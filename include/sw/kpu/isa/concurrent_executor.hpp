@@ -96,19 +96,29 @@ struct ScheduledOp {
 
 /**
  * @brief Models a hardware resource with timing and occupancy
+ *
+ * Timing model: Each resource has a bus width (bytes per cycle) that determines
+ * how many cycles a transfer takes. For example:
+ * - DMA engine with 64-byte bus @ 250 MHz: 64 bytes per DMA cycle
+ * - BlockMover with 64-byte bus @ 500 MHz: 64 bytes per BM cycle
+ *
+ * The cycle count is simply: ceil(transfer_bytes / bus_width_bytes)
+ * This gives the number of cycles in the resource's clock domain.
  */
 class HardwareResource {
 public:
     ResourceId id;
-    double bandwidth_gb_s;      // Bandwidth for this resource
+    double bandwidth_gb_s;      // Bandwidth for this resource (for reporting)
+    Size bus_width_bytes;       // Bytes transferred per cycle
     Cycle next_available_cycle; // When resource becomes free
 
     // Occupancy tracking
     std::vector<ScheduledOp> completed_ops;
     ScheduledOp* current_op;
 
-    HardwareResource(ResourceType type, uint8_t index, double bandwidth = 100.0)
-        : id{type, index}, bandwidth_gb_s(bandwidth),
+    HardwareResource(ResourceType type, uint8_t index, double bandwidth = 16.0,
+                     Size bus_width = 64)
+        : id{type, index}, bandwidth_gb_s(bandwidth), bus_width_bytes(bus_width),
           next_available_cycle(0), current_op(nullptr) {}
 
     bool is_busy(Cycle at_cycle) const {
@@ -118,8 +128,9 @@ public:
     Cycle schedule_op(Cycle earliest, Size bytes, uint32_t instr_id,
                       const std::string& label, MatrixID mat, TileCoord tile) {
         Cycle start = std::max(earliest, next_available_cycle);
-        // Calculate cycles based on bandwidth (assume 1 GHz clock)
-        Cycle cycles = static_cast<Cycle>(bytes / bandwidth_gb_s);
+        // Calculate cycles: ceiling division of bytes by bus width
+        // This is the number of bus transactions needed
+        Cycle cycles = (bytes + bus_width_bytes - 1) / bus_width_bytes;
         if (cycles == 0) cycles = 1;  // Minimum 1 cycle
 
         ScheduledOp op;
@@ -147,17 +158,18 @@ public:
  *
  * Each memory channel has:
  * - One DMA engine for external memory transfers
- * - Associated bandwidth constraints
+ * - Associated bandwidth constraints (derived from bus width × clock)
  * - Queue of pending transfers
  */
 struct MemoryChannel {
     uint8_t channel_id;
     double bandwidth_gb_s;
+    Size bus_width_bytes;
     HardwareResource dma_engine;
 
-    MemoryChannel(uint8_t id, double bw = 50.0)
-        : channel_id(id), bandwidth_gb_s(bw),
-          dma_engine(ResourceType::DMA_ENGINE, id, bw) {}
+    MemoryChannel(uint8_t id, double bw = 16.0, Size bus_width = 64)
+        : channel_id(id), bandwidth_gb_s(bw), bus_width_bytes(bus_width),
+          dma_engine(ResourceType::DMA_ENGINE, id, bw, bus_width) {}
 };
 
 // ============================================================================

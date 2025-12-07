@@ -7,6 +7,7 @@ add_library(kpu_isa STATIC
     program_executor.cpp
     concurrent_executor.cpp
     tile_layout.cpp
+    tile_cache.cpp
 )
 
 target_include_directories(kpu_isa PUBLIC

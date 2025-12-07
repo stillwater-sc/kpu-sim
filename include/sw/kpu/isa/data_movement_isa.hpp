@@ -31,6 +31,7 @@
 #include <string>
 #include <variant>
 #include <optional>
+#include <set>
 
 namespace sw::kpu::isa {
 
@@ -402,6 +403,9 @@ public:
 
         // Double-buffering enabled
         bool double_buffer;
+
+        // Tile caching (Phase 1)
+        bool enable_tile_caching = true;  // Track tile reuse in L3
     };
 
     explicit OutputStationaryProgramBuilder(const Config& config);
@@ -426,6 +430,12 @@ public:
      */
     DMProgram build();
 
+    /**
+     * @brief Get tile cache statistics after build()
+     * @return String summary of cache hits/misses
+     */
+    std::string get_cache_stats() const;
+
 private:
     Config config_;
     uint32_t next_instruction_id_;
@@ -435,12 +445,50 @@ private:
     // Tile iteration counts
     Size m_tiles_, n_tiles_, k_tiles_;
 
+    // Tile cache tracking (Phase 1)
+    // Using simple set-based tracking: {matrix, ti, tk} for A, {matrix, tk, tj} for B
+    struct TileCacheState {
+        std::set<uint64_t> resident_tiles;  // Encoded tile keys
+        Size capacity_bytes;
+        Size used_bytes = 0;
+        size_t hits = 0;
+        size_t misses = 0;
+        Size bytes_saved = 0;
+
+        uint64_t encode_key(MatrixID mat, uint16_t i, uint16_t j, uint16_t k) const {
+            return (static_cast<uint64_t>(mat) << 48) |
+                   (static_cast<uint64_t>(i) << 32) |
+                   (static_cast<uint64_t>(j) << 16) |
+                   static_cast<uint64_t>(k);
+        }
+
+        bool is_resident(MatrixID mat, uint16_t i, uint16_t j, uint16_t k) const {
+            return resident_tiles.count(encode_key(mat, i, j, k)) > 0;
+        }
+
+        void mark_resident(MatrixID mat, uint16_t i, uint16_t j, uint16_t k, Size size) {
+            resident_tiles.insert(encode_key(mat, i, j, k));
+            used_bytes += size;
+        }
+
+        void reset() {
+            resident_tiles.clear();
+            used_bytes = 0;
+            hits = 0;
+            misses = 0;
+            bytes_saved = 0;
+        }
+    };
+    mutable TileCacheState tile_cache_;
+
     // Address calculation
     Address calculate_a_tile_addr(TileCoord tile) const;
     Address calculate_b_tile_addr(TileCoord tile) const;
     Address calculate_c_tile_addr(TileCoord tile) const;
 
-    // Instruction generation
+    // Instruction generation (with cache-aware variants)
+    bool try_emit_load_a_tile(DMProgram& prog, TileCoord tile, BufferSlot buf);
+    bool try_emit_load_b_tile(DMProgram& prog, TileCoord tile, BufferSlot buf);
     void emit_load_a_tile(DMProgram& prog, TileCoord tile, BufferSlot buf);
     void emit_load_b_tile(DMProgram& prog, TileCoord tile, BufferSlot buf);
     void emit_move_a_l3_to_l2(DMProgram& prog, TileCoord tile, BufferSlot buf);

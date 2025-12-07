@@ -16,27 +16,34 @@ namespace sw::kpu::isa {
 
 ConcurrentExecutor::ConcurrentExecutor(const ResourceConfig& config)
     : config_(config),
-      compute_fabric_(ResourceType::COMPUTE_FABRIC, 0, config.compute_throughput_gflops),
+      compute_fabric_(ResourceType::COMPUTE_FABRIC, 0, config.compute_throughput_gflops,
+                      config.systolic_size * config.systolic_size),  // Compute processes full tile per cycle
       current_cycle_(0),
       makespan_(0),
       last_barrier_cycle_(0),
       tile_layout_(nullptr)
 {
     // Initialize memory channels with DMA engines
+    // Each DMA engine transfers bus_width_bytes per cycle
     for (uint8_t i = 0; i < config.num_memory_channels; ++i) {
-        memory_channels_.emplace_back(i, config.dma_bandwidth_gb_s);
+        memory_channels_.emplace_back(i, config.dma_bandwidth_gb_s,
+                                      config.dma_bus_width_bytes);
     }
 
-    // Initialize block movers
+    // Initialize block movers (L3 → L2)
+    // Each BlockMover transfers bus_width_bytes per cycle
     for (uint8_t i = 0; i < config.num_block_movers; ++i) {
         block_movers_.emplace_back(ResourceType::BLOCK_MOVER, i,
-                                   config.block_mover_bandwidth_gb_s);
+                                   config.block_mover_bandwidth_gb_s,
+                                   config.block_mover_bus_width_bytes);
     }
 
-    // Initialize streamers
+    // Initialize streamers (L2 → L1)
+    // Each Streamer transfers bus_width_bytes per cycle
     for (uint8_t i = 0; i < config.num_streamers; ++i) {
         streamers_.emplace_back(ResourceType::STREAMER, i,
-                                config.streamer_bandwidth_gb_s);
+                                config.streamer_bandwidth_gb_s,
+                                config.streamer_bus_width_bytes);
     }
 }
 
@@ -64,7 +71,11 @@ void ConcurrentExecutor::initialize_layout_for_program(const DMProgram& program)
     layout_config.num_channels = config_.num_memory_channels;
     layout_config.num_l3_tiles = 4;  // Default
     layout_config.num_l2_banks = 8;  // Default
-    layout_config.tile_size_bytes = program.Ti * program.Tj * 4;  // Assume float32
+    // Tile size for layout: max of A tile (Ti×Tk) and B tile (Tk×Tj)
+    // This is used for address allocation, not transfer size
+    Size a_tile_bytes = program.Ti * program.Tk * 4;  // Assume float32
+    Size b_tile_bytes = program.Tk * program.Tj * 4;
+    layout_config.tile_size_bytes = std::max(a_tile_bytes, b_tile_bytes);
     layout_config.element_size = 4;
 
     // Calculate tile counts

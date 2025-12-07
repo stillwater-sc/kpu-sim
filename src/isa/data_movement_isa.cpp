@@ -6,6 +6,7 @@
 #include <sw/kpu/isa/data_movement_isa.hpp>
 #include <stdexcept>
 #include <sstream>
+#include <iomanip>
 
 namespace sw::kpu::isa {
 
@@ -327,6 +328,23 @@ OutputStationaryProgramBuilder::OutputStationaryProgramBuilder(const Config& con
     current_l3_offset_[1] = 0;
     current_l2_offset_[0] = 0;
     current_l2_offset_[1] = 0;
+
+    // Initialize tile cache capacity
+    tile_cache_.capacity_bytes = config_.num_l3_tiles * config_.l3_tile_capacity;
+    tile_cache_.reset();
+}
+
+std::string OutputStationaryProgramBuilder::get_cache_stats() const {
+    std::ostringstream oss;
+    oss << "\nTile Cache Statistics:\n";
+    oss << "  Hits:       " << tile_cache_.hits << "\n";
+    oss << "  Misses:     " << tile_cache_.misses << "\n";
+    size_t total = tile_cache_.hits + tile_cache_.misses;
+    double hit_rate = total > 0 ? (100.0 * tile_cache_.hits / total) : 0.0;
+    oss << "  Hit rate:   " << std::fixed << std::setprecision(1) << hit_rate << "%\n";
+    oss << "  Bytes saved: " << (tile_cache_.bytes_saved / 1024.0) << " KB\n";
+    oss << "  Resident tiles: " << tile_cache_.resident_tiles.size() << "\n";
+    return oss.str();
 }
 
 Address OutputStationaryProgramBuilder::calculate_a_tile_addr(TileCoord tile) const {
@@ -389,6 +407,64 @@ void OutputStationaryProgramBuilder::emit_load_b_tile(DMProgram& prog, TileCoord
     auto instr = DMInstruction::dma_load(MatrixID::B, tile, ext_addr, l3_tile, l3_off, tile_bytes);
     instr.instruction_id = next_instruction_id_++;
     prog.instructions.push_back(instr);
+}
+
+bool OutputStationaryProgramBuilder::try_emit_load_a_tile(DMProgram& prog, TileCoord tile, BufferSlot buf) {
+    // A tiles are indexed by (ti, tk) - check if already in cache
+    if (config_.enable_tile_caching &&
+        tile_cache_.is_resident(MatrixID::A, tile.ti, 0, tile.tk)) {
+        // Cache hit - no DMA needed
+        Size actual_ti = std::min(config_.Ti, config_.M - tile.ti * config_.Ti);
+        Size actual_tk = std::min(config_.Tk, config_.K - tile.tk * config_.Tk);
+        Size tile_bytes = actual_ti * actual_tk * config_.element_size;
+
+        tile_cache_.hits++;
+        tile_cache_.bytes_saved += tile_bytes;
+        return false;  // No DMA emitted
+    }
+
+    // Cache miss - emit DMA and mark as resident
+    emit_load_a_tile(prog, tile, buf);
+
+    if (config_.enable_tile_caching) {
+        Size actual_ti = std::min(config_.Ti, config_.M - tile.ti * config_.Ti);
+        Size actual_tk = std::min(config_.Tk, config_.K - tile.tk * config_.Tk);
+        Size tile_bytes = actual_ti * actual_tk * config_.element_size;
+
+        tile_cache_.misses++;
+        tile_cache_.mark_resident(MatrixID::A, tile.ti, 0, tile.tk, tile_bytes);
+    }
+
+    return true;  // DMA was emitted
+}
+
+bool OutputStationaryProgramBuilder::try_emit_load_b_tile(DMProgram& prog, TileCoord tile, BufferSlot buf) {
+    // B tiles are indexed by (tk, tj) - check if already in cache
+    if (config_.enable_tile_caching &&
+        tile_cache_.is_resident(MatrixID::B, 0, tile.tj, tile.tk)) {
+        // Cache hit - no DMA needed
+        Size actual_tk = std::min(config_.Tk, config_.K - tile.tk * config_.Tk);
+        Size actual_tj = std::min(config_.Tj, config_.N - tile.tj * config_.Tj);
+        Size tile_bytes = actual_tk * actual_tj * config_.element_size;
+
+        tile_cache_.hits++;
+        tile_cache_.bytes_saved += tile_bytes;
+        return false;  // No DMA emitted
+    }
+
+    // Cache miss - emit DMA and mark as resident
+    emit_load_b_tile(prog, tile, buf);
+
+    if (config_.enable_tile_caching) {
+        Size actual_tk = std::min(config_.Tk, config_.K - tile.tk * config_.Tk);
+        Size actual_tj = std::min(config_.Tj, config_.N - tile.tj * config_.Tj);
+        Size tile_bytes = actual_tk * actual_tj * config_.element_size;
+
+        tile_cache_.misses++;
+        tile_cache_.mark_resident(MatrixID::B, 0, tile.tj, tile.tk, tile_bytes);
+    }
+
+    return true;  // DMA was emitted
 }
 
 void OutputStationaryProgramBuilder::emit_move_a_l3_to_l2(DMProgram& prog, TileCoord tile, BufferSlot buf) {
@@ -568,12 +644,14 @@ DMProgram OutputStationaryProgramBuilder::build() {
                     current_buf = (tk % 2 == 0) ? BufferSlot::BUF_0 : BufferSlot::BUF_1;
                 }
 
-                // Phase 1: Load tiles from external memory to L3
-                emit_load_a_tile(prog, tile, current_buf);
-                emit_load_b_tile(prog, tile, current_buf);
+                // Phase 1: Load tiles from external memory to L3 (with cache tracking)
+                bool a_loaded = try_emit_load_a_tile(prog, tile, current_buf);
+                bool b_loaded = try_emit_load_b_tile(prog, tile, current_buf);
 
-                // Wait for DMA to complete before BlockMover
-                emit_barrier(prog);
+                // Wait for DMA to complete before BlockMover (only if we issued DMAs)
+                if (a_loaded || b_loaded) {
+                    emit_barrier(prog);
+                }
 
                 // Phase 2: Move tiles from L3 to L2
                 emit_move_a_l3_to_l2(prog, tile, current_buf);
@@ -590,7 +668,7 @@ DMProgram OutputStationaryProgramBuilder::build() {
                 // Wait for streaming/compute to complete before next iteration
                 emit_barrier(prog);
 
-                // Update traffic estimates
+                // Update traffic estimates (only count actual DMA transfers)
                 Size a_tile_bytes = std::min(config_.Ti, config_.M - ti * config_.Ti) *
                                    std::min(config_.Tk, config_.K - tk * config_.Tk) *
                                    config_.element_size;
@@ -598,7 +676,14 @@ DMProgram OutputStationaryProgramBuilder::build() {
                                    std::min(config_.Tj, config_.N - tj * config_.Tj) *
                                    config_.element_size;
 
-                prog.estimates.external_mem_bytes += a_tile_bytes + b_tile_bytes;
+                // Only count external mem traffic if DMA was actually issued
+                if (a_loaded) {
+                    prog.estimates.external_mem_bytes += a_tile_bytes;
+                }
+                if (b_loaded) {
+                    prog.estimates.external_mem_bytes += b_tile_bytes;
+                }
+                // L3 and L2 always get the traffic (tile is moved internally)
                 prog.estimates.l3_bytes += a_tile_bytes + b_tile_bytes;
                 prog.estimates.l2_bytes += a_tile_bytes + b_tile_bytes;
             }

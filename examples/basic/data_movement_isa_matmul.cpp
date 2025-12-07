@@ -191,6 +191,10 @@ void example_small_matmul() {
     std::cout << "\nProgram generation time: " << duration.count() << " us\n";
 
     print_program_summary(program);
+
+    // Show tile cache statistics
+    std::cout << builder.get_cache_stats();
+
     print_instruction_trace(program, 30);
 
     // Validate
@@ -494,6 +498,123 @@ This is why output-stationary excels when:
 }
 
 // ============================================================================
+// Example 6: Tile Caching Demonstration
+// ============================================================================
+
+void example_tile_caching() {
+    print_separator("Example 6: Tile Caching Benefits");
+
+    std::cout << R"(
+This example demonstrates L3 tile caching, which eliminates redundant DMA
+transfers when tiles are reused across loop iterations.
+
+In output-stationary dataflow:
+  - A[ti,tk] is reused across all tj iterations (N/Tj times)
+  - B[tk,tj] is reused across all ti iterations (M/Ti times)
+
+Without caching, we reload tiles on every access.
+With caching, we only load each unique tile once.
+)";
+
+    // Common configuration
+    OutputStationaryProgramBuilder::Config config;
+    config.M = 128;
+    config.N = 128;
+    config.K = 128;
+    config.Ti = 32;
+    config.Tj = 32;
+    config.Tk = 32;
+    config.L1_Ki = 16;
+    config.systolic_size = 16;
+    config.element_size = 4;
+    config.l3_tile_capacity = 128 * 1024;
+    config.l2_bank_capacity = 64 * 1024;
+    config.l1_buffer_capacity = 32 * 1024;
+    config.num_l3_tiles = 4;
+    config.num_l2_banks = 8;
+    config.num_l1_buffers = 4;
+    config.double_buffer = false;
+
+    // Calculate expected values
+    Size m_tiles = (config.M + config.Ti - 1) / config.Ti;  // 4
+    Size n_tiles = (config.N + config.Tj - 1) / config.Tj;  // 4
+    Size k_tiles = (config.K + config.Tk - 1) / config.Tk;  // 4
+
+    Size a_unique_tiles = m_tiles * k_tiles;  // 16 unique A tiles
+    Size b_unique_tiles = k_tiles * n_tiles;  // 16 unique B tiles
+    Size total_unique = a_unique_tiles + b_unique_tiles;  // 32 unique tiles
+
+    // Without caching: every iteration loads
+    Size total_iterations = m_tiles * n_tiles * k_tiles;  // 64
+    Size loads_without_cache = total_iterations * 2;  // 128 loads (A + B each iter)
+
+    std::cout << "\nMatrix: C[" << config.M << "," << config.N << "] = "
+              << "A[" << config.M << "," << config.K << "] x "
+              << "B[" << config.K << "," << config.N << "]\n";
+    std::cout << "Tiles: " << m_tiles << "x" << n_tiles << "x" << k_tiles
+              << " = " << total_iterations << " iterations\n\n";
+
+    std::cout << "Expected tile counts:\n";
+    std::cout << "  Unique A tiles (ti × tk): " << a_unique_tiles << "\n";
+    std::cout << "  Unique B tiles (tk × tj): " << b_unique_tiles << "\n";
+    std::cout << "  Total unique tiles:       " << total_unique << "\n";
+    std::cout << "  Without caching (loads):  " << loads_without_cache << "\n";
+    std::cout << "  Potential savings:        " << (loads_without_cache - total_unique)
+              << " redundant loads avoided\n\n";
+
+    // Build WITH caching (default)
+    std::cout << "--- WITH Tile Caching (default) ---\n";
+    config.enable_tile_caching = true;
+    OutputStationaryProgramBuilder builder_cached(config);
+    DMProgram program_cached = builder_cached.build();
+
+    std::cout << "  DMA operations:    " << program_cached.num_dma_ops() << "\n";
+    std::cout << "  External traffic:  " << std::fixed << std::setprecision(2)
+              << (program_cached.estimates.external_mem_bytes / 1024.0) << " KB\n";
+    std::cout << builder_cached.get_cache_stats();
+
+    // Build WITHOUT caching
+    std::cout << "\n--- WITHOUT Tile Caching ---\n";
+    config.enable_tile_caching = false;
+    OutputStationaryProgramBuilder builder_uncached(config);
+    DMProgram program_uncached = builder_uncached.build();
+
+    std::cout << "  DMA operations:    " << program_uncached.num_dma_ops() << "\n";
+    std::cout << "  External traffic:  " << std::fixed << std::setprecision(2)
+              << (program_uncached.estimates.external_mem_bytes / 1024.0) << " KB\n";
+
+    // Summary comparison
+    std::cout << "\n--- Comparison ---\n";
+    Size bytes_saved = program_uncached.estimates.external_mem_bytes -
+                       program_cached.estimates.external_mem_bytes;
+    Size dma_saved = program_uncached.num_dma_ops() - program_cached.num_dma_ops();
+
+    std::cout << "  DMA ops reduced:     " << program_uncached.num_dma_ops()
+              << " -> " << program_cached.num_dma_ops()
+              << " (" << dma_saved << " fewer, "
+              << std::setprecision(1) << (100.0 * dma_saved / program_uncached.num_dma_ops())
+              << "% reduction)\n";
+    std::cout << "  External traffic:    " << std::setprecision(2)
+              << (program_uncached.estimates.external_mem_bytes / 1024.0) << " KB -> "
+              << (program_cached.estimates.external_mem_bytes / 1024.0) << " KB ("
+              << (bytes_saved / 1024.0) << " KB saved)\n";
+
+    // Calculate minimum traffic
+    Size min_bytes = (config.M * config.K + config.K * config.N +
+                     config.M * config.N) * config.element_size;
+    double reuse_cached = static_cast<double>(program_cached.estimates.external_mem_bytes) / min_bytes;
+    double reuse_uncached = static_cast<double>(program_uncached.estimates.external_mem_bytes) / min_bytes;
+
+    std::cout << "  Reuse factor:        " << std::setprecision(2) << reuse_uncached
+              << "x -> " << reuse_cached << "x (1.0x is optimal)\n";
+    std::cout << "  Arith. intensity:    " << std::setprecision(1)
+              << (2.0 * config.M * config.N * config.K / program_uncached.estimates.external_mem_bytes)
+              << " -> "
+              << (2.0 * config.M * config.N * config.K / program_cached.estimates.external_mem_bytes)
+              << " FLOPs/byte\n";
+}
+
+// ============================================================================
 // Main
 // ============================================================================
 
@@ -513,6 +634,7 @@ This example demonstrates:
   2. Analyzing generated instruction sequences
   3. Understanding traffic estimates and arithmetic intensity
   4. Comparing different tiling strategies
+  5. Tile caching for eliminating redundant DMA transfers
 
 Note: This ISA-based approach represents how actual programs execute
 on the KPU, unlike direct component API calls which are useful for
@@ -525,6 +647,7 @@ testing individual hardware blocks.
     example_tile_size_comparison();
     example_concurrent_execution();
     example_loop_structure();
+    example_tile_caching();
 
     print_separator("Summary");
     std::cout << R"(
