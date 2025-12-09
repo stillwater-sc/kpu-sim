@@ -1,0 +1,62 @@
+  Next Steps for Enhancement
+
+  1. Add architectural energy breakdowns to comparison output when energy models are configured
+  2. Implement export formats: JSON, CSV, HTML with interactive charts
+  3. Add visualization: Terminal heatmaps, bar charts using rich library
+  4. Support custom models: Beyond torchvision (user-provided PyTorch modules)
+  5. Add cost analysis: $/inference based on cloud pricing
+  6. Batch sweep mode: Automatically compare across batch sizes
+
+
+
+● Web Search(""Priest normalization" "non-overlapping property" floating-point expansion definition")
+  ⎿  Did 0 searches in 12s
+
+● Web Search("Hida Bailey renormalization algorithm quad-double two-phase pseudocode")
+  ⎿  Did 1 search in 19s
+
+● Fetch(https://raw.githubusercontent.com/aoki-t/QD/master/src/qd_real.cpp)
+  ⎿  Received 94.1KB (200 OK)
+
+● Fetch(https://raw.githubusercontent.com/aoki-t/QD/master/include/qd/qd_real.h)
+  ⎿  Received 10.1KB (200 OK)
+
+● Let me look for the inline implementation file which should contain the actual renormalization algorithm.
+
+● Fetch(https://raw.githubusercontent.com/aoki-t/QD/master/include/qd/qd_inline.h)
+  ⎿  Received 23.5KB (200 OK)
+
+● Fetch(https://raw.githubusercontent.com/aoki-t/QD/master/include/qd/dd_inline.h)
+  ⎿  Received 14.2KB (200 OK)
+
+● Fetch(https://portal.nersc.gov/project/sparse/xiaoye-web/arith15.pdf)
+  ⎿  Received 187.8KB (200 OK)
+
+
+
+I can help you create this architecture document, but I need to understand the specifics of your KPU architecture first. I'm not familiar with the Stillwater Knowledge Processing Unit or its Domain Flow Architecture implementation - these appear to be specialized systems that aren't in my training data.
+
+To create a useful markdown document that Claude Code can effectively parse for energy modeling, I'll need you to provide:
+
+1. **Core architectural components** - What processing units, memory hierarchies, interconnects, and control structures make up the KPU?
+
+2. **Operational model** - How does it process knowledge? What are the key computational stages?
+
+3. **Data flow patterns** - How does data move through the system? What are the primary paths?
+
+4. **Energy-relevant operations** - What operations do you already know are significant energy consumers? (e.g., memory access patterns, arithmetic operations, data transfers, synchronization events)
+
+5. **Domain Flow Architecture specifics** - What makes this architecture distinct? What are its key design principles?
+
+Once you provide these details, I can structure the markdown document with clear sections that will make it straightforward for Claude Code to identify and extract energy-consuming events. The document should probably include explicit sections for computational operations, memory access patterns, communication events, and control flow - all tagged in a way that facilitates automated extraction.
+
+What details can you share about the KPU architecture?
+
+The document is ready for Section 2, which needs the KPU-specific specializations. What components or enhancements does the KPU add to the base DFA architecture? For example:
+
+Specialized PE types or instructions?
+Additional memory hierarchies or caches?
+Specific operator accelerators (attention mechanisms, activations, quantization)?
+Modified streaming patterns or fabric topologies?
+Knowledge representation structures?
+
