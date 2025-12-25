@@ -118,13 +118,5 @@ kpu_add_example(resource_api_demo
     SOURCES resource_api_demo.cpp
 )
 
-kpu_add_example(kernel_demo
-    FOLDER "basic"
-    DESCRIPTION "Kernel abstraction and KernelCompiler demonstration"
-    SOURCES kernel_demo.cpp
-)
-
-# Link kernel demo against ISA library (for ConcurrentExecutor)
-target_link_libraries(example_kernel_demo PRIVATE
-    kpu_isa
-)
+# Note: kernel_demo has been moved to examples/kernel/matmul_kernel.cpp
+# See examples/kernel/ for matmul_kernel, mlp_kernel, and other kernel demos

@@ -1,17 +1,17 @@
-// Kernel Abstraction Demo
-// Demonstrates the Kernel and KernelCompiler APIs for the KPU simulator
+// Matrix Multiplication Kernel Demo
+// Demonstrates the Kernel and KernelCompiler APIs for matmul operations
 //
 // This example shows how to:
-// - Create kernels with factory methods (simplest API)
-// - Compile kernels with custom options (more control)
+// - Create matmul kernels with factory methods (simplest API)
+// - Compile matmul kernels with custom options (more control)
 // - Access kernel metadata and arguments
 // - Inspect compilation statistics
 // - Execute kernels using ConcurrentExecutor
 
 /*
- Kernel Abstraction Demo (examples/basic/kernel_demo.cpp)
+ Matrix Multiplication Kernel Demo (examples/kernel/matmul_kernel.cpp)
 
- The demo demonstrates the key capabilities of the Kernel API:
+ The demo demonstrates the key capabilities of the Kernel API for matmul:
 
   | Section            | Functionality                                          |
   |--------------------|--------------------------------------------------------|
@@ -24,7 +24,7 @@
 
  Running the Demo
 
-  ./build/examples/basic/example_kernel_demo
+  ./build/examples/kernel/matmul_kernel
 
  Key Output Highlights
 
@@ -75,7 +75,7 @@ std::string format_count(Size count) {
 }
 
 int main() {
-    std::cout << "KPU Simulator - Kernel Abstraction Demo\n";
+    std::cout << "KPU Simulator - Matrix Multiplication Kernel Demo\n";
     separator();
 
     // =========================================================================
@@ -96,7 +96,7 @@ int main() {
               << ", K=" << kernel.K() << "\n";
     std::cout << "  Tile Sizes:   Ti=" << kernel.Ti() << ", Tj=" << kernel.Tj()
               << ", Tk=" << kernel.Tk() << "\n";
-    std::cout << "  Instructions: " << kernel.instruction_count() << "\n";
+    std::cout << "  Program Size: " << kernel.instruction_count() << " operations\n";
 
     // =========================================================================
     // 2. Kernel Creation with Compiler Options
@@ -197,11 +197,8 @@ int main() {
               << stats.num_n_tiles << " x " << stats.num_k_tiles
               << " = " << stats.total_tiles << " tiles\n";
 
-    std::cout << "\nInstruction Breakdown:\n";
-    std::cout << "  Total Instructions: " << stats.instruction_count << "\n";
-    std::cout << "  DMA Operations:     " << stats.dma_ops << "\n";
-    std::cout << "  Block Mover Ops:    " << stats.block_mover_ops << "\n";
-    std::cout << "  Streamer Ops:       " << stats.streamer_ops << "\n";
+    // Display the new Operation Breakdown
+    std::cout << "\n" << stats.operations.summary();
 
     std::cout << "\nMemory Traffic Estimates:\n";
     std::cout << "  External (DRAM): " << format_bytes(stats.estimated_external_bytes) << "\n";
@@ -247,31 +244,36 @@ int main() {
     // =========================================================================
     separator("6. Size Comparison");
 
-    std::cout << "\nComparing kernels of different sizes:\n\n";
+    std::cout << "\nComparing matmul kernels of different sizes:\n\n";
 
-    std::cout << std::setw(15) << "Size"
-              << std::setw(15) << "Instructions"
-              << std::setw(15) << "FLOPs"
-              << std::setw(15) << "AI"
-              << std::setw(15) << "Cycles" << "\n";
-    std::cout << std::string(75, '-') << "\n";
+    std::cout << std::setw(12) << "Size"
+              << std::setw(10) << "DMA Ops"
+              << std::setw(10) << "BM Ops"
+              << std::setw(10) << "STR Ops"
+              << std::setw(12) << "Volume"
+              << std::setw(10) << "AI"
+              << std::setw(12) << "Cycles" << "\n";
+    std::cout << std::string(76, '-') << "\n";
 
     std::vector<Size> sizes = {128, 256, 512, 1024, 2048};
 
     for (Size size : sizes) {
         Kernel k = compiler.compile_matmul(size, size, size);
+        const CompilationStats& s = compiler.last_stats();
         Cycle c = executor.execute(k.program());
 
         std::string size_str = std::to_string(size) + "x" + std::to_string(size);
-        std::cout << std::setw(15) << size_str
-                  << std::setw(15) << k.instruction_count()
-                  << std::setw(15) << format_count(k.total_flops())
-                  << std::setw(15) << std::fixed << std::setprecision(1) << k.arithmetic_intensity()
-                  << std::setw(15) << c << "\n";
+        std::cout << std::setw(12) << size_str
+                  << std::setw(10) << s.operations.external_memory.count
+                  << std::setw(10) << s.operations.l3_l2.count
+                  << std::setw(10) << s.operations.l2_l1.count
+                  << std::setw(12) << format_bytes(s.estimated_external_bytes)
+                  << std::setw(10) << std::fixed << std::setprecision(1) << k.arithmetic_intensity()
+                  << std::setw(12) << c << "\n";
     }
 
     separator();
-    std::cout << "\nDemo complete!\n";
+    std::cout << "\nMatmul kernel demo complete!\n";
 
     return 0;
 }

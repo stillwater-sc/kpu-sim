@@ -116,6 +116,91 @@ struct CompileOptions {
 };
 
 /**
+ * @brief Statistics for a single resource type (DMA, BlockMover, Streamer)
+ *
+ * Captures the granularity of operations in a distributed dataflow machine.
+ * Unlike simple instruction counts, this tracks bytes moved and latency.
+ */
+struct ResourceOperationStats {
+    size_t count = 0;              ///< Number of operations issued
+    Size total_bytes = 0;          ///< Total bytes moved by this resource
+    Size avg_bytes_per_op = 0;     ///< Average bytes per operation
+    Cycle avg_latency_cycles = 0;  ///< Average cycles per operation
+
+    /**
+     * @brief Finalize statistics after accumulation
+     */
+    void finalize() {
+        if (count > 0) {
+            avg_bytes_per_op = total_bytes / count;
+        }
+    }
+};
+
+/**
+ * @brief Pipeline resource configuration
+ *
+ * Describes the concurrency available at each level of the memory hierarchy.
+ */
+struct PipelineResources {
+    size_t dma_channels = 4;    ///< Number of concurrent DMA channels
+    size_t block_movers = 8;    ///< Number of concurrent block movers
+    size_t streamers = 16;      ///< Number of concurrent streamers
+
+    // Peak bandwidth specifications (bytes/cycle at 1 GHz)
+    Size external_peak_bw = 64;  ///< External memory peak (64 GB/s)
+    Size l3_l2_peak_bw = 128;    ///< L3↔L2 peak (128 GB/s)
+    Size l2_l1_peak_bw = 256;    ///< L2↔L1 peak (256 GB/s)
+};
+
+/**
+ * @brief Bandwidth estimates and utilization
+ */
+struct BandwidthEstimates {
+    double external_gbps = 0.0;       ///< Achieved external bandwidth (GB/s)
+    double l3_l2_gbps = 0.0;          ///< Achieved L3↔L2 bandwidth (GB/s)
+    double l2_l1_gbps = 0.0;          ///< Achieved L2↔L1 bandwidth (GB/s)
+
+    double external_utilization = 0.0; ///< Fraction of peak external BW
+    double l3_l2_utilization = 0.0;    ///< Fraction of peak L3↔L2 BW
+    double l2_l1_utilization = 0.0;    ///< Fraction of peak L2↔L1 BW
+};
+
+/**
+ * @brief Complete operation breakdown for a compiled kernel
+ *
+ * Replaces simple "instruction counts" with meaningful operation statistics
+ * that capture the granularity and data movement characteristics of a
+ * distributed dataflow machine.
+ */
+struct OperationBreakdown {
+    // Per-level operation statistics
+    ResourceOperationStats external_memory;  ///< DMA (External ↔ L3)
+    ResourceOperationStats l3_l2;            ///< Block Mover (L3 ↔ L2)
+    ResourceOperationStats l2_l1;            ///< Streamer (L2 ↔ L1)
+
+    // Pipeline configuration
+    PipelineResources pipeline;
+
+    // Bandwidth estimates (computed from stats and cycle estimates)
+    BandwidthEstimates bandwidth;
+
+    // Total estimated execution cycles (for bandwidth calculation)
+    Cycle estimated_cycles = 0;
+
+    /**
+     * @brief Compute bandwidth estimates from operation stats
+     * @param clock_ghz Clock frequency in GHz (default 1.0)
+     */
+    void compute_bandwidth(double clock_ghz = 1.0);
+
+    /**
+     * @brief Get formatted summary string
+     */
+    std::string summary() const;
+};
+
+/**
  * @brief Statistics from kernel compilation
  *
  * Provides insights into the compilation process and the generated kernel.
@@ -131,12 +216,15 @@ struct CompilationStats {
     Size selected_Tk = 0;                 ///< Final Tk tile size
     Size selected_L1_Ki = 0;              ///< Final L1 streaming chunk
 
-    // Instruction breakdown
-    size_t instruction_count = 0;         ///< Total instruction count
-    size_t dma_ops = 0;                   ///< DMA operations
-    size_t block_mover_ops = 0;           ///< Block mover operations
-    size_t streamer_ops = 0;              ///< Streamer operations
-    size_t compute_ops = 0;               ///< Compute operations
+    // Operation breakdown (replaces instruction_count, dma_ops, etc.)
+    OperationBreakdown operations;
+
+    // Legacy fields for backward compatibility (deprecated, use operations instead)
+    size_t instruction_count = 0;         ///< @deprecated Use operations.*.count
+    size_t dma_ops = 0;                   ///< @deprecated Use operations.external_memory.count
+    size_t block_mover_ops = 0;           ///< @deprecated Use operations.l3_l2.count
+    size_t streamer_ops = 0;              ///< @deprecated Use operations.l2_l1.count
+    size_t compute_ops = 0;               ///< @deprecated Compute is implicit in streaming
 
     // Memory estimates
     Size estimated_external_bytes = 0;    ///< Estimated external memory traffic
@@ -348,9 +436,14 @@ private:
     DataflowStrategy select_dataflow(Size M, Size N, Size K) const;
 
     /**
-     * @brief Count instructions by type for statistics
+     * @brief Count operations and compute statistics
+     *
+     * Analyzes the program to populate OperationBreakdown with counts,
+     * bytes moved, and latency estimates for each resource type.
      */
-    void count_instructions(const isa::DMProgram& program);
+    void count_operations(const isa::DMProgram& program,
+                          Size elem_size,
+                          const TileOptimizer::TileConfig& tiles);
 };
 
 } // namespace sw::kpu::compiler

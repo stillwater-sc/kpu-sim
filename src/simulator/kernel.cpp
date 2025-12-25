@@ -141,7 +141,7 @@ std::string Kernel::summary() const {
         ss << "  Has Bias: " << (has_bias_ ? "yes" : "no") << "\n";
     }
 
-    ss << "  Instructions: " << instruction_count() << "\n";
+    ss << "  Program Size: " << instruction_count() << " operations\n";
     ss << "  Arguments:\n";
     for (const auto& arg : arguments_) {
         ss << "    " << arg.name << ": "
@@ -163,7 +163,7 @@ std::string Kernel::summary() const {
 
 bool Kernel::validate(std::string& error) const {
     if (program_.instructions.empty()) {
-        error = "Kernel has no instructions";
+        error = "Kernel program is empty";
         return false;
     }
 
