@@ -8,6 +8,7 @@ add_library(kpu_isa STATIC
     concurrent_executor.cpp
     tile_layout.cpp
     tile_cache.cpp
+    program_serializer.cpp
 )
 
 target_include_directories(kpu_isa PUBLIC
@@ -17,6 +18,7 @@ target_include_directories(kpu_isa PUBLIC
 target_link_libraries(kpu_isa PUBLIC
     kpu_components
     kpu_trace
+    nlohmann_json::nlohmann_json
 )
 
 target_compile_features(kpu_isa PUBLIC cxx_std_20)

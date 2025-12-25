@@ -301,6 +301,14 @@ public:
     isa::DMProgram& program() { return program_; }
 
     /**
+     * @brief Set the underlying DMProgram
+     *
+     * Used by serialization to load a pre-compiled program.
+     * @param program The program to set
+     */
+    void set_program(isa::DMProgram program) { program_ = std::move(program); }
+
+    /**
      * @brief Get performance estimates from program
      */
     const isa::DMProgram::Estimates& estimates() const {

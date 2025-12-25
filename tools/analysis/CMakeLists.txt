@@ -20,3 +20,11 @@ kpu_add_tool(trace-analyzer
     LIBS
         nlohmann_json::nlohmann_json
 )
+
+# KPU Binary Disassembler
+kpu_add_tool(kpubin-disasm
+    FOLDER "Analysis"
+    DESCRIPTION "KPU binary format disassembler for .kpubin and .kpukernel files"
+    SOURCES
+        kpubin-disasm/kpubin_disasm.cpp
+)
