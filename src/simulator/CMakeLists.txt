@@ -7,6 +7,7 @@ set(KPU_SIMULATOR_SOURCES
     resource_manager.cpp
     kernel.cpp
     kernel_serializer.cpp
+    kernel_graph.cpp
 #    device_manager.cpp
 #    instruction_set.cpp
 #    execution_engine.cpp

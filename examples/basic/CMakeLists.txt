@@ -118,5 +118,16 @@ kpu_add_example(resource_api_demo
     SOURCES resource_api_demo.cpp
 )
 
+kpu_add_example(kernel_graph_demo
+    FOLDER "basic"
+    DESCRIPTION "Multi-kernel graph execution demonstration"
+    SOURCES kernel_graph_demo.cpp
+)
+
+# Link kernel graph demo against ISA library for ConcurrentExecutor
+target_link_libraries(example_kernel_graph_demo PRIVATE
+    kpu_isa
+)
+
 # Note: kernel_demo has been moved to examples/kernel/matmul_kernel.cpp
 # See examples/kernel/ for matmul_kernel, mlp_kernel, and other kernel demos

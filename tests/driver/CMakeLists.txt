@@ -32,6 +32,11 @@ kpu_add_component_test(mlp_kernel_test "driver"
     test_mlp_kernel.cpp
 )
 
+# Kernel graph tests (multi-kernel DAG)
+kpu_add_component_test(kernel_graph_test "driver"
+    test_kernel_graph.cpp
+)
+
 # Memory safety and bounds checking tests  
 # kpu_add_component_test(memory_safety_test "driver"
 #     test_memory_bounds.cpp
