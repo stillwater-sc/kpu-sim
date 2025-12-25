@@ -171,29 +171,31 @@ TEST_CASE("ResourceManager memory allocation", "[resource_api]") {
     SECTION("Allocate in specific resource") {
         ResourceHandle handle = rm->get_resource(ResourceType::PAGE_BUFFER, 0);
 
-        Address addr = rm->allocate(handle, 1024, 64, "test_alloc");
-        REQUIRE(addr != 0);
+        auto result = rm->allocate(handle, 1024, 64, "test_alloc");
+        REQUIRE(result.has_value());
+        Address addr = *result;
         REQUIRE((addr % 64) == 0);  // Check alignment
     }
 
     SECTION("Allocate with default alignment") {
         ResourceHandle handle = rm->get_resource(ResourceType::PAGE_BUFFER, 0);
 
-        Address addr = rm->allocate(handle, 256);
-        REQUIRE(addr != 0);
+        auto result = rm->allocate(handle, 256);
+        REQUIRE(result.has_value());
+        Address addr = *result;
         REQUIRE((addr % 64) == 0);  // Default alignment is 64
     }
 
-    SECTION("Allocate zero size returns zero") {
+    SECTION("Allocate zero size returns nullopt") {
         ResourceHandle handle = rm->get_resource(ResourceType::PAGE_BUFFER, 0);
 
-        Address addr = rm->allocate(handle, 0);
-        REQUIRE(addr == 0);
+        auto result = rm->allocate(handle, 0);
+        REQUIRE_FALSE(result.has_value());
     }
 
     SECTION("Allocate by resource type") {
-        Address addr = rm->allocate(ResourceType::PAGE_BUFFER, 512, 64, "by_type");
-        REQUIRE(addr != 0);
+        auto result = rm->allocate(ResourceType::PAGE_BUFFER, 512, 64, "by_type");
+        REQUIRE(result.has_value());
     }
 
     SECTION("Track allocations") {
@@ -210,7 +212,9 @@ TEST_CASE("ResourceManager memory allocation", "[resource_api]") {
     SECTION("Get allocation info") {
         ResourceHandle handle = rm->get_resource(ResourceType::PAGE_BUFFER, 0);
 
-        Address addr = rm->allocate(handle, 2048, 128, "labeled_alloc");
+        auto result = rm->allocate(handle, 2048, 128, "labeled_alloc");
+        REQUIRE(result.has_value());
+        Address addr = *result;
 
         auto info = rm->get_allocation_info(addr);
         REQUIRE(info.has_value());
@@ -243,8 +247,9 @@ TEST_CASE("ResourceManager memory operations", "[resource_api]") {
     auto rm = simulator.create_resource_manager();
 
     ResourceHandle scratch = rm->get_resource(ResourceType::PAGE_BUFFER, 0);
-    Address addr = rm->allocate(scratch, 1024);
-    REQUIRE(addr != 0);
+    auto alloc_result = rm->allocate(scratch, 1024);
+    REQUIRE(alloc_result.has_value());
+    Address addr = *alloc_result;
 
     SECTION("Write and read back data") {
         std::vector<float> write_data = {1.0f, 2.0f, 3.0f, 4.0f};
@@ -276,7 +281,9 @@ TEST_CASE("ResourceManager memory operations", "[resource_api]") {
         rm->write(addr, source_data.data(), 256);
 
         // Allocate destination and copy
-        Address dst = rm->allocate(scratch, 256);
+        auto dst_result = rm->allocate(scratch, 256);
+        REQUIRE(dst_result.has_value());
+        Address dst = *dst_result;
         rm->copy(addr, dst, 256);
 
         // Read back and verify

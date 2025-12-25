@@ -17,6 +17,11 @@ kpu_add_component_test(resource_api_test "driver"
     test_resource_api.cpp
 )
 
+# Comprehensive test for all resource types
+kpu_add_component_test(all_resources_test "driver"
+    test_all_resources.cpp
+)
+
 # Memory safety and bounds checking tests  
 # kpu_add_component_test(memory_safety_test "driver"
 #     test_memory_bounds.cpp

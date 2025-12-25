@@ -111,3 +111,9 @@ kpu_add_example(tile_layout_test
 target_link_libraries(example_tile_layout_test PRIVATE
     kpu_isa
 )
+
+kpu_add_example(resource_api_demo
+    FOLDER "basic"
+    DESCRIPTION "Resource API demonstration: discovery, allocation, status, statistics"
+    SOURCES resource_api_demo.cpp
+)

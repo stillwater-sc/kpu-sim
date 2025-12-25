@@ -175,12 +175,12 @@ const ResourceManager::ResourceAllocator* ResourceManager::find_allocator(Resour
     return &it->second;
 }
 
-Address ResourceManager::allocate(ResourceHandle resource, Size size, Size alignment,
-                                   const std::string& label) {
+std::optional<Address> ResourceManager::allocate(ResourceHandle resource, Size size, Size alignment,
+                                                  const std::string& label) {
     validate_memory_resource(resource);
 
     if (size == 0) {
-        return 0;
+        return std::nullopt;
     }
 
     // Validate alignment is power of 2
@@ -195,7 +195,7 @@ Address ResourceManager::allocate(ResourceHandle resource, Size size, Size align
 
     // Check if allocation fits
     if (aligned + size > resource.base_address + resource.capacity) {
-        return 0;  // Out of memory
+        return std::nullopt;  // Out of memory
     }
 
     // Record allocation
@@ -209,8 +209,8 @@ Address ResourceManager::allocate(ResourceHandle resource, Size size, Size align
     return aligned;
 }
 
-Address ResourceManager::allocate(ResourceType type, Size size, Size alignment,
-                                   const std::string& label) {
+std::optional<Address> ResourceManager::allocate(ResourceType type, Size size, Size alignment,
+                                                  const std::string& label) {
     if (!is_memory_resource(type)) {
         throw std::invalid_argument("Cannot allocate in non-memory resource type: " +
                                      resource_type_name(type));
@@ -220,13 +220,13 @@ Address ResourceManager::allocate(ResourceType type, Size size, Size alignment,
     size_t count = get_resource_count(type);
     for (size_t i = 0; i < count; ++i) {
         ResourceHandle resource = get_resource(type, i);
-        Address addr = allocate(resource, size, alignment, label);
-        if (addr != 0) {
+        auto addr = allocate(resource, size, alignment, label);
+        if (addr.has_value()) {
             return addr;
         }
     }
 
-    return 0;  // All resources exhausted
+    return std::nullopt;  // All resources exhausted
 }
 
 bool ResourceManager::deallocate(Address address) {
@@ -471,6 +471,242 @@ void ResourceManager::validate_memory_resource(ResourceHandle resource) const {
     if (!resource.is_memory()) {
         throw std::invalid_argument("Expected memory resource, got: " + resource.to_string());
     }
+}
+
+// =========================================
+// Resource Reset and Clear
+// =========================================
+
+void ResourceManager::clear(ResourceHandle resource) {
+    validate_memory_resource(resource);
+
+    // Zero out the entire memory region
+    std::vector<uint8_t> zeros(resource.capacity, 0);
+
+    switch (resource.type) {
+        case ResourceType::HOST_MEMORY:
+            simulator_.write_host_memory(resource.id, 0, zeros.data(), resource.capacity);
+            break;
+        case ResourceType::EXTERNAL_MEMORY:
+            simulator_.write_memory_bank(resource.id, 0, zeros.data(), resource.capacity);
+            break;
+        case ResourceType::L3_TILE:
+            simulator_.write_l3_tile(resource.id, 0, zeros.data(), resource.capacity);
+            break;
+        case ResourceType::L2_BANK:
+            simulator_.write_l2_bank(resource.id, 0, zeros.data(), resource.capacity);
+            break;
+        case ResourceType::L1_BUFFER:
+            simulator_.write_l1_buffer(resource.id, 0, zeros.data(), resource.capacity);
+            break;
+        case ResourceType::PAGE_BUFFER:
+            simulator_.write_scratchpad(resource.id, 0, zeros.data(), resource.capacity);
+            break;
+        default:
+            throw std::invalid_argument("Cannot clear non-memory resource");
+    }
+}
+
+void ResourceManager::reset_allocations(ResourceHandle resource) {
+    validate_memory_resource(resource);
+
+    size_t key = allocator_key(resource.type, resource.id);
+    auto it = allocators_.find(key);
+    if (it != allocators_.end()) {
+        it->second.next_free = resource.base_address;
+        it->second.total_allocated = 0;
+        it->second.allocations.clear();
+        // Note: peak_allocated and stats are preserved
+    }
+}
+
+void ResourceManager::reset(ResourceHandle resource) {
+    clear(resource);
+    reset_allocations(resource);
+
+    // Also reset stats for this resource
+    size_t key = allocator_key(resource.type, resource.id);
+    auto it = allocators_.find(key);
+    if (it != allocators_.end()) {
+        it->second.stats.reset_counters();
+        it->second.peak_allocated = 0;
+    }
+}
+
+// =========================================
+// Resource Statistics and Status
+// =========================================
+
+ResourceState ResourceManager::get_state(ResourceHandle resource) const {
+    validate_resource(resource);
+
+    if (is_busy(resource)) {
+        return ResourceState::BUSY;
+    }
+    return ResourceState::IDLE;
+}
+
+ResourceStatus ResourceManager::get_status(ResourceHandle resource) const {
+    validate_resource(resource);
+
+    ResourceStatus status;
+    status.handle = resource;
+    status.state = get_state(resource);
+
+    if (resource.is_memory()) {
+        status.memory_stats = get_memory_stats(resource);
+    } else if (resource.is_compute()) {
+        status.compute_stats = get_compute_stats(resource);
+    } else if (resource.is_data_movement()) {
+        status.data_movement_stats = get_data_movement_stats(resource);
+    }
+
+    return status;
+}
+
+MemoryResourceStats ResourceManager::get_memory_stats(ResourceHandle resource) const {
+    validate_memory_resource(resource);
+
+    MemoryResourceStats stats;
+    stats.capacity_bytes = resource.capacity;
+    stats.allocated_bytes = get_allocated_bytes(resource);
+    stats.available_bytes = get_available_bytes(resource);
+
+    // Get stats from allocator if exists
+    const ResourceAllocator* alloc = find_allocator(resource);
+    if (alloc) {
+        stats.peak_allocated_bytes = alloc->peak_allocated;
+        stats.read_count = alloc->stats.read_count;
+        stats.write_count = alloc->stats.write_count;
+        stats.bytes_read = alloc->stats.bytes_read;
+        stats.bytes_written = alloc->stats.bytes_written;
+        stats.read_cycles = alloc->stats.read_cycles;
+        stats.write_cycles = alloc->stats.write_cycles;
+        stats.stall_cycles = alloc->stats.stall_cycles;
+    }
+
+    return stats;
+}
+
+ComputeResourceStats ResourceManager::get_compute_stats(ResourceHandle resource) const {
+    validate_resource(resource);
+    if (!resource.is_compute()) {
+        throw std::invalid_argument("Expected compute resource, got: " + resource.to_string());
+    }
+
+    size_t key = allocator_key(resource.type, resource.id);
+    auto it = compute_stats_.find(key);
+    if (it != compute_stats_.end()) {
+        return it->second;
+    }
+    return ComputeResourceStats();
+}
+
+DataMovementStats ResourceManager::get_data_movement_stats(ResourceHandle resource) const {
+    validate_resource(resource);
+    if (!resource.is_data_movement()) {
+        throw std::invalid_argument("Expected data movement resource, got: " + resource.to_string());
+    }
+
+    size_t key = allocator_key(resource.type, resource.id);
+    auto it = data_movement_stats_.find(key);
+    if (it != data_movement_stats_.end()) {
+        return it->second;
+    }
+    return DataMovementStats();
+}
+
+void ResourceManager::reset_stats(ResourceHandle resource) {
+    validate_resource(resource);
+
+    size_t key = allocator_key(resource.type, resource.id);
+
+    if (resource.is_memory()) {
+        auto it = allocators_.find(key);
+        if (it != allocators_.end()) {
+            it->second.stats.reset_counters();
+        }
+    } else if (resource.is_compute()) {
+        auto it = compute_stats_.find(key);
+        if (it != compute_stats_.end()) {
+            it->second.reset_counters();
+        }
+    } else if (resource.is_data_movement()) {
+        auto it = data_movement_stats_.find(key);
+        if (it != data_movement_stats_.end()) {
+            it->second.reset_counters();
+        }
+    }
+}
+
+SystemStats ResourceManager::get_system_stats() const {
+    SystemStats stats;
+
+    // Aggregate memory stats
+    for (const auto& [key, alloc] : allocators_) {
+        stats.total_memory_allocated += alloc.total_allocated;
+        stats.total_memory_read_bytes += alloc.stats.bytes_read;
+        stats.total_memory_write_bytes += alloc.stats.bytes_written;
+    }
+
+    // Aggregate compute stats
+    for (const auto& [key, cs] : compute_stats_) {
+        stats.total_compute_ops += cs.total_ops;
+        stats.total_flops += cs.total_flops;
+    }
+
+    // Aggregate data movement stats
+    for (const auto& [key, dms] : data_movement_stats_) {
+        stats.total_transfers += dms.transfer_count;
+        stats.total_bytes_moved += dms.bytes_transferred;
+    }
+
+    // Calculate total memory capacity
+    auto mem_resources = get_memory_resources();
+    for (const auto& res : mem_resources) {
+        stats.total_memory_capacity += res.capacity;
+    }
+
+    return stats;
+}
+
+void ResourceManager::reset_all_stats() {
+    for (auto& [key, alloc] : allocators_) {
+        alloc.stats.reset_counters();
+    }
+    for (auto& [key, cs] : compute_stats_) {
+        cs.reset_counters();
+    }
+    for (auto& [key, dms] : data_movement_stats_) {
+        dms.reset_counters();
+    }
+}
+
+double ResourceManager::get_utilization(ResourceHandle resource) const {
+    validate_resource(resource);
+
+    if (resource.is_memory()) {
+        auto stats = get_memory_stats(resource);
+        return stats.utilization_percent();
+    } else if (resource.is_compute()) {
+        auto stats = get_compute_stats(resource);
+        return stats.utilization_percent();
+    } else if (resource.is_data_movement()) {
+        auto stats = get_data_movement_stats(resource);
+        return stats.utilization_percent();
+    }
+
+    return 0.0;
+}
+
+bool ResourceManager::is_empty(ResourceHandle resource) const {
+    validate_memory_resource(resource);
+    return get_allocated_bytes(resource) == 0;
+}
+
+bool ResourceManager::is_full(ResourceHandle resource) const {
+    validate_memory_resource(resource);
+    return get_available_bytes(resource) == 0;
 }
 
 } // namespace sw::kpu

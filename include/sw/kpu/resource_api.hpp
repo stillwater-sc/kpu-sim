@@ -13,149 +13,13 @@
 
 #include <sw/concepts.hpp>
 #include <sw/kpu/data_types.hpp>
+#include <sw/kpu/resource_handle.hpp>
+#include <sw/kpu/resource_stats.hpp>
 
 namespace sw::kpu {
 
 // Forward declarations
 class KPUSimulator;
-
-/**
- * @brief Types of hardware resources in the KPU
- *
- * The KPU has a hierarchical memory system and various compute/data movement resources.
- * This enum identifies all addressable resource types.
- */
-enum class ResourceType : uint8_t {
-    // Memory resources (hierarchical)
-    HOST_MEMORY = 0,        // Host system memory (NUMA regions)
-    EXTERNAL_MEMORY = 1,    // KPU-local memory (GDDR6/HBM banks)
-    L3_TILE = 2,            // L3 distributed cache tiles
-    L2_BANK = 3,            // L2 cache banks
-    L1_BUFFER = 4,          // L1 streaming buffers (compute fabric)
-    PAGE_BUFFER = 5,        // Page buffers to coalesce tile requests (memory controller)
-
-    // Compute resources
-    COMPUTE_TILE = 6,       // Compute tiles (systolic arrays)
-
-    // Data movement resources
-    DMA_ENGINE = 7,         // DMA engines for external transfers
-    BLOCK_MOVER = 8,        // Block movers for L3-L2 transfers
-    STREAMER = 9,           // Streamers for L2-L1 transfers
-
-    // Sentinel
-    COUNT = 10
-};
-
-/**
- * @brief Get string name of a resource type
- * @param type The resource type
- * @return String representation
- */
-inline std::string resource_type_name(ResourceType type) {
-    switch (type) {
-        case ResourceType::HOST_MEMORY: return "host_memory";
-        case ResourceType::EXTERNAL_MEMORY: return "external_memory";
-        case ResourceType::L3_TILE: return "l3_tile";
-        case ResourceType::L2_BANK: return "l2_bank";
-        case ResourceType::L1_BUFFER: return "l1_buffer";
-        case ResourceType::PAGE_BUFFER: return "page_buffer";
-        case ResourceType::COMPUTE_TILE: return "compute_tile";
-        case ResourceType::DMA_ENGINE: return "dma_engine";
-        case ResourceType::BLOCK_MOVER: return "block_mover";
-        case ResourceType::STREAMER: return "streamer";
-        default: return "unknown";
-    }
-}
-
-/**
- * @brief Check if a resource type is a memory resource
- * @param type The resource type
- * @return true if memory resource
- */
-constexpr bool is_memory_resource(ResourceType type) {
-    switch (type) {
-        case ResourceType::HOST_MEMORY:
-        case ResourceType::EXTERNAL_MEMORY:
-        case ResourceType::L3_TILE:
-        case ResourceType::L2_BANK:
-        case ResourceType::L1_BUFFER:
-        case ResourceType::PAGE_BUFFER:
-            return true;
-        default:
-            return false;
-    }
-}
-
-/**
- * @brief Check if a resource type is a compute resource
- * @param type The resource type
- * @return true if compute resource
- */
-constexpr bool is_compute_resource(ResourceType type) {
-    return type == ResourceType::COMPUTE_TILE;
-}
-
-/**
- * @brief Check if a resource type is a data movement resource
- * @param type The resource type
- * @return true if data movement resource
- */
-constexpr bool is_data_movement_resource(ResourceType type) {
-    switch (type) {
-        case ResourceType::DMA_ENGINE:
-        case ResourceType::BLOCK_MOVER:
-        case ResourceType::STREAMER:
-            return true;
-        default:
-            return false;
-    }
-}
-
-/**
- * @brief Handle to a hardware resource
- *
- * ResourceHandle provides a unified way to identify and access any hardware
- * resource in the KPU. Handles are lightweight value types that can be
- * stored, passed, and compared efficiently.
- */
-struct ResourceHandle {
-    ResourceType type;          // Type of resource
-    size_t id;                  // Resource index within its type
-    Address base_address;       // Base address in unified address space (for memory resources)
-    Size capacity;              // Capacity in bytes (for memory resources)
-
-    ResourceHandle()
-        : type(ResourceType::COUNT), id(0), base_address(0), capacity(0) {}
-
-    ResourceHandle(ResourceType t, size_t i, Address base = 0, Size cap = 0)
-        : type(t), id(i), base_address(base), capacity(cap) {}
-
-    // Check if handle is valid
-    bool is_valid() const { return type != ResourceType::COUNT; }
-
-    // Check if handle refers to a memory resource
-    bool is_memory() const { return is_memory_resource(type); }
-
-    // Check if handle refers to a compute resource
-    bool is_compute() const { return is_compute_resource(type); }
-
-    // Check if handle refers to a data movement resource
-    bool is_data_movement() const { return is_data_movement_resource(type); }
-
-    // Equality comparison
-    bool operator==(const ResourceHandle& other) const {
-        return type == other.type && id == other.id;
-    }
-
-    bool operator!=(const ResourceHandle& other) const {
-        return !(*this == other);
-    }
-
-    // String representation for debugging
-    std::string to_string() const {
-        return resource_type_name(type) + "[" + std::to_string(id) + "]";
-    }
-};
 
 /**
  * @brief Information about a memory allocation
@@ -257,11 +121,11 @@ public:
      * @param size Size in bytes to allocate
      * @param alignment Required alignment (must be power of 2, default 64)
      * @param label Optional label for debugging
-     * @return Allocated address, or 0 if allocation failed
+     * @return Allocated address, or nullopt if allocation failed
      * @throws std::invalid_argument if resource is not a memory resource
      */
-    Address allocate(ResourceHandle resource, Size size, Size alignment = 64,
-                     const std::string& label = "");
+    std::optional<Address> allocate(ResourceHandle resource, Size size, Size alignment = 64,
+                                    const std::string& label = "");
 
     /**
      * @brief Allocate memory in the first available resource of a given type
@@ -269,11 +133,11 @@ public:
      * @param size Size in bytes to allocate
      * @param alignment Required alignment (must be power of 2, default 64)
      * @param label Optional label for debugging
-     * @return Allocated address, or 0 if allocation failed
+     * @return Allocated address, or nullopt if allocation failed
      * @throws std::invalid_argument if type is not a memory resource type
      */
-    Address allocate(ResourceType type, Size size, Size alignment = 64,
-                     const std::string& label = "");
+    std::optional<Address> allocate(ResourceType type, Size size, Size alignment = 64,
+                                    const std::string& label = "");
 
     /**
      * @brief Deallocate memory
@@ -403,6 +267,134 @@ public:
      */
     bool is_valid_range(Address address, Size size) const;
 
+    // =========================================
+    // Resource Reset and Clear
+    // =========================================
+
+    /**
+     * @brief Clear (zero out) a memory resource's contents
+     *
+     * Writes zeros to the entire capacity of the memory resource.
+     * Does not affect allocation tracking - allocations remain valid.
+     *
+     * @param resource Handle to the memory resource
+     * @throws std::invalid_argument if resource is not a memory resource
+     */
+    void clear(ResourceHandle resource);
+
+    /**
+     * @brief Reset a memory resource's allocation state
+     *
+     * Frees all allocations and resets the allocator to initial state.
+     * Does NOT zero the memory contents (use clear() for that).
+     *
+     * @param resource Handle to the memory resource
+     * @throws std::invalid_argument if resource is not a memory resource
+     */
+    void reset_allocations(ResourceHandle resource);
+
+    /**
+     * @brief Clear and reset a memory resource completely
+     *
+     * Combines clear() and reset_allocations() - zeros memory and frees allocations.
+     *
+     * @param resource Handle to the memory resource
+     * @throws std::invalid_argument if resource is not a memory resource
+     */
+    void reset(ResourceHandle resource);
+
+    // =========================================
+    // Resource Statistics and Status
+    // =========================================
+
+    /**
+     * @brief Get current operational state of a resource
+     * @param resource The resource handle
+     * @return Current ResourceState
+     */
+    ResourceState get_state(ResourceHandle resource) const;
+
+    /**
+     * @brief Get comprehensive status for a resource
+     *
+     * Returns state and type-appropriate statistics.
+     *
+     * @param resource The resource handle
+     * @return ResourceStatus with state and stats
+     */
+    ResourceStatus get_status(ResourceHandle resource) const;
+
+    /**
+     * @brief Get statistics for a memory resource
+     * @param resource Handle to a memory resource
+     * @return MemoryResourceStats
+     * @throws std::invalid_argument if not a memory resource
+     */
+    MemoryResourceStats get_memory_stats(ResourceHandle resource) const;
+
+    /**
+     * @brief Get statistics for a compute resource
+     * @param resource Handle to a compute resource
+     * @return ComputeResourceStats
+     * @throws std::invalid_argument if not a compute resource
+     */
+    ComputeResourceStats get_compute_stats(ResourceHandle resource) const;
+
+    /**
+     * @brief Get statistics for a data movement resource
+     * @param resource Handle to a data movement resource
+     * @return DataMovementStats
+     * @throws std::invalid_argument if not a data movement resource
+     */
+    DataMovementStats get_data_movement_stats(ResourceHandle resource) const;
+
+    /**
+     * @brief Reset statistics counters for a resource
+     *
+     * Clears all counters (bytes transferred, operations, etc.)
+     * but preserves capacity and current allocation state.
+     *
+     * @param resource The resource handle
+     */
+    void reset_stats(ResourceHandle resource);
+
+    /**
+     * @brief Get system-wide aggregated statistics
+     * @return SystemStats aggregated across all resources
+     */
+    SystemStats get_system_stats() const;
+
+    /**
+     * @brief Reset all statistics counters across all resources
+     */
+    void reset_all_stats();
+
+    /**
+     * @brief Get utilization percentage for a resource
+     *
+     * For memory: allocated / capacity
+     * For compute: compute_cycles / total_cycles
+     * For data movement: active_cycles / total_cycles
+     *
+     * @param resource The resource handle
+     * @return Utilization as percentage (0-100)
+     */
+    double get_utilization(ResourceHandle resource) const;
+
+    /**
+     * @brief Check if a memory resource is empty (no allocations)
+     * @param resource Handle to a memory resource
+     * @return true if no allocations exist
+     */
+    bool is_empty(ResourceHandle resource) const;
+
+    /**
+     * @brief Check if a memory resource is full (no available space)
+     * @param resource Handle to a memory resource
+     * @return true if available bytes is zero
+     */
+    bool is_full(ResourceHandle resource) const;
+
 private:
     KPUSimulator& simulator_;
 
@@ -410,11 +402,21 @@ private:
     struct ResourceAllocator {
         Address next_free;          // Next free address (bump allocator)
         Size total_allocated;       // Total bytes allocated
+        Size peak_allocated;        // High watermark
         std::vector<AllocationInfo> allocations;  // All allocations in this resource
+
+        // Statistics
+        MemoryResourceStats stats;
+
+        ResourceAllocator() : next_free(0), total_allocated(0), peak_allocated(0) {}
     };
 
     // Map from (type, id) to allocator state
     std::unordered_map<size_t, ResourceAllocator> allocators_;
+
+    // Statistics for non-memory resources
+    std::unordered_map<size_t, ComputeResourceStats> compute_stats_;
+    std::unordered_map<size_t, DataMovementStats> data_movement_stats_;
 
     // Helper to get allocator key
     static size_t allocator_key(ResourceType type, size_t id) {
