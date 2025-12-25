@@ -54,6 +54,7 @@ add_subdirectory(compute)
 add_subdirectory(storage)
 add_subdirectory(compiler)
 add_subdirectory(isa)
+add_subdirectory(runtime)
 add_subdirectory(integration)
 #add_subdirectory(benchmarks)
 
@@ -163,6 +164,14 @@ add_custom_target(test_integration
     VERBATIM
 )
 set_target_properties(test_integration PROPERTIES FOLDER "Tests/Runners")
+
+add_custom_target(test_runtime
+    COMMAND ${CMAKE_CTEST_COMMAND} -C $<CONFIG> --output-on-failure -L runtime
+    COMMENT "Running runtime tests"
+    WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
+    VERBATIM
+)
+set_target_properties(test_runtime PROPERTIES FOLDER "Tests/Runners")
 
 #add_custom_target(test_benchmarks
 #    COMMAND ${CMAKE_CTEST_COMMAND} -C $<CONFIG> --output-on-failure -L benchmark
