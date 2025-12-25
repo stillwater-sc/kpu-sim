@@ -104,12 +104,12 @@ void Streamer::enqueue_stream(const StreamConfig& config) {
             );
             payload.destination = trace::MemoryLocation(
                 config.l1_base_addr, stream_size, static_cast<uint32_t>(config.l1_scratchpad_id),
-                trace::ComponentType::SCRATCHPAD
+                trace::ComponentType::PAGE_BUFFER
             );
         } else {
             payload.source = trace::MemoryLocation(
                 config.l1_base_addr, stream_size, static_cast<uint32_t>(config.l1_scratchpad_id),
-                trace::ComponentType::SCRATCHPAD
+                trace::ComponentType::PAGE_BUFFER
             );
             payload.destination = trace::MemoryLocation(
                 config.l2_base_addr, stream_size, static_cast<uint32_t>(config.l2_bank_id),
@@ -180,12 +180,12 @@ bool Streamer::update(Cycle current_cycle,
                 );
                 payload.destination = trace::MemoryLocation(
                     config.l1_base_addr, stream_size, static_cast<uint32_t>(config.l1_scratchpad_id),
-                    trace::ComponentType::SCRATCHPAD
+                    trace::ComponentType::PAGE_BUFFER
                 );
             } else {
                 payload.source = trace::MemoryLocation(
                     config.l1_base_addr, stream_size, static_cast<uint32_t>(config.l1_scratchpad_id),
-                    trace::ComponentType::SCRATCHPAD
+                    trace::ComponentType::PAGE_BUFFER
                 );
                 payload.destination = trace::MemoryLocation(
                     config.l2_base_addr, stream_size, static_cast<uint32_t>(config.l2_bank_id),

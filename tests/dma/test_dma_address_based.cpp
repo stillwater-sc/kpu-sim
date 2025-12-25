@@ -63,7 +63,7 @@ public:
         decoder.add_region(L3_TILE0_BASE, 128 * 1024, MemoryType::L3_TILE, 0, "L3 Tile 0");
         decoder.add_region(L3_TILE1_BASE, 128 * 1024, MemoryType::L3_TILE, 1, "L3 Tile 1");
         decoder.add_region(L2_BANK0_BASE, 64 * 1024, MemoryType::L2_BANK, 0, "L2 Bank 0");
-        decoder.add_region(SCRATCHPAD0_BASE, 256 * 1024, MemoryType::SCRATCHPAD, 0, "Scratchpad 0");
+        decoder.add_region(SCRATCHPAD0_BASE, 256 * 1024, MemoryType::PAGE_BUFFER, 0, "PageBuffer 0");
 
         // Connect address decoder to DMA engine
         dma_engine.set_address_decoder(&decoder);
@@ -91,7 +91,7 @@ public:
 
     bool verify_scratchpad_data(Address addr, const std::vector<uint8_t>& expected) {
         auto route = decoder.decode(addr);
-        if (route.type != MemoryType::SCRATCHPAD) return false;
+        if (route.type != MemoryType::PAGE_BUFFER) return false;
 
         std::vector<uint8_t> actual(expected.size());
         scratchpads[route.id].read(route.offset, actual.data(), expected.size());
@@ -191,7 +191,7 @@ TEST_CASE_METHOD(AddressBasedDMAFixture, "Address-Based API: Memory Map Visualiz
     REQUIRE(route1.offset == 0x5000);
 
     auto route_scratch = decoder.decode(SCRATCHPAD0_BASE + 0x100);
-    REQUIRE(route_scratch.type == MemoryType::SCRATCHPAD);
+    REQUIRE(route_scratch.type == MemoryType::PAGE_BUFFER);
     REQUIRE(route_scratch.id == 0);
     REQUIRE(route_scratch.offset == 0x100);
 }
@@ -326,7 +326,7 @@ TEST_CASE_METHOD(AddressBasedDMAFixture, "Address-Based API: Comparison with Typ
 
         dma_engine.enqueue_transfer(
             DMAEngine::MemoryType::KPU_MEMORY, src_route.id, src_route.offset,
-            DMAEngine::MemoryType::SCRATCHPAD, dst_route.id, dst_route.offset,
+            DMAEngine::MemoryType::PAGE_BUFFER, dst_route.id, dst_route.offset,
             transfer_size,
             [&complete]() { complete = true; }
         );

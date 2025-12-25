@@ -68,7 +68,7 @@ void DMAEngine::enqueue_transfer(Address src_addr, Address dst_addr, Size size,
             case sw::memory::MemoryType::EXTERNAL:    return MemoryType::KPU_MEMORY;
             case sw::memory::MemoryType::L3_TILE:     return MemoryType::L3_TILE;
             case sw::memory::MemoryType::L2_BANK:     return MemoryType::L2_BANK;
-            case sw::memory::MemoryType::SCRATCHPAD:  return MemoryType::SCRATCHPAD;
+            case sw::memory::MemoryType::PAGE_BUFFER: return MemoryType::PAGE_BUFFER;
             default:
                 throw std::runtime_error("Unknown memory type in address decoder");
         }
@@ -132,12 +132,12 @@ bool DMAEngine::process_transfers(std::vector<ExternalMemory>& host_memory_regio
         transfer.start_cycle = current_cycle_;
 
         // Validate destination capacity before starting the transfer
-        if (transfer.dst_type == MemoryType::SCRATCHPAD) {
+        if (transfer.dst_type == MemoryType::PAGE_BUFFER) {
             if (transfer.dst_id >= scratchpads.size()) {
-                throw std::out_of_range("Invalid destination scratchpad ID: " + std::to_string(transfer.dst_id));
+                throw std::out_of_range("Invalid destination page buffer ID: " + std::to_string(transfer.dst_id));
             }
             if (transfer.dst_addr + transfer.size > scratchpads[transfer.dst_id].get_capacity()) {
-                throw std::out_of_range("DMA transfer would exceed scratchpad capacity: addr=" +
+                throw std::out_of_range("DMA transfer would exceed page buffer capacity: addr=" +
                     std::to_string(transfer.dst_addr) + " size=" + std::to_string(transfer.size) +
                     " capacity=" + std::to_string(scratchpads[transfer.dst_id].get_capacity()));
             }
@@ -174,7 +174,7 @@ bool DMAEngine::process_transfers(std::vector<ExternalMemory>& host_memory_regio
                     case MemoryType::KPU_MEMORY: return trace::ComponentType::KPU_MEMORY;
                     case MemoryType::L3_TILE: return trace::ComponentType::L3_TILE;
                     case MemoryType::L2_BANK: return trace::ComponentType::L2_BANK;
-                    case MemoryType::SCRATCHPAD: return trace::ComponentType::SCRATCHPAD;
+                    case MemoryType::PAGE_BUFFER: return trace::ComponentType::PAGE_BUFFER;
                     default: return trace::ComponentType::UNKNOWN;
                 }
             };
@@ -228,9 +228,9 @@ bool DMAEngine::process_transfers(std::vector<ExternalMemory>& host_memory_regio
                 l2_banks[transfer.src_id].read(transfer.src_addr, transfer_buffer.data(), transfer.size);
                 break;
 
-            case MemoryType::SCRATCHPAD:
+            case MemoryType::PAGE_BUFFER:
                 if (transfer.src_id >= scratchpads.size()) {
-                    throw std::out_of_range("Invalid source scratchpad ID: " + std::to_string(transfer.src_id));
+                    throw std::out_of_range("Invalid source page buffer ID: " + std::to_string(transfer.src_id));
                 }
                 scratchpads[transfer.src_id].read(transfer.src_addr, transfer_buffer.data(), transfer.size);
                 break;
@@ -245,7 +245,7 @@ bool DMAEngine::process_transfers(std::vector<ExternalMemory>& host_memory_regio
                     case MemoryType::KPU_MEMORY: return trace::ComponentType::KPU_MEMORY;
                     case MemoryType::L3_TILE: return trace::ComponentType::L3_TILE;
                     case MemoryType::L2_BANK: return trace::ComponentType::L2_BANK;
-                    case MemoryType::SCRATCHPAD: return trace::ComponentType::SCRATCHPAD;
+                    case MemoryType::PAGE_BUFFER: return trace::ComponentType::PAGE_BUFFER;
                     default: return trace::ComponentType::UNKNOWN;
                 }
             };
@@ -317,13 +317,13 @@ bool DMAEngine::process_transfers(std::vector<ExternalMemory>& host_memory_regio
                     l2_banks[transfer.dst_id].write(transfer.dst_addr, transfer_buffer.data(), transfer.size);
                     break;
 
-                case MemoryType::SCRATCHPAD:
+                case MemoryType::PAGE_BUFFER:
                     if (transfer.dst_id >= scratchpads.size()) {
-                        throw std::out_of_range("Invalid destination scratchpad ID: " + std::to_string(transfer.dst_id));
+                        throw std::out_of_range("Invalid destination page buffer ID: " + std::to_string(transfer.dst_id));
                     }
                     // Validate transfer doesn't exceed destination capacity
                     if (transfer.dst_addr + transfer.size > scratchpads[transfer.dst_id].get_capacity()) {
-                        throw std::out_of_range("DMA transfer would exceed scratchpad capacity: addr=" +
+                        throw std::out_of_range("DMA transfer would exceed page buffer capacity: addr=" +
                             std::to_string(transfer.dst_addr) + " size=" + std::to_string(transfer.size) +
                             " capacity=" + std::to_string(scratchpads[transfer.dst_id].get_capacity()));
                     }
@@ -340,7 +340,7 @@ bool DMAEngine::process_transfers(std::vector<ExternalMemory>& host_memory_regio
                         case MemoryType::KPU_MEMORY: return trace::ComponentType::KPU_MEMORY;
                         case MemoryType::L3_TILE: return trace::ComponentType::L3_TILE;
                         case MemoryType::L2_BANK: return trace::ComponentType::L2_BANK;
-                        case MemoryType::SCRATCHPAD: return trace::ComponentType::SCRATCHPAD;
+                        case MemoryType::PAGE_BUFFER: return trace::ComponentType::PAGE_BUFFER;
                         default: return trace::ComponentType::UNKNOWN;
                     }
                 };
@@ -393,7 +393,7 @@ bool DMAEngine::process_transfers(std::vector<ExternalMemory>& host_memory_regio
                         case MemoryType::KPU_MEMORY: return trace::ComponentType::KPU_MEMORY;
                         case MemoryType::L3_TILE: return trace::ComponentType::L3_TILE;
                         case MemoryType::L2_BANK: return trace::ComponentType::L2_BANK;
-                        case MemoryType::SCRATCHPAD: return trace::ComponentType::SCRATCHPAD;
+                        case MemoryType::PAGE_BUFFER: return trace::ComponentType::PAGE_BUFFER;
                         default: return trace::ComponentType::UNKNOWN;
                     }
                 };

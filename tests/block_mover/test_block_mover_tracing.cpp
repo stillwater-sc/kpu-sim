@@ -13,6 +13,8 @@
 #include <sw/trace/trace_logger.hpp>
 #include <sw/trace/trace_exporter.hpp>
 
+#include "../test_utilities.hpp"
+
 using namespace sw;
 using namespace sw::kpu;
 using namespace sw::trace;
@@ -290,11 +292,12 @@ TEST_CASE_METHOD(BlockMoverTracingFixture, "Trace: Export BlockMover to CSV", "[
     }
 
     // Export traces to CSV
-    bool csv_export_success = export_logger_traces("block_mover_trace_test.csv", "csv", logger);
+    auto csv_path = sw::test::get_test_output_path("block_mover_trace_test.csv");
+    bool csv_export_success = export_logger_traces(csv_path, "csv", logger);
     REQUIRE(csv_export_success);
 
     std::cout << "\n=== BlockMover Trace Export ===" << std::endl;
-    std::cout << "Exported " << logger.get_trace_count() << " traces to block_mover_trace_test.csv" << std::endl;
+    std::cout << "Exported " << logger.get_trace_count() << " traces to " << csv_path << std::endl;
 }
 
 TEST_CASE_METHOD(BlockMoverTracingFixture, "Trace: Export BlockMover to Chrome Trace Format", "[trace][block_mover][export][chrome]") {
@@ -331,11 +334,12 @@ TEST_CASE_METHOD(BlockMoverTracingFixture, "Trace: Export BlockMover to Chrome T
     }
 
     // Export traces to Chrome trace format
-    bool chrome_export_success = export_logger_traces("block_mover_trace_test.trace", "chrome", logger);
+    auto chrome_path = sw::test::get_test_output_path("block_mover_trace_test.trace");
+    bool chrome_export_success = export_logger_traces(chrome_path, "chrome", logger);
     REQUIRE(chrome_export_success);
 
     std::cout << "\n=== Chrome Trace Export ===" << std::endl;
-    std::cout << "Exported " << logger.get_trace_count() << " traces to block_mover_trace_test.trace" << std::endl;
+    std::cout << "Exported " << logger.get_trace_count() << " traces to " << chrome_path << std::endl;
     std::cout << "Open in chrome://tracing for visualization" << std::endl;
 }
 

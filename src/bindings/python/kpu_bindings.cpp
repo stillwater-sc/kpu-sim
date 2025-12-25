@@ -30,7 +30,7 @@ PYBIND11_MODULE(stillwater_kpu, m) {
         .value("KPU_MEMORY", sw::kpu::DMAEngine::MemoryType::KPU_MEMORY)
         .value("L3_TILE", sw::kpu::DMAEngine::MemoryType::L3_TILE)
         .value("L2_BANK", sw::kpu::DMAEngine::MemoryType::L2_BANK)
-        .value("SCRATCHPAD", sw::kpu::DMAEngine::MemoryType::SCRATCHPAD);
+        .value("PAGE_BUFFER", sw::kpu::DMAEngine::MemoryType::PAGE_BUFFER);
     
     py::class_<sw::kpu::DMAEngine>(m, "DMAEngine")
         .def("is_busy", &sw::kpu::DMAEngine::is_busy)

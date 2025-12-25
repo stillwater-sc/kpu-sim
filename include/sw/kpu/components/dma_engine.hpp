@@ -41,8 +41,9 @@ public:
         HOST_MEMORY,      // Host DDR
         KPU_MEMORY,       // KPU main memory banks (GDDR6)
         L3_TILE,          // L3 cache tiles
-        L2_BANK,          // L2 cache banks
-        SCRATCHPAD        // L1 scratchpad
+        L2_BANK,          // L2 cache banks (typically via BlockMover, but DMA can target)
+        PAGE_BUFFER       // Page buffers (memory controller aggregation)
+        // Note: L1 buffers are managed by Streamers, not accessible via DMA
     };
 
     struct Transfer {

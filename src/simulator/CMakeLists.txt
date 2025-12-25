@@ -4,6 +4,7 @@
 
 set(KPU_SIMULATOR_SOURCES
     kpu_simulator.cpp
+    resource_manager.cpp
 #    device_manager.cpp
 #    instruction_set.cpp
 #    execution_engine.cpp

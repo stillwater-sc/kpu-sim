@@ -164,7 +164,7 @@ std::string AddressDecoder::to_string() const {
             case MemoryType::L3_TILE:     type_str = "L3_TILE"; break;
             case MemoryType::L2_BANK:     type_str = "L2_BANK"; break;
             case MemoryType::L1:          type_str = "L1"; break;
-            case MemoryType::SCRATCHPAD:  type_str = "SCRATCHPAD"; break;
+            case MemoryType::PAGE_BUFFER: type_str = "PAGE_BUFFER"; break;
         }
         oss << std::left << std::setw(11) << type_str;
 

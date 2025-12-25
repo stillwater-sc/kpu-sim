@@ -8,6 +8,15 @@ kpu_add_component_test(memory_allocation_test "driver"
     test_memory_alignment.cpp
 )
 
+# Data types and resource API tests
+kpu_add_component_test(data_types_test "driver"
+    test_data_types.cpp
+)
+
+kpu_add_component_test(resource_api_test "driver"
+    test_resource_api.cpp
+)
+
 # Memory safety and bounds checking tests  
 # kpu_add_component_test(memory_safety_test "driver"
 #     test_memory_bounds.cpp

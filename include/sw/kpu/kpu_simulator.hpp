@@ -23,6 +23,7 @@
 #endif
 
 #include <sw/concepts.hpp>
+#include <sw/kpu/data_types.hpp>
 #include <sw/memory/external_memory.hpp>
 #include <sw/memory/address_decoder.hpp>
 #include <sw/kpu/components/scratchpad.hpp>
@@ -35,6 +36,9 @@
 #include <sw/kpu/components/compute_fabric.hpp>
 
 namespace sw::kpu {
+
+// Forward declarations
+class ResourceManager;
 
 // Main KPU Simulator class - clean delegation-based API
 class KPU_API KPUSimulator {
@@ -352,6 +356,21 @@ public:
     const sw::memory::AddressDecoder* get_address_decoder() const {
         return &address_decoder;
     }
+
+    /**
+     * @brief Create a ResourceManager for this simulator
+     *
+     * The ResourceManager provides a unified API for:
+     * - Memory allocation across all memory resources
+     * - Reading/writing to any memory address
+     * - Querying resource availability and status
+     *
+     * Note: The returned ResourceManager holds a reference to this simulator,
+     * so the simulator must outlive the ResourceManager.
+     *
+     * @return A new ResourceManager instance
+     */
+    std::unique_ptr<ResourceManager> create_resource_manager();
 
 private:
     void validate_host_memory_region_id(size_t region_id) const;

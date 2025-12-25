@@ -159,7 +159,7 @@ private:
             case ComponentType::L1:                 return 10; // L1 streaming buffers
             case ComponentType::COMPUTE_FABRIC:     return 11; // Compute orchestrator
             case ComponentType::SYSTOLIC_ARRAY:     return 12; // Compute engine
-            case ComponentType::SCRATCHPAD:         return 15; // Memory controller buffers
+            case ComponentType::PAGE_BUFFER:        return 15; // Memory controller page buffers
             case ComponentType::STORAGE_SCHEDULER:  return 20; // System services
             case ComponentType::MEMORY_ORCHESTRATOR: return 21;
             default: return 99;  // Unknown/other components

@@ -5,6 +5,7 @@
 #include <cstring>
 
 #include "sw/kpu/kpu_simulator.hpp"
+#include "sw/kpu/resource_api.hpp"
 
 namespace sw::kpu {
 
@@ -158,8 +159,8 @@ KPUSimulator::KPUSimulator(const Config& config) : current_cycle(0) {
     }
     for (size_t i = 0; i < config.scratchpad_count; ++i) {
         Size capacity = config.scratchpad_capacity_kb * 1024;
-        address_decoder.add_region(current_addr, capacity, sw::memory::MemoryType::SCRATCHPAD, i,
-                                  "Scratchpad " + std::to_string(i));
+        address_decoder.add_region(current_addr, capacity, sw::memory::MemoryType::PAGE_BUFFER, i,
+                                  "PageBuffer " + std::to_string(i));
         current_addr += capacity;
     }
 
@@ -1081,6 +1082,14 @@ Address KPUSimulator::get_scratchpad_base(size_t pad_id) const {
         base += scratchpads[i].get_capacity();
     }
     return base;
+}
+
+// ===========================================
+// Resource Manager Factory
+// ===========================================
+
+std::unique_ptr<ResourceManager> KPUSimulator::create_resource_manager() {
+    return std::make_unique<ResourceManager>(*this);
 }
 
 } // namespace sw::kpu

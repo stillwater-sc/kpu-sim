@@ -13,6 +13,8 @@
 #include <sw/trace/trace_logger.hpp>
 #include <sw/trace/trace_exporter.hpp>
 
+#include "../test_utilities.hpp"
+
 using namespace sw;
 using namespace sw::kpu;
 using namespace sw::trace;
@@ -136,7 +138,7 @@ TEST_CASE_METHOD(StreamerTracingFixture, "Trace: Streamer L2->L1 Row Stream", "[
     const auto& payload = std::get<DMAPayload>(complete_trace.payload);
     REQUIRE(payload.bytes_transferred == matrix_height * matrix_width * element_size);
     REQUIRE(payload.source.type == ComponentType::L2_BANK);
-    REQUIRE(payload.destination.type == ComponentType::SCRATCHPAD);
+    REQUIRE(payload.destination.type == ComponentType::PAGE_BUFFER);
 
     std::cout << "\n=== Streamer L2->L1 Row Stream Trace ===" << std::endl;
     std::cout << "Transaction ID: " << complete_trace.transaction_id << std::endl;
@@ -264,7 +266,7 @@ TEST_CASE_METHOD(StreamerTracingFixture, "Trace: Streamer L1->L2 Row Stream", "[
 
     // Verify payload shows correct source/destination
     const auto& payload = std::get<DMAPayload>(complete_trace.payload);
-    REQUIRE(payload.source.type == ComponentType::SCRATCHPAD);
+    REQUIRE(payload.source.type == ComponentType::PAGE_BUFFER);
     REQUIRE(payload.destination.type == ComponentType::L2_BANK);
 
     std::cout << "\n=== Streamer L1->L2 Writeback Trace ===" << std::endl;
@@ -382,11 +384,12 @@ TEST_CASE_METHOD(StreamerTracingFixture, "Trace: Export Streamer to CSV", "[trac
     }
 
     // Export traces to CSV
-    bool csv_export_success = export_logger_traces("streamer_trace_test.csv", "csv", logger);
+    auto csv_path = sw::test::get_test_output_path("streamer_trace_test.csv");
+    bool csv_export_success = export_logger_traces(csv_path, "csv", logger);
     REQUIRE(csv_export_success);
 
     std::cout << "\n=== Streamer Trace Export ===" << std::endl;
-    std::cout << "Exported " << logger.get_trace_count() << " traces to streamer_trace_test.csv" << std::endl;
+    std::cout << "Exported " << logger.get_trace_count() << " traces to " << csv_path << std::endl;
 }
 
 TEST_CASE_METHOD(StreamerTracingFixture, "Trace: Export Streamer to Chrome Format", "[trace][streamer][export][chrome]") {
@@ -435,11 +438,12 @@ TEST_CASE_METHOD(StreamerTracingFixture, "Trace: Export Streamer to Chrome Forma
     }
 
     // Export traces to Chrome trace format
-    bool chrome_export_success = export_logger_traces("streamer_trace_test.trace", "chrome", logger);
+    auto chrome_path = sw::test::get_test_output_path("streamer_trace_test.trace");
+    bool chrome_export_success = export_logger_traces(chrome_path, "chrome", logger);
     REQUIRE(chrome_export_success);
 
     std::cout << "\n=== Chrome Trace Export ===" << std::endl;
-    std::cout << "Exported " << logger.get_trace_count() << " traces to streamer_trace_test.trace" << std::endl;
+    std::cout << "Exported " << logger.get_trace_count() << " traces to " << chrome_path << std::endl;
     std::cout << "Open in chrome://tracing for visualization" << std::endl;
 }
 

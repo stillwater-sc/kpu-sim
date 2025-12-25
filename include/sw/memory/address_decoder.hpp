@@ -35,7 +35,7 @@ namespace sw::memory {
  *
  * Architecture notes:
  * - L3 → L2 → L1 → Compute: Standard cache hierarchy for compute datapath
- * - SCRATCHPAD: Memory controller buffers for external memory aggregation/disaggregation
+ * - PAGE_BUFFER: Memory controller page buffers for internal/external memory aggregation/disaggregation
  *   (separate from cache hierarchy, used for row/column batching)
  */
 enum class MemoryType {
@@ -44,7 +44,7 @@ enum class MemoryType {
     L3_TILE,          // L3 cache tiles
     L2_BANK,          // L2 cache banks
     L1,               // L1 streaming buffers (compute fabric, fed by Streamers)
-    SCRATCHPAD        // Scratchpad buffers (memory controller, for external memory efficiency)
+    PAGE_BUFFER       // Page buffers (memory controller, for internal/external memory efficiency)
 };
 
 /**
@@ -64,7 +64,7 @@ enum class MemoryType {
  * decoder.add_region(0x0000'0000, 512_MB, MemoryType::EXTERNAL, 0);
  * decoder.add_region(0x2000'0000, 512_MB, MemoryType::EXTERNAL, 1);
  * decoder.add_region(0x8000'0000, 128_KB, MemoryType::L3_TILE, 0);
- * decoder.add_region(0xFFFF'0000, 64_KB,  MemoryType::SCRATCHPAD, 0);
+ * decoder.add_region(0xFFFF'0000, 64_KB,  MemoryType::PAGE_BUFFER, 0);
  *
  * // Decode address to routing info
  * auto route = decoder.decode(0x0000'1000);

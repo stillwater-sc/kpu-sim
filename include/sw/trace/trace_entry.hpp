@@ -42,7 +42,7 @@ enum class ComponentType : uint8_t {
     L1 = 9,                    // L1 streaming buffers (compute fabric)
 
     // Memory controller components
-    SCRATCHPAD = 12,           // Scratchpad buffers (memory controller aggregation)
+    PAGE_BUFFER = 12,           // Page buffers (memory controller aggregation)
 
     // KPU compute components
     COMPUTE_FABRIC = 10,       // Compute orchestrator

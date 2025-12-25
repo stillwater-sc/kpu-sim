@@ -62,3 +62,8 @@ build_*/
 .vs/
 .vscode/
 Testing/
+
+# Test artifacts
+*_test.csv
+*_test.json
+*_test.trace
