@@ -9,6 +9,7 @@ add_library(kpu_compiler
     l2_tile_scheduler.cpp
     l3_scheduler.cpp
     schedule_characterizer.cpp
+    kernel_compiler.cpp
 )
 
 target_include_directories(kpu_compiler
@@ -21,6 +22,7 @@ target_include_directories(kpu_compiler
 target_link_libraries(kpu_compiler
     PUBLIC
         nlohmann_json::nlohmann_json
+        kpu_isa                     # For DMProgram, OutputStationaryProgramBuilder
 )
 
 # Add domain_flow support if available

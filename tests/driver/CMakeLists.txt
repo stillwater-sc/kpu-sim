@@ -22,6 +22,11 @@ kpu_add_component_test(all_resources_test "driver"
     test_all_resources.cpp
 )
 
+# Kernel abstraction and compilation tests
+kpu_add_component_test(kernel_test "driver"
+    test_kernel.cpp
+)
+
 # Memory safety and bounds checking tests  
 # kpu_add_component_test(memory_safety_test "driver"
 #     test_memory_bounds.cpp

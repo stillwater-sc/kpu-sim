@@ -5,6 +5,7 @@
 set(KPU_SIMULATOR_SOURCES
     kpu_simulator.cpp
     resource_manager.cpp
+    kernel.cpp
 #    device_manager.cpp
 #    instruction_set.cpp
 #    execution_engine.cpp
@@ -32,6 +33,8 @@ target_include_directories(kpu_simulator
 target_link_libraries(kpu_simulator
     PUBLIC
         kpu_components          # New component-based architecture
+        kpu_compiler            # Kernel compilation (TileOptimizer, etc.)
+        kpu_isa                 # ISA (DMProgram, OutputStationaryProgramBuilder)
     PRIVATE
         $<TARGET_NAME_IF_EXISTS:Threads::Threads>
         $<TARGET_NAME_IF_EXISTS:fmt::fmt>
