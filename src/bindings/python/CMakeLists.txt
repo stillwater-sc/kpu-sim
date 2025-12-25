@@ -93,6 +93,8 @@ endif()
 pybind11_add_module(stillwater_kpu kpu_bindings.cpp)
 target_link_libraries(stillwater_kpu PRIVATE
     kpu_simulator
+    kpu_isa
+    kpu_runtime
     pybind11::headers
 )
 kpu_set_target_options(stillwater_kpu)
