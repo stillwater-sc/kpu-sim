@@ -20,6 +20,7 @@ enum class KernelOpType : uint8_t {
     BATCH_MATMUL = 1,   // Batched matrix multiplication
     CONV2D = 2,         // 2D convolution (future)
     ELEMENTWISE = 3,    // Elementwise operations (future)
+    MLP = 4,            // Fused matmul + bias + activation: C = activation(A x B + bias)
     CUSTOM = 255        // Custom/user-defined
 };
 
@@ -32,6 +33,7 @@ inline const char* kernel_op_type_name(KernelOpType op) {
         case KernelOpType::BATCH_MATMUL: return "batch_matmul";
         case KernelOpType::CONV2D: return "conv2d";
         case KernelOpType::ELEMENTWISE: return "elementwise";
+        case KernelOpType::MLP: return "mlp";
         case KernelOpType::CUSTOM: return "custom";
         default: return "unknown";
     }
@@ -108,6 +110,16 @@ public:
     Kernel(isa::DMProgram program, KernelOpType op_type,
            DataType dtype = DataType::FLOAT32);
 
+    /**
+     * @brief Construct MLP kernel from existing DMProgram
+     * @param program The compiled program (moved)
+     * @param dtype Data type of elements
+     * @param activation Activation function type
+     * @param has_bias Whether bias addition is enabled
+     */
+    Kernel(isa::DMProgram program, DataType dtype,
+           ActivationType activation, bool has_bias);
+
     // Move semantics (efficient, default)
     Kernel(Kernel&&) = default;
     Kernel& operator=(Kernel&&) = default;
@@ -147,6 +159,31 @@ public:
     static Kernel create_from_config(
         const isa::OutputStationaryProgramBuilder::Config& config,
         DataType dtype = DataType::FLOAT32);
+
+    /**
+     * @brief Create a fused MLP kernel (matmul + bias + activation)
+     * @param M Rows of A and C
+     * @param N Columns of B and C
+     * @param K Columns of A, rows of B
+     * @param activation Activation function type
+     * @param has_bias Whether to apply bias addition
+     * @param dtype Data type (default FLOAT32)
+     * @return Compiled kernel
+     *
+     * Creates C = activation(A @ B + bias) in a single fused operation.
+     * The Vector Engine applies bias and activation inline during
+     * the output drain phase, avoiding extra memory passes.
+     *
+     * Arguments:
+     *   - A: [M, K] input matrix
+     *   - B: [K, N] weight matrix
+     *   - bias: [N] bias vector (if has_bias=true)
+     *   - C: [M, N] output matrix
+     */
+    static Kernel create_mlp(Size M, Size N, Size K,
+                             ActivationType activation,
+                             bool has_bias = true,
+                             DataType dtype = DataType::FLOAT32);
 
     // =========================================
     // Metadata Accessors
@@ -232,6 +269,20 @@ public:
     Size Tk() const { return program_.Tk; }
 
     // =========================================
+    // MLP Accessors (for MLP kernels)
+    // =========================================
+
+    /**
+     * @brief Get activation function type (for MLP kernels)
+     */
+    ActivationType activation() const { return activation_; }
+
+    /**
+     * @brief Check if kernel uses bias (for MLP kernels)
+     */
+    bool has_bias() const { return has_bias_; }
+
+    // =========================================
     // Program Access
     // =========================================
 
@@ -293,10 +344,19 @@ private:
     DataType dtype_ = DataType::FLOAT32;
     std::vector<KernelArgument> arguments_;
 
+    // MLP-specific members
+    ActivationType activation_ = ActivationType::NONE;
+    bool has_bias_ = false;
+
     /**
      * @brief Set up arguments for MATMUL operation
      */
     void setup_matmul_arguments();
+
+    /**
+     * @brief Set up arguments for MLP operation
+     */
+    void setup_mlp_arguments();
 };
 
 } // namespace sw::kpu

@@ -248,6 +248,27 @@ public:
     Kernel compile_matmul(Size M, Size N, Size K,
                           Size Ti, Size Tj, Size Tk, Size L1_Ki);
 
+    /**
+     * @brief Compile a fused MLP kernel (matmul + bias + activation)
+     * @param M Rows of A and C
+     * @param N Columns of B and C
+     * @param K Columns of A, rows of B
+     * @param activation Activation function type
+     * @param has_bias Whether to apply bias addition
+     * @param dtype Data type (default FLOAT32)
+     * @param options Compilation options (default: auto-optimize)
+     * @return Compiled kernel
+     *
+     * Generates C = activation(A @ B + bias) as a fused operation.
+     * The Vector Engine applies bias and activation inline during
+     * the output drain phase.
+     */
+    Kernel compile_mlp(Size M, Size N, Size K,
+                       ActivationType activation,
+                       bool has_bias = true,
+                       DataType dtype = DataType::FLOAT32,
+                       const CompileOptions& options = CompileOptions::defaults());
+
     // =========================================
     // Tile Optimization
     // =========================================

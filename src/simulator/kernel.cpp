@@ -25,7 +25,20 @@ Kernel::Kernel(isa::DMProgram program, KernelOpType op_type, DataType dtype)
     // Set up arguments based on operation type
     if (op_type == KernelOpType::MATMUL || op_type == KernelOpType::BATCH_MATMUL) {
         setup_matmul_arguments();
+    } else if (op_type == KernelOpType::MLP) {
+        setup_mlp_arguments();
     }
+}
+
+Kernel::Kernel(isa::DMProgram program, DataType dtype,
+               ActivationType activation, bool has_bias)
+    : program_(std::move(program))
+    , op_type_(KernelOpType::MLP)
+    , dtype_(dtype)
+    , activation_(activation)
+    , has_bias_(has_bias) {
+
+    setup_mlp_arguments();
 }
 
 // ============================================================================
@@ -51,6 +64,15 @@ Kernel Kernel::create_from_config(
 
     // Create kernel with matmul type
     return Kernel(std::move(program), KernelOpType::MATMUL, dtype);
+}
+
+Kernel Kernel::create_mlp(Size M, Size N, Size K,
+                          ActivationType activation,
+                          bool has_bias,
+                          DataType dtype) {
+    // Use KernelCompiler with MLP options
+    compiler::KernelCompiler compiler;
+    return compiler.compile_mlp(M, N, K, activation, has_bias, dtype);
 }
 
 // ============================================================================
@@ -108,9 +130,15 @@ std::string Kernel::summary() const {
     ss << "  Operation: " << kernel_op_type_name(op_type_) << "\n";
     ss << "  Data Type: " << dtype_name(dtype_) << "\n";
 
-    if (op_type_ == KernelOpType::MATMUL || op_type_ == KernelOpType::BATCH_MATMUL) {
+    if (op_type_ == KernelOpType::MATMUL || op_type_ == KernelOpType::BATCH_MATMUL ||
+        op_type_ == KernelOpType::MLP) {
         ss << "  Dimensions: M=" << M() << ", N=" << N() << ", K=" << K() << "\n";
         ss << "  Tile Sizes: Ti=" << Ti() << ", Tj=" << Tj() << ", Tk=" << Tk() << "\n";
+    }
+
+    if (op_type_ == KernelOpType::MLP) {
+        ss << "  Activation: " << activation_type_name(activation_) << "\n";
+        ss << "  Has Bias: " << (has_bias_ ? "yes" : "no") << "\n";
     }
 
     ss << "  Instructions: " << instruction_count() << "\n";
@@ -154,6 +182,23 @@ bool Kernel::validate(std::string& error) const {
         }
     }
 
+    if (op_type_ == KernelOpType::MLP) {
+        if (M() == 0 || N() == 0 || K() == 0) {
+            error = "Matrix dimensions must be non-zero";
+            return false;
+        }
+        if (Ti() == 0 || Tj() == 0 || Tk() == 0) {
+            error = "Tile sizes must be non-zero";
+            return false;
+        }
+        // MLP: A, B, [bias,] C
+        size_t expected_args = has_bias_ ? 4 : 3;
+        if (arguments_.size() < expected_args) {
+            error = "MLP kernel must have at least " + std::to_string(expected_args) + " arguments";
+            return false;
+        }
+    }
+
     error.clear();
     return true;
 }
@@ -170,6 +215,23 @@ Size Kernel::total_flops() const {
         // Matrix multiplication: 2*M*N*K (multiply-add per element)
         return 2 * M() * N() * K();
     }
+    if (op_type_ == KernelOpType::MLP) {
+        // MLP = matmul + bias + activation
+        // Matmul: 2*M*N*K
+        Size flops = 2 * M() * N() * K();
+
+        // Bias addition: M*N additions
+        if (has_bias_) {
+            flops += M() * N();
+        }
+
+        // Activation: M*N operations (varies by type, count as 1 op each)
+        if (activation_ != ActivationType::NONE) {
+            flops += M() * N();
+        }
+
+        return flops;
+    }
     // For other operation types, could return estimates or 0
     return 0;
 }
@@ -180,8 +242,6 @@ Size Kernel::total_flops() const {
 
 void Kernel::setup_matmul_arguments() {
     arguments_.clear();
-
-    Size elem_size = dtype_size(dtype_);
 
     // Input A: [M, K]
     arguments_.emplace_back(
@@ -202,6 +262,40 @@ void Kernel::setup_matmul_arguments() {
         "C", dtype_,
         std::vector<Size>{M(), N()},
         true   // is_output = true
+    );
+}
+
+void Kernel::setup_mlp_arguments() {
+    arguments_.clear();
+
+    // Input A: [M, K]
+    arguments_.emplace_back(
+        "A", dtype_,
+        std::vector<Size>{M(), K()},
+        false
+    );
+
+    // Input B (weights): [K, N]
+    arguments_.emplace_back(
+        "B", dtype_,
+        std::vector<Size>{K(), N()},
+        false
+    );
+
+    // Bias: [N] (if enabled)
+    if (has_bias_) {
+        arguments_.emplace_back(
+            "bias", dtype_,
+            std::vector<Size>{N()},
+            false
+        );
+    }
+
+    // Output C: [M, N]
+    arguments_.emplace_back(
+        "C", dtype_,
+        std::vector<Size>{M(), N()},
+        true
     );
 }
 

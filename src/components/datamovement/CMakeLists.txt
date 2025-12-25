@@ -5,6 +5,7 @@ set(DATAMOVEMENT_COMPONENT_SOURCES
     dma_engine.cpp
     block_mover.cpp
     streamer.cpp
+    vector_engine.cpp
 )
 
 # Create the data_movement components library
@@ -22,6 +23,7 @@ target_include_directories(kpu_datamovement_components
 target_link_libraries(kpu_datamovement_components
     PUBLIC
         kpu_memory_components  # DATAMOVEMENT components depend on memory components (includes AddressDecoder)
+        kpu_compute_components # VectorEngine depends on SFU from compute components
         kpu_trace             # For cycle-accurate tracing
 )
 

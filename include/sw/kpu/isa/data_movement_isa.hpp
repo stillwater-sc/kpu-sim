@@ -26,6 +26,7 @@
 #pragma once
 
 #include <sw/concepts.hpp>
+#include <sw/kpu/components/sfu.hpp>  // For ActivationType
 #include <cstdint>
 #include <vector>
 #include <string>
@@ -193,6 +194,13 @@ struct StreamerOperands {
     Size width;                 // Matrix width
     Size fabric_size;           // Systolic array size
     BufferSlot buffer;          // Buffer slot
+
+    // Vector Engine configuration (for STR_DRAIN_OUTPUT)
+    // VE processes data inline during L1→L2 transfer
+    bool ve_enabled = false;                        ///< Route through Vector Engine
+    ActivationType ve_activation = ActivationType::NONE;  ///< Activation function
+    bool ve_bias_enabled = false;                   ///< Apply bias addition
+    Address ve_bias_addr = 0;                       ///< Bias vector address in L1
 };
 
 /**
@@ -284,7 +292,11 @@ struct DMInstruction {
     static DMInstruction str_drain(TileCoord tile,
                                    uint8_t l2_bank, uint8_t l1_buf,
                                    Address l2_addr, Address l1_addr,
-                                   Size height, Size width, Size fabric_size);
+                                   Size height, Size width, Size fabric_size,
+                                   bool ve_enabled = false,
+                                   ActivationType ve_activation = ActivationType::NONE,
+                                   bool ve_bias_enabled = false,
+                                   Address ve_bias_addr = 0);
 
     static DMInstruction barrier();
     static DMInstruction wait(uint32_t op_mask);

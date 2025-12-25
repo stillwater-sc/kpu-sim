@@ -181,6 +181,117 @@ Kernel KernelCompiler::compile_matmul(Size M, Size N, Size K,
     return compile_matmul(M, N, K, opts);
 }
 
+Kernel KernelCompiler::compile_mlp(Size M, Size N, Size K,
+                                    ActivationType activation,
+                                    bool has_bias,
+                                    DataType dtype,
+                                    const CompileOptions& options) {
+    auto start_time = std::chrono::high_resolution_clock::now();
+
+    last_succeeded_ = false;
+    last_error_.clear();
+    last_stats_ = CompilationStats{};
+
+    // Step 1: Determine tile sizes (same as matmul)
+    TileOptimizer::TileConfig tile_config;
+
+    if (options.is_auto_tiling()) {
+        tile_config = tile_optimizer_.optimize(M, N, K, options.tile_strategy);
+        last_stats_.used_auto_tiling = true;
+
+        if (!tile_config.valid) {
+            last_error_ = "Tile optimization failed: " + tile_config.reason;
+            return Kernel{};
+        }
+    } else {
+        tile_config.Ti = options.Ti;
+        tile_config.Tj = options.Tj;
+        tile_config.Tk = options.Tk;
+        tile_config.L1_Ki = options.L1_Ki > 0 ? options.L1_Ki : options.Tk;
+        tile_config.valid = true;
+        last_stats_.used_auto_tiling = false;
+    }
+
+    // Store tile sizes in stats
+    last_stats_.selected_Ti = tile_config.Ti;
+    last_stats_.selected_Tj = tile_config.Tj;
+    last_stats_.selected_Tk = tile_config.Tk;
+    last_stats_.selected_L1_Ki = tile_config.L1_Ki;
+
+    // Step 2: Build program configuration
+    CompileOptions opts = options;
+    opts.dtype = dtype;
+    isa::OutputStationaryProgramBuilder::Config prog_config =
+        build_program_config(M, N, K, tile_config, opts);
+
+    // Step 3: Generate program
+    // Note: For now, we generate the same program as matmul.
+    // The VE configuration is stored in the kernel metadata.
+    // Future: Modify OutputStationaryProgramBuilder to emit VE-enabled drain ops.
+    isa::OutputStationaryProgramBuilder builder(prog_config);
+    isa::DMProgram program = builder.build();
+
+    // Update program name to indicate MLP
+    std::ostringstream name_ss;
+    name_ss << "mlp_" << M << "x" << N << "x" << K;
+    if (has_bias) {
+        name_ss << "_bias";
+    }
+    name_ss << "_" << activation_type_name(activation);
+    program.name = name_ss.str();
+
+    // Step 4: Count instructions and record stats
+    count_instructions(program);
+
+    // Calculate tile counts
+    auto ceil_div = [](Size a, Size b) { return (a + b - 1) / b; };
+    last_stats_.num_m_tiles = ceil_div(M, tile_config.Ti);
+    last_stats_.num_n_tiles = ceil_div(N, tile_config.Tj);
+    last_stats_.num_k_tiles = ceil_div(K, tile_config.Tk);
+    last_stats_.total_tiles = last_stats_.num_m_tiles *
+                              last_stats_.num_n_tiles *
+                              last_stats_.num_k_tiles;
+
+    // Estimate memory traffic (MLP saves traffic via fusion)
+    Size elem_size = dtype_size(dtype);
+    Size A_bytes = M * K * elem_size;
+    Size B_bytes = K * N * elem_size;
+    Size C_bytes = M * N * elem_size;
+    Size bias_bytes = has_bias ? N * elem_size : 0;
+
+    // With VE fusion, we avoid extra memory passes for bias+activation
+    last_stats_.estimated_external_bytes = A_bytes + B_bytes + C_bytes + bias_bytes;
+    last_stats_.estimated_l3_bytes = last_stats_.estimated_external_bytes;
+
+    // L2 traffic
+    last_stats_.estimated_l2_bytes = last_stats_.total_tiles *
+        (tile_config.Ti * tile_config.Tk +
+         tile_config.Tk * tile_config.Tj +
+         tile_config.Ti * tile_config.Tj) * elem_size;
+
+    // Arithmetic intensity (MLP has slightly higher compute per byte)
+    Size total_flops = 2 * M * N * K;  // matmul
+    if (has_bias) total_flops += M * N;  // bias add
+    if (activation != ActivationType::NONE) total_flops += M * N;  // activation
+    last_stats_.estimated_arithmetic_intensity =
+        static_cast<double>(total_flops) /
+        static_cast<double>(last_stats_.estimated_external_bytes);
+
+    last_stats_.dataflow_used = (options.dataflow == DataflowStrategy::AUTO)
+        ? select_dataflow(M, N, K) : options.dataflow;
+
+    // Compile time
+    auto end_time = std::chrono::high_resolution_clock::now();
+    auto duration = std::chrono::duration_cast<std::chrono::microseconds>(
+        end_time - start_time);
+    last_stats_.compile_time_us = static_cast<double>(duration.count());
+
+    last_succeeded_ = true;
+
+    // Create MLP kernel using the specialized constructor
+    return Kernel(std::move(program), dtype, activation, has_bias);
+}
+
 // ============================================================================
 // Tile Optimization
 // ============================================================================

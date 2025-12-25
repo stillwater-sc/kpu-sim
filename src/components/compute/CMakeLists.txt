@@ -5,6 +5,7 @@
 set(COMPUTE_COMPONENT_SOURCES
     compute_fabric.cpp
     systolic_array.cpp
+    sfu.cpp
 )
 
 # Create the compute components library

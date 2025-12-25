@@ -27,6 +27,11 @@ kpu_add_component_test(kernel_test "driver"
     test_kernel.cpp
 )
 
+# MLP kernel tests
+kpu_add_component_test(mlp_kernel_test "driver"
+    test_mlp_kernel.cpp
+)
+
 # Memory safety and bounds checking tests  
 # kpu_add_component_test(memory_safety_test "driver"
 #     test_memory_bounds.cpp

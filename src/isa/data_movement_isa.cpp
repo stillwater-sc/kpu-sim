@@ -178,7 +178,11 @@ DMInstruction DMInstruction::str_feed_cols(MatrixID mat, TileCoord tile,
 DMInstruction DMInstruction::str_drain(TileCoord tile,
                                        uint8_t l2_bank, uint8_t l1_buf,
                                        Address l2_addr, Address l1_addr,
-                                       Size height, Size width, Size fabric_size) {
+                                       Size height, Size width, Size fabric_size,
+                                       bool ve_enabled,
+                                       ActivationType ve_activation,
+                                       bool ve_bias_enabled,
+                                       Address ve_bias_addr) {
     DMInstruction instr;
     instr.opcode = DMOpcode::STR_DRAIN_OUTPUT;
 
@@ -194,11 +198,26 @@ DMInstruction DMInstruction::str_drain(TileCoord tile,
     ops.fabric_size = fabric_size;
     ops.buffer = BufferSlot::AUTO;
 
+    // Vector Engine configuration for fused bias+activation
+    ops.ve_enabled = ve_enabled;
+    ops.ve_activation = ve_activation;
+    ops.ve_bias_enabled = ve_bias_enabled;
+    ops.ve_bias_addr = ve_bias_addr;
+
     instr.operands = ops;
 
     // C_tile uses [ti, tj] - the output matrix tile coordinates
     std::ostringstream oss;
     oss << "STR_DRAIN C_tile[" << tile.ti << "," << tile.tj << "]";
+    if (ve_enabled) {
+        oss << " +VE";
+        if (ve_bias_enabled) {
+            oss << "+bias";
+        }
+        if (ve_activation != ActivationType::NONE) {
+            oss << "+" << activation_type_name(ve_activation);
+        }
+    }
     instr.label = oss.str();
 
     return instr;
