@@ -37,15 +37,14 @@ int main() {
     std::cout << "  C is " << M << "x" << N << "\n\n";
 
     // Create KPU simulator
-    sw::kpu::KPUSimulator::Config config(
-        1,      // 1 memory bank
-        1024,   // 1GB
-        100,    // 100 GB/s
-        1,      // 1 scratchpad
-        64,     // 64KB
-        1,      // 1 compute tile
-        1       // 1 DMA
-    );
+    sw::kpu::KPUSimulator::Config config;
+    config.memory_bank_count = 1;
+    config.memory_bank_capacity_mb = 1024;
+    config.memory_bandwidth_gbps = 100;
+    config.l1_buffer_count = 1;
+    config.l1_buffer_capacity_kb = 64;
+    config.compute_tile_count = 1;
+    config.dma_engine_count = 1;
 
     sw::kpu::KPUSimulator kpu(config);
 

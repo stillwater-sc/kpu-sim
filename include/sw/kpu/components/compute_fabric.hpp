@@ -23,7 +23,7 @@
 #endif
 
 #include <sw/concepts.hpp>
-#include <sw/kpu/components/scratchpad.hpp>
+#include <sw/kpu/components/l1_buffer.hpp>
 #include <sw/kpu/components/systolic_array.hpp>
 #include <sw/trace/trace_logger.hpp>
 
@@ -40,8 +40,8 @@ public:
 
     struct MatMulConfig {
         Size m, n, k; // Matrix dimensions: C[m,n] = A[m,k] * B[k,n]
-        Address a_addr, b_addr, c_addr; // Addresses in scratchpad
-        size_t scratchpad_id; // Which scratchpad to use
+        Address a_addr, b_addr, c_addr; // Addresses in L1 buffer
+        size_t l1_buffer_id; // Which L1 buffer to use
         std::function<void()> completion_callback;
 
         // Timing and tracing
@@ -90,7 +90,7 @@ public:
 
     // Compute operations
     void start_matmul(const MatMulConfig& config);
-    bool update(Cycle current_cycle, std::vector<Scratchpad>& scratchpads);
+    bool update(Cycle current_cycle, std::vector<L1Buffer>& l1_buffers);
     bool is_busy() const { return is_computing; }
     void reset();
     
@@ -104,8 +104,8 @@ public:
     Size get_systolic_cols() const;
 
 private:
-    void execute_matmul(std::vector<Scratchpad>& scratchpads);
-    void execute_systolic_matmul(std::vector<Scratchpad>& scratchpads);
+    void execute_matmul(std::vector<L1Buffer>& l1_buffers);
+    void execute_systolic_matmul(std::vector<L1Buffer>& l1_buffers);
     Cycle estimate_cycles(Size m, Size n, Size k) const;
 };
 

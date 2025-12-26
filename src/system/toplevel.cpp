@@ -151,10 +151,16 @@ sw::kpu::KPUSimulator* SystemSimulator::create_kpu_from_config(const KPUConfig& 
         sim_config.memory_bandwidth_gbps = static_cast<sw::kpu::Size>(kpu_config.memory.banks[0].bandwidth_gbps);
     }
 
-    // Scratchpad configuration
-    sim_config.scratchpad_count = kpu_config.memory.scratchpads.size();
+    // L1 buffer configuration (compute fabric)
+    sim_config.l1_buffer_count = kpu_config.memory.l1_buffers.size();
+    if (!kpu_config.memory.l1_buffers.empty()) {
+        sim_config.l1_buffer_capacity_kb = kpu_config.memory.l1_buffers[0].capacity_kb;
+    }
+
+    // Page buffer configuration (memory controller scratchpads)
+    sim_config.page_buffer_count = kpu_config.memory.scratchpads.size();
     if (!kpu_config.memory.scratchpads.empty()) {
-        sim_config.scratchpad_capacity_kb = kpu_config.memory.scratchpads[0].capacity_kb;
+        sim_config.page_buffer_capacity_kb = kpu_config.memory.scratchpads[0].capacity_kb;
     }
 
     // L3 and L2 configuration
@@ -172,9 +178,9 @@ sw::kpu::KPUSimulator* SystemSimulator::create_kpu_from_config(const KPUConfig& 
     sim_config.compute_tile_count = kpu_config.compute_fabric.tiles.size();
     if (!kpu_config.compute_fabric.tiles.empty()) {
         const auto& tile = kpu_config.compute_fabric.tiles[0];
-        sim_config.use_systolic_arrays = (tile.type == "systolic");
-        sim_config.systolic_array_rows = tile.systolic_rows;
-        sim_config.systolic_array_cols = tile.systolic_cols;
+        sim_config.use_systolic_array_mode = (tile.type == "systolic");
+        sim_config.processor_array_rows = tile.systolic_rows;
+        sim_config.processor_array_cols = tile.systolic_cols;
     }
 
     // Data movement configuration
@@ -317,7 +323,7 @@ std::string SystemSimulator::get_system_report() const {
             oss << "    L3 Tiles: " << kpu->get_l3_tile_count() << "\n";
             oss << "    L2 Banks: " << kpu->get_l2_bank_count() << "\n";
             oss << "    L1 Buffers: " << kpu->get_l1_buffer_count() << "\n";
-            oss << "    Scratchpads: " << kpu->get_scratchpad_count() << "\n";
+            oss << "    Page Buffers: " << kpu->get_page_buffer_count() << "\n";
             oss << "    Compute Tiles: " << kpu->get_compute_tile_count() << "\n";
             oss << "    DMA Engines: " << kpu->get_dma_engine_count() << "\n";
             oss << "    Block Movers: " << kpu->get_block_mover_count() << "\n";

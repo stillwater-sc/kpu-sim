@@ -16,10 +16,10 @@ void print_memory_info(const sw::kpu::KPUSimulator& kpu) {
                   << (kpu.get_memory_bank_capacity(i) / (1024 * 1024)) << " MB\n";
     }
 
-    std::cout << "  Scratchpads: " << kpu.get_scratchpad_count() << "\n";
-    for (size_t i = 0; i < kpu.get_scratchpad_count(); ++i) {
-        std::cout << "    Scratchpad " << i << ": "
-                  << (kpu.get_scratchpad_capacity(i) / 1024) << " KB\n";
+    std::cout << "  L1 buffers: " << kpu.get_l1_buffer_count() << "\n";
+    for (size_t i = 0; i < kpu.get_l1_buffer_count(); ++i) {
+        std::cout << "    L1 buffer " << i << ": "
+                  << (kpu.get_l1_buffer_capacity(i) / 1024) << " KB\n";
     }
 
     std::cout << "  L3 tiles: " << kpu.get_l3_tile_count() << "\n";
@@ -31,16 +31,21 @@ int main() {
     std::cout << " KPU Memory Management Example\n";
     std::cout << "===========================================\n";
 
-    // Create KPU with multiple memory banks and scratchpads
-    sw::kpu::KPUSimulator::Config config(
-        4,      // 4 memory banks
-        512,    // 512MB each
-        100,    // 100 GB/s bandwidth
-        4,      // 4 scratchpads
-        64,     // 64KB each
-        2,      // 2 compute tiles
-        4       // 4 DMA engines
-    );
+    // Create KPU with multiple memory banks and L1 buffers
+    sw::kpu::KPUSimulator::Config config;
+    config.memory_bank_count = 4;
+    config.memory_bank_capacity_mb = 512;
+    config.memory_bandwidth_gbps = 100;
+    config.l1_buffer_count = 4;
+    config.l1_buffer_capacity_kb = 64;
+    config.compute_tile_count = 2;
+    config.dma_engine_count = 4;
+    config.l3_tile_count = 4;
+    config.l3_tile_capacity_kb = 256;
+    config.l2_bank_count = 8;
+    config.l2_bank_capacity_kb = 64;
+    config.block_mover_count = 4;
+    config.streamer_count = 8;
 
     sw::kpu::KPUSimulator kpu(config);
     print_memory_info(kpu);
@@ -78,68 +83,77 @@ int main() {
     }
     std::cout << "  Data verification: " << (match ? "PASS" : "FAIL") << "\n";
 
-    // 3. DMA transfer to scratchpad
-    std::cout << "\n3. DMA transfer from external memory to scratchpad...\n";
-    const size_t dma_id = 0;
-    const size_t scratchpad_id = 0;
+    // 3. Transfer through memory hierarchy: External → L3 → L2 → L1
+    std::cout << "\n3. Memory hierarchy transfer pipeline...\n";
+    const size_t l3_tile_id = 0;
+    const size_t l2_bank_id = 0;
+    const size_t l1_buffer_id = 0;
     const size_t transfer_size = 256 * sizeof(float);
 
-    std::cout << "  Starting DMA transfer...\n";
-    Address global_src = kpu.get_external_bank_base(bank_id) + addr;
-    Address global_dst = kpu.get_scratchpad_base(scratchpad_id) + 0;
-    kpu.dma_external_to_scratchpad(
-        dma_id,
-        global_src, global_dst,
-        transfer_size
-    );
+    // Step 3a: Write to L3 tile (simulating DMA to L3)
+    std::cout << "  External memory → L3 tile...\n";
+    kpu.write_l3_tile(l3_tile_id, 0, data.data(), transfer_size);
+    std::cout << "  Written " << transfer_size << " bytes to L3 tile\n";
 
-    std::cout << "  DMA transfer initiated\n";
-    std::cout << "  Running simulation until idle...\n";
+    // Step 3b: BlockMover L3 → L2
+    std::cout << "  L3 tile → L2 bank (via BlockMover)...\n";
+    bool block_done = false;
+    kpu.start_block_transfer(0, l3_tile_id, 0, l2_bank_id, 0,
+                             16, 16, sizeof(float),  // 16x16 block
+                             sw::kpu::BlockMover::TransformType::IDENTITY,
+                             [&]() { block_done = true; });
     kpu.run_until_idle();
-    std::cout << "  DMA transfer complete\n";
+    std::cout << "  BlockMover transfer complete\n";
 
-    // 4. Read from scratchpad
-    std::cout << "\n4. Reading from scratchpad...\n";
-    std::vector<float> scratch_data(256);
-    kpu.read_scratchpad(scratchpad_id, 0, scratch_data.data(), scratch_data.size() * sizeof(float));
-    std::cout << "  Read " << scratch_data.size() << " floats from scratchpad " << scratchpad_id << "\n";
+    // Step 3c: Streamer L2 → L1
+    std::cout << "  L2 bank → L1 buffer (via Streamer)...\n";
+    bool stream_done = false;
+    kpu.start_row_stream(0, l2_bank_id, l1_buffer_id, 0, 0,
+                         16, 16, sizeof(float), 16,
+                         sw::kpu::Streamer::StreamDirection::L2_TO_L1,
+                         [&]() { stream_done = true; });
+    kpu.run_until_idle();
+    std::cout << "  Streamer transfer complete\n";
 
-    // Verify scratchpad data matches original
+    // 4. Read from L1 buffer
+    std::cout << "\n4. Reading from L1 buffer...\n";
+    std::vector<float> l1_data(256);
+    kpu.read_l1_buffer(l1_buffer_id, 0, l1_data.data(), l1_data.size() * sizeof(float));
+    std::cout << "  Read " << l1_data.size() << " floats from L1 buffer " << l1_buffer_id << "\n";
+
+    // Verify L1 data matches original
     match = true;
-    for (size_t i = 0; i < scratch_data.size(); ++i) {
-        if (scratch_data[i] != data[i]) {
+    for (size_t i = 0; i < l1_data.size(); ++i) {
+        if (l1_data[i] != data[i]) {
             match = false;
             break;
         }
     }
-    std::cout << "  Scratchpad data verification: " << (match ? "PASS" : "FAIL") << "\n";
+    std::cout << "  L1 buffer data verification: " << (match ? "PASS" : "FAIL") << "\n";
 
-    // 5. Write to scratchpad and DMA back
-    std::cout << "\n5. Write to scratchpad and DMA back to memory...\n";
+    // 5. Write to L1 buffer and transfer back through hierarchy
+    std::cout << "\n5. Write to L1 buffer and transfer back...\n";
     std::vector<float> new_data(256);
     for (size_t i = 0; i < new_data.size(); ++i) {
         new_data[i] = static_cast<float>(i * 2);
     }
 
-    kpu.write_scratchpad(scratchpad_id, 0, new_data.data(), new_data.size() * sizeof(float));
-    std::cout << "  Written " << new_data.size() << " floats to scratchpad\n";
+    kpu.write_l1_buffer(l1_buffer_id, 0, new_data.data(), new_data.size() * sizeof(float));
+    std::cout << "  Written " << new_data.size() << " floats to L1 buffer\n";
 
-    // DMA back to a different memory location
-    const size_t new_addr = 64 * 1024; // 64KB offset
-    Address global_scratch_src = kpu.get_scratchpad_base(scratchpad_id) + 0;
-    Address global_ext_dst = kpu.get_external_bank_base(bank_id) + new_addr;
-    kpu.dma_scratchpad_to_external(
-        dma_id,
-        global_scratch_src, global_ext_dst,
-        new_data.size() * sizeof(float)
-    );
-
+    // L1 → L2 (via Streamer)
+    std::cout << "  L1 buffer → L2 bank (via Streamer)...\n";
+    stream_done = false;
+    kpu.start_row_stream(0, l2_bank_id, l1_buffer_id, 0x1000, 0,
+                         16, 16, sizeof(float), 16,
+                         sw::kpu::Streamer::StreamDirection::L1_TO_L2,
+                         [&]() { stream_done = true; });
     kpu.run_until_idle();
-    std::cout << "  DMA transfer back to memory complete\n";
+    std::cout << "  Streamer transfer complete\n";
 
-    // Read and verify
+    // Read from L2 and verify
     std::vector<float> final_data(256);
-    kpu.read_memory_bank(bank_id, new_addr, final_data.data(), final_data.size() * sizeof(float));
+    kpu.read_l2_bank(l2_bank_id, 0x1000, final_data.data(), final_data.size() * sizeof(float));
 
     match = true;
     for (size_t i = 0; i < final_data.size(); ++i) {

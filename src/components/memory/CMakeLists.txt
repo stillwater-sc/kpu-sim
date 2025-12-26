@@ -7,6 +7,7 @@ set(MEMORY_COMPONENT_SOURCES
     memory_map.cpp
     sparse_memory.cpp
     scratchpad.cpp
+    page_buffer.cpp
     l3_tile.cpp
     l2_bank.cpp
     l1_buffer.cpp

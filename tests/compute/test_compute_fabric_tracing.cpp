@@ -9,7 +9,7 @@
 #include <catch2/catch_approx.hpp>
 
 #include <sw/kpu/components/compute_fabric.hpp>
-#include <sw/kpu/components/scratchpad.hpp>
+#include <sw/kpu/components/l1_buffer.hpp>
 #include <sw/trace/trace_logger.hpp>
 #include <sw/trace/trace_exporter.hpp>
 
@@ -22,7 +22,7 @@ using namespace sw::trace;
 // Test fixture for ComputeFabric tracing tests
 class ComputeFabricTracingFixture {
 public:
-    std::vector<Scratchpad> scratchpads;
+    std::vector<L1Buffer> l1_buffers;
     std::unique_ptr<ComputeFabric> compute_fabric_basic;
     std::unique_ptr<ComputeFabric> compute_fabric_systolic;
     TraceLogger& logger;
@@ -30,9 +30,9 @@ public:
     ComputeFabricTracingFixture()
         : logger(TraceLogger::instance())
     {
-        // Create 2 scratchpads of 64KB each (ID is implicit from vector index)
-        scratchpads.emplace_back(64);  // ID 0, 64 KB capacity
-        scratchpads.emplace_back(64);  // ID 1, 64 KB capacity
+        // Create 2 L1 buffers of 64KB each
+        l1_buffers.emplace_back(0, 64);  // ID 0, 64 KB capacity
+        l1_buffers.emplace_back(1, 64);  // ID 1, 64 KB capacity
 
         // Create ComputeFabric instances
         // Basic matmul: tile 0, BASIC_MATMUL, 1 GHz
@@ -93,8 +93,8 @@ TEST_CASE_METHOD(ComputeFabricTracingFixture, "Trace: ComputeFabric Single MatMu
     auto matrix_a = generate_matrix(m, k, 1.0f);
     auto matrix_b = generate_matrix(k, n, 2.0f);
 
-    scratchpads[0].write(a_addr, matrix_a.data(), m * k * sizeof(float));
-    scratchpads[0].write(b_addr, matrix_b.data(), k * n * sizeof(float));
+    l1_buffers[0].write(a_addr, matrix_a.data(), m * k * sizeof(float));
+    l1_buffers[0].write(b_addr, matrix_b.data(), k * n * sizeof(float));
 
     // Set initial cycle
     compute_fabric_basic->set_cycle(1000);
@@ -106,7 +106,7 @@ TEST_CASE_METHOD(ComputeFabricTracingFixture, "Trace: ComputeFabric Single MatMu
     ComputeFabric::MatMulConfig config{
         .m = m, .n = n, .k = k,
         .a_addr = a_addr, .b_addr = b_addr, .c_addr = c_addr,
-        .scratchpad_id = 0,
+        .l1_buffer_id = 0,
         .completion_callback = [&operation_complete]() { operation_complete = true; }
     };
 
@@ -118,7 +118,7 @@ TEST_CASE_METHOD(ComputeFabricTracingFixture, "Trace: ComputeFabric Single MatMu
     // Process the operation - advance cycle each iteration
     while (!operation_complete) {
         compute_fabric_basic->set_cycle(compute_fabric_basic->get_cycle() + 1);
-        compute_fabric_basic->update(compute_fabric_basic->get_cycle(), scratchpads);
+        compute_fabric_basic->update(compute_fabric_basic->get_cycle(), l1_buffers);
     }
 
     // Should have logged the completion
@@ -158,7 +158,7 @@ TEST_CASE_METHOD(ComputeFabricTracingFixture, "Trace: ComputeFabric Single MatMu
 
     // Verify the computation result
     std::vector<float> result_c(m * n);
-    scratchpads[0].read(c_addr, result_c.data(), m * n * sizeof(float));
+    l1_buffers[0].read(c_addr, result_c.data(), m * n * sizeof(float));
     REQUIRE(verify_matmul(matrix_a, matrix_b, result_c, m, n, k));
 
     std::cout << "\n=== ComputeFabric MatMul Trace (BASIC_MATMUL) ===" << std::endl;
@@ -180,8 +180,8 @@ TEST_CASE_METHOD(ComputeFabricTracingFixture, "Trace: ComputeFabric Single MatMu
     auto matrix_a = generate_matrix(m, k, 1.0f);
     auto matrix_b = generate_matrix(k, n, 2.0f);
 
-    scratchpads[1].write(a_addr, matrix_a.data(), m * k * sizeof(float));
-    scratchpads[1].write(b_addr, matrix_b.data(), k * n * sizeof(float));
+    l1_buffers[1].write(a_addr, matrix_a.data(), m * k * sizeof(float));
+    l1_buffers[1].write(b_addr, matrix_b.data(), k * n * sizeof(float));
 
     // Set initial cycle
     compute_fabric_systolic->set_cycle(2000);
@@ -193,7 +193,7 @@ TEST_CASE_METHOD(ComputeFabricTracingFixture, "Trace: ComputeFabric Single MatMu
     ComputeFabric::MatMulConfig config{
         .m = m, .n = n, .k = k,
         .a_addr = a_addr, .b_addr = b_addr, .c_addr = c_addr,
-        .scratchpad_id = 1,
+        .l1_buffer_id = 1,
         .completion_callback = [&operation_complete]() { operation_complete = true; }
     };
 
@@ -205,7 +205,7 @@ TEST_CASE_METHOD(ComputeFabricTracingFixture, "Trace: ComputeFabric Single MatMu
     // Process the operation - advance cycle each iteration
     while (!operation_complete) {
         compute_fabric_systolic->set_cycle(compute_fabric_systolic->get_cycle() + 1);
-        compute_fabric_systolic->update(compute_fabric_systolic->get_cycle(), scratchpads);
+        compute_fabric_systolic->update(compute_fabric_systolic->get_cycle(), l1_buffers);
     }
 
     // Should have logged the completion
@@ -258,14 +258,14 @@ TEST_CASE_METHOD(ComputeFabricTracingFixture, "Trace: Multiple ComputeFabric Ope
         auto matrix_a = generate_matrix(m, k, static_cast<float>(i + 1));
         auto matrix_b = generate_matrix(k, n, static_cast<float>(i + 2));
 
-        scratchpads[0].write(a_addr, matrix_a.data(), matrix_size);
-        scratchpads[0].write(b_addr, matrix_b.data(), matrix_size);
+        l1_buffers[0].write(a_addr, matrix_a.data(), matrix_size);
+        l1_buffers[0].write(b_addr, matrix_b.data(), matrix_size);
 
         bool operation_complete = false;
         ComputeFabric::MatMulConfig config{
             .m = m, .n = n, .k = k,
             .a_addr = a_addr, .b_addr = b_addr, .c_addr = c_addr,
-            .scratchpad_id = 0,
+            .l1_buffer_id = 0,
             .completion_callback = [&operation_complete, &completed_count]() {
                 operation_complete = true;
                 completed_count++;
@@ -277,7 +277,7 @@ TEST_CASE_METHOD(ComputeFabricTracingFixture, "Trace: Multiple ComputeFabric Ope
         // Process this operation
         while (!operation_complete) {
             compute_fabric_basic->set_cycle(compute_fabric_basic->get_cycle() + 1);
-            compute_fabric_basic->update(compute_fabric_basic->get_cycle(), scratchpads);
+            compute_fabric_basic->update(compute_fabric_basic->get_cycle(), l1_buffers);
         }
     }
 
@@ -323,14 +323,14 @@ TEST_CASE_METHOD(ComputeFabricTracingFixture, "Trace: Export ComputeFabric to CS
         auto matrix_a = generate_matrix(m, k);
         auto matrix_b = generate_matrix(k, n);
 
-        scratchpads[0].write(a_addr, matrix_a.data(), matrix_size);
-        scratchpads[0].write(b_addr, matrix_b.data(), matrix_size);
+        l1_buffers[0].write(a_addr, matrix_a.data(), matrix_size);
+        l1_buffers[0].write(b_addr, matrix_b.data(), matrix_size);
 
         bool complete = false;
         ComputeFabric::MatMulConfig config{
             .m = m, .n = n, .k = k,
             .a_addr = a_addr, .b_addr = b_addr, .c_addr = c_addr,
-            .scratchpad_id = 0,
+            .l1_buffer_id = 0,
             .completion_callback = [&complete]() { complete = true; }
         };
 
@@ -338,7 +338,7 @@ TEST_CASE_METHOD(ComputeFabricTracingFixture, "Trace: Export ComputeFabric to CS
 
         while (!complete) {
             compute_fabric_basic->set_cycle(compute_fabric_basic->get_cycle() + 1);
-            compute_fabric_basic->update(compute_fabric_basic->get_cycle(), scratchpads);
+            compute_fabric_basic->update(compute_fabric_basic->get_cycle(), l1_buffers);
         }
     }
 
@@ -370,14 +370,14 @@ TEST_CASE_METHOD(ComputeFabricTracingFixture, "Trace: Export ComputeFabric to Ch
         auto matrix_a = generate_matrix(m, k);
         auto matrix_b = generate_matrix(k, n);
 
-        scratchpads[1].write(a_addr, matrix_a.data(), matrix_size);
-        scratchpads[1].write(b_addr, matrix_b.data(), matrix_size);
+        l1_buffers[1].write(a_addr, matrix_a.data(), matrix_size);
+        l1_buffers[1].write(b_addr, matrix_b.data(), matrix_size);
 
         bool complete = false;
         ComputeFabric::MatMulConfig config{
             .m = m, .n = n, .k = k,
             .a_addr = a_addr, .b_addr = b_addr, .c_addr = c_addr,
-            .scratchpad_id = 1,
+            .l1_buffer_id = 1,
             .completion_callback = [&complete]() { complete = true; }
         };
 
@@ -385,7 +385,7 @@ TEST_CASE_METHOD(ComputeFabricTracingFixture, "Trace: Export ComputeFabric to Ch
 
         while (!complete) {
             compute_fabric_systolic->set_cycle(compute_fabric_systolic->get_cycle() + 1);
-            compute_fabric_systolic->update(compute_fabric_systolic->get_cycle(), scratchpads);
+            compute_fabric_systolic->update(compute_fabric_systolic->get_cycle(), l1_buffers);
         }
     }
 
@@ -415,14 +415,14 @@ TEST_CASE_METHOD(ComputeFabricTracingFixture, "Trace: Cycle Range Query for Comp
         auto matrix_a = generate_matrix(m, k);
         auto matrix_b = generate_matrix(k, n);
 
-        scratchpads[0].write(0, matrix_a.data(), matrix_size);
-        scratchpads[0].write(matrix_size, matrix_b.data(), matrix_size);
+        l1_buffers[0].write(0, matrix_a.data(), matrix_size);
+        l1_buffers[0].write(matrix_size, matrix_b.data(), matrix_size);
 
         bool complete = false;
         ComputeFabric::MatMulConfig config{
             .m = m, .n = n, .k = k,
             .a_addr = 0, .b_addr = matrix_size, .c_addr = 2 * matrix_size,
-            .scratchpad_id = 0,
+            .l1_buffer_id = 0,
             .completion_callback = [&complete]() { complete = true; }
         };
 
@@ -430,7 +430,7 @@ TEST_CASE_METHOD(ComputeFabricTracingFixture, "Trace: Cycle Range Query for Comp
 
         while (!complete) {
             compute_fabric_basic->set_cycle(compute_fabric_basic->get_cycle() + 1);
-            compute_fabric_basic->update(compute_fabric_basic->get_cycle(), scratchpads);
+            compute_fabric_basic->update(compute_fabric_basic->get_cycle(), l1_buffers);
         }
     }
 
@@ -464,13 +464,13 @@ TEST_CASE_METHOD(ComputeFabricTracingFixture, "Trace: ComputeFabric Throughput A
         size_t matrix_b_size = k * n * sizeof(float);
         size_t total_size = matrix_a_size + matrix_b_size + m * n * sizeof(float);
 
-        if (total_size > scratchpads[0].get_capacity()) continue;
+        if (total_size > l1_buffers[0].get_capacity()) continue;
 
         auto matrix_a = generate_matrix(m, k);
         auto matrix_b = generate_matrix(k, n);
 
-        scratchpads[0].write(0, matrix_a.data(), matrix_a_size);
-        scratchpads[0].write(matrix_a_size, matrix_b.data(), matrix_b_size);
+        l1_buffers[0].write(0, matrix_a.data(), matrix_a_size);
+        l1_buffers[0].write(matrix_a_size, matrix_b.data(), matrix_b_size);
 
         bool complete = false;
         ComputeFabric::MatMulConfig config{
@@ -478,7 +478,7 @@ TEST_CASE_METHOD(ComputeFabricTracingFixture, "Trace: ComputeFabric Throughput A
             .a_addr = 0,
             .b_addr = matrix_a_size,
             .c_addr = matrix_a_size + matrix_b_size,
-            .scratchpad_id = 0,
+            .l1_buffer_id = 0,
             .completion_callback = [&complete]() { complete = true; }
         };
 
@@ -486,7 +486,7 @@ TEST_CASE_METHOD(ComputeFabricTracingFixture, "Trace: ComputeFabric Throughput A
 
         while (!complete) {
             compute_fabric_basic->set_cycle(compute_fabric_basic->get_cycle() + 1);
-            compute_fabric_basic->update(compute_fabric_basic->get_cycle(), scratchpads);
+            compute_fabric_basic->update(compute_fabric_basic->get_cycle(), l1_buffers);
         }
     }
 
@@ -536,14 +536,14 @@ TEST_CASE_METHOD(ComputeFabricTracingFixture, "Trace: Verify Transaction ID Uniq
         auto matrix_a = generate_matrix(m, k);
         auto matrix_b = generate_matrix(k, n);
 
-        scratchpads[0].write(a_addr, matrix_a.data(), matrix_size);
-        scratchpads[0].write(b_addr, matrix_b.data(), matrix_size);
+        l1_buffers[0].write(a_addr, matrix_a.data(), matrix_size);
+        l1_buffers[0].write(b_addr, matrix_b.data(), matrix_size);
 
         bool complete = false;
         ComputeFabric::MatMulConfig config{
             .m = m, .n = n, .k = k,
             .a_addr = a_addr, .b_addr = b_addr, .c_addr = c_addr,
-            .scratchpad_id = 0,
+            .l1_buffer_id = 0,
             .completion_callback = [&complete]() { complete = true; }
         };
 
@@ -551,7 +551,7 @@ TEST_CASE_METHOD(ComputeFabricTracingFixture, "Trace: Verify Transaction ID Uniq
 
         while (!complete) {
             compute_fabric_basic->set_cycle(compute_fabric_basic->get_cycle() + 1);
-            compute_fabric_basic->update(compute_fabric_basic->get_cycle(), scratchpads);
+            compute_fabric_basic->update(compute_fabric_basic->get_cycle(), l1_buffers);
         }
     }
 

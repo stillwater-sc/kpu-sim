@@ -243,7 +243,7 @@ bool execute_tiled_matmul(KPUSimulator* kpu, MatMulConfig& config) {
         // Simple single-tile execution (similar to autonomous test)
         const size_t l3_tile_id = 0;
         const size_t l2_bank_id = 0;
-        const size_t scratchpad_id = 0;
+        const size_t l1_buffer_id = 0;
         const size_t block_mover_id = 0;
         const size_t compute_tile_id = 0;
 
@@ -278,16 +278,16 @@ bool execute_tiled_matmul(KPUSimulator* kpu, MatMulConfig& config) {
         kpu->run_until_idle();
 
         // L2→L1
-        kpu->start_row_stream(0, l2_bank_id, scratchpad_id, l2_a_addr, l1_a_addr,
+        kpu->start_row_stream(0, l2_bank_id, l1_buffer_id, l2_a_addr, l1_a_addr,
                               config.M, config.K, sizeof(float), config.tile_size,
                               Streamer::StreamDirection::L2_TO_L1, nullptr);
-        kpu->start_column_stream(1, l2_bank_id, scratchpad_id, l2_b_addr, l1_b_addr,
+        kpu->start_column_stream(1, l2_bank_id, l1_buffer_id, l2_b_addr, l1_b_addr,
                                  config.K, config.N, sizeof(float), config.tile_size,
                                  Streamer::StreamDirection::L2_TO_L1, nullptr);
         kpu->run_until_idle();
 
         // Compute
-        kpu->start_matmul(compute_tile_id, scratchpad_id, config.M, config.N, config.K,
+        kpu->start_matmul(compute_tile_id, l1_buffer_id, config.M, config.N, config.K,
                          l1_a_addr, l1_b_addr, l1_c_addr, nullptr);
         kpu->run_until_idle();
 
@@ -299,7 +299,7 @@ bool execute_tiled_matmul(KPUSimulator* kpu, MatMulConfig& config) {
         const Address l2_c_addr = 0x4000;
         const Address l3_c_addr = 0x8000;
 
-        kpu->start_row_stream(0, l2_bank_id, scratchpad_id, l2_c_addr, l1_c_addr,
+        kpu->start_row_stream(0, l2_bank_id, l1_buffer_id, l2_c_addr, l1_c_addr,
                               config.M, config.N, sizeof(float), config.tile_size,
                               Streamer::StreamDirection::L1_TO_L2, nullptr);
         kpu->run_until_idle();
@@ -333,7 +333,7 @@ bool execute_tiled_matmul(KPUSimulator* kpu, MatMulConfig& config) {
         // Component IDs
         const size_t l3_tile_id = 0;
         const size_t l2_bank_id = 0;
-        const size_t scratchpad_id = 0;
+        const size_t l1_buffer_id = 0;
         const size_t block_mover_id = 0;
         const size_t compute_tile_id = 0;
 
@@ -456,7 +456,7 @@ bool execute_tiled_matmul(KPUSimulator* kpu, MatMulConfig& config) {
                                                BlockMover::TransformType::IDENTITY, nullptr);
                     kpu->run_until_idle();
 
-                    kpu->start_row_stream(0, l2_bank_id, scratchpad_id, l2_a_addr, l1_a_addr,
+                    kpu->start_row_stream(0, l2_bank_id, l1_buffer_id, l2_a_addr, l1_a_addr,
                                           tile_m, tile_k, sizeof(float), config.tile_size,
                                           Streamer::StreamDirection::L2_TO_L1, nullptr);
                     kpu->run_until_idle();
@@ -476,7 +476,7 @@ bool execute_tiled_matmul(KPUSimulator* kpu, MatMulConfig& config) {
                                                BlockMover::TransformType::IDENTITY, nullptr);
                     kpu->run_until_idle();
 
-                    kpu->start_column_stream(1, l2_bank_id, scratchpad_id, l2_b_addr, l1_b_addr,
+                    kpu->start_column_stream(1, l2_bank_id, l1_buffer_id, l2_b_addr, l1_b_addr,
                                              tile_k, tile_n, sizeof(float), config.tile_size,
                                              Streamer::StreamDirection::L2_TO_L1, nullptr);
                     kpu->run_until_idle();
@@ -489,7 +489,7 @@ bool execute_tiled_matmul(KPUSimulator* kpu, MatMulConfig& config) {
 
                     // Compute: C_partial = A[ti,tk] × B[tk,tj]
                     Cycle compute_start = kpu->get_current_cycle();
-                    kpu->start_matmul(compute_tile_id, scratchpad_id, tile_m, tile_n, tile_k,
+                    kpu->start_matmul(compute_tile_id, l1_buffer_id, tile_m, tile_n, tile_k,
                                      l1_a_addr, l1_b_addr, l1_c_addr, nullptr);
                     kpu->run_until_idle();
                     Cycle compute_cycles = kpu->get_current_cycle() - compute_start;
@@ -500,7 +500,7 @@ bool execute_tiled_matmul(KPUSimulator* kpu, MatMulConfig& config) {
 
                     // Read partial result and accumulate into c_tile
                     std::vector<float> c_partial(tile_m * tile_n);
-                    kpu->read_scratchpad(scratchpad_id, l1_c_addr, c_partial.data(), c_partial.size() * sizeof(float));
+                    kpu->read_l1_buffer(l1_buffer_id, l1_c_addr, c_partial.data(), c_partial.size() * sizeof(float));
 
                     for (size_t i = 0; i < c_partial.size(); ++i) {
                         c_tile[i] += c_partial[i];
@@ -516,10 +516,10 @@ bool execute_tiled_matmul(KPUSimulator* kpu, MatMulConfig& config) {
                 Cycle store_start = kpu->get_current_cycle();
 
                 // Write c_tile to L1
-                kpu->write_scratchpad(scratchpad_id, l1_c_addr, c_tile.data(), c_tile.size() * sizeof(float));
+                kpu->write_l1_buffer(l1_buffer_id, l1_c_addr, c_tile.data(), c_tile.size() * sizeof(float));
 
                 // L1→L2→L3
-                kpu->start_row_stream(0, l2_bank_id, scratchpad_id, l2_c_addr, l1_c_addr,
+                kpu->start_row_stream(0, l2_bank_id, l1_buffer_id, l2_c_addr, l1_c_addr,
                                       tile_m, tile_n, sizeof(float), config.tile_size,
                                       Streamer::StreamDirection::L1_TO_L2, nullptr);
                 kpu->run_until_idle();

@@ -2,7 +2,7 @@
 #include <vector>
 
 #include <sw/kpu/components/compute_fabric.hpp>
-#include <sw/kpu/components/scratchpad.hpp>
+#include <sw/kpu/components/l1_buffer.hpp>
 
 namespace sw::kpu {
 
@@ -108,14 +108,14 @@ void ComputeFabric::start_matmul(const MatMulConfig& config) {
         systolic_config.a_addr = config.a_addr;
         systolic_config.b_addr = config.b_addr;
         systolic_config.c_addr = config.c_addr;
-        systolic_config.scratchpad_id = config.scratchpad_id;
+        systolic_config.l1_buffer_id = config.l1_buffer_id;
         systolic_config.completion_callback = config.completion_callback;
 
         systolic_array->start_matmul(systolic_config);
     }
 }
 
-bool ComputeFabric::update(Cycle current_cycle, std::vector<Scratchpad>& scratchpads) {
+bool ComputeFabric::update(Cycle current_cycle, std::vector<L1Buffer>& l1_buffers) {
     if (!is_computing) {
         return false;
     }
@@ -128,14 +128,14 @@ bool ComputeFabric::update(Cycle current_cycle, std::vector<Scratchpad>& scratch
 
     // Route to appropriate implementation
     if (compute_type == ComputeType::SYSTOLIC_ARRAY && systolic_array) {
-        operation_completed = systolic_array->update(current_cycle, scratchpads);
+        operation_completed = systolic_array->update(current_cycle, l1_buffers);
     } else {
         // Basic matrix multiplication implementation
         Cycle required_cycles = estimate_cycles(current_op.m, current_op.n, current_op.k);
 
         if (current_cycle - compute_start_cycle >= required_cycles) {
             // Operation completed
-            execute_matmul(scratchpads);
+            execute_matmul(l1_buffers);
             operation_completed = true;
         }
     }
@@ -182,14 +182,14 @@ bool ComputeFabric::update(Cycle current_cycle, std::vector<Scratchpad>& scratch
     return false;
 }
 
-void ComputeFabric::execute_matmul(std::vector<Scratchpad>& scratchpads) {
-    if (current_op.scratchpad_id >= scratchpads.size()) {
-        throw std::out_of_range("Invalid scratchpad ID for matmul operation");
+void ComputeFabric::execute_matmul(std::vector<L1Buffer>& l1_buffers) {
+    if (current_op.l1_buffer_id >= l1_buffers.size()) {
+        throw std::out_of_range("Invalid L1 buffer ID for matmul operation");
     }
 
-    auto& scratchpad = scratchpads[current_op.scratchpad_id];
+    auto& l1_buffer = l1_buffers[current_op.l1_buffer_id];
 
-    // Read matrices from scratchpad
+    // Read matrices from L1 buffer
     Size a_size = current_op.m * current_op.k * sizeof(float);
     Size b_size = current_op.k * current_op.n * sizeof(float);
     Size c_size = current_op.m * current_op.n * sizeof(float);
@@ -198,8 +198,8 @@ void ComputeFabric::execute_matmul(std::vector<Scratchpad>& scratchpads) {
     std::vector<float> b(current_op.k * current_op.n);
     std::vector<float> c(current_op.m * current_op.n, 0.0f);
 
-    scratchpad.read(current_op.a_addr, a.data(), a_size);
-    scratchpad.read(current_op.b_addr, b.data(), b_size);
+    l1_buffer.read(current_op.a_addr, a.data(), a_size);
+    l1_buffer.read(current_op.b_addr, b.data(), b_size);
 
     // Perform matrix multiplication: C = A * B
     for (Size i = 0; i < current_op.m; ++i) {
@@ -212,8 +212,8 @@ void ComputeFabric::execute_matmul(std::vector<Scratchpad>& scratchpads) {
         }
     }
 
-    // Write result back to scratchpad
-    scratchpad.write(current_op.c_addr, c.data(), c_size);
+    // Write result back to L1 buffer
+    l1_buffer.write(current_op.c_addr, c.data(), c_size);
 }
 
 Cycle ComputeFabric::estimate_cycles(Size m, Size n, Size k) const {

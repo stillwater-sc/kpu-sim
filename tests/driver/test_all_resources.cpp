@@ -40,8 +40,8 @@ public:
         config.l1_buffer_count = 16;
         config.l1_buffer_capacity_kb = 8;
 
-        config.scratchpad_count = 4;
-        config.scratchpad_capacity_kb = 16;
+        config.page_buffer_count = 4;
+        config.page_buffer_capacity_kb = 16;
 
         config.compute_tile_count = 4;
         config.dma_engine_count = 2;

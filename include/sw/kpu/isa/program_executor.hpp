@@ -19,7 +19,8 @@
 #include <sw/kpu/components/block_mover.hpp>
 #include <sw/kpu/components/streamer.hpp>
 #include <sw/kpu/components/compute_fabric.hpp>
-#include <sw/kpu/components/scratchpad.hpp>
+#include <sw/kpu/components/page_buffer.hpp>
+#include <sw/kpu/components/l1_buffer.hpp>
 #include <sw/kpu/components/l3_tile.hpp>
 #include <sw/kpu/components/l2_bank.hpp>
 #include <sw/memory/external_memory.hpp>
@@ -65,7 +66,8 @@ public:
         // Cache hierarchy
         std::vector<L3Tile>* l3_tiles;
         std::vector<L2Bank>* l2_banks;
-        std::vector<Scratchpad>* scratchpads;
+        std::vector<L1Buffer>* l1_buffers;      // Compute fabric L1 buffers
+        std::vector<PageBuffer>* page_buffers;   // Memory controller page buffers
 
         // Data movement engines
         std::vector<DMAEngine>* dma_engines;

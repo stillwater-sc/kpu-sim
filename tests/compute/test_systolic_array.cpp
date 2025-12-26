@@ -21,8 +21,8 @@ public:
         config.memory_bank_count = 2;
         config.memory_bank_capacity_mb = 64;
         config.memory_bandwidth_gbps = 8;
-        config.scratchpad_count = 4;
-        config.scratchpad_capacity_kb = 256;
+        config.l1_buffer_count = 4;
+        config.l1_buffer_capacity_kb = 256;
         config.compute_tile_count = 1;
         config.dma_engine_count = 2;
         config.l3_tile_count = 4;
@@ -33,9 +33,9 @@ public:
         config.streamer_count = 8;
 
         // Systolic array configuration
-        config.systolic_array_rows = 4;  // Smaller for testing
-        config.systolic_array_cols = 4;
-        config.use_systolic_arrays = true;
+        config.processor_array_rows = 4;  // Smaller for testing
+        config.processor_array_cols = 4;
+        config.use_systolic_array_mode = true;
 
         sim = std::make_unique<KPUSimulator>(config);
     }
@@ -114,7 +114,7 @@ TEST_CASE_METHOD(SystolicArrayTestFixture, "Systolic Array Configuration", "[sys
     SECTION("Can disable systolic arrays") {
         // Create a new simulator with systolic arrays disabled
         KPUSimulator::Config basic_config = config;
-        basic_config.use_systolic_arrays = false;
+        basic_config.use_systolic_array_mode = false;
         auto basic_sim = std::make_unique<KPUSimulator>(basic_config);
 
         REQUIRE(basic_sim->is_using_systolic_arrays() == false);
@@ -143,18 +143,18 @@ TEST_CASE_METHOD(SystolicArrayTestFixture, "Systolic Array Matrix Multiplication
         // Expected result: [[19,22], [43,50]]
 		print_matrix("C", matrix_c, m, n);
 
-        // Write matrices to scratchpad
-        const size_t scratchpad_id = 0;
+        // Write matrices to L1 buffer
+        const size_t l1_buffer_id = 0;
         const Address a_addr = 0;
         const Address b_addr = a_addr + matrix_a.size() * element_size;
         const Address c_addr = b_addr + matrix_b.size() * element_size;
 
-        sim->write_scratchpad(scratchpad_id, a_addr, matrix_a.data(), matrix_a.size() * element_size);
-        sim->write_scratchpad(scratchpad_id, b_addr, matrix_b.data(), matrix_b.size() * element_size);
+        sim->write_l1_buffer(l1_buffer_id, a_addr, matrix_a.data(), matrix_a.size() * element_size);
+        sim->write_l1_buffer(l1_buffer_id, b_addr, matrix_b.data(), matrix_b.size() * element_size);
 
         // Start matrix multiplication
         bool matmul_complete = false;
-        sim->start_matmul(0, scratchpad_id, m, n, k, a_addr, b_addr, c_addr,
+        sim->start_matmul(0, l1_buffer_id, m, n, k, a_addr, b_addr, c_addr,
                          [&matmul_complete]() { matmul_complete = true; });
 
         // Run simulation until completion
@@ -164,7 +164,7 @@ TEST_CASE_METHOD(SystolicArrayTestFixture, "Systolic Array Matrix Multiplication
         REQUIRE_FALSE(sim->is_compute_busy(0));
 
         // Read result
-        sim->read_scratchpad(scratchpad_id, c_addr, c.data(), c.size() * element_size);
+        sim->read_l1_buffer(l1_buffer_id, c_addr, c.data(), c.size() * element_size);
 
         // Print actual result
         print_matrix("C actual", c, m, n);
@@ -196,18 +196,18 @@ TEST_CASE_METHOD(SystolicArrayTestFixture, "Systolic Array Matrix Multiplication
         print_matrix("B", matrix_b, k, n);
         print_matrix("C", matrix_c, m, n);
 
-        // Write matrices to scratchpad
-        const size_t scratchpad_id = 0;
+        // Write matrices to L1 buffer
+        const size_t l1_buffer_id = 0;
         const Address a_addr = 0;
         const Address b_addr = a_addr + matrix_a.size() * element_size;
         const Address c_addr = b_addr + matrix_b.size() * element_size;
 
-        sim->write_scratchpad(scratchpad_id, a_addr, matrix_a.data(), matrix_a.size() * element_size);
-        sim->write_scratchpad(scratchpad_id, b_addr, matrix_b.data(), matrix_b.size() * element_size);
+        sim->write_l1_buffer(l1_buffer_id, a_addr, matrix_a.data(), matrix_a.size() * element_size);
+        sim->write_l1_buffer(l1_buffer_id, b_addr, matrix_b.data(), matrix_b.size() * element_size);
 
         // Start matrix multiplication
         bool matmul_complete = false;
-        sim->start_matmul(0, scratchpad_id, m, n, k, a_addr, b_addr, c_addr,
+        sim->start_matmul(0, l1_buffer_id, m, n, k, a_addr, b_addr, c_addr,
                          [&matmul_complete]() { matmul_complete = true; });
 
         // Run simulation until completion
@@ -217,7 +217,7 @@ TEST_CASE_METHOD(SystolicArrayTestFixture, "Systolic Array Matrix Multiplication
         REQUIRE_FALSE(sim->is_compute_busy(0));
 
         // Read result
-        sim->read_scratchpad(scratchpad_id, c_addr, c.data(), c.size() * element_size);
+        sim->read_l1_buffer(l1_buffer_id, c_addr, c.data(), c.size() * element_size);
 
 		// Print actual result
         print_matrix("C actual", c, m, n);
@@ -244,18 +244,18 @@ TEST_CASE_METHOD(SystolicArrayTestFixture, "Systolic Array Matrix Multiplication
         print_matrix("B", matrix_b, k, n);
         print_matrix("C", matrix_c, m, n);
 
-        const size_t scratchpad_id = 0;
+        const size_t l1_buffer_id = 0;
         const Address a_addr = 0;
         const Address b_addr = a_addr + matrix_a.size() * element_size;
         const Address c_addr = b_addr + matrix_b.size() * element_size;
 
-        sim->write_scratchpad(scratchpad_id, a_addr, matrix_a.data(), matrix_a.size() * element_size);
-        sim->write_scratchpad(scratchpad_id, b_addr, matrix_b.data(), matrix_b.size() * element_size);
+        sim->write_l1_buffer(l1_buffer_id, a_addr, matrix_a.data(), matrix_a.size() * element_size);
+        sim->write_l1_buffer(l1_buffer_id, b_addr, matrix_b.data(), matrix_b.size() * element_size);
 
         bool matmul_complete = false;
         auto start_cycle = sim->get_current_cycle();
 
-        sim->start_matmul(0, scratchpad_id, m, n, k, a_addr, b_addr, c_addr,
+        sim->start_matmul(0, l1_buffer_id, m, n, k, a_addr, b_addr, c_addr,
                          [&matmul_complete]() { matmul_complete = true; });
 
         sim->run_until_idle();
@@ -264,7 +264,7 @@ TEST_CASE_METHOD(SystolicArrayTestFixture, "Systolic Array Matrix Multiplication
         REQUIRE(matmul_complete);
 
         // Read and verify result
-        sim->read_scratchpad(scratchpad_id, c_addr, c.data(), c.size() * element_size);
+        sim->read_l1_buffer(l1_buffer_id, c_addr, c.data(), c.size() * element_size);
         print_matrix("C actual", c, m, n);
         REQUIRE(verify_matmul<Real>(c, matrix_c, m, n, k));
 
@@ -289,22 +289,22 @@ TEST_CASE_METHOD(SystolicArrayTestFixture, "Systolic Array Error Handling", "[sy
         auto matrix_a = generate_matrix<Real>(m, k, 1.0f);
         auto matrix_b = generate_matrix<Real>(k, n, 1.0f);
 
-        const size_t scratchpad_id = 0;
+        const size_t l1_buffer_id = 0;
         const Address a_addr = 0;
         const Address b_addr = 64;
         const Address c_addr = 128;
 
-        sim->write_scratchpad(scratchpad_id, a_addr, matrix_a.data(), matrix_a.size() * sizeof(float));
-        sim->write_scratchpad(scratchpad_id, b_addr, matrix_b.data(), matrix_b.size() * sizeof(float));
+        sim->write_l1_buffer(l1_buffer_id, a_addr, matrix_a.data(), matrix_a.size() * sizeof(float));
+        sim->write_l1_buffer(l1_buffer_id, b_addr, matrix_b.data(), matrix_b.size() * sizeof(float));
 
         // Start first operation
-        sim->start_matmul(0, scratchpad_id, m, n, k, a_addr, b_addr, c_addr);
+        sim->start_matmul(0, l1_buffer_id, m, n, k, a_addr, b_addr, c_addr);
 
         REQUIRE(sim->is_compute_busy(0));
 
         // Try to start second operation - should throw
         REQUIRE_THROWS_AS(
-            sim->start_matmul(0, scratchpad_id, m, n, k, a_addr, b_addr, c_addr),
+            sim->start_matmul(0, l1_buffer_id, m, n, k, a_addr, b_addr, c_addr),
             std::runtime_error
         );
 

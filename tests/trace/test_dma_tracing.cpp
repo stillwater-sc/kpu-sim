@@ -9,9 +9,7 @@
 #include <sw/kpu/components/dma_engine.hpp>
 #include <sw/memory/external_memory.hpp>
 #include <sw/memory/address_decoder.hpp>
-#include <sw/kpu/components/scratchpad.hpp>
 #include <sw/kpu/components/l3_tile.hpp>
-#include <sw/kpu/components/l2_bank.hpp>
 #include <sw/trace/trace_logger.hpp>
 #include <sw/trace/trace_exporter.hpp>
 
@@ -21,43 +19,44 @@ using namespace sw;
 using namespace sw::kpu;
 using namespace sw::trace;
 
-// Test fixture for DMA tracing tests
+/**
+ * Test fixture for DMA tracing tests
+ *
+ * Tests DMA transfers between HOST_MEMORY, KPU_MEMORY (external), and L3_TILE.
+ * Note: L2 banks accessed via BlockMover, L1 buffers via Streamers (not DMA)
+ */
 class DMATracingFixture {
 public:
     std::vector<ExternalMemory> host_memory_regions;  // Host memory (empty for these tests)
     std::vector<ExternalMemory> memory_banks;
-    std::vector<L3Tile> l3_tiles;  // Empty for these tests
-    std::vector<L2Bank> l2_banks;  // Empty for these tests
-    std::vector<Scratchpad> scratchpads;
+    std::vector<L3Tile> l3_tiles;
     sw::memory::AddressDecoder address_decoder;
     DMAEngine dma_engine;
     TraceLogger& logger;
 
     // Address space layout
     static constexpr Address KPU_MEMORY_BASE = 0x0000'0000;  // KPU external memory banks
-    static constexpr Address SCRATCHPAD_BASE = 0xFFFF'0000;  // Scratchpad buffers
+    static constexpr Address L3_TILE_BASE = 0x8000'0000;     // L3 cache tiles
 
     DMATracingFixture()
         : dma_engine(0, 1.0, 100.0)  // Engine 0, 1 GHz, 100 GB/s
         , logger(TraceLogger::instance())
     {
-        // Host memory regions remain empty for these tests (only testing EXTERNAL <-> SCRATCHPAD)
+        // Host memory regions remain empty for these tests (only testing EXTERNAL <-> L3)
 
         // Create 2 memory banks of 64MB each
         memory_banks.emplace_back(64, 100);  // 64 MB capacity, 100 Gbps bandwidth
         memory_banks.emplace_back(64, 100);
 
-        // Create 2 scratchpads of 256KB each
-        scratchpads.emplace_back(256);  // 256 KB capacity
-        scratchpads.emplace_back(256);
-
-        // L3 and L2 remain empty for these tests (only testing EXTERNAL <-> SCRATCHPAD)
+        // Create 2 L3 tiles of 512KB each
+        l3_tiles.emplace_back(512);  // 512 KB capacity
+        l3_tiles.emplace_back(512);
 
         // Configure address decoder
         address_decoder.add_region(KPU_MEMORY_BASE, 64 * 1024 * 1024, sw::memory::MemoryType::EXTERNAL, 0);
         address_decoder.add_region(KPU_MEMORY_BASE + 64 * 1024 * 1024, 64 * 1024 * 1024, sw::memory::MemoryType::EXTERNAL, 1);
-        address_decoder.add_region(SCRATCHPAD_BASE, 256 * 1024, sw::memory::MemoryType::PAGE_BUFFER, 0);
-        address_decoder.add_region(SCRATCHPAD_BASE + 256 * 1024, 256 * 1024, sw::memory::MemoryType::PAGE_BUFFER, 1);
+        address_decoder.add_region(L3_TILE_BASE, 512 * 1024, sw::memory::MemoryType::L3_TILE, 0);
+        address_decoder.add_region(L3_TILE_BASE + 512 * 1024, 512 * 1024, sw::memory::MemoryType::L3_TILE, 1);
 
         // Set address decoder on DMA engine
         dma_engine.set_address_decoder(&address_decoder);
@@ -80,7 +79,7 @@ public:
     }
 };
 
-TEST_CASE_METHOD(DMATracingFixture, "Trace: Single DMA Transfer - External to Scratchpad", "[trace][dma]") {
+TEST_CASE_METHOD(DMATracingFixture, "Trace: Single DMA Transfer - External to L3", "[trace][dma]") {
     const size_t transfer_size = 4096;
     const Address src_addr = 0x1000;
     const Address dst_addr = 0x0;
@@ -97,13 +96,13 @@ TEST_CASE_METHOD(DMATracingFixture, "Trace: Single DMA Transfer - External to Sc
     // Enqueue transfer using address-based API
     dma_engine.enqueue_transfer(
         KPU_MEMORY_BASE + src_addr,   // Source: KPU memory bank 0
-        SCRATCHPAD_BASE + dst_addr,    // Dest: Scratchpad 0
+        L3_TILE_BASE + dst_addr,       // Dest: L3 Tile 0
         transfer_size
     );
 
     // Process the transfer (cycle-accurate: may take multiple calls)
     while (dma_engine.is_busy()) {
-        dma_engine.process_transfers(host_memory_regions, memory_banks, l3_tiles, l2_banks, scratchpads);
+        dma_engine.process_transfers(host_memory_regions, memory_banks, l3_tiles);
         dma_engine.set_current_cycle(dma_engine.get_current_cycle() + 1);
     }
 
@@ -163,14 +162,14 @@ TEST_CASE_METHOD(DMATracingFixture, "Trace: Multiple DMA Transfers", "[trace][dm
 
         dma_engine.enqueue_transfer(
             KPU_MEMORY_BASE + i * transfer_size,
-            SCRATCHPAD_BASE + i * transfer_size,
+            L3_TILE_BASE + i * transfer_size,
             transfer_size
         );
     }
 
     // Process all transfers (cycle-accurate: advance cycle each iteration)
     while (dma_engine.is_busy()) {
-        dma_engine.process_transfers(host_memory_regions, memory_banks, l3_tiles, l2_banks, scratchpads);
+        dma_engine.process_transfers(host_memory_regions, memory_banks, l3_tiles);
         dma_engine.set_current_cycle(dma_engine.get_current_cycle() + 1);
     }
 
@@ -208,13 +207,13 @@ TEST_CASE_METHOD(DMATracingFixture, "Trace: Export to CSV", "[trace][dma][export
 
         dma_engine.enqueue_transfer(
             KPU_MEMORY_BASE + i * transfer_size,
-            SCRATCHPAD_BASE + i * transfer_size,
+            L3_TILE_BASE + i * transfer_size,
             transfer_size
         );
 
         // Process until this transfer completes
         while (dma_engine.is_busy()) {
-            dma_engine.process_transfers(host_memory_regions, memory_banks, l3_tiles, l2_banks, scratchpads);
+            dma_engine.process_transfers(host_memory_regions, memory_banks, l3_tiles);
             dma_engine.set_current_cycle(dma_engine.get_current_cycle() + 1);
         }
     }
@@ -240,13 +239,13 @@ TEST_CASE_METHOD(DMATracingFixture, "Trace: Export to JSON", "[trace][dma][expor
 
         dma_engine.enqueue_transfer(
             KPU_MEMORY_BASE + i * transfer_size,
-            SCRATCHPAD_BASE + i * transfer_size,
+            L3_TILE_BASE + i * transfer_size,
             transfer_size
         );
 
         // Process until this transfer completes
         while (dma_engine.is_busy()) {
-            dma_engine.process_transfers(host_memory_regions, memory_banks, l3_tiles, l2_banks, scratchpads);
+            dma_engine.process_transfers(host_memory_regions, memory_banks, l3_tiles);
             dma_engine.set_current_cycle(dma_engine.get_current_cycle() + 1);
         }
     }
@@ -276,13 +275,13 @@ TEST_CASE_METHOD(DMATracingFixture, "Trace: Export to Chrome Trace Format", "[tr
 
         dma_engine.enqueue_transfer(
             KPU_MEMORY_BASE + i * transfer_size,
-            SCRATCHPAD_BASE + i * transfer_size,
+            L3_TILE_BASE + i * transfer_size,
             transfer_size
         );
 
         // Process until this transfer completes
         while (dma_engine.is_busy()) {
-            dma_engine.process_transfers(host_memory_regions, memory_banks, l3_tiles, l2_banks, scratchpads);
+            dma_engine.process_transfers(host_memory_regions, memory_banks, l3_tiles);
             dma_engine.set_current_cycle(dma_engine.get_current_cycle() + 1);
         }
     }
@@ -311,13 +310,13 @@ TEST_CASE_METHOD(DMATracingFixture, "Trace: Cycle Range Query", "[trace][dma][qu
 
         dma_engine.enqueue_transfer(
             KPU_MEMORY_BASE,
-            SCRATCHPAD_BASE,
+            L3_TILE_BASE,
             1024
         );
 
         // Process until this transfer completes
         while (dma_engine.is_busy()) {
-            dma_engine.process_transfers(host_memory_regions, memory_banks, l3_tiles, l2_banks, scratchpads);
+            dma_engine.process_transfers(host_memory_regions, memory_banks, l3_tiles);
             dma_engine.set_current_cycle(dma_engine.get_current_cycle() + 1);
         }
     }
@@ -344,20 +343,20 @@ TEST_CASE_METHOD(DMATracingFixture, "Trace: Bandwidth Analysis", "[trace][dma][a
     dma_engine.set_current_cycle(20000);
 
     for (size_t size : transfer_sizes) {
-        if (size > scratchpads[0].get_capacity()) continue;
+        if (size > l3_tiles[0].get_capacity()) continue;
 
         auto test_data = generate_test_pattern(size);
         memory_banks[0].write(0, test_data.data(), size);
 
         dma_engine.enqueue_transfer(
             KPU_MEMORY_BASE,
-            SCRATCHPAD_BASE,
+            L3_TILE_BASE,
             size
         );
 
         // Process until this transfer completes
         while (dma_engine.is_busy()) {
-            dma_engine.process_transfers(host_memory_regions, memory_banks, l3_tiles, l2_banks, scratchpads);
+            dma_engine.process_transfers(host_memory_regions, memory_banks, l3_tiles);
             dma_engine.set_current_cycle(dma_engine.get_current_cycle() + 1);
         }
     }

@@ -5,7 +5,7 @@
 
 #include <sw/kpu/components/streamer.hpp>
 #include <sw/kpu/components/l2_bank.hpp>
-#include <sw/kpu/components/scratchpad.hpp>
+#include <sw/kpu/components/l1_buffer.hpp>
 #include <sw/trace/trace_logger.hpp>
 
 namespace sw::kpu {
@@ -103,13 +103,13 @@ void Streamer::enqueue_stream(const StreamConfig& config) {
                 trace::ComponentType::L2_BANK
             );
             payload.destination = trace::MemoryLocation(
-                config.l1_base_addr, stream_size, static_cast<uint32_t>(config.l1_scratchpad_id),
-                trace::ComponentType::PAGE_BUFFER
+                config.l1_base_addr, stream_size, static_cast<uint32_t>(config.l1_buffer_id),
+                trace::ComponentType::L1
             );
         } else {
             payload.source = trace::MemoryLocation(
-                config.l1_base_addr, stream_size, static_cast<uint32_t>(config.l1_scratchpad_id),
-                trace::ComponentType::PAGE_BUFFER
+                config.l1_base_addr, stream_size, static_cast<uint32_t>(config.l1_buffer_id),
+                trace::ComponentType::L1
             );
             payload.destination = trace::MemoryLocation(
                 config.l2_base_addr, stream_size, static_cast<uint32_t>(config.l2_bank_id),
@@ -131,7 +131,7 @@ void Streamer::enqueue_stream(const StreamConfig& config) {
 
 bool Streamer::update(Cycle current_cycle,
                               std::vector<L2Bank>& l2_banks,
-                              std::vector<Scratchpad>& l1_scratchpads) {
+                              std::vector<L1Buffer>& l1_buffers) {
     // Start a new stream if none is active and queue has work
     if (!current_stream && !stream_queue.empty()) {
         initialize_stream_state(stream_queue.front());
@@ -143,7 +143,7 @@ bool Streamer::update(Cycle current_cycle,
     }
 
     // Process the current stream
-    bool stream_complete = advance_stream_cycle(current_cycle, l2_banks, l1_scratchpads);
+    bool stream_complete = advance_stream_cycle(current_cycle, l2_banks, l1_buffers);
 
     if (stream_complete) {
         StreamConfig& config = current_stream->config;
@@ -179,13 +179,13 @@ bool Streamer::update(Cycle current_cycle,
                     trace::ComponentType::L2_BANK
                 );
                 payload.destination = trace::MemoryLocation(
-                    config.l1_base_addr, stream_size, static_cast<uint32_t>(config.l1_scratchpad_id),
-                    trace::ComponentType::PAGE_BUFFER
+                    config.l1_base_addr, stream_size, static_cast<uint32_t>(config.l1_buffer_id),
+                    trace::ComponentType::L1
                 );
             } else {
                 payload.source = trace::MemoryLocation(
-                    config.l1_base_addr, stream_size, static_cast<uint32_t>(config.l1_scratchpad_id),
-                    trace::ComponentType::PAGE_BUFFER
+                    config.l1_base_addr, stream_size, static_cast<uint32_t>(config.l1_buffer_id),
+                    trace::ComponentType::L1
                 );
                 payload.destination = trace::MemoryLocation(
                     config.l2_base_addr, stream_size, static_cast<uint32_t>(config.l2_bank_id),
@@ -237,7 +237,7 @@ void Streamer::initialize_stream_state(const StreamConfig& config) {
 
 bool Streamer::advance_stream_cycle(Cycle current_cycle,
                                             std::vector<L2Bank>& l2_banks,
-                                            std::vector<Scratchpad>& l1_scratchpads) {
+                                            std::vector<L1Buffer>& l1_buffers) {
     const StreamConfig& config = current_stream->config;
 
     // Set start cycle on first call
@@ -247,8 +247,8 @@ bool Streamer::advance_stream_cycle(Cycle current_cycle,
 
     // Validate indices
     if (config.l2_bank_id >= l2_banks.size() ||
-        config.l1_scratchpad_id >= l1_scratchpads.size()) {
-        throw std::out_of_range("Invalid L2 bank or L1 scratchpad ID");
+        config.l1_buffer_id >= l1_buffers.size()) {
+        throw std::out_of_range("Invalid L2 bank or L1 buffer ID");
     }
 
     bool stream_complete = false;
@@ -257,17 +257,17 @@ bool Streamer::advance_stream_cycle(Cycle current_cycle,
     switch (config.direction) {
         case StreamDirection::L2_TO_L1:
             if (config.stream_type == StreamType::ROW_STREAM) {
-                stream_complete = stream_row_l2_to_l1(current_cycle, l2_banks, l1_scratchpads);
+                stream_complete = stream_row_l2_to_l1(current_cycle, l2_banks, l1_buffers);
             } else {
-                stream_complete = stream_column_l2_to_l1(current_cycle, l2_banks, l1_scratchpads);
+                stream_complete = stream_column_l2_to_l1(current_cycle, l2_banks, l1_buffers);
             }
             break;
 
         case StreamDirection::L1_TO_L2:
             if (config.stream_type == StreamType::ROW_STREAM) {
-                stream_complete = stream_row_l1_to_l2(current_cycle, l2_banks, l1_scratchpads);
+                stream_complete = stream_row_l1_to_l2(current_cycle, l2_banks, l1_buffers);
             } else {
-                stream_complete = stream_column_l1_to_l2(current_cycle, l2_banks, l1_scratchpads);
+                stream_complete = stream_column_l1_to_l2(current_cycle, l2_banks, l1_buffers);
             }
             break;
     }
@@ -277,11 +277,11 @@ bool Streamer::advance_stream_cycle(Cycle current_cycle,
 
 bool Streamer::stream_row_l2_to_l1(Cycle current_cycle,
                                            std::vector<L2Bank>& l2_banks,
-                                           std::vector<Scratchpad>& l1_scratchpads) {
+                                           std::vector<L1Buffer>& l1_buffers) {
     (void)current_cycle; // Suppress unused parameter warning
     const StreamConfig& config = current_stream->config;
     L2Bank& l2_bank = l2_banks[config.l2_bank_id];
-    Scratchpad& l1_scratch = l1_scratchpads[config.l1_scratchpad_id];
+    L1Buffer& l1_buffer = l1_buffers[config.l1_buffer_id];
 
     Size fabric_size = config.compute_fabric_size;
 
@@ -306,7 +306,7 @@ bool Streamer::stream_row_l2_to_l1(Cycle current_cycle,
         // Transfer data directly from L2 to L1
         std::vector<uint8_t> element_data(config.element_size);
         l2_bank.read(l2_addr, element_data.data(), config.element_size);
-        l1_scratch.write(l1_addr, element_data.data(), config.element_size);
+        l1_buffer.write(l1_addr, element_data.data(), config.element_size);
     }
 
     // Advance to next position
@@ -326,11 +326,11 @@ bool Streamer::stream_row_l2_to_l1(Cycle current_cycle,
 
 bool Streamer::stream_column_l2_to_l1(Cycle current_cycle,
                                               std::vector<L2Bank>& l2_banks,
-                                              std::vector<Scratchpad>& l1_scratchpads) {
+                                              std::vector<L1Buffer>& l1_buffers) {
     (void)current_cycle; // Suppress unused parameter warning
     const StreamConfig& config = current_stream->config;
     L2Bank& l2_bank = l2_banks[config.l2_bank_id];
-    Scratchpad& l1_scratch = l1_scratchpads[config.l1_scratchpad_id];
+    L1Buffer& l1_buffer = l1_buffers[config.l1_buffer_id];
 
     Size fabric_size = config.compute_fabric_size;
 
@@ -355,7 +355,7 @@ bool Streamer::stream_column_l2_to_l1(Cycle current_cycle,
         // Transfer data directly from L2 to L1
         std::vector<uint8_t> element_data(config.element_size);
         l2_bank.read(l2_addr, element_data.data(), config.element_size);
-        l1_scratch.write(l1_addr, element_data.data(), config.element_size);
+        l1_buffer.write(l1_addr, element_data.data(), config.element_size);
     }
 
     // Advance to next position
@@ -375,11 +375,11 @@ bool Streamer::stream_column_l2_to_l1(Cycle current_cycle,
 
 bool Streamer::stream_row_l1_to_l2(Cycle current_cycle,
                                            std::vector<L2Bank>& l2_banks,
-                                           std::vector<Scratchpad>& l1_scratchpads) {
+                                           std::vector<L1Buffer>& l1_buffers) {
     (void)current_cycle; // Suppress unused parameter warning
     const StreamConfig& config = current_stream->config;
     L2Bank& l2_bank = l2_banks[config.l2_bank_id];
-    Scratchpad& l1_scratch = l1_scratchpads[config.l1_scratchpad_id];
+    L1Buffer& l1_buffer = l1_buffers[config.l1_buffer_id];
 
     Size fabric_size = config.compute_fabric_size;
 
@@ -399,7 +399,7 @@ bool Streamer::stream_row_l1_to_l2(Cycle current_cycle,
 
         // Transfer data
         std::vector<uint8_t> element_data(config.element_size);
-        l1_scratch.read(l1_addr, element_data.data(), config.element_size);
+        l1_buffer.read(l1_addr, element_data.data(), config.element_size);
         l2_bank.write(l2_addr, element_data.data(), config.element_size);
     }
 
@@ -420,11 +420,11 @@ bool Streamer::stream_row_l1_to_l2(Cycle current_cycle,
 
 bool Streamer::stream_column_l1_to_l2(Cycle current_cycle,
                                               std::vector<L2Bank>& l2_banks,
-                                              std::vector<Scratchpad>& l1_scratchpads) {
+                                              std::vector<L1Buffer>& l1_buffers) {
     (void)current_cycle; // Suppress unused parameter warning
     const StreamConfig& config = current_stream->config;
     L2Bank& l2_bank = l2_banks[config.l2_bank_id];
-    Scratchpad& l1_scratch = l1_scratchpads[config.l1_scratchpad_id];
+    L1Buffer& l1_buffer = l1_buffers[config.l1_buffer_id];
 
     Size fabric_size = config.compute_fabric_size;
 
@@ -444,7 +444,7 @@ bool Streamer::stream_column_l1_to_l2(Cycle current_cycle,
 
         // Transfer data
         std::vector<uint8_t> element_data(config.element_size);
-        l1_scratch.read(l1_addr, element_data.data(), config.element_size);
+        l1_buffer.read(l1_addr, element_data.data(), config.element_size);
         l2_bank.write(l2_addr, element_data.data(), config.element_size);
     }
 

@@ -94,10 +94,11 @@ TEST_CASE("ResourceManager resource discovery", "[resource_api]") {
     KPUSimulator::Config config;
     config.host_memory_region_count = 1;
     config.memory_bank_count = 2;
+    config.memory_bank_capacity_mb = 128;  // 128 MB per bank
     config.l3_tile_count = 4;
     config.l2_bank_count = 8;
     config.l1_buffer_count = 4;
-    config.scratchpad_count = 2;
+    config.page_buffer_count = 2;
     config.compute_tile_count = 2;
     config.dma_engine_count = 4;
     config.block_mover_count = 4;
@@ -162,8 +163,9 @@ TEST_CASE("ResourceManager memory allocation", "[resource_api]") {
     KPUSimulator::Config config;
     config.memory_bank_count = 1;
     config.memory_bank_capacity_mb = 1;  // 1 MB
-    config.scratchpad_count = 1;
-    config.scratchpad_capacity_kb = 64;  // 64 KB
+    config.page_buffer_count = 1;
+    config.page_buffer_capacity_kb = 64;  // 64 KB
+    config.compute_tile_count = 1;  // For "Non-memory resource throws" test
 
     KPUSimulator simulator(config);
     auto rm = simulator.create_resource_manager();
@@ -240,8 +242,8 @@ TEST_CASE("ResourceManager memory allocation", "[resource_api]") {
 
 TEST_CASE("ResourceManager memory operations", "[resource_api]") {
     KPUSimulator::Config config;
-    config.scratchpad_count = 1;
-    config.scratchpad_capacity_kb = 64;
+    config.page_buffer_count = 1;
+    config.page_buffer_capacity_kb = 64;
 
     KPUSimulator simulator(config);
     auto rm = simulator.create_resource_manager();
@@ -298,8 +300,8 @@ TEST_CASE("ResourceManager address space queries", "[resource_api]") {
     KPUSimulator::Config config;
     config.memory_bank_count = 2;
     config.memory_bank_capacity_mb = 1;
-    config.scratchpad_count = 2;
-    config.scratchpad_capacity_kb = 64;
+    config.page_buffer_count = 2;
+    config.page_buffer_capacity_kb = 64;
 
     KPUSimulator simulator(config);
     auto rm = simulator.create_resource_manager();

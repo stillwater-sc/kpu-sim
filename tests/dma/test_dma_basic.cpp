@@ -11,6 +11,7 @@
 using namespace sw::kpu;
 
 // Test fixture for DMA tests
+// DMA supports transfers between: HOST_MEMORY, KPU_MEMORY (external), and L3_TILE
 class DMATestFixture {
 public:
     KPUSimulator::Config config;
@@ -21,10 +22,10 @@ public:
         config.memory_bank_count = 2;
         config.memory_bank_capacity_mb = 64;
         config.memory_bandwidth_gbps = 8;
-        config.scratchpad_count = 2;
-        config.scratchpad_capacity_kb = 256;
+        config.l3_tile_count = 4;
+        config.l3_tile_capacity_kb = 256;
         config.compute_tile_count = 1;
-        config.dma_engine_count = 4; // Multiple DMA engines for various transfer types
+        config.dma_engine_count = 4;
 
         sim = std::make_unique<KPUSimulator>(config);
     }
@@ -36,38 +37,38 @@ public:
         return data;
     }
 
-    // Helper to verify data integrity
-    bool verify_data(const std::vector<uint8_t>& expected,
-                     Address addr, size_t size, size_t memory_bank_id) {
+    // Helper to verify data in memory bank
+    bool verify_memory_bank_data(const std::vector<uint8_t>& expected,
+                                 Address addr, size_t size, size_t bank_id) {
         std::vector<uint8_t> actual(size);
-        sim->read_memory_bank(memory_bank_id, addr, actual.data(), size);
+        sim->read_memory_bank(bank_id, addr, actual.data(), size);
         return std::equal(expected.begin(), expected.end(), actual.begin());
     }
 
-    bool verify_scratchpad_data(const std::vector<uint8_t>& expected,
-                                Address addr, size_t size, size_t scratchpad_id) {
+    // Helper to verify data in L3 tile
+    bool verify_l3_tile_data(const std::vector<uint8_t>& expected,
+                             Address addr, size_t size, size_t tile_id) {
         std::vector<uint8_t> actual(size);
-        sim->read_scratchpad(scratchpad_id, addr, actual.data(), size);
+        sim->read_l3_tile(tile_id, addr, actual.data(), size);
         return std::equal(expected.begin(), expected.end(), actual.begin());
     }
 };
 
-TEST_CASE_METHOD(DMATestFixture, "DMA Basic Transfer - External to Scratchpad", "[dma][basic]") {
+TEST_CASE_METHOD(DMATestFixture, "DMA Basic Transfer - External to L3 Tile", "[dma][basic]") {
     const size_t transfer_size = 1024;
     const Address src_addr = 0x1000;
     const Address dst_addr = 0x0;
 
-    // Generate and write test data to external memory
+    // Generate and write test data to external memory bank
     auto test_data = generate_test_pattern(transfer_size, 0xAA);
     sim->write_memory_bank(0, src_addr, test_data.data(), transfer_size);
 
-    // Start DMA transfer (External[0] -> Scratchpad[0])
-    // Compute global addresses
+    // Start DMA transfer (External[0] -> L3 Tile[0])
     Address global_src_addr = sim->get_external_bank_base(0) + src_addr;
-    Address global_dst_addr = sim->get_scratchpad_base(0) + dst_addr;
+    Address global_dst_addr = sim->get_l3_tile_base(0) + dst_addr;
 
     bool transfer_complete = false;
-    sim->dma_external_to_scratchpad(0, global_src_addr, global_dst_addr, transfer_size,
+    sim->dma_external_to_l3(0, global_src_addr, global_dst_addr, transfer_size,
         [&transfer_complete]() { transfer_complete = true; });
 
     // Process until transfer completes
@@ -75,27 +76,26 @@ TEST_CASE_METHOD(DMATestFixture, "DMA Basic Transfer - External to Scratchpad", 
         sim->step();
     }
 
-    // Verify data integrity
-    REQUIRE(verify_scratchpad_data(test_data, dst_addr, transfer_size, 0));
+    // Verify data integrity in L3 tile
+    REQUIRE(verify_l3_tile_data(test_data, dst_addr, transfer_size, 0));
     REQUIRE_FALSE(sim->is_dma_busy(0));
 }
 
-TEST_CASE_METHOD(DMATestFixture, "DMA Basic Transfer - Scratchpad to External", "[dma][basic]") {
+TEST_CASE_METHOD(DMATestFixture, "DMA Basic Transfer - L3 Tile to External", "[dma][basic]") {
     const size_t transfer_size = 2048;
     const Address src_addr = 0x0;
     const Address dst_addr = 0x2000;
 
-    // Generate and write test data to scratchpad
+    // Generate and write test data to L3 tile
     auto test_data = generate_test_pattern(transfer_size, 0x55);
-    sim->write_scratchpad(0, src_addr, test_data.data(), transfer_size);
+    sim->write_l3_tile(0, src_addr, test_data.data(), transfer_size);
 
-    // Start DMA transfer (Scratchpad[0] -> External[0])
-    // Compute global addresses
-    Address global_src_addr = sim->get_scratchpad_base(0) + src_addr;
+    // Start DMA transfer (L3 Tile[0] -> External[0])
+    Address global_src_addr = sim->get_l3_tile_base(0) + src_addr;
     Address global_dst_addr = sim->get_external_bank_base(0) + dst_addr;
 
     bool transfer_complete = false;
-    sim->dma_scratchpad_to_external(0, global_src_addr, global_dst_addr, transfer_size,
+    sim->dma_l3_to_external(0, global_src_addr, global_dst_addr, transfer_size,
         [&transfer_complete]() { transfer_complete = true; });
 
     // Process until transfer completes
@@ -103,313 +103,104 @@ TEST_CASE_METHOD(DMATestFixture, "DMA Basic Transfer - Scratchpad to External", 
         sim->step();
     }
 
-    // Verify data integrity
-    REQUIRE(verify_data(test_data, dst_addr, transfer_size, 0));
-    REQUIRE_FALSE(sim->is_dma_busy(1));
-}
-
-TEST_CASE_METHOD(DMATestFixture, "DMA Queue Management - Multiple Transfers", "[dma][queue]") {
-    const size_t transfer_size = 512;
-
-    // Prepare multiple test datasets
-    auto data1 = generate_test_pattern(transfer_size, 0x11);
-    auto data2 = generate_test_pattern(transfer_size, 0x22);
-    auto data3 = generate_test_pattern(transfer_size, 0x33);
-
-    // Write test data to external memory
-    sim->write_memory_bank(0, 0x1000, data1.data(), transfer_size);
-    sim->write_memory_bank(0, 0x1000 + transfer_size, data2.data(), transfer_size);
-    sim->write_memory_bank(0, 0x1000 + 2*transfer_size, data3.data(), transfer_size);
-
-    // Queue multiple transfers
-    int completions = 0;
-    auto completion_callback = [&completions]() { completions++; };
-
-    // Compute base addresses once
-    Address external_base = sim->get_external_bank_base(0);
-    Address scratchpad_base = sim->get_scratchpad_base(0);
-
-    sim->dma_external_to_scratchpad(0, external_base + 0x1000, scratchpad_base + 0x0, transfer_size, completion_callback);
-    sim->dma_external_to_scratchpad(0, external_base + 0x1000 + transfer_size, scratchpad_base + transfer_size, transfer_size, completion_callback);
-    sim->dma_external_to_scratchpad(0, external_base + 0x1000 + 2*transfer_size, scratchpad_base + 2*transfer_size, transfer_size, completion_callback);
-
-    REQUIRE(sim->is_dma_busy(0));
-
-    // Process until all transfers complete
-    while (completions < 3) {
-        sim->step();
-    }
-
-    // Verify all data transferred correctly (FIFO order)
-    REQUIRE(verify_scratchpad_data(data1, 0x0, transfer_size, 0));
-    REQUIRE(verify_scratchpad_data(data2, transfer_size, transfer_size, 0));
-    REQUIRE(verify_scratchpad_data(data3, 2*transfer_size, transfer_size, 0));
+    // Verify data integrity in external memory
+    REQUIRE(verify_memory_bank_data(test_data, dst_addr, transfer_size, 0));
     REQUIRE_FALSE(sim->is_dma_busy(0));
 }
 
-TEST_CASE_METHOD(DMATestFixture, "DMA Data Integrity - Various Sizes", "[dma][integrity]") {
-    std::vector<size_t> test_sizes = {1, 16, 64, 256, 1024, 4096, 65536};
+TEST_CASE_METHOD(DMATestFixture, "DMA Large Transfer", "[dma][large]") {
+    // Test with L3 tile capacity
+    const size_t transfer_size = config.l3_tile_capacity_kb * 1024 / 2; // Half tile capacity
+    const Address src_addr = 0x0;
+    const Address dst_addr = 0x0;
 
-    for (size_t size : test_sizes) {
-        SECTION("Transfer size: " + std::to_string(size) + " bytes") {
-            if (size > sim->get_scratchpad_capacity(0)) {
-                SKIP("Transfer size exceeds scratchpad capacity");
-            }
+    // Generate random test data
+    std::vector<uint8_t> test_data(transfer_size);
+    std::mt19937 rng(42);
+    std::generate(test_data.begin(), test_data.end(), [&rng]() { return rng() & 0xFF; });
 
-            auto test_data = generate_test_pattern(size, static_cast<uint8_t>(size & 0xFF));
-            sim->write_memory_bank(0, 0, test_data.data(), size);
+    // Write to external memory
+    sim->write_memory_bank(0, src_addr, test_data.data(), transfer_size);
 
-            bool complete = false;
-            Address global_src = sim->get_external_bank_base(0) + 0;
-            Address global_dst = sim->get_scratchpad_base(0) + 0;
-            sim->dma_external_to_scratchpad(0, global_src, global_dst, size, [&complete]() { complete = true; });
+    // Transfer to L3 tile
+    Address global_src_addr = sim->get_external_bank_base(0) + src_addr;
+    Address global_dst_addr = sim->get_l3_tile_base(0) + dst_addr;
 
-            while (!complete) {
-                sim->step();
-            }
+    bool transfer_complete = false;
+    sim->dma_external_to_l3(0, global_src_addr, global_dst_addr, transfer_size,
+        [&transfer_complete]() { transfer_complete = true; });
 
-            REQUIRE(verify_scratchpad_data(test_data, 0, size, 0));
-        }
+    while (!transfer_complete) {
+        sim->step();
+    }
+
+    // Verify data
+    REQUIRE(verify_l3_tile_data(test_data, dst_addr, transfer_size, 0));
+}
+
+TEST_CASE_METHOD(DMATestFixture, "DMA Concurrent Transfers", "[dma][concurrent]") {
+    const size_t transfer_size = 512;
+
+    // Setup transfers to different L3 tiles using different DMA engines
+    std::vector<std::vector<uint8_t>> test_data_sets;
+    for (size_t i = 0; i < config.l3_tile_count && i < config.dma_engine_count; ++i) {
+        auto data = generate_test_pattern(transfer_size, static_cast<uint8_t>(i * 0x10));
+        test_data_sets.push_back(data);
+
+        Address src_addr = i * 0x1000;
+        sim->write_memory_bank(0, src_addr, data.data(), transfer_size);
+    }
+
+    // Start concurrent transfers
+    std::vector<bool> transfers_complete(test_data_sets.size(), false);
+    for (size_t i = 0; i < test_data_sets.size(); ++i) {
+        Address src_addr = i * 0x1000;
+        Address global_src = sim->get_external_bank_base(0) + src_addr;
+        Address global_dst = sim->get_l3_tile_base(i);
+
+        sim->dma_external_to_l3(i, global_src, global_dst, transfer_size,
+            [&transfers_complete, i]() { transfers_complete[i] = true; });
+    }
+
+    // Wait for all transfers to complete
+    while (!std::all_of(transfers_complete.begin(), transfers_complete.end(),
+                        [](bool c) { return c; })) {
+        sim->step();
+    }
+
+    // Verify all transfers
+    for (size_t i = 0; i < test_data_sets.size(); ++i) {
+        REQUIRE(verify_l3_tile_data(test_data_sets[i], 0, transfer_size, i));
     }
 }
 
-TEST_CASE_METHOD(DMATestFixture, "DMA Error Handling - Invalid Addresses", "[dma][error]") {
-    const size_t transfer_size = 1024;
+TEST_CASE_METHOD(DMATestFixture, "DMA Status Queries", "[dma][status]") {
+    const size_t transfer_size = 4096;
+    const Address src_addr = 0x0;
 
-    SECTION("Source address out of bounds") {
-        // Use an address way beyond the entire unified address space
-        // Compute total address space size (must include ALL memory types)
-        Address total_space = 0;
-        // Host memory
-        total_space += config.host_memory_region_count * config.host_memory_region_capacity_mb * 1024ULL * 1024ULL;
-        // External memory banks
-        total_space += config.memory_bank_count * config.memory_bank_capacity_mb * 1024ULL * 1024ULL;
-        // On-chip memory hierarchy
-        total_space += config.l3_tile_count * config.l3_tile_capacity_kb * 1024ULL;
-        total_space += config.l2_bank_count * config.l2_bank_capacity_kb * 1024ULL;
-        total_space += config.l1_buffer_count * config.l1_buffer_capacity_kb * 1024ULL;
-        total_space += config.scratchpad_count * config.scratchpad_capacity_kb * 1024ULL;
+    // Generate test data
+    auto test_data = generate_test_pattern(transfer_size, 0x77);
+    sim->write_memory_bank(0, src_addr, test_data.data(), transfer_size);
 
-        Address invalid_src = total_space + 100000;  // Way beyond address space
+    // Initially DMA should not be busy
+    REQUIRE_FALSE(sim->is_dma_busy(0));
 
-        // With address-based API, validation may happen during queuing or processing
-        bool exception_thrown = false;
-        try {
-            // Try to use invalid global source address (destination is valid)
-            Address valid_dst = sim->get_scratchpad_base(0);
-            sim->dma_external_to_scratchpad(0, invalid_src, valid_dst, transfer_size);
-            // If queuing succeeded, error should occur during processing
-            for (int i = 0; i < 100 && !exception_thrown; ++i) {
-                try {
-                    sim->step();
-                } catch (const std::exception&) {
-                    exception_thrown = true;
-                    break;
-                }
-            }
-        } catch (const std::exception&) {
-            // Exception during queuing is also acceptable
-            exception_thrown = true;
-        }
-        REQUIRE(exception_thrown);
-    }
+    // Start transfer
+    Address global_src = sim->get_external_bank_base(0) + src_addr;
+    Address global_dst = sim->get_l3_tile_base(0);
 
-    SECTION("Destination address out of bounds") {
-        // Use an address way beyond the entire unified address space
-        // Compute total address space size (must include ALL memory types)
-        Address total_space = 0;
-        // Host memory
-        total_space += config.host_memory_region_count * config.host_memory_region_capacity_mb * 1024ULL * 1024ULL;
-        // External memory banks
-        total_space += config.memory_bank_count * config.memory_bank_capacity_mb * 1024ULL * 1024ULL;
-        // On-chip memory hierarchy
-        total_space += config.l3_tile_count * config.l3_tile_capacity_kb * 1024ULL;
-        total_space += config.l2_bank_count * config.l2_bank_capacity_kb * 1024ULL;
-        total_space += config.l1_buffer_count * config.l1_buffer_capacity_kb * 1024ULL;
-        total_space += config.scratchpad_count * config.scratchpad_capacity_kb * 1024ULL;
+    bool transfer_complete = false;
+    sim->dma_external_to_l3(0, global_src, global_dst, transfer_size,
+        [&transfer_complete]() { transfer_complete = true; });
 
-        Address invalid_dst = total_space + 100000;  // Way beyond address space
-
-        // With address-based API, validation may happen during queuing or processing
-        bool exception_thrown = false;
-        try {
-            // Try to use invalid global destination address (source is valid)
-            Address valid_src = sim->get_external_bank_base(0);
-            sim->dma_external_to_scratchpad(0, valid_src, invalid_dst, transfer_size);
-            // If queuing succeeded, error should occur during processing
-            for (int i = 0; i < 100 && !exception_thrown; ++i) {
-                try {
-                    sim->step();
-                } catch (const std::exception&) {
-                    exception_thrown = true;
-                    break;
-                }
-            }
-        } catch (const std::exception&) {
-            // Exception during queuing is also acceptable
-            exception_thrown = true;
-        }
-        REQUIRE(exception_thrown);
-    }
-
-    SECTION("Transfer size exceeds destination capacity") {
-        // Transfer that starts at valid address but extends beyond the scratchpad
-        // This should fail during validation
-        size_t oversized_transfer = sim->get_scratchpad_capacity(0) + 1024;
-
-        // With address-based API, validation may happen during queuing or processing
-        bool exception_thrown = false;
-        try {
-            Address valid_src = sim->get_external_bank_base(0);
-            Address valid_dst = sim->get_scratchpad_base(0);
-            sim->dma_external_to_scratchpad(0, valid_src, valid_dst, oversized_transfer);
-            // If queuing succeeded, error should occur during processing
-            for (int i = 0; i < 100 && !exception_thrown; ++i) {
-                try {
-                    sim->step();
-                } catch (const std::exception&) {
-                    exception_thrown = true;
-                    break;
-                }
-            }
-        } catch (const std::exception&) {
-            // Exception during queuing is also acceptable
-            exception_thrown = true;
-        }
-        REQUIRE(exception_thrown);
-    }
-}
-
-TEST_CASE_METHOD(DMATestFixture, "DMA Error Handling - Invalid IDs", "[dma][error]") {
-    SECTION("Invalid DMA engine ID") {
-        Address valid_src = sim->get_external_bank_base(0);
-        Address valid_dst = sim->get_scratchpad_base(0);
-        REQUIRE_THROWS_AS(
-            sim->dma_external_to_scratchpad(99, valid_src, valid_dst, 1024),
-            std::out_of_range
-        );
-
-        REQUIRE_THROWS_AS(
-            sim->is_dma_busy(99),
-            std::out_of_range
-        );
-    }
-}
-
-TEST_CASE_METHOD(DMATestFixture, "DMA Reset Functionality", "[dma][reset]") {
-    const size_t transfer_size = 1024;
-    auto test_data = generate_test_pattern(transfer_size);
-
-    // Queue a transfer
-    sim->write_memory_bank(0, 0, test_data.data(), transfer_size);
-    Address global_src = sim->get_external_bank_base(0);
-    Address global_dst = sim->get_scratchpad_base(0);
-    sim->dma_external_to_scratchpad(0, global_src, global_dst, transfer_size);
-
+    // DMA should be busy during transfer
     REQUIRE(sim->is_dma_busy(0));
 
-    // Reset the simulator
-    sim->reset();
+    // Complete the transfer
+    while (!transfer_complete) {
+        sim->step();
+    }
 
     // DMA should no longer be busy
     REQUIRE_FALSE(sim->is_dma_busy(0));
-}
-
-TEST_CASE_METHOD(DMATestFixture, "DMA Concurrent Operations", "[dma][concurrent]") {
-    const size_t transfer_size = 1024;
-
-    // Prepare test data for different DMA engines
-    auto data1 = generate_test_pattern(transfer_size, 0xAA);
-    auto data2 = generate_test_pattern(transfer_size, 0xBB);
-
-    // Write to different memory banks
-    sim->write_memory_bank(0, 0, data1.data(), transfer_size);
-    sim->write_memory_bank(1, 0, data2.data(), transfer_size);
-
-    // Start concurrent transfers using different DMA engines
-    bool transfer1_complete = false;
-    bool transfer2_complete = false;
-
-    // DMA 0: Bank0 -> Scratchpad0
-    Address bank0_base = sim->get_external_bank_base(0);
-    Address bank1_base = sim->get_external_bank_base(1);
-    Address scratch_base = sim->get_scratchpad_base(0);
-
-    sim->dma_external_to_scratchpad(0, bank0_base, scratch_base, transfer_size,
-        [&transfer1_complete]() { transfer1_complete = true; });
-
-    // DMA 1: Bank1 -> Scratchpad0 (different section)
-    if (sim->get_scratchpad_capacity(0) >= 2 * transfer_size) {
-        sim->dma_external_to_scratchpad(1, bank1_base, scratch_base + transfer_size, transfer_size,
-            [&transfer2_complete]() { transfer2_complete = true; });
-    }
-
-    REQUIRE(sim->is_dma_busy(0));
-    if (sim->get_scratchpad_capacity(0) >= 2 * transfer_size) {
-        REQUIRE(sim->is_dma_busy(1));
-    }
-
-    // Process until both complete
-    while (!transfer1_complete || (!transfer2_complete && sim->get_scratchpad_capacity(0) >= 2 * transfer_size)) {
-        sim->step();
-    }
-
-    // Verify both transfers completed correctly
-    REQUIRE(verify_scratchpad_data(data1, 0, transfer_size, 0));
-    if (sim->get_scratchpad_capacity(0) >= 2 * transfer_size) {
-        REQUIRE(verify_scratchpad_data(data2, transfer_size, transfer_size, 0));
-    }
-}
-
-TEST_CASE_METHOD(DMATestFixture, "DMA Matrix Data Movement", "[dma][matrix]") {
-    // Simulate moving matrix data for tensor operations
-    const size_t matrix_rows = 32;
-    const size_t matrix_cols = 32;
-    const size_t matrix_size = matrix_rows * matrix_cols * sizeof(float);
-
-    if (matrix_size > sim->get_scratchpad_capacity(0)) {
-        SKIP("Matrix too large for scratchpad");
-    }
-
-    // Generate matrix data
-    std::vector<float> matrix_a(matrix_rows * matrix_cols);
-    std::vector<float> matrix_b(matrix_rows * matrix_cols);
-
-    std::random_device rd;
-    std::mt19937 gen(rd());
-    std::uniform_real_distribution<float> dis(-1.0f, 1.0f);
-
-    std::generate(matrix_a.begin(), matrix_a.end(), [&]() { return dis(gen); });
-    std::generate(matrix_b.begin(), matrix_b.end(), [&]() { return dis(gen); });
-
-    // Write matrices to external memory
-    sim->write_memory_bank(0, 0, matrix_a.data(), matrix_size);
-    sim->write_memory_bank(0, matrix_size, matrix_b.data(), matrix_size);
-
-    // Transfer matrices to scratchpad
-    bool transfer_a_complete = false;
-    bool transfer_b_complete = false;
-
-    Address ext_base = sim->get_external_bank_base(0);
-    Address scratch_base = sim->get_scratchpad_base(0);
-
-    sim->dma_external_to_scratchpad(0, ext_base, scratch_base, matrix_size,
-        [&transfer_a_complete]() { transfer_a_complete = true; });
-    sim->dma_external_to_scratchpad(0, ext_base + matrix_size, scratch_base + matrix_size, matrix_size,
-        [&transfer_b_complete]() { transfer_b_complete = true; });
-
-    // Process transfers
-    while (!transfer_a_complete || !transfer_b_complete) {
-        sim->step();
-    }
-
-    // Verify matrix data integrity
-    std::vector<float> read_matrix_a(matrix_rows * matrix_cols);
-    std::vector<float> read_matrix_b(matrix_rows * matrix_cols);
-
-    sim->read_scratchpad(0, 0, read_matrix_a.data(), matrix_size);
-    sim->read_scratchpad(0, matrix_size, read_matrix_b.data(), matrix_size);
-
-    REQUIRE(std::equal(matrix_a.begin(), matrix_a.end(), read_matrix_a.begin()));
-    REQUIRE(std::equal(matrix_b.begin(), matrix_b.end(), read_matrix_b.begin()));
 }

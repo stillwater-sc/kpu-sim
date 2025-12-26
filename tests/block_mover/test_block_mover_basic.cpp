@@ -21,8 +21,8 @@ public:
         config.memory_bank_count = 2;
         config.memory_bank_capacity_mb = 64;
         config.memory_bandwidth_gbps = 8;
-        config.scratchpad_count = 2;
-        config.scratchpad_capacity_kb = 256;
+        config.l1_buffer_count = 2;
+        config.l1_buffer_capacity_kb = 256;
         config.compute_tile_count = 1;
         config.dma_engine_count = 4;
         config.l3_tile_count = 4;

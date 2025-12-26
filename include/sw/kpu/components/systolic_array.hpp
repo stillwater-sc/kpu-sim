@@ -20,7 +20,7 @@
 #endif
 
 #include <sw/concepts.hpp>
-#include <sw/kpu/components/scratchpad.hpp>
+#include <sw/kpu/components/l1_buffer.hpp>
 
 namespace sw::kpu {
 
@@ -94,8 +94,8 @@ public:
 
     struct MatMulConfig {
         Size m, n, k; // Matrix dimensions: C[m,n] = A[m,k] * B[k,n]
-        Address a_addr, b_addr, c_addr; // Addresses in scratchpad
-        size_t scratchpad_id; // Which scratchpad to use
+        Address a_addr, b_addr, c_addr; // Addresses in L1 buffer
+        size_t l1_buffer_id; // Which L1 buffer to use
         std::function<void()> completion_callback;
     };
 
@@ -145,7 +145,7 @@ public:
 
     // Matrix multiplication operations
     void start_matmul(const MatMulConfig& config);
-    bool update(Cycle current_cycle, std::vector<Scratchpad>& scratchpads);
+    bool update(Cycle current_cycle, std::vector<L1Buffer>& l1_buffers);
     bool is_busy() const { return is_computing; }
     void reset();
 
@@ -167,9 +167,9 @@ public:
 private:
     // Internal processing
     void cycle_pe_array(Cycle current_cycle);
-    void load_a_data(Cycle current_cycle, std::vector<Scratchpad>& scratchpads);
-    void load_b_data(Cycle current_cycle, std::vector<Scratchpad>& scratchpads);
-    void evacuate_c_data(Cycle current_cycle, std::vector<Scratchpad>& scratchpads);
+    void load_a_data(Cycle current_cycle, std::vector<L1Buffer>& l1_buffers);
+    void load_b_data(Cycle current_cycle, std::vector<L1Buffer>& l1_buffers);
+    void evacuate_c_data(Cycle current_cycle, std::vector<L1Buffer>& l1_buffers);
 
     // Bus management
     void propagate_horizontal_bus();
@@ -190,7 +190,7 @@ private:
     Address calculate_matrix_address(Address base_addr, Size row, Size col, Size width, Size element_size) const;
 
     // Temporary simple implementation for testing
-    void perform_direct_matrix_multiply(std::vector<Scratchpad>& scratchpads);
+    void perform_direct_matrix_multiply(std::vector<L1Buffer>& l1_buffers);
 };
 
 } // namespace sw::kpu

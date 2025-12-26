@@ -3,6 +3,7 @@
 #include <cmath>
 
 #include <sw/kpu/components/systolic_array.hpp>
+#include <sw/kpu/components/l1_buffer.hpp>
 
 namespace sw::kpu {
 
@@ -130,7 +131,7 @@ void SystolicArray::start_matmul(const MatMulConfig& config) {
     for (auto& bus : diagonal_bus) { while (!bus.empty()) bus.pop(); }
 }
 
-bool SystolicArray::update(Cycle current_cycle, std::vector<Scratchpad>& scratchpads) {
+bool SystolicArray::update(Cycle current_cycle, std::vector<L1Buffer>& l1_buffers) {
     if (!is_computing) {
         return false;
     }
@@ -149,7 +150,7 @@ bool SystolicArray::update(Cycle current_cycle, std::vector<Scratchpad>& scratch
     // Check if computation has completed
     if (cycles_elapsed >= required_cycles) {
         // Perform the actual matrix multiplication
-        perform_direct_matrix_multiply(scratchpads);
+        perform_direct_matrix_multiply(l1_buffers);
 
         // Call completion callback if provided
         if (current_op.completion_callback) {
@@ -187,12 +188,12 @@ void SystolicArray::cycle_pe_array(Cycle current_cycle) {
     }
 }
 
-void SystolicArray::load_a_data(Cycle current_cycle, std::vector<Scratchpad>& scratchpads) {
-    if (current_op.scratchpad_id >= scratchpads.size()) {
+void SystolicArray::load_a_data(Cycle current_cycle, std::vector<L1Buffer>& l1_buffers) {
+    if (current_op.l1_buffer_id >= l1_buffers.size()) {
         return;
     }
 
-    auto& scratchpad = scratchpads[current_op.scratchpad_id];
+    auto& l1_buffer = l1_buffers[current_op.l1_buffer_id];
 
     // Simplified loading: stream matrix A row by row with staggering
     (void)current_cycle; // Suppress unused parameter warning for now
@@ -208,7 +209,7 @@ void SystolicArray::load_a_data(Cycle current_cycle, std::vector<Scratchpad>& sc
                     current_op.a_addr, global_row, global_col, current_op.k, sizeof(float));
 
                 float value;
-                scratchpad.read(addr, &value, sizeof(float));
+                l1_buffer.read(addr, &value, sizeof(float));
                 horizontal_bus[row].push(value);
             }
         }
@@ -224,12 +225,12 @@ void SystolicArray::load_a_data(Cycle current_cycle, std::vector<Scratchpad>& sc
     }
 }
 
-void SystolicArray::load_b_data(Cycle current_cycle, std::vector<Scratchpad>& scratchpads) {
-    if (current_op.scratchpad_id >= scratchpads.size()) {
+void SystolicArray::load_b_data(Cycle current_cycle, std::vector<L1Buffer>& l1_buffers) {
+    if (current_op.l1_buffer_id >= l1_buffers.size()) {
         return;
     }
 
-    auto& scratchpad = scratchpads[current_op.scratchpad_id];
+    auto& l1_buffer = l1_buffers[current_op.l1_buffer_id];
 
     // Simplified loading: stream matrix B column by column with staggering
     for (Size col = 0; col < std::min(num_cols, current_op.n); ++col) {
@@ -243,7 +244,7 @@ void SystolicArray::load_b_data(Cycle current_cycle, std::vector<Scratchpad>& sc
                     current_op.b_addr, global_row, global_col, current_op.n, sizeof(float));
 
                 float value;
-                scratchpad.read(addr, &value, sizeof(float));
+                l1_buffer.read(addr, &value, sizeof(float));
                 vertical_bus[col].push(value);
             }
         }
@@ -259,12 +260,12 @@ void SystolicArray::load_b_data(Cycle current_cycle, std::vector<Scratchpad>& sc
     }
 }
 
-void SystolicArray::evacuate_c_data(Cycle current_cycle, std::vector<Scratchpad>& scratchpads) {
-    if (current_op.scratchpad_id >= scratchpads.size()) {
+void SystolicArray::evacuate_c_data(Cycle current_cycle, std::vector<L1Buffer>& l1_buffers) {
+    if (current_op.l1_buffer_id >= l1_buffers.size()) {
         return;
     }
 
-    auto& scratchpad = scratchpads[current_op.scratchpad_id];
+    auto& l1_buffer = l1_buffers[current_op.l1_buffer_id];
 
     // Evacuate completed results along diagonal bus
     // Results become available after K cycles of accumulation
@@ -294,7 +295,7 @@ void SystolicArray::evacuate_c_data(Cycle current_cycle, std::vector<Scratchpad>
                     if (global_row < current_op.m && global_col < current_op.n) {
                         Address addr = calculate_matrix_address(
                             current_op.c_addr, global_row, global_col, current_op.n, sizeof(float));
-                        scratchpad.write(addr, &result, sizeof(float));
+                        l1_buffer.write(addr, &result, sizeof(float));
                     }
                 }
             }
@@ -382,23 +383,23 @@ std::vector<Scalar> SystolicArray::evacuate_c_data(Size max_elements) {
     return results;
 }
 
-void SystolicArray::perform_direct_matrix_multiply(std::vector<Scratchpad>& scratchpads) {
-    if (current_op.scratchpad_id >= scratchpads.size()) {
+void SystolicArray::perform_direct_matrix_multiply(std::vector<L1Buffer>& l1_buffers) {
+    if (current_op.l1_buffer_id >= l1_buffers.size()) {
         return;
     }
 
-    auto& scratchpad = scratchpads[current_op.scratchpad_id];
+    auto& l1_buffer = l1_buffers[current_op.l1_buffer_id];
 
-    // Read matrices A and B from scratchpad
+    // Read matrices A and B from L1 buffer
     std::vector<float> matrix_a(current_op.m * current_op.k);
     std::vector<float> matrix_b(current_op.k * current_op.n);
     std::vector<float> matrix_c(current_op.m * current_op.n, 0.0f);
 
     // Read matrix A
-    scratchpad.read(current_op.a_addr, matrix_a.data(), matrix_a.size() * sizeof(float));
+    l1_buffer.read(current_op.a_addr, matrix_a.data(), matrix_a.size() * sizeof(float));
 
     // Read matrix B
-    scratchpad.read(current_op.b_addr, matrix_b.data(), matrix_b.size() * sizeof(float));
+    l1_buffer.read(current_op.b_addr, matrix_b.data(), matrix_b.size() * sizeof(float));
 
     // Perform matrix multiplication: C = A * B
     for (Size i = 0; i < current_op.m; ++i) {
@@ -411,8 +412,8 @@ void SystolicArray::perform_direct_matrix_multiply(std::vector<Scratchpad>& scra
         }
     }
 
-    // Write result matrix C back to scratchpad
-    scratchpad.write(current_op.c_addr, matrix_c.data(), matrix_c.size() * sizeof(float));
+    // Write result matrix C back to L1 buffer
+    l1_buffer.write(current_op.c_addr, matrix_c.data(), matrix_c.size() * sizeof(float));
 }
 
 void SystolicArray::reset() {

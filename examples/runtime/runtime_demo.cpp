@@ -123,13 +123,14 @@ int main() {
     sim_config.l3_tile_capacity_kb = 512;
     sim_config.l2_bank_count = 16;
     sim_config.l2_bank_capacity_kb = 64;
-    sim_config.scratchpad_count = 4;
-    sim_config.scratchpad_capacity_kb = 64;
+    sim_config.l1_buffer_count = 4;
+    sim_config.l1_buffer_capacity_kb = 64;
     sim_config.dma_engine_count = 4;
     sim_config.block_mover_count = 8;
     sim_config.streamer_count = 16;
-    sim_config.systolic_array_rows = 16;
-    sim_config.systolic_array_cols = 16;
+    sim_config.processor_array_rows = 16;
+    sim_config.processor_array_cols = 16;
+    sim_config.use_systolic_array_mode = true;
 
     KPUSimulator simulator(sim_config);
 

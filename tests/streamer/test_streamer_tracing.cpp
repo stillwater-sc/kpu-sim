@@ -9,7 +9,7 @@
 
 #include <sw/kpu/components/streamer.hpp>
 #include <sw/kpu/components/l2_bank.hpp>
-#include <sw/kpu/components/scratchpad.hpp>
+#include <sw/kpu/components/l1_buffer.hpp>
 #include <sw/trace/trace_logger.hpp>
 #include <sw/trace/trace_exporter.hpp>
 
@@ -23,7 +23,7 @@ using namespace sw::trace;
 class StreamerTracingFixture {
 public:
     std::vector<L2Bank> l2_banks;
-    std::vector<Scratchpad> l1_scratchpads;
+    std::vector<L1Buffer> l1_buffers;
     std::unique_ptr<Streamer> streamer;
     TraceLogger& logger;
 
@@ -34,9 +34,9 @@ public:
         l2_banks.emplace_back(0, 64);  // ID 0, 64 KB capacity
         l2_banks.emplace_back(1, 64);  // ID 1, 64 KB capacity
 
-        // Create 2 L1 scratchpads of 16KB each
-        l1_scratchpads.emplace_back(16);  // 16 KB capacity
-        l1_scratchpads.emplace_back(16);  // 16 KB capacity
+        // Create 2 L1 buffers of 16KB each
+        l1_buffers.emplace_back(0, 16);  // ID 0, 16 KB capacity
+        l1_buffers.emplace_back(1, 16);  // ID 1, 16 KB capacity
 
         // Create Streamer: streamer 0, 1 GHz, 100 GB/s
         streamer = std::make_unique<Streamer>(0, 1.0, 100.0);
@@ -81,7 +81,7 @@ TEST_CASE_METHOD(StreamerTracingFixture, "Trace: Streamer L2->L1 Row Stream", "[
     // Configure and enqueue stream
     Streamer::StreamConfig config;
     config.l2_bank_id = 0;
-    config.l1_scratchpad_id = 0;
+    config.l1_buffer_id = 0;
     config.l2_base_addr = l2_addr;
     config.l1_base_addr = l1_addr;
     config.matrix_height = matrix_height;
@@ -103,7 +103,7 @@ TEST_CASE_METHOD(StreamerTracingFixture, "Trace: Streamer L2->L1 Row Stream", "[
     // Process the stream - advance cycle each iteration
     while (!stream_complete) {
         streamer->set_cycle(streamer->get_cycle() + 1);
-        streamer->update(streamer->get_cycle(), l2_banks, l1_scratchpads);
+        streamer->update(streamer->get_cycle(), l2_banks, l1_buffers);
     }
 
     // Should have logged the completion
@@ -138,7 +138,7 @@ TEST_CASE_METHOD(StreamerTracingFixture, "Trace: Streamer L2->L1 Row Stream", "[
     const auto& payload = std::get<DMAPayload>(complete_trace.payload);
     REQUIRE(payload.bytes_transferred == matrix_height * matrix_width * element_size);
     REQUIRE(payload.source.type == ComponentType::L2_BANK);
-    REQUIRE(payload.destination.type == ComponentType::PAGE_BUFFER);
+    REQUIRE(payload.destination.type == ComponentType::L1);
 
     std::cout << "\n=== Streamer L2->L1 Row Stream Trace ===" << std::endl;
     std::cout << "Transaction ID: " << complete_trace.transaction_id << std::endl;
@@ -168,7 +168,7 @@ TEST_CASE_METHOD(StreamerTracingFixture, "Trace: Streamer L2->L1 Column Stream",
     // Configure and enqueue column stream
     Streamer::StreamConfig config;
     config.l2_bank_id = 0;
-    config.l1_scratchpad_id = 0;
+    config.l1_buffer_id = 0;
     config.l2_base_addr = l2_addr;
     config.l1_base_addr = l1_addr;
     config.matrix_height = matrix_height;
@@ -190,7 +190,7 @@ TEST_CASE_METHOD(StreamerTracingFixture, "Trace: Streamer L2->L1 Column Stream",
     // Process the stream
     while (!stream_complete) {
         streamer->set_cycle(streamer->get_cycle() + 1);
-        streamer->update(streamer->get_cycle(), l2_banks, l1_scratchpads);
+        streamer->update(streamer->get_cycle(), l2_banks, l1_buffers);
     }
 
     // Should have logged the completion
@@ -223,19 +223,17 @@ TEST_CASE_METHOD(StreamerTracingFixture, "Trace: Streamer L1->L2 Row Stream", "[
     const Address l2_addr = 0x1000;
     const Address l1_addr = 0x0;
 
-    // Generate and write test data to L1 scratchpad
+    // Generate and write test data to L1 buffer
     auto matrix_data = generate_matrix(matrix_height, matrix_width, 10.0f);
-    l1_scratchpads[0].write(l1_addr, matrix_data.data(), matrix_data.size() * element_size);
+    l1_buffers[0].write(l1_addr, matrix_data.data(), matrix_data.size() * element_size);
 
     // Set initial cycle
     streamer->set_cycle(3000);
 
-    // size_t initial_trace_count = logger.get_trace_count();
-
-    // Configure L1→L2 writeback stream
+    // Configure L1->L2 writeback stream
     Streamer::StreamConfig config;
     config.l2_bank_id = 0;
-    config.l1_scratchpad_id = 0;
+    config.l1_buffer_id = 0;
     config.l2_base_addr = l2_addr;
     config.l1_base_addr = l1_addr;
     config.matrix_height = matrix_height;
@@ -254,19 +252,19 @@ TEST_CASE_METHOD(StreamerTracingFixture, "Trace: Streamer L1->L2 Row Stream", "[
     // Process the stream
     while (!stream_complete) {
         streamer->set_cycle(streamer->get_cycle() + 1);
-        streamer->update(streamer->get_cycle(), l2_banks, l1_scratchpads);
+        streamer->update(streamer->get_cycle(), l2_banks, l1_buffers);
     }
 
     // Verify traces
     auto streamer_traces = logger.get_component_traces(ComponentType::STREAMER, 0);
     auto& complete_trace = streamer_traces[streamer_traces.size() - 1];
 
-    // Verify direction is L1→L2
+    // Verify direction is L1->L2
     REQUIRE(complete_trace.description.find("L1_TO_L2") != std::string::npos);
 
     // Verify payload shows correct source/destination
     const auto& payload = std::get<DMAPayload>(complete_trace.payload);
-    REQUIRE(payload.source.type == ComponentType::PAGE_BUFFER);
+    REQUIRE(payload.source.type == ComponentType::L1);
     REQUIRE(payload.destination.type == ComponentType::L2_BANK);
 
     std::cout << "\n=== Streamer L1->L2 Writeback Trace ===" << std::endl;
@@ -296,7 +294,7 @@ TEST_CASE_METHOD(StreamerTracingFixture, "Trace: Multiple Streamer Operations", 
 
         Streamer::StreamConfig config;
         config.l2_bank_id = 0;
-        config.l1_scratchpad_id = 0;
+        config.l1_buffer_id = 0;
         config.l2_base_addr = addr;
         config.l1_base_addr = addr;
         config.matrix_height = matrix_size;
@@ -317,7 +315,7 @@ TEST_CASE_METHOD(StreamerTracingFixture, "Trace: Multiple Streamer Operations", 
     // Process all streams
     while (completed_count < num_streams) {
         streamer->set_cycle(streamer->get_cycle() + 1);
-        streamer->update(streamer->get_cycle(), l2_banks, l1_scratchpads);
+        streamer->update(streamer->get_cycle(), l2_banks, l1_buffers);
     }
 
     // Should have logged 3 additional completion traces (total 6 new traces)
@@ -361,7 +359,7 @@ TEST_CASE_METHOD(StreamerTracingFixture, "Trace: Export Streamer to CSV", "[trac
 
         Streamer::StreamConfig config;
         config.l2_bank_id = 0;
-        config.l1_scratchpad_id = 0;
+        config.l1_buffer_id = 0;
         config.l2_base_addr = addr;
         config.l1_base_addr = addr;
         config.matrix_height = matrix_size;
@@ -379,7 +377,7 @@ TEST_CASE_METHOD(StreamerTracingFixture, "Trace: Export Streamer to CSV", "[trac
 
         while (!complete) {
             streamer->set_cycle(streamer->get_cycle() + 1);
-            streamer->update(streamer->get_cycle(), l2_banks, l1_scratchpads);
+            streamer->update(streamer->get_cycle(), l2_banks, l1_buffers);
         }
     }
 
@@ -415,7 +413,7 @@ TEST_CASE_METHOD(StreamerTracingFixture, "Trace: Export Streamer to Chrome Forma
 
         Streamer::StreamConfig config;
         config.l2_bank_id = 0;
-        config.l1_scratchpad_id = 0;
+        config.l1_buffer_id = 0;
         config.l2_base_addr = addr;
         config.l1_base_addr = addr;
         config.matrix_height = matrix_size;
@@ -433,7 +431,7 @@ TEST_CASE_METHOD(StreamerTracingFixture, "Trace: Export Streamer to Chrome Forma
 
         while (!complete) {
             streamer->set_cycle(streamer->get_cycle() + 1);
-            streamer->update(streamer->get_cycle(), l2_banks, l1_scratchpads);
+            streamer->update(streamer->get_cycle(), l2_banks, l1_buffers);
         }
     }
 
@@ -464,7 +462,7 @@ TEST_CASE_METHOD(StreamerTracingFixture, "Trace: Verify Transaction ID Uniquenes
 
         Streamer::StreamConfig config;
         config.l2_bank_id = 0;
-        config.l1_scratchpad_id = 0;
+        config.l1_buffer_id = 0;
         config.l2_base_addr = addr;
         config.l1_base_addr = addr;
         config.matrix_height = 4;
@@ -482,7 +480,7 @@ TEST_CASE_METHOD(StreamerTracingFixture, "Trace: Verify Transaction ID Uniquenes
     // Process all streams
     while (std::any_of(completions.begin(), completions.end(), [](bool c) { return !c; })) {
         streamer->set_cycle(streamer->get_cycle() + 1);
-        streamer->update(streamer->get_cycle(), l2_banks, l1_scratchpads);
+        streamer->update(streamer->get_cycle(), l2_banks, l1_buffers);
     }
 
     // Get all traces

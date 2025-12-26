@@ -31,13 +31,16 @@ protected:
         config.l3_tile_capacity_kb = 128;
         config.l2_bank_count = 8;
         config.l2_bank_capacity_kb = 64;
-        config.scratchpad_count = 2;
-        config.scratchpad_capacity_kb = 64;
+        config.page_buffer_count = 2;
+        config.page_buffer_capacity_kb = 64;
+        config.l1_buffer_count = 4;
+        config.l1_buffer_capacity_kb = 64;
         config.dma_engine_count = 2;
         config.block_mover_count = 4;
         config.streamer_count = 8;
-        config.systolic_array_rows = 16;
-        config.systolic_array_cols = 16;
+        config.processor_array_rows = 16;
+        config.processor_array_cols = 16;
+        config.use_systolic_array_mode = true;
 
         simulator = std::make_unique<KPUSimulator>(config);
         runtime = std::make_unique<KPURuntime>(simulator.get());

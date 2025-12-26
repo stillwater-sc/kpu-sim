@@ -17,12 +17,12 @@ public:
     std::unique_ptr<KPUSimulator> sim;
 
     StreamerTestFixture() {
-        // Configuration with L2 banks, L1 scratchpads, and Streamers
+        // Configuration with L2 banks, L1 buffers, and Streamers
         config.memory_bank_count = 2;
         config.memory_bank_capacity_mb = 64;
         config.memory_bandwidth_gbps = 8;
-        config.scratchpad_count = 4;
-        config.scratchpad_capacity_kb = 256;
+        config.l1_buffer_count = 4;
+        config.l1_buffer_capacity_kb = 256;
         config.compute_tile_count = 1;
         config.dma_engine_count = 4;
         config.l3_tile_count = 4;
@@ -98,11 +98,11 @@ TEST_CASE_METHOD(StreamerTestFixture, "Streamer Basic Functionality", "[streamer
 
         // Set up streaming from L2 to L1
         const size_t streamer_id = 0;
-        const size_t l1_scratchpad_id = 0;
+        const size_t l1_buffer_id = 0;
         const Address l1_base_addr = 0;
 
         bool stream_complete = false;
-        sim->start_row_stream(streamer_id, l2_bank_id, l1_scratchpad_id,
+        sim->start_row_stream(streamer_id, l2_bank_id, l1_buffer_id,
                              l2_base_addr, l1_base_addr,
                              matrix_height, matrix_width, element_size, fabric_size,
                              Streamer::StreamDirection::L2_TO_L1,
@@ -121,7 +121,7 @@ TEST_CASE_METHOD(StreamerTestFixture, "Streamer Basic Functionality", "[streamer
 
         // Verify streamed data in L1 - check first row
         std::vector<float> l1_data(fabric_size);
-        sim->read_scratchpad(l1_scratchpad_id, l1_base_addr,
+        sim->read_l1_buffer(l1_buffer_id, l1_base_addr,
                            l1_data.data(), fabric_size * element_size);
 
         //REQUIRE(verify_row_stream(test_matrix, l1_data, matrix_height, matrix_width, fabric_size, 0));
@@ -145,11 +145,11 @@ TEST_CASE_METHOD(StreamerTestFixture, "Streamer Basic Functionality", "[streamer
 
         // Set up streaming from L2 to L1
         const size_t streamer_id = 1;
-        const size_t l1_scratchpad_id = 1;
+        const size_t l1_buffer_id = 1;
         const Address l1_base_addr = 0;
 
         bool stream_complete = false;
-        sim->start_column_stream(streamer_id, l2_bank_id, l1_scratchpad_id,
+        sim->start_column_stream(streamer_id, l2_bank_id, l1_buffer_id,
                                 l2_base_addr, l1_base_addr,
                                 matrix_height, matrix_width, element_size, fabric_size,
                                 Streamer::StreamDirection::L2_TO_L1,
@@ -163,7 +163,7 @@ TEST_CASE_METHOD(StreamerTestFixture, "Streamer Basic Functionality", "[streamer
 
         // Verify streamed data in L1 - check first column
         std::vector<float> l1_data(fabric_size);
-        sim->read_scratchpad(l1_scratchpad_id, l1_base_addr,
+        sim->read_l1_buffer(l1_buffer_id, l1_base_addr,
                            l1_data.data(), fabric_size * element_size);
 
         //REQUIRE(verify_column_stream(test_matrix, l1_data, matrix_height, matrix_width, fabric_size, 0));
@@ -178,10 +178,10 @@ TEST_CASE_METHOD(StreamerTestFixture, "Streamer Basic Functionality", "[streamer
 
         // Generate test data in L1 (simulate compute results)
         std::vector<float> l1_data = {100.0f, 101.0f, 102.0f, 103.0f};
-        const size_t l1_scratchpad_id = 2;
+        const size_t l1_buffer_id = 2;
         const Address l1_base_addr = 0;
 
-        sim->write_scratchpad(l1_scratchpad_id, l1_base_addr,
+        sim->write_l1_buffer(l1_buffer_id, l1_base_addr,
                              l1_data.data(), l1_data.size() * element_size);
 
         // Set up streaming from L1 to L2
@@ -190,7 +190,7 @@ TEST_CASE_METHOD(StreamerTestFixture, "Streamer Basic Functionality", "[streamer
         const Address l2_base_addr = 0;
 
         bool stream_complete = false;
-        sim->start_row_stream(streamer_id, l2_bank_id, l1_scratchpad_id,
+        sim->start_row_stream(streamer_id, l2_bank_id, l1_buffer_id,
                              l2_base_addr, l1_base_addr,
                              matrix_height, matrix_width, element_size, fabric_size,
                              Streamer::StreamDirection::L1_TO_L2,
@@ -295,7 +295,7 @@ TEST_CASE_METHOD(StreamerTestFixture, "Streamer Edge Cases", "[streamer][edge]")
 
         // Verify the single element was streamed correctly
         float result;
-        sim->read_scratchpad(0, 0, &result, element_size);
+        sim->read_l1_buffer(0, 0, &result, element_size);
         REQUIRE(result == Catch::Approx(42.0f));
     }
 }
@@ -319,8 +319,8 @@ TEST_CASE_METHOD(StreamerTestFixture, "Streamer Error Handling", "[streamer][err
         );
     }
 
-    SECTION("Validates L1 scratchpad ID bounds") {
-        const size_t invalid_l1_id = config.scratchpad_count + 1;
+    SECTION("Validates L1 buffer ID bounds") {
+        const size_t invalid_l1_id = config.l1_buffer_count + 1;
 
         REQUIRE_THROWS_AS(
             sim->start_row_stream(0, 0, invalid_l1_id, 0, 0, 4, 4, 4, 2),

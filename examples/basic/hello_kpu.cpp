@@ -13,19 +13,21 @@ int main() {
     std::cout << "===========================================\n\n";
 
     // Create a simple KPU configuration
-    sw::kpu::KPUSimulator::Config config(
-        2,      // 2 memory banks
-        1024,   // 1GB each
-        100,    // 100 GB/s bandwidth
-        2,      // 2 scratchpads
-        64,     // 64KB each
-        2,      // 2 compute tiles
-        2       // 2 DMA engines
-    );
+    sw::kpu::KPUSimulator::Config config;
+    config.memory_bank_count = 2;
+    config.memory_bank_capacity_mb = 1024;
+    config.memory_bandwidth_gbps = 100;
+    config.l1_buffer_count = 2;
+    config.l1_buffer_capacity_kb = 64;
+    config.compute_tile_count = 2;
+    config.dma_engine_count = 2;
+    config.processor_array_rows = 16;
+    config.processor_array_cols = 16;
+    config.use_systolic_array_mode = true;
 
     std::cout << "Creating KPU with configuration:\n";
     std::cout << "  Memory banks: " << config.memory_bank_count << "\n";
-    std::cout << "  Scratchpads: " << config.scratchpad_count << "\n";
+    std::cout << "  L1 buffers: " << config.l1_buffer_count << "\n";
     std::cout << "  Compute tiles: " << config.compute_tile_count << "\n\n";
 
     // Create simulator

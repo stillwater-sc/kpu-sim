@@ -18,7 +18,7 @@
  *   * BOTTOM edge: 16 in (streaming) + 16 out (C output streaming down)
  *   This supports bubble-free output extraction in any direction
  *
- * - 4 scratchpads (memory controller collation buffers)
+ * - 4 page buffers (memory controller collation buffers)
  *   * NOT part of memory hierarchy
  *   * Working memories to aggregate/disaggregate transactions into memory pages
  *   * Used by memory controller for efficient DRAM access
@@ -26,7 +26,7 @@
  * - 16x16 systolic array with output-stationary scheduling
  *   * Output elements remain stationary in PEs
  *   * Input (A) and weight (B) values stream through
- *   * C[0][0] available at cycle N, C[15][15] at cycle N+32
+ *   * C[0][0] available at cycle N, C[15][15] at cycle 3*N
  *
  * L1 Buffer Architecture:
  * ----------------------
@@ -396,7 +396,7 @@ bool execute_single_tile_autonomous(sw::kpu::KPUSimulator* kpu,
     const sw::kpu::Address l2_input_addr = 0x0000;
     const sw::kpu::Address l2_weights_addr = 0x2000;
 
-    const size_t scratchpad_id = 0;
+    const size_t l1_buffer_id = 0;
     const sw::kpu::Address l1_input_addr = 0x0000;
     const sw::kpu::Address l1_weights_addr = 0x1000;
     const sw::kpu::Address l1_output_addr = 0x2000;
@@ -622,7 +622,7 @@ bool execute_single_tile_autonomous(sw::kpu::KPUSimulator* kpu,
     const size_t col_streamer_id = 1;
 
     orch.await(BLOCK_INPUT_DONE, [&]() {
-        kpu->start_row_stream(row_streamer_id, l2_bank_id, scratchpad_id,
+        kpu->start_row_stream(row_streamer_id, l2_bank_id, l1_buffer_id,
                                l2_input_addr, l1_input_addr,
                                tile_m, tile_k, sizeof(float), compute_fabric_size,
                                Streamer::StreamDirection::L2_TO_L1,
@@ -630,7 +630,7 @@ bool execute_single_tile_autonomous(sw::kpu::KPUSimulator* kpu,
     }, "Streamer: L2->L1 (input rows)");
 
     orch.await(BLOCK_WEIGHTS_DONE, [&]() {
-        kpu->start_column_stream(col_streamer_id, l2_bank_id, scratchpad_id,
+        kpu->start_column_stream(col_streamer_id, l2_bank_id, l1_buffer_id,
                                   l2_weights_addr, l1_weights_addr,
                                   tile_k, tile_n, sizeof(float), compute_fabric_size,
                                   Streamer::StreamDirection::L2_TO_L1,
@@ -641,7 +641,7 @@ bool execute_single_tile_autonomous(sw::kpu::KPUSimulator* kpu,
     const size_t compute_tile_id = 0;
 
     orch.await({STREAM_INPUT_DONE, STREAM_WEIGHTS_DONE}, [&]() {
-        kpu->start_matmul(compute_tile_id, scratchpad_id,
+        kpu->start_matmul(compute_tile_id, l1_buffer_id,
                           tile_m, tile_n, tile_k,
                           l1_input_addr, l1_weights_addr, l1_output_addr,
                           [&]() { orch.signal(COMPUTE_DONE); });
@@ -650,18 +650,18 @@ bool execute_single_tile_autonomous(sw::kpu::KPUSimulator* kpu,
     // Stage 5: Add bias - waits for compute
     orch.await(COMPUTE_DONE, [&]() {
         std::vector<float> result(tile_m * tile_n);
-        kpu->read_scratchpad(scratchpad_id, l1_output_addr, result.data(), result.size() * sizeof(float));
+        kpu->read_l1_buffer(l1_buffer_id, l1_output_addr, result.data(), result.size() * sizeof(float));
         for (size_t i = 0; i < result.size(); ++i) {
             result[i] += host_bias[i % tile_n];
         }
-        kpu->write_scratchpad(scratchpad_id, l1_output_addr, result.data(), result.size() * sizeof(float));
+        kpu->write_l1_buffer(l1_buffer_id, l1_output_addr, result.data(), result.size() * sizeof(float));
         orch.signal(BIAS_ADDED);
     }, "Add bias");
 
     // Stage 6: Result readback path L1 -> L2 -> L3 -> Memory
     orch.await(BIAS_ADDED, [&]() {
         const sw::kpu::Address l2_output_addr = 0x4000;
-        kpu->start_row_stream(row_streamer_id, l2_bank_id, scratchpad_id,
+        kpu->start_row_stream(row_streamer_id, l2_bank_id, l1_buffer_id,
                                l2_output_addr, l1_output_addr,
                                tile_m, tile_n, sizeof(float), compute_fabric_size,
                                Streamer::StreamDirection::L1_TO_L2,
@@ -983,7 +983,7 @@ bool run_single_tile_test(const SystemConfig& config) {
     std::cout << "  L3 tiles: " << kpu->get_l3_tile_count() << "\n";
     std::cout << "  L2 banks: " << kpu->get_l2_bank_count() << "\n";
     std::cout << "  L1 buffers: " << kpu->get_l1_buffer_count() << "\n";
-    std::cout << "  Scratchpads: " << kpu->get_scratchpad_count() << "\n";
+    std::cout << "  Page buffers: " << kpu->get_page_buffer_count() << "\n";
     std::cout << "  Compute tiles: " << kpu->get_compute_tile_count() << "\n";
     std::cout << "  Systolic array: " << kpu->get_systolic_array_rows()
               << " × " << kpu->get_systolic_array_cols() << "\n";
@@ -1086,12 +1086,12 @@ bool run_single_tile_test(const SystemConfig& config) {
     }
 
     // Scratchpads (memory controller collation buffers)
-    if (kpu->get_scratchpad_count() > 0) {
+    if (kpu->get_page_buffer_count() > 0) {
         std::cout << "  +---------------------------------------------------------+\n";
         std::cout << "  | Scratchpad Collation Buffers (Memory Controller)        |\n";
-        for (size_t i = 0; i < kpu->get_scratchpad_count(); ++i) {
-            auto base = kpu->get_scratchpad_base(i);
-            auto capacity = kpu->get_scratchpad_capacity(i);
+        for (size_t i = 0; i < kpu->get_page_buffer_count(); ++i) {
+            auto base = kpu->get_page_buffer_base(i);
+            auto capacity = kpu->get_page_buffer_capacity(i);
             std::ostringstream line;
             line << "  |   Scratch[" << i << "]: 0x" << std::hex << std::setfill('0')
                  << std::setw(10) << base << std::dec << "  ("

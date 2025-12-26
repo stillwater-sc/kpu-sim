@@ -26,7 +26,14 @@
 #include <sw/kpu/data_types.hpp>
 #include <sw/memory/external_memory.hpp>
 #include <sw/memory/address_decoder.hpp>
-#include <sw/kpu/components/scratchpad.hpp>
+//#include <sw/kpu/components/scratchpad.hpp>  a basic sofware-managed memory pattern. 
+// scratchpads are not used directly, as only specific-use scratchpads make sense:
+// there must be some protocol and driver defined to use a scratchpad effectively.
+// Here is a specific implementation of a page buffer for the memory controller.
+// Page buffers are actually hardware-managed, as they are a local cache for
+// the memory controller to coalesce accesses to external memory.
+#include <sw/kpu/components/page_buffer.hpp>
+#include <sw/kpu/components/memory_controller.hpp>
 #include <sw/kpu/components/dma_engine.hpp>
 #include <sw/kpu/components/l3_tile.hpp>
 #include <sw/kpu/components/l2_bank.hpp>
@@ -54,28 +61,31 @@ public:
         Size memory_bank_capacity_mb;
         Size memory_bandwidth_gbps;
 
+        // Memory Controllers for local external memory channels
+        Size memory_controller_count;
+        Size page_buffer_count;         // Page buffers attached to the memory controller
+        Size page_buffer_capacity_kb;
+
         // On-chip memory hierarchy
         Size l3_tile_count;
         Size l3_tile_capacity_kb;
         Size l2_bank_count;
         Size l2_bank_capacity_kb;
-        Size l1_buffer_count;           // L1 streaming buffers (compute fabric)
+        Size l1_buffer_count;           // L1 streaming buffers: part of compute fabric, one for each row and column in a compute tile
         Size l1_buffer_capacity_kb;
-        Size scratchpad_count;          // Scratchpad page buffers (memory controller)
-        Size scratchpad_capacity_kb;
-
-        // Compute resources
-        Size compute_tile_count;
 
         // Data movement engines
         Size dma_engine_count;
         Size block_mover_count;
         Size streamer_count;
 
-        // Systolic array configuration
-        Size systolic_array_rows;
-        Size systolic_array_cols;
-        bool use_systolic_arrays;
+        // Compute resources
+        Size compute_tile_count;
+
+        // Compute tile array configuration
+        Size processor_array_rows;
+        Size processor_array_cols;
+        bool use_systolic_array_mode;
 
         // Programmable memory map base addresses (for debugging/testing)
         // If set to 0, addresses are automatically computed sequentially
@@ -85,23 +95,24 @@ public:
         Address l3_tile_base;
         Address l2_bank_base;
         Address l1_buffer_base;         // L1 streaming buffers (compute fabric)
-        Address scratchpad_base;        // Scratchpad page buffers (memory controller)
+        Address page_buffer_base;       // Page buffers (memory controller)
 
         Config()
-            : host_memory_region_count(1), host_memory_region_capacity_mb(4096),
-              host_memory_bandwidth_gbps(50),  // Typical DDR4 bandwidth
-              memory_bank_count(2), memory_bank_capacity_mb(1024),
-              memory_bandwidth_gbps(100),
-              l3_tile_count(4), l3_tile_capacity_kb(128),
-              l2_bank_count(8), l2_bank_capacity_kb(64),
-              l1_buffer_count(4), l1_buffer_capacity_kb(32),
-              scratchpad_count(2), scratchpad_capacity_kb(64),
-              compute_tile_count(2),
-              dma_engine_count(2), block_mover_count(4), streamer_count(8),
-              systolic_array_rows(16), systolic_array_cols(16),
-              use_systolic_arrays(true),
+            : host_memory_region_count(0), host_memory_region_capacity_mb(0),
+              host_memory_bandwidth_gbps(0),
+              memory_bank_count(0), memory_bank_capacity_mb(0),
+              memory_bandwidth_gbps(0),
+              memory_controller_count(0),
+              page_buffer_count(0), page_buffer_capacity_kb(0),
+              l3_tile_count(0), l3_tile_capacity_kb(0),
+              l2_bank_count(0), l2_bank_capacity_kb(0),
+              l1_buffer_count(0), l1_buffer_capacity_kb(0),
+              dma_engine_count(0), block_mover_count(0), streamer_count(0),
+              compute_tile_count(0),
+              processor_array_rows(0), processor_array_cols(0),
+              use_systolic_array_mode(false),
               host_memory_base(0), external_memory_base(0), l3_tile_base(0),
-              l2_bank_base(0), l1_buffer_base(0), scratchpad_base(0) {}
+              l2_bank_base(0), l1_buffer_base(0), page_buffer_base(0) {}
 
 		Config(const Config&) = default;
 		Config& operator=(const Config&) = default;
@@ -109,28 +120,6 @@ public:
 		Config& operator=(Config&&) = default;
 		~Config() = default;
 
-        // Legacy constructor for backward compatibility
-        Config (Size mem_banks, Size mem_cap, Size mem_bw,
-                Size pads, Size pad_cap,
-                Size tiles, Size dmas, Size l3_tiles = 4, Size l3_cap = 128,
-                Size l2_banks = 8, Size l2_cap = 64, Size block_movers = 4, Size streamers = 8,
-                Size systolic_rows = 16, Size systolic_cols = 16, bool use_systolic = true,
-                Size l1_bufs = 4, Size l1_cap = 32)
-            : host_memory_region_count(1), host_memory_region_capacity_mb(4096),
-              host_memory_bandwidth_gbps(50),
-              memory_bank_count(mem_banks), memory_bank_capacity_mb(mem_cap),
-              memory_bandwidth_gbps(mem_bw),
-              l3_tile_count(l3_tiles), l3_tile_capacity_kb(l3_cap),
-              l2_bank_count(l2_banks), l2_bank_capacity_kb(l2_cap),
-              l1_buffer_count(l1_bufs), l1_buffer_capacity_kb(l1_cap),
-              scratchpad_count(pads), scratchpad_capacity_kb(pad_cap),
-              compute_tile_count(tiles),
-              dma_engine_count(dmas), block_mover_count(block_movers), streamer_count(streamers),
-              systolic_array_rows(systolic_rows), systolic_array_cols(systolic_cols),
-              use_systolic_arrays(use_systolic),
-              host_memory_base(0), external_memory_base(0), l3_tile_base(0),
-              l2_bank_base(0), l1_buffer_base(0), scratchpad_base(0) {
-		}
     };
     
     struct MatMulTest {
@@ -148,7 +137,7 @@ private:
     std::vector<L3Tile> l3_tiles;
     std::vector<L2Bank> l2_banks;
     std::vector<L1Buffer> l1_buffers;  // L1 streaming buffers (compute fabric)
-    std::vector<Scratchpad> scratchpads;  // Scratchpad page buffers (memory controller)
+    std::vector<PageBuffer> page_buffers;  // Page buffers (memory controller)
     std::vector<DMAEngine> dma_engines;
     std::vector<ComputeFabric> compute_tiles;
     std::vector<BlockMover> block_movers;
@@ -184,9 +173,9 @@ public:
     void write_l2_bank(size_t bank_id, Address addr, const void* data, Size size);
     void read_l1_buffer(size_t buffer_id, Address addr, void* data, Size size);
     void write_l1_buffer(size_t buffer_id, Address addr, const void* data, Size size);
-    void read_scratchpad(size_t pad_id, Address addr, void* data, Size size);
-    void write_scratchpad(size_t pad_id, Address addr, const void* data, Size size);
-    
+    void read_page_buffer(size_t pad_id, Address addr, void* data, Size size);
+    void write_page_buffer(size_t pad_id, Address addr, const void* data, Size size);
+
     // ===========================================
     // DMA Operations - Address-Based API
     // ===========================================
@@ -265,7 +254,7 @@ public:
     bool is_streamer_busy(size_t streamer_id);
 
     // Compute operations
-    void start_matmul(size_t tile_id, size_t scratchpad_id, Size m, Size n, Size k,
+    void start_matmul(size_t tile_id, size_t l1_buffer_id, Size m, Size n, Size k,
                      Address a_addr, Address b_addr, Address c_addr,
                      std::function<void()> callback = nullptr);
     bool is_compute_busy(size_t tile_id);
@@ -287,7 +276,7 @@ public:
     size_t get_l3_tile_count() const { return l3_tiles.size(); }
     size_t get_l2_bank_count() const { return l2_banks.size(); }
     size_t get_l1_buffer_count() const { return l1_buffers.size(); }
-    size_t get_scratchpad_count() const { return scratchpads.size(); }
+    size_t get_page_buffer_count() const { return page_buffers.size(); }
     size_t get_compute_tile_count() const { return compute_tiles.size(); }
     size_t get_dma_engine_count() const { return dma_engines.size(); }
     size_t get_block_mover_count() const { return block_movers.size(); }
@@ -298,7 +287,7 @@ public:
     Size get_l3_tile_capacity(size_t tile_id) const;
     Size get_l2_bank_capacity(size_t bank_id) const;
     Size get_l1_buffer_capacity(size_t buffer_id) const;
-    Size get_scratchpad_capacity(size_t pad_id) const;
+    Size get_page_buffer_capacity(size_t pad_id) const;
     
     // High-level test operations
     bool run_matmul_test(const MatMulTest& test, size_t memory_bank_id = 0, 
@@ -316,7 +305,7 @@ public:
     bool is_l3_tile_ready(size_t tile_id) const;
     bool is_l2_bank_ready(size_t bank_id) const;
     bool is_l1_buffer_ready(size_t buffer_id) const;
-    bool is_scratchpad_ready(size_t pad_id) const;
+    bool is_page_buffer_ready(size_t pad_id) const;
 
     // ===========================================
     // Address Computation Helpers
@@ -337,7 +326,7 @@ public:
     Address get_l3_tile_base(size_t tile_id) const;
     Address get_l2_bank_base(size_t bank_id) const;
     Address get_l1_buffer_base(size_t buffer_id) const;
-    Address get_scratchpad_base(size_t pad_id) const;
+    Address get_page_buffer_base(size_t pad_id) const;
 
     // Tracing control
     void enable_dma_tracing(size_t dma_id);
@@ -378,7 +367,7 @@ private:
     void validate_l3_tile_id(size_t tile_id) const;
     void validate_l2_bank_id(size_t bank_id) const;
     void validate_l1_buffer_id(size_t buffer_id) const;
-    void validate_scratchpad_id(size_t pad_id) const;
+    void validate_page_buffer_id(size_t pad_id) const;
     void validate_dma_id(size_t dma_id) const;
     void validate_tile_id(size_t tile_id) const;
     void validate_block_mover_id(size_t mover_id) const;

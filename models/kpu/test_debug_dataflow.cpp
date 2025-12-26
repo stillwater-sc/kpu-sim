@@ -10,12 +10,14 @@ int main() {
     config.memory_bank_count = 1;
     config.l3_tile_count = 1;
     config.l2_bank_count = 1;
-    config.scratchpad_count = 1;
+    config.l1_buffer_count = 1;
+    config.l1_buffer_capacity_kb = 64;
     config.compute_tile_count = 1;
     config.block_mover_count = 1;
     config.streamer_count = 2;
-    config.systolic_array_rows = 16;
-    config.systolic_array_cols = 16;
+    config.processor_array_rows = 16;
+    config.processor_array_cols = 16;
+    config.use_systolic_array_mode = true;
 
     KPUSimulator kpu(config);
 
@@ -76,8 +78,8 @@ int main() {
     std::cout << "Streamer callbacks: A=" << stream_a_done << ", B=" << stream_b_done << "\n";
 
     // Verify L1
-    kpu.read_scratchpad(0, 0x0000, verify_A.data(), verify_A.size() * sizeof(float));
-    kpu.read_scratchpad(0, 0x1000, verify_B.data(), verify_B.size() * sizeof(float));
+    kpu.read_l1_buffer(0, 0x0000, verify_A.data(), verify_A.size() * sizeof(float));
+    kpu.read_l1_buffer(0, 0x1000, verify_B.data(), verify_B.size() * sizeof(float));
     std::cout << "L1 A: " << verify_A[0] << ", " << verify_A[1] << ", " << verify_A[2] << ", " << verify_A[3] << "\n";
     std::cout << "L1 B: " << verify_B[0] << ", " << verify_B[1] << ", " << verify_B[2] << ", " << verify_B[3] << "\n";
 
@@ -90,7 +92,7 @@ int main() {
 
     // Verify result
     std::vector<float> C(4);
-    kpu.read_scratchpad(0, 0x2000, C.data(), C.size() * sizeof(float));
+    kpu.read_l1_buffer(0, 0x2000, C.data(), C.size() * sizeof(float));
     std::cout << "Result C:\n";
     std::cout << "  [" << C[0] << ", " << C[1] << "]\n";
     std::cout << "  [" << C[2] << ", " << C[3] << "]\n";

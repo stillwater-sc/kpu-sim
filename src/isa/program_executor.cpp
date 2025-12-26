@@ -272,7 +272,7 @@ bool ProgramExecutor::dispatch_streamer(const DMInstruction& instr) {
 
     Streamer::StreamConfig config;
     config.l2_bank_id = ops.l2_bank_id;
-    config.l1_scratchpad_id = ops.l1_buffer_id;
+    config.l1_buffer_id = ops.l1_buffer_id;
     config.l2_base_addr = ops.l2_addr;
     config.l1_base_addr = ops.l1_addr;
     config.matrix_height = ops.height;
@@ -349,10 +349,10 @@ bool ProgramExecutor::dispatch_sync(const DMInstruction& instr) {
 
 void ProgramExecutor::update_hardware() {
     // Update cycle on all components
+    // DMA moves data between host/KPU memory and L3 tiles
     for (auto& dma : *hw_.dma_engines) {
         dma.set_current_cycle(current_cycle_);
-        dma.process_transfers(*hw_.host_memory, *hw_.external_memory,
-                             *hw_.l3_tiles, *hw_.l2_banks, *hw_.scratchpads);
+        dma.process_transfers(*hw_.host_memory, *hw_.external_memory, *hw_.l3_tiles);
     }
 
     for (auto& bm : *hw_.block_movers) {
@@ -362,12 +362,12 @@ void ProgramExecutor::update_hardware() {
 
     for (auto& str : *hw_.streamers) {
         str.set_cycle(current_cycle_);
-        str.update(current_cycle_, *hw_.l2_banks, *hw_.scratchpads);
+        str.update(current_cycle_, *hw_.l2_banks, *hw_.l1_buffers);
     }
 
     // Update compute fabric (reacts to arriving data)
     if (hw_.compute_fabric) {
-        hw_.compute_fabric->update(current_cycle_, *hw_.scratchpads);
+        hw_.compute_fabric->update(current_cycle_, *hw_.l1_buffers);
     }
 }
 

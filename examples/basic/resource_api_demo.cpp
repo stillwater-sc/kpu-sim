@@ -94,9 +94,6 @@ int main() {
     config.l1_buffer_count = 32;
     config.l1_buffer_capacity_kb = 16;
 
-    config.scratchpad_count = 8;
-    config.scratchpad_capacity_kb = 32;
-
     // Configure compute and data movement
     config.compute_tile_count = 8;
     config.dma_engine_count = 4;

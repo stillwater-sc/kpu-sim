@@ -21,7 +21,6 @@
 
 #include <sw/concepts.hpp>
 #include <sw/memory/external_memory.hpp>
-#include <sw/kpu/components/scratchpad.hpp>
 #include <sw/trace/trace_logger.hpp>
 
 namespace sw::memory {
@@ -32,18 +31,15 @@ namespace sw::kpu {
 
 // Forward declarations
 class L3Tile;
-class L2Bank;
 
 // DMA Engine for data movement between memory hierarchies
 class KPU_API DMAEngine {
 public:
     enum class MemoryType {
         HOST_MEMORY,      // Host DDR
-        KPU_MEMORY,       // KPU main memory banks (GDDR6)
-        L3_TILE,          // L3 cache tiles
-        L2_BANK,          // L2 cache banks (typically via BlockMover, but DMA can target)
-        PAGE_BUFFER       // Page buffers (memory controller aggregation)
-        // Note: L1 buffers are managed by Streamers, not accessible via DMA
+        KPU_MEMORY,       // KPU main memory banks (GDDR6/HBM)
+        L3_TILE           // L3 cache tiles (on-chip cache hierarchy)
+        // Note: L2 banks accessed via BlockMover, L1 buffers via Streamers
     };
 
     struct Transfer {
@@ -151,39 +147,10 @@ public:
     void enqueue_transfer(Address src_addr, Address dst_addr, Size size,
                          std::function<void()> callback = nullptr);
 
-    // ===========================================
-    // Type-Based API (Legacy - Deprecated)
-    // ===========================================
-
-    /**
-     * @brief Enqueue a DMA transfer using memory types and IDs (deprecated)
-     *
-     * @deprecated Use address-based enqueue_transfer(Address, Address, Size) instead.
-     * This API tightly couples code to physical memory topology and prevents
-     * virtual memory implementation. It will be removed in a future release.
-     *
-     * Migration example:
-     * @code
-     * // Old (deprecated):
-     * dma.enqueue_transfer(KPU_MEMORY, 0, 0x1000, SCRATCHPAD, 0, 0x0, 4096);
-     *
-     * // New (recommended):
-     * Address src = 0x0000'1000;  // KPU_MEMORY[0] base + 0x1000
-     * Address dst = 0xFFFF'0000;  // SCRATCHPAD[0] base
-     * dma.enqueue_transfer(src, dst, 4096);
-     * @endcode
-     */
-    [[deprecated("Use address-based API: enqueue_transfer(Address src, Address dst, Size size)")]]
-    void enqueue_transfer(MemoryType src_type, size_t src_id, Address src_addr,
-                         MemoryType dst_type, size_t dst_id, Address dst_addr,
-                         Size size, std::function<void()> callback = nullptr);
-
-    // Process transfers with full memory hierarchy access
+    // Process transfers with memory hierarchy access
     bool process_transfers(std::vector<ExternalMemory>& host_memory_regions,
                           std::vector<ExternalMemory>& memory_banks,
-                          std::vector<L3Tile>& l3_tiles,
-                          std::vector<L2Bank>& l2_banks,
-                          std::vector<Scratchpad>& scratchpads);
+                          std::vector<L3Tile>& l3_tiles);
 
     bool is_busy() const { return is_active || !transfer_queue.empty(); }
     void reset();

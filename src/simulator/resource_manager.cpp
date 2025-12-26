@@ -37,7 +37,7 @@ size_t ResourceManager::get_resource_count(ResourceType type) const {
         case ResourceType::L1_BUFFER:
             return simulator_.get_l1_buffer_count();
         case ResourceType::PAGE_BUFFER:
-            return simulator_.get_scratchpad_count();
+            return simulator_.get_page_buffer_count();
         case ResourceType::COMPUTE_TILE:
             return simulator_.get_compute_tile_count();
         case ResourceType::DMA_ENGINE:
@@ -86,8 +86,8 @@ ResourceHandle ResourceManager::get_resource(ResourceType type, size_t id) const
             handle.capacity = simulator_.get_l1_buffer_capacity(id);
             break;
         case ResourceType::PAGE_BUFFER:
-            handle.base_address = simulator_.get_scratchpad_base(id);
-            handle.capacity = simulator_.get_scratchpad_capacity(id);
+            handle.base_address = simulator_.get_page_buffer_base(id);
+            handle.capacity = simulator_.get_page_buffer_capacity(id);
             break;
         default:
             // Non-memory resources don't have base addresses
@@ -313,7 +313,7 @@ void ResourceManager::write(Address address, const void* data, Size size) {
             simulator_.write_l1_buffer(resource.id, offset, data, size);
             break;
         case ResourceType::PAGE_BUFFER:
-            simulator_.write_scratchpad(resource.id, offset, data, size);
+            simulator_.write_page_buffer(resource.id, offset, data, size);
             break;
         default:
             throw std::invalid_argument("Cannot write to non-memory resource");
@@ -347,7 +347,7 @@ void ResourceManager::read(Address address, void* data, Size size) {
             simulator_.read_l1_buffer(resource.id, offset, data, size);
             break;
         case ResourceType::PAGE_BUFFER:
-            simulator_.read_scratchpad(resource.id, offset, data, size);
+            simulator_.read_page_buffer(resource.id, offset, data, size);
             break;
         default:
             throw std::invalid_argument("Cannot read from non-memory resource");
@@ -395,7 +395,7 @@ bool ResourceManager::is_busy(ResourceHandle resource) const {
         case ResourceType::L1_BUFFER:
             return !simulator_.is_l1_buffer_ready(resource.id);
         case ResourceType::PAGE_BUFFER:
-            return !simulator_.is_scratchpad_ready(resource.id);
+            return !simulator_.is_page_buffer_ready(resource.id);
         default:
             return false;
     }
@@ -500,7 +500,7 @@ void ResourceManager::clear(ResourceHandle resource) {
             simulator_.write_l1_buffer(resource.id, 0, zeros.data(), resource.capacity);
             break;
         case ResourceType::PAGE_BUFFER:
-            simulator_.write_scratchpad(resource.id, 0, zeros.data(), resource.capacity);
+            simulator_.write_page_buffer(resource.id, 0, zeros.data(), resource.capacity);
             break;
         default:
             throw std::invalid_argument("Cannot clear non-memory resource");

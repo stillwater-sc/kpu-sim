@@ -42,22 +42,22 @@ KPUSimulator::KPUSimulator(const Config& config) : current_cycle(0) {
         l1_buffers.emplace_back(i, config.l1_buffer_capacity_kb);
     }
 
-    // Initialize scratchpads - memory controller page buffers (NOT L1!)
-    scratchpads.reserve(config.scratchpad_count);
-    for (size_t i = 0; i < config.scratchpad_count; ++i) {
-        scratchpads.emplace_back(config.scratchpad_capacity_kb);
+    // Initialize page buffers - memory controller page buffers
+    page_buffers.reserve(config.page_buffer_count);
+    for (size_t i = 0; i < config.page_buffer_count; ++i) {
+        page_buffers.emplace_back(config.page_buffer_capacity_kb);
     }
 
     // Initialize compute tiles with systolic array configuration
     compute_tiles.reserve(config.compute_tile_count);
     for (size_t i = 0; i < config.compute_tile_count; ++i) {
-        ComputeFabric::ComputeType compute_type = config.use_systolic_arrays ?
+        ComputeFabric::ComputeType compute_type = config.use_systolic_array_mode ?
             ComputeFabric::ComputeType::SYSTOLIC_ARRAY :
             ComputeFabric::ComputeType::BASIC_MATMUL;
 
         compute_tiles.emplace_back(i, compute_type,
-                                  config.systolic_array_rows,
-                                  config.systolic_array_cols);
+                                  config.processor_array_rows,
+                                  config.processor_array_cols);
     }
 
     // Initialize DMA engines - general-purpose data movement
@@ -96,10 +96,13 @@ KPUSimulator::KPUSimulator(const Config& config) : current_cycle(0) {
     Address current_addr;
 
     // Host memory regions (NUMA)
+    // Reserve address 0 for null pointer detection (first 4KB page is guard zone)
+    constexpr Address NULL_GUARD_SIZE = 0x1000;  // 4KB null guard zone
+
     if (config.host_memory_base != 0) {
         current_addr = config.host_memory_base;
     } else {
-        current_addr = 0x0000'0000;  // Default: start at 0
+        current_addr = NULL_GUARD_SIZE;  // Default: start after null guard zone
     }
     for (size_t i = 0; i < config.host_memory_region_count; ++i) {
         Size capacity = config.host_memory_region_capacity_mb * 1024 * 1024;
@@ -153,12 +156,12 @@ KPUSimulator::KPUSimulator(const Config& config) : current_cycle(0) {
         current_addr += capacity;
     }
 
-    // Scratchpads (memory controller page buffers)
-    if (config.scratchpad_base != 0) {
-        current_addr = config.scratchpad_base;
+    // Page buffers (memory controller)
+    if (config.page_buffer_base != 0) {
+        current_addr = config.page_buffer_base;
     }
-    for (size_t i = 0; i < config.scratchpad_count; ++i) {
-        Size capacity = config.scratchpad_capacity_kb * 1024;
+    for (size_t i = 0; i < config.page_buffer_count; ++i) {
+        Size capacity = config.page_buffer_capacity_kb * 1024;
         address_decoder.add_region(current_addr, capacity, sw::memory::MemoryType::PAGE_BUFFER, i,
                                   "PageBuffer " + std::to_string(i));
         current_addr += capacity;
@@ -196,14 +199,14 @@ void KPUSimulator::write_memory_bank(size_t bank_id, Address addr, const void* d
     memory_banks[bank_id].write(addr, data, size);
 }
 
-void KPUSimulator::read_scratchpad(size_t pad_id, Address addr, void* data, Size size) {
-    validate_scratchpad_id(pad_id);
-    scratchpads[pad_id].read(addr, data, size);
+void KPUSimulator::read_page_buffer(size_t pad_id, Address addr, void* data, Size size) {
+    validate_page_buffer_id(pad_id);
+    page_buffers[pad_id].read(addr, data, size);
 }
 
-void KPUSimulator::write_scratchpad(size_t pad_id, Address addr, const void* data, Size size) {
-    validate_scratchpad_id(pad_id);
-    scratchpads[pad_id].write(addr, data, size);
+void KPUSimulator::write_page_buffer(size_t pad_id, Address addr, const void* data, Size size) {
+    validate_page_buffer_id(pad_id);
+    page_buffers[pad_id].write(addr, data, size);
 }
 
 // L3 and L2 memory operations
@@ -339,18 +342,18 @@ bool KPUSimulator::is_block_mover_busy(size_t block_mover_id) {
 }
 
 // Streamer operations
-void KPUSimulator::start_row_stream(size_t streamer_id, size_t l2_bank_id, size_t l1_scratchpad_id,
+void KPUSimulator::start_row_stream(size_t streamer_id, size_t l2_bank_id, size_t l1_buffer_id,
                                    Address l2_base_addr, Address l1_base_addr,
                                    Size matrix_height, Size matrix_width, Size element_size, Size compute_fabric_size,
                                    Streamer::StreamDirection direction,
                                    std::function<void()> callback) {
     validate_streamer_id(streamer_id);
     validate_l2_bank_id(l2_bank_id);
-    validate_scratchpad_id(l1_scratchpad_id);
+    validate_l1_buffer_id(l1_buffer_id);
 
     Streamer::StreamConfig config{
         .l2_bank_id = l2_bank_id,
-        .l1_scratchpad_id = l1_scratchpad_id,
+        .l1_buffer_id = l1_buffer_id,
         .l2_base_addr = l2_base_addr,
         .l1_base_addr = l1_base_addr,
         .matrix_height = matrix_height,
@@ -366,18 +369,18 @@ void KPUSimulator::start_row_stream(size_t streamer_id, size_t l2_bank_id, size_
     streamers[streamer_id].enqueue_stream(config);
 }
 
-void KPUSimulator::start_column_stream(size_t streamer_id, size_t l2_bank_id, size_t l1_scratchpad_id,
+void KPUSimulator::start_column_stream(size_t streamer_id, size_t l2_bank_id, size_t l1_buffer_id,
                                       Address l2_base_addr, Address l1_base_addr,
                                       Size matrix_height, Size matrix_width, Size element_size, Size compute_fabric_size,
                                       Streamer::StreamDirection direction,
                                       std::function<void()> callback) {
     validate_streamer_id(streamer_id);
     validate_l2_bank_id(l2_bank_id);
-    validate_scratchpad_id(l1_scratchpad_id);
+    validate_l1_buffer_id(l1_buffer_id);
 
     Streamer::StreamConfig config{
         .l2_bank_id = l2_bank_id,
-        .l1_scratchpad_id = l1_scratchpad_id,
+        .l1_buffer_id = l1_buffer_id,
         .l2_base_addr = l2_base_addr,
         .l1_base_addr = l1_base_addr,
         .matrix_height = matrix_height,
@@ -399,16 +402,16 @@ bool KPUSimulator::is_streamer_busy(size_t streamer_id) {
 }
 
 // Compute operations
-void KPUSimulator::start_matmul(size_t tile_id, size_t scratchpad_id, Size m, Size n, Size k,
+void KPUSimulator::start_matmul(size_t tile_id, size_t l1_buffer_id, Size m, Size n, Size k,
                                Address a_addr, Address b_addr, Address c_addr,
                                std::function<void()> callback) {
     validate_tile_id(tile_id);
-    validate_scratchpad_id(scratchpad_id);
+    validate_l1_buffer_id(l1_buffer_id);
 
     ComputeFabric::MatMulConfig config{
         .m = m, .n = n, .k = k,
         .a_addr = a_addr, .b_addr = b_addr, .c_addr = c_addr,
-        .scratchpad_id = scratchpad_id,
+        .l1_buffer_id = l1_buffer_id,
         .completion_callback = std::move(callback)
     };
 
@@ -437,7 +440,7 @@ void KPUSimulator::reset() {
     for (auto& l1_buffer : l1_buffers) {
         l1_buffer.reset();
     }
-    for (auto& pad : scratchpads) {
+    for (auto& pad : page_buffers) {
         pad.reset();
     }
     for (auto& dma : dma_engines) {
@@ -474,18 +477,18 @@ void KPUSimulator::step() {
     }
 
     // Then process/update all components
-    // DMA engines now have access to host memory regions
+    // DMA engines move data between host/KPU memory and L3 tiles
     for (auto& dma : dma_engines) {
-        dma.process_transfers(host_memory_regions, memory_banks, l3_tiles, l2_banks, scratchpads);
+        dma.process_transfers(host_memory_regions, memory_banks, l3_tiles);
     }
     for (auto& block_mover : block_movers) {
         block_mover.process_transfers(l3_tiles, l2_banks);
     }
     for (auto& streamer : streamers) {
-        streamer.update(current_cycle, l2_banks, scratchpads);
+        streamer.update(current_cycle, l2_banks, l1_buffers);
     }
     for (auto& tile : compute_tiles) {
-        tile.update(current_cycle, scratchpads);
+        tile.update(current_cycle, l1_buffers);
     }
 }
 
@@ -549,9 +552,9 @@ Size KPUSimulator::get_l1_buffer_capacity(size_t buffer_id) const {
     return l1_buffers[buffer_id].get_capacity();
 }
 
-Size KPUSimulator::get_scratchpad_capacity(size_t pad_id) const {
-    validate_scratchpad_id(pad_id);
-    return scratchpads[pad_id].get_capacity();
+Size KPUSimulator::get_page_buffer_capacity(size_t pad_id) const {
+    validate_page_buffer_id(pad_id);
+    return page_buffers[pad_id].get_capacity();
 }
 
 // High-level test operation
@@ -584,8 +587,8 @@ bool KPUSimulator::run_matmul_test(const MatMulTest& test, size_t memory_bank_id
         // Compute global addresses for DMA transfers
         Address global_ext_a_addr = get_external_bank_base(memory_bank_id) + ext_a_addr;
         Address global_ext_b_addr = get_external_bank_base(memory_bank_id) + ext_b_addr;
-        Address global_scratch_a_addr = get_scratchpad_base(scratchpad_id) + scratch_a_addr;
-        Address global_scratch_b_addr = get_scratchpad_base(scratchpad_id) + scratch_b_addr;
+        Address global_scratch_a_addr = get_l1_buffer_base(scratchpad_id) + scratch_a_addr;
+        Address global_scratch_b_addr = get_l1_buffer_base(scratchpad_id) + scratch_b_addr;
 
         // DMA A and B matrices to scratchpad using convenience methods
         dma_external_to_scratchpad(0, global_ext_a_addr, global_scratch_a_addr, a_size,
@@ -611,7 +614,7 @@ bool KPUSimulator::run_matmul_test(const MatMulTest& test, size_t memory_bank_id
         // DMA result back to external memory using convenience method
         bool dma_c_complete = false;
         Address global_ext_c_addr = get_external_bank_base(memory_bank_id) + ext_c_addr;
-        Address global_scratch_c_addr = get_scratchpad_base(scratchpad_id) + scratch_c_addr;
+        Address global_scratch_c_addr = get_l1_buffer_base(scratchpad_id) + scratch_c_addr;
         dma_scratchpad_to_external(0, global_scratch_c_addr, global_ext_c_addr, c_size,
             [&dma_c_complete]() { dma_c_complete = true; });
 
@@ -648,7 +651,7 @@ void KPUSimulator::print_stats() const {
     std::cout << "L3 tiles: " << l3_tiles.size() << std::endl;
     std::cout << "L2 banks: " << l2_banks.size() << std::endl;
     std::cout << "L1 buffers: " << l1_buffers.size() << std::endl;
-    std::cout << "Scratchpads: " << scratchpads.size() << std::endl;
+    std::cout << "Page buffers: " << page_buffers.size() << std::endl;
     std::cout << "Compute tiles: " << compute_tiles.size() << std::endl;
     std::cout << "DMA engines: " << dma_engines.size() << std::endl;
     std::cout << "Block movers: " << block_movers.size() << std::endl;
@@ -663,10 +666,10 @@ void KPUSimulator::print_component_status() const {
                   << " MB, Ready: " << (memory_banks[i].is_ready() ? "Yes" : "No") << std::endl;
     }
 
-    std::cout << "Scratchpads:" << std::endl;
-    for (size_t i = 0; i < scratchpads.size(); ++i) {
-        std::cout << "  Pad[" << i << "]: " << scratchpads[i].get_capacity() / 1024
-                  << " KB, Ready: " << (scratchpads[i].is_ready() ? "Yes" : "No") << std::endl;
+    std::cout << "Page Buffers:" << std::endl;
+    for (size_t i = 0; i < page_buffers.size(); ++i) {
+        std::cout << "  Pad[" << i << "]: " << page_buffers[i].get_capacity() / 1024
+                  << " KB, Ready: " << (page_buffers[i].is_ready() ? "Yes" : "No") << std::endl;
     }
 
     std::cout << "DMA Engines:" << std::endl;
@@ -737,9 +740,9 @@ bool KPUSimulator::is_l1_buffer_ready(size_t buffer_id) const {
     return l1_buffers[buffer_id].is_ready();
 }
 
-bool KPUSimulator::is_scratchpad_ready(size_t pad_id) const {
-    validate_scratchpad_id(pad_id);
-    return scratchpads[pad_id].is_ready();
+bool KPUSimulator::is_page_buffer_ready(size_t pad_id) const {
+    validate_page_buffer_id(pad_id);
+    return page_buffers[pad_id].is_ready();
 }
 
 // Validation helpers
@@ -755,9 +758,9 @@ void KPUSimulator::validate_bank_id(size_t bank_id) const {
     }
 }
 
-void KPUSimulator::validate_scratchpad_id(size_t pad_id) const {
-    if (pad_id >= scratchpads.size()) {
-        throw std::out_of_range("Invalid scratchpad ID: " + std::to_string(pad_id));
+void KPUSimulator::validate_page_buffer_id(size_t pad_id) const {
+    if (pad_id >= page_buffers.size()) {
+        throw std::out_of_range("Invalid page buffer ID: " + std::to_string(pad_id));
     }
 }
 
@@ -865,8 +868,8 @@ KPUSimulator::Config generate_multi_bank_config(size_t num_banks, size_t num_til
     config.memory_bank_count = num_banks;
     config.memory_bank_capacity_mb = 512; // Smaller banks for multi-bank setup
     config.memory_bandwidth_gbps = 16; // Higher bandwidth per bank
-    config.scratchpad_count = num_tiles; // One scratchpad per tile
-    config.scratchpad_capacity_kb = 256;
+    config.l1_buffer_count = num_tiles; // One L1 buffer per tile
+    config.l1_buffer_capacity_kb = 256;
     config.compute_tile_count = num_tiles;
     config.dma_engine_count = num_banks + num_tiles; // Plenty of DMA engines
     return config;
@@ -973,11 +976,14 @@ void KPUSimulator::disable_compute_fabric_tracing(size_t tile_id) {
 // Address Computation Helpers
 // ===========================================
 
+// Null guard zone size - must match the value used in the constructor's memory map
+static constexpr Address NULL_GUARD_SIZE_STATIC = 0x1000;  // 4KB null guard zone
+
 // These must match the memory map layout in the constructor
 Address KPUSimulator::get_host_memory_region_base(size_t region_id) const {
     validate_host_memory_region_id(region_id);
-    // Host memory regions start at 0 (or config.host_memory_base), each gets its full capacity
-    Address base = 0;
+    // Host memory regions start after null guard zone, each gets its full capacity
+    Address base = NULL_GUARD_SIZE_STATIC;
     for (size_t i = 0; i < region_id; ++i) {
         base += host_memory_regions[i].get_capacity();
     }
@@ -986,8 +992,8 @@ Address KPUSimulator::get_host_memory_region_base(size_t region_id) const {
 
 Address KPUSimulator::get_external_bank_base(size_t bank_id) const {
     validate_bank_id(bank_id);
-    // External banks start after all host memory regions
-    Address base = 0;
+    // External banks start after null guard zone and all host memory regions
+    Address base = NULL_GUARD_SIZE_STATIC;
     for (const auto& region : host_memory_regions) {
         base += region.get_capacity();
     }
@@ -1000,8 +1006,8 @@ Address KPUSimulator::get_external_bank_base(size_t bank_id) const {
 
 Address KPUSimulator::get_l3_tile_base(size_t tile_id) const {
     validate_l3_tile_id(tile_id);
-    // L3 tiles start after all host memory regions and external banks
-    Address base = 0;
+    // L3 tiles start after null guard zone, host memory regions, and external banks
+    Address base = NULL_GUARD_SIZE_STATIC;
     for (const auto& region : host_memory_regions) {
         base += region.get_capacity();
     }
@@ -1017,8 +1023,8 @@ Address KPUSimulator::get_l3_tile_base(size_t tile_id) const {
 
 Address KPUSimulator::get_l2_bank_base(size_t bank_id) const {
     validate_l2_bank_id(bank_id);
-    // L2 banks start after all host memory regions, external banks, and L3 tiles
-    Address base = 0;
+    // L2 banks start after null guard zone, host memory regions, external banks, and L3 tiles
+    Address base = NULL_GUARD_SIZE_STATIC;
     for (const auto& region : host_memory_regions) {
         base += region.get_capacity();
     }
@@ -1037,8 +1043,8 @@ Address KPUSimulator::get_l2_bank_base(size_t bank_id) const {
 
 Address KPUSimulator::get_l1_buffer_base(size_t buffer_id) const {
     validate_l1_buffer_id(buffer_id);
-    // L1 buffers start after all host memory regions, external banks, L3 tiles, and L2 banks
-    Address base = 0;
+    // L1 buffers start after null guard zone, host memory regions, external banks, L3 tiles, and L2 banks
+    Address base = NULL_GUARD_SIZE_STATIC;
     for (const auto& region : host_memory_regions) {
         base += region.get_capacity();
     }
@@ -1058,10 +1064,10 @@ Address KPUSimulator::get_l1_buffer_base(size_t buffer_id) const {
     return base;
 }
 
-Address KPUSimulator::get_scratchpad_base(size_t pad_id) const {
-    validate_scratchpad_id(pad_id);
-    // Scratchpads start after all host memory regions, external banks, L3 tiles, L2 banks, and L1 buffers
-    Address base = 0;
+Address KPUSimulator::get_page_buffer_base(size_t pad_id) const {
+    validate_page_buffer_id(pad_id);
+    // Page buffers start after null guard zone, host memory regions, external banks, L3 tiles, L2 banks, and L1 buffers
+    Address base = NULL_GUARD_SIZE_STATIC;
     for (const auto& region : host_memory_regions) {
         base += region.get_capacity();
     }
@@ -1077,9 +1083,9 @@ Address KPUSimulator::get_scratchpad_base(size_t pad_id) const {
     for (const auto& buffer : l1_buffers) {
         base += buffer.get_capacity();
     }
-    // Then add offsets for scratchpads before this one
+    // Then add offsets for page buffers before this one
     for (size_t i = 0; i < pad_id; ++i) {
-        base += scratchpads[i].get_capacity();
+        base += page_buffers[i].get_capacity();
     }
     return base;
 }

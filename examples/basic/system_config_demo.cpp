@@ -136,12 +136,12 @@ void demo_programmatic_config() {
         kpu.memory.banks.push_back(bank);
     }
 
-    // Add scratchpads
+    // Add L1 buffers (compute fabric)
     for (int i = 0; i < 4; ++i) {
-        KPUScratchpadConfig scratch;
-        scratch.id = "scratch_" + std::to_string(i);
-        scratch.capacity_kb = 128;
-        kpu.memory.scratchpads.push_back(scratch);
+        KPUL1Config l1_buf;
+        l1_buf.id = "l1_buffer_" + std::to_string(i);
+        l1_buf.capacity_kb = 128;
+        kpu.memory.l1_buffers.push_back(l1_buf);
     }
 
     // Add compute tiles
@@ -230,7 +230,7 @@ void demo_simulator_initialization() {
         if (kpu) {
             std::cout << "KPU[0] details:\n";
             std::cout << "  Memory banks: " << kpu->get_memory_bank_count() << "\n";
-            std::cout << "  Scratchpads: " << kpu->get_scratchpad_count() << "\n";
+            std::cout << "  L1 buffers: " << kpu->get_l1_buffer_count() << "\n";
             std::cout << "  Compute tiles: " << kpu->get_compute_tile_count() << "\n";
             std::cout << "  DMA engines: " << kpu->get_dma_engine_count() << "\n";
         }

@@ -147,12 +147,12 @@ void create_system(SystemConfig& config) {
         kpu.memory.l2_banks.push_back(bank);
     }
 
-    // Add scratchpads
+    // Add L1 buffers
     for (int i = 0; i < 4; ++i) {
-        KPUScratchpadConfig scratch;
-        scratch.id = "scratch_" + std::to_string(i);
-        scratch.capacity_kb = 128;
-        kpu.memory.scratchpads.push_back(scratch);
+        KPUL1Config l1_buf;
+        l1_buf.id = "l1_buffer_" + std::to_string(i);
+        l1_buf.capacity_kb = 128;
+        kpu.memory.l1_buffers.push_back(l1_buf);
     }
 
     // Add compute tiles
@@ -347,29 +347,29 @@ bool execute_mlp_layer(sw::kpu::KPUSimulator* kpu,
     kpu->run_until_idle();
     std::cout << "  Weight blocks moved to L2[" << l2_bank_id << "]\n";
 
-    // Step 5: Streamers from L2 to L1 scratchpad
-    std::cout << "\n[5] L2 Banks -> L1 Scratchpad (Streamers)\n";
+    // Step 5: Streamers from L2 to L1 buffer
+    std::cout << "\n[5] L2 Banks -> L1 Buffer (Streamers)\n";
 
     const size_t row_streamer_id = 0;
     const size_t col_streamer_id = 1;
-    const size_t scratchpad_id = 0;
+    const size_t l1_buffer_id = 0;
     const Address l1_input_addr = 0x0000;
     const Address l1_weights_addr = 0x1000;
     const size_t compute_fabric_size = kpu->get_systolic_array_rows();
 
     // Stream input rows to L1
-    kpu->start_row_stream(row_streamer_id, l2_bank_id, scratchpad_id,
+    kpu->start_row_stream(row_streamer_id, l2_bank_id, l1_buffer_id,
         l2_input_addr, l1_input_addr,
         batch_size, input_dim, sizeof(float), compute_fabric_size);
     kpu->run_until_idle();
-    std::cout << "  Input rows streamed to L1 scratchpad[" << scratchpad_id << "]\n";
+    std::cout << "  Input rows streamed to L1 buffer[" << l1_buffer_id << "]\n";
 
     // Stream weight columns to L1
-    kpu->start_column_stream(col_streamer_id, l2_bank_id, scratchpad_id,
+    kpu->start_column_stream(col_streamer_id, l2_bank_id, l1_buffer_id,
         l2_weights_addr, l1_weights_addr,
         input_dim, output_dim, sizeof(float), compute_fabric_size);
     kpu->run_until_idle();
-    std::cout << "  Weight columns streamed to L1 scratchpad[" << scratchpad_id << "]\n";
+    std::cout << "  Weight columns streamed to L1 buffer[" << l1_buffer_id << "]\n";
 
     // Step 6: Execute matrix multiplication on systolic array
     std::cout << "\n[6] Systolic Array Compute\n";
@@ -381,20 +381,20 @@ bool execute_mlp_layer(sw::kpu::KPUSimulator* kpu,
               << "×" << kpu->get_systolic_array_cols()
               << " (" << kpu->get_systolic_array_total_pes() << " PEs)\n";
 
-    kpu->start_matmul(compute_tile_id, scratchpad_id,
+    kpu->start_matmul(compute_tile_id, l1_buffer_id,
         batch_size, output_dim, input_dim,
         l1_input_addr, l1_weights_addr, l1_output_addr);
     kpu->run_until_idle();
     std::cout << "  Matrix multiplication completed\n";
 
-    // Add bias (simple operation in scratchpad)
+    // Add bias (simple operation in L1 buffer)
     std::cout << "  Adding bias...\n";
     std::vector<float> result(batch_size * output_dim);
-    kpu->read_scratchpad(scratchpad_id, l1_output_addr, result.data(), result.size() * sizeof(float));
+    kpu->read_l1_buffer(l1_buffer_id, l1_output_addr, result.data(), result.size() * sizeof(float));
     for (size_t i = 0; i < result.size(); ++i) {
         result[i] += bias[i % output_dim];
     }
-    kpu->write_scratchpad(scratchpad_id, l1_output_addr, result.data(), result.size() * sizeof(float));
+    kpu->write_l1_buffer(l1_buffer_id, l1_output_addr, result.data(), result.size() * sizeof(float));
     std::cout << "  Bias added\n";
 
     // Step 7: Result readback through reverse path
@@ -402,7 +402,7 @@ bool execute_mlp_layer(sw::kpu::KPUSimulator* kpu,
 
     // L1 → L2 (via streamer)
     const Address l2_output_addr = 0x4000;
-    kpu->start_row_stream(row_streamer_id, l2_bank_id, scratchpad_id,
+    kpu->start_row_stream(row_streamer_id, l2_bank_id, l1_buffer_id,
         l2_output_addr, l1_output_addr,
         batch_size, output_dim, sizeof(float), compute_fabric_size,
         sw::kpu::Streamer::StreamDirection::L1_TO_L2);
@@ -456,7 +456,7 @@ bool bist(const SystemConfig& config) {
         if (kpu) {
             std::cout << "KPU[0] details:\n";
             std::cout << "  Memory banks: " << kpu->get_memory_bank_count() << "\n";
-            std::cout << "  Scratchpads: " << kpu->get_scratchpad_count() << "\n";
+            std::cout << "  L1 buffers: " << kpu->get_l1_buffer_count() << "\n";
             std::cout << "  Compute tiles: " << kpu->get_compute_tile_count() << "\n";
             std::cout << "  DMA engines: " << kpu->get_dma_engine_count() << "\n";
             std::cout << "  L3 tiles: " << kpu->get_l3_tile_count() << "\n";

@@ -95,7 +95,7 @@ BoundSchedule ScheduleBinder::bind(const dfx::Program& program) {
 
             // Systolic array processes (systolic_rows × systolic_cols) elements per cycle
             size_t flops = 2 * tile_m * tile_n * tile_k;
-            size_t flops_per_cycle = config_.systolic_array_rows * config_.systolic_array_cols * 2;
+            size_t flops_per_cycle = config_.processor_array_rows * config_.processor_array_cols * 2;
             bound.end_cycle = bound.start_cycle + (flops / flops_per_cycle);
         }
         else if (auto* barrier = dynamic_cast<const dfx::BarrierOp*>(op.get())) {

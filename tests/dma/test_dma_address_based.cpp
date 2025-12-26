@@ -9,9 +9,7 @@
 #include <sw/kpu/components/dma_engine.hpp>
 #include <sw/memory/address_decoder.hpp>
 #include <sw/memory/external_memory.hpp>
-#include <sw/kpu/components/scratchpad.hpp>
 #include <sw/kpu/components/l3_tile.hpp>
-#include <sw/kpu/components/l2_bank.hpp>
 
 using namespace sw::kpu;
 using namespace sw::memory;
@@ -23,6 +21,9 @@ using namespace sw::memory;
  * - Memory map is configured once during initialization
  * - DMA commands use pure addresses (like Intel IOAT, ARM PL330, AMD SDMA)
  * - Applications are decoupled from physical memory topology
+ *
+ * DMA supports transfers between: HOST_MEMORY, KPU_MEMORY (external), L3_TILE
+ * Note: L2 banks accessed via BlockMover, L1 buffers via Streamers (not DMA)
  */
 class AddressBasedDMAFixture {
 public:
@@ -30,8 +31,6 @@ public:
     std::vector<ExternalMemory> host_memory_regions;  // Empty for these tests
     std::vector<ExternalMemory> memory_banks;
     std::vector<L3Tile> l3_tiles;
-    std::vector<L2Bank> l2_banks;
-    std::vector<Scratchpad> scratchpads;
 
     // DMA engine and address decoder
     DMAEngine dma_engine;
@@ -41,29 +40,23 @@ public:
     static constexpr Address EXTERNAL_BANK0_BASE = 0x0000'0000;
     static constexpr Address EXTERNAL_BANK1_BASE = 0x2000'0000;  // 512 MB offset
     static constexpr Address L3_TILE0_BASE       = 0x8000'0000;
-    static constexpr Address L3_TILE1_BASE       = 0x8002'0000;  // 128 KB offset
-    static constexpr Address L2_BANK0_BASE       = 0x9000'0000;
-    static constexpr Address SCRATCHPAD0_BASE    = 0xFFFF'0000;
+    static constexpr Address L3_TILE1_BASE       = 0x8008'0000;  // 512 KB offset
 
     AddressBasedDMAFixture()
         : dma_engine(0, 1.0, 100.0)  // Engine 0, 1 GHz, 100 GB/s
     {
-        // Create hardware components (2 external banks, 256 KB scratchpad)
+        // Create hardware components
         memory_banks.emplace_back(512, 100);  // 512 MB capacity
         memory_banks.emplace_back(512, 100);
-        l3_tiles.emplace_back(128);           // 128 KB
-        l3_tiles.emplace_back(128);
-        l2_banks.emplace_back(64);            // 64 KB
-        scratchpads.emplace_back(256);        // 256 KB
+        l3_tiles.emplace_back(512);           // 512 KB L3 tile
+        l3_tiles.emplace_back(512);
 
         // Configure memory map (done ONCE during initialization)
         // This is the key advantage: applications use addresses, not (type, id) tuples
         decoder.add_region(EXTERNAL_BANK0_BASE, 512 * 1024 * 1024, MemoryType::EXTERNAL, 0, "External Bank 0");
         decoder.add_region(EXTERNAL_BANK1_BASE, 512 * 1024 * 1024, MemoryType::EXTERNAL, 1, "External Bank 1");
-        decoder.add_region(L3_TILE0_BASE, 128 * 1024, MemoryType::L3_TILE, 0, "L3 Tile 0");
-        decoder.add_region(L3_TILE1_BASE, 128 * 1024, MemoryType::L3_TILE, 1, "L3 Tile 1");
-        decoder.add_region(L2_BANK0_BASE, 64 * 1024, MemoryType::L2_BANK, 0, "L2 Bank 0");
-        decoder.add_region(SCRATCHPAD0_BASE, 256 * 1024, MemoryType::PAGE_BUFFER, 0, "PageBuffer 0");
+        decoder.add_region(L3_TILE0_BASE, 512 * 1024, MemoryType::L3_TILE, 0, "L3 Tile 0");
+        decoder.add_region(L3_TILE1_BASE, 512 * 1024, MemoryType::L3_TILE, 1, "L3 Tile 1");
 
         // Connect address decoder to DMA engine
         dma_engine.set_address_decoder(&decoder);
@@ -89,12 +82,12 @@ public:
         return std::equal(expected.begin(), expected.end(), actual.begin());
     }
 
-    bool verify_scratchpad_data(Address addr, const std::vector<uint8_t>& expected) {
+    bool verify_l3_data(Address addr, const std::vector<uint8_t>& expected) {
         auto route = decoder.decode(addr);
-        if (route.type != MemoryType::PAGE_BUFFER) return false;
+        if (route.type != MemoryType::L3_TILE) return false;
 
         std::vector<uint8_t> actual(expected.size());
-        scratchpads[route.id].read(route.offset, actual.data(), expected.size());
+        l3_tiles[route.id].read(route.offset, actual.data(), expected.size());
         return std::equal(expected.begin(), expected.end(), actual.begin());
     }
 
@@ -103,6 +96,11 @@ public:
         auto route = decoder.decode(addr);
         memory_banks[route.id].write(route.offset, data.data(), data.size());
     }
+
+    void write_l3_data(Address addr, const std::vector<uint8_t>& data) {
+        auto route = decoder.decode(addr);
+        l3_tiles[route.id].write(route.offset, data.data(), data.size());
+    }
 };
 
 TEST_CASE_METHOD(AddressBasedDMAFixture, "Address-Based API: Basic Transfer", "[dma][address][basic]") {
@@ -110,7 +108,7 @@ TEST_CASE_METHOD(AddressBasedDMAFixture, "Address-Based API: Basic Transfer", "[
 
     // Source and destination as pure addresses (no type/id needed!)
     Address src_addr = EXTERNAL_BANK0_BASE + 0x1000;
-    Address dst_addr = SCRATCHPAD0_BASE;
+    Address dst_addr = L3_TILE0_BASE;
 
     // Write test data to source
     auto test_data = generate_pattern(transfer_size, 0xAA);
@@ -123,12 +121,12 @@ TEST_CASE_METHOD(AddressBasedDMAFixture, "Address-Based API: Basic Transfer", "[
 
     // Process until complete
     while (!complete) {
-        dma_engine.process_transfers(host_memory_regions, memory_banks, l3_tiles, l2_banks, scratchpads);
+        dma_engine.process_transfers(host_memory_regions, memory_banks, l3_tiles);
         dma_engine.set_current_cycle(dma_engine.get_current_cycle() + 1);
     }
 
     // Verify data integrity
-    REQUIRE(verify_scratchpad_data(dst_addr, test_data));
+    REQUIRE(verify_l3_data(dst_addr, test_data));
     REQUIRE_FALSE(dma_engine.is_busy());
 }
 
@@ -141,8 +139,8 @@ TEST_CASE_METHOD(AddressBasedDMAFixture, "Address-Based API: Hardware Topology I
     Address matrix_a_addr = EXTERNAL_BANK0_BASE + 0x10000;  // In Bank 0
     Address matrix_b_addr = EXTERNAL_BANK1_BASE + 0x20000;  // In Bank 1 (different bank!)
 
-    Address scratch_a = SCRATCHPAD0_BASE;
-    Address scratch_b = SCRATCHPAD0_BASE + transfer_size;
+    Address l3_a = L3_TILE0_BASE;
+    Address l3_b = L3_TILE0_BASE + transfer_size;
 
     // Write test data
     auto data_a = generate_pattern(transfer_size, 0x11);
@@ -155,18 +153,18 @@ TEST_CASE_METHOD(AddressBasedDMAFixture, "Address-Based API: Hardware Topology I
     int completions = 0;
     auto callback = [&completions]() { completions++; };
 
-    dma_engine.enqueue_transfer(matrix_a_addr, scratch_a, transfer_size, callback);
-    dma_engine.enqueue_transfer(matrix_b_addr, scratch_b, transfer_size, callback);
+    dma_engine.enqueue_transfer(matrix_a_addr, l3_a, transfer_size, callback);
+    dma_engine.enqueue_transfer(matrix_b_addr, l3_b, transfer_size, callback);
 
     // Process transfers
     while (completions < 2) {
-        dma_engine.process_transfers(host_memory_regions, memory_banks, l3_tiles, l2_banks, scratchpads);
+        dma_engine.process_transfers(host_memory_regions, memory_banks, l3_tiles);
         dma_engine.set_current_cycle(dma_engine.get_current_cycle() + 1);
     }
 
     // Verify both transfers succeeded
-    REQUIRE(verify_scratchpad_data(scratch_a, data_a));
-    REQUIRE(verify_scratchpad_data(scratch_b, data_b));
+    REQUIRE(verify_l3_data(l3_a, data_a));
+    REQUIRE(verify_l3_data(l3_b, data_b));
 }
 
 TEST_CASE_METHOD(AddressBasedDMAFixture, "Address-Based API: Memory Map Visualization", "[dma][address][config]") {
@@ -176,7 +174,7 @@ TEST_CASE_METHOD(AddressBasedDMAFixture, "Address-Based API: Memory Map Visualiz
     INFO("Memory Map:\n" << map);
 
     // Verify map contains expected regions
-    REQUIRE(decoder.get_regions().size() == 6);
+    REQUIRE(decoder.get_regions().size() == 4);
     REQUIRE(decoder.get_total_mapped_size() > 0);
 
     // Verify specific address decoding
@@ -190,10 +188,10 @@ TEST_CASE_METHOD(AddressBasedDMAFixture, "Address-Based API: Memory Map Visualiz
     REQUIRE(route1.id == 1);
     REQUIRE(route1.offset == 0x5000);
 
-    auto route_scratch = decoder.decode(SCRATCHPAD0_BASE + 0x100);
-    REQUIRE(route_scratch.type == MemoryType::PAGE_BUFFER);
-    REQUIRE(route_scratch.id == 0);
-    REQUIRE(route_scratch.offset == 0x100);
+    auto route_l3 = decoder.decode(L3_TILE0_BASE + 0x100);
+    REQUIRE(route_l3.type == MemoryType::L3_TILE);
+    REQUIRE(route_l3.id == 0);
+    REQUIRE(route_l3.offset == 0x100);
 }
 
 TEST_CASE_METHOD(AddressBasedDMAFixture, "Address-Based API: Error Handling - Unmapped Address", "[dma][address][error]") {
@@ -201,7 +199,7 @@ TEST_CASE_METHOD(AddressBasedDMAFixture, "Address-Based API: Error Handling - Un
 
     // Try to transfer from an unmapped address
     Address invalid_src = 0x7000'0000;  // Not in any region
-    Address valid_dst = SCRATCHPAD0_BASE;
+    Address valid_dst = L3_TILE0_BASE;
 
     REQUIRE_THROWS_AS(
         dma_engine.enqueue_transfer(invalid_src, valid_dst, transfer_size),
@@ -211,10 +209,10 @@ TEST_CASE_METHOD(AddressBasedDMAFixture, "Address-Based API: Error Handling - Un
 
 TEST_CASE_METHOD(AddressBasedDMAFixture, "Address-Based API: Error Handling - Cross-Region Transfer", "[dma][address][error]") {
     // A transfer that starts in one region but extends into unmapped space
-    Address src_addr = SCRATCHPAD0_BASE + (256 * 1024) - 512;  // Near end of scratchpad
+    Address src_addr = L3_TILE0_BASE + (512 * 1024) - 512;  // Near end of L3 tile
     Address dst_addr = EXTERNAL_BANK0_BASE;
 
-    size_t oversized = 2048;  // Would extend past end of scratchpad
+    size_t oversized = 2048;  // Would extend past end of L3 tile
 
     REQUIRE_THROWS_AS(
         dma_engine.enqueue_transfer(src_addr, dst_addr, oversized),
@@ -239,11 +237,10 @@ TEST_CASE_METHOD(AddressBasedDMAFixture, "Address-Based API: Error Handling - De
 TEST_CASE_METHOD(AddressBasedDMAFixture, "Address-Based API: Multiple Transfers Across Hierarchy", "[dma][address][hierarchy]") {
     const size_t transfer_size = 1024;
 
-    // Test data movement through the entire memory hierarchy
+    // Test data movement: External -> L3 -> External (different location)
     Address ext_addr = EXTERNAL_BANK0_BASE + 0x1000;
     Address l3_addr  = L3_TILE0_BASE + 0x100;
-    Address l2_addr  = L2_BANK0_BASE + 0x50;
-    Address scratch_addr = SCRATCHPAD0_BASE;
+    Address ext_addr2 = EXTERNAL_BANK1_BASE + 0x2000;
 
     // Prepare test data
     auto test_data = generate_pattern(transfer_size, 0x55);
@@ -252,100 +249,68 @@ TEST_CASE_METHOD(AddressBasedDMAFixture, "Address-Based API: Multiple Transfers 
     int completions = 0;
     auto callback = [&completions]() { completions++; };
 
-    // Transfer chain: External -> L3 -> L2 -> Scratchpad
-    // Each transfer queued with just addresses!
+    // Transfer: External -> L3
     dma_engine.enqueue_transfer(ext_addr, l3_addr, transfer_size, callback);
 
     // Process first transfer
     while (completions < 1) {
-        dma_engine.process_transfers(host_memory_regions, memory_banks, l3_tiles, l2_banks, scratchpads);
+        dma_engine.process_transfers(host_memory_regions, memory_banks, l3_tiles);
         dma_engine.set_current_cycle(dma_engine.get_current_cycle() + 1);
     }
 
-    // Continue chain
-    dma_engine.enqueue_transfer(l3_addr, l2_addr, transfer_size, callback);
+    // Verify data in L3
+    REQUIRE(verify_l3_data(l3_addr, test_data));
+
+    // Transfer: L3 -> External (different bank)
+    dma_engine.enqueue_transfer(l3_addr, ext_addr2, transfer_size, callback);
 
     while (completions < 2) {
-        dma_engine.process_transfers(host_memory_regions, memory_banks, l3_tiles, l2_banks, scratchpads);
-        dma_engine.set_current_cycle(dma_engine.get_current_cycle() + 1);
-    }
-
-    // Final transfer to scratchpad
-    dma_engine.enqueue_transfer(l2_addr, scratch_addr, transfer_size, callback);
-
-    while (completions < 3) {
-        dma_engine.process_transfers(host_memory_regions, memory_banks, l3_tiles, l2_banks, scratchpads);
+        dma_engine.process_transfers(host_memory_regions, memory_banks, l3_tiles);
         dma_engine.set_current_cycle(dma_engine.get_current_cycle() + 1);
     }
 
     // Verify data made it through entire hierarchy
-    REQUIRE(verify_scratchpad_data(scratch_addr, test_data));
+    REQUIRE(verify_external_data(ext_addr2, test_data));
 }
 
-TEST_CASE_METHOD(AddressBasedDMAFixture, "Address-Based API: Comparison with Type-Based API", "[dma][address][comparison]") {
-    // This test shows both APIs side-by-side to demonstrate the difference
+TEST_CASE_METHOD(AddressBasedDMAFixture, "Address-Based API: Bidirectional Transfers", "[dma][address][bidirectional]") {
+    // Test transfers in both directions: External <-> L3
 
     const size_t transfer_size = 2048;
-    Address src_addr = EXTERNAL_BANK0_BASE + 0x1000;
-    Address dst_addr = SCRATCHPAD0_BASE;
+    Address ext_addr = EXTERNAL_BANK0_BASE + 0x1000;
+    Address l3_addr = L3_TILE0_BASE;
 
     auto test_data = generate_pattern(transfer_size, 0x77);
-    write_external_data(src_addr, test_data);
+    write_external_data(ext_addr, test_data);
 
-    SECTION("Address-Based API (New - Recommended)") {
-        // Simple, clean, hardware-agnostic
-        bool complete = false;
-        dma_engine.enqueue_transfer(src_addr, dst_addr, transfer_size,
-            [&complete]() { complete = true; });
+    // External -> L3
+    bool complete = false;
+    dma_engine.enqueue_transfer(ext_addr, l3_addr, transfer_size,
+        [&complete]() { complete = true; });
 
-        while (!complete) {
-            dma_engine.process_transfers(host_memory_regions, memory_banks, l3_tiles, l2_banks, scratchpads);
-            dma_engine.set_current_cycle(dma_engine.get_current_cycle() + 1);
-        }
-
-        REQUIRE(verify_scratchpad_data(dst_addr, test_data));
+    while (!complete) {
+        dma_engine.process_transfers(host_memory_regions, memory_banks, l3_tiles);
+        dma_engine.set_current_cycle(dma_engine.get_current_cycle() + 1);
     }
 
-    SECTION("Type-Based API (Legacy - Deprecated)") {
-        // Requires knowing physical memory topology
-        // More verbose, tightly coupled to hardware
-        bool complete = false;
+    REQUIRE(verify_l3_data(l3_addr, test_data));
 
-        // Must decode addresses to get type/id (what decoder does internally)
-        auto src_route = decoder.decode(src_addr);
-        auto dst_route = decoder.decode(dst_addr);
+    // Modify data in L3
+    auto modified_data = generate_pattern(transfer_size, 0xBB);
+    write_l3_data(l3_addr, modified_data);
 
-        // Suppress deprecation warnings for legacy API demonstration
-        #ifdef _MSC_VER
-            #pragma warning(push)
-            #pragma warning(disable: 4996)  // 'function': was declared deprecated
-        #else
-            #pragma GCC diagnostic push
-            #pragma GCC diagnostic ignored "-Wdeprecated-declarations"
-        #endif
+    // L3 -> External (different location)
+    Address ext_addr2 = EXTERNAL_BANK0_BASE + 0x10000;
+    complete = false;
+    dma_engine.enqueue_transfer(l3_addr, ext_addr2, transfer_size,
+        [&complete]() { complete = true; });
 
-        dma_engine.enqueue_transfer(
-            DMAEngine::MemoryType::KPU_MEMORY, src_route.id, src_route.offset,
-            DMAEngine::MemoryType::PAGE_BUFFER, dst_route.id, dst_route.offset,
-            transfer_size,
-            [&complete]() { complete = true; }
-        );
-
-        #ifdef _MSC_VER
-            #pragma warning(pop)
-        #else
-            #pragma GCC diagnostic pop
-        #endif
-
-        while (!complete) {
-            dma_engine.process_transfers(host_memory_regions, memory_banks, l3_tiles, l2_banks, scratchpads);
-            dma_engine.set_current_cycle(dma_engine.get_current_cycle() + 1);
-        }
-
-        REQUIRE(verify_scratchpad_data(dst_addr, test_data));
+    while (!complete) {
+        dma_engine.process_transfers(host_memory_regions, memory_banks, l3_tiles);
+        dma_engine.set_current_cycle(dma_engine.get_current_cycle() + 1);
     }
 
-    // Both APIs produce identical results, but address-based is cleaner
+    REQUIRE(verify_external_data(ext_addr2, modified_data));
 }
 
 TEST_CASE_METHOD(AddressBasedDMAFixture, "Address-Based API: Virtual Memory Simulation", "[dma][address][virtual]") {
@@ -373,36 +338,36 @@ TEST_CASE_METHOD(AddressBasedDMAFixture, "Address-Based API: Virtual Memory Simu
     // For simulation, we translate manually
     auto translate = [](const VirtualMapping& vm) { return vm.physical_addr; };
 
-    Address scratch_a = SCRATCHPAD0_BASE;
-    Address scratch_b = SCRATCHPAD0_BASE + transfer_size;
+    Address l3_a = L3_TILE0_BASE;
+    Address l3_b = L3_TILE0_BASE + transfer_size;
 
     int completions = 0;
     auto callback = [&completions]() { completions++; };
 
     // Application code - uses virtual addresses, doesn't care about physical layout
-    dma_engine.enqueue_transfer(translate(tensor_a), scratch_a, transfer_size, callback);
-    dma_engine.enqueue_transfer(translate(tensor_b), scratch_b, transfer_size, callback);
+    dma_engine.enqueue_transfer(translate(tensor_a), l3_a, transfer_size, callback);
+    dma_engine.enqueue_transfer(translate(tensor_b), l3_b, transfer_size, callback);
 
     // If virtual memory remaps tensor_a to a different bank, only the mapping changes
     // The DMA code stays the same! This is the key benefit.
 
     while (completions < 2) {
-        dma_engine.process_transfers(host_memory_regions, memory_banks, l3_tiles, l2_banks, scratchpads);
+        dma_engine.process_transfers(host_memory_regions, memory_banks, l3_tiles);
         dma_engine.set_current_cycle(dma_engine.get_current_cycle() + 1);
     }
 
-    REQUIRE(verify_scratchpad_data(scratch_a, data_a));
-    REQUIRE(verify_scratchpad_data(scratch_b, data_b));
+    REQUIRE(verify_l3_data(l3_a, data_a));
+    REQUIRE(verify_l3_data(l3_b, data_b));
 }
 
 TEST_CASE_METHOD(AddressBasedDMAFixture, "Address-Based API: Dynamic Memory Allocation Pattern", "[dma][address][allocation]") {
     // Demonstrates how address-based API enables flexible memory allocation
 
     // Simulate a simple allocator that uses any available memory
-    auto allocate = [](size_t size) -> Address {
+    auto allocate = [this](size_t size) -> Address {
         // In a real system, this would search for free space
         // For this test, we'll use different regions based on size
-        if (size <= 64 * 1024) {
+        if (size <= 128 * 1024) {
             return L3_TILE0_BASE;  // Small allocations in L3
         } else {
             return EXTERNAL_BANK0_BASE;  // Large allocations in external
@@ -411,7 +376,7 @@ TEST_CASE_METHOD(AddressBasedDMAFixture, "Address-Based API: Dynamic Memory Allo
 
     // Allocate tensors - allocator chooses optimal location
     size_t small_tensor_size = 16 * 1024;
-    size_t large_tensor_size = 128 * 1024;
+    size_t large_tensor_size = 256 * 1024;
 
     Address small_tensor = allocate(small_tensor_size);
     Address large_tensor = allocate(large_tensor_size);
@@ -421,7 +386,7 @@ TEST_CASE_METHOD(AddressBasedDMAFixture, "Address-Based API: Dynamic Memory Allo
     auto small_data = generate_pattern(small_tensor_size, 0x11);
     auto large_data = generate_pattern(large_tensor_size, 0x22);
 
-    // Decode to write (in real system, this would be transparent)
+    // Write data to allocated locations
     auto small_route = decoder.decode(small_tensor);
     if (small_route.type == MemoryType::L3_TILE) {
         l3_tiles[small_route.id].write(small_route.offset, small_data.data(), small_data.size());
@@ -433,20 +398,17 @@ TEST_CASE_METHOD(AddressBasedDMAFixture, "Address-Based API: Dynamic Memory Allo
     }
 
     // DMA transfers work regardless of where allocator placed data
-    Address scratch_small = SCRATCHPAD0_BASE;
-    Address scratch_large = SCRATCHPAD0_BASE + small_tensor_size;
+    // Transfer small tensor from L3 to external
+    Address ext_dest = EXTERNAL_BANK0_BASE + 0x100000;
 
-    int completions = 0;
-    auto callback = [&completions]() { completions++; };
+    bool complete = false;
+    dma_engine.enqueue_transfer(small_tensor, ext_dest, small_tensor_size,
+        [&complete]() { complete = true; });
 
-    dma_engine.enqueue_transfer(small_tensor, scratch_small, small_tensor_size, callback);
-    dma_engine.enqueue_transfer(large_tensor, scratch_large, large_tensor_size, callback);
-
-    while (completions < 2) {
-        dma_engine.process_transfers(host_memory_regions, memory_banks, l3_tiles, l2_banks, scratchpads);
+    while (!complete) {
+        dma_engine.process_transfers(host_memory_regions, memory_banks, l3_tiles);
         dma_engine.set_current_cycle(dma_engine.get_current_cycle() + 1);
     }
 
-    REQUIRE(verify_scratchpad_data(scratch_small, small_data));
-    // Note: large tensor exceeds scratchpad capacity (256 KB), so we only test small
+    REQUIRE(verify_external_data(ext_dest, small_data));
 }

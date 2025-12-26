@@ -27,7 +27,7 @@ namespace sw::kpu {
 
 // Forward declarations
 class L2Bank;
-class Scratchpad;
+class L1Buffer;
 
 // Streamer for L2-L1 data movement supporting systolic array streaming
 class KPU_API Streamer {
@@ -45,7 +45,7 @@ public:
     struct StreamConfig {
         // Source and destination
         size_t l2_bank_id;
-        size_t l1_scratchpad_id;
+        size_t l1_buffer_id;
 
         // Memory layout
         Address l2_base_addr;
@@ -108,25 +108,25 @@ private:
     void initialize_stream_state(const StreamConfig& config);
     bool advance_stream_cycle(Cycle current_cycle,
                              std::vector<L2Bank>& l2_banks,
-                             std::vector<Scratchpad>& l1_scratchpads);
+                             std::vector<L1Buffer>& l1_buffers);
 
     // Row streaming implementation
     bool stream_row_l2_to_l1(Cycle current_cycle,
                             std::vector<L2Bank>& l2_banks,
-                            std::vector<Scratchpad>& l1_scratchpads);
+                            std::vector<L1Buffer>& l1_buffers);
 
     bool stream_row_l1_to_l2(Cycle current_cycle,
                             std::vector<L2Bank>& l2_banks,
-                            std::vector<Scratchpad>& l1_scratchpads);
+                            std::vector<L1Buffer>& l1_buffers);
 
     // Column streaming implementation
     bool stream_column_l2_to_l1(Cycle current_cycle,
                                std::vector<L2Bank>& l2_banks,
-                               std::vector<Scratchpad>& l1_scratchpads);
+                               std::vector<L1Buffer>& l1_buffers);
 
     bool stream_column_l1_to_l2(Cycle current_cycle,
                                std::vector<L2Bank>& l2_banks,
-                               std::vector<Scratchpad>& l1_scratchpads);
+                               std::vector<L1Buffer>& l1_buffers);
 
     // Cache line management
     void fetch_cache_line_if_needed(L2Bank& l2_bank, Address addr);
@@ -165,7 +165,7 @@ public:
     // Update streaming state - called each cycle
     bool update(Cycle current_cycle,
                std::vector<L2Bank>& l2_banks,
-               std::vector<Scratchpad>& l1_scratchpads);
+               std::vector<L1Buffer>& l1_buffers);
 
     // Status queries
     bool is_busy() const { return current_stream != nullptr || !stream_queue.empty(); }
