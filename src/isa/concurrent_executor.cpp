@@ -214,11 +214,103 @@ void ConcurrentExecutor::schedule_instruction(const DMInstruction& instr) {
             break;
         }
 
-        case DMOpcode::STR_FEED_ROWS:
-        case DMOpcode::STR_FEED_COLS:
+        case DMOpcode::STR_FEED_ROWS: {
+            // STR_FEED_ROWS feeds A matrix rows into the systolic array's left edge
+            // This is the operation that primarily drives compute for output-stationary
+            // Both A rows and B columns feed simultaneously, but we count compute here once
+            const auto& ops = std::get<StreamerOperands>(instr.operands);
+            uint8_t str_id = select_streamer(ops.matrix, ops.tile);
+            auto& str = streamers_[str_id];
+
+            // Calculate transfer cycles (existing model)
+            Cycle transfer_cycles = (transfer_size + str.bus_width_bytes - 1) / str.bus_width_bytes;
+            if (transfer_cycles == 0) transfer_cycles = 1;
+
+            // Calculate compute cycles for the tile being processed
+            // For output-stationary matmul: Ti×Tj×Tk FMAs = Ti×Tj×Tk×2 FLOPs
+            // ops.height = Ti (rows of A tile), ops.width = Tk (cols of A tile)
+            // The systolic array is fed with Tk elements per row, Ti rows total
+            // Each cycle: systolic_size² MACs (multiply-accumulate)
+            Size Ti = ops.height > 0 ? ops.height : 64;
+            Size Tk = ops.width > 0 ? ops.width : 64;
+            // Assume square output tile, Tj = Ti
+            Size Tj = Ti;
+
+            // Compute cycles: Tk iterations, each producing systolic_size² outputs
+            // Total FMAs = Ti × Tj × Tk, throughput = systolic_size²
+            uint64_t total_fmas = static_cast<uint64_t>(Ti) * Tj * Tk;
+            Size systolic_throughput = config_.systolic_size * config_.systolic_size;
+            Cycle compute_cycles = (total_fmas + systolic_throughput - 1) / systolic_throughput;
+
+            // The streamer is busy for max(transfer, compute) since they overlap
+            // Streamer feeds data while systolic computes
+            Cycle streamer_duration = std::max(transfer_cycles, compute_cycles);
+
+            // Schedule the streamer with the correct duration
+            Cycle str_start = std::max(earliest, str.next_available_cycle);
+            ScheduledOp str_op;
+            str_op.instruction_id = instr.instruction_id;
+            str_op.resource = str.id;
+            str_op.start_cycle = str_start;
+            str_op.end_cycle = str_start + streamer_duration;
+            str_op.label = instr.label;
+            str_op.matrix = ops.matrix;
+            str_op.tile = ops.tile;
+            str.completed_ops.push_back(str_op);
+            str.next_available_cycle = str_op.end_cycle;
+
+            // Schedule compute fabric for the compute portion
+            // This is the ONE compute operation for the tile (not duplicated for B)
+            Cycle comp_start = std::max(str_start, compute_fabric_.next_available_cycle);
+            ScheduledOp comp_op;
+            comp_op.instruction_id = instr.instruction_id;
+            comp_op.resource = compute_fabric_.id;
+            comp_op.start_cycle = comp_start;
+            comp_op.end_cycle = comp_start + compute_cycles;
+            comp_op.label = instr.label + "_compute";
+            comp_op.matrix = MatrixID::C;  // Compute produces C
+            comp_op.tile = ops.tile;
+            compute_fabric_.completed_ops.push_back(comp_op);
+            compute_fabric_.next_available_cycle = comp_op.end_cycle;
+
+            completion = std::max(str_op.end_cycle, comp_op.end_cycle);
+            break;
+        }
+
+        case DMOpcode::STR_FEED_COLS: {
+            // STR_FEED_COLS feeds B matrix columns into the systolic array's top edge
+            // In output-stationary dataflow, B cols are broadcast while A rows stream
+            // The compute is already counted in STR_FEED_ROWS, so this is just transfer
+            const auto& ops = std::get<StreamerOperands>(instr.operands);
+            uint8_t str_id = select_streamer(ops.matrix, ops.tile);
+            auto& str = streamers_[str_id];
+
+            // Calculate transfer cycles
+            Cycle transfer_cycles = (transfer_size + str.bus_width_bytes - 1) / str.bus_width_bytes;
+            if (transfer_cycles == 0) transfer_cycles = 1;
+
+            // For output-stationary, B is broadcast - the streamer is only busy
+            // for transfer time, as compute is gated by A row feed
+            Cycle str_start = std::max(earliest, str.next_available_cycle);
+            ScheduledOp str_op;
+            str_op.instruction_id = instr.instruction_id;
+            str_op.resource = str.id;
+            str_op.start_cycle = str_start;
+            str_op.end_cycle = str_start + transfer_cycles;
+            str_op.label = instr.label;
+            str_op.matrix = ops.matrix;
+            str_op.tile = ops.tile;
+            str.completed_ops.push_back(str_op);
+            str.next_available_cycle = str_op.end_cycle;
+
+            completion = str_op.end_cycle;
+            break;
+        }
+
         case DMOpcode::STR_DRAIN_OUTPUT:
         case DMOpcode::STR_BROADCAST_ROW:
         case DMOpcode::STR_BROADCAST_COL: {
+            // These don't involve systolic compute, just data transfer
             const auto& ops = std::get<StreamerOperands>(instr.operands);
             uint8_t str_id = select_streamer(ops.matrix, ops.tile);
             auto& str = streamers_[str_id];
@@ -229,7 +321,7 @@ void ConcurrentExecutor::schedule_instruction(const DMInstruction& instr) {
         }
 
         case DMOpcode::BARRIER: {
-            // Barrier waits for all in-flight operations
+            // Barrier waits for all in-flight operations including compute
             Cycle barrier_time = 0;
             for (const auto& mc : memory_channels_) {
                 barrier_time = std::max(barrier_time, mc.dma_engine.next_available_cycle);
@@ -240,6 +332,8 @@ void ConcurrentExecutor::schedule_instruction(const DMInstruction& instr) {
             for (const auto& str : streamers_) {
                 barrier_time = std::max(barrier_time, str.next_available_cycle);
             }
+            // Also wait for compute fabric to complete
+            barrier_time = std::max(barrier_time, compute_fabric_.next_available_cycle);
             last_barrier_cycle_ = barrier_time;
             completion = barrier_time;
             break;

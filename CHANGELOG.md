@@ -60,13 +60,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Changed exact equality to 1% tolerance for MLP kernels
   - Accounts for bias and activation FLOPs not in basic matmul calculation
 
-### Identified - 2025-12-25
-- **Critical Efficiency Bug in ConcurrentExecutor**
-  - Root cause: Executor models only data movement time, not systolic compute time
-  - `HardwareResource::schedule_op` calculates `cycles = bytes / bus_width` (transfer only)
-  - Missing: systolic array compute cycles during STR_FEED_ROWS/COLS operations
-  - Impact: Compute utilization shows 0.0%, efficiency metrics are incorrect
-  - Documented in `docs/efficiency-bug-analysis.md` with proposed fix
+### Fixed - 2025-12-25 (Session 2)
+- **Critical Efficiency Bug in ConcurrentExecutor** (RESOLVED)
+  - Modified `ConcurrentExecutor::schedule_instruction()` in `src/isa/concurrent_executor.cpp`
+  - **STR_FEED_ROWS** now calculates and schedules compute cycles:
+    - Compute cycles = Ti × Tj × Tk / systolic_size²
+    - Streamer duration = max(transfer_cycles, compute_cycles)
+    - Schedules both streamer and compute fabric operations
+  - **STR_FEED_COLS** models transfer only (output-stationary dataflow)
+    - B columns are broadcast while A rows stream
+    - Compute already counted in STR_FEED_ROWS
+  - **BARRIER** now waits for compute fabric completion
+  - Results:
+    - Before: 0% compute utilization across all sizes
+    - After: 50-76% compute utilization depending on matrix size
+    - Overhead trends from 100% (64×64) down to 31% (1024×1024)
+  - Updated `docs/efficiency-bug-analysis.md` with fix details and results
 
 ### Added - 2025-12-06
 - **CLAUDE.md Documentation File**
