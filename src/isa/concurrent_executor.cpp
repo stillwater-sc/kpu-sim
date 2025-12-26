@@ -71,17 +71,26 @@ void ConcurrentExecutor::initialize_layout_for_program(const DMProgram& program)
     layout_config.num_channels = config_.num_memory_channels;
     layout_config.num_l3_tiles = 4;  // Default
     layout_config.num_l2_banks = 8;  // Default
+
+    // Guard against zero tile dimensions (use defaults if not set)
+    Size Ti = program.Ti > 0 ? program.Ti : 64;
+    Size Tj = program.Tj > 0 ? program.Tj : 64;
+    Size Tk = program.Tk > 0 ? program.Tk : 64;
+    Size M = program.M > 0 ? program.M : Ti;
+    Size N = program.N > 0 ? program.N : Tj;
+    Size K = program.K > 0 ? program.K : Tk;
+
     // Tile size for layout: max of A tile (Ti×Tk) and B tile (Tk×Tj)
     // This is used for address allocation, not transfer size
-    Size a_tile_bytes = program.Ti * program.Tk * 4;  // Assume float32
-    Size b_tile_bytes = program.Tk * program.Tj * 4;
+    Size a_tile_bytes = Ti * Tk * 4;  // Assume float32
+    Size b_tile_bytes = Tk * Tj * 4;
     layout_config.tile_size_bytes = std::max(a_tile_bytes, b_tile_bytes);
     layout_config.element_size = 4;
 
     // Calculate tile counts
-    layout_config.m_tiles = (program.M + program.Ti - 1) / program.Ti;
-    layout_config.n_tiles = (program.N + program.Tj - 1) / program.Tj;
-    layout_config.k_tiles = (program.K + program.Tk - 1) / program.Tk;
+    layout_config.m_tiles = (M + Ti - 1) / Ti;
+    layout_config.n_tiles = (N + Tj - 1) / Tj;
+    layout_config.k_tiles = (K + Tk - 1) / Tk;
 
     // Set up channel assignments for MATRIX_PARTITIONED
     // A gets half the channels, B gets the other half (or remaining)

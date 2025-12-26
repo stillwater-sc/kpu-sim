@@ -22,6 +22,9 @@ add_subdirectory(isa)
 # Add runtime library (host-side orchestration for kernel execution)
 add_subdirectory(runtime)
 
+# Add benchmark library
+add_subdirectory(benchmark)
+
 # Keep old memory directory for backward compatibility during transition
 # add_subdirectory(memory)  # Disabled - all components moved to src/components/
 

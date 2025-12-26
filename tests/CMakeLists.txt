@@ -56,7 +56,7 @@ add_subdirectory(compiler)
 add_subdirectory(isa)
 add_subdirectory(runtime)
 add_subdirectory(integration)
-#add_subdirectory(benchmarks)
+add_subdirectory(benchmarks)
 
 # Legacy test (in this directory)
 kpu_add_component_test(legacy_test_main "legacy" test_main.cpp)
