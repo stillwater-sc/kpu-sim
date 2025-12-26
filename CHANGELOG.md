@@ -7,6 +7,67 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added - 2025-12-25
+- **Benchmark Infrastructure (Phase 7)**
+  - `include/sw/benchmark/benchmark.hpp` - Complete benchmark harness API:
+    - `BenchmarkHarness` class with systematic sweep methods
+    - `BenchmarkResult` and `BenchmarkSuite` structs for result collection
+    - `HardwareSpec` for roofline performance modeling
+    - Size sweeps, tile sensitivity analysis, activation comparisons
+  - `src/benchmark/benchmark.cpp` - Full implementation
+  - `src/benchmark/CMakeLists.txt` - Build configuration with `StillwaterKPU::Benchmark` alias
+
+- **Benchmark Test Suite**
+  - `tests/benchmarks/test_matmul_benchmarks.cpp` - 7 matmul benchmark tests:
+    - Size sweeps (64 to 2048)
+    - Tile sensitivity analysis
+    - Non-square and transformer-like dimensions
+    - Roofline analysis
+    - CSV export
+  - `tests/benchmarks/test_mlp_benchmarks.cpp` - 5 MLP benchmark tests:
+    - Activation function comparison (RELU, GELU, SIGMOID, TANH, SILU)
+    - Transformer FFN benchmarks
+    - Size sweeps with GELU
+  - `tests/benchmarks/test_graph_benchmarks.cpp` - 6 multi-kernel graph tests:
+    - Two-layer MLP graph
+    - Deep MLP (5 layers)
+    - Transformer FFN block
+    - Diamond pattern (parallel branches)
+    - Graph vs individual kernel comparison
+    - Depth scaling analysis
+
+- **Efficiency Diagnostic Tools**
+  - `tests/benchmarks/test_efficiency_diagnostic.cpp` - Comprehensive diagnostic test:
+    - Kernel/tile configuration display
+    - Theoretical vs actual cycle comparison
+    - Operation breakdown by resource type (DMA, BM, Streamer, Compute)
+    - ASCII timeline visualization
+    - Pipeline analysis (startup/drain cycles)
+  - `docs/efficiency-bug-analysis.md` - Detailed analysis of efficiency bug
+
+### Fixed - 2025-12-25
+- **String concatenation error** in `benchmark.cpp` (line 202)
+  - Changed `"mlp_" + activation_type_name()` to `std::string("mlp_") + ...`
+
+- **CMake test registration** in `tests/benchmarks/CMakeLists.txt`
+  - Changed from `catch_discover_tests()` to `add_test()` pattern for compatibility
+
+- **Division by zero in executor** (`concurrent_executor.cpp:82-84`)
+  - Added guards for zero tile dimensions in `initialize_layout_for_program()`
+  - Uses default 64 for Ti/Tj/Tk if program dimensions are 0
+
+- **FLOP count tolerance** in `test_graph_benchmarks.cpp`
+  - Changed exact equality to 1% tolerance for MLP kernels
+  - Accounts for bias and activation FLOPs not in basic matmul calculation
+
+### Identified - 2025-12-25
+- **Critical Efficiency Bug in ConcurrentExecutor**
+  - Root cause: Executor models only data movement time, not systolic compute time
+  - `HardwareResource::schedule_op` calculates `cycles = bytes / bus_width` (transfer only)
+  - Missing: systolic array compute cycles during STR_FEED_ROWS/COLS operations
+  - Impact: Compute utilization shows 0.0%, efficiency metrics are incorrect
+  - Documented in `docs/efficiency-bug-analysis.md` with proposed fix
+
 ### Added - 2025-12-06
 - **CLAUDE.md Documentation File**
   - Created `CLAUDE.md` for Claude Code guidance when working in this repository
