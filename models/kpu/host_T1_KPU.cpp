@@ -1,5 +1,5 @@
 /**
- * @file host_t100_autonomous.cpp
+ * @file host_T1_KPU.cpp
  * @brief Autonomous execution model for Host + KPU T1 system
  *
  * This model demonstrates how the KPU hardware actually executes: autonomous

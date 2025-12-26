@@ -143,6 +143,26 @@ KPUSimulator::Config KPUConfigLoader::parse_json(const nlohmann::json& j) {
     config.processor_array_cols = get_nested_or_default<Size>(j, "compute", "processor_array", "cols", 0);
     config.use_systolic_array_mode = get_nested_or_default<bool>(j, "compute", "systolic_mode", false);
 
+    // Parse topology (default: rectangular)
+    std::string topology_str = get_nested_or_default<std::string>(j, "compute", "processor_array", "topology", "rectangular");
+    try {
+        config.processor_array_topology = topology_from_string(topology_str);
+    } catch (...) {
+        config.processor_array_topology = ProcessorArrayTopology::RECTANGULAR;
+    }
+
+    // Auto-compute L1 buffer count if not explicitly set
+    // L1 buffers are derived from processor array configuration
+    if (config.l1_buffer_count == 0 && config.compute_tile_count > 0 &&
+        config.processor_array_rows > 0) {
+        config.l1_buffer_count = compute_l1_buffer_count(
+            config.processor_array_topology,
+            config.processor_array_rows,
+            config.processor_array_cols,
+            config.compute_tile_count
+        );
+    }
+
     // Address map (optional)
     if (j.contains("address_map")) {
         const auto& am = j["address_map"];
@@ -192,6 +212,7 @@ nlohmann::json KPUConfigLoader::to_json(const KPUSimulator::Config& config) {
     j["compute"]["tile_count"] = config.compute_tile_count;
     j["compute"]["processor_array"]["rows"] = config.processor_array_rows;
     j["compute"]["processor_array"]["cols"] = config.processor_array_cols;
+    j["compute"]["processor_array"]["topology"] = topology_to_string(config.processor_array_topology);
     j["compute"]["systolic_mode"] = config.use_systolic_array_mode;
 
     // Address map (only if non-default)
@@ -390,6 +411,26 @@ void KPUConfigLoader::validate_config(const KPUSimulator::Config& config,
         result.warnings.push_back("Compute tiles configured but no L1 buffers");
     }
 
+    // Validate L1 buffer count matches processor array configuration
+    if (config.l1_buffer_count > 0 && config.compute_tile_count > 0 &&
+        config.processor_array_rows > 0) {
+        Size expected_l1_count = compute_l1_buffer_count(
+            config.processor_array_topology,
+            config.processor_array_rows,
+            config.processor_array_cols,
+            config.compute_tile_count
+        );
+        if (config.l1_buffer_count != expected_l1_count) {
+            result.warnings.push_back(
+                "L1 buffer count mismatch: configured " +
+                std::to_string(config.l1_buffer_count) +
+                " but processor array requires " +
+                std::to_string(expected_l1_count) +
+                " (4 × (rows + cols) × compute_tiles for rectangular arrays)"
+            );
+        }
+    }
+
     if (config.l2_bank_count == 0 && config.l1_buffer_count > 0) {
         result.warnings.push_back("L1 buffers configured but no L2 banks");
     }
@@ -424,121 +465,148 @@ bool KPUConfigLoader::is_json_file(const std::filesystem::path& file_path) {
 // =========================================
 
 KPUSimulator::Config KPUConfigLoader::create_minimal() {
+    // Minimal configuration: smallest viable KPU for testing
+    // 1 compute tile, 8×8 array, 1 L3 tile, 4 L2 banks
     KPUSimulator::Config config;
 
-    // Host memory
+    // Host memory (minimal for testing)
     config.host_memory_region_count = 1;
-    config.host_memory_region_capacity_mb = 256;
-    config.host_memory_bandwidth_gbps = 50;
-
-    // External memory
-    config.memory_bank_count = 2;
-    config.memory_bank_capacity_mb = 512;
-    config.memory_bandwidth_gbps = 100;
-
-    // Memory controller
-    config.memory_controller_count = 1;
-    config.page_buffer_count = 2;
-    config.page_buffer_capacity_kb = 32;
-
-    // On-chip memory
-    config.l3_tile_count = 4;
-    config.l3_tile_capacity_kb = 128;
-    config.l2_bank_count = 8;
-    config.l2_bank_capacity_kb = 64;
-    config.l1_buffer_count = 4;
-    config.l1_buffer_capacity_kb = 64;
-
-    // Data movement
-    config.dma_engine_count = 2;
-    config.block_mover_count = 4;
-    config.streamer_count = 8;
-
-    // Compute
-    config.compute_tile_count = 1;
-    config.processor_array_rows = 16;
-    config.processor_array_cols = 16;
-    config.use_systolic_array_mode = true;
-
-    return config;
-}
-
-KPUSimulator::Config KPUConfigLoader::create_edge_ai() {
-    KPUSimulator::Config config;
-
-    // Host memory (embedded)
-    config.host_memory_region_count = 1;
-    config.host_memory_region_capacity_mb = 512;
+    config.host_memory_region_capacity_mb = 128;
     config.host_memory_bandwidth_gbps = 25;
 
-    // External memory (LPDDR5)
-    config.memory_bank_count = 2;
+    // External memory (single GDDR6 channel)
+    config.memory_bank_count = 1;
     config.memory_bank_capacity_mb = 256;
     config.memory_bandwidth_gbps = 50;
 
     // Memory controller
     config.memory_controller_count = 1;
-    config.page_buffer_count = 4;
+    config.page_buffer_count = 2;
     config.page_buffer_capacity_kb = 16;
 
-    // On-chip memory (compact)
-    config.l3_tile_count = 2;
+    // Compute: 1 tile, 8×8 array
+    config.compute_tile_count = 1;
+    config.processor_array_rows = 8;
+    config.processor_array_cols = 8;
+    config.processor_array_topology = ProcessorArrayTopology::RECTANGULAR;
+    config.use_systolic_array_mode = true;
+
+    // On-chip memory: 1 L3 tile, 4 L2 banks (to match streamer bandwidth)
+    config.l3_tile_count = 1;
     config.l3_tile_capacity_kb = 64;
     config.l2_bank_count = 4;
     config.l2_bank_capacity_kb = 32;
-    config.l1_buffer_count = 2;
+    // L1 buffers: 4 × (8 + 8) × 1 tile = 64
+    config.l1_buffer_count = compute_l1_buffer_count(
+        config.processor_array_topology,
+        config.processor_array_rows,
+        config.processor_array_cols,
+        config.compute_tile_count
+    );
     config.l1_buffer_capacity_kb = 32;
 
     // Data movement (minimal)
     config.dma_engine_count = 1;
-    config.block_mover_count = 2;
+    config.block_mover_count = 1;
     config.streamer_count = 4;
 
-    // Compute (small array for power efficiency)
-    config.compute_tile_count = 1;
-    config.processor_array_rows = 8;
-    config.processor_array_cols = 8;
+    return config;
+}
+
+KPUSimulator::Config KPUConfigLoader::create_edge_ai() {
+    // Edge AI configuration: 2 compute tiles for power-efficient inference
+    // 2 tiles, 16×16 arrays, 2 L3 tiles, 8 L2 banks per L3 (16 total)
+    KPUSimulator::Config config;
+
+    // Host memory (embedded system)
+    config.host_memory_region_count = 1;
+    config.host_memory_region_capacity_mb = 512;
+    config.host_memory_bandwidth_gbps = 50;
+
+    // External memory (LPDDR5 dual channel)
+    config.memory_bank_count = 2;
+    config.memory_bank_capacity_mb = 512;
+    config.memory_bandwidth_gbps = 100;
+
+    // Memory controller
+    config.memory_controller_count = 2;
+    config.page_buffer_count = 4;
+    config.page_buffer_capacity_kb = 32;
+
+    // Compute: 2 tiles, 16×16 arrays
+    config.compute_tile_count = 2;
+    config.processor_array_rows = 16;
+    config.processor_array_cols = 16;
+    config.processor_array_topology = ProcessorArrayTopology::RECTANGULAR;
     config.use_systolic_array_mode = true;
+
+    // On-chip memory: 2 L3 tiles, 8 L2 banks per L3 (16 total)
+    config.l3_tile_count = 2;
+    config.l3_tile_capacity_kb = 128;
+    config.l2_bank_count = 16;  // 8 per L3 tile
+    config.l2_bank_capacity_kb = 64;
+    // L1 buffers: 4 × (16 + 16) × 2 tiles = 256
+    config.l1_buffer_count = compute_l1_buffer_count(
+        config.processor_array_topology,
+        config.processor_array_rows,
+        config.processor_array_cols,
+        config.compute_tile_count
+    );
+    config.l1_buffer_capacity_kb = 64;
+
+    // Data movement
+    config.dma_engine_count = 2;
+    config.block_mover_count = 4;
+    config.streamer_count = 16;
 
     return config;
 }
 
 KPUSimulator::Config KPUConfigLoader::create_datacenter() {
+    // Datacenter configuration: massive parallel compute
+    // 256 tiles (16×16 checkerboard), 32×32 arrays, 256 L3 tiles, 16 L2 banks per L3
     KPUSimulator::Config config;
 
-    // Host memory (NUMA)
-    config.host_memory_region_count = 2;
-    config.host_memory_region_capacity_mb = 4096;
-    config.host_memory_bandwidth_gbps = 100;
+    // Host memory (NUMA, large capacity)
+    config.host_memory_region_count = 4;
+    config.host_memory_region_capacity_mb = 16384;  // 16GB per region = 64GB total
+    config.host_memory_bandwidth_gbps = 200;
 
-    // External memory (HBM3)
-    config.memory_bank_count = 8;
-    config.memory_bank_capacity_mb = 2048;
-    config.memory_bandwidth_gbps = 400;
+    // External memory (6 HBM3 channels @ 800 GB/s each = 4.8 TB/s)
+    config.memory_bank_count = 6;
+    config.memory_bank_capacity_mb = 4096;  // 4GB per channel = 24GB total
+    config.memory_bandwidth_gbps = 800;
 
-    // Memory controller
-    config.memory_controller_count = 8;
-    config.page_buffer_count = 16;
-    config.page_buffer_capacity_kb = 64;
+    // Memory controller (one per HBM channel)
+    config.memory_controller_count = 6;
+    config.page_buffer_count = 32;
+    config.page_buffer_capacity_kb = 128;
 
-    // On-chip memory (large)
-    config.l3_tile_count = 16;
-    config.l3_tile_capacity_kb = 512;
-    config.l2_bank_count = 64;
-    config.l2_bank_capacity_kb = 128;
-    config.l1_buffer_count = 32;
-    config.l1_buffer_capacity_kb = 128;
-
-    // Data movement
-    config.dma_engine_count = 8;
-    config.block_mover_count = 16;
-    config.streamer_count = 64;
-
-    // Compute (large array)
-    config.compute_tile_count = 4;
+    // Compute: 256 tiles (16×16 checkerboard), 32×32 arrays each
+    config.compute_tile_count = 256;
     config.processor_array_rows = 32;
     config.processor_array_cols = 32;
+    config.processor_array_topology = ProcessorArrayTopology::RECTANGULAR;
     config.use_systolic_array_mode = true;
+
+    // On-chip memory: 256 L3 tiles, 16 L2 banks per L3 (4096 total)
+    config.l3_tile_count = 256;
+    config.l3_tile_capacity_kb = 512;
+    config.l2_bank_count = 4096;  // 16 per L3 tile
+    config.l2_bank_capacity_kb = 128;
+    // L1 buffers: 4 × (32 + 32) × 256 tiles = 65,536
+    config.l1_buffer_count = compute_l1_buffer_count(
+        config.processor_array_topology,
+        config.processor_array_rows,
+        config.processor_array_cols,
+        config.compute_tile_count
+    );
+    config.l1_buffer_capacity_kb = 128;
+
+    // Data movement (scaled for 256 tiles)
+    config.dma_engine_count = 32;
+    config.block_mover_count = 256;  // 1 per L3 tile
+    config.streamer_count = 1024;    // 4 per L3 tile
 
     return config;
 }
@@ -570,6 +638,13 @@ KPUSimulator::Config KPUConfigLoader::create_for_matmul(Size m, Size n, Size k, 
     config.page_buffer_count = 2;
     config.page_buffer_capacity_kb = 32;
 
+    // Compute
+    config.compute_tile_count = 1;
+    config.processor_array_rows = array_size;
+    config.processor_array_cols = array_size;
+    config.processor_array_topology = ProcessorArrayTopology::RECTANGULAR;
+    config.use_systolic_array_mode = true;
+
     // On-chip memory (sized for tiling)
     Size tile_bytes = array_size * array_size * sizeof(float);
     Size l1_capacity_kb = (tile_bytes / 1024) + 1;
@@ -580,19 +655,19 @@ KPUSimulator::Config KPUConfigLoader::create_for_matmul(Size m, Size n, Size k, 
     config.l3_tile_capacity_kb = l3_capacity_kb;
     config.l2_bank_count = 8;
     config.l2_bank_capacity_kb = l2_capacity_kb;
-    config.l1_buffer_count = 4;
+    // L1 buffers derived from array size
+    config.l1_buffer_count = compute_l1_buffer_count(
+        config.processor_array_topology,
+        config.processor_array_rows,
+        config.processor_array_cols,
+        config.compute_tile_count
+    );
     config.l1_buffer_capacity_kb = l1_capacity_kb;
 
     // Data movement
     config.dma_engine_count = 2;
     config.block_mover_count = 4;
     config.streamer_count = 8;
-
-    // Compute
-    config.compute_tile_count = 1;
-    config.processor_array_rows = array_size;
-    config.processor_array_cols = array_size;
-    config.use_systolic_array_mode = true;
 
     return config;
 }

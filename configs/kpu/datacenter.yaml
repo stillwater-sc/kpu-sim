@@ -1,63 +1,66 @@
 # KPU Simulator Configuration - Datacenter
-# High-performance configuration with HBM and multiple compute tiles
+# Massive parallel configuration for high-performance inference and training
+# 256 tiles (16x16 checkerboard), 32x32 arrays, 256 L3 tiles, 16 L2 banks per L3
 
 name: "Datacenter KPU"
-description: "Multi-tile HBM configuration for high-performance inference"
+description: "256-tile configuration for datacenter-scale AI workloads"
 
-# Host system memory
+# Host system memory (NUMA, large capacity)
 host_memory:
-  region_count: 2          # NUMA regions
-  region_capacity_mb: 4096 # 4GB per region
-  bandwidth_gbps: 100
+  region_count: 4
+  region_capacity_mb: 16384    # 16GB per region = 64GB total
+  bandwidth_gbps: 200
 
-# External memory (HBM3)
+# External memory (6 HBM3 channels @ 800 GB/s each = 4.8 TB/s)
 external_memory:
-  bank_count: 8            # 8 HBM stacks
-  bank_capacity_mb: 2048   # 2GB per stack = 16GB total
-  bandwidth_gbps: 400      # 400 GB/s per stack
+  bank_count: 6
+  bank_capacity_mb: 4096       # 4GB per channel = 24GB total
+  bandwidth_gbps: 800
 
-# Memory controller configuration
+# Memory controller configuration (one per HBM channel)
 memory_controller:
-  controller_count: 8
-  page_buffer_count: 16
-  page_buffer_capacity_kb: 64
+  controller_count: 6
+  page_buffer_count: 32
+  page_buffer_capacity_kb: 128
 
 # On-chip memory hierarchy
 on_chip_memory:
-  # L3: Software-managed global buffer (larger for tiling)
+  # L3: Software-managed global buffer (256 tiles, one per compute tile)
   l3:
-    tile_count: 16
+    tile_count: 256
     tile_capacity_kb: 512
 
-  # L2: Software-managed tile buffer
+  # L2: Software-managed tile buffer (16 banks per L3 = 4096 total)
   l2:
-    bank_count: 64
+    bank_count: 4096
     bank_capacity_kb: 128
 
   # L1: Streaming buffers in compute fabric
+  # buffer_count is DERIVED: 4 * (rows + cols) * tiles
+  # For 32x32 array with 256 tiles: 4 * (32 + 32) * 256 = 65,536 buffers
   l1:
-    buffer_count: 32
     buffer_capacity_kb: 128
 
-# Data movement engines
+# Data movement engines (scaled for 256 tiles)
 data_movement:
-  dma_engine_count: 8
-  block_mover_count: 16
-  streamer_count: 64
+  dma_engine_count: 32
+  block_mover_count: 256       # 1 per L3 tile
+  streamer_count: 1024         # 4 per L3 tile
 
-# Compute fabric configuration
+# Compute fabric configuration (16x16 checkerboard of 256 tiles)
 compute:
-  tile_count: 4
+  tile_count: 256
   processor_array:
     rows: 32
     cols: 32
+    topology: rectangular
   systolic_mode: true
 
 # Custom address map for easier debugging
 address_map:
   host_memory_base: 0x0000000000000000     # 0GB - Host memory
-  external_memory_base: 0x0000000400000000 # 16GB - External HBM
-  l3_tile_base: 0x0000000800000000         # 32GB - L3 tiles
-  l2_bank_base: 0x0000000900000000         # 36GB - L2 banks
-  l1_buffer_base: 0x0000000A00000000       # 40GB - L1 buffers
-  page_buffer_base: 0x0000000B00000000     # 44GB - Page buffers
+  external_memory_base: 0x0000001000000000 # 64GB - External HBM
+  l3_tile_base: 0x0000002000000000         # 128GB - L3 tiles
+  l2_bank_base: 0x0000003000000000         # 192GB - L2 banks
+  l1_buffer_base: 0x0000004000000000       # 256GB - L1 buffers
+  page_buffer_base: 0x0000005000000000     # 320GB - Page buffers

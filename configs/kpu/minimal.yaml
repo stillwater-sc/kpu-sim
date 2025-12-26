@@ -1,64 +1,57 @@
 # KPU Simulator Configuration - Minimal
-# A basic single-tile configuration for testing and development
+# Smallest viable KPU for testing and development
+# 1 tile, 8x8 array, 1 L3 tile, 4 L2 banks
 
 name: "Minimal KPU"
 description: "Single compute tile, minimal memory for basic testing"
 
-# Host system memory (optional - for host-to-device transfers)
+# Host system memory (minimal for testing)
 host_memory:
   region_count: 1
-  region_capacity_mb: 256
-  bandwidth_gbps: 50
+  region_capacity_mb: 128
+  bandwidth_gbps: 25
 
-# External memory (KPU local memory - GDDR/HBM)
+# External memory (single GDDR6 channel)
 external_memory:
-  bank_count: 2
-  bank_capacity_mb: 512
-  bandwidth_gbps: 100
+  bank_count: 1
+  bank_capacity_mb: 256
+  bandwidth_gbps: 50
 
 # Memory controller configuration
 memory_controller:
   controller_count: 1
   page_buffer_count: 2
-  page_buffer_capacity_kb: 32
+  page_buffer_capacity_kb: 16
 
 # On-chip memory hierarchy
 on_chip_memory:
   # L3: Software-managed global buffer
   l3:
-    tile_count: 4
-    tile_capacity_kb: 128
+    tile_count: 1
+    tile_capacity_kb: 64
 
-  # L2: Software-managed tile buffer
+  # L2: Software-managed tile buffer (4 banks to match streamer bandwidth)
   l2:
-    bank_count: 8
-    bank_capacity_kb: 64
+    bank_count: 4
+    bank_capacity_kb: 32
 
   # L1: Streaming buffers in compute fabric
+  # buffer_count is DERIVED from processor array: 4 * (rows + cols) * tiles
+  # For 8x8 array with 1 tile: 4 * (8 + 8) * 1 = 64 buffers
   l1:
-    buffer_count: 4
-    buffer_capacity_kb: 64
+    buffer_capacity_kb: 32
 
-# Data movement engines
+# Data movement engines (minimal)
 data_movement:
-  dma_engine_count: 2
-  block_mover_count: 4
-  streamer_count: 8
+  dma_engine_count: 1
+  block_mover_count: 1
+  streamer_count: 4
 
 # Compute fabric configuration
 compute:
   tile_count: 1
   processor_array:
-    rows: 16
-    cols: 16
+    rows: 8
+    cols: 8
+    topology: rectangular
   systolic_mode: true
-
-# Optional: Custom base addresses for memory map (debugging)
-# If not specified, addresses are computed sequentially
-# address_map:
-#   host_memory_base: 0x0000000000000000
-#   external_memory_base: 0x0000000100000000
-#   l3_tile_base: 0x0000000200000000
-#   l2_bank_base: 0x0000000300000000
-#   l1_buffer_base: 0x0000000400000000
-#   page_buffer_base: 0x0000000500000000

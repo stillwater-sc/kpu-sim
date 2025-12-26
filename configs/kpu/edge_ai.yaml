@@ -1,51 +1,57 @@
 # KPU Simulator Configuration - Edge AI
 # Power-efficient configuration for edge inference
+# 2 tiles, 16x16 arrays, 2 L3 tiles, 8 L2 banks per L3 (16 total)
 
 name: "Edge AI KPU"
-description: "Compact configuration for edge AI inference"
+description: "Dual-tile configuration for edge AI inference"
 
-# Host system memory (embedded)
+# Host system memory (embedded system)
 host_memory:
   region_count: 1
   region_capacity_mb: 512
-  bandwidth_gbps: 25
+  bandwidth_gbps: 50
 
-# External memory (LPDDR5)
+# External memory (LPDDR5 dual channel)
 external_memory:
   bank_count: 2
-  bank_capacity_mb: 256
-  bandwidth_gbps: 50
+  bank_capacity_mb: 512
+  bandwidth_gbps: 100
 
 # Memory controller configuration
 memory_controller:
-  controller_count: 1
+  controller_count: 2
   page_buffer_count: 4
-  page_buffer_capacity_kb: 16
+  page_buffer_capacity_kb: 32
 
-# On-chip memory hierarchy (compact)
+# On-chip memory hierarchy
 on_chip_memory:
+  # L3: Software-managed global buffer (2 tiles)
   l3:
     tile_count: 2
-    tile_capacity_kb: 64
+    tile_capacity_kb: 128
 
+  # L2: Software-managed tile buffer (8 banks per L3 = 16 total)
   l2:
-    bank_count: 4
-    bank_capacity_kb: 32
+    bank_count: 16
+    bank_capacity_kb: 64
 
+  # L1: Streaming buffers in compute fabric
+  # buffer_count is DERIVED: 4 * (rows + cols) * tiles
+  # For 16x16 array with 2 tiles: 4 * (16 + 16) * 2 = 256 buffers
   l1:
-    buffer_count: 2
-    buffer_capacity_kb: 32
+    buffer_capacity_kb: 64
 
-# Data movement engines (minimal)
+# Data movement engines
 data_movement:
-  dma_engine_count: 1
-  block_mover_count: 2
-  streamer_count: 4
+  dma_engine_count: 2
+  block_mover_count: 4
+  streamer_count: 16
 
-# Compute fabric configuration (small array for power efficiency)
+# Compute fabric configuration
 compute:
-  tile_count: 1
+  tile_count: 2
   processor_array:
-    rows: 8
-    cols: 8
+    rows: 16
+    cols: 16
+    topology: rectangular
   systolic_mode: true

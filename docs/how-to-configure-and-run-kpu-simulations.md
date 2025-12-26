@@ -81,13 +81,14 @@ memory_controller:
 # On-chip memory hierarchy
 on_chip_memory:
   l3:
-    tile_count: 4
+    tile_count: 2
     tile_capacity_kb: 128
   l2:
     bank_count: 8
     bank_capacity_kb: 64
+  # L1 buffer_count is DERIVED from processor array configuration
+  # For 16x16 array with 1 tile: 4 * (16 + 16) * 1 = 128 buffers
   l1:
-    buffer_count: 4
     buffer_capacity_kb: 64
 
 # Data movement engines
@@ -102,6 +103,7 @@ compute:
   processor_array:
     rows: 16
     cols: 16
+    topology: rectangular  # rectangular or hexagonal
   systolic_mode: true
 ```
 
@@ -130,7 +132,7 @@ For programmatic configuration or integration with other tools:
   },
   "on_chip_memory": {
     "l3": {
-      "tile_count": 4,
+      "tile_count": 2,
       "tile_capacity_kb": 128
     },
     "l2": {
@@ -138,7 +140,6 @@ For programmatic configuration or integration with other tools:
       "bank_capacity_kb": 64
     },
     "l1": {
-      "buffer_count": 4,
       "buffer_capacity_kb": 64
     }
   },
@@ -151,12 +152,16 @@ For programmatic configuration or integration with other tools:
     "tile_count": 1,
     "processor_array": {
       "rows": 16,
-      "cols": 16
+      "cols": 16,
+      "topology": "rectangular"
     },
     "systolic_mode": true
   }
 }
 ```
+
+Note: The `l1.buffer_count` field is **derived** from the processor array configuration and should not be set manually. It is computed as:
+`L1_buffers = 4 × (rows + cols) × compute_tiles`
 
 ## Configuration Parameters
 
@@ -170,61 +175,79 @@ For programmatic configuration or integration with other tools:
 | **external_memory** | bank_count | Number of GDDR/HBM banks | 2-16 |
 | | bank_capacity_mb | Capacity per bank (MB) | 256-4096 |
 | | bandwidth_gbps | Memory bandwidth (GB/s) | 100-1000 |
-| **on_chip_memory.l3** | tile_count | Global buffer tiles | 2-16 |
+| **on_chip_memory.l3** | tile_count | Global buffer tiles | 1-256 |
 | | tile_capacity_kb | Capacity per tile (KB) | 64-512 |
-| **on_chip_memory.l2** | bank_count | Tile buffer banks | 4-64 |
+| **on_chip_memory.l2** | bank_count | Tile buffer banks | 4-4096 |
 | | bank_capacity_kb | Capacity per bank (KB) | 32-128 |
-| **on_chip_memory.l1** | buffer_count | Streaming buffers | 2-32 |
+| **on_chip_memory.l1** | buffer_count | **DERIVED** - see below | - |
 | | buffer_capacity_kb | Capacity per buffer (KB) | 32-128 |
+
+### L1 Buffer Count (Derived Property)
+
+L1 streaming buffers are **automatically derived** from the processor array configuration. Do not set `buffer_count` manually - it will be computed:
+
+**Formula**: `L1_buffers = 4 × (rows + cols) × compute_tiles`
+
+Each edge (TOP/BOTTOM/LEFT/RIGHT) has ingress and egress buffers:
+- TOP edge: `cols` ingress (B weights) + `cols` egress (C output)
+- BOTTOM edge: `cols` ingress + `cols` egress
+- LEFT edge: `rows` ingress (A inputs) + `rows` egress
+- RIGHT edge: `rows` ingress + `rows` egress
+
+**Examples**:
+- 8×8 array, 1 tile (minimal): 4 × (8+8) × 1 = **64 L1 buffers**
+- 16×16 array, 2 tiles (edge_ai): 4 × (16+16) × 2 = **256 L1 buffers**
+- 32×32 array, 256 tiles (datacenter): 4 × (32+32) × 256 = **65,536 L1 buffers**
 
 ### Data Movement
 
 | Parameter | Description | Typical Values |
 |-----------|-------------|----------------|
-| dma_engine_count | DMA engines for external transfers | 2-8 |
-| block_mover_count | L3↔L2 block movers | 4-16 |
-| streamer_count | L2↔L1 streamers | 4-32 |
+| dma_engine_count | DMA engines for external transfers | 1-32 |
+| block_mover_count | L3↔L2 block movers | 1-256 |
+| streamer_count | L2↔L1 streamers | 4-1024 |
 
 ### Compute
 
 | Parameter | Description | Typical Values |
 |-----------|-------------|----------------|
-| tile_count | Number of compute tiles | 1-8 |
+| tile_count | Number of compute tiles | 1-256 |
 | processor_array.rows | Systolic array rows | 8-64 |
 | processor_array.cols | Systolic array columns | 8-64 |
+| processor_array.topology | Array layout (rectangular or hexagonal) | rectangular |
 | systolic_mode | Enable systolic data flow | true/false |
 
 ## Factory Configurations
 
-Three factory configurations are provided for common use cases:
+Three factory configurations are provided for common use cases, forming a proper progression from small to large:
 
 ### Minimal (`--factory minimal`)
 
-Single compute tile with minimal resources for testing and development:
+Smallest viable KPU for testing and development:
 
-- 1 compute tile (16×16 systolic array)
-- 2 external memory banks (512 MB each)
-- 4 L3 tiles, 8 L2 banks, 4 L1 buffers
-- Best for: Unit testing, small matrix operations
+- 1 compute tile (8×8 rectangular systolic array)
+- 1 external memory bank (256 MB, GDDR6)
+- 1 L3 tile, 4 L2 banks, **64 L1 buffers** (derived: 4×(8+8)×1)
+- Best for: Unit testing, small matrix operations, development
 
 ### Edge AI (`--factory edge_ai`)
 
-Power-efficient configuration for edge deployment:
+Dual-tile configuration for edge AI inference:
 
-- 1 compute tile (16×16 systolic array)
-- 2 external memory banks (256 MB each)
-- 2 L3 tiles, 4 L2 banks, 2 L1 buffers
-- Lower bandwidth settings for power efficiency
+- 2 compute tiles (16×16 rectangular systolic arrays each)
+- 2 external memory banks (512 MB each, LPDDR5)
+- 2 L3 tiles, 16 L2 banks (8 per L3), **256 L1 buffers** (derived: 4×(16+16)×2)
+- Power-efficient bandwidth settings (100 GB/s)
 - Best for: Mobile/embedded AI, edge inference
 
 ### Datacenter (`--factory datacenter`)
 
-High-performance configuration with HBM memory:
+256-tile configuration for datacenter-scale AI workloads:
 
-- 4 compute tiles (16×16 systolic arrays)
-- 8 external memory banks (2 GB each)
-- 16 L3 tiles, 64 L2 banks, 32 L1 buffers
-- 800 GB/s memory bandwidth
+- 256 compute tiles (32×32 rectangular systolic arrays each) in 16×16 checkerboard
+- 6 HBM3 channels (4 GB each, 24 GB total)
+- 256 L3 tiles, 4096 L2 banks (16 per L3), **65,536 L1 buffers** (derived: 4×(32+32)×256)
+- 4.8 TB/s memory bandwidth (800 GB/s per channel)
 - Best for: Training, large batch inference, datacenter workloads
 
 ## KPU Runner Command Reference

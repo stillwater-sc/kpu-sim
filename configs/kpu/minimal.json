@@ -4,48 +4,48 @@
 
   "host_memory": {
     "region_count": 1,
-    "region_capacity_mb": 256,
-    "bandwidth_gbps": 50
+    "region_capacity_mb": 128,
+    "bandwidth_gbps": 25
   },
 
   "external_memory": {
-    "bank_count": 2,
-    "bank_capacity_mb": 512,
-    "bandwidth_gbps": 100
+    "bank_count": 1,
+    "bank_capacity_mb": 256,
+    "bandwidth_gbps": 50
   },
 
   "memory_controller": {
     "controller_count": 1,
     "page_buffer_count": 2,
-    "page_buffer_capacity_kb": 32
+    "page_buffer_capacity_kb": 16
   },
 
   "on_chip_memory": {
     "l3": {
-      "tile_count": 4,
-      "tile_capacity_kb": 128
+      "tile_count": 1,
+      "tile_capacity_kb": 64
     },
     "l2": {
-      "bank_count": 8,
-      "bank_capacity_kb": 64
+      "bank_count": 4,
+      "bank_capacity_kb": 32
     },
     "l1": {
-      "buffer_count": 4,
-      "buffer_capacity_kb": 64
+      "buffer_capacity_kb": 32
     }
   },
 
   "data_movement": {
-    "dma_engine_count": 2,
-    "block_mover_count": 4,
-    "streamer_count": 8
+    "dma_engine_count": 1,
+    "block_mover_count": 1,
+    "streamer_count": 4
   },
 
   "compute": {
     "tile_count": 1,
     "processor_array": {
-      "rows": 16,
-      "cols": 16
+      "rows": 8,
+      "cols": 8,
+      "topology": "rectangular"
     },
     "systolic_mode": true
   }

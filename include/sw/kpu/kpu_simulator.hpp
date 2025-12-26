@@ -24,6 +24,7 @@
 
 #include <sw/concepts.hpp>
 #include <sw/kpu/data_types.hpp>
+#include <sw/kpu/processor_array_topology.hpp>
 #include <sw/memory/external_memory.hpp>
 #include <sw/memory/address_decoder.hpp>
 //#include <sw/kpu/components/scratchpad.hpp>  a basic sofware-managed memory pattern. 
@@ -71,7 +72,11 @@ public:
         Size l3_tile_capacity_kb;
         Size l2_bank_count;
         Size l2_bank_capacity_kb;
-        Size l1_buffer_count;           // L1 streaming buffers: part of compute fabric, one for each row and column in a compute tile
+        // L1 streaming buffers: DERIVED from processor array configuration
+        // For rectangular arrays: 4 × (rows + cols) per compute tile
+        // For hexagonal arrays: 12 × side_length per compute tile
+        // See processor_array_topology.hpp for derivation formulas
+        Size l1_buffer_count;           // Auto-computed if 0; set only for testing
         Size l1_buffer_capacity_kb;
 
         // Data movement engines
@@ -85,6 +90,7 @@ public:
         // Compute tile array configuration
         Size processor_array_rows;
         Size processor_array_cols;
+        ProcessorArrayTopology processor_array_topology;
         bool use_systolic_array_mode;
 
         // Programmable memory map base addresses (for debugging/testing)
@@ -110,6 +116,7 @@ public:
               dma_engine_count(0), block_mover_count(0), streamer_count(0),
               compute_tile_count(0),
               processor_array_rows(0), processor_array_cols(0),
+              processor_array_topology(ProcessorArrayTopology::RECTANGULAR),
               use_systolic_array_mode(false),
               host_memory_base(0), external_memory_base(0), l3_tile_base(0),
               l2_bank_base(0), l1_buffer_base(0), page_buffer_base(0) {}
