@@ -1,0 +1,51 @@
+# KPU Simulator Configuration - Edge AI
+# Power-efficient configuration for edge inference
+
+name: "Edge AI KPU"
+description: "Compact configuration for edge AI inference"
+
+# Host system memory (embedded)
+host_memory:
+  region_count: 1
+  region_capacity_mb: 512
+  bandwidth_gbps: 25
+
+# External memory (LPDDR5)
+external_memory:
+  bank_count: 2
+  bank_capacity_mb: 256
+  bandwidth_gbps: 50
+
+# Memory controller configuration
+memory_controller:
+  controller_count: 1
+  page_buffer_count: 4
+  page_buffer_capacity_kb: 16
+
+# On-chip memory hierarchy (compact)
+on_chip_memory:
+  l3:
+    tile_count: 2
+    tile_capacity_kb: 64
+
+  l2:
+    bank_count: 4
+    bank_capacity_kb: 32
+
+  l1:
+    buffer_count: 2
+    buffer_capacity_kb: 32
+
+# Data movement engines (minimal)
+data_movement:
+  dma_engine_count: 1
+  block_mover_count: 2
+  streamer_count: 4
+
+# Compute fabric configuration (small array for power efficiency)
+compute:
+  tile_count: 1
+  processor_array:
+    rows: 8
+    cols: 8
+  systolic_mode: true

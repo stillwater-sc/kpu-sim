@@ -1,0 +1,64 @@
+# KPU Simulator Configuration - Minimal
+# A basic single-tile configuration for testing and development
+
+name: "Minimal KPU"
+description: "Single compute tile, minimal memory for basic testing"
+
+# Host system memory (optional - for host-to-device transfers)
+host_memory:
+  region_count: 1
+  region_capacity_mb: 256
+  bandwidth_gbps: 50
+
+# External memory (KPU local memory - GDDR/HBM)
+external_memory:
+  bank_count: 2
+  bank_capacity_mb: 512
+  bandwidth_gbps: 100
+
+# Memory controller configuration
+memory_controller:
+  controller_count: 1
+  page_buffer_count: 2
+  page_buffer_capacity_kb: 32
+
+# On-chip memory hierarchy
+on_chip_memory:
+  # L3: Software-managed global buffer
+  l3:
+    tile_count: 4
+    tile_capacity_kb: 128
+
+  # L2: Software-managed tile buffer
+  l2:
+    bank_count: 8
+    bank_capacity_kb: 64
+
+  # L1: Streaming buffers in compute fabric
+  l1:
+    buffer_count: 4
+    buffer_capacity_kb: 64
+
+# Data movement engines
+data_movement:
+  dma_engine_count: 2
+  block_mover_count: 4
+  streamer_count: 8
+
+# Compute fabric configuration
+compute:
+  tile_count: 1
+  processor_array:
+    rows: 16
+    cols: 16
+  systolic_mode: true
+
+# Optional: Custom base addresses for memory map (debugging)
+# If not specified, addresses are computed sequentially
+# address_map:
+#   host_memory_base: 0x0000000000000000
+#   external_memory_base: 0x0000000100000000
+#   l3_tile_base: 0x0000000200000000
+#   l2_bank_base: 0x0000000300000000
+#   l1_buffer_base: 0x0000000400000000
+#   page_buffer_base: 0x0000000500000000

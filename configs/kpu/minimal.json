@@ -1,0 +1,52 @@
+{
+  "name": "Minimal KPU",
+  "description": "Single compute tile, minimal memory for basic testing",
+
+  "host_memory": {
+    "region_count": 1,
+    "region_capacity_mb": 256,
+    "bandwidth_gbps": 50
+  },
+
+  "external_memory": {
+    "bank_count": 2,
+    "bank_capacity_mb": 512,
+    "bandwidth_gbps": 100
+  },
+
+  "memory_controller": {
+    "controller_count": 1,
+    "page_buffer_count": 2,
+    "page_buffer_capacity_kb": 32
+  },
+
+  "on_chip_memory": {
+    "l3": {
+      "tile_count": 4,
+      "tile_capacity_kb": 128
+    },
+    "l2": {
+      "bank_count": 8,
+      "bank_capacity_kb": 64
+    },
+    "l1": {
+      "buffer_count": 4,
+      "buffer_capacity_kb": 64
+    }
+  },
+
+  "data_movement": {
+    "dma_engine_count": 2,
+    "block_mover_count": 4,
+    "streamer_count": 8
+  },
+
+  "compute": {
+    "tile_count": 1,
+    "processor_array": {
+      "rows": 16,
+      "cols": 16
+    },
+    "systolic_mode": true
+  }
+}
