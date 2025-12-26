@@ -648,46 +648,82 @@ DMProgram OutputStationaryProgramBuilder::build() {
      *     Store C[ti,tj] to external memory
      */
 
-    BufferSlot current_buf = BufferSlot::BUF_0;
+    /**
+     * Pipelined Output-Stationary Execution:
+     *
+     * For each output tile C[ti,tj], we stream ALL k-dimension tiles continuously
+     * without barriers between them. The systolic array accumulates in place.
+     *
+     * Key optimizations:
+     * 1. Prefetch: Load/move next k-tile while current is streaming
+     * 2. No barriers within K loop - continuous accumulation
+     * 3. Double-buffering for overlap of data movement and compute
+     * 4. Only barrier after all K tiles are streamed (before drain)
+     */
 
     for (Size ti = 0; ti < m_tiles_; ++ti) {
         for (Size tj = 0; tj < n_tiles_; ++tj) {
-            // Process all K tiles for this output tile
+            // === PHASE 1: Load first k-tile to prime the pipeline ===
+            TileCoord first_tile{static_cast<uint16_t>(ti),
+                                static_cast<uint16_t>(tj),
+                                0};
+
+            BufferSlot buf_0 = BufferSlot::BUF_0;
+            BufferSlot buf_1 = BufferSlot::BUF_1;
+
+            // Load first tiles to L3
+            bool a_loaded = try_emit_load_a_tile(prog, first_tile, buf_0);
+            bool b_loaded = try_emit_load_b_tile(prog, first_tile, buf_0);
+
+            if (a_loaded || b_loaded) {
+                emit_barrier(prog);
+            }
+
+            // Move first tiles to L2
+            emit_move_a_l3_to_l2(prog, first_tile, buf_0);
+            emit_move_b_l3_to_l2(prog, first_tile, buf_0);
+            emit_barrier(prog);
+
+            // === PHASE 2: Pipelined K-loop ===
+            // Stream all K tiles continuously without barriers
+            // Prefetch next tile while current streams
+
             for (Size tk = 0; tk < k_tiles_; ++tk) {
-                TileCoord tile{static_cast<uint16_t>(ti),
-                              static_cast<uint16_t>(tj),
-                              static_cast<uint16_t>(tk)};
+                TileCoord current_tile{static_cast<uint16_t>(ti),
+                                       static_cast<uint16_t>(tj),
+                                       static_cast<uint16_t>(tk)};
 
-                // Determine buffer slot (alternates for double-buffering)
-                if (config_.double_buffer) {
-                    current_buf = (tk % 2 == 0) ? BufferSlot::BUF_0 : BufferSlot::BUF_1;
+                BufferSlot current_buf = (tk % 2 == 0) ? buf_0 : buf_1;
+                BufferSlot next_buf = (tk % 2 == 0) ? buf_1 : buf_0;
+
+                // Prefetch next k-tile (overlapped with current streaming)
+                // This issues DMA and BM commands that execute concurrently
+                if (tk + 1 < k_tiles_) {
+                    TileCoord next_tile{static_cast<uint16_t>(ti),
+                                        static_cast<uint16_t>(tj),
+                                        static_cast<uint16_t>(tk + 1)};
+
+                    // DMA load (concurrent with streaming below)
+                    bool a_prefetched = try_emit_load_a_tile(prog, next_tile, next_buf);
+                    bool b_prefetched = try_emit_load_b_tile(prog, next_tile, next_buf);
+
+                    // BM move will wait for DMA internally (no barrier needed here)
+                    // The executor handles resource dependencies
+                    if (a_prefetched) {
+                        emit_move_a_l3_to_l2(prog, next_tile, next_buf);
+                    }
+                    if (b_prefetched) {
+                        emit_move_b_l3_to_l2(prog, next_tile, next_buf);
+                    }
                 }
 
-                // Phase 1: Load tiles from external memory to L3 (with cache tracking)
-                bool a_loaded = try_emit_load_a_tile(prog, tile, current_buf);
-                bool b_loaded = try_emit_load_b_tile(prog, tile, current_buf);
+                // Stream current tile to systolic array
+                // A rows and B columns stream concurrently, accumulating into C
+                // NO BARRIER - continuous streaming across all k tiles
+                emit_stream_a_rows(prog, current_tile, current_buf);
+                emit_stream_b_cols(prog, current_tile, current_buf);
 
-                // Wait for DMA to complete before BlockMover (only if we issued DMAs)
-                if (a_loaded || b_loaded) {
-                    emit_barrier(prog);
-                }
-
-                // Phase 2: Move tiles from L3 to L2
-                emit_move_a_l3_to_l2(prog, tile, current_buf);
-                emit_move_b_l3_to_l2(prog, tile, current_buf);
-
-                // Wait for BlockMover to complete before streaming
-                emit_barrier(prog);
-
-                // Phase 3: Stream to systolic array
-                // A rows and B columns are streamed concurrently
-                emit_stream_a_rows(prog, tile, current_buf);
-                emit_stream_b_cols(prog, tile, current_buf);
-
-                // Wait for streaming/compute to complete before next iteration
-                emit_barrier(prog);
-
-                // Update traffic estimates (only count actual DMA transfers)
+                // Update traffic estimates
                 Size a_tile_bytes = std::min(config_.Ti, config_.M - ti * config_.Ti) *
                                    std::min(config_.Tk, config_.K - tk * config_.Tk) *
                                    config_.element_size;
@@ -696,24 +732,26 @@ DMProgram OutputStationaryProgramBuilder::build() {
                                    config_.element_size;
 
                 // Only count external mem traffic if DMA was actually issued
-                if (a_loaded) {
-                    prog.estimates.external_mem_bytes += a_tile_bytes;
+                if (tk == 0) {
+                    if (a_loaded) prog.estimates.external_mem_bytes += a_tile_bytes;
+                    if (b_loaded) prog.estimates.external_mem_bytes += b_tile_bytes;
+                } else {
+                    // For subsequent tiles, check cache (simplified tracking)
+                    prog.estimates.external_mem_bytes += a_tile_bytes + b_tile_bytes;
                 }
-                if (b_loaded) {
-                    prog.estimates.external_mem_bytes += b_tile_bytes;
-                }
-                // L3 and L2 always get the traffic (tile is moved internally)
                 prog.estimates.l3_bytes += a_tile_bytes + b_tile_bytes;
                 prog.estimates.l2_bytes += a_tile_bytes + b_tile_bytes;
             }
 
-            // After all K tiles: drain C from PEs and store
+            // === PHASE 3: Barrier after all K tiles, then drain C ===
+            // This ensures all accumulation is complete before draining
+            emit_barrier(prog);
+
             TileCoord c_tile{static_cast<uint16_t>(ti),
                             static_cast<uint16_t>(tj),
                             0};
 
             emit_drain_c(prog, c_tile);
-            emit_barrier(prog);
             emit_store_c_tile(prog, c_tile);
             emit_barrier(prog);
 

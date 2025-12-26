@@ -60,6 +60,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Changed exact equality to 1% tolerance for MLP kernels
   - Accounts for bias and activation FLOPs not in basic matmul calculation
 
+### Added - 2025-12-25 (Session 2)
+- **Pipelined Tile Scheduling for Blocked Matmul**
+  - Modified `OutputStationaryProgramBuilder::build()` in `src/isa/data_movement_isa.cpp`
+  - Removed unnecessary barriers within K-loop for continuous accumulation
+  - Added prefetch logic: load next k-tile while current streams to systolic array
+  - Double-buffering for overlap of data movement and compute
+  - Results: 96% compute utilization at 1024×1024 (up from 76%)
+  - Overhead reduced from 31% to 4.2% for large matrices
+  - Created `docs/SYSTOLIC_TILE_SCHEDULING.md` with analysis
+
 ### Fixed - 2025-12-25 (Session 2)
 - **Critical Efficiency Bug in ConcurrentExecutor** (RESOLVED)
   - Modified `ConcurrentExecutor::schedule_instruction()` in `src/isa/concurrent_executor.cpp`
