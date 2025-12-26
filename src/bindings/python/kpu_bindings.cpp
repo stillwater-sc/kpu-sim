@@ -41,17 +41,15 @@ PYBIND11_MODULE(stillwater_kpu, m) {
         .def("reset", &sw::kpu::ExternalMemory::reset)
         .def("get_last_access_cycle", &sw::kpu::ExternalMemory::get_last_access_cycle);
     
-    py::class_<sw::kpu::Scratchpad>(m, "Scratchpad")
-        .def("get_capacity", &sw::kpu::Scratchpad::get_capacity)
-        .def("is_ready", &sw::kpu::Scratchpad::is_ready)
-        .def("reset", &sw::kpu::Scratchpad::reset);
-    
+    py::class_<sw::kpu::L1Buffer>(m, "L1Buffer")
+        .def("get_capacity", &sw::kpu::L1Buffer::get_capacity)
+        .def("is_ready", &sw::kpu::L1Buffer::is_ready)
+        .def("reset", &sw::kpu::L1Buffer::reset);
+
     py::enum_<sw::kpu::DMAEngine::MemoryType>(m, "MemoryType")
         .value("HOST_MEMORY", sw::kpu::DMAEngine::MemoryType::HOST_MEMORY)
         .value("KPU_MEMORY", sw::kpu::DMAEngine::MemoryType::KPU_MEMORY)
-        .value("L3_TILE", sw::kpu::DMAEngine::MemoryType::L3_TILE)
-        .value("L2_BANK", sw::kpu::DMAEngine::MemoryType::L2_BANK)
-        .value("PAGE_BUFFER", sw::kpu::DMAEngine::MemoryType::PAGE_BUFFER);
+        .value("L3_TILE", sw::kpu::DMAEngine::MemoryType::L3_TILE);
     
     py::class_<sw::kpu::DMAEngine>(m, "DMAEngine")
         .def("is_busy", &sw::kpu::DMAEngine::is_busy)
@@ -79,24 +77,24 @@ PYBIND11_MODULE(stillwater_kpu, m) {
         .def_readwrite("l3_tile_capacity_kb", &sw::kpu::KPUSimulator::Config::l3_tile_capacity_kb)
         .def_readwrite("l2_bank_count", &sw::kpu::KPUSimulator::Config::l2_bank_count)
         .def_readwrite("l2_bank_capacity_kb", &sw::kpu::KPUSimulator::Config::l2_bank_capacity_kb)
-        .def_readwrite("scratchpad_count", &sw::kpu::KPUSimulator::Config::scratchpad_count)
-        .def_readwrite("scratchpad_capacity_kb", &sw::kpu::KPUSimulator::Config::scratchpad_capacity_kb)
+        .def_readwrite("l1_buffer_count", &sw::kpu::KPUSimulator::Config::l1_buffer_count)
+        .def_readwrite("l1_buffer_capacity_kb", &sw::kpu::KPUSimulator::Config::l1_buffer_capacity_kb)
         // Compute resources
         .def_readwrite("compute_tile_count", &sw::kpu::KPUSimulator::Config::compute_tile_count)
         // Data movement engines
         .def_readwrite("dma_engine_count", &sw::kpu::KPUSimulator::Config::dma_engine_count)
         .def_readwrite("block_mover_count", &sw::kpu::KPUSimulator::Config::block_mover_count)
         .def_readwrite("streamer_count", &sw::kpu::KPUSimulator::Config::streamer_count)
-        // Systolic array configuration
-        .def_readwrite("systolic_array_rows", &sw::kpu::KPUSimulator::Config::systolic_array_rows)
-        .def_readwrite("systolic_array_cols", &sw::kpu::KPUSimulator::Config::systolic_array_cols)
-        .def_readwrite("use_systolic_arrays", &sw::kpu::KPUSimulator::Config::use_systolic_arrays)
+        // Processor array configuration
+        .def_readwrite("processor_array_rows", &sw::kpu::KPUSimulator::Config::processor_array_rows)
+        .def_readwrite("processor_array_cols", &sw::kpu::KPUSimulator::Config::processor_array_cols)
+        .def_readwrite("use_systolic_array_mode", &sw::kpu::KPUSimulator::Config::use_systolic_array_mode)
         // Programmable memory map base addresses
         .def_readwrite("host_memory_base", &sw::kpu::KPUSimulator::Config::host_memory_base)
         .def_readwrite("external_memory_base", &sw::kpu::KPUSimulator::Config::external_memory_base)
         .def_readwrite("l3_tile_base", &sw::kpu::KPUSimulator::Config::l3_tile_base)
         .def_readwrite("l2_bank_base", &sw::kpu::KPUSimulator::Config::l2_bank_base)
-        .def_readwrite("scratchpad_base", &sw::kpu::KPUSimulator::Config::scratchpad_base);
+        .def_readwrite("l1_buffer_base", &sw::kpu::KPUSimulator::Config::l1_buffer_base);
     
     py::class_<sw::kpu::KPUSimulator::MatMulTest>(m, "MatMulTest")
         .def(py::init<>())
@@ -143,13 +141,13 @@ PYBIND11_MODULE(stillwater_kpu, m) {
         .def("write_l2_bank", [](sw::kpu::KPUSimulator& self, size_t bank_id, sw::kpu::Address addr, const std::vector<float>& data) {
             self.write_l2_bank(bank_id, addr, data.data(), data.size() * sizeof(float));
         })
-        .def("read_scratchpad", [](sw::kpu::KPUSimulator& self, size_t pad_id, sw::kpu::Address addr, size_t count) {
+        .def("read_l1_buffer", [](sw::kpu::KPUSimulator& self, size_t buffer_id, sw::kpu::Address addr, size_t count) {
             std::vector<float> data(count);
-            self.read_scratchpad(pad_id, addr, data.data(), count * sizeof(float));
+            self.read_l1_buffer(buffer_id, addr, data.data(), count * sizeof(float));
             return data;
         })
-        .def("write_scratchpad", [](sw::kpu::KPUSimulator& self, size_t pad_id, sw::kpu::Address addr, const std::vector<float>& data) {
-            self.write_scratchpad(pad_id, addr, data.data(), data.size() * sizeof(float));
+        .def("write_l1_buffer", [](sw::kpu::KPUSimulator& self, size_t buffer_id, sw::kpu::Address addr, const std::vector<float>& data) {
+            self.write_l1_buffer(buffer_id, addr, data.data(), data.size() * sizeof(float));
         })
         
         // NumPy array support
@@ -165,17 +163,17 @@ PYBIND11_MODULE(stillwater_kpu, m) {
             py::buffer_info buf = array.request();
             self.write_memory_bank(bank_id, addr, buf.ptr, buf.size * sizeof(float));
         })
-        .def("read_scratchpad_numpy", [](sw::kpu::KPUSimulator& self, size_t pad_id, sw::kpu::Address addr, const std::vector<size_t>& shape) {
+        .def("read_l1_buffer_numpy", [](sw::kpu::KPUSimulator& self, size_t buffer_id, sw::kpu::Address addr, const std::vector<size_t>& shape) {
             size_t total_elements = 1;
             for (auto dim : shape) total_elements *= dim;
-            
+
             auto result = py::array_t<float>(shape);
-            self.read_scratchpad(pad_id, addr, result.mutable_unchecked().mutable_data(0), total_elements * sizeof(float));
+            self.read_l1_buffer(buffer_id, addr, result.mutable_unchecked().mutable_data(0), total_elements * sizeof(float));
             return result;
         })
-        .def("write_scratchpad_numpy", [](sw::kpu::KPUSimulator& self, size_t pad_id, sw::kpu::Address addr, py::array_t<float> array) {
+        .def("write_l1_buffer_numpy", [](sw::kpu::KPUSimulator& self, size_t buffer_id, sw::kpu::Address addr, py::array_t<float> array) {
             py::buffer_info buf = array.request();
-            self.write_scratchpad(pad_id, addr, buf.ptr, buf.size * sizeof(float));
+            self.write_l1_buffer(buffer_id, addr, buf.ptr, buf.size * sizeof(float));
         })
         
         // DMA operations - Primary address-based API
@@ -313,7 +311,7 @@ PYBIND11_MODULE(stillwater_kpu, m) {
         .def("get_memory_bank_count", &sw::kpu::KPUSimulator::get_memory_bank_count)
         .def("get_l3_tile_count", &sw::kpu::KPUSimulator::get_l3_tile_count)
         .def("get_l2_bank_count", &sw::kpu::KPUSimulator::get_l2_bank_count)
-        .def("get_scratchpad_count", &sw::kpu::KPUSimulator::get_scratchpad_count)
+        .def("get_l1_buffer_count", &sw::kpu::KPUSimulator::get_l1_buffer_count)
         .def("get_compute_tile_count", &sw::kpu::KPUSimulator::get_compute_tile_count)
         .def("get_dma_engine_count", &sw::kpu::KPUSimulator::get_dma_engine_count)
         .def("get_block_mover_count", &sw::kpu::KPUSimulator::get_block_mover_count)
@@ -322,7 +320,7 @@ PYBIND11_MODULE(stillwater_kpu, m) {
         .def("get_memory_bank_capacity", &sw::kpu::KPUSimulator::get_memory_bank_capacity)
         .def("get_l3_tile_capacity", &sw::kpu::KPUSimulator::get_l3_tile_capacity)
         .def("get_l2_bank_capacity", &sw::kpu::KPUSimulator::get_l2_bank_capacity)
-        .def("get_scratchpad_capacity", &sw::kpu::KPUSimulator::get_scratchpad_capacity)
+        .def("get_l1_buffer_capacity", &sw::kpu::KPUSimulator::get_l1_buffer_capacity)
 
         // Address computation helpers for unified address space
         .def("get_host_memory_region_base", &sw::kpu::KPUSimulator::get_host_memory_region_base,
@@ -337,8 +335,8 @@ PYBIND11_MODULE(stillwater_kpu, m) {
              "Get the base address of an L3 tile in the unified address space")
         .def("get_l2_bank_base", &sw::kpu::KPUSimulator::get_l2_bank_base,
              "Get the base address of an L2 bank in the unified address space")
-        .def("get_scratchpad_base", &sw::kpu::KPUSimulator::get_scratchpad_base,
-             "Get the base address of a scratchpad in the unified address space")
+        .def("get_l1_buffer_base", &sw::kpu::KPUSimulator::get_l1_buffer_base,
+             "Get the base address of an L1 buffer in the unified address space")
         
         // High-level operations
         .def("run_matmul_test", &sw::kpu::KPUSimulator::run_matmul_test,
@@ -353,7 +351,7 @@ PYBIND11_MODULE(stillwater_kpu, m) {
         .def("is_memory_bank_ready", &sw::kpu::KPUSimulator::is_memory_bank_ready)
         .def("is_l3_tile_ready", &sw::kpu::KPUSimulator::is_l3_tile_ready)
         .def("is_l2_bank_ready", &sw::kpu::KPUSimulator::is_l2_bank_ready)
-        .def("is_scratchpad_ready", &sw::kpu::KPUSimulator::is_scratchpad_ready)
+        .def("is_l1_buffer_ready", &sw::kpu::KPUSimulator::is_l1_buffer_ready)
 
         // Systolic array information
         .def("is_using_systolic_arrays", &sw::kpu::KPUSimulator::is_using_systolic_arrays)
