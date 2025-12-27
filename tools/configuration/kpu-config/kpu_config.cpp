@@ -17,6 +17,7 @@
 #include <iostream>
 #include <iomanip>
 #include <fstream>
+#include <sstream>
 #include <string>
 #include <vector>
 #include <algorithm>
@@ -790,6 +791,68 @@ int cmd_stats_table() {
     }
 
     std::cout << "╚══════════════╩══════════╩══════════╩═════════╩═════════╩══════════╩═════════╩══════════╩═══════════╩═══════════════╝\n\n";
+
+    // Print precision throughput table (124 chars wide)
+    std::cout << "╔══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════╗\n";
+    std::cout << "║                                        Precision Throughput (Peak TOPS)                                                  ║\n";
+    std::cout << "╠══════════════╦═══════════╦═══════════╦═══════════╦═══════════╦═══════════╦═══════════╦═══════════╦═══════════╦═══════════╣\n";
+    std::cout << "║ Config       ║   FP32    ║   FP16    ║   BF16    ║   FP8     ║   FP4     ║   INT32   ║   INT16   ║   INT8    ║   INT4    ║\n";
+    std::cout << "╠══════════════╬═══════════╬═══════════╬═══════════╬═══════════╬═══════════╬═══════════╬═══════════╬═══════════╬═══════════╣\n";
+
+    // Precision scaling factors based on bit width
+    // FP32/INT32 = 1× (baseline, 32 bits)
+    // FP16/INT16/BF16 = 2× (16 bits)
+    // FP8/INT8 = 4× (8 bits)
+    // FP4/INT4 = 8× (4 bits)
+    for (const auto& s : stats) {
+        double fp32 = s.peak_tops;
+        double fp16 = fp32 * 2.0;
+        double bf16 = fp32 * 2.0;
+        double fp8  = fp32 * 4.0;
+        double fp4  = fp32 * 8.0;
+        double int32 = fp32;
+        double int16 = fp32 * 2.0;
+        double int8  = fp32 * 4.0;
+        double int4  = fp32 * 8.0;
+
+        // Format function for TOPS values
+        auto fmt_tops = [](double tops) -> std::string {
+            std::ostringstream ss;
+            if (tops >= 1000.0) {
+                // Show as X,XXX for thousands
+                ss << std::fixed << std::setprecision(0) << tops;
+            } else if (tops >= 100.0) {
+                ss << std::fixed << std::setprecision(0) << tops;
+            } else if (tops >= 10.0) {
+                ss << std::fixed << std::setprecision(1) << tops;
+            } else if (tops >= 1.0) {
+                ss << std::fixed << std::setprecision(2) << tops;
+            } else {
+                ss << std::fixed << std::setprecision(3) << tops;
+            }
+            return ss.str();
+        };
+
+        std::cout << "║ " << std::left << std::setw(12) << s.name << " ║";
+        std::cout << std::right << std::setw(9) << fmt_tops(fp32) << "  ║";
+        std::cout << std::setw(9) << fmt_tops(fp16) << "  ║";
+        std::cout << std::setw(9) << fmt_tops(bf16) << "  ║";
+        std::cout << std::setw(9) << fmt_tops(fp8) << "  ║";
+        std::cout << std::setw(9) << fmt_tops(fp4) << "  ║";
+        std::cout << std::setw(9) << fmt_tops(int32) << "  ║";
+        std::cout << std::setw(9) << fmt_tops(int16) << "  ║";
+        std::cout << std::setw(9) << fmt_tops(int8) << "  ║";
+        std::cout << std::setw(9) << fmt_tops(int4) << "  ║\n";
+    }
+
+    std::cout << "╠══════════════╩═══════════╩═══════════╩═══════════╩═══════════╩═══════════╩═══════════╩═══════════╩═══════════╩═══════════╣\n";
+    std::cout << "║                                                                                                                          ║\n";
+    std::cout << "║  Notes:                                                                                                                  ║\n";
+    std::cout << "║  • Throughput scales with precision: 32-bit (1×), 16-bit (2×), 8-bit (4×), 4-bit (8×)                                    ║\n";
+    std::cout << "║  • FP32/INT32 = baseline throughput from systolic array                                                                  ║\n";
+    std::cout << "║  • BF16 (bfloat16) has same throughput as FP16 (16-bit mantissa + 8-bit exponent)                                        ║\n";
+    std::cout << "║  • Values shown are theoretical peaks; actual performance depends on memory bandwidth and utilization                    ║\n";
+    std::cout << "╚══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════╝\n\n";
 
     return 0;
 }
