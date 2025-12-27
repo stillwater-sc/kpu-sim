@@ -1,0 +1,33 @@
+compute:
+  processor_array:
+    cols: 24
+    rows: 24
+    topology: rectangular
+  systolic_mode: true
+  tile_count: 64
+data_movement:
+  block_mover_count: 64
+  dma_engine_count: 8
+  streamer_count: 256
+external_memory:
+  bandwidth_gbps: 25
+  bank_capacity_mb: 512
+  bank_count: 8
+host_memory:
+  bandwidth_gbps: 100
+  region_capacity_mb: 2048
+  region_count: 2
+memory_controller:
+  controller_count: 4
+  page_buffer_capacity_kb: 32
+  page_buffer_count: 16
+on_chip_memory:
+  l1:
+    buffer_capacity_kb: 64
+    buffer_count: 12288
+  l2:
+    bank_capacity_kb: 64
+    bank_count: 1024
+  l3:
+    tile_capacity_kb: 256
+    tile_count: 64

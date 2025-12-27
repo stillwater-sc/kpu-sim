@@ -474,10 +474,10 @@ KPUSimulator::Config KPUConfigLoader::create_minimal() {
     config.host_memory_region_capacity_mb = 128;
     config.host_memory_bandwidth_gbps = 25;
 
-    // External memory (single GDDR6 channel)
+    // External memory (single LPDDR4x channel - low power)
     config.memory_bank_count = 1;
     config.memory_bank_capacity_mb = 256;
-    config.memory_bandwidth_gbps = 50;
+    config.memory_bandwidth_gbps = 25;
 
     // Memory controller
     config.memory_controller_count = 1;
@@ -491,11 +491,12 @@ KPUSimulator::Config KPUConfigLoader::create_minimal() {
     config.processor_array_topology = ProcessorArrayTopology::RECTANGULAR;
     config.use_systolic_array_mode = true;
 
-    // On-chip memory: 1 L3 tile, 4 L2 banks (to match streamer bandwidth)
+    // On-chip memory: L3 = global working set, L2 = local tile buffers
+    // L3 should be significantly larger than L2 total
     config.l3_tile_count = 1;
-    config.l3_tile_capacity_kb = 64;
+    config.l3_tile_capacity_kb = 256;    // 256 KB L3 total
     config.l2_bank_count = 4;
-    config.l2_bank_capacity_kb = 32;
+    config.l2_bank_capacity_kb = 16;     // 64 KB L2 total (4:1 ratio)
     // L1 buffers: 4 × (8 + 8) × 1 tile = 64
     config.l1_buffer_count = compute_l1_buffer_count(
         config.processor_array_topology,
@@ -523,10 +524,11 @@ KPUSimulator::Config KPUConfigLoader::create_edge_ai() {
     config.host_memory_region_capacity_mb = 512;
     config.host_memory_bandwidth_gbps = 50;
 
-    // External memory (LPDDR5 dual channel)
-    config.memory_bank_count = 2;
-    config.memory_bank_capacity_mb = 512;
-    config.memory_bandwidth_gbps = 100;
+    // External memory (LPDDR5 quad channel, 64-bit total)
+    // 4 channels × 16-bit × 6400 MT/s ≈ 50 GB/s total
+    config.memory_bank_count = 4;
+    config.memory_bank_capacity_mb = 256;
+    config.memory_bandwidth_gbps = 12;  // ~12.8 GB/s per 16-bit channel
 
     // Memory controller
     config.memory_controller_count = 2;
@@ -540,11 +542,12 @@ KPUSimulator::Config KPUConfigLoader::create_edge_ai() {
     config.processor_array_topology = ProcessorArrayTopology::RECTANGULAR;
     config.use_systolic_array_mode = true;
 
-    // On-chip memory: 2 L3 tiles, 8 L2 banks per L3 (16 total)
+    // On-chip memory: L3 = global working set, L2 = local tile buffers
+    // L3 should be significantly larger than L2 total
     config.l3_tile_count = 2;
-    config.l3_tile_capacity_kb = 128;
-    config.l2_bank_count = 16;  // 8 per L3 tile
-    config.l2_bank_capacity_kb = 64;
+    config.l3_tile_capacity_kb = 512;    // 1 MB L3 total
+    config.l2_bank_count = 8;            // 4 per compute tile
+    config.l2_bank_capacity_kb = 32;     // 256 KB L2 total (4:1 ratio)
     // L1 buffers: 4 × (16 + 16) × 2 tiles = 256
     config.l1_buffer_count = compute_l1_buffer_count(
         config.processor_array_topology,
@@ -558,6 +561,58 @@ KPUSimulator::Config KPUConfigLoader::create_edge_ai() {
     config.dma_engine_count = 2;
     config.block_mover_count = 4;
     config.streamer_count = 16;
+
+    return config;
+}
+
+KPUSimulator::Config KPUConfigLoader::create_embodied_ai() {
+    // Embodied AI configuration: robotics and autonomous systems
+    // Modeled after Jetson Orin: 256-bit LPDDR5 @ 204 GB/s, power-efficient
+    // 64 tiles (8×8 layout), 24×24 arrays, 64 L3 tiles, 16 L2 banks per L3
+    KPUSimulator::Config config;
+
+    // Host memory (embedded high-performance)
+    config.host_memory_region_count = 2;
+    config.host_memory_region_capacity_mb = 2048;  // 2GB per region = 4GB total
+    config.host_memory_bandwidth_gbps = 100;
+
+    // External memory (8-channel LPDDR5, 256-bit total, Jetson Orin style)
+    // 8 channels × 32-bit × 25 GB/s = 200 GB/s total, very power efficient
+    config.memory_bank_count = 8;
+    config.memory_bank_capacity_mb = 512;   // 512MB per channel = 4GB total
+    config.memory_bandwidth_gbps = 25;      // 25 GB/s per channel
+
+    // Memory controller (one per 2 channels)
+    config.memory_controller_count = 4;
+    config.page_buffer_count = 16;
+    config.page_buffer_capacity_kb = 32;
+
+    // Compute: 64 tiles (8×8 layout), 24×24 arrays each
+    config.compute_tile_count = 64;
+    config.processor_array_rows = 24;
+    config.processor_array_cols = 24;
+    config.processor_array_topology = ProcessorArrayTopology::RECTANGULAR;
+    config.use_systolic_array_mode = true;
+
+    // On-chip memory: L3 = global working set, L2 = local tile buffers
+    // L3 should be significantly larger than L2 total
+    config.l3_tile_count = 16;
+    config.l3_tile_capacity_kb = 2048;   // 32 MB L3 total
+    config.l2_bank_count = 256;          // 4 per compute tile
+    config.l2_bank_capacity_kb = 32;     // 8 MB L2 total (4:1 ratio)
+    // L1 buffers: 4 × (24 + 24) × 64 tiles = 12,288
+    config.l1_buffer_count = compute_l1_buffer_count(
+        config.processor_array_topology,
+        config.processor_array_rows,
+        config.processor_array_cols,
+        config.compute_tile_count
+    );
+    config.l1_buffer_capacity_kb = 64;
+
+    // Data movement (scaled for 64 tiles)
+    config.dma_engine_count = 8;
+    config.block_mover_count = 64;   // 1 per L3 tile
+    config.streamer_count = 256;     // 4 per L3 tile
 
     return config;
 }
@@ -589,11 +644,12 @@ KPUSimulator::Config KPUConfigLoader::create_datacenter() {
     config.processor_array_topology = ProcessorArrayTopology::RECTANGULAR;
     config.use_systolic_array_mode = true;
 
-    // On-chip memory: 256 L3 tiles, 16 L2 banks per L3 (4096 total)
-    config.l3_tile_count = 256;
-    config.l3_tile_capacity_kb = 512;
-    config.l2_bank_count = 4096;  // 16 per L3 tile
-    config.l2_bank_capacity_kb = 128;
+    // On-chip memory: L3 = global working set, L2 = local tile buffers
+    // L3 should be significantly larger than L2 total
+    config.l3_tile_count = 64;
+    config.l3_tile_capacity_kb = 4096;   // 256 MB L3 total
+    config.l2_bank_count = 1024;         // 4 per compute tile
+    config.l2_bank_capacity_kb = 64;     // 64 MB L2 total (4:1 ratio)
     // L1 buffers: 4 × (32 + 32) × 256 tiles = 65,536
     config.l1_buffer_count = compute_l1_buffer_count(
         config.processor_array_topology,

@@ -144,6 +144,12 @@ public:
     static KPUSimulator::Config create_edge_ai();
 
     /**
+     * @brief Create embodied AI configuration (robotics/autonomous systems)
+     * @return Embodied AI KPUSimulator::Config
+     */
+    static KPUSimulator::Config create_embodied_ai();
+
+    /**
      * @brief Create datacenter configuration (high-performance)
      * @return Datacenter KPUSimulator::Config
      */

@@ -219,14 +219,14 @@ Each edge (TOP/BOTTOM/LEFT/RIGHT) has ingress and egress buffers:
 
 ## Factory Configurations
 
-Three factory configurations are provided for common use cases, forming a proper progression from small to large:
+Four factory configurations are provided for common use cases, forming a proper progression from small to large:
 
 ### Minimal (`--factory minimal`)
 
 Smallest viable KPU for testing and development:
 
 - 1 compute tile (8×8 rectangular systolic array)
-- 1 external memory bank (256 MB, GDDR6)
+- 1 external memory channel (256 MB, LPDDR4x, 25 GB/s)
 - 1 L3 tile, 4 L2 banks, **64 L1 buffers** (derived: 4×(8+8)×1)
 - Best for: Unit testing, small matrix operations, development
 
@@ -235,10 +235,20 @@ Smallest viable KPU for testing and development:
 Dual-tile configuration for edge AI inference:
 
 - 2 compute tiles (16×16 rectangular systolic arrays each)
-- 2 external memory banks (512 MB each, LPDDR5)
+- 4 external memory channels (256 MB each, LPDDR5, 64-bit total)
 - 2 L3 tiles, 16 L2 banks (8 per L3), **256 L1 buffers** (derived: 4×(16+16)×2)
-- Power-efficient bandwidth settings (100 GB/s)
+- Power-efficient 48 GB/s bandwidth (~3.2W memory subsystem)
 - Best for: Mobile/embedded AI, edge inference
+
+### Embodied AI (`--factory embodied_ai`)
+
+64-tile configuration for robotics and autonomous systems (Jetson Orin style):
+
+- 64 compute tiles (24×24 rectangular systolic arrays each) in 8×8 layout
+- 8 external memory channels (512 MB each, LPDDR5, 256-bit total)
+- 64 L3 tiles, 1024 L2 banks (16 per L3), **12,288 L1 buffers** (derived: 4×(24+24)×64)
+- 200 GB/s memory bandwidth, power-efficient (~8W memory subsystem)
+- Best for: Real-time robotics, autonomous driving, embodied agents
 
 ### Datacenter (`--factory datacenter`)
 
@@ -264,7 +274,7 @@ Options:
   -o, --output <file>     Write results to JSON file
   --validate              Validate config without running
   --show-config           Display parsed configuration
-  --factory <name>        Use factory config: minimal, edge_ai, datacenter
+  --factory <name>        Use factory config: minimal, edge_ai, embodied_ai, datacenter
 ```
 
 ### Test Types
@@ -482,6 +492,7 @@ kpu-sim/
 │       ├── minimal.yaml      # Basic testing config
 │       ├── minimal.json      # JSON equivalent
 │       ├── edge_ai.yaml      # Edge deployment config
+│       ├── embodied_ai.yaml  # Robotics/autonomous config
 │       └── datacenter.yaml   # High-performance config
 ├── tools/
 │   └── runner/

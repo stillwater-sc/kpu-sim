@@ -35,10 +35,11 @@ void print_usage(const char* program) {
     std::cout << "  validate <file>              Validate a configuration file\n";
     std::cout << "  convert <file> -o <output>   Convert between YAML and JSON\n";
     std::cout << "  show <file>                  Display formatted configuration\n";
-    std::cout << "  generate <type> [-o <file>]  Generate template (minimal|edge_ai|datacenter)\n";
+    std::cout << "  generate <type> [-o <file>]  Generate template (minimal|edge_ai|embodied_ai|datacenter)\n";
     std::cout << "  get <file> <path>            Query config value (e.g., external_memory.bank_count)\n";
     std::cout << "  diff <file1> <file2>         Compare two configurations\n";
-    std::cout << "  list-templates               List available template types\n\n";
+    std::cout << "  list-templates               List available template types\n";
+    std::cout << "  stats-table                  Display statistics table for all configurations\n\n";
     std::cout << "Options:\n";
     std::cout << "  -o, --output <file>   Output file\n";
     std::cout << "  -f, --format <fmt>    Output format: yaml, json (default: auto from extension)\n";
@@ -47,9 +48,9 @@ void print_usage(const char* program) {
     std::cout << "Examples:\n";
     std::cout << "  " << program << " validate configs/kpu/my_config.yaml\n";
     std::cout << "  " << program << " convert config.yaml -o config.json\n";
-    std::cout << "  " << program << " generate minimal -o my_config.yaml\n";
+    std::cout << "  " << program << " generate embodied_ai -o robot.yaml\n";
     std::cout << "  " << program << " get config.yaml external_memory.bank_count\n";
-    std::cout << "  " << program << " diff config1.yaml config2.yaml\n";
+    std::cout << "  " << program << " stats-table\n";
 }
 
 bool ends_with(const std::string& str, const std::string& suffix) {
@@ -299,11 +300,13 @@ int cmd_generate(const std::string& template_type, const std::string& output_fil
             config = KPUConfigLoader::create_minimal();
         } else if (template_type == "edge_ai" || template_type == "edge") {
             config = KPUConfigLoader::create_edge_ai();
+        } else if (template_type == "embodied_ai" || template_type == "embodied") {
+            config = KPUConfigLoader::create_embodied_ai();
         } else if (template_type == "datacenter" || template_type == "dc") {
             config = KPUConfigLoader::create_datacenter();
         } else {
             std::cerr << "Error: Unknown template type: " << template_type << "\n";
-            std::cerr << "Available templates: minimal, edge_ai, datacenter\n";
+            std::cerr << "Available templates: minimal, edge_ai, embodied_ai, datacenter\n";
             return 1;
         }
 
@@ -571,14 +574,20 @@ int cmd_list_templates() {
 
     std::cout << "  minimal      Smallest viable KPU for testing and development\n";
     std::cout << "               - 1 compute tile (8x8 rectangular systolic)\n";
-    std::cout << "               - 1 external bank (256 MB, GDDR6)\n";
+    std::cout << "               - 1 external channel (256 MB, LPDDR4x)\n";
     std::cout << "               - 1 L3, 4 L2, 64 L1 buffers (derived: 4*(8+8)*1)\n\n";
 
     std::cout << "  edge_ai      Dual-tile configuration for edge AI inference\n";
     std::cout << "               - 2 compute tiles (16x16 rectangular systolic each)\n";
-    std::cout << "               - 2 external banks (512 MB each, LPDDR5)\n";
+    std::cout << "               - 4 external channels (256 MB each, LPDDR5, 64-bit)\n";
     std::cout << "               - 2 L3, 16 L2, 256 L1 buffers (derived: 4*(16+16)*2)\n";
-    std::cout << "               - Power-efficient bandwidth settings\n\n";
+    std::cout << "               - Power-efficient 48 GB/s bandwidth\n\n";
+
+    std::cout << "  embodied_ai  64-tile configuration for robotics/autonomous systems\n";
+    std::cout << "               - 64 compute tiles (24x24 rectangular systolic each)\n";
+    std::cout << "               - 8 external channels (512 MB each, LPDDR5)\n";
+    std::cout << "               - Jetson Orin style: 256-bit, 200 GB/s, power-efficient\n";
+    std::cout << "               - 64 L3, 1024 L2, 12288 L1 buffers (derived: 4*(24+24)*64)\n\n";
 
     std::cout << "  datacenter   256-tile configuration for datacenter-scale AI\n";
     std::cout << "               - 256 compute tiles (32x32 rectangular systolic each)\n";
@@ -593,7 +602,194 @@ int cmd_list_templates() {
 
     std::cout << "Generate a template:\n";
     std::cout << "  kpu-config generate minimal -o my_config.yaml\n";
+    std::cout << "  kpu-config generate embodied_ai -o robot.yaml\n";
     std::cout << "  kpu-config generate datacenter -o hpc_config.json\n";
+
+    return 0;
+}
+
+// =========================================
+// Command: stats-table
+// =========================================
+
+struct ConfigStats {
+    std::string name;
+    Size tiles;
+    Size array_rows;
+    Size array_cols;
+    Size l3_count;
+    Size l2_count;
+    Size l1_count;
+    Size l3_kb;
+    Size l2_kb;
+    Size l1_kb;
+    Size clock_mhz;
+    double ops_per_cycle_per_tile;
+    double ops_per_cycle_total;
+    double peak_tops;
+    double l3_total_kb;
+    double l2_total_kb;
+    double l1_total_kb;
+    double tdp_watts;
+    double mem_bw_gbps;
+};
+
+ConfigStats compute_stats(const std::string& name, const KPUSimulator::Config& config, Size clock_mhz) {
+    ConfigStats s;
+    s.name = name;
+    s.tiles = config.compute_tile_count;
+    s.array_rows = config.processor_array_rows;
+    s.array_cols = config.processor_array_cols;
+    s.l3_count = config.l3_tile_count;
+    s.l2_count = config.l2_bank_count;
+    s.l1_count = config.l1_buffer_count;
+    s.l3_kb = config.l3_tile_capacity_kb;
+    s.l2_kb = config.l2_bank_capacity_kb;
+    s.l1_kb = config.l1_buffer_capacity_kb;
+    s.clock_mhz = clock_mhz;
+
+    // Ops per cycle: 2 ops per PE per cycle (FMA = multiply + add)
+    s.ops_per_cycle_per_tile = 2.0 * s.array_rows * s.array_cols;
+    s.ops_per_cycle_total = s.ops_per_cycle_per_tile * s.tiles;
+
+    // Peak throughput in TOPS: ops/cycle * clock_freq_GHz
+    double clock_ghz = clock_mhz / 1000.0;
+    s.peak_tops = (s.ops_per_cycle_total * clock_ghz) / 1000.0;  // Tera = 10^12
+
+    // Total storage in KB
+    s.l3_total_kb = static_cast<double>(s.l3_count) * s.l3_kb;
+    s.l2_total_kb = static_cast<double>(s.l2_count) * s.l2_kb;
+
+    // L1 buffers are FIFOs with depth = array dimension, not the config capacity
+    // Each L1 buffer = FIFO_depth × element_size = array_dim × 4 bytes
+    Size fifo_depth = std::max(s.array_rows, s.array_cols);
+    Size element_size = 4;  // 4 bytes for float32
+    Size l1_buffer_bytes = fifo_depth * element_size;
+    s.l1_total_kb = static_cast<double>(s.l1_count) * l1_buffer_bytes / 1024.0;
+
+    // Memory bandwidth
+    s.mem_bw_gbps = static_cast<double>(config.memory_bank_count) * config.memory_bandwidth_gbps;
+
+    // TDP estimation (rough model based on typical accelerators)
+    // ~0.5W per TOPS for compute + memory overhead
+    double compute_power = s.peak_tops * 0.5;
+    double memory_power = s.mem_bw_gbps * 0.015;  // ~15mW per GB/s
+    double on_chip_power = (s.l3_total_kb + s.l2_total_kb + s.l1_total_kb) * 0.0001;  // ~0.1mW per KB
+    s.tdp_watts = compute_power + memory_power + on_chip_power;
+
+    return s;
+}
+
+std::string format_size_kb(double kb) {
+    if (kb >= 1024 * 1024) {
+        return std::to_string(static_cast<int>(kb / (1024 * 1024))) + " GB";
+    } else if (kb >= 1024) {
+        return std::to_string(static_cast<int>(kb / 1024)) + " MB";
+    } else {
+        return std::to_string(static_cast<int>(kb)) + " KB";
+    }
+}
+
+int cmd_stats_table() {
+    // Define clock frequencies for each config (typical values)
+    std::vector<std::pair<std::string, std::pair<KPUSimulator::Config, Size>>> configs = {
+        {"Minimal", {KPUConfigLoader::create_minimal(), 500}},
+        {"Edge AI", {KPUConfigLoader::create_edge_ai(), 750}},
+        {"Embodied AI", {KPUConfigLoader::create_embodied_ai(), 1000}},
+        {"Datacenter", {KPUConfigLoader::create_datacenter(), 1500}}
+    };
+
+    std::vector<ConfigStats> stats;
+    for (const auto& [name, cfg_clock] : configs) {
+        stats.push_back(compute_stats(name, cfg_clock.first, cfg_clock.second));
+    }
+
+    // Print header
+    std::cout << "\n";
+    std::cout << "╔═══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════╗\n";
+    std::cout << "║                                     KPU Configuration Statistics                                                          ║\n";
+    std::cout << "╠══════════════╦═══════╦═══════╦═══════╦═══════╦═══════════╦═══════════╦═══════════╦════════════╦════════════╦══════════════╣\n";
+    std::cout << "║ Config       ║ Tiles ║ Array ║ Clock ║ Ops/  ║ Ops/Cycle ║ Peak      ║ L3        ║ L2         ║ L1         ║ Est. TDP     ║\n";
+    std::cout << "║              ║       ║       ║ (MHz) ║ Cycle ║ Total     ║ (TOPS)    ║ Storage   ║ Storage    ║ Storage    ║ (Watts)      ║\n";
+    std::cout << "║              ║       ║       ║       ║ /Tile ║           ║           ║           ║            ║            ║              ║\n";
+    std::cout << "╠══════════════╬═══════╬═══════╬═══════╬═══════╬═══════════╬═══════════╬═══════════╬════════════╬════════════╬══════════════╣\n";
+
+    for (const auto& s : stats) {
+        std::cout << "║ " << std::left << std::setw(12) << s.name << " ║";
+        std::cout << std::right << std::setw(5) << s.tiles << "  ║";
+        std::cout << std::setw(3) << s.array_rows << "x" << std::left << std::setw(3) << s.array_cols << "║";
+        std::cout << std::right << std::setw(5) << s.clock_mhz << "  ║";
+        std::cout << std::setw(5) << static_cast<int>(s.ops_per_cycle_per_tile) << "  ║";
+        std::cout << std::setw(9) << static_cast<int>(s.ops_per_cycle_total) << "  ║";
+        std::cout << std::setw(9) << std::fixed << std::setprecision(1) << s.peak_tops << "  ║";
+        std::cout << std::setw(9) << format_size_kb(s.l3_total_kb) << "  ║";
+        std::cout << std::setw(10) << format_size_kb(s.l2_total_kb) << "  ║";
+        std::cout << std::setw(10) << format_size_kb(s.l1_total_kb) << "  ║";
+        std::cout << std::setw(10) << std::fixed << std::setprecision(1) << s.tdp_watts << " W  ║\n";
+    }
+
+    std::cout << "╠══════════════╩═══════╩═══════╩═══════╩═══════╩═══════════╩═══════════╩═══════════╩════════════╩════════════╩══════════════╣\n";
+
+    // Print additional details
+    std::cout << "║                                                                                                                           ║\n";
+    std::cout << "║  Notes:                                                                                                                   ║\n";
+    std::cout << "║  • Ops/Cycle/Tile = 2 × rows × cols (FMA operations in systolic array)                                                    ║\n";
+    std::cout << "║  • Peak TOPS = Ops/Cycle Total × Clock (GHz) / 1000                                                                       ║\n";
+    std::cout << "║  • L1 buffers derived: 4 × (rows + cols) × tiles                                                                          ║\n";
+    std::cout << "║  • TDP is estimated based on typical accelerator power profiles                                                           ║\n";
+    std::cout << "╚═══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════╝\n";
+
+    // Print memory interface table
+    std::cout << "\n";
+    std::cout << "╔════════════════════════════════════════════════════════════════════════════════════════════════════════════════════╗\n";
+    std::cout << "║                                           Memory Interface Summary                                                 ║\n";
+    std::cout << "╠══════════════╦══════════╦══════════╦═════════╦═════════╦══════════╦═════════╦══════════╦═══════════╦═══════════════╣\n";
+    std::cout << "║ Config       ║ Mem Type ║ Channels ║ Ch.Width║ Total   ║ BW/Ch    ║ Total   ║ Power/Ch ║ Total     ║ Power/Pin     ║\n";
+    std::cout << "║              ║          ║          ║ (bits)  ║ Pins    ║ (GB/s)   ║ BW(GB/s)║ (W)      ║ Power (W) ║ (mW)          ║\n";
+    std::cout << "╠══════════════╬══════════╬══════════╬═════════╬═════════╬══════════╬═════════╬══════════╬═══════════╬═══════════════╣\n";
+
+    // Memory interface specifications:
+    // GDDR6:  32-bit channel, ~5W/channel
+    // LPDDR5: 16-bit channel, ~0.8W/channel (low power)
+    // GDDR6X: 32-bit channel, ~8W/channel
+    // HBM3:   1024-bit per stack, ~10W/stack
+    struct MemInfo {
+        std::string name;
+        std::string mem_type;
+        int channels;
+        int ch_width_bits;
+        int bw_per_ch;      // GB/s
+        double power_per_ch; // Watts
+    };
+
+    // LPDDR5 @ 6400 MT/s: ~12.8 GB/s per 16-bit, ~25.6 GB/s per 32-bit
+    std::vector<MemInfo> mem_info = {
+        {"Minimal",     "LPDDR4x", 1, 16,   25,  0.4},   // 25 GB/s total
+        {"Edge AI",     "LPDDR5",  4, 16,   12,  0.8},   // 48 GB/s total (64-bit)
+        {"Embodied AI", "LPDDR5",  8, 32,   25,  1.0},   // 200 GB/s total (256-bit, Jetson Orin)
+        {"Datacenter",  "HBM3",    6, 1024, 800, 10.0}   // 4800 GB/s total
+    };
+
+    for (const auto& m : mem_info) {
+        int total_pins = m.channels * m.ch_width_bits;
+        int total_bw = m.channels * m.bw_per_ch;
+        double total_power = m.channels * m.power_per_ch;
+        double power_per_pin = (total_power * 1000.0) / total_pins;  // mW per pin
+
+        // Column widths must match header: 14,10,10,9,9,10,9,10,11,15
+        std::cout << "║ " << std::left << std::setw(12) << m.name << " ║";
+        std::cout << " " << std::left << std::setw(8) << m.mem_type << " ║";
+        std::cout << std::right << std::setw(9) << m.channels << " ║";
+        std::cout << std::setw(8) << m.ch_width_bits << " ║";
+        std::cout << std::setw(8) << total_pins << " ║";
+        std::cout << std::setw(9) << m.bw_per_ch << " ║";
+        std::cout << std::setw(8) << total_bw << " ║";
+        std::cout << std::setw(9) << std::fixed << std::setprecision(1) << m.power_per_ch << " ║";
+        std::cout << std::setw(10) << std::fixed << std::setprecision(1) << total_power << " ║";
+        std::cout << std::setw(14) << std::fixed << std::setprecision(2) << power_per_pin << " ║\n";
+    }
+
+    std::cout << "╚══════════════╩══════════╩══════════╩═════════╩═════════╩══════════╩═════════╩══════════╩═══════════╩═══════════════╝\n\n";
 
     return 0;
 }
@@ -679,6 +875,9 @@ int main(int argc, char* argv[]) {
 
     } else if (command == "list-templates") {
         return cmd_list_templates();
+
+    } else if (command == "stats-table") {
+        return cmd_stats_table();
 
     } else {
         std::cerr << "Unknown command: " << command << "\n";
