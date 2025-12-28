@@ -36,7 +36,7 @@ void print_usage(const char* program) {
     std::cout << "  validate <file>              Validate a configuration file\n";
     std::cout << "  convert <file> -o <output>   Convert between YAML and JSON\n";
     std::cout << "  show <file>                  Display formatted configuration\n";
-    std::cout << "  generate <type> [-o <file>]  Generate template (minimal|edge_ai|embodied_ai|datacenter)\n";
+    std::cout << "  generate <type> [-o <file>]  Generate template (see list-templates)\n";
     std::cout << "  get <file> <path>            Query config value (e.g., external_memory.bank_count)\n";
     std::cout << "  diff <file1> <file2>         Compare two configurations\n";
     std::cout << "  list-templates               List available template types\n";
@@ -49,7 +49,7 @@ void print_usage(const char* program) {
     std::cout << "Examples:\n";
     std::cout << "  " << program << " validate configs/kpu/my_config.yaml\n";
     std::cout << "  " << program << " convert config.yaml -o config.json\n";
-    std::cout << "  " << program << " generate embodied_ai -o robot.yaml\n";
+    std::cout << "  " << program << " generate humanoid_ai -o robot.yaml\n";
     std::cout << "  " << program << " get config.yaml external_memory.bank_count\n";
     std::cout << "  " << program << " stats-table\n";
 }
@@ -301,13 +301,17 @@ int cmd_generate(const std::string& template_type, const std::string& output_fil
             config = KPUConfigLoader::create_minimal();
         } else if (template_type == "edge_ai" || template_type == "edge") {
             config = KPUConfigLoader::create_edge_ai();
-        } else if (template_type == "embodied_ai" || template_type == "embodied") {
-            config = KPUConfigLoader::create_embodied_ai();
+        } else if (template_type == "drone_ai" || template_type == "drone") {
+            config = KPUConfigLoader::create_drone_ai();
+        } else if (template_type == "humanoid_ai" || template_type == "humanoid") {
+            config = KPUConfigLoader::create_humanoid_ai();
+        } else if (template_type == "av_ai" || template_type == "av") {
+            config = KPUConfigLoader::create_av_ai();
         } else if (template_type == "datacenter" || template_type == "dc") {
             config = KPUConfigLoader::create_datacenter();
         } else {
             std::cerr << "Error: Unknown template type: " << template_type << "\n";
-            std::cerr << "Available templates: minimal, edge_ai, embodied_ai, datacenter\n";
+            std::cerr << "Available templates: minimal, edge_ai, drone_ai, humanoid_ai, av_ai, datacenter\n";
             return 1;
         }
 
@@ -575,26 +579,33 @@ int cmd_list_templates() {
 
     std::cout << "  minimal      Smallest viable KPU for testing and development\n";
     std::cout << "               - 1 compute tile (8x8 rectangular systolic)\n";
-    std::cout << "               - 1 external channel (256 MB, LPDDR4x)\n";
-    std::cout << "               - 1 L3, 4 L2, 64 L1 buffers (derived: 4*(8+8)*1)\n\n";
+    std::cout << "               - 1 external channel (256 MB, LPDDR4x, 10 GB/s)\n";
+    std::cout << "               - Target: ~1W\n\n";
 
     std::cout << "  edge_ai      Dual-tile configuration for edge AI inference\n";
     std::cout << "               - 2 compute tiles (16x16 rectangular systolic each)\n";
-    std::cout << "               - 4 external channels (256 MB each, LPDDR5, 64-bit)\n";
-    std::cout << "               - 2 L3, 16 L2, 256 L1 buffers (derived: 4*(16+16)*2)\n";
-    std::cout << "               - Power-efficient 48 GB/s bandwidth\n\n";
+    std::cout << "               - 4 external channels (256 MB each, LPDDR5, 48 GB/s total)\n";
+    std::cout << "               - Target: ~3W\n\n";
 
-    std::cout << "  embodied_ai  64-tile configuration for robotics/autonomous systems\n";
+    std::cout << "  drone_ai     16-tile configuration for small drones and micro-robots\n";
+    std::cout << "               - 16 compute tiles (24x24 rectangular systolic each)\n";
+    std::cout << "               - 4 external channels (512 MB each, LPDDR5, 100 GB/s total)\n";
+    std::cout << "               - Jetson Nano class, target: ~15W\n\n";
+
+    std::cout << "  humanoid_ai  64-tile configuration for humanoid robots\n";
     std::cout << "               - 64 compute tiles (24x24 rectangular systolic each)\n";
-    std::cout << "               - 8 external channels (512 MB each, LPDDR5)\n";
-    std::cout << "               - Jetson Orin style: 256-bit, 200 GB/s, power-efficient\n";
-    std::cout << "               - 64 L3, 1024 L2, 12288 L1 buffers (derived: 4*(24+24)*64)\n\n";
+    std::cout << "               - 8 external channels (512 MB each, LPDDR5, 200 GB/s total)\n";
+    std::cout << "               - Jetson AGX Orin class, target: ~45W\n\n";
+
+    std::cout << "  av_ai        128-tile configuration for autonomous vehicles\n";
+    std::cout << "               - 128 compute tiles (28x28 rectangular systolic each)\n";
+    std::cout << "               - 4 HBM3 channels (4 GB each, 1.6 TB/s total)\n";
+    std::cout << "               - Jetson Thor class, target: ~150W\n\n";
 
     std::cout << "  datacenter   256-tile configuration for datacenter-scale AI\n";
     std::cout << "               - 256 compute tiles (32x32 rectangular systolic each)\n";
-    std::cout << "               - 6 external banks (4 GB each, HBM3)\n";
-    std::cout << "               - 256 L3, 4096 L2, 65536 L1 buffers (derived: 4*(32+32)*256)\n";
-    std::cout << "               - 4.8 TB/s memory bandwidth\n\n";
+    std::cout << "               - 6 HBM3 channels (4 GB each, 4.8 TB/s total)\n";
+    std::cout << "               - Target: ~500W\n\n";
 
     std::cout << "L1 Buffer Derivation:\n";
     std::cout << "  L1 streaming buffers are derived from the processor array configuration.\n";
@@ -603,7 +614,9 @@ int cmd_list_templates() {
 
     std::cout << "Generate a template:\n";
     std::cout << "  kpu-config generate minimal -o my_config.yaml\n";
-    std::cout << "  kpu-config generate embodied_ai -o robot.yaml\n";
+    std::cout << "  kpu-config generate drone_ai -o drone.yaml\n";
+    std::cout << "  kpu-config generate humanoid_ai -o humanoid.yaml\n";
+    std::cout << "  kpu-config generate av_ai -o automotive.yaml\n";
     std::cout << "  kpu-config generate datacenter -o hpc_config.json\n";
 
     return 0;
@@ -696,7 +709,9 @@ int cmd_stats_table() {
     std::vector<std::pair<std::string, std::pair<KPUSimulator::Config, Size>>> configs = {
         {"Minimal", {KPUConfigLoader::create_minimal(), 500}},
         {"Edge AI", {KPUConfigLoader::create_edge_ai(), 750}},
-        {"Embodied AI", {KPUConfigLoader::create_embodied_ai(), 1000}},
+        {"Drone AI", {KPUConfigLoader::create_drone_ai(), 1000}},
+        {"Humanoid AI", {KPUConfigLoader::create_humanoid_ai(), 1000}},
+        {"AV AI", {KPUConfigLoader::create_av_ai(), 1200}},
         {"Datacenter", {KPUConfigLoader::create_datacenter(), 1500}}
     };
 
@@ -763,12 +778,16 @@ int cmd_stats_table() {
         double power_per_ch; // Watts
     };
 
+    // LPDDR4x @ 4266 MT/s: ~8.5 GB/s per 16-bit channel
     // LPDDR5 @ 6400 MT/s: ~12.8 GB/s per 16-bit, ~25.6 GB/s per 32-bit
+    // HBM3 @ 6.4 Gbps: ~400-800 GB/s per 1024-bit stack
     std::vector<MemInfo> mem_info = {
-        {"Minimal",     "LPDDR4x", 1, 16,   25,  0.4},   // 25 GB/s total
+        {"Minimal",     "LPDDR4x", 1, 16,   10,  0.3},   // 10 GB/s total
         {"Edge AI",     "LPDDR5",  4, 16,   12,  0.8},   // 48 GB/s total (64-bit)
-        {"Embodied AI", "LPDDR5",  8, 32,   25,  1.0},   // 200 GB/s total (256-bit, Jetson Orin)
-        {"Datacenter",  "HBM3",    6, 1024, 800, 10.0}   // 4800 GB/s total
+        {"Drone AI",    "LPDDR5",  4, 32,   25,  1.0},   // 100 GB/s total (128-bit)
+        {"Humanoid AI", "LPDDR5",  8, 32,   25,  1.0},   // 200 GB/s total (256-bit)
+        {"AV AI",       "HBM3",    4, 1024, 400, 8.0},   // 1600 GB/s total (4 stacks)
+        {"Datacenter",  "HBM3",    6, 1024, 800, 10.0}   // 4800 GB/s total (6 stacks)
     };
 
     for (const auto& m : mem_info) {

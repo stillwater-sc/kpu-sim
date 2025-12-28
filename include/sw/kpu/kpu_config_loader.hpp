@@ -144,10 +144,22 @@ public:
     static KPUSimulator::Config create_edge_ai();
 
     /**
-     * @brief Create embodied AI configuration (robotics/autonomous systems)
-     * @return Embodied AI KPUSimulator::Config
+     * @brief Create drone AI configuration (small drones, micro-robots)
+     * @return Drone AI KPUSimulator::Config
      */
-    static KPUSimulator::Config create_embodied_ai();
+    static KPUSimulator::Config create_drone_ai();
+
+    /**
+     * @brief Create humanoid AI configuration (quadrupeds, bipeds, humanoids)
+     * @return Humanoid AI KPUSimulator::Config
+     */
+    static KPUSimulator::Config create_humanoid_ai();
+
+    /**
+     * @brief Create AV AI configuration (autonomous vehicles, robotaxis)
+     * @return AV AI KPUSimulator::Config
+     */
+    static KPUSimulator::Config create_av_ai();
 
     /**
      * @brief Create datacenter configuration (high-performance)

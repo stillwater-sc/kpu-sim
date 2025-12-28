@@ -474,10 +474,10 @@ KPUSimulator::Config KPUConfigLoader::create_minimal() {
     config.host_memory_region_capacity_mb = 128;
     config.host_memory_bandwidth_gbps = 25;
 
-    // External memory (single LPDDR4x channel - low power)
+    // External memory (single LPDDR4x channel @ 4266 MT/s - low power)
     config.memory_bank_count = 1;
     config.memory_bank_capacity_mb = 256;
-    config.memory_bandwidth_gbps = 25;
+    config.memory_bandwidth_gbps = 10;  // ~8.5 GB/s per 16-bit channel
 
     // Memory controller
     config.memory_controller_count = 1;
@@ -565,10 +565,62 @@ KPUSimulator::Config KPUConfigLoader::create_edge_ai() {
     return config;
 }
 
-KPUSimulator::Config KPUConfigLoader::create_embodied_ai() {
-    // Embodied AI configuration: robotics and autonomous systems
-    // Modeled after Jetson Orin: 256-bit LPDDR5 @ 204 GB/s, power-efficient
-    // 64 tiles (8×8 layout), 24×24 arrays, 64 L3 tiles, 16 L2 banks per L3
+KPUSimulator::Config KPUConfigLoader::create_drone_ai() {
+    // Drone AI configuration: small drones, micro-robots, wearables
+    // 16 tiles (4×4 layout), 24×24 arrays, 4-channel LPDDR5 @ 100 GB/s
+    // Target power: ~15W
+    KPUSimulator::Config config;
+
+    // Host memory (embedded)
+    config.host_memory_region_count = 1;
+    config.host_memory_region_capacity_mb = 1024;  // 1GB
+    config.host_memory_bandwidth_gbps = 50;
+
+    // External memory (4-channel LPDDR5, 128-bit total)
+    // 4 channels × 32-bit × 25 GB/s = 100 GB/s total
+    config.memory_bank_count = 4;
+    config.memory_bank_capacity_mb = 512;   // 512MB per channel = 2GB total
+    config.memory_bandwidth_gbps = 25;      // 25 GB/s per channel
+
+    // Memory controller (one per 2 channels)
+    config.memory_controller_count = 2;
+    config.page_buffer_count = 8;
+    config.page_buffer_capacity_kb = 32;
+
+    // Compute: 16 tiles (4×4 layout), 24×24 arrays each
+    config.compute_tile_count = 16;
+    config.processor_array_rows = 24;
+    config.processor_array_cols = 24;
+    config.processor_array_topology = ProcessorArrayTopology::RECTANGULAR;
+    config.use_systolic_array_mode = true;
+
+    // On-chip memory: L3 = global working set, L2 = local tile buffers
+    config.l3_tile_count = 4;
+    config.l3_tile_capacity_kb = 2048;   // 8 MB L3 total
+    config.l2_bank_count = 64;           // 4 per compute tile
+    config.l2_bank_capacity_kb = 32;     // 2 MB L2 total (4:1 ratio)
+    // L1 buffers: 4 × (24 + 24) × 16 tiles = 3,072
+    config.l1_buffer_count = compute_l1_buffer_count(
+        config.processor_array_topology,
+        config.processor_array_rows,
+        config.processor_array_cols,
+        config.compute_tile_count
+    );
+    config.l1_buffer_capacity_kb = 64;
+
+    // Data movement (scaled for 16 tiles)
+    config.dma_engine_count = 4;
+    config.block_mover_count = 16;   // 4 per L3 tile
+    config.streamer_count = 64;      // 4 per compute tile
+
+    return config;
+}
+
+KPUSimulator::Config KPUConfigLoader::create_humanoid_ai() {
+    // Humanoid AI configuration: quadrupeds, bipeds, humanoid robots
+    // Modeled after Jetson AGX Orin: 256-bit LPDDR5 @ 200 GB/s
+    // 64 tiles (8×8 layout), 24×24 arrays
+    // Target power: ~45W
     KPUSimulator::Config config;
 
     // Host memory (embedded high-performance)
@@ -576,8 +628,8 @@ KPUSimulator::Config KPUConfigLoader::create_embodied_ai() {
     config.host_memory_region_capacity_mb = 2048;  // 2GB per region = 4GB total
     config.host_memory_bandwidth_gbps = 100;
 
-    // External memory (8-channel LPDDR5, 256-bit total, Jetson Orin style)
-    // 8 channels × 32-bit × 25 GB/s = 200 GB/s total, very power efficient
+    // External memory (8-channel LPDDR5, 256-bit total)
+    // 8 channels × 32-bit × 25 GB/s = 200 GB/s total, power efficient
     config.memory_bank_count = 8;
     config.memory_bank_capacity_mb = 512;   // 512MB per channel = 4GB total
     config.memory_bandwidth_gbps = 25;      // 25 GB/s per channel
@@ -595,7 +647,6 @@ KPUSimulator::Config KPUConfigLoader::create_embodied_ai() {
     config.use_systolic_array_mode = true;
 
     // On-chip memory: L3 = global working set, L2 = local tile buffers
-    // L3 should be significantly larger than L2 total
     config.l3_tile_count = 16;
     config.l3_tile_capacity_kb = 2048;   // 32 MB L3 total
     config.l2_bank_count = 256;          // 4 per compute tile
@@ -611,8 +662,59 @@ KPUSimulator::Config KPUConfigLoader::create_embodied_ai() {
 
     // Data movement (scaled for 64 tiles)
     config.dma_engine_count = 8;
-    config.block_mover_count = 64;   // 1 per L3 tile
-    config.streamer_count = 256;     // 4 per L3 tile
+    config.block_mover_count = 64;   // 4 per L3 tile
+    config.streamer_count = 256;     // 4 per compute tile
+
+    return config;
+}
+
+KPUSimulator::Config KPUConfigLoader::create_av_ai() {
+    // AV AI configuration: autonomous vehicles, robotaxis
+    // Modeled after Jetson Thor: HBM3 memory, high bandwidth
+    // 128 tiles (8×16 layout), 28×28 arrays, 4 HBM3 channels @ 1600 GB/s
+    // Target power: ~150W
+    KPUSimulator::Config config;
+
+    // Host memory (automotive high-performance)
+    config.host_memory_region_count = 2;
+    config.host_memory_region_capacity_mb = 8192;  // 8GB per region = 16GB total
+    config.host_memory_bandwidth_gbps = 150;
+
+    // External memory (4-channel HBM3 @ 400 GB/s each = 1.6 TB/s)
+    config.memory_bank_count = 4;
+    config.memory_bank_capacity_mb = 4096;  // 4GB per channel = 16GB total
+    config.memory_bandwidth_gbps = 400;     // 400 GB/s per HBM3 channel
+
+    // Memory controller (one per HBM channel)
+    config.memory_controller_count = 4;
+    config.page_buffer_count = 24;
+    config.page_buffer_capacity_kb = 64;
+
+    // Compute: 128 tiles (8×16 layout), 28×28 arrays each
+    config.compute_tile_count = 128;
+    config.processor_array_rows = 28;
+    config.processor_array_cols = 28;
+    config.processor_array_topology = ProcessorArrayTopology::RECTANGULAR;
+    config.use_systolic_array_mode = true;
+
+    // On-chip memory: L3 = global working set, L2 = local tile buffers
+    config.l3_tile_count = 32;
+    config.l3_tile_capacity_kb = 4096;   // 128 MB L3 total
+    config.l2_bank_count = 512;          // 4 per compute tile
+    config.l2_bank_capacity_kb = 64;     // 32 MB L2 total (4:1 ratio)
+    // L1 buffers: 4 × (28 + 28) × 128 tiles = 28,672
+    config.l1_buffer_count = compute_l1_buffer_count(
+        config.processor_array_topology,
+        config.processor_array_rows,
+        config.processor_array_cols,
+        config.compute_tile_count
+    );
+    config.l1_buffer_capacity_kb = 64;
+
+    // Data movement (scaled for 128 tiles)
+    config.dma_engine_count = 16;
+    config.block_mover_count = 128;  // 4 per L3 tile
+    config.streamer_count = 512;     // 4 per compute tile
 
     return config;
 }

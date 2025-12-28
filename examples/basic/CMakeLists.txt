@@ -129,5 +129,11 @@ target_link_libraries(example_kernel_graph_demo PRIVATE
     kpu_isa
 )
 
+kpu_add_example(host_to_l3_matmul
+    FOLDER "basic"
+    DESCRIPTION "Full data flow: Host → L3 → Shadow → Compute → Local"
+    SOURCES host_to_l3_matmul.cpp
+)
+
 # Note: kernel_demo has been moved to examples/kernel/matmul_kernel.cpp
 # See examples/kernel/ for matmul_kernel, mlp_kernel, and other kernel demos
