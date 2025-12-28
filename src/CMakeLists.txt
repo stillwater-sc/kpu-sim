@@ -22,6 +22,9 @@ add_subdirectory(isa)
 # Add runtime library (host-side orchestration for kernel execution)
 add_subdirectory(runtime)
 
+# Add data flow graph infrastructure (tile-level scheduling)
+add_subdirectory(dataflow)
+
 # Add benchmark library
 add_subdirectory(benchmark)
 

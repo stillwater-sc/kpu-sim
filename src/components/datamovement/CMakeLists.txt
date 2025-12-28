@@ -6,6 +6,8 @@ set(DATAMOVEMENT_COMPONENT_SOURCES
     block_mover.cpp
     streamer.cpp
     vector_engine.cpp
+    l3_interconnect.cpp
+    stateful_block_mover.cpp
 )
 
 # Create the data_movement components library
