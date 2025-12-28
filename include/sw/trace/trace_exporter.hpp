@@ -1,6 +1,7 @@
 #pragma once
 
 #include <sw/trace/trace_logger.hpp>
+#include <sw/trace/resource_tracker.hpp>
 #include <fstream>
 #include <sstream>
 #include <iomanip>
@@ -294,6 +295,148 @@ inline bool export_logger_traces(const std::string& filename,
 
     return false;
 }
+
+// Export ResourceTracker data to Chrome Trace format
+class KPU_API ResourceTrackerExporter {
+private:
+    // Get display name for component types (user-friendly names)
+    static std::string get_display_name(ComponentType type) {
+        switch (type) {
+            case ComponentType::SYSTOLIC_ARRAY:  return "Compute Tile";
+            case ComponentType::DMA_ENGINE:      return "DMA Engine";
+            case ComponentType::BLOCK_MOVER:     return "Block Mover";
+            case ComponentType::STREAMER:        return "Streamer";
+            case ComponentType::L3_TILE:         return "L3 Tile";
+            case ComponentType::L2_BANK:         return "L2 Bank";
+            case ComponentType::L1:              return "L1 Buffer";
+            default: return to_string(type);
+        }
+    }
+
+    // Map ComponentType to display order (lower = higher in viewer)
+    static uint32_t get_display_pid(ComponentType type) {
+        switch (type) {
+            case ComponentType::DMA_ENGINE:      return 4;
+            case ComponentType::BLOCK_MOVER:     return 7;
+            case ComponentType::STREAMER:        return 9;
+            case ComponentType::SYSTOLIC_ARRAY:  return 12;
+            default: return 50;
+        }
+    }
+
+public:
+    static bool export_to_chrome_trace(const std::string& filename,
+                                       const std::map<ResourceId, ResourceTrack>& tracks,
+                                       double clock_freq_ghz = 1.0) {
+        std::ofstream file(filename);
+        if (!file.is_open()) return false;
+
+        file << "[\n";
+
+        // Collect unique process names
+        std::map<uint32_t, std::string> process_names;
+        for (const auto& [res_id, track] : tracks) {
+            uint32_t pid = get_display_pid(res_id.type);
+            std::ostringstream name;
+            name << std::setfill('0') << std::setw(2) << pid << "-" << get_display_name(res_id.type);
+            process_names[pid] = name.str();
+        }
+
+        // Emit process name metadata
+        bool first_event = true;
+        for (const auto& [pid, name] : process_names) {
+            if (!first_event) file << ",\n";
+            file << "  {\"name\": \"process_name\", \"ph\": \"M\", \"pid\": " << pid
+                 << ", \"args\": {\"name\": \"" << name << "\"}}";
+            first_event = false;
+        }
+
+        // Sort resources by (type, id) to ensure proper numerical ordering
+        std::vector<std::pair<ResourceId, const ResourceTrack*>> sorted_resources;
+        for (const auto& [res_id, track] : tracks) {
+            sorted_resources.emplace_back(res_id, &track);
+        }
+        std::sort(sorted_resources.begin(), sorted_resources.end(),
+            [](const auto& a, const auto& b) {
+                if (a.first.type != b.first.type)
+                    return static_cast<uint8_t>(a.first.type) < static_cast<uint8_t>(b.first.type);
+                return a.first.id < b.first.id;
+            });
+
+        // Emit thread name metadata for each resource (in sorted order)
+        // Use sort_index to ensure Chrome displays threads in correct order
+        int sort_idx = 0;
+        for (const auto& [res_id, track_ptr] : sorted_resources) {
+            uint32_t pid = get_display_pid(res_id.type);
+            file << ",\n";
+            file << "  {\"name\": \"thread_name\", \"ph\": \"M\", \"pid\": " << pid
+                 << ", \"tid\": " << res_id.id
+                 << ", \"args\": {\"name\": \"" << get_display_name(res_id.type) << " #" << res_id.id << "\"}}";
+            // Add sort_index metadata to force ordering
+            file << ",\n";
+            file << "  {\"name\": \"thread_sort_index\", \"ph\": \"M\", \"pid\": " << pid
+                 << ", \"tid\": " << res_id.id
+                 << ", \"args\": {\"sort_index\": " << sort_idx++ << "}}";
+        }
+
+        // Emit operation intervals as complete events (in sorted order)
+        for (const auto& [res_id, track_ptr] : sorted_resources) {
+            uint32_t pid = get_display_pid(res_id.type);
+            uint32_t tid = res_id.id;
+            std::string display_name = get_display_name(res_id.type);
+
+            for (const auto& [start, end] : track_ptr->operation_intervals) {
+                file << ",\n";
+                double ts_us = static_cast<double>(start) / clock_freq_ghz * 1000.0;
+                double dur_us = static_cast<double>(end - start) / clock_freq_ghz * 1000.0;
+
+                file << "  {\"name\": \"BUSY\",";
+                file << " \"cat\": \"" << display_name << "\",";
+                file << " \"ph\": \"X\",";
+                file << " \"ts\": " << std::fixed << std::setprecision(3) << ts_us << ",";
+                file << " \"dur\": " << dur_us << ",";
+                file << " \"pid\": " << pid << ",";
+                file << " \"tid\": " << tid << ",";
+                file << " \"args\": {";
+                file << "\"cycle_start\": " << start << ",";
+                file << "\"cycle_end\": " << end << ",";
+                file << "\"duration\": " << (end - start);
+                file << "}}";
+            }
+        }
+
+        // Also emit state transitions as instant events (in sorted order)
+        for (const auto& [res_id, track_ptr] : sorted_resources) {
+            uint32_t pid = get_display_pid(res_id.type);
+            uint32_t tid = res_id.id;
+
+            for (const auto& trans : track_ptr->transitions) {
+                file << ",\n";
+                double ts_us = static_cast<double>(trans.cycle) / clock_freq_ghz * 1000.0;
+
+                file << "  {\"name\": \"" << to_string(trans.to_state) << "\",";
+                file << " \"cat\": \"state\",";
+                file << " \"ph\": \"i\",";
+                file << " \"ts\": " << std::fixed << std::setprecision(3) << ts_us << ",";
+                file << " \"pid\": " << pid << ",";
+                file << " \"tid\": " << tid << ",";
+                file << " \"s\": \"t\",";
+                file << " \"args\": {";
+                file << "\"from\": \"" << to_string(trans.from_state) << "\",";
+                file << "\"to\": \"" << to_string(trans.to_state) << "\",";
+                file << "\"cycle\": " << trans.cycle;
+                if (!trans.reason.empty()) {
+                    file << ",\"reason\": \"" << trans.reason << "\"";
+                }
+                file << "}}";
+            }
+        }
+
+        file << "\n]\n";
+        file.close();
+        return true;
+    }
+};
 
 } // namespace sw::trace
 

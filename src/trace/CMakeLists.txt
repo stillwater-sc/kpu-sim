@@ -9,6 +9,8 @@ set(TRACE_HEADERS
     ${PROJECT_SOURCE_DIR}/include/sw/trace/trace_entry.hpp
     ${PROJECT_SOURCE_DIR}/include/sw/trace/trace_logger.hpp
     ${PROJECT_SOURCE_DIR}/include/sw/trace/trace_exporter.hpp
+    ${PROJECT_SOURCE_DIR}/include/sw/trace/resource_tracker.hpp
+    ${PROJECT_SOURCE_DIR}/include/sw/trace/concurrency_analyzer.hpp
 )
 
 # Create trace library
