@@ -35,6 +35,7 @@ namespace sw::kpu::noc {
 class NoC;
 class NoCRouter;
 class NoCLink;
+class NoCTracer;
 
 // ============================================================================
 // NoC Configuration
@@ -431,6 +432,10 @@ public:
     // Configuration
     const NoCConfig& config() const { return config_; }
 
+    // Tracing
+    void set_tracer(NoCTracer* tracer) { tracer_ = tracer; }
+    NoCTracer* tracer() const { return tracer_; }
+
     // Register delivery callbacks
     void set_l3_delivery_callback(uint8_t l3_id, PacketDeliveryCallback callback);
     void set_dma_delivery_callback(PacketDeliveryCallback callback);
@@ -532,6 +537,9 @@ private:
 
     // Statistics
     Stats stats_;
+
+    // Tracer (optional)
+    NoCTracer* tracer_ = nullptr;
 
     // Internal helpers
     void initialize_routers();

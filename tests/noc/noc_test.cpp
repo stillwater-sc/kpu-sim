@@ -272,3 +272,103 @@ TEST_CASE("NoC Statistics", "[noc]") {
     REQUIRE(stats.total_packets == 10);
     REQUIRE(stats.total_bytes == 2560);
 }
+
+TEST_CASE("NoC Trace Generation", "[noc][trace]") {
+    NoCConfig config;
+    config.rows = 4;
+    config.cols = 4;
+    config.link_bandwidth = 64;
+    config.link_latency = 1;
+    config.router_latency = 1;
+
+    NoC noc(config);
+    NoCTracer tracer;
+    noc.set_tracer(&tracer);
+
+    // Simulate a systolic-like pattern:
+    // - A tiles flow East (row 0: 0->1->2->3)
+    // - B tiles flow South (col 0: 0->4->8->12)
+
+    std::vector<NoCPacket> delivered;
+    for (uint8_t i = 0; i < 16; i++) {
+        noc.set_l3_delivery_callback(i, [&delivered](const NoCPacket& pkt, uint64_t) {
+            delivered.push_back(pkt);
+        });
+    }
+
+    uint64_t cycle = 0;
+
+    // Inject A tiles flowing East from column 0
+    for (int row = 0; row < 4; row++) {
+        for (int k = 0; k < 4; k++) {
+            uint8_t src = row * 4;  // Column 0
+            uint8_t dst = row * 4 + 3;  // Column 3
+
+            TileDescriptor tile;
+            tile.tensor = TensorId::A;
+            tile.m_tile = row;
+            tile.k_tile = k;
+            tile.size = 256;
+
+            // Stagger injections to simulate real behavior
+            while (noc.inject_l3_to_l3(src, dst, tile, cycle) != TransferResult::SUCCESS) {
+                noc.step(cycle++);
+            }
+            noc.step(cycle++);
+        }
+    }
+
+    // Inject B tiles flowing South from row 0
+    for (int col = 0; col < 4; col++) {
+        for (int k = 0; k < 4; k++) {
+            uint8_t src = col;  // Row 0
+            uint8_t dst = 12 + col;  // Row 3
+
+            TileDescriptor tile;
+            tile.tensor = TensorId::B;
+            tile.k_tile = k;
+            tile.n_tile = col;
+            tile.size = 256;
+
+            while (noc.inject_l3_to_l3(src, dst, tile, cycle) != TransferResult::SUCCESS) {
+                noc.step(cycle++);
+            }
+            noc.step(cycle++);
+        }
+    }
+
+    // Run until idle
+    while (!noc.is_idle() && cycle < 5000) {
+        noc.step(cycle++);
+    }
+
+    std::cout << "\nNoC Trace Generation:\n";
+    std::cout << "  Total cycles: " << cycle << "\n";
+    std::cout << "  Packets delivered: " << delivered.size() << "\n";
+    std::cout << "  Trace events: " << tracer.num_events() << "\n";
+
+    // Export trace to CSV
+    std::string trace_file = "/tmp/noc_trace.csv";
+    REQUIRE(tracer.export_csv(trace_file));
+    std::cout << "  Trace exported to: " << trace_file << "\n";
+
+    // Verify we have all types of events
+    size_t inject_count = 0, hop_count = 0, eject_count = 0;
+    for (const auto& e : tracer.events()) {
+        switch (e.type) {
+            case NoCEventType::INJECT: inject_count++; break;
+            case NoCEventType::HOP: hop_count++; break;
+            case NoCEventType::EJECT: eject_count++; break;
+            default: break;
+        }
+    }
+
+    std::cout << "  INJECT events: " << inject_count << "\n";
+    std::cout << "  HOP events: " << hop_count << "\n";
+    std::cout << "  EJECT events: " << eject_count << "\n";
+
+    REQUIRE(inject_count == 32);  // 16 A tiles + 16 B tiles
+    REQUIRE(eject_count == 32);   // All should be delivered
+    REQUIRE(hop_count > 0);       // Should have some hops
+    REQUIRE(delivered.size() == 32);
+}

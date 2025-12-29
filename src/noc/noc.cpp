@@ -403,6 +403,19 @@ TransferResult NoC::inject_l3_to_l3(
 
     if (!can_inject(src_l3, PortDirection::LOCAL, cycle)) {
         stats_.injection_blocked_cycles++;
+
+        // Record blocked event
+        if (tracer_) {
+            NoCTraceEvent event;
+            event.cycle = cycle;
+            event.type = NoCEventType::BLOCKED;
+            event.router_id = src_l3;
+            event.port = PortDirection::LOCAL;
+            event.packet_seq = next_sequence_;  // Would-be packet
+            event.tile = tile;
+            tracer_->record_event(event);
+        }
+
         return TransferResult::BUFFER_FULL;
     }
 
@@ -412,6 +425,18 @@ TransferResult NoC::inject_l3_to_l3(
 
     if (!routers_[src_l3]->inject_packet(std::move(pkt), PortDirection::LOCAL, cycle)) {
         return TransferResult::BUFFER_FULL;
+    }
+
+    // Record injection event
+    if (tracer_) {
+        NoCTraceEvent event;
+        event.cycle = cycle;
+        event.type = NoCEventType::INJECT;
+        event.router_id = src_l3;
+        event.port = PortDirection::LOCAL;
+        event.packet_seq = next_sequence_ - 1;  // We already incremented in create_packet
+        event.tile = tile;
+        tracer_->record_event(event);
     }
 
     stats_.total_packets++;
@@ -512,6 +537,18 @@ void NoC::step(uint64_t cycle) {
                             out.buffer.pop();
                             out.link->clear_current_packet();
 
+                            // Record hop event
+                            if (tracer_) {
+                                NoCTraceEvent event;
+                                event.cycle = cycle;
+                                event.type = NoCEventType::HOP;
+                                event.router_id = static_cast<uint8_t>(neighbor);
+                                event.port = in_dir;
+                                event.packet_seq = pkt.sequence_num;
+                                event.tile = pkt.tile;
+                                tracer_->record_event(event);
+                            }
+
                             next_inp.buffer.push(std::move(pkt));
                             next_inp.packets_received++;
                         }
@@ -529,6 +566,18 @@ void NoC::deliver_packets(uint64_t cycle) {
             if (pkt_opt) {
                 NoCPacket& pkt = *pkt_opt;
                 pkt.tail_arrive_cycle = cycle;
+
+                // Record eject event
+                if (tracer_) {
+                    NoCTraceEvent event;
+                    event.cycle = cycle;
+                    event.type = NoCEventType::EJECT;
+                    event.router_id = i;
+                    event.port = PortDirection::LOCAL;
+                    event.packet_seq = pkt.sequence_num;
+                    event.tile = pkt.tile;
+                    tracer_->record_event(event);
+                }
 
                 // Update statistics
                 update_stats(pkt);
