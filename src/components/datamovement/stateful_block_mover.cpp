@@ -59,6 +59,9 @@ bool StatefulBlockMover::step(uint64_t cycle) {
         return false;
     }
 
+    // Store current cycle for execute_current to use
+    current_cycle_ = cycle;
+
     // Process any completed transfers
     process_completed_transfers(cycle);
 
@@ -210,29 +213,29 @@ bool StatefulBlockMover::execute_current() {
             return true;
 
         case BlockMoverOp::PUSH_TO_L2:
-            return exec_push_to_l2(cmd, 0);  // cycle not needed for now
+            return exec_push_to_l2(cmd, current_cycle_);
 
         case BlockMoverOp::PULL_FROM_L2:
-            return exec_pull_from_l2(cmd, 0);
+            return exec_pull_from_l2(cmd, current_cycle_);
 
         case BlockMoverOp::SEND_EAST:
-            return exec_send(cmd, Direction::EAST, 0);
+            return exec_send(cmd, Direction::EAST, current_cycle_);
 
         case BlockMoverOp::SEND_WEST:
-            return exec_send(cmd, Direction::WEST, 0);
+            return exec_send(cmd, Direction::WEST, current_cycle_);
 
         case BlockMoverOp::SEND_NORTH:
-            return exec_send(cmd, Direction::NORTH, 0);
+            return exec_send(cmd, Direction::NORTH, current_cycle_);
 
         case BlockMoverOp::SEND_SOUTH:
-            return exec_send(cmd, Direction::SOUTH, 0);
+            return exec_send(cmd, Direction::SOUTH, current_cycle_);
 
         case BlockMoverOp::SEND_TO:
-            return exec_send_to(cmd, 0);
+            return exec_send_to(cmd, current_cycle_);
 
         case BlockMoverOp::RECEIVE:
         case BlockMoverOp::RECEIVE_FROM:
-            return exec_receive(cmd, 0);
+            return exec_receive(cmd, current_cycle_);
 
         case BlockMoverOp::WAIT_TRIGGER:
             return exec_wait_trigger(cmd);
@@ -241,7 +244,7 @@ bool StatefulBlockMover::execute_current() {
             return exec_emit_trigger(cmd);
 
         case BlockMoverOp::BARRIER:
-            return exec_barrier(cmd, 0);
+            return exec_barrier(cmd, current_cycle_);
 
         case BlockMoverOp::FENCE:
             // Memory fence - ensure ordering (no-op in simulation)
@@ -610,14 +613,15 @@ BlockMoverArray::BlockMoverArray(const Config& config)
 void BlockMoverArray::setup_callbacks() {
     // Set up transfer callbacks to inject packets into interconnect
     for (size_t id = 0; id < movers_.size(); ++id) {
+        auto* mover = movers_[id].get();
         movers_[id]->set_transfer_callback(
-            [this, id](const TileDescriptor& tile, uint8_t dest_l3) {
+            [this, id, mover](const TileDescriptor& tile, uint8_t dest_l3) {
                 L3TransferPacket packet;
                 packet.src_l3_id = static_cast<uint8_t>(id);
                 packet.dst_l3_id = dest_l3;
                 packet.tile = tile;
-                // Note: actual data not copied in simulation
-                interconnect_.inject_packet(packet, 0);  // cycle managed externally
+                // Use the mover's current cycle for proper timing
+                interconnect_.inject_packet(packet, mover->current_cycle());
             });
 
         movers_[id]->set_trigger_callback(

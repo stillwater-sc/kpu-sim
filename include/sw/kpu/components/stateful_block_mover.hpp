@@ -223,6 +223,7 @@ public:
     size_t commands_remaining() const {
         return pc_ < program_.size() ? program_.size() - pc_ : 0;
     }
+    uint64_t current_cycle() const { return current_cycle_; }
 
     const BlockMoverCommand* current_command() const {
         return pc_ < program_.size() ? &program_[pc_] : nullptr;
@@ -308,6 +309,9 @@ private:
 
     // Statistics
     Stats stats_;
+
+    // Current cycle (set by step() for use by execute_current)
+    uint64_t current_cycle_ = 0;
 
     // ========== Internal Execution ==========
 

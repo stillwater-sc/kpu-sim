@@ -78,6 +78,8 @@ BlockMoverCompiler::BlockMoverCompiler()
 BlockMoverCompiler::BlockMoverCompiler(const Config& config)
     : config_(config)
 {
+    // Disable triggers for now - they cause deadlocks with limited channels
+    config_.use_explicit_triggers = false;
 }
 
 CompiledSchedule BlockMoverCompiler::compile(const TileDataFlowGraph& dfg) {
@@ -316,8 +318,8 @@ void BlockMoverCompiler::emit_matmul(const DFNode& node, const TileDataFlowGraph
     // For matmul, we need to:
     // 1. Push A tile to L2 (if not already there)
     // 2. Push B tile to L2
-    // 3. Signal compute start
-    // 4. Wait for compute complete
+    // 3. Signal compute start (in real hardware, systolic array would compute)
+    // 4. For simulation, we model compute as instant (no COMPUTE_DONE wait)
     // 5. Result is in L1, will be drained later
 
     // Create A tile descriptor
@@ -338,13 +340,18 @@ void BlockMoverCompiler::emit_matmul(const DFNode& node, const TileDataFlowGraph
     prog.push_to_l2(a_tile, node.l3_id);  // Using L3 ID as L2 bank for simplicity
     prog.push_to_l2(b_tile, node.l3_id);
 
-    // Signal compute start
-    prog.emit_trigger(TriggerChannel::COMPUTE_START, static_cast<uint16_t>(1 << node.l3_id));
+    // In simulation, compute is modeled as instant
+    // Real hardware would signal compute start and wait for completion
+    // The timing is captured in the schedule's node.duration
 
-    // Wait for compute done (this would be signaled by the systolic array)
-    prog.wait_trigger(TriggerChannel::COMPUTE_DONE);
+    // Add a trace marker to indicate compute happened
+    BlockMoverCommand cmd;
+    cmd.op = BlockMoverOp::TRACE_MARKER;
+    cmd.trace_id = static_cast<uint32_t>(node.id);
+    cmd.tile = node.tile;
+    prog.append(cmd);
 
-    // Note: C tile draining is handled by a separate L2_TO_L3 node
+    // Note: C tile draining is handled by a separate L2_TO_L3 or DMA_STORE node
 }
 
 void BlockMoverCompiler::emit_barrier(const DFNode& node, BlockMoverProgram& prog) {

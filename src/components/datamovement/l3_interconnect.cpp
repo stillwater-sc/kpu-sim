@@ -74,10 +74,10 @@ bool L3Interconnect::inject_packet(const L3TransferPacket& packet, uint64_t cycl
     // Check if link is available
     InterconnectLink& link = links_[packet.src_l3_id][static_cast<size_t>(*next_dir)];
     if (!link.is_available(cycle)) {
-        // Queue for later injection
+        // Queue for later injection - use next cycle to avoid infinite loop
         L3TransferPacket queued = packet;
         queued.inject_cycle = cycle;
-        injection_queue_.push({cycle, queued});
+        injection_queue_.push({cycle + 1, queued});
         return true;
     }
 

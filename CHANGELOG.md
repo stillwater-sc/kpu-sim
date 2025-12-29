@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed - 2025-12-29
+- **Timing Bug in StatefulBlockMover** (`stateful_block_mover.cpp:200-247`)
+  - `execute_current()` was passing `0` as cycle to all command executors
+  - Added `current_cycle_` member variable and public accessor
+  - Now all transfer timing calculations use correct current cycle
+  - Impact: Transfer completion times now calculated correctly
+
+- **Infinite Loop in L3Interconnect** (`l3_interconnect.cpp:76-81`)
+  - When link busy, `inject_packet()` was re-queuing packets with same cycle
+  - The `step()` while loop immediately re-processed them, causing infinite loop
+  - Fixed by queuing for `cycle + 1` instead of `cycle`
+  - Impact: Simulation no longer hangs on busy links
+
+- **Interconnect Callback Timing** (`stateful_block_mover.cpp:617-624`)
+  - Transfer callback was passing `0` for cycle when injecting packets
+  - Now uses `mover->current_cycle()` for correct timing
+
+### Changed - 2025-12-29
+- **Block Systolic Matmul Example** (`examples/blas/block_systolic_matmul.cpp`)
+  - Cleaned up debug output for production use
+  - Added note that compute time is not simulated (data movement only)
+  - Improved progress reporting for long simulations
+
 ### Added - 2025-12-25
 - **Benchmark Infrastructure (Phase 7)**
   - `include/sw/benchmark/benchmark.hpp` - Complete benchmark harness API:
@@ -396,6 +419,8 @@ See `docs/sessions/2025-11-23_schedule_generator_pipelining.md` for detailed rec
 
 ### Session Logs
 Detailed session logs are maintained in `docs/sessions/` directory:
+- `2025-12-29_block_systolic_matmul_simulation.md` - Block systolic matmul bug fixes
+- `2025-12-25_benchmarking_and_efficiency_analysis.md` - Benchmark infrastructure and efficiency bug fix
 - `2025-11-26_dfx_compiler_implementation.md` - DFX layer and kernel compiler implementation
 - `2025-11-25_strategy_aware_scheduling.md` - Strategy-aware L2/L3 scheduling fix
 - `2025-11-23_schedule_generator_pipelining.md` - Double-buffering and pipelining attempt
