@@ -21,6 +21,7 @@
 #include "sw/kpu/components/stateful_block_mover.hpp"
 #include "sw/kpu/dataflow/tile_dataflow_graph.hpp"
 #include "sw/kpu/dataflow/block_mover_compiler.hpp"
+#include "sw/kpu/dataflow/tile_flow_tracer.hpp"
 
 using namespace sw::kpu;
 using namespace sw::kpu::dataflow;
@@ -382,16 +383,25 @@ void analyze_compiled_schedule(const CompiledSchedule& schedule) {
 // Simulation
 // ============================================================================
 
-void simulate_execution(const CompiledSchedule& compiled, const MatmulConfig& config) {
+void simulate_execution(const CompiledSchedule& compiled, const MatmulConfig& config,
+                        bool enable_tracing = true) {
     std::cout << "\n╔══════════════════════════════════════════════════════════════════╗\n";
     std::cout << "║                    SIMULATION EXECUTION                           ║\n";
     std::cout << "╚══════════════════════════════════════════════════════════════════╝\n\n";
+
+    // Create tile flow tracer
+    TileFlowTracer tracer;
 
     // Create BlockMoverArray
     BlockMoverArray::Config array_config;
     array_config.rows = config.mesh_rows;
     array_config.cols = config.mesh_cols;
     BlockMoverArray array(array_config);
+
+    // Enable tracing
+    if (enable_tracing) {
+        array.set_tracer(&tracer);
+    }
 
     // Load programs
     std::vector<BlockMoverProgram> programs;
@@ -403,6 +413,9 @@ void simulate_execution(const CompiledSchedule& compiled, const MatmulConfig& co
     array.load_programs(programs);
 
     std::cout << "Starting simulation with " << programs.size() << " active L3 tiles...\n" << std::flush;
+    if (enable_tracing) {
+        std::cout << "  Tracing enabled\n" << std::flush;
+    }
 
     // Execute
     auto start_time = std::chrono::high_resolution_clock::now();
@@ -443,6 +456,33 @@ void simulate_execution(const CompiledSchedule& compiled, const MatmulConfig& co
     std::cout << "  Total bytes moved:       " << (stats.total_bytes_moved / 1024) << " KB\n";
     std::cout << "  Average utilization:     " << std::fixed << std::setprecision(1)
               << (stats.avg_utilization * 100) << "%\n";
+
+    // Export trace data
+    if (enable_tracing && tracer.num_events() > 0) {
+        std::cout << "\nTrace Statistics:\n";
+        auto trace_stats = tracer.compute_stats(config.num_l3_tiles);
+        std::cout << "  Total events: " << trace_stats.total_events << "\n";
+        std::cout << "  L3-L3 transfers: " << trace_stats.l3_transfers << "\n";
+        std::cout << "  L3-L2 transfers: " << trace_stats.l2_transfers << "\n";
+        std::cout << "  Barriers: " << trace_stats.barriers << "\n";
+
+        // Export to files
+        std::string csv_file = "tile_flow_trace.csv";
+        std::string json_file = "tile_flow_trace.json";
+        std::string chrome_file = "tile_flow_trace_chrome.json";
+
+        if (tracer.export_csv(csv_file)) {
+            std::cout << "\n  Trace exported to: " << csv_file << "\n";
+        }
+        if (tracer.export_json(json_file)) {
+            std::cout << "  Trace exported to: " << json_file << "\n";
+        }
+        if (tracer.export_chrome_trace(chrome_file)) {
+            std::cout << "  Chrome Trace exported to: " << chrome_file << "\n";
+            std::cout << "  Open in: chrome://tracing or https://ui.perfetto.dev\n";
+        }
+        std::cout << "\n  Visualize with: python3 tools/visualization/tile_flow_gantt.py " << csv_file << "\n";
+    }
 }
 
 // ============================================================================

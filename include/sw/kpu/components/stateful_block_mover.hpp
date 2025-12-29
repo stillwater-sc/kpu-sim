@@ -19,8 +19,14 @@
 
 #include "block_mover_isa.hpp"
 #include "l3_interconnect.hpp"
+#include "sw/kpu/dataflow/tile_flow_tracer.hpp"
 
 namespace sw::kpu {
+
+// Forward declaration
+namespace dataflow {
+class TileFlowTracer;
+}
 
 // Forward declarations
 class L3Tile;
@@ -206,6 +212,11 @@ public:
         trace_callback_ = std::move(callback);
     }
 
+    /// Set tracer for recording tile flow events
+    void set_tracer(dataflow::TileFlowTracer* tracer) {
+        tracer_ = tracer;
+    }
+
     // ========== State Query ==========
 
     uint8_t id() const { return config_.id; }
@@ -307,6 +318,9 @@ private:
     TriggerCallback trigger_callback_;
     TraceCallback trace_callback_;
 
+    // Tracer
+    dataflow::TileFlowTracer* tracer_ = nullptr;
+
     // Statistics
     Stats stats_;
 
@@ -400,11 +414,16 @@ public:
     };
     AggregateStats get_aggregate_stats() const;
 
+    // Tracing support
+    void set_tracer(dataflow::TileFlowTracer* tracer) { tracer_ = tracer; }
+    dataflow::TileFlowTracer* tracer() const { return tracer_; }
+
 private:
     Config config_;
     std::vector<std::unique_ptr<StatefulBlockMover>> movers_;
     L3Interconnect interconnect_;
     TriggerNetwork triggers_;
+    dataflow::TileFlowTracer* tracer_ = nullptr;
 
     void setup_callbacks();
 };

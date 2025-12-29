@@ -5,6 +5,9 @@
 # Add trace infrastructure first (needed by components)
 add_subdirectory(trace)
 
+# Add NoC (Network-on-Chip) component
+add_subdirectory(noc)
+
 # Add component-based architecture
 add_subdirectory(components)
 

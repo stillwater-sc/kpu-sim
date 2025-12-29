@@ -55,6 +55,7 @@ add_subdirectory(storage)
 add_subdirectory(compiler)
 add_subdirectory(isa)
 add_subdirectory(runtime)
+add_subdirectory(noc)
 add_subdirectory(integration)
 add_subdirectory(benchmarks)
 

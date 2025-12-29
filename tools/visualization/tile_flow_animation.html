@@ -1,0 +1,1199 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>KPU Tile Flow Animation</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+            min-height: 100vh;
+            color: #fff;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+        }
+
+        header {
+            text-align: center;
+            margin-bottom: 30px;
+        }
+
+        h1 {
+            font-size: 2.5em;
+            background: linear-gradient(90deg, #4CAF50, #2196F3);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            margin-bottom: 10px;
+        }
+
+        .subtitle {
+            color: #888;
+            font-size: 1.1em;
+        }
+
+        .main-content {
+            display: flex;
+            gap: 30px;
+            justify-content: center;
+            flex-wrap: wrap;
+        }
+
+        .mesh-container {
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 16px;
+            padding: 20px;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+        }
+
+        #mesh-svg {
+            display: block;
+        }
+
+        .l3-tile {
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+
+        .l3-tile:hover {
+            filter: brightness(1.2);
+        }
+
+        .l3-tile-bg {
+            fill: #2a2a4a;
+            stroke: #444;
+            stroke-width: 2;
+        }
+
+        .l3-tile.active .l3-tile-bg {
+            stroke: #4CAF50;
+            stroke-width: 3;
+            filter: drop-shadow(0 0 10px rgba(76, 175, 80, 0.5));
+        }
+
+        .l3-label {
+            fill: #888;
+            font-size: 12px;
+            font-weight: bold;
+        }
+
+        .tensor-block {
+            opacity: 0.9;
+            transition: all 0.2s ease;
+        }
+
+        .tensor-block.tensor-A { fill: #FF6B6B; }
+        .tensor-block.tensor-B { fill: #4ECDC4; }
+        .tensor-block.tensor-C { fill: #FFE66D; }
+
+        .transfer-arrow {
+            stroke-width: 4;
+            fill: none;
+            opacity: 0;
+            transition: opacity 0.3s ease;
+        }
+
+        .transfer-arrow.active {
+            opacity: 0.8;
+            animation: pulse 0.5s ease infinite;
+        }
+
+        @keyframes pulse {
+            0%, 100% { stroke-width: 4; }
+            50% { stroke-width: 6; }
+        }
+
+        .controls {
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 16px;
+            padding: 20px;
+            width: 350px;
+        }
+
+        .control-group {
+            margin-bottom: 20px;
+        }
+
+        .control-group h3 {
+            color: #4CAF50;
+            margin-bottom: 10px;
+            font-size: 0.9em;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+
+        .play-controls {
+            display: flex;
+            gap: 10px;
+            justify-content: center;
+            margin-bottom: 15px;
+        }
+
+        .btn {
+            background: linear-gradient(135deg, #4CAF50, #2E7D32);
+            border: none;
+            color: white;
+            padding: 12px 24px;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 1em;
+            transition: all 0.3s ease;
+        }
+
+        .btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 15px rgba(76, 175, 80, 0.4);
+        }
+
+        .btn:active {
+            transform: translateY(0);
+        }
+
+        .btn-secondary {
+            background: linear-gradient(135deg, #555, #333);
+        }
+
+        .btn-secondary:hover {
+            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.4);
+        }
+
+        .speed-control {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .speed-control input {
+            flex: 1;
+            -webkit-appearance: none;
+            height: 8px;
+            background: #333;
+            border-radius: 4px;
+            outline: none;
+        }
+
+        .speed-control input::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            width: 20px;
+            height: 20px;
+            background: #4CAF50;
+            border-radius: 50%;
+            cursor: pointer;
+        }
+
+        .timeline {
+            position: relative;
+            height: 60px;
+            background: #1a1a2e;
+            border-radius: 8px;
+            overflow: hidden;
+            margin-bottom: 10px;
+        }
+
+        .timeline-progress {
+            position: absolute;
+            height: 100%;
+            background: linear-gradient(90deg, rgba(76, 175, 80, 0.3), rgba(33, 150, 243, 0.3));
+            transition: width 0.1s ease;
+        }
+
+        .timeline-cursor {
+            position: absolute;
+            width: 3px;
+            height: 100%;
+            background: #4CAF50;
+            box-shadow: 0 0 10px #4CAF50;
+            transition: left 0.1s ease;
+        }
+
+        .timeline-events {
+            position: absolute;
+            width: 100%;
+            height: 100%;
+        }
+
+        .timeline-event {
+            position: absolute;
+            width: 3px;
+            height: 30%;
+            bottom: 0;
+            border-radius: 2px 2px 0 0;
+        }
+
+        .cycle-display {
+            display: flex;
+            justify-content: space-between;
+            color: #888;
+            font-size: 0.9em;
+        }
+
+        .current-cycle {
+            font-size: 2em;
+            font-weight: bold;
+            color: #4CAF50;
+            text-align: center;
+            margin: 10px 0;
+        }
+
+        .event-log {
+            background: #1a1a2e;
+            border-radius: 8px;
+            padding: 10px;
+            height: 200px;
+            overflow-y: auto;
+            font-family: 'Monaco', 'Consolas', monospace;
+            font-size: 0.85em;
+        }
+
+        .event-log-entry {
+            padding: 4px 8px;
+            border-radius: 4px;
+            margin-bottom: 4px;
+        }
+
+        .event-log-entry.L3_SEND_START { background: rgba(76, 175, 80, 0.2); border-left: 3px solid #4CAF50; }
+        .event-log-entry.L3_TO_L2_START { background: rgba(33, 150, 243, 0.2); border-left: 3px solid #2196F3; }
+        .event-log-entry.BARRIER_START { background: rgba(255, 152, 0, 0.2); border-left: 3px solid #FF9800; }
+        .event-log-entry.L3_RECEIVE { background: rgba(139, 195, 74, 0.2); border-left: 3px solid #8BC34A; }
+
+        .legend {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 15px;
+            justify-content: center;
+            margin-top: 10px;
+        }
+
+        .legend-item {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            font-size: 0.85em;
+        }
+
+        .legend-color {
+            width: 16px;
+            height: 16px;
+            border-radius: 4px;
+        }
+
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 10px;
+        }
+
+        .stat-card {
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 8px;
+            padding: 10px;
+            text-align: center;
+        }
+
+        .stat-value {
+            font-size: 1.5em;
+            font-weight: bold;
+            color: #4CAF50;
+        }
+
+        .stat-label {
+            font-size: 0.75em;
+            color: #888;
+            text-transform: uppercase;
+        }
+
+        .file-input-wrapper {
+            text-align: center;
+            margin-bottom: 20px;
+        }
+
+        .file-input {
+            display: none;
+        }
+
+        .file-label {
+            display: inline-block;
+            background: linear-gradient(135deg, #2196F3, #1976D2);
+            padding: 10px 20px;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+
+        .file-label:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 15px rgba(33, 150, 243, 0.4);
+        }
+
+        .demo-notice {
+            background: rgba(255, 152, 0, 0.2);
+            border: 1px solid #FF9800;
+            border-radius: 8px;
+            padding: 10px;
+            margin-bottom: 15px;
+            font-size: 0.85em;
+            text-align: center;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>KPU Tile Flow Visualization</h1>
+            <p class="subtitle">Watch data tiles hop and forward through the L3 mesh</p>
+        </header>
+
+        <div class="main-content">
+            <div class="mesh-container">
+                <svg id="mesh-svg" width="520" height="520" viewBox="0 0 520 520">
+                    <defs>
+                        <marker id="arrowhead" markerWidth="10" markerHeight="7" refX="10" refY="3.5" orient="auto">
+                            <polygon points="0 0, 10 3.5, 0 7" fill="#4CAF50"/>
+                        </marker>
+                        <filter id="glow">
+                            <feGaussianBlur stdDeviation="3" result="coloredBlur"/>
+                            <feMerge>
+                                <feMergeNode in="coloredBlur"/>
+                                <feMergeNode in="SourceGraphic"/>
+                            </feMerge>
+                        </filter>
+                    </defs>
+                    <!-- L3 tiles will be rendered here -->
+                    <g id="l3-tiles"></g>
+                    <!-- Transfer arrows -->
+                    <g id="transfer-arrows"></g>
+                    <!-- Moving tensors -->
+                    <g id="moving-tensors"></g>
+                </svg>
+
+                <div class="legend">
+                    <div class="legend-item">
+                        <div class="legend-color" style="background: #FF6B6B;"></div>
+                        <span>Tensor A (Input)</span>
+                    </div>
+                    <div class="legend-item">
+                        <div class="legend-color" style="background: #4ECDC4;"></div>
+                        <span>Tensor B (Weights)</span>
+                    </div>
+                    <div class="legend-item">
+                        <div class="legend-color" style="background: #FFE66D;"></div>
+                        <span>Tensor C (Output)</span>
+                    </div>
+                </div>
+            </div>
+
+            <div class="controls">
+                <div class="file-input-wrapper">
+                    <input type="file" id="trace-file" class="file-input" accept=".csv,.json">
+                    <label for="trace-file" class="file-label">Load Trace File</label>
+                </div>
+
+                <div id="demo-notice" class="demo-notice">
+                    Demo mode: Showing synthetic 4x4 matmul flow
+                </div>
+
+                <div class="control-group">
+                    <h3>Output Tile Filter</h3>
+                    <div class="tile-selector">
+                        <div class="tile-inputs">
+                            <label>M: <input type="number" id="m-tile" min="0" max="15" value="0" style="width: 50px; background: #333; border: 1px solid #555; color: white; padding: 4px; border-radius: 4px;"></label>
+                            <label>N: <input type="number" id="n-tile" min="0" max="15" value="0" style="width: 50px; background: #333; border: 1px solid #555; color: white; padding: 4px; border-radius: 4px;"></label>
+                            <label>K tiles: <input type="number" id="k-tiles" min="1" max="16" value="4" style="width: 50px; background: #333; border: 1px solid #555; color: white; padding: 4px; border-radius: 4px;"></label>
+                        </div>
+                        <div class="filter-buttons" style="margin-top: 10px; display: flex; gap: 10px;">
+                            <button class="btn" id="btn-filter">Filter C[m,n]</button>
+                            <button class="btn btn-secondary" id="btn-clear-filter">Show All</button>
+                        </div>
+                    </div>
+                    <div id="dependency-info" style="margin-top: 10px; padding: 8px; background: rgba(76, 175, 80, 0.1); border-radius: 4px; font-size: 0.85em; display: none;"></div>
+                </div>
+
+                <div class="control-group">
+                    <h3>Playback</h3>
+                    <div class="play-controls">
+                        <button class="btn btn-secondary" id="btn-step-back">&#9664;&#9664;</button>
+                        <button class="btn" id="btn-play">&#9654; Play</button>
+                        <button class="btn btn-secondary" id="btn-step">&#9654;&#9654;</button>
+                    </div>
+                    <div class="speed-control">
+                        <span>Speed:</span>
+                        <input type="range" id="speed-slider" min="1" max="100" value="50">
+                        <span id="speed-value">1x</span>
+                    </div>
+                </div>
+
+                <div class="control-group">
+                    <h3>Timeline</h3>
+                    <div class="current-cycle">Cycle: <span id="cycle-counter">0</span></div>
+                    <div class="timeline" id="timeline">
+                        <div class="timeline-progress" id="timeline-progress"></div>
+                        <div class="timeline-events" id="timeline-events"></div>
+                        <div class="timeline-cursor" id="timeline-cursor"></div>
+                    </div>
+                    <div class="cycle-display">
+                        <span id="start-cycle">0</span>
+                        <span id="end-cycle">4126</span>
+                    </div>
+                </div>
+
+                <div class="control-group">
+                    <h3>Statistics</h3>
+                    <div class="stats-grid">
+                        <div class="stat-card">
+                            <div class="stat-value" id="stat-transfers">0</div>
+                            <div class="stat-label">L3 Transfers</div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-value" id="stat-l2-pushes">0</div>
+                            <div class="stat-label">L2 Pushes</div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-value" id="stat-barriers">0</div>
+                            <div class="stat-label">Barriers</div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-value" id="stat-active">0</div>
+                            <div class="stat-label">Active Tiles</div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="control-group">
+                    <h3>Event Log</h3>
+                    <div class="event-log" id="event-log"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Configuration
+        const MESH_ROWS = 4;
+        const MESH_COLS = 4;
+        const TILE_SIZE = 100;
+        const TILE_GAP = 30;
+        const TENSOR_SIZE = 25;
+
+        // State
+        let events = [];
+        let currentCycle = 0;
+        let maxCycle = 4126;
+        let isPlaying = false;
+        let playbackSpeed = 50;
+        let animationFrame = null;
+        let lastFrameTime = 0;
+
+        // Tensor name mapping
+        const TENSOR_NAMES = { 0: 'A', 1: 'B', 2: 'C', 3: 'Bias' };
+        const TENSOR_COLORS = {
+            0: '#FF6B6B',  // A - red
+            1: '#4ECDC4',  // B - teal
+            2: '#FFE66D',  // C - yellow
+            3: '#9B59B6'   // Bias - purple
+        };
+
+        // L3 tile state
+        let l3TileState = {};
+        for (let i = 0; i < 16; i++) {
+            l3TileState[i] = { tensors: new Set(), active: false };
+        }
+
+        // Statistics
+        let stats = {
+            transfers: 0,
+            l2Pushes: 0,
+            barriers: 0
+        };
+
+        // Filter state
+        let isFiltered = false;
+        let filteredEvents = [];
+        let allEvents = [];
+        let filterM = 0;
+        let filterN = 0;
+        let filterKTiles = 4;
+        let involvedL3Tiles = new Set();
+
+        // Filter events for a specific output tile C[m,n]
+        function filterEventsByOutputTile(events, m, n, kTiles) {
+            const relevantTiles = new Set();
+
+            // C[m,n] output tile
+            relevantTiles.add(`2,${m},${n},0`);
+
+            // A[m,k] input tiles for all k
+            for (let k = 0; k < kTiles; k++) {
+                relevantTiles.add(`0,${m},0,${k}`);
+            }
+
+            // B[k,n] input tiles for all k
+            for (let k = 0; k < kTiles; k++) {
+                relevantTiles.add(`1,0,${n},${k}`);
+            }
+
+            return events.filter(e => {
+                const key = `${e.tensor},${e.m_tile},${e.n_tile},${e.k_tile}`;
+                return relevantTiles.has(key);
+            });
+        }
+
+        // Get L3 tiles involved in computing C[m,n]
+        function getInvolvedL3Tiles(m, n) {
+            const tiles = new Set();
+
+            // Output L3 tile (where C[m,n] is computed)
+            tiles.add(m * MESH_COLS + n);
+
+            // A tiles path: from (m, 0) to (m, n)
+            for (let col = 0; col <= n; col++) {
+                tiles.add(m * MESH_COLS + col);
+            }
+
+            // B tiles path: from (0, n) to (m, n)
+            for (let row = 0; row <= m; row++) {
+                tiles.add(row * MESH_COLS + n);
+            }
+
+            return tiles;
+        }
+
+        // Apply filter
+        function applyFilter() {
+            filterM = parseInt(document.getElementById('m-tile').value) || 0;
+            filterN = parseInt(document.getElementById('n-tile').value) || 0;
+            filterKTiles = parseInt(document.getElementById('k-tiles').value) || 4;
+
+            // Clamp values
+            filterM = Math.max(0, Math.min(filterM, MESH_ROWS - 1));
+            filterN = Math.max(0, Math.min(filterN, MESH_COLS - 1));
+
+            isFiltered = true;
+            filteredEvents = filterEventsByOutputTile(allEvents, filterM, filterN, filterKTiles);
+            involvedL3Tiles = getInvolvedL3Tiles(filterM, filterN);
+
+            // Update dependency info
+            const depInfo = document.getElementById('dependency-info');
+            depInfo.style.display = 'block';
+            depInfo.innerHTML = `<strong>C[${filterM},${filterN}]</strong> requires ${filterKTiles} A tiles + ${filterKTiles} B tiles<br>` +
+                `Filtered: ${filteredEvents.length} of ${allEvents.length} events<br>` +
+                `L3 tiles involved: ${Array.from(involvedL3Tiles).sort((a,b)=>a-b).join(', ')}`;
+
+            // Update visual state
+            updateL3TileVisuals();
+
+            // Reset and replay
+            resetState();
+            events = filteredEvents;
+            maxCycle = filteredEvents.length > 0 ? Math.max(...filteredEvents.map(e => e.cycle)) : 1000;
+            document.getElementById('end-cycle').textContent = maxCycle;
+            initTimelineEvents();
+        }
+
+        // Clear filter
+        function clearFilter() {
+            isFiltered = false;
+            events = allEvents;
+            filteredEvents = [];
+            involvedL3Tiles.clear();
+
+            document.getElementById('dependency-info').style.display = 'none';
+
+            maxCycle = allEvents.length > 0 ? Math.max(...allEvents.map(e => e.cycle)) : 1000;
+            document.getElementById('end-cycle').textContent = maxCycle;
+
+            // Update visual state
+            updateL3TileVisuals();
+            resetState();
+            initTimelineEvents();
+        }
+
+        // Update L3 tile visuals based on filter
+        function updateL3TileVisuals() {
+            for (let i = 0; i < 16; i++) {
+                const tile = document.getElementById(`l3-tile-${i}`);
+                if (tile) {
+                    const bg = tile.querySelector('.l3-tile-bg');
+                    if (isFiltered && !involvedL3Tiles.has(i)) {
+                        // Dim tiles not involved
+                        bg.style.opacity = '0.3';
+                        bg.style.fill = '#1a1a2a';
+                    } else if (isFiltered && i === filterM * MESH_COLS + filterN) {
+                        // Highlight output tile
+                        bg.style.opacity = '1';
+                        bg.style.fill = '#3a4a3a';
+                        bg.style.stroke = '#FFE66D';
+                        bg.style.strokeWidth = '3';
+                    } else {
+                        // Normal state
+                        bg.style.opacity = '1';
+                        bg.style.fill = '#2a2a4a';
+                        bg.style.stroke = '#444';
+                        bg.style.strokeWidth = '2';
+                    }
+                }
+            }
+        }
+
+        // Initialize the mesh visualization
+        function initMesh() {
+            const tilesGroup = document.getElementById('l3-tiles');
+            tilesGroup.innerHTML = '';
+
+            for (let row = 0; row < MESH_ROWS; row++) {
+                for (let col = 0; col < MESH_COLS; col++) {
+                    const id = row * MESH_COLS + col;
+                    const x = col * (TILE_SIZE + TILE_GAP) + 10;
+                    const y = row * (TILE_SIZE + TILE_GAP) + 10;
+
+                    const tile = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+                    tile.classList.add('l3-tile');
+                    tile.id = `l3-tile-${id}`;
+                    tile.setAttribute('transform', `translate(${x}, ${y})`);
+
+                    // Background rectangle
+                    const bg = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+                    bg.classList.add('l3-tile-bg');
+                    bg.setAttribute('width', TILE_SIZE);
+                    bg.setAttribute('height', TILE_SIZE);
+                    bg.setAttribute('rx', 8);
+
+                    // Label
+                    const label = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+                    label.classList.add('l3-label');
+                    label.setAttribute('x', TILE_SIZE / 2);
+                    label.setAttribute('y', 15);
+                    label.setAttribute('text-anchor', 'middle');
+                    label.textContent = `L3[${id}]`;
+
+                    // Container for tensors in this tile
+                    const tensorGroup = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+                    tensorGroup.id = `tensors-${id}`;
+                    tensorGroup.setAttribute('transform', 'translate(10, 25)');
+
+                    tile.appendChild(bg);
+                    tile.appendChild(label);
+                    tile.appendChild(tensorGroup);
+                    tilesGroup.appendChild(tile);
+                }
+            }
+        }
+
+        // Get tile center coordinates
+        function getTileCenter(id) {
+            const row = Math.floor(id / MESH_COLS);
+            const col = id % MESH_COLS;
+            return {
+                x: col * (TILE_SIZE + TILE_GAP) + 10 + TILE_SIZE / 2,
+                y: row * (TILE_SIZE + TILE_GAP) + 10 + TILE_SIZE / 2
+            };
+        }
+
+        // Update tensor display in a tile
+        function updateTileTensors(tileId) {
+            const tensorGroup = document.getElementById(`tensors-${tileId}`);
+            if (!tensorGroup) return;
+
+            tensorGroup.innerHTML = '';
+            const state = l3TileState[tileId];
+            let index = 0;
+
+            for (const tensorKey of state.tensors) {
+                const [tensor, m, n, k] = tensorKey.split(',').map(Number);
+                const row = Math.floor(index / 3);
+                const col = index % 3;
+
+                const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+                rect.classList.add('tensor-block', `tensor-${TENSOR_NAMES[tensor]}`);
+                rect.setAttribute('x', col * (TENSOR_SIZE + 3));
+                rect.setAttribute('y', row * (TENSOR_SIZE + 3));
+                rect.setAttribute('width', TENSOR_SIZE);
+                rect.setAttribute('height', TENSOR_SIZE);
+                rect.setAttribute('rx', 4);
+                rect.setAttribute('fill', TENSOR_COLORS[tensor]);
+
+                // Add label
+                const text = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+                text.setAttribute('x', col * (TENSOR_SIZE + 3) + TENSOR_SIZE / 2);
+                text.setAttribute('y', row * (TENSOR_SIZE + 3) + TENSOR_SIZE / 2 + 4);
+                text.setAttribute('text-anchor', 'middle');
+                text.setAttribute('fill', '#000');
+                text.setAttribute('font-size', '10px');
+                text.setAttribute('font-weight', 'bold');
+                text.textContent = `${TENSOR_NAMES[tensor]}`;
+
+                tensorGroup.appendChild(rect);
+                tensorGroup.appendChild(text);
+                index++;
+            }
+        }
+
+        // Show transfer animation
+        function showTransfer(srcId, dstId, tensor, duration = 300) {
+            const arrowsGroup = document.getElementById('transfer-arrows');
+            const src = getTileCenter(srcId);
+            const dst = getTileCenter(dstId);
+
+            // Create arrow
+            const arrow = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+            arrow.classList.add('transfer-arrow');
+            arrow.setAttribute('x1', src.x);
+            arrow.setAttribute('y1', src.y);
+            arrow.setAttribute('x2', dst.x);
+            arrow.setAttribute('y2', dst.y);
+            arrow.setAttribute('stroke', TENSOR_COLORS[tensor] || '#4CAF50');
+            arrow.setAttribute('marker-end', 'url(#arrowhead)');
+
+            arrowsGroup.appendChild(arrow);
+
+            // Animate
+            setTimeout(() => arrow.classList.add('active'), 10);
+            setTimeout(() => {
+                arrow.classList.remove('active');
+                setTimeout(() => arrow.remove(), 300);
+            }, duration);
+        }
+
+        // Process event
+        function processEvent(event) {
+            const tensorKey = `${event.tensor},${event.m_tile},${event.n_tile},${event.k_tile}`;
+
+            switch (event.event_type) {
+                case 'L3_SEND_START':
+                    // Show transfer animation
+                    showTransfer(event.src_l3, event.dst_l3, event.tensor);
+                    // Add tensor to destination
+                    l3TileState[event.dst_l3].tensors.add(tensorKey);
+                    updateTileTensors(event.dst_l3);
+                    stats.transfers++;
+                    break;
+
+                case 'L3_RECEIVE':
+                    // Tensor already added by send
+                    break;
+
+                case 'L3_TO_L2_START':
+                    // Remove tensor from L3 (pushed to L2)
+                    l3TileState[event.l3_id].tensors.delete(tensorKey);
+                    updateTileTensors(event.l3_id);
+                    stats.l2Pushes++;
+                    break;
+
+                case 'BARRIER_START':
+                    stats.barriers++;
+                    document.getElementById(`l3-tile-${event.l3_id}`).classList.add('active');
+                    break;
+
+                case 'BARRIER_COMPLETE':
+                    document.getElementById(`l3-tile-${event.l3_id}`).classList.remove('active');
+                    break;
+
+                case 'DMA_LOAD_START':
+                case 'DMA_LOAD_COMPLETE':
+                    // Initial load - add tensor to tile
+                    l3TileState[event.l3_id].tensors.add(tensorKey);
+                    updateTileTensors(event.l3_id);
+                    break;
+            }
+
+            updateStats();
+            addEventToLog(event);
+        }
+
+        // Update statistics display
+        function updateStats() {
+            document.getElementById('stat-transfers').textContent = stats.transfers;
+            document.getElementById('stat-l2-pushes').textContent = stats.l2Pushes;
+            document.getElementById('stat-barriers').textContent = stats.barriers;
+
+            let activeTiles = 0;
+            for (let i = 0; i < 16; i++) {
+                if (l3TileState[i].tensors.size > 0) activeTiles++;
+            }
+            document.getElementById('stat-active').textContent = activeTiles;
+        }
+
+        // Add event to log
+        function addEventToLog(event) {
+            const log = document.getElementById('event-log');
+            const entry = document.createElement('div');
+            entry.classList.add('event-log-entry', event.event_type);
+
+            const tensorName = TENSOR_NAMES[event.tensor] || '?';
+            let text = `[${event.cycle}] L3[${event.l3_id}] ${event.event_type}`;
+
+            if (event.event_type === 'L3_SEND_START') {
+                text = `[${event.cycle}] ${tensorName}[${event.m_tile},${event.n_tile}] L3[${event.src_l3}]→L3[${event.dst_l3}]`;
+            } else if (event.event_type === 'L3_TO_L2_START') {
+                text = `[${event.cycle}] ${tensorName}[${event.m_tile},${event.n_tile}] L3[${event.l3_id}]→L2`;
+            }
+
+            entry.textContent = text;
+            log.appendChild(entry);
+            log.scrollTop = log.scrollHeight;
+
+            // Keep log limited
+            while (log.children.length > 50) {
+                log.removeChild(log.firstChild);
+            }
+        }
+
+        // Update timeline
+        function updateTimeline() {
+            const progress = (currentCycle / maxCycle) * 100;
+            document.getElementById('timeline-progress').style.width = `${progress}%`;
+            document.getElementById('timeline-cursor').style.left = `${progress}%`;
+            document.getElementById('cycle-counter').textContent = currentCycle;
+        }
+
+        // Reset state
+        function resetState() {
+            currentCycle = 0;
+            stats = { transfers: 0, l2Pushes: 0, barriers: 0 };
+            for (let i = 0; i < 16; i++) {
+                l3TileState[i] = { tensors: new Set(), active: false };
+                updateTileTensors(i);
+                document.getElementById(`l3-tile-${i}`).classList.remove('active');
+            }
+            document.getElementById('event-log').innerHTML = '';
+            updateStats();
+            updateTimeline();
+        }
+
+        // Animation loop
+        function animate(timestamp) {
+            if (!isPlaying) return;
+
+            const elapsed = timestamp - lastFrameTime;
+            const cyclesPerSecond = playbackSpeed * 20;  // Adjust multiplier as needed
+            const cyclesToAdvance = Math.floor(elapsed * cyclesPerSecond / 1000);
+
+            if (cyclesToAdvance > 0) {
+                lastFrameTime = timestamp;
+                advanceCycles(cyclesToAdvance);
+            }
+
+            if (currentCycle < maxCycle) {
+                animationFrame = requestAnimationFrame(animate);
+            } else {
+                stopPlayback();
+            }
+        }
+
+        // Advance by N cycles
+        function advanceCycles(n) {
+            const targetCycle = Math.min(currentCycle + n, maxCycle);
+
+            // Process all events in this range
+            for (const event of events) {
+                if (event.cycle > currentCycle && event.cycle <= targetCycle) {
+                    processEvent(event);
+                }
+            }
+
+            currentCycle = targetCycle;
+            updateTimeline();
+        }
+
+        // Step to next event
+        function stepToNextEvent() {
+            const nextEvent = events.find(e => e.cycle > currentCycle);
+            if (nextEvent) {
+                advanceCycles(nextEvent.cycle - currentCycle);
+            }
+        }
+
+        // Step back (reset and replay to previous event)
+        function stepBack() {
+            const prevEvents = events.filter(e => e.cycle < currentCycle);
+            if (prevEvents.length > 0) {
+                const targetCycle = prevEvents[prevEvents.length - 1].cycle;
+                resetState();
+                advanceCycles(targetCycle);
+            } else {
+                resetState();
+            }
+        }
+
+        // Start playback
+        function startPlayback() {
+            isPlaying = true;
+            lastFrameTime = performance.now();
+            document.getElementById('btn-play').innerHTML = '&#10074;&#10074; Pause';
+            animationFrame = requestAnimationFrame(animate);
+        }
+
+        // Stop playback
+        function stopPlayback() {
+            isPlaying = false;
+            document.getElementById('btn-play').innerHTML = '&#9654; Play';
+            if (animationFrame) {
+                cancelAnimationFrame(animationFrame);
+            }
+        }
+
+        // Toggle playback
+        function togglePlayback() {
+            if (isPlaying) {
+                stopPlayback();
+            } else {
+                if (currentCycle >= maxCycle) {
+                    resetState();
+                }
+                startPlayback();
+            }
+        }
+
+        // Parse CSV file
+        function parseCSV(text) {
+            const lines = text.trim().split('\n');
+            const headers = lines[0].split(',');
+            const parsedEvents = [];
+
+            for (let i = 1; i < lines.length; i++) {
+                const values = lines[i].split(',');
+                const event = {};
+                headers.forEach((h, idx) => {
+                    const val = values[idx];
+                    if (['cycle', 'l3_id', 'tensor', 'm_tile', 'n_tile', 'k_tile', 'src_l3', 'dst_l3', 'bytes'].includes(h)) {
+                        event[h] = parseInt(val, 10);
+                    } else {
+                        event[h] = val;
+                    }
+                });
+                parsedEvents.push(event);
+            }
+
+            return parsedEvents;
+        }
+
+        // Load trace file
+        function loadTraceFile(file) {
+            const reader = new FileReader();
+            reader.onload = (e) => {
+                const text = e.target.result;
+
+                if (file.name.endsWith('.json')) {
+                    const data = JSON.parse(text);
+                    allEvents = data.events || data;
+                } else {
+                    allEvents = parseCSV(text);
+                }
+
+                // Clear any existing filter
+                isFiltered = false;
+                filteredEvents = [];
+                involvedL3Tiles.clear();
+                document.getElementById('dependency-info').style.display = 'none';
+
+                events = allEvents;
+                maxCycle = Math.max(...events.map(e => e.cycle));
+                document.getElementById('end-cycle').textContent = maxCycle;
+                document.getElementById('demo-notice').style.display = 'none';
+
+                updateL3TileVisuals();
+                resetState();
+                initTimelineEvents();
+
+                console.log(`Loaded ${events.length} events, max cycle: ${maxCycle}`);
+            };
+            reader.readAsText(file);
+        }
+
+        // Initialize timeline event markers
+        function initTimelineEvents() {
+            const container = document.getElementById('timeline-events');
+            container.innerHTML = '';
+
+            for (const event of events) {
+                const marker = document.createElement('div');
+                marker.classList.add('timeline-event');
+                marker.style.left = `${(event.cycle / maxCycle) * 100}%`;
+
+                if (event.event_type === 'L3_SEND_START') {
+                    marker.style.background = '#4CAF50';
+                } else if (event.event_type === 'L3_TO_L2_START') {
+                    marker.style.background = '#2196F3';
+                } else if (event.event_type === 'BARRIER_START') {
+                    marker.style.background = '#FF9800';
+                }
+
+                container.appendChild(marker);
+            }
+        }
+
+        // Generate demo data
+        function generateDemoData() {
+            const demoEvents = [];
+            let cycle = 0;
+
+            // Simulate hop-and-forward pattern for 4x4 matmul
+            // A tiles flow right, B tiles flow down
+
+            // Initial loads at corners
+            for (let i = 0; i < 4; i++) {
+                // Load A tiles to left column
+                demoEvents.push({
+                    cycle: cycle,
+                    l3_id: i * 4,
+                    event_type: 'DMA_LOAD_START',
+                    tensor: 0,  // A
+                    m_tile: i, n_tile: 0, k_tile: 0,
+                    src_l3: 0, dst_l3: i * 4,
+                    bytes: 4096
+                });
+
+                // Load B tiles to top row
+                demoEvents.push({
+                    cycle: cycle,
+                    l3_id: i,
+                    event_type: 'DMA_LOAD_START',
+                    tensor: 1,  // B
+                    m_tile: 0, n_tile: i, k_tile: 0,
+                    src_l3: 0, dst_l3: i,
+                    bytes: 4096
+                });
+            }
+
+            cycle += 100;
+
+            // Simulate hop-and-forward through the mesh
+            for (let step = 0; step < 3; step++) {
+                // A tiles hop right
+                for (let row = 0; row < 4; row++) {
+                    for (let col = 0; col < 3; col++) {
+                        const src = row * 4 + col;
+                        const dst = row * 4 + col + 1;
+                        demoEvents.push({
+                            cycle: cycle + step * 200 + col * 50,
+                            l3_id: src,
+                            event_type: 'L3_SEND_START',
+                            tensor: 0,
+                            m_tile: row, n_tile: 0, k_tile: step,
+                            src_l3: src, dst_l3: dst,
+                            bytes: 4096
+                        });
+                    }
+                }
+
+                // B tiles hop down
+                for (let col = 0; col < 4; col++) {
+                    for (let row = 0; row < 3; row++) {
+                        const src = row * 4 + col;
+                        const dst = (row + 1) * 4 + col;
+                        demoEvents.push({
+                            cycle: cycle + step * 200 + row * 50 + 25,
+                            l3_id: src,
+                            event_type: 'L3_SEND_START',
+                            tensor: 1,
+                            m_tile: 0, n_tile: col, k_tile: step,
+                            src_l3: src, dst_l3: dst,
+                            bytes: 4096
+                        });
+                    }
+                }
+
+                // Barriers after each step
+                cycle += 200;
+                for (let i = 0; i < 16; i++) {
+                    demoEvents.push({
+                        cycle: cycle,
+                        l3_id: i,
+                        event_type: 'BARRIER_START',
+                        tensor: 2, m_tile: 0, n_tile: 0, k_tile: 0,
+                        src_l3: 0, dst_l3: 0, bytes: 0
+                    });
+                    demoEvents.push({
+                        cycle: cycle + 50,
+                        l3_id: i,
+                        event_type: 'BARRIER_COMPLETE',
+                        tensor: 2, m_tile: 0, n_tile: 0, k_tile: 0,
+                        src_l3: 0, dst_l3: 0, bytes: 0
+                    });
+                }
+                cycle += 100;
+            }
+
+            // Final L3 to L2 pushes
+            for (let i = 0; i < 16; i++) {
+                demoEvents.push({
+                    cycle: cycle + i * 10,
+                    l3_id: i,
+                    event_type: 'L3_TO_L2_START',
+                    tensor: 2,
+                    m_tile: Math.floor(i / 4), n_tile: i % 4, k_tile: 0,
+                    src_l3: i, dst_l3: 0,
+                    bytes: 4096
+                });
+            }
+
+            maxCycle = cycle + 200;
+            document.getElementById('end-cycle').textContent = maxCycle;
+
+            return demoEvents.sort((a, b) => a.cycle - b.cycle);
+        }
+
+        // Initialize
+        document.addEventListener('DOMContentLoaded', () => {
+            initMesh();
+
+            // Load demo data
+            allEvents = generateDemoData();
+            events = allEvents;
+            initTimelineEvents();
+
+            // Event listeners
+            document.getElementById('btn-play').addEventListener('click', togglePlayback);
+            document.getElementById('btn-step').addEventListener('click', () => {
+                stopPlayback();
+                stepToNextEvent();
+            });
+            document.getElementById('btn-step-back').addEventListener('click', () => {
+                stopPlayback();
+                stepBack();
+            });
+
+            document.getElementById('speed-slider').addEventListener('input', (e) => {
+                playbackSpeed = parseInt(e.target.value, 10);
+                document.getElementById('speed-value').textContent = `${(playbackSpeed / 50).toFixed(1)}x`;
+            });
+
+            document.getElementById('trace-file').addEventListener('change', (e) => {
+                if (e.target.files.length > 0) {
+                    loadTraceFile(e.target.files[0]);
+                }
+            });
+
+            // Filter button listeners
+            document.getElementById('btn-filter').addEventListener('click', () => {
+                stopPlayback();
+                applyFilter();
+            });
+
+            document.getElementById('btn-clear-filter').addEventListener('click', () => {
+                stopPlayback();
+                clearFilter();
+            });
+
+            // Timeline click
+            document.getElementById('timeline').addEventListener('click', (e) => {
+                stopPlayback();
+                const rect = e.currentTarget.getBoundingClientRect();
+                const pct = (e.clientX - rect.left) / rect.width;
+                const targetCycle = Math.floor(pct * maxCycle);
+                resetState();
+                advanceCycles(targetCycle);
+            });
+        });
+    </script>
+</body>
+</html>

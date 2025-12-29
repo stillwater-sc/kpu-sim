@@ -344,6 +344,24 @@ bool StatefulBlockMover::check_wait_conditions(uint64_t cycle) {
 void StatefulBlockMover::process_completed_transfers(uint64_t cycle) {
     while (!pending_transfers_.empty() &&
            pending_transfers_.front().is_complete(cycle)) {
+        const auto& transfer = pending_transfers_.front();
+
+        // Record completion event before removing
+        if (tracer_) {
+            switch (transfer.type) {
+                case PendingTransfer::Type::L3_TO_L2:
+                    tracer_->record_l3_to_l2(cycle, config_.id, transfer.tile, false);
+                    break;
+                case PendingTransfer::Type::L3_TO_L3:
+                    tracer_->record_l3_send(cycle, config_.id, transfer.dest_id,
+                                            transfer.tile, false);
+                    break;
+                case PendingTransfer::Type::L2_TO_L3:
+                    tracer_->record_l2_to_l3(cycle, config_.id, transfer.tile, false);
+                    break;
+            }
+        }
+
         pending_transfers_.pop();
     }
 }
@@ -365,6 +383,11 @@ bool StatefulBlockMover::exec_push_to_l2(const BlockMoverCommand& cmd, uint64_t 
     stats_.l3_to_l2_transfers++;
     stats_.l3_to_l2_bytes += cmd.tile.size;
 
+    // Record trace event
+    if (tracer_) {
+        tracer_->record_l3_to_l2(cycle, config_.id, cmd.tile, true);
+    }
+
     return true;  // Command issued, can proceed
 }
 
@@ -379,6 +402,11 @@ bool StatefulBlockMover::exec_pull_from_l2(const BlockMoverCommand& cmd, uint64_
         PendingTransfer::Type::L2_TO_L3, cmd.tile.size, cycle);
 
     pending_transfers_.push(transfer);
+
+    // Record trace event
+    if (tracer_) {
+        tracer_->record_l2_to_l3(cycle, config_.id, cmd.tile, true);
+    }
 
     return true;
 }
@@ -410,6 +438,12 @@ bool StatefulBlockMover::exec_send(const BlockMoverCommand& cmd, Direction dir, 
     stats_.l3_to_l3_transfers++;
     stats_.l3_to_l3_bytes += cmd.tile.size;
 
+    // Record trace event
+    if (tracer_) {
+        tracer_->record_l3_send(cycle, config_.id, static_cast<uint8_t>(neighbor),
+                                cmd.tile, true);
+    }
+
     return true;
 }
 
@@ -431,6 +465,11 @@ bool StatefulBlockMover::exec_send_to(const BlockMoverCommand& cmd, uint64_t cyc
 
     stats_.l3_to_l3_transfers++;
     stats_.l3_to_l3_bytes += cmd.tile.size;
+
+    // Record trace event
+    if (tracer_) {
+        tracer_->record_l3_send(cycle, config_.id, cmd.dest_l3_id, cmd.tile, true);
+    }
 
     return true;
 }
@@ -496,7 +535,16 @@ bool StatefulBlockMover::exec_barrier(const BlockMoverCommand& cmd, uint64_t cyc
     }
 
     if (pending_transfers_.empty()) {
+        // Record barrier complete
+        if (tracer_) {
+            tracer_->record_barrier(cycle, config_.id, false);
+        }
         return true;
+    }
+
+    // Record barrier start (waiting)
+    if (tracer_) {
+        tracer_->record_barrier(cycle, config_.id, true);
     }
 
     state_ = BlockMoverState::WAITING_TRANSFER;
@@ -635,6 +683,13 @@ void BlockMoverArray::setup_callbacks() {
         interconnect_.set_delivery_callback(static_cast<uint8_t>(id),
             [this, id](const L3TransferPacket& packet) {
                 movers_[id]->receive_packet(packet);
+                // Record receive event
+                if (tracer_) {
+                    tracer_->record_l3_receive(packet.arrival_cycle,
+                                               static_cast<uint8_t>(id),
+                                               packet.src_l3_id,
+                                               packet.tile);
+                }
             });
     }
 }
@@ -643,6 +698,10 @@ void BlockMoverArray::load_programs(const std::vector<BlockMoverProgram>& progra
     for (const auto& prog : programs) {
         if (prog.l3_id < movers_.size()) {
             movers_[prog.l3_id]->load_program(prog);
+            // Propagate tracer to individual movers
+            if (tracer_) {
+                movers_[prog.l3_id]->set_tracer(tracer_);
+            }
         }
     }
 }
