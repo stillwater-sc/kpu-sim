@@ -51,6 +51,7 @@ __pycache__/
 .env/
 
 # virtual environment
+.venv/
 venv/
 kpu_venv/
 wsl_venv/

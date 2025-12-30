@@ -9,6 +9,7 @@
 #include <fstream>
 #include <iomanip>
 #include <iostream>
+#include <map>
 #include <sstream>
 
 namespace sw::kpu::noc {
@@ -858,13 +859,201 @@ bool NoCTracer::export_chrome_trace(const std::string& filename,
     std::ofstream file(filename);
     if (!file) return false;
 
-    // Similar to TileFlowTracer but for NoC events
+    const size_t mesh_rows = config.rows;
+    const size_t mesh_cols = config.cols;
+    const size_t num_routers = mesh_rows * mesh_cols;
+
     file << "{\"traceEvents\":[\n";
 
-    // Process/thread metadata for routers and links
-    // ... (similar structure to tile_flow_tracer)
+    bool first = true;
 
-    file << "]}\n";
+    // Helper to emit JSON object
+    auto emit = [&](const std::string& json) {
+        if (!first) file << ",\n";
+        first = false;
+        file << json;
+    };
+
+    // Process names
+    emit("{\"name\":\"process_name\",\"ph\":\"M\",\"pid\":1,\"args\":{\"name\":\"Routers\"}}");
+    emit("{\"name\":\"process_name\",\"ph\":\"M\",\"pid\":2,\"args\":{\"name\":\"East Links\"}}");
+    emit("{\"name\":\"process_name\",\"ph\":\"M\",\"pid\":3,\"args\":{\"name\":\"South Links\"}}");
+    emit("{\"name\":\"process_name\",\"ph\":\"M\",\"pid\":4,\"args\":{\"name\":\"Packet Flow\"}}");
+
+    // Thread names for routers
+    for (size_t i = 0; i < num_routers; i++) {
+        size_t row = i / mesh_cols;
+        size_t col = i % mesh_cols;
+        std::ostringstream oss;
+        oss << "{\"name\":\"thread_name\",\"ph\":\"M\",\"pid\":1,\"tid\":" << i
+            << ",\"args\":{\"name\":\"R[" << row << "," << col << "]\"}}";
+        emit(oss.str());
+    }
+
+    // Thread names for East links (horizontal)
+    for (size_t row = 0; row < mesh_rows; row++) {
+        for (size_t col = 0; col < mesh_cols - 1; col++) {
+            int link_id = static_cast<int>(row * (mesh_cols - 1) + col);
+            std::ostringstream oss;
+            oss << "{\"name\":\"thread_name\",\"ph\":\"M\",\"pid\":2,\"tid\":" << link_id
+                << ",\"args\":{\"name\":\"[" << row << "," << col << "]→["
+                << row << "," << (col + 1) << "]\"}}";
+            emit(oss.str());
+        }
+    }
+
+    // Thread names for South links (vertical)
+    for (size_t row = 0; row < mesh_rows - 1; row++) {
+        for (size_t col = 0; col < mesh_cols; col++) {
+            int link_id = static_cast<int>(row * mesh_cols + col);
+            std::ostringstream oss;
+            oss << "{\"name\":\"thread_name\",\"ph\":\"M\",\"pid\":3,\"tid\":" << link_id
+                << ",\"args\":{\"name\":\"[" << row << "," << col << "]↓["
+                << (row + 1) << "," << col << "]\"}}";
+            emit(oss.str());
+        }
+    }
+
+    // Thread for packet flows (one per packet for causality)
+    emit("{\"name\":\"thread_name\",\"ph\":\"M\",\"pid\":4,\"tid\":0,\"args\":{\"name\":\"All Packets\"}}");
+
+    // Track packet start/end for flow events
+    std::map<uint64_t, uint64_t> packet_inject_cycle;  // seq -> inject_cycle
+    std::map<uint64_t, uint8_t> packet_src_router;     // seq -> src_router
+
+    // Helper for tile name
+    auto tile_name = [](const TileDescriptor& tile) -> std::string {
+        std::string name;
+        switch (tile.tensor) {
+            case TensorId::A:
+                name = "A[" + std::to_string(tile.m_tile) + "," + std::to_string(tile.k_tile) + "]";
+                break;
+            case TensorId::B:
+                name = "B[" + std::to_string(tile.k_tile) + "," + std::to_string(tile.n_tile) + "]";
+                break;
+            case TensorId::C:
+                name = "C[" + std::to_string(tile.m_tile) + "," + std::to_string(tile.n_tile) + "]";
+                break;
+            default:
+                name = "?";
+        }
+        return name;
+    };
+
+    // Emit events
+    for (const auto& e : events_) {
+        std::ostringstream oss;
+        std::string tname = tile_name(e.tile);
+
+        size_t src_row = e.src_router / mesh_cols;
+        size_t src_col = e.src_router % mesh_cols;
+        size_t dst_row = e.dst_router / mesh_cols;
+        size_t dst_col = e.dst_router % mesh_cols;
+
+        switch (e.type) {
+            case NoCEventType::INJECT: {
+                // Complete event (X) on source router - avoids B/E ordering issues
+                oss << "{\"name\":\"" << tname << " inject\","
+                    << "\"cat\":\"inject\","
+                    << "\"ph\":\"X\","
+                    << "\"ts\":" << e.cycle << ","
+                    << "\"dur\":" << e.num_flits << ","
+                    << "\"pid\":1,"
+                    << "\"tid\":" << static_cast<int>(e.router_id) << ","
+                    << "\"args\":{\"tile\":\"" << tname << "\","
+                    << "\"dst\":\"R[" << dst_row << "," << dst_col << "]\","
+                    << "\"flits\":" << e.num_flits << "}}";
+                emit(oss.str());
+
+                // Flow start event for causality
+                std::ostringstream flow_oss;
+                flow_oss << "{\"name\":\"" << tname << "\","
+                         << "\"cat\":\"flow\","
+                         << "\"ph\":\"s\","
+                         << "\"ts\":" << e.cycle << ","
+                         << "\"pid\":4,"
+                         << "\"tid\":0,"
+                         << "\"id\":" << e.packet_seq << "}";
+                emit(flow_oss.str());
+
+                packet_inject_cycle[e.packet_seq] = e.cycle;
+                packet_src_router[e.packet_seq] = e.router_id;
+                break;
+            }
+
+            case NoCEventType::HOP: {
+                // Complete event for link transfer
+                int link_tid;
+                int link_pid;
+                std::string dir;
+
+                if (dst_col > src_col) {
+                    // East link
+                    link_pid = 2;
+                    link_tid = static_cast<int>(src_row * (mesh_cols - 1) + src_col);
+                    dir = "→";
+                } else if (dst_row > src_row) {
+                    // South link
+                    link_pid = 3;
+                    link_tid = static_cast<int>(src_row * mesh_cols + src_col);
+                    dir = "↓";
+                } else {
+                    // Other direction (West or North)
+                    link_pid = 1;
+                    link_tid = e.router_id;
+                    dir = "->";
+                }
+
+                // HOP event marks arrival; calculate transfer start
+                uint64_t transfer_start = e.cycle > e.num_flits ? e.cycle - e.num_flits : 0;
+                uint64_t duration = e.cycle - transfer_start;
+
+                oss << "{\"name\":\"" << tname << " R[" << src_row << "," << src_col << "]"
+                    << dir << "R[" << dst_row << "," << dst_col << "]\","
+                    << "\"cat\":\"transfer\","
+                    << "\"ph\":\"X\","
+                    << "\"ts\":" << transfer_start << ","
+                    << "\"dur\":" << duration << ","
+                    << "\"pid\":" << link_pid << ","
+                    << "\"tid\":" << link_tid << ","
+                    << "\"args\":{\"flits\":" << e.num_flits << "}}";
+                emit(oss.str());
+                break;
+            }
+
+            case NoCEventType::EJECT: {
+                // Eject event on destination router (instant event)
+                oss << "{\"name\":\"" << tname << " eject\","
+                    << "\"cat\":\"eject\","
+                    << "\"ph\":\"i\","
+                    << "\"ts\":" << e.cycle << ","
+                    << "\"pid\":1,"
+                    << "\"tid\":" << static_cast<int>(e.router_id) << ","
+                    << "\"s\":\"t\","
+                    << "\"args\":{\"tile\":\"" << tname << "\"}}";
+                emit(oss.str());
+
+                // Flow end event for causality
+                std::ostringstream flow_oss;
+                flow_oss << "{\"name\":\"" << tname << "\","
+                         << "\"cat\":\"flow\","
+                         << "\"ph\":\"f\","
+                         << "\"ts\":" << e.cycle << ","
+                         << "\"pid\":4,"
+                         << "\"tid\":0,"
+                         << "\"bp\":\"e\","
+                         << "\"id\":" << e.packet_seq << "}";
+                emit(flow_oss.str());
+                break;
+            }
+
+            default:
+                // Skip FLIT_SEND/FLIT_ARRIVE to avoid trace bloat
+                break;
+        }
+    }
+
+    file << "\n]}\n";
 
     return true;
 }

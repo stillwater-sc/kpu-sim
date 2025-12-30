@@ -2,6 +2,7 @@
 
 add_library(kpu_noc STATIC
     noc.cpp
+    wormhole_router.cpp
 )
 
 target_include_directories(kpu_noc PUBLIC

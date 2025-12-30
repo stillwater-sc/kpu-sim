@@ -352,6 +352,11 @@ TEST_CASE("NoC Trace Generation", "[noc][trace]") {
     REQUIRE(tracer.export_csv(trace_file));
     std::cout << "  Trace exported to: " << trace_file << "\n";
 
+    // Export trace to Chrome Trace format
+    std::string chrome_trace_file = "/tmp/noc_trace_chrome.json";
+    REQUIRE(tracer.export_chrome_trace(chrome_trace_file, config));
+    std::cout << "  Chrome trace exported to: " << chrome_trace_file << "\n";
+
     // Verify we have all types of events
     size_t inject_count = 0, hop_count = 0, eject_count = 0;
     for (const auto& e : tracer.events()) {

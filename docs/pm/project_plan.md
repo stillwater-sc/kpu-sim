@@ -210,3 +210,112 @@ To maintain the **3x productivity boost**, the team is structured as a **"Human-
 By keeping a **flat, SME-led organization** and using AI to handle the "junior engineer" tasks (testbench writing, log triaging, floorplan iterations), you are reducing your **Burn Rate by ~50%** while maintaining an aggressive production timeline.
 
 **The ROI is realized through "Massive Cost Avoidance":** You are reaching the Production milestone with a significantly lower CapEx requirement, allowing for higher equity retention for founders and early investors.
+
+## Risk Mitigation List
+
+To ensure this 24-month roadmap remains viable, you must manage the "Lean Team" risks. While Agentic AI provides a 3x speed boost, it also introduces specific failure modes that traditional teams don't face.
+
+The following **Risk Register** identifies the three most critical technical threats to your production timeline and the specific mitigation strategies for your SME-led structure.
+
+---
+
+## Technical Risk Register: The Road to Production
+
+| Risk Factor | Impact | Probability | Mitigation Strategy |
+| --- | --- | --- | --- |
+| **1. Hardware/Software Divergence** | High | High | Implement a **Single Source of Truth (SSoT)** using machine-readable ISA specs that auto-update the fsim and Compiler headers simultaneously. |
+| **2. AI Verification Blindspots** | Medium | Medium | Shift QA SMEs from *writing tests* to *verifying checkers*. Use "Mutation Testing" where agents intentionally break the RTL to see if the AI-generated tests catch it. |
+| **3. Timing Closure "Wall" (I/O & NoC)** | High | Medium | Use the **MPW phase** specifically to stress-test the "irregular" logic (PCIe/NoC) rather than just the "regular" ALU array. |
+
+---
+
+## 1. The "Compiler Gap" (Hardware-Software Mismatch)
+
+**The Threat:** In AI hardware, the chip is only as good as its compiler. If the outsourced compiler team builds for an ISA that drifts from the RTL (even by a single cycle or bit-width), the silicon will be functionally correct but practically unusable for real-world models.
+
+* **AI Mitigation:** Use Agentic AI to maintain a **Hardware-Software Interface (HSI)** layer. Any change the Architect makes in the RTL spec should trigger an agent to auto-generate updated C++ headers and documentation for the outsourced compiler team.
+* **The Goal:** Continuous "Software-in-the-Loop" (SiL) testing starting at Month 4.
+
+---
+
+## 2. Verification Hallucinations (QA Blindspots)
+
+**The Threat:** When using AI to generate 3x the volume of tests, there is a risk of "High Coverage, Low Quality." The agents might achieve 100% code coverage by hitting the same state machine transitions in trivial ways, missing the complex "race conditions" between the NoC and the DMA engines.
+
+* **AI Mitigation:** Your 3 QA SMEs must act as **"Red Teamers."** Instead of checking if the tests pass, they should use agents to perform **Formal Verification** on the most congested data paths.
+* **The Goal:** Focus human SME time on "Interaction Bugs"—the errors that happen when the Memory Controller, NoC, and ALUs all request the bus at the same micro-second.
+
+---
+
+## 3. The Physical Design "Single Point of Failure"
+
+**The Threat:** You have 1 PD SME. While your ALU array is regular and easy to place, the **PCIe Gen5/6 and HBM3/DDR5 interfaces** are notoriously difficult. If timing closure fails on these interfaces during the Test Chip phase, you could lose 3–6 months in redesign.
+
+* **AI Mitigation:** Employ **"Shift-Left" Physical Design.** The PD SME should use AI agents to run "Trial Placements" during the FPGA phase (Month 4). This identifies "routing congestion" before the RTL is even finalized.
+* **The Goal:** Ensure the "smallish installation" used for the MPW includes a representative slice of the most congested logic, not just the easiest ALU blocks.
+
+---
+
+### Summary of Success Metrics for Investors
+
+To give your investors confidence, you can report these **de-risking KPIs** at each board meeting:
+
+* **KPI 1:** "Zero-drift" ISA (fsim and RTL are bit-identical daily).
+* **KPI 2:** "Functional Coverage" vs. "Code Coverage" (focusing on the quality of AI-generated tests).
+* **KPI 3:** "Timing Slack Margin" (early indicators that the design will fit the chosen process node).
+
+## Technical Diligence Checklist
+
+This **Technical Diligence Checklist** is designed to demonstrate to sophisticated investors that while your team is lean, your processes are "tier-1" grade. It highlights how you use **Agentic AI** not just for speed, but for superior rigors in verification and integration.
+
+---
+
+## Technical Diligence Checklist: AI Hardware Accelerator
+
+### 1. Architecture & Functional Simulation (fsim)
+
+* **[ ] Bit-Accuracy Validation:** Does the C++ fsim match the RTL results bit-for-bit across all ALU operations?
+* **[ ] ISA Version Control:** Is there a single machine-readable source (e.g., YAML or SystemRDL) that automatically updates the fsim, the RTL headers, and the Compiler/Driver API?
+* **[ ] Performance Modeling:** Can the fsim provide cycle-approximate estimates for key AI kernels (e.g., Llama-3, Stable Diffusion) to prove throughput claims?
+
+---
+
+### 2. Logic QA & Verification (The "Agentic" Edge)
+
+* **[ ] Regression Autonomy:** Do AI agents handle 24/7 regression triaging, or are SMEs stuck manual-debugging "noise" failures?
+* **[ ] Functional vs. Code Coverage:** Are you tracking *functional* milestones (e.g., "all DMA-to-NoC arbitration scenarios hit") rather than just line-of-code metrics?
+* **[ ] Formal Verification Reach:** Have the NoC credit-loops and PCIe state machines been formally proven to be deadlock-free?
+* **[ ] AI Mutation Testing:** Can you demonstrate that your AI-generated testbench successfully catches "mutated" (intentionally broken) RTL?
+
+---
+
+### 3. Physical Design & Manufacturing De-risking
+
+* **[ ] "Shift-Left" PD:** Has a trial floorplan of the full chip been run at the target frequency to identify long-wire routing congestion?
+* **[ ] MPW Success Criteria:** Is the MPW specifically designed to validate the most "irregular" and high-risk logic (e.g., the clock tree or the I/O interface)?
+* **[ ] Thermal & Power Envelope:** Is there a validated power-grid analysis (IR drop) based on realistic AI workloads, not just synthetic toggles?
+* **[ ] Foundry & IP Strategy:** Are all 3rd-party IPs (PCIe PHY, HBM/DDR Controller) silicon-proven on the target process node?
+
+---
+
+### 4. Software & System Integration (Outsource Management)
+
+* **[ ] Compiler Path-to-Silicon:** Is the outsourced compiler team already running code on the fsim?
+* **[ ] BSP/BIOS Milestone Sync:** Does the hardware team provide a "Virtual Hardware" model to the BIOS partners to prevent bring-up delays?
+* **[ ] Kernel Library Roadmap:** Is there a plan to support standard frameworks (PyTorch/ONNX) via an MLIR-based compiler flow?
+
+---
+
+### 5. Resource & Operational Efficiency
+
+* **[ ] AI-to-SME Ratio:** Can you quantify the OpEx savings? (e.g., "We are achieving 100 verification man-hours for every 5 hours of SME supervision").
+* **[ ] Knowledge Retention:** Is there a centralized "Vector Database" or documentation hub where the AI agents store the history of design decisions and bug fixes?
+* **[ ] Supply Chain Resilience:** Have long-lead items (Test fixtures, HBM modules, and packaging substrates) been identified and slotted?
+
+---
+
+### Why This Checklist Wins Over Investors
+
+Investors in the semiconductor space are often wary of "small teams" because of the **"Verification Gap"**—the tendency for small teams to miss a critical bug that requires a $5M–$10M re-spin.
+
+By showing that your **Logic QA SMEs** use AI to achieve **95%+ functional coverage** and that your **fsim** is the "Golden Source" for your compiler partners, you prove that you have the discipline of a 500-person firm with the burn rate of a 10-person startup.

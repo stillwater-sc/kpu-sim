@@ -567,6 +567,61 @@ def generate_noc_html(events: list, title: str = "KPU NoC Animation") -> str:
                 </div>
 
                 <div class="control-group">
+                    <h3>Utilization Analysis</h3>
+                    <div class="period-selector" style="display: flex; gap: 8px; align-items: center; margin-bottom: 12px;">
+                        <label style="font-size: 0.8em; color: #888;">Period:</label>
+                        <input type="number" id="analysis-start" value="0" min="0" max="{max_cycle}"
+                               style="width: 70px; background: #111; border: 1px solid #333; color: #fff; padding: 4px; border-radius: 4px;">
+                        <span style="color: #666;">-</span>
+                        <input type="number" id="analysis-end" value="{max_cycle}" min="0" max="{max_cycle}"
+                               style="width: 70px; background: #111; border: 1px solid #333; color: #fff; padding: 4px; border-radius: 4px;">
+                        <button class="btn btn-secondary" id="btn-apply-period" style="padding: 4px 8px; font-size: 0.8em;">Apply</button>
+                        <button class="btn btn-secondary" id="btn-reset-period" style="padding: 4px 8px; font-size: 0.8em;">Full</button>
+                    </div>
+
+                    <div class="utilization-bars" style="display: flex; flex-direction: column; gap: 8px;">
+                        <div class="util-bar-container">
+                            <div style="display: flex; justify-content: space-between; font-size: 0.75em; color: #888; margin-bottom: 2px;">
+                                <span>East Links (A→)</span>
+                                <span id="util-east-pct">0%</span>
+                            </div>
+                            <div style="background: #111; height: 12px; border-radius: 3px; overflow: hidden;">
+                                <div id="util-east-bar" style="height: 100%; background: linear-gradient(90deg, #FF6B6B, #cc4444); width: 0%; transition: width 0.3s;"></div>
+                            </div>
+                        </div>
+                        <div class="util-bar-container">
+                            <div style="display: flex; justify-content: space-between; font-size: 0.75em; color: #888; margin-bottom: 2px;">
+                                <span>South Links (B↓)</span>
+                                <span id="util-south-pct">0%</span>
+                            </div>
+                            <div style="background: #111; height: 12px; border-radius: 3px; overflow: hidden;">
+                                <div id="util-south-bar" style="height: 100%; background: linear-gradient(90deg, #4ECDC4, #2a9a92); width: 0%; transition: width 0.3s;"></div>
+                            </div>
+                        </div>
+                        <div class="util-bar-container">
+                            <div style="display: flex; justify-content: space-between; font-size: 0.75em; color: #888; margin-bottom: 2px;">
+                                <span>Routers</span>
+                                <span id="util-router-pct">0%</span>
+                            </div>
+                            <div style="background: #111; height: 12px; border-radius: 3px; overflow: hidden;">
+                                <div id="util-router-bar" style="height: 100%; background: linear-gradient(90deg, #00ff88, #00aa66); width: 0%; transition: width 0.3s;"></div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="efficiency-stats" style="margin-top: 12px; display: grid; grid-template-columns: repeat(2, 1fr); gap: 6px;">
+                        <div style="background: rgba(0,0,0,0.3); padding: 6px; border-radius: 4px; text-align: center;">
+                            <div style="font-size: 1.1em; color: #00aaff;" id="eff-bytes">0 KB</div>
+                            <div style="font-size: 0.65em; color: #666;">Bytes Moved</div>
+                        </div>
+                        <div style="background: rgba(0,0,0,0.3); padding: 6px; border-radius: 4px; text-align: center;">
+                            <div style="font-size: 1.1em; color: #ffaa00;" id="eff-bw">0%</div>
+                            <div style="font-size: 0.65em; color: #666;">BW Efficiency</div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="control-group">
                     <h3>Selected L3</h3>
                     <div class="l3-detail" id="l3-detail">
                         <div class="l3-detail-header">Click an L3 tile to inspect</div>
@@ -1398,6 +1453,142 @@ def generate_noc_html(events: list, title: str = "KPU NoC Animation") -> str:
             }}
         }}
 
+        // ========== UTILIZATION ANALYSIS ==========
+
+        // Calculate utilization metrics for a time period
+        function calculateUtilization(startCycle, endCycle) {{
+            const MESH_COLS = 4;
+            const periodCycles = endCycle - startCycle;
+            if (periodCycles <= 0) return null;
+
+            // Track busy intervals per resource type
+            const eastLinkBusy = {{}};   // link_id -> [[start, end], ...]
+            const southLinkBusy = {{}};
+            const routerBusy = {{}};     // router_id -> [[start, end], ...]
+
+            let totalBytes = 0;
+
+            // Process events in the period
+            for (const e of events) {{
+                const cycle = e.cycle || 0;
+                if (cycle < startCycle || cycle > endCycle) continue;
+
+                const type = e.type;
+                const numFlits = e.num_flits || 256;
+                const srcRouter = e.src_router || 0;
+                const dstRouter = e.dst_router || 0;
+                const routerId = e.router_id || 0;
+
+                // Event types: 0=INJECT, 1=HOP, 2=EJECT, 6=FLIT_SEND, 7=FLIT_ARRIVE
+                const EVENT_INJECT = 0;
+                const EVENT_HOP = 1;
+                const EVENT_EJECT = 2;
+                const EVENT_FLIT_SEND = 6;
+
+                if (type === EVENT_INJECT) {{
+                    // Router activity at injection
+                    const routerKey = routerId;
+                    if (!routerBusy[routerKey]) routerBusy[routerKey] = [];
+                    routerBusy[routerKey].push([cycle, Math.min(cycle + numFlits, endCycle)]);
+                    totalBytes += numFlits * 64;  // 64 bytes per FLIT
+                }}
+                else if (type === EVENT_HOP) {{
+                    // Link activity
+                    const srcRow = Math.floor(srcRouter / MESH_COLS);
+                    const srcCol = srcRouter % MESH_COLS;
+                    const dstRow = Math.floor(dstRouter / MESH_COLS);
+                    const dstCol = dstRouter % MESH_COLS;
+
+                    const hopStart = cycle > numFlits ? cycle - numFlits : cycle;
+                    const hopEnd = cycle;
+
+                    if (dstCol > srcCol) {{
+                        // East link
+                        const linkKey = `${{srcRow}},${{srcCol}}`;
+                        if (!eastLinkBusy[linkKey]) eastLinkBusy[linkKey] = [];
+                        eastLinkBusy[linkKey].push([hopStart, Math.min(hopEnd, endCycle)]);
+                    }} else if (dstRow > srcRow) {{
+                        // South link
+                        const linkKey = `${{srcRow}},${{srcCol}}`;
+                        if (!southLinkBusy[linkKey]) southLinkBusy[linkKey] = [];
+                        southLinkBusy[linkKey].push([hopStart, Math.min(hopEnd, endCycle)]);
+                    }}
+
+                    // Router activity at destination
+                    if (!routerBusy[dstRouter]) routerBusy[dstRouter] = [];
+                    routerBusy[dstRouter].push([hopStart, Math.min(hopEnd, endCycle)]);
+                }}
+            }}
+
+            // Merge overlapping intervals and calculate utilization
+            function mergeAndCalculate(busyMap, numResources) {{
+                let totalBusy = 0;
+                for (const key in busyMap) {{
+                    const intervals = busyMap[key].sort((a, b) => a[0] - b[0]);
+                    if (intervals.length === 0) continue;
+
+                    const merged = [intervals[0].slice()];
+                    for (let i = 1; i < intervals.length; i++) {{
+                        const [s, e] = intervals[i];
+                        if (s <= merged[merged.length - 1][1]) {{
+                            merged[merged.length - 1][1] = Math.max(merged[merged.length - 1][1], e);
+                        }} else {{
+                            merged.push([s, e]);
+                        }}
+                    }}
+                    totalBusy += merged.reduce((sum, [s, e]) => sum + (e - s), 0);
+                }}
+                return totalBusy / (periodCycles * numResources);
+            }}
+
+            // Calculate utilization for each resource type
+            const NUM_EAST_LINKS = 12;  // 4 rows × 3 links
+            const NUM_SOUTH_LINKS = 12; // 3 rows × 4 links
+            const NUM_ROUTERS = 16;
+
+            const eastUtil = mergeAndCalculate(eastLinkBusy, NUM_EAST_LINKS);
+            const southUtil = mergeAndCalculate(southLinkBusy, NUM_SOUTH_LINKS);
+            const routerUtil = mergeAndCalculate(routerBusy, NUM_ROUTERS);
+
+            // Bandwidth efficiency: bytes transferred / (total_links × bandwidth × time)
+            const LINK_BW = 64;  // bytes/cycle
+            const totalLinks = NUM_EAST_LINKS + NUM_SOUTH_LINKS;
+            const maxBytes = totalLinks * LINK_BW * periodCycles;
+            const bwEfficiency = totalBytes / maxBytes;
+
+            return {{
+                eastUtil: Math.min(1, eastUtil),
+                southUtil: Math.min(1, southUtil),
+                routerUtil: Math.min(1, routerUtil),
+                totalBytes: totalBytes,
+                bwEfficiency: Math.min(1, bwEfficiency),
+                periodCycles: periodCycles
+            }};
+        }}
+
+        // Update utilization display
+        function updateUtilizationDisplay(startCycle, endCycle) {{
+            const metrics = calculateUtilization(startCycle, endCycle);
+            if (!metrics) return;
+
+            // Update bars
+            document.getElementById('util-east-bar').style.width = `${{metrics.eastUtil * 100}}%`;
+            document.getElementById('util-east-pct').textContent = `${{(metrics.eastUtil * 100).toFixed(1)}}%`;
+
+            document.getElementById('util-south-bar').style.width = `${{metrics.southUtil * 100}}%`;
+            document.getElementById('util-south-pct').textContent = `${{(metrics.southUtil * 100).toFixed(1)}}%`;
+
+            document.getElementById('util-router-bar').style.width = `${{metrics.routerUtil * 100}}%`;
+            document.getElementById('util-router-pct').textContent = `${{(metrics.routerUtil * 100).toFixed(1)}}%`;
+
+            // Update efficiency stats
+            const bytesKB = (metrics.totalBytes / 1024).toFixed(0);
+            const bytesMB = (metrics.totalBytes / (1024 * 1024)).toFixed(1);
+            document.getElementById('eff-bytes').textContent =
+                metrics.totalBytes > 1024 * 1024 ? `${{bytesMB}} MB` : `${{bytesKB}} KB`;
+            document.getElementById('eff-bw').textContent = `${{(metrics.bwEfficiency * 100).toFixed(1)}}%`;
+        }}
+
         // Initialize on load
         document.addEventListener('DOMContentLoaded', () => {{
             initMesh();
@@ -1444,6 +1635,22 @@ def generate_noc_html(events: list, title: str = "KPU NoC Animation") -> str:
             document.getElementById('filter-A').addEventListener('click', () => toggleFilter('A'));
             document.getElementById('filter-B').addEventListener('click', () => toggleFilter('B'));
             document.getElementById('filter-C').addEventListener('click', () => toggleFilter('C'));
+
+            // Utilization analysis controls
+            document.getElementById('btn-apply-period').addEventListener('click', () => {{
+                const startCycle = parseInt(document.getElementById('analysis-start').value) || 0;
+                const endCycle = parseInt(document.getElementById('analysis-end').value) || maxCycle;
+                updateUtilizationDisplay(startCycle, endCycle);
+            }});
+
+            document.getElementById('btn-reset-period').addEventListener('click', () => {{
+                document.getElementById('analysis-start').value = '0';
+                document.getElementById('analysis-end').value = maxCycle;
+                updateUtilizationDisplay(0, maxCycle);
+            }});
+
+            // Initial utilization calculation
+            updateUtilizationDisplay(0, maxCycle);
 
             // Keyboard shortcuts
             document.addEventListener('keydown', (e) => {{
