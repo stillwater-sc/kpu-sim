@@ -108,6 +108,7 @@ enum class BlockMoverOp : uint8_t {
     EMIT_TRIGGER = 41,      // Signal trigger to specified destination(s)
     BARRIER = 42,           // Wait for all pending transfers to complete
     FENCE = 43,             // Memory fence (ensure ordering)
+    WAIT_DELIVERY = 44,     // Wait for previous SEND to be delivered by NoC
 
     // ========== Control Flow ==========
     LOOP_START = 50,        // Begin loop (loop_count iterations)
@@ -140,6 +141,7 @@ inline const char* to_string(BlockMoverOp op) {
         case BlockMoverOp::EMIT_TRIGGER: return "EMIT_TRIGGER";
         case BlockMoverOp::BARRIER: return "BARRIER";
         case BlockMoverOp::FENCE: return "FENCE";
+        case BlockMoverOp::WAIT_DELIVERY: return "WAIT_DELIVERY";
         case BlockMoverOp::LOOP_START: return "LOOP_START";
         case BlockMoverOp::LOOP_END: return "LOOP_END";
         case BlockMoverOp::JUMP: return "JUMP";
@@ -256,6 +258,10 @@ struct BlockMoverProgram {
     // Metadata
     std::string name;
     uint32_t estimated_cycles = 0;
+
+    // Execution timing - delay before starting program execution
+    // Used to create staggered wavefront patterns in systolic execution
+    uint64_t start_delay_cycles = 0;
 
     size_t size() const { return commands.size(); }
     bool empty() const { return commands.empty(); }

@@ -20,6 +20,7 @@
 #include "block_mover_isa.hpp"
 #include "l3_interconnect.hpp"
 #include "sw/kpu/dataflow/tile_flow_tracer.hpp"
+#include "sw/kpu/noc/noc.hpp"
 
 namespace sw::kpu {
 
@@ -94,10 +95,12 @@ struct StatefulBlockMoverConfig {
 /// State of the BlockMover program execution
 enum class BlockMoverState : uint8_t {
     IDLE,               // No program loaded or execution complete
+    WAITING_START,      // Waiting for start_delay to elapse before execution
     RUNNING,            // Actively executing commands
     WAITING_TRIGGER,    // Blocked waiting for trigger(s)
     WAITING_TRANSFER,   // Blocked waiting for transfer to complete
     WAITING_RECEIVE,    // Blocked waiting for incoming packet
+    WAITING_DELIVERY,   // Blocked waiting for NoC delivery confirmation
     HALTED,             // Explicitly halted (for debugging)
     ERROR,              // Execution error
 };
@@ -105,10 +108,12 @@ enum class BlockMoverState : uint8_t {
 inline const char* to_string(BlockMoverState state) {
     switch (state) {
         case BlockMoverState::IDLE: return "IDLE";
+        case BlockMoverState::WAITING_START: return "WAITING_START";
         case BlockMoverState::RUNNING: return "RUNNING";
         case BlockMoverState::WAITING_TRIGGER: return "WAITING_TRIGGER";
         case BlockMoverState::WAITING_TRANSFER: return "WAITING_TRANSFER";
         case BlockMoverState::WAITING_RECEIVE: return "WAITING_RECEIVE";
+        case BlockMoverState::WAITING_DELIVERY: return "WAITING_DELIVERY";
         case BlockMoverState::HALTED: return "HALTED";
         case BlockMoverState::ERROR: return "ERROR";
         default: return "UNKNOWN";
@@ -195,6 +200,9 @@ public:
     /// Notify that a transfer to L2 has completed
     void notify_l2_transfer_complete(const TileDescriptor& tile);
 
+    /// Notify that a NoC packet sent by this BlockMover has been delivered
+    void notify_noc_delivery();
+
     // ========== Callbacks ==========
 
     /// Set callback for L3→L3 transfers (called when SEND_* completes)
@@ -224,9 +232,11 @@ public:
     bool is_idle() const { return state_ == BlockMoverState::IDLE; }
     bool is_running() const { return state_ == BlockMoverState::RUNNING; }
     bool is_waiting() const {
-        return state_ == BlockMoverState::WAITING_TRIGGER ||
+        return state_ == BlockMoverState::WAITING_START ||
+               state_ == BlockMoverState::WAITING_TRIGGER ||
                state_ == BlockMoverState::WAITING_TRANSFER ||
-               state_ == BlockMoverState::WAITING_RECEIVE;
+               state_ == BlockMoverState::WAITING_RECEIVE ||
+               state_ == BlockMoverState::WAITING_DELIVERY;
     }
 
     size_t program_counter() const { return pc_; }
@@ -327,6 +337,12 @@ private:
     // Current cycle (set by step() for use by execute_current)
     uint64_t current_cycle_ = 0;
 
+    // Start delay for staggered wavefront execution
+    uint64_t start_delay_cycles_ = 0;
+
+    // NoC delivery tracking (for WAIT_DELIVERY command)
+    size_t pending_noc_deliveries_ = 0;
+
     // ========== Internal Execution ==========
 
     /// Execute the current command
@@ -351,6 +367,7 @@ private:
     bool exec_wait_trigger(const BlockMoverCommand& cmd);
     bool exec_emit_trigger(const BlockMoverCommand& cmd);
     bool exec_barrier(const BlockMoverCommand& cmd, uint64_t cycle);
+    bool exec_wait_delivery(const BlockMoverCommand& cmd);
     bool exec_loop_start(const BlockMoverCommand& cmd);
     bool exec_loop_end(const BlockMoverCommand& cmd);
     bool exec_jump(const BlockMoverCommand& cmd);
@@ -401,8 +418,16 @@ public:
     size_t num_waiting() const;
 
     // Inter-mover communication
-    L3Interconnect& interconnect() { return interconnect_; }
+    noc::NoC& noc() { return noc_; }
+    const noc::NoC& noc() const { return noc_; }
     TriggerNetwork& triggers() { return triggers_; }
+
+    // NoC tracing
+    void set_noc_tracer(noc::NoCTracer* tracer) {
+        noc_tracer_ = tracer;
+        noc_.set_tracer(tracer);
+    }
+    noc::NoCTracer* noc_tracer() const { return noc_tracer_; }
 
     // Statistics
     struct AggregateStats {
@@ -421,9 +446,19 @@ public:
 private:
     Config config_;
     std::vector<std::unique_ptr<StatefulBlockMover>> movers_;
-    L3Interconnect interconnect_;
+    noc::NoC noc_;
+    noc::NoCTracer* noc_tracer_ = nullptr;
     TriggerNetwork triggers_;
     dataflow::TileFlowTracer* tracer_ = nullptr;
+
+    // Pending NoC injections (for retry on BUFFER_FULL)
+    struct PendingNoCInjection {
+        uint8_t src_l3_id;
+        uint8_t dst_l3_id;
+        TileDescriptor tile;
+        uint64_t first_attempt_cycle;
+    };
+    std::queue<PendingNoCInjection> pending_noc_injections_;
 
     void setup_callbacks();
 };

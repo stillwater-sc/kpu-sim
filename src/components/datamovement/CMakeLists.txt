@@ -27,6 +27,7 @@ target_link_libraries(kpu_datamovement_components
         kpu_memory_components  # DATAMOVEMENT components depend on memory components (includes AddressDecoder)
         kpu_compute_components # VectorEngine depends on SFU from compute components
         kpu_trace             # For cycle-accurate tracing
+        kpu_noc               # NoC for L3-to-L3 transfers
 )
 
 # Set target properties

@@ -22,6 +22,7 @@
 #include "sw/kpu/dataflow/tile_dataflow_graph.hpp"
 #include "sw/kpu/dataflow/block_mover_compiler.hpp"
 #include "sw/kpu/dataflow/tile_flow_tracer.hpp"
+#include "sw/kpu/noc/noc.hpp"
 
 using namespace sw::kpu;
 using namespace sw::kpu::dataflow;
@@ -50,9 +51,27 @@ struct MatmulConfig {
     uint32_t systolic_size = 24;
 
     // Timing estimates (cycles)
-    uint32_t dma_bandwidth_bytes_per_cycle = 32;    // External memory bandwidth
+    uint32_t dma_bandwidth_bytes_per_cycle = 64;    // Per-channel DMA bandwidth
     uint32_t l3_bandwidth_bytes_per_cycle = 64;     // L3 interconnect bandwidth
     uint32_t l2_bandwidth_bytes_per_cycle = 64;     // L3→L2 bandwidth
+
+    // DMA channel architecture:
+    // - 4 A-row channels: one per mesh row, feeding column 0
+    // - 4 B-col channels: one per mesh column, feeding row 0
+    // - Total: 8 parallel DMA channels
+    uint8_t num_a_dma_channels() const { return mesh_rows; }
+    uint8_t num_b_dma_channels() const { return mesh_cols; }
+    uint8_t total_dma_channels() const { return mesh_rows + mesh_cols; }
+
+    // DMA timing per channel
+    uint32_t dma_cycles_per_tile() const {
+        return a_tile_bytes() / dma_bandwidth_bytes_per_cycle;
+    }
+
+    // Aggregate DMA bandwidth
+    uint32_t total_dma_bandwidth() const {
+        return total_dma_channels() * dma_bandwidth_bytes_per_cycle;
+    }
 
     // Derived values
     uint32_t tile_m() const { return M / m_tiles; }
@@ -92,7 +111,34 @@ struct MatmulConfig {
         std::cout << "  L3 tiles: " << static_cast<int>(num_l3_tiles) << " ("
                   << static_cast<int>(mesh_rows) << "×" << static_cast<int>(mesh_cols) << " mesh)\n";
         std::cout << "  Systolic array: " << systolic_size << "×" << systolic_size << "\n";
-        std::cout << "  Peak throughput: " << (systolic_size * systolic_size) << " MACs/cycle\n";
+        std::cout << "  Peak throughput: " << (systolic_size * systolic_size) << " MACs/cycle\n\n";
+
+        std::cout << "DMA Architecture:\n";
+        std::cout << "  A-row channels: " << static_cast<int>(num_a_dma_channels())
+                  << " (feeding column 0)\n";
+        std::cout << "  B-col channels: " << static_cast<int>(num_b_dma_channels())
+                  << " (feeding row 0)\n";
+        std::cout << "  Total DMA channels: " << static_cast<int>(total_dma_channels()) << "\n";
+        std::cout << "  Per-channel bandwidth: " << dma_bandwidth_bytes_per_cycle << " B/cycle\n";
+        std::cout << "  Aggregate DMA bandwidth: " << total_dma_bandwidth() << " B/cycle\n\n";
+
+        std::cout << "Bandwidth Analysis:\n";
+        uint32_t noc_transfer_cycles = a_tile_bytes() / l3_bandwidth_bytes_per_cycle;
+        uint32_t tiles_per_k_step = mesh_rows + mesh_cols;  // A tiles + B tiles
+        uint64_t bytes_per_k_step = static_cast<uint64_t>(mesh_rows) * a_tile_bytes() +
+                                    static_cast<uint64_t>(mesh_cols) * b_tile_bytes();
+        std::cout << "  NoC transfer time: " << noc_transfer_cycles << " cycles/tile\n";
+        std::cout << "  DMA load time: " << dma_cycles_per_tile() << " cycles/tile\n";
+        std::cout << "  Ingress per K-step: " << tiles_per_k_step << " tiles ("
+                  << (bytes_per_k_step / 1024) << " KB)\n";
+        std::cout << "  Required ingress BW: " << (bytes_per_k_step / noc_transfer_cycles)
+                  << " B/cycle\n";
+        std::cout << "  Available DMA BW: " << total_dma_bandwidth() << " B/cycle ";
+        if (total_dma_bandwidth() >= bytes_per_k_step / noc_transfer_cycles) {
+            std::cout << "(sufficient)\n";
+        } else {
+            std::cout << "(BOTTLENECK)\n";
+        }
     }
 };
 
@@ -100,8 +146,14 @@ struct MatmulConfig {
 // Systolic Dataflow Patterns
 // ============================================================================
 
-/// Build a DFG for output-stationary systolic matmul
+/// Build a DFG for output-stationary systolic matmul with staggered wavefront
 /// C tiles stay in place, A flows East, B flows South
+///
+/// The staggered wavefront creates a diagonal wave pattern:
+/// - A[m,k] enters one row at a time (staggered by m)
+/// - B[k,n] enters one column at a time (staggered by n)
+/// - At each L3[m,n], A and B meet at time proportional to (m + n)
+/// - K iterations are pipelined: K+1 starts loading while K is still computing
 TileDataFlowGraph build_systolic_matmul_dfg(const MatmulConfig& config) {
     TileDataFlowGraph dfg;
 
@@ -109,6 +161,7 @@ TileDataFlowGraph build_systolic_matmul_dfg(const MatmulConfig& config) {
     uint32_t n_tiles = config.n_tiles;
     uint32_t k_tiles = config.k_tiles;
     uint8_t mesh_cols = config.mesh_cols;
+    uint8_t mesh_rows = config.mesh_rows;
 
     // Track node IDs
     // load_a[m][k] - DMA load of A[m,k]
@@ -130,10 +183,14 @@ TileDataFlowGraph build_systolic_matmul_dfg(const MatmulConfig& config) {
 
     // B tile transfer tracking: [k][n][row]
     std::vector<std::vector<std::vector<size_t>>> b_at_row(
-        k_tiles, std::vector<std::vector<size_t>>(n_tiles, std::vector<size_t>(config.mesh_rows)));
+        k_tiles, std::vector<std::vector<size_t>>(n_tiles, std::vector<size_t>(mesh_rows)));
 
-    // Phase 1: DMA loads
+    // ========================================================================
+    // Phase 1: DMA loads with staggered wavefront
+    // ========================================================================
+
     // A tiles loaded to column 0 of mesh (L3 tiles 0, 4, 8, 12 for 4x4 mesh)
+    // Stagger: A[m,k] waits for A[m-1,k] to create diagonal wavefront
     for (uint32_t m = 0; m < m_tiles; ++m) {
         for (uint32_t k = 0; k < k_tiles; ++k) {
             TileDescriptor tile;
@@ -145,13 +202,14 @@ TileDataFlowGraph build_systolic_matmul_dfg(const MatmulConfig& config) {
             tile.width = static_cast<uint16_t>(config.tile_k());
 
             // Load to L3 in column 0, row = m % mesh_rows
-            uint8_t l3_id = static_cast<uint8_t>((m % config.mesh_rows) * mesh_cols);
+            uint8_t l3_id = static_cast<uint8_t>((m % mesh_rows) * mesh_cols);
             load_a[m][k] = dfg.add_dma_load(tile, l3_id);
             a_at_col[m][k][0] = load_a[m][k];
         }
     }
 
     // B tiles loaded to row 0 of mesh (L3 tiles 0, 1, 2, 3 for 4x4 mesh)
+    // Stagger: B[k,n] waits for B[k,n-1] to create diagonal wavefront
     for (uint32_t k = 0; k < k_tiles; ++k) {
         for (uint32_t n = 0; n < n_tiles; ++n) {
             TileDescriptor tile;
@@ -169,8 +227,39 @@ TileDataFlowGraph build_systolic_matmul_dfg(const MatmulConfig& config) {
         }
     }
 
+    // ========================================================================
+    // Phase 1b: DMA channel K-step ordering (parallel channels)
+    // ========================================================================
+    //
+    // DMA Architecture:
+    // - 4 A-row DMA channels: one per mesh row, feeding column 0
+    //   Each channel loads A[row, k=0], A[row, k=1], ... sequentially
+    // - 4 B-col DMA channels: one per mesh column, feeding row 0
+    //   Each channel loads B[k=0, col], B[k=1, col], ... sequentially
+    // - Channels operate in parallel (no cross-row/column dependencies)
+    //
+    // This models 8 parallel DMA engines, each with its own address
+    // generation logic for sequential tile loads.
+
+    // A-row DMA channels: K-step ordering within each row (m)
+    // A[m,k] waits for A[m,k-1] on the same channel
+    for (uint32_t m = 0; m < m_tiles; ++m) {
+        for (uint32_t k = 1; k < k_tiles; ++k) {
+            dfg.add_edge(load_a[m][k-1], load_a[m][k], DFEdgeType::CONTROL);
+        }
+    }
+
+    // B-col DMA channels: K-step ordering within each column (n)
+    // B[k,n] waits for B[k-1,n] on the same channel
+    for (uint32_t n = 0; n < n_tiles; ++n) {
+        for (uint32_t k = 1; k < k_tiles; ++k) {
+            dfg.add_edge(load_b[k-1][n], load_b[k][n], DFEdgeType::CONTROL);
+        }
+    }
+
+    // ========================================================================
     // Phase 2: A tiles flow East, B tiles flow South
-    // Create transfer nodes for systolic flow
+    // ========================================================================
 
     // A flows East: for each A tile, create transfers across columns
     for (uint32_t m = 0; m < m_tiles; ++m) {
@@ -181,7 +270,7 @@ TileDataFlowGraph build_systolic_matmul_dfg(const MatmulConfig& config) {
             tile.k_tile = static_cast<uint16_t>(k);
             tile.size = config.a_tile_bytes();
 
-            uint8_t row = static_cast<uint8_t>(m % config.mesh_rows);
+            uint8_t row = static_cast<uint8_t>(m % mesh_rows);
 
             for (uint8_t col = 1; col < mesh_cols; ++col) {
                 uint8_t src_l3 = row * mesh_cols + (col - 1);
@@ -205,7 +294,7 @@ TileDataFlowGraph build_systolic_matmul_dfg(const MatmulConfig& config) {
 
             uint8_t col = static_cast<uint8_t>(n % mesh_cols);
 
-            for (uint8_t row = 1; row < config.mesh_rows; ++row) {
+            for (uint8_t row = 1; row < mesh_rows; ++row) {
                 uint8_t src_l3 = (row - 1) * mesh_cols + col;
                 uint8_t dst_l3 = row * mesh_cols + col;
 
@@ -216,11 +305,103 @@ TileDataFlowGraph build_systolic_matmul_dfg(const MatmulConfig& config) {
         }
     }
 
+    // ========================================================================
+    // Phase 2b: K-step ordering for proper pipelining
+    // ========================================================================
+
+    // For proper systolic pipelining:
+    // - Tiles for K=1 should flow through AFTER tiles for K=0
+    // - This allows: receive A[0,0] → forward → receive A[0,1] → forward → ...
+    // - Without this, all K tiles are sent simultaneously, no pipelining
+
+    // K-step dependencies on A transfers: A[m,k] at col c waits for A[m,k-1] at col c
+    for (uint32_t m = 0; m < m_tiles; ++m) {
+        for (uint8_t col = 1; col < mesh_cols; ++col) {
+            for (uint32_t k = 1; k < k_tiles; ++k) {
+                // A[m,k] at column col waits for A[m,k-1] at same column
+                dfg.add_edge(a_at_col[m][k-1][col], a_at_col[m][k][col], DFEdgeType::CONTROL);
+            }
+        }
+    }
+
+    // K-step dependencies on B transfers: B[k,n] at row r waits for B[k-1,n] at row r
+    for (uint32_t n = 0; n < n_tiles; ++n) {
+        for (uint8_t row = 1; row < mesh_rows; ++row) {
+            for (uint32_t k = 1; k < k_tiles; ++k) {
+                // B[k,n] at row waits for B[k-1,n] at same row
+                dfg.add_edge(b_at_row[k-1][n][row], b_at_row[k][n][row], DFEdgeType::CONTROL);
+            }
+        }
+    }
+
+    // ========================================================================
+    // Phase 2c: Wavefront pattern via independent row/column operation
+    // ========================================================================
+    //
+    // In a true systolic array:
+    // - Each row operates independently (A tiles flow East on their row)
+    // - Each column operates independently (B tiles flow South on their column)
+    // - The diagonal wavefront emerges from:
+    //   1. Parallel DMA channels starting simultaneously
+    //   2. WAIT_DELIVERY ensuring K-step sequencing within each path
+    //   3. start_delay at edge L3s creating the initial offset
+    //
+    // NO cross-row or cross-column dependencies are needed for transfers.
+    // This allows maximum NoC concurrency.
+
+    // ========================================================================
+    // Phase 2d: Global K-step barriers for flow control
+    // ========================================================================
+    //
+    // To prevent NoC congestion while allowing concurrent A/B sends within
+    // each K-step, we add global barriers between K iterations:
+    // - All A and B tiles for K=k must reach their destinations
+    // - Before any A or B tiles for K=k+1 can start flowing
+    //
+    // This gives us concurrent A/B DMA with proper flow control.
+
+    // Create barrier nodes for each K transition
+    std::vector<size_t> k_barriers(k_tiles);
+    for (uint32_t k = 0; k < k_tiles; ++k) {
+        TileDescriptor barrier_tile;
+        barrier_tile.k_tile = static_cast<uint16_t>(k);
+        // Use L3[0,0] as the barrier coordination point
+        k_barriers[k] = dfg.add_barrier(0);
+    }
+
+    // K-step barrier depends on all A tiles reaching their final column
+    // and all B tiles reaching their final row for that K
+    for (uint32_t k = 0; k < k_tiles; ++k) {
+        // A tiles at final column (mesh_cols - 1) for all rows
+        for (uint32_t m = 0; m < m_tiles; ++m) {
+            dfg.add_edge(a_at_col[m][k][mesh_cols - 1], k_barriers[k], DFEdgeType::CONTROL);
+        }
+        // B tiles at final row (mesh_rows - 1) for all columns
+        for (uint32_t n = 0; n < n_tiles; ++n) {
+            dfg.add_edge(b_at_row[k][n][mesh_rows - 1], k_barriers[k], DFEdgeType::CONTROL);
+        }
+    }
+
+    // Next K's DMA loads depend on previous K's barrier
+    for (uint32_t k = 1; k < k_tiles; ++k) {
+        // All A loads for K=k wait for K=k-1 barrier
+        for (uint32_t m = 0; m < m_tiles; ++m) {
+            dfg.add_edge(k_barriers[k-1], load_a[m][k], DFEdgeType::CONTROL);
+        }
+        // All B loads for K=k wait for K=k-1 barrier
+        for (uint32_t n = 0; n < n_tiles; ++n) {
+            dfg.add_edge(k_barriers[k-1], load_b[k][n], DFEdgeType::CONTROL);
+        }
+    }
+
+    // ========================================================================
     // Phase 3: Compute nodes
+    // ========================================================================
+
     for (uint32_t m = 0; m < m_tiles; ++m) {
         for (uint32_t n = 0; n < n_tiles; ++n) {
             // C[m,n] is computed at L3[row, col] where row = m % mesh_rows, col = n % mesh_cols
-            uint8_t row = static_cast<uint8_t>(m % config.mesh_rows);
+            uint8_t row = static_cast<uint8_t>(m % mesh_rows);
             uint8_t col = static_cast<uint8_t>(n % mesh_cols);
             uint8_t l3_id = row * mesh_cols + col;
 
@@ -256,7 +437,9 @@ TileDataFlowGraph build_systolic_matmul_dfg(const MatmulConfig& config) {
                 }
             }
 
+            // ================================================================
             // Phase 4: Drain C tiles
+            // ================================================================
             TileDescriptor c_final;
             c_final.tensor = TensorId::C;
             c_final.m_tile = static_cast<uint16_t>(m);
@@ -389,8 +572,9 @@ void simulate_execution(const CompiledSchedule& compiled, const MatmulConfig& co
     std::cout << "║                    SIMULATION EXECUTION                           ║\n";
     std::cout << "╚══════════════════════════════════════════════════════════════════╝\n\n";
 
-    // Create tile flow tracer
+    // Create tracers
     TileFlowTracer tracer;
+    noc::NoCTracer noc_tracer;
 
     // Create BlockMoverArray
     BlockMoverArray::Config array_config;
@@ -401,16 +585,33 @@ void simulate_execution(const CompiledSchedule& compiled, const MatmulConfig& co
     // Enable tracing
     if (enable_tracing) {
         array.set_tracer(&tracer);
+        array.set_noc_tracer(&noc_tracer);
     }
 
-    // Load programs
+    // Load programs with staggered start delays for systolic wavefront
+    // Each L3 starts at cycle proportional to (row + col) × transfer_time
+    // This creates a diagonal wavefront where tiles meet at the correct time
+    uint64_t transfer_time = config.a_tile_bytes() / config.l3_bandwidth_bytes_per_cycle;
+
     std::vector<BlockMoverProgram> programs;
     for (uint8_t l3 = 0; l3 < config.num_l3_tiles; ++l3) {
         if (!compiled.program(l3).empty()) {
-            programs.push_back(compiled.program(l3));
+            BlockMoverProgram prog = compiled.program(l3);
+
+            // Calculate wavefront position: row + col
+            uint8_t row = l3 / config.mesh_cols;
+            uint8_t col = l3 % config.mesh_cols;
+            uint64_t wavefront_pos = row + col;
+
+            // Start delay creates the diagonal wavefront
+            prog.start_delay_cycles = wavefront_pos * transfer_time;
+
+            programs.push_back(prog);
         }
     }
     array.load_programs(programs);
+
+    std::cout << "Wavefront timing: transfer_time=" << transfer_time << " cycles\n" << std::flush;
 
     std::cout << "Starting simulation with " << programs.size() << " active L3 tiles...\n" << std::flush;
     if (enable_tracing) {
@@ -482,6 +683,29 @@ void simulate_execution(const CompiledSchedule& compiled, const MatmulConfig& co
             std::cout << "  Open in: chrome://tracing or https://ui.perfetto.dev\n";
         }
         std::cout << "\n  Visualize with: python3 tools/visualization/tile_flow_gantt.py " << csv_file << "\n";
+    }
+
+    // Export NoC trace data
+    if (enable_tracing && noc_tracer.num_events() > 0) {
+        std::cout << "\nNoC Statistics:\n";
+        const auto& noc_stats = array.noc().stats();
+        std::cout << "  Total packets: " << noc_stats.total_packets << "\n";
+        std::cout << "  Total bytes: " << (noc_stats.total_bytes / 1024) << " KB\n";
+        std::cout << "  Total hops: " << noc_stats.total_hops << "\n";
+        if (noc_stats.total_packets > 0) {
+            std::cout << "  Avg latency: " << std::fixed << std::setprecision(1)
+                      << noc_stats.avg_latency() << " cycles\n";
+            std::cout << "  Avg hops: " << std::fixed << std::setprecision(1)
+                      << noc_stats.avg_hops() << "\n";
+        }
+
+        // Export NoC trace
+        std::string noc_trace_file = "/tmp/noc_trace.csv";
+        if (noc_tracer.export_csv(noc_trace_file)) {
+            std::cout << "\n  NoC trace exported to: " << noc_trace_file << "\n";
+            std::cout << "  Visualize with: python3 tools/visualization/generate_noc_animation.py "
+                      << noc_trace_file << " /tmp/matmul_noc.html\n";
+        }
     }
 }
 
@@ -568,7 +792,15 @@ int main(int argc, char* argv[]) {
 
     std::cout << "  Creating compiler..." << std::flush;
     auto compile_start = std::chrono::high_resolution_clock::now();
-    BlockMoverCompiler compiler;
+
+    // Configure compiler for concurrent A/B DMA
+    // Disable sync_sends to allow A and B tiles to be sent in parallel
+    // K-step ordering is enforced by DFG dependencies
+    BlockMoverCompiler::Config compiler_config;
+    compiler_config.mesh_rows = config.mesh_rows;
+    compiler_config.mesh_cols = config.mesh_cols;
+    compiler_config.sync_sends = false;  // Allow parallel A/B sends
+    BlockMoverCompiler compiler(compiler_config);
     std::cout << " compiling..." << std::flush;
     CompiledSchedule compiled = compiler.compile(dfg, schedule);
     std::cout << " done.\n" << std::flush;

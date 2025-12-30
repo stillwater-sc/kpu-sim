@@ -27,14 +27,20 @@ def load_noc_trace(filename: str) -> list:
                 continue
             event = {}
             for h, v in zip(headers, values):
-                if h in ['cycle', 'router_id', 'packet_seq', 'tensor', 'm_tile', 'n_tile', 'k_tile', 'type']:
+                # Integer fields
+                int_fields = ['cycle', 'router_id', 'packet_seq', 'tensor',
+                              'm_tile', 'n_tile', 'k_tile', 'type',
+                              'flit_index', 'num_flits', 'src_router', 'dst_router']
+                if h in int_fields:
                     try:
                         event[h] = int(v)
                     except ValueError:
-                        event[h] = v
+                        event[h] = 0
                 else:
                     event[h] = v
             events.append(event)
+    # Sort by cycle then by type (FLIT_ARRIVE events should come after INJECT/HOP)
+    events.sort(key=lambda e: (e.get('cycle', 0), e.get('type', 0)))
     return events
 
 
@@ -602,10 +608,15 @@ def generate_noc_html(events: list, title: str = "KPU NoC Animation") -> str:
         const EVENT_HOP = 1;
         const EVENT_EJECT = 2;
         const EVENT_BLOCKED = 3;
+        const EVENT_LINK_BUSY = 4;
+        const EVENT_LINK_IDLE = 5;
+        const EVENT_FLIT_SEND = 6;
+        const EVENT_FLIT_ARRIVE = 7;
 
-        const EVENT_NAMES = ['INJECT', 'HOP', 'EJECT', 'BLOCKED', 'LINK_BUSY', 'LINK_IDLE'];
+        const EVENT_NAMES = ['INJECT', 'HOP', 'EJECT', 'BLOCKED', 'LINK_BUSY', 'LINK_IDLE', 'FLIT_SEND', 'FLIT_ARRIVE'];
         const TENSOR_NAMES = {{ 0: 'A', 1: 'B', 2: 'C', 3: 'D' }};
         const TENSOR_COLORS = {{ 0: '#FF6B6B', 1: '#4ECDC4', 2: '#FFE66D', 3: '#9B59B6' }};
+        const TENSOR_COLORS_LIGHT = {{ 0: '#FFAAAA', 1: '#99E6E0', 2: '#FFF2AA', 3: '#C9A0DC' }};
 
         // State
         let currentCycle = 0;
@@ -620,13 +631,16 @@ def generate_noc_html(events: list, title: str = "KPU NoC Animation") -> str:
         let filters = {{ A: true, B: true, C: true }};
 
         // Simulation state
-        let l3Contents = {{}};     // l3_id -> Set of tile keys
+        let l3Contents = {{}};     // l3_id -> Set of tile keys (completed tiles)
+        let l3PartialTiles = {{}};  // l3_id -> Map of tileKey -> {{flitsReceived, numFlits, tensor, m, n, k}}
         let packetsInFlight = {{}}; // packet_seq -> {{src, dst, tensor, tile, currentPos}}
-        let stats = {{ injected: 0, delivered: 0, hops: 0 }};
+        let linkActivity = {{}};    // "srcId-dstId" -> {{tensor, progress, lastCycle}}
+        let stats = {{ injected: 0, delivered: 0, hops: 0, flits: 0 }};
 
         // Initialize L3 contents
         for (let i = 0; i < 16; i++) {{
             l3Contents[i] = new Set();
+            l3PartialTiles[i] = new Map();
         }}
 
         // Format tile label: A0.0, B11.17, etc.
@@ -851,15 +865,39 @@ def generate_noc_html(events: list, title: str = "KPU NoC Animation") -> str:
             if (!tilesContainer) return;
 
             tilesContainer.innerHTML = '';
-            const tiles = Array.from(l3Contents[l3Id]);
-            capacityLabel.textContent = `${{tiles.length}} tiles`;
+
+            // Combine completed tiles and partial tiles
+            const completedTiles = Array.from(l3Contents[l3Id]);
+            const partialTiles = Array.from(l3PartialTiles[l3Id].entries());
+
+            // Create display list: completed tiles first, then partial tiles not in completed
+            const displayTiles = [];
+            completedTiles.forEach(tileKey => {{
+                const [tensor, m, n, k] = tileKey.split(',').map(Number);
+                displayTiles.push({{ tileKey, tensor, m, n, k, progress: 1.0 }});
+            }});
+            partialTiles.forEach(([tileKey, info]) => {{
+                if (!l3Contents[l3Id].has(tileKey)) {{
+                    const progress = info.flitsReceived / info.numFlits;
+                    displayTiles.push({{
+                        tileKey,
+                        tensor: info.tensor,
+                        m: info.m,
+                        n: info.n,
+                        k: info.k,
+                        progress
+                    }});
+                }}
+            }});
+
+            capacityLabel.textContent = `${{completedTiles.length}} tiles (${{partialTiles.length}} partial)`;
 
             const pos = getL3Pos(l3Id);
             const startX = pos.x - L3_SIZE / 2 + 8;
             const startY = pos.y - L3_SIZE / 2 + 24;
 
-            tiles.forEach((tileKey, index) => {{
-                const [tensor, m, n, k] = tileKey.split(',').map(Number);
+            displayTiles.forEach((tile, index) => {{
+                const {{ tileKey, tensor, m, n, k, progress }} = tile;
 
                 // Check filter
                 const tensorName = TENSOR_NAMES[tensor];
@@ -872,13 +910,26 @@ def generate_noc_html(events: list, title: str = "KPU NoC Animation") -> str:
                 const x = startX + col * (TILE_BLOCK_SIZE + 3);
                 const y = startY + row * (TILE_BLOCK_SIZE + 3);
 
-                // Tile rectangle
-                const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
-                rect.classList.add('matrix-tile', `tensor-${{tensorName}}`);
-                rect.setAttribute('x', x);
-                rect.setAttribute('y', y);
-                rect.setAttribute('width', TILE_BLOCK_SIZE);
-                rect.setAttribute('height', TILE_BLOCK_SIZE);
+                // Background rect (light color)
+                const bgRect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+                bgRect.setAttribute('x', x);
+                bgRect.setAttribute('y', y);
+                bgRect.setAttribute('width', TILE_BLOCK_SIZE);
+                bgRect.setAttribute('height', TILE_BLOCK_SIZE);
+                bgRect.setAttribute('rx', 3);
+                bgRect.style.fill = TENSOR_COLORS_LIGHT[tensor] || '#ddd';
+                bgRect.style.stroke = TENSOR_COLORS[tensor] || '#999';
+                bgRect.style.strokeWidth = '1';
+
+                // Fill rect (shows progress from bottom up)
+                const fillHeight = TILE_BLOCK_SIZE * progress;
+                const fillRect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+                fillRect.classList.add('matrix-tile', `tensor-${{tensorName}}`);
+                fillRect.setAttribute('x', x);
+                fillRect.setAttribute('y', y + TILE_BLOCK_SIZE - fillHeight);
+                fillRect.setAttribute('width', TILE_BLOCK_SIZE);
+                fillRect.setAttribute('height', fillHeight);
+                fillRect.setAttribute('rx', progress < 1 ? 0 : 3);
 
                 // Tile label
                 const label = document.createElementNS('http://www.w3.org/2000/svg', 'text');
@@ -886,9 +937,11 @@ def generate_noc_html(events: list, title: str = "KPU NoC Animation") -> str:
                 label.setAttribute('x', x + TILE_BLOCK_SIZE / 2);
                 label.setAttribute('y', y + TILE_BLOCK_SIZE / 2 + 3);
                 label.setAttribute('text-anchor', 'middle');
-                label.textContent = formatTileLabel(tensor, m, n, k);
+                const progressPct = progress < 1 ? ` ${{Math.round(progress * 100)}}%` : '';
+                label.textContent = formatTileLabel(tensor, m, n, k) + progressPct;
 
-                tilesContainer.appendChild(rect);
+                tilesContainer.appendChild(bgRect);
+                tilesContainer.appendChild(fillRect);
                 tilesContainer.appendChild(label);
             }});
 
@@ -1037,6 +1090,11 @@ def generate_noc_html(events: list, title: str = "KPU NoC Animation") -> str:
                     }};
                     setRouterActive(routerId, true);
                     setTimeout(() => setRouterActive(routerId, false), 200);
+
+                    // Add tile to source L3 cache (it has the tile before sending)
+                    l3Contents[routerId].add(tileKey);
+                    updateL3Display(routerId);
+
                     stats.injected++;
                     break;
 
@@ -1084,10 +1142,60 @@ def generate_noc_html(events: list, title: str = "KPU NoC Animation") -> str:
                         setTimeout(() => router.classList.remove('congested'), 300);
                     }}
                     break;
+
+                case EVENT_FLIT_SEND:
+                    // Show link activity for FLIT transfer
+                    const srcRouter = event.src_router || 0;
+                    const dstRouter = event.dst_router || 0;
+                    const flitProgress = (event.flit_index || 0) / (event.num_flits || 1);
+
+                    // Update link color based on tensor and progress
+                    setLinkActive(srcRouter, dstRouter, true, tensor);
+
+                    // Track link activity for animation
+                    const linkKey = `${{srcRouter}}-${{dstRouter}}`;
+                    linkActivity[linkKey] = {{
+                        tensor: tensor,
+                        progress: flitProgress,
+                        lastCycle: event.cycle
+                    }};
+
+                    stats.flits++;
+                    break;
+
+                case EVENT_FLIT_ARRIVE:
+                    // Update partial tile fill state
+                    const flitIndex = event.flit_index || 0;
+                    const numFlits = event.num_flits || 1;
+
+                    // Initialize or update partial tile info
+                    if (!l3PartialTiles[routerId].has(tileKey)) {{
+                        l3PartialTiles[routerId].set(tileKey, {{
+                            flitsReceived: 0,
+                            numFlits: numFlits,
+                            tensor: tensor,
+                            m: event.m_tile,
+                            n: event.n_tile,
+                            k: event.k_tile
+                        }});
+                    }}
+
+                    const tileInfo = l3PartialTiles[routerId].get(tileKey);
+                    // Update flits received (use flit_index as progress indicator)
+                    tileInfo.flitsReceived = Math.max(tileInfo.flitsReceived, flitIndex + 1);
+
+                    // Update display to show progressive fill
+                    updateL3Display(routerId);
+
+                    stats.flits++;
+                    break;
             }}
 
             updateStats();
-            addEventToLog(event);
+            // Only log major events, not every FLIT
+            if (type !== EVENT_FLIT_SEND && type !== EVENT_FLIT_ARRIVE) {{
+                addEventToLog(event);
+            }}
         }}
 
         // Update statistics display
@@ -1147,10 +1255,12 @@ def generate_noc_html(events: list, title: str = "KPU NoC Animation") -> str:
         function resetState() {{
             currentCycle = 0;
             packetsInFlight = {{}};
-            stats = {{ injected: 0, delivered: 0, hops: 0 }};
+            linkActivity = {{}};
+            stats = {{ injected: 0, delivered: 0, hops: 0, flits: 0 }};
 
             for (let i = 0; i < 16; i++) {{
                 l3Contents[i] = new Set();
+                l3PartialTiles[i] = new Map();
                 updateL3Display(i);
                 setRouterActive(i, false);
             }}

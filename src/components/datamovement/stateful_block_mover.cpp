@@ -24,7 +24,16 @@ StatefulBlockMover::StatefulBlockMover(const StatefulBlockMoverConfig& config)
 void StatefulBlockMover::load_program(const BlockMoverProgram& program) {
     program_ = program.commands;
     pc_ = 0;
-    state_ = program_.empty() ? BlockMoverState::IDLE : BlockMoverState::RUNNING;
+    start_delay_cycles_ = program.start_delay_cycles;
+
+    // Determine initial state
+    if (program_.empty()) {
+        state_ = BlockMoverState::IDLE;
+    } else if (start_delay_cycles_ > 0) {
+        state_ = BlockMoverState::WAITING_START;
+    } else {
+        state_ = BlockMoverState::RUNNING;
+    }
 
     // Clear execution state
     while (!loop_stack_.empty()) loop_stack_.pop();
@@ -62,6 +71,16 @@ bool StatefulBlockMover::step(uint64_t cycle) {
     // Store current cycle for execute_current to use
     current_cycle_ = cycle;
 
+    // Check if we're waiting for start delay
+    if (state_ == BlockMoverState::WAITING_START) {
+        if (cycle < start_delay_cycles_) {
+            // Still waiting for start time
+            return true;
+        }
+        // Start delay elapsed, transition to RUNNING
+        state_ = BlockMoverState::RUNNING;
+    }
+
     // Process any completed transfers
     process_completed_transfers(cycle);
 
@@ -84,7 +103,9 @@ bool StatefulBlockMover::step(uint64_t cycle) {
             }
             return true;  // Still executing (waiting)
         }
+        // Wait condition satisfied - the command that caused the wait is now complete
         state_ = BlockMoverState::RUNNING;
+        advance_pc();  // Move to next command
     }
 
     // Execute current command
@@ -250,6 +271,9 @@ bool StatefulBlockMover::execute_current() {
             // Memory fence - ensure ordering (no-op in simulation)
             return true;
 
+        case BlockMoverOp::WAIT_DELIVERY:
+            return exec_wait_delivery(cmd);
+
         case BlockMoverOp::LOOP_START:
             return exec_loop_start(cmd);
 
@@ -319,21 +343,22 @@ bool StatefulBlockMover::check_wait_conditions(uint64_t cycle) {
         case BlockMoverState::WAITING_RECEIVE: {
             // Check if we have a packet in the receive queue
             if (!receive_queue_.empty()) {
-                if (expected_receive_) {
-                    // Check if it matches what we're expecting
-                    const auto& packet = receive_queue_.front();
-                    if (packet.tile == *expected_receive_) {
-                        receive_queue_.pop();
-                        expected_receive_.reset();
-                        return true;
-                    }
-                } else {
-                    // Accept any packet
-                    receive_queue_.pop();
-                    return true;
-                }
+                // Accept any packet - the RECEIVE_FROM already validated src_l3_id
+                // when exec_receive() was first called and the queue was non-empty.
+                // If we're waiting, it means the queue was empty at that time,
+                // and any new packet is the one we're expecting.
+                receive_queue_.pop();
+                expected_receive_.reset();
+                return true;
             }
             return false;
+        }
+
+        case BlockMoverState::WAITING_DELIVERY: {
+            // Check if all NoC deliveries are complete
+            // (notify_noc_delivery decrements pending_noc_deliveries_ and
+            // transitions state to RUNNING when it reaches 0)
+            return pending_noc_deliveries_ == 0;
         }
 
         default:
@@ -435,6 +460,9 @@ bool StatefulBlockMover::exec_send(const BlockMoverCommand& cmd, Direction dir, 
         transfer_callback_(cmd.tile, static_cast<uint8_t>(neighbor));
     }
 
+    // Track pending NoC delivery for WAIT_DELIVERY synchronization
+    pending_noc_deliveries_++;
+
     stats_.l3_to_l3_transfers++;
     stats_.l3_to_l3_bytes += cmd.tile.size;
 
@@ -462,6 +490,9 @@ bool StatefulBlockMover::exec_send_to(const BlockMoverCommand& cmd, uint64_t cyc
     if (transfer_callback_) {
         transfer_callback_(cmd.tile, cmd.dest_l3_id);
     }
+
+    // Track pending NoC delivery for WAIT_DELIVERY synchronization
+    pending_noc_deliveries_++;
 
     stats_.l3_to_l3_transfers++;
     stats_.l3_to_l3_bytes += cmd.tile.size;
@@ -551,6 +582,30 @@ bool StatefulBlockMover::exec_barrier(const BlockMoverCommand& cmd, uint64_t cyc
     return false;
 }
 
+bool StatefulBlockMover::exec_wait_delivery(const BlockMoverCommand& cmd) {
+    (void)cmd;
+
+    // If no pending NoC deliveries, proceed immediately
+    if (pending_noc_deliveries_ == 0) {
+        return true;
+    }
+
+    // Block until all pending NoC deliveries complete
+    state_ = BlockMoverState::WAITING_DELIVERY;
+    return false;
+}
+
+void StatefulBlockMover::notify_noc_delivery() {
+    if (pending_noc_deliveries_ > 0) {
+        pending_noc_deliveries_--;
+    }
+
+    // If we were waiting for delivery and all deliveries are complete, resume
+    if (state_ == BlockMoverState::WAITING_DELIVERY && pending_noc_deliveries_ == 0) {
+        state_ = BlockMoverState::RUNNING;
+    }
+}
+
 bool StatefulBlockMover::exec_loop_start(const BlockMoverCommand& cmd) {
     if (cmd.loop_count == 0) {
         // Skip to matching LOOP_END
@@ -636,12 +691,24 @@ BlockMoverArray::BlockMoverArray()
 
 BlockMoverArray::BlockMoverArray(const Config& config)
     : config_(config)
-    , interconnect_(L3InterconnectConfig{
-          InterconnectTopology::MESH_2D,
+    , noc_(noc::NoCConfig{
+          noc::NoCTopology::MESH_2D,
           config.rows,
           config.cols,
-          config.mover_config.l3_to_l3_bandwidth_bytes_per_cycle,
-          config.mover_config.l3_to_l3_latency_cycles
+          noc::RoutingAlgorithm::XY,
+          noc::FlowControl::STORE_AND_FORWARD,
+          1,  // router_latency
+          1,  // link_latency
+          config.mover_config.l3_to_l3_bandwidth_bytes_per_cycle,  // link_bandwidth
+          config.mover_config.l3_to_l3_bandwidth_bytes_per_cycle,  // injection_bandwidth
+          32,  // dma_bandwidth
+          8,   // input_buffer_flits
+          4,   // output_buffer_flits
+          64,  // flit_size_bytes
+          4096,  // max_packet_flits
+          1,   // num_virtual_channels
+          true,  // dma_at_edges
+          1    // dma_ports_per_edge
       })
     , triggers_(config.rows * config.cols)
 {
@@ -659,17 +726,18 @@ BlockMoverArray::BlockMoverArray(const Config& config)
 }
 
 void BlockMoverArray::setup_callbacks() {
-    // Set up transfer callbacks to inject packets into interconnect
+    // Set up transfer callbacks to queue packets for NoC injection
     for (size_t id = 0; id < movers_.size(); ++id) {
         auto* mover = movers_[id].get();
         movers_[id]->set_transfer_callback(
             [this, id, mover](const TileDescriptor& tile, uint8_t dest_l3) {
-                L3TransferPacket packet;
-                packet.src_l3_id = static_cast<uint8_t>(id);
-                packet.dst_l3_id = dest_l3;
-                packet.tile = tile;
-                // Use the mover's current cycle for proper timing
-                interconnect_.inject_packet(packet, mover->current_cycle());
+                // Queue for injection (will be processed in step())
+                pending_noc_injections_.push(PendingNoCInjection{
+                    static_cast<uint8_t>(id),
+                    dest_l3,
+                    tile,
+                    mover->current_cycle()
+                });
             });
 
         movers_[id]->set_trigger_callback(
@@ -678,16 +746,31 @@ void BlockMoverArray::setup_callbacks() {
             });
     }
 
-    // Set up interconnect delivery callbacks
+    // Set up NoC delivery callbacks
     for (size_t id = 0; id < movers_.size(); ++id) {
-        interconnect_.set_delivery_callback(static_cast<uint8_t>(id),
-            [this, id](const L3TransferPacket& packet) {
-                movers_[id]->receive_packet(packet);
+        noc_.set_l3_delivery_callback(static_cast<uint8_t>(id),
+            [this, id](const noc::NoCPacket& packet, uint64_t cycle) {
+                // Convert NoCPacket to L3TransferPacket for BlockMover
+                L3TransferPacket l3_pkt;
+                l3_pkt.src_l3_id = packet.src_router;
+                l3_pkt.dst_l3_id = packet.dst_router;
+                l3_pkt.tile = packet.tile;
+                l3_pkt.inject_cycle = packet.inject_cycle;
+                l3_pkt.arrival_cycle = cycle;
+
+                movers_[id]->receive_packet(l3_pkt);
+
+                // Notify source BlockMover that delivery is complete
+                // This enables WAIT_DELIVERY to unblock
+                if (packet.src_router < movers_.size()) {
+                    movers_[packet.src_router]->notify_noc_delivery();
+                }
+
                 // Record receive event
                 if (tracer_) {
-                    tracer_->record_l3_receive(packet.arrival_cycle,
+                    tracer_->record_l3_receive(cycle,
                                                static_cast<uint8_t>(id),
-                                               packet.src_l3_id,
+                                               packet.src_router,
                                                packet.tile);
                 }
             });
@@ -712,8 +795,24 @@ void BlockMoverArray::step(uint64_t cycle) {
         mover->step(cycle);
     }
 
-    // Step interconnect
-    interconnect_.step(cycle);
+    // Process pending NoC injections (with retry on BUFFER_FULL)
+    size_t attempts = pending_noc_injections_.size();
+    for (size_t i = 0; i < attempts; ++i) {
+        auto inj = pending_noc_injections_.front();
+        pending_noc_injections_.pop();
+
+        auto result = noc_.inject_l3_to_l3(
+            inj.src_l3_id, inj.dst_l3_id, inj.tile, cycle);
+
+        if (result == noc::TransferResult::BUFFER_FULL) {
+            // Re-queue for next cycle
+            pending_noc_injections_.push(inj);
+        }
+        // SUCCESS: packet will be delivered via callback
+    }
+
+    // Step NoC
+    noc_.step(cycle);
 
     // Step trigger network
     triggers_.step(cycle);
@@ -733,15 +832,19 @@ void BlockMoverArray::reset() {
     for (auto& mover : movers_) {
         mover->reset();
     }
-    interconnect_.reset_stats();
+    noc_.reset_stats();
     triggers_.reset();
+    // Clear pending injections
+    while (!pending_noc_injections_.empty()) {
+        pending_noc_injections_.pop();
+    }
 }
 
 bool BlockMoverArray::all_idle() const {
     for (const auto& mover : movers_) {
         if (!mover->is_idle()) return false;
     }
-    return interconnect_.is_idle();
+    return noc_.is_idle() && pending_noc_injections_.empty();
 }
 
 bool BlockMoverArray::any_running() const {

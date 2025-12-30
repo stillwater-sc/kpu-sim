@@ -1,8 +1,8 @@
 # Session Log: December 29, 2025
-## Block Systolic Matrix Multiply Simulation - Bug Fixes and Completion
+## Block Systolic Matrix Multiply Simulation - FLIT-Level Tracking and Progressive Fill
 
 ### Session Overview
-This session completed the block systolic matrix multiply example (`block_systolic_matmul.cpp`) by fixing critical bugs in the StatefulBlockMover and L3Interconnect components that were preventing the simulation from running correctly.
+This session extended the NoC implementation with FLIT-level tracking for visualization of progressive tile filling during data movement. Building on the previous session's bug fixes, this work adds fine-grained trace events that show how tiles are gradually assembled from FLITs as they traverse the network.
 
 ### Work Completed
 

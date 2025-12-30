@@ -564,6 +564,8 @@ enum class NoCEventType : uint8_t {
     BLOCKED,        // Packet blocked (contention)
     LINK_BUSY,      // Link became busy
     LINK_IDLE,      // Link became idle
+    FLIT_SEND,      // Individual FLIT sent on link (for progressive fill)
+    FLIT_ARRIVE,    // Individual FLIT arrived at destination
 };
 
 /// A NoC trace event
@@ -574,6 +576,12 @@ struct NoCTraceEvent {
     PortDirection port = PortDirection::LOCAL;
     uint64_t packet_seq = 0;        // Packet sequence number
     TileDescriptor tile;            // Tile being transferred
+
+    // FLIT-level information
+    uint16_t flit_index = 0;        // Current FLIT index (0 to num_flits-1)
+    uint16_t num_flits = 0;         // Total FLITs in packet
+    uint8_t src_router = 0;         // Source router (for link tracking)
+    uint8_t dst_router = 0;         // Destination router (for link tracking)
 
     std::string to_string() const;
 };

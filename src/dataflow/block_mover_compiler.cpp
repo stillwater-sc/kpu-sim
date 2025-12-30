@@ -212,7 +212,7 @@ void BlockMoverCompiler::emit_node(const DFNode& node, const TileDataFlowGraph& 
             emit_dma_store(node, prog);
             break;
         case DFNodeType::L3_TRANSFER:
-            emit_l3_transfer(node, prog);
+            emit_l3_transfer(node, schedule);
             break;
         case DFNodeType::L3_TO_L2:
             emit_l3_to_l2(node, prog);
@@ -273,8 +273,26 @@ void BlockMoverCompiler::emit_dma_store(const DFNode& node, BlockMoverProgram& p
     prog.append(cmd);
 }
 
-void BlockMoverCompiler::emit_l3_transfer(const DFNode& node, BlockMoverProgram& prog) {
-    // Determine direction from src to dst
+void BlockMoverCompiler::emit_l3_transfer(const DFNode& node, CompiledSchedule& schedule) {
+    // Get source and destination programs
+    BlockMoverProgram& src_prog = schedule.program(node.src_l3_id);
+    BlockMoverProgram& dst_prog = schedule.program(node.dst_l3_id);
+
+    // Skip if source == destination
+    if (node.src_l3_id == node.dst_l3_id) {
+        return;
+    }
+
+    // Emit RECEIVE on destination L3 first (it will block until tile arrives)
+    {
+        BlockMoverCommand recv_cmd;
+        recv_cmd.op = BlockMoverOp::RECEIVE_FROM;
+        recv_cmd.tile = node.tile;
+        recv_cmd.src_l3_id = node.src_l3_id;
+        dst_prog.append(recv_cmd);
+    }
+
+    // Emit SEND on source L3
     auto dir = get_direction(node.src_l3_id, node.dst_l3_id);
 
     if (dir && *dir != Direction::LOCAL) {
@@ -287,16 +305,23 @@ void BlockMoverCompiler::emit_l3_transfer(const DFNode& node, BlockMoverProgram&
             default: break;
         }
         cmd.tile = node.tile;
-        prog.append(cmd);
-    } else if (!dir || node.src_l3_id != node.dst_l3_id) {
+        src_prog.append(cmd);
+    } else {
         // Non-neighbor transfer, use SEND_TO
         BlockMoverCommand cmd;
         cmd.op = BlockMoverOp::SEND_TO;
         cmd.tile = node.tile;
         cmd.dest_l3_id = node.dst_l3_id;
-        prog.append(cmd);
+        src_prog.append(cmd);
     }
-    // If src == dst, no transfer needed
+
+    // Emit WAIT_DELIVERY after SEND to synchronize K iterations
+    // This ensures A[m,k] is delivered before A[m,k+1] is sent
+    if (config_.sync_sends) {
+        BlockMoverCommand wait_cmd;
+        wait_cmd.op = BlockMoverOp::WAIT_DELIVERY;
+        src_prog.append(wait_cmd);
+    }
 }
 
 void BlockMoverCompiler::emit_l3_to_l2(const DFNode& node, BlockMoverProgram& prog) {

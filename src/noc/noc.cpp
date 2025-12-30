@@ -429,6 +429,8 @@ TransferResult NoC::inject_l3_to_l3(
 
     // Record injection event
     if (tracer_) {
+        uint32_t num_flits = (tile.size + config_.flit_size_bytes - 1) / config_.flit_size_bytes;
+
         NoCTraceEvent event;
         event.cycle = cycle;
         event.type = NoCEventType::INJECT;
@@ -436,6 +438,10 @@ TransferResult NoC::inject_l3_to_l3(
         event.port = PortDirection::LOCAL;
         event.packet_seq = next_sequence_ - 1;  // We already incremented in create_packet
         event.tile = tile;
+        event.flit_index = 0;  // First FLIT
+        event.num_flits = num_flits;
+        event.src_router = src_l3;
+        event.dst_router = dst_l3;
         tracer_->record_event(event);
     }
 
@@ -546,7 +552,31 @@ void NoC::step(uint64_t cycle) {
                                 event.port = in_dir;
                                 event.packet_seq = pkt.sequence_num;
                                 event.tile = pkt.tile;
+                                event.flit_index = pkt.num_flits - 1;
+                                event.num_flits = pkt.num_flits;
+                                event.src_router = i;
+                                event.dst_router = static_cast<uint8_t>(neighbor);
                                 tracer_->record_event(event);
+
+                                // Emit sampled FLIT_SEND events for link occupancy visualization
+                                // FLITs are sent over num_flits cycles
+                                uint64_t send_start_cycle = cycle > pkt.num_flits ?
+                                                            cycle - pkt.num_flits : 0;
+                                const uint16_t sample_interval = std::max<uint16_t>(1, pkt.num_flits / 8);
+                                for (uint16_t flit = 0; flit < pkt.num_flits; flit += sample_interval) {
+                                    NoCTraceEvent flit_event;
+                                    flit_event.cycle = send_start_cycle + flit;
+                                    flit_event.type = NoCEventType::FLIT_SEND;
+                                    flit_event.router_id = i;
+                                    flit_event.port = dir;
+                                    flit_event.packet_seq = pkt.sequence_num;
+                                    flit_event.tile = pkt.tile;
+                                    flit_event.flit_index = flit;
+                                    flit_event.num_flits = pkt.num_flits;
+                                    flit_event.src_router = i;
+                                    flit_event.dst_router = static_cast<uint8_t>(neighbor);
+                                    tracer_->record_event(flit_event);
+                                }
                             }
 
                             next_inp.buffer.push(std::move(pkt));
@@ -576,7 +606,35 @@ void NoC::deliver_packets(uint64_t cycle) {
                     event.port = PortDirection::LOCAL;
                     event.packet_seq = pkt.sequence_num;
                     event.tile = pkt.tile;
+                    event.flit_index = pkt.num_flits - 1;  // Last FLIT
+                    event.num_flits = pkt.num_flits;
+                    event.src_router = pkt.src_router;
+                    event.dst_router = i;
                     tracer_->record_event(event);
+
+                    // Emit FLIT_ARRIVE events for progressive fill visualization
+                    // FLITs arrive over num_flits cycles (at 1 FLIT/cycle bandwidth)
+                    // First FLIT arrived at (cycle - num_flits + 1)
+                    uint64_t first_flit_cycle = cycle > pkt.num_flits ?
+                                                cycle - pkt.num_flits + 1 : pkt.inject_cycle;
+
+                    // Emit sampled FLIT arrivals (every 16th FLIT to avoid trace bloat)
+                    // This gives ~16 progressive fill updates per tile
+                    const uint16_t sample_interval = std::max<uint16_t>(1, pkt.num_flits / 16);
+                    for (uint16_t flit = 0; flit < pkt.num_flits; flit += sample_interval) {
+                        NoCTraceEvent flit_event;
+                        flit_event.cycle = first_flit_cycle + flit;
+                        flit_event.type = NoCEventType::FLIT_ARRIVE;
+                        flit_event.router_id = i;
+                        flit_event.port = PortDirection::LOCAL;
+                        flit_event.packet_seq = pkt.sequence_num;
+                        flit_event.tile = pkt.tile;
+                        flit_event.flit_index = flit;
+                        flit_event.num_flits = pkt.num_flits;
+                        flit_event.src_router = pkt.src_router;
+                        flit_event.dst_router = i;
+                        tracer_->record_event(flit_event);
+                    }
                 }
 
                 // Update statistics
@@ -773,7 +831,8 @@ bool NoCTracer::export_csv(const std::string& filename) const {
     std::ofstream file(filename);
     if (!file) return false;
 
-    file << "cycle,type,router_id,port,packet_seq,tensor,m_tile,n_tile,k_tile\n";
+    file << "cycle,type,router_id,port,packet_seq,tensor,m_tile,n_tile,k_tile,"
+         << "flit_index,num_flits,src_router,dst_router\n";
 
     for (const auto& e : events_) {
         file << e.cycle << ","
@@ -784,7 +843,11 @@ bool NoCTracer::export_csv(const std::string& filename) const {
              << static_cast<int>(e.tile.tensor) << ","
              << e.tile.m_tile << ","
              << e.tile.n_tile << ","
-             << e.tile.k_tile << "\n";
+             << e.tile.k_tile << ","
+             << e.flit_index << ","
+             << e.num_flits << ","
+             << static_cast<int>(e.src_router) << ","
+             << static_cast<int>(e.dst_router) << "\n";
     }
 
     return true;

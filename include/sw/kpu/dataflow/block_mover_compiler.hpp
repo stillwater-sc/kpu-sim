@@ -101,6 +101,7 @@ public:
         bool enable_pipelining = true;          // Overlap loads with compute
         bool enable_double_buffering = false;   // Use double-buffered L3 regions
         bool emit_barriers = true;              // Insert barriers between phases
+        bool sync_sends = true;                 // Emit WAIT_DELIVERY after SEND for K-step sync
 
         // Trigger allocation strategy
         bool use_explicit_triggers = true;      // vs implicit ordering
@@ -151,7 +152,7 @@ private:
 
     void emit_dma_load(const DFNode& node, BlockMoverProgram& prog);
     void emit_dma_store(const DFNode& node, BlockMoverProgram& prog);
-    void emit_l3_transfer(const DFNode& node, BlockMoverProgram& prog);
+    void emit_l3_transfer(const DFNode& node, CompiledSchedule& schedule);
     void emit_l3_to_l2(const DFNode& node, BlockMoverProgram& prog);
     void emit_l2_to_l3(const DFNode& node, BlockMoverProgram& prog);
     void emit_matmul(const DFNode& node, const TileDataFlowGraph& dfg,
