@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added - 2025-12-29 (Session 2)
+- **FLIT-Level Tracking in NoC** (`include/sw/kpu/noc/noc.hpp`, `src/noc/noc.cpp`)
+  - New event types: `FLIT_SEND` and `FLIT_ARRIVE` for fine-grained visualization
+  - Extended `NoCTraceEvent` with `flit_index`, `num_flits`, `src_router`, `dst_router` fields
+  - Sampled FLIT emission to balance trace detail vs overhead:
+    - `FLIT_ARRIVE`: Every 256 FLITs → 16 progressive fill updates per tile
+    - `FLIT_SEND`: Every 512 FLITs → 8 link activity updates per hop
+  - For 256KB tiles (4096 FLITs): progressive fill shows ~256 cycles per 6.25% increment
+
+- **Progressive Tile Filling Animation** (`tools/visualization/generate_noc_animation.py`)
+  - Tracks partial tile fill state per L3 cache (`l3PartialTiles` map)
+  - Visual progressive fill: light background fills from bottom-up as FLITs arrive
+  - Displays percentage completion on partial tiles (e.g., "A0.0 25%")
+  - Link activity visualization showing tensor type during FLIT transfer
+  - New light color palette (`TENSOR_COLORS_LIGHT`) for partial tile backgrounds
+
+- **Extended NoC Trace CSV Format**
+  - New columns: `flit_index`, `num_flits`, `src_router`, `dst_router`
+  - Full format: `cycle,type,router_id,port,packet_seq,tensor,m_tile,n_tile,k_tile,flit_index,num_flits,src_router,dst_router`
+
+### Verified - 2025-12-29 (Session 2)
+- **Systolic Wavefront Timing**
+  - A and B tiles injected concurrently (1 cycle apart): A[0,0,k=0] at cycle 2, B[0,0,k=0] at cycle 3
+  - Proper East/South flow: A tiles flow East, B tiles flow South
+  - K-step barriers synchronizing correctly: K=1 tiles start after K=0 completes
+  - Parallel DMA channels working: each row/column has independent injection
+
 ### Fixed - 2025-12-29
 - **Timing Bug in StatefulBlockMover** (`stateful_block_mover.cpp:200-247`)
   - `execute_current()` was passing `0` as cycle to all command executors
@@ -419,7 +446,7 @@ See `docs/sessions/2025-11-23_schedule_generator_pipelining.md` for detailed rec
 
 ### Session Logs
 Detailed session logs are maintained in `docs/sessions/` directory:
-- `2025-12-29_block_systolic_matmul_simulation.md` - Block systolic matmul bug fixes
+- `2025-12-29_block_systolic_matmul_simulation.md` - Block systolic matmul bug fixes and FLIT-level tracking
 - `2025-12-25_benchmarking_and_efficiency_analysis.md` - Benchmark infrastructure and efficiency bug fix
 - `2025-11-26_dfx_compiler_implementation.md` - DFX layer and kernel compiler implementation
 - `2025-11-25_strategy_aware_scheduling.md` - Strategy-aware L2/L3 scheduling fix

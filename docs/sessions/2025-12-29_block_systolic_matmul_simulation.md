@@ -122,9 +122,163 @@ Total Test time (real) = 16.45 sec
 | `src/components/datamovement/l3_interconnect.cpp` | Fixed packet re-queuing (cycle + 1) |
 | `examples/blas/block_systolic_matmul.cpp` | Cleaned up debug output, improved progress reporting |
 
+---
+
+## Session 2: FLIT-Level Tracking (Later on December 29, 2025)
+
+### Work Completed
+
+#### 1. FLIT-Level Event Types Added to NoC
+
+**Files Modified:**
+- `include/sw/kpu/noc/noc.hpp` - Added new event types and trace fields
+
+**Changes:**
+Added two new NoC event types for fine-grained tracking:
+```cpp
+enum class NoCEventType : uint8_t {
+    // ... existing types ...
+    FLIT_SEND,      // Individual FLIT sent on link
+    FLIT_ARRIVE,    // Individual FLIT arrived at destination
+};
+```
+
+Extended `NoCTraceEvent` with FLIT information:
+```cpp
+struct NoCTraceEvent {
+    // ... existing fields ...
+    uint16_t flit_index = 0;    // Current FLIT index (0 to num_flits-1)
+    uint16_t num_flits = 0;     // Total FLITs in packet
+    uint8_t src_router = 0;     // Source router (for link tracking)
+    uint8_t dst_router = 0;     // Destination router (for link tracking)
+};
+```
+
+#### 2. FLIT Event Emission in NoC
+
+**Files Modified:**
+- `src/noc/noc.cpp` - Added FLIT event emission
+
+**Key Implementation Details:**
+
+When packets are delivered (`deliver_packets()`):
+- Emit sampled `FLIT_ARRIVE` events (every 256 FLITs for 16 updates per tile)
+- Calculate first FLIT arrival time based on transfer duration
+- Emit `FLIT_ARRIVE` events spread across the transfer window
+
+When packets hop between routers (`step()`):
+- Emit sampled `FLIT_SEND` events (every 512 FLITs for 8 updates per link)
+- Track link activity for visualization
+
+**Sampling Strategy:**
+For a 256KB tile (4096 FLITs at 64 bytes/FLIT):
+- `FLIT_ARRIVE`: Every 256 FLITs → 16 progressive fill updates
+- `FLIT_SEND`: Every 512 FLITs → 8 link activity updates
+
+#### 3. CSV Export Updated
+
+**Files Modified:**
+- `src/noc/noc.cpp` - Extended `export_csv()`
+
+New CSV format:
+```
+cycle,type,router_id,port,packet_seq,tensor,m_tile,n_tile,k_tile,flit_index,num_flits,src_router,dst_router
+```
+
+#### 4. Animation Generator Updates
+
+**Files Modified:**
+- `tools/visualization/generate_noc_animation.py`
+
+**Changes:**
+
+1. **Event Type Constants:**
+   - Added `EVENT_FLIT_SEND = 6` and `EVENT_FLIT_ARRIVE = 7`
+   - Added `TENSOR_COLORS_LIGHT` for partial tile backgrounds
+
+2. **State Tracking:**
+   - Added `l3PartialTiles` map tracking partial fill per L3
+   - Added `linkActivity` map for link occupancy visualization
+   - Added `flits` to statistics
+
+3. **Progressive Fill Display:**
+   ```javascript
+   // Background rect (light color)
+   bgRect.style.fill = TENSOR_COLORS_LIGHT[tensor];
+
+   // Fill rect (shows progress from bottom up)
+   const fillHeight = TILE_BLOCK_SIZE * progress;
+   fillRect.setAttribute('y', y + TILE_BLOCK_SIZE - fillHeight);
+   fillRect.setAttribute('height', fillHeight);
+   ```
+
+4. **FLIT Event Processing:**
+   - `EVENT_FLIT_SEND`: Updates link color based on tensor type
+   - `EVENT_FLIT_ARRIVE`: Updates partial tile fill state
+
+### Systolic Wavefront Timing Verification
+
+Analyzed trace to verify proper systolic timing:
+
+**K=0 First Step:**
+- Cycle 2: A[0,0,k=0] injected at R0→R1 (East flow)
+- Cycle 3: B[0,0,k=0] injected at R0→R4 (South flow)
+- Only 1 cycle apart - concurrent A/B injection confirmed
+
+**K=0 Propagation:**
+- Cycle 4097: A[1,0,k=0] injected at R4→R5 (row 1)
+- Cycle 4101: B[0,1,k=0] injected at R1→R5 (col 1)
+- Cycle 4102: A/B tiles forwarded to next mesh positions
+
+**K=1 After Barrier:**
+- Cycle 4107: A[0,0,k=1] and A[1,0,k=1] injected
+- Cycle 4108: B[0,0,k=1] injected
+- K-step barriers properly synchronizing
+
+### Simulation Results
+
+After FLIT-level tracking:
+```
+Simulation complete:
+  Simulated cycles: 61478
+  Simulation time:  112 ms
+
+NoC Statistics:
+  Total packets: 96
+  Total bytes: 24576 KB
+  Total hops: 192
+  Avg latency: 8659.8 cycles
+  Avg hops: 2.0
+
+Trace Statistics:
+  Total events: 2592 (includes FLIT samples)
+```
+
+### Key Metrics
+
+**FLIT Transfer Timing:**
+- 256KB tile = 4096 FLITs at 64 bytes/FLIT
+- At 64 B/cycle bandwidth: 4096 cycles per tile
+- Progressive fill shows ~256 cycles per 6.25% increment
+
+**Trace Overhead:**
+- Original events: ~564
+- With FLIT sampling: 2592 events
+- ~4.6× increase for fine-grained visualization
+
+### Files Changed Summary
+
+| File | Changes |
+|------|---------|
+| `include/sw/kpu/noc/noc.hpp` | Added FLIT_SEND/FLIT_ARRIVE events, flit_index/num_flits/src_router/dst_router fields |
+| `src/noc/noc.cpp` | Emit FLIT events in deliver_packets() and step(), extended CSV export |
+| `tools/visualization/generate_noc_animation.py` | Progressive fill display, FLIT event processing, partial tile tracking |
+
 ### Next Steps
 
 Potential future work:
 1. Add compute time modeling to BlockMover simulation
 2. Implement event-driven simulation (skip idle cycles) for performance
 3. Add more systolic dataflow patterns (weight-stationary, input-stationary)
+4. Add wormhole routing support for lower latency
+5. Implement NoC virtual channels for deadlock-free routing
