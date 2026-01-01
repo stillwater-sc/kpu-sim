@@ -112,6 +112,65 @@ cmake --build build
 | `KPU_ENABLE_PROFILING` | OFF | Enable profiling support |
 | `KPU_ENABLE_SANITIZERS` | OFF | Enable sanitizers (debug builds) |
 
+### Install CLI Tools
+
+After building, install the CLI tools to a local `./bin` directory for easy access:
+
+```bash
+# Build and install all tools
+./scripts/install-tools.sh
+
+# Or install only DFG tools
+./scripts/install-tools.sh dfg
+
+# Clean installed tools
+./scripts/install-tools.sh clean
+```
+
+**Installed tools:**
+
+| Tool | Description |
+|------|-------------|
+| `kpu-dfg-gen` | Generate Data Flow Graphs from templates |
+| `kpu-dfg-sched` | Schedule DFG nodes using ASAP/ALAP/LIST algorithms |
+| `kpu-dfg-compile` | Compile scheduled DFG to BlockMover programs |
+| `kpu-dfg-viz` | Export to DOT, Chrome Trace, Mermaid formats |
+| `kpu-dfg-analyze` | Statistics, critical path analysis, validation |
+| `kpu-runner` | Run compiled models |
+| `kpu-config` | Configuration management |
+| `kpu-kpubin-disasm` | Disassemble .kpubin files |
+
+**Three ways to use installed tools:**
+
+```bash
+# 1. Source environment (interactive sessions)
+source scripts/env.sh
+kpu-dfg-gen --help
+
+# 2. Include in pipeline scripts
+#!/bin/bash
+source "$(dirname "$0")/../../scripts/kpu-env.sh" || exit 1
+kpu-dfg-gen --template matmul -M 1024 -N 1024 -K 1024 -o dfg.json
+
+# 3. Direct path
+./bin/kpu-dfg-gen --help
+```
+
+**Example DFG pipeline:**
+
+```bash
+# Generate → Schedule → Compile → Analyze
+kpu-dfg-gen --template matmul -M 1024 -N 1024 -K 1024 --tiles 4x4x4 -o dfg.json
+kpu-dfg-sched -i dfg.json -o scheduled.json --algorithm ASAP
+kpu-dfg-compile -i scheduled.json -o programs.json
+kpu-dfg-analyze -i dfg.json --stats --critical-path
+
+# Generate timeline for Perfetto visualization
+kpu-dfg-viz -i scheduled.json -o timeline.json --format chrome-trace
+```
+
+See [`docs/dfg-toolchain.md`](docs/dfg-toolchain.md) for complete documentation.
+
 ### Install Python Package
 
 ```bash
@@ -366,13 +425,23 @@ KPU-simulator/
 │   ├── bindings/            # C and Python bindings
 │   ├── simulator/           # Core simulator
 │   └── driver/              # Driver implementation
+├── tools/                   # CLI tools
+│   ├── dfg/                 # DFG toolchain (gen, sched, compile, viz, analyze)
+│   ├── runner/              # Model runner
+│   ├── configuration/       # Configuration tools
+│   └── analysis/            # Analysis tools (disassembler)
 ├── tests/                   # Test suite (30 tests)
 ├── examples/                # C++ and Python examples
 │   ├── basic/               # Basic C++ examples
+│   ├── pipelines/           # Pipeline scripts using CLI tools
 │   └── python/              # Python examples
+├── bin/                     # Installed CLI tools (created by install-tools.sh)
 ├── docs/                    # Documentation (50+ files)
 ├── cmake/                   # CMake modules
 ├── scripts/                 # Build and utility scripts
+│   ├── install-tools.sh     # Install CLI tools to ./bin
+│   ├── env.sh               # Environment setup (interactive)
+│   └── kpu-env.sh           # Environment setup (for scripts)
 ├── configs/                 # Configuration files
 ├── test_graphs/             # Test computational graphs
 └── CMakePresets.json        # CMake presets configuration
@@ -505,6 +574,7 @@ Python wrapper for KPU simulator.
 - **[Developer Setup Guide](README_dev.md)** - Development environment setup
 - **[Quick Start Guide](QUICK_START.md)** - domain_flow integration quick start
 - **[Architecture Specification](docs/kpu_architecture.md)** - Detailed KPU architecture
+- **[DFG Toolchain](docs/dfg-toolchain.md)** - CLI tools for DFG generation, scheduling, compilation
 - **[domain_flow Integration](docs/domain-flow-integration.md)** - Computational graph integration
 - **[Configuration Guide](docs/configuration-architecture.md)** - System configuration
 - **[Data Orchestration](docs/data-orchestration.md)** - Data movement details

@@ -68,3 +68,4 @@ Testing/
 *_test.csv
 *_test.json
 *_test.trace
+bin/
