@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added - 2025-12-31
+- **Standalone DFG Toolchain** (`tools/dfg/`)
+  - Complete CLI toolchain for Data Flow Graph generation, scheduling, compilation, visualization, and analysis
+  - 5 standalone tools with JSON interchange format:
+    - `kpu-dfg-gen` - Generate DFG from templates (matmul)
+    - `kpu-dfg-sched` - Schedule using ASAP/ALAP/LIST algorithms
+    - `kpu-dfg-compile` - Compile to BlockMover programs
+    - `kpu-dfg-viz` - Export to DOT, Chrome Trace, Mermaid
+    - `kpu-dfg-analyze` - Statistics, critical path, validation
+  - JSON serialization library (`tools/dfg/common/`):
+    - `dfg_json.hpp/cpp` - TileDataFlowGraph serialization
+    - `schedule_json.hpp/cpp` - DFGSchedule serialization
+    - `compiled_json.hpp/cpp` - CompiledSchedule/BlockMoverProgram serialization
+  - Chrome Trace export for Perfetto timeline visualization
+  - DOT/GraphViz export for graph structure visualization
+  - Comprehensive documentation: `docs/dfg-toolchain.md`
+
+- **Example Pipeline**:
+  ```bash
+  kpu-dfg-gen --template matmul -M 1024 -N 1024 -K 1024 --tiles 4x4x4 -o dfg.json
+  kpu-dfg-sched -i dfg.json -o scheduled.json --algorithm ASAP
+  kpu-dfg-compile -i scheduled.json -o programs.json
+  kpu-dfg-viz -i scheduled.json -o timeline.json --format chrome-trace
+  kpu-dfg-analyze -i dfg.json --stats --critical-path
+  ```
+
 ### Added - 2025-12-29 (Session 2)
 - **FLIT-Level Tracking in NoC** (`include/sw/kpu/noc/noc.hpp`, `src/noc/noc.cpp`)
   - New event types: `FLIT_SEND` and `FLIT_ARRIVE` for fine-grained visualization
