@@ -75,6 +75,11 @@ add_subdirectory(configuration)
 add_subdirectory(benchmark)
 
 # ============================================================================
+# DFG Tools - Standalone Data Flow Graph toolchain
+# ============================================================================
+add_subdirectory(dfg)
+
+# ============================================================================
 # Legacy C++ tools (deprecated - to be migrated)
 # ============================================================================
 # add_subdirectory(cpp)
