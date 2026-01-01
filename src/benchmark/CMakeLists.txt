@@ -3,6 +3,7 @@
 
 add_library(kpu_benchmark STATIC
     benchmark.cpp
+    noc_benchmark.cpp
 )
 
 target_include_directories(kpu_benchmark PUBLIC
@@ -12,6 +13,7 @@ target_include_directories(kpu_benchmark PUBLIC
 target_link_libraries(kpu_benchmark PUBLIC
     kpu_simulator
     kpu_isa
+    kpu_noc
 )
 
 add_library(StillwaterKPU::Benchmark ALIAS kpu_benchmark)

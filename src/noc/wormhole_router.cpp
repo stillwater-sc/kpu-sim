@@ -193,10 +193,13 @@ Flit OutputPort::take_pending_flit() {
 // WormholeRouter
 // ============================================================================
 
-WormholeRouter::WormholeRouter(uint8_t id, uint8_t row, uint8_t col, bool has_dma)
+WormholeRouter::WormholeRouter(uint8_t id, uint8_t row, uint8_t col,
+                               uint8_t mesh_rows, uint8_t mesh_cols, bool has_dma)
     : id_(id)
     , row_(row)
     , col_(col)
+    , mesh_rows_(mesh_rows)
+    , mesh_cols_(mesh_cols)
     , has_dma_(has_dma)
 {
     // Initialize ports
@@ -311,29 +314,33 @@ void WormholeRouter::reset_stats() {
 }
 
 PortDir WormholeRouter::route(uint8_t dst_router) const {
-    // Single-hop nearest-neighbor routing
-    // Destination must be adjacent
+    // XY (dimension-ordered) routing for multi-hop support
+    // Routes first in X direction (columns), then in Y direction (rows)
+    // This is deadlock-free when consistently applied
 
     if (dst_router == id_) {
         return PortDir::LOCAL;  // Arrived at destination
     }
 
-    // Calculate destination position
-    uint8_t dst_row = dst_router / 4;  // Assuming 4 columns
-    uint8_t dst_col = dst_router % 4;
+    // Calculate destination position using actual mesh dimensions
+    uint8_t dst_row = dst_router / mesh_cols_;
+    uint8_t dst_col = dst_router % mesh_cols_;
 
-    // Determine direction (must be single hop)
-    if (dst_col == col_ + 1 && dst_row == row_) {
+    // X-dimension first (columns): move EAST or WEST until column matches
+    if (dst_col > col_) {
         return PortDir::EAST;
-    } else if (dst_col == col_ - 1 && dst_row == row_) {
+    } else if (dst_col < col_) {
         return PortDir::WEST;
-    } else if (dst_row == row_ + 1 && dst_col == col_) {
+    }
+
+    // Y-dimension second (rows): move NORTH or SOUTH until row matches
+    if (dst_row > row_) {
         return PortDir::SOUTH;
-    } else if (dst_row == row_ - 1 && dst_col == col_) {
+    } else if (dst_row < row_) {
         return PortDir::NORTH;
     }
 
-    // If not a direct neighbor, default to LOCAL (error case)
+    // Should never reach here if dst_router != id_
     return PortDir::LOCAL;
 }
 
@@ -640,7 +647,7 @@ WormholeNoC::WormholeNoC(const Config& config)
 }
 
 void WormholeNoC::setup_mesh() {
-    // Create routers
+    // Create routers with mesh dimensions for XY routing
     for (uint8_t row = 0; row < config_.rows; row++) {
         for (uint8_t col = 0; col < config_.cols; col++) {
             uint8_t id = router_id(row, col);
@@ -652,7 +659,8 @@ void WormholeNoC::setup_mesh() {
             if (config_.dma_on_west_edge && col == 0) has_dma = true;
             if (config_.dma_on_east_edge && col == config_.cols - 1) has_dma = true;
 
-            routers_[id] = WormholeRouter(id, row, col, has_dma);
+            routers_[id] = WormholeRouter(id, row, col,
+                                          config_.rows, config_.cols, has_dma);
         }
     }
 

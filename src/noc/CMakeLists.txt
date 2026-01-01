@@ -3,6 +3,8 @@
 add_library(kpu_noc STATIC
     noc.cpp
     wormhole_router.cpp
+    dataflow_noc.cpp
+    noc_adapters.cpp
 )
 
 target_include_directories(kpu_noc PUBLIC

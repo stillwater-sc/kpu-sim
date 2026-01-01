@@ -5,7 +5,7 @@
 // Key features:
 // - Flit-level simulation with proper serialization
 // - Credit-based flow control
-// - Single-hop nearest-neighbor routing
+// - Multi-hop XY (dimension-ordered) routing
 // - Path reservation (HEAD reserves, TAIL releases)
 // - Simultaneous independent link activity
 // ============================================================================
@@ -316,12 +316,15 @@ private:
 class WormholeRouter {
 public:
     WormholeRouter() = default;
-    WormholeRouter(uint8_t id, uint8_t row, uint8_t col, bool has_dma = false);
+    WormholeRouter(uint8_t id, uint8_t row, uint8_t col,
+                   uint8_t mesh_rows, uint8_t mesh_cols, bool has_dma = false);
 
     // Identification
     uint8_t id() const { return id_; }
     uint8_t row() const { return row_; }
     uint8_t col() const { return col_; }
+    uint8_t mesh_rows() const { return mesh_rows_; }
+    uint8_t mesh_cols() const { return mesh_cols_; }
 
     // Port access
     InputPort& input(PortDir dir) { return inputs_[static_cast<size_t>(dir)]; }
@@ -374,6 +377,8 @@ private:
     uint8_t id_ = 0;
     uint8_t row_ = 0;
     uint8_t col_ = 0;
+    uint8_t mesh_rows_ = 4;
+    uint8_t mesh_cols_ = 4;
     bool has_dma_ = false;
 
     std::array<InputPort, 6> inputs_;    // N, S, E, W, L, DMA
@@ -390,7 +395,8 @@ private:
 
     Stats stats_;
 
-    // Single-hop routing
+    // XY (dimension-ordered) routing for multi-hop support
+    // Routes first in X (columns), then in Y (rows)
     PortDir route(uint8_t dst_router) const;
 
     // Process injection (LOCAL/DMA → input buffer)
