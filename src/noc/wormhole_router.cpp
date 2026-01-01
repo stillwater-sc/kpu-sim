@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <fstream>
 #include <iomanip>
+#include <iostream>
 #include <sstream>
 
 namespace sw::kpu::noc {
@@ -97,10 +98,10 @@ InputPort::InputPort(PortDir dir)
     : direction_(dir)
 {}
 
-void InputPort::receive_flit(const Flit& flit, uint64_t cycle) {
+bool InputPort::receive_flit(const Flit& flit, uint64_t cycle) {
     if (!buffer_.can_accept()) {
         stats_.buffer_full_cycles++;
-        return;  // Should not happen with credit flow control
+        return false;  // Buffer full - caller should not return credit
     }
 
     buffer_.push(flit);
@@ -114,6 +115,8 @@ void InputPort::receive_flit(const Flit& flit, uint64_t cycle) {
     if (flit.is_tail()) {
         active_packet_.reset();
     }
+
+    return true;
 }
 
 Flit InputPort::consume_flit() {
@@ -818,10 +821,17 @@ void WormholeNoC::step(uint64_t cycle) {
                 if (neighbor_id >= 0) {
                     // Deliver to neighbor's input port
                     PortDir in_dir = opposite_dir(static_cast<PortDir>(dir));
-                    routers_[neighbor_id].input(in_dir).receive_flit(flit, cycle);
+                    bool accepted = routers_[neighbor_id].input(in_dir).receive_flit(flit, cycle);
 
-                    // Return credit to sender
-                    out_port.receive_credit();
+                    if (!accepted) {
+                        // Flit dropped - this is a critical error in credit flow
+                        // Should not happen with properly sized buffers
+                        std::cerr << "[NOC ERROR] Flit dropped at router " << neighbor_id
+                                  << " from " << static_cast<int>(flit.src_router)
+                                  << " seq=" << flit.packet_seq << "\n";
+                    }
+                    // Note: Credits are returned when flits are CONSUMED (switched),
+                    // not when received. See return_credits_to_upstream() below.
 
                     // Record flit hop
                     if (tracer_) {
@@ -833,6 +843,11 @@ void WormholeNoC::step(uint64_t cycle) {
             }
         }
     }
+
+    // Step 2b: Return credits based on consumed flits
+    // Credits are returned when flits are CONSUMED (switched to output), not received.
+    // This ensures proper back-pressure when a packet is blocked at an intermediate router.
+    return_credits_to_upstream(cycle);
 
     // Step 3: Check for completed deliveries
     check_deliveries(cycle);
@@ -890,6 +905,65 @@ void WormholeNoC::check_deliveries(uint64_t cycle) {
 
                     active_transfers_.erase(it);
                 }
+            }
+        }
+    }
+}
+
+void WormholeNoC::return_credits_to_upstream(uint64_t cycle) {
+    (void)cycle;  // Not currently used but available for tracing
+
+    // For each router, check each input port for credits to return
+    for (uint8_t id = 0; id < routers_.size(); id++) {
+        auto& router = routers_[id];
+
+        // Check each input direction (except LOCAL and DMA which don't have upstream routers)
+        for (size_t dir = 0; dir < 4; dir++) {  // N, S, E, W only
+            auto& in_port = router.input(static_cast<PortDir>(dir));
+            uint32_t credits = in_port.credits_to_return();
+
+            if (credits > 0) {
+                // Find the upstream router and output port
+                int upstream_id = -1;
+                PortDir upstream_out_dir = PortDir::LOCAL;
+
+                switch (static_cast<PortDir>(dir)) {
+                    case PortDir::NORTH:  // Came from south of upstream router
+                        if (router.row() > 0) {
+                            upstream_id = router_id(router.row() - 1, router.col());
+                            upstream_out_dir = PortDir::SOUTH;
+                        }
+                        break;
+                    case PortDir::SOUTH:  // Came from north of upstream router
+                        if (router.row() < config_.rows - 1) {
+                            upstream_id = router_id(router.row() + 1, router.col());
+                            upstream_out_dir = PortDir::NORTH;
+                        }
+                        break;
+                    case PortDir::EAST:  // Came from west of upstream router
+                        if (router.col() < config_.cols - 1) {
+                            upstream_id = router_id(router.row(), router.col() + 1);
+                            upstream_out_dir = PortDir::WEST;
+                        }
+                        break;
+                    case PortDir::WEST:  // Came from east of upstream router
+                        if (router.col() > 0) {
+                            upstream_id = router_id(router.row(), router.col() - 1);
+                            upstream_out_dir = PortDir::EAST;
+                        }
+                        break;
+                    default:
+                        break;
+                }
+
+                if (upstream_id >= 0) {
+                    // Return credits to the upstream router's output port
+                    for (uint32_t c = 0; c < credits; c++) {
+                        routers_[upstream_id].output(upstream_out_dir).receive_credit();
+                    }
+                }
+
+                in_port.clear_returned_credits();
             }
         }
     }

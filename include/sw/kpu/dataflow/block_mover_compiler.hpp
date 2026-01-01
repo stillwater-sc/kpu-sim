@@ -103,6 +103,9 @@ public:
         bool emit_barriers = true;              // Insert barriers between phases
         bool sync_sends = true;                 // Emit WAIT_DELIVERY after SEND for K-step sync
 
+        // Cycle-accurate scheduling
+        bool emit_cycle_waits = true;           // Insert WAIT_UNTIL_CYCLE for cycle-accurate timing
+
         // Trigger allocation strategy
         bool use_explicit_triggers = true;      // vs implicit ordering
     };
@@ -125,6 +128,9 @@ public:
 private:
     Config config_;
     CompiledSchedule::Stats last_stats_;
+
+    // Schedule for cycle-accurate timing
+    const DFGSchedule* schedule_ = nullptr;
 
     // Trigger allocation
     struct TriggerAllocation {

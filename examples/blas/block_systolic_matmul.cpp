@@ -22,7 +22,7 @@
 #include "sw/kpu/dataflow/tile_dataflow_graph.hpp"
 #include "sw/kpu/dataflow/block_mover_compiler.hpp"
 #include "sw/kpu/dataflow/tile_flow_tracer.hpp"
-#include "sw/kpu/noc/noc.hpp"
+#include "sw/kpu/noc/wormhole_router.hpp"
 
 using namespace sw::kpu;
 using namespace sw::kpu::dataflow;
@@ -156,6 +156,16 @@ struct MatmulConfig {
 /// - K iterations are pipelined: K+1 starts loading while K is still computing
 TileDataFlowGraph build_systolic_matmul_dfg(const MatmulConfig& config) {
     TileDataFlowGraph dfg;
+
+    // Configure timing model for accurate cycle-accurate scheduling
+    // Use wormhole (pipelined) timing to match actual NoC behavior
+    TimingModel timing;
+    timing.mesh_rows = config.mesh_rows;
+    timing.mesh_cols = config.mesh_cols;
+    timing.store_and_forward = false;  // Wormhole NoC uses flit-pipelined routing
+    timing.router_latency_cycles = 1;
+    timing.link_latency_cycles = 0;    // Single-cycle hop
+    dfg.set_timing_model(timing);
 
     uint32_t m_tiles = config.m_tiles;
     uint32_t n_tiles = config.n_tiles;
@@ -350,49 +360,20 @@ TileDataFlowGraph build_systolic_matmul_dfg(const MatmulConfig& config) {
     // This allows maximum NoC concurrency.
 
     // ========================================================================
-    // Phase 2d: Global K-step barriers for flow control
+    // Note on K-step synchronization:
     // ========================================================================
     //
-    // To prevent NoC congestion while allowing concurrent A/B sends within
-    // each K-step, we add global barriers between K iterations:
-    // - All A and B tiles for K=k must reach their destinations
-    // - Before any A or B tiles for K=k+1 can start flowing
+    // In a true systolic design, barriers are NOT needed. The spatial and
+    // temporal structure provides implicit synchronization:
     //
-    // This gives us concurrent A/B DMA with proper flow control.
-
-    // Create barrier nodes for each K transition
-    std::vector<size_t> k_barriers(k_tiles);
-    for (uint32_t k = 0; k < k_tiles; ++k) {
-        TileDescriptor barrier_tile;
-        barrier_tile.k_tile = static_cast<uint16_t>(k);
-        // Use L3[0,0] as the barrier coordination point
-        k_barriers[k] = dfg.add_barrier(0);
-    }
-
-    // K-step barrier depends on all A tiles reaching their final column
-    // and all B tiles reaching their final row for that K
-    for (uint32_t k = 0; k < k_tiles; ++k) {
-        // A tiles at final column (mesh_cols - 1) for all rows
-        for (uint32_t m = 0; m < m_tiles; ++m) {
-            dfg.add_edge(a_at_col[m][k][mesh_cols - 1], k_barriers[k], DFEdgeType::CONTROL);
-        }
-        // B tiles at final row (mesh_rows - 1) for all columns
-        for (uint32_t n = 0; n < n_tiles; ++n) {
-            dfg.add_edge(b_at_row[k][n][mesh_rows - 1], k_barriers[k], DFEdgeType::CONTROL);
-        }
-    }
-
-    // Next K's DMA loads depend on previous K's barrier
-    for (uint32_t k = 1; k < k_tiles; ++k) {
-        // All A loads for K=k wait for K=k-1 barrier
-        for (uint32_t m = 0; m < m_tiles; ++m) {
-            dfg.add_edge(k_barriers[k-1], load_a[m][k], DFEdgeType::CONTROL);
-        }
-        // All B loads for K=k wait for K=k-1 barrier
-        for (uint32_t n = 0; n < n_tiles; ++n) {
-            dfg.add_edge(k_barriers[k-1], load_b[k][n], DFEdgeType::CONTROL);
-        }
-    }
+    // 1. DMA channel K-step ordering (Phase 1b): A[m,k] waits for A[m,k-1]
+    // 2. Transfer K-step ordering (Phase 2b): A[m,k] at col c waits for A[m,k-1] at col c
+    //
+    // With accurate timing model (store-and-forward delays), the scheduler
+    // computes when each K-step can start without contention. The WAIT_UNTIL_CYCLE
+    // command enforces this timing at runtime.
+    //
+    // No barriers needed - tile boundaries provide natural synchronization.
 
     // ========================================================================
     // Phase 3: Compute nodes
@@ -574,7 +555,7 @@ void simulate_execution(const CompiledSchedule& compiled, const MatmulConfig& co
 
     // Create tracers
     TileFlowTracer tracer;
-    noc::NoCTracer noc_tracer;
+    noc::WormholeTracer noc_tracer;
 
     // Create BlockMoverArray
     BlockMoverArray::Config array_config;
@@ -588,30 +569,19 @@ void simulate_execution(const CompiledSchedule& compiled, const MatmulConfig& co
         array.set_noc_tracer(&noc_tracer);
     }
 
-    // Load programs with staggered start delays for systolic wavefront
-    // Each L3 starts at cycle proportional to (row + col) × transfer_time
-    // This creates a diagonal wavefront where tiles meet at the correct time
-    uint64_t transfer_time = config.a_tile_bytes() / config.l3_bandwidth_bytes_per_cycle;
-
+    // Load programs - the schedule's WAIT_UNTIL_CYCLE commands handle all timing
+    // No wavefront start delays needed; the scheduler respects dependencies
+    // which naturally create the diagonal wavefront pattern
     std::vector<BlockMoverProgram> programs;
     for (uint8_t l3 = 0; l3 < config.num_l3_tiles; ++l3) {
         if (!compiled.program(l3).empty()) {
-            BlockMoverProgram prog = compiled.program(l3);
-
-            // Calculate wavefront position: row + col
-            uint8_t row = l3 / config.mesh_cols;
-            uint8_t col = l3 % config.mesh_cols;
-            uint64_t wavefront_pos = row + col;
-
-            // Start delay creates the diagonal wavefront
-            prog.start_delay_cycles = wavefront_pos * transfer_time;
-
-            programs.push_back(prog);
+            programs.push_back(compiled.program(l3));
         }
     }
     array.load_programs(programs);
 
-    std::cout << "Wavefront timing: transfer_time=" << transfer_time << " cycles\n" << std::flush;
+    uint64_t transfer_time = config.a_tile_bytes() / config.l3_bandwidth_bytes_per_cycle;
+    std::cout << "Transfer time: " << transfer_time << " cycles/tile\n" << std::flush;
 
     std::cout << "Starting simulation with " << programs.size() << " active L3 tiles...\n" << std::flush;
     if (enable_tracing) {
@@ -636,6 +606,26 @@ void simulate_execution(const CompiledSchedule& compiled, const MatmulConfig& co
             std::cout << "  Cycle " << (cycle / 1000) << "K: "
                       << array.num_running() << " running, "
                       << array.num_waiting() << " waiting\n" << std::flush;
+        }
+
+        // Debug: Print stuck mover status after 1000 cycles
+        if (cycle == 1000 && array.num_waiting() > 0) {
+            std::cout << "\n*** DEBUG: Movers stuck at cycle 1000 ***\n";
+            for (uint8_t id = 0; id < 16; ++id) {
+                auto& mover = array[id];
+                if (!mover.is_idle()) {
+                    uint8_t row = id / 4;
+                    uint8_t col = id % 4;
+                    std::cout << "  L3[" << static_cast<int>(row) << "," << static_cast<int>(col)
+                              << "] (id=" << static_cast<int>(id) << "): "
+                              << mover.to_string();
+                    if (mover.state() == BlockMoverState::WAITING_RECEIVE) {
+                        std::cout << " " << mover.debug_receive_state();
+                    }
+                    std::cout << "\n";
+                }
+            }
+            std::cout << "\n";
         }
     }
 
@@ -687,16 +677,17 @@ void simulate_execution(const CompiledSchedule& compiled, const MatmulConfig& co
 
     // Export NoC trace data
     if (enable_tracing && noc_tracer.num_events() > 0) {
-        std::cout << "\nNoC Statistics:\n";
+        std::cout << "\nNoC Statistics (Wormhole Router):\n";
         const auto& noc_stats = array.noc().stats();
-        std::cout << "  Total packets: " << noc_stats.total_packets << "\n";
-        std::cout << "  Total bytes: " << (noc_stats.total_bytes / 1024) << " KB\n";
-        std::cout << "  Total hops: " << noc_stats.total_hops << "\n";
-        if (noc_stats.total_packets > 0) {
-            std::cout << "  Avg latency: " << std::fixed << std::setprecision(1)
-                      << noc_stats.avg_latency() << " cycles\n";
-            std::cout << "  Avg hops: " << std::fixed << std::setprecision(1)
-                      << noc_stats.avg_hops() << "\n";
+        std::cout << "  Tiles injected:  " << noc_stats.tiles_injected << "\n";
+        std::cout << "  Tiles delivered: " << noc_stats.tiles_delivered << "\n";
+        std::cout << "  Total flits:     " << noc_stats.total_flits << "\n";
+        std::cout << "  Total bytes:     " << (noc_stats.total_bytes / 1024) << " KB\n";
+        if (noc_stats.tiles_delivered > 0) {
+            std::cout << "  Avg latency:     " << std::fixed << std::setprecision(1)
+                      << (static_cast<double>(noc_stats.total_latency_cycles) / noc_stats.tiles_delivered)
+                      << " cycles\n";
+            std::cout << "  Max latency:     " << noc_stats.max_latency_cycles << " cycles\n";
         }
 
         // Export NoC trace
@@ -706,12 +697,39 @@ void simulate_execution(const CompiledSchedule& compiled, const MatmulConfig& co
             std::cout << "  Visualize with: python3 tools/visualization/generate_noc_animation.py "
                       << noc_trace_file << " /tmp/matmul_noc.html\n";
         }
+
+        // Export Chrome trace
+        std::string chrome_trace_file = "/tmp/noc_trace_chrome.json";
+        if (noc_tracer.export_chrome_trace(chrome_trace_file, config.mesh_rows, config.mesh_cols)) {
+            std::cout << "  Chrome Trace exported to: " << chrome_trace_file << "\n";
+            std::cout << "  Open in: chrome://tracing or https://ui.perfetto.dev\n";
+        }
     }
+
+    // Print systolic order check results
+    std::cout << "\n";
+    array.order_checker().print_violations(std::cout);
 }
 
 // ============================================================================
 // Main
 // ============================================================================
+
+void print_usage(const char* prog) {
+    std::cout << "Usage: " << prog << " [options]\n\n";
+    std::cout << "Options:\n";
+    std::cout << "  -m SIZE    Matrix size M=N=K (default: 1024)\n";
+    std::cout << "  -t TILES   Tile count m_tiles=n_tiles (default: 4)\n";
+    std::cout << "  -k KTILES  K tile count (default: same as -t)\n";
+    std::cout << "  --small    Use small 64x64 matrix with 4 tiles (for debugging)\n";
+    std::cout << "  --tiny     Use tiny 32x32 matrix with 4 tiles (1KB tiles)\n";
+    std::cout << "  --help     Show this help\n\n";
+    std::cout << "Examples:\n";
+    std::cout << "  " << prog << "              # Default 1024x1024 with 4x4 tiles (256KB each)\n";
+    std::cout << "  " << prog << " --small      # 64x64 with 4x4 tiles (1KB each)\n";
+    std::cout << "  " << prog << " --tiny       # 32x32 with 4x4 tiles (256B each)\n";
+    std::cout << "  " << prog << " -m 256 -t 4  # 256x256 with 4x4 tiles (16KB each)\n";
+}
 
 int main(int argc, char* argv[]) {
     std::cout << R"(
@@ -730,17 +748,38 @@ int main(int argc, char* argv[]) {
 ╚══════════════════════════════════════════════════════════════════════════════╝
 )";
 
-    // Parse command line for matrix size
+    // Parse command line
     MatmulConfig config;
 
-    if (argc > 1) {
-        config.M = config.N = config.K = std::stoul(argv[1]);
-    }
-    if (argc > 2) {
-        config.m_tiles = config.n_tiles = std::stoul(argv[2]);
-    }
-    if (argc > 3) {
-        config.k_tiles = std::stoul(argv[3]);
+    for (int i = 1; i < argc; ++i) {
+        std::string arg = argv[i];
+        if (arg == "--help" || arg == "-h") {
+            print_usage(argv[0]);
+            return 0;
+        } else if (arg == "--small") {
+            // Small test case: 64x64 matrix, 4x4 tiles = 16x16 per tile = 1KB
+            config.M = config.N = config.K = 64;
+            config.m_tiles = config.n_tiles = config.k_tiles = 4;
+        } else if (arg == "--tiny") {
+            // Tiny test case: 32x32 matrix, 4x4 tiles = 8x8 per tile = 256B
+            config.M = config.N = config.K = 32;
+            config.m_tiles = config.n_tiles = config.k_tiles = 4;
+        } else if (arg == "-m" && i + 1 < argc) {
+            config.M = config.N = config.K = std::stoul(argv[++i]);
+        } else if (arg == "-t" && i + 1 < argc) {
+            config.m_tiles = config.n_tiles = config.k_tiles = std::stoul(argv[++i]);
+        } else if (arg == "-k" && i + 1 < argc) {
+            config.k_tiles = std::stoul(argv[++i]);
+        } else if (arg[0] != '-') {
+            // Legacy positional args
+            config.M = config.N = config.K = std::stoul(arg);
+            if (i + 1 < argc && argv[i+1][0] != '-') {
+                config.m_tiles = config.n_tiles = std::stoul(argv[++i]);
+            }
+            if (i + 1 < argc && argv[i+1][0] != '-') {
+                config.k_tiles = std::stoul(argv[++i]);
+            }
+        }
     }
 
     // Validate configuration
@@ -774,7 +813,9 @@ int main(int argc, char* argv[]) {
 
     std::cout << "  Creating scheduler..." << std::flush;
     auto sched_start = std::chrono::high_resolution_clock::now();
-    DFGScheduler scheduler;
+    DFGScheduler::Config sched_config;
+    sched_config.algorithm = DFGScheduler::Algorithm::ASAP;  // Don't serialize L3 resources
+    DFGScheduler scheduler(sched_config);
     std::cout << " scheduling..." << std::flush;
     DFGSchedule schedule = scheduler.schedule(dfg);
     std::cout << " done.\n" << std::flush;

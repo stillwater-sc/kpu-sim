@@ -109,6 +109,7 @@ enum class BlockMoverOp : uint8_t {
     BARRIER = 42,           // Wait for all pending transfers to complete
     FENCE = 43,             // Memory fence (ensure ordering)
     WAIT_DELIVERY = 44,     // Wait for previous SEND to be delivered by NoC
+    WAIT_UNTIL_CYCLE = 45,  // Wait until current_cycle >= target_cycle (cycle-accurate scheduling)
 
     // ========== Control Flow ==========
     LOOP_START = 50,        // Begin loop (loop_count iterations)
@@ -142,6 +143,7 @@ inline const char* to_string(BlockMoverOp op) {
         case BlockMoverOp::BARRIER: return "BARRIER";
         case BlockMoverOp::FENCE: return "FENCE";
         case BlockMoverOp::WAIT_DELIVERY: return "WAIT_DELIVERY";
+        case BlockMoverOp::WAIT_UNTIL_CYCLE: return "WAIT_UNTIL_CYCLE";
         case BlockMoverOp::LOOP_START: return "LOOP_START";
         case BlockMoverOp::LOOP_END: return "LOOP_END";
         case BlockMoverOp::JUMP: return "JUMP";
@@ -207,6 +209,9 @@ struct BlockMoverCommand {
     // Debug/trace
     uint32_t trace_id = 0;      // User-defined trace marker ID
 
+    // Cycle-accurate scheduling
+    uint64_t target_cycle = 0;  // For WAIT_UNTIL_CYCLE: wait until this cycle
+
     // Estimated timing (filled by compiler, used by simulator)
     uint16_t latency_cycles = 0;
 
@@ -226,6 +231,9 @@ struct BlockMoverCommand {
             case BlockMoverOp::SEND_TO:
                 s += " " + tile.to_string() + " → L3[" + std::to_string(dest_l3_id) + "]";
                 break;
+            case BlockMoverOp::RECEIVE_FROM:
+                s += " from L3[" + std::to_string(src_l3_id) + "]";
+                break;
             case BlockMoverOp::WAIT_TRIGGER:
                 s += " mask=0x" + std::to_string(trigger_wait_mask);
                 break;
@@ -238,6 +246,9 @@ struct BlockMoverCommand {
             case BlockMoverOp::LOOP_END:
             case BlockMoverOp::JUMP:
                 s += " offset=" + std::to_string(jump_offset);
+                break;
+            case BlockMoverOp::WAIT_UNTIL_CYCLE:
+                s += " cycle=" + std::to_string(target_cycle);
                 break;
             default:
                 break;
@@ -334,6 +345,14 @@ struct BlockMoverProgram {
     BlockMoverProgram& barrier() {
         BlockMoverCommand cmd;
         cmd.op = BlockMoverOp::BARRIER;
+        commands.push_back(cmd);
+        return *this;
+    }
+
+    BlockMoverProgram& wait_until_cycle(uint64_t cycle) {
+        BlockMoverCommand cmd;
+        cmd.op = BlockMoverOp::WAIT_UNTIL_CYCLE;
+        cmd.target_cycle = cycle;
         commands.push_back(cmd);
         return *this;
     }

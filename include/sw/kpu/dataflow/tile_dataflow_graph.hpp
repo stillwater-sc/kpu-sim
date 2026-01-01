@@ -140,6 +140,74 @@ struct DFEdge {
 };
 
 // ============================================================================
+// Timing Model for Accurate Scheduling
+// ============================================================================
+
+/// Models timing characteristics for cycle-accurate systolic scheduling
+struct TimingModel {
+    // Bandwidth parameters (bytes per cycle)
+    uint64_t dma_bandwidth_bytes_per_cycle = 32;     // External memory → L3 (32 GB/s @ 1GHz)
+    uint64_t l3_bandwidth_bytes_per_cycle = 64;      // L3 ↔ L3 link bandwidth
+
+    // Latency parameters
+    uint64_t router_latency_cycles = 1;              // Per-router traversal latency
+    uint64_t link_latency_cycles = 1;                // Per-link latency
+
+    // Transfer mode
+    bool store_and_forward = true;                   // If true, entire tile received before forwarding
+                                                     // If false, flit-pipelined (forward as flits arrive)
+
+    // Mesh configuration (for hop count calculation)
+    uint8_t mesh_rows = 4;
+    uint8_t mesh_cols = 4;
+
+    /// Calculate time to inject a tile into the network
+    uint64_t injection_duration(uint64_t tile_bytes) const {
+        return (tile_bytes + l3_bandwidth_bytes_per_cycle - 1) / l3_bandwidth_bytes_per_cycle;
+    }
+
+    /// Calculate time for a tile to propagate through H hops
+    uint64_t propagation_delay(uint64_t tile_bytes, uint8_t hops) const {
+        if (hops == 0) return 0;
+        if (store_and_forward) {
+            // Store-and-forward: must wait for entire tile at each hop
+            // Each hop takes: injection_duration (to receive) + injection_duration (to forward)
+            // But pipelining means: first hop's forward overlaps with second hop's receive
+            // Total: injection_duration * hops (each hop adds one tile transfer time)
+            return injection_duration(tile_bytes) * hops;
+        } else {
+            // Flit-pipelined: tiles can forward as flits arrive
+            // Just router + link latency per hop
+            return (router_latency_cycles + link_latency_cycles) * hops;
+        }
+    }
+
+    /// Calculate time for a DMA load
+    uint64_t dma_load_duration(uint64_t tile_bytes) const {
+        return (tile_bytes + dma_bandwidth_bytes_per_cycle - 1) / dma_bandwidth_bytes_per_cycle;
+    }
+
+    /// Calculate Manhattan distance (hop count) between two L3 tiles
+    uint8_t hop_count(uint8_t src_l3, uint8_t dst_l3) const {
+        uint8_t src_row = src_l3 / mesh_cols;
+        uint8_t src_col = src_l3 % mesh_cols;
+        uint8_t dst_row = dst_l3 / mesh_cols;
+        uint8_t dst_col = dst_l3 % mesh_cols;
+        return static_cast<uint8_t>(
+            (src_row > dst_row ? src_row - dst_row : dst_row - src_row) +
+            (src_col > dst_col ? src_col - dst_col : dst_col - src_col)
+        );
+    }
+
+    /// Calculate total L3→L3 transfer duration including propagation
+    uint64_t l3_transfer_duration(uint64_t tile_bytes, uint8_t src_l3, uint8_t dst_l3) const {
+        uint8_t hops = hop_count(src_l3, dst_l3);
+        // Total time = injection + propagation to destination
+        return injection_duration(tile_bytes) + propagation_delay(tile_bytes, hops);
+    }
+};
+
+// ============================================================================
 // Tile Data Flow Graph
 // ============================================================================
 
@@ -240,6 +308,15 @@ public:
         uint32_t M, uint32_t N, uint32_t K,
         uint32_t m_tiles, uint32_t n_tiles, uint32_t k_tiles);
 
+    // ========== Timing Model ==========
+
+    /// Set the timing model for accurate duration calculations
+    void set_timing_model(const TimingModel& model) { timing_ = model; }
+
+    /// Get the timing model
+    const TimingModel& timing_model() const { return timing_; }
+    TimingModel& timing_model() { return timing_; }
+
     // ========== Debug ==========
 
     std::string to_string() const;
@@ -254,6 +331,9 @@ private:
 
     // Index structures for fast lookup
     std::map<uint8_t, std::vector<size_t>> nodes_by_l3_;
+
+    // Timing model for accurate duration calculations
+    TimingModel timing_;
 
     // Helper for cycle detection
     bool has_cycle_from(size_t node, std::vector<int>& state) const;
@@ -280,6 +360,16 @@ struct DFGSchedule {
 
     /// Get schedule for a specific L3 tile
     std::vector<ScheduledNode> get_l3_schedule(uint8_t l3_id) const;
+
+    /// Find scheduled node by ID
+    const ScheduledNode* find_node(size_t node_id) const {
+        for (const auto& sn : nodes) {
+            if (sn.node_id == node_id) {
+                return &sn;
+            }
+        }
+        return nullptr;
+    }
 
     /// Validate schedule (check dependencies)
     bool validate(const TileDataFlowGraph& dfg) const;

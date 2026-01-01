@@ -222,7 +222,8 @@ public:
 
     // Flit reception from link
     bool can_receive() const { return buffer_.can_accept(); }
-    void receive_flit(const Flit& flit, uint64_t cycle);
+    /// Receive a flit from upstream. Returns true if flit was accepted.
+    bool receive_flit(const Flit& flit, uint64_t cycle);
 
     // Flit access for switch
     bool has_flit() const { return !buffer_.is_empty(); }
@@ -542,6 +543,7 @@ private:
     // Internal helpers
     void setup_mesh();
     void check_deliveries(uint64_t cycle);
+    void return_credits_to_upstream(uint64_t cycle);
     void record_event(WormholeEventType type, uint8_t router_id, PortDir port,
                      uint16_t packet_seq, FlitType flit_type,
                      uint16_t flit_index, uint16_t total_flits,

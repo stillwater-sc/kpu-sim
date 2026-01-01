@@ -36,9 +36,8 @@ size_t TileDataFlowGraph::add_dma_load(const TileDescriptor& tile, uint8_t dest_
     node.dst_l3_id = dest_l3;
     node.name = "DMA_LOAD_" + tile.to_string();
 
-    // Estimate duration based on tile size
-    // Assume 32 GB/s DMA bandwidth = 32 bytes/cycle @ 1 GHz
-    node.duration = (tile.size + 31) / 32;
+    // Use timing model for accurate duration
+    node.duration = static_cast<int64_t>(timing_.dma_load_duration(tile.size));
 
     return add_node(node);
 }
@@ -50,7 +49,9 @@ size_t TileDataFlowGraph::add_dma_store(const TileDescriptor& tile, uint8_t src_
     node.l3_id = src_l3;
     node.src_l3_id = src_l3;
     node.name = "DMA_STORE_" + tile.to_string();
-    node.duration = (tile.size + 31) / 32;
+
+    // Use timing model for accurate duration
+    node.duration = static_cast<int64_t>(timing_.dma_load_duration(tile.size));
 
     return add_node(node);
 }
@@ -64,8 +65,9 @@ size_t TileDataFlowGraph::add_l3_transfer(const TileDescriptor& tile, uint8_t sr
     node.dst_l3_id = dst_l3;
     node.name = "L3_XFER_" + tile.to_string();
 
-    // Assume 64 bytes/cycle L3 interconnect bandwidth
-    node.duration = (tile.size + 63) / 64;
+    // Use timing model for accurate duration including propagation delay
+    node.duration = static_cast<int64_t>(
+        timing_.l3_transfer_duration(tile.size, src_l3, dst_l3));
 
     return add_node(node);
 }
@@ -78,8 +80,8 @@ size_t TileDataFlowGraph::add_l3_to_l2(const TileDescriptor& tile, uint8_t l3_id
     node.l2_bank_id = l2_bank;
     node.name = "L3_TO_L2_" + tile.to_string();
 
-    // Assume 64 bytes/cycle L3→L2 bandwidth
-    node.duration = (tile.size + 63) / 64;
+    // Use timing model - L3→L2 uses same bandwidth as L3 link
+    node.duration = static_cast<int64_t>(timing_.injection_duration(tile.size));
 
     return add_node(node);
 }
@@ -91,7 +93,9 @@ size_t TileDataFlowGraph::add_l2_to_l3(const TileDescriptor& tile, uint8_t l3_id
     node.l3_id = l3_id;
     node.l2_bank_id = l2_bank;
     node.name = "L2_TO_L3_" + tile.to_string();
-    node.duration = (tile.size + 63) / 64;
+
+    // Use timing model - L2→L3 uses same bandwidth as L3 link
+    node.duration = static_cast<int64_t>(timing_.injection_duration(tile.size));
 
     return add_node(node);
 }

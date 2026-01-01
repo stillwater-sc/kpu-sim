@@ -40,7 +40,7 @@ void StatefulBlockMover::load_program(const BlockMoverProgram& program) {
     triggers_received_.reset();
     trigger_wait_mask_ = 0;
     while (!pending_transfers_.empty()) pending_transfers_.pop();
-    while (!receive_queue_.empty()) receive_queue_.pop();
+    receive_queue_.clear();
     expected_receive_.reset();
 }
 
@@ -135,7 +135,7 @@ void StatefulBlockMover::reset() {
     triggers_received_.reset();
     trigger_wait_mask_ = 0;
     while (!pending_transfers_.empty()) pending_transfers_.pop();
-    while (!receive_queue_.empty()) receive_queue_.pop();
+    receive_queue_.clear();
     expected_receive_.reset();
 }
 
@@ -159,7 +159,7 @@ void StatefulBlockMover::receive_trigger(uint8_t channel) {
 }
 
 void StatefulBlockMover::receive_packet(const L3TransferPacket& packet) {
-    receive_queue_.push(packet);
+    receive_queue_.push_back(packet);
 }
 
 void StatefulBlockMover::notify_l2_transfer_complete(const TileDescriptor& tile) {
@@ -219,6 +219,32 @@ std::string StatefulBlockMover::dump_state() const {
     return oss.str();
 }
 
+std::string StatefulBlockMover::debug_receive_state() const {
+    std::ostringstream oss;
+
+    // Show current command if in WAITING_RECEIVE
+    if (state_ == BlockMoverState::WAITING_RECEIVE && pc_ < program_.size()) {
+        const auto& cmd = program_[pc_];
+        if (cmd.op == BlockMoverOp::RECEIVE_FROM) {
+            oss << "expects src=" << static_cast<int>(cmd.src_l3_id);
+        } else if (cmd.op == BlockMoverOp::RECEIVE) {
+            oss << "expects any";
+        }
+    }
+
+    // Show what's in the queue
+    oss << " queue=[";
+    bool first = true;
+    for (const auto& pkt : receive_queue_) {
+        if (!first) oss << ",";
+        oss << static_cast<int>(pkt.src_l3_id);
+        first = false;
+    }
+    oss << "]";
+
+    return oss.str();
+}
+
 // ========== Internal Execution ==========
 
 bool StatefulBlockMover::execute_current() {
@@ -274,6 +300,14 @@ bool StatefulBlockMover::execute_current() {
         case BlockMoverOp::WAIT_DELIVERY:
             return exec_wait_delivery(cmd);
 
+        case BlockMoverOp::WAIT_UNTIL_CYCLE:
+            // Wait until current_cycle >= target_cycle
+            // This enables cycle-accurate scheduling without barriers
+            if (current_cycle_ < cmd.target_cycle) {
+                return false;  // Keep waiting, don't advance to next command
+            }
+            return true;
+
         case BlockMoverOp::LOOP_START:
             return exec_loop_start(cmd);
 
@@ -299,7 +333,11 @@ bool StatefulBlockMover::execute_current() {
 
         case BlockMoverOp::TRACE_MARKER:
             if (trace_callback_) {
-                trace_callback_(cmd.trace_id, 0);
+                trace_callback_(cmd.trace_id, current_cycle_);
+            }
+            // If tile has non-zero size, this is a DMA arrival - notify callback
+            if (dma_arrival_callback_ && cmd.tile.size > 0) {
+                dma_arrival_callback_(cmd.tile, current_cycle_);
             }
             return true;
 
@@ -341,13 +379,28 @@ bool StatefulBlockMover::check_wait_conditions(uint64_t cycle) {
         }
 
         case BlockMoverState::WAITING_RECEIVE: {
-            // Check if we have a packet in the receive queue
+            // Check if we have a matching packet in the receive queue
             if (!receive_queue_.empty()) {
-                // Accept any packet - the RECEIVE_FROM already validated src_l3_id
-                // when exec_receive() was first called and the queue was non-empty.
-                // If we're waiting, it means the queue was empty at that time,
-                // and any new packet is the one we're expecting.
-                receive_queue_.pop();
+                // For RECEIVE_FROM, we need to find a packet from the expected source
+                // Check if this was a RECEIVE_FROM command (we stored the tile info)
+                if (expected_receive_.has_value()) {
+                    // Get the current command to check src_l3_id
+                    const auto& cmd = program_[pc_];
+                    if (cmd.op == BlockMoverOp::RECEIVE_FROM) {
+                        // Search for packet from expected source
+                        for (auto it = receive_queue_.begin(); it != receive_queue_.end(); ++it) {
+                            if (it->src_l3_id == cmd.src_l3_id) {
+                                receive_queue_.erase(it);
+                                expected_receive_.reset();
+                                return true;
+                            }
+                        }
+                        // No matching packet yet, keep waiting
+                        return false;
+                    }
+                }
+                // Accept any packet for regular RECEIVE
+                receive_queue_.pop_front();
                 expected_receive_.reset();
                 return true;
             }
@@ -508,17 +561,22 @@ bool StatefulBlockMover::exec_send_to(const BlockMoverCommand& cmd, uint64_t cyc
 bool StatefulBlockMover::exec_receive(const BlockMoverCommand& cmd, uint64_t cycle) {
     (void)cycle;
 
-    // Check if we already have a packet waiting
+    // Check if we have a matching packet in the queue
     if (!receive_queue_.empty()) {
         if (cmd.op == BlockMoverOp::RECEIVE_FROM) {
-            // Check if it's from the expected source
-            if (receive_queue_.front().src_l3_id == cmd.src_l3_id) {
-                receive_queue_.pop();
-                return true;
+            // Search for a packet from the expected source (selective receive)
+            // This is necessary because packets from different sources may arrive
+            // out of order due to different NoC paths
+            for (auto it = receive_queue_.begin(); it != receive_queue_.end(); ++it) {
+                if (it->src_l3_id == cmd.src_l3_id) {
+                    receive_queue_.erase(it);
+                    return true;
+                }
             }
+            // No matching packet found, need to wait
         } else {
-            // Accept any packet
-            receive_queue_.pop();
+            // Accept any packet (front of queue)
+            receive_queue_.pop_front();
             return true;
         }
     }
@@ -691,26 +749,16 @@ BlockMoverArray::BlockMoverArray()
 
 BlockMoverArray::BlockMoverArray(const Config& config)
     : config_(config)
-    , noc_(noc::NoCConfig{
-          noc::NoCTopology::MESH_2D,
+    , noc_(noc::WormholeNoC::Config{
           config.rows,
           config.cols,
-          noc::RoutingAlgorithm::XY,
-          noc::FlowControl::STORE_AND_FORWARD,
-          1,  // router_latency
-          1,  // link_latency
-          config.mover_config.l3_to_l3_bandwidth_bytes_per_cycle,  // link_bandwidth
-          config.mover_config.l3_to_l3_bandwidth_bytes_per_cycle,  // injection_bandwidth
-          32,  // dma_bandwidth
-          8,   // input_buffer_flits
-          4,   // output_buffer_flits
-          64,  // flit_size_bytes
-          4096,  // max_packet_flits
-          1,   // num_virtual_channels
-          true,  // dma_at_edges
-          1    // dma_ports_per_edge
+          true,   // dma_on_north_edge
+          false,  // dma_on_south_edge
+          false,  // dma_on_east_edge
+          false   // dma_on_west_edge
       })
     , triggers_(config.rows * config.cols)
+    , order_checker_(SystolicOrderChecker::Config{config.rows, config.cols, true, true})
 {
     size_t num_tiles = config.rows * config.cols;
     movers_.reserve(num_tiles);
@@ -744,34 +792,62 @@ void BlockMoverArray::setup_callbacks() {
             [this, id](uint8_t channel, uint16_t dest_mask) {
                 triggers_.send_trigger(static_cast<uint8_t>(id), channel, dest_mask);
             });
+
+        // Set up DMA arrival callback for order checking
+        movers_[id]->set_dma_arrival_callback(
+            [this, id](const TileDescriptor& tile, uint64_t cycle) {
+                // Record DMA arrival for systolic order checking
+                order_checker_.record_arrival(static_cast<uint8_t>(id), tile, cycle);
+            });
     }
 
     // Set up NoC delivery callbacks
     for (size_t id = 0; id < movers_.size(); ++id) {
-        noc_.set_l3_delivery_callback(static_cast<uint8_t>(id),
-            [this, id](const noc::NoCPacket& packet, uint64_t cycle) {
-                // Convert NoCPacket to L3TransferPacket for BlockMover
+        noc_.set_delivery_callback(static_cast<uint8_t>(id),
+            [this, id](const TileDescriptor& tile, uint8_t src_router, uint64_t cycle) {
+                // Check systolic order before accepting tile
+                bool order_valid = order_checker_.record_arrival(
+                    static_cast<uint8_t>(id), tile, cycle);
+
+                if (!order_valid && order_checker_.is_enabled()) {
+                    // Print violations immediately for debugging
+                    std::cerr << "\n*** SYSTOLIC ORDER VIOLATION at cycle " << cycle << " ***\n";
+                    const auto& violations = order_checker_.violations();
+                    if (!violations.empty()) {
+                        std::cerr << violations.back().message << "\n";
+                    }
+                }
+
+                // Create L3TransferPacket for BlockMover
                 L3TransferPacket l3_pkt;
-                l3_pkt.src_l3_id = packet.src_router;
-                l3_pkt.dst_l3_id = packet.dst_router;
-                l3_pkt.tile = packet.tile;
-                l3_pkt.inject_cycle = packet.inject_cycle;
+                l3_pkt.src_l3_id = src_router;
+                l3_pkt.dst_l3_id = static_cast<uint8_t>(id);
+                l3_pkt.tile = tile;
+                l3_pkt.inject_cycle = 0;  // Not tracked in wormhole NoC callback
                 l3_pkt.arrival_cycle = cycle;
+
+                // Debug: track deliveries to L3[1,1] or from key sources
+                if (cycle < 200 && (id == 5 || src_router == 4 || src_router == 1)) {
+                    std::cerr << "[DBG] cycle=" << cycle << " deliver "
+                              << static_cast<int>(src_router) << "->"
+                              << static_cast<int>(id) << " "
+                              << tile.to_string() << "\n";
+                }
 
                 movers_[id]->receive_packet(l3_pkt);
 
                 // Notify source BlockMover that delivery is complete
                 // This enables WAIT_DELIVERY to unblock
-                if (packet.src_router < movers_.size()) {
-                    movers_[packet.src_router]->notify_noc_delivery();
+                if (src_router < movers_.size()) {
+                    movers_[src_router]->notify_noc_delivery();
                 }
 
                 // Record receive event
                 if (tracer_) {
                     tracer_->record_l3_receive(cycle,
                                                static_cast<uint8_t>(id),
-                                               packet.src_router,
-                                               packet.tile);
+                                               src_router,
+                                               tile);
                 }
             });
     }
@@ -795,20 +871,33 @@ void BlockMoverArray::step(uint64_t cycle) {
         mover->step(cycle);
     }
 
-    // Process pending NoC injections (with retry on BUFFER_FULL)
+    // Process pending NoC injections (with retry on BUSY)
     size_t attempts = pending_noc_injections_.size();
     for (size_t i = 0; i < attempts; ++i) {
         auto inj = pending_noc_injections_.front();
         pending_noc_injections_.pop();
 
-        auto result = noc_.inject_l3_to_l3(
+        auto result = noc_.inject_tile(
             inj.src_l3_id, inj.dst_l3_id, inj.tile, cycle);
 
-        if (result == noc::TransferResult::BUFFER_FULL) {
+        if (result == noc::WormholeNoC::InjectResult::BUSY) {
             // Re-queue for next cycle
             pending_noc_injections_.push(inj);
+            // Debug: track busy injections
+            if (cycle < 200 && (inj.dst_l3_id == 5 || inj.src_l3_id == 4 || inj.src_l3_id == 1)) {
+                std::cerr << "[DBG] cycle=" << cycle << " BUSY inject "
+                          << static_cast<int>(inj.src_l3_id) << "->"
+                          << static_cast<int>(inj.dst_l3_id) << "\n";
+            }
+        } else {
+            // Debug: track successful injections to L3[1,1] or from key sources
+            if (cycle < 200 && (inj.dst_l3_id == 5 || inj.src_l3_id == 4 || inj.src_l3_id == 1)) {
+                std::cerr << "[DBG] cycle=" << cycle << " inject "
+                          << static_cast<int>(inj.src_l3_id) << "->"
+                          << static_cast<int>(inj.dst_l3_id) << " "
+                          << inj.tile.to_string() << "\n";
+            }
         }
-        // SUCCESS: packet will be delivered via callback
     }
 
     // Step NoC

@@ -94,6 +94,9 @@ CompiledSchedule BlockMoverCompiler::compile(const TileDataFlowGraph& dfg,
                                               const DFGSchedule& schedule) {
     CompiledSchedule result;
 
+    // Store schedule for cycle-accurate timing
+    schedule_ = &schedule;
+
     // Initialize programs
     for (uint8_t i = 0; i < 16; ++i) {
         result.blockmover_programs[i].l3_id = i;
@@ -108,8 +111,26 @@ CompiledSchedule BlockMoverCompiler::compile(const TileDataFlowGraph& dfg,
         assign_triggers(dfg);
     }
 
-    // Phase 2: Emit commands for each node in schedule order
+    // Phase 2: Emit commands for each node in SCHEDULED order (by start_cycle)
+    // Using topological order alone isn't sufficient for cycle-accurate scheduling
+    // because it doesn't respect timing relationships between independent nodes.
     std::vector<size_t> order = dfg.topological_order();
+
+    // Sort by scheduled start cycle while maintaining topological order as tie-breaker
+    // This ensures WAIT_UNTIL_CYCLE commands are emitted in monotonically increasing order
+    std::sort(order.begin(), order.end(), [&](size_t a, size_t b) {
+        auto sched_a = schedule.find_node(a);
+        auto sched_b = schedule.find_node(b);
+        int64_t start_a = sched_a ? sched_a->start_cycle : 0;
+        int64_t start_b = sched_b ? sched_b->start_cycle : 0;
+        if (start_a != start_b) {
+            return start_a < start_b;
+        }
+        // Tie-breaker: lower node ID first
+        return a < b;
+    });
+
+    // Emit all nodes in scheduled order
     for (size_t node_id : order) {
         emit_node(dfg.node(node_id), dfg, result);
     }
@@ -171,6 +192,10 @@ CompiledSchedule BlockMoverCompiler::compile(const TileDataFlowGraph& dfg,
     }
 
     last_stats_ = result.stats;
+
+    // Clear schedule pointer to avoid dangling references
+    schedule_ = nullptr;
+
     return result;
 }
 
@@ -189,7 +214,17 @@ void BlockMoverCompiler::emit_node(const DFNode& node, const TileDataFlowGraph& 
                                     CompiledSchedule& schedule) {
     BlockMoverProgram& prog = schedule.program(node.l3_id);
 
-    // First, wait for predecessors if using explicit triggers
+    // Insert WAIT_UNTIL_CYCLE for cycle-accurate scheduling
+    // This ensures operations start at their scheduled times, providing
+    // implicit synchronization without barriers for systolic schedules
+    if (config_.emit_cycle_waits && schedule_) {
+        auto sched_node = schedule_->find_node(node.id);
+        if (sched_node && sched_node->start_cycle > 0) {
+            prog.wait_until_cycle(static_cast<uint64_t>(sched_node->start_cycle));
+        }
+    }
+
+    // Wait for predecessors if using explicit triggers
     if (config_.use_explicit_triggers && !node.predecessors.empty()) {
         uint16_t wait_mask = 0;
         for (size_t pred_id : node.predecessors) {
@@ -284,7 +319,19 @@ void BlockMoverCompiler::emit_l3_transfer(const DFNode& node, CompiledSchedule& 
     }
 
     // Emit RECEIVE on destination L3 first (it will block until tile arrives)
+    // Add WAIT_UNTIL_CYCLE for the destination to ensure correct tile ordering
+    // The tile arrives at end_cycle (start_cycle + propagation delay)
+    if (config_.emit_cycle_waits && schedule_) {
+        auto sched_node = schedule_->find_node(node.id);
+        if (sched_node && sched_node->end_cycle > 0) {
+            dst_prog.wait_until_cycle(static_cast<uint64_t>(sched_node->end_cycle));
+        }
+    }
+
     {
+        // RECEIVE_FROM filters by source L3. This ensures we get the right packet
+        // when multiple sources send to the same destination at the same cycle.
+        // The WAIT_UNTIL_CYCLE ensures timing; RECEIVE_FROM ensures correctness.
         BlockMoverCommand recv_cmd;
         recv_cmd.op = BlockMoverOp::RECEIVE_FROM;
         recv_cmd.tile = node.tile;
@@ -394,7 +441,96 @@ void BlockMoverCompiler::insert_barriers(CompiledSchedule& schedule) {
 }
 
 void BlockMoverCompiler::assemble_programs(CompiledSchedule& schedule) {
+    // Sort commands within each program by cycle values
+    // This ensures WAIT_UNTIL_CYCLE commands are in ascending order
     for (auto& prog : schedule.blockmover_programs) {
+        if (prog.commands.empty()) continue;
+
+        // Group commands into (WAIT_UNTIL_CYCLE, subsequent commands) pairs
+        // Each group is executed at a specific cycle
+        struct CommandGroup {
+            uint64_t cycle = 0;
+            std::vector<BlockMoverCommand> cmds;
+        };
+        std::vector<CommandGroup> groups;
+        CommandGroup current_group;
+        current_group.cycle = 0;
+
+        for (const auto& cmd : prog.commands) {
+            if (cmd.op == BlockMoverOp::WAIT_UNTIL_CYCLE) {
+                // Start a new group if current group has commands
+                if (!current_group.cmds.empty()) {
+                    groups.push_back(std::move(current_group));
+                    current_group = CommandGroup{};
+                }
+                current_group.cycle = cmd.target_cycle;
+                current_group.cmds.push_back(cmd);
+            } else {
+                current_group.cmds.push_back(cmd);
+            }
+        }
+        // Add the last group
+        if (!current_group.cmds.empty()) {
+            groups.push_back(std::move(current_group));
+        }
+
+        // Sort groups by cycle value, with secondary sort by command type
+        // RECEIVE_FROM must come before SEND in the same cycle (data must arrive before forwarding)
+        // Priority order for systolic efficiency:
+        // 1. RECEIVE: Must receive data before using it
+        // 2. SEND: Forward data ASAP to minimize latency for downstream L3s
+        // 3. PUSH_TO_L2: Local L2 operations (reads from L3, no dependency on SEND)
+        // 4. TRACE_MARKER: Just logging, lowest priority
+        auto command_priority = [](const BlockMoverCommand& cmd) -> int {
+            switch (cmd.op) {
+                case BlockMoverOp::RECEIVE_FROM:
+                    return 0;  // RECEIVE first (data must arrive before use)
+                case BlockMoverOp::SEND_EAST:
+                case BlockMoverOp::SEND_WEST:
+                case BlockMoverOp::SEND_NORTH:
+                case BlockMoverOp::SEND_SOUTH:
+                case BlockMoverOp::SEND_TO:
+                    return 1;  // SEND early to start tile moving through NoC
+                case BlockMoverOp::PUSH_TO_L2:
+                    return 2;  // Then L2 operations (can happen after or parallel to SEND)
+                case BlockMoverOp::TRACE_MARKER:
+                    return 3;  // Then markers
+                default:
+                    return 5;
+            }
+        };
+
+        std::sort(groups.begin(), groups.end(),
+                  [&command_priority](const CommandGroup& a, const CommandGroup& b) {
+                      if (a.cycle != b.cycle) {
+                          return a.cycle < b.cycle;
+                      }
+                      // Same cycle - sort by command type priority
+                      // Find the primary command (first non-WAIT command)
+                      int prio_a = 10, prio_b = 10;
+                      for (const auto& cmd : a.cmds) {
+                          if (cmd.op != BlockMoverOp::WAIT_UNTIL_CYCLE) {
+                              prio_a = command_priority(cmd);
+                              break;
+                          }
+                      }
+                      for (const auto& cmd : b.cmds) {
+                          if (cmd.op != BlockMoverOp::WAIT_UNTIL_CYCLE) {
+                              prio_b = command_priority(cmd);
+                              break;
+                          }
+                      }
+                      return prio_a < prio_b;
+                  });
+
+        // Flatten back to command list
+        prog.commands.clear();
+        for (const auto& group : groups) {
+            for (const auto& cmd : group.cmds) {
+                prog.commands.push_back(cmd);
+            }
+        }
+
         prog.assemble();
     }
 }

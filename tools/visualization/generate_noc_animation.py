@@ -16,9 +16,28 @@ import sys
 from pathlib import Path
 
 
-def load_noc_trace(filename: str) -> list:
-    """Load NoC trace CSV file and return list of events."""
+def load_noc_trace(filename: str, include_flit_hops: bool = False) -> list:
+    """Load NoC trace CSV file and return list of events.
+
+    Args:
+        filename: Path to CSV trace file
+        include_flit_hops: If False (default), filters out FLIT_HOP events (type 4)
+                          to reduce event count for large traces
+    """
+    # WormholeEventType mapping:
+    # 0 = INJECT_START
+    # 1 = INJECT_COMPLETE
+    # 2 = PATH_RESERVE
+    # 3 = PATH_RELEASE
+    # 4 = FLIT_HOP (very high volume - 1 per flit)
+    # 5 = DELIVER_START
+    # 6 = DELIVER_COMPLETE
+    # 7 = ARBITRATION_BLOCK
+    # 8 = BACKPRESSURE
+
     events = []
+    skipped_flit_hops = 0
+
     with open(filename, 'r') as f:
         headers = f.readline().strip().split(',')
         for line in f:
@@ -30,7 +49,8 @@ def load_noc_trace(filename: str) -> list:
                 # Integer fields
                 int_fields = ['cycle', 'router_id', 'packet_seq', 'tensor',
                               'm_tile', 'n_tile', 'k_tile', 'type',
-                              'flit_index', 'num_flits', 'src_router', 'dst_router']
+                              'flit_index', 'num_flits', 'src_router', 'dst_router',
+                              'total_flits', 'size']
                 if h in int_fields:
                     try:
                         event[h] = int(v)
@@ -38,8 +58,19 @@ def load_noc_trace(filename: str) -> list:
                         event[h] = 0
                 else:
                     event[h] = v
+
+            # Filter out FLIT_HOP events (type 4) unless requested
+            event_type = event.get('type', -1)
+            if not include_flit_hops and event_type == 4:
+                skipped_flit_hops += 1
+                continue
+
             events.append(event)
-    # Sort by cycle then by type (FLIT_ARRIVE events should come after INJECT/HOP)
+
+    if skipped_flit_hops > 0:
+        print(f"Filtered out {skipped_flit_hops} FLIT_HOP events (use --flit-hops to include)")
+
+    # Sort by cycle then by type
     events.sort(key=lambda e: (e.get('cycle', 0), e.get('type', 0)))
     return events
 
@@ -658,17 +689,19 @@ def generate_noc_html(events: list, title: str = "KPU NoC Animation") -> str:
         const TILE_COLS = 4;          // Tiles per row in L3 grid
         const PACKET_SIZE = 16;       // Packet size on links
 
-        // Event types
-        const EVENT_INJECT = 0;
-        const EVENT_HOP = 1;
-        const EVENT_EJECT = 2;
-        const EVENT_BLOCKED = 3;
-        const EVENT_LINK_BUSY = 4;
-        const EVENT_LINK_IDLE = 5;
-        const EVENT_FLIT_SEND = 6;
-        const EVENT_FLIT_ARRIVE = 7;
+        // WormholeEventType mapping (must match C++ enum)
+        const EVENT_INJECT_START = 0;
+        const EVENT_INJECT_COMPLETE = 1;
+        const EVENT_PATH_RESERVE = 2;
+        const EVENT_PATH_RELEASE = 3;
+        const EVENT_FLIT_HOP = 4;
+        const EVENT_DELIVER_START = 5;
+        const EVENT_DELIVER_COMPLETE = 6;
+        const EVENT_ARBITRATION_BLOCK = 7;
+        const EVENT_BACKPRESSURE = 8;
 
-        const EVENT_NAMES = ['INJECT', 'HOP', 'EJECT', 'BLOCKED', 'LINK_BUSY', 'LINK_IDLE', 'FLIT_SEND', 'FLIT_ARRIVE'];
+        const EVENT_NAMES = ['INJECT_START', 'INJECT_COMPLETE', 'PATH_RESERVE', 'PATH_RELEASE',
+                             'FLIT_HOP', 'DELIVER_START', 'DELIVER_COMPLETE', 'ARBITRATION_BLOCK', 'BACKPRESSURE'];
         const TENSOR_NAMES = {{ 0: 'A', 1: 'B', 2: 'C', 3: 'D' }};
         const TENSOR_COLORS = {{ 0: '#FF6B6B', 1: '#4ECDC4', 2: '#FFE66D', 3: '#9B59B6' }};
         const TENSOR_COLORS_LIGHT = {{ 0: '#FFAAAA', 1: '#99E6E0', 2: '#FFF2AA', 3: '#C9A0DC' }};
@@ -1128,6 +1161,8 @@ def generate_noc_html(events: list, title: str = "KPU NoC Animation") -> str:
             const routerId = event.router_id;
             const packetSeq = event.packet_seq;
             const tensor = event.tensor;
+            const srcRouter = event.src_router || 0;
+            const dstRouter = event.dst_router || 0;
             const tileKey = `${{tensor}},${{event.m_tile}},${{event.n_tile}},${{event.k_tile}}`;
 
             // Check filter
@@ -1135,61 +1170,82 @@ def generate_noc_html(events: list, title: str = "KPU NoC Animation") -> str:
             if (!filters[tensorName]) return;
 
             switch (type) {{
-                case EVENT_INJECT:
-                    // Packet starts at source router
+                case EVENT_INJECT_START:
+                    // Tile injection started at source router
                     packetsInFlight[packetSeq] = {{
-                        src: routerId,
-                        currentRouter: routerId,
+                        src: srcRouter,
+                        dst: dstRouter,
+                        currentRouter: srcRouter,
                         tensor: tensor,
-                        tile: {{ m: event.m_tile, n: event.n_tile, k: event.k_tile }}
+                        tile: {{ m: event.m_tile, n: event.n_tile, k: event.k_tile }},
+                        totalFlits: event.total_flits || 64
                     }};
-                    setRouterActive(routerId, true);
-                    setTimeout(() => setRouterActive(routerId, false), 200);
+                    setRouterActive(srcRouter, true);
 
                     // Add tile to source L3 cache (it has the tile before sending)
-                    l3Contents[routerId].add(tileKey);
-                    updateL3Display(routerId);
+                    l3Contents[srcRouter].add(tileKey);
+                    updateL3Display(srcRouter);
 
                     stats.injected++;
                     break;
 
-                case EVENT_HOP:
-                    // Packet arrived at new router
+                case EVENT_INJECT_COMPLETE:
+                    // Injection complete - show packet traveling
                     if (packetsInFlight[packetSeq]) {{
                         const pkt = packetsInFlight[packetSeq];
-                        const prevRouter = pkt.currentRouter;
+                        showPacketOnLink(packetSeq, pkt.src, pkt.dst, tensor,
+                                        event.m_tile, event.n_tile, event.k_tile, 0.5);
+                        setLinkActive(pkt.src, pkt.dst, true, tensor);
+                        setRouterActive(srcRouter, false);
+                    }}
+                    break;
 
-                        // Show packet moving on link
-                        showPacketOnLink(packetSeq, prevRouter, routerId, tensor,
-                                        event.m_tile, event.n_tile, event.k_tile, 1.0);
+                case EVENT_PATH_RESERVE:
+                    // Path reserved from src to dst
+                    setLinkActive(srcRouter, dstRouter, true, tensor);
+                    break;
 
-                        // Animate link
-                        setLinkActive(prevRouter, routerId, true, tensor);
-                        setTimeout(() => setLinkActive(prevRouter, routerId, false), 150);
+                case EVENT_PATH_RELEASE:
+                    // Path released
+                    setLinkActive(srcRouter, dstRouter, false);
+                    break;
 
-                        // Flash router
-                        setRouterActive(routerId, true);
-                        setTimeout(() => setRouterActive(routerId, false), 100);
-
+                case EVENT_FLIT_HOP:
+                    // Single flit traversed link (high volume - usually filtered)
+                    if (packetsInFlight[packetSeq]) {{
+                        const pkt = packetsInFlight[packetSeq];
                         pkt.currentRouter = routerId;
                         stats.hops++;
                     }}
                     break;
 
-                case EVENT_EJECT:
-                    // Packet delivered to L3
+                case EVENT_DELIVER_START:
+                    // First flit arrived at destination
+                    if (packetsInFlight[packetSeq]) {{
+                        const pkt = packetsInFlight[packetSeq];
+                        showPacketOnLink(packetSeq, pkt.src, dstRouter, tensor,
+                                        event.m_tile, event.n_tile, event.k_tile, 1.0);
+                        flashL3Receiving(dstRouter);
+                    }}
+                    break;
+
+                case EVENT_DELIVER_COMPLETE:
+                    // All flits delivered - tile complete
                     removePacket(packetSeq);
                     delete packetsInFlight[packetSeq];
 
-                    // Add tile to L3 cache
-                    l3Contents[routerId].add(tileKey);
-                    updateL3Display(routerId);
-                    flashL3Receiving(routerId);
+                    // Add tile to destination L3 cache
+                    l3Contents[dstRouter].add(tileKey);
+                    updateL3Display(dstRouter);
+                    flashL3Receiving(dstRouter);
+
+                    // Clear link
+                    setLinkActive(srcRouter, dstRouter, false);
 
                     stats.delivered++;
                     break;
 
-                case EVENT_BLOCKED:
+                case EVENT_ARBITRATION_BLOCK:
                     // Show contention
                     const router = document.getElementById(`router-${{routerId}}`);
                     if (router) {{
@@ -1198,59 +1254,16 @@ def generate_noc_html(events: list, title: str = "KPU NoC Animation") -> str:
                     }}
                     break;
 
-                case EVENT_FLIT_SEND:
-                    // Show link activity for FLIT transfer
-                    const srcRouter = event.src_router || 0;
-                    const dstRouter = event.dst_router || 0;
-                    const flitProgress = (event.flit_index || 0) / (event.num_flits || 1);
-
-                    // Update link color based on tensor and progress
-                    setLinkActive(srcRouter, dstRouter, true, tensor);
-
-                    // Track link activity for animation
-                    const linkKey = `${{srcRouter}}-${{dstRouter}}`;
-                    linkActivity[linkKey] = {{
-                        tensor: tensor,
-                        progress: flitProgress,
-                        lastCycle: event.cycle
-                    }};
-
-                    stats.flits++;
-                    break;
-
-                case EVENT_FLIT_ARRIVE:
-                    // Update partial tile fill state
-                    const flitIndex = event.flit_index || 0;
-                    const numFlits = event.num_flits || 1;
-
-                    // Initialize or update partial tile info
-                    if (!l3PartialTiles[routerId].has(tileKey)) {{
-                        l3PartialTiles[routerId].set(tileKey, {{
-                            flitsReceived: 0,
-                            numFlits: numFlits,
-                            tensor: tensor,
-                            m: event.m_tile,
-                            n: event.n_tile,
-                            k: event.k_tile
-                        }});
-                    }}
-
-                    const tileInfo = l3PartialTiles[routerId].get(tileKey);
-                    // Update flits received (use flit_index as progress indicator)
-                    tileInfo.flitsReceived = Math.max(tileInfo.flitsReceived, flitIndex + 1);
-
-                    // Update display to show progressive fill
-                    updateL3Display(routerId);
-
-                    stats.flits++;
+                case EVENT_BACKPRESSURE:
+                    // Credit stall - show on router
+                    setRouterActive(routerId, true);
+                    setTimeout(() => setRouterActive(routerId, false), 100);
                     break;
             }}
 
             updateStats();
-            // Only log major events, not every FLIT
-            if (type !== EVENT_FLIT_SEND && type !== EVENT_FLIT_ARRIVE) {{
-                addEventToLog(event);
-            }}
+            // Log all events (FLIT_HOP usually filtered out at load time)
+            addEventToLog(event);
         }}
 
         // Update statistics display
@@ -1267,28 +1280,41 @@ def generate_noc_html(events: list, title: str = "KPU NoC Animation") -> str:
             const entry = document.createElement('div');
 
             const typeName = EVENT_NAMES[event.type] || 'UNKNOWN';
-            entry.classList.add('event-log-entry', typeName);
+            // Map event types to CSS classes for styling
+            const cssClass = event.type === EVENT_INJECT_START || event.type === EVENT_INJECT_COMPLETE ? 'INJECT' :
+                             event.type === EVENT_DELIVER_START || event.type === EVENT_DELIVER_COMPLETE ? 'EJECT' :
+                             event.type === EVENT_ARBITRATION_BLOCK || event.type === EVENT_BACKPRESSURE ? 'BLOCKED' :
+                             'HOP';
+            entry.classList.add('event-log-entry', cssClass);
 
             const tileLabel = formatTileLabel(event.tensor, event.m_tile, event.n_tile, event.k_tile);
-            const row = Math.floor(event.router_id / MESH_SIZE);
-            const col = event.router_id % MESH_SIZE;
+            const srcRouter = event.src_router || 0;
+            const dstRouter = event.dst_router || 0;
+            const dstRow = Math.floor(dstRouter / MESH_SIZE);
+            const dstCol = dstRouter % MESH_SIZE;
 
             let text = `[${{event.cycle}}] `;
             switch (event.type) {{
-                case EVENT_INJECT:
-                    text += `INJ ${{tileLabel}} @ R${{event.router_id}}`;
+                case EVENT_INJECT_START:
+                    text += `INJ ${{tileLabel}} R${{srcRouter}}→R${{dstRouter}}`;
                     break;
-                case EVENT_HOP:
-                    text += `HOP ${{tileLabel}} -> R${{event.router_id}}`;
+                case EVENT_INJECT_COMPLETE:
+                    text += `INJ_DONE ${{tileLabel}}`;
                     break;
-                case EVENT_EJECT:
-                    text += `DEL ${{tileLabel}} -> L3[${{row}},${{col}}]`;
+                case EVENT_DELIVER_START:
+                    text += `DEL ${{tileLabel}} → L3[${{dstRow}},${{dstCol}}]`;
                     break;
-                case EVENT_BLOCKED:
-                    text += `BLK ${{tileLabel}} @ R${{event.router_id}}`;
+                case EVENT_DELIVER_COMPLETE:
+                    text += `DEL_DONE ${{tileLabel}} → L3[${{dstRow}},${{dstCol}}]`;
+                    break;
+                case EVENT_ARBITRATION_BLOCK:
+                    text += `BLOCK R${{event.router_id}}`;
+                    break;
+                case EVENT_BACKPRESSURE:
+                    text += `STALL R${{event.router_id}}`;
                     break;
                 default:
-                    text += `${{typeName}} @ R${{event.router_id}}`;
+                    text += `${{typeName}}`;
             }}
 
             entry.textContent = text;
@@ -1421,21 +1447,31 @@ def generate_noc_html(events: list, title: str = "KPU NoC Animation") -> str:
                 marker.style.left = `${{(event.cycle / maxCycle) * 100}}%`;
 
                 switch (event.type) {{
-                    case EVENT_INJECT:
+                    case EVENT_INJECT_START:
                         marker.style.background = '#00ff88';
                         break;
-                    case EVENT_HOP:
-                        marker.style.background = '#00aaff';
-                        marker.style.height = '25%';
+                    case EVENT_INJECT_COMPLETE:
+                        marker.style.background = '#00cc66';
+                        marker.style.height = '30%';
                         break;
-                    case EVENT_EJECT:
+                    case EVENT_DELIVER_START:
                         marker.style.background = '#ffaa00';
+                        marker.style.height = '30%';
                         break;
-                    case EVENT_BLOCKED:
+                    case EVENT_DELIVER_COMPLETE:
+                        marker.style.background = '#ff8800';
+                        break;
+                    case EVENT_FLIT_HOP:
+                        marker.style.background = '#00aaff';
+                        marker.style.height = '15%';
+                        break;
+                    case EVENT_ARBITRATION_BLOCK:
+                    case EVENT_BACKPRESSURE:
                         marker.style.background = '#ff4444';
                         break;
                     default:
                         marker.style.background = '#666';
+                        marker.style.height = '20%';
                 }}
 
                 container.appendChild(marker);
@@ -1693,6 +1729,8 @@ def main():
                         help='Output HTML file (default: noc_animation.html)')
     parser.add_argument('--title', '-t', default='KPU NoC Animation',
                         help='Title for the visualization')
+    parser.add_argument('--flit-hops', action='store_true',
+                        help='Include FLIT_HOP events (warning: can generate huge files)')
 
     args = parser.parse_args()
 
@@ -1704,7 +1742,7 @@ def main():
 
     # Load trace
     print(f"Loading NoC trace from: {args.trace_file}")
-    events = load_noc_trace(args.trace_file)
+    events = load_noc_trace(args.trace_file, include_flit_hops=args.flit_hops)
     print(f"Loaded {len(events)} events")
 
     # Generate HTML

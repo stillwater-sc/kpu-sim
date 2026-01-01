@@ -9,18 +9,21 @@
 #include <bitset>
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
 #include <functional>
+#include <iostream>
 #include <memory>
 #include <optional>
 #include <queue>
 #include <stack>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 #include "block_mover_isa.hpp"
 #include "l3_interconnect.hpp"
 #include "sw/kpu/dataflow/tile_flow_tracer.hpp"
-#include "sw/kpu/noc/noc.hpp"
+#include "sw/kpu/noc/wormhole_router.hpp"
 
 namespace sw::kpu {
 
@@ -160,6 +163,7 @@ public:
     using TransferCallback = std::function<void(const TileDescriptor&, uint8_t dest_l3)>;
     using TriggerCallback = std::function<void(uint8_t channel, uint16_t dest_mask)>;
     using TraceCallback = std::function<void(uint32_t trace_id, uint64_t cycle)>;
+    using DmaArrivalCallback = std::function<void(const TileDescriptor& tile, uint64_t cycle)>;
 
     explicit StatefulBlockMover(const StatefulBlockMoverConfig& config = StatefulBlockMoverConfig{});
 
@@ -218,6 +222,11 @@ public:
     /// Set callback for trace markers
     void set_trace_callback(TraceCallback callback) {
         trace_callback_ = std::move(callback);
+    }
+
+    /// Set callback for DMA arrivals (called when TRACE_MARKER with tile is executed)
+    void set_dma_arrival_callback(DmaArrivalCallback callback) {
+        dma_arrival_callback_ = std::move(callback);
     }
 
     /// Set tracer for recording tile flow events
@@ -296,6 +305,9 @@ public:
     std::string to_string() const;
     std::string dump_state() const;
 
+    /// Get detailed info about receive state (expected vs queued sources)
+    std::string debug_receive_state() const;
+
 private:
     StatefulBlockMoverConfig config_;
     BlockMoverState state_ = BlockMoverState::IDLE;
@@ -317,7 +329,7 @@ private:
 
     // Transfer state
     std::queue<PendingTransfer> pending_transfers_;
-    std::queue<L3TransferPacket> receive_queue_;
+    std::deque<L3TransferPacket> receive_queue_;  // deque for selective receive
     std::optional<TileDescriptor> expected_receive_;
 
     // Current L2 target (set by SET_L2_BANK)
@@ -327,6 +339,7 @@ private:
     TransferCallback transfer_callback_;
     TriggerCallback trigger_callback_;
     TraceCallback trace_callback_;
+    DmaArrivalCallback dma_arrival_callback_;
 
     // Tracer
     dataflow::TileFlowTracer* tracer_ = nullptr;
@@ -378,6 +391,168 @@ private:
 };
 
 // ============================================================================
+// Systolic Order Checker
+// ============================================================================
+
+/// Validates systolic recurrence ordering for tile arrivals
+/// A tiles: A[m,k] at L3[row,col] must arrive AFTER A[m,k] at L3[row,col-1]
+/// B tiles: B[k,n] at L3[row,col] must arrive AFTER B[k,n] at L3[row-1,col]
+class SystolicOrderChecker {
+public:
+    struct Config {
+        uint8_t rows = 4;
+        uint8_t cols = 4;
+        bool enabled = true;
+        bool stop_on_violation = true;  // Stop simulation on first violation
+    };
+
+    struct Violation {
+        uint64_t cycle;
+        TensorId tensor;
+        uint16_t m_tile, n_tile, k_tile;
+        uint8_t arrived_at_l3;      // Where tile arrived
+        uint8_t expected_from_l3;   // Where it should have arrived first
+        uint64_t expected_arrival_cycle;  // When it arrived at expected_from
+        std::string message;
+    };
+
+    SystolicOrderChecker() : config_{} {
+        arrival_times_.resize(config_.rows * config_.cols);
+    }
+
+    explicit SystolicOrderChecker(const Config& config)
+        : config_(config) {
+        // Initialize arrival tracking: [l3_id][tile_key] -> arrival_cycle
+        arrival_times_.resize(config.rows * config.cols);
+    }
+
+    /// Record a tile arrival at an L3
+    /// Returns true if order is valid, false if violation detected
+    bool record_arrival(uint8_t l3_id, const TileDescriptor& tile, uint64_t cycle) {
+        if (!config_.enabled) return true;
+
+        uint8_t row = l3_id / config_.cols;
+        uint8_t col = l3_id % config_.cols;
+
+        // Create tile key for lookup
+        std::string tile_key = make_tile_key(tile);
+
+        // Check recurrence based on tensor type
+        bool valid = true;
+        if (tile.tensor == TensorId::A && col > 0) {
+            // A tiles flow East: must arrive at [row, col-1] first
+            uint8_t prev_l3 = row * config_.cols + (col - 1);
+            valid = check_predecessor(tile_key, prev_l3, l3_id, tile, cycle);
+        } else if (tile.tensor == TensorId::B && row > 0) {
+            // B tiles flow South: must arrive at [row-1, col] first
+            uint8_t prev_l3 = (row - 1) * config_.cols + col;
+            valid = check_predecessor(tile_key, prev_l3, l3_id, tile, cycle);
+        }
+        // DMA arrivals (col=0 for A, row=0 for B) don't need predecessor check
+
+        // Record this arrival
+        arrival_times_[l3_id][tile_key] = cycle;
+
+        return valid;
+    }
+
+    /// Check if there are any violations
+    bool has_violations() const { return !violations_.empty(); }
+
+    /// Get all violations
+    const std::vector<Violation>& violations() const { return violations_; }
+
+    /// Get number of violations
+    size_t num_violations() const { return violations_.size(); }
+
+    /// Clear recorded arrivals and violations
+    void reset() {
+        for (auto& map : arrival_times_) {
+            map.clear();
+        }
+        violations_.clear();
+    }
+
+    /// Print violation summary
+    void print_violations(std::ostream& os = std::cout) const {
+        if (violations_.empty()) {
+            os << "Systolic order check: PASSED (no violations)\n";
+            return;
+        }
+
+        os << "\n╔══════════════════════════════════════════════════════════════════╗\n";
+        os << "║           SYSTOLIC ORDER VIOLATIONS DETECTED                     ║\n";
+        os << "╚══════════════════════════════════════════════════════════════════╝\n\n";
+
+        for (const auto& v : violations_) {
+            os << "  [Cycle " << v.cycle << "] " << v.message << "\n";
+        }
+        os << "\nTotal violations: " << violations_.size() << "\n";
+    }
+
+    /// Enable/disable checking
+    void set_enabled(bool enabled) { config_.enabled = enabled; }
+    bool is_enabled() const { return config_.enabled; }
+
+private:
+    Config config_;
+    std::vector<std::unordered_map<std::string, uint64_t>> arrival_times_;
+    std::vector<Violation> violations_;
+
+    std::string make_tile_key(const TileDescriptor& tile) const {
+        // Create unique key based on tensor type and indices
+        char buf[64];
+        switch (tile.tensor) {
+            case TensorId::A:
+                snprintf(buf, sizeof(buf), "A[%u,%u]", tile.m_tile, tile.k_tile);
+                break;
+            case TensorId::B:
+                snprintf(buf, sizeof(buf), "B[%u,%u]", tile.k_tile, tile.n_tile);
+                break;
+            case TensorId::C:
+                snprintf(buf, sizeof(buf), "C[%u,%u]", tile.m_tile, tile.n_tile);
+                break;
+            default:
+                snprintf(buf, sizeof(buf), "?[%u,%u,%u]", tile.m_tile, tile.n_tile, tile.k_tile);
+        }
+        return std::string(buf);
+    }
+
+    bool check_predecessor(const std::string& tile_key, uint8_t prev_l3, uint8_t curr_l3,
+                          const TileDescriptor& tile, uint64_t cycle) {
+        auto it = arrival_times_[prev_l3].find(tile_key);
+        if (it == arrival_times_[prev_l3].end()) {
+            // Tile hasn't arrived at predecessor yet - violation!
+            Violation v;
+            v.cycle = cycle;
+            v.tensor = tile.tensor;
+            v.m_tile = tile.m_tile;
+            v.n_tile = tile.n_tile;
+            v.k_tile = tile.k_tile;
+            v.arrived_at_l3 = curr_l3;
+            v.expected_from_l3 = prev_l3;
+            v.expected_arrival_cycle = 0;  // Never arrived
+
+            uint8_t prev_row = prev_l3 / config_.cols;
+            uint8_t prev_col = prev_l3 % config_.cols;
+            uint8_t curr_row = curr_l3 / config_.cols;
+            uint8_t curr_col = curr_l3 % config_.cols;
+
+            char buf[256];
+            snprintf(buf, sizeof(buf),
+                     "%s arrived at L3[%u,%u] before arriving at L3[%u,%u] (systolic violation)",
+                     tile_key.c_str(), curr_row, curr_col, prev_row, prev_col);
+            v.message = buf;
+
+            violations_.push_back(v);
+            return false;
+        }
+        // Predecessor arrival exists - order is correct
+        return true;
+    }
+};
+
+// ============================================================================
 // BlockMover Array (all 16 BlockMovers)
 // ============================================================================
 
@@ -418,16 +593,16 @@ public:
     size_t num_waiting() const;
 
     // Inter-mover communication
-    noc::NoC& noc() { return noc_; }
-    const noc::NoC& noc() const { return noc_; }
+    noc::WormholeNoC& noc() { return noc_; }
+    const noc::WormholeNoC& noc() const { return noc_; }
     TriggerNetwork& triggers() { return triggers_; }
 
     // NoC tracing
-    void set_noc_tracer(noc::NoCTracer* tracer) {
+    void set_noc_tracer(noc::WormholeTracer* tracer) {
         noc_tracer_ = tracer;
         noc_.set_tracer(tracer);
     }
-    noc::NoCTracer* noc_tracer() const { return noc_tracer_; }
+    noc::WormholeTracer* noc_tracer() const { return noc_tracer_; }
 
     // Statistics
     struct AggregateStats {
@@ -443,13 +618,20 @@ public:
     void set_tracer(dataflow::TileFlowTracer* tracer) { tracer_ = tracer; }
     dataflow::TileFlowTracer* tracer() const { return tracer_; }
 
+    // Systolic order checking
+    SystolicOrderChecker& order_checker() { return order_checker_; }
+    const SystolicOrderChecker& order_checker() const { return order_checker_; }
+    void enable_order_checking(bool enabled) { order_checker_.set_enabled(enabled); }
+    bool has_order_violations() const { return order_checker_.has_violations(); }
+
 private:
     Config config_;
     std::vector<std::unique_ptr<StatefulBlockMover>> movers_;
-    noc::NoC noc_;
-    noc::NoCTracer* noc_tracer_ = nullptr;
+    noc::WormholeNoC noc_;
+    noc::WormholeTracer* noc_tracer_ = nullptr;
     TriggerNetwork triggers_;
     dataflow::TileFlowTracer* tracer_ = nullptr;
+    SystolicOrderChecker order_checker_;
 
     // Pending NoC injections (for retry on BUFFER_FULL)
     struct PendingNoCInjection {
