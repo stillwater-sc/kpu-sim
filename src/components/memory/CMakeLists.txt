@@ -17,6 +17,9 @@ set(MEMORY_COMPONENT_SOURCES
     address_decoder.cpp
     memory_controller.cpp
     lpddr5_memory_controller.cpp
+    # Multi-fidelity memory controller framework
+    behavioral_memory_controller.cpp
+    memory_controller_factory.cpp
 )
 
 # Create the memory components library

@@ -461,15 +461,22 @@ private:
                           uint8_t channel = 0, uint8_t bank = 0);
 
     // Tracing helpers
-    void trace_bank_state_change(uint8_t channel, uint8_t bank, BankState new_state,
+    void trace_bank_state_change(uint8_t channel, uint8_t bank, lpddr5::BankState new_state,
                                  const std::string& reason = "");
     void trace_bus_state_change(uint8_t channel, bool is_data_bus,
                                 const std::string& state, const std::string& reason = "");
     void trace_command(uint8_t channel, uint8_t bank, const std::string& cmd,
                        uint64_t duration, uint64_t request_id = 0);
 
+    // Synchronize interface stats from internal stats
+    void sync_interface_stats();
+
+    // Synchronize interface violations from internal violations
+    void sync_interface_violations();
+
     // Configuration
-    Config config_;
+    Config lpddr5_config_;                              // LPDDR5-specific config
+    sw::kpu::MemoryControllerConfig interface_config_;  // Interface-compatible config
 
     // State
     std::array<Channel, 2> channels_;
@@ -480,12 +487,16 @@ private:
     std::queue<MemoryRequest> pending_queue_;
     std::vector<MemoryRequest> active_requests_;
 
-    // Statistics
+    // Statistics (internal LPDDR5-specific)
     Statistics stats_;
+    // Statistics (interface-compatible, synced from stats_)
+    mutable sw::kpu::MemoryControllerStatistics interface_stats_;
 
     // Invariant checking
     bool check_invariants_ = true;
-    std::vector<InvariantViolation> violations_;
+    std::vector<lpddr5::InvariantViolation> violations_;
+    // Violations (interface-compatible, synced from violations_)
+    mutable std::vector<IMemoryController::InvariantViolation> interface_violations_;
 
     // Tracing
     bool tracing_enabled_ = false;
