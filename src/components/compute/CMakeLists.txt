@@ -6,6 +6,10 @@ set(COMPUTE_COMPONENT_SOURCES
     compute_fabric.cpp
     systolic_array.cpp
     sfu.cpp
+    # Multi-fidelity compute fabric framework
+    behavioral_compute_fabric.cpp
+    transactional_compute_fabric.cpp
+    compute_fabric_factory.cpp
 )
 
 # Create the compute components library

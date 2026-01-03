@@ -21,6 +21,10 @@ set(MEMORY_COMPONENT_SOURCES
     behavioral_memory_controller.cpp
     transactional_memory_controller.cpp
     memory_controller_factory.cpp
+    # Multi-fidelity L3 tile framework
+    behavioral_l3_tile.cpp
+    transactional_l3_tile.cpp
+    l3_tile_factory.cpp
 )
 
 # Create the memory components library

@@ -5,6 +5,8 @@ add_library(kpu_noc STATIC
     wormhole_router.cpp
     dataflow_noc.cpp
     noc_adapters.cpp
+    # Multi-fidelity NoC framework
+    behavioral_noc.cpp
 )
 
 target_include_directories(kpu_noc PUBLIC
