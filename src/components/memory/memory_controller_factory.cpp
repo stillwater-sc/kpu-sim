@@ -5,6 +5,7 @@
 
 #include <sw/kpu/components/memory/memory_controller_interface.hpp>
 #include <sw/kpu/components/memory/behavioral_memory_controller.hpp>
+#include <sw/kpu/components/memory/transactional_memory_controller.hpp>
 #include <sw/kpu/components/lpddr5_memory_controller.hpp>
 #include <stdexcept>
 #include <sstream>
@@ -20,9 +21,8 @@ std::unique_ptr<IMemoryController> create_memory_controller(
             return std::make_unique<BehavioralMemoryController>(config);
 
         case SimulationFidelity::TRANSACTIONAL:
-            // Transactional model - not yet implemented, fall back to behavioral
-            // TODO: Implement TransactionalMemoryController
-            return std::make_unique<BehavioralMemoryController>(config);
+            // Transactional model - queue-based with statistical timing
+            return std::make_unique<TransactionalMemoryController>(config);
 
         case SimulationFidelity::CYCLE_ACCURATE:
             // Cycle-accurate - select based on technology

@@ -19,6 +19,7 @@ set(MEMORY_COMPONENT_SOURCES
     lpddr5_memory_controller.cpp
     # Multi-fidelity memory controller framework
     behavioral_memory_controller.cpp
+    transactional_memory_controller.cpp
     memory_controller_factory.cpp
 )
 

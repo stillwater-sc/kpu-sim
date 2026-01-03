@@ -8,6 +8,10 @@ set(DATAMOVEMENT_COMPONENT_SOURCES
     vector_engine.cpp
     l3_interconnect.cpp
     stateful_block_mover.cpp
+    # Multi-fidelity DMA engine framework
+    behavioral_dma_engine.cpp
+    transactional_dma_engine.cpp
+    dma_engine_factory.cpp
 )
 
 # Create the data_movement components library
