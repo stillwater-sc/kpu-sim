@@ -22,6 +22,7 @@
 #include <sw/concepts.hpp>
 #include <sw/memory/external_memory.hpp>
 #include <sw/trace/trace_logger.hpp>
+#include <sw/kpu/dataflow/tile_flow_tracer.hpp>
 
 namespace sw::memory {
     class AddressDecoder;
@@ -31,6 +32,7 @@ namespace sw::kpu {
 
 // Forward declarations
 class L3Tile;
+class MemoryController;
 
 // DMA Engine for data movement between memory hierarchies
 class KPU_API DMAEngine {
@@ -79,6 +81,12 @@ private:
     // Address decoder for address-based API (optional)
     sw::memory::AddressDecoder* address_decoder_;
 
+    // Memory controller for cycle-accurate DRAM timing (optional)
+    MemoryController* memory_controller_;
+
+    // Tile flow tracer for visualization (optional)
+    dataflow::TileFlowTracer* tile_tracer_;
+
 public:
     explicit DMAEngine(size_t engine_id = 0, double clock_freq_ghz = 1.0, double bandwidth_gb_s = 100.0);
     ~DMAEngine() = default;
@@ -105,6 +113,24 @@ public:
 
     sw::memory::AddressDecoder* get_address_decoder() const {
         return address_decoder_;
+    }
+
+    // Set memory controller for cycle-accurate DRAM timing
+    void set_memory_controller(MemoryController* mc) {
+        memory_controller_ = mc;
+    }
+
+    MemoryController* get_memory_controller() const {
+        return memory_controller_;
+    }
+
+    // Set tile flow tracer for visualization
+    void set_tile_tracer(dataflow::TileFlowTracer* tracer) {
+        tile_tracer_ = tracer;
+    }
+
+    dataflow::TileFlowTracer* get_tile_tracer() const {
+        return tile_tracer_;
     }
 
     // ===========================================

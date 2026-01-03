@@ -15,6 +15,8 @@ set(MEMORY_COMPONENT_SOURCES
     storage_scheduler.cpp
     memory_orchestrator_integration.cpp
     address_decoder.cpp
+    memory_controller.cpp
+    lpddr5_memory_controller.cpp
 )
 
 # Create the memory components library

@@ -8,6 +8,7 @@
 #include <sw/memory/address_decoder.hpp>
 #include <sw/kpu/components/dma_engine.hpp>
 #include <sw/kpu/components/l3_tile.hpp>
+#include <sw/kpu/components/memory_controller.hpp>
 
 namespace sw::kpu {
 
@@ -22,6 +23,8 @@ DMAEngine::DMAEngine(size_t engine_id, double clock_freq_ghz, double bandwidth_g
     , bandwidth_gb_s_(bandwidth_gb_s)
     , current_cycle_(0)
     , address_decoder_(nullptr)
+    , memory_controller_(nullptr)
+    , tile_tracer_(nullptr)
 {
 }
 
@@ -113,6 +116,19 @@ bool DMAEngine::process_transfers(std::vector<ExternalMemory>& host_memory_regio
         // Allocate buffer for the transfer
         transfer_buffer.resize(transfer.size);
 
+        // Log tile flow event for DMA request
+        if (tile_tracer_) {
+            dataflow::TileFlowEvent e;
+            e.cycle = current_cycle_;
+            e.type = dataflow::TileEventType::DMA_REQUEST;
+            e.dma_channel = static_cast<uint8_t>(engine_id);
+            e.l3_id = (transfer.dst_type == MemoryType::L3_TILE) ?
+                      static_cast<uint8_t>(transfer.dst_id) : 0;
+            e.address = transfer.src_addr;
+            e.bytes = static_cast<uint32_t>(transfer.size);
+            tile_tracer_->record(e);
+        }
+
         // Log trace entry for transfer issue
         if (tracing_enabled_ && trace_logger_) {
             trace::TraceEntry entry(
@@ -155,7 +171,22 @@ bool DMAEngine::process_transfers(std::vector<ExternalMemory>& host_memory_regio
             trace_logger_->log(std::move(entry));
         }
 
+        // Log DMA load start event
+        if (tile_tracer_) {
+            dataflow::TileFlowEvent e;
+            e.cycle = current_cycle_;
+            e.type = dataflow::TileEventType::DMA_LOAD_START;
+            e.dma_channel = static_cast<uint8_t>(engine_id);
+            e.l3_id = (transfer.dst_type == MemoryType::L3_TILE) ?
+                      static_cast<uint8_t>(transfer.dst_id) : 0;
+            e.address = transfer.src_addr;
+            e.bytes = static_cast<uint32_t>(transfer.size);
+            tile_tracer_->record(e);
+        }
+
         // Read from source into buffer
+        // If memory controller is available and source is KPU_MEMORY, use it
+        // (Note: For full async integration, this would need state machine changes)
         switch (transfer.src_type) {
             case MemoryType::HOST_MEMORY:
                 if (transfer.src_id >= host_memory_regions.size()) {
@@ -167,6 +198,12 @@ bool DMAEngine::process_transfers(std::vector<ExternalMemory>& host_memory_regio
             case MemoryType::KPU_MEMORY:
                 if (transfer.src_id >= memory_banks.size()) {
                     throw std::out_of_range("Invalid source memory bank ID: " + std::to_string(transfer.src_id));
+                }
+                // Use memory controller if available for accurate timing simulation
+                if (memory_controller_) {
+                    memory_controller_->submit_read(transfer.src_addr, static_cast<uint32_t>(transfer.size));
+                    // Drain memory controller to get actual read latency
+                    memory_controller_->drain();
                 }
                 memory_banks[transfer.src_id].read(transfer.src_addr, transfer_buffer.data(), transfer.size);
                 break;
@@ -323,6 +360,19 @@ bool DMAEngine::process_transfers(std::vector<ExternalMemory>& host_memory_regio
                 entry.description = "DMA transfer completed";
 
                 trace_logger_->log(std::move(entry));
+            }
+
+            // Log DMA load complete event
+            if (tile_tracer_) {
+                dataflow::TileFlowEvent e;
+                e.cycle = current_cycle_;
+                e.type = dataflow::TileEventType::DMA_LOAD_COMPLETE;
+                e.dma_channel = static_cast<uint8_t>(engine_id);
+                e.l3_id = (transfer.dst_type == MemoryType::L3_TILE) ?
+                          static_cast<uint8_t>(transfer.dst_id) : 0;
+                e.address = transfer.dst_addr;
+                e.bytes = static_cast<uint32_t>(transfer.size);
+                tile_tracer_->record(e);
             }
 
             // Call completion callback if provided

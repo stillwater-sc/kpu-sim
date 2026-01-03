@@ -25,11 +25,27 @@ namespace sw::kpu::dataflow {
 
 /// Type of tile flow event
 enum class TileEventType : uint8_t {
+    // Memory Controller events (DRAM timing)
+    MC_BANK_ACTIVATE,       // DRAM bank row activation (ACT command)
+    MC_BANK_PRECHARGE,      // DRAM bank precharge (PRE command)
+    MC_PAGE_HIT,            // Access to already-open row (fast)
+    MC_PAGE_CONFLICT,       // Access to different row (requires precharge+activate)
+    MC_READ_ISSUE,          // Memory controller issues read command
+    MC_READ_COMPLETE,       // Data arrives from DRAM
+    MC_WRITE_ISSUE,         // Memory controller issues write command
+    MC_WRITE_COMPLETE,      // Write completes to DRAM
+    MC_REFRESH_START,       // DRAM refresh begins
+    MC_REFRESH_COMPLETE,    // DRAM refresh completes
+    MC_QUEUE_FULL,          // Memory controller queue full (stall)
+
     // DMA events (External memory <-> L3)
+    DMA_REQUEST,            // DMA request queued
     DMA_LOAD_START,         // Tile load from external memory begins
     DMA_LOAD_COMPLETE,      // Tile load from external memory completes
     DMA_STORE_START,        // Tile store to external memory begins
     DMA_STORE_COMPLETE,     // Tile store to external memory completes
+    DMA_STALL,              // DMA stalled waiting for memory controller
+    DMA_CHANNEL_IDLE,       // DMA channel becomes idle
 
     // L3-to-L3 transfer events
     L3_SEND_START,          // Tile transfer to neighbor L3 begins
@@ -60,23 +76,44 @@ enum class TileEventType : uint8_t {
 
 inline const char* to_string(TileEventType type) {
     switch (type) {
+        // Memory Controller events
+        case TileEventType::MC_BANK_ACTIVATE: return "MC_BANK_ACTIVATE";
+        case TileEventType::MC_BANK_PRECHARGE: return "MC_BANK_PRECHARGE";
+        case TileEventType::MC_PAGE_HIT: return "MC_PAGE_HIT";
+        case TileEventType::MC_PAGE_CONFLICT: return "MC_PAGE_CONFLICT";
+        case TileEventType::MC_READ_ISSUE: return "MC_READ_ISSUE";
+        case TileEventType::MC_READ_COMPLETE: return "MC_READ_COMPLETE";
+        case TileEventType::MC_WRITE_ISSUE: return "MC_WRITE_ISSUE";
+        case TileEventType::MC_WRITE_COMPLETE: return "MC_WRITE_COMPLETE";
+        case TileEventType::MC_REFRESH_START: return "MC_REFRESH_START";
+        case TileEventType::MC_REFRESH_COMPLETE: return "MC_REFRESH_COMPLETE";
+        case TileEventType::MC_QUEUE_FULL: return "MC_QUEUE_FULL";
+        // DMA events
+        case TileEventType::DMA_REQUEST: return "DMA_REQUEST";
         case TileEventType::DMA_LOAD_START: return "DMA_LOAD_START";
         case TileEventType::DMA_LOAD_COMPLETE: return "DMA_LOAD_COMPLETE";
         case TileEventType::DMA_STORE_START: return "DMA_STORE_START";
         case TileEventType::DMA_STORE_COMPLETE: return "DMA_STORE_COMPLETE";
+        case TileEventType::DMA_STALL: return "DMA_STALL";
+        case TileEventType::DMA_CHANNEL_IDLE: return "DMA_CHANNEL_IDLE";
+        // L3-to-L3 events
         case TileEventType::L3_SEND_START: return "L3_SEND_START";
         case TileEventType::L3_SEND_COMPLETE: return "L3_SEND_COMPLETE";
         case TileEventType::L3_RECEIVE: return "L3_RECEIVE";
+        // L3-to-L2 events
         case TileEventType::L3_TO_L2_START: return "L3_TO_L2_START";
         case TileEventType::L3_TO_L2_COMPLETE: return "L3_TO_L2_COMPLETE";
         case TileEventType::L2_TO_L3_START: return "L2_TO_L3_START";
         case TileEventType::L2_TO_L3_COMPLETE: return "L2_TO_L3_COMPLETE";
+        // Compute events
         case TileEventType::COMPUTE_START: return "COMPUTE_START";
         case TileEventType::COMPUTE_COMPLETE: return "COMPUTE_COMPLETE";
+        // Sync events
         case TileEventType::BARRIER_START: return "BARRIER_START";
         case TileEventType::BARRIER_COMPLETE: return "BARRIER_COMPLETE";
         case TileEventType::TRIGGER_SEND: return "TRIGGER_SEND";
         case TileEventType::TRIGGER_RECEIVE: return "TRIGGER_RECEIVE";
+        // State events
         case TileEventType::MOVER_IDLE: return "MOVER_IDLE";
         case TileEventType::MOVER_RUNNING: return "MOVER_RUNNING";
         case TileEventType::MOVER_WAITING: return "MOVER_WAITING";
@@ -101,6 +138,12 @@ struct TileFlowEvent {
     uint8_t trigger_channel = 0;    // Trigger channel (for trigger events)
     uint32_t bytes = 0;             // Bytes transferred
 
+    // Memory controller specific fields
+    uint8_t bank_id = 0;            // DRAM bank ID
+    uint32_t row = 0;               // DRAM row address
+    uint8_t dma_channel = 0;        // DMA channel ID
+    uint64_t address = 0;           // Memory address
+
     std::string to_csv() const {
         std::ostringstream oss;
         oss << cycle << ","
@@ -112,12 +155,16 @@ struct TileFlowEvent {
             << tile.k_tile << ","
             << static_cast<int>(src_l3_id) << ","
             << static_cast<int>(dst_l3_id) << ","
-            << bytes;
+            << bytes << ","
+            << static_cast<int>(bank_id) << ","
+            << row << ","
+            << static_cast<int>(dma_channel) << ","
+            << address;
         return oss.str();
     }
 
     static std::string csv_header() {
-        return "cycle,l3_id,event_type,tensor,m_tile,n_tile,k_tile,src_l3,dst_l3,bytes";
+        return "cycle,l3_id,event_type,tensor,m_tile,n_tile,k_tile,src_l3,dst_l3,bytes,bank_id,row,dma_channel,address";
     }
 };
 
@@ -129,6 +176,7 @@ struct TileFlowEvent {
 struct TileFlowTracerConfig {
     bool enabled = true;
     size_t max_events = 1000000;    // Limit to avoid memory issues
+    bool trace_memory_controller = true;  // Memory controller DRAM timing events
     bool trace_dma = true;
     bool trace_l3_transfers = true;
     bool trace_l2_transfers = true;
@@ -160,10 +208,29 @@ public:
 
         // Filter by event type
         switch (event.type) {
+            // Memory Controller events
+            case TileEventType::MC_BANK_ACTIVATE:
+            case TileEventType::MC_BANK_PRECHARGE:
+            case TileEventType::MC_PAGE_HIT:
+            case TileEventType::MC_PAGE_CONFLICT:
+            case TileEventType::MC_READ_ISSUE:
+            case TileEventType::MC_READ_COMPLETE:
+            case TileEventType::MC_WRITE_ISSUE:
+            case TileEventType::MC_WRITE_COMPLETE:
+            case TileEventType::MC_REFRESH_START:
+            case TileEventType::MC_REFRESH_COMPLETE:
+            case TileEventType::MC_QUEUE_FULL:
+                if (!config_.trace_memory_controller) return;
+                break;
+
+            // DMA events
+            case TileEventType::DMA_REQUEST:
             case TileEventType::DMA_LOAD_START:
             case TileEventType::DMA_LOAD_COMPLETE:
             case TileEventType::DMA_STORE_START:
             case TileEventType::DMA_STORE_COMPLETE:
+            case TileEventType::DMA_STALL:
+            case TileEventType::DMA_CHANNEL_IDLE:
                 if (!config_.trace_dma) return;
                 break;
 
@@ -200,6 +267,108 @@ public:
         }
 
         events_.push_back(event);
+    }
+
+    // ========== Memory Controller Events ==========
+
+    void record_mc_bank_activate(uint64_t cycle, uint8_t bank_id, uint32_t row) {
+        TileFlowEvent e;
+        e.cycle = cycle;
+        e.type = TileEventType::MC_BANK_ACTIVATE;
+        e.bank_id = bank_id;
+        e.row = row;
+        record(e);
+    }
+
+    void record_mc_bank_precharge(uint64_t cycle, uint8_t bank_id) {
+        TileFlowEvent e;
+        e.cycle = cycle;
+        e.type = TileEventType::MC_BANK_PRECHARGE;
+        e.bank_id = bank_id;
+        record(e);
+    }
+
+    void record_mc_page_hit(uint64_t cycle, uint8_t bank_id, uint32_t row) {
+        TileFlowEvent e;
+        e.cycle = cycle;
+        e.type = TileEventType::MC_PAGE_HIT;
+        e.bank_id = bank_id;
+        e.row = row;
+        record(e);
+    }
+
+    void record_mc_page_conflict(uint64_t cycle, uint8_t bank_id, uint32_t old_row [[maybe_unused]], uint32_t new_row) {
+        TileFlowEvent e;
+        e.cycle = cycle;
+        e.type = TileEventType::MC_PAGE_CONFLICT;
+        e.bank_id = bank_id;
+        e.row = new_row;
+        record(e);
+    }
+
+    void record_mc_read(uint64_t cycle, uint8_t bank_id, uint64_t address, uint32_t bytes, bool complete) {
+        TileFlowEvent e;
+        e.cycle = cycle;
+        e.type = complete ? TileEventType::MC_READ_COMPLETE : TileEventType::MC_READ_ISSUE;
+        e.bank_id = bank_id;
+        e.address = address;
+        e.bytes = bytes;
+        record(e);
+    }
+
+    void record_mc_write(uint64_t cycle, uint8_t bank_id, uint64_t address, uint32_t bytes, bool complete) {
+        TileFlowEvent e;
+        e.cycle = cycle;
+        e.type = complete ? TileEventType::MC_WRITE_COMPLETE : TileEventType::MC_WRITE_ISSUE;
+        e.bank_id = bank_id;
+        e.address = address;
+        e.bytes = bytes;
+        record(e);
+    }
+
+    void record_mc_refresh(uint64_t cycle, bool start) {
+        TileFlowEvent e;
+        e.cycle = cycle;
+        e.type = start ? TileEventType::MC_REFRESH_START : TileEventType::MC_REFRESH_COMPLETE;
+        record(e);
+    }
+
+    void record_mc_queue_full(uint64_t cycle) {
+        TileFlowEvent e;
+        e.cycle = cycle;
+        e.type = TileEventType::MC_QUEUE_FULL;
+        record(e);
+    }
+
+    // ========== DMA Events ==========
+
+    void record_dma_request(uint64_t cycle, uint8_t dma_channel, uint8_t l3_id,
+                            const TileDescriptor& tile, uint64_t address) {
+        TileFlowEvent e;
+        e.cycle = cycle;
+        e.type = TileEventType::DMA_REQUEST;
+        e.dma_channel = dma_channel;
+        e.l3_id = l3_id;
+        e.tile = tile;
+        e.address = address;
+        e.bytes = tile.size;
+        record(e);
+    }
+
+    void record_dma_stall(uint64_t cycle, uint8_t dma_channel) {
+        TileFlowEvent e;
+        e.cycle = cycle;
+        e.type = TileEventType::DMA_STALL;
+        e.dma_channel = dma_channel;
+        record(e);
+    }
+
+    void record_dma_channel_idle(uint64_t cycle, uint8_t dma_channel) {
+        TileFlowEvent e;
+        e.cycle = cycle;
+        e.type = TileEventType::DMA_CHANNEL_IDLE;
+        e.dma_channel = dma_channel;
+        record(e);
     }
 
     // Convenience methods for common events
@@ -393,14 +562,19 @@ public:
             const auto& e = events_[i];
             file << "    {\n";
             file << "      \"cycle\": " << e.cycle << ",\n";
+            file << "      \"event_type\": \"" << to_string(e.type) << "\",\n";
             file << "      \"l3_id\": " << static_cast<int>(e.l3_id) << ",\n";
-            file << "      \"type\": \"" << to_string(e.type) << "\",\n";
             file << "      \"tensor\": " << static_cast<int>(e.tile.tensor) << ",\n";
-            file << "      \"tile\": [" << e.tile.m_tile << ", "
-                 << e.tile.n_tile << ", " << e.tile.k_tile << "],\n";
+            file << "      \"m_tile\": " << e.tile.m_tile << ",\n";
+            file << "      \"n_tile\": " << e.tile.n_tile << ",\n";
+            file << "      \"k_tile\": " << e.tile.k_tile << ",\n";
             file << "      \"src_l3\": " << static_cast<int>(e.src_l3_id) << ",\n";
             file << "      \"dst_l3\": " << static_cast<int>(e.dst_l3_id) << ",\n";
-            file << "      \"bytes\": " << e.bytes << "\n";
+            file << "      \"bytes\": " << e.bytes << ",\n";
+            file << "      \"bank_id\": " << static_cast<int>(e.bank_id) << ",\n";
+            file << "      \"row\": " << e.row << ",\n";
+            file << "      \"dma_channel\": " << static_cast<int>(e.dma_channel) << ",\n";
+            file << "      \"address\": " << e.address << "\n";
             file << "    }" << (i < events_.size() - 1 ? "," : "") << "\n";
         }
 

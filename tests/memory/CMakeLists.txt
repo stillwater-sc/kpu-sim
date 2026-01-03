@@ -92,14 +92,40 @@ set_target_properties(test_external_memory_sparse PROPERTIES
     VS_DEBUGGER_WORKING_DIRECTORY "${CMAKE_BINARY_DIR}"
 )
 
+# LPDDR5 Memory Controller tests
+add_executable(lpddr5_memory_controller_test
+    lpddr5_memory_controller_test.cpp
+)
+
+target_link_libraries(lpddr5_memory_controller_test
+    PRIVATE
+        kpu_memory_components
+        kpu_trace
+        Catch2::Catch2WithMain
+)
+
+target_include_directories(lpddr5_memory_controller_test
+    PRIVATE
+        ${PROJECT_SOURCE_DIR}/include
+)
+
+set_target_properties(lpddr5_memory_controller_test PROPERTIES
+    CXX_STANDARD 20
+    CXX_STANDARD_REQUIRED ON
+    FOLDER "Tests/memory"
+    VS_DEBUGGER_WORKING_DIRECTORY "${CMAKE_BINARY_DIR}"
+)
+
 # Add tests to CTest
 add_test(NAME MemoryMapDebug COMMAND test_memory_map_debug)
 add_test(NAME MemoryMap COMMAND test_memory_map)
 add_test(NAME SparseMemory COMMAND test_sparse_memory)
 add_test(NAME ExternalMemorySparse COMMAND test_external_memory_sparse)
+add_test(NAME LPDDR5MemoryController COMMAND lpddr5_memory_controller_test)
 
 # Set test labels for filtering
 set_tests_properties(MemoryMapDebug PROPERTIES LABELS "memory;memmap;debug")
 set_tests_properties(MemoryMap PROPERTIES LABELS "memory;memmap")
 set_tests_properties(SparseMemory PROPERTIES LABELS "memory;sparse")
 set_tests_properties(ExternalMemorySparse PROPERTIES LABELS "memory;external;datacenter")
+set_tests_properties(LPDDR5MemoryController PROPERTIES LABELS "memory;lpddr5;mc")

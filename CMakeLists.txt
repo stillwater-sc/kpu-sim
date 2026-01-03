@@ -160,6 +160,9 @@ if(KPU_BUILD_TOOLS)
     add_subdirectory(tools)
 endif()
 
+# Domain Flow Pattern tests (always build for verification)
+add_subdirectory(patterns)
+
 # Installation of headers
 install(DIRECTORY include/
     DESTINATION include

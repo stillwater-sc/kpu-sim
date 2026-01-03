@@ -161,7 +161,12 @@ private:
             case ComponentType::COMPUTE_FABRIC:     return 11; // Compute orchestrator
             case ComponentType::SYSTOLIC_ARRAY:     return 12; // Compute engine
             case ComponentType::PAGE_BUFFER:        return 15; // Memory controller page buffers
-            case ComponentType::STORAGE_SCHEDULER:  return 20; // System services
+            case ComponentType::LPDDR5_BANK:        return 16; // LPDDR5 banks
+            case ComponentType::LPDDR5_BANK_GROUP:  return 17; // LPDDR5 bank groups
+            case ComponentType::LPDDR5_CHANNEL:     return 18; // LPDDR5 channels
+            case ComponentType::LPDDR5_DATA_BUS:    return 19; // LPDDR5 data bus
+            case ComponentType::LPDDR5_CMD_BUS:     return 20; // LPDDR5 command bus
+            case ComponentType::STORAGE_SCHEDULER:  return 30; // System services
             case ComponentType::MEMORY_ORCHESTRATOR: return 21;
             default: return 99;  // Unknown/other components
         }
@@ -309,6 +314,11 @@ private:
             case ComponentType::L3_TILE:         return "L3 Tile";
             case ComponentType::L2_BANK:         return "L2 Bank";
             case ComponentType::L1:              return "L1 Buffer";
+            case ComponentType::LPDDR5_BANK:     return "LPDDR5 Bank";
+            case ComponentType::LPDDR5_BANK_GROUP: return "LPDDR5 Bank Group";
+            case ComponentType::LPDDR5_CHANNEL:  return "LPDDR5 Channel";
+            case ComponentType::LPDDR5_DATA_BUS: return "LPDDR5 Data Bus";
+            case ComponentType::LPDDR5_CMD_BUS:  return "LPDDR5 Cmd Bus";
             default: return to_string(type);
         }
     }
@@ -320,6 +330,11 @@ private:
             case ComponentType::BLOCK_MOVER:     return 7;
             case ComponentType::STREAMER:        return 9;
             case ComponentType::SYSTOLIC_ARRAY:  return 12;
+            case ComponentType::LPDDR5_BANK:     return 16;
+            case ComponentType::LPDDR5_BANK_GROUP: return 17;
+            case ComponentType::LPDDR5_CHANNEL:  return 18;
+            case ComponentType::LPDDR5_DATA_BUS: return 19;
+            case ComponentType::LPDDR5_CMD_BUS:  return 20;
             default: return 50;
         }
     }

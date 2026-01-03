@@ -44,6 +44,13 @@ enum class ComponentType : uint8_t {
     // Memory controller components
     PAGE_BUFFER = 12,           // Page buffers (memory controller aggregation)
 
+    // LPDDR5 Memory Controller components
+    LPDDR5_BANK = 13,           // Individual LPDDR5 bank
+    LPDDR5_BANK_GROUP = 14,     // LPDDR5 bank group (4 banks)
+    LPDDR5_CHANNEL = 15,        // LPDDR5 channel
+    LPDDR5_DATA_BUS = 16,       // LPDDR5 data bus
+    LPDDR5_CMD_BUS = 17,        // LPDDR5 command bus
+
     // KPU compute components
     COMPUTE_FABRIC = 10,       // Compute orchestrator
     SYSTOLIC_ARRAY = 11,       // Systolic array compute engine
@@ -76,6 +83,14 @@ enum class TransactionType : uint8_t {
     // Memory management
     ALLOCATE = 30,
     DEALLOCATE = 31,
+
+    // LPDDR5 Memory Controller operations
+    ACTIVATE = 40,       // Row activation (ACT command)
+    PRECHARGE = 41,      // Row precharge (PRE command)
+    REFRESH = 42,        // Per-bank or all-bank refresh
+    BURST_READ = 43,     // Read burst (CAS read)
+    BURST_WRITE = 44,    // Write burst (CAS write)
+    TURNAROUND = 45,     // Bus turnaround (R->W or W->R)
 
     UNKNOWN = 255
 };

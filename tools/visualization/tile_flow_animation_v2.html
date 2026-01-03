@@ -1,0 +1,1981 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>KPU Full Data Path Visualization</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+            min-height: 100vh;
+            color: #fff;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 1600px;
+            margin: 0 auto;
+        }
+
+        header {
+            text-align: center;
+            margin-bottom: 20px;
+        }
+
+        h1 {
+            font-size: 2em;
+            background: linear-gradient(90deg, #4CAF50, #2196F3, #FF9800);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            margin-bottom: 5px;
+        }
+
+        .subtitle {
+            color: #888;
+            font-size: 1em;
+        }
+
+        .main-layout {
+            display: flex;
+            gap: 20px;
+        }
+
+        .viz-column {
+            flex: 1;
+        }
+
+        .controls-column {
+            width: 320px;
+            flex-shrink: 0;
+        }
+
+        .panel {
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 12px;
+            padding: 15px;
+            margin-bottom: 15px;
+            box-shadow: 0 4px 16px rgba(0, 0, 0, 0.2);
+        }
+
+        .panel-title {
+            color: #4CAF50;
+            font-size: 0.85em;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            margin-bottom: 10px;
+            border-bottom: 1px solid rgba(255,255,255,0.1);
+            padding-bottom: 5px;
+        }
+
+        /* SVG Container */
+        #main-svg {
+            display: block;
+            width: 100%;
+            height: auto;
+        }
+
+        /* External Memory */
+        .ddr-bank {
+            transition: all 0.3s ease;
+        }
+        .ddr-bank.idle { fill: #2a3a4a; }
+        .ddr-bank.open { fill: #4a6a4a; }
+        .ddr-bank.conflict { fill: #6a4a4a; }
+        .ddr-bank.refresh { fill: #4a4a6a; }
+        .ddr-bank.active {
+            filter: drop-shadow(0 0 8px rgba(76, 175, 80, 0.6));
+        }
+
+        /* Memory Controller */
+        .mc-component {
+            transition: all 0.3s ease;
+        }
+        .page-buffer { fill: #3a4a5a; }
+        .page-buffer.filled { fill: #5a7a5a; }
+        .bank-arbiter { fill: #4a4a6a; }
+        .bank-arbiter.busy { fill: #7a5a7a; animation: pulse 0.5s ease infinite; }
+
+        /* DMA Engines */
+        .dma-channel {
+            transition: all 0.3s ease;
+        }
+        .dma-channel.idle { fill: #2a3a4a; }
+        .dma-channel.fetching { fill: #5a5a3a; animation: pulse 0.8s ease infinite; }
+        .dma-channel.transferring { fill: #3a5a3a; animation: transfer-pulse 0.3s ease infinite; }
+        .dma-channel.stalled { fill: #5a3a3a; }
+        .dma-channel.done { fill: #3a5a5a; }
+
+        .dma-queue-slot {
+            fill: #2a2a3a;
+            stroke: #444;
+            stroke-width: 1;
+        }
+        .dma-queue-slot.filled {
+            fill: #4a6a4a;
+        }
+
+        /* Data Path Arrows */
+        .data-path {
+            stroke: #4CAF50;
+            stroke-width: 3;
+            fill: none;
+            opacity: 0.3;
+            stroke-dasharray: 8,4;
+        }
+        .data-path.active {
+            opacity: 0.9;
+            stroke-width: 4;
+            animation: flow 0.5s linear infinite;
+        }
+
+        @keyframes flow {
+            from { stroke-dashoffset: 12; }
+            to { stroke-dashoffset: 0; }
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 0.8; }
+            50% { opacity: 1; }
+        }
+
+        @keyframes transfer-pulse {
+            0%, 100% { filter: brightness(1); }
+            50% { filter: brightness(1.3); }
+        }
+
+        /* L3 Tiles */
+        .l3-tile-bg {
+            fill: #2a2a4a;
+            stroke: #444;
+            stroke-width: 2;
+            transition: all 0.3s ease;
+        }
+        .l3-tile.receiving .l3-tile-bg {
+            stroke: #4CAF50;
+            stroke-width: 3;
+            filter: drop-shadow(0 0 10px rgba(76, 175, 80, 0.5));
+        }
+        .l3-tile.active .l3-tile-bg {
+            stroke: #FF9800;
+            stroke-width: 3;
+        }
+
+        /* Tensor blocks */
+        .tensor-A { fill: #FF6B6B; }
+        .tensor-B { fill: #4ECDC4; }
+        .tensor-C { fill: #FFE66D; }
+
+        /* Moving data packet */
+        .data-packet {
+            opacity: 0;
+            transition: opacity 0.2s ease;
+        }
+        .data-packet.active {
+            opacity: 1;
+        }
+
+        /* Labels */
+        .component-label {
+            fill: #888;
+            font-size: 10px;
+            font-weight: bold;
+        }
+        .state-label {
+            fill: #aaa;
+            font-size: 9px;
+        }
+
+        /* Controls */
+        .btn {
+            background: linear-gradient(135deg, #4CAF50, #2E7D32);
+            border: none;
+            color: white;
+            padding: 10px 20px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 0.9em;
+            transition: all 0.3s ease;
+            margin: 2px;
+        }
+        .btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(76, 175, 80, 0.4);
+        }
+        .btn-secondary {
+            background: linear-gradient(135deg, #555, #333);
+        }
+
+        .play-controls {
+            display: flex;
+            justify-content: center;
+            gap: 5px;
+            margin-bottom: 10px;
+        }
+
+        .speed-control {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-top: 10px;
+        }
+        .speed-control input {
+            flex: 1;
+            -webkit-appearance: none;
+            height: 6px;
+            background: #333;
+            border-radius: 3px;
+        }
+        .speed-control input::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            width: 16px;
+            height: 16px;
+            background: #4CAF50;
+            border-radius: 50%;
+            cursor: pointer;
+        }
+
+        .current-cycle {
+            font-size: 1.8em;
+            font-weight: bold;
+            color: #4CAF50;
+            text-align: center;
+            margin: 8px 0;
+        }
+
+        .timeline {
+            position: relative;
+            height: 40px;
+            background: #1a1a2e;
+            border-radius: 6px;
+            overflow: hidden;
+            margin-bottom: 8px;
+            cursor: pointer;
+        }
+        .timeline-progress {
+            position: absolute;
+            height: 100%;
+            background: linear-gradient(90deg, rgba(76, 175, 80, 0.3), rgba(33, 150, 243, 0.3));
+        }
+        .timeline-cursor {
+            position: absolute;
+            width: 2px;
+            height: 100%;
+            background: #4CAF50;
+            box-shadow: 0 0 8px #4CAF50;
+        }
+
+        /* Stats grid */
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 8px;
+        }
+        .stat-card {
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 6px;
+            padding: 8px;
+            text-align: center;
+        }
+        .stat-value {
+            font-size: 1.3em;
+            font-weight: bold;
+            color: #4CAF50;
+        }
+        .stat-label {
+            font-size: 0.7em;
+            color: #888;
+            text-transform: uppercase;
+        }
+
+        /* Component state display */
+        .state-display {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 6px;
+            font-size: 0.8em;
+        }
+        .state-item {
+            background: rgba(0,0,0,0.2);
+            padding: 6px;
+            border-radius: 4px;
+        }
+        .state-item-label {
+            color: #888;
+            font-size: 0.75em;
+        }
+        .state-item-value {
+            color: #4CAF50;
+            font-weight: bold;
+        }
+        .state-item-value.warning { color: #FF9800; }
+        .state-item-value.error { color: #f44336; }
+
+        /* Event log */
+        .event-log {
+            background: #1a1a2e;
+            border-radius: 6px;
+            padding: 8px;
+            height: 150px;
+            overflow-y: auto;
+            font-family: 'Monaco', 'Consolas', monospace;
+            font-size: 0.75em;
+        }
+        .event-log-entry {
+            padding: 3px 6px;
+            border-radius: 3px;
+            margin-bottom: 3px;
+        }
+        .event-log-entry.dma { background: rgba(255, 152, 0, 0.2); border-left: 2px solid #FF9800; }
+        .event-log-entry.mc { background: rgba(33, 150, 243, 0.2); border-left: 2px solid #2196F3; }
+        .event-log-entry.l3 { background: rgba(76, 175, 80, 0.2); border-left: 2px solid #4CAF50; }
+        .event-log-entry.error { background: rgba(244, 67, 54, 0.2); border-left: 2px solid #f44336; }
+        .event-log-entry.info { background: rgba(156, 39, 176, 0.2); border-left: 2px solid #9C27B0; }
+
+        /* Legend */
+        .legend {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+            justify-content: center;
+            margin-top: 10px;
+            font-size: 0.8em;
+        }
+        .legend-item {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+        }
+        .legend-color {
+            width: 12px;
+            height: 12px;
+            border-radius: 3px;
+        }
+
+        /* File input */
+        .file-input-wrapper {
+            text-align: center;
+            margin-bottom: 10px;
+            padding: 15px;
+            border: 2px dashed #2196F3;
+            border-radius: 8px;
+            transition: all 0.3s ease;
+        }
+        .file-input-wrapper:hover {
+            border-color: #4CAF50;
+            background: rgba(33, 150, 243, 0.1);
+        }
+        .file-input { display: none; }
+        .file-label {
+            display: inline-block;
+            background: linear-gradient(135deg, #2196F3, #1976D2);
+            padding: 10px 20px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 0.9em;
+            font-weight: bold;
+        }
+        .file-label:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(33, 150, 243, 0.4);
+        }
+        .drop-hint {
+            font-size: 0.75em;
+            color: #888;
+            margin-top: 8px;
+        }
+
+        .demo-notice {
+            background: rgba(255, 152, 0, 0.2);
+            border: 1px solid #FF9800;
+            border-radius: 6px;
+            padding: 8px;
+            margin-bottom: 10px;
+            font-size: 0.8em;
+            text-align: center;
+        }
+
+        .keyboard-hint {
+            text-align: center;
+            margin-top: 8px;
+            font-size: 0.75em;
+            color: #666;
+        }
+        .keyboard-hint span {
+            cursor: help;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>KPU Full Data Path Visualization</h1>
+            <p class="subtitle">External Memory &rarr; Memory Controller &rarr; DMA Engines &rarr; L3 Mesh</p>
+        </header>
+
+        <div class="main-layout">
+            <div class="viz-column">
+                <div class="panel">
+                    <svg id="main-svg" viewBox="0 0 900 750">
+                        <defs>
+                            <marker id="arrowhead" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+                                <polygon points="0 0, 8 3, 0 6" fill="#4CAF50"/>
+                            </marker>
+                            <marker id="arrowhead-orange" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+                                <polygon points="0 0, 8 3, 0 6" fill="#FF9800"/>
+                            </marker>
+                            <filter id="glow">
+                                <feGaussianBlur stdDeviation="2" result="coloredBlur"/>
+                                <feMerge>
+                                    <feMergeNode in="coloredBlur"/>
+                                    <feMergeNode in="SourceGraphic"/>
+                                </feMerge>
+                            </filter>
+                            <linearGradient id="dataGradient" x1="0%" y1="0%" x2="100%" y2="0%">
+                                <stop offset="0%" style="stop-color:#FF9800;stop-opacity:1" />
+                                <stop offset="100%" style="stop-color:#4CAF50;stop-opacity:1" />
+                            </linearGradient>
+                        </defs>
+
+                        <!-- ============================================ -->
+                        <!-- EXTERNAL MEMORY (DDR/HBM) - Top Section -->
+                        <!-- ============================================ -->
+                        <g id="external-memory" transform="translate(50, 10)">
+                            <text x="400" y="15" class="component-label" text-anchor="middle" style="font-size:12px;">
+                                External Memory (DDR4/HBM)
+                            </text>
+
+                            <!-- Memory Banks -->
+                            <g id="ddr-banks" transform="translate(0, 25)">
+                                <!-- Bank 0-7 -->
+                                <g id="bank-0" class="ddr-bank idle">
+                                    <rect x="0" y="0" width="90" height="35" rx="4"/>
+                                    <text x="45" y="15" class="component-label" text-anchor="middle">Bank 0</text>
+                                    <text x="45" y="28" class="state-label" text-anchor="middle" id="bank-0-state">IDLE</text>
+                                </g>
+                                <g id="bank-1" class="ddr-bank idle" transform="translate(100, 0)">
+                                    <rect x="0" y="0" width="90" height="35" rx="4"/>
+                                    <text x="45" y="15" class="component-label" text-anchor="middle">Bank 1</text>
+                                    <text x="45" y="28" class="state-label" text-anchor="middle" id="bank-1-state">IDLE</text>
+                                </g>
+                                <g id="bank-2" class="ddr-bank idle" transform="translate(200, 0)">
+                                    <rect x="0" y="0" width="90" height="35" rx="4"/>
+                                    <text x="45" y="15" class="component-label" text-anchor="middle">Bank 2</text>
+                                    <text x="45" y="28" class="state-label" text-anchor="middle" id="bank-2-state">IDLE</text>
+                                </g>
+                                <g id="bank-3" class="ddr-bank idle" transform="translate(300, 0)">
+                                    <rect x="0" y="0" width="90" height="35" rx="4"/>
+                                    <text x="45" y="15" class="component-label" text-anchor="middle">Bank 3</text>
+                                    <text x="45" y="28" class="state-label" text-anchor="middle" id="bank-3-state">IDLE</text>
+                                </g>
+                                <g id="bank-4" class="ddr-bank idle" transform="translate(400, 0)">
+                                    <rect x="0" y="0" width="90" height="35" rx="4"/>
+                                    <text x="45" y="15" class="component-label" text-anchor="middle">Bank 4</text>
+                                    <text x="45" y="28" class="state-label" text-anchor="middle" id="bank-4-state">IDLE</text>
+                                </g>
+                                <g id="bank-5" class="ddr-bank idle" transform="translate(500, 0)">
+                                    <rect x="0" y="0" width="90" height="35" rx="4"/>
+                                    <text x="45" y="15" class="component-label" text-anchor="middle">Bank 5</text>
+                                    <text x="45" y="28" class="state-label" text-anchor="middle" id="bank-5-state">IDLE</text>
+                                </g>
+                                <g id="bank-6" class="ddr-bank idle" transform="translate(600, 0)">
+                                    <rect x="0" y="0" width="90" height="35" rx="4"/>
+                                    <text x="45" y="15" class="component-label" text-anchor="middle">Bank 6</text>
+                                    <text x="45" y="28" class="state-label" text-anchor="middle" id="bank-6-state">IDLE</text>
+                                </g>
+                                <g id="bank-7" class="ddr-bank idle" transform="translate(700, 0)">
+                                    <rect x="0" y="0" width="90" height="35" rx="4"/>
+                                    <text x="45" y="15" class="component-label" text-anchor="middle">Bank 7</text>
+                                    <text x="45" y="28" class="state-label" text-anchor="middle" id="bank-7-state">IDLE</text>
+                                </g>
+                            </g>
+                        </g>
+
+                        <!-- ============================================ -->
+                        <!-- MEMORY CONTROLLER - Second Section -->
+                        <!-- ============================================ -->
+                        <g id="memory-controller" transform="translate(50, 90)">
+                            <rect x="-5" y="-5" width="810" height="80" rx="8"
+                                  fill="rgba(33, 150, 243, 0.1)" stroke="#2196F3" stroke-width="1"/>
+                            <text x="400" y="12" class="component-label" text-anchor="middle" style="font-size:11px;">
+                                Memory Controller
+                            </text>
+
+                            <!-- Bank Arbiter -->
+                            <g id="bank-arbiter" class="mc-component bank-arbiter" transform="translate(10, 22)">
+                                <rect x="0" y="0" width="120" height="45" rx="4"/>
+                                <text x="60" y="18" class="component-label" text-anchor="middle">Bank Arbiter</text>
+                                <text x="60" y="32" class="state-label" text-anchor="middle" id="arbiter-state">IDLE</text>
+                                <text x="60" y="42" class="state-label" text-anchor="middle" id="arbiter-pending">Pending: 0</text>
+                            </g>
+
+                            <!-- Page Buffers -->
+                            <g id="page-buffers" transform="translate(150, 22)">
+                                <text x="0" y="-5" class="state-label">Page Buffers</text>
+                                <g id="page-buf-0" class="mc-component page-buffer">
+                                    <rect x="0" y="0" width="70" height="45" rx="3"/>
+                                    <text x="35" y="18" class="state-label" text-anchor="middle">PB0</text>
+                                    <text x="35" y="32" class="state-label" text-anchor="middle" id="pb0-row">Row: --</text>
+                                    <text x="35" y="42" class="state-label" text-anchor="middle" id="pb0-fill">0%</text>
+                                </g>
+                                <g id="page-buf-1" class="mc-component page-buffer" transform="translate(80, 0)">
+                                    <rect x="0" y="0" width="70" height="45" rx="3"/>
+                                    <text x="35" y="18" class="state-label" text-anchor="middle">PB1</text>
+                                    <text x="35" y="32" class="state-label" text-anchor="middle" id="pb1-row">Row: --</text>
+                                    <text x="35" y="42" class="state-label" text-anchor="middle" id="pb1-fill">0%</text>
+                                </g>
+                                <g id="page-buf-2" class="mc-component page-buffer" transform="translate(160, 0)">
+                                    <rect x="0" y="0" width="70" height="45" rx="3"/>
+                                    <text x="35" y="18" class="state-label" text-anchor="middle">PB2</text>
+                                    <text x="35" y="32" class="state-label" text-anchor="middle" id="pb2-row">Row: --</text>
+                                    <text x="35" y="42" class="state-label" text-anchor="middle" id="pb2-fill">0%</text>
+                                </g>
+                                <g id="page-buf-3" class="mc-component page-buffer" transform="translate(240, 0)">
+                                    <rect x="0" y="0" width="70" height="45" rx="3"/>
+                                    <text x="35" y="18" class="state-label" text-anchor="middle">PB3</text>
+                                    <text x="35" y="32" class="state-label" text-anchor="middle" id="pb3-row">Row: --</text>
+                                    <text x="35" y="42" class="state-label" text-anchor="middle" id="pb3-fill">0%</text>
+                                </g>
+                            </g>
+
+                            <!-- Read/Write Queues -->
+                            <g id="rw-queues" transform="translate(580, 22)">
+                                <text x="0" y="-5" class="state-label">R/W Queues</text>
+                                <g id="read-queue">
+                                    <rect x="0" y="0" width="100" height="20" rx="3" fill="#3a4a3a" stroke="#4CAF50"/>
+                                    <text x="50" y="14" class="state-label" text-anchor="middle" id="read-queue-fill">Read: 0/8</text>
+                                </g>
+                                <g id="write-queue" transform="translate(0, 25)">
+                                    <rect x="0" y="0" width="100" height="20" rx="3" fill="#4a3a3a" stroke="#FF6B6B"/>
+                                    <text x="50" y="14" class="state-label" text-anchor="middle" id="write-queue-fill">Write: 0/8</text>
+                                </g>
+                            </g>
+
+                            <!-- Bandwidth meter -->
+                            <g id="mc-bandwidth" transform="translate(700, 22)">
+                                <text x="0" y="-5" class="state-label">BW</text>
+                                <rect x="0" y="0" width="80" height="45" rx="3" fill="#2a2a3a" stroke="#666"/>
+                                <rect x="2" y="2" width="0" height="41" rx="2" fill="#4CAF50" id="mc-bw-bar"/>
+                                <text x="40" y="28" class="state-label" text-anchor="middle" id="mc-bw-text">0 GB/s</text>
+                            </g>
+                        </g>
+
+                        <!-- ============================================ -->
+                        <!-- DMA ENGINES - Third Section -->
+                        <!-- ============================================ -->
+                        <g id="dma-engines" transform="translate(50, 185)">
+                            <rect x="-5" y="-5" width="810" height="100" rx="8"
+                                  fill="rgba(255, 152, 0, 0.1)" stroke="#FF9800" stroke-width="1"/>
+                            <text x="400" y="12" class="component-label" text-anchor="middle" style="font-size:11px;">
+                                DMA Engines (8 Channels)
+                            </text>
+
+                            <!-- DMA Channel 0-7 -->
+                            <g id="dma-channels" transform="translate(10, 22)">
+                                <!-- Channel template repeated -->
+                                <g id="dma-ch-0" class="dma-channel idle">
+                                    <rect x="0" y="0" width="90" height="65" rx="4"/>
+                                    <text x="45" y="14" class="component-label" text-anchor="middle">DMA 0</text>
+                                    <text x="45" y="28" class="state-label" text-anchor="middle" id="dma-0-state">IDLE</text>
+                                    <!-- Queue slots -->
+                                    <g transform="translate(5, 35)">
+                                        <rect class="dma-queue-slot" x="0" y="0" width="12" height="12" rx="2" id="dma-0-q0"/>
+                                        <rect class="dma-queue-slot" x="14" y="0" width="12" height="12" rx="2" id="dma-0-q1"/>
+                                        <rect class="dma-queue-slot" x="28" y="0" width="12" height="12" rx="2" id="dma-0-q2"/>
+                                        <rect class="dma-queue-slot" x="42" y="0" width="12" height="12" rx="2" id="dma-0-q3"/>
+                                    </g>
+                                    <text x="45" y="60" class="state-label" text-anchor="middle" id="dma-0-bytes">0 KB</text>
+                                </g>
+
+                                <g id="dma-ch-1" class="dma-channel idle" transform="translate(100, 0)">
+                                    <rect x="0" y="0" width="90" height="65" rx="4"/>
+                                    <text x="45" y="14" class="component-label" text-anchor="middle">DMA 1</text>
+                                    <text x="45" y="28" class="state-label" text-anchor="middle" id="dma-1-state">IDLE</text>
+                                    <g transform="translate(5, 35)">
+                                        <rect class="dma-queue-slot" x="0" y="0" width="12" height="12" rx="2" id="dma-1-q0"/>
+                                        <rect class="dma-queue-slot" x="14" y="0" width="12" height="12" rx="2" id="dma-1-q1"/>
+                                        <rect class="dma-queue-slot" x="28" y="0" width="12" height="12" rx="2" id="dma-1-q2"/>
+                                        <rect class="dma-queue-slot" x="42" y="0" width="12" height="12" rx="2" id="dma-1-q3"/>
+                                    </g>
+                                    <text x="45" y="60" class="state-label" text-anchor="middle" id="dma-1-bytes">0 KB</text>
+                                </g>
+
+                                <g id="dma-ch-2" class="dma-channel idle" transform="translate(200, 0)">
+                                    <rect x="0" y="0" width="90" height="65" rx="4"/>
+                                    <text x="45" y="14" class="component-label" text-anchor="middle">DMA 2</text>
+                                    <text x="45" y="28" class="state-label" text-anchor="middle" id="dma-2-state">IDLE</text>
+                                    <g transform="translate(5, 35)">
+                                        <rect class="dma-queue-slot" x="0" y="0" width="12" height="12" rx="2" id="dma-2-q0"/>
+                                        <rect class="dma-queue-slot" x="14" y="0" width="12" height="12" rx="2" id="dma-2-q1"/>
+                                        <rect class="dma-queue-slot" x="28" y="0" width="12" height="12" rx="2" id="dma-2-q2"/>
+                                        <rect class="dma-queue-slot" x="42" y="0" width="12" height="12" rx="2" id="dma-2-q3"/>
+                                    </g>
+                                    <text x="45" y="60" class="state-label" text-anchor="middle" id="dma-2-bytes">0 KB</text>
+                                </g>
+
+                                <g id="dma-ch-3" class="dma-channel idle" transform="translate(300, 0)">
+                                    <rect x="0" y="0" width="90" height="65" rx="4"/>
+                                    <text x="45" y="14" class="component-label" text-anchor="middle">DMA 3</text>
+                                    <text x="45" y="28" class="state-label" text-anchor="middle" id="dma-3-state">IDLE</text>
+                                    <g transform="translate(5, 35)">
+                                        <rect class="dma-queue-slot" x="0" y="0" width="12" height="12" rx="2" id="dma-3-q0"/>
+                                        <rect class="dma-queue-slot" x="14" y="0" width="12" height="12" rx="2" id="dma-3-q1"/>
+                                        <rect class="dma-queue-slot" x="28" y="0" width="12" height="12" rx="2" id="dma-3-q2"/>
+                                        <rect class="dma-queue-slot" x="42" y="0" width="12" height="12" rx="2" id="dma-3-q3"/>
+                                    </g>
+                                    <text x="45" y="60" class="state-label" text-anchor="middle" id="dma-3-bytes">0 KB</text>
+                                </g>
+
+                                <g id="dma-ch-4" class="dma-channel idle" transform="translate(400, 0)">
+                                    <rect x="0" y="0" width="90" height="65" rx="4"/>
+                                    <text x="45" y="14" class="component-label" text-anchor="middle">DMA 4</text>
+                                    <text x="45" y="28" class="state-label" text-anchor="middle" id="dma-4-state">IDLE</text>
+                                    <g transform="translate(5, 35)">
+                                        <rect class="dma-queue-slot" x="0" y="0" width="12" height="12" rx="2" id="dma-4-q0"/>
+                                        <rect class="dma-queue-slot" x="14" y="0" width="12" height="12" rx="2" id="dma-4-q1"/>
+                                        <rect class="dma-queue-slot" x="28" y="0" width="12" height="12" rx="2" id="dma-4-q2"/>
+                                        <rect class="dma-queue-slot" x="42" y="0" width="12" height="12" rx="2" id="dma-4-q3"/>
+                                    </g>
+                                    <text x="45" y="60" class="state-label" text-anchor="middle" id="dma-4-bytes">0 KB</text>
+                                </g>
+
+                                <g id="dma-ch-5" class="dma-channel idle" transform="translate(500, 0)">
+                                    <rect x="0" y="0" width="90" height="65" rx="4"/>
+                                    <text x="45" y="14" class="component-label" text-anchor="middle">DMA 5</text>
+                                    <text x="45" y="28" class="state-label" text-anchor="middle" id="dma-5-state">IDLE</text>
+                                    <g transform="translate(5, 35)">
+                                        <rect class="dma-queue-slot" x="0" y="0" width="12" height="12" rx="2" id="dma-5-q0"/>
+                                        <rect class="dma-queue-slot" x="14" y="0" width="12" height="12" rx="2" id="dma-5-q1"/>
+                                        <rect class="dma-queue-slot" x="28" y="0" width="12" height="12" rx="2" id="dma-5-q2"/>
+                                        <rect class="dma-queue-slot" x="42" y="0" width="12" height="12" rx="2" id="dma-5-q3"/>
+                                    </g>
+                                    <text x="45" y="60" class="state-label" text-anchor="middle" id="dma-5-bytes">0 KB</text>
+                                </g>
+
+                                <g id="dma-ch-6" class="dma-channel idle" transform="translate(600, 0)">
+                                    <rect x="0" y="0" width="90" height="65" rx="4"/>
+                                    <text x="45" y="14" class="component-label" text-anchor="middle">DMA 6</text>
+                                    <text x="45" y="28" class="state-label" text-anchor="middle" id="dma-6-state">IDLE</text>
+                                    <g transform="translate(5, 35)">
+                                        <rect class="dma-queue-slot" x="0" y="0" width="12" height="12" rx="2" id="dma-6-q0"/>
+                                        <rect class="dma-queue-slot" x="14" y="0" width="12" height="12" rx="2" id="dma-6-q1"/>
+                                        <rect class="dma-queue-slot" x="28" y="0" width="12" height="12" rx="2" id="dma-6-q2"/>
+                                        <rect class="dma-queue-slot" x="42" y="0" width="12" height="12" rx="2" id="dma-6-q3"/>
+                                    </g>
+                                    <text x="45" y="60" class="state-label" text-anchor="middle" id="dma-6-bytes">0 KB</text>
+                                </g>
+
+                                <g id="dma-ch-7" class="dma-channel idle" transform="translate(700, 0)">
+                                    <rect x="0" y="0" width="90" height="65" rx="4"/>
+                                    <text x="45" y="14" class="component-label" text-anchor="middle">DMA 7</text>
+                                    <text x="45" y="28" class="state-label" text-anchor="middle" id="dma-7-state">IDLE</text>
+                                    <g transform="translate(5, 35)">
+                                        <rect class="dma-queue-slot" x="0" y="0" width="12" height="12" rx="2" id="dma-7-q0"/>
+                                        <rect class="dma-queue-slot" x="14" y="0" width="12" height="12" rx="2" id="dma-7-q1"/>
+                                        <rect class="dma-queue-slot" x="28" y="0" width="12" height="12" rx="2" id="dma-7-q2"/>
+                                        <rect class="dma-queue-slot" x="42" y="0" width="12" height="12" rx="2" id="dma-7-q3"/>
+                                    </g>
+                                    <text x="45" y="60" class="state-label" text-anchor="middle" id="dma-7-bytes">0 KB</text>
+                                </g>
+                            </g>
+                        </g>
+
+                        <!-- ============================================ -->
+                        <!-- DATA PATH ARROWS (DDR -> MC -> DMA -> L3) -->
+                        <!-- ============================================ -->
+                        <g id="data-paths">
+                            <!-- DDR to MC paths -->
+                            <path class="data-path" d="M 95 70 L 95 85" id="path-ddr-mc-0"/>
+                            <path class="data-path" d="M 195 70 L 195 85" id="path-ddr-mc-1"/>
+                            <path class="data-path" d="M 295 70 L 295 85" id="path-ddr-mc-2"/>
+                            <path class="data-path" d="M 395 70 L 395 85" id="path-ddr-mc-3"/>
+                            <path class="data-path" d="M 495 70 L 495 85" id="path-ddr-mc-4"/>
+                            <path class="data-path" d="M 595 70 L 595 85" id="path-ddr-mc-5"/>
+                            <path class="data-path" d="M 695 70 L 695 85" id="path-ddr-mc-6"/>
+                            <path class="data-path" d="M 795 70 L 795 85" id="path-ddr-mc-7"/>
+
+                            <!-- MC to DMA paths -->
+                            <path class="data-path" d="M 95 175 L 95 200" id="path-mc-dma-0"/>
+                            <path class="data-path" d="M 195 175 L 195 200" id="path-mc-dma-1"/>
+                            <path class="data-path" d="M 295 175 L 295 200" id="path-mc-dma-2"/>
+                            <path class="data-path" d="M 395 175 L 395 200" id="path-mc-dma-3"/>
+                            <path class="data-path" d="M 495 175 L 495 200" id="path-mc-dma-4"/>
+                            <path class="data-path" d="M 595 175 L 595 200" id="path-mc-dma-5"/>
+                            <path class="data-path" d="M 695 175 L 695 200" id="path-mc-dma-6"/>
+                            <path class="data-path" d="M 795 175 L 795 200" id="path-mc-dma-7"/>
+
+                            <!-- DMA to L3 edge paths (will be updated based on mesh size) -->
+                            <g id="dma-to-l3-paths"></g>
+                        </g>
+
+                        <!-- ============================================ -->
+                        <!-- L3 MESH - Bottom Section (4x4) -->
+                        <!-- ============================================ -->
+                        <g id="l3-mesh" transform="translate(150, 310)">
+                            <text x="250" y="-5" class="component-label" text-anchor="middle" style="font-size:11px;">
+                                L3 Tile Mesh (Checkerboard Array Edge)
+                            </text>
+                            <g id="l3-tiles"></g>
+                            <g id="l3-transfers"></g>
+                            <g id="moving-tensors"></g>
+                        </g>
+
+                        <!-- Data packets (animated) -->
+                        <g id="data-packets"></g>
+                    </svg>
+
+                    <div class="legend">
+                        <div class="legend-item">
+                            <div class="legend-color" style="background: #FF6B6B;"></div>
+                            <span>Tensor A</span>
+                        </div>
+                        <div class="legend-item">
+                            <div class="legend-color" style="background: #4ECDC4;"></div>
+                            <span>Tensor B</span>
+                        </div>
+                        <div class="legend-item">
+                            <div class="legend-color" style="background: #FFE66D;"></div>
+                            <span>Tensor C</span>
+                        </div>
+                        <div class="legend-item">
+                            <div class="legend-color" style="background: #4a6a4a;"></div>
+                            <span>Bank Open</span>
+                        </div>
+                        <div class="legend-item">
+                            <div class="legend-color" style="background: #6a4a4a;"></div>
+                            <span>Bank Conflict</span>
+                        </div>
+                        <div class="legend-item">
+                            <div class="legend-color" style="background: #5a5a3a;"></div>
+                            <span>DMA Fetching</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="controls-column">
+                <div class="panel">
+                    <div class="file-input-wrapper">
+                        <input type="file" id="trace-file" class="file-input" accept=".csv,.json">
+                        <label for="trace-file" class="file-label">Load Trace File</label>
+                        <div class="drop-hint">or drag &amp; drop a .json/.csv file here</div>
+                    </div>
+                    <div id="load-status" style="text-align: center; font-size: 0.8em; color: #4CAF50; display: none;"></div>
+                    <div style="text-align: center; margin-top: 8px;">
+                        <button class="btn btn-secondary" id="btn-load-demo" style="font-size: 0.75em; padding: 6px 12px;">
+                            Load Demo Trace
+                        </button>
+                    </div>
+                </div>
+
+                <div class="panel">
+                    <div class="panel-title">Playback</div>
+                    <div class="play-controls">
+                        <button class="btn btn-secondary" id="btn-reset">&#8634;</button>
+                        <button class="btn btn-secondary" id="btn-step-back">&#9664;&#9664;</button>
+                        <button class="btn" id="btn-play">&#9654; Play</button>
+                        <button class="btn btn-secondary" id="btn-step">&#9654;&#9654;</button>
+                    </div>
+                    <div class="current-cycle">Cycle: <span id="cycle-counter">0</span></div>
+                    <div class="timeline" id="timeline">
+                        <div class="timeline-progress" id="timeline-progress"></div>
+                        <div class="timeline-cursor" id="timeline-cursor"></div>
+                    </div>
+                    <div class="speed-control">
+                        <span>Speed:</span>
+                        <input type="range" id="speed-slider" min="1" max="100" value="30">
+                        <span id="speed-value">1x</span>
+                    </div>
+                    <div class="keyboard-hint">
+                        <span title="Space=Play/Pause, ←→=Step, R=Reset, Home/End=Jump">⌨ Space, ←→, R, Home, End</span>
+                    </div>
+                </div>
+
+                <div class="panel">
+                    <div class="panel-title">Memory Controller</div>
+                    <div class="state-display">
+                        <div class="state-item">
+                            <div class="state-item-label">Banks Open</div>
+                            <div class="state-item-value" id="mc-banks-open">0</div>
+                        </div>
+                        <div class="state-item">
+                            <div class="state-item-label">Page Hits</div>
+                            <div class="state-item-value" id="mc-page-hits">0</div>
+                        </div>
+                        <div class="state-item">
+                            <div class="state-item-label">Conflicts</div>
+                            <div class="state-item-value" id="mc-conflicts">0</div>
+                        </div>
+                        <div class="state-item">
+                            <div class="state-item-label">Bandwidth</div>
+                            <div class="state-item-value" id="mc-bandwidth">0 GB/s</div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="panel">
+                    <div class="panel-title">DMA Status</div>
+                    <div class="state-display">
+                        <div class="state-item">
+                            <div class="state-item-label">Active Ch.</div>
+                            <div class="state-item-value" id="dma-active">0</div>
+                        </div>
+                        <div class="state-item">
+                            <div class="state-item-label">Pending</div>
+                            <div class="state-item-value" id="dma-pending">0</div>
+                        </div>
+                        <div class="state-item">
+                            <div class="state-item-label">Completed</div>
+                            <div class="state-item-value" id="dma-completed">0</div>
+                        </div>
+                        <div class="state-item">
+                            <div class="state-item-label">Stalls</div>
+                            <div class="state-item-value" id="dma-stalls">0</div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="panel">
+                    <div class="panel-title">Statistics</div>
+                    <div class="stats-grid">
+                        <div class="stat-card">
+                            <div class="stat-value" id="stat-tiles-loaded">0</div>
+                            <div class="stat-label">Tiles Loaded</div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-value" id="stat-bytes-total">0</div>
+                            <div class="stat-label">KB Transferred</div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-value" id="stat-l3-transfers">0</div>
+                            <div class="stat-label">L3 Transfers</div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-value" id="stat-utilization">0%</div>
+                            <div class="stat-label">Utilization</div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="panel">
+                    <div class="panel-title">Event Log</div>
+                    <div class="event-log" id="event-log"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // ================================================================
+        // Configuration
+        // ================================================================
+        const MESH_ROWS = 4;
+        const MESH_COLS = 4;
+        const NUM_DMA_CHANNELS = 8;
+        const NUM_MEMORY_BANKS = 8;
+        const TILE_SIZE = 90;
+        const TILE_GAP = 15;
+        const TENSOR_SIZE = 20;
+
+        // ================================================================
+        // State
+        // ================================================================
+        let events = [];
+        let currentCycle = 0;
+        let maxCycle = 5000;
+        let isPlaying = false;
+        let playbackSpeed = 30;
+        let animationFrame = null;
+        let lastFrameTime = 0;
+
+        // Component states
+        let memoryBanks = Array(NUM_MEMORY_BANKS).fill().map(() => ({
+            state: 'idle',
+            openRow: null,
+            lastAccess: 0
+        }));
+
+        let memoryController = {
+            arbiterState: 'idle',
+            pendingRequests: 0,
+            pageBuffers: Array(4).fill().map(() => ({ row: null, fill: 0 })),
+            readQueueFill: 0,
+            writeQueueFill: 0,
+            bandwidth: 0,
+            pageHits: 0,
+            conflicts: 0
+        };
+
+        let dmaChannels = Array(NUM_DMA_CHANNELS).fill().map(() => ({
+            state: 'idle',
+            queueFill: 0,
+            bytesTransferred: 0,
+            targetL3: null,
+            tensor: null
+        }));
+
+        let l3TileState = {};
+        for (let i = 0; i < 16; i++) {
+            l3TileState[i] = { tensors: new Set(), receiving: false };
+        }
+
+        let stats = {
+            tilesLoaded: 0,
+            bytesTotal: 0,
+            l3Transfers: 0,
+            dmaStalls: 0,
+            dmaCompleted: 0
+        };
+
+        // Tensor names and colors
+        const TENSOR_NAMES = { 0: 'A', 1: 'B', 2: 'C', 3: 'Bias' };
+        const TENSOR_COLORS = {
+            0: '#FF6B6B',
+            1: '#4ECDC4',
+            2: '#FFE66D',
+            3: '#9B59B6'
+        };
+
+        // ================================================================
+        // Initialize SVG Components
+        // ================================================================
+        function initL3Mesh() {
+            const tilesGroup = document.getElementById('l3-tiles');
+            tilesGroup.innerHTML = '';
+
+            for (let row = 0; row < MESH_ROWS; row++) {
+                for (let col = 0; col < MESH_COLS; col++) {
+                    const id = row * MESH_COLS + col;
+                    const x = col * (TILE_SIZE + TILE_GAP);
+                    const y = row * (TILE_SIZE + TILE_GAP);
+
+                    const tile = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+                    tile.classList.add('l3-tile');
+                    tile.id = `l3-tile-${id}`;
+                    tile.setAttribute('transform', `translate(${x}, ${y})`);
+
+                    // Background
+                    const bg = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+                    bg.classList.add('l3-tile-bg');
+                    bg.setAttribute('width', TILE_SIZE);
+                    bg.setAttribute('height', TILE_SIZE);
+                    bg.setAttribute('rx', 6);
+
+                    // Label
+                    const label = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+                    label.classList.add('component-label');
+                    label.setAttribute('x', TILE_SIZE / 2);
+                    label.setAttribute('y', 12);
+                    label.setAttribute('text-anchor', 'middle');
+                    label.textContent = `L3[${row},${col}]`;
+
+                    // Tensor container
+                    const tensorGroup = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+                    tensorGroup.id = `tensors-${id}`;
+                    tensorGroup.setAttribute('transform', 'translate(5, 18)');
+
+                    tile.appendChild(bg);
+                    tile.appendChild(label);
+                    tile.appendChild(tensorGroup);
+                    tilesGroup.appendChild(tile);
+                }
+            }
+
+            // Create DMA to L3 edge paths
+            initDMAToL3Paths();
+        }
+
+        function initDMAToL3Paths() {
+            const pathsGroup = document.getElementById('dma-to-l3-paths');
+            pathsGroup.innerHTML = '';
+
+            // DMA channels connect to edge L3 tiles
+            // Channels 0-3 connect to left column (L3 0, 4, 8, 12)
+            // Channels 4-7 connect to top row (L3 0, 1, 2, 3)
+            const dmaToL3Map = [
+                { dma: 0, l3: 0 },  // A tiles to column 0
+                { dma: 1, l3: 4 },
+                { dma: 2, l3: 8 },
+                { dma: 3, l3: 12 },
+                { dma: 4, l3: 0 },  // B tiles to row 0
+                { dma: 5, l3: 1 },
+                { dma: 6, l3: 2 },
+                { dma: 7, l3: 3 }
+            ];
+
+            dmaToL3Map.forEach(({dma, l3}) => {
+                const dmaX = 95 + dma * 100;
+                const dmaY = 280;
+                const l3Row = Math.floor(l3 / MESH_COLS);
+                const l3Col = l3 % MESH_COLS;
+                const l3X = 150 + l3Col * (TILE_SIZE + TILE_GAP) + TILE_SIZE / 2;
+                const l3Y = 310;
+
+                const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+                path.classList.add('data-path');
+                path.id = `path-dma-l3-${dma}`;
+                path.setAttribute('d', `M ${dmaX} ${dmaY} Q ${dmaX} ${(dmaY + l3Y) / 2} ${l3X} ${l3Y}`);
+                pathsGroup.appendChild(path);
+            });
+        }
+
+        // ================================================================
+        // State Update Functions
+        // ================================================================
+        function updateMemoryBankDisplay(bankId) {
+            const bank = memoryBanks[bankId];
+            if (!bank) return;
+
+            const elem = document.getElementById(`bank-${bankId}`);
+            if (elem) {
+                elem.classList.remove('idle', 'open', 'conflict', 'refresh', 'active');
+                elem.classList.add(bank.state);
+            }
+
+            const stateLabels = {
+                'idle': 'IDLE',
+                'open': `ROW ${bank.openRow}`,
+                'conflict': 'CONFLICT',
+                'refresh': 'REFRESH'
+            };
+            const stateText = document.getElementById(`bank-${bankId}-state`);
+            if (stateText) stateText.textContent = stateLabels[bank.state] || bank.state.toUpperCase();
+        }
+
+        function updateMemoryControllerDisplay() {
+            const mc = memoryController;
+
+            // Arbiter
+            const arbiter = document.getElementById('bank-arbiter');
+            if (arbiter) {
+                arbiter.classList.toggle('busy', mc.arbiterState === 'busy');
+            }
+            const arbiterState = document.getElementById('arbiter-state');
+            if (arbiterState) arbiterState.textContent = mc.arbiterState.toUpperCase();
+            const arbiterPending = document.getElementById('arbiter-pending');
+            if (arbiterPending) arbiterPending.textContent = `Pending: ${mc.pendingRequests}`;
+
+            // Page buffers
+            mc.pageBuffers.forEach((pb, i) => {
+                const elem = document.getElementById(`page-buf-${i}`);
+                if (elem) elem.classList.toggle('filled', pb.fill > 50);
+                const rowElem = document.getElementById(`pb${i}-row`);
+                if (rowElem) rowElem.textContent = pb.row !== null ? `Row: ${pb.row}` : 'Row: --';
+                const fillElem = document.getElementById(`pb${i}-fill`);
+                if (fillElem) fillElem.textContent = `${pb.fill}%`;
+            });
+
+            // Queues
+            const readQueue = document.getElementById('read-queue-fill');
+            if (readQueue) readQueue.textContent = `Read: ${mc.readQueueFill}/8`;
+            const writeQueue = document.getElementById('write-queue-fill');
+            if (writeQueue) writeQueue.textContent = `Write: ${mc.writeQueueFill}/8`;
+
+            // Bandwidth bar
+            const bwPercent = Math.min(100, (mc.bandwidth / 50) * 100);  // Assume 50 GB/s max
+            const bwBar = document.getElementById('mc-bw-bar');
+            if (bwBar) bwBar.setAttribute('width', (bwPercent * 76 / 100));
+            const bwText = document.getElementById('mc-bw-text');
+            if (bwText) bwText.textContent = `${mc.bandwidth.toFixed(1)} GB/s`;
+
+            // Stats panel
+            const banksOpen = document.getElementById('mc-banks-open');
+            if (banksOpen) banksOpen.textContent = memoryBanks.filter(b => b.state === 'open').length;
+            const pageHits = document.getElementById('mc-page-hits');
+            if (pageHits) pageHits.textContent = mc.pageHits;
+            const conflicts = document.getElementById('mc-conflicts');
+            if (conflicts) conflicts.textContent = mc.conflicts;
+            const bandwidth = document.getElementById('mc-bandwidth');
+            if (bandwidth) bandwidth.textContent = `${mc.bandwidth.toFixed(1)} GB/s`;
+        }
+
+        function updateDMAChannelDisplay(channelId) {
+            const ch = dmaChannels[channelId];
+            if (!ch) return;
+
+            const elem = document.getElementById(`dma-ch-${channelId}`);
+            if (elem) {
+                elem.classList.remove('idle', 'fetching', 'transferring', 'stalled', 'done');
+                elem.classList.add(ch.state);
+            }
+
+            const stateElem = document.getElementById(`dma-${channelId}-state`);
+            if (stateElem) stateElem.textContent = ch.state.toUpperCase();
+            const bytesElem = document.getElementById(`dma-${channelId}-bytes`);
+            if (bytesElem) bytesElem.textContent = `${(ch.bytesTransferred / 1024).toFixed(0)} KB`;
+
+            // Queue slots
+            for (let q = 0; q < 4; q++) {
+                const slot = document.getElementById(`dma-${channelId}-q${q}`);
+                if (slot) slot.classList.toggle('filled', q < ch.queueFill);
+            }
+        }
+
+        function updateDMAStatsDisplay() {
+            const active = dmaChannels.filter(ch => ch.state !== 'idle' && ch.state !== 'done').length;
+            const pending = dmaChannels.reduce((sum, ch) => sum + ch.queueFill, 0);
+
+            const activeElem = document.getElementById('dma-active');
+            if (activeElem) activeElem.textContent = active;
+            const pendingElem = document.getElementById('dma-pending');
+            if (pendingElem) pendingElem.textContent = pending;
+            const completedElem = document.getElementById('dma-completed');
+            if (completedElem) completedElem.textContent = stats.dmaCompleted;
+            const stallsElem = document.getElementById('dma-stalls');
+            if (stallsElem) stallsElem.textContent = stats.dmaStalls;
+        }
+
+        function updateTileTensors(tileId) {
+            const tensorGroup = document.getElementById(`tensors-${tileId}`);
+            if (!tensorGroup) return;
+
+            tensorGroup.innerHTML = '';
+            const state = l3TileState[tileId];
+            let index = 0;
+
+            for (const tensorKey of state.tensors) {
+                const [tensor, m, n, k] = tensorKey.split(',').map(Number);
+                const row = Math.floor(index / 4);
+                const col = index % 4;
+
+                const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+                rect.setAttribute('x', col * (TENSOR_SIZE + 2));
+                rect.setAttribute('y', row * (TENSOR_SIZE + 2));
+                rect.setAttribute('width', TENSOR_SIZE);
+                rect.setAttribute('height', TENSOR_SIZE);
+                rect.setAttribute('rx', 3);
+                rect.setAttribute('fill', TENSOR_COLORS[tensor] || '#666');
+
+                const text = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+                text.setAttribute('x', col * (TENSOR_SIZE + 2) + TENSOR_SIZE / 2);
+                text.setAttribute('y', row * (TENSOR_SIZE + 2) + TENSOR_SIZE / 2 + 3);
+                text.setAttribute('text-anchor', 'middle');
+                text.setAttribute('fill', '#000');
+                text.setAttribute('font-size', '8px');
+                text.setAttribute('font-weight', 'bold');
+                text.textContent = TENSOR_NAMES[tensor] || '?';
+
+                tensorGroup.appendChild(rect);
+                tensorGroup.appendChild(text);
+                index++;
+            }
+        }
+
+        function updateL3TileReceiving(tileId, receiving) {
+            const tile = document.getElementById(`l3-tile-${tileId}`);
+            if (tile) {
+                tile.classList.toggle('receiving', receiving);
+                l3TileState[tileId].receiving = receiving;
+            }
+        }
+
+        function updateStats() {
+            const tilesLoaded = document.getElementById('stat-tiles-loaded');
+            if (tilesLoaded) tilesLoaded.textContent = stats.tilesLoaded;
+            const bytesTotal = document.getElementById('stat-bytes-total');
+            if (bytesTotal) bytesTotal.textContent = Math.floor(stats.bytesTotal / 1024);
+            const l3Transfers = document.getElementById('stat-l3-transfers');
+            if (l3Transfers) l3Transfers.textContent = stats.l3Transfers;
+
+            const totalTime = currentCycle || 1;
+            const utilization = (stats.bytesTotal / (totalTime * 50)) * 100;  // Assume 50 bytes/cycle max
+            const utilizationElem = document.getElementById('stat-utilization');
+            if (utilizationElem) utilizationElem.textContent = `${Math.min(100, utilization).toFixed(0)}%`;
+        }
+
+        function setDataPathActive(pathId, active) {
+            const path = document.getElementById(pathId);
+            if (path) {
+                path.classList.toggle('active', active);
+            }
+        }
+
+        // ================================================================
+        // Event Processing
+        // ================================================================
+        function processEvent(event) {
+            const tensorKey = `${event.tensor},${event.m_tile},${event.n_tile},${event.k_tile}`;
+
+            switch (event.event_type) {
+                // Memory Controller events - C++ and legacy formats
+                case 'MC_BANK_OPEN':
+                case 'MC_BANK_ACTIVATE':
+                    memoryBanks[event.bank_id].state = 'open';
+                    memoryBanks[event.bank_id].openRow = event.row;
+                    updateMemoryBankDisplay(event.bank_id);
+                    setDataPathActive(`path-ddr-mc-${event.bank_id}`, true);
+                    addEventToLog(event, 'mc');
+                    break;
+
+                case 'MC_BANK_CONFLICT':
+                case 'MC_PAGE_CONFLICT':
+                    memoryBanks[event.bank_id].state = 'conflict';
+                    memoryController.conflicts++;
+                    updateMemoryBankDisplay(event.bank_id);
+                    addEventToLog(event, 'error');
+                    break;
+
+                case 'MC_PAGE_HIT':
+                    memoryController.pageHits++;
+                    updateMemoryControllerDisplay();
+                    break;
+
+                case 'MC_READ_ISSUE':
+                case 'MC_WRITE_ISSUE':
+                    // Memory controller issued read/write command
+                    setDataPathActive(`path-ddr-mc-${event.bank_id}`, true);
+                    break;
+
+                case 'MC_READ_COMPLETE':
+                case 'MC_WRITE_COMPLETE':
+                case 'MC_BANK_PRECHARGE':
+                    memoryBanks[event.bank_id].state = 'idle';
+                    updateMemoryBankDisplay(event.bank_id);
+                    setDataPathActive(`path-ddr-mc-${event.bank_id}`, false);
+                    break;
+
+                case 'MC_REFRESH_START':
+                    // Mark all banks as refreshing
+                    for (let i = 0; i < 8; i++) {
+                        memoryBanks[i].state = 'refresh';
+                        updateMemoryBankDisplay(i);
+                    }
+                    break;
+
+                case 'MC_REFRESH_COMPLETE':
+                    // Mark all banks as idle after refresh
+                    for (let i = 0; i < 8; i++) {
+                        memoryBanks[i].state = 'idle';
+                        updateMemoryBankDisplay(i);
+                    }
+                    break;
+
+                case 'MC_QUEUE_FULL':
+                    addEventToLog(event, 'error');
+                    break;
+
+                case 'DMA_REQUEST':
+                    dmaChannels[event.dma_channel].queueFill++;
+                    dmaChannels[event.dma_channel].state = 'fetching';
+                    dmaChannels[event.dma_channel].targetL3 = event.l3_id;
+                    dmaChannels[event.dma_channel].tensor = event.tensor;
+                    updateDMAChannelDisplay(event.dma_channel);
+                    setDataPathActive(`path-mc-dma-${event.dma_channel}`, true);
+                    addEventToLog(event, 'dma');
+                    break;
+
+                case 'DMA_TRANSFER_START':
+                case 'DMA_LOAD_START':
+                case 'DMA_STORE_START':
+                    dmaChannels[event.dma_channel].state = 'transferring';
+                    updateDMAChannelDisplay(event.dma_channel);
+                    updateL3TileReceiving(event.l3_id, true);
+                    setDataPathActive(`path-dma-l3-${event.dma_channel}`, true);
+                    break;
+
+                case 'DMA_TRANSFER_COMPLETE':
+                case 'DMA_LOAD_COMPLETE':
+                case 'DMA_STORE_COMPLETE':
+                    dmaChannels[event.dma_channel].bytesTransferred += event.bytes || 4096;
+                    dmaChannels[event.dma_channel].queueFill = Math.max(0, dmaChannels[event.dma_channel].queueFill - 1);
+
+                    if (dmaChannels[event.dma_channel].queueFill === 0) {
+                        dmaChannels[event.dma_channel].state = 'done';
+                    }
+
+                    stats.dmaCompleted++;
+                    stats.tilesLoaded++;
+                    stats.bytesTotal += event.bytes || 4096;
+
+                    updateDMAChannelDisplay(event.dma_channel);
+                    updateL3TileReceiving(event.l3_id, false);
+                    setDataPathActive(`path-dma-l3-${event.dma_channel}`, false);
+                    setDataPathActive(`path-mc-dma-${event.dma_channel}`, false);
+
+                    // Add tensor to L3 tile
+                    l3TileState[event.l3_id].tensors.add(tensorKey);
+                    updateTileTensors(event.l3_id);
+                    addEventToLog(event, 'l3');
+                    break;
+
+                case 'DMA_STALL':
+                    dmaChannels[event.dma_channel].state = 'stalled';
+                    stats.dmaStalls++;
+                    updateDMAChannelDisplay(event.dma_channel);
+                    addEventToLog(event, 'error');
+                    break;
+
+                case 'L3_SEND_START':
+                    stats.l3Transfers++;
+                    updateL3TileReceiving(event.src_l3, true);
+                    updateL3TileReceiving(event.dst_l3, true);
+                    addEventToLog(event, 'l3');
+                    break;
+
+                case 'L3_SEND_COMPLETE':
+                case 'L3_RECEIVE':
+                    // Tensor arrives at destination
+                    l3TileState[event.dst_l3 || event.l3_id].tensors.add(tensorKey);
+                    updateTileTensors(event.dst_l3 || event.l3_id);
+                    updateL3TileReceiving(event.dst_l3 || event.l3_id, false);
+                    if (event.src_l3 !== undefined) {
+                        updateL3TileReceiving(event.src_l3, false);
+                    }
+                    break;
+
+                case 'L3_TO_L2_START':
+                    // Tensor being pushed to L2, highlight the tile
+                    const tile = document.getElementById(`l3-tile-${event.l3_id}`);
+                    if (tile) tile.classList.add('active');
+                    break;
+
+                case 'L3_TO_L2_COMPLETE':
+                    // Tensor consumed, remove from L3
+                    l3TileState[event.l3_id].tensors.delete(tensorKey);
+                    updateTileTensors(event.l3_id);
+                    const tile2 = document.getElementById(`l3-tile-${event.l3_id}`);
+                    if (tile2) tile2.classList.remove('active');
+                    break;
+
+                case 'BARRIER_START':
+                case 'BARRIER_COMPLETE':
+                    // Barrier synchronization - log only
+                    addEventToLog(event, 'info');
+                    break;
+
+                case 'DMA_IDLE':
+                case 'DMA_CHANNEL_IDLE':
+                    dmaChannels[event.dma_channel].state = 'idle';
+                    updateDMAChannelDisplay(event.dma_channel);
+                    break;
+            }
+
+            updateDMAStatsDisplay();
+            updateMemoryControllerDisplay();
+            updateStats();
+        }
+
+        function addEventToLog(event, type) {
+            const log = document.getElementById('event-log');
+            const entry = document.createElement('div');
+            entry.classList.add('event-log-entry', type);
+
+            let text = `[${event.cycle}] `;
+            switch (event.event_type) {
+                case 'MC_BANK_OPEN':
+                case 'MC_BANK_ACTIVATE':
+                    text += `MC: Bank ${event.bank_id} open (row ${event.row})`;
+                    break;
+                case 'MC_BANK_CONFLICT':
+                case 'MC_PAGE_CONFLICT':
+                    text += `MC: Bank ${event.bank_id} CONFLICT`;
+                    break;
+                case 'MC_PAGE_HIT':
+                    text += `MC: Bank ${event.bank_id} page hit (row ${event.row})`;
+                    break;
+                case 'MC_READ_ISSUE':
+                    text += `MC: Bank ${event.bank_id} read issued`;
+                    break;
+                case 'MC_REFRESH_START':
+                    text += `MC: Refresh started`;
+                    break;
+                case 'MC_QUEUE_FULL':
+                    text += `MC: Queue FULL - stall`;
+                    break;
+                case 'DMA_REQUEST':
+                    text += `DMA ${event.dma_channel}: Request ${TENSOR_NAMES[event.tensor]}[${event.m_tile},${event.n_tile}]`;
+                    break;
+                case 'DMA_TRANSFER_COMPLETE':
+                case 'DMA_LOAD_COMPLETE':
+                case 'DMA_STORE_COMPLETE':
+                    text += `DMA ${event.dma_channel}: → L3[${event.l3_id}] complete`;
+                    break;
+                case 'DMA_STALL':
+                    text += `DMA ${event.dma_channel}: STALL`;
+                    break;
+                case 'L3_SEND_START':
+                    text += `L3[${event.src_l3}]→L3[${event.dst_l3}]: ${TENSOR_NAMES[event.tensor]}[${event.m_tile},${event.n_tile}]`;
+                    break;
+                case 'L3_RECEIVE':
+                    text += `L3[${event.l3_id}] received ${TENSOR_NAMES[event.tensor]}`;
+                    break;
+                case 'L3_TO_L2_START':
+                    text += `L3[${event.l3_id}]→L2: ${TENSOR_NAMES[event.tensor]}`;
+                    break;
+                case 'BARRIER_START':
+                    text += `Barrier started (k=${event.k_tile || '?'})`;
+                    break;
+                case 'BARRIER_COMPLETE':
+                    text += `Barrier complete`;
+                    break;
+                case 'TRACE_LOADED':
+                    text = `Trace loaded - click Play or use arrow keys`;
+                    break;
+                case 'WELCOME':
+                    text = `Load a trace file to begin visualization`;
+                    break;
+                default:
+                    text += `${event.event_type}`;
+            }
+
+            entry.textContent = text;
+            log.appendChild(entry);
+            log.scrollTop = log.scrollHeight;
+
+            while (log.children.length > 40) {
+                log.removeChild(log.firstChild);
+            }
+        }
+
+        // ================================================================
+        // Timeline and Playback
+        // ================================================================
+        function updateTimeline() {
+            const progress = maxCycle > 0 ? (currentCycle / maxCycle) * 100 : 0;
+            const progressElem = document.getElementById('timeline-progress');
+            if (progressElem) progressElem.style.width = `${progress}%`;
+            const cursorElem = document.getElementById('timeline-cursor');
+            if (cursorElem) cursorElem.style.left = `${progress}%`;
+            const counterElem = document.getElementById('cycle-counter');
+            if (counterElem) counterElem.textContent = currentCycle;
+        }
+
+        function resetState() {
+            currentCycle = 0;
+            stats = { tilesLoaded: 0, bytesTotal: 0, l3Transfers: 0, dmaStalls: 0, dmaCompleted: 0 };
+
+            memoryBanks.forEach((_, i) => {
+                memoryBanks[i] = { state: 'idle', openRow: null, lastAccess: 0 };
+                updateMemoryBankDisplay(i);
+            });
+
+            memoryController = {
+                arbiterState: 'idle',
+                pendingRequests: 0,
+                pageBuffers: Array(4).fill().map(() => ({ row: null, fill: 0 })),
+                readQueueFill: 0,
+                writeQueueFill: 0,
+                bandwidth: 0,
+                pageHits: 0,
+                conflicts: 0
+            };
+            updateMemoryControllerDisplay();
+
+            dmaChannels.forEach((_, i) => {
+                dmaChannels[i] = { state: 'idle', queueFill: 0, bytesTransferred: 0, targetL3: null, tensor: null };
+                updateDMAChannelDisplay(i);
+            });
+            updateDMAStatsDisplay();
+
+            for (let i = 0; i < 16; i++) {
+                l3TileState[i] = { tensors: new Set(), receiving: false };
+                updateTileTensors(i);
+                updateL3TileReceiving(i, false);
+            }
+
+            // Clear active paths
+            document.querySelectorAll('.data-path').forEach(p => p.classList.remove('active'));
+
+            document.getElementById('event-log').innerHTML = '';
+            updateStats();
+            updateTimeline();
+        }
+
+        function advanceCycles(n) {
+            const targetCycle = Math.min(currentCycle + n, maxCycle);
+
+            for (const event of events) {
+                // Use >= for currentCycle to include events at the starting cycle
+                if (event.cycle >= currentCycle && event.cycle <= targetCycle) {
+                    // But don't re-process events we've already seen
+                    if (event.cycle > currentCycle || currentCycle === 0) {
+                        processEvent(event);
+                    }
+                }
+            }
+
+            currentCycle = targetCycle;
+            updateTimeline();
+        }
+
+        // Process all events at cycle 0 after loading/reset
+        function processInitialEvents() {
+            for (const event of events) {
+                if (event.cycle === 0) {
+                    processEvent(event);
+                }
+            }
+        }
+
+        function animate(timestamp) {
+            if (!isPlaying) return;
+
+            const elapsed = timestamp - lastFrameTime;
+            const cyclesPerSecond = playbackSpeed * 30;
+            const cyclesToAdvance = Math.floor(elapsed * cyclesPerSecond / 1000);
+
+            if (cyclesToAdvance > 0) {
+                lastFrameTime = timestamp;
+                advanceCycles(cyclesToAdvance);
+            }
+
+            if (currentCycle < maxCycle) {
+                animationFrame = requestAnimationFrame(animate);
+            } else {
+                stopPlayback();
+            }
+        }
+
+        function startPlayback() {
+            isPlaying = true;
+            lastFrameTime = performance.now();
+            document.getElementById('btn-play').innerHTML = '&#10074;&#10074; Pause';
+            animationFrame = requestAnimationFrame(animate);
+        }
+
+        function stopPlayback() {
+            isPlaying = false;
+            document.getElementById('btn-play').innerHTML = '&#9654; Play';
+            if (animationFrame) cancelAnimationFrame(animationFrame);
+        }
+
+        function togglePlayback() {
+            if (events.length === 0) {
+                alert('Please load a trace file first');
+                return;
+            }
+            if (isPlaying) {
+                stopPlayback();
+            } else {
+                if (currentCycle >= maxCycle) resetState();
+                startPlayback();
+            }
+        }
+
+        function stepToNextEvent() {
+            const nextEvent = events.find(e => e.cycle > currentCycle);
+            if (nextEvent) {
+                advanceCycles(nextEvent.cycle - currentCycle);
+            }
+        }
+
+        function stepToPrevEvent() {
+            // Find the latest event before current cycle
+            const prevEvents = events.filter(e => e.cycle < currentCycle);
+            if (prevEvents.length === 0) {
+                // Already at the beginning
+                return;
+            }
+
+            // Get the cycle of the previous event
+            const prevCycle = Math.max(...prevEvents.map(e => e.cycle));
+
+            // Reset and replay to that point
+            resetState();
+            if (prevCycle > 0) {
+                advanceCycles(prevCycle);
+            } else {
+                processInitialEvents();
+            }
+        }
+
+        // ================================================================
+        // Demo Data Generation
+        // ================================================================
+        function generateDemoData() {
+            const demoEvents = [];
+            let cycle = 0;
+
+            // Simulate loading A tiles via DMA 0-3 and B tiles via DMA 4-7
+            for (let k = 0; k < 4; k++) {
+                // A tiles to left column
+                for (let row = 0; row < 4; row++) {
+                    const dmaChannel = row;
+                    const l3Id = row * 4;
+                    const bankId = (row + k) % 8;
+
+                    // Bank open
+                    demoEvents.push({
+                        cycle: cycle,
+                        event_type: 'MC_BANK_OPEN',
+                        bank_id: bankId,
+                        row: k * 100 + row
+                    });
+
+                    // DMA request
+                    demoEvents.push({
+                        cycle: cycle + 5,
+                        event_type: 'DMA_REQUEST',
+                        dma_channel: dmaChannel,
+                        l3_id: l3Id,
+                        tensor: 0,
+                        m_tile: row, n_tile: 0, k_tile: k
+                    });
+
+                    // Transfer start
+                    demoEvents.push({
+                        cycle: cycle + 20,
+                        event_type: 'DMA_TRANSFER_START',
+                        dma_channel: dmaChannel,
+                        l3_id: l3Id
+                    });
+
+                    // Occasional stall for realism
+                    if (k === 2 && row === 1) {
+                        demoEvents.push({
+                            cycle: cycle + 30,
+                            event_type: 'DMA_STALL',
+                            dma_channel: dmaChannel
+                        });
+                    }
+
+                    // Transfer complete
+                    demoEvents.push({
+                        cycle: cycle + 80,
+                        event_type: 'DMA_TRANSFER_COMPLETE',
+                        dma_channel: dmaChannel,
+                        l3_id: l3Id,
+                        tensor: 0,
+                        m_tile: row, n_tile: 0, k_tile: k,
+                        bytes: 4096
+                    });
+
+                    // Bank close
+                    demoEvents.push({
+                        cycle: cycle + 85,
+                        event_type: 'MC_READ_COMPLETE',
+                        bank_id: bankId
+                    });
+                }
+
+                // B tiles to top row
+                for (let col = 0; col < 4; col++) {
+                    const dmaChannel = 4 + col;
+                    const l3Id = col;
+                    const bankId = (col + k + 4) % 8;
+
+                    // Occasional conflict
+                    if (k === 1 && col === 2) {
+                        demoEvents.push({
+                            cycle: cycle + 10,
+                            event_type: 'MC_BANK_CONFLICT',
+                            bank_id: bankId
+                        });
+                    }
+
+                    demoEvents.push({
+                        cycle: cycle + 15,
+                        event_type: 'MC_BANK_OPEN',
+                        bank_id: bankId,
+                        row: k * 100 + col + 50
+                    });
+
+                    demoEvents.push({
+                        cycle: cycle + 25,
+                        event_type: 'DMA_REQUEST',
+                        dma_channel: dmaChannel,
+                        l3_id: l3Id,
+                        tensor: 1,
+                        m_tile: 0, n_tile: col, k_tile: k
+                    });
+
+                    demoEvents.push({
+                        cycle: cycle + 40,
+                        event_type: 'DMA_TRANSFER_START',
+                        dma_channel: dmaChannel,
+                        l3_id: l3Id
+                    });
+
+                    demoEvents.push({
+                        cycle: cycle + 100,
+                        event_type: 'DMA_TRANSFER_COMPLETE',
+                        dma_channel: dmaChannel,
+                        l3_id: l3Id,
+                        tensor: 1,
+                        m_tile: 0, n_tile: col, k_tile: k,
+                        bytes: 4096
+                    });
+
+                    demoEvents.push({
+                        cycle: cycle + 105,
+                        event_type: 'MC_READ_COMPLETE',
+                        bank_id: bankId
+                    });
+                }
+
+                cycle += 150;
+
+                // L3 hop-and-forward
+                // A tiles hop right
+                for (let row = 0; row < 4; row++) {
+                    for (let col = 0; col < 3; col++) {
+                        const src = row * 4 + col;
+                        const dst = row * 4 + col + 1;
+                        demoEvents.push({
+                            cycle: cycle + col * 20,
+                            event_type: 'L3_SEND_START',
+                            src_l3: src, dst_l3: dst,
+                            l3_id: src,
+                            tensor: 0,
+                            m_tile: row, n_tile: 0, k_tile: k
+                        });
+                    }
+                }
+
+                // B tiles hop down
+                for (let col = 0; col < 4; col++) {
+                    for (let row = 0; row < 3; row++) {
+                        const src = row * 4 + col;
+                        const dst = (row + 1) * 4 + col;
+                        demoEvents.push({
+                            cycle: cycle + 10 + row * 20,
+                            event_type: 'L3_SEND_START',
+                            src_l3: src, dst_l3: dst,
+                            l3_id: src,
+                            tensor: 1,
+                            m_tile: 0, n_tile: col, k_tile: k
+                        });
+                    }
+                }
+
+                cycle += 100;
+            }
+
+            maxCycle = cycle + 100;
+            return demoEvents.sort((a, b) => a.cycle - b.cycle);
+        }
+
+        // ================================================================
+        // File Loading
+        // ================================================================
+        function parseCSV(text) {
+            const lines = text.trim().split('\n');
+            const headers = lines[0].split(',');
+            const parsedEvents = [];
+
+            for (let i = 1; i < lines.length; i++) {
+                const values = lines[i].split(',');
+                const event = {};
+                headers.forEach((h, idx) => {
+                    const val = values[idx];
+                    const numFields = ['cycle', 'l3_id', 'tensor', 'm_tile', 'n_tile', 'k_tile',
+                                       'src_l3', 'dst_l3', 'bytes', 'dma_channel', 'bank_id', 'row'];
+                    if (numFields.includes(h)) {
+                        event[h] = parseInt(val, 10);
+                    } else {
+                        event[h] = val;
+                    }
+                });
+                parsedEvents.push(event);
+            }
+
+            return parsedEvents;
+        }
+
+        function loadTraceFile(file) {
+            console.log('Loading file:', file.name, 'size:', file.size);
+
+            const reader = new FileReader();
+
+            reader.onerror = (e) => {
+                console.error('FileReader error:', e);
+                alert('Error reading file: ' + e.target.error);
+            };
+
+            reader.onload = (e) => {
+                try {
+                    const text = e.target.result;
+                    console.log('File loaded, length:', text.length);
+
+                    if (file.name.endsWith('.json')) {
+                        const data = JSON.parse(text);
+                        events = data.events || data;
+                        console.log('Parsed JSON, events:', events.length);
+                    } else {
+                        events = parseCSV(text);
+                        console.log('Parsed CSV, events:', events.length);
+                    }
+
+                    if (!events || events.length === 0) {
+                        alert('No events found in trace file');
+                        return;
+                    }
+
+                    maxCycle = Math.max(...events.map(e => e.cycle || 0));
+
+                    // Show load status
+                    const loadStatus = document.getElementById('load-status');
+                    loadStatus.textContent = `Loaded: ${file.name} (${events.length} events, cycles 0-${maxCycle})`;
+                    loadStatus.style.display = 'block';
+
+                    resetState();
+
+                    // Process events at cycle 0 immediately
+                    processInitialEvents();
+
+                    // Show load status
+                    const statusMsg = `Loaded ${events.length} events (cycles 0-${maxCycle})`;
+                    console.log(statusMsg);
+                    addEventToLog({cycle: 0, event_type: 'TRACE_LOADED'}, 'info');
+
+                    // Count event types
+                    const typeCounts = {};
+                    events.forEach(e => {
+                        typeCounts[e.event_type] = (typeCounts[e.event_type] || 0) + 1;
+                    });
+                    console.log('Event types:', typeCounts);
+
+                } catch (err) {
+                    console.error('Error processing file:', err);
+                    alert('Error processing trace file: ' + err.message);
+                }
+            };
+
+            reader.readAsText(file);
+        }
+
+        // ================================================================
+        // Initialization
+        // ================================================================
+        document.addEventListener('DOMContentLoaded', () => {
+            initL3Mesh();
+
+            // Start with empty state - wait for user to load a trace file
+            events = [];
+            maxCycle = 0;
+
+            // Show welcome message
+            addEventToLog({cycle: 0, event_type: 'WELCOME'}, 'info');
+
+            // Event listeners
+            document.getElementById('btn-play').addEventListener('click', togglePlayback);
+
+            // Load demo button
+            document.getElementById('btn-load-demo').addEventListener('click', () => {
+                events = generateDemoData();
+                maxCycle = Math.max(...events.map(e => e.cycle || 0));
+
+                const loadStatus = document.getElementById('load-status');
+                loadStatus.textContent = `Demo loaded (${events.length} events, cycles 0-${maxCycle})`;
+                loadStatus.style.display = 'block';
+
+                resetState();
+                processInitialEvents();
+                addEventToLog({cycle: 0, event_type: 'TRACE_LOADED'}, 'info');
+            });
+            document.getElementById('btn-step').addEventListener('click', () => {
+                stopPlayback();
+                stepToNextEvent();
+            });
+            document.getElementById('btn-step-back').addEventListener('click', () => {
+                stopPlayback();
+                stepToPrevEvent();
+            });
+            document.getElementById('btn-reset').addEventListener('click', () => {
+                stopPlayback();
+                resetState();
+            });
+
+            document.getElementById('speed-slider').addEventListener('input', (e) => {
+                playbackSpeed = parseInt(e.target.value, 10);
+                document.getElementById('speed-value').textContent = `${(playbackSpeed / 30).toFixed(1)}x`;
+            });
+
+            // File input change handler
+            const fileInput = document.getElementById('trace-file');
+            console.log('File input element:', fileInput);
+
+            fileInput.addEventListener('change', (e) => {
+                console.log('File input change event fired, files:', e.target.files.length);
+                if (e.target.files.length > 0) {
+                    loadTraceFile(e.target.files[0]);
+                }
+            });
+
+            // Drag and drop support
+            const dropZone = document.querySelector('.file-input-wrapper');
+
+            dropZone.addEventListener('dragover', (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                dropZone.style.background = 'rgba(33, 150, 243, 0.3)';
+            });
+
+            dropZone.addEventListener('dragleave', (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                dropZone.style.background = '';
+            });
+
+            dropZone.addEventListener('drop', (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                dropZone.style.background = '';
+
+                const files = e.dataTransfer.files;
+                console.log('Drop event, files:', files.length);
+                if (files.length > 0) {
+                    loadTraceFile(files[0]);
+                }
+            });
+
+            document.getElementById('timeline').addEventListener('click', (e) => {
+                stopPlayback();
+                const rect = e.currentTarget.getBoundingClientRect();
+                const pct = (e.clientX - rect.left) / rect.width;
+                const targetCycle = Math.floor(pct * maxCycle);
+                resetState();
+                advanceCycles(targetCycle);
+            });
+
+            // Keyboard shortcuts
+            document.addEventListener('keydown', (e) => {
+                // Ignore if typing in an input
+                if (e.target.tagName === 'INPUT') return;
+
+                switch (e.key) {
+                    case ' ':  // Space - play/pause
+                        e.preventDefault();
+                        togglePlayback();
+                        break;
+                    case 'ArrowRight':  // Step forward to next event
+                        e.preventDefault();
+                        stopPlayback();
+                        stepToNextEvent();
+                        break;
+                    case 'ArrowLeft':  // Step back (go to previous event)
+                        e.preventDefault();
+                        stopPlayback();
+                        stepToPrevEvent();
+                        break;
+                    case 'Home':  // Go to start
+                        e.preventDefault();
+                        stopPlayback();
+                        resetState();
+                        processInitialEvents();
+                        break;
+                    case 'End':  // Go to end
+                        e.preventDefault();
+                        stopPlayback();
+                        resetState();
+                        advanceCycles(maxCycle);
+                        break;
+                    case 'r':  // Reset
+                    case 'R':
+                        e.preventDefault();
+                        stopPlayback();
+                        resetState();
+                        processInitialEvents();
+                        break;
+                }
+            });
+        });
+    </script>
+</body>
+</html>

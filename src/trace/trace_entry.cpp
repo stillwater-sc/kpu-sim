@@ -15,6 +15,11 @@ const char* to_string(ComponentType type) {
         case ComponentType::L2_BANK: return "L2_BANK";
         case ComponentType::L1: return "L1";
         case ComponentType::PAGE_BUFFER: return "PAGE_BUFFER";
+        case ComponentType::LPDDR5_BANK: return "LPDDR5_BANK";
+        case ComponentType::LPDDR5_BANK_GROUP: return "LPDDR5_BANK_GROUP";
+        case ComponentType::LPDDR5_CHANNEL: return "LPDDR5_CHANNEL";
+        case ComponentType::LPDDR5_DATA_BUS: return "LPDDR5_DATA_BUS";
+        case ComponentType::LPDDR5_CMD_BUS: return "LPDDR5_CMD_BUS";
         case ComponentType::COMPUTE_FABRIC: return "COMPUTE_FABRIC";
         case ComponentType::SYSTOLIC_ARRAY: return "SYSTOLIC_ARRAY";
         case ComponentType::STORAGE_SCHEDULER: return "STORAGE_SCHEDULER";
@@ -38,6 +43,12 @@ const char* to_string(TransactionType type) {
         case TransactionType::FENCE: return "FENCE";
         case TransactionType::ALLOCATE: return "ALLOCATE";
         case TransactionType::DEALLOCATE: return "DEALLOCATE";
+        case TransactionType::ACTIVATE: return "ACTIVATE";
+        case TransactionType::PRECHARGE: return "PRECHARGE";
+        case TransactionType::REFRESH: return "REFRESH";
+        case TransactionType::BURST_READ: return "BURST_READ";
+        case TransactionType::BURST_WRITE: return "BURST_WRITE";
+        case TransactionType::TURNAROUND: return "TURNAROUND";
         case TransactionType::UNKNOWN: return "UNKNOWN";
         default: return "INVALID";
     }
