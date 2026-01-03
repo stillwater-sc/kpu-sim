@@ -1,0 +1,42 @@
+{
+  "simulation": {
+    "default_fidelity": "TRANSACTIONAL",
+    "default_verification": "ASSERTIONS",
+    "enable_tracing": false,
+    "num_memory_controllers": 1,
+    "num_dma_engines": 4,
+    "num_l3_tiles": 4,
+    "num_l2_banks": 16,
+    "num_compute_tiles": 16
+  },
+  "memory": {
+    "fidelity": "TRANSACTIONAL",
+    "technology": "LPDDR5",
+    "speed_mt_s": 6400,
+    "channels": 1,
+    "banks_per_channel": 16,
+    "verification": "ASSERTIONS"
+  },
+  "dma": {
+    "fidelity": "TRANSACTIONAL",
+    "channels": 8,
+    "bandwidth_gbps": 100
+  },
+  "l3": {
+    "fidelity": "TRANSACTIONAL",
+    "capacity_kb": 256,
+    "num_banks": 8,
+    "num_ports": 4
+  },
+  "compute": {
+    "fidelity": "BEHAVIORAL",
+    "technology": "INT8_SYSTOLIC",
+    "array_size": [16, 16],
+    "macs_per_cycle": 256
+  },
+  "noc": {
+    "fidelity": "TRANSACTIONAL",
+    "topology": "MESH_2D",
+    "dimensions": [4, 4]
+  }
+}
