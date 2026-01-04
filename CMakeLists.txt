@@ -160,8 +160,10 @@ if(KPU_BUILD_TOOLS)
     add_subdirectory(tools)
 endif()
 
-# Domain Flow Pattern tests (always build for verification)
-add_subdirectory(patterns)
+# Domain Flow Pattern tests (build if directory exists - optional/experimental)
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/patterns")
+    add_subdirectory(patterns)
+endif()
 
 # Installation of headers
 install(DIRECTORY include/

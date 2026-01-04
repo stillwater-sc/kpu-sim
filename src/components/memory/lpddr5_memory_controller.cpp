@@ -24,7 +24,9 @@ LPDDR5MemoryController::LPDDR5MemoryController(const Config& config)
     : lpddr5_config_(config)
 {
     // Initialize bank groups for each bank
-    for (uint8_t ch = 0; ch < lpddr5_config_.num_channels; ++ch) {
+    // Use explicit bounds to avoid GCC false positive -Wstringop-overflow
+    const uint8_t num_ch = std::min<uint8_t>(lpddr5_config_.num_channels, 2);
+    for (uint8_t ch = 0; ch < num_ch; ++ch) {
         for (uint8_t b = 0; b < 16; ++b) {
             channels_[ch].banks[b].bank_group = b / 4;
         }
