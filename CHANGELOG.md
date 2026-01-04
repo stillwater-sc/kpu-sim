@@ -7,6 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added - 2026-01-03
+- **LPDDR5 Memory Controller Pattern Test Suite** (`patterns/`)
+  - Complete rewrite of pattern infrastructure for cycle-accurate LPDDR5 controller
+  - Progressive bank access testing: 1, 2, 3, 4 banks
+  - Common infrastructure:
+    - `patterns/common/lpddr5_configs.hpp` - Standard single/dual channel LPDDR5-6400 configs
+    - `patterns/common/pattern_harness.hpp` - Reusable test harness with tracing
+  - Pattern 01 tests:
+    - Single bank page hits (same row)
+    - Single bank page conflicts (different rows)
+    - Two banks same group (tRRD_L timing)
+    - Two banks different groups (tRRD_S timing)
+    - Three banks mixed groups
+    - Four banks full group (tFAW testing)
+    - Four banks across groups (max parallelism)
+    - Mixed read/write with turnarounds (tRTW, tWTR)
+  - Chrome Trace export for Perfetto visualization
+  - Documentation: `patterns/PLAN.md`, `patterns/ARCHITECTURE.md`
+
+### Fixed - 2026-01-03
+- **GCC Warning in LPDDR5MemoryController** (`lpddr5_memory_controller.cpp`)
+  - Fixed false positive `-Wstringop-overflow` warning in constructor
+  - Added explicit bounds check with `std::min<uint8_t>()` for loop variable
+
+- **CI Build Failure** (`CMakeLists.txt`)
+  - Made `add_subdirectory(patterns)` conditional on directory existence
+  - Prevents build failure when patterns directory not present
+
 ### Added - 2025-12-31
 - **Standalone DFG Toolchain** (`tools/dfg/`)
   - Complete CLI toolchain for Data Flow Graph generation, scheduling, compilation, visualization, and analysis
