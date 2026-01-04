@@ -1,0 +1,51 @@
+{
+  "simulation": {
+    "default_fidelity": "BEHAVIORAL",
+    "verification_level": "ASSERTIONS",
+    "enable_tracing": true
+  },
+  "kpu": {
+    "memory": {
+      "fidelity": "BEHAVIORAL",
+      "technology": "LPDDR5",
+      "capacity_gb": 1,
+      "controllers": 1,
+      "channels_per_controller": 4,
+      "banks_per_channel": 16,
+      "speed_mt_s": 6400
+    },
+    "dma": {
+      "fidelity": "BEHAVIORAL",
+      "engines": 1,
+      "channels_per_engine": 2,
+      "bandwidth_gbps": 51
+    },
+    "l3": {
+      "fidelity": "BEHAVIORAL",
+      "tiles": 1,
+      "capacity_kb": 256,
+      "banks_per_tile": 8,
+      "ports_per_tile": 4
+    },
+    "l2": {
+      "fidelity": "BEHAVIORAL",
+      "banks": 4,
+      "capacity_kb": 64
+    },
+    "compute": {
+      "fidelity": "BEHAVIORAL",
+      "technology": "INT8_SYSTOLIC",
+      "tiles": 1,
+      "array_rows": 4,
+      "array_cols": 4,
+      "macs_per_cycle": 16
+    },
+    "noc": {
+      "fidelity": "BEHAVIORAL",
+      "topology": "MESH_2D",
+      "rows": 2,
+      "cols": 2,
+      "link_bandwidth_gbps": 64
+    }
+  }
+}

@@ -154,6 +154,9 @@ private:
     /// Parse NoC section
     static NoCConfig parse_noc(const nlohmann::json& j,
                                const SimulatorConfig& defaults);
+
+    /// Parse L2 section (updates SimulatorConfig directly for L2 params)
+    static void parse_l2(const nlohmann::json& j, SimulatorConfig& config);
 };
 
 // ============================================================================

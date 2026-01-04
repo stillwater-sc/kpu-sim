@@ -99,7 +99,16 @@ struct MemoryControllerConfig : ComponentConfig {
     /// Data rate in MT/s (megatransfers per second)
     uint32_t speed_mt_s = 6400;
 
-    /// Number of channels
+    /// Total memory capacity in GB
+    uint32_t capacity_gb = 1;
+
+    /// Number of memory controllers
+    uint8_t num_controllers = 1;
+
+    /// Channels per controller
+    uint8_t channels_per_controller = 1;
+
+    /// Total number of channels (derived or set directly)
     uint8_t num_channels = 1;
 
     /// Banks per channel
@@ -130,7 +139,13 @@ struct MemoryControllerConfig : ComponentConfig {
 
 /// DMA engine configuration
 struct DMAEngineConfig : ComponentConfig {
-    /// Number of DMA channels
+    /// Number of DMA engines
+    uint32_t num_engines = 1;
+
+    /// Channels per engine
+    uint32_t channels_per_engine = 8;
+
+    /// Total number of DMA channels (derived or set directly)
     uint32_t num_channels = 8;
 
     /// Maximum burst size in bytes
@@ -152,13 +167,16 @@ struct DMAEngineConfig : ComponentConfig {
 
 /// L3 tile configuration
 struct L3TileConfig : ComponentConfig {
-    /// Capacity in KB
+    /// Number of L3 tiles
+    uint32_t num_tiles = 1;
+
+    /// Capacity per tile in KB
     uint32_t capacity_kb = 256;
 
-    /// Number of banks
+    /// Number of banks per tile
     uint8_t num_banks = 8;
 
-    /// Number of ports
+    /// Number of ports per tile
     uint8_t num_ports = 4;
 
     /// Bank width in bytes
@@ -232,6 +250,9 @@ struct ComputeFabricConfig : ComponentConfig {
     /// Compute technology
     ComputeTechnology technology = ComputeTechnology::IDEAL;
 
+    /// Number of compute tiles
+    uint32_t num_tiles = 1;
+
     /// Array dimensions (for systolic arrays)
     uint32_t array_rows = 16;
     uint32_t array_cols = 16;
@@ -282,6 +303,7 @@ struct SimulatorConfig {
     uint32_t num_dma_engines = 4;
     uint32_t num_l3_tiles = 4;
     uint32_t num_l2_banks = 16;
+    uint32_t l2_capacity_kb = 64;  // L2 capacity per bank
     uint32_t num_l1_buffers = 0;  // Auto-computed if 0
     uint32_t num_block_movers = 4;
     uint32_t num_streamers = 4;

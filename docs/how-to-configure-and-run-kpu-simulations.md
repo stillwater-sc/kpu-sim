@@ -2,12 +2,13 @@
 
 ## Overview
 
-The KPU Simulator provides a flexible configuration system and command-line runner for executing simulations. This guide covers:
+The KPU Simulator provides a multi-fidelity configuration system supporting BEHAVIORAL, TRANSACTIONAL, and CYCLE_ACCURATE simulation modes. This guide covers:
 
-1. Configuration file formats (YAML and JSON)
-2. Factory configurations for common use cases
+1. Multi-fidelity configuration format (JSON)
+2. Preset configurations for common use cases
 3. Using the `kpu-runner` command-line tool
-4. Customizing configurations for your needs
+4. Configuration validation and analysis with `kpu-config`
+5. Customizing configurations for your needs
 
 ## Prerequisites
 
@@ -20,245 +21,180 @@ cmake .. -DCMAKE_BUILD_TYPE=Release
 cmake --build . -j8
 ```
 
-The runner tool will be at: `build/tools/runner/kpu-runner`
+The tools will be at:
+- `build/tools/runner/kpu-runner` - Simulation runner
+- `build/tools/configuration/kpu-config` - Configuration tool
 
 ## Quick Start
 
-### Using Factory Configurations
+### Using Preset Configurations
 
-The fastest way to run a simulation is with built-in factory configurations:
+The fastest way to run a simulation is with built-in presets:
 
 ```bash
 # Run a 64x64x64 matrix multiplication with minimal hardware
-./build/tools/runner/kpu-runner --factory minimal -m 64x64x64
+./build/tools/runner/kpu-runner --preset minimal -m 64x64x64
 
 # Run on edge AI configuration
-./build/tools/runner/kpu-runner --factory edge_ai -m 128x128x128
+./build/tools/runner/kpu-runner --preset edge_ai -m 128x128x128
 
 # Run on datacenter configuration with larger matrices
-./build/tools/runner/kpu-runner --factory datacenter -m 1024x1024x1024
+./build/tools/runner/kpu-runner --preset datacenter -m 1024x1024x1024
+
+# Run with fast behavioral simulation
+./build/tools/runner/kpu-runner --preset fast -m 256x256x256
+
+# Run with cycle-accurate simulation
+./build/tools/runner/kpu-runner --preset accurate -m 256x256x256
 ```
 
 ### Using Configuration Files
 
 ```bash
-# YAML configuration
-./build/tools/runner/kpu-runner configs/kpu/minimal.yaml -m 256x256x256
+# Use a multi-fidelity configuration file
+./build/tools/runner/kpu-runner configs/components/kpu/minimal.json -m 256x256x256
 
-# JSON configuration
-./build/tools/runner/kpu-runner configs/kpu/minimal.json -m 256x256x256
+# Use cross-validation configs for comparing fidelity levels
+./build/tools/runner/kpu-runner configs/components/kpu/crossval_behavioral.json -m 128x128x128
+./build/tools/runner/kpu-runner configs/components/kpu/crossval_cycle_accurate.json -m 128x128x128
 ```
 
-## Configuration File Format
+## Multi-Fidelity Configuration Format
 
-### YAML Format
+The configuration system supports three simulation fidelity levels:
 
-YAML is the recommended format for human-readable configurations:
+| Fidelity | Speed | Accuracy | Use Case |
+|----------|-------|----------|----------|
+| BEHAVIORAL | Fastest | Low | Functional verification, early prototyping |
+| TRANSACTIONAL | Medium | Medium | Performance estimation, design exploration |
+| CYCLE_ACCURATE | Slowest | High | Detailed timing analysis, hardware validation |
 
-```yaml
-# KPU Simulator Configuration
-name: "My KPU Config"
-description: "Custom configuration for testing"
-
-# Host system memory (for host-to-device transfers)
-host_memory:
-  region_count: 1
-  region_capacity_mb: 256
-  bandwidth_gbps: 50
-
-# External memory (GDDR/HBM)
-external_memory:
-  bank_count: 2
-  bank_capacity_mb: 512
-  bandwidth_gbps: 100
-
-# Memory controller
-memory_controller:
-  controller_count: 1
-  page_buffer_count: 2
-  page_buffer_capacity_kb: 32
-
-# On-chip memory hierarchy
-on_chip_memory:
-  l3:
-    tile_count: 2
-    tile_capacity_kb: 128
-  l2:
-    bank_count: 8
-    bank_capacity_kb: 64
-  # L1 buffer_count is DERIVED from processor array configuration
-  # For 16x16 array with 1 tile: 4 * (16 + 16) * 1 = 128 buffers
-  l1:
-    buffer_capacity_kb: 64
-
-# Data movement engines
-data_movement:
-  dma_engine_count: 2
-  block_mover_count: 4
-  streamer_count: 8
-
-# Compute fabric
-compute:
-  tile_count: 1
-  processor_array:
-    rows: 16
-    cols: 16
-    topology: rectangular  # rectangular or hexagonal
-  systolic_mode: true
-```
-
-### JSON Format
-
-For programmatic configuration or integration with other tools:
+### JSON Configuration Format
 
 ```json
 {
-  "name": "My KPU Config",
-  "description": "Custom configuration for testing",
-  "host_memory": {
-    "region_count": 1,
-    "region_capacity_mb": 256,
-    "bandwidth_gbps": 50
+  "simulation": {
+    "default_fidelity": "BEHAVIORAL",
+    "verification_level": "ASSERTIONS",
+    "num_memory_controllers": 1,
+    "num_dma_engines": 2,
+    "num_l3_tiles": 1,
+    "num_l2_banks": 4,
+    "num_compute_tiles": 1
   },
-  "external_memory": {
-    "bank_count": 2,
-    "bank_capacity_mb": 512,
-    "bandwidth_gbps": 100
+  "memory": {
+    "fidelity": "BEHAVIORAL",
+    "technology": "LPDDR5",
+    "capacity_gb": 16,
+    "channels": 2,
+    "burst_length": 16,
+    "clock_mhz": 3200
   },
-  "memory_controller": {
-    "controller_count": 1,
-    "page_buffer_count": 2,
-    "page_buffer_capacity_kb": 32
+  "dma": {
+    "fidelity": "BEHAVIORAL",
+    "max_concurrent_transfers": 4,
+    "burst_size_bytes": 256
   },
-  "on_chip_memory": {
-    "l3": {
-      "tile_count": 2,
-      "tile_capacity_kb": 128
-    },
-    "l2": {
-      "bank_count": 8,
-      "bank_capacity_kb": 64
-    },
-    "l1": {
-      "buffer_capacity_kb": 64
-    }
-  },
-  "data_movement": {
-    "dma_engine_count": 2,
-    "block_mover_count": 4,
-    "streamer_count": 8
+  "interconnect": {
+    "fidelity": "BEHAVIORAL",
+    "technology": "MESH_2D",
+    "mesh_rows": 4,
+    "mesh_cols": 4,
+    "link_bandwidth_gbps": 100
   },
   "compute": {
-    "tile_count": 1,
-    "processor_array": {
-      "rows": 16,
-      "cols": 16,
-      "topology": "rectangular"
-    },
-    "systolic_mode": true
+    "fidelity": "BEHAVIORAL",
+    "technology": "SYSTOLIC",
+    "array_size": [8, 8],
+    "macs_per_cycle": 64
   }
 }
 ```
 
-Note: The `l1.buffer_count` field is **derived** from the processor array configuration and should not be set manually. It is computed as:
-`L1_buffers = 4 × (rows + cols) × compute_tiles`
+### Component-Level Fidelity
+
+Each subsystem can have independent fidelity levels, allowing mixed-fidelity simulation:
+
+```json
+{
+  "simulation": {
+    "default_fidelity": "TRANSACTIONAL"
+  },
+  "memory": {
+    "fidelity": "CYCLE_ACCURATE"
+  },
+  "compute": {
+    "fidelity": "BEHAVIORAL"
+  }
+}
+```
+
+This enables fast compute simulation while maintaining accurate memory timing.
 
 ## Configuration Parameters
 
-### Memory Hierarchy
+### Simulation Section
 
-| Section | Parameter | Description | Typical Values |
-|---------|-----------|-------------|----------------|
-| **host_memory** | region_count | Number of host memory regions | 1-4 |
-| | region_capacity_mb | Capacity per region (MB) | 256-4096 |
-| | bandwidth_gbps | PCIe bandwidth (GB/s) | 32-128 |
-| **external_memory** | bank_count | Number of GDDR/HBM banks | 2-16 |
-| | bank_capacity_mb | Capacity per bank (MB) | 256-4096 |
-| | bandwidth_gbps | Memory bandwidth (GB/s) | 100-1000 |
-| **on_chip_memory.l3** | tile_count | Global buffer tiles | 1-256 |
-| | tile_capacity_kb | Capacity per tile (KB) | 64-512 |
-| **on_chip_memory.l2** | bank_count | Tile buffer banks | 4-4096 |
-| | bank_capacity_kb | Capacity per bank (KB) | 32-128 |
-| **on_chip_memory.l1** | buffer_count | **DERIVED** - see below | - |
-| | buffer_capacity_kb | Capacity per buffer (KB) | 32-128 |
+| Parameter | Description | Values |
+|-----------|-------------|--------|
+| default_fidelity | Default fidelity for all components | BEHAVIORAL, TRANSACTIONAL, CYCLE_ACCURATE |
+| verification_level | Runtime checking level | NONE, ASSERTIONS, INVARIANTS, PROTOCOL |
+| num_memory_controllers | Number of memory controllers | 1-8 |
+| num_dma_engines | Number of DMA engines | 1-32 |
+| num_l3_tiles | Number of L3 cache tiles | 1-256 |
+| num_l2_banks | Number of L2 cache banks | 4-4096 |
+| num_compute_tiles | Number of compute tiles | 1-256 |
 
-### L1 Buffer Count (Derived Property)
+### Memory Section
 
-L1 streaming buffers are **automatically derived** from the processor array configuration. Do not set `buffer_count` manually - it will be computed:
+| Parameter | Description | Values |
+|-----------|-------------|--------|
+| technology | Memory type | LPDDR4, LPDDR5, HBM2, HBM3, GDDR6, DDR5 |
+| capacity_gb | Total memory capacity | 1-128 |
+| channels | Number of memory channels | 1-16 |
+| burst_length | Burst transfer length | 8, 16, 32 |
+| clock_mhz | Memory clock frequency | 800-6400 |
 
-**Formula**: `L1_buffers = 4 × (rows + cols) × compute_tiles`
+### Compute Section
 
-Each edge (TOP/BOTTOM/LEFT/RIGHT) has ingress and egress buffers:
-- TOP edge: `cols` ingress (B weights) + `cols` egress (C output)
-- BOTTOM edge: `cols` ingress + `cols` egress
-- LEFT edge: `rows` ingress (A inputs) + `rows` egress
-- RIGHT edge: `rows` ingress + `rows` egress
+| Parameter | Description | Values |
+|-----------|-------------|--------|
+| technology | Compute architecture | SYSTOLIC, VECTOR, HYBRID |
+| array_size | Systolic array dimensions [rows, cols] | [8,8] to [64,64] |
+| macs_per_cycle | Peak MACs per cycle | 64-4096 |
 
-**Examples**:
-- 8×8 array, 1 tile (minimal): 4 × (8+8) × 1 = **64 L1 buffers**
-- 16×16 array, 2 tiles (edge_ai): 4 × (16+16) × 2 = **256 L1 buffers**
-- 32×32 array, 256 tiles (datacenter): 4 × (32+32) × 256 = **65,536 L1 buffers**
+### Interconnect Section
 
-### Data Movement
+| Parameter | Description | Values |
+|-----------|-------------|--------|
+| technology | Network topology | MESH_2D, TORUS_2D, CROSSBAR, RING |
+| mesh_rows | Mesh network rows | 2-16 |
+| mesh_cols | Mesh network columns | 2-16 |
+| link_bandwidth_gbps | Link bandwidth | 10-1000 |
 
-| Parameter | Description | Typical Values |
-|-----------|-------------|----------------|
-| dma_engine_count | DMA engines for external transfers | 1-32 |
-| block_mover_count | L3↔L2 block movers | 1-256 |
-| streamer_count | L2↔L1 streamers | 4-1024 |
+## Preset Configurations
 
-### Compute
+### Behavioral Presets (Fast)
 
-| Parameter | Description | Typical Values |
-|-----------|-------------|----------------|
-| tile_count | Number of compute tiles | 1-256 |
-| processor_array.rows | Systolic array rows | 8-64 |
-| processor_array.cols | Systolic array columns | 8-64 |
-| processor_array.topology | Array layout (rectangular or hexagonal) | rectangular |
-| systolic_mode | Enable systolic data flow | true/false |
+| Preset | Description |
+|--------|-------------|
+| `fast` | All-behavioral simulation for quick functional testing |
+| `minimal` | Smallest hardware config (1 compute tile, 8x8 array) |
 
-## Factory Configurations
+### Transactional Presets (Balanced)
 
-Four factory configurations are provided for common use cases, forming a proper progression from small to large:
+| Preset | Description |
+|--------|-------------|
+| `balanced` | Mixed fidelity for design exploration |
+| `edge_ai` | Edge AI configuration (2 tiles, 16x16 arrays) |
+| `embodied_ai` | Robotics configuration (64 tiles, 24x24 arrays) |
 
-### Minimal (`--factory minimal`)
+### Cycle-Accurate Presets (Detailed)
 
-Smallest viable KPU for testing and development:
-
-- 1 compute tile (8×8 rectangular systolic array)
-- 1 external memory channel (256 MB, LPDDR4x, 25 GB/s)
-- 1 L3 tile, 4 L2 banks, **64 L1 buffers** (derived: 4×(8+8)×1)
-- Best for: Unit testing, small matrix operations, development
-
-### Edge AI (`--factory edge_ai`)
-
-Dual-tile configuration for edge AI inference:
-
-- 2 compute tiles (16×16 rectangular systolic arrays each)
-- 4 external memory channels (256 MB each, LPDDR5, 64-bit total)
-- 2 L3 tiles, 16 L2 banks (8 per L3), **256 L1 buffers** (derived: 4×(16+16)×2)
-- Power-efficient 48 GB/s bandwidth (~3.2W memory subsystem)
-- Best for: Mobile/embedded AI, edge inference
-
-### Embodied AI (`--factory embodied_ai`)
-
-64-tile configuration for robotics and autonomous systems (Jetson Orin style):
-
-- 64 compute tiles (24×24 rectangular systolic arrays each) in 8×8 layout
-- 8 external memory channels (512 MB each, LPDDR5, 256-bit total)
-- 64 L3 tiles, 1024 L2 banks (16 per L3), **12,288 L1 buffers** (derived: 4×(24+24)×64)
-- 200 GB/s memory bandwidth, power-efficient (~8W memory subsystem)
-- Best for: Real-time robotics, autonomous driving, embodied agents
-
-### Datacenter (`--factory datacenter`)
-
-256-tile configuration for datacenter-scale AI workloads:
-
-- 256 compute tiles (32×32 rectangular systolic arrays each) in 16×16 checkerboard
-- 6 HBM3 channels (4 GB each, 24 GB total)
-- 256 L3 tiles, 4096 L2 banks (16 per L3), **65,536 L1 buffers** (derived: 4×(32+32)×256)
-- 4.8 TB/s memory bandwidth (800 GB/s per channel)
-- Best for: Training, large batch inference, datacenter workloads
+| Preset | Description |
+|--------|-------------|
+| `accurate` | Full cycle-accurate simulation |
+| `datacenter` | High-performance config (256 tiles, 32x32 arrays) |
 
 ## KPU Runner Command Reference
 
@@ -274,168 +210,158 @@ Options:
   -o, --output <file>     Write results to JSON file
   --validate              Validate config without running
   --show-config           Display parsed configuration
-  --factory <name>        Use factory config: minimal, edge_ai, embodied_ai, datacenter
+  --preset <name>         Use preset: fast, balanced, accurate, mixed,
+                          minimal, edge_ai, embodied_ai, datacenter
 ```
 
-### Test Types
-
-| Type | Description |
-|------|-------------|
-| `matmul` | Single matrix multiplication (default) |
-| `mlp` | MLP layer with GELU activation |
-| `benchmark` | Suite of matrix sizes (64 to 512) |
-
-## Examples
-
-### Basic Matrix Multiplication
+### Examples
 
 ```bash
-# 128x128x128 matmul on minimal config
-./build/tools/runner/kpu-runner --factory minimal -m 128x128x128
+# Basic matrix multiplication with minimal config
+./build/tools/runner/kpu-runner --preset minimal -m 128x128x128
 
-# Output:
-# KPU Simulator initialized.
-#   Memory banks: 2
-#   L3 tiles:     4
-#   L2 banks:     8
-#   L1 buffers:   4
-#   Compute tiles:1
-# Running MatMul test: 128 x 128 x 128
-#
-# === Results ===
-# Status:      SUCCESS
-# Cycles:      11904
-# Time:        0.051 ms
-# Performance: 82.16 GFLOPS
+# MLP layer test with edge AI config
+./build/tools/runner/kpu-runner --preset edge_ai -t mlp -m 128x64x128
+
+# Benchmark suite on datacenter config
+./build/tools/runner/kpu-runner --preset datacenter -t benchmark
+
+# Use configuration file
+./build/tools/runner/kpu-runner configs/components/kpu/minimal.json -m 256x256x256
+
+# Verbose output with results export
+./build/tools/runner/kpu-runner --preset accurate -m 512x512x512 -v -o results.json
 ```
 
-### MLP Layer Test
+## KPU Config Tool
+
+The `kpu-config` tool helps manage configuration files:
 
 ```bash
-# MLP with 128x64x128 dimensions
-./build/tools/runner/kpu-runner --factory minimal -t mlp -m 128x64x128
+# Show configuration details
+./build/tools/configuration/kpu-config show configs/components/kpu/minimal.json
 
-# Output shows fused matmul + GELU activation performance
-```
+# Validate configuration
+./build/tools/configuration/kpu-config validate configs/components/kpu/my_config.json
 
-### Benchmark Suite
+# Generate preset configuration file
+./build/tools/configuration/kpu-config generate --preset edge_ai > edge_ai.json
 
-```bash
-# Run benchmark across multiple matrix sizes
-./build/tools/runner/kpu-runner --factory datacenter -t benchmark
-
-# Output:
-# === Running Benchmark Suite ===
-#
-#       Size      Cycles   Time (ms)      GFLOPS
-# ----------------------------------------------
-#      64x64        1792        0.02       27.28
-#    128x128       11904        0.03      127.36
-#    256x256       78464        0.11      292.78
-#    512x512      571008        0.81      331.25
-```
-
-### View Configuration
-
-```bash
-# Display parsed configuration details
-./build/tools/runner/kpu-runner configs/kpu/datacenter.yaml --show-config
-
-# Output shows all memory, data movement, and compute settings
-```
-
-### Export Results to JSON
-
-```bash
-# Save results to file for analysis
-./build/tools/runner/kpu-runner --factory minimal -m 256x256x256 -o results.json
-
-# results.json:
-# {
-#   "success": true,
-#   "cycles": 78464,
-#   "elapsed_ms": 0.118,
-#   "gflops": 283.42
-# }
-```
-
-### Validate Configuration
-
-```bash
-# Check config validity without running
-./build/tools/runner/kpu-runner configs/kpu/custom.yaml --validate
+# Convert between presets
+./build/tools/configuration/kpu-config generate --preset datacenter --fidelity BEHAVIORAL
 ```
 
 ## Creating Custom Configurations
 
-### Step 1: Copy a Template
+### Step 1: Start from a Template
 
 ```bash
-cp configs/kpu/minimal.yaml configs/kpu/my_config.yaml
+# Generate a base config
+./build/tools/configuration/kpu-config generate --preset minimal > my_config.json
 ```
 
 ### Step 2: Modify Parameters
 
-Edit the file to match your target hardware:
+Edit the JSON file to match your requirements:
 
-```yaml
-name: "My Custom KPU"
-description: "Optimized for transformer inference"
-
-external_memory:
-  bank_count: 4
-  bank_capacity_mb: 1024
-  bandwidth_gbps: 400
-
-on_chip_memory:
-  l3:
-    tile_count: 8
-    tile_capacity_kb: 256
-  l2:
-    bank_count: 16
-    bank_capacity_kb: 64
-
-compute:
-  tile_count: 2
-  processor_array:
-    rows: 32
-    cols: 32
+```json
+{
+  "simulation": {
+    "default_fidelity": "TRANSACTIONAL",
+    "verification_level": "ASSERTIONS",
+    "num_memory_controllers": 2,
+    "num_dma_engines": 4,
+    "num_l3_tiles": 4,
+    "num_l2_banks": 16,
+    "num_compute_tiles": 4
+  },
+  "memory": {
+    "fidelity": "CYCLE_ACCURATE",
+    "technology": "LPDDR5",
+    "capacity_gb": 16,
+    "channels": 4,
+    "burst_length": 16,
+    "clock_mhz": 3200
+  },
+  "compute": {
+    "fidelity": "BEHAVIORAL",
+    "technology": "SYSTOLIC",
+    "array_size": [16, 16],
+    "macs_per_cycle": 256
+  }
+}
 ```
 
 ### Step 3: Validate and Test
 
 ```bash
-# Validate syntax
-./build/tools/runner/kpu-runner configs/kpu/my_config.yaml --validate
+# Validate configuration
+./build/tools/configuration/kpu-config validate my_config.json
 
 # Run a test
-./build/tools/runner/kpu-runner configs/kpu/my_config.yaml -m 512x512x512 -v
+./build/tools/runner/kpu-runner my_config.json -m 512x512x512 -v
+```
+
+## Cross-Validation Testing
+
+To compare simulation results across fidelity levels, use matched configurations:
+
+```bash
+# Create matching configs at different fidelities
+./build/tools/configuration/kpu-config generate --preset minimal --fidelity BEHAVIORAL > crossval_behavioral.json
+./build/tools/configuration/kpu-config generate --preset minimal --fidelity TRANSACTIONAL > crossval_transactional.json
+./build/tools/configuration/kpu-config generate --preset minimal --fidelity CYCLE_ACCURATE > crossval_cycle_accurate.json
+
+# Run same workload on each
+./build/tools/runner/kpu-runner crossval_behavioral.json -m 128x128x128 -o behavioral_results.json
+./build/tools/runner/kpu-runner crossval_transactional.json -m 128x128x128 -o transactional_results.json
+./build/tools/runner/kpu-runner crossval_cycle_accurate.json -m 128x128x128 -o cycle_accurate_results.json
+
+# Compare results
+# Results should match functionally; timing will vary by fidelity
 ```
 
 ## Programmatic Configuration (C++)
 
-You can also load configurations programmatically:
+You can also create configurations programmatically:
 
 ```cpp
-#include <sw/kpu/kpu_config_loader.hpp>
 #include <sw/kpu/kpu_simulator.hpp>
 
 using namespace sw::kpu;
 
 int main() {
-    // Load from file
-    auto config = KPUConfigLoader::load_yaml("configs/kpu/minimal.yaml");
-
-    // Or use factory
-    auto config = KPUConfigLoader::create_minimal();
-
-    // Or create programmatically
-    auto config = KPUConfigLoader::create_for_matmul(1024, 1024, 1024);
+    // Create configuration directly
+    KPUSimulator::Config config;
+    config.host_memory_region_count = 1;
+    config.host_memory_region_capacity_mb = 256;
+    config.host_memory_bandwidth_gbps = 50;
+    config.memory_bank_count = 1;
+    config.memory_bank_capacity_mb = 256;
+    config.memory_bandwidth_gbps = 25;
+    config.memory_controller_count = 1;
+    config.page_buffer_count = 2;
+    config.page_buffer_capacity_kb = 32;
+    config.l3_tile_count = 1;
+    config.l3_tile_capacity_kb = 128;
+    config.l2_bank_count = 4;
+    config.l2_bank_capacity_kb = 64;
+    config.l1_buffer_count = 64;
+    config.l1_buffer_capacity_kb = 64;
+    config.compute_tile_count = 1;
+    config.processor_array_rows = 8;
+    config.processor_array_cols = 8;
+    config.processor_array_topology = ProcessorArrayTopology::RECTANGULAR;
+    config.use_systolic_array_mode = true;
+    config.dma_engine_count = 2;
+    config.block_mover_count = 2;
+    config.streamer_count = 4;
 
     // Create simulator
     KPUSimulator sim(config);
 
     // Run your workload...
+    return 0;
 }
 ```
 
@@ -446,9 +372,9 @@ int main() {
 **Error**: `Failed to load configuration`
 
 **Solutions**:
-1. Check file exists: `ls -la configs/kpu/your_config.yaml`
-2. Validate YAML syntax with an online validator
-3. Ensure all required sections are present
+1. Check file exists: `ls -la configs/components/kpu/your_config.json`
+2. Validate JSON syntax with `jq . your_config.json`
+3. Use the config tool: `./build/tools/configuration/kpu-config validate your_config.json`
 
 ### Invalid Matrix Dimensions
 
@@ -464,23 +390,23 @@ int main() {
 -m 128,128,128
 ```
 
-### Factory Config Not Found
+### Preset Not Found
 
-**Error**: `Unknown factory config: xyz`
+**Error**: `Unknown preset: xyz`
 
-**Solution**: Use one of: `minimal`, `edge_ai`, `datacenter`
+**Solution**: Use one of: `fast`, `balanced`, `accurate`, `mixed`, `minimal`, `edge_ai`, `embodied_ai`, `datacenter`
 
 ### Low Performance Numbers
 
 If GFLOPS seems low:
 
 1. **Matrix too small**: Small matrices have high overhead-to-compute ratio
-2. **Wrong config**: Edge AI config has lower bandwidth
+2. **Wrong fidelity**: CYCLE_ACCURATE is slower but more precise
 3. **Use benchmark mode**: Compare across sizes to see scaling
 
 ```bash
 # See how performance scales with size
-./build/tools/runner/kpu-runner --factory datacenter -t benchmark
+./build/tools/runner/kpu-runner --preset datacenter -t benchmark
 ```
 
 ## Configuration Files Location
@@ -488,18 +414,28 @@ If GFLOPS seems low:
 ```
 kpu-sim/
 ├── configs/
-│   └── kpu/
-│       ├── minimal.yaml      # Basic testing config
-│       ├── minimal.json      # JSON equivalent
-│       ├── edge_ai.yaml      # Edge deployment config
-│       ├── embodied_ai.yaml  # Robotics/autonomous config
-│       └── datacenter.yaml   # High-performance config
+│   ├── components/
+│   │   └── kpu/                      # KPU component configs
+│   │       ├── minimal.json              # Minimal hardware (1 tile, 8x8)
+│   │       ├── edge_ai.json              # Edge AI (2 tiles, 16x16)
+│   │       ├── embodied_ai.json          # Robotics (64 tiles, 24x24)
+│   │       ├── datacenter.json           # Datacenter (256 tiles, 32x32)
+│   │       ├── crossval_behavioral.json  # Cross-validation BEHAVIORAL
+│   │       ├── crossval_transactional.json
+│   │       └── crossval_cycle_accurate.json
+│   └── systems/                      # Full system configs
+│       ├── minimal_kpu.json          # Minimal single-KPU system
+│       ├── edge_ai.json              # Edge AI system
+│       └── datacenter_hbm.json       # HBM datacenter system
 ├── tools/
-│   └── runner/
-│       └── kpu_runner.cpp    # Runner implementation
+│   ├── runner/
+│   │   └── kpu_runner.cpp            # Runner implementation
+│   └── configuration/
+│       └── kpu-config.cpp            # Config tool
 └── include/
     └── sw/kpu/
-        └── kpu_config_loader.hpp  # Config loader API
+        └── config/
+            └── simulator_config_parser.hpp  # Config parser API
 ```
 
 ## See Also
@@ -507,4 +443,3 @@ kpu-sim/
 - [KPU Architecture](kpu_architecture.md) - Detailed hardware architecture
 - [Memory Hierarchy](unified-address-space.md) - Memory addressing
 - [Python Integration](how-to-build-and-use-python-bindings.md) - Python API
-- [Benchmarking](sessions/2025-12-25_benchmarking_and_efficiency_analysis.md) - Performance analysis

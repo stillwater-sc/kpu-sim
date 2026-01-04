@@ -151,6 +151,9 @@ private:
         }
         return default_value;
     }
+
+    // Helper to resolve $ref references to external JSON files
+    static nlohmann::json resolve_ref(const nlohmann::json& j, const std::filesystem::path& base_path);
 };
 
 } // namespace sw::sim

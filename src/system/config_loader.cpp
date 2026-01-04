@@ -29,7 +29,10 @@ SystemConfig ConfigLoader::load_from_file(const std::filesystem::path& file_path
         throw std::runtime_error("JSON parse error in " + file_path.string() + ": " + e.what());
     }
 
-    return parse_json(j);
+    // Resolve any $ref references to external config files
+    json resolved = resolve_ref(j, file_path);
+
+    return parse_json(resolved);
 }
 
 SystemConfig ConfigLoader::load_from_string(const std::string& json_string) {
@@ -240,8 +243,13 @@ AcceleratorConfig ConfigLoader::parse_accelerator_config(const json& j) {
     config.description = get_or_default(j, "description", std::string(""));
 
     // Parse type-specific configuration
-    if (config.type == AcceleratorType::KPU && j.contains("kpu_config")) {
-        config.kpu_config = parse_kpu_config(j["kpu_config"]);
+    // Support both new naming ("kpu") and legacy naming ("kpu_config")
+    if (config.type == AcceleratorType::KPU) {
+        if (j.contains("kpu")) {
+            config.kpu_config = parse_kpu_config(j["kpu"]);
+        } else if (j.contains("kpu_config")) {
+            config.kpu_config = parse_kpu_config(j["kpu_config"]);
+        }
     }
     else if (config.type == AcceleratorType::GPU && j.contains("gpu_config")) {
         config.gpu_config = parse_gpu_config(j["gpu_config"]);
@@ -592,6 +600,57 @@ PowerManagementConfig ConfigLoader::parse_power_management_config(const json& j)
 // Helpers
 //=============================================================================
 
+json ConfigLoader::resolve_ref(const json& j, const std::filesystem::path& base_path) {
+    // If this is a $ref object, load the referenced file
+    if (j.is_object() && j.contains("$ref")) {
+        std::string ref_path = j["$ref"].get<std::string>();
+        std::filesystem::path resolved_path;
+
+        // Handle relative paths
+        if (ref_path[0] != '/') {
+            resolved_path = base_path.parent_path() / ref_path;
+        } else {
+            resolved_path = ref_path;
+        }
+
+        if (!std::filesystem::exists(resolved_path)) {
+            throw std::runtime_error("Referenced config file not found: " + resolved_path.string());
+        }
+
+        std::ifstream file(resolved_path);
+        if (!file.is_open()) {
+            throw std::runtime_error("Failed to open referenced file: " + resolved_path.string());
+        }
+
+        json ref_json;
+        file >> ref_json;
+
+        // Recursively resolve any nested $ref
+        return resolve_ref(ref_json, resolved_path);
+    }
+
+    // For arrays, resolve each element
+    if (j.is_array()) {
+        json result = json::array();
+        for (const auto& elem : j) {
+            result.push_back(resolve_ref(elem, base_path));
+        }
+        return result;
+    }
+
+    // For objects, resolve each value
+    if (j.is_object()) {
+        json result = json::object();
+        for (auto& [key, value] : j.items()) {
+            result[key] = resolve_ref(value, base_path);
+        }
+        return result;
+    }
+
+    // Primitives are returned as-is
+    return j;
+}
+
 AcceleratorType ConfigLoader::string_to_accelerator_type(const std::string& type_str) {
     if (type_str == "KPU") return AcceleratorType::KPU;
     if (type_str == "GPU") return AcceleratorType::GPU;
@@ -724,8 +783,9 @@ json ConfigLoader::to_json(const AcceleratorConfig& config) {
         j["description"] = config.description;
     }
 
+    // Use new naming convention ("kpu" instead of "kpu_config")
     if (config.kpu_config.has_value()) {
-        j["kpu_config"] = to_json(config.kpu_config.value());
+        j["kpu"] = to_json(config.kpu_config.value());
     }
     else if (config.gpu_config.has_value()) {
         j["gpu_config"] = to_json(config.gpu_config.value());

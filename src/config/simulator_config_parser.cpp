@@ -64,25 +64,34 @@ SimulatorConfig SimulatorConfigParser::parse_json(const nlohmann::json& j) {
         parse_simulation(j["simulation"], config);
     }
 
+    // Determine component source: new nested format (j["kpu"]) or legacy flat format
+    // New format: { "simulation": {...}, "kpu": { "memory": {...}, ... } }
+    // Legacy format: { "simulation": {...}, "memory": {...}, ... }
+    const nlohmann::json& components = j.contains("kpu") ? j["kpu"] : j;
+
     // Parse per-component configurations
-    if (j.contains("memory")) {
-        config.memory_controller = parse_memory(j["memory"], config);
+    if (components.contains("memory")) {
+        config.memory_controller = parse_memory(components["memory"], config);
     }
 
-    if (j.contains("dma")) {
-        config.dma_engine = parse_dma(j["dma"], config);
+    if (components.contains("dma")) {
+        config.dma_engine = parse_dma(components["dma"], config);
     }
 
-    if (j.contains("l3")) {
-        config.l3_tile = parse_l3(j["l3"], config);
+    if (components.contains("l3")) {
+        config.l3_tile = parse_l3(components["l3"], config);
     }
 
-    if (j.contains("compute")) {
-        config.compute_fabric = parse_compute(j["compute"], config);
+    if (components.contains("l2")) {
+        parse_l2(components["l2"], config);
     }
 
-    if (j.contains("noc")) {
-        config.noc = parse_noc(j["noc"], config);
+    if (components.contains("compute")) {
+        config.compute_fabric = parse_compute(components["compute"], config);
+    }
+
+    if (components.contains("noc")) {
+        config.noc = parse_noc(components["noc"], config);
     }
 
     return config;
@@ -132,10 +141,20 @@ MemoryControllerConfig SimulatorConfigParser::parse_memory(const nlohmann::json&
     }
 
     config.speed_mt_s = get_with_default<uint32_t>(j, "speed_mt_s", 6400);
-    config.num_channels = get_with_default<uint8_t>(j, "channels", 1);
+
+    // Support both new format (controllers, channels_per_controller) and legacy (channels)
+    if (j.contains("controllers")) {
+        config.num_controllers = get_with_default<uint8_t>(j, "controllers", 1);
+        config.channels_per_controller = get_with_default<uint8_t>(j, "channels_per_controller", 1);
+        config.num_channels = config.num_controllers * config.channels_per_controller;
+    } else {
+        config.num_channels = get_with_default<uint8_t>(j, "channels", 1);
+    }
+
     config.banks_per_channel = get_with_default<uint8_t>(j, "banks_per_channel", 16);
     config.bank_groups = get_with_default<uint8_t>(j, "bank_groups", 4);
     config.queue_depth = get_with_default<uint32_t>(j, "queue_depth", 32);
+    config.capacity_gb = get_with_default<uint32_t>(j, "capacity_gb", 1);
 
     // Apply default timing based on technology
     config.timing = MemoryControllerConfig::get_default_timing(
@@ -156,7 +175,15 @@ DMAEngineConfig SimulatorConfigParser::parse_dma(const nlohmann::json& j,
         config.fidelity = parse_fidelity(j["fidelity"].get<std::string>());
     }
 
-    config.num_channels = get_with_default<uint32_t>(j, "channels", 8);
+    // Support both new format (engines, channels_per_engine) and legacy (channels)
+    if (j.contains("engines")) {
+        config.num_engines = get_with_default<uint32_t>(j, "engines", 1);
+        config.channels_per_engine = get_with_default<uint32_t>(j, "channels_per_engine", 1);
+        config.num_channels = config.num_engines * config.channels_per_engine;
+    } else {
+        config.num_channels = get_with_default<uint32_t>(j, "channels", 8);
+    }
+
     config.max_burst_size = get_with_default<uint32_t>(j, "max_burst_size", 256);
     config.bandwidth_gbps = get_with_default<uint32_t>(j, "bandwidth_gbps", 100);
     config.queue_depth_per_channel = get_with_default<uint32_t>(j, "queue_depth", 16);
@@ -177,12 +204,23 @@ L3TileConfig SimulatorConfigParser::parse_l3(const nlohmann::json& j,
     }
 
     config.capacity_kb = get_with_default<uint32_t>(j, "capacity_kb", 256);
-    config.num_banks = get_with_default<uint8_t>(j, "num_banks", 8);
-    config.num_ports = get_with_default<uint8_t>(j, "num_ports", 4);
+
+    // Support both new format (tiles, banks_per_tile, ports_per_tile) and legacy (num_banks, num_ports)
+    config.num_tiles = get_with_default<uint32_t>(j, "tiles", 1);
+    config.num_banks = get_with_default<uint8_t>(j, "banks_per_tile",
+                                                  get_with_default<uint8_t>(j, "num_banks", 8));
+    config.num_ports = get_with_default<uint8_t>(j, "ports_per_tile",
+                                                  get_with_default<uint8_t>(j, "num_ports", 4));
     config.bank_width_bytes = get_with_default<uint32_t>(j, "bank_width_bytes", 64);
     config.access_latency_cycles = get_with_default<uint32_t>(j, "access_latency", 4);
 
     return config;
+}
+
+void SimulatorConfigParser::parse_l2(const nlohmann::json& j, SimulatorConfig& config) {
+    // L2 configuration updates SimulatorConfig directly
+    config.num_l2_banks = get_with_default<uint32_t>(j, "banks", config.num_l2_banks);
+    config.l2_capacity_kb = get_with_default<uint32_t>(j, "capacity_kb", 64);
 }
 
 ComputeFabricConfig SimulatorConfigParser::parse_compute(const nlohmann::json& j,
@@ -200,6 +238,9 @@ ComputeFabricConfig SimulatorConfigParser::parse_compute(const nlohmann::json& j
     if (j.contains("technology")) {
         config.technology = parse_compute_technology(j["technology"].get<std::string>());
     }
+
+    // Number of compute tiles
+    config.num_tiles = get_with_default<uint32_t>(j, "tiles", 1);
 
     config.array_rows = get_with_default<uint32_t>(j, "array_rows", 16);
     config.array_cols = get_with_default<uint32_t>(j, "array_cols", 16);
@@ -231,9 +272,15 @@ NoCConfig SimulatorConfigParser::parse_noc(const nlohmann::json& j,
         config.technology = parse_interconnect_technology(j["topology"].get<std::string>());
     }
 
-    config.mesh_rows = get_with_default<uint32_t>(j, "mesh_rows", 4);
-    config.mesh_cols = get_with_default<uint32_t>(j, "mesh_cols", 4);
-    config.link_bandwidth = get_with_default<uint32_t>(j, "link_bandwidth", 64);
+    // Support both new format (rows, cols) and legacy (mesh_rows, mesh_cols)
+    config.mesh_rows = get_with_default<uint32_t>(j, "rows",
+                                                   get_with_default<uint32_t>(j, "mesh_rows", 4));
+    config.mesh_cols = get_with_default<uint32_t>(j, "cols",
+                                                   get_with_default<uint32_t>(j, "mesh_cols", 4));
+
+    // Support both new format (link_bandwidth_gbps) and legacy (link_bandwidth)
+    config.link_bandwidth = get_with_default<uint32_t>(j, "link_bandwidth_gbps",
+                                                        get_with_default<uint32_t>(j, "link_bandwidth", 64));
     config.router_latency = get_with_default<uint32_t>(j, "router_latency", 1);
 
     // Handle dimensions as [rows, cols]
@@ -255,34 +302,34 @@ nlohmann::json SimulatorConfigParser::to_json(const SimulatorConfig& config) {
     // Simulation section
     j["simulation"] = {
         {"default_fidelity", to_string(config.default_fidelity)},
-        {"default_verification", to_string(config.default_verification)},
-        {"enable_tracing", config.default_tracing},
-        {"num_memory_controllers", config.num_memory_controllers},
-        {"num_dma_engines", config.num_dma_engines},
-        {"num_l3_tiles", config.num_l3_tiles},
-        {"num_l2_banks", config.num_l2_banks},
-        {"num_compute_tiles", config.num_compute_tiles}
+        {"verification_level", to_string(config.default_verification)},
+        {"enable_tracing", config.default_tracing}
     };
+
+    // KPU section - nested format
+    nlohmann::json kpu;
 
     // Memory section
     if (config.memory_controller) {
         const auto& mc = *config.memory_controller;
-        j["memory"] = {
+        kpu["memory"] = {
             {"fidelity", to_string(mc.fidelity)},
             {"technology", to_string(mc.technology)},
-            {"speed_mt_s", mc.speed_mt_s},
-            {"channels", mc.num_channels},
+            {"capacity_gb", mc.capacity_gb},
+            {"controllers", mc.num_controllers},
+            {"channels_per_controller", mc.channels_per_controller},
             {"banks_per_channel", mc.banks_per_channel},
-            {"verification", to_string(mc.verification)}
+            {"speed_mt_s", mc.speed_mt_s}
         };
     }
 
     // DMA section
     if (config.dma_engine) {
         const auto& dma = *config.dma_engine;
-        j["dma"] = {
+        kpu["dma"] = {
             {"fidelity", to_string(dma.fidelity)},
-            {"channels", dma.num_channels},
+            {"engines", dma.num_engines},
+            {"channels_per_engine", dma.channels_per_engine},
             {"bandwidth_gbps", dma.bandwidth_gbps}
         };
     }
@@ -290,21 +337,31 @@ nlohmann::json SimulatorConfigParser::to_json(const SimulatorConfig& config) {
     // L3 section
     if (config.l3_tile) {
         const auto& l3 = *config.l3_tile;
-        j["l3"] = {
+        kpu["l3"] = {
             {"fidelity", to_string(l3.fidelity)},
+            {"tiles", l3.num_tiles},
             {"capacity_kb", l3.capacity_kb},
-            {"num_banks", l3.num_banks},
-            {"num_ports", l3.num_ports}
+            {"banks_per_tile", l3.num_banks},
+            {"ports_per_tile", l3.num_ports}
         };
     }
+
+    // L2 section
+    kpu["l2"] = {
+        {"fidelity", to_string(config.default_fidelity)},
+        {"banks", config.num_l2_banks},
+        {"capacity_kb", config.l2_capacity_kb}
+    };
 
     // Compute section
     if (config.compute_fabric) {
         const auto& cf = *config.compute_fabric;
-        j["compute"] = {
+        kpu["compute"] = {
             {"fidelity", to_string(cf.fidelity)},
             {"technology", to_string(cf.technology)},
-            {"array_size", {cf.array_rows, cf.array_cols}},
+            {"tiles", cf.num_tiles},
+            {"array_rows", cf.array_rows},
+            {"array_cols", cf.array_cols},
             {"macs_per_cycle", cf.macs_per_cycle}
         };
     }
@@ -312,12 +369,16 @@ nlohmann::json SimulatorConfigParser::to_json(const SimulatorConfig& config) {
     // NoC section
     if (config.noc) {
         const auto& noc = *config.noc;
-        j["noc"] = {
+        kpu["noc"] = {
             {"fidelity", to_string(noc.fidelity)},
             {"topology", to_string(noc.technology)},
-            {"dimensions", {noc.mesh_rows, noc.mesh_cols}}
+            {"rows", noc.mesh_rows},
+            {"cols", noc.mesh_cols},
+            {"link_bandwidth_gbps", noc.link_bandwidth}
         };
     }
+
+    j["kpu"] = kpu;
 
     return j;
 }

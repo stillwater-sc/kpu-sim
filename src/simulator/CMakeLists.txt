@@ -8,7 +8,6 @@ set(KPU_SIMULATOR_SOURCES
     kernel.cpp
     kernel_serializer.cpp
     kernel_graph.cpp
-    kpu_config_loader.cpp
 #    device_manager.cpp
 #    instruction_set.cpp
 #    execution_engine.cpp

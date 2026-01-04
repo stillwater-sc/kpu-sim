@@ -40,7 +40,6 @@
  */
 
 #include <sw/kpu/kpu_simulator.hpp>
-#include <sw/kpu/kpu_config_loader.hpp>
 
 #include <iostream>
 #include <iomanip>
@@ -143,7 +142,30 @@ This example demonstrates the full data flow for matrix multiplication:
     print_separator("1. Configure KPU Simulator");
 
     // Create a minimal configuration for testing
-    auto config = KPUConfigLoader::create_minimal();
+    KPUSimulator::Config config;
+    config.host_memory_region_count = 1;
+    config.host_memory_region_capacity_mb = 256;
+    config.host_memory_bandwidth_gbps = 50;
+    config.memory_bank_count = 1;
+    config.memory_bank_capacity_mb = 256;
+    config.memory_bandwidth_gbps = 25;
+    config.memory_controller_count = 1;
+    config.page_buffer_count = 2;
+    config.page_buffer_capacity_kb = 32;
+    config.l3_tile_count = 1;
+    config.l3_tile_capacity_kb = 128;
+    config.l2_bank_count = 4;
+    config.l2_bank_capacity_kb = 64;
+    config.l1_buffer_count = 64;
+    config.l1_buffer_capacity_kb = 64;
+    config.compute_tile_count = 1;
+    config.processor_array_rows = 8;
+    config.processor_array_cols = 8;
+    config.processor_array_topology = ProcessorArrayTopology::RECTANGULAR;
+    config.use_systolic_array_mode = true;
+    config.dma_engine_count = 2;
+    config.block_mover_count = 2;
+    config.streamer_count = 4;
 
     // Print configuration
     std::cout << "\nKPU Configuration:\n";

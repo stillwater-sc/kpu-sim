@@ -17,7 +17,6 @@
  */
 
 #include <sw/kpu/kpu_simulator.hpp>
-#include <sw/kpu/kpu_config_loader.hpp>
 #include <sw/trace/trace_logger.hpp>
 #include <sw/trace/trace_exporter.hpp>
 #include <sw/trace/resource_tracker.hpp>

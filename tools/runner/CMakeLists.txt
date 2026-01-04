@@ -5,6 +5,7 @@ add_executable(kpu-runner kpu_runner.cpp)
 target_link_libraries(kpu-runner
     PRIVATE
         kpu_simulator
+        kpu_config
         kpu_runtime
         kpu_compiler
         kpu_isa
