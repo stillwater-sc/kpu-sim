@@ -1,58 +1,107 @@
 # patterns/CMakeLists.txt
 #
-# LPDDR5 Memory Controller Pattern Test Suite
+# Multi-Component Pattern Test Suite
 #
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2024-2025 Stillwater Supercomputing, Inc.
 
-# Pattern common headers (header-only)
+# ============================================================================
+# Common Pattern Infrastructure
+# ============================================================================
+
+# Top-level pattern common headers (cross-component)
 add_library(pattern_common INTERFACE)
 target_include_directories(pattern_common INTERFACE
     ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/common
 )
 
-# Pattern 1: LPDDR5 Bank Access Patterns
-# Tests single bank, multi-bank, page hits, conflicts, and turnarounds
-add_executable(single_dma_single_bank
-    pattern01_single_dma_single_bank/main.cpp
-)
-target_link_libraries(single_dma_single_bank PRIVATE
-    pattern_common
-    kpu_memory_components
-    kpu_trace
-)
-target_include_directories(single_dma_single_bank PRIVATE
+# ============================================================================
+# Memory Patterns
+# ============================================================================
+
+# LPDDR5-specific common headers
+add_library(lpddr5_pattern_common INTERFACE)
+target_include_directories(lpddr5_pattern_common INTERFACE
+    ${CMAKE_CURRENT_SOURCE_DIR}/memory/lpddr5/common
     ${PROJECT_SOURCE_DIR}/include
 )
 
-# Set output directory
-set_target_properties(single_dma_single_bank PROPERTIES
-    RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/patterns
-)
+# Helper function to add LPDDR5 pattern
+function(add_lpddr5_pattern NAME SOURCE_DIR)
+    add_executable(lpddr5_${NAME}
+        ${CMAKE_CURRENT_SOURCE_DIR}/memory/lpddr5/${SOURCE_DIR}/main.cpp
+    )
+    target_link_libraries(lpddr5_${NAME} PRIVATE
+        pattern_common
+        lpddr5_pattern_common
+        kpu_memory_components
+        kpu_trace
+    )
+    set_target_properties(lpddr5_${NAME} PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/patterns/memory/lpddr5
+    )
+endfunction()
 
-# Future patterns will be added as they are implemented:
-# Level 1: Single Bank
-# add_subdirectory(level1_single_bank/pattern02_page_conflict)
-# add_subdirectory(level1_single_bank/pattern03_mixed_rw)
+# -----------------------------------------------------------------------------
+# Level 1: Single Bank Patterns
+# -----------------------------------------------------------------------------
 
-# Level 2: Two Banks
-# add_subdirectory(level2_two_banks/pattern04_same_group)
-# add_subdirectory(level2_two_banks/pattern05_diff_groups)
+add_lpddr5_pattern(page_hits single-bank/page-hits)
+add_lpddr5_pattern(page_conflicts single-bank/page-conflicts)
+add_lpddr5_pattern(mixed_rw single-bank/mixed-rw)
 
-# Level 3: Three Banks
-# add_subdirectory(level3_three_banks/pattern06_mixed_groups)
-# add_subdirectory(level3_three_banks/pattern07_same_group)
+# -----------------------------------------------------------------------------
+# Level 2: Two Bank Patterns (TODO)
+# -----------------------------------------------------------------------------
 
-# Level 4: Four Banks
-# add_subdirectory(level4_four_banks/pattern08_full_group)
-# add_subdirectory(level4_four_banks/pattern09_across_groups)
-# add_subdirectory(level4_four_banks/pattern10_page_hit_burst)
+# add_lpddr5_pattern(same_group two-bank/same-group)
+# add_lpddr5_pattern(diff_groups two-bank/diff-groups)
 
-# Level 5: Dual Channel
-# add_subdirectory(level5_dual_channel/pattern11_independent)
-# add_subdirectory(level5_dual_channel/pattern12_interleaved)
+# -----------------------------------------------------------------------------
+# Level 3: Three Bank Patterns (TODO)
+# -----------------------------------------------------------------------------
 
-# Level 6: Complex Patterns
-# add_subdirectory(level6_complex/pattern13_strided)
-# add_subdirectory(level6_complex/pattern14_random)
-# add_subdirectory(level6_complex/pattern15_tile_load)
+# add_lpddr5_pattern(three_mixed_groups three-bank/mixed-groups)
+# add_lpddr5_pattern(three_same_group three-bank/same-group)
+
+# -----------------------------------------------------------------------------
+# Level 4: Four Bank Patterns (TODO)
+# -----------------------------------------------------------------------------
+
+# add_lpddr5_pattern(full_group four-bank/full-group)
+# add_lpddr5_pattern(across_groups four-bank/across-groups)
+# add_lpddr5_pattern(page_hit_burst four-bank/page-hit-burst)
+
+# -----------------------------------------------------------------------------
+# Level 5: Dual Channel Patterns (TODO)
+# -----------------------------------------------------------------------------
+
+# add_lpddr5_pattern(independent dual-channel/independent)
+# add_lpddr5_pattern(interleaved dual-channel/interleaved)
+
+# -----------------------------------------------------------------------------
+# Level 6: Complex Patterns (TODO)
+# -----------------------------------------------------------------------------
+
+# add_lpddr5_pattern(strided complex/strided)
+# add_lpddr5_pattern(random complex/random)
+# add_lpddr5_pattern(tile_load complex/tile-load)
+
+# ============================================================================
+# NoC Patterns (TODO)
+# ============================================================================
+
+# add_subdirectory(noc)
+
+# ============================================================================
+# Compute Patterns (TODO)
+# ============================================================================
+
+# add_subdirectory(compute)
+
+# ============================================================================
+# Connection Patterns (TODO)
+# ============================================================================
+
+# add_subdirectory(connection)
