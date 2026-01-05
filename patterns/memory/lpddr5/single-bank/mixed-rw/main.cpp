@@ -19,7 +19,7 @@ using namespace sw::kpu::patterns::lpddr5;
 
 bool test_mixed_rw() {
     std::cout << "\n=== Test: Mixed Read/Write with Turnaround ===" << std::endl;
-    std::cout << "Configuration: Bank 0, same row, alternating R/W" << std::endl;
+    std::cout << "Configuration: Bank 0, same row, alternating R/W (8 ops)" << std::endl;
     std::cout << "Expected: tRTW and tWTR turnaround delays" << std::endl;
 
     LPDDR5Harness harness(single_channel_config());
@@ -27,7 +27,7 @@ bool test_mixed_rw() {
     const uint8_t BANK = 0;
     const uint32_t ROW = 100;
 
-    for (int i = 0; i < 4; ++i) {
+    for (int i = 0; i < 8; ++i) {
         if (i % 2 == 0) {
             harness.submit_read(make_address(BANK, ROW, i * 64));
         } else {
@@ -46,8 +46,8 @@ bool test_mixed_rw() {
     if (!harness.verify_no_violations()) return false;
 
     const auto& stats = harness.stats();
-    if (stats.reads != 2 || stats.writes != 2) {
-        std::cerr << "FAIL: Expected 2 reads and 2 writes" << std::endl;
+    if (stats.reads != 4 || stats.writes != 4) {
+        std::cerr << "FAIL: Expected 4 reads and 4 writes" << std::endl;
         return false;
     }
 
@@ -79,13 +79,16 @@ int main(int argc, char* argv[]) {
     std::cout << "=======================================" << std::endl;
 
     bool run_fidelity = false;
-    std::string trace_file = "mixed_rw_trace.json";
+    bool export_trace = true;
+    std::string trace_file;  // Will use default organized path
 
     for (int i = 1; i < argc; ++i) {
         if (std::strcmp(argv[i], "--fidelity") == 0) {
             run_fidelity = true;
         } else if (std::strcmp(argv[i], "--trace") == 0 && i + 1 < argc) {
             trace_file = argv[++i];
+        } else if (std::strcmp(argv[i], "--no-trace") == 0) {
+            export_trace = false;
         }
     }
 
@@ -95,18 +98,24 @@ int main(int argc, char* argv[]) {
         run_multi_fidelity();
     }
 
-    // Export trace
-    std::cout << "\n=== Trace Export ===" << std::endl;
-    LPDDR5Harness harness(single_channel_config());
-    for (int i = 0; i < 4; ++i) {
-        if (i % 2 == 0) {
-            harness.submit_read(make_address(0, 100, i * 64));
-        } else {
-            harness.submit_write(make_address(0, 100, i * 64));
+    // Export trace to organized directory
+    if (export_trace) {
+        std::cout << "\n=== Trace Export ===" << std::endl;
+        LPDDR5Harness harness(single_channel_config());
+        for (int i = 0; i < 8; ++i) {
+            if (i % 2 == 0) {
+                harness.submit_read(make_address(0, 100, i * 64));
+            } else {
+                harness.submit_write(make_address(0, 100, i * 64));
+            }
         }
+        harness.run_until_complete();
+
+        if (trace_file.empty()) {
+            trace_file = make_trace_path("single-bank", "mixed_rw_trace.json");
+        }
+        harness.export_trace(trace_file);
     }
-    harness.run_until_complete();
-    harness.export_trace(trace_file);
 
     return pass ? 0 : 1;
 }

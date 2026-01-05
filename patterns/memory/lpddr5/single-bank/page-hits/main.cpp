@@ -19,15 +19,15 @@ using namespace sw::kpu::patterns::lpddr5;
 
 bool test_page_hits() {
     std::cout << "\n=== Test: Single Bank Page Hits ===" << std::endl;
-    std::cout << "Configuration: Bank 0, same row, 8 reads" << std::endl;
-    std::cout << "Expected: 1 page empty, 7 page hits" << std::endl;
+    std::cout << "Configuration: Bank 0, same row, 16 reads" << std::endl;
+    std::cout << "Expected: 1 page empty, 15 page hits" << std::endl;
 
     LPDDR5Harness harness(single_channel_config());
 
     const uint8_t BANK = 0;
     const uint32_t ROW = 100;
 
-    for (int i = 0; i < 8; ++i) {
+    for (int i = 0; i < 16; ++i) {
         harness.submit_read(make_address(BANK, ROW, i * 64));
     }
 
@@ -40,7 +40,7 @@ bool test_page_hits() {
     harness.print_stats();
 
     if (!harness.verify_no_violations()) return false;
-    if (!harness.verify_stats(8, 0, 7, 1, 0)) return false;
+    if (!harness.verify_stats(16, 0, 15, 1, 0)) return false;
 
     std::cout << "PASS: Page hits work correctly" << std::endl;
     return true;
@@ -65,13 +65,16 @@ int main(int argc, char* argv[]) {
     std::cout << "======================================" << std::endl;
 
     bool run_fidelity = false;
-    std::string trace_file = "page_hits_trace.json";
+    bool export_trace = true;
+    std::string trace_file;  // Will use default organized path
 
     for (int i = 1; i < argc; ++i) {
         if (std::strcmp(argv[i], "--fidelity") == 0) {
             run_fidelity = true;
         } else if (std::strcmp(argv[i], "--trace") == 0 && i + 1 < argc) {
             trace_file = argv[++i];
+        } else if (std::strcmp(argv[i], "--no-trace") == 0) {
+            export_trace = false;
         }
     }
 
@@ -81,14 +84,21 @@ int main(int argc, char* argv[]) {
         run_multi_fidelity();
     }
 
-    // Export trace
-    std::cout << "\n=== Trace Export ===" << std::endl;
-    LPDDR5Harness harness(single_channel_config());
-    for (int i = 0; i < 8; ++i) {
-        harness.submit_read(make_address(0, 100, i * 64));
+    // Export trace to organized directory
+    if (export_trace) {
+        std::cout << "\n=== Trace Export ===" << std::endl;
+        LPDDR5Harness harness(single_channel_config());
+        for (int i = 0; i < 16; ++i) {
+            harness.submit_read(make_address(0, 100, i * 64));
+        }
+        harness.run_until_complete();
+
+        // Use organized path if not specified
+        if (trace_file.empty()) {
+            trace_file = make_trace_path("single-bank", "page_hits_trace.json");
+        }
+        harness.export_trace(trace_file);
     }
-    harness.run_until_complete();
-    harness.export_trace(trace_file);
 
     return pass ? 0 : 1;
 }

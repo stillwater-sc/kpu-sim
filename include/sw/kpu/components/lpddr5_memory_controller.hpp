@@ -114,6 +114,11 @@ struct Bank {
 
     // Track burst completion for data bus
     uint64_t burst_end = 0;          // When current burst ends
+
+    // INV-002: Track which request opened this page for PRECHARGE tracing
+    // When PRECHARGE is issued, use this ID so the command is associated
+    // with the transaction that triggered it, not a sentinel value.
+    uint64_t page_opener_request_id = 0;
 };
 
 // ============================================================================
@@ -429,7 +434,7 @@ private:
     bool can_precharge(uint8_t channel, uint8_t bank, uint64_t cycle) const;
     bool can_refresh(uint8_t channel, uint8_t bank) const;
 
-    void do_activate(uint8_t channel, uint8_t bank, uint32_t row);
+    void do_activate(uint8_t channel, uint8_t bank, uint32_t row, uint64_t request_id);
     void do_read(uint8_t channel, uint8_t bank, MemoryRequest& req);
     void do_write(uint8_t channel, uint8_t bank, MemoryRequest& req);
     void do_precharge(uint8_t channel, uint8_t bank);

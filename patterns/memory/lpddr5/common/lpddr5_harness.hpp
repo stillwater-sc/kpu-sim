@@ -15,14 +15,50 @@
 #include <fstream>
 #include <functional>
 
+#include <filesystem>
 #include <sw/kpu/components/lpddr5_memory_controller.hpp>
 #include <sw/trace/resource_tracker.hpp>
 #include <sw/trace/trace_exporter.hpp>
 #include "lpddr5_configs.hpp"
 
+namespace fs = std::filesystem;
+
 namespace sw::kpu::patterns::lpddr5 {
 
 using namespace sw::kpu::lpddr5;
+
+// ============================================================================
+// Trace Directory Management
+// ============================================================================
+
+/// Get project root by finding CMakeLists.txt
+inline fs::path find_project_root() {
+    fs::path current = fs::current_path();
+    while (!current.empty() && current != current.root_path()) {
+        if (fs::exists(current / "CMakeLists.txt") &&
+            fs::exists(current / "patterns")) {
+            return current;
+        }
+        current = current.parent_path();
+    }
+    // Fallback to current directory
+    return fs::current_path();
+}
+
+/// Get trace directory for a specific pattern category
+/// Creates the directory if it doesn't exist
+inline fs::path get_trace_dir(const std::string& category) {
+    fs::path root = find_project_root();
+    fs::path trace_dir = root / "traces" / "memory" / "lpddr5" / category;
+    fs::create_directories(trace_dir);
+    return trace_dir;
+}
+
+/// Build full trace path
+inline std::string make_trace_path(const std::string& category,
+                                    const std::string& filename) {
+    return (get_trace_dir(category) / filename).string();
+}
 
 /// LPDDR5-specific test harness for memory controller patterns
 ///

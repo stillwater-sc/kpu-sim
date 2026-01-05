@@ -1,0 +1,5 @@
+# Ignore generated trace files
+*.json
+
+# Keep the viewer and documentation
+!.gitignore

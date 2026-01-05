@@ -558,7 +558,7 @@ bool LPDDR5MemoryController::can_refresh(uint8_t channel, uint8_t bank) const {
 // Bank operations
 // ============================================================================
 
-void LPDDR5MemoryController::do_activate(uint8_t channel, uint8_t bank, uint32_t row) {
+void LPDDR5MemoryController::do_activate(uint8_t channel, uint8_t bank, uint32_t row, uint64_t request_id) {
     auto& ch = channels_[channel];
     Bank& b = ch.banks[bank];
     const auto& timing = lpddr5_config_.timing;
@@ -567,6 +567,11 @@ void LPDDR5MemoryController::do_activate(uint8_t channel, uint8_t bank, uint32_t
     b.open_row = row;
     b.state_until = current_cycle_ + timing.tRCD;
     b.last_activate = current_cycle_;
+
+    // INV-002: Track which request opened this page for PRECHARGE tracing
+    // When PRECHARGE is issued later, it will use this ID so the command
+    // is associated with the transaction that triggered it.
+    b.page_opener_request_id = request_id;
 
     // Update bank group
     uint8_t bg = bank / 4;
@@ -579,9 +584,9 @@ void LPDDR5MemoryController::do_activate(uint8_t channel, uint8_t bank, uint32_t
     ch.cmd_bus_state = CommandBusState::BUSY;
     ch.cmd_bus_until = current_cycle_ + 1;
 
-    // Trace the operation
+    // Trace the operation - use the request_id so ACTIVATE is correlated with its CAS command
     trace_bank_state_change(channel, bank, lpddr5::BankState::ACTIVATING, "ACTIVATE row " + std::to_string(row));
-    trace_command(channel, bank, "ACTIVATE", timing.tRCD, 0);
+    trace_command(channel, bank, "ACTIVATE", timing.tRCD, request_id);
     trace_bus_state_change(channel, false, "BUSY", "ACT cmd");
 }
 
@@ -669,6 +674,11 @@ void LPDDR5MemoryController::do_precharge(uint8_t channel, uint8_t bank) {
     Bank& b = ch.banks[bank];
     const auto& timing = lpddr5_config_.timing;
 
+    // INV-002: Capture the request_id that opened this page before clearing it
+    // This ensures PRECHARGE is traced with the same txn_id as the request
+    // that triggered the page open, maintaining command-to-transaction association.
+    uint64_t request_id = b.page_opener_request_id;
+
     b.state = lpddr5::BankState::PRECHARGING;
     b.state_until = current_cycle_ + timing.tRP;
 
@@ -676,9 +686,9 @@ void LPDDR5MemoryController::do_precharge(uint8_t channel, uint8_t bank) {
     ch.cmd_bus_state = CommandBusState::BUSY;
     ch.cmd_bus_until = current_cycle_ + 1;
 
-    // Trace the operation
+    // Trace the operation with the correct request_id (not 0)
     trace_bank_state_change(channel, bank, lpddr5::BankState::PRECHARGING, "PRECHARGE");
-    trace_command(channel, bank, "PRECHARGE", timing.tRP, 0);
+    trace_command(channel, bank, "PRECHARGE", timing.tRP, request_id);
     trace_bus_state_change(channel, false, "BUSY", "PRE cmd");
 }
 
@@ -853,7 +863,7 @@ bool LPDDR5MemoryController::try_issue_request(MemoryRequest& req) {
         case lpddr5::BankState::IDLE:
             // Page empty - need to activate
             if (can_activate(ch, bank, current_cycle_)) {
-                do_activate(ch, bank, req.row);
+                do_activate(ch, bank, req.row, req.id);
                 // Only count as page_empty if this wasn't preceded by a page conflict
                 if (!req.triggered_conflict) {
                     stats_.page_empty++;

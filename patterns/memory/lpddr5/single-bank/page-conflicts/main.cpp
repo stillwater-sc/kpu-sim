@@ -64,13 +64,16 @@ int main(int argc, char* argv[]) {
     std::cout << "==========================================" << std::endl;
 
     bool run_fidelity = false;
-    std::string trace_file = "page_conflicts_trace.json";
+    bool export_trace = true;
+    std::string trace_file;  // Will use default organized path
 
     for (int i = 1; i < argc; ++i) {
         if (std::strcmp(argv[i], "--fidelity") == 0) {
             run_fidelity = true;
         } else if (std::strcmp(argv[i], "--trace") == 0 && i + 1 < argc) {
             trace_file = argv[++i];
+        } else if (std::strcmp(argv[i], "--no-trace") == 0) {
+            export_trace = false;
         }
     }
 
@@ -80,14 +83,20 @@ int main(int argc, char* argv[]) {
         run_multi_fidelity();
     }
 
-    // Export trace
-    std::cout << "\n=== Trace Export ===" << std::endl;
-    LPDDR5Harness harness(single_channel_config());
-    for (int i = 0; i < 4; ++i) {
-        harness.submit_read(make_address(0, i * 100, 0));
+    // Export trace to organized directory
+    if (export_trace) {
+        std::cout << "\n=== Trace Export ===" << std::endl;
+        LPDDR5Harness harness(single_channel_config());
+        for (int i = 0; i < 4; ++i) {
+            harness.submit_read(make_address(0, i * 100, 0));
+        }
+        harness.run_until_complete();
+
+        if (trace_file.empty()) {
+            trace_file = make_trace_path("single-bank", "page_conflicts_trace.json");
+        }
+        harness.export_trace(trace_file);
     }
-    harness.run_until_complete();
-    harness.export_trace(trace_file);
 
     return pass ? 0 : 1;
 }

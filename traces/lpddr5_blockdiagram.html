@@ -1,0 +1,1192 @@
+<!DOCTYPE html>
+<!--
+  LPDDR5 Memory Controller - Block Diagram Animation
+
+  Architecture based on:
+  - System Fabric → DDR Memory Controller → DDR PHY → LPDDR5 Device
+
+  Controller micro-architecture:
+  - Write Path: AXI Write → Packetizer → Write Cmd Pool + Data Buffer → Arbitration → Scheduler
+  - Read Path: Scheduler → PHY → DRAM → Read Data Path → Reorder Buffer → AXI Read
+  - Command Path: Scheduler → Timing Control → PHY → DRAM
+
+  References:
+  - https://chipress.online/2024/05/11/design-a-ddr-memory-controller-i-an-overview/
+  - https://www.systemverilog.io/design/lpddr5-tutorial-physical-structure/
+  - DFI Specification (ddr-phy.org)
+
+  SPDX-License-Identifier: MIT
+  Copyright (c) 2024-2025 Stillwater Supercomputing, Inc.
+-->
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>LPDDR5 Block Diagram Animation</title>
+    <style>
+        :root {
+            --bg: #0f172a;
+            --panel: #1e293b;
+            --border: #334155;
+            --text: #e2e8f0;
+            --text-dim: #94a3b8;
+            --accent: #3b82f6;
+            --read: #22c55e;
+            --write: #a855f7;
+            --activate: #f59e0b;
+            --precharge: #ec4899;
+            --idle: #475569;
+            --cmd: #0ea5e9;
+            --init: #6366f1;
+            --phy: #14b8a6;
+            --dram: #f97316;
+        }
+
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            min-height: 100vh;
+        }
+
+        .header {
+            background: var(--panel);
+            border-bottom: 1px solid var(--border);
+            padding: 8px 16px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+
+        .header h1 { font-size: 13px; font-weight: 600; }
+
+        .controls { display: flex; align-items: center; gap: 8px; }
+
+        button {
+            background: var(--border);
+            color: var(--text);
+            border: none;
+            padding: 5px 12px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 11px;
+        }
+        button:hover { background: #475569; }
+        button.active { background: var(--accent); }
+        button:disabled { opacity: 0.5; cursor: not-allowed; }
+
+        .view-toggle {
+            display: flex;
+            gap: 2px;
+            background: var(--bg);
+            padding: 2px;
+            border-radius: 6px;
+            border: 1px solid var(--border);
+        }
+        .view-toggle button { border-radius: 4px; padding: 4px 10px; }
+
+        .cycle-display {
+            font-family: monospace;
+            font-size: 12px;
+            background: var(--bg);
+            padding: 4px 10px;
+            border-radius: 4px;
+            border: 1px solid var(--border);
+        }
+
+        .main { display: flex; height: calc(100vh - 44px); }
+
+        .diagram-area {
+            flex: 1;
+            padding: 12px;
+            display: flex;
+            flex-direction: column;
+            overflow: auto;
+        }
+
+        .view-svg { width: 100%; flex: 1; display: none; }
+        .view-svg.active { display: block; }
+
+        /* Block styling */
+        .block {
+            fill: var(--panel);
+            stroke: var(--border);
+            stroke-width: 2;
+        }
+        .block-label {
+            fill: var(--text);
+            font-size: 9px;
+            font-weight: 600;
+            text-anchor: middle;
+        }
+        .block-sublabel {
+            fill: var(--text-dim);
+            font-size: 7px;
+            text-anchor: middle;
+        }
+
+        /* Section boxes */
+        .section-box {
+            fill: none;
+            stroke-width: 2;
+            rx: 6;
+        }
+        .section-box.mc { stroke: var(--accent); }
+        .section-box.phy { stroke: var(--phy); }
+        .section-box.dram { stroke: var(--dram); }
+        .section-label {
+            font-size: 11px;
+            font-weight: 600;
+        }
+        .section-label.mc { fill: var(--accent); }
+        .section-label.phy { fill: var(--phy); }
+        .section-label.dram { fill: var(--dram); }
+
+        /* Queue/Pool styling */
+        .pool {
+            fill: #1a2536;
+            stroke: var(--border);
+            stroke-width: 1.5;
+        }
+        .pool.write { stroke: var(--write); }
+        .pool.read { stroke: var(--read); }
+        .pool.maint { stroke: var(--activate); }
+        .pool-label {
+            fill: var(--text);
+            font-size: 8px;
+            font-weight: 600;
+            text-anchor: middle;
+        }
+
+        /* Queue slots */
+        .slot {
+            fill: #293548;
+            stroke: var(--border);
+            stroke-width: 1;
+        }
+        .slot.active { fill: #1e3a5f; stroke: var(--accent); stroke-width: 2; }
+        .slot.write-active { fill: #3b1f4a; stroke: var(--write); stroke-width: 2; }
+        .slot.read-active { fill: #0d3320; stroke: var(--read); stroke-width: 2; }
+        .slot-label {
+            fill: var(--text-dim);
+            font-size: 7px;
+            font-weight: 600;
+            text-anchor: middle;
+        }
+
+        /* Bank styling */
+        .bank { fill: var(--idle); stroke: #64748b; stroke-width: 1.5; }
+        .bank.idle { fill: var(--idle); }
+        .bank.activating { fill: #b45309; stroke: var(--activate); }
+        .bank.reading { fill: #1d4ed8; stroke: var(--read); }
+        .bank.writing { fill: #7c3aed; stroke: var(--write); }
+        .bank.precharging { fill: #be185d; stroke: var(--precharge); }
+        .bank-label { fill: white; font-size: 7px; font-weight: 600; text-anchor: middle; }
+
+        /* Bus styling */
+        .bus { fill: var(--idle); transition: fill 0.1s; }
+        .bus.cmd-active { fill: var(--cmd); }
+        .bus.read-active { fill: var(--read); }
+        .bus.write-active { fill: var(--write); }
+        .bus-value {
+            fill: white;
+            font-size: 7px;
+            font-weight: bold;
+            text-anchor: middle;
+        }
+
+        /* Data path arrows */
+        .arrow { fill: none; stroke: var(--border); stroke-width: 1.5; }
+        .arrow.write { stroke: var(--write); }
+        .arrow.read { stroke: var(--read); }
+        .arrow.cmd { stroke: var(--cmd); stroke-dasharray: 4,2; }
+        .arrow.thick { stroke-width: 3; }
+
+        /* Request tokens */
+        .token { transition: transform 0.15s ease-out; }
+        .token-circle { stroke-width: 2; }
+        .token-circle.read { fill: var(--read); stroke: #16a34a; }
+        .token-circle.write { fill: var(--write); stroke: #9333ea; }
+        .token-text { fill: white; font-size: 7px; font-weight: bold; text-anchor: middle; }
+
+        /* Init indicator */
+        .init-pulse { animation: pulse 1.5s ease-in-out infinite; }
+        @keyframes pulse { 0%, 100% { opacity: 0.4; } 50% { opacity: 1; } }
+        .init-bar { fill: var(--init); transition: width 0.1s linear; }
+        .init-text { fill: var(--init); font-size: 10px; font-weight: 600; text-anchor: middle; }
+
+        /* Sidebar */
+        .sidebar {
+            width: 260px;
+            background: var(--panel);
+            border-left: 1px solid var(--border);
+            padding: 12px;
+            overflow-y: auto;
+            font-size: 11px;
+        }
+        .sidebar h2 {
+            font-size: 10px;
+            color: var(--text-dim);
+            text-transform: uppercase;
+            margin-bottom: 8px;
+        }
+        .section { margin-bottom: 16px; }
+        .row {
+            display: flex;
+            justify-content: space-between;
+            padding: 3px 0;
+            border-bottom: 1px solid var(--border);
+        }
+        .row-label { color: var(--text-dim); }
+        .row-value { font-family: monospace; }
+
+        .legend {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 4px;
+            margin-top: 8px;
+        }
+        .legend-item {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            font-size: 9px;
+        }
+        .legend-color {
+            width: 12px;
+            height: 12px;
+            border-radius: 2px;
+        }
+        .legend-color.request { border-radius: 50%; }
+
+        .debug {
+            background: var(--bg);
+            padding: 8px;
+            border-radius: 4px;
+            font-family: monospace;
+            font-size: 9px;
+            max-height: 180px;
+            overflow-y: auto;
+            white-space: pre-wrap;
+        }
+
+        .no-data {
+            position: absolute;
+            top: 50%; left: 50%;
+            transform: translate(-50%, -50%);
+            text-align: center;
+            color: var(--text-dim);
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>LPDDR5 Memory Subsystem - Block Diagram</h1>
+        <div class="controls">
+            <input type="file" id="fileInput" accept=".json" style="font-size: 11px; width: 160px;">
+            <div class="view-toggle">
+                <button id="btnViewArch" class="active">Architecture</button>
+                <button id="btnViewDetail">Detailed</button>
+            </div>
+            <button id="btnReset" disabled>Reset</button>
+            <button id="btnStep" disabled>Step</button>
+            <button id="btnPlay" disabled>Play</button>
+            <input type="range" id="speedSlider" min="50" max="500" value="200" style="width: 60px;">
+            <div class="cycle-display">Cycle: <span id="cycleNum">0</span> / <span id="cycleMax">0</span></div>
+        </div>
+    </div>
+
+    <div class="main">
+        <div class="diagram-area">
+            <div class="no-data" id="noData">Load a trace JSON file to visualize</div>
+
+            <!-- ARCHITECTURE VIEW -->
+            <svg id="diagram-arch" class="view-svg active" viewBox="0 0 1100 580">
+                <defs>
+                    <marker id="arr-r" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+                        <polygon points="0 0, 8 3, 0 6" fill="#64748b"/>
+                    </marker>
+                    <marker id="arr-wr" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+                        <polygon points="0 0, 8 3, 0 6" fill="#a855f7"/>
+                    </marker>
+                    <marker id="arr-rd" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+                        <polygon points="0 0, 8 3, 0 6" fill="#22c55e"/>
+                    </marker>
+                    <marker id="arr-cmd" markerWidth="6" markerHeight="5" refX="5" refY="2.5" orient="auto">
+                        <polygon points="0 0, 6 2.5, 0 5" fill="#0ea5e9"/>
+                    </marker>
+                    <marker id="arr-left-rd" markerWidth="8" markerHeight="6" refX="1" refY="3" orient="auto">
+                        <polygon points="8 0, 0 3, 8 6" fill="#22c55e"/>
+                    </marker>
+                </defs>
+
+                <!-- Title -->
+                <text x="550" y="20" text-anchor="middle" fill="#e2e8f0" font-size="12" font-weight="600">
+                    LPDDR5 Memory Subsystem: System Fabric → Memory Controller → PHY → DRAM
+                </text>
+
+                <!-- ============ SYSTEM FABRIC (Host Interface) ============ -->
+                <text x="30" y="50" class="section-label" fill="#64748b">SYSTEM FABRIC</text>
+
+                <!-- Write Request Queue (horizontal, L→R) -->
+                <text x="30" y="75" fill="#a855f7" font-size="9" font-weight="600">Write Requests →</text>
+                <g id="a-write-queue">
+                    <rect class="slot" id="a-wqslot-0" x="30" y="82" width="44" height="22" rx="3"/>
+                    <text class="slot-label" x="52" y="96" id="a-wqlabel-0">-</text>
+                    <rect class="slot" id="a-wqslot-1" x="78" y="82" width="44" height="22" rx="3"/>
+                    <text class="slot-label" x="100" y="96" id="a-wqlabel-1">-</text>
+                    <rect class="slot" id="a-wqslot-2" x="126" y="82" width="44" height="22" rx="3"/>
+                    <text class="slot-label" x="148" y="96" id="a-wqlabel-2">-</text>
+                    <rect class="slot" id="a-wqslot-3" x="174" y="82" width="44" height="22" rx="3"/>
+                    <text class="slot-label" x="196" y="96" id="a-wqlabel-3">-</text>
+                </g>
+
+                <!-- Read Request Queue (horizontal, L→R) -->
+                <text x="30" y="125" fill="#22c55e" font-size="9" font-weight="600">Read Requests →</text>
+                <g id="a-read-queue">
+                    <rect class="slot" id="a-rqslot-0" x="30" y="132" width="44" height="22" rx="3"/>
+                    <text class="slot-label" x="52" y="146" id="a-rqlabel-0">-</text>
+                    <rect class="slot" id="a-rqslot-1" x="78" y="132" width="44" height="22" rx="3"/>
+                    <text class="slot-label" x="100" y="146" id="a-rqlabel-1">-</text>
+                    <rect class="slot" id="a-rqslot-2" x="126" y="132" width="44" height="22" rx="3"/>
+                    <text class="slot-label" x="148" y="146" id="a-rqlabel-2">-</text>
+                    <rect class="slot" id="a-rqslot-3" x="174" y="132" width="44" height="22" rx="3"/>
+                    <text class="slot-label" x="196" y="146" id="a-rqlabel-3">-</text>
+                </g>
+
+                <!-- ============ MEMORY CONTROLLER ============ -->
+                <text x="240" y="50" class="section-label mc">DDR MEMORY CONTROLLER</text>
+                <rect class="section-box mc" x="235" y="58" width="420" height="460"/>
+
+                <!-- Write Path -->
+                <g id="a-write-path">
+                    <!-- Write Packetizer -->
+                    <rect class="block" x="250" y="75" width="70" height="40" rx="4"/>
+                    <text class="block-label" x="285" y="92">Write</text>
+                    <text class="block-label" x="285" y="103">Packetizer</text>
+
+                    <!-- Arrow to Write Cmd Pool -->
+                    <path class="arrow write" d="M 320 95 L 340 95" marker-end="url(#arr-wr)"/>
+
+                    <!-- Write Command Pool + Data Buffer -->
+                    <rect class="pool write" x="345" y="70" width="120" height="75" rx="4"/>
+                    <text class="pool-label" x="405" y="85" fill="#a855f7">Write Cmd Pool</text>
+                    <text class="block-sublabel" x="405" y="97">+ Data Buffer</text>
+                    <!-- Queue slots inside pool -->
+                    <rect class="slot" id="a-wcpool-0" x="352" y="102" width="24" height="16" rx="2"/>
+                    <rect class="slot" id="a-wcpool-1" x="380" y="102" width="24" height="16" rx="2"/>
+                    <rect class="slot" id="a-wcpool-2" x="408" y="102" width="24" height="16" rx="2"/>
+                    <rect class="slot" id="a-wcpool-3" x="436" y="102" width="24" height="16" rx="2"/>
+                    <text class="slot-label" x="405" y="132" id="a-wcpool-count">0 pending</text>
+
+                    <!-- Write Arbitration -->
+                    <rect class="block" x="480" y="80" width="60" height="35" rx="4"/>
+                    <text class="block-label" x="510" y="95">Write</text>
+                    <text class="block-label" x="510" y="106">Arb</text>
+                    <path class="arrow write" d="M 465 95 L 480 95" marker-end="url(#arr-wr)"/>
+                </g>
+
+                <!-- Read Path -->
+                <g id="a-read-path">
+                    <!-- Read Packetizer -->
+                    <rect class="block" x="250" y="155" width="70" height="40" rx="4"/>
+                    <text class="block-label" x="285" y="172">Read</text>
+                    <text class="block-label" x="285" y="183">Packetizer</text>
+
+                    <!-- Arrow to Read Cmd Pool -->
+                    <path class="arrow read" d="M 320 175 L 340 175" marker-end="url(#arr-rd)"/>
+
+                    <!-- Read Command Pool -->
+                    <rect class="pool read" x="345" y="150" width="120" height="55" rx="4"/>
+                    <text class="pool-label" x="405" y="165" fill="#22c55e">Read Cmd Pool</text>
+                    <!-- Queue slots inside pool -->
+                    <rect class="slot" id="a-rcpool-0" x="352" y="172" width="24" height="16" rx="2"/>
+                    <rect class="slot" id="a-rcpool-1" x="380" y="172" width="24" height="16" rx="2"/>
+                    <rect class="slot" id="a-rcpool-2" x="408" y="172" width="24" height="16" rx="2"/>
+                    <rect class="slot" id="a-rcpool-3" x="436" y="172" width="24" height="16" rx="2"/>
+                    <text class="slot-label" x="405" y="200" id="a-rcpool-count">0 pending</text>
+
+                    <!-- Read Arbitration -->
+                    <rect class="block" x="480" y="155" width="60" height="35" rx="4"/>
+                    <text class="block-label" x="510" y="170">Read</text>
+                    <text class="block-label" x="510" y="181">Arb</text>
+                    <path class="arrow read" d="M 465 175 L 480 175" marker-end="url(#arr-rd)"/>
+                </g>
+
+                <!-- Maintenance Command Queue -->
+                <g id="a-maint-path">
+                    <rect class="pool maint" x="345" y="215" width="120" height="35" rx="4"/>
+                    <text class="pool-label" x="405" y="230" fill="#f59e0b">Maintenance Queue</text>
+                    <text class="block-sublabel" x="405" y="243">REF, ZQ, MRW</text>
+                </g>
+
+                <!-- Command Scheduler -->
+                <g id="a-scheduler">
+                    <rect class="block" x="555" y="70" width="90" height="185" rx="4" stroke="#0ea5e9"/>
+                    <text class="block-label" x="600" y="90" fill="#0ea5e9">DDR Command</text>
+                    <text class="block-label" x="600" y="103" fill="#0ea5e9">Scheduler</text>
+                    <text class="block-sublabel" x="600" y="118">FR-FCFS</text>
+
+                    <!-- Timing constraints display -->
+                    <rect fill="#1a2536" x="562" y="125" width="76" height="65" rx="3"/>
+                    <text x="600" y="140" text-anchor="middle" fill="#64748b" font-size="7">Timing Check</text>
+                    <text x="600" y="153" text-anchor="middle" fill="#64748b" font-size="6" id="a-timing-trcd">tRCD: -</text>
+                    <text x="600" y="163" text-anchor="middle" fill="#64748b" font-size="6" id="a-timing-tcl">tCL: -</text>
+                    <text x="600" y="173" text-anchor="middle" fill="#64748b" font-size="6" id="a-timing-trp">tRP: -</text>
+                    <text x="600" y="183" text-anchor="middle" fill="#64748b" font-size="6" id="a-timing-tfaw">tFAW: -</text>
+
+                    <!-- Next command indicator -->
+                    <text x="600" y="205" text-anchor="middle" fill="#0ea5e9" font-size="8" font-weight="600" id="a-next-cmd">IDLE</text>
+
+                    <!-- Pending count -->
+                    <text x="600" y="220" text-anchor="middle" fill="#64748b" font-size="7">Queue: <tspan id="a-sched-pending">0</tspan></text>
+                    <text x="600" y="232" text-anchor="middle" fill="#64748b" font-size="7">Issued: <tspan id="a-sched-issued">0</tspan></text>
+                    <text x="600" y="244" text-anchor="middle" fill="#64748b" font-size="7">Waiting: <tspan id="a-sched-waiting">0</tspan></text>
+
+                    <!-- Arrows into scheduler -->
+                    <path class="arrow write" d="M 540 95 L 555 130" marker-end="url(#arr-wr)"/>
+                    <path class="arrow read" d="M 540 175 L 555 160" marker-end="url(#arr-rd)"/>
+                    <path class="arrow" d="M 465 232 L 555 200" marker-end="url(#arr-r)" stroke="#f59e0b"/>
+                </g>
+
+                <!-- Write Data Path -->
+                <g id="a-write-data-path">
+                    <rect class="block" x="345" y="265" width="120" height="50" rx="4"/>
+                    <text class="block-label" x="405" y="283">Write Data Path</text>
+                    <text class="block-sublabel" x="405" y="296">Merge + Forward Buf</text>
+                    <text class="block-sublabel" x="405" y="308" id="a-wdata-status">-</text>
+
+                    <!-- Arrow from Write Cmd Pool -->
+                    <path class="arrow write" d="M 405 145 L 405 265" marker-end="url(#arr-wr)"/>
+                </g>
+
+                <!-- Read Data Path -->
+                <g id="a-read-data-path">
+                    <rect class="block" x="345" y="325" width="120" height="50" rx="4"/>
+                    <text class="block-label" x="405" y="343">Read Data Path</text>
+                    <text class="block-sublabel" x="405" y="356">Merge + Reorder Buf</text>
+                    <text class="block-sublabel" x="405" y="368" id="a-rdata-status">-</text>
+                </g>
+
+                <!-- Read Response Queue (horizontal, R→L) -->
+                <text x="30" y="340" fill="#22c55e" font-size="9" font-weight="600">← Read Responses</text>
+                <g id="a-read-response">
+                    <rect class="slot" id="a-rrslot-0" x="174" y="347" width="44" height="22" rx="3"/>
+                    <text class="slot-label" x="196" y="361" id="a-rrlabel-0">-</text>
+                    <rect class="slot" id="a-rrslot-1" x="126" y="347" width="44" height="22" rx="3"/>
+                    <text class="slot-label" x="148" y="361" id="a-rrlabel-1">-</text>
+                    <rect class="slot" id="a-rrslot-2" x="78" y="347" width="44" height="22" rx="3"/>
+                    <text class="slot-label" x="100" y="361" id="a-rrlabel-2">-</text>
+                    <rect class="slot" id="a-rrslot-3" x="30" y="347" width="44" height="22" rx="3"/>
+                    <text class="slot-label" x="52" y="361" id="a-rrlabel-3">-</text>
+                </g>
+                <!-- Arrow from Read Data Path to Response Queue -->
+                <path class="arrow read" d="M 345 350 L 222 358" marker-end="url(#arr-left-rd)"/>
+
+                <!-- DFI Interface -->
+                <g id="a-dfi">
+                    <rect class="block" x="555" y="270" width="90" height="100" rx="4" stroke="#14b8a6"/>
+                    <text class="block-label" x="600" y="290" fill="#14b8a6">DFI</text>
+                    <text class="block-label" x="600" y="302" fill="#14b8a6">Interface</text>
+
+                    <text x="600" y="320" text-anchor="middle" fill="#64748b" font-size="7">Commands→</text>
+                    <text x="600" y="333" text-anchor="middle" fill="#a855f7" font-size="7">WrData→</text>
+                    <text x="600" y="346" text-anchor="middle" fill="#22c55e" font-size="7">←RdData</text>
+                    <text x="600" y="359" text-anchor="middle" fill="#64748b" font-size="7">←RdValid</text>
+
+                    <!-- Arrows from scheduler and data paths -->
+                    <path class="arrow cmd" d="M 600 255 L 600 270" marker-end="url(#arr-cmd)"/>
+                    <path class="arrow write" d="M 465 290 L 555 305" marker-end="url(#arr-wr)"/>
+                </g>
+
+                <!-- Initialization indicator -->
+                <g id="a-init-indicator" style="display: none;">
+                    <rect class="init-pulse" x="400" y="395" width="200" height="30" rx="4" fill="#1e1b4b" stroke="#6366f1"/>
+                    <text class="init-text" x="500" y="412">INITIALIZING</text>
+                    <rect fill="#334155" x="410" y="418" width="180" height="4" rx="2"/>
+                    <rect class="init-bar" id="a-init-progress" x="410" y="418" width="0" height="4" rx="2"/>
+                </g>
+
+                <!-- ============ DDR PHY ============ -->
+                <text x="670" y="50" class="section-label phy">DDR PHY</text>
+                <rect class="section-box phy" x="665" y="58" width="120" height="460"/>
+
+                <g id="a-phy">
+                    <!-- PHY Control -->
+                    <rect class="block" x="675" y="75" width="100" height="50" rx="4"/>
+                    <text class="block-label" x="725" y="95">PHY Control</text>
+                    <text class="block-sublabel" x="725" y="108">Init/Calibration</text>
+
+                    <!-- CA (Command/Address) Path -->
+                    <rect class="block" x="675" y="135" width="100" height="45" rx="4"/>
+                    <text class="block-label" x="725" y="152" fill="#0ea5e9">CA Datapath</text>
+                    <text class="block-sublabel" x="725" y="165">Commands→</text>
+                    <rect class="bus" id="a-cabus" x="682" y="168" width="86" height="8" rx="2"/>
+
+                    <!-- Write DQ Path -->
+                    <rect class="block" x="675" y="190" width="100" height="55" rx="4"/>
+                    <text class="block-label" x="725" y="207" fill="#a855f7">Write Datapath</text>
+                    <text class="block-sublabel" x="725" y="220">WrData→</text>
+                    <rect class="bus" id="a-wdqbus" x="682" y="225" width="86" height="8" rx="2"/>
+                    <text class="bus-value" id="a-wdq-val" x="725" y="244" fill="#64748b">-</text>
+
+                    <!-- Read DQ Path -->
+                    <rect class="block" x="675" y="255" width="100" height="55" rx="4"/>
+                    <text class="block-label" x="725" y="272" fill="#22c55e">Read Datapath</text>
+                    <text class="block-sublabel" x="725" y="285">←RdData</text>
+                    <rect class="bus" id="a-rdqbus" x="682" y="290" width="86" height="8" rx="2"/>
+                    <text class="bus-value" id="a-rdq-val" x="725" y="309" fill="#64748b">-</text>
+
+                    <!-- DQS Gating -->
+                    <rect class="block" x="675" y="320" width="100" height="40" rx="4"/>
+                    <text class="block-label" x="725" y="338">DQS Gating</text>
+                    <text class="block-sublabel" x="725" y="350">Read Capture</text>
+
+                    <!-- I/O Pads -->
+                    <rect class="block" x="675" y="370" width="100" height="50" rx="4"/>
+                    <text class="block-label" x="725" y="390">I/O Pads</text>
+                    <text class="block-sublabel" x="725" y="403">CA/DQ/DQS</text>
+
+                    <!-- Connection arrows -->
+                    <path class="arrow cmd" d="M 645 320 L 675 157" marker-end="url(#arr-cmd)"/>
+                    <path class="arrow write" d="M 645 340 L 675 217" marker-end="url(#arr-wr)"/>
+                    <path class="arrow read" d="M 675 282 L 645 355" marker-end="url(#arr-left-rd)"/>
+                </g>
+
+                <!-- ============ LPDDR5 DEVICE ============ -->
+                <text x="800" y="50" class="section-label dram">LPDDR5 DEVICE (Die 0)</text>
+                <rect class="section-box dram" x="795" y="58" width="290" height="460"/>
+
+                <g id="a-dram">
+                    <!-- Command Decoder -->
+                    <rect class="block" x="805" y="75" width="80" height="45" rx="4"/>
+                    <text class="block-label" x="845" y="93">Command</text>
+                    <text class="block-label" x="845" y="105">Decoder</text>
+
+                    <!-- Arrow from PHY CA to Command Decoder -->
+                    <path class="arrow cmd" d="M 775 172 L 805 93" marker-end="url(#arr-cmd)"/>
+
+                    <!-- Mode Registers -->
+                    <rect class="block" x="895" y="75" width="80" height="45" rx="4"/>
+                    <text class="block-label" x="935" y="93">Mode</text>
+                    <text class="block-label" x="935" y="105">Registers</text>
+
+                    <!-- Bank Array (4 Bank Groups × 4 Banks) -->
+                    <rect fill="none" stroke="#64748b" x="805" y="130" width="270" height="135" rx="4"/>
+                    <text x="940" y="145" text-anchor="middle" fill="#64748b" font-size="9">Bank Array: 4 Bank Groups × 4 Banks</text>
+
+                    <!-- BG0 Label -->
+                    <text x="812" y="165" fill="#f59e0b" font-size="7">BG0</text>
+                    <g id="a-bank-0"><rect class="bank" x="830" y="155" width="55" height="22" rx="2"/><text class="bank-label" x="857" y="169">B0</text></g>
+                    <g id="a-bank-1"><rect class="bank" x="890" y="155" width="55" height="22" rx="2"/><text class="bank-label" x="917" y="169">B1</text></g>
+                    <g id="a-bank-2"><rect class="bank" x="950" y="155" width="55" height="22" rx="2"/><text class="bank-label" x="977" y="169">B2</text></g>
+                    <g id="a-bank-3"><rect class="bank" x="1010" y="155" width="55" height="22" rx="2"/><text class="bank-label" x="1037" y="169">B3</text></g>
+
+                    <!-- BG1 Label -->
+                    <text x="812" y="190" fill="#f59e0b" font-size="7">BG1</text>
+                    <g id="a-bank-4"><rect class="bank" x="830" y="180" width="55" height="22" rx="2"/><text class="bank-label" x="857" y="194">B4</text></g>
+                    <g id="a-bank-5"><rect class="bank" x="890" y="180" width="55" height="22" rx="2"/><text class="bank-label" x="917" y="194">B5</text></g>
+                    <g id="a-bank-6"><rect class="bank" x="950" y="180" width="55" height="22" rx="2"/><text class="bank-label" x="977" y="194">B6</text></g>
+                    <g id="a-bank-7"><rect class="bank" x="1010" y="180" width="55" height="22" rx="2"/><text class="bank-label" x="1037" y="194">B7</text></g>
+
+                    <!-- BG2 Label -->
+                    <text x="812" y="215" fill="#f59e0b" font-size="7">BG2</text>
+                    <g id="a-bank-8"><rect class="bank" x="830" y="205" width="55" height="22" rx="2"/><text class="bank-label" x="857" y="219">B8</text></g>
+                    <g id="a-bank-9"><rect class="bank" x="890" y="205" width="55" height="22" rx="2"/><text class="bank-label" x="917" y="219">B9</text></g>
+                    <g id="a-bank-10"><rect class="bank" x="950" y="205" width="55" height="22" rx="2"/><text class="bank-label" x="977" y="219">B10</text></g>
+                    <g id="a-bank-11"><rect class="bank" x="1010" y="205" width="55" height="22" rx="2"/><text class="bank-label" x="1037" y="219">B11</text></g>
+
+                    <!-- BG3 Label -->
+                    <text x="812" y="240" fill="#f59e0b" font-size="7">BG3</text>
+                    <g id="a-bank-12"><rect class="bank" x="830" y="230" width="55" height="22" rx="2"/><text class="bank-label" x="857" y="244">B12</text></g>
+                    <g id="a-bank-13"><rect class="bank" x="890" y="230" width="55" height="22" rx="2"/><text class="bank-label" x="917" y="244">B13</text></g>
+                    <g id="a-bank-14"><rect class="bank" x="950" y="230" width="55" height="22" rx="2"/><text class="bank-label" x="977" y="244">B14</text></g>
+                    <g id="a-bank-15"><rect class="bank" x="1010" y="230" width="55" height="22" rx="2"/><text class="bank-label" x="1037" y="244">B15</text></g>
+
+                    <!-- Row Buffer / Sense Amplifiers -->
+                    <rect class="block" x="805" y="275" width="270" height="45" rx="4"/>
+                    <text class="block-label" x="940" y="293">Sense Amplifiers (Row Buffer)</text>
+                    <text class="block-sublabel" x="940" y="308">8KB per bank • Page hit/miss detection</text>
+
+                    <!-- Column Select -->
+                    <rect class="block" x="805" y="330" width="130" height="40" rx="4"/>
+                    <text class="block-label" x="870" y="348">Column Select</text>
+                    <text class="block-sublabel" x="870" y="360">BL16 burst</text>
+
+                    <!-- Prefetch Buffer -->
+                    <rect class="block" x="945" y="330" width="130" height="40" rx="4"/>
+                    <text class="block-label" x="1010" y="348">Prefetch Buffer</text>
+                    <text class="block-sublabel" x="1010" y="360">16n prefetch</text>
+
+                    <!-- Global I/O (Data Serialization) -->
+                    <rect class="block" x="805" y="380" width="270" height="55" rx="4"/>
+                    <text class="block-label" x="940" y="400">Global I/O</text>
+                    <text class="block-sublabel" x="940" y="413">x16 DQ @ 8533 MT/s • BL16 = 32 bytes</text>
+
+                    <!-- Burst data display -->
+                    <text class="bus-value" id="a-burst-display" x="940" y="428" fill="#64748b">-</text>
+
+                    <!-- Data arrows from/to PHY -->
+                    <path class="arrow write thick" d="M 775 230 L 805 400" marker-end="url(#arr-wr)"/>
+                    <path class="arrow read thick" d="M 805 410 L 775 295" marker-end="url(#arr-left-rd)"/>
+
+                    <!-- DQS/CK -->
+                    <rect class="block" x="805" y="445" width="130" height="35" rx="4"/>
+                    <text class="block-label" x="870" y="463">DQS Strobe</text>
+                    <text class="block-sublabel" x="870" y="475">Read/Write timing</text>
+
+                    <rect class="block" x="945" y="445" width="130" height="35" rx="4"/>
+                    <text class="block-label" x="1010" y="463">CK/CKE</text>
+                    <text class="block-sublabel" x="1010" y="475">Clock/Enable</text>
+                </g>
+
+                <!-- Token containers -->
+                <g id="a-tokens"></g>
+            </svg>
+
+            <!-- DETAILED VIEW (simplified for now) -->
+            <svg id="diagram-detail" class="view-svg" viewBox="0 0 1100 580">
+                <text x="550" y="290" text-anchor="middle" fill="#64748b" font-size="14">
+                    Detailed View: Same as Architecture View with expanded timing details
+                </text>
+                <text x="550" y="310" text-anchor="middle" fill="#64748b" font-size="11">
+                    (Load a trace to see animation)
+                </text>
+            </svg>
+        </div>
+
+        <div class="sidebar">
+            <div class="section">
+                <h2>Command Pools</h2>
+                <div class="row"><span class="row-label">Write Pool</span><span class="row-value" id="statWrPool">0</span></div>
+                <div class="row"><span class="row-label">Read Pool</span><span class="row-value" id="statRdPool">0</span></div>
+                <div class="row"><span class="row-label">Scheduler Queue</span><span class="row-value" id="statSchedQ">0</span></div>
+            </div>
+
+            <div class="section">
+                <h2>Statistics</h2>
+                <div class="row"><span class="row-label">Total Requests</span><span class="row-value" id="statTotal">0</span></div>
+                <div class="row"><span class="row-label">Completed</span><span class="row-value" id="statComplete">0</span></div>
+                <div class="row"><span class="row-label">In Flight</span><span class="row-value" id="statInFlight">0</span></div>
+                <div class="row"><span class="row-label">Reads</span><span class="row-value" id="statReads">0</span></div>
+                <div class="row"><span class="row-label">Writes</span><span class="row-value" id="statWrites">0</span></div>
+            </div>
+
+            <div class="section">
+                <h2>Current Activity</h2>
+                <div class="row"><span class="row-label">Active Bank</span><span class="row-value" id="curBank">-</span></div>
+                <div class="row"><span class="row-label">Operation</span><span class="row-value" id="curOp">-</span></div>
+                <div class="row"><span class="row-label">Burst Beat</span><span class="row-value" id="curBurst">-</span></div>
+            </div>
+
+            <div class="section">
+                <h2>DRAM Commands</h2>
+                <div class="row"><span class="row-label">ACT Issued</span><span class="row-value" id="cmdAct">0</span></div>
+                <div class="row"><span class="row-label">RD Issued</span><span class="row-value" id="cmdRd">0</span></div>
+                <div class="row"><span class="row-label">WR Issued</span><span class="row-value" id="cmdWr">0</span></div>
+                <div class="row"><span class="row-label">PRE Issued</span><span class="row-value" id="cmdPre">0</span></div>
+            </div>
+
+            <div class="section">
+                <h2>Legend</h2>
+                <div class="legend">
+                    <div class="legend-item">
+                        <div class="legend-color request" style="background: #22c55e;"></div>
+                        <span>Read</span>
+                    </div>
+                    <div class="legend-item">
+                        <div class="legend-color request" style="background: #a855f7;"></div>
+                        <span>Write</span>
+                    </div>
+                    <div class="legend-item">
+                        <div class="legend-color" style="background: #f59e0b;"></div>
+                        <span>ACTIVATE</span>
+                    </div>
+                    <div class="legend-item">
+                        <div class="legend-color" style="background: #0ea5e9;"></div>
+                        <span>Command</span>
+                    </div>
+                    <div class="legend-item">
+                        <div class="legend-color" style="background: #ec4899;"></div>
+                        <span>PRECHARGE</span>
+                    </div>
+                    <div class="legend-item">
+                        <div class="legend-color" style="background: #14b8a6;"></div>
+                        <span>PHY</span>
+                    </div>
+                </div>
+            </div>
+
+            <div class="section">
+                <h2>Data Flow</h2>
+                <div class="debug" id="debugLog">Write Path: Host → MC → PHY → DRAM
+Read Path:  DRAM → PHY → MC → Host
+
+Load trace to see request flow...</div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let requests = [];
+        let cycle = 0;
+        let maxCycle = 0;
+        let playing = false;
+        let playTimer = null;
+        let currentView = 'arch';
+        let initEndCycle = 0;
+
+        const QUEUE_SLOTS = 4;
+
+        function parseTrace(data) {
+            requests = [];
+            const events = [];
+
+            for (const item of data) {
+                if (item.ph === 'M') continue;
+                const id = item.args?.txn_id;
+                if (id === undefined) continue;
+                events.push({
+                    txnId: id,
+                    name: item.name,
+                    start: item.args.cycle_issue,
+                    end: item.args.cycle_complete,
+                    bank: item.tid || 0
+                });
+            }
+
+            events.sort((a, b) => a.start - b.start);
+
+            const firstDramCmd = events.find(e =>
+                e.name === 'ACTIVATE' || e.name.includes('READ') || e.name.includes('WRITE')
+            );
+            initEndCycle = firstDramCmd ? firstDramCmd.start : 0;
+
+            const txnMap = new Map();
+            for (const evt of events) {
+                if (!txnMap.has(evt.txnId)) {
+                    txnMap.set(evt.txnId, { activate: null, dataOp: null, precharge: null });
+                }
+                const entry = txnMap.get(evt.txnId);
+                if (evt.name === 'ACTIVATE') entry.activate = evt;
+                else if (evt.name.includes('READ') || evt.name.includes('WRITE')) entry.dataOp = evt;
+                else if (evt.name === 'PRECHARGE') entry.precharge = evt;
+            }
+
+            let reqIdx = 0;
+            for (const [txnId, entry] of txnMap) {
+                if (!entry.dataOp) continue;
+
+                const dataOp = entry.dataOp;
+                const activate = entry.activate;
+                const precharge = entry.precharge;
+                const isRead = dataOp.name.includes('READ');
+                const type = isRead ? 'read' : 'write';
+
+                const stages = [];
+                const commands = [];
+
+                // Stage 1: Arrival in request queue
+                const arrivalTime = Math.floor(reqIdx * Math.max(1, initEndCycle - 10) / Math.max(1, txnMap.size));
+                stages.push({
+                    name: 'request_queue',
+                    start: arrivalTime,
+                    end: arrivalTime + 3,
+                    slot: reqIdx % QUEUE_SLOTS
+                });
+
+                // Stage 2: Packetizer
+                const packetStart = arrivalTime + 3;
+                stages.push({ name: 'packetizer', start: packetStart, end: packetStart + 2 });
+
+                // Stage 3: Command Pool (where requests queue waiting for scheduler)
+                const poolStart = packetStart + 2;
+                const poolEnd = activate ? activate.start - 3 : dataOp.start - 3;
+                stages.push({
+                    name: 'cmd_pool',
+                    start: poolStart,
+                    end: Math.max(poolEnd, poolStart + 1),
+                    slot: reqIdx % QUEUE_SLOTS
+                });
+
+                // Stage 4: Scheduler (brief - picking next command)
+                const schedStart = Math.max(poolEnd, poolStart + 1);
+                const schedEnd = activate ? activate.start : dataOp.start;
+                stages.push({ name: 'scheduler', start: schedStart, end: schedEnd });
+
+                // Stage 5: DFI/PHY (command issue)
+                if (activate) {
+                    commands.push({ type: 'ACT', start: activate.start, end: activate.end, bank: activate.bank });
+                    stages.push({ name: 'phy_cmd', start: activate.start, end: activate.start + 2 });
+                    stages.push({ name: 'bank_activate', start: activate.start, end: activate.end, bank: activate.bank });
+                }
+
+                // Stage 6: Data command
+                commands.push({ type: isRead ? 'RD' : 'WR', start: dataOp.start, end: dataOp.end, bank: dataOp.bank });
+                stages.push({ name: 'phy_cmd', start: dataOp.start, end: dataOp.start + 2 });
+                stages.push({ name: 'bank_data', start: dataOp.start, end: dataOp.end, bank: dataOp.bank, op: type });
+
+                // Stage 7: Data transfer through PHY
+                if (isRead) {
+                    // Read: DRAM → PHY → MC
+                    const burstStart = dataOp.start + 4; // tCL
+                    stages.push({ name: 'phy_read', start: burstStart, end: dataOp.end });
+                    stages.push({ name: 'read_data_path', start: dataOp.end, end: dataOp.end + 4 });
+                    stages.push({ name: 'response_queue', start: dataOp.end + 4, end: dataOp.end + 8, slot: reqIdx % QUEUE_SLOTS });
+                } else {
+                    // Write: MC → PHY → DRAM
+                    stages.push({ name: 'write_data_path', start: dataOp.start - 2, end: dataOp.start });
+                    stages.push({ name: 'phy_write', start: dataOp.start, end: dataOp.end });
+                }
+
+                // Stage 8: Precharge
+                if (precharge) {
+                    commands.push({ type: 'PRE', start: precharge.start, end: precharge.end, bank: precharge.bank });
+                }
+
+                stages.push({ name: 'complete', start: dataOp.end + 8, end: dataOp.end + 10 });
+                stages.sort((a, b) => a.start - b.start);
+
+                requests.push({
+                    id: reqIdx++,
+                    txnId,
+                    type,
+                    bank: dataOp.bank,
+                    cycleStart: stages[0].start,
+                    cycleEnd: stages[stages.length - 1].end,
+                    stages,
+                    commands
+                });
+
+                maxCycle = Math.max(maxCycle, stages[stages.length - 1].end + 5);
+            }
+
+            requests.sort((a, b) => a.cycleStart - b.cycleStart);
+            return requests;
+        }
+
+        function createTokens() {
+            const g = document.getElementById('a-tokens');
+            if (!g) return;
+            g.innerHTML = '';
+
+            for (const req of requests) {
+                const token = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+                token.setAttribute('class', 'token');
+                token.setAttribute('id', `a-token-${req.id}`);
+                token.style.display = 'none';
+
+                const circle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+                circle.setAttribute('class', `token-circle ${req.type}`);
+                circle.setAttribute('r', '10');
+
+                const text = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+                text.setAttribute('class', 'token-text');
+                text.setAttribute('dy', '3');
+                text.textContent = req.type === 'read' ? `R${req.id}` : `W${req.id}`;
+
+                token.appendChild(circle);
+                token.appendChild(text);
+                g.appendChild(token);
+            }
+        }
+
+        // Position mapping for stages
+        const POSITIONS = {
+            request_queue: (slot, type) => type === 'write'
+                ? { x: 52 + slot * 48, y: 93 }
+                : { x: 52 + slot * 48, y: 143 },
+            packetizer: (type) => type === 'write'
+                ? { x: 285, y: 95 }
+                : { x: 285, y: 175 },
+            cmd_pool: (slot, type) => type === 'write'
+                ? { x: 364 + slot * 28, y: 110 }
+                : { x: 364 + slot * 28, y: 180 },
+            scheduler: { x: 600, y: 180 },
+            phy_cmd: { x: 725, y: 157 },
+            phy_write: { x: 725, y: 230 },
+            phy_read: { x: 725, y: 295 },
+            write_data_path: { x: 405, y: 290 },
+            read_data_path: { x: 405, y: 350 },
+            bank: (b) => ({ x: 857 + (b % 4) * 60, y: 166 + Math.floor(b / 4) * 25 }),
+            response_queue: (slot) => ({ x: 196 - slot * 48, y: 358 }),
+            complete: { x: 30, y: 358 }
+        };
+
+        function updateViz() {
+            document.getElementById('cycleNum').textContent = cycle;
+
+            // Reset banks
+            for (let i = 0; i < 16; i++) {
+                const b = document.querySelector(`#a-bank-${i} rect`);
+                if (b) b.setAttribute('class', 'bank');
+            }
+
+            // Reset buses
+            const cabus = document.getElementById('a-cabus');
+            const wdqbus = document.getElementById('a-wdqbus');
+            const rdqbus = document.getElementById('a-rdqbus');
+            if (cabus) cabus.setAttribute('class', 'bus');
+            if (wdqbus) wdqbus.setAttribute('class', 'bus');
+            if (rdqbus) rdqbus.setAttribute('class', 'bus');
+
+            // Reset queue slots
+            for (let i = 0; i < QUEUE_SLOTS; i++) {
+                ['wq', 'rq', 'wcpool-', 'rcpool-', 'rr'].forEach(prefix => {
+                    const slot = document.getElementById(`a-${prefix}slot-${i}`);
+                    if (slot) slot.setAttribute('class', 'slot');
+                });
+            }
+
+            // Init indicator
+            const initIndicator = document.getElementById('a-init-indicator');
+            const initProgress = document.getElementById('a-init-progress');
+            if (initIndicator && initProgress) {
+                if (cycle < initEndCycle && cycle > 0) {
+                    initIndicator.style.display = 'block';
+                    initProgress.setAttribute('width', (cycle / initEndCycle) * 180);
+                } else {
+                    initIndicator.style.display = 'none';
+                }
+            }
+
+            let inFlight = 0, completed = 0, reads = 0, writes = 0;
+            let wrPoolCount = 0, rdPoolCount = 0, schedCount = 0;
+            let actCount = 0, rdCount = 0, wrCount = 0, preCount = 0;
+            let currentBank = '-', currentOp = '-', currentBurst = '-';
+
+            for (const req of requests) {
+                if (req.type === 'read') reads++; else writes++;
+
+                const token = document.getElementById(`a-token-${req.id}`);
+                if (!token) continue;
+
+                let curStage = null;
+                for (const s of req.stages) {
+                    if (cycle >= s.start && cycle < s.end) {
+                        curStage = s;
+                        break;
+                    }
+                }
+
+                if (!curStage) {
+                    token.style.display = 'none';
+                    if (cycle >= req.cycleEnd) completed++;
+                    continue;
+                }
+
+                inFlight++;
+                token.style.display = 'block';
+
+                let pos;
+                const stageName = curStage.name;
+
+                if (stageName === 'request_queue') {
+                    pos = POSITIONS.request_queue(curStage.slot, req.type);
+                    const prefix = req.type === 'write' ? 'wq' : 'rq';
+                    const slot = document.getElementById(`a-${prefix}slot-${curStage.slot}`);
+                    if (slot) slot.setAttribute('class', `slot ${req.type}-active`);
+                } else if (stageName === 'packetizer') {
+                    pos = POSITIONS.packetizer(req.type);
+                } else if (stageName === 'cmd_pool') {
+                    pos = POSITIONS.cmd_pool(curStage.slot, req.type);
+                    const prefix = req.type === 'write' ? 'wcpool-' : 'rcpool-';
+                    const slot = document.getElementById(`a-${prefix}${curStage.slot}`);
+                    if (slot) slot.setAttribute('class', `slot ${req.type}-active`);
+                    if (req.type === 'write') wrPoolCount++; else rdPoolCount++;
+                } else if (stageName === 'scheduler') {
+                    pos = POSITIONS.scheduler;
+                    schedCount++;
+                    document.getElementById('a-next-cmd').textContent =
+                        req.type === 'read' ? 'RD→' : 'WR→';
+                } else if (stageName === 'phy_cmd') {
+                    pos = POSITIONS.phy_cmd;
+                    if (cabus) cabus.setAttribute('class', 'bus cmd-active');
+                } else if (stageName === 'phy_write') {
+                    pos = POSITIONS.phy_write;
+                    if (wdqbus) wdqbus.setAttribute('class', 'bus write-active');
+                    const beat = Math.min(15, cycle - curStage.start);
+                    document.getElementById('a-wdq-val').textContent = `Beat ${beat}/15`;
+                    currentBurst = `${beat}/15`;
+                } else if (stageName === 'phy_read') {
+                    pos = POSITIONS.phy_read;
+                    if (rdqbus) rdqbus.setAttribute('class', 'bus read-active');
+                    const beat = Math.min(15, cycle - curStage.start);
+                    document.getElementById('a-rdq-val').textContent = `Beat ${beat}/15`;
+                    document.getElementById('a-burst-display').textContent =
+                        `BL16: 0x${(0xD0 + beat).toString(16).toUpperCase()}`;
+                    currentBurst = `${beat}/15`;
+                } else if (stageName === 'write_data_path') {
+                    pos = POSITIONS.write_data_path;
+                    document.getElementById('a-wdata-status').textContent = 'Buffering...';
+                } else if (stageName === 'read_data_path') {
+                    pos = POSITIONS.read_data_path;
+                    document.getElementById('a-rdata-status').textContent = 'Reordering...';
+                } else if (stageName === 'bank_activate' || stageName === 'bank_data') {
+                    pos = POSITIONS.bank(curStage.bank);
+                    const bankRect = document.querySelector(`#a-bank-${curStage.bank} rect`);
+                    if (bankRect) {
+                        if (stageName === 'bank_activate') {
+                            bankRect.setAttribute('class', 'bank activating');
+                            currentOp = 'ACTIVATE';
+                        } else if (curStage.op === 'read') {
+                            bankRect.setAttribute('class', 'bank reading');
+                            currentOp = 'READ';
+                        } else {
+                            bankRect.setAttribute('class', 'bank writing');
+                            currentOp = 'WRITE';
+                        }
+                    }
+                    currentBank = `B${curStage.bank}`;
+                } else if (stageName === 'response_queue') {
+                    pos = POSITIONS.response_queue(curStage.slot);
+                    const slot = document.getElementById(`a-rrslot-${curStage.slot}`);
+                    if (slot) slot.setAttribute('class', 'slot read-active');
+                } else {
+                    pos = POSITIONS.complete;
+                }
+
+                if (pos) {
+                    token.setAttribute('transform', `translate(${pos.x}, ${pos.y})`);
+                }
+
+                // Count commands
+                for (const cmd of req.commands) {
+                    if (cycle >= cmd.start) {
+                        if (cmd.type === 'ACT') actCount++;
+                        else if (cmd.type === 'RD') rdCount++;
+                        else if (cmd.type === 'WR') wrCount++;
+                        else if (cmd.type === 'PRE') preCount++;
+                    }
+                }
+            }
+
+            // Update stats
+            document.getElementById('statTotal').textContent = requests.length;
+            document.getElementById('statComplete').textContent = completed;
+            document.getElementById('statInFlight').textContent = inFlight;
+            document.getElementById('statReads').textContent = reads;
+            document.getElementById('statWrites').textContent = writes;
+            document.getElementById('statWrPool').textContent = wrPoolCount;
+            document.getElementById('statRdPool').textContent = rdPoolCount;
+            document.getElementById('statSchedQ').textContent = schedCount;
+
+            document.getElementById('cmdAct').textContent = actCount;
+            document.getElementById('cmdRd').textContent = rdCount;
+            document.getElementById('cmdWr').textContent = wrCount;
+            document.getElementById('cmdPre').textContent = preCount;
+
+            document.getElementById('curBank').textContent = currentBank;
+            document.getElementById('curOp').textContent = currentOp;
+            document.getElementById('curBurst').textContent = currentBurst;
+
+            document.getElementById('a-sched-pending').textContent = schedCount;
+            document.getElementById('a-sched-issued').textContent = actCount + rdCount + wrCount + preCount;
+        }
+
+        function logDebug() {
+            if (requests.length === 0) return;
+            let log = `Init period: 0-${initEndCycle} cycles\n`;
+            log += `Total: ${requests.length} requests\n\n`;
+            log += 'Data Flow:\n';
+            log += '  Write: Host→MC→PHY→DRAM\n';
+            log += '  Read:  DRAM→PHY→MC→Host\n\n';
+            log += 'Request→Commands:\n';
+            for (let i = 0; i < Math.min(4, requests.length); i++) {
+                const r = requests[i];
+                const label = r.type === 'read' ? `R${r.id}` : `W${r.id}`;
+                log += `  ${label}: ${r.commands.map(c => c.type).join('→')}\n`;
+            }
+            document.getElementById('debugLog').textContent = log;
+        }
+
+        function switchView(view) {
+            currentView = view;
+            document.getElementById('btnViewArch').classList.toggle('active', view === 'arch');
+            document.getElementById('btnViewDetail').classList.toggle('active', view === 'detail');
+            document.getElementById('diagram-arch').classList.toggle('active', view === 'arch');
+            document.getElementById('diagram-detail').classList.toggle('active', view === 'detail');
+        }
+
+        function loadTrace(data) {
+            parseTrace(data);
+
+            if (requests.length > 0) {
+                document.getElementById('noData').style.display = 'none';
+                document.getElementById('cycleMax').textContent = maxCycle;
+                cycle = 0;
+
+                createTokens();
+                logDebug();
+                updateViz();
+
+                document.getElementById('btnReset').disabled = false;
+                document.getElementById('btnStep').disabled = false;
+                document.getElementById('btnPlay').disabled = false;
+            }
+        }
+
+        // Event handlers
+        document.getElementById('fileInput').addEventListener('change', async (e) => {
+            const file = e.target.files[0];
+            if (!file) return;
+            try {
+                const text = await file.text();
+                const data = JSON.parse(text);
+                loadTrace(data);
+            } catch (err) {
+                alert('Error: ' + err.message);
+            }
+        });
+
+        document.getElementById('btnViewArch').addEventListener('click', () => switchView('arch'));
+        document.getElementById('btnViewDetail').addEventListener('click', () => switchView('detail'));
+
+        document.getElementById('btnReset').addEventListener('click', () => {
+            cycle = 0;
+            stopPlay();
+            updateViz();
+        });
+
+        document.getElementById('btnStep').addEventListener('click', () => {
+            if (cycle < maxCycle) { cycle++; updateViz(); }
+        });
+
+        document.getElementById('btnPlay').addEventListener('click', () => {
+            if (playing) stopPlay(); else startPlay();
+        });
+
+        function startPlay() {
+            playing = true;
+            document.getElementById('btnPlay').textContent = 'Pause';
+            document.getElementById('btnPlay').classList.add('active');
+            const speed = 550 - document.getElementById('speedSlider').value;
+            playTimer = setInterval(() => {
+                if (cycle < maxCycle) { cycle++; updateViz(); }
+                else stopPlay();
+            }, speed);
+        }
+
+        function stopPlay() {
+            playing = false;
+            document.getElementById('btnPlay').textContent = 'Play';
+            document.getElementById('btnPlay').classList.remove('active');
+            if (playTimer) { clearInterval(playTimer); playTimer = null; }
+        }
+
+        document.getElementById('speedSlider').addEventListener('input', () => {
+            if (playing) { stopPlay(); startPlay(); }
+        });
+
+        document.addEventListener('keydown', (e) => {
+            if (e.key === ' ') { e.preventDefault(); document.getElementById('btnPlay').click(); }
+            else if (e.key === 'ArrowRight') { e.preventDefault(); document.getElementById('btnStep').click(); }
+            else if (e.key === 'ArrowLeft' && cycle > 0) { e.preventDefault(); cycle--; updateViz(); }
+            else if (e.key === '1') switchView('arch');
+            else if (e.key === '2') switchView('detail');
+        });
+    </script>
+</body>
+</html>
