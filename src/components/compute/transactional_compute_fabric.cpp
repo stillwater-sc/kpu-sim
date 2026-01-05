@@ -156,7 +156,7 @@ uint8_t TransactionalComputeFabric::pipeline_progress() const {
     uint64_t elapsed = current_cycle_ - current_op_.submit_cycle;
 
     if (total == 0) return 100;
-    return static_cast<uint8_t>(std::min(100UL, (elapsed * 100) / total));
+    return static_cast<uint8_t>(std::min(uint64_t{100}, (elapsed * 100) / total));
 }
 
 // ============================================================================

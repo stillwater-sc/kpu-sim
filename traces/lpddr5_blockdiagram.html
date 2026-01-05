@@ -60,6 +60,12 @@
             justify-content: space-between;
         }
 
+        .header-left {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
         .header h1 { font-size: 13px; font-weight: 600; }
 
         .controls { display: flex; align-items: center; gap: 8px; }
@@ -72,20 +78,27 @@
             border-radius: 4px;
             cursor: pointer;
             font-size: 11px;
+            display: flex;
+            align-items: center;
+            gap: 4px;
         }
         button:hover { background: #475569; }
         button.active { background: var(--accent); }
         button:disabled { opacity: 0.5; cursor: not-allowed; }
 
-        .view-toggle {
-            display: flex;
-            gap: 2px;
-            background: var(--bg);
-            padding: 2px;
-            border-radius: 6px;
-            border: 1px solid var(--border);
+        .file-btn { background: var(--accent); }
+        .file-btn:hover { background: #2563eb; }
+
+        .file-input { display: none; }
+
+        .trace-filename {
+            font-size: 11px;
+            color: var(--text-dim);
+            max-width: 180px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
         }
-        .view-toggle button { border-radius: 4px; padding: 4px 10px; }
 
         .cycle-display {
             font-family: monospace;
@@ -106,8 +119,7 @@
             overflow: auto;
         }
 
-        .view-svg { width: 100%; flex: 1; display: none; }
-        .view-svg.active { display: block; }
+        .view-svg { width: 100%; flex: 1; display: block; }
 
         /* Block styling */
         .block {
@@ -283,13 +295,20 @@
 </head>
 <body>
     <div class="header">
-        <h1>LPDDR5 Memory Subsystem - Block Diagram</h1>
+        <div class="header-left">
+            <h1>LPDDR5 Block Diagram</h1>
+            <button class="file-btn" onclick="document.getElementById('fileInput').click()">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                    <polyline points="17 8 12 3 7 8"/>
+                    <line x1="12" y1="3" x2="12" y2="15"/>
+                </svg>
+                Choose File
+            </button>
+            <input type="file" id="fileInput" accept=".json" class="file-input">
+            <span class="trace-filename" id="traceFilename">No trace loaded</span>
+        </div>
         <div class="controls">
-            <input type="file" id="fileInput" accept=".json" style="font-size: 11px; width: 160px;">
-            <div class="view-toggle">
-                <button id="btnViewArch" class="active">Architecture</button>
-                <button id="btnViewDetail">Detailed</button>
-            </div>
             <button id="btnReset" disabled>Reset</button>
             <button id="btnStep" disabled>Step</button>
             <button id="btnPlay" disabled>Play</button>
@@ -303,7 +322,7 @@
             <div class="no-data" id="noData">Load a trace JSON file to visualize</div>
 
             <!-- ARCHITECTURE VIEW -->
-            <svg id="diagram-arch" class="view-svg active" viewBox="0 0 1100 580">
+            <svg id="diagram-arch" class="view-svg" viewBox="0 0 1100 580">
                 <defs>
                     <marker id="arr-r" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
                         <polygon points="0 0, 8 3, 0 6" fill="#64748b"/>
@@ -645,16 +664,6 @@
                 <!-- Token containers -->
                 <g id="a-tokens"></g>
             </svg>
-
-            <!-- DETAILED VIEW (simplified for now) -->
-            <svg id="diagram-detail" class="view-svg" viewBox="0 0 1100 580">
-                <text x="550" y="290" text-anchor="middle" fill="#64748b" font-size="14">
-                    Detailed View: Same as Architecture View with expanded timing details
-                </text>
-                <text x="550" y="310" text-anchor="middle" fill="#64748b" font-size="11">
-                    (Load a trace to see animation)
-                </text>
-            </svg>
         </div>
 
         <div class="sidebar">
@@ -735,7 +744,6 @@ Load trace to see request flow...</div>
         let maxCycle = 0;
         let playing = false;
         let playTimer = null;
-        let currentView = 'arch';
         let initEndCycle = 0;
 
         const QUEUE_SLOTS = 4;
@@ -1102,14 +1110,6 @@ Load trace to see request flow...</div>
             document.getElementById('debugLog').textContent = log;
         }
 
-        function switchView(view) {
-            currentView = view;
-            document.getElementById('btnViewArch').classList.toggle('active', view === 'arch');
-            document.getElementById('btnViewDetail').classList.toggle('active', view === 'detail');
-            document.getElementById('diagram-arch').classList.toggle('active', view === 'arch');
-            document.getElementById('diagram-detail').classList.toggle('active', view === 'detail');
-        }
-
         function loadTrace(data) {
             parseTrace(data);
 
@@ -1132,6 +1132,7 @@ Load trace to see request flow...</div>
         document.getElementById('fileInput').addEventListener('change', async (e) => {
             const file = e.target.files[0];
             if (!file) return;
+            document.getElementById('traceFilename').textContent = file.name;
             try {
                 const text = await file.text();
                 const data = JSON.parse(text);
@@ -1140,9 +1141,6 @@ Load trace to see request flow...</div>
                 alert('Error: ' + err.message);
             }
         });
-
-        document.getElementById('btnViewArch').addEventListener('click', () => switchView('arch'));
-        document.getElementById('btnViewDetail').addEventListener('click', () => switchView('detail'));
 
         document.getElementById('btnReset').addEventListener('click', () => {
             cycle = 0;
@@ -1184,8 +1182,6 @@ Load trace to see request flow...</div>
             if (e.key === ' ') { e.preventDefault(); document.getElementById('btnPlay').click(); }
             else if (e.key === 'ArrowRight') { e.preventDefault(); document.getElementById('btnStep').click(); }
             else if (e.key === 'ArrowLeft' && cycle > 0) { e.preventDefault(); cycle--; updateViz(); }
-            else if (e.key === '1') switchView('arch');
-            else if (e.key === '2') switchView('detail');
         });
     </script>
 </body>

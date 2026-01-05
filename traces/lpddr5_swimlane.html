@@ -46,10 +46,16 @@
             padding: 12px 20px;
             display: flex;
             align-items: center;
-            gap: 20px;
+            justify-content: space-between;
             position: sticky;
             top: 0;
             z-index: 100;
+        }
+
+        .header-left {
+            display: flex;
+            align-items: center;
+            gap: 12px;
         }
 
         .header h1 {
@@ -82,8 +88,22 @@
         button:disabled { opacity: 0.5; cursor: not-allowed; }
         button.active { background: var(--accent); border-color: var(--accent); }
 
-        .file-input {
+        .file-btn {
+            background: var(--accent);
+            border-color: var(--accent);
+        }
+
+        .file-btn:hover { background: #4089e0; }
+
+        .file-input { display: none; }
+
+        .trace-filename {
             font-size: 12px;
+            color: var(--text-dim);
+            max-width: 200px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
         }
 
         .cycle-display {
@@ -427,9 +447,20 @@
 </head>
 <body>
     <div class="header">
-        <h1>LPDDR5 Swimlane View</h1>
-        <div class="controls">
+        <div class="header-left">
+            <h1>LPDDR5 Swimlane View</h1>
+            <button class="file-btn" onclick="document.getElementById('fileInput').click()">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                    <polyline points="17 8 12 3 7 8"/>
+                    <line x1="12" y1="3" x2="12" y2="15"/>
+                </svg>
+                Choose File
+            </button>
             <input type="file" id="fileInput" accept=".json" class="file-input">
+            <span class="trace-filename" id="traceFilename">No trace loaded</span>
+        </div>
+        <div class="controls">
             <button id="btnReset" disabled title="Reset (Home)">⏮ Reset</button>
             <button id="btnStepBack" disabled title="Step Back (←)">◀</button>
             <button id="btnPlay" disabled title="Play/Pause (Space)">▶ Play</button>
@@ -1030,6 +1061,8 @@
         fileInput.addEventListener('change', async (e) => {
             const file = e.target.files[0];
             if (!file) return;
+
+            document.getElementById('traceFilename').textContent = file.name;
 
             try {
                 const text = await file.text();
