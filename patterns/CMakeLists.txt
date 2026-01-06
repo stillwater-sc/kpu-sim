@@ -74,11 +74,11 @@ add_lpddr5_pattern(across_groups four-bank/across-groups)
 add_lpddr5_pattern(page_hit_burst four-bank/page-hit-burst)
 
 # -----------------------------------------------------------------------------
-# Level 5: Dual Channel Patterns (TODO)
+# Level 5: Dual Channel Patterns
 # -----------------------------------------------------------------------------
 
-# add_lpddr5_pattern(independent dual-channel/independent)
-# add_lpddr5_pattern(interleaved dual-channel/interleaved)
+add_lpddr5_pattern(independent dual-channel/independent)
+add_lpddr5_pattern(interleaved dual-channel/interleaved)
 
 # -----------------------------------------------------------------------------
 # Level 6: Complex Patterns (TODO)
