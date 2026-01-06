@@ -259,7 +259,7 @@ bool KPUSimulator::is_dma_busy(size_t dma_id) {
 // DMA Convenience Helpers
 // ===========================================
 
-// Pattern (a): Host ↔ External
+// Pattern (a): Host <---> External
 void KPUSimulator::dma_host_to_external(size_t dma_id, Address host_addr, Address external_addr,
                                         Size size, std::function<void()> callback) {
     start_dma_transfer(dma_id, host_addr, external_addr, size, std::move(callback));
@@ -270,7 +270,7 @@ void KPUSimulator::dma_external_to_host(size_t dma_id, Address external_addr, Ad
     start_dma_transfer(dma_id, external_addr, host_addr, size, std::move(callback));
 }
 
-// Pattern (b): Host ↔ L3
+// Pattern (b): Host <---> L3
 void KPUSimulator::dma_host_to_l3(size_t dma_id, Address host_addr, Address l3_addr,
                                  Size size, std::function<void()> callback) {
     start_dma_transfer(dma_id, host_addr, l3_addr, size, std::move(callback));
@@ -281,7 +281,7 @@ void KPUSimulator::dma_l3_to_host(size_t dma_id, Address l3_addr, Address host_a
     start_dma_transfer(dma_id, l3_addr, host_addr, size, std::move(callback));
 }
 
-// Pattern (c): External ↔ L3
+// Pattern (c): External <---> L3
 void KPUSimulator::dma_external_to_l3(size_t dma_id, Address external_addr, Address l3_addr,
                                      Size size, std::function<void()> callback) {
     start_dma_transfer(dma_id, external_addr, l3_addr, size, std::move(callback));
@@ -292,7 +292,9 @@ void KPUSimulator::dma_l3_to_external(size_t dma_id, Address l3_addr, Address ex
     start_dma_transfer(dma_id, l3_addr, external_addr, size, std::move(callback));
 }
 
-// Pattern (d): Host ↔ Scratchpad
+/* Potential Future Extensions to have Scratchpad memory region:
+
+// Pattern (d): Host <---> Scratchpad
 void KPUSimulator::dma_host_to_scratchpad(size_t dma_id, Address host_addr, Address scratchpad_addr,
                                          Size size, std::function<void()> callback) {
     start_dma_transfer(dma_id, host_addr, scratchpad_addr, size, std::move(callback));
@@ -319,6 +321,7 @@ void KPUSimulator::dma_scratchpad_to_scratchpad(size_t dma_id, Address src_scrat
                                                Size size, std::function<void()> callback) {
     start_dma_transfer(dma_id, src_scratchpad_addr, dst_scratchpad_addr, size, std::move(callback));
 }
+*/
 
 // BlockMover operations
 void KPUSimulator::start_block_transfer(size_t block_mover_id, size_t src_l3_tile_id, Address src_offset,
