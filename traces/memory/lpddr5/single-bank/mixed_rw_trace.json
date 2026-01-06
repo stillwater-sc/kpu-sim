@@ -1,0 +1,13 @@
+[
+  {"name": "process_name", "ph": "M", "pid": 16, "args": {"name": "16-LPDDR5_BANK"}},
+  {"name": "thread_name", "ph": "M", "pid": 16, "tid": 0, "args": {"name": "LPDDR5_BANK #0"}},
+  {"name": "ACTIVATE", "cat": "LPDDR5_BANK", "ph": "X", "ts": 13125.000, "dur": 4375.000, "pid": 16, "tid": 0, "args": {"txn_id": 1,"status": "COMPLETED","cycle_issue": 42,"cycle_complete": 56,"payload": "Memory[LPDDR5_BANK:0@0x0 size:0 hit:Y lat:14]","desc": "ACTIVATE Ch0 Bank0"}},
+  {"name": "BURST_READ", "cat": "LPDDR5_BANK", "ph": "X", "ts": 17500.000, "dur": 6875.000, "pid": 16, "tid": 0, "args": {"txn_id": 1,"status": "COMPLETED","cycle_issue": 56,"cycle_complete": 78,"payload": "Memory[LPDDR5_BANK:0@0x0 size:0 hit:Y lat:22]","desc": "READ Ch0 Bank0"}},
+  {"name": "BURST_WRITE", "cat": "LPDDR5_BANK", "ph": "X", "ts": 28750.000, "dur": 5000.000, "pid": 16, "tid": 0, "args": {"txn_id": 2,"status": "COMPLETED","cycle_issue": 92,"cycle_complete": 108,"payload": "Memory[LPDDR5_BANK:0@0x0 size:0 hit:Y lat:16]","desc": "WRITE Ch0 Bank0"}},
+  {"name": "BURST_READ", "cat": "LPDDR5_BANK", "ph": "X", "ts": 36875.000, "dur": 6875.000, "pid": 16, "tid": 0, "args": {"txn_id": 3,"status": "COMPLETED","cycle_issue": 118,"cycle_complete": 140,"payload": "Memory[LPDDR5_BANK:0@0x0 size:0 hit:Y lat:22]","desc": "READ Ch0 Bank0"}},
+  {"name": "BURST_WRITE", "cat": "LPDDR5_BANK", "ph": "X", "ts": 48125.000, "dur": 5000.000, "pid": 16, "tid": 0, "args": {"txn_id": 4,"status": "COMPLETED","cycle_issue": 154,"cycle_complete": 170,"payload": "Memory[LPDDR5_BANK:0@0x0 size:0 hit:Y lat:16]","desc": "WRITE Ch0 Bank0"}},
+  {"name": "BURST_READ", "cat": "LPDDR5_BANK", "ph": "X", "ts": 56250.000, "dur": 6875.000, "pid": 16, "tid": 0, "args": {"txn_id": 5,"status": "COMPLETED","cycle_issue": 180,"cycle_complete": 202,"payload": "Memory[LPDDR5_BANK:0@0x0 size:0 hit:Y lat:22]","desc": "READ Ch0 Bank0"}},
+  {"name": "BURST_WRITE", "cat": "LPDDR5_BANK", "ph": "X", "ts": 67500.000, "dur": 5000.000, "pid": 16, "tid": 0, "args": {"txn_id": 6,"status": "COMPLETED","cycle_issue": 216,"cycle_complete": 232,"payload": "Memory[LPDDR5_BANK:0@0x0 size:0 hit:Y lat:16]","desc": "WRITE Ch0 Bank0"}},
+  {"name": "BURST_READ", "cat": "LPDDR5_BANK", "ph": "X", "ts": 75625.000, "dur": 6875.000, "pid": 16, "tid": 0, "args": {"txn_id": 7,"status": "COMPLETED","cycle_issue": 242,"cycle_complete": 264,"payload": "Memory[LPDDR5_BANK:0@0x0 size:0 hit:Y lat:22]","desc": "READ Ch0 Bank0"}},
+  {"name": "BURST_WRITE", "cat": "LPDDR5_BANK", "ph": "X", "ts": 86875.000, "dur": 5000.000, "pid": 16, "tid": 0, "args": {"txn_id": 8,"status": "COMPLETED","cycle_issue": 278,"cycle_complete": 294,"payload": "Memory[LPDDR5_BANK:0@0x0 size:0 hit:Y lat:16]","desc": "WRITE Ch0 Bank0"}}
+]
