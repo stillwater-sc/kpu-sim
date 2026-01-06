@@ -69,9 +69,35 @@
       }
     },
     {
-      "name": "windows-msvc", 
-      "displayName": "Windows MSVC (Default)",
-      "description": "Windows build using MSVC - default for Windows",
+      "name": "windows-msvc",
+      "displayName": "Windows MSVC (No Python)",
+      "description": "Windows build using MSVC without Python bindings",
+      "generator": "Visual Studio 17 2022",
+      "binaryDir": "${sourceDir}/build",
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Windows"
+      },
+      "cacheVariables": {
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
+        "KPU_BUILD_TESTS": "ON",
+        "KPU_BUILD_EXAMPLES": "ON",
+        "KPU_BUILD_TOOLS": "ON",
+        "KPU_BUILD_PYTHON_BINDINGS": "OFF",
+        "KPU_ENABLE_OPENMP": "ON",
+        "CMAKE_CXX_COMPILER": "cl",
+        "CMAKE_C_COMPILER": "cl"
+      },
+      "architecture": {
+        "value": "x64",
+        "strategy": "set"
+      }
+    },
+    {
+      "name": "windows-msvc-python",
+      "displayName": "Windows MSVC (With Python)",
+      "description": "Windows build using MSVC with Python bindings - requires Python dev libraries",
       "generator": "Visual Studio 17 2022",
       "binaryDir": "${sourceDir}/build",
       "condition": {

@@ -562,7 +562,7 @@ Size KPUSimulator::get_page_buffer_capacity(size_t pad_id) const {
 
 // High-level test operation
 bool KPUSimulator::run_matmul_test(const MatMulTest& test, size_t memory_bank_id,
-                                  size_t scratchpad_id, size_t compute_tile_id) {
+                                  size_t l3_tile_id, size_t compute_tile_id) {
     reset();
 
     Size a_size = test.m * test.k * sizeof(float);
@@ -574,10 +574,10 @@ bool KPUSimulator::run_matmul_test(const MatMulTest& test, size_t memory_bank_id
     Address ext_b_addr = a_size;
     Address ext_c_addr = ext_b_addr + b_size;
 
-    // Addresses in scratchpad
-    Address scratch_a_addr = 0;
-    Address scratch_b_addr = a_size;
-    Address scratch_c_addr = scratch_b_addr + b_size;
+    // Addresses in L3 tile
+    Address l3_a_addr = 0;
+    Address l3_b_addr = a_size;
+    Address l3_c_addr = l3_b_addr + b_size;
 
     try {
         // Load test data into external memory
@@ -590,13 +590,13 @@ bool KPUSimulator::run_matmul_test(const MatMulTest& test, size_t memory_bank_id
         // Compute global addresses for DMA transfers
         Address global_ext_a_addr = get_external_bank_base(memory_bank_id) + ext_a_addr;
         Address global_ext_b_addr = get_external_bank_base(memory_bank_id) + ext_b_addr;
-        Address global_scratch_a_addr = get_l1_buffer_base(scratchpad_id) + scratch_a_addr;
-        Address global_scratch_b_addr = get_l1_buffer_base(scratchpad_id) + scratch_b_addr;
+        Address global_l3_a_addr = get_l3_tile_base(l3_tile_id) + l3_a_addr;
+        Address global_l3_b_addr = get_l3_tile_base(l3_tile_id) + l3_b_addr;
 
-        // DMA A and B matrices to scratchpad using convenience methods
-        dma_external_to_scratchpad(0, global_ext_a_addr, global_scratch_a_addr, a_size,
+        // DMA A and B matrices to L3 tile using convenience methods
+        dma_external_to_l3(0, global_ext_a_addr, global_l3_a_addr, a_size,
             [&dma_a_complete]() { dma_a_complete = true; });
-        dma_external_to_scratchpad(0, global_ext_b_addr, global_scratch_b_addr, b_size,
+        dma_external_to_l3(0, global_ext_b_addr, global_l3_b_addr, b_size,
             [&dma_b_complete]() { dma_b_complete = true; });
 
         // Wait for data to be loaded
@@ -605,8 +605,8 @@ bool KPUSimulator::run_matmul_test(const MatMulTest& test, size_t memory_bank_id
         }
 
         // Start matrix multiplication
-        start_matmul(compute_tile_id, scratchpad_id, test.m, test.n, test.k,
-                    scratch_a_addr, scratch_b_addr, scratch_c_addr,
+        start_matmul(compute_tile_id, l3_tile_id, test.m, test.n, test.k,
+                    l3_a_addr, l3_b_addr, l3_c_addr,
                     [&compute_complete]() { compute_complete = true; });
 
         // Wait for computation to complete
@@ -617,8 +617,8 @@ bool KPUSimulator::run_matmul_test(const MatMulTest& test, size_t memory_bank_id
         // DMA result back to external memory using convenience method
         bool dma_c_complete = false;
         Address global_ext_c_addr = get_external_bank_base(memory_bank_id) + ext_c_addr;
-        Address global_scratch_c_addr = get_l1_buffer_base(scratchpad_id) + scratch_c_addr;
-        dma_scratchpad_to_external(0, global_scratch_c_addr, global_ext_c_addr, c_size,
+        Address global_l3_c_addr = get_l3_tile_base(l3_tile_id) + l3_c_addr;
+        dma_l3_to_external(0, global_l3_c_addr, global_ext_c_addr, c_size,
             [&dma_c_complete]() { dma_c_complete = true; });
 
         // Wait for result transfer

@@ -220,6 +220,7 @@ public:
     void dma_l3_to_external(size_t dma_id, Address l3_addr, Address external_addr,
                             Size size, std::function<void()> callback = nullptr);
 
+/* Potential Future Extensions to have Scratchpad memory region:
     // Pattern (d): Host ↔ Scratchpad
     void dma_host_to_scratchpad(size_t dma_id, Address host_addr, Address scratchpad_addr,
                                 Size size, std::function<void()> callback = nullptr);
@@ -235,6 +236,7 @@ public:
     // Pattern (f): Scratchpad ↔ Scratchpad (data reshuffling)
     void dma_scratchpad_to_scratchpad(size_t dma_id, Address src_scratchpad_addr, Address dst_scratchpad_addr,
                                       Size size, std::function<void()> callback = nullptr);
+*/
 
     // BlockMover operations - L3 to L2 data movement with transformations
     void start_block_transfer(size_t block_mover_id, size_t src_l3_tile_id, Address src_offset,
@@ -297,8 +299,8 @@ public:
     Size get_page_buffer_capacity(size_t pad_id) const;
     
     // High-level test operations
-    bool run_matmul_test(const MatMulTest& test, size_t memory_bank_id = 0, 
-                        size_t scratchpad_id = 0, size_t compute_tile_id = 0);
+    bool run_matmul_test(const MatMulTest& test, size_t memory_bank_id = 0,
+                        size_t l3_tile_id = 0, size_t compute_tile_id = 0);
     
     // Statistics and monitoring
     Cycle get_current_cycle() const { return current_cycle; }
