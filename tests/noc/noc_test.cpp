@@ -4,6 +4,7 @@
 // ============================================================================
 
 #include <catch2/catch_test_macros.hpp>
+#include <filesystem>
 #include <iostream>
 #include <vector>
 
@@ -348,12 +349,13 @@ TEST_CASE("NoC Trace Generation", "[noc][trace]") {
     std::cout << "  Trace events: " << tracer.num_events() << "\n";
 
     // Export trace to CSV
-    std::string trace_file = "/tmp/noc_trace.csv";
+    auto temp_dir = std::filesystem::temp_directory_path();
+    std::string trace_file = (temp_dir / "noc_trace.csv").string();
     REQUIRE(tracer.export_csv(trace_file));
     std::cout << "  Trace exported to: " << trace_file << "\n";
 
     // Export trace to Chrome Trace format
-    std::string chrome_trace_file = "/tmp/noc_trace_chrome.json";
+    std::string chrome_trace_file = (temp_dir / "noc_trace_chrome.json").string();
     REQUIRE(tracer.export_chrome_trace(chrome_trace_file, config));
     std::cout << "  Chrome trace exported to: " << chrome_trace_file << "\n";
 

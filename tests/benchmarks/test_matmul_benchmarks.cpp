@@ -6,6 +6,7 @@
 
 #include <sw/benchmark/benchmark.hpp>
 
+#include <filesystem>
 #include <iostream>
 #include <fstream>
 
@@ -192,10 +193,11 @@ TEST_CASE("CSV export", "[benchmark][export]") {
     REQUIRE(csv.find("matmul") != std::string::npos);
 
     // Write to file for inspection
-    std::ofstream out("/tmp/kpu_benchmark_results.csv");
+    auto benchmark_path = std::filesystem::temp_directory_path() / "kpu_benchmark_results.csv";
+    std::ofstream out(benchmark_path);
     if (out) {
         out << csv;
         out.close();
-        std::cout << "Wrote results to /tmp/kpu_benchmark_results.csv" << std::endl;
+        std::cout << "Wrote results to " << benchmark_path << std::endl;
     }
 }

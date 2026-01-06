@@ -4,6 +4,7 @@
 // ============================================================================
 
 #include <catch2/catch_test_macros.hpp>
+#include <filesystem>
 #include <iostream>
 
 #include "sw/kpu/noc/wormhole_router.hpp"
@@ -354,12 +355,15 @@ TEST_CASE("Wormhole trace generation", "[wormhole][trace]") {
     REQUIRE(flit_hops == 16);  // One hop per flit
 
     // Export CSV
-    REQUIRE(tracer.export_csv("/tmp/wormhole_trace.csv"));
-    std::cout << "  Trace exported to: /tmp/wormhole_trace.csv\n";
+    auto temp_dir = std::filesystem::temp_directory_path();
+    auto csv_path = (temp_dir / "wormhole_trace.csv").string();
+    REQUIRE(tracer.export_csv(csv_path));
+    std::cout << "  Trace exported to: " << csv_path << "\n";
 
     // Export Chrome trace
-    REQUIRE(tracer.export_chrome_trace("/tmp/wormhole_trace_chrome.json", 4, 4));
-    std::cout << "  Chrome trace exported to: /tmp/wormhole_trace_chrome.json\n";
+    auto chrome_path = (temp_dir / "wormhole_trace_chrome.json").string();
+    REQUIRE(tracer.export_chrome_trace(chrome_path, 4, 4));
+    std::cout << "  Chrome trace exported to: " << chrome_path << "\n";
 }
 
 TEST_CASE("Contention on same output port", "[wormhole][noc][contention]") {

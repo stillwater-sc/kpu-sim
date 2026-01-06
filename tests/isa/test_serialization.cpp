@@ -479,7 +479,7 @@ TEST_CASE("KernelSerializer file I/O", "[serialization][kernel][file]") {
 // ============================================================================
 
 TEST_CASE("Generate test files for disassembler", "[serialization][disasm]") {
-    std::filesystem::path test_dir = "/tmp/kpu_test_output";
+    std::filesystem::path test_dir = std::filesystem::temp_directory_path() / "kpu_test_output";
     std::filesystem::create_directories(test_dir);
 
     SECTION("Generate program binary file") {

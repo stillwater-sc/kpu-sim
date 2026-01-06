@@ -19,6 +19,7 @@
 #include <sw/kpu/components/lpddr5_memory_controller.hpp>
 #include <sw/trace/resource_tracker.hpp>
 #include <sw/trace/trace_exporter.hpp>
+#include <filesystem>
 #include <random>
 #include <iostream>
 #include <iomanip>
@@ -774,7 +775,8 @@ TEST_CASE("Tracing: Resource tracking and Chrome Trace export", "[lpddr5][trace]
         tracker.finalize(ctx.mc->current_cycle());
 
         // Export trace entries to Chrome Trace format
-        const std::string trace_file = "/tmp/lpddr5_trace_entries.json";
+        auto temp_dir = std::filesystem::temp_directory_path();
+        const std::string trace_file = (temp_dir / "lpddr5_trace_entries.json").string();
         bool exported = sw::trace::ChromeTraceExporter::export_traces(
             trace_file,
             ctx.mc->trace_entries(),
@@ -783,7 +785,7 @@ TEST_CASE("Tracing: Resource tracking and Chrome Trace export", "[lpddr5][trace]
         CHECK(exported);
 
         // Export resource tracker data
-        const std::string resource_file = "/tmp/lpddr5_resources.json";
+        const std::string resource_file = (temp_dir / "lpddr5_resources.json").string();
         auto tracks = tracker.get_all_tracks();
         bool resource_exported = sw::trace::ResourceTrackerExporter::export_to_chrome_trace(
             resource_file,
