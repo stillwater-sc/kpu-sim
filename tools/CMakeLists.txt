@@ -75,6 +75,11 @@ add_subdirectory(configuration)
 add_subdirectory(benchmark)
 
 # ============================================================================
+# Calibration Tools
+# ============================================================================
+add_subdirectory(calibration)
+
+# ============================================================================
 # DFG Tools - Standalone Data Flow Graph toolchain
 # ============================================================================
 add_subdirectory(dfg)

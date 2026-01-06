@@ -89,6 +89,18 @@ struct MemoryTimingParams {
     uint32_t mean_read_latency = 80;     // For TRANSACTIONAL fidelity
     uint32_t mean_write_latency = 90;
     uint32_t latency_variance = 20;      // Standard deviation
+
+    // Transactional model: page scenario factors (calibrated from cycle-accurate)
+    // These multiply the mean latency to get scenario-specific latency
+    double page_hit_factor = 0.7;        // < 1.0: page hits are faster than average
+    double page_empty_factor = 1.0;      // ~1.0: page empty is baseline
+    double page_conflict_factor = 1.3;   // > 1.0: page conflicts are slower
+
+    // Transactional model: per-scenario latencies (preferred, calibrated directly)
+    // When non-zero, these are used instead of mean_latency * factor
+    uint32_t page_hit_latency = 0;       // Latency for page hits (row already open)
+    uint32_t page_empty_latency = 0;     // Latency for page empty (bank idle)
+    uint32_t page_conflict_latency = 0;  // Latency for page conflicts (different row)
 };
 
 /// Memory controller configuration

@@ -255,9 +255,81 @@ struct Statistics {
     uint64_t read_to_write_turnarounds = 0;
     uint64_t write_to_read_turnarounds = 0;
 
+    // =========================================================================
+    // Calibration metrics - separate read/write latencies
+    // =========================================================================
+    uint64_t read_latency_total = 0;
+    uint64_t write_latency_total = 0;
+    uint64_t read_latency_min = UINT64_MAX;
+    uint64_t read_latency_max = 0;
+    uint64_t write_latency_min = UINT64_MAX;
+    uint64_t write_latency_max = 0;
+
+    // Per-scenario latency tracking (for transactional calibration)
+    uint64_t page_hit_latency_total = 0;
+    uint64_t page_hit_count = 0;
+    uint64_t page_empty_latency_total = 0;
+    uint64_t page_empty_count = 0;
+    uint64_t page_conflict_latency_total = 0;
+    uint64_t page_conflict_count = 0;
+
+    // =========================================================================
+    // Calibration helper methods
+    // =========================================================================
     double avg_latency() const {
         uint64_t total = reads + writes;
         return total > 0 ? static_cast<double>(total_latency) / total : 0.0;
+    }
+
+    double avg_read_latency() const {
+        return reads > 0 ? static_cast<double>(read_latency_total) / reads : 0.0;
+    }
+
+    double avg_write_latency() const {
+        return writes > 0 ? static_cast<double>(write_latency_total) / writes : 0.0;
+    }
+
+    double avg_page_hit_latency() const {
+        return page_hit_count > 0 ? static_cast<double>(page_hit_latency_total) / page_hit_count : 0.0;
+    }
+
+    double avg_page_empty_latency() const {
+        return page_empty_count > 0 ? static_cast<double>(page_empty_latency_total) / page_empty_count : 0.0;
+    }
+
+    double avg_page_conflict_latency() const {
+        return page_conflict_count > 0 ? static_cast<double>(page_conflict_latency_total) / page_conflict_count : 0.0;
+    }
+
+    double page_hit_rate() const {
+        uint64_t total = page_hits + page_empty + page_conflicts;
+        return total > 0 ? static_cast<double>(page_hits) / total : 0.0;
+    }
+
+    double page_empty_rate() const {
+        uint64_t total = page_hits + page_empty + page_conflicts;
+        return total > 0 ? static_cast<double>(page_empty) / total : 0.0;
+    }
+
+    double page_conflict_rate() const {
+        uint64_t total = page_hits + page_empty + page_conflicts;
+        return total > 0 ? static_cast<double>(page_conflicts) / total : 0.0;
+    }
+
+    // Compute page hit/conflict factors relative to mean latency (for transactional model)
+    double page_hit_factor() const {
+        double mean = avg_latency();
+        return mean > 0 ? avg_page_hit_latency() / mean : 1.0;
+    }
+
+    double page_empty_factor() const {
+        double mean = avg_latency();
+        return mean > 0 ? avg_page_empty_latency() / mean : 1.0;
+    }
+
+    double page_conflict_factor() const {
+        double mean = avg_latency();
+        return mean > 0 ? avg_page_conflict_latency() / mean : 1.0;
     }
 };
 

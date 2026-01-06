@@ -119,11 +119,8 @@ std::optional<uint64_t> TransactionalMemoryController::submit_request(
     auto& bank_info = banks_[channel][bank];
     uint64_t start_cycle = std::max(current_cycle_, bank_info.busy_until_cycle);
 
-    // Add queueing delay if requests are waiting
-    if (!bank_info.queue.empty()) {
-        // Estimate additional delay from queued requests
-        start_cycle += bank_info.queue.size() * config_.timing.mean_read_latency / 2;
-    }
+    // Note: busy_until_cycle already tracks bank serialization, so no additional
+    // queueing delay needed here. The queue is for tracking pending request IDs.
 
     // Calculate latency (includes row buffer effects)
     uint32_t latency = calculate_latency(channel, bank, row, type);
@@ -308,30 +305,35 @@ uint32_t TransactionalMemoryController::calculate_latency(
     const auto& bank_info = banks_[channel][bank];
     const auto& timing = config_.timing;
 
+    // Use physical timing parameters for service time (preferred for throughput modeling)
+    // Per-scenario latencies from CA may include queueing delays which double-count
+    // contention when combined with the transactional model's per-bank busy tracking.
+
+    uint32_t cas_latency = (type == MemoryRequestType::READ)
+                           ? timing.tCL + timing.tBurst
+                           : timing.tWL + timing.tBurst;
+
     uint32_t latency;
 
     if (!bank_info.has_row_open()) {
-        // Page empty - need activate + access
-        latency = (type == MemoryRequestType::READ)
-                  ? timing.mean_read_latency
-                  : timing.mean_write_latency;
+        // Page empty - need ACT + CAS
+        // Service time: tRCD + CAS latency
+        latency = timing.tRCD + cas_latency;
         stats_.page_empty++;
     } else if (bank_info.open_row == row) {
-        // Page hit - just CAS latency
-        latency = (type == MemoryRequestType::READ)
-                  ? timing.tCL + timing.tBurst
-                  : timing.tWL + timing.tBurst;
+        // Page hit - just CAS
+        // Service time: CAS latency only
+        latency = cas_latency;
         stats_.page_hits++;
     } else {
-        // Page conflict - precharge + activate + access
-        latency = timing.tRP + timing.tRCD;
-        latency += (type == MemoryRequestType::READ)
-                   ? timing.tCL + timing.tBurst
-                   : timing.tWL + timing.tBurst;
+        // Page conflict - need PRE + ACT + CAS
+        // Service time: tRP + tRCD + CAS latency
+        latency = timing.tRP + timing.tRCD + cas_latency;
         stats_.page_conflicts++;
     }
 
-    return latency;
+    // Ensure minimum latency of 1
+    return std::max(1u, latency);
 }
 
 uint32_t TransactionalMemoryController::sample_latency(uint32_t base_latency) {

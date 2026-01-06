@@ -290,6 +290,10 @@ void LPDDR5MemoryController::sync_interface_stats() {
     interface_stats_.refreshes = stats_.refreshes;
     interface_stats_.read_to_write_turnarounds = stats_.read_to_write_turnarounds;
     interface_stats_.write_to_read_turnarounds = stats_.write_to_read_turnarounds;
+
+    // Compute overall min/max from read/write min/max
+    interface_stats_.min_latency = std::min(stats_.read_latency_min, stats_.write_latency_min);
+    interface_stats_.max_latency = std::max(stats_.read_latency_max, stats_.write_latency_max);
 }
 
 void LPDDR5MemoryController::sync_interface_violations() {
@@ -940,6 +944,33 @@ void LPDDR5MemoryController::complete_requests() {
             // Request completed
             uint64_t latency = current_cycle_ - it->submit_cycle;
             stats_.total_latency += latency;
+
+            // Track separate read/write latencies for calibration
+            if (it->type == RequestType::READ) {
+                stats_.read_latency_total += latency;
+                stats_.read_latency_min = std::min(stats_.read_latency_min, latency);
+                stats_.read_latency_max = std::max(stats_.read_latency_max, latency);
+            } else {
+                stats_.write_latency_total += latency;
+                stats_.write_latency_min = std::min(stats_.write_latency_min, latency);
+                stats_.write_latency_max = std::max(stats_.write_latency_max, latency);
+            }
+
+            // Track per-scenario latencies for transactional model calibration
+            // Scenarios are mutually exclusive:
+            //   - Page hit: row was already open (no activate, no conflict)
+            //   - Page empty: bank was idle, needed activate (no conflict)
+            //   - Page conflict: different row was open, needed precharge + activate
+            if (it->triggered_conflict) {
+                stats_.page_conflict_latency_total += latency;
+                stats_.page_conflict_count++;
+            } else if (it->triggered_activate) {
+                stats_.page_empty_latency_total += latency;
+                stats_.page_empty_count++;
+            } else {
+                stats_.page_hit_latency_total += latency;
+                stats_.page_hit_count++;
+            }
 
             // Call completion callback
             if (it->callback) {

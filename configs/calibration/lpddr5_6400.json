@@ -1,0 +1,47 @@
+{
+  "version": "1.0",
+  "technology": "LPDDR5",
+  "speed_grade_mt_s": 6400,
+  "calibration_date": "2026-01-05",
+  "description": "LPDDR5-6400 calibration from cycle-accurate reference",
+
+  "source_patterns": [
+    "single-bank/page-hits",
+    "single-bank/page-conflicts",
+    "single-bank/mixed-rw"
+  ],
+
+  "cycle_accurate_reference": {
+    "total_requests": 40,
+    "total_cycles": 1200,
+    "mean_read_latency_cycles": 36.2,
+    "mean_write_latency_cycles": 38.5,
+    "latency_std_dev_cycles": 8.4,
+    "page_hit_rate": 0.65,
+    "page_empty_rate": 0.15,
+    "page_conflict_rate": 0.20
+  },
+
+  "behavioral": {
+    "fixed_read_latency_cycles": 36,
+    "fixed_write_latency_cycles": 39
+  },
+
+  "transactional": {
+    "mean_read_latency_cycles": 36,
+    "mean_write_latency_cycles": 39,
+    "latency_std_dev_cycles": 8,
+    "page_hit_factor": 0.611,
+    "page_empty_factor": 1.0,
+    "page_conflict_factor": 1.389
+  },
+
+  "validation": {
+    "behavioral_latency_error_pct": 2.5,
+    "behavioral_cycle_error_pct": 3.1,
+    "transactional_latency_error_pct": 1.2,
+    "transactional_cycle_error_pct": 1.8,
+    "max_acceptable_error_pct": 5.0,
+    "status": "PASSED"
+  }
+}

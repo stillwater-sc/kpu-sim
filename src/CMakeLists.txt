@@ -34,6 +34,9 @@ add_subdirectory(benchmark)
 # Add configuration system (multi-fidelity config parsing)
 add_subdirectory(config)
 
+# Add calibration storage (multi-fidelity calibration parameters)
+add_subdirectory(calibration)
+
 # Keep old memory directory for backward compatibility during transition
 # add_subdirectory(memory)  # Disabled - all components moved to src/components/
 

@@ -56,6 +56,7 @@ add_subdirectory(compiler)
 add_subdirectory(isa)
 add_subdirectory(runtime)
 add_subdirectory(noc)
+add_subdirectory(calibration)
 add_subdirectory(integration)
 add_subdirectory(benchmarks)
 
