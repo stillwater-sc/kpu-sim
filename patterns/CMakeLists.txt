@@ -59,11 +59,11 @@ add_lpddr5_pattern(same_group two-bank/same-group)
 add_lpddr5_pattern(diff_groups two-bank/diff-groups)
 
 # -----------------------------------------------------------------------------
-# Level 3: Three Bank Patterns (TODO)
+# Level 3: Three Bank Patterns
 # -----------------------------------------------------------------------------
 
-# add_lpddr5_pattern(three_mixed_groups three-bank/mixed-groups)
-# add_lpddr5_pattern(three_same_group three-bank/same-group)
+add_lpddr5_pattern(three_mixed_groups three-bank/mixed-groups)
+add_lpddr5_pattern(three_same_group three-bank/same-group)
 
 # -----------------------------------------------------------------------------
 # Level 4: Four Bank Patterns (TODO)
