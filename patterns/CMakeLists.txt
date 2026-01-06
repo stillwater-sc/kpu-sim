@@ -66,12 +66,12 @@ add_lpddr5_pattern(three_mixed_groups three-bank/mixed-groups)
 add_lpddr5_pattern(three_same_group three-bank/same-group)
 
 # -----------------------------------------------------------------------------
-# Level 4: Four Bank Patterns (TODO)
+# Level 4: Four Bank Patterns
 # -----------------------------------------------------------------------------
 
-# add_lpddr5_pattern(full_group four-bank/full-group)
-# add_lpddr5_pattern(across_groups four-bank/across-groups)
-# add_lpddr5_pattern(page_hit_burst four-bank/page-hit-burst)
+add_lpddr5_pattern(full_group four-bank/full-group)
+add_lpddr5_pattern(across_groups four-bank/across-groups)
+add_lpddr5_pattern(page_hit_burst four-bank/page-hit-burst)
 
 # -----------------------------------------------------------------------------
 # Level 5: Dual Channel Patterns (TODO)
