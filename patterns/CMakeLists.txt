@@ -52,11 +52,11 @@ add_lpddr5_pattern(page_conflicts single-bank/page-conflicts)
 add_lpddr5_pattern(mixed_rw single-bank/mixed-rw)
 
 # -----------------------------------------------------------------------------
-# Level 2: Two Bank Patterns (TODO)
+# Level 2: Two Bank Patterns
 # -----------------------------------------------------------------------------
 
-# add_lpddr5_pattern(same_group two-bank/same-group)
-# add_lpddr5_pattern(diff_groups two-bank/diff-groups)
+add_lpddr5_pattern(same_group two-bank/same-group)
+add_lpddr5_pattern(diff_groups two-bank/diff-groups)
 
 # -----------------------------------------------------------------------------
 # Level 3: Three Bank Patterns (TODO)
