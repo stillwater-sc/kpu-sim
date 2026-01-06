@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added - 2026-01-05
+- **Multi-Fidelity Calibration Framework** (`src/calibration/`, `tools/calibration/`)
+  - Complete calibration workflow for deriving behavioral and transactional model parameters from cycle-accurate simulation
+  - Calibration storage schema with JSON serialization (`calibration_storage.hpp`)
+  - Parameter extraction from cycle-accurate statistics (`calibration_extraction.hpp`)
+  - Quality assessment with severity levels, scores, and grades (`calibration_quality.hpp`)
+  - CLI tools:
+    - `kpu-calibrate` - Run cycle-accurate simulation and extract calibration parameters
+    - `kpu-validate` - Cross-validate calibration across all fidelity levels with quality reporting
+  - Test coverage: `calibration_storage_test`, `calibration_extraction_test`, `calibration_quality_test`
+  - Documentation: `docs/MULTI_FIDELITY_CALIBRATION_WORKFLOW.md`
+
+### Fixed - 2026-01-05
+- **Transactional Memory Controller Accuracy** (`transactional_memory_controller.cpp`)
+  - Use physical timing parameters (tCL, tRCD, tRP) for service time calculation
+  - Removed redundant queueing delay that double-counted contention
+  - **Result: Cycle error reduced from 2013% to 1.3%** vs cycle-accurate reference
+
 ### Added - 2026-01-03
 - **LPDDR5 Memory Controller Pattern Test Suite** (`patterns/`)
   - Complete rewrite of pattern infrastructure for cycle-accurate LPDDR5 controller
