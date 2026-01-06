@@ -94,10 +94,10 @@ CalibrationWorkload make_page_hit_workload(size_t count, std::mt19937& rng) {
     CalibrationWorkload w;
     w.name = "page_hits";
 
-    std::uniform_int_distribution<uint8_t> bank_dist(0, 15);
+    std::uniform_int_distribution<unsigned int> bank_dist(0, 15);
     std::uniform_int_distribution<uint32_t> row_dist(0, 65535);
 
-    uint8_t bank = bank_dist(rng);
+    uint8_t bank = static_cast<uint8_t>(bank_dist(rng));
     uint32_t row = row_dist(rng);
 
     for (size_t i = 0; i < count; ++i) {
@@ -114,9 +114,9 @@ CalibrationWorkload make_page_conflict_workload(size_t count, std::mt19937& rng)
     CalibrationWorkload w;
     w.name = "page_conflicts";
 
-    std::uniform_int_distribution<uint8_t> bank_dist(0, 15);
+    std::uniform_int_distribution<unsigned int> bank_dist(0, 15);
 
-    uint8_t bank = bank_dist(rng);
+    uint8_t bank = static_cast<uint8_t>(bank_dist(rng));
 
     for (size_t i = 0; i < count; ++i) {
         uint32_t row = i % 1000;  // Different row each time
@@ -149,11 +149,11 @@ CalibrationWorkload make_mixed_workload(size_t count, std::mt19937& rng) {
     CalibrationWorkload w;
     w.name = "mixed";
 
-    std::uniform_int_distribution<uint8_t> bank_dist(0, 15);
+    std::uniform_int_distribution<unsigned int> bank_dist(0, 15);
     std::uniform_int_distribution<uint32_t> row_dist(0, 65535);
     std::uniform_int_distribution<int> pattern_dist(0, 9);
 
-    uint8_t current_bank = bank_dist(rng);
+    uint8_t current_bank = static_cast<uint8_t>(bank_dist(rng));
     uint32_t current_row = row_dist(rng);
 
     for (size_t i = 0; i < count; ++i) {
@@ -166,7 +166,7 @@ CalibrationWorkload make_mixed_workload(size_t count, std::mt19937& rng) {
             w.requests.push_back({type, make_address(current_bank, current_row, col)});
         } else if (pattern < 7) {
             // 20% page empty - new bank
-            current_bank = bank_dist(rng);
+            current_bank = static_cast<uint8_t>(bank_dist(rng));
             current_row = row_dist(rng);
             auto type = (pattern == 5) ? RequestType::WRITE : RequestType::READ;
             w.requests.push_back({type, make_address(current_bank, current_row, 0)});

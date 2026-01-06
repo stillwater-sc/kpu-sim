@@ -548,14 +548,14 @@ TEST_CASE("Level9: State space exploration", "[lpddr5][level9]") {
 
     SECTION("Random access pattern") {
         std::mt19937 rng(42);  // Fixed seed for reproducibility
-        std::uniform_int_distribution<uint8_t> bank_dist(0, 15);
+        std::uniform_int_distribution<unsigned int> bank_dist(0, 15);
         std::uniform_int_distribution<uint32_t> row_dist(0, 1000);
         std::uniform_int_distribution<int> type_dist(0, 1);
 
         std::vector<uint8_t> data(64, 0x99);
 
         for (int i = 0; i < 100; ++i) {
-            uint8_t bank = bank_dist(rng);
+            uint8_t bank = static_cast<uint8_t>(bank_dist(rng));
             uint32_t row = row_dist(rng);
             uint64_t addr = ctx.make_address(bank, row, 0);
 
@@ -573,14 +573,14 @@ TEST_CASE("Level9: State space exploration", "[lpddr5][level9]") {
 
     SECTION("Stress test - 500 random requests") {
         std::mt19937 rng(123);
-        std::uniform_int_distribution<uint8_t> bank_dist(0, 15);
+        std::uniform_int_distribution<unsigned int> bank_dist(0, 15);
         std::uniform_int_distribution<uint32_t> row_dist(0, 100);  // Limited for conflicts
         std::uniform_int_distribution<int> type_dist(0, 1);
 
         std::vector<uint8_t> data(64, 0xAA);
 
         for (int i = 0; i < 500; ++i) {
-            uint8_t bank = bank_dist(rng);
+            uint8_t bank = static_cast<uint8_t>(bank_dist(rng));
             uint32_t row = row_dist(rng);
             uint64_t addr = ctx.make_address(bank, row, 0);
 

@@ -94,11 +94,11 @@ std::vector<ValidationRequest> generate_validation_workload(size_t count, uint32
     std::vector<ValidationRequest> requests;
     requests.reserve(count);
 
-    std::uniform_int_distribution<uint8_t> bank_dist(0, 15);
+    std::uniform_int_distribution<unsigned int> bank_dist(0, 15);
     std::uniform_int_distribution<uint32_t> row_dist(0, 65535);
     std::uniform_int_distribution<int> pattern_dist(0, 9);
 
-    uint8_t current_bank = bank_dist(rng);
+    uint8_t current_bank = static_cast<uint8_t>(bank_dist(rng));
     uint32_t current_row = row_dist(rng);
 
     for (size_t i = 0; i < count; ++i) {
@@ -111,7 +111,7 @@ std::vector<ValidationRequest> generate_validation_workload(size_t count, uint32
             requests.push_back({is_read, make_address(current_bank, current_row, col)});
         } else if (pattern < 7) {
             // 20% page empty
-            current_bank = bank_dist(rng);
+            current_bank = static_cast<uint8_t>(bank_dist(rng));
             current_row = row_dist(rng);
             bool is_read = (pattern != 5);
             requests.push_back({is_read, make_address(current_bank, current_row, 0)});
