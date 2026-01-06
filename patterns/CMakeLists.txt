@@ -81,12 +81,12 @@ add_lpddr5_pattern(independent dual-channel/independent)
 add_lpddr5_pattern(interleaved dual-channel/interleaved)
 
 # -----------------------------------------------------------------------------
-# Level 6: Complex Patterns (TODO)
+# Level 6: Complex Patterns
 # -----------------------------------------------------------------------------
 
-# add_lpddr5_pattern(strided complex/strided)
-# add_lpddr5_pattern(random complex/random)
-# add_lpddr5_pattern(tile_load complex/tile-load)
+add_lpddr5_pattern(strided complex/strided)
+add_lpddr5_pattern(random complex/random)
+add_lpddr5_pattern(tile_load complex/tile-load)
 
 # ============================================================================
 # NoC Patterns (TODO)
