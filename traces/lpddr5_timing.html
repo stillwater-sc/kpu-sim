@@ -474,16 +474,55 @@
             tRRD_L: 6, tRRD_S: 4, tFAW: 24, tRTW: 14, tWTR_L: 10
         };
 
-        // Signal rows
-        const SIGNALS = [
+        // Signal rows - dynamically built based on trace data
+        let SIGNALS = [
             { id: 'clk', label: 'CLK', type: 'clock' },
             { id: 'cmd', label: 'CMD Bus', type: 'command' },
-            { id: 'bank0', label: 'Bank 0 State', type: 'bank' },
-            { id: 'bank1', label: 'Bank 1 State', type: 'bank' },
-            { id: 'bank2', label: 'Bank 2 State', type: 'bank' },
-            { id: 'bank3', label: 'Bank 3 State', type: 'bank' },
             { id: 'dq', label: 'DQ (Data)', type: 'data' },
         ];
+
+        // Build SIGNALS array dynamically based on banks found in trace
+        function buildSignals(data) {
+            // Find all unique banks from trace metadata and events
+            const banks = new Set();
+
+            for (const item of data) {
+                // Check thread_name metadata for bank declarations
+                if (item.ph === 'M' && item.name === 'thread_name') {
+                    const match = item.args?.name?.match(/LPDDR5_BANK #(\d+)/);
+                    if (match) {
+                        banks.add(parseInt(match[1]));
+                    }
+                }
+                // Also check event tids
+                if (item.ph === 'X' && item.tid !== undefined) {
+                    banks.add(item.tid);
+                }
+            }
+
+            // Sort banks numerically
+            const sortedBanks = Array.from(banks).sort((a, b) => a - b);
+
+            // Build signals array with dynamic bank rows
+            SIGNALS = [
+                { id: 'clk', label: 'CLK', type: 'clock' },
+                { id: 'cmd', label: 'CMD Bus', type: 'command' },
+            ];
+
+            for (const bankId of sortedBanks) {
+                SIGNALS.push({
+                    id: `bank${bankId}`,
+                    label: `Bank ${bankId} State`,
+                    type: 'bank',
+                    bankId: bankId  // Store actual bank ID
+                });
+            }
+
+            SIGNALS.push({ id: 'dq', label: 'DQ (Data)', type: 'data' });
+
+            console.log(`Detected ${sortedBanks.length} banks:`, sortedBanks);
+            return sortedBanks;
+        }
 
         // State
         let traceData = null;
@@ -643,7 +682,8 @@
                 } else if (signal.type === 'command') {
                     drawCommandBus(rowGroup, y, displayRequests, cycleToX);
                 } else if (signal.type === 'bank') {
-                    const bankId = parseInt(signal.id.replace('bank', ''));
+                    // Use stored bankId (supports banks > 9 and non-sequential banks)
+                    const bankId = signal.bankId !== undefined ? signal.bankId : parseInt(signal.id.replace('bank', ''));
                     drawBankState(rowGroup, y, bankId, displayRequests, minCycle, maxCycle, cycleToX);
                 } else if (signal.type === 'data') {
                     drawDataBus(rowGroup, y, displayRequests, cycleToX);
@@ -980,6 +1020,10 @@
             try {
                 const text = await file.text();
                 traceData = JSON.parse(text);
+
+                // Build SIGNALS array dynamically based on banks in trace
+                buildSignals(traceData);
+
                 requests = parseTrace(traceData);
 
                 if (requests.length > 0) {
