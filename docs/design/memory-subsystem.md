@@ -85,7 +85,7 @@ Based on my research of memory controller IP (Synopsys, Cadence) and LPDDR5 devi
   └────────────────────────────────────────────────────────────────┘   └────────────────────────┘
 ```
 
-  Key Features:
+Key Features:
   - Clear pipeline stages: Request → Decode → Schedule → Issue → DRAM → Data Return → Reorder
   - Shows timing checks (tRCD, tCAS, tRP) in scheduling stage
   - One request (R0) may generate multiple commands (ACT + RD)
@@ -94,7 +94,7 @@ Based on my research of memory controller IP (Synopsys, Cadence) and LPDDR5 devi
 
 ## Proposal 3: Transaction Lifecycle View (Emphasizes Request State Machine)
 
-```text`
+```text
   ┌──────────────────────────────────────────────────────────────────────────────────────────────┐
   │                                   REQUEST LIFECYCLE                                          │
   │                                                                                              │
