@@ -251,9 +251,9 @@ uint32_t L3Interconnect::estimate_transfer_cycles(uint8_t src_id, uint8_t dst_id
     uint8_t hops = config_.manhattan_distance(src_id, dst_id);
     if (hops == 0) return 0;  // Same tile
 
-    uint32_t per_hop = config_.link_latency_cycles +
+    uint32_t per_hop = static_cast<uint32_t>(config_.link_latency_cycles +
                        (bytes + config_.link_bandwidth_bytes_per_cycle - 1) /
-                       config_.link_bandwidth_bytes_per_cycle;
+                       config_.link_bandwidth_bytes_per_cycle);
 
     // Pipelined: first hop takes full time, subsequent hops overlap
     return per_hop + (hops - 1) * config_.link_latency_cycles;

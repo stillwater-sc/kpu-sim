@@ -143,7 +143,7 @@ struct InterconnectLink {
     }
 
     uint32_t transfer_cycles(size_t bytes) const {
-        return latency_cycles + (bytes + bandwidth_bytes_per_cycle - 1) / bandwidth_bytes_per_cycle;
+        return static_cast<uint32_t>(latency_cycles + (bytes + bandwidth_bytes_per_cycle - 1) / bandwidth_bytes_per_cycle);
     }
 };
 

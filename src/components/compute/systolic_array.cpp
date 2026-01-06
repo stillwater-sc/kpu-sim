@@ -284,7 +284,7 @@ void SystolicArray::evacuate_c_data(Cycle current_cycle, std::vector<L1Buffer>& 
             Size diagonal_idx = row + col;
             if (diagonal_idx < diagonal_bus.size()) {
                 // Move result to diagonal bus for evacuation
-                float result = pe->get_c_output();
+                Scalar result = pe->get_c_output();
                 if (result != 0.0f) { // Only evacuate non-zero results
                     diagonal_bus[diagonal_idx].push(result);
 

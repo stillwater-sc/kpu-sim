@@ -38,9 +38,9 @@ public:
     void set_b_input(Scalar value) { b_input = value; }
 
     // Data outputs (for propagation)
-    float get_a_output() const { return a_output; }
-    float get_b_output() const { return b_output; }
-    float get_c_output() const { return c_accumulator; }
+    Scalar get_a_output() const { return a_output; }
+    Scalar get_b_output() const { return b_output; }
+    Scalar get_c_output() const { return c_accumulator; }
 
     // Process one cycle
     void cycle() {

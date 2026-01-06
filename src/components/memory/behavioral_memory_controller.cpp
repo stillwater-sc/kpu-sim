@@ -24,8 +24,8 @@ BehavioralMemoryController::BehavioralMemoryController(const MemoryControllerCon
 }
 
 std::optional<uint64_t> BehavioralMemoryController::submit_read(
-    uint64_t address,
-    uint32_t size,
+    [[maybe_unused]]uint64_t address,
+    [[maybe_unused]]uint32_t size,
     std::function<void()> callback)
 {
     uint64_t request_id = next_request_id_++;

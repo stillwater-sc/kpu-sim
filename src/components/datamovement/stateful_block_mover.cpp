@@ -734,7 +734,7 @@ uint64_t StatefulBlockMover::calc_transfer_complete_cycle(
             break;
     }
 
-    uint32_t transfer_cycles = (bytes + bandwidth - 1) / bandwidth;
+    uint32_t transfer_cycles = static_cast<uint32_t>((bytes + bandwidth - 1) / bandwidth);
     return start + latency + transfer_cycles;
 }
 

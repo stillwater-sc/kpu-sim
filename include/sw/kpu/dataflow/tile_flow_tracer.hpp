@@ -515,16 +515,16 @@ public:
         std::set<std::tuple<uint8_t, uint16_t, uint16_t, uint16_t>> tile_keys;
 
         // C[m,n] output tile
-        tile_keys.insert({2, m_tile, n_tile, 0});
+        tile_keys.insert({ static_cast<uint8_t>(2), m_tile, n_tile, static_cast<uint16_t>(0)});
 
         // A[m,k] input tiles for all k
         for (size_t k = 0; k < k_tiles; k++) {
-            tile_keys.insert({0, m_tile, 0, static_cast<uint16_t>(k)});
+            tile_keys.insert({ static_cast<uint8_t>(0), m_tile, static_cast<uint16_t>(0), static_cast<uint16_t>(k)});
         }
 
         // B[k,n] input tiles for all k
         for (size_t k = 0; k < k_tiles; k++) {
-            tile_keys.insert({1, 0, n_tile, static_cast<uint16_t>(k)});
+            tile_keys.insert({ static_cast<uint8_t>(1), static_cast<uint16_t>(0), n_tile, static_cast<uint16_t>(k)});
         }
 
         return filter_by_tiles(tile_keys);

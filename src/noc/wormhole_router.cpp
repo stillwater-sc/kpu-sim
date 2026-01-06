@@ -222,7 +222,7 @@ bool WormholeRouter::start_injection(uint16_t packet_seq,
         return false;
     }
 
-    uint16_t num_flits = (tile.size + FLIT_SIZE_BYTES - 1) / FLIT_SIZE_BYTES;
+    uint16_t num_flits = static_cast<uint16_t>((tile.size + FLIT_SIZE_BYTES - 1) / FLIT_SIZE_BYTES);
     if (num_flits == 0) num_flits = 1;
 
     local_injection_.start(packet_seq, tile, dst_router, cycle, num_flits);
@@ -258,7 +258,7 @@ bool WormholeRouter::start_dma_injection(uint16_t packet_seq,
         return false;
     }
 
-    uint16_t num_flits = (tile.size + FLIT_SIZE_BYTES - 1) / FLIT_SIZE_BYTES;
+    uint16_t num_flits = static_cast<uint16_t>((tile.size + FLIT_SIZE_BYTES - 1) / FLIT_SIZE_BYTES);
     if (num_flits == 0) num_flits = 1;
 
     dma_injection_.start(packet_seq, tile, dst_router, cycle, num_flits);
@@ -710,7 +710,7 @@ WormholeNoC::InjectResult WormholeNoC::inject_tile(
     }
 
     uint16_t seq = next_packet_seq_++;
-    uint16_t num_flits = (tile.size + FLIT_SIZE_BYTES - 1) / FLIT_SIZE_BYTES;
+    uint16_t num_flits = static_cast<uint16_t>((tile.size + FLIT_SIZE_BYTES - 1) / FLIT_SIZE_BYTES);
     if (num_flits == 0) num_flits = 1;
 
     if (!router.start_injection(seq, tile, dst_router, cycle)) {
@@ -762,7 +762,7 @@ WormholeNoC::InjectResult WormholeNoC::dma_inject(
     }
 
     uint16_t seq = next_packet_seq_++;
-    uint16_t num_flits = (tile.size + FLIT_SIZE_BYTES - 1) / FLIT_SIZE_BYTES;
+    uint16_t num_flits = static_cast<uint16_t>((tile.size + FLIT_SIZE_BYTES - 1) / FLIT_SIZE_BYTES);
 
     if (!router.start_dma_injection(seq, tile, dst_router, cycle)) {
         return InjectResult::BUSY;

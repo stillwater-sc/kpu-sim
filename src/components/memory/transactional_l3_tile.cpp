@@ -40,7 +40,7 @@ void TransactionalL3Tile::reset() {
     }
 
     // Clear memory
-    std::fill(memory_.begin(), memory_.end(), 0);
+    std::fill(memory_.begin(), memory_.end(), static_cast<uint8_t>(0));
 
     // Reset statistics
     stats_.reset();
