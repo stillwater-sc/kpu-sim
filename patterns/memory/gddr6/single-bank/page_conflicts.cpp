@@ -8,11 +8,25 @@
 
 #include <iostream>
 #include <iomanip>
+#include <cstring>
 #include "../common/gddr6_harness.hpp"
+#include "../common/multi_fidelity.hpp"
+#include "../common/workloads.hpp"
 
 using namespace sw::kpu::patterns::gddr6;
 
-int main() {
+int main(int argc, char* argv[]) {
+    // Parse command line arguments
+    bool run_fidelity = false;
+    bool export_trace = true;
+
+    for (int i = 1; i < argc; ++i) {
+        if (std::strcmp(argv[i], "--fidelity") == 0) {
+            run_fidelity = true;
+        } else if (std::strcmp(argv[i], "--no-trace") == 0) {
+            export_trace = false;
+        }
+    }
     std::cout << "=== GDDR6 Page Conflict Pattern ===" << std::endl;
     std::cout << "Sequential reads to different rows in a single bank" << std::endl;
     std::cout << "Each access triggers: PRECHARGE -> ACTIVATE -> READ" << std::endl;
@@ -116,8 +130,25 @@ int main() {
     }
 
     // Export trace for visualization
-    std::string trace_file = make_trace_path("single-bank", "page_conflicts_trace.json");
-    harness.export_trace(trace_file, 2.0);  // 2.0 GHz for GDDR6-16000
+    if (export_trace) {
+        std::string trace_file = make_trace_path("single-bank", "page_conflicts_trace.json");
+        harness.export_trace(trace_file, 2.0);  // 2.0 GHz for GDDR6-16000
+    }
+
+    // Run multi-fidelity comparison if requested
+    if (run_fidelity) {
+        std::cout << "\n=== Multi-Fidelity Comparison ===" << std::endl;
+        MultiFidelityHarness mf_harness(config);
+
+        // Create page conflict workload matching our test
+        auto workload = make_page_conflict_workload(CHANNEL, BANK, NUM_READS);
+
+        std::cout << "\n--- Uncalibrated ---" << std::endl;
+        mf_harness.run_comparison(workload, true);
+
+        std::cout << "\n--- Calibrated ---" << std::endl;
+        mf_harness.run_calibrated(workload, true);
+    }
 
     if (pass) {
         std::cout << "\n=== PASS ===" << std::endl;
