@@ -96,6 +96,44 @@ add_lpddr5_pattern(random     complex/random     "Level 6 - Complex")
 add_lpddr5_pattern(tile_load  complex/tile-load  "Level 6 - Complex")
 
 # ============================================================================
+# GDDR6 Memory Patterns
+# ============================================================================
+
+# GDDR6-specific common headers
+add_library(gddr6_pattern_common INTERFACE)
+target_include_directories(gddr6_pattern_common INTERFACE
+    ${CMAKE_CURRENT_SOURCE_DIR}/memory/gddr6/common
+    ${PROJECT_SOURCE_DIR}/include
+)
+set_target_properties(gddr6_pattern_common PROPERTIES FOLDER "Patterns/Memory/GDDR6/Common")
+
+# Helper function to add GDDR6 pattern
+# Usage: add_gddr6_pattern(NAME SOURCE_FILE FOLDER_LEVEL)
+function(add_gddr6_pattern NAME SOURCE_FILE FOLDER_LEVEL)
+    add_executable(gddr6_${NAME}
+        ${CMAKE_CURRENT_SOURCE_DIR}/memory/gddr6/${SOURCE_FILE}
+    )
+    target_link_libraries(gddr6_${NAME} PRIVATE
+        pattern_common
+        gddr6_pattern_common
+        kpu_memory_components
+        kpu_trace
+    )
+    set_target_properties(gddr6_${NAME} PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/patterns/memory/gddr6
+        FOLDER "Patterns/Memory/GDDR6/${FOLDER_LEVEL}"
+    )
+endfunction()
+
+# -----------------------------------------------------------------------------
+# Level 1: Single Bank Patterns
+# -----------------------------------------------------------------------------
+
+add_gddr6_pattern(page_hits      single-bank/page_hits.cpp      "Level 1 - Single Bank")
+add_gddr6_pattern(page_conflicts single-bank/page_conflicts.cpp "Level 1 - Single Bank")
+add_gddr6_pattern(mixed_rw       single-bank/mixed_rw.cpp       "Level 1 - Single Bank")
+
+# ============================================================================
 # NoC Patterns (TODO)
 # ============================================================================
 

@@ -17,6 +17,7 @@ set(MEMORY_COMPONENT_SOURCES
     address_decoder.cpp
     memory_controller.cpp
     lpddr5_memory_controller.cpp
+    gddr6_memory_controller.cpp
     # Multi-fidelity memory controller framework
     behavioral_memory_controller.cpp
     transactional_memory_controller.cpp
