@@ -8,7 +8,7 @@ target_link_libraries(benchmark_matmul PRIVATE
     StillwaterKPU::Benchmark
 )
 kpu_set_target_options(benchmark_matmul)
-set_target_properties(benchmark_matmul PROPERTIES FOLDER "tests/benchmarks")
+set_target_properties(benchmark_matmul PROPERTIES FOLDER "Benchmarks")
 
 # MLP and activation benchmarks
 add_executable(benchmark_mlp test_mlp_benchmarks.cpp)
@@ -17,7 +17,7 @@ target_link_libraries(benchmark_mlp PRIVATE
     StillwaterKPU::Benchmark
 )
 kpu_set_target_options(benchmark_mlp)
-set_target_properties(benchmark_mlp PROPERTIES FOLDER "tests/benchmarks")
+set_target_properties(benchmark_mlp PROPERTIES FOLDER "Benchmarks")
 
 # Graph benchmarks
 add_executable(benchmark_graph test_graph_benchmarks.cpp)
@@ -26,7 +26,7 @@ target_link_libraries(benchmark_graph PRIVATE
     StillwaterKPU::Benchmark
 )
 kpu_set_target_options(benchmark_graph)
-set_target_properties(benchmark_graph PROPERTIES FOLDER "tests/benchmarks")
+set_target_properties(benchmark_graph PROPERTIES FOLDER "Benchmarks")
 
 # Register with CTest
 add_test(NAME benchmark_matmul COMMAND benchmark_matmul)
@@ -48,7 +48,7 @@ target_link_libraries(efficiency_diagnostic PRIVATE
     kpu_simulator  # Repeated to resolve circular dependency with LTO
 )
 kpu_set_target_options(efficiency_diagnostic)
-set_target_properties(efficiency_diagnostic PROPERTIES FOLDER "tests/benchmarks")
+set_target_properties(efficiency_diagnostic PROPERTIES FOLDER "Benchmarks")
 
 # Combined benchmark runner
 add_executable(run_all_benchmarks
@@ -61,4 +61,4 @@ target_link_libraries(run_all_benchmarks PRIVATE
     StillwaterKPU::Benchmark
 )
 kpu_set_target_options(run_all_benchmarks)
-set_target_properties(run_all_benchmarks PROPERTIES FOLDER "tests/benchmarks")
+set_target_properties(run_all_benchmarks PROPERTIES FOLDER "Benchmarks")
