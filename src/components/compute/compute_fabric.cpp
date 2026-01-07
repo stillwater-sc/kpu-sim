@@ -23,7 +23,7 @@ ComputeFabric::ComputeFabric(size_t tile_id, ComputeType type, Size systolic_row
 
     // Initialize systolic array if selected
     if (compute_type == ComputeType::SYSTOLIC_ARRAY) {
-        systolic_array = std::make_unique<SystolicArray>(systolic_rows, systolic_cols);
+        systolic_array = std::make_unique<SystolicArray<float>>(systolic_rows, systolic_cols);
     }
 }
 
@@ -35,7 +35,7 @@ ComputeFabric::ComputeFabric(const ComputeFabric& other)
 
     // Deep copy systolic array if it exists
     if (other.systolic_array) {
-        systolic_array = std::make_unique<SystolicArray>(*other.systolic_array);
+        systolic_array = std::make_unique<SystolicArray<float>>(*other.systolic_array);
     }
 }
 
@@ -53,7 +53,7 @@ ComputeFabric& ComputeFabric::operator=(const ComputeFabric& other) {
 
         // Deep copy systolic array if it exists
         if (other.systolic_array) {
-            systolic_array = std::make_unique<SystolicArray>(*other.systolic_array);
+            systolic_array = std::make_unique<SystolicArray<float>>(*other.systolic_array);
         } else {
             systolic_array.reset();
         }
@@ -101,7 +101,7 @@ void ComputeFabric::start_matmul(const MatMulConfig& config) {
 
     // Route to appropriate implementation
     if (compute_type == ComputeType::SYSTOLIC_ARRAY && systolic_array) {
-        SystolicArray::MatMulConfig systolic_config;
+        SystolicArray<float>::MatMulConfig systolic_config;
         systolic_config.m = config.m;
         systolic_config.n = config.n;
         systolic_config.k = config.k;

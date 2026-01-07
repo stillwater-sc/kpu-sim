@@ -57,8 +57,8 @@ private:
     size_t tile_id;  // Which compute tile this fabric represents
     ComputeType compute_type;
 
-    // Systolic array (when enabled)
-    std::unique_ptr<SystolicArray> systolic_array;
+    // Systolic array (when enabled) - using float as default scalar type
+    std::unique_ptr<SystolicArray<float>> systolic_array;
 
     // Tracing support
     bool tracing_enabled_;
@@ -68,8 +68,8 @@ private:
 
 public:
     explicit ComputeFabric(size_t tile_id, ComputeType type = ComputeType::SYSTOLIC_ARRAY,
-                          Size systolic_rows = SystolicArray::DEFAULT_ROWS,
-                          Size systolic_cols = SystolicArray::DEFAULT_COLS,
+                          Size systolic_rows = SystolicArray<float>::DEFAULT_ROWS,
+                          Size systolic_cols = SystolicArray<float>::DEFAULT_COLS,
                           double clock_freq_ghz = 1.0);
     ~ComputeFabric() = default;
 
@@ -99,7 +99,7 @@ public:
     ComputeType get_compute_type() const { return compute_type; }
 
     // Systolic array access (when available)
-    SystolicArray* get_systolic_array() const { return systolic_array.get(); }
+    SystolicArray<float>* get_systolic_array() const { return systolic_array.get(); }
     Size get_systolic_rows() const;
     Size get_systolic_cols() const;
 
