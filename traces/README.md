@@ -6,22 +6,40 @@ Generated trace files from memory controller patterns and visualization tools.
 
 ```
 traces/
-├── lpddr5_swimlane.html    # Swimlane pipeline view
-├── lpddr5_timing.html      # DRAM timing diagram view
-├── lpddr5_blockdiagram.html # Animated block diagram
+├── README.md                    # This file
 ├── memory/
 │   └── lpddr5/
-│       ├── single-bank/    # Single bank pattern traces
-│       ├── two-bank/       # Two bank pattern traces
-│       ├── four-bank/      # Four bank pattern traces
-│       └── complex/        # Complex pattern traces
+│       ├── tools/               # LPDDR5 visualization tools
+│       │   ├── swimlane.html    # Swimlane pipeline view
+│       │   ├── timing.html      # DRAM timing diagram view
+│       │   ├── blockdiagram.html # Animated block diagram
+│       │   └── bank_analyzer.html # Bank state analyzer
+│       ├── single-bank/         # Single bank pattern traces
+│       ├── two-bank/            # Two bank pattern traces
+│       ├── three-bank/          # Three bank pattern traces
+│       ├── four-bank/           # Four bank pattern traces
+│       ├── dual-channel/        # Dual channel pattern traces
+│       └── complex/             # Complex pattern traces
+```
+
+## Quick Start
+
+```bash
+# Generate a trace
+./build/patterns/memory/lpddr5/lpddr5_page_hits
+
+# View summary (CLI - works everywhere)
+./build/tools/trace/kpu-trace-summary traces/memory/lpddr5/single-bank/page_hits_trace.json
+
+# Launch web viewer (when GUI available)
+./tools/trace/serve-trace.py traces/memory/lpddr5/single-bank/page_hits_trace.json
 ```
 
 ## Visualization Tools
 
-Three complementary viewers for understanding memory request flow:
+Located in `traces/memory/lpddr5/tools/`:
 
-### 1. Swimlane View (`lpddr5_swimlane.html`)
+### 1. Swimlane View (`swimlane.html`)
 
 Horizontal pipeline visualization showing requests flowing through stages:
 
@@ -35,14 +53,7 @@ Request Queue → MC Scheduler → Cmd Bus → Bank (ACT) → Bank (CAS) → Dat
 - Tracking multiple concurrent requests
 - Timeline-based analysis
 
-**Features:**
-- Horizontal lanes for each pipeline stage
-- Color-coded request tokens
-- Playback with cycle-by-cycle stepping
-- Request filtering and highlighting
-- Statistics panel
-
-### 2. Timing Diagram (`lpddr5_timing.html`)
+### 2. Timing Diagram (`timing.html`)
 
 Classic waveform-style diagram like DRAM datasheets:
 
@@ -51,46 +62,31 @@ CLK:      _|‾|_|‾|_|‾|_|‾|_
 CMD:      ────┤ACT├───┤RD├──
 Bank 0:   IDLE│ACTIVATING│ACTIVE│READING│
 DQ:       ────────────────────┤BURST├──
-                   ├──tRCD──┤├─tCL─┤
+                  ├──tRCD──┤├─tCL─┤
 ```
 
 **Best for:**
 - Validating timing constraints (tRCD, tCL, tRP, etc.)
 - Understanding command sequences
 - Comparing page hit vs page miss latencies
-- Educational purposes
 
-**Features:**
-- Signal waveforms (CLK, CMD, Bank State, DQ)
-- Timing constraint annotations with arrows
-- Per-request or all-requests view
-- Dark/light theme toggle
+### 3. Block Diagram Animation (`blockdiagram.html`)
 
-### 3. Block Diagram Animation (`lpddr5_blockdiagram.html`)
-
-Animated architectural view with request tokens flowing through components:
-
-```
-┌──────────┐    ┌────────────────┐    ┌─────────────────────┐
-│ Request  │───▶│ Memory         │───▶│ LPDDR5 Device       │
-│ Queue    │    │ Controller     │    │ Banks, Sense Amps   │
-└──────────┘    └────────────────┘    └─────────────────────┘
-                        ▲                       │
-                        └───────────────────────┘
-                              Data Bus
-```
+Animated architectural view with request tokens flowing through components.
 
 **Best for:**
 - Understanding physical architecture
 - Visualizing data flow paths
-- Educational/demo purposes
 - Seeing bank state changes
 
-**Features:**
-- Animated request tokens
-- Bank state coloring (idle/activating/reading/writing)
-- Bus activity indicators
-- Real-time statistics
+### 4. Bank Analyzer (`bank_analyzer.html`)
+
+Per-bank horizontal lanes with command/data bus visualization.
+
+**Best for:**
+- Detailed bank-level analysis
+- Resource utilization over time
+- Command scheduling analysis
 
 ## Keyboard Controls
 
@@ -99,7 +95,42 @@ All viewers support:
 - **Arrow Right**: Step forward
 - **Arrow Left**: Step backward
 - **Home**: Go to start
-- **End**: Go to end (swimlane/timing)
+- **End**: Go to end
+
+## CLI Tools
+
+### kpu-trace-summary
+
+Command-line trace analysis (works on headless servers):
+
+```bash
+# Basic summary
+./build/tools/trace/kpu-trace-summary trace.json
+
+# Verbose output with per-transaction details
+./build/tools/trace/kpu-trace-summary trace.json --verbose
+
+# JSON output for scripting
+./build/tools/trace/kpu-trace-summary trace.json --json
+
+# Validate timing constraints
+./build/tools/trace/kpu-trace-summary trace.json --validate
+```
+
+### serve-trace.py
+
+Local HTTP server for HTML visualization:
+
+```bash
+# Serve and open browser
+./tools/trace/serve-trace.py trace.json
+
+# Specify port
+./tools/trace/serve-trace.py trace.json --port 8888
+
+# Server only (no browser)
+./tools/trace/serve-trace.py trace.json --no-browser
+```
 
 ## Generating Traces
 
