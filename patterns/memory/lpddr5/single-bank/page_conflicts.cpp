@@ -1,7 +1,7 @@
-// patterns/memory/lpddr5/single-bank/page-hits/main.cpp
+// patterns/memory/lpddr5/single-bank/page-conflicts.cpp
 //
-// Pattern: Sequential reads to same row (page hits)
-// Tests: tCL + tBurst timing, page hit behavior
+// Pattern: Reads to different rows (page conflicts)
+// Tests: tRP + tRCD + tCL + tBurst timing, precharge behavior
 //
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2024-2025 Stillwater Supercomputing, Inc.
@@ -10,25 +10,24 @@
 #include <iomanip>
 #include <cstring>
 
-#include "../../common/lpddr5_configs.hpp"
-#include "../../common/lpddr5_harness.hpp"
-#include "../../common/workloads.hpp"
-#include "../../common/multi_fidelity.hpp"
+#include "../common/lpddr5_configs.hpp"
+#include "../common/lpddr5_harness.hpp"
+#include "../common/workloads.hpp"
+#include "../common/multi_fidelity.hpp"
 
 using namespace sw::kpu::patterns::lpddr5;
 
-bool test_page_hits() {
-    std::cout << "\n=== Test: Single Bank Page Hits ===" << std::endl;
-    std::cout << "Configuration: Bank 0, same row, 16 reads" << std::endl;
-    std::cout << "Expected: 1 page empty, 15 page hits" << std::endl;
+bool test_page_conflicts() {
+    std::cout << "\n=== Test: Single Bank Page Conflicts ===" << std::endl;
+    std::cout << "Configuration: Bank 0, different rows, 8 reads" << std::endl;
+    std::cout << "Expected: 1 page empty, 7 page conflicts" << std::endl;
 
     LPDDR5Harness harness(single_channel_config());
 
     const uint8_t BANK = 0;
-    const uint32_t ROW = 100;
 
-    for (int i = 0; i < 16; ++i) {
-        harness.submit_read(make_address(BANK, ROW, i * 64));
+    for (int i = 0; i < 8; ++i) {
+        harness.submit_read(make_address(BANK, i * 100, 0));  // Different rows
     }
 
     if (!harness.run_until_complete()) {
@@ -40,9 +39,9 @@ bool test_page_hits() {
     harness.print_stats();
 
     if (!harness.verify_no_violations()) return false;
-    if (!harness.verify_stats(16, 0, 15, 1, 0)) return false;
+    if (!harness.verify_stats(8, 0, 0, 1, 7)) return false;
 
-    std::cout << "PASS: Page hits work correctly" << std::endl;
+    std::cout << "PASS: Page conflicts work correctly" << std::endl;
     return true;
 }
 
@@ -50,7 +49,7 @@ void run_multi_fidelity() {
     std::cout << "\n=== Multi-Fidelity Comparison ===" << std::endl;
 
     MultiFidelityHarness harness(single_channel_config());
-    auto workload = make_page_hit_workload();
+    auto workload = make_page_conflict_workload(0, 8);
 
     std::cout << "\n--- Uncalibrated ---" << std::endl;
     harness.run_comparison(workload, true);
@@ -60,9 +59,9 @@ void run_multi_fidelity() {
 }
 
 int main(int argc, char* argv[]) {
-    std::cout << "======================================" << std::endl;
-    std::cout << "LPDDR5 Pattern: Single Bank Page Hits" << std::endl;
-    std::cout << "======================================" << std::endl;
+    std::cout << "==========================================" << std::endl;
+    std::cout << "LPDDR5 Pattern: Single Bank Page Conflicts" << std::endl;
+    std::cout << "==========================================" << std::endl;
 
     bool run_fidelity = false;
     bool export_trace = true;
@@ -78,7 +77,7 @@ int main(int argc, char* argv[]) {
         }
     }
 
-    bool pass = test_page_hits();
+    bool pass = test_page_conflicts();
 
     if (run_fidelity) {
         run_multi_fidelity();
@@ -88,14 +87,13 @@ int main(int argc, char* argv[]) {
     if (export_trace) {
         std::cout << "\n=== Trace Export ===" << std::endl;
         LPDDR5Harness harness(single_channel_config());
-        for (int i = 0; i < 16; ++i) {
-            harness.submit_read(make_address(0, 100, i * 64));
+        for (int i = 0; i < 4; ++i) {
+            harness.submit_read(make_address(0, i * 100, 0));
         }
         harness.run_until_complete();
 
-        // Use organized path if not specified
         if (trace_file.empty()) {
-            trace_file = make_trace_path("single-bank", "page_hits_trace.json");
+            trace_file = make_trace_path("single-bank", "page_conflicts_trace.json");
         }
         harness.export_trace(trace_file);
     }

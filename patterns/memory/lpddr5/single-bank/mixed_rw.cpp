@@ -1,4 +1,4 @@
-// patterns/memory/lpddr5/single-bank/mixed-rw/main.cpp
+// patterns/memory/lpddr5/single-bank/mixed-rw.cpp
 //
 // Pattern: Alternating reads and writes (bus turnaround)
 // Tests: tRTW and tWTR timing
@@ -10,10 +10,10 @@
 #include <iomanip>
 #include <cstring>
 
-#include "../../common/lpddr5_configs.hpp"
-#include "../../common/lpddr5_harness.hpp"
-#include "../../common/workloads.hpp"
-#include "../../common/multi_fidelity.hpp"
+#include "../common/lpddr5_configs.hpp"
+#include "../common/lpddr5_harness.hpp"
+#include "../common/workloads.hpp"
+#include "../common/multi_fidelity.hpp"
 
 using namespace sw::kpu::patterns::lpddr5;
 

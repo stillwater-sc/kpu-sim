@@ -21,10 +21,10 @@
 #include <iomanip>
 #include <cstring>
 
-#include "../../common/lpddr5_configs.hpp"
-#include "../../common/lpddr5_harness.hpp"
-#include "../../common/workloads.hpp"
-#include "../../common/multi_fidelity.hpp"
+#include "../common/lpddr5_configs.hpp"
+#include "../common/lpddr5_harness.hpp"
+#include "../common/workloads.hpp"
+#include "../common/multi_fidelity.hpp"
 
 using namespace sw::kpu::patterns::lpddr5;
 
