@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed - 2026-01-06
+- **SystolicArray Template Refactoring** (`include/sw/kpu/components/systolic_array.hpp`)
+  - Converted `SystolicArray` from a non-templated class to `template<typename Scalar> class SystolicArray`
+  - Removed hardcoded `using Scalar = double;` typedef
+  - Enables instantiation with different numeric types: `float`, `double`, `int8_t`, `int32_t`, and custom types
+  - Moved all implementations to header (required for templates)
+  - Updated `ProcessingElement<Scalar>` to use `Scalar{0}` for type-generic zero values
+  - Added explicit instantiations for `int8_t`, `int32_t`, `float`, `double`
+  - Updated `ComputeFabric` to use `SystolicArray<float>` explicitly
+  - **Benefit**: Systolic array structure is now orthogonal to scalar type, enabling quantized inference and custom numeric types
+
 ### Added - 2026-01-05
 - **Multi-Fidelity Calibration Framework** (`src/calibration/`, `tools/calibration/`)
   - Complete calibration workflow for deriving behavioral and transactional model parameters from cycle-accurate simulation
