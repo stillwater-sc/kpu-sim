@@ -195,12 +195,12 @@
         .connection.dq { stroke: var(--accent); stroke-width: 4; }
         .connection-arrow { fill: var(--border); }
 
-        /* Bus segments */
-        .bus-segment { stroke-width: 6; stroke-linecap: round; rx: 3; }
-        .bus-segment.idle { fill: var(--idle); stroke: none; }
-        .bus-segment.ca-active { fill: var(--activate); stroke: none; }
-        .bus-segment.dq-read { fill: var(--read); stroke: none; }
-        .bus-segment.dq-write { fill: var(--write); stroke: none; }
+        /* Bus segments - tubular with hollow interior */
+        .bus-segment { fill: none; stroke-width: 2; stroke-linecap: round; }
+        .bus-segment.idle { stroke: var(--idle); }
+        .bus-segment.ca-active { stroke: var(--activate); fill: rgba(245, 158, 11, 0.2); }
+        .bus-segment.dq-read { stroke: var(--read); fill: rgba(34, 197, 94, 0.2); }
+        .bus-segment.dq-write { stroke: var(--write); fill: rgba(168, 85, 247, 0.2); }
 
         /* Request tokens */
         .token { transition: transform 0.15s ease-out; }
@@ -315,7 +315,7 @@
                 <div>Load a trace JSON file to animate</div>
             </div>
 
-            <svg id="diagram" viewBox="0 0 1100 520" preserveAspectRatio="xMidYMid meet" style="display: none;">
+            <svg id="diagram" viewBox="0 0 840 380" preserveAspectRatio="xMidYMid meet" style="display: none;">
                 <defs>
                     <marker id="arrowhead" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
                         <polygon points="0 0, 8 3, 0 6" fill="#64748b"/>
@@ -325,6 +325,9 @@
                     </marker>
                     <marker id="arrowhead-dq" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
                         <polygon points="0 0, 8 3, 0 6" fill="#3b82f6"/>
+                    </marker>
+                    <marker id="arrowhead-dq-left" markerWidth="8" markerHeight="6" refX="1" refY="3" orient="auto">
+                        <polygon points="8 0, 0 3, 8 6" fill="#3b82f6"/>
                     </marker>
                     <marker id="arrowhead-read" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
                         <polygon points="0 0, 8 3, 0 6" fill="#22c55e"/>
@@ -342,7 +345,7 @@
                 </defs>
 
                 <!-- Title -->
-                <text x="550" y="22" text-anchor="middle" fill="#e2e8f0" font-size="13" font-weight="600">
+                <text x="420" y="22" text-anchor="middle" fill="#e2e8f0" font-size="13" font-weight="600">
                     LPDDR5 Memory Subsystem Architecture
                 </text>
 
@@ -392,6 +395,13 @@
 
                 <!-- Connection: MPFE to MC -->
                 <path class="connection" d="M 170 170 L 195 170" marker-end="url(#arrowhead)"/>
+
+                <!-- ==================== DFI INTERFACE (MC to PHY) - simple arrows ==================== -->
+                <g id="dfi-interface">
+                    <path class="connection" d="M 400 130 L 423 130" marker-end="url(#arrowhead)"/>
+                    <path class="connection" d="M 400 180 L 423 180" marker-end="url(#arrowhead)"/>
+                    <text x="412" y="158" fill="#475569" font-size="7" text-anchor="middle">DFI</text>
+                </g>
 
                 <!-- ==================== MEMORY CONTROLLER ==================== -->
                 <g class="component" id="comp-mc">
@@ -448,162 +458,142 @@
                     <text x="300" y="279" fill="#94a3b8" font-size="7" text-anchor="middle" id="scheduler-text">Scheduler (FR-FCFS)</text>
                 </g>
 
-                <!-- ==================== CA BUS (Command/Address) ==================== -->
-                <g id="ca-bus">
-                    <rect class="bus-segment idle" id="ca-bus-segment" x="405" y="105" width="200" height="10" rx="3"/>
-                    <text x="505" y="100" fill="#f59e0b" font-size="9" text-anchor="middle" font-weight="600">CA Bus (Command/Address)</text>
-                    <path class="connection ca" d="M 400 110 L 410 110" marker-end="url(#arrowhead-ca)"/>
-                    <path class="connection ca" d="M 600 110 L 610 110" marker-end="url(#arrowhead-ca)"/>
-                </g>
-
                 <!-- ==================== LPDDR5 PHY ==================== -->
                 <g class="component" id="comp-phy">
-                    <rect class="component-box phy" x="620" y="55" width="100" height="240"/>
-                    <text class="block-title phy" x="670" y="72">LPDDR5 PHY</text>
+                    <rect class="component-box phy" x="428" y="55" width="100" height="240"/>
+                    <text class="block-title phy" x="478" y="72">LPDDR5 PHY</text>
 
                     <!-- CA Slice -->
-                    <rect class="sub-block" x="630" y="90" width="80" height="30"/>
-                    <text x="670" y="109" fill="#94a3b8" font-size="8" text-anchor="middle">CA Slice</text>
+                    <rect class="sub-block" x="438" y="90" width="80" height="30"/>
+                    <text x="478" y="109" fill="#94a3b8" font-size="8" text-anchor="middle">CA Slice</text>
 
                     <!-- Data Slices -->
-                    <rect class="sub-block" x="630" y="128" width="38" height="50"/>
-                    <text x="649" y="150" fill="#94a3b8" font-size="7" text-anchor="middle">Data</text>
-                    <text x="649" y="160" fill="#94a3b8" font-size="7" text-anchor="middle">Slice 0</text>
+                    <rect class="sub-block" x="438" y="128" width="38" height="50"/>
+                    <text x="457" y="150" fill="#94a3b8" font-size="7" text-anchor="middle">Data</text>
+                    <text x="457" y="160" fill="#94a3b8" font-size="7" text-anchor="middle">Slice 0</text>
 
-                    <rect class="sub-block" x="672" y="128" width="38" height="50"/>
-                    <text x="691" y="150" fill="#94a3b8" font-size="7" text-anchor="middle">Data</text>
-                    <text x="691" y="160" fill="#94a3b8" font-size="7" text-anchor="middle">Slice 1</text>
+                    <rect class="sub-block" x="480" y="128" width="38" height="50"/>
+                    <text x="499" y="150" fill="#94a3b8" font-size="7" text-anchor="middle">Data</text>
+                    <text x="499" y="160" fill="#94a3b8" font-size="7" text-anchor="middle">Slice 1</text>
 
                     <!-- Memory Clock / PLL -->
-                    <rect class="sub-block" x="630" y="185" width="38" height="35"/>
-                    <text x="649" y="200" fill="#94a3b8" font-size="7" text-anchor="middle">PLL</text>
-                    <text x="649" y="210" fill="#94a3b8" font-size="7" text-anchor="middle">Clock</text>
+                    <rect class="sub-block" x="438" y="185" width="38" height="35"/>
+                    <text x="457" y="200" fill="#94a3b8" font-size="7" text-anchor="middle">PLL</text>
+                    <text x="457" y="210" fill="#94a3b8" font-size="7" text-anchor="middle">Clock</text>
 
                     <!-- I/O Calibration -->
-                    <rect class="sub-block" x="672" y="185" width="38" height="35"/>
-                    <text x="691" y="200" fill="#94a3b8" font-size="7" text-anchor="middle">I/O</text>
-                    <text x="691" y="210" fill="#94a3b8" font-size="7" text-anchor="middle">Calib</text>
+                    <rect class="sub-block" x="480" y="185" width="38" height="35"/>
+                    <text x="499" y="200" fill="#94a3b8" font-size="7" text-anchor="middle">I/O</text>
+                    <text x="499" y="210" fill="#94a3b8" font-size="7" text-anchor="middle">Calib</text>
 
                     <!-- IO Pads -->
-                    <rect class="sub-block" x="630" y="228" width="80" height="25"/>
-                    <text x="670" y="244" fill="#94a3b8" font-size="8" text-anchor="middle">IO Pads</text>
-
-                    <!-- DFI Interface label -->
-                    <text x="615" y="160" fill="#64748b" font-size="7" text-anchor="end" transform="rotate(-90, 615, 160)">DFI</text>
+                    <rect class="sub-block" x="438" y="228" width="80" height="25"/>
+                    <text x="478" y="244" fill="#94a3b8" font-size="8" text-anchor="middle">IO Pads</text>
                 </g>
 
-                <!-- Connection: PHY to Device -->
-                <path class="connection" d="M 720 170 L 745 170" marker-end="url(#arrowhead)"/>
+                <!-- ==================== CA BUS (PHY to Device) ==================== -->
+                <g id="ca-bus">
+                    <rect class="bus-segment idle" id="ca-bus-segment" x="528" y="101" width="63" height="8" rx="3"/>
+                    <path class="connection cmd" d="M 528 105 L 596 105" marker-end="url(#arrowhead-ca)"/>
+                    <text x="559" y="94" fill="#f59e0b" font-size="8" font-weight="600">CA</text>
+                </g>
+
+                <!-- ==================== DQ BUS (PHY to Device) ==================== -->
+                <g id="dq-bus">
+                    <rect class="bus-segment idle" id="dq-bus-segment" x="528" y="247" width="72" height="8" rx="3"/>
+                    <!-- Bidirectional arrows -->
+                    <polygon points="532,251 540,247 540,255" fill="#3b82f6"/>
+                    <polygon points="596,251 588,247 588,255" fill="#3b82f6"/>
+                    <text x="564" y="242" fill="#3b82f6" font-size="9" font-weight="600" text-anchor="middle">DQ</text>
+                    <text x="564" y="268" fill="#64748b" font-size="7" text-anchor="middle" id="dq-direction">Bidirectional</text>
+                </g>
 
                 <!-- ==================== LPDDR5 DEVICE ==================== -->
                 <g class="component" id="comp-device">
-                    <rect class="component-box device" x="750" y="55" width="340" height="240" fill="none" stroke-dasharray="5,3"/>
-                    <text class="block-title device" x="920" y="72">LPDDR5 Device</text>
+                    <rect class="component-box device" x="600" y="55" width="220" height="240" fill="none" stroke-dasharray="5,3"/>
+                    <text class="block-title device" x="710" y="72">LPDDR5 Device</text>
 
-                    <!-- Row Decoder -->
-                    <rect class="sub-block" x="760" y="95" width="45" height="80"/>
-                    <text x="782" y="130" fill="#94a3b8" font-size="7" text-anchor="middle">Row</text>
-                    <text x="782" y="140" fill="#94a3b8" font-size="7" text-anchor="middle">Dec</text>
+                    <!-- Row Decoder (aligned with Sense Amps: y=98, height=70) -->
+                    <rect class="sub-block" x="610" y="98" width="35" height="70"/>
+                    <text x="627" y="130" fill="#94a3b8" font-size="7" text-anchor="middle">Row</text>
+                    <text x="627" y="140" fill="#94a3b8" font-size="7" text-anchor="middle">Dec</text>
 
                     <!-- Bank Array - Group 0 -->
-                    <text x="870" y="92" fill="#64748b" font-size="8" text-anchor="middle">Bank Group 0</text>
+                    <text x="700" y="92" fill="#64748b" font-size="7" text-anchor="middle">Bank Group 0</text>
                     <g class="bank" id="bank-0">
-                        <rect class="bank-box idle" x="815" y="98" width="32" height="26"/>
-                        <text class="bank-label" x="831" y="112">B0</text>
-                        <text class="bank-state-text" x="831" y="120" id="bank-0-state">IDLE</text>
+                        <rect class="bank-box idle" x="650" y="98" width="28" height="24"/>
+                        <text class="bank-label" x="664" y="111">B0</text>
+                        <text class="bank-state-text" x="664" y="118" id="bank-0-state">IDLE</text>
                     </g>
                     <g class="bank" id="bank-1">
-                        <rect class="bank-box idle" x="850" y="98" width="32" height="26"/>
-                        <text class="bank-label" x="866" y="112">B1</text>
-                        <text class="bank-state-text" x="866" y="120" id="bank-1-state">IDLE</text>
+                        <rect class="bank-box idle" x="680" y="98" width="28" height="24"/>
+                        <text class="bank-label" x="694" y="111">B1</text>
+                        <text class="bank-state-text" x="694" y="118" id="bank-1-state">IDLE</text>
                     </g>
                     <g class="bank" id="bank-2">
-                        <rect class="bank-box idle" x="885" y="98" width="32" height="26"/>
-                        <text class="bank-label" x="901" y="112">B2</text>
-                        <text class="bank-state-text" x="901" y="120" id="bank-2-state">IDLE</text>
+                        <rect class="bank-box idle" x="710" y="98" width="28" height="24"/>
+                        <text class="bank-label" x="724" y="111">B2</text>
+                        <text class="bank-state-text" x="724" y="118" id="bank-2-state">IDLE</text>
                     </g>
                     <g class="bank" id="bank-3">
-                        <rect class="bank-box idle" x="920" y="98" width="32" height="26"/>
-                        <text class="bank-label" x="936" y="112">B3</text>
-                        <text class="bank-state-text" x="936" y="120" id="bank-3-state">IDLE</text>
+                        <rect class="bank-box idle" x="740" y="98" width="28" height="24"/>
+                        <text class="bank-label" x="754" y="111">B3</text>
+                        <text class="bank-state-text" x="754" y="118" id="bank-3-state">IDLE</text>
                     </g>
 
                     <!-- Bank Array - Group 1 -->
-                    <text x="870" y="142" fill="#64748b" font-size="8" text-anchor="middle">Bank Group 1</text>
+                    <text x="700" y="138" fill="#64748b" font-size="7" text-anchor="middle">Bank Group 1</text>
                     <g class="bank" id="bank-4">
-                        <rect class="bank-box idle" x="815" y="148" width="32" height="26"/>
-                        <text class="bank-label" x="831" y="162">B4</text>
-                        <text class="bank-state-text" x="831" y="170" id="bank-4-state">IDLE</text>
+                        <rect class="bank-box idle" x="650" y="143" width="28" height="24"/>
+                        <text class="bank-label" x="664" y="156">B4</text>
+                        <text class="bank-state-text" x="664" y="163" id="bank-4-state">IDLE</text>
                     </g>
                     <g class="bank" id="bank-5">
-                        <rect class="bank-box idle" x="850" y="148" width="32" height="26"/>
-                        <text class="bank-label" x="866" y="162">B5</text>
-                        <text class="bank-state-text" x="866" y="170" id="bank-5-state">IDLE</text>
+                        <rect class="bank-box idle" x="680" y="143" width="28" height="24"/>
+                        <text class="bank-label" x="694" y="156">B5</text>
+                        <text class="bank-state-text" x="694" y="163" id="bank-5-state">IDLE</text>
                     </g>
                     <g class="bank" id="bank-6">
-                        <rect class="bank-box idle" x="885" y="148" width="32" height="26"/>
-                        <text class="bank-label" x="901" y="162">B6</text>
-                        <text class="bank-state-text" x="901" y="170" id="bank-6-state">IDLE</text>
+                        <rect class="bank-box idle" x="710" y="143" width="28" height="24"/>
+                        <text class="bank-label" x="724" y="156">B6</text>
+                        <text class="bank-state-text" x="724" y="163" id="bank-6-state">IDLE</text>
                     </g>
                     <g class="bank" id="bank-7">
-                        <rect class="bank-box idle" x="920" y="148" width="32" height="26"/>
-                        <text class="bank-label" x="936" y="162">B7</text>
-                        <text class="bank-state-text" x="936" y="170" id="bank-7-state">IDLE</text>
+                        <rect class="bank-box idle" x="740" y="143" width="28" height="24"/>
+                        <text class="bank-label" x="754" y="156">B7</text>
+                        <text class="bank-state-text" x="754" y="163" id="bank-7-state">IDLE</text>
                     </g>
 
-                    <!-- Sense Amplifiers -->
-                    <rect class="sub-block" x="960" y="95" width="50" height="85"/>
-                    <text x="985" y="135" fill="#94a3b8" font-size="7" text-anchor="middle">Sense</text>
-                    <text x="985" y="145" fill="#94a3b8" font-size="7" text-anchor="middle">Amps</text>
-                    <text x="985" y="160" fill="#64748b" font-size="6" text-anchor="middle" id="senseamp-status">-</text>
+                    <!-- Sense Amps + Column Decoder (combined) -->
+                    <rect class="sub-block" x="775" y="98" width="30" height="70"/>
+                    <text x="790" y="128" fill="#94a3b8" font-size="6" text-anchor="middle">Sense</text>
+                    <text x="790" y="138" fill="#94a3b8" font-size="6" text-anchor="middle">Amps</text>
+                    <text x="790" y="155" fill="#64748b" font-size="5" text-anchor="middle" id="senseamp-status">-</text>
 
-                    <!-- Column Decoder -->
-                    <rect class="sub-block" x="1020" y="95" width="50" height="85"/>
-                    <text x="1045" y="135" fill="#94a3b8" font-size="7" text-anchor="middle">Column</text>
-                    <text x="1045" y="145" fill="#94a3b8" font-size="7" text-anchor="middle">Decoder</text>
-
-                    <!-- IO Interface -->
-                    <rect class="sub-block" x="960" y="200" width="110" height="30"/>
-                    <text x="1015" y="219" fill="#94a3b8" font-size="8" text-anchor="middle">Data I/O</text>
+                    <!-- Data I/O -->
+                    <rect class="sub-block" x="610" y="200" width="158" height="25"/>
+                    <text x="689" y="216" fill="#94a3b8" font-size="7" text-anchor="middle">Data I/O + Column Decoder</text>
                 </g>
-
-                <!-- ==================== DQ BUS (Data) ==================== -->
-                <g id="dq-bus">
-                    <rect class="bus-segment idle" id="dq-bus-segment" x="200" y="315" width="750" height="12" rx="4"/>
-                    <text x="575" y="310" fill="#3b82f6" font-size="9" text-anchor="middle" font-weight="600">DQ Bus (Data)</text>
-
-                    <!-- Bidirectional arrows -->
-                    <path class="connection dq" d="M 195 321 L 210 321" marker-end="url(#arrowhead-dq)"/>
-                    <path class="connection dq" d="M 955 321 L 940 321" marker-end="url(#arrowhead-dq)"/>
-
-                    <!-- Data flow direction indicator -->
-                    <text x="400" y="342" fill="#64748b" font-size="7" text-anchor="middle" id="dq-direction">Read Data: Device -> MPFE</text>
-                </g>
-
-                <!-- Connections from DQ bus to components -->
-                <path class="connection" d="M 300 315 L 300 295" stroke-dasharray="3,2"/>
-                <path class="connection" d="M 670 315 L 670 295" stroke-dasharray="3,2"/>
-                <path class="connection" d="M 920 315 L 920 230" stroke-dasharray="3,2"/>
 
                 <!-- Return path from MPFE Response Buffer to output -->
                 <g id="complete-path">
-                    <path class="connection" d="M 50 200 L 25 200 L 25 360 L 100 360" marker-end="url(#arrowhead)"/>
-                    <text x="80" y="375" fill="#64748b" font-size="8" text-anchor="middle">Complete</text>
+                    <path class="connection" d="M 50 200 L 25 200 L 25 320 L 100 320" marker-end="url(#arrowhead)"/>
+                    <text x="80" y="335" fill="#64748b" font-size="8" text-anchor="middle">Complete</text>
                 </g>
 
                 <!-- ==================== TIMING ANNOTATIONS ==================== -->
                 <g id="timing-annotations">
-                    <text x="505" y="130" fill="#f59e0b" font-size="7" text-anchor="middle">tRCD=14cy | tRP=14cy</text>
-                    <text x="575" y="340" fill="#3b82f6" font-size="7" text-anchor="middle">tCL=14cy | tBurst=8cy</text>
+                    <text x="710" y="280" fill="#f59e0b" font-size="7" text-anchor="middle">tRCD=14cy | tRP=14cy</text>
+                    <text x="710" y="292" fill="#3b82f6" font-size="7" text-anchor="middle">tCL=14cy | tBurst=8cy</text>
                 </g>
 
                 <!-- ==================== STAGE FLOW LABELS ==================== -->
                 <g id="stage-flow">
                     <text x="105" y="45" fill="#64748b" font-size="8" text-anchor="middle">1. Dispatch</text>
                     <text x="300" y="45" fill="#64748b" font-size="8" text-anchor="middle">2. Schedule</text>
-                    <text x="505" y="45" fill="#64748b" font-size="8" text-anchor="middle">3. Command</text>
-                    <text x="670" y="45" fill="#64748b" font-size="8" text-anchor="middle">4. PHY</text>
-                    <text x="920" y="45" fill="#64748b" font-size="8" text-anchor="middle">5. Bank Access</text>
+                    <text x="478" y="45" fill="#64748b" font-size="8" text-anchor="middle">3. PHY</text>
+                    <text x="565" y="45" fill="#f59e0b" font-size="9" text-anchor="middle" font-weight="600">4. CA/DQ</text>
+                    <text x="710" y="45" fill="#64748b" font-size="8" text-anchor="middle">5. Bank Access</text>
                 </g>
 
                 <!-- ==================== TOKEN CONTAINER ==================== -->
@@ -687,6 +677,10 @@
                         <div class="legend-color" style="background: #f59e0b;"></div>
                         <span>CA Bus</span>
                     </div>
+                    <div class="legend-item">
+                        <div class="legend-color" style="background: #3b82f6;"></div>
+                        <span>DQ Bus</span>
+                    </div>
                 </div>
             </div>
 
@@ -728,25 +722,29 @@
             mc_scheduler: { x: 300, y: 272 },
             mc_txproc: { x: 355, y: 110 },
 
-            // PHY
-            phy_ca: { x: 670, y: 105 },
-            phy_data: { x: 670, y: 155 },
+            // PHY stages
+            phy_ca: { x: 478, y: 105 },
+            phy_data: { x: 478, y: 155 },
 
-            // Device
-            rowdec: { x: 782, y: 135 },
+            // CA/DQ buses (PHY to Device)
+            ca_bus: { x: 565, y: 105 },
+            dq_bus: { x: 564, y: 251 },
+
+            // Device - moved right for wider buses
+            rowdec: { x: 627, y: 133 },
             bank: (b) => ({
-                x: 831 + (b % 4) * 35,
-                y: 110 + Math.floor(b / 4) * 50
+                x: 664 + (b % 4) * 30,
+                y: 110 + Math.floor(b / 4) * 45
             }),
-            senseamp: { x: 985, y: 140 },
-            coldec: { x: 1045, y: 140 },
+            senseamp: { x: 790, y: 133 },
+            coldec: { x: 790, y: 133 },
 
             // Data path
-            databus: { x: 575, y: 321 },
+            databus: { x: 564, y: 251 },
 
             // MPFE response
             response_buf: { x: 105, y: 208 },
-            complete: { x: 100, y: 360 }
+            complete: { x: 100, y: 320 }
         };
 
         // DOM elements
@@ -1065,9 +1063,10 @@
 
             // Reset component states
             document.getElementById('senseamp-status').textContent = '-';
+            // CA and DQ buses (PHY to Device)
             document.getElementById('ca-bus-segment').setAttribute('class', 'bus-segment idle');
             document.getElementById('dq-bus-segment').setAttribute('class', 'bus-segment idle');
-            document.getElementById('dq-direction').textContent = 'Read Data: Device -> MPFE';
+            document.getElementById('dq-direction').textContent = 'Bidirectional';
 
             let inProgress = 0;
             let completed = 0;
@@ -1142,10 +1141,12 @@
                 }
 
                 // Track bus activity
+                // PHY CA stage - CA bus to device
                 if (currentStage.stage === 'phy_ca') {
                     caActive = true;
                 }
-                if (currentStage.stage === 'databus') {
+                // Data bus stages - DQ active
+                if (currentStage.stage === 'databus' || currentStage.stage === 'phy_data') {
                     dqActive = true;
                     dqDirection = currentStage.direction || 'read';
                 }
@@ -1153,7 +1154,7 @@
                 token.setAttribute('transform', `translate(${pos.x}, ${pos.y})`);
             }
 
-            // Update bus segments
+            // Update CA and DQ bus segments (PHY to Device)
             if (caActive) {
                 document.getElementById('ca-bus-segment').setAttribute('class', 'bus-segment ca-active bus-active');
             }
@@ -1161,7 +1162,7 @@
                 const dqClass = dqDirection === 'read' ? 'dq-read' : 'dq-write';
                 document.getElementById('dq-bus-segment').setAttribute('class', `bus-segment ${dqClass} bus-active`);
                 document.getElementById('dq-direction').textContent =
-                    dqDirection === 'read' ? 'Read Data: Device -> MPFE' : 'Write Data: MPFE -> Device';
+                    dqDirection === 'read' ? 'Read Data: Device → PHY' : 'Write Data: PHY → Device';
             }
 
             // Update MPFE components
