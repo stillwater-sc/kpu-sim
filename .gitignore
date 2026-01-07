@@ -69,3 +69,6 @@ Testing/
 *_test.json
 *_test.trace
 bin/
+
+# pyenv files
+.python-version
