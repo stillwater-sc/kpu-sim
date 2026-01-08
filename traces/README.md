@@ -6,108 +6,169 @@ Generated trace files from memory controller patterns and visualization tools.
 
 ```
 traces/
-├── README.md                    # This file
-├── memory/
-│   └── lpddr5/
-│       ├── tools/               # LPDDR5 visualization tools
-│       │   ├── swimlane.html    # Swimlane pipeline view
-│       │   ├── timing.html      # DRAM timing diagram view
-│       │   ├── blockdiagram.html # Animated block diagram
-│       │   └── bank_analyzer.html # Bank state analyzer
-│       ├── single-bank/         # Single bank pattern traces
-│       ├── two-bank/            # Two bank pattern traces
-│       ├── three-bank/          # Three bank pattern traces
-│       ├── four-bank/           # Four bank pattern traces
-│       ├── dual-channel/        # Dual channel pattern traces
-│       └── complex/             # Complex pattern traces
+├── README.md                       # This file
+└── memory/
+    ├── lpddr5/                     # LPDDR5 memory controller traces
+    │   ├── tools/                  # Visualization tools
+    │   │   ├── swimlane.html       # Swimlane pipeline view
+    │   │   ├── timing.html         # DRAM timing diagram view
+    │   │   ├── blockdiagram.html   # Animated block diagram
+    │   │   └── bank_analyzer.html  # Bank state analyzer
+    │   ├── single-bank/            # Level 1: Single bank patterns
+    │   │   ├── page_hits_trace.json
+    │   │   ├── page_conflicts_trace.json
+    │   │   └── mixed_rw_trace.json
+    │   ├── two-bank/               # Level 2: Two bank patterns
+    │   │   ├── same_group_trace.json
+    │   │   └── diff_groups_trace.json
+    │   ├── three-bank/             # Level 3: Three bank patterns
+    │   │   ├── same_group_trace.json
+    │   │   └── mixed_groups_trace.json
+    │   ├── four-bank/              # Level 4: Four bank patterns
+    │   │   ├── full_group_trace.json
+    │   │   ├── across_groups_trace.json
+    │   │   └── page_hit_burst_trace.json
+    │   ├── dual-channel/           # Level 5: Dual channel patterns
+    │   │   ├── independent_trace.json
+    │   │   └── interleaved_trace.json
+    │   ├── complex/                # Level 6: Complex patterns
+    │   │   ├── stream_trace.json       # STREAM benchmark
+    │   │   ├── tile_load_trace.json    # ML tile loading
+    │   │   ├── multi_dma_trace.json    # Multi-DMA engines
+    │   │   ├── random_trace.json       # Random access
+    │   │   └── strided_trace.json      # Strided access
+    │   └── bandwidth/              # Level 7: Bandwidth patterns
+    │       ├── page_burst_trace.json   # Max page hits (128/page)
+    │       └── max_bandwidth_trace.json # Peak bandwidth
+    │
+    └── gddr6/                      # GDDR6 memory controller traces
+        ├── tools/                  # Visualization tools (shared with LPDDR5)
+        ├── single-bank/            # Level 1: Single bank patterns
+        │   ├── page_hits_trace.json
+        │   ├── page_conflicts_trace.json
+        │   └── mixed_rw_trace.json
+        ├── two-bank/               # Level 2: Two bank patterns
+        │   ├── same_group_trace.json
+        │   └── diff_groups_trace.json
+        ├── three-bank/             # Level 3: Three bank patterns
+        │   ├── same_group_trace.json
+        │   └── mixed_groups_trace.json
+        ├── four-bank/              # Level 4: Four bank patterns
+        │   ├── full_group_trace.json
+        │   ├── across_groups_trace.json
+        │   └── page_hit_burst_trace.json
+        ├── dual-channel/           # Level 5: Dual channel patterns
+        │   ├── independent_trace.json
+        │   └── interleaved_trace.json
+        ├── complex/                # Level 6: Complex patterns
+        │   ├── stream_trace.json       # STREAM benchmark
+        │   ├── tile_load_trace.json    # ML tile loading
+        │   ├── multi_dma_trace.json    # Multi-DMA (16 banks)
+        │   ├── random_trace.json       # Random access
+        │   └── strided_trace.json      # Strided access
+        └── bandwidth/              # Level 7: Bandwidth patterns
+            ├── page_burst_trace.json        # Max page hits
+            ├── max_bandwidth_trace.json     # Peak bandwidth (16 banks)
+            └── eight_bank_bandwidth_trace.json  # 8-bank subset
 ```
+
+## Memory Technologies
+
+### LPDDR5-6400
+- **Clock**: 3.2 GHz
+- **Banks**: 8 per channel (2 bank groups × 4 banks)
+- **Channels**: 1-2
+- **Peak Bandwidth**: 25.6 GB/s (dual channel)
+
+### GDDR6-16000
+- **Clock**: 2.0 GHz
+- **Banks**: 16 per channel (4 bank groups × 4 banks)
+- **Channels**: 2
+- **Peak Bandwidth**: 64 GB/s
 
 ## Quick Start
 
 ```bash
-# Generate a trace
+# Generate LPDDR5 traces
 ./build/patterns/memory/lpddr5/lpddr5_page_hits
+./build/patterns/memory/lpddr5/lpddr5_stream
+./build/patterns/memory/lpddr5/lpddr5_multi_dma
 
-# View summary (CLI - works everywhere)
-./build/tools/trace/kpu-trace-summary traces/memory/lpddr5/single-bank/page_hits_trace.json
+# Generate GDDR6 traces
+./build/patterns/memory/gddr6/gddr6_page_hits
+./build/patterns/memory/gddr6/gddr6_stream
+./build/patterns/memory/gddr6/gddr6_multi_dma
 
-# Launch web viewer (when GUI available)
-./tools/trace/serve-trace.py traces/memory/lpddr5/single-bank/page_hits_trace.json
+# View summary (CLI)
+./build/tools/trace/kpu-trace-summary traces/memory/lpddr5/complex/stream_trace.json
+
+# Launch web viewer
+./tools/trace/serve-trace.py traces/memory/gddr6/complex/multi_dma_trace.json
 ```
+
+## Pattern Categories
+
+### Level 1: Single Bank
+Basic single-bank access patterns for latency characterization.
+- `page_hits` - Sequential same-row access (best case)
+- `page_conflicts` - Alternating different rows (worst case)
+- `mixed_rw` - Interleaved read/write operations
+
+### Level 2: Two Banks
+Bank-level parallelism with two concurrent banks.
+- `same_group` - Both banks in same bank group (tRRD_L, tCCD_L apply)
+- `diff_groups` - Banks in different groups (tRRD_S, tCCD_S apply)
+
+### Level 3: Three Banks
+Increased parallelism with three active banks.
+- `same_group` - All three in one bank group
+- `mixed_groups` - Banks distributed across groups
+
+### Level 4: Four Banks
+Full bank group utilization.
+- `full_group` - Complete bank group (4 banks)
+- `across_groups` - One bank per group (LPDDR5: 2 groups, GDDR6: 4 groups)
+- `page_hit_burst` - Sustained page hits across 4 banks
+
+### Level 5: Dual Channel
+Multi-channel configurations.
+- `independent` - Separate access per channel
+- `interleaved` - Alternating channel access
+
+### Level 6: Complex Patterns
+Real-world workload simulations.
+- `stream` - STREAM benchmark (Copy, Scale, Add, Triad)
+- `tile_load` - ML accelerator tile loading patterns
+- `multi_dma` - Concurrent DMA engine simulation
+- `random` - Random access stress test
+- `strided` - Regular strided access patterns
+
+### Level 7: Bandwidth Patterns
+Maximum throughput characterization.
+- `page_burst` - Full page utilization (128 cache lines/page)
+- `max_bandwidth` - Peak achievable bandwidth
+- `eight_bank_bandwidth` - GDDR6 8-bank subset comparison
 
 ## Visualization Tools
 
-Located in `traces/memory/lpddr5/tools/`:
+### Web-Based Viewers
 
-### 1. Swimlane View (`swimlane.html`)
+Located in `traces/memory/{lpddr5,gddr6}/tools/`:
 
-Horizontal pipeline visualization showing requests flowing through stages:
+| Tool | Description | Best For |
+|------|-------------|----------|
+| `swimlane.html` | Horizontal pipeline view | Request parallelism |
+| `timing.html` | DRAM waveform diagram | Timing validation |
+| `blockdiagram.html` | Animated architecture | Data flow visualization |
+| `bank_analyzer.html` | Per-bank lanes | Resource utilization |
 
-```
-Request Queue → MC Scheduler → Cmd Bus → Bank (ACT) → Bank (CAS) → Data Bus → Return
-```
-
-**Best for:**
-- Understanding request parallelism
-- Seeing resource contention
-- Tracking multiple concurrent requests
-- Timeline-based analysis
-
-### 2. Timing Diagram (`timing.html`)
-
-Classic waveform-style diagram like DRAM datasheets:
-
-```
-CLK:      _|‾|_|‾|_|‾|_|‾|_
-CMD:      ────┤ACT├───┤RD├──
-Bank 0:   IDLE│ACTIVATING│ACTIVE│READING│
-DQ:       ────────────────────┤BURST├──
-                  ├──tRCD──┤├─tCL─┤
-```
-
-**Best for:**
-- Validating timing constraints (tRCD, tCL, tRP, etc.)
-- Understanding command sequences
-- Comparing page hit vs page miss latencies
-
-### 3. Block Diagram Animation (`blockdiagram.html`)
-
-Animated architectural view with request tokens flowing through components.
-
-**Best for:**
-- Understanding physical architecture
-- Visualizing data flow paths
-- Seeing bank state changes
-
-### 4. Bank Analyzer (`bank_analyzer.html`)
-
-Per-bank horizontal lanes with command/data bus visualization.
-
-**Best for:**
-- Detailed bank-level analysis
-- Resource utilization over time
-- Command scheduling analysis
-
-## Keyboard Controls
-
-All viewers support:
-- **Space**: Play/Pause
-- **Arrow Right**: Step forward
-- **Arrow Left**: Step backward
-- **Home**: Go to start
-- **End**: Go to end
-
-## CLI Tools
-
-### kpu-trace-summary
-
-Command-line trace analysis (works on headless servers):
+### CLI Tools
 
 ```bash
 # Basic summary
 ./build/tools/trace/kpu-trace-summary trace.json
 
-# Verbose output with per-transaction details
+# Verbose with per-transaction details
 ./build/tools/trace/kpu-trace-summary trace.json --verbose
 
 # JSON output for scripting
@@ -115,55 +176,54 @@ Command-line trace analysis (works on headless servers):
 
 # Validate timing constraints
 ./build/tools/trace/kpu-trace-summary trace.json --validate
-```
 
-### serve-trace.py
-
-Local HTTP server for HTML visualization:
-
-```bash
-# Serve and open browser
+# Launch local web server
 ./tools/trace/serve-trace.py trace.json
-
-# Specify port
-./tools/trace/serve-trace.py trace.json --port 8888
-
-# Server only (no browser)
-./tools/trace/serve-trace.py trace.json --no-browser
 ```
 
-## Generating Traces
+### Perfetto (Advanced)
 
-```bash
-# Build and run a pattern (generates trace automatically)
-./build/patterns/memory/lpddr5/lpddr5_page_hits
-
-# Trace written to: traces/memory/lpddr5/single-bank/page_hits_trace.json
-
-# Custom trace path
-./build/patterns/memory/lpddr5/lpddr5_page_hits --trace /tmp/custom.json
-
-# Skip trace generation
-./build/patterns/memory/lpddr5/lpddr5_page_hits --no-trace
-```
-
-## Perfetto (Advanced Analysis)
-
-For detailed analysis, use Perfetto:
-
+For detailed timeline analysis:
 1. Go to https://ui.perfetto.dev
 2. Drag and drop any trace JSON file
-3. Explore the full timeline visualization
+3. Explore with full zoom/pan/search capabilities
+
+## Keyboard Controls (Web Viewers)
+
+| Key | Action |
+|-----|--------|
+| Space | Play/Pause |
+| Right Arrow | Step forward |
+| Left Arrow | Step backward |
+| Home | Go to start |
+| End | Go to end |
 
 ## Trace File Format
 
-Traces use Chrome Trace Event Format (JSON):
+Chrome Trace Event Format (JSON):
 
 ```json
 [
-  {"name": "process_name", "ph": "M", "pid": 16, "args": {"name": "LPDDR5_BANK"}},
-  {"name": "ACTIVATE", "cat": "LPDDR5_BANK", "ph": "X",
-   "ts": 13125.0, "dur": 4375.0, "pid": 16, "tid": 0,
-   "args": {"txn_id": 0, "cycle_issue": 42, "cycle_complete": 56}}
+  {"name": "process_name", "ph": "M", "pid": 22, "args": {"name": "GDDR6_BANK"}},
+  {"name": "thread_name", "ph": "M", "pid": 22, "tid": 0, "args": {"name": "GDDR6_BANK #0"}},
+  {"name": "ACTIVATE", "cat": "GDDR6_BANK", "ph": "X",
+   "ts": 23000.0, "dur": 9000.0, "pid": 22, "tid": 0,
+   "args": {"txn_id": 1, "cycle_issue": 46, "cycle_complete": 64}}
 ]
 ```
+
+### Event Types
+
+| Type | Description |
+|------|-------------|
+| `ACTIVATE` | Row activation (ACT command) |
+| `BURST_READ` | Read data burst |
+| `BURST_WRITE` | Write data burst |
+| `PRECHARGE` | Row precharge (close page) |
+| `REFRESH` | Bank refresh operation |
+
+## See Also
+
+- [Memory Characterization](../docs/memory-characterization.md) - Latency and bandwidth analysis
+- [Pattern Source](../patterns/memory/) - Pattern implementation code
+- [LPDDR5 Invariants](../patterns/memory/lpddr5/INVARIANTS.md) - Timing constraint validation
