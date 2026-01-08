@@ -8,6 +8,7 @@ Multi-fidelity simulation and calibration patterns for memory subsystems.
 |-----------|------------|--------|
 | `lpddr5/` | LPDDR5 (mobile/edge AI) | Active |
 | `ddr5/` | DDR5 (server) | Planned |
+| `gddr6/` | GDDR6 (accelerators) | Active |
 | `hbm3/` | HBM3 (datacenter AI) | Planned |
 | `hbm2/` | HBM2 (legacy) | Planned |
 

@@ -133,6 +133,43 @@ add_gddr6_pattern(page_hits      single-bank/page_hits.cpp      "Level 1 - Singl
 add_gddr6_pattern(page_conflicts single-bank/page_conflicts.cpp "Level 1 - Single Bank")
 add_gddr6_pattern(mixed_rw       single-bank/mixed_rw.cpp       "Level 1 - Single Bank")
 
+# -----------------------------------------------------------------------------
+# Level 2: Two Bank Patterns
+# -----------------------------------------------------------------------------
+
+add_gddr6_pattern(two_same_group  two-bank/same_group.cpp  "Level 2 - Two Bank")
+add_gddr6_pattern(two_diff_groups two-bank/diff_groups.cpp "Level 2 - Two Bank")
+
+# -----------------------------------------------------------------------------
+# Level 3: Three Bank Patterns
+# -----------------------------------------------------------------------------
+
+add_gddr6_pattern(three_same_group   three-bank/same_group.cpp   "Level 3 - Three Bank")
+add_gddr6_pattern(three_mixed_groups three-bank/mixed_groups.cpp "Level 3 - Three Bank")
+
+# -----------------------------------------------------------------------------
+# Level 4: Four Bank Patterns
+# -----------------------------------------------------------------------------
+
+add_gddr6_pattern(full_group     four-bank/full_group.cpp     "Level 4 - Four Bank")
+add_gddr6_pattern(across_groups  four-bank/across_groups.cpp  "Level 4 - Four Bank")
+add_gddr6_pattern(page_hit_burst four-bank/page_hit_burst.cpp "Level 4 - Four Bank")
+
+# -----------------------------------------------------------------------------
+# Level 5: Dual Channel Patterns
+# -----------------------------------------------------------------------------
+
+add_gddr6_pattern(dual_independent dual-channel/independent.cpp "Level 5 - Dual Channel")
+add_gddr6_pattern(dual_interleaved dual-channel/interleaved.cpp "Level 5 - Dual Channel")
+
+# -----------------------------------------------------------------------------
+# Level 6: Complex Patterns
+# -----------------------------------------------------------------------------
+
+add_gddr6_pattern(strided    complex/strided.cpp    "Level 6 - Complex")
+add_gddr6_pattern(random     complex/random.cpp     "Level 6 - Complex")
+add_gddr6_pattern(tile_load  complex/tile_load.cpp  "Level 6 - Complex")
+
 # ============================================================================
 # NoC Patterns (TODO)
 # ============================================================================
