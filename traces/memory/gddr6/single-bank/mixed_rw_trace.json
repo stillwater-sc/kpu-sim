@@ -1,0 +1,13 @@
+[
+  {"name": "process_name", "ph": "M", "pid": 22, "args": {"name": "22-GDDR6_BANK"}},
+  {"name": "thread_name", "ph": "M", "pid": 22, "tid": 0, "args": {"name": "GDDR6_BANK #0"}},
+  {"name": "ACTIVATE", "cat": "GDDR6_BANK", "ph": "X", "ts": 23000.000, "dur": 9000.000, "pid": 22, "tid": 0, "args": {"txn_id": 1,"status": "COMPLETED","cycle_issue": 46,"cycle_complete": 64,"payload": "Memory[GDDR6_BANK:0@0x0 size:0 hit:Y lat:18]","desc": "ACTIVATE Ch0 Bank0"}},
+  {"name": "BURST_READ", "cat": "GDDR6_BANK", "ph": "X", "ts": 32000.000, "dur": 12000.000, "pid": 22, "tid": 0, "args": {"txn_id": 1,"status": "COMPLETED","cycle_issue": 64,"cycle_complete": 88,"payload": "Memory[GDDR6_BANK:0@0x0 size:0 hit:Y lat:24]","desc": "READ Ch0 Bank0"}},
+  {"name": "BURST_WRITE", "cat": "GDDR6_BANK", "ph": "X", "ts": 51000.000, "dur": 6000.000, "pid": 22, "tid": 0, "args": {"txn_id": 2,"status": "COMPLETED","cycle_issue": 102,"cycle_complete": 114,"payload": "Memory[GDDR6_BANK:0@0x0 size:0 hit:Y lat:12]","desc": "WRITE Ch0 Bank0"}},
+  {"name": "BURST_READ", "cat": "GDDR6_BANK", "ph": "X", "ts": 60000.000, "dur": 12000.000, "pid": 22, "tid": 0, "args": {"txn_id": 3,"status": "COMPLETED","cycle_issue": 120,"cycle_complete": 144,"payload": "Memory[GDDR6_BANK:0@0x0 size:0 hit:Y lat:24]","desc": "READ Ch0 Bank0"}},
+  {"name": "BURST_WRITE", "cat": "GDDR6_BANK", "ph": "X", "ts": 79000.000, "dur": 6000.000, "pid": 22, "tid": 0, "args": {"txn_id": 4,"status": "COMPLETED","cycle_issue": 158,"cycle_complete": 170,"payload": "Memory[GDDR6_BANK:0@0x0 size:0 hit:Y lat:12]","desc": "WRITE Ch0 Bank0"}},
+  {"name": "BURST_READ", "cat": "GDDR6_BANK", "ph": "X", "ts": 88000.000, "dur": 12000.000, "pid": 22, "tid": 0, "args": {"txn_id": 5,"status": "COMPLETED","cycle_issue": 176,"cycle_complete": 200,"payload": "Memory[GDDR6_BANK:0@0x0 size:0 hit:Y lat:24]","desc": "READ Ch0 Bank0"}},
+  {"name": "BURST_WRITE", "cat": "GDDR6_BANK", "ph": "X", "ts": 107000.000, "dur": 6000.000, "pid": 22, "tid": 0, "args": {"txn_id": 6,"status": "COMPLETED","cycle_issue": 214,"cycle_complete": 226,"payload": "Memory[GDDR6_BANK:0@0x0 size:0 hit:Y lat:12]","desc": "WRITE Ch0 Bank0"}},
+  {"name": "BURST_READ", "cat": "GDDR6_BANK", "ph": "X", "ts": 116000.000, "dur": 12000.000, "pid": 22, "tid": 0, "args": {"txn_id": 7,"status": "COMPLETED","cycle_issue": 232,"cycle_complete": 256,"payload": "Memory[GDDR6_BANK:0@0x0 size:0 hit:Y lat:24]","desc": "READ Ch0 Bank0"}},
+  {"name": "BURST_WRITE", "cat": "GDDR6_BANK", "ph": "X", "ts": 135000.000, "dur": 6000.000, "pid": 22, "tid": 0, "args": {"txn_id": 8,"status": "COMPLETED","cycle_issue": 270,"cycle_complete": 282,"payload": "Memory[GDDR6_BANK:0@0x0 size:0 hit:Y lat:12]","desc": "WRITE Ch0 Bank0"}}
+]
