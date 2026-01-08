@@ -1,0 +1,384 @@
+<!DOCTYPE html>
+<!--
+  HBM3 Memory Controller - Timing Diagram Visualization
+
+  HBM3-5600 Timing Parameters @ 2.8 GHz:
+  - tRCD: 8 cycles
+  - tCL: 8 cycles
+  - tRP: 8 cycles
+  - tRAS: 16 cycles
+  - tBurst: 4 cycles (BL8)
+
+  SPDX-License-Identifier: MIT
+  Copyright (c) 2024-2026 Stillwater Supercomputing, Inc.
+-->
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>HBM3 Timing Diagram</title>
+    <style>
+        :root {
+            --bg: #0a0e14;
+            --bg-panel: #151a21;
+            --bg-signal: #1a1f27;
+            --border: #2d333b;
+            --text: #e6edf3;
+            --text-dim: #7d8590;
+            --clk-color: #06b6d4;
+            --cmd-color: #f0883e;
+            --act-color: #f59e0b;
+            --rd-color: #3fb950;
+            --wr-color: #a371f7;
+            --pre-color: #f85149;
+            --data-color: #06b6d4;
+            --timing-color: #ffd33d;
+            --channel-color: #06b6d4;
+        }
+
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+
+        body {
+            font-family: 'SF Mono', Monaco, monospace;
+            background: var(--bg);
+            color: var(--text);
+            min-height: 100vh;
+            overflow: hidden;
+        }
+
+        .header {
+            background: var(--bg-panel);
+            padding: 12px 20px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            border-bottom: 1px solid var(--border);
+            height: 50px;
+        }
+
+        .header-left { display: flex; align-items: center; gap: 12px; }
+        .header h1 { font-size: 14px; font-weight: 500; }
+
+        .tech-badge {
+            background: linear-gradient(135deg, #06b6d4, #0891b2);
+            color: #fff;
+            padding: 2px 8px;
+            border-radius: 4px;
+            font-size: 10px;
+            font-weight: 700;
+        }
+
+        button {
+            background: #2d333b;
+            color: #fff;
+            border: none;
+            padding: 6px 12px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 12px;
+        }
+
+        button:hover { background: #3d444d; }
+        .file-btn { background: #06b6d4; }
+        .file-btn:hover { background: #0891b2; }
+        .file-input { display: none; }
+        .trace-filename { font-size: 12px; color: var(--text-dim); max-width: 200px; overflow: hidden; text-overflow: ellipsis; }
+
+        .controls { display: flex; align-items: center; gap: 10px; }
+        .zoom-controls { display: flex; gap: 4px; }
+        .time-display { background: #2d333b; padding: 6px 12px; border-radius: 4px; font-size: 12px; }
+
+        .main-container { display: flex; height: calc(100vh - 50px); }
+
+        .left-panel {
+            width: 200px;
+            background: var(--bg-panel);
+            border-right: 1px solid var(--border);
+            padding: 15px;
+            overflow-y: auto;
+        }
+
+        .panel-section { margin-bottom: 20px; }
+        .panel-section h3 { font-size: 10px; font-weight: 600; text-transform: uppercase; color: var(--text-dim); margin-bottom: 10px; }
+
+        .timing-param { display: flex; justify-content: space-between; font-size: 11px; padding: 3px 0; }
+        .timing-param .name { color: var(--timing-color); }
+
+        .legend-item { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; font-size: 11px; }
+        .legend-line { width: 24px; height: 3px; border-radius: 1px; }
+
+        .diagram-container { flex: 1; overflow: auto; padding: 20px; }
+        .diagram-wrapper { min-width: 100%; min-height: 100%; }
+
+        .empty-state { display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100%; color: var(--text-dim); gap: 15px; }
+        .empty-state svg { width: 64px; height: 64px; opacity: 0.5; }
+
+        .signal-row { display: flex; align-items: center; height: 40px; border-bottom: 1px solid var(--border); }
+        .signal-label { width: 120px; padding: 0 10px; font-size: 11px; flex-shrink: 0; border-right: 1px solid var(--border); background: var(--bg-panel); }
+        .signal-label.group { font-weight: 600; color: var(--text-dim); background: var(--bg-signal); height: 24px; text-transform: uppercase; font-size: 10px; }
+        .signal-label.channel { color: var(--channel-color); }
+        .signal-waveform { flex: 1; height: 100%; position: relative; background: var(--bg-signal); }
+        .waveform-svg { width: 100%; height: 100%; }
+
+        .time-ruler { height: 30px; display: flex; background: var(--bg-panel); border-bottom: 1px solid var(--border); position: sticky; top: 0; z-index: 10; }
+        .time-ruler-label { width: 120px; flex-shrink: 0; border-right: 1px solid var(--border); display: flex; align-items: center; padding: 0 10px; font-size: 10px; color: var(--text-dim); }
+        .time-ruler-content { flex: 1; position: relative; background: var(--bg-signal); }
+
+        ::-webkit-scrollbar { width: 8px; height: 8px; }
+        ::-webkit-scrollbar-track { background: var(--bg); }
+        ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <div class="header-left">
+            <h1>HBM3 Timing Diagram</h1>
+            <span class="tech-badge">HBM3-5600</span>
+            <button class="file-btn" onclick="document.getElementById('fileInput').click()">Load Trace</button>
+            <input type="file" id="fileInput" class="file-input" accept=".json" onchange="loadTraceFile(event)">
+            <span class="trace-filename" id="traceFilename">No trace loaded</span>
+        </div>
+        <div class="controls">
+            <div class="zoom-controls">
+                <button onclick="zoomIn()">+</button>
+                <button onclick="zoomOut()">-</button>
+                <button onclick="zoomFit()">Fit</button>
+            </div>
+            <div class="time-display" id="timeDisplay">Cycles: 0 - 100</div>
+        </div>
+    </div>
+
+    <div class="main-container">
+        <div class="left-panel">
+            <div class="panel-section">
+                <h3>HBM3-5600 Timing</h3>
+                <div class="timing-param"><span class="name">tRCD</span><span>8 cy</span></div>
+                <div class="timing-param"><span class="name">tCL (RL)</span><span>8 cy</span></div>
+                <div class="timing-param"><span class="name">tWL</span><span>4 cy</span></div>
+                <div class="timing-param"><span class="name">tRP</span><span>8 cy</span></div>
+                <div class="timing-param"><span class="name">tRAS</span><span>16 cy</span></div>
+                <div class="timing-param"><span class="name">tRC</span><span>24 cy</span></div>
+                <div class="timing-param"><span class="name">tBurst</span><span>4 cy (BL8)</span></div>
+                <div class="timing-param"><span class="name">tRRD_L</span><span>4 cy</span></div>
+                <div class="timing-param"><span class="name">tRRD_S</span><span>2 cy</span></div>
+                <div class="timing-param"><span class="name">tCCD_L</span><span>4 cy</span></div>
+                <div class="timing-param"><span class="name">tCCD_S</span><span>2 cy</span></div>
+            </div>
+
+            <div class="panel-section">
+                <h3>Signal Legend</h3>
+                <div class="legend-item"><div class="legend-line" style="background: var(--clk-color);"></div><span>Clock</span></div>
+                <div class="legend-item"><div class="legend-line" style="background: var(--act-color);"></div><span>ACTIVATE</span></div>
+                <div class="legend-item"><div class="legend-line" style="background: var(--rd-color);"></div><span>READ</span></div>
+                <div class="legend-item"><div class="legend-line" style="background: var(--wr-color);"></div><span>WRITE</span></div>
+                <div class="legend-item"><div class="legend-line" style="background: var(--pre-color);"></div><span>PRECHARGE</span></div>
+                <div class="legend-item"><div class="legend-line" style="background: var(--data-color);"></div><span>DATA</span></div>
+            </div>
+
+            <div class="panel-section">
+                <h3>Architecture</h3>
+                <div class="timing-param"><span class="name">Channels</span><span>16</span></div>
+                <div class="timing-param"><span class="name">PCs/Channel</span><span>2</span></div>
+                <div class="timing-param"><span class="name">Banks/PC</span><span>16</span></div>
+                <div class="timing-param"><span class="name">Total Banks</span><span>512</span></div>
+                <div class="timing-param"><span class="name">Bus Width</span><span>64-bit/ch</span></div>
+                <div class="timing-param"><span class="name">Peak BW</span><span>716.8 GB/s</span></div>
+            </div>
+        </div>
+
+        <div class="diagram-container" id="diagramContainer">
+            <div class="empty-state" id="emptyState">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                    <path d="M3 3v18h18"/><path d="M7 16l4-8 4 8 4-12"/>
+                </svg>
+                <p>Load a trace file to view timing diagram</p>
+                <button class="file-btn" onclick="document.getElementById('fileInput').click()">Load Trace JSON</button>
+            </div>
+            <div class="diagram-wrapper" id="diagramWrapper" style="display: none;"></div>
+        </div>
+    </div>
+
+    <script>
+        const TIMING = { tRCD: 8, tCL: 8, tWL: 4, tRP: 8, tRAS: 16, tRC: 24, tBurst: 4, tRRD_L: 4, tRRD_S: 2, tCCD_L: 4, tCCD_S: 2, tWR: 12, tRTP: 4 };
+        const COLORS = { clk: '#06b6d4', act: '#f59e0b', rd: '#3fb950', wr: '#a371f7', pre: '#f85149', data: '#06b6d4' };
+
+        let traceData = null;
+        let viewState = { startCycle: 0, endCycle: 100, pixelsPerCycle: 10 };
+
+        function loadTraceFile(event) {
+            const file = event.target.files[0];
+            if (!file) return;
+            const reader = new FileReader();
+            reader.onload = (e) => {
+                try {
+                    traceData = JSON.parse(e.target.result);
+                    document.getElementById('traceFilename').textContent = file.name;
+                    processTrace();
+                    renderDiagram();
+                } catch (err) { alert('Error: ' + err.message); }
+            };
+            reader.readAsText(file);
+        }
+
+        function processTrace() {
+            let minCycle = Infinity, maxCycle = 0;
+            for (const event of traceData) {
+                if (event.ph === 'M') continue;
+                const start = event.args?.cycle_issue || 0;
+                const end = event.args?.cycle_complete || start;
+                minCycle = Math.min(minCycle, start);
+                maxCycle = Math.max(maxCycle, end);
+            }
+            viewState.startCycle = Math.max(0, minCycle - 5);
+            viewState.endCycle = maxCycle + 10;
+            const availableWidth = document.getElementById('diagramContainer').clientWidth - 140;
+            viewState.pixelsPerCycle = Math.max(5, Math.min(20, availableWidth / (maxCycle - minCycle + 15)));
+        }
+
+        function renderDiagram() {
+            if (!traceData) return;
+            document.getElementById('emptyState').style.display = 'none';
+            document.getElementById('diagramWrapper').style.display = 'block';
+
+            const wrapper = document.getElementById('diagramWrapper');
+            const width = (viewState.endCycle - viewState.startCycle + 10) * viewState.pixelsPerCycle;
+
+            const activeBanks = new Set();
+            const events = traceData.filter(e => e.ph === 'X' && e.args?.txn_id);
+            for (const event of events) activeBanks.add(event.tid || 0);
+
+            let html = `<div class="time-ruler"><div class="time-ruler-label">Cycle</div><div class="time-ruler-content"><svg width="${width}" height="30">${renderTimeRuler(width)}</svg></div></div>`;
+            html += renderSignalRow('CK', 'clock', width, renderClockWaveform(width));
+            html += `<div class="signal-row"><div class="signal-label group">Command Bus</div><div class="signal-waveform" style="width:${width}px;"></div></div>`;
+            html += renderSignalRow('CMD', 'command', width, renderCommandWaveform(width, events));
+            html += `<div class="signal-row"><div class="signal-label group">Bank States</div><div class="signal-waveform" style="width:${width}px;"></div></div>`;
+
+            for (const bank of [...activeBanks].sort((a, b) => a - b)) {
+                html += renderSignalRow(`Bank ${bank}`, 'bank', width, renderBankWaveform(width, events, bank));
+            }
+
+            // Data buses - per pseudo-channel (independent 32-bit buses)
+            // Identify active pseudo-channels from the bank IDs
+            const activePCs = new Set();
+            for (const evt of events) {
+                if (evt.name.includes('READ') || evt.name.includes('WRITE')) {
+                    const bankId = evt.tid || 0;
+                    const ch = Math.floor(bankId / 32);
+                    const pc = Math.floor((bankId % 32) / 16);
+                    activePCs.add(`${ch}-${pc}`);
+                }
+            }
+            const sortedPCs = [...activePCs].sort();
+
+            html += `<div class="signal-row"><div class="signal-label group">Data Buses (per PC)</div><div class="signal-waveform" style="width:${width}px;"></div></div>`;
+            for (const pcKey of sortedPCs) {
+                const [ch, pc] = pcKey.split('-').map(Number);
+                html += renderSignalRow(`DQ Ch${ch}-PC${pc}`, 'data', width, renderDataWaveform(width, events, ch, pc));
+            }
+
+            wrapper.innerHTML = html;
+            document.getElementById('timeDisplay').textContent = `Cycles: ${viewState.startCycle} - ${viewState.endCycle}`;
+        }
+
+        function renderTimeRuler(width) {
+            let svg = '';
+            const ppc = viewState.pixelsPerCycle;
+            let tickInterval = ppc < 8 ? 10 : ppc < 5 ? 20 : 5;
+            for (let cycle = Math.ceil(viewState.startCycle / tickInterval) * tickInterval; cycle <= viewState.endCycle; cycle += tickInterval) {
+                const x = (cycle - viewState.startCycle) * ppc;
+                const isMajor = cycle % (tickInterval * 2) === 0;
+                svg += `<line x1="${x}" y1="${isMajor ? 15 : 20}" x2="${x}" y2="30" stroke="${isMajor ? '#64748b' : '#3d444d'}"/>`;
+                if (isMajor) svg += `<text x="${x}" y="12" fill="#7d8590" font-size="9" text-anchor="middle">${cycle}</text>`;
+            }
+            return svg;
+        }
+
+        function renderSignalRow(label, type, width, svgContent) {
+            return `<div class="signal-row"><div class="signal-label${type === 'channel' ? ' channel' : ''}">${label}</div><div class="signal-waveform"><svg class="waveform-svg" width="${width}" height="40">${svgContent}</svg></div></div>`;
+        }
+
+        function renderClockWaveform(width) {
+            let path = 'M 0 30';
+            const ppc = viewState.pixelsPerCycle;
+            for (let cycle = viewState.startCycle; cycle <= viewState.endCycle; cycle++) {
+                const x = (cycle - viewState.startCycle) * ppc;
+                path += ` L ${x} 30 L ${x} 10 L ${x + ppc/2} 10 L ${x + ppc/2} 30`;
+            }
+            return `<path d="${path}" stroke="${COLORS.clk}" stroke-width="1.5" fill="none"/>`;
+        }
+
+        function renderCommandWaveform(width, events) {
+            let svg = `<line x1="0" y1="30" x2="${width}" y2="30" stroke="#3d444d"/>`;
+            const ppc = viewState.pixelsPerCycle;
+            for (const event of events) {
+                const cycle = event.args?.cycle_issue || 0;
+                const x = (cycle - viewState.startCycle) * ppc;
+                const cmdWidth = ppc * 0.8;
+                let color = '#64748b', label = '';
+                if (event.name === 'ACTIVATE') { color = COLORS.act; label = 'ACT'; }
+                else if (event.name.includes('READ')) { color = COLORS.rd; label = 'RD'; }
+                else if (event.name.includes('WRITE')) { color = COLORS.wr; label = 'WR'; }
+                else if (event.name === 'PRECHARGE') { color = COLORS.pre; label = 'PRE'; }
+                else continue;
+                svg += `<rect x="${x}" y="8" width="${cmdWidth}" height="20" rx="2" fill="${color}" opacity="0.9"/>`;
+                if (ppc > 8) svg += `<text x="${x + cmdWidth/2}" y="22" fill="#fff" font-size="8" text-anchor="middle">${label}</text>`;
+            }
+            return svg;
+        }
+
+        function renderBankWaveform(width, events, bank) {
+            let svg = `<line x1="0" y1="30" x2="${width}" y2="30" stroke="#3d444d"/>`;
+            const ppc = viewState.pixelsPerCycle;
+            const bankEvents = events.filter(e => (e.tid || 0) === bank);
+            for (const event of bankEvents) {
+                const x1 = (event.args?.cycle_issue - viewState.startCycle) * ppc;
+                const x2 = (event.args?.cycle_complete - viewState.startCycle) * ppc;
+                const boxWidth = Math.max(x2 - x1, 4);
+                let color = '#64748b', label = '';
+                if (event.name === 'ACTIVATE') { color = COLORS.act; label = 'tRCD'; }
+                else if (event.name.includes('READ')) { color = COLORS.rd; label = 'RD'; }
+                else if (event.name.includes('WRITE')) { color = COLORS.wr; label = 'WR'; }
+                else if (event.name === 'PRECHARGE') { color = COLORS.pre; label = 'tRP'; }
+                else continue;
+                svg += `<rect x="${x1}" y="8" width="${boxWidth}" height="22" rx="2" fill="${color}" opacity="0.7"/>`;
+                if (boxWidth > 25) svg += `<text x="${x1 + boxWidth/2}" y="23" fill="#fff" font-size="8" text-anchor="middle">${label}</text>`;
+            }
+            return svg;
+        }
+
+        function renderDataWaveform(width, events, filterChannel = null, filterPc = null) {
+            let svg = `<line x1="0" y1="30" x2="${width}" y2="30" stroke="#3d444d"/>`;
+            const ppc = viewState.pixelsPerCycle;
+            for (const event of events) {
+                if (!event.name.includes('READ') && !event.name.includes('WRITE')) continue;
+
+                // Filter by channel/PC if specified
+                if (filterChannel !== null && filterPc !== null) {
+                    const bankId = event.tid || 0;
+                    const evtCh = Math.floor(bankId / 32);
+                    const evtPc = Math.floor((bankId % 32) / 16);
+                    if (evtCh !== filterChannel || evtPc !== filterPc) continue;
+                }
+
+                const cycleEnd = event.args?.cycle_complete || 0;
+                const isRead = event.name.includes('READ');
+                const dataStart = isRead ? cycleEnd - TIMING.tBurst : event.args?.cycle_issue || 0;
+                const dataEnd = isRead ? cycleEnd : (event.args?.cycle_issue || 0) + TIMING.tBurst;
+                const x1 = (dataStart - viewState.startCycle) * ppc;
+                const boxWidth = Math.max((dataEnd - dataStart) * ppc, 4);
+                const color = isRead ? COLORS.rd : COLORS.wr;
+                svg += `<rect x="${x1}" y="10" width="${boxWidth}" height="18" rx="2" fill="${color}" opacity="0.8"/>`;
+                if (boxWidth > 20) svg += `<text x="${x1 + boxWidth/2}" y="23" fill="#fff" font-size="8" text-anchor="middle">${isRead ? 'RD' : 'WR'}</text>`;
+            }
+            return svg;
+        }
+
+        function zoomIn() { viewState.pixelsPerCycle = Math.min(50, viewState.pixelsPerCycle * 1.5); renderDiagram(); }
+        function zoomOut() { viewState.pixelsPerCycle = Math.max(3, viewState.pixelsPerCycle / 1.5); renderDiagram(); }
+        function zoomFit() { if (!traceData) return; viewState.pixelsPerCycle = Math.max(5, (document.getElementById('diagramContainer').clientWidth - 160) / (viewState.endCycle - viewState.startCycle)); renderDiagram(); }
+
+        document.addEventListener('keydown', (e) => { if (e.key === '+' || e.key === '=') zoomIn(); else if (e.key === '-') zoomOut(); else if (e.key === '0') zoomFit(); });
+        window.addEventListener('resize', () => { if (traceData) renderDiagram(); });
+    </script>
+</body>
+</html>

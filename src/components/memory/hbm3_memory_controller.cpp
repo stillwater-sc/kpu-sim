@@ -1146,13 +1146,17 @@ void HBM3MemoryController::trace_command(uint8_t channel, uint8_t pc, uint8_t ba
                                           const std::string& cmd, uint64_t duration, uint64_t request_id) {
     if (!tracing_enabled_) return;
 
-    // Use global pseudo-channel ID for trace tid
-    uint8_t pc_id = channel * 2 + pc;
+    // Use unique bank ID for trace tid - each bank gets its own timeline
+    // This prevents visual overlap of concurrent operations on different banks
+    // bank_id = channel * (PCs_per_channel * banks_per_PC) + pc * banks_per_PC + bank
+    uint16_t bank_id = static_cast<uint16_t>(channel) * hbm3_config_.pseudo_channels_per_channel * hbm3_config_.banks_per_pseudo_channel
+                     + static_cast<uint16_t>(pc) * hbm3_config_.banks_per_pseudo_channel
+                     + bank;
 
     sw::trace::TraceEntry entry(
         current_cycle_,
         sw::trace::ComponentType::HBM3_BANK,
-        pc_id,  // Use pseudo-channel as component_id for grouping
+        bank_id,  // Use unique bank ID for independent timelines
         cmd == "READ" || cmd == "BURST_READ" ? sw::trace::TransactionType::BURST_READ :
         cmd == "WRITE" || cmd == "BURST_WRITE" ? sw::trace::TransactionType::BURST_WRITE :
         cmd == "ACTIVATE" ? sw::trace::TransactionType::ACTIVATE :

@@ -1,0 +1,451 @@
+<!DOCTYPE html>
+<!--
+  HBM3 Memory Controller - Animated Block Diagram
+
+  HBM3 Architecture:
+  - 16 channels per stack (64-bit each)
+  - 2 pseudo-channels per channel
+  - 16 banks per pseudo-channel
+  - 512 total banks, 716.8 GB/s peak bandwidth
+  - TSV (Through-Silicon Via) interconnect
+
+  SPDX-License-Identifier: MIT
+  Copyright (c) 2024-2026 Stillwater Supercomputing, Inc.
+-->
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>HBM3 Block Diagram</title>
+    <style>
+        :root {
+            --bg: #0a0e14;
+            --bg-panel: #151a21;
+            --border: #2d333b;
+            --text: #e6edf3;
+            --text-dim: #7d8590;
+            --mc-color: #3b82f6;
+            --phy-color: #8b5cf6;
+            --dram-color: #06b6d4;
+            --bank-idle: #1e293b;
+            --bank-active: #22c55e;
+            --bank-precharge: #ef4444;
+            --bank-read: #3b82f6;
+            --bank-write: #a855f7;
+            --token-read: #22c55e;
+            --token-write: #a855f7;
+            --channel-color: #06b6d4;
+            --tsv-color: #fbbf24;
+        }
+
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+
+        body {
+            font-family: 'SF Mono', Monaco, monospace;
+            background: var(--bg);
+            color: var(--text);
+            min-height: 100vh;
+            overflow: hidden;
+        }
+
+        .header {
+            background: var(--bg-panel);
+            padding: 12px 20px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            border-bottom: 1px solid var(--border);
+            height: 50px;
+        }
+
+        .header-left { display: flex; align-items: center; gap: 12px; }
+        .header h1 { font-size: 14px; font-weight: 500; }
+
+        .tech-badge {
+            background: linear-gradient(135deg, #06b6d4, #0891b2);
+            color: #fff;
+            padding: 2px 8px;
+            border-radius: 4px;
+            font-size: 10px;
+            font-weight: 700;
+        }
+
+        button {
+            background: #2d333b;
+            color: #fff;
+            border: none;
+            padding: 6px 12px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 12px;
+        }
+
+        button:hover { background: #3d444d; }
+        button.active { background: #06b6d4; }
+        .file-btn { background: #06b6d4; }
+        .file-btn:hover { background: #0891b2; }
+        .file-input { display: none; }
+
+        .controls { display: flex; gap: 10px; align-items: center; }
+        .speed-control { display: flex; align-items: center; gap: 8px; font-size: 12px; }
+        .speed-control input { width: 80px; }
+        .cycle-display { background: #2d333b; padding: 6px 12px; border-radius: 4px; font-size: 12px; }
+
+        .main-container { display: flex; height: calc(100vh - 50px); }
+
+        .left-panel {
+            width: 200px;
+            background: var(--bg-panel);
+            border-right: 1px solid var(--border);
+            padding: 15px;
+            overflow-y: auto;
+        }
+
+        .panel-section { margin-bottom: 20px; }
+        .panel-section h3 { font-size: 10px; font-weight: 600; text-transform: uppercase; color: var(--text-dim); margin-bottom: 10px; }
+        .legend-item { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; font-size: 11px; }
+        .legend-box { width: 16px; height: 12px; border-radius: 2px; }
+        .stats-row { display: flex; justify-content: space-between; font-size: 11px; padding: 3px 0; }
+        .stats-row .label { color: var(--text-dim); }
+
+        .diagram-container { flex: 1; display: flex; align-items: center; justify-content: center; padding: 20px; overflow: auto; }
+        .diagram-svg { max-width: 100%; max-height: 100%; }
+
+        .component { fill: var(--bg-panel); stroke: var(--border); stroke-width: 2; }
+        .component-label { fill: var(--text); font-size: 12px; font-weight: 500; }
+        .component-sublabel { fill: var(--text-dim); font-size: 9px; }
+
+        .bank { transition: fill 0.2s; }
+        .bank.idle { fill: var(--bank-idle); }
+        .bank.active { fill: var(--bank-active); }
+        .bank.reading { fill: var(--bank-read); }
+        .bank.writing { fill: var(--bank-write); }
+        .bank.precharging { fill: var(--bank-precharge); }
+
+        .data-path { stroke: var(--border); stroke-width: 2; fill: none; }
+        .tsv-path { stroke: var(--tsv-color); stroke-width: 3; stroke-dasharray: 4 2; }
+
+        @keyframes pulse { 0%, 100% { opacity: 0.6; } 50% { opacity: 1; } }
+        .component-active { animation: pulse 1s ease-in-out infinite; }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <div class="header-left">
+            <h1>HBM3 Block Diagram</h1>
+            <span class="tech-badge">716.8 GB/s</span>
+            <button class="file-btn" onclick="document.getElementById('fileInput').click()">Load Trace</button>
+            <input type="file" id="fileInput" class="file-input" accept=".json" onchange="loadTraceFile(event)">
+            <span id="traceFilename" style="font-size: 12px; color: var(--text-dim);">No trace loaded</span>
+        </div>
+        <div class="controls">
+            <button id="btnPlay" onclick="togglePlay()">Play</button>
+            <button onclick="stepForward()">Step</button>
+            <button onclick="reset()">Reset</button>
+            <div class="speed-control">
+                <span>Speed:</span>
+                <input type="range" min="1" max="10" value="5" id="speedSlider" onchange="updateSpeed()">
+            </div>
+            <div class="cycle-display">Cycle: <span id="currentCycle">0</span></div>
+        </div>
+    </div>
+
+    <div class="main-container">
+        <div class="left-panel">
+            <div class="panel-section">
+                <h3>Bank States</h3>
+                <div class="legend-item"><div class="legend-box" style="background: var(--bank-idle);"></div><span>Idle/Precharged</span></div>
+                <div class="legend-item"><div class="legend-box" style="background: var(--bank-active);"></div><span>Row Active</span></div>
+                <div class="legend-item"><div class="legend-box" style="background: var(--bank-read);"></div><span>Reading</span></div>
+                <div class="legend-item"><div class="legend-box" style="background: var(--bank-write);"></div><span>Writing</span></div>
+                <div class="legend-item"><div class="legend-box" style="background: var(--bank-precharge);"></div><span>Precharging</span></div>
+            </div>
+
+            <div class="panel-section">
+                <h3>Statistics</h3>
+                <div class="stats-row"><span class="label">Transactions</span><span id="statTxns">0</span></div>
+                <div class="stats-row"><span class="label">Active Channels</span><span id="statChannels">0</span></div>
+                <div class="stats-row"><span class="label">Active Banks</span><span id="statBanks">0</span></div>
+                <div class="stats-row"><span class="label">Read Ops</span><span id="statReads">0</span></div>
+                <div class="stats-row"><span class="label">Write Ops</span><span id="statWrites">0</span></div>
+            </div>
+
+            <div class="panel-section">
+                <h3>HBM3 Architecture</h3>
+                <div class="stats-row"><span class="label">Channels</span><span>16</span></div>
+                <div class="stats-row"><span class="label">PCs/Channel</span><span>2</span></div>
+                <div class="stats-row"><span class="label">Banks/PC</span><span>16</span></div>
+                <div class="stats-row"><span class="label">Total Banks</span><span>512</span></div>
+                <div class="stats-row"><span class="label">Stack Height</span><span>8-12 die</span></div>
+                <div class="stats-row"><span class="label">Clock</span><span>2.8 GHz</span></div>
+            </div>
+        </div>
+
+        <div class="diagram-container">
+            <svg class="diagram-svg" viewBox="0 0 900 600" id="diagram">
+                <defs>
+                    <pattern id="grid" width="20" height="20" patternUnits="userSpaceOnUse">
+                        <path d="M 20 0 L 0 0 0 20" fill="none" stroke="#1e293b" stroke-width="0.5"/>
+                    </pattern>
+                </defs>
+                <rect width="900" height="600" fill="url(#grid)"/>
+
+                <text x="450" y="30" text-anchor="middle" fill="var(--text)" font-size="16" font-weight="600">HBM3 Memory Subsystem</text>
+
+                <!-- Host/SoC -->
+                <g id="host">
+                    <rect x="50" y="80" width="120" height="80" rx="8" class="component" stroke="var(--mc-color)"/>
+                    <text x="110" y="115" text-anchor="middle" class="component-label">Host SoC</text>
+                    <text x="110" y="135" text-anchor="middle" class="component-sublabel">Request Queue</text>
+                </g>
+
+                <!-- Memory Controller -->
+                <g id="mc">
+                    <rect x="220" y="60" width="160" height="120" rx="8" class="component" stroke="var(--mc-color)"/>
+                    <text x="300" y="95" text-anchor="middle" class="component-label">HBM3 Controller</text>
+                    <text x="300" y="115" text-anchor="middle" class="component-sublabel">16-Channel Scheduler</text>
+                    <text x="300" y="135" text-anchor="middle" class="component-sublabel">FR-FCFS Policy</text>
+                    <rect x="240" y="145" width="120" height="20" rx="4" fill="#0e7490" opacity="0.5"/>
+                    <text x="300" y="159" text-anchor="middle" fill="#67e8f9" font-size="8">Command Queue</text>
+                </g>
+
+                <!-- HBM3 PHY -->
+                <g id="phy">
+                    <rect x="430" y="60" width="120" height="120" rx="8" class="component" stroke="var(--phy-color)"/>
+                    <text x="490" y="95" text-anchor="middle" class="component-label">HBM3 PHY</text>
+                    <text x="490" y="115" text-anchor="middle" class="component-sublabel">1024-bit Interface</text>
+                    <text x="490" y="135" text-anchor="middle" class="component-sublabel">2.8 GHz CK</text>
+                    <text x="490" y="155" text-anchor="middle" class="component-sublabel" fill="var(--tsv-color)">TSV Bridge</text>
+                </g>
+
+                <!-- Connection lines -->
+                <path d="M 170 120 L 220 120" class="data-path" id="path-host-mc"/>
+                <path d="M 380 120 L 430 120" class="data-path" id="path-mc-phy"/>
+
+                <!-- HBM3 Stack -->
+                <g id="hbm-stack" transform="translate(580, 40)">
+                    <text x="130" y="0" text-anchor="middle" fill="var(--text-dim)" font-size="11">HBM3 Stack (8-12 Die)</text>
+
+                    <!-- Base die (Logic Die) -->
+                    <rect x="20" y="20" width="220" height="35" rx="4" fill="#1a2332" stroke="var(--tsv-color)" stroke-width="2"/>
+                    <text x="130" y="42" text-anchor="middle" fill="var(--tsv-color)" font-size="9">Logic Die (PHY + ECC)</text>
+
+                    <!-- DRAM dies (stacked) - 8 dies for HBM3 -->
+                    <g id="die-0">
+                        <rect x="30" y="60" width="200" height="40" rx="3" fill="#1e293b" stroke="var(--dram-color)" stroke-width="1"/>
+                        <text x="130" y="75" text-anchor="middle" fill="var(--text-dim)" font-size="8">DRAM Die 0 (Ch 0-1)</text>
+                        <g id="die0-banks">
+                            <rect x="40" y="82" width="10" height="10" rx="1" class="bank idle" id="bank-0"/>
+                            <rect x="52" y="82" width="10" height="10" rx="1" class="bank idle" id="bank-1"/>
+                            <rect x="64" y="82" width="10" height="10" rx="1" class="bank idle" id="bank-2"/>
+                            <rect x="76" y="82" width="10" height="10" rx="1" class="bank idle" id="bank-3"/>
+                            <rect x="140" y="82" width="10" height="10" rx="1" class="bank idle" id="bank-4"/>
+                            <rect x="152" y="82" width="10" height="10" rx="1" class="bank idle" id="bank-5"/>
+                            <rect x="164" y="82" width="10" height="10" rx="1" class="bank idle" id="bank-6"/>
+                            <rect x="176" y="82" width="10" height="10" rx="1" class="bank idle" id="bank-7"/>
+                        </g>
+                    </g>
+
+                    <g id="die-1">
+                        <rect x="33" y="105" width="200" height="40" rx="3" fill="#1e293b" stroke="var(--dram-color)" stroke-width="1"/>
+                        <text x="133" y="120" text-anchor="middle" fill="var(--text-dim)" font-size="8">DRAM Die 1 (Ch 2-3)</text>
+                        <g id="die1-banks">
+                            <rect x="43" y="127" width="10" height="10" rx="1" class="bank idle" id="bank-8"/>
+                            <rect x="55" y="127" width="10" height="10" rx="1" class="bank idle" id="bank-9"/>
+                            <rect x="67" y="127" width="10" height="10" rx="1" class="bank idle" id="bank-10"/>
+                            <rect x="79" y="127" width="10" height="10" rx="1" class="bank idle" id="bank-11"/>
+                            <rect x="143" y="127" width="10" height="10" rx="1" class="bank idle" id="bank-12"/>
+                            <rect x="155" y="127" width="10" height="10" rx="1" class="bank idle" id="bank-13"/>
+                            <rect x="167" y="127" width="10" height="10" rx="1" class="bank idle" id="bank-14"/>
+                            <rect x="179" y="127" width="10" height="10" rx="1" class="bank idle" id="bank-15"/>
+                        </g>
+                    </g>
+
+                    <g id="die-2">
+                        <rect x="36" y="150" width="200" height="40" rx="3" fill="#1e293b" stroke="var(--dram-color)" stroke-width="1"/>
+                        <text x="136" y="165" text-anchor="middle" fill="var(--text-dim)" font-size="8">DRAM Die 2 (Ch 4-5)</text>
+                    </g>
+
+                    <g id="die-3">
+                        <rect x="39" y="195" width="200" height="40" rx="3" fill="#1e293b" stroke="var(--dram-color)" stroke-width="1"/>
+                        <text x="139" y="210" text-anchor="middle" fill="var(--text-dim)" font-size="8">DRAM Die 3 (Ch 6-7)</text>
+                    </g>
+
+                    <g id="die-4">
+                        <rect x="42" y="240" width="200" height="40" rx="3" fill="#1e293b" stroke="var(--dram-color)" stroke-width="1"/>
+                        <text x="142" y="255" text-anchor="middle" fill="var(--text-dim)" font-size="8">DRAM Die 4 (Ch 8-9)</text>
+                    </g>
+
+                    <g id="die-5">
+                        <rect x="45" y="285" width="200" height="40" rx="3" fill="#1e293b" stroke="var(--dram-color)" stroke-width="1"/>
+                        <text x="145" y="300" text-anchor="middle" fill="var(--text-dim)" font-size="8">DRAM Die 5 (Ch 10-11)</text>
+                    </g>
+
+                    <g id="die-6">
+                        <rect x="48" y="330" width="200" height="40" rx="3" fill="#1e293b" stroke="var(--dram-color)" stroke-width="1"/>
+                        <text x="148" y="345" text-anchor="middle" fill="var(--text-dim)" font-size="8">DRAM Die 6 (Ch 12-13)</text>
+                    </g>
+
+                    <g id="die-7">
+                        <rect x="51" y="375" width="200" height="40" rx="3" fill="#1e293b" stroke="var(--dram-color)" stroke-width="1"/>
+                        <text x="151" y="390" text-anchor="middle" fill="var(--text-dim)" font-size="8">DRAM Die 7 (Ch 14-15)</text>
+                    </g>
+
+                    <!-- TSV representation -->
+                    <line x1="80" y1="55" x2="80" y2="415" class="tsv-path" opacity="0.3"/>
+                    <line x1="180" y1="55" x2="180" y2="415" class="tsv-path" opacity="0.3"/>
+                    <text x="130" y="435" text-anchor="middle" fill="var(--tsv-color)" font-size="8">TSV Interconnect (1024-bit)</text>
+                </g>
+
+                <!-- PHY to Stack connection -->
+                <path d="M 550 120 L 600 120" class="data-path" id="path-phy-stack"/>
+
+                <!-- Info box -->
+                <g id="info-box" transform="translate(50, 450)">
+                    <rect x="0" y="0" width="500" height="120" rx="8" fill="var(--bg-panel)" stroke="var(--border)"/>
+                    <text x="20" y="25" fill="var(--text)" font-size="12" font-weight="500">HBM3 Specifications</text>
+                    <text x="20" y="50" fill="var(--text-dim)" font-size="10">Data Rate: 5.6 Gbps/pin (HBM3-5600)</text>
+                    <text x="20" y="70" fill="var(--text-dim)" font-size="10">Bus Width: 1024 bits (16 channels x 64 bits)</text>
+                    <text x="20" y="90" fill="var(--text-dim)" font-size="10">Peak Bandwidth: 716.8 GB/s per stack</text>
+                    <text x="20" y="110" fill="var(--text-dim)" font-size="10">Energy Efficiency: 2.5-3.5 pJ/bit</text>
+                    <text x="280" y="50" fill="var(--text-dim)" font-size="10">Stack Height: 8-12 DRAM dies</text>
+                    <text x="280" y="70" fill="var(--text-dim)" font-size="10">Package: 2.5D CoWoS/EMIB</text>
+                    <text x="280" y="90" fill="var(--text-dim)" font-size="10">TSV Pitch: 25-36 um</text>
+                    <text x="280" y="110" fill="var(--text-dim)" font-size="10">Per-Bank Refresh, Row Hammer mitigation</text>
+                </g>
+            </svg>
+        </div>
+    </div>
+
+    <script>
+        let traceData = null;
+        let transactions = new Map();
+        let currentCycle = 0;
+        let maxCycle = 0;
+        let isPlaying = false;
+        let playInterval = null;
+        let playSpeed = 100;
+
+        const BANK_STATES = { IDLE: 'idle', ACTIVE: 'active', READING: 'reading', WRITING: 'writing', PRECHARGING: 'precharging' };
+        let bankStates = {};
+
+        function loadTraceFile(event) {
+            const file = event.target.files[0];
+            if (!file) return;
+            const reader = new FileReader();
+            reader.onload = (e) => {
+                try {
+                    traceData = JSON.parse(e.target.result);
+                    document.getElementById('traceFilename').textContent = file.name;
+                    processTrace();
+                    updateStats();
+                } catch (err) { alert('Error: ' + err.message); }
+            };
+            reader.readAsText(file);
+        }
+
+        function processTrace() {
+            transactions.clear();
+            maxCycle = 0;
+            const events = traceData.filter(e => e.ph === 'X' && e.args?.txn_id);
+            for (const event of events) {
+                const txnId = event.args.txn_id;
+                const start = event.args.cycle_issue || 0;
+                const end = event.args.cycle_complete || start;
+                if (!transactions.has(txnId)) transactions.set(txnId, { phases: [], type: null });
+                const txn = transactions.get(txnId);
+                txn.phases.push({ name: event.name, start, end, bank: event.tid || 0, channel: event.args.channel || 0 });
+                if (event.name.includes('READ')) txn.type = 'READ';
+                if (event.name.includes('WRITE')) txn.type = 'WRITE';
+                maxCycle = Math.max(maxCycle, end);
+            }
+        }
+
+        function updateStats() {
+            let reads = 0, writes = 0;
+            const channels = new Set(), banks = new Set();
+            for (const txn of transactions.values()) {
+                if (txn.type === 'READ') reads++;
+                if (txn.type === 'WRITE') writes++;
+                for (const phase of txn.phases) { channels.add(phase.channel); banks.add(phase.bank); }
+            }
+            document.getElementById('statTxns').textContent = transactions.size;
+            document.getElementById('statChannels').textContent = channels.size;
+            document.getElementById('statBanks').textContent = banks.size;
+            document.getElementById('statReads').textContent = reads;
+            document.getElementById('statWrites').textContent = writes;
+        }
+
+        function updateBankStates(cycle) {
+            for (let i = 0; i < 16; i++) bankStates[i] = BANK_STATES.IDLE;
+            for (const txn of transactions.values()) {
+                for (const phase of txn.phases) {
+                    if (cycle >= phase.start && cycle <= phase.end) {
+                        const bank = phase.bank;
+                        if (phase.name === 'ACTIVATE') bankStates[bank] = BANK_STATES.ACTIVE;
+                        else if (phase.name.includes('READ')) bankStates[bank] = BANK_STATES.READING;
+                        else if (phase.name.includes('WRITE')) bankStates[bank] = BANK_STATES.WRITING;
+                        else if (phase.name === 'PRECHARGE') bankStates[bank] = BANK_STATES.PRECHARGING;
+                    }
+                }
+            }
+            for (let i = 0; i < 16; i++) {
+                const bankEl = document.getElementById(`bank-${i}`);
+                if (bankEl) bankEl.className.baseVal = `bank ${bankStates[i]}`;
+            }
+        }
+
+        function updateDisplay() {
+            document.getElementById('currentCycle').textContent = currentCycle;
+            updateBankStates(currentCycle);
+        }
+
+        function togglePlay() {
+            if (isPlaying) stopPlay(); else startPlay();
+        }
+
+        function startPlay() {
+            if (!traceData) return;
+            isPlaying = true;
+            document.getElementById('btnPlay').textContent = 'Pause';
+            document.getElementById('btnPlay').classList.add('active');
+            playInterval = setInterval(() => {
+                if (currentCycle < maxCycle) { currentCycle++; updateDisplay(); }
+                else stopPlay();
+            }, playSpeed);
+        }
+
+        function stopPlay() {
+            isPlaying = false;
+            document.getElementById('btnPlay').textContent = 'Play';
+            document.getElementById('btnPlay').classList.remove('active');
+            if (playInterval) { clearInterval(playInterval); playInterval = null; }
+        }
+
+        function stepForward() {
+            if (!traceData) return;
+            stopPlay();
+            if (currentCycle < maxCycle) { currentCycle++; updateDisplay(); }
+        }
+
+        function reset() {
+            stopPlay();
+            currentCycle = 0;
+            updateDisplay();
+        }
+
+        function updateSpeed() {
+            playSpeed = 200 - (document.getElementById('speedSlider').value * 18);
+            if (isPlaying) { stopPlay(); startPlay(); }
+        }
+
+        document.addEventListener('keydown', (e) => {
+            if (e.key === ' ') { e.preventDefault(); togglePlay(); }
+            else if (e.key === 'ArrowRight') stepForward();
+            else if (e.key === 'r') reset();
+        });
+
+        for (let i = 0; i < 16; i++) bankStates[i] = BANK_STATES.IDLE;
+    </script>
+</body>
+</html>
