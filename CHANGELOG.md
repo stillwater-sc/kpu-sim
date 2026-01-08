@@ -50,11 +50,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Added HBM2 component types (HBM2_BANK, HBM2_PSEUDO_CHANNEL, etc.)
   - Added HBM3 component types (HBM3_BANK, HBM3_PSEUDO_CHANNEL, etc.)
 
+- **Collapsible HBM Swimlane Visualization** (`traces/memory/hbm2/tools/swimlane.html`, `traces/memory/hbm3/tools/swimlane.html`)
+  - Hierarchical collapsible view: Channel → Pseudo-Channel → Banks + Data Bus
+  - Expand All / Collapse All controls
+  - Activity indicators for collapsed sections
+  - Per-channel color coding
+  - DQ pin range display showing physical bus mapping (e.g., "PC0 (DQ[63:0])")
+  - Bank ID decoding: `bank_id = channel * 32 + pc * 16 + bank`
+  - HBM2: 8 channels × 2 PCs × 64-bit = 1024-bit I/O bus
+  - HBM3: 16 channels × 2 PCs × 32-bit = 1024-bit I/O bus
+
 ### Fixed - 2026-01-08
 - **HBM Invariant Checking** (`hbm2_memory_controller.cpp`, `hbm3_memory_controller.cpp`)
   - Changed from generic "state_until in past" checks to semantic invariant checking
   - Aligned with LPDDR5/GDDR6 approach checking tRCD, tRAS, tWR, tRTP violations
   - READING/WRITING states use `burst_end` not `state_until` for timing
+
+- **Trace Generation Script Missing Patterns** (`traces/scripts/generate_all_traces.sh`)
+  - Added missing LPDDR5 patterns: stream, multi_dma, max_bandwidth, page_burst
+  - Added missing GDDR6 patterns: stream, multi_dma, max_bandwidth, page_burst, eight_bank_bandwidth
+  - Root cause: `--clean` option deleted all traces but script only regenerated subset
+
+- **LPDDR5 Page Burst Test Failure** (`patterns/memory/lpddr5/bandwidth/page_burst.cpp`)
+  - Created `bandwidth_test_config()` with queue_depth=2048 (was 64)
+  - Fixed silent request drops due to queue overflow
+  - Changed assertions to expect >90% hit rate instead of exact count
+  - Accounts for DRAM refresh (tREFIpb=244) periodically closing pages
 
 ### Fixed - 2026-01-07
 - **GDDR6/LPDDR5 Multi-DMA Trace Generation** (`patterns/memory/{gddr6,lpddr5}/complex/multi_dma.cpp`)
@@ -603,7 +624,7 @@ See `docs/sessions/2025-11-23_schedule_generator_pipelining.md` for detailed rec
 
 ### Session Logs
 Detailed session logs are maintained in `docs/sessions/` directory:
-- `2026-01-08_hbm2_hbm3_memory_controllers.md` - HBM2/HBM3 memory controller implementation and pattern test suites
+- `2026-01-08_hbm2_hbm3_memory_controllers.md` - HBM2/HBM3 memory controllers, collapsible swimlane visualization, trace script and test fixes
 - `2026-01-07_gddr6_trace_and_bandwidth_metrics.md` - GDDR6 trace fix and memory characterization documentation
 - `2025-12-29_block_systolic_matmul_simulation.md` - Block systolic matmul bug fixes and FLIT-level tracking
 - `2025-12-25_benchmarking_and_efficiency_analysis.md` - Benchmark infrastructure and efficiency bug fix

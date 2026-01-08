@@ -2,14 +2,18 @@
 <!--
   HBM3 Memory Controller - Swimlane Visualization
 
-  Shows memory request flow through pipeline stages:
-  Request Queue -> Scheduler -> Cmd Bus -> Bank (ACT) -> Bank (CAS) -> Data Bus -> Return
+  Collapsible hierarchical view organized by:
+  - Channel (16 total, 64-bit each)
+  - Pseudo-Channel (2 per channel, 32-bit each)
+  - Banks (16 per pseudo-channel)
+  - Data Bus (per pseudo-channel)
 
   HBM3 Architecture:
   - 16 channels per stack (64-bit each)
   - 2 pseudo-channels per channel (32-bit each)
   - 16 banks per pseudo-channel
   - 512 total banks, 716.8 GB/s peak bandwidth
+  - 1024-bit wide I/O bus (32 x 32-bit)
 
   SPDX-License-Identifier: MIT
   Copyright (c) 2024-2026 Stillwater Supercomputing, Inc.
@@ -27,16 +31,13 @@
             --border: #30363d;
             --text: #e6edf3;
             --text-dim: #8b949e;
-            --accent: #58a6ff;
+            --accent: #06b6d4;
             --read-color: #3fb950;
             --write-color: #a371f7;
             --activate-color: #f0883e;
             --precharge-color: #f85149;
             --cmd-color: #ffd33d;
-            --data-color: #58a6ff;
-            --channel-color: #79c0ff;
-            --pc-color: #d2a8ff;
-            --hbm3-accent: #06b6d4;
+            --data-color: #06b6d4;
         }
 
         * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -106,11 +107,12 @@
         button.active { background: var(--accent); border-color: var(--accent); }
 
         .file-btn {
-            background: var(--hbm3-accent);
-            border-color: var(--hbm3-accent);
+            background: var(--accent);
+            border-color: var(--accent);
         }
 
         .file-btn:hover { background: #0891b2; }
+
         .file-input { display: none; }
 
         .trace-filename {
@@ -145,7 +147,7 @@
         }
 
         .sidebar {
-            width: 300px;
+            width: 280px;
             background: var(--bg-panel);
             border-right: 1px solid var(--border);
             padding: 15px;
@@ -187,7 +189,7 @@
         }
 
         .tech-info .highlight {
-            color: var(--hbm3-accent);
+            color: var(--accent);
             font-weight: 600;
         }
 
@@ -210,8 +212,20 @@
             border-radius: 2px;
         }
 
+        .expand-controls {
+            display: flex;
+            gap: 8px;
+            margin-bottom: 10px;
+        }
+
+        .expand-controls button {
+            flex: 1;
+            font-size: 11px;
+            padding: 4px 8px;
+        }
+
         .request-list {
-            max-height: 300px;
+            max-height: 250px;
             overflow-y: auto;
         }
 
@@ -226,7 +240,7 @@
         }
 
         .request-item:hover { border-color: var(--accent); }
-        .request-item.selected { border-color: var(--accent); background: rgba(88, 166, 255, 0.1); }
+        .request-item.selected { border-color: var(--accent); background: rgba(6, 182, 212, 0.1); }
 
         .request-item .req-header {
             display: flex;
@@ -267,7 +281,7 @@
             top: 0;
             background: var(--bg-dark);
             z-index: 10;
-            margin-left: 160px;
+            margin-left: 200px;
             border-bottom: 1px solid var(--border);
         }
 
@@ -295,13 +309,17 @@
             display: flex;
             align-items: stretch;
             border-bottom: 1px solid var(--border);
-            min-height: 36px;
+            min-height: 28px;
+        }
+
+        .lane.hidden {
+            display: none;
         }
 
         .lane-label {
-            width: 160px;
-            min-width: 160px;
-            padding: 8px 12px;
+            width: 200px;
+            min-width: 200px;
+            padding: 4px 8px;
             font-size: 11px;
             font-weight: 500;
             background: var(--bg-panel);
@@ -311,9 +329,10 @@
             position: sticky;
             left: 0;
             z-index: 5;
+            gap: 6px;
         }
 
-        .lane-label.group {
+        .lane-label.group-header {
             background: var(--bg-lane);
             font-weight: 600;
             color: var(--text-dim);
@@ -322,24 +341,106 @@
             letter-spacing: 0.5px;
         }
 
-        .lane-label.channel {
+        .lane-label.channel-header {
             background: rgba(6, 182, 212, 0.1);
-            color: var(--hbm3-accent);
+            font-weight: 600;
+            cursor: pointer;
+        }
+
+        .lane-label.channel-header:hover {
+            background: rgba(6, 182, 212, 0.2);
+        }
+
+        .lane-label.pc-header {
+            padding-left: 20px;
+            background: rgba(163, 113, 247, 0.1);
+            font-weight: 500;
+            cursor: pointer;
+        }
+
+        .lane-label.pc-header:hover {
+            background: rgba(163, 113, 247, 0.2);
+        }
+
+        .lane-label.bank-lane {
+            padding-left: 40px;
+            font-size: 10px;
+            color: var(--text-dim);
+        }
+
+        .lane-label.data-bus-lane {
+            padding-left: 40px;
+            font-weight: 500;
+            color: var(--data-color);
+        }
+
+        .lane-label.data-bus-group-header {
+            background: rgba(88, 166, 255, 0.15);
+            font-weight: 600;
+            cursor: pointer;
+            color: var(--data-color);
+        }
+
+        .lane-label.data-bus-group-header:hover {
+            background: rgba(88, 166, 255, 0.25);
+        }
+
+        .lane-label.data-bus-pc-lane {
+            padding-left: 20px;
+            font-weight: 500;
+            color: var(--data-color);
+            font-size: 10px;
+        }
+
+        .lane-label.ca-bus-group-header {
+            background: rgba(255, 211, 61, 0.15);
+            font-weight: 600;
+            cursor: pointer;
+            color: var(--cmd-color);
+        }
+
+        .lane-label.ca-bus-group-header:hover {
+            background: rgba(255, 211, 61, 0.25);
+        }
+
+        .lane-label.ca-bus-pc-lane {
+            padding-left: 20px;
+            font-weight: 500;
+            color: var(--cmd-color);
+            font-size: 10px;
+        }
+
+        .toggle-icon {
+            font-size: 10px;
+            width: 12px;
+            text-align: center;
+            user-select: none;
+        }
+
+        .channel-indicator {
+            width: 8px;
+            height: 8px;
+            border-radius: 2px;
+            flex-shrink: 0;
         }
 
         .lane-content {
             flex: 1;
             position: relative;
             background: var(--bg-lane);
-            min-height: 36px;
+            min-height: 28px;
+        }
+
+        .lane-content.alt {
+            background: var(--bg-panel);
         }
 
         .event {
             position: absolute;
-            height: 24px;
-            top: 6px;
+            height: 20px;
+            top: 4px;
             border-radius: 3px;
-            font-size: 10px;
+            font-size: 9px;
             color: #fff;
             display: flex;
             align-items: center;
@@ -364,7 +465,7 @@
         }
 
         .event-label {
-            padding: 0 6px;
+            padding: 0 4px;
             text-overflow: ellipsis;
             overflow: hidden;
         }
@@ -380,17 +481,30 @@
         .event.bank-wr { background: linear-gradient(90deg, var(--write-color), #c084fc); }
         .event.data-rd { background: var(--data-color); }
         .event.data-wr { background: var(--write-color); }
+        .event.ca-act { background: var(--cmd-color); color: #000; }
+        .event.ca-rd { background: var(--cmd-color); color: #000; }
+        .event.ca-wr { background: var(--cmd-color); color: #000; }
+        .event.ca-pre { background: var(--cmd-color); color: #000; }
         .event.return { background: var(--read-color); color: #000; }
+        .event.complete { background: #238636; }
+
+        .activity-bar {
+            position: absolute;
+            height: 4px;
+            bottom: 2px;
+            border-radius: 2px;
+            opacity: 0.7;
+        }
 
         .playback-cursor {
             position: absolute;
             top: 0;
             bottom: 0;
             width: 2px;
-            background: var(--hbm3-accent);
+            background: var(--accent);
             z-index: 50;
             pointer-events: none;
-            margin-left: 160px;
+            margin-left: 200px;
         }
 
         .playback-cursor::before {
@@ -402,7 +516,7 @@
             height: 0;
             border-left: 5px solid transparent;
             border-right: 5px solid transparent;
-            border-top: 6px solid var(--hbm3-accent);
+            border-top: 6px solid var(--accent);
         }
 
         .tooltip {
@@ -455,30 +569,79 @@
             font-size: 12px;
             margin-top: 10px;
         }
+
+        .stat-value.clickable {
+            cursor: pointer;
+            color: var(--accent);
+            text-decoration: underline;
+        }
+
+        .stat-value.clickable:hover {
+            color: #22d3ee;
+        }
+
+        /* Period visualization - markers are relative to lane content only */
+        .period-marker {
+            position: absolute;
+            top: 0;
+            bottom: 0;
+            width: 2px;
+            z-index: 3;
+            pointer-events: none;
+        }
+
+        .period-marker.start {
+            background: #22c55e;
+            box-shadow: 0 0 8px #22c55e;
+        }
+
+        .period-marker.end {
+            background: #ef4444;
+            box-shadow: 0 0 8px #ef4444;
+        }
+
+        .period-label {
+            position: absolute;
+            top: 35px;
+            background: var(--bg-panel);
+            border: 1px solid var(--accent);
+            border-radius: 4px;
+            padding: 4px 8px;
+            font-size: 11px;
+            color: var(--text);
+            z-index: 4;
+            pointer-events: none;
+            white-space: nowrap;
+        }
+
+        /* Events outside the selected period are dimmed via class */
+        .event.period-dimmed {
+            opacity: 0.25;
+        }
     </style>
 </head>
 <body>
     <div class="header">
         <div class="header-left">
             <h1>HBM3 Swimlane View</h1>
-            <span class="tech-badge">716.8 GB/s</span>
+            <span class="tech-badge">716 GB/s</span>
             <button class="file-btn" onclick="document.getElementById('fileInput').click()">
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                     <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
                     <polyline points="17 8 12 3 7 8"/>
                     <line x1="12" y1="3" x2="12" y2="15"/>
                 </svg>
-                Choose File
+                Load Trace
             </button>
             <input type="file" id="fileInput" accept=".json" class="file-input">
             <span class="trace-filename" id="traceFilename">No trace loaded</span>
         </div>
         <div class="controls">
-            <button id="btnReset" disabled>Reset</button>
-            <button id="btnStepBack" disabled>-</button>
-            <button id="btnPlay" disabled>Play</button>
-            <button id="btnStep" disabled>+</button>
-            <button id="btnEnd" disabled>End</button>
+            <button id="btnReset" disabled title="Reset (Home)">Reset</button>
+            <button id="btnStepBack" disabled title="Step Back">-</button>
+            <button id="btnPlay" disabled title="Play/Pause (Space)">Play</button>
+            <button id="btnStep" disabled title="Step Forward">+</button>
+            <button id="btnEnd" disabled title="End (End)">End</button>
             <div class="cycle-display">Cycle: <span id="currentCycle">0</span> / <span id="maxCycle">0</span></div>
             <div class="zoom-controls">
                 <span>Zoom:</span>
@@ -494,16 +657,27 @@
             <div class="info-panel">
                 <h2>HBM3 Architecture</h2>
                 <div class="tech-info">
-                    <div><span class="highlight">16 channels</span> per stack (64-bit each)</div>
-                    <div><span class="highlight">2 pseudo-channels</span> per channel</div>
+                    <div><span class="highlight">16 channels</span> (64-bit each)</div>
+                    <div><span class="highlight">2 pseudo-channels</span> per channel (32-bit)</div>
                     <div><span class="highlight">16 banks</span> per pseudo-channel</div>
                     <div><span class="highlight">512 total banks</span></div>
-                    <div>Clock: <span class="highlight">2.8 GHz</span> (HBM3-5600)</div>
+                    <div><span class="highlight">1024-bit</span> I/O bus width</div>
                 </div>
             </div>
 
             <div class="info-panel">
-                <h2>Statistics</h2>
+                <h2>View Controls</h2>
+                <div class="expand-controls">
+                    <button id="btnExpandAll">Expand All</button>
+                    <button id="btnCollapseAll">Collapse All</button>
+                </div>
+                <div style="font-size: 11px; color: var(--text-dim);">
+                    Click channel/PC headers to expand/collapse
+                </div>
+            </div>
+
+            <div class="info-panel">
+                <h2>Event Statistics</h2>
                 <div class="stat-row">
                     <span class="stat-label">Total Requests</span>
                     <span class="stat-value" id="statTotal">0</span>
@@ -517,16 +691,44 @@
                     <span class="stat-value" id="statWrites">0</span>
                 </div>
                 <div class="stat-row">
-                    <span class="stat-label">Page Hits</span>
-                    <span class="stat-value" id="statPageHits">0</span>
+                    <span class="stat-label">Active Channels</span>
+                    <span class="stat-value" id="statActiveChannels">0</span>
                 </div>
                 <div class="stat-row">
-                    <span class="stat-label">Page Conflicts</span>
-                    <span class="stat-value" id="statPageConflicts">0</span>
+                    <span class="stat-label">Active PCs</span>
+                    <span class="stat-value" id="statActivePCs">0</span>
                 </div>
+            </div>
+
+            <div class="info-panel">
+                <h2>Performance Statistics</h2>
                 <div class="stat-row">
                     <span class="stat-label">Avg Latency</span>
                     <span class="stat-value" id="statAvgLatency">0 cy</span>
+                </div>
+                <div class="stat-row">
+                    <span class="stat-label">Min Latency</span>
+                    <span class="stat-value" id="statMinLatency">0 cy</span>
+                </div>
+                <div class="stat-row">
+                    <span class="stat-label">Max Latency</span>
+                    <span class="stat-value" id="statMaxLatency">0 cy</span>
+                </div>
+                <div class="stat-row">
+                    <span class="stat-label">Avg Bandwidth</span>
+                    <span class="stat-value" id="statAvgBandwidth">0 GB/s</span>
+                </div>
+                <div class="stat-row">
+                    <span class="stat-label">Min Bandwidth</span>
+                    <span class="stat-value" id="statMinBandwidth">0 GB/s</span>
+                </div>
+                <div class="stat-row">
+                    <span class="stat-label">Max Bandwidth</span>
+                    <span class="stat-value" id="statMaxBandwidth">0 GB/s</span>
+                </div>
+                <div class="stat-row">
+                    <span class="stat-label">Data Bus Util</span>
+                    <span class="stat-value" id="statDataBusUtil">0%</span>
                 </div>
             </div>
 
@@ -535,19 +737,15 @@
                 <div class="legend">
                     <div class="legend-item">
                         <div class="legend-color" style="background: var(--activate-color);"></div>
-                        <span>ACT (Row Activate)</span>
+                        <span>ACT (Activate)</span>
                     </div>
                     <div class="legend-item">
                         <div class="legend-color" style="background: var(--read-color);"></div>
-                        <span>RD (Read Command)</span>
+                        <span>RD (Read)</span>
                     </div>
                     <div class="legend-item">
                         <div class="legend-color" style="background: var(--write-color);"></div>
-                        <span>WR (Write Command)</span>
-                    </div>
-                    <div class="legend-item">
-                        <div class="legend-color" style="background: var(--precharge-color);"></div>
-                        <span>PRE (Precharge)</span>
+                        <span>WR (Write)</span>
                     </div>
                     <div class="legend-item">
                         <div class="legend-color" style="background: var(--data-color);"></div>
@@ -559,7 +757,7 @@
             <div class="info-panel">
                 <h2>Requests</h2>
                 <div class="request-list" id="requestList">
-                    <div style="color: var(--text-dim); font-size: 12px;">No requests loaded</div>
+                    <div style="color: var(--text-dim); font-size: 12px;">Load a trace to see requests</div>
                 </div>
             </div>
         </div>
@@ -567,8 +765,8 @@
         <div class="swimlane-container" id="swimlaneContainer">
             <div class="no-data" id="noData">
                 <div class="no-data-icon">📊</div>
-                <div>Load a trace JSON file to visualize</div>
-                <code>./build/patterns/memory/hbm3/hbm3_page_hits</code>
+                <div>Load an HBM3 trace JSON file to visualize</div>
+                <code>./build/patterns/memory/hbm3/hbm3_max_bandwidth</code>
             </div>
             <div class="swimlane-wrapper" id="swimlaneWrapper" style="display: none;">
                 <div class="playback-cursor" id="playbackCursor"></div>
@@ -590,6 +788,28 @@
         let zoomLevel = 1.0;
         let pixelsPerCycle = PIXELS_PER_CYCLE;
 
+        // HBM3 Architecture Constants
+        const NUM_CHANNELS = 16;
+        const NUM_PCS_PER_CHANNEL = 2;
+        const BANKS_PER_PC = 16;
+        const BITS_PER_PC = 32;  // HBM3: 32-bit per PC (vs HBM2: 64-bit)
+
+        // Channel colors (16 colors for 16 channels)
+        const CHANNEL_COLORS = [
+            '#ff6b6b', '#4ecdc4', '#45b7d1', '#96ceb4',
+            '#ffeaa7', '#dfe6e9', '#fd79a8', '#a29bfe',
+            '#ff9ff3', '#54a0ff', '#5f27cd', '#00d2d3',
+            '#ff6b6b', '#10ac84', '#ee5253', '#0abde3'
+        ];
+
+        // HBM3 Timing parameters (in cycles @ 3.2 GHz)
+        const TIMING = {
+            tRCD: 8,
+            tCL: 8,
+            tBurst: 4,
+            tRP: 8,
+        };
+
         let traceData = null;
         let requests = [];
         let events = [];
@@ -599,53 +819,21 @@
         let playInterval = null;
         let selectedRequest = null;
 
-        // HBM3-5600 Timing parameters (in cycles @ 2.8 GHz)
-        const TIMING = {
-            tRCD: 8,
-            tCL: 8,
-            tBurst: 4,
-            tRP: 8,
-            tRTW: 6,
-            tWTR: 4,
-        };
+        let expandedChannels = new Set();
+        let expandedPCs = new Set();
+        let dataBusExpanded = true;        // Data Bus group expansion state
+        let caBusExpanded = true;          // CA Bus group expansion state
 
-        const NUM_CHANNELS = 16;
-        const NUM_PCS = 2;
-        const BANKS_PER_PC = 16;
+        let activeChannels = new Set();
+        let activePCs = new Set();
+        let activeBanks = new Set();
 
-        const LANES = [
-            { id: 'group-request', label: 'REQUEST PATH', isGroup: true },
-            { id: 'req-queue', label: 'Request Queue' },
-            { id: 'mc-sched', label: 'MC Scheduler' },
-            { id: 'group-cmd', label: 'COMMAND PATH', isGroup: true },
-            { id: 'cmd-bus', label: 'Command Bus' },
-            { id: 'group-banks', label: 'HBM3 BANKS', isGroup: true },
-            { id: 'ch0-pc0', label: 'Ch0 PC0', isChannel: true },
-            { id: 'bank-0', label: 'Bank 0' },
-            { id: 'bank-1', label: 'Bank 1' },
-            { id: 'bank-2', label: 'Bank 2' },
-            { id: 'bank-3', label: 'Bank 3' },
-            { id: 'ch0-pc1', label: 'Ch0 PC1', isChannel: true },
-            { id: 'bank-16', label: 'Bank 16' },
-            { id: 'bank-17', label: 'Bank 17' },
-            { id: 'group-data', label: 'DATA BUSES (per pseudo-channel)', isGroup: true },
-            { id: 'data-bus-ch0-pc0', label: 'DQ Ch0-PC0 (32b)' },
-            { id: 'data-bus-ch0-pc1', label: 'DQ Ch0-PC1 (32b)' },
-            { id: 'data-bus-ch1-pc0', label: 'DQ Ch1-PC0 (32b)' },
-            { id: 'data-bus-ch1-pc1', label: 'DQ Ch1-PC1 (32b)' },
-            { id: 'data-bus-other', label: 'DQ Other Ch (32b)' },
-            { id: 'return-buf', label: 'Return Buffer' },
-        ];
-
-        // Helper: Get the correct data bus lane for a given channel and pseudo-channel
-        // Each pseudo-channel has its own independent 32-bit data bus
-        function getDataBusLane(channel, pc) {
-            if (channel === 0 && pc === 0) return 'data-bus-ch0-pc0';
-            if (channel === 0 && pc === 1) return 'data-bus-ch0-pc1';
-            if (channel === 1 && pc === 0) return 'data-bus-ch1-pc0';
-            if (channel === 1 && pc === 1) return 'data-bus-ch1-pc1';
-            return 'data-bus-other';  // Channels 2-15 grouped for simplicity
-        }
+        // Performance statistics tracking
+        let minLatencyRequest = null;
+        let maxLatencyRequest = null;
+        let minBandwidthPeriod = null;  // { start, end, bandwidth }
+        let maxBandwidthPeriod = null;  // { start, end, bandwidth }
+        let activePeriod = null;        // Currently displayed period
 
         const fileInput = document.getElementById('fileInput');
         const btnReset = document.getElementById('btnReset');
@@ -655,6 +843,8 @@
         const btnEnd = document.getElementById('btnEnd');
         const btnZoomIn = document.getElementById('btnZoomIn');
         const btnZoomOut = document.getElementById('btnZoomOut');
+        const btnExpandAll = document.getElementById('btnExpandAll');
+        const btnCollapseAll = document.getElementById('btnCollapseAll');
         const currentCycleEl = document.getElementById('currentCycle');
         const maxCycleEl = document.getElementById('maxCycle');
         const zoomLevelEl = document.getElementById('zoomLevel');
@@ -665,15 +855,43 @@
         const tooltip = document.getElementById('tooltip');
         const requestList = document.getElementById('requestList');
 
+        // Period visualization - markers/labels are created dynamically in lane content
+        let periodMarkers = [];  // Array of {start, end, label} elements per lane
+
+        // Stats elements for clickable functionality
+        const statMinLatencyEl = document.getElementById('statMinLatency');
+        const statMaxLatencyEl = document.getElementById('statMaxLatency');
+        const statMinBwEl = document.getElementById('statMinBandwidth');
+        const statMaxBwEl = document.getElementById('statMaxBandwidth');
+
+        function decodeBankId(bankId) {
+            const channel = Math.floor(bankId / (NUM_PCS_PER_CHANNEL * BANKS_PER_PC));
+            const remainder = bankId % (NUM_PCS_PER_CHANNEL * BANKS_PER_PC);
+            const pc = Math.floor(remainder / BANKS_PER_PC);
+            const bank = remainder % BANKS_PER_PC;
+            return { channel, pc, bank };
+        }
+
+        function getDQRange(channel, pc) {
+            const pcIndex = channel * NUM_PCS_PER_CHANNEL + pc;
+            const startBit = pcIndex * BITS_PER_PC;
+            const endBit = startBit + BITS_PER_PC - 1;
+            return `DQ[${endBit}:${startBit}]`;
+        }
+
         function parseTrace(data) {
             requests = [];
             events = [];
             maxCycle = 0;
+            activeChannels.clear();
+            activePCs.clear();
+            activeBanks.clear();
 
             const txnEvents = new Map();
 
             for (const item of data) {
                 if (item.ph === 'M') continue;
+
                 const txnId = item.args?.txn_id;
                 if (txnId === undefined) continue;
 
@@ -685,12 +903,12 @@
                     txnEvents.set(txnId, []);
                 }
 
-                // Decode channel, pc, bank from tid (bank_id)
-                // bank_id = channel * 32 + pc * 16 + bank
                 const bankId = item.tid || 0;
-                const channel = Math.floor(bankId / 32);
-                const pc = Math.floor((bankId % 32) / 16);
-                const bankWithinPc = bankId % 16;
+                const { channel, pc, bank } = decodeBankId(bankId);
+
+                activeChannels.add(channel);
+                activePCs.add(`${channel}-${pc}`);
+                activeBanks.add(bankId);
 
                 txnEvents.get(txnId).push({
                     name: item.name,
@@ -698,12 +916,20 @@
                     cycleStart,
                     cycleEnd,
                     duration: cycleEnd - cycleStart,
-                    bank: bankId,
-                    bankWithinPc,
+                    bankId,
                     channel,
                     pc,
+                    bank,
                     args: item.args
                 });
+            }
+
+            expandedChannels = new Set(activeChannels);
+            for (const ch of activeChannels) {
+                expandedPCs.add(`${ch}-0`);
+                if (activePCs.has(`${ch}-1`)) {
+                    expandedPCs.add(`${ch}-1`);
+                }
             }
 
             let reqIndex = 0;
@@ -715,18 +941,15 @@
 
                 const isRead = txnEvts.some(e => e.name.includes('READ') || e.name === 'BURST_READ');
                 const isWrite = txnEvts.some(e => e.name.includes('WRITE') || e.name === 'BURST_WRITE');
-                const isPageHit = txnEvts.some(e => e.name.includes('PAGE_HIT'));
-                const isPageConflict = txnEvts.some(e => e.name.includes('PAGE_CONFLICT'));
-                const isPageEmpty = txnEvts.some(e => e.name.includes('PAGE_EMPTY'));
 
                 const request = {
                     id: reqIndex++,
                     txnId,
                     type: isRead ? 'READ' : (isWrite ? 'WRITE' : 'UNKNOWN'),
-                    bank: firstEvt.bank,
+                    bankId: firstEvt.bankId,
                     channel: firstEvt.channel,
                     pc: firstEvt.pc,
-                    pageStatus: isPageHit ? 'HIT' : (isPageConflict ? 'CONFLICT' : (isPageEmpty ? 'EMPTY' : 'UNKNOWN')),
+                    bank: firstEvt.bank,
                     cycleStart: firstEvt.cycleStart,
                     cycleEnd: lastEvt.cycleEnd,
                     latency: lastEvt.cycleEnd - firstEvt.cycleStart,
@@ -734,43 +957,113 @@
                     rawEvents: txnEvts
                 };
 
-                let hasActivate = false;
                 for (const evt of txnEvts) {
-                    const bankLane = `bank-${evt.bank}`;
+                    const bankLaneId = `bank-${evt.channel}-${evt.pc}-${evt.bank}`;
+                    const dataBusLaneId = `databus-${evt.channel}-${evt.pc}`;
 
                     if (evt.name === 'ACTIVATE') {
-                        hasActivate = true;
-                        if (evt.cycleStart > 0) {
-                            request.stages.push({ lane: 'req-queue', start: Math.max(0, evt.cycleStart - 8), end: evt.cycleStart, label: `R${request.id}`, type: 'queue' });
-                            request.stages.push({ lane: 'mc-sched', start: evt.cycleStart - 4, end: evt.cycleStart, label: 'SCHED', type: 'schedule' });
-                        }
-                        request.stages.push({ lane: 'cmd-bus', start: evt.cycleStart, end: evt.cycleStart + 1, label: 'ACT', type: 'cmd-act' });
-                        request.stages.push({ lane: bankLane, start: evt.cycleStart, end: evt.cycleEnd, label: `tRCD (${evt.duration}cy)`, type: 'bank-act' });
+                        request.stages.push({
+                            lane: bankLaneId,
+                            start: evt.cycleStart,
+                            end: evt.cycleEnd,
+                            label: `ACT`,
+                            type: 'bank-act'
+                        });
+                        // CA bus command (1 cycle)
+                        request.stages.push({
+                            lane: `cabus-${evt.channel}-${evt.pc}`,
+                            start: evt.cycleStart,
+                            end: evt.cycleStart + 1,
+                            label: `ACT`,
+                            type: 'ca-act'
+                        });
                     }
                     else if (evt.name === 'BURST_READ' || evt.name.includes('READ')) {
-                        request.stages.push({ lane: 'cmd-bus', start: evt.cycleStart, end: evt.cycleStart + 1, label: 'RD', type: 'cmd-rd' });
-                        request.stages.push({ lane: bankLane, start: evt.cycleStart, end: evt.cycleEnd, label: `tCL+Burst (${evt.duration}cy)`, type: 'bank-rd' });
+                        request.stages.push({
+                            lane: bankLaneId,
+                            start: evt.cycleStart,
+                            end: evt.cycleEnd,
+                            label: `RD`,
+                            type: 'bank-rd'
+                        });
+                        // CA bus command (1 cycle)
+                        request.stages.push({
+                            lane: `cabus-${evt.channel}-${evt.pc}`,
+                            start: evt.cycleStart,
+                            end: evt.cycleStart + 1,
+                            label: `RD`,
+                            type: 'ca-rd'
+                        });
+
                         const dataStart = evt.cycleEnd - TIMING.tBurst;
-                        // Route to correct per-pseudo-channel data bus
-                        const dataBusLane = getDataBusLane(request.channel, request.pc);
-                        request.stages.push({ lane: dataBusLane, start: dataStart, end: evt.cycleEnd, label: `DATA (${TIMING.tBurst}cy)`, type: 'data-rd' });
-                        request.stages.push({ lane: 'return-buf', start: evt.cycleEnd, end: evt.cycleEnd + 2, label: `R${request.id}`, type: 'return' });
+                        // Per-PC data bus (within channel hierarchy)
+                        request.stages.push({
+                            lane: dataBusLaneId,
+                            start: dataStart,
+                            end: evt.cycleEnd,
+                            label: `R${request.id}`,
+                            type: 'data-rd'
+                        });
+                        // Consolidated data bus (global view)
+                        request.stages.push({
+                            lane: `globalbus-${evt.channel}-${evt.pc}`,
+                            start: dataStart,
+                            end: evt.cycleEnd,
+                            label: `R${request.id}`,
+                            type: 'data-rd'
+                        });
                     }
                     else if (evt.name === 'BURST_WRITE' || evt.name.includes('WRITE')) {
-                        request.stages.push({ lane: 'cmd-bus', start: evt.cycleStart, end: evt.cycleStart + 1, label: 'WR', type: 'cmd-wr' });
-                        // Route to correct per-pseudo-channel data bus
-                        const dataBusLaneWr = getDataBusLane(request.channel, request.pc);
-                        request.stages.push({ lane: dataBusLaneWr, start: evt.cycleStart, end: evt.cycleStart + TIMING.tBurst, label: `DATA (${TIMING.tBurst}cy)`, type: 'data-wr' });
-                        request.stages.push({ lane: bankLane, start: evt.cycleStart, end: evt.cycleEnd, label: `Write (${evt.duration}cy)`, type: 'bank-wr' });
+                        // Per-PC data bus (within channel hierarchy)
+                        request.stages.push({
+                            lane: dataBusLaneId,
+                            start: evt.cycleStart,
+                            end: evt.cycleStart + TIMING.tBurst,
+                            label: `W${request.id}`,
+                            type: 'data-wr'
+                        });
+                        // Consolidated data bus (global view)
+                        request.stages.push({
+                            lane: `globalbus-${evt.channel}-${evt.pc}`,
+                            start: evt.cycleStart,
+                            end: evt.cycleStart + TIMING.tBurst,
+                            label: `W${request.id}`,
+                            type: 'data-wr'
+                        });
+                        // CA bus command (1 cycle)
+                        request.stages.push({
+                            lane: `cabus-${evt.channel}-${evt.pc}`,
+                            start: evt.cycleStart,
+                            end: evt.cycleStart + 1,
+                            label: `WR`,
+                            type: 'ca-wr'
+                        });
+
+                        request.stages.push({
+                            lane: bankLaneId,
+                            start: evt.cycleStart,
+                            end: evt.cycleEnd,
+                            label: `WR`,
+                            type: 'bank-wr'
+                        });
                     }
                     else if (evt.name === 'PRECHARGE') {
-                        request.stages.push({ lane: 'cmd-bus', start: evt.cycleStart, end: evt.cycleStart + 1, label: 'PRE', type: 'cmd-pre' });
+                        request.stages.push({
+                            lane: bankLaneId,
+                            start: evt.cycleStart,
+                            end: evt.cycleEnd,
+                            label: `PRE`,
+                            type: 'cmd-pre'
+                        });
+                        // CA bus command (1 cycle)
+                        request.stages.push({
+                            lane: `cabus-${evt.channel}-${evt.pc}`,
+                            start: evt.cycleStart,
+                            end: evt.cycleStart + 1,
+                            label: `PRE`,
+                            type: 'ca-pre'
+                        });
                     }
-                }
-
-                if (!hasActivate && request.stages.length > 0) {
-                    const firstStage = request.stages[0];
-                    request.stages.unshift({ lane: 'req-queue', start: Math.max(0, firstStage.start - 4), end: firstStage.start, label: `R${request.id}`, type: 'queue' });
                 }
 
                 requests.push(request);
@@ -780,41 +1073,266 @@
 
             for (const req of requests) {
                 for (const stage of req.stages) {
-                    events.push({ ...stage, requestId: req.id, requestType: req.type });
+                    events.push({
+                        ...stage,
+                        requestId: req.id,
+                        requestType: req.type,
+                        channel: req.channel,
+                        pc: req.pc,
+                        bank: req.bank
+                    });
                 }
             }
 
+            console.log(`Parsed ${requests.length} requests, ${events.length} events`);
+            console.log(`Active: ${activeChannels.size} channels, ${activePCs.size} PCs, ${activeBanks.size} banks`);
             return requests;
+        }
+
+        function buildLaneStructure() {
+            const lanes = [];
+
+            // CA BUS at the top (commands come first in event causality)
+            lanes.push({ id: 'group-cabus', label: 'CA BUS (Command/Address)', isGroup: true });
+
+            lanes.push({
+                id: 'cabus-header',
+                label: 'Command Bus',
+                isCABusGroupHeader: true,
+                expanded: caBusExpanded
+            });
+
+            if (caBusExpanded) {
+                // Add a lane for each active pseudo-channel's CA signals
+                for (let ch = 0; ch < NUM_CHANNELS; ch++) {
+                    for (let pc = 0; pc < NUM_PCS_PER_CHANNEL; pc++) {
+                        const pcKey = `${ch}-${pc}`;
+                        if (!activePCs.has(pcKey)) continue;
+
+                        lanes.push({
+                            id: `cabus-${ch}-${pc}`,
+                            label: `Ch${ch} PC${pc} CA`,
+                            isCABusPCLane: true,
+                            channel: ch,
+                            pc: pc,
+                            color: CHANNEL_COLORS[ch]
+                        });
+                    }
+                }
+            }
+
+            // Channel hierarchy (Banks)
+            lanes.push({ id: 'group-memory', label: 'HBM3 MEMORY ARRAY', isGroup: true });
+
+            for (let ch = 0; ch < NUM_CHANNELS; ch++) {
+                if (!activeChannels.has(ch)) continue;
+
+                const chExpanded = expandedChannels.has(ch);
+                lanes.push({
+                    id: `channel-${ch}`,
+                    label: `Channel ${ch}`,
+                    isChannelHeader: true,
+                    channel: ch,
+                    expanded: chExpanded,
+                    color: CHANNEL_COLORS[ch]
+                });
+
+                if (chExpanded) {
+                    for (let pc = 0; pc < NUM_PCS_PER_CHANNEL; pc++) {
+                        const pcKey = `${ch}-${pc}`;
+                        if (!activePCs.has(pcKey)) continue;
+
+                        const pcExpanded = expandedPCs.has(pcKey);
+                        const dqRange = getDQRange(ch, pc);
+
+                        lanes.push({
+                            id: `pc-${ch}-${pc}`,
+                            label: `PC${pc} (${dqRange})`,
+                            isPCHeader: true,
+                            channel: ch,
+                            pc: pc,
+                            expanded: pcExpanded,
+                            color: CHANNEL_COLORS[ch]
+                        });
+
+                        if (pcExpanded) {
+                            for (let bank = 0; bank < BANKS_PER_PC; bank++) {
+                                const bankId = ch * (NUM_PCS_PER_CHANNEL * BANKS_PER_PC) + pc * BANKS_PER_PC + bank;
+                                if (!activeBanks.has(bankId)) continue;
+
+                                lanes.push({
+                                    id: `bank-${ch}-${pc}-${bank}`,
+                                    label: `Bank ${bank}`,
+                                    isBankLane: true,
+                                    channel: ch,
+                                    pc: pc,
+                                    bank: bank,
+                                    color: CHANNEL_COLORS[ch]
+                                });
+                            }
+
+                            lanes.push({
+                                id: `databus-${ch}-${pc}`,
+                                label: `Data Bus ${dqRange}`,
+                                isDataBusLane: true,
+                                channel: ch,
+                                pc: pc,
+                                color: CHANNEL_COLORS[ch]
+                            });
+                        }
+                    }
+                }
+            }
+
+            // Add consolidated DATA BUS group at the bottom
+            lanes.push({ id: 'group-databus', label: 'DATA BUS (1024-bit)', isGroup: true });
+
+            lanes.push({
+                id: 'databus-header',
+                label: 'I/O Bus',
+                isDataBusGroupHeader: true,
+                expanded: dataBusExpanded
+            });
+
+            if (dataBusExpanded) {
+                // Add a lane for each active pseudo-channel's DQ signals
+                for (let ch = 0; ch < NUM_CHANNELS; ch++) {
+                    for (let pc = 0; pc < NUM_PCS_PER_CHANNEL; pc++) {
+                        const pcKey = `${ch}-${pc}`;
+                        if (!activePCs.has(pcKey)) continue;
+
+                        const dqRange = getDQRange(ch, pc);
+                        lanes.push({
+                            id: `globalbus-${ch}-${pc}`,
+                            label: `Ch${ch} PC${pc} ${dqRange}`,
+                            isDataBusPCLane: true,
+                            channel: ch,
+                            pc: pc,
+                            color: CHANNEL_COLORS[ch]
+                        });
+                    }
+                }
+            }
+
+            return lanes;
+        }
+
+        function toggleDataBus() {
+            dataBusExpanded = !dataBusExpanded;
+            renderSwimlanes();
+        }
+
+        function toggleCABus() {
+            caBusExpanded = !caBusExpanded;
+            renderSwimlanes();
         }
 
         function renderSwimlanes() {
             const lanesContainer = document.getElementById('lanes');
             lanesContainer.innerHTML = '';
+
             const width = (maxCycle + 50) * pixelsPerCycle;
             renderTimeRuler(width);
 
-            for (const lane of LANES) {
+            const lanes = buildLaneStructure();
+
+            for (const lane of lanes) {
                 const laneEl = document.createElement('div');
                 laneEl.className = 'lane';
+                laneEl.dataset.laneId = lane.id;
 
                 const labelEl = document.createElement('div');
                 let labelClass = 'lane-label';
-                if (lane.isGroup) labelClass += ' group';
-                if (lane.isChannel) labelClass += ' channel';
+
+                if (lane.isGroup) {
+                    labelClass += ' group-header';
+                } else if (lane.isChannelHeader) {
+                    labelClass += ' channel-header';
+                } else if (lane.isPCHeader) {
+                    labelClass += ' pc-header';
+                } else if (lane.isBankLane) {
+                    labelClass += ' bank-lane';
+                } else if (lane.isDataBusLane) {
+                    labelClass += ' data-bus-lane';
+                } else if (lane.isDataBusGroupHeader) {
+                    labelClass += ' data-bus-group-header';
+                } else if (lane.isDataBusPCLane) {
+                    labelClass += ' data-bus-pc-lane';
+                } else if (lane.isCABusGroupHeader) {
+                    labelClass += ' ca-bus-group-header';
+                } else if (lane.isCABusPCLane) {
+                    labelClass += ' ca-bus-pc-lane';
+                }
+
                 labelEl.className = labelClass;
-                labelEl.textContent = lane.label;
+
+                if (lane.isChannelHeader || lane.isPCHeader || lane.isDataBusGroupHeader || lane.isCABusGroupHeader) {
+                    const toggle = document.createElement('span');
+                    toggle.className = 'toggle-icon';
+                    toggle.textContent = lane.expanded ? '▼' : '▶';
+                    labelEl.appendChild(toggle);
+
+                    if (lane.color) {
+                        const indicator = document.createElement('span');
+                        indicator.className = 'channel-indicator';
+                        indicator.style.background = lane.color;
+                        labelEl.appendChild(indicator);
+                    }
+
+                    const text = document.createElement('span');
+                    text.textContent = lane.label;
+                    labelEl.appendChild(text);
+
+                    labelEl.addEventListener('click', () => {
+                        if (lane.isChannelHeader) {
+                            toggleChannel(lane.channel);
+                        } else if (lane.isPCHeader) {
+                            togglePC(lane.channel, lane.pc);
+                        } else if (lane.isDataBusGroupHeader) {
+                            toggleDataBus();
+                        } else if (lane.isCABusGroupHeader) {
+                            toggleCABus();
+                        }
+                    });
+                } else if (lane.isDataBusPCLane || lane.isCABusPCLane) {
+                    // Data bus PC lane with channel color indicator
+                    if (lane.color) {
+                        const indicator = document.createElement('span');
+                        indicator.className = 'channel-indicator';
+                        indicator.style.background = lane.color;
+                        labelEl.appendChild(indicator);
+                    }
+                    const text = document.createElement('span');
+                    text.textContent = lane.label;
+                    labelEl.appendChild(text);
+                } else {
+                    if (lane.color && !lane.isGroup) {
+                        const indicator = document.createElement('span');
+                        indicator.className = 'channel-indicator';
+                        indicator.style.background = lane.color;
+                        labelEl.appendChild(indicator);
+                    }
+                    const text = document.createElement('span');
+                    text.textContent = lane.label;
+                    labelEl.appendChild(text);
+                }
+
                 laneEl.appendChild(labelEl);
 
                 if (!lane.isGroup) {
                     const contentEl = document.createElement('div');
                     contentEl.className = 'lane-content';
-                    contentEl.id = `lane-${lane.id}`;
+                    contentEl.id = `lane-content-${lane.id}`;
                     contentEl.style.width = `${width}px`;
 
                     const laneEvents = events.filter(e => e.lane === lane.id);
                     for (const evt of laneEvents) {
                         const evtEl = createEventElement(evt);
                         contentEl.appendChild(evtEl);
+                    }
+
+                    if ((lane.isChannelHeader && !lane.expanded) || (lane.isPCHeader && !lane.expanded) || (lane.isDataBusGroupHeader && !lane.expanded) || (lane.isCABusGroupHeader && !lane.expanded)) {
+                        addActivityIndicators(contentEl, lane);
                     }
 
                     laneEl.appendChild(contentEl);
@@ -824,6 +1342,108 @@
             }
 
             updatePlaybackCursor();
+        }
+
+        function addActivityIndicators(contentEl, lane) {
+            let relevantEvents;
+            if (lane.isChannelHeader) {
+                relevantEvents = events.filter(e => e.channel === lane.channel);
+            } else if (lane.isPCHeader) {
+                relevantEvents = events.filter(e => e.channel === lane.channel && e.pc === lane.pc);
+            } else if (lane.isDataBusGroupHeader) {
+                // Show all data bus events across all PCs
+                relevantEvents = events.filter(e => e.lane && e.lane.startsWith('globalbus-'));
+            } else if (lane.isCABusGroupHeader) {
+                // Show all CA bus events across all PCs
+                relevantEvents = events.filter(e => e.lane && e.lane.startsWith('cabus-'));
+            }
+
+            if (!relevantEvents || relevantEvents.length === 0) return;
+
+            const ranges = [];
+            for (const evt of relevantEvents) {
+                let merged = false;
+                for (const range of ranges) {
+                    if (evt.start <= range.end + 2 && evt.end >= range.start - 2) {
+                        range.start = Math.min(range.start, evt.start);
+                        range.end = Math.max(range.end, evt.end);
+                        range.types.add(evt.type);
+                        merged = true;
+                        break;
+                    }
+                }
+                if (!merged) {
+                    ranges.push({ start: evt.start, end: evt.end, types: new Set([evt.type]) });
+                }
+            }
+
+            for (const range of ranges) {
+                const bar = document.createElement('div');
+                bar.className = 'activity-bar';
+                bar.style.left = `${range.start * pixelsPerCycle}px`;
+                bar.style.width = `${Math.max(2, (range.end - range.start) * pixelsPerCycle)}px`;
+
+                if (range.types.has('data-rd') || range.types.has('bank-rd')) {
+                    bar.style.background = 'var(--read-color)';
+                } else if (range.types.has('data-wr') || range.types.has('bank-wr')) {
+                    bar.style.background = 'var(--write-color)';
+                } else if (range.types.has('bank-act')) {
+                    bar.style.background = 'var(--activate-color)';
+                } else if (range.types.has('ca-act') || range.types.has('ca-rd') || range.types.has('ca-wr') || range.types.has('ca-pre')) {
+                    // CA Bus commands - use command color (yellow/gold)
+                    bar.style.background = 'var(--cmd-color)';
+                } else {
+                    bar.style.background = lane.color || 'var(--accent)';
+                }
+
+                contentEl.appendChild(bar);
+            }
+        }
+
+        function toggleChannel(channel) {
+            if (expandedChannels.has(channel)) {
+                expandedChannels.delete(channel);
+                for (let pc = 0; pc < NUM_PCS_PER_CHANNEL; pc++) {
+                    expandedPCs.delete(`${channel}-${pc}`);
+                }
+            } else {
+                expandedChannels.add(channel);
+                for (let pc = 0; pc < NUM_PCS_PER_CHANNEL; pc++) {
+                    if (activePCs.has(`${channel}-${pc}`)) {
+                        expandedPCs.add(`${channel}-${pc}`);
+                        break;
+                    }
+                }
+            }
+            renderSwimlanes();
+        }
+
+        function togglePC(channel, pc) {
+            const key = `${channel}-${pc}`;
+            if (expandedPCs.has(key)) {
+                expandedPCs.delete(key);
+            } else {
+                expandedPCs.add(key);
+            }
+            renderSwimlanes();
+        }
+
+        function expandAll() {
+            for (const ch of activeChannels) {
+                expandedChannels.add(ch);
+                for (let pc = 0; pc < NUM_PCS_PER_CHANNEL; pc++) {
+                    if (activePCs.has(`${ch}-${pc}`)) {
+                        expandedPCs.add(`${ch}-${pc}`);
+                    }
+                }
+            }
+            renderSwimlanes();
+        }
+
+        function collapseAll() {
+            expandedChannels.clear();
+            expandedPCs.clear();
+            renderSwimlanes();
         }
 
         function renderTimeRuler(width) {
@@ -865,7 +1485,8 @@
         }
 
         function updatePlaybackCursor() {
-            const left = 160 + currentCycle * pixelsPerCycle;
+            // CSS already has margin-left: 200px, so just set left based on cycle
+            const left = currentCycle * pixelsPerCycle;
             playbackCursor.style.left = `${left}px`;
             currentCycleEl.textContent = currentCycle;
         }
@@ -874,16 +1495,44 @@
             const req = requests.find(r => r.id === evt.requestId);
             if (!req) return;
 
-            document.getElementById('tooltipTitle').textContent = `Request ${req.id}: ${req.type}`;
+            const dqRange = getDQRange(req.channel, req.pc);
+
+            document.getElementById('tooltipTitle').textContent =
+                `Request ${req.id}: ${req.type}`;
+
             document.getElementById('tooltipContent').innerHTML = `
-                <div class="tooltip-row"><span class="tooltip-label">Stage</span><span class="tooltip-value">${evt.label}</span></div>
-                <div class="tooltip-row"><span class="tooltip-label">Cycles</span><span class="tooltip-value">${evt.start} - ${evt.end}</span></div>
-                <div class="tooltip-row"><span class="tooltip-label">Duration</span><span class="tooltip-value">${evt.end - evt.start} cycles</span></div>
-                <div class="tooltip-row"><span class="tooltip-label">Channel</span><span class="tooltip-value">${req.channel}</span></div>
-                <div class="tooltip-row"><span class="tooltip-label">Pseudo-Channel</span><span class="tooltip-value">${req.pc}</span></div>
-                <div class="tooltip-row"><span class="tooltip-label">Bank</span><span class="tooltip-value">${req.bank}</span></div>
-                <div class="tooltip-row"><span class="tooltip-label">Page Status</span><span class="tooltip-value">${req.pageStatus}</span></div>
-                <div class="tooltip-row"><span class="tooltip-label">Total Latency</span><span class="tooltip-value">${req.latency} cycles</span></div>
+                <div class="tooltip-row">
+                    <span class="tooltip-label">Stage</span>
+                    <span class="tooltip-value">${evt.label}</span>
+                </div>
+                <div class="tooltip-row">
+                    <span class="tooltip-label">Cycles</span>
+                    <span class="tooltip-value">${evt.start} - ${evt.end}</span>
+                </div>
+                <div class="tooltip-row">
+                    <span class="tooltip-label">Duration</span>
+                    <span class="tooltip-value">${evt.end - evt.start} cy</span>
+                </div>
+                <div class="tooltip-row">
+                    <span class="tooltip-label">Channel</span>
+                    <span class="tooltip-value">${req.channel}</span>
+                </div>
+                <div class="tooltip-row">
+                    <span class="tooltip-label">Pseudo-Channel</span>
+                    <span class="tooltip-value">PC${req.pc}</span>
+                </div>
+                <div class="tooltip-row">
+                    <span class="tooltip-label">Bank</span>
+                    <span class="tooltip-value">${req.bank}</span>
+                </div>
+                <div class="tooltip-row">
+                    <span class="tooltip-label">Data Bus</span>
+                    <span class="tooltip-value">${dqRange}</span>
+                </div>
+                <div class="tooltip-row">
+                    <span class="tooltip-label">Total Latency</span>
+                    <span class="tooltip-value">${req.latency} cy</span>
+                </div>
             `;
 
             tooltip.style.left = `${e.clientX + 10}px`;
@@ -891,13 +1540,90 @@
             tooltip.classList.add('visible');
         }
 
-        function hideTooltip() { tooltip.classList.remove('visible'); }
+        function hideTooltip() {
+            tooltip.classList.remove('visible');
+        }
+
+        function showPeriod(period, label) {
+            if (!period) return;
+
+            // Toggle off if clicking the same period
+            if (activePeriod && activePeriod.start === period.start && activePeriod.end === period.end) {
+                hidePeriod();
+                return;
+            }
+
+            // Clear any previous period visualization
+            hidePeriod();
+            activePeriod = period;
+
+            const startX = period.start * pixelsPerCycle;
+            const endX = period.end * pixelsPerCycle;
+
+            // Add period-dimmed class to events outside the period
+            document.querySelectorAll('.event').forEach(el => {
+                const evtLeft = parseFloat(el.style.left);
+                const evtRight = evtLeft + parseFloat(el.style.width);
+                // Event is outside if it ends before period start or starts after period end
+                const isOutside = evtRight < startX || evtLeft > endX;
+                el.classList.toggle('period-dimmed', isOutside);
+            });
+
+            // Add markers to each lane-content area
+            periodMarkers = [];
+            document.querySelectorAll('.lane-content').forEach(content => {
+                // Start marker (green)
+                const startMarker = document.createElement('div');
+                startMarker.className = 'period-marker start';
+                startMarker.style.left = `${startX}px`;
+                content.appendChild(startMarker);
+
+                // End marker (red)
+                const endMarker = document.createElement('div');
+                endMarker.className = 'period-marker end';
+                endMarker.style.left = `${endX}px`;
+                content.appendChild(endMarker);
+
+                periodMarkers.push(startMarker, endMarker);
+            });
+
+            // Add label to first lane-content
+            const firstContent = document.querySelector('.lane-content');
+            if (firstContent) {
+                const labelEl = document.createElement('div');
+                labelEl.className = 'period-label';
+                const labelX = (startX + endX) / 2;
+                labelEl.style.left = `${labelX}px`;
+                labelEl.style.transform = 'translateX(-50%)';
+                labelEl.textContent = `${label}: ${period.bandwidth.toFixed(1)} GB/s (cycles ${period.start}-${period.end})`;
+                firstContent.appendChild(labelEl);
+                periodMarkers.push(labelEl);
+            }
+        }
+
+        function hidePeriod() {
+            activePeriod = null;
+
+            // Remove period-dimmed class from all events
+            document.querySelectorAll('.event.period-dimmed').forEach(el => {
+                el.classList.remove('period-dimmed');
+            });
+
+            // Remove all period markers and labels
+            periodMarkers.forEach(el => el.remove());
+            periodMarkers = [];
+        }
 
         function selectRequest(reqId) {
+            // Hide any active period when selecting a request
+            hidePeriod();
+
             selectedRequest = selectedRequest === reqId ? null : reqId;
+
             document.querySelectorAll('.request-item').forEach(el => {
                 el.classList.toggle('selected', parseInt(el.dataset.reqId) === selectedRequest);
             });
+
             document.querySelectorAll('.event').forEach(el => {
                 const evtReqId = parseInt(el.dataset.requestId);
                 if (selectedRequest !== null) {
@@ -911,7 +1637,10 @@
 
         function updateRequestList() {
             requestList.innerHTML = '';
-            for (const req of requests) {
+            const displayRequests = requests.slice(0, 50);
+
+            for (const req of displayRequests) {
+                const dqRange = getDQRange(req.channel, req.pc);
                 const itemEl = document.createElement('div');
                 itemEl.className = 'request-item';
                 itemEl.dataset.reqId = req.id;
@@ -920,28 +1649,228 @@
                         <span class="req-id">R${req.id}</span>
                         <span class="req-type ${req.type.toLowerCase()}">${req.type}</span>
                     </div>
-                    <div class="req-detail">Ch${req.channel} PC${req.pc} Bank${req.bank} | ${req.pageStatus} | ${req.latency}cy</div>
+                    <div class="req-detail">
+                        Ch${req.channel} PC${req.pc} B${req.bank} | ${dqRange} | ${req.latency}cy
+                    </div>
                 `;
                 itemEl.addEventListener('click', () => selectRequest(req.id));
                 requestList.appendChild(itemEl);
+            }
+
+            if (requests.length > 50) {
+                const more = document.createElement('div');
+                more.style.cssText = 'color: var(--text-dim); font-size: 11px; padding: 8px;';
+                more.textContent = `... and ${requests.length - 50} more requests`;
+                requestList.appendChild(more);
             }
         }
 
         function updateStats() {
             const reads = requests.filter(r => r.type === 'READ').length;
             const writes = requests.filter(r => r.type === 'WRITE').length;
-            const pageHits = requests.filter(r => r.pageStatus === 'HIT').length;
-            const pageConflicts = requests.filter(r => r.pageStatus === 'CONFLICT').length;
-            const avgLatency = requests.length > 0 ? Math.round(requests.reduce((sum, r) => sum + r.latency, 0) / requests.length) : 0;
 
+            // Event statistics
             document.getElementById('statTotal').textContent = requests.length;
             document.getElementById('statReads').textContent = reads;
             document.getElementById('statWrites').textContent = writes;
-            document.getElementById('statPageHits').textContent = pageHits;
-            document.getElementById('statPageConflicts').textContent = pageConflicts;
-            document.getElementById('statAvgLatency').textContent = `${avgLatency} cy`;
+            document.getElementById('statActiveChannels').textContent = activeChannels.size;
+            document.getElementById('statActivePCs').textContent = activePCs.size;
             maxCycleEl.textContent = maxCycle;
+
+            // Reset clickable styling
+            statMinLatencyEl.className = 'stat-value';
+            statMaxLatencyEl.className = 'stat-value';
+            statMinBwEl.className = 'stat-value';
+            statMaxBwEl.className = 'stat-value';
+            statMinLatencyEl.onclick = null;
+            statMaxLatencyEl.onclick = null;
+            statMinBwEl.onclick = null;
+            statMaxBwEl.onclick = null;
+
+            // Performance statistics
+            if (requests.length > 0) {
+                // Latency calculations
+                const latencies = requests.map(r => r.latency);
+                const avgLatency = Math.round(latencies.reduce((a, b) => a + b, 0) / latencies.length);
+                const minLatency = Math.min(...latencies);
+                const maxLatency = Math.max(...latencies);
+
+                // Find the requests with min/max latency
+                minLatencyRequest = requests.find(r => r.latency === minLatency);
+                maxLatencyRequest = requests.find(r => r.latency === maxLatency);
+
+                document.getElementById('statAvgLatency').textContent = `${avgLatency} cy`;
+                statMinLatencyEl.textContent = `${minLatency} cy`;
+                statMaxLatencyEl.textContent = `${maxLatency} cy`;
+
+                // Make min/max latency clickable - capture ID in closure
+                if (minLatencyRequest) {
+                    const minReqId = minLatencyRequest.id;  // Capture in closure
+                    statMinLatencyEl.className = 'stat-value clickable';
+                    statMinLatencyEl.title = `Click to select R${minReqId}`;
+                    statMinLatencyEl.onclick = () => {
+                        hidePeriod();
+                        selectRequest(minReqId);
+                    };
+                }
+                if (maxLatencyRequest) {
+                    const maxReqId = maxLatencyRequest.id;  // Capture in closure
+                    statMaxLatencyEl.className = 'stat-value clickable';
+                    statMaxLatencyEl.title = `Click to select R${maxReqId}`;
+                    statMaxLatencyEl.onclick = () => {
+                        hidePeriod();
+                        selectRequest(maxReqId);
+                    };
+                }
+
+                // Bandwidth calculations based on actual data bus utilization
+                // HBM3: 32-bit bus per PC, DDR transfers 2 × 4 bytes = 8 bytes per clock cycle
+                // Clock frequency: 2.8 GHz (DDR = 5.6 GT/s effective)
+                // Peak per PC = 8 bytes/cycle × 2.8 GHz = 22.4 GB/s
+                const BYTES_PER_CYCLE = 8;    // 32-bit × 2 (DDR) = 8 bytes/cycle
+                const CLOCK_FREQ_GHZ = 2.8;   // 2.8 GHz memory clock
+                const totalCycles = maxCycle > 0 ? maxCycle : 1;
+
+                // Filter to only databus events (avoid double-counting globalbus duplicates)
+                const dataBusEvents = events.filter(e =>
+                    (e.type === 'data-rd' || e.type === 'data-wr') &&
+                    e.lane && e.lane.startsWith('databus-')
+                );
+
+                // Count actual data transfer cycles per PC using Sets (deduplicates overlapping events)
+                const busyCyclesByPC = new Map();
+                for (const evt of dataBusEvents) {
+                    const pcKey = `${evt.channel}-${evt.pc}`;
+                    if (!busyCyclesByPC.has(pcKey)) {
+                        busyCyclesByPC.set(pcKey, new Set());
+                    }
+                    for (let c = evt.start; c < evt.end; c++) {
+                        busyCyclesByPC.get(pcKey).add(c);
+                    }
+                }
+
+                // Total bytes transferred = sum of (busy cycles per PC × bytes per cycle)
+                let totalBytesTransferred = 0;
+                for (const cycles of busyCyclesByPC.values()) {
+                    totalBytesTransferred += cycles.size * BYTES_PER_CYCLE;
+                }
+
+                // Average bandwidth = total bytes / total time
+                const avgBandwidth = (totalBytesTransferred / totalCycles) * CLOCK_FREQ_GHZ;
+
+                // Calculate per-window bandwidth for min/max using same deduplication
+                const windowSize = Math.max(50, Math.ceil(totalCycles / 20));
+                const windowData = [];
+
+                for (let start = 0; start < totalCycles; start += windowSize) {
+                    const end = Math.min(start + windowSize, totalCycles);
+
+                    // Count data bus cycles in this window using Set for deduplication
+                    const windowCyclesByPC = new Map();
+                    for (const evt of dataBusEvents) {
+                        const overlapStart = Math.max(evt.start, start);
+                        const overlapEnd = Math.min(evt.end, end);
+                        if (overlapEnd > overlapStart) {
+                            const pcKey = `${evt.channel}-${evt.pc}`;
+                            if (!windowCyclesByPC.has(pcKey)) {
+                                windowCyclesByPC.set(pcKey, new Set());
+                            }
+                            for (let c = overlapStart; c < overlapEnd; c++) {
+                                windowCyclesByPC.get(pcKey).add(c);
+                            }
+                        }
+                    }
+
+                    // Sum busy cycles across all PCs in this window
+                    let windowBusCycles = 0;
+                    for (const cycles of windowCyclesByPC.values()) {
+                        windowBusCycles += cycles.size;
+                    }
+
+                    if (windowBusCycles > 0) {
+                        const windowBytes = windowBusCycles * BYTES_PER_CYCLE;
+                        const bandwidth = (windowBytes / (end - start)) * CLOCK_FREQ_GHZ;
+                        windowData.push({ start, end, bandwidth, busCycles: windowBusCycles });
+                    }
+                }
+
+                let minBandwidth = 0, maxBandwidth = 0;
+                if (windowData.length > 0) {
+                    minBandwidth = Math.min(...windowData.map(w => w.bandwidth));
+                    maxBandwidth = Math.max(...windowData.map(w => w.bandwidth));
+
+                    // Find periods - use small epsilon for floating point comparison
+                    minBandwidthPeriod = windowData.find(w => Math.abs(w.bandwidth - minBandwidth) < 0.001) || null;
+                    maxBandwidthPeriod = windowData.find(w => Math.abs(w.bandwidth - maxBandwidth) < 0.001) || null;
+                } else {
+                    minBandwidthPeriod = null;
+                    maxBandwidthPeriod = null;
+                }
+
+                document.getElementById('statAvgBandwidth').textContent = `${avgBandwidth.toFixed(1)} GB/s`;
+                statMinBwEl.textContent = `${minBandwidth.toFixed(1)} GB/s`;
+                statMaxBwEl.textContent = `${maxBandwidth.toFixed(1)} GB/s`;
+
+                // Make min/max bandwidth clickable - capture period in closure
+                if (minBandwidthPeriod) {
+                    const minPeriod = { ...minBandwidthPeriod };  // Capture copy
+                    statMinBwEl.className = 'stat-value clickable';
+                    statMinBwEl.title = `Click to show period (cycles ${minPeriod.start}-${minPeriod.end})`;
+                    statMinBwEl.onclick = () => showPeriod(minPeriod, 'Min Bandwidth');
+                }
+                if (maxBandwidthPeriod) {
+                    const maxPeriod = { ...maxBandwidthPeriod };  // Capture copy
+                    statMaxBwEl.className = 'stat-value clickable';
+                    statMaxBwEl.title = `Click to show period (cycles ${maxPeriod.start}-${maxPeriod.end})`;
+                    statMaxBwEl.onclick = () => showPeriod(maxPeriod, 'Max Bandwidth');
+                }
+
+                // Data bus utilization
+                // Count cycles where data bus is active (data-rd or data-wr events)
+                let busyBusCycles = 0;
+                const dataBusEvents = events.filter(e => e.type === 'data-rd' || e.type === 'data-wr');
+                // Create a set of busy cycles per PC, then sum unique busy cycles
+                const busyCyclesByPC = new Map();
+                for (const evt of dataBusEvents) {
+                    const pcKey = `${evt.channel}-${evt.pc}`;
+                    if (!busyCyclesByPC.has(pcKey)) {
+                        busyCyclesByPC.set(pcKey, new Set());
+                    }
+                    for (let c = evt.start; c < evt.end; c++) {
+                        busyCyclesByPC.get(pcKey).add(c);
+                    }
+                }
+                // Sum up all busy cycles across all PCs
+                for (const cycles of busyCyclesByPC.values()) {
+                    busyBusCycles += cycles.size;
+                }
+                // Total possible = cycles × active PCs
+                const totalPossibleBusCycles = totalCycles * activePCs.size;
+                const busUtil = totalPossibleBusCycles > 0
+                    ? (busyBusCycles / totalPossibleBusCycles * 100)
+                    : 0;
+
+                document.getElementById('statDataBusUtil').textContent = `${busUtil.toFixed(1)}%`;
+            } else {
+                document.getElementById('statAvgLatency').textContent = '0 cy';
+                statMinLatencyEl.textContent = '0 cy';
+                statMaxLatencyEl.textContent = '0 cy';
+                document.getElementById('statAvgBandwidth').textContent = '0 GB/s';
+                statMinBwEl.textContent = '0 GB/s';
+                statMaxBwEl.textContent = '0 GB/s';
+                document.getElementById('statDataBusUtil').textContent = '0%';
+
+                // Clear tracking
+                minLatencyRequest = null;
+                maxLatencyRequest = null;
+                minBandwidthPeriod = null;
+                maxBandwidthPeriod = null;
+            }
         }
+
+        // Preset zoom levels that include 100%
+        const ZOOM_LEVELS = [0.25, 0.5, 0.75, 1.0, 1.5, 2.0, 3.0, 4.0];
+        let zoomIndex = ZOOM_LEVELS.indexOf(1.0);  // Start at 100%
 
         function setZoom(level) {
             zoomLevel = Math.max(0.25, Math.min(4, level));
@@ -950,22 +1879,57 @@
             renderSwimlanes();
         }
 
+        function zoomIn() {
+            // Find next higher zoom level
+            const nextIndex = ZOOM_LEVELS.findIndex(z => z > zoomLevel);
+            if (nextIndex !== -1) {
+                zoomIndex = nextIndex;
+                setZoom(ZOOM_LEVELS[zoomIndex]);
+            }
+        }
+
+        function zoomOut() {
+            // Find next lower zoom level
+            let prevIndex = -1;
+            for (let i = ZOOM_LEVELS.length - 1; i >= 0; i--) {
+                if (ZOOM_LEVELS[i] < zoomLevel) {
+                    prevIndex = i;
+                    break;
+                }
+            }
+            if (prevIndex !== -1) {
+                zoomIndex = prevIndex;
+                setZoom(ZOOM_LEVELS[zoomIndex]);
+            }
+        }
+
+        function resetZoom() {
+            zoomIndex = ZOOM_LEVELS.indexOf(1.0);
+            setZoom(1.0);
+        }
+
         fileInput.addEventListener('change', async (e) => {
             const file = e.target.files[0];
             if (!file) return;
+
             document.getElementById('traceFilename').textContent = file.name;
+
             try {
                 const text = await file.text();
                 traceData = JSON.parse(text);
                 requests = parseTrace(traceData);
+
                 if (requests.length > 0) {
                     noData.style.display = 'none';
                     swimlaneWrapper.style.display = 'block';
+
                     renderSwimlanes();
                     updateRequestList();
                     updateStats();
+
                     currentCycle = 0;
                     updatePlaybackCursor();
+
                     btnReset.disabled = false;
                     btnStepBack.disabled = false;
                     btnPlay.disabled = false;
@@ -973,23 +1937,59 @@
                     btnEnd.disabled = false;
                 }
             } catch (err) {
+                console.error('Error loading trace:', err);
                 alert('Error loading trace file: ' + err.message);
             }
         });
 
-        btnReset.addEventListener('click', () => { currentCycle = 0; stopPlayback(); updatePlaybackCursor(); });
-        btnStepBack.addEventListener('click', () => { if (currentCycle > 0) { currentCycle--; updatePlaybackCursor(); } });
-        btnStep.addEventListener('click', () => { if (currentCycle < maxCycle) { currentCycle++; updatePlaybackCursor(); } });
-        btnEnd.addEventListener('click', () => { currentCycle = maxCycle; stopPlayback(); updatePlaybackCursor(); });
-        btnPlay.addEventListener('click', () => { if (isPlaying) stopPlayback(); else startPlayback(); });
+        btnExpandAll.addEventListener('click', expandAll);
+        btnCollapseAll.addEventListener('click', collapseAll);
+
+        btnReset.addEventListener('click', () => {
+            currentCycle = 0;
+            stopPlayback();
+            updatePlaybackCursor();
+        });
+
+        btnStepBack.addEventListener('click', () => {
+            if (currentCycle > 0) {
+                currentCycle--;
+                updatePlaybackCursor();
+            }
+        });
+
+        btnStep.addEventListener('click', () => {
+            if (currentCycle < maxCycle) {
+                currentCycle++;
+                updatePlaybackCursor();
+            }
+        });
+
+        btnEnd.addEventListener('click', () => {
+            currentCycle = maxCycle;
+            stopPlayback();
+            updatePlaybackCursor();
+        });
+
+        btnPlay.addEventListener('click', () => {
+            if (isPlaying) {
+                stopPlayback();
+            } else {
+                startPlayback();
+            }
+        });
 
         function startPlayback() {
             isPlaying = true;
             btnPlay.textContent = 'Pause';
             btnPlay.classList.add('active');
             playInterval = setInterval(() => {
-                if (currentCycle < maxCycle) { currentCycle++; updatePlaybackCursor(); }
-                else stopPlayback();
+                if (currentCycle < maxCycle) {
+                    currentCycle++;
+                    updatePlaybackCursor();
+                } else {
+                    stopPlayback();
+                }
             }, 50);
         }
 
@@ -997,28 +1997,71 @@
             isPlaying = false;
             btnPlay.textContent = 'Play';
             btnPlay.classList.remove('active');
-            if (playInterval) { clearInterval(playInterval); playInterval = null; }
+            if (playInterval) {
+                clearInterval(playInterval);
+                playInterval = null;
+            }
         }
 
-        btnZoomIn.addEventListener('click', () => setZoom(zoomLevel * 1.5));
-        btnZoomOut.addEventListener('click', () => setZoom(zoomLevel / 1.5));
+        btnZoomIn.addEventListener('click', zoomIn);
+        btnZoomOut.addEventListener('click', zoomOut);
+        // Click on zoom level to reset to 100%
+        zoomLevelEl.style.cursor = 'pointer';
+        zoomLevelEl.title = 'Click to reset to 100%';
+        zoomLevelEl.addEventListener('click', resetZoom);
 
         document.addEventListener('keydown', (e) => {
             if (requests.length === 0) return;
+
             switch (e.key) {
-                case ' ': e.preventDefault(); btnPlay.click(); break;
-                case 'ArrowRight': e.preventDefault(); currentCycle = Math.min(maxCycle, currentCycle + (e.shiftKey ? 10 : 1)); updatePlaybackCursor(); break;
-                case 'ArrowLeft': e.preventDefault(); currentCycle = Math.max(0, currentCycle - (e.shiftKey ? 10 : 1)); updatePlaybackCursor(); break;
-                case 'Home': e.preventDefault(); currentCycle = 0; updatePlaybackCursor(); break;
-                case 'End': e.preventDefault(); currentCycle = maxCycle; updatePlaybackCursor(); break;
-                case '+': case '=': e.preventDefault(); setZoom(zoomLevel * 1.5); break;
-                case '-': e.preventDefault(); setZoom(zoomLevel / 1.5); break;
-                case 'Escape': selectRequest(null); break;
+                case ' ':
+                    e.preventDefault();
+                    btnPlay.click();
+                    break;
+                case 'ArrowRight':
+                    e.preventDefault();
+                    if (e.shiftKey) currentCycle = Math.min(maxCycle, currentCycle + 10);
+                    else currentCycle = Math.min(maxCycle, currentCycle + 1);
+                    updatePlaybackCursor();
+                    break;
+                case 'ArrowLeft':
+                    e.preventDefault();
+                    if (e.shiftKey) currentCycle = Math.max(0, currentCycle - 10);
+                    else currentCycle = Math.max(0, currentCycle - 1);
+                    updatePlaybackCursor();
+                    break;
+                case 'Home':
+                    e.preventDefault();
+                    currentCycle = 0;
+                    updatePlaybackCursor();
+                    break;
+                case 'End':
+                    e.preventDefault();
+                    currentCycle = maxCycle;
+                    updatePlaybackCursor();
+                    break;
+                case '+':
+                case '=':
+                    e.preventDefault();
+                    zoomIn();
+                    break;
+                case '-':
+                    e.preventDefault();
+                    zoomOut();
+                    break;
+                case '0':
+                    e.preventDefault();
+                    resetZoom();
+                    break;
+                case 'Escape':
+                    selectRequest(null);
+                    break;
             }
         });
 
         swimlaneContainer.addEventListener('scroll', () => {
-            document.getElementById('timeRuler').scrollLeft = swimlaneContainer.scrollLeft;
+            const ruler = document.getElementById('timeRuler');
+            ruler.scrollLeft = swimlaneContainer.scrollLeft;
         });
     </script>
 </body>

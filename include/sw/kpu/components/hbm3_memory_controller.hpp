@@ -551,6 +551,8 @@ private:
                                 const std::string& state, const std::string& reason = "");
     void trace_command(uint8_t channel, uint8_t pc, uint8_t bank, const std::string& cmd,
                        uint64_t duration, uint64_t request_id = 0);
+    void trace_ca_command(uint8_t channel, uint8_t pc, const std::string& cmd,
+                          uint64_t request_id = 0);
 
     // Synchronize interface stats from internal stats
     void sync_interface_stats();

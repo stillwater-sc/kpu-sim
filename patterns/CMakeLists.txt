@@ -253,6 +253,15 @@ add_hbm2_pattern(eight_channel multi-channel/hbm2_eight_channel.cpp "Level 4 - M
 
 add_hbm2_pattern(max_bandwidth bandwidth/hbm2_max_bandwidth.cpp "Level 5 - Bandwidth")
 
+# -----------------------------------------------------------------------------
+# Level 6: Full Bank Patterns (16 banks per PC, 256 total)
+# -----------------------------------------------------------------------------
+
+add_hbm2_pattern(all_banks_parallel    full-bank/hbm2_all_banks_parallel.cpp    "Level 6 - Full Bank")
+add_hbm2_pattern(bank_group_stress     full-bank/hbm2_bank_group_stress.cpp     "Level 6 - Full Bank")
+add_hbm2_pattern(full_stack_saturation full-bank/hbm2_full_stack_saturation.cpp "Level 6 - Full Bank")
+add_hbm2_pattern(bank_distribution     full-bank/hbm2_bank_distribution.cpp     "Level 6 - Full Bank")
+
 # ============================================================================
 # HBM3 Memory Patterns
 # ============================================================================
@@ -316,6 +325,15 @@ add_hbm3_pattern(sixteen_channel multi-channel/hbm3_sixteen_channel.cpp "Level 4
 # -----------------------------------------------------------------------------
 
 add_hbm3_pattern(max_bandwidth bandwidth/hbm3_max_bandwidth.cpp "Level 5 - Bandwidth")
+
+# -----------------------------------------------------------------------------
+# Level 6: Full Bank Patterns (16 banks per PC, 512 total)
+# -----------------------------------------------------------------------------
+
+add_hbm3_pattern(all_banks_parallel    full-bank/hbm3_all_banks_parallel.cpp    "Level 6 - Full Bank")
+add_hbm3_pattern(bank_group_stress     full-bank/hbm3_bank_group_stress.cpp     "Level 6 - Full Bank")
+add_hbm3_pattern(full_stack_saturation full-bank/hbm3_full_stack_saturation.cpp "Level 6 - Full Bank")
+add_hbm3_pattern(bank_distribution     full-bank/hbm3_bank_distribution.cpp     "Level 6 - Full Bank")
 
 # ============================================================================
 # NoC Patterns (TODO)

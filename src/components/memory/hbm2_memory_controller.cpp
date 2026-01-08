@@ -641,6 +641,7 @@ void HBM2MemoryController::do_activate(uint8_t channel, uint8_t pc, uint8_t bank
     // Trace the operation
     trace_bank_state_change(channel, pc, bank, hbm2::BankState::ACTIVATING, "ACTIVATE row " + std::to_string(row));
     trace_command(channel, pc, bank, "ACTIVATE", timing.tRCDRD, request_id);
+    trace_ca_command(channel, pc, "ACT", request_id);
     trace_bus_state_change(channel, pc, false, "BUSY", "ACT cmd");
 }
 
@@ -679,6 +680,7 @@ void HBM2MemoryController::do_read(uint8_t channel, uint8_t pc, uint8_t bank, Me
     uint64_t duration = timing.tRL + burst_cycles();
     trace_bank_state_change(channel, pc, bank, hbm2::BankState::READING, "READ burst");
     trace_command(channel, pc, bank, "READ", duration, req.id);
+    trace_ca_command(channel, pc, "RD", req.id);
     trace_bus_state_change(channel, pc, true, "BUSY", "READ burst");
     trace_bus_state_change(channel, pc, false, "BUSY", "RD cmd");
 }
@@ -719,6 +721,7 @@ void HBM2MemoryController::do_write(uint8_t channel, uint8_t pc, uint8_t bank, M
     uint64_t duration = timing.tWL + burst_cycles();
     trace_bank_state_change(channel, pc, bank, hbm2::BankState::WRITING, "WRITE burst");
     trace_command(channel, pc, bank, "WRITE", duration, req.id);
+    trace_ca_command(channel, pc, "WR", req.id);
     trace_bus_state_change(channel, pc, true, "BUSY", "WRITE burst");
     trace_bus_state_change(channel, pc, false, "BUSY", "WR cmd");
 }
@@ -742,6 +745,7 @@ void HBM2MemoryController::do_precharge(uint8_t channel, uint8_t pc, uint8_t ban
     trace_bank_state_change(channel, pc, bank, hbm2::BankState::PRECHARGING, "PRECHARGE");
     trace_command(channel, pc, bank, "PRECHARGE", timing.tRP, request_id);
     trace_bus_state_change(channel, pc, false, "BUSY", "PRE cmd");
+    trace_ca_command(channel, pc, "PRE", request_id);
 }
 
 void HBM2MemoryController::do_refresh(uint8_t channel, uint8_t pc, uint8_t bank) {
@@ -763,6 +767,7 @@ void HBM2MemoryController::do_refresh(uint8_t channel, uint8_t pc, uint8_t bank)
     trace_bank_state_change(channel, pc, bank, hbm2::BankState::REFRESHING, "REFRESH");
     trace_command(channel, pc, bank, "REFRESH", timing.tRFCpb, 0);
     trace_bus_state_change(channel, pc, false, "BUSY", "REF cmd");
+    trace_ca_command(channel, pc, "REF", 0);
 }
 
 // ============================================================================
@@ -1173,6 +1178,50 @@ void HBM2MemoryController::trace_command(uint8_t channel, uint8_t pc, uint8_t ba
     // Store bank info in description
     std::ostringstream ss;
     ss << cmd << " ch=" << (int)channel << " pc=" << (int)pc << " bank=" << (int)bank;
+    entry.description = ss.str();
+
+    trace_entries_.push_back(std::move(entry));
+}
+
+void HBM2MemoryController::trace_ca_command(uint8_t channel, uint8_t pc, const std::string& cmd,
+                                             uint64_t request_id) {
+    if (!tracing_enabled_) return;
+
+    // Use pseudo-channel index as the unique ID for CA bus
+    // ca_bus_id = channel * PCs_per_channel + pc
+    uint16_t ca_bus_id = static_cast<uint16_t>(channel) * hbm2_config_.pseudo_channels_per_channel + pc;
+
+    // Determine transaction type from command string
+    sw::trace::TransactionType txn_type;
+    if (cmd == "ACT") {
+        txn_type = sw::trace::TransactionType::ACTIVATE;
+    } else if (cmd == "RD") {
+        txn_type = sw::trace::TransactionType::BURST_READ;
+    } else if (cmd == "WR") {
+        txn_type = sw::trace::TransactionType::BURST_WRITE;
+    } else if (cmd == "PRE") {
+        txn_type = sw::trace::TransactionType::PRECHARGE;
+    } else if (cmd == "REF") {
+        txn_type = sw::trace::TransactionType::REFRESH;
+    } else {
+        txn_type = sw::trace::TransactionType::UNKNOWN;
+    }
+
+    sw::trace::TraceEntry entry(
+        current_cycle_,
+        sw::trace::ComponentType::HBM2_CMD_BUS,
+        ca_bus_id,  // Unique per pseudo-channel
+        txn_type,
+        request_id
+    );
+
+    // CA bus commands are 1 cycle for serialization
+    entry.complete(current_cycle_ + 1);
+    entry.clock_freq_ghz = 1.0;  // 1 GHz for HBM2
+
+    // Description with command info
+    std::ostringstream ss;
+    ss << cmd << " ch=" << (int)channel << " pc=" << (int)pc;
     entry.description = ss.str();
 
     trace_entries_.push_back(std::move(entry));

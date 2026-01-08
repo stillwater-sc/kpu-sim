@@ -641,6 +641,7 @@ void HBM3MemoryController::do_activate(uint8_t channel, uint8_t pc, uint8_t bank
     trace_bank_state_change(channel, pc, bank, hbm3::BankState::ACTIVATING, "ACTIVATE row " + std::to_string(row));
     trace_command(channel, pc, bank, "ACTIVATE", timing.tRCD, request_id);
     trace_bus_state_change(channel, pc, false, "BUSY", "ACT cmd");
+    trace_ca_command(channel, pc, "ACT", request_id);
 }
 
 void HBM3MemoryController::do_read(uint8_t channel, uint8_t pc, uint8_t bank, MemoryRequest& req) {
@@ -680,6 +681,7 @@ void HBM3MemoryController::do_read(uint8_t channel, uint8_t pc, uint8_t bank, Me
     trace_command(channel, pc, bank, "READ", duration, req.id);
     trace_bus_state_change(channel, pc, true, "BUSY", "READ burst");
     trace_bus_state_change(channel, pc, false, "BUSY", "RD cmd");
+    trace_ca_command(channel, pc, "RD", req.id);
 }
 
 void HBM3MemoryController::do_write(uint8_t channel, uint8_t pc, uint8_t bank, MemoryRequest& req) {
@@ -720,6 +722,7 @@ void HBM3MemoryController::do_write(uint8_t channel, uint8_t pc, uint8_t bank, M
     trace_command(channel, pc, bank, "WRITE", duration, req.id);
     trace_bus_state_change(channel, pc, true, "BUSY", "WRITE burst");
     trace_bus_state_change(channel, pc, false, "BUSY", "WR cmd");
+    trace_ca_command(channel, pc, "WR", req.id);
 }
 
 void HBM3MemoryController::do_precharge(uint8_t channel, uint8_t pc, uint8_t bank) {
@@ -741,6 +744,7 @@ void HBM3MemoryController::do_precharge(uint8_t channel, uint8_t pc, uint8_t ban
     trace_bank_state_change(channel, pc, bank, hbm3::BankState::PRECHARGING, "PRECHARGE");
     trace_command(channel, pc, bank, "PRECHARGE", timing.tRP, request_id);
     trace_bus_state_change(channel, pc, false, "BUSY", "PRE cmd");
+    trace_ca_command(channel, pc, "PRE", request_id);
 }
 
 void HBM3MemoryController::do_refresh(uint8_t channel, uint8_t pc, uint8_t bank) {
@@ -762,6 +766,7 @@ void HBM3MemoryController::do_refresh(uint8_t channel, uint8_t pc, uint8_t bank)
     trace_bank_state_change(channel, pc, bank, hbm3::BankState::REFRESHING, "REFRESH");
     trace_command(channel, pc, bank, "REFRESH", timing.tRFCpb, 0);
     trace_bus_state_change(channel, pc, false, "BUSY", "REF cmd");
+    trace_ca_command(channel, pc, "REF", 0);
 }
 
 // ============================================================================
@@ -1172,6 +1177,48 @@ void HBM3MemoryController::trace_command(uint8_t channel, uint8_t pc, uint8_t ba
     // Store bank info in description
     std::ostringstream ss;
     ss << cmd << " ch=" << (int)channel << " pc=" << (int)pc << " bank=" << (int)bank;
+    entry.description = ss.str();
+
+    trace_entries_.push_back(std::move(entry));
+}
+
+void HBM3MemoryController::trace_ca_command(uint8_t channel, uint8_t pc, const std::string& cmd,
+                                             uint64_t request_id) {
+    if (!tracing_enabled_) return;
+
+    // CA bus ID: one per pseudo-channel (channel * PCs_per_channel + pc)
+    uint16_t ca_bus_id = static_cast<uint16_t>(channel) * hbm3_config_.pseudo_channels_per_channel + pc;
+
+    // Map command string to transaction type
+    sw::trace::TransactionType txn_type;
+    if (cmd == "ACT") {
+        txn_type = sw::trace::TransactionType::ACTIVATE;
+    } else if (cmd == "RD") {
+        txn_type = sw::trace::TransactionType::BURST_READ;
+    } else if (cmd == "WR") {
+        txn_type = sw::trace::TransactionType::BURST_WRITE;
+    } else if (cmd == "PRE") {
+        txn_type = sw::trace::TransactionType::PRECHARGE;
+    } else if (cmd == "REF") {
+        txn_type = sw::trace::TransactionType::REFRESH;
+    } else {
+        txn_type = sw::trace::TransactionType::UNKNOWN;
+    }
+
+    sw::trace::TraceEntry entry(
+        current_cycle_,
+        sw::trace::ComponentType::HBM3_CMD_BUS,
+        ca_bus_id,
+        txn_type,
+        request_id
+    );
+
+    // CA commands take 1 cycle to serialize
+    entry.complete(current_cycle_ + 1);
+    entry.clock_freq_ghz = 2.8;  // 2.8 GHz for HBM3
+
+    std::ostringstream ss;
+    ss << cmd << " ch=" << (int)channel << " pc=" << (int)pc;
     entry.description = ss.str();
 
     trace_entries_.push_back(std::move(entry));

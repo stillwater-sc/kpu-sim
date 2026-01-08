@@ -199,9 +199,113 @@ HBM3 Patterns:
 | `patterns/CMakeLists.txt` | Add HBM pattern targets |
 | `docs/analysis/memory-characterization.md` | Comprehensive HBM documentation |
 
+## Session 2: Trace Script Fix, Test Fix, and Visualization Improvements
+
+### Deleted Traces Root Cause Analysis
+
+**Issue:** Running `generate_all_traces.sh --clean` deleted GDDR6 and LPDDR5 traces that were not regenerated.
+
+**Deleted Files:**
+- `traces/memory/lpddr5/bandwidth/max_bandwidth_trace.json`
+- `traces/memory/lpddr5/bandwidth/page_burst_trace.json`
+- `traces/memory/lpddr5/complex/multi_dma_trace.json`
+- `traces/memory/lpddr5/complex/stream_trace.json`
+- `traces/memory/gddr6/bandwidth/eight_bank_bandwidth_trace.json`
+- `traces/memory/gddr6/bandwidth/max_bandwidth_trace.json`
+- `traces/memory/gddr6/bandwidth/page_burst_trace.json`
+- `traces/memory/gddr6/complex/multi_dma_trace.json`
+- `traces/memory/gddr6/complex/stream_trace.json`
+
+**Root Cause:** The `generate_all_traces.sh` script's `--clean` option deleted ALL traces, but only regenerated traces for patterns explicitly listed in the script. Missing patterns:
+- LPDDR5: `stream`, `multi_dma`, `max_bandwidth`, `page_burst`
+- GDDR6: `stream`, `multi_dma`, `max_bandwidth`, `page_burst`, `eight_bank_bandwidth`
+
+**Fix:**
+1. Restored traces from git: `git checkout -- traces/memory/lpddr5/ traces/memory/gddr6/`
+2. Updated `traces/scripts/generate_all_traces.sh` to include all missing patterns
+
+### LPDDR5 Page Burst Test Fix
+
+**Issue:** `lpddr5_page_burst` test failing after trace regeneration.
+
+**Root Cause 1:** Queue depth (64) too small for 128 requests, causing silent request drops.
+
+**Root Cause 2:** Test expected exactly 127/128 page hits, but DRAM refresh (tREFIpb=244 cycles) periodically closes pages, causing some `page_empty` hits instead of `page_hit`.
+
+**Fix:**
+1. Created `bandwidth_test_config()` with `queue_depth = 2048`
+2. Changed assertions to expect >90% hit rate instead of exact count
+3. Updated all bandwidth test functions to use the new config
+
+### Collapsible HBM Swimlane Visualization
+
+**Investigation:** User reported overlapping data bus cycles for concurrent banks in HBM2 swimlane visualization.
+
+**Finding:** NOT a bug - HBM has 16 pseudo-channels with independent data buses:
+- HBM2: 2 PCs per channel × 8 channels = 16 PCs, each with 64-bit DQ bus
+- HBM3: 2 PCs per channel × 16 channels = 32 PCs, each with 32-bit DQ bus
+- Each PC uses different physical pins (DQ[63:0], DQ[127:64], etc.)
+- The visualization was showing all buses on limited lanes, causing apparent overlap
+
+**Implementation:** Collapsible Pseudo-Channel Hierarchy (Option 1 of 3 presented)
+
+**New Visualization Features:**
+- Hierarchical collapsible structure: Channel → PC → Banks + Data Bus
+- Expand All / Collapse All buttons
+- Activity indicators (colored bars) for collapsed sections
+- Per-channel color coding
+- DQ pin range display (e.g., "DQ[63:0]")
+- Only shows active channels/PCs/banks from trace
+- Tooltip shows full details including DQ pin range
+
+**Files Created/Updated:**
+- `traces/memory/hbm2/tools/swimlane.html` - Complete rewrite with collapsible hierarchy
+- `traces/memory/hbm3/tools/swimlane.html` - HBM3 version (16 channels, 32-bit per PC)
+
+**Key Code Additions:**
+```javascript
+function decodeBankId(bankId) {
+    const channel = Math.floor(bankId / (NUM_PCS_PER_CHANNEL * BANKS_PER_PC));
+    const remainder = bankId % (NUM_PCS_PER_CHANNEL * BANKS_PER_PC);
+    const pc = Math.floor(remainder / BANKS_PER_PC);
+    const bank = remainder % BANKS_PER_PC;
+    return { channel, pc, bank };
+}
+
+function getDQRange(channel, pc) {
+    const pcIndex = channel * NUM_PCS_PER_CHANNEL + pc;
+    const startBit = pcIndex * BITS_PER_PC;
+    const endBit = startBit + BITS_PER_PC - 1;
+    return `DQ[${endBit}:${startBit}]`;
+}
+```
+
+## Summary of All Changes (Session 1 + Session 2)
+
+### Files Created
+| File | Description |
+|------|-------------|
+| HBM2 Memory Controller (header + cpp) | ~1800 lines |
+| HBM3 Memory Controller (header + cpp) | ~1800 lines |
+| HBM2 Pattern Infrastructure (18 files) | ~3000 lines |
+| HBM3 Pattern Infrastructure (18 files) | ~3000 lines |
+| HBM2/HBM3 Swimlane Visualizations | ~800 lines each |
+
+### Files Modified
+| File | Change |
+|------|--------|
+| `include/sw/kpu/fidelity/simulation_fidelity.hpp` | Added HBM2, HBM2E enum |
+| `include/sw/trace/trace_entry.hpp` | Added HBM component types |
+| `src/components/memory/memory_controller_factory.cpp` | Wire up HBM controllers |
+| `src/components/memory/CMakeLists.txt` | Add HBM source files |
+| `patterns/CMakeLists.txt` | Add HBM pattern targets |
+| `traces/scripts/generate_all_traces.sh` | Add missing LPDDR5/GDDR6 patterns |
+| `patterns/memory/lpddr5/bandwidth/page_burst.cpp` | Fix queue depth and assertions |
+| `docs/analysis/memory-characterization.md` | HBM documentation |
+
 ## Next Steps
 
 1. Add HBM2E and HBM3E variants with higher data rates
-2. Create trace directories for HBM visualization
-3. Consider adding trace validators for HBM (like LPDDR5)
-4. Calibration data collection for multi-fidelity models
+2. Consider adding trace validators for HBM (like LPDDR5)
+3. Calibration data collection for multi-fidelity models
+4. Test collapsible swimlane visualizations with actual trace data

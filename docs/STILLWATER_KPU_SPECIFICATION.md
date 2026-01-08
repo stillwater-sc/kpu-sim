@@ -29,10 +29,10 @@ This architecture is particularly suited for real-time signal processing and con
                               PCIe Interface
                                     │
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│                         STILLWATER KPU                                      │
+│                             STILLWATER KPU                                  │
 │  ┌───────────────────────────────────────────────────────────────────────┐  │
 │  │                         EXTERNAL MEMORY                               │  │
-│  │                   (DDR4 / GDDR6 / HBM2/3/4)                           │  │
+│  │                (DDR5 / LPDDR5/6 / GDDR6 / HBM2/3/4)                   │  │
 │  │                        Technology Agnostic                            │  │
 │  └───────────────────────────────────────────────────────────────────────┘  │
 │                                    │                                        │
