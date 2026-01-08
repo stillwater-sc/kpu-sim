@@ -58,6 +58,22 @@ enum class ComponentType : uint8_t {
     GDDR6_DATA_BUS = 25,        // GDDR6 data bus (DQ)
     GDDR6_CMD_BUS = 26,         // GDDR6 command/address bus (CA)
 
+    // HBM2 Memory Controller components
+    HBM2_BANK = 30,             // Individual HBM2 bank (16 banks per pseudo-channel)
+    HBM2_BANK_GROUP = 31,       // HBM2 bank group (4 groups per pseudo-channel)
+    HBM2_PSEUDO_CHANNEL = 32,   // HBM2 pseudo-channel (2 per channel)
+    HBM2_CHANNEL = 33,          // HBM2 channel (8 channels per stack)
+    HBM2_DATA_BUS = 34,         // HBM2 data bus (64-bit per pseudo-channel)
+    HBM2_CMD_BUS = 35,          // HBM2 command/address bus
+
+    // HBM3 Memory Controller components
+    HBM3_BANK = 40,             // Individual HBM3 bank (16-32 banks per pseudo-channel)
+    HBM3_BANK_GROUP = 41,       // HBM3 bank group (4-8 groups per pseudo-channel)
+    HBM3_PSEUDO_CHANNEL = 42,   // HBM3 pseudo-channel (2 per channel)
+    HBM3_CHANNEL = 43,          // HBM3 channel (16 channels per stack)
+    HBM3_DATA_BUS = 44,         // HBM3 data bus (32-bit per pseudo-channel)
+    HBM3_CMD_BUS = 45,          // HBM3 command/address bus
+
     // KPU compute components
     COMPUTE_FABRIC = 10,       // Compute orchestrator
     SYSTOLIC_ARRAY = 11,       // Systolic array compute engine

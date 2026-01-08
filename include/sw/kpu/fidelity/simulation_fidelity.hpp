@@ -94,6 +94,12 @@ enum class MemoryTechnology : uint8_t {
     /// JEDEC DDR5 (servers, workstations)
     DDR5,
 
+    /// JEDEC HBM2 (high-bandwidth memory gen 2)
+    HBM2,
+
+    /// JEDEC HBM2E (high-bandwidth memory gen 2 enhanced)
+    HBM2E,
+
     /// JEDEC HBM3 (datacenter AI accelerators)
     HBM3,
 
@@ -113,6 +119,8 @@ constexpr std::string_view to_string(MemoryTechnology tech) {
         case MemoryTechnology::LPDDR5:  return "LPDDR5";
         case MemoryTechnology::LPDDR5X: return "LPDDR5X";
         case MemoryTechnology::DDR5:    return "DDR5";
+        case MemoryTechnology::HBM2:    return "HBM2";
+        case MemoryTechnology::HBM2E:   return "HBM2E";
         case MemoryTechnology::HBM3:    return "HBM3";
         case MemoryTechnology::HBM3E:   return "HBM3E";
         case MemoryTechnology::GDDR6:   return "GDDR6";
@@ -128,6 +136,17 @@ constexpr bool is_low_power(MemoryTechnology tech) {
 
 /// Check if technology is high-bandwidth memory
 constexpr bool is_hbm(MemoryTechnology tech) {
+    return tech == MemoryTechnology::HBM2 || tech == MemoryTechnology::HBM2E ||
+           tech == MemoryTechnology::HBM3 || tech == MemoryTechnology::HBM3E;
+}
+
+/// Check if technology is HBM2 variant
+constexpr bool is_hbm2(MemoryTechnology tech) {
+    return tech == MemoryTechnology::HBM2 || tech == MemoryTechnology::HBM2E;
+}
+
+/// Check if technology is HBM3 variant
+constexpr bool is_hbm3(MemoryTechnology tech) {
     return tech == MemoryTechnology::HBM3 || tech == MemoryTechnology::HBM3E;
 }
 

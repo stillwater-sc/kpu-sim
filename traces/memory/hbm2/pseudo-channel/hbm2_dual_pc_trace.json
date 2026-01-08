@@ -1,0 +1,15 @@
+[
+  {"name": "process_name", "ph": "M", "pid": 99, "args": {"name": "99-HBM2_BANK"}},
+  {"name": "thread_name", "ph": "M", "pid": 99, "tid": 0, "args": {"name": "HBM2_BANK #0"}},
+  {"name": "thread_name", "ph": "M", "pid": 99, "tid": 1, "args": {"name": "HBM2_BANK #1"}},
+  {"name": "ACTIVATE", "cat": "HBM2_BANK", "ph": "X", "ts": 42000.000, "dur": 12000.000, "pid": 99, "tid": 0, "args": {"txn_id": 1,"status": "COMPLETED","cycle_issue": 42,"cycle_complete": 54,"payload": "NoPayload","desc": "ACTIVATE ch=0 pc=0 bank=0"}},
+  {"name": "ACTIVATE", "cat": "HBM2_BANK", "ph": "X", "ts": 42000.000, "dur": 12000.000, "pid": 99, "tid": 1, "args": {"txn_id": 2,"status": "COMPLETED","cycle_issue": 42,"cycle_complete": 54,"payload": "NoPayload","desc": "ACTIVATE ch=0 pc=1 bank=0"}},
+  {"name": "BURST_READ", "cat": "HBM2_BANK", "ph": "X", "ts": 54000.000, "dur": 20000.000, "pid": 99, "tid": 0, "args": {"txn_id": 1,"status": "COMPLETED","cycle_issue": 54,"cycle_complete": 74,"payload": "NoPayload","desc": "READ ch=0 pc=0 bank=0"}},
+  {"name": "BURST_READ", "cat": "HBM2_BANK", "ph": "X", "ts": 54000.000, "dur": 20000.000, "pid": 99, "tid": 1, "args": {"txn_id": 2,"status": "COMPLETED","cycle_issue": 54,"cycle_complete": 74,"payload": "NoPayload","desc": "READ ch=0 pc=1 bank=0"}},
+  {"name": "BURST_READ", "cat": "HBM2_BANK", "ph": "X", "ts": 74000.000, "dur": 20000.000, "pid": 99, "tid": 0, "args": {"txn_id": 3,"status": "COMPLETED","cycle_issue": 74,"cycle_complete": 94,"payload": "NoPayload","desc": "READ ch=0 pc=0 bank=0"}},
+  {"name": "BURST_READ", "cat": "HBM2_BANK", "ph": "X", "ts": 74000.000, "dur": 20000.000, "pid": 99, "tid": 1, "args": {"txn_id": 4,"status": "COMPLETED","cycle_issue": 74,"cycle_complete": 94,"payload": "NoPayload","desc": "READ ch=0 pc=1 bank=0"}},
+  {"name": "BURST_READ", "cat": "HBM2_BANK", "ph": "X", "ts": 94000.000, "dur": 20000.000, "pid": 99, "tid": 0, "args": {"txn_id": 5,"status": "COMPLETED","cycle_issue": 94,"cycle_complete": 114,"payload": "NoPayload","desc": "READ ch=0 pc=0 bank=0"}},
+  {"name": "BURST_READ", "cat": "HBM2_BANK", "ph": "X", "ts": 94000.000, "dur": 20000.000, "pid": 99, "tid": 1, "args": {"txn_id": 6,"status": "COMPLETED","cycle_issue": 94,"cycle_complete": 114,"payload": "NoPayload","desc": "READ ch=0 pc=1 bank=0"}},
+  {"name": "BURST_READ", "cat": "HBM2_BANK", "ph": "X", "ts": 114000.000, "dur": 20000.000, "pid": 99, "tid": 0, "args": {"txn_id": 7,"status": "COMPLETED","cycle_issue": 114,"cycle_complete": 134,"payload": "NoPayload","desc": "READ ch=0 pc=0 bank=0"}},
+  {"name": "BURST_READ", "cat": "HBM2_BANK", "ph": "X", "ts": 114000.000, "dur": 20000.000, "pid": 99, "tid": 1, "args": {"txn_id": 8,"status": "COMPLETED","cycle_issue": 114,"cycle_complete": 134,"payload": "NoPayload","desc": "READ ch=0 pc=1 bank=0"}}
+]

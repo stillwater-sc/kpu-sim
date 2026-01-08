@@ -18,6 +18,8 @@ set(MEMORY_COMPONENT_SOURCES
     memory_controller.cpp
     lpddr5_memory_controller.cpp
     gddr6_memory_controller.cpp
+    hbm2_memory_controller.cpp
+    hbm3_memory_controller.cpp
     # Multi-fidelity memory controller framework
     behavioral_memory_controller.cpp
     transactional_memory_controller.cpp

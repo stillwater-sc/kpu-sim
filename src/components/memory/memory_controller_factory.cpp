@@ -7,6 +7,9 @@
 #include <sw/kpu/components/memory/behavioral_memory_controller.hpp>
 #include <sw/kpu/components/memory/transactional_memory_controller.hpp>
 #include <sw/kpu/components/lpddr5_memory_controller.hpp>
+#include <sw/kpu/components/gddr6_memory_controller.hpp>
+#include <sw/kpu/components/hbm2_memory_controller.hpp>
+#include <sw/kpu/components/hbm3_memory_controller.hpp>
 #include <stdexcept>
 #include <sstream>
 
@@ -40,17 +43,21 @@ std::unique_ptr<IMemoryController> create_memory_controller(
                     // For now, fall back to LPDDR5 with DDR5-like timing
                     return std::make_unique<lpddr5::LPDDR5MemoryController>(config);
 
+                case MemoryTechnology::HBM2:
+                case MemoryTechnology::HBM2E:
+                    return std::make_unique<hbm2::HBM2MemoryController>(config);
+
                 case MemoryTechnology::HBM3:
                 case MemoryTechnology::HBM3E:
-                    // TODO: Implement HBM3MemoryController
-                    // For now, fall back to LPDDR5 with HBM-like timing
-                    return std::make_unique<lpddr5::LPDDR5MemoryController>(config);
+                    return std::make_unique<hbm3::HBM3MemoryController>(config);
 
                 case MemoryTechnology::GDDR6:
+                    return std::make_unique<gddr6::GDDR6MemoryController>(config);
+
                 case MemoryTechnology::GDDR7:
-                    // TODO: Implement GDDRMemoryController
-                    // For now, fall back to LPDDR5 with GDDR-like timing
-                    return std::make_unique<lpddr5::LPDDR5MemoryController>(config);
+                    // TODO: Implement GDDR7MemoryController
+                    // For now, fall back to GDDR6 with GDDR7-like timing
+                    return std::make_unique<gddr6::GDDR6MemoryController>(config);
 
                 default: {
                     std::ostringstream oss;
@@ -172,9 +179,30 @@ MemoryTimingParams MemoryControllerConfig::get_default_timing(
             timing.tFAW = 32;
             break;
 
+        case MemoryTechnology::HBM2:
+        case MemoryTechnology::HBM2E:
+            // HBM2 typical timing @ 2 Gbps (1 GHz CK)
+            timing.tRCD = 12;
+            timing.tRP = 14;
+            timing.tRAS = 28;
+            timing.tRC = 42;
+            timing.tCL = 18;
+            timing.tWL = 7;
+            timing.tWR = 16;
+            timing.tRTP = 6;
+            timing.tRRD_L = 4;
+            timing.tRRD_S = 3;
+            timing.tCCD_L = 4;
+            timing.tCCD_S = 2;
+            timing.tWTR_L = 8;
+            timing.tWTR_S = 4;
+            timing.tRTW = 10;
+            timing.tFAW = 16;
+            break;
+
         case MemoryTechnology::HBM3:
         case MemoryTechnology::HBM3E:
-            // HBM3 typical timing (very low latency due to close integration)
+            // HBM3 typical timing @ 5.6 Gbps (2.8 GHz CK)
             timing.tRCD = 8;
             timing.tRP = 8;
             timing.tRAS = 16;
@@ -188,7 +216,7 @@ MemoryTimingParams MemoryControllerConfig::get_default_timing(
             timing.tCCD_L = 4;
             timing.tCCD_S = 2;
             timing.tWTR_L = 6;
-            timing.tWTR_S = 2;
+            timing.tWTR_S = 3;
             timing.tRTW = 8;
             timing.tFAW = 16;
             break;

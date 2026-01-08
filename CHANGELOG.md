@@ -7,6 +7,55 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added - 2026-01-08
+- **HBM2 Memory Controller** (`include/sw/kpu/components/hbm2_memory_controller.hpp`, `src/components/memory/hbm2_memory_controller.cpp`)
+  - Cycle-accurate HBM2-2000 memory controller (256 GB/s peak bandwidth)
+  - 8 channels, 2 pseudo-channels per channel, 16 banks per PC (256 total banks)
+  - Full timing parameter support (tRCD=12, tCL=18, tRP=14, tRAS=28, tRC=42, etc.)
+  - Bank group timing (tRRD_L, tRRD_S, tCCD_L, tCCD_S, tFAW)
+  - Chrome Trace export for Perfetto visualization
+  - Semantic invariant checking aligned with LPDDR5/GDDR6 patterns
+
+- **HBM3 Memory Controller** (`include/sw/kpu/components/hbm3_memory_controller.hpp`, `src/components/memory/hbm3_memory_controller.cpp`)
+  - Cycle-accurate HBM3-5600 memory controller (716.8 GB/s peak bandwidth)
+  - 16 channels, 2 pseudo-channels per channel, 16 banks per PC (512 total banks)
+  - Full timing parameter support (tRCD=8, tCL=8, tRP=8, tRAS=16, tRC=24, etc.)
+  - Bank group timing and per-bank refresh support
+  - Chrome Trace export for Perfetto visualization
+
+- **HBM2 Pattern Test Suite** (`patterns/memory/hbm2/`)
+  - 9 pattern tests covering single-bank, two-bank, pseudo-channel, multi-channel, and bandwidth scenarios
+  - Common infrastructure: `hbm2_harness.hpp`, `hbm2_configs.hpp`
+  - Patterns: page_hits, page_conflicts, mixed_rw, same_group, diff_groups, dual_pc, four_channel, eight_channel, max_bandwidth
+
+- **HBM3 Pattern Test Suite** (`patterns/memory/hbm3/`)
+  - 9 pattern tests mirroring HBM2 suite
+  - Common infrastructure: `hbm3_harness.hpp`, `hbm3_configs.hpp`
+  - Patterns: page_hits, page_conflicts, mixed_rw, same_group, diff_groups, dual_pc, eight_channel, sixteen_channel, max_bandwidth
+
+- **HBM Memory Characterization** (`docs/analysis/memory-characterization.md`)
+  - Technology Summary table with LPDDR5, GDDR6, HBM2, HBM3
+  - HBM2-2000 full characterization (timing, latency, bandwidth)
+  - HBM3-5600 full characterization (timing, latency, bandwidth)
+  - HBM Evolution: HBM2 to HBM3 to HBM4 comparison
+  - LPDDR5 vs HBM2, HBM2 vs HBM3, All Technologies comparisons
+  - Technology Selection Guide and Design Recommendations
+
+### Changed - 2026-01-08
+- **Memory Technology Enum** (`include/sw/kpu/fidelity/simulation_fidelity.hpp`)
+  - Added `HBM2`, `HBM2E` to `MemoryTechnology` enum
+  - Updated `to_string()` and `is_hbm()` helper functions
+
+- **Trace Component Types** (`include/sw/trace/trace_entry.hpp`)
+  - Added HBM2 component types (HBM2_BANK, HBM2_PSEUDO_CHANNEL, etc.)
+  - Added HBM3 component types (HBM3_BANK, HBM3_PSEUDO_CHANNEL, etc.)
+
+### Fixed - 2026-01-08
+- **HBM Invariant Checking** (`hbm2_memory_controller.cpp`, `hbm3_memory_controller.cpp`)
+  - Changed from generic "state_until in past" checks to semantic invariant checking
+  - Aligned with LPDDR5/GDDR6 approach checking tRCD, tRAS, tWR, tRTP violations
+  - READING/WRITING states use `burst_end` not `state_until` for timing
+
 ### Fixed - 2026-01-07
 - **GDDR6/LPDDR5 Multi-DMA Trace Generation** (`patterns/memory/{gddr6,lpddr5}/complex/multi_dma.cpp`)
   - Fixed bug where trace export only showed 8 of 16 GDDR6 banks (and 4 of 8 LPDDR5 banks)
@@ -554,6 +603,8 @@ See `docs/sessions/2025-11-23_schedule_generator_pipelining.md` for detailed rec
 
 ### Session Logs
 Detailed session logs are maintained in `docs/sessions/` directory:
+- `2026-01-08_hbm2_hbm3_memory_controllers.md` - HBM2/HBM3 memory controller implementation and pattern test suites
+- `2026-01-07_gddr6_trace_and_bandwidth_metrics.md` - GDDR6 trace fix and memory characterization documentation
 - `2025-12-29_block_systolic_matmul_simulation.md` - Block systolic matmul bug fixes and FLIT-level tracking
 - `2025-12-25_benchmarking_and_efficiency_analysis.md` - Benchmark infrastructure and efficiency bug fix
 - `2025-11-26_dfx_compiler_implementation.md` - DFX layer and kernel compiler implementation

@@ -1,0 +1,13 @@
+[
+  {"name": "process_name", "ph": "M", "pid": 99, "args": {"name": "99-HBM3_BANK"}},
+  {"name": "thread_name", "ph": "M", "pid": 99, "tid": 0, "args": {"name": "HBM3_BANK #0"}},
+  {"name": "ACTIVATE", "cat": "HBM3_BANK", "ph": "X", "ts": 8571.429, "dur": 2857.143, "pid": 99, "tid": 0, "args": {"txn_id": 1,"status": "COMPLETED","cycle_issue": 24,"cycle_complete": 32,"payload": "NoPayload","desc": "ACTIVATE ch=0 pc=0 bank=0"}},
+  {"name": "BURST_READ", "cat": "HBM3_BANK", "ph": "X", "ts": 11428.571, "dur": 4285.714, "pid": 99, "tid": 0, "args": {"txn_id": 1,"status": "COMPLETED","cycle_issue": 32,"cycle_complete": 44,"payload": "NoPayload","desc": "READ ch=0 pc=0 bank=0"}},
+  {"name": "BURST_READ", "cat": "HBM3_BANK", "ph": "X", "ts": 15714.286, "dur": 4285.714, "pid": 99, "tid": 0, "args": {"txn_id": 2,"status": "COMPLETED","cycle_issue": 44,"cycle_complete": 56,"payload": "NoPayload","desc": "READ ch=0 pc=0 bank=0"}},
+  {"name": "BURST_READ", "cat": "HBM3_BANK", "ph": "X", "ts": 20000.000, "dur": 4285.714, "pid": 99, "tid": 0, "args": {"txn_id": 3,"status": "COMPLETED","cycle_issue": 56,"cycle_complete": 68,"payload": "NoPayload","desc": "READ ch=0 pc=0 bank=0"}},
+  {"name": "BURST_READ", "cat": "HBM3_BANK", "ph": "X", "ts": 24285.714, "dur": 4285.714, "pid": 99, "tid": 0, "args": {"txn_id": 4,"status": "COMPLETED","cycle_issue": 68,"cycle_complete": 80,"payload": "NoPayload","desc": "READ ch=0 pc=0 bank=0"}},
+  {"name": "BURST_READ", "cat": "HBM3_BANK", "ph": "X", "ts": 28571.429, "dur": 4285.714, "pid": 99, "tid": 0, "args": {"txn_id": 5,"status": "COMPLETED","cycle_issue": 80,"cycle_complete": 92,"payload": "NoPayload","desc": "READ ch=0 pc=0 bank=0"}},
+  {"name": "BURST_READ", "cat": "HBM3_BANK", "ph": "X", "ts": 32857.143, "dur": 4285.714, "pid": 99, "tid": 0, "args": {"txn_id": 6,"status": "COMPLETED","cycle_issue": 92,"cycle_complete": 104,"payload": "NoPayload","desc": "READ ch=0 pc=0 bank=0"}},
+  {"name": "BURST_READ", "cat": "HBM3_BANK", "ph": "X", "ts": 37142.857, "dur": 4285.714, "pid": 99, "tid": 0, "args": {"txn_id": 7,"status": "COMPLETED","cycle_issue": 104,"cycle_complete": 116,"payload": "NoPayload","desc": "READ ch=0 pc=0 bank=0"}},
+  {"name": "BURST_READ", "cat": "HBM3_BANK", "ph": "X", "ts": 41428.571, "dur": 4285.714, "pid": 99, "tid": 0, "args": {"txn_id": 8,"status": "COMPLETED","cycle_issue": 116,"cycle_complete": 128,"payload": "NoPayload","desc": "READ ch=0 pc=0 bank=0"}}
+]

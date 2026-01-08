@@ -25,6 +25,18 @@ const char* to_string(ComponentType type) {
         case ComponentType::GDDR6_CHANNEL: return "GDDR6_CHANNEL";
         case ComponentType::GDDR6_DATA_BUS: return "GDDR6_DATA_BUS";
         case ComponentType::GDDR6_CMD_BUS: return "GDDR6_CMD_BUS";
+        case ComponentType::HBM2_BANK: return "HBM2_BANK";
+        case ComponentType::HBM2_BANK_GROUP: return "HBM2_BANK_GROUP";
+        case ComponentType::HBM2_PSEUDO_CHANNEL: return "HBM2_PSEUDO_CHANNEL";
+        case ComponentType::HBM2_CHANNEL: return "HBM2_CHANNEL";
+        case ComponentType::HBM2_DATA_BUS: return "HBM2_DATA_BUS";
+        case ComponentType::HBM2_CMD_BUS: return "HBM2_CMD_BUS";
+        case ComponentType::HBM3_BANK: return "HBM3_BANK";
+        case ComponentType::HBM3_BANK_GROUP: return "HBM3_BANK_GROUP";
+        case ComponentType::HBM3_PSEUDO_CHANNEL: return "HBM3_PSEUDO_CHANNEL";
+        case ComponentType::HBM3_CHANNEL: return "HBM3_CHANNEL";
+        case ComponentType::HBM3_DATA_BUS: return "HBM3_DATA_BUS";
+        case ComponentType::HBM3_CMD_BUS: return "HBM3_CMD_BUS";
         case ComponentType::COMPUTE_FABRIC: return "COMPUTE_FABRIC";
         case ComponentType::SYSTOLIC_ARRAY: return "SYSTOLIC_ARRAY";
         case ComponentType::STORAGE_SCHEDULER: return "STORAGE_SCHEDULER";

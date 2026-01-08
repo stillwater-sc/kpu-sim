@@ -190,6 +190,134 @@ add_gddr6_pattern(max_bandwidth        bandwidth/max_bandwidth.cpp        "Level
 add_gddr6_pattern(page_burst           bandwidth/page_burst.cpp           "Level 7 - Bandwidth")
 
 # ============================================================================
+# HBM2 Memory Patterns
+# ============================================================================
+
+# HBM2-specific common headers
+add_library(hbm2_pattern_common INTERFACE)
+target_include_directories(hbm2_pattern_common INTERFACE
+    ${CMAKE_CURRENT_SOURCE_DIR}/memory/hbm2/common
+    ${PROJECT_SOURCE_DIR}/include
+)
+set_target_properties(hbm2_pattern_common PROPERTIES FOLDER "Patterns/Memory/HBM2/Common")
+
+# Helper function to add HBM2 pattern
+# Usage: add_hbm2_pattern(NAME SOURCE_FILE FOLDER_LEVEL)
+function(add_hbm2_pattern NAME SOURCE_FILE FOLDER_LEVEL)
+    add_executable(hbm2_${NAME}
+        ${CMAKE_CURRENT_SOURCE_DIR}/memory/hbm2/${SOURCE_FILE}
+    )
+    target_link_libraries(hbm2_${NAME} PRIVATE
+        pattern_common
+        hbm2_pattern_common
+        kpu_memory_components
+        kpu_trace
+    )
+    set_target_properties(hbm2_${NAME} PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/patterns/memory/hbm2
+        FOLDER "Patterns/Memory/HBM2/${FOLDER_LEVEL}"
+    )
+endfunction()
+
+# -----------------------------------------------------------------------------
+# Level 1: Single Bank Patterns
+# -----------------------------------------------------------------------------
+
+add_hbm2_pattern(page_hits      single-bank/hbm2_page_hits.cpp      "Level 1 - Single Bank")
+add_hbm2_pattern(page_conflicts single-bank/hbm2_page_conflicts.cpp "Level 1 - Single Bank")
+add_hbm2_pattern(mixed_rw       single-bank/hbm2_mixed_rw.cpp       "Level 1 - Single Bank")
+
+# -----------------------------------------------------------------------------
+# Level 2: Two Bank Patterns
+# -----------------------------------------------------------------------------
+
+add_hbm2_pattern(same_group  two-bank/hbm2_same_group.cpp  "Level 2 - Two Bank")
+add_hbm2_pattern(diff_groups two-bank/hbm2_diff_groups.cpp "Level 2 - Two Bank")
+
+# -----------------------------------------------------------------------------
+# Level 3: Pseudo-Channel Patterns
+# -----------------------------------------------------------------------------
+
+add_hbm2_pattern(dual_pc pseudo-channel/hbm2_dual_pc.cpp "Level 3 - Pseudo Channel")
+
+# -----------------------------------------------------------------------------
+# Level 4: Multi-Channel Patterns
+# -----------------------------------------------------------------------------
+
+add_hbm2_pattern(four_channel  multi-channel/hbm2_four_channel.cpp  "Level 4 - Multi Channel")
+add_hbm2_pattern(eight_channel multi-channel/hbm2_eight_channel.cpp "Level 4 - Multi Channel")
+
+# -----------------------------------------------------------------------------
+# Level 5: Bandwidth Patterns
+# -----------------------------------------------------------------------------
+
+add_hbm2_pattern(max_bandwidth bandwidth/hbm2_max_bandwidth.cpp "Level 5 - Bandwidth")
+
+# ============================================================================
+# HBM3 Memory Patterns
+# ============================================================================
+
+# HBM3-specific common headers
+add_library(hbm3_pattern_common INTERFACE)
+target_include_directories(hbm3_pattern_common INTERFACE
+    ${CMAKE_CURRENT_SOURCE_DIR}/memory/hbm3/common
+    ${PROJECT_SOURCE_DIR}/include
+)
+set_target_properties(hbm3_pattern_common PROPERTIES FOLDER "Patterns/Memory/HBM3/Common")
+
+# Helper function to add HBM3 pattern
+# Usage: add_hbm3_pattern(NAME SOURCE_FILE FOLDER_LEVEL)
+function(add_hbm3_pattern NAME SOURCE_FILE FOLDER_LEVEL)
+    add_executable(hbm3_${NAME}
+        ${CMAKE_CURRENT_SOURCE_DIR}/memory/hbm3/${SOURCE_FILE}
+    )
+    target_link_libraries(hbm3_${NAME} PRIVATE
+        pattern_common
+        hbm3_pattern_common
+        kpu_memory_components
+        kpu_trace
+    )
+    set_target_properties(hbm3_${NAME} PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/patterns/memory/hbm3
+        FOLDER "Patterns/Memory/HBM3/${FOLDER_LEVEL}"
+    )
+endfunction()
+
+# -----------------------------------------------------------------------------
+# Level 1: Single Bank Patterns
+# -----------------------------------------------------------------------------
+
+add_hbm3_pattern(page_hits      single-bank/hbm3_page_hits.cpp      "Level 1 - Single Bank")
+add_hbm3_pattern(page_conflicts single-bank/hbm3_page_conflicts.cpp "Level 1 - Single Bank")
+add_hbm3_pattern(mixed_rw       single-bank/hbm3_mixed_rw.cpp       "Level 1 - Single Bank")
+
+# -----------------------------------------------------------------------------
+# Level 2: Two Bank Patterns
+# -----------------------------------------------------------------------------
+
+add_hbm3_pattern(same_group  two-bank/hbm3_same_group.cpp  "Level 2 - Two Bank")
+add_hbm3_pattern(diff_groups two-bank/hbm3_diff_groups.cpp "Level 2 - Two Bank")
+
+# -----------------------------------------------------------------------------
+# Level 3: Pseudo-Channel Patterns
+# -----------------------------------------------------------------------------
+
+add_hbm3_pattern(dual_pc pseudo-channel/hbm3_dual_pc.cpp "Level 3 - Pseudo Channel")
+
+# -----------------------------------------------------------------------------
+# Level 4: Multi-Channel Patterns
+# -----------------------------------------------------------------------------
+
+add_hbm3_pattern(eight_channel   multi-channel/hbm3_eight_channel.cpp   "Level 4 - Multi Channel")
+add_hbm3_pattern(sixteen_channel multi-channel/hbm3_sixteen_channel.cpp "Level 4 - Multi Channel")
+
+# -----------------------------------------------------------------------------
+# Level 5: Bandwidth Patterns
+# -----------------------------------------------------------------------------
+
+add_hbm3_pattern(max_bandwidth bandwidth/hbm3_max_bandwidth.cpp "Level 5 - Bandwidth")
+
+# ============================================================================
 # NoC Patterns (TODO)
 # ============================================================================
 
