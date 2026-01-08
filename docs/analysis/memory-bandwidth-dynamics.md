@@ -31,3 +31,39 @@ Generated traces:
   - traces/memory/gddr6/bandwidth/eight_bank_bandwidth_trace.json
   - traces/memory/gddr6/bandwidth/max_bandwidth_trace.json
 
+Created two documentation files:
+
+  1. docs/memory-characterization.md
+
+A comprehensive latency and bandwidth characterization document with:
+
+  LPDDR5-6400 Section:
+  - Timing parameters (tRCD=14, tCL=16, tRP=14, etc.)
+  - Latency characterization (page hit: ~243 cycles, page conflict: ~305 cycles)
+  - Bandwidth scaling (1-8 banks: 2.20-2.80 bytes/cycle)
+  - STREAM benchmark results (Copy: 19.04, Triad: 26.67 bytes/cycle)
+  - Multi-DMA performance (4-16 engines: 44.73-89.47 bytes/cycle)
+
+  GDDR6-16000 Section:
+  - Timing parameters (tRCDRD=18, tRL=20, tRP=18, etc.)
+  - Latency characterization (page hit: ~172 cycles, page conflict: ~298 cycles)
+  - Bandwidth scaling (1-16 banks: 1.59-2.56 bytes/cycle)
+  - STREAM benchmark results (Copy: 38.24, Triad: 59.08 bytes/cycle)
+  - Multi-DMA performance (4-32 engines: 40.93-81.87 bytes/cycle)
+
+  Comparative Analysis:
+  - GDDR6 provides 2x STREAM bandwidth advantage
+  - LPDDR5 has lower page miss latency
+  - Pattern category descriptions (Levels 1-7)
+
+  2. traces/README.md (Updated)
+
+  - Complete directory structure showing both LPDDR5 and GDDR6 trace locations
+  - Memory technology specifications
+  - Quick start commands for both memory types
+  - Pattern category descriptions (single-bank through bandwidth)
+  - Visualization tool reference table
+  - CLI tool usage examples
+  - Chrome Trace Format documentation
+  - Cross-references to characterization document
+

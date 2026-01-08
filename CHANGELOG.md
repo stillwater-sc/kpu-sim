@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed - 2026-01-07
+- **GDDR6/LPDDR5 Multi-DMA Trace Generation** (`patterns/memory/{gddr6,lpddr5}/complex/multi_dma.cpp`)
+  - Fixed bug where trace export only showed 8 of 16 GDDR6 banks (and 4 of 8 LPDDR5 banks)
+  - Root cause: Queue depth (64) was smaller than total requests (128) submitted before simulation
+  - Increased queue depth to 256 for trace export sections
+  - **Result**: GDDR6 trace now shows all 16 banks (144 events, was 72); LPDDR5 shows all 8 banks (136 events)
+
+### Added - 2026-01-07
+- **Memory Characterization Documentation** (`docs/memory-characterization.md`)
+  - Comprehensive latency and bandwidth analysis for LPDDR5-6400 and GDDR6-16000
+  - Timing parameter tables (tRCD, tCL, tRP, tRAS, tRC, etc.)
+  - Latency characterization: page hit, page empty, page conflict scenarios
+  - Bandwidth scaling analysis (1-16 banks)
+  - STREAM benchmark results (Copy, Scale, Add, Triad)
+  - Multi-DMA performance (4-32 concurrent engines)
+  - Comparative analysis between LPDDR5 and GDDR6
+  - Pattern category descriptions (Levels 1-7)
+
+- **Updated Trace Directory Documentation** (`traces/README.md`)
+  - Complete directory structure for both LPDDR5 and GDDR6 traces
+  - Memory technology specifications and quick start commands
+  - Pattern category descriptions with trace file listings
+  - Visualization tool reference table
+  - Chrome Trace Format documentation
+
 ### Changed - 2026-01-06
 - **SystolicArray Template Refactoring** (`include/sw/kpu/components/systolic_array.hpp`)
   - Converted `SystolicArray` from a non-templated class to `template<typename Scalar> class SystolicArray`
