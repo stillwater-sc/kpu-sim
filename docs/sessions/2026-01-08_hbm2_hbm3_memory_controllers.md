@@ -303,9 +303,128 @@ function getDQRange(channel, pc) {
 | `patterns/memory/lpddr5/bandwidth/page_burst.cpp` | Fix queue depth and assertions |
 | `docs/analysis/memory-characterization.md` | HBM documentation |
 
+## Session 3: Swimlane Visualization Bug Fixes
+
+### Bugs Reported
+
+User testing of the HBM2/HBM3 swimlane visualizations revealed several issues:
+
+1. **Max bandwidth reported as 327.7 GB/s** - impossible value (HBM2 peak is 256 GB/s)
+2. **Max bandwidth period selection shows wrong period** - showed beginning of trace (lowest bandwidth) instead of actual max
+3. **Min/Max latency not highlighting the transaction** - clicking didn't select the associated request
+4. **Horizontal panning broken** - lane labels scrolled away instead of staying fixed
+5. **CA Bus missing activity indicators** - Data Bus showed aggregated activity when collapsed, CA Bus didn't
+6. **Playback cursor misaligned after zooming** - cursor didn't track cycle count after zoom
+7. **Can't reset to 100% zoom** - multiplying/dividing by 1.5 never reaches exactly 100%
+
+### Root Cause Analysis
+
+**1. Bandwidth Double-Counting**
+Each data transfer creates TWO trace events: `databus-X-Y` and `globalbus-X-Y`. The utilization calculation used Sets for deduplication, but bandwidth calculation counted both:
+```javascript
+// Bug: counted databus-0-0 AND globalbus-0-0 as separate transfers
+const dataBusEvents = events.filter(e => e.type === 'data-rd' || e.type === 'data-wr');
+```
+
+**Fix:** Filter to only `databus-*` events:
+```javascript
+const dataBusEvents = events.filter(e =>
+    (e.type === 'data-rd' || e.type === 'data-wr') &&
+    e.lane && e.lane.startsWith('databus-')
+);
+```
+
+**2. Latency Highlight Not Working (HBM2 only)**
+The `selectRequest()` function expected an ID string, but code passed the full request object:
+```javascript
+// Bug: passed object instead of ID
+selectRequest(minLatencyRequest);
+// Fix:
+selectRequest(minLatencyRequest.id);
+```
+
+**3. Panning Broken**
+Period overlays had `position: absolute` and `z-index: 40`, which was higher than lane labels' `z-index: 5`. The overlays covered the lane labels and intercepted scroll events.
+
+**Fix:** Replaced overlays with CSS class-based dimming:
+```css
+.event.period-dimmed {
+    opacity: 0.25;
+}
+```
+
+**4. CA Bus Activity Indicators**
+The aggregated activity logic only handled Data Bus group headers:
+```javascript
+if (lane.isDataBusGroupHeader) {
+    relevantEvents = events.filter(e => e.lane && e.lane.startsWith('databus-'));
+}
+```
+
+**Fix:** Added CA Bus case:
+```javascript
+} else if (lane.isCABusGroupHeader) {
+    relevantEvents = events.filter(e => e.lane && e.lane.startsWith('cabus-'));
+}
+```
+
+**5. Playback Cursor Offset**
+CSS already had `margin-left: 200px` for lane-label width, but JavaScript ALSO added 200:
+```javascript
+// Bug: double offset
+const left = 200 + currentCycle * pixelsPerCycle;
+```
+
+**Fix:**
+```javascript
+// CSS handles margin, just set left based on cycle
+const left = currentCycle * pixelsPerCycle;
+```
+
+**6. Zoom Reset Impossible**
+Using `* 1.5` and `/ 1.5` produces sequences like:
+- 100% → 150% → 225% → 337.5%
+- 100% → 66.7% → 44.4% → 29.6%
+Never returns to exactly 100%.
+
+**Fix:** Preset zoom levels with discrete stepping:
+```javascript
+const ZOOM_LEVELS = [0.25, 0.5, 0.75, 1.0, 1.5, 2.0, 3.0, 4.0];
+
+function zoomIn() {
+    const nextIndex = ZOOM_LEVELS.findIndex(z => z > zoomLevel);
+    if (nextIndex !== -1) setZoom(ZOOM_LEVELS[nextIndex]);
+}
+
+function resetZoom() {
+    setZoom(1.0);
+}
+```
+
+Added:
+- Keyboard shortcut '0' resets to 100%
+- Clicking zoom level display resets to 100%
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `traces/memory/hbm2/tools/swimlane.html` | All 7 bug fixes |
+| `traces/memory/hbm3/tools/swimlane.html` | All 7 bug fixes |
+
+### Validation
+
+All fixes applied consistently to both HBM2 and HBM3 swimlane visualizations:
+- Bandwidth now correctly reports ~244 GB/s at 95% utilization (vs impossible 327 GB/s)
+- Min/Max latency clicks highlight the correct transaction
+- Lane labels stay fixed during horizontal scrolling
+- CA Bus shows activity indicators when collapsed
+- Playback cursor aligns with cycle count at all zoom levels
+- Zoom preset levels allow returning to exactly 100%
+
 ## Next Steps
 
 1. Add HBM2E and HBM3E variants with higher data rates
 2. Consider adding trace validators for HBM (like LPDDR5)
 3. Calibration data collection for multi-fidelity models
-4. Test collapsible swimlane visualizations with actual trace data
+4. Apply similar visualization improvements to LPDDR5/GDDR6 swimlanes if needed

@@ -61,6 +61,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - HBM3: 16 channels × 2 PCs × 32-bit = 1024-bit I/O bus
 
 ### Fixed - 2026-01-08
+- **HBM Swimlane Visualization Bugs** (`traces/memory/hbm2/tools/swimlane.html`, `traces/memory/hbm3/tools/swimlane.html`)
+  - Fixed bandwidth calculation double-counting from `databus-*` and `globalbus-*` events
+  - Fixed min/max latency not highlighting associated transaction (passed object instead of ID)
+  - Fixed horizontal panning broken by period overlay `z-index` above sticky lane labels
+  - Added CA Bus activity indicators when collapsed (matching Data Bus behavior)
+  - Fixed playback cursor misaligned after zooming (duplicate 200px offset in CSS + JS)
+  - Added preset zoom levels [0.25, 0.5, 0.75, 1.0, 1.5, 2.0, 3.0, 4.0] with reset to 100%
+  - Added keyboard shortcut '0' to reset zoom; clickable zoom level display for reset
+
 - **HBM Invariant Checking** (`hbm2_memory_controller.cpp`, `hbm3_memory_controller.cpp`)
   - Changed from generic "state_until in past" checks to semantic invariant checking
   - Aligned with LPDDR5/GDDR6 approach checking tRCD, tRAS, tWR, tRTP violations
