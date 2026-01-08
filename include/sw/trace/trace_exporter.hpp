@@ -166,6 +166,11 @@ private:
             case ComponentType::LPDDR5_CHANNEL:     return 18; // LPDDR5 channels
             case ComponentType::LPDDR5_DATA_BUS:    return 19; // LPDDR5 data bus
             case ComponentType::LPDDR5_CMD_BUS:     return 20; // LPDDR5 command bus
+            case ComponentType::GDDR6_BANK:         return 22; // GDDR6 banks
+            case ComponentType::GDDR6_BANK_GROUP:   return 23; // GDDR6 bank groups
+            case ComponentType::GDDR6_CHANNEL:      return 24; // GDDR6 channels
+            case ComponentType::GDDR6_DATA_BUS:     return 25; // GDDR6 data bus
+            case ComponentType::GDDR6_CMD_BUS:      return 26; // GDDR6 command bus
             case ComponentType::STORAGE_SCHEDULER:  return 30; // System services
             case ComponentType::MEMORY_ORCHESTRATOR: return 21;
             default: return 99;  // Unknown/other components
@@ -319,6 +324,11 @@ private:
             case ComponentType::LPDDR5_CHANNEL:  return "LPDDR5 Channel";
             case ComponentType::LPDDR5_DATA_BUS: return "LPDDR5 Data Bus";
             case ComponentType::LPDDR5_CMD_BUS:  return "LPDDR5 Cmd Bus";
+            case ComponentType::GDDR6_BANK:      return "GDDR6 Bank";
+            case ComponentType::GDDR6_BANK_GROUP: return "GDDR6 Bank Group";
+            case ComponentType::GDDR6_CHANNEL:   return "GDDR6 Channel";
+            case ComponentType::GDDR6_DATA_BUS:  return "GDDR6 Data Bus";
+            case ComponentType::GDDR6_CMD_BUS:   return "GDDR6 Cmd Bus";
             default: return to_string(type);
         }
     }
@@ -335,6 +345,11 @@ private:
             case ComponentType::LPDDR5_CHANNEL:  return 18;
             case ComponentType::LPDDR5_DATA_BUS: return 19;
             case ComponentType::LPDDR5_CMD_BUS:  return 20;
+            case ComponentType::GDDR6_BANK:      return 22;
+            case ComponentType::GDDR6_BANK_GROUP: return 23;
+            case ComponentType::GDDR6_CHANNEL:   return 24;
+            case ComponentType::GDDR6_DATA_BUS:  return 25;
+            case ComponentType::GDDR6_CMD_BUS:   return 26;
             default: return 50;
         }
     }

@@ -51,6 +51,13 @@ enum class ComponentType : uint8_t {
     LPDDR5_DATA_BUS = 16,       // LPDDR5 data bus
     LPDDR5_CMD_BUS = 17,        // LPDDR5 command bus
 
+    // GDDR6 Memory Controller components
+    GDDR6_BANK = 22,            // Individual GDDR6 bank (16 banks total)
+    GDDR6_BANK_GROUP = 23,      // GDDR6 bank group (4 groups, 4 banks each)
+    GDDR6_CHANNEL = 24,         // GDDR6 channel (dual 16-bit channels)
+    GDDR6_DATA_BUS = 25,        // GDDR6 data bus (DQ)
+    GDDR6_CMD_BUS = 26,         // GDDR6 command/address bus (CA)
+
     // KPU compute components
     COMPUTE_FABRIC = 10,       // Compute orchestrator
     SYSTOLIC_ARRAY = 11,       // Systolic array compute engine

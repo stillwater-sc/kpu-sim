@@ -20,6 +20,11 @@ const char* to_string(ComponentType type) {
         case ComponentType::LPDDR5_CHANNEL: return "LPDDR5_CHANNEL";
         case ComponentType::LPDDR5_DATA_BUS: return "LPDDR5_DATA_BUS";
         case ComponentType::LPDDR5_CMD_BUS: return "LPDDR5_CMD_BUS";
+        case ComponentType::GDDR6_BANK: return "GDDR6_BANK";
+        case ComponentType::GDDR6_BANK_GROUP: return "GDDR6_BANK_GROUP";
+        case ComponentType::GDDR6_CHANNEL: return "GDDR6_CHANNEL";
+        case ComponentType::GDDR6_DATA_BUS: return "GDDR6_DATA_BUS";
+        case ComponentType::GDDR6_CMD_BUS: return "GDDR6_CMD_BUS";
         case ComponentType::COMPUTE_FABRIC: return "COMPUTE_FABRIC";
         case ComponentType::SYSTOLIC_ARRAY: return "SYSTOLIC_ARRAY";
         case ComponentType::STORAGE_SCHEDULER: return "STORAGE_SCHEDULER";

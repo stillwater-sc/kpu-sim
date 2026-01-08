@@ -1086,7 +1086,7 @@ void GDDR6MemoryController::trace_bank_state_change(
     if (!tracing_enabled_) return;
 
     if (resource_tracker_) {
-        // Use KPU_MEMORY which is labeled as GDDR6
+        // Use GDDR6_BANK for proper trace categorization
         uint32_t bank_id = channel * 16 + bank;
 
         sw::trace::ResourceState rs;
@@ -1110,7 +1110,7 @@ void GDDR6MemoryController::trace_bank_state_change(
         }
 
         resource_tracker_->transition(
-            sw::trace::ComponentType::KPU_MEMORY,
+            sw::trace::ComponentType::GDDR6_BANK,
             bank_id,
             rs,
             current_cycle_,
@@ -1126,10 +1126,10 @@ void GDDR6MemoryController::trace_bus_state_change(
     if (!tracing_enabled_) return;
 
     if (resource_tracker_) {
-        // Use generic component types for buses
+        // Use GDDR6-specific bus types
         sw::trace::ComponentType bus_type = is_data_bus ?
-            sw::trace::ComponentType::KPU_MEMORY :
-            sw::trace::ComponentType::KPU_MEMORY;
+            sw::trace::ComponentType::GDDR6_DATA_BUS :
+            sw::trace::ComponentType::GDDR6_CMD_BUS;
 
         sw::trace::ResourceState rs = (state == "IDLE") ?
             sw::trace::ResourceState::IDLE :
@@ -1175,7 +1175,7 @@ void GDDR6MemoryController::trace_command(
 
     sw::trace::TraceEntry entry(
         current_cycle_,
-        sw::trace::ComponentType::KPU_MEMORY,
+        sw::trace::ComponentType::GDDR6_BANK,
         bank_id,
         trans_type,
         request_id
@@ -1186,7 +1186,7 @@ void GDDR6MemoryController::trace_command(
 
     // Add memory payload
     sw::trace::MemoryPayload payload;
-    payload.location = sw::trace::MemoryLocation(0, 0, bank_id, sw::trace::ComponentType::KPU_MEMORY);
+    payload.location = sw::trace::MemoryLocation(0, 0, bank_id, sw::trace::ComponentType::GDDR6_BANK);
     payload.latency_cycles = static_cast<uint32_t>(duration);
     entry.payload = payload;
 

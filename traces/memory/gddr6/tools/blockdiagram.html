@@ -1,0 +1,1468 @@
+<!DOCTYPE html>
+<!--
+  GDDR6 Memory Subsystem - Block Diagram Animation (v1 - Dual Channel Architecture)
+
+  Animated visualization showing request tokens flowing through:
+  - MPFE (Multi-Port Front-End): Request Queue, Response Buffer, Write Buffer
+  - Memory Controller: Arbiter, Cmd/Write/Read Queues, Transaction Processing, Look-Ahead Opt
+  - GDDR6 PHY: Data Slices (x2 channels), WCK Clock, I/O Calibration
+  - GDDR6 Device: 16 Banks in 4 Bank Groups, Row/Col Decoders, Sense Amps
+  - CA Bus (Command/Address) and DQ Bus (Data) as key resources
+
+  GDDR6 Architecture Features:
+  - 16 banks organized in 4 bank groups (BG0-BG3, 4 banks each)
+  - Dual 16-bit channels (32-bit total data width)
+  - 16n prefetch with BL16 burst length
+  - WCK (Write Clock) for data timing
+
+  SPDX-License-Identifier: MIT
+  Copyright (c) 2024-2026 Stillwater Supercomputing, Inc.
+-->
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>GDDR6 Memory Subsystem - Block Diagram</title>
+    <style>
+        :root {
+            --bg: #0f172a;
+            --panel: #1e293b;
+            --border: #334155;
+            --text: #e2e8f0;
+            --text-dim: #94a3b8;
+            --accent: #06b6d4;
+            --read: #22c55e;
+            --write: #a855f7;
+            --activate: #f59e0b;
+            --idle: #475569;
+            --active: #10b981;
+            --mpfe: #0ea5e9;
+            --mc: #8b5cf6;
+            --phy: #06b6d4;
+            --device: #f97316;
+            /* Bank group colors */
+            --bg0: #3b82f6;
+            --bg1: #22c55e;
+            --bg2: #f59e0b;
+            --bg3: #ef4444;
+        }
+
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            min-height: 100vh;
+            overflow: hidden;
+        }
+
+        .header {
+            background: var(--panel);
+            border-bottom: 1px solid var(--border);
+            padding: 10px 20px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+
+        .header h1 { font-size: 14px; font-weight: 600; }
+
+        .controls {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        button {
+            background: var(--border);
+            color: var(--text);
+            border: none;
+            padding: 6px 14px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 12px;
+        }
+
+        button:hover { background: #475569; }
+        button.active { background: var(--accent); }
+        button:disabled { opacity: 0.5; cursor: not-allowed; }
+
+        .cycle-display {
+            font-family: 'SF Mono', monospace;
+            font-size: 13px;
+            background: var(--panel);
+            padding: 6px 12px;
+            border-radius: 4px;
+            border: 1px solid var(--border);
+        }
+
+        .main-container {
+            display: flex;
+            height: calc(100vh - 50px);
+        }
+
+        .diagram-area {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            padding: 10px 20px;
+            overflow: hidden;
+        }
+
+        #diagram {
+            width: 100%;
+            flex: 1;
+            min-height: 0;
+        }
+
+        /* Component styling */
+        .component { cursor: pointer; transition: filter 0.2s; }
+        .component:hover { filter: brightness(1.2); }
+
+        .component-box {
+            fill: var(--panel);
+            stroke: var(--border);
+            stroke-width: 2;
+            rx: 6;
+        }
+
+        .component-box.mpfe { stroke: var(--mpfe); }
+        .component-box.mc { stroke: var(--mc); }
+        .component-box.phy { stroke: var(--phy); }
+        .component-box.device { stroke: var(--device); }
+
+        .component-box.active { stroke-width: 3; }
+        .component-box.highlighted {
+            stroke-width: 3;
+            filter: drop-shadow(0 0 8px rgba(6, 182, 212, 0.5));
+        }
+
+        .component-label {
+            fill: var(--text);
+            font-size: 11px;
+            font-weight: 600;
+            text-anchor: middle;
+        }
+
+        .component-sublabel {
+            fill: var(--text-dim);
+            font-size: 9px;
+            text-anchor: middle;
+        }
+
+        /* Sub-block styling */
+        .sub-block {
+            fill: #334155;
+            stroke: #475569;
+            stroke-width: 1;
+            rx: 3;
+        }
+
+        .sub-block-label {
+            fill: #94a3b8;
+            font-size: 8px;
+            text-anchor: middle;
+        }
+
+        /* Bank styling - smaller for 16 banks */
+        .bank-box {
+            fill: var(--idle);
+            stroke: #64748b;
+            stroke-width: 1.5;
+            rx: 3;
+            transition: fill 0.2s, stroke 0.2s;
+        }
+
+        .bank-box.idle { fill: var(--idle); stroke: #64748b; }
+        .bank-box.activating { fill: #b45309; stroke: var(--activate); }
+        .bank-box.active { fill: #047857; stroke: var(--active); }
+        .bank-box.reading { fill: #1d4ed8; stroke: var(--read); }
+        .bank-box.writing { fill: #7c3aed; stroke: var(--write); }
+
+        /* Bank group border colors */
+        .bank-box.bg0 { stroke: var(--bg0); }
+        .bank-box.bg1 { stroke: var(--bg1); }
+        .bank-box.bg2 { stroke: var(--bg2); }
+        .bank-box.bg3 { stroke: var(--bg3); }
+
+        .bank-label { fill: white; font-size: 7px; font-weight: 600; text-anchor: middle; }
+        .bank-state-text { fill: rgba(255,255,255,0.7); font-size: 5px; text-anchor: middle; }
+
+        /* FIFO slot styling */
+        .fifo-slot { fill: #334155; stroke: #475569; stroke-width: 1; rx: 2; }
+        .fifo-slot.occupied { fill: #1e3a5f; stroke: var(--accent); }
+        .fifo-slot-label { fill: var(--text-dim); font-size: 7px; text-anchor: middle; font-weight: 600; }
+        .fifo-slot-label.active { fill: var(--text); }
+
+        /* Response buffer slot styling */
+        .response-slot { fill: #334155; stroke: #475569; stroke-width: 1; rx: 2; }
+        .response-slot.reserved { fill: #4c1d95; stroke: #7c3aed; stroke-dasharray: 2,2; }
+        .response-slot.filled { fill: #065f46; stroke: var(--active); }
+        .response-tag { fill: var(--text-dim); font-size: 6px; text-anchor: middle; }
+
+        /* Write buffer slot styling */
+        .write-slot { fill: #334155; stroke: #475569; stroke-width: 1; rx: 2; }
+        .write-slot.pending { fill: #581c87; stroke: var(--write); }
+        .write-slot.retiring { fill: #7c3aed; stroke: var(--write); stroke-dasharray: 2,2; }
+
+        /* Connection paths */
+        .connection { fill: none; stroke: var(--border); stroke-width: 2; }
+        .connection.ca { stroke: var(--activate); stroke-width: 3; }
+        .connection.dq { stroke: var(--accent); stroke-width: 4; }
+        .connection-arrow { fill: var(--border); }
+
+        /* Bus segments - tubular with hollow interior */
+        .bus-segment { fill: none; stroke-width: 2; stroke-linecap: round; }
+        .bus-segment.idle { stroke: var(--idle); }
+        .bus-segment.ca-active { stroke: var(--activate); fill: rgba(245, 158, 11, 0.2); }
+        .bus-segment.dq-read { stroke: var(--read); fill: rgba(34, 197, 94, 0.2); }
+        .bus-segment.dq-write { stroke: var(--write); fill: rgba(168, 85, 247, 0.2); }
+
+        /* Dual channel indicators */
+        .channel-label { fill: var(--accent); font-size: 7px; font-weight: 600; text-anchor: middle; }
+
+        /* Request tokens */
+        .token { transition: transform 0.15s ease-out; }
+        .token-body { stroke-width: 2; }
+        .token-body.read { fill: var(--read); stroke: #16a34a; }
+        .token-body.write { fill: var(--write); stroke: #9333ea; }
+        .token-label { fill: white; font-size: 7px; font-weight: bold; text-anchor: middle; }
+
+        /* Data burst animation */
+        @keyframes pulse { 0%, 100% { opacity: 0.6; } 50% { opacity: 1; } }
+        .bus-active { animation: pulse 0.3s ease-in-out infinite; }
+
+        /* Stage labels */
+        .stage-label { fill: #64748b; font-size: 9px; text-anchor: middle; }
+        .block-title { fill: var(--text); font-size: 10px; font-weight: 600; text-anchor: middle; }
+        .block-title.mpfe { fill: var(--mpfe); }
+        .block-title.mc { fill: var(--mc); }
+        .block-title.phy { fill: var(--phy); }
+        .block-title.device { fill: var(--device); }
+
+        /* Sidebar */
+        .sidebar {
+            width: 260px;
+            background: var(--panel);
+            border-left: 1px solid var(--border);
+            padding: 15px;
+            overflow-y: auto;
+        }
+
+        .sidebar h2 {
+            font-size: 11px;
+            font-weight: 600;
+            color: var(--text-dim);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin-bottom: 10px;
+        }
+
+        .info-section { margin-bottom: 20px; }
+
+        .stat-row {
+            display: flex;
+            justify-content: space-between;
+            padding: 5px 0;
+            font-size: 11px;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .stat-label { color: var(--text-dim); }
+        .stat-value { font-family: 'SF Mono', monospace; }
+
+        .activity-log {
+            background: var(--bg);
+            border-radius: 4px;
+            padding: 10px;
+            font-family: 'SF Mono', monospace;
+            font-size: 9px;
+            max-height: 150px;
+            overflow-y: auto;
+        }
+
+        .log-entry { padding: 2px 0; border-bottom: 1px solid var(--border); }
+        .log-cycle { color: var(--accent); }
+        .log-action { color: var(--text); }
+
+        .legend { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+        .legend-item { display: flex; align-items: center; gap: 5px; font-size: 9px; }
+        .legend-color { width: 12px; height: 12px; border-radius: 2px; }
+
+        .no-data {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            text-align: center;
+            color: var(--text-dim);
+        }
+        .no-data-icon { font-size: 48px; margin-bottom: 15px; }
+
+        /* Debug panel */
+        .debug-panel {
+            background: #1a1a2e;
+            border: 1px solid #334155;
+            border-radius: 4px;
+            padding: 8px;
+            margin-top: 10px;
+            font-family: 'SF Mono', monospace;
+            font-size: 8px;
+            max-height: 100px;
+            overflow-y: auto;
+        }
+        .debug-title { color: #06b6d4; margin-bottom: 4px; }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>GDDR6 Memory Subsystem - Block Diagram</h1>
+        <div class="controls">
+            <input type="file" id="fileInput" accept=".json" style="font-size: 12px;">
+            <button id="btnReset" disabled>Reset</button>
+            <button id="btnStep" disabled>Step</button>
+            <button id="btnPlay" disabled>Play</button>
+            <input type="range" id="speedSlider" min="50" max="500" value="200" style="width: 80px;">
+            <div class="cycle-display">Cycle: <span id="currentCycle">0</span> / <span id="maxCycle">0</span></div>
+        </div>
+    </div>
+
+    <div class="main-container">
+        <div class="diagram-area">
+            <div class="no-data" id="noData">
+                <div class="no-data-icon">&#128295;</div>
+                <div>Load a GDDR6 trace JSON file to animate</div>
+            </div>
+
+            <svg id="diagram" viewBox="0 0 940 420" preserveAspectRatio="xMidYMid meet" style="display: none;">
+                <defs>
+                    <marker id="arrowhead" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+                        <polygon points="0 0, 8 3, 0 6" fill="#64748b"/>
+                    </marker>
+                    <marker id="arrowhead-ca" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+                        <polygon points="0 0, 8 3, 0 6" fill="#f59e0b"/>
+                    </marker>
+                    <marker id="arrowhead-dq" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+                        <polygon points="0 0, 8 3, 0 6" fill="#06b6d4"/>
+                    </marker>
+                    <marker id="arrowhead-dq-left" markerWidth="8" markerHeight="6" refX="1" refY="3" orient="auto">
+                        <polygon points="8 0, 0 3, 8 6" fill="#06b6d4"/>
+                    </marker>
+                    <marker id="arrowhead-read" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+                        <polygon points="0 0, 8 3, 0 6" fill="#22c55e"/>
+                    </marker>
+                    <linearGradient id="ca-gradient" x1="0%" y1="0%" x2="100%" y2="0%">
+                        <stop offset="0%" style="stop-color:#f59e0b;stop-opacity:0.3"/>
+                        <stop offset="50%" style="stop-color:#f59e0b;stop-opacity:1"/>
+                        <stop offset="100%" style="stop-color:#f59e0b;stop-opacity:0.3"/>
+                    </linearGradient>
+                    <linearGradient id="dq-gradient" x1="0%" y1="0%" x2="100%" y2="0%">
+                        <stop offset="0%" style="stop-color:#06b6d4;stop-opacity:0.3"/>
+                        <stop offset="50%" style="stop-color:#06b6d4;stop-opacity:1"/>
+                        <stop offset="100%" style="stop-color:#06b6d4;stop-opacity:0.3"/>
+                    </linearGradient>
+                </defs>
+
+                <!-- Title -->
+                <text x="470" y="22" text-anchor="middle" fill="#e2e8f0" font-size="13" font-weight="600">
+                    GDDR6 Memory Subsystem Architecture (16 Banks, 4 Bank Groups)
+                </text>
+
+                <!-- ==================== INPUT STREAM ==================== -->
+                <g id="input-stream">
+                    <text x="15" y="170" fill="#64748b" font-size="8">Bus Masters</text>
+                    <path class="connection" d="M 10 190 L 35 190" marker-end="url(#arrowhead)"/>
+                </g>
+
+                <!-- ==================== MPFE (Multi-Port Front-End) ==================== -->
+                <g class="component" id="comp-mpfe">
+                    <rect class="component-box mpfe" x="40" y="55" width="130" height="280"/>
+                    <text class="block-title mpfe" x="105" y="72">MPFE</text>
+                    <text class="component-sublabel" x="105" y="84">Multi-Port Front-End</text>
+
+                    <!-- Request Queue (FIFO) -->
+                    <rect class="sub-block" x="50" y="95" width="110" height="65"/>
+                    <text class="sub-block-label" x="105" y="108">Request Queue</text>
+                    <text x="105" y="118" fill="#64748b" font-size="7" text-anchor="middle">(FIFO)</text>
+                    <g id="req-queue-slots">
+                        <g id="req-slot-0"><rect class="fifo-slot" x="55" y="123" width="48" height="14"/><text class="fifo-slot-label" x="79" y="133" id="req-label-0">-</text></g>
+                        <g id="req-slot-1"><rect class="fifo-slot" x="55" y="139" width="48" height="14"/><text class="fifo-slot-label" x="79" y="149" id="req-label-1">-</text></g>
+                        <g id="req-slot-2"><rect class="fifo-slot" x="107" y="123" width="48" height="14"/><text class="fifo-slot-label" x="131" y="133" id="req-label-2">-</text></g>
+                        <g id="req-slot-3"><rect class="fifo-slot" x="107" y="139" width="48" height="14"/><text class="fifo-slot-label" x="131" y="149" id="req-label-3">-</text></g>
+                    </g>
+
+                    <!-- Read Response Buffer (Out-of-Order) -->
+                    <rect class="sub-block" x="50" y="168" width="110" height="60"/>
+                    <text class="sub-block-label" x="105" y="181">Read Response Buffer</text>
+                    <text x="105" y="191" fill="#64748b" font-size="7" text-anchor="middle">(Out-of-Order)</text>
+                    <g id="response-slots">
+                        <g id="resp-slot-0"><rect class="response-slot" x="55" y="197" width="24" height="22"/><text class="response-tag" x="67" y="211" id="resp-tag-0">-</text></g>
+                        <g id="resp-slot-1"><rect class="response-slot" x="82" y="197" width="24" height="22"/><text class="response-tag" x="94" y="211" id="resp-tag-1">-</text></g>
+                        <g id="resp-slot-2"><rect class="response-slot" x="109" y="197" width="24" height="22"/><text class="response-tag" x="121" y="211" id="resp-tag-2">-</text></g>
+                        <g id="resp-slot-3"><rect class="response-slot" x="136" y="197" width="24" height="22"/><text class="response-tag" x="148" y="211" id="resp-tag-3">-</text></g>
+                    </g>
+
+                    <!-- Write Buffer -->
+                    <rect class="sub-block" x="50" y="235" width="110" height="50"/>
+                    <text class="sub-block-label" x="105" y="248">Write Buffer</text>
+                    <g id="write-slots">
+                        <g id="write-slot-0"><rect class="write-slot" x="55" y="255" width="32" height="20"/><text class="response-tag" x="71" y="268" id="write-tag-0">-</text></g>
+                        <g id="write-slot-1"><rect class="write-slot" x="91" y="255" width="32" height="20"/><text class="response-tag" x="107" y="268" id="write-tag-1">-</text></g>
+                        <g id="write-slot-2"><rect class="write-slot" x="127" y="255" width="32" height="20"/><text class="response-tag" x="143" y="268" id="write-tag-2">-</text></g>
+                    </g>
+
+                    <!-- Channel indicator -->
+                    <rect class="sub-block" x="50" y="295" width="110" height="30"/>
+                    <text class="sub-block-label" x="105" y="314">Dual Channel (32-bit)</text>
+                </g>
+
+                <!-- Connection: MPFE to MC -->
+                <path class="connection" d="M 170 190 L 195 190" marker-end="url(#arrowhead)"/>
+
+                <!-- ==================== DFI INTERFACE (MC to PHY) ==================== -->
+                <g id="dfi-interface">
+                    <path class="connection" d="M 400 130 L 423 130" marker-end="url(#arrowhead)"/>
+                    <path class="connection" d="M 400 200 L 423 200" marker-end="url(#arrowhead)"/>
+                    <text x="412" y="168" fill="#475569" font-size="7" text-anchor="middle">DFI</text>
+                </g>
+
+                <!-- ==================== MEMORY CONTROLLER ==================== -->
+                <g class="component" id="comp-mc">
+                    <rect class="component-box mc" x="200" y="55" width="200" height="280"/>
+                    <text class="block-title mc" x="300" y="72">Memory Controller</text>
+
+                    <!-- Multiport Arbiter (left side) -->
+                    <rect class="sub-block" x="210" y="85" width="40" height="80"/>
+                    <text x="230" y="115" fill="#94a3b8" font-size="7" text-anchor="middle">Arb</text>
+                    <text x="230" y="125" fill="#94a3b8" font-size="7" text-anchor="middle">iter</text>
+
+                    <!-- Command Queue -->
+                    <rect class="sub-block" x="258" y="85" width="55" height="25"/>
+                    <text x="285" y="101" fill="#94a3b8" font-size="7" text-anchor="middle">Cmd Queue</text>
+
+                    <!-- Write Queue -->
+                    <rect class="sub-block" x="258" y="115" width="55" height="25"/>
+                    <text x="285" y="131" fill="#94a3b8" font-size="7" text-anchor="middle">Write Queue</text>
+
+                    <!-- Read Queue -->
+                    <rect class="sub-block" x="258" y="145" width="55" height="25"/>
+                    <text x="285" y="161" fill="#94a3b8" font-size="7" text-anchor="middle">Read Queue</text>
+
+                    <!-- Transaction Processing -->
+                    <rect class="sub-block" x="320" y="85" width="70" height="55"/>
+                    <text x="355" y="108" fill="#94a3b8" font-size="7" text-anchor="middle">Transaction</text>
+                    <text x="355" y="118" fill="#94a3b8" font-size="7" text-anchor="middle">Processing</text>
+
+                    <!-- Look-Ahead Optimization -->
+                    <rect class="sub-block" x="320" y="145" width="70" height="55"/>
+                    <text x="355" y="168" fill="#94a3b8" font-size="7" text-anchor="middle">Look-Ahead</text>
+                    <text x="355" y="178" fill="#94a3b8" font-size="7" text-anchor="middle">Optimization</text>
+
+                    <!-- Bank Group Scheduler -->
+                    <rect class="sub-block" x="210" y="175" width="180" height="25"/>
+                    <text x="300" y="191" fill="#94a3b8" font-size="7" text-anchor="middle">Bank Group Scheduler (BG0-BG3)</text>
+
+                    <!-- Config/ECC row -->
+                    <rect class="sub-block" x="210" y="210" width="55" height="25"/>
+                    <text x="237" y="226" fill="#94a3b8" font-size="7" text-anchor="middle">Config Regs</text>
+
+                    <rect class="sub-block" x="270" y="210" width="35" height="25"/>
+                    <text x="287" y="226" fill="#94a3b8" font-size="7" text-anchor="middle">ECC</text>
+
+                    <!-- BIST/Low Power -->
+                    <rect class="sub-block" x="310" y="210" width="35" height="25"/>
+                    <text x="327" y="226" fill="#94a3b8" font-size="7" text-anchor="middle">BIST</text>
+
+                    <rect class="sub-block" x="350" y="210" width="40" height="25"/>
+                    <text x="370" y="226" fill="#94a3b8" font-size="7" text-anchor="middle">LowPwr</text>
+
+                    <!-- Refresh controller -->
+                    <rect class="sub-block" x="210" y="240" width="180" height="20"/>
+                    <text x="300" y="254" fill="#94a3b8" font-size="7" text-anchor="middle">Refresh Controller | Bank State Tracker</text>
+
+                    <!-- Scheduler -->
+                    <rect class="sub-block" x="210" y="265" width="180" height="20" id="scheduler-block"/>
+                    <text x="300" y="279" fill="#94a3b8" font-size="7" text-anchor="middle" id="scheduler-text">Scheduler (FR-FCFS)</text>
+
+                    <!-- Channel Arbiter -->
+                    <rect class="sub-block" x="210" y="290" width="180" height="20"/>
+                    <text x="300" y="304" fill="#94a3b8" font-size="7" text-anchor="middle">Dual Channel Arbiter (Ch A/B)</text>
+                </g>
+
+                <!-- ==================== GDDR6 PHY ==================== -->
+                <g class="component" id="comp-phy">
+                    <rect class="component-box phy" x="428" y="55" width="100" height="280"/>
+                    <text class="block-title phy" x="478" y="72">GDDR6 PHY</text>
+
+                    <!-- CA Slice -->
+                    <rect class="sub-block" x="438" y="90" width="80" height="30"/>
+                    <text x="478" y="109" fill="#94a3b8" font-size="8" text-anchor="middle">CA Slice</text>
+
+                    <!-- Data Slices (Dual Channel) -->
+                    <rect class="sub-block" x="438" y="128" width="38" height="50"/>
+                    <text x="457" y="145" fill="#94a3b8" font-size="7" text-anchor="middle">Data</text>
+                    <text x="457" y="155" fill="#94a3b8" font-size="7" text-anchor="middle">Slice A</text>
+                    <text x="457" y="168" fill="#06b6d4" font-size="6" text-anchor="middle">16-bit</text>
+
+                    <rect class="sub-block" x="480" y="128" width="38" height="50"/>
+                    <text x="499" y="145" fill="#94a3b8" font-size="7" text-anchor="middle">Data</text>
+                    <text x="499" y="155" fill="#94a3b8" font-size="7" text-anchor="middle">Slice B</text>
+                    <text x="499" y="168" fill="#06b6d4" font-size="6" text-anchor="middle">16-bit</text>
+
+                    <!-- WCK Clock (GDDR6 specific) -->
+                    <rect class="sub-block" x="438" y="185" width="38" height="35"/>
+                    <text x="457" y="200" fill="#94a3b8" font-size="7" text-anchor="middle">WCK</text>
+                    <text x="457" y="210" fill="#94a3b8" font-size="7" text-anchor="middle">Clock</text>
+
+                    <!-- I/O Calibration -->
+                    <rect class="sub-block" x="480" y="185" width="38" height="35"/>
+                    <text x="499" y="200" fill="#94a3b8" font-size="7" text-anchor="middle">I/O</text>
+                    <text x="499" y="210" fill="#94a3b8" font-size="7" text-anchor="middle">Calib</text>
+
+                    <!-- IO Pads -->
+                    <rect class="sub-block" x="438" y="228" width="80" height="25"/>
+                    <text x="478" y="244" fill="#94a3b8" font-size="8" text-anchor="middle">IO Pads</text>
+
+                    <!-- Training Engine -->
+                    <rect class="sub-block" x="438" y="260" width="80" height="25"/>
+                    <text x="478" y="276" fill="#94a3b8" font-size="7" text-anchor="middle">Training Engine</text>
+
+                    <!-- DBI/CRC -->
+                    <rect class="sub-block" x="438" y="292" width="80" height="25"/>
+                    <text x="478" y="308" fill="#94a3b8" font-size="7" text-anchor="middle">DBI/CRC</text>
+                </g>
+
+                <!-- ==================== CA BUS (PHY to Device) ==================== -->
+                <g id="ca-bus">
+                    <rect class="bus-segment idle" id="ca-bus-segment" x="528" y="101" width="63" height="8" rx="3"/>
+                    <path class="connection cmd" d="M 528 105 L 596 105" marker-end="url(#arrowhead-ca)"/>
+                    <text x="559" y="94" fill="#f59e0b" font-size="8" font-weight="600">CA</text>
+                </g>
+
+                <!-- ==================== DQ BUS (PHY to Device) - Dual Channel ==================== -->
+                <g id="dq-bus">
+                    <!-- Channel A -->
+                    <rect class="bus-segment idle" id="dq-bus-segment-a" x="528" y="287" width="72" height="6" rx="3"/>
+                    <polygon points="532,290 538,287 538,293" fill="#06b6d4"/>
+                    <polygon points="596,290 590,287 590,293" fill="#06b6d4"/>
+                    <text x="564" y="282" fill="#06b6d4" font-size="7" font-weight="600" text-anchor="middle">DQ-A</text>
+
+                    <!-- Channel B -->
+                    <rect class="bus-segment idle" id="dq-bus-segment-b" x="528" y="305" width="72" height="6" rx="3"/>
+                    <polygon points="532,308 538,305 538,311" fill="#06b6d4"/>
+                    <polygon points="596,308 590,305 590,311" fill="#06b6d4"/>
+                    <text x="564" y="320" fill="#06b6d4" font-size="7" font-weight="600" text-anchor="middle">DQ-B</text>
+
+                    <text x="564" y="335" fill="#64748b" font-size="6" text-anchor="middle" id="dq-direction">32-bit Bidirectional</text>
+                </g>
+
+                <!-- ==================== GDDR6 DEVICE (16 Banks, 4 Bank Groups) ==================== -->
+                <g class="component" id="comp-device">
+                    <rect class="component-box device" x="600" y="55" width="320" height="280" fill="none" stroke-dasharray="5,3"/>
+                    <text class="block-title device" x="760" y="72">GDDR6 Device (16 Banks)</text>
+
+                    <!-- Row Decoder -->
+                    <rect class="sub-block" x="610" y="90" width="30" height="140"/>
+                    <text x="625" y="155" fill="#94a3b8" font-size="7" text-anchor="middle" transform="rotate(-90, 625, 155)">Row Decoder</text>
+
+                    <!-- Bank Group 0 (Banks 0-3) -->
+                    <text x="680" y="88" fill="#3b82f6" font-size="7" text-anchor="middle" font-weight="600">BG0</text>
+                    <g class="bank" id="bank-0">
+                        <rect class="bank-box idle bg0" x="650" y="93" width="22" height="20"/>
+                        <text class="bank-label" x="661" y="105">B0</text>
+                        <text class="bank-state-text" x="661" y="111" id="bank-0-state">-</text>
+                    </g>
+                    <g class="bank" id="bank-1">
+                        <rect class="bank-box idle bg0" x="674" y="93" width="22" height="20"/>
+                        <text class="bank-label" x="685" y="105">B1</text>
+                        <text class="bank-state-text" x="685" y="111" id="bank-1-state">-</text>
+                    </g>
+                    <g class="bank" id="bank-2">
+                        <rect class="bank-box idle bg0" x="698" y="93" width="22" height="20"/>
+                        <text class="bank-label" x="709" y="105">B2</text>
+                        <text class="bank-state-text" x="709" y="111" id="bank-2-state">-</text>
+                    </g>
+                    <g class="bank" id="bank-3">
+                        <rect class="bank-box idle bg0" x="722" y="93" width="22" height="20"/>
+                        <text class="bank-label" x="733" y="105">B3</text>
+                        <text class="bank-state-text" x="733" y="111" id="bank-3-state">-</text>
+                    </g>
+
+                    <!-- Bank Group 1 (Banks 4-7) -->
+                    <text x="680" y="128" fill="#22c55e" font-size="7" text-anchor="middle" font-weight="600">BG1</text>
+                    <g class="bank" id="bank-4">
+                        <rect class="bank-box idle bg1" x="650" y="133" width="22" height="20"/>
+                        <text class="bank-label" x="661" y="145">B4</text>
+                        <text class="bank-state-text" x="661" y="151" id="bank-4-state">-</text>
+                    </g>
+                    <g class="bank" id="bank-5">
+                        <rect class="bank-box idle bg1" x="674" y="133" width="22" height="20"/>
+                        <text class="bank-label" x="685" y="145">B5</text>
+                        <text class="bank-state-text" x="685" y="151" id="bank-5-state">-</text>
+                    </g>
+                    <g class="bank" id="bank-6">
+                        <rect class="bank-box idle bg1" x="698" y="133" width="22" height="20"/>
+                        <text class="bank-label" x="709" y="145">B6</text>
+                        <text class="bank-state-text" x="709" y="151" id="bank-6-state">-</text>
+                    </g>
+                    <g class="bank" id="bank-7">
+                        <rect class="bank-box idle bg1" x="722" y="133" width="22" height="20"/>
+                        <text class="bank-label" x="733" y="145">B7</text>
+                        <text class="bank-state-text" x="733" y="151" id="bank-7-state">-</text>
+                    </g>
+
+                    <!-- Bank Group 2 (Banks 8-11) -->
+                    <text x="680" y="168" fill="#f59e0b" font-size="7" text-anchor="middle" font-weight="600">BG2</text>
+                    <g class="bank" id="bank-8">
+                        <rect class="bank-box idle bg2" x="650" y="173" width="22" height="20"/>
+                        <text class="bank-label" x="661" y="185">B8</text>
+                        <text class="bank-state-text" x="661" y="191" id="bank-8-state">-</text>
+                    </g>
+                    <g class="bank" id="bank-9">
+                        <rect class="bank-box idle bg2" x="674" y="173" width="22" height="20"/>
+                        <text class="bank-label" x="685" y="185">B9</text>
+                        <text class="bank-state-text" x="685" y="191" id="bank-9-state">-</text>
+                    </g>
+                    <g class="bank" id="bank-10">
+                        <rect class="bank-box idle bg2" x="698" y="173" width="22" height="20"/>
+                        <text class="bank-label" x="709" y="185">B10</text>
+                        <text class="bank-state-text" x="709" y="191" id="bank-10-state">-</text>
+                    </g>
+                    <g class="bank" id="bank-11">
+                        <rect class="bank-box idle bg2" x="722" y="173" width="22" height="20"/>
+                        <text class="bank-label" x="733" y="185">B11</text>
+                        <text class="bank-state-text" x="733" y="191" id="bank-11-state">-</text>
+                    </g>
+
+                    <!-- Bank Group 3 (Banks 12-15) -->
+                    <text x="680" y="208" fill="#ef4444" font-size="7" text-anchor="middle" font-weight="600">BG3</text>
+                    <g class="bank" id="bank-12">
+                        <rect class="bank-box idle bg3" x="650" y="213" width="22" height="20"/>
+                        <text class="bank-label" x="661" y="225">B12</text>
+                        <text class="bank-state-text" x="661" y="231" id="bank-12-state">-</text>
+                    </g>
+                    <g class="bank" id="bank-13">
+                        <rect class="bank-box idle bg3" x="674" y="213" width="22" height="20"/>
+                        <text class="bank-label" x="685" y="225">B13</text>
+                        <text class="bank-state-text" x="685" y="231" id="bank-13-state">-</text>
+                    </g>
+                    <g class="bank" id="bank-14">
+                        <rect class="bank-box idle bg3" x="698" y="213" width="22" height="20"/>
+                        <text class="bank-label" x="709" y="225">B14</text>
+                        <text class="bank-state-text" x="709" y="231" id="bank-14-state">-</text>
+                    </g>
+                    <g class="bank" id="bank-15">
+                        <rect class="bank-box idle bg3" x="722" y="213" width="22" height="20"/>
+                        <text class="bank-label" x="733" y="225">B15</text>
+                        <text class="bank-state-text" x="733" y="231" id="bank-15-state">-</text>
+                    </g>
+
+                    <!-- Sense Amps + Column Decoder -->
+                    <rect class="sub-block" x="752" y="90" width="35" height="145"/>
+                    <text x="769" y="155" fill="#94a3b8" font-size="6" text-anchor="middle" transform="rotate(90, 769, 155)">Sense Amps</text>
+                    <text x="780" y="180" fill="#64748b" font-size="5" text-anchor="middle" id="senseamp-status">-</text>
+
+                    <!-- Column Decoder -->
+                    <rect class="sub-block" x="795" y="90" width="30" height="145"/>
+                    <text x="810" y="155" fill="#94a3b8" font-size="6" text-anchor="middle" transform="rotate(90, 810, 155)">Col Dec</text>
+
+                    <!-- Prefetch Buffer (16n) -->
+                    <rect class="sub-block" x="835" y="90" width="75" height="35"/>
+                    <text x="872" y="110" fill="#94a3b8" font-size="7" text-anchor="middle">Prefetch Buffer</text>
+                    <text x="872" y="120" fill="#06b6d4" font-size="6" text-anchor="middle">(16n BL16)</text>
+
+                    <!-- Global I/O -->
+                    <rect class="sub-block" x="835" y="130" width="75" height="35"/>
+                    <text x="872" y="150" fill="#94a3b8" font-size="7" text-anchor="middle">Global I/O</text>
+
+                    <!-- DQ Drivers -->
+                    <rect class="sub-block" x="835" y="170" width="75" height="30"/>
+                    <text x="872" y="189" fill="#94a3b8" font-size="7" text-anchor="middle">DQ Drivers</text>
+
+                    <!-- DBI Logic -->
+                    <rect class="sub-block" x="835" y="205" width="75" height="30"/>
+                    <text x="872" y="224" fill="#94a3b8" font-size="7" text-anchor="middle">DBI Logic</text>
+
+                    <!-- Data I/O -->
+                    <rect class="sub-block" x="610" y="250" width="200" height="30"/>
+                    <text x="710" y="268" fill="#94a3b8" font-size="7" text-anchor="middle">Data I/O + WCK Receiver</text>
+
+                    <!-- Command Decoder -->
+                    <rect class="sub-block" x="610" y="285" width="200" height="25"/>
+                    <text x="710" y="301" fill="#94a3b8" font-size="7" text-anchor="middle">Command Decoder (CA Bus)</text>
+                </g>
+
+                <!-- Return path from MPFE Response Buffer to output -->
+                <g id="complete-path">
+                    <path class="connection" d="M 50 200 L 25 200 L 25 360 L 100 360" marker-end="url(#arrowhead)"/>
+                    <text x="80" y="375" fill="#64748b" font-size="8" text-anchor="middle">Complete</text>
+                </g>
+
+                <!-- ==================== TIMING ANNOTATIONS ==================== -->
+                <g id="timing-annotations">
+                    <text x="760" y="365" fill="#f59e0b" font-size="7" text-anchor="middle">tRCDRD=18 | tRCDWR=12 | tRP=18</text>
+                    <text x="760" y="377" fill="#06b6d4" font-size="7" text-anchor="middle">tRL=20 | tWL=8 | tBurst=4</text>
+                    <text x="760" y="389" fill="#22c55e" font-size="7" text-anchor="middle">tRRD_L=6 | tRRD_S=4 | tCCD_L=4 | tCCD_S=2</text>
+                </g>
+
+                <!-- ==================== STAGE FLOW LABELS ==================== -->
+                <g id="stage-flow">
+                    <text x="105" y="45" fill="#64748b" font-size="8" text-anchor="middle">1. Dispatch</text>
+                    <text x="300" y="45" fill="#64748b" font-size="8" text-anchor="middle">2. Schedule</text>
+                    <text x="478" y="45" fill="#64748b" font-size="8" text-anchor="middle">3. PHY</text>
+                    <text x="565" y="45" fill="#f59e0b" font-size="9" text-anchor="middle" font-weight="600">4. CA/DQ</text>
+                    <text x="760" y="45" fill="#64748b" font-size="8" text-anchor="middle">5. Bank Access</text>
+                </g>
+
+                <!-- ==================== TOKEN CONTAINER ==================== -->
+                <g id="tokens"></g>
+            </svg>
+        </div>
+
+        <div class="sidebar">
+            <div class="info-section">
+                <h2>Statistics</h2>
+                <div class="stat-row">
+                    <span class="stat-label">Total Requests</span>
+                    <span class="stat-value" id="statTotal">0</span>
+                </div>
+                <div class="stat-row">
+                    <span class="stat-label">Completed</span>
+                    <span class="stat-value" id="statCompleted">0</span>
+                </div>
+                <div class="stat-row">
+                    <span class="stat-label">In Progress</span>
+                    <span class="stat-value" id="statInProgress">0</span>
+                </div>
+                <div class="stat-row">
+                    <span class="stat-label">In MPFE Queue</span>
+                    <span class="stat-value" id="statQueued">0</span>
+                </div>
+                <div class="stat-row">
+                    <span class="stat-label">Response Reserved</span>
+                    <span class="stat-value" id="statReserved">0</span>
+                </div>
+                <div class="stat-row">
+                    <span class="stat-label">Avg Latency</span>
+                    <span class="stat-value" id="statLatency">0 cy</span>
+                </div>
+            </div>
+
+            <div class="info-section">
+                <h2>Current Request</h2>
+                <div class="stat-row">
+                    <span class="stat-label">Request</span>
+                    <span class="stat-value" id="currentReq">-</span>
+                </div>
+                <div class="stat-row">
+                    <span class="stat-label">Stage</span>
+                    <span class="stat-value" id="currentStage">-</span>
+                </div>
+                <div class="stat-row">
+                    <span class="stat-label">Bank Group</span>
+                    <span class="stat-value" id="currentBG">-</span>
+                </div>
+            </div>
+
+            <div class="info-section">
+                <h2>Legend</h2>
+                <div class="legend">
+                    <div class="legend-item">
+                        <div class="legend-color" style="background: #475569;"></div>
+                        <span>Idle</span>
+                    </div>
+                    <div class="legend-item">
+                        <div class="legend-color" style="background: #b45309;"></div>
+                        <span>Activating</span>
+                    </div>
+                    <div class="legend-item">
+                        <div class="legend-color" style="background: #047857;"></div>
+                        <span>Active</span>
+                    </div>
+                    <div class="legend-item">
+                        <div class="legend-color" style="background: #1d4ed8;"></div>
+                        <span>Reading</span>
+                    </div>
+                    <div class="legend-item">
+                        <div class="legend-color" style="background: #7c3aed;"></div>
+                        <span>Writing</span>
+                    </div>
+                    <div class="legend-item">
+                        <div class="legend-color" style="background: #22c55e;"></div>
+                        <span>Read Token</span>
+                    </div>
+                    <div class="legend-item">
+                        <div class="legend-color" style="background: #a855f7;"></div>
+                        <span>Write Token</span>
+                    </div>
+                    <div class="legend-item">
+                        <div class="legend-color" style="background: #f59e0b;"></div>
+                        <span>CA Bus</span>
+                    </div>
+                </div>
+                <div class="legend" style="margin-top: 8px;">
+                    <div class="legend-item">
+                        <div class="legend-color" style="background: #3b82f6; border: 2px solid #3b82f6;"></div>
+                        <span>BG0</span>
+                    </div>
+                    <div class="legend-item">
+                        <div class="legend-color" style="background: #22c55e; border: 2px solid #22c55e;"></div>
+                        <span>BG1</span>
+                    </div>
+                    <div class="legend-item">
+                        <div class="legend-color" style="background: #f59e0b; border: 2px solid #f59e0b;"></div>
+                        <span>BG2</span>
+                    </div>
+                    <div class="legend-item">
+                        <div class="legend-color" style="background: #ef4444; border: 2px solid #ef4444;"></div>
+                        <span>BG3</span>
+                    </div>
+                </div>
+            </div>
+
+            <div class="info-section">
+                <h2>Activity Log</h2>
+                <div class="activity-log" id="activityLog">
+                    <div style="color: #64748b;">Load trace to see activity</div>
+                </div>
+            </div>
+
+            <div class="info-section">
+                <h2>Debug Info</h2>
+                <div class="debug-panel" id="debugPanel">
+                    <div class="debug-title">Request Stages</div>
+                    <div id="debugContent">-</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // GDDR6-16000 Timing parameters
+        const TIMING = {
+            tRCDRD: 18,
+            tRCDWR: 12,
+            tRP: 18,
+            tRL: 20,
+            tWL: 8,
+            tBurst: 4,  // BL16 at 16n prefetch = 4 WCK cycles effective
+            tRRD_L: 6,
+            tRRD_S: 4,
+            tCCD_L: 4,
+            tCCD_S: 2,
+            tFAW: 16
+        };
+
+        // State
+        let traceData = null;
+        let requests = [];
+        let currentCycle = 0;
+        let maxCycle = 0;
+        let isPlaying = false;
+        let playInterval = null;
+        let activityLog = [];
+
+        // Token positions for animation - adjusted for GDDR6 layout (16 banks)
+        const POSITIONS = {
+            // MPFE stages
+            mpfe_queue: { x: 105, y: 140 },
+            mpfe_dispatch: { x: 105, y: 195 },
+
+            // MC stages
+            mc_arbiter: { x: 230, y: 125 },
+            mc_scheduler: { x: 300, y: 285 },
+            mc_txproc: { x: 355, y: 110 },
+
+            // PHY stages
+            phy_ca: { x: 478, y: 105 },
+            phy_data: { x: 478, y: 155 },
+
+            // CA/DQ buses (PHY to Device)
+            ca_bus: { x: 565, y: 105 },
+            dq_bus: { x: 564, y: 295 },
+
+            // Device - 16 banks in 4 groups
+            rowdec: { x: 625, y: 160 },
+            bank: (b) => {
+                const bankGroup = Math.floor(b / 4);
+                const bankInGroup = b % 4;
+                return {
+                    x: 661 + bankInGroup * 24,
+                    y: 103 + bankGroup * 40
+                };
+            },
+            senseamp: { x: 769, y: 160 },
+            coldec: { x: 810, y: 160 },
+
+            // Data path
+            databus: { x: 564, y: 295 },
+
+            // MPFE response
+            response_buf: { x: 105, y: 208 },
+            complete: { x: 100, y: 360 }
+        };
+
+        // DOM elements
+        const fileInput = document.getElementById('fileInput');
+        const btnReset = document.getElementById('btnReset');
+        const btnStep = document.getElementById('btnStep');
+        const btnPlay = document.getElementById('btnPlay');
+        const speedSlider = document.getElementById('speedSlider');
+        const currentCycleEl = document.getElementById('currentCycle');
+        const maxCycleEl = document.getElementById('maxCycle');
+        const noData = document.getElementById('noData');
+        const diagram = document.getElementById('diagram');
+        const tokensGroup = document.getElementById('tokens');
+
+        // Parse trace with improved stage detection
+        function parseTrace(data) {
+            requests = [];
+            const txnEvents = new Map();
+
+            // First pass: group events by txn_id
+            for (const item of data) {
+                if (item.ph === 'M') continue;
+                const txnId = item.args?.txn_id;
+                if (txnId === undefined) continue;
+
+                if (!txnEvents.has(txnId)) txnEvents.set(txnId, []);
+                txnEvents.get(txnId).push({
+                    name: item.name,
+                    cycleStart: item.args?.cycle_issue || 0,
+                    cycleEnd: item.args?.cycle_complete || 0,
+                    bank: item.tid || 0,
+                    desc: item.args?.desc || ''
+                });
+            }
+
+            let idx = 0;
+            for (const [txnId, evts] of txnEvents) {
+                evts.sort((a, b) => a.cycleStart - b.cycleStart);
+                const first = evts[0];
+                const last = evts[evts.length - 1];
+
+                const isRead = evts.some(e => e.name.includes('READ'));
+                const isWrite = evts.some(e => e.name.includes('WRITE'));
+                const hasActivate = evts.some(e => e.name === 'ACTIVATE');
+                const activateEvt = evts.find(e => e.name === 'ACTIVATE');
+                const dataEvt = evts.find(e => e.name.includes('READ') || e.name.includes('WRITE'));
+
+                if (!isRead && !isWrite) continue;
+
+                const stages = [];
+                const firstDramCycle = hasActivate ? activateEvt.cycleStart : dataEvt?.cycleStart || first.cycleStart;
+
+                // Work backwards from DRAM timing to calculate pipeline stages
+                const phyCaEnd = firstDramCycle;
+                const phyCaStart = phyCaEnd - 2;
+                const txProcEnd = phyCaStart;
+                const txProcStart = txProcEnd - 3;
+                const schedulerEnd = txProcStart;
+                const schedulerStart = schedulerEnd - 3;
+                const arbiterEnd = schedulerStart;
+                const arbiterStart = arbiterEnd - 2;
+
+                // MPFE dispatch happens before arbiter
+                const dispatchEnd = arbiterStart;
+                const dispatchStart = dispatchEnd - 2;
+
+                // Queue arrival
+                const queueStart = Math.max(0, dispatchStart - 4 + idx);
+
+                // MPFE stages
+                stages.push({ stage: 'mpfe_queue', start: queueStart, end: dispatchStart });
+                stages.push({ stage: 'mpfe_dispatch', start: dispatchStart, end: dispatchEnd, reserveResponse: isRead });
+
+                // MC stages
+                stages.push({ stage: 'mc_arbiter', start: arbiterStart, end: arbiterEnd });
+                stages.push({ stage: 'mc_scheduler', start: schedulerStart, end: schedulerEnd });
+                stages.push({ stage: 'mc_txproc', start: txProcStart, end: txProcEnd });
+
+                // PHY CA
+                stages.push({ stage: 'phy_ca', start: phyCaStart, end: phyCaEnd });
+
+                // Device stages
+                if (hasActivate && activateEvt) {
+                    stages.push({ stage: 'rowdec', start: firstDramCycle, end: firstDramCycle + 2 });
+                    stages.push({
+                        stage: 'bank',
+                        start: firstDramCycle + 2,
+                        end: activateEvt.cycleEnd,
+                        bank: activateEvt.bank,
+                        op: 'activate'
+                    });
+                }
+
+                if (dataEvt) {
+                    const dataStart = dataEvt.cycleStart;
+                    const dataEnd = dataEvt.cycleEnd;
+                    const burstTime = TIMING.tBurst;
+
+                    // Bank access for data operation
+                    stages.push({
+                        stage: 'bank',
+                        start: dataStart,
+                        end: dataStart + burstTime,
+                        bank: dataEvt.bank,
+                        op: isRead ? 'read' : 'write'
+                    });
+
+                    // Sense amplifier
+                    const senseStart = dataStart + burstTime;
+                    const senseEnd = senseStart + 4;
+                    stages.push({ stage: 'senseamp', start: senseStart, end: senseEnd });
+
+                    // Column decoder
+                    const coldecStart = senseEnd;
+                    const coldecEnd = coldecStart + 4;
+                    stages.push({ stage: 'coldec', start: coldecStart, end: coldecEnd });
+
+                    // Data bus transfer
+                    const databusStart = coldecEnd;
+                    const databusEnd = Math.max(dataEnd, databusStart + 4);
+                    stages.push({ stage: 'databus', start: databusStart, end: databusEnd, direction: isRead ? 'read' : 'write' });
+
+                    // PHY data
+                    const phyDataStart = databusEnd;
+                    const phyDataEnd = phyDataStart + 2;
+                    stages.push({ stage: 'phy_data', start: phyDataStart, end: phyDataEnd });
+
+                    if (isRead) {
+                        // Response buffer receives data
+                        const respStart = phyDataEnd;
+                        const respEnd = respStart + 3;
+                        stages.push({ stage: 'response_buf', start: respStart, end: respEnd, fillResponse: true });
+
+                        // Complete
+                        stages.push({ stage: 'complete', start: respEnd, end: respEnd + 3 });
+                    } else {
+                        // Write completes when write buffer retires
+                        stages.push({ stage: 'complete', start: databusEnd, end: databusEnd + 3 });
+                    }
+                }
+
+                stages.sort((a, b) => a.start - b.start);
+
+                const bankGroup = Math.floor(first.bank / 4);
+                requests.push({
+                    id: idx++,
+                    txnId,
+                    type: isRead ? 'READ' : 'WRITE',
+                    bank: first.bank,
+                    bankGroup: bankGroup,
+                    cycleStart: stages[0].start,
+                    cycleEnd: stages[stages.length - 1].end,
+                    latency: last.cycleEnd - first.cycleStart,
+                    stages,
+                    events: evts,
+                    hasActivate,
+                    responseReservedAt: isRead ? dispatchStart : null,
+                    responseFilledAt: null
+                });
+
+                maxCycle = Math.max(maxCycle, stages[stages.length - 1].end + 5);
+            }
+
+            requests.sort((a, b) => a.cycleStart - b.cycleStart);
+            return requests;
+        }
+
+        // Create token SVG element
+        function createToken(req) {
+            const g = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+            g.setAttribute('class', 'token');
+            g.setAttribute('id', `token-${req.id}`);
+            g.style.display = 'none';
+
+            const circle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+            circle.setAttribute('class', `token-body ${req.type.toLowerCase()}`);
+            circle.setAttribute('r', '7');
+
+            const text = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+            text.setAttribute('class', 'token-label');
+            text.setAttribute('dy', '2.5');
+            text.setAttribute('font-size', '6');
+            text.textContent = `R${req.id}`;
+
+            g.appendChild(circle);
+            g.appendChild(text);
+            return g;
+        }
+
+        // Initialize visualization
+        function initVisualization() {
+            tokensGroup.innerHTML = '';
+
+            for (const req of requests) {
+                const token = createToken(req);
+                tokensGroup.appendChild(token);
+            }
+
+            updateVisualization();
+        }
+
+        // Update Request Queue (MPFE)
+        function updateRequestQueue() {
+            const inQueue = requests.filter(r => {
+                const queueStage = r.stages.find(s => s.stage === 'mpfe_queue');
+                return queueStage && currentCycle >= queueStage.start && currentCycle < queueStage.end;
+            }).slice(0, 4);
+
+            for (let i = 0; i < 4; i++) {
+                const slotRect = document.querySelector(`#req-slot-${i} rect`);
+                const slotLabel = document.getElementById(`req-label-${i}`);
+
+                if (i < inQueue.length) {
+                    slotRect.setAttribute('class', 'fifo-slot occupied');
+                    slotLabel.setAttribute('class', 'fifo-slot-label active');
+                    slotLabel.textContent = `R${inQueue[i].id}`;
+                } else {
+                    slotRect.setAttribute('class', 'fifo-slot');
+                    slotLabel.setAttribute('class', 'fifo-slot-label');
+                    slotLabel.textContent = '-';
+                }
+            }
+        }
+
+        // Update Response Buffer (MPFE)
+        function updateResponseBuffer() {
+            const reserved = requests.filter(r => {
+                if (r.type !== 'READ') return false;
+                const dispatchStage = r.stages.find(s => s.stage === 'mpfe_dispatch');
+                const respStage = r.stages.find(s => s.stage === 'response_buf');
+                if (!dispatchStage) return false;
+
+                const dispatched = currentCycle >= dispatchStage.end;
+                const filled = respStage && currentCycle >= respStage.start;
+                return dispatched && !filled;
+            });
+
+            const filled = requests.filter(r => {
+                const respStage = r.stages.find(s => s.stage === 'response_buf');
+                return respStage && currentCycle >= respStage.start && currentCycle < respStage.end;
+            });
+
+            for (let i = 0; i < 4; i++) {
+                const slotRect = document.querySelector(`#resp-slot-${i} rect`);
+                const slotTag = document.getElementById(`resp-tag-${i}`);
+
+                if (i < filled.length) {
+                    slotRect.setAttribute('class', 'response-slot filled');
+                    slotTag.textContent = `R${filled[i].id}`;
+                } else if (i < reserved.length + filled.length) {
+                    const reservedIdx = i - filled.length;
+                    slotRect.setAttribute('class', 'response-slot reserved');
+                    slotTag.textContent = `R${reserved[reservedIdx].id}?`;
+                } else {
+                    slotRect.setAttribute('class', 'response-slot');
+                    slotTag.textContent = '-';
+                }
+            }
+
+            return reserved.length;
+        }
+
+        // Update Write Buffer (MPFE)
+        function updateWriteBuffer() {
+            const pending = requests.filter(r => {
+                if (r.type !== 'WRITE') return false;
+                const dispatchStage = r.stages.find(s => s.stage === 'mpfe_dispatch');
+                const databusStage = r.stages.find(s => s.stage === 'databus');
+                if (!dispatchStage) return false;
+
+                const dispatched = currentCycle >= dispatchStage.end;
+                const retired = databusStage && currentCycle >= databusStage.end;
+                return dispatched && !retired;
+            }).slice(0, 3);
+
+            const retiring = requests.filter(r => {
+                if (r.type !== 'WRITE') return false;
+                const databusStage = r.stages.find(s => s.stage === 'databus');
+                return databusStage && currentCycle >= databusStage.start && currentCycle < databusStage.end;
+            });
+
+            for (let i = 0; i < 3; i++) {
+                const slotRect = document.querySelector(`#write-slot-${i} rect`);
+                const slotTag = document.getElementById(`write-tag-${i}`);
+
+                if (i < retiring.length) {
+                    slotRect.setAttribute('class', 'write-slot retiring');
+                    slotTag.textContent = `W${retiring[i].id}`;
+                } else if (i < pending.length) {
+                    slotRect.setAttribute('class', 'write-slot pending');
+                    slotTag.textContent = `W${pending[i].id}`;
+                } else {
+                    slotRect.setAttribute('class', 'write-slot');
+                    slotTag.textContent = '-';
+                }
+            }
+        }
+
+        // Update visualization for current cycle
+        function updateVisualization() {
+            currentCycleEl.textContent = currentCycle;
+
+            // Reset all 16 bank states
+            for (let i = 0; i < 16; i++) {
+                const bankBox = document.querySelector(`#bank-${i} .bank-box`);
+                const bankState = document.getElementById(`bank-${i}-state`);
+                if (bankBox) {
+                    const bgClass = `bg${Math.floor(i / 4)}`;
+                    bankBox.setAttribute('class', `bank-box idle ${bgClass}`);
+                    bankState.textContent = '-';
+                }
+            }
+
+            // Reset component states
+            document.getElementById('senseamp-status').textContent = '-';
+            document.getElementById('ca-bus-segment').setAttribute('class', 'bus-segment idle');
+            document.getElementById('dq-bus-segment-a').setAttribute('class', 'bus-segment idle');
+            document.getElementById('dq-bus-segment-b').setAttribute('class', 'bus-segment idle');
+            document.getElementById('dq-direction').textContent = '32-bit Bidirectional';
+
+            let inProgress = 0;
+            let completed = 0;
+            let debugInfo = [];
+            let activeReq = null;
+            let activeStage = null;
+            let caActive = false;
+            let dqActive = false;
+            let dqDirection = 'read';
+
+            // Update each request token
+            for (const req of requests) {
+                const token = document.getElementById(`token-${req.id}`);
+                if (!token) continue;
+
+                // Find current stage
+                let currentStage = null;
+                for (const stage of req.stages) {
+                    if (currentCycle >= stage.start && currentCycle < stage.end) {
+                        currentStage = stage;
+                        break;
+                    }
+                }
+
+                if (!currentStage) {
+                    if (currentCycle >= req.cycleEnd) {
+                        completed++;
+                        token.style.display = 'none';
+                    } else if (currentCycle < req.cycleStart) {
+                        token.style.display = 'none';
+                    }
+                    continue;
+                }
+
+                inProgress++;
+                token.style.display = 'block';
+                activeReq = req;
+                activeStage = currentStage;
+
+                if (req.id < 3) {
+                    debugInfo.push(`R${req.id}: ${currentStage.stage} (${currentStage.start}-${currentStage.end})`);
+                }
+
+                // Get position for current stage
+                let pos;
+                if (currentStage.stage === 'bank') {
+                    pos = POSITIONS.bank(currentStage.bank !== undefined ? currentStage.bank : req.bank);
+
+                    // Update bank state
+                    const bankIdx = currentStage.bank !== undefined ? currentStage.bank : req.bank;
+                    const bankGroup = Math.floor(bankIdx / 4);
+                    const bankBox = document.querySelector(`#bank-${bankIdx} .bank-box`);
+                    const bankState = document.getElementById(`bank-${bankIdx}-state`);
+                    if (bankBox && bankState) {
+                        const bgClass = `bg${bankGroup}`;
+                        if (currentStage.op === 'read') {
+                            bankBox.setAttribute('class', `bank-box reading ${bgClass}`);
+                            bankState.textContent = 'RD';
+                        } else if (currentStage.op === 'write') {
+                            bankBox.setAttribute('class', `bank-box writing ${bgClass}`);
+                            bankState.textContent = 'WR';
+                        } else {
+                            bankBox.setAttribute('class', `bank-box activating ${bgClass}`);
+                            bankState.textContent = 'ACT';
+                        }
+                    }
+                } else {
+                    pos = POSITIONS[currentStage.stage] || { x: 100, y: 100 };
+                }
+
+                // Update component highlights
+                if (currentStage.stage === 'senseamp') {
+                    document.getElementById('senseamp-status').textContent = `R${req.id}`;
+                }
+
+                // Track bus activity
+                if (currentStage.stage === 'phy_ca') {
+                    caActive = true;
+                }
+                if (currentStage.stage === 'databus' || currentStage.stage === 'phy_data') {
+                    dqActive = true;
+                    dqDirection = currentStage.direction || 'read';
+                }
+
+                token.setAttribute('transform', `translate(${pos.x}, ${pos.y})`);
+            }
+
+            // Update CA and DQ bus segments
+            if (caActive) {
+                document.getElementById('ca-bus-segment').setAttribute('class', 'bus-segment ca-active bus-active');
+            }
+            if (dqActive) {
+                const dqClass = dqDirection === 'read' ? 'dq-read' : 'dq-write';
+                document.getElementById('dq-bus-segment-a').setAttribute('class', `bus-segment ${dqClass} bus-active`);
+                document.getElementById('dq-bus-segment-b').setAttribute('class', `bus-segment ${dqClass} bus-active`);
+                document.getElementById('dq-direction').textContent =
+                    dqDirection === 'read' ? 'Read: Device -> PHY (32-bit)' : 'Write: PHY -> Device (32-bit)';
+            }
+
+            // Update MPFE components
+            updateRequestQueue();
+            const reservedCount = updateResponseBuffer();
+            updateWriteBuffer();
+
+            // Update stats
+            document.getElementById('statTotal').textContent = requests.length;
+            document.getElementById('statCompleted').textContent = completed;
+            document.getElementById('statInProgress').textContent = inProgress;
+
+            const queued = requests.filter(r => {
+                const queueStage = r.stages.find(s => s.stage === 'mpfe_queue');
+                return queueStage && currentCycle >= queueStage.start && currentCycle < queueStage.end;
+            }).length;
+            document.getElementById('statQueued').textContent = queued;
+            document.getElementById('statReserved').textContent = reservedCount;
+
+            const avgLatency = requests.length > 0
+                ? Math.round(requests.reduce((s, r) => s + r.latency, 0) / requests.length)
+                : 0;
+            document.getElementById('statLatency').textContent = `${avgLatency} cy`;
+
+            // Update current request info
+            if (activeReq && activeStage) {
+                document.getElementById('currentReq').textContent = `R${activeReq.id} (${activeReq.type})`;
+                document.getElementById('currentStage').textContent = activeStage.stage;
+                document.getElementById('currentBG').textContent = `BG${activeReq.bankGroup} (Bank ${activeReq.bank})`;
+            } else {
+                document.getElementById('currentReq').textContent = '-';
+                document.getElementById('currentStage').textContent = '-';
+                document.getElementById('currentBG').textContent = '-';
+            }
+
+            document.getElementById('debugContent').innerHTML = debugInfo.join('<br>') || '-';
+        }
+
+        function addLogEntry(cycle, message) {
+            activityLog.push({ cycle, message });
+            if (activityLog.length > 50) activityLog.shift();
+
+            const logEl = document.getElementById('activityLog');
+            logEl.innerHTML = activityLog.slice(-20).reverse().map(e =>
+                `<div class="log-entry"><span class="log-cycle">[${e.cycle}]</span> <span class="log-action">${e.message}</span></div>`
+            ).join('');
+        }
+
+        // Event handlers
+        fileInput.addEventListener('change', async (e) => {
+            const file = e.target.files[0];
+            if (!file) return;
+
+            try {
+                const text = await file.text();
+                traceData = JSON.parse(text);
+                requests = parseTrace(traceData);
+
+                if (requests.length > 0) {
+                    noData.style.display = 'none';
+                    diagram.style.display = 'block';
+
+                    maxCycleEl.textContent = maxCycle;
+                    currentCycle = 0;
+
+                    initVisualization();
+
+                    btnReset.disabled = false;
+                    btnStep.disabled = false;
+                    btnPlay.disabled = false;
+
+                    addLogEntry(0, `Loaded: ${requests.length} requests`);
+                }
+            } catch (err) {
+                console.error('Error:', err);
+                alert('Error loading trace: ' + err.message);
+            }
+        });
+
+        btnReset.addEventListener('click', () => {
+            currentCycle = 0;
+            stopPlayback();
+            updateVisualization();
+        });
+
+        btnStep.addEventListener('click', () => {
+            if (currentCycle < maxCycle) {
+                currentCycle++;
+                updateVisualization();
+            }
+        });
+
+        btnPlay.addEventListener('click', () => {
+            if (isPlaying) {
+                stopPlayback();
+            } else {
+                startPlayback();
+            }
+        });
+
+        function startPlayback() {
+            isPlaying = true;
+            btnPlay.textContent = 'Pause';
+            btnPlay.classList.add('active');
+
+            const interval = 550 - speedSlider.value;
+            playInterval = setInterval(() => {
+                if (currentCycle < maxCycle) {
+                    currentCycle++;
+                    updateVisualization();
+                } else {
+                    stopPlayback();
+                }
+            }, interval);
+        }
+
+        function stopPlayback() {
+            isPlaying = false;
+            btnPlay.textContent = 'Play';
+            btnPlay.classList.remove('active');
+            if (playInterval) {
+                clearInterval(playInterval);
+                playInterval = null;
+            }
+        }
+
+        speedSlider.addEventListener('input', () => {
+            if (isPlaying) {
+                stopPlayback();
+                startPlayback();
+            }
+        });
+
+        // Keyboard shortcuts
+        document.addEventListener('keydown', (e) => {
+            if (requests.length === 0) return;
+
+            if (e.key === ' ') { e.preventDefault(); btnPlay.click(); }
+            else if (e.key === 'ArrowRight') { e.preventDefault(); btnStep.click(); }
+            else if (e.key === 'ArrowLeft' && currentCycle > 0) {
+                e.preventDefault();
+                currentCycle--;
+                updateVisualization();
+            }
+            else if (e.key === 'Home') { e.preventDefault(); btnReset.click(); }
+        });
+    </script>
+</body>
+</html>
