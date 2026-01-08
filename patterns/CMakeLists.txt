@@ -94,12 +94,15 @@ add_lpddr5_pattern(interleaved dual-channel/interleaved.cpp "Level 5 - Dual Chan
 add_lpddr5_pattern(strided    complex/strided.cpp    "Level 6 - Complex")
 add_lpddr5_pattern(random     complex/random.cpp     "Level 6 - Complex")
 add_lpddr5_pattern(tile_load  complex/tile_load.cpp  "Level 6 - Complex")
+add_lpddr5_pattern(stream     complex/stream.cpp     "Level 6 - Complex")
+add_lpddr5_pattern(multi_dma  complex/multi_dma.cpp  "Level 6 - Complex")
 
 # -----------------------------------------------------------------------------
 # Level 7: Bandwidth Patterns
 # -----------------------------------------------------------------------------
 
 add_lpddr5_pattern(max_bandwidth bandwidth/max_bandwidth.cpp "Level 7 - Bandwidth")
+add_lpddr5_pattern(page_burst    bandwidth/page_burst.cpp    "Level 7 - Bandwidth")
 
 # ============================================================================
 # GDDR6 Memory Patterns
@@ -175,6 +178,8 @@ add_gddr6_pattern(dual_interleaved dual-channel/interleaved.cpp "Level 5 - Dual 
 add_gddr6_pattern(strided    complex/strided.cpp    "Level 6 - Complex")
 add_gddr6_pattern(random     complex/random.cpp     "Level 6 - Complex")
 add_gddr6_pattern(tile_load  complex/tile_load.cpp  "Level 6 - Complex")
+add_gddr6_pattern(stream     complex/stream.cpp     "Level 6 - Complex")
+add_gddr6_pattern(multi_dma  complex/multi_dma.cpp  "Level 6 - Complex")
 
 # -----------------------------------------------------------------------------
 # Level 7: Bandwidth Patterns
@@ -182,6 +187,7 @@ add_gddr6_pattern(tile_load  complex/tile_load.cpp  "Level 6 - Complex")
 
 add_gddr6_pattern(eight_bank_bandwidth bandwidth/eight_bank_bandwidth.cpp "Level 7 - Bandwidth")
 add_gddr6_pattern(max_bandwidth        bandwidth/max_bandwidth.cpp        "Level 7 - Bandwidth")
+add_gddr6_pattern(page_burst           bandwidth/page_burst.cpp           "Level 7 - Bandwidth")
 
 # ============================================================================
 # NoC Patterns (TODO)

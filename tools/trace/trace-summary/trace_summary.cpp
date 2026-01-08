@@ -37,6 +37,12 @@ struct TimingParams {
     int tWTR_S = 4;     // Write to Read turnaround (different bank group)
 };
 
+// Memory system constants for bandwidth calculations
+constexpr int CACHE_LINE_BYTES = 64;        // Bytes per memory access
+constexpr int PAGE_SIZE_BYTES = 8192;       // Row buffer size (8 KB)
+constexpr int PAGE_HITS_PER_PAGE = PAGE_SIZE_BYTES / CACHE_LINE_BYTES;  // 128
+constexpr double FREQUENCY_GHZ = 3.2;       // LPDDR5-6400 frequency
+
 struct Command {
     std::string name;
     std::string category;
@@ -84,6 +90,15 @@ struct TraceStats {
     std::vector<int> latencies;
     std::map<int, int> bank_usage;  // bank -> command count
     std::vector<TimingViolation> violations;
+
+    // Bandwidth metrics
+    int64_t total_bytes = 0;
+    int64_t read_bytes = 0;
+    int64_t write_bytes = 0;
+    double bytes_per_cycle = 0.0;
+    double bandwidth_gbps = 0.0;      // GB/s at configured frequency
+    double efficiency = 0.0;          // Actual vs theoretical max bandwidth
+    int active_banks = 0;             // Number of unique banks used
 };
 
 class TraceSummary {
@@ -206,8 +221,10 @@ public:
                     stats.activate_count++;
                 } else if (cmd.name == "BURST_READ" || cmd.name == "READ") {
                     stats.read_cmd_count++;
+                    stats.read_bytes += CACHE_LINE_BYTES;
                 } else if (cmd.name == "BURST_WRITE" || cmd.name == "WRITE") {
                     stats.write_cmd_count++;
+                    stats.write_bytes += CACHE_LINE_BYTES;
                 } else if (cmd.name == "PRECHARGE") {
                     stats.precharge_count++;
                 }
@@ -216,6 +233,25 @@ public:
                 stats.end_cycle = std::max(stats.end_cycle, cmd.cycle_complete);
                 stats.bank_usage[cmd.bank]++;
             }
+        }
+
+        // Calculate bandwidth metrics
+        stats.total_bytes = stats.read_bytes + stats.write_bytes;
+        stats.active_banks = stats.bank_usage.size();
+        int total_cycles = stats.end_cycle - stats.start_cycle;
+
+        if (total_cycles > 0) {
+            stats.bytes_per_cycle = static_cast<double>(stats.total_bytes) / total_cycles;
+
+            // GB/s at LPDDR5-6400 (3.2 GHz)
+            // bytes/cycle * 3.2e9 cycles/sec / 1e9 bytes/GB = bytes/cycle * 3.2
+            stats.bandwidth_gbps = stats.bytes_per_cycle * FREQUENCY_GHZ;
+
+            // Theoretical max: 64 bytes/cycle with perfect pipelining (single channel)
+            // With dual-channel LPDDR5: 128 bytes/cycle theoretical
+            // Efficiency = actual / theoretical
+            double theoretical_max_bytes_per_cycle = CACHE_LINE_BYTES;  // Single channel max
+            stats.efficiency = 100.0 * stats.bytes_per_cycle / theoretical_max_bytes_per_cycle;
         }
 
         return stats;
@@ -341,6 +377,40 @@ public:
                       << " (" << std::fixed << std::setprecision(1) << hit_rate << "%)\n";
         }
 
+        // Bandwidth metrics
+        std::cout << "\nBandwidth Metrics:\n";
+        std::cout << "  Total Bytes: " << stats.total_bytes;
+        if (stats.total_bytes >= 1024) {
+            std::cout << " (" << std::fixed << std::setprecision(1)
+                      << (stats.total_bytes / 1024.0) << " KB)";
+        }
+        std::cout << "\n";
+        std::cout << "  Read:  " << stats.read_bytes << " bytes ("
+                  << stats.read_cmd_count << " ops)\n";
+        std::cout << "  Write: " << stats.write_bytes << " bytes ("
+                  << stats.write_cmd_count << " ops)\n";
+        std::cout << "  Throughput: " << std::fixed << std::setprecision(2)
+                  << stats.bytes_per_cycle << " bytes/cycle\n";
+        std::cout << "  Bandwidth:  " << std::setprecision(2)
+                  << stats.bandwidth_gbps << " GB/s (at "
+                  << FREQUENCY_GHZ << " GHz)\n";
+        std::cout << "  Efficiency: " << std::setprecision(1)
+                  << stats.efficiency << "% of theoretical max\n";
+        std::cout << "  Active Banks: " << stats.active_banks << "\n";
+
+        // Page hit amortization analysis
+        if (stats.activate_count > 0 && stats.total_transactions > 0) {
+            double hits_per_activate = static_cast<double>(stats.page_hits) / stats.activate_count;
+            double theoretical_max_hits = PAGE_HITS_PER_PAGE - 1;  // 127 hits after initial miss
+            double page_utilization = 100.0 * (hits_per_activate + 1) / PAGE_HITS_PER_PAGE;
+            std::cout << "  Page Utilization:\n";
+            std::cout << "    Hits per page open: " << std::setprecision(1)
+                      << (hits_per_activate + 1) << " / " << PAGE_HITS_PER_PAGE
+                      << " (" << page_utilization << "%)\n";
+            std::cout << "    Optimal: " << PAGE_HITS_PER_PAGE
+                      << " accesses per page (1 miss + " << (PAGE_HITS_PER_PAGE - 1) << " hits)\n";
+        }
+
         // Bank utilization
         std::cout << "\nBank Utilization:\n";
         for (const auto& [bank, count] : stats.bank_usage) {
@@ -431,6 +501,21 @@ public:
             {"page_hits", stats.page_hits},
             {"page_conflicts", stats.page_conflicts},
             {"total_cycles", stats.end_cycle - stats.start_cycle}
+        };
+
+        // Bandwidth metrics
+        output["bandwidth"] = {
+            {"total_bytes", stats.total_bytes},
+            {"read_bytes", stats.read_bytes},
+            {"write_bytes", stats.write_bytes},
+            {"bytes_per_cycle", stats.bytes_per_cycle},
+            {"bandwidth_gbps", stats.bandwidth_gbps},
+            {"efficiency_percent", stats.efficiency},
+            {"active_banks", stats.active_banks},
+            {"frequency_ghz", FREQUENCY_GHZ},
+            {"cache_line_bytes", CACHE_LINE_BYTES},
+            {"page_size_bytes", PAGE_SIZE_BYTES},
+            {"max_hits_per_page", PAGE_HITS_PER_PAGE}
         };
 
         // Latency stats
