@@ -7,7 +7,9 @@
 #include <sw/kpu/components/memory/behavioral_memory_controller.hpp>
 #include <sw/kpu/components/memory/transactional_memory_controller.hpp>
 #include <sw/kpu/components/lpddr5_memory_controller.hpp>
+#include <sw/kpu/components/ddr5_memory_controller.hpp>
 #include <sw/kpu/components/gddr6_memory_controller.hpp>
+#include <sw/kpu/components/gddr7_memory_controller.hpp>
 #include <sw/kpu/components/hbm2_memory_controller.hpp>
 #include <sw/kpu/components/hbm3_memory_controller.hpp>
 #include <stdexcept>
@@ -39,9 +41,7 @@ std::unique_ptr<IMemoryController> create_memory_controller(
                     return std::make_unique<lpddr5::LPDDR5MemoryController>(config);
 
                 case MemoryTechnology::DDR5:
-                    // TODO: Implement DDR5MemoryController
-                    // For now, fall back to LPDDR5 with DDR5-like timing
-                    return std::make_unique<lpddr5::LPDDR5MemoryController>(config);
+                    return std::make_unique<ddr5::DDR5MemoryController>(config);
 
                 case MemoryTechnology::HBM2:
                 case MemoryTechnology::HBM2E:
@@ -55,9 +55,7 @@ std::unique_ptr<IMemoryController> create_memory_controller(
                     return std::make_unique<gddr6::GDDR6MemoryController>(config);
 
                 case MemoryTechnology::GDDR7:
-                    // TODO: Implement GDDR7MemoryController
-                    // For now, fall back to GDDR6 with GDDR7-like timing
-                    return std::make_unique<gddr6::GDDR6MemoryController>(config);
+                    return std::make_unique<gddr7::GDDR7MemoryController>(config);
 
                 default: {
                     std::ostringstream oss;
@@ -262,8 +260,7 @@ MemoryTimingParams MemoryControllerConfig::get_default_timing(
             break;
 
         case MemoryTechnology::GDDR6:
-        case MemoryTechnology::GDDR7:
-            // GDDR6 typical timing
+            // GDDR6-16000 typical timing
             timing.tRCD = 12;
             timing.tRP = 12;
             timing.tRAS = 24;
@@ -273,13 +270,33 @@ MemoryTimingParams MemoryControllerConfig::get_default_timing(
             timing.tWR = 20;
             timing.tRTP = 6;
             timing.tRRD_L = 4;
-            timing.tRRD_S = 4;  // No bank groups in GDDR6
+            timing.tRRD_S = 4;
             timing.tCCD_L = 4;
             timing.tCCD_S = 4;
             timing.tWTR_L = 8;
             timing.tWTR_S = 8;
             timing.tRTW = 10;
             timing.tFAW = 20;
+            break;
+
+        case MemoryTechnology::GDDR7:
+            // GDDR7-32000 typical timing (PAM3 signaling)
+            timing.tRCD = 14;
+            timing.tRP = 14;
+            timing.tRAS = 24;
+            timing.tRC = 38;
+            timing.tCL = 16;
+            timing.tWL = 6;
+            timing.tWR = 14;
+            timing.tRTP = 6;
+            timing.tRRD_L = 4;
+            timing.tRRD_S = 3;
+            timing.tCCD_L = 3;
+            timing.tCCD_S = 2;
+            timing.tWTR_L = 5;
+            timing.tWTR_S = 3;
+            timing.tRTW = 12;
+            timing.tFAW = 12;
             break;
 
         default:

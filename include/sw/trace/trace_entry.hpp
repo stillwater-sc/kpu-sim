@@ -74,6 +74,20 @@ enum class ComponentType : uint8_t {
     HBM3_DATA_BUS = 44,         // HBM3 data bus (32-bit per pseudo-channel)
     HBM3_CMD_BUS = 45,          // HBM3 command/address bus
 
+    // DDR5 Memory Controller components
+    DDR5_BANK = 46,             // Individual DDR5 bank (32 banks per channel)
+    DDR5_BANK_GROUP = 47,       // DDR5 bank group (4 groups, 8 banks each)
+    DDR5_CHANNEL = 48,          // DDR5 channel (dual-channel)
+    DDR5_DATA_BUS = 49,         // DDR5 data bus (64-bit per channel)
+    DDR5_CMD_BUS = 50,          // DDR5 command/address bus
+
+    // GDDR7 Memory Controller components
+    GDDR7_BANK = 51,            // Individual GDDR7 bank (16 banks total)
+    GDDR7_BANK_GROUP = 52,      // GDDR7 bank group (4 groups, 4 banks each)
+    GDDR7_CHANNEL = 53,         // GDDR7 channel (dual 16-bit channels, PAM3)
+    GDDR7_DATA_BUS = 54,        // GDDR7 data bus (DQ)
+    GDDR7_CMD_BUS = 55,         // GDDR7 command/address bus (CA)
+
     // KPU compute components
     COMPUTE_FABRIC = 10,       // Compute orchestrator
     SYSTOLIC_ARRAY = 11,       // Systolic array compute engine
