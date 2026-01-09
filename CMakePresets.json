@@ -166,6 +166,19 @@
       }
     },
     {
+      "name": "macos-ninja",
+      "displayName": "macOS with Ninja",
+      "inherits": "default",
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Darwin"
+      },
+      "cacheVariables": {
+        "CMAKE_OSX_DEPLOYMENT_TARGET": "11.0"
+      }
+    },
+    {
       "name": "macos",
       "displayName": "macOS Configuration",
       "description": "macOS build with Xcode tools",
