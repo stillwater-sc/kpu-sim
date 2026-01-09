@@ -339,3 +339,44 @@ Key Configs Available
   | single_pc_config_3200() | 1.6 GHz | Single PC  |
   | single_pc_config_3600() | 1.8 GHz | Single PC  |
 
+## HBM3E
+
+HBM3E pattern infrastructure complete. Summary:
+
+Created Structure
+
+```
+  patterns/memory/hbm3e/
+  ├── common/
+  │   ├── hbm3e_configs.hpp     # 8400/9600 configs
+  │   └── hbm3e_harness.hpp     # Variant-aware harness
+  ├── single-bank/
+  │   ├── hbm3e_9600_page_hits.cpp
+  │   ├── hbm3e_9600_page_conflicts.cpp
+  │   └── hbm3e_8400_page_hits.cpp
+  └── bandwidth/
+      └── hbm3e_9600_max_bandwidth.cpp
+
+  traces/memory/hbm3e/tools/swimlane.html  # 1.23 TB/s badge
+```
+
+HBM3E Variants
+
+  | Variant    | Clock   | Peak Bandwidth |
+  |------------|---------|----------------|
+  | HBM3E-8400 | 4.2 GHz | 1.075 TB/s     |
+  | HBM3E-9600 | 4.8 GHz | 1.229 TB/s     |
+
+  Test Results
+
+  All 4 patterns pass:
+  PASS: hbm3e_9600_page_hits
+  PASS: hbm3e_9600_page_conflicts
+  PASS: hbm3e_9600_max_bandwidth
+  PASS: hbm3e_8400_page_hits
+
+Usage
+
+  ./build/patterns/memory/hbm3e/hbm3e_9600_page_hits
+  # Trace exported to: traces/memory/hbm3e/single-bank/hbm3e_9600_page_hits_trace.json
+

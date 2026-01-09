@@ -374,6 +374,44 @@ add_hbm2e_pattern(3600_max_bandwidth  bandwidth/hbm2e_3600_max_bandwidth.cpp    
 add_hbm2e_pattern(3200_page_hits      single-bank/hbm2e_3200_page_hits.cpp      "HBM2E-3200")
 
 # ============================================================================
+# HBM3E Memory Patterns (8.4-9.6 Gbps variants)
+# ============================================================================
+
+# HBM3E-specific common headers
+add_library(hbm3e_pattern_common INTERFACE)
+target_include_directories(hbm3e_pattern_common INTERFACE
+    ${CMAKE_CURRENT_SOURCE_DIR}/memory/hbm3e/common
+)
+target_link_libraries(hbm3e_pattern_common INTERFACE kpu_memory_components kpu_trace)
+set_target_properties(hbm3e_pattern_common PROPERTIES FOLDER "Patterns/Memory/HBM3E/Common")
+
+# Helper function to add HBM3E pattern
+# Usage: add_hbm3e_pattern(NAME SOURCE_FILE FOLDER_LEVEL)
+function(add_hbm3e_pattern NAME SOURCE_FILE FOLDER_LEVEL)
+    set(TARGET_NAME "hbm3e_${NAME}")
+    add_executable(${TARGET_NAME} memory/hbm3e/${SOURCE_FILE})
+    target_link_libraries(${TARGET_NAME} PRIVATE hbm3e_pattern_common)
+    set_target_properties(${TARGET_NAME} PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/patterns/memory/hbm3e"
+        FOLDER "Patterns/Memory/HBM3E/${FOLDER_LEVEL}"
+    )
+endfunction()
+
+# -----------------------------------------------------------------------------
+# HBM3E-9600 Patterns (9.6 Gbps @ 4.8 GHz, 1.229 TB/s peak)
+# -----------------------------------------------------------------------------
+
+add_hbm3e_pattern(9600_page_hits      single-bank/hbm3e_9600_page_hits.cpp      "HBM3E-9600")
+add_hbm3e_pattern(9600_page_conflicts single-bank/hbm3e_9600_page_conflicts.cpp "HBM3E-9600")
+add_hbm3e_pattern(9600_max_bandwidth  bandwidth/hbm3e_9600_max_bandwidth.cpp    "HBM3E-9600")
+
+# -----------------------------------------------------------------------------
+# HBM3E-8400 Patterns (8.4 Gbps @ 4.2 GHz, 1.075 TB/s peak)
+# -----------------------------------------------------------------------------
+
+add_hbm3e_pattern(8400_page_hits      single-bank/hbm3e_8400_page_hits.cpp      "HBM3E-8400")
+
+# ============================================================================
 # NoC Patterns (TODO)
 # ============================================================================
 

@@ -626,9 +626,90 @@ PASS: hbm2e_3200_page_hits
 2. **Variant-aware infrastructure** - The harness should track which variant is in use for correct clock frequency in trace exports
 3. **Consistent labeling** - Each technology variant should have its own clearly labeled visualization tools
 
+## Session 6: HBM3E Separate Pattern Infrastructure
+
+### Implementation
+
+Following the same approach as HBM2E (Session 5), created a complete separate directory structure for HBM3E variants:
+
+```
+patterns/memory/hbm3e/
+├── common/
+│   ├── hbm3e_configs.hpp     # HBM3E-8400 and HBM3E-9600 configs
+│   └── hbm3e_harness.hpp     # Test harness with variant-aware clock
+├── single-bank/
+│   ├── hbm3e_9600_page_hits.cpp
+│   ├── hbm3e_9600_page_conflicts.cpp
+│   └── hbm3e_8400_page_hits.cpp
+└── bandwidth/
+    └── hbm3e_9600_max_bandwidth.cpp
+
+traces/memory/hbm3e/
+└── tools/
+    └── swimlane.html         # Visualization labeled "1.23 TB/s"
+```
+
+### HBM3E Variants
+
+| Variant | Clock | Data Rate | Peak BW |
+|---------|-------|-----------|---------|
+| HBM3E-8400 | 4.2 GHz | 8.4 Gbps | 1.075 TB/s |
+| HBM3E-9600 | 4.8 GHz | 9.6 Gbps | 1.229 TB/s |
+
+### Timing Parameters
+
+HBM3E-9600 timings (@ 4.8 GHz CK) vs HBM3-5600 (@ 2.8 GHz CK):
+
+| Parameter | HBM3-5600 (2.8 GHz) | HBM3E-9600 (4.8 GHz) | Ratio |
+|-----------|---------------------|----------------------|-------|
+| tRCD | 8 | 14 | 1.71x |
+| tRP | 8 | 14 | 1.71x |
+| tRAS | 16 | 27 | 1.71x |
+| tRC | 24 | 41 | 1.71x |
+| tRL | 8 | 14 | 1.71x |
+| tWL | 4 | 7 | 1.71x |
+
+### Files Created
+
+| File | Lines | Description |
+|------|-------|-------------|
+| `patterns/memory/hbm3e/common/hbm3e_configs.hpp` | ~300 | 8400/9600 configs, timing constants |
+| `patterns/memory/hbm3e/common/hbm3e_harness.hpp` | ~300 | Variant-aware test harness |
+| `patterns/memory/hbm3e/single-bank/hbm3e_9600_page_hits.cpp` | ~75 | Page hit pattern |
+| `patterns/memory/hbm3e/single-bank/hbm3e_9600_page_conflicts.cpp` | ~85 | Page conflict pattern |
+| `patterns/memory/hbm3e/single-bank/hbm3e_8400_page_hits.cpp` | ~75 | HBM3E-8400 variant |
+| `patterns/memory/hbm3e/bandwidth/hbm3e_9600_max_bandwidth.cpp` | ~95 | Bandwidth test |
+| `traces/memory/hbm3e/tools/swimlane.html` | ~2000 | Adapted from HBM3 |
+
+### Test Results
+
+All 4 HBM3E patterns pass:
+```
+PASS: hbm3e_9600_page_hits
+PASS: hbm3e_9600_page_conflicts
+PASS: hbm3e_9600_max_bandwidth
+PASS: hbm3e_8400_page_hits
+```
+
+### Usage
+
+To generate an HBM3E-9600 trace:
+
+```bash
+# Build
+cmake --build --preset release
+
+# Run pattern
+./build/patterns/memory/hbm3e/hbm3e_9600_page_hits
+
+# Output shows:
+# Configuration: HBM3E-9600 @ 4.8 GHz
+# Peak bandwidth: 1228.8 GB/s
+# Trace exported to: traces/memory/hbm3e/single-bank/hbm3e_9600_page_hits_trace.json
+```
+
 ## Next Steps
 
 1. Calibration data collection for multi-fidelity models
 2. Run HBM trace validators on existing traces to verify
-3. Add HBM3E separate pattern infrastructure (following HBM2E pattern)
-4. Consider adding more complex HBM2E pattern tests (multi-channel, full-bank)
+3. Consider adding more complex HBM2E/HBM3E pattern tests (multi-channel, full-bank)
