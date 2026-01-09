@@ -601,7 +601,7 @@ KernelGraphCompileResult KernelGraph::compile_sequential() const {
 
 void KernelGraph::append_kernel_program(isa::DMProgram& target,
                                         const Kernel& kernel,
-                                        Address base_offset) const {
+                                        Address /*base_offset*/) const {
     for (const auto& instr : kernel.program().instructions) {
         target.instructions.push_back(instr);
     }

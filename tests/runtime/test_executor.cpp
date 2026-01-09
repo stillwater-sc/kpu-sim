@@ -214,7 +214,7 @@ TEST_CASE_METHOD(ExecutorTestFixture, "GraphExecutor execution", "[executor][exe
 
         executor->set_input("A", A.data(), {M, K});
         executor->set_input("B", B.data(), {K, N});
-        executor->set_input("bias", bias.data(), {N});
+        executor->set_input("bias", bias.data(), N);
 
         auto result = executor->execute();
 
@@ -342,7 +342,7 @@ TEST_CASE_METHOD(ExecutorTestFixture, "GraphExecutor different kernels", "[execu
 
             executor->set_input("A", A.data(), {32, 32});
             executor->set_input("B", B.data(), {32, 32});
-            executor->set_input("bias", bias.data(), {32});
+            executor->set_input("bias", bias.data(), 32);
 
             auto result = executor->execute();
             REQUIRE(result.success);

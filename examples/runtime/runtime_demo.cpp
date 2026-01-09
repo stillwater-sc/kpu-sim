@@ -382,7 +382,7 @@ int main() {
 
     mlp_executor.set_input("A", mlp_A.data(), {64, 64});
     mlp_executor.set_input("B", mlp_B.data(), {64, 128});
-    mlp_executor.set_input("bias", mlp_bias.data(), {128});
+    mlp_executor.set_input("bias", mlp_bias.data(), 128);
 
     ExecutionResult mlp_result = mlp_executor.execute();
 

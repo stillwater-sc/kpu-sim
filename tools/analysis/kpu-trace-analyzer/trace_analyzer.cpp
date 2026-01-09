@@ -7,7 +7,7 @@
 
 #include <iostream>
 
-int main(int argc, char* argv[]) {
+int main(int /*argc*/, char* /*argv*/[]) {
     std::cout << "KPU Trace Analyzer - Not yet implemented\n";
     std::cout << "This tool will analyze and visualize execution traces.\n";
     return 0;

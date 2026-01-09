@@ -98,7 +98,7 @@ InputPort::InputPort(PortDir dir)
     : direction_(dir)
 {}
 
-bool InputPort::receive_flit(const Flit& flit, uint64_t cycle) {
+bool InputPort::receive_flit(const Flit& flit, uint64_t /*cycle*/) {
     if (!buffer_.can_accept()) {
         stats_.buffer_full_cycles++;
         return false;  // Buffer full - caller should not return credit
@@ -140,7 +140,7 @@ bool OutputPort::can_accept() const {
     return buffer_.can_accept() && credits_ > 0;
 }
 
-void OutputPort::accept_flit(const Flit& flit, uint64_t cycle) {
+void OutputPort::accept_flit(const Flit& flit, uint64_t /*cycle*/) {
     buffer_.push(flit);
 
     // Update path reservation
@@ -154,7 +154,7 @@ void OutputPort::accept_flit(const Flit& flit, uint64_t cycle) {
     }
 }
 
-void OutputPort::step(uint64_t cycle) {
+void OutputPort::step(uint64_t /*cycle*/) {
     pending_flit_.reset();
 
     if (buffer_.is_empty()) {
@@ -460,7 +460,7 @@ void WormholeRouter::process_outputs(uint64_t cycle) {
     }
 }
 
-void WormholeRouter::receive_from_links(uint64_t cycle) {
+void WormholeRouter::receive_from_links(uint64_t /*cycle*/) {
     // Called by NoC to deliver flits from neighboring routers
     // This is handled through the output port's downstream connection
 }
@@ -794,9 +794,6 @@ void WormholeNoC::step(uint64_t cycle) {
 
             if (out_port.has_flit_for_link()) {
                 Flit flit = out_port.take_pending_flit();
-
-                // Find destination router
-                uint8_t dst_id = flit.dst_router;
 
                 // For single-hop, the immediate neighbor is the destination
                 // But we need to get the actual neighbor based on direction

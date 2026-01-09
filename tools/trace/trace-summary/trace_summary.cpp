@@ -401,7 +401,6 @@ public:
         // Page hit amortization analysis
         if (stats.activate_count > 0 && stats.total_transactions > 0) {
             double hits_per_activate = static_cast<double>(stats.page_hits) / stats.activate_count;
-            double theoretical_max_hits = PAGE_HITS_PER_PAGE - 1;  // 127 hits after initial miss
             double page_utilization = 100.0 * (hits_per_activate + 1) / PAGE_HITS_PER_PAGE;
             std::cout << "  Page Utilization:\n";
             std::cout << "    Hits per page open: " << std::setprecision(1)

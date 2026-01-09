@@ -477,7 +477,7 @@ private:
 
     // Emit hop event (complete event on router)
     void emit_hop_event(std::ostream& out, bool& first,
-                        const HopInfo& hop, uint8_t mesh_cols) const {
+                        const HopInfo& hop, uint8_t /*mesh_cols*/) const {
         if (!first) out << ",\n";
         first = false;
 

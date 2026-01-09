@@ -343,7 +343,7 @@ uint64_t DFXGenerator::generate_tile_load(dfx::Program& program,
                                            const std::string& tensor_name,
                                            const std::vector<size_t>& tile_idx,
                                            const std::vector<size_t>& tile_shape,
-                                           dfx::DataType dtype,
+                                           dfx::DataType /*dtype*/,
                                            const std::vector<uint64_t>& depends_on) {
     // Generate load chain: EXTERNAL → L3 → L2 → L1
 
@@ -403,7 +403,7 @@ uint64_t DFXGenerator::generate_tile_store(dfx::Program& program,
                                             const std::string& tensor_name,
                                             const std::vector<size_t>& tile_idx,
                                             const std::vector<size_t>& tile_shape,
-                                            dfx::DataType dtype,
+                                            dfx::DataType /*dtype*/,
                                             const std::vector<uint64_t>& depends_on) {
     // Generate store chain: REGISTER → L1 → L2 → L3 → EXTERNAL
 

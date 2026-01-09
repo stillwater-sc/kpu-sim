@@ -142,7 +142,7 @@ void NoCRouter::connect_output(PortDirection dir, NoCLink* link) {
         config_.input_buffer_flits;
 }
 
-bool NoCRouter::can_inject(PortDirection port, uint64_t cycle) const {
+bool NoCRouter::can_inject(PortDirection port, uint64_t /*cycle*/) const {
     const auto& inp = input_ports_[static_cast<size_t>(port)];
     return inp.can_accept();
 }
@@ -221,7 +221,7 @@ PortDirection NoCRouter::xy_route(uint8_t dst_router) const {
     return PortDirection::LOCAL;
 }
 
-void NoCRouter::process_inputs(uint64_t cycle) {
+void NoCRouter::process_inputs(uint64_t /*cycle*/) {
     route_requests_.clear();
 
     // Collect packets from all input ports that need routing
@@ -230,9 +230,6 @@ void NoCRouter::process_inputs(uint64_t cycle) {
 
         if (!inp.buffer.empty()) {
             NoCPacket* pkt = &inp.buffer.front();
-
-            // Determine output port
-            PortDirection out_dir = route(pkt->dst_router);
 
             route_requests_.push_back({static_cast<PortDirection>(i), pkt});
         }
@@ -488,7 +485,7 @@ TransferResult NoC::inject_dma_to_l3(
 TransferResult NoC::inject_l3_to_dma(
     uint8_t src_l3,
     const TileDescriptor& tile,
-    uint64_t cycle)
+    uint64_t /*cycle*/)
 {
     // Similar to DMA to L3, simplified model
     // In reality, would need to route to edge router with DMA port
@@ -724,16 +721,7 @@ const NoCLink* NoC::get_link(uint8_t src, PortDirection dir) const {
 
 void NoC::reset_stats() {
     stats_ = Stats{};
-    for (auto& router : routers_) {
-        // Could add router stat reset if needed
-    }
-    for (auto& router_links : links_) {
-        for (auto& link : router_links) {
-            if (link) {
-                // Could add link stat reset if needed
-            }
-        }
-    }
+    // Router and link stats could be reset here if needed in the future
 }
 
 std::string NoC::to_string() const {

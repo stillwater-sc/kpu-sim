@@ -47,7 +47,7 @@ constexpr Size NUM_WAVES = 4, TILES_PER_WAVE = 4;
 constexpr Size NUM_A_L3_TILES = 8, NUM_B_L3_TILES = 4;
 constexpr Size A_SIZE = M * K * ELEM_SIZE;
 constexpr Size B_SIZE = K * N * ELEM_SIZE;
-constexpr Size C_SIZE = M * N * ELEM_SIZE;
+[[maybe_unused]] constexpr Size C_SIZE = M * N * ELEM_SIZE;
 constexpr Size C_TILE_SIZE = M_TILE_SIZE * N_TILE_SIZE * ELEM_SIZE;
 
 void fill_random(std::vector<float>& data) {

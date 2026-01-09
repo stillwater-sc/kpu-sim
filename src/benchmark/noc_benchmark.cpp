@@ -19,7 +19,6 @@ namespace sw::benchmark {
 
 double BenchmarkStats::variance() const {
     if (samples < 2) return 0.0;
-    double m = mean();
     // Note: We don't store individual samples, so we can't compute true variance
     // This is an approximation using min/max range
     double range = static_cast<double>(max_cycles - min_cycles);
@@ -108,7 +107,7 @@ LatencyResult NoCMicrobenchmarks::measure_tile_latency(uint8_t src, uint8_t dst,
         uint64_t end_cycle = 0;
 
         noc_->set_delivery_callback(dst, [&](const TileDescriptor&, uint8_t, uint8_t,
-                                              uint64_t inject, uint64_t complete) {
+                                              uint64_t /*inject*/, uint64_t complete) {
             end_cycle = complete;
         });
 
@@ -178,7 +177,7 @@ ThroughputResult NoCMicrobenchmarks::measure_point_to_point_bandwidth(
 
     uint64_t delivered = 0;
 
-    noc_->set_global_delivery_callback([&](const TileDescriptor& t, uint8_t, uint8_t,
+    noc_->set_global_delivery_callback([&](const TileDescriptor& /*t*/, uint8_t, uint8_t,
                                             uint64_t, uint64_t) {
         delivered++;
     });
@@ -236,8 +235,6 @@ ThroughputResult NoCMicrobenchmarks::measure_aggregate_bandwidth(
     std::vector<uint32_t> tiles_injected(transfers.size(), 0);
 
     while (delivered < total_expected) {
-        bool any_injected = false;
-
         for (size_t t = 0; t < transfers.size(); ++t) {
             if (tiles_injected[t] < num_tiles) {
                 TileDescriptor tile;
@@ -251,7 +248,6 @@ ThroughputResult NoCMicrobenchmarks::measure_aggregate_bandwidth(
 
                 if (inject_result == InjectResult::SUCCESS) {
                     tiles_injected[t]++;
-                    any_injected = true;
                 }
             }
         }
@@ -564,8 +560,6 @@ PatternResult NoCPatternBenchmarks::measure_allreduce(uint32_t tile_size) {
     result.pattern_name = "allreduce";
     result.config = "size=" + std::to_string(tile_size);
 
-    uint8_t num_routers = noc_->num_routers();
-
     // Phase 1: Reduce to router 0
     auto reduce_result = measure_reduce_all(0, tile_size);
 
@@ -809,7 +803,8 @@ OperatorResult NoCOperatorBenchmarks::benchmark_matmul(uint32_t M, uint32_t N, u
     // Tile sizes in bytes (assuming float32)
     uint32_t a_tile_bytes = Ti * Tk * 4;
     uint32_t b_tile_bytes = Tk * Tj * 4;
-    uint32_t c_tile_bytes = Ti * Tj * 4;
+    (void)a_tile_bytes;  // Used for documentation/future use
+    (void)b_tile_bytes;
 
     // Total FLOPs
     result.total_flops = 2ULL * M * N * K;
@@ -1480,7 +1475,7 @@ std::string NoCBenchmarkReporter::generate_json(const NoCBenchmarkHarness::FullR
 }
 
 std::string NoCBenchmarkReporter::generate_latency_heatmap_data(
-    const std::vector<LatencyResult>& results, uint8_t mesh_size) {
+    const std::vector<LatencyResult>& results, uint8_t /*mesh_size*/) {
 
     std::ostringstream ss;
 

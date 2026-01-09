@@ -5,7 +5,7 @@
 
 #include <iostream>
 
-int main(int argc, char* argv[]) {
+int main(int /*argc*/, char* /*argv*/[]) {
     std::cout << "KPU Assembler - Not yet implemented\n";
     return 0;
 }

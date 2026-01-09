@@ -114,7 +114,7 @@ void analyze_dfg_stats(const TileDataFlowGraph& dfg) {
               << parallelism << "x\n";
 }
 
-void analyze_schedule_stats(const DFGSchedule& schedule, const TileDataFlowGraph& dfg) {
+void analyze_schedule_stats(const DFGSchedule& schedule, const TileDataFlowGraph& /*dfg*/) {
     std::cout << "\n=== Schedule Statistics ===\n\n";
 
     std::cout << "Schedule:\n";

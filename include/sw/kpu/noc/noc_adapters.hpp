@@ -65,7 +65,7 @@ private:
         uint64_t inject_cycle;
     };
     std::unordered_map<uint64_t, InjectionInfo> pending_injections_;
-    uint64_t next_injection_id_ = 0;
+    [[maybe_unused]] uint64_t next_injection_id_ = 0;
 };
 
 // ============================================================================

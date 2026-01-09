@@ -98,11 +98,11 @@ Kernel KernelSerializer::deserialize(const std::vector<uint8_t>& data) const {
     Size N = read_value<Size>(data, offset);
     Size K = read_value<Size>(data, offset);
 
-    // Tile sizes
-    Size Ti = read_value<Size>(data, offset);
-    Size Tj = read_value<Size>(data, offset);
-    Size Tk = read_value<Size>(data, offset);
-    Size L1_Ki = read_value<Size>(data, offset);
+    // Tile sizes (read but not currently used during deserialization)
+    (void)read_value<Size>(data, offset);  // Ti
+    (void)read_value<Size>(data, offset);  // Tj
+    (void)read_value<Size>(data, offset);  // Tk
+    (void)read_value<Size>(data, offset);  // L1_Ki
 
     // MLP-specific
     bool has_bias = read_value<uint8_t>(data, offset) != 0;

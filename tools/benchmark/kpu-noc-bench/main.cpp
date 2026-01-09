@@ -329,7 +329,6 @@ void run_traced_benchmark(const Options& opts, std::shared_ptr<NoCBenchmarkTrace
 
     // Track bandwidth and backpressure
     uint32_t total_bytes = 0;
-    uint64_t last_counter_cycle = 0;
 
     // Simulate A tiles flowing East (row broadcast)
     for (uint8_t row = 0; row < opts.mesh_rows && row < num_tiles; row++) {

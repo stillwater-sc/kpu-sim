@@ -122,7 +122,7 @@ void BenchmarkHarness::populate_result(BenchmarkResult& result,
 }
 
 BenchmarkResult BenchmarkHarness::benchmark_matmul(Size M, Size N, Size K,
-                                                    DataType dtype) {
+                                                    DataType /*dtype*/) {
     // Compile kernel with auto-optimization
     auto start = std::chrono::high_resolution_clock::now();
     Kernel kernel = compiler_.compile_matmul(M, N, K);
@@ -151,7 +151,7 @@ BenchmarkResult BenchmarkHarness::benchmark_matmul(Size M, Size N, Size K,
 
 BenchmarkResult BenchmarkHarness::benchmark_matmul_tiled(Size M, Size N, Size K,
                                                           Size Ti, Size Tj, Size Tk,
-                                                          DataType dtype) {
+                                                          DataType /*dtype*/) {
     // Compile with explicit tile sizes
     auto start = std::chrono::high_resolution_clock::now();
     Kernel kernel = compiler_.compile_matmul(M, N, K, Ti, Tj, Tk);
