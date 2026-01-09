@@ -422,9 +422,80 @@ All fixes applied consistently to both HBM2 and HBM3 swimlane visualizations:
 - Playback cursor aligns with cycle count at all zoom levels
 - Zoom preset levels allow returning to exactly 100%
 
+## Session 4: HBM Variants, Trace Validators, and Visualization Improvements
+
+### HBM2E and HBM3E Timing Parameters
+
+Added distinct timing parameters for the higher-speed HBM variants:
+
+**HBM2E-3600 (3.6 Gbps, 1.8 GHz CK):**
+- Scaled from HBM2: 1.0/1.8 ≈ 0.56x
+- tRCD: 7 (was 12), tRP: 8 (was 14), tRAS: 16 (was 28), tRC: 24 (was 42)
+- tCL: 10 (was 18), tWL: 4 (was 7)
+- Peak bandwidth: 461 GB/s
+
+**HBM3E-9600 (9.6 Gbps, 4.8 GHz CK):**
+- Scaled from HBM3: 2.8/4.8 ≈ 0.58x
+- tRCD: 5 (was 8), tRP: 5 (was 8), tRAS: 10 (was 16), tRC: 14 (was 24)
+- tCL: 5 (was 8), tWL: 3 (was 4)
+- Peak bandwidth: 1229 GB/s
+
+**File Modified:** `src/components/memory/memory_controller_factory.cpp`
+
+### HBM2 and HBM3 Trace Validators
+
+Created Python trace validators following the GDDR6 pattern:
+
+**Files Created:**
+| File | Lines | Description |
+|------|-------|-------------|
+| `patterns/memory/hbm2/INVARIANTS.md` | ~300 | HBM2 invariant documentation |
+| `patterns/memory/hbm2/common/trace_validator.py` | ~550 | HBM2 Python validator |
+| `patterns/memory/hbm3/INVARIANTS.md` | ~300 | HBM3 invariant documentation |
+| `patterns/memory/hbm3/common/trace_validator.py` | ~550 | HBM3 Python validator |
+
+**Invariants Implemented:**
+- INV-001 to INV-004: Transaction structure (txn_id semantics, command ownership, temporal ordering)
+- INV-100: tRCD constraint (ACTIVATE to READ/WRITE)
+- INV-101: tRP constraint (PRECHARGE to ACTIVATE)
+- INV-102: tRRD constraint (ACTIVATE to ACTIVATE, bank group aware)
+- INV-103: tFAW constraint (four-activate window)
+- INV-106: tCCD constraint (CAS to CAS, bank group aware)
+- INV-107: tRAS constraint (minimum row active time)
+- INV-108: tRC constraint (row cycle time)
+
+**Key Features:**
+- Pseudo-channel aware timing checks (timing constraints apply per-PC)
+- Bank group detection: `bg = bank / 4`
+- Bank ID decoding: `channel = bank_id / 32; pc = (bank_id % 32) / 16; bank = bank_id % 16`
+
+### LPDDR5/GDDR6 Swimlane Visualization Improvements
+
+Applied the same zoom fixes from HBM swimlanes to LPDDR5 and GDDR6:
+
+**Files Modified:**
+- `traces/memory/lpddr5/tools/swimlane.html`
+- `traces/memory/gddr6/tools/swimlane.html`
+
+**Changes:**
+1. Fixed `updatePlaybackCursor()` - removed duplicate offset (CSS already handles margin-left)
+2. Added `ZOOM_LEVELS` array: `[0.25, 0.5, 0.75, 1.0, 1.5, 2.0, 3.0, 4.0]`
+3. Added `zoomIn()`, `zoomOut()`, `resetZoom()` functions
+4. Updated zoom button event listeners to use new functions
+5. Made zoom level display clickable to reset to 100%
+6. Added keyboard shortcut '0' to reset zoom
+
+### Summary
+
+All "Next Steps" from Session 3 have been completed:
+- ✅ Add HBM2E and HBM3E variants with higher data rates
+- ✅ Add trace validators for HBM (like LPDDR5)
+- ✅ Apply similar visualization improvements to LPDDR5/GDDR6 swimlanes
+
+Note: GDDR6 already had a trace validator (639 lines), so no new validator was needed.
+
 ## Next Steps
 
-1. Add HBM2E and HBM3E variants with higher data rates
-2. Consider adding trace validators for HBM (like LPDDR5)
-3. Calibration data collection for multi-fidelity models
-4. Apply similar visualization improvements to LPDDR5/GDDR6 swimlanes if needed
+1. Calibration data collection for multi-fidelity models
+2. Run HBM trace validators on existing traces to verify
+3. Consider adding more complex HBM pattern tests

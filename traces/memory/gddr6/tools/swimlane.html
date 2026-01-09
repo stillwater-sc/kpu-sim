@@ -942,7 +942,8 @@
         }
 
         function updatePlaybackCursor() {
-            const left = 140 + currentCycle * pixelsPerCycle;
+            // CSS already has margin-left for lane-label width, so just set left based on cycle
+            const left = currentCycle * pixelsPerCycle;
             playbackCursor.style.left = `${left}px`;
             currentCycleEl.textContent = currentCycle;
 
@@ -1065,6 +1066,37 @@
             renderSwimlanes();
         }
 
+        // Preset zoom levels for predictable stepping
+        const ZOOM_LEVELS = [0.25, 0.5, 0.75, 1.0, 1.5, 2.0, 3.0, 4.0];
+        let zoomIndex = ZOOM_LEVELS.indexOf(1.0);
+
+        function zoomIn() {
+            const nextIndex = ZOOM_LEVELS.findIndex(z => z > zoomLevel);
+            if (nextIndex !== -1) {
+                zoomIndex = nextIndex;
+                setZoom(ZOOM_LEVELS[zoomIndex]);
+            }
+        }
+
+        function zoomOut() {
+            let prevIndex = -1;
+            for (let i = ZOOM_LEVELS.length - 1; i >= 0; i--) {
+                if (ZOOM_LEVELS[i] < zoomLevel) {
+                    prevIndex = i;
+                    break;
+                }
+            }
+            if (prevIndex !== -1) {
+                zoomIndex = prevIndex;
+                setZoom(ZOOM_LEVELS[zoomIndex]);
+            }
+        }
+
+        function resetZoom() {
+            zoomIndex = ZOOM_LEVELS.indexOf(1.0);
+            setZoom(1.0);
+        }
+
         // Event handlers
         fileInput.addEventListener('change', async (e) => {
             const file = e.target.files[0];
@@ -1158,8 +1190,13 @@
             }
         }
 
-        btnZoomIn.addEventListener('click', () => setZoom(zoomLevel * 1.5));
-        btnZoomOut.addEventListener('click', () => setZoom(zoomLevel / 1.5));
+        btnZoomIn.addEventListener('click', zoomIn);
+        btnZoomOut.addEventListener('click', zoomOut);
+
+        // Make zoom level clickable to reset to 100%
+        zoomLevelEl.style.cursor = 'pointer';
+        zoomLevelEl.title = 'Click to reset to 100%';
+        zoomLevelEl.addEventListener('click', resetZoom);
 
         document.addEventListener('keydown', (e) => {
             if (requests.length === 0) return;
@@ -1194,11 +1231,15 @@
                 case '+':
                 case '=':
                     e.preventDefault();
-                    setZoom(zoomLevel * 1.5);
+                    zoomIn();
                     break;
                 case '-':
                     e.preventDefault();
-                    setZoom(zoomLevel / 1.5);
+                    zoomOut();
+                    break;
+                case '0':
+                    e.preventDefault();
+                    resetZoom();
                     break;
                 case 'Escape':
                     selectRequest(null);

@@ -8,6 +8,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added - 2026-01-08
+- **HBM2E and HBM3E Timing Parameters** (`src/components/memory/memory_controller_factory.cpp`)
+  - Distinct timing for HBM2E-3600 @ 1.8 GHz (461 GB/s peak): tRCD=7, tRP=8, tRAS=16, tRC=24
+  - Distinct timing for HBM3E-9600 @ 4.8 GHz (1229 GB/s peak): tRCD=5, tRP=5, tRAS=10, tRC=14
+  - Scaled from base variants using clock ratio (HBM2E: 0.56x, HBM3E: 0.58x)
+
+- **HBM2 Trace Validator** (`patterns/memory/hbm2/common/trace_validator.py`, `patterns/memory/hbm2/INVARIANTS.md`)
+  - Python trace validator for HBM2 traces with structure and timing invariant checking
+  - INV-001 to INV-004: Transaction structure invariants
+  - INV-100 to INV-108: Timing constraint invariants (tRCD, tRP, tRRD, tFAW, tCCD, tRAS, tRC)
+  - Pseudo-channel aware bank group calculations
+  - Comprehensive INVARIANTS.md documentation
+
+- **HBM3 Trace Validator** (`patterns/memory/hbm3/common/trace_validator.py`, `patterns/memory/hbm3/INVARIANTS.md`)
+  - Python trace validator for HBM3 traces with HBM3-5600 timing parameters
+  - Same invariant structure as HBM2 adapted for 16-channel architecture
+  - Comprehensive INVARIANTS.md documentation
+
 - **HBM2 Memory Controller** (`include/sw/kpu/components/hbm2_memory_controller.hpp`, `src/components/memory/hbm2_memory_controller.cpp`)
   - Cycle-accurate HBM2-2000 memory controller (256 GB/s peak bandwidth)
   - 8 channels, 2 pseudo-channels per channel, 16 banks per PC (256 total banks)
@@ -69,6 +86,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Fixed playback cursor misaligned after zooming (duplicate 200px offset in CSS + JS)
   - Added preset zoom levels [0.25, 0.5, 0.75, 1.0, 1.5, 2.0, 3.0, 4.0] with reset to 100%
   - Added keyboard shortcut '0' to reset zoom; clickable zoom level display for reset
+
+- **LPDDR5/GDDR6 Swimlane Visualization** (`traces/memory/lpddr5/tools/swimlane.html`, `traces/memory/gddr6/tools/swimlane.html`)
+  - Fixed playback cursor misaligned after zooming (removed duplicate offset in JS)
+  - Added preset zoom levels [0.25, 0.5, 0.75, 1.0, 1.5, 2.0, 3.0, 4.0] for predictable zoom stepping
+  - Added `resetZoom()` function and keyboard shortcut '0' to return to 100%
+  - Made zoom level display clickable to reset to 100%
 
 - **HBM Invariant Checking** (`hbm2_memory_controller.cpp`, `hbm3_memory_controller.cpp`)
   - Changed from generic "state_until in past" checks to semantic invariant checking

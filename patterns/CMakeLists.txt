@@ -336,6 +336,44 @@ add_hbm3_pattern(full_stack_saturation full-bank/hbm3_full_stack_saturation.cpp 
 add_hbm3_pattern(bank_distribution     full-bank/hbm3_bank_distribution.cpp     "Level 6 - Full Bank")
 
 # ============================================================================
+# HBM2E Memory Patterns (3.2-3.6 Gbps variants)
+# ============================================================================
+
+# HBM2E-specific common headers
+add_library(hbm2e_pattern_common INTERFACE)
+target_include_directories(hbm2e_pattern_common INTERFACE
+    ${CMAKE_CURRENT_SOURCE_DIR}/memory/hbm2e/common
+)
+target_link_libraries(hbm2e_pattern_common INTERFACE kpu_memory_components kpu_trace)
+set_target_properties(hbm2e_pattern_common PROPERTIES FOLDER "Patterns/Memory/HBM2E/Common")
+
+# Helper function to add HBM2E pattern
+# Usage: add_hbm2e_pattern(NAME SOURCE_FILE FOLDER_LEVEL)
+function(add_hbm2e_pattern NAME SOURCE_FILE FOLDER_LEVEL)
+    set(TARGET_NAME "hbm2e_${NAME}")
+    add_executable(${TARGET_NAME} memory/hbm2e/${SOURCE_FILE})
+    target_link_libraries(${TARGET_NAME} PRIVATE hbm2e_pattern_common)
+    set_target_properties(${TARGET_NAME} PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/patterns/memory/hbm2e"
+        FOLDER "Patterns/Memory/HBM2E/${FOLDER_LEVEL}"
+    )
+endfunction()
+
+# -----------------------------------------------------------------------------
+# HBM2E-3600 Patterns (3.6 Gbps @ 1.8 GHz, 460.8 GB/s peak)
+# -----------------------------------------------------------------------------
+
+add_hbm2e_pattern(3600_page_hits      single-bank/hbm2e_3600_page_hits.cpp      "HBM2E-3600")
+add_hbm2e_pattern(3600_page_conflicts single-bank/hbm2e_3600_page_conflicts.cpp "HBM2E-3600")
+add_hbm2e_pattern(3600_max_bandwidth  bandwidth/hbm2e_3600_max_bandwidth.cpp    "HBM2E-3600")
+
+# -----------------------------------------------------------------------------
+# HBM2E-3200 Patterns (3.2 Gbps @ 1.6 GHz, 409.6 GB/s peak)
+# -----------------------------------------------------------------------------
+
+add_hbm2e_pattern(3200_page_hits      single-bank/hbm2e_3200_page_hits.cpp      "HBM2E-3200")
+
+# ============================================================================
 # NoC Patterns (TODO)
 # ============================================================================
 

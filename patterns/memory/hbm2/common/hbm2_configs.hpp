@@ -236,6 +236,7 @@ constexpr uint32_t TILE_BYTES = 4096;
 constexpr double HBM2_2000_BANDWIDTH = 256.0;
 
 /// HBM2E-3200 peak bandwidth: 409.6 GB/s per stack
+/// (See patterns/memory/hbm2e/common/hbm2e_configs.hpp for HBM2E configs)
 constexpr double HBM2E_3200_BANDWIDTH = 409.6;
 
 } // namespace sw::kpu::patterns::hbm2

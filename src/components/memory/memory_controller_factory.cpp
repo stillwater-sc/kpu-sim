@@ -180,8 +180,7 @@ MemoryTimingParams MemoryControllerConfig::get_default_timing(
             break;
 
         case MemoryTechnology::HBM2:
-        case MemoryTechnology::HBM2E:
-            // HBM2 typical timing @ 2 Gbps (1 GHz CK)
+            // HBM2-2000 typical timing @ 2 Gbps (1.0 GHz CK)
             timing.tRCD = 12;
             timing.tRP = 14;
             timing.tRAS = 28;
@@ -200,9 +199,29 @@ MemoryTimingParams MemoryControllerConfig::get_default_timing(
             timing.tFAW = 16;
             break;
 
+        case MemoryTechnology::HBM2E:
+            // HBM2E-3600 timing @ 3.6 Gbps (1.8 GHz CK)
+            // Scaled from HBM2: 1.0/1.8 ≈ 0.56x
+            timing.tRCD = 7;    // 12 * 0.56 ≈ 7
+            timing.tRP = 8;     // 14 * 0.56 ≈ 8
+            timing.tRAS = 16;   // 28 * 0.56 ≈ 16
+            timing.tRC = 24;    // 42 * 0.56 ≈ 24
+            timing.tCL = 10;    // 18 * 0.56 ≈ 10
+            timing.tWL = 4;     // 7 * 0.56 ≈ 4
+            timing.tWR = 9;     // 16 * 0.56 ≈ 9
+            timing.tRTP = 4;    // 6 * 0.56 ≈ 4
+            timing.tRRD_L = 3;  // 4 * 0.56 ≈ 3
+            timing.tRRD_S = 2;  // 3 * 0.56 ≈ 2
+            timing.tCCD_L = 3;  // 4 * 0.56 ≈ 3
+            timing.tCCD_S = 2;  // 2 * 0.56 ≈ 2
+            timing.tWTR_L = 5;  // 8 * 0.56 ≈ 5
+            timing.tWTR_S = 3;  // 4 * 0.56 ≈ 3
+            timing.tRTW = 6;    // 10 * 0.56 ≈ 6
+            timing.tFAW = 9;    // 16 * 0.56 ≈ 9
+            break;
+
         case MemoryTechnology::HBM3:
-        case MemoryTechnology::HBM3E:
-            // HBM3 typical timing @ 5.6 Gbps (2.8 GHz CK)
+            // HBM3-5600 typical timing @ 5.6 Gbps (2.8 GHz CK)
             timing.tRCD = 8;
             timing.tRP = 8;
             timing.tRAS = 16;
@@ -219,6 +238,27 @@ MemoryTimingParams MemoryControllerConfig::get_default_timing(
             timing.tWTR_S = 3;
             timing.tRTW = 8;
             timing.tFAW = 16;
+            break;
+
+        case MemoryTechnology::HBM3E:
+            // HBM3E-9600 timing @ 9.6 Gbps (4.8 GHz CK)
+            // Scaled from HBM3: 2.8/4.8 ≈ 0.58x
+            timing.tRCD = 5;    // 8 * 0.58 ≈ 5
+            timing.tRP = 5;     // 8 * 0.58 ≈ 5
+            timing.tRAS = 10;   // 16 * 0.58 ≈ 10
+            timing.tRC = 14;    // 24 * 0.58 ≈ 14
+            timing.tCL = 5;     // 8 * 0.58 ≈ 5
+            timing.tWL = 3;     // 4 * 0.58 ≈ 3
+            timing.tWR = 7;     // 12 * 0.58 ≈ 7
+            timing.tRTP = 3;    // 4 * 0.58 ≈ 3
+            timing.tRRD_L = 3;  // 4 * 0.58 ≈ 3
+            timing.tRRD_S = 2;  // 2 * 0.58 ≈ 2
+            timing.tCCD_L = 3;  // 4 * 0.58 ≈ 3
+            timing.tCCD_S = 2;  // 2 * 0.58 ≈ 2
+            timing.tWTR_L = 4;  // 6 * 0.58 ≈ 4
+            timing.tWTR_S = 2;  // 3 * 0.58 ≈ 2
+            timing.tRTW = 5;    // 8 * 0.58 ≈ 5
+            timing.tFAW = 10;   // 16 * 0.58 ≈ 10
             break;
 
         case MemoryTechnology::GDDR6:
