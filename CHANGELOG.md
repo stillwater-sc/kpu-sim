@@ -8,6 +8,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added - 2026-01-08
+- **HBM2E Pattern Infrastructure** (`patterns/memory/hbm2e/`)
+  - Separate directory structure for HBM2E variants (3.2-3.6 Gbps)
+  - `common/hbm2e_configs.hpp`: HBM2E-3200 @ 1.6 GHz and HBM2E-3600 @ 1.8 GHz configs
+  - `common/hbm2e_harness.hpp`: Test harness with variant-aware clock frequencies
+  - HBM2E-3600 patterns: page_hits, page_conflicts, max_bandwidth
+  - HBM2E-3200 pattern: page_hits
+  - Swimlane visualization labeled for HBM2E (460.8 GB/s peak)
+  - Traces output to `traces/memory/hbm2e/` (separate from HBM2)
+
 - **HBM2E and HBM3E Timing Parameters** (`src/components/memory/memory_controller_factory.cpp`)
   - Distinct timing for HBM2E-3600 @ 1.8 GHz (461 GB/s peak): tRCD=7, tRP=8, tRAS=16, tRC=24
   - Distinct timing for HBM3E-9600 @ 4.8 GHz (1229 GB/s peak): tRCD=5, tRP=5, tRAS=10, tRC=14

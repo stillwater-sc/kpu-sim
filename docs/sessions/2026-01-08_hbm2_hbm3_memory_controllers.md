@@ -494,8 +494,141 @@ All "Next Steps" from Session 3 have been completed:
 
 Note: GDDR6 already had a trace validator (639 lines), so no new validator was needed.
 
+## Session 5: HBM2E Separate Pattern Infrastructure
+
+### User Request
+
+User asked how to produce a trace for HBM2E-3600 configuration. Initial approach mixed HBM2E patterns into the HBM2 directory, which the user correctly identified as problematic:
+
+> "Is that your design? I don't like it as it mixes HBM2 with HBM2E traces. How would that manifest itself in the visualization tools? As they are hardcoded labeling to HBM2, wouldn't that create confusion?"
+
+### Solution: Separate HBM2E Infrastructure
+
+Created a complete separate directory structure for HBM2E variants:
+
+```
+patterns/memory/hbm2e/
+├── common/
+│   ├── hbm2e_configs.hpp     # HBM2E-3200 and HBM2E-3600 configs
+│   └── hbm2e_harness.hpp     # Test harness with variant-aware clock
+├── single-bank/
+│   ├── hbm2e_3600_page_hits.cpp
+│   ├── hbm2e_3600_page_conflicts.cpp
+│   └── hbm2e_3200_page_hits.cpp
+└── bandwidth/
+    └── hbm2e_3600_max_bandwidth.cpp
+
+traces/memory/hbm2e/
+└── tools/
+    └── swimlane.html         # Visualization labeled "460.8 GB/s"
+```
+
+### Key Design Decisions
+
+**1. Variant-Aware Harness**
+The `HBM2EHarness` class tracks which variant is in use and exports traces with correct clock frequency:
+
+```cpp
+enum class HBM2EVariant {
+    HBM2E_3200,  // 3.2 Gbps @ 1.6 GHz
+    HBM2E_3600   // 3.6 Gbps @ 1.8 GHz
+};
+
+// Trace export uses correct clock for time conversion
+bool export_trace(const std::string& filename) {
+    return ChromeTraceExporter::export_traces(
+        filename,
+        mc_->trace_entries(),
+        clock_ghz()  // 1.6 or 1.8 GHz based on variant
+    );
+}
+```
+
+**2. Timing Parameters at Higher Clock**
+HBM2E-3600 timings in cycles (at 1.8 GHz CK) vs HBM2-2000 (at 1.0 GHz CK):
+
+| Parameter | HBM2-2000 (1.0 GHz) | HBM2E-3600 (1.8 GHz) | Ratio |
+|-----------|---------------------|----------------------|-------|
+| tRCDRD | 12 | 22 | 1.8x |
+| tRP | 14 | 25 | 1.8x |
+| tRAS | 28 | 50 | 1.8x |
+| tRC | 42 | 76 | 1.8x |
+| tRL | 18 | 32 | 1.8x |
+| tWL | 7 | 13 | 1.8x |
+
+The cycle counts increase proportionally to clock (same absolute time in ns).
+
+**3. Separate Visualization**
+The swimlane.html for HBM2E shows:
+- Header: "HBM2E Swimlane View"
+- Badge: "460.8 GB/s" (vs HBM2's "256 GB/s")
+- Comments reference HBM2E architecture
+
+### Files Created
+
+| File | Lines | Description |
+|------|-------|-------------|
+| `patterns/memory/hbm2e/common/hbm2e_configs.hpp` | ~300 | 3200/3600 configs, timing constants |
+| `patterns/memory/hbm2e/common/hbm2e_harness.hpp` | ~300 | Variant-aware test harness |
+| `patterns/memory/hbm2e/single-bank/hbm2e_3600_page_hits.cpp` | ~75 | Page hit pattern |
+| `patterns/memory/hbm2e/single-bank/hbm2e_3600_page_conflicts.cpp` | ~85 | Page conflict pattern |
+| `patterns/memory/hbm2e/single-bank/hbm2e_3200_page_hits.cpp` | ~75 | HBM2E-3200 variant |
+| `patterns/memory/hbm2e/bandwidth/hbm2e_3600_max_bandwidth.cpp` | ~95 | Bandwidth test |
+| `traces/memory/hbm2e/tools/swimlane.html` | ~2100 | Adapted from HBM2 |
+
+### Files Modified
+
+| File | Change |
+|------|--------|
+| `patterns/CMakeLists.txt` | Added HBM2E pattern targets with `add_hbm2e_pattern()` function |
+| `patterns/memory/hbm2/common/hbm2_configs.hpp` | Removed HBM2E configs (now in separate file) |
+
+### Cleanup
+
+Removed from `hbm2_configs.hpp`:
+- `hbm2e_3600_config()` function
+- `single_pc_config_3600()` function
+- `full_stack_config_3600()` function
+- `HBM2E_3600_BANDWIDTH` constant
+
+These are now properly located in `hbm2e_configs.hpp`.
+
+### Usage
+
+To generate an HBM2E-3600 trace:
+
+```bash
+# Build
+cmake --build --preset release
+
+# Run pattern
+./build/patterns/memory/hbm2e/hbm2e_3600_page_hits
+
+# Output shows:
+# Configuration: HBM2E-3600 @ 1.8 GHz
+# Peak bandwidth: 460.8 GB/s
+# Trace exported to: traces/memory/hbm2e/single-bank/hbm2e_3600_page_hits_trace.json
+```
+
+### Test Results
+
+All 4 HBM2E patterns pass:
+```
+PASS: hbm2e_3600_page_hits
+PASS: hbm2e_3600_page_conflicts
+PASS: hbm2e_3600_max_bandwidth
+PASS: hbm2e_3200_page_hits
+```
+
+### Lessons Learned
+
+1. **Separate variants cleanly** - Mixing HBM2 and HBM2E in the same directory creates confusion in visualization tools and trace analysis
+2. **Variant-aware infrastructure** - The harness should track which variant is in use for correct clock frequency in trace exports
+3. **Consistent labeling** - Each technology variant should have its own clearly labeled visualization tools
+
 ## Next Steps
 
 1. Calibration data collection for multi-fidelity models
 2. Run HBM trace validators on existing traces to verify
-3. Consider adding more complex HBM pattern tests
+3. Add HBM3E separate pattern infrastructure (following HBM2E pattern)
+4. Consider adding more complex HBM2E pattern tests (multi-channel, full-bank)
