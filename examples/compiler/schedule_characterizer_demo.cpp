@@ -9,6 +9,7 @@
 
 #include <sw/compiler/schedule_characterizer.hpp>
 #include <iostream>
+#include <iomanip>
 #include <chrono>
 
 using namespace sw::kpu::compiler;

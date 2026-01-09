@@ -680,7 +680,7 @@ bool StatefulBlockMover::exec_loop_start(const BlockMoverCommand& cmd) {
     return true;
 }
 
-bool StatefulBlockMover::exec_loop_end(const BlockMoverCommand& cmd) {
+bool StatefulBlockMover::exec_loop_end(const BlockMoverCommand& /*cmd*/) {
     if (loop_stack_.empty()) {
         // Unbalanced loop - error or just continue
         return true;

@@ -292,7 +292,7 @@ void SparseMemory::clear() {
         for (Size page_idx : accessed_pages_) {
             Address page_addr = page_idx * psize;
             if (page_addr < config_.virtual_size) {
-                Size clear_size = std::min(psize, config_.virtual_size - page_addr);
+                Size clear_size = std::min<Size>(psize, config_.virtual_size - page_addr);
                 std::memset(static_cast<char*>(map_->data()) + page_addr, 0, clear_size);
             }
         }

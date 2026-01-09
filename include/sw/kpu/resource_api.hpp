@@ -60,11 +60,11 @@ public:
 
     ~ResourceManager() = default;
 
-    // Non-copyable, movable
+    // Non-copyable, non-assignable (reference member prevents assignment)
     ResourceManager(const ResourceManager&) = delete;
     ResourceManager& operator=(const ResourceManager&) = delete;
     ResourceManager(ResourceManager&&) = default;
-    ResourceManager& operator=(ResourceManager&&) = default;
+    ResourceManager& operator=(ResourceManager&&) = delete;
 
     // =========================================
     // Resource Discovery

@@ -6,7 +6,6 @@
 #include <cstring>
 #include <cstdlib>
 #include <cstdio>
-#include <cstdalign>
 
 namespace sw::driver {
 
