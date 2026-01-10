@@ -508,6 +508,65 @@ add_hbm3e_pattern(9600_max_bandwidth  bandwidth/hbm3e_9600_max_bandwidth.cpp    
 add_hbm3e_pattern(8400_page_hits      single-bank/hbm3e_8400_page_hits.cpp      "HBM3E-8400")
 
 # ============================================================================
+# DMA Patterns
+# ============================================================================
+
+# DMA-specific common headers
+add_library(dma_pattern_common INTERFACE)
+target_include_directories(dma_pattern_common INTERFACE
+    ${CMAKE_CURRENT_SOURCE_DIR}/dma/common
+    ${PROJECT_SOURCE_DIR}/include
+)
+set_target_properties(dma_pattern_common PROPERTIES FOLDER "Patterns/DMA/Common")
+
+# Helper function to add DMA pattern
+# Usage: add_dma_pattern(NAME SOURCE_FILE FOLDER_LEVEL)
+#   NAME         - Pattern name (becomes dma_${NAME})
+#   SOURCE_FILE  - Source file relative to dma/
+#   FOLDER_LEVEL - MSVC folder level (e.g., "STREAM", "GEMM", "Conv2D")
+function(add_dma_pattern NAME SOURCE_FILE FOLDER_LEVEL)
+    add_executable(dma_${NAME}
+        ${CMAKE_CURRENT_SOURCE_DIR}/dma/${SOURCE_FILE}
+    )
+    target_link_libraries(dma_${NAME} PRIVATE
+        pattern_common
+        dma_pattern_common
+        kpu_datamovement_components
+        kpu_memory_components
+        kpu_noc
+        kpu_trace
+    )
+    set_target_properties(dma_${NAME} PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/patterns/dma
+        FOLDER "Patterns/DMA/${FOLDER_LEVEL}"
+    )
+endfunction()
+
+# -----------------------------------------------------------------------------
+# STREAM Benchmark Patterns
+# -----------------------------------------------------------------------------
+
+add_dma_pattern(stream_copy  stream/stream_copy.cpp  "STREAM")
+add_dma_pattern(stream_triad stream/stream_triad.cpp "STREAM")
+
+# -----------------------------------------------------------------------------
+# GEMM Tile Patterns
+# -----------------------------------------------------------------------------
+
+add_dma_pattern(tile_aligned        gemm/tile_aligned.cpp        "GEMM")
+add_dma_pattern(tile_pitched_narrow gemm/tile_pitched_narrow.cpp "GEMM")
+add_dma_pattern(tile_pitched_wide   gemm/tile_pitched_wide.cpp   "GEMM")
+add_dma_pattern(tile_page_boundary  gemm/tile_page_boundary.cpp  "GEMM")
+add_dma_pattern(a_tile_row_major    gemm/a_tile_row_major.cpp    "GEMM")
+add_dma_pattern(b_tile_col_major    gemm/b_tile_col_major.cpp    "GEMM")
+
+# -----------------------------------------------------------------------------
+# Conv2D Patterns
+# -----------------------------------------------------------------------------
+
+add_dma_pattern(input_tile_nhwc conv2d/input_tile_nhwc.cpp "Conv2D")
+
+# ============================================================================
 # NoC Patterns (TODO)
 # ============================================================================
 
