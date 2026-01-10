@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>DMA Trace Visualization</title>
+    <style>
+        body { font-family: monospace; background: #1e1e1e; color: #d4d4d4; padding: 20px; }
+        .process { margin: 20px 0; }
+        .process-name { font-weight: bold; color: #569cd6; margin-bottom: 10px; }
+        .track { display: flex; align-items: center; margin: 5px 0; }
+        .track-name { width: 80px; color: #9cdcfe; }
+        .timeline { position: relative; height: 24px; background: #252526; flex: 1; border-radius: 2px; }
+        .event { position: absolute; height: 20px; top: 2px; border-radius: 2px; font-size: 10px; 
+                 display: flex; align-items: center; justify-content: center; color: white; 
+                 overflow: hidden; white-space: nowrap; }
+        .dma-read { background: #4ec9b0; }
+        .dma-write { background: #ce9178; }
+        .mc-act { background: #c586c0; }
+        .mc-read { background: #4fc1ff; }
+        .mc-write { background: #dcdcaa; }
+        .mc-pre { background: #6a9955; }
+        .legend { margin: 20px 0; display: flex; gap: 20px; }
+        .legend-item { display: flex; align-items: center; gap: 5px; }
+        .legend-color { width: 20px; height: 14px; border-radius: 2px; }
+        h2 { color: #4ec9b0; }
+        .stats { background: #252526; padding: 15px; border-radius: 4px; margin: 20px 0; }
+    </style>
+</head>
+<body>
+    <h2>DMA Pattern Trace: tile_aligned</h2>
+    <div class="stats">
+
+        <div>Transfers: 12</div>
+        <div>Bytes: 3072</div>
+        <div>Page Hit Rate: 75.0%</div>
+        <div>Bandwidth: 30.34 GB/s</div>
+    </div>
+
+    <div class="legend">
+        <div class="legend-item"><div class="legend-color dma-read"></div>DMA_READ</div>
+        <div class="legend-item"><div class="legend-color dma-write"></div>DMA_WRITE</div>
+        <div class="legend-item"><div class="legend-color mc-act"></div>ACT</div>
+        <div class="legend-item"><div class="legend-color mc-read"></div>READ</div>
+        <div class="legend-item"><div class="legend-color mc-pre"></div>PRE</div>
+    </div>
+
+    <div class="process">
+        <div class="process-name">Process 1: DMA_ENGINE</div>
+        <div class="track"><div class="track-name">Channel 0</div><div class="timeline">
+            <div class="event dma-read" style="left:0.0px;width:364.4px;" title="DMA_READ 0x20c400">DMA_READ</div>
+            <div class="event dma-read" style="left:0.0px;width:578.2px;" title="DMA_READ 0x21c400">DMA_READ</div>
+            <div class="event dma-read" style="left:0.0px;width:800.0px;" title="DMA_READ 0x22c400">DMA_READ</div>
+        </div></div>
+        <div class="track"><div class="track-name">Channel 1</div><div class="timeline">
+            <div class="event dma-read" style="left:0.0px;width:198.0px;" title="DMA_READ 0x200400">DMA_READ</div>
+            <div class="event dma-read" style="left:0.0px;width:419.8px;" title="DMA_READ 0x210400">DMA_READ</div>
+            <div class="event dma-read" style="left:0.0px;width:633.7px;" title="DMA_READ 0x220400">DMA_READ</div>
+        </div></div>
+        <div class="track"><div class="track-name">Channel 2</div><div class="timeline">
+            <div class="event dma-read" style="left:0.0px;width:253.5px;" title="DMA_READ 0x204400">DMA_READ</div>
+            <div class="event dma-read" style="left:0.0px;width:475.2px;" title="DMA_READ 0x214400">DMA_READ</div>
+            <div class="event dma-read" style="left:0.0px;width:689.1px;" title="DMA_READ 0x224400">DMA_READ</div>
+        </div></div>
+        <div class="track"><div class="track-name">Channel 3</div><div class="timeline">
+            <div class="event dma-read" style="left:0.0px;width:308.9px;" title="DMA_READ 0x208400">DMA_READ</div>
+            <div class="event dma-read" style="left:0.0px;width:530.7px;" title="DMA_READ 0x218400">DMA_READ</div>
+            <div class="event dma-read" style="left:0.0px;width:744.6px;" title="DMA_READ 0x228400">DMA_READ</div>
+        </div></div>
+    </div>
+
+    <div class="process">
+        <div class="process-name">Process 2: MEMORY_CONTROLLER</div>
+        <div class="track"><div class="track-name">Bank 0</div><div class="timeline">
+            <div class="event mc-act" style="left:103.0px;width:31.7px;" title="ACTIVATE Ch0 Bank0">ACT</div>
+            <div class="event mc-read" style="left:142.6px;width:55.4px;" title="READ Ch0 Bank0">READ</div>
+            <div class="event mc-read" style="left:190.1px;width:55.4px;" title="READ Ch0 Bank0">READ</div>
+            <div class="event mc-read" style="left:245.5px;width:55.4px;" title="READ Ch0 Bank0">READ</div>
+            <div class="event mc-read" style="left:301.0px;width:55.4px;" title="READ Ch0 Bank0">READ</div>
+        </div></div>
+        <div class="track"><div class="track-name">Bank 1</div><div class="timeline">
+            <div class="event mc-act" style="left:301.0px;width:31.7px;" title="ACTIVATE Ch0 Bank1">ACT</div>
+            <div class="event mc-read" style="left:356.4px;width:55.4px;" title="READ Ch0 Bank1">READ</div>
+            <div class="event mc-read" style="left:411.9px;width:55.4px;" title="READ Ch0 Bank1">READ</div>
+            <div class="event mc-read" style="left:467.3px;width:55.4px;" title="READ Ch0 Bank1">READ</div>
+            <div class="event mc-read" style="left:522.8px;width:55.4px;" title="READ Ch0 Bank1">READ</div>
+        </div></div>
+        <div class="track"><div class="track-name">Bank 2</div><div class="timeline">
+            <div class="event mc-act" style="left:522.8px;width:31.7px;" title="ACTIVATE Ch0 Bank2">ACT</div>
+            <div class="event mc-read" style="left:570.3px;width:55.4px;" title="READ Ch0 Bank2">READ</div>
+            <div class="event mc-read" style="left:625.7px;width:55.4px;" title="READ Ch0 Bank2">READ</div>
+            <div class="event mc-read" style="left:681.2px;width:55.4px;" title="READ Ch0 Bank2">READ</div>
+            <div class="event mc-read" style="left:736.6px;width:55.4px;" title="READ Ch0 Bank2">READ</div>
+        </div></div>
+    </div>
+
+    <p style="color:#6a9955;">Timeline: 0 - 0.101 microseconds</p>
+    <p style="color:#808080;">For full interactive visualization, open the JSON file in <a href="https://ui.perfetto.dev" style="color:#4ec9b0;">Perfetto</a></p>
+</body>
+</html>
