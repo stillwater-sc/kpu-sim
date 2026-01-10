@@ -303,7 +303,108 @@ public:
 
     /// Clear violation list
     virtual void clear_violations() = 0;
+
+    // ========================================================================
+    // Refresh Control (CYCLE_ACCURATE only)
+    // ========================================================================
+
+    /// Refresh scheduling mode
+    ///
+    /// Controls how and when refresh commands are issued:
+    /// - AUTOMATIC: Opportunistic scheduling with deadline enforcement (default)
+    /// - INTERVAL: Fixed cycle interval between refreshes
+    /// - OPPORTUNISTIC: Only refresh during idle periods
+    /// - EXPLICIT: Only refresh when inject_refresh() is called
+    /// - DISABLED: No refresh at all (for short deterministic tests)
+    enum class RefreshMode : uint8_t {
+        AUTOMATIC,      ///< Opportunistic + deadline enforcement (default)
+        INTERVAL,       ///< Fixed cycle interval with optional deadline
+        OPPORTUNISTIC,  ///< Opportunistic only + deadline enforcement
+        EXPLICIT,       ///< Manual injection + optional deadline
+        DISABLED        ///< No refresh (test mode only)
+    };
+
+    /// Set refresh scheduling mode
+    /// @param mode The scheduling mode to use
+    /// @note Default implementation does nothing (for non-cycle-accurate controllers)
+    virtual void set_refresh_mode(RefreshMode mode) { (void)mode; }
+
+    /// Get current refresh mode
+    /// @return Current refresh mode (AUTOMATIC for non-cycle-accurate controllers)
+    virtual RefreshMode refresh_mode() const { return RefreshMode::AUTOMATIC; }
+
+    /// Set refresh interval for INTERVAL mode
+    /// @param cycles Number of cycles between refresh commands
+    /// @note Only effective when mode is INTERVAL
+    /// @note If cycles is 0, uses technology-specific tREFI
+    virtual void set_refresh_interval(uint64_t cycles) { (void)cycles; }
+
+    /// Get configured refresh interval
+    /// @return Configured interval in cycles (0 = use tREFI)
+    virtual uint64_t refresh_interval() const { return 0; }
+
+    /// Enable/disable deadline enforcement
+    /// @param enforce If true, force refresh at deadline regardless of mode
+    /// @note Default is true; set to false only for controlled tests
+    /// @warning Disabling deadline enforcement risks data loss in real hardware
+    virtual void set_deadline_enforcement(bool enforce) { (void)enforce; }
+
+    /// Check if deadline enforcement is active
+    /// @return true if deadline enforcement is enabled
+    virtual bool deadline_enforced() const { return true; }
+
+    /// Get cycles until refresh deadline for a bank
+    /// @param channel Memory channel
+    /// @param bank Bank number
+    /// @return Cycles until deadline (0 if deadline passed, UINT64_MAX if N/A)
+    virtual uint64_t cycles_until_deadline(uint8_t channel, uint8_t bank) const {
+        (void)channel; (void)bank;
+        return UINT64_MAX;
+    }
+
+    /// Check if refresh is pending for a bank
+    /// @param channel Memory channel
+    /// @param bank Bank number
+    /// @return true if bank has pending refresh
+    virtual bool refresh_pending(uint8_t channel, uint8_t bank) const {
+        (void)channel; (void)bank;
+        return false;
+    }
+
+    /// Get accumulated refresh debt for a bank
+    /// @param channel Memory channel
+    /// @param bank Bank number
+    /// @return Number of deferred refresh operations
+    virtual uint32_t refresh_debt(uint8_t channel, uint8_t bank) const {
+        (void)channel; (void)bank;
+        return 0;
+    }
+
+    /// Inject a refresh command manually
+    /// @param channel Target channel
+    /// @param bank Target bank (-1 for all-bank refresh)
+    /// @return true if refresh was issued, false if blocked
+    virtual bool inject_refresh(uint8_t channel, int8_t bank = -1) {
+        (void)channel; (void)bank;
+        return false;
+    }
 };
+
+// ============================================================================
+// Convenience Functions for RefreshMode
+// ============================================================================
+
+/// Convert refresh mode to string
+constexpr std::string_view to_string(IMemoryController::RefreshMode mode) {
+    switch (mode) {
+        case IMemoryController::RefreshMode::AUTOMATIC:     return "AUTOMATIC";
+        case IMemoryController::RefreshMode::INTERVAL:      return "INTERVAL";
+        case IMemoryController::RefreshMode::OPPORTUNISTIC: return "OPPORTUNISTIC";
+        case IMemoryController::RefreshMode::EXPLICIT:      return "EXPLICIT";
+        case IMemoryController::RefreshMode::DISABLED:      return "DISABLED";
+        default: return "UNKNOWN";
+    }
+}
 
 // ============================================================================
 // Memory Controller Factory

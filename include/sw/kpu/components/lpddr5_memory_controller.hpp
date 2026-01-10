@@ -459,6 +459,25 @@ public:
     void clear_violations() override { violations_.clear(); interface_violations_.clear(); }
 
     // ========================================================================
+    // IMemoryController Interface - Refresh Control
+    // ========================================================================
+
+    void set_refresh_mode(RefreshMode mode) override;
+    RefreshMode refresh_mode() const override { return refresh_mode_; }
+
+    void set_refresh_interval(uint64_t cycles) override;
+    uint64_t refresh_interval() const override { return refresh_interval_; }
+
+    void set_deadline_enforcement(bool enforce) override { deadline_enforcement_ = enforce; }
+    bool deadline_enforced() const override { return deadline_enforcement_; }
+
+    uint64_t cycles_until_deadline(uint8_t channel, uint8_t bank) const override;
+    bool refresh_pending(uint8_t channel, uint8_t bank) const override;
+    uint32_t refresh_debt(uint8_t channel, uint8_t bank) const override;
+
+    bool inject_refresh(uint8_t channel, int8_t bank = -1) override;
+
+    // ========================================================================
     // LPDDR5-Specific API (not part of IMemoryController)
     // ========================================================================
 
@@ -579,6 +598,12 @@ private:
     bool tracing_enabled_ = false;
     sw::trace::ResourceTracker* resource_tracker_ = nullptr;
     std::vector<sw::trace::TraceEntry> trace_entries_;
+
+    // Refresh control
+    RefreshMode refresh_mode_ = RefreshMode::AUTOMATIC;
+    uint64_t refresh_interval_ = 0;        // 0 = use tREFIpb
+    bool deadline_enforcement_ = true;
+    uint64_t last_interval_refresh_ = 0;   // For INTERVAL mode tracking
 };
 
 } // namespace sw::kpu::lpddr5

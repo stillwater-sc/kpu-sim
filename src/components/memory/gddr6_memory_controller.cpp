@@ -804,36 +804,107 @@ void GDDR6MemoryController::finalize_bus_traces() {
 }
 
 void GDDR6MemoryController::handle_refresh() {
+    // DISABLED mode: no refresh at all
+    if (refresh_mode_ == RefreshMode::DISABLED) {
+        return;
+    }
+
     const auto& timing = gddr6_config_.timing;
 
-    for (uint8_t ch = 0; ch < gddr6_config_.num_channels; ++ch) {
-        Channel& channel = channels_[ch];
+    // Deadline enforcement (applies to all modes except DISABLED)
+    if (deadline_enforcement_) {
+        for (uint8_t ch = 0; ch < gddr6_config_.num_channels; ++ch) {
+            Channel& channel = channels_[ch];
 
-        // Check if any bank needs refresh
-        for (uint8_t b = 0; b < 16; ++b) {
-            Bank& bank = channel.banks[b];
+            for (uint8_t b = 0; b < 16; ++b) {
+                Bank& bank = channel.banks[b];
 
-            // Check if refresh deadline is approaching
-            uint64_t deadline = bank.last_refresh + 16 * timing.tREFI;
-            if (current_cycle_ >= deadline - timing.tRFCpb) {
-                // Urgent refresh needed
-                if (can_refresh(ch, b)) {
-                    do_refresh(ch, b);
-                    return;  // Only one refresh per cycle
+                // Check if refresh deadline is approaching
+                uint64_t deadline = bank.last_refresh + 16 * timing.tREFI;
+                if (current_cycle_ >= deadline - timing.tRFCpb) {
+                    // Urgent refresh needed - force it regardless of mode
+                    if (can_refresh(ch, b)) {
+                        do_refresh(ch, b);
+                        return;  // Only one refresh per cycle
+                    }
                 }
             }
         }
+    }
 
-        // Background refresh (round-robin)
-        uint8_t next_bank = channel.next_refresh_bank;
-        Bank& bank = channel.banks[next_bank];
+    // Mode-specific scheduling
+    switch (refresh_mode_) {
+        case RefreshMode::AUTOMATIC:
+            // Original behavior: opportunistic + proactive round-robin
+            for (uint8_t ch = 0; ch < gddr6_config_.num_channels; ++ch) {
+                Channel& channel = channels_[ch];
+                uint8_t next_bank = channel.next_refresh_bank;
+                Bank& bank = channel.banks[next_bank];
 
-        if (current_cycle_ >= bank.last_refresh + timing.tREFI) {
-            if (can_refresh(ch, next_bank)) {
-                do_refresh(ch, next_bank);
-                channel.next_refresh_bank = (next_bank + 1) % 16;
+                if (current_cycle_ >= bank.last_refresh + timing.tREFI) {
+                    if (can_refresh(ch, next_bank)) {
+                        do_refresh(ch, next_bank);
+                        channel.next_refresh_bank = (next_bank + 1) % 16;
+                        return;
+                    }
+                }
             }
+            break;
+
+        case RefreshMode::INTERVAL: {
+            // Fixed interval mode: refresh at user-specified intervals
+            uint64_t interval = refresh_interval_;
+            if (interval == 0) {
+                interval = timing.tREFI;  // Default to tREFI
+            }
+
+            if (current_cycle_ >= last_interval_refresh_ + interval) {
+                // Do round-robin refresh across banks
+                for (uint8_t ch = 0; ch < gddr6_config_.num_channels; ++ch) {
+                    Channel& channel = channels_[ch];
+                    uint8_t next_bank = channel.next_refresh_bank;
+
+                    if (can_refresh(ch, next_bank)) {
+                        do_refresh(ch, next_bank);
+                        channel.next_refresh_bank = (next_bank + 1) % 16;
+                        last_interval_refresh_ = current_cycle_;
+                        return;
+                    }
+                }
+            }
+            break;
         }
+
+        case RefreshMode::OPPORTUNISTIC:
+            // Only refresh when bus is idle (opportunistic only)
+            for (uint8_t ch = 0; ch < gddr6_config_.num_channels; ++ch) {
+                Channel& channel = channels_[ch];
+
+                // Check if bus is idle
+                if (channel.cmd_bus_state == CommandBusState::IDLE &&
+                    channel.data_bus_state == DataBusState::IDLE) {
+
+                    uint8_t next_bank = channel.next_refresh_bank;
+                    Bank& bank = channel.banks[next_bank];
+
+                    if (current_cycle_ >= bank.last_refresh + timing.tREFI) {
+                        if (can_refresh(ch, next_bank)) {
+                            do_refresh(ch, next_bank);
+                            channel.next_refresh_bank = (next_bank + 1) % 16;
+                            return;
+                        }
+                    }
+                }
+            }
+            break;
+
+        case RefreshMode::EXPLICIT:
+            // Do nothing - wait for inject_refresh() calls
+            break;
+
+        case RefreshMode::DISABLED:
+            // Already handled above
+            break;
     }
 }
 
@@ -1191,6 +1262,94 @@ void GDDR6MemoryController::trace_command(
     entry.payload = payload;
 
     trace_entries_.push_back(entry);
+}
+
+// ============================================================================
+// Refresh Control Implementation
+// ============================================================================
+
+void GDDR6MemoryController::set_refresh_mode(RefreshMode mode) {
+    refresh_mode_ = mode;
+    if (mode == RefreshMode::INTERVAL) {
+        last_interval_refresh_ = current_cycle_;
+    }
+}
+
+void GDDR6MemoryController::set_refresh_interval(uint64_t cycles) {
+    refresh_interval_ = cycles;
+    last_interval_refresh_ = current_cycle_;
+}
+
+uint64_t GDDR6MemoryController::cycles_until_deadline(uint8_t channel, uint8_t bank) const {
+    if (channel >= gddr6_config_.num_channels || bank >= 16) {
+        return UINT64_MAX;
+    }
+
+    const auto& timing = gddr6_config_.timing;
+    const Bank& b = channels_[channel].banks[bank];
+
+    // Deadline is 16 * tREFI after last refresh
+    uint64_t deadline = b.last_refresh + 16 * timing.tREFI;
+
+    if (current_cycle_ >= deadline) {
+        return 0;
+    }
+
+    return deadline - current_cycle_;
+}
+
+bool GDDR6MemoryController::refresh_pending(uint8_t channel, uint8_t bank) const {
+    if (channel >= gddr6_config_.num_channels || bank >= 16) {
+        return false;
+    }
+
+    const auto& timing = gddr6_config_.timing;
+    const Bank& b = channels_[channel].banks[bank];
+
+    return current_cycle_ >= b.last_refresh + timing.tREFI;
+}
+
+uint32_t GDDR6MemoryController::refresh_debt(uint8_t channel, uint8_t bank) const {
+    if (channel >= gddr6_config_.num_channels || bank >= 16) {
+        return 0;
+    }
+
+    const auto& timing = gddr6_config_.timing;
+    const Bank& b = channels_[channel].banks[bank];
+
+    if (current_cycle_ <= b.last_refresh) {
+        return 0;
+    }
+
+    uint64_t elapsed = current_cycle_ - b.last_refresh;
+    return static_cast<uint32_t>(elapsed / timing.tREFI);
+}
+
+bool GDDR6MemoryController::inject_refresh(uint8_t channel, int8_t bank) {
+    if (channel >= gddr6_config_.num_channels) {
+        return false;
+    }
+
+    if (bank == -1) {
+        uint8_t next_bank = channels_[channel].next_refresh_bank;
+        if (can_refresh(channel, next_bank)) {
+            do_refresh(channel, next_bank);
+            channels_[channel].next_refresh_bank = (next_bank + 1) % 16;
+            return true;
+        }
+        return false;
+    }
+
+    if (bank >= 16) {
+        return false;
+    }
+
+    if (can_refresh(channel, static_cast<uint8_t>(bank))) {
+        do_refresh(channel, static_cast<uint8_t>(bank));
+        return true;
+    }
+
+    return false;
 }
 
 } // namespace sw::kpu::gddr6

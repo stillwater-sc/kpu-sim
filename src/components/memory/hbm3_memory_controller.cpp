@@ -858,23 +858,117 @@ void HBM3MemoryController::finalize_bus_traces() {
 }
 
 void HBM3MemoryController::handle_refresh() {
+    // DISABLED mode: no refresh at all
+    if (refresh_mode_ == RefreshMode::DISABLED) {
+        return;
+    }
+
     const auto& timing = hbm3_config_.timing;
 
-    for (uint8_t ch = 0; ch < hbm3_config_.num_channels; ++ch) {
-        for (uint8_t pc = 0; pc < hbm3_config_.pseudo_channels_per_channel; ++pc) {
-            PseudoChannel& pseudo_ch = channels_[ch].pseudo_channels[pc];
+    // Deadline enforcement (applies to all modes except DISABLED)
+    if (deadline_enforcement_) {
+        for (uint8_t ch = 0; ch < hbm3_config_.num_channels; ++ch) {
+            for (uint8_t pc = 0; pc < hbm3_config_.pseudo_channels_per_channel; ++pc) {
+                PseudoChannel& pseudo_ch = channels_[ch].pseudo_channels[pc];
 
-            // Check if any bank needs refresh
-            uint8_t bank = pseudo_ch.next_refresh_bank;
-            Bank& b = pseudo_ch.banks[bank];
+                for (uint8_t b = 0; b < 16; ++b) {
+                    Bank& bank = pseudo_ch.banks[b];
 
-            if (b.state == hbm3::BankState::IDLE &&
-                current_cycle_ >= b.last_refresh + timing.tREFI) {
-                do_refresh(ch, pc, bank);
-                pseudo_ch.next_refresh_bank = (bank + 1) % 16;
-                return;  // One refresh per cycle
+                    // Check if refresh deadline is approaching
+                    // HBM3 allows deferring up to 8 refreshes per bank
+                    uint64_t deadline = bank.last_refresh + 8 * timing.tREFI;
+                    if (current_cycle_ >= deadline - timing.tRFCpb) {
+                        // Urgent refresh needed - force it regardless of mode
+                        if (can_refresh(ch, pc, b)) {
+                            do_refresh(ch, pc, b);
+                            return;  // Only one refresh per cycle
+                        }
+                    }
+                }
             }
         }
+    }
+
+    // Mode-specific scheduling
+    switch (refresh_mode_) {
+        case RefreshMode::AUTOMATIC:
+            // Original behavior: opportunistic + proactive round-robin
+            for (uint8_t ch = 0; ch < hbm3_config_.num_channels; ++ch) {
+                for (uint8_t pc = 0; pc < hbm3_config_.pseudo_channels_per_channel; ++pc) {
+                    PseudoChannel& pseudo_ch = channels_[ch].pseudo_channels[pc];
+                    uint8_t next_bank = pseudo_ch.next_refresh_bank;
+                    Bank& bank = pseudo_ch.banks[next_bank];
+
+                    if (current_cycle_ >= bank.last_refresh + timing.tREFI) {
+                        if (can_refresh(ch, pc, next_bank)) {
+                            do_refresh(ch, pc, next_bank);
+                            pseudo_ch.next_refresh_bank = (next_bank + 1) % 16;
+                            return;  // One refresh per cycle
+                        }
+                    }
+                }
+            }
+            break;
+
+        case RefreshMode::INTERVAL: {
+            // Fixed interval mode: refresh at user-specified intervals
+            uint64_t interval = refresh_interval_;
+            if (interval == 0) {
+                interval = timing.tREFI;  // Default to tREFI
+            }
+
+            if (current_cycle_ >= last_interval_refresh_ + interval) {
+                // Do round-robin refresh across pseudo-channels and banks
+                for (uint8_t ch = 0; ch < hbm3_config_.num_channels; ++ch) {
+                    for (uint8_t pc = 0; pc < hbm3_config_.pseudo_channels_per_channel; ++pc) {
+                        PseudoChannel& pseudo_ch = channels_[ch].pseudo_channels[pc];
+                        uint8_t next_bank = pseudo_ch.next_refresh_bank;
+
+                        if (can_refresh(ch, pc, next_bank)) {
+                            do_refresh(ch, pc, next_bank);
+                            pseudo_ch.next_refresh_bank = (next_bank + 1) % 16;
+                            last_interval_refresh_ = current_cycle_;
+                            return;
+                        }
+                    }
+                }
+            }
+            break;
+        }
+
+        case RefreshMode::OPPORTUNISTIC:
+            // Only refresh when bus is idle (opportunistic only)
+            for (uint8_t ch = 0; ch < hbm3_config_.num_channels; ++ch) {
+                for (uint8_t pc = 0; pc < hbm3_config_.pseudo_channels_per_channel; ++pc) {
+                    PseudoChannel& pseudo_ch = channels_[ch].pseudo_channels[pc];
+
+                    // Check if bus is idle (no pending commands or data transfers)
+                    if (pseudo_ch.cmd_bus_state == CommandBusState::IDLE &&
+                        pseudo_ch.data_bus_state == DataBusState::IDLE) {
+
+                        uint8_t next_bank = pseudo_ch.next_refresh_bank;
+                        Bank& bank = pseudo_ch.banks[next_bank];
+
+                        // Only refresh if past the per-bank interval
+                        if (current_cycle_ >= bank.last_refresh + timing.tREFI) {
+                            if (can_refresh(ch, pc, next_bank)) {
+                                do_refresh(ch, pc, next_bank);
+                                pseudo_ch.next_refresh_bank = (next_bank + 1) % 16;
+                                return;
+                            }
+                        }
+                    }
+                }
+            }
+            break;
+
+        case RefreshMode::EXPLICIT:
+            // Do nothing - wait for inject_refresh() calls
+            break;
+
+        case RefreshMode::DISABLED:
+            // Already handled at the top
+            break;
     }
 }
 
@@ -1222,6 +1316,143 @@ void HBM3MemoryController::trace_ca_command(uint8_t channel, uint8_t pc, const s
     entry.description = ss.str();
 
     trace_entries_.push_back(std::move(entry));
+}
+
+// ============================================================================
+// Refresh Control Implementation
+// ============================================================================
+
+void HBM3MemoryController::set_refresh_mode(RefreshMode mode) {
+    refresh_mode_ = mode;
+    // Reset interval tracking when changing modes
+    if (mode == RefreshMode::INTERVAL) {
+        last_interval_refresh_ = current_cycle_;
+    }
+}
+
+void HBM3MemoryController::set_refresh_interval(uint64_t cycles) {
+    refresh_interval_ = cycles;
+    // Reset tracking to start fresh from current cycle
+    last_interval_refresh_ = current_cycle_;
+}
+
+uint64_t HBM3MemoryController::cycles_until_deadline(uint8_t channel, uint8_t bank) const {
+    if (channel >= hbm3_config_.num_channels) {
+        return UINT64_MAX;
+    }
+
+    // HBM3 interface mapping: bank = pc * 8 + bank_within_pc
+    // HBM3 has 16 channels with 2 pseudo-channels each.
+    // Each pseudo-channel has 8 banks = 16 banks per channel.
+    // Interface maps: channel=ch, bank=pc*8+bank_within_pc
+    //
+    // However, looking at get_bank_state(), it uses:
+    //   pc = bank / 16, local_bank = bank % 16
+    // This implies banks_per_channel = 32 (2 PCs * 16 banks each).
+    //
+    // Follow the existing get_bank_state() pattern for consistency.
+    uint8_t pc = bank / 16;
+    uint8_t local_bank = bank % 16;
+
+    if (pc >= hbm3_config_.pseudo_channels_per_channel || local_bank >= 16) {
+        return UINT64_MAX;
+    }
+
+    const auto& timing = hbm3_config_.timing;
+    const Bank& b = channels_[channel].pseudo_channels[pc].banks[local_bank];
+
+    // HBM3 allows deferring up to 8 refreshes per bank
+    // Deadline is 8 * tREFI after last refresh
+    uint64_t deadline = b.last_refresh + 8 * timing.tREFI;
+
+    if (current_cycle_ >= deadline) {
+        return 0;  // Deadline passed
+    }
+
+    return deadline - current_cycle_;
+}
+
+bool HBM3MemoryController::refresh_pending(uint8_t channel, uint8_t bank) const {
+    if (channel >= hbm3_config_.num_channels) {
+        return false;
+    }
+
+    // Map interface bank to pseudo-channel + local bank
+    uint8_t pc = bank / 16;
+    uint8_t local_bank = bank % 16;
+
+    if (pc >= hbm3_config_.pseudo_channels_per_channel || local_bank >= 16) {
+        return false;
+    }
+
+    const auto& timing = hbm3_config_.timing;
+    const Bank& b = channels_[channel].pseudo_channels[pc].banks[local_bank];
+
+    // Refresh is pending if we're past tREFI since last refresh
+    return current_cycle_ >= b.last_refresh + timing.tREFI;
+}
+
+uint32_t HBM3MemoryController::refresh_debt(uint8_t channel, uint8_t bank) const {
+    if (channel >= hbm3_config_.num_channels) {
+        return 0;
+    }
+
+    // Map interface bank to pseudo-channel + local bank
+    uint8_t pc = bank / 16;
+    uint8_t local_bank = bank % 16;
+
+    if (pc >= hbm3_config_.pseudo_channels_per_channel || local_bank >= 16) {
+        return 0;
+    }
+
+    const auto& timing = hbm3_config_.timing;
+    const Bank& b = channels_[channel].pseudo_channels[pc].banks[local_bank];
+
+    // Calculate how many refresh intervals have passed since last refresh
+    if (current_cycle_ <= b.last_refresh) {
+        return 0;
+    }
+
+    uint64_t elapsed = current_cycle_ - b.last_refresh;
+    return static_cast<uint32_t>(elapsed / timing.tREFI);
+}
+
+bool HBM3MemoryController::inject_refresh(uint8_t channel, int8_t bank) {
+    if (channel >= hbm3_config_.num_channels) {
+        return false;
+    }
+
+    if (bank == -1) {
+        // All-bank refresh: try to refresh the next bank in round-robin order
+        // across all pseudo-channels
+        for (uint8_t pc = 0; pc < hbm3_config_.pseudo_channels_per_channel; ++pc) {
+            PseudoChannel& pseudo_ch = channels_[channel].pseudo_channels[pc];
+            uint8_t next_bank = pseudo_ch.next_refresh_bank;
+
+            if (can_refresh(channel, pc, next_bank)) {
+                do_refresh(channel, pc, next_bank);
+                pseudo_ch.next_refresh_bank = (next_bank + 1) % 16;
+                return true;
+            }
+        }
+        return false;
+    }
+
+    // Map interface bank to pseudo-channel + local bank
+    uint8_t pc = static_cast<uint8_t>(bank) / 16;
+    uint8_t local_bank = static_cast<uint8_t>(bank) % 16;
+
+    if (pc >= hbm3_config_.pseudo_channels_per_channel || local_bank >= 16) {
+        return false;
+    }
+
+    // Per-bank refresh
+    if (can_refresh(channel, pc, local_bank)) {
+        do_refresh(channel, pc, local_bank);
+        return true;
+    }
+
+    return false;
 }
 
 } // namespace sw::kpu::hbm3
