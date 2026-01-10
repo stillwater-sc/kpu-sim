@@ -7,6 +7,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added - 2026-01-09
+- **DMA Pattern Test Suite** (`patterns/dma/`)
+  - Complete infrastructure for DMA data movement validation
+  - `common/dma_harness.hpp`: Test harness integrating DMA + Memory Controller + NoC
+  - `common/dma_configs.hpp`: Standard DMA configuration presets
+  - `common/matrix_layouts.hpp`: Matrix addressing with pitch support for tile extraction
+  - STREAM patterns: `stream_copy.cpp`, `stream_triad.cpp`
+  - GEMM tile patterns: `tile_aligned.cpp`, `tile_pitched_narrow.cpp`, `tile_pitched_wide.cpp`, `tile_page_boundary.cpp`, `a_tile_row_major.cpp`, `b_tile_col_major.cpp`
+  - Conv2D pattern: `input_tile_nhwc.cpp`
+  - Documentation: `README.md`, `INVARIANTS.md`
+
+- **DMA-to-MC Trace Linkage** (`patterns/dma/common/dma_harness.hpp`)
+  - Explicit `dma_transfer_id` field in MC trace entries
+  - Accurate timing correlation between DMA and MC components
+  - Click-to-highlight support in visualization
+
+- **DMA Swimlane Visualization** (`traces/dma/tools/swimlane.html`)
+  - Interactive swimlane view with DMA channels and MC banks
+  - Left sidebar with statistics (transfers, bandwidth, page hits)
+  - DMA-MC association highlighting on click
+  - Bank utilization display
+  - File loading, zoom, and pan controls
+
+### Changed - 2026-01-09
+- **Memory Controller Interface** (`include/sw/kpu/components/memory/memory_controller_interface.hpp`)
+  - Added `trace_entries()` method to retrieve MC trace data
+  - Added `clear_trace_entries()` method for trace management
+  - Full `trace_entry.hpp` include for TraceEntry type
+
+### Fixed - 2026-01-09
+- **DMA Transfer Start Cycle Computation** (`patterns/dma/common/dma_harness.hpp`)
+  - Fixed issue where all DMA transfers showed `submit_cycle=0`
+  - Compute actual start from associated MC commands using completion-based mapping
+  - Each transfer now shows when MC begins processing its request
+
 ### Added - 2026-01-08
 - **HBM3E Pattern Infrastructure** (`patterns/memory/hbm3e/`)
   - Separate directory structure for HBM3E variants (8.4-9.6 Gbps)
