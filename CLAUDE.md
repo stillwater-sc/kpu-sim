@@ -1,10 +1,102 @@
 # Claude Code Integration Guidelines
 
 This document provides guidance for Claude Code when working on the KPU-SIM project.
-It defines validation requirements, invariant locations, and the development workflow
-that ensures correct code generation.
 
-## Core Principle: Validate Before Declaring Complete
+## Repository Purpose: Multi-Fidelity Simulation
+
+**READ THIS FIRST** - The KPU simulator is a **multi-fidelity simulation environment**
+that supports three tiers of modeling abstraction:
+
+### Simulation Fidelity Tiers
+
+| Tier | Purpose | Speed | Computes Values? |
+|------|---------|-------|------------------|
+| **BEHAVIORAL** | Functional correctness, software bring-up | ~100-1000x | **YES** |
+| **TRANSACTIONAL** | Architecture exploration, bottleneck ID | ~10-100x | Statistical |
+| **CYCLE_ACCURATE** | Performance analysis, timing validation | 1x (baseline) | Via integration |
+
+### The Multi-Fidelity Philosophy
+
+The progression works as follows:
+
+1. **Cycle-Accurate First**: Model subsystems from first principles to capture emergent
+   behavior with high confidence (e.g., DRAM timing, bank conflicts, page dynamics)
+
+2. **Characterize Statistics**: Extract latency, concurrency, and resource occupation
+   statistics from cycle-accurate simulation
+
+3. **Build Transactional Models**: Use collected statistics to create faster models
+   with queue-based contention and aggregate latencies
+
+4. **Create Behavioral Models**: Highest abstraction with functional correctness,
+   enabling software development and validation
+
+### Key Use Cases by Fidelity
+
+**BEHAVIORAL (Functional Simulation)**:
+- Execute high-level operators (e.g., eigenvalue solver, MLP, convolution)
+- Validate application software correctness
+- Software/firmware bring-up before hardware
+- CI/CD pipeline testing
+- **Components compute actual values and propagate results**
+
+**TRANSACTIONAL (Performance Estimation)**:
+- Early architecture design space exploration
+- Workload characterization
+- Power/performance estimation
+- Identify bottlenecks without full timing detail
+
+**CYCLE_ACCURATE (Timing Validation)**:
+- Precise performance analysis
+- Protocol compliance verification
+- Trace generation for visualization
+- Hardware/software co-design
+- Invariant-based validation
+
+### Key Documentation
+
+| Document | Purpose |
+|----------|---------|
+| `docs/SIMULATION_FIDELITY_FRAMEWORK.md` | Full multi-fidelity design (READ THIS) |
+| `include/sw/kpu/fidelity/simulation_fidelity.hpp` | Fidelity enums and types |
+| `include/sw/kpu/fidelity/component_config.hpp` | Per-component configuration |
+
+### Component Fidelity Support
+
+Each component can operate at its own fidelity level:
+
+| Component | BEHAVIORAL | TRANSACTIONAL | CYCLE_ACCURATE |
+|-----------|------------|---------------|----------------|
+| Memory Controller | Fixed latency | Queue model | Full DRAM FSM |
+| DMA Engine | Instant transfer | Bandwidth model | Channel arbitration |
+| Compute Fabric | **Actual compute** | Throughput model | Pipeline stages |
+| NoC | Zero latency | Hop count model | Wormhole routing |
+| L3/L2/L1 Memory | Direct access | Bank contention | Port arbitration |
+
+### Configuring Fidelity
+
+```cpp
+#include <sw/kpu/fidelity/simulation_fidelity.hpp>
+#include <sw/kpu/fidelity/component_config.hpp>
+
+// Configure behavioral simulation for functional testing
+ComponentConfig config;
+config.memory_fidelity = SimulationFidelity::BEHAVIORAL;
+config.compute_fidelity = SimulationFidelity::BEHAVIORAL;  // Computes actual values!
+
+// Configure cycle-accurate for performance analysis
+config.memory_fidelity = SimulationFidelity::CYCLE_ACCURATE;
+config.verification_level = VerificationLevel::INVARIANTS;
+```
+
+---
+
+## Validation Requirements
+
+This section covers validation for **cycle-accurate** simulation, particularly
+memory controller traces and timing invariants.
+
+### Core Principle: Validate Before Declaring Complete
 
 **Never declare code generation complete without validation.**
 
@@ -21,23 +113,43 @@ Claude Code must follow this workflow for any code that produces artifacts:
 4. Only declare complete when validation passes
 ```
 
-## Project Structure for Validation
+## Project Structure
 
 ```
 kpu-sim/
 ├── CLAUDE.md                              # This file - read first!
+│
+├── docs/
+│   ├── SIMULATION_FIDELITY_FRAMEWORK.md   # Multi-fidelity design (MUST READ)
+│   ├── KPU_API_GAPS_AND_ROADMAP.md        # API gaps and DNN roadmap
+│   └── sessions/                          # Session logs and changelogs
+│
+├── include/sw/kpu/
+│   ├── fidelity/
+│   │   ├── simulation_fidelity.hpp        # Fidelity enums (BEHAVIORAL, etc.)
+│   │   └── component_config.hpp           # Per-component configuration
+│   ├── components/
+│   │   ├── compute_fabric.hpp             # Compute with actual matmul
+│   │   ├── behavioral_compute_fabric.hpp  # Behavioral compute model
+│   │   └── memory/
+│   │       ├── memory_controller_interface.hpp  # MC interface
+│   │       └── behavioral_memory_controller.hpp # Behavioral MC
+│   └── kpu_simulator.hpp                  # Main simulator class
+│
 ├── patterns/
 │   └── memory/
 │       └── lpddr5/
-│           ├── INVARIANTS.md              # Trace invariants (MUST READ)
+│           ├── INVARIANTS.md              # Trace invariants (cycle-accurate)
 │           └── common/
 │               ├── trace_validator.py     # Standalone trace validator
 │               └── lpddr5_harness.hpp     # C++ test harness
+│
 ├── traces/
 │   └── memory/
 │       └── lpddr5/                        # Generated trace files
-└── docs/
-    └── sessions/                          # Session logs and changelogs
+│
+└── examples/
+    └── mlp/                               # MLP examples (XOR, MNIST, etc.)
 ```
 
 ## Validation Tools
@@ -218,23 +330,38 @@ Include:
 
 Before generating code, ask:
 
-1. "What invariants apply to this code?"
-2. "What validation tools should I run?"
-3. "What are the expected outputs?"
+1. "What fidelity level is this code targeting?"
+   - BEHAVIORAL: Must compute actual values
+   - TRANSACTIONAL: Statistical timing models
+   - CYCLE_ACCURATE: Full protocol state machines
+
+2. "What invariants apply to this code?"
+
+3. "What validation tools should I run?"
+
+4. "What are the expected outputs?"
 
 After generating code, ask:
 
 1. "Did all validations pass?"
+
 2. "Are there any warnings I should address?"
+
 3. "Is the code covered by existing invariants?"
+
+4. "Does the behavioral tier still compute correct functional results?"
 
 ## Remember
 
-**Correct code is more valuable than fast code.**
+**This is a multi-fidelity simulator, not just a timing model.**
 
-Take time to:
+Key principles:
+- BEHAVIORAL tier must compute actual values for software validation
+- Read `docs/SIMULATION_FIDELITY_FRAMEWORK.md` before making architectural changes
 - Read INVARIANTS.md before generating trace-related code
 - Run validators after every change
 - Parse and act on validation failures
 - Add new invariants when bugs are discovered
 - Document changes in session logs
+
+**Correct code is more valuable than fast code.**

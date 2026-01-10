@@ -2,16 +2,16 @@
 
 ## Executive Summary
 
-The KPU simulator is currently a **timing and performance model**, not a functional simulator.
-It accurately models:
-- Instruction scheduling and cycle counts
-- Memory hierarchy latencies
-- Data movement through the system
-- Resource contention
+The KPU simulator is designed as a **multi-fidelity simulation environment** supporting
+three tiers: BEHAVIORAL, TRANSACTIONAL, and CYCLE_ACCURATE. See `docs/SIMULATION_FIDELITY_FRAMEWORK.md`.
 
-It does **NOT** compute actual numerical results during kernel execution. This document
-analyzes the gap between timing simulation and functional simulation, using the XOR MLP
-as a concrete example.
+**Current State**: The CYCLE_ACCURATE tier (used by default in examples) models timing
+but does not compute values. The BEHAVIORAL tier infrastructure exists but needs
+integration with the graph execution path.
+
+This document analyzes the gap in the **current execution path** (cycle-accurate default)
+and what's needed to enable functional simulation via the BEHAVIORAL tier, using the
+XOR MLP as a concrete example.
 
 ## The XOR MLP Problem
 
@@ -402,29 +402,36 @@ bool verify_xor_functional(GraphRunner& runner) {
 
 ## Conclusion
 
-The KPU simulator has the foundational components for functional simulation:
+The KPU simulator has a **multi-fidelity architecture** with foundational components:
+- `SimulationFidelity` enum: BEHAVIORAL, TRANSACTIONAL, CYCLE_ACCURATE
 - SystolicArray with actual MAC operations
 - ComputeFabric with matmul implementation
-- BehavioralComputeFabric as alternative
+- BehavioralComputeFabric for functional simulation
+- BehavioralMemoryController for fast functional memory
 
-**The gap is in integration**: These functional components are not invoked during
-the normal execution path. The ConcurrentExecutor only schedules instructions for
-timing; it doesn't execute them functionally.
+**The gap is in the graph execution integration**: The GraphRunner and examples
+currently use the CYCLE_ACCURATE path by default. The BEHAVIORAL components exist
+but aren't wired into the high-level execution flow.
 
 ### Summary of Gaps
 
 | Category | Gap | Impact | Priority |
 |----------|-----|--------|----------|
-| Compute | MACs not executed | No actual results | Critical |
-| Memory | Data not read during exec | Weights ignored | Critical |
-| Activation | Functions not applied | Wrong outputs | Critical |
-| Small ops | No mapping strategy | Unclear behavior | High |
-| Verification | No functional tests | Can't validate | High |
-| Documentation | Timing-only not clear | User confusion | Medium |
+| Graph Execution | No fidelity selection | Can't switch modes | Critical |
+| Compute Integration | BEHAVIORAL not wired | No functional exec | Critical |
+| Activation | Functions not applied in path | Wrong outputs | Critical |
+| Small ops | No mapping strategy documented | Unclear behavior | High |
+| Examples | Use CYCLE_ACCURATE only | No functional demos | High |
 
 ### Recommended Next Steps
 
-1. **Immediate**: Add explicit documentation that this is a timing-only model
-2. **Short-term**: Add functional execution mode flag
-3. **Medium-term**: Implement functional MATMUL/BIAS/activation
-4. **Long-term**: Full functional simulation with verification suite
+1. **Immediate**: Add fidelity selection to GraphRunner
+   ```cpp
+   GraphRunner runner(&runtime, SimulationFidelity::BEHAVIORAL);
+   ```
+
+2. **Short-term**: Wire BehavioralComputeFabric into execution path
+
+3. **Medium-term**: Create functional MLP examples that compute actual values
+
+4. **Long-term**: Full eigenvalue solver / linear algebra functional validation
