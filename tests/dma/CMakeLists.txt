@@ -50,3 +50,14 @@ kpu_add_component_test(dma_cycle_accurate_test "dma"
 set_tests_properties(dma_cycle_accurate_test PROPERTIES
     LABELS "dma;cycle_accurate"
 )
+
+# DMA-Memory-NoC integration tests
+kpu_add_component_test(dma_memory_noc_integration_test "dma"
+    test_dma_memory_noc_integration.cpp
+)
+
+# Mark as integration test with extended timeout
+set_tests_properties(dma_memory_noc_integration_test PROPERTIES
+    LABELS "dma;memory;noc;integration"
+    TIMEOUT 300
+)
