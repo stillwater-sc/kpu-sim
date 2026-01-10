@@ -8,6 +8,10 @@ set(CMAKE_WARN_DEPRECATED OFF CACHE BOOL "" FORCE)
 cmake_policy(SET CMP0148 NEW)  # Use FindPython instead of FindPythonInterp/FindPythonLibs
 # Note: Deprecation warnings from external dependencies are suppressed globally above.
 
+# Ignore improper ASM tool
+cmake_policy(SET CMP0194 NEW)
+# if build fails, there is an ASM dependency
+
 project(kpu_simulator 
     VERSION 0.1.0
     DESCRIPTION "Stillwater Knowledge Processing Unit Simulator"
