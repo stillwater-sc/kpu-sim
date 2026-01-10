@@ -31,3 +31,8 @@ kpu_add_runtime_test(runtime_test
 kpu_add_runtime_test(executor_test
     test_executor.cpp
 )
+
+# Graph tests (multi-layer execution)
+kpu_add_runtime_test(graph_test
+    test_graph.cpp
+)

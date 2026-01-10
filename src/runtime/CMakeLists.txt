@@ -4,11 +4,13 @@
 set(RUNTIME_SOURCES
     runtime.cpp
     executor.cpp
+    graph.cpp
 )
 
 set(RUNTIME_HEADERS
     ${CMAKE_SOURCE_DIR}/include/sw/runtime/runtime.hpp
     ${CMAKE_SOURCE_DIR}/include/sw/runtime/executor.hpp
+    ${CMAKE_SOURCE_DIR}/include/sw/runtime/graph.hpp
 )
 
 add_library(kpu_runtime STATIC

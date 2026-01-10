@@ -8,6 +8,13 @@ This document provides a detailed analysis of gaps in the KPU software stack req
 2. **Multi-layer MLP** (immediate target)
 3. **Full torchvision DNN** (e.g., SqueezeNet 1.0, MobileNetV2)
 
+> **Important: Timing Model vs Functional Simulation**
+>
+> The KPU simulator is currently a **timing/performance model**, not a functional simulator.
+> It accurately models cycle counts, memory latencies, and resource contention, but does NOT
+> compute actual matrix multiplication results. For a detailed analysis of what's needed for
+> functional simulation, see [FUNCTIONAL_SIMULATION_GAP_ANALYSIS.md](FUNCTIONAL_SIMULATION_GAP_ANALYSIS.md).
+
 ## Current API Status
 
 ### Production-Ready Components ✅
