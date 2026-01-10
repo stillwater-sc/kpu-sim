@@ -1,0 +1,1342 @@
+<!DOCTYPE html>
+<!--
+  DMA Engine - Swimlane Visualization
+
+  Shows DMA transfer flow through the system:
+  DMA Channels -> Memory Controller -> Banks -> Data Return
+
+  Features:
+  - DMA transfers linked to MC transactions by timing/address
+  - Bank utilization visualization
+  - Page hit/conflict analysis
+
+  SPDX-License-Identifier: MIT
+  Copyright (c) 2024-2025 Stillwater Supercomputing, Inc.
+-->
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DMA Swimlane View</title>
+    <style>
+        :root {
+            --bg-dark: #0d1117;
+            --bg-panel: #161b22;
+            --bg-lane: #21262d;
+            --border: #30363d;
+            --text: #e6edf3;
+            --text-dim: #8b949e;
+            --accent: #58a6ff;
+            --dma-read: #4ec9b0;
+            --dma-write: #ce9178;
+            --mc-act: #f0883e;
+            --mc-read: #3fb950;
+            --mc-write: #a371f7;
+            --mc-pre: #f85149;
+            --mc-ref: #6e7681;
+        }
+
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+            background: var(--bg-dark);
+            color: var(--text);
+            min-height: 100vh;
+        }
+
+        /* Header */
+        .header {
+            background: var(--bg-panel);
+            border-bottom: 1px solid var(--border);
+            padding: 12px 20px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            position: sticky;
+            top: 0;
+            z-index: 100;
+        }
+
+        .header-left {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .header h1 {
+            font-size: 16px;
+            font-weight: 600;
+            white-space: nowrap;
+        }
+
+        .controls {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            flex-wrap: wrap;
+        }
+
+        button {
+            background: var(--bg-lane);
+            color: var(--text);
+            border: 1px solid var(--border);
+            padding: 6px 12px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 12px;
+            display: flex;
+            align-items: center;
+            gap: 4px;
+        }
+
+        button:hover { background: var(--border); }
+        button:disabled { opacity: 0.5; cursor: not-allowed; }
+        button.active { background: var(--accent); border-color: var(--accent); }
+
+        .file-btn {
+            background: var(--accent);
+            border-color: var(--accent);
+        }
+
+        .file-btn:hover { background: #4089e0; }
+
+        .file-input { display: none; }
+
+        .trace-filename {
+            font-size: 12px;
+            color: var(--text-dim);
+            max-width: 200px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .cycle-display {
+            font-family: 'SF Mono', Monaco, monospace;
+            font-size: 14px;
+            background: var(--bg-lane);
+            padding: 6px 12px;
+            border-radius: 6px;
+            border: 1px solid var(--border);
+        }
+
+        .zoom-controls {
+            display: flex;
+            align-items: center;
+            gap: 5px;
+        }
+
+        .zoom-controls span { font-size: 12px; color: var(--text-dim); }
+
+        /* Main Content */
+        .main-container {
+            display: flex;
+            height: calc(100vh - 60px);
+        }
+
+        /* Sidebar */
+        .sidebar {
+            width: 300px;
+            background: var(--bg-panel);
+            border-right: 1px solid var(--border);
+            padding: 15px;
+            overflow-y: auto;
+        }
+
+        .sidebar h2 {
+            font-size: 12px;
+            font-weight: 600;
+            color: var(--text-dim);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin-bottom: 10px;
+        }
+
+        .info-panel {
+            background: var(--bg-lane);
+            border-radius: 6px;
+            padding: 12px;
+            margin-bottom: 15px;
+        }
+
+        .stat-row {
+            display: flex;
+            justify-content: space-between;
+            padding: 4px 0;
+            font-size: 13px;
+        }
+
+        .stat-label { color: var(--text-dim); }
+        .stat-value { font-family: 'SF Mono', Monaco, monospace; }
+
+        .stat-highlight {
+            color: var(--accent);
+            font-weight: 600;
+        }
+
+        .legend {
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+        }
+
+        .legend-item {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 12px;
+        }
+
+        .legend-color {
+            width: 16px;
+            height: 10px;
+            border-radius: 2px;
+        }
+
+        .transfer-list {
+            max-height: 250px;
+            overflow-y: auto;
+        }
+
+        .transfer-item {
+            padding: 8px;
+            background: var(--bg-lane);
+            border-radius: 4px;
+            margin-bottom: 6px;
+            font-size: 12px;
+            cursor: pointer;
+            border: 1px solid transparent;
+        }
+
+        .transfer-item:hover { border-color: var(--accent); }
+        .transfer-item.selected { border-color: var(--accent); background: rgba(88, 166, 255, 0.1); }
+
+        .transfer-item .xfer-header {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 4px;
+        }
+
+        .transfer-item .xfer-id { font-weight: 600; }
+        .transfer-item .xfer-type {
+            padding: 2px 6px;
+            border-radius: 3px;
+            font-size: 10px;
+            font-weight: 600;
+        }
+        .transfer-item .xfer-type.read { background: var(--dma-read); color: #000; }
+        .transfer-item .xfer-type.write { background: var(--dma-write); color: #fff; }
+
+        .transfer-item .xfer-detail {
+            color: var(--text-dim);
+            font-family: 'SF Mono', Monaco, monospace;
+            font-size: 11px;
+        }
+
+        .bank-utilization {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 4px;
+            margin-top: 8px;
+        }
+
+        .bank-box {
+            width: 28px;
+            height: 20px;
+            border-radius: 3px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 9px;
+            font-weight: 600;
+            background: var(--bg-dark);
+            border: 1px solid var(--border);
+        }
+
+        .bank-box.active { background: var(--mc-read); color: #000; }
+        .bank-box.high { background: var(--mc-act); color: #000; }
+
+        /* Swimlane Area */
+        .swimlane-container {
+            flex: 1;
+            overflow: auto;
+            padding: 20px;
+        }
+
+        .swimlane-wrapper {
+            min-width: 100%;
+            position: relative;
+        }
+
+        /* Time ruler */
+        .time-ruler {
+            height: 30px;
+            position: sticky;
+            top: 0;
+            background: var(--bg-dark);
+            z-index: 10;
+            margin-left: 140px;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .time-ruler-inner {
+            position: relative;
+            height: 100%;
+        }
+
+        .time-tick {
+            position: absolute;
+            top: 0;
+            height: 100%;
+            border-left: 1px solid var(--border);
+            font-size: 10px;
+            color: var(--text-dim);
+            padding-left: 4px;
+            padding-top: 4px;
+        }
+
+        .time-tick.major {
+            border-left-color: var(--text-dim);
+        }
+
+        /* Lanes */
+        .lane {
+            display: flex;
+            align-items: stretch;
+            border-bottom: 1px solid var(--border);
+            min-height: 36px;
+        }
+
+        .lane-label {
+            width: 140px;
+            min-width: 140px;
+            padding: 8px 12px;
+            font-size: 11px;
+            font-weight: 500;
+            background: var(--bg-panel);
+            border-right: 1px solid var(--border);
+            display: flex;
+            align-items: center;
+            position: sticky;
+            left: 0;
+            z-index: 5;
+        }
+
+        .lane-label.group {
+            background: var(--bg-lane);
+            font-weight: 600;
+            color: var(--text-dim);
+            text-transform: uppercase;
+            font-size: 10px;
+            letter-spacing: 0.5px;
+        }
+
+        .lane-content {
+            flex: 1;
+            position: relative;
+            background: var(--bg-lane);
+            min-height: 36px;
+        }
+
+        .lane-content.alt {
+            background: var(--bg-panel);
+        }
+
+        /* Events */
+        .event {
+            position: absolute;
+            height: 24px;
+            top: 6px;
+            border-radius: 3px;
+            font-size: 10px;
+            color: #fff;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            overflow: hidden;
+            white-space: nowrap;
+            cursor: pointer;
+            transition: opacity 0.15s, transform 0.15s;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.3);
+        }
+
+        .event:hover {
+            transform: translateY(-1px);
+            box-shadow: 0 2px 6px rgba(0,0,0,0.4);
+            z-index: 20;
+        }
+
+        .event.dimmed { opacity: 0.3; }
+        .event.highlighted {
+            box-shadow: 0 0 0 2px #fff, 0 2px 8px rgba(0,0,0,0.5);
+            z-index: 25;
+        }
+
+        .event-label {
+            padding: 0 6px;
+            text-overflow: ellipsis;
+            overflow: hidden;
+        }
+
+        /* Event colors */
+        .event.dma-read { background: var(--dma-read); color: #000; }
+        .event.dma-write { background: var(--dma-write); color: #fff; }
+        .event.mc-act { background: var(--mc-act); color: #000; }
+        .event.mc-read { background: var(--mc-read); color: #000; }
+        .event.mc-write { background: var(--mc-write); color: #fff; }
+        .event.mc-pre { background: var(--mc-pre); color: #fff; }
+        .event.mc-ref { background: var(--mc-ref); color: #fff; }
+
+        /* Connection lines */
+        .connection-line {
+            position: absolute;
+            pointer-events: none;
+            z-index: 1;
+            stroke: var(--accent);
+            stroke-width: 1.5;
+            stroke-dasharray: 4 2;
+            fill: none;
+            opacity: 0;
+            transition: opacity 0.2s;
+        }
+
+        .connection-line.visible {
+            opacity: 0.7;
+        }
+
+        /* Playback cursor */
+        .playback-cursor {
+            position: absolute;
+            top: 0;
+            bottom: 0;
+            width: 2px;
+            background: var(--accent);
+            z-index: 50;
+            pointer-events: none;
+            margin-left: 140px;
+        }
+
+        .playback-cursor::before {
+            content: '';
+            position: absolute;
+            top: -5px;
+            left: -4px;
+            width: 0;
+            height: 0;
+            border-left: 5px solid transparent;
+            border-right: 5px solid transparent;
+            border-top: 6px solid var(--accent);
+        }
+
+        /* Tooltip */
+        .tooltip {
+            position: fixed;
+            background: var(--bg-panel);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            padding: 10px;
+            font-size: 12px;
+            z-index: 1000;
+            max-width: 350px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.4);
+            pointer-events: none;
+            display: none;
+        }
+
+        .tooltip.visible { display: block; }
+
+        .tooltip-title {
+            font-weight: 600;
+            margin-bottom: 6px;
+            padding-bottom: 6px;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .tooltip-row {
+            display: flex;
+            justify-content: space-between;
+            gap: 20px;
+            padding: 2px 0;
+        }
+
+        .tooltip-label { color: var(--text-dim); }
+        .tooltip-value { font-family: 'SF Mono', Monaco, monospace; }
+
+        .tooltip-section {
+            margin-top: 8px;
+            padding-top: 8px;
+            border-top: 1px solid var(--border);
+        }
+
+        .tooltip-section-title {
+            font-weight: 600;
+            color: var(--accent);
+            margin-bottom: 4px;
+            font-size: 11px;
+        }
+
+        /* No data state */
+        .no-data {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 400px;
+            color: var(--text-dim);
+        }
+
+        .no-data-icon { font-size: 48px; margin-bottom: 15px; }
+        .no-data code {
+            background: var(--bg-lane);
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 12px;
+            margin-top: 10px;
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <div class="header-left">
+            <h1>DMA Swimlane View</h1>
+            <button class="file-btn" onclick="document.getElementById('fileInput').click()">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                    <polyline points="17 8 12 3 7 8"/>
+                    <line x1="12" y1="3" x2="12" y2="15"/>
+                </svg>
+                Choose File
+            </button>
+            <input type="file" id="fileInput" accept=".json" class="file-input">
+            <span class="trace-filename" id="traceFilename">No trace loaded</span>
+        </div>
+        <div class="controls">
+            <button id="btnReset" disabled title="Reset (Home)">⏮ Reset</button>
+            <button id="btnStepBack" disabled title="Step Back (←)">◀</button>
+            <button id="btnPlay" disabled title="Play/Pause (Space)">▶ Play</button>
+            <button id="btnStep" disabled title="Step Forward (→)">▶</button>
+            <button id="btnEnd" disabled title="End (End)">⏭</button>
+            <div class="cycle-display">Cycle: <span id="currentCycle">0</span> / <span id="maxCycle">0</span></div>
+            <div class="zoom-controls">
+                <span>Zoom:</span>
+                <button id="btnZoomOut">−</button>
+                <span id="zoomLevel">100%</span>
+                <button id="btnZoomIn">+</button>
+            </div>
+        </div>
+    </div>
+
+    <div class="main-container">
+        <div class="sidebar">
+            <div class="info-panel">
+                <h2>DMA Statistics</h2>
+                <div class="stat-row">
+                    <span class="stat-label">Total Transfers</span>
+                    <span class="stat-value" id="statTotal">0</span>
+                </div>
+                <div class="stat-row">
+                    <span class="stat-label">Reads</span>
+                    <span class="stat-value" id="statReads">0</span>
+                </div>
+                <div class="stat-row">
+                    <span class="stat-label">Writes</span>
+                    <span class="stat-value" id="statWrites">0</span>
+                </div>
+                <div class="stat-row">
+                    <span class="stat-label">Total Bytes</span>
+                    <span class="stat-value" id="statBytes">0</span>
+                </div>
+                <div class="stat-row">
+                    <span class="stat-label">Bandwidth</span>
+                    <span class="stat-value stat-highlight" id="statBandwidth">0 GB/s</span>
+                </div>
+            </div>
+
+            <div class="info-panel">
+                <h2>Memory Controller</h2>
+                <div class="stat-row">
+                    <span class="stat-label">MC Commands</span>
+                    <span class="stat-value" id="statMcCmds">0</span>
+                </div>
+                <div class="stat-row">
+                    <span class="stat-label">Page Hits</span>
+                    <span class="stat-value" id="statPageHits">0</span>
+                </div>
+                <div class="stat-row">
+                    <span class="stat-label">Page Hit Rate</span>
+                    <span class="stat-value stat-highlight" id="statPageHitRate">0%</span>
+                </div>
+                <div class="stat-row">
+                    <span class="stat-label">Activations</span>
+                    <span class="stat-value" id="statActivations">0</span>
+                </div>
+                <div class="stat-row">
+                    <span class="stat-label">Precharges</span>
+                    <span class="stat-value" id="statPrecharges">0</span>
+                </div>
+            </div>
+
+            <div class="info-panel">
+                <h2>Bank Utilization</h2>
+                <div class="bank-utilization" id="bankUtilization">
+                    <!-- Populated dynamically -->
+                </div>
+            </div>
+
+            <div class="info-panel">
+                <h2>Legend</h2>
+                <div class="legend">
+                    <div class="legend-item">
+                        <div class="legend-color" style="background: var(--dma-read);"></div>
+                        <span>DMA Read</span>
+                    </div>
+                    <div class="legend-item">
+                        <div class="legend-color" style="background: var(--dma-write);"></div>
+                        <span>DMA Write</span>
+                    </div>
+                    <div class="legend-item">
+                        <div class="legend-color" style="background: var(--mc-act);"></div>
+                        <span>ACT (Activate)</span>
+                    </div>
+                    <div class="legend-item">
+                        <div class="legend-color" style="background: var(--mc-read);"></div>
+                        <span>READ</span>
+                    </div>
+                    <div class="legend-item">
+                        <div class="legend-color" style="background: var(--mc-write);"></div>
+                        <span>WRITE</span>
+                    </div>
+                    <div class="legend-item">
+                        <div class="legend-color" style="background: var(--mc-pre);"></div>
+                        <span>PRE (Precharge)</span>
+                    </div>
+                </div>
+            </div>
+
+            <div class="info-panel">
+                <h2>Transfers</h2>
+                <div class="transfer-list" id="transferList">
+                    <div style="color: var(--text-dim); font-size: 12px;">No transfers loaded</div>
+                </div>
+            </div>
+        </div>
+
+        <div class="swimlane-container" id="swimlaneContainer">
+            <div class="no-data" id="noData">
+                <div class="no-data-icon">📊</div>
+                <div>Load a DMA trace JSON file to visualize</div>
+                <code>./build/patterns/dma/dma_tile_aligned</code>
+            </div>
+            <div class="swimlane-wrapper" id="swimlaneWrapper" style="display: none;">
+                <svg class="connection-svg" id="connectionSvg" style="position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; z-index: 1;"></svg>
+                <div class="playback-cursor" id="playbackCursor"></div>
+                <div class="time-ruler" id="timeRuler">
+                    <div class="time-ruler-inner" id="timeRulerInner"></div>
+                </div>
+                <div id="lanes"></div>
+            </div>
+        </div>
+    </div>
+
+    <div class="tooltip" id="tooltip">
+        <div class="tooltip-title" id="tooltipTitle">Event</div>
+        <div id="tooltipContent"></div>
+    </div>
+
+    <script>
+        // Configuration
+        const PIXELS_PER_CYCLE = 2;  // Base scale
+        let zoomLevel = 1.0;
+        let pixelsPerCycle = PIXELS_PER_CYCLE;
+        const CLOCK_GHZ = 2.0;  // 2 GHz clock for cycle-to-time conversion
+
+        // State
+        let traceData = null;
+        let dmaTransfers = [];
+        let mcCommands = [];
+        let events = [];
+        let currentCycle = 0;
+        let maxCycle = 0;
+        let isPlaying = false;
+        let playInterval = null;
+        let selectedTransfer = null;
+
+        // Track which banks are used
+        let bankUsage = new Map();
+
+        // DOM elements
+        const fileInput = document.getElementById('fileInput');
+        const btnReset = document.getElementById('btnReset');
+        const btnStepBack = document.getElementById('btnStepBack');
+        const btnPlay = document.getElementById('btnPlay');
+        const btnStep = document.getElementById('btnStep');
+        const btnEnd = document.getElementById('btnEnd');
+        const btnZoomIn = document.getElementById('btnZoomIn');
+        const btnZoomOut = document.getElementById('btnZoomOut');
+        const currentCycleEl = document.getElementById('currentCycle');
+        const maxCycleEl = document.getElementById('maxCycle');
+        const zoomLevelEl = document.getElementById('zoomLevel');
+        const noData = document.getElementById('noData');
+        const swimlaneWrapper = document.getElementById('swimlaneWrapper');
+        const swimlaneContainer = document.getElementById('swimlaneContainer');
+        const playbackCursor = document.getElementById('playbackCursor');
+        const tooltip = document.getElementById('tooltip');
+        const transferList = document.getElementById('transferList');
+
+        // Parse trace data
+        function parseTrace(data) {
+            dmaTransfers = [];
+            mcCommands = [];
+            events = [];
+            maxCycle = 0;
+            bankUsage.clear();
+
+            // Parse DMA transfers
+            for (const item of data) {
+                if (item.cat === 'dma' && item.ph === 'X') {
+                    const xfer = {
+                        id: item.args?.id || dmaTransfers.length,
+                        type: item.name.includes('READ') ? 'READ' : 'WRITE',
+                        srcAddr: item.args?.src || '0x0',
+                        dstAddr: item.args?.dst || '0x0',
+                        size: item.args?.size || 0,
+                        channel: item.args?.channel || 0,
+                        submitCycle: item.args?.submit_cycle || 0,
+                        completeCycle: item.args?.complete_cycle || 0,
+                        duration: (item.args?.complete_cycle || 0) - (item.args?.submit_cycle || 0),
+                        mcCommands: []  // Associated MC commands
+                    };
+                    dmaTransfers.push(xfer);
+                    maxCycle = Math.max(maxCycle, xfer.completeCycle);
+                }
+            }
+
+            // Parse MC commands
+            for (const item of data) {
+                if (item.cat === 'mc' && (item.ph === 'X' || item.ph === 'i')) {
+                    const cmd = {
+                        name: item.name,
+                        txnId: item.args?.txn_id || 0,
+                        component: item.args?.component || 0,
+                        issueCycle: item.args?.issue_cycle || item.args?.cycle || 0,
+                        completeCycle: item.args?.complete_cycle || item.args?.cycle || 0,
+                        duration: (item.args?.complete_cycle || item.args?.cycle || 0) -
+                                 (item.args?.issue_cycle || item.args?.cycle || 0),
+                        desc: item.args?.desc || '',
+                        // Use explicit dma_transfer_id from trace if available
+                        dmaTransferId: item.args?.dma_transfer_id !== undefined ?
+                                      item.args.dma_transfer_id : null
+                    };
+                    mcCommands.push(cmd);
+                    maxCycle = Math.max(maxCycle, cmd.completeCycle);
+
+                    // Track bank usage
+                    const bank = cmd.component;
+                    bankUsage.set(bank, (bankUsage.get(bank) || 0) + 1);
+                }
+            }
+
+            // Associate MC commands with DMA transfers by timing overlap
+            associateMcWithDma();
+
+            console.log(`Parsed ${dmaTransfers.length} DMA transfers, ${mcCommands.length} MC commands`);
+            return dmaTransfers;
+        }
+
+        // Associate MC commands with DMA transfers
+        // Uses explicit dma_transfer_id from trace if available, otherwise falls back to timing
+        function associateMcWithDma() {
+            for (const cmd of mcCommands) {
+                // Check if explicit dma_transfer_id is provided in trace
+                if (cmd.dmaTransferId !== null && cmd.dmaTransferId >= 0) {
+                    const xfer = dmaTransfers.find(x => x.id === cmd.dmaTransferId);
+                    if (xfer) {
+                        xfer.mcCommands.push(cmd);
+                        continue;
+                    }
+                }
+
+                // Fallback: Find DMA transfer that overlaps with this command's timing
+                for (const xfer of dmaTransfers) {
+                    // Check if MC command falls within DMA transfer's time window
+                    if (cmd.issueCycle >= xfer.submitCycle && cmd.issueCycle <= xfer.completeCycle) {
+                        // Additional check: for writes, MC should be WRITE; for reads, MC should be READ/ACT
+                        const isMatch = (xfer.type === 'WRITE' && (cmd.name === 'WRITE' || cmd.name === 'ACT' || cmd.name === 'PRE')) ||
+                                       (xfer.type === 'READ' && (cmd.name === 'READ' || cmd.name === 'ACT' || cmd.name === 'PRE'));
+                        if (isMatch || cmd.name === 'ACT' || cmd.name === 'PRE') {
+                            cmd.dmaTransferId = xfer.id;
+                            xfer.mcCommands.push(cmd);
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+
+        // Calculate which bank an address maps to (simplified)
+        function addressToBank(addrStr) {
+            // Parse hex address and use bits for bank selection
+            const addr = parseInt(addrStr, 16);
+            // Simplified: use bits 12-14 for bank (8 banks)
+            return (addr >> 12) & 0x7;
+        }
+
+        // Build lane definitions based on data
+        function buildLanes() {
+            const lanes = [
+                { id: 'group-dma', label: 'DMA ENGINE', isGroup: true }
+            ];
+
+            // Add DMA channels
+            const channels = new Set(dmaTransfers.map(x => x.channel));
+            const sortedChannels = Array.from(channels).sort((a, b) => a - b);
+            for (const ch of sortedChannels) {
+                lanes.push({ id: `dma-ch-${ch}`, label: `Channel ${ch}` });
+            }
+
+            lanes.push({ id: 'group-mc', label: 'MEMORY CONTROLLER', isGroup: true });
+
+            // Add bank lanes based on usage
+            const banks = Array.from(bankUsage.keys()).sort((a, b) => a - b);
+            for (const bank of banks) {
+                lanes.push({ id: `mc-bank-${bank}`, label: `Bank ${bank}` });
+            }
+
+            return lanes;
+        }
+
+        // Render swimlanes
+        function renderSwimlanes() {
+            const lanesContainer = document.getElementById('lanes');
+            lanesContainer.innerHTML = '';
+
+            const width = (maxCycle + 50) * pixelsPerCycle;
+            const lanes = buildLanes();
+
+            // Render time ruler
+            renderTimeRuler(width);
+
+            // Track lane positions for connection lines
+            const lanePositions = {};
+            let currentY = 30; // After time ruler
+
+            // Render lanes
+            for (const lane of lanes) {
+                const laneEl = document.createElement('div');
+                laneEl.className = 'lane';
+
+                const labelEl = document.createElement('div');
+                labelEl.className = `lane-label ${lane.isGroup ? 'group' : ''}`;
+                labelEl.textContent = lane.label;
+                laneEl.appendChild(labelEl);
+
+                if (!lane.isGroup) {
+                    const contentEl = document.createElement('div');
+                    contentEl.className = 'lane-content';
+                    contentEl.id = `lane-${lane.id}`;
+                    contentEl.style.width = `${width}px`;
+
+                    // Render DMA events
+                    if (lane.id.startsWith('dma-ch-')) {
+                        const channel = parseInt(lane.id.split('-')[2]);
+                        const channelXfers = dmaTransfers.filter(x => x.channel === channel);
+                        for (const xfer of channelXfers) {
+                            const evtEl = createDmaEvent(xfer);
+                            contentEl.appendChild(evtEl);
+                        }
+                    }
+
+                    // Render MC events
+                    if (lane.id.startsWith('mc-bank-')) {
+                        const bank = parseInt(lane.id.split('-')[2]);
+                        const bankCmds = mcCommands.filter(c => c.component === bank);
+                        for (const cmd of bankCmds) {
+                            const evtEl = createMcEvent(cmd);
+                            contentEl.appendChild(evtEl);
+                        }
+                    }
+
+                    laneEl.appendChild(contentEl);
+                    lanePositions[lane.id] = currentY + 18; // Center of lane
+                }
+
+                lanesContainer.appendChild(laneEl);
+                currentY += lane.isGroup ? 36 : 36;
+            }
+
+            updatePlaybackCursor();
+        }
+
+        function renderTimeRuler(width) {
+            const rulerInner = document.getElementById('timeRulerInner');
+            rulerInner.innerHTML = '';
+            rulerInner.style.width = `${width}px`;
+
+            let tickInterval = 50;
+            if (pixelsPerCycle < 1) tickInterval = 100;
+            else if (pixelsPerCycle < 2) tickInterval = 50;
+            else if (pixelsPerCycle > 4) tickInterval = 20;
+
+            for (let cycle = 0; cycle <= maxCycle + 50; cycle += tickInterval) {
+                const tickEl = document.createElement('div');
+                tickEl.className = `time-tick ${cycle % (tickInterval * 5) === 0 ? 'major' : ''}`;
+                tickEl.style.left = `${cycle * pixelsPerCycle}px`;
+                tickEl.textContent = cycle;
+                rulerInner.appendChild(tickEl);
+            }
+        }
+
+        function createDmaEvent(xfer) {
+            const el = document.createElement('div');
+            const typeClass = xfer.type === 'READ' ? 'dma-read' : 'dma-write';
+            el.className = `event ${typeClass}`;
+            el.style.left = `${xfer.submitCycle * pixelsPerCycle}px`;
+            el.style.width = `${Math.max(20, xfer.duration * pixelsPerCycle)}px`;
+            el.dataset.transferId = xfer.id;
+            el.dataset.type = 'dma';
+
+            const labelEl = document.createElement('span');
+            labelEl.className = 'event-label';
+            labelEl.textContent = `${xfer.type} ${xfer.size}B`;
+            el.appendChild(labelEl);
+
+            el.addEventListener('mouseenter', (e) => showDmaTooltip(e, xfer));
+            el.addEventListener('mouseleave', hideTooltip);
+            el.addEventListener('click', () => selectTransfer(xfer.id));
+
+            return el;
+        }
+
+        function createMcEvent(cmd) {
+            const el = document.createElement('div');
+            const typeClass = {
+                'ACT': 'mc-act',
+                'READ': 'mc-read',
+                'WRITE': 'mc-write',
+                'PRE': 'mc-pre',
+                'REF': 'mc-ref'
+            }[cmd.name] || 'mc-read';
+
+            el.className = `event ${typeClass}`;
+            el.style.left = `${cmd.issueCycle * pixelsPerCycle}px`;
+            el.style.width = `${Math.max(15, cmd.duration * pixelsPerCycle)}px`;
+            el.dataset.transferId = cmd.dmaTransferId;
+            el.dataset.type = 'mc';
+            el.dataset.txnId = cmd.txnId;
+
+            const labelEl = document.createElement('span');
+            labelEl.className = 'event-label';
+            labelEl.textContent = cmd.name;
+            el.appendChild(labelEl);
+
+            el.addEventListener('mouseenter', (e) => showMcTooltip(e, cmd));
+            el.addEventListener('mouseleave', hideTooltip);
+            el.addEventListener('click', () => {
+                if (cmd.dmaTransferId !== null) {
+                    selectTransfer(cmd.dmaTransferId);
+                }
+            });
+
+            return el;
+        }
+
+        function updatePlaybackCursor() {
+            const left = currentCycle * pixelsPerCycle;
+            playbackCursor.style.left = `${left}px`;
+            currentCycleEl.textContent = currentCycle;
+        }
+
+        function showDmaTooltip(e, xfer) {
+            document.getElementById('tooltipTitle').textContent =
+                `DMA Transfer ${xfer.id}: ${xfer.type}`;
+
+            let content = `
+                <div class="tooltip-row">
+                    <span class="tooltip-label">Source</span>
+                    <span class="tooltip-value">${xfer.srcAddr}</span>
+                </div>
+                <div class="tooltip-row">
+                    <span class="tooltip-label">Destination</span>
+                    <span class="tooltip-value">${xfer.dstAddr}</span>
+                </div>
+                <div class="tooltip-row">
+                    <span class="tooltip-label">Size</span>
+                    <span class="tooltip-value">${xfer.size} bytes</span>
+                </div>
+                <div class="tooltip-row">
+                    <span class="tooltip-label">Channel</span>
+                    <span class="tooltip-value">${xfer.channel}</span>
+                </div>
+                <div class="tooltip-row">
+                    <span class="tooltip-label">Cycles</span>
+                    <span class="tooltip-value">${xfer.submitCycle} → ${xfer.completeCycle}</span>
+                </div>
+                <div class="tooltip-row">
+                    <span class="tooltip-label">Duration</span>
+                    <span class="tooltip-value">${xfer.duration} cycles</span>
+                </div>
+            `;
+
+            // Show associated MC commands
+            if (xfer.mcCommands.length > 0) {
+                content += `
+                    <div class="tooltip-section">
+                        <div class="tooltip-section-title">Memory Controller Commands (${xfer.mcCommands.length})</div>
+                `;
+                for (const cmd of xfer.mcCommands.slice(0, 5)) {
+                    content += `
+                        <div class="tooltip-row">
+                            <span class="tooltip-label">${cmd.name}</span>
+                            <span class="tooltip-value">Bank ${cmd.component} @ ${cmd.issueCycle}</span>
+                        </div>
+                    `;
+                }
+                if (xfer.mcCommands.length > 5) {
+                    content += `<div style="color: var(--text-dim); font-size: 10px;">+${xfer.mcCommands.length - 5} more...</div>`;
+                }
+                content += `</div>`;
+            }
+
+            document.getElementById('tooltipContent').innerHTML = content;
+            tooltip.style.left = `${e.clientX + 10}px`;
+            tooltip.style.top = `${e.clientY + 10}px`;
+            tooltip.classList.add('visible');
+        }
+
+        function showMcTooltip(e, cmd) {
+            document.getElementById('tooltipTitle').textContent =
+                `MC Command: ${cmd.name}`;
+
+            let content = `
+                <div class="tooltip-row">
+                    <span class="tooltip-label">Bank</span>
+                    <span class="tooltip-value">${cmd.component}</span>
+                </div>
+                <div class="tooltip-row">
+                    <span class="tooltip-label">Transaction ID</span>
+                    <span class="tooltip-value">${cmd.txnId}</span>
+                </div>
+                <div class="tooltip-row">
+                    <span class="tooltip-label">Cycles</span>
+                    <span class="tooltip-value">${cmd.issueCycle} → ${cmd.completeCycle}</span>
+                </div>
+                <div class="tooltip-row">
+                    <span class="tooltip-label">Duration</span>
+                    <span class="tooltip-value">${cmd.duration} cycles</span>
+                </div>
+            `;
+
+            if (cmd.desc) {
+                content += `
+                    <div class="tooltip-row">
+                        <span class="tooltip-label">Description</span>
+                        <span class="tooltip-value">${cmd.desc}</span>
+                    </div>
+                `;
+            }
+
+            if (cmd.dmaTransferId !== null) {
+                const xfer = dmaTransfers.find(x => x.id === cmd.dmaTransferId);
+                if (xfer) {
+                    content += `
+                        <div class="tooltip-section">
+                            <div class="tooltip-section-title">Associated DMA Transfer</div>
+                            <div class="tooltip-row">
+                                <span class="tooltip-label">Transfer</span>
+                                <span class="tooltip-value">#${xfer.id} (${xfer.type})</span>
+                            </div>
+                            <div class="tooltip-row">
+                                <span class="tooltip-label">Size</span>
+                                <span class="tooltip-value">${xfer.size} bytes</span>
+                            </div>
+                        </div>
+                    `;
+                }
+            }
+
+            document.getElementById('tooltipContent').innerHTML = content;
+            tooltip.style.left = `${e.clientX + 10}px`;
+            tooltip.style.top = `${e.clientY + 10}px`;
+            tooltip.classList.add('visible');
+        }
+
+        function hideTooltip() {
+            tooltip.classList.remove('visible');
+        }
+
+        function selectTransfer(xferId) {
+            selectedTransfer = selectedTransfer === xferId ? null : xferId;
+
+            // Update transfer list selection
+            document.querySelectorAll('.transfer-item').forEach(el => {
+                el.classList.toggle('selected', parseInt(el.dataset.xferId) === selectedTransfer);
+            });
+
+            // Update event highlighting
+            document.querySelectorAll('.event').forEach(el => {
+                const evtXferId = parseInt(el.dataset.transferId);
+                if (selectedTransfer !== null) {
+                    el.classList.toggle('dimmed', evtXferId !== selectedTransfer && !isNaN(evtXferId));
+                    el.classList.toggle('highlighted', evtXferId === selectedTransfer);
+                } else {
+                    el.classList.remove('dimmed', 'highlighted');
+                }
+            });
+        }
+
+        function updateTransferList() {
+            transferList.innerHTML = '';
+            for (const xfer of dmaTransfers) {
+                const itemEl = document.createElement('div');
+                itemEl.className = 'transfer-item';
+                itemEl.dataset.xferId = xfer.id;
+                itemEl.innerHTML = `
+                    <div class="xfer-header">
+                        <span class="xfer-id">T${xfer.id}</span>
+                        <span class="xfer-type ${xfer.type.toLowerCase()}">${xfer.type}</span>
+                    </div>
+                    <div class="xfer-detail">
+                        Ch${xfer.channel} | ${xfer.size}B | ${xfer.duration}cy | ${xfer.mcCommands.length} MC cmds
+                    </div>
+                `;
+                itemEl.addEventListener('click', () => selectTransfer(xfer.id));
+                transferList.appendChild(itemEl);
+            }
+        }
+
+        function updateBankUtilization() {
+            const container = document.getElementById('bankUtilization');
+            container.innerHTML = '';
+
+            const banks = Array.from(bankUsage.keys()).sort((a, b) => a - b);
+            const maxUsage = Math.max(...bankUsage.values(), 1);
+
+            for (const bank of banks) {
+                const usage = bankUsage.get(bank) || 0;
+                const box = document.createElement('div');
+                box.className = 'bank-box';
+                if (usage > maxUsage * 0.7) box.classList.add('high');
+                else if (usage > 0) box.classList.add('active');
+                box.textContent = `B${bank}`;
+                box.title = `Bank ${bank}: ${usage} commands`;
+                container.appendChild(box);
+            }
+        }
+
+        function updateStats() {
+            const reads = dmaTransfers.filter(x => x.type === 'READ').length;
+            const writes = dmaTransfers.filter(x => x.type === 'WRITE').length;
+            const totalBytes = dmaTransfers.reduce((sum, x) => sum + x.size, 0);
+
+            // Calculate bandwidth
+            const totalNs = maxCycle / CLOCK_GHZ;
+            const bandwidthGbps = totalNs > 0 ? (totalBytes / totalNs) : 0;
+
+            // MC stats
+            const activations = mcCommands.filter(c => c.name === 'ACT').length;
+            const precharges = mcCommands.filter(c => c.name === 'PRE').length;
+            const mcReads = mcCommands.filter(c => c.name === 'READ').length;
+            const mcWrites = mcCommands.filter(c => c.name === 'WRITE').length;
+            const pageHits = mcReads + mcWrites - activations;  // Approximate
+            const pageHitRate = (mcReads + mcWrites) > 0 ?
+                (pageHits / (mcReads + mcWrites) * 100).toFixed(1) : 0;
+
+            document.getElementById('statTotal').textContent = dmaTransfers.length;
+            document.getElementById('statReads').textContent = reads;
+            document.getElementById('statWrites').textContent = writes;
+            document.getElementById('statBytes').textContent = formatBytes(totalBytes);
+            document.getElementById('statBandwidth').textContent = bandwidthGbps.toFixed(2) + ' GB/s';
+
+            document.getElementById('statMcCmds').textContent = mcCommands.length;
+            document.getElementById('statPageHits').textContent = Math.max(0, pageHits);
+            document.getElementById('statPageHitRate').textContent = pageHitRate + '%';
+            document.getElementById('statActivations').textContent = activations;
+            document.getElementById('statPrecharges').textContent = precharges;
+
+            maxCycleEl.textContent = maxCycle;
+        }
+
+        function formatBytes(bytes) {
+            if (bytes < 1024) return bytes + ' B';
+            if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+            return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+        }
+
+        function setZoom(level) {
+            zoomLevel = Math.max(0.25, Math.min(4, level));
+            pixelsPerCycle = PIXELS_PER_CYCLE * zoomLevel;
+            zoomLevelEl.textContent = `${Math.round(zoomLevel * 100)}%`;
+            renderSwimlanes();
+        }
+
+        const ZOOM_LEVELS = [0.25, 0.5, 0.75, 1.0, 1.5, 2.0, 3.0, 4.0];
+
+        function zoomIn() {
+            const nextIndex = ZOOM_LEVELS.findIndex(z => z > zoomLevel);
+            if (nextIndex !== -1) setZoom(ZOOM_LEVELS[nextIndex]);
+        }
+
+        function zoomOut() {
+            let prevIndex = -1;
+            for (let i = ZOOM_LEVELS.length - 1; i >= 0; i--) {
+                if (ZOOM_LEVELS[i] < zoomLevel) { prevIndex = i; break; }
+            }
+            if (prevIndex !== -1) setZoom(ZOOM_LEVELS[prevIndex]);
+        }
+
+        function resetZoom() { setZoom(1.0); }
+
+        // Event handlers
+        fileInput.addEventListener('change', async (e) => {
+            const file = e.target.files[0];
+            if (!file) return;
+
+            document.getElementById('traceFilename').textContent = file.name;
+
+            try {
+                const text = await file.text();
+                traceData = JSON.parse(text);
+                dmaTransfers = parseTrace(traceData);
+
+                if (dmaTransfers.length > 0 || mcCommands.length > 0) {
+                    noData.style.display = 'none';
+                    swimlaneWrapper.style.display = 'block';
+
+                    renderSwimlanes();
+                    updateTransferList();
+                    updateBankUtilization();
+                    updateStats();
+
+                    currentCycle = 0;
+                    updatePlaybackCursor();
+
+                    btnReset.disabled = false;
+                    btnStepBack.disabled = false;
+                    btnPlay.disabled = false;
+                    btnStep.disabled = false;
+                    btnEnd.disabled = false;
+                }
+            } catch (err) {
+                console.error('Error loading trace:', err);
+                alert('Error loading trace file: ' + err.message);
+            }
+        });
+
+        btnReset.addEventListener('click', () => {
+            currentCycle = 0;
+            stopPlayback();
+            updatePlaybackCursor();
+        });
+
+        btnStepBack.addEventListener('click', () => {
+            if (currentCycle > 0) {
+                currentCycle--;
+                updatePlaybackCursor();
+            }
+        });
+
+        btnStep.addEventListener('click', () => {
+            if (currentCycle < maxCycle) {
+                currentCycle++;
+                updatePlaybackCursor();
+            }
+        });
+
+        btnEnd.addEventListener('click', () => {
+            currentCycle = maxCycle;
+            stopPlayback();
+            updatePlaybackCursor();
+        });
+
+        btnPlay.addEventListener('click', () => {
+            if (isPlaying) stopPlayback();
+            else startPlayback();
+        });
+
+        function startPlayback() {
+            isPlaying = true;
+            btnPlay.textContent = '⏸ Pause';
+            btnPlay.classList.add('active');
+            playInterval = setInterval(() => {
+                if (currentCycle < maxCycle) {
+                    currentCycle++;
+                    updatePlaybackCursor();
+                } else {
+                    stopPlayback();
+                }
+            }, 20);
+        }
+
+        function stopPlayback() {
+            isPlaying = false;
+            btnPlay.textContent = '▶ Play';
+            btnPlay.classList.remove('active');
+            if (playInterval) {
+                clearInterval(playInterval);
+                playInterval = null;
+            }
+        }
+
+        btnZoomIn.addEventListener('click', zoomIn);
+        btnZoomOut.addEventListener('click', zoomOut);
+        zoomLevelEl.style.cursor = 'pointer';
+        zoomLevelEl.title = 'Click to reset to 100%';
+        zoomLevelEl.addEventListener('click', resetZoom);
+
+        // Keyboard shortcuts
+        document.addEventListener('keydown', (e) => {
+            if (dmaTransfers.length === 0 && mcCommands.length === 0) return;
+
+            switch (e.key) {
+                case ' ':
+                    e.preventDefault();
+                    btnPlay.click();
+                    break;
+                case 'ArrowRight':
+                    e.preventDefault();
+                    currentCycle = Math.min(maxCycle, currentCycle + (e.shiftKey ? 10 : 1));
+                    updatePlaybackCursor();
+                    break;
+                case 'ArrowLeft':
+                    e.preventDefault();
+                    currentCycle = Math.max(0, currentCycle - (e.shiftKey ? 10 : 1));
+                    updatePlaybackCursor();
+                    break;
+                case 'Home':
+                    e.preventDefault();
+                    currentCycle = 0;
+                    updatePlaybackCursor();
+                    break;
+                case 'End':
+                    e.preventDefault();
+                    currentCycle = maxCycle;
+                    updatePlaybackCursor();
+                    break;
+                case '+':
+                case '=':
+                    e.preventDefault();
+                    zoomIn();
+                    break;
+                case '-':
+                    e.preventDefault();
+                    zoomOut();
+                    break;
+                case '0':
+                    e.preventDefault();
+                    resetZoom();
+                    break;
+                case 'Escape':
+                    selectTransfer(null);
+                    break;
+            }
+        });
+
+        // Scroll sync
+        swimlaneContainer.addEventListener('scroll', () => {
+            const ruler = document.getElementById('timeRuler');
+            ruler.scrollLeft = swimlaneContainer.scrollLeft;
+        });
+    </script>
+</body>
+</html>

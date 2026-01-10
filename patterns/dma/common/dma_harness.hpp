@@ -653,23 +653,48 @@ public:
             }
         }
 
-        // Export memory controller trace entries
+        // Helper: find DMA transfer that overlaps with a cycle range
+        auto find_dma_transfer = [this](uint64_t issue_cycle, bool is_read) -> int64_t {
+            std::lock_guard<std::mutex> lock(events_mutex_);
+            for (const auto& evt : transfer_events_) {
+                // Check timing overlap
+                if (issue_cycle >= evt.submit_cycle && issue_cycle <= evt.complete_cycle) {
+                    // Match read/write type
+                    if (evt.is_read == is_read) {
+                        return static_cast<int64_t>(evt.transfer_id);
+                    }
+                }
+            }
+            // Also check for ACT/PRE which can match either type
+            for (const auto& evt : transfer_events_) {
+                if (issue_cycle >= evt.submit_cycle && issue_cycle <= evt.complete_cycle) {
+                    return static_cast<int64_t>(evt.transfer_id);
+                }
+            }
+            return -1;  // No matching transfer
+        };
+
+        // Export memory controller trace entries with DMA linkage
         for (size_t i = 0; i < mc_trace_entries.size(); ++i) {
             const auto& entry = mc_trace_entries[i];
 
             // Convert transaction type to command name
             std::string cmd_name;
+            bool is_read_cmd = false;
             switch (entry.transaction_type) {
                 case sw::trace::TransactionType::ACTIVATE:    cmd_name = "ACT"; break;
                 case sw::trace::TransactionType::PRECHARGE:   cmd_name = "PRE"; break;
                 case sw::trace::TransactionType::REFRESH:     cmd_name = "REF"; break;
-                case sw::trace::TransactionType::BURST_READ:  cmd_name = "READ"; break;
+                case sw::trace::TransactionType::BURST_READ:  cmd_name = "READ"; is_read_cmd = true; break;
                 case sw::trace::TransactionType::BURST_WRITE: cmd_name = "WRITE"; break;
                 case sw::trace::TransactionType::TURNAROUND:  cmd_name = "TURNAROUND"; break;
-                case sw::trace::TransactionType::READ:        cmd_name = "READ"; break;
+                case sw::trace::TransactionType::READ:        cmd_name = "READ"; is_read_cmd = true; break;
                 case sw::trace::TransactionType::WRITE:       cmd_name = "WRITE"; break;
                 default: cmd_name = "CMD"; break;
             }
+
+            // Find associated DMA transfer
+            int64_t dma_xfer_id = find_dma_transfer(entry.cycle_issue, is_read_cmd);
 
             // Calculate timing
             double ts = cycle_to_us(entry.cycle_issue);
@@ -687,6 +712,7 @@ public:
                      << "\"dur\": " << dur << ", "
                      << "\"pid\": 2, \"tid\": " << (entry.component_id % 8) << ", "
                      << "\"args\": {"
+                     << "\"dma_transfer_id\": " << dma_xfer_id << ", "
                      << "\"txn_id\": " << entry.transaction_id << ", "
                      << "\"component\": " << static_cast<int>(entry.component_id) << ", "
                      << "\"issue_cycle\": " << entry.cycle_issue << ", "
@@ -697,6 +723,7 @@ public:
                      << "\"s\": \"t\", "
                      << "\"pid\": 2, \"tid\": " << (entry.component_id % 8) << ", "
                      << "\"args\": {"
+                     << "\"dma_transfer_id\": " << dma_xfer_id << ", "
                      << "\"txn_id\": " << entry.transaction_id << ", "
                      << "\"component\": " << static_cast<int>(entry.component_id) << ", "
                      << "\"cycle\": " << entry.cycle_issue;
