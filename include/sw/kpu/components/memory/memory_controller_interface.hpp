@@ -16,6 +16,7 @@
 
 #include <sw/kpu/fidelity/simulation_fidelity.hpp>
 #include <sw/kpu/fidelity/component_config.hpp>
+#include <sw/trace/trace_entry.hpp>
 
 // Forward declarations
 namespace sw::trace {
@@ -264,6 +265,16 @@ public:
 
     /// Set resource tracker for trace export
     virtual void set_resource_tracker(sw::trace::ResourceTracker* tracker) = 0;
+
+    /// Get trace entries (for cycle-accurate controllers)
+    /// Returns empty vector if tracing not supported or disabled
+    virtual const std::vector<sw::trace::TraceEntry>& trace_entries() const {
+        static const std::vector<sw::trace::TraceEntry> empty;
+        return empty;
+    }
+
+    /// Clear trace entries
+    virtual void clear_trace_entries() {}
 
     // ========================================================================
     // Invariant Checking (CYCLE_ACCURATE only)

@@ -26,6 +26,7 @@
 #include <sw/kpu/noc/noc_interface.hpp>
 #include <sw/trace/resource_tracker.hpp>
 #include <sw/trace/trace_exporter.hpp>
+#include <sw/trace/trace_entry.hpp>
 
 #include "dma_configs.hpp"
 #include "matrix_layouts.hpp"
@@ -583,7 +584,11 @@ public:
              << "\"bandwidth_gbps\": " << s.effective_bandwidth_gbps(clock_ghz)
              << "}},\n";
 
+        // Get memory controller trace entries
+        auto mc_trace_entries = mc_->trace_entries();
+
         // Export per-transfer events
+        bool has_mc_entries = !mc_trace_entries.empty();
         {
             std::lock_guard<std::mutex> lock(events_mutex_);
             for (size_t i = 0; i < transfer_events_.size(); ++i) {
@@ -618,13 +623,13 @@ public:
                      << "}}";
 
                 // Add comma unless last event
-                if (i < transfer_events_.size() - 1 || !memory_events_.empty()) {
+                if (i < transfer_events_.size() - 1 || !memory_events_.empty() || has_mc_entries) {
                     file << ",";
                 }
                 file << "\n";
             }
 
-            // Export memory events
+            // Export local memory events (if any)
             for (size_t i = 0; i < memory_events_.size(); ++i) {
                 const auto& evt = memory_events_[i];
 
@@ -641,11 +646,73 @@ public:
                      << "\"txn_id\": " << evt.txn_id
                      << "}}";
 
-                if (i < memory_events_.size() - 1) {
+                if (i < memory_events_.size() - 1 || has_mc_entries) {
                     file << ",";
                 }
                 file << "\n";
             }
+        }
+
+        // Export memory controller trace entries
+        for (size_t i = 0; i < mc_trace_entries.size(); ++i) {
+            const auto& entry = mc_trace_entries[i];
+
+            // Convert transaction type to command name
+            std::string cmd_name;
+            switch (entry.transaction_type) {
+                case sw::trace::TransactionType::ACTIVATE:    cmd_name = "ACT"; break;
+                case sw::trace::TransactionType::PRECHARGE:   cmd_name = "PRE"; break;
+                case sw::trace::TransactionType::REFRESH:     cmd_name = "REF"; break;
+                case sw::trace::TransactionType::BURST_READ:  cmd_name = "READ"; break;
+                case sw::trace::TransactionType::BURST_WRITE: cmd_name = "WRITE"; break;
+                case sw::trace::TransactionType::TURNAROUND:  cmd_name = "TURNAROUND"; break;
+                case sw::trace::TransactionType::READ:        cmd_name = "READ"; break;
+                case sw::trace::TransactionType::WRITE:       cmd_name = "WRITE"; break;
+                default: cmd_name = "CMD"; break;
+            }
+
+            // Calculate timing
+            double ts = cycle_to_us(entry.cycle_issue);
+
+            // For duration events (X), use issue to complete
+            // For instant events (i), just use issue time
+            bool has_duration = (entry.cycle_complete > entry.cycle_issue);
+
+            if (has_duration) {
+                double dur = cycle_to_us(entry.cycle_complete - entry.cycle_issue);
+                if (dur < 0.001) dur = 0.001;
+
+                file << "  {\"name\": \"" << cmd_name << "\", \"cat\": \"mc\", \"ph\": \"X\", "
+                     << "\"ts\": " << std::fixed << std::setprecision(3) << ts << ", "
+                     << "\"dur\": " << dur << ", "
+                     << "\"pid\": 2, \"tid\": " << (entry.component_id % 8) << ", "
+                     << "\"args\": {"
+                     << "\"txn_id\": " << entry.transaction_id << ", "
+                     << "\"component\": " << static_cast<int>(entry.component_id) << ", "
+                     << "\"issue_cycle\": " << entry.cycle_issue << ", "
+                     << "\"complete_cycle\": " << entry.cycle_complete;
+            } else {
+                file << "  {\"name\": \"" << cmd_name << "\", \"cat\": \"mc\", \"ph\": \"i\", "
+                     << "\"ts\": " << std::fixed << std::setprecision(3) << ts << ", "
+                     << "\"s\": \"t\", "
+                     << "\"pid\": 2, \"tid\": " << (entry.component_id % 8) << ", "
+                     << "\"args\": {"
+                     << "\"txn_id\": " << entry.transaction_id << ", "
+                     << "\"component\": " << static_cast<int>(entry.component_id) << ", "
+                     << "\"cycle\": " << entry.cycle_issue;
+            }
+
+            // Add description if present
+            if (!entry.description.empty()) {
+                file << ", \"desc\": \"" << entry.description << "\"";
+            }
+
+            file << "}}";
+
+            if (i < mc_trace_entries.size() - 1) {
+                file << ",";
+            }
+            file << "\n";
         }
 
         file << "]\n";
@@ -654,6 +721,7 @@ public:
         std::cout << "Trace exported to: " << full_path << std::endl;
         std::cout << "  DMA transfers: " << transfer_events_.size() << std::endl;
         std::cout << "  Memory events: " << memory_events_.size() << std::endl;
+        std::cout << "  MC trace entries: " << mc_trace_entries.size() << std::endl;
         std::cout << "  Open with: https://ui.perfetto.dev" << std::endl;
         return true;
     }
