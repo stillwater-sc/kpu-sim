@@ -406,6 +406,186 @@ TEST_CASE("KernelGraph compilation", "[kernel_graph][compile]") {
 }
 
 // ============================================================================
+// True Kernel Fusion Tests
+// ============================================================================
+
+TEST_CASE("True kernel fusion optimization", "[kernel_graph][fusion][true_fusion]") {
+    KernelGraph graph;
+
+    // Create a fusible pair: C1 = A1 @ B1, then C2 = C1 @ B2
+    // Dimensions: layer1 outputs [64, 128], layer2 uses that as A input
+    size_t k1 = graph.add_kernel(Kernel::create_matmul(64, 128, 64), "layer1");
+    size_t k2 = graph.add_kernel(Kernel::create_matmul(64, 256, 128), "layer2");
+    graph.add_edge(k1, k2, "C", "A");
+
+    SECTION("Fused has fewer instructions than sequential") {
+        auto seq = graph.compile_sequential();
+
+        KernelGraphCompileOptions opts;
+        opts.fusion_strategy = FusionStrategy::PRODUCER_CONSUMER;
+        auto fused = graph.compile(opts);
+
+        REQUIRE(fused.success);
+        REQUIRE(seq.success);
+
+        // Fused should have fewer instructions because:
+        // - Producer's DMA_STORE_TILE for C is skipped
+        // - Consumer's DMA_LOAD_TILE for A is skipped
+        // - One less HALT (only one at end)
+        REQUIRE(fused.program.instructions.size() < seq.program.instructions.size());
+    }
+
+    SECTION("Fused reports reduced memory traffic") {
+        auto seq = graph.compile_sequential();
+
+        KernelGraphCompileOptions opts;
+        opts.fusion_strategy = FusionStrategy::PRODUCER_CONSUMER;
+        auto fused = graph.compile(opts);
+
+        REQUIRE(fused.success);
+
+        // Expected savings: 2 × M × N × sizeof(float) = 2 × 64 × 128 × 4 = 65536 bytes
+        Size expected_savings = 2 * 64 * 128 * sizeof(float);
+        Size actual_savings = seq.program.estimates.external_mem_bytes -
+                              fused.program.estimates.external_mem_bytes;
+
+        // Allow some tolerance (80% of expected)
+        REQUIRE(actual_savings >= expected_savings * 0.8);
+    }
+
+    SECTION("Fused has no DMA_STORE for producer C") {
+        KernelGraphCompileOptions opts;
+        opts.fusion_strategy = FusionStrategy::PRODUCER_CONSUMER;
+        auto fused = graph.compile(opts);
+
+        REQUIRE(fused.success);
+
+        // Count C stores in fused program
+        size_t fused_c_stores = 0;
+        for (const auto& instr : fused.program.instructions) {
+            if (instr.opcode == isa::DMOpcode::DMA_STORE_TILE) {
+                if (std::holds_alternative<isa::DMAOperands>(instr.operands)) {
+                    const auto& ops = std::get<isa::DMAOperands>(instr.operands);
+                    if (ops.matrix == isa::MatrixID::C) {
+                        fused_c_stores++;
+                    }
+                }
+            }
+        }
+
+        // Count C stores in sequential program
+        auto seq = graph.compile_sequential();
+        size_t seq_c_stores = 0;
+        for (const auto& instr : seq.program.instructions) {
+            if (instr.opcode == isa::DMOpcode::DMA_STORE_TILE) {
+                if (std::holds_alternative<isa::DMAOperands>(instr.operands)) {
+                    const auto& ops = std::get<isa::DMAOperands>(instr.operands);
+                    if (ops.matrix == isa::MatrixID::C) {
+                        seq_c_stores++;
+                    }
+                }
+            }
+        }
+
+        // Fused should have fewer C stores (only consumer's C is stored)
+        REQUIRE(fused_c_stores < seq_c_stores);
+    }
+
+    SECTION("Fused has no DMA_LOAD for consumer A") {
+        KernelGraphCompileOptions opts;
+        opts.fusion_strategy = FusionStrategy::PRODUCER_CONSUMER;
+        auto fused = graph.compile(opts);
+
+        REQUIRE(fused.success);
+
+        // Count A loads in fused program
+        size_t fused_a_loads = 0;
+        for (const auto& instr : fused.program.instructions) {
+            if (instr.opcode == isa::DMOpcode::DMA_LOAD_TILE) {
+                if (std::holds_alternative<isa::DMAOperands>(instr.operands)) {
+                    const auto& ops = std::get<isa::DMAOperands>(instr.operands);
+                    if (ops.matrix == isa::MatrixID::A) {
+                        fused_a_loads++;
+                    }
+                }
+            }
+        }
+
+        // Count A loads in sequential program
+        auto seq = graph.compile_sequential();
+        size_t seq_a_loads = 0;
+        for (const auto& instr : seq.program.instructions) {
+            if (instr.opcode == isa::DMOpcode::DMA_LOAD_TILE) {
+                if (std::holds_alternative<isa::DMAOperands>(instr.operands)) {
+                    const auto& ops = std::get<isa::DMAOperands>(instr.operands);
+                    if (ops.matrix == isa::MatrixID::A) {
+                        seq_a_loads++;
+                    }
+                }
+            }
+        }
+
+        // Fused should have fewer A loads (consumer's A loads are skipped)
+        REQUIRE(fused_a_loads < seq_a_loads);
+    }
+
+    SECTION("Fused identifies fused pairs") {
+        KernelGraphCompileOptions opts;
+        opts.fusion_strategy = FusionStrategy::PRODUCER_CONSUMER;
+        auto fused = graph.compile(opts);
+
+        REQUIRE(fused.success);
+        REQUIRE(fused.fused_pairs.size() == 1);
+        REQUIRE(fused.fused_pairs[0].first == k1);
+        REQUIRE(fused.fused_pairs[0].second == k2);
+    }
+
+    SECTION("No fusion when strategy is NONE") {
+        KernelGraphCompileOptions opts;
+        opts.fusion_strategy = FusionStrategy::NONE;
+        auto result = graph.compile(opts);
+
+        REQUIRE(result.success);
+        REQUIRE(result.fused_pairs.empty());
+    }
+}
+
+TEST_CASE("Fusion with longer chains", "[kernel_graph][fusion][true_fusion]") {
+    KernelGraph graph;
+
+    // Three-layer chain
+    size_t k1 = graph.add_kernel(Kernel::create_matmul(32, 64, 32), "layer1");
+    size_t k2 = graph.add_kernel(Kernel::create_matmul(32, 128, 64), "layer2");
+    size_t k3 = graph.add_kernel(Kernel::create_matmul(32, 256, 128), "layer3");
+
+    graph.add_edge(k1, k2, "C", "A");
+    graph.add_edge(k2, k3, "C", "A");
+
+    SECTION("Finds multiple fusible pairs") {
+        auto fusible = graph.find_fusible_pairs();
+        // k1->k2 and k2->k3 are both fusible
+        REQUIRE(fusible.size() == 2);
+    }
+
+    SECTION("Fused has significantly fewer instructions") {
+        auto seq = graph.compile_sequential();
+
+        KernelGraphCompileOptions opts;
+        opts.fusion_strategy = FusionStrategy::PRODUCER_CONSUMER;
+        auto fused = graph.compile(opts);
+
+        REQUIRE(fused.success);
+        REQUIRE(fused.program.instructions.size() < seq.program.instructions.size());
+
+        // Current implementation fuses pairs sequentially - in a chain k1->k2->k3,
+        // when k1->k2 is fused, k2 is marked as processed, so k2->k3 uses unfused k3.
+        // This saves at least 2 instructions per fused pair (1 DMA_STORE + 1 DMA_LOAD)
+        size_t diff = seq.program.instructions.size() - fused.program.instructions.size();
+        REQUIRE(diff >= 2);
+    }
+}
+
+// ============================================================================
 // Visualization Tests
 // ============================================================================
 

@@ -5,9 +5,12 @@
 
 #include <algorithm>
 #include <queue>
+#include <set>
 #include <sstream>
 #include <stdexcept>
 #include <iomanip>
+#include <unordered_set>
+#include <unordered_map>
 
 namespace sw::kpu {
 
@@ -494,24 +497,27 @@ KernelGraphCompileResult KernelGraph::compile(
         return result;
     }
 
-    // Get execution order
-    result.execution_order = get_execution_order();
-
-    // For now, use sequential compilation
-    // TODO: Implement fusion strategies
+    // No fusion requested - use sequential compilation
     if (options.fusion_strategy == FusionStrategy::NONE) {
         return compile_sequential();
     }
 
     // Find fusible pairs
     auto fusible = find_fusible_pairs();
-    result.fused_pairs = fusible;
 
-    // For producer-consumer fusion, compile with fusion
-    // This is a simplified implementation - full fusion would require
-    // more sophisticated program merging
+    // If no fusible pairs found, fall back to sequential
+    if (fusible.empty()) {
+        return compile_sequential();
+    }
 
-    return compile_sequential();  // Fall back to sequential for now
+    // Producer-consumer fusion: eliminate intermediate memory traffic
+    if (options.fusion_strategy == FusionStrategy::PRODUCER_CONSUMER) {
+        return compile_with_fusion(fusible, options);
+    }
+
+    // Other fusion strategies not yet implemented
+    // HORIZONTAL and PIPELINE fall back to sequential for now
+    return compile_sequential();
 }
 
 KernelGraphCompileResult KernelGraph::compile_sequential() const {
@@ -607,15 +613,242 @@ void KernelGraph::append_kernel_program(isa::DMProgram& target,
     }
 }
 
+// ============================================================================
+// Fusion Analysis and Compilation
+// ============================================================================
+
+KernelGraph::FusionAnalysis
+KernelGraph::analyze_producer_for_fusion(const Kernel& producer) const {
+    FusionAnalysis analysis;
+    const auto& instrs = producer.program().instructions;
+
+    for (size_t i = 0; i < instrs.size(); ++i) {
+        const auto& instr = instrs[i];
+
+        if (instr.opcode == isa::DMOpcode::DMA_STORE_TILE) {
+            if (std::holds_alternative<isa::DMAOperands>(instr.operands)) {
+                const auto& ops = std::get<isa::DMAOperands>(instr.operands);
+                if (ops.matrix == isa::MatrixID::C) {
+                    analysis.c_store_indices.push_back(i);
+                    analysis.c_l3_offset = ops.l3_offset;
+                }
+            }
+        }
+    }
+
+    return analysis;
+}
+
+KernelGraph::FusionAnalysis
+KernelGraph::analyze_consumer_for_fusion(const Kernel& consumer) const {
+    FusionAnalysis analysis;
+    const auto& instrs = consumer.program().instructions;
+
+    for (size_t i = 0; i < instrs.size(); ++i) {
+        const auto& instr = instrs[i];
+
+        if (instr.opcode == isa::DMOpcode::DMA_LOAD_TILE) {
+            if (std::holds_alternative<isa::DMAOperands>(instr.operands)) {
+                const auto& ops = std::get<isa::DMAOperands>(instr.operands);
+                if (ops.matrix == isa::MatrixID::A) {
+                    analysis.a_load_indices.push_back(i);
+                }
+            }
+        }
+    }
+
+    return analysis;
+}
+
 void KernelGraph::compile_fused_pair(isa::DMProgram& target,
                                      const KernelNode& producer,
                                      const KernelNode& consumer,
-                                     Address base_offset) const {
-    // TODO: Implement true fusion
-    // For now, just append sequentially
-    append_kernel_program(target, *producer.kernel, base_offset);
+                                     Address /*base_offset*/) const {
+    // Analyze both programs to find instructions to skip/modify
+    auto prod_analysis = analyze_producer_for_fusion(*producer.kernel);
+    auto cons_analysis = analyze_consumer_for_fusion(*consumer.kernel);
+
+    // Build skip sets for producer (skip C stores to external memory)
+    std::set<size_t> prod_skip(prod_analysis.c_store_indices.begin(),
+                                prod_analysis.c_store_indices.end());
+
+    // Build skip sets for consumer (skip A loads from external memory)
+    std::set<size_t> cons_skip(cons_analysis.a_load_indices.begin(),
+                                cons_analysis.a_load_indices.end());
+
+    // === PHASE 1: Emit producer instructions ===
+    // Skip C stores (keep intermediate in L3) and HALT
+    const auto& prod_instrs = producer.kernel->program().instructions;
+    for (size_t i = 0; i < prod_instrs.size(); ++i) {
+        const auto& instr = prod_instrs[i];
+
+        // Skip instructions in skip set
+        if (prod_skip.count(i)) continue;
+
+        // Skip HALT - we'll add one at the very end
+        if (instr.opcode == isa::DMOpcode::HALT) continue;
+
+        target.instructions.push_back(instr);
+    }
+
+    // === PHASE 2: Add minimal sync barrier ===
+    // Ensures producer's output is complete before consumer starts
     target.instructions.push_back(isa::DMInstruction::barrier());
-    append_kernel_program(target, *consumer.kernel, base_offset);
+
+    // === PHASE 3: Emit consumer instructions ===
+    // Skip A loads (data is already in L3 from producer's C)
+    // Remap A's L3 source references to producer's C location
+    const auto& cons_instrs = consumer.kernel->program().instructions;
+    for (size_t i = 0; i < cons_instrs.size(); ++i) {
+        // Skip instructions in skip set
+        if (cons_skip.count(i)) continue;
+
+        auto instr = cons_instrs[i];  // Copy for potential modification
+
+        // Remap BM_MOVE_TILE for A to use producer's C location in L3
+        if (instr.opcode == isa::DMOpcode::BM_MOVE_TILE ||
+            instr.opcode == isa::DMOpcode::BM_TRANSPOSE_TILE) {
+            if (std::holds_alternative<isa::BlockMoverOperands>(instr.operands)) {
+                auto& ops = std::get<isa::BlockMoverOperands>(instr.operands);
+                if (ops.matrix == isa::MatrixID::A) {
+                    // Consumer's A is producer's C - remap L3 source
+                    ops.src_offset = prod_analysis.c_l3_offset;
+                    // Update label for debugging
+                    instr.label = "BM_MOVE A(fused_from_C) L3→L2";
+                }
+            }
+        }
+
+        target.instructions.push_back(instr);
+    }
+}
+
+KernelGraphCompileResult KernelGraph::compile_with_fusion(
+    const std::vector<std::pair<size_t, size_t>>& fused_pairs,
+    const KernelGraphCompileOptions& /*options*/) const {
+
+    KernelGraphCompileResult result;
+    result.execution_order = get_execution_order();
+    result.fused_pairs = fused_pairs;
+
+    // Create combined program
+    result.program.name = name_.empty() ? "kernel_graph_fused" : name_ + "_fused";
+    result.program.version = 1;
+    result.program.dataflow = isa::DMProgram::Dataflow::OUTPUT_STATIONARY;
+
+    // Track which nodes have been processed
+    std::unordered_set<size_t> processed;
+
+    // Build lookup for quick fused pair checking
+    std::unordered_map<size_t, size_t> producer_to_consumer;
+    for (const auto& [prod, cons] : fused_pairs) {
+        producer_to_consumer[prod] = cons;
+    }
+
+    // Compile in execution order
+    for (size_t node_id : result.execution_order) {
+        if (processed.count(node_id)) continue;
+
+        const auto& node = get_node(node_id);
+
+        // Check if this node is a producer in a fused pair
+        auto fuse_it = producer_to_consumer.find(node_id);
+        if (fuse_it != producer_to_consumer.end()) {
+            size_t consumer_id = fuse_it->second;
+
+            // Compile as fused pair
+            compile_fused_pair(result.program,
+                               node,
+                               get_node(consumer_id),
+                               0);
+
+            processed.insert(node_id);
+            processed.insert(consumer_id);
+        } else {
+            // Compile as standalone kernel
+            const Kernel& kernel = *node.kernel;
+
+            for (const auto& instr : kernel.program().instructions) {
+                // Skip HALT except for the last kernel
+                if (instr.opcode == isa::DMOpcode::HALT &&
+                    node_id != result.execution_order.back()) {
+                    continue;
+                }
+                result.program.instructions.push_back(instr);
+            }
+
+            // Add barrier between kernels (except after last)
+            if (node_id != result.execution_order.back()) {
+                result.program.instructions.push_back(isa::DMInstruction::barrier());
+            }
+
+            processed.insert(node_id);
+        }
+    }
+
+    // Update program dimensions from first kernel
+    if (!result.execution_order.empty()) {
+        const auto& first_kernel = *get_node(result.execution_order[0]).kernel;
+        result.program.M = first_kernel.program().M;
+        result.program.N = first_kernel.program().N;
+        result.program.K = first_kernel.program().K;
+        result.program.Ti = first_kernel.program().Ti;
+        result.program.Tj = first_kernel.program().Tj;
+        result.program.Tk = first_kernel.program().Tk;
+        result.program.L1_Ki = first_kernel.program().L1_Ki;
+    }
+
+    // Update estimates with fusion savings
+    update_fused_estimates(result, fused_pairs);
+
+    result.success = true;
+    return result;
+}
+
+void KernelGraph::update_fused_estimates(
+    KernelGraphCompileResult& result,
+    const std::vector<std::pair<size_t, size_t>>& fused_pairs) const {
+
+    // Calculate base estimates from all kernels
+    Size total_external = 0;
+    Size total_flops = 0;
+
+    for (size_t node_id : result.execution_order) {
+        const auto& kernel = *get_node(node_id).kernel;
+        result.program.estimates.total_cycles += kernel.program().estimates.total_cycles;
+        result.program.estimates.l3_bytes += kernel.program().estimates.l3_bytes;
+        result.program.estimates.l2_bytes += kernel.program().estimates.l2_bytes;
+        total_external += kernel.program().estimates.external_mem_bytes;
+        total_flops += kernel.total_flops();
+    }
+
+    // Calculate memory savings from fusion
+    // For each fused pair: savings = 2 * intermediate_size (one store + one load)
+    Size bytes_saved = 0;
+    for (const auto& [prod_id, cons_id] : fused_pairs) {
+        const auto& producer = *get_node(prod_id).kernel;
+        // Producer's C output size = M * N * dtype_size
+        Size c_size = producer.M() * producer.N() * dtype_size(producer.dtype());
+        // Saved: write from producer + read from consumer
+        bytes_saved += 2 * c_size;
+    }
+
+    // Apply savings
+    result.program.estimates.external_mem_bytes =
+        (total_external > bytes_saved) ? (total_external - bytes_saved) : 0;
+
+    // Recalculate arithmetic intensity with reduced memory traffic
+    if (result.program.estimates.external_mem_bytes > 0) {
+        result.program.estimates.arithmetic_intensity =
+            static_cast<double>(total_flops) / result.program.estimates.external_mem_bytes;
+    }
+
+    // Estimate workspace required
+    result.workspace_required = 0;
+    for (size_t node_id : result.execution_order) {
+        const auto& kernel = *get_node(node_id).kernel;
+        result.workspace_required += kernel.total_input_bytes() + kernel.total_output_bytes();
+    }
 }
 
 // ============================================================================

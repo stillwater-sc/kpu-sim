@@ -459,6 +459,43 @@ private:
                             const KernelNode& producer,
                             const KernelNode& consumer,
                             Address base_offset) const;
+
+    // =========================================
+    // Fusion Analysis Helpers
+    // =========================================
+
+    /**
+     * @brief Analysis result for fusion optimization
+     */
+    struct FusionAnalysis {
+        std::vector<size_t> c_store_indices;    ///< DMA_STORE_TILE indices for C
+        std::vector<size_t> a_load_indices;     ///< DMA_LOAD_TILE indices for A
+        Address c_l3_offset = 0;                ///< L3 offset where C resides
+    };
+
+    /**
+     * @brief Analyze producer kernel for fusion (find C output instructions)
+     */
+    FusionAnalysis analyze_producer_for_fusion(const Kernel& producer) const;
+
+    /**
+     * @brief Analyze consumer kernel for fusion (find A input instructions)
+     */
+    FusionAnalysis analyze_consumer_for_fusion(const Kernel& consumer) const;
+
+    /**
+     * @brief Compile with producer-consumer fusion optimization
+     */
+    KernelGraphCompileResult compile_with_fusion(
+        const std::vector<std::pair<size_t, size_t>>& fused_pairs,
+        const KernelGraphCompileOptions& options) const;
+
+    /**
+     * @brief Update estimates to reflect fusion memory savings
+     */
+    void update_fused_estimates(
+        KernelGraphCompileResult& result,
+        const std::vector<std::pair<size_t, size_t>>& fused_pairs) const;
 };
 
 } // namespace sw::kpu
