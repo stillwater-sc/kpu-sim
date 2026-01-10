@@ -19,6 +19,7 @@
 #include <filesystem>
 #include <atomic>
 #include <mutex>
+#include <unordered_map>
 
 #include <sw/kpu/components/dma/cycle_accurate_dma_engine.hpp>
 #include <sw/kpu/components/dma/dma_placement.hpp>
@@ -587,6 +588,50 @@ public:
         // Get memory controller trace entries
         auto mc_trace_entries = mc_->trace_entries();
 
+        // Compute actual start cycles for DMA transfers from MC commands
+        // Strategy: First compute MC-to-transfer associations, then for each transfer,
+        // find the earliest MC command that is associated with it.
+        std::unordered_map<uint64_t, uint64_t> transfer_start_cycles;
+
+        // Build a mapping from MC command index to DMA transfer ID
+        // (same logic as find_dma_transfer, but precomputed)
+        std::vector<int64_t> mc_to_transfer(mc_trace_entries.size(), -1);
+        for (size_t i = 0; i < mc_trace_entries.size(); ++i) {
+            const auto& entry = mc_trace_entries[i];
+            bool is_read_cmd = (entry.transaction_type == sw::trace::TransactionType::READ ||
+                                entry.transaction_type == sw::trace::TransactionType::BURST_READ);
+
+            // Find the transfer with smallest complete_cycle >= MC complete_cycle
+            int64_t best_id = -1;
+            uint64_t best_complete = UINT64_MAX;
+            for (const auto& evt : transfer_events_) {
+                if (evt.complete_cycle >= entry.cycle_complete) {
+                    if (evt.is_read == is_read_cmd || !is_read_cmd) {  // ACT/PRE can match any
+                        if (evt.complete_cycle < best_complete) {
+                            best_complete = evt.complete_cycle;
+                            best_id = static_cast<int64_t>(evt.transfer_id);
+                        }
+                    }
+                }
+            }
+            mc_to_transfer[i] = best_id;
+        }
+
+        // Now for each transfer, find the earliest MC command associated with it
+        for (const auto& evt : transfer_events_) {
+            uint64_t earliest_issue = UINT64_MAX;
+            for (size_t i = 0; i < mc_trace_entries.size(); ++i) {
+                if (mc_to_transfer[i] == static_cast<int64_t>(evt.transfer_id)) {
+                    if (mc_trace_entries[i].cycle_issue < earliest_issue) {
+                        earliest_issue = mc_trace_entries[i].cycle_issue;
+                    }
+                }
+            }
+            if (earliest_issue != UINT64_MAX) {
+                transfer_start_cycles[evt.transfer_id] = earliest_issue;
+            }
+        }
+
         // Export per-transfer events
         bool has_mc_entries = !mc_trace_entries.empty();
         {
@@ -594,15 +639,22 @@ public:
             for (size_t i = 0; i < transfer_events_.size(); ++i) {
                 const auto& evt = transfer_events_[i];
 
-                // Calculate duration
-                uint64_t duration_cycles = (evt.complete_cycle > evt.submit_cycle)
-                    ? (evt.complete_cycle - evt.submit_cycle) : 1;
+                // Use computed start cycle if available, otherwise use submit_cycle
+                uint64_t actual_start = evt.submit_cycle;
+                auto it = transfer_start_cycles.find(evt.transfer_id);
+                if (it != transfer_start_cycles.end()) {
+                    actual_start = it->second;
+                }
+
+                // Calculate duration from actual start to completion
+                uint64_t duration_cycles = (evt.complete_cycle > actual_start)
+                    ? (evt.complete_cycle - actual_start) : 1;
 
                 // Transfer type name
                 std::string name = evt.is_read ? "DMA_READ" : "DMA_WRITE";
 
                 // Start time and duration in microseconds
-                double ts = cycle_to_us(evt.submit_cycle);
+                double ts = cycle_to_us(actual_start);
                 double dur = cycle_to_us(duration_cycles);
 
                 // Ensure minimum visible duration
@@ -618,7 +670,7 @@ public:
                      << "\"dst\": \"0x" << std::hex << evt.dst_addr << std::dec << "\", "
                      << "\"size\": " << evt.size << ", "
                      << "\"channel\": " << evt.channel << ", "
-                     << "\"submit_cycle\": " << evt.submit_cycle << ", "
+                     << "\"submit_cycle\": " << actual_start << ", "
                      << "\"complete_cycle\": " << evt.complete_cycle
                      << "}}";
 
@@ -653,25 +705,29 @@ public:
             }
         }
 
-        // Helper: find DMA transfer that overlaps with a cycle range
-        auto find_dma_transfer = [this](uint64_t issue_cycle, bool is_read) -> int64_t {
+        // Helper: find DMA transfer that this MC command serves
+        // Strategy: Find the transfer with the smallest complete_cycle that is >= the MC command's complete_cycle
+        // This correctly associates each MC command with the transfer it's completing.
+        auto find_dma_transfer = [this](uint64_t complete_cycle, bool is_read) -> int64_t {
             std::lock_guard<std::mutex> lock(events_mutex_);
+            int64_t best_id = -1;
+            uint64_t best_complete = UINT64_MAX;
+
             for (const auto& evt : transfer_events_) {
-                // Check timing overlap
-                if (issue_cycle >= evt.submit_cycle && issue_cycle <= evt.complete_cycle) {
+                // The transfer's complete_cycle should be >= the MC command's complete_cycle
+                // (the MC command must finish before or when the transfer completes)
+                if (evt.complete_cycle >= complete_cycle) {
                     // Match read/write type
-                    if (evt.is_read == is_read) {
-                        return static_cast<int64_t>(evt.transfer_id);
+                    if (evt.is_read == is_read || !is_read) {  // ACT/PRE can match any
+                        // Take the transfer with smallest complete_cycle (earliest completion)
+                        if (evt.complete_cycle < best_complete) {
+                            best_complete = evt.complete_cycle;
+                            best_id = static_cast<int64_t>(evt.transfer_id);
+                        }
                     }
                 }
             }
-            // Also check for ACT/PRE which can match either type
-            for (const auto& evt : transfer_events_) {
-                if (issue_cycle >= evt.submit_cycle && issue_cycle <= evt.complete_cycle) {
-                    return static_cast<int64_t>(evt.transfer_id);
-                }
-            }
-            return -1;  // No matching transfer
+            return best_id;
         };
 
         // Export memory controller trace entries with DMA linkage
@@ -693,8 +749,8 @@ public:
                 default: cmd_name = "CMD"; break;
             }
 
-            // Find associated DMA transfer
-            int64_t dma_xfer_id = find_dma_transfer(entry.cycle_issue, is_read_cmd);
+            // Find associated DMA transfer (using complete_cycle for proper association)
+            int64_t dma_xfer_id = find_dma_transfer(entry.cycle_complete, is_read_cmd);
 
             // Calculate timing
             double ts = cycle_to_us(entry.cycle_issue);
