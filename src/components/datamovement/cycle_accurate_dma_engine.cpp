@@ -268,8 +268,20 @@ void CycleAccurateDMAEngine::process_channel(uint32_t ch_id) {
             break;
 
         case DMAChannelState::STALLED_MEMORY_FULL:
-            // Retry memory read
-            issue_memory_read(ch_id);
+            // Determine if this is a read or write based on transfer direction
+            if (ch.request.src_type == DMAMemoryType::DEVICE_MEMORY ||
+                ch.request.src_type == DMAMemoryType::HOST_MEMORY) {
+                // Load operation: read from device memory
+                issue_memory_read(ch_id);
+            } else if (ch.request.dst_type == DMAMemoryType::DEVICE_MEMORY ||
+                       ch.request.dst_type == DMAMemoryType::HOST_MEMORY) {
+                // Store operation: write to device memory
+                issue_memory_write(ch_id);
+            } else {
+                // Local transfer (L3 to L3, etc.) - skip memory operations
+                ch.memory_complete = true;
+                ch.state = DMAChannelState::COMPLETE;
+            }
             break;
 
         case DMAChannelState::WAITING_MEMORY_READ:
