@@ -1,0 +1,477 @@
+<!DOCTYPE html>
+<!--
+  HBM2E Bank State Analyzer
+
+  Shows bank utilization across 8 channels with 2 pseudo-channels each.
+  Enhanced HBM2 with 3.2-3.6 Gbps per pin.
+
+  SPDX-License-Identifier: MIT
+  Copyright (c) 2024-2025 Stillwater Supercomputing, Inc.
+-->
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>HBM2E Bank Analyzer</title>
+    <style>
+        :root {
+            --bg: #0a0e14;
+            --bg-panel: #151a21;
+            --border: #2d333b;
+            --text: #e6edf3;
+            --text-dim: #7d8590;
+            --phase-act: #f59e0b;
+            --phase-rd: #22c55e;
+            --phase-wr: #a855f7;
+            --phase-pre: #ef4444;
+            --highlight: #fbbf24;
+            --hbm2e: #10b981;
+        }
+
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+
+        body {
+            font-family: 'SF Mono', Monaco, monospace;
+            background: var(--bg);
+            color: var(--text);
+            min-height: 100vh;
+            overflow: hidden;
+        }
+
+        .header {
+            background: var(--bg-panel);
+            padding: 12px 20px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            border-bottom: 1px solid var(--border);
+            height: 50px;
+        }
+
+        .header h1 { font-size: 14px; font-weight: 500; }
+
+        .tech-badge {
+            background: var(--hbm2e);
+            color: #fff;
+            padding: 2px 8px;
+            border-radius: 4px;
+            font-size: 10px;
+            font-weight: 700;
+            margin-left: 8px;
+        }
+
+        .controls { display: flex; align-items: center; gap: 12px; }
+
+        button {
+            background: #2d333b;
+            color: #fff;
+            border: none;
+            padding: 6px 12px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 12px;
+        }
+
+        button:hover { background: #3d444d; }
+        .file-btn { background: #3b82f6; }
+
+        .main-container { display: flex; height: calc(100vh - 50px); }
+
+        .left-panel {
+            width: 200px;
+            background: var(--bg-panel);
+            border-right: 1px solid var(--border);
+            padding: 15px;
+            overflow-y: auto;
+        }
+
+        .panel-section { margin-bottom: 20px; }
+        .panel-section h3 {
+            font-size: 10px;
+            font-weight: 600;
+            text-transform: uppercase;
+            color: var(--text-dim);
+            margin-bottom: 10px;
+        }
+
+        .legend-item { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; font-size: 11px; }
+        .legend-hexagon { width: 24px; height: 14px; }
+        .legend-hexagon svg { width: 100%; height: 100%; }
+
+        .stats-table { width: 100%; font-size: 11px; }
+        .stats-table td { padding: 3px 0; }
+        .stats-table .label { color: var(--text-dim); }
+        .stats-table .value { text-align: right; }
+
+        .analyzer-container { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+
+        .time-ruler { height: 30px; background: #151a21; border-bottom: 1px solid var(--border); }
+
+        .lanes-container { flex: 1; overflow-y: auto; overflow-x: hidden; }
+
+        .lane-row {
+            height: 22px;
+            display: flex;
+            align-items: center;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .lane-row:nth-child(even) { background: #0d1117; }
+        .lane-row:nth-child(odd) { background: #151a21; }
+        .lane-row.channel-header { background: #1a2332; height: 20px; }
+
+        .lane-label {
+            width: 120px;
+            padding: 0 8px;
+            font-size: 10px;
+            color: var(--text);
+            border-right: 1px solid var(--border);
+            height: 100%;
+            display: flex;
+            align-items: center;
+        }
+
+        .lane-label.indent { padding-left: 20px; font-size: 9px; color: var(--text-dim); }
+
+        .lane-content { flex: 1; height: 100%; position: relative; overflow: hidden; }
+        .lane-svg { width: 100%; height: 100%; display: block; }
+
+        .phase-hexagon { cursor: pointer; transition: filter 0.15s; }
+        .phase-hexagon:hover { filter: brightness(1.2); }
+
+        .info-panel {
+            position: fixed;
+            right: 20px;
+            top: 70px;
+            width: 260px;
+            background: var(--bg-panel);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 15px;
+            display: none;
+            z-index: 100;
+        }
+
+        .info-panel.visible { display: block; }
+
+        .empty-state {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100%;
+            color: var(--text-dim);
+            gap: 15px;
+        }
+
+        .collapse-btn {
+            width: 14px;
+            height: 14px;
+            background: none;
+            border: 1px solid var(--text-dim);
+            border-radius: 2px;
+            padding: 0;
+            cursor: pointer;
+            font-size: 10px;
+            color: var(--text-dim);
+            margin-right: 6px;
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <div style="display: flex; align-items: center; gap: 12px;">
+            <h1>HBM2E Bank Analyzer<span class="tech-badge">3.6 Gbps</span></h1>
+            <button class="file-btn" onclick="document.getElementById('fileInput').click()">Load Trace</button>
+            <input type="file" id="fileInput" accept=".json" style="display: none;">
+            <span id="traceFilename" style="font-size: 12px; color: var(--text-dim);">No trace loaded</span>
+        </div>
+        <div class="controls">
+            <button onclick="zoomIn()">+</button>
+            <button onclick="zoomOut()">-</button>
+            <button onclick="zoomFit()">Fit</button>
+            <span id="timeDisplay" style="background: #2d333b; padding: 6px 12px; border-radius: 4px; font-size: 12px;">Cycles: 0 - 0</span>
+        </div>
+    </div>
+
+    <div class="main-container">
+        <div class="left-panel">
+            <div class="panel-section">
+                <h3>Phase Legend</h3>
+                <div class="legend-item">
+                    <div class="legend-hexagon"><svg viewBox="0 0 24 14"><polygon points="3,7 6,2 18,2 21,7 18,12 6,12" fill="var(--phase-act)" opacity="0.8"/></svg></div>
+                    <span>ACTIVATE</span>
+                </div>
+                <div class="legend-item">
+                    <div class="legend-hexagon"><svg viewBox="0 0 24 14"><polygon points="3,7 6,2 18,2 21,7 18,12 6,12" fill="var(--phase-rd)" opacity="0.8"/></svg></div>
+                    <span>READ</span>
+                </div>
+                <div class="legend-item">
+                    <div class="legend-hexagon"><svg viewBox="0 0 24 14"><polygon points="3,7 6,2 18,2 21,7 18,12 6,12" fill="var(--phase-wr)" opacity="0.8"/></svg></div>
+                    <span>WRITE</span>
+                </div>
+                <div class="legend-item">
+                    <div class="legend-hexagon"><svg viewBox="0 0 24 14"><polygon points="3,7 6,2 18,2 21,7 18,12 6,12" fill="var(--phase-pre)" opacity="0.8"/></svg></div>
+                    <span>PRECHARGE</span>
+                </div>
+            </div>
+
+            <div class="panel-section">
+                <h3>Statistics</h3>
+                <table class="stats-table">
+                    <tr><td class="label">Transactions</td><td class="value" id="statTxns">0</td></tr>
+                    <tr><td class="label">Total Cycles</td><td class="value" id="statCycles">0</td></tr>
+                    <tr><td class="label">Channels Used</td><td class="value" id="statChannels">0</td></tr>
+                    <tr><td class="label">ACT Commands</td><td class="value" id="statAct">0</td></tr>
+                    <tr><td class="label">RD Commands</td><td class="value" id="statRd">0</td></tr>
+                    <tr><td class="label">WR Commands</td><td class="value" id="statWr">0</td></tr>
+                </table>
+            </div>
+
+            <div class="panel-section">
+                <h3>View Options</h3>
+                <div class="legend-item">
+                    <input type="checkbox" id="showAllChannels" onchange="updateView()">
+                    <label for="showAllChannels">Show All Channels</label>
+                </div>
+            </div>
+        </div>
+
+        <div class="analyzer-container">
+            <div class="time-ruler" id="timeRuler"><svg id="rulerSvg"></svg></div>
+            <div class="lanes-container" id="lanesContainer">
+                <div class="empty-state" id="emptyState">
+                    <p>Load an HBM2E trace file to analyze</p>
+                    <button onclick="document.getElementById('fileInput').click()">Load Trace JSON</button>
+                </div>
+                <div id="lanesWrapper" style="display: none;"></div>
+            </div>
+        </div>
+    </div>
+
+    <div class="info-panel" id="infoPanel">
+        <h4 style="font-size: 12px; margin-bottom: 10px;">
+            Transaction <span id="infoTxnId">#1</span>
+            <button style="float: right; background: none; border: none; color: var(--text-dim); cursor: pointer;" onclick="closeInfoPanel()">x</button>
+        </h4>
+        <table style="width: 100%; font-size: 11px;">
+            <tr><td style="color: var(--text-dim);">Type</td><td id="infoType">READ</td></tr>
+            <tr><td style="color: var(--text-dim);">Channel</td><td id="infoChannel">0</td></tr>
+            <tr><td style="color: var(--text-dim);">PC</td><td id="infoPC">0</td></tr>
+            <tr><td style="color: var(--text-dim);">Bank</td><td id="infoBank">0</td></tr>
+            <tr><td style="color: var(--text-dim);">Latency</td><td id="infoLatency">0 cycles</td></tr>
+        </table>
+        <div id="phaseList" style="margin-top: 10px;"></div>
+    </div>
+
+    <script>
+        const NUM_CHANNELS = 8;
+        const PC_PER_CHANNEL = 2;
+        const BANKS_PER_PC = 16;
+
+        let traceData = null;
+        let transactions = new Map();
+        let viewState = { startCycle: 0, endCycle: 100, pixelsPerCycle: 8, selectedTxn: null, collapsedChannels: new Set() };
+
+        const PHASE_COLORS = {
+            'ACTIVATE': '#f59e0b', 'BURST_READ': '#22c55e', 'READ': '#22c55e',
+            'BURST_WRITE': '#a855f7', 'WRITE': '#a855f7', 'PRECHARGE': '#ef4444'
+        };
+
+        document.getElementById('fileInput').addEventListener('change', (e) => {
+            const file = e.target.files[0];
+            if (!file) return;
+            const reader = new FileReader();
+            reader.onload = (evt) => {
+                try {
+                    traceData = JSON.parse(evt.target.result);
+                    document.getElementById('traceFilename').textContent = file.name;
+                    processTrace();
+                    renderView();
+                } catch (err) { alert('Error: ' + err.message); }
+            };
+            reader.readAsText(file);
+        });
+
+        function processTrace() {
+            transactions.clear();
+            let minCycle = Infinity, maxCycle = 0;
+            let stats = { act: 0, rd: 0, wr: 0 };
+            let channelsUsed = new Set();
+
+            const events = traceData.filter(e => e.ph === 'X' && e.args?.txn_id !== undefined);
+
+            for (const event of events) {
+                const txnId = event.args.txn_id;
+                const startCycle = event.args.cycle_issue || 0;
+                const endCycle = event.args.cycle_complete || 0;
+                let bank = event.tid || 0;
+                const channel = Math.floor(bank / (PC_PER_CHANNEL * BANKS_PER_PC));
+
+                if (!transactions.has(txnId)) {
+                    transactions.set(txnId, { id: txnId, phases: [], type: null, bank: bank, channel: channel, start: Infinity, end: 0 });
+                }
+
+                const txn = transactions.get(txnId);
+                txn.phases.push({ name: event.name, start: startCycle, end: endCycle, bank: bank });
+                txn.start = Math.min(txn.start, startCycle);
+                txn.end = Math.max(txn.end, endCycle);
+                txn.bank = bank;
+                txn.channel = channel;
+                channelsUsed.add(channel);
+
+                if (event.name.includes('READ')) { txn.type = 'READ'; stats.rd++; }
+                else if (event.name.includes('WRITE')) { txn.type = 'WRITE'; stats.wr++; }
+                else if (event.name === 'ACTIVATE') { stats.act++; }
+
+                minCycle = Math.min(minCycle, startCycle);
+                maxCycle = Math.max(maxCycle, endCycle);
+            }
+
+            viewState.startCycle = Math.max(0, minCycle - 5);
+            viewState.endCycle = maxCycle + 10;
+
+            document.getElementById('statTxns').textContent = transactions.size;
+            document.getElementById('statCycles').textContent = maxCycle;
+            document.getElementById('statChannels').textContent = channelsUsed.size;
+            document.getElementById('statAct').textContent = stats.act;
+            document.getElementById('statRd').textContent = stats.rd;
+            document.getElementById('statWr').textContent = stats.wr;
+        }
+
+        function renderView() {
+            if (!traceData) return;
+            document.getElementById('emptyState').style.display = 'none';
+            document.getElementById('lanesWrapper').style.display = 'block';
+            renderTimeRuler();
+            renderLanes();
+            document.getElementById('timeDisplay').textContent = `Cycles: ${viewState.startCycle} - ${viewState.endCycle}`;
+        }
+
+        function renderTimeRuler() {
+            const svg = document.getElementById('rulerSvg');
+            const width = document.getElementById('lanesContainer').clientWidth;
+            let html = `<rect x="0" y="0" width="${width}" height="30" fill="#151a21"/>`;
+            html += `<rect x="0" y="0" width="120" height="30" fill="#0d1117"/>`;
+            html += `<text x="10" y="20" fill="#7d8590" font-size="10">Cycle</text>`;
+
+            const ppc = viewState.pixelsPerCycle;
+            let tickInterval = ppc < 5 ? 20 : ppc < 10 ? 10 : 5;
+
+            for (let cycle = Math.ceil(viewState.startCycle / tickInterval) * tickInterval; cycle <= viewState.endCycle; cycle += tickInterval) {
+                const x = 120 + (cycle - viewState.startCycle) * ppc;
+                if (x < 120 || x > width) continue;
+                html += `<line x1="${x}" y1="20" x2="${x}" y2="30" stroke="#3d444d" stroke-width="1"/>`;
+                html += `<text x="${x}" y="15" fill="#7d8590" font-size="9" text-anchor="middle">${cycle}</text>`;
+            }
+            svg.innerHTML = html;
+        }
+
+        function renderLanes() {
+            const wrapper = document.getElementById('lanesWrapper');
+            const showAll = document.getElementById('showAllChannels').checked;
+
+            const activeChannels = new Set();
+            for (const txn of transactions.values()) activeChannels.add(txn.channel);
+
+            let html = '';
+
+            for (let ch = 0; ch < NUM_CHANNELS; ch++) {
+                const isCollapsed = viewState.collapsedChannels.has(ch);
+                const hasActivity = activeChannels.has(ch);
+                if (!showAll && !hasActivity) continue;
+
+                html += `<div class="lane-row channel-header"><div class="lane-label"><button class="collapse-btn" onclick="toggleChannel(${ch})">${isCollapsed ? '+' : '-'}</button>Channel ${ch}</div><div class="lane-content"></div></div>`;
+
+                if (!isCollapsed) {
+                    for (let pc = 0; pc < PC_PER_CHANNEL; pc++) {
+                        const pcBankStart = ch * PC_PER_CHANNEL * BANKS_PER_PC + pc * BANKS_PER_PC;
+                        html += `<div class="lane-row"><div class="lane-label indent">PC${pc} (B${pcBankStart}-${pcBankStart + BANKS_PER_PC - 1})</div><div class="lane-content"><svg class="lane-svg" id="ch${ch}-pc${pc}"></svg></div></div>`;
+                    }
+                }
+            }
+
+            wrapper.innerHTML = html;
+            renderPhases();
+        }
+
+        function renderPhases() {
+            const startCycle = viewState.startCycle;
+            const ppc = viewState.pixelsPerCycle;
+
+            document.querySelectorAll('.lane-svg').forEach(svg => svg.innerHTML = '');
+
+            for (const [txnId, txn] of transactions) {
+                const ch = txn.channel;
+                const pc = Math.floor((txn.bank % (PC_PER_CHANNEL * BANKS_PER_PC)) / BANKS_PER_PC);
+                const svg = document.getElementById(`ch${ch}-pc${pc}`);
+                if (!svg) continue;
+
+                for (const phase of txn.phases) {
+                    const x1 = (phase.start - startCycle) * ppc;
+                    const width = Math.max((phase.end - phase.start) * ppc, 4);
+                    const color = PHASE_COLORS[phase.name] || '#64748b';
+                    svg.innerHTML += createHexagon(x1, width, 11, color, txnId, phase.name);
+                }
+            }
+        }
+
+        function createHexagon(x, width, height, color, txnId, phaseName) {
+            const y = 11;
+            const tipOffset = Math.min(4, width * 0.15);
+            const points = `${x},${y} ${x + tipOffset},${y - height / 2 + 1} ${x + width - tipOffset},${y - height / 2 + 1} ${x + width},${y} ${x + width - tipOffset},${y + height / 2 - 1} ${x + tipOffset},${y + height / 2 - 1}`;
+            return `<polygon points="${points}" fill="${color}" fill-opacity="0.8" class="phase-hexagon" onclick="selectTransaction(${txnId})"/>`;
+        }
+
+        function toggleChannel(ch) {
+            if (viewState.collapsedChannels.has(ch)) viewState.collapsedChannels.delete(ch);
+            else viewState.collapsedChannels.add(ch);
+            renderLanes();
+        }
+
+        function selectTransaction(txnId) {
+            viewState.selectedTxn = txnId;
+            const txn = transactions.get(txnId);
+            if (!txn) return;
+
+            document.getElementById('infoTxnId').textContent = '#' + txnId;
+            document.getElementById('infoType').textContent = txn.type || 'Unknown';
+            document.getElementById('infoChannel').textContent = txn.channel;
+            document.getElementById('infoPC').textContent = Math.floor((txn.bank % (PC_PER_CHANNEL * BANKS_PER_PC)) / BANKS_PER_PC);
+            document.getElementById('infoBank').textContent = txn.bank;
+            document.getElementById('infoLatency').textContent = (txn.end - txn.start) + ' cycles';
+
+            let phaseHtml = '<div style="font-size: 10px; color: var(--text-dim); margin-bottom: 5px;">Phases:</div>';
+            for (const phase of txn.phases) {
+                const color = PHASE_COLORS[phase.name] || '#64748b';
+                phaseHtml += `<div style="font-size: 10px; display: flex; align-items: center; gap: 6px; margin-bottom: 3px;"><div style="width: 8px; height: 8px; background: ${color}; border-radius: 2px;"></div>${phase.name} (${phase.start}-${phase.end})</div>`;
+            }
+            document.getElementById('phaseList').innerHTML = phaseHtml;
+            document.getElementById('infoPanel').classList.add('visible');
+        }
+
+        function closeInfoPanel() {
+            document.getElementById('infoPanel').classList.remove('visible');
+            viewState.selectedTxn = null;
+        }
+
+        function zoomIn() { viewState.pixelsPerCycle = Math.min(50, viewState.pixelsPerCycle * 1.5); renderView(); }
+        function zoomOut() { viewState.pixelsPerCycle = Math.max(1, viewState.pixelsPerCycle / 1.5); renderView(); }
+        function zoomFit() {
+            if (!traceData) return;
+            const container = document.getElementById('lanesContainer');
+            viewState.pixelsPerCycle = Math.max(2, (container.clientWidth - 140) / (viewState.endCycle - viewState.startCycle));
+            renderView();
+        }
+        function updateView() { if (traceData) renderLanes(); }
+
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape') closeInfoPanel();
+            else if (e.key === '+' || e.key === '=') zoomIn();
+            else if (e.key === '-') zoomOut();
+        });
+
+        window.addEventListener('resize', () => { if (traceData) renderView(); });
+    </script>
+</body>
+</html>

@@ -1,0 +1,765 @@
+<!DOCTYPE html>
+<!--
+  DDR5 Memory Subsystem - Block Diagram Animation
+
+  Animated visualization showing request tokens flowing through:
+  - Memory Controller: Arbiter, Cmd/Write/Read Queues, Transaction Processing
+  - DDR5 PHY: Data Slices, CA Slice, I/O
+  - DDR5 Device: 32 Banks (4 Bank Groups x 8 Banks), Row/Col Decoders, Sense Amps
+  - CA Bus (Command/Address) and DQ Bus (Data) as key resources
+
+  SPDX-License-Identifier: MIT
+  Copyright (c) 2024-2025 Stillwater Supercomputing, Inc.
+-->
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DDR5 Memory Subsystem - Block Diagram</title>
+    <style>
+        :root {
+            --bg: #0f172a;
+            --panel: #1e293b;
+            --border: #334155;
+            --text: #e2e8f0;
+            --text-dim: #94a3b8;
+            --accent: #3b82f6;
+            --read: #22c55e;
+            --write: #a855f7;
+            --activate: #f59e0b;
+            --idle: #475569;
+            --active: #10b981;
+            --mc: #8b5cf6;
+            --phy: #06b6d4;
+            --device: #f97316;
+        }
+
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            min-height: 100vh;
+            overflow: hidden;
+        }
+
+        .header {
+            background: var(--panel);
+            border-bottom: 1px solid var(--border);
+            padding: 10px 20px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+
+        .header h1 { font-size: 14px; font-weight: 600; }
+
+        .controls {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        button {
+            background: var(--border);
+            color: var(--text);
+            border: none;
+            padding: 6px 14px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 12px;
+        }
+
+        button:hover { background: #475569; }
+        button.active { background: var(--accent); }
+        button:disabled { opacity: 0.5; cursor: not-allowed; }
+
+        .cycle-display {
+            font-family: 'SF Mono', monospace;
+            font-size: 13px;
+            background: var(--panel);
+            padding: 6px 12px;
+            border-radius: 4px;
+            border: 1px solid var(--border);
+        }
+
+        .main-container {
+            display: flex;
+            height: calc(100vh - 50px);
+        }
+
+        .diagram-area {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            padding: 10px 20px;
+            overflow: hidden;
+        }
+
+        #diagram {
+            width: 100%;
+            flex: 1;
+            min-height: 0;
+        }
+
+        .component { cursor: pointer; transition: filter 0.2s; }
+        .component:hover { filter: brightness(1.2); }
+
+        .component-box {
+            fill: var(--panel);
+            stroke: var(--border);
+            stroke-width: 2;
+            rx: 6;
+        }
+
+        .component-box.mc { stroke: var(--mc); }
+        .component-box.phy { stroke: var(--phy); }
+        .component-box.device { stroke: var(--device); }
+
+        .component-label {
+            fill: var(--text);
+            font-size: 11px;
+            font-weight: 600;
+            text-anchor: middle;
+        }
+
+        .component-sublabel {
+            fill: var(--text-dim);
+            font-size: 9px;
+            text-anchor: middle;
+        }
+
+        .sub-block {
+            fill: #334155;
+            stroke: #475569;
+            stroke-width: 1;
+            rx: 3;
+        }
+
+        .sub-block-label {
+            fill: #94a3b8;
+            font-size: 8px;
+            text-anchor: middle;
+        }
+
+        .bank-box {
+            fill: var(--idle);
+            stroke: #64748b;
+            stroke-width: 1;
+            rx: 2;
+            transition: fill 0.2s, stroke 0.2s;
+        }
+
+        .bank-box.idle { fill: var(--idle); stroke: #64748b; }
+        .bank-box.activating { fill: #b45309; stroke: var(--activate); }
+        .bank-box.active { fill: #047857; stroke: var(--active); }
+        .bank-box.reading { fill: #1d4ed8; stroke: var(--read); }
+        .bank-box.writing { fill: #7c3aed; stroke: var(--write); }
+
+        .bank-label { fill: white; font-size: 6px; font-weight: 600; text-anchor: middle; }
+
+        .connection { fill: none; stroke: var(--border); stroke-width: 2; }
+
+        .bus-segment { fill: none; stroke-width: 2; stroke-linecap: round; }
+        .bus-segment.idle { stroke: var(--idle); }
+        .bus-segment.ca-active { stroke: var(--activate); fill: rgba(245, 158, 11, 0.2); }
+        .bus-segment.dq-read { stroke: var(--read); fill: rgba(34, 197, 94, 0.2); }
+        .bus-segment.dq-write { stroke: var(--write); fill: rgba(168, 85, 247, 0.2); }
+
+        .token { transition: transform 0.15s ease-out; }
+        .token-body { stroke-width: 2; }
+        .token-body.read { fill: var(--read); stroke: #16a34a; }
+        .token-body.write { fill: var(--write); stroke: #9333ea; }
+        .token-label { fill: white; font-size: 7px; font-weight: bold; text-anchor: middle; }
+
+        @keyframes pulse { 0%, 100% { opacity: 0.6; } 50% { opacity: 1; } }
+        .bus-active { animation: pulse 0.3s ease-in-out infinite; }
+
+        .block-title { fill: var(--text); font-size: 10px; font-weight: 600; text-anchor: middle; }
+        .block-title.mc { fill: var(--mc); }
+        .block-title.phy { fill: var(--phy); }
+        .block-title.device { fill: var(--device); }
+
+        .sidebar {
+            width: 260px;
+            background: var(--panel);
+            border-left: 1px solid var(--border);
+            padding: 15px;
+            overflow-y: auto;
+        }
+
+        .sidebar h2 {
+            font-size: 11px;
+            font-weight: 600;
+            color: var(--text-dim);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin-bottom: 10px;
+        }
+
+        .info-section { margin-bottom: 20px; }
+
+        .stat-row {
+            display: flex;
+            justify-content: space-between;
+            padding: 5px 0;
+            font-size: 11px;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .stat-label { color: var(--text-dim); }
+        .stat-value { font-family: 'SF Mono', monospace; }
+
+        .legend { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+        .legend-item { display: flex; align-items: center; gap: 5px; font-size: 9px; }
+        .legend-color { width: 12px; height: 12px; border-radius: 2px; }
+
+        .no-data {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            text-align: center;
+            color: var(--text-dim);
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>DDR5 Memory Subsystem - Block Diagram</h1>
+        <div class="controls">
+            <input type="file" id="fileInput" accept=".json" style="font-size: 12px;">
+            <button id="btnReset" disabled>Reset</button>
+            <button id="btnStep" disabled>Step</button>
+            <button id="btnPlay" disabled>Play</button>
+            <input type="range" id="speedSlider" min="50" max="500" value="200" style="width: 80px;">
+            <div class="cycle-display">Cycle: <span id="currentCycle">0</span> / <span id="maxCycle">0</span></div>
+        </div>
+    </div>
+
+    <div class="main-container">
+        <div class="diagram-area">
+            <div class="no-data" id="noData">
+                <div style="font-size: 48px; margin-bottom: 15px;">&#128295;</div>
+                <div>Load a trace JSON file to animate</div>
+            </div>
+
+            <svg id="diagram" viewBox="0 0 900 450" preserveAspectRatio="xMidYMid meet" style="display: none;">
+                <defs>
+                    <marker id="arrowhead" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+                        <polygon points="0 0, 8 3, 0 6" fill="#64748b"/>
+                    </marker>
+                    <marker id="arrowhead-ca" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+                        <polygon points="0 0, 8 3, 0 6" fill="#f59e0b"/>
+                    </marker>
+                </defs>
+
+                <text x="450" y="22" text-anchor="middle" fill="#e2e8f0" font-size="13" font-weight="600">
+                    DDR5 Memory Subsystem Architecture (32 Banks: 4 BG x 8 Banks)
+                </text>
+
+                <!-- Memory Controller -->
+                <g class="component" id="comp-mc">
+                    <rect class="component-box mc" x="40" y="50" width="200" height="180"/>
+                    <text class="block-title mc" x="140" y="70">Memory Controller</text>
+
+                    <rect class="sub-block" x="50" y="85" width="40" height="60"/>
+                    <text x="70" y="115" fill="#94a3b8" font-size="7" text-anchor="middle">Arbiter</text>
+
+                    <rect class="sub-block" x="98" y="85" width="55" height="20"/>
+                    <text x="125" y="99" fill="#94a3b8" font-size="7" text-anchor="middle">Cmd Queue</text>
+
+                    <rect class="sub-block" x="98" y="110" width="55" height="20"/>
+                    <text x="125" y="124" fill="#94a3b8" font-size="7" text-anchor="middle">Write Queue</text>
+
+                    <rect class="sub-block" x="98" y="135" width="55" height="20"/>
+                    <text x="125" y="149" fill="#94a3b8" font-size="7" text-anchor="middle">Read Queue</text>
+
+                    <rect class="sub-block" x="160" y="85" width="70" height="70"/>
+                    <text x="195" y="115" fill="#94a3b8" font-size="7" text-anchor="middle">Transaction</text>
+                    <text x="195" y="125" fill="#94a3b8" font-size="7" text-anchor="middle">Processing</text>
+
+                    <rect class="sub-block" x="50" y="165" width="180" height="20"/>
+                    <text x="140" y="179" fill="#94a3b8" font-size="7" text-anchor="middle">Scheduler (FR-FCFS) | Refresh Controller</text>
+
+                    <rect class="sub-block" x="50" y="190" width="85" height="20"/>
+                    <text x="92" y="204" fill="#94a3b8" font-size="7" text-anchor="middle">ECC Engine</text>
+
+                    <rect class="sub-block" x="145" y="190" width="85" height="20"/>
+                    <text x="187" y="204" fill="#94a3b8" font-size="7" text-anchor="middle">On-Die ECC</text>
+                </g>
+
+                <path class="connection" d="M 240 130 L 280 130" marker-end="url(#arrowhead)"/>
+                <text x="260" y="122" fill="#475569" font-size="7" text-anchor="middle">DFI</text>
+
+                <!-- DDR5 PHY -->
+                <g class="component" id="comp-phy">
+                    <rect class="component-box phy" x="285" y="50" width="100" height="180"/>
+                    <text class="block-title phy" x="335" y="70">DDR5 PHY</text>
+
+                    <rect class="sub-block" x="295" y="85" width="80" height="25"/>
+                    <text x="335" y="102" fill="#94a3b8" font-size="8" text-anchor="middle">CA Slice</text>
+
+                    <rect class="sub-block" x="295" y="118" width="38" height="40"/>
+                    <text x="314" y="138" fill="#94a3b8" font-size="7" text-anchor="middle">Data</text>
+                    <text x="314" y="148" fill="#94a3b8" font-size="7" text-anchor="middle">Slice 0</text>
+
+                    <rect class="sub-block" x="337" y="118" width="38" height="40"/>
+                    <text x="356" y="138" fill="#94a3b8" font-size="7" text-anchor="middle">Data</text>
+                    <text x="356" y="148" fill="#94a3b8" font-size="7" text-anchor="middle">Slice 1</text>
+
+                    <rect class="sub-block" x="295" y="165" width="80" height="25"/>
+                    <text x="335" y="182" fill="#94a3b8" font-size="7" text-anchor="middle">PLL / DLL / I/O</text>
+
+                    <rect class="sub-block" x="295" y="195" width="80" height="20"/>
+                    <text x="335" y="209" fill="#94a3b8" font-size="8" text-anchor="middle">IO Pads</text>
+                </g>
+
+                <!-- CA BUS -->
+                <g id="ca-bus">
+                    <rect class="bus-segment idle" id="ca-bus-segment" x="385" y="93" width="70" height="8" rx="3"/>
+                    <path class="connection" d="M 385 97 L 460 97" marker-end="url(#arrowhead-ca)"/>
+                    <text x="420" y="86" fill="#f59e0b" font-size="8" font-weight="600">CA</text>
+                </g>
+
+                <!-- DQ BUS -->
+                <g id="dq-bus">
+                    <rect class="bus-segment idle" id="dq-bus-segment" x="385" y="200" width="70" height="8" rx="3"/>
+                    <polygon points="389,204 397,200 397,208" fill="#3b82f6"/>
+                    <polygon points="451,204 443,200 443,208" fill="#3b82f6"/>
+                    <text x="420" y="195" fill="#3b82f6" font-size="9" font-weight="600" text-anchor="middle">DQ</text>
+                </g>
+
+                <!-- DDR5 Device -->
+                <g class="component" id="comp-device">
+                    <rect class="component-box device" x="460" y="40" width="420" height="390" fill="none" stroke-dasharray="5,3"/>
+                    <text class="block-title device" x="670" y="58">DDR5 Device (32 Banks)</text>
+
+                    <!-- Row Decoder -->
+                    <rect class="sub-block" x="470" y="75" width="30" height="160"/>
+                    <text x="485" y="155" fill="#94a3b8" font-size="7" text-anchor="middle" transform="rotate(-90, 485, 155)">Row Decoder</text>
+
+                    <!-- Bank Group 0 (Banks 0-7) -->
+                    <text x="580" y="72" fill="#64748b" font-size="8" text-anchor="middle">Bank Group 0</text>
+                    <g id="bank-group-0">
+                        <g class="bank" id="bank-0"><rect class="bank-box idle" x="510" y="78" width="24" height="18"/><text class="bank-label" x="522" y="90">B0</text></g>
+                        <g class="bank" id="bank-1"><rect class="bank-box idle" x="538" y="78" width="24" height="18"/><text class="bank-label" x="550" y="90">B1</text></g>
+                        <g class="bank" id="bank-2"><rect class="bank-box idle" x="566" y="78" width="24" height="18"/><text class="bank-label" x="578" y="90">B2</text></g>
+                        <g class="bank" id="bank-3"><rect class="bank-box idle" x="594" y="78" width="24" height="18"/><text class="bank-label" x="606" y="90">B3</text></g>
+                        <g class="bank" id="bank-4"><rect class="bank-box idle" x="622" y="78" width="24" height="18"/><text class="bank-label" x="634" y="90">B4</text></g>
+                        <g class="bank" id="bank-5"><rect class="bank-box idle" x="650" y="78" width="24" height="18"/><text class="bank-label" x="662" y="90">B5</text></g>
+                        <g class="bank" id="bank-6"><rect class="bank-box idle" x="678" y="78" width="24" height="18"/><text class="bank-label" x="690" y="90">B6</text></g>
+                        <g class="bank" id="bank-7"><rect class="bank-box idle" x="706" y="78" width="24" height="18"/><text class="bank-label" x="718" y="90">B7</text></g>
+                    </g>
+
+                    <!-- Bank Group 1 (Banks 8-15) -->
+                    <text x="580" y="115" fill="#64748b" font-size="8" text-anchor="middle">Bank Group 1</text>
+                    <g id="bank-group-1">
+                        <g class="bank" id="bank-8"><rect class="bank-box idle" x="510" y="120" width="24" height="18"/><text class="bank-label" x="522" y="132">B8</text></g>
+                        <g class="bank" id="bank-9"><rect class="bank-box idle" x="538" y="120" width="24" height="18"/><text class="bank-label" x="550" y="132">B9</text></g>
+                        <g class="bank" id="bank-10"><rect class="bank-box idle" x="566" y="120" width="24" height="18"/><text class="bank-label" x="578" y="132">10</text></g>
+                        <g class="bank" id="bank-11"><rect class="bank-box idle" x="594" y="120" width="24" height="18"/><text class="bank-label" x="606" y="132">11</text></g>
+                        <g class="bank" id="bank-12"><rect class="bank-box idle" x="622" y="120" width="24" height="18"/><text class="bank-label" x="634" y="132">12</text></g>
+                        <g class="bank" id="bank-13"><rect class="bank-box idle" x="650" y="120" width="24" height="18"/><text class="bank-label" x="662" y="132">13</text></g>
+                        <g class="bank" id="bank-14"><rect class="bank-box idle" x="678" y="120" width="24" height="18"/><text class="bank-label" x="690" y="132">14</text></g>
+                        <g class="bank" id="bank-15"><rect class="bank-box idle" x="706" y="120" width="24" height="18"/><text class="bank-label" x="718" y="132">15</text></g>
+                    </g>
+
+                    <!-- Bank Group 2 (Banks 16-23) -->
+                    <text x="580" y="157" fill="#64748b" font-size="8" text-anchor="middle">Bank Group 2</text>
+                    <g id="bank-group-2">
+                        <g class="bank" id="bank-16"><rect class="bank-box idle" x="510" y="162" width="24" height="18"/><text class="bank-label" x="522" y="174">16</text></g>
+                        <g class="bank" id="bank-17"><rect class="bank-box idle" x="538" y="162" width="24" height="18"/><text class="bank-label" x="550" y="174">17</text></g>
+                        <g class="bank" id="bank-18"><rect class="bank-box idle" x="566" y="162" width="24" height="18"/><text class="bank-label" x="578" y="174">18</text></g>
+                        <g class="bank" id="bank-19"><rect class="bank-box idle" x="594" y="162" width="24" height="18"/><text class="bank-label" x="606" y="174">19</text></g>
+                        <g class="bank" id="bank-20"><rect class="bank-box idle" x="622" y="162" width="24" height="18"/><text class="bank-label" x="634" y="174">20</text></g>
+                        <g class="bank" id="bank-21"><rect class="bank-box idle" x="650" y="162" width="24" height="18"/><text class="bank-label" x="662" y="174">21</text></g>
+                        <g class="bank" id="bank-22"><rect class="bank-box idle" x="678" y="162" width="24" height="18"/><text class="bank-label" x="690" y="174">22</text></g>
+                        <g class="bank" id="bank-23"><rect class="bank-box idle" x="706" y="162" width="24" height="18"/><text class="bank-label" x="718" y="174">23</text></g>
+                    </g>
+
+                    <!-- Bank Group 3 (Banks 24-31) -->
+                    <text x="580" y="199" fill="#64748b" font-size="8" text-anchor="middle">Bank Group 3</text>
+                    <g id="bank-group-3">
+                        <g class="bank" id="bank-24"><rect class="bank-box idle" x="510" y="204" width="24" height="18"/><text class="bank-label" x="522" y="216">24</text></g>
+                        <g class="bank" id="bank-25"><rect class="bank-box idle" x="538" y="204" width="24" height="18"/><text class="bank-label" x="550" y="216">25</text></g>
+                        <g class="bank" id="bank-26"><rect class="bank-box idle" x="566" y="204" width="24" height="18"/><text class="bank-label" x="578" y="216">26</text></g>
+                        <g class="bank" id="bank-27"><rect class="bank-box idle" x="594" y="204" width="24" height="18"/><text class="bank-label" x="606" y="216">27</text></g>
+                        <g class="bank" id="bank-28"><rect class="bank-box idle" x="622" y="204" width="24" height="18"/><text class="bank-label" x="634" y="216">28</text></g>
+                        <g class="bank" id="bank-29"><rect class="bank-box idle" x="650" y="204" width="24" height="18"/><text class="bank-label" x="662" y="216">29</text></g>
+                        <g class="bank" id="bank-30"><rect class="bank-box idle" x="678" y="204" width="24" height="18"/><text class="bank-label" x="690" y="216">30</text></g>
+                        <g class="bank" id="bank-31"><rect class="bank-box idle" x="706" y="204" width="24" height="18"/><text class="bank-label" x="718" y="216">31</text></g>
+                    </g>
+
+                    <!-- Sense Amps -->
+                    <rect class="sub-block" x="740" y="75" width="30" height="150"/>
+                    <text x="755" y="150" fill="#94a3b8" font-size="7" text-anchor="middle" transform="rotate(90, 755, 150)">Sense Amps</text>
+
+                    <!-- Data I/O -->
+                    <rect class="sub-block" x="510" y="240" width="260" height="25"/>
+                    <text x="640" y="257" fill="#94a3b8" font-size="7" text-anchor="middle">Data I/O + Column Decoder</text>
+
+                    <!-- Timing Annotations -->
+                    <text x="640" y="290" fill="#f59e0b" font-size="7" text-anchor="middle">tRCD=16cy | tRP=16cy | tCL=16cy</text>
+                    <text x="640" y="305" fill="#3b82f6" font-size="7" text-anchor="middle">tRRD_L=8cy | tRRD_S=4cy | tFAW=32cy</text>
+                </g>
+
+                <!-- Stage Flow Labels -->
+                <text x="140" y="38" fill="#64748b" font-size="8" text-anchor="middle">1. Schedule</text>
+                <text x="335" y="38" fill="#64748b" font-size="8" text-anchor="middle">2. PHY</text>
+                <text x="420" y="38" fill="#f59e0b" font-size="8" text-anchor="middle">3. CA/DQ</text>
+                <text x="670" y="38" fill="#64748b" font-size="8" text-anchor="middle">4. Bank Access</text>
+
+                <g id="tokens"></g>
+            </svg>
+        </div>
+
+        <div class="sidebar">
+            <div class="info-section">
+                <h2>DDR5-4800 Statistics</h2>
+                <div class="stat-row">
+                    <span class="stat-label">Total Requests</span>
+                    <span class="stat-value" id="statTotal">0</span>
+                </div>
+                <div class="stat-row">
+                    <span class="stat-label">Completed</span>
+                    <span class="stat-value" id="statCompleted">0</span>
+                </div>
+                <div class="stat-row">
+                    <span class="stat-label">In Progress</span>
+                    <span class="stat-value" id="statInProgress">0</span>
+                </div>
+                <div class="stat-row">
+                    <span class="stat-label">Avg Latency</span>
+                    <span class="stat-value" id="statLatency">0 cy</span>
+                </div>
+            </div>
+
+            <div class="info-section">
+                <h2>Current Request</h2>
+                <div class="stat-row">
+                    <span class="stat-label">Request</span>
+                    <span class="stat-value" id="currentReq">-</span>
+                </div>
+                <div class="stat-row">
+                    <span class="stat-label">Bank</span>
+                    <span class="stat-value" id="currentBank">-</span>
+                </div>
+            </div>
+
+            <div class="info-section">
+                <h2>Legend</h2>
+                <div class="legend">
+                    <div class="legend-item">
+                        <div class="legend-color" style="background: #475569;"></div>
+                        <span>Idle</span>
+                    </div>
+                    <div class="legend-item">
+                        <div class="legend-color" style="background: #b45309;"></div>
+                        <span>Activating</span>
+                    </div>
+                    <div class="legend-item">
+                        <div class="legend-color" style="background: #047857;"></div>
+                        <span>Active</span>
+                    </div>
+                    <div class="legend-item">
+                        <div class="legend-color" style="background: #1d4ed8;"></div>
+                        <span>Reading</span>
+                    </div>
+                    <div class="legend-item">
+                        <div class="legend-color" style="background: #7c3aed;"></div>
+                        <span>Writing</span>
+                    </div>
+                    <div class="legend-item">
+                        <div class="legend-color" style="background: #22c55e;"></div>
+                        <span>Read Token</span>
+                    </div>
+                    <div class="legend-item">
+                        <div class="legend-color" style="background: #a855f7;"></div>
+                        <span>Write Token</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // DDR5: 32 banks (4 bank groups x 8 banks)
+        const NUM_BANKS = 32;
+        const BANKS_PER_GROUP = 8;
+
+        let traceData = null;
+        let requests = [];
+        let currentCycle = 0;
+        let maxCycle = 0;
+        let isPlaying = false;
+        let playInterval = null;
+
+        const POSITIONS = {
+            mc_scheduler: { x: 140, y: 179 },
+            mc_txproc: { x: 195, y: 115 },
+            phy_ca: { x: 335, y: 97 },
+            phy_data: { x: 335, y: 145 },
+            ca_bus: { x: 420, y: 97 },
+            dq_bus: { x: 420, y: 204 },
+            bank: (b) => {
+                const group = Math.floor(b / BANKS_PER_GROUP);
+                const local = b % BANKS_PER_GROUP;
+                return {
+                    x: 522 + local * 28,
+                    y: 87 + group * 42
+                };
+            }
+        };
+
+        const fileInput = document.getElementById('fileInput');
+        const btnReset = document.getElementById('btnReset');
+        const btnStep = document.getElementById('btnStep');
+        const btnPlay = document.getElementById('btnPlay');
+        const speedSlider = document.getElementById('speedSlider');
+        const currentCycleEl = document.getElementById('currentCycle');
+        const maxCycleEl = document.getElementById('maxCycle');
+        const noData = document.getElementById('noData');
+        const diagram = document.getElementById('diagram');
+        const tokensGroup = document.getElementById('tokens');
+
+        function parseTrace(data) {
+            requests = [];
+            const txnEvents = new Map();
+
+            for (const item of data) {
+                if (item.ph === 'M') continue;
+                const txnId = item.args?.txn_id;
+                if (txnId === undefined) continue;
+
+                if (!txnEvents.has(txnId)) txnEvents.set(txnId, []);
+                txnEvents.get(txnId).push({
+                    name: item.name,
+                    cycleStart: item.args?.cycle_issue || 0,
+                    cycleEnd: item.args?.cycle_complete || 0,
+                    bank: item.tid || 0
+                });
+            }
+
+            let idx = 0;
+            for (const [txnId, evts] of txnEvents) {
+                evts.sort((a, b) => a.cycleStart - b.cycleStart);
+                const first = evts[0];
+                const last = evts[evts.length - 1];
+
+                const isRead = evts.some(e => e.name.includes('READ'));
+                const isWrite = evts.some(e => e.name.includes('WRITE'));
+                if (!isRead && !isWrite) continue;
+
+                const stages = [];
+                const hasActivate = evts.some(e => e.name === 'ACTIVATE');
+                const activateEvt = evts.find(e => e.name === 'ACTIVATE');
+                const dataEvt = evts.find(e => e.name.includes('READ') || e.name.includes('WRITE'));
+
+                const firstDramCycle = hasActivate ? activateEvt.cycleStart : dataEvt?.cycleStart || first.cycleStart;
+                const schedulerStart = Math.max(0, firstDramCycle - 10);
+
+                stages.push({ stage: 'mc_scheduler', start: schedulerStart, end: schedulerStart + 3 });
+                stages.push({ stage: 'mc_txproc', start: schedulerStart + 3, end: schedulerStart + 6 });
+                stages.push({ stage: 'phy_ca', start: schedulerStart + 6, end: firstDramCycle });
+
+                if (hasActivate && activateEvt) {
+                    stages.push({ stage: 'bank', start: activateEvt.cycleStart, end: activateEvt.cycleEnd, bank: activateEvt.bank, op: 'activate' });
+                }
+
+                if (dataEvt) {
+                    stages.push({ stage: 'bank', start: dataEvt.cycleStart, end: dataEvt.cycleEnd, bank: dataEvt.bank, op: isRead ? 'read' : 'write' });
+                    stages.push({ stage: 'dq_bus', start: dataEvt.cycleEnd, end: dataEvt.cycleEnd + 4, direction: isRead ? 'read' : 'write' });
+                    stages.push({ stage: 'phy_data', start: dataEvt.cycleEnd + 4, end: dataEvt.cycleEnd + 6 });
+                }
+
+                stages.sort((a, b) => a.start - b.start);
+
+                requests.push({
+                    id: idx++,
+                    txnId,
+                    type: isRead ? 'READ' : 'WRITE',
+                    bank: first.bank,
+                    cycleStart: stages[0].start,
+                    cycleEnd: stages[stages.length - 1].end,
+                    latency: last.cycleEnd - first.cycleStart,
+                    stages
+                });
+
+                maxCycle = Math.max(maxCycle, stages[stages.length - 1].end + 5);
+            }
+
+            requests.sort((a, b) => a.cycleStart - b.cycleStart);
+            return requests;
+        }
+
+        function createToken(req) {
+            const g = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+            g.setAttribute('class', 'token');
+            g.setAttribute('id', `token-${req.id}`);
+            g.style.display = 'none';
+
+            const circle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+            circle.setAttribute('class', `token-body ${req.type.toLowerCase()}`);
+            circle.setAttribute('r', '8');
+
+            const text = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+            text.setAttribute('class', 'token-label');
+            text.setAttribute('dy', '3');
+            text.textContent = `R${req.id}`;
+
+            g.appendChild(circle);
+            g.appendChild(text);
+            return g;
+        }
+
+        function initVisualization() {
+            tokensGroup.innerHTML = '';
+            for (const req of requests) {
+                tokensGroup.appendChild(createToken(req));
+            }
+            updateVisualization();
+        }
+
+        function updateVisualization() {
+            currentCycleEl.textContent = currentCycle;
+
+            for (let i = 0; i < NUM_BANKS; i++) {
+                const bankBox = document.querySelector(`#bank-${i} .bank-box`);
+                if (bankBox) bankBox.setAttribute('class', 'bank-box idle');
+            }
+
+            document.getElementById('ca-bus-segment').setAttribute('class', 'bus-segment idle');
+            document.getElementById('dq-bus-segment').setAttribute('class', 'bus-segment idle');
+
+            let inProgress = 0;
+            let completed = 0;
+            let caActive = false;
+            let dqActive = false;
+            let dqDirection = 'read';
+
+            for (const req of requests) {
+                const token = document.getElementById(`token-${req.id}`);
+                if (!token) continue;
+
+                let currentStage = null;
+                for (const stage of req.stages) {
+                    if (currentCycle >= stage.start && currentCycle < stage.end) {
+                        currentStage = stage;
+                        break;
+                    }
+                }
+
+                if (!currentStage) {
+                    if (currentCycle >= req.cycleEnd) {
+                        completed++;
+                        token.style.display = 'none';
+                    } else if (currentCycle < req.cycleStart) {
+                        token.style.display = 'none';
+                    }
+                    continue;
+                }
+
+                inProgress++;
+                token.style.display = 'block';
+
+                let pos;
+                if (currentStage.stage === 'bank') {
+                    pos = POSITIONS.bank(currentStage.bank !== undefined ? currentStage.bank : req.bank);
+                    const bankIdx = currentStage.bank !== undefined ? currentStage.bank : req.bank;
+                    const bankBox = document.querySelector(`#bank-${bankIdx} .bank-box`);
+                    if (bankBox) {
+                        if (currentStage.op === 'read') bankBox.setAttribute('class', 'bank-box reading');
+                        else if (currentStage.op === 'write') bankBox.setAttribute('class', 'bank-box writing');
+                        else bankBox.setAttribute('class', 'bank-box activating');
+                    }
+                } else {
+                    pos = POSITIONS[currentStage.stage] || { x: 100, y: 100 };
+                }
+
+                if (currentStage.stage === 'phy_ca') caActive = true;
+                if (currentStage.stage === 'dq_bus') {
+                    dqActive = true;
+                    dqDirection = currentStage.direction || 'read';
+                }
+
+                token.setAttribute('transform', `translate(${pos.x}, ${pos.y})`);
+                document.getElementById('currentReq').textContent = `R${req.id} (${req.type})`;
+                document.getElementById('currentBank').textContent = req.bank;
+            }
+
+            if (caActive) document.getElementById('ca-bus-segment').setAttribute('class', 'bus-segment ca-active bus-active');
+            if (dqActive) {
+                const dqClass = dqDirection === 'read' ? 'dq-read' : 'dq-write';
+                document.getElementById('dq-bus-segment').setAttribute('class', `bus-segment ${dqClass} bus-active`);
+            }
+
+            document.getElementById('statTotal').textContent = requests.length;
+            document.getElementById('statCompleted').textContent = completed;
+            document.getElementById('statInProgress').textContent = inProgress;
+            const avgLatency = requests.length > 0
+                ? Math.round(requests.reduce((s, r) => s + r.latency, 0) / requests.length)
+                : 0;
+            document.getElementById('statLatency').textContent = `${avgLatency} cy`;
+        }
+
+        fileInput.addEventListener('change', async (e) => {
+            const file = e.target.files[0];
+            if (!file) return;
+
+            try {
+                const text = await file.text();
+                traceData = JSON.parse(text);
+                requests = parseTrace(traceData);
+
+                if (requests.length > 0) {
+                    noData.style.display = 'none';
+                    diagram.style.display = 'block';
+                    maxCycleEl.textContent = maxCycle;
+                    currentCycle = 0;
+                    initVisualization();
+                    btnReset.disabled = false;
+                    btnStep.disabled = false;
+                    btnPlay.disabled = false;
+                }
+            } catch (err) {
+                console.error('Error:', err);
+                alert('Error loading trace: ' + err.message);
+            }
+        });
+
+        btnReset.addEventListener('click', () => { currentCycle = 0; stopPlayback(); updateVisualization(); });
+        btnStep.addEventListener('click', () => { if (currentCycle < maxCycle) { currentCycle++; updateVisualization(); } });
+        btnPlay.addEventListener('click', () => { if (isPlaying) stopPlayback(); else startPlayback(); });
+
+        function startPlayback() {
+            isPlaying = true;
+            btnPlay.textContent = 'Pause';
+            btnPlay.classList.add('active');
+            const interval = 550 - speedSlider.value;
+            playInterval = setInterval(() => {
+                if (currentCycle < maxCycle) { currentCycle++; updateVisualization(); }
+                else stopPlayback();
+            }, interval);
+        }
+
+        function stopPlayback() {
+            isPlaying = false;
+            btnPlay.textContent = 'Play';
+            btnPlay.classList.remove('active');
+            if (playInterval) { clearInterval(playInterval); playInterval = null; }
+        }
+
+        speedSlider.addEventListener('input', () => { if (isPlaying) { stopPlayback(); startPlayback(); } });
+
+        document.addEventListener('keydown', (e) => {
+            if (requests.length === 0) return;
+            if (e.key === ' ') { e.preventDefault(); btnPlay.click(); }
+            else if (e.key === 'ArrowRight') { e.preventDefault(); btnStep.click(); }
+            else if (e.key === 'ArrowLeft' && currentCycle > 0) { e.preventDefault(); currentCycle--; updateVisualization(); }
+            else if (e.key === 'Home') { e.preventDefault(); btnReset.click(); }
+        });
+    </script>
+</body>
+</html>

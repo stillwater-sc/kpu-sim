@@ -1,0 +1,522 @@
+<!DOCTYPE html>
+<!--
+  HBM3E Bank State Analyzer
+
+  Shows bank utilization across 16 pseudo-channels.
+  Enhanced HBM3 with 8.4-9.6 Gbps per pin and ~1.2 TB/s bandwidth.
+
+  SPDX-License-Identifier: MIT
+  Copyright (c) 2024-2025 Stillwater Supercomputing, Inc.
+-->
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>HBM3E Bank Analyzer</title>
+    <style>
+        :root {
+            --bg: #0a0e14;
+            --bg-panel: #151a21;
+            --border: #2d333b;
+            --text: #e6edf3;
+            --text-dim: #7d8590;
+            --phase-act: #f59e0b;
+            --phase-rd: #22c55e;
+            --phase-wr: #a855f7;
+            --phase-pre: #ef4444;
+            --highlight: #fbbf24;
+            --hbm3e: #f472b6;
+        }
+
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+
+        body {
+            font-family: 'SF Mono', Monaco, monospace;
+            background: var(--bg);
+            color: var(--text);
+            min-height: 100vh;
+            overflow: hidden;
+        }
+
+        .header {
+            background: var(--bg-panel);
+            padding: 12px 20px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            border-bottom: 1px solid var(--border);
+            height: 50px;
+        }
+
+        .header h1 { font-size: 14px; font-weight: 500; }
+
+        .tech-badge {
+            background: var(--hbm3e);
+            color: #fff;
+            padding: 2px 8px;
+            border-radius: 4px;
+            font-size: 10px;
+            font-weight: 700;
+            margin-left: 8px;
+        }
+
+        .controls { display: flex; align-items: center; gap: 12px; }
+
+        button {
+            background: #2d333b;
+            color: #fff;
+            border: none;
+            padding: 6px 12px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 12px;
+        }
+
+        button:hover { background: #3d444d; }
+        .file-btn { background: #3b82f6; }
+
+        .main-container { display: flex; height: calc(100vh - 50px); }
+
+        .left-panel {
+            width: 200px;
+            background: var(--bg-panel);
+            border-right: 1px solid var(--border);
+            padding: 15px;
+            overflow-y: auto;
+        }
+
+        .panel-section { margin-bottom: 20px; }
+        .panel-section h3 {
+            font-size: 10px;
+            font-weight: 600;
+            text-transform: uppercase;
+            color: var(--text-dim);
+            margin-bottom: 10px;
+        }
+
+        .legend-item { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; font-size: 11px; }
+        .legend-hexagon { width: 24px; height: 14px; }
+        .legend-hexagon svg { width: 100%; height: 100%; }
+
+        .stats-table { width: 100%; font-size: 11px; }
+        .stats-table td { padding: 3px 0; }
+        .stats-table .label { color: var(--text-dim); }
+        .stats-table .value { text-align: right; }
+
+        .analyzer-container { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+
+        .time-ruler { height: 30px; background: #151a21; border-bottom: 1px solid var(--border); }
+
+        .lanes-container { flex: 1; overflow-y: auto; overflow-x: hidden; }
+
+        .lane-row {
+            height: 22px;
+            display: flex;
+            align-items: center;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .lane-row:nth-child(even) { background: #0d1117; }
+        .lane-row:nth-child(odd) { background: #151a21; }
+        .lane-row.pc-header { background: #1a2332; height: 20px; }
+
+        .lane-label {
+            width: 120px;
+            padding: 0 8px;
+            font-size: 10px;
+            color: var(--text);
+            border-right: 1px solid var(--border);
+            height: 100%;
+            display: flex;
+            align-items: center;
+        }
+
+        .lane-label.indent { padding-left: 20px; font-size: 9px; color: var(--text-dim); }
+
+        .lane-content { flex: 1; height: 100%; position: relative; overflow: hidden; }
+        .lane-svg { width: 100%; height: 100%; display: block; }
+
+        .phase-hexagon { cursor: pointer; transition: filter 0.15s; }
+        .phase-hexagon:hover { filter: brightness(1.2); }
+
+        .info-panel {
+            position: fixed;
+            right: 20px;
+            top: 70px;
+            width: 260px;
+            background: var(--bg-panel);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 15px;
+            display: none;
+            z-index: 100;
+        }
+
+        .info-panel.visible { display: block; }
+
+        .empty-state {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100%;
+            color: var(--text-dim);
+            gap: 15px;
+        }
+
+        .collapse-btn {
+            width: 14px;
+            height: 14px;
+            background: none;
+            border: 1px solid var(--text-dim);
+            border-radius: 2px;
+            padding: 0;
+            cursor: pointer;
+            font-size: 10px;
+            color: var(--text-dim);
+            margin-right: 6px;
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <div style="display: flex; align-items: center; gap: 12px;">
+            <h1>HBM3E Bank Analyzer<span class="tech-badge">9.6 Gbps</span></h1>
+            <button class="file-btn" onclick="document.getElementById('fileInput').click()">Load Trace</button>
+            <input type="file" id="fileInput" accept=".json" style="display: none;">
+            <span id="traceFilename" style="font-size: 12px; color: var(--text-dim);">No trace loaded</span>
+        </div>
+        <div class="controls">
+            <button onclick="zoomIn()">+</button>
+            <button onclick="zoomOut()">-</button>
+            <button onclick="zoomFit()">Fit</button>
+            <span id="timeDisplay" style="background: #2d333b; padding: 6px 12px; border-radius: 4px; font-size: 12px;">Cycles: 0 - 0</span>
+        </div>
+    </div>
+
+    <div class="main-container">
+        <div class="left-panel">
+            <div class="panel-section">
+                <h3>Phase Legend</h3>
+                <div class="legend-item">
+                    <div class="legend-hexagon">
+                        <svg viewBox="0 0 24 14"><polygon points="4,0 20,0 24,7 20,14 4,14 0,7" fill="#f59e0b"/></svg>
+                    </div>
+                    <span>Activate</span>
+                </div>
+                <div class="legend-item">
+                    <div class="legend-hexagon">
+                        <svg viewBox="0 0 24 14"><polygon points="4,0 20,0 24,7 20,14 4,14 0,7" fill="#22c55e"/></svg>
+                    </div>
+                    <span>Read</span>
+                </div>
+                <div class="legend-item">
+                    <div class="legend-hexagon">
+                        <svg viewBox="0 0 24 14"><polygon points="4,0 20,0 24,7 20,14 4,14 0,7" fill="#a855f7"/></svg>
+                    </div>
+                    <span>Write</span>
+                </div>
+                <div class="legend-item">
+                    <div class="legend-hexagon">
+                        <svg viewBox="0 0 24 14"><polygon points="4,0 20,0 24,7 20,14 4,14 0,7" fill="#ef4444"/></svg>
+                    </div>
+                    <span>Precharge</span>
+                </div>
+            </div>
+
+            <div class="panel-section">
+                <h3>HBM3E Stats</h3>
+                <table class="stats-table">
+                    <tr><td class="label">Pseudo-Channels</td><td class="value">16</td></tr>
+                    <tr><td class="label">Banks/PC</td><td class="value">16</td></tr>
+                    <tr><td class="label">Total Banks</td><td class="value">256</td></tr>
+                    <tr><td class="label">Data Rate</td><td class="value">9.6 Gbps</td></tr>
+                    <tr><td class="label">Bandwidth</td><td class="value">~1.2 TB/s</td></tr>
+                </table>
+            </div>
+
+            <div class="panel-section">
+                <h3>Trace Statistics</h3>
+                <table class="stats-table">
+                    <tr><td class="label">Total Requests</td><td class="value" id="statTotal">0</td></tr>
+                    <tr><td class="label">Read Ops</td><td class="value" id="statReads">0</td></tr>
+                    <tr><td class="label">Write Ops</td><td class="value" id="statWrites">0</td></tr>
+                    <tr><td class="label">Avg Latency</td><td class="value" id="statLatency">0 cy</td></tr>
+                    <tr><td class="label">PC Util</td><td class="value" id="statUtil">0%</td></tr>
+                </table>
+            </div>
+        </div>
+
+        <div class="analyzer-container" id="analyzerContainer">
+            <div class="empty-state" id="emptyState">
+                <div style="font-size: 48px;">&#128202;</div>
+                <div>Load an HBM3E trace JSON file</div>
+                <div style="font-size: 11px;">Supports Chrome Trace JSON format</div>
+            </div>
+            <div class="time-ruler" id="timeRuler" style="display: none;"></div>
+            <div class="lanes-container" id="lanesContainer" style="display: none;"></div>
+        </div>
+    </div>
+
+    <div class="info-panel" id="infoPanel">
+        <h3 style="font-size: 12px; margin-bottom: 10px;">Request Details</h3>
+        <div id="infoPanelContent" style="font-size: 11px; line-height: 1.6;"></div>
+        <button onclick="closeInfoPanel()" style="margin-top: 10px; width: 100%;">Close</button>
+    </div>
+
+    <script>
+        const PSEUDO_CHANNELS = 16;
+        const BANKS_PER_PC = 16;
+        const TOTAL_BANKS = PSEUDO_CHANNELS * BANKS_PER_PC;
+
+        let traceData = null;
+        let events = [];
+        let requests = [];
+        let minCycle = 0;
+        let maxCycle = 100;
+        let pixelsPerCycle = 2;
+        let collapsedPCs = new Set();
+
+        function parseTrace(data) {
+            events = [];
+            requests = [];
+            const txnEvents = new Map();
+
+            for (const item of data) {
+                if (item.ph === 'M') continue;
+                const txnId = item.args?.txn_id;
+                if (txnId === undefined) continue;
+
+                const evt = {
+                    name: item.name,
+                    cycleStart: item.args?.cycle_issue || 0,
+                    cycleEnd: item.args?.cycle_complete || 0,
+                    bank: item.tid || 0,
+                    txnId
+                };
+                events.push(evt);
+
+                if (!txnEvents.has(txnId)) txnEvents.set(txnId, []);
+                txnEvents.get(txnId).push(evt);
+            }
+
+            let idx = 0;
+            for (const [txnId, evts] of txnEvents) {
+                evts.sort((a, b) => a.cycleStart - b.cycleStart);
+                const first = evts[0];
+                const last = evts[evts.length - 1];
+
+                const hasRead = evts.some(e => e.name.includes('READ'));
+                const hasWrite = evts.some(e => e.name.includes('WRITE'));
+                if (!hasRead && !hasWrite) continue;
+
+                const bank = first.bank;
+                const pc = Math.floor(bank / BANKS_PER_PC);
+                const bankInPc = bank % BANKS_PER_PC;
+
+                requests.push({
+                    id: idx++,
+                    txnId,
+                    type: hasRead ? 'READ' : 'WRITE',
+                    bank,
+                    pc,
+                    bankInPc,
+                    cycleStart: first.cycleStart,
+                    cycleEnd: last.cycleEnd,
+                    latency: last.cycleEnd - first.cycleStart,
+                    events: evts
+                });
+            }
+
+            events.sort((a, b) => a.cycleStart - b.cycleStart);
+            requests.sort((a, b) => a.cycleStart - b.cycleStart);
+
+            if (events.length > 0) {
+                minCycle = Math.min(...events.map(e => e.cycleStart));
+                maxCycle = Math.max(...events.map(e => e.cycleEnd)) + 10;
+            }
+
+            return { events, requests };
+        }
+
+        function getPhaseColor(name) {
+            if (name === 'ACTIVATE') return '#f59e0b';
+            if (name.includes('READ')) return '#22c55e';
+            if (name.includes('WRITE')) return '#a855f7';
+            if (name === 'PRECHARGE') return '#ef4444';
+            return '#64748b';
+        }
+
+        function drawLanes() {
+            const container = document.getElementById('lanesContainer');
+            container.innerHTML = '';
+
+            const usedPCs = new Set(events.map(e => Math.floor(e.bank / BANKS_PER_PC)));
+            const sortedPCs = Array.from(usedPCs).sort((a, b) => a - b);
+
+            for (const pc of sortedPCs) {
+                const pcBanks = new Set(events.filter(e => Math.floor(e.bank / BANKS_PER_PC) === pc).map(e => e.bank % BANKS_PER_PC));
+                const sortedBanks = Array.from(pcBanks).sort((a, b) => a - b);
+                const isCollapsed = collapsedPCs.has(pc);
+
+                // PC header row
+                const headerRow = document.createElement('div');
+                headerRow.className = 'lane-row pc-header';
+                headerRow.innerHTML = `
+                    <div class="lane-label">
+                        <button class="collapse-btn" onclick="togglePC(${pc})">${isCollapsed ? '+' : '-'}</button>
+                        <span style="color: #d2a8ff;">PC ${pc}</span>
+                        <span style="margin-left: auto; color: #7d8590; font-size: 9px;">${sortedBanks.length} banks</span>
+                    </div>
+                    <div class="lane-content"></div>
+                `;
+                container.appendChild(headerRow);
+
+                if (isCollapsed) continue;
+
+                // Bank rows
+                for (const bankInPc of sortedBanks) {
+                    const globalBank = pc * BANKS_PER_PC + bankInPc;
+                    const row = document.createElement('div');
+                    row.className = 'lane-row';
+                    row.innerHTML = `
+                        <div class="lane-label indent">Bank ${bankInPc}</div>
+                        <div class="lane-content" id="lane-${globalBank}"></div>
+                    `;
+                    container.appendChild(row);
+                }
+            }
+
+            drawEvents();
+        }
+
+        function drawEvents() {
+            const containerWidth = document.getElementById('lanesContainer').clientWidth - 120;
+            const cycleRange = maxCycle - minCycle;
+            const cycleToX = (cycle) => ((cycle - minCycle) / cycleRange) * containerWidth;
+
+            for (const evt of events) {
+                const laneEl = document.getElementById(`lane-${evt.bank}`);
+                if (!laneEl) continue;
+
+                const x = cycleToX(evt.cycleStart);
+                const width = Math.max(((evt.cycleEnd - evt.cycleStart) / cycleRange) * containerWidth, 6);
+                const color = getPhaseColor(evt.name);
+
+                const hexagon = document.createElement('div');
+                hexagon.className = 'phase-hexagon';
+                hexagon.style.cssText = `
+                    position: absolute;
+                    left: ${x}px;
+                    top: 2px;
+                    width: ${width}px;
+                    height: 18px;
+                `;
+                hexagon.innerHTML = `
+                    <svg viewBox="0 0 ${width} 18" preserveAspectRatio="none" style="width: 100%; height: 100%;">
+                        <polygon points="3,0 ${width - 3},0 ${width},9 ${width - 3},18 3,18 0,9" fill="${color}" opacity="0.85"/>
+                    </svg>
+                `;
+                hexagon.onclick = () => showInfo(evt);
+                laneEl.appendChild(hexagon);
+            }
+
+            drawTimeRuler();
+            updateStats();
+        }
+
+        function drawTimeRuler() {
+            const ruler = document.getElementById('timeRuler');
+            const containerWidth = document.getElementById('lanesContainer').clientWidth - 120;
+            const cycleRange = maxCycle - minCycle;
+            const step = Math.max(1, Math.ceil(cycleRange / 20));
+
+            ruler.innerHTML = `<div style="width: 120px; border-right: 1px solid #2d333b; height: 100%;"></div>`;
+            const ticksDiv = document.createElement('div');
+            ticksDiv.style.cssText = 'flex: 1; position: relative; height: 100%;';
+
+            for (let c = minCycle; c <= maxCycle; c += step) {
+                const x = ((c - minCycle) / cycleRange) * containerWidth;
+                const tick = document.createElement('div');
+                tick.style.cssText = `position: absolute; left: ${x}px; top: 0; font-size: 9px; color: #7d8590; transform: translateX(-50%);`;
+                tick.textContent = c;
+                ticksDiv.appendChild(tick);
+            }
+
+            ruler.appendChild(ticksDiv);
+            document.getElementById('timeDisplay').textContent = `Cycles: ${minCycle} - ${maxCycle}`;
+        }
+
+        function updateStats() {
+            const reads = requests.filter(r => r.type === 'READ').length;
+            const writes = requests.filter(r => r.type === 'WRITE').length;
+            const avgLatency = requests.length > 0 ? Math.round(requests.reduce((s, r) => s + r.latency, 0) / requests.length) : 0;
+            const usedPCs = new Set(requests.map(r => r.pc)).size;
+
+            document.getElementById('statTotal').textContent = requests.length;
+            document.getElementById('statReads').textContent = reads;
+            document.getElementById('statWrites').textContent = writes;
+            document.getElementById('statLatency').textContent = `${avgLatency} cy`;
+            document.getElementById('statUtil').textContent = `${Math.round((usedPCs / PSEUDO_CHANNELS) * 100)}%`;
+        }
+
+        function togglePC(pc) {
+            if (collapsedPCs.has(pc)) collapsedPCs.delete(pc);
+            else collapsedPCs.add(pc);
+            drawLanes();
+        }
+
+        function showInfo(evt) {
+            const req = requests.find(r => r.txnId === evt.txnId);
+            const panel = document.getElementById('infoPanel');
+            const content = document.getElementById('infoPanelContent');
+
+            content.innerHTML = `
+                <div><strong>Command:</strong> ${evt.name}</div>
+                <div><strong>Pseudo-Channel:</strong> ${Math.floor(evt.bank / BANKS_PER_PC)}</div>
+                <div><strong>Bank:</strong> ${evt.bank % BANKS_PER_PC} (global: ${evt.bank})</div>
+                <div><strong>Cycle:</strong> ${evt.cycleStart} - ${evt.cycleEnd}</div>
+                <div><strong>Duration:</strong> ${evt.cycleEnd - evt.cycleStart} cycles</div>
+                ${req ? `
+                    <hr style="border: none; border-top: 1px solid #2d333b; margin: 8px 0;">
+                    <div><strong>Request:</strong> R${req.id} (${req.type})</div>
+                    <div><strong>Total Latency:</strong> ${req.latency} cycles</div>
+                ` : ''}
+            `;
+            panel.classList.add('visible');
+        }
+
+        function closeInfoPanel() {
+            document.getElementById('infoPanel').classList.remove('visible');
+        }
+
+        function zoomIn() { pixelsPerCycle = Math.min(pixelsPerCycle * 1.5, 20); drawLanes(); }
+        function zoomOut() { pixelsPerCycle = Math.max(pixelsPerCycle / 1.5, 0.5); drawLanes(); }
+        function zoomFit() { pixelsPerCycle = 2; drawLanes(); }
+
+        document.getElementById('fileInput').addEventListener('change', async (e) => {
+            const file = e.target.files[0];
+            if (!file) return;
+
+            try {
+                traceData = JSON.parse(await file.text());
+                parseTrace(traceData);
+
+                if (events.length > 0) {
+                    document.getElementById('emptyState').style.display = 'none';
+                    document.getElementById('timeRuler').style.display = 'flex';
+                    document.getElementById('lanesContainer').style.display = 'block';
+                    document.getElementById('traceFilename').textContent = file.name;
+                    drawLanes();
+                }
+            } catch (err) {
+                alert('Error parsing trace: ' + err.message);
+            }
+        });
+
+        window.addEventListener('resize', () => {
+            if (events.length > 0) drawLanes();
+        });
+    </script>
+</body>
+</html>

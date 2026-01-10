@@ -105,6 +105,54 @@ add_lpddr5_pattern(max_bandwidth bandwidth/max_bandwidth.cpp "Level 7 - Bandwidt
 add_lpddr5_pattern(page_burst    bandwidth/page_burst.cpp    "Level 7 - Bandwidth")
 
 # ============================================================================
+# DDR5 Memory Patterns
+# ============================================================================
+
+# DDR5-specific common headers
+add_library(ddr5_pattern_common INTERFACE)
+target_include_directories(ddr5_pattern_common INTERFACE
+    ${CMAKE_CURRENT_SOURCE_DIR}/memory/ddr5/common
+    ${PROJECT_SOURCE_DIR}/include
+)
+set_target_properties(ddr5_pattern_common PROPERTIES FOLDER "Patterns/Memory/DDR5/Common")
+
+# Helper function to add DDR5 pattern
+# Usage: add_ddr5_pattern(NAME SOURCE_FILE FOLDER_LEVEL)
+#   NAME         - Pattern name (becomes ddr5_${NAME})
+#   SOURCE_FILE  - Source file relative to memory/ddr5/
+#   FOLDER_LEVEL - MSVC folder level (e.g., "Level 1 - Single Bank")
+function(add_ddr5_pattern NAME SOURCE_FILE FOLDER_LEVEL)
+    add_executable(ddr5_${NAME}
+        ${CMAKE_CURRENT_SOURCE_DIR}/memory/ddr5/${SOURCE_FILE}
+    )
+    target_link_libraries(ddr5_${NAME} PRIVATE
+        pattern_common
+        ddr5_pattern_common
+        kpu_memory_components
+        kpu_trace
+    )
+    set_target_properties(ddr5_${NAME} PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/patterns/memory/ddr5
+        FOLDER "Patterns/Memory/DDR5/${FOLDER_LEVEL}"
+    )
+endfunction()
+
+# -----------------------------------------------------------------------------
+# Level 1: Single Bank Patterns
+# -----------------------------------------------------------------------------
+
+add_ddr5_pattern(page_hits      single-bank/page_hits.cpp      "Level 1 - Single Bank")
+add_ddr5_pattern(page_conflicts single-bank/page_conflicts.cpp "Level 1 - Single Bank")
+add_ddr5_pattern(mixed_rw       single-bank/mixed_rw.cpp       "Level 1 - Single Bank")
+
+# -----------------------------------------------------------------------------
+# Level 2: Two Bank Patterns
+# -----------------------------------------------------------------------------
+
+add_ddr5_pattern(same_group  two-bank/same_group.cpp  "Level 2 - Two Bank")
+add_ddr5_pattern(diff_groups two-bank/diff_groups.cpp "Level 2 - Two Bank")
+
+# ============================================================================
 # GDDR6 Memory Patterns
 # ============================================================================
 
@@ -188,6 +236,54 @@ add_gddr6_pattern(multi_dma  complex/multi_dma.cpp  "Level 6 - Complex")
 add_gddr6_pattern(eight_bank_bandwidth bandwidth/eight_bank_bandwidth.cpp "Level 7 - Bandwidth")
 add_gddr6_pattern(max_bandwidth        bandwidth/max_bandwidth.cpp        "Level 7 - Bandwidth")
 add_gddr6_pattern(page_burst           bandwidth/page_burst.cpp           "Level 7 - Bandwidth")
+
+# ============================================================================
+# GDDR7 Memory Patterns
+# ============================================================================
+
+# GDDR7-specific common headers
+add_library(gddr7_pattern_common INTERFACE)
+target_include_directories(gddr7_pattern_common INTERFACE
+    ${CMAKE_CURRENT_SOURCE_DIR}/memory/gddr7/common
+    ${PROJECT_SOURCE_DIR}/include
+)
+set_target_properties(gddr7_pattern_common PROPERTIES FOLDER "Patterns/Memory/GDDR7/Common")
+
+# Helper function to add GDDR7 pattern
+# Usage: add_gddr7_pattern(NAME SOURCE_FILE FOLDER_LEVEL)
+#   NAME         - Pattern name (becomes gddr7_${NAME})
+#   SOURCE_FILE  - Source file relative to memory/gddr7/
+#   FOLDER_LEVEL - MSVC folder level (e.g., "Level 1 - Single Bank")
+function(add_gddr7_pattern NAME SOURCE_FILE FOLDER_LEVEL)
+    add_executable(gddr7_${NAME}
+        ${CMAKE_CURRENT_SOURCE_DIR}/memory/gddr7/${SOURCE_FILE}
+    )
+    target_link_libraries(gddr7_${NAME} PRIVATE
+        pattern_common
+        gddr7_pattern_common
+        kpu_memory_components
+        kpu_trace
+    )
+    set_target_properties(gddr7_${NAME} PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/patterns/memory/gddr7
+        FOLDER "Patterns/Memory/GDDR7/${FOLDER_LEVEL}"
+    )
+endfunction()
+
+# -----------------------------------------------------------------------------
+# Level 1: Single Bank Patterns
+# -----------------------------------------------------------------------------
+
+add_gddr7_pattern(page_hits      single-bank/page_hits.cpp      "Level 1 - Single Bank")
+add_gddr7_pattern(page_conflicts single-bank/page_conflicts.cpp "Level 1 - Single Bank")
+add_gddr7_pattern(mixed_rw       single-bank/mixed_rw.cpp       "Level 1 - Single Bank")
+
+# -----------------------------------------------------------------------------
+# Level 2: Two Bank Patterns
+# -----------------------------------------------------------------------------
+
+add_gddr7_pattern(same_group  two-bank/same_group.cpp  "Level 2 - Two Bank")
+add_gddr7_pattern(diff_groups two-bank/diff_groups.cpp "Level 2 - Two Bank")
 
 # ============================================================================
 # HBM2 Memory Patterns

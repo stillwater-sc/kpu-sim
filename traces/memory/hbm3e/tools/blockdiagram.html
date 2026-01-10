@@ -1,0 +1,561 @@
+<!DOCTYPE html>
+<!--
+  HBM3E Memory Controller - Animated Block Diagram
+
+  Enhanced HBM3 with highest bandwidth (8.4-9.6 Gbps per pin):
+  - 16 pseudo-channels
+  - 16 banks per pseudo-channel (256 total)
+  - TSV (Through-Silicon Via) interconnect
+  - Enhanced refresh (RFM), ECC, power efficiency
+  - ~1.2 TB/s peak bandwidth per stack
+
+  SPDX-License-Identifier: MIT
+  Copyright (c) 2024-2025 Stillwater Supercomputing, Inc.
+-->
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>HBM3E Block Diagram</title>
+    <style>
+        :root {
+            --bg: #0a0e14;
+            --bg-panel: #151a21;
+            --border: #2d333b;
+            --text: #e6edf3;
+            --text-dim: #7d8590;
+            --mc-color: #3b82f6;
+            --phy-color: #8b5cf6;
+            --dram-color: #f59e0b;
+            --bank-idle: #1e293b;
+            --bank-active: #22c55e;
+            --bank-read: #3b82f6;
+            --bank-write: #a855f7;
+            --token-read: #22c55e;
+            --token-write: #a855f7;
+            --channel-color: #79c0ff;
+            --pc-color: #d2a8ff;
+            --tsv-color: #fbbf24;
+            --hbm3e-accent: #f472b6;
+        }
+
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+
+        body {
+            font-family: 'SF Mono', Monaco, monospace;
+            background: var(--bg);
+            color: var(--text);
+            min-height: 100vh;
+            overflow: hidden;
+        }
+
+        .header {
+            background: var(--bg-panel);
+            padding: 12px 20px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            border-bottom: 1px solid var(--border);
+            height: 50px;
+        }
+
+        .header h1 { font-size: 14px; font-weight: 500; }
+
+        .tech-badge {
+            background: linear-gradient(135deg, #f472b6, #ec4899);
+            color: #fff;
+            padding: 2px 8px;
+            border-radius: 4px;
+            font-size: 10px;
+            font-weight: 700;
+            margin-left: 8px;
+        }
+
+        button {
+            background: #2d333b;
+            color: #fff;
+            border: none;
+            padding: 6px 12px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 12px;
+        }
+
+        button:hover { background: #3d444d; }
+        button.active { background: #3b82f6; }
+        .file-btn { background: #3b82f6; }
+        .file-btn:hover { background: #2563eb; }
+
+        .controls { display: flex; gap: 10px; align-items: center; }
+
+        .cycle-display {
+            background: #2d333b;
+            padding: 6px 12px;
+            border-radius: 4px;
+            font-size: 12px;
+        }
+
+        .main-container { display: flex; height: calc(100vh - 50px); }
+
+        .left-panel {
+            width: 220px;
+            background: var(--bg-panel);
+            border-right: 1px solid var(--border);
+            padding: 15px;
+            overflow-y: auto;
+        }
+
+        .panel-section { margin-bottom: 20px; }
+        .panel-section h3 {
+            font-size: 10px;
+            font-weight: 600;
+            text-transform: uppercase;
+            color: var(--text-dim);
+            margin-bottom: 10px;
+        }
+
+        .legend-item {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-bottom: 6px;
+            font-size: 11px;
+        }
+
+        .legend-box { width: 16px; height: 12px; border-radius: 2px; }
+
+        .stats-row {
+            display: flex;
+            justify-content: space-between;
+            font-size: 11px;
+            padding: 3px 0;
+        }
+
+        .stats-row .label { color: var(--text-dim); }
+
+        .diagram-container {
+            flex: 1;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+            overflow: auto;
+        }
+
+        .no-data {
+            text-align: center;
+            color: var(--text-dim);
+        }
+
+        .component { fill: var(--bg-panel); stroke: var(--border); stroke-width: 2; }
+        .component.mc { stroke: var(--mc-color); }
+        .component.phy { stroke: var(--phy-color); }
+        .component.dram { stroke: var(--dram-color); }
+
+        .bank-box { fill: var(--bank-idle); stroke: #475569; stroke-width: 1; transition: fill 0.2s; }
+        .bank-box.active { fill: var(--bank-active); }
+        .bank-box.reading { fill: var(--bank-read); }
+        .bank-box.writing { fill: var(--bank-write); }
+
+        .token { transition: transform 0.1s ease-out; }
+        .token-body.read { fill: var(--token-read); stroke: #16a34a; stroke-width: 2; }
+        .token-body.write { fill: var(--token-write); stroke: #9333ea; stroke-width: 2; }
+        .token-label { fill: white; font-size: 6px; font-weight: bold; text-anchor: middle; }
+
+        .channel-line { stroke: var(--channel-color); stroke-width: 2; fill: none; }
+        .tsv-line { stroke: var(--tsv-color); stroke-width: 3; fill: none; stroke-dasharray: 4,2; }
+
+        @keyframes pulse { 0%, 100% { opacity: 0.6; } 50% { opacity: 1; } }
+        .bus-active { animation: pulse 0.3s ease-in-out infinite; }
+
+        .block-label { fill: var(--text); font-size: 10px; font-weight: 600; text-anchor: middle; }
+        .sub-label { fill: var(--text-dim); font-size: 8px; text-anchor: middle; }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <div style="display: flex; align-items: center; gap: 12px;">
+            <h1>HBM3E Block Diagram<span class="tech-badge">9.6 Gbps</span></h1>
+            <button class="file-btn" onclick="document.getElementById('fileInput').click()">Load Trace</button>
+            <input type="file" id="fileInput" accept=".json" style="display: none;">
+            <span id="traceFilename" style="font-size: 12px; color: var(--text-dim);">No trace loaded</span>
+        </div>
+        <div class="controls">
+            <button id="btnReset" disabled>Reset</button>
+            <button id="btnStep" disabled>Step</button>
+            <button id="btnPlay" disabled>Play</button>
+            <input type="range" id="speedSlider" min="50" max="500" value="200" style="width: 80px;">
+            <div class="cycle-display">Cycle: <span id="currentCycle">0</span> / <span id="maxCycle">0</span></div>
+        </div>
+    </div>
+
+    <div class="main-container">
+        <div class="left-panel">
+            <div class="panel-section">
+                <h3>HBM3E Architecture</h3>
+                <div class="stats-row"><span class="label">Pseudo-Channels</span><span>16</span></div>
+                <div class="stats-row"><span class="label">Banks/PC</span><span>16</span></div>
+                <div class="stats-row"><span class="label">Total Banks</span><span>256</span></div>
+                <div class="stats-row"><span class="label">Data Rate</span><span>8.4-9.6 Gbps</span></div>
+                <div class="stats-row"><span class="label">Bus Width</span><span>64-bit/PC</span></div>
+                <div class="stats-row"><span class="label">Bandwidth</span><span>~1.2 TB/s</span></div>
+            </div>
+
+            <div class="panel-section">
+                <h3>Bank States</h3>
+                <div class="legend-item"><div class="legend-box" style="background: #1e293b;"></div><span>Idle</span></div>
+                <div class="legend-item"><div class="legend-box" style="background: #22c55e;"></div><span>Active</span></div>
+                <div class="legend-item"><div class="legend-box" style="background: #3b82f6;"></div><span>Reading</span></div>
+                <div class="legend-item"><div class="legend-box" style="background: #a855f7;"></div><span>Writing</span></div>
+            </div>
+
+            <div class="panel-section">
+                <h3>Statistics</h3>
+                <div class="stats-row"><span class="label">Requests</span><span id="statTotal">0</span></div>
+                <div class="stats-row"><span class="label">Completed</span><span id="statCompleted">0</span></div>
+                <div class="stats-row"><span class="label">In Progress</span><span id="statInProgress">0</span></div>
+                <div class="stats-row"><span class="label">Avg Latency</span><span id="statLatency">0 cy</span></div>
+            </div>
+
+            <div class="panel-section">
+                <h3>Current Request</h3>
+                <div class="stats-row"><span class="label">Request</span><span id="currentReq">-</span></div>
+                <div class="stats-row"><span class="label">Pseudo-Ch</span><span id="currentPC">-</span></div>
+                <div class="stats-row"><span class="label">Bank</span><span id="currentBank">-</span></div>
+            </div>
+        </div>
+
+        <div class="diagram-container">
+            <div class="no-data" id="noData">
+                <div style="font-size: 48px; margin-bottom: 15px;">&#128202;</div>
+                <div>Load an HBM3E trace JSON file to animate</div>
+            </div>
+
+            <svg id="diagram" viewBox="0 0 950 550" style="display: none; max-width: 100%; height: auto;">
+                <defs>
+                    <marker id="arrowhead" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+                        <polygon points="0 0, 8 3, 0 6" fill="#64748b"/>
+                    </marker>
+                </defs>
+
+                <text x="475" y="25" text-anchor="middle" fill="#e6edf3" font-size="14" font-weight="600">
+                    HBM3E Memory Subsystem (16 Pseudo-Channels, 256 Banks Total)
+                </text>
+
+                <!-- Memory Controller -->
+                <g class="component mc">
+                    <rect x="50" y="60" width="180" height="200" rx="6"/>
+                    <text class="block-label" x="140" y="85">Memory Controller</text>
+
+                    <rect x="60" y="100" width="70" height="30" fill="#1e293b" stroke="#3b82f6" rx="3"/>
+                    <text class="sub-label" x="95" y="120">Cmd Queue</text>
+
+                    <rect x="140" y="100" width="80" height="30" fill="#1e293b" stroke="#3b82f6" rx="3"/>
+                    <text class="sub-label" x="180" y="120">Scheduler</text>
+
+                    <rect x="60" y="140" width="70" height="30" fill="#1e293b" stroke="#3b82f6" rx="3"/>
+                    <text class="sub-label" x="95" y="160">Read Queue</text>
+
+                    <rect x="140" y="140" width="80" height="30" fill="#1e293b" stroke="#3b82f6" rx="3"/>
+                    <text class="sub-label" x="180" y="160">Write Queue</text>
+
+                    <rect x="60" y="180" width="160" height="25" fill="#1e293b" stroke="#3b82f6" rx="3"/>
+                    <text class="sub-label" x="140" y="197">16-PC Arbiter</text>
+
+                    <rect x="60" y="210" width="160" height="20" fill="#1e293b" stroke="#f472b6" rx="3"/>
+                    <text class="sub-label" x="140" y="224" fill="#f472b6">HBM3E ECC + RFM</text>
+
+                    <rect x="60" y="235" width="160" height="18" fill="#1e293b" stroke="#f472b6" rx="3"/>
+                    <text class="sub-label" x="140" y="248" fill="#f472b6">1.2 TB/s Controller</text>
+                </g>
+
+                <path d="M 230 160 L 280 160" stroke="#64748b" stroke-width="2" marker-end="url(#arrowhead)"/>
+
+                <!-- HBM3E PHY -->
+                <g class="component phy">
+                    <rect x="285" y="60" width="130" height="200" rx="6"/>
+                    <text class="block-label" x="350" y="85">HBM3E PHY</text>
+
+                    <rect x="295" y="100" width="110" height="25" fill="#1e293b" stroke="#8b5cf6" rx="3"/>
+                    <text class="sub-label" x="350" y="117">16x SerDes</text>
+
+                    <rect x="295" y="130" width="110" height="25" fill="#1e293b" stroke="#8b5cf6" rx="3"/>
+                    <text class="sub-label" x="350" y="147">9.6 Gbps I/O</text>
+
+                    <rect x="295" y="160" width="110" height="25" fill="#1e293b" stroke="#8b5cf6" rx="3"/>
+                    <text class="sub-label" x="350" y="177">PLL / Training</text>
+
+                    <rect x="295" y="190" width="110" height="30" fill="#1e293b" stroke="#fbbf24" rx="3"/>
+                    <text class="sub-label" x="350" y="205" fill="#fbbf24">TSV Interface</text>
+                    <text class="sub-label" x="350" y="215" fill="#fbbf24">1024-bit</text>
+
+                    <rect x="295" y="225" width="110" height="25" fill="#1e293b" stroke="#f472b6" rx="3"/>
+                    <text class="sub-label" x="350" y="242" fill="#f472b6">HBM3E PHY IP</text>
+                </g>
+
+                <!-- TSV Stack -->
+                <g id="tsv-stack">
+                    <line class="tsv-line" x1="415" y1="160" x2="465" y2="160"/>
+                    <text x="440" y="150" fill="#fbbf24" font-size="8" text-anchor="middle">TSV</text>
+                </g>
+
+                <!-- HBM3E Die Stack -->
+                <g class="component dram">
+                    <rect x="470" y="40" width="455" height="480" rx="6" fill="none" stroke-dasharray="5,3"/>
+                    <text class="block-label" x="697" y="60">HBM3E Die Stack (8+ DRAM Die)</text>
+
+                    <!-- Pseudo-Channels 0-7 (top half) -->
+                    <g id="pcs-top">
+                        <text x="585" y="85" fill="#d2a8ff" font-size="9" text-anchor="middle">Pseudo-Channels 0-7</text>
+
+                        <!-- PC 0-1 -->
+                        <g id="pc-0-1">
+                            <rect x="480" y="95" width="100" height="75" fill="#151a21" stroke="#d2a8ff" rx="3"/>
+                            <text x="530" y="108" fill="#d2a8ff" font-size="8" text-anchor="middle">PC 0</text>
+                            <g id="pc0-banks">
+                                <rect class="bank-box" id="bank-0-0" x="485" y="112" width="10" height="8" rx="1"/>
+                                <rect class="bank-box" id="bank-0-1" x="497" y="112" width="10" height="8" rx="1"/>
+                                <rect class="bank-box" id="bank-0-2" x="509" y="112" width="10" height="8" rx="1"/>
+                                <rect class="bank-box" id="bank-0-3" x="521" y="112" width="10" height="8" rx="1"/>
+                                <rect class="bank-box" id="bank-0-4" x="533" y="112" width="10" height="8" rx="1"/>
+                                <rect class="bank-box" id="bank-0-5" x="545" y="112" width="10" height="8" rx="1"/>
+                                <rect class="bank-box" id="bank-0-6" x="557" y="112" width="10" height="8" rx="1"/>
+                                <rect class="bank-box" id="bank-0-7" x="569" y="112" width="10" height="8" rx="1"/>
+                                <rect class="bank-box" id="bank-0-8" x="485" y="122" width="10" height="8" rx="1"/>
+                                <rect class="bank-box" id="bank-0-9" x="497" y="122" width="10" height="8" rx="1"/>
+                                <rect class="bank-box" id="bank-0-10" x="509" y="122" width="10" height="8" rx="1"/>
+                                <rect class="bank-box" id="bank-0-11" x="521" y="122" width="10" height="8" rx="1"/>
+                                <rect class="bank-box" id="bank-0-12" x="533" y="122" width="10" height="8" rx="1"/>
+                                <rect class="bank-box" id="bank-0-13" x="545" y="122" width="10" height="8" rx="1"/>
+                                <rect class="bank-box" id="bank-0-14" x="557" y="122" width="10" height="8" rx="1"/>
+                                <rect class="bank-box" id="bank-0-15" x="569" y="122" width="10" height="8" rx="1"/>
+                            </g>
+                            <text x="530" y="145" fill="#94a3b8" font-size="7" text-anchor="middle">16 banks</text>
+                            <rect x="485" y="150" width="90" height="15" fill="#1e293b" stroke="#475569" rx="2"/>
+                            <text x="530" y="161" fill="#94a3b8" font-size="6" text-anchor="middle">64-bit I/O</text>
+                        </g>
+
+                        <!-- PC 1 -->
+                        <g id="pc-1">
+                            <rect x="585" y="95" width="100" height="75" fill="#151a21" stroke="#d2a8ff" rx="3"/>
+                            <text x="635" y="108" fill="#d2a8ff" font-size="8" text-anchor="middle">PC 1</text>
+                            <g id="pc1-banks">
+                                <rect class="bank-box" id="bank-1-0" x="590" y="112" width="10" height="8" rx="1"/>
+                                <rect class="bank-box" id="bank-1-1" x="602" y="112" width="10" height="8" rx="1"/>
+                                <rect class="bank-box" id="bank-1-2" x="614" y="112" width="10" height="8" rx="1"/>
+                                <rect class="bank-box" id="bank-1-3" x="626" y="112" width="10" height="8" rx="1"/>
+                                <rect class="bank-box" id="bank-1-4" x="638" y="112" width="10" height="8" rx="1"/>
+                                <rect class="bank-box" id="bank-1-5" x="650" y="112" width="10" height="8" rx="1"/>
+                                <rect class="bank-box" id="bank-1-6" x="662" y="112" width="10" height="8" rx="1"/>
+                                <rect class="bank-box" id="bank-1-7" x="674" y="112" width="10" height="8" rx="1"/>
+                            </g>
+                            <text x="635" y="145" fill="#94a3b8" font-size="7" text-anchor="middle">16 banks</text>
+                            <rect x="590" y="150" width="90" height="15" fill="#1e293b" stroke="#475569" rx="2"/>
+                            <text x="635" y="161" fill="#94a3b8" font-size="6" text-anchor="middle">64-bit I/O</text>
+                        </g>
+
+                        <!-- PC 2-7 simplified -->
+                        <g id="pc-2-7">
+                            <rect x="690" y="95" width="110" height="75" fill="#151a21" stroke="#d2a8ff" rx="3"/>
+                            <text x="745" y="115" fill="#d2a8ff" font-size="8" text-anchor="middle">PC 2-7</text>
+                            <text x="745" y="135" fill="#94a3b8" font-size="7" text-anchor="middle">96 banks</text>
+                            <text x="745" y="148" fill="#94a3b8" font-size="7" text-anchor="middle">(6 x 16)</text>
+                        </g>
+                    </g>
+
+                    <!-- Pseudo-Channels 8-15 (bottom half) -->
+                    <g id="pcs-bottom">
+                        <text x="585" y="195" fill="#d2a8ff" font-size="9" text-anchor="middle">Pseudo-Channels 8-15</text>
+
+                        <g id="pc-8-15">
+                            <rect x="480" y="205" width="320" height="65" fill="#151a21" stroke="#d2a8ff" rx="3"/>
+                            <text x="640" y="225" fill="#d2a8ff" font-size="9" text-anchor="middle">PC 8-15: 128 banks (8 x 16 banks)</text>
+                            <text x="640" y="245" fill="#94a3b8" font-size="8" text-anchor="middle">Each PC: 64-bit data bus @ 9.6 Gbps</text>
+                            <text x="640" y="260" fill="#f472b6" font-size="8" text-anchor="middle">HBM3E: RFM + In-Line ECC</text>
+                        </g>
+                    </g>
+
+                    <!-- Timing Info -->
+                    <g id="timing-info">
+                        <rect x="480" y="290" width="200" height="70" fill="#151a21" stroke="#475569" rx="3"/>
+                        <text x="580" y="308" fill="#f59e0b" font-size="9" text-anchor="middle">HBM3E Timing</text>
+                        <text x="580" y="322" fill="#94a3b8" font-size="8" text-anchor="middle">tRCD=12 | tRP=12 | tCL=12</text>
+                        <text x="580" y="336" fill="#94a3b8" font-size="8" text-anchor="middle">tRRD=4 | tFAW=12 | tBurst=4</text>
+                        <text x="580" y="350" fill="#94a3b8" font-size="8" text-anchor="middle">tRFC=350ns (32Gb die)</text>
+                    </g>
+
+                    <!-- Bandwidth Info -->
+                    <g id="bw-info">
+                        <rect x="690" y="290" width="220" height="70" fill="#151a21" stroke="#f472b6" rx="3"/>
+                        <text x="800" y="308" fill="#f472b6" font-size="9" text-anchor="middle">HBM3E Enhanced</text>
+                        <text x="800" y="322" fill="#94a3b8" font-size="8" text-anchor="middle">8.4-9.6 Gbps/pin</text>
+                        <text x="800" y="336" fill="#94a3b8" font-size="8" text-anchor="middle">~1.2 TB/s peak per stack</text>
+                        <text x="800" y="350" fill="#94a3b8" font-size="8" text-anchor="middle">8-12 die stack (32-48 GB)</text>
+                    </g>
+
+                    <!-- Power & Thermal -->
+                    <g id="power-info">
+                        <rect x="480" y="375" width="200" height="60" fill="#151a21" stroke="#22c55e" rx="3"/>
+                        <text x="580" y="393" fill="#22c55e" font-size="9" text-anchor="middle">Power Efficiency</text>
+                        <text x="580" y="407" fill="#94a3b8" font-size="8" text-anchor="middle">~3.5 pJ/bit</text>
+                        <text x="580" y="421" fill="#94a3b8" font-size="8" text-anchor="middle">Improved refresh (RFM)</text>
+                    </g>
+
+                    <!-- AI Workload Info -->
+                    <g id="ai-info">
+                        <rect x="690" y="375" width="220" height="60" fill="#151a21" stroke="#3b82f6" rx="3"/>
+                        <text x="800" y="393" fill="#3b82f6" font-size="9" text-anchor="middle">AI/HPC Optimized</text>
+                        <text x="800" y="407" fill="#94a3b8" font-size="8" text-anchor="middle">Large model training support</text>
+                        <text x="800" y="421" fill="#94a3b8" font-size="8" text-anchor="middle">Multi-stack configurations</text>
+                    </g>
+                </g>
+
+                <g id="tokens"></g>
+            </svg>
+        </div>
+    </div>
+
+    <script>
+        const PSEUDO_CHANNELS = 16;
+        const BANKS_PER_PC = 16;
+        const TOTAL_BANKS = PSEUDO_CHANNELS * BANKS_PER_PC;
+
+        let traceData = null;
+        let requests = [];
+        let currentCycle = 0;
+        let maxCycle = 0;
+        let isPlaying = false;
+        let playInterval = null;
+
+        function parseTrace(data) {
+            requests = [];
+            const txnEvents = new Map();
+
+            for (const item of data) {
+                if (item.ph === 'M') continue;
+                const txnId = item.args?.txn_id;
+                if (txnId === undefined) continue;
+                if (!txnEvents.has(txnId)) txnEvents.set(txnId, []);
+                txnEvents.get(txnId).push({
+                    name: item.name,
+                    cycleStart: item.args?.cycle_issue || 0,
+                    cycleEnd: item.args?.cycle_complete || 0,
+                    bank: item.tid || 0
+                });
+            }
+
+            let idx = 0;
+            for (const [txnId, evts] of txnEvents) {
+                evts.sort((a, b) => a.cycleStart - b.cycleStart);
+                const first = evts[0];
+                const last = evts[evts.length - 1];
+
+                const isRead = evts.some(e => e.name.includes('READ'));
+                const isWrite = evts.some(e => e.name.includes('WRITE'));
+                if (!isRead && !isWrite) continue;
+
+                const bank = first.bank;
+                const pc = Math.floor(bank / BANKS_PER_PC);
+                const bankInPc = bank % BANKS_PER_PC;
+
+                requests.push({
+                    id: idx++,
+                    txnId,
+                    type: isRead ? 'READ' : 'WRITE',
+                    bank: bank,
+                    pc: pc,
+                    bankInPc: bankInPc,
+                    cycleStart: first.cycleStart,
+                    cycleEnd: last.cycleEnd,
+                    latency: last.cycleEnd - first.cycleStart,
+                    events: evts
+                });
+
+                maxCycle = Math.max(maxCycle, last.cycleEnd + 5);
+            }
+            requests.sort((a, b) => a.cycleStart - b.cycleStart);
+            return requests;
+        }
+
+        function updateVisualization() {
+            document.getElementById('currentCycle').textContent = currentCycle;
+
+            // Reset all banks
+            document.querySelectorAll('.bank-box').forEach(b => b.setAttribute('class', 'bank-box'));
+
+            let inProgress = 0, completed = 0;
+
+            for (const req of requests) {
+                if (currentCycle >= req.cycleEnd) {
+                    completed++;
+                } else if (currentCycle >= req.cycleStart && currentCycle < req.cycleEnd) {
+                    inProgress++;
+                    // Highlight active bank
+                    const bankEl = document.getElementById(`bank-${req.pc}-${req.bankInPc}`);
+                    if (bankEl) {
+                        bankEl.setAttribute('class', `bank-box ${req.type === 'READ' ? 'reading' : 'writing'}`);
+                    }
+                    document.getElementById('currentReq').textContent = `R${req.id} (${req.type})`;
+                    document.getElementById('currentPC').textContent = req.pc;
+                    document.getElementById('currentBank').textContent = req.bank;
+                }
+            }
+
+            document.getElementById('statTotal').textContent = requests.length;
+            document.getElementById('statCompleted').textContent = completed;
+            document.getElementById('statInProgress').textContent = inProgress;
+            document.getElementById('statLatency').textContent = requests.length > 0 ? `${Math.round(requests.reduce((s, r) => s + r.latency, 0) / requests.length)} cy` : '0 cy';
+        }
+
+        document.getElementById('fileInput').addEventListener('change', async (e) => {
+            const file = e.target.files[0];
+            if (!file) return;
+            try {
+                traceData = JSON.parse(await file.text());
+                requests = parseTrace(traceData);
+                if (requests.length > 0) {
+                    document.getElementById('noData').style.display = 'none';
+                    document.getElementById('diagram').style.display = 'block';
+                    document.getElementById('traceFilename').textContent = file.name;
+                    document.getElementById('maxCycle').textContent = maxCycle;
+                    currentCycle = 0;
+                    updateVisualization();
+                    document.getElementById('btnReset').disabled = false;
+                    document.getElementById('btnStep').disabled = false;
+                    document.getElementById('btnPlay').disabled = false;
+                }
+            } catch (err) { alert('Error: ' + err.message); }
+        });
+
+        document.getElementById('btnReset').addEventListener('click', () => { currentCycle = 0; stopPlayback(); updateVisualization(); });
+        document.getElementById('btnStep').addEventListener('click', () => { if (currentCycle < maxCycle) { currentCycle++; updateVisualization(); } });
+        document.getElementById('btnPlay').addEventListener('click', () => { if (isPlaying) stopPlayback(); else startPlayback(); });
+
+        function startPlayback() {
+            isPlaying = true;
+            document.getElementById('btnPlay').textContent = 'Pause';
+            document.getElementById('btnPlay').classList.add('active');
+            playInterval = setInterval(() => {
+                if (currentCycle < maxCycle) { currentCycle++; updateVisualization(); }
+                else stopPlayback();
+            }, 550 - document.getElementById('speedSlider').value);
+        }
+
+        function stopPlayback() {
+            isPlaying = false;
+            document.getElementById('btnPlay').textContent = 'Play';
+            document.getElementById('btnPlay').classList.remove('active');
+            if (playInterval) { clearInterval(playInterval); playInterval = null; }
+        }
+
+        document.getElementById('speedSlider').addEventListener('input', () => { if (isPlaying) { stopPlayback(); startPlayback(); } });
+
+        document.addEventListener('keydown', (e) => {
+            if (requests.length === 0) return;
+            if (e.key === ' ') { e.preventDefault(); document.getElementById('btnPlay').click(); }
+            else if (e.key === 'ArrowRight') { e.preventDefault(); document.getElementById('btnStep').click(); }
+            else if (e.key === 'Home') { e.preventDefault(); document.getElementById('btnReset').click(); }
+        });
+    </script>
+</body>
+</html>

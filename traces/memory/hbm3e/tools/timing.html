@@ -1,0 +1,606 @@
+<!DOCTYPE html>
+<!--
+  HBM3E Memory Controller - Timing Diagram Visualization
+
+  Enhanced HBM3 timing diagram with 8.4-9.6 Gbps per pin.
+  Shows command bus, pseudo-channel states, and data bus timing.
+
+  SPDX-License-Identifier: MIT
+  Copyright (c) 2024-2025 Stillwater Supercomputing, Inc.
+-->
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>HBM3E Timing Diagram</title>
+    <style>
+        :root {
+            --bg: #0a0e14;
+            --bg-panel: #151a21;
+            --border: #2d333b;
+            --text: #e6edf3;
+            --text-dim: #7d8590;
+            --cmd-act: #f59e0b;
+            --cmd-rd: #22c55e;
+            --cmd-wr: #a855f7;
+            --cmd-pre: #ef4444;
+            --data: #3b82f6;
+            --timing-line: #ef4444;
+            --timing-text: #f87171;
+            --hbm3e: #f472b6;
+        }
+
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+
+        body {
+            font-family: 'SF Mono', Monaco, monospace;
+            background: var(--bg);
+            color: var(--text);
+            min-height: 100vh;
+        }
+
+        .header {
+            background: var(--bg-panel);
+            padding: 12px 20px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            position: sticky;
+            top: 0;
+            z-index: 100;
+        }
+
+        .header h1 { font-size: 14px; font-weight: 500; }
+
+        .tech-badge {
+            background: var(--hbm3e);
+            color: #fff;
+            padding: 2px 8px;
+            border-radius: 4px;
+            font-size: 10px;
+            font-weight: 700;
+            margin-left: 8px;
+        }
+
+        button {
+            background: #2d333b;
+            color: #fff;
+            border: none;
+            padding: 6px 12px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 12px;
+        }
+
+        button:hover { background: #3d444d; }
+        button.active { background: #3b82f6; }
+        .file-btn { background: #3b82f6; }
+
+        .main-container { display: flex; height: calc(100vh - 50px); }
+
+        .info-panel {
+            width: 260px;
+            background: var(--bg-panel);
+            border-right: 1px solid var(--border);
+            padding: 15px;
+            overflow-y: auto;
+        }
+
+        .info-section { margin-bottom: 20px; }
+        .info-section h3 {
+            font-size: 11px;
+            font-weight: 600;
+            text-transform: uppercase;
+            color: var(--text-dim);
+            margin-bottom: 10px;
+        }
+
+        .timing-table { width: 100%; font-size: 11px; border-collapse: collapse; }
+        .timing-table td { padding: 4px 6px; border-bottom: 1px solid var(--border); }
+        .timing-table .param { font-weight: 500; }
+        .timing-table .value { text-align: right; color: #3b82f6; }
+
+        .legend-item { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; font-size: 11px; }
+        .legend-color { width: 20px; height: 12px; border-radius: 2px; }
+
+        .diagram-container { flex: 1; overflow: auto; padding: 20px; }
+
+        .diagram-wrapper {
+            background: #0d1117;
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            overflow: hidden;
+        }
+
+        .grid-line { stroke: var(--border); stroke-width: 0.5; }
+        .grid-line.major { stroke-width: 1; }
+
+        .signal-label { font-size: 11px; font-weight: 500; fill: var(--text); }
+        .cycle-label { font-size: 9px; fill: #7d8590; }
+
+        .waveform { fill: none; stroke-width: 2; stroke-linecap: round; }
+        .waveform.clk { stroke: #64748b; }
+
+        .cmd-pulse { stroke-width: 0; }
+        .cmd-pulse.act { fill: var(--cmd-act); }
+        .cmd-pulse.rd { fill: var(--cmd-rd); }
+        .cmd-pulse.wr { fill: var(--cmd-wr); }
+        .cmd-pulse.pre { fill: var(--cmd-pre); }
+
+        .cmd-label { font-size: 9px; font-weight: 600; fill: #fff; text-anchor: middle; }
+
+        .bank-state { stroke-width: 1; }
+        .bank-state.idle { fill: #1e293b; stroke: #475569; }
+        .bank-state.activating { fill: #78350f; stroke: #f59e0b; }
+        .bank-state.active { fill: #064e3b; stroke: #22c55e; }
+        .bank-state.reading { fill: #1e3a5f; stroke: #3b82f6; }
+        .bank-state.writing { fill: #4c1d95; stroke: #a855f7; }
+
+        .state-label { font-size: 8px; fill: var(--text); text-anchor: middle; }
+
+        .data-burst { fill: var(--data); opacity: 0.3; }
+
+        .timing-bracket { stroke: var(--timing-line); stroke-width: 1.5; fill: none; }
+        .timing-label { font-size: 10px; font-weight: 600; fill: var(--timing-text); }
+        .timing-value { font-size: 9px; fill: var(--timing-text); }
+
+        .no-data {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 400px;
+            color: var(--text-dim);
+        }
+
+        select {
+            background: #2d333b;
+            color: #fff;
+            border: none;
+            padding: 6px 10px;
+            border-radius: 4px;
+            font-size: 12px;
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <div style="display: flex; align-items: center; gap: 12px;">
+            <h1>HBM3E Timing Diagram<span class="tech-badge">9.6 Gbps</span></h1>
+            <button class="file-btn" onclick="document.getElementById('fileInput').click()">Load Trace</button>
+            <input type="file" id="fileInput" accept=".json" style="display: none;">
+            <span id="traceFilename" style="font-size: 12px; color: var(--text-dim);">No trace loaded</span>
+        </div>
+        <div style="display: flex; align-items: center; gap: 10px;">
+            <select id="requestSelect" disabled><option>Select request...</option></select>
+            <button id="btnPrev" disabled>Prev</button>
+            <button id="btnNext" disabled>Next</button>
+            <button id="btnShowAll">Show All</button>
+            <span style="background: #2d333b; padding: 6px 12px; border-radius: 4px; font-size: 12px;">
+                Request: <span id="currentReq">-</span> | Cycles: <span id="cycleRange">-</span>
+            </span>
+        </div>
+    </div>
+
+    <div class="main-container">
+        <div class="info-panel">
+            <div class="info-section">
+                <h3>HBM3E Timing</h3>
+                <table class="timing-table">
+                    <tr><td class="param">tRCD</td><td class="value">12 cycles</td></tr>
+                    <tr><td class="param">tRP</td><td class="value">12 cycles</td></tr>
+                    <tr><td class="param">tCL</td><td class="value">12 cycles</td></tr>
+                    <tr><td class="param">tBurst</td><td class="value">4 cycles</td></tr>
+                    <tr><td class="param">tRRD</td><td class="value">4 cycles</td></tr>
+                    <tr><td class="param">tFAW</td><td class="value">12 cycles</td></tr>
+                    <tr><td class="param">tRTW</td><td class="value">12 cycles</td></tr>
+                    <tr><td class="param">tWTR</td><td class="value">6 cycles</td></tr>
+                </table>
+                <div style="margin-top: 10px; padding: 8px; background: rgba(244, 114, 182, 0.1); border-radius: 4px; font-size: 10px; color: var(--hbm3e);">
+                    HBM3E: 8.4-9.6 Gbps/pin<br>
+                    ~1.2 TB/s peak bandwidth
+                </div>
+            </div>
+
+            <div class="info-section">
+                <h3>Command Legend</h3>
+                <div class="legend-item"><div class="legend-color" style="background: var(--cmd-act);"></div><span>ACT - Row Activate</span></div>
+                <div class="legend-item"><div class="legend-color" style="background: var(--cmd-rd);"></div><span>RD - Read Command</span></div>
+                <div class="legend-item"><div class="legend-color" style="background: var(--cmd-wr);"></div><span>WR - Write Command</span></div>
+                <div class="legend-item"><div class="legend-color" style="background: var(--cmd-pre);"></div><span>PRE - Precharge</span></div>
+            </div>
+
+            <div class="info-section">
+                <h3>Selected Request</h3>
+                <div id="requestInfo" style="font-size: 11px; line-height: 1.5;">
+                    <p style="color: #7d8590;">Load a trace to view details</p>
+                </div>
+            </div>
+        </div>
+
+        <div class="diagram-container">
+            <div class="no-data" id="noData">
+                <div style="font-size: 32px; margin-bottom: 10px;">&#128200;</div>
+                <div>Load an HBM3E trace JSON file</div>
+            </div>
+            <div class="diagram-wrapper" id="diagramWrapper" style="display: none;">
+                <svg id="timingDiagram"></svg>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const MARGIN = { top: 40, right: 40, bottom: 30, left: 130 };
+        const ROW_HEIGHT = 50;
+        const PIXELS_PER_CYCLE = 14;
+        const CMD_HEIGHT = 20;
+
+        const TIMING = { tRCD: 12, tRP: 12, tCL: 12, tBurst: 4, tRRD: 4, tFAW: 12, tRTW: 12, tWTR: 6 };
+        const BANKS_PER_PC = 16;
+
+        let SIGNALS = [];
+        let traceData = null;
+        let requests = [];
+        let selectedRequestIdx = -1;
+        let showAllRequests = false;
+
+        const svg = document.getElementById('timingDiagram');
+
+        function buildSignals(data) {
+            const banks = new Set();
+            for (const item of data) {
+                if (item.ph === 'X' && item.tid !== undefined) banks.add(item.tid);
+            }
+            const sortedBanks = Array.from(banks).sort((a, b) => a - b);
+
+            SIGNALS = [
+                { id: 'clk', label: 'CLK', type: 'clock' },
+                { id: 'cmd', label: 'CMD Bus', type: 'command' },
+            ];
+
+            const pcs = new Set();
+            for (const b of sortedBanks) {
+                const pc = Math.floor(b / BANKS_PER_PC);
+                pcs.add(pc);
+            }
+
+            for (const pc of Array.from(pcs).sort((a, b) => a - b)) {
+                SIGNALS.push({ id: `pc${pc}`, label: `PC ${pc}`, type: 'bank', pc: pc });
+            }
+
+            SIGNALS.push({ id: 'dq', label: 'DQ (Data)', type: 'data' });
+            return sortedBanks;
+        }
+
+        function parseTrace(data) {
+            requests = [];
+            const txnEvents = new Map();
+
+            for (const item of data) {
+                if (item.ph === 'M') continue;
+                const txnId = item.args?.txn_id;
+                if (txnId === undefined) continue;
+                if (!txnEvents.has(txnId)) txnEvents.set(txnId, []);
+                txnEvents.get(txnId).push({
+                    name: item.name,
+                    cycleStart: item.args?.cycle_issue || 0,
+                    cycleEnd: item.args?.cycle_complete || 0,
+                    bank: item.tid || 0
+                });
+            }
+
+            let idx = 0;
+            for (const [txnId, evts] of txnEvents) {
+                evts.sort((a, b) => a.cycleStart - b.cycleStart);
+                const first = evts[0];
+                const last = evts[evts.length - 1];
+
+                const hasRead = evts.some(e => e.name.includes('READ'));
+                const hasWrite = evts.some(e => e.name.includes('WRITE'));
+                if (!hasRead && !hasWrite) continue;
+
+                const hasActivate = evts.some(e => e.name === 'ACTIVATE');
+                const pc = Math.floor(first.bank / BANKS_PER_PC);
+
+                requests.push({
+                    id: idx++,
+                    txnId,
+                    type: hasRead ? 'READ' : 'WRITE',
+                    bank: first.bank,
+                    pc: pc,
+                    pageStatus: hasActivate ? 'MISS' : 'HIT',
+                    cycleStart: first.cycleStart,
+                    cycleEnd: last.cycleEnd,
+                    latency: last.cycleEnd - first.cycleStart,
+                    hasActivate,
+                    events: evts
+                });
+            }
+            requests.sort((a, b) => a.cycleStart - b.cycleStart);
+            return requests;
+        }
+
+        function createSvgElement(tag, attrs, text) {
+            const el = document.createElementNS('http://www.w3.org/2000/svg', tag);
+            for (const [k, v] of Object.entries(attrs || {})) el.setAttribute(k, v);
+            if (text) el.textContent = text;
+            return el;
+        }
+
+        function drawDiagram() {
+            if (requests.length === 0) return;
+
+            let displayRequests = showAllRequests ? requests : (selectedRequestIdx >= 0 ? [requests[selectedRequestIdx]] : [requests[0]]);
+            if (displayRequests.length === 0 && requests.length > 0) {
+                displayRequests = [requests[0]];
+                selectedRequestIdx = 0;
+            }
+
+            const minCycle = Math.max(0, Math.min(...displayRequests.map(r => r.cycleStart)) - 8);
+            const maxCycle = Math.max(...displayRequests.map(r => r.cycleEnd)) + 15;
+            const cycleRange = maxCycle - minCycle;
+
+            const width = MARGIN.left + cycleRange * PIXELS_PER_CYCLE + MARGIN.right;
+            const height = MARGIN.top + SIGNALS.length * ROW_HEIGHT + MARGIN.bottom + 60;
+
+            svg.setAttribute('width', width);
+            svg.setAttribute('height', height);
+            svg.innerHTML = '';
+
+            const defs = createSvgElement('defs');
+            const hatchPattern = createSvgElement('pattern', { id: 'dataHatch', patternUnits: 'userSpaceOnUse', width: 8, height: 8 });
+            hatchPattern.appendChild(createSvgElement('path', { d: 'M-1,1 l2,-2 M0,8 l8,-8 M7,9 l2,-2', stroke: '#f472b6', 'stroke-width': 1 }));
+            defs.appendChild(hatchPattern);
+            svg.appendChild(defs);
+
+            const cycleToX = (cycle) => MARGIN.left + (cycle - minCycle) * PIXELS_PER_CYCLE;
+
+            // Grid
+            const gridGroup = createSvgElement('g', { class: 'grid' });
+            for (let c = minCycle; c <= maxCycle; c++) {
+                const x = cycleToX(c);
+                gridGroup.appendChild(createSvgElement('line', { x1: x, y1: MARGIN.top, x2: x, y2: height - MARGIN.bottom, class: `grid-line ${c % 10 === 0 ? 'major' : ''}` }));
+                if (c % 5 === 0) gridGroup.appendChild(createSvgElement('text', { x: x, y: MARGIN.top - 5, class: 'cycle-label', 'text-anchor': 'middle' }, c.toString()));
+            }
+            svg.appendChild(gridGroup);
+
+            // Signal rows
+            SIGNALS.forEach((signal, i) => {
+                const y = MARGIN.top + i * ROW_HEIGHT;
+                const rowGroup = createSvgElement('g', { class: `signal-row ${signal.type}` });
+                rowGroup.appendChild(createSvgElement('rect', { x: 0, y: y, width: width, height: ROW_HEIGHT, fill: i % 2 === 0 ? '#0d1117' : '#151a21' }));
+                rowGroup.appendChild(createSvgElement('text', { x: 10, y: y + ROW_HEIGHT / 2 + 4, class: 'signal-label' }, signal.label));
+
+                if (signal.type === 'clock') drawClock(rowGroup, y, minCycle, maxCycle, cycleToX);
+                else if (signal.type === 'command') drawCommandBus(rowGroup, y, displayRequests, cycleToX);
+                else if (signal.type === 'bank') drawPCState(rowGroup, y, signal.pc, displayRequests, minCycle, maxCycle, cycleToX);
+                else if (signal.type === 'data') drawDataBus(rowGroup, y, displayRequests, cycleToX);
+
+                svg.appendChild(rowGroup);
+            });
+
+            drawTimingAnnotations(displayRequests, cycleToX, height);
+            updateRequestInfo();
+            document.getElementById('cycleRange').textContent = `${minCycle} -> ${maxCycle}`;
+            document.getElementById('currentReq').textContent = showAllRequests ? 'All' : (selectedRequestIdx >= 0 ? `R${selectedRequestIdx}` : '-');
+        }
+
+        function drawClock(group, y, minCycle, maxCycle, cycleToX) {
+            const midY = y + ROW_HEIGHT / 2;
+            let path = `M ${cycleToX(minCycle)} ${midY + 12}`;
+            for (let c = minCycle; c <= maxCycle; c++) {
+                const x = cycleToX(c);
+                path += ` L ${x} ${midY + 12} L ${x} ${midY - 12} L ${x + PIXELS_PER_CYCLE / 2} ${midY - 12} L ${x + PIXELS_PER_CYCLE / 2} ${midY + 12}`;
+            }
+            group.appendChild(createSvgElement('path', { d: path, class: 'waveform clk' }));
+        }
+
+        function drawCommandBus(group, y, displayRequests, cycleToX) {
+            const midY = y + ROW_HEIGHT / 2;
+            group.appendChild(createSvgElement('line', { x1: MARGIN.left, y1: midY, x2: MARGIN.left + 2000, y2: midY, stroke: '#2d333b', 'stroke-width': 2, 'stroke-dasharray': '2,2' }));
+
+            displayRequests.forEach(req => {
+                for (const evt of req.events) {
+                    let cmdType = null, label = '';
+                    if (evt.name === 'ACTIVATE') { cmdType = 'act'; label = 'ACT'; }
+                    else if (evt.name.includes('READ')) { cmdType = 'rd'; label = 'RD'; }
+                    else if (evt.name.includes('WRITE')) { cmdType = 'wr'; label = 'WR'; }
+                    else if (evt.name === 'PRECHARGE') { cmdType = 'pre'; label = 'PRE'; }
+
+                    if (cmdType) {
+                        const x = cycleToX(evt.cycleStart);
+                        const cmdWidth = Math.max(PIXELS_PER_CYCLE * 1.5, 18);
+                        group.appendChild(createSvgElement('rect', { x: x - cmdWidth / 2, y: midY - CMD_HEIGHT / 2, width: cmdWidth, height: CMD_HEIGHT, rx: 3, class: `cmd-pulse ${cmdType}` }));
+                        group.appendChild(createSvgElement('text', { x: x, y: midY + 3, class: 'cmd-label' }, label));
+                    }
+                }
+            });
+        }
+
+        function drawPCState(group, y, pc, displayRequests, minCycle, maxCycle, cycleToX) {
+            const midY = y + ROW_HEIGHT / 2;
+            const stateHeight = 24;
+            const stateY = midY - stateHeight / 2;
+
+            const states = [];
+            let currentState = { state: 'idle', start: minCycle };
+
+            for (const req of displayRequests) {
+                if (req.pc !== pc) continue;
+                for (const evt of req.events) {
+                    if (evt.name === 'ACTIVATE') {
+                        if (currentState.state !== 'idle') { currentState.end = evt.cycleStart; states.push(currentState); }
+                        states.push({ state: 'activating', start: evt.cycleStart, end: evt.cycleEnd });
+                        currentState = { state: 'active', start: evt.cycleEnd };
+                    } else if (evt.name.includes('READ')) {
+                        if (currentState.state !== 'idle') { currentState.end = evt.cycleStart; states.push(currentState); }
+                        states.push({ state: 'reading', start: evt.cycleStart, end: evt.cycleEnd });
+                        currentState = { state: 'active', start: evt.cycleEnd };
+                    } else if (evt.name.includes('WRITE')) {
+                        if (currentState.state !== 'idle') { currentState.end = evt.cycleStart; states.push(currentState); }
+                        states.push({ state: 'writing', start: evt.cycleStart, end: evt.cycleEnd });
+                        currentState = { state: 'active', start: evt.cycleEnd };
+                    }
+                }
+            }
+            currentState.end = maxCycle;
+            states.push(currentState);
+
+            if (states.length === 0 || (states.length === 1 && states[0].state === 'idle')) {
+                group.appendChild(createSvgElement('rect', { x: cycleToX(minCycle), y: stateY, width: (maxCycle - minCycle) * PIXELS_PER_CYCLE, height: stateHeight, rx: 3, class: 'bank-state idle' }));
+                group.appendChild(createSvgElement('text', { x: cycleToX(minCycle) + 20, y: midY + 3, class: 'state-label' }, 'IDLE'));
+                return;
+            }
+
+            for (const s of states) {
+                if (s.end <= s.start) continue;
+                const x = cycleToX(s.start);
+                const w = (s.end - s.start) * PIXELS_PER_CYCLE;
+                group.appendChild(createSvgElement('rect', { x: x, y: stateY, width: w, height: stateHeight, rx: 2, class: `bank-state ${s.state}` }));
+                if (w > 30) group.appendChild(createSvgElement('text', { x: x + w / 2, y: midY + 3, class: 'state-label' }, s.state.toUpperCase().substring(0, 5)));
+            }
+        }
+
+        function drawDataBus(group, y, displayRequests, cycleToX) {
+            const midY = y + ROW_HEIGHT / 2;
+            const burstHeight = 20;
+            const burstY = midY - burstHeight / 2;
+
+            group.appendChild(createSvgElement('line', { x1: MARGIN.left, y1: midY, x2: MARGIN.left + 2000, y2: midY, stroke: '#2d333b', 'stroke-width': 2, 'stroke-dasharray': '2,2' }));
+
+            displayRequests.forEach(req => {
+                for (const evt of req.events) {
+                    if (evt.name.includes('READ')) {
+                        const dataStart = evt.cycleEnd - TIMING.tBurst;
+                        const x = cycleToX(dataStart);
+                        const w = TIMING.tBurst * PIXELS_PER_CYCLE;
+                        group.appendChild(createSvgElement('rect', { x: x, y: burstY, width: w, height: burstHeight, fill: 'rgba(244, 114, 182, 0.3)' }));
+                        group.appendChild(createSvgElement('rect', { x: x, y: burstY, width: w, height: burstHeight, fill: 'url(#dataHatch)', stroke: '#f472b6', 'stroke-width': 1 }));
+                        if (w > 25) group.appendChild(createSvgElement('text', { x: x + w / 2, y: midY + 3, 'font-size': '8px', fill: '#f9a8d4', 'text-anchor': 'middle' }, `R${req.id}`));
+                    } else if (evt.name.includes('WRITE')) {
+                        const x = cycleToX(evt.cycleStart);
+                        const w = TIMING.tBurst * PIXELS_PER_CYCLE;
+                        group.appendChild(createSvgElement('rect', { x: x, y: burstY, width: w, height: burstHeight, fill: '#a855f7', opacity: 0.3 }));
+                        group.appendChild(createSvgElement('rect', { x: x, y: burstY, width: w, height: burstHeight, fill: 'none', stroke: '#a855f7', 'stroke-width': 1 }));
+                    }
+                }
+            });
+        }
+
+        function drawTimingAnnotations(displayRequests, cycleToX, svgHeight) {
+            const annotY = svgHeight - MARGIN.bottom - 40;
+
+            displayRequests.forEach(req => {
+                const actEvt = req.events.find(e => e.name === 'ACTIVATE');
+                const rdEvt = req.events.find(e => e.name.includes('READ'));
+                const wrEvt = req.events.find(e => e.name.includes('WRITE'));
+
+                if (actEvt && (rdEvt || wrEvt)) {
+                    const casEvt = rdEvt || wrEvt;
+                    const x1 = cycleToX(actEvt.cycleStart);
+                    const x2 = cycleToX(casEvt.cycleStart);
+                    const bracketY = annotY;
+
+                    const bracketGroup = createSvgElement('g');
+                    bracketGroup.appendChild(createSvgElement('line', { x1: x1, y1: bracketY - 5, x2: x1, y2: bracketY + 5, class: 'timing-bracket' }));
+                    bracketGroup.appendChild(createSvgElement('line', { x1: x1, y1: bracketY, x2: x2, y2: bracketY, class: 'timing-bracket' }));
+                    bracketGroup.appendChild(createSvgElement('line', { x1: x2, y1: bracketY - 5, x2: x2, y2: bracketY + 5, class: 'timing-bracket' }));
+
+                    const midX = (x1 + x2) / 2;
+                    bracketGroup.appendChild(createSvgElement('text', { x: midX, y: bracketY - 8, class: 'timing-label', 'text-anchor': 'middle' }, 'tRCD'));
+                    bracketGroup.appendChild(createSvgElement('text', { x: midX, y: bracketY + 15, class: 'timing-value', 'text-anchor': 'middle' }, `${casEvt.cycleStart - actEvt.cycleStart} cy`));
+
+                    svg.appendChild(bracketGroup);
+                }
+            });
+        }
+
+        function updateRequestInfo() {
+            const infoDiv = document.getElementById('requestInfo');
+            if (selectedRequestIdx < 0 || requests.length === 0) {
+                infoDiv.innerHTML = '<p style="color: #7d8590;">No request selected</p>';
+                return;
+            }
+
+            const req = requests[selectedRequestIdx];
+            infoDiv.innerHTML = `
+                <div><strong>Request ID:</strong> R${req.id}</div>
+                <div><strong>Type:</strong> <span style="color: ${req.type === 'READ' ? '#22c55e' : '#a855f7'}">${req.type}</span></div>
+                <div><strong>Pseudo-Channel:</strong> ${req.pc}</div>
+                <div><strong>Bank:</strong> ${req.bank % BANKS_PER_PC} (global: ${req.bank})</div>
+                <div><strong>Page Status:</strong> ${req.pageStatus}</div>
+                <div><strong>Start Cycle:</strong> ${req.cycleStart}</div>
+                <div><strong>End Cycle:</strong> ${req.cycleEnd}</div>
+                <div><strong>Latency:</strong> ${req.latency} cycles</div>
+            `;
+        }
+
+        function populateRequestSelect() {
+            const select = document.getElementById('requestSelect');
+            select.innerHTML = '<option value="-1">Select request...</option>';
+            requests.forEach((req, idx) => {
+                const opt = document.createElement('option');
+                opt.value = idx;
+                opt.textContent = `R${req.id}: ${req.type} PC${req.pc} B${req.bank % BANKS_PER_PC}`;
+                select.appendChild(opt);
+            });
+            select.disabled = false;
+        }
+
+        document.getElementById('fileInput').addEventListener('change', async (e) => {
+            const file = e.target.files[0];
+            if (!file) return;
+
+            try {
+                traceData = JSON.parse(await file.text());
+                buildSignals(traceData);
+                parseTrace(traceData);
+
+                if (requests.length > 0) {
+                    document.getElementById('noData').style.display = 'none';
+                    document.getElementById('diagramWrapper').style.display = 'block';
+                    document.getElementById('traceFilename').textContent = file.name;
+                    selectedRequestIdx = 0;
+                    populateRequestSelect();
+                    document.getElementById('requestSelect').value = '0';
+                    document.getElementById('btnPrev').disabled = false;
+                    document.getElementById('btnNext').disabled = false;
+                    drawDiagram();
+                }
+            } catch (err) {
+                alert('Error parsing trace: ' + err.message);
+            }
+        });
+
+        document.getElementById('requestSelect').addEventListener('change', (e) => {
+            selectedRequestIdx = parseInt(e.target.value);
+            showAllRequests = false;
+            drawDiagram();
+        });
+
+        document.getElementById('btnPrev').addEventListener('click', () => {
+            if (selectedRequestIdx > 0) {
+                selectedRequestIdx--;
+                showAllRequests = false;
+                document.getElementById('requestSelect').value = selectedRequestIdx;
+                drawDiagram();
+            }
+        });
+
+        document.getElementById('btnNext').addEventListener('click', () => {
+            if (selectedRequestIdx < requests.length - 1) {
+                selectedRequestIdx++;
+                showAllRequests = false;
+                document.getElementById('requestSelect').value = selectedRequestIdx;
+                drawDiagram();
+            }
+        });
+
+        document.getElementById('btnShowAll').addEventListener('click', () => {
+            showAllRequests = !showAllRequests;
+            document.getElementById('btnShowAll').classList.toggle('active', showAllRequests);
+            drawDiagram();
+        });
+    </script>
+</body>
+</html>
