@@ -40,6 +40,5 @@ add_subdirectory(calibration)
 # Keep old memory directory for backward compatibility during transition
 # add_subdirectory(memory)  # Disabled - all components moved to src/components/
 
-if(KPU_BUILD_PYTHON_BINDINGS)
-    add_subdirectory(bindings)
-endif()
+# Language bindings (C API always built, Python conditional inside)
+add_subdirectory(bindings)
