@@ -11,6 +11,7 @@ set(DATAMOVEMENT_COMPONENT_SOURCES
     # Multi-fidelity DMA engine framework
     behavioral_dma_engine.cpp
     transactional_dma_engine.cpp
+    cycle_accurate_dma_engine.cpp
     dma_engine_factory.cpp
 )
 

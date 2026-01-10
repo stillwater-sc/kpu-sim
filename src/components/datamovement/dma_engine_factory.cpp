@@ -6,6 +6,7 @@
 #include <sw/kpu/components/dma/dma_engine_interface.hpp>
 #include <sw/kpu/components/dma/behavioral_dma_engine.hpp>
 #include <sw/kpu/components/dma/transactional_dma_engine.hpp>
+#include <sw/kpu/components/dma/cycle_accurate_dma_engine.hpp>
 #include <stdexcept>
 #include <sstream>
 
@@ -19,10 +20,21 @@ std::unique_ptr<IDMAEngine> create_dma_engine(const DMAEngineConfig& config) {
         case SimulationFidelity::TRANSACTIONAL:
             return std::make_unique<TransactionalDMAEngine>(config);
 
-        case SimulationFidelity::CYCLE_ACCURATE:
-            // TODO: Implement CycleAccurateDMAEngine
-            // For now, fall back to transactional
-            return std::make_unique<TransactionalDMAEngine>(config);
+        case SimulationFidelity::CYCLE_ACCURATE: {
+            // Create CycleAccurateDMAConfig from base config
+            CycleAccurateDMAConfig ca_config;
+            // Copy base fields
+            ca_config.fidelity = SimulationFidelity::CYCLE_ACCURATE;
+            ca_config.num_engines = config.num_engines;
+            ca_config.channels_per_engine = config.channels_per_engine;
+            ca_config.num_channels = config.num_channels;
+            ca_config.max_burst_size = config.max_burst_size;
+            ca_config.bandwidth_gbps = config.bandwidth_gbps;
+            ca_config.queue_depth_per_channel = config.queue_depth_per_channel;
+            ca_config.fixed_latency_per_burst = config.fixed_latency_per_burst;
+            // Use defaults for cycle-accurate specific fields
+            return std::make_unique<CycleAccurateDMAEngine>(ca_config);
+        }
 
         default: {
             std::ostringstream oss;

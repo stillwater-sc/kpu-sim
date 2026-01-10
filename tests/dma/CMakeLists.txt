@@ -40,3 +40,13 @@ kpu_add_component_test(dma_address_based_test "dma"
 set_tests_properties(dma_address_based_test PROPERTIES
     LABELS "dma;address;new_api"
 )
+
+# Cycle-accurate DMA engine tests
+kpu_add_component_test(dma_cycle_accurate_test "dma"
+    test_cycle_accurate_dma.cpp
+)
+
+# Mark as cycle-accurate test
+set_tests_properties(dma_cycle_accurate_test PROPERTIES
+    LABELS "dma;cycle_accurate"
+)
