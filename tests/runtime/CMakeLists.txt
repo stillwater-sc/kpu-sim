@@ -36,3 +36,8 @@ kpu_add_runtime_test(executor_test
 kpu_add_runtime_test(graph_test
     test_graph.cpp
 )
+
+# Behavioral memory model tests
+kpu_add_runtime_test(behavioral_memory_test
+    test_behavioral_memory.cpp
+)
