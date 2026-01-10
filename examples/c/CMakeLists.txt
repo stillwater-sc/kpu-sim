@@ -8,7 +8,7 @@
 add_executable(hello_kpu hello_kpu.c)
 target_link_libraries(hello_kpu PRIVATE StillwaterKPU::C_API)
 set_target_properties(hello_kpu PROPERTIES
-    FOLDER "examples/C"
+    FOLDER "Examples/C"
     C_STANDARD 11
     C_STANDARD_REQUIRED ON
 )
@@ -17,7 +17,7 @@ set_target_properties(hello_kpu PROPERTIES
 add_executable(runtime_demo_c runtime_demo.c)
 target_link_libraries(runtime_demo_c PRIVATE StillwaterKPU::C_API)
 set_target_properties(runtime_demo_c PROPERTIES
-    FOLDER "examples/C"
+    FOLDER "Examples/C"
     C_STANDARD 11
     C_STANDARD_REQUIRED ON
 )

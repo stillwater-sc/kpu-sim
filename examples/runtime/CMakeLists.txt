@@ -10,7 +10,7 @@ function(kpu_add_runtime_example example_name)
         kpu_runtime
     )
 
-    set_target_properties(${example_name} PROPERTIES FOLDER "Examples/runtime")
+    set_target_properties(${example_name} PROPERTIES FOLDER "Examples/Runtime")
 
     install(TARGETS ${example_name}
         DESTINATION bin/examples
