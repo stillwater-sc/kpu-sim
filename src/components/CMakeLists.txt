@@ -5,6 +5,7 @@
 add_subdirectory(memory)        # Base memory components
 add_subdirectory(datamovement)  # Depends on memory components
 add_subdirectory(compute)       # Depends on memory components
+add_subdirectory(behavioral)    # Behavioral/functional simulation models
 # add_subdirectory(control)     # Future: control and management components
 
 # Create a combined components library for convenience
@@ -16,6 +17,7 @@ target_link_libraries(kpu_components
         kpu_memory_components
         kpu_datamovement_components
         kpu_compute_components
+        kpu_behavioral_components
 )
 
 # Set target properties

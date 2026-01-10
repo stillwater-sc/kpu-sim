@@ -1,5 +1,5 @@
 // ============================================================================
-// include/sw/runtime/behavioral/memory_model.hpp
+// include/sw/kpu/behavioral/memory_model.hpp
 // Behavioral memory model for functional simulation
 //
 // This model tracks actual data values across the KPU memory hierarchy:
@@ -23,7 +23,7 @@
 #include <unordered_map>
 #include <vector>
 
-namespace sw::runtime::behavioral {
+namespace sw::kpu::behavioral {
 
 // ============================================================================
 // Type Definitions
@@ -426,4 +426,4 @@ private:
     RegionAllocator* get_allocator(MemoryRegionType type, uint32_t id);
 };
 
-} // namespace sw::runtime::behavioral
+} // namespace sw::kpu::behavioral

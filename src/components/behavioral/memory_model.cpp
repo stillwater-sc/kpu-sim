@@ -1,15 +1,15 @@
 // ============================================================================
-// src/runtime/behavioral/memory_model.cpp
+// src/components/behavioral/memory_model.cpp
 // Behavioral memory model implementation
 // ============================================================================
 
-#include <sw/runtime/behavioral/memory_model.hpp>
+#include <sw/kpu/behavioral/memory_model.hpp>
 
 #include <iomanip>
 #include <iostream>
 #include <sstream>
 
-namespace sw::runtime::behavioral {
+namespace sw::kpu::behavioral {
 
 // ============================================================================
 // Constructor
@@ -477,4 +477,4 @@ void BehavioralMemoryModel::dump_hex(Address addr, Size bytes) const {
     std::cout << std::dec;
 }
 
-} // namespace sw::runtime::behavioral
+} // namespace sw::kpu::behavioral

@@ -6,12 +6,12 @@
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_floating_point.hpp>
 
-#include <sw/runtime/behavioral/memory_model.hpp>
+#include <sw/kpu/behavioral/memory_model.hpp>
 
 #include <cmath>
 #include <vector>
 
-using namespace sw::runtime::behavioral;
+using namespace sw::kpu::behavioral;
 using Catch::Matchers::WithinRel;
 
 // ============================================================================

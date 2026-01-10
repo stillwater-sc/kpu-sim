@@ -38,6 +38,14 @@ kpu_add_runtime_test(graph_test
 )
 
 # Behavioral memory model tests
-kpu_add_runtime_test(behavioral_memory_test
-    test_behavioral_memory.cpp
+# Note: Links against kpu_behavioral_components directly since
+# behavioral models are in sw::kpu::behavioral, not sw::runtime
+add_executable(behavioral_memory_test test_behavioral_memory.cpp)
+target_link_libraries(behavioral_memory_test
+    PRIVATE
+    kpu_behavioral_components
+    Catch2::Catch2WithMain
 )
+set_target_properties(behavioral_memory_test PROPERTIES FOLDER "Tests/runtime")
+add_test(NAME behavioral_memory_test COMMAND behavioral_memory_test)
+set_tests_properties(behavioral_memory_test PROPERTIES LABELS "runtime;behavioral")
