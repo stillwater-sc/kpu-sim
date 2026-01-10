@@ -42,6 +42,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Compute actual start from associated MC commands using completion-based mapping
   - Each transfer now shows when MC begins processing its request
 
+- **DMA WRITE Trace Generation** (`src/components/datamovement/cycle_accurate_dma_engine.cpp`)
+  - Fixed DMA engine only issuing memory reads, ignoring write transfers
+  - STALLED_MEMORY_FULL state now checks transfer direction and calls appropriate function
+  - stream_copy pattern now correctly shows 6R + 6W memory controller commands
+
 ### Added - 2026-01-08
 - **HBM3E Pattern Infrastructure** (`patterns/memory/hbm3e/`)
   - Separate directory structure for HBM3E variants (8.4-9.6 Gbps)

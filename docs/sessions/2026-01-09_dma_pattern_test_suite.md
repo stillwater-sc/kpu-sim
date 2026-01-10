@@ -206,6 +206,7 @@ virtual void clear_trace_entries();
 
 1. `02bccd9` - Add memory controller trace entries to DMA traces
 2. `c6d1b0f` - Fix DMA transfer start cycle computation in traces
+3. `76caff3` - Add WRITE trace generation to DMA engine
 
 ## Validation
 
@@ -216,16 +217,15 @@ All traces verified for swimlane visualization compatibility:
 
 ## Known Limitations
 
-1. **WRITE traces not generated:** Mock memory controller only traces READs
-   - Affects stream_copy WRITE transfers (show at cycle 0)
-   - Could be fixed by implementing WRITE trace generation
-
-2. **Single memory controller:** Current harness uses one MC
+1. **Single memory controller:** Current harness uses one MC
    - Multi-channel patterns would need MC array
+
+2. ~~**WRITE traces not generated**~~ - Fixed in commit `76caff3`
+   - DMA engine now properly calls `issue_memory_write()` for store operations
 
 ## Next Steps
 
-1. Add WRITE trace generation to memory controller
-2. Implement multi-channel DMA patterns
-3. Add NoC congestion modeling
-4. Create automated trace validation script
+1. Implement multi-channel DMA patterns
+2. Add NoC congestion modeling
+3. Create automated trace validation script
+4. Add page hit optimization for sequential writes
