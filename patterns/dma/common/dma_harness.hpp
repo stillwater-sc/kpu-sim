@@ -14,9 +14,11 @@
 #include <iostream>
 #include <iomanip>
 #include <fstream>
+#include <sstream>
 #include <functional>
 #include <filesystem>
 #include <atomic>
+#include <mutex>
 
 #include <sw/kpu/components/dma/cycle_accurate_dma_engine.hpp>
 #include <sw/kpu/components/dma/dma_placement.hpp>
@@ -62,6 +64,39 @@ inline std::string make_trace_path(const std::string& category,
                                     const std::string& filename) {
     return (get_trace_dir(category) / filename).string();
 }
+
+// ============================================================================
+// DMA Transfer Event Tracking
+// ============================================================================
+
+/// Represents a single DMA transfer event for tracing
+struct DMATransferEvent {
+    uint64_t transfer_id;        // Unique transfer ID
+    uint64_t submit_cycle;       // Cycle when transfer was submitted
+    uint64_t complete_cycle;     // Cycle when transfer completed (0 if pending)
+    uint64_t src_addr;           // Source address
+    uint64_t dst_addr;           // Destination address
+    uint32_t size;               // Transfer size in bytes
+    bool is_read;                // True if reading from device memory
+    uint32_t channel;            // DMA channel used
+
+    DMATransferEvent()
+        : transfer_id(0), submit_cycle(0), complete_cycle(0)
+        , src_addr(0), dst_addr(0), size(0), is_read(true), channel(0) {}
+};
+
+/// Memory controller command event for tracing
+struct MemoryCommandEvent {
+    uint64_t cycle;              // Cycle when command was issued
+    std::string command;         // Command type (ACT, READ, WRITE, PRE)
+    uint8_t channel;             // Memory channel
+    uint8_t bank;                // Bank number
+    uint64_t address;            // Row/column address
+    uint64_t txn_id;             // Transaction ID
+
+    MemoryCommandEvent()
+        : cycle(0), channel(0), bank(0), address(0), txn_id(0) {}
+};
 
 // ============================================================================
 // DMA Harness Statistics
@@ -177,7 +212,11 @@ public:
     /// @return Transfer ID if accepted, nullopt if queue full
     std::optional<uint64_t> submit_transfer(const DMATransfer& transfer,
                                              std::function<void()> callback = nullptr) {
-        return dma_->submit(transfer, callback);
+        auto result = dma_->submit(transfer, callback);
+        if (result.has_value()) {
+            record_transfer_submit(result.value(), transfer);
+        }
+        return result;
     }
 
     /// Submit read from device memory to L3 tile
@@ -189,7 +228,15 @@ public:
         xfer.dst_type = DMAMemoryType::L3_TILE;
         xfer.dst_addr = dst_addr;
         xfer.size = size;
-        return dma_->submit(xfer, [this]() { transfers_completed_++; });
+
+        auto id = dma_->submit(xfer, [this, id = next_transfer_id_]() {
+            record_transfer_complete(id);
+            transfers_completed_++;
+        });
+        if (id.has_value()) {
+            record_transfer_submit(id.value(), xfer);
+        }
+        return id;
     }
 
     /// Submit write from L3 tile to device memory
@@ -201,7 +248,15 @@ public:
         xfer.dst_type = DMAMemoryType::DEVICE_MEMORY;
         xfer.dst_addr = dst_addr;
         xfer.size = size;
-        return dma_->submit(xfer, [this]() { transfers_completed_++; });
+
+        auto id = dma_->submit(xfer, [this, id = next_transfer_id_]() {
+            record_transfer_complete(id);
+            transfers_completed_++;
+        });
+        if (id.has_value()) {
+            record_transfer_submit(id.value(), xfer);
+        }
+        return id;
     }
 
     // ========================================================================
@@ -218,8 +273,13 @@ public:
 
         size_t submitted = 0;
         for (auto& xfer : transfers) {
-            auto id = dma_->submit(xfer, [this]() { transfers_completed_++; });
+            uint64_t expected_id = next_transfer_id_;
+            auto id = dma_->submit(xfer, [this, expected_id]() {
+                record_transfer_complete(expected_id);
+                transfers_completed_++;
+            });
             if (id.has_value()) {
+                record_transfer_submit(id.value(), xfer);
                 submitted++;
             }
         }
@@ -235,8 +295,13 @@ public:
 
         size_t submitted = 0;
         for (auto& xfer : transfers) {
-            auto id = dma_->submit(xfer, [this]() { transfers_completed_++; });
+            uint64_t expected_id = next_transfer_id_;
+            auto id = dma_->submit(xfer, [this, expected_id]() {
+                record_transfer_complete(expected_id);
+                transfers_completed_++;
+            });
             if (id.has_value()) {
+                record_transfer_submit(id.value(), xfer);
                 submitted++;
             }
         }
@@ -272,8 +337,15 @@ public:
             read_xfer.dst_addr = 0;
             read_xfer.size = static_cast<uint32_t>(size);
 
-            auto id = dma_->submit(read_xfer, [this]() { transfers_completed_++; });
-            if (id.has_value()) submitted++;
+            uint64_t expected_id = next_transfer_id_;
+            auto id = dma_->submit(read_xfer, [this, expected_id]() {
+                record_transfer_complete(expected_id);
+                transfers_completed_++;
+            });
+            if (id.has_value()) {
+                record_transfer_submit(id.value(), read_xfer);
+                submitted++;
+            }
 
             // Write to destination
             DMATransfer write_xfer;
@@ -283,8 +355,15 @@ public:
             write_xfer.dst_addr = dst_base + offset;
             write_xfer.size = static_cast<uint32_t>(size);
 
-            id = dma_->submit(write_xfer, [this]() { transfers_completed_++; });
-            if (id.has_value()) submitted++;
+            expected_id = next_transfer_id_;
+            id = dma_->submit(write_xfer, [this, expected_id]() {
+                record_transfer_complete(expected_id);
+                transfers_completed_++;
+            });
+            if (id.has_value()) {
+                record_transfer_submit(id.value(), write_xfer);
+                submitted++;
+            }
         }
 
         return submitted;
@@ -310,8 +389,16 @@ public:
             b_xfer.dst_type = DMAMemoryType::L3_TILE;
             b_xfer.dst_addr = 0;
             b_xfer.size = static_cast<uint32_t>(size);
-            auto id = dma_->submit(b_xfer, [this]() { transfers_completed_++; });
-            if (id.has_value()) submitted++;
+
+            uint64_t expected_id = next_transfer_id_;
+            auto id = dma_->submit(b_xfer, [this, expected_id]() {
+                record_transfer_complete(expected_id);
+                transfers_completed_++;
+            });
+            if (id.has_value()) {
+                record_transfer_submit(id.value(), b_xfer);
+                submitted++;
+            }
 
             // Read from C
             DMATransfer c_xfer;
@@ -320,8 +407,16 @@ public:
             c_xfer.dst_type = DMAMemoryType::L3_TILE;
             c_xfer.dst_addr = TILE_L3_SIZE_BYTES / 2;  // Different tile region
             c_xfer.size = static_cast<uint32_t>(size);
-            id = dma_->submit(c_xfer, [this]() { transfers_completed_++; });
-            if (id.has_value()) submitted++;
+
+            expected_id = next_transfer_id_;
+            id = dma_->submit(c_xfer, [this, expected_id]() {
+                record_transfer_complete(expected_id);
+                transfers_completed_++;
+            });
+            if (id.has_value()) {
+                record_transfer_submit(id.value(), c_xfer);
+                submitted++;
+            }
 
             // Write to A
             DMATransfer a_xfer;
@@ -330,8 +425,16 @@ public:
             a_xfer.dst_type = DMAMemoryType::DEVICE_MEMORY;
             a_xfer.dst_addr = a_base + offset;
             a_xfer.size = static_cast<uint32_t>(size);
-            id = dma_->submit(a_xfer, [this]() { transfers_completed_++; });
-            if (id.has_value()) submitted++;
+
+            expected_id = next_transfer_id_;
+            id = dma_->submit(a_xfer, [this, expected_id]() {
+                record_transfer_complete(expected_id);
+                transfers_completed_++;
+            });
+            if (id.has_value()) {
+                record_transfer_submit(id.value(), a_xfer);
+                submitted++;
+            }
         }
 
         return submitted;
@@ -437,7 +540,7 @@ public:
     // Trace Export
     // ========================================================================
 
-    /// Export DMA trace to JSON file
+    /// Export DMA trace to JSON file with per-transfer events
     bool export_trace(const std::string& filename, double clock_ghz = 2.0) {
         std::string full_path = make_trace_path("", filename);
 
@@ -451,31 +554,120 @@ public:
             return false;
         }
 
+        // Convert cycles to microseconds for Chrome trace format
+        auto cycle_to_us = [clock_ghz](uint64_t cycle) -> double {
+            return static_cast<double>(cycle) / (clock_ghz * 1000.0);
+        };
+
         // Export as Chrome trace format
         file << "[\n";
 
-        // Add process name
-        file << "  {\"name\": \"process_name\", \"ph\": \"M\", \"pid\": 4, "
+        // Add process/thread metadata
+        file << "  {\"name\": \"process_name\", \"ph\": \"M\", \"pid\": 1, "
              << "\"args\": {\"name\": \"DMA_ENGINE\"}},\n";
-        file << "  {\"name\": \"process_name\", \"ph\": \"M\", \"pid\": 20, "
+        file << "  {\"name\": \"thread_name\", \"ph\": \"M\", \"pid\": 1, \"tid\": 0, "
+             << "\"args\": {\"name\": \"DMA Transfers\"}},\n";
+        file << "  {\"name\": \"process_name\", \"ph\": \"M\", \"pid\": 2, "
              << "\"args\": {\"name\": \"MEMORY_CONTROLLER\"}},\n";
+        file << "  {\"name\": \"thread_name\", \"ph\": \"M\", \"pid\": 2, \"tid\": 0, "
+             << "\"args\": {\"name\": \"Memory Operations\"}},\n";
 
         // Add summary event
         auto s = stats();
-        file << "  {\"name\": \"DMA_SUMMARY\", \"cat\": \"summary\", \"ph\": \"i\", "
+        file << "  {\"name\": \"Summary\", \"cat\": \"info\", \"ph\": \"i\", "
              << "\"ts\": 0, \"pid\": 0, \"s\": \"g\", \"args\": {"
              << "\"transfers\": " << s.dma_transfers_completed << ", "
              << "\"bytes\": " << s.dma_bytes_transferred << ", "
              << "\"page_hit_rate\": " << std::fixed << std::setprecision(2)
              << (s.page_hit_rate() * 100.0) << ", "
              << "\"bandwidth_gbps\": " << s.effective_bandwidth_gbps(clock_ghz)
-             << "}}\n";
+             << "}},\n";
+
+        // Export per-transfer events
+        {
+            std::lock_guard<std::mutex> lock(events_mutex_);
+            for (size_t i = 0; i < transfer_events_.size(); ++i) {
+                const auto& evt = transfer_events_[i];
+
+                // Calculate duration
+                uint64_t duration_cycles = (evt.complete_cycle > evt.submit_cycle)
+                    ? (evt.complete_cycle - evt.submit_cycle) : 1;
+
+                // Transfer type name
+                std::string name = evt.is_read ? "DMA_READ" : "DMA_WRITE";
+
+                // Start time and duration in microseconds
+                double ts = cycle_to_us(evt.submit_cycle);
+                double dur = cycle_to_us(duration_cycles);
+
+                // Ensure minimum visible duration
+                if (dur < 0.001) dur = 0.001;
+
+                file << "  {\"name\": \"" << name << "\", \"cat\": \"dma\", \"ph\": \"X\", "
+                     << "\"ts\": " << std::fixed << std::setprecision(3) << ts << ", "
+                     << "\"dur\": " << dur << ", "
+                     << "\"pid\": 1, \"tid\": " << (evt.channel % 4) << ", "
+                     << "\"args\": {"
+                     << "\"id\": " << evt.transfer_id << ", "
+                     << "\"src\": \"0x" << std::hex << evt.src_addr << std::dec << "\", "
+                     << "\"dst\": \"0x" << std::hex << evt.dst_addr << std::dec << "\", "
+                     << "\"size\": " << evt.size << ", "
+                     << "\"channel\": " << evt.channel << ", "
+                     << "\"submit_cycle\": " << evt.submit_cycle << ", "
+                     << "\"complete_cycle\": " << evt.complete_cycle
+                     << "}}";
+
+                // Add comma unless last event
+                if (i < transfer_events_.size() - 1 || !memory_events_.empty()) {
+                    file << ",";
+                }
+                file << "\n";
+            }
+
+            // Export memory events
+            for (size_t i = 0; i < memory_events_.size(); ++i) {
+                const auto& evt = memory_events_[i];
+
+                double ts = cycle_to_us(evt.cycle);
+
+                file << "  {\"name\": \"" << evt.command << "\", \"cat\": \"memory\", \"ph\": \"i\", "
+                     << "\"ts\": " << std::fixed << std::setprecision(3) << ts << ", "
+                     << "\"s\": \"t\", "
+                     << "\"pid\": 2, \"tid\": " << static_cast<int>(evt.bank % 8) << ", "
+                     << "\"args\": {"
+                     << "\"channel\": " << static_cast<int>(evt.channel) << ", "
+                     << "\"bank\": " << static_cast<int>(evt.bank) << ", "
+                     << "\"addr\": \"0x" << std::hex << evt.address << std::dec << "\", "
+                     << "\"txn_id\": " << evt.txn_id
+                     << "}}";
+
+                if (i < memory_events_.size() - 1) {
+                    file << ",";
+                }
+                file << "\n";
+            }
+        }
 
         file << "]\n";
         file.close();
 
         std::cout << "Trace exported to: " << full_path << std::endl;
+        std::cout << "  DMA transfers: " << transfer_events_.size() << std::endl;
+        std::cout << "  Memory events: " << memory_events_.size() << std::endl;
+        std::cout << "  Open with: https://ui.perfetto.dev" << std::endl;
         return true;
+    }
+
+    /// Get transfer events for external analysis
+    const std::vector<DMATransferEvent>& transfer_events() const {
+        return transfer_events_;
+    }
+
+    /// Clear recorded events
+    void clear_events() {
+        std::lock_guard<std::mutex> lock(events_mutex_);
+        transfer_events_.clear();
+        memory_events_.clear();
     }
 
     // ========================================================================
@@ -511,6 +703,62 @@ private:
 
     // Current matrix layout
     MatrixLayout matrix_layout_;
+
+    // Event tracking
+    mutable std::mutex events_mutex_;
+    std::vector<DMATransferEvent> transfer_events_;
+    std::vector<MemoryCommandEvent> memory_events_;
+    uint64_t next_transfer_id_ = 0;
+
+    // ========================================================================
+    // Private Helper Methods
+    // ========================================================================
+
+    /// Record a transfer submission
+    void record_transfer_submit(uint64_t id, const DMATransfer& xfer) {
+        std::lock_guard<std::mutex> lock(events_mutex_);
+
+        DMATransferEvent evt;
+        evt.transfer_id = next_transfer_id_++;
+        evt.submit_cycle = cycle_;
+        evt.complete_cycle = 0;  // Not yet complete
+        evt.src_addr = xfer.src_addr;
+        evt.dst_addr = xfer.dst_addr;
+        evt.size = xfer.size;
+        evt.is_read = (xfer.src_type == DMAMemoryType::DEVICE_MEMORY);
+        evt.channel = static_cast<uint32_t>(id % dma_config_.num_channels);
+
+        transfer_events_.push_back(evt);
+    }
+
+    /// Record a transfer completion
+    void record_transfer_complete(uint64_t id) {
+        std::lock_guard<std::mutex> lock(events_mutex_);
+
+        // Find the transfer event and update completion time
+        for (auto& evt : transfer_events_) {
+            if (evt.transfer_id == id && evt.complete_cycle == 0) {
+                evt.complete_cycle = cycle_;
+                break;
+            }
+        }
+    }
+
+    /// Record a memory controller command
+    void record_memory_command(const std::string& cmd, uint8_t channel,
+                                uint8_t bank, uint64_t addr, uint64_t txn_id) {
+        std::lock_guard<std::mutex> lock(events_mutex_);
+
+        MemoryCommandEvent evt;
+        evt.cycle = cycle_;
+        evt.command = cmd;
+        evt.channel = channel;
+        evt.bank = bank;
+        evt.address = addr;
+        evt.txn_id = txn_id;
+
+        memory_events_.push_back(evt);
+    }
 };
 
 } // namespace sw::kpu::patterns::dma
