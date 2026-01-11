@@ -1,5 +1,5 @@
 // ============================================================================
-// include/sw/kpu/components/dma/dma_engine_interface.hpp
+// include/sw/kpu/models/interfaces/dma/dma_engine_interface.hpp
 // Abstract interface for DMA engines at all fidelity levels
 //
 // See docs/SIMULATION_FIDELITY_FRAMEWORK.md for design documentation

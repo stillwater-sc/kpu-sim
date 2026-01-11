@@ -21,7 +21,7 @@
 
 #include <sw/concepts.hpp>
 #include <sw/compute/dot_pe.hpp>
-#include <sw/kpu/components/scratchpad.hpp>
+#include <sw/kpu/models/temporal/memory/scratchpad.hpp>
 
 namespace sw::compute {
 

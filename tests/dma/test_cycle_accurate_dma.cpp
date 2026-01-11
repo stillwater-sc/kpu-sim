@@ -4,9 +4,9 @@
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/catch_approx.hpp>
 
-#include <sw/kpu/components/dma/cycle_accurate_dma_engine.hpp>
-#include <sw/kpu/components/dma/dma_placement.hpp>
-#include <sw/kpu/components/dma/dma_engine_interface.hpp>
+#include <sw/kpu/models/temporal/datamovement/cycle_accurate_dma_engine.hpp>
+#include <sw/kpu/models/temporal/datamovement/dma_placement.hpp>
+#include <sw/kpu/models/interfaces/dma_engine_interface.hpp>
 
 using namespace sw::kpu;
 

@@ -6,8 +6,8 @@
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/generators/catch_generators.hpp>
 
-#include <sw/kpu/noc/noc_interface.hpp>
-#include <sw/kpu/noc/noc_adapters.hpp>
+#include <sw/kpu/models/interfaces/noc_interface.hpp>
+#include <sw/kpu/models/temporal/noc/noc_adapters.hpp>
 
 using namespace sw::kpu;
 using namespace sw::kpu::noc;

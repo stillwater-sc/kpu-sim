@@ -8,8 +8,8 @@
 #include <catch2/catch_approx.hpp>
 
 #include <sw/kpu/models/temporal/datamovement/streamer.hpp>
-#include <sw/kpu/components/l2_bank.hpp>
-#include <sw/kpu/components/l1_buffer.hpp>
+#include <sw/kpu/models/temporal/memory/l2_bank.hpp>
+#include <sw/kpu/models/temporal/memory/l1_buffer.hpp>
 #include <sw/trace/trace_logger.hpp>
 #include <sw/trace/trace_exporter.hpp>
 

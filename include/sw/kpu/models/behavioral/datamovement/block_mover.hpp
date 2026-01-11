@@ -10,7 +10,7 @@
 
 #pragma once
 
-#include <sw/kpu/behavioral/memory_model.hpp>
+#include <sw/kpu/models/behavioral/memory/memory_model.hpp>
 #include <cstdint>
 #include <functional>
 

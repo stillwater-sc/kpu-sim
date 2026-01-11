@@ -9,10 +9,10 @@
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/catch_approx.hpp>
 
-#include <sw/kpu/components/dma/cycle_accurate_dma_engine.hpp>
-#include <sw/kpu/components/dma/dma_placement.hpp>
-#include <sw/kpu/components/memory/memory_controller_interface.hpp>
-#include <sw/kpu/noc/noc_interface.hpp>
+#include <sw/kpu/models/temporal/datamovement/cycle_accurate_dma_engine.hpp>
+#include <sw/kpu/models/temporal/datamovement/dma_placement.hpp>
+#include <sw/kpu/models/interfaces/memory_controller_interface.hpp>
+#include <sw/kpu/models/interfaces/noc_interface.hpp>
 
 #include <atomic>
 #include <vector>

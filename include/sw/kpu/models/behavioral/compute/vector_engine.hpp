@@ -11,8 +11,8 @@
 
 #pragma once
 
-#include <sw/kpu/behavioral/memory_model.hpp>
-#include <sw/kpu/components/sfu.hpp>
+#include <sw/kpu/models/behavioral/memory/memory_model.hpp>
+#include <sw/kpu/models/temporal/compute/sfu.hpp>
 #include <cstdint>
 #include <vector>
 

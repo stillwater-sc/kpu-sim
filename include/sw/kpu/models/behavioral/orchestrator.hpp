@@ -14,7 +14,7 @@
 #include <sw/kpu/models/behavioral/memory/memory_model.hpp>
 #include <sw/kpu/models/behavioral/datamovement/block_mover.hpp>
 #include <sw/kpu/models/behavioral/compute/vector_engine.hpp>
-#include <sw/kpu/components/sfu.hpp>
+#include <sw/kpu/models/temporal/compute/sfu.hpp>
 #include <cstdint>
 #include <memory>
 

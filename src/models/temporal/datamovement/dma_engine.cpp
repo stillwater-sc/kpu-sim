@@ -8,7 +8,7 @@
 #include <sw/memory/address_decoder.hpp>
 #include <sw/kpu/models/temporal/datamovement/dma_engine.hpp>
 #include <sw/kpu/models/temporal/memory/l3_tile.hpp>
-#include <sw/kpu/components/memory_controller.hpp>
+#include <sw/kpu/models/temporal/memory/controllers/controller_base.hpp>
 
 namespace sw::kpu {
 

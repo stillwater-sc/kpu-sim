@@ -13,8 +13,8 @@
 #include <sw/kpu/calibration/calibration_extraction.hpp>
 #include <sw/kpu/calibration/calibration_quality.hpp>
 #include <sw/kpu/models/temporal/memory/controllers/lpddr5_controller.hpp>
-#include <sw/kpu/components/memory/behavioral_memory_controller.hpp>
-#include <sw/kpu/components/memory/transactional_memory_controller.hpp>
+#include <sw/kpu/models/behavioral/memory/memory_controller.hpp>
+#include <sw/kpu/models/transactional/memory/memory_controller.hpp>
 
 #include <iostream>
 #include <iomanip>

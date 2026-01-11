@@ -9,7 +9,7 @@
 #include <sw/kpu/models/temporal/datamovement/dma_engine.hpp>
 #include <sw/memory/external_memory.hpp>
 #include <sw/memory/address_decoder.hpp>
-#include <sw/kpu/components/l3_tile.hpp>
+#include <sw/kpu/models/temporal/memory/l3_tile.hpp>
 #include <sw/trace/trace_logger.hpp>
 #include <sw/trace/trace_exporter.hpp>
 

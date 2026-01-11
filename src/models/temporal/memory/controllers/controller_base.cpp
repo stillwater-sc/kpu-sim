@@ -3,7 +3,7 @@
 // Memory Controller with cycle-accurate DRAM timing simulation
 // ============================================================================
 
-#include <sw/kpu/components/memory_controller.hpp>
+#include <sw/kpu/models/temporal/memory/controllers/controller_base.hpp>
 #include <algorithm>
 #include <cstring>
 #include <stdexcept>

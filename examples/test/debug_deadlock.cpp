@@ -1,7 +1,7 @@
 #include <iostream>
 #include <iomanip>
-#include "sw/kpu/components/block_mover_isa.hpp"
-#include "sw/kpu/components/stateful_block_mover.hpp"
+#include <sw/kpu/models/temporal/datamovement/block_mover_isa.hpp>
+#include <sw/kpu/models/temporal/datamovement/stateful_block_mover.hpp>
 #include "sw/kpu/dataflow/tile_dataflow_graph.hpp"
 #include "sw/kpu/dataflow/block_mover_compiler.hpp"
 

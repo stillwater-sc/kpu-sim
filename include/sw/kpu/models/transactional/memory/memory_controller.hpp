@@ -15,7 +15,7 @@
 #include <random>
 #include <vector>
 
-#include <sw/kpu/components/memory/memory_controller_interface.hpp>
+#include <sw/kpu/models/interfaces/memory_controller_interface.hpp>
 
 namespace sw::kpu {
 

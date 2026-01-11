@@ -3,7 +3,7 @@
 // Factory for creating DMA engines at various fidelity levels
 // ============================================================================
 
-#include <sw/kpu/components/dma/dma_engine_interface.hpp>
+#include <sw/kpu/models/interfaces/dma_engine_interface.hpp>
 #include <sw/kpu/models/behavioral/datamovement/dma_engine.hpp>
 #include <sw/kpu/models/transactional/datamovement/dma_engine.hpp>
 #include <sw/kpu/models/temporal/datamovement/cycle_accurate_dma_engine.hpp>

@@ -18,7 +18,7 @@
 #include <string_view>
 #include <vector>
 #include <sw/trace/trace_entry.hpp>
-#include <sw/kpu/components/memory/memory_controller_interface.hpp>
+#include <sw/kpu/models/interfaces/memory_controller_interface.hpp>
 
 // Forward declarations for trace integration
 namespace sw::trace {

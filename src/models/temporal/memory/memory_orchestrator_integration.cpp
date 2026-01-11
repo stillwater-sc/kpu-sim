@@ -1,4 +1,4 @@
-#include <sw/kpu/components/memory_orchestrator_integration.hpp>
+#include <sw/kpu/models/temporal/memory/memory_orchestrator_integration.hpp>
 #include <algorithm>
 #include <thread>
 #include <chrono>

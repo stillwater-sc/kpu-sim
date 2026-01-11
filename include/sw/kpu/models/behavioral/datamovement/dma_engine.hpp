@@ -14,7 +14,7 @@
 #include <queue>
 #include <vector>
 
-#include <sw/kpu/components/dma/dma_engine_interface.hpp>
+#include <sw/kpu/models/interfaces/dma_engine_interface.hpp>
 
 namespace sw::kpu {
 

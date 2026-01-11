@@ -12,7 +12,7 @@
 #include <queue>
 #include <vector>
 
-#include <sw/kpu/components/memory/l3_tile_interface.hpp>
+#include <sw/kpu/models/interfaces/l3_tile_interface.hpp>
 
 namespace sw::kpu {
 

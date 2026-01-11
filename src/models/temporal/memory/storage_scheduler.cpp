@@ -1,6 +1,6 @@
 #include <sw/kpu/models/temporal/memory/storage_scheduler.hpp>
-#include <sw/kpu/components/block_mover.hpp>
-#include <sw/kpu/components/streamer.hpp>
+#include <sw/kpu/models/temporal/datamovement/block_mover.hpp>
+#include <sw/kpu/models/temporal/datamovement/streamer.hpp>
 #include <algorithm>
 #include <cstring>
 #include <stdexcept>

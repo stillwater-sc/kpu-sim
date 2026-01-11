@@ -1,5 +1,5 @@
 // ============================================================================
-// include/sw/kpu/components/memory/l3_tile_interface.hpp
+// include/sw/kpu/models/interfaces/memory/l3_tile_interface.hpp
 // Abstract interface for L3 tiles at all fidelity levels
 //
 // See docs/SIMULATION_FIDELITY_FRAMEWORK.md for design documentation

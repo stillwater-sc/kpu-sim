@@ -6,7 +6,7 @@
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/catch_approx.hpp>
 
-#include <sw/kpu/noc/dataflow_noc.hpp>
+#include <sw/kpu/models/temporal/noc/dataflow_noc.hpp>
 
 using namespace sw::kpu;
 using namespace sw::kpu::noc;

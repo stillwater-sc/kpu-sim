@@ -13,7 +13,7 @@
 #pragma once
 
 #include <sw/kpu/models/behavioral/orchestrator.hpp>
-#include <sw/kpu/components/sfu.hpp>
+#include <sw/kpu/models/temporal/compute/sfu.hpp>
 #include <cstdint>
 #include <vector>
 #include <string>

@@ -3,7 +3,7 @@
 // Factory for creating L3 tiles at various fidelity levels
 // ============================================================================
 
-#include <sw/kpu/components/memory/l3_tile_interface.hpp>
+#include <sw/kpu/models/interfaces/l3_tile_interface.hpp>
 #include <sw/kpu/models/behavioral/memory/l3_tile.hpp>
 #include <sw/kpu/models/transactional/memory/l3_tile.hpp>
 #include <stdexcept>

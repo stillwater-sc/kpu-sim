@@ -1,5 +1,5 @@
 // ============================================================================
-// include/sw/kpu/components/memory/memory_controller_interface.hpp
+// include/sw/kpu/models/interfaces/memory/memory_controller_interface.hpp
 // Abstract interface for memory controllers at all fidelity levels
 //
 // See docs/SIMULATION_FIDELITY_FRAMEWORK.md for design documentation

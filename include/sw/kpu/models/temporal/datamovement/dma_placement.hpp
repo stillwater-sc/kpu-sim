@@ -14,8 +14,8 @@
 #include <vector>
 
 #include <sw/kpu/models/temporal/datamovement/cycle_accurate_dma_engine.hpp>
-#include <sw/kpu/components/memory/memory_controller_interface.hpp>
-#include <sw/kpu/noc/noc_interface.hpp>
+#include <sw/kpu/models/interfaces/memory_controller_interface.hpp>
+#include <sw/kpu/models/interfaces/noc_interface.hpp>
 
 namespace sw::kpu {
 

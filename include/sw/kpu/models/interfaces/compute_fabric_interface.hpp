@@ -1,5 +1,5 @@
 // ============================================================================
-// include/sw/kpu/components/compute/compute_fabric_interface.hpp
+// include/sw/kpu/models/interfaces/compute/compute_fabric_interface.hpp
 // Abstract interface for compute fabrics at all fidelity levels
 //
 // See docs/SIMULATION_FIDELITY_FRAMEWORK.md for design documentation

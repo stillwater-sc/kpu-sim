@@ -7,7 +7,7 @@
 #include <filesystem>
 #include <iostream>
 
-#include "sw/kpu/noc/wormhole_router.hpp"
+#include <sw/kpu/models/temporal/noc/wormhole_router.hpp>
 
 using namespace sw::kpu::noc;
 using namespace sw::kpu;

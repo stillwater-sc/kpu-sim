@@ -15,7 +15,7 @@
 #include <tuple>
 #include <vector>
 
-#include "sw/kpu/components/block_mover_isa.hpp"
+#include <sw/kpu/models/temporal/datamovement/block_mover_isa.hpp>
 
 namespace sw::kpu::dataflow {
 

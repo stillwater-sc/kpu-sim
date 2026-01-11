@@ -1,5 +1,5 @@
 // ============================================================================
-// include/sw/kpu/noc/noc_interface.hpp
+// include/sw/kpu/models/interfaces/noc_interface.hpp
 // Abstract NoC Interface for Runtime Selection
 //
 // This interface allows different NoC implementations to be used
@@ -11,7 +11,7 @@
 
 #pragma once
 
-#include <sw/kpu/components/block_mover_isa.hpp>
+#include <sw/kpu/models/temporal/datamovement/block_mover_isa.hpp>
 
 #include <cstdint>
 #include <functional>

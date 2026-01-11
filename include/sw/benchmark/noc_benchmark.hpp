@@ -8,8 +8,8 @@
 
 #pragma once
 
-#include <sw/kpu/noc/noc_interface.hpp>
-#include <sw/kpu/noc/noc_adapters.hpp>
+#include <sw/kpu/models/interfaces/noc_interface.hpp>
+#include <sw/kpu/models/temporal/noc/noc_adapters.hpp>
 
 #include <cstdint>
 #include <functional>

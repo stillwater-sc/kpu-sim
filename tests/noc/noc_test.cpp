@@ -8,7 +8,7 @@
 #include <iostream>
 #include <vector>
 
-#include "sw/kpu/noc/noc.hpp"
+#include <sw/kpu/models/temporal/noc/noc.hpp>
 
 using namespace sw::kpu;
 using namespace sw::kpu::noc;

@@ -13,7 +13,7 @@
 #include <queue>
 #include <vector>
 
-#include <sw/kpu/components/compute/compute_fabric_interface.hpp>
+#include <sw/kpu/models/interfaces/compute_fabric_interface.hpp>
 
 namespace sw::kpu {
 

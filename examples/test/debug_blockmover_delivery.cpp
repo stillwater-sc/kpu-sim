@@ -1,7 +1,7 @@
 #include <iostream>
 #include <iomanip>
-#include "sw/kpu/components/stateful_block_mover.hpp"
-#include "sw/kpu/noc/noc.hpp"
+#include <sw/kpu/models/temporal/datamovement/stateful_block_mover.hpp>
+#include <sw/kpu/models/temporal/noc/noc.hpp>
 
 using namespace sw::kpu;
 

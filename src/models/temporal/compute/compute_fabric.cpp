@@ -2,7 +2,7 @@
 #include <vector>
 
 #include <sw/kpu/models/temporal/compute/compute_fabric.hpp>
-#include <sw/kpu/components/l1_buffer.hpp>
+#include <sw/kpu/models/temporal/memory/l1_buffer.hpp>
 
 namespace sw::kpu {
 

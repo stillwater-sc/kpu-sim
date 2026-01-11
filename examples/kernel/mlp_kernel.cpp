@@ -50,7 +50,7 @@
 #include <sw/kpu/kernel.hpp>
 #include <sw/compiler/kernel_compiler.hpp>
 #include <sw/kpu/isa/concurrent_executor.hpp>
-#include <sw/kpu/components/sfu.hpp>
+#include <sw/kpu/models/temporal/compute/sfu.hpp>
 
 #include <iostream>
 #include <iomanip>

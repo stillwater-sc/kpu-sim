@@ -26,7 +26,7 @@
 #pragma once
 
 #include <sw/concepts.hpp>
-#include <sw/kpu/components/sfu.hpp>  // For ActivationType
+#include <sw/kpu/models/temporal/compute/sfu.hpp>  // For ActivationType
 #include <cstdint>
 #include <vector>
 #include <string>

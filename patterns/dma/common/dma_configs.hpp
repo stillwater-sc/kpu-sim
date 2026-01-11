@@ -7,8 +7,8 @@
 
 #pragma once
 
-#include <sw/kpu/components/dma/cycle_accurate_dma_engine.hpp>
-#include <sw/kpu/components/memory/memory_controller_interface.hpp>
+#include <sw/kpu/models/temporal/datamovement/cycle_accurate_dma_engine.hpp>
+#include <sw/kpu/models/interfaces/memory_controller_interface.hpp>
 #include <sw/kpu/fidelity/component_config.hpp>
 
 namespace sw::kpu::patterns::dma {

@@ -13,8 +13,8 @@
 #include <string>
 #include <vector>
 
-#include "sw/kpu/components/block_mover_isa.hpp"
-#include "sw/kpu/components/l3_interconnect.hpp"
+#include <sw/kpu/models/temporal/datamovement/block_mover_isa.hpp>
+#include <sw/kpu/models/temporal/datamovement/l3_interconnect.hpp>
 #include "sw/kpu/dataflow/tile_dataflow_graph.hpp"
 
 namespace sw::kpu::dataflow {

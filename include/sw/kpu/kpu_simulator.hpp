@@ -33,15 +33,15 @@
 // Here is a specific implementation of a page buffer for the memory controller.
 // Page buffers are actually hardware-managed, as they are a local cache for
 // the memory controller to coalesce accesses to external memory.
-#include <sw/kpu/components/page_buffer.hpp>
-#include <sw/kpu/components/memory_controller.hpp>
-#include <sw/kpu/components/dma_engine.hpp>
-#include <sw/kpu/components/l3_tile.hpp>
-#include <sw/kpu/components/l2_bank.hpp>
-#include <sw/kpu/components/l1_buffer.hpp>
-#include <sw/kpu/components/block_mover.hpp>
-#include <sw/kpu/components/streamer.hpp>
-#include <sw/kpu/components/compute_fabric.hpp>
+#include <sw/kpu/models/temporal/memory/page_buffer.hpp>
+#include <sw/kpu/models/temporal/memory/controllers/controller_base.hpp>
+#include <sw/kpu/models/temporal/datamovement/dma_engine.hpp>
+#include <sw/kpu/models/temporal/memory/l3_tile.hpp>
+#include <sw/kpu/models/temporal/memory/l2_bank.hpp>
+#include <sw/kpu/models/temporal/memory/l1_buffer.hpp>
+#include <sw/kpu/models/temporal/datamovement/block_mover.hpp>
+#include <sw/kpu/models/temporal/datamovement/streamer.hpp>
+#include <sw/kpu/models/temporal/compute/compute_fabric.hpp>
 
 namespace sw::kpu {
 

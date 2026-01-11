@@ -15,14 +15,14 @@
 #pragma once
 
 #include <sw/kpu/isa/data_movement_isa.hpp>
-#include <sw/kpu/components/dma_engine.hpp>
-#include <sw/kpu/components/block_mover.hpp>
-#include <sw/kpu/components/streamer.hpp>
-#include <sw/kpu/components/compute_fabric.hpp>
-#include <sw/kpu/components/page_buffer.hpp>
-#include <sw/kpu/components/l1_buffer.hpp>
-#include <sw/kpu/components/l3_tile.hpp>
-#include <sw/kpu/components/l2_bank.hpp>
+#include <sw/kpu/models/temporal/datamovement/dma_engine.hpp>
+#include <sw/kpu/models/temporal/datamovement/block_mover.hpp>
+#include <sw/kpu/models/temporal/datamovement/streamer.hpp>
+#include <sw/kpu/models/temporal/compute/compute_fabric.hpp>
+#include <sw/kpu/models/temporal/memory/page_buffer.hpp>
+#include <sw/kpu/models/temporal/memory/l1_buffer.hpp>
+#include <sw/kpu/models/temporal/memory/l3_tile.hpp>
+#include <sw/kpu/models/temporal/memory/l2_bank.hpp>
 #include <sw/memory/external_memory.hpp>
 #include <sw/trace/trace_logger.hpp>
 

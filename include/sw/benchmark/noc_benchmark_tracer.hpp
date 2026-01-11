@@ -5,7 +5,7 @@
 
 #pragma once
 
-#include <sw/kpu/noc/noc_interface.hpp>
+#include <sw/kpu/models/interfaces/noc_interface.hpp>
 
 #include <cstdint>
 #include <fstream>
@@ -47,7 +47,7 @@ inline const char* to_string(RouterState state) {
 // ============================================================================
 
 // Include wormhole_router for PortDir definition
-#include <sw/kpu/noc/wormhole_router.hpp>
+#include <sw/kpu/models/temporal/noc/wormhole_router.hpp>
 
 // Bring PortDir into benchmark namespace for convenience
 using sw::kpu::noc::PortDir;
