@@ -7,7 +7,7 @@
 
 #pragma once
 
-#include <sw/kpu/components/gddr7_memory_controller.hpp>
+#include <sw/kpu/models/temporal/memory/controllers/gddr7_controller.hpp>
 
 namespace sw::kpu::patterns::gddr7 {
 

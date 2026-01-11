@@ -16,7 +16,7 @@
 #include <functional>
 
 #include <filesystem>
-#include <sw/kpu/components/lpddr5_memory_controller.hpp>
+#include <sw/kpu/models/temporal/memory/controllers/lpddr5_controller.hpp>
 #include <sw/trace/resource_tracker.hpp>
 #include <sw/trace/trace_exporter.hpp>
 #include "lpddr5_configs.hpp"

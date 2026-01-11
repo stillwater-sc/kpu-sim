@@ -3,7 +3,7 @@
 // LPDDR5 Memory Controller implementation with formal invariant checking
 // ============================================================================
 
-#include <sw/kpu/components/lpddr5_memory_controller.hpp>
+#include <sw/kpu/models/temporal/memory/controllers/lpddr5_controller.hpp>
 #include <sw/trace/trace_entry.hpp>
 #include <sw/trace/resource_tracker.hpp>
 #include <algorithm>

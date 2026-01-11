@@ -3,7 +3,7 @@
 // Behavioral Orchestrator implementation
 // ============================================================================
 
-#include <sw/kpu/behavioral/orchestrator.hpp>
+#include <sw/kpu/models/behavioral/orchestrator.hpp>
 #include <stdexcept>
 #include <cstring>
 #include <algorithm>

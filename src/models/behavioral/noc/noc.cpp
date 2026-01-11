@@ -3,7 +3,7 @@
 // Behavioral (functional) NoC implementation
 // ============================================================================
 
-#include <sw/kpu/noc/behavioral_noc.hpp>
+#include <sw/kpu/models/behavioral/noc/noc.hpp>
 
 #include <cstdlib>
 

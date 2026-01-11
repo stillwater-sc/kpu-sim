@@ -4,7 +4,7 @@
 // ============================================================================
 
 #include <sw/kpu/components/dma/dma_engine_interface.hpp>
-#include <sw/kpu/components/dma/behavioral_dma_engine.hpp>
+#include <sw/kpu/models/behavioral/datamovement/dma_engine.hpp>
 #include <sw/kpu/components/dma/transactional_dma_engine.hpp>
 #include <sw/kpu/components/dma/cycle_accurate_dma_engine.hpp>
 #include <stdexcept>

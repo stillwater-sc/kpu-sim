@@ -7,7 +7,7 @@
 
 #pragma once
 
-#include <sw/kpu/components/hbm2_memory_controller.hpp>
+#include <sw/kpu/models/temporal/memory/controllers/hbm2_controller.hpp>
 
 namespace sw::kpu::patterns::hbm2 {
 

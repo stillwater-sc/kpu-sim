@@ -3,7 +3,7 @@
 // GDDR6 Memory Controller implementation with formal invariant checking
 // ============================================================================
 
-#include <sw/kpu/components/gddr6_memory_controller.hpp>
+#include <sw/kpu/models/temporal/memory/controllers/gddr6_controller.hpp>
 #include <sw/trace/trace_entry.hpp>
 #include <sw/trace/resource_tracker.hpp>
 #include <algorithm>

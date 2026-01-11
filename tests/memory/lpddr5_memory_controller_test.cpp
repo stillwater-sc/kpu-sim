@@ -16,7 +16,7 @@
 
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/catch_approx.hpp>
-#include <sw/kpu/components/lpddr5_memory_controller.hpp>
+#include <sw/kpu/models/temporal/memory/controllers/lpddr5_controller.hpp>
 #include <sw/trace/resource_tracker.hpp>
 #include <sw/trace/trace_exporter.hpp>
 #include <filesystem>

@@ -3,7 +3,7 @@
 // HBM3 Memory Controller implementation with formal invariant checking
 // ============================================================================
 
-#include <sw/kpu/components/hbm3_memory_controller.hpp>
+#include <sw/kpu/models/temporal/memory/controllers/hbm3_controller.hpp>
 #include <sw/trace/trace_entry.hpp>
 #include <sw/trace/resource_tracker.hpp>
 #include <algorithm>

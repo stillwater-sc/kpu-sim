@@ -3,7 +3,7 @@
 // Behavioral memory model implementation
 // ============================================================================
 
-#include <sw/kpu/behavioral/memory_model.hpp>
+#include <sw/kpu/models/behavioral/memory/memory_model.hpp>
 
 #include <iomanip>
 #include <iostream>

@@ -12,7 +12,7 @@
  * Expected output: XOR(0,0)=0, XOR(0,1)=1, XOR(1,0)=1, XOR(1,1)=0
  */
 
-#include <sw/kpu/behavioral/mlp_executor.hpp>
+#include <sw/kpu/models/behavioral/mlp_executor.hpp>
 #include <iostream>
 #include <cmath>
 #include <vector>

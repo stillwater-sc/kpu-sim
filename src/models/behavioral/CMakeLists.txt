@@ -22,16 +22,16 @@ set(BEHAVIORAL_SOURCES
 )
 
 set(BEHAVIORAL_HEADERS
-    ${CMAKE_SOURCE_DIR}/include/sw/kpu/behavioral/memory_model.hpp
-    ${CMAKE_SOURCE_DIR}/include/sw/kpu/behavioral/block_mover.hpp
-    ${CMAKE_SOURCE_DIR}/include/sw/kpu/behavioral/vector_engine.hpp
-    ${CMAKE_SOURCE_DIR}/include/sw/kpu/behavioral/orchestrator.hpp
-    ${CMAKE_SOURCE_DIR}/include/sw/kpu/behavioral/mlp_executor.hpp
-    ${CMAKE_SOURCE_DIR}/include/sw/kpu/components/memory/behavioral_memory_controller.hpp
-    ${CMAKE_SOURCE_DIR}/include/sw/kpu/components/memory/behavioral_l3_tile.hpp
-    ${CMAKE_SOURCE_DIR}/include/sw/kpu/components/compute/behavioral_compute_fabric.hpp
-    ${CMAKE_SOURCE_DIR}/include/sw/kpu/components/dma/behavioral_dma_engine.hpp
-    ${CMAKE_SOURCE_DIR}/include/sw/kpu/noc/behavioral_noc.hpp
+    ${CMAKE_SOURCE_DIR}/include/sw/kpu/models/behavioral/memory/memory_model.hpp
+    ${CMAKE_SOURCE_DIR}/include/sw/kpu/models/behavioral/memory/memory_controller.hpp
+    ${CMAKE_SOURCE_DIR}/include/sw/kpu/models/behavioral/memory/l3_tile.hpp
+    ${CMAKE_SOURCE_DIR}/include/sw/kpu/models/behavioral/compute/compute_fabric.hpp
+    ${CMAKE_SOURCE_DIR}/include/sw/kpu/models/behavioral/compute/vector_engine.hpp
+    ${CMAKE_SOURCE_DIR}/include/sw/kpu/models/behavioral/datamovement/block_mover.hpp
+    ${CMAKE_SOURCE_DIR}/include/sw/kpu/models/behavioral/datamovement/dma_engine.hpp
+    ${CMAKE_SOURCE_DIR}/include/sw/kpu/models/behavioral/noc/noc.hpp
+    ${CMAKE_SOURCE_DIR}/include/sw/kpu/models/behavioral/orchestrator.hpp
+    ${CMAKE_SOURCE_DIR}/include/sw/kpu/models/behavioral/mlp_executor.hpp
 )
 
 add_library(kpu_behavioral STATIC

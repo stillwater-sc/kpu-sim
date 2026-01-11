@@ -3,7 +3,7 @@
 // Behavioral MLP Executor implementation
 // ============================================================================
 
-#include <sw/kpu/behavioral/mlp_executor.hpp>
+#include <sw/kpu/models/behavioral/mlp_executor.hpp>
 #include <stdexcept>
 #include <algorithm>
 

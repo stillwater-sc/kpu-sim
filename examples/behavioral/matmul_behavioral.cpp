@@ -11,7 +11,7 @@
  *   3. Identity test: C = I @ A should equal A
  */
 
-#include <sw/kpu/behavioral/orchestrator.hpp>
+#include <sw/kpu/models/behavioral/orchestrator.hpp>
 #include <iostream>
 #include <cmath>
 #include <vector>

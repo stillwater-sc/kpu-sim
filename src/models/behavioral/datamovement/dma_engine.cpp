@@ -3,7 +3,7 @@
 // Behavioral (functional) DMA engine implementation
 // ============================================================================
 
-#include <sw/kpu/components/dma/behavioral_dma_engine.hpp>
+#include <sw/kpu/models/behavioral/datamovement/dma_engine.hpp>
 
 #include <algorithm>
 

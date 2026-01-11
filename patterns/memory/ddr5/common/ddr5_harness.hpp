@@ -16,7 +16,7 @@
 #include <functional>
 
 #include <filesystem>
-#include <sw/kpu/components/ddr5_memory_controller.hpp>
+#include <sw/kpu/models/temporal/memory/controllers/ddr5_controller.hpp>
 #include <sw/trace/resource_tracker.hpp>
 #include <sw/trace/trace_exporter.hpp>
 #include "ddr5_configs.hpp"

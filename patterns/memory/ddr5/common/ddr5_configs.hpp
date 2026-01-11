@@ -7,7 +7,7 @@
 
 #pragma once
 
-#include <sw/kpu/components/ddr5_memory_controller.hpp>
+#include <sw/kpu/models/temporal/memory/controllers/ddr5_controller.hpp>
 
 namespace sw::kpu::patterns::ddr5 {
 

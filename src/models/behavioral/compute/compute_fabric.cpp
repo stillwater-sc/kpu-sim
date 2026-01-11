@@ -3,7 +3,7 @@
 // Behavioral (functional) compute fabric implementation
 // ============================================================================
 
-#include <sw/kpu/components/compute/behavioral_compute_fabric.hpp>
+#include <sw/kpu/models/behavioral/compute/compute_fabric.hpp>
 
 #include <algorithm>
 #include <cstring>

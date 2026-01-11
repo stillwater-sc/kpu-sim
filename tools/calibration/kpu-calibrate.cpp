@@ -11,7 +11,7 @@
 
 #include <sw/kpu/calibration/calibration_storage.hpp>
 #include <sw/kpu/calibration/calibration_extraction.hpp>
-#include <sw/kpu/components/lpddr5_memory_controller.hpp>
+#include <sw/kpu/models/temporal/memory/controllers/lpddr5_controller.hpp>
 
 #include <iostream>
 #include <iomanip>

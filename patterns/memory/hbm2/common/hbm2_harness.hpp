@@ -16,7 +16,7 @@
 #include <functional>
 
 #include <filesystem>
-#include <sw/kpu/components/hbm2_memory_controller.hpp>
+#include <sw/kpu/models/temporal/memory/controllers/hbm2_controller.hpp>
 #include <sw/trace/resource_tracker.hpp>
 #include <sw/trace/trace_exporter.hpp>
 #include "hbm2_configs.hpp"

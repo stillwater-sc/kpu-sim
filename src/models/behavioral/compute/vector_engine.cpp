@@ -3,7 +3,7 @@
 // Behavioral Vector Engine implementation
 // ============================================================================
 
-#include <sw/kpu/behavioral/vector_engine.hpp>
+#include <sw/kpu/models/behavioral/compute/vector_engine.hpp>
 #include <stdexcept>
 
 namespace sw::kpu::behavioral {

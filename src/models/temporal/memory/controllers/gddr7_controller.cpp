@@ -3,7 +3,7 @@
 // GDDR7 Memory Controller implementation with formal invariant checking
 // ============================================================================
 
-#include <sw/kpu/components/gddr7_memory_controller.hpp>
+#include <sw/kpu/models/temporal/memory/controllers/gddr7_controller.hpp>
 #include <sw/trace/trace_entry.hpp>
 #include <sw/trace/resource_tracker.hpp>
 #include <algorithm>

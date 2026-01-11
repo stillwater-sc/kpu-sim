@@ -4,7 +4,7 @@
 // ============================================================================
 
 #include <sw/kpu/components/compute/compute_fabric_interface.hpp>
-#include <sw/kpu/components/compute/behavioral_compute_fabric.hpp>
+#include <sw/kpu/models/behavioral/compute/compute_fabric.hpp>
 #include <sw/kpu/components/compute/transactional_compute_fabric.hpp>
 #include <stdexcept>
 #include <sstream>

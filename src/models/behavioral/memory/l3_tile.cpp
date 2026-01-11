@@ -3,7 +3,7 @@
 // Behavioral (functional) L3 tile implementation
 // ============================================================================
 
-#include <sw/kpu/components/memory/behavioral_l3_tile.hpp>
+#include <sw/kpu/models/behavioral/memory/l3_tile.hpp>
 
 #include <algorithm>
 #include <cstring>

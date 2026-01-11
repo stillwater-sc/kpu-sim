@@ -4,14 +4,14 @@
 // ============================================================================
 
 #include <sw/kpu/components/memory/memory_controller_interface.hpp>
-#include <sw/kpu/components/memory/behavioral_memory_controller.hpp>
+#include <sw/kpu/models/behavioral/memory/memory_controller.hpp>
 #include <sw/kpu/components/memory/transactional_memory_controller.hpp>
-#include <sw/kpu/components/lpddr5_memory_controller.hpp>
-#include <sw/kpu/components/ddr5_memory_controller.hpp>
-#include <sw/kpu/components/gddr6_memory_controller.hpp>
-#include <sw/kpu/components/gddr7_memory_controller.hpp>
-#include <sw/kpu/components/hbm2_memory_controller.hpp>
-#include <sw/kpu/components/hbm3_memory_controller.hpp>
+#include <sw/kpu/models/temporal/memory/controllers/lpddr5_controller.hpp>
+#include <sw/kpu/models/temporal/memory/controllers/ddr5_controller.hpp>
+#include <sw/kpu/models/temporal/memory/controllers/gddr6_controller.hpp>
+#include <sw/kpu/models/temporal/memory/controllers/gddr7_controller.hpp>
+#include <sw/kpu/models/temporal/memory/controllers/hbm2_controller.hpp>
+#include <sw/kpu/models/temporal/memory/controllers/hbm3_controller.hpp>
 #include <stdexcept>
 #include <sstream>
 

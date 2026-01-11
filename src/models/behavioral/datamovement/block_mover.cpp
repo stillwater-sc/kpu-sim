@@ -3,7 +3,7 @@
 // Behavioral BlockMover implementation
 // ============================================================================
 
-#include <sw/kpu/behavioral/block_mover.hpp>
+#include <sw/kpu/models/behavioral/datamovement/block_mover.hpp>
 #include <stdexcept>
 #include <cstring>
 

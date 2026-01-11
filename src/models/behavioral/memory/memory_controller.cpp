@@ -3,7 +3,7 @@
 // Behavioral (functional) memory controller implementation
 // ============================================================================
 
-#include <sw/kpu/components/memory/behavioral_memory_controller.hpp>
+#include <sw/kpu/models/behavioral/memory/memory_controller.hpp>
 #include <algorithm>
 #include <cstring>
 #include <stdexcept>

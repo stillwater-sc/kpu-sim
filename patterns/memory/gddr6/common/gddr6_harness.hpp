@@ -16,7 +16,7 @@
 #include <functional>
 
 #include <filesystem>
-#include <sw/kpu/components/gddr6_memory_controller.hpp>
+#include <sw/kpu/models/temporal/memory/controllers/gddr6_controller.hpp>
 #include <sw/trace/resource_tracker.hpp>
 #include <sw/trace/trace_exporter.hpp>
 #include "gddr6_configs.hpp"
