@@ -499,10 +499,10 @@ public:
     sw::trace::ResourceTracker* resource_tracker() const { return resource_tracker_; }
 
     /// Get trace entries
-    const std::vector<sw::trace::TraceEntry>& trace_entries() const { return trace_entries_; }
+    const std::vector<sw::trace::TraceEntry>& trace_entries() const override { return trace_entries_; }
 
     /// Clear trace entries
-    void clear_trace_entries() { trace_entries_.clear(); }
+    void clear_trace_entries() override { trace_entries_.clear(); }
 
     /// Get GDDR6-specific configuration
     const Config& gddr6_config() const { return gddr6_config_; }

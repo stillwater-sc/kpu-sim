@@ -1,44 +1,22 @@
 # ============================================================================
 # src/CMakeLists.txt
-# Core simulator engine
+# KPU Simulator Source Organization
+#
+# Directory Structure:
+#   models/    - Multi-fidelity simulation models (behavioral/transactional/temporal)
+#   software/  - Host-side software (runtime, compiler, ISA)
+#   system/    - System-level integration
+#   tools/     - Development tools (bindings, benchmarks, trace)
+# ============================================================================
 
-# Add trace infrastructure first (needed by components)
-add_subdirectory(trace)
+# Simulation models (by fidelity level)
+add_subdirectory(models)
 
-# Add NoC (Network-on-Chip) component
-add_subdirectory(noc)
+# Host-side software
+add_subdirectory(software)
 
-# Add component-based architecture
-add_subdirectory(components)
-
-# Add main simulator and system components
+# System integration
 add_subdirectory(system)
-add_subdirectory(simulator)
-add_subdirectory(driver)
 
-# Add compiler components (graph loading, schedule generation)
-add_subdirectory(compiler)
-
-# Add ISA components (Data Movement ISA for Domain Flow Architecture)
-add_subdirectory(isa)
-
-# Add runtime library (host-side orchestration for kernel execution)
-add_subdirectory(runtime)
-
-# Add data flow graph infrastructure (tile-level scheduling)
-add_subdirectory(dataflow)
-
-# Add benchmark library
-add_subdirectory(benchmark)
-
-# Add configuration system (multi-fidelity config parsing)
-add_subdirectory(config)
-
-# Add calibration storage (multi-fidelity calibration parameters)
-add_subdirectory(calibration)
-
-# Keep old memory directory for backward compatibility during transition
-# add_subdirectory(memory)  # Disabled - all components moved to src/components/
-
-# Language bindings (C API always built, Python conditional inside)
-add_subdirectory(bindings)
+# Development tools
+add_subdirectory(tools)

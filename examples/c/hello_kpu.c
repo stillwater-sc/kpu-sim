@@ -68,8 +68,8 @@ int main(void) {
     }
 
     printf("   Clock frequency: %.1f GHz\n", rt_config.clock_ghz);
-    printf("   Total memory:    %" PRIu64 " bytes\n", kpu_runtime_get_total_memory(runtime));
-    printf("   Free memory:     %" PRIu64 " bytes\n", kpu_runtime_get_free_memory(runtime));
+    printf("   Total memory:    %zu bytes\n", kpu_runtime_get_total_memory(runtime));
+    printf("   Free memory:     %zu bytes\n", kpu_runtime_get_free_memory(runtime));
 
     /* =========================================================
      * 3. Allocate Device Memory
@@ -83,7 +83,7 @@ int main(void) {
     const KPUSize B_bytes = K * N * elem_size;
     const KPUSize C_bytes = M * N * elem_size;
 
-    printf("   Matrix sizes: A[%" PRIu64 " x %" PRIu64 "], B[%" PRIu64 " x %" PRIu64 "], C[%" PRIu64 " x %" PRIu64 "]\n",
+    printf("   Matrix sizes: A[%zu x %zu], B[%zu x %zu], C[%zu x %zu]\n",
            M, K, K, N, M, N);
 
     KPUAddress A_dev = kpu_runtime_malloc(runtime, A_bytes, 0);
@@ -97,10 +97,10 @@ int main(void) {
         return 1;
     }
 
-    printf("   A: %" PRIu64 " bytes @ 0x%" PRIx64 "\n", A_bytes, A_dev);
-    printf("   B: %" PRIu64 " bytes @ 0x%" PRIx64 "\n", B_bytes, B_dev);
-    printf("   C: %" PRIu64 " bytes @ 0x%" PRIx64 "\n", C_bytes, C_dev);
-    printf("   Free after alloc: %" PRIu64 " bytes\n", kpu_runtime_get_free_memory(runtime));
+    printf("   A: %zu bytes @ 0x%" PRIx64 "\n", A_bytes, A_dev);
+    printf("   B: %zu bytes @ 0x%" PRIx64 "\n", B_bytes, B_dev);
+    printf("   C: %zu bytes @ 0x%" PRIx64 "\n", C_bytes, C_dev);
+    printf("   Free after alloc: %zu bytes\n", kpu_runtime_get_free_memory(runtime));
 
     /* =========================================================
      * 4. Initialize and Copy Data
@@ -164,15 +164,15 @@ int main(void) {
     }
 
     printf("   Kernel: %s\n", kpu_op_type_name(kpu_kernel_get_op_type(kernel)));
-    printf("   Dimensions: M=%" PRIu64 ", N=%" PRIu64 ", K=%" PRIu64 "\n",
+    printf("   Dimensions: M=%zu, N=%zu, K=%zu\n",
            kpu_kernel_get_M(kernel),
            kpu_kernel_get_N(kernel),
            kpu_kernel_get_K(kernel));
-    printf("   Tile sizes: Ti=%" PRIu64 ", Tj=%" PRIu64 ", Tk=%" PRIu64 "\n",
+    printf("   Tile sizes: Ti=%zu, Tj=%zu, Tk=%zu\n",
            kpu_kernel_get_Ti(kernel),
            kpu_kernel_get_Tj(kernel),
            kpu_kernel_get_Tk(kernel));
-    printf("   FLOPs: %" PRIu64 "\n", kpu_kernel_get_total_flops(kernel));
+    printf("   FLOPs: %zu\n", kpu_kernel_get_total_flops(kernel));
     printf("   Instructions: %zu\n", kpu_kernel_get_instruction_count(kernel));
 
     /* Launch kernel */
@@ -206,14 +206,14 @@ int main(void) {
     int errors = 0;
     for (KPUSize i = 0; i < M * N && errors < 5; i++) {
         if (C_host[i] != expected) {
-            printf("   Error at C[%" PRIu64 "]: expected %.1f, got %.1f\n",
+            printf("   Error at C[%zu]: expected %.1f, got %.1f\n",
                    i, expected, C_host[i]);
             errors++;
         }
     }
 
     if (errors == 0) {
-        printf("   Result verified: all %" PRIu64 " elements = %.1f\n", M * N, expected);
+        printf("   Result verified: all %zu elements = %.1f\n", M * N, expected);
     } else {
         printf("   Found %d errors (showing first 5)\n", errors);
     }

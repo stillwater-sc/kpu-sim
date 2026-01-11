@@ -1,14 +1,13 @@
 # Compute Component Library
 # Compute fabric and matrix processing components
 
-# Compute component sources
+# Compute component sources (cycle-accurate/temporal implementations)
 set(COMPUTE_COMPONENT_SOURCES
     compute_fabric.cpp
     systolic_array.cpp
     sfu.cpp
-    # Multi-fidelity compute fabric framework
-    behavioral_compute_fabric.cpp
-    transactional_compute_fabric.cpp
+    # matmul_tau111_s001.cpp  # TODO: Fix template issues with this file
+    # Multi-fidelity factory (behavioral/transactional in src/behavioral, src/transactional)
     compute_fabric_factory.cpp
 )
 
@@ -27,6 +26,8 @@ target_include_directories(kpu_compute_components
 target_link_libraries(kpu_compute_components
     PUBLIC
         kpu_memory_components  # Compute components depend on memory components
+        kpu_behavioral        # Factories reference behavioral implementations
+        kpu_transactional     # Factories reference transactional implementations
 )
 
 # Set target properties

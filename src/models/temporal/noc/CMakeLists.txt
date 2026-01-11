@@ -1,12 +1,12 @@
 # NoC (Network-on-Chip) component library
 
+# NoC component sources (cycle-accurate/temporal implementations)
 add_library(kpu_noc STATIC
     noc.cpp
     wormhole_router.cpp
     dataflow_noc.cpp
     noc_adapters.cpp
-    # Multi-fidelity NoC framework
-    behavioral_noc.cpp
+    # Behavioral NoC is in src/behavioral/noc/
 )
 
 target_include_directories(kpu_noc PUBLIC

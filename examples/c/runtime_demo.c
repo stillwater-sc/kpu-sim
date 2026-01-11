@@ -44,11 +44,11 @@ static void separator(const char* title) {
 /* Helper: format bytes */
 static const char* format_bytes(KPUSize bytes, char* buf, size_t buf_size) {
     if (bytes >= 1024 * 1024) {
-        snprintf(buf, buf_size, "%" PRIu64 " MB", bytes / (1024 * 1024));
+        snprintf(buf, buf_size, "%zu MB", bytes / (1024 * 1024));
     } else if (bytes >= 1024) {
-        snprintf(buf, buf_size, "%" PRIu64 " KB", bytes / 1024);
+        snprintf(buf, buf_size, "%zu KB", bytes / 1024);
     } else {
-        snprintf(buf, buf_size, "%" PRIu64 " B", bytes);
+        snprintf(buf, buf_size, "%zu B", bytes);
     }
     return buf;
 }
@@ -110,7 +110,7 @@ int main(void) {
     const KPUSize B_bytes = K * N * elem_size;
     const KPUSize C_bytes = M * N * elem_size;
 
-    printf("Allocating device memory for %" PRIu64 "x%" PRIu64 " x %" PRIu64 "x%" PRIu64 " matmul...\n\n", M, K, K, N);
+    printf("Allocating device memory for %zux%zu x %zux%zu matmul...\n\n", M, K, K, N);
 
     KPUAddress A_dev = kpu_runtime_malloc(runtime, A_bytes, 0);
     KPUAddress B_dev = kpu_runtime_malloc(runtime, B_bytes, 0);
@@ -164,9 +164,9 @@ int main(void) {
         goto cleanup;
     }
 
-    printf("  Kernel: %s (%" PRIu64 "x%" PRIu64 "x%" PRIu64 ")\n",
+    printf("  Kernel: %s (%zux%zux%zu)\n",
            kpu_op_type_name(kpu_kernel_get_op_type(kernel)), M, N, K);
-    printf("  Tiles:  Ti=%" PRIu64 ", Tj=%" PRIu64 ", Tk=%" PRIu64 "\n",
+    printf("  Tiles:  Ti=%zu, Tj=%zu, Tk=%zu\n",
            kpu_kernel_get_Ti(kernel),
            kpu_kernel_get_Tj(kernel),
            kpu_kernel_get_Tk(kernel));
@@ -213,7 +213,7 @@ int main(void) {
         goto cleanup;
     }
 
-    printf("  Created matmul: %" PRIu64 "x%" PRIu64 "x%" PRIu64 "\n", M2, N2, K2);
+    printf("  Created matmul: %zux%zux%zu\n", M2, N2, K2);
 
     /* Check tensor bindings */
     printf("\n  Tensor Bindings:\n");
@@ -223,7 +223,7 @@ int main(void) {
         if (kpu_executor_get_binding_info(executor, binding_names[i], &info) == KPU_SUCCESS) {
             printf("    %s: ", info.name);
             for (uint32_t d = 0; d < info.ndims; d++) {
-                printf("%" PRIu64, info.shape[d]);
+                printf("%zu", info.shape[d]);
                 if (d < info.ndims - 1) printf("x");
             }
             printf(" @ 0x%" PRIx64 "\n", info.device_address);

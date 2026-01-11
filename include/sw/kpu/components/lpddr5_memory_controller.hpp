@@ -497,10 +497,10 @@ public:
     sw::trace::ResourceTracker* resource_tracker() const { return resource_tracker_; }
 
     /// Get trace entries
-    const std::vector<sw::trace::TraceEntry>& trace_entries() const { return trace_entries_; }
+    const std::vector<sw::trace::TraceEntry>& trace_entries() const override { return trace_entries_; }
 
     /// Clear trace entries
-    void clear_trace_entries() { trace_entries_.clear(); }
+    void clear_trace_entries() override { trace_entries_.clear(); }
 
     /// Get LPDDR5-specific configuration
     const Config& lpddr5_config() const { return lpddr5_config_; }

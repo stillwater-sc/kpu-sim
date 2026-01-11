@@ -1,6 +1,16 @@
 # ============================================================================
 # src/system/CMakeLists.txt
+# System-level integration and orchestration
+# ============================================================================
+
+# Add subsystem components
+add_subdirectory(config)
+add_subdirectory(calibration)
+add_subdirectory(simulator)
+
+# ============================================================================
 # TopLevel system orchestration module
+# ============================================================================
 
 set(SYSTEM_SOURCES
     toplevel.cpp

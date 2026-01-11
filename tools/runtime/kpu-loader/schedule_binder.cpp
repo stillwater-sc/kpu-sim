@@ -98,7 +98,7 @@ BoundSchedule ScheduleBinder::bind(const dfx::Program& program) {
             size_t flops_per_cycle = config_.processor_array_rows * config_.processor_array_cols * 2;
             bound.end_cycle = bound.start_cycle + (flops / flops_per_cycle);
         }
-        else if (auto* barrier = dynamic_cast<const dfx::BarrierOp*>(op.get())) {
+        else if (dynamic_cast<const dfx::BarrierOp*>(op.get()) != nullptr) {
             // Barriers have zero cycles
             bound.end_cycle = bound.start_cycle;
         }

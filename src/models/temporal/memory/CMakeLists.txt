@@ -1,8 +1,9 @@
 # Memory Component Library
 # Hierarchical memory system components
 
-# Memory component sources
+# Memory component sources (cycle-accurate/temporal implementations)
 set(MEMORY_COMPONENT_SOURCES
+    # Memory hierarchy
     external_memory.cpp
     memory_map.cpp
     sparse_memory.cpp
@@ -15,20 +16,16 @@ set(MEMORY_COMPONENT_SOURCES
     storage_scheduler.cpp
     memory_orchestrator_integration.cpp
     address_decoder.cpp
-    memory_controller.cpp
-    lpddr5_memory_controller.cpp
-    ddr5_memory_controller.cpp
-    gddr6_memory_controller.cpp
-    gddr7_memory_controller.cpp
-    hbm2_memory_controller.cpp
-    hbm3_memory_controller.cpp
-    # Multi-fidelity memory controller framework
-    behavioral_memory_controller.cpp
-    transactional_memory_controller.cpp
-    memory_controller_factory.cpp
-    # Multi-fidelity L3 tile framework
-    behavioral_l3_tile.cpp
-    transactional_l3_tile.cpp
+    # Memory controllers
+    controllers/controller_base.cpp
+    controllers/controller_factory.cpp
+    controllers/lpddr5_controller.cpp
+    controllers/ddr5_controller.cpp
+    controllers/gddr6_controller.cpp
+    controllers/gddr7_controller.cpp
+    controllers/hbm2_controller.cpp
+    controllers/hbm3_controller.cpp
+    # L3 tile factory
     l3_tile_factory.cpp
 )
 
@@ -43,10 +40,12 @@ target_include_directories(kpu_memory_components
         ${CMAKE_CURRENT_SOURCE_DIR}
 )
 
-# Link dependencies if needed
+# Link dependencies
+# Factories reference behavioral/transactional implementations
 target_link_libraries(kpu_memory_components
     PUBLIC
-        # Add any dependencies here
+        kpu_behavioral
+        kpu_transactional
 )
 
 # Set target properties

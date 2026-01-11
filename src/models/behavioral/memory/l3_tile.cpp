@@ -1,5 +1,5 @@
 // ============================================================================
-// src/components/memory/behavioral_l3_tile.cpp
+// src/models/behavioral/memory/l3_tile.cpp
 // Behavioral (functional) L3 tile implementation
 // ============================================================================
 

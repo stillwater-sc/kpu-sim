@@ -1,6 +1,6 @@
 # Data Movement Component Library
 
-# Data movement component sources
+# Data movement component sources (cycle-accurate/temporal implementations)
 set(DATAMOVEMENT_COMPONENT_SOURCES
     dma_engine.cpp
     block_mover.cpp
@@ -8,10 +8,8 @@ set(DATAMOVEMENT_COMPONENT_SOURCES
     vector_engine.cpp
     l3_interconnect.cpp
     stateful_block_mover.cpp
-    # Multi-fidelity DMA engine framework
-    behavioral_dma_engine.cpp
-    transactional_dma_engine.cpp
     cycle_accurate_dma_engine.cpp
+    # Multi-fidelity factory (behavioral/transactional in src/behavioral, src/transactional)
     dma_engine_factory.cpp
 )
 
@@ -33,6 +31,8 @@ target_link_libraries(kpu_datamovement_components
         kpu_compute_components # VectorEngine depends on SFU from compute components
         kpu_trace             # For cycle-accurate tracing
         kpu_noc               # NoC for L3-to-L3 transfers
+        kpu_behavioral        # Factories reference behavioral implementations
+        kpu_transactional     # Factories reference transactional implementations
 )
 
 # Set target properties
