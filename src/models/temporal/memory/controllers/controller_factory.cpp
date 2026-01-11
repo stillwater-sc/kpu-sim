@@ -5,7 +5,7 @@
 
 #include <sw/kpu/components/memory/memory_controller_interface.hpp>
 #include <sw/kpu/models/behavioral/memory/memory_controller.hpp>
-#include <sw/kpu/components/memory/transactional_memory_controller.hpp>
+#include <sw/kpu/models/transactional/memory/memory_controller.hpp>
 #include <sw/kpu/models/temporal/memory/controllers/lpddr5_controller.hpp>
 #include <sw/kpu/models/temporal/memory/controllers/ddr5_controller.hpp>
 #include <sw/kpu/models/temporal/memory/controllers/gddr6_controller.hpp>

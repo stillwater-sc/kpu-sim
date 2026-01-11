@@ -14,10 +14,10 @@ set(TRANSACTIONAL_SOURCES
 )
 
 set(TRANSACTIONAL_HEADERS
-    ${CMAKE_SOURCE_DIR}/include/sw/kpu/components/memory/transactional_memory_controller.hpp
-    ${CMAKE_SOURCE_DIR}/include/sw/kpu/components/memory/transactional_l3_tile.hpp
-    ${CMAKE_SOURCE_DIR}/include/sw/kpu/components/compute/transactional_compute_fabric.hpp
-    ${CMAKE_SOURCE_DIR}/include/sw/kpu/components/dma/transactional_dma_engine.hpp
+    ${CMAKE_SOURCE_DIR}/include/sw/kpu/models/transactional/memory/memory_controller.hpp
+    ${CMAKE_SOURCE_DIR}/include/sw/kpu/models/transactional/memory/l3_tile.hpp
+    ${CMAKE_SOURCE_DIR}/include/sw/kpu/models/transactional/compute/compute_fabric.hpp
+    ${CMAKE_SOURCE_DIR}/include/sw/kpu/models/transactional/datamovement/dma_engine.hpp
 )
 
 add_library(kpu_transactional STATIC

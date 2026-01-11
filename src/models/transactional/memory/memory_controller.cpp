@@ -3,7 +3,7 @@
 // Transactional (queue-based) memory controller implementation
 // ============================================================================
 
-#include <sw/kpu/components/memory/transactional_memory_controller.hpp>
+#include <sw/kpu/models/transactional/memory/memory_controller.hpp>
 
 #include <algorithm>
 #include <cstring>

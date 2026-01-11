@@ -3,7 +3,7 @@
 // Transactional (bandwidth-limited) DMA engine implementation
 // ============================================================================
 
-#include <sw/kpu/components/dma/transactional_dma_engine.hpp>
+#include <sw/kpu/models/transactional/datamovement/dma_engine.hpp>
 
 #include <algorithm>
 #include <limits>

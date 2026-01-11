@@ -3,7 +3,7 @@
 // Transactional compute fabric implementation
 // ============================================================================
 
-#include <sw/kpu/components/compute/transactional_compute_fabric.hpp>
+#include <sw/kpu/models/transactional/compute/compute_fabric.hpp>
 
 #include <algorithm>
 

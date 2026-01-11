@@ -5,7 +5,7 @@
 
 #include <sw/kpu/components/memory/l3_tile_interface.hpp>
 #include <sw/kpu/models/behavioral/memory/l3_tile.hpp>
-#include <sw/kpu/components/memory/transactional_l3_tile.hpp>
+#include <sw/kpu/models/transactional/memory/l3_tile.hpp>
 #include <stdexcept>
 #include <sstream>
 

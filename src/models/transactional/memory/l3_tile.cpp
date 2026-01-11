@@ -3,7 +3,7 @@
 // Transactional L3 tile implementation
 // ============================================================================
 
-#include <sw/kpu/components/memory/transactional_l3_tile.hpp>
+#include <sw/kpu/models/transactional/memory/l3_tile.hpp>
 
 #include <algorithm>
 #include <cstring>
