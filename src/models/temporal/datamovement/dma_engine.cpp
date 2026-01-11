@@ -6,8 +6,8 @@
 
 #include <sw/memory/external_memory.hpp>
 #include <sw/memory/address_decoder.hpp>
-#include <sw/kpu/components/dma_engine.hpp>
-#include <sw/kpu/components/l3_tile.hpp>
+#include <sw/kpu/models/temporal/datamovement/dma_engine.hpp>
+#include <sw/kpu/models/temporal/memory/l3_tile.hpp>
 #include <sw/kpu/components/memory_controller.hpp>
 
 namespace sw::kpu {

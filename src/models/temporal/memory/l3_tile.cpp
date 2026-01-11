@@ -2,7 +2,7 @@
 #include <cstring>
 #include <stdexcept>
 
-#include <sw/kpu/components/l3_tile.hpp>
+#include <sw/kpu/models/temporal/memory/l3_tile.hpp>
 
 namespace sw::kpu {
 

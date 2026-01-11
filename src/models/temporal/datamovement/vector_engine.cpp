@@ -1,7 +1,7 @@
 // Vector Engine Implementation
 // Inline bias addition and activation processing during L1→L2 transfer
 
-#include <sw/kpu/components/vector_engine.hpp>
+#include <sw/kpu/models/temporal/datamovement/vector_engine.hpp>
 #include <stdexcept>
 #include <cstring>
 

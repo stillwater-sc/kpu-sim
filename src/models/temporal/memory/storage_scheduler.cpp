@@ -1,4 +1,4 @@
-#include <sw/kpu/components/storage_scheduler.hpp>
+#include <sw/kpu/models/temporal/memory/storage_scheduler.hpp>
 #include <sw/kpu/components/block_mover.hpp>
 #include <sw/kpu/components/streamer.hpp>
 #include <algorithm>

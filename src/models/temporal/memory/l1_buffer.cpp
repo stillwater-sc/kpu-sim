@@ -2,7 +2,7 @@
 #include <cstring>
 #include <stdexcept>
 
-#include <sw/kpu/components/l1_buffer.hpp>
+#include <sw/kpu/models/temporal/memory/l1_buffer.hpp>
 
 namespace sw::kpu {
 

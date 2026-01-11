@@ -3,7 +3,7 @@
 // L3 Tile Mesh Interconnect Implementation
 // ============================================================================
 
-#include "sw/kpu/components/l3_interconnect.hpp"
+#include <sw/kpu/models/temporal/datamovement/l3_interconnect.hpp>
 #include <iostream>
 #include <sstream>
 #include <iomanip>

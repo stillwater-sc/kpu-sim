@@ -3,9 +3,9 @@
 #include <stdexcept>
 #include <cmath>
 
-#include <sw/kpu/components/streamer.hpp>
-#include <sw/kpu/components/l2_bank.hpp>
-#include <sw/kpu/components/l1_buffer.hpp>
+#include <sw/kpu/models/temporal/datamovement/streamer.hpp>
+#include <sw/kpu/models/temporal/memory/l2_bank.hpp>
+#include <sw/kpu/models/temporal/memory/l1_buffer.hpp>
 #include <sw/trace/trace_logger.hpp>
 
 namespace sw::kpu {

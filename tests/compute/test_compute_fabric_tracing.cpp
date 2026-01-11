@@ -8,7 +8,7 @@
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/catch_approx.hpp>
 
-#include <sw/kpu/components/compute_fabric.hpp>
+#include <sw/kpu/models/temporal/compute/compute_fabric.hpp>
 #include <sw/kpu/components/l1_buffer.hpp>
 #include <sw/trace/trace_logger.hpp>
 #include <sw/trace/trace_exporter.hpp>

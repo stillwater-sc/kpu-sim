@@ -3,7 +3,7 @@
 // NoC Adapter Implementations
 // ============================================================================
 
-#include <sw/kpu/noc/noc_adapters.hpp>
+#include <sw/kpu/models/temporal/noc/noc_adapters.hpp>
 
 #include <stdexcept>
 

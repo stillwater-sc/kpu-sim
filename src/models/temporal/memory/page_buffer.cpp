@@ -2,7 +2,7 @@
 #include <cstring>
 #include <stdexcept>
 
-#include <sw/kpu/components/page_buffer.hpp>
+#include <sw/kpu/models/temporal/memory/page_buffer.hpp>
 
 namespace sw::kpu {
 

@@ -2,7 +2,7 @@
 #include <cstring>
 #include <stdexcept>
 
-#include <sw/kpu/components/l2_bank.hpp>
+#include <sw/kpu/models/temporal/memory/l2_bank.hpp>
 
 namespace sw::kpu {
 

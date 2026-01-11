@@ -1,7 +1,7 @@
 // Special Function Unit (SFU) Implementation
 // LUT-based activation functions with linear interpolation
 
-#include <sw/kpu/components/sfu.hpp>
+#include <sw/kpu/models/temporal/compute/sfu.hpp>
 #include <stdexcept>
 #include <cmath>
 

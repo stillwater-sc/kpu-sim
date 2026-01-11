@@ -2,7 +2,7 @@
 #include <cstring>
 #include <stdexcept>
 
-#include <sw/kpu/components/scratchpad.hpp>
+#include <sw/kpu/models/temporal/memory/scratchpad.hpp>
 
 namespace sw::kpu {
 

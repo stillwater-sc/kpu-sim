@@ -5,9 +5,9 @@
 #include <algorithm>
 #include <cstring>
 
-#include <sw/kpu/components/block_mover.hpp>
-#include <sw/kpu/components/l3_tile.hpp>
-#include <sw/kpu/components/l2_bank.hpp>
+#include <sw/kpu/models/temporal/datamovement/block_mover.hpp>
+#include <sw/kpu/models/temporal/memory/l3_tile.hpp>
+#include <sw/kpu/models/temporal/memory/l2_bank.hpp>
 #include <sw/trace/trace_logger.hpp>
 
 namespace sw::kpu {

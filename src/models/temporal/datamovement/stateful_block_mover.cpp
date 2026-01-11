@@ -3,7 +3,7 @@
 // Stateful BlockMover Implementation
 // ============================================================================
 
-#include "sw/kpu/components/stateful_block_mover.hpp"
+#include <sw/kpu/models/temporal/datamovement/stateful_block_mover.hpp>
 #include <sstream>
 #include <iomanip>
 

@@ -2,7 +2,7 @@
 #include <stdexcept>
 #include <cmath>
 
-#include <sw/kpu/components/systolic_array.hpp>
+#include <sw/kpu/models/temporal/compute/systolic_array.hpp>
 
 namespace sw::kpu {
 

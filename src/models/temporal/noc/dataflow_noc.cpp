@@ -3,7 +3,7 @@
 // Unified Dataflow Network-on-Chip Implementation
 // ============================================================================
 
-#include <sw/kpu/noc/dataflow_noc.hpp>
+#include <sw/kpu/models/temporal/noc/dataflow_noc.hpp>
 
 #include <algorithm>
 #include <stdexcept>

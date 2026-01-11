@@ -3,7 +3,7 @@
 // Network-on-Chip Implementation
 // ============================================================================
 
-#include "sw/kpu/noc/noc.hpp"
+#include <sw/kpu/models/temporal/noc/noc.hpp>
 
 #include <algorithm>
 #include <fstream>

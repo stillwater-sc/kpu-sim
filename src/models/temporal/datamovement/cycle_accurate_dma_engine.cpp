@@ -3,7 +3,7 @@
 // Cycle-accurate DMA engine implementation
 // ============================================================================
 
-#include <sw/kpu/components/dma/cycle_accurate_dma_engine.hpp>
+#include <sw/kpu/models/temporal/datamovement/cycle_accurate_dma_engine.hpp>
 
 #include <algorithm>
 #include <stdexcept>

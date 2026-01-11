@@ -4,7 +4,7 @@
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/catch_approx.hpp>
 
-#include <sw/kpu/components/sfu.hpp>
+#include <sw/kpu/models/temporal/compute/sfu.hpp>
 #include <cmath>
 #include <vector>
 

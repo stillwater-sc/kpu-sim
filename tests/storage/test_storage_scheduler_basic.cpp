@@ -1,6 +1,6 @@
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/catch_approx.hpp>
-#include <sw/kpu/components/storage_scheduler.hpp>
+#include <sw/kpu/models/temporal/memory/storage_scheduler.hpp>
 #include <vector>
 #include <algorithm>
 #include <cstring>

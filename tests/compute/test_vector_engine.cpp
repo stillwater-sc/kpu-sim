@@ -4,7 +4,7 @@
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/catch_approx.hpp>
 
-#include <sw/kpu/components/vector_engine.hpp>
+#include <sw/kpu/models/temporal/datamovement/vector_engine.hpp>
 #include <cmath>
 #include <vector>
 #include <cstring>

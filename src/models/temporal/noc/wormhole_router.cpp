@@ -3,7 +3,7 @@
 // Wormhole Router Implementation
 // ============================================================================
 
-#include "sw/kpu/noc/wormhole_router.hpp"
+#include <sw/kpu/models/temporal/noc/wormhole_router.hpp>
 
 #include <algorithm>
 #include <fstream>
