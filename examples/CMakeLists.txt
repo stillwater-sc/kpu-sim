@@ -43,6 +43,10 @@ if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/mlp)
     add_subdirectory(mlp)
 endif()
 
+if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/behavioral)
+    add_subdirectory(behavioral)
+endif()
+
 if(KPU_BUILD_PYTHON_BINDINGS)
     # Python examples are handled by the Python package
     if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/python)

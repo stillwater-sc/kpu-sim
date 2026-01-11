@@ -10,14 +10,23 @@ set(BEHAVIORAL_SOURCES
     memory/l3_tile.cpp
     # Compute models
     compute/compute_fabric.cpp
+    compute/vector_engine.cpp
     # Data movement models
     datamovement/dma_engine.cpp
+    datamovement/block_mover.cpp
     # NoC models
     noc/noc.cpp
+    # Orchestration and execution
+    orchestrator.cpp
+    mlp_executor.cpp
 )
 
 set(BEHAVIORAL_HEADERS
     ${CMAKE_SOURCE_DIR}/include/sw/kpu/behavioral/memory_model.hpp
+    ${CMAKE_SOURCE_DIR}/include/sw/kpu/behavioral/block_mover.hpp
+    ${CMAKE_SOURCE_DIR}/include/sw/kpu/behavioral/vector_engine.hpp
+    ${CMAKE_SOURCE_DIR}/include/sw/kpu/behavioral/orchestrator.hpp
+    ${CMAKE_SOURCE_DIR}/include/sw/kpu/behavioral/mlp_executor.hpp
     ${CMAKE_SOURCE_DIR}/include/sw/kpu/components/memory/behavioral_memory_controller.hpp
     ${CMAKE_SOURCE_DIR}/include/sw/kpu/components/memory/behavioral_l3_tile.hpp
     ${CMAKE_SOURCE_DIR}/include/sw/kpu/components/compute/behavioral_compute_fabric.hpp
@@ -38,6 +47,7 @@ target_include_directories(kpu_behavioral PUBLIC
 target_link_libraries(kpu_behavioral
     PUBLIC
         kpu_trace
+        kpu_compute_components  # For SFU (activation functions)
     PRIVATE
         $<TARGET_NAME_IF_EXISTS:spdlog::spdlog>
 )
