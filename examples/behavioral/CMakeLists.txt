@@ -19,6 +19,14 @@ set_target_properties(xor_behavioral PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/examples/behavioral
 )
 
+# OFG trace demo - demonstrates multi-level tracing with Chrome Trace export
+add_executable(ofg_trace_demo ofg_trace_demo.cpp)
+target_link_libraries(ofg_trace_demo PRIVATE kpu_behavioral)
+set_target_properties(ofg_trace_demo PROPERTIES
+    FOLDER "Examples/Behavioral"
+    RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/examples/behavioral
+)
+
 # Add tests
 add_test(NAME behavioral_matmul COMMAND matmul_behavioral)
 add_test(NAME behavioral_xor COMMAND xor_behavioral)

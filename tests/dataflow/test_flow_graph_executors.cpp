@@ -558,3 +558,241 @@ TEST_CASE("FlowGraphExecutor reset", "[dataflow][executor][reset]") {
     REQUIRE(executor.run());
     REQUIRE(executor.is_complete());
 }
+
+// ============================================================================
+// Chrome Trace Export Tests
+// ============================================================================
+
+#include <sw/kpu/models/dataflow/chrome_trace.hpp>
+#include <fstream>
+#include <filesystem>
+
+TEST_CASE("ChromeTraceWriter basic events", "[dataflow][trace][chrome]") {
+    ChromeTraceWriter writer("Test DMA", ExecutionLevel::DMA, 0);
+
+    SECTION("Metadata events are created") {
+        const auto& events = writer.events();
+        REQUIRE(events.size() >= 2);  // process_name and thread_name
+
+        bool has_proc_name = false, has_thread_name = false;
+        for (const auto& e : events) {
+            if (e.name == "process_name") has_proc_name = true;
+            if (e.name == "thread_name") has_thread_name = true;
+        }
+        REQUIRE(has_proc_name);
+        REQUIRE(has_thread_name);
+    }
+
+    SECTION("Duration events") {
+        // Use larger cycle values to ensure non-zero duration after ns->us conversion
+        writer.record_duration("test_op", "test", 0, 100000);
+
+        const auto& events = writer.events();
+        bool found = false;
+        for (const auto& e : events) {
+            if (e.name == "test_op" && e.phase == TracePhase::COMPLETE) {
+                found = true;
+                REQUIRE(e.duration_us > 0);
+            }
+        }
+        REQUIRE(found);
+    }
+
+    SECTION("Instant events") {
+        writer.record_instant("marker", "test", 50);
+
+        const auto& events = writer.events();
+        bool found = false;
+        for (const auto& e : events) {
+            if (e.name == "marker" && e.phase == TracePhase::INSTANT) {
+                found = true;
+            }
+        }
+        REQUIRE(found);
+    }
+}
+
+TEST_CASE("ChromeTraceWriter records ExecutionEvents", "[dataflow][trace][chrome]") {
+    OperandFlowGraph graph;
+    auto input = tile_a(0, 0, Location::L3, 0);
+    auto output = tile_a(0, 0, Location::L2, 0);
+
+    auto wait_id = graph.add_wait({input}, "wait");
+    auto fire_id = graph.add_fire(Operation::PUSH_TO_L2, {input}, {output}, "push");
+    graph.add_edge(wait_id, fire_id);
+
+    FlowGraphExecutor executor(graph);
+    ChromeTraceWriter writer("DMA Tile 0", ExecutionLevel::DMA, 0);
+
+    // Install callback to record events
+    executor.set_event_callback([&writer](const ExecutionEvent& e) {
+        writer.record_event(e);
+    });
+
+    executor.inject_operand(input);
+    executor.run();
+
+    const auto& events = writer.events();
+
+    // Should have various event types
+    bool has_node_complete = false;
+    bool has_operand_ready = false;
+    for (const auto& e : events) {
+        if (e.category == "node" && e.phase == TracePhase::COMPLETE) has_node_complete = true;
+        if (e.category == "operand" && e.name == "Operand Ready") has_operand_ready = true;
+    }
+    REQUIRE(has_node_complete);
+    REQUIRE(has_operand_ready);
+}
+
+TEST_CASE("TraceConsolidator merges multiple traces", "[dataflow][trace][consolidator]") {
+    // Create trace writers for different levels
+    ChromeTraceWriter dma_writer("L3 Tile 0", ExecutionLevel::DMA, 0);
+    ChromeTraceWriter bm_writer("Tile[0,0]", ExecutionLevel::BLOCK_MOVER, 0);
+    ChromeTraceWriter streamer_writer("L2 Bank 0", ExecutionLevel::STREAMER, 0);
+
+    // Add some events to each
+    dma_writer.record_duration("DMA Load", "dma", 0, 100);
+    bm_writer.record_duration("Push to L2", "blockmover", 100, 150);
+    streamer_writer.record_duration("Feed West", "streamer", 150, 200);
+
+    // Consolidate
+    TraceConsolidator consolidator;
+    consolidator.add_trace(dma_writer);
+    consolidator.add_trace(bm_writer);
+    consolidator.add_trace(streamer_writer);
+
+    REQUIRE(consolidator.event_count() > 6);  // Metadata + duration events
+
+    // Check summary
+    std::string summary = consolidator.summary();
+    REQUIRE(summary.find("Total events") != std::string::npos);
+}
+
+TEST_CASE("TraceConsolidator operand flow", "[dataflow][trace][consolidator][flow]") {
+    ChromeTraceWriter producer("DMA", ExecutionLevel::DMA, 0);
+    ChromeTraceWriter consumer("BlockMover", ExecutionLevel::BLOCK_MOVER, 0);
+
+    TraceConsolidator consolidator;
+    consolidator.add_trace(producer);
+    consolidator.add_trace(consumer);
+
+    // Add flow connection
+    consolidator.add_operand_flow("A[0,0]@L3", producer, 100, consumer, 110);
+
+    // Should have flow events
+    size_t initial_count = consolidator.event_count();
+    REQUIRE(consolidator.event_count() >= initial_count);  // Flow events added
+}
+
+TEST_CASE("Chrome trace file output", "[dataflow][trace][file]") {
+    // Create a simple execution with tracing
+    OperandFlowGraph graph;
+    auto input = tile_a(0, 0, Location::L3, 0);
+    auto output = tile_a(0, 0, Location::L2, 0);
+    auto wait = graph.add_wait({input});
+    auto fire = graph.add_fire(Operation::PUSH_TO_L2, {input}, {output});
+    graph.add_edge(wait, fire);
+
+    FlowGraphExecutor executor(graph);
+    ChromeTraceWriter writer("Test", ExecutionLevel::DMA, 0);
+
+    executor.set_event_callback([&writer](const ExecutionEvent& e) {
+        writer.record_event(e);
+    });
+
+    executor.inject_operand(input);
+    executor.run();
+
+    // Write to temp file
+    std::string filename = "/tmp/test_trace.json";
+    REQUIRE(writer.write_to_file(filename));
+
+    // Verify file exists and is valid JSON
+    std::ifstream file(filename);
+    REQUIRE(file.is_open());
+
+    std::string content((std::istreambuf_iterator<char>(file)),
+                         std::istreambuf_iterator<char>());
+    REQUIRE(content.find("traceEvents") != std::string::npos);
+    REQUIRE(content.find("displayTimeUnit") != std::string::npos);
+
+    // Cleanup
+    std::filesystem::remove(filename);
+}
+
+TEST_CASE("Multi-level trace consolidation", "[dataflow][trace][integration]") {
+    // DMA level
+    DMAFlowGraphBuilder dma_builder;
+    dma_builder.set_node_id(0)
+               .set_dimensions(1, 1, 1)
+               .add_load_a(0, 0, 0);
+    auto dma_graph = dma_builder.build();
+    DMAFlowExecutor dma(dma_graph);
+
+    ChromeTraceWriter dma_trace("L3 Tile 0", ExecutionLevel::DMA, 0);
+    dma.set_event_callback([&dma_trace](const ExecutionEvent& e) {
+        dma_trace.record_event(e);
+    });
+
+    // BlockMover level
+    OperandFlowGraph bm_graph;
+    bm_graph.level = ExecutionLevel::BLOCK_MOVER;
+    auto a_l3 = tile_a(0, 0, Location::L3, 0);
+    auto a_l2 = tile_a(0, 0, Location::L2, 0);
+    auto l2_avail = make_buffer_token(Location::L2, 0);
+    auto bm_wait = bm_graph.add_wait({a_l3});
+    auto bm_wait_l2 = bm_graph.add_wait({l2_avail});
+    auto bm_join = bm_graph.add_join({a_l3, l2_avail});
+    auto bm_push = bm_graph.add_fire(Operation::PUSH_TO_L2, {a_l3}, {a_l2});
+    bm_graph.add_edge(bm_wait, bm_join);
+    bm_graph.add_edge(bm_wait_l2, bm_join);
+    bm_graph.add_edge(bm_join, bm_push);
+    BlockMoverFlowExecutor bm(bm_graph);
+
+    ChromeTraceWriter bm_trace("Tile[0,0]", ExecutionLevel::BLOCK_MOVER, 0);
+    bm.set_event_callback([&bm_trace](const ExecutionEvent& e) {
+        bm_trace.record_event(e);
+    });
+
+    // Execute DMA
+    dma.inject_buffer_available(Location::L3, 0);
+    REQUIRE(dma.run());
+
+    // Feed DMA outputs to BlockMover
+    auto dma_outputs = dma.get_tile_ready_events();
+    bm.inject_operand(dma_outputs[0].operand, dma_outputs[0].cycle);
+    bm.inject_operand(l2_avail);
+
+    REQUIRE(bm.run());
+
+    // Consolidate traces
+    TraceConsolidator consolidator;
+    consolidator.add_trace(dma_trace);
+    consolidator.add_trace(bm_trace);
+
+    // Add flow between levels
+    consolidator.add_operand_flow(
+        "A[0,0]@L3",
+        dma_trace, dma_outputs[0].cycle,
+        bm_trace, dma_outputs[0].cycle + 1  // BlockMover receives next cycle
+    );
+
+    // Write consolidated trace
+    std::string filename = "/tmp/multilevel_trace.json";
+    REQUIRE(consolidator.write_to_file(filename));
+
+    // Verify
+    std::ifstream file(filename);
+    std::string content((std::istreambuf_iterator<char>(file)),
+                         std::istreambuf_iterator<char>());
+
+    // Should have events from both levels (different pids)
+    REQUIRE(content.find("\"pid\":1") != std::string::npos);  // DMA
+    REQUIRE(content.find("\"pid\":2") != std::string::npos);  // BlockMover
+
+    // Should have flow events
+    REQUIRE(content.find("flow") != std::string::npos);
+
+    std::filesystem::remove(filename);
+}

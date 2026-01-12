@@ -1,0 +1,1235 @@
+<!DOCTYPE html>
+<!--
+  KPU OFG Execution Animation
+
+  Visualizes Operand Flow Graph execution showing:
+  - Concurrent OFG executors at each memory level
+  - Dataflow-driven triggering between levels
+  - Operand movement through the memory hierarchy
+
+  Data Sources:
+  - Load JSON trace file from behavioral/transactional/temporal simulator
+  - Use embedded demo trace for testing
+
+  SPDX-License-Identifier: MIT
+  Copyright (c) 2024-2026 Stillwater Supercomputing, Inc.
+-->
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>KPU OFG Execution Animation</title>
+    <style>
+        :root {
+            --bg: #0a0e14;
+            --bg-panel: #151a21;
+            --bg-memory: #1a1f27;
+            --border: #2d333b;
+            --text: #e6edf3;
+            --text-dim: #7d8590;
+
+            --color-a: #ef4444;
+            --color-b: #22c55e;
+            --color-c: #fbbf24;
+
+            --color-dma: #f59e0b;
+            --color-blockmover: #3b82f6;
+            --color-streamer: #8b5cf6;
+            --color-compute: #ec4899;
+
+            --state-waiting: #4b5563;
+            --state-ready: #fbbf24;
+            --state-firing: #22c55e;
+            --state-done: #6b7280;
+
+            --trigger-color: #22d3ee;
+        }
+
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+
+        body {
+            font-family: 'SF Mono', Monaco, 'Consolas', monospace;
+            background: var(--bg);
+            color: var(--text);
+            min-height: 100vh;
+            padding: 12px;
+        }
+
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+        }
+
+        .header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 12px 16px;
+            background: var(--bg-panel);
+            border-radius: 8px;
+            margin-bottom: 12px;
+        }
+
+        .header h1 {
+            font-size: 14px;
+            font-weight: 500;
+        }
+
+        .controls {
+            display: flex;
+            gap: 8px;
+            align-items: center;
+        }
+
+        button {
+            background: #2d333b;
+            color: var(--text);
+            border: none;
+            padding: 6px 12px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 12px;
+            font-family: inherit;
+        }
+
+        button:hover { background: #3d444d; }
+        button.active { background: var(--color-blockmover); }
+        button:disabled { opacity: 0.5; cursor: not-allowed; }
+
+        .file-input {
+            display: none;
+        }
+
+        .cycle-display {
+            background: #2d333b;
+            padding: 6px 12px;
+            border-radius: 4px;
+            font-size: 12px;
+            min-width: 120px;
+            text-align: center;
+        }
+
+        .speed-control {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            font-size: 11px;
+            color: var(--text-dim);
+        }
+
+        .speed-control input {
+            width: 80px;
+        }
+
+        .main-content {
+            display: grid;
+            grid-template-columns: 1fr 280px;
+            gap: 12px;
+        }
+
+        .visualization {
+            background: var(--bg-panel);
+            border-radius: 8px;
+            padding: 16px;
+            min-height: 700px;
+        }
+
+        .sidebar {
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+        }
+
+        .panel {
+            background: var(--bg-panel);
+            border-radius: 8px;
+            padding: 12px;
+        }
+
+        .panel h3 {
+            font-size: 10px;
+            text-transform: uppercase;
+            color: var(--text-dim);
+            margin-bottom: 8px;
+            letter-spacing: 0.5px;
+        }
+
+        /* Memory Hierarchy Visualization */
+        .memory-hierarchy {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+
+        .memory-level {
+            background: var(--bg-memory);
+            border-radius: 6px;
+            padding: 12px;
+            position: relative;
+        }
+
+        .memory-level-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 8px;
+        }
+
+        .memory-level-title {
+            font-size: 11px;
+            font-weight: 600;
+            color: var(--text-dim);
+        }
+
+        .memory-level.host { border-left: 3px solid var(--text-dim); }
+        .memory-level.l3 { border-left: 3px solid var(--color-dma); }
+        .memory-level.l2 { border-left: 3px solid var(--color-blockmover); }
+        .memory-level.l1-compute { border-left: 3px solid var(--color-streamer); }
+
+        /* Storage containers */
+        .storage-row {
+            display: flex;
+            gap: 6px;
+            flex-wrap: wrap;
+        }
+
+        .storage-cell {
+            width: 60px;
+            height: 40px;
+            background: var(--bg);
+            border: 1px solid var(--border);
+            border-radius: 4px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 9px;
+            color: var(--text-dim);
+            position: relative;
+            overflow: hidden;
+        }
+
+        .storage-cell.large {
+            width: 80px;
+            height: 50px;
+        }
+
+        .storage-cell .tile {
+            position: absolute;
+            inset: 2px;
+            border-radius: 2px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 10px;
+            font-weight: 600;
+            color: white;
+            opacity: 0;
+            transform: scale(0.8);
+            transition: opacity 0.3s, transform 0.3s;
+        }
+
+        .storage-cell .tile.visible {
+            opacity: 1;
+            transform: scale(1);
+        }
+
+        .storage-cell .tile.tile-a { background: var(--color-a); }
+        .storage-cell .tile.tile-b { background: var(--color-b); }
+        .storage-cell .tile.tile-c { background: var(--color-c); }
+
+        /* OFG Executor Display */
+        .ofg-executor {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 8px;
+            background: rgba(0,0,0,0.2);
+            border-radius: 4px;
+            margin-top: 8px;
+        }
+
+        .ofg-label {
+            font-size: 10px;
+            color: var(--text-dim);
+            min-width: 80px;
+        }
+
+        .ofg-nodes {
+            display: flex;
+            gap: 4px;
+            align-items: center;
+        }
+
+        .ofg-node {
+            width: 20px;
+            height: 20px;
+            border-radius: 50%;
+            background: var(--state-waiting);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 8px;
+            color: white;
+            transition: background 0.2s, transform 0.2s;
+        }
+
+        .ofg-node.ready { background: var(--state-ready); }
+        .ofg-node.firing { background: var(--state-firing); transform: scale(1.2); }
+        .ofg-node.done { background: var(--state-done); }
+
+        .ofg-arrow {
+            color: var(--text-dim);
+            font-size: 10px;
+        }
+
+        /* L1 Stream Buffers */
+        .stream-buffers {
+            display: flex;
+            gap: 16px;
+            margin-bottom: 12px;
+        }
+
+        .stream-buffer {
+            flex: 1;
+        }
+
+        .stream-buffer-label {
+            font-size: 9px;
+            color: var(--text-dim);
+            margin-bottom: 4px;
+        }
+
+        .stream-buffer-bar {
+            height: 16px;
+            background: var(--bg);
+            border-radius: 2px;
+            overflow: hidden;
+            display: flex;
+        }
+
+        .stream-buffer-fill {
+            height: 100%;
+            transition: width 0.3s;
+        }
+
+        .stream-buffer-fill.a { background: var(--color-a); }
+        .stream-buffer-fill.b { background: var(--color-b); }
+        .stream-buffer-fill.c { background: var(--color-c); }
+
+        /* Compute Tile */
+        .compute-tile {
+            display: flex;
+            justify-content: center;
+            margin-top: 8px;
+        }
+
+        .systolic-array {
+            display: grid;
+            grid-template-columns: repeat(4, 24px);
+            gap: 2px;
+            padding: 8px;
+            background: var(--bg);
+            border-radius: 4px;
+        }
+
+        .pe-cell {
+            width: 24px;
+            height: 24px;
+            background: var(--bg-panel);
+            border: 1px solid var(--border);
+            border-radius: 2px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 8px;
+            color: var(--text-dim);
+            transition: background 0.2s, border-color 0.2s;
+        }
+
+        .pe-cell.active {
+            background: rgba(236, 72, 153, 0.3);
+            border-color: var(--color-compute);
+        }
+
+        /* Data Flow Arrows */
+        .flow-indicator {
+            display: flex;
+            justify-content: center;
+            padding: 4px 0;
+        }
+
+        .flow-arrow {
+            color: var(--text-dim);
+            font-size: 16px;
+            opacity: 0.5;
+            transition: opacity 0.3s, color 0.3s;
+        }
+
+        .flow-arrow.active {
+            opacity: 1;
+            color: var(--trigger-color);
+            animation: pulse 0.5s ease-in-out;
+        }
+
+        @keyframes pulse {
+            0%, 100% { transform: scale(1); }
+            50% { transform: scale(1.3); }
+        }
+
+        /* Event Log */
+        .event-log {
+            max-height: 200px;
+            overflow-y: auto;
+            font-size: 10px;
+        }
+
+        .event-item {
+            padding: 4px 6px;
+            border-bottom: 1px solid var(--border);
+            display: flex;
+            gap: 8px;
+        }
+
+        .event-cycle {
+            color: var(--text-dim);
+            min-width: 40px;
+        }
+
+        .event-level {
+            min-width: 60px;
+            font-weight: 600;
+        }
+
+        .event-level.dma { color: var(--color-dma); }
+        .event-level.block_mover { color: var(--color-blockmover); }
+        .event-level.streamer { color: var(--color-streamer); }
+        .event-level.compute { color: var(--color-compute); }
+
+        .event-desc {
+            color: var(--text);
+        }
+
+        /* Legend */
+        .legend-item {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            font-size: 10px;
+            margin-bottom: 4px;
+        }
+
+        .legend-color {
+            width: 14px;
+            height: 14px;
+            border-radius: 2px;
+        }
+
+        /* Trigger visualization */
+        .trigger-line {
+            position: absolute;
+            height: 2px;
+            background: var(--trigger-color);
+            transform-origin: left center;
+            opacity: 0;
+            transition: opacity 0.3s;
+        }
+
+        .trigger-line.active {
+            opacity: 1;
+            animation: trigger-flash 0.5s ease-out;
+        }
+
+        @keyframes trigger-flash {
+            0% { opacity: 1; box-shadow: 0 0 10px var(--trigger-color); }
+            100% { opacity: 0; }
+        }
+
+        /* Status indicator */
+        .status-bar {
+            display: flex;
+            gap: 16px;
+            padding: 8px 12px;
+            background: rgba(0,0,0,0.2);
+            border-radius: 4px;
+            font-size: 10px;
+            margin-top: 12px;
+        }
+
+        .status-item {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+        }
+
+        .status-dot.idle { background: var(--state-waiting); }
+        .status-dot.active { background: var(--state-firing); }
+        .status-dot.complete { background: var(--color-c); }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>KPU OFG Execution Visualization</h1>
+            <div class="controls">
+                <input type="file" id="fileInput" class="file-input" accept=".json">
+                <button onclick="document.getElementById('fileInput').click()">Load Trace</button>
+                <button onclick="loadDemoTrace()">Demo</button>
+                <button id="btnStep" onclick="stepForward()">Step</button>
+                <button id="btnPlay" onclick="togglePlay()">Play</button>
+                <button onclick="reset()">Reset</button>
+                <div class="cycle-display">
+                    Cycle: <span id="cycleNum">0</span>
+                </div>
+                <div class="speed-control">
+                    <span>Speed:</span>
+                    <input type="range" id="speedSlider" min="1" max="10" value="5">
+                </div>
+            </div>
+        </div>
+
+        <div class="main-content">
+            <div class="visualization">
+                <div class="memory-hierarchy" id="memoryHierarchy">
+                    <!-- Host Memory -->
+                    <div class="memory-level host">
+                        <div class="memory-level-header">
+                            <span class="memory-level-title">HOST MEMORY</span>
+                        </div>
+                        <div class="storage-row" id="hostStorage">
+                            <div class="storage-cell large" id="host-a">
+                                <span>A[M,K]</span>
+                                <div class="tile tile-a" id="host-tile-a">A</div>
+                            </div>
+                            <div class="storage-cell large" id="host-b">
+                                <span>B[K,N]</span>
+                                <div class="tile tile-b" id="host-tile-b">B</div>
+                            </div>
+                            <div class="storage-cell large" id="host-c" style="margin-left: auto;">
+                                <span>C[M,N]</span>
+                                <div class="tile tile-c" id="host-tile-c">C</div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- DMA Level -->
+                    <div class="flow-indicator">
+                        <span class="flow-arrow" id="flow-host-l3">↕</span>
+                    </div>
+                    <div class="ofg-executor" style="background: rgba(245, 158, 11, 0.1); border: 1px solid var(--color-dma);">
+                        <span class="ofg-label" style="color: var(--color-dma);">DMA OFG</span>
+                        <div class="ofg-nodes" id="dma-ofg-nodes">
+                            <div class="ofg-node" id="dma-node-0">W</div>
+                            <span class="ofg-arrow">→</span>
+                            <div class="ofg-node" id="dma-node-1">F</div>
+                            <span class="ofg-arrow">→</span>
+                            <div class="ofg-node" id="dma-node-2">P</div>
+                        </div>
+                    </div>
+
+                    <!-- L3 Memory -->
+                    <div class="flow-indicator">
+                        <span class="flow-arrow" id="flow-dma-l3">↓</span>
+                    </div>
+                    <div class="memory-level l3">
+                        <div class="memory-level-header">
+                            <span class="memory-level-title">L3 TILE ARRAY (4 × 128KB)</span>
+                        </div>
+                        <div class="storage-row" id="l3Storage">
+                            <div class="storage-cell" id="l3-0">
+                                <span>L3[0]</span>
+                                <div class="tile tile-a" id="l3-0-tile"></div>
+                            </div>
+                            <div class="storage-cell" id="l3-1">
+                                <span>L3[1]</span>
+                                <div class="tile tile-b" id="l3-1-tile"></div>
+                            </div>
+                            <div class="storage-cell" id="l3-2">
+                                <span>L3[2]</span>
+                                <div class="tile tile-c" id="l3-2-tile"></div>
+                            </div>
+                            <div class="storage-cell" id="l3-3">
+                                <span>L3[3]</span>
+                                <div class="tile" id="l3-3-tile"></div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- BlockMover Level -->
+                    <div class="flow-indicator">
+                        <span class="flow-arrow" id="flow-l3-l2">↕</span>
+                    </div>
+                    <div class="ofg-executor" style="background: rgba(59, 130, 246, 0.1); border: 1px solid var(--color-blockmover);">
+                        <span class="ofg-label" style="color: var(--color-blockmover);">BlockMover OFG</span>
+                        <div class="ofg-nodes" id="bm-ofg-nodes">
+                            <div class="ofg-node" id="bm-node-0">W</div>
+                            <span class="ofg-arrow">→</span>
+                            <div class="ofg-node" id="bm-node-1">J</div>
+                            <span class="ofg-arrow">→</span>
+                            <div class="ofg-node" id="bm-node-2">F</div>
+                            <span class="ofg-arrow">→</span>
+                            <div class="ofg-node" id="bm-node-3">P</div>
+                        </div>
+                    </div>
+
+                    <!-- L2 Memory -->
+                    <div class="flow-indicator">
+                        <span class="flow-arrow" id="flow-bm-l2">↓</span>
+                    </div>
+                    <div class="memory-level l2">
+                        <div class="memory-level-header">
+                            <span class="memory-level-title">L2 BANK ARRAY (8 × 64KB)</span>
+                        </div>
+                        <div class="storage-row" id="l2Storage">
+                            <div class="storage-cell" id="l2-0"><span>0</span><div class="tile tile-a" id="l2-0-tile"></div></div>
+                            <div class="storage-cell" id="l2-1"><span>1</span><div class="tile tile-b" id="l2-1-tile"></div></div>
+                            <div class="storage-cell" id="l2-2"><span>2</span><div class="tile tile-c" id="l2-2-tile"></div></div>
+                            <div class="storage-cell" id="l2-3"><span>3</span><div class="tile" id="l2-3-tile"></div></div>
+                            <div class="storage-cell" id="l2-4"><span>4</span><div class="tile" id="l2-4-tile"></div></div>
+                            <div class="storage-cell" id="l2-5"><span>5</span><div class="tile" id="l2-5-tile"></div></div>
+                            <div class="storage-cell" id="l2-6"><span>6</span><div class="tile" id="l2-6-tile"></div></div>
+                            <div class="storage-cell" id="l2-7"><span>7</span><div class="tile" id="l2-7-tile"></div></div>
+                        </div>
+                    </div>
+
+                    <!-- Streamer Level -->
+                    <div class="flow-indicator">
+                        <span class="flow-arrow" id="flow-l2-l1">↕</span>
+                    </div>
+                    <div class="ofg-executor" style="background: rgba(139, 92, 246, 0.1); border: 1px solid var(--color-streamer);">
+                        <span class="ofg-label" style="color: var(--color-streamer);">Streamer OFG</span>
+                        <div class="ofg-nodes" id="str-ofg-nodes">
+                            <div class="ofg-node" id="str-node-0">W</div>
+                            <span class="ofg-arrow">→</span>
+                            <div class="ofg-node" id="str-node-1">J</div>
+                            <span class="ofg-arrow">→</span>
+                            <div class="ofg-node" id="str-node-2">F</div>
+                            <span class="ofg-arrow">→</span>
+                            <div class="ofg-node" id="str-node-3">M</div>
+                            <span class="ofg-arrow">→</span>
+                            <div class="ofg-node" id="str-node-4">D</div>
+                        </div>
+                    </div>
+
+                    <!-- L1 + Compute -->
+                    <div class="flow-indicator">
+                        <span class="flow-arrow" id="flow-str-compute">↓</span>
+                    </div>
+                    <div class="memory-level l1-compute">
+                        <div class="memory-level-header">
+                            <span class="memory-level-title">L1 STREAM BUFFERS + COMPUTE</span>
+                        </div>
+                        <div class="stream-buffers">
+                            <div class="stream-buffer">
+                                <div class="stream-buffer-label">West Edge (A)</div>
+                                <div class="stream-buffer-bar">
+                                    <div class="stream-buffer-fill a" id="l1-west-fill" style="width: 0%;"></div>
+                                </div>
+                            </div>
+                            <div class="stream-buffer">
+                                <div class="stream-buffer-label">North Edge (B)</div>
+                                <div class="stream-buffer-bar">
+                                    <div class="stream-buffer-fill b" id="l1-north-fill" style="width: 0%;"></div>
+                                </div>
+                            </div>
+                            <div class="stream-buffer">
+                                <div class="stream-buffer-label">South Edge (C drain)</div>
+                                <div class="stream-buffer-bar">
+                                    <div class="stream-buffer-fill c" id="l1-south-fill" style="width: 0%;"></div>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="compute-tile">
+                            <div class="systolic-array" id="systolicArray">
+                                <!-- 4x4 PE grid -->
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Status Bar -->
+                    <div class="status-bar">
+                        <div class="status-item">
+                            <div class="status-dot" id="status-dma"></div>
+                            <span>DMA</span>
+                        </div>
+                        <div class="status-item">
+                            <div class="status-dot" id="status-bm"></div>
+                            <span>BlockMover</span>
+                        </div>
+                        <div class="status-item">
+                            <div class="status-dot" id="status-str"></div>
+                            <span>Streamer</span>
+                        </div>
+                        <div class="status-item">
+                            <div class="status-dot" id="status-compute"></div>
+                            <span>Compute</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="sidebar">
+                <div class="panel">
+                    <h3>Legend</h3>
+                    <div class="legend-item">
+                        <div class="legend-color" style="background: var(--color-a);"></div>
+                        <span>Tile A (input)</span>
+                    </div>
+                    <div class="legend-item">
+                        <div class="legend-color" style="background: var(--color-b);"></div>
+                        <span>Tile B (input)</span>
+                    </div>
+                    <div class="legend-item">
+                        <div class="legend-color" style="background: var(--color-c);"></div>
+                        <span>Tile C (output)</span>
+                    </div>
+                    <div style="margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--border);">
+                        <div class="legend-item">
+                            <div class="legend-color" style="background: var(--state-waiting);"></div>
+                            <span>OFG: Waiting</span>
+                        </div>
+                        <div class="legend-item">
+                            <div class="legend-color" style="background: var(--state-ready);"></div>
+                            <span>OFG: Ready</span>
+                        </div>
+                        <div class="legend-item">
+                            <div class="legend-color" style="background: var(--state-firing);"></div>
+                            <span>OFG: Firing</span>
+                        </div>
+                        <div class="legend-item">
+                            <div class="legend-color" style="background: var(--state-done);"></div>
+                            <span>OFG: Done</span>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="panel">
+                    <h3>OFG Node Types</h3>
+                    <div style="font-size: 10px; color: var(--text-dim);">
+                        <div><strong>W</strong> = WAIT (for operand)</div>
+                        <div><strong>J</strong> = JOIN (sync multiple)</div>
+                        <div><strong>F</strong> = FIRE (execute op)</div>
+                        <div><strong>P</strong> = PRODUCE (emit result)</div>
+                        <div><strong>M</strong> = MATMUL</div>
+                        <div><strong>D</strong> = DRAIN</div>
+                    </div>
+                </div>
+
+                <div class="panel" style="flex: 1;">
+                    <h3>Event Log</h3>
+                    <div class="event-log" id="eventLog">
+                        <div class="event-item">
+                            <span class="event-cycle">--</span>
+                            <span class="event-desc">Load a trace file or click Demo</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // =====================================================
+        // State
+        // =====================================================
+        let traceData = null;
+        let currentCycle = 0;
+        let eventIndex = 0;
+        let isPlaying = false;
+        let playInterval = null;
+
+        // Visual state
+        let tilePositions = {
+            a: { host: true, l3: null, l2: null },
+            b: { host: true, l3: null, l2: null },
+            c: { host: false, l3: null, l2: null }
+        };
+
+        let ofgStates = {
+            dma: ['waiting', 'waiting', 'waiting'],
+            bm: ['waiting', 'waiting', 'waiting', 'waiting'],
+            str: ['waiting', 'waiting', 'waiting', 'waiting', 'waiting']
+        };
+
+        let bufferLevels = { west: 0, north: 0, south: 0 };
+        let computeActive = false;
+
+        // =====================================================
+        // Initialization
+        // =====================================================
+        function init() {
+            createSystolicArray();
+            setupFileInput();
+            reset();
+        }
+
+        function createSystolicArray() {
+            const array = document.getElementById('systolicArray');
+            array.innerHTML = '';
+            for (let i = 0; i < 16; i++) {
+                const pe = document.createElement('div');
+                pe.className = 'pe-cell';
+                pe.id = `pe-${i}`;
+                pe.textContent = '·';
+                array.appendChild(pe);
+            }
+        }
+
+        function setupFileInput() {
+            document.getElementById('fileInput').addEventListener('change', (e) => {
+                const file = e.target.files[0];
+                if (file) {
+                    const reader = new FileReader();
+                    reader.onload = (event) => {
+                        try {
+                            traceData = JSON.parse(event.target.result);
+                            reset();
+                            logEvent('--', 'system', `Loaded trace: ${file.name}`);
+                        } catch (err) {
+                            alert('Invalid trace file: ' + err.message);
+                        }
+                    };
+                    reader.readAsText(file);
+                }
+            });
+        }
+
+        // =====================================================
+        // Demo Trace
+        // =====================================================
+        function loadDemoTrace() {
+            traceData = generateDemoTrace();
+            reset();
+            logEvent('--', 'system', 'Loaded demo trace');
+        }
+
+        function generateDemoTrace() {
+            // Generate a demo trace showing C = A × B execution
+            return {
+                metadata: {
+                    generator: "demo",
+                    config: { l3_tiles: 4, l2_banks: 8 }
+                },
+                tensors: [
+                    { id: "A", shape: [64, 32], type: "input" },
+                    { id: "B", shape: [32, 64], type: "input" },
+                    { id: "C", shape: [64, 64], type: "output" }
+                ],
+                events: [
+                    // DMA loads A
+                    { cycle: 0, level: "DMA", type: "node_state", node: 0, state: "ready" },
+                    { cycle: 1, level: "DMA", type: "node_state", node: 0, state: "firing", desc: "WAIT buffer" },
+                    { cycle: 2, level: "DMA", type: "node_state", node: 0, state: "done" },
+                    { cycle: 2, level: "DMA", type: "node_state", node: 1, state: "ready" },
+                    { cycle: 3, level: "DMA", type: "node_state", node: 1, state: "firing", desc: "LOAD A" },
+                    { cycle: 5, level: "DMA", type: "tile_move", tile: "a", from: "host", to: "l3", node: 0 },
+                    { cycle: 5, level: "DMA", type: "node_state", node: 1, state: "done" },
+                    { cycle: 5, level: "DMA", type: "node_state", node: 2, state: "firing", desc: "PRODUCE A@L3" },
+                    { cycle: 6, level: "DMA", type: "node_state", node: 2, state: "done" },
+                    { cycle: 6, level: "DMA", type: "trigger", target: "BLOCK_MOVER", desc: "TILE_READY(A@L3)" },
+
+                    // DMA loads B (parallel)
+                    { cycle: 3, level: "DMA", type: "node_state", node: 0, state: "ready" },
+                    { cycle: 4, level: "DMA", type: "node_state", node: 0, state: "firing", desc: "WAIT buffer" },
+                    { cycle: 4, level: "DMA", type: "node_state", node: 0, state: "done" },
+                    { cycle: 4, level: "DMA", type: "node_state", node: 1, state: "firing", desc: "LOAD B" },
+                    { cycle: 7, level: "DMA", type: "tile_move", tile: "b", from: "host", to: "l3", node: 1 },
+                    { cycle: 7, level: "DMA", type: "node_state", node: 1, state: "done" },
+                    { cycle: 7, level: "DMA", type: "node_state", node: 2, state: "firing", desc: "PRODUCE B@L3" },
+                    { cycle: 8, level: "DMA", type: "node_state", node: 2, state: "done" },
+                    { cycle: 8, level: "DMA", type: "trigger", target: "BLOCK_MOVER", desc: "TILE_READY(B@L3)" },
+
+                    // BlockMover pushes A to L2
+                    { cycle: 7, level: "BLOCK_MOVER", type: "node_state", node: 0, state: "ready" },
+                    { cycle: 8, level: "BLOCK_MOVER", type: "node_state", node: 0, state: "firing", desc: "WAIT A@L3" },
+                    { cycle: 8, level: "BLOCK_MOVER", type: "node_state", node: 0, state: "done" },
+                    { cycle: 8, level: "BLOCK_MOVER", type: "node_state", node: 1, state: "ready" },
+                    { cycle: 9, level: "BLOCK_MOVER", type: "node_state", node: 1, state: "firing", desc: "JOIN A + L2_avail" },
+                    { cycle: 9, level: "BLOCK_MOVER", type: "node_state", node: 1, state: "done" },
+                    { cycle: 9, level: "BLOCK_MOVER", type: "node_state", node: 2, state: "firing", desc: "PUSH A→L2" },
+                    { cycle: 11, level: "BLOCK_MOVER", type: "tile_move", tile: "a", from: "l3", to: "l2", node: 0 },
+                    { cycle: 11, level: "BLOCK_MOVER", type: "node_state", node: 2, state: "done" },
+                    { cycle: 11, level: "BLOCK_MOVER", type: "node_state", node: 3, state: "firing", desc: "PRODUCE A@L2" },
+                    { cycle: 12, level: "BLOCK_MOVER", type: "node_state", node: 3, state: "done" },
+                    { cycle: 12, level: "BLOCK_MOVER", type: "trigger", target: "STREAMER", desc: "TILE_READY(A@L2)" },
+
+                    // BlockMover pushes B to L2
+                    { cycle: 9, level: "BLOCK_MOVER", type: "node_state", node: 0, state: "ready" },
+                    { cycle: 10, level: "BLOCK_MOVER", type: "node_state", node: 0, state: "firing", desc: "WAIT B@L3" },
+                    { cycle: 10, level: "BLOCK_MOVER", type: "node_state", node: 0, state: "done" },
+                    { cycle: 10, level: "BLOCK_MOVER", type: "node_state", node: 1, state: "firing", desc: "JOIN B + L2_avail" },
+                    { cycle: 10, level: "BLOCK_MOVER", type: "node_state", node: 1, state: "done" },
+                    { cycle: 10, level: "BLOCK_MOVER", type: "node_state", node: 2, state: "firing", desc: "PUSH B→L2" },
+                    { cycle: 13, level: "BLOCK_MOVER", type: "tile_move", tile: "b", from: "l3", to: "l2", node: 1 },
+                    { cycle: 13, level: "BLOCK_MOVER", type: "node_state", node: 2, state: "done" },
+                    { cycle: 13, level: "BLOCK_MOVER", type: "node_state", node: 3, state: "firing", desc: "PRODUCE B@L2" },
+                    { cycle: 14, level: "BLOCK_MOVER", type: "node_state", node: 3, state: "done" },
+                    { cycle: 14, level: "BLOCK_MOVER", type: "trigger", target: "STREAMER", desc: "TILE_READY(B@L2)" },
+
+                    // Streamer feeds A and B
+                    { cycle: 13, level: "STREAMER", type: "node_state", node: 0, state: "ready" },
+                    { cycle: 14, level: "STREAMER", type: "node_state", node: 0, state: "firing", desc: "WAIT A@L2, B@L2" },
+                    { cycle: 15, level: "STREAMER", type: "node_state", node: 0, state: "done" },
+                    { cycle: 15, level: "STREAMER", type: "node_state", node: 1, state: "firing", desc: "JOIN A+B" },
+                    { cycle: 15, level: "STREAMER", type: "node_state", node: 1, state: "done" },
+                    { cycle: 15, level: "STREAMER", type: "node_state", node: 2, state: "firing", desc: "FEED A→West, B→North" },
+                    { cycle: 16, level: "STREAMER", type: "buffer_fill", buffer: "west", level: 25 },
+                    { cycle: 17, level: "STREAMER", type: "buffer_fill", buffer: "north", level: 25 },
+                    { cycle: 18, level: "STREAMER", type: "buffer_fill", buffer: "west", level: 50 },
+                    { cycle: 18, level: "STREAMER", type: "buffer_fill", buffer: "north", level: 50 },
+                    { cycle: 19, level: "STREAMER", type: "buffer_fill", buffer: "west", level: 75 },
+                    { cycle: 19, level: "STREAMER", type: "buffer_fill", buffer: "north", level: 75 },
+                    { cycle: 20, level: "STREAMER", type: "buffer_fill", buffer: "west", level: 100 },
+                    { cycle: 20, level: "STREAMER", type: "buffer_fill", buffer: "north", level: 100 },
+                    { cycle: 20, level: "STREAMER", type: "node_state", node: 2, state: "done" },
+                    { cycle: 20, level: "STREAMER", type: "trigger", target: "COMPUTE", desc: "L1 buffers ready" },
+
+                    // Compute
+                    { cycle: 20, level: "COMPUTE", type: "compute_start" },
+                    { cycle: 21, level: "STREAMER", type: "node_state", node: 3, state: "firing", desc: "MATMUL C = A × B" },
+                    { cycle: 22, level: "COMPUTE", type: "pe_active", pe: [0, 1, 2, 3] },
+                    { cycle: 23, level: "COMPUTE", type: "pe_active", pe: [0, 1, 2, 3, 4, 5, 6, 7] },
+                    { cycle: 24, level: "COMPUTE", type: "pe_active", pe: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11] },
+                    { cycle: 25, level: "COMPUTE", type: "pe_active", pe: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15] },
+                    { cycle: 30, level: "COMPUTE", type: "compute_done" },
+                    { cycle: 30, level: "STREAMER", type: "node_state", node: 3, state: "done" },
+                    { cycle: 30, level: "STREAMER", type: "buffer_fill", buffer: "west", level: 0 },
+                    { cycle: 30, level: "STREAMER", type: "buffer_fill", buffer: "north", level: 0 },
+
+                    // Drain C
+                    { cycle: 30, level: "STREAMER", type: "node_state", node: 4, state: "firing", desc: "DRAIN C→L2" },
+                    { cycle: 31, level: "STREAMER", type: "buffer_fill", buffer: "south", level: 25 },
+                    { cycle: 32, level: "STREAMER", type: "buffer_fill", buffer: "south", level: 50 },
+                    { cycle: 33, level: "STREAMER", type: "buffer_fill", buffer: "south", level: 75 },
+                    { cycle: 34, level: "STREAMER", type: "buffer_fill", buffer: "south", level: 100 },
+                    { cycle: 35, level: "STREAMER", type: "tile_move", tile: "c", from: "compute", to: "l2", node: 2 },
+                    { cycle: 35, level: "STREAMER", type: "node_state", node: 4, state: "done" },
+                    { cycle: 35, level: "STREAMER", type: "buffer_fill", buffer: "south", level: 0 },
+                    { cycle: 35, level: "STREAMER", type: "trigger", target: "BLOCK_MOVER", desc: "TILE_READY(C@L2)" },
+
+                    // BlockMover pulls C to L3
+                    { cycle: 36, level: "BLOCK_MOVER", type: "node_state", node: 0, state: "firing", desc: "WAIT C@L2" },
+                    { cycle: 36, level: "BLOCK_MOVER", type: "node_state", node: 0, state: "done" },
+                    { cycle: 36, level: "BLOCK_MOVER", type: "node_state", node: 2, state: "firing", desc: "PULL C→L3" },
+                    { cycle: 38, level: "BLOCK_MOVER", type: "tile_move", tile: "c", from: "l2", to: "l3", node: 2 },
+                    { cycle: 38, level: "BLOCK_MOVER", type: "node_state", node: 2, state: "done" },
+                    { cycle: 38, level: "BLOCK_MOVER", type: "node_state", node: 3, state: "firing", desc: "PRODUCE C@L3" },
+                    { cycle: 39, level: "BLOCK_MOVER", type: "node_state", node: 3, state: "done" },
+                    { cycle: 39, level: "BLOCK_MOVER", type: "trigger", target: "DMA", desc: "TILE_READY(C@L3)" },
+
+                    // DMA stores C
+                    { cycle: 40, level: "DMA", type: "node_state", node: 0, state: "firing", desc: "WAIT C@L3" },
+                    { cycle: 40, level: "DMA", type: "node_state", node: 0, state: "done" },
+                    { cycle: 40, level: "DMA", type: "node_state", node: 1, state: "firing", desc: "STORE C→Host" },
+                    { cycle: 43, level: "DMA", type: "tile_move", tile: "c", from: "l3", to: "host" },
+                    { cycle: 43, level: "DMA", type: "node_state", node: 1, state: "done" },
+                    { cycle: 43, level: "DMA", type: "node_state", node: 2, state: "firing", desc: "PRODUCE BUFFER_AVAIL" },
+                    { cycle: 44, level: "DMA", type: "node_state", node: 2, state: "done" },
+                    { cycle: 44, level: "DMA", type: "complete", desc: "C = A × B complete" }
+                ]
+            };
+        }
+
+        // =====================================================
+        // Playback Controls
+        // =====================================================
+        function reset() {
+            stopPlay();
+            currentCycle = 0;
+            eventIndex = 0;
+
+            // Reset visual state
+            tilePositions = {
+                a: { host: true, l3: null, l2: null },
+                b: { host: true, l3: null, l2: null },
+                c: { host: false, l3: null, l2: null }
+            };
+
+            ofgStates = {
+                dma: ['waiting', 'waiting', 'waiting'],
+                bm: ['waiting', 'waiting', 'waiting', 'waiting'],
+                str: ['waiting', 'waiting', 'waiting', 'waiting', 'waiting']
+            };
+
+            bufferLevels = { west: 0, north: 0, south: 0 };
+            computeActive = false;
+
+            updateDisplay();
+            clearEventLog();
+            document.getElementById('cycleNum').textContent = '0';
+        }
+
+        function togglePlay() {
+            if (isPlaying) {
+                stopPlay();
+            } else {
+                startPlay();
+            }
+        }
+
+        function startPlay() {
+            isPlaying = true;
+            document.getElementById('btnPlay').textContent = 'Pause';
+            document.getElementById('btnPlay').classList.add('active');
+
+            const speed = 11 - document.getElementById('speedSlider').value;
+            const interval = speed * 100;
+
+            playInterval = setInterval(() => {
+                if (!stepForward()) {
+                    stopPlay();
+                }
+            }, interval);
+        }
+
+        function stopPlay() {
+            isPlaying = false;
+            document.getElementById('btnPlay').textContent = 'Play';
+            document.getElementById('btnPlay').classList.remove('active');
+            if (playInterval) {
+                clearInterval(playInterval);
+                playInterval = null;
+            }
+        }
+
+        function stepForward() {
+            if (!traceData || !traceData.events) return false;
+
+            currentCycle++;
+            document.getElementById('cycleNum').textContent = currentCycle;
+
+            // Process all events for this cycle
+            let hasEvents = false;
+            while (eventIndex < traceData.events.length &&
+                   traceData.events[eventIndex].cycle <= currentCycle) {
+                processEvent(traceData.events[eventIndex]);
+                eventIndex++;
+                hasEvents = true;
+            }
+
+            updateDisplay();
+
+            return eventIndex < traceData.events.length;
+        }
+
+        // =====================================================
+        // Event Processing
+        // =====================================================
+        function processEvent(event) {
+            switch (event.type) {
+                case 'node_state':
+                    updateOFGState(event.level, event.node, event.state);
+                    if (event.desc) {
+                        logEvent(event.cycle, event.level, event.desc);
+                    }
+                    break;
+
+                case 'tile_move':
+                    moveTile(event.tile, event.from, event.to, event.node);
+                    logEvent(event.cycle, event.level, `Move ${event.tile.toUpperCase()} ${event.from}→${event.to}`);
+                    break;
+
+                case 'trigger':
+                    flashTrigger(event.level, event.target);
+                    logEvent(event.cycle, event.level, `TRIGGER → ${event.target}: ${event.desc}`);
+                    break;
+
+                case 'buffer_fill':
+                    bufferLevels[event.buffer] = event.level;
+                    break;
+
+                case 'compute_start':
+                    computeActive = true;
+                    logEvent(event.cycle, 'COMPUTE', 'Systolic array active');
+                    break;
+
+                case 'compute_done':
+                    computeActive = false;
+                    clearPEs();
+                    logEvent(event.cycle, 'COMPUTE', 'Matmul complete');
+                    break;
+
+                case 'pe_active':
+                    activatePEs(event.pe);
+                    break;
+
+                case 'complete':
+                    logEvent(event.cycle, 'SYSTEM', event.desc);
+                    break;
+            }
+        }
+
+        function updateOFGState(level, node, state) {
+            const levelKey = level.toLowerCase().replace('_', '');
+            if (levelKey === 'blockmover') {
+                ofgStates.bm[node] = state;
+            } else if (ofgStates[levelKey]) {
+                ofgStates[levelKey][node] = state;
+            }
+        }
+
+        function moveTile(tile, from, to, nodeId) {
+            const t = tilePositions[tile];
+
+            // Clear from source
+            if (from === 'host') t.host = false;
+            else if (from === 'l3') t.l3 = null;
+            else if (from === 'l2') t.l2 = null;
+
+            // Set at destination
+            if (to === 'host') t.host = true;
+            else if (to === 'l3') t.l3 = nodeId;
+            else if (to === 'l2') t.l2 = nodeId;
+        }
+
+        function flashTrigger(from, to) {
+            // Flash the appropriate flow arrow
+            let arrowId = null;
+            if (from === 'DMA' && to === 'BLOCK_MOVER') arrowId = 'flow-dma-l3';
+            else if (from === 'BLOCK_MOVER' && to === 'STREAMER') arrowId = 'flow-bm-l2';
+            else if (from === 'STREAMER' && to === 'COMPUTE') arrowId = 'flow-str-compute';
+            else if (from === 'STREAMER' && to === 'BLOCK_MOVER') arrowId = 'flow-l2-l1';
+            else if (from === 'BLOCK_MOVER' && to === 'DMA') arrowId = 'flow-l3-l2';
+
+            if (arrowId) {
+                const arrow = document.getElementById(arrowId);
+                arrow.classList.add('active');
+                setTimeout(() => arrow.classList.remove('active'), 500);
+            }
+        }
+
+        function activatePEs(peList) {
+            for (const pe of peList) {
+                const elem = document.getElementById(`pe-${pe}`);
+                if (elem) elem.classList.add('active');
+            }
+        }
+
+        function clearPEs() {
+            for (let i = 0; i < 16; i++) {
+                const elem = document.getElementById(`pe-${i}`);
+                if (elem) elem.classList.remove('active');
+            }
+        }
+
+        // =====================================================
+        // Display Update
+        // =====================================================
+        function updateDisplay() {
+            // Update tiles
+            updateTileDisplay('host-tile-a', tilePositions.a.host, 'A');
+            updateTileDisplay('host-tile-b', tilePositions.b.host, 'B');
+            updateTileDisplay('host-tile-c', tilePositions.c.host, 'C');
+
+            // L3 tiles
+            for (let i = 0; i < 4; i++) {
+                const elem = document.getElementById(`l3-${i}-tile`);
+                let content = '';
+                let tileClass = '';
+                if (tilePositions.a.l3 === i) { content = 'A'; tileClass = 'tile-a'; }
+                else if (tilePositions.b.l3 === i) { content = 'B'; tileClass = 'tile-b'; }
+                else if (tilePositions.c.l3 === i) { content = 'C'; tileClass = 'tile-c'; }
+
+                elem.textContent = content;
+                elem.className = 'tile ' + tileClass;
+                elem.classList.toggle('visible', content !== '');
+            }
+
+            // L2 banks
+            for (let i = 0; i < 8; i++) {
+                const elem = document.getElementById(`l2-${i}-tile`);
+                let content = '';
+                let tileClass = '';
+                if (tilePositions.a.l2 === i) { content = 'A'; tileClass = 'tile-a'; }
+                else if (tilePositions.b.l2 === i) { content = 'B'; tileClass = 'tile-b'; }
+                else if (tilePositions.c.l2 === i) { content = 'C'; tileClass = 'tile-c'; }
+
+                elem.textContent = content;
+                elem.className = 'tile ' + tileClass;
+                elem.classList.toggle('visible', content !== '');
+            }
+
+            // OFG states
+            updateOFGDisplay('dma', ofgStates.dma);
+            updateOFGDisplay('bm', ofgStates.bm);
+            updateOFGDisplay('str', ofgStates.str);
+
+            // Buffer levels
+            document.getElementById('l1-west-fill').style.width = bufferLevels.west + '%';
+            document.getElementById('l1-north-fill').style.width = bufferLevels.north + '%';
+            document.getElementById('l1-south-fill').style.width = bufferLevels.south + '%';
+
+            // Status dots
+            updateStatusDot('status-dma', ofgStates.dma);
+            updateStatusDot('status-bm', ofgStates.bm);
+            updateStatusDot('status-str', ofgStates.str);
+            document.getElementById('status-compute').className =
+                'status-dot ' + (computeActive ? 'active' : 'idle');
+        }
+
+        function updateTileDisplay(id, visible, label) {
+            const elem = document.getElementById(id);
+            elem.textContent = label;
+            elem.classList.toggle('visible', visible);
+        }
+
+        function updateOFGDisplay(prefix, states) {
+            for (let i = 0; i < states.length; i++) {
+                const elem = document.getElementById(`${prefix}-node-${i}`);
+                if (elem) {
+                    elem.className = 'ofg-node ' + states[i];
+                }
+            }
+        }
+
+        function updateStatusDot(id, states) {
+            const elem = document.getElementById(id);
+            const hasFiring = states.includes('firing');
+            const allDone = states.every(s => s === 'done');
+            elem.className = 'status-dot ' + (hasFiring ? 'active' : (allDone ? 'complete' : 'idle'));
+        }
+
+        // =====================================================
+        // Event Log
+        // =====================================================
+        function logEvent(cycle, level, desc) {
+            const log = document.getElementById('eventLog');
+            const item = document.createElement('div');
+            item.className = 'event-item';
+
+            const levelClass = level.toLowerCase().replace('_', '');
+
+            item.innerHTML = `
+                <span class="event-cycle">${cycle}</span>
+                <span class="event-level ${levelClass}">${level}</span>
+                <span class="event-desc">${desc}</span>
+            `;
+
+            log.appendChild(item);
+            log.scrollTop = log.scrollHeight;
+        }
+
+        function clearEventLog() {
+            const log = document.getElementById('eventLog');
+            log.innerHTML = '';
+        }
+
+        // =====================================================
+        // Keyboard shortcuts
+        // =====================================================
+        document.addEventListener('keydown', (e) => {
+            if (e.key === ' ') { e.preventDefault(); togglePlay(); }
+            else if (e.key === 'ArrowRight') { e.preventDefault(); stepForward(); }
+            else if (e.key === 'r') { reset(); }
+        });
+
+        // Initialize
+        init();
+    </script>
+</body>
+</html>
