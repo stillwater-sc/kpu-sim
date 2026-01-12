@@ -693,425 +693,331 @@
 
         // ===========================================
         // A-Stationary Simulation (Weight Stationary)
-        // A stays in PE, B streams North→South, C partial sums flow South
+        // Projection S=[0,1,0]: PE array is M×K (i,k)
+        // A[i,k] stays in PE(i,k)
+        // B flows North→South (along i)
+        // C flows West→East (along k), accumulating partial sums
+        // Final C emerges from rightmost column (k=K-1)
         // ===========================================
-        let aStationaryPhase = 'load'; // 'load' or 'compute'
-        let loadCycle = 0;
-
         function simulateAStationary() {
             const indicator = document.getElementById('phaseIndicator');
 
-            // Phase 1: Load A values into PEs (takes M cycles due to skew)
-            if (aStationaryPhase === 'load') {
-                const kToRead = currentCycle;
-                if (kToRead < K) {
-                    sramValid = true;
-                    sramK = kToRead;
-                    sramA = [];
-                    for (let i = 0; i < M; i++) sramA.push(A[i][kToRead]);
-                    sramB = []; // B not used during load
-                } else {
-                    sramValid = false;
+            // A-stationary PE array is M×K = 4×2
+            // We reuse the M×N peState array but only use columns 0..K-1
+            // PE(i,k) holds A[i,k] and processes all j values over time
+
+            // For A-stationary, we iterate over j (the projected dimension)
+            // Each cycle processes one j value across the wavefront
+            const jToProcess = currentCycle;
+
+            if (jToProcess < N) {
+                sramValid = true;
+                sramK = jToProcess; // Using sramK to show which j we're processing
+
+                // B[k,j] values for this j - one per PE column (k=0..K-1)
+                sramB = [];
+                for (let k = 0; k < K; k++) sramB.push(B[k][jToProcess]);
+
+                // A values shown (A is stationary, loaded at start)
+                sramA = [];
+                for (let i = 0; i < M; i++) sramA.push(A[i][0]); // Just show first column
+            } else {
+                sramValid = false;
+                sramK = -1;
+                sramA = [];
+                sramB = [];
+            }
+
+            const isSos = (jToProcess === 0);
+            const isEos = (jToProcess === N - 1);
+
+            // Clear computing state
+            for (let i = 0; i < M; i++) {
+                for (let k = 0; k < K; k++) {
+                    peState[i][k].computing = false;
                 }
+            }
 
-                const isSos = (kToRead === 0);
-                const isEos = (kToRead === K - 1);
-
-                // Process A skew buffer
+            // A is stationary - load A[i,k] into PE(i,k) on first cycle
+            if (currentCycle === 0) {
                 for (let i = 0; i < M; i++) {
-                    const depth = i;
-                    if (depth === 0) {
-                        if (sramValid) {
-                            aOutputs[i] = { value: sramA[i], valid: true, sos: isSos, eos: isEos };
-                        } else {
-                            aOutputs[i] = { value: null, valid: false, sos: false, eos: false };
-                        }
+                    for (let k = 0; k < K; k++) {
+                        peState[i][k].a = A[i][k];
+                        peState[i][k].aValid = true;
+                    }
+                }
+            }
+
+            // Show A outputs (stationary, just for display)
+            for (let i = 0; i < M; i++) {
+                aOutputs[i] = { value: A[i][0], valid: true, sos: false, eos: false };
+            }
+
+            // B skew buffer - B[k,j] enters column k with skew based on k
+            // Column k has k delay registers
+            for (let k = 0; k < K; k++) {
+                const depth = k;
+                if (depth === 0) {
+                    if (sramValid) {
+                        bOutputs[k] = { value: sramB[k], valid: true, sos: isSos, eos: isEos };
                     } else {
-                        aOutputs[i] = skewA[i][0];
-                        for (let r = 0; r < depth - 1; r++) {
-                            skewA[i][r] = skewA[i][r + 1];
-                        }
-                        if (sramValid) {
-                            skewA[i][depth - 1] = { value: sramA[i], valid: true, sos: isSos, eos: isEos };
-                        } else {
-                            skewA[i][depth - 1] = { value: null, valid: false, sos: false, eos: false };
-                        }
+                        bOutputs[k] = { value: null, valid: false, sos: false, eos: false };
+                    }
+                } else {
+                    bOutputs[k] = skewB[k][0] || { value: null, valid: false, sos: false, eos: false };
+                    for (let r = 0; r < depth - 1; r++) {
+                        skewB[k][r] = skewB[k][r + 1] || { value: null, valid: false, sos: false, eos: false };
+                    }
+                    if (sramValid) {
+                        skewB[k][depth - 1] = { value: sramB[k], valid: true, sos: isSos, eos: isEos };
+                    } else {
+                        skewB[k][depth - 1] = { value: null, valid: false, sos: false, eos: false };
                     }
                 }
+            }
 
-                // Clear B outputs during load phase
-                for (let j = 0; j < N; j++) {
-                    bOutputs[j] = { value: null, valid: false, sos: false, eos: false };
+            // Capture previous state for systolic flow
+            let prevB = [], prevBValid = [], prevBSos = [], prevBEos = [];
+            let prevC = [], prevCValid = [];
+            for (let i = 0; i < M; i++) {
+                prevB[i] = []; prevBValid[i] = []; prevBSos[i] = []; prevBEos[i] = [];
+                prevC[i] = []; prevCValid[i] = [];
+                for (let k = 0; k < K; k++) {
+                    prevB[i][k] = peState[i][k].b;
+                    prevBValid[i][k] = peState[i][k].bValid;
+                    prevBSos[i][k] = peState[i][k].bSos;
+                    prevBEos[i][k] = peState[i][k].bEos;
+                    prevC[i][k] = peState[i][k].c;
+                    prevCValid[i][k] = peState[i][k].computing || peState[i][k].c !== 0;
                 }
+            }
 
-                // Load A into PEs - A enters from West, flows East to fill columns
-                for (let i = 0; i < M; i++) {
-                    for (let j = N - 1; j >= 0; j--) {
-                        const pe = peState[i][j];
-                        if (j === 0) {
-                            if (aOutputs[i].valid) {
-                                pe.a = aOutputs[i].value;
-                                pe.aValid = true;
-                                pe.aSos = aOutputs[i].sos;
-                                pe.aEos = aOutputs[i].eos;
-                            }
-                        } else if (peState[i][j-1].aValid && !pe.aValid) {
-                            // Shift A values East during load
-                            pe.a = peState[i][j-1].a;
-                            pe.aValid = true;
-                        }
-                        pe.computing = false;
+            // Update PEs - M×K array
+            for (let i = 0; i < M; i++) {
+                for (let k = 0; k < K; k++) {
+                    const pe = peState[i][k];
+
+                    // B flows North→South
+                    if (i === 0) {
+                        pe.b = bOutputs[k].value;
+                        pe.bValid = bOutputs[k].valid;
+                        pe.bSos = bOutputs[k].sos;
+                        pe.bEos = bOutputs[k].eos;
+                    } else {
+                        pe.b = prevB[i-1][k];
+                        pe.bValid = prevBValid[i-1][k];
+                        pe.bSos = prevBSos[i-1][k];
+                        pe.bEos = prevBEos[i-1][k];
                     }
-                }
 
-                // Check if all PEs have A loaded
-                let allLoaded = true;
-                for (let i = 0; i < M; i++) {
-                    for (let j = 0; j < Math.min(K, N); j++) {
-                        if (!peState[i][j].aValid) allLoaded = false;
+                    // C flows West→East (partial sums along k)
+                    // C_in comes from PE to the left (k-1)
+                    let cIn = (k > 0) ? prevC[i][k-1] : 0;
+
+                    // Compute: C_out = C_in + A * B
+                    if (pe.aValid && pe.bValid) {
+                        pe.computing = true;
+                        pe.c = cIn + pe.a * pe.b;
+                    } else {
+                        pe.c = cIn; // Pass through
                     }
-                }
 
-                indicator.textContent = `A-Stationary: Loading weights...`;
-                indicator.className = 'phase-indicator';
-
-                if (currentCycle >= K + M - 1) {
-                    aStationaryPhase = 'compute';
-                    loadCycle = currentCycle + 1;
-                    // Reset skew buffers for B
-                    for (let j = 0; j < N; j++) {
-                        skewB[j] = [];
-                        for (let r = 0; r < j; r++) {
-                            skewB[j][r] = { value: null, valid: false, sos: false, eos: false };
+                    // Rightmost column (k=K-1) captures final C[i,j] result
+                    // j is determined by when B arrives (with skew)
+                    if (k === K - 1 && pe.bValid) {
+                        // Determine which j this result corresponds to
+                        // Due to skew, j = cycle - i - k for the value at PE(i,k)
+                        const j = currentCycle - i - k;
+                        if (j >= 0 && j < N) {
+                            outputC[i][j] = pe.c;
                         }
                     }
                 }
             }
-            // Phase 2: Stream B, accumulate C, C flows South
-            else {
-                const computeCycle = currentCycle - loadCycle;
-                const kToRead = computeCycle;
 
-                if (kToRead < K) {
-                    sramValid = true;
-                    sramK = kToRead;
-                    sramA = []; // A already loaded
-                    sramB = [];
-                    for (let j = 0; j < N; j++) sramB.push(B[kToRead][j]);
-                } else {
-                    sramValid = false;
-                    sramB = [];
-                }
-
-                const isSos = (kToRead === 0);
-                const isEos = (kToRead === K - 1);
-
-                // Clear A outputs (A is stationary, not streaming)
-                for (let i = 0; i < M; i++) {
-                    aOutputs[i] = { value: null, valid: false, sos: false, eos: false };
-                }
-
-                // Process B skew buffer
+            // Check completion - all M×N output values
+            let doneCount = 0;
+            for (let i = 0; i < M; i++) {
                 for (let j = 0; j < N; j++) {
-                    const depth = j;
-                    if (depth === 0) {
-                        if (sramValid) {
-                            bOutputs[j] = { value: sramB[j], valid: true, sos: isSos, eos: isEos };
-                        } else {
-                            bOutputs[j] = { value: null, valid: false, sos: false, eos: false };
-                        }
-                    } else {
-                        bOutputs[j] = skewB[j][0];
-                        for (let r = 0; r < depth - 1; r++) {
-                            skewB[j][r] = skewB[j][r + 1];
-                        }
-                        if (sramValid) {
-                            skewB[j][depth - 1] = { value: sramB[j], valid: true, sos: isSos, eos: isEos };
-                        } else {
-                            skewB[j][depth - 1] = { value: null, valid: false, sos: false, eos: false };
-                        }
-                    }
+                    if (outputC[i][j] !== null) doneCount++;
                 }
+            }
 
-                // Capture previous B and C for systolic flow
-                let prevB = [], prevC = [];
-                for (let i = 0; i < M; i++) {
-                    prevB[i] = [];
-                    prevC[i] = [];
-                    for (let j = 0; j < N; j++) {
-                        prevB[i][j] = peState[i][j].b;
-                        prevC[i][j] = peState[i][j].c;
-                    }
-                }
+            if (doneCount === M * N && completionCycle < 0) {
+                completionCycle = currentCycle;
+            }
 
-                // Update PEs: B flows South, C accumulates and flows South
-                for (let i = 0; i < M; i++) {
-                    for (let j = 0; j < N; j++) {
-                        const pe = peState[i][j];
-                        pe.computing = false;
-
-                        // B enters from North, flows South
-                        if (i === 0) {
-                            pe.b = bOutputs[j].value;
-                            pe.bValid = bOutputs[j].valid;
-                            pe.bSos = bOutputs[j].sos;
-                            pe.bEos = bOutputs[j].eos;
-                        } else {
-                            pe.b = prevB[i-1][j];
-                            pe.bValid = peState[i-1][j].bValid;
-                            pe.bSos = peState[i-1][j].bSos;
-                            pe.bEos = peState[i-1][j].bEos;
-                        }
-
-                        // C partial sum enters from North (0 for top row), flows South
-                        let cIn = 0;
-                        if (i > 0) {
-                            cIn = prevC[i-1][j];
-                        }
-
-                        if (pe.bSos && pe.bValid) {
-                            pe.c = 0;
-                            pe.done = false;
-                        }
-
-                        if (pe.aValid && pe.bValid) {
-                            pe.computing = true;
-                            pe.c = cIn + pe.a * pe.b;
-
-                            // Bottom row outputs final C
-                            if (i === M - 1 && pe.bEos && !pe.done) {
-                                pe.done = true;
-                                outputC[i][j] = pe.c;
-                            }
-                        } else {
-                            pe.c = cIn; // Pass through partial sum
-                        }
-                    }
-                }
-
-                let doneCount = 0;
-                for (let j = 0; j < N; j++) {
-                    if (peState[M-1][j].done) doneCount++;
-                }
-
-                if (doneCount === N && completionCycle < 0) {
-                    completionCycle = currentCycle;
-                }
-
-                if (doneCount === N) {
-                    indicator.textContent = `A-Stationary: Complete! ${N} outputs`;
-                    indicator.className = 'phase-indicator complete';
-                } else {
-                    indicator.textContent = `A-Stationary: Computing... B streaming`;
-                    indicator.className = 'phase-indicator';
-                }
+            if (doneCount === M * N) {
+                indicator.textContent = `A-Stationary: Complete! All ${M*N} results`;
+                indicator.className = 'phase-indicator complete';
+            } else {
+                indicator.textContent = `A-Stationary: B flows S, C flows E (${doneCount}/${M*N})`;
+                indicator.className = 'phase-indicator';
             }
         }
 
         // ===========================================
         // B-Stationary Simulation (Input Stationary)
-        // B stays in PE, A streams West→East, C partial sums flow East
+        // Projection S=[1,0,0]: PE array is K×N (k,j)
+        // B[k,j] stays in PE(k,j)
+        // A flows West→East (along j)
+        // C flows North→South (along k), accumulating partial sums
+        // Final C emerges from bottom row (k=K-1)
         // ===========================================
-        let bStationaryPhase = 'load';
-
         function simulateBStationary() {
             const indicator = document.getElementById('phaseIndicator');
 
-            // Phase 1: Load B values into PEs
-            if (bStationaryPhase === 'load') {
-                const kToRead = currentCycle;
-                if (kToRead < K) {
-                    sramValid = true;
-                    sramK = kToRead;
-                    sramA = [];
-                    sramB = [];
-                    for (let j = 0; j < N; j++) sramB.push(B[kToRead][j]);
-                } else {
-                    sramValid = false;
-                }
+            // B-stationary PE array is K×N = 2×4
+            // We reuse the M×N peState array but only use rows 0..K-1
+            // PE(k,j) holds B[k,j] and processes all i values over time
 
-                const isSos = (kToRead === 0);
-                const isEos = (kToRead === K - 1);
+            // For B-stationary, we iterate over i (the projected dimension)
+            // Each cycle processes one i value across the wavefront
+            const iToProcess = currentCycle;
 
-                // Process B skew buffer
+            if (iToProcess < M) {
+                sramValid = true;
+                sramK = iToProcess; // Using sramK to show which i we're processing
+
+                // A[i,k] values for this i - one per PE row (k=0..K-1)
+                sramA = [];
+                for (let k = 0; k < K; k++) sramA.push(A[iToProcess][k]);
+
+                // B values shown (B is stationary, loaded at start)
+                sramB = [];
+                for (let j = 0; j < N; j++) sramB.push(B[0][j]); // Just show first row
+            } else {
+                sramValid = false;
+                sramK = -1;
+                sramA = [];
+                sramB = [];
+            }
+
+            const isSos = (iToProcess === 0);
+            const isEos = (iToProcess === M - 1);
+
+            // Clear computing state
+            for (let k = 0; k < K; k++) {
                 for (let j = 0; j < N; j++) {
-                    const depth = j;
-                    if (depth === 0) {
-                        if (sramValid) {
-                            bOutputs[j] = { value: sramB[j], valid: true, sos: isSos, eos: isEos };
-                        } else {
-                            bOutputs[j] = { value: null, valid: false, sos: false, eos: false };
-                        }
+                    peState[k][j].computing = false;
+                }
+            }
+
+            // B is stationary - load B[k,j] into PE(k,j) on first cycle
+            if (currentCycle === 0) {
+                for (let k = 0; k < K; k++) {
+                    for (let j = 0; j < N; j++) {
+                        peState[k][j].b = B[k][j];
+                        peState[k][j].bValid = true;
+                    }
+                }
+            }
+
+            // Show B outputs (stationary, just for display)
+            for (let j = 0; j < N; j++) {
+                bOutputs[j] = { value: B[0][j], valid: true, sos: false, eos: false };
+            }
+
+            // A skew buffer - A[i,k] enters row k with skew based on k
+            // Row k has k delay registers
+            for (let k = 0; k < K; k++) {
+                const depth = k;
+                if (depth === 0) {
+                    if (sramValid) {
+                        aOutputs[k] = { value: sramA[k], valid: true, sos: isSos, eos: isEos };
                     } else {
-                        bOutputs[j] = skewB[j][0];
-                        for (let r = 0; r < depth - 1; r++) {
-                            skewB[j][r] = skewB[j][r + 1];
-                        }
-                        if (sramValid) {
-                            skewB[j][depth - 1] = { value: sramB[j], valid: true, sos: isSos, eos: isEos };
-                        } else {
-                            skewB[j][depth - 1] = { value: null, valid: false, sos: false, eos: false };
-                        }
+                        aOutputs[k] = { value: null, valid: false, sos: false, eos: false };
+                    }
+                } else {
+                    aOutputs[k] = skewA[k][0] || { value: null, valid: false, sos: false, eos: false };
+                    for (let r = 0; r < depth - 1; r++) {
+                        skewA[k][r] = skewA[k][r + 1] || { value: null, valid: false, sos: false, eos: false };
+                    }
+                    if (sramValid) {
+                        skewA[k][depth - 1] = { value: sramA[k], valid: true, sos: isSos, eos: isEos };
+                    } else {
+                        skewA[k][depth - 1] = { value: null, valid: false, sos: false, eos: false };
                     }
                 }
+            }
 
-                // Clear A outputs during load
-                for (let i = 0; i < M; i++) {
-                    aOutputs[i] = { value: null, valid: false, sos: false, eos: false };
-                }
-
-                // Load B into PEs - B enters from North, flows South to fill rows
+            // Capture previous state for systolic flow
+            let prevA = [], prevAValid = [], prevASos = [], prevAEos = [];
+            let prevC = [], prevCValid = [];
+            for (let k = 0; k < K; k++) {
+                prevA[k] = []; prevAValid[k] = []; prevASos[k] = []; prevAEos[k] = [];
+                prevC[k] = []; prevCValid[k] = [];
                 for (let j = 0; j < N; j++) {
-                    for (let i = M - 1; i >= 0; i--) {
-                        const pe = peState[i][j];
-                        if (i === 0) {
-                            if (bOutputs[j].valid) {
-                                pe.b = bOutputs[j].value;
-                                pe.bValid = true;
-                                pe.bSos = bOutputs[j].sos;
-                                pe.bEos = bOutputs[j].eos;
-                            }
-                        } else if (peState[i-1][j].bValid && !pe.bValid) {
-                            pe.b = peState[i-1][j].b;
-                            pe.bValid = true;
-                        }
-                        pe.computing = false;
-                    }
+                    prevA[k][j] = peState[k][j].a;
+                    prevAValid[k][j] = peState[k][j].aValid;
+                    prevASos[k][j] = peState[k][j].aSos;
+                    prevAEos[k][j] = peState[k][j].aEos;
+                    prevC[k][j] = peState[k][j].c;
+                    prevCValid[k][j] = peState[k][j].computing || peState[k][j].c !== 0;
                 }
+            }
 
-                indicator.textContent = `B-Stationary: Loading inputs...`;
-                indicator.className = 'phase-indicator';
+            // Update PEs - K×N array
+            for (let k = 0; k < K; k++) {
+                for (let j = 0; j < N; j++) {
+                    const pe = peState[k][j];
 
-                if (currentCycle >= K + N - 1) {
-                    bStationaryPhase = 'compute';
-                    loadCycle = currentCycle + 1;
-                    // Reset skew buffers for A
-                    for (let i = 0; i < M; i++) {
-                        skewA[i] = [];
-                        for (let r = 0; r < i; r++) {
-                            skewA[i][r] = { value: null, valid: false, sos: false, eos: false };
+                    // A flows West→East
+                    if (j === 0) {
+                        pe.a = aOutputs[k].value;
+                        pe.aValid = aOutputs[k].valid;
+                        pe.aSos = aOutputs[k].sos;
+                        pe.aEos = aOutputs[k].eos;
+                    } else {
+                        pe.a = prevA[k][j-1];
+                        pe.aValid = prevAValid[k][j-1];
+                        pe.aSos = prevASos[k][j-1];
+                        pe.aEos = prevAEos[k][j-1];
+                    }
+
+                    // C flows North→South (partial sums along k)
+                    // C_in comes from PE above (k-1)
+                    let cIn = (k > 0) ? prevC[k-1][j] : 0;
+
+                    // Compute: C_out = C_in + A * B
+                    if (pe.aValid && pe.bValid) {
+                        pe.computing = true;
+                        pe.c = cIn + pe.a * pe.b;
+                    } else {
+                        pe.c = cIn; // Pass through
+                    }
+
+                    // Bottom row (k=K-1) captures final C[i,j] result
+                    // i is determined by when A arrives (with skew)
+                    if (k === K - 1 && pe.aValid) {
+                        // Determine which i this result corresponds to
+                        // Due to skew, i = cycle - k - j for the value at PE(k,j)
+                        const i = currentCycle - k - j;
+                        if (i >= 0 && i < M) {
+                            outputC[i][j] = pe.c;
                         }
                     }
                 }
             }
-            // Phase 2: Stream A, accumulate C, C flows East
-            else {
-                const computeCycle = currentCycle - loadCycle;
-                const kToRead = computeCycle;
 
-                if (kToRead < K) {
-                    sramValid = true;
-                    sramK = kToRead;
-                    sramA = [];
-                    for (let i = 0; i < M; i++) sramA.push(A[i][kToRead]);
-                    sramB = [];
-                } else {
-                    sramValid = false;
-                    sramA = [];
-                }
-
-                const isSos = (kToRead === 0);
-                const isEos = (kToRead === K - 1);
-
-                // Process A skew buffer
-                for (let i = 0; i < M; i++) {
-                    const depth = i;
-                    if (depth === 0) {
-                        if (sramValid) {
-                            aOutputs[i] = { value: sramA[i], valid: true, sos: isSos, eos: isEos };
-                        } else {
-                            aOutputs[i] = { value: null, valid: false, sos: false, eos: false };
-                        }
-                    } else {
-                        aOutputs[i] = skewA[i][0];
-                        for (let r = 0; r < depth - 1; r++) {
-                            skewA[i][r] = skewA[i][r + 1];
-                        }
-                        if (sramValid) {
-                            skewA[i][depth - 1] = { value: sramA[i], valid: true, sos: isSos, eos: isEos };
-                        } else {
-                            skewA[i][depth - 1] = { value: null, valid: false, sos: false, eos: false };
-                        }
-                    }
-                }
-
-                // Clear B outputs (B is stationary)
+            // Check completion - all M×N output values
+            let doneCount = 0;
+            for (let i = 0; i < M; i++) {
                 for (let j = 0; j < N; j++) {
-                    bOutputs[j] = { value: null, valid: false, sos: false, eos: false };
+                    if (outputC[i][j] !== null) doneCount++;
                 }
+            }
 
-                // Capture previous A and C
-                let prevA = [], prevC = [];
-                for (let i = 0; i < M; i++) {
-                    prevA[i] = [];
-                    prevC[i] = [];
-                    for (let j = 0; j < N; j++) {
-                        prevA[i][j] = peState[i][j].a;
-                        prevC[i][j] = peState[i][j].c;
-                    }
-                }
+            if (doneCount === M * N && completionCycle < 0) {
+                completionCycle = currentCycle;
+            }
 
-                // Update PEs: A flows East, C accumulates and flows East
-                for (let i = 0; i < M; i++) {
-                    for (let j = 0; j < N; j++) {
-                        const pe = peState[i][j];
-                        pe.computing = false;
-
-                        // A enters from West, flows East
-                        if (j === 0) {
-                            pe.a = aOutputs[i].value;
-                            pe.aValid = aOutputs[i].valid;
-                            pe.aSos = aOutputs[i].sos;
-                            pe.aEos = aOutputs[i].eos;
-                        } else {
-                            pe.a = prevA[i][j-1];
-                            pe.aValid = peState[i][j-1].aValid;
-                            pe.aSos = peState[i][j-1].aSos;
-                            pe.aEos = peState[i][j-1].aEos;
-                        }
-
-                        // C partial sum enters from West (0 for left column), flows East
-                        let cIn = 0;
-                        if (j > 0) {
-                            cIn = prevC[i][j-1];
-                        }
-
-                        if (pe.aSos && pe.aValid) {
-                            pe.c = 0;
-                            pe.done = false;
-                        }
-
-                        if (pe.aValid && pe.bValid) {
-                            pe.computing = true;
-                            pe.c = cIn + pe.a * pe.b;
-
-                            // Right column outputs final C
-                            if (j === N - 1 && pe.aEos && !pe.done) {
-                                pe.done = true;
-                                outputC[i][j] = pe.c;
-                            }
-                        } else {
-                            pe.c = cIn;
-                        }
-                    }
-                }
-
-                let doneCount = 0;
-                for (let i = 0; i < M; i++) {
-                    if (peState[i][N-1].done) doneCount++;
-                }
-
-                if (doneCount === M && completionCycle < 0) {
-                    completionCycle = currentCycle;
-                }
-
-                if (doneCount === M) {
-                    indicator.textContent = `B-Stationary: Complete! ${M} outputs`;
-                    indicator.className = 'phase-indicator complete';
-                } else {
-                    indicator.textContent = `B-Stationary: Computing... A streaming`;
-                    indicator.className = 'phase-indicator';
-                }
+            if (doneCount === M * N) {
+                indicator.textContent = `B-Stationary: Complete! All ${M*N} results`;
+                indicator.className = 'phase-indicator complete';
+            } else {
+                indicator.textContent = `B-Stationary: A flows E, C flows S (${doneCount}/${M*N})`;
+                indicator.className = 'phase-indicator';
             }
         }
 
@@ -1198,6 +1104,7 @@
                     pe.appendChild(badge);
                 }
 
+                // PE display: show A x B inputs when valid
                 if (state.aValid || state.bValid) {
                     const inputs = document.createElement('div');
                     inputs.className = 'pe-inputs';
@@ -1410,7 +1317,24 @@
         // ===========================================
         function changeSchedule() {
             currentSchedule = document.getElementById('scheduleSelect').value;
+            updateScheduleDescription();
             reset();
+        }
+
+        function updateScheduleDescription() {
+            const title = document.getElementById('scheduleTitle');
+            const desc = document.getElementById('scheduleDesc');
+
+            if (currentSchedule === 'c-stationary') {
+                title.textContent = 'C-Stationary S=[0,0,1]';
+                desc.innerHTML = 'PE array: M×N (4×4)<br>A flows East, B flows South<br>C accumulates in PE';
+            } else if (currentSchedule === 'a-stationary') {
+                title.textContent = 'A-Stationary S=[0,1,0]';
+                desc.innerHTML = 'PE array: M×K (4×2)<br>A stationary, B flows South<br>C flows East → right edge';
+            } else if (currentSchedule === 'b-stationary') {
+                title.textContent = 'B-Stationary S=[1,0,0]';
+                desc.innerHTML = 'PE array: K×N (2×4)<br>A flows East, B stationary<br>C flows South → bottom edge';
+            }
         }
 
         function togglePlay() {
