@@ -2,11 +2,12 @@
 <!--
   KPU Systolic Array Dataflow Animation - Kung-Leiserson Style
 
-  Shows the standard 2D physical layout with:
-  - B Scratchpad at top, Skew Buffer B feeding columns downward
-  - A Scratchpad on left, Skew Buffer A feeding rows rightward
-  - Systolic Array in center with proper data flow
-  - SOS (Start-of-Stream) and EOS (End-of-Stream) markers
+  Shows complete dataflow for all three stationary schedules:
+  - C-Stationary (S=[0,0,1]): M×N array, A/B stream, C stays, then drains
+  - A-Stationary (S=[0,1,0]): M×K array, A loads, B streams, C flows East
+  - B-Stationary (S=[1,0,0]): K×N array, B loads, A streams, C flows South
+
+  Each schedule shows: Load → Compute → Unload phases
 
   SPDX-License-Identifier: MIT
   Copyright (c) 2024-2026 Stillwater Supercomputing, Inc.
@@ -30,6 +31,8 @@
             --correct: #22c55e;
             --sos-color: #22d3ee;
             --eos-color: #f97316;
+            --load-phase: #a855f7;
+            --unload-phase: #ec4899;
         }
 
         * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -98,6 +101,7 @@
         .matrix-label { font-size: 11px; font-weight: 600; margin-bottom: 4px; }
         .matrix-label.a { color: var(--color-a); }
         .matrix-label.b { color: var(--color-b); }
+        .matrix-label.c { color: var(--color-c); }
 
         .matrix {
             display: grid;
@@ -149,11 +153,11 @@
             margin-bottom: 10px;
             font-size: 11px;
         }
+        .phase-indicator.load { background: rgba(168, 85, 247, 0.3); }
+        .phase-indicator.compute { background: rgba(59, 130, 246, 0.2); }
+        .phase-indicator.unload { background: rgba(236, 72, 153, 0.3); }
         .phase-indicator.complete { background: rgba(34, 197, 94, 0.3); }
 
-        /* ============================================ */
-        /* Flexbox Layout                              */
-        /* ============================================ */
         .grid-container {
             display: flex;
             flex-direction: column;
@@ -167,28 +171,18 @@
             gap: 2px;
         }
 
-        /* A-side section (SRAM + skew registers + output + arrow) */
-        .a-side {
+        .a-side, .b-side, .c-side {
             display: flex;
             align-items: center;
             gap: 2px;
         }
 
-        /* B-side section (skew buffer columns above PEs) */
-        .b-side {
-            display: flex;
-            align-items: center;
-            gap: 2px;
-        }
-
-        /* PE array row */
         .pe-row {
             display: flex;
             align-items: center;
             gap: 2px;
         }
 
-        /* Cell types */
         .cell {
             display: flex;
             align-items: center;
@@ -207,6 +201,7 @@
         .cell.header { background: transparent; border: none; color: var(--text-dim); font-weight: 600; }
         .cell.a { background: rgba(239, 68, 68, 0.2); color: var(--color-a); border-color: rgba(239, 68, 68, 0.4); }
         .cell.b { background: rgba(34, 197, 94, 0.2); color: var(--color-b); border-color: rgba(34, 197, 94, 0.4); }
+        .cell.c { background: rgba(251, 191, 36, 0.2); color: var(--color-c); border-color: rgba(251, 191, 36, 0.4); }
         .cell.active { box-shadow: 0 0 6px currentColor; }
         .cell.arrow { background: transparent; border: none; color: var(--text-dim); font-size: 14px; width: 24px; }
 
@@ -220,7 +215,6 @@
         .cell .marker.sos { color: var(--sos-color); }
         .cell .marker.eos { color: var(--eos-color); }
 
-        /* Processing Element */
         .pe {
             display: flex;
             flex-direction: column;
@@ -235,7 +229,9 @@
             position: relative;
             flex-shrink: 0;
         }
+        .pe.loading { border-color: var(--load-phase); background: rgba(168, 85, 247, 0.15); }
         .pe.computing { border-color: var(--computing); background: rgba(59, 130, 246, 0.15); }
+        .pe.draining { border-color: var(--unload-phase); background: rgba(236, 72, 153, 0.15); }
         .pe.done { border-color: var(--correct); background: rgba(34, 197, 94, 0.15); }
 
         .pe-value { font-weight: 600; font-size: 12px; }
@@ -255,10 +251,7 @@
             font-weight: bold;
         }
 
-        /* B-column cells match PE width */
-        .cell.b-col {
-            width: 60px;
-        }
+        .cell.b-col, .cell.c-col { width: 60px; }
 
         .sram-info {
             padding: 4px 8px;
@@ -268,15 +261,26 @@
             font-size: 10px;
             color: var(--text-dim);
         }
-        .sram-info .k-val {
-            color: var(--computing);
-            font-weight: 600;
+        .sram-info .phase-val { font-weight: 600; }
+        .sram-info .phase-val.load { color: var(--load-phase); }
+        .sram-info .phase-val.compute { color: var(--computing); }
+        .sram-info .phase-val.unload { color: var(--unload-phase); }
+
+        .timing-info {
+            font-size: 10px;
+            color: var(--text-dim);
+            margin-top: 8px;
+            padding: 6px;
+            background: rgba(0,0,0,0.2);
+            border-radius: 4px;
         }
+        .timing-info div { margin-bottom: 2px; }
+        .timing-info .current { color: var(--computing); font-weight: 600; }
     </style>
 </head>
 <body>
     <div class="header">
-        <h1>Systolic Array Dataflow Animation - Kung-Leiserson Layout</h1>
+        <h1>Systolic Array Dataflow Animation - Complete Phases</h1>
         <div class="controls">
             <select id="scheduleSelect" onchange="changeSchedule()">
                 <option value="c-stationary">C-Stationary (Output)</option>
@@ -308,16 +312,16 @@
             <div class="legend">
                 <h3>Legend</h3>
                 <div class="legend-item">
-                    <div class="legend-box" style="background: rgba(239, 68, 68, 0.3);"></div>
-                    <span>A values (rows)</span>
-                </div>
-                <div class="legend-item">
-                    <div class="legend-box" style="background: rgba(34, 197, 94, 0.3);"></div>
-                    <span>B values (cols)</span>
+                    <div class="legend-box" style="background: rgba(168, 85, 247, 0.4);"></div>
+                    <span>Load Phase</span>
                 </div>
                 <div class="legend-item">
                     <div class="legend-box" style="background: var(--computing);"></div>
-                    <span>Computing</span>
+                    <span>Compute Phase</span>
+                </div>
+                <div class="legend-item">
+                    <div class="legend-box" style="background: rgba(236, 72, 153, 0.4);"></div>
+                    <span>Unload Phase</span>
                 </div>
                 <div class="legend-item">
                     <div class="legend-box" style="background: var(--correct);"></div>
@@ -328,8 +332,8 @@
             <div class="schedule-box">
                 <div class="title">Stream Markers</div>
                 <div style="font-size:10px;">
-                    <span style="color: var(--sos-color); font-weight: bold;">S</span> = Start (k=0)<br>
-                    <span style="color: var(--eos-color); font-weight: bold;">E</span> = End (k=K-1)
+                    <span style="color: var(--sos-color); font-weight: bold;">S</span> = Start of Stream<br>
+                    <span style="color: var(--eos-color); font-weight: bold;">E</span> = End of Stream
                 </div>
             </div>
         </div>
@@ -337,15 +341,15 @@
         <!-- Center: Physical Layout -->
         <div class="panel" style="overflow: auto;">
             <div class="phase-indicator" id="phaseIndicator">
-                C-Stationary: Streaming A and B
+                C-Stationary: Ready
             </div>
-            <div class="sram-info" id="sramInfo">SRAM: idle</div>
+            <div class="sram-info" id="sramInfo">Phase: idle</div>
             <div class="grid-container" id="gridContainer"></div>
         </div>
 
         <!-- Right Panel -->
         <div class="panel">
-            <h3>Expected C = A x B</h3>
+            <h3>Expected C = A × B</h3>
             <div class="matrix-container">
                 <div class="matrix" id="matrixCExp" style="grid-template-columns: repeat(4, 1fr);"></div>
             </div>
@@ -356,17 +360,19 @@
             </div>
 
             <div class="schedule-box">
-                <div class="title" id="scheduleTitle">C-Stationary</div>
+                <div class="title" id="scheduleTitle">C-Stationary S=[0,0,1]</div>
                 <div id="scheduleDesc">
-                    A enters WEST, flows East<br>
-                    B enters NORTH, flows South<br>
-                    C accumulates in PE
+                    PE array: M×N (4×4)<br>
+                    A flows East, B flows South<br>
+                    C accumulates in PE, then drains
                 </div>
             </div>
 
-            <div class="schedule-box" style="margin-top: 8px;">
-                <div class="title">Progress</div>
-                <div id="currentOp">Press Play to start</div>
+            <div class="timing-info" id="timingInfo">
+                <div>Load: <span id="loadCycles">0</span> cycles</div>
+                <div>Compute: <span id="computeCycles">0</span> cycles</div>
+                <div>Unload: <span id="unloadCycles">0</span> cycles</div>
+                <div class="current">Total: <span id="totalCycles">0</span> cycles</div>
             </div>
         </div>
     </div>
@@ -389,9 +395,6 @@
             }
         }
 
-        const maxSkewDepth = Math.max(M, N) - 1;
-        const DRAIN_CYCLES = 2;
-
         // ===========================================
         // State
         // ===========================================
@@ -399,67 +402,133 @@
         let isPlaying = false;
         let playInterval = null;
         let currentSchedule = 'c-stationary';
-        let completionCycle = -1;
 
+        // Phase tracking
+        let currentPhase = 'load'; // 'load', 'compute', 'unload', 'complete'
+        let phaseStartCycle = 0;
+
+        // Timing info
+        let loadCycleCount = 0;
+        let computeCycleCount = 0;
+        let unloadCycleCount = 0;
+
+        // PE state - sized for largest array (M×N)
         let peState = [];
         let outputC = [];
-        let skewA = [];
-        let skewB = [];
+
+        // Skew buffers
+        let skewA = [];  // Input skew for A (rows)
+        let skewB = [];  // Input skew for B (columns)
+        let skewCRight = [];  // Output skew for C (A-stationary, exits right)
+        let skewCBottom = []; // Output skew for C (B-stationary, exits bottom)
+
+        // Outputs from skew buffers
         let aOutputs = [];
         let bOutputs = [];
+        let cRightOutputs = [];
+        let cBottomOutputs = [];
+
+        // SRAM state for display
         let sramA = [];
         let sramB = [];
-        let sramK = -1;
         let sramValid = false;
+        let sramLabel = '';
 
         // ===========================================
-        // Initialize
+        // Get PE array dimensions for current schedule
+        // ===========================================
+        function getPEDimensions() {
+            if (currentSchedule === 'c-stationary') return { rows: M, cols: N };
+            if (currentSchedule === 'a-stationary') return { rows: M, cols: K };
+            if (currentSchedule === 'b-stationary') return { rows: K, cols: N };
+            return { rows: M, cols: N };
+        }
+
+        // ===========================================
+        // Initialize State
         // ===========================================
         function initState() {
+            const dim = getPEDimensions();
+
             peState = [];
             outputC = [];
-            skewA = [];
-            skewB = [];
-            aOutputs = [];
-            bOutputs = [];
-            sramA = [];
-            sramB = [];
-            sramK = -1;
-            sramValid = false;
-            completionCycle = -1;
+            currentPhase = 'load';
+            phaseStartCycle = 0;
+            loadCycleCount = 0;
+            computeCycleCount = 0;
+            unloadCycleCount = 0;
 
+            // Initialize PE array
             for (let i = 0; i < M; i++) {
                 peState[i] = [];
                 outputC[i] = [];
-                aOutputs[i] = { value: null, valid: false, sos: false, eos: false };
                 for (let j = 0; j < N; j++) {
                     peState[i][j] = {
                         a: null, b: null, c: 0,
                         aValid: false, bValid: false,
                         aSos: false, aEos: false,
                         bSos: false, bEos: false,
-                        computing: false, done: false
+                        computing: false, loading: false, draining: false, done: false
                     };
                     outputC[i][j] = null;
                 }
             }
 
-            // Initialize skew buffers as fixed-size register arrays
-            // Row/column i/j has exactly i/j registers (R0..R(i-1) or R0..R(j-1))
-            // Data enters at highest index, shifts down, exits from index 0
+            // Initialize A skew buffer (row i has i registers)
+            skewA = [];
+            aOutputs = [];
             for (let i = 0; i < M; i++) {
                 skewA[i] = [];
                 for (let r = 0; r < i; r++) {
                     skewA[i][r] = { value: null, valid: false, sos: false, eos: false };
                 }
+                aOutputs[i] = { value: null, valid: false, sos: false, eos: false };
             }
 
+            // Initialize B skew buffer (column j has j registers)
+            skewB = [];
+            bOutputs = [];
             for (let j = 0; j < N; j++) {
                 skewB[j] = [];
                 for (let r = 0; r < j; r++) {
                     skewB[j][r] = { value: null, valid: false, sos: false, eos: false };
                 }
                 bOutputs[j] = { value: null, valid: false, sos: false, eos: false };
+            }
+
+            // Initialize C output skew buffers
+            // Right buffer for A-stationary: row i needs (M-1-i) registers to de-skew
+            skewCRight = [];
+            cRightOutputs = [];
+            for (let i = 0; i < M; i++) {
+                skewCRight[i] = [];
+                const depth = M - 1 - i;
+                for (let r = 0; r < depth; r++) {
+                    skewCRight[i][r] = { value: null, valid: false, j: -1 };
+                }
+                cRightOutputs[i] = { value: null, valid: false, j: -1 };
+            }
+
+            // Bottom buffer for B-stationary: column j needs (N-1-j) registers to de-skew
+            skewCBottom = [];
+            cBottomOutputs = [];
+            for (let j = 0; j < N; j++) {
+                skewCBottom[j] = [];
+                const depth = N - 1 - j;
+                for (let r = 0; r < depth; r++) {
+                    skewCBottom[j][r] = { value: null, valid: false, i: -1 };
+                }
+                cBottomOutputs[j] = { value: null, valid: false, i: -1 };
+            }
+
+            sramA = [];
+            sramB = [];
+            sramValid = false;
+            sramLabel = '';
+
+            // C-stationary skips load phase
+            if (currentSchedule === 'c-stationary') {
+                currentPhase = 'compute';
             }
         }
 
@@ -511,516 +580,658 @@
         }
 
         // ===========================================
+        // Skew Buffer Helper: shift and inject
+        // ===========================================
+        function shiftSkewBuffer(buffer, depth, newValue) {
+            let output = null;
+            if (depth === 0) {
+                output = newValue;
+            } else {
+                output = buffer[0] || { value: null, valid: false, sos: false, eos: false };
+                for (let r = 0; r < depth - 1; r++) {
+                    buffer[r] = buffer[r + 1] || { value: null, valid: false, sos: false, eos: false };
+                }
+                buffer[depth - 1] = newValue;
+            }
+            return output;
+        }
+
+        // ===========================================
         // C-Stationary Simulation
         // ===========================================
         function simulateCStationary() {
-            const kToRead = currentCycle;
-            if (kToRead < K) {
-                sramValid = true;
-                sramK = kToRead;
-                sramA = [];
-                for (let i = 0; i < M; i++) sramA.push(A[i][kToRead]);
-                sramB = [];
-                for (let j = 0; j < N; j++) sramB.push(B[kToRead][j]);
-            } else {
-                sramValid = false;
-                sramK = -1;
-                sramA = [];
-                sramB = [];
-            }
+            const phaseCycle = currentCycle - phaseStartCycle;
 
-            const isSos = (kToRead === 0);
-            const isEos = (kToRead === K - 1);
+            if (currentPhase === 'compute') {
+                // Stream A and B, accumulate C
+                const kToRead = phaseCycle;
 
-            for (let i = 0; i < M; i++) {
+                if (kToRead < K) {
+                    sramValid = true;
+                    sramLabel = `k=${kToRead}`;
+                    sramA = [];
+                    for (let i = 0; i < M; i++) sramA.push(A[i][kToRead]);
+                    sramB = [];
+                    for (let j = 0; j < N; j++) sramB.push(B[kToRead][j]);
+                } else {
+                    sramValid = false;
+                    sramA = [];
+                    sramB = [];
+                }
+
+                const isSos = (kToRead === 0);
+                const isEos = (kToRead === K - 1);
+                const newA = sramValid ? { value: null, valid: true, sos: isSos, eos: isEos } : { value: null, valid: false, sos: false, eos: false };
+                const newB = sramValid ? { value: null, valid: true, sos: isSos, eos: isEos } : { value: null, valid: false, sos: false, eos: false };
+
+                // Process A skew buffer
+                for (let i = 0; i < M; i++) {
+                    const input = sramValid ? { value: sramA[i], valid: true, sos: isSos, eos: isEos } : { value: null, valid: false, sos: false, eos: false };
+                    aOutputs[i] = shiftSkewBuffer(skewA[i], i, input);
+                }
+
+                // Process B skew buffer
                 for (let j = 0; j < N; j++) {
-                    peState[i][j].computing = false;
+                    const input = sramValid ? { value: sramB[j], valid: true, sos: isSos, eos: isEos } : { value: null, valid: false, sos: false, eos: false };
+                    bOutputs[j] = shiftSkewBuffer(skewB[j], j, input);
+                }
+
+                // Capture PE state for systolic shift
+                let prevA = [], prevB = [];
+                let prevAValid = [], prevBValid = [];
+                let prevASos = [], prevAEos = [], prevBSos = [], prevBEos = [];
+                for (let i = 0; i < M; i++) {
+                    prevA[i] = []; prevB[i] = [];
+                    prevAValid[i] = []; prevBValid[i] = [];
+                    prevASos[i] = []; prevAEos[i] = [];
+                    prevBSos[i] = []; prevBEos[i] = [];
+                    for (let j = 0; j < N; j++) {
+                        prevA[i][j] = peState[i][j].a;
+                        prevB[i][j] = peState[i][j].b;
+                        prevAValid[i][j] = peState[i][j].aValid;
+                        prevBValid[i][j] = peState[i][j].bValid;
+                        prevASos[i][j] = peState[i][j].aSos;
+                        prevAEos[i][j] = peState[i][j].aEos;
+                        prevBSos[i][j] = peState[i][j].bSos;
+                        prevBEos[i][j] = peState[i][j].bEos;
+                    }
+                }
+
+                // Update PEs
+                for (let i = 0; i < M; i++) {
+                    for (let j = 0; j < N; j++) {
+                        const pe = peState[i][j];
+                        pe.computing = false;
+                        pe.loading = false;
+                        pe.draining = false;
+
+                        // A from West
+                        if (j === 0) {
+                            pe.a = aOutputs[i].value;
+                            pe.aValid = aOutputs[i].valid;
+                            pe.aSos = aOutputs[i].sos;
+                            pe.aEos = aOutputs[i].eos;
+                        } else {
+                            pe.a = prevA[i][j-1];
+                            pe.aValid = prevAValid[i][j-1];
+                            pe.aSos = prevASos[i][j-1];
+                            pe.aEos = prevAEos[i][j-1];
+                        }
+
+                        // B from North
+                        if (i === 0) {
+                            pe.b = bOutputs[j].value;
+                            pe.bValid = bOutputs[j].valid;
+                            pe.bSos = bOutputs[j].sos;
+                            pe.bEos = bOutputs[j].eos;
+                        } else {
+                            pe.b = prevB[i-1][j];
+                            pe.bValid = prevBValid[i-1][j];
+                            pe.bSos = prevBSos[i-1][j];
+                            pe.bEos = prevBEos[i-1][j];
+                        }
+
+                        // Reset on SOS
+                        if (pe.aSos && pe.aValid && pe.bSos && pe.bValid) {
+                            pe.c = 0;
+                            pe.done = false;
+                        }
+
+                        // Compute
+                        if (pe.aValid && pe.bValid) {
+                            pe.computing = true;
+                            pe.c += pe.a * pe.b;
+
+                            if (pe.aEos && pe.bEos && !pe.done) {
+                                pe.done = true;
+                            }
+                        }
+                    }
+                }
+
+                // Check if compute phase done
+                let allDone = true;
+                for (let i = 0; i < M; i++) {
+                    for (let j = 0; j < N; j++) {
+                        if (!peState[i][j].done) allDone = false;
+                    }
+                }
+
+                if (allDone) {
+                    computeCycleCount = phaseCycle + 1;
+                    currentPhase = 'unload';
+                    phaseStartCycle = currentCycle + 1;
                 }
             }
+            else if (currentPhase === 'unload') {
+                // Drain C from PEs using diagonal wavefront
+                const drainCycle = currentCycle - phaseStartCycle;
 
-            // Process skew buffers as shift registers
-            // Lane i has i registers: data enters at [i-1], shifts down, exits from [0]
-            const newA = sramValid
-                ? { value: null, valid: true, sos: isSos, eos: isEos }
-                : { value: null, valid: false, sos: false, eos: false };
-            const newB = sramValid
-                ? { value: null, valid: true, sos: isSos, eos: isEos }
-                : { value: null, valid: false, sos: false, eos: false };
+                sramValid = false;
+                sramA = [];
+                sramB = [];
 
-            // A skew buffer (rows)
-            for (let i = 0; i < M; i++) {
-                const depth = i;
-                if (depth === 0) {
-                    // No registers - direct passthrough
-                    if (sramValid) {
-                        aOutputs[i] = { value: sramA[i], valid: true, sos: isSos, eos: isEos };
-                    } else {
+                // Clear PE display state
+                for (let i = 0; i < M; i++) {
+                    for (let j = 0; j < N; j++) {
+                        peState[i][j].computing = false;
+                        peState[i][j].draining = false;
                         aOutputs[i] = { value: null, valid: false, sos: false, eos: false };
                     }
-                } else {
-                    // Output from R0 (index 0)
-                    aOutputs[i] = skewA[i][0];
-
-                    // Shift down: R[r] = R[r+1]
-                    for (let r = 0; r < depth - 1; r++) {
-                        skewA[i][r] = skewA[i][r + 1];
-                    }
-
-                    // New input enters top register (index depth-1)
-                    if (sramValid) {
-                        skewA[i][depth - 1] = { value: sramA[i], valid: true, sos: isSos, eos: isEos };
-                    } else {
-                        skewA[i][depth - 1] = { value: null, valid: false, sos: false, eos: false };
-                    }
                 }
-            }
-
-            // B skew buffer (columns)
-            for (let j = 0; j < N; j++) {
-                const depth = j;
-                if (depth === 0) {
-                    // No registers - direct passthrough
-                    if (sramValid) {
-                        bOutputs[j] = { value: sramB[j], valid: true, sos: isSos, eos: isEos };
-                    } else {
-                        bOutputs[j] = { value: null, valid: false, sos: false, eos: false };
-                    }
-                } else {
-                    // Output from R0 (index 0)
-                    bOutputs[j] = skewB[j][0];
-
-                    // Shift down: R[r] = R[r+1]
-                    for (let r = 0; r < depth - 1; r++) {
-                        skewB[j][r] = skewB[j][r + 1];
-                    }
-
-                    // New input enters top register (index depth-1)
-                    if (sramValid) {
-                        skewB[j][depth - 1] = { value: sramB[j], valid: true, sos: isSos, eos: isEos };
-                    } else {
-                        skewB[j][depth - 1] = { value: null, valid: false, sos: false, eos: false };
-                    }
-                }
-            }
-
-            // Capture PE state for systolic shift
-            let prevA = [], prevB = [];
-            let prevASos = [], prevAEos = [], prevBSos = [], prevBEos = [];
-            let prevAValid = [], prevBValid = [];
-            for (let i = 0; i < M; i++) {
-                prevA[i] = []; prevB[i] = [];
-                prevASos[i] = []; prevAEos[i] = [];
-                prevBSos[i] = []; prevBEos[i] = [];
-                prevAValid[i] = []; prevBValid[i] = [];
                 for (let j = 0; j < N; j++) {
-                    prevA[i][j] = peState[i][j].a;
-                    prevB[i][j] = peState[i][j].b;
-                    prevAValid[i][j] = peState[i][j].aValid;
-                    prevBValid[i][j] = peState[i][j].bValid;
-                    prevASos[i][j] = peState[i][j].aSos;
-                    prevAEos[i][j] = peState[i][j].aEos;
-                    prevBSos[i][j] = peState[i][j].bSos;
-                    prevBEos[i][j] = peState[i][j].bEos;
+                    bOutputs[j] = { value: null, valid: false, sos: false, eos: false };
                 }
-            }
 
-            // Update PEs
-            for (let i = 0; i < M; i++) {
-                for (let j = 0; j < N; j++) {
-                    const pe = peState[i][j];
-
-                    if (j === 0) {
-                        pe.a = aOutputs[i].value;
-                        pe.aValid = aOutputs[i].valid;
-                        pe.aSos = aOutputs[i].sos;
-                        pe.aEos = aOutputs[i].eos;
-                    } else {
-                        pe.a = prevA[i][j-1];
-                        pe.aValid = prevAValid[i][j-1];
-                        pe.aSos = prevASos[i][j-1];
-                        pe.aEos = prevAEos[i][j-1];
-                    }
-
-                    if (i === 0) {
-                        pe.b = bOutputs[j].value;
-                        pe.bValid = bOutputs[j].valid;
-                        pe.bSos = bOutputs[j].sos;
-                        pe.bEos = bOutputs[j].eos;
-                    } else {
-                        pe.b = prevB[i-1][j];
-                        pe.bValid = prevBValid[i-1][j];
-                        pe.bSos = prevBSos[i-1][j];
-                        pe.bEos = prevBEos[i-1][j];
-                    }
-
-                    if (pe.aSos && pe.aValid && pe.bSos && pe.bValid) {
-                        pe.c = 0;
-                        pe.done = false;
-                    }
-
-                    if (pe.aValid && pe.bValid) {
-                        pe.computing = true;
-                        pe.c += pe.a * pe.b;
-
-                        if (pe.aEos && pe.bEos && !pe.done) {
-                            pe.done = true;
-                            outputC[i][j] = pe.c;
+                // Diagonal drain: PE(i,j) drains at cycle (i+j)
+                for (let i = 0; i < M; i++) {
+                    for (let j = 0; j < N; j++) {
+                        if (drainCycle === i + j) {
+                            peState[i][j].draining = true;
+                            outputC[i][j] = peState[i][j].c;
                         }
                     }
                 }
-            }
 
-            let doneCount = 0;
-            for (let i = 0; i < M; i++) {
-                for (let j = 0; j < N; j++) {
-                    if (peState[i][j].done) doneCount++;
+                // Check if unload complete
+                const maxDrainCycle = (M - 1) + (N - 1);
+                if (drainCycle >= maxDrainCycle) {
+                    unloadCycleCount = drainCycle + 1;
+                    currentPhase = 'complete';
                 }
-            }
-
-            if (doneCount === M * N && completionCycle < 0) {
-                completionCycle = currentCycle;
-            }
-
-            const indicator = document.getElementById('phaseIndicator');
-            if (doneCount === M * N) {
-                indicator.textContent = `Complete! All ${M*N} dot products computed`;
-                indicator.className = 'phase-indicator complete';
-            } else {
-                indicator.textContent = `C-Stationary: ${doneCount}/${M*N} done`;
-                indicator.className = 'phase-indicator';
             }
         }
 
         // ===========================================
-        // A-Stationary Simulation (Weight Stationary)
-        // Projection S=[0,1,0]: PE array is M×K (i,k)
-        // A[i,k] stays in PE(i,k)
-        // B flows North→South (along i)
-        // C flows West→East (along k), accumulating partial sums
-        // Final C emerges from rightmost column (k=K-1)
+        // A-Stationary Simulation
+        // PE array: M×K, A stationary, B flows South, C flows East
+        // Load: A enters West, flows East through skew buffer to PEs
+        // Compute: B enters North with skew, C enters West (repurposed A skew buffer)
         // ===========================================
+
+        // Track C input values for visualization
+        let cInputs = [];
+
         function simulateAStationary() {
-            const indicator = document.getElementById('phaseIndicator');
+            const phaseCycle = currentCycle - phaseStartCycle;
+            const dim = getPEDimensions(); // M×K
 
-            // A-stationary PE array is M×K = 4×2
-            // We reuse the M×N peState array but only use columns 0..K-1
-            // PE(i,k) holds A[i,k] and processes all j values over time
+            if (currentPhase === 'load') {
+                // Load A[i,k] into PE(i,k) with row skew
+                // A[:,k] enters at cycle k, A[i,k] exits skew buffer at cycle k+i
+                // and goes DIRECTLY to PE(i,k)
+                const kToLoad = phaseCycle;
 
-            // For A-stationary, we iterate over j (the projected dimension)
-            // Each cycle processes one j value across the wavefront
-            const jToProcess = currentCycle;
-
-            if (jToProcess < N) {
-                sramValid = true;
-                sramK = jToProcess; // Using sramK to show which j we're processing
-
-                // B[k,j] values for this j - one per PE column (k=0..K-1)
-                sramB = [];
-                for (let k = 0; k < K; k++) sramB.push(B[k][jToProcess]);
-
-                // A values shown (A is stationary, loaded at start)
-                sramA = [];
-                for (let i = 0; i < M; i++) sramA.push(A[i][0]); // Just show first column
-            } else {
-                sramValid = false;
-                sramK = -1;
-                sramA = [];
-                sramB = [];
-            }
-
-            const isSos = (jToProcess === 0);
-            const isEos = (jToProcess === N - 1);
-
-            // Clear computing state
-            for (let i = 0; i < M; i++) {
-                for (let k = 0; k < K; k++) {
-                    peState[i][k].computing = false;
+                if (kToLoad < K) {
+                    sramValid = true;
+                    sramLabel = `A[:,${kToLoad}]`;
+                    sramA = [];
+                    for (let i = 0; i < M; i++) sramA.push(A[i][kToLoad]);
+                    sramB = [];
+                } else {
+                    sramValid = false;
+                    sramA = [];
                 }
-            }
 
-            // A is stationary - load A[i,k] into PE(i,k) on first cycle
-            if (currentCycle === 0) {
+                const isSos = (kToLoad === 0);
+                const isEos = (kToLoad === K - 1);
+
+                // Process A through skew buffer (row i has i registers)
+                for (let i = 0; i < M; i++) {
+                    const input = sramValid ? { value: sramA[i], valid: true, sos: isSos, eos: isEos } : { value: null, valid: false, sos: false, eos: false };
+                    aOutputs[i] = shiftSkewBuffer(skewA[i], i, input);
+                }
+
+                // Clear B outputs during load
+                for (let j = 0; j < N; j++) {
+                    bOutputs[j] = { value: null, valid: false, sos: false, eos: false };
+                }
+
+                // Clear all PE loading states first
                 for (let i = 0; i < M; i++) {
                     for (let k = 0; k < K; k++) {
-                        peState[i][k].a = A[i][k];
-                        peState[i][k].aValid = true;
+                        peState[i][k].loading = false;
+                        peState[i][k].computing = false;
                     }
                 }
-            }
 
-            // Show A outputs (stationary, just for display)
-            for (let i = 0; i < M; i++) {
-                aOutputs[i] = { value: A[i][0], valid: true, sos: false, eos: false };
-            }
+                // Route skew buffer outputs DIRECTLY to correct PE
+                // At cycle c, row i outputs A[i, c-i] which goes to PE(i, c-i)
+                for (let i = 0; i < M; i++) {
+                    if (aOutputs[i].valid) {
+                        const k = phaseCycle - i;  // Which column this value belongs to
+                        if (k >= 0 && k < K && !peState[i][k].aValid) {
+                            peState[i][k].a = aOutputs[i].value;
+                            peState[i][k].aValid = true;
+                            peState[i][k].loading = true;
+                        }
+                    }
+                }
 
-            // B skew buffer - B[k,j] enters column k with skew based on k
-            // Column k has k delay registers
-            for (let k = 0; k < K; k++) {
-                const depth = k;
-                if (depth === 0) {
-                    if (sramValid) {
-                        bOutputs[k] = { value: sramB[k], valid: true, sos: isSos, eos: isEos };
-                    } else {
+                // Check if load complete - all PEs in M×K array have A loaded
+                let allLoaded = true;
+                for (let i = 0; i < M; i++) {
+                    for (let k = 0; k < K; k++) {
+                        if (!peState[i][k].aValid) allLoaded = false;
+                    }
+                }
+
+                if (allLoaded) {
+                    loadCycleCount = phaseCycle + 1;
+                    currentPhase = 'compute';
+                    phaseStartCycle = currentCycle + 1;
+
+                    // Re-initialize skew buffers for compute phase
+                    // B skew buffer (column k has k registers) for B input
+                    for (let k = 0; k < K; k++) {
+                        skewB[k] = [];
+                        for (let r = 0; r < k; r++) {
+                            skewB[k][r] = { value: null, valid: false, sos: false, eos: false };
+                        }
                         bOutputs[k] = { value: null, valid: false, sos: false, eos: false };
                     }
+
+                    // A skew buffer repurposed for C INPUT (row i has i registers)
+                    for (let i = 0; i < M; i++) {
+                        skewA[i] = [];
+                        for (let r = 0; r < i; r++) {
+                            skewA[i][r] = { value: 0, valid: true, sos: false, eos: false, isC: true };
+                        }
+                        aOutputs[i] = { value: null, valid: false, sos: false, eos: false };
+                    }
+
+                    // Initialize C inputs array for visualization
+                    cInputs = [];
+                    for (let i = 0; i < M; i++) {
+                        cInputs[i] = { value: 0, valid: false, isC: true };
+                    }
+                }
+            }
+            else if (currentPhase === 'compute') {
+                // Stream B North→South, C enters West and flows East
+                const jToProcess = phaseCycle;
+
+                if (jToProcess < N) {
+                    sramValid = true;
+                    sramLabel = `B[:,${jToProcess}]`;
+                    sramB = [];
+                    for (let k = 0; k < K; k++) sramB.push(B[k][jToProcess]);
+                    sramA = [];  // A is stationary, but show C input indicator
                 } else {
-                    bOutputs[k] = skewB[k][0] || { value: null, valid: false, sos: false, eos: false };
-                    for (let r = 0; r < depth - 1; r++) {
-                        skewB[k][r] = skewB[k][r + 1] || { value: null, valid: false, sos: false, eos: false };
-                    }
-                    if (sramValid) {
-                        skewB[k][depth - 1] = { value: sramB[k], valid: true, sos: isSos, eos: isEos };
-                    } else {
-                        skewB[k][depth - 1] = { value: null, valid: false, sos: false, eos: false };
+                    sramValid = false;
+                    sramB = [];
+                }
+
+                const isSos = (jToProcess === 0);
+                const isEos = (jToProcess === N - 1);
+
+                // C enters from West through repurposed A skew buffer
+                // C[i,j] initial value is 0, enters at cycle j, exits row i at cycle j+i
+                for (let i = 0; i < M; i++) {
+                    // C input is always 0 (initial partial sum)
+                    const cInput = (jToProcess < N) ?
+                        { value: 0, valid: true, sos: isSos, eos: isEos, isC: true } :
+                        { value: null, valid: false, sos: false, eos: false, isC: true };
+                    aOutputs[i] = shiftSkewBuffer(skewA[i], i, cInput);
+                    aOutputs[i].isC = true;  // Mark as C value for display
+                    cInputs[i] = aOutputs[i];
+                }
+
+                // B skew buffer - column k has k registers
+                for (let k = 0; k < K; k++) {
+                    const input = sramValid ? { value: sramB[k], valid: true, sos: isSos, eos: isEos } : { value: null, valid: false, sos: false, eos: false };
+                    bOutputs[k] = shiftSkewBuffer(skewB[k], k, input);
+                }
+
+                // Capture previous state for systolic flow
+                let prevB = [], prevBValid = [], prevBSos = [], prevBEos = [];
+                let prevC = [];
+                for (let i = 0; i < M; i++) {
+                    prevB[i] = []; prevBValid[i] = []; prevBSos[i] = []; prevBEos[i] = [];
+                    prevC[i] = [];
+                    for (let k = 0; k < K; k++) {
+                        prevB[i][k] = peState[i][k].b;
+                        prevBValid[i][k] = peState[i][k].bValid;
+                        prevBSos[i][k] = peState[i][k].bSos;
+                        prevBEos[i][k] = peState[i][k].bEos;
+                        prevC[i][k] = peState[i][k].c;
                     }
                 }
-            }
 
-            // Capture previous state for systolic flow
-            let prevB = [], prevBValid = [], prevBSos = [], prevBEos = [];
-            let prevC = [], prevCValid = [];
-            for (let i = 0; i < M; i++) {
-                prevB[i] = []; prevBValid[i] = []; prevBSos[i] = []; prevBEos[i] = [];
-                prevC[i] = []; prevCValid[i] = [];
-                for (let k = 0; k < K; k++) {
-                    prevB[i][k] = peState[i][k].b;
-                    prevBValid[i][k] = peState[i][k].bValid;
-                    prevBSos[i][k] = peState[i][k].bSos;
-                    prevBEos[i][k] = peState[i][k].bEos;
-                    prevC[i][k] = peState[i][k].c;
-                    prevCValid[i][k] = peState[i][k].computing || peState[i][k].c !== 0;
-                }
-            }
+                // Update PEs - M×K array
+                for (let i = 0; i < M; i++) {
+                    for (let k = 0; k < K; k++) {
+                        const pe = peState[i][k];
+                        pe.computing = false;
+                        pe.loading = false;
+                        pe.draining = false;
 
-            // Update PEs - M×K array
-            for (let i = 0; i < M; i++) {
-                for (let k = 0; k < K; k++) {
-                    const pe = peState[i][k];
+                        // B flows North→South
+                        if (i === 0) {
+                            pe.b = bOutputs[k].value;
+                            pe.bValid = bOutputs[k].valid;
+                            pe.bSos = bOutputs[k].sos;
+                            pe.bEos = bOutputs[k].eos;
+                        } else {
+                            pe.b = prevB[i-1][k];
+                            pe.bValid = prevBValid[i-1][k];
+                            pe.bSos = prevBSos[i-1][k];
+                            pe.bEos = prevBEos[i-1][k];
+                        }
 
-                    // B flows North→South
-                    if (i === 0) {
-                        pe.b = bOutputs[k].value;
-                        pe.bValid = bOutputs[k].valid;
-                        pe.bSos = bOutputs[k].sos;
-                        pe.bEos = bOutputs[k].eos;
-                    } else {
-                        pe.b = prevB[i-1][k];
-                        pe.bValid = prevBValid[i-1][k];
-                        pe.bSos = prevBSos[i-1][k];
-                        pe.bEos = prevBEos[i-1][k];
-                    }
+                        // C flows West→East
+                        // First column (k=0) gets C from skew buffer (initial 0)
+                        // Other columns get C from PE to the left
+                        let cIn;
+                        if (k === 0) {
+                            cIn = (cInputs[i] && cInputs[i].valid) ? cInputs[i].value : 0;
+                        } else {
+                            cIn = prevC[i][k-1];
+                        }
 
-                    // C flows West→East (partial sums along k)
-                    // C_in comes from PE to the left (k-1)
-                    let cIn = (k > 0) ? prevC[i][k-1] : 0;
-
-                    // Compute: C_out = C_in + A * B
-                    if (pe.aValid && pe.bValid) {
-                        pe.computing = true;
-                        pe.c = cIn + pe.a * pe.b;
-                    } else {
-                        pe.c = cIn; // Pass through
-                    }
-
-                    // Rightmost column (k=K-1) captures final C[i,j] result
-                    // j is determined by when B arrives (with skew)
-                    if (k === K - 1 && pe.bValid) {
-                        // Determine which j this result corresponds to
-                        // Due to skew, j = cycle - i - k for the value at PE(i,k)
-                        const j = currentCycle - i - k;
-                        if (j >= 0 && j < N) {
-                            outputC[i][j] = pe.c;
+                        // Compute: C_out = C_in + A * B
+                        if (pe.aValid && pe.bValid) {
+                            pe.computing = true;
+                            pe.c = cIn + pe.a * pe.b;
+                        } else {
+                            pe.c = cIn;  // Pass through
                         }
                     }
                 }
-            }
 
-            // Check completion - all M×N output values
-            let doneCount = 0;
-            for (let i = 0; i < M; i++) {
-                for (let j = 0; j < N; j++) {
-                    if (outputC[i][j] !== null) doneCount++;
+                // Process C output from right edge (k=K-1)
+                // Use de-skew buffer to align outputs
+                for (let i = 0; i < M; i++) {
+                    const depth = M - 1 - i;
+                    const pe = peState[i][K-1];
+
+                    // Determine which j this C value corresponds to
+                    // At cycle c, PE(i,K-1) outputs C[i, j] where wavefront timing gives j
+                    const j = phaseCycle - i - (K - 1);
+                    const cValue = (pe.bValid && j >= 0) ?
+                        { value: pe.c, valid: true, j: j } :
+                        { value: null, valid: false, j: -1 };
+
+                    if (depth === 0) {
+                        cRightOutputs[i] = cValue;
+                    } else {
+                        cRightOutputs[i] = skewCRight[i][0] || { value: null, valid: false, j: -1 };
+                        for (let r = 0; r < depth - 1; r++) {
+                            skewCRight[i][r] = skewCRight[i][r + 1] || { value: null, valid: false, j: -1 };
+                        }
+                        skewCRight[i][depth - 1] = cValue;
+                    }
+
+                    // Capture valid outputs to result matrix
+                    if (cRightOutputs[i].valid && cRightOutputs[i].j >= 0 && cRightOutputs[i].j < N) {
+                        outputC[i][cRightOutputs[i].j] = cRightOutputs[i].value;
+                    }
                 }
-            }
 
-            if (doneCount === M * N && completionCycle < 0) {
-                completionCycle = currentCycle;
-            }
+                // Check completion
+                let doneCount = 0;
+                for (let i = 0; i < M; i++) {
+                    for (let j = 0; j < N; j++) {
+                        if (outputC[i][j] !== null) doneCount++;
+                    }
+                }
 
-            if (doneCount === M * N) {
-                indicator.textContent = `A-Stationary: Complete! All ${M*N} results`;
-                indicator.className = 'phase-indicator complete';
-            } else {
-                indicator.textContent = `A-Stationary: B flows S, C flows E (${doneCount}/${M*N})`;
-                indicator.className = 'phase-indicator';
+                if (doneCount === M * N) {
+                    computeCycleCount = phaseCycle + 1;
+                    currentPhase = 'complete';
+                }
             }
         }
 
         // ===========================================
-        // B-Stationary Simulation (Input Stationary)
-        // Projection S=[1,0,0]: PE array is K×N (k,j)
-        // B[k,j] stays in PE(k,j)
-        // A flows West→East (along j)
-        // C flows North→South (along k), accumulating partial sums
-        // Final C emerges from bottom row (k=K-1)
+        // B-Stationary Simulation
         // ===========================================
         function simulateBStationary() {
-            const indicator = document.getElementById('phaseIndicator');
+            const phaseCycle = currentCycle - phaseStartCycle;
+            const dim = getPEDimensions(); // K×N
 
-            // B-stationary PE array is K×N = 2×4
-            // We reuse the M×N peState array but only use rows 0..K-1
-            // PE(k,j) holds B[k,j] and processes all i values over time
+            if (currentPhase === 'load') {
+                // Load B[k,j] into PE(k,j) with column skew
+                const kToLoad = phaseCycle;
 
-            // For B-stationary, we iterate over i (the projected dimension)
-            // Each cycle processes one i value across the wavefront
-            const iToProcess = currentCycle;
-
-            if (iToProcess < M) {
-                sramValid = true;
-                sramK = iToProcess; // Using sramK to show which i we're processing
-
-                // A[i,k] values for this i - one per PE row (k=0..K-1)
-                sramA = [];
-                for (let k = 0; k < K; k++) sramA.push(A[iToProcess][k]);
-
-                // B values shown (B is stationary, loaded at start)
-                sramB = [];
-                for (let j = 0; j < N; j++) sramB.push(B[0][j]); // Just show first row
-            } else {
-                sramValid = false;
-                sramK = -1;
-                sramA = [];
-                sramB = [];
-            }
-
-            const isSos = (iToProcess === 0);
-            const isEos = (iToProcess === M - 1);
-
-            // Clear computing state
-            for (let k = 0; k < K; k++) {
-                for (let j = 0; j < N; j++) {
-                    peState[k][j].computing = false;
+                if (kToLoad < K) {
+                    sramValid = true;
+                    sramLabel = `B[${kToLoad},:]`;
+                    sramB = [];
+                    for (let j = 0; j < N; j++) sramB.push(B[kToLoad][j]);
+                    sramA = [];
+                } else {
+                    sramValid = false;
+                    sramB = [];
                 }
-            }
 
-            // B is stationary - load B[k,j] into PE(k,j) on first cycle
-            if (currentCycle === 0) {
+                const isSos = (kToLoad === 0);
+                const isEos = (kToLoad === K - 1);
+
+                // Process B through skew buffer (column j has j registers)
+                for (let j = 0; j < N; j++) {
+                    const input = sramValid ? { value: sramB[j], valid: true, sos: isSos, eos: isEos } : { value: null, valid: false, sos: false, eos: false };
+                    bOutputs[j] = shiftSkewBuffer(skewB[j], j, input);
+                }
+
+                // Clear A outputs during load
+                for (let i = 0; i < M; i++) {
+                    aOutputs[i] = { value: null, valid: false, sos: false, eos: false };
+                }
+
+                // Clear all PE loading states first
                 for (let k = 0; k < K; k++) {
                     for (let j = 0; j < N; j++) {
-                        peState[k][j].b = B[k][j];
-                        peState[k][j].bValid = true;
+                        peState[k][j].loading = false;
+                        peState[k][j].computing = false;
                     }
                 }
-            }
 
-            // Show B outputs (stationary, just for display)
-            for (let j = 0; j < N; j++) {
-                bOutputs[j] = { value: B[0][j], valid: true, sos: false, eos: false };
-            }
-
-            // A skew buffer - A[i,k] enters row k with skew based on k
-            // Row k has k delay registers
-            for (let k = 0; k < K; k++) {
-                const depth = k;
-                if (depth === 0) {
-                    if (sramValid) {
-                        aOutputs[k] = { value: sramA[k], valid: true, sos: isSos, eos: isEos };
-                    } else {
-                        aOutputs[k] = { value: null, valid: false, sos: false, eos: false };
-                    }
-                } else {
-                    aOutputs[k] = skewA[k][0] || { value: null, valid: false, sos: false, eos: false };
-                    for (let r = 0; r < depth - 1; r++) {
-                        skewA[k][r] = skewA[k][r + 1] || { value: null, valid: false, sos: false, eos: false };
-                    }
-                    if (sramValid) {
-                        skewA[k][depth - 1] = { value: sramA[k], valid: true, sos: isSos, eos: isEos };
-                    } else {
-                        skewA[k][depth - 1] = { value: null, valid: false, sos: false, eos: false };
-                    }
-                }
-            }
-
-            // Capture previous state for systolic flow
-            let prevA = [], prevAValid = [], prevASos = [], prevAEos = [];
-            let prevC = [], prevCValid = [];
-            for (let k = 0; k < K; k++) {
-                prevA[k] = []; prevAValid[k] = []; prevASos[k] = []; prevAEos[k] = [];
-                prevC[k] = []; prevCValid[k] = [];
+                // Route skew buffer outputs DIRECTLY to correct PE
+                // At cycle c, column j outputs B[c-j, j] which goes to PE(c-j, j)
                 for (let j = 0; j < N; j++) {
-                    prevA[k][j] = peState[k][j].a;
-                    prevAValid[k][j] = peState[k][j].aValid;
-                    prevASos[k][j] = peState[k][j].aSos;
-                    prevAEos[k][j] = peState[k][j].aEos;
-                    prevC[k][j] = peState[k][j].c;
-                    prevCValid[k][j] = peState[k][j].computing || peState[k][j].c !== 0;
-                }
-            }
-
-            // Update PEs - K×N array
-            for (let k = 0; k < K; k++) {
-                for (let j = 0; j < N; j++) {
-                    const pe = peState[k][j];
-
-                    // A flows West→East
-                    if (j === 0) {
-                        pe.a = aOutputs[k].value;
-                        pe.aValid = aOutputs[k].valid;
-                        pe.aSos = aOutputs[k].sos;
-                        pe.aEos = aOutputs[k].eos;
-                    } else {
-                        pe.a = prevA[k][j-1];
-                        pe.aValid = prevAValid[k][j-1];
-                        pe.aSos = prevASos[k][j-1];
-                        pe.aEos = prevAEos[k][j-1];
-                    }
-
-                    // C flows North→South (partial sums along k)
-                    // C_in comes from PE above (k-1)
-                    let cIn = (k > 0) ? prevC[k-1][j] : 0;
-
-                    // Compute: C_out = C_in + A * B
-                    if (pe.aValid && pe.bValid) {
-                        pe.computing = true;
-                        pe.c = cIn + pe.a * pe.b;
-                    } else {
-                        pe.c = cIn; // Pass through
-                    }
-
-                    // Bottom row (k=K-1) captures final C[i,j] result
-                    // i is determined by when A arrives (with skew)
-                    if (k === K - 1 && pe.aValid) {
-                        // Determine which i this result corresponds to
-                        // Due to skew, i = cycle - k - j for the value at PE(k,j)
-                        const i = currentCycle - k - j;
-                        if (i >= 0 && i < M) {
-                            outputC[i][j] = pe.c;
+                    if (bOutputs[j].valid) {
+                        const k = phaseCycle - j;  // Which row this value belongs to
+                        if (k >= 0 && k < K && !peState[k][j].bValid) {
+                            peState[k][j].b = bOutputs[j].value;
+                            peState[k][j].bValid = true;
+                            peState[k][j].loading = true;
                         }
                     }
                 }
-            }
 
-            // Check completion - all M×N output values
-            let doneCount = 0;
-            for (let i = 0; i < M; i++) {
-                for (let j = 0; j < N; j++) {
-                    if (outputC[i][j] !== null) doneCount++;
+                // Check if load complete - all PEs in K×N array have B loaded
+                let allLoaded = true;
+                for (let k = 0; k < K; k++) {
+                    for (let j = 0; j < N; j++) {
+                        if (!peState[k][j].bValid) allLoaded = false;
+                    }
+                }
+
+                if (allLoaded) {
+                    loadCycleCount = phaseCycle + 1;
+                    currentPhase = 'compute';
+                    phaseStartCycle = currentCycle + 1;
+
+                    // Re-initialize A skew buffer for A input during compute
+                    // Row k has k registers
+                    for (let k = 0; k < K; k++) {
+                        skewA[k] = [];
+                        for (let r = 0; r < k; r++) {
+                            skewA[k][r] = { value: null, valid: false, sos: false, eos: false };
+                        }
+                        aOutputs[k] = { value: null, valid: false, sos: false, eos: false };
+                    }
+
+                    // B skew buffer repurposed for C INPUT (column j has j registers)
+                    for (let j = 0; j < N; j++) {
+                        skewB[j] = [];
+                        for (let r = 0; r < j; r++) {
+                            skewB[j][r] = { value: 0, valid: true, sos: false, eos: false, isC: true };
+                        }
+                        bOutputs[j] = { value: null, valid: false, sos: false, eos: false };
+                    }
+
+                    // Initialize C inputs array for visualization
+                    cInputs = [];
+                    for (let j = 0; j < N; j++) {
+                        cInputs[j] = { value: 0, valid: false, isC: true };
+                    }
                 }
             }
+            else if (currentPhase === 'compute') {
+                // Stream A West→East, C enters from North through repurposed B skew buffer
+                const iToProcess = phaseCycle;
 
-            if (doneCount === M * N && completionCycle < 0) {
-                completionCycle = currentCycle;
-            }
+                if (iToProcess < M) {
+                    sramValid = true;
+                    sramLabel = `A[${iToProcess},:]`;
+                    sramA = [];
+                    for (let k = 0; k < K; k++) sramA.push(A[iToProcess][k]);
+                    sramB = [];
+                } else {
+                    sramValid = false;
+                    sramA = [];
+                }
 
-            if (doneCount === M * N) {
-                indicator.textContent = `B-Stationary: Complete! All ${M*N} results`;
-                indicator.className = 'phase-indicator complete';
-            } else {
-                indicator.textContent = `B-Stationary: A flows E, C flows S (${doneCount}/${M*N})`;
-                indicator.className = 'phase-indicator';
+                const isSos = (iToProcess === 0);
+                const isEos = (iToProcess === M - 1);
+
+                // C enters from North through repurposed B skew buffer
+                // C[i,j] initial value is 0, enters at cycle i, exits column j at cycle i+j
+                for (let j = 0; j < N; j++) {
+                    // C input is always 0 (initial partial sum)
+                    const cInput = (iToProcess < M) ?
+                        { value: 0, valid: true, sos: isSos, eos: isEos, isC: true } :
+                        { value: null, valid: false, sos: false, eos: false, isC: true };
+                    bOutputs[j] = shiftSkewBuffer(skewB[j], j, cInput);
+                    bOutputs[j].isC = true;  // Mark as C value for display
+                    cInputs[j] = bOutputs[j];
+                }
+
+                // A skew buffer - row k has k registers
+                for (let k = 0; k < K; k++) {
+                    const input = sramValid ? { value: sramA[k], valid: true, sos: isSos, eos: isEos } : { value: null, valid: false, sos: false, eos: false };
+                    aOutputs[k] = shiftSkewBuffer(skewA[k], k, input);
+                }
+
+                // Capture previous state
+                let prevA = [], prevAValid = [], prevASos = [], prevAEos = [];
+                let prevC = [];
+                for (let k = 0; k < K; k++) {
+                    prevA[k] = []; prevAValid[k] = []; prevASos[k] = []; prevAEos[k] = [];
+                    prevC[k] = [];
+                    for (let j = 0; j < N; j++) {
+                        prevA[k][j] = peState[k][j].a;
+                        prevAValid[k][j] = peState[k][j].aValid;
+                        prevASos[k][j] = peState[k][j].aSos;
+                        prevAEos[k][j] = peState[k][j].aEos;
+                        prevC[k][j] = peState[k][j].c;
+                    }
+                }
+
+                // Update PEs - K×N array
+                for (let k = 0; k < K; k++) {
+                    for (let j = 0; j < N; j++) {
+                        const pe = peState[k][j];
+                        pe.computing = false;
+                        pe.loading = false;
+                        pe.draining = false;
+
+                        // A flows West→East
+                        if (j === 0) {
+                            pe.a = aOutputs[k].value;
+                            pe.aValid = aOutputs[k].valid;
+                            pe.aSos = aOutputs[k].sos;
+                            pe.aEos = aOutputs[k].eos;
+                        } else {
+                            pe.a = prevA[k][j-1];
+                            pe.aValid = prevAValid[k][j-1];
+                            pe.aSos = prevASos[k][j-1];
+                            pe.aEos = prevAEos[k][j-1];
+                        }
+
+                        // C flows North→South
+                        // First row (k=0) gets C from skew buffer (initial 0)
+                        // Other rows get C from PE above
+                        let cIn;
+                        if (k === 0) {
+                            cIn = (cInputs[j] && cInputs[j].valid) ? cInputs[j].value : 0;
+                        } else {
+                            cIn = prevC[k-1][j];
+                        }
+
+                        // Compute: C_out = C_in + A * B
+                        if (pe.aValid && pe.bValid) {
+                            pe.computing = true;
+                            pe.c = cIn + pe.a * pe.b;
+                        } else {
+                            pe.c = cIn;  // Pass through
+                        }
+                    }
+                }
+
+                // Process C bottom skew buffer for de-skewing
+                // Column j needs (N-1-j) delay registers
+                for (let j = 0; j < N; j++) {
+                    const depth = N - 1 - j;
+                    const pe = peState[K-1][j];
+                    const cValue = pe.aValid ? { value: pe.c, valid: true, i: iToProcess - (K-1) - j } : { value: null, valid: false, i: -1 };
+
+                    if (depth === 0) {
+                        cBottomOutputs[j] = cValue;
+                    } else {
+                        cBottomOutputs[j] = skewCBottom[j][0] || { value: null, valid: false, i: -1 };
+                        for (let r = 0; r < depth - 1; r++) {
+                            skewCBottom[j][r] = skewCBottom[j][r + 1] || { value: null, valid: false, i: -1 };
+                        }
+                        skewCBottom[j][depth - 1] = cValue;
+                    }
+
+                    // Capture valid outputs
+                    if (cBottomOutputs[j].valid && cBottomOutputs[j].i >= 0 && cBottomOutputs[j].i < M) {
+                        outputC[cBottomOutputs[j].i][j] = cBottomOutputs[j].value;
+                    }
+                }
+
+                // Check completion
+                let doneCount = 0;
+                for (let i = 0; i < M; i++) {
+                    for (let j = 0; j < N; j++) {
+                        if (outputC[i][j] !== null) doneCount++;
+                    }
+                }
+
+                if (doneCount === M * N) {
+                    computeCycleCount = phaseCycle + 1;
+                    currentPhase = 'complete';
+                }
             }
         }
 
+        // ===========================================
+        // Main simulation step
+        // ===========================================
         function simulateStep() {
             if (currentSchedule === 'c-stationary') {
                 simulateCStationary();
@@ -1032,31 +1243,64 @@
         }
 
         // ===========================================
-        // Display - Flexbox layout
+        // Display
         // ===========================================
-
-        // Calculate A-side width: SRAM(50) + gap(2) + registers + gap + Out(46) + gap + arrow(24)
-        // registers = maxSkewDepth * (46 + 2) - 2
-        const CELL_W = 46, SRAM_W = 50, ARROW_W = 24, GAP = 2;
-        const PE_W = 60;
-        const aSideWidth = SRAM_W + GAP + (maxSkewDepth * (CELL_W + GAP)) + CELL_W + GAP + ARROW_W;
-
         function updateDisplay() {
             document.getElementById('cycleNum').textContent = currentCycle;
 
-            // SRAM info
-            const sramInfo = document.getElementById('sramInfo');
-            if (sramValid) {
-                let markers = '';
-                if (sramK === 0) markers = ' (SOS)';
-                if (sramK === K-1) markers = ' (EOS)';
-                sramInfo.innerHTML = `SRAM read: <span class="k-val">k=${sramK}${markers}</span>`;
+            const dim = getPEDimensions();
+            const maxSkewDepth = Math.max(dim.rows, dim.cols) - 1;
+
+            // Update phase indicator
+            const indicator = document.getElementById('phaseIndicator');
+            let phaseText = '';
+            if (currentPhase === 'load') {
+                phaseText = `${currentSchedule.toUpperCase()}: Loading stationary operand`;
+                indicator.className = 'phase-indicator load';
+            } else if (currentPhase === 'compute') {
+                phaseText = `${currentSchedule.toUpperCase()}: Computing`;
+                indicator.className = 'phase-indicator compute';
+            } else if (currentPhase === 'unload') {
+                phaseText = `${currentSchedule.toUpperCase()}: Draining results`;
+                indicator.className = 'phase-indicator unload';
             } else {
-                sramInfo.textContent = 'SRAM: idle';
+                phaseText = `${currentSchedule.toUpperCase()}: Complete!`;
+                indicator.className = 'phase-indicator complete';
             }
+            indicator.textContent = phaseText;
+
+            // SRAM info (show context switch for C injection)
+            const sramInfo = document.getElementById('sramInfo');
+            let sramHtml = `Phase: <span class="phase-val ${currentPhase}">${currentPhase}</span>`;
+            if (sramValid) {
+                sramHtml += ` | Reading: ${sramLabel}`;
+            }
+            // Show C injection status for A/B-stationary compute phase
+            if (currentPhase === 'compute') {
+                if (currentSchedule === 'a-stationary') {
+                    sramHtml += ` | <span style="color: var(--color-c);">C enters West (skew buffer repurposed)</span>`;
+                } else if (currentSchedule === 'b-stationary') {
+                    sramHtml += ` | <span style="color: var(--color-c);">C enters North (skew buffer repurposed)</span>`;
+                }
+            }
+            sramInfo.innerHTML = sramHtml;
+
+            // Update timing info
+            document.getElementById('loadCycles').textContent = loadCycleCount;
+            document.getElementById('computeCycles').textContent = computeCycleCount;
+            document.getElementById('unloadCycles').textContent = unloadCycleCount;
+            document.getElementById('totalCycles').textContent = loadCycleCount + computeCycleCount + unloadCycleCount;
 
             const container = document.getElementById('gridContainer');
             container.innerHTML = '';
+
+            // Cell sizes
+            const CELL_W = 46, SRAM_W = 50, ARROW_W = 24, GAP = 2;
+            const PE_W = 60;
+
+            // Calculate A-side width
+            const aSkewDepth = Math.max(0, dim.rows - 1);
+            const aSideWidth = SRAM_W + GAP + (aSkewDepth * (CELL_W + GAP)) + CELL_W + GAP + ARROW_W;
 
             // Helper: create cell
             function cell(type, content, flags = {}) {
@@ -1068,8 +1312,10 @@
                 else if (type === 'arrow') div.className = 'cell arrow';
 
                 if (type === 'b-col' || flags.bCol) div.classList.add('b-col');
+                if (type === 'c-col' || flags.cCol) div.classList.add('c-col');
                 if (flags.a) div.classList.add('a');
                 if (flags.b) div.classList.add('b');
+                if (flags.c) div.classList.add('c');
                 if (flags.active) div.classList.add('active');
 
                 if (flags.sos) {
@@ -1095,16 +1341,11 @@
                 const state = peState[i][j];
 
                 if (state.done) pe.classList.add('done');
+                else if (state.draining) pe.classList.add('draining');
                 else if (state.computing) pe.classList.add('computing');
+                else if (state.loading) pe.classList.add('loading');
 
-                if ((state.aEos && state.aValid) || (state.bEos && state.bValid)) {
-                    const badge = document.createElement('span');
-                    badge.className = 'eos-badge';
-                    badge.textContent = 'E';
-                    pe.appendChild(badge);
-                }
-
-                // PE display: show A x B inputs when valid
+                // Show inputs
                 if (state.aValid || state.bValid) {
                     const inputs = document.createElement('div');
                     inputs.className = 'pe-inputs';
@@ -1115,7 +1356,7 @@
                         inputs.appendChild(s);
                     }
                     if (state.aValid && state.bValid) {
-                        inputs.appendChild(document.createTextNode('x'));
+                        inputs.appendChild(document.createTextNode('×'));
                     }
                     if (state.bValid) {
                         const s = document.createElement('span');
@@ -1128,47 +1369,54 @@
 
                 const val = document.createElement('div');
                 val.className = 'pe-value';
-                val.textContent = state.done ? state.c : (state.c || '.');
+                val.textContent = state.c || '.';
                 pe.appendChild(val);
 
                 return pe;
             }
 
-            // Helper: create a B-side row (for skew buffer above PEs)
-            function createBRow(content) {
+            // Helper: create row with B-side content above PEs
+            function createBRow(content, showCRight = false) {
                 const row = document.createElement('div');
                 row.className = 'grid-row';
 
-                // Spacer to align with PE columns
                 const spacer = document.createElement('div');
                 spacer.style.width = aSideWidth + 'px';
                 spacer.style.flexShrink = '0';
                 row.appendChild(spacer);
 
-                // B-side content
                 const bSide = document.createElement('div');
                 bSide.className = 'b-side';
                 content.forEach(el => bSide.appendChild(el));
                 row.appendChild(bSide);
 
+                // C output on right for A-stationary
+                if (showCRight && currentSchedule === 'a-stationary') {
+                    const cSide = document.createElement('div');
+                    cSide.className = 'c-side';
+                    cSide.appendChild(cell('arrow', ' '));
+                    row.appendChild(cSide);
+                }
+
                 return row;
             }
 
-            // ═══════════════════════════════════════════════════════════════
-            // ROW: B column headers
-            // ═══════════════════════════════════════════════════════════════
+            // B column headers
             let bCells = [];
-            for (let j = 0; j < N; j++) {
+            for (let j = 0; j < dim.cols; j++) {
                 bCells.push(cell('header', `b${j}`, { bCol: true }));
             }
             container.appendChild(createBRow(bCells));
 
-            // ═══════════════════════════════════════════════════════════════
-            // ROW: B SRAM values
-            // ═══════════════════════════════════════════════════════════════
+            // B SRAM values (or C injection indicator for B-stationary compute)
             bCells = [];
-            for (let j = 0; j < N; j++) {
-                if (sramValid) {
+            for (let j = 0; j < dim.cols; j++) {
+                if (currentSchedule === 'b-stationary' && currentPhase === 'compute') {
+                    // Show C=0 injection during B-stationary compute
+                    const c = cell('', 'C=0', { c: true, cCol: true });
+                    c.style.fontSize = '8px';
+                    bCells.push(c);
+                } else if (sramB.length > j && sramValid && (currentPhase === 'load' || currentSchedule === 'c-stationary' || (currentSchedule === 'a-stationary' && currentPhase === 'compute'))) {
                     bCells.push(cell('', sramB[j], { b: true, bCol: true }));
                 } else {
                     const c = cell('', '.', { bCol: true });
@@ -1178,20 +1426,18 @@
             }
             container.appendChild(createBRow(bCells));
 
-            // ═══════════════════════════════════════════════════════════════
-            // ROWS: B Skew Buffer registers (R2, R1, R0 from top to bottom)
-            // Column j has j registers: R0..R(j-1)
-            // Data enters at R(j-1), shifts down, exits from R0
-            // ═══════════════════════════════════════════════════════════════
-            for (let d = maxSkewDepth - 1; d >= 0; d--) {
+            // B Skew Buffer registers (may contain C values in B-stationary compute phase)
+            const bSkewDepth = Math.max(0, dim.cols - 1);
+            for (let d = bSkewDepth - 1; d >= 0; d--) {
                 bCells = [];
-                for (let j = 0; j < N; j++) {
+                for (let j = 0; j < dim.cols; j++) {
                     let c;
-                    // Column j has registers R0..R(j-1), so it has Rd only if d < j
-                    if (d < j && skewB[j][d]) {
+                    if (d < j && skewB[j] && skewB[j][d]) {
                         const reg = skewB[j][d];
                         if (reg.valid) {
-                            c = cell('', reg.value, { b: true, bCol: true, sos: reg.sos, eos: reg.eos });
+                            // Check if this is a C value (repurposed buffer in B-stationary)
+                            const isC = reg.isC || (currentSchedule === 'b-stationary' && currentPhase === 'compute');
+                            c = cell('', reg.value, { b: !isC, c: isC, bCol: !isC, cCol: isC, sos: reg.sos, eos: reg.eos });
                         } else {
                             c = cell('', '.', { bCol: true });
                         }
@@ -1203,45 +1449,52 @@
                 container.appendChild(createBRow(bCells));
             }
 
-            // ═══════════════════════════════════════════════════════════════
-            // ROW: B Output
-            // ═══════════════════════════════════════════════════════════════
+            // B Output row (may be C value in B-stationary compute phase)
             bCells = [];
-            for (let j = 0; j < N; j++) {
+            for (let j = 0; j < dim.cols; j++) {
                 const out = bOutputs[j];
-                if (out.valid) {
-                    bCells.push(cell('', out.value, { b: true, bCol: true, active: true, sos: out.sos, eos: out.eos }));
+                if (out && out.valid) {
+                    // Check if this is a C value (repurposed buffer in B-stationary)
+                    const isC = out.isC || (currentSchedule === 'b-stationary' && currentPhase === 'compute');
+                    bCells.push(cell('', out.value, { b: !isC, c: isC, bCol: !isC, cCol: isC, active: true, sos: out.sos, eos: out.eos }));
                 } else {
                     bCells.push(cell('', '.', { bCol: true }));
                 }
             }
             container.appendChild(createBRow(bCells));
 
-            // ═══════════════════════════════════════════════════════════════
-            // ROW: Arrows down
-            // ═══════════════════════════════════════════════════════════════
+            // Arrows down (color based on what's flowing - B or C)
             bCells = [];
-            for (let j = 0; j < N; j++) {
-                const c = cell('arrow', bOutputs[j].valid ? '\u2193' : ' ');
-                c.classList.add('b-col');
+            for (let j = 0; j < dim.cols; j++) {
+                const out = bOutputs[j];
+                const c = cell('arrow', (out && out.valid) ? '↓' : ' ');
+                // Check if this is C flowing (B-stationary compute phase)
+                const isC = out && out.isC || (currentSchedule === 'b-stationary' && currentPhase === 'compute');
+                if (isC && out && out.valid) {
+                    c.style.color = 'var(--color-c)';
+                } else {
+                    c.classList.add('b-col');
+                }
                 bCells.push(c);
             }
             container.appendChild(createBRow(bCells));
 
-            // ═══════════════════════════════════════════════════════════════
-            // ROWS: A Skew Buffer + PE Array
-            // ═══════════════════════════════════════════════════════════════
-            for (let i = 0; i < M; i++) {
+            // PE rows with A-side
+            for (let i = 0; i < dim.rows; i++) {
                 const row = document.createElement('div');
                 row.className = 'grid-row';
 
-                // A-side section
+                // A-side
                 const aSide = document.createElement('div');
                 aSide.className = 'a-side';
 
-                // A SRAM
+                // A SRAM (or C injection indicator for A-stationary compute)
                 let c;
-                if (sramValid) {
+                if (currentSchedule === 'a-stationary' && currentPhase === 'compute') {
+                    // Show C=0 injection during A-stationary compute
+                    c = cell('sram', 'C=0', { c: true });
+                    c.style.fontSize = '8px';
+                } else if (sramA.length > i && sramValid && (currentPhase === 'load' || currentSchedule === 'c-stationary' || (currentSchedule === 'b-stationary' && currentPhase === 'compute'))) {
                     c = cell('sram', sramA[i], { a: true });
                 } else {
                     c = cell('sram', `a${i}`);
@@ -1249,15 +1502,14 @@
                 }
                 aSide.appendChild(c);
 
-                // A skew buffer registers (displayed R2, R1, R0 from left to right)
-                // Row i has i registers: R0..R(i-1)
-                // Data enters at R(i-1), shifts down, exits from R0
-                for (let d = maxSkewDepth - 1; d >= 0; d--) {
-                    // Row i has registers R0..R(i-1), so it has Rd only if d < i
-                    if (d < i && skewA[i][d]) {
+                // A skew buffer registers (may contain C values in A-stationary compute phase)
+                for (let d = aSkewDepth - 1; d >= 0; d--) {
+                    if (d < i && skewA[i] && skewA[i][d]) {
                         const reg = skewA[i][d];
                         if (reg.valid) {
-                            c = cell('', reg.value, { a: true, sos: reg.sos, eos: reg.eos });
+                            // Check if this is a C value (repurposed buffer in A-stationary)
+                            const isC = reg.isC || (currentSchedule === 'a-stationary' && currentPhase === 'compute');
+                            c = cell('', reg.value, { a: !isC, c: isC, sos: reg.sos, eos: reg.eos });
                         } else {
                             c = cell('', '.');
                         }
@@ -1267,17 +1519,24 @@
                     aSide.appendChild(c);
                 }
 
-                // A output
+                // A output (may be C value in A-stationary compute phase)
                 const aOut = aOutputs[i];
-                if (aOut.valid) {
-                    c = cell('', aOut.value, { a: true, active: true, sos: aOut.sos, eos: aOut.eos });
+                if (aOut && aOut.valid) {
+                    // Check if this is a C value (repurposed buffer in A-stationary)
+                    const isC = aOut.isC || (currentSchedule === 'a-stationary' && currentPhase === 'compute');
+                    c = cell('', aOut.value, { a: !isC, c: isC, active: true, sos: aOut.sos, eos: aOut.eos });
                 } else {
                     c = cell('', '.');
                 }
                 aSide.appendChild(c);
 
-                // Arrow
-                c = cell('arrow', aOut.valid ? '\u2192' : ' ');
+                // Arrow (color based on what's flowing - A or C)
+                c = cell('arrow', (aOut && aOut.valid) ? '→' : ' ');
+                // Check if this is C flowing (A-stationary compute phase)
+                const isCFlow = aOut && aOut.isC || (currentSchedule === 'a-stationary' && currentPhase === 'compute');
+                if (isCFlow && aOut && aOut.valid) {
+                    c.style.color = 'var(--color-c)';
+                }
                 aSide.appendChild(c);
 
                 row.appendChild(aSide);
@@ -1285,31 +1544,91 @@
                 // PE array
                 const peRow = document.createElement('div');
                 peRow.className = 'pe-row';
-                for (let j = 0; j < N; j++) {
+                for (let j = 0; j < dim.cols; j++) {
                     peRow.appendChild(makePE(i, j));
                 }
                 row.appendChild(peRow);
 
+                // C output on right for A-stationary
+                if (currentSchedule === 'a-stationary' && i < M) {
+                    const cSide = document.createElement('div');
+                    cSide.className = 'c-side';
+
+                    const cOut = cRightOutputs[i];
+                    c = cell('arrow', (cOut && cOut.valid) ? '→' : ' ');
+                    cSide.appendChild(c);
+
+                    if (cOut && cOut.valid) {
+                        c = cell('', cOut.value, { c: true, active: true });
+                    } else {
+                        c = cell('', '.', { cCol: true });
+                    }
+                    cSide.appendChild(c);
+
+                    row.appendChild(cSide);
+                }
+
                 container.appendChild(row);
             }
 
-            // Update computed C matrix
-            let completeCount = 0;
+            // C output at bottom for B-stationary
+            if (currentSchedule === 'b-stationary') {
+                // Arrow row
+                const arrowRow = document.createElement('div');
+                arrowRow.className = 'grid-row';
+                const arrowSpacer = document.createElement('div');
+                arrowSpacer.style.width = aSideWidth + 'px';
+                arrowSpacer.style.flexShrink = '0';
+                arrowRow.appendChild(arrowSpacer);
+
+                const arrowContent = document.createElement('div');
+                arrowContent.className = 'b-side';
+                for (let j = 0; j < dim.cols; j++) {
+                    const cOut = cBottomOutputs[j];
+                    const c = cell('arrow', (cOut && cOut.valid) ? '↓' : ' ');
+                    c.classList.add('c-col');
+                    arrowContent.appendChild(c);
+                }
+                arrowRow.appendChild(arrowContent);
+                container.appendChild(arrowRow);
+
+                // C output row
+                const cRow = document.createElement('div');
+                cRow.className = 'grid-row';
+                const cSpacer = document.createElement('div');
+                cSpacer.style.width = aSideWidth + 'px';
+                cSpacer.style.flexShrink = '0';
+                cRow.appendChild(cSpacer);
+
+                const cContent = document.createElement('div');
+                cContent.className = 'b-side';
+                for (let j = 0; j < dim.cols; j++) {
+                    const cOut = cBottomOutputs[j];
+                    let c;
+                    if (cOut && cOut.valid) {
+                        c = cell('', cOut.value, { c: true, cCol: true, active: true });
+                    } else {
+                        c = cell('', '.', { cCol: true });
+                    }
+                    cContent.appendChild(c);
+                }
+                cRow.appendChild(cContent);
+                container.appendChild(cRow);
+            }
+
+            // Update computed C matrix display
             for (let i = 0; i < M; i++) {
                 for (let j = 0; j < N; j++) {
                     const c = document.getElementById(`c-${i}-${j}`);
                     if (outputC[i][j] !== null) {
                         c.textContent = outputC[i][j];
                         c.classList.add('correct');
-                        completeCount++;
                     } else {
                         c.textContent = '-';
                         c.classList.remove('correct');
                     }
                 }
             }
-
-            document.getElementById('currentOp').textContent = `Complete: ${completeCount}/${M*N}`;
         }
 
         // ===========================================
@@ -1327,13 +1646,13 @@
 
             if (currentSchedule === 'c-stationary') {
                 title.textContent = 'C-Stationary S=[0,0,1]';
-                desc.innerHTML = 'PE array: M×N (4×4)<br>A flows East, B flows South<br>C accumulates in PE';
+                desc.innerHTML = 'PE array: M×N (4×4)<br>A flows E, B flows S<br>C stays in PE, then drains';
             } else if (currentSchedule === 'a-stationary') {
                 title.textContent = 'A-Stationary S=[0,1,0]';
-                desc.innerHTML = 'PE array: M×K (4×2)<br>A stationary, B flows South<br>C flows East → right edge';
+                desc.innerHTML = 'PE array: M×K (4×2)<br>A loads, then B flows S<br>C flows E → right edge';
             } else if (currentSchedule === 'b-stationary') {
                 title.textContent = 'B-Stationary S=[1,0,0]';
-                desc.innerHTML = 'PE array: K×N (2×4)<br>A flows East, B stationary<br>C flows South → bottom edge';
+                desc.innerHTML = 'PE array: K×N (2×4)<br>B loads, then A flows E<br>C flows S → bottom edge';
             }
         }
 
@@ -1347,14 +1666,14 @@
             document.getElementById('btnPlay').textContent = 'Pause';
             document.getElementById('btnPlay').classList.add('active');
             playInterval = setInterval(() => {
-                if (!shouldStop()) {
+                if (currentPhase !== 'complete') {
                     simulateStep();
                     updateDisplay();
                     currentCycle++;
                 } else {
                     stopPlay();
                 }
-            }, 700);
+            }, 500);
         }
 
         function stopPlay() {
@@ -1369,7 +1688,7 @@
 
         function stepForward() {
             stopPlay();
-            if (!shouldStop()) {
+            if (currentPhase !== 'complete') {
                 simulateStep();
                 updateDisplay();
                 currentCycle++;
@@ -1383,21 +1702,16 @@
             updateDisplay();
         }
 
-        function shouldStop() {
-            if (completionCycle >= 0) {
-                return currentCycle >= completionCycle + DRAIN_CYCLES;
-            }
-            return false;
-        }
-
         document.addEventListener('keydown', (e) => {
             if (e.key === ' ') { e.preventDefault(); togglePlay(); }
             else if (e.key === 'ArrowRight') stepForward();
             else if (e.key === 'r') reset();
         });
 
+        // Initialize
         createMatrixDisplays();
         initState();
+        updateScheduleDescription();
         updateDisplay();
     </script>
 </body>
