@@ -1,0 +1,1480 @@
+<!DOCTYPE html>
+<!--
+  KPU Systolic Array Dataflow Animation - Kung-Leiserson Style
+
+  Shows the standard 2D physical layout with:
+  - B Scratchpad at top, Skew Buffer B feeding columns downward
+  - A Scratchpad on left, Skew Buffer A feeding rows rightward
+  - Systolic Array in center with proper data flow
+  - SOS (Start-of-Stream) and EOS (End-of-Stream) markers
+
+  SPDX-License-Identifier: MIT
+  Copyright (c) 2024-2026 Stillwater Supercomputing, Inc.
+-->
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Systolic Array Dataflow Animation</title>
+    <style>
+        :root {
+            --bg: #0a0e14;
+            --bg-panel: #151a21;
+            --border: #2d333b;
+            --text: #e6edf3;
+            --text-dim: #7d8590;
+            --color-a: #ef4444;
+            --color-b: #22c55e;
+            --color-c: #fbbf24;
+            --computing: #3b82f6;
+            --correct: #22c55e;
+            --sos-color: #22d3ee;
+            --eos-color: #f97316;
+        }
+
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+
+        body {
+            font-family: 'SF Mono', Monaco, 'Consolas', monospace;
+            background: var(--bg);
+            color: var(--text);
+            min-height: 100vh;
+            padding: 10px;
+        }
+
+        .header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 10px;
+            background: var(--bg-panel);
+            border-radius: 8px;
+            margin-bottom: 10px;
+        }
+
+        .header h1 { font-size: 14px; font-weight: 500; }
+        .controls { display: flex; gap: 8px; align-items: center; }
+
+        button, select {
+            background: #2d333b;
+            color: #fff;
+            border: none;
+            padding: 6px 12px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 12px;
+        }
+        button:hover, select:hover { background: #3d444d; }
+        button.active { background: var(--computing); }
+
+        .cycle-display {
+            background: #2d333b;
+            padding: 6px 12px;
+            border-radius: 4px;
+            font-size: 12px;
+        }
+
+        .main-layout {
+            display: grid;
+            grid-template-columns: 200px 1fr 220px;
+            gap: 10px;
+        }
+
+        .panel {
+            background: var(--bg-panel);
+            border-radius: 8px;
+            padding: 12px;
+        }
+
+        .panel h3 {
+            font-size: 10px;
+            text-transform: uppercase;
+            color: var(--text-dim);
+            margin-bottom: 8px;
+            letter-spacing: 0.5px;
+        }
+
+        .matrix-container { margin-bottom: 12px; }
+        .matrix-label { font-size: 11px; font-weight: 600; margin-bottom: 4px; }
+        .matrix-label.a { color: var(--color-a); }
+        .matrix-label.b { color: var(--color-b); }
+
+        .matrix {
+            display: grid;
+            gap: 2px;
+            font-size: 10px;
+        }
+
+        .matrix-cell {
+            background: #2d333b;
+            padding: 4px;
+            text-align: center;
+            border-radius: 2px;
+            min-width: 28px;
+        }
+        .matrix-cell.correct { background: rgba(34, 197, 94, 0.3); color: var(--correct); }
+
+        .schedule-box {
+            background: rgba(0,0,0,0.2);
+            border-radius: 6px;
+            padding: 10px;
+            margin-top: 12px;
+            font-size: 11px;
+        }
+        .schedule-box .title {
+            font-weight: 600;
+            color: var(--color-c);
+            margin-bottom: 6px;
+        }
+
+        .legend { margin-top: 12px; }
+        .legend-item {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            font-size: 10px;
+            margin-bottom: 4px;
+        }
+        .legend-box {
+            width: 16px;
+            height: 12px;
+            border-radius: 2px;
+        }
+
+        .phase-indicator {
+            text-align: center;
+            padding: 8px;
+            background: rgba(59, 130, 246, 0.2);
+            border-radius: 6px;
+            margin-bottom: 10px;
+            font-size: 11px;
+        }
+        .phase-indicator.complete { background: rgba(34, 197, 94, 0.3); }
+
+        /* ============================================ */
+        /* Flexbox Layout                              */
+        /* ============================================ */
+        .grid-container {
+            display: flex;
+            flex-direction: column;
+            gap: 2px;
+            font-size: 10px;
+        }
+
+        .grid-row {
+            display: flex;
+            align-items: center;
+            gap: 2px;
+        }
+
+        /* A-side section (SRAM + skew registers + output + arrow) */
+        .a-side {
+            display: flex;
+            align-items: center;
+            gap: 2px;
+        }
+
+        /* B-side section (skew buffer columns above PEs) */
+        .b-side {
+            display: flex;
+            align-items: center;
+            gap: 2px;
+        }
+
+        /* PE array row */
+        .pe-row {
+            display: flex;
+            align-items: center;
+            gap: 2px;
+        }
+
+        /* Cell types */
+        .cell {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            width: 46px;
+            height: 28px;
+            font-size: 10px;
+            border-radius: 3px;
+            background: var(--bg);
+            border: 1px solid var(--border);
+            position: relative;
+            flex-shrink: 0;
+        }
+        .cell.sram { width: 50px; }
+        .cell.empty { background: transparent; border-color: transparent; }
+        .cell.header { background: transparent; border: none; color: var(--text-dim); font-weight: 600; }
+        .cell.a { background: rgba(239, 68, 68, 0.2); color: var(--color-a); border-color: rgba(239, 68, 68, 0.4); }
+        .cell.b { background: rgba(34, 197, 94, 0.2); color: var(--color-b); border-color: rgba(34, 197, 94, 0.4); }
+        .cell.active { box-shadow: 0 0 6px currentColor; }
+        .cell.arrow { background: transparent; border: none; color: var(--text-dim); font-size: 14px; width: 24px; }
+
+        .cell .marker {
+            position: absolute;
+            top: 1px;
+            right: 2px;
+            font-size: 7px;
+            font-weight: bold;
+        }
+        .cell .marker.sos { color: var(--sos-color); }
+        .cell .marker.eos { color: var(--eos-color); }
+
+        /* Processing Element */
+        .pe {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            width: 60px;
+            height: 46px;
+            background: var(--bg);
+            border: 2px solid var(--border);
+            border-radius: 4px;
+            font-size: 9px;
+            position: relative;
+            flex-shrink: 0;
+        }
+        .pe.computing { border-color: var(--computing); background: rgba(59, 130, 246, 0.15); }
+        .pe.done { border-color: var(--correct); background: rgba(34, 197, 94, 0.15); }
+
+        .pe-value { font-weight: 600; font-size: 12px; }
+        .pe.done .pe-value { color: var(--correct); }
+        .pe.computing .pe-value { color: var(--computing); }
+
+        .pe-inputs { display: flex; gap: 2px; font-size: 8px; }
+        .pe-in-a { color: var(--color-a); }
+        .pe-in-b { color: var(--color-b); }
+
+        .pe .eos-badge {
+            position: absolute;
+            top: 2px;
+            right: 2px;
+            font-size: 7px;
+            color: var(--eos-color);
+            font-weight: bold;
+        }
+
+        /* B-column cells match PE width */
+        .cell.b-col {
+            width: 60px;
+        }
+
+        .sram-info {
+            padding: 4px 8px;
+            background: rgba(0,0,0,0.2);
+            border-radius: 4px;
+            margin-bottom: 8px;
+            font-size: 10px;
+            color: var(--text-dim);
+        }
+        .sram-info .k-val {
+            color: var(--computing);
+            font-weight: 600;
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>Systolic Array Dataflow Animation - Kung-Leiserson Layout</h1>
+        <div class="controls">
+            <select id="scheduleSelect" onchange="changeSchedule()">
+                <option value="c-stationary">C-Stationary (Output)</option>
+                <option value="a-stationary">A-Stationary (Weight)</option>
+                <option value="b-stationary">B-Stationary (Input)</option>
+            </select>
+            <button id="btnPlay" onclick="togglePlay()">Play</button>
+            <button onclick="stepForward()">Step</button>
+            <button onclick="reset()">Reset</button>
+            <div class="cycle-display">
+                Cycle: <span id="cycleNum">0</span>
+            </div>
+        </div>
+    </div>
+
+    <div class="main-layout">
+        <!-- Left Panel -->
+        <div class="panel">
+            <h3>Input Matrices</h3>
+            <div class="matrix-container">
+                <div class="matrix-label a">A [4x2]</div>
+                <div class="matrix" id="matrixA" style="grid-template-columns: repeat(2, 1fr);"></div>
+            </div>
+            <div class="matrix-container">
+                <div class="matrix-label b">B [2x4]</div>
+                <div class="matrix" id="matrixB" style="grid-template-columns: repeat(4, 1fr);"></div>
+            </div>
+
+            <div class="legend">
+                <h3>Legend</h3>
+                <div class="legend-item">
+                    <div class="legend-box" style="background: rgba(239, 68, 68, 0.3);"></div>
+                    <span>A values (rows)</span>
+                </div>
+                <div class="legend-item">
+                    <div class="legend-box" style="background: rgba(34, 197, 94, 0.3);"></div>
+                    <span>B values (cols)</span>
+                </div>
+                <div class="legend-item">
+                    <div class="legend-box" style="background: var(--computing);"></div>
+                    <span>Computing</span>
+                </div>
+                <div class="legend-item">
+                    <div class="legend-box" style="background: var(--correct);"></div>
+                    <span>Complete</span>
+                </div>
+            </div>
+
+            <div class="schedule-box">
+                <div class="title">Stream Markers</div>
+                <div style="font-size:10px;">
+                    <span style="color: var(--sos-color); font-weight: bold;">S</span> = Start (k=0)<br>
+                    <span style="color: var(--eos-color); font-weight: bold;">E</span> = End (k=K-1)
+                </div>
+            </div>
+        </div>
+
+        <!-- Center: Physical Layout -->
+        <div class="panel" style="overflow: auto;">
+            <div class="phase-indicator" id="phaseIndicator">
+                C-Stationary: Streaming A and B
+            </div>
+            <div class="sram-info" id="sramInfo">SRAM: idle</div>
+            <div class="grid-container" id="gridContainer"></div>
+        </div>
+
+        <!-- Right Panel -->
+        <div class="panel">
+            <h3>Expected C = A x B</h3>
+            <div class="matrix-container">
+                <div class="matrix" id="matrixCExp" style="grid-template-columns: repeat(4, 1fr);"></div>
+            </div>
+
+            <h3>Computed C</h3>
+            <div class="matrix-container">
+                <div class="matrix" id="matrixCComp" style="grid-template-columns: repeat(4, 1fr);"></div>
+            </div>
+
+            <div class="schedule-box">
+                <div class="title" id="scheduleTitle">C-Stationary</div>
+                <div id="scheduleDesc">
+                    A enters WEST, flows East<br>
+                    B enters NORTH, flows South<br>
+                    C accumulates in PE
+                </div>
+            </div>
+
+            <div class="schedule-box" style="margin-top: 8px;">
+                <div class="title">Progress</div>
+                <div id="currentOp">Press Play to start</div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // ===========================================
+        // Configuration
+        // ===========================================
+        const M = 4, K = 2, N = 4;
+        const A = [[1,2],[3,4],[5,6],[7,8]];
+        const B = [[1,2,3,4],[5,6,7,8]];
+
+        const C_expected = [];
+        for (let i = 0; i < M; i++) {
+            C_expected[i] = [];
+            for (let j = 0; j < N; j++) {
+                let sum = 0;
+                for (let k = 0; k < K; k++) sum += A[i][k] * B[k][j];
+                C_expected[i][j] = sum;
+            }
+        }
+
+        const maxSkewDepth = Math.max(M, N) - 1;
+        const DRAIN_CYCLES = 2;
+
+        // ===========================================
+        // State
+        // ===========================================
+        let currentCycle = 0;
+        let isPlaying = false;
+        let playInterval = null;
+        let currentSchedule = 'c-stationary';
+        let completionCycle = -1;
+
+        let peState = [];
+        let outputC = [];
+        let skewA = [];
+        let skewB = [];
+        let aOutputs = [];
+        let bOutputs = [];
+        let sramA = [];
+        let sramB = [];
+        let sramK = -1;
+        let sramValid = false;
+
+        // ===========================================
+        // Initialize
+        // ===========================================
+        function initState() {
+            peState = [];
+            outputC = [];
+            skewA = [];
+            skewB = [];
+            aOutputs = [];
+            bOutputs = [];
+            sramA = [];
+            sramB = [];
+            sramK = -1;
+            sramValid = false;
+            completionCycle = -1;
+
+            for (let i = 0; i < M; i++) {
+                peState[i] = [];
+                outputC[i] = [];
+                aOutputs[i] = { value: null, valid: false, sos: false, eos: false };
+                for (let j = 0; j < N; j++) {
+                    peState[i][j] = {
+                        a: null, b: null, c: 0,
+                        aValid: false, bValid: false,
+                        aSos: false, aEos: false,
+                        bSos: false, bEos: false,
+                        computing: false, done: false
+                    };
+                    outputC[i][j] = null;
+                }
+            }
+
+            // Initialize skew buffers as fixed-size register arrays
+            // Row/column i/j has exactly i/j registers (R0..R(i-1) or R0..R(j-1))
+            // Data enters at highest index, shifts down, exits from index 0
+            for (let i = 0; i < M; i++) {
+                skewA[i] = [];
+                for (let r = 0; r < i; r++) {
+                    skewA[i][r] = { value: null, valid: false, sos: false, eos: false };
+                }
+            }
+
+            for (let j = 0; j < N; j++) {
+                skewB[j] = [];
+                for (let r = 0; r < j; r++) {
+                    skewB[j][r] = { value: null, valid: false, sos: false, eos: false };
+                }
+                bOutputs[j] = { value: null, valid: false, sos: false, eos: false };
+            }
+        }
+
+        function createMatrixDisplays() {
+            const matA = document.getElementById('matrixA');
+            matA.innerHTML = '';
+            for (let i = 0; i < M; i++) {
+                for (let k = 0; k < K; k++) {
+                    const cell = document.createElement('div');
+                    cell.className = 'matrix-cell';
+                    cell.textContent = A[i][k];
+                    matA.appendChild(cell);
+                }
+            }
+
+            const matB = document.getElementById('matrixB');
+            matB.innerHTML = '';
+            for (let k = 0; k < K; k++) {
+                for (let j = 0; j < N; j++) {
+                    const cell = document.createElement('div');
+                    cell.className = 'matrix-cell';
+                    cell.textContent = B[k][j];
+                    matB.appendChild(cell);
+                }
+            }
+
+            const matCExp = document.getElementById('matrixCExp');
+            matCExp.innerHTML = '';
+            for (let i = 0; i < M; i++) {
+                for (let j = 0; j < N; j++) {
+                    const cell = document.createElement('div');
+                    cell.className = 'matrix-cell';
+                    cell.textContent = C_expected[i][j];
+                    matCExp.appendChild(cell);
+                }
+            }
+
+            const matCComp = document.getElementById('matrixCComp');
+            matCComp.innerHTML = '';
+            for (let i = 0; i < M; i++) {
+                for (let j = 0; j < N; j++) {
+                    const cell = document.createElement('div');
+                    cell.className = 'matrix-cell';
+                    cell.id = `c-${i}-${j}`;
+                    cell.textContent = '-';
+                    matCComp.appendChild(cell);
+                }
+            }
+        }
+
+        // ===========================================
+        // C-Stationary Simulation
+        // ===========================================
+        function simulateCStationary() {
+            const kToRead = currentCycle;
+            if (kToRead < K) {
+                sramValid = true;
+                sramK = kToRead;
+                sramA = [];
+                for (let i = 0; i < M; i++) sramA.push(A[i][kToRead]);
+                sramB = [];
+                for (let j = 0; j < N; j++) sramB.push(B[kToRead][j]);
+            } else {
+                sramValid = false;
+                sramK = -1;
+                sramA = [];
+                sramB = [];
+            }
+
+            const isSos = (kToRead === 0);
+            const isEos = (kToRead === K - 1);
+
+            for (let i = 0; i < M; i++) {
+                for (let j = 0; j < N; j++) {
+                    peState[i][j].computing = false;
+                }
+            }
+
+            // Process skew buffers as shift registers
+            // Lane i has i registers: data enters at [i-1], shifts down, exits from [0]
+            const newA = sramValid
+                ? { value: null, valid: true, sos: isSos, eos: isEos }
+                : { value: null, valid: false, sos: false, eos: false };
+            const newB = sramValid
+                ? { value: null, valid: true, sos: isSos, eos: isEos }
+                : { value: null, valid: false, sos: false, eos: false };
+
+            // A skew buffer (rows)
+            for (let i = 0; i < M; i++) {
+                const depth = i;
+                if (depth === 0) {
+                    // No registers - direct passthrough
+                    if (sramValid) {
+                        aOutputs[i] = { value: sramA[i], valid: true, sos: isSos, eos: isEos };
+                    } else {
+                        aOutputs[i] = { value: null, valid: false, sos: false, eos: false };
+                    }
+                } else {
+                    // Output from R0 (index 0)
+                    aOutputs[i] = skewA[i][0];
+
+                    // Shift down: R[r] = R[r+1]
+                    for (let r = 0; r < depth - 1; r++) {
+                        skewA[i][r] = skewA[i][r + 1];
+                    }
+
+                    // New input enters top register (index depth-1)
+                    if (sramValid) {
+                        skewA[i][depth - 1] = { value: sramA[i], valid: true, sos: isSos, eos: isEos };
+                    } else {
+                        skewA[i][depth - 1] = { value: null, valid: false, sos: false, eos: false };
+                    }
+                }
+            }
+
+            // B skew buffer (columns)
+            for (let j = 0; j < N; j++) {
+                const depth = j;
+                if (depth === 0) {
+                    // No registers - direct passthrough
+                    if (sramValid) {
+                        bOutputs[j] = { value: sramB[j], valid: true, sos: isSos, eos: isEos };
+                    } else {
+                        bOutputs[j] = { value: null, valid: false, sos: false, eos: false };
+                    }
+                } else {
+                    // Output from R0 (index 0)
+                    bOutputs[j] = skewB[j][0];
+
+                    // Shift down: R[r] = R[r+1]
+                    for (let r = 0; r < depth - 1; r++) {
+                        skewB[j][r] = skewB[j][r + 1];
+                    }
+
+                    // New input enters top register (index depth-1)
+                    if (sramValid) {
+                        skewB[j][depth - 1] = { value: sramB[j], valid: true, sos: isSos, eos: isEos };
+                    } else {
+                        skewB[j][depth - 1] = { value: null, valid: false, sos: false, eos: false };
+                    }
+                }
+            }
+
+            // Capture PE state for systolic shift
+            let prevA = [], prevB = [];
+            let prevASos = [], prevAEos = [], prevBSos = [], prevBEos = [];
+            let prevAValid = [], prevBValid = [];
+            for (let i = 0; i < M; i++) {
+                prevA[i] = []; prevB[i] = [];
+                prevASos[i] = []; prevAEos[i] = [];
+                prevBSos[i] = []; prevBEos[i] = [];
+                prevAValid[i] = []; prevBValid[i] = [];
+                for (let j = 0; j < N; j++) {
+                    prevA[i][j] = peState[i][j].a;
+                    prevB[i][j] = peState[i][j].b;
+                    prevAValid[i][j] = peState[i][j].aValid;
+                    prevBValid[i][j] = peState[i][j].bValid;
+                    prevASos[i][j] = peState[i][j].aSos;
+                    prevAEos[i][j] = peState[i][j].aEos;
+                    prevBSos[i][j] = peState[i][j].bSos;
+                    prevBEos[i][j] = peState[i][j].bEos;
+                }
+            }
+
+            // Update PEs
+            for (let i = 0; i < M; i++) {
+                for (let j = 0; j < N; j++) {
+                    const pe = peState[i][j];
+
+                    if (j === 0) {
+                        pe.a = aOutputs[i].value;
+                        pe.aValid = aOutputs[i].valid;
+                        pe.aSos = aOutputs[i].sos;
+                        pe.aEos = aOutputs[i].eos;
+                    } else {
+                        pe.a = prevA[i][j-1];
+                        pe.aValid = prevAValid[i][j-1];
+                        pe.aSos = prevASos[i][j-1];
+                        pe.aEos = prevAEos[i][j-1];
+                    }
+
+                    if (i === 0) {
+                        pe.b = bOutputs[j].value;
+                        pe.bValid = bOutputs[j].valid;
+                        pe.bSos = bOutputs[j].sos;
+                        pe.bEos = bOutputs[j].eos;
+                    } else {
+                        pe.b = prevB[i-1][j];
+                        pe.bValid = prevBValid[i-1][j];
+                        pe.bSos = prevBSos[i-1][j];
+                        pe.bEos = prevBEos[i-1][j];
+                    }
+
+                    if (pe.aSos && pe.aValid && pe.bSos && pe.bValid) {
+                        pe.c = 0;
+                        pe.done = false;
+                    }
+
+                    if (pe.aValid && pe.bValid) {
+                        pe.computing = true;
+                        pe.c += pe.a * pe.b;
+
+                        if (pe.aEos && pe.bEos && !pe.done) {
+                            pe.done = true;
+                            outputC[i][j] = pe.c;
+                        }
+                    }
+                }
+            }
+
+            let doneCount = 0;
+            for (let i = 0; i < M; i++) {
+                for (let j = 0; j < N; j++) {
+                    if (peState[i][j].done) doneCount++;
+                }
+            }
+
+            if (doneCount === M * N && completionCycle < 0) {
+                completionCycle = currentCycle;
+            }
+
+            const indicator = document.getElementById('phaseIndicator');
+            if (doneCount === M * N) {
+                indicator.textContent = `Complete! All ${M*N} dot products computed`;
+                indicator.className = 'phase-indicator complete';
+            } else {
+                indicator.textContent = `C-Stationary: ${doneCount}/${M*N} done`;
+                indicator.className = 'phase-indicator';
+            }
+        }
+
+        // ===========================================
+        // A-Stationary Simulation (Weight Stationary)
+        // A stays in PE, B streams North→South, C partial sums flow South
+        // ===========================================
+        let aStationaryPhase = 'load'; // 'load' or 'compute'
+        let loadCycle = 0;
+
+        function simulateAStationary() {
+            const indicator = document.getElementById('phaseIndicator');
+
+            // Phase 1: Load A values into PEs (takes M cycles due to skew)
+            if (aStationaryPhase === 'load') {
+                const kToRead = currentCycle;
+                if (kToRead < K) {
+                    sramValid = true;
+                    sramK = kToRead;
+                    sramA = [];
+                    for (let i = 0; i < M; i++) sramA.push(A[i][kToRead]);
+                    sramB = []; // B not used during load
+                } else {
+                    sramValid = false;
+                }
+
+                const isSos = (kToRead === 0);
+                const isEos = (kToRead === K - 1);
+
+                // Process A skew buffer
+                for (let i = 0; i < M; i++) {
+                    const depth = i;
+                    if (depth === 0) {
+                        if (sramValid) {
+                            aOutputs[i] = { value: sramA[i], valid: true, sos: isSos, eos: isEos };
+                        } else {
+                            aOutputs[i] = { value: null, valid: false, sos: false, eos: false };
+                        }
+                    } else {
+                        aOutputs[i] = skewA[i][0];
+                        for (let r = 0; r < depth - 1; r++) {
+                            skewA[i][r] = skewA[i][r + 1];
+                        }
+                        if (sramValid) {
+                            skewA[i][depth - 1] = { value: sramA[i], valid: true, sos: isSos, eos: isEos };
+                        } else {
+                            skewA[i][depth - 1] = { value: null, valid: false, sos: false, eos: false };
+                        }
+                    }
+                }
+
+                // Clear B outputs during load phase
+                for (let j = 0; j < N; j++) {
+                    bOutputs[j] = { value: null, valid: false, sos: false, eos: false };
+                }
+
+                // Load A into PEs - A enters from West, flows East to fill columns
+                for (let i = 0; i < M; i++) {
+                    for (let j = N - 1; j >= 0; j--) {
+                        const pe = peState[i][j];
+                        if (j === 0) {
+                            if (aOutputs[i].valid) {
+                                pe.a = aOutputs[i].value;
+                                pe.aValid = true;
+                                pe.aSos = aOutputs[i].sos;
+                                pe.aEos = aOutputs[i].eos;
+                            }
+                        } else if (peState[i][j-1].aValid && !pe.aValid) {
+                            // Shift A values East during load
+                            pe.a = peState[i][j-1].a;
+                            pe.aValid = true;
+                        }
+                        pe.computing = false;
+                    }
+                }
+
+                // Check if all PEs have A loaded
+                let allLoaded = true;
+                for (let i = 0; i < M; i++) {
+                    for (let j = 0; j < Math.min(K, N); j++) {
+                        if (!peState[i][j].aValid) allLoaded = false;
+                    }
+                }
+
+                indicator.textContent = `A-Stationary: Loading weights...`;
+                indicator.className = 'phase-indicator';
+
+                if (currentCycle >= K + M - 1) {
+                    aStationaryPhase = 'compute';
+                    loadCycle = currentCycle + 1;
+                    // Reset skew buffers for B
+                    for (let j = 0; j < N; j++) {
+                        skewB[j] = [];
+                        for (let r = 0; r < j; r++) {
+                            skewB[j][r] = { value: null, valid: false, sos: false, eos: false };
+                        }
+                    }
+                }
+            }
+            // Phase 2: Stream B, accumulate C, C flows South
+            else {
+                const computeCycle = currentCycle - loadCycle;
+                const kToRead = computeCycle;
+
+                if (kToRead < K) {
+                    sramValid = true;
+                    sramK = kToRead;
+                    sramA = []; // A already loaded
+                    sramB = [];
+                    for (let j = 0; j < N; j++) sramB.push(B[kToRead][j]);
+                } else {
+                    sramValid = false;
+                    sramB = [];
+                }
+
+                const isSos = (kToRead === 0);
+                const isEos = (kToRead === K - 1);
+
+                // Clear A outputs (A is stationary, not streaming)
+                for (let i = 0; i < M; i++) {
+                    aOutputs[i] = { value: null, valid: false, sos: false, eos: false };
+                }
+
+                // Process B skew buffer
+                for (let j = 0; j < N; j++) {
+                    const depth = j;
+                    if (depth === 0) {
+                        if (sramValid) {
+                            bOutputs[j] = { value: sramB[j], valid: true, sos: isSos, eos: isEos };
+                        } else {
+                            bOutputs[j] = { value: null, valid: false, sos: false, eos: false };
+                        }
+                    } else {
+                        bOutputs[j] = skewB[j][0];
+                        for (let r = 0; r < depth - 1; r++) {
+                            skewB[j][r] = skewB[j][r + 1];
+                        }
+                        if (sramValid) {
+                            skewB[j][depth - 1] = { value: sramB[j], valid: true, sos: isSos, eos: isEos };
+                        } else {
+                            skewB[j][depth - 1] = { value: null, valid: false, sos: false, eos: false };
+                        }
+                    }
+                }
+
+                // Capture previous B and C for systolic flow
+                let prevB = [], prevC = [];
+                for (let i = 0; i < M; i++) {
+                    prevB[i] = [];
+                    prevC[i] = [];
+                    for (let j = 0; j < N; j++) {
+                        prevB[i][j] = peState[i][j].b;
+                        prevC[i][j] = peState[i][j].c;
+                    }
+                }
+
+                // Update PEs: B flows South, C accumulates and flows South
+                for (let i = 0; i < M; i++) {
+                    for (let j = 0; j < N; j++) {
+                        const pe = peState[i][j];
+                        pe.computing = false;
+
+                        // B enters from North, flows South
+                        if (i === 0) {
+                            pe.b = bOutputs[j].value;
+                            pe.bValid = bOutputs[j].valid;
+                            pe.bSos = bOutputs[j].sos;
+                            pe.bEos = bOutputs[j].eos;
+                        } else {
+                            pe.b = prevB[i-1][j];
+                            pe.bValid = peState[i-1][j].bValid;
+                            pe.bSos = peState[i-1][j].bSos;
+                            pe.bEos = peState[i-1][j].bEos;
+                        }
+
+                        // C partial sum enters from North (0 for top row), flows South
+                        let cIn = 0;
+                        if (i > 0) {
+                            cIn = prevC[i-1][j];
+                        }
+
+                        if (pe.bSos && pe.bValid) {
+                            pe.c = 0;
+                            pe.done = false;
+                        }
+
+                        if (pe.aValid && pe.bValid) {
+                            pe.computing = true;
+                            pe.c = cIn + pe.a * pe.b;
+
+                            // Bottom row outputs final C
+                            if (i === M - 1 && pe.bEos && !pe.done) {
+                                pe.done = true;
+                                outputC[i][j] = pe.c;
+                            }
+                        } else {
+                            pe.c = cIn; // Pass through partial sum
+                        }
+                    }
+                }
+
+                let doneCount = 0;
+                for (let j = 0; j < N; j++) {
+                    if (peState[M-1][j].done) doneCount++;
+                }
+
+                if (doneCount === N && completionCycle < 0) {
+                    completionCycle = currentCycle;
+                }
+
+                if (doneCount === N) {
+                    indicator.textContent = `A-Stationary: Complete! ${N} outputs`;
+                    indicator.className = 'phase-indicator complete';
+                } else {
+                    indicator.textContent = `A-Stationary: Computing... B streaming`;
+                    indicator.className = 'phase-indicator';
+                }
+            }
+        }
+
+        // ===========================================
+        // B-Stationary Simulation (Input Stationary)
+        // B stays in PE, A streams West→East, C partial sums flow East
+        // ===========================================
+        let bStationaryPhase = 'load';
+
+        function simulateBStationary() {
+            const indicator = document.getElementById('phaseIndicator');
+
+            // Phase 1: Load B values into PEs
+            if (bStationaryPhase === 'load') {
+                const kToRead = currentCycle;
+                if (kToRead < K) {
+                    sramValid = true;
+                    sramK = kToRead;
+                    sramA = [];
+                    sramB = [];
+                    for (let j = 0; j < N; j++) sramB.push(B[kToRead][j]);
+                } else {
+                    sramValid = false;
+                }
+
+                const isSos = (kToRead === 0);
+                const isEos = (kToRead === K - 1);
+
+                // Process B skew buffer
+                for (let j = 0; j < N; j++) {
+                    const depth = j;
+                    if (depth === 0) {
+                        if (sramValid) {
+                            bOutputs[j] = { value: sramB[j], valid: true, sos: isSos, eos: isEos };
+                        } else {
+                            bOutputs[j] = { value: null, valid: false, sos: false, eos: false };
+                        }
+                    } else {
+                        bOutputs[j] = skewB[j][0];
+                        for (let r = 0; r < depth - 1; r++) {
+                            skewB[j][r] = skewB[j][r + 1];
+                        }
+                        if (sramValid) {
+                            skewB[j][depth - 1] = { value: sramB[j], valid: true, sos: isSos, eos: isEos };
+                        } else {
+                            skewB[j][depth - 1] = { value: null, valid: false, sos: false, eos: false };
+                        }
+                    }
+                }
+
+                // Clear A outputs during load
+                for (let i = 0; i < M; i++) {
+                    aOutputs[i] = { value: null, valid: false, sos: false, eos: false };
+                }
+
+                // Load B into PEs - B enters from North, flows South to fill rows
+                for (let j = 0; j < N; j++) {
+                    for (let i = M - 1; i >= 0; i--) {
+                        const pe = peState[i][j];
+                        if (i === 0) {
+                            if (bOutputs[j].valid) {
+                                pe.b = bOutputs[j].value;
+                                pe.bValid = true;
+                                pe.bSos = bOutputs[j].sos;
+                                pe.bEos = bOutputs[j].eos;
+                            }
+                        } else if (peState[i-1][j].bValid && !pe.bValid) {
+                            pe.b = peState[i-1][j].b;
+                            pe.bValid = true;
+                        }
+                        pe.computing = false;
+                    }
+                }
+
+                indicator.textContent = `B-Stationary: Loading inputs...`;
+                indicator.className = 'phase-indicator';
+
+                if (currentCycle >= K + N - 1) {
+                    bStationaryPhase = 'compute';
+                    loadCycle = currentCycle + 1;
+                    // Reset skew buffers for A
+                    for (let i = 0; i < M; i++) {
+                        skewA[i] = [];
+                        for (let r = 0; r < i; r++) {
+                            skewA[i][r] = { value: null, valid: false, sos: false, eos: false };
+                        }
+                    }
+                }
+            }
+            // Phase 2: Stream A, accumulate C, C flows East
+            else {
+                const computeCycle = currentCycle - loadCycle;
+                const kToRead = computeCycle;
+
+                if (kToRead < K) {
+                    sramValid = true;
+                    sramK = kToRead;
+                    sramA = [];
+                    for (let i = 0; i < M; i++) sramA.push(A[i][kToRead]);
+                    sramB = [];
+                } else {
+                    sramValid = false;
+                    sramA = [];
+                }
+
+                const isSos = (kToRead === 0);
+                const isEos = (kToRead === K - 1);
+
+                // Process A skew buffer
+                for (let i = 0; i < M; i++) {
+                    const depth = i;
+                    if (depth === 0) {
+                        if (sramValid) {
+                            aOutputs[i] = { value: sramA[i], valid: true, sos: isSos, eos: isEos };
+                        } else {
+                            aOutputs[i] = { value: null, valid: false, sos: false, eos: false };
+                        }
+                    } else {
+                        aOutputs[i] = skewA[i][0];
+                        for (let r = 0; r < depth - 1; r++) {
+                            skewA[i][r] = skewA[i][r + 1];
+                        }
+                        if (sramValid) {
+                            skewA[i][depth - 1] = { value: sramA[i], valid: true, sos: isSos, eos: isEos };
+                        } else {
+                            skewA[i][depth - 1] = { value: null, valid: false, sos: false, eos: false };
+                        }
+                    }
+                }
+
+                // Clear B outputs (B is stationary)
+                for (let j = 0; j < N; j++) {
+                    bOutputs[j] = { value: null, valid: false, sos: false, eos: false };
+                }
+
+                // Capture previous A and C
+                let prevA = [], prevC = [];
+                for (let i = 0; i < M; i++) {
+                    prevA[i] = [];
+                    prevC[i] = [];
+                    for (let j = 0; j < N; j++) {
+                        prevA[i][j] = peState[i][j].a;
+                        prevC[i][j] = peState[i][j].c;
+                    }
+                }
+
+                // Update PEs: A flows East, C accumulates and flows East
+                for (let i = 0; i < M; i++) {
+                    for (let j = 0; j < N; j++) {
+                        const pe = peState[i][j];
+                        pe.computing = false;
+
+                        // A enters from West, flows East
+                        if (j === 0) {
+                            pe.a = aOutputs[i].value;
+                            pe.aValid = aOutputs[i].valid;
+                            pe.aSos = aOutputs[i].sos;
+                            pe.aEos = aOutputs[i].eos;
+                        } else {
+                            pe.a = prevA[i][j-1];
+                            pe.aValid = peState[i][j-1].aValid;
+                            pe.aSos = peState[i][j-1].aSos;
+                            pe.aEos = peState[i][j-1].aEos;
+                        }
+
+                        // C partial sum enters from West (0 for left column), flows East
+                        let cIn = 0;
+                        if (j > 0) {
+                            cIn = prevC[i][j-1];
+                        }
+
+                        if (pe.aSos && pe.aValid) {
+                            pe.c = 0;
+                            pe.done = false;
+                        }
+
+                        if (pe.aValid && pe.bValid) {
+                            pe.computing = true;
+                            pe.c = cIn + pe.a * pe.b;
+
+                            // Right column outputs final C
+                            if (j === N - 1 && pe.aEos && !pe.done) {
+                                pe.done = true;
+                                outputC[i][j] = pe.c;
+                            }
+                        } else {
+                            pe.c = cIn;
+                        }
+                    }
+                }
+
+                let doneCount = 0;
+                for (let i = 0; i < M; i++) {
+                    if (peState[i][N-1].done) doneCount++;
+                }
+
+                if (doneCount === M && completionCycle < 0) {
+                    completionCycle = currentCycle;
+                }
+
+                if (doneCount === M) {
+                    indicator.textContent = `B-Stationary: Complete! ${M} outputs`;
+                    indicator.className = 'phase-indicator complete';
+                } else {
+                    indicator.textContent = `B-Stationary: Computing... A streaming`;
+                    indicator.className = 'phase-indicator';
+                }
+            }
+        }
+
+        function simulateStep() {
+            if (currentSchedule === 'c-stationary') {
+                simulateCStationary();
+            } else if (currentSchedule === 'a-stationary') {
+                simulateAStationary();
+            } else if (currentSchedule === 'b-stationary') {
+                simulateBStationary();
+            }
+        }
+
+        // ===========================================
+        // Display - Flexbox layout
+        // ===========================================
+
+        // Calculate A-side width: SRAM(50) + gap(2) + registers + gap + Out(46) + gap + arrow(24)
+        // registers = maxSkewDepth * (46 + 2) - 2
+        const CELL_W = 46, SRAM_W = 50, ARROW_W = 24, GAP = 2;
+        const PE_W = 60;
+        const aSideWidth = SRAM_W + GAP + (maxSkewDepth * (CELL_W + GAP)) + CELL_W + GAP + ARROW_W;
+
+        function updateDisplay() {
+            document.getElementById('cycleNum').textContent = currentCycle;
+
+            // SRAM info
+            const sramInfo = document.getElementById('sramInfo');
+            if (sramValid) {
+                let markers = '';
+                if (sramK === 0) markers = ' (SOS)';
+                if (sramK === K-1) markers = ' (EOS)';
+                sramInfo.innerHTML = `SRAM read: <span class="k-val">k=${sramK}${markers}</span>`;
+            } else {
+                sramInfo.textContent = 'SRAM: idle';
+            }
+
+            const container = document.getElementById('gridContainer');
+            container.innerHTML = '';
+
+            // Helper: create cell
+            function cell(type, content, flags = {}) {
+                const div = document.createElement('div');
+                div.className = 'cell';
+                if (type === 'empty') div.className = 'cell empty';
+                else if (type === 'header') div.className = 'cell header';
+                else if (type === 'sram') div.className = 'cell sram';
+                else if (type === 'arrow') div.className = 'cell arrow';
+
+                if (type === 'b-col' || flags.bCol) div.classList.add('b-col');
+                if (flags.a) div.classList.add('a');
+                if (flags.b) div.classList.add('b');
+                if (flags.active) div.classList.add('active');
+
+                if (flags.sos) {
+                    const m = document.createElement('span');
+                    m.className = 'marker sos';
+                    m.textContent = 'S';
+                    div.appendChild(m);
+                }
+                if (flags.eos) {
+                    const m = document.createElement('span');
+                    m.className = 'marker eos';
+                    m.textContent = 'E';
+                    div.appendChild(m);
+                }
+
+                div.appendChild(document.createTextNode(content));
+                return div;
+            }
+
+            function makePE(i, j) {
+                const pe = document.createElement('div');
+                pe.className = 'pe';
+                const state = peState[i][j];
+
+                if (state.done) pe.classList.add('done');
+                else if (state.computing) pe.classList.add('computing');
+
+                if ((state.aEos && state.aValid) || (state.bEos && state.bValid)) {
+                    const badge = document.createElement('span');
+                    badge.className = 'eos-badge';
+                    badge.textContent = 'E';
+                    pe.appendChild(badge);
+                }
+
+                if (state.aValid || state.bValid) {
+                    const inputs = document.createElement('div');
+                    inputs.className = 'pe-inputs';
+                    if (state.aValid) {
+                        const s = document.createElement('span');
+                        s.className = 'pe-in-a';
+                        s.textContent = state.a;
+                        inputs.appendChild(s);
+                    }
+                    if (state.aValid && state.bValid) {
+                        inputs.appendChild(document.createTextNode('x'));
+                    }
+                    if (state.bValid) {
+                        const s = document.createElement('span');
+                        s.className = 'pe-in-b';
+                        s.textContent = state.b;
+                        inputs.appendChild(s);
+                    }
+                    pe.appendChild(inputs);
+                }
+
+                const val = document.createElement('div');
+                val.className = 'pe-value';
+                val.textContent = state.done ? state.c : (state.c || '.');
+                pe.appendChild(val);
+
+                return pe;
+            }
+
+            // Helper: create a B-side row (for skew buffer above PEs)
+            function createBRow(content) {
+                const row = document.createElement('div');
+                row.className = 'grid-row';
+
+                // Spacer to align with PE columns
+                const spacer = document.createElement('div');
+                spacer.style.width = aSideWidth + 'px';
+                spacer.style.flexShrink = '0';
+                row.appendChild(spacer);
+
+                // B-side content
+                const bSide = document.createElement('div');
+                bSide.className = 'b-side';
+                content.forEach(el => bSide.appendChild(el));
+                row.appendChild(bSide);
+
+                return row;
+            }
+
+            // ═══════════════════════════════════════════════════════════════
+            // ROW: B column headers
+            // ═══════════════════════════════════════════════════════════════
+            let bCells = [];
+            for (let j = 0; j < N; j++) {
+                bCells.push(cell('header', `b${j}`, { bCol: true }));
+            }
+            container.appendChild(createBRow(bCells));
+
+            // ═══════════════════════════════════════════════════════════════
+            // ROW: B SRAM values
+            // ═══════════════════════════════════════════════════════════════
+            bCells = [];
+            for (let j = 0; j < N; j++) {
+                if (sramValid) {
+                    bCells.push(cell('', sramB[j], { b: true, bCol: true }));
+                } else {
+                    const c = cell('', '.', { bCol: true });
+                    c.style.color = 'var(--text-dim)';
+                    bCells.push(c);
+                }
+            }
+            container.appendChild(createBRow(bCells));
+
+            // ═══════════════════════════════════════════════════════════════
+            // ROWS: B Skew Buffer registers (R2, R1, R0 from top to bottom)
+            // Column j has j registers: R0..R(j-1)
+            // Data enters at R(j-1), shifts down, exits from R0
+            // ═══════════════════════════════════════════════════════════════
+            for (let d = maxSkewDepth - 1; d >= 0; d--) {
+                bCells = [];
+                for (let j = 0; j < N; j++) {
+                    let c;
+                    // Column j has registers R0..R(j-1), so it has Rd only if d < j
+                    if (d < j && skewB[j][d]) {
+                        const reg = skewB[j][d];
+                        if (reg.valid) {
+                            c = cell('', reg.value, { b: true, bCol: true, sos: reg.sos, eos: reg.eos });
+                        } else {
+                            c = cell('', '.', { bCol: true });
+                        }
+                    } else {
+                        c = cell('empty', '', { bCol: true });
+                    }
+                    bCells.push(c);
+                }
+                container.appendChild(createBRow(bCells));
+            }
+
+            // ═══════════════════════════════════════════════════════════════
+            // ROW: B Output
+            // ═══════════════════════════════════════════════════════════════
+            bCells = [];
+            for (let j = 0; j < N; j++) {
+                const out = bOutputs[j];
+                if (out.valid) {
+                    bCells.push(cell('', out.value, { b: true, bCol: true, active: true, sos: out.sos, eos: out.eos }));
+                } else {
+                    bCells.push(cell('', '.', { bCol: true }));
+                }
+            }
+            container.appendChild(createBRow(bCells));
+
+            // ═══════════════════════════════════════════════════════════════
+            // ROW: Arrows down
+            // ═══════════════════════════════════════════════════════════════
+            bCells = [];
+            for (let j = 0; j < N; j++) {
+                const c = cell('arrow', bOutputs[j].valid ? '\u2193' : ' ');
+                c.classList.add('b-col');
+                bCells.push(c);
+            }
+            container.appendChild(createBRow(bCells));
+
+            // ═══════════════════════════════════════════════════════════════
+            // ROWS: A Skew Buffer + PE Array
+            // ═══════════════════════════════════════════════════════════════
+            for (let i = 0; i < M; i++) {
+                const row = document.createElement('div');
+                row.className = 'grid-row';
+
+                // A-side section
+                const aSide = document.createElement('div');
+                aSide.className = 'a-side';
+
+                // A SRAM
+                let c;
+                if (sramValid) {
+                    c = cell('sram', sramA[i], { a: true });
+                } else {
+                    c = cell('sram', `a${i}`);
+                    c.style.color = 'var(--text-dim)';
+                }
+                aSide.appendChild(c);
+
+                // A skew buffer registers (displayed R2, R1, R0 from left to right)
+                // Row i has i registers: R0..R(i-1)
+                // Data enters at R(i-1), shifts down, exits from R0
+                for (let d = maxSkewDepth - 1; d >= 0; d--) {
+                    // Row i has registers R0..R(i-1), so it has Rd only if d < i
+                    if (d < i && skewA[i][d]) {
+                        const reg = skewA[i][d];
+                        if (reg.valid) {
+                            c = cell('', reg.value, { a: true, sos: reg.sos, eos: reg.eos });
+                        } else {
+                            c = cell('', '.');
+                        }
+                    } else {
+                        c = cell('empty', '');
+                    }
+                    aSide.appendChild(c);
+                }
+
+                // A output
+                const aOut = aOutputs[i];
+                if (aOut.valid) {
+                    c = cell('', aOut.value, { a: true, active: true, sos: aOut.sos, eos: aOut.eos });
+                } else {
+                    c = cell('', '.');
+                }
+                aSide.appendChild(c);
+
+                // Arrow
+                c = cell('arrow', aOut.valid ? '\u2192' : ' ');
+                aSide.appendChild(c);
+
+                row.appendChild(aSide);
+
+                // PE array
+                const peRow = document.createElement('div');
+                peRow.className = 'pe-row';
+                for (let j = 0; j < N; j++) {
+                    peRow.appendChild(makePE(i, j));
+                }
+                row.appendChild(peRow);
+
+                container.appendChild(row);
+            }
+
+            // Update computed C matrix
+            let completeCount = 0;
+            for (let i = 0; i < M; i++) {
+                for (let j = 0; j < N; j++) {
+                    const c = document.getElementById(`c-${i}-${j}`);
+                    if (outputC[i][j] !== null) {
+                        c.textContent = outputC[i][j];
+                        c.classList.add('correct');
+                        completeCount++;
+                    } else {
+                        c.textContent = '-';
+                        c.classList.remove('correct');
+                    }
+                }
+            }
+
+            document.getElementById('currentOp').textContent = `Complete: ${completeCount}/${M*N}`;
+        }
+
+        // ===========================================
+        // Controls
+        // ===========================================
+        function changeSchedule() {
+            currentSchedule = document.getElementById('scheduleSelect').value;
+            reset();
+        }
+
+        function togglePlay() {
+            if (isPlaying) stopPlay();
+            else startPlay();
+        }
+
+        function startPlay() {
+            isPlaying = true;
+            document.getElementById('btnPlay').textContent = 'Pause';
+            document.getElementById('btnPlay').classList.add('active');
+            playInterval = setInterval(() => {
+                if (!shouldStop()) {
+                    simulateStep();
+                    updateDisplay();
+                    currentCycle++;
+                } else {
+                    stopPlay();
+                }
+            }, 700);
+        }
+
+        function stopPlay() {
+            isPlaying = false;
+            document.getElementById('btnPlay').textContent = 'Play';
+            document.getElementById('btnPlay').classList.remove('active');
+            if (playInterval) {
+                clearInterval(playInterval);
+                playInterval = null;
+            }
+        }
+
+        function stepForward() {
+            stopPlay();
+            if (!shouldStop()) {
+                simulateStep();
+                updateDisplay();
+                currentCycle++;
+            }
+        }
+
+        function reset() {
+            stopPlay();
+            currentCycle = 0;
+            initState();
+            updateDisplay();
+        }
+
+        function shouldStop() {
+            if (completionCycle >= 0) {
+                return currentCycle >= completionCycle + DRAIN_CYCLES;
+            }
+            return false;
+        }
+
+        document.addEventListener('keydown', (e) => {
+            if (e.key === ' ') { e.preventDefault(); togglePlay(); }
+            else if (e.key === 'ArrowRight') stepForward();
+            else if (e.key === 'r') reset();
+        });
+
+        createMatrixDisplays();
+        initState();
+        updateDisplay();
+    </script>
+</body>
+</html>

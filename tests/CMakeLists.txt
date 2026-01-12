@@ -59,6 +59,7 @@ add_subdirectory(noc)
 add_subdirectory(calibration)
 add_subdirectory(integration)
 add_subdirectory(benchmarks)
+add_subdirectory(dataflow)
 
 # Legacy test (in this directory)
 kpu_add_component_test(legacy_test_main "legacy" test_main.cpp)
@@ -174,6 +175,14 @@ add_custom_target(test_runtime
     VERBATIM
 )
 set_target_properties(test_runtime PROPERTIES FOLDER "Tests/Runners")
+
+add_custom_target(test_dataflow
+    COMMAND ${CMAKE_CTEST_COMMAND} -C $<CONFIG> --output-on-failure -L dataflow
+    COMMENT "Running dataflow tests"
+    WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
+    VERBATIM
+)
+set_target_properties(test_dataflow PROPERTIES FOLDER "Tests/Runners")
 
 #add_custom_target(test_benchmarks
 #    COMMAND ${CMAKE_CTEST_COMMAND} -C $<CONFIG> --output-on-failure -L benchmark
