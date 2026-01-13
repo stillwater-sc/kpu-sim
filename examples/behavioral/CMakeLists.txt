@@ -27,6 +27,14 @@ set_target_properties(ofg_trace_demo PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/examples/behavioral
 )
 
+# Tiled matmul trace generator - parameterized tiled matmul with timing
+add_executable(tiled_matmul_trace tiled_matmul_trace.cpp)
+target_link_libraries(tiled_matmul_trace PRIVATE kpu_behavioral)
+set_target_properties(tiled_matmul_trace PROPERTIES
+    FOLDER "Examples/Behavioral"
+    RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/examples/behavioral
+)
+
 # Add tests
 add_test(NAME behavioral_matmul COMMAND matmul_behavioral)
 add_test(NAME behavioral_xor COMMAND xor_behavioral)

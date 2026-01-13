@@ -19,6 +19,7 @@ set(BEHAVIORAL_SOURCES
     # Orchestration and execution
     orchestrator.cpp
     mlp_executor.cpp
+    tiled_matmul_program.cpp
 )
 
 set(BEHAVIORAL_HEADERS
@@ -32,6 +33,7 @@ set(BEHAVIORAL_HEADERS
     ${CMAKE_SOURCE_DIR}/include/sw/kpu/models/behavioral/noc/noc.hpp
     ${CMAKE_SOURCE_DIR}/include/sw/kpu/models/behavioral/orchestrator.hpp
     ${CMAKE_SOURCE_DIR}/include/sw/kpu/models/behavioral/mlp_executor.hpp
+    ${CMAKE_SOURCE_DIR}/include/sw/kpu/behavioral/tiled_matmul_program.hpp
 )
 
 add_library(kpu_behavioral STATIC

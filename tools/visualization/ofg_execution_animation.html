@@ -6,10 +6,12 @@
   - Concurrent OFG executors at each memory level
   - Dataflow-driven triggering between levels
   - Operand movement through the memory hierarchy
+  - Statistics and progress for tiled matrix operations
 
   Data Sources:
   - Load JSON trace file from behavioral/transactional/temporal simulator
   - Use embedded demo trace for testing
+  - Supports TiledMatmulProgram trace format
 
   SPDX-License-Identifier: MIT
   Copyright (c) 2024-2026 Stillwater Supercomputing, Inc.
@@ -31,6 +33,7 @@
             --color-a: #ef4444;
             --color-b: #22c55e;
             --color-c: #fbbf24;
+            --color-d: #f97316;
 
             --color-dma: #f59e0b;
             --color-blockmover: #3b82f6;
@@ -56,7 +59,7 @@
         }
 
         .container {
-            max-width: 1400px;
+            max-width: 1600px;
             margin: 0 auto;
         }
 
@@ -68,6 +71,8 @@
             background: var(--bg-panel);
             border-radius: 8px;
             margin-bottom: 12px;
+            flex-wrap: wrap;
+            gap: 8px;
         }
 
         .header h1 {
@@ -79,6 +84,7 @@
             display: flex;
             gap: 8px;
             align-items: center;
+            flex-wrap: wrap;
         }
 
         button {
@@ -96,16 +102,14 @@
         button.active { background: var(--color-blockmover); }
         button:disabled { opacity: 0.5; cursor: not-allowed; }
 
-        .file-input {
-            display: none;
-        }
+        .file-input { display: none; }
 
         .cycle-display {
             background: #2d333b;
             padding: 6px 12px;
             border-radius: 4px;
             font-size: 12px;
-            min-width: 120px;
+            min-width: 180px;
             text-align: center;
         }
 
@@ -117,13 +121,35 @@
             color: var(--text-dim);
         }
 
-        .speed-control input {
-            width: 80px;
+        .speed-control input { width: 80px; }
+
+        /* Timeline scrubber */
+        .timeline-container {
+            background: var(--bg-panel);
+            border-radius: 8px;
+            padding: 12px 16px;
+            margin-bottom: 12px;
+        }
+
+        .timeline-bar {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .timeline-slider {
+            flex: 1;
+            height: 24px;
+        }
+
+        .timeline-slider input {
+            width: 100%;
+            cursor: pointer;
         }
 
         .main-content {
             display: grid;
-            grid-template-columns: 1fr 280px;
+            grid-template-columns: 1fr 320px;
             gap: 12px;
         }
 
@@ -131,7 +157,7 @@
             background: var(--bg-panel);
             border-radius: 8px;
             padding: 16px;
-            min-height: 700px;
+            min-height: 600px;
         }
 
         .sidebar {
@@ -153,6 +179,71 @@
             margin-bottom: 8px;
             letter-spacing: 0.5px;
         }
+
+        /* Statistics Panel */
+        .stats-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 8px;
+        }
+
+        .stat-item {
+            background: var(--bg-memory);
+            border-radius: 4px;
+            padding: 8px;
+        }
+
+        .stat-label {
+            font-size: 9px;
+            color: var(--text-dim);
+            text-transform: uppercase;
+        }
+
+        .stat-value {
+            font-size: 14px;
+            font-weight: 600;
+            color: var(--text);
+        }
+
+        .stat-item.full-width {
+            grid-column: 1 / -1;
+        }
+
+        /* Progress bars */
+        .progress-section {
+            margin-top: 12px;
+        }
+
+        .progress-item {
+            margin-bottom: 8px;
+        }
+
+        .progress-header {
+            display: flex;
+            justify-content: space-between;
+            font-size: 10px;
+            margin-bottom: 4px;
+        }
+
+        .progress-label { color: var(--text-dim); }
+        .progress-count { color: var(--text); }
+
+        .progress-bar {
+            height: 8px;
+            background: var(--bg);
+            border-radius: 4px;
+            overflow: hidden;
+        }
+
+        .progress-fill {
+            height: 100%;
+            transition: width 0.1s ease;
+        }
+
+        .progress-fill.dma { background: var(--color-dma); }
+        .progress-fill.bm { background: var(--color-blockmover); }
+        .progress-fill.str { background: var(--color-streamer); }
+        .progress-fill.compute { background: var(--color-compute); }
 
         /* Memory Hierarchy Visualization */
         .memory-hierarchy {
@@ -202,189 +293,189 @@
             display: flex;
             align-items: center;
             justify-content: center;
-            font-size: 9px;
+            font-size: 10px;
             color: var(--text-dim);
             position: relative;
-            overflow: hidden;
-        }
-
-        .storage-cell.large {
-            width: 80px;
-            height: 50px;
         }
 
         .storage-cell .tile {
             position: absolute;
-            inset: 2px;
-            border-radius: 2px;
+            top: 2px;
+            left: 2px;
+            right: 2px;
+            bottom: 2px;
+            border-radius: 3px;
             display: flex;
             align-items: center;
             justify-content: center;
-            font-size: 10px;
+            font-size: 11px;
             font-weight: 600;
-            color: white;
             opacity: 0;
-            transform: scale(0.8);
-            transition: opacity 0.3s, transform 0.3s;
+            transition: opacity 0.2s ease;
         }
 
-        .storage-cell .tile.visible {
-            opacity: 1;
-            transform: scale(1);
+        .storage-cell .tile.visible { opacity: 1; }
+        .storage-cell .tile.tile-a { background: var(--color-a); color: white; }
+        .storage-cell .tile.tile-b { background: var(--color-b); color: white; }
+        .storage-cell .tile.tile-c { background: var(--color-c); color: black; }
+        .storage-cell .tile.tile-d { background: var(--color-d); color: white; }
+
+        /* Flow arrows */
+        .flow-arrow {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 4px 0;
+            color: var(--text-dim);
+            font-size: 14px;
+            transition: color 0.3s ease;
         }
 
-        .storage-cell .tile.tile-a { background: var(--color-a); }
-        .storage-cell .tile.tile-b { background: var(--color-b); }
-        .storage-cell .tile.tile-c { background: var(--color-c); }
+        .flow-arrow.active {
+            color: var(--trigger-color);
+            animation: pulse 0.5s ease;
+        }
 
-        /* OFG Executor Display */
+        @keyframes pulse {
+            0% { transform: scale(1); }
+            50% { transform: scale(1.2); }
+            100% { transform: scale(1); }
+        }
+
+        /* OFG Executor displays */
         .ofg-executor {
             display: flex;
             align-items: center;
-            gap: 8px;
-            padding: 8px;
-            background: rgba(0,0,0,0.2);
-            border-radius: 4px;
+            gap: 4px;
             margin-top: 8px;
+            flex-wrap: wrap;
         }
 
         .ofg-label {
-            font-size: 10px;
+            font-size: 9px;
             color: var(--text-dim);
-            min-width: 80px;
-        }
-
-        .ofg-nodes {
-            display: flex;
-            gap: 4px;
-            align-items: center;
+            min-width: 40px;
         }
 
         .ofg-node {
             width: 20px;
             height: 20px;
             border-radius: 50%;
-            background: var(--state-waiting);
             display: flex;
             align-items: center;
             justify-content: center;
-            font-size: 8px;
-            color: white;
-            transition: background 0.2s, transform 0.2s;
+            font-size: 9px;
+            font-weight: 600;
+            transition: all 0.2s ease;
         }
 
-        .ofg-node.ready { background: var(--state-ready); }
-        .ofg-node.firing { background: var(--state-firing); transform: scale(1.2); }
-        .ofg-node.done { background: var(--state-done); }
+        .ofg-node.waiting { background: var(--state-waiting); color: var(--text-dim); }
+        .ofg-node.ready { background: var(--state-ready); color: black; }
+        .ofg-node.firing { background: var(--state-firing); color: white; }
+        .ofg-node.done { background: var(--state-done); color: white; }
 
-        .ofg-arrow {
-            color: var(--text-dim);
+        /* Status indicators */
+        .status-indicators {
+            display: flex;
+            gap: 8px;
             font-size: 10px;
         }
 
-        /* L1 Stream Buffers */
-        .stream-buffers {
+        .status-item {
             display: flex;
-            gap: 16px;
-            margin-bottom: 12px;
+            align-items: center;
+            gap: 4px;
         }
 
-        .stream-buffer {
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: var(--state-waiting);
+        }
+
+        .status-dot.active { background: var(--state-firing); }
+        .status-dot.complete { background: var(--state-done); }
+        .status-dot.idle { background: var(--state-waiting); }
+
+        /* L1 Buffers */
+        .l1-buffers {
+            display: flex;
+            gap: 12px;
+            margin-bottom: 8px;
+        }
+
+        .l1-buffer {
             flex: 1;
         }
 
-        .stream-buffer-label {
+        .l1-buffer-label {
             font-size: 9px;
             color: var(--text-dim);
             margin-bottom: 4px;
         }
 
-        .stream-buffer-bar {
-            height: 16px;
+        .l1-buffer-bar {
+            height: 12px;
             background: var(--bg);
             border-radius: 2px;
             overflow: hidden;
-            display: flex;
         }
 
-        .stream-buffer-fill {
+        .l1-buffer-fill {
             height: 100%;
-            transition: width 0.3s;
+            background: var(--trigger-color);
+            transition: width 0.2s ease;
+            width: 0%;
         }
 
-        .stream-buffer-fill.a { background: var(--color-a); }
-        .stream-buffer-fill.b { background: var(--color-b); }
-        .stream-buffer-fill.c { background: var(--color-c); }
+        .l1-buffer-fill.west { background: var(--color-a); }
+        .l1-buffer-fill.north { background: var(--color-b); }
+        .l1-buffer-fill.south { background: var(--color-c); }
 
-        /* Compute Tile */
-        .compute-tile {
+        /* Systolic array */
+        .systolic-container {
             display: flex;
-            justify-content: center;
-            margin-top: 8px;
+            align-items: center;
+            gap: 12px;
         }
 
         .systolic-array {
             display: grid;
-            grid-template-columns: repeat(4, 24px);
+            grid-template-columns: repeat(4, 20px);
             gap: 2px;
-            padding: 8px;
             background: var(--bg);
+            padding: 4px;
             border-radius: 4px;
         }
 
         .pe-cell {
-            width: 24px;
-            height: 24px;
-            background: var(--bg-panel);
-            border: 1px solid var(--border);
+            width: 20px;
+            height: 20px;
+            background: var(--bg-memory);
             border-radius: 2px;
             display: flex;
             align-items: center;
             justify-content: center;
             font-size: 8px;
             color: var(--text-dim);
-            transition: background 0.2s, border-color 0.2s;
+            transition: all 0.1s ease;
         }
 
         .pe-cell.active {
-            background: rgba(236, 72, 153, 0.3);
-            border-color: var(--color-compute);
+            background: var(--color-compute);
+            color: white;
         }
 
-        /* Data Flow Arrows */
-        .flow-indicator {
-            display: flex;
-            justify-content: center;
-            padding: 4px 0;
-        }
-
-        .flow-arrow {
-            color: var(--text-dim);
-            font-size: 16px;
-            opacity: 0.5;
-            transition: opacity 0.3s, color 0.3s;
-        }
-
-        .flow-arrow.active {
-            opacity: 1;
-            color: var(--trigger-color);
-            animation: pulse 0.5s ease-in-out;
-        }
-
-        @keyframes pulse {
-            0%, 100% { transform: scale(1); }
-            50% { transform: scale(1.3); }
-        }
-
-        /* Event Log */
+        /* Event log */
         .event-log {
-            max-height: 200px;
+            max-height: 250px;
             overflow-y: auto;
             font-size: 10px;
         }
 
         .event-item {
-            padding: 4px 6px;
+            padding: 4px 0;
             border-bottom: 1px solid var(--border);
             display: flex;
             gap: 8px;
@@ -392,331 +483,360 @@
 
         .event-cycle {
             color: var(--text-dim);
-            min-width: 40px;
+            min-width: 60px;
         }
 
         .event-level {
-            min-width: 60px;
+            min-width: 50px;
             font-weight: 600;
         }
 
-        .event-level.dma { color: var(--color-dma); }
-        .event-level.block_mover { color: var(--color-blockmover); }
-        .event-level.streamer { color: var(--color-streamer); }
-        .event-level.compute { color: var(--color-compute); }
+        .event-level.DMA { color: var(--color-dma); }
+        .event-level.BLOCK_MOVER { color: var(--color-blockmover); }
+        .event-level.STREAMER { color: var(--color-streamer); }
+        .event-level.COMPUTE { color: var(--color-compute); }
+        .event-level.L3 { color: var(--color-dma); }
+        .event-level.L2 { color: var(--color-blockmover); }
+        .event-level.system { color: var(--text-dim); }
 
         .event-desc {
             color: var(--text);
+            flex: 1;
         }
 
         /* Legend */
+        .legend {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+        }
+
         .legend-item {
             display: flex;
             align-items: center;
-            gap: 6px;
+            gap: 4px;
             font-size: 10px;
-            margin-bottom: 4px;
         }
 
         .legend-color {
-            width: 14px;
-            height: 14px;
+            width: 12px;
+            height: 12px;
             border-radius: 2px;
         }
 
-        /* Trigger visualization */
-        .trigger-line {
-            position: absolute;
-            height: 2px;
-            background: var(--trigger-color);
-            transform-origin: left center;
-            opacity: 0;
-            transition: opacity 0.3s;
-        }
-
-        .trigger-line.active {
-            opacity: 1;
-            animation: trigger-flash 0.5s ease-out;
-        }
-
-        @keyframes trigger-flash {
-            0% { opacity: 1; box-shadow: 0 0 10px var(--trigger-color); }
-            100% { opacity: 0; }
-        }
-
-        /* Status indicator */
-        .status-bar {
-            display: flex;
-            gap: 16px;
-            padding: 8px 12px;
-            background: rgba(0,0,0,0.2);
+        /* Problem info */
+        .problem-info {
+            font-size: 11px;
+            color: var(--text);
+            margin-bottom: 8px;
+            padding: 8px;
+            background: var(--bg-memory);
             border-radius: 4px;
-            font-size: 10px;
-            margin-top: 12px;
         }
 
-        .status-item {
-            display: flex;
-            align-items: center;
-            gap: 6px;
+        .problem-title {
+            font-weight: 600;
+            margin-bottom: 4px;
         }
 
-        .status-dot {
-            width: 8px;
-            height: 8px;
-            border-radius: 50%;
+        /* Responsive */
+        @media (max-width: 1200px) {
+            .main-content {
+                grid-template-columns: 1fr;
+            }
+            .sidebar {
+                flex-direction: row;
+                flex-wrap: wrap;
+            }
+            .panel { flex: 1; min-width: 280px; }
         }
-
-        .status-dot.idle { background: var(--state-waiting); }
-        .status-dot.active { background: var(--state-firing); }
-        .status-dot.complete { background: var(--color-c); }
     </style>
 </head>
 <body>
     <div class="container">
         <div class="header">
-            <h1>KPU OFG Execution Visualization</h1>
+            <h1>KPU OFG Execution Animation</h1>
             <div class="controls">
                 <input type="file" id="fileInput" class="file-input" accept=".json">
                 <button onclick="document.getElementById('fileInput').click()">Load Trace</button>
                 <button onclick="loadDemoTrace()">Demo</button>
-                <button id="btnStep" onclick="stepForward()">Step</button>
-                <button id="btnPlay" onclick="togglePlay()">Play</button>
+                <button onclick="loadSampleTiled()">Tiled Sample</button>
                 <button onclick="reset()">Reset</button>
                 <div class="cycle-display">
-                    Cycle: <span id="cycleNum">0</span>
+                    Cycle: <span id="cycleNum">0</span> / <span id="totalCycles">0</span>
                 </div>
+                <button id="btnStepBack" onclick="stepBackward()">◀</button>
+                <button id="btnPlay" onclick="togglePlay()">Play</button>
+                <button id="btnStep" onclick="stepForward()">▶</button>
+                <button id="btnJump" onclick="jumpToEnd()">▶▶</button>
                 <div class="speed-control">
-                    <span>Speed:</span>
+                    <label>Speed:</label>
                     <input type="range" id="speedSlider" min="1" max="10" value="5">
                 </div>
             </div>
         </div>
 
+        <!-- Timeline scrubber for large traces -->
+        <div class="timeline-container" id="timelineContainer" style="display: none;">
+            <div class="timeline-bar">
+                <span style="font-size: 11px; color: var(--text-dim);">Timeline:</span>
+                <div class="timeline-slider">
+                    <input type="range" id="timelineSlider" min="0" max="100" value="0"
+                           oninput="scrubTimeline(this.value)">
+                </div>
+                <span id="timelinePercent" style="font-size: 11px; min-width: 40px;">0%</span>
+            </div>
+        </div>
+
         <div class="main-content">
             <div class="visualization">
-                <div class="memory-hierarchy" id="memoryHierarchy">
+                <!-- Problem info (shown for tiled traces) -->
+                <div class="problem-info" id="problemInfo" style="display: none;">
+                    <div class="problem-title" id="problemTitle">Problem</div>
+                    <div id="problemDetails"></div>
+                </div>
+
+                <div class="memory-hierarchy">
                     <!-- Host Memory -->
                     <div class="memory-level host">
                         <div class="memory-level-header">
                             <span class="memory-level-title">HOST MEMORY</span>
+                            <div class="status-indicators">
+                                <div class="status-item">
+                                    <span class="status-dot" id="status-host"></span>
+                                    <span>Tensors</span>
+                                </div>
+                            </div>
                         </div>
-                        <div class="storage-row" id="hostStorage">
-                            <div class="storage-cell large" id="host-a">
-                                <span>A[M,K]</span>
+                        <div class="storage-row">
+                            <div class="storage-cell">
+                                <span>A</span>
                                 <div class="tile tile-a" id="host-tile-a">A</div>
                             </div>
-                            <div class="storage-cell large" id="host-b">
-                                <span>B[K,N]</span>
+                            <div class="storage-cell">
+                                <span>B</span>
                                 <div class="tile tile-b" id="host-tile-b">B</div>
                             </div>
-                            <div class="storage-cell large" id="host-c" style="margin-left: auto;">
-                                <span>C[M,N]</span>
+                            <div class="storage-cell">
+                                <span>C</span>
                                 <div class="tile tile-c" id="host-tile-c">C</div>
+                            </div>
+                            <div class="storage-cell">
+                                <span>D</span>
+                                <div class="tile tile-d" id="host-tile-d">D</div>
                             </div>
                         </div>
                     </div>
 
-                    <!-- DMA Level -->
-                    <div class="flow-indicator">
-                        <span class="flow-arrow" id="flow-host-l3">↕</span>
-                    </div>
-                    <div class="ofg-executor" style="background: rgba(245, 158, 11, 0.1); border: 1px solid var(--color-dma);">
-                        <span class="ofg-label" style="color: var(--color-dma);">DMA OFG</span>
-                        <div class="ofg-nodes" id="dma-ofg-nodes">
-                            <div class="ofg-node" id="dma-node-0">W</div>
-                            <span class="ofg-arrow">→</span>
-                            <div class="ofg-node" id="dma-node-1">F</div>
-                            <span class="ofg-arrow">→</span>
-                            <div class="ofg-node" id="dma-node-2">P</div>
-                        </div>
-                    </div>
+                    <div class="flow-arrow" id="flow-host-l3">↓ DMA Engine ↓</div>
 
-                    <!-- L3 Memory -->
-                    <div class="flow-indicator">
-                        <span class="flow-arrow" id="flow-dma-l3">↓</span>
-                    </div>
+                    <!-- L3 Tiles -->
                     <div class="memory-level l3">
                         <div class="memory-level-header">
                             <span class="memory-level-title">L3 TILE ARRAY (4 × 128KB)</span>
-                        </div>
-                        <div class="storage-row" id="l3Storage">
-                            <div class="storage-cell" id="l3-0">
-                                <span>L3[0]</span>
-                                <div class="tile tile-a" id="l3-0-tile"></div>
-                            </div>
-                            <div class="storage-cell" id="l3-1">
-                                <span>L3[1]</span>
-                                <div class="tile tile-b" id="l3-1-tile"></div>
-                            </div>
-                            <div class="storage-cell" id="l3-2">
-                                <span>L3[2]</span>
-                                <div class="tile tile-c" id="l3-2-tile"></div>
-                            </div>
-                            <div class="storage-cell" id="l3-3">
-                                <span>L3[3]</span>
-                                <div class="tile" id="l3-3-tile"></div>
+                            <div class="status-indicators">
+                                <div class="status-item">
+                                    <span class="status-dot" id="status-dma"></span>
+                                    <span>DMA</span>
+                                </div>
                             </div>
                         </div>
-                    </div>
-
-                    <!-- BlockMover Level -->
-                    <div class="flow-indicator">
-                        <span class="flow-arrow" id="flow-l3-l2">↕</span>
-                    </div>
-                    <div class="ofg-executor" style="background: rgba(59, 130, 246, 0.1); border: 1px solid var(--color-blockmover);">
-                        <span class="ofg-label" style="color: var(--color-blockmover);">BlockMover OFG</span>
-                        <div class="ofg-nodes" id="bm-ofg-nodes">
-                            <div class="ofg-node" id="bm-node-0">W</div>
-                            <span class="ofg-arrow">→</span>
-                            <div class="ofg-node" id="bm-node-1">J</div>
-                            <span class="ofg-arrow">→</span>
-                            <div class="ofg-node" id="bm-node-2">F</div>
-                            <span class="ofg-arrow">→</span>
-                            <div class="ofg-node" id="bm-node-3">P</div>
+                        <div class="storage-row">
+                            <div class="storage-cell"><span>[0]</span><div class="tile" id="l3-0-tile"></div></div>
+                            <div class="storage-cell"><span>[1]</span><div class="tile" id="l3-1-tile"></div></div>
+                            <div class="storage-cell"><span>[2]</span><div class="tile" id="l3-2-tile"></div></div>
+                            <div class="storage-cell"><span>[3]</span><div class="tile" id="l3-3-tile"></div></div>
+                        </div>
+                        <div class="ofg-executor">
+                            <span class="ofg-label">OFG:</span>
+                            <div class="ofg-node waiting" id="dma-node-0">W</div>
+                            <div class="ofg-node waiting" id="dma-node-1">F</div>
+                            <div class="ofg-node waiting" id="dma-node-2">P</div>
                         </div>
                     </div>
 
-                    <!-- L2 Memory -->
-                    <div class="flow-indicator">
-                        <span class="flow-arrow" id="flow-bm-l2">↓</span>
-                    </div>
+                    <div class="flow-arrow" id="flow-dma-l3">↓ BlockMover ↓</div>
+
+                    <!-- L2 Banks -->
                     <div class="memory-level l2">
                         <div class="memory-level-header">
                             <span class="memory-level-title">L2 BANK ARRAY (8 × 64KB)</span>
+                            <div class="status-indicators">
+                                <div class="status-item">
+                                    <span class="status-dot" id="status-bm"></span>
+                                    <span>BlockMover</span>
+                                </div>
+                            </div>
                         </div>
-                        <div class="storage-row" id="l2Storage">
-                            <div class="storage-cell" id="l2-0"><span>0</span><div class="tile tile-a" id="l2-0-tile"></div></div>
-                            <div class="storage-cell" id="l2-1"><span>1</span><div class="tile tile-b" id="l2-1-tile"></div></div>
-                            <div class="storage-cell" id="l2-2"><span>2</span><div class="tile tile-c" id="l2-2-tile"></div></div>
-                            <div class="storage-cell" id="l2-3"><span>3</span><div class="tile" id="l2-3-tile"></div></div>
-                            <div class="storage-cell" id="l2-4"><span>4</span><div class="tile" id="l2-4-tile"></div></div>
-                            <div class="storage-cell" id="l2-5"><span>5</span><div class="tile" id="l2-5-tile"></div></div>
-                            <div class="storage-cell" id="l2-6"><span>6</span><div class="tile" id="l2-6-tile"></div></div>
-                            <div class="storage-cell" id="l2-7"><span>7</span><div class="tile" id="l2-7-tile"></div></div>
+                        <div class="storage-row">
+                            <div class="storage-cell"><span>[0]</span><div class="tile" id="l2-0-tile"></div></div>
+                            <div class="storage-cell"><span>[1]</span><div class="tile" id="l2-1-tile"></div></div>
+                            <div class="storage-cell"><span>[2]</span><div class="tile" id="l2-2-tile"></div></div>
+                            <div class="storage-cell"><span>[3]</span><div class="tile" id="l2-3-tile"></div></div>
+                            <div class="storage-cell"><span>[4]</span><div class="tile" id="l2-4-tile"></div></div>
+                            <div class="storage-cell"><span>[5]</span><div class="tile" id="l2-5-tile"></div></div>
+                            <div class="storage-cell"><span>[6]</span><div class="tile" id="l2-6-tile"></div></div>
+                            <div class="storage-cell"><span>[7]</span><div class="tile" id="l2-7-tile"></div></div>
+                        </div>
+                        <div class="ofg-executor">
+                            <span class="ofg-label">OFG:</span>
+                            <div class="ofg-node waiting" id="bm-node-0">W</div>
+                            <div class="ofg-node waiting" id="bm-node-1">J</div>
+                            <div class="ofg-node waiting" id="bm-node-2">F</div>
+                            <div class="ofg-node waiting" id="bm-node-3">P</div>
                         </div>
                     </div>
 
-                    <!-- Streamer Level -->
-                    <div class="flow-indicator">
-                        <span class="flow-arrow" id="flow-l2-l1">↕</span>
-                    </div>
-                    <div class="ofg-executor" style="background: rgba(139, 92, 246, 0.1); border: 1px solid var(--color-streamer);">
-                        <span class="ofg-label" style="color: var(--color-streamer);">Streamer OFG</span>
-                        <div class="ofg-nodes" id="str-ofg-nodes">
-                            <div class="ofg-node" id="str-node-0">W</div>
-                            <span class="ofg-arrow">→</span>
-                            <div class="ofg-node" id="str-node-1">J</div>
-                            <span class="ofg-arrow">→</span>
-                            <div class="ofg-node" id="str-node-2">F</div>
-                            <span class="ofg-arrow">→</span>
-                            <div class="ofg-node" id="str-node-3">M</div>
-                            <span class="ofg-arrow">→</span>
-                            <div class="ofg-node" id="str-node-4">D</div>
-                        </div>
-                    </div>
+                    <div class="flow-arrow" id="flow-bm-l2">↓ Streamer ↓</div>
 
                     <!-- L1 + Compute -->
-                    <div class="flow-indicator">
-                        <span class="flow-arrow" id="flow-str-compute">↓</span>
-                    </div>
                     <div class="memory-level l1-compute">
                         <div class="memory-level-header">
-                            <span class="memory-level-title">L1 STREAM BUFFERS + COMPUTE</span>
-                        </div>
-                        <div class="stream-buffers">
-                            <div class="stream-buffer">
-                                <div class="stream-buffer-label">West Edge (A)</div>
-                                <div class="stream-buffer-bar">
-                                    <div class="stream-buffer-fill a" id="l1-west-fill" style="width: 0%;"></div>
+                            <span class="memory-level-title">L1 + COMPUTE TILE</span>
+                            <div class="status-indicators">
+                                <div class="status-item">
+                                    <span class="status-dot" id="status-str"></span>
+                                    <span>Streamer</span>
                                 </div>
-                            </div>
-                            <div class="stream-buffer">
-                                <div class="stream-buffer-label">North Edge (B)</div>
-                                <div class="stream-buffer-bar">
-                                    <div class="stream-buffer-fill b" id="l1-north-fill" style="width: 0%;"></div>
-                                </div>
-                            </div>
-                            <div class="stream-buffer">
-                                <div class="stream-buffer-label">South Edge (C drain)</div>
-                                <div class="stream-buffer-bar">
-                                    <div class="stream-buffer-fill c" id="l1-south-fill" style="width: 0%;"></div>
+                                <div class="status-item">
+                                    <span class="status-dot" id="status-compute"></span>
+                                    <span>Compute</span>
                                 </div>
                             </div>
                         </div>
-                        <div class="compute-tile">
-                            <div class="systolic-array" id="systolicArray">
-                                <!-- 4x4 PE grid -->
+                        <div class="l1-buffers">
+                            <div class="l1-buffer">
+                                <div class="l1-buffer-label">West (A)</div>
+                                <div class="l1-buffer-bar">
+                                    <div class="l1-buffer-fill west" id="l1-west-fill"></div>
+                                </div>
+                            </div>
+                            <div class="l1-buffer">
+                                <div class="l1-buffer-label">North (B)</div>
+                                <div class="l1-buffer-bar">
+                                    <div class="l1-buffer-fill north" id="l1-north-fill"></div>
+                                </div>
+                            </div>
+                            <div class="l1-buffer">
+                                <div class="l1-buffer-label">South (C)</div>
+                                <div class="l1-buffer-bar">
+                                    <div class="l1-buffer-fill south" id="l1-south-fill"></div>
+                                </div>
                             </div>
                         </div>
-                    </div>
-
-                    <!-- Status Bar -->
-                    <div class="status-bar">
-                        <div class="status-item">
-                            <div class="status-dot" id="status-dma"></div>
-                            <span>DMA</span>
-                        </div>
-                        <div class="status-item">
-                            <div class="status-dot" id="status-bm"></div>
-                            <span>BlockMover</span>
-                        </div>
-                        <div class="status-item">
-                            <div class="status-dot" id="status-str"></div>
-                            <span>Streamer</span>
-                        </div>
-                        <div class="status-item">
-                            <div class="status-dot" id="status-compute"></div>
-                            <span>Compute</span>
+                        <div class="systolic-container">
+                            <div>
+                                <div class="systolic-array" id="systolicArray"></div>
+                                <div style="font-size: 9px; color: var(--text-dim); text-align: center; margin-top: 4px;">
+                                    Systolic Array
+                                </div>
+                            </div>
+                            <div class="ofg-executor" style="flex-direction: column; align-items: flex-start;">
+                                <span class="ofg-label">Streamer OFG:</span>
+                                <div style="display: flex; gap: 4px;">
+                                    <div class="ofg-node waiting" id="str-node-0">W</div>
+                                    <div class="ofg-node waiting" id="str-node-1">J</div>
+                                    <div class="ofg-node waiting" id="str-node-2">F</div>
+                                    <div class="ofg-node waiting" id="str-node-3">M</div>
+                                    <div class="ofg-node waiting" id="str-node-4">D</div>
+                                </div>
+                            </div>
                         </div>
                     </div>
                 </div>
             </div>
 
             <div class="sidebar">
-                <div class="panel">
-                    <h3>Legend</h3>
-                    <div class="legend-item">
-                        <div class="legend-color" style="background: var(--color-a);"></div>
-                        <span>Tile A (input)</span>
-                    </div>
-                    <div class="legend-item">
-                        <div class="legend-color" style="background: var(--color-b);"></div>
-                        <span>Tile B (input)</span>
-                    </div>
-                    <div class="legend-item">
-                        <div class="legend-color" style="background: var(--color-c);"></div>
-                        <span>Tile C (output)</span>
-                    </div>
-                    <div style="margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--border);">
-                        <div class="legend-item">
-                            <div class="legend-color" style="background: var(--state-waiting);"></div>
-                            <span>OFG: Waiting</span>
+                <!-- Statistics Panel -->
+                <div class="panel" id="statsPanel">
+                    <h3>Execution Statistics</h3>
+                    <div class="stats-grid">
+                        <div class="stat-item full-width">
+                            <div class="stat-label">Progress</div>
+                            <div class="stat-value"><span id="stat-progress">0</span>%</div>
                         </div>
-                        <div class="legend-item">
-                            <div class="legend-color" style="background: var(--state-ready);"></div>
-                            <span>OFG: Ready</span>
+                        <div class="stat-item">
+                            <div class="stat-label">Matmuls</div>
+                            <div class="stat-value"><span id="stat-matmuls">0</span></div>
                         </div>
-                        <div class="legend-item">
-                            <div class="legend-color" style="background: var(--state-firing);"></div>
-                            <span>OFG: Firing</span>
+                        <div class="stat-item">
+                            <div class="stat-label">DMA Loads</div>
+                            <div class="stat-value"><span id="stat-loads">0</span></div>
                         </div>
-                        <div class="legend-item">
-                            <div class="legend-color" style="background: var(--state-done);"></div>
-                            <span>OFG: Done</span>
+                        <div class="stat-item">
+                            <div class="stat-label">DMA Stores</div>
+                            <div class="stat-value"><span id="stat-stores">0</span></div>
+                        </div>
+                        <div class="stat-item">
+                            <div class="stat-label">BM Pushes</div>
+                            <div class="stat-value"><span id="stat-pushes">0</span></div>
+                        </div>
+                    </div>
+
+                    <div class="progress-section">
+                        <div class="progress-item">
+                            <div class="progress-header">
+                                <span class="progress-label">DMA</span>
+                                <span class="progress-count" id="dma-progress">0/0</span>
+                            </div>
+                            <div class="progress-bar">
+                                <div class="progress-fill dma" id="dma-progress-bar" style="width: 0%"></div>
+                            </div>
+                        </div>
+                        <div class="progress-item">
+                            <div class="progress-header">
+                                <span class="progress-label">BlockMover</span>
+                                <span class="progress-count" id="bm-progress">0/0</span>
+                            </div>
+                            <div class="progress-bar">
+                                <div class="progress-fill bm" id="bm-progress-bar" style="width: 0%"></div>
+                            </div>
+                        </div>
+                        <div class="progress-item">
+                            <div class="progress-header">
+                                <span class="progress-label">Compute</span>
+                                <span class="progress-count" id="compute-progress">0/0</span>
+                            </div>
+                            <div class="progress-bar">
+                                <div class="progress-fill compute" id="compute-progress-bar" style="width: 0%"></div>
+                            </div>
                         </div>
                     </div>
                 </div>
 
                 <div class="panel">
-                    <h3>OFG Node Types</h3>
-                    <div style="font-size: 10px; color: var(--text-dim);">
-                        <div><strong>W</strong> = WAIT (for operand)</div>
-                        <div><strong>J</strong> = JOIN (sync multiple)</div>
-                        <div><strong>F</strong> = FIRE (execute op)</div>
-                        <div><strong>P</strong> = PRODUCE (emit result)</div>
-                        <div><strong>M</strong> = MATMUL</div>
-                        <div><strong>D</strong> = DRAIN</div>
+                    <h3>Legend</h3>
+                    <div class="legend">
+                        <div class="legend-item">
+                            <div class="legend-color" style="background: var(--color-a);"></div>
+                            <span>Tile A</span>
+                        </div>
+                        <div class="legend-item">
+                            <div class="legend-color" style="background: var(--color-b);"></div>
+                            <span>Tile B</span>
+                        </div>
+                        <div class="legend-item">
+                            <div class="legend-color" style="background: var(--color-c);"></div>
+                            <span>Tile C</span>
+                        </div>
+                        <div class="legend-item">
+                            <div class="legend-color" style="background: var(--color-d);"></div>
+                            <span>Tile D</span>
+                        </div>
+                    </div>
+                    <div class="legend" style="margin-top: 8px;">
+                        <div class="legend-item">
+                            <div class="legend-color" style="background: var(--state-waiting);"></div>
+                            <span>Waiting</span>
+                        </div>
+                        <div class="legend-item">
+                            <div class="legend-color" style="background: var(--state-firing);"></div>
+                            <span>Active</span>
+                        </div>
+                        <div class="legend-item">
+                            <div class="legend-color" style="background: var(--state-done);"></div>
+                            <span>Done</span>
+                        </div>
                     </div>
                 </div>
 
@@ -738,6 +858,7 @@
         // State
         // =====================================================
         let traceData = null;
+        let traceFormat = 'demo';  // 'demo' or 'tiled'
         let currentCycle = 0;
         let eventIndex = 0;
         let isPlaying = false;
@@ -747,7 +868,8 @@
         let tilePositions = {
             a: { host: true, l3: null, l2: null },
             b: { host: true, l3: null, l2: null },
-            c: { host: false, l3: null, l2: null }
+            c: { host: false, l3: null, l2: null },
+            d: { host: false, l3: null, l2: null }
         };
 
         let ofgStates = {
@@ -758,6 +880,25 @@
 
         let bufferLevels = { west: 0, north: 0, south: 0 };
         let computeActive = false;
+
+        // Stats tracking for tiled traces
+        let stats = {
+            matmuls: 0,
+            loads: 0,
+            stores: 0,
+            pushes: 0,
+            pulls: 0,
+            feeds: 0,
+            drains: 0
+        };
+
+        // Active operations tracking
+        let activeOps = {
+            dma: new Set(),
+            bm: new Set(),
+            str: new Set(),
+            compute: null
+        };
 
         // =====================================================
         // Initialization
@@ -788,8 +929,9 @@
                     reader.onload = (event) => {
                         try {
                             traceData = JSON.parse(event.target.result);
+                            detectTraceFormat();
                             reset();
-                            logEvent('--', 'system', `Loaded trace: ${file.name}`);
+                            logEvent('--', 'system', `Loaded trace: ${file.name} (${traceFormat} format)`);
                         } catch (err) {
                             alert('Invalid trace file: ' + err.message);
                         }
@@ -799,17 +941,52 @@
             });
         }
 
+        function detectTraceFormat() {
+            if (!traceData || !traceData.events || traceData.events.length === 0) {
+                traceFormat = 'demo';
+                return;
+            }
+
+            // Check first event to determine format
+            const firstEvent = traceData.events[0];
+            if (firstEvent.type === 'LOAD' || firstEvent.type === 'STORE' ||
+                firstEvent.type === 'PUSH_TO_L2' || firstEvent.type === 'MATMUL') {
+                traceFormat = 'tiled';
+            } else {
+                traceFormat = 'demo';
+            }
+        }
+
+        // =====================================================
+        // Load sample tiled trace
+        // =====================================================
+        async function loadSampleTiled() {
+            try {
+                const response = await fetch('../../../traces/tiled_matmul_small.json');
+                if (response.ok) {
+                    traceData = await response.json();
+                    detectTraceFormat();
+                    reset();
+                    logEvent('--', 'system', 'Loaded tiled matmul sample trace');
+                } else {
+                    alert('Could not load sample trace. Run tiled_matmul_trace first.');
+                }
+            } catch (err) {
+                alert('Could not load sample trace: ' + err.message);
+            }
+        }
+
         // =====================================================
         // Demo Trace
         // =====================================================
         function loadDemoTrace() {
             traceData = generateDemoTrace();
+            traceFormat = 'demo';
             reset();
             logEvent('--', 'system', 'Loaded demo trace');
         }
 
         function generateDemoTrace() {
-            // Generate a demo trace showing C = A × B execution
             return {
                 metadata: {
                     generator: "demo",
@@ -840,43 +1017,20 @@
                     { cycle: 4, level: "DMA", type: "node_state", node: 1, state: "firing", desc: "LOAD B" },
                     { cycle: 7, level: "DMA", type: "tile_move", tile: "b", from: "host", to: "l3", node: 1 },
                     { cycle: 7, level: "DMA", type: "node_state", node: 1, state: "done" },
-                    { cycle: 7, level: "DMA", type: "node_state", node: 2, state: "firing", desc: "PRODUCE B@L3" },
-                    { cycle: 8, level: "DMA", type: "node_state", node: 2, state: "done" },
                     { cycle: 8, level: "DMA", type: "trigger", target: "BLOCK_MOVER", desc: "TILE_READY(B@L3)" },
 
-                    // BlockMover pushes A to L2
-                    { cycle: 7, level: "BLOCK_MOVER", type: "node_state", node: 0, state: "ready" },
-                    { cycle: 8, level: "BLOCK_MOVER", type: "node_state", node: 0, state: "firing", desc: "WAIT A@L3" },
-                    { cycle: 8, level: "BLOCK_MOVER", type: "node_state", node: 0, state: "done" },
-                    { cycle: 8, level: "BLOCK_MOVER", type: "node_state", node: 1, state: "ready" },
-                    { cycle: 9, level: "BLOCK_MOVER", type: "node_state", node: 1, state: "firing", desc: "JOIN A + L2_avail" },
-                    { cycle: 9, level: "BLOCK_MOVER", type: "node_state", node: 1, state: "done" },
+                    // BlockMover pushes to L2
                     { cycle: 9, level: "BLOCK_MOVER", type: "node_state", node: 2, state: "firing", desc: "PUSH A→L2" },
                     { cycle: 11, level: "BLOCK_MOVER", type: "tile_move", tile: "a", from: "l3", to: "l2", node: 0 },
                     { cycle: 11, level: "BLOCK_MOVER", type: "node_state", node: 2, state: "done" },
-                    { cycle: 11, level: "BLOCK_MOVER", type: "node_state", node: 3, state: "firing", desc: "PRODUCE A@L2" },
-                    { cycle: 12, level: "BLOCK_MOVER", type: "node_state", node: 3, state: "done" },
                     { cycle: 12, level: "BLOCK_MOVER", type: "trigger", target: "STREAMER", desc: "TILE_READY(A@L2)" },
 
-                    // BlockMover pushes B to L2
-                    { cycle: 9, level: "BLOCK_MOVER", type: "node_state", node: 0, state: "ready" },
-                    { cycle: 10, level: "BLOCK_MOVER", type: "node_state", node: 0, state: "firing", desc: "WAIT B@L3" },
-                    { cycle: 10, level: "BLOCK_MOVER", type: "node_state", node: 0, state: "done" },
-                    { cycle: 10, level: "BLOCK_MOVER", type: "node_state", node: 1, state: "firing", desc: "JOIN B + L2_avail" },
-                    { cycle: 10, level: "BLOCK_MOVER", type: "node_state", node: 1, state: "done" },
                     { cycle: 10, level: "BLOCK_MOVER", type: "node_state", node: 2, state: "firing", desc: "PUSH B→L2" },
                     { cycle: 13, level: "BLOCK_MOVER", type: "tile_move", tile: "b", from: "l3", to: "l2", node: 1 },
                     { cycle: 13, level: "BLOCK_MOVER", type: "node_state", node: 2, state: "done" },
-                    { cycle: 13, level: "BLOCK_MOVER", type: "node_state", node: 3, state: "firing", desc: "PRODUCE B@L2" },
-                    { cycle: 14, level: "BLOCK_MOVER", type: "node_state", node: 3, state: "done" },
                     { cycle: 14, level: "BLOCK_MOVER", type: "trigger", target: "STREAMER", desc: "TILE_READY(B@L2)" },
 
-                    // Streamer feeds A and B
-                    { cycle: 13, level: "STREAMER", type: "node_state", node: 0, state: "ready" },
-                    { cycle: 14, level: "STREAMER", type: "node_state", node: 0, state: "firing", desc: "WAIT A@L2, B@L2" },
-                    { cycle: 15, level: "STREAMER", type: "node_state", node: 0, state: "done" },
-                    { cycle: 15, level: "STREAMER", type: "node_state", node: 1, state: "firing", desc: "JOIN A+B" },
-                    { cycle: 15, level: "STREAMER", type: "node_state", node: 1, state: "done" },
+                    // Streamer feeds
                     { cycle: 15, level: "STREAMER", type: "node_state", node: 2, state: "firing", desc: "FEED A→West, B→North" },
                     { cycle: 16, level: "STREAMER", type: "buffer_fill", buffer: "west", level: 25 },
                     { cycle: 17, level: "STREAMER", type: "buffer_fill", buffer: "north", level: 25 },
@@ -887,7 +1041,6 @@
                     { cycle: 20, level: "STREAMER", type: "buffer_fill", buffer: "west", level: 100 },
                     { cycle: 20, level: "STREAMER", type: "buffer_fill", buffer: "north", level: 100 },
                     { cycle: 20, level: "STREAMER", type: "node_state", node: 2, state: "done" },
-                    { cycle: 20, level: "STREAMER", type: "trigger", target: "COMPUTE", desc: "L1 buffers ready" },
 
                     // Compute
                     { cycle: 20, level: "COMPUTE", type: "compute_start" },
@@ -903,33 +1056,20 @@
 
                     // Drain C
                     { cycle: 30, level: "STREAMER", type: "node_state", node: 4, state: "firing", desc: "DRAIN C→L2" },
-                    { cycle: 31, level: "STREAMER", type: "buffer_fill", buffer: "south", level: 25 },
-                    { cycle: 32, level: "STREAMER", type: "buffer_fill", buffer: "south", level: 50 },
-                    { cycle: 33, level: "STREAMER", type: "buffer_fill", buffer: "south", level: 75 },
-                    { cycle: 34, level: "STREAMER", type: "buffer_fill", buffer: "south", level: 100 },
                     { cycle: 35, level: "STREAMER", type: "tile_move", tile: "c", from: "compute", to: "l2", node: 2 },
                     { cycle: 35, level: "STREAMER", type: "node_state", node: 4, state: "done" },
-                    { cycle: 35, level: "STREAMER", type: "buffer_fill", buffer: "south", level: 0 },
                     { cycle: 35, level: "STREAMER", type: "trigger", target: "BLOCK_MOVER", desc: "TILE_READY(C@L2)" },
 
-                    // BlockMover pulls C to L3
-                    { cycle: 36, level: "BLOCK_MOVER", type: "node_state", node: 0, state: "firing", desc: "WAIT C@L2" },
-                    { cycle: 36, level: "BLOCK_MOVER", type: "node_state", node: 0, state: "done" },
+                    // BlockMover pulls C
                     { cycle: 36, level: "BLOCK_MOVER", type: "node_state", node: 2, state: "firing", desc: "PULL C→L3" },
                     { cycle: 38, level: "BLOCK_MOVER", type: "tile_move", tile: "c", from: "l2", to: "l3", node: 2 },
                     { cycle: 38, level: "BLOCK_MOVER", type: "node_state", node: 2, state: "done" },
-                    { cycle: 38, level: "BLOCK_MOVER", type: "node_state", node: 3, state: "firing", desc: "PRODUCE C@L3" },
-                    { cycle: 39, level: "BLOCK_MOVER", type: "node_state", node: 3, state: "done" },
                     { cycle: 39, level: "BLOCK_MOVER", type: "trigger", target: "DMA", desc: "TILE_READY(C@L3)" },
 
                     // DMA stores C
-                    { cycle: 40, level: "DMA", type: "node_state", node: 0, state: "firing", desc: "WAIT C@L3" },
-                    { cycle: 40, level: "DMA", type: "node_state", node: 0, state: "done" },
                     { cycle: 40, level: "DMA", type: "node_state", node: 1, state: "firing", desc: "STORE C→Host" },
                     { cycle: 43, level: "DMA", type: "tile_move", tile: "c", from: "l3", to: "host" },
                     { cycle: 43, level: "DMA", type: "node_state", node: 1, state: "done" },
-                    { cycle: 43, level: "DMA", type: "node_state", node: 2, state: "firing", desc: "PRODUCE BUFFER_AVAIL" },
-                    { cycle: 44, level: "DMA", type: "node_state", node: 2, state: "done" },
                     { cycle: 44, level: "DMA", type: "complete", desc: "C = A × B complete" }
                 ]
             };
@@ -947,7 +1087,8 @@
             tilePositions = {
                 a: { host: true, l3: null, l2: null },
                 b: { host: true, l3: null, l2: null },
-                c: { host: false, l3: null, l2: null }
+                c: { host: false, l3: null, l2: null },
+                d: { host: false, l3: null, l2: null }
             };
 
             ofgStates = {
@@ -959,9 +1100,51 @@
             bufferLevels = { west: 0, north: 0, south: 0 };
             computeActive = false;
 
+            stats = { matmuls: 0, loads: 0, stores: 0, pushes: 0, pulls: 0, feeds: 0, drains: 0 };
+            activeOps = { dma: new Set(), bm: new Set(), str: new Set(), compute: null };
+
+            // Update UI based on trace format
+            updateUIForFormat();
             updateDisplay();
+            updateStatsDisplay();
             clearEventLog();
             document.getElementById('cycleNum').textContent = '0';
+
+            if (traceData && traceData.events) {
+                const maxCycle = traceData.events[traceData.events.length - 1].cycle;
+                document.getElementById('totalCycles').textContent = maxCycle;
+                document.getElementById('timelineSlider').max = maxCycle;
+            }
+        }
+
+        function updateUIForFormat() {
+            const problemInfo = document.getElementById('problemInfo');
+            const timelineContainer = document.getElementById('timelineContainer');
+
+            if (traceFormat === 'tiled' && traceData && traceData.metadata) {
+                // Show problem info
+                problemInfo.style.display = 'block';
+                const config = traceData.metadata.config || {};
+                document.getElementById('problemTitle').textContent = traceData.metadata.problem || 'Matrix Multiplication';
+                document.getElementById('problemDetails').innerHTML = `
+                    Tiles: ${config.m_tiles || '?'} × ${config.n_tiles || '?'} × ${config.k_tiles || '?'} |
+                    Array: ${config.systolic_rows || 16} × ${config.systolic_cols || 16} |
+                    Events: ${traceData.events.length}
+                `;
+
+                // Show timeline for large traces
+                timelineContainer.style.display = traceData.events.length > 500 ? 'block' : 'none';
+
+                // Update stats targets
+                if (traceData.stats) {
+                    document.getElementById('dma-progress').textContent = `0/${traceData.stats.dma_loads + traceData.stats.dma_stores}`;
+                    document.getElementById('bm-progress').textContent = `0/${traceData.stats.bm_pushes + traceData.stats.bm_pulls}`;
+                    document.getElementById('compute-progress').textContent = `0/${traceData.stats.matmuls}`;
+                }
+            } else {
+                problemInfo.style.display = 'none';
+                timelineContainer.style.display = 'none';
+            }
         }
 
         function togglePlay() {
@@ -978,7 +1161,7 @@
             document.getElementById('btnPlay').classList.add('active');
 
             const speed = 11 - document.getElementById('speedSlider').value;
-            const interval = speed * 100;
+            const interval = traceFormat === 'tiled' ? speed * 10 : speed * 100;
 
             playInterval = setInterval(() => {
                 if (!stepForward()) {
@@ -1000,27 +1183,176 @@
         function stepForward() {
             if (!traceData || !traceData.events) return false;
 
-            currentCycle++;
+            // For tiled traces, advance by batch of cycles
+            const stepSize = traceFormat === 'tiled' ? 100 : 1;
+            currentCycle += stepSize;
             document.getElementById('cycleNum').textContent = currentCycle;
 
-            // Process all events for this cycle
-            let hasEvents = false;
+            // Process all events up to current cycle
             while (eventIndex < traceData.events.length &&
                    traceData.events[eventIndex].cycle <= currentCycle) {
                 processEvent(traceData.events[eventIndex]);
                 eventIndex++;
-                hasEvents = true;
             }
 
             updateDisplay();
+            updateStatsDisplay();
+            updateTimeline();
 
             return eventIndex < traceData.events.length;
+        }
+
+        function stepBackward() {
+            if (currentCycle <= 0) return;
+
+            const stepSize = traceFormat === 'tiled' ? 100 : 1;
+            const targetCycle = Math.max(0, currentCycle - stepSize);
+
+            // Reset and replay to target
+            reset();
+            while (currentCycle < targetCycle && eventIndex < traceData.events.length) {
+                currentCycle++;
+                while (eventIndex < traceData.events.length &&
+                       traceData.events[eventIndex].cycle <= currentCycle) {
+                    processEvent(traceData.events[eventIndex]);
+                    eventIndex++;
+                }
+            }
+
+            document.getElementById('cycleNum').textContent = currentCycle;
+            updateDisplay();
+            updateStatsDisplay();
+            updateTimeline();
+        }
+
+        function jumpToEnd() {
+            if (!traceData || !traceData.events) return;
+
+            const maxCycle = traceData.events[traceData.events.length - 1].cycle;
+            scrubTimeline(maxCycle);
+        }
+
+        function scrubTimeline(targetCycle) {
+            if (!traceData || !traceData.events) return;
+
+            targetCycle = parseInt(targetCycle);
+
+            // Reset and replay to target
+            reset();
+            while (eventIndex < traceData.events.length &&
+                   traceData.events[eventIndex].cycle <= targetCycle) {
+                processEvent(traceData.events[eventIndex]);
+                eventIndex++;
+            }
+
+            currentCycle = targetCycle;
+            document.getElementById('cycleNum').textContent = currentCycle;
+            updateDisplay();
+            updateStatsDisplay();
+            updateTimeline();
+        }
+
+        function updateTimeline() {
+            if (!traceData || !traceData.events) return;
+
+            const maxCycle = traceData.events[traceData.events.length - 1].cycle;
+            const percent = Math.round((currentCycle / maxCycle) * 100);
+
+            document.getElementById('timelineSlider').value = currentCycle;
+            document.getElementById('timelinePercent').textContent = percent + '%';
         }
 
         // =====================================================
         // Event Processing
         // =====================================================
         function processEvent(event) {
+            if (traceFormat === 'tiled') {
+                processTiledEvent(event);
+            } else {
+                processDemoEvent(event);
+            }
+        }
+
+        function processTiledEvent(event) {
+            switch (event.type) {
+                case 'LOAD':
+                    stats.loads++;
+                    updateOFGStateFromOp('dma', 'firing');
+                    if (event.name && stats.loads <= 10) {
+                        logEvent(event.cycle, event.level, event.name);
+                    }
+                    break;
+
+                case 'STORE':
+                    stats.stores++;
+                    updateOFGStateFromOp('dma', 'firing');
+                    if (event.name && stats.stores <= 10) {
+                        logEvent(event.cycle, event.level, event.name);
+                    }
+                    break;
+
+                case 'PUSH_TO_L2':
+                    stats.pushes++;
+                    updateOFGStateFromOp('bm', 'firing');
+                    break;
+
+                case 'PULL_FROM_L2':
+                    stats.pulls++;
+                    updateOFGStateFromOp('bm', 'firing');
+                    break;
+
+                case 'FEED_WEST':
+                    stats.feeds++;
+                    updateOFGStateFromOp('str', 'firing');
+                    bufferLevels.west = Math.min(100, bufferLevels.west + 25);
+                    break;
+
+                case 'FEED_NORTH':
+                    stats.feeds++;
+                    updateOFGStateFromOp('str', 'firing');
+                    bufferLevels.north = Math.min(100, bufferLevels.north + 25);
+                    break;
+
+                case 'MATMUL':
+                    stats.matmuls++;
+                    computeActive = true;
+                    activeOps.compute = event;
+                    activateAllPEs();
+                    if (stats.matmuls % 10 === 0 || stats.matmuls <= 5) {
+                        logEvent(event.cycle, 'COMPUTE', `MATMUL #${stats.matmuls}`);
+                    }
+                    // Schedule deactivation
+                    setTimeout(() => {
+                        bufferLevels.west = 0;
+                        bufferLevels.north = 0;
+                        updateDisplay();
+                    }, 100);
+                    break;
+
+                case 'DRAIN':
+                    stats.drains++;
+                    updateOFGStateFromOp('str', 'firing');
+                    bufferLevels.south = Math.min(100, bufferLevels.south + 50);
+                    setTimeout(() => {
+                        bufferLevels.south = 0;
+                        computeActive = false;
+                        clearPEs();
+                        updateDisplay();
+                    }, 100);
+                    break;
+
+                case 'TILE_READY':
+                    // Update tile visualization based on location
+                    updateTileFromEvent(event);
+                    break;
+
+                case 'BUFFER_FREE':
+                    // Buffer became available
+                    break;
+            }
+        }
+
+        function processDemoEvent(event) {
             switch (event.type) {
                 case 'node_state':
                     updateOFGState(event.level, event.node, event.state);
@@ -1045,6 +1377,7 @@
 
                 case 'compute_start':
                     computeActive = true;
+                    stats.matmuls++;
                     logEvent(event.cycle, 'COMPUTE', 'Systolic array active');
                     break;
 
@@ -1061,6 +1394,41 @@
                 case 'complete':
                     logEvent(event.cycle, 'SYSTEM', event.desc);
                     break;
+            }
+        }
+
+        function updateOFGStateFromOp(level, state) {
+            // Simple visualization: mark some nodes as active
+            if (level === 'dma') {
+                ofgStates.dma[1] = state;
+            } else if (level === 'bm') {
+                ofgStates.bm[2] = state;
+            } else if (level === 'str') {
+                ofgStates.str[2] = state;
+            }
+        }
+
+        function updateTileFromEvent(event) {
+            const op = event.operand;
+            if (!op) return;
+
+            const tileType = op.type.toLowerCase();
+            const loc = event.level;
+
+            // Map operand type to tile position key
+            let key = null;
+            if (tileType === 'a') key = 'a';
+            else if (tileType === 'b') key = 'b';
+            else if (tileType === 'c') key = 'c';
+            else if (tileType === 'd') key = 'd';
+
+            if (!key) return;
+
+            // Update tile position based on location
+            if (loc === 'L3') {
+                tilePositions[key].l3 = op.dst;
+            } else if (loc === 'L2') {
+                tilePositions[key].l2 = op.dst;
             }
         }
 
@@ -1088,24 +1456,32 @@
         }
 
         function flashTrigger(from, to) {
-            // Flash the appropriate flow arrow
             let arrowId = null;
             if (from === 'DMA' && to === 'BLOCK_MOVER') arrowId = 'flow-dma-l3';
             else if (from === 'BLOCK_MOVER' && to === 'STREAMER') arrowId = 'flow-bm-l2';
             else if (from === 'STREAMER' && to === 'COMPUTE') arrowId = 'flow-str-compute';
-            else if (from === 'STREAMER' && to === 'BLOCK_MOVER') arrowId = 'flow-l2-l1';
-            else if (from === 'BLOCK_MOVER' && to === 'DMA') arrowId = 'flow-l3-l2';
+            else if (from === 'STREAMER' && to === 'BLOCK_MOVER') arrowId = 'flow-bm-l2';
+            else if (from === 'BLOCK_MOVER' && to === 'DMA') arrowId = 'flow-dma-l3';
 
             if (arrowId) {
                 const arrow = document.getElementById(arrowId);
-                arrow.classList.add('active');
-                setTimeout(() => arrow.classList.remove('active'), 500);
+                if (arrow) {
+                    arrow.classList.add('active');
+                    setTimeout(() => arrow.classList.remove('active'), 500);
+                }
             }
         }
 
         function activatePEs(peList) {
             for (const pe of peList) {
                 const elem = document.getElementById(`pe-${pe}`);
+                if (elem) elem.classList.add('active');
+            }
+        }
+
+        function activateAllPEs() {
+            for (let i = 0; i < 16; i++) {
+                const elem = document.getElementById(`pe-${i}`);
                 if (elem) elem.classList.add('active');
             }
         }
@@ -1125,15 +1501,19 @@
             updateTileDisplay('host-tile-a', tilePositions.a.host, 'A');
             updateTileDisplay('host-tile-b', tilePositions.b.host, 'B');
             updateTileDisplay('host-tile-c', tilePositions.c.host, 'C');
+            updateTileDisplay('host-tile-d', tilePositions.d.host, 'D');
 
             // L3 tiles
             for (let i = 0; i < 4; i++) {
                 const elem = document.getElementById(`l3-${i}-tile`);
+                if (!elem) continue;
+
                 let content = '';
                 let tileClass = '';
                 if (tilePositions.a.l3 === i) { content = 'A'; tileClass = 'tile-a'; }
                 else if (tilePositions.b.l3 === i) { content = 'B'; tileClass = 'tile-b'; }
                 else if (tilePositions.c.l3 === i) { content = 'C'; tileClass = 'tile-c'; }
+                else if (tilePositions.d.l3 === i) { content = 'D'; tileClass = 'tile-d'; }
 
                 elem.textContent = content;
                 elem.className = 'tile ' + tileClass;
@@ -1143,11 +1523,14 @@
             // L2 banks
             for (let i = 0; i < 8; i++) {
                 const elem = document.getElementById(`l2-${i}-tile`);
+                if (!elem) continue;
+
                 let content = '';
                 let tileClass = '';
                 if (tilePositions.a.l2 === i) { content = 'A'; tileClass = 'tile-a'; }
                 else if (tilePositions.b.l2 === i) { content = 'B'; tileClass = 'tile-b'; }
                 else if (tilePositions.c.l2 === i) { content = 'C'; tileClass = 'tile-c'; }
+                else if (tilePositions.d.l2 === i) { content = 'D'; tileClass = 'tile-d'; }
 
                 elem.textContent = content;
                 elem.className = 'tile ' + tileClass;
@@ -1174,6 +1557,7 @@
 
         function updateTileDisplay(id, visible, label) {
             const elem = document.getElementById(id);
+            if (!elem) return;
             elem.textContent = label;
             elem.classList.toggle('visible', visible);
         }
@@ -1189,9 +1573,42 @@
 
         function updateStatusDot(id, states) {
             const elem = document.getElementById(id);
+            if (!elem) return;
             const hasFiring = states.includes('firing');
             const allDone = states.every(s => s === 'done');
             elem.className = 'status-dot ' + (hasFiring ? 'active' : (allDone ? 'complete' : 'idle'));
+        }
+
+        function updateStatsDisplay() {
+            if (!traceData) return;
+
+            // Update stat values
+            document.getElementById('stat-matmuls').textContent = stats.matmuls;
+            document.getElementById('stat-loads').textContent = stats.loads;
+            document.getElementById('stat-stores').textContent = stats.stores;
+            document.getElementById('stat-pushes').textContent = stats.pushes;
+
+            // Update progress bars if we have totals
+            if (traceData.stats) {
+                const totals = traceData.stats;
+
+                const dmaTotal = totals.dma_loads + totals.dma_stores;
+                const dmaDone = stats.loads + stats.stores;
+                document.getElementById('dma-progress').textContent = `${dmaDone}/${dmaTotal}`;
+                document.getElementById('dma-progress-bar').style.width = (dmaDone / dmaTotal * 100) + '%';
+
+                const bmTotal = totals.bm_pushes + totals.bm_pulls;
+                const bmDone = stats.pushes + stats.pulls;
+                document.getElementById('bm-progress').textContent = `${bmDone}/${bmTotal}`;
+                document.getElementById('bm-progress-bar').style.width = (bmDone / bmTotal * 100) + '%';
+
+                document.getElementById('compute-progress').textContent = `${stats.matmuls}/${totals.matmuls}`;
+                document.getElementById('compute-progress-bar').style.width = (stats.matmuls / totals.matmuls * 100) + '%';
+
+                // Overall progress
+                const progress = Math.round((stats.matmuls / totals.matmuls) * 100);
+                document.getElementById('stat-progress').textContent = progress;
+            }
         }
 
         // =====================================================
@@ -1201,17 +1618,17 @@
             const log = document.getElementById('eventLog');
             const item = document.createElement('div');
             item.className = 'event-item';
-
-            const levelClass = level.toLowerCase().replace('_', '');
-
             item.innerHTML = `
                 <span class="event-cycle">${cycle}</span>
-                <span class="event-level ${levelClass}">${level}</span>
+                <span class="event-level ${level}">${level}</span>
                 <span class="event-desc">${desc}</span>
             `;
+            log.insertBefore(item, log.firstChild);
 
-            log.appendChild(item);
-            log.scrollTop = log.scrollHeight;
+            // Limit log size
+            while (log.children.length > 100) {
+                log.removeChild(log.lastChild);
+            }
         }
 
         function clearEventLog() {
@@ -1220,15 +1637,8 @@
         }
 
         // =====================================================
-        // Keyboard shortcuts
-        // =====================================================
-        document.addEventListener('keydown', (e) => {
-            if (e.key === ' ') { e.preventDefault(); togglePlay(); }
-            else if (e.key === 'ArrowRight') { e.preventDefault(); stepForward(); }
-            else if (e.key === 'r') { reset(); }
-        });
-
         // Initialize
+        // =====================================================
         init();
     </script>
 </body>
