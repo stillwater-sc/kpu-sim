@@ -1,6 +1,8 @@
 // ============================================================================
 // src/models/behavioral/tiled_matmul_program.cpp
 // Parameterized Tiled Matrix Multiplication - Implementation
+// Uses dataflow semantics (credits up, data down)
+// See docs/kpu-execution-model.md for the execution model
 // ============================================================================
 
 #include <sw/kpu/behavioral/tiled_matmul_program.hpp>
@@ -19,10 +21,12 @@ std::string TiledMatmulProgram::to_json() const {
     // Metadata
     json << "  \"metadata\": {\n";
     json << "    \"generator\": \"kpu-sim TiledMatmulProgram\",\n";
-    json << "    \"version\": \"1.0\",\n";
+    json << "    \"version\": \"3.0\",\n";
+    json << "    \"execution_model\": \"dataflow\",\n";
     json << "    \"problem\": \"D[" << config_.M << "," << config_.N
          << "] = C + A[" << config_.M << "," << config_.K
          << "] * B[" << config_.K << "," << config_.N << "]\",\n";
+    json << "    \"loop_order\": \"" << to_string(config_.loop_order) << "\",\n";
     json << "    \"config\": {\n";
     json << "      \"M\": " << config_.M << ",\n";
     json << "      \"N\": " << config_.N << ",\n";
@@ -32,7 +36,7 @@ std::string TiledMatmulProgram::to_json() const {
     json << "      \"tile_k\": " << config_.tile_k << ",\n";
     json << "      \"systolic_rows\": " << config_.systolic_rows << ",\n";
     json << "      \"systolic_cols\": " << config_.systolic_cols << ",\n";
-    json << "      \"l3_tiles\": " << static_cast<int>(config_.num_l3_tiles) << ",\n";
+    json << "      \"l3_buffers\": " << static_cast<int>(config_.num_l3_tiles) << ",\n";
     json << "      \"l2_banks\": " << static_cast<int>(config_.num_l2_banks) << ",\n";
     json << "      \"m_tiles\": " << config_.m_tiles() << ",\n";
     json << "      \"n_tiles\": " << config_.n_tiles() << ",\n";
@@ -52,15 +56,15 @@ std::string TiledMatmulProgram::to_json() const {
     json << "  \"stats\": {\n";
     json << "    \"total_cycles\": " << stats_.total_cycles << ",\n";
     json << "    \"compute_cycles\": " << stats_.compute_cycles << ",\n";
-    json << "    \"dma_loads\": " << stats_.dma_loads << ",\n";
-    json << "    \"dma_stores\": " << stats_.dma_stores << ",\n";
+    json << "    \"dma_pushes\": " << stats_.dma_loads << ",\n";
+    json << "    \"dma_pulls\": " << stats_.dma_stores << ",\n";
     json << "    \"dma_bytes\": " << stats_.dma_bytes << ",\n";
     json << "    \"bm_pushes\": " << stats_.bm_pushes << ",\n";
     json << "    \"bm_pulls\": " << stats_.bm_pulls << ",\n";
     json << "    \"bm_bytes\": " << stats_.bm_bytes << ",\n";
     json << "    \"str_feeds\": " << stats_.str_feeds << ",\n";
     json << "    \"str_drains\": " << stats_.str_drains << ",\n";
-    json << "    \"matmuls\": " << stats_.matmuls << ",\n";
+    json << "    \"computes\": " << stats_.matmuls << ",\n";
     json << "    \"flops\": " << stats_.flops << ",\n";
     json << "    \"compute_utilization\": " << std::fixed << std::setprecision(4)
          << stats_.compute_utilization() << "\n";
@@ -79,8 +83,9 @@ std::string TiledMatmulProgram::to_json() const {
         json << "      \"operand\": {\n";
         json << "        \"type\": \"" << to_string(e.operand) << "\",\n";
         json << "        \"coord\": [" << e.tile_i << ", " << e.tile_j << ", " << e.tile_k << "],\n";
-        json << "        \"src\": " << static_cast<int>(e.src_location) << ",\n";
-        json << "        \"dst\": " << static_cast<int>(e.dst_location) << "\n";
+        json << "        \"buffer_id\": " << static_cast<int>(e.buffer_id) << ",\n";
+        json << "        \"src_buffer\": " << static_cast<int>(e.src_buffer) << ",\n";
+        json << "        \"dst_buffer\": " << static_cast<int>(e.dst_buffer) << "\n";
         json << "      }";
 
         if (e.duration > 0) {
@@ -89,6 +94,27 @@ std::string TiledMatmulProgram::to_json() const {
 
         if (!e.name.empty()) {
             json << ",\n      \"name\": \"" << e.name << "\"";
+        }
+
+        // Buffer state for dataflow events
+        if (e.operation == TraceOperation::DMA_PUSH ||
+            e.operation == TraceOperation::TILE_READY ||
+            e.operation == TraceOperation::BUFFER_AVAILABLE) {
+            json << ",\n      \"l3_buffers_occupied\": " << static_cast<int>(e.l3_buffers_occupied);
+            json << ",\n      \"l2_buffers_occupied\": " << static_cast<int>(e.l2_buffers_occupied);
+        }
+
+        // Loop state for compute and tile events
+        if (e.operation == TraceOperation::DMA_PUSH ||
+            e.operation == TraceOperation::TILE_READY ||
+            e.operation == TraceOperation::BM_PUSH ||
+            e.operation == TraceOperation::COMPUTE ||
+            e.operation == TraceOperation::TILE_COMPLETE ||
+            e.operation == TraceOperation::MATMUL) {
+            json << ",\n      \"loop_state\": {"
+                 << "\"i\": " << e.loop_state.outer
+                 << ", \"j\": " << e.loop_state.middle
+                 << ", \"k\": " << e.loop_state.inner << "}";
         }
 
         json << "\n    }";

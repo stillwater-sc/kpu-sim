@@ -57,6 +57,7 @@ The progression works as follows:
 
 | Document | Purpose |
 |----------|---------|
+| `docs/kpu-execution-model.md` | **Credit-based dataflow model (MUST READ)** |
 | `docs/SIMULATION_FIDELITY_FRAMEWORK.md` | Full multi-fidelity design (READ THIS) |
 | `include/sw/kpu/fidelity/simulation_fidelity.hpp` | Fidelity enums and types |
 | `include/sw/kpu/fidelity/component_config.hpp` | Per-component configuration |
@@ -91,6 +92,108 @@ config.verification_level = VerificationLevel::INVARIANTS;
 
 ---
 
+## KPU Execution Model: Credit-Based Dataflow
+
+**CRITICAL: READ THIS BEFORE ANY KPU-RELATED CODE GENERATION**
+
+The KPU implements a **credit-based dataflow execution model**. This is fundamentally
+different from stored-program (von Neumann) architectures. Failure to understand this
+distinction leads to incorrect implementations.
+
+**Authoritative Reference:** `docs/kpu-execution-model.md`
+
+### Core Principle: Credits UP, Data DOWN
+
+```
+                    CREDITS (upstream)
+                         ↑
+    Host Memory ───→ L3 Buffers ───→ L2 Buffers ───→ L1 Streams ───→ Compute
+                         ↓
+                    DATA/TILES (downstream)
+```
+
+### MANDATORY Rules for KPU Code
+
+1. **NO CACHE SEMANTICS**
+   - L3, L2, L1 are **buffers**, NOT caches
+   - NEVER use terms: cache hit, cache miss, cache evict, LRU, refetch
+   - NEVER implement demand-driven fetching
+   - CORRECT: "tile arrived at buffer", "buffer available (credit)"
+   - WRONG: "cache hit", "cache miss", "tile evicted"
+
+2. **CREDIT-BASED FLOW**
+   - A producer can ONLY push data when it has a credit from downstream
+   - When a consumer finishes with data, it returns a credit upstream
+   - No polling, no request-response - only push with credit
+
+3. **COMPONENT BEHAVIORS**
+   - **DMA**: WAITS for L3 buffer credit, then PUSHES tile to L3
+   - **BlockMover**: WAITS for tile arrival (tag CAM) + L2 credit, then PUSHES to L2
+   - **Streamer**: WAITS for tile arrival (tag CAM) + L1 credit, then PUSHES to L1
+   - All components use **tag CAM** for out-of-order tile matching
+
+4. **CORRECT TRACE EVENTS**
+   ```
+   TILE_READY(T @ L3[i])      - Tile T arrived at L3 buffer i
+   BUFFER_AVAILABLE(L3[i])    - L3 buffer i has credit (space available)
+   DMA_PUSH                   - DMA pushing tile downstream
+   BM_PUSH                    - BlockMover pushing tile L3→L2
+   STR_FEED                   - Streamer feeding tile L2→L1
+   ```
+
+5. **FORBIDDEN TRACE EVENTS**
+   ```
+   L3_ACCESS with HIT/MISS    - WRONG: Implies cache lookup
+   CACHE_HIT / CACHE_MISS     - WRONG: No cache exists
+   L3_EVICT                   - WRONG: No eviction, only credit return
+   REFETCH                    - WRONG: Tiles flow once, not re-fetched
+   ```
+
+### Quick Reference Table
+
+| WRONG (Cache/Stored-Program) | CORRECT (Dataflow) |
+|------------------------------|-------------------|
+| Cache hit | Tile already in buffer (from previous push) |
+| Cache miss | Waiting for tile to arrive |
+| Cache eviction | Buffer available (credit returned) |
+| LRU replacement | N/A - explicit buffer management |
+| Fetch on demand | Push when credit available |
+| Request-response | Credit-push flow |
+| Content-addressed lookup | Tag CAM match for tile arrival |
+
+### Implementation Reference
+
+**USE THESE (correct dataflow semantics):**
+```
+include/sw/kpu/models/dataflow/
+├── flow_graph_executor.hpp       # Base dataflow executor
+├── dma_flow_executor.hpp         # DMA with credit semantics
+├── block_mover_flow_executor.hpp # BlockMover with credit/push
+└── streamer_flow_executor.hpp    # Streamer with credit/push
+```
+
+**AVOID THESE (incorrect cache semantics - deprecated):**
+```
+include/sw/kpu/behavioral/
+├── l3_cache_model.hpp            # WRONG: Cache semantics
+```
+
+### Before Writing KPU Code, Ask:
+
+1. "Am I implementing push-with-credit or fetch-on-demand?"
+   - If fetch-on-demand: STOP and redesign
+
+2. "Am I using cache terminology (hit/miss/evict)?"
+   - If yes: STOP and use buffer/credit terminology
+
+3. "Does my component wait for downstream credit before pushing?"
+   - If no: STOP and add credit checking
+
+4. "Does my component return credit upstream after consuming data?"
+   - If no: STOP and add credit return
+
+---
+
 ## Validation Requirements
 
 This section covers validation for **cycle-accurate** simulation, particularly
@@ -120,6 +223,7 @@ kpu-sim/
 ├── CLAUDE.md                              # This file - read first!
 │
 ├── docs/
+│   ├── kpu-execution-model.md             # Credit-based dataflow (MUST READ)
 │   ├── SIMULATION_FIDELITY_FRAMEWORK.md   # Multi-fidelity design (MUST READ)
 │   ├── KPU_API_GAPS_AND_ROADMAP.md        # API gaps and DNN roadmap
 │   └── sessions/                          # Session logs and changelogs

@@ -3,13 +3,22 @@
 // Generate trace for tiled matrix multiplication: D = C + A * B
 // ============================================================================
 //
-// Problem: D[1000,1000] = C[1000,1000] + A[1000,100] * B[100,1000]
+// EXECUTION MODEL: Credit-based dataflow (NO CACHE!)
+// See docs/kpu-execution-model.md for the authoritative reference.
 //
-// Hardware config:
-// - 16x16 systolic array
-// - 4 L3 tiles (128KB each)
-// - 8 L2 banks (64KB each)
-// - Double-buffering for A and B tiles
+// Usage:
+//   tiled_matmul_trace [--small|--tiny|--medium|--large] [--order IKJ|KIJ|...]
+//
+// Example sizes:
+//   --tiny:   D[32,32]  = A[32,48]  * B[48,32]   (12 matmuls, ~3K cycles)
+//   --small:  D[48,48]  = A[48,48]  * B[48,48]   (27 matmuls, ~8K cycles)
+//   --medium: D[128,128]= A[128,64] * B[64,128]  (256 matmuls, ~70K cycles)
+//   --large:  D[1000,1000]=A[1000,100]*B[100,1000] (27K matmuls, ~3.6M cycles)
+//
+// The "tiny" example is designed to show:
+// - With IKJ: A tiles have good reuse (each loaded once)
+// - With IKJ: B tiles have poor reuse (each loaded m_tiles times)
+// - Buffer pressure when DMA is faster than downstream consumption
 //
 // Output: traces/tiled_matmul_trace.json
 // View with: tools/visualization/ofg_execution_animation.html
@@ -35,6 +44,7 @@ void print_config(const TiledMatmulConfig& config) {
               << " (k=" << config.tile_k << ")" << std::endl;
     std::cout << "Systolic array: " << config.systolic_rows << " x "
               << config.systolic_cols << std::endl;
+    std::cout << "Loop order: " << to_string(config.loop_order) << std::endl;
     std::cout << std::endl;
 
     std::cout << "Tile decomposition:" << std::endl;
@@ -53,10 +63,11 @@ void print_config(const TiledMatmulConfig& config) {
     std::cout << std::endl;
 
     std::cout << "Hardware resources:" << std::endl;
-    std::cout << "  L3 tiles: " << static_cast<int>(config.num_l3_tiles)
-              << " (A buffers: " << static_cast<int>(config.l3_a_buffers[0])
+    std::cout << "  L3 cache capacity: " << config.l3_capacity_tiles << " tiles" << std::endl;
+    std::cout << "  L3 buffers: " << static_cast<int>(config.num_l3_tiles)
+              << " (A: " << static_cast<int>(config.l3_a_buffers[0])
               << "," << static_cast<int>(config.l3_a_buffers[1])
-              << ", B buffers: " << static_cast<int>(config.l3_b_buffers[0])
+              << ", B: " << static_cast<int>(config.l3_b_buffers[0])
               << "," << static_cast<int>(config.l3_b_buffers[1]) << ")" << std::endl;
     std::cout << "  L2 banks: " << static_cast<int>(config.num_l2_banks) << std::endl;
     std::cout << std::endl;
@@ -101,6 +112,15 @@ void print_stats(const TiledMatmulStats& stats, double clock_ghz = 1.0) {
     std::cout << "  FLOPs: " << stats.flops << std::endl;
     std::cout << std::endl;
 
+    // Buffer utilization statistics (dataflow model - NO CACHE semantics)
+    // See docs/kpu-execution-model.md for the credit-based dataflow model
+    std::cout << "Buffer Utilization:" << std::endl;
+    std::cout << "  L3 TILE_READY events: " << stats.l3_tile_ready_events << std::endl;
+    std::cout << "  L3 BUFFER_AVAILABLE credits: " << stats.l3_buffer_available_events << std::endl;
+    std::cout << "  L2 TILE_READY events: " << stats.l2_tile_ready_events << std::endl;
+    std::cout << "  L2 BUFFER_AVAILABLE credits: " << stats.l2_buffer_available_events << std::endl;
+    std::cout << std::endl;
+
     std::cout << "Utilization:" << std::endl;
     std::cout << "  Compute utilization: "
               << std::fixed << std::setprecision(2)
@@ -113,9 +133,10 @@ void print_stats(const TiledMatmulStats& stats, double clock_ghz = 1.0) {
 
 int main(int argc, char* argv[]) {
     std::cout << "=== Tiled Matrix Multiplication Trace Generator ===" << std::endl;
+    std::cout << "(Credit-based dataflow model - see docs/kpu-execution-model.md)" << std::endl;
     std::cout << std::endl;
 
-    // Configure the problem: D[1000,1000] = C[1000,1000] + A[1000,100] * B[100,1000]
+    // Default: large problem
     TiledMatmulConfig config;
     config.M = 1000;
     config.N = 1000;
@@ -132,6 +153,10 @@ int main(int argc, char* argv[]) {
     config.num_l3_tiles = 4;
     config.num_l2_banks = 8;
 
+    // L3 buffer configuration (NOT cache!)
+    config.l3_capacity_tiles = 24;      // For compatibility, not used in dataflow
+    config.loop_order = LoopOrder::IKJ; // Best A-tile buffer reuse
+
     // Timing parameters (typical for on-chip movement)
     config.dma_load_latency = 100;      // ~100 cycles to start DMA
     config.dma_store_latency = 100;
@@ -147,21 +172,86 @@ int main(int argc, char* argv[]) {
 
     config.accumulate_c = true;
 
+    // Parse command line arguments
+    std::string size_mode = "large";
+    for (int i = 1; i < argc; ++i) {
+        std::string arg = argv[i];
+        if (arg == "--tiny") {
+            // Tiny: D[32,32] = A[32,48] * B[48,32]
+            // 2x2 output tiles, 2x3 A tiles, 3x2 B tiles = 12 matmul ops
+            // In IKJ: A loaded 6 times (good), B loaded 12 times (2x each - shows reuse issue)
+            config.M = 32;
+            config.N = 32;
+            config.K = 48;
+            size_mode = "tiny";
+        } else if (arg == "--small") {
+            // Small: D[48,48] = A[48,48] * B[48,48]
+            // 3x3 output tiles, 3x3 A tiles, 3x3 B tiles = 27 matmul ops
+            config.M = 48;
+            config.N = 48;
+            config.K = 48;
+            size_mode = "small";
+        } else if (arg == "--medium") {
+            // Medium: D[128,128] = A[128,64] * B[64,128]
+            // 8x8 output tiles, 8x4 A tiles, 4x8 B tiles = 256 matmul ops
+            config.M = 128;
+            config.N = 128;
+            config.K = 64;
+            size_mode = "medium";
+        } else if (arg == "--large") {
+            // Large: default (1000x1000)
+            size_mode = "large";
+        } else if (arg == "--order" && i + 1 < argc) {
+            std::string order = argv[++i];
+            if (order == "IJK") config.loop_order = LoopOrder::IJK;
+            else if (order == "JIK") config.loop_order = LoopOrder::JIK;
+            else if (order == "IKJ") config.loop_order = LoopOrder::IKJ;
+            else if (order == "KIJ") config.loop_order = LoopOrder::KIJ;
+            else if (order == "KJI") config.loop_order = LoopOrder::KJI;
+            else if (order == "JKI") config.loop_order = LoopOrder::JKI;
+            else if (order == "BLOCKED") config.loop_order = LoopOrder::BLOCKED;
+        } else if (arg == "--help" || arg == "-h") {
+            std::cout << "Usage: tiled_matmul_trace [OPTIONS]\n\n"
+                      << "Size options:\n"
+                      << "  --tiny    D[32,32] = A[32,48] * B[48,32]   (12 matmuls, ~3K cycles)\n"
+                      << "  --small   D[48,48] = A[48,48] * B[48,48]   (27 matmuls, ~8K cycles)\n"
+                      << "  --medium  D[128,128]=A[128,64]*B[64,128]   (256 matmuls, ~70K cycles)\n"
+                      << "  --large   D[1000,1000]=A[1000,100]*B[100,1000] (27K matmuls, ~3.6M cycles)\n\n"
+                      << "Loop order:\n"
+                      << "  --order IKJ   A-tile reuse across j (default)\n"
+                      << "  --order KIJ   B-tile reuse across i\n"
+                      << "  --order IJK   Sequential accumulation\n"
+                      << "  --order JIK   B-column reuse\n"
+                      << "  --order KJI   A-column reuse\n"
+                      << "  --order JKI   B-column streaming\n\n"
+                      << "The --tiny example shows buffer reuse patterns:\n"
+                      << "  IKJ: A[i,k] reused for all j, B[k,j] loaded m_tiles times\n"
+                      << std::endl;
+            return 0;
+        }
+    }
+
+    std::cout << "Size mode: " << size_mode << std::endl;
     print_config(config);
 
-    // Optional: reduce problem size if requested
-    if (argc > 1) {
-        int scale = std::atoi(argv[1]);
-        if (scale > 0 && scale < 100) {
-            // Scale down for faster testing
-            config.M = 16 * scale;
-            config.N = 16 * scale;
-            config.K = 16 * std::max(1, scale / 10);
-            std::cout << "Scaled problem to: D[" << config.M << "," << config.N
-                      << "] = A[" << config.M << "," << config.K
-                      << "] * B[" << config.K << "," << config.N << "]" << std::endl;
-            std::cout << std::endl;
-        }
+    // Print reuse analysis for educational purposes
+    if (size_mode == "tiny" || size_mode == "small") {
+        uint32_t m_tiles = config.m_tiles();
+        uint32_t n_tiles = config.n_tiles();
+        uint32_t k_tiles = config.k_tiles();
+
+        std::cout << "=== Buffer Reuse Analysis (IKJ loop order) ===" << std::endl;
+        std::cout << "A tiles: " << m_tiles << " x " << k_tiles << " = "
+                  << (m_tiles * k_tiles) << " unique tiles" << std::endl;
+        std::cout << "  Each A[i,k] loaded ONCE, reused for all " << n_tiles << " j values" << std::endl;
+        std::cout << "  Total A loads from host: " << (m_tiles * k_tiles) << std::endl;
+        std::cout << std::endl;
+
+        std::cout << "B tiles: " << k_tiles << " x " << n_tiles << " = "
+                  << (k_tiles * n_tiles) << " unique tiles" << std::endl;
+        std::cout << "  Each B[k,j] loaded " << m_tiles << " times (once per i row)" << std::endl;
+        std::cout << "  Total B loads from host: " << (k_tiles * n_tiles * m_tiles) << std::endl;
+        std::cout << std::endl;
     }
 
     // Execute with pipelining

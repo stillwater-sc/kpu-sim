@@ -9,14 +9,20 @@
 // Features:
 // - Parameterized problem dimensions
 // - Tile sizes matched to systolic array
+// - Credit-based dataflow execution model (NO CACHE semantics!)
+// - Programmable loop order for optimal buffer utilization
 // - Double-buffering for L3 and L2
 // - Timing approximations for behavioral simulation
-// - Trace generation for visualization
+// - Trace generation with dataflow events for visualization
+//
+// EXECUTION MODEL: See docs/kpu-execution-model.md
+// - Credits flow UPSTREAM (consumer signals buffer availability)
+// - Data/tiles flow DOWNSTREAM (producer pushes when credit available)
+// - NO cache, NO cache miss - only buffers and credits
 //
 // ============================================================================
 
 #pragma once
-
 #include <cstdint>
 #include <vector>
 #include <string>
@@ -26,6 +32,34 @@
 #include <cmath>
 
 namespace sw::kpu::behavioral {
+
+// ============================================================================
+// Loop Order Configuration
+// ============================================================================
+
+/// Loop ordering strategies for tiled matrix multiplication
+enum class LoopOrder : uint8_t {
+    IJK,        // for i: for j: for k: → A-row stays in cache
+    JIK,        // for j: for i: for k: → B-column stays in cache
+    IKJ,        // for i: for k: for j: → A-row reuse, B streamed
+    KIJ,        // for k: for i: for j: → B-row stays in cache
+    KJI,        // for k: for j: for i: → A-column stays in cache
+    JKI,        // for j: for k: for i: → B-column reuse, A streamed
+    BLOCKED     // 2-level blocking for better locality
+};
+
+inline const char* to_string(LoopOrder order) {
+    switch (order) {
+        case LoopOrder::IJK: return "IJK";
+        case LoopOrder::JIK: return "JIK";
+        case LoopOrder::IKJ: return "IKJ";
+        case LoopOrder::KIJ: return "KIJ";
+        case LoopOrder::KJI: return "KJI";
+        case LoopOrder::JKI: return "JKI";
+        case LoopOrder::BLOCKED: return "BLOCKED";
+        default: return "UNKNOWN";
+    }
+}
 
 // ============================================================================
 // Configuration
@@ -46,8 +80,17 @@ struct TiledMatmulConfig {
     // Hardware configuration
     uint32_t systolic_rows = 16;
     uint32_t systolic_cols = 16;
-    uint8_t num_l3_tiles = 4;   // Total L3 tile buffers
+    uint8_t num_l3_tiles = 4;   // Total L3 tile buffers (legacy)
     uint8_t num_l2_banks = 8;   // Total L2 bank buffers
+
+    // L3 Cache configuration (new)
+    uint32_t l3_capacity_tiles = 24;  // How many tiles fit in L3 cache
+    LoopOrder loop_order = LoopOrder::IKJ;  // Default: good A-row reuse
+
+    // For BLOCKED loop order
+    uint32_t block_i = 4;       // Block size in i dimension (tiles)
+    uint32_t block_j = 4;       // Block size in j dimension (tiles)
+    uint32_t block_k = 7;       // Block size in k dimension (tiles)
 
     // Double-buffering allocation
     // L3: [0,1] for A ping-pong, [2,3] for B ping-pong
@@ -153,49 +196,98 @@ inline const char* to_string(TraceOperandType type) {
     }
 }
 
-/// Operation types in trace
+/// Operation types in trace (dataflow semantics - NO CACHE TERMINOLOGY)
+/// See docs/kpu-execution-model.md for the credit-based dataflow model
 enum class TraceOperation : uint8_t {
-    LOAD,           // DMA load from host
-    STORE,          // DMA store to host
-    PUSH_TO_L2,     // BlockMover L3 -> L2
-    PULL_FROM_L2,   // BlockMover L2 -> L3
-    FEED_WEST,      // Streamer L2 -> L1 west
-    FEED_NORTH,     // Streamer L2 -> L1 north
-    MATMUL,         // Compute operation
-    DRAIN,          // Streamer accumulator -> L2
-    TILE_READY,     // Event: tile arrived
-    BUFFER_FREE     // Event: buffer available
+    // DMA operations
+    DMA_PUSH,           // DMA pushes tile to L3 buffer (has credit)
+    DMA_PULL,           // DMA pulls tile from L3 to host
+
+    // BlockMover operations
+    BM_PUSH,            // BlockMover pushes tile L3 -> L2 (has credit)
+    BM_PULL,            // BlockMover pulls tile L2 -> L3
+
+    // Streamer operations
+    STR_FEED_A,         // Streamer feeds A tile L2 -> L1 west
+    STR_FEED_B,         // Streamer feeds B tile L2 -> L1 north
+    STR_DRAIN,          // Streamer drains accumulator -> L2
+
+    // Compute operations
+    COMPUTE,            // Systolic array active
+
+    // Dataflow events (tokens)
+    TILE_READY,         // Token: tile arrived at buffer (data downstream)
+    BUFFER_AVAILABLE,   // Token: buffer has credit (credit upstream)
+
+    // Progress tracking
+    TILE_COMPLETE,      // Output tile fully computed
+    LOOP_ITER,          // Loop iteration marker
+
+    // Legacy (for compatibility during transition)
+    LOAD,               // Deprecated: use DMA_PUSH
+    STORE,              // Deprecated: use DMA_PULL
+    PUSH_TO_L2,         // Deprecated: use BM_PUSH
+    PULL_FROM_L2,       // Deprecated: use BM_PULL
+    FEED_WEST,          // Deprecated: use STR_FEED_A
+    FEED_NORTH,         // Deprecated: use STR_FEED_B
+    DRAIN,              // Deprecated: use STR_DRAIN
+    MATMUL              // Deprecated: use COMPUTE
 };
 
 inline const char* to_string(TraceOperation op) {
     switch (op) {
+        case TraceOperation::DMA_PUSH: return "DMA_PUSH";
+        case TraceOperation::DMA_PULL: return "DMA_PULL";
+        case TraceOperation::BM_PUSH: return "BM_PUSH";
+        case TraceOperation::BM_PULL: return "BM_PULL";
+        case TraceOperation::STR_FEED_A: return "STR_FEED_A";
+        case TraceOperation::STR_FEED_B: return "STR_FEED_B";
+        case TraceOperation::STR_DRAIN: return "STR_DRAIN";
+        case TraceOperation::COMPUTE: return "COMPUTE";
+        case TraceOperation::TILE_READY: return "TILE_READY";
+        case TraceOperation::BUFFER_AVAILABLE: return "BUFFER_AVAILABLE";
+        case TraceOperation::TILE_COMPLETE: return "TILE_COMPLETE";
+        case TraceOperation::LOOP_ITER: return "LOOP_ITER";
+        // Legacy
         case TraceOperation::LOAD: return "LOAD";
         case TraceOperation::STORE: return "STORE";
         case TraceOperation::PUSH_TO_L2: return "PUSH_TO_L2";
         case TraceOperation::PULL_FROM_L2: return "PULL_FROM_L2";
         case TraceOperation::FEED_WEST: return "FEED_WEST";
         case TraceOperation::FEED_NORTH: return "FEED_NORTH";
-        case TraceOperation::MATMUL: return "MATMUL";
         case TraceOperation::DRAIN: return "DRAIN";
-        case TraceOperation::TILE_READY: return "TILE_READY";
-        case TraceOperation::BUFFER_FREE: return "BUFFER_FREE";
+        case TraceOperation::MATMUL: return "MATMUL";
         default: return "UNKNOWN";
     }
 }
 
-/// Trace event for visualization
+/// Trace event for visualization (dataflow semantics)
+/// See docs/kpu-execution-model.md for the credit-based dataflow model
 struct TraceEvent {
-    uint64_t cycle;             // When event occurs
-    TraceLevel level;           // Which level
-    TraceOperation operation;   // What operation
-    TraceOperandType operand;   // Which operand
-    uint16_t tile_i;            // Tile row
-    uint16_t tile_j;            // Tile column
-    uint16_t tile_k;            // Tile k (for A, B)
-    uint8_t src_location;       // Source node/bank
-    uint8_t dst_location;       // Destination node/bank
-    uint64_t duration;          // Duration in cycles (0 for instant events)
-    std::string name;           // Human-readable name
+    // Core fields (order preserved for brace-initialization compatibility)
+    uint64_t cycle = 0;             // When event occurs
+    TraceLevel level = TraceLevel::DMA;           // Which level
+    TraceOperation operation = TraceOperation::DMA_PUSH;   // What operation
+    TraceOperandType operand = TraceOperandType::TILE_A;   // Which operand
+    uint16_t tile_i = 0;            // Tile row index
+    uint16_t tile_j = 0;            // Tile column index
+    uint16_t tile_k = 0;            // Tile k index (for A, B)
+    uint8_t src_buffer = 0;         // Source buffer (for moves)
+    uint8_t dst_buffer = 0;         // Destination buffer (for moves)
+    uint64_t duration = 0;          // Duration in cycles (0 for instant events)
+    std::string name;               // Human-readable name
+
+    // Additional dataflow fields (set explicitly, not via brace init)
+    uint8_t buffer_id = 0;          // Which buffer (L3[i], L2[j], etc.)
+    uint8_t l3_buffers_occupied = 0;   // How many L3 buffers currently hold tiles
+    uint8_t l2_buffers_occupied = 0;   // How many L2 banks currently hold tiles
+
+    // Loop state for visualization
+    struct LoopState {
+        uint32_t outer = 0;         // Outer loop position (i)
+        uint32_t middle = 0;        // Middle loop position (j)
+        uint32_t inner = 0;         // Inner loop position (k)
+    } loop_state;
 
     std::string operand_id() const {
         std::string id = to_string(operand);
@@ -205,6 +297,17 @@ struct TraceEvent {
         }
         id += "]";
         return id;
+    }
+
+    std::string buffer_str() const {
+        std::string loc;
+        switch (level) {
+            case TraceLevel::L3: loc = "L3"; break;
+            case TraceLevel::L2: loc = "L2"; break;
+            case TraceLevel::L1: loc = "L1"; break;
+            default: loc = "?"; break;
+        }
+        return loc + "[" + std::to_string(buffer_id) + "]";
     }
 };
 
@@ -230,6 +333,12 @@ struct TiledMatmulStats {
     uint32_t matmuls = 0;
     uint64_t flops = 0;
 
+    // Buffer utilization statistics (dataflow model)
+    uint32_t l3_tile_ready_events = 0;    // How many TILE_READY tokens emitted
+    uint32_t l3_buffer_available_events = 0; // How many credits returned
+    uint32_t l2_tile_ready_events = 0;
+    uint32_t l2_buffer_available_events = 0;
+
     // Utilization
     double compute_utilization() const {
         return total_cycles > 0 ?
@@ -247,6 +356,7 @@ struct TiledMatmulStats {
 // ============================================================================
 
 /// Generates and executes tiled matmul with timing model
+/// Uses credit-based dataflow execution (see docs/kpu-execution-model.md)
 class TiledMatmulProgram {
 public:
     explicit TiledMatmulProgram(const TiledMatmulConfig& config)
@@ -260,7 +370,8 @@ public:
         trace_.clear();
         stats_ = TiledMatmulStats{};
 
-        // Initialize resource availability
+        // Initialize buffer availability (cycle when buffer becomes available)
+        // Buffer occupancy is implicitly tracked: buffer is occupied if l3_available_[i] > current_cycle_
         for (int i = 0; i < 4; ++i) {
             l3_available_[i] = 0;
         }
@@ -271,21 +382,38 @@ public:
         compute_available_ = 0;
         next_a_buffer_ = 0;
         next_b_buffer_ = 0;
+
+        // Reset loop state
+        loop_i_ = loop_j_ = loop_k_ = 0;
     }
 
-    /// Execute the full tiled matmul
+    /// Execute the full tiled matmul using configured loop order
     void execute() {
         reset();
 
-        uint32_t m_tiles = config_.m_tiles();
-        uint32_t n_tiles = config_.n_tiles();
-        uint32_t k_tiles = config_.k_tiles();
-
-        // C-stationary execution: iterate over output tiles
-        for (uint32_t i = 0; i < m_tiles; ++i) {
-            for (uint32_t j = 0; j < n_tiles; ++j) {
-                execute_output_tile(i, j, k_tiles);
-            }
+        // Execute according to configured loop order
+        switch (config_.loop_order) {
+            case LoopOrder::IJK:
+                execute_ijk();
+                break;
+            case LoopOrder::JIK:
+                execute_jik();
+                break;
+            case LoopOrder::IKJ:
+                execute_ikj();
+                break;
+            case LoopOrder::KIJ:
+                execute_kij();
+                break;
+            case LoopOrder::KJI:
+                execute_kji();
+                break;
+            case LoopOrder::JKI:
+                execute_jki();
+                break;
+            case LoopOrder::BLOCKED:
+                execute_blocked();
+                break;
         }
 
         stats_.total_cycles = current_cycle_;
@@ -293,23 +421,14 @@ public:
     }
 
     /// Execute with pipelined output tiles (more realistic)
+    /// Note: This uses the configured loop order with pipelining
     void execute_pipelined() {
         reset();
 
-        uint32_t m_tiles = config_.m_tiles();
-        uint32_t n_tiles = config_.n_tiles();
-        uint32_t k_tiles = config_.k_tiles();
-
-        // Pipeline: start loading next output tile while computing current
-        // This is a simplified model - real hardware would have more overlap
-
-        for (uint32_t i = 0; i < m_tiles; ++i) {
-            for (uint32_t j = 0; j < n_tiles; ++j) {
-                // For first k iteration, we must wait for data
-                // For subsequent k, we can overlap
-                execute_output_tile_pipelined(i, j, k_tiles);
-            }
-        }
+        // Pipelined execution uses IKJ order for best A-tile buffer reuse
+        // The key insight: for each row i, we stream through k tiles while
+        // computing j tiles. A[i,k] stays in L3 buffer for all j iterations.
+        execute_ikj_pipelined();
 
         stats_.total_cycles = current_cycle_;
         stats_.flops = config_.total_flops();
@@ -336,7 +455,8 @@ private:
     std::vector<TraceEvent> trace_;
     TiledMatmulStats stats_;
 
-    // Resource availability tracking (cycle when available)
+    // Resource availability tracking (cycle when buffer becomes available)
+    // This implicitly tracks buffer occupancy: buffer is occupied if l3_available_[i] > current_cycle_
     uint64_t l3_available_[4] = {0};
     uint64_t l2_available_[8] = {0};
     uint64_t compute_available_ = 0;
@@ -344,6 +464,11 @@ private:
     // Double-buffer indices (0 or 1)
     int next_a_buffer_ = 0;
     int next_b_buffer_ = 0;
+
+    // Current loop state for visualization
+    uint32_t loop_i_ = 0;
+    uint32_t loop_j_ = 0;
+    uint32_t loop_k_ = 0;
 
     /// Execute a single output tile D[i,j] with all k iterations
     void execute_output_tile(uint32_t i, uint32_t j, uint32_t k_tiles) {
@@ -611,27 +736,53 @@ private:
     // BlockMover Operations
     // ========================================================================
 
+    /// BlockMover pushes A tile from L3 to L2 (dataflow semantics)
+    /// When tile is consumed from L3, returns BUFFER_AVAILABLE credit upstream
     uint64_t push_to_l2_a(uint32_t i, uint32_t k, uint64_t l3_ready) {
+        uint8_t l3_buffer = config_.l3_a_buffers[(k + 1) % 2];
         uint8_t l2_bank = config_.l2_a_banks[k % 2];
         uint64_t start = std::max(l3_ready, l2_available_[l2_bank]);
         uint64_t latency = config_.bm_push_latency +
             (config_.a_tile_bytes() / config_.bm_bandwidth);
         uint64_t end = start + latency;
 
-        trace_.push_back({
-            start, TraceLevel::BLOCK_MOVER, TraceOperation::PUSH_TO_L2,
-            TraceOperandType::TILE_A,
-            static_cast<uint16_t>(i), 0, static_cast<uint16_t>(k),
-            config_.l3_a_buffers[(k + 1) % 2], l2_bank, latency,
-            "PUSH A[" + std::to_string(i) + "," + std::to_string(k) + "] -> L2"
-        });
+        // BM_PUSH: BlockMover pushes tile L3 -> L2
+        TraceEvent push_event;
+        push_event.cycle = start;
+        push_event.level = TraceLevel::BLOCK_MOVER;
+        push_event.operation = TraceOperation::BM_PUSH;
+        push_event.operand = TraceOperandType::TILE_A;
+        push_event.tile_i = static_cast<uint16_t>(i);
+        push_event.tile_k = static_cast<uint16_t>(k);
+        push_event.src_buffer = l3_buffer;
+        push_event.dst_buffer = l2_bank;
+        push_event.duration = latency;
+        push_event.name = "BM_PUSH A[" + std::to_string(i) + "," + std::to_string(k) +
+                         "] L3[" + std::to_string(l3_buffer) + "] -> L2[" + std::to_string(l2_bank) + "]";
+        trace_.push_back(push_event);
 
-        trace_.push_back({
-            end, TraceLevel::L2, TraceOperation::TILE_READY,
-            TraceOperandType::TILE_A,
-            static_cast<uint16_t>(i), 0, static_cast<uint16_t>(k),
-            l2_bank, l2_bank, 0, ""
-        });
+        // TILE_READY: Tile arrived at L2 bank
+        TraceEvent ready_event;
+        ready_event.cycle = end;
+        ready_event.level = TraceLevel::L2;
+        ready_event.operation = TraceOperation::TILE_READY;
+        ready_event.operand = TraceOperandType::TILE_A;
+        ready_event.tile_i = static_cast<uint16_t>(i);
+        ready_event.tile_k = static_cast<uint16_t>(k);
+        ready_event.buffer_id = l2_bank;
+        ready_event.name = "TILE_READY A[" + std::to_string(i) + "," + std::to_string(k) +
+                          "] @ L2[" + std::to_string(l2_bank) + "]";
+        trace_.push_back(ready_event);
+
+        // BUFFER_AVAILABLE: L3 buffer is free (credit returned to DMA)
+        TraceEvent credit_event;
+        credit_event.cycle = end;
+        credit_event.level = TraceLevel::L3;
+        credit_event.operation = TraceOperation::BUFFER_AVAILABLE;
+        credit_event.operand = TraceOperandType::BUFFER;
+        credit_event.buffer_id = l3_buffer;
+        credit_event.name = "BUFFER_AVAILABLE L3[" + std::to_string(l3_buffer) + "]";
+        trace_.push_back(credit_event);
 
         l2_available_[l2_bank] = end;
         stats_.bm_pushes++;
@@ -640,27 +791,52 @@ private:
         return end;
     }
 
+    /// BlockMover pushes B tile from L3 to L2 (dataflow semantics)
     uint64_t push_to_l2_b(uint32_t k, uint32_t j, uint64_t l3_ready) {
+        uint8_t l3_buffer = config_.l3_b_buffers[(k + 1) % 2];
         uint8_t l2_bank = config_.l2_b_banks[k % 2];
         uint64_t start = std::max(l3_ready, l2_available_[l2_bank]);
         uint64_t latency = config_.bm_push_latency +
             (config_.b_tile_bytes() / config_.bm_bandwidth);
         uint64_t end = start + latency;
 
-        trace_.push_back({
-            start, TraceLevel::BLOCK_MOVER, TraceOperation::PUSH_TO_L2,
-            TraceOperandType::TILE_B,
-            0, static_cast<uint16_t>(j), static_cast<uint16_t>(k),
-            config_.l3_b_buffers[(k + 1) % 2], l2_bank, latency,
-            "PUSH B[" + std::to_string(k) + "," + std::to_string(j) + "] -> L2"
-        });
+        // BM_PUSH: BlockMover pushes tile L3 -> L2
+        TraceEvent push_event;
+        push_event.cycle = start;
+        push_event.level = TraceLevel::BLOCK_MOVER;
+        push_event.operation = TraceOperation::BM_PUSH;
+        push_event.operand = TraceOperandType::TILE_B;
+        push_event.tile_j = static_cast<uint16_t>(j);
+        push_event.tile_k = static_cast<uint16_t>(k);
+        push_event.src_buffer = l3_buffer;
+        push_event.dst_buffer = l2_bank;
+        push_event.duration = latency;
+        push_event.name = "BM_PUSH B[" + std::to_string(k) + "," + std::to_string(j) +
+                         "] L3[" + std::to_string(l3_buffer) + "] -> L2[" + std::to_string(l2_bank) + "]";
+        trace_.push_back(push_event);
 
-        trace_.push_back({
-            end, TraceLevel::L2, TraceOperation::TILE_READY,
-            TraceOperandType::TILE_B,
-            0, static_cast<uint16_t>(j), static_cast<uint16_t>(k),
-            l2_bank, l2_bank, 0, ""
-        });
+        // TILE_READY: Tile arrived at L2 bank
+        TraceEvent ready_event;
+        ready_event.cycle = end;
+        ready_event.level = TraceLevel::L2;
+        ready_event.operation = TraceOperation::TILE_READY;
+        ready_event.operand = TraceOperandType::TILE_B;
+        ready_event.tile_j = static_cast<uint16_t>(j);
+        ready_event.tile_k = static_cast<uint16_t>(k);
+        ready_event.buffer_id = l2_bank;
+        ready_event.name = "TILE_READY B[" + std::to_string(k) + "," + std::to_string(j) +
+                          "] @ L2[" + std::to_string(l2_bank) + "]";
+        trace_.push_back(ready_event);
+
+        // BUFFER_AVAILABLE: L3 buffer is free (credit returned to DMA)
+        TraceEvent credit_event;
+        credit_event.cycle = end;
+        credit_event.level = TraceLevel::L3;
+        credit_event.operation = TraceOperation::BUFFER_AVAILABLE;
+        credit_event.operand = TraceOperandType::BUFFER;
+        credit_event.buffer_id = l3_buffer;
+        credit_event.name = "BUFFER_AVAILABLE L3[" + std::to_string(l3_buffer) + "]";
+        trace_.push_back(credit_event);
 
         l2_available_[l2_bank] = end;
         stats_.bm_pushes++;
@@ -783,6 +959,429 @@ private:
 
         stats_.str_drains++;
         return end;
+    }
+
+    // ========================================================================
+    // Dataflow-Semantic Tile Loading (Credit-Based)
+    // See docs/kpu-execution-model.md for the execution model
+    // ========================================================================
+
+    /// Load A tile: DMA waits for L3 buffer credit, then pushes tile
+    /// Returns cycle when tile is ready (TILE_READY event)
+    uint64_t load_a_tile_dataflow(uint32_t i, uint32_t k) {
+        // Select buffer using double-buffering
+        uint8_t buffer = config_.l3_a_buffers[next_a_buffer_];
+        next_a_buffer_ = 1 - next_a_buffer_;
+
+        // Wait for buffer credit (buffer available)
+        uint64_t start = std::max(current_cycle_, l3_available_[buffer]);
+
+        // DMA transfer latency
+        uint64_t latency = config_.dma_load_latency +
+            (config_.a_tile_bytes() / config_.dma_bandwidth);
+        uint64_t end = start + latency;
+
+        // Record DMA_PUSH event (producer pushes to buffer)
+        TraceEvent dma_event;
+        dma_event.cycle = start;
+        dma_event.level = TraceLevel::DMA;
+        dma_event.operation = TraceOperation::DMA_PUSH;
+        dma_event.operand = TraceOperandType::TILE_A;
+        dma_event.tile_i = static_cast<uint16_t>(i);
+        dma_event.tile_j = 0;
+        dma_event.tile_k = static_cast<uint16_t>(k);
+        dma_event.buffer_id = buffer;
+        dma_event.dst_buffer = buffer;
+        dma_event.duration = latency;
+        dma_event.loop_state = {loop_i_, loop_j_, loop_k_};
+        dma_event.l3_buffers_occupied = count_l3_occupied();
+        dma_event.name = "DMA_PUSH A[" + std::to_string(i) + "," + std::to_string(k) +
+                        "] -> L3[" + std::to_string(buffer) + "]";
+        trace_.push_back(dma_event);
+
+        // Record TILE_READY event (data token arrives at L3)
+        TraceEvent ready_event;
+        ready_event.cycle = end;
+        ready_event.level = TraceLevel::L3;
+        ready_event.operation = TraceOperation::TILE_READY;
+        ready_event.operand = TraceOperandType::TILE_A;
+        ready_event.tile_i = static_cast<uint16_t>(i);
+        ready_event.tile_j = 0;
+        ready_event.tile_k = static_cast<uint16_t>(k);
+        ready_event.buffer_id = buffer;
+        ready_event.loop_state = {loop_i_, loop_j_, loop_k_};
+        ready_event.name = "TILE_READY A[" + std::to_string(i) + "," + std::to_string(k) +
+                          "] @ L3[" + std::to_string(buffer) + "]";
+        trace_.push_back(ready_event);
+
+        // Buffer is occupied until consumed by BlockMover
+        l3_available_[buffer] = end;
+
+        stats_.dma_loads++;
+        stats_.dma_bytes += config_.a_tile_bytes();
+
+        return end;
+    }
+
+    /// Load B tile: DMA waits for L3 buffer credit, then pushes tile
+    uint64_t load_b_tile_dataflow(uint32_t k, uint32_t j) {
+        // Select buffer using double-buffering
+        uint8_t buffer = config_.l3_b_buffers[next_b_buffer_];
+        next_b_buffer_ = 1 - next_b_buffer_;
+
+        // Wait for buffer credit (buffer available)
+        uint64_t start = std::max(current_cycle_, l3_available_[buffer]);
+
+        // DMA transfer latency
+        uint64_t latency = config_.dma_load_latency +
+            (config_.b_tile_bytes() / config_.dma_bandwidth);
+        uint64_t end = start + latency;
+
+        // Record DMA_PUSH event
+        TraceEvent dma_event;
+        dma_event.cycle = start;
+        dma_event.level = TraceLevel::DMA;
+        dma_event.operation = TraceOperation::DMA_PUSH;
+        dma_event.operand = TraceOperandType::TILE_B;
+        dma_event.tile_i = 0;
+        dma_event.tile_j = static_cast<uint16_t>(j);
+        dma_event.tile_k = static_cast<uint16_t>(k);
+        dma_event.buffer_id = buffer;
+        dma_event.dst_buffer = buffer;
+        dma_event.duration = latency;
+        dma_event.loop_state = {loop_i_, loop_j_, loop_k_};
+        dma_event.l3_buffers_occupied = count_l3_occupied();
+        dma_event.name = "DMA_PUSH B[" + std::to_string(k) + "," + std::to_string(j) +
+                        "] -> L3[" + std::to_string(buffer) + "]";
+        trace_.push_back(dma_event);
+
+        // Record TILE_READY event
+        TraceEvent ready_event;
+        ready_event.cycle = end;
+        ready_event.level = TraceLevel::L3;
+        ready_event.operation = TraceOperation::TILE_READY;
+        ready_event.operand = TraceOperandType::TILE_B;
+        ready_event.tile_i = 0;
+        ready_event.tile_j = static_cast<uint16_t>(j);
+        ready_event.tile_k = static_cast<uint16_t>(k);
+        ready_event.buffer_id = buffer;
+        ready_event.loop_state = {loop_i_, loop_j_, loop_k_};
+        ready_event.name = "TILE_READY B[" + std::to_string(k) + "," + std::to_string(j) +
+                          "] @ L3[" + std::to_string(buffer) + "]";
+        trace_.push_back(ready_event);
+
+        // Buffer is occupied until consumed by BlockMover
+        l3_available_[buffer] = end;
+
+        stats_.dma_loads++;
+        stats_.dma_bytes += config_.b_tile_bytes();
+
+        return end;
+    }
+
+    /// Count how many L3 buffers are currently occupied (timing-based)
+    uint8_t count_l3_occupied() const {
+        uint8_t count = 0;
+        for (uint8_t i = 0; i < config_.num_l3_tiles; ++i) {
+            if (l3_available_[i] > current_cycle_) {
+                count++;
+            }
+        }
+        return count;
+    }
+
+    /// Count how many L2 banks are currently occupied (timing-based)
+    uint8_t count_l2_occupied() const {
+        uint8_t count = 0;
+        for (uint8_t i = 0; i < config_.num_l2_banks; ++i) {
+            if (l2_available_[i] > current_cycle_) {
+                count++;
+            }
+        }
+        return count;
+    }
+
+    /// Execute one matmul operation using dataflow-semantic loading
+    void execute_single_matmul_dataflow(uint32_t i, uint32_t j, uint32_t k,
+                                        bool is_first_k, bool is_last_k) {
+        loop_i_ = i;
+        loop_j_ = j;
+        loop_k_ = k;
+
+        // Load C for first k iteration if accumulating
+        if (is_first_k && config_.accumulate_c) {
+            load_c_tile(i, j);
+        }
+
+        // Dataflow tile loading (DMA waits for credit, then pushes)
+        uint64_t a_ready = load_a_tile_dataflow(i, k);
+        uint64_t b_ready = load_b_tile_dataflow(k, j);
+
+        // BlockMover: Push to L2
+        uint64_t a_l2_ready = push_to_l2_a(i, k, a_ready);
+        uint64_t b_l2_ready = push_to_l2_b(k, j, b_ready);
+
+        // Streamer: Feed to L1
+        uint64_t a_l1_ready = feed_west(i, k, a_l2_ready);
+        uint64_t b_l1_ready = feed_north(k, j, b_l2_ready);
+
+        // Compute: MATMUL
+        uint64_t compute_done = execute_matmul(i, j, k,
+            std::max(a_l1_ready, b_l1_ready));
+        compute_available_ = compute_done;
+
+        // Drain and store on last k iteration
+        if (is_last_k) {
+            uint64_t d_l2_ready = drain_result(i, j, compute_available_);
+            uint64_t d_l3_ready = pull_from_l2(i, j, d_l2_ready);
+            store_d_tile(i, j, d_l3_ready);
+
+            // Record tile completion
+            TraceEvent complete_event;
+            complete_event.cycle = current_cycle_;
+            complete_event.level = TraceLevel::L3;
+            complete_event.operation = TraceOperation::TILE_COMPLETE;
+            complete_event.operand = TraceOperandType::TILE_D;
+            complete_event.tile_i = static_cast<uint16_t>(i);
+            complete_event.tile_j = static_cast<uint16_t>(j);
+            complete_event.loop_state = {loop_i_, loop_j_, loop_k_};
+            complete_event.name = "COMPLETE D[" + std::to_string(i) + "," + std::to_string(j) + "]";
+            trace_.push_back(complete_event);
+        }
+    }
+
+    // ========================================================================
+    // Loop Order Implementations
+    // ========================================================================
+
+    /// IJK: for i: for j: for k: - A-row stays in L3 buffer for K iterations
+    void execute_ijk() {
+        uint32_t m_tiles = config_.m_tiles();
+        uint32_t n_tiles = config_.n_tiles();
+        uint32_t k_tiles = config_.k_tiles();
+
+        for (uint32_t i = 0; i < m_tiles; ++i) {
+            for (uint32_t j = 0; j < n_tiles; ++j) {
+                for (uint32_t k = 0; k < k_tiles; ++k) {
+                    execute_single_matmul_dataflow(i, j, k,
+                        k == 0, k == k_tiles - 1);
+                }
+            }
+        }
+    }
+
+    /// JIK: for j: for i: for k: - B-column stays in L3 buffer for K iterations
+    void execute_jik() {
+        uint32_t m_tiles = config_.m_tiles();
+        uint32_t n_tiles = config_.n_tiles();
+        uint32_t k_tiles = config_.k_tiles();
+
+        for (uint32_t j = 0; j < n_tiles; ++j) {
+            for (uint32_t i = 0; i < m_tiles; ++i) {
+                for (uint32_t k = 0; k < k_tiles; ++k) {
+                    execute_single_matmul_dataflow(i, j, k,
+                        k == 0, k == k_tiles - 1);
+                }
+            }
+        }
+    }
+
+    /// IKJ: for i: for k: for j: - A[i,k] reused across all j (best A reuse)
+    void execute_ikj() {
+        uint32_t m_tiles = config_.m_tiles();
+        uint32_t n_tiles = config_.n_tiles();
+        uint32_t k_tiles = config_.k_tiles();
+
+        for (uint32_t i = 0; i < m_tiles; ++i) {
+            for (uint32_t k = 0; k < k_tiles; ++k) {
+                for (uint32_t j = 0; j < n_tiles; ++j) {
+                    execute_single_matmul_dataflow(i, j, k,
+                        k == 0, k == k_tiles - 1);
+                }
+            }
+        }
+    }
+
+    /// KIJ: for k: for i: for j: - B[k,:] reused across all i
+    void execute_kij() {
+        uint32_t m_tiles = config_.m_tiles();
+        uint32_t n_tiles = config_.n_tiles();
+        uint32_t k_tiles = config_.k_tiles();
+
+        for (uint32_t k = 0; k < k_tiles; ++k) {
+            for (uint32_t i = 0; i < m_tiles; ++i) {
+                for (uint32_t j = 0; j < n_tiles; ++j) {
+                    execute_single_matmul_dataflow(i, j, k,
+                        k == 0, k == k_tiles - 1);
+                }
+            }
+        }
+    }
+
+    /// KJI: for k: for j: for i: - A[:,k] column reused across all j
+    void execute_kji() {
+        uint32_t m_tiles = config_.m_tiles();
+        uint32_t n_tiles = config_.n_tiles();
+        uint32_t k_tiles = config_.k_tiles();
+
+        for (uint32_t k = 0; k < k_tiles; ++k) {
+            for (uint32_t j = 0; j < n_tiles; ++j) {
+                for (uint32_t i = 0; i < m_tiles; ++i) {
+                    execute_single_matmul_dataflow(i, j, k,
+                        k == 0, k == k_tiles - 1);
+                }
+            }
+        }
+    }
+
+    /// JKI: for j: for k: for i: - B[:,j] column reused across all k
+    void execute_jki() {
+        uint32_t m_tiles = config_.m_tiles();
+        uint32_t n_tiles = config_.n_tiles();
+        uint32_t k_tiles = config_.k_tiles();
+
+        for (uint32_t j = 0; j < n_tiles; ++j) {
+            for (uint32_t k = 0; k < k_tiles; ++k) {
+                for (uint32_t i = 0; i < m_tiles; ++i) {
+                    execute_single_matmul_dataflow(i, j, k,
+                        k == 0, k == k_tiles - 1);
+                }
+            }
+        }
+    }
+
+    /// BLOCKED: 2-level blocking for better cache utilization
+    void execute_blocked() {
+        uint32_t m_tiles = config_.m_tiles();
+        uint32_t n_tiles = config_.n_tiles();
+        uint32_t k_tiles = config_.k_tiles();
+
+        uint32_t bi = config_.block_i;
+        uint32_t bj = config_.block_j;
+        uint32_t bk = config_.block_k;
+
+        // Outer loops over blocks
+        for (uint32_t ii = 0; ii < m_tiles; ii += bi) {
+            for (uint32_t jj = 0; jj < n_tiles; jj += bj) {
+                for (uint32_t kk = 0; kk < k_tiles; kk += bk) {
+                    // Inner loops within block
+                    uint32_t i_end = std::min(ii + bi, m_tiles);
+                    uint32_t j_end = std::min(jj + bj, n_tiles);
+                    uint32_t k_end = std::min(kk + bk, k_tiles);
+
+                    for (uint32_t i = ii; i < i_end; ++i) {
+                        for (uint32_t k = kk; k < k_end; ++k) {
+                            for (uint32_t j = jj; j < j_end; ++j) {
+                                // is_first_k and is_last_k need to consider
+                                // the global k range, not just this block
+                                bool is_first = (kk == 0 && k == kk);
+                                bool is_last = (k == k_tiles - 1);
+
+                                execute_single_matmul_dataflow(i, j, k,
+                                    is_first, is_last);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// IKJ with pipelining - overlaps DMA with compute
+    /// Uses credit-based dataflow: DMA waits for buffer credit, then pushes tile
+    /// See docs/kpu-execution-model.md for the dataflow model
+    void execute_ikj_pipelined() {
+        uint32_t m_tiles = config_.m_tiles();
+        uint32_t n_tiles = config_.n_tiles();
+        uint32_t k_tiles = config_.k_tiles();
+
+        for (uint32_t i = 0; i < m_tiles; ++i) {
+            loop_i_ = i;
+
+            for (uint32_t k = 0; k < k_tiles; ++k) {
+                loop_k_ = k;
+
+                // DATAFLOW: DMA pushes A[i,k] to L3 buffer
+                // DMA waits for BUFFER_AVAILABLE credit implicitly via l3_available_
+                // Buffer occupancy is tracked by l3_available_[buffer] > current_cycle_
+                uint64_t a_l3_ready = load_a_tile_dataflow(i, k);
+                stats_.l3_tile_ready_events++;
+
+                // Push A to L2 (A tile stays in L3 for all j iterations - buffer reuse)
+                uint64_t a_l2_ready = push_to_l2_a(i, k, a_l3_ready);
+
+                // Stream through all j columns - A[i,k] is reused for all j
+                for (uint32_t j = 0; j < n_tiles; ++j) {
+                    loop_j_ = j;
+
+                    // Load C for first k iteration
+                    if (k == 0 && config_.accumulate_c) {
+                        load_c_tile(i, j);
+                    }
+
+                    // DATAFLOW: DMA pushes B[k,j] to L3 buffer
+                    uint64_t b_l3_ready = load_b_tile_dataflow(k, j);
+                    stats_.l3_tile_ready_events++;
+
+                    uint64_t b_l2_ready = push_to_l2_b(k, j, b_l3_ready);
+
+                    // Feed tiles to L1 and compute
+                    uint64_t a_l1 = feed_west(i, k, a_l2_ready);
+                    uint64_t b_l1 = feed_north(k, j, b_l2_ready);
+
+                    uint64_t ready_time = std::max({a_l1, b_l1, compute_available_});
+                    compute_available_ = execute_matmul(i, j, k, ready_time);
+
+                    // B buffer freed after B tile is pushed to L2 - emit credit upstream
+                    // (The BlockMover returns credit when it consumes from L3)
+                    emit_buffer_available(TraceLevel::L3, config_.l3_b_buffers[(next_b_buffer_ + 1) % 2]);
+
+                    // Drain on last k iteration
+                    if (k == k_tiles - 1) {
+                        uint64_t d_l2_ready = drain_result(i, j, compute_available_);
+                        uint64_t d_l3_ready = pull_from_l2(i, j, d_l2_ready);
+                        store_d_tile(i, j, d_l3_ready);
+
+                        TraceEvent complete_event;
+                        complete_event.cycle = current_cycle_;
+                        complete_event.level = TraceLevel::L3;
+                        complete_event.operation = TraceOperation::TILE_COMPLETE;
+                        complete_event.operand = TraceOperandType::TILE_D;
+                        complete_event.tile_i = static_cast<uint16_t>(i);
+                        complete_event.tile_j = static_cast<uint16_t>(j);
+                        complete_event.loop_state = {loop_i_, loop_j_, loop_k_};
+                        complete_event.l3_buffers_occupied = count_l3_occupied();
+                        complete_event.name = "COMPLETE D[" + std::to_string(i) + "," + std::to_string(j) + "]";
+                        trace_.push_back(complete_event);
+                    }
+                }
+
+                // A buffer freed after all j iterations complete - emit credit upstream
+                emit_buffer_available(TraceLevel::L3, config_.l3_a_buffers[(next_a_buffer_ + 1) % 2]);
+            }
+        }
+    }
+
+    /// Emit BUFFER_AVAILABLE credit event (dataflow: credit flows upstream)
+    void emit_buffer_available(TraceLevel level, uint8_t buffer_id) {
+        TraceEvent credit_event;
+        credit_event.cycle = current_cycle_;
+        credit_event.level = level;
+        credit_event.operation = TraceOperation::BUFFER_AVAILABLE;
+        credit_event.operand = TraceOperandType::BUFFER;
+        credit_event.buffer_id = buffer_id;
+        credit_event.l3_buffers_occupied = count_l3_occupied();
+        credit_event.l2_buffers_occupied = count_l2_occupied();
+        credit_event.loop_state = {loop_i_, loop_j_, loop_k_};
+        credit_event.name = (level == TraceLevel::L3 ? "L3" : "L2") +
+                           std::string("[") + std::to_string(buffer_id) + "] CREDIT";
+        trace_.push_back(credit_event);
+
+        if (level == TraceLevel::L3) {
+            stats_.l3_buffer_available_events++;
+        } else {
+            stats_.l2_buffer_available_events++;
+        }
     }
 };
 

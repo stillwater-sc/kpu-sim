@@ -8,48 +8,48 @@ implementation path.
 
 ## KPU Architecture Summary
 
-```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                              HOST MEMORY                                     │
+```text
+┌────────────────────────────────────────────────────────────────────────────┐
+│                              HOST MEMORY                                   │
 │  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐        │
 │  │ Graph Desc  │  │   Weights   │  │   Inputs    │  │   Outputs   │        │
 │  └─────────────┘  └─────────────┘  └─────────────┘  └─────────────┘        │
-└───────────────────────────────┬─────────────────────────────────────────────┘
+└───────────────────────────────┬────────────────────────────────────────────┘
                                 │ DMA (Host↔KPU)
                                 ▼
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                              L3 TILES (On-Chip)                              │
+┌────────────────────────────────────────────────────────────────────────────┐
+│                              L3 TILES (On-Chip)                            │
 │  ┌─────────┐  ┌─────────┐  ┌─────────┐  ┌─────────┐                        │
 │  │ Tile 0  │  │ Tile 1  │  │ Tile 2  │  │ Tile 3  │  ...                   │
 │  └────┬────┘  └────┬────┘  └────┬────┘  └────┬────┘                        │
-└───────┼────────────┼────────────┼────────────┼──────────────────────────────┘
+└───────┼────────────┼────────────┼────────────┼─────────────────────────────┘
         │            │            │            │
         └────────────┴─────┬──────┴────────────┘
                            │ BlockMover (L3↔L2, L3↔L3)
                            ▼
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                              L2 BANKS                                        │
+┌────────────────────────────────────────────────────────────────────────────┐
+│                              L2 BANKS                                      │
 │  ┌─────────┐  ┌─────────┐  ┌─────────┐  ┌─────────┐                        │
 │  │ Bank 0  │  │ Bank 1  │  │ Bank 2  │  │ Bank 3  │  ...                   │
 │  └────┬────┘  └────┬────┘  └────┬────┘  └────┬────┘                        │
-└───────┼────────────┼────────────┼────────────┼──────────────────────────────┘
+└───────┼────────────┼────────────┼────────────┼─────────────────────────────┘
         │            │            │            │
         └────────────┴─────┬──────┴────────────┘
                            │ Streamers (L2→L1, push-only)
                            ▼
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                         L1 STREAMING BUFFERS                                 │
+┌────────────────────────────────────────────────────────────────────────────┐
+│                         L1 STREAMING BUFFERS                               │
 │  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐                      │
 │  │ Row Ingress  │  │ Col Ingress  │  │   Egress     │                      │
 │  │   Buffers    │  │   Buffers    │  │   Buffers    │                      │
 │  └──────┬───────┘  └──────┬───────┘  └──────┬───────┘                      │
-└─────────┼─────────────────┼─────────────────┼───────────────────────────────┘
+└─────────┼─────────────────┼─────────────────┼──────────────────────────────┘
           │                 │                 ▲
           ▼                 ▼                 │
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                           COMPUTE TILE                                       │
+┌────────────────────────────────────────────────────────────────────────────┐
+│                           COMPUTE TILE                                     │
 │  ┌─────────────────────────────────────────────────────────────────────┐   │
-│  │                     16×16 Systolic Array                             │   │
+│  │                     16×16 Systolic Array                            │   │
 │  │   Row →  ┌───┬───┬───┬───┐                                          │   │
 │  │   Data   │PE │PE │...│PE │ → Accumulated                            │   │
 │  │          ├───┼───┼───┼───┤    Results                               │   │
@@ -60,23 +60,26 @@ implementation path.
 │  │          │PE │PE │...│PE │                                          │   │
 │  │          └───┴───┴───┴───┘                                          │   │
 │  └─────────────────────────────────────────────────────────────────────┘   │
-└─────────────────────────────────────────────────────────────────────────────┘
+└────────────────────────────────────────────────────────────────────────────┘
 ```
 
 ## Key Execution Characteristics
 
 ### 1. Push-Only Compute Tiles
+
 - Compute tiles do NOT pull data
 - Streamers push data into L1 buffers
 - L1 buffers autonomously stream into compute tile ingress ports
 - Results pushed from compute tile → L1 egress → L2
 
 ### 2. Data Must Be Pre-Positioned
+
 - Compute cannot start until RIGHT data is in L2
 - BlockMover cannot write to L2 unless space is allocated
 - Streamers run fixed FSM - cannot bubble (stall)
 
 ### 3. Decomposition is Central
+
 - Compiler decomposes operators into tiles fitting L3/L2/L1
 - This decomposition drives BOTH functional AND performance behavior
 - Runtime orchestrates based on compiler's tile schedule
@@ -85,7 +88,7 @@ implementation path.
 
 ### Phase 0: Graph Compilation (Offline or JIT)
 
-```
+```python
 COMPILE(graph):
     for each operator in topological_order(graph):
         input_shapes = get_input_shapes(operator)
@@ -118,7 +121,7 @@ COMPILE(graph):
 
 ### Phase 1: Graph Initialization (Runtime)
 
-```
+```python
 INITIALIZE_GRAPH(compiled_graph, input_data, weights):
     # Allocate host memory for graph structures
     host_graph = allocate_host_memory(compiled_graph)
@@ -137,7 +140,7 @@ INITIALIZE_GRAPH(compiled_graph, input_data, weights):
 
 ### Phase 2: Orchestrator Loop (Runtime - Host CPU)
 
-```
+```python
 EXECUTE_GRAPH(host_graph):
     resource_manager = get_resource_manager()
 
@@ -150,7 +153,7 @@ EXECUTE_GRAPH(host_graph):
 
 ### Phase 3: Operator Execution (Per-Operator)
 
-```
+```python
 EXECUTE_OPERATOR(op_program, resource_mgr):
     tile_schedule = op_program.tile_schedule
 
@@ -299,7 +302,7 @@ EXECUTE_OPERATOR(op_program, resource_mgr):
 
 ### Behavioral Compute Functions
 
-```
+```python
 BEHAVIORAL_MATMUL(A[M,K], B[K,N]) -> C[M,N]:
     C = zeros(M, N)
     for i in range(M):
@@ -404,7 +407,7 @@ struct StreamerProgram {
 
 ### Phase 1: Core Infrastructure
 
-**1.1 Behavioral Memory Model**
+#### 1.1 Behavioral Memory Model
 
 Create a unified memory model that tracks data location and content:
 
@@ -431,10 +434,11 @@ public:
 ```
 
 **Files to create:**
+
 - `include/sw/runtime/behavioral/memory_model.hpp`
 - `src/runtime/behavioral/memory_model.cpp`
 
-**1.2 Resource Manager Enhancement**
+#### 1.2 Resource Manager Enhancement**
 
 Extend ResourceManager to handle allocations across memory hierarchy:
 
@@ -470,12 +474,13 @@ private:
 ```
 
 **Files to create:**
+
 - `include/sw/runtime/behavioral/resource_manager.hpp`
 - `src/runtime/behavioral/resource_manager.cpp`
 
 ### Phase 2: Tiling and Decomposition
 
-**2.1 Tile Schedule Generator**
+#### 2.1 Tile Schedule Generator
 
 Create tiling logic that decomposes operators:
 
@@ -515,10 +520,11 @@ private:
 ```
 
 **Files to create:**
+
 - `include/sw/compiler/tiler.hpp`
 - `src/compiler/tiler.cpp`
 
-**2.2 Command Buffer Generator**
+#### 2.2 Command Buffer Generator
 
 Generate hardware commands from tile schedule:
 
@@ -544,12 +550,13 @@ public:
 ```
 
 **Files to create:**
+
 - `include/sw/compiler/command_generator.hpp`
 - `src/compiler/command_generator.cpp`
 
 ### Phase 3: Behavioral Compute
 
-**3.1 Behavioral Compute Engine**
+#### 3.1 Behavioral Compute Engine
 
 Implement actual computation:
 
@@ -584,12 +591,13 @@ public:
 ```
 
 **Files to create:**
+
 - `include/sw/runtime/behavioral/compute_engine.hpp`
 - `src/runtime/behavioral/compute_engine.cpp`
 
 ### Phase 4: Behavioral Graph Executor
 
-**4.1 Behavioral Graph Runner**
+#### 4.1 Behavioral Graph Runner
 
 Integrate all components:
 
@@ -641,12 +649,13 @@ private:
 ```
 
 **Files to create:**
+
 - `include/sw/runtime/behavioral/graph_executor.hpp`
 - `src/runtime/behavioral/graph_executor.cpp`
 
 ### Phase 5: Example and Validation
 
-**5.1 Behavioral XOR Example**
+#### 5.1 Behavioral XOR Example
 
 ```cpp
 // examples/behavioral/xor_behavioral.cpp
@@ -708,7 +717,7 @@ int main() {
 ## File Summary
 
 | File | Purpose | Phase |
-|------|---------|-------|
+| ---- | ------- | ----- |
 | `include/sw/runtime/behavioral/memory_model.hpp` | Unified memory with actual data | 1.1 |
 | `src/runtime/behavioral/memory_model.cpp` | Memory model implementation | 1.1 |
 | `include/sw/runtime/behavioral/resource_manager.hpp` | Resource allocation & commands | 1.2 |

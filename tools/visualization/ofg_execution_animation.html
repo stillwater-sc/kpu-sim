@@ -1,17 +1,30 @@
 <!DOCTYPE html>
 <!--
-  KPU OFG Execution Animation
+  KPU OFG Execution Animation with Block Matrix Visualization
+
+  EXECUTION MODEL: Credit-based Dataflow (NO CACHE!)
+  See docs/kpu-execution-model.md for the authoritative reference.
+
+  Key Principles:
+  - Credits flow UPSTREAM (consumer signals buffer availability)
+  - Data/tiles flow DOWNSTREAM (producer pushes when credit available)
+  - NO cache, NO cache miss - only buffers and credits
+  - DMA waits for L3 buffer credit, then pushes
+  - BlockMover waits for tile arrival + L2 credit, then pushes
+  - Streamer waits for tile arrival + L1 credit, then pushes
 
   Visualizes Operand Flow Graph execution showing:
+  - Block matrix decomposition with per-tile state tracking
+  - L3 buffer occupancy and credit flow (NOT cache hit/miss!)
   - Concurrent OFG executors at each memory level
-  - Dataflow-driven triggering between levels
-  - Operand movement through the memory hierarchy
+  - Credit-driven triggering between levels
   - Statistics and progress for tiled matrix operations
 
   Data Sources:
   - Load JSON trace file from behavioral/transactional/temporal simulator
   - Use embedded demo trace for testing
-  - Supports TiledMatmulProgram trace format
+  - Supports TiledMatmulProgram trace format v3.0 (dataflow events)
+  - Backward compatible with v2.0 traces (legacy cache events)
 
   SPDX-License-Identifier: MIT
   Copyright (c) 2024-2026 Stillwater Supercomputing, Inc.
@@ -46,6 +59,15 @@
             --state-done: #6b7280;
 
             --trigger-color: #22d3ee;
+
+            /* Tile states for block matrix */
+            --tile-not-loaded: #2d333b;
+            --tile-in-l3: #3b82f6;
+            --tile-in-l2: #06b6d4;
+            --tile-computing: #fbbf24;
+            --tile-complete: #22c55e;
+            --tile-evicted: #64748b;
+            --tile-refetch: #ef4444;
         }
 
         * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -59,7 +81,7 @@
         }
 
         .container {
-            max-width: 1600px;
+            max-width: 1900px;
             margin: 0 auto;
         }
 
@@ -147,9 +169,19 @@
             cursor: pointer;
         }
 
+        /* Three-column layout: block matrices | memory hierarchy | stats */
         .main-content {
             display: grid;
-            grid-template-columns: 1fr 320px;
+            grid-template-columns: 340px 1fr 320px;
+            gap: 12px;
+        }
+
+        .block-matrix-panel {
+            background: var(--bg-panel);
+            border-radius: 8px;
+            padding: 12px;
+            display: flex;
+            flex-direction: column;
             gap: 12px;
         }
 
@@ -178,6 +210,219 @@
             color: var(--text-dim);
             margin-bottom: 8px;
             letter-spacing: 0.5px;
+        }
+
+        /* Block Matrix Visualization */
+        .matrix-section {
+            background: var(--bg-memory);
+            border-radius: 6px;
+            padding: 10px;
+        }
+
+        .matrix-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 8px;
+        }
+
+        .matrix-title {
+            font-size: 11px;
+            font-weight: 600;
+        }
+
+        .matrix-title.tile-a { color: var(--color-a); }
+        .matrix-title.tile-b { color: var(--color-b); }
+        .matrix-title.tile-c { color: var(--color-c); }
+
+        .matrix-dims {
+            font-size: 9px;
+            color: var(--text-dim);
+        }
+
+        .matrix-grid {
+            display: grid;
+            gap: 1px;
+            background: var(--bg);
+            padding: 2px;
+            border-radius: 4px;
+            max-height: 120px;
+            overflow: auto;
+        }
+
+        .matrix-tile {
+            width: 8px;
+            height: 8px;
+            min-width: 8px;
+            min-height: 8px;
+            background: var(--tile-not-loaded);
+            border-radius: 1px;
+            transition: background-color 0.15s ease;
+        }
+
+        .matrix-tile.in-l3 { background: var(--tile-in-l3); }
+        .matrix-tile.in-l2 { background: var(--tile-in-l2); }
+        .matrix-tile.computing { background: var(--tile-computing); animation: pulse-tile 0.5s ease infinite; }
+        .matrix-tile.complete { background: var(--tile-complete); }
+        .matrix-tile.evicted { background: var(--tile-evicted); }
+        .matrix-tile.refetch { background: var(--tile-refetch); animation: flash-refetch 0.3s ease; }
+
+        @keyframes pulse-tile {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.6; }
+        }
+
+        @keyframes flash-refetch {
+            0% { background: var(--tile-refetch); }
+            50% { background: white; }
+            100% { background: var(--tile-in-l3); }
+        }
+
+        /* L3 Cache Status */
+        .cache-status {
+            background: var(--bg-memory);
+            border-radius: 6px;
+            padding: 10px;
+        }
+
+        .cache-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 8px;
+        }
+
+        .cache-title {
+            font-size: 11px;
+            font-weight: 600;
+            color: var(--color-blockmover);
+        }
+
+        .cache-occupancy {
+            font-size: 10px;
+            color: var(--text);
+        }
+
+        .cache-bar {
+            height: 16px;
+            background: var(--bg);
+            border-radius: 4px;
+            overflow: hidden;
+            margin-bottom: 8px;
+        }
+
+        .cache-fill {
+            height: 100%;
+            background: linear-gradient(90deg, var(--color-a), var(--color-b));
+            transition: width 0.2s ease;
+        }
+
+        .cache-stats-grid {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 6px;
+        }
+
+        .cache-stat {
+            text-align: center;
+            padding: 4px;
+            background: var(--bg);
+            border-radius: 3px;
+        }
+
+        .cache-stat-value {
+            font-size: 12px;
+            font-weight: 600;
+        }
+
+        .cache-stat-value.hit { color: var(--tile-complete); }
+        .cache-stat-value.miss { color: var(--text); }
+        .cache-stat-value.refetch { color: var(--tile-refetch); }
+
+        .cache-stat-label {
+            font-size: 8px;
+            color: var(--text-dim);
+            text-transform: uppercase;
+        }
+
+        /* Loop Progress */
+        .loop-progress {
+            background: var(--bg-memory);
+            border-radius: 6px;
+            padding: 10px;
+        }
+
+        .loop-title {
+            font-size: 11px;
+            font-weight: 600;
+            color: var(--text);
+            margin-bottom: 8px;
+        }
+
+        .loop-order {
+            font-size: 10px;
+            color: var(--color-streamer);
+            margin-bottom: 8px;
+        }
+
+        .loop-item {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-bottom: 6px;
+        }
+
+        .loop-label {
+            font-size: 10px;
+            color: var(--text-dim);
+            min-width: 16px;
+        }
+
+        .loop-bar {
+            flex: 1;
+            height: 10px;
+            background: var(--bg);
+            border-radius: 3px;
+            overflow: hidden;
+        }
+
+        .loop-fill {
+            height: 100%;
+            transition: width 0.1s ease;
+        }
+
+        .loop-fill.loop-i { background: var(--color-a); }
+        .loop-fill.loop-j { background: var(--color-b); }
+        .loop-fill.loop-k { background: var(--color-c); }
+
+        .loop-count {
+            font-size: 9px;
+            color: var(--text);
+            min-width: 50px;
+            text-align: right;
+        }
+
+        /* Block Matrix Legend */
+        .matrix-legend {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 6px;
+            padding: 8px;
+            background: var(--bg-memory);
+            border-radius: 6px;
+        }
+
+        .legend-item {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+            font-size: 9px;
+        }
+
+        .legend-dot {
+            width: 10px;
+            height: 10px;
+            border-radius: 2px;
         }
 
         /* Statistics Panel */
@@ -469,7 +714,7 @@
 
         /* Event log */
         .event-log {
-            max-height: 250px;
+            max-height: 200px;
             overflow-y: auto;
             font-size: 10px;
         }
@@ -497,6 +742,7 @@
         .event-level.COMPUTE { color: var(--color-compute); }
         .event-level.L3 { color: var(--color-dma); }
         .event-level.L2 { color: var(--color-blockmover); }
+        .event-level.CACHE { color: var(--tile-in-l3); }
         .event-level.system { color: var(--text-dim); }
 
         .event-desc {
@@ -540,7 +786,16 @@
         }
 
         /* Responsive */
-        @media (max-width: 1200px) {
+        @media (max-width: 1400px) {
+            .main-content {
+                grid-template-columns: 1fr 320px;
+            }
+            .block-matrix-panel {
+                display: none;
+            }
+        }
+
+        @media (max-width: 1000px) {
             .main-content {
                 grid-template-columns: 1fr;
             }
@@ -589,6 +844,108 @@
         </div>
 
         <div class="main-content">
+            <!-- Left Panel: Block Matrix Visualization -->
+            <div class="block-matrix-panel" id="blockMatrixPanel">
+                <!-- Matrix A -->
+                <div class="matrix-section">
+                    <div class="matrix-header">
+                        <span class="matrix-title tile-a">Matrix A</span>
+                        <span class="matrix-dims" id="matrixADims">[M×K]</span>
+                    </div>
+                    <div class="matrix-grid" id="matrixAGrid"></div>
+                </div>
+
+                <!-- Matrix B -->
+                <div class="matrix-section">
+                    <div class="matrix-header">
+                        <span class="matrix-title tile-b">Matrix B</span>
+                        <span class="matrix-dims" id="matrixBDims">[K×N]</span>
+                    </div>
+                    <div class="matrix-grid" id="matrixBGrid"></div>
+                </div>
+
+                <!-- Matrix C/D -->
+                <div class="matrix-section">
+                    <div class="matrix-header">
+                        <span class="matrix-title tile-c">Matrix C/D</span>
+                        <span class="matrix-dims" id="matrixCDims">[M×N]</span>
+                    </div>
+                    <div class="matrix-grid" id="matrixCGrid"></div>
+                </div>
+
+                <!-- L3 Buffer Status (Dataflow Model - NO CACHE!) -->
+                <!-- See docs/kpu-execution-model.md for credit-based dataflow -->
+                <div class="cache-status">
+                    <div class="cache-header">
+                        <span class="cache-title">L3 Buffers</span>
+                        <span class="cache-occupancy"><span id="cacheOccupancy">0</span>/<span id="cacheCapacity">4</span> buffers</span>
+                    </div>
+                    <div class="cache-bar">
+                        <div class="cache-fill" id="cacheFill" style="width: 0%"></div>
+                    </div>
+                    <div class="cache-stats-grid">
+                        <div class="cache-stat">
+                            <div class="cache-stat-value hit" id="cacheHits">0</div>
+                            <div class="cache-stat-label">TILE_READY</div>
+                        </div>
+                        <div class="cache-stat">
+                            <div class="cache-stat-value miss" id="cacheMisses">0</div>
+                            <div class="cache-stat-label">CREDITS</div>
+                        </div>
+                        <div class="cache-stat">
+                            <div class="cache-stat-value refetch" id="cacheRefetches">0</div>
+                            <div class="cache-stat-label">L2 Occ</div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Loop Progress -->
+                <div class="loop-progress">
+                    <div class="loop-title">Loop Progress</div>
+                    <div class="loop-order" id="loopOrder">Order: IKJ</div>
+                    <div class="loop-item">
+                        <span class="loop-label">i:</span>
+                        <div class="loop-bar"><div class="loop-fill loop-i" id="loopIFill"></div></div>
+                        <span class="loop-count" id="loopICount">0/0</span>
+                    </div>
+                    <div class="loop-item">
+                        <span class="loop-label">j:</span>
+                        <div class="loop-bar"><div class="loop-fill loop-j" id="loopJFill"></div></div>
+                        <span class="loop-count" id="loopJCount">0/0</span>
+                    </div>
+                    <div class="loop-item">
+                        <span class="loop-label">k:</span>
+                        <div class="loop-bar"><div class="loop-fill loop-k" id="loopKFill"></div></div>
+                        <span class="loop-count" id="loopKCount">0/0</span>
+                    </div>
+                </div>
+
+                <!-- Legend -->
+                <div class="matrix-legend">
+                    <div class="legend-item">
+                        <div class="legend-dot" style="background: var(--tile-not-loaded);"></div>
+                        <span>Not loaded</span>
+                    </div>
+                    <div class="legend-item">
+                        <div class="legend-dot" style="background: var(--tile-in-l3);"></div>
+                        <span>In L3</span>
+                    </div>
+                    <div class="legend-item">
+                        <div class="legend-dot" style="background: var(--tile-computing);"></div>
+                        <span>Computing</span>
+                    </div>
+                    <div class="legend-item">
+                        <div class="legend-dot" style="background: var(--tile-complete);"></div>
+                        <span>Complete</span>
+                    </div>
+                    <div class="legend-item">
+                        <div class="legend-dot" style="background: var(--tile-refetch);"></div>
+                        <span>Refetch</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Center: Memory Hierarchy -->
             <div class="visualization">
                 <!-- Problem info (shown for tiled traces) -->
                 <div class="problem-info" id="problemInfo" style="display: none;">
@@ -641,21 +998,26 @@
                                 </div>
                             </div>
                         </div>
+                        <!-- L3 Buffer Occupancy -->
+                        <div style="font-size: 9px; color: var(--text-dim); margin-bottom: 4px;">Buffer Occupancy:</div>
                         <div class="storage-row">
                             <div class="storage-cell"><span>[0]</span><div class="tile" id="l3-0-tile"></div></div>
                             <div class="storage-cell"><span>[1]</span><div class="tile" id="l3-1-tile"></div></div>
                             <div class="storage-cell"><span>[2]</span><div class="tile" id="l3-2-tile"></div></div>
                             <div class="storage-cell"><span>[3]</span><div class="tile" id="l3-3-tile"></div></div>
                         </div>
-                        <div class="ofg-executor">
-                            <span class="ofg-label">OFG:</span>
-                            <div class="ofg-node waiting" id="dma-node-0">W</div>
-                            <div class="ofg-node waiting" id="dma-node-1">F</div>
-                            <div class="ofg-node waiting" id="dma-node-2">P</div>
+                        <!-- DMA Executor OFG (Dataflow: Wait for credit, then Push) -->
+                        <div style="margin-top: 8px; padding-top: 6px; border-top: 1px dashed var(--border);">
+                            <div style="font-size: 9px; color: var(--text-dim); margin-bottom: 4px;">DMA Executor OFG:</div>
+                            <div class="ofg-executor" style="margin-top: 0;">
+                                <div class="ofg-node waiting" id="dma-node-0" title="Wait for L3 buffer credit">W</div>
+                                <div class="ofg-node waiting" id="dma-node-1" title="Push tile to L3 buffer">P</div>
+                                <div class="ofg-node waiting" id="dma-node-2" title="Emit TILE_READY token">T</div>
+                            </div>
                         </div>
                     </div>
 
-                    <div class="flow-arrow" id="flow-dma-l3">↓ BlockMover ↓</div>
+                    <div class="flow-arrow" id="flow-dma-l3">↓ TILE_READY ↓ CREDIT ↑</div>
 
                     <!-- L2 Banks -->
                     <div class="memory-level l2">
@@ -668,6 +1030,8 @@
                                 </div>
                             </div>
                         </div>
+                        <!-- L2 Bank Occupancy -->
+                        <div style="font-size: 9px; color: var(--text-dim); margin-bottom: 4px;">Bank Occupancy:</div>
                         <div class="storage-row">
                             <div class="storage-cell"><span>[0]</span><div class="tile" id="l2-0-tile"></div></div>
                             <div class="storage-cell"><span>[1]</span><div class="tile" id="l2-1-tile"></div></div>
@@ -678,16 +1042,19 @@
                             <div class="storage-cell"><span>[6]</span><div class="tile" id="l2-6-tile"></div></div>
                             <div class="storage-cell"><span>[7]</span><div class="tile" id="l2-7-tile"></div></div>
                         </div>
-                        <div class="ofg-executor">
-                            <span class="ofg-label">OFG:</span>
-                            <div class="ofg-node waiting" id="bm-node-0">W</div>
-                            <div class="ofg-node waiting" id="bm-node-1">J</div>
-                            <div class="ofg-node waiting" id="bm-node-2">F</div>
-                            <div class="ofg-node waiting" id="bm-node-3">P</div>
+                        <!-- BlockMover Executor OFG (Dataflow: Wait for tile+credit, then Push) -->
+                        <div style="margin-top: 8px; padding-top: 6px; border-top: 1px dashed var(--border);">
+                            <div style="font-size: 9px; color: var(--text-dim); margin-bottom: 4px;">BlockMover Executor OFG:</div>
+                            <div class="ofg-executor" style="margin-top: 0;">
+                                <div class="ofg-node waiting" id="bm-node-0" title="Wait for TILE_READY">W</div>
+                                <div class="ofg-node waiting" id="bm-node-1" title="Wait for L2 bank credit">C</div>
+                                <div class="ofg-node waiting" id="bm-node-2" title="Push tile L3→L2">P</div>
+                                <div class="ofg-node waiting" id="bm-node-3" title="Return L3 credit upstream">↑</div>
+                            </div>
                         </div>
                     </div>
 
-                    <div class="flow-arrow" id="flow-bm-l2">↓ Streamer ↓</div>
+                    <div class="flow-arrow" id="flow-bm-l2">↓ TILE_READY ↓ CREDIT ↑</div>
 
                     <!-- L1 + Compute -->
                     <div class="memory-level l1-compute">
@@ -704,6 +1071,8 @@
                                 </div>
                             </div>
                         </div>
+                        <!-- L1 Stream Buffers -->
+                        <div style="font-size: 9px; color: var(--text-dim); margin-bottom: 4px;">Stream Buffers:</div>
                         <div class="l1-buffers">
                             <div class="l1-buffer">
                                 <div class="l1-buffer-label">West (A)</div>
@@ -731,14 +1100,15 @@
                                     Systolic Array
                                 </div>
                             </div>
-                            <div class="ofg-executor" style="flex-direction: column; align-items: flex-start;">
-                                <span class="ofg-label">Streamer OFG:</span>
-                                <div style="display: flex; gap: 4px;">
-                                    <div class="ofg-node waiting" id="str-node-0">W</div>
-                                    <div class="ofg-node waiting" id="str-node-1">J</div>
-                                    <div class="ofg-node waiting" id="str-node-2">F</div>
-                                    <div class="ofg-node waiting" id="str-node-3">M</div>
-                                    <div class="ofg-node waiting" id="str-node-4">D</div>
+                            <!-- Streamer Executor OFG (Dataflow: Wait for tile+L1 credit, Feed, Drain) -->
+                            <div style="margin-left: 12px; padding-left: 8px; border-left: 1px dashed var(--border);">
+                                <div style="font-size: 9px; color: var(--text-dim); margin-bottom: 4px;">Streamer OFG:</div>
+                                <div class="ofg-executor" style="margin-top: 0; flex-direction: row;">
+                                    <div class="ofg-node waiting" id="str-node-0" title="Wait for TILE_READY">W</div>
+                                    <div class="ofg-node waiting" id="str-node-1" title="Wait for L1 credit">C</div>
+                                    <div class="ofg-node waiting" id="str-node-2" title="Feed tile L2→L1">F</div>
+                                    <div class="ofg-node waiting" id="str-node-3" title="Return L2 credit">↑</div>
+                                    <div class="ofg-node waiting" id="str-node-4" title="Drain accumulator">D</div>
                                 </div>
                             </div>
                         </div>
@@ -746,6 +1116,7 @@
                 </div>
             </div>
 
+            <!-- Right: Statistics and Event Log -->
             <div class="sidebar">
                 <!-- Statistics Panel -->
                 <div class="panel" id="statsPanel">
@@ -838,6 +1209,24 @@
                             <span>Done</span>
                         </div>
                     </div>
+                    <!-- Dataflow OFG Legend -->
+                    <div style="margin-top: 12px; padding-top: 8px; border-top: 1px solid var(--border);">
+                        <div style="font-size: 10px; color: var(--text-dim); margin-bottom: 6px;">
+                            OFG Nodes (Credit-Based Dataflow):
+                        </div>
+                        <div style="font-size: 9px; color: var(--text-dim); line-height: 1.4;">
+                            <div><b>W</b> = Wait for token/credit</div>
+                            <div><b>P</b> = Push data downstream</div>
+                            <div><b>T</b> = Emit TILE_READY token</div>
+                            <div><b>C</b> = Wait for buffer credit</div>
+                            <div><b>F</b> = Feed tile to L1</div>
+                            <div><b>D</b> = Drain accumulator</div>
+                            <div><b>↑</b> = Return credit upstream</div>
+                        </div>
+                        <div style="font-size: 9px; color: var(--trigger-color); margin-top: 6px;">
+                            Credits ↑ Data ↓ (NO CACHE!)
+                        </div>
+                    </div>
                 </div>
 
                 <div class="panel" style="flex: 1;">
@@ -863,6 +1252,36 @@
         let eventIndex = 0;
         let isPlaying = false;
         let playInterval = null;
+
+        // Matrix dimensions for block visualization
+        let matrixConfig = {
+            m_tiles: 0,
+            n_tiles: 0,
+            k_tiles: 0,
+            l3_capacity: 24
+        };
+
+        // Per-tile state tracking: 'not-loaded', 'in-l3', 'in-l2', 'computing', 'complete', 'evicted', 'refetch'
+        let tileStates = {
+            A: [],  // [m_tiles][k_tiles]
+            B: [],  // [k_tiles][n_tiles]
+            C: []   // [m_tiles][n_tiles]
+        };
+
+        // Current loop position
+        let loopState = { i: 0, j: 0, k: 0 };
+
+        // Buffer statistics (dataflow model - NO CACHE semantics!)
+        // See docs/kpu-execution-model.md for the credit-based dataflow model
+        let bufferStats = {
+            tile_ready: 0,        // TILE_READY tokens (data arrived)
+            credits_returned: 0,  // BUFFER_AVAILABLE credits returned
+            l3_occupied: 0,       // Current L3 buffer occupancy
+            l2_occupied: 0        // Current L2 buffer occupancy
+        };
+
+        // Legacy cache statistics (for backward compatibility with old traces)
+        let cacheStats = { hits: 0, misses: 0, refetches: 0, occupancy: 0 };
 
         // Visual state
         let tilePositions = {
@@ -949,11 +1368,150 @@
 
             // Check first event to determine format
             const firstEvent = traceData.events[0];
-            if (firstEvent.type === 'LOAD' || firstEvent.type === 'STORE' ||
-                firstEvent.type === 'PUSH_TO_L2' || firstEvent.type === 'MATMUL') {
+            // Dataflow events (v3.0+): DMA_PUSH, TILE_READY, BM_PUSH, BUFFER_AVAILABLE, COMPUTE
+            // Legacy events (v2.0): LOAD, STORE, PUSH_TO_L2, MATMUL, L3_ACCESS
+            if (firstEvent.type === 'DMA_PUSH' || firstEvent.type === 'DMA_PULL' ||
+                firstEvent.type === 'BM_PUSH' || firstEvent.type === 'BM_PULL' ||
+                firstEvent.type === 'TILE_READY' || firstEvent.type === 'BUFFER_AVAILABLE' ||
+                firstEvent.type === 'COMPUTE' || firstEvent.type === 'STR_FEED_A' ||
+                firstEvent.type === 'STR_FEED_B' || firstEvent.type === 'STR_DRAIN' ||
+                firstEvent.type === 'LOAD' || firstEvent.type === 'STORE' ||
+                firstEvent.type === 'PUSH_TO_L2' || firstEvent.type === 'MATMUL' ||
+                firstEvent.type === 'L3_ACCESS') {
                 traceFormat = 'tiled';
             } else {
                 traceFormat = 'demo';
+            }
+        }
+
+        // =====================================================
+        // Block Matrix Initialization
+        // =====================================================
+        function initBlockMatrices() {
+            if (!traceData || !traceData.metadata || !traceData.metadata.config) {
+                return;
+            }
+
+            const config = traceData.metadata.config;
+            matrixConfig.m_tiles = config.m_tiles || 0;
+            matrixConfig.n_tiles = config.n_tiles || 0;
+            matrixConfig.k_tiles = config.k_tiles || 0;
+            matrixConfig.l3_capacity = config.l3_capacity_tiles || 24;
+
+            // Initialize tile state arrays
+            tileStates.A = Array(matrixConfig.m_tiles).fill(null).map(() =>
+                Array(matrixConfig.k_tiles).fill('not-loaded'));
+            tileStates.B = Array(matrixConfig.k_tiles).fill(null).map(() =>
+                Array(matrixConfig.n_tiles).fill('not-loaded'));
+            tileStates.C = Array(matrixConfig.m_tiles).fill(null).map(() =>
+                Array(matrixConfig.n_tiles).fill('not-loaded'));
+
+            // Create grid elements
+            createMatrixGrid('matrixAGrid', matrixConfig.m_tiles, matrixConfig.k_tiles, 'A');
+            createMatrixGrid('matrixBGrid', matrixConfig.k_tiles, matrixConfig.n_tiles, 'B');
+            createMatrixGrid('matrixCGrid', matrixConfig.m_tiles, matrixConfig.n_tiles, 'C');
+
+            // Update dimension labels
+            document.getElementById('matrixADims').textContent =
+                `[${matrixConfig.m_tiles}×${matrixConfig.k_tiles}]`;
+            document.getElementById('matrixBDims').textContent =
+                `[${matrixConfig.k_tiles}×${matrixConfig.n_tiles}]`;
+            document.getElementById('matrixCDims').textContent =
+                `[${matrixConfig.m_tiles}×${matrixConfig.n_tiles}]`;
+
+            // Update cache capacity
+            document.getElementById('cacheCapacity').textContent = matrixConfig.l3_capacity;
+
+            // Update loop order display
+            if (traceData.metadata.loop_order) {
+                document.getElementById('loopOrder').textContent =
+                    'Order: ' + traceData.metadata.loop_order;
+            }
+        }
+
+        function createMatrixGrid(containerId, rows, cols, matrixId) {
+            const container = document.getElementById(containerId);
+            container.innerHTML = '';
+
+            // Limit display size for very large matrices
+            const maxDisplay = 40;
+            const displayRows = Math.min(rows, maxDisplay);
+            const displayCols = Math.min(cols, maxDisplay);
+
+            container.style.gridTemplateColumns = `repeat(${displayCols}, 8px)`;
+
+            for (let i = 0; i < displayRows; i++) {
+                for (let j = 0; j < displayCols; j++) {
+                    const tile = document.createElement('div');
+                    tile.className = 'matrix-tile';
+                    tile.id = `tile-${matrixId}-${i}-${j}`;
+                    tile.title = `${matrixId}[${i},${j}]`;
+                    container.appendChild(tile);
+                }
+            }
+        }
+
+        function updateTileState(matrix, i, j, state) {
+            if (matrix === 'A' && i < tileStates.A.length && j < tileStates.A[0].length) {
+                tileStates.A[i][j] = state;
+            } else if (matrix === 'B' && i < tileStates.B.length && j < tileStates.B[0].length) {
+                tileStates.B[i][j] = state;
+            } else if ((matrix === 'C' || matrix === 'D') && i < tileStates.C.length && j < tileStates.C[0].length) {
+                tileStates.C[i][j] = state;
+            }
+
+            // Update visual element
+            const tileId = `tile-${matrix === 'D' ? 'C' : matrix}-${i}-${j}`;
+            const elem = document.getElementById(tileId);
+            if (elem) {
+                elem.className = 'matrix-tile';
+                if (state !== 'not-loaded') {
+                    elem.classList.add(state);
+                }
+            }
+        }
+
+        function updateLoopDisplay() {
+            const m = matrixConfig.m_tiles || 1;
+            const n = matrixConfig.n_tiles || 1;
+            const k = matrixConfig.k_tiles || 1;
+
+            // Show completion: current+1 since loop indices are 0-based
+            document.getElementById('loopIFill').style.width = ((loopState.i + 1) / m * 100) + '%';
+            document.getElementById('loopJFill').style.width = ((loopState.j + 1) / n * 100) + '%';
+            document.getElementById('loopKFill').style.width = ((loopState.k + 1) / k * 100) + '%';
+
+            // Show "completed/total" (add 1 since indices are 0-based)
+            document.getElementById('loopICount').textContent = `${loopState.i + 1}/${m}`;
+            document.getElementById('loopJCount').textContent = `${loopState.j + 1}/${n}`;
+            document.getElementById('loopKCount').textContent = `${loopState.k + 1}/${k}`;
+        }
+
+        function updateCacheDisplay() {
+            // Check if this is a dataflow trace (v3.0+) or legacy cache trace
+            const isDataflow = traceData && traceData.metadata && traceData.metadata.execution_model === 'dataflow';
+
+            if (isDataflow) {
+                // Dataflow model: show buffer stats (no cache!)
+                const capacity = matrixConfig.l3_buffers || 4;
+                const percent = (bufferStats.l3_occupied / capacity * 100);
+
+                document.getElementById('cacheCapacity').textContent = capacity;
+                document.getElementById('cacheOccupancy').textContent = bufferStats.l3_occupied;
+                document.getElementById('cacheFill').style.width = percent + '%';
+                document.getElementById('cacheHits').textContent = bufferStats.tile_ready;
+                document.getElementById('cacheMisses').textContent = bufferStats.credits_returned;
+                document.getElementById('cacheRefetches').textContent = bufferStats.l2_occupied;
+            } else {
+                // Legacy cache model: show cache stats
+                const capacity = matrixConfig.l3_capacity || 24;
+                const percent = (cacheStats.occupancy / capacity * 100);
+
+                document.getElementById('cacheOccupancy').textContent = cacheStats.occupancy;
+                document.getElementById('cacheFill').style.width = percent + '%';
+                document.getElementById('cacheHits').textContent = cacheStats.hits;
+                document.getElementById('cacheMisses').textContent = cacheStats.misses;
+                document.getElementById('cacheRefetches').textContent = cacheStats.refetches;
             }
         }
 
@@ -962,18 +1520,223 @@
         // =====================================================
         async function loadSampleTiled() {
             try {
-                const response = await fetch('../../../traces/tiled_matmul_small.json');
-                if (response.ok) {
-                    traceData = await response.json();
-                    detectTraceFormat();
-                    reset();
-                    logEvent('--', 'system', 'Loaded tiled matmul sample trace');
-                } else {
-                    alert('Could not load sample trace. Run tiled_matmul_trace first.');
+                // Try multiple paths
+                const paths = [
+                    '../../../traces/tiled_matmul_trace.json',
+                    'traces/tiled_matmul_trace.json',
+                    '/traces/tiled_matmul_trace.json'
+                ];
+
+                for (const path of paths) {
+                    try {
+                        const response = await fetch(path);
+                        if (response.ok) {
+                            traceData = await response.json();
+                            detectTraceFormat();
+                            reset();
+                            logEvent('--', 'system', 'Loaded tiled matmul trace from file');
+                            return;
+                        }
+                    } catch (e) {
+                        // Try next path
+                    }
                 }
+
+                // Fall back to embedded sample trace
+                traceData = generateEmbeddedTiledTrace();
+                detectTraceFormat();
+                reset();
+                logEvent('--', 'system', 'Loaded embedded tiled sample (use file input for real traces)');
             } catch (err) {
                 alert('Could not load sample trace: ' + err.message);
             }
+        }
+
+        // Generate a minimal embedded tiled trace for demo purposes
+        // Uses dataflow semantics (credits UP, data DOWN - NO CACHE!)
+        // See docs/kpu-execution-model.md for the execution model
+        //
+        // Tiny example: D[32,32] = A[32,48] * B[48,32]
+        //   m_tiles=2, n_tiles=2, k_tiles=3 => 12 matmul ops
+        //
+        // IKJ loop order demonstrates buffer reuse patterns:
+        //   - A[i,k] loaded once, reused for all j (good reuse)
+        //   - B[k,j] loaded m_tiles times (once per i) - shows buffer pressure
+        function generateEmbeddedTiledTrace() {
+            const m_tiles = 2, n_tiles = 2, k_tiles = 3;
+            const events = [];
+            let cycle = 0;
+            let l3_occupied = 0;
+
+            // IKJ loop order: for each i, for each k, for each j
+            for (let i = 0; i < m_tiles; i++) {
+                for (let k = 0; k < k_tiles; k++) {
+                    const a_buffer = k % 2;  // Double-buffering for A
+
+                    // DMA_PUSH: DMA pushes A tile to L3 buffer
+                    events.push({
+                        cycle: cycle,
+                        level: 'DMA',
+                        type: 'DMA_PUSH',
+                        operand: { type: 'A', coord: [i, 0, k], buffer_id: a_buffer, src_buffer: 0, dst_buffer: a_buffer },
+                        duration: 100,
+                        name: `DMA_PUSH A[${i},${k}] -> L3[${a_buffer}]`,
+                        l3_buffers_occupied: l3_occupied,
+                        loop_state: { i, j: 0, k }
+                    });
+                    cycle += 100;
+                    l3_occupied = Math.min(l3_occupied + 1, 4);
+
+                    // TILE_READY: A tile arrived at L3
+                    events.push({
+                        cycle: cycle,
+                        level: 'L3',
+                        type: 'TILE_READY',
+                        operand: { type: 'A', coord: [i, 0, k], buffer_id: a_buffer, src_buffer: 0, dst_buffer: 0 },
+                        name: `TILE_READY A[${i},${k}] @ L3[${a_buffer}]`,
+                        l3_buffers_occupied: l3_occupied,
+                        loop_state: { i, j: 0, k }
+                    });
+
+                    for (let j = 0; j < n_tiles; j++) {
+                        const b_buffer = (j % 2) + 2;  // Double-buffering for B (buffers 2,3)
+
+                        // DMA_PUSH: DMA pushes B tile to L3 buffer
+                        events.push({
+                            cycle: cycle,
+                            level: 'DMA',
+                            type: 'DMA_PUSH',
+                            operand: { type: 'B', coord: [0, j, k], buffer_id: b_buffer, src_buffer: 0, dst_buffer: b_buffer },
+                            duration: 100,
+                            name: `DMA_PUSH B[${k},${j}] -> L3[${b_buffer}]`,
+                            l3_buffers_occupied: l3_occupied,
+                            loop_state: { i, j, k }
+                        });
+                        cycle += 100;
+
+                        // TILE_READY: B tile arrived at L3
+                        events.push({
+                            cycle: cycle,
+                            level: 'L3',
+                            type: 'TILE_READY',
+                            operand: { type: 'B', coord: [0, j, k], buffer_id: b_buffer, src_buffer: 0, dst_buffer: 0 },
+                            name: `TILE_READY B[${k},${j}] @ L3[${b_buffer}]`,
+                            l3_buffers_occupied: l3_occupied,
+                            loop_state: { i, j, k }
+                        });
+
+                        // BM_PUSH: BlockMover pushes tiles to L2
+                        events.push({
+                            cycle: cycle,
+                            level: 'BLOCK_MOVER',
+                            type: 'BM_PUSH',
+                            operand: { type: 'A', coord: [i, 0, k], buffer_id: 0, src_buffer: a_buffer, dst_buffer: 0 },
+                            duration: 10,
+                            name: `BM_PUSH A[${i},${k}] L3[${a_buffer}] -> L2[0]`,
+                            loop_state: { i, j, k }
+                        });
+                        events.push({
+                            cycle: cycle,
+                            level: 'BLOCK_MOVER',
+                            type: 'BM_PUSH',
+                            operand: { type: 'B', coord: [0, j, k], buffer_id: 2, src_buffer: b_buffer, dst_buffer: 2 },
+                            duration: 10,
+                            name: `BM_PUSH B[${k},${j}] L3[${b_buffer}] -> L2[2]`,
+                            loop_state: { i, j, k }
+                        });
+                        cycle += 10;
+
+                        // BUFFER_AVAILABLE: B buffer credit returned after BM consumes
+                        events.push({
+                            cycle: cycle,
+                            level: 'L3',
+                            type: 'BUFFER_AVAILABLE',
+                            operand: { type: 'BUF', coord: [0, 0, 0], buffer_id: b_buffer, src_buffer: 0, dst_buffer: 0 },
+                            name: `L3[${b_buffer}] CREDIT`,
+                            l3_buffers_occupied: Math.max(0, l3_occupied - 1),
+                            loop_state: { i, j, k }
+                        });
+
+                        // COMPUTE: Systolic array active
+                        events.push({
+                            cycle: cycle,
+                            level: 'COMPUTE',
+                            type: 'COMPUTE',
+                            operand: { type: 'C', coord: [i, j, k], buffer_id: 0, src_buffer: 0, dst_buffer: 0 },
+                            duration: 48,
+                            name: `COMPUTE C[${i},${j}] += A[${i},${k}] × B[${k},${j}]`,
+                            loop_state: { i, j, k }
+                        });
+                        cycle += 48;
+
+                        // TILE_COMPLETE on last k
+                        if (k === k_tiles - 1) {
+                            events.push({
+                                cycle: cycle,
+                                level: 'L3',
+                                type: 'TILE_COMPLETE',
+                                operand: { type: 'D', coord: [i, j, 0], buffer_id: 0, src_buffer: 0, dst_buffer: 0 },
+                                tile_i: i,
+                                tile_j: j,
+                                name: `COMPLETE D[${i},${j}]`,
+                                l3_buffers_occupied: l3_occupied,
+                                loop_state: { i, j, k }
+                            });
+                        }
+                    }
+
+                    // BUFFER_AVAILABLE: A buffer credit returned after all j complete
+                    events.push({
+                        cycle: cycle,
+                        level: 'L3',
+                        type: 'BUFFER_AVAILABLE',
+                        operand: { type: 'BUF', coord: [0, 0, 0], buffer_id: a_buffer, src_buffer: 0, dst_buffer: 0 },
+                        name: `L3[${a_buffer}] CREDIT`,
+                        l3_buffers_occupied: Math.max(0, l3_occupied - 1),
+                        loop_state: { i, j: n_tiles - 1, k }
+                    });
+                }
+            }
+
+            return {
+                metadata: {
+                    generator: 'embedded-sample',
+                    version: '3.0',
+                    execution_model: 'dataflow',  // Credit-based dataflow (NO CACHE!)
+                    problem: `D[${m_tiles*16},${n_tiles*16}] = C + A[${m_tiles*16},${k_tiles*16}] × B[${k_tiles*16},${n_tiles*16}]`,
+                    loop_order: 'IKJ',
+                    config: {
+                        M: m_tiles * 16,
+                        N: n_tiles * 16,
+                        K: k_tiles * 16,
+                        tile_m: 16,
+                        tile_n: 16,
+                        tile_k: 16,
+                        systolic_rows: 16,
+                        systolic_cols: 16,
+                        l3_buffers: 4,
+                        l2_banks: 8,
+                        m_tiles,
+                        n_tiles,
+                        k_tiles
+                    }
+                },
+                tensors: [
+                    { id: 'A', shape: [m_tiles * 16, k_tiles * 16], type: 'input' },
+                    { id: 'B', shape: [k_tiles * 16, n_tiles * 16], type: 'input' },
+                    { id: 'C', shape: [m_tiles * 16, n_tiles * 16], type: 'input' },
+                    { id: 'D', shape: [m_tiles * 16, n_tiles * 16], type: 'output' }
+                ],
+                stats: {
+                    total_cycles: cycle,
+                    compute_cycles: m_tiles * n_tiles * k_tiles * 48,
+                    dma_pushes: m_tiles * k_tiles + m_tiles * n_tiles * k_tiles,
+                    dma_pulls: m_tiles * n_tiles,
+                    bm_pushes: m_tiles * n_tiles * k_tiles * 2,
+                    computes: m_tiles * n_tiles * k_tiles
+                },
+                events
+            };
         }
 
         // =====================================================
@@ -998,7 +1761,6 @@
                     { id: "C", shape: [64, 64], type: "output" }
                 ],
                 events: [
-                    // DMA loads A
                     { cycle: 0, level: "DMA", type: "node_state", node: 0, state: "ready" },
                     { cycle: 1, level: "DMA", type: "node_state", node: 0, state: "firing", desc: "WAIT buffer" },
                     { cycle: 2, level: "DMA", type: "node_state", node: 0, state: "done" },
@@ -1009,8 +1771,6 @@
                     { cycle: 5, level: "DMA", type: "node_state", node: 2, state: "firing", desc: "PRODUCE A@L3" },
                     { cycle: 6, level: "DMA", type: "node_state", node: 2, state: "done" },
                     { cycle: 6, level: "DMA", type: "trigger", target: "BLOCK_MOVER", desc: "TILE_READY(A@L3)" },
-
-                    // DMA loads B (parallel)
                     { cycle: 3, level: "DMA", type: "node_state", node: 0, state: "ready" },
                     { cycle: 4, level: "DMA", type: "node_state", node: 0, state: "firing", desc: "WAIT buffer" },
                     { cycle: 4, level: "DMA", type: "node_state", node: 0, state: "done" },
@@ -1018,19 +1778,14 @@
                     { cycle: 7, level: "DMA", type: "tile_move", tile: "b", from: "host", to: "l3", node: 1 },
                     { cycle: 7, level: "DMA", type: "node_state", node: 1, state: "done" },
                     { cycle: 8, level: "DMA", type: "trigger", target: "BLOCK_MOVER", desc: "TILE_READY(B@L3)" },
-
-                    // BlockMover pushes to L2
                     { cycle: 9, level: "BLOCK_MOVER", type: "node_state", node: 2, state: "firing", desc: "PUSH A→L2" },
                     { cycle: 11, level: "BLOCK_MOVER", type: "tile_move", tile: "a", from: "l3", to: "l2", node: 0 },
                     { cycle: 11, level: "BLOCK_MOVER", type: "node_state", node: 2, state: "done" },
                     { cycle: 12, level: "BLOCK_MOVER", type: "trigger", target: "STREAMER", desc: "TILE_READY(A@L2)" },
-
                     { cycle: 10, level: "BLOCK_MOVER", type: "node_state", node: 2, state: "firing", desc: "PUSH B→L2" },
                     { cycle: 13, level: "BLOCK_MOVER", type: "tile_move", tile: "b", from: "l3", to: "l2", node: 1 },
                     { cycle: 13, level: "BLOCK_MOVER", type: "node_state", node: 2, state: "done" },
                     { cycle: 14, level: "BLOCK_MOVER", type: "trigger", target: "STREAMER", desc: "TILE_READY(B@L2)" },
-
-                    // Streamer feeds
                     { cycle: 15, level: "STREAMER", type: "node_state", node: 2, state: "firing", desc: "FEED A→West, B→North" },
                     { cycle: 16, level: "STREAMER", type: "buffer_fill", buffer: "west", level: 25 },
                     { cycle: 17, level: "STREAMER", type: "buffer_fill", buffer: "north", level: 25 },
@@ -1041,8 +1796,6 @@
                     { cycle: 20, level: "STREAMER", type: "buffer_fill", buffer: "west", level: 100 },
                     { cycle: 20, level: "STREAMER", type: "buffer_fill", buffer: "north", level: 100 },
                     { cycle: 20, level: "STREAMER", type: "node_state", node: 2, state: "done" },
-
-                    // Compute
                     { cycle: 20, level: "COMPUTE", type: "compute_start" },
                     { cycle: 21, level: "STREAMER", type: "node_state", node: 3, state: "firing", desc: "MATMUL C = A × B" },
                     { cycle: 22, level: "COMPUTE", type: "pe_active", pe: [0, 1, 2, 3] },
@@ -1053,20 +1806,14 @@
                     { cycle: 30, level: "STREAMER", type: "node_state", node: 3, state: "done" },
                     { cycle: 30, level: "STREAMER", type: "buffer_fill", buffer: "west", level: 0 },
                     { cycle: 30, level: "STREAMER", type: "buffer_fill", buffer: "north", level: 0 },
-
-                    // Drain C
                     { cycle: 30, level: "STREAMER", type: "node_state", node: 4, state: "firing", desc: "DRAIN C→L2" },
                     { cycle: 35, level: "STREAMER", type: "tile_move", tile: "c", from: "compute", to: "l2", node: 2 },
                     { cycle: 35, level: "STREAMER", type: "node_state", node: 4, state: "done" },
                     { cycle: 35, level: "STREAMER", type: "trigger", target: "BLOCK_MOVER", desc: "TILE_READY(C@L2)" },
-
-                    // BlockMover pulls C
                     { cycle: 36, level: "BLOCK_MOVER", type: "node_state", node: 2, state: "firing", desc: "PULL C→L3" },
                     { cycle: 38, level: "BLOCK_MOVER", type: "tile_move", tile: "c", from: "l2", to: "l3", node: 2 },
                     { cycle: 38, level: "BLOCK_MOVER", type: "node_state", node: 2, state: "done" },
                     { cycle: 39, level: "BLOCK_MOVER", type: "trigger", target: "DMA", desc: "TILE_READY(C@L3)" },
-
-                    // DMA stores C
                     { cycle: 40, level: "DMA", type: "node_state", node: 1, state: "firing", desc: "STORE C→Host" },
                     { cycle: 43, level: "DMA", type: "tile_move", tile: "c", from: "l3", to: "host" },
                     { cycle: 43, level: "DMA", type: "node_state", node: 1, state: "done" },
@@ -1103,10 +1850,18 @@
             stats = { matmuls: 0, loads: 0, stores: 0, pushes: 0, pulls: 0, feeds: 0, drains: 0 };
             activeOps = { dma: new Set(), bm: new Set(), str: new Set(), compute: null };
 
+            // Reset buffer stats (dataflow model)
+            bufferStats = { tile_ready: 0, credits_returned: 0, l3_occupied: 0, l2_occupied: 0 };
+            // Reset legacy cache stats
+            cacheStats = { hits: 0, misses: 0, refetches: 0, occupancy: 0 };
+            loopState = { i: 0, j: 0, k: 0 };
+
             // Update UI based on trace format
             updateUIForFormat();
             updateDisplay();
             updateStatsDisplay();
+            updateCacheDisplay();
+            updateLoopDisplay();
             clearEventLog();
             document.getElementById('cycleNum').textContent = '0';
 
@@ -1120,26 +1875,44 @@
         function updateUIForFormat() {
             const problemInfo = document.getElementById('problemInfo');
             const timelineContainer = document.getElementById('timelineContainer');
+            const blockMatrixPanel = document.getElementById('blockMatrixPanel');
 
             if (traceFormat === 'tiled' && traceData && traceData.metadata) {
                 // Show problem info
                 problemInfo.style.display = 'block';
                 const config = traceData.metadata.config || {};
                 document.getElementById('problemTitle').textContent = traceData.metadata.problem || 'Matrix Multiplication';
-                document.getElementById('problemDetails').innerHTML = `
-                    Tiles: ${config.m_tiles || '?'} × ${config.n_tiles || '?'} × ${config.k_tiles || '?'} |
-                    Array: ${config.systolic_rows || 16} × ${config.systolic_cols || 16} |
-                    Events: ${traceData.events.length}
-                `;
+
+                let details = `Tiles: ${config.m_tiles || '?'} × ${config.n_tiles || '?'} × ${config.k_tiles || '?'}`;
+                details += ` | Array: ${config.systolic_rows || 16} × ${config.systolic_cols || 16}`;
+                details += ` | Events: ${traceData.events.length}`;
+                if (traceData.metadata.loop_order) {
+                    details += ` | Loop: ${traceData.metadata.loop_order}`;
+                }
+                document.getElementById('problemDetails').innerHTML = details;
 
                 // Show timeline for large traces
                 timelineContainer.style.display = traceData.events.length > 500 ? 'block' : 'none';
 
-                // Update stats targets
+                // Initialize block matrices
+                initBlockMatrices();
+
+                // Update stats targets (support both old and new field names)
                 if (traceData.stats) {
-                    document.getElementById('dma-progress').textContent = `0/${traceData.stats.dma_loads + traceData.stats.dma_stores}`;
-                    document.getElementById('bm-progress').textContent = `0/${traceData.stats.bm_pushes + traceData.stats.bm_pulls}`;
-                    document.getElementById('compute-progress').textContent = `0/${traceData.stats.matmuls}`;
+                    const s = traceData.stats;
+                    // dma_pushes/dma_pulls (new) or dma_loads/dma_stores (old)
+                    const dmaTotal = (s.dma_pushes || s.dma_loads || 0) + (s.dma_pulls || s.dma_stores || 0);
+                    const bmTotal = (s.bm_pushes || 0) + (s.bm_pulls || 0);
+                    // computes (new) or matmuls (old)
+                    const computeTotal = s.computes || s.matmuls || 0;
+                    document.getElementById('dma-progress').textContent = `0/${dmaTotal}`;
+                    document.getElementById('bm-progress').textContent = `0/${bmTotal}`;
+                    document.getElementById('compute-progress').textContent = `0/${computeTotal}`;
+                }
+
+                // Pre-populate cache stats if available
+                if (traceData.cache_stats) {
+                    // These will be updated as events are processed
                 }
             } else {
                 problemInfo.style.display = 'none';
@@ -1197,6 +1970,8 @@
 
             updateDisplay();
             updateStatsDisplay();
+            updateCacheDisplay();
+            updateLoopDisplay();
             updateTimeline();
 
             return eventIndex < traceData.events.length;
@@ -1222,6 +1997,8 @@
             document.getElementById('cycleNum').textContent = currentCycle;
             updateDisplay();
             updateStatsDisplay();
+            updateCacheDisplay();
+            updateLoopDisplay();
             updateTimeline();
         }
 
@@ -1249,6 +2026,8 @@
             document.getElementById('cycleNum').textContent = currentCycle;
             updateDisplay();
             updateStatsDisplay();
+            updateCacheDisplay();
+            updateLoopDisplay();
             updateTimeline();
         }
 
@@ -1274,7 +2053,176 @@
         }
 
         function processTiledEvent(event) {
+            // Update loop state from event if available
+            if (event.loop_state) {
+                loopState.i = event.loop_state.i || 0;
+                loopState.j = event.loop_state.j || 0;
+                loopState.k = event.loop_state.k || 0;
+            }
+
             switch (event.type) {
+                // ============================================================
+                // DATAFLOW EVENTS (credit-based dataflow model)
+                // See docs/kpu-execution-model.md for the execution model
+                // ============================================================
+
+                // DMA pushes tile to L3 buffer (producer waits for credit)
+                case 'DMA_PUSH':
+                    stats.loads++;
+                    updateOFGStateFromOp('dma', 'firing');
+                    // Update buffer occupancy
+                    if (event.l3_buffers_occupied !== undefined) {
+                        bufferStats.l3_occupied = event.l3_buffers_occupied;
+                    }
+                    if (event.name && stats.loads <= 10) {
+                        logEvent(event.cycle, event.level || 'DMA', event.name);
+                    }
+                    break;
+
+                // DMA pulls tile from L3 to host
+                case 'DMA_PULL':
+                    stats.stores++;
+                    updateOFGStateFromOp('dma', 'firing');
+                    if (event.name && stats.stores <= 10) {
+                        logEvent(event.cycle, event.level || 'DMA', event.name);
+                    }
+                    break;
+
+                // BlockMover pushes tile from L3 to L2
+                case 'BM_PUSH':
+                    stats.pushes++;
+                    updateOFGStateFromOp('bm', 'firing');
+                    // Update tile state to in-l2
+                    if (event.operand) {
+                        const op = event.operand.type;
+                        const coord = event.operand.coord || [event.tile_i, event.tile_j, event.tile_k];
+                        if (op === 'A') updateTileState('A', coord[0], coord[2], 'in-l2');
+                        else if (op === 'B') updateTileState('B', coord[2], coord[1], 'in-l2');
+                    }
+                    // Log first 10 BM pushes
+                    if (stats.pushes <= 10 && event.name) {
+                        logEvent(event.cycle, 'BLOCK_MOVER', event.name);
+                    }
+                    break;
+
+                // BlockMover pulls tile from L2 to L3
+                case 'BM_PULL':
+                    stats.pulls++;
+                    updateOFGStateFromOp('bm', 'firing');
+                    // Log first 10 BM pulls
+                    if (stats.pulls <= 10 && event.name) {
+                        logEvent(event.cycle, 'BLOCK_MOVER', event.name);
+                    }
+                    break;
+
+                // Streamer feeds A tile from L2 to L1 west buffers
+                case 'STR_FEED_A':
+                    stats.feeds++;
+                    updateOFGStateFromOp('str', 'firing');
+                    bufferLevels.west = Math.min(100, bufferLevels.west + 25);
+                    // Log first 10 streamer feeds
+                    if (stats.feeds <= 10 && event.name) {
+                        logEvent(event.cycle, 'STREAMER', event.name);
+                    }
+                    break;
+
+                // Streamer feeds B tile from L2 to L1 north buffers
+                case 'STR_FEED_B':
+                    stats.feeds++;
+                    updateOFGStateFromOp('str', 'firing');
+                    bufferLevels.north = Math.min(100, bufferLevels.north + 25);
+                    // Log first 10 streamer feeds
+                    if (stats.feeds <= 10 && event.name) {
+                        logEvent(event.cycle, 'STREAMER', event.name);
+                    }
+                    break;
+
+                // Streamer drains accumulator to L2
+                case 'STR_DRAIN':
+                    stats.drains++;
+                    updateOFGStateFromOp('str', 'firing');
+                    bufferLevels.south = Math.min(100, bufferLevels.south + 50);
+                    // Log all drains (usually fewer than feeds)
+                    if (stats.drains <= 10 && event.name) {
+                        logEvent(event.cycle, 'STREAMER', event.name);
+                    }
+                    setTimeout(() => {
+                        bufferLevels.south = 0;
+                        computeActive = false;
+                        clearPEs();
+                        updateDisplay();
+                    }, 100);
+                    break;
+
+                // Compute (systolic array active)
+                case 'COMPUTE':
+                    stats.matmuls++;
+                    computeActive = true;
+                    activeOps.compute = event;
+                    activateAllPEs();
+
+                    // Mark A and B tiles as computing
+                    if (event.operand) {
+                        const coord = event.operand.coord || [event.tile_i, event.tile_j, event.tile_k];
+                        updateTileState('A', coord[0], coord[2], 'computing');
+                        updateTileState('B', coord[2], coord[1], 'computing');
+                    }
+
+                    if (stats.matmuls % 10 === 0 || stats.matmuls <= 5) {
+                        logEvent(event.cycle, 'COMPUTE', `MATMUL #${stats.matmuls}`);
+                    }
+                    // Schedule deactivation
+                    setTimeout(() => {
+                        bufferLevels.west = 0;
+                        bufferLevels.north = 0;
+                        updateDisplay();
+                    }, 100);
+                    break;
+
+                // TILE_READY: data token arrives at buffer (dataflow downstream)
+                case 'TILE_READY':
+                    bufferStats.tile_ready++;
+                    updateTileFromEvent(event);
+                    if (event.l3_buffers_occupied !== undefined) {
+                        bufferStats.l3_occupied = event.l3_buffers_occupied;
+                    }
+                    // Log first 10 tile ready events
+                    if (bufferStats.tile_ready <= 10 && event.name) {
+                        logEvent(event.cycle, event.level || 'L3', event.name);
+                    }
+                    break;
+
+                // BUFFER_AVAILABLE: credit returns upstream (buffer freed)
+                case 'BUFFER_AVAILABLE':
+                    bufferStats.credits_returned++;
+                    if (event.l3_buffers_occupied !== undefined) {
+                        bufferStats.l3_occupied = event.l3_buffers_occupied;
+                    }
+                    // Log first few credits for debugging
+                    if (bufferStats.credits_returned <= 5 && event.name) {
+                        logEvent(event.cycle, event.level || 'L3', event.name);
+                    }
+                    break;
+
+                // TILE_COMPLETE: output tile fully computed
+                case 'TILE_COMPLETE':
+                    // Mark output tile as complete
+                    if (event.operand) {
+                        const coord = event.operand.coord || [event.tile_i, event.tile_j, 0];
+                        updateTileState('C', coord[0], coord[1], 'complete');
+                    } else {
+                        updateTileState('C', event.tile_i, event.tile_j, 'complete');
+                    }
+                    // Log all tile completions (important milestones)
+                    if (event.name) {
+                        logEvent(event.cycle, 'COMPUTE', event.name);
+                    }
+                    break;
+
+                // ============================================================
+                // LEGACY EVENTS (for backward compatibility)
+                // These map to the dataflow events above
+                // ============================================================
                 case 'LOAD':
                     stats.loads++;
                     updateOFGStateFromOp('dma', 'firing');
@@ -1294,23 +2242,45 @@
                 case 'PUSH_TO_L2':
                     stats.pushes++;
                     updateOFGStateFromOp('bm', 'firing');
+                    if (event.operand) {
+                        const op = event.operand.type;
+                        const coord = event.operand.coord || [event.tile_i, event.tile_j, event.tile_k];
+                        if (op === 'A') updateTileState('A', coord[0], coord[2], 'in-l2');
+                        else if (op === 'B') updateTileState('B', coord[2], coord[1], 'in-l2');
+                    }
+                    // Log first 10 BM pushes
+                    if (stats.pushes <= 10 && event.name) {
+                        logEvent(event.cycle, 'BLOCK_MOVER', event.name);
+                    }
                     break;
 
                 case 'PULL_FROM_L2':
                     stats.pulls++;
                     updateOFGStateFromOp('bm', 'firing');
+                    // Log first 10 BM pulls
+                    if (stats.pulls <= 10 && event.name) {
+                        logEvent(event.cycle, 'BLOCK_MOVER', event.name);
+                    }
                     break;
 
                 case 'FEED_WEST':
                     stats.feeds++;
                     updateOFGStateFromOp('str', 'firing');
                     bufferLevels.west = Math.min(100, bufferLevels.west + 25);
+                    // Log first 10 streamer feeds
+                    if (stats.feeds <= 10 && event.name) {
+                        logEvent(event.cycle, 'STREAMER', event.name);
+                    }
                     break;
 
                 case 'FEED_NORTH':
                     stats.feeds++;
                     updateOFGStateFromOp('str', 'firing');
                     bufferLevels.north = Math.min(100, bufferLevels.north + 25);
+                    // Log first 10 streamer feeds
+                    if (stats.feeds <= 10 && event.name) {
+                        logEvent(event.cycle, 'STREAMER', event.name);
+                    }
                     break;
 
                 case 'MATMUL':
@@ -1318,10 +2288,14 @@
                     computeActive = true;
                     activeOps.compute = event;
                     activateAllPEs();
+                    if (event.operand) {
+                        const coord = event.operand.coord || [event.tile_i, event.tile_j, event.tile_k];
+                        updateTileState('A', coord[0], coord[2], 'computing');
+                        updateTileState('B', coord[2], coord[1], 'computing');
+                    }
                     if (stats.matmuls % 10 === 0 || stats.matmuls <= 5) {
                         logEvent(event.cycle, 'COMPUTE', `MATMUL #${stats.matmuls}`);
                     }
-                    // Schedule deactivation
                     setTimeout(() => {
                         bufferLevels.west = 0;
                         bufferLevels.north = 0;
@@ -1333,6 +2307,10 @@
                     stats.drains++;
                     updateOFGStateFromOp('str', 'firing');
                     bufferLevels.south = Math.min(100, bufferLevels.south + 50);
+                    // Log all drains (important milestones)
+                    if (stats.drains <= 10 && event.name) {
+                        logEvent(event.cycle, 'STREAMER', event.name);
+                    }
                     setTimeout(() => {
                         bufferLevels.south = 0;
                         computeActive = false;
@@ -1340,15 +2318,30 @@
                         updateDisplay();
                     }, 100);
                     break;
+            }
+        }
 
-                case 'TILE_READY':
-                    // Update tile visualization based on location
-                    updateTileFromEvent(event);
-                    break;
+        // Process dataflow TILE_READY event
+        function updateTileFromEvent(event) {
+            const operand = event.operand ? event.operand.type : null;
+            const coord = event.operand ? event.operand.coord : [event.tile_i, event.tile_j, event.tile_k];
+            const level = event.level || 'L3';
 
-                case 'BUFFER_FREE':
-                    // Buffer became available
-                    break;
+            // Determine tile state based on which buffer level received the tile
+            const state = level === 'L2' ? 'in-l2' : 'in-l3';
+
+            if (operand === 'A') {
+                updateTileState('A', coord[0], coord[2], state);
+            } else if (operand === 'B') {
+                updateTileState('B', coord[2], coord[1], state);
+            } else if (operand === 'C' || operand === 'D') {
+                // C/D tiles use i,j coords
+                updateTileState('C', coord[0], coord[1], state);
+            }
+
+            // Log first few tile arrivals
+            if (bufferStats.tile_ready <= 10 && event.name) {
+                logEvent(event.cycle, level, event.name);
             }
         }
 
@@ -1398,7 +2391,6 @@
         }
 
         function updateOFGStateFromOp(level, state) {
-            // Simple visualization: mark some nodes as active
             if (level === 'dma') {
                 ofgStates.dma[1] = state;
             } else if (level === 'bm') {
@@ -1415,7 +2407,6 @@
             const tileType = op.type.toLowerCase();
             const loc = event.level;
 
-            // Map operand type to tile position key
             let key = null;
             if (tileType === 'a') key = 'a';
             else if (tileType === 'b') key = 'b';
@@ -1424,7 +2415,6 @@
 
             if (!key) return;
 
-            // Update tile position based on location
             if (loc === 'L3') {
                 tilePositions[key].l3 = op.dst;
             } else if (loc === 'L2') {
@@ -1444,12 +2434,10 @@
         function moveTile(tile, from, to, nodeId) {
             const t = tilePositions[tile];
 
-            // Clear from source
             if (from === 'host') t.host = false;
             else if (from === 'l3') t.l3 = null;
             else if (from === 'l2') t.l2 = null;
 
-            // Set at destination
             if (to === 'host') t.host = true;
             else if (to === 'l3') t.l3 = nodeId;
             else if (to === 'l2') t.l2 = nodeId;
@@ -1497,13 +2485,11 @@
         // Display Update
         // =====================================================
         function updateDisplay() {
-            // Update tiles
             updateTileDisplay('host-tile-a', tilePositions.a.host, 'A');
             updateTileDisplay('host-tile-b', tilePositions.b.host, 'B');
             updateTileDisplay('host-tile-c', tilePositions.c.host, 'C');
             updateTileDisplay('host-tile-d', tilePositions.d.host, 'D');
 
-            // L3 tiles
             for (let i = 0; i < 4; i++) {
                 const elem = document.getElementById(`l3-${i}-tile`);
                 if (!elem) continue;
@@ -1520,7 +2506,6 @@
                 elem.classList.toggle('visible', content !== '');
             }
 
-            // L2 banks
             for (let i = 0; i < 8; i++) {
                 const elem = document.getElementById(`l2-${i}-tile`);
                 if (!elem) continue;
@@ -1537,17 +2522,14 @@
                 elem.classList.toggle('visible', content !== '');
             }
 
-            // OFG states
             updateOFGDisplay('dma', ofgStates.dma);
             updateOFGDisplay('bm', ofgStates.bm);
             updateOFGDisplay('str', ofgStates.str);
 
-            // Buffer levels
             document.getElementById('l1-west-fill').style.width = bufferLevels.west + '%';
             document.getElementById('l1-north-fill').style.width = bufferLevels.north + '%';
             document.getElementById('l1-south-fill').style.width = bufferLevels.south + '%';
 
-            // Status dots
             updateStatusDot('status-dma', ofgStates.dma);
             updateStatusDot('status-bm', ofgStates.bm);
             updateStatusDot('status-str', ofgStates.str);
@@ -1582,31 +2564,31 @@
         function updateStatsDisplay() {
             if (!traceData) return;
 
-            // Update stat values
             document.getElementById('stat-matmuls').textContent = stats.matmuls;
             document.getElementById('stat-loads').textContent = stats.loads;
             document.getElementById('stat-stores').textContent = stats.stores;
             document.getElementById('stat-pushes').textContent = stats.pushes;
 
-            // Update progress bars if we have totals
             if (traceData.stats) {
-                const totals = traceData.stats;
+                const t = traceData.stats;
 
-                const dmaTotal = totals.dma_loads + totals.dma_stores;
+                // Support both old and new field names
+                const dmaTotal = (t.dma_pushes || t.dma_loads || 0) + (t.dma_pulls || t.dma_stores || 0);
                 const dmaDone = stats.loads + stats.stores;
                 document.getElementById('dma-progress').textContent = `${dmaDone}/${dmaTotal}`;
-                document.getElementById('dma-progress-bar').style.width = (dmaDone / dmaTotal * 100) + '%';
+                document.getElementById('dma-progress-bar').style.width = dmaTotal > 0 ? (dmaDone / dmaTotal * 100) + '%' : '0%';
 
-                const bmTotal = totals.bm_pushes + totals.bm_pulls;
+                const bmTotal = (t.bm_pushes || 0) + (t.bm_pulls || 0);
                 const bmDone = stats.pushes + stats.pulls;
                 document.getElementById('bm-progress').textContent = `${bmDone}/${bmTotal}`;
-                document.getElementById('bm-progress-bar').style.width = (bmDone / bmTotal * 100) + '%';
+                document.getElementById('bm-progress-bar').style.width = bmTotal > 0 ? (bmDone / bmTotal * 100) + '%' : '0%';
 
-                document.getElementById('compute-progress').textContent = `${stats.matmuls}/${totals.matmuls}`;
-                document.getElementById('compute-progress-bar').style.width = (stats.matmuls / totals.matmuls * 100) + '%';
+                // computes (new) or matmuls (old)
+                const computeTotal = t.computes || t.matmuls || 0;
+                document.getElementById('compute-progress').textContent = `${stats.matmuls}/${computeTotal}`;
+                document.getElementById('compute-progress-bar').style.width = computeTotal > 0 ? (stats.matmuls / computeTotal * 100) + '%' : '0%';
 
-                // Overall progress
-                const progress = Math.round((stats.matmuls / totals.matmuls) * 100);
+                const progress = computeTotal > 0 ? Math.round((stats.matmuls / computeTotal) * 100) : 0;
                 document.getElementById('stat-progress').textContent = progress;
             }
         }
@@ -1625,7 +2607,6 @@
             `;
             log.insertBefore(item, log.firstChild);
 
-            // Limit log size
             while (log.children.length > 100) {
                 log.removeChild(log.lastChild);
             }
