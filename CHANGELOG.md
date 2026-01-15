@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed - 2026-01-15
+- **Documentation Reorganization** (`docs/`)
+  - Restructured from ~70 flat files to organized hierarchy with 9 numbered categories
+  - Created `01-architecture/` through `09-virtual-platform/` for core simulator components
+  - Added subdirectories: `03-memory-subsystem/{controllers,invariants,l3-l2-l1}`, `05-data-movement/{dma,noc,pcie}`
+  - Consolidated external references under `reference/gpu-specs/`
+  - Reorganized project management under `project/{milestones,reports,partners}`
+  - Archived deprecated documents to `archive/{development-notes,status,superseded}`
+  - All moves done via `git mv` to preserve file history
+
+### Added - 2026-01-15
+- **Documentation Index** (`docs/README.md`)
+  - Comprehensive navigation guide with quick start section
+  - Table of contents for all documentation categories
+  - Key concepts section covering multi-fidelity simulation and credit-based dataflow
+  - Navigation tips for common use cases
+
 ### Fixed - 2026-01-14
 - **OFG Visualization NaN% Statistics** (`tools/visualization/ofg_execution_animation.html`)
   - Fixed field name mismatch: display code expected `dma_loads`/`dma_stores`/`matmuls` but traces use `dma_pushes`/`dma_pulls`/`computes`
