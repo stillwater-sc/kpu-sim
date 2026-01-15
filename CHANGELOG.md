@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed - 2026-01-14
+- **OFG Visualization NaN% Statistics** (`tools/visualization/ofg_execution_animation.html`)
+  - Fixed field name mismatch: display code expected `dma_loads`/`dma_stores`/`matmuls` but traces use `dma_pushes`/`dma_pulls`/`computes`
+  - Added fallback lookups supporting both old and new naming conventions
+  - Progress bars and percentages now display correctly
+
+- **OFG Visualization Loop Progress Display** (`tools/visualization/ofg_execution_animation.html`)
+  - Fixed loop progress showing zero-indexed values (e.g., "1/2" instead of "2/2" when complete)
+  - Changed display to show completion count: `${loopState.i + 1}/${m}` for intuitive progress tracking
+
+- **OFG Visualization Missing Event Log Entries** (`tools/visualization/ofg_execution_animation.html`)
+  - Added `logEvent()` calls to BlockMover events (BM_PUSH, BM_PULL, PUSH_TO_L2, PULL_FROM_L2)
+  - Added `logEvent()` calls to Streamer events (STR_FEED_A/B, FEED_WEST/NORTH, STR_DRAIN, DRAIN)
+  - Added `logEvent()` calls to TILE_READY and TILE_COMPLETE events
+  - Event log now shows complete dataflow pipeline activity
+
+### Changed - 2026-01-14
+- **OFG Embedded Demo Trace** (`tools/visualization/ofg_execution_animation.html`)
+  - Changed from 4×4×2 tiles (32 matmul ops) to 2×2×3 tiles (12 matmul ops)
+  - Matches `--tiny` CLI option for educational examples
+  - Shows buffer reuse patterns more clearly
+
+- **OFG Visual Separation** (`tools/visualization/ofg_execution_animation.html`)
+  - Added labels ("Buffer Occupancy:", "Bank Occupancy:", "Stream Buffers:")
+  - Added dashed separators between buffer displays and executor OFG states
+  - Clearer distinction between tile storage and executor state machines
+
 ### Added - 2026-01-09
 - **DMA Pattern Test Suite** (`patterns/dma/`)
   - Complete infrastructure for DMA data movement validation
