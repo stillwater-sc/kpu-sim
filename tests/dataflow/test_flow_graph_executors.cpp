@@ -704,8 +704,8 @@ TEST_CASE("Chrome trace file output", "[dataflow][trace][file]") {
     executor.inject_operand(input);
     executor.run();
 
-    // Write to temp file
-    std::string filename = "/tmp/test_trace.json";
+    // Write to temp file (cross-platform)
+    std::string filename = (std::filesystem::temp_directory_path() / "test_trace.json").string();
     REQUIRE(writer.write_to_file(filename));
 
     // Verify file exists and is valid JSON
@@ -778,8 +778,8 @@ TEST_CASE("Multi-level trace consolidation", "[dataflow][trace][integration]") {
         bm_trace, dma_outputs[0].cycle + 1  // BlockMover receives next cycle
     );
 
-    // Write consolidated trace
-    std::string filename = "/tmp/multilevel_trace.json";
+    // Write consolidated trace (cross-platform)
+    std::string filename = (std::filesystem::temp_directory_path() / "multilevel_trace.json").string();
     REQUIRE(consolidator.write_to_file(filename));
 
     // Verify
