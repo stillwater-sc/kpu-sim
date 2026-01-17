@@ -50,6 +50,7 @@ from .ops import (
     softmax,
     # Normalization
     layer_norm,
+    batch_norm2d,
     # Convolution
     conv2d,
     # Pooling
@@ -86,6 +87,9 @@ from .runtime import (
 from .graph import OpGraph, OpNode, OpType
 from .dfx_emitter import DFXProgram, DFXOp, DFXEmitter
 
+# Datasets
+from .datasets import MNIST, load_mnist
+
 __all__ = [
     # Version
     "__version__",
@@ -114,6 +118,7 @@ __all__ = [
 
     # Operators - normalization
     "layer_norm",
+    "batch_norm2d",
 
     # Operators - convolution
     "conv2d",
@@ -158,6 +163,10 @@ __all__ = [
     "DFXProgram",
     "DFXOp",
     "DFXEmitter",
+
+    # Datasets
+    "MNIST",
+    "load_mnist",
 ]
 
 

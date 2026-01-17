@@ -503,6 +503,73 @@ def layer_norm(x: 'Tensor',
         return Tensor(result.astype(x.dtype))
 
 
+def batch_norm2d(x: 'Tensor',
+                 weight: Optional['Tensor'] = None,
+                 bias: Optional['Tensor'] = None,
+                 running_mean: Optional['Tensor'] = None,
+                 running_var: Optional['Tensor'] = None,
+                 training: bool = False,
+                 eps: float = 1e-5,
+                 momentum: float = 0.1) -> 'Tensor':
+    """
+    2D Batch Normalization.
+
+    In training mode: normalizes using batch statistics.
+    In inference mode: uses running_mean and running_var if provided,
+    otherwise computes from batch.
+
+    Args:
+        x: Input tensor [N, C, H, W]
+        weight: Scale parameter (gamma) [C]
+        bias: Shift parameter (beta) [C]
+        running_mean: Running mean for inference [C]
+        running_var: Running variance for inference [C]
+        training: Whether in training mode
+        eps: Small constant for numerical stability
+        momentum: Momentum for running statistics update
+
+    Returns:
+        Normalized tensor [N, C, H, W]
+    """
+    from .tensor import Tensor, TensorMeta
+    from .graph import OpType
+
+    if Tensor._tracing:
+        out_meta = TensorMeta(shape=x.shape, dtype=x.dtype)
+        out = Tensor(out_meta)
+        inputs = [x]
+        if weight is not None:
+            inputs.append(weight)
+        if bias is not None:
+            inputs.append(bias)
+        Tensor._trace_graph.add_op(OpType.BATCH_NORM, inputs, [out],
+                                   eps=eps, training=training)
+        return out
+    else:
+        if x._data is None:
+            raise ValueError("Cannot execute batch_norm2d on symbolic tensor")
+
+        # Use running stats in inference mode if available
+        if not training and running_mean is not None and running_var is not None:
+            mean = running_mean._data.reshape(1, -1, 1, 1)
+            var = running_var._data.reshape(1, -1, 1, 1)
+        else:
+            # Compute from batch
+            mean = np.mean(x._data, axis=(0, 2, 3), keepdims=True)
+            var = np.var(x._data, axis=(0, 2, 3), keepdims=True)
+
+        # Normalize
+        result = (x._data - mean) / np.sqrt(var + eps)
+
+        # Apply scale and shift
+        if weight is not None:
+            result = result * weight._data.reshape(1, -1, 1, 1)
+        if bias is not None:
+            result = result + bias._data.reshape(1, -1, 1, 1)
+
+        return Tensor(result.astype(x.dtype))
+
+
 # ========== Convolution Operations ==========
 
 def conv2d(x: 'Tensor',

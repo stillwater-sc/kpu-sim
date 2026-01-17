@@ -232,6 +232,19 @@ class KPURuntime:
             if result.ndim == 0:
                 result = np.atleast_1d(result)
 
+        elif op.opcode == DFXOpCode.BATCH_NORM:
+            x = inputs[0]
+            eps = op.attrs.get('eps', 1e-5)
+            # Compute batch statistics
+            mean = np.mean(x, axis=(0, 2, 3), keepdims=True)
+            var = np.var(x, axis=(0, 2, 3), keepdims=True)
+            result = (x - mean) / np.sqrt(var + eps)
+            # Apply scale and bias if provided
+            if len(inputs) > 1:
+                result = result * inputs[1].reshape(1, -1, 1, 1)
+            if len(inputs) > 2:
+                result = result + inputs[2].reshape(1, -1, 1, 1)
+
         elif op.opcode == DFXOpCode.LAYER_NORM:
             x = inputs[0]
             normalized_shape = op.attrs.get('normalized_shape', (x.shape[-1],))
@@ -368,8 +381,35 @@ class KPURuntime:
             result = np.concatenate(inputs, axis=dim)
 
         elif op.opcode == DFXOpCode.RESHAPE:
-            shape = op.attrs.get('shape')
-            result = inputs[0].reshape(shape)
+            shape = list(op.attrs.get('shape'))
+            x = inputs[0]
+            total_size = x.size
+
+            # Handle -1 dimensions
+            if -1 in shape:
+                neg_idx = shape.index(-1)
+                other_size = 1
+                for i, s in enumerate(shape):
+                    if i != neg_idx:
+                        other_size *= s
+                if other_size > 0:
+                    shape[neg_idx] = total_size // other_size
+
+            # Check if shape matches input size
+            target_size = 1
+            for s in shape:
+                target_size *= s
+
+            # If size mismatch, try to fix first dimension (batch)
+            # This handles dynamic batch sizes traced with a fixed batch
+            if target_size != total_size and len(shape) > 1:
+                other_size = 1
+                for s in shape[1:]:
+                    other_size *= s
+                if other_size > 0 and total_size % other_size == 0:
+                    shape[0] = total_size // other_size
+
+            result = x.reshape(tuple(shape))
 
         elif op.opcode == DFXOpCode.TRANSPOSE:
             axes = op.attrs.get('axes')

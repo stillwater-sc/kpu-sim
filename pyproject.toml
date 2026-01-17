@@ -7,7 +7,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "stillwater-kpu-simulator"
-version = "0.1.0"
+version = "0.3.1"
 description = "Stillwater Knowledge Processing Unit Simulator with TopLevelSimulator"
 readme = "README.md"
 requires-python = ">=3.8"
