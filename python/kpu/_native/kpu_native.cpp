@@ -188,9 +188,9 @@ private:
             py::buffer_info b_buf = B.request();
 
             // Get dimensions for FLOP counting
-            ssize_t M = a_buf.shape[a_buf.ndim - 2];
-            ssize_t K = a_buf.shape[a_buf.ndim - 1];
-            ssize_t N = b_buf.shape[b_buf.ndim - 1];
+            py::ssize_t M = a_buf.shape[a_buf.ndim - 2];
+            py::ssize_t K = a_buf.shape[a_buf.ndim - 1];
+            py::ssize_t N = b_buf.shape[b_buf.ndim - 1];
 
             // Compute result using numpy
             py::array_t<float> C = np.attr("matmul")(A, B).cast<py::array_t<float>>();
