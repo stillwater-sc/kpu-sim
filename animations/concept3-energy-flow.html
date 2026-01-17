@@ -16,7 +16,7 @@
             background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
             color: #fff;
             min-height: 100vh;
-            padding: 20px;
+            padding: 10px 15px;
         }
 
         .container {
@@ -26,8 +26,8 @@
 
         h1 {
             text-align: center;
-            font-size: 2rem;
-            margin-bottom: 10px;
+            font-size: 1.4rem;
+            margin-bottom: 5px;
             background: linear-gradient(90deg, #ff6b6b, #4ecdc4);
             -webkit-background-clip: text;
             -webkit-text-fill-color: transparent;
@@ -37,20 +37,20 @@
         .subtitle {
             text-align: center;
             color: #888;
-            margin-bottom: 30px;
-            font-size: 1.1rem;
+            margin-bottom: 12px;
+            font-size: 0.85rem;
         }
 
         .comparison {
             display: grid;
             grid-template-columns: 1fr 1fr;
-            gap: 30px;
+            gap: 15px;
         }
 
         .panel {
             background: rgba(255, 255, 255, 0.05);
-            border-radius: 16px;
-            padding: 20px;
+            border-radius: 12px;
+            padding: 10px;
             border: 1px solid rgba(255, 255, 255, 0.1);
         }
 
@@ -58,13 +58,13 @@
             display: flex;
             align-items: center;
             justify-content: space-between;
-            margin-bottom: 20px;
-            padding-bottom: 15px;
+            margin-bottom: 8px;
+            padding-bottom: 6px;
             border-bottom: 1px solid rgba(255, 255, 255, 0.1);
         }
 
         .panel-title {
-            font-size: 1.4rem;
+            font-size: 1rem;
             font-weight: 600;
         }
 
@@ -77,10 +77,10 @@
         }
 
         .efficiency-badge {
-            padding: 8px 16px;
-            border-radius: 20px;
+            padding: 4px 10px;
+            border-radius: 15px;
             font-weight: bold;
-            font-size: 1.1rem;
+            font-size: 0.75rem;
         }
 
         .gpu-panel .efficiency-badge {
@@ -96,8 +96,8 @@
         /* Energy Flow Visualization */
         .energy-flow-container {
             position: relative;
-            height: 350px;
-            margin-bottom: 20px;
+            height: 200px;
+            margin-bottom: 10px;
         }
 
         .energy-source {
@@ -105,26 +105,26 @@
             left: 0;
             top: 50%;
             transform: translateY(-50%);
-            width: 70px;
-            height: 100px;
+            width: 50px;
+            height: 70px;
             background: linear-gradient(135deg, #ffd54f, #ffb300);
-            border-radius: 8px;
+            border-radius: 6px;
             display: flex;
             flex-direction: column;
             align-items: center;
             justify-content: center;
             z-index: 10;
-            box-shadow: 0 4px 15px rgba(255, 213, 79, 0.3);
+            box-shadow: 0 3px 10px rgba(255, 213, 79, 0.3);
         }
 
         .energy-source-label {
-            font-size: 0.7rem;
+            font-size: 0.55rem;
             font-weight: bold;
             color: #333;
         }
 
         .energy-source-value {
-            font-size: 1.1rem;
+            font-size: 0.8rem;
             font-weight: bold;
             color: #333;
         }
@@ -132,13 +132,13 @@
         .energy-sink {
             position: absolute;
             right: 0;
-            width: 90px;
-            border-radius: 8px;
+            width: 65px;
+            border-radius: 6px;
             display: flex;
             flex-direction: column;
             align-items: center;
             justify-content: center;
-            padding: 8px;
+            padding: 5px;
             z-index: 10;
             transition: all 0.5s ease;
         }
@@ -164,18 +164,18 @@
         }
 
         .sink-label {
-            font-size: 0.65rem;
+            font-size: 0.5rem;
             font-weight: bold;
             color: #fff;
             text-align: center;
-            line-height: 1.2;
+            line-height: 1.1;
         }
 
         .sink-value {
-            font-size: 0.9rem;
+            font-size: 0.7rem;
             font-weight: bold;
             color: #fff;
-            margin-top: 2px;
+            margin-top: 1px;
         }
 
         /* SVG Flow */
@@ -236,20 +236,20 @@
 
         /* Breakdown Bars */
         .breakdown-section {
-            margin-top: 20px;
+            margin-top: 8px;
         }
 
         .breakdown-title {
-            font-size: 0.9rem;
+            font-size: 0.7rem;
             font-weight: 600;
-            margin-bottom: 10px;
+            margin-bottom: 5px;
             color: #888;
         }
 
         .breakdown-bar {
-            height: 40px;
+            height: 22px;
             background: rgba(0, 0, 0, 0.3);
-            border-radius: 8px;
+            border-radius: 4px;
             overflow: hidden;
             display: flex;
             position: relative;
@@ -260,7 +260,7 @@
             display: flex;
             align-items: center;
             justify-content: center;
-            font-size: 0.7rem;
+            font-size: 0.5rem;
             font-weight: bold;
             color: #fff;
             transition: all 0.3s ease;
@@ -303,45 +303,45 @@
         .legend {
             display: flex;
             flex-wrap: wrap;
-            gap: 10px;
-            margin-top: 15px;
+            gap: 6px;
+            margin-top: 5px;
         }
 
         .legend-item {
             display: flex;
             align-items: center;
-            gap: 5px;
-            font-size: 0.75rem;
+            gap: 3px;
+            font-size: 0.55rem;
             color: #aaa;
         }
 
         .legend-color {
-            width: 12px;
-            height: 12px;
-            border-radius: 3px;
+            width: 8px;
+            height: 8px;
+            border-radius: 2px;
         }
 
         /* Key Message */
         .key-message {
             text-align: center;
-            padding: 15px;
+            padding: 8px;
             background: rgba(0, 0, 0, 0.2);
-            border-radius: 10px;
-            margin-top: 15px;
+            border-radius: 6px;
+            margin-top: 8px;
         }
 
         .gpu-panel .key-message {
-            border-left: 3px solid #ff6b6b;
+            border-left: 2px solid #ff6b6b;
         }
 
         .domain-flow-panel .key-message {
-            border-left: 3px solid #4ecdc4;
+            border-left: 2px solid #4ecdc4;
         }
 
         .key-message p {
-            font-size: 0.9rem;
+            font-size: 0.65rem;
             color: #ccc;
-            line-height: 1.5;
+            line-height: 1.4;
         }
 
         .key-message strong {
@@ -352,34 +352,34 @@
         .summary {
             display: grid;
             grid-template-columns: repeat(3, 1fr);
-            gap: 20px;
-            margin-top: 30px;
-            padding: 25px;
+            gap: 10px;
+            margin-top: 12px;
+            padding: 10px;
             background: rgba(255, 255, 255, 0.05);
-            border-radius: 12px;
+            border-radius: 8px;
         }
 
         .summary-item {
             text-align: center;
-            padding: 15px;
+            padding: 8px;
             background: rgba(0, 0, 0, 0.2);
-            border-radius: 10px;
+            border-radius: 6px;
         }
 
         .summary-label {
-            font-size: 0.85rem;
+            font-size: 0.6rem;
             color: #888;
-            margin-bottom: 10px;
+            margin-bottom: 4px;
         }
 
         .summary-values {
             display: flex;
             justify-content: center;
-            gap: 30px;
+            gap: 15px;
         }
 
         .summary-value {
-            font-size: 1.8rem;
+            font-size: 1rem;
             font-weight: bold;
         }
 
@@ -392,32 +392,32 @@
         }
 
         .summary-value small {
-            font-size: 0.9rem;
+            font-size: 0.6rem;
             opacity: 0.7;
         }
 
         .summary-comparison {
-            font-size: 0.8rem;
+            font-size: 0.55rem;
             color: #4ecdc4;
-            margin-top: 8px;
+            margin-top: 3px;
         }
 
         /* Workload Selector */
         .workload-selector {
             display: flex;
             justify-content: center;
-            gap: 15px;
-            margin-bottom: 30px;
+            gap: 10px;
+            margin-bottom: 12px;
         }
 
         .workload-btn {
             background: rgba(255, 255, 255, 0.1);
             border: 1px solid rgba(255, 255, 255, 0.2);
             color: #fff;
-            padding: 10px 25px;
-            border-radius: 25px;
+            padding: 6px 16px;
+            border-radius: 20px;
             cursor: pointer;
-            font-size: 0.9rem;
+            font-size: 0.75rem;
             transition: all 0.3s ease;
         }
 
@@ -449,13 +449,13 @@
         .detail-table {
             width: 100%;
             border-collapse: collapse;
-            margin-top: 15px;
-            font-size: 0.8rem;
+            margin-top: 8px;
+            font-size: 0.6rem;
         }
 
         .detail-table th,
         .detail-table td {
-            padding: 8px 12px;
+            padding: 4px 6px;
             text-align: left;
             border-bottom: 1px solid rgba(255, 255, 255, 0.1);
         }
@@ -783,24 +783,22 @@
             // Set viewBox to match container dimensions
             svg.setAttribute('viewBox', `0 0 ${width} ${height}`);
 
-            // Source position (left side)
-            const sourceX = 70; // After source box
-            const sourceWidth = 70;
+            // Source position (left side) - scaled for smaller container
+            const sourceX = 50; // After source box
             const sourceCenterY = height / 2;
-            const sourceHalfHeight = 50; // Total source height = 100
+            const sourceHalfHeight = 35; // Total source height = 70
 
             // Sink positions (right side)
-            const sinkX = width - 90; // Before sink boxes
-            const sinkWidth = 90;
-            const totalSinkHeight = height - 40; // Padding
-            const gap = 15; // Gap between sinks
+            const sinkX = width - 65; // Before sink boxes
+            const totalSinkHeight = height - 30; // Padding
+            const gap = 10; // Gap between sinks
 
             // Calculate sink dimensions based on energy ratios
-            const computeHeight = Math.max(40, (totalSinkHeight - gap) * computeRatio);
-            const overheadHeight = Math.max(40, (totalSinkHeight - gap) * (1 - computeRatio));
+            const computeHeight = Math.max(30, (totalSinkHeight - gap) * computeRatio);
+            const overheadHeight = Math.max(30, (totalSinkHeight - gap) * (1 - computeRatio));
 
             // Position sinks
-            const computeSinkTop = 20;
+            const computeSinkTop = 15;
             const computeSinkBot = computeSinkTop + computeHeight;
             const overheadSinkTop = computeSinkBot + gap;
             const overheadSinkBot = overheadSinkTop + overheadHeight;
@@ -875,7 +873,7 @@
 
                 particles.push(`
                     <path id="${pathId}" d="${path}" fill="none" stroke="none" />
-                    <circle r="4" fill="${color}">
+                    <circle r="3" fill="${color}">
                         <animateMotion dur="${duration}s" repeatCount="indefinite" begin="${delay}s">
                             <mpath href="#${pathId}" />
                         </animateMotion>
