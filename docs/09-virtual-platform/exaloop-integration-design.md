@@ -118,7 +118,7 @@ Native Code (x86/ARM)    ← We redirect to KPU DFX
 │                              KPU Runtime                                    │
 │                                                                             │
 │  ┌──────────────┐    ┌──────────────┐    ┌──────────────┐                   │
-│  │  DFX IR      │───▶│ KPU Kernels  │───▶│  Simulator   │                   │
+│  │  DFX IR      │───>│ KPU Kernels  │───>│  Simulator   │                   │
 │  │  (per layer) │    │ (compiled)   │    │ (fsim/tsim)  │                   │
 │  └──────────────┘    └──────────────┘    └──────────────┘                   │
 │                                                                             │

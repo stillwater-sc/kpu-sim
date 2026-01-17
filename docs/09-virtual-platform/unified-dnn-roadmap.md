@@ -11,7 +11,7 @@ The goal is a single coherent roadmap that enables executing full DNNs (starting
 
 ---
 
-## Current Status (2026-01-16)
+## Current Status (2026-01-17)
 
 ### Completed
 
@@ -22,47 +22,99 @@ The goal is a single coherent roadmap that enables executing full DNNs (starting
 | **OpGraph/DFX emission** | ✅ Done | Builds graph, emits DFX IR JSON |
 | **BEHAVIORAL runtime** | ✅ Done | Pure Python execution (computes values) |
 | **MNIST MLP example** | ✅ Done | 784→128→64→10, verified against NumPy |
-| **20 unit tests** | ✅ Done | All passing |
+| **CNN operators** | ✅ Done | conv2d, pooling, layer_norm, batch_norm |
+| **MNIST CNN example** | ✅ Done | Conv→Pool→FC, verified against NumPy |
+| **MNIST data loader** | ✅ Done | Downloads from S3 mirror |
+| **torch.compile backend** | ✅ Done | `torch.compile(model, backend="kpu")` |
+| **FX graph converter** | ✅ Done | Walks FX IR, maps to kpu operations |
+| **Unit tests** | ✅ Done | All passing |
 | **pybind11 infrastructure** | ✅ Done | `_native/` module skeleton |
 
-### Not Yet Done (From Both Roadmaps)
+### Not Yet Done
 
-| Component | Source | Priority |
-|-----------|--------|----------|
-| Conv2D kernel | api-gaps | P0 |
-| Pooling operations | api-gaps | P1 |
-| Softmax/LayerNorm | api-gaps | P1 |
-| Elementwise ops | api-gaps | P1 |
-| Model loader (JSON/ONNX) | api-gaps | P0 |
-| Multi-layer graph execution | api-gaps | P0 |
-| Codon DSL plugin | exaloop | Phase 2 |
-| TRANSACTIONAL runtime | exaloop | Phase 2 |
-| CYCLE_ACCURATE runtime | exaloop | Phase 3 |
+| Component | Priority | Notes |
+|-----------|----------|-------|
+| TRANSACTIONAL runtime | P1 | Connect to C++ kpu-sim |
+| CYCLE_ACCURATE runtime | P2 | Full timing simulation |
+| Codon DSL plugin | P2 | Native compilation via Exaloop |
+| Offline model export | P3 | ONNX/flatbuffers for deployment |
+
+---
+
+## torch.compile Integration (NEW)
+
+The primary development workflow is now through `torch.compile`:
+
+```python
+import torch
+import torchvision.models as models
+
+# Load any PyTorch model
+model = models.squeezenet1_0(pretrained=True)
+model.eval()
+
+# Compile with KPU backend
+compiled_model = torch.compile(model, backend="kpu")
+
+# Execute - Dynamo captures graph, KPU backend runs on simulator
+output = compiled_model(input_tensor)
+```
+
+### How It Works
+
+1. **Dynamo captures** the model's execution as an FX GraphModule
+2. **KPU backend receives** the FX graph with all operations
+3. **FX converter walks** the graph, mapping PyTorch ops to kpu ops
+4. **Behavioral runtime** executes operations using NumPy
+5. **Results are validated** against PyTorch eager mode
+
+### Supported Operations
+
+The FX converter supports all common DNN operations:
+
+| Category | Operations |
+|----------|------------|
+| **Activations** | relu, gelu, silu, sigmoid, tanh, softmax |
+| **Convolutions** | conv2d (nn.Conv2d or F.conv2d) |
+| **Pooling** | max_pool2d, avg_pool2d, adaptive_avg_pool2d |
+| **Normalization** | batch_norm, layer_norm |
+| **Linear** | linear, matmul, mm, bmm |
+| **Elementwise** | add, sub, mul, div |
+| **Shape** | reshape, view, flatten, transpose, permute |
+| **Reductions** | mean, sum |
+
+### Files
+
+| File | Purpose |
+|------|---------|
+| `kpu/torch_backend.py` | Backend registration, KPUBackend class |
+| `kpu/fx_converter.py` | FXToKPUConverter, op mapping |
+| `examples/torch_compile_demo.py` | Demo with MLP, CNN, pretrained models |
 
 ---
 
 ## Unified Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                           User Python Code                                  │
-│                                                                             │
-│  @kpu.compile                                                               │
-│  def network(x, w1, w2, ...):                                               │
-│      h1 = kpu.relu(x @ w1)                                                  │
-│      ...                                                                    │
-│      return kpu.softmax(output)                                             │
-│                                                                             │
-└─────────────────────────────────────────────────────────────────────────────┘
+┌────────────────────────────────────────────────────────────────────────────┐
+│                           User Python Code                                 │
+│                                                                            │
+│  @kpu.compile                                                              │
+│  def network(x, w1, w2, ...):                                              │
+│      h1 = kpu.relu(x @ w1)                                                 │
+│      ...                                                                   │
+│      return kpu.softmax(output)                                            │
+│                                                                            │
+└────────────────────────────────────────────────────────────────────────────┘
                                     │
                                     ▼
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                         Python kpu Package                                  │
+┌────────────────────────────────────────────────────────────────────────────┐
+│                         Python kpu Package                                 │
 │  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐    │
 │  │   Tensor     │  │   OpGraph    │  │  DFXEmitter  │  │   Runtime    │    │
 │  │  (tracing)   │  │  (DAG)       │  │  (JSON IR)   │  │  (execute)   │    │
 │  └──────────────┘  └──────────────┘  └──────────────┘  └──────────────┘    │
-└─────────────────────────────────────────────────────────────────────────────┘
+└────────────────────────────────────────────────────────────────────────────┘
                                     │
                     ┌───────────────┼───────────────┐
                     │               │               │
@@ -70,15 +122,15 @@ The goal is a single coherent roadmap that enables executing full DNNs (starting
            ┌──────────────┐ ┌──────────────┐ ┌──────────────┐
            │  BEHAVIORAL  │ │TRANSACTIONAL │ │CYCLE_ACCURATE│
            │  (NumPy)     │ │ (C++ stats)  │ │ (C++ full)   │
-           │  ✅ Done     │ │  TODO        │ │   TODO       │
+           │     Done     │ │  TODO        │ │   TODO       │
            └──────────────┘ └──────────────┘ └──────────────┘
                                     │               │
                                     └───────┬───────┘
                                             ▼
-                              ┌───────────────────────┐
-                              │   C++ kpu-sim         │
-                              │  (existing simulator) │
-                              └───────────────────────┘
+                                ┌───────────────────────┐
+                                │   C++ kpu-sim         │
+                                │  (existing simulator) │
+                                └───────────────────────┘
 ```
 
 ---

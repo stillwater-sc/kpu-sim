@@ -90,6 +90,18 @@ from .dfx_emitter import DFXProgram, DFXOp, DFXEmitter
 # Datasets
 from .datasets import MNIST, load_mnist
 
+# torch.compile backend (optional, requires PyTorch)
+try:
+    import torch as _torch  # Check if torch is actually importable
+    from . import torch_backend
+    from .torch_backend import compile as torch_compile
+    TORCH_AVAILABLE = True
+    del _torch
+except ImportError:
+    torch_backend = None
+    torch_compile = None
+    TORCH_AVAILABLE = False
+
 __all__ = [
     # Version
     "__version__",
@@ -167,6 +179,11 @@ __all__ = [
     # Datasets
     "MNIST",
     "load_mnist",
+
+    # torch.compile backend
+    "torch_backend",
+    "torch_compile",
+    "TORCH_AVAILABLE",
 ]
 
 
@@ -188,17 +205,25 @@ def info() -> str:
     runtime = get_runtime()
     fidelity_name = fidelity_names.get(runtime.fidelity, "UNKNOWN")
 
+    torch_status = "available (torch.compile backend registered)" if TORCH_AVAILABLE else "not available (install PyTorch)"
+
     return f"""KPU Python Package v{__version__}
   Fidelity: {fidelity_name}
   Native bindings: {'available' if runtime._native_sim is not None else 'not available (using pure Python)'}
+  PyTorch integration: {torch_status}
 
 Supported operations:
   - Matrix: matmul, linear
   - Convolution: conv2d
   - Pooling: max_pool2d, avg_pool2d, adaptive_avg_pool2d
   - Activation: relu, gelu, silu, sigmoid, tanh, softmax
-  - Normalization: layer_norm
+  - Normalization: layer_norm, batch_norm2d
   - Elementwise: +, -, *, /, exp, log, sqrt
   - Reduction: sum, mean
   - Shape: reshape, transpose, concat, flatten
+
+torch.compile usage:
+  import torch
+  model = torch.compile(my_model, backend="kpu")
+  output = model(input)
 """
