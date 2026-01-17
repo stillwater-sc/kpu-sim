@@ -279,9 +279,15 @@ class KPURuntime:
         """Initialize native C++ simulator."""
         try:
             # Try to import native bindings
-            from . import _native
-            self._native_sim = _native.create_simulator(self.fidelity)
+            from ._native import _native
+            self._native_sim = _native.create_runtime(self.fidelity)
         except ImportError:
+            # Native bindings not available - this is normal in pure-Python mode
+            self._native_sim = None
+        except Exception as e:
+            # Log any other errors but continue without native support
+            import warnings
+            warnings.warn(f"Native bindings failed to initialize: {e}")
             self._native_sim = None
 
     def _execute_native(self,

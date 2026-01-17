@@ -169,6 +169,16 @@ if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/patterns")
     add_subdirectory(patterns)
 endif()
 
+# High-level Python package (kpu) with native bindings
+if(KPU_BUILD_PYTHON_BINDINGS AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/python/kpu/_native/kpu_native.cpp")
+    if(PYBIND11_AVAILABLE)
+        message(STATUS "Building kpu Python package native bindings")
+        add_subdirectory(python/kpu/_native)
+    else()
+        message(STATUS "pybind11 not available - kpu Python package will use pure Python mode")
+    endif()
+endif()
+
 # Installation of headers
 install(DIRECTORY include/
     DESTINATION include
