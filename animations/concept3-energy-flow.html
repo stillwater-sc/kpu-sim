@@ -509,20 +509,32 @@
                 </div>
 
                 <div class="energy-flow-container" id="gpu-flow-container">
+                    <svg class="flow-svg" id="gpu-flow-svg" preserveAspectRatio="none">
+                        <defs>
+                            <linearGradient id="sankey-compute-gradient" x1="0%" y1="0%" x2="100%" y2="0%">
+                                <stop offset="0%" style="stop-color:#ffd54f"/>
+                                <stop offset="50%" style="stop-color:#8bc34a"/>
+                                <stop offset="100%" style="stop-color:#4caf50"/>
+                            </linearGradient>
+                            <linearGradient id="sankey-overhead-gradient" x1="0%" y1="0%" x2="100%" y2="0%">
+                                <stop offset="0%" style="stop-color:#ffb300"/>
+                                <stop offset="50%" style="stop-color:#ff7043"/>
+                                <stop offset="100%" style="stop-color:#f44336"/>
+                            </linearGradient>
+                        </defs>
+                        <!-- Sankey paths drawn by JS -->
+                    </svg>
+
                     <div class="energy-source">
                         <div class="energy-source-label">INPUT</div>
                         <div class="energy-source-value" id="gpu-input-energy">100 pJ</div>
                     </div>
 
-                    <svg class="flow-svg" id="gpu-flow-svg">
-                        <!-- Paths drawn by JS -->
-                    </svg>
-
-                    <div class="energy-sink sink-compute" style="height: 50px; top: 20px;">
+                    <div class="energy-sink sink-compute" id="gpu-sink-compute">
                         <div class="sink-label">Useful<br>Compute</div>
                         <div class="sink-value" id="gpu-compute-energy">12 pJ</div>
                     </div>
-                    <div class="energy-sink sink-overhead" style="height: 280px; top: 80px;">
+                    <div class="energy-sink sink-overhead" id="gpu-sink-overhead">
                         <div class="sink-label">Instruction<br>Overhead</div>
                         <div class="sink-value" id="gpu-overhead-energy">88 pJ</div>
                     </div>
@@ -577,20 +589,32 @@
                 </div>
 
                 <div class="energy-flow-container" id="df-flow-container">
+                    <svg class="flow-svg" id="df-flow-svg" preserveAspectRatio="none">
+                        <defs>
+                            <linearGradient id="sankey-df-compute-gradient" x1="0%" y1="0%" x2="100%" y2="0%">
+                                <stop offset="0%" style="stop-color:#ffd54f"/>
+                                <stop offset="50%" style="stop-color:#8bc34a"/>
+                                <stop offset="100%" style="stop-color:#4caf50"/>
+                            </linearGradient>
+                            <linearGradient id="sankey-df-overhead-gradient" x1="0%" y1="0%" x2="100%" y2="0%">
+                                <stop offset="0%" style="stop-color:#ffb300"/>
+                                <stop offset="50%" style="stop-color:#90a4ae"/>
+                                <stop offset="100%" style="stop-color:#78909c"/>
+                            </linearGradient>
+                        </defs>
+                        <!-- Sankey paths drawn by JS -->
+                    </svg>
+
                     <div class="energy-source">
                         <div class="energy-source-label">INPUT</div>
                         <div class="energy-source-value" id="df-input-energy">15 pJ</div>
                     </div>
 
-                    <svg class="flow-svg" id="df-flow-svg">
-                        <!-- Paths drawn by JS -->
-                    </svg>
-
-                    <div class="energy-sink df-sink-compute" style="height: 280px; top: 20px;">
+                    <div class="energy-sink df-sink-compute" id="df-sink-compute">
                         <div class="sink-label">Useful<br>Compute</div>
                         <div class="sink-value" id="df-compute-energy">12 pJ</div>
                     </div>
-                    <div class="energy-sink df-sink-overhead" style="height: 60px; top: 310px;">
+                    <div class="energy-sink df-sink-overhead" id="df-sink-overhead">
                         <div class="sink-label">Overhead</div>
                         <div class="sink-value" id="df-overhead-energy">3 pJ</div>
                     </div>
@@ -699,7 +723,7 @@
                     total: 14,
                     compute: 12,
                     reg: 0.4,
-                    data: 0.8,  // Better reuse with line buffers
+                    data: 0.8,
                     credit: 0.2,
                     misc: 0.6,
                     efficiency: 86
@@ -721,7 +745,7 @@
                     total: 16,
                     compute: 12,
                     reg: 0.6,
-                    data: 2.2,  // More data movement for softmax
+                    data: 2.2,
                     credit: 0.3,
                     misc: 0.9,
                     efficiency: 75
@@ -730,13 +754,145 @@
         };
 
         let currentWorkload = 'gemm';
+        let animationFrameId = null;
+
+        // Generate a smooth Sankey path as a filled shape
+        function generateSankeyPath(x1, y1Top, y1Bot, x2, y2Top, y2Bot) {
+            // Control points for smooth cubic bezier curves
+            const midX = (x1 + x2) / 2;
+
+            // Top edge: left to right
+            const topPath = `M ${x1} ${y1Top} C ${midX} ${y1Top}, ${midX} ${y2Top}, ${x2} ${y2Top}`;
+            // Bottom edge: right to left (to close the shape)
+            const botPath = `L ${x2} ${y2Bot} C ${midX} ${y2Bot}, ${midX} ${y1Bot}, ${x1} ${y1Bot} Z`;
+
+            return topPath + ' ' + botPath;
+        }
+
+        // Draw Sankey diagram for a container
+        function drawSankeyDiagram(containerId, svgId, computeRatio, isGpu) {
+            const container = document.getElementById(containerId);
+            const svg = document.getElementById(svgId);
+
+            if (!container || !svg) return;
+
+            const rect = container.getBoundingClientRect();
+            const width = rect.width;
+            const height = rect.height;
+
+            // Set viewBox to match container dimensions
+            svg.setAttribute('viewBox', `0 0 ${width} ${height}`);
+
+            // Source position (left side)
+            const sourceX = 70; // After source box
+            const sourceWidth = 70;
+            const sourceCenterY = height / 2;
+            const sourceHalfHeight = 50; // Total source height = 100
+
+            // Sink positions (right side)
+            const sinkX = width - 90; // Before sink boxes
+            const sinkWidth = 90;
+            const totalSinkHeight = height - 40; // Padding
+            const gap = 15; // Gap between sinks
+
+            // Calculate sink dimensions based on energy ratios
+            const computeHeight = Math.max(40, (totalSinkHeight - gap) * computeRatio);
+            const overheadHeight = Math.max(40, (totalSinkHeight - gap) * (1 - computeRatio));
+
+            // Position sinks
+            const computeSinkTop = 20;
+            const computeSinkBot = computeSinkTop + computeHeight;
+            const overheadSinkTop = computeSinkBot + gap;
+            const overheadSinkBot = overheadSinkTop + overheadHeight;
+
+            // Update sink element positions
+            const computeSink = document.getElementById(isGpu ? 'gpu-sink-compute' : 'df-sink-compute');
+            const overheadSink = document.getElementById(isGpu ? 'gpu-sink-overhead' : 'df-sink-overhead');
+
+            if (computeSink) {
+                computeSink.style.top = `${computeSinkTop}px`;
+                computeSink.style.height = `${computeHeight}px`;
+            }
+            if (overheadSink) {
+                overheadSink.style.top = `${overheadSinkTop}px`;
+                overheadSink.style.height = `${overheadHeight}px`;
+            }
+
+            // Calculate source split point
+            const sourceComputeHeight = sourceHalfHeight * 2 * computeRatio;
+            const sourceOverheadHeight = sourceHalfHeight * 2 * (1 - computeRatio);
+
+            const sourceComputeTop = sourceCenterY - sourceHalfHeight;
+            const sourceComputeBot = sourceComputeTop + sourceComputeHeight;
+            const sourceOverheadTop = sourceComputeBot;
+            const sourceOverheadBot = sourceOverheadTop + sourceOverheadHeight;
+
+            // Generate paths
+            const computePath = generateSankeyPath(
+                sourceX, sourceComputeTop, sourceComputeBot,
+                sinkX, computeSinkTop, computeSinkBot
+            );
+
+            const overheadPath = generateSankeyPath(
+                sourceX, sourceOverheadTop, sourceOverheadBot,
+                sinkX, overheadSinkTop, overheadSinkBot
+            );
+
+            // Get existing defs
+            const defs = svg.querySelector('defs');
+            const defsHtml = defs ? defs.outerHTML : '';
+
+            // Create SVG content with paths
+            const gradientPrefix = isGpu ? 'sankey' : 'sankey-df';
+
+            svg.innerHTML = `
+                ${defsHtml}
+                <path class="sankey-path" d="${computePath}" fill="url(#${gradientPrefix}-compute-gradient)" />
+                <path class="sankey-path" d="${overheadPath}" fill="url(#${gradientPrefix}-overhead-gradient)" />
+                ${createParticles(sourceX, sinkX, sourceComputeTop, sourceComputeBot, computeSinkTop, computeSinkBot, 'compute', isGpu)}
+                ${createParticles(sourceX, sinkX, sourceOverheadTop, sourceOverheadBot, overheadSinkTop, overheadSinkBot, 'overhead', isGpu)}
+            `;
+        }
+
+        // Create animated particles along a path
+        function createParticles(x1, x2, y1Top, y1Bot, y2Top, y2Bot, type, isGpu) {
+            const particles = [];
+            const numParticles = type === 'compute' ? 3 : (isGpu ? 8 : 2);
+            const color = type === 'compute' ? 'rgba(255,255,255,0.9)' : 'rgba(255,255,255,0.7)';
+
+            for (let i = 0; i < numParticles; i++) {
+                const delay = (i / numParticles) * 3; // Stagger over 3 seconds
+                const duration = 2 + Math.random() * 1; // 2-3 second duration
+                const yOffset = Math.random() * 0.8 + 0.1; // Random position within band (10%-90%)
+
+                // Calculate path for this particle
+                const y1 = y1Top + (y1Bot - y1Top) * yOffset;
+                const y2 = y2Top + (y2Bot - y2Top) * yOffset;
+                const midX = (x1 + x2) / 2;
+
+                const pathId = `particle-path-${type}-${isGpu ? 'gpu' : 'df'}-${i}`;
+                const path = `M ${x1} ${y1} C ${midX} ${y1}, ${midX} ${y2}, ${x2} ${y2}`;
+
+                particles.push(`
+                    <path id="${pathId}" d="${path}" fill="none" stroke="none" />
+                    <circle r="4" fill="${color}">
+                        <animateMotion dur="${duration}s" repeatCount="indefinite" begin="${delay}s">
+                            <mpath href="#${pathId}" />
+                        </animateMotion>
+                        <animate attributeName="opacity" values="0;1;1;0" dur="${duration}s" repeatCount="indefinite" begin="${delay}s" />
+                    </circle>
+                `);
+            }
+
+            return particles.join('');
+        }
 
         function updateDisplay() {
             const data = workloadData[currentWorkload];
             const gpuData = data.gpu;
             const dfData = data.df;
 
-            // Update GPU values
+            // Update GPU text values
             document.getElementById('gpu-efficiency').textContent = `${gpuData.efficiency}% Efficient`;
             document.getElementById('gpu-input-energy').textContent = `${gpuData.total} pJ`;
             document.getElementById('gpu-compute-energy').textContent = `${gpuData.compute} pJ`;
@@ -753,7 +909,6 @@
 
             // Update GPU breakdown bar
             const gpuBreakdown = document.getElementById('gpu-breakdown');
-            const gpuOverhead = gpuData.total - gpuData.compute;
             gpuBreakdown.innerHTML = `
                 <div class="breakdown-segment bg-instr-fetch" style="width: ${gpuData.ifetch}%;" title="Instruction Fetch">I-Fetch ${gpuData.ifetch}%</div>
                 <div class="breakdown-segment bg-instr-decode" style="width: ${gpuData.decode}%;" title="Instruction Decode">${gpuData.decode}%</div>
@@ -764,7 +919,7 @@
                 <div class="breakdown-segment bg-misc" style="width: ${gpuData.misc}%;" title="Misc">${gpuData.misc}%</div>
             `;
 
-            // Update Domain Flow values
+            // Update Domain Flow text values
             document.getElementById('df-efficiency').textContent = `${dfData.efficiency}% Efficient`;
             document.getElementById('df-input-energy').textContent = `${dfData.total} pJ`;
             document.getElementById('df-compute-energy').textContent = `${dfData.compute} pJ`;
@@ -800,77 +955,12 @@
             document.getElementById('summary-df-eff').innerHTML = `${dfData.efficiency}<small>%</small>`;
             document.getElementById('summary-ops-watt').innerHTML = `${energyRatio}<small>×</small>`;
 
-            // Update flow visualizations (sink heights)
-            updateFlowVisualization(gpuData, dfData);
-        }
-
-        function updateFlowVisualization(gpuData, dfData) {
-            // Adjust GPU sink sizes based on data
+            // Draw Sankey diagrams
             const gpuComputeRatio = gpuData.compute / gpuData.total;
-            const gpuOverheadRatio = 1 - gpuComputeRatio;
-
-            const gpuContainer = document.getElementById('gpu-flow-container');
-            const gpuComputeSink = gpuContainer.querySelector('.sink-compute');
-            const gpuOverheadSink = gpuContainer.querySelector('.sink-overhead');
-
-            if (gpuComputeSink && gpuOverheadSink) {
-                const totalHeight = 330;
-                gpuComputeSink.style.height = `${Math.max(40, totalHeight * gpuComputeRatio)}px`;
-                gpuOverheadSink.style.height = `${totalHeight * gpuOverheadRatio}px`;
-                gpuOverheadSink.style.top = `${20 + totalHeight * gpuComputeRatio + 10}px`;
-            }
-
-            // Adjust Domain Flow sink sizes
             const dfComputeRatio = dfData.compute / dfData.total;
-            const dfOverheadRatio = 1 - dfComputeRatio;
 
-            const dfContainer = document.getElementById('df-flow-container');
-            const dfComputeSink = dfContainer.querySelector('.df-sink-compute');
-            const dfOverheadSink = dfContainer.querySelector('.df-sink-overhead');
-
-            if (dfComputeSink && dfOverheadSink) {
-                const totalHeight = 330;
-                dfComputeSink.style.height = `${totalHeight * dfComputeRatio}px`;
-                dfOverheadSink.style.height = `${Math.max(40, totalHeight * dfOverheadRatio)}px`;
-                dfOverheadSink.style.top = `${20 + totalHeight * dfComputeRatio + 10}px`;
-            }
-        }
-
-        // Draw flow paths
-        function drawFlowPaths() {
-            // GPU flow paths
-            const gpuSvg = document.getElementById('gpu-flow-svg');
-            gpuSvg.innerHTML = `
-                <defs>
-                    <linearGradient id="compute-gradient" x1="0%" y1="0%" x2="100%" y2="0%">
-                        <stop offset="0%" style="stop-color:#ffd54f"/>
-                        <stop offset="100%" style="stop-color:#4caf50"/>
-                    </linearGradient>
-                    <linearGradient id="overhead-gradient" x1="0%" y1="0%" x2="100%" y2="0%">
-                        <stop offset="0%" style="stop-color:#ffd54f"/>
-                        <stop offset="100%" style="stop-color:#f44336"/>
-                    </linearGradient>
-                </defs>
-                <path d="M 0 160 Q 80 160, 100 50 T 200 50" stroke="url(#compute-gradient)" stroke-width="12" fill="none" opacity="0.6"/>
-                <path d="M 0 200 Q 100 200, 150 250 T 200 320" stroke="url(#overhead-gradient)" stroke-width="88" fill="none" opacity="0.4"/>
-            `;
-
-            // Domain Flow paths
-            const dfSvg = document.getElementById('df-flow-svg');
-            dfSvg.innerHTML = `
-                <defs>
-                    <linearGradient id="df-compute-gradient" x1="0%" y1="0%" x2="100%" y2="0%">
-                        <stop offset="0%" style="stop-color:#ffd54f"/>
-                        <stop offset="100%" style="stop-color:#4caf50"/>
-                    </linearGradient>
-                    <linearGradient id="df-overhead-gradient" x1="0%" y1="0%" x2="100%" y2="0%">
-                        <stop offset="0%" style="stop-color:#ffd54f"/>
-                        <stop offset="100%" style="stop-color:#78909c"/>
-                    </linearGradient>
-                </defs>
-                <path d="M 0 160 Q 50 160, 100 140 T 200 140" stroke="url(#df-compute-gradient)" stroke-width="80" fill="none" opacity="0.5"/>
-                <path d="M 0 200 Q 100 200, 150 340 T 200 340" stroke="url(#df-overhead-gradient)" stroke-width="15" fill="none" opacity="0.4"/>
-            `;
+            drawSankeyDiagram('gpu-flow-container', 'gpu-flow-svg', gpuComputeRatio, true);
+            drawSankeyDiagram('df-flow-container', 'df-flow-svg', dfComputeRatio, false);
         }
 
         // Workload button handlers
@@ -883,9 +973,23 @@
             });
         });
 
-        // Initialize
-        drawFlowPaths();
-        updateDisplay();
+        // Handle window resize
+        let resizeTimeout;
+        window.addEventListener('resize', () => {
+            clearTimeout(resizeTimeout);
+            resizeTimeout = setTimeout(updateDisplay, 100);
+        });
+
+        // Initialize after DOM is ready
+        document.addEventListener('DOMContentLoaded', () => {
+            // Small delay to ensure container dimensions are calculated
+            setTimeout(updateDisplay, 50);
+        });
+
+        // Also run on load in case DOMContentLoaded already fired
+        if (document.readyState === 'complete') {
+            setTimeout(updateDisplay, 50);
+        }
     </script>
 </body>
 </html>

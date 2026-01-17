@@ -16,7 +16,7 @@
             background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
             color: #fff;
             min-height: 100vh;
-            padding: 20px;
+            padding: 10px 15px;
         }
 
         .container {
@@ -26,8 +26,8 @@
 
         h1 {
             text-align: center;
-            font-size: 2rem;
-            margin-bottom: 10px;
+            font-size: 1.4rem;
+            margin-bottom: 5px;
             background: linear-gradient(90deg, #ff6b6b, #4ecdc4);
             -webkit-background-clip: text;
             -webkit-text-fill-color: transparent;
@@ -37,20 +37,20 @@
         .subtitle {
             text-align: center;
             color: #888;
-            margin-bottom: 30px;
-            font-size: 1.1rem;
+            margin-bottom: 12px;
+            font-size: 0.85rem;
         }
 
         .comparison {
             display: grid;
             grid-template-columns: 1fr 1fr;
-            gap: 30px;
+            gap: 15px;
         }
 
         .panel {
             background: rgba(255, 255, 255, 0.05);
-            border-radius: 16px;
-            padding: 20px;
+            border-radius: 12px;
+            padding: 12px;
             border: 1px solid rgba(255, 255, 255, 0.1);
         }
 
@@ -58,13 +58,13 @@
             display: flex;
             align-items: center;
             justify-content: space-between;
-            margin-bottom: 20px;
-            padding-bottom: 15px;
+            margin-bottom: 10px;
+            padding-bottom: 8px;
             border-bottom: 1px solid rgba(255, 255, 255, 0.1);
         }
 
         .panel-title {
-            font-size: 1.4rem;
+            font-size: 1.1rem;
             font-weight: 600;
         }
 
@@ -78,14 +78,14 @@
 
         .stats {
             display: flex;
-            gap: 15px;
-            font-size: 0.85rem;
+            gap: 10px;
+            font-size: 0.75rem;
         }
 
         .stat {
             background: rgba(0, 0, 0, 0.3);
-            padding: 5px 12px;
-            border-radius: 20px;
+            padding: 3px 8px;
+            border-radius: 12px;
         }
 
         .stat-value {
@@ -101,47 +101,47 @@
         .gpu-viz {
             display: grid;
             grid-template-rows: auto auto auto;
-            gap: 15px;
+            gap: 8px;
         }
 
         .warp-scheduler {
             background: rgba(255, 107, 107, 0.1);
             border: 1px solid rgba(255, 107, 107, 0.3);
-            border-radius: 12px;
-            padding: 15px;
+            border-radius: 8px;
+            padding: 8px;
         }
 
         .scheduler-header {
             display: flex;
             justify-content: space-between;
             align-items: center;
-            margin-bottom: 10px;
+            margin-bottom: 6px;
         }
 
         .scheduler-title {
-            font-size: 0.9rem;
+            font-size: 0.75rem;
             color: #ff6b6b;
             font-weight: 600;
         }
 
         .scheduler-status {
-            font-size: 0.8rem;
+            font-size: 0.7rem;
             color: #888;
         }
 
         .warps-grid {
             display: grid;
             grid-template-columns: repeat(8, 1fr);
-            gap: 6px;
+            gap: 3px;
         }
 
         .warp {
             aspect-ratio: 1;
-            border-radius: 6px;
+            border-radius: 4px;
             display: flex;
             align-items: center;
             justify-content: center;
-            font-size: 0.65rem;
+            font-size: 0.55rem;
             font-weight: bold;
             transition: all 0.3s ease;
             position: relative;
@@ -185,7 +185,7 @@
 
         .memory-section {
             display: flex;
-            gap: 15px;
+            gap: 8px;
             align-items: stretch;
         }
 
@@ -193,26 +193,26 @@
             flex: 1;
             background: rgba(156, 39, 176, 0.1);
             border: 1px solid rgba(156, 39, 176, 0.3);
-            border-radius: 12px;
-            padding: 12px;
+            border-radius: 8px;
+            padding: 8px;
         }
 
         .register-title {
-            font-size: 0.85rem;
+            font-size: 0.7rem;
             color: #9c27b0;
-            margin-bottom: 8px;
+            margin-bottom: 5px;
             font-weight: 600;
         }
 
         .register-banks {
             display: grid;
             grid-template-columns: repeat(8, 1fr);
-            gap: 3px;
+            gap: 2px;
         }
 
         .bank {
-            height: 20px;
-            border-radius: 3px;
+            height: 14px;
+            border-radius: 2px;
             background: rgba(156, 39, 176, 0.2);
             transition: all 0.2s ease;
         }
@@ -232,7 +232,7 @@
         }
 
         .memory-bus {
-            width: 80px;
+            width: 50px;
             display: flex;
             flex-direction: column;
             align-items: center;
@@ -241,10 +241,10 @@
         }
 
         .bus-label {
-            font-size: 0.7rem;
+            font-size: 0.6rem;
             color: #666;
             text-align: center;
-            margin-bottom: 5px;
+            margin-bottom: 3px;
         }
 
         .bus-arrows {
@@ -256,20 +256,20 @@
 
         .request-arrow, .reply-arrow {
             position: absolute;
-            width: 8px;
-            height: 8px;
+            width: 6px;
+            height: 6px;
             border-radius: 50%;
             animation: moveArrow 1s linear infinite;
         }
 
         .request-arrow {
             background: #ff6b6b;
-            left: 10px;
+            left: 8px;
         }
 
         .reply-arrow {
             background: #4caf50;
-            right: 10px;
+            right: 8px;
         }
 
         @keyframes moveArrow {
@@ -278,11 +278,11 @@
         }
 
         .dram-block {
-            flex: 0 0 100px;
+            flex: 0 0 70px;
             background: rgba(255, 152, 0, 0.1);
             border: 1px solid rgba(255, 152, 0, 0.3);
-            border-radius: 12px;
-            padding: 12px;
+            border-radius: 8px;
+            padding: 8px;
             display: flex;
             flex-direction: column;
             align-items: center;
@@ -290,24 +290,24 @@
         }
 
         .dram-title {
-            font-size: 0.85rem;
+            font-size: 0.7rem;
             color: #ff9800;
             font-weight: 600;
-            margin-bottom: 5px;
+            margin-bottom: 3px;
         }
 
         .dram-latency {
-            font-size: 0.75rem;
+            font-size: 0.6rem;
             color: #888;
         }
 
         .metrics-bar {
             display: flex;
-            gap: 10px;
+            gap: 6px;
             justify-content: space-around;
             background: rgba(0, 0, 0, 0.2);
-            border-radius: 8px;
-            padding: 12px;
+            border-radius: 6px;
+            padding: 6px;
         }
 
         .metric {
@@ -315,13 +315,13 @@
         }
 
         .metric-label {
-            font-size: 0.7rem;
+            font-size: 0.6rem;
             color: #888;
             margin-bottom: 3px;
         }
 
         .metric-value {
-            font-size: 1.1rem;
+            font-size: 0.85rem;
             font-weight: bold;
         }
 
@@ -337,68 +337,68 @@
         .domain-flow-viz {
             display: flex;
             flex-direction: column;
-            gap: 15px;
+            gap: 8px;
         }
 
         .pipeline-container {
             background: rgba(78, 205, 196, 0.05);
             border: 1px solid rgba(78, 205, 196, 0.2);
-            border-radius: 12px;
-            padding: 20px;
+            border-radius: 8px;
+            padding: 10px;
         }
 
         .pipeline-header {
             display: flex;
             justify-content: space-between;
             align-items: center;
-            margin-bottom: 15px;
+            margin-bottom: 8px;
         }
 
         .pipeline-title {
-            font-size: 0.9rem;
+            font-size: 0.75rem;
             color: #4ecdc4;
             font-weight: 600;
         }
 
         .flow-direction {
-            font-size: 0.75rem;
+            font-size: 0.65rem;
             color: #888;
         }
 
         .pipeline-stages {
             display: flex;
             align-items: center;
-            gap: 10px;
+            gap: 5px;
         }
 
         .stage {
             flex: 1;
             background: rgba(78, 205, 196, 0.1);
             border: 1px solid rgba(78, 205, 196, 0.3);
-            border-radius: 10px;
-            padding: 12px 8px;
+            border-radius: 6px;
+            padding: 6px 4px;
             text-align: center;
             position: relative;
         }
 
         .stage-name {
-            font-size: 0.75rem;
+            font-size: 0.6rem;
             color: #4ecdc4;
             font-weight: 600;
-            margin-bottom: 8px;
+            margin-bottom: 4px;
         }
 
         .stage-buffer {
             display: flex;
-            gap: 4px;
+            gap: 2px;
             justify-content: center;
-            margin-bottom: 8px;
+            margin-bottom: 4px;
         }
 
         .buffer-slot {
-            width: 24px;
-            height: 24px;
-            border-radius: 4px;
+            width: 16px;
+            height: 16px;
+            border-radius: 3px;
             background: rgba(255, 255, 255, 0.1);
             border: 1px solid rgba(78, 205, 196, 0.3);
             transition: all 0.3s ease;
@@ -415,7 +415,7 @@
         }
 
         .stage-credits {
-            font-size: 0.65rem;
+            font-size: 0.55rem;
             color: #888;
         }
 
@@ -426,59 +426,59 @@
 
         .flow-arrow {
             color: #4ecdc4;
-            font-size: 1.5rem;
+            font-size: 1rem;
             opacity: 0.6;
         }
 
         .data-flow-animation {
-            height: 40px;
+            height: 25px;
             position: relative;
-            margin: 15px 0;
+            margin: 8px 0;
             overflow: hidden;
         }
 
         .data-packet {
             position: absolute;
-            width: 30px;
-            height: 30px;
+            width: 20px;
+            height: 20px;
             background: linear-gradient(135deg, #4ecdc4, #44a08d);
-            border-radius: 6px;
+            border-radius: 4px;
             display: flex;
             align-items: center;
             justify-content: center;
-            font-size: 0.7rem;
+            font-size: 0.55rem;
             font-weight: bold;
             color: #fff;
             animation: flowRight 3s linear infinite;
-            top: 5px;
+            top: 2px;
         }
 
         .data-packet:nth-child(2) { animation-delay: -1s; }
         .data-packet:nth-child(3) { animation-delay: -2s; }
 
         @keyframes flowRight {
-            0% { left: -40px; opacity: 0; }
+            0% { left: -30px; opacity: 0; }
             10% { opacity: 1; }
             90% { opacity: 1; }
             100% { left: 100%; opacity: 0; }
         }
 
         .credit-flow-animation {
-            height: 25px;
+            height: 18px;
             position: relative;
             overflow: hidden;
         }
 
         .credit-packet {
             position: absolute;
-            width: 20px;
-            height: 20px;
+            width: 14px;
+            height: 14px;
             background: linear-gradient(135deg, #81c784, #66bb6a);
             border-radius: 50%;
             display: flex;
             align-items: center;
             justify-content: center;
-            font-size: 0.6rem;
+            font-size: 0.5rem;
             font-weight: bold;
             color: #fff;
             animation: flowLeft 2.5s linear infinite;
@@ -489,7 +489,7 @@
         .credit-packet:nth-child(3) { animation-delay: -1.6s; }
 
         @keyframes flowLeft {
-            0% { right: -30px; opacity: 0; }
+            0% { right: -20px; opacity: 0; }
             10% { opacity: 1; }
             90% { opacity: 1; }
             100% { right: 100%; opacity: 0; }
@@ -497,24 +497,24 @@
 
         .compute-unit {
             background: rgba(76, 175, 80, 0.1);
-            border: 2px solid rgba(76, 175, 80, 0.4);
-            border-radius: 12px;
-            padding: 15px;
+            border: 1px solid rgba(76, 175, 80, 0.4);
+            border-radius: 8px;
+            padding: 8px;
             text-align: center;
         }
 
         .compute-title {
-            font-size: 0.9rem;
+            font-size: 0.7rem;
             color: #4caf50;
             font-weight: 600;
-            margin-bottom: 10px;
+            margin-bottom: 6px;
         }
 
         .systolic-grid {
             display: grid;
             grid-template-columns: repeat(4, 1fr);
-            gap: 4px;
-            max-width: 160px;
+            gap: 2px;
+            max-width: 100px;
             margin: 0 auto;
         }
 
@@ -522,35 +522,35 @@
             aspect-ratio: 1;
             background: rgba(76, 175, 80, 0.2);
             border: 1px solid rgba(76, 175, 80, 0.4);
-            border-radius: 4px;
+            border-radius: 2px;
             transition: all 0.3s ease;
         }
 
         .pe.active {
             background: #4caf50;
-            box-shadow: 0 0 10px rgba(76, 175, 80, 0.5);
+            box-shadow: 0 0 6px rgba(76, 175, 80, 0.5);
         }
 
         .key-message {
             text-align: center;
-            padding: 15px;
+            padding: 8px;
             background: rgba(0, 0, 0, 0.2);
-            border-radius: 10px;
-            margin-top: 15px;
+            border-radius: 6px;
+            margin-top: 8px;
         }
 
         .gpu-panel .key-message {
-            border-left: 3px solid #ff6b6b;
+            border-left: 2px solid #ff6b6b;
         }
 
         .domain-flow-panel .key-message {
-            border-left: 3px solid #4ecdc4;
+            border-left: 2px solid #4ecdc4;
         }
 
         .key-message p {
-            font-size: 0.9rem;
+            font-size: 0.7rem;
             color: #ccc;
-            line-height: 1.5;
+            line-height: 1.4;
         }
 
         .key-message strong {
@@ -561,18 +561,18 @@
         .controls {
             display: flex;
             justify-content: center;
-            gap: 15px;
-            margin-top: 25px;
+            gap: 10px;
+            margin-top: 12px;
         }
 
         .control-btn {
             background: rgba(255, 255, 255, 0.1);
             border: 1px solid rgba(255, 255, 255, 0.2);
             color: #fff;
-            padding: 10px 25px;
-            border-radius: 25px;
+            padding: 6px 16px;
+            border-radius: 15px;
             cursor: pointer;
-            font-size: 0.9rem;
+            font-size: 0.75rem;
             transition: all 0.3s ease;
         }
 
@@ -588,36 +588,36 @@
         .speed-control {
             display: flex;
             align-items: center;
-            gap: 10px;
+            gap: 8px;
             color: #888;
-            font-size: 0.85rem;
+            font-size: 0.7rem;
         }
 
         .speed-control input {
-            width: 100px;
+            width: 80px;
         }
 
         /* Legend */
         .legend {
             display: flex;
             justify-content: center;
-            gap: 20px;
-            margin-top: 20px;
+            gap: 12px;
+            margin-top: 10px;
             flex-wrap: wrap;
         }
 
         .legend-item {
             display: flex;
             align-items: center;
-            gap: 6px;
-            font-size: 0.8rem;
+            gap: 4px;
+            font-size: 0.65rem;
             color: #888;
         }
 
         .legend-color {
-            width: 12px;
-            height: 12px;
-            border-radius: 3px;
+            width: 10px;
+            height: 10px;
+            border-radius: 2px;
         }
 
         .legend-color.executing { background: #2196f3; }
