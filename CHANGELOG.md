@@ -7,6 +7,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added - 2026-01-16
+- **Python KPU Package** (`python/kpu/`)
+  - High-level Python API for KPU simulator with decorator-based compilation
+  - `@kpu.compile` decorator for tracing Python functions into DFX IR
+  - `kpu.Tensor` class with NumPy interoperability and operator overloading (`@`, `+`, `-`, `*`, `/`)
+  - Operator functions: `relu`, `gelu`, `silu`, `sigmoid`, `tanh`, `softmax`, `sum`, `mean`, `matmul`, `linear`
+  - `OpGraph` class for operation DAG with topological ordering and validation
+  - `DFXProgram` generation with JSON serialization/deserialization
+  - `KPURuntime` with BEHAVIORAL execution using NumPy for functional correctness
+  - Multi-fidelity support: `BEHAVIORAL`, `TRANSACTIONAL`, `CYCLE_ACCURATE` constants
+
+- **Python Package Examples and Tests** (`python/`)
+  - `examples/mnist_mlp.py` - Complete MNIST MLP example (784→128→64→10) with NumPy verification
+  - `tests/test_kpu.py` - 20 tests covering tensors, operators, compiler, DFX emitter
+  - `pyproject.toml` - Package configuration for pip installation
+  - `README.md` - Quick start guide and API documentation
+
+- **Native Bindings Infrastructure** (`python/kpu/_native/`)
+  - `kpu_native.cpp` - pybind11 bindings for optional C++ acceleration
+  - `CMakeLists.txt` - Build configuration outputting to package directory
+  - `__init__.py` - Package init with graceful fallback when bindings unavailable
+  - Supports all operators: matmul, relu, gelu, silu, sigmoid, tanh, softmax, add, sub, mul, div, neg, exp, log, sqrt
+  - FLOP counting and timing statistics
+
+- **Virtual Platform Documentation** (`docs/09-virtual-platform/`)
+  - `exaloop-integration-design.md` - Comprehensive Exaloop/Codon integration design
+  - `qemu-vs-userspace-runtime.md` - Analysis of QEMU vs user-space runtime tradeoffs
+
+### Changed - 2026-01-16
+- **Root CMakeLists.txt**
+  - Added section to build `python/kpu/_native` when `KPU_BUILD_PYTHON_BINDINGS=ON` and pybind11 available
+
 ### Changed - 2026-01-15
 - **Documentation Reorganization** (`docs/`)
   - Restructured from ~70 flat files to organized hierarchy with 9 numbered categories
@@ -758,6 +790,7 @@ See `docs/sessions/2025-11-23_schedule_generator_pipelining.md` for detailed rec
 
 ### Session Logs
 Detailed session logs are maintained in `docs/sessions/` directory:
+- `2026-01-16_python_kpu_package.md` - Python KPU package with @kpu.compile decorator and DFX IR generation
 - `2026-01-08_hbm2_hbm3_memory_controllers.md` - HBM2/HBM3 memory controllers, collapsible swimlane visualization, trace script and test fixes
 - `2026-01-07_gddr6_trace_and_bandwidth_metrics.md` - GDDR6 trace fix and memory characterization documentation
 - `2025-12-29_block_systolic_matmul_simulation.md` - Block systolic matmul bug fixes and FLIT-level tracking
