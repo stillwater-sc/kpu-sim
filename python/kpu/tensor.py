@@ -147,6 +147,54 @@ class Tensor:
         """Return True if this is a symbolic tensor (no data)."""
         return self._data is None
 
+    # ========== Shape Operations ==========
+
+    def reshape(self, *shape) -> 'Tensor':
+        """
+        Reshape tensor to new shape.
+
+        Args:
+            shape: New shape (can be a tuple or individual dimensions)
+
+        Returns:
+            Reshaped tensor
+        """
+        from .ops import reshape as ops_reshape
+
+        # Handle both reshape((2, 3)) and reshape(2, 3)
+        if len(shape) == 1 and isinstance(shape[0], (tuple, list)):
+            shape = tuple(shape[0])
+        else:
+            shape = tuple(shape)
+
+        return ops_reshape(self, shape)
+
+    def flatten(self, start_dim: int = 0, end_dim: int = -1) -> 'Tensor':
+        """
+        Flatten tensor dimensions.
+
+        Args:
+            start_dim: First dimension to flatten
+            end_dim: Last dimension to flatten
+
+        Returns:
+            Flattened tensor
+        """
+        from .ops import flatten as ops_flatten
+        return ops_flatten(self, start_dim, end_dim)
+
+    def view(self, *shape) -> 'Tensor':
+        """
+        View tensor with new shape (alias for reshape).
+
+        Args:
+            shape: New shape
+
+        Returns:
+            Reshaped tensor
+        """
+        return self.reshape(*shape)
+
     # ========== Arithmetic Operations ==========
 
     def __matmul__(self, other: 'Tensor') -> 'Tensor':

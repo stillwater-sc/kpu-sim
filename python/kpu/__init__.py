@@ -48,6 +48,14 @@ from .ops import (
     sigmoid,
     tanh,
     softmax,
+    # Normalization
+    layer_norm,
+    # Convolution
+    conv2d,
+    # Pooling
+    max_pool2d,
+    avg_pool2d,
+    adaptive_avg_pool2d,
     # Elementwise operations
     exp,
     log,
@@ -58,6 +66,8 @@ from .ops import (
     # Shape operations
     reshape,
     transpose,
+    concat,
+    flatten,
     # Matrix operations
     matmul,
     linear,
@@ -102,6 +112,17 @@ __all__ = [
     "tanh",
     "softmax",
 
+    # Operators - normalization
+    "layer_norm",
+
+    # Operators - convolution
+    "conv2d",
+
+    # Operators - pooling
+    "max_pool2d",
+    "avg_pool2d",
+    "adaptive_avg_pool2d",
+
     # Operators - elementwise
     "exp",
     "log",
@@ -114,6 +135,8 @@ __all__ = [
     # Operators - shape
     "reshape",
     "transpose",
+    "concat",
+    "flatten",
 
     # Operators - matrix
     "matmul",
@@ -162,8 +185,11 @@ def info() -> str:
 
 Supported operations:
   - Matrix: matmul, linear
+  - Convolution: conv2d
+  - Pooling: max_pool2d, avg_pool2d, adaptive_avg_pool2d
   - Activation: relu, gelu, silu, sigmoid, tanh, softmax
+  - Normalization: layer_norm
   - Elementwise: +, -, *, /, exp, log, sqrt
   - Reduction: sum, mean
-  - Shape: reshape, transpose
+  - Shape: reshape, transpose, concat, flatten
 """

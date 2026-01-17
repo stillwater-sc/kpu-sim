@@ -293,6 +293,183 @@ class TestMNISTMLP:
         np.testing.assert_allclose(result.numpy(), expected, rtol=1e-5)
 
 
+class TestCNNOperators:
+    """Tests for CNN operators (conv2d, pooling, etc.)."""
+
+    def setup_method(self):
+        """Set up behavioral fidelity for each test."""
+        kpu.set_fidelity(kpu.BEHAVIORAL)
+
+    def test_conv2d_basic(self):
+        """Test basic 2D convolution."""
+        # Input: [batch=1, channels=1, height=4, width=4]
+        x = kpu.Tensor(np.ones((1, 1, 4, 4), dtype=np.float32))
+        # Kernel: [out_channels=1, in_channels=1, kh=3, kw=3]
+        w = kpu.Tensor(np.ones((1, 1, 3, 3), dtype=np.float32))
+
+        y = kpu.conv2d(x, w)
+
+        # Output should be [1, 1, 2, 2] with all 9s (sum of 3x3 ones)
+        assert y.shape == (1, 1, 2, 2)
+        np.testing.assert_allclose(y.numpy(), np.full((1, 1, 2, 2), 9.0), rtol=1e-5)
+
+    def test_conv2d_with_padding(self):
+        """Test conv2d with padding."""
+        x = kpu.Tensor(np.ones((1, 1, 4, 4), dtype=np.float32))
+        w = kpu.Tensor(np.ones((1, 1, 3, 3), dtype=np.float32))
+
+        y = kpu.conv2d(x, w, padding=1)
+
+        # With padding=1, output should be same size as input
+        assert y.shape == (1, 1, 4, 4)
+
+    def test_conv2d_with_stride(self):
+        """Test conv2d with stride."""
+        x = kpu.Tensor(np.ones((1, 1, 8, 8), dtype=np.float32))
+        w = kpu.Tensor(np.ones((2, 1, 3, 3), dtype=np.float32))
+
+        y = kpu.conv2d(x, w, stride=2)
+
+        # Stride=2 should halve spatial dimensions (approximately)
+        assert y.shape == (1, 2, 3, 3)
+
+    def test_max_pool2d(self):
+        """Test 2D max pooling."""
+        x_data = np.array([[[[1, 2, 3, 4],
+                             [5, 6, 7, 8],
+                             [9, 10, 11, 12],
+                             [13, 14, 15, 16]]]], dtype=np.float32)
+        x = kpu.Tensor(x_data)
+
+        y = kpu.max_pool2d(x, kernel_size=2, stride=2)
+
+        expected = np.array([[[[6, 8],
+                               [14, 16]]]], dtype=np.float32)
+        assert y.shape == (1, 1, 2, 2)
+        np.testing.assert_array_equal(y.numpy(), expected)
+
+    def test_avg_pool2d(self):
+        """Test 2D average pooling."""
+        x_data = np.array([[[[1, 2, 3, 4],
+                             [5, 6, 7, 8],
+                             [9, 10, 11, 12],
+                             [13, 14, 15, 16]]]], dtype=np.float32)
+        x = kpu.Tensor(x_data)
+
+        y = kpu.avg_pool2d(x, kernel_size=2, stride=2)
+
+        # Each 2x2 region averaged
+        expected = np.array([[[[3.5, 5.5],
+                               [11.5, 13.5]]]], dtype=np.float32)
+        assert y.shape == (1, 1, 2, 2)
+        np.testing.assert_allclose(y.numpy(), expected, rtol=1e-5)
+
+    def test_adaptive_avg_pool2d(self):
+        """Test adaptive average pooling."""
+        x = kpu.Tensor(np.ones((1, 1, 8, 8), dtype=np.float32))
+
+        y = kpu.adaptive_avg_pool2d(x, output_size=(1, 1))
+
+        assert y.shape == (1, 1, 1, 1)
+        np.testing.assert_allclose(y.numpy(), np.ones((1, 1, 1, 1)), rtol=1e-5)
+
+    def test_layer_norm(self):
+        """Test layer normalization."""
+        x = kpu.Tensor(np.array([[1, 2, 3], [4, 5, 6]], dtype=np.float32))
+
+        y = kpu.layer_norm(x, normalized_shape=3)
+
+        # Each row should be normalized (mean=0, std=1)
+        y_np = y.numpy()
+        np.testing.assert_allclose(y_np.mean(axis=-1), [0, 0], atol=1e-5)
+        np.testing.assert_allclose(y_np.std(axis=-1), [1, 1], atol=0.1)
+
+    def test_concat(self):
+        """Test tensor concatenation."""
+        a = kpu.Tensor(np.array([[1, 2], [3, 4]], dtype=np.float32))
+        b = kpu.Tensor(np.array([[5, 6], [7, 8]], dtype=np.float32))
+
+        # Concat along dim 0
+        c = kpu.concat([a, b], dim=0)
+        assert c.shape == (4, 2)
+        np.testing.assert_array_equal(c.numpy(), [[1, 2], [3, 4], [5, 6], [7, 8]])
+
+        # Concat along dim 1
+        d = kpu.concat([a, b], dim=1)
+        assert d.shape == (2, 4)
+        np.testing.assert_array_equal(d.numpy(), [[1, 2, 5, 6], [3, 4, 7, 8]])
+
+    def test_reshape(self):
+        """Test tensor reshape."""
+        x = kpu.Tensor(np.arange(12, dtype=np.float32))
+
+        y = kpu.reshape(x, (3, 4))
+        assert y.shape == (3, 4)
+
+        # Test with -1
+        z = kpu.reshape(x, (2, -1))
+        assert z.shape == (2, 6)
+
+    def test_tensor_reshape_method(self):
+        """Test Tensor.reshape() method."""
+        x = kpu.Tensor(np.arange(12, dtype=np.float32))
+
+        y = x.reshape(3, 4)
+        assert y.shape == (3, 4)
+
+        z = x.reshape((2, 6))
+        assert z.shape == (2, 6)
+
+    def test_flatten(self):
+        """Test tensor flatten."""
+        x = kpu.Tensor(np.ones((2, 3, 4), dtype=np.float32))
+
+        y = kpu.flatten(x, start_dim=1)
+        assert y.shape == (2, 12)
+
+        z = x.flatten(start_dim=0)
+        assert z.shape == (24,)
+
+
+class TestSimpleCNN:
+    """Integration test for simple CNN."""
+
+    def setup_method(self):
+        """Set up behavioral fidelity for each test."""
+        kpu.set_fidelity(kpu.BEHAVIORAL)
+
+    def test_simple_cnn(self):
+        """Test simple Conv -> ReLU -> Pool -> FC architecture."""
+        @kpu.compile
+        def simple_cnn(x, conv_w, fc_w, fc_b):
+            # Conv: [1, 1, 8, 8] -> [1, 4, 6, 6]
+            h = kpu.relu(kpu.conv2d(x, conv_w))
+            # Pool: [1, 4, 6, 6] -> [1, 4, 3, 3]
+            h = kpu.max_pool2d(h, kernel_size=2, stride=2)
+            # Flatten: [1, 4, 3, 3] -> [1, 36]
+            h = h.reshape(h.shape[0], -1)
+            # FC: [1, 36] -> [1, 10]
+            return h @ fc_w + fc_b
+
+        np.random.seed(42)
+        x = kpu.Tensor(np.random.randn(1, 1, 8, 8).astype(np.float32))
+        conv_w = kpu.Tensor(np.random.randn(4, 1, 3, 3).astype(np.float32) * 0.1)
+        fc_w = kpu.Tensor(np.random.randn(36, 10).astype(np.float32) * 0.1)
+        fc_b = kpu.Tensor(np.zeros(10, dtype=np.float32))
+
+        result = simple_cnn(x, conv_w, fc_w, fc_b)
+
+        assert result.shape == (1, 10)
+        # Verify DFX generation includes new ops
+        dfx = simple_cnn.get_dfx()
+        op_types = [op.opcode.value for op in dfx.ops]
+        assert 'conv2d' in op_types
+        assert 'relu' in op_types
+        assert 'maxpool2d' in op_types
+        assert 'reshape' in op_types
+        assert 'matmul' in op_types
+
+
 class TestDFXEmitter:
     """Tests for DFX IR emission."""
 

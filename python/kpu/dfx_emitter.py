@@ -62,6 +62,10 @@ class DFXOpCode(Enum):
     TANH = "tanh"
     SOFTMAX = "softmax"
 
+    # Compute - normalization
+    LAYER_NORM = "layer_norm"
+    BATCH_NORM = "batch_norm"
+
     # Compute - elementwise
     ADD = "add"
     SUB = "sub"
@@ -77,6 +81,17 @@ class DFXOpCode(Enum):
     MEAN = "mean"
     MAX = "max"
     MIN = "min"
+
+    # Compute - pooling
+    MAXPOOL2D = "maxpool2d"
+    AVGPOOL2D = "avgpool2d"
+    ADAPTIVE_AVGPOOL2D = "adaptive_avgpool2d"
+
+    # Shape operations
+    RESHAPE = "reshape"
+    TRANSPOSE = "transpose"
+    CONCAT = "concat"
+    FLATTEN = "flatten"
 
     # Control
     BARRIER = "barrier"
@@ -330,12 +345,15 @@ class DFXEmitter:
         # Map OpType to DFXOpCode
         op_map = {
             OpType.MATMUL: DFXOpCode.MATMUL,
+            OpType.CONV2D: DFXOpCode.CONV2D,
             OpType.RELU: DFXOpCode.RELU,
             OpType.GELU: DFXOpCode.GELU,
             OpType.SILU: DFXOpCode.SILU,
             OpType.SIGMOID: DFXOpCode.SIGMOID,
             OpType.TANH: DFXOpCode.TANH,
             OpType.SOFTMAX: DFXOpCode.SOFTMAX,
+            OpType.LAYER_NORM: DFXOpCode.LAYER_NORM,
+            OpType.BATCH_NORM: DFXOpCode.BATCH_NORM,
             OpType.ADD: DFXOpCode.ADD,
             OpType.SUB: DFXOpCode.SUB,
             OpType.MUL: DFXOpCode.MUL,
@@ -348,6 +366,13 @@ class DFXEmitter:
             OpType.MEAN: DFXOpCode.MEAN,
             OpType.MAX: DFXOpCode.MAX,
             OpType.MIN: DFXOpCode.MIN,
+            OpType.MAXPOOL2D: DFXOpCode.MAXPOOL2D,
+            OpType.AVGPOOL2D: DFXOpCode.AVGPOOL2D,
+            OpType.ADAPTIVE_AVGPOOL2D: DFXOpCode.ADAPTIVE_AVGPOOL2D,
+            OpType.RESHAPE: DFXOpCode.RESHAPE,
+            OpType.TRANSPOSE: DFXOpCode.TRANSPOSE,
+            OpType.CONCAT: DFXOpCode.CONCAT,
+            OpType.FLATTEN: DFXOpCode.FLATTEN,
         }
 
         if node.op_type not in op_map:

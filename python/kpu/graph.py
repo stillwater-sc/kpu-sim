@@ -24,6 +24,9 @@ class OpType(Enum):
     # Matrix operations
     MATMUL = "matmul"
 
+    # Convolution operations
+    CONV2D = "conv2d"
+
     # Activation functions
     RELU = "relu"
     GELU = "gelu"
@@ -31,6 +34,10 @@ class OpType(Enum):
     SOFTMAX = "softmax"
     SIGMOID = "sigmoid"
     TANH = "tanh"
+
+    # Normalization
+    LAYER_NORM = "layer_norm"
+    BATCH_NORM = "batch_norm"
 
     # Elementwise binary operations
     ADD = "add"
@@ -50,9 +57,16 @@ class OpType(Enum):
     MAX = "max"
     MIN = "min"
 
+    # Pooling operations
+    MAXPOOL2D = "maxpool2d"
+    AVGPOOL2D = "avgpool2d"
+    ADAPTIVE_AVGPOOL2D = "adaptive_avgpool2d"
+
     # Reshape operations
     RESHAPE = "reshape"
     TRANSPOSE = "transpose"
+    CONCAT = "concat"
+    FLATTEN = "flatten"
 
     def is_compute(self) -> bool:
         """Return True if this is a compute operation (not data movement)."""
@@ -76,6 +90,18 @@ class OpType(Enum):
     def is_reduction(self) -> bool:
         """Return True if this is a reduction operation."""
         return self in (OpType.SUM, OpType.MEAN, OpType.MAX, OpType.MIN, OpType.SOFTMAX)
+
+    def is_pooling(self) -> bool:
+        """Return True if this is a pooling operation."""
+        return self in (OpType.MAXPOOL2D, OpType.AVGPOOL2D, OpType.ADAPTIVE_AVGPOOL2D)
+
+    def is_conv(self) -> bool:
+        """Return True if this is a convolution operation."""
+        return self == OpType.CONV2D
+
+    def is_normalization(self) -> bool:
+        """Return True if this is a normalization operation."""
+        return self in (OpType.LAYER_NORM, OpType.BATCH_NORM)
 
 
 @dataclass

@@ -232,6 +232,166 @@ class KPURuntime:
             if result.ndim == 0:
                 result = np.atleast_1d(result)
 
+        elif op.opcode == DFXOpCode.LAYER_NORM:
+            x = inputs[0]
+            normalized_shape = op.attrs.get('normalized_shape', (x.shape[-1],))
+            eps = op.attrs.get('eps', 1e-5)
+            ndim = len(normalized_shape)
+            axes = tuple(range(-ndim, 0))
+            mean = np.mean(x, axis=axes, keepdims=True)
+            var = np.var(x, axis=axes, keepdims=True)
+            result = (x - mean) / np.sqrt(var + eps)
+            # Apply scale and bias if provided
+            if len(inputs) > 1:
+                result = result * inputs[1]
+            if len(inputs) > 2:
+                result = result + inputs[2]
+
+        elif op.opcode == DFXOpCode.CONV2D:
+            x = inputs[0]
+            weight = inputs[1]
+            stride = op.attrs.get('stride', (1, 1))
+            padding = op.attrs.get('padding', (0, 0))
+            dilation = op.attrs.get('dilation', (1, 1))
+
+            N, C_in, H_in, W_in = x.shape
+            C_out, C_in_per_group, K_h, K_w = weight.shape
+
+            H_out = (H_in + 2 * padding[0] - dilation[0] * (K_h - 1) - 1) // stride[0] + 1
+            W_out = (W_in + 2 * padding[1] - dilation[1] * (K_w - 1) - 1) // stride[1] + 1
+
+            # Pad input
+            if padding[0] > 0 or padding[1] > 0:
+                x_padded = np.pad(x, ((0, 0), (0, 0),
+                                      (padding[0], padding[0]),
+                                      (padding[1], padding[1])), mode='constant')
+            else:
+                x_padded = x
+
+            result = np.zeros((N, C_out, H_out, W_out), dtype=x.dtype)
+            for n in range(N):
+                for c_out in range(C_out):
+                    for h_out in range(H_out):
+                        for w_out in range(W_out):
+                            h_start = h_out * stride[0]
+                            w_start = w_out * stride[1]
+                            val = 0.0
+                            for c_in in range(C_in_per_group):
+                                for kh in range(K_h):
+                                    for kw in range(K_w):
+                                        h_in = h_start + kh * dilation[0]
+                                        w_in = w_start + kw * dilation[1]
+                                        val += x_padded[n, c_in, h_in, w_in] * weight[c_out, c_in, kh, kw]
+                            result[n, c_out, h_out, w_out] = val
+
+            # Add bias if provided
+            if len(inputs) > 2:
+                result = result + inputs[2].reshape(1, -1, 1, 1)
+
+        elif op.opcode == DFXOpCode.MAXPOOL2D:
+            x = inputs[0]
+            kernel_size = op.attrs.get('kernel_size', (2, 2))
+            stride = op.attrs.get('stride', kernel_size)
+            padding = op.attrs.get('padding', (0, 0))
+
+            N, C, H_in, W_in = x.shape
+            K_h, K_w = kernel_size
+            H_out = (H_in + 2 * padding[0] - K_h) // stride[0] + 1
+            W_out = (W_in + 2 * padding[1] - K_w) // stride[1] + 1
+
+            if padding[0] > 0 or padding[1] > 0:
+                x_padded = np.pad(x, ((0, 0), (0, 0),
+                                      (padding[0], padding[0]),
+                                      (padding[1], padding[1])),
+                                  mode='constant', constant_values=-np.inf)
+            else:
+                x_padded = x
+
+            result = np.zeros((N, C, H_out, W_out), dtype=x.dtype)
+            for n in range(N):
+                for c in range(C):
+                    for h_out in range(H_out):
+                        for w_out in range(W_out):
+                            h_start = h_out * stride[0]
+                            w_start = w_out * stride[1]
+                            window = x_padded[n, c, h_start:h_start+K_h, w_start:w_start+K_w]
+                            result[n, c, h_out, w_out] = np.max(window)
+
+        elif op.opcode == DFXOpCode.AVGPOOL2D:
+            x = inputs[0]
+            kernel_size = op.attrs.get('kernel_size', (2, 2))
+            stride = op.attrs.get('stride', kernel_size)
+            padding = op.attrs.get('padding', (0, 0))
+
+            N, C, H_in, W_in = x.shape
+            K_h, K_w = kernel_size
+            H_out = (H_in + 2 * padding[0] - K_h) // stride[0] + 1
+            W_out = (W_in + 2 * padding[1] - K_w) // stride[1] + 1
+
+            if padding[0] > 0 or padding[1] > 0:
+                x_padded = np.pad(x, ((0, 0), (0, 0),
+                                      (padding[0], padding[0]),
+                                      (padding[1], padding[1])), mode='constant')
+            else:
+                x_padded = x
+
+            result = np.zeros((N, C, H_out, W_out), dtype=x.dtype)
+            for n in range(N):
+                for c in range(C):
+                    for h_out in range(H_out):
+                        for w_out in range(W_out):
+                            h_start = h_out * stride[0]
+                            w_start = w_out * stride[1]
+                            window = x_padded[n, c, h_start:h_start+K_h, w_start:w_start+K_w]
+                            result[n, c, h_out, w_out] = np.mean(window)
+
+        elif op.opcode == DFXOpCode.ADAPTIVE_AVGPOOL2D:
+            x = inputs[0]
+            output_size = op.attrs.get('output_size', (1, 1))
+            N, C, H_in, W_in = x.shape
+            H_out, W_out = output_size
+
+            result = np.zeros((N, C, H_out, W_out), dtype=x.dtype)
+            for n in range(N):
+                for c in range(C):
+                    for h_out in range(H_out):
+                        for w_out in range(W_out):
+                            h_start = (h_out * H_in) // H_out
+                            h_end = ((h_out + 1) * H_in) // H_out
+                            w_start = (w_out * W_in) // W_out
+                            w_end = ((w_out + 1) * W_in) // W_out
+                            window = x[n, c, h_start:h_end, w_start:w_end]
+                            result[n, c, h_out, w_out] = np.mean(window)
+
+        elif op.opcode == DFXOpCode.CONCAT:
+            dim = op.attrs.get('dim', 0)
+            result = np.concatenate(inputs, axis=dim)
+
+        elif op.opcode == DFXOpCode.RESHAPE:
+            shape = op.attrs.get('shape')
+            result = inputs[0].reshape(shape)
+
+        elif op.opcode == DFXOpCode.TRANSPOSE:
+            axes = op.attrs.get('axes')
+            result = np.transpose(inputs[0], axes)
+
+        elif op.opcode == DFXOpCode.FLATTEN:
+            start_dim = op.attrs.get('start_dim', 0)
+            end_dim = op.attrs.get('end_dim', -1)
+            x = inputs[0]
+            ndim = x.ndim
+            if start_dim < 0:
+                start_dim = ndim + start_dim
+            if end_dim < 0:
+                end_dim = ndim + end_dim
+            new_shape = list(x.shape[:start_dim])
+            flat_size = 1
+            for i in range(start_dim, end_dim + 1):
+                flat_size *= x.shape[i]
+            new_shape.append(flat_size)
+            new_shape.extend(x.shape[end_dim + 1:])
+            result = x.reshape(new_shape)
+
         else:
             raise NotImplementedError(f"Op {op.opcode} not implemented in behavioral runtime")
 
