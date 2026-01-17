@@ -1,0 +1,1094 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>The Latency Hiding Burden - GPU vs Domain Flow</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+            color: #fff;
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+        }
+
+        h1 {
+            text-align: center;
+            font-size: 2rem;
+            margin-bottom: 10px;
+            background: linear-gradient(90deg, #ff6b6b, #4ecdc4);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+
+        .subtitle {
+            text-align: center;
+            color: #888;
+            margin-bottom: 30px;
+            font-size: 1.1rem;
+        }
+
+        .comparison {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 30px;
+        }
+
+        .panel {
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 16px;
+            padding: 20px;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        .panel-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 20px;
+            padding-bottom: 15px;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        .panel-title {
+            font-size: 1.4rem;
+            font-weight: 600;
+        }
+
+        .gpu-panel .panel-title {
+            color: #ff6b6b;
+        }
+
+        .domain-flow-panel .panel-title {
+            color: #4ecdc4;
+        }
+
+        .stats {
+            display: flex;
+            gap: 15px;
+            font-size: 0.85rem;
+        }
+
+        .stat {
+            background: rgba(0, 0, 0, 0.3);
+            padding: 5px 12px;
+            border-radius: 20px;
+        }
+
+        .stat-value {
+            font-weight: bold;
+            color: #4ecdc4;
+        }
+
+        .gpu-panel .stat-value {
+            color: #ff6b6b;
+        }
+
+        /* GPU Visualization */
+        .gpu-viz {
+            display: grid;
+            grid-template-rows: auto auto auto;
+            gap: 15px;
+        }
+
+        .warp-scheduler {
+            background: rgba(255, 107, 107, 0.1);
+            border: 1px solid rgba(255, 107, 107, 0.3);
+            border-radius: 12px;
+            padding: 15px;
+        }
+
+        .scheduler-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 10px;
+        }
+
+        .scheduler-title {
+            font-size: 0.9rem;
+            color: #ff6b6b;
+            font-weight: 600;
+        }
+
+        .scheduler-status {
+            font-size: 0.8rem;
+            color: #888;
+        }
+
+        .warps-grid {
+            display: grid;
+            grid-template-columns: repeat(8, 1fr);
+            gap: 6px;
+        }
+
+        .warp {
+            aspect-ratio: 1;
+            border-radius: 6px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 0.65rem;
+            font-weight: bold;
+            transition: all 0.3s ease;
+            position: relative;
+        }
+
+        .warp.waiting {
+            background: rgba(255, 193, 7, 0.2);
+            border: 1px solid rgba(255, 193, 7, 0.5);
+            color: #ffc107;
+        }
+
+        .warp.ready {
+            background: rgba(76, 175, 80, 0.2);
+            border: 1px solid rgba(76, 175, 80, 0.5);
+            color: #4caf50;
+        }
+
+        .warp.executing {
+            background: rgba(33, 150, 243, 0.3);
+            border: 2px solid #2196f3;
+            color: #2196f3;
+            animation: pulse 0.5s ease infinite;
+        }
+
+        .warp.stalled {
+            background: rgba(244, 67, 54, 0.2);
+            border: 1px solid rgba(244, 67, 54, 0.5);
+            color: #f44336;
+        }
+
+        .warp.idle {
+            background: rgba(100, 100, 100, 0.1);
+            border: 1px solid rgba(100, 100, 100, 0.3);
+            color: #666;
+        }
+
+        @keyframes pulse {
+            0%, 100% { transform: scale(1); }
+            50% { transform: scale(1.1); }
+        }
+
+        .memory-section {
+            display: flex;
+            gap: 15px;
+            align-items: stretch;
+        }
+
+        .register-file {
+            flex: 1;
+            background: rgba(156, 39, 176, 0.1);
+            border: 1px solid rgba(156, 39, 176, 0.3);
+            border-radius: 12px;
+            padding: 12px;
+        }
+
+        .register-title {
+            font-size: 0.85rem;
+            color: #9c27b0;
+            margin-bottom: 8px;
+            font-weight: 600;
+        }
+
+        .register-banks {
+            display: grid;
+            grid-template-columns: repeat(8, 1fr);
+            gap: 3px;
+        }
+
+        .bank {
+            height: 20px;
+            border-radius: 3px;
+            background: rgba(156, 39, 176, 0.2);
+            transition: all 0.2s ease;
+        }
+
+        .bank.active {
+            background: #9c27b0;
+        }
+
+        .bank.conflict {
+            background: #f44336;
+            animation: flash 0.3s ease infinite;
+        }
+
+        @keyframes flash {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+
+        .memory-bus {
+            width: 80px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            position: relative;
+        }
+
+        .bus-label {
+            font-size: 0.7rem;
+            color: #666;
+            text-align: center;
+            margin-bottom: 5px;
+        }
+
+        .bus-arrows {
+            flex: 1;
+            width: 100%;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .request-arrow, .reply-arrow {
+            position: absolute;
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            animation: moveArrow 1s linear infinite;
+        }
+
+        .request-arrow {
+            background: #ff6b6b;
+            left: 10px;
+        }
+
+        .reply-arrow {
+            background: #4caf50;
+            right: 10px;
+        }
+
+        @keyframes moveArrow {
+            0% { top: 0%; opacity: 1; }
+            100% { top: 100%; opacity: 0.3; }
+        }
+
+        .dram-block {
+            flex: 0 0 100px;
+            background: rgba(255, 152, 0, 0.1);
+            border: 1px solid rgba(255, 152, 0, 0.3);
+            border-radius: 12px;
+            padding: 12px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .dram-title {
+            font-size: 0.85rem;
+            color: #ff9800;
+            font-weight: 600;
+            margin-bottom: 5px;
+        }
+
+        .dram-latency {
+            font-size: 0.75rem;
+            color: #888;
+        }
+
+        .metrics-bar {
+            display: flex;
+            gap: 10px;
+            justify-content: space-around;
+            background: rgba(0, 0, 0, 0.2);
+            border-radius: 8px;
+            padding: 12px;
+        }
+
+        .metric {
+            text-align: center;
+        }
+
+        .metric-label {
+            font-size: 0.7rem;
+            color: #888;
+            margin-bottom: 3px;
+        }
+
+        .metric-value {
+            font-size: 1.1rem;
+            font-weight: bold;
+        }
+
+        .metric-value.bad {
+            color: #ff6b6b;
+        }
+
+        .metric-value.good {
+            color: #4ecdc4;
+        }
+
+        /* Domain Flow Visualization */
+        .domain-flow-viz {
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+        }
+
+        .pipeline-container {
+            background: rgba(78, 205, 196, 0.05);
+            border: 1px solid rgba(78, 205, 196, 0.2);
+            border-radius: 12px;
+            padding: 20px;
+        }
+
+        .pipeline-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 15px;
+        }
+
+        .pipeline-title {
+            font-size: 0.9rem;
+            color: #4ecdc4;
+            font-weight: 600;
+        }
+
+        .flow-direction {
+            font-size: 0.75rem;
+            color: #888;
+        }
+
+        .pipeline-stages {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .stage {
+            flex: 1;
+            background: rgba(78, 205, 196, 0.1);
+            border: 1px solid rgba(78, 205, 196, 0.3);
+            border-radius: 10px;
+            padding: 12px 8px;
+            text-align: center;
+            position: relative;
+        }
+
+        .stage-name {
+            font-size: 0.75rem;
+            color: #4ecdc4;
+            font-weight: 600;
+            margin-bottom: 8px;
+        }
+
+        .stage-buffer {
+            display: flex;
+            gap: 4px;
+            justify-content: center;
+            margin-bottom: 8px;
+        }
+
+        .buffer-slot {
+            width: 24px;
+            height: 24px;
+            border-radius: 4px;
+            background: rgba(255, 255, 255, 0.1);
+            border: 1px solid rgba(78, 205, 196, 0.3);
+            transition: all 0.3s ease;
+        }
+
+        .buffer-slot.filled {
+            background: #4ecdc4;
+            border-color: #4ecdc4;
+        }
+
+        .buffer-slot.filling {
+            background: linear-gradient(to top, #4ecdc4 50%, transparent 50%);
+            animation: fill 0.5s ease;
+        }
+
+        .stage-credits {
+            font-size: 0.65rem;
+            color: #888;
+        }
+
+        .credit-indicator {
+            color: #81c784;
+            font-weight: bold;
+        }
+
+        .flow-arrow {
+            color: #4ecdc4;
+            font-size: 1.5rem;
+            opacity: 0.6;
+        }
+
+        .data-flow-animation {
+            height: 40px;
+            position: relative;
+            margin: 15px 0;
+            overflow: hidden;
+        }
+
+        .data-packet {
+            position: absolute;
+            width: 30px;
+            height: 30px;
+            background: linear-gradient(135deg, #4ecdc4, #44a08d);
+            border-radius: 6px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 0.7rem;
+            font-weight: bold;
+            color: #fff;
+            animation: flowRight 3s linear infinite;
+            top: 5px;
+        }
+
+        .data-packet:nth-child(2) { animation-delay: -1s; }
+        .data-packet:nth-child(3) { animation-delay: -2s; }
+
+        @keyframes flowRight {
+            0% { left: -40px; opacity: 0; }
+            10% { opacity: 1; }
+            90% { opacity: 1; }
+            100% { left: 100%; opacity: 0; }
+        }
+
+        .credit-flow-animation {
+            height: 25px;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .credit-packet {
+            position: absolute;
+            width: 20px;
+            height: 20px;
+            background: linear-gradient(135deg, #81c784, #66bb6a);
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 0.6rem;
+            font-weight: bold;
+            color: #fff;
+            animation: flowLeft 2.5s linear infinite;
+            top: 2px;
+        }
+
+        .credit-packet:nth-child(2) { animation-delay: -0.8s; }
+        .credit-packet:nth-child(3) { animation-delay: -1.6s; }
+
+        @keyframes flowLeft {
+            0% { right: -30px; opacity: 0; }
+            10% { opacity: 1; }
+            90% { opacity: 1; }
+            100% { right: 100%; opacity: 0; }
+        }
+
+        .compute-unit {
+            background: rgba(76, 175, 80, 0.1);
+            border: 2px solid rgba(76, 175, 80, 0.4);
+            border-radius: 12px;
+            padding: 15px;
+            text-align: center;
+        }
+
+        .compute-title {
+            font-size: 0.9rem;
+            color: #4caf50;
+            font-weight: 600;
+            margin-bottom: 10px;
+        }
+
+        .systolic-grid {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 4px;
+            max-width: 160px;
+            margin: 0 auto;
+        }
+
+        .pe {
+            aspect-ratio: 1;
+            background: rgba(76, 175, 80, 0.2);
+            border: 1px solid rgba(76, 175, 80, 0.4);
+            border-radius: 4px;
+            transition: all 0.3s ease;
+        }
+
+        .pe.active {
+            background: #4caf50;
+            box-shadow: 0 0 10px rgba(76, 175, 80, 0.5);
+        }
+
+        .key-message {
+            text-align: center;
+            padding: 15px;
+            background: rgba(0, 0, 0, 0.2);
+            border-radius: 10px;
+            margin-top: 15px;
+        }
+
+        .gpu-panel .key-message {
+            border-left: 3px solid #ff6b6b;
+        }
+
+        .domain-flow-panel .key-message {
+            border-left: 3px solid #4ecdc4;
+        }
+
+        .key-message p {
+            font-size: 0.9rem;
+            color: #ccc;
+            line-height: 1.5;
+        }
+
+        .key-message strong {
+            color: #fff;
+        }
+
+        /* Controls */
+        .controls {
+            display: flex;
+            justify-content: center;
+            gap: 15px;
+            margin-top: 25px;
+        }
+
+        .control-btn {
+            background: rgba(255, 255, 255, 0.1);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            color: #fff;
+            padding: 10px 25px;
+            border-radius: 25px;
+            cursor: pointer;
+            font-size: 0.9rem;
+            transition: all 0.3s ease;
+        }
+
+        .control-btn:hover {
+            background: rgba(255, 255, 255, 0.2);
+        }
+
+        .control-btn.primary {
+            background: linear-gradient(135deg, #4ecdc4, #44a08d);
+            border: none;
+        }
+
+        .speed-control {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            color: #888;
+            font-size: 0.85rem;
+        }
+
+        .speed-control input {
+            width: 100px;
+        }
+
+        /* Legend */
+        .legend {
+            display: flex;
+            justify-content: center;
+            gap: 20px;
+            margin-top: 20px;
+            flex-wrap: wrap;
+        }
+
+        .legend-item {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            font-size: 0.8rem;
+            color: #888;
+        }
+
+        .legend-color {
+            width: 12px;
+            height: 12px;
+            border-radius: 3px;
+        }
+
+        .legend-color.executing { background: #2196f3; }
+        .legend-color.waiting { background: #ffc107; }
+        .legend-color.ready { background: #4caf50; }
+        .legend-color.stalled { background: #f44336; }
+        .legend-color.data { background: #4ecdc4; }
+        .legend-color.credit { background: #81c784; }
+
+        @media (max-width: 1200px) {
+            .comparison {
+                grid-template-columns: 1fr;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>The Latency Hiding Burden</h1>
+        <p class="subtitle">How GPU and Domain Flow architectures handle memory latency differently</p>
+
+        <div class="comparison">
+            <!-- GPU Panel -->
+            <div class="panel gpu-panel">
+                <div class="panel-header">
+                    <div class="panel-title">GPU (Stored Program)</div>
+                    <div class="stats">
+                        <div class="stat">Cycle: <span class="stat-value" id="gpu-cycle">0</span></div>
+                        <div class="stat">Ops: <span class="stat-value" id="gpu-ops">0</span></div>
+                    </div>
+                </div>
+
+                <div class="gpu-viz">
+                    <div class="warp-scheduler">
+                        <div class="scheduler-header">
+                            <span class="scheduler-title">Warp Scheduler</span>
+                            <span class="scheduler-status" id="scheduler-status">Selecting warp...</span>
+                        </div>
+                        <div class="warps-grid" id="warps-grid">
+                            <!-- Warps generated by JS -->
+                        </div>
+                    </div>
+
+                    <div class="memory-section">
+                        <div class="register-file">
+                            <div class="register-title">Register File (64K Registers)</div>
+                            <div class="register-banks" id="register-banks">
+                                <!-- Banks generated by JS -->
+                            </div>
+                            <div style="font-size: 0.7rem; color: #666; margin-top: 8px; text-align: center;">
+                                Each warp needs dedicated registers while waiting
+                            </div>
+                        </div>
+
+                        <div class="memory-bus">
+                            <div class="bus-label">Memory<br>Bus</div>
+                            <div class="bus-arrows" id="bus-arrows">
+                                <!-- Arrows generated by JS -->
+                            </div>
+                        </div>
+
+                        <div class="dram-block">
+                            <div class="dram-title">DRAM</div>
+                            <div class="dram-latency">~200 cycles</div>
+                        </div>
+                    </div>
+
+                    <div class="metrics-bar">
+                        <div class="metric">
+                            <div class="metric-label">Active Warps</div>
+                            <div class="metric-value bad" id="active-warps">1/32</div>
+                        </div>
+                        <div class="metric">
+                            <div class="metric-label">Waiting</div>
+                            <div class="metric-value bad" id="waiting-warps">28</div>
+                        </div>
+                        <div class="metric">
+                            <div class="metric-label">Bank Conflicts</div>
+                            <div class="metric-value bad" id="bank-conflicts">0</div>
+                        </div>
+                        <div class="metric">
+                            <div class="metric-label">Efficiency</div>
+                            <div class="metric-value bad" id="gpu-efficiency">12%</div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="key-message">
+                    <p><strong>The Problem:</strong> GPUs must juggle 32+ warps to hide memory latency.
+                    Each waiting warp holds registers hostage. Bank conflicts cause stalls.
+                    Most cycles are spent on <strong>scheduling overhead</strong>, not compute.</p>
+                </div>
+            </div>
+
+            <!-- Domain Flow Panel -->
+            <div class="panel domain-flow-panel">
+                <div class="panel-header">
+                    <div class="panel-title">Domain Flow (KPU)</div>
+                    <div class="stats">
+                        <div class="stat">Cycle: <span class="stat-value" id="df-cycle">0</span></div>
+                        <div class="stat">Ops: <span class="stat-value" id="df-ops">0</span></div>
+                    </div>
+                </div>
+
+                <div class="domain-flow-viz">
+                    <div class="pipeline-container">
+                        <div class="pipeline-header">
+                            <span class="pipeline-title">Credit-Based Pipeline</span>
+                            <span class="flow-direction">Credits UP, Data DOWN</span>
+                        </div>
+
+                        <div class="pipeline-stages">
+                            <div class="stage">
+                                <div class="stage-name">Host Memory</div>
+                                <div class="stage-buffer">
+                                    <div class="buffer-slot filled"></div>
+                                    <div class="buffer-slot filled"></div>
+                                </div>
+                                <div class="stage-credits">Credits: <span class="credit-indicator" id="host-credits">2</span></div>
+                            </div>
+                            <div class="flow-arrow">→</div>
+                            <div class="stage">
+                                <div class="stage-name">L3 Buffer</div>
+                                <div class="stage-buffer">
+                                    <div class="buffer-slot" id="l3-slot-0"></div>
+                                    <div class="buffer-slot" id="l3-slot-1"></div>
+                                </div>
+                                <div class="stage-credits">Credits: <span class="credit-indicator" id="l3-credits">2</span></div>
+                            </div>
+                            <div class="flow-arrow">→</div>
+                            <div class="stage">
+                                <div class="stage-name">L2 Buffer</div>
+                                <div class="stage-buffer">
+                                    <div class="buffer-slot" id="l2-slot-0"></div>
+                                    <div class="buffer-slot" id="l2-slot-1"></div>
+                                </div>
+                                <div class="stage-credits">Credits: <span class="credit-indicator" id="l2-credits">2</span></div>
+                            </div>
+                            <div class="flow-arrow">→</div>
+                            <div class="stage">
+                                <div class="stage-name">L1 Stream</div>
+                                <div class="stage-buffer">
+                                    <div class="buffer-slot" id="l1-slot-0"></div>
+                                    <div class="buffer-slot" id="l1-slot-1"></div>
+                                </div>
+                                <div class="stage-credits">Credits: <span class="credit-indicator" id="l1-credits">2</span></div>
+                            </div>
+                        </div>
+
+                        <div class="data-flow-animation">
+                            <div class="data-packet">A</div>
+                            <div class="data-packet">B</div>
+                            <div class="data-packet">C</div>
+                        </div>
+
+                        <div style="text-align: center; font-size: 0.75rem; color: #81c784; margin-bottom: 5px;">
+                            ↑ Credits flow back when buffer consumed ↑
+                        </div>
+                        <div class="credit-flow-animation">
+                            <div class="credit-packet">✓</div>
+                            <div class="credit-packet">✓</div>
+                            <div class="credit-packet">✓</div>
+                        </div>
+                    </div>
+
+                    <div class="compute-unit">
+                        <div class="compute-title">Systolic Array (Always Fed)</div>
+                        <div class="systolic-grid" id="systolic-grid">
+                            <!-- PEs generated by JS -->
+                        </div>
+                        <div style="font-size: 0.75rem; color: #888; margin-top: 10px;">
+                            Data arrives predictably - no waiting, no stalls
+                        </div>
+                    </div>
+
+                    <div class="metrics-bar">
+                        <div class="metric">
+                            <div class="metric-label">Pipeline Stages</div>
+                            <div class="metric-value good">4/4 Active</div>
+                        </div>
+                        <div class="metric">
+                            <div class="metric-label">Stalls</div>
+                            <div class="metric-value good" id="df-stalls">0</div>
+                        </div>
+                        <div class="metric">
+                            <div class="metric-label">Scheduler</div>
+                            <div class="metric-value good">None</div>
+                        </div>
+                        <div class="metric">
+                            <div class="metric-label">Efficiency</div>
+                            <div class="metric-value good" id="df-efficiency">94%</div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="key-message">
+                    <p><strong>The Solution:</strong> Domain Flow eliminates latency at the system level.
+                    Credits control flow - data only moves when space is available.
+                    <strong>No scheduler. No waiting. No wasted registers.</strong>
+                    The compute array stays continuously fed.</p>
+                </div>
+            </div>
+        </div>
+
+        <div class="controls">
+            <button class="control-btn primary" id="play-pause-btn">Pause</button>
+            <button class="control-btn" id="reset-btn">Reset</button>
+            <div class="speed-control">
+                <span>Speed:</span>
+                <input type="range" id="speed-slider" min="0.5" max="3" step="0.5" value="1">
+                <span id="speed-value">1x</span>
+            </div>
+        </div>
+
+        <div class="legend">
+            <div class="legend-item"><div class="legend-color executing"></div> Executing</div>
+            <div class="legend-item"><div class="legend-color waiting"></div> Waiting for Memory</div>
+            <div class="legend-item"><div class="legend-color ready"></div> Ready</div>
+            <div class="legend-item"><div class="legend-color stalled"></div> Bank Conflict</div>
+            <div class="legend-item"><div class="legend-color data"></div> Data Flow</div>
+            <div class="legend-item"><div class="legend-color credit"></div> Credit Return</div>
+        </div>
+    </div>
+
+    <script>
+        // Animation State
+        const state = {
+            running: true,
+            speed: 1,
+            gpuCycle: 0,
+            dfCycle: 0,
+            gpuOps: 0,
+            dfOps: 0,
+            bankConflicts: 0,
+            warps: [],
+            memoryRequests: []
+        };
+
+        // Initialize Warps
+        function initWarps() {
+            state.warps = [];
+            for (let i = 0; i < 32; i++) {
+                state.warps.push({
+                    id: i,
+                    state: i < 4 ? 'ready' : 'idle',
+                    waitCycles: 0,
+                    registers: Math.floor(Math.random() * 8)
+                });
+            }
+        }
+
+        // Initialize Register Banks
+        function initRegisterBanks() {
+            const container = document.getElementById('register-banks');
+            container.innerHTML = '';
+            for (let i = 0; i < 16; i++) {
+                const bank = document.createElement('div');
+                bank.className = 'bank';
+                bank.id = `bank-${i}`;
+                container.appendChild(bank);
+            }
+        }
+
+        // Initialize Systolic Array
+        function initSystolicArray() {
+            const container = document.getElementById('systolic-grid');
+            container.innerHTML = '';
+            for (let i = 0; i < 16; i++) {
+                const pe = document.createElement('div');
+                pe.className = 'pe';
+                pe.id = `pe-${i}`;
+                container.appendChild(pe);
+            }
+        }
+
+        // Initialize Warps Grid
+        function initWarpsGrid() {
+            const container = document.getElementById('warps-grid');
+            container.innerHTML = '';
+            for (let i = 0; i < 32; i++) {
+                const warp = document.createElement('div');
+                warp.className = 'warp idle';
+                warp.id = `warp-${i}`;
+                warp.textContent = `W${i}`;
+                container.appendChild(warp);
+            }
+        }
+
+        // GPU Simulation Step
+        function gpuStep() {
+            state.gpuCycle++;
+            document.getElementById('gpu-cycle').textContent = state.gpuCycle;
+
+            let activeCount = 0;
+            let waitingCount = 0;
+            let executingWarp = -1;
+
+            // Update warp states
+            state.warps.forEach((warp, idx) => {
+                if (warp.state === 'waiting') {
+                    warp.waitCycles--;
+                    if (warp.waitCycles <= 0) {
+                        warp.state = 'ready';
+                    }
+                    waitingCount++;
+                } else if (warp.state === 'executing') {
+                    // Finish execution, issue memory request
+                    warp.state = 'waiting';
+                    warp.waitCycles = 150 + Math.floor(Math.random() * 100); // ~200 cycle latency
+                    state.gpuOps++;
+                } else if (warp.state === 'ready') {
+                    activeCount++;
+                }
+            });
+
+            // Scheduler picks a ready warp
+            const readyWarps = state.warps.filter(w => w.state === 'ready');
+            if (readyWarps.length > 0) {
+                const selectedWarp = readyWarps[Math.floor(Math.random() * readyWarps.length)];
+                selectedWarp.state = 'executing';
+                executingWarp = selectedWarp.id;
+
+                // Check for bank conflict (simplified)
+                if (Math.random() < 0.15) {
+                    state.bankConflicts++;
+                    document.getElementById('bank-conflicts').textContent = state.bankConflicts;
+                    // Flash a random bank
+                    const bankIdx = Math.floor(Math.random() * 16);
+                    const bank = document.getElementById(`bank-${bankIdx}`);
+                    bank.classList.add('conflict');
+                    setTimeout(() => bank.classList.remove('conflict'), 200);
+                }
+            }
+
+            // Update UI
+            state.warps.forEach((warp, idx) => {
+                const el = document.getElementById(`warp-${idx}`);
+                el.className = `warp ${warp.state}`;
+            });
+
+            document.getElementById('gpu-ops').textContent = state.gpuOps;
+            document.getElementById('active-warps').textContent = `${activeCount}/32`;
+            document.getElementById('waiting-warps').textContent = state.warps.filter(w => w.state === 'waiting').length;
+
+            // Update scheduler status
+            const status = document.getElementById('scheduler-status');
+            if (executingWarp >= 0) {
+                status.textContent = `Issued W${executingWarp}`;
+            } else {
+                status.textContent = 'All warps waiting...';
+            }
+
+            // Update register bank activity
+            state.warps.forEach((warp, idx) => {
+                if (warp.state === 'executing' || warp.state === 'ready') {
+                    const bankIdx = idx % 16;
+                    const bank = document.getElementById(`bank-${bankIdx}`);
+                    if (!bank.classList.contains('conflict')) {
+                        bank.classList.add('active');
+                        setTimeout(() => bank.classList.remove('active'), 150);
+                    }
+                }
+            });
+
+            // Calculate efficiency (simplified)
+            const efficiency = Math.round((state.gpuOps / state.gpuCycle) * 100 * 0.12);
+            document.getElementById('gpu-efficiency').textContent = `${Math.min(15, Math.max(8, efficiency))}%`;
+        }
+
+        // Domain Flow Simulation Step
+        function domainFlowStep() {
+            state.dfCycle++;
+            document.getElementById('df-cycle').textContent = state.dfCycle;
+
+            // Systolic array always executing in steady state
+            state.dfOps += 16; // 4x4 array, all PEs active
+            document.getElementById('df-ops').textContent = state.dfOps;
+
+            // Animate systolic array - wavefront pattern
+            const peCount = 16;
+            for (let i = 0; i < peCount; i++) {
+                const pe = document.getElementById(`pe-${i}`);
+                const row = Math.floor(i / 4);
+                const col = i % 4;
+                const activePhase = (state.dfCycle + row + col) % 4;
+                if (activePhase === 0) {
+                    pe.classList.add('active');
+                } else {
+                    pe.classList.remove('active');
+                }
+            }
+
+            // Update buffer slots (simulate data flowing through)
+            const phase = state.dfCycle % 8;
+
+            // L3 buffers
+            document.getElementById('l3-slot-0').classList.toggle('filled', phase % 4 < 2);
+            document.getElementById('l3-slot-1').classList.toggle('filled', phase % 4 >= 2);
+
+            // L2 buffers
+            document.getElementById('l2-slot-0').classList.toggle('filled', (phase + 1) % 4 < 2);
+            document.getElementById('l2-slot-1').classList.toggle('filled', (phase + 1) % 4 >= 2);
+
+            // L1 buffers
+            document.getElementById('l1-slot-0').classList.toggle('filled', (phase + 2) % 4 < 2);
+            document.getElementById('l1-slot-1').classList.toggle('filled', (phase + 2) % 4 >= 2);
+
+            // Update credits display (they fluctuate as data moves)
+            const creditPhase = state.dfCycle % 4;
+            document.getElementById('l3-credits').textContent = creditPhase < 2 ? '1' : '2';
+            document.getElementById('l2-credits').textContent = creditPhase < 2 ? '2' : '1';
+            document.getElementById('l1-credits').textContent = creditPhase < 2 ? '1' : '2';
+
+            // Efficiency stays high
+            const efficiency = 94 + Math.floor(Math.random() * 4);
+            document.getElementById('df-efficiency').textContent = `${efficiency}%`;
+        }
+
+        // Animation Loop
+        let lastTime = 0;
+        const baseInterval = 100; // ms per step at 1x speed
+
+        function animate(currentTime) {
+            if (!state.running) {
+                requestAnimationFrame(animate);
+                return;
+            }
+
+            const elapsed = currentTime - lastTime;
+            const interval = baseInterval / state.speed;
+
+            if (elapsed >= interval) {
+                gpuStep();
+                domainFlowStep();
+                lastTime = currentTime;
+            }
+
+            requestAnimationFrame(animate);
+        }
+
+        // Event Listeners
+        document.getElementById('play-pause-btn').addEventListener('click', () => {
+            state.running = !state.running;
+            document.getElementById('play-pause-btn').textContent = state.running ? 'Pause' : 'Play';
+        });
+
+        document.getElementById('reset-btn').addEventListener('click', () => {
+            state.gpuCycle = 0;
+            state.dfCycle = 0;
+            state.gpuOps = 0;
+            state.dfOps = 0;
+            state.bankConflicts = 0;
+            initWarps();
+            document.getElementById('gpu-cycle').textContent = '0';
+            document.getElementById('df-cycle').textContent = '0';
+            document.getElementById('gpu-ops').textContent = '0';
+            document.getElementById('df-ops').textContent = '0';
+            document.getElementById('bank-conflicts').textContent = '0';
+        });
+
+        document.getElementById('speed-slider').addEventListener('input', (e) => {
+            state.speed = parseFloat(e.target.value);
+            document.getElementById('speed-value').textContent = `${state.speed}x`;
+        });
+
+        // Initialize
+        initWarps();
+        initWarpsGrid();
+        initRegisterBanks();
+        initSystolicArray();
+        requestAnimationFrame(animate);
+    </script>
+</body>
+</html>

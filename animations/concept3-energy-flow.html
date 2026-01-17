@@ -1,0 +1,891 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Energy Flow - SIMT vs Domain Flow</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+            color: #fff;
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+        }
+
+        h1 {
+            text-align: center;
+            font-size: 2rem;
+            margin-bottom: 10px;
+            background: linear-gradient(90deg, #ff6b6b, #4ecdc4);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+
+        .subtitle {
+            text-align: center;
+            color: #888;
+            margin-bottom: 30px;
+            font-size: 1.1rem;
+        }
+
+        .comparison {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 30px;
+        }
+
+        .panel {
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 16px;
+            padding: 20px;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        .panel-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 20px;
+            padding-bottom: 15px;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        .panel-title {
+            font-size: 1.4rem;
+            font-weight: 600;
+        }
+
+        .gpu-panel .panel-title {
+            color: #ff6b6b;
+        }
+
+        .domain-flow-panel .panel-title {
+            color: #4ecdc4;
+        }
+
+        .efficiency-badge {
+            padding: 8px 16px;
+            border-radius: 20px;
+            font-weight: bold;
+            font-size: 1.1rem;
+        }
+
+        .gpu-panel .efficiency-badge {
+            background: rgba(255, 107, 107, 0.2);
+            color: #ff6b6b;
+        }
+
+        .domain-flow-panel .efficiency-badge {
+            background: rgba(78, 205, 196, 0.2);
+            color: #4ecdc4;
+        }
+
+        /* Energy Flow Visualization */
+        .energy-flow-container {
+            position: relative;
+            height: 350px;
+            margin-bottom: 20px;
+        }
+
+        .energy-source {
+            position: absolute;
+            left: 0;
+            top: 50%;
+            transform: translateY(-50%);
+            width: 70px;
+            height: 100px;
+            background: linear-gradient(135deg, #ffd54f, #ffb300);
+            border-radius: 8px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            z-index: 10;
+            box-shadow: 0 4px 15px rgba(255, 213, 79, 0.3);
+        }
+
+        .energy-source-label {
+            font-size: 0.7rem;
+            font-weight: bold;
+            color: #333;
+        }
+
+        .energy-source-value {
+            font-size: 1.1rem;
+            font-weight: bold;
+            color: #333;
+        }
+
+        .energy-sink {
+            position: absolute;
+            right: 0;
+            width: 90px;
+            border-radius: 8px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            padding: 8px;
+            z-index: 10;
+            transition: all 0.5s ease;
+        }
+
+        .sink-compute {
+            background: linear-gradient(135deg, #4caf50, #388e3c);
+            box-shadow: 0 4px 15px rgba(76, 175, 80, 0.3);
+        }
+
+        .sink-overhead {
+            background: linear-gradient(135deg, #f44336, #c62828);
+            box-shadow: 0 4px 15px rgba(244, 67, 54, 0.3);
+        }
+
+        .df-sink-compute {
+            background: linear-gradient(135deg, #4caf50, #388e3c);
+            box-shadow: 0 4px 15px rgba(76, 175, 80, 0.3);
+        }
+
+        .df-sink-overhead {
+            background: linear-gradient(135deg, #78909c, #546e7a);
+            box-shadow: 0 4px 15px rgba(120, 144, 156, 0.3);
+        }
+
+        .sink-label {
+            font-size: 0.65rem;
+            font-weight: bold;
+            color: #fff;
+            text-align: center;
+            line-height: 1.2;
+        }
+
+        .sink-value {
+            font-size: 0.9rem;
+            font-weight: bold;
+            color: #fff;
+            margin-top: 2px;
+        }
+
+        /* SVG Flow */
+        .flow-svg {
+            position: absolute;
+            left: 0;
+            top: 0;
+            width: 100%;
+            height: 100%;
+            pointer-events: none;
+        }
+
+        .sankey-path {
+            fill-opacity: 0.7;
+            transition: fill-opacity 0.3s ease;
+        }
+
+        .sankey-path:hover {
+            fill-opacity: 0.9;
+        }
+
+        .sankey-path-compute {
+            fill: url(#sankey-compute-gradient);
+        }
+
+        .sankey-path-overhead {
+            fill: url(#sankey-overhead-gradient);
+        }
+
+        .sankey-path-df-compute {
+            fill: url(#sankey-df-compute-gradient);
+        }
+
+        .sankey-path-df-overhead {
+            fill: url(#sankey-df-overhead-gradient);
+        }
+
+        /* Flow particles */
+        .flow-particle {
+            fill: rgba(255, 255, 255, 0.9);
+        }
+
+        @keyframes flowParticle {
+            0% { offset-distance: 0%; opacity: 0; }
+            5% { opacity: 1; }
+            95% { opacity: 1; }
+            100% { offset-distance: 100%; opacity: 0; }
+        }
+
+        .particle {
+            position: absolute;
+            width: 6px;
+            height: 6px;
+            background: rgba(255, 255, 255, 0.8);
+            border-radius: 50%;
+            pointer-events: none;
+        }
+
+        /* Breakdown Bars */
+        .breakdown-section {
+            margin-top: 20px;
+        }
+
+        .breakdown-title {
+            font-size: 0.9rem;
+            font-weight: 600;
+            margin-bottom: 10px;
+            color: #888;
+        }
+
+        .breakdown-bar {
+            height: 40px;
+            background: rgba(0, 0, 0, 0.3);
+            border-radius: 8px;
+            overflow: hidden;
+            display: flex;
+            position: relative;
+        }
+
+        .breakdown-segment {
+            height: 100%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 0.7rem;
+            font-weight: bold;
+            color: #fff;
+            transition: all 0.3s ease;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .breakdown-segment:hover {
+            filter: brightness(1.2);
+        }
+
+        .breakdown-segment::after {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: -100%;
+            width: 100%;
+            height: 100%;
+            background: linear-gradient(90deg, transparent, rgba(255,255,255,0.2), transparent);
+            animation: shimmer 2s infinite;
+        }
+
+        @keyframes shimmer {
+            0% { left: -100%; }
+            100% { left: 100%; }
+        }
+
+        /* Color classes */
+        .bg-instr-fetch { background: linear-gradient(135deg, #e91e63, #c2185b); }
+        .bg-instr-decode { background: linear-gradient(135deg, #f44336, #d32f2f); }
+        .bg-scheduling { background: linear-gradient(135deg, #ff9800, #f57c00); }
+        .bg-reg-access { background: linear-gradient(135deg, #9c27b0, #7b1fa2); }
+        .bg-operand-coll { background: linear-gradient(135deg, #ffc107, #ffa000); }
+        .bg-compute { background: linear-gradient(135deg, #4caf50, #388e3c); }
+        .bg-data-move { background: linear-gradient(135deg, #4ecdc4, #26a69a); }
+        .bg-credit { background: linear-gradient(135deg, #81c784, #66bb6a); }
+        .bg-misc { background: linear-gradient(135deg, #78909c, #546e7a); }
+
+        /* Legend */
+        .legend {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+            margin-top: 15px;
+        }
+
+        .legend-item {
+            display: flex;
+            align-items: center;
+            gap: 5px;
+            font-size: 0.75rem;
+            color: #aaa;
+        }
+
+        .legend-color {
+            width: 12px;
+            height: 12px;
+            border-radius: 3px;
+        }
+
+        /* Key Message */
+        .key-message {
+            text-align: center;
+            padding: 15px;
+            background: rgba(0, 0, 0, 0.2);
+            border-radius: 10px;
+            margin-top: 15px;
+        }
+
+        .gpu-panel .key-message {
+            border-left: 3px solid #ff6b6b;
+        }
+
+        .domain-flow-panel .key-message {
+            border-left: 3px solid #4ecdc4;
+        }
+
+        .key-message p {
+            font-size: 0.9rem;
+            color: #ccc;
+            line-height: 1.5;
+        }
+
+        .key-message strong {
+            color: #fff;
+        }
+
+        /* Summary */
+        .summary {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 20px;
+            margin-top: 30px;
+            padding: 25px;
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 12px;
+        }
+
+        .summary-item {
+            text-align: center;
+            padding: 15px;
+            background: rgba(0, 0, 0, 0.2);
+            border-radius: 10px;
+        }
+
+        .summary-label {
+            font-size: 0.85rem;
+            color: #888;
+            margin-bottom: 10px;
+        }
+
+        .summary-values {
+            display: flex;
+            justify-content: center;
+            gap: 30px;
+        }
+
+        .summary-value {
+            font-size: 1.8rem;
+            font-weight: bold;
+        }
+
+        .summary-value.gpu {
+            color: #ff6b6b;
+        }
+
+        .summary-value.df {
+            color: #4ecdc4;
+        }
+
+        .summary-value small {
+            font-size: 0.9rem;
+            opacity: 0.7;
+        }
+
+        .summary-comparison {
+            font-size: 0.8rem;
+            color: #4ecdc4;
+            margin-top: 8px;
+        }
+
+        /* Workload Selector */
+        .workload-selector {
+            display: flex;
+            justify-content: center;
+            gap: 15px;
+            margin-bottom: 30px;
+        }
+
+        .workload-btn {
+            background: rgba(255, 255, 255, 0.1);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            color: #fff;
+            padding: 10px 25px;
+            border-radius: 25px;
+            cursor: pointer;
+            font-size: 0.9rem;
+            transition: all 0.3s ease;
+        }
+
+        .workload-btn:hover {
+            background: rgba(255, 255, 255, 0.2);
+        }
+
+        .workload-btn.active {
+            background: linear-gradient(135deg, #4ecdc4, #44a08d);
+            border: none;
+        }
+
+        /* Energy Pulse Animation */
+        .energy-pulse {
+            position: absolute;
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            background: rgba(255, 215, 0, 0.8);
+            animation: pulse-move 1.5s ease-in-out infinite;
+        }
+
+        @keyframes pulse-move {
+            0% { transform: translateX(0) scale(1); opacity: 1; }
+            100% { transform: translateX(200px) scale(0.5); opacity: 0; }
+        }
+
+        /* Detailed Breakdown Table */
+        .detail-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 15px;
+            font-size: 0.8rem;
+        }
+
+        .detail-table th,
+        .detail-table td {
+            padding: 8px 12px;
+            text-align: left;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        .detail-table th {
+            color: #888;
+            font-weight: normal;
+        }
+
+        .detail-table td:last-child {
+            text-align: right;
+            font-weight: bold;
+        }
+
+        .gpu-panel .detail-table td:last-child {
+            color: #ff6b6b;
+        }
+
+        .domain-flow-panel .detail-table td:last-child {
+            color: #4ecdc4;
+        }
+
+        @media (max-width: 1200px) {
+            .comparison {
+                grid-template-columns: 1fr;
+            }
+
+            .summary {
+                grid-template-columns: 1fr;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Energy Flow: Where Your Power Goes</h1>
+        <p class="subtitle">Understanding energy efficiency in SIMT vs Domain Flow architectures</p>
+
+        <div class="workload-selector">
+            <button class="workload-btn active" data-workload="gemm">Matrix Multiply (GEMM)</button>
+            <button class="workload-btn" data-workload="conv">Convolution (Conv2D)</button>
+            <button class="workload-btn" data-workload="attention">Attention (Transformer)</button>
+        </div>
+
+        <div class="comparison">
+            <!-- GPU Panel -->
+            <div class="panel gpu-panel">
+                <div class="panel-header">
+                    <div class="panel-title">GPU (Stored Program)</div>
+                    <div class="efficiency-badge" id="gpu-efficiency">12% Efficient</div>
+                </div>
+
+                <div class="energy-flow-container" id="gpu-flow-container">
+                    <div class="energy-source">
+                        <div class="energy-source-label">INPUT</div>
+                        <div class="energy-source-value" id="gpu-input-energy">100 pJ</div>
+                    </div>
+
+                    <svg class="flow-svg" id="gpu-flow-svg">
+                        <!-- Paths drawn by JS -->
+                    </svg>
+
+                    <div class="energy-sink sink-compute" style="height: 50px; top: 20px;">
+                        <div class="sink-label">Useful<br>Compute</div>
+                        <div class="sink-value" id="gpu-compute-energy">12 pJ</div>
+                    </div>
+                    <div class="energy-sink sink-overhead" style="height: 280px; top: 80px;">
+                        <div class="sink-label">Instruction<br>Overhead</div>
+                        <div class="sink-value" id="gpu-overhead-energy">88 pJ</div>
+                    </div>
+                </div>
+
+                <div class="breakdown-section">
+                    <div class="breakdown-title">Energy Breakdown by Component</div>
+                    <div class="breakdown-bar" id="gpu-breakdown">
+                        <div class="breakdown-segment bg-instr-fetch" style="width: 18%;" title="Instruction Fetch">I-Fetch 18%</div>
+                        <div class="breakdown-segment bg-instr-decode" style="width: 10%;" title="Instruction Decode">Decode 10%</div>
+                        <div class="breakdown-segment bg-scheduling" style="width: 12%;" title="Warp Scheduling">Sched 12%</div>
+                        <div class="breakdown-segment bg-reg-access" style="width: 30%;" title="Register Access">Reg 30%</div>
+                        <div class="breakdown-segment bg-operand-coll" style="width: 8%;" title="Operand Collection">Op.Coll 8%</div>
+                        <div class="breakdown-segment bg-compute" style="width: 12%;" title="Compute">Compute 12%</div>
+                        <div class="breakdown-segment bg-misc" style="width: 10%;" title="Misc">Misc 10%</div>
+                    </div>
+                    <div class="legend">
+                        <div class="legend-item"><div class="legend-color bg-instr-fetch"></div>Instruction Fetch</div>
+                        <div class="legend-item"><div class="legend-color bg-instr-decode"></div>Decode</div>
+                        <div class="legend-item"><div class="legend-color bg-scheduling"></div>Scheduling</div>
+                        <div class="legend-item"><div class="legend-color bg-reg-access"></div>Register Access</div>
+                        <div class="legend-item"><div class="legend-color bg-operand-coll"></div>Operand Collect</div>
+                        <div class="legend-item"><div class="legend-color bg-compute"></div>Compute</div>
+                    </div>
+                </div>
+
+                <table class="detail-table">
+                    <tr><th>Component</th><th>Energy</th></tr>
+                    <tr><td>Instruction Fetch (I-Cache read)</td><td id="gpu-ifetch">18 pJ</td></tr>
+                    <tr><td>Instruction Decode</td><td id="gpu-decode">10 pJ</td></tr>
+                    <tr><td>Warp Scheduling</td><td id="gpu-sched">12 pJ</td></tr>
+                    <tr><td>Register File Access (3× per op)</td><td id="gpu-reg">30 pJ</td></tr>
+                    <tr><td>Operand Collection</td><td id="gpu-opcoll">8 pJ</td></tr>
+                    <tr><td>FMA Compute</td><td id="gpu-fma">12 pJ</td></tr>
+                    <tr><td>Misc (clock, etc.)</td><td id="gpu-misc">10 pJ</td></tr>
+                    <tr style="border-top: 2px solid rgba(255,107,107,0.5);"><td><strong>Total per FMA</strong></td><td><strong id="gpu-total">100 pJ</strong></td></tr>
+                </table>
+
+                <div class="key-message">
+                    <p><strong>The GPU Tax:</strong> Every single FMA operation costs ~100 pJ,
+                    but only 12 pJ does useful work. <strong>88% of energy is wasted on
+                    instruction infrastructure</strong> - fetching, decoding, scheduling,
+                    and shuffling data through the register file.</p>
+                </div>
+            </div>
+
+            <!-- Domain Flow Panel -->
+            <div class="panel domain-flow-panel">
+                <div class="panel-header">
+                    <div class="panel-title">KPU (Domain Flow)</div>
+                    <div class="efficiency-badge" id="df-efficiency">83% Efficient</div>
+                </div>
+
+                <div class="energy-flow-container" id="df-flow-container">
+                    <div class="energy-source">
+                        <div class="energy-source-label">INPUT</div>
+                        <div class="energy-source-value" id="df-input-energy">15 pJ</div>
+                    </div>
+
+                    <svg class="flow-svg" id="df-flow-svg">
+                        <!-- Paths drawn by JS -->
+                    </svg>
+
+                    <div class="energy-sink df-sink-compute" style="height: 280px; top: 20px;">
+                        <div class="sink-label">Useful<br>Compute</div>
+                        <div class="sink-value" id="df-compute-energy">12 pJ</div>
+                    </div>
+                    <div class="energy-sink df-sink-overhead" style="height: 60px; top: 310px;">
+                        <div class="sink-label">Overhead</div>
+                        <div class="sink-value" id="df-overhead-energy">3 pJ</div>
+                    </div>
+                </div>
+
+                <div class="breakdown-section">
+                    <div class="breakdown-title">Energy Breakdown by Component</div>
+                    <div class="breakdown-bar" id="df-breakdown">
+                        <div class="breakdown-segment bg-compute" style="width: 80%;" title="Compute">Compute 80%</div>
+                        <div class="breakdown-segment bg-data-move" style="width: 12%;" title="Data Movement">Data 12%</div>
+                        <div class="breakdown-segment bg-credit" style="width: 3%;" title="Credit Logic">Cr 3%</div>
+                        <div class="breakdown-segment bg-misc" style="width: 5%;" title="Misc">5%</div>
+                    </div>
+                    <div class="legend">
+                        <div class="legend-item"><div class="legend-color bg-compute"></div>Systolic Compute</div>
+                        <div class="legend-item"><div class="legend-color bg-data-move"></div>Data Movement</div>
+                        <div class="legend-item"><div class="legend-color bg-credit"></div>Credit Logic</div>
+                        <div class="legend-item"><div class="legend-color bg-misc"></div>Misc</div>
+                    </div>
+                </div>
+
+                <table class="detail-table">
+                    <tr><th>Component</th><th>Energy</th></tr>
+                    <tr><td>FMA Compute (systolic)</td><td id="df-fma">12 pJ</td></tr>
+                    <tr><td>Local Register (shift)</td><td id="df-reg">0.5 pJ</td></tr>
+                    <tr><td>Data Movement (amortized)</td><td id="df-data">1.5 pJ</td></tr>
+                    <tr><td>Credit State Machine</td><td id="df-credit">0.2 pJ</td></tr>
+                    <tr><td>Misc (clock, etc.)</td><td id="df-misc">0.8 pJ</td></tr>
+                    <tr style="border-top: 2px solid rgba(78,205,196,0.5);"><td><strong>Total per FMA</strong></td><td><strong id="df-total">15 pJ</strong></td></tr>
+                </table>
+
+                <div class="key-message">
+                    <p><strong>The Domain Flow Advantage:</strong> No instructions to fetch or decode.
+                    No scheduler. No banked register file. Data flows directly through compute.
+                    <strong>83% of energy does useful work.</strong> Same compute for 6.7× less total energy.</p>
+                </div>
+            </div>
+        </div>
+
+        <div class="summary">
+            <div class="summary-item">
+                <div class="summary-label">Energy per FMA Operation</div>
+                <div class="summary-values">
+                    <div class="summary-value gpu" id="summary-gpu-energy">100<small>pJ</small></div>
+                    <div class="summary-value df" id="summary-df-energy">15<small>pJ</small></div>
+                </div>
+                <div class="summary-comparison" id="summary-energy-ratio">6.7× less energy</div>
+            </div>
+            <div class="summary-item">
+                <div class="summary-label">Energy Efficiency</div>
+                <div class="summary-values">
+                    <div class="summary-value gpu" id="summary-gpu-eff">12<small>%</small></div>
+                    <div class="summary-value df" id="summary-df-eff">83<small>%</small></div>
+                </div>
+                <div class="summary-comparison">6.9× more efficient</div>
+            </div>
+            <div class="summary-item">
+                <div class="summary-label">Ops per Watt (Relative)</div>
+                <div class="summary-values">
+                    <div class="summary-value gpu">1<small>×</small></div>
+                    <div class="summary-value df" id="summary-ops-watt">6.7<small>×</small></div>
+                </div>
+                <div class="summary-comparison">Same compute, fraction of power</div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Energy data for different workloads
+        const workloadData = {
+            gemm: {
+                gpu: {
+                    total: 100,
+                    compute: 12,
+                    ifetch: 18,
+                    decode: 10,
+                    sched: 12,
+                    reg: 30,
+                    opcoll: 8,
+                    misc: 10,
+                    efficiency: 12
+                },
+                df: {
+                    total: 15,
+                    compute: 12,
+                    reg: 0.5,
+                    data: 1.5,
+                    credit: 0.2,
+                    misc: 0.8,
+                    efficiency: 80
+                }
+            },
+            conv: {
+                gpu: {
+                    total: 120,
+                    compute: 12,
+                    ifetch: 22,
+                    decode: 12,
+                    sched: 15,
+                    reg: 35,
+                    opcoll: 10,
+                    misc: 14,
+                    efficiency: 10
+                },
+                df: {
+                    total: 14,
+                    compute: 12,
+                    reg: 0.4,
+                    data: 0.8,  // Better reuse with line buffers
+                    credit: 0.2,
+                    misc: 0.6,
+                    efficiency: 86
+                }
+            },
+            attention: {
+                gpu: {
+                    total: 130,
+                    compute: 12,
+                    ifetch: 25,
+                    decode: 14,
+                    sched: 18,
+                    reg: 38,
+                    opcoll: 12,
+                    misc: 11,
+                    efficiency: 9
+                },
+                df: {
+                    total: 16,
+                    compute: 12,
+                    reg: 0.6,
+                    data: 2.2,  // More data movement for softmax
+                    credit: 0.3,
+                    misc: 0.9,
+                    efficiency: 75
+                }
+            }
+        };
+
+        let currentWorkload = 'gemm';
+
+        function updateDisplay() {
+            const data = workloadData[currentWorkload];
+            const gpuData = data.gpu;
+            const dfData = data.df;
+
+            // Update GPU values
+            document.getElementById('gpu-efficiency').textContent = `${gpuData.efficiency}% Efficient`;
+            document.getElementById('gpu-input-energy').textContent = `${gpuData.total} pJ`;
+            document.getElementById('gpu-compute-energy').textContent = `${gpuData.compute} pJ`;
+            document.getElementById('gpu-overhead-energy').textContent = `${gpuData.total - gpuData.compute} pJ`;
+
+            document.getElementById('gpu-ifetch').textContent = `${gpuData.ifetch} pJ`;
+            document.getElementById('gpu-decode').textContent = `${gpuData.decode} pJ`;
+            document.getElementById('gpu-sched').textContent = `${gpuData.sched} pJ`;
+            document.getElementById('gpu-reg').textContent = `${gpuData.reg} pJ`;
+            document.getElementById('gpu-opcoll').textContent = `${gpuData.opcoll} pJ`;
+            document.getElementById('gpu-fma').textContent = `${gpuData.compute} pJ`;
+            document.getElementById('gpu-misc').textContent = `${gpuData.misc} pJ`;
+            document.getElementById('gpu-total').textContent = `${gpuData.total} pJ`;
+
+            // Update GPU breakdown bar
+            const gpuBreakdown = document.getElementById('gpu-breakdown');
+            const gpuOverhead = gpuData.total - gpuData.compute;
+            gpuBreakdown.innerHTML = `
+                <div class="breakdown-segment bg-instr-fetch" style="width: ${gpuData.ifetch}%;" title="Instruction Fetch">I-Fetch ${gpuData.ifetch}%</div>
+                <div class="breakdown-segment bg-instr-decode" style="width: ${gpuData.decode}%;" title="Instruction Decode">${gpuData.decode}%</div>
+                <div class="breakdown-segment bg-scheduling" style="width: ${gpuData.sched}%;" title="Warp Scheduling">${gpuData.sched}%</div>
+                <div class="breakdown-segment bg-reg-access" style="width: ${gpuData.reg}%;" title="Register Access">Reg ${gpuData.reg}%</div>
+                <div class="breakdown-segment bg-operand-coll" style="width: ${gpuData.opcoll}%;" title="Operand Collection">${gpuData.opcoll}%</div>
+                <div class="breakdown-segment bg-compute" style="width: ${gpuData.compute}%;" title="Compute">${gpuData.compute}%</div>
+                <div class="breakdown-segment bg-misc" style="width: ${gpuData.misc}%;" title="Misc">${gpuData.misc}%</div>
+            `;
+
+            // Update Domain Flow values
+            document.getElementById('df-efficiency').textContent = `${dfData.efficiency}% Efficient`;
+            document.getElementById('df-input-energy').textContent = `${dfData.total} pJ`;
+            document.getElementById('df-compute-energy').textContent = `${dfData.compute} pJ`;
+            document.getElementById('df-overhead-energy').textContent = `${(dfData.total - dfData.compute).toFixed(1)} pJ`;
+
+            document.getElementById('df-fma').textContent = `${dfData.compute} pJ`;
+            document.getElementById('df-reg').textContent = `${dfData.reg} pJ`;
+            document.getElementById('df-data').textContent = `${dfData.data} pJ`;
+            document.getElementById('df-credit').textContent = `${dfData.credit} pJ`;
+            document.getElementById('df-misc').textContent = `${dfData.misc} pJ`;
+            document.getElementById('df-total').textContent = `${dfData.total} pJ`;
+
+            // Update Domain Flow breakdown bar
+            const dfComputePct = Math.round((dfData.compute / dfData.total) * 100);
+            const dfDataPct = Math.round((dfData.data / dfData.total) * 100);
+            const dfCreditPct = Math.round(((dfData.reg + dfData.credit) / dfData.total) * 100);
+            const dfMiscPct = 100 - dfComputePct - dfDataPct - dfCreditPct;
+
+            const dfBreakdown = document.getElementById('df-breakdown');
+            dfBreakdown.innerHTML = `
+                <div class="breakdown-segment bg-compute" style="width: ${dfComputePct}%;" title="Compute">${dfComputePct}%</div>
+                <div class="breakdown-segment bg-data-move" style="width: ${dfDataPct}%;" title="Data Movement">${dfDataPct}%</div>
+                <div class="breakdown-segment bg-credit" style="width: ${dfCreditPct}%;" title="Credit/Register">${dfCreditPct}%</div>
+                <div class="breakdown-segment bg-misc" style="width: ${dfMiscPct}%;" title="Misc">${dfMiscPct}%</div>
+            `;
+
+            // Update summary
+            const energyRatio = (gpuData.total / dfData.total).toFixed(1);
+            document.getElementById('summary-gpu-energy').innerHTML = `${gpuData.total}<small>pJ</small>`;
+            document.getElementById('summary-df-energy').innerHTML = `${dfData.total}<small>pJ</small>`;
+            document.getElementById('summary-energy-ratio').textContent = `${energyRatio}× less energy`;
+            document.getElementById('summary-gpu-eff').innerHTML = `${gpuData.efficiency}<small>%</small>`;
+            document.getElementById('summary-df-eff').innerHTML = `${dfData.efficiency}<small>%</small>`;
+            document.getElementById('summary-ops-watt').innerHTML = `${energyRatio}<small>×</small>`;
+
+            // Update flow visualizations (sink heights)
+            updateFlowVisualization(gpuData, dfData);
+        }
+
+        function updateFlowVisualization(gpuData, dfData) {
+            // Adjust GPU sink sizes based on data
+            const gpuComputeRatio = gpuData.compute / gpuData.total;
+            const gpuOverheadRatio = 1 - gpuComputeRatio;
+
+            const gpuContainer = document.getElementById('gpu-flow-container');
+            const gpuComputeSink = gpuContainer.querySelector('.sink-compute');
+            const gpuOverheadSink = gpuContainer.querySelector('.sink-overhead');
+
+            if (gpuComputeSink && gpuOverheadSink) {
+                const totalHeight = 330;
+                gpuComputeSink.style.height = `${Math.max(40, totalHeight * gpuComputeRatio)}px`;
+                gpuOverheadSink.style.height = `${totalHeight * gpuOverheadRatio}px`;
+                gpuOverheadSink.style.top = `${20 + totalHeight * gpuComputeRatio + 10}px`;
+            }
+
+            // Adjust Domain Flow sink sizes
+            const dfComputeRatio = dfData.compute / dfData.total;
+            const dfOverheadRatio = 1 - dfComputeRatio;
+
+            const dfContainer = document.getElementById('df-flow-container');
+            const dfComputeSink = dfContainer.querySelector('.df-sink-compute');
+            const dfOverheadSink = dfContainer.querySelector('.df-sink-overhead');
+
+            if (dfComputeSink && dfOverheadSink) {
+                const totalHeight = 330;
+                dfComputeSink.style.height = `${totalHeight * dfComputeRatio}px`;
+                dfOverheadSink.style.height = `${Math.max(40, totalHeight * dfOverheadRatio)}px`;
+                dfOverheadSink.style.top = `${20 + totalHeight * dfComputeRatio + 10}px`;
+            }
+        }
+
+        // Draw flow paths
+        function drawFlowPaths() {
+            // GPU flow paths
+            const gpuSvg = document.getElementById('gpu-flow-svg');
+            gpuSvg.innerHTML = `
+                <defs>
+                    <linearGradient id="compute-gradient" x1="0%" y1="0%" x2="100%" y2="0%">
+                        <stop offset="0%" style="stop-color:#ffd54f"/>
+                        <stop offset="100%" style="stop-color:#4caf50"/>
+                    </linearGradient>
+                    <linearGradient id="overhead-gradient" x1="0%" y1="0%" x2="100%" y2="0%">
+                        <stop offset="0%" style="stop-color:#ffd54f"/>
+                        <stop offset="100%" style="stop-color:#f44336"/>
+                    </linearGradient>
+                </defs>
+                <path d="M 0 160 Q 80 160, 100 50 T 200 50" stroke="url(#compute-gradient)" stroke-width="12" fill="none" opacity="0.6"/>
+                <path d="M 0 200 Q 100 200, 150 250 T 200 320" stroke="url(#overhead-gradient)" stroke-width="88" fill="none" opacity="0.4"/>
+            `;
+
+            // Domain Flow paths
+            const dfSvg = document.getElementById('df-flow-svg');
+            dfSvg.innerHTML = `
+                <defs>
+                    <linearGradient id="df-compute-gradient" x1="0%" y1="0%" x2="100%" y2="0%">
+                        <stop offset="0%" style="stop-color:#ffd54f"/>
+                        <stop offset="100%" style="stop-color:#4caf50"/>
+                    </linearGradient>
+                    <linearGradient id="df-overhead-gradient" x1="0%" y1="0%" x2="100%" y2="0%">
+                        <stop offset="0%" style="stop-color:#ffd54f"/>
+                        <stop offset="100%" style="stop-color:#78909c"/>
+                    </linearGradient>
+                </defs>
+                <path d="M 0 160 Q 50 160, 100 140 T 200 140" stroke="url(#df-compute-gradient)" stroke-width="80" fill="none" opacity="0.5"/>
+                <path d="M 0 200 Q 100 200, 150 340 T 200 340" stroke="url(#df-overhead-gradient)" stroke-width="15" fill="none" opacity="0.4"/>
+            `;
+        }
+
+        // Workload button handlers
+        document.querySelectorAll('.workload-btn').forEach(btn => {
+            btn.addEventListener('click', () => {
+                document.querySelectorAll('.workload-btn').forEach(b => b.classList.remove('active'));
+                btn.classList.add('active');
+                currentWorkload = btn.dataset.workload;
+                updateDisplay();
+            });
+        });
+
+        // Initialize
+        drawFlowPaths();
+        updateDisplay();
+    </script>
+</body>
+</html>
