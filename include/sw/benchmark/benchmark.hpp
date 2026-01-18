@@ -103,6 +103,11 @@ struct BenchmarkResult {
      * @brief Format result as detailed multi-line report
      */
     std::string to_detailed_string() const;
+
+    /**
+     * @brief Format result as JSON object
+     */
+    std::string to_json() const;
 };
 
 /**
@@ -126,6 +131,11 @@ struct BenchmarkSuite {
      * @brief Generate CSV output
      */
     std::string to_csv() const;
+
+    /**
+     * @brief Generate JSON output
+     */
+    std::string to_json() const;
 
     /**
      * @brief Find best result by GFLOPS
@@ -331,6 +341,24 @@ inline BenchmarkSuite standard_matmul_sweep() {
     return harness.sweep_matmul_square(64, 4096, 2);
 }
 
+/**
+ * @brief Run extended matmul sweep (powers of 2 from 64 to 16384)
+ * This is the v0.3.1 benchmark sweep for comprehensive performance analysis.
+ */
+inline BenchmarkSuite extended_matmul_sweep() {
+    BenchmarkHarness harness;
+    return harness.sweep_matmul_square(64, 16384, 2);
+}
+
+/**
+ * @brief Run quick matmul sweep (powers of 2 from 64 to 1024)
+ * For CI/regression testing where full sweep is too slow.
+ */
+inline BenchmarkSuite quick_matmul_sweep() {
+    BenchmarkHarness harness;
+    return harness.sweep_matmul_square(64, 1024, 2);
+}
+
 // ============================================================================
 // Implementation
 // ============================================================================
@@ -472,6 +500,79 @@ inline const BenchmarkResult* BenchmarkSuite::best_by_efficiency() const {
         }
     }
     return best;
+}
+
+inline std::string BenchmarkResult::to_json() const {
+    std::ostringstream ss;
+    ss << std::fixed << std::setprecision(6);
+    ss << "{\n";
+    ss << "  \"name\": \"" << name << "\",\n";
+    ss << "  \"config\": \"" << config << "\",\n";
+    ss << "  \"timing\": {\n";
+    ss << "    \"cycles\": " << cycles << ",\n";
+    ss << "    \"compile_time_us\": " << compile_time_us << ",\n";
+    ss << "    \"wall_time_us\": " << wall_time_us << "\n";
+    ss << "  },\n";
+    ss << "  \"compute\": {\n";
+    ss << "    \"flops\": " << flops << ",\n";
+    ss << "    \"gflops\": " << gflops << ",\n";
+    ss << "    \"gflops_at_freq\": " << gflops_at_freq << ",\n";
+    ss << "    \"efficiency\": " << compute_efficiency << "\n";
+    ss << "  },\n";
+    ss << "  \"memory\": {\n";
+    ss << "    \"external_bytes\": " << external_bytes << ",\n";
+    ss << "    \"l3_bytes\": " << l3_bytes << ",\n";
+    ss << "    \"l2_bytes\": " << l2_bytes << ",\n";
+    ss << "    \"arithmetic_intensity\": " << arithmetic_intensity << ",\n";
+    ss << "    \"memory_efficiency\": " << memory_efficiency << ",\n";
+    ss << "    \"bottleneck\": \"" << bottleneck() << "\"\n";
+    ss << "  },\n";
+    ss << "  \"tiling\": {\n";
+    ss << "    \"Ti\": " << Ti << ",\n";
+    ss << "    \"Tj\": " << Tj << ",\n";
+    ss << "    \"Tk\": " << Tk << ",\n";
+    ss << "    \"num_tiles\": " << num_tiles << "\n";
+    ss << "  },\n";
+    ss << "  \"instructions\": {\n";
+    ss << "    \"total\": " << total_instructions << ",\n";
+    ss << "    \"dma_ops\": " << dma_ops << ",\n";
+    ss << "    \"block_mover_ops\": " << block_mover_ops << ",\n";
+    ss << "    \"streamer_ops\": " << streamer_ops << "\n";
+    ss << "  },\n";
+    ss << "  \"utilization\": {\n";
+    ss << "    \"dma\": " << dma_utilization << ",\n";
+    ss << "    \"block_mover\": " << block_mover_utilization << ",\n";
+    ss << "    \"streamer\": " << streamer_utilization << ",\n";
+    ss << "    \"compute\": " << compute_utilization << "\n";
+    ss << "  }\n";
+    ss << "}";
+    return ss.str();
+}
+
+inline std::string BenchmarkSuite::to_json() const {
+    std::ostringstream ss;
+    ss << "{\n";
+    ss << "  \"name\": \"" << name << "\",\n";
+    ss << "  \"description\": \"" << description << "\",\n";
+    ss << "  \"version\": \"0.3.1\",\n";
+    ss << "  \"results\": [\n";
+    for (size_t i = 0; i < results.size(); ++i) {
+        // Indent each result JSON
+        std::string result_json = results[i].to_json();
+        std::istringstream iss(result_json);
+        std::string line;
+        bool first_line = true;
+        while (std::getline(iss, line)) {
+            if (!first_line) ss << "\n";
+            ss << "    " << line;
+            first_line = false;
+        }
+        if (i < results.size() - 1) ss << ",";
+        ss << "\n";
+    }
+    ss << "  ]\n";
+    ss << "}";
+    return ss.str();
 }
 
 } // namespace sw::benchmark

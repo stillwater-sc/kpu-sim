@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 4.2)
+cmake_minimum_required(VERSION 3.20)
 
 # Suppress deprecation warnings from external dependencies globally
 # This must be set before any external dependencies are processed

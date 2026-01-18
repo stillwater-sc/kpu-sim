@@ -1,0 +1,217 @@
+{
+  "name": "matmul_sweep",
+  "description": "Square matrix multiplication sweep from 64 to 1024",
+  "version": "0.3.1",
+  "results": [
+    {
+      "name": "matmul",
+      "config": "64x64x64",
+      "timing": {
+        "cycles": 1792,
+        "compile_time_us": 98.0,
+        "wall_time_us": 139.651
+      },
+      "compute": {
+        "flops": 524288,
+        "gflops": 292.571429,
+        "gflops_at_freq": 292.571429,
+        "efficiency": 0.428571
+      },
+      "memory": {
+        "external_bytes": 49152,
+        "l3_bytes": 0,
+        "l2_bytes": 0,
+        "arithmetic_intensity": 10.666667,
+        "memory_efficiency": 0.0,
+        "bottleneck": "L3-memory-bound"
+      },
+      "tiling": {
+        "Ti": 64,
+        "Tj": 64,
+        "Tk": 64,
+        "num_tiles": 1
+      },
+      "instructions": {
+        "total": 13,
+        "dma_ops": 3,
+        "block_mover_ops": 2,
+        "streamer_ops": 3
+      },
+      "utilization": {
+        "dma": 0.107143,
+        "block_mover": 0.071429,
+        "streamer": 0.214286,
+        "compute": 0.571429
+      }
+    },
+    {
+      "name": "matmul",
+      "config": "128x128x128",
+      "timing": {
+        "cycles": 11904,
+        "compile_time_us": 51.0,
+        "wall_time_us": 90.901
+      },
+      "compute": {
+        "flops": 4194304,
+        "gflops": 352.344086,
+        "gflops_at_freq": 352.344086,
+        "efficiency": 0.344086
+      },
+      "memory": {
+        "external_bytes": 196608,
+        "l3_bytes": 0,
+        "l2_bytes": 0,
+        "arithmetic_intensity": 21.333333,
+        "memory_efficiency": 0.0,
+        "bottleneck": "compute-bound"
+      },
+      "tiling": {
+        "Ti": 64,
+        "Tj": 64,
+        "Tk": 96,
+        "num_tiles": 8
+      },
+      "instructions": {
+        "total": 60,
+        "dma_ops": 12,
+        "block_mover_ops": 12,
+        "streamer_ops": 20
+      },
+      "utilization": {
+        "dma": 0.064516,
+        "block_mover": 0.075269,
+        "streamer": 0.236559,
+        "compute": 0.688172
+      }
+    },
+    {
+      "name": "matmul",
+      "config": "256x256x256",
+      "timing": {
+        "cycles": 78464,
+        "compile_time_us": 200.0,
+        "wall_time_us": 353.041
+      },
+      "compute": {
+        "flops": 33554432,
+        "gflops": 427.641109,
+        "gflops_at_freq": 427.641109,
+        "efficiency": 0.417618
+      },
+      "memory": {
+        "external_bytes": 786432,
+        "l3_bytes": 0,
+        "l2_bytes": 0,
+        "arithmetic_intensity": 42.666667,
+        "memory_efficiency": 0.0,
+        "bottleneck": "compute-bound"
+      },
+      "tiling": {
+        "Ti": 64,
+        "Tj": 64,
+        "Tk": 96,
+        "num_tiles": 48
+      },
+      "instructions": {
+        "total": 256,
+        "dma_ops": 40,
+        "block_mover_ops": 48,
+        "streamer_ops": 112
+      },
+      "utilization": {
+        "dma": 0.039152,
+        "block_mover": 0.055465,
+        "streamer": 0.274062,
+        "compute": 0.835237
+      }
+    },
+    {
+      "name": "matmul",
+      "config": "512x512x512",
+      "timing": {
+        "cycles": 571008,
+        "compile_time_us": 1189.0,
+        "wall_time_us": 2115.629
+      },
+      "compute": {
+        "flops": 268435456,
+        "gflops": 470.108048,
+        "gflops_at_freq": 470.108048,
+        "efficiency": 0.45909
+      },
+      "memory": {
+        "external_bytes": 3145728,
+        "l3_bytes": 0,
+        "l2_bytes": 0,
+        "arithmetic_intensity": 85.333333,
+        "memory_efficiency": 0.0,
+        "bottleneck": "compute-bound"
+      },
+      "tiling": {
+        "Ti": 64,
+        "Tj": 64,
+        "Tk": 96,
+        "num_tiles": 384
+      },
+      "instructions": {
+        "total": 1408,
+        "dma_ops": 160,
+        "block_mover_ops": 208,
+        "streamer_ops": 832
+      },
+      "utilization": {
+        "dma": 0.02152,
+        "block_mover": 0.033176,
+        "streamer": 0.294104,
+        "compute": 0.91818
+      }
+    },
+    {
+      "name": "matmul",
+      "config": "1024x1024x1024",
+      "timing": {
+        "cycles": 4370048,
+        "compile_time_us": 6365.0,
+        "wall_time_us": 12349.601
+      },
+      "compute": {
+        "flops": 2147483648,
+        "gflops": 491.409625,
+        "gflops_at_freq": 491.409625,
+        "efficiency": 0.479892
+      },
+      "memory": {
+        "external_bytes": 12582912,
+        "l3_bytes": 0,
+        "l2_bytes": 0,
+        "arithmetic_intensity": 170.666667,
+        "memory_efficiency": 0.0,
+        "bottleneck": "compute-bound"
+      },
+      "tiling": {
+        "Ti": 64,
+        "Tj": 64,
+        "Tk": 96,
+        "num_tiles": 2816
+      },
+      "instructions": {
+        "total": 8128,
+        "dma_ops": 608,
+        "block_mover_ops": 832,
+        "streamer_ops": 5888
+      },
+      "utilization": {
+        "dma": 0.011247,
+        "block_mover": 0.018043,
+        "streamer": 0.303682,
+        "compute": 0.959784
+      }
+    }
+  ],
+  "_metadata": {
+    "generated_at": "2026-01-18T17:47:27.891249",
+    "version": "0.3.1",
+    "regression_threshold": 0.05
+  }
+}

@@ -56,12 +56,13 @@ Current   Bench-    TRANS-     Add'l     Kernel    Quant-    Model     Prod
 
 ### Features
 
-| Feature | Description | Files |
-|---------|-------------|-------|
-| Microbenchmarks | matmul sweep (64→16K), tile sensitivity | `tests/benchmarks/` |
-| Roofline Analysis | Peak vs achieved FLOPS/bandwidth | `tools/benchmark/` |
-| Statistics Collection | Cycle breakdown, memory traffic, utilization | `include/sw/kpu/stats/` |
-| Performance Regression | CI fails if >5% regression | `.github/workflows/` |
+| SEMVER | Feature | Description | Files |
+|--------|---------|-------------|-------|
+| v0.3.1 | Microbenchmarks | matmul sweep (64→16K), tile sensitivity | `tests/benchmarks/` |
+| v0.3.2 | Roofline Analysis | Peak vs achieved FLOPS/bandwidth | `tools/benchmark/` |
+| v0.3.3 | XUE Observation Architecture | Event occurrence hierarchy for Operational Analysis | `tools/xue/` |
+| v0.3.4 | Statistics Collection | Cycle breakdown, memory traffic, utilization | `include/sw/kpu/stats/` |
+| v0.3.5 | Performance Regression | CI fails if >5% regression | `.github/workflows/` |
 
 ### Success Criteria
 
@@ -70,6 +71,8 @@ Current   Bench-    TRANS-     Add'l     Kernel    Quant-    Model     Prod
 - [ ] Memory bandwidth utilization >70% for BW-bound cases
 - [ ] Roofline plot generation
 - [ ] 10+ regression baselines
+- [ ] XUE Event Hierarchy
+- [ ] XUE Performance Engineering validation (simulation vs operational analysis within 10% accuracy)
 
 ### Tag: `v0.3.0-benchmarks`
 

@@ -54,7 +54,7 @@ TEST_CASE("Single matmul benchmark", "[benchmark][matmul]") {
 TEST_CASE("Matmul size sweep", "[benchmark][matmul][sweep]") {
     BenchmarkHarness harness;
 
-    SECTION("Powers of 2 sweep") {
+    SECTION("Powers of 2 sweep (standard)") {
         auto suite = harness.sweep_matmul_square(64, 2048, 2);
 
         REQUIRE(suite.results.size() >= 6);  // 64, 128, 256, 512, 1024, 2048
@@ -71,6 +71,29 @@ TEST_CASE("Matmul size sweep", "[benchmark][matmul][sweep]") {
         REQUIRE(best != nullptr);
         std::cout << "Best by GFLOPS: " << best->config
                   << " at " << best->gflops << " GFLOPS" << std::endl;
+    }
+
+    SECTION("Extended sweep to 16K (v0.3.1)") {
+        // Extended sweep for v0.3.1 - includes sizes up to 16384
+        auto suite = harness.sweep_matmul_square(64, 16384, 2);
+
+        // Should have 9 sizes: 64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384
+        REQUIRE(suite.results.size() >= 9);
+
+        std::cout << "\n=== Extended Matmul Sweep (v0.3.1) ===" << std::endl;
+        std::cout << suite.summary_table() << std::endl;
+
+        // Verify large problems achieve higher efficiency (compute-bound)
+        auto& largest = suite.results.back();
+        REQUIRE(largest.is_compute_bound());  // 16K should be compute-bound
+
+        // Large problems should approach peak efficiency (asymptotic ~50%)
+        REQUIRE(largest.compute_efficiency >= 0.49);  // At least 49% of peak
+
+        std::cout << "Largest problem (" << largest.config << "):\n";
+        std::cout << "  Efficiency: " << (largest.compute_efficiency * 100) << "%\n";
+        std::cout << "  GFLOPS: " << largest.gflops << "\n";
+        std::cout << "  Arithmetic Intensity: " << largest.arithmetic_intensity << " FLOP/byte\n";
     }
 
     SECTION("Custom sizes") {
@@ -115,6 +138,128 @@ TEST_CASE("Tile size sensitivity", "[benchmark][matmul][tiles]") {
     REQUIRE(best != nullptr);
     std::cout << "Best tiles: " << best->Ti << "x" << best->Tj << "x" << best->Tk
               << " at " << (best->compute_efficiency * 100) << "% efficiency" << std::endl;
+}
+
+TEST_CASE("Extended tile sensitivity (v0.3.1)", "[benchmark][matmul][tiles][v031]") {
+    BenchmarkHarness harness;
+
+    // Comprehensive tile configurations including asymmetric tiles
+    std::vector<std::tuple<Size, Size, Size>> tile_configs = {
+        // Symmetric small tiles
+        {16, 16, 16},
+        {32, 32, 32},
+        {64, 64, 64},
+        {128, 128, 128},
+        // Asymmetric tiles - K-dimension emphasis (reduces K-loop overhead)
+        {32, 32, 64},
+        {32, 32, 128},
+        {64, 64, 128},
+        {64, 64, 256},
+        // Asymmetric tiles - M/N emphasis (better for tall/wide matrices)
+        {64, 32, 32},
+        {32, 64, 32},
+        {128, 64, 64},
+        {64, 128, 64},
+        // Large symmetric (for big problems)
+        {256, 256, 256},
+    };
+
+    SECTION("Small problem (256x256x256) - memory-bound regime") {
+        Size M = 256, N = 256, K = 256;
+        auto suite = harness.sweep_tile_sizes(M, N, K, tile_configs);
+
+        std::cout << "\n=== Tile Sensitivity: 256x256x256 (Small/Memory-bound) ===\n";
+        std::cout << suite.summary_table() << std::endl;
+
+        auto best = suite.best_by_efficiency();
+        REQUIRE(best != nullptr);
+        std::cout << "Best: " << best->Ti << "x" << best->Tj << "x" << best->Tk
+                  << " → " << (best->compute_efficiency * 100) << "% efficiency\n";
+
+        // For small problems, smaller tiles often work better
+        REQUIRE(best->Ti <= 128);
+    }
+
+    SECTION("Medium problem (1024x1024x1024) - compute-bound regime") {
+        Size M = 1024, N = 1024, K = 1024;
+        auto suite = harness.sweep_tile_sizes(M, N, K, tile_configs);
+
+        std::cout << "\n=== Tile Sensitivity: 1024x1024x1024 (Medium/Compute-bound) ===\n";
+        std::cout << suite.summary_table() << std::endl;
+
+        auto best = suite.best_by_efficiency();
+        REQUIRE(best != nullptr);
+        std::cout << "Best: " << best->Ti << "x" << best->Tj << "x" << best->Tk
+                  << " → " << (best->compute_efficiency * 100) << "% efficiency\n";
+
+        // Medium problems should achieve reasonable efficiency
+        REQUIRE(best->compute_efficiency > 0.3);
+    }
+
+    SECTION("Large problem (4096x4096x4096) - deeply compute-bound") {
+        Size M = 4096, N = 4096, K = 4096;
+        auto suite = harness.sweep_tile_sizes(M, N, K, tile_configs);
+
+        std::cout << "\n=== Tile Sensitivity: 4096x4096x4096 (Large/Compute-bound) ===\n";
+        std::cout << suite.summary_table() << std::endl;
+
+        auto best = suite.best_by_efficiency();
+        REQUIRE(best != nullptr);
+        std::cout << "Best: " << best->Ti << "x" << best->Tj << "x" << best->Tk
+                  << " → " << (best->compute_efficiency * 100) << "% efficiency\n";
+
+        // Large problems should achieve high efficiency with optimal tiles
+        REQUIRE(best->compute_efficiency > 0.4);
+    }
+
+    SECTION("Tall matrix tile sensitivity (2048x256x512)") {
+        Size M = 2048, N = 256, K = 512;
+        auto suite = harness.sweep_tile_sizes(M, N, K, tile_configs);
+
+        std::cout << "\n=== Tile Sensitivity: 2048x256x512 (Tall) ===\n";
+        std::cout << suite.summary_table() << std::endl;
+
+        auto best = suite.best_by_efficiency();
+        REQUIRE(best != nullptr);
+        std::cout << "Best: " << best->Ti << "x" << best->Tj << "x" << best->Tk
+                  << " → " << (best->compute_efficiency * 100) << "% efficiency\n";
+    }
+
+    SECTION("Transformer FFN tile sensitivity (16384x3072x768)") {
+        // GPT-2 style: batch*seq=16384, intermediate=3072, hidden=768
+        Size M = 16384, N = 3072, K = 768;
+        auto suite = harness.sweep_tile_sizes(M, N, K, tile_configs);
+
+        std::cout << "\n=== Tile Sensitivity: 16384x3072x768 (Transformer FFN) ===\n";
+        std::cout << suite.summary_table() << std::endl;
+
+        auto best = suite.best_by_efficiency();
+        REQUIRE(best != nullptr);
+        std::cout << "Best: " << best->Ti << "x" << best->Tj << "x" << best->Tk
+                  << " → " << (best->compute_efficiency * 100) << "% efficiency\n";
+
+        // Transformer workloads should benefit from larger tiles
+        REQUIRE(best->compute_efficiency > 0.3);
+    }
+
+    SECTION("JSON export of tile analysis") {
+        Size M = 512, N = 512, K = 512;
+        auto suite = harness.sweep_tile_sizes(M, N, K, tile_configs);
+        suite.name = "tile_sensitivity_512";
+        suite.description = "Tile sensitivity analysis for 512x512x512 matmul";
+
+        std::string json = suite.to_json();
+        REQUIRE(!json.empty());
+
+        // Write to file for analysis
+        auto path = std::filesystem::temp_directory_path() / "kpu_tile_sensitivity.json";
+        std::ofstream out(path);
+        if (out) {
+            out << json;
+            out.close();
+            std::cout << "Wrote tile sensitivity results to " << path << std::endl;
+        }
+    }
 }
 
 TEST_CASE("Non-square matmul benchmark", "[benchmark][matmul]") {
@@ -199,5 +344,48 @@ TEST_CASE("CSV export", "[benchmark][export]") {
         out << csv;
         out.close();
         std::cout << "Wrote results to " << benchmark_path << std::endl;
+    }
+}
+
+TEST_CASE("JSON export (v0.3.1)", "[benchmark][export][json]") {
+    BenchmarkHarness harness;
+
+    SECTION("Single result JSON") {
+        auto result = harness.benchmark_matmul(256, 256, 256);
+        std::string json = result.to_json();
+
+        // Verify JSON structure
+        REQUIRE(!json.empty());
+        REQUIRE(json.find("\"name\":") != std::string::npos);
+        REQUIRE(json.find("\"config\":") != std::string::npos);
+        REQUIRE(json.find("\"timing\":") != std::string::npos);
+        REQUIRE(json.find("\"compute\":") != std::string::npos);
+        REQUIRE(json.find("\"memory\":") != std::string::npos);
+        REQUIRE(json.find("\"utilization\":") != std::string::npos);
+
+        std::cout << "Single result JSON:\n" << json << std::endl;
+    }
+
+    SECTION("Suite JSON") {
+        auto suite = harness.sweep_matmul_square(64, 512, 2);
+        suite.name = "matmul_sweep_v031";
+        suite.description = "Extended matmul sweep for v0.3.1 benchmarking";
+
+        std::string json = suite.to_json();
+
+        // Verify JSON structure
+        REQUIRE(!json.empty());
+        REQUIRE(json.find("\"name\": \"matmul_sweep_v031\"") != std::string::npos);
+        REQUIRE(json.find("\"version\": \"0.3.1\"") != std::string::npos);
+        REQUIRE(json.find("\"results\":") != std::string::npos);
+
+        // Write to file for inspection
+        auto benchmark_path = std::filesystem::temp_directory_path() / "kpu_benchmark_results.json";
+        std::ofstream out(benchmark_path);
+        if (out) {
+            out << json;
+            out.close();
+            std::cout << "Wrote JSON results to " << benchmark_path << std::endl;
+        }
     }
 }

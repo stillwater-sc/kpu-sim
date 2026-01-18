@@ -1,0 +1,72 @@
+# KPU Benchmark Regression Testing Workflow
+# Part of v0.3.1 Benchmarking & Observability
+#
+# This workflow runs benchmark regression tests on PRs and pushes to main.
+# It compares performance against stored baselines and fails if significant
+# regressions are detected (>5% degradation).
+
+name: Benchmark Regression
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'src/**'
+      - 'include/**'
+      - 'tests/benchmarks/**'
+      - 'tools/benchmark/**'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'src/**'
+      - 'include/**'
+      - 'tests/benchmarks/**'
+      - 'tools/benchmark/**'
+  workflow_dispatch:  # Allow manual trigger
+
+jobs:
+  benchmark:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build
+
+      - name: Configure CMake
+        run: |
+          cmake -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DKPU_BUILD_TESTS=ON \
+            -DKPU_BUILD_TOOLS=ON \
+            -DKPU_BUILD_PYTHON_BINDINGS=OFF
+
+      - name: Build benchmark tools
+        run: |
+          cmake --build build --target benchmark
+
+      - name: Run benchmark regression check
+        run: |
+          python3 scripts/benchmark_regression.py check
+
+      - name: Generate benchmark report
+        if: always()
+        run: |
+          python3 scripts/benchmark_regression.py report || true
+
+      - name: Upload benchmark results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-results
+          path: tests/benchmarks/baselines/
+          retention-days: 30
