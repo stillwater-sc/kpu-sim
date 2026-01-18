@@ -97,6 +97,77 @@
             color: #ff6b6b;
         }
 
+        /* Progress display */
+        .workload-info {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin-bottom: 8px;
+            padding: 6px 10px;
+            background: rgba(0, 0, 0, 0.3);
+            border-radius: 8px;
+        }
+
+        .workload-label {
+            font-size: 0.7rem;
+            color: #888;
+        }
+
+        .progress-container {
+            flex: 1;
+            height: 16px;
+            background: rgba(0, 0, 0, 0.3);
+            border-radius: 8px;
+            overflow: hidden;
+            position: relative;
+        }
+
+        .progress-bar {
+            height: 100%;
+            border-radius: 8px;
+            transition: width 0.1s ease;
+        }
+
+        .gpu-panel .progress-bar {
+            background: linear-gradient(90deg, #ff6b6b, #ff8a80);
+        }
+
+        .domain-flow-panel .progress-bar {
+            background: linear-gradient(90deg, #4ecdc4, #80deea);
+        }
+
+        .progress-text {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            font-size: 0.65rem;
+            font-weight: bold;
+            color: #fff;
+            text-shadow: 0 1px 2px rgba(0,0,0,0.5);
+        }
+
+        .winner-badge {
+            display: none;
+            background: linear-gradient(135deg, #ffd700, #ffb300);
+            color: #333;
+            padding: 4px 10px;
+            border-radius: 12px;
+            font-size: 0.7rem;
+            font-weight: bold;
+            animation: celebrate 0.5s ease;
+        }
+
+        .winner-badge.show {
+            display: inline-block;
+        }
+
+        @keyframes celebrate {
+            0% { transform: scale(0); }
+            50% { transform: scale(1.2); }
+            100% { transform: scale(1); }
+        }
+
         /* GPU Visualization */
         .gpu-viz {
             display: grid;
@@ -218,12 +289,22 @@
         }
 
         .bank.active {
-            background: #9c27b0;
+            background: #4caf50;
+            box-shadow: 0 0 4px rgba(76, 175, 80, 0.5);
+        }
+
+        .bank.occupied {
+            background: rgba(255, 193, 7, 0.6);
+            border: 1px solid rgba(255, 193, 7, 0.8);
         }
 
         .bank.conflict {
             background: #f44336;
             animation: flash 0.3s ease infinite;
+        }
+
+        .bank.free {
+            background: rgba(100, 100, 100, 0.2);
         }
 
         @keyframes flash {
@@ -624,6 +705,7 @@
         .legend-color.waiting { background: #ffc107; }
         .legend-color.ready { background: #4caf50; }
         .legend-color.stalled { background: #f44336; }
+        .legend-color.occupied { background: rgba(255, 193, 7, 0.6); border: 1px solid #ffc107; }
         .legend-color.data { background: #4ecdc4; }
         .legend-color.credit { background: #81c784; }
 
@@ -646,7 +728,16 @@
                     <div class="panel-title">GPU (Stored Program)</div>
                     <div class="stats">
                         <div class="stat">Cycle: <span class="stat-value" id="gpu-cycle">0</span></div>
-                        <div class="stat">Ops: <span class="stat-value" id="gpu-ops">0</span></div>
+                        <div class="stat">MACs: <span class="stat-value" id="gpu-ops">0</span></div>
+                        <span class="winner-badge" id="gpu-winner">WINNER</span>
+                    </div>
+                </div>
+
+                <div class="workload-info">
+                    <span class="workload-label">GEMM 1024³:</span>
+                    <div class="progress-container">
+                        <div class="progress-bar" id="gpu-progress-bar" style="width: 0%"></div>
+                        <span class="progress-text" id="gpu-progress-text">0.000%</span>
                     </div>
                 </div>
 
@@ -718,7 +809,16 @@
                     <div class="panel-title">KPU (Domain Flow)</div>
                     <div class="stats">
                         <div class="stat">Cycle: <span class="stat-value" id="df-cycle">0</span></div>
-                        <div class="stat">Ops: <span class="stat-value" id="df-ops">0</span></div>
+                        <div class="stat">MACs: <span class="stat-value" id="df-ops">0</span></div>
+                        <span class="winner-badge" id="df-winner">WINNER</span>
+                    </div>
+                </div>
+
+                <div class="workload-info">
+                    <span class="workload-label">GEMM 1024³:</span>
+                    <div class="progress-container">
+                        <div class="progress-bar" id="df-progress-bar" style="width: 0%"></div>
+                        <span class="progress-text" id="df-progress-text">0.000%</span>
                     </div>
                 </div>
 
@@ -784,12 +884,12 @@
                     </div>
 
                     <div class="compute-unit">
-                        <div class="compute-title">Systolic Array (Always Fed)</div>
+                        <div class="compute-title">16×16 Systolic Array (256 PEs)</div>
                         <div class="systolic-grid" id="systolic-grid">
-                            <!-- PEs generated by JS -->
+                            <!-- PEs generated by JS (showing 4x4 subset) -->
                         </div>
                         <div style="font-size: 0.75rem; color: #888; margin-top: 10px;">
-                            Data arrives predictably - no waiting, no stalls
+                            ~243 MACs/cycle - Data arrives predictably, no stalls
                         </div>
                     </div>
 
@@ -836,6 +936,7 @@
             <div class="legend-item"><div class="legend-color executing"></div> Executing</div>
             <div class="legend-item"><div class="legend-color waiting"></div> Waiting for Memory</div>
             <div class="legend-item"><div class="legend-color ready"></div> Ready</div>
+            <div class="legend-item"><div class="legend-color occupied"></div> Registers Held</div>
             <div class="legend-item"><div class="legend-color stalled"></div> Bank Conflict</div>
             <div class="legend-item"><div class="legend-color data"></div> Data Flow</div>
             <div class="legend-item"><div class="legend-color credit"></div> Credit Return</div>
@@ -843,29 +944,48 @@
     </div>
 
     <script>
+        // Workload: 1024 x 1024 x 1024 GEMM = 1,073,741,824 MACs
+        // Scaled down for animation: 1M MACs (takes reasonable time to animate)
+        const TOTAL_MACS = 1000000;  // 1 million MACs for animation
+        const ACTUAL_GEMM_SIZE = "1024³";  // Display label
+
         // Animation State
         const state = {
             running: true,
             speed: 1,
             gpuCycle: 0,
             dfCycle: 0,
-            gpuOps: 0,
-            dfOps: 0,
+            gpuMACs: 0,
+            dfMACs: 0,
             bankConflicts: 0,
             warps: [],
-            memoryRequests: []
+            memoryRequests: [],
+            finished: false,
+            winner: null
         };
 
-        // Initialize Warps
+        // Initialize Warps - 24 warps allocated to hide latency (but most waiting)
         function initWarps() {
             state.warps = [];
+            const activeWarps = 24;  // Warps allocated (need many to hide 200 cycle latency)
             for (let i = 0; i < 32; i++) {
-                state.warps.push({
-                    id: i,
-                    state: i < 4 ? 'ready' : 'idle',
-                    waitCycles: 0,
-                    registers: Math.floor(Math.random() * 8)
-                });
+                if (i < activeWarps) {
+                    // Stagger initial memory requests to simulate realistic startup
+                    const initialWait = Math.floor(Math.random() * 200);
+                    state.warps.push({
+                        id: i,
+                        state: initialWait < 20 ? 'ready' : 'waiting',
+                        waitCycles: initialWait < 20 ? 0 : initialWait,
+                        registersHeld: 64  // Each warp holds 64 registers while waiting
+                    });
+                } else {
+                    state.warps.push({
+                        id: i,
+                        state: 'idle',
+                        waitCycles: 0,
+                        registersHeld: 0
+                    });
+                }
             }
         }
 
@@ -907,103 +1027,172 @@
         }
 
         // GPU Simulation Step
+        // Model: 4 warp schedulers, can issue 4 warps/cycle (128 MACs) if warps are ready
+        // With 24 warps and 200 cycle latency: sustained = 24*32/200 = 3.84 MACs/cycle
+        // But we'll model it more accurately with proper scheduling
         function gpuStep() {
+            if (state.finished) return;
+
             state.gpuCycle++;
             document.getElementById('gpu-cycle').textContent = state.gpuCycle;
 
-            let activeCount = 0;
-            let waitingCount = 0;
+            let macsThisCycle = 0;
             let executingWarp = -1;
 
-            // Update warp states
+            // Phase 1: Executing warps complete and go to waiting
+            state.warps.forEach((warp, idx) => {
+                if (warp.state === 'executing') {
+                    macsThisCycle += 32;  // 32 threads per warp, 1 MAC each
+                    warp.state = 'waiting';
+                    warp.waitCycles = 200;  // Fixed 200 cycle latency
+                }
+            });
+
+            // Phase 2: Waiting warps count down, become ready when done
             state.warps.forEach((warp, idx) => {
                 if (warp.state === 'waiting') {
                     warp.waitCycles--;
                     if (warp.waitCycles <= 0) {
                         warp.state = 'ready';
                     }
-                    waitingCount++;
-                } else if (warp.state === 'executing') {
-                    // Finish execution, issue memory request
-                    warp.state = 'waiting';
-                    warp.waitCycles = 150 + Math.floor(Math.random() * 100); // ~200 cycle latency
-                    state.gpuOps++;
-                } else if (warp.state === 'ready') {
-                    activeCount++;
                 }
             });
 
-            // Scheduler picks a ready warp
+            // Phase 3: Scheduler issues up to 4 ready warps (4 schedulers × 1 warp each)
             const readyWarps = state.warps.filter(w => w.state === 'ready');
-            if (readyWarps.length > 0) {
-                const selectedWarp = readyWarps[Math.floor(Math.random() * readyWarps.length)];
-                selectedWarp.state = 'executing';
-                executingWarp = selectedWarp.id;
+            const issueWidth = Math.min(4, readyWarps.length);  // 4 schedulers
 
-                // Check for bank conflict (simplified)
+            for (let i = 0; i < issueWidth; i++) {
+                const selectedWarp = readyWarps[i];
+                selectedWarp.state = 'executing';
+                if (i === 0) executingWarp = selectedWarp.id;
+
+                // Check for bank conflict (15% chance)
                 if (Math.random() < 0.15) {
                     state.bankConflicts++;
-                    document.getElementById('bank-conflicts').textContent = state.bankConflicts;
-                    // Flash a random bank
-                    const bankIdx = Math.floor(Math.random() * 16);
-                    const bank = document.getElementById(`bank-${bankIdx}`);
-                    bank.classList.add('conflict');
-                    setTimeout(() => bank.classList.remove('conflict'), 200);
                 }
             }
 
-            // Update UI
+            // Update MACs count
+            state.gpuMACs += macsThisCycle;
+            document.getElementById('gpu-ops').textContent = state.gpuMACs.toLocaleString();
+
+            // Update progress
+            const gpuProgress = (state.gpuMACs / TOTAL_MACS) * 100;
+            document.getElementById('gpu-progress-bar').style.width = `${Math.min(100, gpuProgress)}%`;
+            document.getElementById('gpu-progress-text').textContent = `${gpuProgress.toFixed(3)}%`;
+
+            // Check for winner
+            if (state.gpuMACs >= TOTAL_MACS && !state.winner) {
+                state.winner = 'gpu';
+                state.finished = true;
+                document.getElementById('gpu-winner').classList.add('show');
+            }
+
+            // Count states AFTER all transitions
+            const readyCount = state.warps.filter(w => w.state === 'ready').length;
+            const executingCount = state.warps.filter(w => w.state === 'executing').length;
+            const waitingCount = state.warps.filter(w => w.state === 'waiting').length;
+            const allocatedWarps = state.warps.filter(w => w.state !== 'idle').length;
+
+            // Update warp UI
             state.warps.forEach((warp, idx) => {
                 const el = document.getElementById(`warp-${idx}`);
                 el.className = `warp ${warp.state}`;
             });
 
-            document.getElementById('gpu-ops').textContent = state.gpuOps;
-            document.getElementById('active-warps').textContent = `${activeCount}/32`;
-            document.getElementById('waiting-warps').textContent = state.warps.filter(w => w.state === 'waiting').length;
+            document.getElementById('active-warps').textContent = `${executingCount + readyCount}/${allocatedWarps}`;
+            document.getElementById('waiting-warps').textContent = waitingCount;
+            document.getElementById('bank-conflicts').textContent = state.bankConflicts;
 
             // Update scheduler status
             const status = document.getElementById('scheduler-status');
-            if (executingWarp >= 0) {
-                status.textContent = `Issued W${executingWarp}`;
-            } else {
+            if (executingCount > 0) {
+                status.textContent = `Issued ${executingCount} warp${executingCount > 1 ? 's' : ''}`;
+            } else if (readyCount === 0 && waitingCount > 0) {
                 status.textContent = 'All warps waiting...';
+            } else {
+                status.textContent = 'Selecting...';
             }
 
-            // Update register bank activity
+            // Update register banks to show occupation by waiting/executing warps
+            updateRegisterBanks();
+
+            // Calculate efficiency: actual vs theoretical (4 warps × 32 threads × cycles)
+            const theoreticalMaxMACs = state.gpuCycle * 128;  // 4 warps × 32 threads
+            const actualEfficiency = theoreticalMaxMACs > 0 ?
+                Math.round((state.gpuMACs / theoreticalMaxMACs) * 100) : 0;
+            document.getElementById('gpu-efficiency').textContent = `${actualEfficiency}%`;
+        }
+
+        // Update register banks visualization
+        function updateRegisterBanks() {
+            // Clear all banks first
+            for (let i = 0; i < 16; i++) {
+                const bank = document.getElementById(`bank-${i}`);
+                bank.className = 'bank';
+            }
+
+            // Color banks based on warp states
             state.warps.forEach((warp, idx) => {
-                if (warp.state === 'executing' || warp.state === 'ready') {
-                    const bankIdx = idx % 16;
-                    const bank = document.getElementById(`bank-${bankIdx}`);
-                    if (!bank.classList.contains('conflict')) {
-                        bank.classList.add('active');
-                        setTimeout(() => bank.classList.remove('active'), 150);
+                if (warp.state === 'idle') return;
+
+                // Each warp uses 2 banks (simplified)
+                const bankIdx1 = idx % 16;
+                const bankIdx2 = (idx + 8) % 16;
+                const bank1 = document.getElementById(`bank-${bankIdx1}`);
+                const bank2 = document.getElementById(`bank-${bankIdx2}`);
+
+                if (warp.state === 'executing') {
+                    bank1.classList.add('active');
+                } else if (warp.state === 'waiting') {
+                    // Waiting warps hold registers hostage (yellow)
+                    if (!bank1.classList.contains('active')) {
+                        bank1.classList.add('occupied');
+                    }
+                } else if (warp.state === 'ready') {
+                    if (!bank1.classList.contains('active') && !bank1.classList.contains('occupied')) {
+                        bank1.classList.add('occupied');
                     }
                 }
             });
-
-            // Calculate efficiency (simplified)
-            const efficiency = Math.round((state.gpuOps / state.gpuCycle) * 100 * 0.12);
-            document.getElementById('gpu-efficiency').textContent = `${Math.min(15, Math.max(8, efficiency))}%`;
         }
 
         // Domain Flow Simulation Step
+        // KPU with 16x16 = 256 PE systolic compute tile running at ~95% utilization
         function domainFlowStep() {
+            if (state.finished) return;
+
             state.dfCycle++;
             document.getElementById('df-cycle').textContent = state.dfCycle;
 
-            // Systolic array always executing in steady state
-            state.dfOps += 16; // 4x4 array, all PEs active
-            document.getElementById('df-ops').textContent = state.dfOps;
+            // Systolic array: 256 PEs (16x16), ~95% utilization = 243 MACs/cycle avg
+            const utilization = 0.93 + Math.random() * 0.05;  // 93-98%
+            const macsThisCycle = Math.floor(256 * utilization);
+            state.dfMACs += macsThisCycle;
+            document.getElementById('df-ops').textContent = state.dfMACs.toLocaleString();
 
-            // Animate systolic array - wavefront pattern
+            // Update progress
+            const dfProgress = (state.dfMACs / TOTAL_MACS) * 100;
+            document.getElementById('df-progress-bar').style.width = `${Math.min(100, dfProgress)}%`;
+            document.getElementById('df-progress-text').textContent = `${dfProgress.toFixed(3)}%`;
+
+            // Check for winner
+            if (state.dfMACs >= TOTAL_MACS && !state.winner) {
+                state.winner = 'kpu';
+                state.finished = true;
+                document.getElementById('df-winner').classList.add('show');
+            }
+
+            // Animate systolic compute tile - wavefront pattern (showing 4x4 subset)
             const peCount = 16;
             for (let i = 0; i < peCount; i++) {
                 const pe = document.getElementById(`pe-${i}`);
                 const row = Math.floor(i / 4);
                 const col = i % 4;
-                const activePhase = (state.dfCycle + row + col) % 4;
-                if (activePhase === 0) {
+                // Most PEs active most of the time
+                const activePhase = (state.dfCycle + row + col) % 3;
+                if (activePhase < 2) {  // 2/3 of PEs active at any time visually
                     pe.classList.add('active');
                 } else {
                     pe.classList.remove('active');
@@ -1032,7 +1221,7 @@
             document.getElementById('l1-credits').textContent = creditPhase < 2 ? '1' : '2';
 
             // Efficiency stays high
-            const efficiency = 94 + Math.floor(Math.random() * 4);
+            const efficiency = Math.round(utilization * 100);
             document.getElementById('df-efficiency').textContent = `${efficiency}%`;
         }
 
@@ -1067,15 +1256,34 @@
         document.getElementById('reset-btn').addEventListener('click', () => {
             state.gpuCycle = 0;
             state.dfCycle = 0;
-            state.gpuOps = 0;
-            state.dfOps = 0;
+            state.gpuMACs = 0;
+            state.dfMACs = 0;
             state.bankConflicts = 0;
+            state.finished = false;
+            state.winner = null;
             initWarps();
+
+            // Reset displays
             document.getElementById('gpu-cycle').textContent = '0';
             document.getElementById('df-cycle').textContent = '0';
             document.getElementById('gpu-ops').textContent = '0';
             document.getElementById('df-ops').textContent = '0';
             document.getElementById('bank-conflicts').textContent = '0';
+
+            // Reset progress bars
+            document.getElementById('gpu-progress-bar').style.width = '0%';
+            document.getElementById('gpu-progress-text').textContent = '0.000%';
+            document.getElementById('df-progress-bar').style.width = '0%';
+            document.getElementById('df-progress-text').textContent = '0.000%';
+
+            // Hide winner badges
+            document.getElementById('gpu-winner').classList.remove('show');
+            document.getElementById('df-winner').classList.remove('show');
+
+            // Reset register banks
+            for (let i = 0; i < 16; i++) {
+                document.getElementById(`bank-${i}`).className = 'bank';
+            }
         });
 
         document.getElementById('speed-slider').addEventListener('input', (e) => {
