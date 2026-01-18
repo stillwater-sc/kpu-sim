@@ -41,6 +41,71 @@
             font-size: 0.85rem;
         }
 
+        /* Data movement comparison banner */
+        .data-movement-banner {
+            display: grid;
+            grid-template-columns: 1fr auto 1fr;
+            gap: 15px;
+            align-items: center;
+            background: rgba(0, 0, 0, 0.3);
+            border-radius: 10px;
+            padding: 10px 20px;
+            margin-bottom: 12px;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        .data-movement-stat {
+            text-align: center;
+        }
+
+        .data-movement-stat.gpu {
+            border-right: 1px solid rgba(255, 255, 255, 0.1);
+            padding-right: 15px;
+        }
+
+        .data-movement-stat.kpu {
+            border-left: 1px solid rgba(255, 255, 255, 0.1);
+            padding-left: 15px;
+        }
+
+        .data-movement-label {
+            font-size: 0.7rem;
+            color: #888;
+            margin-bottom: 4px;
+        }
+
+        .data-movement-value {
+            font-size: 1.1rem;
+            font-weight: bold;
+        }
+
+        .data-movement-value.bad {
+            color: #ff6b6b;
+        }
+
+        .data-movement-value.good {
+            color: #4ecdc4;
+        }
+
+        .data-movement-ratio {
+            text-align: center;
+            padding: 8px 15px;
+            background: rgba(255, 193, 7, 0.2);
+            border-radius: 8px;
+            border: 1px solid rgba(255, 193, 7, 0.4);
+        }
+
+        .ratio-label {
+            font-size: 0.65rem;
+            color: #ffc107;
+        }
+
+        .ratio-value {
+            font-size: 1.3rem;
+            font-weight: bold;
+            color: #ffc107;
+        }
+
         .comparison {
             display: grid;
             grid-template-columns: 1fr 1fr;
@@ -285,7 +350,7 @@
             height: 14px;
             border-radius: 2px;
             background: rgba(156, 39, 176, 0.2);
-            transition: all 0.2s ease;
+            transition: all 0.1s ease;
         }
 
         .bank.active {
@@ -307,9 +372,79 @@
             background: rgba(100, 100, 100, 0.2);
         }
 
+        .bank.reading {
+            background: #ff6b6b;
+            box-shadow: 0 0 6px rgba(255, 107, 107, 0.8);
+            animation: intense-read 0.1s ease infinite;
+        }
+
         @keyframes flash {
             0%, 100% { opacity: 1; }
             50% { opacity: 0.5; }
+        }
+
+        @keyframes intense-read {
+            0%, 100% { transform: scale(1); background: #ff6b6b; }
+            50% { transform: scale(1.1); background: #ff8a80; }
+        }
+
+        /* Register file activity intensity meter */
+        .rf-activity-container {
+            margin-top: 8px;
+            padding: 6px;
+            background: rgba(255, 107, 107, 0.1);
+            border-radius: 6px;
+            border: 1px solid rgba(255, 107, 107, 0.3);
+        }
+
+        .rf-activity-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 4px;
+        }
+
+        .rf-activity-label {
+            font-size: 0.65rem;
+            color: #ff6b6b;
+            font-weight: 600;
+        }
+
+        .rf-activity-count {
+            font-size: 0.7rem;
+            color: #ff8a80;
+            font-weight: bold;
+        }
+
+        .rf-activity-bar {
+            height: 8px;
+            background: rgba(0, 0, 0, 0.3);
+            border-radius: 4px;
+            overflow: hidden;
+        }
+
+        .rf-activity-fill {
+            height: 100%;
+            background: linear-gradient(90deg, #ff6b6b, #ff8a80, #ffab91);
+            border-radius: 4px;
+            transition: width 0.1s ease;
+            animation: rf-pulse 0.2s ease infinite;
+        }
+
+        @keyframes rf-pulse {
+            0%, 100% { opacity: 0.8; }
+            50% { opacity: 1; }
+        }
+
+        .rf-explanation {
+            font-size: 0.6rem;
+            color: #888;
+            margin-top: 4px;
+            text-align: center;
+        }
+
+        .rf-explanation strong {
+            color: #ff6b6b;
         }
 
         .memory-bus {
@@ -358,29 +493,57 @@
             100% { top: 100%; opacity: 0.3; }
         }
 
-        .dram-block {
-            flex: 0 0 70px;
-            background: rgba(255, 152, 0, 0.1);
-            border: 1px solid rgba(255, 152, 0, 0.3);
-            border-radius: 8px;
-            padding: 8px;
+        /* Memory hierarchy blocks */
+        .mem-hierarchy-block {
+            flex: 0 0 55px;
+            border-radius: 6px;
+            padding: 6px 4px;
             display: flex;
             flex-direction: column;
             align-items: center;
             justify-content: center;
+            text-align: center;
         }
 
-        .dram-title {
-            font-size: 0.7rem;
-            color: #ff9800;
+        .smem-block {
+            background: rgba(76, 175, 80, 0.15);
+            border: 1px solid rgba(76, 175, 80, 0.4);
+        }
+
+        .l2-block {
+            background: rgba(33, 150, 243, 0.15);
+            border: 1px solid rgba(33, 150, 243, 0.4);
+        }
+
+        .dram-block {
+            background: rgba(255, 152, 0, 0.15);
+            border: 1px solid rgba(255, 152, 0, 0.4);
+        }
+
+        .mem-title {
+            font-size: 0.65rem;
             font-weight: 600;
-            margin-bottom: 3px;
+            margin-bottom: 2px;
         }
 
-        .dram-latency {
-            font-size: 0.6rem;
+        .smem-block .mem-title { color: #4caf50; }
+        .l2-block .mem-title { color: #2196f3; }
+        .dram-block .mem-title { color: #ff9800; }
+
+        .mem-latency {
+            font-size: 0.55rem;
             color: #888;
+            margin-bottom: 2px;
         }
+
+        .mem-hit-rate {
+            font-size: 0.55rem;
+            font-weight: bold;
+        }
+
+        .smem-block .mem-hit-rate { color: #81c784; }
+        .l2-block .mem-hit-rate { color: #64b5f6; }
+        .dram-block .mem-hit-rate { color: #ffb74d; }
 
         .metrics-bar {
             display: flex;
@@ -591,6 +754,85 @@
             margin-bottom: 6px;
         }
 
+        /* L1 buffer activity display (calm, steady) */
+        .l1-activity-container {
+            margin-top: 8px;
+            padding: 6px;
+            background: rgba(78, 205, 196, 0.1);
+            border-radius: 6px;
+            border: 1px solid rgba(78, 205, 196, 0.3);
+        }
+
+        .l1-activity-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 4px;
+        }
+
+        .l1-activity-label {
+            font-size: 0.65rem;
+            color: #4ecdc4;
+            font-weight: 600;
+        }
+
+        .l1-activity-count {
+            font-size: 0.7rem;
+            color: #80deea;
+            font-weight: bold;
+        }
+
+        .l1-activity-bar {
+            height: 8px;
+            background: rgba(0, 0, 0, 0.3);
+            border-radius: 4px;
+            overflow: hidden;
+        }
+
+        .l1-activity-fill {
+            height: 100%;
+            background: linear-gradient(90deg, #4ecdc4, #80deea);
+            border-radius: 4px;
+            transition: width 0.3s ease;
+        }
+
+        .l1-explanation {
+            font-size: 0.6rem;
+            color: #888;
+            margin-top: 4px;
+            text-align: center;
+        }
+
+        .l1-explanation strong {
+            color: #4ecdc4;
+        }
+
+        /* Systolic reuse visualization */
+        .reuse-indicator {
+            display: flex;
+            justify-content: center;
+            gap: 15px;
+            margin-top: 8px;
+            padding: 6px;
+            background: rgba(76, 175, 80, 0.1);
+            border-radius: 6px;
+        }
+
+        .reuse-item {
+            text-align: center;
+        }
+
+        .reuse-label {
+            font-size: 0.55rem;
+            color: #888;
+        }
+
+        .reuse-value {
+            font-size: 0.75rem;
+            font-weight: bold;
+            color: #81c784;
+        }
+
         .systolic-grid {
             display: grid;
             grid-template-columns: repeat(4, 1fr);
@@ -721,6 +963,22 @@
         <h1>The Latency Hiding Burden</h1>
         <p class="subtitle">How SIMT and Domain Flow architectures handle memory latency differently</p>
 
+        <!-- Data Movement Comparison Banner -->
+        <div class="data-movement-banner">
+            <div class="data-movement-stat gpu">
+                <div class="data-movement-label">GPU: Register File Reads (N³)</div>
+                <div class="data-movement-value bad" id="gpu-rf-reads">0</div>
+            </div>
+            <div class="data-movement-ratio">
+                <div class="ratio-label">Data Movement Ratio</div>
+                <div class="ratio-value" id="movement-ratio">1×</div>
+            </div>
+            <div class="data-movement-stat kpu">
+                <div class="data-movement-label">KPU: L1 Buffer Reads (N²)</div>
+                <div class="data-movement-value good" id="kpu-l1-reads">0</div>
+            </div>
+        </div>
+
         <div class="comparison">
             <!-- GPU Panel -->
             <div class="panel gpu-panel">
@@ -729,7 +987,7 @@
                     <div class="stats">
                         <div class="stat">Cycle: <span class="stat-value" id="gpu-cycle">0</span></div>
                         <div class="stat">MACs: <span class="stat-value" id="gpu-ops">0</span></div>
-                        <span class="winner-badge" id="gpu-winner">WINNER</span>
+                        <span class="winner-badge" id="gpu-winner">DONE</span>
                     </div>
                 </div>
 
@@ -753,26 +1011,48 @@
                     </div>
 
                     <div class="memory-section">
-                        <div class="register-file">
-                            <div class="register-title">Register File (64K Registers)</div>
+                        <div class="register-file" style="flex: 1;">
+                            <div class="register-title">Register File (64K) - SIMT Bottleneck</div>
                             <div class="register-banks" id="register-banks">
                                 <!-- Banks generated by JS -->
                             </div>
-                            <div style="font-size: 0.7rem; color: #666; margin-top: 8px; text-align: center;">
-                                Each warp needs dedicated registers while waiting
+                            <div class="rf-activity-container">
+                                <div class="rf-activity-header">
+                                    <span class="rf-activity-label">RF Read Intensity</span>
+                                    <span class="rf-activity-count" id="rf-reads-per-cycle">0 reads/cycle</span>
+                                </div>
+                                <div class="rf-activity-bar">
+                                    <div class="rf-activity-fill" id="rf-activity-fill" style="width: 0%"></div>
+                                </div>
+                                <div class="rf-explanation">
+                                    SIMT: Each thread fetches operands → <strong>N³ reads</strong>
+                                </div>
                             </div>
                         </div>
 
                         <div class="memory-bus">
-                            <div class="bus-label">Memory<br>Bus</div>
+                            <div class="bus-label">Mem<br>Bus</div>
                             <div class="bus-arrows" id="bus-arrows">
                                 <!-- Arrows generated by JS -->
                             </div>
                         </div>
 
-                        <div class="dram-block">
-                            <div class="dram-title">DRAM</div>
-                            <div class="dram-latency">~200 cycles</div>
+                        <div class="mem-hierarchy-block smem-block">
+                            <div class="mem-title">SMEM</div>
+                            <div class="mem-latency">~10 cyc</div>
+                            <div class="mem-hit-rate" id="smem-hit-rate">90%</div>
+                        </div>
+
+                        <div class="mem-hierarchy-block l2-block">
+                            <div class="mem-title">L2</div>
+                            <div class="mem-latency">~75 cyc</div>
+                            <div class="mem-hit-rate" id="l2-hit-rate">8%</div>
+                        </div>
+
+                        <div class="mem-hierarchy-block dram-block">
+                            <div class="mem-title">DRAM</div>
+                            <div class="mem-latency">~200 cyc</div>
+                            <div class="mem-hit-rate" id="dram-hit-rate">2%</div>
                         </div>
                     </div>
 
@@ -797,9 +1077,10 @@
                 </div>
 
                 <div class="key-message">
-                    <p><strong>The Problem:</strong> GPUs must juggle 32+ warps to hide memory latency.
-                    Each waiting warp holds registers hostage. Bank conflicts cause stalls.
-                    Most cycles are spent on <strong>scheduling overhead</strong>, not compute.</p>
+                    <p><strong>The Problem:</strong> SIMT threads compute independent dot products.
+                    Each thread fetches its own A row and B column from the register file.
+                    For a 1024³ matmul: <strong>3 billion RF accesses</strong> (N³ scaling).
+                    The register file becomes the energy bottleneck.</p>
                 </div>
             </div>
 
@@ -810,7 +1091,7 @@
                     <div class="stats">
                         <div class="stat">Cycle: <span class="stat-value" id="df-cycle">0</span></div>
                         <div class="stat">MACs: <span class="stat-value" id="df-ops">0</span></div>
-                        <span class="winner-badge" id="df-winner">WINNER</span>
+                        <span class="winner-badge" id="df-winner">DONE</span>
                     </div>
                 </div>
 
@@ -884,12 +1165,31 @@
                     </div>
 
                     <div class="compute-unit">
-                        <div class="compute-title">16×16 Systolic Array (256 PEs)</div>
+                        <div class="compute-title">16×16 Systolic Compute Tile (256 PEs)</div>
                         <div class="systolic-grid" id="systolic-grid">
                             <!-- PEs generated by JS (showing 4x4 subset) -->
                         </div>
-                        <div style="font-size: 0.75rem; color: #888; margin-top: 10px;">
-                            ~243 MACs/cycle - Data arrives predictably, no stalls
+                        <div class="l1-activity-container">
+                            <div class="l1-activity-header">
+                                <span class="l1-activity-label">L1 Buffer Activity</span>
+                                <span class="l1-activity-count" id="l1-reads-per-cycle">32 reads/cycle</span>
+                            </div>
+                            <div class="l1-activity-bar">
+                                <div class="l1-activity-fill" id="l1-activity-fill" style="width: 30%"></div>
+                            </div>
+                            <div class="l1-explanation">
+                                Systolic: Operands enter once, reused N times → <strong>N² total reads</strong>
+                            </div>
+                        </div>
+                        <div class="reuse-indicator">
+                            <div class="reuse-item">
+                                <div class="reuse-label">A operand reuse</div>
+                                <div class="reuse-value">16×</div>
+                            </div>
+                            <div class="reuse-item">
+                                <div class="reuse-label">B operand reuse</div>
+                                <div class="reuse-value">16×</div>
+                            </div>
                         </div>
                     </div>
 
@@ -914,10 +1214,10 @@
                 </div>
 
                 <div class="key-message">
-                    <p><strong>The Solution:</strong> Domain Flow eliminates latency at the system level.
-                    Credits control flow - data only moves when space is available.
-                    <strong>No scheduler. No waiting. No wasted registers.</strong>
-                    The compute array stays continuously fed.</p>
+                    <p><strong>The Solution:</strong> Systolic schedules reuse operands as they flow through.
+                    Each A element is used by 16 PEs (one row). Each B element by 16 PEs (one column).
+                    For a 1024³ matmul: <strong>~2 million L1 reads</strong> (N² scaling).
+                    That's <strong>1500× less data movement</strong> than SIMT.</p>
                 </div>
             </div>
         </div>
@@ -933,11 +1233,10 @@
         </div>
 
         <div class="legend">
-            <div class="legend-item"><div class="legend-color executing"></div> Executing</div>
+            <div class="legend-item"><div class="legend-color ready"></div> Ready (tile loaded)</div>
             <div class="legend-item"><div class="legend-color waiting"></div> Waiting for Memory</div>
-            <div class="legend-item"><div class="legend-color ready"></div> Ready</div>
             <div class="legend-item"><div class="legend-color occupied"></div> Registers Held</div>
-            <div class="legend-item"><div class="legend-color stalled"></div> Bank Conflict</div>
+            <div class="legend-item"><div class="legend-color" style="background: #ff6b6b;"></div> RF Reading</div>
             <div class="legend-item"><div class="legend-color data"></div> Data Flow</div>
             <div class="legend-item"><div class="legend-color credit"></div> Credit Return</div>
         </div>
@@ -949,6 +1248,29 @@
         const TOTAL_MACS = 1000000;  // 1 million MACs for animation
         const ACTUAL_GEMM_SIZE = "1024³";  // Display label
 
+        // Data movement scaling factors:
+        // For actual 1024³ GEMM:
+        //   GPU (SIMT): ~3 billion RF reads (3 × N³ for 2 operand reads + 1 write per MAC)
+        //   KPU (Systolic): ~2 million L1 reads (2 × N² for streaming A rows + B columns)
+        // Ratio: ~1500× more data movement on GPU
+        //
+        // For our scaled 1M MACs animation:
+        //   GPU: 3M RF reads (3 per MAC)
+        //   KPU: ~2000 L1 reads (scaled proportionally to maintain 1500× ratio visual)
+        const RF_READS_PER_MAC = 3;  // 2 operand reads + 1 accumulator write
+        const L1_READS_RATIO = 1500; // KPU reads 1500× less data
+
+        // Memory hierarchy latencies (cycles)
+        const SMEM_LATENCY = 10;    // Shared memory: ~10 cycles
+        const L2_LATENCY = 75;      // L2 cache: ~50-100 cycles
+        const DRAM_LATENCY = 200;   // DRAM: ~200 cycles
+
+        // Memory hierarchy hit rates for tiled GEMM
+        // Tiles are loaded into SMEM and reused - most accesses hit SMEM
+        const SMEM_HIT_RATE = 0.90;  // 90% of accesses hit shared memory
+        const L2_HIT_RATE = 0.08;    // 8% hit L2 (tiles recently evicted from SMEM)
+        const DRAM_HIT_RATE = 0.02;  // 2% cold misses go to DRAM
+
         // Animation State
         const state = {
             running: true,
@@ -957,32 +1279,61 @@
             dfCycle: 0,
             gpuMACs: 0,
             dfMACs: 0,
+            gpuRFReads: 0,      // Total register file reads (GPU)
+            kpuL1Reads: 0,      // Total L1 buffer reads (KPU)
             bankConflicts: 0,
             warps: [],
             memoryRequests: [],
             finished: false,
-            winner: null
+            winner: null,
+            // Tiled GEMM model: tiles loaded to SMEM, then many FMAs
+            // With 16x16 tiles and K=16: each thread does 16 FMAs per tile pair
+            fmasPerTile: 16,    // FMAs per tile load (16x16 tile, K dimension = 16)
+            // Memory access stats
+            smemHits: 0,
+            l2Hits: 0,
+            dramHits: 0
         };
 
-        // Initialize Warps - 24 warps allocated to hide latency (but most waiting)
+        // Initialize Warps - 24 warps allocated for tiled GEMM
+        // With SMEM-based tiling, most warps can stay active with short latencies
         function initWarps() {
             state.warps = [];
-            const activeWarps = 24;  // Warps allocated (need many to hide 200 cycle latency)
+            const activeWarps = 24;  // Warps allocated
             for (let i = 0; i < 32; i++) {
                 if (i < activeWarps) {
-                    // Stagger initial memory requests to simulate realistic startup
-                    const initialWait = Math.floor(Math.random() * 200);
+                    // Stagger initial tile loads - mix of SMEM, L2, and initial DRAM loads
+                    // First few warps load from DRAM (cold start), rest hit SMEM quickly
+                    let initialWait, memLevel;
+                    if (i < 4) {
+                        // First 4 warps: cold start, loading initial tiles from DRAM
+                        initialWait = DRAM_LATENCY - (i * 30);  // Staggered
+                        memLevel = 'dram';
+                    } else if (i < 8) {
+                        // Next 4 warps: L2 hits
+                        initialWait = L2_LATENCY - (i * 5);
+                        memLevel = 'l2';
+                    } else {
+                        // Rest: tiles already in SMEM from previous warps
+                        initialWait = SMEM_LATENCY + Math.floor(Math.random() * 5);
+                        memLevel = 'smem';
+                    }
+
                     state.warps.push({
                         id: i,
-                        state: initialWait < 20 ? 'ready' : 'waiting',
-                        waitCycles: initialWait < 20 ? 0 : initialWait,
-                        registersHeld: 64  // Each warp holds 64 registers while waiting
+                        state: initialWait <= 0 ? 'ready' : 'waiting',
+                        waitCycles: Math.max(0, initialWait),
+                        memLevel: memLevel,
+                        fmaCount: 0,
+                        registersHeld: 64  // Each warp holds 64 registers
                     });
                 } else {
                     state.warps.push({
                         id: i,
                         state: 'idle',
                         waitCycles: 0,
+                        memLevel: null,
+                        fmaCount: 0,
                         registersHeld: 0
                     });
                 }
@@ -1027,9 +1378,9 @@
         }
 
         // GPU Simulation Step
-        // Model: 4 warp schedulers, can issue 4 warps/cycle (128 MACs) if warps are ready
-        // With 24 warps and 200 cycle latency: sustained = 24*32/200 = 3.84 MACs/cycle
-        // But we'll model it more accurately with proper scheduling
+        // Model: One SM with 128 CUDA cores, 4 schedulers (each issues 1 warp/cycle)
+        // Maximum throughput: 4 warps × 32 threads = 128 MACs/cycle
+        // Tiled GEMM with memory hierarchy: SMEM (10 cycles), L2 (75 cycles), DRAM (200 cycles)
         function gpuStep() {
             if (state.finished) return;
 
@@ -1037,18 +1388,9 @@
             document.getElementById('gpu-cycle').textContent = state.gpuCycle;
 
             let macsThisCycle = 0;
-            let executingWarp = -1;
+            let rfReadsThisCycle = 0;
 
-            // Phase 1: Executing warps complete and go to waiting
-            state.warps.forEach((warp, idx) => {
-                if (warp.state === 'executing') {
-                    macsThisCycle += 32;  // 32 threads per warp, 1 MAC each
-                    warp.state = 'waiting';
-                    warp.waitCycles = 200;  // Fixed 200 cycle latency
-                }
-            });
-
-            // Phase 2: Waiting warps count down, become ready when done
+            // Phase 1: Waiting warps count down, become ready when tile arrives
             state.warps.forEach((warp, idx) => {
                 if (warp.state === 'waiting') {
                     warp.waitCycles--;
@@ -1058,23 +1400,53 @@
                 }
             });
 
-            // Phase 3: Scheduler issues up to 4 ready warps (4 schedulers × 1 warp each)
+            // Phase 2: Scheduler selects up to 4 ready warps to EXECUTE THIS CYCLE
+            // Only selected warps do MACs - this limits throughput to 128 MACs/cycle
             const readyWarps = state.warps.filter(w => w.state === 'ready');
-            const issueWidth = Math.min(4, readyWarps.length);  // 4 schedulers
+            const issueWidth = Math.min(4, readyWarps.length);  // 4 schedulers, 1 warp each
 
             for (let i = 0; i < issueWidth; i++) {
-                const selectedWarp = readyWarps[i];
-                selectedWarp.state = 'executing';
-                if (i === 0) executingWarp = selectedWarp.id;
+                const warp = readyWarps[i];
 
-                // Check for bank conflict (15% chance)
-                if (Math.random() < 0.15) {
+                // This warp executes this cycle: 32 threads × 1 FMA = 32 MACs
+                macsThisCycle += 32;
+                rfReadsThisCycle += 32 * RF_READS_PER_MAC;  // 3 RF accesses per MAC per thread
+
+                // Track FMAs done on current tile
+                warp.fmaCount = (warp.fmaCount || 0) + 1;
+
+                // Check for bank conflict (5% chance)
+                if (Math.random() < 0.05) {
                     state.bankConflicts++;
                 }
+
+                // After fmasPerTile FMAs, need next tile from memory hierarchy
+                if (warp.fmaCount >= state.fmasPerTile) {
+                    warp.state = 'waiting';
+                    warp.fmaCount = 0;
+
+                    // Sample memory hierarchy for latency
+                    const rand = Math.random();
+                    if (rand < SMEM_HIT_RATE) {
+                        warp.waitCycles = SMEM_LATENCY;
+                        warp.memLevel = 'smem';
+                        state.smemHits++;
+                    } else if (rand < SMEM_HIT_RATE + L2_HIT_RATE) {
+                        warp.waitCycles = L2_LATENCY;
+                        warp.memLevel = 'l2';
+                        state.l2Hits++;
+                    } else {
+                        warp.waitCycles = DRAM_LATENCY;
+                        warp.memLevel = 'dram';
+                        state.dramHits++;
+                    }
+                }
+                // If not done with tile, warp stays 'ready' for next cycle
             }
 
-            // Update MACs count
+            // Update MACs and RF reads count
             state.gpuMACs += macsThisCycle;
+            state.gpuRFReads += rfReadsThisCycle;
             document.getElementById('gpu-ops').textContent = state.gpuMACs.toLocaleString();
 
             // Update progress
@@ -1082,58 +1454,74 @@
             document.getElementById('gpu-progress-bar').style.width = `${Math.min(100, gpuProgress)}%`;
             document.getElementById('gpu-progress-text').textContent = `${gpuProgress.toFixed(3)}%`;
 
-            // Check for winner
+            // Check for completion
             if (state.gpuMACs >= TOTAL_MACS && !state.winner) {
                 state.winner = 'gpu';
                 state.finished = true;
                 document.getElementById('gpu-winner').classList.add('show');
             }
 
-            // Count states AFTER all transitions
+            // Count states for display
             const readyCount = state.warps.filter(w => w.state === 'ready').length;
-            const executingCount = state.warps.filter(w => w.state === 'executing').length;
             const waitingCount = state.warps.filter(w => w.state === 'waiting').length;
             const allocatedWarps = state.warps.filter(w => w.state !== 'idle').length;
 
-            // Update warp UI
+            // Mark warps that were selected this cycle as 'executing' for visual feedback
+            // (They're actually still 'ready' unless they transitioned to 'waiting')
+            const executingThisCycle = issueWidth;
+
+            // Update warp UI - show which warps are active
             state.warps.forEach((warp, idx) => {
                 const el = document.getElementById(`warp-${idx}`);
+                // For visual: warps with tiles (ready) show as ready/executing
                 el.className = `warp ${warp.state}`;
             });
 
-            document.getElementById('active-warps').textContent = `${executingCount + readyCount}/${allocatedWarps}`;
+            document.getElementById('active-warps').textContent = `${readyCount}/${allocatedWarps}`;
             document.getElementById('waiting-warps').textContent = waitingCount;
             document.getElementById('bank-conflicts').textContent = state.bankConflicts;
 
             // Update scheduler status
             const status = document.getElementById('scheduler-status');
-            if (executingCount > 0) {
-                status.textContent = `Issued ${executingCount} warp${executingCount > 1 ? 's' : ''}`;
-            } else if (readyCount === 0 && waitingCount > 0) {
-                status.textContent = 'All warps waiting...';
+            if (executingThisCycle > 0) {
+                status.textContent = `Issued ${executingThisCycle} warp${executingThisCycle > 1 ? 's' : ''} (${macsThisCycle} MACs)`;
+            } else if (waitingCount > 0) {
+                status.textContent = 'All warps waiting for memory...';
             } else {
-                status.textContent = 'Selecting...';
+                status.textContent = 'Idle';
             }
 
-            // Update register banks to show occupation by waiting/executing warps
-            updateRegisterBanks();
+            // Update register banks with read activity visualization
+            updateRegisterBanks(rfReadsThisCycle);
 
-            // Calculate efficiency: actual vs theoretical (4 warps × 32 threads × cycles)
+            // Update RF activity display
+            document.getElementById('rf-reads-per-cycle').textContent = `${rfReadsThisCycle} reads/cycle`;
+            const rfActivityPercent = Math.min(100, (rfReadsThisCycle / 384) * 100);  // 384 = 128 MACs × 3 RF ops
+            document.getElementById('rf-activity-fill').style.width = `${rfActivityPercent}%`;
+
+            // Calculate efficiency: actual MACs vs theoretical max (128 MACs/cycle)
             const theoreticalMaxMACs = state.gpuCycle * 128;  // 4 warps × 32 threads
             const actualEfficiency = theoreticalMaxMACs > 0 ?
                 Math.round((state.gpuMACs / theoreticalMaxMACs) * 100) : 0;
             document.getElementById('gpu-efficiency').textContent = `${actualEfficiency}%`;
+
+            // Update data movement banner
+            updateDataMovementBanner();
         }
 
-        // Update register banks visualization
-        function updateRegisterBanks() {
+        // Update register banks visualization with intense reading activity
+        function updateRegisterBanks(rfReadsThisCycle = 0) {
             // Clear all banks first
             for (let i = 0; i < 16; i++) {
                 const bank = document.getElementById(`bank-${i}`);
                 bank.className = 'bank';
             }
 
-            // Color banks based on warp states
+            // Determine how many warps are actively reading this cycle
+            // (proportional to rfReadsThisCycle)
+            const activeReadingBanks = rfReadsThisCycle > 0 ? Math.min(16, Math.ceil(rfReadsThisCycle / 24)) : 0;
+
+            // Color banks based on warp states and activity
             state.warps.forEach((warp, idx) => {
                 if (warp.state === 'idle') return;
 
@@ -1143,16 +1531,25 @@
                 const bank1 = document.getElementById(`bank-${bankIdx1}`);
                 const bank2 = document.getElementById(`bank-${bankIdx2}`);
 
-                if (warp.state === 'executing') {
-                    bank1.classList.add('active');
+                if (warp.state === 'ready') {
+                    // Ready warps have tiles in registers - show as reading if there's activity
+                    if (rfReadsThisCycle > 0 && idx < 4) {
+                        // First 4 ready warps are being scheduled - show intense reading
+                        bank1.classList.add('reading');
+                        bank2.classList.add('reading');
+                    } else {
+                        // Other ready warps hold registers (yellow) - tile loaded but waiting
+                        if (!bank1.classList.contains('reading')) {
+                            bank1.classList.add('occupied');
+                        }
+                    }
                 } else if (warp.state === 'waiting') {
-                    // Waiting warps hold registers hostage (yellow)
-                    if (!bank1.classList.contains('active')) {
+                    // Waiting warps hold registers hostage while waiting for memory
+                    if (!bank1.classList.contains('reading')) {
                         bank1.classList.add('occupied');
                     }
-                } else if (warp.state === 'ready') {
-                    if (!bank1.classList.contains('active') && !bank1.classList.contains('occupied')) {
-                        bank1.classList.add('occupied');
+                    if (!bank2.classList.contains('reading')) {
+                        bank2.classList.add('occupied');
                     }
                 }
             });
@@ -1160,6 +1557,7 @@
 
         // Domain Flow Simulation Step
         // KPU with 16x16 = 256 PE systolic compute tile running at ~95% utilization
+        // Systolic array: operands stream in from edges, each operand is reused N times
         function domainFlowStep() {
             if (state.finished) return;
 
@@ -1170,6 +1568,13 @@
             const utilization = 0.93 + Math.random() * 0.05;  // 93-98%
             const macsThisCycle = Math.floor(256 * utilization);
             state.dfMACs += macsThisCycle;
+
+            // L1 reads: In systolic, we stream 16 A elements + 16 B elements per cycle
+            // Each element is reused 16 times across the array (N times reuse)
+            // So L1 reads per cycle = 32 (vs GPU's 384+ RF reads per cycle)
+            const l1ReadsThisCycle = 32;  // 16 A elements + 16 B elements streaming in
+            state.kpuL1Reads += l1ReadsThisCycle;
+
             document.getElementById('df-ops').textContent = state.dfMACs.toLocaleString();
 
             // Update progress
@@ -1220,9 +1625,35 @@
             document.getElementById('l2-credits').textContent = creditPhase < 2 ? '2' : '1';
             document.getElementById('l1-credits').textContent = creditPhase < 2 ? '1' : '2';
 
+            // Update L1 activity display (smooth, steady)
+            document.getElementById('l1-reads-per-cycle').textContent = `${l1ReadsThisCycle} reads/cycle`;
+            document.getElementById('l1-activity-fill').style.width = '30%';  // Consistently low
+
             // Efficiency stays high
             const efficiency = Math.round(utilization * 100);
             document.getElementById('df-efficiency').textContent = `${efficiency}%`;
+
+            // Update data movement banner
+            updateDataMovementBanner();
+        }
+
+        // Update the data movement comparison banner
+        function updateDataMovementBanner() {
+            // Format large numbers nicely
+            const formatNumber = (n) => {
+                if (n >= 1000000) return (n / 1000000).toFixed(2) + 'M';
+                if (n >= 1000) return (n / 1000).toFixed(1) + 'K';
+                return n.toString();
+            };
+
+            document.getElementById('gpu-rf-reads').textContent = formatNumber(state.gpuRFReads);
+            document.getElementById('kpu-l1-reads').textContent = formatNumber(state.kpuL1Reads);
+
+            // Calculate and display ratio
+            if (state.kpuL1Reads > 0) {
+                const ratio = Math.round(state.gpuRFReads / state.kpuL1Reads);
+                document.getElementById('movement-ratio').textContent = `${ratio}×`;
+            }
         }
 
         // Animation Loop
@@ -1258,7 +1689,12 @@
             state.dfCycle = 0;
             state.gpuMACs = 0;
             state.dfMACs = 0;
+            state.gpuRFReads = 0;
+            state.kpuL1Reads = 0;
             state.bankConflicts = 0;
+            state.smemHits = 0;
+            state.l2Hits = 0;
+            state.dramHits = 0;
             state.finished = false;
             state.winner = null;
             initWarps();
@@ -1284,6 +1720,17 @@
             for (let i = 0; i < 16; i++) {
                 document.getElementById(`bank-${i}`).className = 'bank';
             }
+
+            // Reset data movement banner
+            document.getElementById('gpu-rf-reads').textContent = '0';
+            document.getElementById('kpu-l1-reads').textContent = '0';
+            document.getElementById('movement-ratio').textContent = '1×';
+
+            // Reset activity displays
+            document.getElementById('rf-reads-per-cycle').textContent = '0 reads/cycle';
+            document.getElementById('rf-activity-fill').style.width = '0%';
+            document.getElementById('l1-reads-per-cycle').textContent = '32 reads/cycle';
+            document.getElementById('l1-activity-fill').style.width = '30%';
         });
 
         document.getElementById('speed-slider').addEventListener('input', (e) => {

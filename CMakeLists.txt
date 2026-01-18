@@ -12,8 +12,7 @@ cmake_policy(SET CMP0148 NEW)  # Use FindPython instead of FindPythonInterp/Find
 cmake_policy(SET CMP0194 NEW)
 # if build fails, there is an ASM dependency
 
-project(kpu_simulator 
-    VERSION 0.1.0
+project(kpu_simulator
     DESCRIPTION "Stillwater Knowledge Processing Unit Simulator"
     HOMEPAGE_URL "https://github.com/stillwater-sc/kpu-simulator"
     LANGUAGES CXX C
@@ -33,6 +32,12 @@ set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
 # Include CMake modules
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
+
+# Version management - derives version from git tags
+# Creates: KPU_VERSION_MAJOR, KPU_VERSION_MINOR, KPU_VERSION_PATCH, KPU_VERSION_STRING
+# Also generates: build/generated/sw/kpu/version.hpp and build/generated/kpu/_version.py
+include(Version)
+
 include(CompilerOptions)
 
 # Include the custom script to gather system info during configuration
