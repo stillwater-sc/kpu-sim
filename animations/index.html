@@ -11,38 +11,27 @@
             box-sizing: border-box;
         }
 
-        html, body {
-            height: 100%;
-            overflow: hidden;
-        }
-
         body {
             font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
             background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
             color: #fff;
-            padding: 10px 15px;
-            display: flex;
-            flex-direction: column;
+            min-height: 100vh;
+            padding: 40px 20px;
         }
 
         .container {
             max-width: 1200px;
             margin: 0 auto;
-            width: 100%;
-            height: 100%;
-            display: flex;
-            flex-direction: column;
         }
 
         header {
             text-align: center;
-            margin-bottom: 8px;
-            flex-shrink: 0;
+            margin-bottom: 50px;
         }
 
         h1 {
-            font-size: 1.4rem;
-            margin-bottom: 3px;
+            font-size: 2.5rem;
+            margin-bottom: 15px;
             background: linear-gradient(90deg, #ff6b6b, #4ecdc4);
             -webkit-background-clip: text;
             -webkit-text-fill-color: transparent;
@@ -50,33 +39,31 @@
         }
 
         .subtitle {
-            font-size: 0.7rem;
+            font-size: 1.2rem;
             color: #888;
             max-width: 700px;
-            margin: 0 auto;
-            line-height: 1.3;
+            margin: 0 auto 30px;
+            line-height: 1.6;
         }
 
         .intro {
             background: rgba(255, 255, 255, 0.05);
-            border-radius: 8px;
-            padding: 8px 12px;
-            margin-bottom: 8px;
+            border-radius: 16px;
+            padding: 30px;
+            margin-bottom: 40px;
             border: 1px solid rgba(255, 255, 255, 0.1);
-            flex-shrink: 0;
         }
 
         .intro h2 {
-            font-size: 0.8rem;
+            font-size: 1.3rem;
             color: #4ecdc4;
-            margin-bottom: 4px;
+            margin-bottom: 15px;
         }
 
         .intro p {
             color: #aaa;
-            line-height: 1.4;
-            margin-bottom: 4px;
-            font-size: 0.65rem;
+            line-height: 1.7;
+            margin-bottom: 15px;
         }
 
         .intro p:last-child {
@@ -86,20 +73,19 @@
         .comparison-grid {
             display: grid;
             grid-template-columns: 1fr 1fr;
-            gap: 8px;
-            margin-bottom: 8px;
-            flex-shrink: 0;
+            gap: 20px;
+            margin-bottom: 40px;
         }
 
         .comparison-item {
             background: rgba(255, 255, 255, 0.05);
-            border-radius: 6px;
-            padding: 6px 10px;
+            border-radius: 12px;
+            padding: 20px;
         }
 
         .comparison-item h3 {
-            font-size: 0.7rem;
-            margin-bottom: 4px;
+            font-size: 1rem;
+            margin-bottom: 10px;
         }
 
         .comparison-item.gpu h3 {
@@ -113,12 +99,12 @@
         .comparison-item ul {
             list-style: none;
             color: #aaa;
-            font-size: 0.55rem;
+            font-size: 0.9rem;
         }
 
         .comparison-item li {
-            padding: 1px 0;
-            padding-left: 12px;
+            padding: 5px 0;
+            padding-left: 20px;
             position: relative;
         }
 
@@ -137,87 +123,78 @@
         }
 
         .concepts-section {
-            flex: 1;
-            min-height: 0;
-            display: flex;
-            flex-direction: column;
+            margin-bottom: 40px;
         }
 
         .concepts-section h2 {
-            font-size: 0.9rem;
-            margin-bottom: 6px;
+            font-size: 1.5rem;
+            margin-bottom: 25px;
             text-align: center;
             color: #fff;
-            flex-shrink: 0;
         }
 
         .concepts-grid {
             display: grid;
             grid-template-columns: repeat(3, 1fr);
-            gap: 8px;
-            flex: 1;
-            min-height: 0;
+            gap: 25px;
         }
 
         .concept-card {
             background: rgba(255, 255, 255, 0.05);
-            border-radius: 8px;
-            padding: 8px;
+            border-radius: 16px;
+            padding: 25px;
             border: 1px solid rgba(255, 255, 255, 0.1);
             transition: all 0.3s ease;
             text-decoration: none;
             color: inherit;
             display: flex;
             flex-direction: column;
-            min-height: 0;
         }
 
         .concept-card:hover {
+            transform: translateY(-5px);
             border-color: #4ecdc4;
-            box-shadow: 0 4px 15px rgba(78, 205, 196, 0.2);
+            box-shadow: 0 10px 40px rgba(78, 205, 196, 0.2);
         }
 
         .concept-number {
-            width: 22px;
-            height: 22px;
+            width: 40px;
+            height: 40px;
             background: linear-gradient(135deg, #4ecdc4, #44a08d);
             border-radius: 50%;
             display: flex;
             align-items: center;
             justify-content: center;
             font-weight: bold;
-            font-size: 0.7rem;
-            margin-bottom: 5px;
-            flex-shrink: 0;
+            font-size: 1.2rem;
+            margin-bottom: 15px;
         }
 
         .concept-title {
-            font-size: 0.75rem;
+            font-size: 1.2rem;
             font-weight: 600;
-            margin-bottom: 3px;
+            margin-bottom: 10px;
             color: #fff;
-            flex-shrink: 0;
         }
 
         .concept-description {
             color: #888;
-            font-size: 0.55rem;
-            line-height: 1.3;
+            font-size: 0.9rem;
+            line-height: 1.5;
             flex-grow: 1;
-            margin-bottom: 5px;
+            margin-bottom: 20px;
         }
 
         .concept-highlights {
             list-style: none;
-            margin-bottom: 5px;
-            flex-shrink: 0;
+            margin-bottom: 20px;
         }
 
         .concept-highlights li {
-            font-size: 0.5rem;
+            font-size: 0.85rem;
             color: #aaa;
-            padding: 1px 0;
-            padding-left: 10px;
+            padding: 5px 0;
+            padding-left: 20px;
             position: relative;
         }
 
@@ -231,11 +208,10 @@
         .concept-cta {
             display: inline-flex;
             align-items: center;
-            gap: 3px;
+            gap: 8px;
             color: #4ecdc4;
             font-weight: 600;
-            font-size: 0.6rem;
-            flex-shrink: 0;
+            font-size: 0.9rem;
         }
 
         .concept-cta::after {
@@ -244,23 +220,43 @@
         }
 
         .concept-card:hover .concept-cta::after {
-            transform: translateX(2px);
+            transform: translateX(5px);
         }
 
         .flow-indicator {
-            display: none;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin: 30px 0;
+        }
+
+        .flow-line {
+            height: 2px;
+            background: linear-gradient(90deg, #ff6b6b, #4ecdc4);
+            flex-grow: 1;
+            max-width: 200px;
+        }
+
+        .flow-arrow {
+            font-size: 1.5rem;
+            color: #4ecdc4;
+            margin: 0 15px;
+        }
+
+        .flow-text {
+            font-size: 0.9rem;
+            color: #888;
         }
 
         .stats-banner {
             display: grid;
             grid-template-columns: repeat(4, 1fr);
-            gap: 8px;
+            gap: 20px;
             background: rgba(78, 205, 196, 0.1);
-            border-radius: 8px;
-            padding: 8px;
-            margin-bottom: 8px;
+            border-radius: 16px;
+            padding: 30px;
+            margin-bottom: 40px;
             border: 1px solid rgba(78, 205, 196, 0.2);
-            flex-shrink: 0;
         }
 
         .stat-item {
@@ -268,7 +264,7 @@
         }
 
         .stat-value {
-            font-size: 1.1rem;
+            font-size: 2.5rem;
             font-weight: bold;
             background: linear-gradient(135deg, #4ecdc4, #44a08d);
             -webkit-background-clip: text;
@@ -277,21 +273,20 @@
         }
 
         .stat-label {
-            font-size: 0.5rem;
+            font-size: 0.9rem;
             color: #888;
-            margin-top: 1px;
+            margin-top: 5px;
         }
 
         footer {
             text-align: center;
-            padding-top: 8px;
+            padding-top: 40px;
             border-top: 1px solid rgba(255, 255, 255, 0.1);
-            flex-shrink: 0;
         }
 
         footer p {
             color: #666;
-            font-size: 0.55rem;
+            font-size: 0.85rem;
         }
 
         footer a {
@@ -319,7 +314,7 @@
 
         @media (max-width: 600px) {
             h1 {
-                font-size: 1.3rem;
+                font-size: 1.8rem;
             }
 
             .stats-banner {
