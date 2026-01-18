@@ -234,9 +234,24 @@ int run_roofline(const Options& opts, std::ostream& out) {
     suite.name = "roofline_analysis";
     suite.description = "Roofline data for KPU simulator";
 
-    if (opts.output_format == "json" || opts.output_format == "csv") {
+    if (opts.output_format == "json") {
+        // Use v0.3.2 roofline JSON with multi-level analysis
+        out << harness.generate_roofline_json(suite) << std::endl;
+    } else if (opts.output_format == "csv") {
         output_suite(suite, opts, out);
     } else {
+        // Text format - show roofline data plus summary
+        HardwareSpec hw = harness.hardware_spec();
+        out << "=== KPU Roofline Analysis (v0.3.2) ===\n\n";
+        out << "Hardware Specification:\n";
+        out << "  Peak Compute:        " << hw.peak_gflops << " GFLOPS\n";
+        out << "  External Bandwidth:  " << hw.external_bw_gbs << " GB/s\n";
+        out << "  L3 Bandwidth:        " << hw.l3_bw_gbs << " GB/s\n";
+        out << "  L2 Bandwidth:        " << hw.l2_bw_gbs << " GB/s\n\n";
+        out << "Ridge Points (FLOP/byte):\n";
+        out << "  External Memory:     " << hw.ridge_point_external() << "\n";
+        out << "  L3 Cache:            " << hw.ridge_point_l3() << "\n";
+        out << "  L2 Cache:            " << hw.ridge_point_l2() << "\n\n";
         out << harness.generate_roofline_data(suite);
     }
 

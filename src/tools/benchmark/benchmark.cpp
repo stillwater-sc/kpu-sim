@@ -405,4 +405,62 @@ std::string BenchmarkHarness::generate_roofline_gnuplot(const BenchmarkSuite& re
     return ss.str();
 }
 
+std::string BenchmarkHarness::generate_roofline_json(const BenchmarkSuite& results) const {
+    std::ostringstream ss;
+    ss << std::fixed << std::setprecision(6);
+
+    ss << "{\n";
+    ss << "  \"version\": \"0.3.2\",\n";
+    ss << "  \"hardware\": {\n";
+    ss << "    \"peak_gflops\": " << hw_spec_.peak_gflops << ",\n";
+    ss << "    \"clock_ghz\": " << hw_spec_.clock_ghz << ",\n";
+    ss << "    \"external_bandwidth_gbs\": " << hw_spec_.external_bw_gbs << ",\n";
+    ss << "    \"l3_bandwidth_gbs\": " << hw_spec_.l3_bw_gbs << ",\n";
+    ss << "    \"l2_bandwidth_gbs\": " << hw_spec_.l2_bw_gbs << ",\n";
+    ss << "    \"ridge_point_external\": " << hw_spec_.ridge_point_external() << ",\n";
+    ss << "    \"ridge_point_l3\": " << hw_spec_.ridge_point_l3() << ",\n";
+    ss << "    \"ridge_point_l2\": " << hw_spec_.ridge_point_l2() << "\n";
+    ss << "  },\n";
+
+    ss << "  \"analysis\": {\n";
+    size_t compute_bound = 0, memory_bound = 0;
+    double total_efficiency = 0.0;
+    for (const auto& r : results.results) {
+        if (r.arithmetic_intensity >= hw_spec_.ridge_point_external()) {
+            compute_bound++;
+        } else {
+            memory_bound++;
+        }
+        total_efficiency += r.compute_efficiency;
+    }
+    double avg_efficiency = results.results.empty() ? 0 : total_efficiency / results.results.size();
+    ss << "    \"compute_bound_count\": " << compute_bound << ",\n";
+    ss << "    \"memory_bound_count\": " << memory_bound << ",\n";
+    ss << "    \"average_efficiency\": " << avg_efficiency << "\n";
+    ss << "  },\n";
+
+    ss << "  \"points\": [\n";
+    for (size_t i = 0; i < results.results.size(); ++i) {
+        const auto& r = results.results[i];
+        double predicted = hw_spec_.roofline_gflops(r.arithmetic_intensity);
+        std::string level = hw_spec_.bottleneck_level(r.arithmetic_intensity);
+
+        ss << "    {\n";
+        ss << "      \"name\": \"" << r.name << "\",\n";
+        ss << "      \"config\": \"" << r.config << "\",\n";
+        ss << "      \"arithmetic_intensity\": " << r.arithmetic_intensity << ",\n";
+        ss << "      \"gflops\": " << r.gflops << ",\n";
+        ss << "      \"efficiency\": " << r.compute_efficiency << ",\n";
+        ss << "      \"predicted_gflops\": " << predicted << ",\n";
+        ss << "      \"bottleneck\": \"" << level << "\"\n";
+        ss << "    }";
+        if (i < results.results.size() - 1) ss << ",";
+        ss << "\n";
+    }
+    ss << "  ]\n";
+    ss << "}";
+
+    return ss.str();
+}
+
 } // namespace sw::benchmark

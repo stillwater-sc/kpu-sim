@@ -325,6 +325,78 @@ TEST_CASE("Roofline analysis", "[benchmark][roofline]") {
     }
 }
 
+TEST_CASE("Multi-level roofline analysis (v0.3.2)", "[benchmark][roofline][v032]") {
+    BenchmarkHarness harness;
+
+    SECTION("Ridge points and bottleneck classification") {
+        HardwareSpec hw = harness.hardware_spec();
+
+        // Verify ridge points are calculated correctly
+        REQUIRE(hw.ridge_point_external() == hw.peak_gflops / hw.external_bw_gbs);
+        REQUIRE(hw.ridge_point_l3() == hw.peak_gflops / hw.l3_bw_gbs);
+        REQUIRE(hw.ridge_point_l2() == hw.peak_gflops / hw.l2_bw_gbs);
+
+        // Ridge points should decrease as bandwidth increases
+        REQUIRE(hw.ridge_point_external() > hw.ridge_point_l3());
+        REQUIRE(hw.ridge_point_l3() > hw.ridge_point_l2());
+
+        // Test bottleneck classification
+        REQUIRE(hw.bottleneck_level(hw.ridge_point_external() + 1) == "compute");
+        REQUIRE(hw.bottleneck_level(hw.ridge_point_l3() + 1) == "external");
+        REQUIRE(hw.bottleneck_level(hw.ridge_point_l2() + 1) == "l3");
+        REQUIRE(hw.bottleneck_level(hw.ridge_point_l2() - 1) == "l2");
+
+        std::cout << "\nMulti-level Ridge Points:\n";
+        std::cout << "  External: " << hw.ridge_point_external() << " FLOP/byte\n";
+        std::cout << "  L3:       " << hw.ridge_point_l3() << " FLOP/byte\n";
+        std::cout << "  L2:       " << hw.ridge_point_l2() << " FLOP/byte\n";
+    }
+
+    SECTION("Roofline JSON output") {
+        auto suite = harness.sweep_matmul_square(64, 512, 2);
+        std::string json = harness.generate_roofline_json(suite);
+
+        // Verify JSON structure
+        REQUIRE(!json.empty());
+        REQUIRE(json.find("\"version\": \"0.3.2\"") != std::string::npos);
+        REQUIRE(json.find("\"hardware\":") != std::string::npos);
+        REQUIRE(json.find("\"ridge_point_external\":") != std::string::npos);
+        REQUIRE(json.find("\"ridge_point_l3\":") != std::string::npos);
+        REQUIRE(json.find("\"ridge_point_l2\":") != std::string::npos);
+        REQUIRE(json.find("\"analysis\":") != std::string::npos);
+        REQUIRE(json.find("\"compute_bound_count\":") != std::string::npos);
+        REQUIRE(json.find("\"bottleneck\":") != std::string::npos);
+
+        std::cout << "\nRoofline JSON (first 500 chars):\n";
+        std::cout << json.substr(0, 500) << "...\n";
+    }
+
+    SECTION("Roofline efficiency analysis") {
+        auto suite = harness.sweep_matmul_square(64, 2048, 2);
+        HardwareSpec hw = harness.hardware_spec();
+
+        size_t compute_bound = 0;
+        size_t memory_bound = 0;
+
+        for (const auto& r : suite.results) {
+            if (r.arithmetic_intensity >= hw.ridge_point_external()) {
+                compute_bound++;
+                // Compute-bound should achieve reasonable efficiency
+                REQUIRE(r.compute_efficiency > 0.3);
+            } else {
+                memory_bound++;
+            }
+        }
+
+        std::cout << "\nEfficiency Analysis:\n";
+        std::cout << "  Compute-bound points: " << compute_bound << "\n";
+        std::cout << "  Memory-bound points:  " << memory_bound << "\n";
+
+        // Most large problems should be compute-bound
+        REQUIRE(compute_bound > memory_bound);
+    }
+}
+
 TEST_CASE("CSV export", "[benchmark][export]") {
     BenchmarkHarness harness;
 

@@ -174,6 +174,22 @@ struct HardwareSpec {
         return peak_gflops / l3_bw_gbs;
     }
 
+    double ridge_point_l2() const {
+        return peak_gflops / l2_bw_gbs;
+    }
+
+    /**
+     * @brief Determine which memory level is the bottleneck
+     * @param arithmetic_intensity FLOP per byte
+     * @return "compute", "external", "l3", or "l2"
+     */
+    std::string bottleneck_level(double arithmetic_intensity) const {
+        if (arithmetic_intensity >= ridge_point_external()) return "compute";
+        if (arithmetic_intensity >= ridge_point_l3()) return "external";
+        if (arithmetic_intensity >= ridge_point_l2()) return "l3";
+        return "l2";
+    }
+
     /**
      * @brief Calculate roofline-predicted performance
      * @param arithmetic_intensity FLOP per byte
@@ -308,6 +324,12 @@ public:
      * @brief Generate gnuplot script for roofline
      */
     std::string generate_roofline_gnuplot(const BenchmarkSuite& results) const;
+
+    /**
+     * @brief Generate roofline analysis as JSON (v0.3.2)
+     * Includes multi-level roofline data (external, L3, L2)
+     */
+    std::string generate_roofline_json(const BenchmarkSuite& results) const;
 
 private:
     HardwareSpec hw_spec_;
