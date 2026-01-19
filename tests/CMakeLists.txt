@@ -61,6 +61,7 @@ add_subdirectory(integration)
 add_subdirectory(benchmarks)
 add_subdirectory(dataflow)
 add_subdirectory(xue)
+add_subdirectory(stats)
 
 # Legacy test (in this directory)
 kpu_add_component_test(legacy_test_main "legacy" test_main.cpp)
@@ -192,6 +193,14 @@ add_custom_target(test_xue
     VERBATIM
 )
 set_target_properties(test_xue PROPERTIES FOLDER "Tests/Runners")
+
+add_custom_target(test_stats
+    COMMAND ${CMAKE_CTEST_COMMAND} -C $<CONFIG> --output-on-failure -L stats
+    COMMENT "Running statistics collection tests"
+    WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
+    VERBATIM
+)
+set_target_properties(test_stats PROPERTIES FOLDER "Tests/Runners")
 
 #add_custom_target(test_benchmarks
 #    COMMAND ${CMAKE_CTEST_COMMAND} -C $<CONFIG> --output-on-failure -L benchmark
