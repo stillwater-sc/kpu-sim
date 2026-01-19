@@ -8,8 +8,8 @@
       "config": "64x64x64",
       "timing": {
         "cycles": 1792,
-        "compile_time_us": 98.0,
-        "wall_time_us": 139.651
+        "compile_time_us": 54.0,
+        "wall_time_us": 81.582
       },
       "compute": {
         "flops": 524288,
@@ -49,8 +49,8 @@
       "config": "128x128x128",
       "timing": {
         "cycles": 11904,
-        "compile_time_us": 51.0,
-        "wall_time_us": 90.901
+        "compile_time_us": 53.0,
+        "wall_time_us": 92.76
       },
       "compute": {
         "flops": 4194304,
@@ -90,8 +90,8 @@
       "config": "256x256x256",
       "timing": {
         "cycles": 78464,
-        "compile_time_us": 200.0,
-        "wall_time_us": 353.041
+        "compile_time_us": 208.0,
+        "wall_time_us": 359.708
       },
       "compute": {
         "flops": 33554432,
@@ -131,8 +131,8 @@
       "config": "512x512x512",
       "timing": {
         "cycles": 571008,
-        "compile_time_us": 1189.0,
-        "wall_time_us": 2115.629
+        "compile_time_us": 1253.0,
+        "wall_time_us": 2141.642
       },
       "compute": {
         "flops": 268435456,
@@ -172,8 +172,8 @@
       "config": "1024x1024x1024",
       "timing": {
         "cycles": 4370048,
-        "compile_time_us": 6365.0,
-        "wall_time_us": 12349.601
+        "compile_time_us": 6523.0,
+        "wall_time_us": 12371.86
       },
       "compute": {
         "flops": 2147483648,
@@ -210,8 +210,8 @@
     }
   ],
   "_metadata": {
-    "generated_at": "2026-01-18T17:47:27.891249",
-    "version": "0.3.1",
+    "generated_at": "2026-01-19T07:50:41.897158",
+    "version": "0.3.5",
     "regression_threshold": 0.05
   }
 }

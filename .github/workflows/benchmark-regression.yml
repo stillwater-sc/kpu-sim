@@ -1,9 +1,15 @@
 # KPU Benchmark Regression Testing Workflow
-# Part of v0.3.1 Benchmarking & Observability
+# Part of v0.3.5 Performance Regression Testing
 #
 # This workflow runs benchmark regression tests on PRs and pushes to main.
 # It compares performance against stored baselines and fails if significant
 # regressions are detected (>5% degradation).
+#
+# Features:
+# - Cached builds for faster CI
+# - Baseline persistence via artifacts
+# - PR comments with regression reports
+# - Manual trigger support
 
 name: Benchmark Regression
 
@@ -15,6 +21,7 @@ on:
       - 'include/**'
       - 'tests/benchmarks/**'
       - 'tools/benchmark/**'
+      - 'scripts/benchmark_regression.py'
   pull_request:
     branches: [main]
     paths:
@@ -22,11 +29,25 @@ on:
       - 'include/**'
       - 'tests/benchmarks/**'
       - 'tools/benchmark/**'
+      - 'scripts/benchmark_regression.py'
   workflow_dispatch:  # Allow manual trigger
+    inputs:
+      update_baseline:
+        description: 'Update baseline after run'
+        required: false
+        default: 'false'
+        type: boolean
+
+env:
+  BUILD_TYPE: Release
+  REGRESSION_THRESHOLD: 5
 
 jobs:
   benchmark:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
 
     steps:
       - name: Checkout repository
@@ -42,31 +63,145 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y ninja-build
 
+      - name: Cache CMake build
+        uses: actions/cache@v4
+        with:
+          path: |
+            build
+            !build/tests
+          key: benchmark-build-${{ runner.os }}-${{ hashFiles('CMakeLists.txt', 'src/**', 'include/**') }}
+          restore-keys: |
+            benchmark-build-${{ runner.os }}-
+
       - name: Configure CMake
         run: |
+          # Clear CMakeCache to ensure options are applied fresh
+          rm -f build/CMakeCache.txt
           cmake -B build -G Ninja \
-            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }} \
             -DKPU_BUILD_TESTS=ON \
             -DKPU_BUILD_TOOLS=ON \
             -DKPU_BUILD_PYTHON_BINDINGS=OFF
 
       - name: Build benchmark tools
         run: |
-          cmake --build build --target benchmark
+          cmake --build build --target kpu-benchmark -j$(nproc)
+
+      - name: Download baseline artifact
+        id: download-baseline
+        uses: dawidd6/action-download-artifact@v3
+        continue-on-error: true
+        with:
+          workflow: benchmark-regression.yml
+          branch: main
+          name: benchmark-baseline
+          path: tests/benchmarks/baselines/
+          if_no_artifact_found: warn
 
       - name: Run benchmark regression check
+        id: regression-check
         run: |
-          python3 scripts/benchmark_regression.py check
+          # Check if baseline exists
+          if [ -f "tests/benchmarks/baselines/baseline.json" ]; then
+            echo "Baseline found, running regression check..."
+            python3 scripts/benchmark_regression.py check 2>&1 | tee regression_output.txt
+            RESULT=${PIPESTATUS[0]}
+            echo "regression_detected=$([[ $RESULT -ne 0 ]] && echo 'true' || echo 'false')" >> $GITHUB_OUTPUT
+          else
+            echo "No baseline found, generating initial baseline..."
+            python3 scripts/benchmark_regression.py generate
+            echo "regression_detected=false" >> $GITHUB_OUTPUT
+          fi
+        continue-on-error: true
 
       - name: Generate benchmark report
-        if: always()
+        id: generate-report
         run: |
-          python3 scripts/benchmark_regression.py report || true
+          python3 scripts/benchmark_regression.py report > benchmark_report.txt 2>&1 || true
+
+          # Create markdown report for PR comment
+          {
+            echo '## Benchmark Regression Report'
+            echo ''
+            echo '```'
+            cat benchmark_report.txt
+            echo '```'
+            echo ''
+            if [ "${{ steps.regression-check.outputs.regression_detected }}" == "true" ]; then
+              echo '> **Warning:** Performance regression detected (>${{ env.REGRESSION_THRESHOLD }}% degradation)'
+            else
+              echo '> **Status:** No performance regressions detected'
+            fi
+          } > benchmark_report.md
+
+      - name: Comment on PR
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const report = fs.readFileSync('benchmark_report.md', 'utf8');
+
+            // Find existing comment
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+            });
+
+            const botComment = comments.find(comment =>
+              comment.user.type === 'Bot' &&
+              comment.body.includes('Benchmark Regression Report')
+            );
+
+            if (botComment) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: botComment.id,
+                body: report
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body: report
+              });
+            }
+
+      - name: Update baseline (on main push or manual trigger)
+        if: |
+          (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
+          (github.event_name == 'workflow_dispatch' && github.event.inputs.update_baseline == 'true')
+        run: |
+          python3 scripts/benchmark_regression.py update
+
+      - name: Upload baseline artifact
+        if: |
+          (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
+          (github.event_name == 'workflow_dispatch' && github.event.inputs.update_baseline == 'true')
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-baseline
+          path: tests/benchmarks/baselines/baseline.json
+          retention-days: 90
+          overwrite: true
 
       - name: Upload benchmark results
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: benchmark-results
-          path: tests/benchmarks/baselines/
+          name: benchmark-results-${{ github.sha }}
+          path: |
+            tests/benchmarks/baselines/
+            benchmark_report.txt
+            benchmark_report.md
           retention-days: 30
+
+      - name: Fail on regression
+        if: steps.regression-check.outputs.regression_detected == 'true'
+        run: |
+          echo "Performance regression detected!"
+          cat benchmark_report.txt
+          exit 1

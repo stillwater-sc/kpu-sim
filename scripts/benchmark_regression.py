@@ -3,7 +3,13 @@
 KPU Benchmark Regression Testing
 
 This script manages benchmark baselines and detects performance regressions.
-Part of v0.3.1 Benchmarking & Observability.
+Part of v0.3.5 Performance Regression Testing.
+
+Features:
+- Baseline generation and management
+- Performance regression detection (>5% threshold)
+- JSON/markdown/text report generation
+- CI integration support
 
 Usage:
     # Generate a new baseline
@@ -17,6 +23,9 @@ Usage:
 
     # Show comparison report
     python benchmark_regression.py report
+
+    # Generate markdown report for PR comments
+    python benchmark_regression.py markdown
 """
 
 import argparse
@@ -71,7 +80,7 @@ def save_baseline(data: dict):
     # Add metadata
     data["_metadata"] = {
         "generated_at": datetime.now().isoformat(),
-        "version": "0.3.1",
+        "version": "0.3.5",
         "regression_threshold": REGRESSION_THRESHOLD
     }
 
@@ -248,6 +257,98 @@ def cmd_report(args):
     sys.exit(exit_code)
 
 
+def generate_markdown_report(baseline: dict, current: dict, regressions: list) -> str:
+    """Generate a markdown-formatted report for PR comments."""
+    lines = []
+    lines.append("## KPU Benchmark Regression Report")
+    lines.append("")
+
+    baseline_meta = baseline.get("_metadata", {})
+    lines.append(f"**Baseline:** {baseline_meta.get('generated_at', 'unknown')}")
+    lines.append(f"**Threshold:** {REGRESSION_THRESHOLD * 100}%")
+    lines.append("")
+
+    # Summary table
+    lines.append("| Config | Metric | Baseline | Current | Change | Status |")
+    lines.append("|--------|--------|----------|---------|--------|--------|")
+
+    baseline_by_config = {r["config"]: r for r in baseline.get("results", [])}
+    current_by_config = {r["config"]: r for r in current.get("results", [])}
+
+    for config in sorted(current_by_config.keys()):
+        if config not in baseline_by_config:
+            continue
+
+        br = baseline_by_config[config]
+        cr = current_by_config[config]
+
+        # GFLOPS comparison
+        bg = br.get("compute", {}).get("gflops", 0)
+        cg = cr.get("compute", {}).get("gflops", 0)
+        change_g = ((cg - bg) / bg * 100) if bg > 0 else 0
+        status_g = "REGRESS" if change_g < -REGRESSION_THRESHOLD * 100 else "OK"
+
+        lines.append(f"| {config} | GFLOPS | {bg:.2f} | {cg:.2f} | {change_g:+.1f}% | {status_g} |")
+
+        # Efficiency comparison
+        be = br.get("compute", {}).get("efficiency", 0)
+        ce = cr.get("compute", {}).get("efficiency", 0)
+        change_e = ((ce - be) / be * 100) if be > 0 else 0
+        status_e = "REGRESS" if change_e < -REGRESSION_THRESHOLD * 100 else "OK"
+
+        lines.append(f"| | Efficiency | {be*100:.1f}% | {ce*100:.1f}% | {change_e:+.1f}% | {status_e} |")
+
+    lines.append("")
+
+    # Summary
+    if regressions:
+        lines.append(f"> **Warning:** {len(regressions)} regression(s) detected")
+        for r in regressions:
+            lines.append(f"> - `{r['config']}`: {r['metric']} dropped {abs(r['change_pct']):.1f}%")
+    else:
+        lines.append("> **Status:** No performance regressions detected")
+
+    return "\n".join(lines)
+
+
+def cmd_markdown(args):
+    """Generate markdown report for PR comments."""
+    baseline = load_baseline()
+    if baseline is None:
+        print("<!-- No baseline found -->")
+        print("## KPU Benchmark Regression Report")
+        print("")
+        print("> **Note:** No baseline found. Run `python benchmark_regression.py generate` first.")
+        sys.exit(0)
+
+    current = run_benchmark()
+    regressions = compare_results(baseline, current)
+    print(generate_markdown_report(baseline, current, regressions))
+    sys.exit(1 if regressions else 0)
+
+
+def cmd_json_report(args):
+    """Generate JSON report for CI integration."""
+    baseline = load_baseline()
+    if baseline is None:
+        print(json.dumps({"error": "No baseline found", "regressions": []}))
+        sys.exit(1)
+
+    current = run_benchmark()
+    regressions = compare_results(baseline, current)
+
+    report = {
+        "version": "0.3.5",
+        "baseline_date": baseline.get("_metadata", {}).get("generated_at"),
+        "threshold_percent": REGRESSION_THRESHOLD * 100,
+        "regression_count": len(regressions),
+        "regressions": regressions,
+        "status": "FAIL" if regressions else "PASS"
+    }
+    print(json.dumps(report, indent=2))
+    sys.exit(1 if regressions else 0)
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="KPU Benchmark Regression Testing",
@@ -272,6 +373,14 @@ def main():
     # report command
     report_parser = subparsers.add_parser("report", help="Show comparison report")
     report_parser.set_defaults(func=cmd_report)
+
+    # markdown command
+    md_parser = subparsers.add_parser("markdown", help="Generate markdown report for PR comments")
+    md_parser.set_defaults(func=cmd_markdown)
+
+    # json-report command
+    json_parser = subparsers.add_parser("json-report", help="Generate JSON report for CI")
+    json_parser.set_defaults(func=cmd_json_report)
 
     args = parser.parse_args()
 
