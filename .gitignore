@@ -70,5 +70,8 @@ Testing/
 *_test.trace
 bin/
 
+# Benchmark baselines (managed via CI artifacts)
+tests/benchmarks/baselines/
+
 # pyenv files
 .python-version
