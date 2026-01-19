@@ -185,19 +185,22 @@ src/compiler/
 
 ### Features
 
-| Feature | Description | Files |
-|---------|-------------|-------|
-| FusionCompiler | Find and apply fusion groups | `include/sw/compiler/fusion_compiler.hpp` |
-| Fusion Detection | Analyze graph for opportunities | `src/compiler/fusion_detection.cpp` |
-| Fused Kernels | Generate merged programs | `src/compiler/fused_kernel.cpp` |
+| SEMVER | Feature | Description | Files |
+|--------|---------|-------------|-------|
+| v0.6.0 | FusionCompiler | Find and apply fusion groups | `include/sw/compiler/fusion_compiler.hpp` |
+| v0.6.1 | Fusion Detection | Analyze graph for opportunities | `src/compiler/fusion_detection.cpp` |
+| v0.6.2 | Fused Kernels | Generate merged programs | `src/compiler/fused_kernel.cpp` |
+| v0.6.3 | Compute Efficiency | Demonstrate Compute Efficiency improvement | `examples/fusion/fusing_kernels.cpp` |
 
 ### Success Criteria
 
 - [ ] 2× memory traffic reduction on FFN pattern
 - [ ] Automatic fusion detection
 - [ ] MatMul+Bias+ReLU fuses correctly
+- [ ] Unfused baseline and Fused baseline
+- [ ] Validate unfused is memory bound, fused is compute bound
 
-### Tag: `v0.6.0-fusion`
+### Tag: `v0.6-fusion`
 
 ---
 
@@ -209,20 +212,35 @@ src/compiler/
 
 ### Features
 
-| Feature | Description |
-|---------|-------------|
-| INT8 MatMul | `Kernel::create_matmul_int8(M, N, K)` |
-| Mixed Precision | INT8 weights, FP16 activations |
-| Quantize/Dequantize | Scale and zero-point handling |
-| Calibration Utils | Post-training quantization helpers |
+| SEMVER | Feature | Description |
+|--------|---------|-------------|
+| v0.7.0 | INT8 MatMul | `Kernel::create_matmul_int8(M, N, K)` |
+| v0.7.1 | FP16 MatMul | `Kernel::create_matmul_fp16(M, N, K)` |
+| v0.7.2 | BF16 MatMul | `Kernel::create_matmul_bf16(M, N, K)` |
+| v0.7.3 | FP8e2 MatMul | `Kernel::create_matmul_fp8e2(M, N, K)` |
+| v0.7.4 | FP8e3 MatMul | `Kernel::create_matmul_fp8e3(M, N, K)` |
+| v0.7.5 | FP8e4 MatMul | `Kernel::create_matmul_fp8e4(M, N, K)` |
+| v0.7.6 | FP8e5 MatMul | `Kernel::create_matmul_fp8e5(M, N, K)` |
+| v0.7.7 | INT4 MatMul | `Kernel::create_matmul_int4(M, N, K)` |
+| v0.7.8 | FP4 MatMul | `Kernel::create_matmul_fp4(M, N, K)` |
+| v0.7.9 | Mixed Precision | INT8 weights, FP16 activations |
+| v0.7.10 | Quantize/Dequantize | Scale and zero-point handling |
+| v0.7.11 | Calibration Utils | Post-training quantization helpers |
 
 ### Data Types
 
 | Type | Size | Status |
 |------|------|--------|
-| INT8 | 1B | Implemented in v0.7.0 |
-| UINT8 | 1B | Implemented in v0.7.0 |
-| INT4 | 0.5B | Packed format in v0.7.0 |
+| INT8 | 1Byte | Implemented in v0.7.0 |
+| UINT8 | 1Byte | Implemented in v0.7.0 |
+| INT4 | 0.5Byte | Packed format in v0.7.7 |
+| FP16 | 2Bytes | v0.7.1 |
+| BF16 | 2Bytes | v0.7.2 |
+| FP8e2 | 1Byte | v0.7.3 |
+| FP8e3 | 1Byte | v0.7.4 |
+| FP8e4 | 1Byte | v0.7.5 |
+| FP8e5 | 1Byte | v0.7.6 |
+| FP4 | 0.5Byte | Packed format in v0.7.8 |
 
 ### Success Criteria
 
