@@ -22,7 +22,9 @@
 #include <sw/kpu/fidelity/simulation_fidelity.hpp>
 #include <sw/kpu/fidelity/component_config.hpp>
 #include <sw/kpu/models/interfaces/compute_fabric_interface.hpp>
+#include <sw/kpu/models/interfaces/memory_controller_interface.hpp>
 #include <sw/kpu/models/transactional/compute/compute_fabric.hpp>
+#include <sw/kpu/models/transactional/memory/memory_controller.hpp>
 
 #ifndef M_PI
 #define M_PI 3.14159265358979323846

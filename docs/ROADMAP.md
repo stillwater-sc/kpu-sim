@@ -86,12 +86,13 @@ Current   Bench-    TRANS-     Add'l     Kernel    Quant-    Model     Prod
 
 ### Features
 
-| Feature | Description | Files |
-|---------|-------------|-------|
-| pybind11 Integration | Full native bindings | `python/kpu/_native/` |
-| DFX→C++ Parser | Parse DFX JSON in C++ | `src/bindings/dfx_parser.cpp` |
-| Timing Stats | Cycles, memory access counts | `include/sw/kpu/stats/` |
-| Python API | `kpu.set_fidelity(TRANSACTIONAL)` | `python/kpu/runtime.py` |
+| SEMVER | Feature | Description | Files |
+|--------|---------|-------------|-------|
+| v0.4.0 | pybind11 Integration | Full native bindings | `python/kpu/_native/` |
+| v0.4.1 | DFX→C++ Parser | Parse DFX JSON in C++ | `src/bindings/dfx_parser.cpp` |
+| v0.4.2 | Timing Stats | Cycles, memory access counts | `include/sw/kpu/stats/` |
+| v0.4.3 | Python API | `kpu.set_fidelity(TRANSACTIONAL)` | `python/kpu/runtime.py` |
+| v0.4.4 | Performance | Performance validation of compute patterns | `patterns/compute-tile/systolic/matmul.cpp` |
 
 ### Architecture
 
@@ -113,6 +114,15 @@ Python kpu package
 └─────────────────┘
 ```
 
+### Performance Tests
+
+For KPU configuration of a single 16x16 PE array, 1M L3, 128K L2, 1k L1, create a performance test that has analytical solutions to event occurrences, and measure service times and latencies with XUE framework:
+
+- [ ] 16x16 matmul, single tile, from DRAM to DRAM. All occurrences correct, service time for matmul, latency for tile to L3, L2, first L1 stream, last L1 stream buffer, latency for result tile to DRAM
+- [ ] 32x32 matmul, four tiles, from DRAM to DRAM, measure compute tile efficiency to see if we are pipelining properly
+- [ ] 64x64 matmul, 16 tiles, from DRAM to DRAM, measure compute tile efficiency
+- [ ] 128x128 matmul, 64 tiles, from DRAM to DRAM, measure compute tile efficiency
+
 ### Success Criteria
 
 - [ ] Python can execute DFX on C++ simulator
@@ -120,7 +130,7 @@ Python kpu package
 - [ ] torch.compile works with TRANSACTIONAL mode
 - [ ] MNIST MLP timing matches C++ direct execution
 
-### Tag: `v0.4.0-transactional`
+### Tag: `v0.4-transactional`
 
 ---
 
@@ -132,16 +142,16 @@ Python kpu package
 
 ### Features
 
-| Kernel | API | Implementation |
-|--------|-----|----------------|
-| Conv2D | `Kernel::create_conv2d(...)` | im2col + GEMM |
-| Attention | `Kernel::create_attention(...)` | Q,K,V projections + softmax |
-| LayerNorm | `Kernel::create_layernorm(...)` | Mean/var + affine |
-| RMSNorm | `Kernel::create_rmsnorm(...)` | RMS + scale |
-| BatchNorm | `Kernel::create_batchnorm(...)` | Foldable to preceding conv |
-| Elementwise | `Kernel::create_elementwise(...)` | add, mul, residual |
-| Pool2D | `Kernel::create_pool2d(...)` | max, avg, global_avg |
-| Softmax | `Kernel::create_softmax(...)` | Reduction-based |
+| SEMVER | Kernel | API | Implementation |
+|--------|--------|-----|----------------|
+| v0.5.0 | Conv2D | `Kernel::create_conv2d(...)` | im2col + GEMM |
+| v0.5.1 | Attention | `Kernel::create_attention(...)` | Q,K,V projections + softmax |
+| v0.5.2 | LayerNorm | `Kernel::create_layernorm(...)` | Mean/var + affine |
+| v0.5.3 | RMSNorm | `Kernel::create_rmsnorm(...)` | RMS + scale |
+| v0.5.4 | BatchNorm | `Kernel::create_batchnorm(...)` | Foldable to preceding conv |
+| v0.5.5 | Elementwise | `Kernel::create_elementwise(...)` | add, mul, residual |
+| v0.5.6 | Pool2D | `Kernel::create_pool2d(...)` | max, avg, global_avg |
+| v0.5.7 | Softmax | `Kernel::create_softmax(...)` | Reduction-based |
 
 ### Files to Create/Modify
 
@@ -165,7 +175,7 @@ src/compiler/
 - [ ] LayerNorm/Softmax kernels working
 - [ ] All kernels accessible from Python via TRANSACTIONAL
 
-### Tag: `v0.5.0-kernels`
+### Tag: `v0.5-kernels`
 
 ---
 
