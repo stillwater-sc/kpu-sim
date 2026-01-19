@@ -709,13 +709,15 @@ TEST_CASE("Chrome trace file output", "[dataflow][trace][file]") {
     REQUIRE(writer.write_to_file(filename));
 
     // Verify file exists and is valid JSON
-    std::ifstream file(filename);
-    REQUIRE(file.is_open());
+    {
+        std::ifstream file(filename);
+        REQUIRE(file.is_open());
 
-    std::string content((std::istreambuf_iterator<char>(file)),
-                         std::istreambuf_iterator<char>());
-    REQUIRE(content.find("traceEvents") != std::string::npos);
-    REQUIRE(content.find("displayTimeUnit") != std::string::npos);
+        std::string content((std::istreambuf_iterator<char>(file)),
+                             std::istreambuf_iterator<char>());
+        REQUIRE(content.find("traceEvents") != std::string::npos);
+        REQUIRE(content.find("displayTimeUnit") != std::string::npos);
+    }  // file closed here
 
     // Cleanup
     std::filesystem::remove(filename);
@@ -783,16 +785,18 @@ TEST_CASE("Multi-level trace consolidation", "[dataflow][trace][integration]") {
     REQUIRE(consolidator.write_to_file(filename));
 
     // Verify
-    std::ifstream file(filename);
-    std::string content((std::istreambuf_iterator<char>(file)),
-                         std::istreambuf_iterator<char>());
+    {
+        std::ifstream file(filename);
+        std::string content((std::istreambuf_iterator<char>(file)),
+                             std::istreambuf_iterator<char>());
 
-    // Should have events from both levels (different pids)
-    REQUIRE(content.find("\"pid\":1") != std::string::npos);  // DMA
-    REQUIRE(content.find("\"pid\":2") != std::string::npos);  // BlockMover
+        // Should have events from both levels (different pids)
+        REQUIRE(content.find("\"pid\":1") != std::string::npos);  // DMA
+        REQUIRE(content.find("\"pid\":2") != std::string::npos);  // BlockMover
 
-    // Should have flow events
-    REQUIRE(content.find("flow") != std::string::npos);
+        // Should have flow events
+        REQUIRE(content.find("flow") != std::string::npos);
+    }  // file closed here
 
     std::filesystem::remove(filename);
 }
