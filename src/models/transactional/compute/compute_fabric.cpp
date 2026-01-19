@@ -113,6 +113,14 @@ bool TransactionalComputeFabric::can_accept() const {
 void TransactionalComputeFabric::tick() {
     current_cycle_++;
 
+    // Update utilization stats BEFORE advancing state machine
+    // This ensures the final compute cycle is counted as busy, not idle
+    if (current_state_ != PipelineState::IDLE) {
+        stats_.busy_cycles++;
+    } else {
+        stats_.idle_cycles++;
+    }
+
     // Process completed operations
     while (!completion_queue_.empty() &&
            completion_queue_.top().completion_cycle <= current_cycle_) {
@@ -128,17 +136,17 @@ void TransactionalComputeFabric::tick() {
 
     // Advance state machine
     advance_state();
-
-    // Update utilization stats
-    if (current_state_ != PipelineState::IDLE) {
-        stats_.busy_cycles++;
-    } else {
-        stats_.idle_cycles++;
-    }
 }
 
 void TransactionalComputeFabric::drain() {
+    // Process pending operations with callbacks
     while (has_pending()) {
+        tick();
+    }
+
+    // Also tick through remaining scheduled cycles for timing stats
+    // This ensures busy/idle cycles are tracked even without callbacks
+    while (current_cycle_ < state_end_cycle_) {
         tick();
     }
 }

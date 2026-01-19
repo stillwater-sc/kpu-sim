@@ -61,6 +61,23 @@ print("Compute Performance:")
 print(f"  MatMul FLOPs:  {stats.matmul_flops:,}")
 print(f"  GFLOPS:        {stats.gflops:.1f} @ {stats.clock_frequency_ghz:.1f} GHz")
 print(f"  FLOPs/Cycle:   {stats.matmul_flops / T:.1f}")
+print()
+
+# Cycle Breakdown (v0.4.2 Timing Stats)
+print("Cycle Breakdown:")
+print(f"  Compute Cycles:  {stats.compute_cycles:,}")
+print(f"  Memory Cycles:   {stats.memory_cycles:,}")
+print(f"  Busy Cycles:     {stats.busy_cycles:,}")
+print(f"  Idle Cycles:     {stats.idle_cycles:,}")
+print(f"  Stall Cycles:    {stats.stall_cycles:,}")
+print()
+
+# Utilization Metrics
+print("Utilization Metrics:")
+print(f"  Utilization:     {stats.utilization * 100:.1f}%")
+print(f"  Efficiency:      {stats.efficiency * 100:.1f}%")
+print(f"  Page Hit Rate:   {stats.page_hit_rate * 100:.1f}%")
+print(f"  Memory BW:       {stats.memory_bandwidth_gbps:.2f} GB/s")
 print("=" * 60)
 
 # Reference calculations

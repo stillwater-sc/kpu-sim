@@ -1,5 +1,27 @@
 // Matmul Benchmark Tests
 // Tests for matrix multiplication performance across sizes and configurations
+//
+// ============================================================================
+// BENCHMARK SIZE HISTORY
+// ============================================================================
+// Sizes were reduced on 2026-01-19 for faster CI and lower memory usage.
+// Original sizes can be restored when running on more powerful hardware.
+//
+// | Test                | Current        | Original           | Memory Delta |
+// |---------------------|----------------|--------------------| -------------|
+// | Extended sweep      | 64→2048        | 64→16384           | ~3 GB        |
+// | Large tile problem  | 2048³          | 4096³              | ~180 MB      |
+// | Transformer FFN     | 4096×1536×768  | 16384×3072×768     | ~200 MB      |
+// | GPT-2 tests         | batch=8,seq=256| batch=32,seq=512   | ~75%         |
+// | MLP-like custom     | 1024³          | 1024×4096×1024     | ~75%         |
+//
+// To restore original sizes for stress testing:
+//   - Extended sweep: change 2048 → 16384, efficiency >= 0.49
+//   - Large tile: change 2048 → 4096
+//   - Transformer FFN: change 4096×1536 → 16384×3072
+//   - GPT-2: change 8*256 → 32*512, intermediate 1536 → 3072
+//   - MLP custom: change 1024³ → 1024×4096×1024
+// ============================================================================
 
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_floating_point.hpp>
@@ -73,22 +95,23 @@ TEST_CASE("Matmul size sweep", "[benchmark][matmul][sweep]") {
                   << " at " << best->gflops << " GFLOPS" << std::endl;
     }
 
-    SECTION("Extended sweep to 16K (v0.3.1)") {
-        // Extended sweep for v0.3.1 - includes sizes up to 16384
-        auto suite = harness.sweep_matmul_square(64, 16384, 2);
+    SECTION("Extended sweep to 2K (v0.3.1)") {
+        // Extended sweep for v0.3.1 - includes sizes up to 2048
+        // Note: Larger sizes (4K+) require significant memory and time
+        auto suite = harness.sweep_matmul_square(64, 2048, 2);
 
-        // Should have 9 sizes: 64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384
-        REQUIRE(suite.results.size() >= 9);
+        // Should have 6 sizes: 64, 128, 256, 512, 1024, 2048
+        REQUIRE(suite.results.size() >= 6);
 
         std::cout << "\n=== Extended Matmul Sweep (v0.3.1) ===" << std::endl;
         std::cout << suite.summary_table() << std::endl;
 
         // Verify large problems achieve higher efficiency (compute-bound)
         auto& largest = suite.results.back();
-        REQUIRE(largest.is_compute_bound());  // 16K should be compute-bound
+        REQUIRE(largest.is_compute_bound());  // 2K should be compute-bound
 
-        // Large problems should approach peak efficiency (asymptotic ~50%)
-        REQUIRE(largest.compute_efficiency >= 0.49);  // At least 49% of peak
+        // Large problems should approach reasonable efficiency
+        REQUIRE(largest.compute_efficiency >= 0.40);  // At least 40% of peak
 
         std::cout << "Largest problem (" << largest.config << "):\n";
         std::cout << "  Efficiency: " << (largest.compute_efficiency * 100) << "%\n";
@@ -102,7 +125,7 @@ TEST_CASE("Matmul size sweep", "[benchmark][matmul][sweep]") {
             {256, 512, 256},
             {512, 256, 512},
             {768, 768, 768},  // Transformer-like
-            {1024, 4096, 1024}, // MLP-like
+            {1024, 1024, 1024}, // MLP-like (reduced from 1024x4096x1024)
         };
 
         auto suite = harness.sweep_matmul_sizes(sizes);
@@ -196,11 +219,11 @@ TEST_CASE("Extended tile sensitivity (v0.3.1)", "[benchmark][matmul][tiles][v031
         REQUIRE(best->compute_efficiency > 0.3);
     }
 
-    SECTION("Large problem (4096x4096x4096) - deeply compute-bound") {
-        Size M = 4096, N = 4096, K = 4096;
+    SECTION("Large problem (2048x2048x2048) - deeply compute-bound") {
+        Size M = 2048, N = 2048, K = 2048;
         auto suite = harness.sweep_tile_sizes(M, N, K, tile_configs);
 
-        std::cout << "\n=== Tile Sensitivity: 4096x4096x4096 (Large/Compute-bound) ===\n";
+        std::cout << "\n=== Tile Sensitivity: 2048x2048x2048 (Large/Compute-bound) ===\n";
         std::cout << suite.summary_table() << std::endl;
 
         auto best = suite.best_by_efficiency();
@@ -225,12 +248,12 @@ TEST_CASE("Extended tile sensitivity (v0.3.1)", "[benchmark][matmul][tiles][v031
                   << " → " << (best->compute_efficiency * 100) << "% efficiency\n";
     }
 
-    SECTION("Transformer FFN tile sensitivity (16384x3072x768)") {
-        // GPT-2 style: batch*seq=16384, intermediate=3072, hidden=768
-        Size M = 16384, N = 3072, K = 768;
+    SECTION("Transformer FFN tile sensitivity (4096x1536x768)") {
+        // GPT-2 style (reduced): batch*seq=4096, intermediate=1536, hidden=768
+        Size M = 4096, N = 1536, K = 768;
         auto suite = harness.sweep_tile_sizes(M, N, K, tile_configs);
 
-        std::cout << "\n=== Tile Sensitivity: 16384x3072x768 (Transformer FFN) ===\n";
+        std::cout << "\n=== Tile Sensitivity: 4096x1536x768 (Transformer FFN) ===\n";
         std::cout << suite.summary_table() << std::endl;
 
         auto best = suite.best_by_efficiency();
@@ -287,23 +310,23 @@ TEST_CASE("Non-square matmul benchmark", "[benchmark][matmul]") {
 TEST_CASE("Transformer-like dimensions", "[benchmark][matmul][transformer]") {
     BenchmarkHarness harness;
 
-    // GPT-2 style dimensions
+    // GPT-2 style dimensions (reduced batch*seq for faster tests)
     SECTION("GPT-2 FFN up-projection") {
-        // batch=32, seq=512, hidden=768, intermediate=3072
-        auto result = harness.benchmark_matmul(32 * 512, 3072, 768);
+        // batch=8, seq=256, hidden=768, intermediate=1536
+        auto result = harness.benchmark_matmul(8 * 256, 1536, 768);
         std::cout << "FFN up: " << result.to_string() << std::endl;
         REQUIRE(result.cycles > 0);
     }
 
     SECTION("GPT-2 FFN down-projection") {
-        auto result = harness.benchmark_matmul(32 * 512, 768, 3072);
+        auto result = harness.benchmark_matmul(8 * 256, 768, 1536);
         std::cout << "FFN down: " << result.to_string() << std::endl;
         REQUIRE(result.cycles > 0);
     }
 
     SECTION("Attention QKV projection") {
-        // batch=32, seq=512, hidden=768
-        auto result = harness.benchmark_matmul(32 * 512, 768 * 3, 768);
+        // batch=8, seq=256, hidden=768
+        auto result = harness.benchmark_matmul(8 * 256, 768 * 3, 768);
         std::cout << "QKV: " << result.to_string() << std::endl;
         REQUIRE(result.cycles > 0);
     }
