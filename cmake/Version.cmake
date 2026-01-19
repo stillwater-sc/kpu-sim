@@ -13,7 +13,7 @@
 find_package(Git QUIET)
 
 # Default version if git not available or no tags
-set(KPU_VERSION_FALLBACK "0.2.0")
+set(KPU_VERSION_FALLBACK "0.3.5")
 
 if(GIT_FOUND AND EXISTS "${CMAKE_SOURCE_DIR}/.git")
     # Get version from git describe

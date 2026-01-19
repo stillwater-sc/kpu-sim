@@ -47,6 +47,8 @@ jobs:
 
     steps:
     - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0  # Fetch all history and tags for version detection
 
     - name: Install CMake 4.2
       uses: jwlawson/actions-setup-cmake@v2
