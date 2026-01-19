@@ -23,16 +23,48 @@ CYCLE_ACCURATE = 2
 
 
 @dataclass
+class LevelMemoryStats:
+    """Per-level memory hierarchy statistics (XUE events).
+
+    Tracks reads, writes, bytes, cycles, and transaction sizes for
+    service rate and throughput calculations.
+    """
+    read_count: int = 0
+    write_count: int = 0
+    read_bytes: int = 0
+    write_bytes: int = 0
+    read_cycles: int = 0
+    write_cycles: int = 0
+    transaction_size: int = 64
+    service_rate: float = 0.0  # bytes/cycle
+    throughput: float = 0.0    # transactions/cycle
+
+    @property
+    def total_bytes(self) -> int:
+        return self.read_bytes + self.write_bytes
+
+    @property
+    def total_count(self) -> int:
+        return self.read_count + self.write_count
+
+
+@dataclass
 class ExecutionStats:
     """Statistics from kernel execution.
 
-    Extended for v0.4.0 TRANSACTIONAL runtime with detailed metrics
+    Extended for v0.4.0+ TRANSACTIONAL runtime with detailed metrics
     from the C++ transactional simulation models.
+
+    XUE Event Tracking:
+      - Per-level memory hierarchy stats (DRAM, L3, L2, L1)
+      - Transaction sizes for service rate calculations
+      - Elapsed cycles (T) for throughput analysis
     """
     # Basic timing
     cycles: int = 0
     compute_cycles: int = 0
     memory_cycles: int = 0
+    elapsed_cycles: int = 0  # Wall clock cycles (T) for service rates
 
     # Detailed cycle breakdown (TRANSACTIONAL mode)
     busy_cycles: int = 0
@@ -44,17 +76,52 @@ class ExecutionStats:
     total_macs: int = 0
     matmul_count: int = 0
 
-    # Memory metrics
+    # Memory hierarchy statistics (XUE events per level)
+    dram: Optional[LevelMemoryStats] = None
+    l3: Optional[LevelMemoryStats] = None
+    l2: Optional[LevelMemoryStats] = None
+    l1: Optional[LevelMemoryStats] = None
+
+    # Legacy memory traffic metrics (for backward compatibility)
     memory_bytes: int = 0
     external_bytes: int = 0
+
+    # Memory controller stats (TRANSACTIONAL mode)
+    memory_reads: int = 0
+    memory_writes: int = 0
+    page_hits: int = 0
+    page_misses: int = 0
+    memory_latency_cycles: int = 0
 
     # Operation counts
     ops_executed: int = 0
 
-    # Performance metrics (computed by native simulator)
+    # Clock frequency used for performance calculations
+    clock_frequency_ghz: float = 0.0
+
+    # Performance metrics (computed using clock_frequency_ghz)
     gflops: float = 0.0
     utilization: float = 0.0
     efficiency: float = 0.0
+    memory_bandwidth_gbps: float = 0.0
+    page_hit_rate: float = 0.0
+
+    # Per-level service rates (GB/s = bytes/cycle * clock_ghz)
+    dram_service_rate_gbps: float = 0.0
+    l3_service_rate_gbps: float = 0.0
+    l2_service_rate_gbps: float = 0.0
+    l1_service_rate_gbps: float = 0.0
+
+    def __post_init__(self):
+        # Initialize level stats if not provided
+        if self.dram is None:
+            self.dram = LevelMemoryStats()
+        if self.l3 is None:
+            self.l3 = LevelMemoryStats()
+        if self.l2 is None:
+            self.l2 = LevelMemoryStats()
+        if self.l1 is None:
+            self.l1 = LevelMemoryStats()
 
 
 class KPURuntime:
@@ -514,6 +581,22 @@ class KPURuntime:
             warnings.warn(f"Native bindings failed to initialize: {e}")
             self._native_sim = None
 
+    def _extract_level_stats(self, level_dict: Dict[str, Any]) -> LevelMemoryStats:
+        """Extract LevelMemoryStats from a dictionary."""
+        if level_dict is None:
+            return LevelMemoryStats()
+        return LevelMemoryStats(
+            read_count=level_dict.get('read_count', 0),
+            write_count=level_dict.get('write_count', 0),
+            read_bytes=level_dict.get('read_bytes', 0),
+            write_bytes=level_dict.get('write_bytes', 0),
+            read_cycles=level_dict.get('read_cycles', 0),
+            write_cycles=level_dict.get('write_cycles', 0),
+            transaction_size=level_dict.get('transaction_size', 64),
+            service_rate=level_dict.get('service_rate', 0.0),
+            throughput=level_dict.get('throughput', 0.0),
+        )
+
     def _execute_native(self,
                         program: 'DFXProgram',
                         inputs: List['Tensor'],
@@ -531,11 +614,18 @@ class KPURuntime:
             mode
         )
 
+        # Extract per-level memory stats (XUE events)
+        dram_stats = self._extract_level_stats(stats_dict.get('dram'))
+        l3_stats = self._extract_level_stats(stats_dict.get('l3'))
+        l2_stats = self._extract_level_stats(stats_dict.get('l2'))
+        l1_stats = self._extract_level_stats(stats_dict.get('l1'))
+
         stats = ExecutionStats(
             # Basic timing
             cycles=stats_dict.get('cycles', 0),
             compute_cycles=stats_dict.get('compute_cycles', 0),
             memory_cycles=stats_dict.get('memory_cycles', 0),
+            elapsed_cycles=stats_dict.get('elapsed_cycles', 0),
             # Detailed cycle breakdown
             busy_cycles=stats_dict.get('busy_cycles', 0),
             idle_cycles=stats_dict.get('idle_cycles', 0),
@@ -544,15 +634,35 @@ class KPURuntime:
             matmul_flops=stats_dict.get('matmul_flops', 0),
             total_macs=stats_dict.get('total_macs', 0),
             matmul_count=stats_dict.get('matmul_count', 0),
-            # Memory metrics
+            # Memory hierarchy stats (XUE events)
+            dram=dram_stats,
+            l3=l3_stats,
+            l2=l2_stats,
+            l1=l1_stats,
+            # Memory traffic metrics
             memory_bytes=stats_dict.get('memory_bytes', 0),
             external_bytes=stats_dict.get('external_bytes', 0),
+            # Memory controller stats
+            memory_reads=stats_dict.get('memory_reads', 0),
+            memory_writes=stats_dict.get('memory_writes', 0),
+            page_hits=stats_dict.get('page_hits', 0),
+            page_misses=stats_dict.get('page_misses', 0),
+            memory_latency_cycles=stats_dict.get('memory_latency_cycles', 0),
             # Operation counts
             ops_executed=stats_dict.get('ops_executed', 0),
+            # Clock frequency
+            clock_frequency_ghz=stats_dict.get('clock_frequency_ghz', 0.0),
             # Performance metrics
             gflops=stats_dict.get('gflops', 0.0),
             utilization=stats_dict.get('utilization', 0.0),
             efficiency=stats_dict.get('efficiency', 0.0),
+            memory_bandwidth_gbps=stats_dict.get('memory_bandwidth_gbps', 0.0),
+            page_hit_rate=stats_dict.get('page_hit_rate', 0.0),
+            # Per-level service rates
+            dram_service_rate_gbps=stats_dict.get('dram_service_rate_gbps', 0.0),
+            l3_service_rate_gbps=stats_dict.get('l3_service_rate_gbps', 0.0),
+            l2_service_rate_gbps=stats_dict.get('l2_service_rate_gbps', 0.0),
+            l1_service_rate_gbps=stats_dict.get('l1_service_rate_gbps', 0.0),
         )
 
         return Tensor(result_data), stats
@@ -560,6 +670,54 @@ class KPURuntime:
     def get_stats(self) -> Optional[ExecutionStats]:
         """Get statistics from the last execution."""
         return self._last_stats
+
+    def set_clock_frequency(self, ghz: float):
+        """Set the clock frequency in GHz for performance calculations.
+
+        IMPORTANT: Must be called before execution in TRANSACTIONAL or
+        CYCLE_ACCURATE mode. This is required to ensure accurate GFLOPS
+        and bandwidth calculations.
+
+        Args:
+            ghz: Clock frequency in GHz (must be positive)
+
+        Raises:
+            ValueError: If ghz <= 0
+            RuntimeError: If native simulator not initialized
+        """
+        if ghz <= 0:
+            raise ValueError("Clock frequency must be positive")
+
+        # Initialize native sim if needed
+        if self._native_sim is None:
+            self._init_native_sim()
+
+        if self._native_sim is not None:
+            self._native_sim.set_clock_frequency(ghz)
+        else:
+            # For behavioral mode, we don't need native sim
+            # Store locally for potential future use
+            self._clock_frequency_ghz = ghz
+
+    def get_clock_frequency(self) -> float:
+        """Get the configured clock frequency in GHz.
+
+        Returns:
+            Clock frequency in GHz, or 0.0 if not set
+        """
+        if self._native_sim is not None:
+            return self._native_sim.get_clock_frequency()
+        return getattr(self, '_clock_frequency_ghz', 0.0)
+
+    def is_clock_frequency_set(self) -> bool:
+        """Check if clock frequency has been explicitly set.
+
+        Returns:
+            True if set, False otherwise
+        """
+        if self._native_sim is not None:
+            return self._native_sim.is_clock_frequency_set()
+        return hasattr(self, '_clock_frequency_ghz')
 
 
 # Module-level functions for convenience
@@ -583,3 +741,39 @@ def set_fidelity(fidelity: int):
 def get_fidelity() -> int:
     """Get the current simulation fidelity level."""
     return get_runtime().fidelity
+
+
+def set_clock_frequency(ghz: float):
+    """Set the clock frequency for performance calculations.
+
+    IMPORTANT: Must be called before execution in TRANSACTIONAL or
+    CYCLE_ACCURATE mode. Without this, execution will fail to prevent
+    silent assumptions about clock speed.
+
+    Args:
+        ghz: Clock frequency in GHz (must be positive)
+
+    Example:
+        >>> kpu.set_clock_frequency(1.0)  # 1 GHz
+        >>> kpu.set_fidelity(kpu.TRANSACTIONAL)
+        >>> result = my_function(x, w)  # Now works
+    """
+    get_runtime().set_clock_frequency(ghz)
+
+
+def get_clock_frequency() -> float:
+    """Get the configured clock frequency in GHz.
+
+    Returns:
+        Clock frequency in GHz, or 0.0 if not set
+    """
+    return get_runtime().get_clock_frequency()
+
+
+def is_clock_frequency_set() -> bool:
+    """Check if clock frequency has been explicitly set.
+
+    Returns:
+        True if set, False otherwise
+    """
+    return get_runtime().is_clock_frequency_set()

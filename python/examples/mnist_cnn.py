@@ -15,17 +15,32 @@ Architecture:
   - FC2: 128 -> 10 (logits)
 
 Usage:
-    python examples/mnist_cnn.py
+    python examples/mnist_cnn.py                   # BEHAVIORAL mode (default)
+    python examples/mnist_cnn.py --transactional   # TRANSACTIONAL mode with XUE analysis
 """
 
 import sys
 import os
+import argparse
 
 # Add parent directory to path for development
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import numpy as np
 import kpu
+
+
+def parse_args():
+    parser = argparse.ArgumentParser(description="MNIST CNN on KPU Simulator")
+    parser.add_argument("--transactional", action="store_true",
+                        help="Use TRANSACTIONAL mode with XUE performance analysis")
+    parser.add_argument("--clock", type=float, default=1.0,
+                        help="Clock frequency in GHz (default: 1.0)")
+    return parser.parse_args()
+
+
+# Parse command line arguments
+args = parse_args()
 
 
 def create_cnn_weights():
@@ -167,9 +182,17 @@ def main():
     print("MNIST CNN Example - KPU Python Package")
     print("=" * 60)
 
-    # Set behavioral fidelity (computes actual values)
-    kpu.set_fidelity(kpu.BEHAVIORAL)
-    print(f"\nFidelity: BEHAVIORAL (computes actual values)")
+    # Set fidelity based on command line
+    # NOTE: TRANSACTIONAL mode currently only supports matmul operations.
+    # CNN operations (conv2d, pooling) are not yet supported in native simulation.
+    if args.transactional:
+        print(f"\nNote: TRANSACTIONAL mode for CNN not yet supported (conv2d pending)")
+        print("  Using BEHAVIORAL mode instead. See minimal_mlp.py for TRANSACTIONAL example.")
+        kpu.set_fidelity(kpu.BEHAVIORAL)
+        print(f"\nFidelity: BEHAVIORAL (computes actual values)")
+    else:
+        kpu.set_fidelity(kpu.BEHAVIORAL)
+        print(f"\nFidelity: BEHAVIORAL (computes actual values)")
 
     # Create random weights
     print("\nCreating CNN weights...")
@@ -202,6 +225,29 @@ def main():
         print("VALIDATION PASSED")
     else:
         print("VALIDATION FAILED")
+
+    # XUE Performance Analysis (TRANSACTIONAL mode only)
+    stats = mnist_cnn.get_stats()
+    if args.transactional and stats and stats.elapsed_cycles > 0:
+        T = stats.elapsed_cycles  # XUE elapsed time in cycles
+        print()
+        print("=" * 60)
+        print("XUE Performance Analysis")
+        print("=" * 60)
+        print(f"  Clock Frequency:     {stats.clock_frequency_ghz:.1f} GHz")
+        print(f"  T (Elapsed Cycles):  {T:,} cycles")
+        print(f"  Wall Time:           {T / (stats.clock_frequency_ghz * 1e9) * 1e6:.2f} us")
+        print()
+        print("Memory Hierarchy (XUE Events):")
+        print(f"  DRAM: {stats.dram.total_bytes:,} bytes | {stats.dram.total_count:,} txns | {stats.dram.service_rate:.2f} B/cycle")
+        print(f"  L3:   {stats.l3.total_bytes:,} bytes | {stats.l3.total_count:,} txns | {stats.l3.service_rate:.2f} B/cycle")
+        print(f"  L2:   {stats.l2.total_bytes:,} bytes | {stats.l2.total_count:,} txns | {stats.l2.service_rate:.2f} B/cycle")
+        print(f"  L1:   {stats.l1.total_bytes:,} bytes | {stats.l1.total_count:,} txns | {stats.l1.service_rate:.2f} B/cycle")
+        print()
+        print("Compute Performance:")
+        print(f"  MatMul FLOPs:  {stats.matmul_flops:,}")
+        print(f"  GFLOPS:        {stats.gflops:.1f} @ {stats.clock_frequency_ghz:.1f} GHz")
+        print(f"  FLOPs/Cycle:   {stats.matmul_flops / T:.1f}")
 
     # Print DFX IR statistics
     print("\n" + "-" * 60)

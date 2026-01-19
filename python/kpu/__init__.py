@@ -81,6 +81,9 @@ from .runtime import (
     get_runtime,
     set_fidelity,
     get_fidelity,
+    set_clock_frequency,
+    get_clock_frequency,
+    is_clock_frequency_set,
 )
 
 # Graph and DFX (for advanced users)
@@ -165,6 +168,9 @@ __all__ = [
     "get_runtime",
     "set_fidelity",
     "get_fidelity",
+    "set_clock_frequency",
+    "get_clock_frequency",
+    "is_clock_frequency_set",
 
     # Graph (advanced)
     "OpGraph",
