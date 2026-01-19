@@ -36,15 +36,15 @@ jobs:
 
       - name: Build release distributions
         run: |
-          # NOTE: put your own distribution build steps here.
+          # Build the kpu Python package from the python/ directory
           python -m pip install build
-          python -m build
+          cd python && python -m build
 
       - name: Upload distributions
         uses: actions/upload-artifact@v4
         with:
           name: release-dists
-          path: dist/
+          path: python/dist/
 
   pypi-publish:
     runs-on: ubuntu-latest

@@ -11,7 +11,7 @@ version = "0.3.1"
 description = "Stillwater Knowledge Processing Unit Simulator with TopLevelSimulator"
 readme = "README.md"
 requires-python = ">=3.8"
-license = {text = "MIT"}
+license = "MIT"
 authors = [
     {name = "Stillwater Supercomputing", email = "info@stillwater-sc.com"}
 ]
@@ -19,8 +19,7 @@ keywords = ["simulation", "hardware", "high-performance-computing", "linear-alge
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
-    "Intended Audience :: Science/Research",  
-    "License :: OSI Approved :: MIT License",
+    "Intended Audience :: Science/Research",
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.8",

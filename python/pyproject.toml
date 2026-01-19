@@ -7,7 +7,7 @@ name = "kpu"
 dynamic = ["version"]  # Version from git tags via setuptools-scm
 description = "KPU (Knowledge Processing Unit) Simulator Python API"
 readme = "README.md"
-license = {text = "Apache-2.0"}
+license = "Apache-2.0"
 authors = [
     {name = "Stillwater Supercomputing, Inc.", email = "info@stillwater-sc.com"}
 ]
@@ -16,7 +16,6 @@ classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
     "Intended Audience :: Science/Research",
-    "License :: OSI Approved :: Apache Software License",
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.9",
