@@ -5,6 +5,7 @@
 // enabling execution on the C++ kpu-sim library.
 //
 // v0.4.0: TRANSACTIONAL runtime integration
+// v0.4.1: DFX parser integration
 
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
@@ -26,6 +27,9 @@
 #include <sw/kpu/models/transactional/compute/compute_fabric.hpp>
 #include <sw/kpu/models/transactional/memory/memory_controller.hpp>
 #include <sw/kpu/stats/memory_traffic.hpp>
+
+// v0.4.1: DFX parser for C++ DFX program representation
+#include <sw/kpu/dfx/dfx_parser.hpp>
 
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
@@ -875,7 +879,7 @@ PYBIND11_MODULE(_native, m) {
     m.doc() = "Native KPU simulator bindings for the kpu Python package";
 
     // Version
-    m.attr("__version__") = "0.4.0";
+    m.attr("__version__") = "0.4.1";
 
     // Fidelity level constants
     m.attr("BEHAVIORAL") = FIDELITY_BEHAVIORAL;
@@ -949,4 +953,61 @@ PYBIND11_MODULE(_native, m) {
     // Check if native bindings are available
     m.def("is_available", []() { return true; },
           "Check if native bindings are available");
+
+    // ========================================================================
+    // v0.4.1: DFX Parser Functions
+    // ========================================================================
+
+    // Parse DFX JSON string and return program info as dict
+    m.def("parse_dfx_json", [](const std::string& json_str) -> py::dict {
+        try {
+            sw::kpu::dfx::DFXParser parser;
+            auto program = parser.parse_json(json_str);
+
+            py::dict result;
+            result["name"] = program.name;
+            result["version"] = program.version;
+            result["num_tensors"] = program.tensors.size();
+            result["num_ops"] = program.ops.size();
+            result["inputs"] = py::cast(program.inputs);
+            result["outputs"] = py::cast(program.outputs);
+
+            // Operation summary
+            py::list ops_summary;
+            for (const auto& op : program.ops) {
+                py::dict op_info;
+                op_info["opcode"] = sw::kpu::dfx::opcode_to_string(op.opcode);
+                op_info["inputs"] = py::cast(op.inputs);
+                op_info["outputs"] = py::cast(op.outputs);
+                ops_summary.append(op_info);
+            }
+            result["ops"] = ops_summary;
+
+            // Tensor summary
+            py::dict tensors_info;
+            for (const auto& [name, tensor] : program.tensors) {
+                py::dict t_info;
+                t_info["shape"] = py::cast(tensor.shape);
+                t_info["dtype"] = sw::kpu::dfx::dtype_to_string(tensor.dtype);
+                t_info["is_const"] = tensor.is_const;
+                tensors_info[py::cast(name)] = t_info;
+            }
+            result["tensors"] = tensors_info;
+
+            return result;
+        } catch (const sw::kpu::dfx::ParseError& e) {
+            throw std::runtime_error(std::string("DFX parse error: ") + e.what());
+        }
+    }, py::arg("json_str"),
+       "Parse DFX JSON string and return program information.\n\n"
+       "This is useful for validating DFX programs and debugging.\n\n"
+       "Args:\n"
+       "    json_str: JSON string containing DFX program\n\n"
+       "Returns:\n"
+       "    Dict with parsed program information");
+
+    // Get DFX parser version
+    m.def("dfx_parser_version", []() -> std::string {
+        return "0.4.1";
+    }, "Get the DFX parser version");
 }

@@ -21,6 +21,7 @@ pybind11_add_module(_native kpu_native.cpp)
 target_link_libraries(_native PRIVATE
     pybind11::headers
     kpu_transactional
+    kpu_dfx
 )
 
 # Include simulator headers
