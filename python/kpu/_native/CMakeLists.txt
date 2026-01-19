@@ -17,13 +17,19 @@ endif()
 # Build the _native module
 pybind11_add_module(_native kpu_native.cpp)
 
-# Link against pybind11 headers
+# Link against pybind11 headers and KPU simulator libraries
 target_link_libraries(_native PRIVATE
     pybind11::headers
+    kpu_transactional
 )
 
-# Set C++17 for structured bindings
-target_compile_features(_native PRIVATE cxx_std_17)
+# Include simulator headers
+target_include_directories(_native PRIVATE
+    ${CMAKE_SOURCE_DIR}/include
+)
+
+# Set C++20 for consistency with main project
+target_compile_features(_native PRIVATE cxx_std_20)
 
 set_target_properties(_native PROPERTIES
     FOLDER "Python/kpu"

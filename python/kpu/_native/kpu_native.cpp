@@ -3,6 +3,8 @@
 //
 // This module provides the native backend for the @kpu.compile decorator,
 // enabling execution on the C++ kpu-sim library.
+//
+// v0.4.0: TRANSACTIONAL runtime integration
 
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
@@ -15,6 +17,12 @@
 #include <string>
 #include <stdexcept>
 #include <cmath>
+
+// KPU Simulator includes for transactional models
+#include <sw/kpu/fidelity/simulation_fidelity.hpp>
+#include <sw/kpu/fidelity/component_config.hpp>
+#include <sw/kpu/models/interfaces/compute_fabric_interface.hpp>
+#include <sw/kpu/models/transactional/compute/compute_fabric.hpp>
 
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
@@ -31,23 +39,67 @@ constexpr int FIDELITY_CYCLE_ACCURATE = 2;
 
 /**
  * @brief Execution statistics returned to Python
+ *
+ * Extended for v0.4.0 TRANSACTIONAL runtime with detailed metrics
+ * from the C++ transactional simulation models.
  */
 struct NativeExecutionStats {
+    // Basic timing
     int64_t cycles = 0;
     int64_t compute_cycles = 0;
     int64_t memory_cycles = 0;
+
+    // Detailed cycle breakdown
+    int64_t busy_cycles = 0;
+    int64_t idle_cycles = 0;
+    int64_t stall_cycles = 0;
+
+    // Compute metrics
     int64_t matmul_flops = 0;
+    int64_t total_macs = 0;
+    int64_t matmul_count = 0;
+
+    // Memory metrics
     int64_t memory_bytes = 0;
+    int64_t external_bytes = 0;
+
+    // Operation counts
     int64_t ops_executed = 0;
+
+    // Performance metrics (computed)
+    double gflops = 0.0;
+    double utilization = 0.0;
+    double efficiency = 0.0;
 
     py::dict to_dict() const {
         py::dict d;
+        // Basic timing
         d["cycles"] = cycles;
         d["compute_cycles"] = compute_cycles;
         d["memory_cycles"] = memory_cycles;
+
+        // Detailed breakdown
+        d["busy_cycles"] = busy_cycles;
+        d["idle_cycles"] = idle_cycles;
+        d["stall_cycles"] = stall_cycles;
+
+        // Compute metrics
         d["matmul_flops"] = matmul_flops;
+        d["total_macs"] = total_macs;
+        d["matmul_count"] = matmul_count;
+
+        // Memory metrics
         d["memory_bytes"] = memory_bytes;
+        d["external_bytes"] = external_bytes;
+
+        // Operation counts
         d["ops_executed"] = ops_executed;
+
+        // Performance metrics
+        d["gflops"] = gflops;
+        d["utilization"] = utilization;
+        d["efficiency"] = efficiency;
+
         return d;
     }
 };
@@ -59,13 +111,28 @@ struct NativeExecutionStats {
  * and execution on the KPU hardware model.
  *
  * For BEHAVIORAL mode, it uses NumPy for actual computation.
- * For TRANSACTIONAL and CYCLE_ACCURATE modes, it will integrate
- * with the C++ kpu-sim library when available.
+ * For TRANSACTIONAL mode, it uses the C++ TransactionalComputeFabric
+ * for accurate throughput-based timing simulation.
  */
 class NativeKPURuntime {
 public:
     explicit NativeKPURuntime(int fidelity = FIDELITY_BEHAVIORAL)
         : fidelity_(fidelity) {
+        // Initialize transactional compute fabric with default config
+        init_transactional_models();
+    }
+
+    void init_transactional_models() {
+        // Configure a 16x16 systolic array (256 MACs/cycle)
+        sw::kpu::ComputeFabricConfig config;
+        config.fidelity = sw::kpu::SimulationFidelity::TRANSACTIONAL;
+        config.array_rows = 16;
+        config.array_cols = 16;
+        config.macs_per_cycle = 256;
+        config.pipeline_depth = 4;
+        config.enable_statistics = true;
+
+        compute_fabric_ = std::make_unique<sw::kpu::TransactionalComputeFabric>(config, 0);
     }
 
     void set_fidelity(int fidelity) {
@@ -114,6 +181,7 @@ public:
 
 private:
     int fidelity_;
+    std::unique_ptr<sw::kpu::TransactionalComputeFabric> compute_fabric_;
 
     std::string fidelity_name() const {
         switch (fidelity_) {
@@ -317,24 +385,123 @@ private:
     }
 
     /**
-     * @brief Execute with timing estimates (placeholder for full simulation)
+     * @brief Execute with transactional timing simulation
+     *
+     * Uses the C++ TransactionalComputeFabric for accurate throughput-based
+     * timing of matmul operations. Other operations use behavioral execution
+     * with estimated timing.
      */
     std::pair<py::array_t<float>, py::dict> execute_simulated(
         const py::dict& dfx_json,
         const std::vector<py::array_t<float>>& inputs,
-        const std::string& mode,
+        [[maybe_unused]] const std::string& mode,
         NativeExecutionStats& stats
     ) {
-        // Execute behaviorally first to get correct results
-        auto [result, _] = execute_behavioral(dfx_json, inputs, stats);
+        // Reset the compute fabric for this execution
+        compute_fabric_->reset();
+        compute_fabric_->reset_stats();
 
-        // Add timing estimates based on FLOPs
-        // Assume a 16x16 systolic array running at 1GHz, 2 ops/MAC
-        int64_t peak_flops_per_cycle = 16 * 16 * 2;
+        // Parse DFX program
+        auto ops = dfx_json["ops"].cast<py::list>();
+        auto input_names = dfx_json["inputs"].cast<py::list>();
+        auto output_names = dfx_json["outputs"].cast<py::list>();
 
-        stats.compute_cycles = stats.matmul_flops / peak_flops_per_cycle;
-        stats.memory_cycles = stats.compute_cycles / 4;  // Assume 25% memory overhead
+        // Map tensor names to numpy arrays
+        std::unordered_map<std::string, py::array_t<float>> tensors;
+
+        // Load inputs
+        for (size_t i = 0; i < inputs.size() && i < static_cast<size_t>(py::len(input_names)); ++i) {
+            std::string name = input_names[i].cast<std::string>();
+            tensors[name] = inputs[i];
+        }
+
+        // Import numpy
+        py::module np = py::module::import("numpy");
+
+        // Execute operations with transactional timing
+        for (auto op_obj : ops) {
+            py::dict op = op_obj.cast<py::dict>();
+            std::string opcode = op["opcode"].cast<std::string>();
+            auto op_input_names = op["inputs"].cast<py::list>();
+            auto op_output_names = op["outputs"].cast<py::list>();
+            std::string output_name = op_output_names[0].cast<std::string>();
+
+            if (opcode == "matmul") {
+                // Use transactional compute fabric for matmul timing
+                std::string a_name = op_input_names[0].cast<std::string>();
+                std::string b_name = op_input_names[1].cast<std::string>();
+
+                auto A = tensors[a_name];
+                auto B = tensors[b_name];
+
+                py::buffer_info a_buf = A.request();
+                py::buffer_info b_buf = B.request();
+
+                // Get dimensions
+                uint32_t M = static_cast<uint32_t>(a_buf.shape[a_buf.ndim - 2]);
+                uint32_t K = static_cast<uint32_t>(a_buf.shape[a_buf.ndim - 1]);
+                uint32_t N = static_cast<uint32_t>(b_buf.shape[b_buf.ndim - 1]);
+
+                // Execute behavioral computation
+                py::array_t<float> C = np.attr("matmul")(A, B).cast<py::array_t<float>>();
+                tensors[output_name] = C;
+
+                // Submit to transactional compute fabric for timing
+                sw::kpu::MatMulDescriptor desc;
+                desc.m = M;
+                desc.n = N;
+                desc.k = K;
+
+                // Get data pointers
+                float* a_ptr = static_cast<float*>(a_buf.ptr);
+                float* b_ptr = static_cast<float*>(b_buf.ptr);
+                py::buffer_info c_buf = C.request();
+                float* c_ptr = static_cast<float*>(c_buf.ptr);
+
+                // Submit matmul to transactional fabric
+                compute_fabric_->submit_matmul(desc, a_ptr, b_ptr, c_ptr, nullptr);
+
+                // Drain to complete the operation
+                compute_fabric_->drain();
+
+                // Track FLOPs
+                stats.matmul_flops += 2LL * M * N * K;
+                stats.total_macs += static_cast<int64_t>(M) * N * K;
+                stats.matmul_count++;
+
+            } else {
+                // Execute other operations behaviorally
+                execute_op_behavioral(op, tensors, stats);
+            }
+
+            stats.ops_executed++;
+        }
+
+        // Collect statistics from transactional compute fabric
+        const auto& fabric_stats = compute_fabric_->stats();
+
+        stats.compute_cycles = static_cast<int64_t>(fabric_stats.total_compute_cycles);
+        stats.busy_cycles = static_cast<int64_t>(fabric_stats.busy_cycles);
+        stats.idle_cycles = static_cast<int64_t>(fabric_stats.idle_cycles);
+        stats.stall_cycles = static_cast<int64_t>(fabric_stats.stall_cycles);
+
+        // Memory cycles estimated as fraction of compute
+        stats.memory_cycles = stats.compute_cycles / 4;
+
+        // Total cycles
         stats.cycles = stats.compute_cycles + stats.memory_cycles;
+
+        // Compute performance metrics
+        if (stats.cycles > 0) {
+            // Assume 1 GHz clock for GFLOPS calculation
+            stats.gflops = static_cast<double>(stats.matmul_flops) / stats.cycles;
+            stats.utilization = fabric_stats.utilization();
+            stats.efficiency = fabric_stats.mac_efficiency(compute_fabric_->peak_macs_per_cycle());
+        }
+
+        // Get output
+        std::string output_name = output_names[0].cast<std::string>();
+        auto result = tensors[output_name];
 
         return {result, stats.to_dict()};
     }
@@ -351,7 +518,7 @@ PYBIND11_MODULE(_native, m) {
     m.doc() = "Native KPU simulator bindings for the kpu Python package";
 
     // Version
-    m.attr("__version__") = "0.1.0";
+    m.attr("__version__") = "0.4.0";
 
     // Fidelity level constants
     m.attr("BEHAVIORAL") = FIDELITY_BEHAVIORAL;

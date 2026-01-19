@@ -24,13 +24,37 @@ CYCLE_ACCURATE = 2
 
 @dataclass
 class ExecutionStats:
-    """Statistics from kernel execution."""
+    """Statistics from kernel execution.
+
+    Extended for v0.4.0 TRANSACTIONAL runtime with detailed metrics
+    from the C++ transactional simulation models.
+    """
+    # Basic timing
     cycles: int = 0
     compute_cycles: int = 0
     memory_cycles: int = 0
+
+    # Detailed cycle breakdown (TRANSACTIONAL mode)
+    busy_cycles: int = 0
+    idle_cycles: int = 0
+    stall_cycles: int = 0
+
+    # Compute metrics
     matmul_flops: int = 0
+    total_macs: int = 0
+    matmul_count: int = 0
+
+    # Memory metrics
     memory_bytes: int = 0
+    external_bytes: int = 0
+
+    # Operation counts
     ops_executed: int = 0
+
+    # Performance metrics (computed by native simulator)
+    gflops: float = 0.0
+    utilization: float = 0.0
+    efficiency: float = 0.0
 
 
 class KPURuntime:
@@ -508,11 +532,27 @@ class KPURuntime:
         )
 
         stats = ExecutionStats(
+            # Basic timing
             cycles=stats_dict.get('cycles', 0),
             compute_cycles=stats_dict.get('compute_cycles', 0),
             memory_cycles=stats_dict.get('memory_cycles', 0),
+            # Detailed cycle breakdown
+            busy_cycles=stats_dict.get('busy_cycles', 0),
+            idle_cycles=stats_dict.get('idle_cycles', 0),
+            stall_cycles=stats_dict.get('stall_cycles', 0),
+            # Compute metrics
             matmul_flops=stats_dict.get('matmul_flops', 0),
+            total_macs=stats_dict.get('total_macs', 0),
+            matmul_count=stats_dict.get('matmul_count', 0),
+            # Memory metrics
             memory_bytes=stats_dict.get('memory_bytes', 0),
+            external_bytes=stats_dict.get('external_bytes', 0),
+            # Operation counts
+            ops_executed=stats_dict.get('ops_executed', 0),
+            # Performance metrics
+            gflops=stats_dict.get('gflops', 0.0),
+            utilization=stats_dict.get('utilization', 0.0),
+            efficiency=stats_dict.get('efficiency', 0.0),
         )
 
         return Tensor(result_data), stats
