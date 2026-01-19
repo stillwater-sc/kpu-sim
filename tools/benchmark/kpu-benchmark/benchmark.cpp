@@ -31,6 +31,15 @@
 #include <cstring>
 #include <filesystem>
 
+// Cross-platform terminal detection
+#ifdef _WIN32
+#include <io.h>
+#define isatty _isatty
+#define fileno _fileno
+#else
+#include <unistd.h>
+#endif
+
 using namespace sw::benchmark;
 using namespace sw::kpu;
 

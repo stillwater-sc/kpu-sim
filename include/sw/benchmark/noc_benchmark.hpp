@@ -126,7 +126,7 @@ struct PatternResult {
     uint32_t num_transfers = 0;
 
     // Pattern-specific metrics
-    double completion_time_cycles() const { return total_cycles; }
+    double completion_time_cycles() const { return static_cast<double>(total_cycles); }
     double aggregate_bandwidth() const {
         return total_cycles > 0 ? static_cast<double>(total_bytes) / total_cycles : 0.0;
     }
