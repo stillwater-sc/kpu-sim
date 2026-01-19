@@ -69,14 +69,16 @@ jobs:
           path: |
             build
             !build/tests
+            !build/CMakeCache.txt
+            !build/CMakeFiles
           key: benchmark-build-${{ runner.os }}-${{ hashFiles('CMakeLists.txt', 'src/**', 'include/**') }}
           restore-keys: |
             benchmark-build-${{ runner.os }}-
 
       - name: Configure CMake
         run: |
-          # Clear CMakeCache to ensure options are applied fresh
-          rm -f build/CMakeCache.txt
+          # Clear all CMake configuration to ensure options are applied fresh
+          rm -rf build/CMakeCache.txt build/CMakeFiles
           cmake -B build -G Ninja \
             -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }} \
             -DKPU_BUILD_TESTS=ON \
