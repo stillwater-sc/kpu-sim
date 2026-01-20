@@ -128,9 +128,9 @@ For KPU configuration of a single 16x16 PE array, 1M L3, 128K L2, 1k L1, create 
 
 ### Python↔C++ Integration (v0.4.6)
 
-- [ ] DFX JSON parsed and executed by C++ simulator
-- [ ] Timing stats (cycles, memory traffic) returned to Python
-- [ ] ExecutionStats populated from native execution
+- [x] DFX JSON parsed and executed by C++ simulator
+- [x] Timing stats (cycles, memory traffic) returned to Python
+- [x] ExecutionStats populated from native execution
 
 ### torch.compile TRANSACTIONAL (v0.4.7)
 
@@ -141,8 +141,8 @@ For KPU configuration of a single 16x16 PE array, 1M L3, 128K L2, 1k L1, create 
 ### Success Criteria
 
 - [x] v0.4.4: XUE metrics validated for compute patterns
-- [ ] v0.4.5: End-to-end tiled matmul with memory hierarchy
-- [ ] v0.4.6: Python can execute DFX on C++ simulator
+- [x] v0.4.5: End-to-end tiled matmul with memory hierarchy
+- [x] v0.4.6: Python can execute DFX on C++ simulator
 - [ ] v0.4.7: torch.compile works with TRANSACTIONAL mode
 
 ### Tag: `v0.4-transactional`
