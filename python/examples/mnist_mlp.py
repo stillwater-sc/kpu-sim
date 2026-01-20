@@ -192,11 +192,34 @@ def main():
             print(f"  Idle Cycles:     {stats.idle_cycles:,}")
             print(f"  Stall Cycles:    {stats.stall_cycles:,}")
             print()
-            print("Utilization Metrics:")
-            print(f"  Utilization:     {stats.utilization * 100:.1f}%")
-            print(f"  Efficiency:      {stats.efficiency * 100:.1f}%")
-            print(f"  Page Hit Rate:   {stats.page_hit_rate * 100:.1f}%")
-            print(f"  Memory BW:       {stats.memory_bandwidth_gbps:.2f} GB/s")
+
+            # =================================================================
+            # XUE Metrics per Resource
+            # =================================================================
+            # XUE methodology requires reporting metrics in order:
+            #   X = Throughput (work done per unit time)
+            #   U = Utilization (fraction of time resource is busy)
+            #   E = Efficiency (fraction of peak capability achieved)
+            # =================================================================
+
+            # Compute Fabric XUE (16x16 systolic array, 256 MACs/cycle)
+            peak_macs_per_cycle = 256
+            compute_throughput = stats.matmul_flops / T if T > 0 else 0
+
+            print("Compute Fabric XUE (16x16 Systolic Array):")
+            print(f"  Throughput   (X): {compute_throughput:.1f} FLOPs/cycle ({stats.gflops:.1f} GFLOPS)")
+            print(f"  Utilization  (U): {stats.utilization * 100:.1f}%")
+            print(f"  Efficiency   (E): {stats.efficiency * 100:.1f}%")
+            print()
+
+            # Memory Controller XUE (LPDDR5)
+            mem_throughput = stats.memory_bandwidth_gbps
+            mem_utilization = stats.memory_cycles / T * 100 if T > 0 else 0
+
+            print("Memory Controller XUE (LPDDR5):")
+            print(f"  Throughput   (X): {mem_throughput:.2f} GB/s")
+            print(f"  Utilization  (U): {mem_utilization:.1f}%")
+            print(f"  Efficiency   (E): {stats.page_hit_rate * 100:.1f}% (page hit rate)")
             print("=" * 60)
 
     # Show generated graph
