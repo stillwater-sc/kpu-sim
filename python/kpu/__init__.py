@@ -27,7 +27,7 @@ Fidelity Levels:
     - CYCLE_ACCURATE: Full timing simulation
 """
 
-__version__ = "0.1.0"
+__version__ = "0.4.3"
 __author__ = "Stillwater Supercomputing, Inc."
 
 # Fidelity levels
@@ -81,6 +81,7 @@ from .runtime import (
     get_runtime,
     set_fidelity,
     get_fidelity,
+    get_fidelity_name,
     set_clock_frequency,
     get_clock_frequency,
     is_clock_frequency_set,
@@ -168,6 +169,7 @@ __all__ = [
     "get_runtime",
     "set_fidelity",
     "get_fidelity",
+    "get_fidelity_name",
     "set_clock_frequency",
     "get_clock_frequency",
     "is_clock_frequency_set",

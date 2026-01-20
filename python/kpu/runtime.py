@@ -153,7 +153,17 @@ class KPURuntime:
         return cls._instance
 
     def set_fidelity(self, fidelity: int):
-        """Set the simulation fidelity level."""
+        """Set the simulation fidelity level.
+
+        Args:
+            fidelity: One of BEHAVIORAL, TRANSACTIONAL, or CYCLE_ACCURATE
+
+        Raises:
+            ValueError: If fidelity is not a valid level
+        """
+        if fidelity not in (BEHAVIORAL, TRANSACTIONAL, CYCLE_ACCURATE):
+            valid = "BEHAVIORAL (0), TRANSACTIONAL (1), CYCLE_ACCURATE (2)"
+            raise ValueError(f"Invalid fidelity level {fidelity}. Must be one of: {valid}")
         self.fidelity = fidelity
         self._native_sim = None  # Force re-initialization
 
@@ -734,13 +744,60 @@ def get_runtime() -> KPURuntime:
 
 
 def set_fidelity(fidelity: int):
-    """Set the global simulation fidelity level."""
+    """Set the global simulation fidelity level.
+
+    Fidelity levels control the trade-off between simulation speed and accuracy:
+
+    - BEHAVIORAL (0): Functional correctness only, computes actual values.
+      Fastest mode, suitable for algorithm development and verification.
+
+    - TRANSACTIONAL (1): Statistical timing model with throughput-based
+      performance estimation. Requires clock_frequency to be set.
+      Use for architecture exploration and performance estimation.
+
+    - CYCLE_ACCURATE (2): Full timing simulation with cycle-by-cycle
+      tracking. Most accurate but slowest. Requires clock_frequency.
+      Use for detailed performance analysis.
+
+    Args:
+        fidelity: One of BEHAVIORAL, TRANSACTIONAL, or CYCLE_ACCURATE
+
+    Raises:
+        ValueError: If fidelity is not a valid level
+
+    Example:
+        >>> import kpu
+        >>> kpu.set_fidelity(kpu.TRANSACTIONAL)
+        >>> kpu.set_clock_frequency(1.0)  # Required for TRANSACTIONAL
+        >>> result = my_function(x, w)
+    """
+    if fidelity not in (BEHAVIORAL, TRANSACTIONAL, CYCLE_ACCURATE):
+        valid = "BEHAVIORAL (0), TRANSACTIONAL (1), CYCLE_ACCURATE (2)"
+        raise ValueError(f"Invalid fidelity level {fidelity}. Must be one of: {valid}")
     get_runtime().set_fidelity(fidelity)
 
 
 def get_fidelity() -> int:
-    """Get the current simulation fidelity level."""
+    """Get the current simulation fidelity level.
+
+    Returns:
+        Current fidelity level (BEHAVIORAL, TRANSACTIONAL, or CYCLE_ACCURATE)
+    """
     return get_runtime().fidelity
+
+
+def get_fidelity_name() -> str:
+    """Get the name of the current simulation fidelity level.
+
+    Returns:
+        String name: "BEHAVIORAL", "TRANSACTIONAL", or "CYCLE_ACCURATE"
+    """
+    names = {
+        BEHAVIORAL: "BEHAVIORAL",
+        TRANSACTIONAL: "TRANSACTIONAL",
+        CYCLE_ACCURATE: "CYCLE_ACCURATE",
+    }
+    return names.get(get_runtime().fidelity, "UNKNOWN")
 
 
 def set_clock_frequency(ghz: float):
