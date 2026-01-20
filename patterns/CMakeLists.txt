@@ -573,10 +573,43 @@ add_dma_pattern(input_tile_nhwc conv2d/input_tile_nhwc.cpp "Conv2D")
 # add_subdirectory(noc)
 
 # ============================================================================
-# Compute Patterns (TODO)
+# Compute Patterns
 # ============================================================================
 
-# add_subdirectory(compute)
+# Compute-specific common headers
+add_library(compute_pattern_common INTERFACE)
+target_include_directories(compute_pattern_common INTERFACE
+    ${CMAKE_CURRENT_SOURCE_DIR}/compute-tile/common
+    ${PROJECT_SOURCE_DIR}/include
+)
+set_target_properties(compute_pattern_common PROPERTIES FOLDER "Patterns/Compute/Common")
+
+# Helper function to add compute pattern
+# Usage: add_compute_pattern(NAME SOURCE_FILE FOLDER_LEVEL)
+#   NAME         - Pattern name (becomes compute_${NAME})
+#   SOURCE_FILE  - Source file relative to compute-tile/
+#   FOLDER_LEVEL - MSVC folder level (e.g., "Systolic", "Vector")
+function(add_compute_pattern NAME SOURCE_FILE FOLDER_LEVEL)
+    add_executable(compute_${NAME}
+        ${CMAKE_CURRENT_SOURCE_DIR}/compute-tile/${SOURCE_FILE}
+    )
+    target_link_libraries(compute_${NAME} PRIVATE
+        pattern_common
+        compute_pattern_common
+        kpu_compute_components
+        kpu_trace
+    )
+    set_target_properties(compute_${NAME} PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/patterns/compute
+        FOLDER "Patterns/Compute/${FOLDER_LEVEL}"
+    )
+endfunction()
+
+# -----------------------------------------------------------------------------
+# Systolic Array Patterns
+# -----------------------------------------------------------------------------
+
+add_compute_pattern(matmul_validation systolic/matmul_validation.cpp "Systolic")
 
 # ============================================================================
 # Connection Patterns (TODO)
