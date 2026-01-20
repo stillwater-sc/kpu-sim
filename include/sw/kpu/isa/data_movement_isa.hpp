@@ -318,21 +318,21 @@ struct DMInstruction {
 struct DMProgram {
     // Program metadata
     std::string name;           // e.g., "matmul_1024x1024x1024_os"
-    uint32_t version;           // Program format version
+    uint32_t version = 1;       // Program format version
 
     // Matrix dimensions
-    Size M, N, K;
+    Size M = 0, N = 0, K = 0;
 
     // Tiling configuration
-    Size Ti, Tj, Tk;            // Tile dimensions
-    Size L1_Ki;                 // L1 streaming chunk
+    Size Ti = 0, Tj = 0, Tk = 0;  // Tile dimensions
+    Size L1_Ki = 0;               // L1 streaming chunk
 
     // Dataflow strategy
     enum class Dataflow {
         OUTPUT_STATIONARY,      // C in PEs, A+B stream through
         WEIGHT_STATIONARY,      // B in PEs, A streams, C accumulates in L2
         INPUT_STATIONARY        // A in PEs, B streams, C accumulates in L2
-    } dataflow;
+    } dataflow = Dataflow::OUTPUT_STATIONARY;
 
     // Instruction stream
     std::vector<DMInstruction> instructions;
@@ -340,9 +340,9 @@ struct DMProgram {
     // Memory layout (technology-agnostic)
     struct MemoryMap {
         // External memory addresses (set at load time)
-        Address a_base;
-        Address b_base;
-        Address c_base;
+        Address a_base = 0;
+        Address b_base = 0;
+        Address c_base = 0;
 
         // L3 tile allocations
         struct L3Alloc {
@@ -367,12 +367,12 @@ struct DMProgram {
 
     // Performance estimates (from SURE analysis)
     struct Estimates {
-        uint64_t total_cycles;
-        uint64_t external_mem_bytes;    // Technology-agnostic
-        uint64_t l3_bytes;
-        uint64_t l2_bytes;
-        double arithmetic_intensity;
-        double estimated_gflops;
+        uint64_t total_cycles = 0;
+        uint64_t external_mem_bytes = 0;    // Technology-agnostic
+        uint64_t l3_bytes = 0;
+        uint64_t l2_bytes = 0;
+        double arithmetic_intensity = 0.0;
+        double estimated_gflops = 0.0;
     } estimates;
 
     // Program statistics
@@ -397,24 +397,24 @@ struct DMProgram {
 class OutputStationaryProgramBuilder {
 public:
     struct Config {
-        Size M, N, K;               // Matrix dimensions
-        Size Ti, Tj, Tk;            // Tile sizes
-        Size L1_Ki;                 // L1 streaming chunk
-        Size systolic_size;         // Systolic array dimension (e.g., 16)
-        Size element_size;          // Element size in bytes (e.g., 4 for float32)
+        Size M = 0, N = 0, K = 0;     // Matrix dimensions
+        Size Ti = 0, Tj = 0, Tk = 0;  // Tile sizes
+        Size L1_Ki = 0;               // L1 streaming chunk
+        Size systolic_size = 16;      // Systolic array dimension (e.g., 16)
+        Size element_size = 4;        // Element size in bytes (e.g., 4 for float32)
 
         // Memory hierarchy sizes (technology-agnostic)
-        Size l3_tile_capacity;      // L3 tile capacity in bytes
-        Size l2_bank_capacity;      // L2 bank capacity in bytes
-        Size l1_buffer_capacity;    // L1 buffer capacity in bytes
+        Size l3_tile_capacity = 0;    // L3 tile capacity in bytes
+        Size l2_bank_capacity = 0;    // L2 bank capacity in bytes
+        Size l1_buffer_capacity = 0;  // L1 buffer capacity in bytes
 
         // Number of components
-        uint8_t num_l3_tiles;
-        uint8_t num_l2_banks;
-        uint8_t num_l1_buffers;
+        uint8_t num_l3_tiles = 1;
+        uint8_t num_l2_banks = 1;
+        uint8_t num_l1_buffers = 1;
 
         // Double-buffering enabled
-        bool double_buffer;
+        bool double_buffer = false;
 
         // Tile caching (Phase 1)
         bool enable_tile_caching = true;  // Track tile reuse in L3

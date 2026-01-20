@@ -27,7 +27,7 @@ Fidelity Levels:
     - CYCLE_ACCURATE: Full timing simulation
 """
 
-__version__ = "0.5.3"
+__version__ = "0.5.4"
 __author__ = "Stillwater Supercomputing, Inc."
 
 # Fidelity levels

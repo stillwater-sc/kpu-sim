@@ -1563,3 +1563,322 @@ TEST_CASE("RMSNorm arithmetic intensity", "[kernel][rmsnorm]") {
     // RMSNorm typically has AI < 10 (it's memory-bound)
     REQUIRE(ai < 10.0);
 }
+
+// ============================================================================
+// BatchNorm Kernel Tests
+// ============================================================================
+
+TEST_CASE("BatchNormConfig structure", "[kernel][batchnorm]") {
+    SECTION("Default configuration") {
+        BatchNormConfig cfg;
+        REQUIRE(cfg.batch_size == 1);
+        REQUIRE(cfg.num_features == 64);
+        REQUIRE(cfg.height == 1);
+        REQUIRE(cfg.width == 1);
+        REQUIRE(cfg.eps == Catch::Approx(1e-5f));
+        REQUIRE(cfg.affine == true);
+    }
+
+    SECTION("Custom configuration") {
+        BatchNormConfig cfg;
+        cfg.batch_size = 8;
+        cfg.num_features = 128;
+        cfg.height = 32;
+        cfg.width = 32;
+
+        REQUIRE(cfg.total_elements() == 8 * 128 * 32 * 32);
+        REQUIRE(cfg.spatial_size() == 32 * 32);
+        REQUIRE(cfg.points_per_channel() == 8 * 32 * 32);
+    }
+
+    SECTION("FLOP calculation with affine") {
+        BatchNormConfig cfg;
+        cfg.batch_size = 2;
+        cfg.num_features = 64;
+        cfg.height = 16;
+        cfg.width = 16;
+        cfg.affine = true;
+
+        Size total = 2 * 64 * 16 * 16;
+        // With affine: subtract mean (1) + mul by rsqrt (1) + scale (1) + bias (1) = 4 ops/elem
+        Size expected_flops = total * 4;
+
+        REQUIRE(cfg.total_flops() == expected_flops);
+    }
+
+    SECTION("FLOP calculation without affine") {
+        BatchNormConfig cfg;
+        cfg.batch_size = 2;
+        cfg.num_features = 64;
+        cfg.height = 16;
+        cfg.width = 16;
+        cfg.affine = false;
+
+        Size total = 2 * 64 * 16 * 16;
+        // Without affine: subtract mean (1) + mul by rsqrt (1) = 2 ops/elem
+        Size expected_flops = total * 2;
+
+        REQUIRE(cfg.total_flops() == expected_flops);
+    }
+}
+
+TEST_CASE("BatchNorm kernel creation", "[kernel][batchnorm]") {
+    SECTION("BatchNorm with config struct") {
+        BatchNormConfig cfg;
+        cfg.batch_size = 4;
+        cfg.num_features = 128;
+        cfg.height = 32;
+        cfg.width = 32;
+
+        Kernel kernel = Kernel::create_batchnorm(cfg);
+
+        REQUIRE(kernel.op_type() == KernelOpType::BATCHNORM);
+        REQUIRE(kernel.dtype() == DataType::FLOAT32);
+        REQUIRE(kernel.batchnorm_config().batch_size == 4);
+        REQUIRE(kernel.batchnorm_config().num_features == 128);
+        REQUIRE(kernel.batchnorm_config().height == 32);
+        REQUIRE(kernel.batchnorm_config().width == 32);
+    }
+
+    SECTION("BatchNorm with explicit parameters") {
+        Kernel kernel = Kernel::create_batchnorm(
+            2,      // batch_size
+            64,     // num_features
+            16,     // height
+            16,     // width
+            1e-5f,  // eps
+            true    // affine
+        );
+
+        REQUIRE(kernel.op_type() == KernelOpType::BATCHNORM);
+        REQUIRE(kernel.batchnorm_config().batch_size == 2);
+        REQUIRE(kernel.batchnorm_config().num_features == 64);
+        REQUIRE(kernel.batchnorm_config().height == 16);
+        REQUIRE(kernel.batchnorm_config().width == 16);
+        REQUIRE(kernel.batchnorm_config().eps == Catch::Approx(1e-5f));
+        REQUIRE(kernel.batchnorm_config().affine == true);
+    }
+
+    SECTION("BatchNorm without affine") {
+        BatchNormConfig cfg;
+        cfg.batch_size = 2;
+        cfg.num_features = 64;
+        cfg.height = 8;
+        cfg.width = 8;
+        cfg.affine = false;
+
+        Kernel kernel = Kernel::create_batchnorm(cfg);
+        REQUIRE(kernel.batchnorm_config().affine == false);
+    }
+
+    SECTION("BatchNorm with different data types") {
+        BatchNormConfig cfg;
+        cfg.batch_size = 2;
+        cfg.num_features = 64;
+        cfg.height = 8;
+        cfg.width = 8;
+
+        Kernel kernel_fp16 = Kernel::create_batchnorm(cfg, DataType::FLOAT16);
+        REQUIRE(kernel_fp16.dtype() == DataType::FLOAT16);
+
+        Kernel kernel_bf16 = Kernel::create_batchnorm(cfg, DataType::BFLOAT16);
+        REQUIRE(kernel_bf16.dtype() == DataType::BFLOAT16);
+    }
+}
+
+TEST_CASE("BatchNorm kernel arguments", "[kernel][batchnorm]") {
+    SECTION("BatchNorm with affine has 6 arguments") {
+        BatchNormConfig cfg;
+        cfg.batch_size = 2;
+        cfg.num_features = 64;
+        cfg.height = 16;
+        cfg.width = 16;
+        cfg.affine = true;
+
+        Kernel kernel = Kernel::create_batchnorm(cfg);
+        const auto& args = kernel.arguments();
+
+        // With affine: input, running_mean, running_var, weight, bias, output
+        REQUIRE(args.size() == 6);
+
+        // Input: [N, C, H, W]
+        REQUIRE(args[0].name == "input");
+        REQUIRE(args[0].shape == std::vector<Size>{2, 64, 16, 16});
+        REQUIRE(args[0].is_output == false);
+
+        // Running mean: [C]
+        REQUIRE(args[1].name == "running_mean");
+        REQUIRE(args[1].shape == std::vector<Size>{64});
+        REQUIRE(args[1].is_output == false);
+
+        // Running var: [C]
+        REQUIRE(args[2].name == "running_var");
+        REQUIRE(args[2].shape == std::vector<Size>{64});
+        REQUIRE(args[2].is_output == false);
+
+        // Weight: [C]
+        REQUIRE(args[3].name == "weight");
+        REQUIRE(args[3].shape == std::vector<Size>{64});
+        REQUIRE(args[3].is_output == false);
+
+        // Bias: [C]
+        REQUIRE(args[4].name == "bias");
+        REQUIRE(args[4].shape == std::vector<Size>{64});
+        REQUIRE(args[4].is_output == false);
+
+        // Output: [N, C, H, W]
+        REQUIRE(args[5].name == "output");
+        REQUIRE(args[5].shape == std::vector<Size>{2, 64, 16, 16});
+        REQUIRE(args[5].is_output == true);
+    }
+
+    SECTION("BatchNorm without affine has 4 arguments") {
+        BatchNormConfig cfg;
+        cfg.batch_size = 2;
+        cfg.num_features = 64;
+        cfg.height = 16;
+        cfg.width = 16;
+        cfg.affine = false;
+
+        Kernel kernel = Kernel::create_batchnorm(cfg);
+        const auto& args = kernel.arguments();
+
+        // Without affine: input, running_mean, running_var, output
+        REQUIRE(args.size() == 4);
+
+        REQUIRE(args[0].name == "input");
+        REQUIRE(args[1].name == "running_mean");
+        REQUIRE(args[2].name == "running_var");
+        REQUIRE(args[3].name == "output");
+    }
+}
+
+TEST_CASE("BatchNorm kernel validation", "[kernel][batchnorm]") {
+    std::string error;
+
+    SECTION("Valid BatchNorm passes validation") {
+        Kernel kernel = Kernel::create_batchnorm(2, 64, 16, 16);
+        REQUIRE(kernel.validate(error));
+        REQUIRE(error.empty());
+    }
+
+    SECTION("Zero batch size fails validation") {
+        BatchNormConfig cfg;
+        cfg.batch_size = 0;
+        cfg.num_features = 64;
+        cfg.height = 16;
+        cfg.width = 16;
+
+        Kernel kernel = Kernel::create_batchnorm(cfg);
+        REQUIRE_FALSE(kernel.validate(error));
+        REQUIRE(error.find("batch size") != std::string::npos);
+    }
+
+    SECTION("Zero num_features fails validation") {
+        BatchNormConfig cfg;
+        cfg.batch_size = 2;
+        cfg.num_features = 0;
+        cfg.height = 16;
+        cfg.width = 16;
+
+        Kernel kernel = Kernel::create_batchnorm(cfg);
+        REQUIRE_FALSE(kernel.validate(error));
+        REQUIRE(error.find("num_features") != std::string::npos);
+    }
+
+    SECTION("Zero height fails validation") {
+        BatchNormConfig cfg;
+        cfg.batch_size = 2;
+        cfg.num_features = 64;
+        cfg.height = 0;
+        cfg.width = 16;
+
+        Kernel kernel = Kernel::create_batchnorm(cfg);
+        REQUIRE_FALSE(kernel.validate(error));
+        REQUIRE(error.find("height") != std::string::npos);
+    }
+
+    SECTION("Zero width fails validation") {
+        BatchNormConfig cfg;
+        cfg.batch_size = 2;
+        cfg.num_features = 64;
+        cfg.height = 16;
+        cfg.width = 0;
+
+        Kernel kernel = Kernel::create_batchnorm(cfg);
+        REQUIRE_FALSE(kernel.validate(error));
+        REQUIRE(error.find("width") != std::string::npos);
+    }
+
+    SECTION("Non-positive epsilon fails validation") {
+        BatchNormConfig cfg;
+        cfg.batch_size = 2;
+        cfg.num_features = 64;
+        cfg.height = 16;
+        cfg.width = 16;
+        cfg.eps = 0.0f;
+
+        Kernel kernel = Kernel::create_batchnorm(cfg);
+        REQUIRE_FALSE(kernel.validate(error));
+        REQUIRE(error.find("epsilon") != std::string::npos);
+    }
+}
+
+TEST_CASE("BatchNorm kernel summary", "[kernel][batchnorm]") {
+    BatchNormConfig cfg;
+    cfg.batch_size = 4;
+    cfg.num_features = 128;
+    cfg.height = 32;
+    cfg.width = 32;
+    cfg.eps = 1e-5f;
+    cfg.affine = true;
+
+    Kernel kernel = Kernel::create_batchnorm(cfg);
+    std::string summary = kernel.summary();
+
+    // Check that summary contains expected BatchNorm information
+    REQUIRE(summary.find("batchnorm") != std::string::npos);
+    REQUIRE(summary.find("Batch Size: 4") != std::string::npos);
+    REQUIRE(summary.find("Num Features: 128") != std::string::npos);
+    REQUIRE(summary.find("Height: 32") != std::string::npos);
+    REQUIRE(summary.find("Width: 32") != std::string::npos);
+    REQUIRE(summary.find("Affine: yes") != std::string::npos);
+    REQUIRE(summary.find("FLOPs") != std::string::npos);
+}
+
+TEST_CASE("BatchNorm kernel FLOPs calculation", "[kernel][batchnorm]") {
+    BatchNormConfig cfg;
+    cfg.batch_size = 2;
+    cfg.num_features = 64;
+    cfg.height = 16;
+    cfg.width = 16;
+
+    SECTION("With affine") {
+        cfg.affine = true;
+        Kernel kernel = Kernel::create_batchnorm(cfg);
+        REQUIRE(kernel.total_flops() == cfg.total_flops());
+    }
+
+    SECTION("Without affine") {
+        cfg.affine = false;
+        Kernel kernel = Kernel::create_batchnorm(cfg);
+        REQUIRE(kernel.total_flops() == cfg.total_flops());
+    }
+}
+
+TEST_CASE("BatchNorm arithmetic intensity", "[kernel][batchnorm]") {
+    BatchNormConfig cfg;
+    cfg.batch_size = 4;
+    cfg.num_features = 128;
+    cfg.height = 32;
+    cfg.width = 32;
+
+    Kernel kernel = Kernel::create_batchnorm(cfg);
+
+    // Arithmetic intensity = FLOPs / bytes
+    // BatchNorm is memory-bound (low arithmetic intensity)
+    double ai = kernel.arithmetic_intensity();
+    REQUIRE(ai > 0.0);
+    // BatchNorm typically has AI < 10 (it's memory-bound)
+    REQUIRE(ai < 10.0);
+}

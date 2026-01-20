@@ -26,6 +26,7 @@ enum class KernelOpType : uint8_t {
     LAYERNORM = 7,      // Layer normalization
     ATTENTION = 8,      // Scaled dot-product attention
     RMSNORM = 9,        // RMS normalization (LLaMA-style)
+    BATCHNORM = 10,     // Batch normalization (CNN inference)
     CUSTOM = 255        // Custom/user-defined
 };
 
@@ -53,6 +54,7 @@ inline const char* kernel_op_type_name(KernelOpType op) {
         case KernelOpType::LAYERNORM: return "layernorm";
         case KernelOpType::ATTENTION: return "attention";
         case KernelOpType::RMSNORM: return "rmsnorm";
+        case KernelOpType::BATCHNORM: return "batchnorm";
         case KernelOpType::CUSTOM: return "custom";
         default: return "unknown";
     }
@@ -289,6 +291,65 @@ struct RMSNormConfig {
 
         // Scale (gamma): D multiplications per group
         flops += groups * D;
+
+        return flops;
+    }
+};
+
+/**
+ * @brief Batch normalization configuration parameters
+ *
+ * Implements BatchNorm2D for CNN inference:
+ *   y = (x - running_mean) / sqrt(running_var + eps) * gamma + beta
+ *
+ * During inference, uses precomputed running statistics.
+ * Can be folded into preceding convolution by adjusting weights.
+ * Input shape: [N, C, H, W], normalizes over C dimension.
+ */
+struct BatchNormConfig {
+    Size batch_size;           // N: batch size
+    Size num_features;         // C: number of channels/features
+    Size height;               // H: spatial height
+    Size width;                // W: spatial width
+    float eps;                 // Epsilon for numerical stability
+    bool affine;               // Use learnable gamma (weight) and beta (bias)
+
+    BatchNormConfig()
+        : batch_size(1), num_features(64), height(1), width(1)
+        , eps(1e-5f), affine(true) {}
+
+    // Total elements in input tensor
+    Size total_elements() const { return batch_size * num_features * height * width; }
+
+    // Spatial size per channel
+    Size spatial_size() const { return height * width; }
+
+    // Total number of points to normalize per channel
+    Size points_per_channel() const { return batch_size * height * width; }
+
+    // Compute total FLOPs for batch normalization (inference mode)
+    // Per element: subtract mean (1), multiply by 1/sqrt(var+eps) (1), scale (1), bias (1)
+    // The 1/sqrt(var+eps) is precomputed per channel, so just a multiply per element
+    Size total_flops() const {
+        Size total = total_elements();
+        Size flops = 0;
+
+        // Subtract running_mean: 1 op per element
+        flops += total;
+
+        // Multiply by 1/sqrt(running_var + eps): 1 op per element
+        // (The sqrt and reciprocal are precomputed per channel, not counted here)
+        flops += total;
+
+        // Scale by gamma: 1 op per element
+        if (affine) {
+            flops += total;
+        }
+
+        // Add beta: 1 op per element
+        if (affine) {
+            flops += total;
+        }
 
         return flops;
     }
@@ -600,6 +661,49 @@ public:
                                  float eps = 1e-6f,
                                  DataType dtype = DataType::FLOAT32);
 
+    // -----------------------------------------
+    // BatchNorm Kernel Creation (v0.5.4)
+    // -----------------------------------------
+
+    /**
+     * @brief Create batch normalization kernel for CNN inference
+     * @param config BatchNorm configuration
+     * @param dtype Data type
+     * @return Compiled kernel
+     *
+     * BatchNorm normalizes over the channel dimension using precomputed
+     * running statistics. Can be folded into preceding convolution.
+     *
+     * Input shape: [N, C, H, W]
+     * Formula: y = (x - running_mean) / sqrt(running_var + eps) * gamma + beta
+     *
+     * Arguments:
+     *   - input: [N, C, H, W] input tensor
+     *   - running_mean: [C] running mean per channel
+     *   - running_var: [C] running variance per channel
+     *   - weight: [C] scale parameter (gamma), if affine
+     *   - bias: [C] bias parameter (beta), if affine
+     *   - output: [N, C, H, W] output tensor
+     */
+    static Kernel create_batchnorm(const BatchNormConfig& config,
+                                   DataType dtype = DataType::FLOAT32);
+
+    /**
+     * @brief Create batch normalization kernel with explicit parameters
+     * @param batch_size N: batch size
+     * @param num_features C: number of channels
+     * @param height H: spatial height
+     * @param width W: spatial width
+     * @param eps Epsilon for numerical stability (default 1e-5)
+     * @param affine Use learnable gamma and beta (default true)
+     * @param dtype Data type
+     * @return Compiled kernel
+     */
+    static Kernel create_batchnorm(Size batch_size, Size num_features,
+                                   Size height, Size width,
+                                   float eps = 1e-5f, bool affine = true,
+                                   DataType dtype = DataType::FLOAT32);
+
     // =========================================
     // Metadata Accessors
     // =========================================
@@ -734,6 +838,15 @@ public:
     const RMSNormConfig& rmsnorm_config() const { return rmsnorm_config_; }
 
     // =========================================
+    // BatchNorm Accessors (for BATCHNORM kernels)
+    // =========================================
+
+    /**
+     * @brief Get BatchNorm configuration (for BATCHNORM kernels)
+     */
+    const BatchNormConfig& batchnorm_config() const { return batchnorm_config_; }
+
+    // =========================================
     // Program Access
     // =========================================
 
@@ -819,6 +932,9 @@ private:
     // RMSNorm-specific members
     RMSNormConfig rmsnorm_config_;
 
+    // BatchNorm-specific members
+    BatchNormConfig batchnorm_config_;
+
     /**
      * @brief Set up arguments for MATMUL operation
      */
@@ -848,6 +964,11 @@ private:
      * @brief Set up arguments for RMSNORM operation
      */
     void setup_rmsnorm_arguments();
+
+    /**
+     * @brief Set up arguments for BATCHNORM operation
+     */
+    void setup_batchnorm_arguments();
 };
 
 } // namespace sw::kpu

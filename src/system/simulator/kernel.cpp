@@ -314,6 +314,49 @@ Kernel Kernel::create_rmsnorm(Size batch_size, Size seq_len, Size normalized_dim
     return create_rmsnorm(config, dtype);
 }
 
+Kernel Kernel::create_batchnorm(const BatchNormConfig& config, DataType dtype) {
+    compiler::KernelCompiler compiler;
+    Size N = config.batch_size;
+    Size C = config.num_features;
+    Size H = config.height;
+    Size W = config.width;
+
+    // BatchNorm is elementwise, but we compile a small matmul as placeholder
+    // for instruction generation (actual compute is per-element)
+    compiler::CompileOptions opts = compiler::CompileOptions::defaults();
+    opts.dtype = dtype;
+    Kernel kernel = compiler.compile_matmul(1, C, C, opts);
+
+    // Override operation type and config
+    kernel.op_type_ = KernelOpType::BATCHNORM;
+    kernel.batchnorm_config_ = config;
+    kernel.dtype_ = dtype;
+
+    // Generate descriptive name
+    std::ostringstream name;
+    name << "batchnorm_n" << N << "_c" << C << "_h" << H << "_w" << W;
+    kernel.program_.name = name.str();
+
+    // Set up batchnorm-specific arguments
+    kernel.setup_batchnorm_arguments();
+
+    return kernel;
+}
+
+Kernel Kernel::create_batchnorm(Size batch_size, Size num_features,
+                                Size height, Size width,
+                                float eps, bool affine, DataType dtype) {
+    BatchNormConfig config;
+    config.batch_size = batch_size;
+    config.num_features = num_features;
+    config.height = height;
+    config.width = width;
+    config.eps = eps;
+    config.affine = affine;
+
+    return create_batchnorm(config, dtype);
+}
+
 // ============================================================================
 // Argument Accessors
 // ============================================================================
@@ -423,6 +466,16 @@ std::string Kernel::summary() const {
         ss << "  Seq Length: " << cfg.seq_len << "\n";
         ss << "  Normalized Dim: " << cfg.normalized_dim << "\n";
         ss << "  Epsilon: " << cfg.eps << "\n";
+    }
+
+    if (op_type_ == KernelOpType::BATCHNORM) {
+        const auto& cfg = batchnorm_config_;
+        ss << "  Batch Size: " << cfg.batch_size << "\n";
+        ss << "  Num Features: " << cfg.num_features << "\n";
+        ss << "  Height: " << cfg.height << "\n";
+        ss << "  Width: " << cfg.width << "\n";
+        ss << "  Epsilon: " << cfg.eps << "\n";
+        ss << "  Affine: " << (cfg.affine ? "yes" : "no") << "\n";
     }
 
     ss << "  Program Size: " << instruction_count() << " operations\n";
@@ -621,6 +674,40 @@ bool Kernel::validate(std::string& error) const {
         }
     }
 
+    // BATCHNORM validation
+    if (op_type_ == KernelOpType::BATCHNORM) {
+        const auto& cfg = batchnorm_config_;
+        if (cfg.batch_size == 0) {
+            error = "BatchNorm batch size must be non-zero";
+            return false;
+        }
+        if (cfg.num_features == 0) {
+            error = "BatchNorm num_features must be non-zero";
+            return false;
+        }
+        if (cfg.height == 0) {
+            error = "BatchNorm height must be non-zero";
+            return false;
+        }
+        if (cfg.width == 0) {
+            error = "BatchNorm width must be non-zero";
+            return false;
+        }
+        if (cfg.eps <= 0) {
+            error = "BatchNorm epsilon must be positive";
+            return false;
+        }
+
+        // Validate argument count:
+        // input, running_mean, running_var, [weight,] [bias,] output
+        size_t expected_args = 4;  // input + running_mean + running_var + output
+        if (cfg.affine) expected_args += 2;  // weight + bias
+        if (arguments_.size() < expected_args) {
+            error = "BATCHNORM kernel must have at least " + std::to_string(expected_args) + " arguments";
+            return false;
+        }
+    }
+
     error.clear();
     return true;
 }
@@ -684,6 +771,9 @@ Size Kernel::total_flops() const {
     }
     if (op_type_ == KernelOpType::RMSNORM) {
         return rmsnorm_config_.total_flops();
+    }
+    if (op_type_ == KernelOpType::BATCHNORM) {
+        return batchnorm_config_.total_flops();
     }
     // For other operation types, could return estimates or 0
     return 0;
@@ -946,6 +1036,62 @@ void Kernel::setup_rmsnorm_arguments() {
     arguments_.emplace_back(
         "output", dtype_,
         std::vector<Size>{B, S, D},
+        true
+    );
+}
+
+void Kernel::setup_batchnorm_arguments() {
+    arguments_.clear();
+
+    const auto& cfg = batchnorm_config_;
+    Size N = cfg.batch_size;
+    Size C = cfg.num_features;
+    Size H = cfg.height;
+    Size W = cfg.width;
+
+    // Input: [N, C, H, W]
+    arguments_.emplace_back(
+        "input", dtype_,
+        std::vector<Size>{N, C, H, W},
+        false
+    );
+
+    // Running mean: [C] - precomputed mean per channel
+    arguments_.emplace_back(
+        "running_mean", dtype_,
+        std::vector<Size>{C},
+        false
+    );
+
+    // Running variance: [C] - precomputed variance per channel
+    arguments_.emplace_back(
+        "running_var", dtype_,
+        std::vector<Size>{C},
+        false
+    );
+
+    // Weight (gamma): [C] - scale parameter (if affine)
+    if (cfg.affine) {
+        arguments_.emplace_back(
+            "weight", dtype_,
+            std::vector<Size>{C},
+            false
+        );
+    }
+
+    // Bias (beta): [C] - shift parameter (if affine)
+    if (cfg.affine) {
+        arguments_.emplace_back(
+            "bias", dtype_,
+            std::vector<Size>{C},
+            false
+        );
+    }
+
+    // Output: [N, C, H, W]
+    arguments_.emplace_back(
+        "output", dtype_,
+        std::vector<Size>{N, C, H, W},
         true
     );
 }
