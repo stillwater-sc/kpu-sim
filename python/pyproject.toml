@@ -1,10 +1,10 @@
 [build-system]
-requires = ["setuptools>=61.0", "wheel", "setuptools-scm>=8.0"]
+requires = ["setuptools>=61.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "kpu"
-dynamic = ["version"]  # Version from git tags via setuptools-scm
+version = "0.4.7"  # Keep in sync with kpu/__init__.py
 description = "KPU (Knowledge Processing Unit) Simulator Python API"
 readme = "README.md"
 license = "Apache-2.0"
@@ -47,16 +47,6 @@ Repository = "https://github.com/stillwater-sc/kpu-sim"
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["kpu*"]
-
-[tool.setuptools_scm]
-# Use git tags for versioning
-# Tags should be in format: v0.3.0
-root = ".."
-version_scheme = "guess-next-dev"
-local_scheme = "node-and-date"
-fallback_version = "0.4.7"
-# Note: Version is also hardcoded in kpu/__init__.py for runtime access
-# The write_to directive is disabled to avoid path issues in CI isolated builds
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
