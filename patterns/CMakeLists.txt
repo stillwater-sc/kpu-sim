@@ -610,6 +610,7 @@ endfunction()
 # -----------------------------------------------------------------------------
 
 add_compute_pattern(matmul_validation systolic/matmul_validation.cpp "Systolic")
+add_compute_pattern(tiled_matmul_e2e systolic/tiled_matmul_e2e.cpp "Systolic")
 
 # ============================================================================
 # Connection Patterns (TODO)
