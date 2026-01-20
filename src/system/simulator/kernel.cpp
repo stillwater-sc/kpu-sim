@@ -269,6 +269,51 @@ Kernel Kernel::create_layernorm(Size batch_size, Size seq_len, Size normalized_d
     return create_layernorm(config, dtype);
 }
 
+Kernel Kernel::create_rmsnorm(const RMSNormConfig& config, DataType dtype) {
+    // RMSNorm computes: y = x / sqrt(mean(x^2) + eps) * gamma
+    // This is primarily a reduction + elementwise operation
+
+    compiler::KernelCompiler compiler;
+
+    Size B = config.batch_size;
+    Size S = config.seq_len;
+    Size D = config.normalized_dim;
+
+    // RMSNorm is not a matmul, but we create a placeholder program
+    // using a simple matmul structure for resource estimation
+    compiler::CompileOptions opts = compiler::CompileOptions::defaults();
+    opts.dtype = dtype;
+
+    // Use a 1xD matmul as placeholder for the reduction operations
+    Kernel kernel = compiler.compile_matmul(1, D, D, opts);
+
+    // Override operation type to RMSNORM
+    kernel.op_type_ = KernelOpType::RMSNORM;
+    kernel.rmsnorm_config_ = config;
+    kernel.dtype_ = dtype;
+
+    // Rename the program
+    std::ostringstream name;
+    name << "rmsnorm_b" << B << "_s" << S << "_d" << D;
+    kernel.program_.name = name.str();
+
+    // Set up rmsnorm-specific arguments
+    kernel.setup_rmsnorm_arguments();
+
+    return kernel;
+}
+
+Kernel Kernel::create_rmsnorm(Size batch_size, Size seq_len, Size normalized_dim,
+                              float eps, DataType dtype) {
+    RMSNormConfig config;
+    config.batch_size = batch_size;
+    config.seq_len = seq_len;
+    config.normalized_dim = normalized_dim;
+    config.eps = eps;
+
+    return create_rmsnorm(config, dtype);
+}
+
 // ============================================================================
 // Argument Accessors
 // ============================================================================
@@ -370,6 +415,14 @@ std::string Kernel::summary() const {
         ss << "  Epsilon: " << cfg.eps << "\n";
         ss << "  Has Weight: " << (cfg.has_weight ? "yes" : "no") << "\n";
         ss << "  Has Bias: " << (cfg.has_bias ? "yes" : "no") << "\n";
+    }
+
+    if (op_type_ == KernelOpType::RMSNORM) {
+        const auto& cfg = rmsnorm_config_;
+        ss << "  Batch Size: " << cfg.batch_size << "\n";
+        ss << "  Seq Length: " << cfg.seq_len << "\n";
+        ss << "  Normalized Dim: " << cfg.normalized_dim << "\n";
+        ss << "  Epsilon: " << cfg.eps << "\n";
     }
 
     ss << "  Program Size: " << instruction_count() << " operations\n";
@@ -539,6 +592,35 @@ bool Kernel::validate(std::string& error) const {
         }
     }
 
+    // RMSNORM validation
+    if (op_type_ == KernelOpType::RMSNORM) {
+        const auto& cfg = rmsnorm_config_;
+        if (cfg.batch_size == 0) {
+            error = "RMSNorm batch size must be non-zero";
+            return false;
+        }
+        if (cfg.seq_len == 0) {
+            error = "RMSNorm sequence length must be non-zero";
+            return false;
+        }
+        if (cfg.normalized_dim == 0) {
+            error = "RMSNorm normalized dimension must be non-zero";
+            return false;
+        }
+        if (cfg.eps <= 0) {
+            error = "RMSNorm epsilon must be positive";
+            return false;
+        }
+
+        // Validate argument count: input, weight (gamma), output
+        // RMSNorm always has weight (gamma) but no bias
+        size_t expected_args = 3;  // input + weight + output
+        if (arguments_.size() < expected_args) {
+            error = "RMSNORM kernel must have at least " + std::to_string(expected_args) + " arguments";
+            return false;
+        }
+    }
+
     error.clear();
     return true;
 }
@@ -599,6 +681,9 @@ Size Kernel::total_flops() const {
     }
     if (op_type_ == KernelOpType::LAYERNORM) {
         return layernorm_config_.total_flops();
+    }
+    if (op_type_ == KernelOpType::RMSNORM) {
+        return rmsnorm_config_.total_flops();
     }
     // For other operation types, could return estimates or 0
     return 0;
@@ -825,6 +910,37 @@ void Kernel::setup_layernorm_arguments() {
             false
         );
     }
+
+    // Output: [B, S, D]
+    arguments_.emplace_back(
+        "output", dtype_,
+        std::vector<Size>{B, S, D},
+        true
+    );
+}
+
+void Kernel::setup_rmsnorm_arguments() {
+    arguments_.clear();
+
+    const auto& cfg = rmsnorm_config_;
+    Size B = cfg.batch_size;
+    Size S = cfg.seq_len;
+    Size D = cfg.normalized_dim;
+
+    // Input: [B, S, D]
+    arguments_.emplace_back(
+        "input", dtype_,
+        std::vector<Size>{B, S, D},
+        false
+    );
+
+    // Weight (gamma): [D] - scale parameter
+    // RMSNorm always has weight, no bias (unlike LayerNorm)
+    arguments_.emplace_back(
+        "weight", dtype_,
+        std::vector<Size>{D},
+        false
+    );
 
     // Output: [B, S, D]
     arguments_.emplace_back(

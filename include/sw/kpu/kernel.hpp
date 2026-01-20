@@ -25,6 +25,7 @@ enum class KernelOpType : uint8_t {
     SOFTMAX = 6,        // Softmax normalization
     LAYERNORM = 7,      // Layer normalization
     ATTENTION = 8,      // Scaled dot-product attention
+    RMSNORM = 9,        // RMS normalization (LLaMA-style)
     CUSTOM = 255        // Custom/user-defined
 };
 
@@ -51,6 +52,7 @@ inline const char* kernel_op_type_name(KernelOpType op) {
         case KernelOpType::SOFTMAX: return "softmax";
         case KernelOpType::LAYERNORM: return "layernorm";
         case KernelOpType::ATTENTION: return "attention";
+        case KernelOpType::RMSNORM: return "rmsnorm";
         case KernelOpType::CUSTOM: return "custom";
         default: return "unknown";
     }
@@ -234,6 +236,59 @@ struct LayerNormConfig {
         if (has_bias) {
             flops += groups * D;
         }
+
+        return flops;
+    }
+};
+
+/**
+ * @brief RMS normalization configuration parameters
+ *
+ * Implements RMSNorm (used in LLaMA, Gemma, etc.):
+ *   y = x / sqrt(mean(x^2) + eps) * gamma
+ *
+ * RMSNorm is a simplified LayerNorm without mean centering or bias.
+ * It's computationally cheaper and works well for transformer architectures.
+ */
+struct RMSNormConfig {
+    Size batch_size;           // B: batch size
+    Size seq_len;              // S: sequence length (or spatial dims)
+    Size normalized_dim;       // D: dimension to normalize over (e.g., d_model)
+    float eps;                 // Epsilon for numerical stability
+
+    RMSNormConfig()
+        : batch_size(1), seq_len(1), normalized_dim(64)
+        , eps(1e-6f) {}  // RMSNorm typically uses smaller eps (1e-6)
+
+    // Total elements in input tensor
+    Size total_elements() const { return batch_size * seq_len * normalized_dim; }
+
+    // Number of normalization groups (each normalized independently)
+    Size num_groups() const { return batch_size * seq_len; }
+
+    // Compute total FLOPs for RMS normalization
+    // Per group: square (D muls), mean (D adds + 1 div), rsqrt (1 op),
+    //            normalize (D muls), scale (D muls)
+    Size total_flops() const {
+        Size D = normalized_dim;
+        Size groups = num_groups();
+
+        Size flops = 0;
+
+        // Square each element: D multiplications per group
+        flops += groups * D;
+
+        // Mean of squares: D additions + 1 division per group
+        flops += groups * (D + 1);
+
+        // Reciprocal sqrt: 1 operation per group (approximated)
+        flops += groups;
+
+        // Normalize: D multiplications per group (x * rsqrt)
+        flops += groups * D;
+
+        // Scale (gamma): D multiplications per group
+        flops += groups * D;
 
         return flops;
     }
@@ -513,6 +568,38 @@ public:
                                    bool has_weight = true, bool has_bias = true,
                                    DataType dtype = DataType::FLOAT32);
 
+    /**
+     * @brief Create an RMS normalization kernel
+     * @param config RMSNorm configuration parameters
+     * @param dtype Data type (default FLOAT32)
+     * @return Compiled kernel
+     *
+     * Implements RMS normalization (used in LLaMA, Gemma, etc.):
+     *   y = x / sqrt(mean(x^2) + eps) * gamma
+     *
+     * RMSNorm is simpler than LayerNorm - no mean centering, no bias.
+     *
+     * Arguments:
+     *   - input: [B, S, D] input tensor
+     *   - weight: [D] scale parameter (gamma)
+     *   - output: [B, S, D] output tensor
+     */
+    static Kernel create_rmsnorm(const RMSNormConfig& config,
+                                 DataType dtype = DataType::FLOAT32);
+
+    /**
+     * @brief Create RMS normalization kernel with explicit parameters
+     * @param batch_size B: batch size
+     * @param seq_len S: sequence length
+     * @param normalized_dim D: dimension to normalize over
+     * @param eps Epsilon for numerical stability (default 1e-6)
+     * @param dtype Data type
+     * @return Compiled kernel
+     */
+    static Kernel create_rmsnorm(Size batch_size, Size seq_len, Size normalized_dim,
+                                 float eps = 1e-6f,
+                                 DataType dtype = DataType::FLOAT32);
+
     // =========================================
     // Metadata Accessors
     // =========================================
@@ -638,6 +725,15 @@ public:
     const LayerNormConfig& layernorm_config() const { return layernorm_config_; }
 
     // =========================================
+    // RMSNorm Accessors (for RMSNORM kernels)
+    // =========================================
+
+    /**
+     * @brief Get RMSNorm configuration (for RMSNORM kernels)
+     */
+    const RMSNormConfig& rmsnorm_config() const { return rmsnorm_config_; }
+
+    // =========================================
     // Program Access
     // =========================================
 
@@ -720,6 +816,9 @@ private:
     // LayerNorm-specific members
     LayerNormConfig layernorm_config_;
 
+    // RMSNorm-specific members
+    RMSNormConfig rmsnorm_config_;
+
     /**
      * @brief Set up arguments for MATMUL operation
      */
@@ -744,6 +843,11 @@ private:
      * @brief Set up arguments for LAYERNORM operation
      */
     void setup_layernorm_arguments();
+
+    /**
+     * @brief Set up arguments for RMSNORM operation
+     */
+    void setup_rmsnorm_arguments();
 };
 
 } // namespace sw::kpu

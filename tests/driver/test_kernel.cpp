@@ -1293,3 +1293,273 @@ TEST_CASE("LayerNorm kernel FLOPs calculation", "[kernel][layernorm]") {
         REQUIRE(kernel.total_flops() == cfg.total_flops());
     }
 }
+
+// ============================================================================
+// RMSNorm Kernel Tests
+// ============================================================================
+
+TEST_CASE("RMSNormConfig structure", "[kernel][rmsnorm]") {
+    SECTION("Default configuration") {
+        RMSNormConfig cfg;
+        REQUIRE(cfg.batch_size == 1);
+        REQUIRE(cfg.seq_len == 1);
+        REQUIRE(cfg.normalized_dim == 64);
+        REQUIRE(cfg.eps == Catch::Approx(1e-6f));
+    }
+
+    SECTION("Custom configuration") {
+        RMSNormConfig cfg;
+        cfg.batch_size = 8;
+        cfg.seq_len = 32;
+        cfg.normalized_dim = 256;
+        cfg.eps = 1e-5f;
+
+        REQUIRE(cfg.total_elements() == 8 * 32 * 256);
+        REQUIRE(cfg.num_groups() == 8 * 32);
+    }
+
+    SECTION("FLOP calculation") {
+        RMSNormConfig cfg;
+        cfg.batch_size = 2;
+        cfg.seq_len = 16;
+        cfg.normalized_dim = 64;
+
+        Size D = 64;
+        Size groups = 2 * 16;  // batch * seq
+
+        // RMSNorm FLOPs:
+        // - Square each element: groups * D
+        // - Mean of squares: groups * (D + 1)  (sum + divide)
+        // - Reciprocal sqrt: groups
+        // - Normalize: groups * D
+        // - Scale (gamma): groups * D
+        Size expected_flops = groups * D +           // square
+                              groups * (D + 1) +     // mean
+                              groups +               // rsqrt
+                              groups * D +           // normalize
+                              groups * D;            // scale
+
+        REQUIRE(cfg.total_flops() == expected_flops);
+    }
+
+    SECTION("Compare to LayerNorm - RMSNorm should be fewer FLOPs") {
+        // RMSNorm is computationally cheaper than LayerNorm
+        // because it skips mean centering and has no bias
+        RMSNormConfig rms_cfg;
+        rms_cfg.batch_size = 2;
+        rms_cfg.seq_len = 16;
+        rms_cfg.normalized_dim = 64;
+
+        LayerNormConfig ln_cfg;
+        ln_cfg.batch_size = 2;
+        ln_cfg.seq_len = 16;
+        ln_cfg.normalized_dim = 64;
+        ln_cfg.has_weight = true;
+        ln_cfg.has_bias = true;
+
+        // RMSNorm should have fewer FLOPs since it doesn't compute mean or apply bias
+        REQUIRE(rms_cfg.total_flops() < ln_cfg.total_flops());
+    }
+}
+
+TEST_CASE("RMSNorm kernel creation", "[kernel][rmsnorm]") {
+    SECTION("RMSNorm with config struct") {
+        RMSNormConfig cfg;
+        cfg.batch_size = 4;
+        cfg.seq_len = 128;
+        cfg.normalized_dim = 512;
+
+        Kernel kernel = Kernel::create_rmsnorm(cfg);
+
+        REQUIRE(kernel.op_type() == KernelOpType::RMSNORM);
+        REQUIRE(kernel.dtype() == DataType::FLOAT32);
+        REQUIRE(kernel.rmsnorm_config().batch_size == 4);
+        REQUIRE(kernel.rmsnorm_config().seq_len == 128);
+        REQUIRE(kernel.rmsnorm_config().normalized_dim == 512);
+    }
+
+    SECTION("RMSNorm with explicit parameters") {
+        Kernel kernel = Kernel::create_rmsnorm(
+            2,      // batch_size
+            64,     // seq_len
+            256,    // normalized_dim
+            1e-5f   // eps
+        );
+
+        REQUIRE(kernel.op_type() == KernelOpType::RMSNORM);
+        REQUIRE(kernel.rmsnorm_config().batch_size == 2);
+        REQUIRE(kernel.rmsnorm_config().seq_len == 64);
+        REQUIRE(kernel.rmsnorm_config().normalized_dim == 256);
+        REQUIRE(kernel.rmsnorm_config().eps == Catch::Approx(1e-5f));
+    }
+
+    SECTION("RMSNorm with custom epsilon") {
+        RMSNormConfig cfg;
+        cfg.eps = 1e-8f;
+
+        Kernel kernel = Kernel::create_rmsnorm(cfg);
+        REQUIRE(kernel.rmsnorm_config().eps == Catch::Approx(1e-8f));
+    }
+
+    SECTION("RMSNorm with different data types") {
+        RMSNormConfig cfg;
+        cfg.batch_size = 2;
+        cfg.seq_len = 16;
+        cfg.normalized_dim = 64;
+
+        Kernel kernel_fp16 = Kernel::create_rmsnorm(cfg, DataType::FLOAT16);
+        REQUIRE(kernel_fp16.dtype() == DataType::FLOAT16);
+
+        Kernel kernel_bf16 = Kernel::create_rmsnorm(cfg, DataType::BFLOAT16);
+        REQUIRE(kernel_bf16.dtype() == DataType::BFLOAT16);
+    }
+}
+
+TEST_CASE("RMSNorm kernel arguments", "[kernel][rmsnorm]") {
+    SECTION("Standard RMSNorm has 3 arguments") {
+        RMSNormConfig cfg;
+        cfg.batch_size = 2;
+        cfg.seq_len = 16;
+        cfg.normalized_dim = 64;
+
+        Kernel kernel = Kernel::create_rmsnorm(cfg);
+        const auto& args = kernel.arguments();
+
+        // RMSNorm always has: input, weight (gamma), output
+        REQUIRE(args.size() == 3);
+
+        // Input: [B, S, D]
+        REQUIRE(args[0].name == "input");
+        REQUIRE(args[0].shape == std::vector<Size>{2, 16, 64});
+        REQUIRE(args[0].is_output == false);
+
+        // Weight: [D]
+        REQUIRE(args[1].name == "weight");
+        REQUIRE(args[1].shape == std::vector<Size>{64});
+        REQUIRE(args[1].is_output == false);
+
+        // Output: [B, S, D]
+        REQUIRE(args[2].name == "output");
+        REQUIRE(args[2].shape == std::vector<Size>{2, 16, 64});
+        REQUIRE(args[2].is_output == true);
+    }
+
+    SECTION("Argument byte sizes") {
+        RMSNormConfig cfg;
+        cfg.batch_size = 4;
+        cfg.seq_len = 32;
+        cfg.normalized_dim = 128;
+
+        Kernel kernel = Kernel::create_rmsnorm(cfg);
+
+        // Input: 4 * 32 * 128 * 4 bytes = 65536 bytes
+        Size input_bytes = 4 * 32 * 128 * sizeof(float);
+        // Weight: 128 * 4 bytes = 512 bytes
+        Size weight_bytes = 128 * sizeof(float);
+        // Output: 4 * 32 * 128 * 4 bytes = 65536 bytes
+        Size output_bytes = 4 * 32 * 128 * sizeof(float);
+
+        REQUIRE(kernel.total_input_bytes() == input_bytes + weight_bytes);
+        REQUIRE(kernel.total_output_bytes() == output_bytes);
+    }
+}
+
+TEST_CASE("RMSNorm kernel validation", "[kernel][rmsnorm]") {
+    std::string error;
+
+    SECTION("Valid RMSNorm passes validation") {
+        Kernel kernel = Kernel::create_rmsnorm(2, 16, 64);
+        REQUIRE(kernel.validate(error));
+        REQUIRE(error.empty());
+    }
+
+    SECTION("Zero batch size fails validation") {
+        RMSNormConfig cfg;
+        cfg.batch_size = 0;
+        cfg.seq_len = 16;
+        cfg.normalized_dim = 64;
+
+        Kernel kernel = Kernel::create_rmsnorm(cfg);
+        REQUIRE_FALSE(kernel.validate(error));
+        REQUIRE(error.find("batch size") != std::string::npos);
+    }
+
+    SECTION("Zero seq_len fails validation") {
+        RMSNormConfig cfg;
+        cfg.batch_size = 2;
+        cfg.seq_len = 0;
+        cfg.normalized_dim = 64;
+
+        Kernel kernel = Kernel::create_rmsnorm(cfg);
+        REQUIRE_FALSE(kernel.validate(error));
+        REQUIRE(error.find("sequence length") != std::string::npos);
+    }
+
+    SECTION("Zero normalized_dim fails validation") {
+        RMSNormConfig cfg;
+        cfg.batch_size = 2;
+        cfg.seq_len = 16;
+        cfg.normalized_dim = 0;
+
+        Kernel kernel = Kernel::create_rmsnorm(cfg);
+        REQUIRE_FALSE(kernel.validate(error));
+        REQUIRE(error.find("normalized dimension") != std::string::npos);
+    }
+
+    SECTION("Non-positive epsilon fails validation") {
+        RMSNormConfig cfg;
+        cfg.batch_size = 2;
+        cfg.seq_len = 16;
+        cfg.normalized_dim = 64;
+        cfg.eps = 0.0f;
+
+        Kernel kernel = Kernel::create_rmsnorm(cfg);
+        REQUIRE_FALSE(kernel.validate(error));
+        REQUIRE(error.find("epsilon") != std::string::npos);
+    }
+}
+
+TEST_CASE("RMSNorm kernel summary", "[kernel][rmsnorm]") {
+    RMSNormConfig cfg;
+    cfg.batch_size = 4;
+    cfg.seq_len = 128;
+    cfg.normalized_dim = 512;
+    cfg.eps = 1e-6f;
+
+    Kernel kernel = Kernel::create_rmsnorm(cfg);
+    std::string summary = kernel.summary();
+
+    // Check that summary contains expected RMSNorm information
+    REQUIRE(summary.find("rmsnorm") != std::string::npos);
+    REQUIRE(summary.find("Batch Size: 4") != std::string::npos);
+    REQUIRE(summary.find("Seq Length: 128") != std::string::npos);
+    REQUIRE(summary.find("Normalized Dim: 512") != std::string::npos);
+    REQUIRE(summary.find("Epsilon") != std::string::npos);
+    REQUIRE(summary.find("FLOPs") != std::string::npos);
+}
+
+TEST_CASE("RMSNorm kernel FLOPs calculation", "[kernel][rmsnorm]") {
+    RMSNormConfig cfg;
+    cfg.batch_size = 2;
+    cfg.seq_len = 16;
+    cfg.normalized_dim = 64;
+
+    Kernel kernel = Kernel::create_rmsnorm(cfg);
+    REQUIRE(kernel.total_flops() == cfg.total_flops());
+}
+
+TEST_CASE("RMSNorm arithmetic intensity", "[kernel][rmsnorm]") {
+    RMSNormConfig cfg;
+    cfg.batch_size = 4;
+    cfg.seq_len = 32;
+    cfg.normalized_dim = 128;
+
+    Kernel kernel = Kernel::create_rmsnorm(cfg);
+
+    // Arithmetic intensity = FLOPs / bytes
+    // RMSNorm is memory-bound (low arithmetic intensity)
+    double ai = kernel.arithmetic_intensity();
+    REQUIRE(ai > 0.0);
+    // RMSNorm typically has AI < 10 (it's memory-bound)
+    REQUIRE(ai < 10.0);
+}
