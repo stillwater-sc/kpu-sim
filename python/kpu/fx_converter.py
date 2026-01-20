@@ -4,6 +4,10 @@ FX Graph to KPU converter.
 
 Converts PyTorch FX GraphModule to executable KPU operations.
 This is the core of the torch.compile backend.
+
+For TRANSACTIONAL and CYCLE_ACCURATE fidelity levels, operations are
+routed through the KPU runtime with C++ native bindings to collect
+timing statistics.
 """
 
 from __future__ import annotations
@@ -20,6 +24,9 @@ try:
     TORCH_AVAILABLE = True
 except ImportError:
     TORCH_AVAILABLE = False
+
+# Module-level storage for last execution stats (for torch.compile paths)
+_last_torch_compile_stats = None
 
 
 @dataclass
@@ -1024,15 +1031,22 @@ class FXToKPUConverter:
     def _build_executable(self) -> Callable:
         """Build the final executable function."""
         import torch
+        from .runtime import BEHAVIORAL, TRANSACTIONAL, CYCLE_ACCURATE
 
         ops = self.ops
         params = self.params
         output_names = self.output_names
+        fidelity = self.fidelity
 
         # All placeholders in order - Dynamo passes all args (params + inputs) at runtime
         placeholder_names = self.placeholder_names
 
+        # Check if we should use timed execution
+        use_timed_execution = fidelity in (TRANSACTIONAL, CYCLE_ACCURATE)
+
         def executable(*args):
+            global _last_torch_compile_stats
+
             # Initialize tensors dict
             tensors = {}
 
@@ -1045,21 +1059,171 @@ class FXToKPUConverter:
                 else:
                     tensors[name] = arg
 
-            # Execute operations
-            for op_name, op_fn, inputs, output in ops:
-                result = op_fn(tensors, params)
-                tensors[output] = result
+            if use_timed_execution:
+                # Route through KPU runtime for timing stats
+                result_tensors, stats = _execute_with_timing(
+                    ops, tensors, params, output_names, fidelity
+                )
+                _last_torch_compile_stats = stats
 
-            # Collect outputs and convert back to PyTorch
-            outputs = []
-            for name in output_names:
-                out = tensors[name]
-                if isinstance(out, np.ndarray):
-                    outputs.append(torch.from_numpy(out))
-                else:
-                    outputs.append(out)
+                # Convert outputs to PyTorch
+                outputs = []
+                for name in output_names:
+                    out = result_tensors[name]
+                    if isinstance(out, np.ndarray):
+                        outputs.append(torch.from_numpy(out))
+                    else:
+                        outputs.append(out)
+            else:
+                # Execute operations directly (BEHAVIORAL mode)
+                for op_name, op_fn, inputs, output in ops:
+                    result = op_fn(tensors, params)
+                    tensors[output] = result
+
+                # Collect outputs and convert back to PyTorch
+                outputs = []
+                for name in output_names:
+                    out = tensors[name]
+                    if isinstance(out, np.ndarray):
+                        outputs.append(torch.from_numpy(out))
+                    else:
+                        outputs.append(out)
+
+                _last_torch_compile_stats = None
 
             # Dynamo expects outputs as a tuple matching the FX graph's output format
             return tuple(outputs)
 
         return executable
+
+
+def _execute_with_timing(ops, tensors, params, output_names, fidelity):
+    """Execute operations through KPU runtime to collect timing stats.
+
+    For TRANSACTIONAL and CYCLE_ACCURATE modes, this builds a DFX program
+    from the operations and executes it through the native C++ simulator.
+    """
+    from .runtime import get_runtime, ExecutionStats
+    from .dfx_emitter import DFXProgram, DFXOp, DFXOpCode
+    from .tensor import Tensor
+
+    runtime = get_runtime()
+    original_fidelity = runtime.fidelity
+    runtime.set_fidelity(fidelity)
+
+    try:
+        # Build DFX program from ops
+        dfx_ops = []
+        tensor_shapes = {}
+
+        # Track input tensor names and their data
+        input_names = []
+        input_data = []
+
+        # First pass: identify unique inputs
+        seen_inputs = set()
+        for op_name, op_fn, op_inputs, output in ops:
+            for inp in op_inputs:
+                if inp in tensors and inp not in seen_inputs:
+                    seen_inputs.add(inp)
+                    input_names.append(inp)
+                    data = tensors[inp]
+                    if isinstance(data, np.ndarray):
+                        input_data.append(Tensor(data))
+                        tensor_shapes[inp] = data.shape
+                    else:
+                        input_data.append(Tensor(np.array([data])))
+                        tensor_shapes[inp] = ()
+
+        # Also include params as inputs
+        for pname, pdata in params.items():
+            if pname not in seen_inputs:
+                seen_inputs.add(pname)
+                input_names.append(pname)
+                input_data.append(Tensor(pdata))
+                tensor_shapes[pname] = pdata.shape
+
+        # Convert ops to DFX format
+        for op_name, op_fn, op_inputs, output in ops:
+            dfx_opcode = _map_op_to_dfx(op_name)
+            if dfx_opcode is not None:
+                # Get all input names for this op
+                all_inputs = list(op_inputs) if op_inputs else []
+
+                dfx_op = DFXOp(
+                    opcode=dfx_opcode,
+                    inputs=all_inputs,
+                    outputs=[output],
+                    attrs={}
+                )
+                dfx_ops.append(dfx_op)
+
+        # Create DFX program
+        program = DFXProgram(
+            inputs=input_names,
+            outputs=output_names,
+            ops=dfx_ops
+        )
+
+        # Execute through runtime
+        result, stats = runtime.execute(program, input_data)
+
+        # Reconstruct result tensors dict
+        # We need to also execute behaviorally to get intermediate values
+        # since the C++ runtime only returns final output
+        result_tensors = dict(tensors)
+        for pname, pdata in params.items():
+            result_tensors[pname] = pdata
+
+        # Execute ops to populate intermediate tensors
+        for op_name, op_fn, op_inputs, output in ops:
+            res = op_fn(result_tensors, params)
+            result_tensors[output] = res
+
+        return result_tensors, stats
+
+    finally:
+        runtime.set_fidelity(original_fidelity)
+
+
+def _map_op_to_dfx(op_name: str):
+    """Map FX converter op name to DFXOpCode."""
+    from .dfx_emitter import DFXOpCode
+
+    op_map = {
+        'matmul': DFXOpCode.MATMUL,
+        'linear': DFXOpCode.MATMUL,  # Linear is matmul + bias
+        'relu': DFXOpCode.RELU,
+        'sigmoid': DFXOpCode.SIGMOID,
+        'tanh': DFXOpCode.TANH,
+        'gelu': DFXOpCode.GELU,
+        'silu': DFXOpCode.SILU,
+        'softmax': DFXOpCode.SOFTMAX,
+        'add': DFXOpCode.ADD,
+        'sub': DFXOpCode.SUB,
+        'mul': DFXOpCode.MUL,
+        'div': DFXOpCode.DIV,
+        'conv2d': DFXOpCode.CONV2D,
+        'max_pool2d': DFXOpCode.MAXPOOL2D,
+        'avg_pool2d': DFXOpCode.AVGPOOL2D,
+        'adaptive_avg_pool2d': DFXOpCode.ADAPTIVE_AVGPOOL2D,
+        'batch_norm': DFXOpCode.BATCH_NORM,
+        'layer_norm': DFXOpCode.LAYER_NORM,
+        'concat': DFXOpCode.CONCAT,
+        'reshape': DFXOpCode.RESHAPE,
+        'flatten': DFXOpCode.FLATTEN,
+        'transpose': DFXOpCode.TRANSPOSE,
+        'mean': DFXOpCode.MEAN,
+        'sum': DFXOpCode.SUM,
+    }
+    return op_map.get(op_name)
+
+
+def get_last_stats():
+    """Get execution stats from the last torch.compile execution.
+
+    Returns:
+        ExecutionStats from the last TRANSACTIONAL/CYCLE_ACCURATE execution,
+        or None if the last execution was BEHAVIORAL or no execution has occurred.
+    """
+    return _last_torch_compile_stats

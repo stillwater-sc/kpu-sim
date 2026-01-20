@@ -181,3 +181,25 @@ def compile(model: Any, *,
         backend = "kpu"
 
     return torch.compile(model, backend=backend, fullgraph=fullgraph, **kwargs)
+
+
+def get_last_stats():
+    """Get execution stats from the last torch.compile execution.
+
+    After executing a model compiled with backend="kpu_transactional" or
+    backend="kpu_cycle_accurate", this function returns the timing statistics
+    collected during execution.
+
+    Returns:
+        ExecutionStats from the last TRANSACTIONAL/CYCLE_ACCURATE execution,
+        or None if the last execution was BEHAVIORAL or no execution occurred.
+
+    Example:
+        >>> compiled = torch.compile(model, backend="kpu_transactional")
+        >>> output = compiled(x)
+        >>> stats = kpu.torch_backend.get_last_stats()
+        >>> print(f"Cycles: {stats.cycles}")
+        >>> print(f"GFLOPS: {stats.gflops:.1f}")
+    """
+    from .fx_converter import get_last_stats as _get_stats
+    return _get_stats()

@@ -27,7 +27,7 @@ Fidelity Levels:
     - CYCLE_ACCURATE: Full timing simulation
 """
 
-__version__ = "0.4.3"
+__version__ = "0.4.7"
 __author__ = "Stillwater Supercomputing, Inc."
 
 # Fidelity levels
@@ -99,11 +99,13 @@ try:
     import torch as _torch  # Check if torch is actually importable
     from . import torch_backend
     from .torch_backend import compile as torch_compile
+    from .torch_backend import get_last_stats as get_torch_compile_stats
     TORCH_AVAILABLE = True
     del _torch
 except ImportError:
     torch_backend = None
     torch_compile = None
+    get_torch_compile_stats = None
     TORCH_AVAILABLE = False
 
 __all__ = [
@@ -191,6 +193,7 @@ __all__ = [
     # torch.compile backend
     "torch_backend",
     "torch_compile",
+    "get_torch_compile_stats",
     "TORCH_AVAILABLE",
 ]
 
@@ -234,4 +237,10 @@ torch.compile usage:
   import torch
   model = torch.compile(my_model, backend="kpu")
   output = model(input)
+
+torch.compile with timing (TRANSACTIONAL mode):
+  model = torch.compile(my_model, backend="kpu_transactional")
+  output = model(input)
+  stats = kpu.get_torch_compile_stats()
+  print(f"Cycles: {{stats.cycles}}, GFLOPS: {{stats.gflops:.1f}}")
 """

@@ -134,16 +134,16 @@ For KPU configuration of a single 16x16 PE array, 1M L3, 128K L2, 1k L1, create 
 
 ### torch.compile TRANSACTIONAL (v0.4.7)
 
-- [ ] torch.compile backend works with TRANSACTIONAL fidelity
-- [ ] Timing stats accessible after model execution
-- [ ] MNIST MLP timing matches C++ direct execution
+- [x] torch.compile backend works with TRANSACTIONAL fidelity
+- [x] Timing stats accessible after model execution
+- [x] MNIST MLP timing matches C++ direct execution
 
 ### Success Criteria
 
 - [x] v0.4.4: XUE metrics validated for compute patterns
 - [x] v0.4.5: End-to-end tiled matmul with memory hierarchy
 - [x] v0.4.6: Python can execute DFX on C++ simulator
-- [ ] v0.4.7: torch.compile works with TRANSACTIONAL mode
+- [x] v0.4.7: torch.compile works with TRANSACTIONAL mode
 
 ### Tag: `v0.4-transactional`
 
