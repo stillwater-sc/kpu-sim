@@ -885,6 +885,96 @@ private:
                 stats.total_macs += static_cast<int64_t>(M) * N * K;
                 stats.matmul_count++;
 
+            } else if (opcode == "linear") {
+                // Linear: y = x @ W.T (+ b)
+                // Weight is [out_features, in_features], needs transpose
+                std::string x_name = op_input_names[0].cast<std::string>();
+                std::string w_name = op_input_names[1].cast<std::string>();
+
+                auto X = tensors[x_name];
+                auto W = tensors[w_name];
+
+                py::buffer_info x_buf = X.request();
+                py::buffer_info w_buf = W.request();
+
+                // Get dimensions: X is [batch, in_features], W is [out_features, in_features]
+                uint32_t M = static_cast<uint32_t>(x_buf.shape[x_buf.ndim - 2]);  // batch
+                uint32_t K = static_cast<uint32_t>(x_buf.shape[x_buf.ndim - 1]);  // in_features
+                uint32_t N = static_cast<uint32_t>(w_buf.shape[w_buf.ndim - 2]);  // out_features
+
+                // Transpose weight: W.T has shape [in_features, out_features]
+                auto W_T = np.attr("transpose")(W).cast<py::array_t<float>>();
+
+                // Execute: y = x @ W.T
+                py::array_t<float> Y = np.attr("matmul")(X, W_T).cast<py::array_t<float>>();
+
+                // Add bias if present
+                if (op_input_names.size() > 2) {
+                    std::string b_name = op_input_names[2].cast<std::string>();
+                    if (tensors.count(b_name) > 0) {
+                        auto B = tensors[b_name];
+                        Y = np.attr("add")(Y, B).cast<py::array_t<float>>();
+                    }
+                }
+
+                tensors[output_name] = Y;
+
+                // Allocate address for output tensor
+                py::buffer_info y_buf = Y.request();
+                size_t y_bytes = static_cast<size_t>(y_buf.size) * sizeof(float);
+                tensor_addresses[output_name] = next_address;
+
+                // Submit matmul to transactional compute fabric for timing
+                sw::kpu::MatMulDescriptor desc;
+                desc.m = M;
+                desc.n = N;
+                desc.k = K;
+
+                // Get data pointers
+                float* x_ptr = static_cast<float*>(x_buf.ptr);
+                py::buffer_info wt_buf = W_T.request();
+                float* wt_ptr = static_cast<float*>(wt_buf.ptr);
+                float* y_ptr = static_cast<float*>(y_buf.ptr);
+
+                compute_fabric_->submit_matmul(desc, x_ptr, wt_ptr, y_ptr, nullptr);
+                compute_fabric_->drain();
+
+                // Track writes through memory hierarchy
+                memory_traffic.record_write(sw::kpu::stats::MemoryLevel::L1, y_bytes);
+                stats.l1.write_bytes += static_cast<int64_t>(y_bytes);
+                stats.l1.write_count += (y_bytes + stats.l1.transaction_size - 1) / stats.l1.transaction_size;
+
+                memory_traffic.record_write(sw::kpu::stats::MemoryLevel::L2, y_bytes);
+                stats.l2.write_bytes += static_cast<int64_t>(y_bytes);
+                stats.l2.write_count += (y_bytes + stats.l2.transaction_size - 1) / stats.l2.transaction_size;
+
+                memory_traffic.record_write(sw::kpu::stats::MemoryLevel::L3, y_bytes);
+                stats.l3.write_bytes += static_cast<int64_t>(y_bytes);
+                stats.l3.write_count += (y_bytes + stats.l3.transaction_size - 1) / stats.l3.transaction_size;
+
+                memory_traffic.record_write(sw::kpu::stats::MemoryLevel::EXTERNAL, y_bytes);
+                stats.dram.write_bytes += static_cast<int64_t>(y_bytes);
+                stats.dram.write_count += (y_bytes + stats.dram.transaction_size - 1) / stats.dram.transaction_size;
+
+                // Submit to memory controller
+                constexpr uint32_t CACHE_LINE_SIZE = 64;
+                for (size_t offset = 0; offset < y_bytes; offset += CACHE_LINE_SIZE) {
+                    uint32_t chunk_size = std::min(static_cast<uint32_t>(CACHE_LINE_SIZE),
+                                                   static_cast<uint32_t>(y_bytes - offset));
+                    memory_controller_->submit_write(next_address + offset, nullptr, chunk_size, nullptr);
+                }
+
+                next_address += y_bytes;
+                stats.memory_bytes += static_cast<int64_t>(y_bytes);
+
+                // Track FLOPs (matmul + optional bias add)
+                stats.matmul_flops += 2LL * M * N * K;
+                if (op_input_names.size() > 2) {
+                    stats.matmul_flops += M * N;  // bias add
+                }
+                stats.total_macs += static_cast<int64_t>(M) * N * K;
+                stats.matmul_count++;
+
             } else if (opcode == "conv2d") {
                 // Conv2D - execute behaviorally and track FLOPs
                 // The behavioral execution handles the computation correctly

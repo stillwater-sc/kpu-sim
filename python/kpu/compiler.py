@@ -9,7 +9,7 @@ then compiles them to DFX IR for execution on the KPU simulator.
 from __future__ import annotations
 import functools
 import numpy as np
-from typing import Callable, List, Dict, Any, Optional, Union, TYPE_CHECKING
+from typing import Callable, List, Dict, Any, Optional, Tuple, Union, TYPE_CHECKING
 from dataclasses import dataclass
 
 if TYPE_CHECKING:
@@ -190,6 +190,24 @@ class CompiledFunction:
     def get_stats(self) -> Optional[ExecutionStats]:
         """Get execution statistics."""
         return self._stats
+
+    def execute_with_stats(self, *args, **kwargs) -> Tuple['Tensor', Optional[ExecutionStats]]:
+        """
+        Execute the compiled function and return both result and stats.
+
+        Convenience method that returns a tuple of (result, stats) for
+        TRANSACTIONAL and CYCLE_ACCURATE modes.
+
+        Returns:
+            Tuple of (result Tensor, ExecutionStats or None)
+
+        Example:
+            result, stats = compiled_fn.execute_with_stats(x, w1, w2)
+            if stats:
+                print(f"Cycles: {stats.cycles}")
+        """
+        result = self.__call__(*args, **kwargs)
+        return result, self._stats
 
     def summary(self) -> str:
         """Get a summary of the compiled function."""

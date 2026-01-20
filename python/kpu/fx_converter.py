@@ -389,6 +389,13 @@ class FXToKPUConverter:
 
     def _emit_linear(self, node: 'fx.Node'):
         """Emit linear layer (y = x @ W.T + b)."""
+        # Get input names for DFX program
+        input_names = []
+        for arg in node.args:
+            arg_name = self._get_arg_name(arg)
+            if arg_name is not None:
+                input_names.append(arg_name)
+
         def op_fn(tensors, params):
             x = self._resolve_value(node.args[0], tensors, params)
             weight = self._resolve_value(node.args[1], tensors, params)
@@ -399,7 +406,7 @@ class FXToKPUConverter:
                 result = result + bias
             return result
 
-        self.ops.append(('linear', op_fn, [], node.name))
+        self.ops.append(('linear', op_fn, input_names, node.name))
         self.env[node.name] = KPUValue(name=node.name)
 
     def _emit_linear_module(self, node: 'fx.Node', module: 'nn.Linear'):
@@ -1104,12 +1111,17 @@ def _execute_with_timing(ops, tensors, params, output_names, fidelity):
     from the operations and executes it through the native C++ simulator.
     """
     from .runtime import get_runtime, ExecutionStats
-    from .dfx_emitter import DFXProgram, DFXOp, DFXOpCode
+    from .dfx_emitter import DFXProgram, DFXOp, DFXOpCode, DFXTensor, DFXDataType, DFXMemLevel
     from .tensor import Tensor
 
     runtime = get_runtime()
     original_fidelity = runtime.fidelity
     runtime.set_fidelity(fidelity)
+
+    # Set default clock frequency if not set (required for TRANSACTIONAL/CYCLE_ACCURATE)
+    from .runtime import is_clock_frequency_set, set_clock_frequency
+    if not is_clock_frequency_set():
+        set_clock_frequency(1.0)  # Default 1 GHz
 
     try:
         # Build DFX program from ops
@@ -1158,11 +1170,35 @@ def _execute_with_timing(ops, tensors, params, output_names, fidelity):
                 )
                 dfx_ops.append(dfx_op)
 
+        # Create DFX tensors from tracked shapes
+        dfx_tensors = {}
+        for tensor_name, shape in tensor_shapes.items():
+            dfx_tensors[tensor_name] = DFXTensor(
+                name=tensor_name,
+                shape=tuple(shape) if hasattr(shape, '__iter__') else (),
+                dtype=DFXDataType.FLOAT32,
+                memory_level=DFXMemLevel.EXTERNAL,
+                is_const=tensor_name in params
+            )
+
+        # Also add output tensors (we don't know shapes yet, but need entries)
+        for out_name in output_names:
+            if out_name not in dfx_tensors:
+                dfx_tensors[out_name] = DFXTensor(
+                    name=out_name,
+                    shape=(),  # Unknown shape
+                    dtype=DFXDataType.FLOAT32,
+                    memory_level=DFXMemLevel.EXTERNAL,
+                    is_const=False
+                )
+
         # Create DFX program
         program = DFXProgram(
+            name="torch_compile_graph",
+            tensors=dfx_tensors,
+            ops=dfx_ops,
             inputs=input_names,
-            outputs=output_names,
-            ops=dfx_ops
+            outputs=output_names
         )
 
         # Execute through runtime
@@ -1192,7 +1228,7 @@ def _map_op_to_dfx(op_name: str):
 
     op_map = {
         'matmul': DFXOpCode.MATMUL,
-        'linear': DFXOpCode.MATMUL,  # Linear is matmul + bias
+        'linear': DFXOpCode.LINEAR,  # Linear: y = x @ W.T + b
         'relu': DFXOpCode.RELU,
         'sigmoid': DFXOpCode.SIGMOID,
         'tanh': DFXOpCode.TANH,

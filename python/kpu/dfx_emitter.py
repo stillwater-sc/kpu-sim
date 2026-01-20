@@ -52,6 +52,7 @@ class DFXOpCode(Enum):
 
     # Compute - matrix
     MATMUL = "matmul"
+    LINEAR = "linear"  # y = x @ W.T + b (weight transposed)
     CONV2D = "conv2d"
 
     # Compute - activation

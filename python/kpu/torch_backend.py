@@ -29,7 +29,11 @@ import numpy as np
 try:
     import torch
     import torch.fx as fx
-    from torch.dynamo import register_backend
+    # PyTorch 2.9+ uses torch._dynamo, older versions use torch.dynamo
+    try:
+        from torch._dynamo import register_backend
+    except ImportError:
+        from torch.dynamo import register_backend
     TORCH_AVAILABLE = True
 except ImportError:
     TORCH_AVAILABLE = False
