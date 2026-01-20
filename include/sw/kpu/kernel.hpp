@@ -18,10 +18,22 @@ namespace sw::kpu {
 enum class KernelOpType : uint8_t {
     MATMUL = 0,         // Matrix multiplication C = A x B
     BATCH_MATMUL = 1,   // Batched matrix multiplication
-    CONV2D = 2,         // 2D convolution (future)
+    CONV2D = 2,         // 2D convolution via im2col + GEMM
     ELEMENTWISE = 3,    // Elementwise operations (future)
     MLP = 4,            // Fused matmul + bias + activation: C = activation(A x B + bias)
+    POOL2D = 5,         // 2D pooling (max, avg)
+    SOFTMAX = 6,        // Softmax normalization
+    LAYERNORM = 7,      // Layer normalization
     CUSTOM = 255        // Custom/user-defined
+};
+
+/**
+ * @brief Pooling operation type
+ */
+enum class PoolType : uint8_t {
+    MAX = 0,
+    AVG = 1,
+    GLOBAL_AVG = 2
 };
 
 /**
@@ -34,10 +46,72 @@ inline const char* kernel_op_type_name(KernelOpType op) {
         case KernelOpType::CONV2D: return "conv2d";
         case KernelOpType::ELEMENTWISE: return "elementwise";
         case KernelOpType::MLP: return "mlp";
+        case KernelOpType::POOL2D: return "pool2d";
+        case KernelOpType::SOFTMAX: return "softmax";
+        case KernelOpType::LAYERNORM: return "layernorm";
         case KernelOpType::CUSTOM: return "custom";
         default: return "unknown";
     }
 }
+
+inline const char* pool_type_name(PoolType pt) {
+    switch (pt) {
+        case PoolType::MAX: return "max";
+        case PoolType::AVG: return "avg";
+        case PoolType::GLOBAL_AVG: return "global_avg";
+        default: return "unknown";
+    }
+}
+
+/**
+ * @brief Conv2D configuration parameters
+ */
+struct Conv2DConfig {
+    Size batch_size;       // N: batch size
+    Size in_channels;      // C_in: input channels
+    Size out_channels;     // C_out: output channels (num filters)
+    Size input_height;     // H: input height
+    Size input_width;      // W: input width
+    Size kernel_height;    // K_h: kernel height
+    Size kernel_width;     // K_w: kernel width
+    Size stride_h;         // Stride in height dimension
+    Size stride_w;         // Stride in width dimension
+    Size padding_h;        // Padding in height dimension
+    Size padding_w;        // Padding in width dimension
+    Size dilation_h;       // Dilation in height (default 1)
+    Size dilation_w;       // Dilation in width (default 1)
+    Size groups;           // Number of groups (default 1)
+
+    Conv2DConfig()
+        : batch_size(1), in_channels(1), out_channels(1)
+        , input_height(1), input_width(1)
+        , kernel_height(1), kernel_width(1)
+        , stride_h(1), stride_w(1)
+        , padding_h(0), padding_w(0)
+        , dilation_h(1), dilation_w(1)
+        , groups(1) {}
+
+    // Compute output dimensions
+    Size output_height() const {
+        return (input_height + 2 * padding_h - dilation_h * (kernel_height - 1) - 1) / stride_h + 1;
+    }
+
+    Size output_width() const {
+        return (input_width + 2 * padding_w - dilation_w * (kernel_width - 1) - 1) / stride_w + 1;
+    }
+
+    // Compute equivalent GEMM dimensions for im2col approach
+    // im2col converts conv to: [N * H_out * W_out, C_in * K_h * K_w] @ [C_out, C_in * K_h * K_w].T
+    Size gemm_M() const { return batch_size * output_height() * output_width(); }
+    Size gemm_N() const { return out_channels; }
+    Size gemm_K() const { return (in_channels / groups) * kernel_height * kernel_width; }
+
+    // Total FLOPs for conv2d
+    Size total_flops() const {
+        // 2 * (N * H_out * W_out) * C_out * (C_in/groups * K_h * K_w)
+        return 2 * gemm_M() * gemm_N() * gemm_K();
+    }
+};
 
 /**
  * @brief Kernel argument descriptor
@@ -185,6 +259,52 @@ public:
                              bool has_bias = true,
                              DataType dtype = DataType::FLOAT32);
 
+    /**
+     * @brief Create a 2D convolution kernel using im2col + GEMM
+     * @param config Conv2D configuration parameters
+     * @param has_bias Whether to apply bias addition
+     * @param activation Activation function (default NONE)
+     * @param dtype Data type (default FLOAT32)
+     * @return Compiled kernel
+     *
+     * Implements convolution via the im2col approach:
+     * 1. im2col transforms input patches into columns
+     * 2. GEMM: im2col_matrix @ weight_matrix.T
+     * 3. Optional bias and activation
+     *
+     * Arguments:
+     *   - input: [N, C_in, H, W] input tensor
+     *   - weight: [C_out, C_in, K_h, K_w] weight tensor
+     *   - bias: [C_out] bias vector (if has_bias=true)
+     *   - output: [N, C_out, H_out, W_out] output tensor
+     */
+    static Kernel create_conv2d(const Conv2DConfig& config,
+                                bool has_bias = true,
+                                ActivationType activation = ActivationType::NONE,
+                                DataType dtype = DataType::FLOAT32);
+
+    /**
+     * @brief Create a 2D convolution kernel with explicit parameters
+     * @param batch_size N: batch size
+     * @param in_channels C_in: input channels
+     * @param out_channels C_out: output channels
+     * @param input_height H: input height
+     * @param input_width W: input width
+     * @param kernel_size K: kernel size (square kernel)
+     * @param stride Stride (same for H and W)
+     * @param padding Padding (same for H and W)
+     * @param has_bias Whether to apply bias
+     * @param activation Activation function
+     * @param dtype Data type
+     * @return Compiled kernel
+     */
+    static Kernel create_conv2d(Size batch_size, Size in_channels, Size out_channels,
+                                Size input_height, Size input_width,
+                                Size kernel_size, Size stride = 1, Size padding = 0,
+                                bool has_bias = true,
+                                ActivationType activation = ActivationType::NONE,
+                                DataType dtype = DataType::FLOAT32);
+
     // =========================================
     // Metadata Accessors
     // =========================================
@@ -283,6 +403,15 @@ public:
     bool has_bias() const { return has_bias_; }
 
     // =========================================
+    // Conv2D Accessors (for CONV2D kernels)
+    // =========================================
+
+    /**
+     * @brief Get Conv2D configuration (for CONV2D kernels)
+     */
+    const Conv2DConfig& conv2d_config() const { return conv2d_config_; }
+
+    // =========================================
     // Program Access
     // =========================================
 
@@ -356,6 +485,9 @@ private:
     ActivationType activation_ = ActivationType::NONE;
     bool has_bias_ = false;
 
+    // Conv2D-specific members
+    Conv2DConfig conv2d_config_;
+
     /**
      * @brief Set up arguments for MATMUL operation
      */
@@ -365,6 +497,11 @@ private:
      * @brief Set up arguments for MLP operation
      */
     void setup_mlp_arguments();
+
+    /**
+     * @brief Set up arguments for CONV2D operation
+     */
+    void setup_conv2d_arguments();
 };
 
 } // namespace sw::kpu

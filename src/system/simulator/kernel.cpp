@@ -75,6 +75,74 @@ Kernel Kernel::create_mlp(Size M, Size N, Size K,
     return compiler.compile_mlp(M, N, K, activation, has_bias, dtype);
 }
 
+Kernel Kernel::create_conv2d(const Conv2DConfig& config,
+                             bool has_bias,
+                             ActivationType activation,
+                             DataType dtype) {
+    // Conv2D uses im2col + GEMM approach
+    // GEMM dimensions: [M, K] @ [K, N] -> [M, N]
+    // where M = batch * H_out * W_out
+    //       K = C_in * kernel_h * kernel_w
+    //       N = C_out
+
+    compiler::KernelCompiler compiler;
+
+    // Compile as MLP (matmul + optional bias + activation)
+    Kernel kernel = compiler.compile_mlp(
+        config.gemm_M(),
+        config.gemm_N(),
+        config.gemm_K(),
+        activation,
+        has_bias,
+        dtype
+    );
+
+    // Override operation type to CONV2D
+    kernel.op_type_ = KernelOpType::CONV2D;
+    kernel.conv2d_config_ = config;
+    kernel.has_bias_ = has_bias;
+    kernel.activation_ = activation;
+
+    // Rename the program
+    std::ostringstream name;
+    name << "conv2d_" << config.batch_size << "x"
+         << config.in_channels << "x"
+         << config.input_height << "x" << config.input_width
+         << "_k" << config.kernel_height << "x" << config.kernel_width
+         << "_s" << config.stride_h << "x" << config.stride_w;
+    kernel.program_.name = name.str();
+
+    // Set up Conv2D-specific arguments
+    kernel.setup_conv2d_arguments();
+
+    return kernel;
+}
+
+Kernel Kernel::create_conv2d(Size batch_size, Size in_channels, Size out_channels,
+                             Size input_height, Size input_width,
+                             Size kernel_size, Size stride, Size padding,
+                             bool has_bias,
+                             ActivationType activation,
+                             DataType dtype) {
+    Conv2DConfig config;
+    config.batch_size = batch_size;
+    config.in_channels = in_channels;
+    config.out_channels = out_channels;
+    config.input_height = input_height;
+    config.input_width = input_width;
+    config.kernel_height = kernel_size;
+    config.kernel_width = kernel_size;
+    config.stride_h = stride;
+    config.stride_w = stride;
+    config.padding_h = padding;
+    config.padding_w = padding;
+    config.dilation_h = 1;
+    config.dilation_w = 1;
+    config.groups = 1;
+
+    return create_conv2d(config, has_bias, activation, dtype);
+}
+
 // ============================================================================
 // Argument Accessors
 // ============================================================================
@@ -141,6 +209,21 @@ std::string Kernel::summary() const {
         ss << "  Has Bias: " << (has_bias_ ? "yes" : "no") << "\n";
     }
 
+    if (op_type_ == KernelOpType::CONV2D) {
+        const auto& cfg = conv2d_config_;
+        ss << "  Input: [" << cfg.batch_size << ", " << cfg.in_channels
+           << ", " << cfg.input_height << ", " << cfg.input_width << "]\n";
+        ss << "  Kernel: " << cfg.kernel_height << "x" << cfg.kernel_width << "\n";
+        ss << "  Stride: " << cfg.stride_h << "x" << cfg.stride_w
+           << ", Padding: " << cfg.padding_h << "x" << cfg.padding_w << "\n";
+        ss << "  Output: [" << cfg.batch_size << ", " << cfg.out_channels
+           << ", " << cfg.output_height() << ", " << cfg.output_width() << "]\n";
+        ss << "  GEMM Dims: M=" << cfg.gemm_M() << ", N=" << cfg.gemm_N()
+           << ", K=" << cfg.gemm_K() << "\n";
+        ss << "  Activation: " << activation_type_name(activation_) << "\n";
+        ss << "  Has Bias: " << (has_bias_ ? "yes" : "no") << "\n";
+    }
+
     ss << "  Program Size: " << instruction_count() << " operations\n";
     ss << "  Arguments:\n";
     for (const auto& arg : arguments_) {
@@ -199,6 +282,46 @@ bool Kernel::validate(std::string& error) const {
         }
     }
 
+    if (op_type_ == KernelOpType::CONV2D) {
+        const auto& cfg = conv2d_config_;
+
+        if (cfg.batch_size == 0) {
+            error = "Conv2D batch size must be non-zero";
+            return false;
+        }
+        if (cfg.in_channels == 0 || cfg.out_channels == 0) {
+            error = "Conv2D channel dimensions must be non-zero";
+            return false;
+        }
+        if (cfg.input_height == 0 || cfg.input_width == 0) {
+            error = "Conv2D input dimensions must be non-zero";
+            return false;
+        }
+        if (cfg.kernel_height == 0 || cfg.kernel_width == 0) {
+            error = "Conv2D kernel dimensions must be non-zero";
+            return false;
+        }
+        if (cfg.stride_h == 0 || cfg.stride_w == 0) {
+            error = "Conv2D stride must be non-zero";
+            return false;
+        }
+        if (cfg.output_height() == 0 || cfg.output_width() == 0) {
+            error = "Conv2D output dimensions would be zero (check padding/stride)";
+            return false;
+        }
+        if (cfg.groups == 0 || cfg.in_channels % cfg.groups != 0) {
+            error = "Conv2D groups must divide input channels evenly";
+            return false;
+        }
+
+        // CONV2D: input, weight, [bias,] output
+        size_t expected_args = has_bias_ ? 4 : 3;
+        if (arguments_.size() < expected_args) {
+            error = "CONV2D kernel must have at least " + std::to_string(expected_args) + " arguments";
+            return false;
+        }
+    }
+
     error.clear();
     return true;
 }
@@ -228,6 +351,28 @@ Size Kernel::total_flops() const {
         // Activation: M*N operations (varies by type, count as 1 op each)
         if (activation_ != ActivationType::NONE) {
             flops += M() * N();
+        }
+
+        return flops;
+    }
+    if (op_type_ == KernelOpType::CONV2D) {
+        // Conv2D FLOPS from config
+        Size flops = conv2d_config_.total_flops();
+
+        // Output elements for bias/activation
+        Size output_elements = conv2d_config_.batch_size *
+                               conv2d_config_.out_channels *
+                               conv2d_config_.output_height() *
+                               conv2d_config_.output_width();
+
+        // Bias addition
+        if (has_bias_) {
+            flops += output_elements;
+        }
+
+        // Activation
+        if (activation_ != ActivationType::NONE) {
+            flops += output_elements;
         }
 
         return flops;
@@ -295,6 +440,45 @@ void Kernel::setup_mlp_arguments() {
     arguments_.emplace_back(
         "C", dtype_,
         std::vector<Size>{M(), N()},
+        true
+    );
+}
+
+void Kernel::setup_conv2d_arguments() {
+    arguments_.clear();
+
+    const auto& cfg = conv2d_config_;
+
+    // Input: [N, C_in, H, W] (NCHW format)
+    arguments_.emplace_back(
+        "input", dtype_,
+        std::vector<Size>{cfg.batch_size, cfg.in_channels,
+                          cfg.input_height, cfg.input_width},
+        false
+    );
+
+    // Weight: [C_out, C_in/groups, K_h, K_w]
+    arguments_.emplace_back(
+        "weight", dtype_,
+        std::vector<Size>{cfg.out_channels, cfg.in_channels / cfg.groups,
+                          cfg.kernel_height, cfg.kernel_width},
+        false
+    );
+
+    // Bias: [C_out] (if enabled)
+    if (has_bias_) {
+        arguments_.emplace_back(
+            "bias", dtype_,
+            std::vector<Size>{cfg.out_channels},
+            false
+        );
+    }
+
+    // Output: [N, C_out, H_out, W_out]
+    arguments_.emplace_back(
+        "output", dtype_,
+        std::vector<Size>{cfg.batch_size, cfg.out_channels,
+                          cfg.output_height(), cfg.output_width()},
         true
     );
 }
