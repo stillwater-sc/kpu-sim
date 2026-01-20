@@ -92,7 +92,10 @@ Current   Bench-    TRANS-     Add'l     Kernel    Quant-    Model     Prod
 | v0.4.1 | DFX→C++ Parser | Parse DFX JSON in C++ | `src/bindings/dfx_parser.cpp` |
 | v0.4.2 | Timing Stats | Cycles, memory access counts | `include/sw/kpu/stats/` |
 | v0.4.3 | Python API | `kpu.set_fidelity(TRANSACTIONAL)` | `python/kpu/runtime.py` |
-| v0.4.4 | Performance | Performance validation of compute patterns | `patterns/compute-tile/systolic/matmul.cpp` |
+| v0.4.4 | Compute Validation | XUE metrics for systolic array | `patterns/compute-tile/systolic/` |
+| v0.4.5 | Tiled MatMul E2E | Full memory hierarchy (DRAM→L3→L2→L1→Compute) | `patterns/compute-tile/systolic/` |
+| v0.4.6 | Python↔C++ Execution | DFX execution on native simulator | `python/kpu/_native/` |
+| v0.4.7 | torch.compile TRANSACTIONAL | Timing simulation via torch backend | `python/kpu/torch_backend.py` |
 
 ### Architecture
 
@@ -114,7 +117,7 @@ Python kpu package
 └─────────────────┘
 ```
 
-### Performance Tests
+### Performance Tests (v0.4.5)
 
 For KPU configuration of a single 16x16 PE array, 1M L3, 128K L2, 1k L1, create a performance test that has analytical solutions to event occurrences, and measure service times and latencies with XUE framework:
 
@@ -123,12 +126,24 @@ For KPU configuration of a single 16x16 PE array, 1M L3, 128K L2, 1k L1, create 
 - [ ] 64x64 matmul, 16 tiles, from DRAM to DRAM, measure compute tile efficiency
 - [ ] 128x128 matmul, 64 tiles, from DRAM to DRAM, measure compute tile efficiency
 
+### Python↔C++ Integration (v0.4.6)
+
+- [ ] DFX JSON parsed and executed by C++ simulator
+- [ ] Timing stats (cycles, memory traffic) returned to Python
+- [ ] ExecutionStats populated from native execution
+
+### torch.compile TRANSACTIONAL (v0.4.7)
+
+- [ ] torch.compile backend works with TRANSACTIONAL fidelity
+- [ ] Timing stats accessible after model execution
+- [ ] MNIST MLP timing matches C++ direct execution
+
 ### Success Criteria
 
-- [ ] Python can execute DFX on C++ simulator
-- [ ] Timing stats returned to Python
-- [ ] torch.compile works with TRANSACTIONAL mode
-- [ ] MNIST MLP timing matches C++ direct execution
+- [x] v0.4.4: XUE metrics validated for compute patterns
+- [ ] v0.4.5: End-to-end tiled matmul with memory hierarchy
+- [ ] v0.4.6: Python can execute DFX on C++ simulator
+- [ ] v0.4.7: torch.compile works with TRANSACTIONAL mode
 
 ### Tag: `v0.4-transactional`
 
