@@ -217,6 +217,58 @@ Kernel Kernel::create_attention(Size batch_size, Size seq_len, Size d_model,
     return create_attention(config, dtype);
 }
 
+Kernel Kernel::create_layernorm(const LayerNormConfig& config, DataType dtype) {
+    // LayerNorm computes: y = (x - mean) / sqrt(var + eps) * gamma + beta
+    // This is primarily a reduction + elementwise operation
+    // For the underlying program, we model it as operating on [B*S, D] data
+
+    compiler::KernelCompiler compiler;
+
+    Size B = config.batch_size;
+    Size S = config.seq_len;
+    Size D = config.normalized_dim;
+
+    // LayerNorm is not a matmul, but we create a placeholder program
+    // using a simple matmul structure for resource estimation
+    // In practice, layernorm would use the Vector Engine for reductions
+    compiler::CompileOptions opts = compiler::CompileOptions::defaults();
+    opts.dtype = dtype;
+
+    // Use a 1xD matmul as placeholder for the reduction operations
+    // This gives reasonable resource estimates for the D-dimension operations
+    Kernel kernel = compiler.compile_matmul(1, D, D, opts);
+
+    // Override operation type to LAYERNORM
+    kernel.op_type_ = KernelOpType::LAYERNORM;
+    kernel.layernorm_config_ = config;
+    kernel.dtype_ = dtype;
+    kernel.has_bias_ = config.has_bias;
+
+    // Rename the program
+    std::ostringstream name;
+    name << "layernorm_b" << B << "_s" << S << "_d" << D;
+    kernel.program_.name = name.str();
+
+    // Set up layernorm-specific arguments
+    kernel.setup_layernorm_arguments();
+
+    return kernel;
+}
+
+Kernel Kernel::create_layernorm(Size batch_size, Size seq_len, Size normalized_dim,
+                                float eps, bool has_weight, bool has_bias,
+                                DataType dtype) {
+    LayerNormConfig config;
+    config.batch_size = batch_size;
+    config.seq_len = seq_len;
+    config.normalized_dim = normalized_dim;
+    config.eps = eps;
+    config.has_weight = has_weight;
+    config.has_bias = has_bias;
+
+    return create_layernorm(config, dtype);
+}
+
 // ============================================================================
 // Argument Accessors
 // ============================================================================
@@ -308,6 +360,16 @@ std::string Kernel::summary() const {
         ss << "  Causal Mask: " << (cfg.causal_mask ? "yes" : "no") << "\n";
         ss << "  QKV Projection: " << (cfg.include_qkv_projection ? "yes" : "no") << "\n";
         ss << "  Output Projection: " << (cfg.include_output_projection ? "yes" : "no") << "\n";
+    }
+
+    if (op_type_ == KernelOpType::LAYERNORM) {
+        const auto& cfg = layernorm_config_;
+        ss << "  Batch Size: " << cfg.batch_size << "\n";
+        ss << "  Seq Length: " << cfg.seq_len << "\n";
+        ss << "  Normalized Dim: " << cfg.normalized_dim << "\n";
+        ss << "  Epsilon: " << cfg.eps << "\n";
+        ss << "  Has Weight: " << (cfg.has_weight ? "yes" : "no") << "\n";
+        ss << "  Has Bias: " << (cfg.has_bias ? "yes" : "no") << "\n";
     }
 
     ss << "  Program Size: " << instruction_count() << " operations\n";
@@ -447,6 +509,36 @@ bool Kernel::validate(std::string& error) const {
         }
     }
 
+    if (op_type_ == KernelOpType::LAYERNORM) {
+        const auto& cfg = layernorm_config_;
+
+        if (cfg.batch_size == 0) {
+            error = "LayerNorm batch size must be non-zero";
+            return false;
+        }
+        if (cfg.seq_len == 0) {
+            error = "LayerNorm sequence length must be non-zero";
+            return false;
+        }
+        if (cfg.normalized_dim == 0) {
+            error = "LayerNorm normalized dimension must be non-zero";
+            return false;
+        }
+        if (cfg.eps <= 0) {
+            error = "LayerNorm epsilon must be positive";
+            return false;
+        }
+
+        // Validate argument count: input, [weight,] [bias,] output
+        size_t expected_args = 2;  // input + output
+        if (cfg.has_weight) expected_args++;
+        if (cfg.has_bias) expected_args++;
+        if (arguments_.size() < expected_args) {
+            error = "LAYERNORM kernel must have at least " + std::to_string(expected_args) + " arguments";
+            return false;
+        }
+    }
+
     error.clear();
     return true;
 }
@@ -504,6 +596,9 @@ Size Kernel::total_flops() const {
     }
     if (op_type_ == KernelOpType::ATTENTION) {
         return attention_config_.total_flops();
+    }
+    if (op_type_ == KernelOpType::LAYERNORM) {
+        return layernorm_config_.total_flops();
     }
     // For other operation types, could return estimates or 0
     return 0;
@@ -696,6 +791,47 @@ void Kernel::setup_attention_arguments() {
             true
         );
     }
+}
+
+void Kernel::setup_layernorm_arguments() {
+    arguments_.clear();
+
+    const auto& cfg = layernorm_config_;
+    Size B = cfg.batch_size;
+    Size S = cfg.seq_len;
+    Size D = cfg.normalized_dim;
+
+    // Input: [B, S, D]
+    arguments_.emplace_back(
+        "input", dtype_,
+        std::vector<Size>{B, S, D},
+        false
+    );
+
+    // Weight (gamma): [D] - scale parameter
+    if (cfg.has_weight) {
+        arguments_.emplace_back(
+            "weight", dtype_,
+            std::vector<Size>{D},
+            false
+        );
+    }
+
+    // Bias (beta): [D] - shift parameter
+    if (cfg.has_bias) {
+        arguments_.emplace_back(
+            "bias", dtype_,
+            std::vector<Size>{D},
+            false
+        );
+    }
+
+    // Output: [B, S, D]
+    arguments_.emplace_back(
+        "output", dtype_,
+        std::vector<Size>{B, S, D},
+        true
+    );
 }
 
 } // namespace sw::kpu

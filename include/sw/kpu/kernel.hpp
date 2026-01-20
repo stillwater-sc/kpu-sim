@@ -180,6 +180,66 @@ struct AttentionConfig {
 };
 
 /**
+ * @brief Layer normalization configuration parameters
+ *
+ * Implements LayerNorm:
+ *   y = (x - mean) / sqrt(var + eps) * gamma + beta
+ *
+ * Where mean and var are computed over the normalized_shape dimensions.
+ * For transformers, typically normalized_shape = [d_model].
+ */
+struct LayerNormConfig {
+    Size batch_size;           // B: batch size
+    Size seq_len;              // S: sequence length (or spatial dims)
+    Size normalized_dim;       // D: dimension to normalize over (e.g., d_model)
+    float eps;                 // Epsilon for numerical stability
+    bool has_weight;           // Apply learned scale (gamma)
+    bool has_bias;             // Apply learned bias (beta)
+
+    LayerNormConfig()
+        : batch_size(1), seq_len(1), normalized_dim(64)
+        , eps(1e-5f), has_weight(true), has_bias(true) {}
+
+    // Total elements in input tensor
+    Size total_elements() const { return batch_size * seq_len * normalized_dim; }
+
+    // Number of normalization groups (each normalized independently)
+    Size num_groups() const { return batch_size * seq_len; }
+
+    // Compute total FLOPs for layer normalization
+    // Per group: mean (D adds), var (D muls + D adds), normalize (D subs + D divs),
+    //            scale (D muls), bias (D adds)
+    // Simplified: ~7 ops per element
+    Size total_flops() const {
+        Size D = normalized_dim;
+        Size groups = num_groups();
+
+        Size flops = 0;
+
+        // Mean computation: D additions + 1 division per group
+        flops += groups * (D + 1);
+
+        // Variance computation: D subtractions + D multiplications + D additions + 1 division
+        flops += groups * (3 * D + 1);
+
+        // Normalization: D subtractions + D divisions (or muls with rsqrt)
+        flops += groups * (2 * D);
+
+        // Scale (gamma): D multiplications
+        if (has_weight) {
+            flops += groups * D;
+        }
+
+        // Bias (beta): D additions
+        if (has_bias) {
+            flops += groups * D;
+        }
+
+        return flops;
+    }
+};
+
+/**
  * @brief Kernel argument descriptor
  *
  * Describes an input or output argument to a kernel, including
@@ -419,6 +479,40 @@ public:
                                    bool include_output_projection = true,
                                    DataType dtype = DataType::FLOAT32);
 
+    /**
+     * @brief Create a layer normalization kernel
+     * @param config LayerNorm configuration parameters
+     * @param dtype Data type (default FLOAT32)
+     * @return Compiled kernel
+     *
+     * Implements layer normalization:
+     *   y = (x - mean) / sqrt(var + eps) * gamma + beta
+     *
+     * Arguments:
+     *   - input: [B, S, D] input tensor
+     *   - weight: [D] scale parameter (gamma), if has_weight
+     *   - bias: [D] bias parameter (beta), if has_bias
+     *   - output: [B, S, D] output tensor
+     */
+    static Kernel create_layernorm(const LayerNormConfig& config,
+                                   DataType dtype = DataType::FLOAT32);
+
+    /**
+     * @brief Create layer normalization kernel with explicit parameters
+     * @param batch_size B: batch size
+     * @param seq_len S: sequence length
+     * @param normalized_dim D: dimension to normalize over
+     * @param eps Epsilon for numerical stability
+     * @param has_weight Apply learned scale (gamma)
+     * @param has_bias Apply learned bias (beta)
+     * @param dtype Data type
+     * @return Compiled kernel
+     */
+    static Kernel create_layernorm(Size batch_size, Size seq_len, Size normalized_dim,
+                                   float eps = 1e-5f,
+                                   bool has_weight = true, bool has_bias = true,
+                                   DataType dtype = DataType::FLOAT32);
+
     // =========================================
     // Metadata Accessors
     // =========================================
@@ -535,6 +629,15 @@ public:
     const AttentionConfig& attention_config() const { return attention_config_; }
 
     // =========================================
+    // LayerNorm Accessors (for LAYERNORM kernels)
+    // =========================================
+
+    /**
+     * @brief Get LayerNorm configuration (for LAYERNORM kernels)
+     */
+    const LayerNormConfig& layernorm_config() const { return layernorm_config_; }
+
+    // =========================================
     // Program Access
     // =========================================
 
@@ -614,6 +717,9 @@ private:
     // Attention-specific members
     AttentionConfig attention_config_;
 
+    // LayerNorm-specific members
+    LayerNormConfig layernorm_config_;
+
     /**
      * @brief Set up arguments for MATMUL operation
      */
@@ -633,6 +739,11 @@ private:
      * @brief Set up arguments for ATTENTION operation
      */
     void setup_attention_arguments();
+
+    /**
+     * @brief Set up arguments for LAYERNORM operation
+     */
+    void setup_layernorm_arguments();
 };
 
 } // namespace sw::kpu

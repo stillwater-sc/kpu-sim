@@ -1036,3 +1036,260 @@ TEST_CASE("Attention kernel FLOPs calculation", "[kernel][attention]") {
         REQUIRE(kernel.total_flops() == cfg.total_flops());
     }
 }
+
+// ============================================================================
+// LayerNorm Kernel Tests
+// ============================================================================
+
+TEST_CASE("LayerNormConfig structure", "[kernel][layernorm]") {
+    SECTION("Default constructor") {
+        LayerNormConfig cfg;
+        REQUIRE(cfg.batch_size == 1);
+        REQUIRE(cfg.seq_len == 1);
+        REQUIRE(cfg.normalized_dim == 64);
+        REQUIRE(cfg.eps == Catch::Approx(1e-5f));
+        REQUIRE(cfg.has_weight == true);
+        REQUIRE(cfg.has_bias == true);
+    }
+
+    SECTION("Total elements calculation") {
+        LayerNormConfig cfg;
+        cfg.batch_size = 2;
+        cfg.seq_len = 16;
+        cfg.normalized_dim = 64;
+        REQUIRE(cfg.total_elements() == 2 * 16 * 64);
+    }
+
+    SECTION("Number of groups calculation") {
+        LayerNormConfig cfg;
+        cfg.batch_size = 2;
+        cfg.seq_len = 16;
+        cfg.normalized_dim = 64;
+        // Each (batch, seq) position is normalized independently
+        REQUIRE(cfg.num_groups() == 2 * 16);
+    }
+
+    SECTION("Total FLOPs calculation with weight and bias") {
+        LayerNormConfig cfg;
+        cfg.batch_size = 2;
+        cfg.seq_len = 16;
+        cfg.normalized_dim = 64;
+        cfg.has_weight = true;
+        cfg.has_bias = true;
+
+        Size D = cfg.normalized_dim;
+        Size groups = cfg.num_groups();
+
+        // Mean: D+1 per group
+        // Variance: 3D+1 per group
+        // Normalize: 2D per group
+        // Scale: D per group (if has_weight)
+        // Bias: D per group (if has_bias)
+        Size expected = groups * (D + 1 + 3 * D + 1 + 2 * D + D + D);
+        REQUIRE(cfg.total_flops() == expected);
+    }
+
+    SECTION("Total FLOPs calculation without weight and bias") {
+        LayerNormConfig cfg;
+        cfg.batch_size = 2;
+        cfg.seq_len = 16;
+        cfg.normalized_dim = 64;
+        cfg.has_weight = false;
+        cfg.has_bias = false;
+
+        Size D = cfg.normalized_dim;
+        Size groups = cfg.num_groups();
+
+        // Mean: D+1 per group
+        // Variance: 3D+1 per group
+        // Normalize: 2D per group
+        Size expected = groups * (D + 1 + 3 * D + 1 + 2 * D);
+        REQUIRE(cfg.total_flops() == expected);
+    }
+}
+
+TEST_CASE("Kernel::create_layernorm factory method", "[kernel][layernorm]") {
+    SECTION("Basic layernorm creation with Config") {
+        LayerNormConfig cfg;
+        cfg.batch_size = 2;
+        cfg.seq_len = 16;
+        cfg.normalized_dim = 64;
+
+        Kernel kernel = Kernel::create_layernorm(cfg);
+
+        REQUIRE(kernel.is_valid());
+        REQUIRE(kernel.op_type() == KernelOpType::LAYERNORM);
+        REQUIRE(kernel.dtype() == DataType::FLOAT32);
+
+        // Verify config was stored
+        REQUIRE(kernel.layernorm_config().batch_size == 2);
+        REQUIRE(kernel.layernorm_config().seq_len == 16);
+        REQUIRE(kernel.layernorm_config().normalized_dim == 64);
+    }
+
+    SECTION("LayerNorm with explicit parameters") {
+        // batch=2, seq=32, dim=128
+        Kernel kernel = Kernel::create_layernorm(2, 32, 128);
+
+        REQUIRE(kernel.is_valid());
+        REQUIRE(kernel.op_type() == KernelOpType::LAYERNORM);
+        REQUIRE(kernel.layernorm_config().batch_size == 2);
+        REQUIRE(kernel.layernorm_config().seq_len == 32);
+        REQUIRE(kernel.layernorm_config().normalized_dim == 128);
+    }
+
+    SECTION("LayerNorm with custom epsilon") {
+        Kernel kernel = Kernel::create_layernorm(1, 16, 64, 1e-6f);
+
+        REQUIRE(kernel.is_valid());
+        REQUIRE(kernel.layernorm_config().eps == Catch::Approx(1e-6f));
+    }
+
+    SECTION("LayerNorm without weight") {
+        Kernel kernel = Kernel::create_layernorm(1, 16, 64, 1e-5f, false, true);
+
+        REQUIRE(kernel.is_valid());
+        REQUIRE(kernel.layernorm_config().has_weight == false);
+        REQUIRE(kernel.layernorm_config().has_bias == true);
+    }
+
+    SECTION("LayerNorm without bias") {
+        Kernel kernel = Kernel::create_layernorm(1, 16, 64, 1e-5f, true, false);
+
+        REQUIRE(kernel.is_valid());
+        REQUIRE(kernel.layernorm_config().has_weight == true);
+        REQUIRE(kernel.layernorm_config().has_bias == false);
+    }
+}
+
+TEST_CASE("LayerNorm kernel arguments", "[kernel][layernorm]") {
+    SECTION("With weight and bias") {
+        LayerNormConfig cfg;
+        cfg.batch_size = 2;
+        cfg.seq_len = 16;
+        cfg.normalized_dim = 64;
+        cfg.has_weight = true;
+        cfg.has_bias = true;
+
+        Kernel kernel = Kernel::create_layernorm(cfg);
+
+        // input, weight, bias, output = 4 arguments
+        REQUIRE(kernel.arguments().size() == 4);
+
+        auto inputs = kernel.input_arguments();
+        REQUIRE(inputs.size() == 3);  // input, weight, bias
+
+        // Check input shape [B, S, D]
+        REQUIRE(inputs[0].name == "input");
+        REQUIRE(inputs[0].shape.size() == 3);
+        REQUIRE(inputs[0].shape[0] == 2);
+        REQUIRE(inputs[0].shape[1] == 16);
+        REQUIRE(inputs[0].shape[2] == 64);
+
+        // Check weight shape [D]
+        REQUIRE(inputs[1].name == "weight");
+        REQUIRE(inputs[1].shape.size() == 1);
+        REQUIRE(inputs[1].shape[0] == 64);
+
+        // Check bias shape [D]
+        REQUIRE(inputs[2].name == "bias");
+        REQUIRE(inputs[2].shape.size() == 1);
+        REQUIRE(inputs[2].shape[0] == 64);
+
+        auto outputs = kernel.output_arguments();
+        REQUIRE(outputs.size() == 1);
+        REQUIRE(outputs[0].name == "output");
+        REQUIRE(outputs[0].shape[0] == 2);   // B
+        REQUIRE(outputs[0].shape[1] == 16);  // S
+        REQUIRE(outputs[0].shape[2] == 64);  // D
+    }
+
+    SECTION("Without weight and bias") {
+        LayerNormConfig cfg;
+        cfg.batch_size = 2;
+        cfg.seq_len = 16;
+        cfg.normalized_dim = 64;
+        cfg.has_weight = false;
+        cfg.has_bias = false;
+
+        Kernel kernel = Kernel::create_layernorm(cfg);
+
+        // input, output = 2 arguments
+        REQUIRE(kernel.arguments().size() == 2);
+
+        auto inputs = kernel.input_arguments();
+        REQUIRE(inputs.size() == 1);  // input only
+
+        auto outputs = kernel.output_arguments();
+        REQUIRE(outputs.size() == 1);
+    }
+
+    SECTION("With weight only (no bias)") {
+        LayerNormConfig cfg;
+        cfg.batch_size = 2;
+        cfg.seq_len = 16;
+        cfg.normalized_dim = 64;
+        cfg.has_weight = true;
+        cfg.has_bias = false;
+
+        Kernel kernel = Kernel::create_layernorm(cfg);
+
+        // input, weight, output = 3 arguments
+        REQUIRE(kernel.arguments().size() == 3);
+
+        auto inputs = kernel.input_arguments();
+        REQUIRE(inputs.size() == 2);  // input, weight
+        REQUIRE(inputs[1].name == "weight");
+    }
+}
+
+TEST_CASE("LayerNorm kernel validation", "[kernel][layernorm]") {
+    SECTION("Valid layernorm passes validation") {
+        Kernel kernel = Kernel::create_layernorm(2, 16, 64);
+        std::string error;
+        REQUIRE(kernel.validate(error) == true);
+        REQUIRE(error.empty());
+    }
+}
+
+TEST_CASE("LayerNorm kernel summary", "[kernel][layernorm]") {
+    LayerNormConfig cfg;
+    cfg.batch_size = 2;
+    cfg.seq_len = 32;
+    cfg.normalized_dim = 128;
+    cfg.eps = 1e-5f;
+
+    Kernel kernel = Kernel::create_layernorm(cfg);
+
+    std::string summary = kernel.summary();
+
+    // Check that summary contains expected LayerNorm information
+    REQUIRE(summary.find("layernorm") != std::string::npos);
+    REQUIRE(summary.find("Batch Size: 2") != std::string::npos);
+    REQUIRE(summary.find("Seq Length: 32") != std::string::npos);
+    REQUIRE(summary.find("Normalized Dim: 128") != std::string::npos);
+    REQUIRE(summary.find("Has Weight: yes") != std::string::npos);
+    REQUIRE(summary.find("Has Bias: yes") != std::string::npos);
+    REQUIRE(summary.find("FLOPs") != std::string::npos);
+}
+
+TEST_CASE("LayerNorm kernel FLOPs calculation", "[kernel][layernorm]") {
+    LayerNormConfig cfg;
+    cfg.batch_size = 2;
+    cfg.seq_len = 16;
+    cfg.normalized_dim = 64;
+
+    SECTION("With weight and bias") {
+        cfg.has_weight = true;
+        cfg.has_bias = true;
+        Kernel kernel = Kernel::create_layernorm(cfg);
+        REQUIRE(kernel.total_flops() == cfg.total_flops());
+    }
+
+    SECTION("Without weight and bias") {
+        cfg.has_weight = false;
+        cfg.has_bias = false;
+        Kernel kernel = Kernel::create_layernorm(cfg);
+        REQUIRE(kernel.total_flops() == cfg.total_flops());
+    }
+}
