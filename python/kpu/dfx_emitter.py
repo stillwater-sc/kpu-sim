@@ -55,6 +55,9 @@ class DFXOpCode(Enum):
     LINEAR = "linear"  # y = x @ W.T + b (weight transposed)
     CONV2D = "conv2d"
 
+    # Compute - attention
+    ATTENTION = "attention"  # Scaled dot-product attention
+
     # Compute - activation
     RELU = "relu"
     GELU = "gelu"
@@ -347,6 +350,7 @@ class DFXEmitter:
         op_map = {
             OpType.MATMUL: DFXOpCode.MATMUL,
             OpType.CONV2D: DFXOpCode.CONV2D,
+            OpType.ATTENTION: DFXOpCode.ATTENTION,
             OpType.RELU: DFXOpCode.RELU,
             OpType.GELU: DFXOpCode.GELU,
             OpType.SILU: DFXOpCode.SILU,

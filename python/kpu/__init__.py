@@ -27,7 +27,7 @@ Fidelity Levels:
     - CYCLE_ACCURATE: Full timing simulation
 """
 
-__version__ = "0.5.0"
+__version__ = "0.5.1"
 __author__ = "Stillwater Supercomputing, Inc."
 
 # Fidelity levels
@@ -53,6 +53,9 @@ from .ops import (
     batch_norm2d,
     # Convolution
     conv2d,
+    # Attention
+    scaled_dot_product_attention,
+    multi_head_attention,
     # Pooling
     max_pool2d,
     avg_pool2d,
@@ -141,6 +144,10 @@ __all__ = [
     # Operators - convolution
     "conv2d",
 
+    # Operators - attention
+    "scaled_dot_product_attention",
+    "multi_head_attention",
+
     # Operators - pooling
     "max_pool2d",
     "avg_pool2d",
@@ -226,6 +233,7 @@ def info() -> str:
 Supported operations:
   - Matrix: matmul, linear
   - Convolution: conv2d
+  - Attention: scaled_dot_product_attention, multi_head_attention
   - Pooling: max_pool2d, avg_pool2d, adaptive_avg_pool2d
   - Activation: relu, gelu, silu, sigmoid, tanh, softmax
   - Normalization: layer_norm, batch_norm2d

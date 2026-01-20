@@ -222,6 +222,9 @@ class FXToKPUConverter:
         elif target == F.layer_norm:
             self._emit_layer_norm(node)
 
+        elif target == F.scaled_dot_product_attention:
+            self._emit_scaled_dot_product_attention(node)
+
         elif target in (operator.add, torch.add):
             self._emit_binary_op(node, 'add')
 
@@ -732,6 +735,54 @@ class FXToKPUConverter:
         self.ops.append(('softmax', op_fn, [input_name], node.name))
         self.env[node.name] = KPUValue(name=node.name)
 
+    def _emit_scaled_dot_product_attention(self, node: 'fx.Node'):
+        """Emit scaled dot-product attention."""
+        # F.scaled_dot_product_attention(query, key, value, attn_mask=None, is_causal=False, scale=None)
+        query_name = self._get_arg_name(node.args[0])
+        key_name = self._get_arg_name(node.args[1])
+        value_name = self._get_arg_name(node.args[2])
+
+        kwargs = dict(node.kwargs)
+        is_causal = kwargs.get('is_causal', False)
+        scale = kwargs.get('scale', None)
+
+        def op_fn(tensors, params):
+            q = self._resolve_value(node.args[0], tensors, params)
+            k = self._resolve_value(node.args[1], tensors, params)
+            v = self._resolve_value(node.args[2], tensors, params)
+
+            # Get head dimension
+            d_k = q.shape[-1]
+            if scale is None:
+                s = 1.0 / np.sqrt(d_k)
+            else:
+                s = scale
+
+            # Q @ K^T
+            k_t = np.swapaxes(k, -2, -1)
+            scores = np.matmul(q, k_t) * s
+
+            # Handle attention mask if provided
+            if len(node.args) > 3 and node.args[3] is not None:
+                attn_mask = self._resolve_value(node.args[3], tensors, params)
+                scores = scores + attn_mask
+
+            # Apply causal mask if requested
+            if is_causal:
+                seq_len = scores.shape[-1]
+                causal_mask = np.triu(np.ones((seq_len, seq_len)), k=1) * -1e9
+                scores = scores + causal_mask
+
+            # Softmax
+            exp_scores = np.exp(scores - np.max(scores, axis=-1, keepdims=True))
+            attn_weights = exp_scores / np.sum(exp_scores, axis=-1, keepdims=True)
+
+            # Attention @ V
+            return np.matmul(attn_weights, v)
+
+        self.ops.append(('attention', op_fn, [query_name, key_name, value_name], node.name))
+        self.env[node.name] = KPUValue(name=node.name)
+
     def _emit_concat(self, node: 'fx.Node'):
         """Emit concatenation."""
         tensors_arg = node.args[0]
@@ -1229,6 +1280,7 @@ def _map_op_to_dfx(op_name: str):
     op_map = {
         'matmul': DFXOpCode.MATMUL,
         'linear': DFXOpCode.LINEAR,  # Linear: y = x @ W.T + b
+        'attention': DFXOpCode.ATTENTION,  # Scaled dot-product attention
         'relu': DFXOpCode.RELU,
         'sigmoid': DFXOpCode.SIGMOID,
         'tanh': DFXOpCode.TANH,

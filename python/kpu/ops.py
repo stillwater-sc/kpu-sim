@@ -8,7 +8,7 @@ and direct execution (for behavioral simulation).
 
 from __future__ import annotations
 import numpy as np
-from typing import Optional, Union, Tuple, TYPE_CHECKING
+from typing import Optional, Union, Tuple, List, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from .tensor import Tensor
@@ -440,6 +440,174 @@ def linear(x: 'Tensor', weight: 'Tensor', bias: Optional['Tensor'] = None) -> 'T
     if bias is not None:
         y = y + bias
     return y
+
+
+# ========== Attention Operations ==========
+
+def scaled_dot_product_attention(
+    query: 'Tensor',
+    key: 'Tensor',
+    value: 'Tensor',
+    attn_mask: Optional['Tensor'] = None,
+    is_causal: bool = False,
+    scale: Optional[float] = None
+) -> 'Tensor':
+    """
+    Scaled Dot-Product Attention.
+
+    Computes: Attention(Q, K, V) = softmax(Q @ K^T / sqrt(d_k)) @ V
+
+    Args:
+        query: Query tensor [B, H, S, d_k] or [B, S, d_k]
+        key: Key tensor [B, H, S, d_k] or [B, S, d_k]
+        value: Value tensor [B, H, S, d_k] or [B, S, d_k]
+        attn_mask: Optional attention mask (additive, -inf for masked positions)
+        is_causal: If True, apply causal mask (future positions masked)
+        scale: Optional scale factor (default: 1/sqrt(d_k))
+
+    Returns:
+        Output tensor with same shape as query
+    """
+    from .tensor import Tensor, TensorMeta
+    from .graph import OpType
+
+    if Tensor._tracing:
+        out_meta = TensorMeta(shape=query.shape, dtype=query.dtype)
+        out = Tensor(out_meta)
+        inputs = [query, key, value]
+        if attn_mask is not None:
+            inputs.append(attn_mask)
+        Tensor._trace_graph.add_op(
+            OpType.ATTENTION, inputs, [out],
+            is_causal=is_causal, scale=scale
+        )
+        return out
+    else:
+        if query._data is None or key._data is None or value._data is None:
+            raise ValueError("Cannot execute attention on symbolic tensor")
+
+        q = query._data
+        k = key._data
+        v = value._data
+
+        # Get head dimension (last dimension of query)
+        d_k = q.shape[-1]
+
+        # Compute scale factor
+        if scale is None:
+            scale = 1.0 / np.sqrt(d_k)
+
+        # Q @ K^T
+        # For [B, H, S, d_k]: transpose last two dims of K -> [B, H, d_k, S]
+        k_t = np.swapaxes(k, -2, -1)
+        scores = np.matmul(q, k_t) * scale
+
+        # Apply mask if provided
+        if attn_mask is not None:
+            scores = scores + attn_mask._data
+
+        # Apply causal mask if requested
+        if is_causal:
+            seq_len = scores.shape[-1]
+            causal_mask = np.triu(np.ones((seq_len, seq_len)), k=1) * -1e9
+            scores = scores + causal_mask
+
+        # Softmax over last dimension
+        exp_scores = np.exp(scores - np.max(scores, axis=-1, keepdims=True))
+        attn_weights = exp_scores / np.sum(exp_scores, axis=-1, keepdims=True)
+
+        # Attention @ V
+        result = np.matmul(attn_weights, v)
+
+        return Tensor(result.astype(query.dtype))
+
+
+def multi_head_attention(
+    x: 'Tensor',
+    w_q: 'Tensor',
+    w_k: 'Tensor',
+    w_v: 'Tensor',
+    w_o: Optional['Tensor'] = None,
+    num_heads: int = 1,
+    is_causal: bool = False
+) -> 'Tensor':
+    """
+    Multi-Head Attention with QKV and output projections.
+
+    Computes:
+        Q, K, V = X @ W_Q, X @ W_K, X @ W_V
+        MultiHead(Q, K, V) = Concat(head_1, ..., head_h) @ W_O
+        where head_i = Attention(Q_i, K_i, V_i)
+
+    Args:
+        x: Input tensor [B, S, D]
+        w_q: Query projection weights [D, D]
+        w_k: Key projection weights [D, D]
+        w_v: Value projection weights [D, D]
+        w_o: Output projection weights [D, D] (optional)
+        num_heads: Number of attention heads
+        is_causal: If True, apply causal mask
+
+    Returns:
+        Output tensor [B, S, D]
+    """
+    from .tensor import Tensor, TensorMeta
+    from .graph import OpType
+
+    if Tensor._tracing:
+        out_meta = TensorMeta(shape=x.shape, dtype=x.dtype)
+        out = Tensor(out_meta)
+        inputs = [x, w_q, w_k, w_v]
+        if w_o is not None:
+            inputs.append(w_o)
+        Tensor._trace_graph.add_op(
+            OpType.ATTENTION, inputs, [out],
+            num_heads=num_heads, is_causal=is_causal,
+            include_qkv_projection=True,
+            include_output_projection=(w_o is not None)
+        )
+        return out
+    else:
+        if x._data is None:
+            raise ValueError("Cannot execute attention on symbolic tensor")
+
+        batch_size, seq_len, d_model = x.shape
+        head_dim = d_model // num_heads
+
+        # Project Q, K, V
+        q = np.matmul(x._data, w_q._data)  # [B, S, D]
+        k = np.matmul(x._data, w_k._data)  # [B, S, D]
+        v = np.matmul(x._data, w_v._data)  # [B, S, D]
+
+        # Reshape to [B, S, H, d_k] then transpose to [B, H, S, d_k]
+        q = q.reshape(batch_size, seq_len, num_heads, head_dim).transpose(0, 2, 1, 3)
+        k = k.reshape(batch_size, seq_len, num_heads, head_dim).transpose(0, 2, 1, 3)
+        v = v.reshape(batch_size, seq_len, num_heads, head_dim).transpose(0, 2, 1, 3)
+
+        # Scaled dot-product attention
+        scale = 1.0 / np.sqrt(head_dim)
+        scores = np.matmul(q, k.transpose(0, 1, 3, 2)) * scale  # [B, H, S, S]
+
+        # Apply causal mask if requested
+        if is_causal:
+            causal_mask = np.triu(np.ones((seq_len, seq_len)), k=1) * -1e9
+            scores = scores + causal_mask
+
+        # Softmax
+        exp_scores = np.exp(scores - np.max(scores, axis=-1, keepdims=True))
+        attn_weights = exp_scores / np.sum(exp_scores, axis=-1, keepdims=True)
+
+        # Attention @ V -> [B, H, S, d_k]
+        attn_output = np.matmul(attn_weights, v)
+
+        # Reshape back to [B, S, D]
+        attn_output = attn_output.transpose(0, 2, 1, 3).reshape(batch_size, seq_len, d_model)
+
+        # Output projection
+        if w_o is not None:
+            attn_output = np.matmul(attn_output, w_o._data)
+
+        return Tensor(attn_output.astype(x.dtype))
 
 
 # ========== Normalization Operations ==========

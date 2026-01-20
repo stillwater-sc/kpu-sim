@@ -20,6 +20,7 @@ TEST_CASE("KernelOpType enumeration", "[kernel]") {
         REQUIRE(std::string(kernel_op_type_name(KernelOpType::BATCH_MATMUL)) == "batch_matmul");
         REQUIRE(std::string(kernel_op_type_name(KernelOpType::CONV2D)) == "conv2d");
         REQUIRE(std::string(kernel_op_type_name(KernelOpType::ELEMENTWISE)) == "elementwise");
+        REQUIRE(std::string(kernel_op_type_name(KernelOpType::ATTENTION)) == "attention");
         REQUIRE(std::string(kernel_op_type_name(KernelOpType::CUSTOM)) == "custom");
     }
 }
@@ -764,5 +765,274 @@ TEST_CASE("Conv2D kernel FLOPs calculation", "[kernel][conv2d]") {
                                cfg.output_height() * cfg.output_width();
         // bias + activation = 2 * output_elements
         REQUIRE(kernel.total_flops() == cfg.total_flops() + 2 * output_elements);
+    }
+}
+
+// ============================================================================
+// Attention Kernel Tests
+// ============================================================================
+
+TEST_CASE("AttentionConfig structure", "[kernel][attention]") {
+    SECTION("Default constructor") {
+        AttentionConfig cfg;
+        REQUIRE(cfg.batch_size == 1);
+        REQUIRE(cfg.seq_len == 1);
+        REQUIRE(cfg.d_model == 64);
+        REQUIRE(cfg.num_heads == 1);
+        REQUIRE(cfg.causal_mask == false);
+        REQUIRE(cfg.include_qkv_projection == true);
+        REQUIRE(cfg.include_output_projection == true);
+    }
+
+    SECTION("Head dimension calculation") {
+        AttentionConfig cfg;
+        cfg.d_model = 512;
+        cfg.num_heads = 8;
+        REQUIRE(cfg.head_dim() == 64);
+
+        cfg.d_model = 768;
+        cfg.num_heads = 12;
+        REQUIRE(cfg.head_dim() == 64);
+    }
+
+    SECTION("Total FLOPs calculation with projections") {
+        AttentionConfig cfg;
+        cfg.batch_size = 2;
+        cfg.seq_len = 16;
+        cfg.d_model = 64;
+        cfg.num_heads = 4;
+        cfg.include_qkv_projection = true;
+        cfg.include_output_projection = true;
+
+        Size B = cfg.batch_size;
+        Size S = cfg.seq_len;
+        Size D = cfg.d_model;
+        Size H = cfg.num_heads;
+        Size d_k = cfg.head_dim();
+
+        // QKV Projection: 6 * B * S * D * D
+        Size qkv_flops = 6 * B * S * D * D;
+
+        // Q @ K^T: 2 * B * H * S * S * d_k
+        Size qk_flops = 2 * B * H * S * S * d_k;
+
+        // Scale: B * H * S * S
+        Size scale_flops = B * H * S * S;
+
+        // Softmax: 5 * B * H * S * S
+        Size softmax_flops = 5 * B * H * S * S;
+
+        // Attn @ V: 2 * B * H * S * d_k * S
+        Size attn_v_flops = 2 * B * H * S * d_k * S;
+
+        // Output projection: 2 * B * S * D * D
+        Size output_flops = 2 * B * S * D * D;
+
+        Size expected = qkv_flops + qk_flops + scale_flops + softmax_flops + attn_v_flops + output_flops;
+        REQUIRE(cfg.total_flops() == expected);
+    }
+
+    SECTION("Total FLOPs calculation without projections") {
+        AttentionConfig cfg;
+        cfg.batch_size = 2;
+        cfg.seq_len = 16;
+        cfg.d_model = 64;
+        cfg.num_heads = 4;
+        cfg.include_qkv_projection = false;
+        cfg.include_output_projection = false;
+
+        Size B = cfg.batch_size;
+        Size S = cfg.seq_len;
+        Size H = cfg.num_heads;
+        Size d_k = cfg.head_dim();
+
+        // Q @ K^T: 2 * B * H * S * S * d_k
+        Size qk_flops = 2 * B * H * S * S * d_k;
+
+        // Scale: B * H * S * S
+        Size scale_flops = B * H * S * S;
+
+        // Softmax: 5 * B * H * S * S
+        Size softmax_flops = 5 * B * H * S * S;
+
+        // Attn @ V: 2 * B * H * S * d_k * S
+        Size attn_v_flops = 2 * B * H * S * d_k * S;
+
+        Size expected = qk_flops + scale_flops + softmax_flops + attn_v_flops;
+        REQUIRE(cfg.total_flops() == expected);
+    }
+}
+
+TEST_CASE("Kernel::create_attention factory method", "[kernel][attention]") {
+    SECTION("Basic attention creation with Config") {
+        AttentionConfig cfg;
+        cfg.batch_size = 2;
+        cfg.seq_len = 16;
+        cfg.d_model = 64;
+        cfg.num_heads = 4;
+
+        Kernel kernel = Kernel::create_attention(cfg);
+
+        REQUIRE(kernel.is_valid());
+        REQUIRE(kernel.op_type() == KernelOpType::ATTENTION);
+        REQUIRE(kernel.dtype() == DataType::FLOAT32);
+
+        // Verify config was stored
+        REQUIRE(kernel.attention_config().batch_size == 2);
+        REQUIRE(kernel.attention_config().seq_len == 16);
+        REQUIRE(kernel.attention_config().d_model == 64);
+        REQUIRE(kernel.attention_config().num_heads == 4);
+    }
+
+    SECTION("Attention with explicit parameters") {
+        // batch=2, seq=32, d_model=128, heads=8
+        Kernel kernel = Kernel::create_attention(2, 32, 128, 8);
+
+        REQUIRE(kernel.is_valid());
+        REQUIRE(kernel.op_type() == KernelOpType::ATTENTION);
+        REQUIRE(kernel.attention_config().batch_size == 2);
+        REQUIRE(kernel.attention_config().seq_len == 32);
+        REQUIRE(kernel.attention_config().d_model == 128);
+        REQUIRE(kernel.attention_config().num_heads == 8);
+        REQUIRE(kernel.attention_config().head_dim() == 16);
+    }
+
+    SECTION("Causal attention") {
+        Kernel kernel = Kernel::create_attention(1, 16, 64, 4, true);
+
+        REQUIRE(kernel.is_valid());
+        REQUIRE(kernel.attention_config().causal_mask == true);
+    }
+
+    SECTION("Attention without projections") {
+        Kernel kernel = Kernel::create_attention(1, 16, 64, 4, false, false, false);
+
+        REQUIRE(kernel.is_valid());
+        REQUIRE(kernel.attention_config().include_qkv_projection == false);
+        REQUIRE(kernel.attention_config().include_output_projection == false);
+    }
+}
+
+TEST_CASE("Attention kernel arguments", "[kernel][attention]") {
+    SECTION("With QKV and output projections") {
+        AttentionConfig cfg;
+        cfg.batch_size = 2;
+        cfg.seq_len = 16;
+        cfg.d_model = 64;
+        cfg.num_heads = 4;
+        cfg.include_qkv_projection = true;
+        cfg.include_output_projection = true;
+
+        Kernel kernel = Kernel::create_attention(cfg);
+
+        // X, W_Q, W_K, W_V, W_O, output = 6 arguments
+        REQUIRE(kernel.arguments().size() == 6);
+
+        auto inputs = kernel.input_arguments();
+        REQUIRE(inputs.size() == 5);  // X, W_Q, W_K, W_V, W_O
+
+        // Check X shape [B, S, D]
+        REQUIRE(inputs[0].name == "X");
+        REQUIRE(inputs[0].shape.size() == 3);
+        REQUIRE(inputs[0].shape[0] == 2);
+        REQUIRE(inputs[0].shape[1] == 16);
+        REQUIRE(inputs[0].shape[2] == 64);
+
+        // Check W_Q shape [D, D]
+        REQUIRE(inputs[1].name == "W_Q");
+        REQUIRE(inputs[1].shape.size() == 2);
+        REQUIRE(inputs[1].shape[0] == 64);
+        REQUIRE(inputs[1].shape[1] == 64);
+
+        auto outputs = kernel.output_arguments();
+        REQUIRE(outputs.size() == 1);
+        REQUIRE(outputs[0].name == "output");
+        REQUIRE(outputs[0].shape[0] == 2);   // B
+        REQUIRE(outputs[0].shape[1] == 16);  // S
+        REQUIRE(outputs[0].shape[2] == 64);  // D
+    }
+
+    SECTION("Without projections (Q, K, V inputs)") {
+        AttentionConfig cfg;
+        cfg.batch_size = 2;
+        cfg.seq_len = 16;
+        cfg.d_model = 64;
+        cfg.num_heads = 4;
+        cfg.include_qkv_projection = false;
+        cfg.include_output_projection = false;
+
+        Kernel kernel = Kernel::create_attention(cfg);
+
+        // Q, K, V, output = 4 arguments
+        REQUIRE(kernel.arguments().size() == 4);
+
+        auto inputs = kernel.input_arguments();
+        REQUIRE(inputs.size() == 3);  // Q, K, V
+
+        // Check Q shape [B, H, S, d_k]
+        REQUIRE(inputs[0].name == "Q");
+        REQUIRE(inputs[0].shape.size() == 4);
+        REQUIRE(inputs[0].shape[0] == 2);   // B
+        REQUIRE(inputs[0].shape[1] == 4);   // H
+        REQUIRE(inputs[0].shape[2] == 16);  // S
+        REQUIRE(inputs[0].shape[3] == 16);  // d_k = 64/4
+
+        auto outputs = kernel.output_arguments();
+        REQUIRE(outputs.size() == 1);
+        REQUIRE(outputs[0].name == "output");
+    }
+}
+
+TEST_CASE("Attention kernel validation", "[kernel][attention]") {
+    SECTION("Valid attention passes validation") {
+        Kernel kernel = Kernel::create_attention(2, 16, 64, 4);
+        std::string error;
+        REQUIRE(kernel.validate(error) == true);
+        REQUIRE(error.empty());
+    }
+}
+
+TEST_CASE("Attention kernel summary", "[kernel][attention]") {
+    AttentionConfig cfg;
+    cfg.batch_size = 2;
+    cfg.seq_len = 32;
+    cfg.d_model = 128;
+    cfg.num_heads = 8;
+    cfg.causal_mask = true;
+
+    Kernel kernel = Kernel::create_attention(cfg);
+
+    std::string summary = kernel.summary();
+
+    // Check that summary contains expected Attention information
+    REQUIRE(summary.find("attention") != std::string::npos);
+    REQUIRE(summary.find("Batch Size: 2") != std::string::npos);
+    REQUIRE(summary.find("Seq Length: 32") != std::string::npos);
+    REQUIRE(summary.find("Model Dim: 128") != std::string::npos);
+    REQUIRE(summary.find("Num Heads: 8") != std::string::npos);
+    REQUIRE(summary.find("Head Dim: 16") != std::string::npos);
+    REQUIRE(summary.find("Causal Mask: yes") != std::string::npos);
+    REQUIRE(summary.find("FLOPs") != std::string::npos);
+}
+
+TEST_CASE("Attention kernel FLOPs calculation", "[kernel][attention]") {
+    AttentionConfig cfg;
+    cfg.batch_size = 2;
+    cfg.seq_len = 16;
+    cfg.d_model = 64;
+    cfg.num_heads = 4;
+
+    SECTION("With all projections") {
+        cfg.include_qkv_projection = true;
+        cfg.include_output_projection = true;
+        Kernel kernel = Kernel::create_attention(cfg);
+        REQUIRE(kernel.total_flops() == cfg.total_flops());
+    }
+
+    SECTION("Without projections") {
+        cfg.include_qkv_projection = false;
+        cfg.include_output_projection = false;
+        Kernel kernel = Kernel::create_attention(cfg);
+        REQUIRE(kernel.total_flops() == cfg.total_flops());
     }
 }

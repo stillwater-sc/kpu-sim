@@ -27,6 +27,9 @@ class OpType(Enum):
     # Convolution operations
     CONV2D = "conv2d"
 
+    # Attention operations
+    ATTENTION = "attention"
+
     # Activation functions
     RELU = "relu"
     GELU = "gelu"

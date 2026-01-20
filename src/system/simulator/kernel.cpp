@@ -143,6 +143,80 @@ Kernel Kernel::create_conv2d(Size batch_size, Size in_channels, Size out_channel
     return create_conv2d(config, has_bias, activation, dtype);
 }
 
+Kernel Kernel::create_attention(const AttentionConfig& config, DataType dtype) {
+    // Attention is composed from matmul operations:
+    // 1. QKV projections (if enabled): Q = X @ W_Q, K = X @ W_K, V = X @ W_V
+    // 2. Attention scores: scores = Q @ K^T / sqrt(d_k)
+    // 3. Softmax: attention_weights = softmax(scores)
+    // 4. Context: context = attention_weights @ V
+    // 5. Output projection (if enabled): output = context @ W_O
+
+    compiler::KernelCompiler compiler;
+
+    // For the underlying program, we use the QK matmul dimensions as the primary
+    // This is: [B*H, S, d_k] @ [B*H, d_k, S] -> [B*H, S, S]
+    Size B = config.batch_size;
+    Size S = config.seq_len;
+    Size D = config.d_model;
+    Size H = config.num_heads;
+    Size d_k = config.head_dim();
+
+    // Create a placeholder program using the largest matmul (QKV projection)
+    // The actual execution will compose multiple operations
+    Size M, N, K;
+    if (config.include_qkv_projection) {
+        // QKV projection: [B*S, D] @ [D, D]
+        M = B * S;
+        N = D;
+        K = D;
+    } else {
+        // Attention core: [B*H, S, d_k] @ [B*H, d_k, S]
+        M = S;
+        N = S;
+        K = d_k;
+    }
+
+    // Compile the base matmul kernel
+    compiler::CompileOptions opts = compiler::CompileOptions::defaults();
+    opts.dtype = dtype;
+    Kernel kernel = compiler.compile_matmul(M, N, K, opts);
+
+    // Override operation type to ATTENTION
+    kernel.op_type_ = KernelOpType::ATTENTION;
+    kernel.attention_config_ = config;
+    kernel.dtype_ = dtype;
+
+    // Rename the program
+    std::ostringstream name;
+    name << "attention_b" << B << "_s" << S << "_d" << D << "_h" << H;
+    if (config.causal_mask) {
+        name << "_causal";
+    }
+    kernel.program_.name = name.str();
+
+    // Set up attention-specific arguments
+    kernel.setup_attention_arguments();
+
+    return kernel;
+}
+
+Kernel Kernel::create_attention(Size batch_size, Size seq_len, Size d_model,
+                                Size num_heads, bool causal_mask,
+                                bool include_qkv_projection,
+                                bool include_output_projection,
+                                DataType dtype) {
+    AttentionConfig config;
+    config.batch_size = batch_size;
+    config.seq_len = seq_len;
+    config.d_model = d_model;
+    config.num_heads = num_heads;
+    config.causal_mask = causal_mask;
+    config.include_qkv_projection = include_qkv_projection;
+    config.include_output_projection = include_output_projection;
+
+    return create_attention(config, dtype);
+}
+
 // ============================================================================
 // Argument Accessors
 // ============================================================================
@@ -222,6 +296,18 @@ std::string Kernel::summary() const {
            << ", K=" << cfg.gemm_K() << "\n";
         ss << "  Activation: " << activation_type_name(activation_) << "\n";
         ss << "  Has Bias: " << (has_bias_ ? "yes" : "no") << "\n";
+    }
+
+    if (op_type_ == KernelOpType::ATTENTION) {
+        const auto& cfg = attention_config_;
+        ss << "  Batch Size: " << cfg.batch_size << "\n";
+        ss << "  Seq Length: " << cfg.seq_len << "\n";
+        ss << "  Model Dim: " << cfg.d_model << "\n";
+        ss << "  Num Heads: " << cfg.num_heads << "\n";
+        ss << "  Head Dim: " << cfg.head_dim() << "\n";
+        ss << "  Causal Mask: " << (cfg.causal_mask ? "yes" : "no") << "\n";
+        ss << "  QKV Projection: " << (cfg.include_qkv_projection ? "yes" : "no") << "\n";
+        ss << "  Output Projection: " << (cfg.include_output_projection ? "yes" : "no") << "\n";
     }
 
     ss << "  Program Size: " << instruction_count() << " operations\n";
@@ -322,6 +408,45 @@ bool Kernel::validate(std::string& error) const {
         }
     }
 
+    if (op_type_ == KernelOpType::ATTENTION) {
+        const auto& cfg = attention_config_;
+
+        if (cfg.batch_size == 0) {
+            error = "Attention batch size must be non-zero";
+            return false;
+        }
+        if (cfg.seq_len == 0) {
+            error = "Attention sequence length must be non-zero";
+            return false;
+        }
+        if (cfg.d_model == 0) {
+            error = "Attention model dimension must be non-zero";
+            return false;
+        }
+        if (cfg.num_heads == 0) {
+            error = "Attention num_heads must be non-zero";
+            return false;
+        }
+        if (cfg.d_model % cfg.num_heads != 0) {
+            error = "Attention d_model must be divisible by num_heads";
+            return false;
+        }
+
+        // Validate argument count based on configuration
+        size_t expected_args;
+        if (cfg.include_qkv_projection) {
+            // X, W_Q, W_K, W_V, [W_O,] output
+            expected_args = cfg.include_output_projection ? 6 : 5;
+        } else {
+            // Q, K, V, output
+            expected_args = 4;
+        }
+        if (arguments_.size() < expected_args) {
+            error = "ATTENTION kernel must have at least " + std::to_string(expected_args) + " arguments";
+            return false;
+        }
+    }
+
     error.clear();
     return true;
 }
@@ -376,6 +501,9 @@ Size Kernel::total_flops() const {
         }
 
         return flops;
+    }
+    if (op_type_ == KernelOpType::ATTENTION) {
+        return attention_config_.total_flops();
     }
     // For other operation types, could return estimates or 0
     return 0;
@@ -481,6 +609,93 @@ void Kernel::setup_conv2d_arguments() {
                           cfg.output_height(), cfg.output_width()},
         true
     );
+}
+
+void Kernel::setup_attention_arguments() {
+    arguments_.clear();
+
+    const auto& cfg = attention_config_;
+    Size B = cfg.batch_size;
+    Size S = cfg.seq_len;
+    Size D = cfg.d_model;
+    Size H = cfg.num_heads;
+    Size d_k = cfg.head_dim();
+
+    if (cfg.include_qkv_projection) {
+        // Full attention with projections
+        // Input: X [B, S, D]
+        arguments_.emplace_back(
+            "X", dtype_,
+            std::vector<Size>{B, S, D},
+            false
+        );
+
+        // Query projection: W_Q [D, D]
+        arguments_.emplace_back(
+            "W_Q", dtype_,
+            std::vector<Size>{D, D},
+            false
+        );
+
+        // Key projection: W_K [D, D]
+        arguments_.emplace_back(
+            "W_K", dtype_,
+            std::vector<Size>{D, D},
+            false
+        );
+
+        // Value projection: W_V [D, D]
+        arguments_.emplace_back(
+            "W_V", dtype_,
+            std::vector<Size>{D, D},
+            false
+        );
+
+        // Output projection: W_O [D, D] (if enabled)
+        if (cfg.include_output_projection) {
+            arguments_.emplace_back(
+                "W_O", dtype_,
+                std::vector<Size>{D, D},
+                false
+            );
+        }
+
+        // Output: [B, S, D]
+        arguments_.emplace_back(
+            "output", dtype_,
+            std::vector<Size>{B, S, D},
+            true
+        );
+    } else {
+        // Attention core only (Q, K, V already computed)
+        // Query: Q [B, H, S, d_k]
+        arguments_.emplace_back(
+            "Q", dtype_,
+            std::vector<Size>{B, H, S, d_k},
+            false
+        );
+
+        // Key: K [B, H, S, d_k]
+        arguments_.emplace_back(
+            "K", dtype_,
+            std::vector<Size>{B, H, S, d_k},
+            false
+        );
+
+        // Value: V [B, H, S, d_k]
+        arguments_.emplace_back(
+            "V", dtype_,
+            std::vector<Size>{B, H, S, d_k},
+            false
+        );
+
+        // Output: [B, H, S, d_k]
+        arguments_.emplace_back(
+            "output", dtype_,
+            std::vector<Size>{B, H, S, d_k},
+            true
+        );
+    }
 }
 
 } // namespace sw::kpu

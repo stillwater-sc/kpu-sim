@@ -24,6 +24,7 @@ enum class KernelOpType : uint8_t {
     POOL2D = 5,         // 2D pooling (max, avg)
     SOFTMAX = 6,        // Softmax normalization
     LAYERNORM = 7,      // Layer normalization
+    ATTENTION = 8,      // Scaled dot-product attention
     CUSTOM = 255        // Custom/user-defined
 };
 
@@ -49,6 +50,7 @@ inline const char* kernel_op_type_name(KernelOpType op) {
         case KernelOpType::POOL2D: return "pool2d";
         case KernelOpType::SOFTMAX: return "softmax";
         case KernelOpType::LAYERNORM: return "layernorm";
+        case KernelOpType::ATTENTION: return "attention";
         case KernelOpType::CUSTOM: return "custom";
         default: return "unknown";
     }
@@ -110,6 +112,70 @@ struct Conv2DConfig {
     Size total_flops() const {
         // 2 * (N * H_out * W_out) * C_out * (C_in/groups * K_h * K_w)
         return 2 * gemm_M() * gemm_N() * gemm_K();
+    }
+};
+
+/**
+ * @brief Attention configuration parameters for transformer self-attention
+ *
+ * Implements scaled dot-product attention:
+ *   Attention(Q, K, V) = softmax(Q @ K^T / sqrt(d_k)) @ V
+ *
+ * With optional QKV and output projections:
+ *   Q, K, V = X @ W_Q, X @ W_K, X @ W_V
+ *   output = Attention(Q, K, V) @ W_O
+ */
+struct AttentionConfig {
+    Size batch_size;       // B: batch size
+    Size seq_len;          // S: sequence length
+    Size d_model;          // D: model/embedding dimension
+    Size num_heads;        // H: number of attention heads
+    bool causal_mask;      // Apply causal mask for decoder attention
+    bool include_qkv_projection;    // Include Q, K, V projections (default true)
+    bool include_output_projection; // Include output projection (default true)
+
+    AttentionConfig()
+        : batch_size(1), seq_len(1), d_model(64), num_heads(1)
+        , causal_mask(false)
+        , include_qkv_projection(true)
+        , include_output_projection(true) {}
+
+    // Head dimension (d_k = d_v = d_model / num_heads)
+    Size head_dim() const { return d_model / num_heads; }
+
+    // Compute total FLOPs for attention operation
+    Size total_flops() const {
+        Size B = batch_size;
+        Size S = seq_len;
+        Size D = d_model;
+        Size H = num_heads;
+        Size d_k = head_dim();
+
+        Size flops = 0;
+
+        // QKV Projection: 3 * (2 * B * S * D * D) = 6 * B * S * D^2
+        if (include_qkv_projection) {
+            flops += 6 * B * S * D * D;
+        }
+
+        // Q @ K^T: 2 * B * H * S * S * d_k (per head matmul)
+        flops += 2 * B * H * S * S * d_k;
+
+        // Scale by 1/sqrt(d_k): B * H * S * S (multiply)
+        flops += B * H * S * S;
+
+        // Softmax: ~5 ops per element (max, sub, exp, sum, div)
+        flops += 5 * B * H * S * S;
+
+        // Attention @ V: 2 * B * H * S * d_k * S (per head matmul)
+        flops += 2 * B * H * S * d_k * S;
+
+        // Output Projection: 2 * B * S * D * D
+        if (include_output_projection) {
+            flops += 2 * B * S * D * D;
+        }
+
+        return flops;
     }
 };
 
@@ -305,6 +371,54 @@ public:
                                 ActivationType activation = ActivationType::NONE,
                                 DataType dtype = DataType::FLOAT32);
 
+    /**
+     * @brief Create a scaled dot-product attention kernel
+     * @param config Attention configuration parameters
+     * @param dtype Data type (default FLOAT32)
+     * @return Compiled kernel
+     *
+     * Implements transformer self-attention:
+     *   Attention(Q, K, V) = softmax(Q @ K^T / sqrt(d_k)) @ V
+     *
+     * With optional projections:
+     *   Q, K, V = X @ W_Q, X @ W_K, X @ W_V
+     *   output = Attention(Q, K, V) @ W_O
+     *
+     * Arguments (when include_qkv_projection=true):
+     *   - X: [B, S, D] input tensor
+     *   - W_Q: [D, D] query projection weights
+     *   - W_K: [D, D] key projection weights
+     *   - W_V: [D, D] value projection weights
+     *   - W_O: [D, D] output projection weights (if include_output_projection)
+     *   - output: [B, S, D] output tensor
+     *
+     * Arguments (when include_qkv_projection=false):
+     *   - Q: [B, H, S, d_k] query tensor
+     *   - K: [B, H, S, d_k] key tensor
+     *   - V: [B, H, S, d_k] value tensor
+     *   - output: [B, H, S, d_k] output tensor
+     */
+    static Kernel create_attention(const AttentionConfig& config,
+                                   DataType dtype = DataType::FLOAT32);
+
+    /**
+     * @brief Create attention kernel with explicit parameters
+     * @param batch_size B: batch size
+     * @param seq_len S: sequence length
+     * @param d_model D: model dimension
+     * @param num_heads H: number of attention heads
+     * @param causal_mask Apply causal masking (for decoder)
+     * @param include_qkv_projection Include Q/K/V projections
+     * @param include_output_projection Include output projection
+     * @param dtype Data type
+     * @return Compiled kernel
+     */
+    static Kernel create_attention(Size batch_size, Size seq_len, Size d_model,
+                                   Size num_heads, bool causal_mask = false,
+                                   bool include_qkv_projection = true,
+                                   bool include_output_projection = true,
+                                   DataType dtype = DataType::FLOAT32);
+
     // =========================================
     // Metadata Accessors
     // =========================================
@@ -412,6 +526,15 @@ public:
     const Conv2DConfig& conv2d_config() const { return conv2d_config_; }
 
     // =========================================
+    // Attention Accessors (for ATTENTION kernels)
+    // =========================================
+
+    /**
+     * @brief Get Attention configuration (for ATTENTION kernels)
+     */
+    const AttentionConfig& attention_config() const { return attention_config_; }
+
+    // =========================================
     // Program Access
     // =========================================
 
@@ -488,6 +611,9 @@ private:
     // Conv2D-specific members
     Conv2DConfig conv2d_config_;
 
+    // Attention-specific members
+    AttentionConfig attention_config_;
+
     /**
      * @brief Set up arguments for MATMUL operation
      */
@@ -502,6 +628,11 @@ private:
      * @brief Set up arguments for CONV2D operation
      */
     void setup_conv2d_arguments();
+
+    /**
+     * @brief Set up arguments for ATTENTION operation
+     */
+    void setup_attention_arguments();
 };
 
 } // namespace sw::kpu
