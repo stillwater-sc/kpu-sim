@@ -107,6 +107,10 @@ class DFXOpCode(Enum):
     FUSED_MATMUL_BIAS_SILU = "fused_matmul_bias_silu"
     FUSED_MATMUL_RELU = "fused_matmul_relu"
 
+    # Conv2D fused operations (v0.6.2+)
+    FUSED_CONV2D_BN_RELU = "fused_conv2d_bn_relu"
+    FUSED_CONV2D_RELU = "fused_conv2d_relu"
+
 
 @dataclass
 class DFXTensor:
@@ -389,6 +393,9 @@ class DFXEmitter:
             OpType.FUSED_MATMUL_BIAS_GELU: DFXOpCode.FUSED_MATMUL_BIAS_GELU,
             OpType.FUSED_MATMUL_BIAS_SILU: DFXOpCode.FUSED_MATMUL_BIAS_SILU,
             OpType.FUSED_MATMUL_RELU: DFXOpCode.FUSED_MATMUL_RELU,
+            # Conv2D fused operations (v0.6.2+)
+            OpType.FUSED_CONV2D_BN_RELU: DFXOpCode.FUSED_CONV2D_BN_RELU,
+            OpType.FUSED_CONV2D_RELU: DFXOpCode.FUSED_CONV2D_RELU,
         }
 
         if node.op_type not in op_map:
@@ -406,13 +413,23 @@ class DFXEmitter:
             attrs["M"] = A_shape[-2]
             attrs["K"] = A_shape[-1]
             attrs["N"] = B_shape[-1]
-        elif node.op_type.is_fused():
-            # Fused ops have A, B as first two inputs
+        elif node.op_type.is_fused_matmul():
+            # Fused MatMul ops have A, B as first two inputs
             A_shape = node.inputs[0].shape
             B_shape = node.inputs[1].shape
             attrs["M"] = A_shape[-2]
             attrs["K"] = A_shape[-1]
             attrs["N"] = B_shape[-1]
+        elif node.op_type.is_fused_conv():
+            # Fused Conv2D ops have input, weight as first two inputs
+            # input: (N, C_in, H, W) or (N, H, W, C_in)
+            # weight: (C_out, C_in, kH, kW)
+            input_shape = node.inputs[0].shape
+            weight_shape = node.inputs[1].shape
+            attrs["batch_size"] = input_shape[0]
+            attrs["in_channels"] = weight_shape[1]
+            attrs["out_channels"] = weight_shape[0]
+            attrs["kernel_size"] = (weight_shape[2], weight_shape[3])
 
         return [DFXOp(
             opcode=opcode,

@@ -570,6 +570,104 @@ class KPURuntime:
             N = B.shape[-1]
             stats.matmul_flops += 2 * M * N * K
 
+        elif op.opcode == DFXOpCode.FUSED_CONV2D_BN_RELU:
+            # Fused: Y = relu(batch_norm(conv2d(X, W)))
+            # inputs: [X, W, gamma, beta, running_mean, running_var] (BN params optional)
+            x = inputs[0]
+            weight = inputs[1]
+            stride = op.attrs.get('stride', (1, 1))
+            padding = op.attrs.get('padding', (0, 0))
+            dilation = op.attrs.get('dilation', (1, 1))
+            eps = op.attrs.get('eps', 1e-5)
+
+            N_batch, C_in, H_in, W_in = x.shape
+            C_out, C_in_per_group, K_h, K_w = weight.shape
+
+            H_out = (H_in + 2 * padding[0] - dilation[0] * (K_h - 1) - 1) // stride[0] + 1
+            W_out = (W_in + 2 * padding[1] - dilation[1] * (K_w - 1) - 1) // stride[1] + 1
+
+            # Pad input
+            if padding[0] > 0 or padding[1] > 0:
+                x_padded = np.pad(x, ((0, 0), (0, 0),
+                                      (padding[0], padding[0]),
+                                      (padding[1], padding[1])), mode='constant')
+            else:
+                x_padded = x
+
+            # Conv2D
+            conv_result = np.zeros((N_batch, C_out, H_out, W_out), dtype=x.dtype)
+            for n in range(N_batch):
+                for c_out in range(C_out):
+                    for h_out in range(H_out):
+                        for w_out in range(W_out):
+                            h_start = h_out * stride[0]
+                            w_start = w_out * stride[1]
+                            val = 0.0
+                            for c_in in range(C_in_per_group):
+                                for kh in range(K_h):
+                                    for kw in range(K_w):
+                                        h_in = h_start + kh * dilation[0]
+                                        w_in = w_start + kw * dilation[1]
+                                        val += x_padded[n, c_in, h_in, w_in] * weight[c_out, c_in, kh, kw]
+                            conv_result[n, c_out, h_out, w_out] = val
+
+            # BatchNorm (compute batch statistics)
+            mean = np.mean(conv_result, axis=(0, 2, 3), keepdims=True)
+            var = np.var(conv_result, axis=(0, 2, 3), keepdims=True)
+            bn_result = (conv_result - mean) / np.sqrt(var + eps)
+
+            # Apply gamma and beta if provided
+            if len(inputs) > 2:
+                bn_result = bn_result * inputs[2].reshape(1, -1, 1, 1)
+            if len(inputs) > 3:
+                bn_result = bn_result + inputs[3].reshape(1, -1, 1, 1)
+
+            # ReLU
+            result = np.maximum(bn_result, 0)
+
+        elif op.opcode == DFXOpCode.FUSED_CONV2D_RELU:
+            # Fused: Y = relu(conv2d(X, W))
+            x = inputs[0]
+            weight = inputs[1]
+            stride = op.attrs.get('stride', (1, 1))
+            padding = op.attrs.get('padding', (0, 0))
+            dilation = op.attrs.get('dilation', (1, 1))
+
+            N_batch, C_in, H_in, W_in = x.shape
+            C_out, C_in_per_group, K_h, K_w = weight.shape
+
+            H_out = (H_in + 2 * padding[0] - dilation[0] * (K_h - 1) - 1) // stride[0] + 1
+            W_out = (W_in + 2 * padding[1] - dilation[1] * (K_w - 1) - 1) // stride[1] + 1
+
+            # Pad input
+            if padding[0] > 0 or padding[1] > 0:
+                x_padded = np.pad(x, ((0, 0), (0, 0),
+                                      (padding[0], padding[0]),
+                                      (padding[1], padding[1])), mode='constant')
+            else:
+                x_padded = x
+
+            # Conv2D + ReLU
+            result = np.zeros((N_batch, C_out, H_out, W_out), dtype=x.dtype)
+            for n in range(N_batch):
+                for c_out in range(C_out):
+                    for h_out in range(H_out):
+                        for w_out in range(W_out):
+                            h_start = h_out * stride[0]
+                            w_start = w_out * stride[1]
+                            val = 0.0
+                            for c_in in range(C_in_per_group):
+                                for kh in range(K_h):
+                                    for kw in range(K_w):
+                                        h_in = h_start + kh * dilation[0]
+                                        w_in = w_start + kw * dilation[1]
+                                        val += x_padded[n, c_in, h_in, w_in] * weight[c_out, c_in, kh, kw]
+                            result[n, c_out, h_out, w_out] = max(val, 0)  # Fused ReLU
+
+            # Add bias if provided
+            if len(inputs) > 2:
+                result = np.maximum(result + inputs[2].reshape(1, -1, 1, 1), 0)
+
         elif op.opcode == DFXOpCode.ATTENTION:
             # Multi-head attention with QKV projections
             # inputs[0] = x [B, S, D]

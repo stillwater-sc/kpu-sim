@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Test suite for KPU Kernel Fusion (v0.6.0).
+Test suite for KPU Kernel Fusion (v0.6.0+).
 
 Tests pattern detection, graph rewriting, and behavioral correctness
 of fused operations.
@@ -30,6 +30,9 @@ from kpu.fusion import (
     FusionOpportunity,
     RooflineMetrics,
     analyze_fusion_potential,
+    # v0.6.2
+    Conv2DBatchNormActivation,
+    Conv2DActivation,
 )
 
 
@@ -360,6 +363,157 @@ class TestGraphRewriting:
         assert visited_ids == all_ids
 
 
+class TestConv2DFusionPatterns:
+    """Tests for Conv2D fusion patterns (v0.6.2+)."""
+
+    def setup_method(self):
+        """Set up behavioral fidelity for each test."""
+        kpu.set_fidelity(kpu.BEHAVIORAL)
+
+    def test_conv2d_relu_detection(self):
+        """Test detection of Conv2D + ReLU pattern."""
+        @kpu.compile(optimize=False)
+        def unfused(x, w):
+            y = kpu.conv2d(x, w, padding=(1, 1))
+            y = kpu.relu(y)
+            return y
+
+        # NCHW format: (batch, channels, height, width)
+        X = kpu.Tensor(np.random.randn(1, 3, 8, 8).astype(np.float32))
+        W = kpu.Tensor(np.random.randn(16, 3, 3, 3).astype(np.float32))
+
+        _ = unfused(X, W)
+        graph = unfused.graph
+
+        # Run fusion compiler
+        compiler = FusionCompiler()
+        optimized = compiler.optimize(graph)
+
+        # Should have fused to 1 operation
+        assert compiler.num_fusions == 1
+        assert 'Conv2DActivation' in compiler.fusion_stats
+
+        # Check the fused op type
+        fused_nodes = [n for n in optimized.nodes if n.op_type.is_fused()]
+        assert len(fused_nodes) == 1
+        assert fused_nodes[0].op_type == OpType.FUSED_CONV2D_RELU
+
+    def test_conv2d_bn_relu_detection(self):
+        """Test detection of Conv2D + BatchNorm + ReLU pattern."""
+        @kpu.compile(optimize=False)
+        def unfused(x, w):
+            y = kpu.conv2d(x, w, padding=(1, 1))
+            y = kpu.batch_norm2d(y)
+            y = kpu.relu(y)
+            return y
+
+        X = kpu.Tensor(np.random.randn(2, 3, 8, 8).astype(np.float32))
+        W = kpu.Tensor(np.random.randn(16, 3, 3, 3).astype(np.float32))
+
+        _ = unfused(X, W)
+        graph = unfused.graph
+
+        compiler = FusionCompiler()
+        optimized = compiler.optimize(graph)
+
+        # Should have fused to 1 operation
+        assert compiler.num_fusions == 1
+        assert 'Conv2DBatchNormActivation' in compiler.fusion_stats
+
+        fused_nodes = [n for n in optimized.nodes if n.op_type.is_fused()]
+        assert len(fused_nodes) == 1
+        assert fused_nodes[0].op_type == OpType.FUSED_CONV2D_BN_RELU
+
+    def test_conv2d_relu_correctness(self):
+        """Test that fused Conv2D+ReLU produces correct output."""
+        def conv_block(x, w):
+            y = kpu.conv2d(x, w, padding=(1, 1))
+            y = kpu.relu(y)
+            return y
+
+        X = kpu.Tensor(np.random.randn(2, 3, 8, 8).astype(np.float32))
+        W = kpu.Tensor(np.random.randn(16, 3, 3, 3).astype(np.float32))
+
+        # Compile without optimization
+        unfused_fn = kpu.compile(conv_block, optimize=False)
+        result_unfused = unfused_fn(X, W)
+
+        # Compile with optimization (will fuse)
+        fused_fn = kpu.compile(conv_block, optimize=True)
+        result_fused = fused_fn(X, W)
+
+        # Outputs should match
+        np.testing.assert_allclose(
+            result_fused.numpy(),
+            result_unfused.numpy(),
+            rtol=1e-5,
+            atol=1e-5
+        )
+
+    def test_conv2d_bn_relu_correctness(self):
+        """Test that fused Conv2D+BatchNorm+ReLU produces correct output."""
+        def conv_block(x, w):
+            y = kpu.conv2d(x, w, padding=(1, 1))
+            y = kpu.batch_norm2d(y)
+            y = kpu.relu(y)
+            return y
+
+        X = kpu.Tensor(np.random.randn(2, 3, 8, 8).astype(np.float32))
+        W = kpu.Tensor(np.random.randn(16, 3, 3, 3).astype(np.float32))
+
+        unfused_fn = kpu.compile(conv_block, optimize=False)
+        result_unfused = unfused_fn(X, W)
+
+        fused_fn = kpu.compile(conv_block, optimize=True)
+        result_fused = fused_fn(X, W)
+
+        np.testing.assert_allclose(
+            result_fused.numpy(),
+            result_unfused.numpy(),
+            rtol=1e-5,
+            atol=1e-5
+        )
+
+    def test_conv2d_no_fusion_without_activation(self):
+        """Test that Conv2D alone is not fused."""
+        @kpu.compile(optimize=False)
+        def unfused(x, w):
+            return kpu.conv2d(x, w, padding=(1, 1))
+
+        X = kpu.Tensor(np.random.randn(1, 3, 8, 8).astype(np.float32))
+        W = kpu.Tensor(np.random.randn(16, 3, 3, 3).astype(np.float32))
+
+        _ = unfused(X, W)
+        graph = unfused.graph
+
+        compiler = FusionCompiler()
+        optimized = compiler.optimize(graph)
+
+        # No fusions should occur
+        assert compiler.num_fusions == 0
+
+    def test_analyzer_detects_conv2d_opportunities(self):
+        """Test that FusionAnalyzer detects Conv2D fusion opportunities."""
+        def conv_block(x, w):
+            y = kpu.conv2d(x, w, padding=(1, 1))
+            y = kpu.relu(y)
+            return y
+
+        X = kpu.Tensor(np.random.randn(1, 3, 8, 8).astype(np.float32))
+        W = kpu.Tensor(np.random.randn(16, 3, 3, 3).astype(np.float32))
+
+        unfused_fn = kpu.compile(conv_block, optimize=False)
+        _ = unfused_fn(X, W)
+
+        analyzer = FusionAnalyzer()
+        report = analyzer.analyze(unfused_fn.graph)
+
+        # Should find 1 fusion opportunity
+        assert report.total_fusions_possible == 1
+        assert len(report.opportunities) == 1
+        assert report.opportunities[0].pattern_name == 'Conv2DActivation'
+
+
 class TestOpTypePredicates:
     """Tests for OpType predicate methods."""
 
@@ -369,11 +523,33 @@ class TestOpTypePredicates:
         assert OpType.FUSED_MATMUL_BIAS_GELU.is_fused()
         assert OpType.FUSED_MATMUL_BIAS_SILU.is_fused()
         assert OpType.FUSED_MATMUL_RELU.is_fused()
+        # v0.6.2 Conv2D fused ops
+        assert OpType.FUSED_CONV2D_BN_RELU.is_fused()
+        assert OpType.FUSED_CONV2D_RELU.is_fused()
 
         # Non-fused ops should return False
         assert not OpType.MATMUL.is_fused()
         assert not OpType.RELU.is_fused()
         assert not OpType.ADD.is_fused()
+
+    def test_is_fused_conv(self):
+        """Test is_fused_conv() returns correct values."""
+        assert OpType.FUSED_CONV2D_BN_RELU.is_fused_conv()
+        assert OpType.FUSED_CONV2D_RELU.is_fused_conv()
+
+        # MatMul fused ops should return False
+        assert not OpType.FUSED_MATMUL_BIAS_RELU.is_fused_conv()
+        assert not OpType.FUSED_MATMUL_RELU.is_fused_conv()
+
+    def test_is_fused_matmul(self):
+        """Test is_fused_matmul() returns correct values."""
+        assert OpType.FUSED_MATMUL_BIAS_RELU.is_fused_matmul()
+        assert OpType.FUSED_MATMUL_BIAS_GELU.is_fused_matmul()
+        assert OpType.FUSED_MATMUL_RELU.is_fused_matmul()
+
+        # Conv2D fused ops should return False
+        assert not OpType.FUSED_CONV2D_BN_RELU.is_fused_matmul()
+        assert not OpType.FUSED_CONV2D_RELU.is_fused_matmul()
 
 
 class TestDFXEmission:

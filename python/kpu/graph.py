@@ -77,6 +77,10 @@ class OpType(Enum):
     FUSED_MATMUL_BIAS_SILU = "fused_matmul_bias_silu"
     FUSED_MATMUL_RELU = "fused_matmul_relu"
 
+    # Conv2D fused operations (v0.6.2+)
+    FUSED_CONV2D_BN_RELU = "fused_conv2d_bn_relu"
+    FUSED_CONV2D_RELU = "fused_conv2d_relu"
+
     def is_compute(self) -> bool:
         """Return True if this is a compute operation (not data movement)."""
         return self not in (OpType.INPUT, OpType.OUTPUT)
@@ -114,6 +118,24 @@ class OpType(Enum):
 
     def is_fused(self) -> bool:
         """Return True if this is a fused operation."""
+        return self in (
+            OpType.FUSED_MATMUL_BIAS_RELU,
+            OpType.FUSED_MATMUL_BIAS_GELU,
+            OpType.FUSED_MATMUL_BIAS_SILU,
+            OpType.FUSED_MATMUL_RELU,
+            OpType.FUSED_CONV2D_BN_RELU,
+            OpType.FUSED_CONV2D_RELU,
+        )
+
+    def is_fused_conv(self) -> bool:
+        """Return True if this is a fused convolution operation."""
+        return self in (
+            OpType.FUSED_CONV2D_BN_RELU,
+            OpType.FUSED_CONV2D_RELU,
+        )
+
+    def is_fused_matmul(self) -> bool:
+        """Return True if this is a fused matmul operation."""
         return self in (
             OpType.FUSED_MATMUL_BIAS_RELU,
             OpType.FUSED_MATMUL_BIAS_GELU,

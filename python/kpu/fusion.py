@@ -7,10 +7,15 @@ like MatMul+Bias+Activation into single fused operations, reducing memory
 traffic by eliminating intermediate tensor reads/writes.
 
 Target Patterns:
+    MatMul Patterns:
     - MatMul + Bias + ReLU  -> FUSED_MATMUL_BIAS_RELU
     - MatMul + Bias + GELU  -> FUSED_MATMUL_BIAS_GELU
     - MatMul + Bias + SiLU  -> FUSED_MATMUL_BIAS_SILU
     - MatMul + ReLU         -> FUSED_MATMUL_RELU
+
+    Conv2D Patterns (v0.6.2+):
+    - Conv2D + BatchNorm + ReLU -> FUSED_CONV2D_BN_RELU
+    - Conv2D + ReLU             -> FUSED_CONV2D_RELU
 
 Example:
     >>> from kpu.fusion import FusionCompiler
@@ -295,10 +300,201 @@ class MatMulActivation(FusionPattern):
         return consumers
 
 
+class Conv2DBatchNormActivation(FusionPattern):
+    """
+    Pattern: Conv2D -> BatchNorm -> Activation (v0.6.2+)
+
+    Matches sequences like:
+        Y = conv2d(X, W)
+        Z = batch_norm(Y)
+        out = relu(Z)
+
+    Fuses to: FUSED_CONV2D_BN_RELU
+
+    This is a very common pattern in CNNs like ResNet, VGG, etc.
+    """
+
+    @property
+    def name(self) -> str:
+        return "Conv2DBatchNormActivation"
+
+    def match(self, graph: 'OpGraph', node: 'OpNode') -> Optional[FusionGroup]:
+        """Match Conv2D -> BatchNorm -> Activation pattern."""
+        from .graph import OpType
+
+        # Must start with CONV2D
+        if node.op_type != OpType.CONV2D:
+            return None
+
+        # Find consumers of this node's output
+        conv_output = node.outputs[0]
+        consumers = self._find_consumers(graph, conv_output)
+
+        # Conv output must have exactly one consumer
+        if len(consumers) != 1:
+            return None
+
+        bn_node = consumers[0]
+
+        # Consumer must be BATCH_NORM
+        if bn_node.op_type != OpType.BATCH_NORM:
+            return None
+
+        # Find consumers of BatchNorm
+        bn_output = bn_node.outputs[0]
+        bn_consumers = self._find_consumers(graph, bn_output)
+
+        # BN output must have exactly one consumer
+        if len(bn_consumers) != 1:
+            return None
+
+        act_node = bn_consumers[0]
+
+        # Consumer must be ReLU (currently only supported activation for conv fusion)
+        if act_node.op_type != OpType.RELU:
+            return None
+
+        fused_op_type = OpType.FUSED_CONV2D_BN_RELU
+
+        # Collect external inputs:
+        # - Conv inputs (input tensor, weight, optional bias)
+        # - BN inputs (gamma, beta, running_mean, running_var) - excluding conv output
+        external_inputs = list(node.inputs)
+
+        # Add BN parameters (skip the first input which is conv output)
+        for inp in bn_node.inputs:
+            if id(inp) != id(conv_output):
+                external_inputs.append(inp)
+
+        return FusionGroup(
+            nodes=[node, bn_node, act_node],
+            pattern_name=self.name,
+            fused_op_type=fused_op_type,
+            external_inputs=external_inputs,
+            output=act_node.outputs[0],
+        )
+
+    def fuse(self, graph: 'OpGraph', group: FusionGroup) -> 'OpNode':
+        """Create fused Conv2D+BatchNorm+Activation node."""
+        from .graph import OpNode
+
+        conv_node = group.nodes[0]
+
+        # Create fused node
+        fused_node = OpNode(
+            op_type=group.fused_op_type,
+            inputs=group.external_inputs,
+            outputs=[group.output],
+            attrs={
+                **conv_node.attrs,
+                'fused_from': [n.op_type.value for n in group.nodes],
+            },
+            name=f"fused_{conv_node.name}" if conv_node.name else "",
+        )
+
+        return fused_node
+
+    def _find_consumers(self, graph: 'OpGraph', tensor: 'Tensor') -> List['OpNode']:
+        """Find all nodes that consume the given tensor."""
+        consumers = []
+        tensor_id = id(tensor)
+
+        for node in graph.nodes:
+            for inp in node.inputs:
+                if id(inp) == tensor_id:
+                    consumers.append(node)
+                    break
+
+        return consumers
+
+
+class Conv2DActivation(FusionPattern):
+    """
+    Pattern: Conv2D -> Activation (no BatchNorm) (v0.6.2+)
+
+    Matches sequences like:
+        Y = conv2d(X, W)
+        out = relu(Y)
+
+    Fuses to: FUSED_CONV2D_RELU
+    """
+
+    @property
+    def name(self) -> str:
+        return "Conv2DActivation"
+
+    def match(self, graph: 'OpGraph', node: 'OpNode') -> Optional[FusionGroup]:
+        """Match Conv2D -> Activation pattern (no BatchNorm)."""
+        from .graph import OpType
+
+        # Must start with CONV2D
+        if node.op_type != OpType.CONV2D:
+            return None
+
+        # Find consumers of this node's output
+        conv_output = node.outputs[0]
+        consumers = self._find_consumers(graph, conv_output)
+
+        # Conv output must have exactly one consumer
+        if len(consumers) != 1:
+            return None
+
+        consumer = consumers[0]
+
+        # Consumer must be activation directly (not BATCH_NORM)
+        # Only ReLU is currently supported
+        if consumer.op_type != OpType.RELU:
+            return None
+
+        fused_op_type = OpType.FUSED_CONV2D_RELU
+
+        return FusionGroup(
+            nodes=[node, consumer],
+            pattern_name=self.name,
+            fused_op_type=fused_op_type,
+            external_inputs=list(node.inputs),
+            output=consumer.outputs[0],
+        )
+
+    def fuse(self, graph: 'OpGraph', group: FusionGroup) -> 'OpNode':
+        """Create fused Conv2D+Activation node."""
+        from .graph import OpNode
+
+        conv_node = group.nodes[0]
+
+        fused_node = OpNode(
+            op_type=group.fused_op_type,
+            inputs=group.external_inputs,
+            outputs=[group.output],
+            attrs={
+                **conv_node.attrs,
+                'fused_from': [n.op_type.value for n in group.nodes],
+            },
+            name=f"fused_{conv_node.name}" if conv_node.name else "",
+        )
+
+        return fused_node
+
+    def _find_consumers(self, graph: 'OpGraph', tensor: 'Tensor') -> List['OpNode']:
+        """Find all nodes that consume the given tensor."""
+        consumers = []
+        tensor_id = id(tensor)
+
+        for node in graph.nodes:
+            for inp in node.inputs:
+                if id(inp) == tensor_id:
+                    consumers.append(node)
+                    break
+
+        return consumers
+
+
 # Default patterns in priority order (more specific patterns first)
 DEFAULT_PATTERNS: List[FusionPattern] = [
-    MatMulBiasActivation(),  # Try 3-op fusion first
-    MatMulActivation(),       # Then 2-op fusion
+    MatMulBiasActivation(),    # Try 3-op MatMul fusion first
+    Conv2DBatchNormActivation(),  # Try 3-op Conv2D fusion
+    MatMulActivation(),        # Then 2-op MatMul fusion
+    Conv2DActivation(),        # Then 2-op Conv2D fusion
 ]
 
 

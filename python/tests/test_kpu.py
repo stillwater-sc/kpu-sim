@@ -442,7 +442,7 @@ class TestSimpleCNN:
 
     def test_simple_cnn(self):
         """Test simple Conv -> ReLU -> Pool -> FC architecture."""
-        @kpu.compile
+        @kpu.compile(optimize=False)  # Disable fusion to test unfused op generation
         def simple_cnn(x, conv_w, fc_w, fc_b):
             # Conv: [1, 1, 8, 8] -> [1, 4, 6, 6]
             h = kpu.relu(kpu.conv2d(x, conv_w))

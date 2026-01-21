@@ -27,7 +27,7 @@ Fidelity Levels:
     - CYCLE_ACCURATE: Full timing simulation
 """
 
-__version__ = "0.6.1"
+__version__ = "0.6.2"
 __author__ = "Stillwater Supercomputing, Inc."
 
 # Fidelity levels
@@ -109,6 +109,9 @@ from .fusion import (
     FusionOpportunity,
     RooflineMetrics,
     analyze_fusion_potential,
+    # v0.6.2: Conv2D fusion patterns
+    Conv2DBatchNormActivation,
+    Conv2DActivation,
 )
 
 # torch.compile backend (optional, requires PyTorch)
@@ -222,6 +225,9 @@ __all__ = [
     "FusionOpportunity",
     "RooflineMetrics",
     "analyze_fusion_potential",
+    # v0.6.2: Conv2D fusion patterns
+    "Conv2DBatchNormActivation",
+    "Conv2DActivation",
 
     # torch.compile backend
     "torch_backend",
