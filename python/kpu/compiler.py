@@ -142,6 +142,12 @@ class CompiledFunction:
         if errors:
             raise ValueError(f"Graph validation failed: {errors}")
 
+        # Apply fusion optimization if enabled
+        if self._optimize:
+            from .fusion import FusionCompiler
+            fusion_compiler = FusionCompiler()
+            graph = fusion_compiler.optimize(graph)
+
         # Emit DFX IR
         emitter = DFXEmitter()
         dfx_program = emitter.emit(graph)

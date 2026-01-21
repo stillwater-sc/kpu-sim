@@ -187,7 +187,8 @@ class TestCompiler:
 
     def test_graph_generation(self):
         """Test that graph is correctly generated."""
-        @kpu.compile
+        # Use optimize=False to test unfused graph structure
+        @kpu.compile(optimize=False)
         def simple_net(x, w):
             return kpu.relu(x @ w)
 
@@ -198,11 +199,12 @@ class TestCompiler:
 
         graph = simple_net.get_graph()
         assert graph is not None
-        assert len(graph.nodes) == 2  # matmul + relu
+        assert len(graph.nodes) == 2  # matmul + relu (unfused)
 
     def test_dfx_generation(self):
         """Test that DFX IR is correctly generated."""
-        @kpu.compile
+        # Use optimize=False to test unfused DFX generation
+        @kpu.compile(optimize=False)
         def simple_net(x, w):
             return kpu.relu(x @ w)
 
@@ -216,7 +218,7 @@ class TestCompiler:
 
         dfx_dict = dfx.to_dict()
         assert 'ops' in dfx_dict
-        assert len(dfx_dict['ops']) == 2  # matmul + relu
+        assert len(dfx_dict['ops']) == 2  # matmul + relu (unfused)
 
         op_types = [op['opcode'] for op in dfx_dict['ops']]
         assert 'matmul' in op_types

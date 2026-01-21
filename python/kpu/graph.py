@@ -71,6 +71,12 @@ class OpType(Enum):
     CONCAT = "concat"
     FLATTEN = "flatten"
 
+    # Fused operations (v0.6.0+)
+    FUSED_MATMUL_BIAS_RELU = "fused_matmul_bias_relu"
+    FUSED_MATMUL_BIAS_GELU = "fused_matmul_bias_gelu"
+    FUSED_MATMUL_BIAS_SILU = "fused_matmul_bias_silu"
+    FUSED_MATMUL_RELU = "fused_matmul_relu"
+
     def is_compute(self) -> bool:
         """Return True if this is a compute operation (not data movement)."""
         return self not in (OpType.INPUT, OpType.OUTPUT)
@@ -105,6 +111,15 @@ class OpType(Enum):
     def is_normalization(self) -> bool:
         """Return True if this is a normalization operation."""
         return self in (OpType.LAYER_NORM, OpType.BATCH_NORM)
+
+    def is_fused(self) -> bool:
+        """Return True if this is a fused operation."""
+        return self in (
+            OpType.FUSED_MATMUL_BIAS_RELU,
+            OpType.FUSED_MATMUL_BIAS_GELU,
+            OpType.FUSED_MATMUL_BIAS_SILU,
+            OpType.FUSED_MATMUL_RELU,
+        )
 
 
 @dataclass

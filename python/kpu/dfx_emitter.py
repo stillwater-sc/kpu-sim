@@ -101,6 +101,12 @@ class DFXOpCode(Enum):
     BARRIER = "barrier"
     NOP = "nop"
 
+    # Fused operations (v0.6.0+)
+    FUSED_MATMUL_BIAS_RELU = "fused_matmul_bias_relu"
+    FUSED_MATMUL_BIAS_GELU = "fused_matmul_bias_gelu"
+    FUSED_MATMUL_BIAS_SILU = "fused_matmul_bias_silu"
+    FUSED_MATMUL_RELU = "fused_matmul_relu"
+
 
 @dataclass
 class DFXTensor:
@@ -378,6 +384,11 @@ class DFXEmitter:
             OpType.TRANSPOSE: DFXOpCode.TRANSPOSE,
             OpType.CONCAT: DFXOpCode.CONCAT,
             OpType.FLATTEN: DFXOpCode.FLATTEN,
+            # Fused operations
+            OpType.FUSED_MATMUL_BIAS_RELU: DFXOpCode.FUSED_MATMUL_BIAS_RELU,
+            OpType.FUSED_MATMUL_BIAS_GELU: DFXOpCode.FUSED_MATMUL_BIAS_GELU,
+            OpType.FUSED_MATMUL_BIAS_SILU: DFXOpCode.FUSED_MATMUL_BIAS_SILU,
+            OpType.FUSED_MATMUL_RELU: DFXOpCode.FUSED_MATMUL_RELU,
         }
 
         if node.op_type not in op_map:
@@ -388,8 +399,15 @@ class DFXEmitter:
         # Build attributes
         attrs = dict(node.attrs)
 
-        # Add shape info for matmul
+        # Add shape info for matmul and fused ops
         if node.op_type == OpType.MATMUL:
+            A_shape = node.inputs[0].shape
+            B_shape = node.inputs[1].shape
+            attrs["M"] = A_shape[-2]
+            attrs["K"] = A_shape[-1]
+            attrs["N"] = B_shape[-1]
+        elif node.op_type.is_fused():
+            # Fused ops have A, B as first two inputs
             A_shape = node.inputs[0].shape
             B_shape = node.inputs[1].shape
             attrs["M"] = A_shape[-2]

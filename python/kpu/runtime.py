@@ -533,6 +533,43 @@ class KPURuntime:
             new_shape.extend(x.shape[end_dim + 1:])
             result = x.reshape(new_shape)
 
+        elif op.opcode == DFXOpCode.FUSED_MATMUL_BIAS_RELU:
+            # Fused: Y = relu(matmul(A, B) + bias)
+            A, B, bias = inputs
+            result = np.maximum(np.matmul(A, B) + bias, 0)
+            # Track FLOPs
+            M, K = A.shape[-2], A.shape[-1]
+            N = B.shape[-1]
+            stats.matmul_flops += 2 * M * N * K
+
+        elif op.opcode == DFXOpCode.FUSED_MATMUL_BIAS_GELU:
+            # Fused: Y = gelu(matmul(A, B) + bias)
+            A, B, bias = inputs
+            x = np.matmul(A, B) + bias
+            result = x * 0.5 * (1 + np.tanh(
+                np.sqrt(2 / np.pi) * (x + 0.044715 * np.power(x, 3))
+            ))
+            M, K = A.shape[-2], A.shape[-1]
+            N = B.shape[-1]
+            stats.matmul_flops += 2 * M * N * K
+
+        elif op.opcode == DFXOpCode.FUSED_MATMUL_BIAS_SILU:
+            # Fused: Y = silu(matmul(A, B) + bias)
+            A, B, bias = inputs
+            x = np.matmul(A, B) + bias
+            result = x * (1 / (1 + np.exp(-x)))
+            M, K = A.shape[-2], A.shape[-1]
+            N = B.shape[-1]
+            stats.matmul_flops += 2 * M * N * K
+
+        elif op.opcode == DFXOpCode.FUSED_MATMUL_RELU:
+            # Fused: Y = relu(matmul(A, B))
+            A, B = inputs
+            result = np.maximum(np.matmul(A, B), 0)
+            M, K = A.shape[-2], A.shape[-1]
+            N = B.shape[-1]
+            stats.matmul_flops += 2 * M * N * K
+
         elif op.opcode == DFXOpCode.ATTENTION:
             # Multi-head attention with QKV projections
             # inputs[0] = x [B, S, D]

@@ -27,7 +27,7 @@ Fidelity Levels:
     - CYCLE_ACCURATE: Full timing simulation
 """
 
-__version__ = "0.5.7"
+__version__ = "0.6.0"
 __author__ = "Stillwater Supercomputing, Inc."
 
 # Fidelity levels
@@ -96,6 +96,14 @@ from .dfx_emitter import DFXProgram, DFXOp, DFXEmitter
 
 # Datasets
 from .datasets import MNIST, load_mnist
+
+# Fusion (v0.6.0+)
+from .fusion import (
+    FusionCompiler,
+    FusionPattern,
+    FusionGroup,
+    estimate_memory_savings,
+)
 
 # torch.compile backend (optional, requires PyTorch)
 try:
@@ -196,6 +204,12 @@ __all__ = [
     # Datasets
     "MNIST",
     "load_mnist",
+
+    # Fusion (v0.6.0+)
+    "FusionCompiler",
+    "FusionPattern",
+    "FusionGroup",
+    "estimate_memory_savings",
 
     # torch.compile backend
     "torch_backend",
