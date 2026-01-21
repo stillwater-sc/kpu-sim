@@ -463,17 +463,56 @@ struct MatMulParams {
  * @brief Elementwise operation types
  */
 enum class ElementwiseOp : uint8_t {
+    // Binary operations
     ADD = 0,
     SUB = 1,
     MUL = 2,
     DIV = 3,
     MAX = 4,
     MIN = 5,
+    // Activation functions
     RELU = 6,
     GELU = 7,
     SIGMOID = 8,
-    TANH = 9
+    TANH = 9,
+    // Unary operations
+    NEG = 10,
+    ABS = 11,
+    SQRT = 12,
+    EXP = 13,
+    LOG = 14,
+    // Scalar operations (second operand is scalar, broadcast)
+    ADD_SCALAR = 20,
+    MUL_SCALAR = 21,
+    POW_SCALAR = 22
 };
+
+/**
+ * @brief Get string name for elementwise operation
+ */
+inline const char* elementwise_op_name(ElementwiseOp op) {
+    switch (op) {
+        case ElementwiseOp::ADD: return "add";
+        case ElementwiseOp::SUB: return "sub";
+        case ElementwiseOp::MUL: return "mul";
+        case ElementwiseOp::DIV: return "div";
+        case ElementwiseOp::MAX: return "max";
+        case ElementwiseOp::MIN: return "min";
+        case ElementwiseOp::RELU: return "relu";
+        case ElementwiseOp::GELU: return "gelu";
+        case ElementwiseOp::SIGMOID: return "sigmoid";
+        case ElementwiseOp::TANH: return "tanh";
+        case ElementwiseOp::NEG: return "neg";
+        case ElementwiseOp::ABS: return "abs";
+        case ElementwiseOp::SQRT: return "sqrt";
+        case ElementwiseOp::EXP: return "exp";
+        case ElementwiseOp::LOG: return "log";
+        case ElementwiseOp::ADD_SCALAR: return "add_scalar";
+        case ElementwiseOp::MUL_SCALAR: return "mul_scalar";
+        case ElementwiseOp::POW_SCALAR: return "pow_scalar";
+        default: return "unknown";
+    }
+}
 
 /**
  * @brief Parameters for elementwise operation

@@ -357,6 +357,72 @@ Kernel Kernel::create_batchnorm(Size batch_size, Size num_features,
     return create_batchnorm(config, dtype);
 }
 
+Kernel Kernel::create_elementwise(const ElementwiseConfig& config, DataType dtype) {
+    compiler::KernelCompiler compiler;
+    Size total = config.total_elements();
+
+    // Elementwise is simple, compile a small matmul as placeholder
+    compiler::CompileOptions opts = compiler::CompileOptions::defaults();
+    opts.dtype = dtype;
+    Kernel kernel = compiler.compile_matmul(1, total, 1, opts);
+
+    // Override operation type and config
+    kernel.op_type_ = KernelOpType::ELEMENTWISE;
+    kernel.elementwise_config_ = config;
+    kernel.dtype_ = dtype;
+
+    // Generate descriptive name
+    std::ostringstream name;
+    name << "elementwise_" << elementwise_op_name(config.op);
+    for (Size dim : config.shape) {
+        name << "_" << dim;
+    }
+    kernel.program_.name = name.str();
+
+    // Set up elementwise-specific arguments
+    kernel.setup_elementwise_arguments();
+
+    return kernel;
+}
+
+Kernel Kernel::create_elementwise(ElementwiseOp op,
+                                  const std::vector<Size>& shape,
+                                  DataType dtype) {
+    ElementwiseConfig config;
+    config.op = op;
+    config.shape = shape;
+    config.is_unary = false;
+    config.is_scalar_b = false;
+
+    return create_elementwise(config, dtype);
+}
+
+Kernel Kernel::create_elementwise_unary(ElementwiseOp op,
+                                        const std::vector<Size>& shape,
+                                        DataType dtype) {
+    ElementwiseConfig config;
+    config.op = op;
+    config.shape = shape;
+    config.is_unary = true;
+    config.is_scalar_b = false;
+
+    return create_elementwise(config, dtype);
+}
+
+Kernel Kernel::create_elementwise_scalar(ElementwiseOp op,
+                                         const std::vector<Size>& shape,
+                                         float scalar,
+                                         DataType dtype) {
+    ElementwiseConfig config;
+    config.op = op;
+    config.shape = shape;
+    config.is_unary = false;
+    config.is_scalar_b = true;
+    config.scalar_value = scalar;
+
+    return create_elementwise(config, dtype);
+}
+
 // ============================================================================
 // Argument Accessors
 // ============================================================================
@@ -476,6 +542,22 @@ std::string Kernel::summary() const {
         ss << "  Width: " << cfg.width << "\n";
         ss << "  Epsilon: " << cfg.eps << "\n";
         ss << "  Affine: " << (cfg.affine ? "yes" : "no") << "\n";
+    }
+
+    if (op_type_ == KernelOpType::ELEMENTWISE) {
+        const auto& cfg = elementwise_config_;
+        ss << "  Operation: " << elementwise_op_name(cfg.op) << "\n";
+        ss << "  Shape: [";
+        for (size_t i = 0; i < cfg.shape.size(); ++i) {
+            if (i > 0) ss << ", ";
+            ss << cfg.shape[i];
+        }
+        ss << "]\n";
+        ss << "  Total Elements: " << cfg.total_elements() << "\n";
+        ss << "  Is Unary: " << (cfg.is_unary ? "yes" : "no") << "\n";
+        if (cfg.is_scalar_b) {
+            ss << "  Scalar Value: " << cfg.scalar_value << "\n";
+        }
     }
 
     ss << "  Program Size: " << instruction_count() << " operations\n";
@@ -708,6 +790,31 @@ bool Kernel::validate(std::string& error) const {
         }
     }
 
+    // ELEMENTWISE validation
+    if (op_type_ == KernelOpType::ELEMENTWISE) {
+        const auto& cfg = elementwise_config_;
+        if (cfg.shape.empty()) {
+            error = "Elementwise shape must not be empty";
+            return false;
+        }
+        for (Size dim : cfg.shape) {
+            if (dim == 0) {
+                error = "Elementwise shape dimensions must be non-zero";
+                return false;
+            }
+        }
+
+        // Validate argument count:
+        // Binary: A, B, C (3)
+        // Unary: A, C (2)
+        // Scalar: A, C (2) - scalar is embedded in config
+        size_t expected_args = cfg.is_unary || cfg.is_scalar_b ? 2 : 3;
+        if (arguments_.size() < expected_args) {
+            error = "ELEMENTWISE kernel must have at least " + std::to_string(expected_args) + " arguments";
+            return false;
+        }
+    }
+
     error.clear();
     return true;
 }
@@ -774,6 +881,9 @@ Size Kernel::total_flops() const {
     }
     if (op_type_ == KernelOpType::BATCHNORM) {
         return batchnorm_config_.total_flops();
+    }
+    if (op_type_ == KernelOpType::ELEMENTWISE) {
+        return elementwise_config_.total_flops();
     }
     // For other operation types, could return estimates or 0
     return 0;
@@ -1092,6 +1202,35 @@ void Kernel::setup_batchnorm_arguments() {
     arguments_.emplace_back(
         "output", dtype_,
         std::vector<Size>{N, C, H, W},
+        true
+    );
+}
+
+void Kernel::setup_elementwise_arguments() {
+    arguments_.clear();
+
+    const auto& cfg = elementwise_config_;
+
+    // Input A: shape from config
+    arguments_.emplace_back(
+        "A", dtype_,
+        cfg.shape,
+        false
+    );
+
+    // Input B: only for binary operations (not unary, not scalar)
+    if (!cfg.is_unary && !cfg.is_scalar_b) {
+        arguments_.emplace_back(
+            "B", dtype_,
+            cfg.shape,
+            false
+        );
+    }
+
+    // Output C: same shape as input
+    arguments_.emplace_back(
+        "C", dtype_,
+        cfg.shape,
         true
     );
 }

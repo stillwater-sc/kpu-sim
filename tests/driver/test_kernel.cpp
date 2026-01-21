@@ -1882,3 +1882,278 @@ TEST_CASE("BatchNorm arithmetic intensity", "[kernel][batchnorm]") {
     // BatchNorm typically has AI < 10 (it's memory-bound)
     REQUIRE(ai < 10.0);
 }
+
+// ============================================================================
+// Elementwise Kernel Tests
+// ============================================================================
+
+TEST_CASE("ElementwiseConfig structure", "[kernel][elementwise]") {
+    SECTION("Default configuration") {
+        ElementwiseConfig cfg;
+        REQUIRE(cfg.op == ElementwiseOp::ADD);
+        REQUIRE(cfg.shape.size() == 1);
+        REQUIRE(cfg.shape[0] == 1);
+        REQUIRE(cfg.is_unary == false);
+        REQUIRE(cfg.is_scalar_b == false);
+    }
+
+    SECTION("Custom configuration") {
+        ElementwiseConfig cfg;
+        cfg.op = ElementwiseOp::MUL;
+        cfg.shape = {2, 64, 128};
+        cfg.is_unary = false;
+
+        REQUIRE(cfg.total_elements() == 2 * 64 * 128);
+    }
+
+    SECTION("FLOP calculation for simple ops") {
+        ElementwiseConfig cfg;
+        cfg.op = ElementwiseOp::ADD;
+        cfg.shape = {32, 64};
+
+        // ADD is 1 FLOP per element
+        REQUIRE(cfg.total_flops() == 32 * 64);
+    }
+
+    SECTION("FLOP calculation for complex ops") {
+        ElementwiseConfig cfg;
+        cfg.op = ElementwiseOp::EXP;
+        cfg.shape = {32, 64};
+
+        // EXP is ~4 FLOPs per element (approximated)
+        REQUIRE(cfg.total_flops() == 32 * 64 * 4);
+    }
+}
+
+TEST_CASE("Elementwise kernel creation", "[kernel][elementwise]") {
+    SECTION("Binary ADD operation") {
+        std::vector<Size> shape = {2, 64, 128};
+        Kernel kernel = Kernel::create_elementwise(ElementwiseOp::ADD, shape);
+
+        REQUIRE(kernel.op_type() == KernelOpType::ELEMENTWISE);
+        REQUIRE(kernel.dtype() == DataType::FLOAT32);
+        REQUIRE(kernel.elementwise_config().op == ElementwiseOp::ADD);
+        REQUIRE(kernel.elementwise_config().shape == shape);
+        REQUIRE(kernel.elementwise_config().is_unary == false);
+    }
+
+    SECTION("Binary MUL operation (Hadamard product)") {
+        std::vector<Size> shape = {32, 32};
+        Kernel kernel = Kernel::create_elementwise(ElementwiseOp::MUL, shape);
+
+        REQUIRE(kernel.op_type() == KernelOpType::ELEMENTWISE);
+        REQUIRE(kernel.elementwise_config().op == ElementwiseOp::MUL);
+    }
+
+    SECTION("Unary SQRT operation") {
+        std::vector<Size> shape = {128, 256};
+        Kernel kernel = Kernel::create_elementwise_unary(ElementwiseOp::SQRT, shape);
+
+        REQUIRE(kernel.op_type() == KernelOpType::ELEMENTWISE);
+        REQUIRE(kernel.elementwise_config().op == ElementwiseOp::SQRT);
+        REQUIRE(kernel.elementwise_config().is_unary == true);
+    }
+
+    SECTION("Unary EXP operation") {
+        std::vector<Size> shape = {64, 64};
+        Kernel kernel = Kernel::create_elementwise_unary(ElementwiseOp::EXP, shape);
+
+        REQUIRE(kernel.elementwise_config().op == ElementwiseOp::EXP);
+        REQUIRE(kernel.elementwise_config().is_unary == true);
+    }
+
+    SECTION("Scalar MUL operation") {
+        std::vector<Size> shape = {32, 64};
+        float scalar = 2.5f;
+        Kernel kernel = Kernel::create_elementwise_scalar(ElementwiseOp::MUL_SCALAR, shape, scalar);
+
+        REQUIRE(kernel.op_type() == KernelOpType::ELEMENTWISE);
+        REQUIRE(kernel.elementwise_config().op == ElementwiseOp::MUL_SCALAR);
+        REQUIRE(kernel.elementwise_config().is_scalar_b == true);
+        REQUIRE(kernel.elementwise_config().scalar_value == Catch::Approx(2.5f));
+    }
+
+    SECTION("With different data types") {
+        std::vector<Size> shape = {64, 64};
+
+        Kernel kernel_fp16 = Kernel::create_elementwise(ElementwiseOp::ADD, shape, DataType::FLOAT16);
+        REQUIRE(kernel_fp16.dtype() == DataType::FLOAT16);
+
+        Kernel kernel_bf16 = Kernel::create_elementwise(ElementwiseOp::ADD, shape, DataType::BFLOAT16);
+        REQUIRE(kernel_bf16.dtype() == DataType::BFLOAT16);
+    }
+}
+
+TEST_CASE("Elementwise kernel arguments", "[kernel][elementwise]") {
+    SECTION("Binary operation has 3 arguments") {
+        std::vector<Size> shape = {32, 64};
+        Kernel kernel = Kernel::create_elementwise(ElementwiseOp::ADD, shape);
+        const auto& args = kernel.arguments();
+
+        // Binary: A, B, C
+        REQUIRE(args.size() == 3);
+
+        // A: input
+        REQUIRE(args[0].name == "A");
+        REQUIRE(args[0].shape == shape);
+        REQUIRE(args[0].is_output == false);
+
+        // B: input
+        REQUIRE(args[1].name == "B");
+        REQUIRE(args[1].shape == shape);
+        REQUIRE(args[1].is_output == false);
+
+        // C: output
+        REQUIRE(args[2].name == "C");
+        REQUIRE(args[2].shape == shape);
+        REQUIRE(args[2].is_output == true);
+    }
+
+    SECTION("Unary operation has 2 arguments") {
+        std::vector<Size> shape = {64, 128};
+        Kernel kernel = Kernel::create_elementwise_unary(ElementwiseOp::NEG, shape);
+        const auto& args = kernel.arguments();
+
+        // Unary: A, C (no B)
+        REQUIRE(args.size() == 2);
+
+        REQUIRE(args[0].name == "A");
+        REQUIRE(args[0].is_output == false);
+
+        REQUIRE(args[1].name == "C");
+        REQUIRE(args[1].is_output == true);
+    }
+
+    SECTION("Scalar operation has 2 arguments") {
+        std::vector<Size> shape = {32, 32};
+        Kernel kernel = Kernel::create_elementwise_scalar(ElementwiseOp::ADD_SCALAR, shape, 1.0f);
+        const auto& args = kernel.arguments();
+
+        // Scalar: A, C (scalar is embedded in config, not an argument)
+        REQUIRE(args.size() == 2);
+
+        REQUIRE(args[0].name == "A");
+        REQUIRE(args[1].name == "C");
+    }
+}
+
+TEST_CASE("Elementwise kernel validation", "[kernel][elementwise]") {
+    std::string error;
+
+    SECTION("Valid elementwise passes validation") {
+        std::vector<Size> shape = {32, 64};
+        Kernel kernel = Kernel::create_elementwise(ElementwiseOp::ADD, shape);
+        REQUIRE(kernel.validate(error));
+        REQUIRE(error.empty());
+    }
+
+    SECTION("Empty shape fails validation") {
+        ElementwiseConfig cfg;
+        cfg.op = ElementwiseOp::ADD;
+        cfg.shape = {};  // Empty shape
+
+        Kernel kernel = Kernel::create_elementwise(cfg);
+        REQUIRE_FALSE(kernel.validate(error));
+        REQUIRE(error.find("empty") != std::string::npos);
+    }
+
+    SECTION("Zero dimension fails validation") {
+        ElementwiseConfig cfg;
+        cfg.op = ElementwiseOp::ADD;
+        cfg.shape = {32, 0, 64};  // Zero dimension
+
+        Kernel kernel = Kernel::create_elementwise(cfg);
+        REQUIRE_FALSE(kernel.validate(error));
+        REQUIRE(error.find("non-zero") != std::string::npos);
+    }
+}
+
+TEST_CASE("Elementwise kernel summary", "[kernel][elementwise]") {
+    std::vector<Size> shape = {2, 64, 128};
+    Kernel kernel = Kernel::create_elementwise(ElementwiseOp::ADD, shape);
+    std::string summary = kernel.summary();
+
+    // Check that summary contains expected Elementwise information
+    REQUIRE(summary.find("elementwise") != std::string::npos);
+    REQUIRE(summary.find("add") != std::string::npos);
+    REQUIRE(summary.find("2") != std::string::npos);
+    REQUIRE(summary.find("64") != std::string::npos);
+    REQUIRE(summary.find("128") != std::string::npos);
+}
+
+TEST_CASE("Elementwise kernel FLOPs calculation", "[kernel][elementwise]") {
+    SECTION("Simple operations") {
+        std::vector<Size> shape = {32, 64};
+        Kernel kernel = Kernel::create_elementwise(ElementwiseOp::ADD, shape);
+
+        ElementwiseConfig cfg;
+        cfg.op = ElementwiseOp::ADD;
+        cfg.shape = shape;
+
+        REQUIRE(kernel.total_flops() == cfg.total_flops());
+    }
+
+    SECTION("Complex operations") {
+        std::vector<Size> shape = {32, 64};
+        Kernel kernel = Kernel::create_elementwise_unary(ElementwiseOp::EXP, shape);
+
+        ElementwiseConfig cfg;
+        cfg.op = ElementwiseOp::EXP;
+        cfg.shape = shape;
+        cfg.is_unary = true;
+
+        REQUIRE(kernel.total_flops() == cfg.total_flops());
+    }
+}
+
+TEST_CASE("Elementwise all operation types", "[kernel][elementwise]") {
+    std::vector<Size> shape = {16, 16};
+
+    // Binary operations
+    SECTION("SUB operation") {
+        Kernel kernel = Kernel::create_elementwise(ElementwiseOp::SUB, shape);
+        REQUIRE(kernel.elementwise_config().op == ElementwiseOp::SUB);
+    }
+
+    SECTION("DIV operation") {
+        Kernel kernel = Kernel::create_elementwise(ElementwiseOp::DIV, shape);
+        REQUIRE(kernel.elementwise_config().op == ElementwiseOp::DIV);
+    }
+
+    SECTION("MAX operation") {
+        Kernel kernel = Kernel::create_elementwise(ElementwiseOp::MAX, shape);
+        REQUIRE(kernel.elementwise_config().op == ElementwiseOp::MAX);
+    }
+
+    SECTION("MIN operation") {
+        Kernel kernel = Kernel::create_elementwise(ElementwiseOp::MIN, shape);
+        REQUIRE(kernel.elementwise_config().op == ElementwiseOp::MIN);
+    }
+
+    // Unary operations
+    SECTION("NEG operation") {
+        Kernel kernel = Kernel::create_elementwise_unary(ElementwiseOp::NEG, shape);
+        REQUIRE(kernel.elementwise_config().op == ElementwiseOp::NEG);
+    }
+
+    SECTION("ABS operation") {
+        Kernel kernel = Kernel::create_elementwise_unary(ElementwiseOp::ABS, shape);
+        REQUIRE(kernel.elementwise_config().op == ElementwiseOp::ABS);
+    }
+
+    SECTION("LOG operation") {
+        Kernel kernel = Kernel::create_elementwise_unary(ElementwiseOp::LOG, shape);
+        REQUIRE(kernel.elementwise_config().op == ElementwiseOp::LOG);
+    }
+
+    // Scalar operations
+    SECTION("ADD_SCALAR operation") {
+        Kernel kernel = Kernel::create_elementwise_scalar(ElementwiseOp::ADD_SCALAR, shape, 5.0f);
+        REQUIRE(kernel.elementwise_config().op == ElementwiseOp::ADD_SCALAR);
+    }
+
+    SECTION("POW_SCALAR operation") {
+        Kernel kernel = Kernel::create_elementwise_scalar(ElementwiseOp::POW_SCALAR, shape, 2.0f);
+        REQUIRE(kernel.elementwise_config().op == ElementwiseOp::POW_SCALAR);
+    }
+}

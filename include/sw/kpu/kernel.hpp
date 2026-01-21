@@ -4,6 +4,7 @@
 
 #include <sw/kpu/isa/data_movement_isa.hpp>
 #include <sw/kpu/data_types.hpp>
+#include <sw/kpu/resource_api.hpp>  // For ElementwiseOp enum
 #include <sw/concepts.hpp>
 
 #include <string>
@@ -59,6 +60,8 @@ inline const char* kernel_op_type_name(KernelOpType op) {
         default: return "unknown";
     }
 }
+
+// Note: ElementwiseOp enum and elementwise_op_name() are defined in resource_api.hpp
 
 inline const char* pool_type_name(PoolType pt) {
     switch (pt) {
@@ -352,6 +355,68 @@ struct BatchNormConfig {
         }
 
         return flops;
+    }
+};
+
+/**
+ * @brief Elementwise operation configuration
+ *
+ * Implements elementwise operations between tensors:
+ *   C = op(A, B) or C = op(A) for unary operations
+ *
+ * Supports binary ops (add, sub, mul, div, max, min),
+ * unary ops (neg, abs, sqrt, exp, log),
+ * and scalar ops (add_scalar, mul_scalar, pow_scalar).
+ *
+ * Tensors must be broadcastable (same shape or scalar).
+ */
+struct ElementwiseConfig {
+    ElementwiseOp op;              // Operation type
+    std::vector<Size> shape;       // Output tensor shape
+    bool is_unary;                 // True for unary operations (only A input)
+    bool is_scalar_b;              // True if B is a scalar (broadcast)
+    float scalar_value;            // Scalar value for scalar operations
+
+    ElementwiseConfig()
+        : op(ElementwiseOp::ADD), shape{1}, is_unary(false)
+        , is_scalar_b(false), scalar_value(0.0f) {}
+
+    // Total elements in output tensor
+    Size total_elements() const {
+        Size total = 1;
+        for (Size dim : shape) {
+            total *= dim;
+        }
+        return total;
+    }
+
+    // Compute total FLOPs for elementwise operation
+    // Most ops are 1 FLOP per element, some (like exp, log, sqrt) count as more
+    Size total_flops() const {
+        Size total = total_elements();
+
+        switch (op) {
+            case ElementwiseOp::ADD:
+            case ElementwiseOp::SUB:
+            case ElementwiseOp::MUL:
+            case ElementwiseOp::DIV:
+            case ElementwiseOp::MAX:
+            case ElementwiseOp::MIN:
+            case ElementwiseOp::NEG:
+            case ElementwiseOp::ABS:
+            case ElementwiseOp::ADD_SCALAR:
+            case ElementwiseOp::MUL_SCALAR:
+                return total;  // 1 op per element
+
+            case ElementwiseOp::SQRT:
+            case ElementwiseOp::EXP:
+            case ElementwiseOp::LOG:
+            case ElementwiseOp::POW_SCALAR:
+                return total * 4;  // Approximated as 4 ops per element
+
+            default:
+                return total;
+        }
     }
 };
 
@@ -704,6 +769,68 @@ public:
                                    float eps = 1e-5f, bool affine = true,
                                    DataType dtype = DataType::FLOAT32);
 
+    // -----------------------------------------
+    // Elementwise Kernel Creation (v0.5.5)
+    // -----------------------------------------
+
+    /**
+     * @brief Create elementwise operation kernel
+     * @param config Elementwise configuration
+     * @param dtype Data type
+     * @return Compiled kernel
+     *
+     * Elementwise operations apply an operation to each element:
+     *   Binary: C = op(A, B) where A, B have same shape
+     *   Unary: C = op(A)
+     *   Scalar: C = op(A, scalar) where scalar is broadcast
+     *
+     * Arguments (binary):
+     *   - A: input tensor
+     *   - B: input tensor (same shape as A)
+     *   - C: output tensor
+     *
+     * Arguments (unary):
+     *   - A: input tensor
+     *   - C: output tensor
+     */
+    static Kernel create_elementwise(const ElementwiseConfig& config,
+                                     DataType dtype = DataType::FLOAT32);
+
+    /**
+     * @brief Create binary elementwise operation kernel
+     * @param op Operation type (ADD, SUB, MUL, DIV, MAX, MIN)
+     * @param shape Tensor shape
+     * @param dtype Data type
+     * @return Compiled kernel
+     */
+    static Kernel create_elementwise(ElementwiseOp op,
+                                     const std::vector<Size>& shape,
+                                     DataType dtype = DataType::FLOAT32);
+
+    /**
+     * @brief Create unary elementwise operation kernel
+     * @param op Operation type (NEG, ABS, SQRT, EXP, LOG)
+     * @param shape Tensor shape
+     * @param dtype Data type
+     * @return Compiled kernel
+     */
+    static Kernel create_elementwise_unary(ElementwiseOp op,
+                                           const std::vector<Size>& shape,
+                                           DataType dtype = DataType::FLOAT32);
+
+    /**
+     * @brief Create scalar elementwise operation kernel
+     * @param op Operation type (ADD_SCALAR, MUL_SCALAR, POW_SCALAR)
+     * @param shape Tensor shape
+     * @param scalar Scalar value to apply
+     * @param dtype Data type
+     * @return Compiled kernel
+     */
+    static Kernel create_elementwise_scalar(ElementwiseOp op,
+                                            const std::vector<Size>& shape,
+                                            float scalar,
+                                            DataType dtype = DataType::FLOAT32);
+
     // =========================================
     // Metadata Accessors
     // =========================================
@@ -847,6 +974,15 @@ public:
     const BatchNormConfig& batchnorm_config() const { return batchnorm_config_; }
 
     // =========================================
+    // Elementwise Accessors (for ELEMENTWISE kernels)
+    // =========================================
+
+    /**
+     * @brief Get Elementwise configuration (for ELEMENTWISE kernels)
+     */
+    const ElementwiseConfig& elementwise_config() const { return elementwise_config_; }
+
+    // =========================================
     // Program Access
     // =========================================
 
@@ -935,6 +1071,9 @@ private:
     // BatchNorm-specific members
     BatchNormConfig batchnorm_config_;
 
+    // Elementwise-specific members
+    ElementwiseConfig elementwise_config_;
+
     /**
      * @brief Set up arguments for MATMUL operation
      */
@@ -969,6 +1108,11 @@ private:
      * @brief Set up arguments for BATCHNORM operation
      */
     void setup_batchnorm_arguments();
+
+    /**
+     * @brief Set up arguments for ELEMENTWISE operation
+     */
+    void setup_elementwise_arguments();
 };
 
 } // namespace sw::kpu
