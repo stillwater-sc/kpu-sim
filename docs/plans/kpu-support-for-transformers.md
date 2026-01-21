@@ -115,3 +115,37 @@ Verified working:
 
 All three models now run cleanly without spurious NNPACK warnings.
 
+## Detection Infrastructure
+
+Phase 3: Detection Infrastructure - ✅ COMPLETE
+
+All Faster R-CNN neural network components validated on KPU:
+```text
+  ┌───────────────────────────┬───────────┬──────────┐
+  │         Component         │  Status   │ Max Diff │
+  ├───────────────────────────┼───────────┼──────────┤
+  │ Backbone (ResNet50 + FPN) │ ✅ PASSED │ < 1e-4   │
+  ├───────────────────────────┼───────────┼──────────┤
+  │ RPN Head                  │ ✅ PASSED │ < 1e-4   │
+  ├───────────────────────────┼───────────┼──────────┤
+  │ ROI Align                 │ ✅ PASSED │ < 1e-5   │
+  ├───────────────────────────┼───────────┼──────────┤
+  │ Box Predictor             │ ✅ PASSED │ < 1e-4   │
+  ├───────────────────────────┼───────────┼──────────┤
+  │ Interpolate (bilinear)    │ ✅ PASSED │ < 1e-5   │
+  └───────────────────────────┴───────────┴──────────┘
+```
+  New example: examples/torch/fasterrcnn_components.py
+
+Note: Full detection models have dynamic post-processing (NMS, proposal filtering) that runs on CPU. All neural network inference components are fully supported on KPU.
+
+Detection models now supported:
+
+  - Faster R-CNN (ResNet50-FPN)
+  - RetinaNet
+  - SSD300
+  - SSDlite (MobileNetV3)
+  - FCOS
+
+The next priority in the roadmap is "Create model compatibility matrix" for automated testing of each model and documenting operator requirements.
+
