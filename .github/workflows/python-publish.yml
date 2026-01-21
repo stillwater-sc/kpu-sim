@@ -38,7 +38,13 @@ jobs:
         run: |
           # Build the kpu Python package from the python/ directory
           python -m pip install build
-          cd python && python -m build
+          cd python
+
+          # Clean stale build artifacts to prevent naming conflicts
+          rm -rf dist/ build/ *.egg-info/
+
+          # Build fresh
+          python -m build
 
       - name: Upload distributions
         uses: actions/upload-artifact@v4
