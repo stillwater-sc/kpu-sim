@@ -7,6 +7,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-01-20
+
+### Added
+- **Kernel Fusion Support** (`python/kpu/fusion.py`)
+  - `FusionCompiler` - Compiler pass for automatic pattern detection and fusion
+  - `FusionPattern` - Abstract base class for fusion patterns
+  - `MatMulBiasActivation` - Pattern for MatMul + Add (bias) + Activation
+  - `MatMulActivation` - Pattern for MatMul + Activation (no bias)
+  - `FusionGroup` - Represents a group of operations to be fused
+  - `estimate_memory_savings()` - Utility to estimate memory traffic reduction
+
+- **Fused Operation Types** (`python/kpu/graph.py`, `python/kpu/dfx_emitter.py`)
+  - `FUSED_MATMUL_BIAS_RELU` - MatMul + Add + ReLU (~2.8x memory savings)
+  - `FUSED_MATMUL_BIAS_GELU` - MatMul + Add + GELU (~2.8x memory savings)
+  - `FUSED_MATMUL_BIAS_SILU` - MatMul + Add + SiLU (~2.8x memory savings)
+  - `FUSED_MATMUL_RELU` - MatMul + ReLU (~2x memory savings)
+  - `OpType.is_fused()` method to identify fused operations
+
+- **Fused Op Runtime Execution** (`python/kpu/runtime.py`)
+  - Behavioral execution handlers for all fused operation types
+  - Correct numerical output matching unfused computation
+
+- **Fusion Demo and Tests**
+  - `examples/fusion/ffn_fusion.py` - Demo comparing fused/unfused FFN execution
+  - `python/tests/test_fusion.py` - 16 tests for pattern detection, correctness, graph rewriting
+
+### Changed
+- **Compiler** (`python/kpu/compiler.py`)
+  - Fusion enabled by default (`optimize=True`)
+  - Use `@kpu.compile(optimize=False)` to disable fusion
+
+- **Tests** (`python/tests/test_kpu.py`)
+  - Updated graph/DFX generation tests to use `optimize=False` for unfused behavior testing
+
+## [0.5.7] - 2026-01-20
+
 ### Added - 2026-01-20
 - **v0.5.x C++ Kernel Series Complete** (`include/sw/kpu/kernel.hpp`, `src/system/simulator/kernel.cpp`)
   - v0.5.6: Pool2D kernel with `create_pool2d()`, `create_max_pool2d()`, `create_avg_pool2d()`, `create_global_avg_pool2d()`
