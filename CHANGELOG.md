@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added - 2026-01-20
+- **v0.5.x C++ Kernel Series Complete** (`include/sw/kpu/kernel.hpp`, `src/system/simulator/kernel.cpp`)
+  - v0.5.6: Pool2D kernel with `create_pool2d()`, `create_max_pool2d()`, `create_avg_pool2d()`, `create_global_avg_pool2d()`
+  - v0.5.7: Softmax kernel with `create_softmax()`, negative axis indexing, FLOP calculation (8N-2 per softmax)
+  - `Pool2DConfig` struct: pool_type, batch_size, channels, dimensions, kernel size, stride, padding
+  - `SoftmaxConfig` struct: shape, axis, reduction_size(), num_softmax_ops(), total_flops()
+
+- **v0.5.x Validation Test Suite** (`python/tests/test_v05_kernel_validation.py`)
+  - 28 tests validating all v0.5.x kernels (Conv2D, Attention, LayerNorm, RMSNorm, BatchNorm, Elementwise, Pool2D, Softmax)
+  - Correctness tests with numerical verification
+  - TRANSACTIONAL mode access tests
+  - Transformer encoder block integration test
+  - All v0.5.0 roadmap success criteria validated
+
+### Fixed - 2026-01-20
+- **ATTENTION Runtime Handler** (`python/kpu/runtime.py`)
+  - Implemented `DFXOpCode.ATTENTION` handler in behavioral runtime
+  - Multi-head attention with QKV projections, scaled dot-product attention, causal masking, output projection
+  - Enables compiled attention functions to execute in BEHAVIORAL and TRANSACTIONAL modes
+
+### Changed - 2026-01-20
+- **ROADMAP.md** (`docs/ROADMAP.md`)
+  - Updated current status to v0.5.7
+  - Marked all v0.5.0 success criteria as validated
+  - Added kernel completion table (v0.5.0-v0.5.7)
+
 ### Added - 2026-01-16
 - **Python KPU Package** (`python/kpu/`)
   - High-level Python API for KPU simulator with decorator-based compilation
