@@ -948,7 +948,12 @@ class FXToKPUConverter:
             # Convert numpy to torch, execute, convert back
             def to_torch(x):
                 if isinstance(x, np.ndarray):
-                    return torch.from_numpy(x)
+                    t = torch.from_numpy(x)
+                    # Ensure float64 arrays are cast to float32 for consistency
+                    # with model weights (which are typically float32)
+                    if t.dtype == torch.float64:
+                        t = t.float()
+                    return t
                 return x
 
             def from_torch(x):
