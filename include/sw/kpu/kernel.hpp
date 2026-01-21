@@ -421,6 +421,94 @@ struct ElementwiseConfig {
 };
 
 /**
+ * @brief 2D Pooling configuration parameters
+ *
+ * Implements 2D pooling operations (max, average, global average):
+ *   - Max pooling: output[n,c,h,w] = max(input[n,c,h*s:h*s+k, w*s:w*s+k])
+ *   - Avg pooling: output[n,c,h,w] = mean(input[n,c,h*s:h*s+k, w*s:w*s+k])
+ *   - Global avg:  output[n,c,0,0] = mean(input[n,c,:,:])
+ *
+ * Input shape: [N, C, H, W]
+ * Output shape: [N, C, H_out, W_out]
+ */
+struct Pool2DConfig {
+    PoolType pool_type;        // MAX, AVG, or GLOBAL_AVG
+    Size batch_size;           // N: batch size
+    Size channels;             // C: number of channels
+    Size input_height;         // H: input height
+    Size input_width;          // W: input width
+    Size kernel_height;        // K_h: pooling kernel height
+    Size kernel_width;         // K_w: pooling kernel width
+    Size stride_h;             // Stride in height dimension
+    Size stride_w;             // Stride in width dimension
+    Size padding_h;            // Padding in height dimension
+    Size padding_w;            // Padding in width dimension
+
+    Pool2DConfig()
+        : pool_type(PoolType::MAX)
+        , batch_size(1), channels(1)
+        , input_height(1), input_width(1)
+        , kernel_height(2), kernel_width(2)
+        , stride_h(2), stride_w(2)
+        , padding_h(0), padding_w(0) {}
+
+    // Compute output dimensions
+    Size output_height() const {
+        if (pool_type == PoolType::GLOBAL_AVG) return 1;
+        return (input_height + 2 * padding_h - kernel_height) / stride_h + 1;
+    }
+
+    Size output_width() const {
+        if (pool_type == PoolType::GLOBAL_AVG) return 1;
+        return (input_width + 2 * padding_w - kernel_width) / stride_w + 1;
+    }
+
+    // Total elements in input tensor
+    Size input_elements() const {
+        return batch_size * channels * input_height * input_width;
+    }
+
+    // Total elements in output tensor
+    Size output_elements() const {
+        return batch_size * channels * output_height() * output_width();
+    }
+
+    // Window size (elements per pooling operation)
+    Size window_size() const {
+        if (pool_type == PoolType::GLOBAL_AVG) {
+            return input_height * input_width;
+        }
+        return kernel_height * kernel_width;
+    }
+
+    // Compute total FLOPs for pooling operation
+    // Max pooling: (K-1) comparisons per output element
+    // Avg pooling: (K-1) additions + 1 division per output element
+    // Global avg: (H*W-1) additions + 1 division per (N*C) output
+    Size total_flops() const {
+        Size out_elems = output_elements();
+        Size K = window_size();
+
+        switch (pool_type) {
+            case PoolType::MAX:
+                // (K-1) comparisons per output element
+                return out_elems * (K - 1);
+
+            case PoolType::AVG:
+                // (K-1) additions + 1 division per output element
+                return out_elems * K;
+
+            case PoolType::GLOBAL_AVG:
+                // (H*W-1) additions + 1 division per output element
+                return out_elems * K;
+
+            default:
+                return out_elems * (K - 1);
+        }
+    }
+};
+
+/**
  * @brief Kernel argument descriptor
  *
  * Describes an input or output argument to a kernel, including
@@ -831,6 +919,80 @@ public:
                                             float scalar,
                                             DataType dtype = DataType::FLOAT32);
 
+    // -----------------------------------------
+    // Pool2D Kernel Creation (v0.5.6)
+    // -----------------------------------------
+
+    /**
+     * @brief Create 2D pooling kernel
+     * @param config Pool2D configuration
+     * @param dtype Data type
+     * @return Compiled kernel
+     *
+     * Pooling reduces spatial dimensions by taking max or average
+     * over local regions. Commonly used in CNNs for downsampling.
+     *
+     * Input shape: [N, C, H, W]
+     * Output shape: [N, C, H_out, W_out]
+     *
+     * Arguments:
+     *   - input: [N, C, H, W] input tensor
+     *   - output: [N, C, H_out, W_out] output tensor
+     */
+    static Kernel create_pool2d(const Pool2DConfig& config,
+                                DataType dtype = DataType::FLOAT32);
+
+    /**
+     * @brief Create max pooling kernel with explicit parameters
+     * @param batch_size N: batch size
+     * @param channels C: number of channels
+     * @param input_height H: input height
+     * @param input_width W: input width
+     * @param kernel_size K: pooling window size (square)
+     * @param stride Stride (default: same as kernel_size)
+     * @param padding Padding (default: 0)
+     * @param dtype Data type
+     * @return Compiled kernel
+     */
+    static Kernel create_max_pool2d(Size batch_size, Size channels,
+                                    Size input_height, Size input_width,
+                                    Size kernel_size, Size stride = 0, Size padding = 0,
+                                    DataType dtype = DataType::FLOAT32);
+
+    /**
+     * @brief Create average pooling kernel with explicit parameters
+     * @param batch_size N: batch size
+     * @param channels C: number of channels
+     * @param input_height H: input height
+     * @param input_width W: input width
+     * @param kernel_size K: pooling window size (square)
+     * @param stride Stride (default: same as kernel_size)
+     * @param padding Padding (default: 0)
+     * @param dtype Data type
+     * @return Compiled kernel
+     */
+    static Kernel create_avg_pool2d(Size batch_size, Size channels,
+                                    Size input_height, Size input_width,
+                                    Size kernel_size, Size stride = 0, Size padding = 0,
+                                    DataType dtype = DataType::FLOAT32);
+
+    /**
+     * @brief Create global average pooling kernel
+     * @param batch_size N: batch size
+     * @param channels C: number of channels
+     * @param input_height H: input height
+     * @param input_width W: input width
+     * @param dtype Data type
+     * @return Compiled kernel
+     *
+     * Global average pooling reduces each channel to a single value
+     * by averaging all spatial elements. Common before final FC layer.
+     * Output shape: [N, C, 1, 1]
+     */
+    static Kernel create_global_avg_pool2d(Size batch_size, Size channels,
+                                           Size input_height, Size input_width,
+                                           DataType dtype = DataType::FLOAT32);
+
     // =========================================
     // Metadata Accessors
     // =========================================
@@ -983,6 +1145,15 @@ public:
     const ElementwiseConfig& elementwise_config() const { return elementwise_config_; }
 
     // =========================================
+    // Pool2D Accessors (for POOL2D kernels)
+    // =========================================
+
+    /**
+     * @brief Get Pool2D configuration (for POOL2D kernels)
+     */
+    const Pool2DConfig& pool2d_config() const { return pool2d_config_; }
+
+    // =========================================
     // Program Access
     // =========================================
 
@@ -1074,6 +1245,9 @@ private:
     // Elementwise-specific members
     ElementwiseConfig elementwise_config_;
 
+    // Pool2D-specific members
+    Pool2DConfig pool2d_config_;
+
     /**
      * @brief Set up arguments for MATMUL operation
      */
@@ -1113,6 +1287,11 @@ private:
      * @brief Set up arguments for ELEMENTWISE operation
      */
     void setup_elementwise_arguments();
+
+    /**
+     * @brief Set up arguments for POOL2D operation
+     */
+    void setup_pool2d_arguments();
 };
 
 } // namespace sw::kpu

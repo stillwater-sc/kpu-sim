@@ -424,6 +424,102 @@ Kernel Kernel::create_elementwise_scalar(ElementwiseOp op,
 }
 
 // ============================================================================
+// Pool2D Kernel Creation (v0.5.6)
+// ============================================================================
+
+Kernel Kernel::create_pool2d(const Pool2DConfig& config, DataType dtype) {
+    compiler::KernelCompiler compiler;
+
+    // Pool2D is a spatial reduction operation
+    // Use a small matmul as placeholder for the program
+    Size out_elems = config.output_elements();
+    compiler::CompileOptions opts = compiler::CompileOptions::defaults();
+    opts.dtype = dtype;
+    Kernel kernel = compiler.compile_matmul(1, out_elems, 1, opts);
+
+    // Override operation type and config
+    kernel.op_type_ = KernelOpType::POOL2D;
+    kernel.pool2d_config_ = config;
+    kernel.dtype_ = dtype;
+
+    // Generate descriptive name
+    std::ostringstream name;
+    name << pool_type_name(config.pool_type) << "_pool2d_"
+         << config.batch_size << "x" << config.channels << "x"
+         << config.input_height << "x" << config.input_width;
+    if (config.pool_type != PoolType::GLOBAL_AVG) {
+        name << "_k" << config.kernel_height << "x" << config.kernel_width
+             << "_s" << config.stride_h << "_p" << config.padding_h;
+    }
+    kernel.program_.name = name.str();
+
+    // Set up pool2d-specific arguments
+    kernel.setup_pool2d_arguments();
+
+    return kernel;
+}
+
+Kernel Kernel::create_max_pool2d(Size batch_size, Size channels,
+                                 Size input_height, Size input_width,
+                                 Size kernel_size, Size stride, Size padding,
+                                 DataType dtype) {
+    Pool2DConfig config;
+    config.pool_type = PoolType::MAX;
+    config.batch_size = batch_size;
+    config.channels = channels;
+    config.input_height = input_height;
+    config.input_width = input_width;
+    config.kernel_height = kernel_size;
+    config.kernel_width = kernel_size;
+    config.stride_h = (stride == 0) ? kernel_size : stride;  // Default: stride = kernel_size
+    config.stride_w = (stride == 0) ? kernel_size : stride;
+    config.padding_h = padding;
+    config.padding_w = padding;
+
+    return create_pool2d(config, dtype);
+}
+
+Kernel Kernel::create_avg_pool2d(Size batch_size, Size channels,
+                                 Size input_height, Size input_width,
+                                 Size kernel_size, Size stride, Size padding,
+                                 DataType dtype) {
+    Pool2DConfig config;
+    config.pool_type = PoolType::AVG;
+    config.batch_size = batch_size;
+    config.channels = channels;
+    config.input_height = input_height;
+    config.input_width = input_width;
+    config.kernel_height = kernel_size;
+    config.kernel_width = kernel_size;
+    config.stride_h = (stride == 0) ? kernel_size : stride;  // Default: stride = kernel_size
+    config.stride_w = (stride == 0) ? kernel_size : stride;
+    config.padding_h = padding;
+    config.padding_w = padding;
+
+    return create_pool2d(config, dtype);
+}
+
+Kernel Kernel::create_global_avg_pool2d(Size batch_size, Size channels,
+                                        Size input_height, Size input_width,
+                                        DataType dtype) {
+    Pool2DConfig config;
+    config.pool_type = PoolType::GLOBAL_AVG;
+    config.batch_size = batch_size;
+    config.channels = channels;
+    config.input_height = input_height;
+    config.input_width = input_width;
+    // For global avg pool, kernel covers entire spatial dimension
+    config.kernel_height = input_height;
+    config.kernel_width = input_width;
+    config.stride_h = 1;
+    config.stride_w = 1;
+    config.padding_h = 0;
+    config.padding_w = 0;
+
+    return create_pool2d(config, dtype);
+}
+
+// ============================================================================
 // Argument Accessors
 // ============================================================================
 
@@ -558,6 +654,21 @@ std::string Kernel::summary() const {
         if (cfg.is_scalar_b) {
             ss << "  Scalar Value: " << cfg.scalar_value << "\n";
         }
+    }
+
+    if (op_type_ == KernelOpType::POOL2D) {
+        const auto& cfg = pool2d_config_;
+        ss << "  Pool Type: " << pool_type_name(cfg.pool_type) << "\n";
+        ss << "  Input: [" << cfg.batch_size << ", " << cfg.channels
+           << ", " << cfg.input_height << ", " << cfg.input_width << "]\n";
+        if (cfg.pool_type != PoolType::GLOBAL_AVG) {
+            ss << "  Kernel: " << cfg.kernel_height << "x" << cfg.kernel_width << "\n";
+            ss << "  Stride: " << cfg.stride_h << "x" << cfg.stride_w
+               << ", Padding: " << cfg.padding_h << "x" << cfg.padding_w << "\n";
+        }
+        ss << "  Output: [" << cfg.batch_size << ", " << cfg.channels
+           << ", " << cfg.output_height() << ", " << cfg.output_width() << "]\n";
+        ss << "  Window Size: " << cfg.window_size() << " elements\n";
     }
 
     ss << "  Program Size: " << instruction_count() << " operations\n";
@@ -815,6 +926,43 @@ bool Kernel::validate(std::string& error) const {
         }
     }
 
+    // POOL2D validation
+    if (op_type_ == KernelOpType::POOL2D) {
+        const auto& cfg = pool2d_config_;
+        if (cfg.batch_size == 0) {
+            error = "Pool2D batch size must be non-zero";
+            return false;
+        }
+        if (cfg.channels == 0) {
+            error = "Pool2D channels must be non-zero";
+            return false;
+        }
+        if (cfg.input_height == 0 || cfg.input_width == 0) {
+            error = "Pool2D input dimensions must be non-zero";
+            return false;
+        }
+        if (cfg.pool_type != PoolType::GLOBAL_AVG) {
+            if (cfg.kernel_height == 0 || cfg.kernel_width == 0) {
+                error = "Pool2D kernel size must be non-zero";
+                return false;
+            }
+            if (cfg.stride_h == 0 || cfg.stride_w == 0) {
+                error = "Pool2D stride must be non-zero";
+                return false;
+            }
+        }
+        // Validate output dimensions are valid
+        if (cfg.output_height() == 0 || cfg.output_width() == 0) {
+            error = "Pool2D output dimensions would be zero - check kernel/stride/padding";
+            return false;
+        }
+        // Validate argument count: input, output (2)
+        if (arguments_.size() < 2) {
+            error = "POOL2D kernel must have at least 2 arguments (input, output)";
+            return false;
+        }
+    }
+
     error.clear();
     return true;
 }
@@ -884,6 +1032,9 @@ Size Kernel::total_flops() const {
     }
     if (op_type_ == KernelOpType::ELEMENTWISE) {
         return elementwise_config_.total_flops();
+    }
+    if (op_type_ == KernelOpType::POOL2D) {
+        return pool2d_config_.total_flops();
     }
     // For other operation types, could return estimates or 0
     return 0;
@@ -1231,6 +1382,26 @@ void Kernel::setup_elementwise_arguments() {
     arguments_.emplace_back(
         "C", dtype_,
         cfg.shape,
+        true
+    );
+}
+
+void Kernel::setup_pool2d_arguments() {
+    arguments_.clear();
+
+    const auto& cfg = pool2d_config_;
+
+    // Input: [N, C, H, W]
+    arguments_.emplace_back(
+        "input", dtype_,
+        std::vector<Size>{cfg.batch_size, cfg.channels, cfg.input_height, cfg.input_width},
+        false
+    );
+
+    // Output: [N, C, H_out, W_out]
+    arguments_.emplace_back(
+        "output", dtype_,
+        std::vector<Size>{cfg.batch_size, cfg.channels, cfg.output_height(), cfg.output_width()},
         true
     );
 }

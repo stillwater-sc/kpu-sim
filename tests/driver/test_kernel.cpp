@@ -2157,3 +2157,316 @@ TEST_CASE("Elementwise all operation types", "[kernel][elementwise]") {
         REQUIRE(kernel.elementwise_config().op == ElementwiseOp::POW_SCALAR);
     }
 }
+
+// ============================================================================
+// Pool2D Kernel Tests (v0.5.6)
+// ============================================================================
+
+TEST_CASE("Pool2DConfig output dimensions", "[kernel][pool2d]") {
+    SECTION("Max pooling output dimensions") {
+        Pool2DConfig cfg;
+        cfg.pool_type = PoolType::MAX;
+        cfg.batch_size = 1;
+        cfg.channels = 64;
+        cfg.input_height = 32;
+        cfg.input_width = 32;
+        cfg.kernel_height = 2;
+        cfg.kernel_width = 2;
+        cfg.stride_h = 2;
+        cfg.stride_w = 2;
+        cfg.padding_h = 0;
+        cfg.padding_w = 0;
+
+        REQUIRE(cfg.output_height() == 16);
+        REQUIRE(cfg.output_width() == 16);
+    }
+
+    SECTION("With padding") {
+        Pool2DConfig cfg;
+        cfg.pool_type = PoolType::MAX;
+        cfg.batch_size = 1;
+        cfg.channels = 64;
+        cfg.input_height = 32;
+        cfg.input_width = 32;
+        cfg.kernel_height = 3;
+        cfg.kernel_width = 3;
+        cfg.stride_h = 2;
+        cfg.stride_w = 2;
+        cfg.padding_h = 1;
+        cfg.padding_w = 1;
+
+        // (32 + 2*1 - 3) / 2 + 1 = 16
+        REQUIRE(cfg.output_height() == 16);
+        REQUIRE(cfg.output_width() == 16);
+    }
+
+    SECTION("Global average pooling output is 1x1") {
+        Pool2DConfig cfg;
+        cfg.pool_type = PoolType::GLOBAL_AVG;
+        cfg.batch_size = 2;
+        cfg.channels = 128;
+        cfg.input_height = 7;
+        cfg.input_width = 7;
+
+        REQUIRE(cfg.output_height() == 1);
+        REQUIRE(cfg.output_width() == 1);
+        REQUIRE(cfg.output_elements() == 2 * 128 * 1 * 1);
+    }
+}
+
+TEST_CASE("Pool2DConfig FLOPs calculation", "[kernel][pool2d]") {
+    SECTION("Max pooling FLOPs") {
+        Pool2DConfig cfg;
+        cfg.pool_type = PoolType::MAX;
+        cfg.batch_size = 1;
+        cfg.channels = 64;
+        cfg.input_height = 32;
+        cfg.input_width = 32;
+        cfg.kernel_height = 2;
+        cfg.kernel_width = 2;
+        cfg.stride_h = 2;
+        cfg.stride_w = 2;
+
+        // Output: 16x16 = 256 elements per channel
+        // 64 channels = 16384 output elements
+        // Window size = 4, comparisons = 3 per element
+        // FLOPs = 16384 * 3 = 49152
+        REQUIRE(cfg.output_elements() == 1 * 64 * 16 * 16);
+        REQUIRE(cfg.window_size() == 4);
+        REQUIRE(cfg.total_flops() == cfg.output_elements() * (cfg.window_size() - 1));
+    }
+
+    SECTION("Average pooling FLOPs") {
+        Pool2DConfig cfg;
+        cfg.pool_type = PoolType::AVG;
+        cfg.batch_size = 2;
+        cfg.channels = 32;
+        cfg.input_height = 8;
+        cfg.input_width = 8;
+        cfg.kernel_height = 2;
+        cfg.kernel_width = 2;
+        cfg.stride_h = 2;
+        cfg.stride_w = 2;
+
+        // Avg: K ops per element (K-1 adds + 1 div)
+        REQUIRE(cfg.total_flops() == cfg.output_elements() * cfg.window_size());
+    }
+
+    SECTION("Global average pooling FLOPs") {
+        Pool2DConfig cfg;
+        cfg.pool_type = PoolType::GLOBAL_AVG;
+        cfg.batch_size = 1;
+        cfg.channels = 64;
+        cfg.input_height = 7;
+        cfg.input_width = 7;
+
+        // Window size = 7*7 = 49
+        REQUIRE(cfg.window_size() == 49);
+        // Output = 1 * 64 * 1 * 1 = 64
+        REQUIRE(cfg.output_elements() == 64);
+        // FLOPs = 64 * 49
+        REQUIRE(cfg.total_flops() == 64 * 49);
+    }
+}
+
+TEST_CASE("Pool2D kernel creation", "[kernel][pool2d]") {
+    SECTION("Max pooling with config") {
+        Pool2DConfig cfg;
+        cfg.pool_type = PoolType::MAX;
+        cfg.batch_size = 2;
+        cfg.channels = 64;
+        cfg.input_height = 32;
+        cfg.input_width = 32;
+        cfg.kernel_height = 2;
+        cfg.kernel_width = 2;
+        cfg.stride_h = 2;
+        cfg.stride_w = 2;
+
+        Kernel kernel = Kernel::create_pool2d(cfg);
+
+        REQUIRE(kernel.is_valid());
+        REQUIRE(kernel.op_type() == KernelOpType::POOL2D);
+        REQUIRE(kernel.pool2d_config().pool_type == PoolType::MAX);
+        REQUIRE(kernel.pool2d_config().output_height() == 16);
+    }
+
+    SECTION("Max pooling with explicit params") {
+        Kernel kernel = Kernel::create_max_pool2d(2, 64, 32, 32, 2);
+
+        REQUIRE(kernel.is_valid());
+        REQUIRE(kernel.op_type() == KernelOpType::POOL2D);
+        REQUIRE(kernel.pool2d_config().pool_type == PoolType::MAX);
+        REQUIRE(kernel.pool2d_config().stride_h == 2);  // Default: stride = kernel_size
+    }
+
+    SECTION("Average pooling") {
+        Kernel kernel = Kernel::create_avg_pool2d(1, 128, 16, 16, 2, 2, 0);
+
+        REQUIRE(kernel.is_valid());
+        REQUIRE(kernel.pool2d_config().pool_type == PoolType::AVG);
+        REQUIRE(kernel.pool2d_config().output_height() == 8);
+    }
+
+    SECTION("Global average pooling") {
+        Kernel kernel = Kernel::create_global_avg_pool2d(1, 512, 7, 7);
+
+        REQUIRE(kernel.is_valid());
+        REQUIRE(kernel.pool2d_config().pool_type == PoolType::GLOBAL_AVG);
+        REQUIRE(kernel.pool2d_config().output_height() == 1);
+        REQUIRE(kernel.pool2d_config().output_width() == 1);
+    }
+
+    SECTION("With different data types") {
+        Kernel kernel_fp16 = Kernel::create_max_pool2d(1, 64, 16, 16, 2, 2, 0, DataType::FLOAT16);
+        REQUIRE(kernel_fp16.dtype() == DataType::FLOAT16);
+
+        Kernel kernel_bf16 = Kernel::create_avg_pool2d(1, 64, 16, 16, 2, 2, 0, DataType::BFLOAT16);
+        REQUIRE(kernel_bf16.dtype() == DataType::BFLOAT16);
+    }
+}
+
+TEST_CASE("Pool2D kernel arguments", "[kernel][pool2d]") {
+    Kernel kernel = Kernel::create_max_pool2d(2, 64, 32, 32, 2);
+
+    const auto& args = kernel.arguments();
+    REQUIRE(args.size() == 2);
+
+    SECTION("Input argument") {
+        REQUIRE(args[0].name == "input");
+        REQUIRE(args[0].is_output == false);
+        REQUIRE(args[0].shape.size() == 4);
+        REQUIRE(args[0].shape[0] == 2);   // batch
+        REQUIRE(args[0].shape[1] == 64);  // channels
+        REQUIRE(args[0].shape[2] == 32);  // height
+        REQUIRE(args[0].shape[3] == 32);  // width
+    }
+
+    SECTION("Output argument") {
+        REQUIRE(args[1].name == "output");
+        REQUIRE(args[1].is_output == true);
+        REQUIRE(args[1].shape.size() == 4);
+        REQUIRE(args[1].shape[0] == 2);   // batch
+        REQUIRE(args[1].shape[1] == 64);  // channels
+        REQUIRE(args[1].shape[2] == 16);  // height_out
+        REQUIRE(args[1].shape[3] == 16);  // width_out
+    }
+}
+
+TEST_CASE("Pool2D kernel validation", "[kernel][pool2d]") {
+    std::string error;
+
+    SECTION("Valid pool2d passes validation") {
+        Kernel kernel = Kernel::create_max_pool2d(2, 64, 32, 32, 2);
+        REQUIRE(kernel.validate(error));
+    }
+
+    SECTION("Zero batch size fails") {
+        Pool2DConfig cfg;
+        cfg.pool_type = PoolType::MAX;
+        cfg.batch_size = 0;
+        cfg.channels = 64;
+        cfg.input_height = 32;
+        cfg.input_width = 32;
+        cfg.kernel_height = 2;
+        cfg.kernel_width = 2;
+        cfg.stride_h = 2;
+        cfg.stride_w = 2;
+
+        Kernel kernel = Kernel::create_pool2d(cfg);
+        REQUIRE_FALSE(kernel.validate(error));
+        REQUIRE(error.find("batch") != std::string::npos);
+    }
+
+    SECTION("Zero channels fails") {
+        Pool2DConfig cfg;
+        cfg.pool_type = PoolType::MAX;
+        cfg.batch_size = 1;
+        cfg.channels = 0;
+        cfg.input_height = 32;
+        cfg.input_width = 32;
+        cfg.kernel_height = 2;
+        cfg.kernel_width = 2;
+        cfg.stride_h = 2;
+        cfg.stride_w = 2;
+
+        Kernel kernel = Kernel::create_pool2d(cfg);
+        REQUIRE_FALSE(kernel.validate(error));
+        REQUIRE(error.find("channels") != std::string::npos);
+    }
+
+    SECTION("Zero input dimension fails") {
+        Pool2DConfig cfg;
+        cfg.pool_type = PoolType::MAX;
+        cfg.batch_size = 1;
+        cfg.channels = 64;
+        cfg.input_height = 0;
+        cfg.input_width = 32;
+        cfg.kernel_height = 2;
+        cfg.kernel_width = 2;
+        cfg.stride_h = 2;
+        cfg.stride_w = 2;
+
+        Kernel kernel = Kernel::create_pool2d(cfg);
+        REQUIRE_FALSE(kernel.validate(error));
+        REQUIRE(error.find("input") != std::string::npos);
+    }
+}
+
+TEST_CASE("Pool2D kernel summary", "[kernel][pool2d]") {
+    Kernel kernel = Kernel::create_max_pool2d(2, 64, 32, 32, 2);
+    std::string summary = kernel.summary();
+
+    REQUIRE(summary.find("pool2d") != std::string::npos);
+    REQUIRE(summary.find("max") != std::string::npos);
+    REQUIRE(summary.find("Input:") != std::string::npos);
+    REQUIRE(summary.find("Output:") != std::string::npos);
+    REQUIRE(summary.find("Kernel:") != std::string::npos);
+}
+
+TEST_CASE("Pool2D kernel FLOPs", "[kernel][pool2d]") {
+    SECTION("Max pooling FLOPs match config") {
+        Kernel kernel = Kernel::create_max_pool2d(1, 64, 32, 32, 2);
+
+        const auto& cfg = kernel.pool2d_config();
+        REQUIRE(kernel.total_flops() == cfg.total_flops());
+    }
+
+    SECTION("Average pooling FLOPs match config") {
+        Kernel kernel = Kernel::create_avg_pool2d(1, 64, 32, 32, 2);
+
+        const auto& cfg = kernel.pool2d_config();
+        REQUIRE(kernel.total_flops() == cfg.total_flops());
+    }
+
+    SECTION("Global average pooling FLOPs match config") {
+        Kernel kernel = Kernel::create_global_avg_pool2d(1, 512, 7, 7);
+
+        const auto& cfg = kernel.pool2d_config();
+        REQUIRE(kernel.total_flops() == cfg.total_flops());
+    }
+}
+
+TEST_CASE("Pool2D common CNN configurations", "[kernel][pool2d]") {
+    SECTION("VGG-style max pooling (2x2, stride 2)") {
+        Kernel kernel = Kernel::create_max_pool2d(1, 64, 224, 224, 2, 2, 0);
+
+        REQUIRE(kernel.pool2d_config().output_height() == 112);
+        REQUIRE(kernel.pool2d_config().output_width() == 112);
+    }
+
+    SECTION("ResNet-style max pooling (3x3, stride 2, padding 1)") {
+        Kernel kernel = Kernel::create_max_pool2d(1, 64, 112, 112, 3, 2, 1);
+
+        // (112 + 2*1 - 3) / 2 + 1 = 56
+        REQUIRE(kernel.pool2d_config().output_height() == 56);
+        REQUIRE(kernel.pool2d_config().output_width() == 56);
+    }
+
+    SECTION("MobileNet global average pooling") {
+        Kernel kernel = Kernel::create_global_avg_pool2d(1, 1024, 7, 7);
+
+        REQUIRE(kernel.pool2d_config().output_height() == 1);
+        REQUIRE(kernel.pool2d_config().output_width() == 1);
+        REQUIRE(kernel.pool2d_config().output_elements() == 1024);
+    }
+}

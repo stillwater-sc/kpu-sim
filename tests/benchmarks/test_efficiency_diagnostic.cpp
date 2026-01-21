@@ -96,13 +96,13 @@ TEST_CASE("64x64x64 Matmul Efficiency Diagnostic", "[diagnostic][efficiency]") {
     for (const auto& op : ops) {
         Cycle dur = op.end_cycle - op.start_cycle;
         switch (op.resource.type) {
-            case ResourceType::DMA_ENGINE:
+            case sw::kpu::isa::ResourceType::DMA_ENGINE:
                 dma_total += dur; dma_count++; break;
-            case ResourceType::BLOCK_MOVER:
+            case sw::kpu::isa::ResourceType::BLOCK_MOVER:
                 bm_total += dur; bm_count++; break;
-            case ResourceType::STREAMER:
+            case sw::kpu::isa::ResourceType::STREAMER:
                 str_total += dur; str_count++; break;
-            case ResourceType::COMPUTE_FABRIC:
+            case sw::kpu::isa::ResourceType::COMPUTE_FABRIC:
                 comp_total += dur; comp_count++; break;
             default: break;
         }
@@ -138,7 +138,7 @@ TEST_CASE("64x64x64 Matmul Efficiency Diagnostic", "[diagnostic][efficiency]") {
     // Find compute operations and check for gaps
     std::vector<const ScheduledOp*> compute_ops;
     for (const auto& op : ops) {
-        if (op.resource.type == ResourceType::COMPUTE_FABRIC) {
+        if (op.resource.type == sw::kpu::isa::ResourceType::COMPUTE_FABRIC) {
             compute_ops.push_back(&op);
         }
     }
