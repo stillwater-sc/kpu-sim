@@ -22,6 +22,102 @@ TRANSACTIONAL = 1
 CYCLE_ACCURATE = 2
 
 
+# =============================================================================
+# Optimized NumPy implementations for behavioral simulation
+# =============================================================================
+
+def _conv2d_im2col(x_padded: np.ndarray, weight: np.ndarray,
+                   stride: Tuple[int, int], H_out: int, W_out: int) -> np.ndarray:
+    """Optimized Conv2D using im2col + matmul.
+
+    im2col unfolds input patches into columns, enabling convolution via
+    a single matrix multiplication per batch element.
+    """
+    N, C_in, H_padded, W_padded = x_padded.shape
+    C_out, C_in_w, K_h, K_w = weight.shape
+
+    # im2col: Extract patches using stride tricks
+    # Shape: (N, C_in, K_h, K_w, H_out, W_out)
+    shape = (N, C_in, K_h, K_w, H_out, W_out)
+    s = x_padded.strides
+    strides = (s[0], s[1], s[2], s[3], s[2] * stride[0], s[3] * stride[1])
+
+    patches = np.lib.stride_tricks.as_strided(x_padded, shape=shape, strides=strides)
+
+    # Reshape to (N, C_in * K_h * K_w, H_out * W_out)
+    col = patches.reshape(N, C_in * K_h * K_w, H_out * W_out)
+    col = np.ascontiguousarray(col)
+
+    # Reshape weight: (C_out, C_in * K_h * K_w)
+    weight_col = weight.reshape(C_out, -1)
+
+    # Convolution as matmul
+    result = np.zeros((N, C_out, H_out * W_out), dtype=x_padded.dtype)
+    for n in range(N):
+        result[n] = weight_col @ col[n]
+
+    return result.reshape(N, C_out, H_out, W_out)
+
+
+def _maxpool2d_fast(x: np.ndarray, kernel_size: Tuple[int, int],
+                    stride: Tuple[int, int], H_out: int, W_out: int) -> np.ndarray:
+    """Optimized MaxPool2D using stride tricks."""
+    N, C, H_in, W_in = x.shape
+    K_h, K_w = kernel_size
+
+    # Create windowed view
+    shape = (N, C, H_out, W_out, K_h, K_w)
+    s = x.strides
+    strides = (s[0], s[1], s[2] * stride[0], s[3] * stride[1], s[2], s[3])
+
+    windows = np.lib.stride_tricks.as_strided(x, shape=shape, strides=strides)
+    return np.max(windows, axis=(4, 5))
+
+
+def _avgpool2d_fast(x: np.ndarray, kernel_size: Tuple[int, int],
+                    stride: Tuple[int, int], H_out: int, W_out: int) -> np.ndarray:
+    """Optimized AvgPool2D using stride tricks."""
+    N, C, H_in, W_in = x.shape
+    K_h, K_w = kernel_size
+
+    # Create windowed view
+    shape = (N, C, H_out, W_out, K_h, K_w)
+    s = x.strides
+    strides = (s[0], s[1], s[2] * stride[0], s[3] * stride[1], s[2], s[3])
+
+    windows = np.lib.stride_tricks.as_strided(x, shape=shape, strides=strides)
+    return np.mean(windows, axis=(4, 5))
+
+
+def _adaptive_avgpool2d_fast(x: np.ndarray, output_size: Tuple[int, int]) -> np.ndarray:
+    """Optimized AdaptiveAvgPool2D."""
+    N, C, H_in, W_in = x.shape
+    H_out, W_out = output_size
+
+    # Global average pooling (very common)
+    if H_out == 1 and W_out == 1:
+        return np.mean(x, axis=(2, 3), keepdims=True)
+
+    # When output divides input evenly
+    if H_in % H_out == 0 and W_in % W_out == 0:
+        K_h = H_in // H_out
+        K_w = W_in // W_out
+        x_reshaped = x.reshape(N, C, H_out, K_h, W_out, K_w)
+        return np.mean(x_reshaped, axis=(3, 5))
+
+    # General case - vectorized over batch and channel
+    result = np.zeros((N, C, H_out, W_out), dtype=x.dtype)
+    for h_out in range(H_out):
+        for w_out in range(W_out):
+            h_start = (h_out * H_in) // H_out
+            h_end = ((h_out + 1) * H_in) // H_out
+            w_start = (w_out * W_in) // W_out
+            w_end = ((w_out + 1) * W_in) // W_out
+            window = x[:, :, h_start:h_end, w_start:w_end]
+            result[:, :, h_out, w_out] = np.mean(window, axis=(2, 3))
+    return result
+
+
 @dataclass
 class LevelMemoryStats:
     """Per-level memory hierarchy statistics (XUE events).
@@ -382,21 +478,26 @@ class KPURuntime:
             else:
                 x_padded = x
 
-            result = np.zeros((N, C_out, H_out, W_out), dtype=x.dtype)
-            for n in range(N):
-                for c_out in range(C_out):
-                    for h_out in range(H_out):
-                        for w_out in range(W_out):
-                            h_start = h_out * stride[0]
-                            w_start = w_out * stride[1]
-                            val = 0.0
-                            for c_in in range(C_in_per_group):
-                                for kh in range(K_h):
-                                    for kw in range(K_w):
-                                        h_in = h_start + kh * dilation[0]
-                                        w_in = w_start + kw * dilation[1]
-                                        val += x_padded[n, c_in, h_in, w_in] * weight[c_out, c_in, kh, kw]
-                            result[n, c_out, h_out, w_out] = val
+            # Optimized im2col implementation for dilation=1
+            if dilation == (1, 1):
+                result = _conv2d_im2col(x_padded, weight, stride, H_out, W_out)
+            else:
+                # Fallback for dilated convolution
+                result = np.zeros((N, C_out, H_out, W_out), dtype=x.dtype)
+                for n in range(N):
+                    for c_out in range(C_out):
+                        for h_out in range(H_out):
+                            for w_out in range(W_out):
+                                h_start = h_out * stride[0]
+                                w_start = w_out * stride[1]
+                                val = 0.0
+                                for c_in in range(C_in_per_group):
+                                    for kh in range(K_h):
+                                        for kw in range(K_w):
+                                            h_in = h_start + kh * dilation[0]
+                                            w_in = w_start + kw * dilation[1]
+                                            val += x_padded[n, c_in, h_in, w_in] * weight[c_out, c_in, kh, kw]
+                                result[n, c_out, h_out, w_out] = val
 
             # Add bias if provided
             if len(inputs) > 2:
@@ -421,15 +522,7 @@ class KPURuntime:
             else:
                 x_padded = x
 
-            result = np.zeros((N, C, H_out, W_out), dtype=x.dtype)
-            for n in range(N):
-                for c in range(C):
-                    for h_out in range(H_out):
-                        for w_out in range(W_out):
-                            h_start = h_out * stride[0]
-                            w_start = w_out * stride[1]
-                            window = x_padded[n, c, h_start:h_start+K_h, w_start:w_start+K_w]
-                            result[n, c, h_out, w_out] = np.max(window)
+            result = _maxpool2d_fast(x_padded, kernel_size, stride, H_out, W_out)
 
         elif op.opcode == DFXOpCode.AVGPOOL2D:
             x = inputs[0]
@@ -449,33 +542,12 @@ class KPURuntime:
             else:
                 x_padded = x
 
-            result = np.zeros((N, C, H_out, W_out), dtype=x.dtype)
-            for n in range(N):
-                for c in range(C):
-                    for h_out in range(H_out):
-                        for w_out in range(W_out):
-                            h_start = h_out * stride[0]
-                            w_start = w_out * stride[1]
-                            window = x_padded[n, c, h_start:h_start+K_h, w_start:w_start+K_w]
-                            result[n, c, h_out, w_out] = np.mean(window)
+            result = _avgpool2d_fast(x_padded, kernel_size, stride, H_out, W_out)
 
         elif op.opcode == DFXOpCode.ADAPTIVE_AVGPOOL2D:
             x = inputs[0]
             output_size = op.attrs.get('output_size', (1, 1))
-            N, C, H_in, W_in = x.shape
-            H_out, W_out = output_size
-
-            result = np.zeros((N, C, H_out, W_out), dtype=x.dtype)
-            for n in range(N):
-                for c in range(C):
-                    for h_out in range(H_out):
-                        for w_out in range(W_out):
-                            h_start = (h_out * H_in) // H_out
-                            h_end = ((h_out + 1) * H_in) // H_out
-                            w_start = (w_out * W_in) // W_out
-                            w_end = ((w_out + 1) * W_in) // W_out
-                            window = x[n, c, h_start:h_end, w_start:w_end]
-                            result[n, c, h_out, w_out] = np.mean(window)
+            result = _adaptive_avgpool2d_fast(x, output_size)
 
         elif op.opcode == DFXOpCode.CONCAT:
             dim = op.attrs.get('dim', 0)
@@ -594,22 +666,26 @@ class KPURuntime:
             else:
                 x_padded = x
 
-            # Conv2D
-            conv_result = np.zeros((N_batch, C_out, H_out, W_out), dtype=x.dtype)
-            for n in range(N_batch):
-                for c_out in range(C_out):
-                    for h_out in range(H_out):
-                        for w_out in range(W_out):
-                            h_start = h_out * stride[0]
-                            w_start = w_out * stride[1]
-                            val = 0.0
-                            for c_in in range(C_in_per_group):
-                                for kh in range(K_h):
-                                    for kw in range(K_w):
-                                        h_in = h_start + kh * dilation[0]
-                                        w_in = w_start + kw * dilation[1]
-                                        val += x_padded[n, c_in, h_in, w_in] * weight[c_out, c_in, kh, kw]
-                            conv_result[n, c_out, h_out, w_out] = val
+            # Optimized Conv2D using im2col
+            if dilation == (1, 1):
+                conv_result = _conv2d_im2col(x_padded, weight, stride, H_out, W_out)
+            else:
+                # Fallback for dilated convolution
+                conv_result = np.zeros((N_batch, C_out, H_out, W_out), dtype=x.dtype)
+                for n in range(N_batch):
+                    for c_out in range(C_out):
+                        for h_out in range(H_out):
+                            for w_out in range(W_out):
+                                h_start = h_out * stride[0]
+                                w_start = w_out * stride[1]
+                                val = 0.0
+                                for c_in in range(C_in_per_group):
+                                    for kh in range(K_h):
+                                        for kw in range(K_w):
+                                            h_in = h_start + kh * dilation[0]
+                                            w_in = w_start + kw * dilation[1]
+                                            val += x_padded[n, c_in, h_in, w_in] * weight[c_out, c_in, kh, kw]
+                                conv_result[n, c_out, h_out, w_out] = val
 
             # BatchNorm (compute batch statistics)
             mean = np.mean(conv_result, axis=(0, 2, 3), keepdims=True)
@@ -647,26 +723,32 @@ class KPURuntime:
             else:
                 x_padded = x
 
-            # Conv2D + ReLU
-            result = np.zeros((N_batch, C_out, H_out, W_out), dtype=x.dtype)
-            for n in range(N_batch):
-                for c_out in range(C_out):
-                    for h_out in range(H_out):
-                        for w_out in range(W_out):
-                            h_start = h_out * stride[0]
-                            w_start = w_out * stride[1]
-                            val = 0.0
-                            for c_in in range(C_in_per_group):
-                                for kh in range(K_h):
-                                    for kw in range(K_w):
-                                        h_in = h_start + kh * dilation[0]
-                                        w_in = w_start + kw * dilation[1]
-                                        val += x_padded[n, c_in, h_in, w_in] * weight[c_out, c_in, kh, kw]
-                            result[n, c_out, h_out, w_out] = max(val, 0)  # Fused ReLU
+            # Optimized Conv2D using im2col
+            if dilation == (1, 1):
+                conv_result = _conv2d_im2col(x_padded, weight, stride, H_out, W_out)
+            else:
+                # Fallback for dilated convolution
+                conv_result = np.zeros((N_batch, C_out, H_out, W_out), dtype=x.dtype)
+                for n in range(N_batch):
+                    for c_out in range(C_out):
+                        for h_out in range(H_out):
+                            for w_out in range(W_out):
+                                h_start = h_out * stride[0]
+                                w_start = w_out * stride[1]
+                                val = 0.0
+                                for c_in in range(C_in_per_group):
+                                    for kh in range(K_h):
+                                        for kw in range(K_w):
+                                            h_in = h_start + kh * dilation[0]
+                                            w_in = w_start + kw * dilation[1]
+                                            val += x_padded[n, c_in, h_in, w_in] * weight[c_out, c_in, kh, kw]
+                                conv_result[n, c_out, h_out, w_out] = val
 
-            # Add bias if provided
+            # Add bias if provided, then ReLU
             if len(inputs) > 2:
-                result = np.maximum(result + inputs[2].reshape(1, -1, 1, 1), 0)
+                result = np.maximum(conv_result + inputs[2].reshape(1, -1, 1, 1), 0)
+            else:
+                result = np.maximum(conv_result, 0)
 
         elif op.opcode == DFXOpCode.ATTENTION:
             # Multi-head attention with QKV projections

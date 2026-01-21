@@ -503,17 +503,20 @@ class FXToKPUConverter:
         kwargs = dict(node.kwargs)
         kernel_size = node.args[1] if len(node.args) > 1 else kwargs.get('kernel_size', 2)
         stride = node.args[2] if len(node.args) > 2 else kwargs.get('stride', kernel_size)
+        padding = node.args[3] if len(node.args) > 3 else kwargs.get('padding', 0)
 
         if isinstance(kernel_size, int):
             kernel_size = (kernel_size, kernel_size)
         if isinstance(stride, int):
             stride = (stride, stride)
+        if isinstance(padding, int):
+            padding = (padding, padding)
 
         input_name = self._get_arg_name(node.args[0])
 
         def op_fn(tensors, params):
             x = tensors[input_name]
-            return self._numpy_max_pool2d(x, kernel_size, stride)
+            return self._numpy_max_pool2d(x, kernel_size, stride, padding)
 
         self.ops.append(('max_pool2d', op_fn, [input_name], node.name))
         self.env[node.name] = KPUValue(name=node.name)
@@ -522,17 +525,20 @@ class FXToKPUConverter:
         """Emit max pooling from module."""
         kernel_size = module.kernel_size
         stride = module.stride if module.stride else kernel_size
+        padding = module.padding
 
         if isinstance(kernel_size, int):
             kernel_size = (kernel_size, kernel_size)
         if isinstance(stride, int):
             stride = (stride, stride)
+        if isinstance(padding, int):
+            padding = (padding, padding)
 
         input_name = self._get_arg_name(node.args[0])
 
         def op_fn(tensors, params):
             x = tensors[input_name]
-            return self._numpy_max_pool2d(x, kernel_size, stride)
+            return self._numpy_max_pool2d(x, kernel_size, stride, padding)
 
         self.ops.append(('max_pool2d', op_fn, [input_name], node.name))
         self.env[node.name] = KPUValue(name=node.name)
@@ -607,14 +613,19 @@ class FXToKPUConverter:
         self.env[node.name] = KPUValue(name=node.name)
 
     def _emit_batch_norm(self, node: 'fx.Node'):
-        """Emit batch normalization (inference mode)."""
-        # For inference, BN is: y = (x - mean) / sqrt(var + eps) * weight + bias
+        """Emit batch normalization (inference mode).
+
+        F.batch_norm signature:
+            batch_norm(input, running_mean, running_var, weight=None, bias=None,
+                       training=False, momentum=0.1, eps=1e-05)
+        """
         def op_fn(tensors, params):
             x = self._resolve_value(node.args[0], tensors, params)
-            weight = self._resolve_value(node.args[1], tensors, params) if len(node.args) > 1 else None
-            bias = self._resolve_value(node.args[2], tensors, params) if len(node.args) > 2 else None
-            running_mean = self._resolve_value(node.args[3], tensors, params) if len(node.args) > 3 else None
-            running_var = self._resolve_value(node.args[4], tensors, params) if len(node.args) > 4 else None
+            # F.batch_norm: args[1]=running_mean, args[2]=running_var, args[3]=weight, args[4]=bias
+            running_mean = self._resolve_value(node.args[1], tensors, params) if len(node.args) > 1 else None
+            running_var = self._resolve_value(node.args[2], tensors, params) if len(node.args) > 2 else None
+            weight = self._resolve_value(node.args[3], tensors, params) if len(node.args) > 3 else None
+            bias = self._resolve_value(node.args[4], tensors, params) if len(node.args) > 4 else None
             eps = node.kwargs.get('eps', 1e-5)
 
             if running_mean is not None and running_var is not None:
@@ -622,7 +633,7 @@ class FXToKPUConverter:
                 mean = running_mean.reshape(1, -1, 1, 1)
                 var = running_var.reshape(1, -1, 1, 1)
             else:
-                # Compute batch stats
+                # Compute batch stats (training mode fallback)
                 mean = np.mean(x, axis=(0, 2, 3), keepdims=True)
                 var = np.var(x, axis=(0, 2, 3), keepdims=True)
 
@@ -968,13 +979,18 @@ class FXToKPUConverter:
                        bias: Optional[np.ndarray],
                        stride: Tuple[int, int],
                        padding: Tuple[int, int]) -> np.ndarray:
-        """NumPy implementation of 2D convolution."""
+        """NumPy implementation of 2D convolution using im2col for performance.
+
+        im2col unfolds input patches into columns, enabling convolution via
+        a single matrix multiplication. This is much faster than nested loops.
+        """
         N, C_in, H_in, W_in = x.shape
         C_out, C_in_w, K_h, K_w = weight.shape
 
         H_out = (H_in + 2 * padding[0] - K_h) // stride[0] + 1
         W_out = (W_in + 2 * padding[1] - K_w) // stride[1] + 1
 
+        # Pad input if needed
         if padding[0] > 0 or padding[1] > 0:
             x_padded = np.pad(x, ((0, 0), (0, 0),
                                   (padding[0], padding[0]),
@@ -982,82 +998,145 @@ class FXToKPUConverter:
         else:
             x_padded = x
 
-        result = np.zeros((N, C_out, H_out, W_out), dtype=x.dtype)
+        # im2col: Extract patches and reshape for matmul
+        # Output shape: (N, C_in * K_h * K_w, H_out * W_out)
+        col = self._im2col(x_padded, K_h, K_w, stride, H_out, W_out)
+
+        # Reshape weight: (C_out, C_in * K_h * K_w)
+        weight_col = weight.reshape(C_out, -1)
+
+        # Convolution as matmul: (C_out, C_in*K*K) @ (N, C_in*K*K, H_out*W_out)
+        # Reshape for batch matmul: result is (N, C_out, H_out * W_out)
+        result = np.zeros((N, C_out, H_out * W_out), dtype=x.dtype)
         for n in range(N):
-            for c_out in range(C_out):
-                for h_out in range(H_out):
-                    for w_out in range(W_out):
-                        h_start = h_out * stride[0]
-                        w_start = w_out * stride[1]
-                        val = 0.0
-                        for c_in in range(C_in_w):
-                            for kh in range(K_h):
-                                for kw in range(K_w):
-                                    val += x_padded[n, c_in, h_start + kh, w_start + kw] * weight[c_out, c_in, kh, kw]
-                        result[n, c_out, h_out, w_out] = val
+            result[n] = weight_col @ col[n]
+
+        # Reshape to (N, C_out, H_out, W_out)
+        result = result.reshape(N, C_out, H_out, W_out)
 
         if bias is not None:
             result = result + bias.reshape(1, -1, 1, 1)
 
         return result
 
+    def _im2col(self, x: np.ndarray, K_h: int, K_w: int,
+                stride: Tuple[int, int], H_out: int, W_out: int) -> np.ndarray:
+        """Extract image patches into columns for efficient convolution.
+
+        Args:
+            x: Input tensor (N, C, H, W) - already padded
+            K_h, K_w: Kernel dimensions
+            stride: Stride tuple
+            H_out, W_out: Output spatial dimensions
+
+        Returns:
+            col: (N, C * K_h * K_w, H_out * W_out)
+        """
+        N, C, H, W = x.shape
+
+        # Use stride tricks for efficient patch extraction
+        # Shape of output indices
+        shape = (N, C, K_h, K_w, H_out, W_out)
+
+        # Compute strides for the view
+        s = x.strides
+        strides = (s[0], s[1], s[2], s[3], s[2] * stride[0], s[3] * stride[1])
+
+        # Create view of patches
+        patches = np.lib.stride_tricks.as_strided(x, shape=shape, strides=strides)
+
+        # Reshape to (N, C * K_h * K_w, H_out * W_out)
+        col = patches.reshape(N, C * K_h * K_w, H_out * W_out)
+
+        # Need to make contiguous copy since as_strided returns a view
+        return np.ascontiguousarray(col)
+
     def _numpy_max_pool2d(self, x: np.ndarray,
                           kernel_size: Tuple[int, int],
-                          stride: Tuple[int, int]) -> np.ndarray:
-        """NumPy implementation of max pooling."""
+                          stride: Tuple[int, int],
+                          padding: Tuple[int, int] = (0, 0)) -> np.ndarray:
+        """NumPy implementation of max pooling using stride tricks."""
         N, C, H_in, W_in = x.shape
         K_h, K_w = kernel_size
+
+        # Apply padding if needed
+        if padding[0] > 0 or padding[1] > 0:
+            x = np.pad(x, ((0, 0), (0, 0),
+                          (padding[0], padding[0]),
+                          (padding[1], padding[1])),
+                       mode='constant', constant_values=-np.inf)
+            H_in = x.shape[2]
+            W_in = x.shape[3]
+
         H_out = (H_in - K_h) // stride[0] + 1
         W_out = (W_in - K_w) // stride[1] + 1
 
-        result = np.zeros((N, C, H_out, W_out), dtype=x.dtype)
-        for n in range(N):
-            for c in range(C):
-                for h_out in range(H_out):
-                    for w_out in range(W_out):
-                        h_start = h_out * stride[0]
-                        w_start = w_out * stride[1]
-                        window = x[n, c, h_start:h_start+K_h, w_start:w_start+K_w]
-                        result[n, c, h_out, w_out] = np.max(window)
+        # Use stride tricks to create a view of all windows
+        # Shape: (N, C, H_out, W_out, K_h, K_w)
+        shape = (N, C, H_out, W_out, K_h, K_w)
+        s = x.strides
+        strides = (s[0], s[1], s[2] * stride[0], s[3] * stride[1], s[2], s[3])
+
+        windows = np.lib.stride_tricks.as_strided(x, shape=shape, strides=strides)
+
+        # Max over the last two dimensions (kernel dims)
+        result = np.max(windows, axis=(4, 5))
         return result
 
     def _numpy_avg_pool2d(self, x: np.ndarray,
                           kernel_size: Tuple[int, int],
                           stride: Tuple[int, int]) -> np.ndarray:
-        """NumPy implementation of average pooling."""
+        """NumPy implementation of average pooling using stride tricks."""
         N, C, H_in, W_in = x.shape
         K_h, K_w = kernel_size
         H_out = (H_in - K_h) // stride[0] + 1
         W_out = (W_in - K_w) // stride[1] + 1
 
-        result = np.zeros((N, C, H_out, W_out), dtype=x.dtype)
-        for n in range(N):
-            for c in range(C):
-                for h_out in range(H_out):
-                    for w_out in range(W_out):
-                        h_start = h_out * stride[0]
-                        w_start = w_out * stride[1]
-                        window = x[n, c, h_start:h_start+K_h, w_start:w_start+K_w]
-                        result[n, c, h_out, w_out] = np.mean(window)
+        # Use stride tricks to create a view of all windows
+        # Shape: (N, C, H_out, W_out, K_h, K_w)
+        shape = (N, C, H_out, W_out, K_h, K_w)
+        s = x.strides
+        strides = (s[0], s[1], s[2] * stride[0], s[3] * stride[1], s[2], s[3])
+
+        windows = np.lib.stride_tricks.as_strided(x, shape=shape, strides=strides)
+
+        # Mean over the last two dimensions (kernel dims)
+        result = np.mean(windows, axis=(4, 5))
         return result
 
     def _numpy_adaptive_avg_pool2d(self, x: np.ndarray,
                                     output_size: Tuple[int, int]) -> np.ndarray:
-        """NumPy implementation of adaptive average pooling."""
+        """NumPy implementation of adaptive average pooling.
+
+        Optimized for common case of global average pooling (output_size=1,1).
+        """
         N, C, H_in, W_in = x.shape
         H_out, W_out = output_size
 
+        # Special case: global average pooling (very common in CNNs)
+        if H_out == 1 and W_out == 1:
+            return np.mean(x, axis=(2, 3), keepdims=True)
+
+        # General case: compute adaptive kernel sizes
+        # When output divides input evenly, use stride tricks
+        if H_in % H_out == 0 and W_in % W_out == 0:
+            K_h = H_in // H_out
+            K_w = W_in // W_out
+            # Reshape and mean
+            x_reshaped = x.reshape(N, C, H_out, K_h, W_out, K_w)
+            return np.mean(x_reshaped, axis=(3, 5))
+
+        # Non-uniform case: vectorize over batch and channel
         result = np.zeros((N, C, H_out, W_out), dtype=x.dtype)
-        for n in range(N):
-            for c in range(C):
-                for h_out in range(H_out):
-                    for w_out in range(W_out):
-                        h_start = (h_out * H_in) // H_out
-                        h_end = ((h_out + 1) * H_in) // H_out
-                        w_start = (w_out * W_in) // W_out
-                        w_end = ((w_out + 1) * W_in) // W_out
-                        window = x[n, c, h_start:h_end, w_start:w_end]
-                        result[n, c, h_out, w_out] = np.mean(window)
+        for h_out in range(H_out):
+            for w_out in range(W_out):
+                h_start = (h_out * H_in) // H_out
+                h_end = ((h_out + 1) * H_in) // H_out
+                w_start = (w_out * W_in) // W_out
+                w_end = ((w_out + 1) * W_in) // W_out
+                # Vectorize over N and C
+                window = x[:, :, h_start:h_end, w_start:w_end]
+                result[:, :, h_out, w_out] = np.mean(window, axis=(2, 3))
         return result
 
     # --- Helpers ---
