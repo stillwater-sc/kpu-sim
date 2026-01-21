@@ -2470,3 +2470,217 @@ TEST_CASE("Pool2D common CNN configurations", "[kernel][pool2d]") {
         REQUIRE(kernel.pool2d_config().output_elements() == 1024);
     }
 }
+
+// ============================================================================
+// Softmax Kernel Tests (v0.5.7)
+// ============================================================================
+
+TEST_CASE("SoftmaxConfig dimensions", "[kernel][softmax]") {
+    SECTION("Basic shape and axis") {
+        SoftmaxConfig cfg({32, 64}, -1);
+
+        REQUIRE(cfg.total_elements() == 32 * 64);
+        REQUIRE(cfg.normalized_axis() == 1);
+        REQUIRE(cfg.reduction_size() == 64);
+        REQUIRE(cfg.num_softmax_ops() == 32);
+    }
+
+    SECTION("Negative axis conversion") {
+        SoftmaxConfig cfg({2, 4, 8, 16}, -2);
+
+        REQUIRE(cfg.normalized_axis() == 2);
+        REQUIRE(cfg.reduction_size() == 8);
+        REQUIRE(cfg.num_softmax_ops() == 2 * 4 * 16);
+    }
+
+    SECTION("First axis") {
+        SoftmaxConfig cfg({100, 10}, 0);
+
+        REQUIRE(cfg.normalized_axis() == 0);
+        REQUIRE(cfg.reduction_size() == 100);
+        REQUIRE(cfg.num_softmax_ops() == 10);
+    }
+
+    SECTION("3D tensor last axis (attention scores)") {
+        // Attention: [batch, seq, seq]
+        SoftmaxConfig cfg({4, 128, 128}, -1);
+
+        REQUIRE(cfg.total_elements() == 4 * 128 * 128);
+        REQUIRE(cfg.reduction_size() == 128);
+        REQUIRE(cfg.num_softmax_ops() == 4 * 128);
+    }
+}
+
+TEST_CASE("SoftmaxConfig FLOPs calculation", "[kernel][softmax]") {
+    SECTION("Classification output layer") {
+        // Batch of 32, 10 classes
+        SoftmaxConfig cfg({32, 10}, -1);
+
+        // Per row: (N-1) + N + 4*N + (N-1) + N = 8*N - 2
+        // For N=10: 78 ops per row, 32 rows = 2496
+        Size expected_per_row = (10 - 1) + 10 + 4 * 10 + (10 - 1) + 10;
+        REQUIRE(expected_per_row == 78);
+        REQUIRE(cfg.total_flops() == 32 * expected_per_row);
+    }
+
+    SECTION("Large vocabulary softmax") {
+        // Batch of 1, 50000 vocabulary size
+        SoftmaxConfig cfg({1, 50000}, -1);
+
+        Size expected_per_row = (50000 - 1) + 50000 + 4 * 50000 + (50000 - 1) + 50000;
+        REQUIRE(cfg.total_flops() == expected_per_row);
+    }
+}
+
+TEST_CASE("Softmax kernel creation", "[kernel][softmax]") {
+    SECTION("With config") {
+        SoftmaxConfig cfg({32, 100}, -1);
+        Kernel kernel = Kernel::create_softmax(cfg);
+
+        REQUIRE(kernel.is_valid());
+        REQUIRE(kernel.op_type() == KernelOpType::SOFTMAX);
+        REQUIRE(kernel.softmax_config().shape.size() == 2);
+        REQUIRE(kernel.softmax_config().axis == -1);
+    }
+
+    SECTION("With explicit shape") {
+        Kernel kernel = Kernel::create_softmax({64, 10}, -1);
+
+        REQUIRE(kernel.is_valid());
+        REQUIRE(kernel.op_type() == KernelOpType::SOFTMAX);
+        REQUIRE(kernel.softmax_config().reduction_size() == 10);
+    }
+
+    SECTION("Different axis values") {
+        Kernel kernel0 = Kernel::create_softmax({32, 64}, 0);
+        REQUIRE(kernel0.softmax_config().normalized_axis() == 0);
+
+        Kernel kernel1 = Kernel::create_softmax({32, 64}, 1);
+        REQUIRE(kernel1.softmax_config().normalized_axis() == 1);
+
+        Kernel kernel_neg = Kernel::create_softmax({32, 64}, -1);
+        REQUIRE(kernel_neg.softmax_config().normalized_axis() == 1);
+    }
+
+    SECTION("With different data types") {
+        Kernel kernel_fp16 = Kernel::create_softmax({32, 100}, -1, DataType::FLOAT16);
+        REQUIRE(kernel_fp16.dtype() == DataType::FLOAT16);
+
+        Kernel kernel_bf16 = Kernel::create_softmax({32, 100}, -1, DataType::BFLOAT16);
+        REQUIRE(kernel_bf16.dtype() == DataType::BFLOAT16);
+    }
+}
+
+TEST_CASE("Softmax kernel arguments", "[kernel][softmax]") {
+    Kernel kernel = Kernel::create_softmax({32, 100}, -1);
+
+    const auto& args = kernel.arguments();
+    REQUIRE(args.size() == 2);
+
+    SECTION("Input argument") {
+        REQUIRE(args[0].name == "input");
+        REQUIRE(args[0].is_output == false);
+        REQUIRE(args[0].shape.size() == 2);
+        REQUIRE(args[0].shape[0] == 32);
+        REQUIRE(args[0].shape[1] == 100);
+    }
+
+    SECTION("Output argument") {
+        REQUIRE(args[1].name == "output");
+        REQUIRE(args[1].is_output == true);
+        REQUIRE(args[1].shape.size() == 2);
+        REQUIRE(args[1].shape[0] == 32);
+        REQUIRE(args[1].shape[1] == 100);
+    }
+}
+
+TEST_CASE("Softmax kernel validation", "[kernel][softmax]") {
+    std::string error;
+
+    SECTION("Valid softmax passes validation") {
+        Kernel kernel = Kernel::create_softmax({32, 100}, -1);
+        REQUIRE(kernel.validate(error));
+    }
+
+    SECTION("Empty shape fails validation") {
+        SoftmaxConfig cfg;
+        cfg.shape = {};
+        cfg.axis = -1;
+
+        Kernel kernel = Kernel::create_softmax(cfg);
+        REQUIRE_FALSE(kernel.validate(error));
+        REQUIRE(error.find("empty") != std::string::npos);
+    }
+
+    SECTION("Zero dimension fails validation") {
+        SoftmaxConfig cfg;
+        cfg.shape = {32, 0, 64};
+        cfg.axis = -1;
+
+        Kernel kernel = Kernel::create_softmax(cfg);
+        REQUIRE_FALSE(kernel.validate(error));
+        REQUIRE(error.find("non-zero") != std::string::npos);
+    }
+
+    SECTION("Out of range axis fails validation") {
+        SoftmaxConfig cfg;
+        cfg.shape = {32, 64};
+        cfg.axis = 5;  // Out of range for 2D tensor
+
+        Kernel kernel = Kernel::create_softmax(cfg);
+        REQUIRE_FALSE(kernel.validate(error));
+        REQUIRE(error.find("range") != std::string::npos);
+    }
+}
+
+TEST_CASE("Softmax kernel summary", "[kernel][softmax]") {
+    Kernel kernel = Kernel::create_softmax({32, 100}, -1);
+    std::string summary = kernel.summary();
+
+    REQUIRE(summary.find("softmax") != std::string::npos);
+    REQUIRE(summary.find("Shape:") != std::string::npos);
+    REQUIRE(summary.find("Axis:") != std::string::npos);
+    REQUIRE(summary.find("Reduction Size:") != std::string::npos);
+}
+
+TEST_CASE("Softmax kernel FLOPs", "[kernel][softmax]") {
+    SECTION("FLOPs match config") {
+        Kernel kernel = Kernel::create_softmax({32, 100}, -1);
+
+        const auto& cfg = kernel.softmax_config();
+        REQUIRE(kernel.total_flops() == cfg.total_flops());
+    }
+
+    SECTION("3D attention softmax") {
+        Kernel kernel = Kernel::create_softmax({4, 128, 128}, -1);
+
+        const auto& cfg = kernel.softmax_config();
+        REQUIRE(kernel.total_flops() == cfg.total_flops());
+    }
+}
+
+TEST_CASE("Softmax common use cases", "[kernel][softmax]") {
+    SECTION("Image classification (batch, classes)") {
+        // ResNet output: 64 batch, 1000 classes
+        Kernel kernel = Kernel::create_softmax({64, 1000}, -1);
+
+        REQUIRE(kernel.softmax_config().reduction_size() == 1000);
+        REQUIRE(kernel.softmax_config().num_softmax_ops() == 64);
+    }
+
+    SECTION("Transformer attention (batch, heads, seq, seq)") {
+        // Attention scores: batch=2, heads=8, seq=512
+        Kernel kernel = Kernel::create_softmax({2, 8, 512, 512}, -1);
+
+        REQUIRE(kernel.softmax_config().reduction_size() == 512);
+        REQUIRE(kernel.softmax_config().num_softmax_ops() == 2 * 8 * 512);
+    }
+
+    SECTION("Language model output (batch, seq, vocab)") {
+        // GPT-2 style: batch=1, seq=1024, vocab=50257
+        Kernel kernel = Kernel::create_softmax({1, 1024, 50257}, -1);
+
+        REQUIRE(kernel.softmax_config().reduction_size() == 50257);
+        REQUIRE(kernel.softmax_config().num_softmax_ops() == 1 * 1024);
+    }
+}

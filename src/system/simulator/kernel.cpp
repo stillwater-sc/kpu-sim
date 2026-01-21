@@ -520,6 +520,47 @@ Kernel Kernel::create_global_avg_pool2d(Size batch_size, Size channels,
 }
 
 // ============================================================================
+// Softmax Kernel Creation (v0.5.7)
+// ============================================================================
+
+Kernel Kernel::create_softmax(const SoftmaxConfig& config, DataType dtype) {
+    compiler::KernelCompiler compiler;
+
+    // Softmax is a reduction operation - use small matmul as placeholder
+    Size total = config.total_elements();
+    compiler::CompileOptions opts = compiler::CompileOptions::defaults();
+    opts.dtype = dtype;
+    Kernel kernel = compiler.compile_matmul(1, total, 1, opts);
+
+    // Override operation type and config
+    kernel.op_type_ = KernelOpType::SOFTMAX;
+    kernel.softmax_config_ = config;
+    kernel.dtype_ = dtype;
+
+    // Generate descriptive name
+    std::ostringstream name;
+    name << "softmax_";
+    for (size_t i = 0; i < config.shape.size(); ++i) {
+        if (i > 0) name << "x";
+        name << config.shape[i];
+    }
+    name << "_axis" << config.axis;
+    kernel.program_.name = name.str();
+
+    // Set up softmax-specific arguments
+    kernel.setup_softmax_arguments();
+
+    return kernel;
+}
+
+Kernel Kernel::create_softmax(const std::vector<Size>& shape,
+                              int axis,
+                              DataType dtype) {
+    SoftmaxConfig config(shape, axis);
+    return create_softmax(config, dtype);
+}
+
+// ============================================================================
 // Argument Accessors
 // ============================================================================
 
@@ -669,6 +710,19 @@ std::string Kernel::summary() const {
         ss << "  Output: [" << cfg.batch_size << ", " << cfg.channels
            << ", " << cfg.output_height() << ", " << cfg.output_width() << "]\n";
         ss << "  Window Size: " << cfg.window_size() << " elements\n";
+    }
+
+    if (op_type_ == KernelOpType::SOFTMAX) {
+        const auto& cfg = softmax_config_;
+        ss << "  Shape: [";
+        for (size_t i = 0; i < cfg.shape.size(); ++i) {
+            if (i > 0) ss << ", ";
+            ss << cfg.shape[i];
+        }
+        ss << "]\n";
+        ss << "  Axis: " << cfg.axis << " (normalized: " << cfg.normalized_axis() << ")\n";
+        ss << "  Reduction Size: " << cfg.reduction_size() << "\n";
+        ss << "  Num Softmax Ops: " << cfg.num_softmax_ops() << "\n";
     }
 
     ss << "  Program Size: " << instruction_count() << " operations\n";
@@ -963,6 +1017,32 @@ bool Kernel::validate(std::string& error) const {
         }
     }
 
+    // SOFTMAX validation
+    if (op_type_ == KernelOpType::SOFTMAX) {
+        const auto& cfg = softmax_config_;
+        if (cfg.shape.empty()) {
+            error = "Softmax shape must not be empty";
+            return false;
+        }
+        for (Size dim : cfg.shape) {
+            if (dim == 0) {
+                error = "Softmax shape dimensions must be non-zero";
+                return false;
+            }
+        }
+        // Validate axis is in range
+        int ndim = static_cast<int>(cfg.shape.size());
+        if (cfg.axis < -ndim || cfg.axis >= ndim) {
+            error = "Softmax axis out of range";
+            return false;
+        }
+        // Validate argument count: input, output (2)
+        if (arguments_.size() < 2) {
+            error = "SOFTMAX kernel must have at least 2 arguments (input, output)";
+            return false;
+        }
+    }
+
     error.clear();
     return true;
 }
@@ -1035,6 +1115,9 @@ Size Kernel::total_flops() const {
     }
     if (op_type_ == KernelOpType::POOL2D) {
         return pool2d_config_.total_flops();
+    }
+    if (op_type_ == KernelOpType::SOFTMAX) {
+        return softmax_config_.total_flops();
     }
     // For other operation types, could return estimates or 0
     return 0;
@@ -1402,6 +1485,26 @@ void Kernel::setup_pool2d_arguments() {
     arguments_.emplace_back(
         "output", dtype_,
         std::vector<Size>{cfg.batch_size, cfg.channels, cfg.output_height(), cfg.output_width()},
+        true
+    );
+}
+
+void Kernel::setup_softmax_arguments() {
+    arguments_.clear();
+
+    const auto& cfg = softmax_config_;
+
+    // Input: shape from config
+    arguments_.emplace_back(
+        "input", dtype_,
+        cfg.shape,
+        false
+    );
+
+    // Output: same shape as input
+    arguments_.emplace_back(
+        "output", dtype_,
+        cfg.shape,
         true
     );
 }

@@ -509,6 +509,77 @@ struct Pool2DConfig {
 };
 
 /**
+ * @brief Softmax configuration parameters
+ *
+ * Implements numerically stable softmax:
+ *   softmax(x)_i = exp(x_i - max(x)) / sum(exp(x_j - max(x)))
+ *
+ * The softmax is computed along a specified axis (default: last axis).
+ * Common uses:
+ *   - Classification output layer (axis=-1)
+ *   - Attention weights (axis=-1)
+ *
+ * Input/Output shape: same (softmax is element-wise along axis)
+ */
+struct SoftmaxConfig {
+    std::vector<Size> shape;   // Input/output tensor shape
+    int axis;                  // Axis along which to compute softmax (negative = from end)
+
+    SoftmaxConfig()
+        : shape{1}, axis(-1) {}
+
+    SoftmaxConfig(const std::vector<Size>& s, int ax = -1)
+        : shape(s), axis(ax) {}
+
+    // Get the normalized axis (convert negative to positive)
+    int normalized_axis() const {
+        int ndim = static_cast<int>(shape.size());
+        int ax = axis;
+        if (ax < 0) ax += ndim;
+        return ax;
+    }
+
+    // Total elements in tensor
+    Size total_elements() const {
+        Size total = 1;
+        for (Size dim : shape) {
+            total *= dim;
+        }
+        return total;
+    }
+
+    // Size of the reduction dimension
+    Size reduction_size() const {
+        int ax = normalized_axis();
+        if (ax < 0 || ax >= static_cast<int>(shape.size())) return 1;
+        return shape[ax];
+    }
+
+    // Number of independent softmax operations
+    Size num_softmax_ops() const {
+        return total_elements() / reduction_size();
+    }
+
+    // Compute total FLOPs for softmax operation
+    // Per softmax row of size N:
+    //   - max: N-1 comparisons
+    //   - subtract max: N subtractions
+    //   - exp: N exponentials (~4 ops each)
+    //   - sum: N-1 additions
+    //   - divide: N divisions
+    // Total per row: (N-1) + N + 4*N + (N-1) + N = 8*N - 2
+    // Simplified: ~8 ops per element
+    Size total_flops() const {
+        Size N = reduction_size();
+        Size num_rows = num_softmax_ops();
+
+        // Per row: max(N-1) + sub(N) + exp(4*N) + sum(N-1) + div(N)
+        Size flops_per_row = (N - 1) + N + 4 * N + (N - 1) + N;
+        return num_rows * flops_per_row;
+    }
+};
+
+/**
  * @brief Kernel argument descriptor
  *
  * Describes an input or output argument to a kernel, including
@@ -993,6 +1064,39 @@ public:
                                            Size input_height, Size input_width,
                                            DataType dtype = DataType::FLOAT32);
 
+    // -----------------------------------------
+    // Softmax Kernel Creation (v0.5.7)
+    // -----------------------------------------
+
+    /**
+     * @brief Create softmax kernel
+     * @param config Softmax configuration
+     * @param dtype Data type
+     * @return Compiled kernel
+     *
+     * Softmax normalizes inputs along a specified axis:
+     *   softmax(x)_i = exp(x_i - max(x)) / sum(exp(x_j - max(x)))
+     *
+     * Uses numerically stable implementation (subtract max before exp).
+     *
+     * Arguments:
+     *   - input: tensor of any shape
+     *   - output: tensor of same shape as input
+     */
+    static Kernel create_softmax(const SoftmaxConfig& config,
+                                 DataType dtype = DataType::FLOAT32);
+
+    /**
+     * @brief Create softmax kernel with explicit shape
+     * @param shape Input tensor shape
+     * @param axis Axis along which to compute softmax (default: -1, last axis)
+     * @param dtype Data type
+     * @return Compiled kernel
+     */
+    static Kernel create_softmax(const std::vector<Size>& shape,
+                                 int axis = -1,
+                                 DataType dtype = DataType::FLOAT32);
+
     // =========================================
     // Metadata Accessors
     // =========================================
@@ -1154,6 +1258,15 @@ public:
     const Pool2DConfig& pool2d_config() const { return pool2d_config_; }
 
     // =========================================
+    // Softmax Accessors (for SOFTMAX kernels)
+    // =========================================
+
+    /**
+     * @brief Get Softmax configuration (for SOFTMAX kernels)
+     */
+    const SoftmaxConfig& softmax_config() const { return softmax_config_; }
+
+    // =========================================
     // Program Access
     // =========================================
 
@@ -1248,6 +1361,9 @@ private:
     // Pool2D-specific members
     Pool2DConfig pool2d_config_;
 
+    // Softmax-specific members
+    SoftmaxConfig softmax_config_;
+
     /**
      * @brief Set up arguments for MATMUL operation
      */
@@ -1292,6 +1408,11 @@ private:
      * @brief Set up arguments for POOL2D operation
      */
     void setup_pool2d_arguments();
+
+    /**
+     * @brief Set up arguments for SOFTMAX operation
+     */
+    void setup_softmax_arguments();
 };
 
 } // namespace sw::kpu
