@@ -24,6 +24,12 @@ from kpu.fusion import (
     MatMulBiasActivation,
     MatMulActivation,
     estimate_memory_savings,
+    # v0.6.1
+    FusionAnalyzer,
+    FusionReport,
+    FusionOpportunity,
+    RooflineMetrics,
+    analyze_fusion_potential,
 )
 
 
@@ -458,6 +464,226 @@ class TestMemorySavingsEstimation:
 
         assert savings['original_ops'] > savings['fused_ops']
         assert savings['reduction_factor'] > 1.0
+
+
+class TestFusionAnalyzer:
+    """Tests for FusionAnalyzer (v0.6.1)."""
+
+    def setup_method(self):
+        """Set up behavioral fidelity for each test."""
+        kpu.set_fidelity(kpu.BEHAVIORAL)
+
+    def test_analyzer_finds_opportunities(self):
+        """Test that FusionAnalyzer detects fusion opportunities."""
+        def ffn(x, w, bias):
+            y = x @ w
+            y = y + bias
+            y = kpu.relu(y)
+            return y
+
+        X = kpu.Tensor(np.random.randn(4, 8).astype(np.float32))
+        W = kpu.Tensor(np.random.randn(8, 16).astype(np.float32))
+        bias = kpu.Tensor(np.random.randn(16).astype(np.float32))
+
+        # Compile without optimization to get unfused graph
+        unfused_fn = kpu.compile(ffn, optimize=False)
+        _ = unfused_fn(X, W, bias)
+
+        # Analyze the unfused graph
+        analyzer = FusionAnalyzer()
+        report = analyzer.analyze(unfused_fn.graph)
+
+        # Should find 1 fusion opportunity
+        assert report.total_fusions_possible == 1
+        assert len(report.opportunities) == 1
+        assert report.opportunities[0].pattern_name == 'MatMulBiasActivation'
+
+    def test_analyzer_with_multiple_opportunities(self):
+        """Test analyzer with multiple fusion opportunities."""
+        def two_layer_ffn(x, w1, b1, w2, b2):
+            y = x @ w1
+            y = y + b1
+            y = kpu.relu(y)
+            y = y @ w2
+            y = y + b2
+            y = kpu.relu(y)
+            return y
+
+        X = kpu.Tensor(np.random.randn(4, 8).astype(np.float32))
+        W1 = kpu.Tensor(np.random.randn(8, 16).astype(np.float32))
+        b1 = kpu.Tensor(np.random.randn(16).astype(np.float32))
+        W2 = kpu.Tensor(np.random.randn(16, 32).astype(np.float32))
+        b2 = kpu.Tensor(np.random.randn(32).astype(np.float32))
+
+        unfused_fn = kpu.compile(two_layer_ffn, optimize=False)
+        _ = unfused_fn(X, W1, b1, W2, b2)
+
+        analyzer = FusionAnalyzer()
+        report = analyzer.analyze(unfused_fn.graph)
+
+        # Should find 2 fusion opportunities
+        assert report.total_fusions_possible == 2
+        assert len(report.opportunities) == 2
+
+    def test_analyzer_no_opportunities(self):
+        """Test analyzer when no fusion opportunities exist."""
+        def simple_matmul(x, w):
+            return x @ w
+
+        X = kpu.Tensor(np.random.randn(4, 8).astype(np.float32))
+        W = kpu.Tensor(np.random.randn(8, 16).astype(np.float32))
+
+        unfused_fn = kpu.compile(simple_matmul, optimize=False)
+        _ = unfused_fn(X, W)
+
+        analyzer = FusionAnalyzer()
+        report = analyzer.analyze(unfused_fn.graph)
+
+        # No fusion opportunities (matmul alone)
+        assert report.total_fusions_possible == 0
+
+
+class TestRooflineAnalysis:
+    """Tests for roofline analysis (v0.6.1)."""
+
+    def setup_method(self):
+        """Set up behavioral fidelity for each test."""
+        kpu.set_fidelity(kpu.BEHAVIORAL)
+
+    def test_roofline_metrics(self):
+        """Test that roofline metrics are computed correctly."""
+        def ffn(x, w, bias):
+            y = x @ w
+            y = y + bias
+            y = kpu.relu(y)
+            return y
+
+        X = kpu.Tensor(np.random.randn(4, 8).astype(np.float32))
+        W = kpu.Tensor(np.random.randn(8, 16).astype(np.float32))
+        bias = kpu.Tensor(np.random.randn(16).astype(np.float32))
+
+        unfused_fn = kpu.compile(ffn, optimize=False)
+        _ = unfused_fn(X, W, bias)
+
+        analyzer = FusionAnalyzer(
+            peak_flops_per_cycle=1024.0,
+            peak_bytes_per_cycle=64.0,
+        )
+        report = analyzer.analyze(unfused_fn.graph)
+
+        # Check roofline metrics are populated
+        assert report.roofline_unfused.total_flops > 0
+        assert report.roofline_unfused.total_bytes > 0
+        assert report.roofline_unfused.arithmetic_intensity > 0
+        assert report.roofline_unfused.ridge_point == 1024.0 / 64.0  # 16.0
+
+    def test_memory_bound_detection(self):
+        """Test detection of memory-bound workload."""
+        # Small matmul = low arithmetic intensity = memory bound
+        def small_ffn(x, w, bias):
+            y = x @ w
+            y = y + bias
+            y = kpu.relu(y)
+            return y
+
+        X = kpu.Tensor(np.random.randn(4, 8).astype(np.float32))
+        W = kpu.Tensor(np.random.randn(8, 16).astype(np.float32))
+        bias = kpu.Tensor(np.random.randn(16).astype(np.float32))
+
+        unfused_fn = kpu.compile(small_ffn, optimize=False)
+        _ = unfused_fn(X, W, bias)
+
+        # Use high ridge point to force memory-bound classification
+        analyzer = FusionAnalyzer(
+            peak_flops_per_cycle=10000.0,  # Very high compute
+            peak_bytes_per_cycle=64.0,
+        )
+        report = analyzer.analyze(unfused_fn.graph)
+
+        # With high compute capability, small workloads are memory-bound
+        assert report.roofline_unfused.is_memory_bound
+        assert not report.roofline_unfused.is_compute_bound
+        assert report.roofline_unfused.efficiency < 100.0
+
+    def test_fusion_improves_efficiency(self):
+        """Test that fusion improves arithmetic intensity."""
+        def ffn(x, w, bias):
+            y = x @ w
+            y = y + bias
+            y = kpu.relu(y)
+            return y
+
+        X = kpu.Tensor(np.random.randn(4, 8).astype(np.float32))
+        W = kpu.Tensor(np.random.randn(8, 16).astype(np.float32))
+        bias = kpu.Tensor(np.random.randn(16).astype(np.float32))
+
+        unfused_fn = kpu.compile(ffn, optimize=False)
+        _ = unfused_fn(X, W, bias)
+
+        analyzer = FusionAnalyzer()
+        report = analyzer.analyze(unfused_fn.graph)
+
+        # Fused should have higher arithmetic intensity (same FLOPs, less bytes)
+        assert report.roofline_fused.arithmetic_intensity >= report.roofline_unfused.arithmetic_intensity
+        # Fused should have higher or equal efficiency
+        assert report.roofline_fused.efficiency >= report.roofline_unfused.efficiency
+
+
+class TestFusionReport:
+    """Tests for FusionReport (v0.6.1)."""
+
+    def setup_method(self):
+        """Set up behavioral fidelity for each test."""
+        kpu.set_fidelity(kpu.BEHAVIORAL)
+
+    def test_report_summary(self):
+        """Test that FusionReport generates a summary."""
+        def ffn(x, w, bias):
+            y = x @ w
+            y = y + bias
+            y = kpu.relu(y)
+            return y
+
+        X = kpu.Tensor(np.random.randn(4, 8).astype(np.float32))
+        W = kpu.Tensor(np.random.randn(8, 16).astype(np.float32))
+        bias = kpu.Tensor(np.random.randn(16).astype(np.float32))
+
+        unfused_fn = kpu.compile(ffn, optimize=False)
+        _ = unfused_fn(X, W, bias)
+
+        report = analyze_fusion_potential(unfused_fn.graph)
+        summary = report.summary()
+
+        # Summary should contain key information
+        assert 'Fusion Analysis Report' in summary
+        assert 'Fusion Opportunities' in summary
+        assert 'Roofline Analysis' in summary
+        assert 'Arithmetic Intensity' in summary
+
+    def test_analyze_fusion_potential_convenience(self):
+        """Test the convenience function analyze_fusion_potential."""
+        def ffn(x, w, bias):
+            y = x @ w
+            y = y + bias
+            y = kpu.relu(y)
+            return y
+
+        X = kpu.Tensor(np.random.randn(4, 8).astype(np.float32))
+        W = kpu.Tensor(np.random.randn(8, 16).astype(np.float32))
+        bias = kpu.Tensor(np.random.randn(16).astype(np.float32))
+
+        unfused_fn = kpu.compile(ffn, optimize=False)
+        _ = unfused_fn(X, W, bias)
+
+        # Use the convenience function
+        report = analyze_fusion_potential(
+            unfused_fn.graph,
+            peak_flops_per_cycle=512.0,
+            peak_bytes_per_cycle=32.0,
+        )
+
+        assert isinstance(report, FusionReport)
+        assert report.roofline_unfused.ridge_point == 512.0 / 32.0
 
 
 if __name__ == '__main__':

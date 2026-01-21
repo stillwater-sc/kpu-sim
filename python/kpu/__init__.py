@@ -27,7 +27,7 @@ Fidelity Levels:
     - CYCLE_ACCURATE: Full timing simulation
 """
 
-__version__ = "0.6.0"
+__version__ = "0.6.1"
 __author__ = "Stillwater Supercomputing, Inc."
 
 # Fidelity levels
@@ -103,6 +103,12 @@ from .fusion import (
     FusionPattern,
     FusionGroup,
     estimate_memory_savings,
+    # v0.6.1: Fusion analysis
+    FusionAnalyzer,
+    FusionReport,
+    FusionOpportunity,
+    RooflineMetrics,
+    analyze_fusion_potential,
 )
 
 # torch.compile backend (optional, requires PyTorch)
@@ -210,6 +216,12 @@ __all__ = [
     "FusionPattern",
     "FusionGroup",
     "estimate_memory_savings",
+    # v0.6.1: Fusion analysis
+    "FusionAnalyzer",
+    "FusionReport",
+    "FusionOpportunity",
+    "RooflineMetrics",
+    "analyze_fusion_potential",
 
     # torch.compile backend
     "torch_backend",

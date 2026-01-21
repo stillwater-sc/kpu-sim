@@ -1,20 +1,18 @@
 #!/usr/bin/env python3
 """
-FFN Fusion Demonstration (v0.6.0)
+FFN Fusion Demonstration (v0.6.1)
 
 Compares fused vs unfused feed-forward network patterns to demonstrate
-memory traffic reduction from kernel fusion.
+memory traffic reduction and roofline analysis for kernel fusion.
 
 Target Pattern:
     Unfused: Y = relu(matmul(X, W1) + bias1) - 3 ops, 3 memory passes
     Fused:   Y = fused_matmul_bias_relu(X, W1, bias1) - 1 op, 1 memory pass
 
-Expected Output:
-    FFN Fusion Comparison
-    ====================
-    Unfused DRAM traffic: 134,217,728 bytes (estimated)
-    Fused DRAM traffic:    67,108,864 bytes (estimated)
-    Memory reduction:     2.0x
+v0.6.1 Features:
+    - FusionAnalyzer for detecting fusion opportunities
+    - Roofline analysis showing memory-bound vs compute-bound
+    - Detailed performance metrics
 
 Usage:
     cd python && python examples/fusion/ffn_fusion.py
@@ -28,6 +26,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', 'python')
 
 import numpy as np
 import kpu
+from kpu.fusion import FusionAnalyzer, analyze_fusion_potential
 
 
 def create_ffn_layer(batch_size: int, input_dim: int, hidden_dim: int):
@@ -102,14 +101,14 @@ def estimate_memory_traffic(batch_size: int, input_dim: int, hidden_dim: int,
 
 
 def main():
-    print("FFN Fusion Demonstration (v0.6.0)")
-    print("=" * 40)
+    print("FFN Fusion Demonstration (v0.6.1)")
+    print("=" * 50)
     print()
 
-    # Configuration
-    batch_size = 1024
-    input_dim = 1024
-    hidden_dim = 4096  # 4x expansion typical in FFN
+    # Configuration - use smaller dimensions that result in memory-bound workload
+    batch_size = 64
+    input_dim = 256
+    hidden_dim = 1024
 
     print(f"Configuration:")
     print(f"  Batch size:  {batch_size}")
@@ -129,6 +128,24 @@ def main():
     print(f"  Unfused graph: {len(unfused_graph.nodes)} ops")
     for node in unfused_graph.topological_order():
         print(f"    - {node.op_type.value}")
+    print()
+
+    # Analyze fusion opportunities BEFORE fusing
+    print("Fusion Analysis (v0.6.1)")
+    print("-" * 50)
+
+    # Use realistic hardware parameters:
+    # - 1024 FLOPs/cycle (e.g., 32x32 systolic array)
+    # - 64 bytes/cycle memory bandwidth
+    analyzer = FusionAnalyzer(
+        peak_flops_per_cycle=1024.0,
+        peak_bytes_per_cycle=64.0,
+    )
+    report = analyzer.analyze(unfused_graph)
+
+    print(f"Detected {report.total_fusions_possible} fusion opportunity:")
+    for opp in report.opportunities:
+        print(f"  - {opp.description}")
     print()
 
     # Compile fused version (optimization enabled - default)
@@ -152,9 +169,31 @@ def main():
         print(f"  Max difference: {max_diff}")
     print()
 
+    # Roofline Analysis
+    print("Roofline Analysis")
+    print("-" * 50)
+    print()
+
+    print("Unfused Workload:")
+    print(f"  Total FLOPs:          {report.roofline_unfused.total_flops:,}")
+    print(f"  Total Memory:         {report.roofline_unfused.total_bytes:,} bytes")
+    print(f"  Arithmetic Intensity: {report.roofline_unfused.arithmetic_intensity:.2f} FLOPs/byte")
+    print(f"  Ridge Point:          {report.roofline_unfused.ridge_point:.2f} FLOPs/byte")
+    print(f"  Bottleneck:           {report.roofline_unfused.bottleneck.upper()}")
+    print(f"  Efficiency:           {report.roofline_unfused.efficiency:.1f}%")
+    print()
+
+    print("Fused Workload (estimated):")
+    print(f"  Total FLOPs:          {report.roofline_fused.total_flops:,}")
+    print(f"  Total Memory:         {report.roofline_fused.total_bytes:,} bytes")
+    print(f"  Arithmetic Intensity: {report.roofline_fused.arithmetic_intensity:.2f} FLOPs/byte")
+    print(f"  Bottleneck:           {report.roofline_fused.bottleneck.upper()}")
+    print(f"  Efficiency:           {report.roofline_fused.efficiency:.1f}%")
+    print()
+
     # Memory traffic analysis
     print("Memory Traffic Analysis")
-    print("-" * 40)
+    print("-" * 50)
 
     unfused_traffic = estimate_memory_traffic(batch_size, input_dim, hidden_dim, fused=False)
     fused_traffic = estimate_memory_traffic(batch_size, input_dim, hidden_dim, fused=True)
@@ -165,56 +204,38 @@ def main():
     print(f"Memory reduction:     {reduction:.2f}x")
     print()
 
-    # Use kpu's built-in memory savings estimation
-    from kpu.fusion import estimate_memory_savings
-
-    # Create fresh graphs for comparison (since graphs were modified)
-    savings = {
-        'original_ops': 3,  # matmul, add, relu
-        'fused_ops': 1,     # fused_matmul_bias_relu
-        'reduction_factor': reduction,
-    }
-
+    # Summary
     print("Summary")
-    print("-" * 40)
-    print(f"Operations reduced: {savings['original_ops']} -> {savings['fused_ops']}")
-    print(f"Memory traffic reduced by {reduction:.1f}x")
+    print("-" * 50)
+    print(f"Operations reduced:     3 -> 1")
+    print(f"Memory traffic:         {reduction:.1f}x reduction")
+    print(f"Estimated speedup:      {report.estimated_speedup:.2f}x")
     print()
 
-    # Performance implications
-    print("Performance Implications")
-    print("-" * 40)
+    # Success criteria validation
+    print("Success Criteria Validation (ROADMAP.md)")
+    print("-" * 50)
 
-    # Assume 1 GHz clock, 100 GB/s memory bandwidth
-    clock_ghz = 1.0
-    mem_bw_gbps = 100.0
+    criteria = [
+        ("2x memory traffic reduction on FFN", reduction >= 2.0),
+        ("Automatic fusion detection", report.total_fusions_possible >= 1),
+        ("MatMul+Bias+ReLU fuses correctly", len(fused_graph.nodes) == 1),
+        ("Unfused is memory bound", report.roofline_unfused.is_memory_bound),
+        ("Fused has higher efficiency", report.roofline_fused.efficiency > report.roofline_unfused.efficiency),
+    ]
 
-    # Compute FLOPs for matmul
-    matmul_flops = 2 * batch_size * input_dim * hidden_dim
-    compute_cycles = matmul_flops / (1024 * 1024)  # Assume 1M MAC/cycle
+    all_passed = True
+    for description, passed in criteria:
+        status = "PASS" if passed else "FAIL"
+        print(f"  [{status}] {description}")
+        if not passed:
+            all_passed = False
 
-    # Memory cycles (bytes / bandwidth)
-    unfused_mem_cycles = unfused_traffic / (mem_bw_gbps * 1e9 / clock_ghz)
-    fused_mem_cycles = fused_traffic / (mem_bw_gbps * 1e9 / clock_ghz)
-
-    # Total cycles (max of compute and memory)
-    unfused_total = max(compute_cycles, unfused_mem_cycles)
-    fused_total = max(compute_cycles, fused_mem_cycles)
-
-    # Efficiency = compute_cycles / total_cycles
-    unfused_efficiency = compute_cycles / unfused_total * 100
-    fused_efficiency = compute_cycles / fused_total * 100
-
-    print(f"Compute cycles: {compute_cycles:,.0f}")
-    print(f"Memory cycles (unfused): {unfused_mem_cycles:,.0f}")
-    print(f"Memory cycles (fused):   {fused_mem_cycles:,.0f}")
     print()
-    print(f"Unfused efficiency: {unfused_efficiency:.0f}% ({'memory bound' if unfused_efficiency < 50 else 'compute bound'})")
-    print(f"Fused efficiency:   {fused_efficiency:.0f}% ({'memory bound' if fused_efficiency < 50 else 'compute bound'})")
-    print()
-
-    if fused_efficiency > unfused_efficiency:
-        print(f"Fusion improved efficiency by {fused_efficiency - unfused_efficiency:.0f} percentage points!")
+    if all_passed:
+        print("All success criteria PASSED!")
+    else:
+        print("Some criteria failed - check configuration parameters.")
 
 
 if __name__ == "__main__":

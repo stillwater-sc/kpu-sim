@@ -521,3 +521,300 @@ def estimate_memory_savings(graph: 'OpGraph', optimized: 'OpGraph') -> Dict[str,
         'fused_memory_passes': fused_passes,
         'reduction_factor': original_passes / fused_passes if fused_passes > 0 else float('inf'),
     }
+
+
+@dataclass
+class RooflineMetrics:
+    """
+    Roofline model metrics for analyzing memory-bound vs compute-bound workloads.
+
+    The roofline model characterizes performance by comparing:
+    - Arithmetic intensity: FLOPs / Bytes (higher = more compute per byte)
+    - Ridge point: Where memory bandwidth meets compute throughput
+
+    Attributes:
+        total_flops: Total floating point operations
+        total_bytes: Total memory traffic (reads + writes)
+        arithmetic_intensity: FLOPs per byte
+        ridge_point: Hardware-specific intensity where memory = compute
+        is_memory_bound: True if workload is memory-limited
+        is_compute_bound: True if workload is compute-limited
+        efficiency: Percentage of peak performance achievable
+        bottleneck: Human-readable description of the bottleneck
+    """
+    total_flops: int
+    total_bytes: int
+    arithmetic_intensity: float
+    ridge_point: float
+    is_memory_bound: bool
+    is_compute_bound: bool
+    efficiency: float
+    bottleneck: str
+
+
+@dataclass
+class FusionOpportunity:
+    """
+    Describes a detected fusion opportunity in the graph.
+
+    Attributes:
+        pattern_name: Name of the fusion pattern that would match
+        nodes: List of node IDs that would be fused
+        ops: List of operation types involved
+        memory_savings: Estimated memory traffic reduction factor
+        description: Human-readable description
+    """
+    pattern_name: str
+    nodes: List[int]
+    ops: List[str]
+    memory_savings: float
+    description: str
+
+
+class FusionAnalyzer:
+    """
+    Analyzes graphs to detect fusion opportunities and roofline characteristics.
+
+    Unlike FusionCompiler which modifies graphs, FusionAnalyzer only reports
+    what could be fused without making changes. Useful for understanding
+    optimization potential before committing to changes.
+
+    Example:
+        >>> analyzer = FusionAnalyzer()
+        >>> report = analyzer.analyze(graph)
+        >>> print(f"Found {len(report.opportunities)} fusion opportunities")
+        >>> print(f"Workload is {report.roofline.bottleneck}")
+    """
+
+    def __init__(self,
+                 patterns: Optional[List[FusionPattern]] = None,
+                 peak_flops_per_cycle: float = 1024.0,
+                 peak_bytes_per_cycle: float = 64.0):
+        """
+        Initialize the FusionAnalyzer.
+
+        Args:
+            patterns: Fusion patterns to detect. If None, uses DEFAULT_PATTERNS.
+            peak_flops_per_cycle: Hardware peak compute throughput (FLOPs/cycle)
+            peak_bytes_per_cycle: Hardware peak memory bandwidth (bytes/cycle)
+        """
+        self.patterns = patterns if patterns is not None else DEFAULT_PATTERNS
+        self.peak_flops_per_cycle = peak_flops_per_cycle
+        self.peak_bytes_per_cycle = peak_bytes_per_cycle
+        # Ridge point: where compute time = memory time
+        # FLOPs/cycle * T = Bytes/cycle * T => FLOPs/Bytes = Bytes_BW / FLOPs_throughput
+        self.ridge_point = peak_flops_per_cycle / peak_bytes_per_cycle
+
+    def analyze(self, graph: 'OpGraph') -> 'FusionReport':
+        """
+        Analyze a graph for fusion opportunities and performance characteristics.
+
+        Args:
+            graph: The operation graph to analyze
+
+        Returns:
+            FusionReport with opportunities and roofline analysis
+        """
+        opportunities = self._find_opportunities(graph)
+        roofline_unfused = self._compute_roofline(graph, fused=False)
+
+        # Estimate fused roofline
+        fused_bytes = roofline_unfused.total_bytes
+        for opp in opportunities:
+            # Each fusion eliminates intermediate tensor traffic
+            # Estimate: each 3-op fusion saves ~2 tensor read/writes
+            fused_bytes -= int(fused_bytes * (opp.memory_savings - 1) / opp.memory_savings / len(opportunities))
+
+        roofline_fused = self._compute_roofline_from_values(
+            roofline_unfused.total_flops,
+            max(fused_bytes, roofline_unfused.total_bytes // 3)  # Conservative estimate
+        )
+
+        return FusionReport(
+            opportunities=opportunities,
+            roofline_unfused=roofline_unfused,
+            roofline_fused=roofline_fused,
+            total_fusions_possible=len(opportunities),
+            estimated_speedup=roofline_fused.efficiency / roofline_unfused.efficiency if roofline_unfused.efficiency > 0 else 1.0,
+        )
+
+    def _find_opportunities(self, graph: 'OpGraph') -> List[FusionOpportunity]:
+        """Find all fusion opportunities in the graph."""
+        opportunities = []
+        seen_node_ids: Set[int] = set()
+
+        for node in graph.topological_order():
+            if node._id in seen_node_ids:
+                continue
+
+            for pattern in self.patterns:
+                group = pattern.match(graph, node)
+                if group is not None:
+                    group_ids = {n._id for n in group.nodes}
+                    if not group_ids & seen_node_ids:
+                        seen_node_ids.update(group_ids)
+
+                        # Estimate memory savings based on ops eliminated
+                        num_ops = len(group.nodes)
+                        memory_savings = num_ops / 1.0  # Fused = 1 memory pass
+
+                        opportunities.append(FusionOpportunity(
+                            pattern_name=pattern.name,
+                            nodes=list(group_ids),
+                            ops=[n.op_type.value for n in group.nodes],
+                            memory_savings=memory_savings,
+                            description=f"{' -> '.join(n.op_type.value for n in group.nodes)} => {group.fused_op_type.value}",
+                        ))
+                        break
+
+        return opportunities
+
+    def _compute_roofline(self, graph: 'OpGraph', fused: bool = False) -> RooflineMetrics:
+        """Compute roofline metrics for a graph."""
+        from .graph import OpType
+
+        total_flops = 0
+        total_bytes = 0
+
+        for node in graph.nodes:
+            # Compute FLOPs
+            if node.op_type == OpType.MATMUL or node.op_type.is_fused():
+                if len(node.inputs) >= 2:
+                    A_shape = node.inputs[0].shape
+                    B_shape = node.inputs[1].shape
+                    if len(A_shape) >= 2 and len(B_shape) >= 2:
+                        M, K = A_shape[-2], A_shape[-1]
+                        N = B_shape[-1]
+                        total_flops += 2 * M * N * K
+
+            # Compute memory traffic (bytes)
+            # Each tensor read/write = size * 4 bytes (float32)
+            for inp in node.inputs:
+                size = 1
+                for dim in inp.shape:
+                    size *= dim
+                total_bytes += size * 4  # Read
+
+            for out in node.outputs:
+                size = 1
+                for dim in out.shape:
+                    size *= dim
+                total_bytes += size * 4  # Write
+
+        return self._compute_roofline_from_values(total_flops, total_bytes)
+
+    def _compute_roofline_from_values(self, total_flops: int, total_bytes: int) -> RooflineMetrics:
+        """Compute roofline metrics from raw FLOP and byte counts."""
+        if total_bytes == 0:
+            arithmetic_intensity = float('inf')
+        else:
+            arithmetic_intensity = total_flops / total_bytes
+
+        is_memory_bound = arithmetic_intensity < self.ridge_point
+        is_compute_bound = not is_memory_bound
+
+        # Efficiency calculation
+        if is_memory_bound:
+            # Memory-bound: limited by bandwidth
+            # Achievable FLOPs = AI * bandwidth
+            achievable_flops_per_cycle = arithmetic_intensity * self.peak_bytes_per_cycle
+            efficiency = (achievable_flops_per_cycle / self.peak_flops_per_cycle) * 100
+            bottleneck = "memory bandwidth"
+        else:
+            # Compute-bound: can achieve peak
+            efficiency = 100.0
+            bottleneck = "compute throughput"
+
+        return RooflineMetrics(
+            total_flops=total_flops,
+            total_bytes=total_bytes,
+            arithmetic_intensity=arithmetic_intensity,
+            ridge_point=self.ridge_point,
+            is_memory_bound=is_memory_bound,
+            is_compute_bound=is_compute_bound,
+            efficiency=min(efficiency, 100.0),
+            bottleneck=bottleneck,
+        )
+
+
+@dataclass
+class FusionReport:
+    """
+    Complete analysis report for fusion opportunities.
+
+    Attributes:
+        opportunities: List of detected fusion opportunities
+        roofline_unfused: Roofline analysis without fusion
+        roofline_fused: Estimated roofline analysis with fusion
+        total_fusions_possible: Number of fusions that can be applied
+        estimated_speedup: Estimated speedup from applying all fusions
+    """
+    opportunities: List[FusionOpportunity]
+    roofline_unfused: RooflineMetrics
+    roofline_fused: RooflineMetrics
+    total_fusions_possible: int
+    estimated_speedup: float
+
+    def summary(self) -> str:
+        """Generate a human-readable summary."""
+        lines = [
+            "Fusion Analysis Report",
+            "=" * 50,
+            "",
+            f"Fusion Opportunities: {self.total_fusions_possible}",
+        ]
+
+        if self.opportunities:
+            lines.append("")
+            for i, opp in enumerate(self.opportunities, 1):
+                lines.append(f"  {i}. {opp.description}")
+                lines.append(f"     Pattern: {opp.pattern_name}, Savings: {opp.memory_savings:.1f}x")
+
+        lines.extend([
+            "",
+            "Roofline Analysis (Unfused):",
+            f"  Total FLOPs:            {self.roofline_unfused.total_flops:,}",
+            f"  Total Memory Traffic:   {self.roofline_unfused.total_bytes:,} bytes",
+            f"  Arithmetic Intensity:   {self.roofline_unfused.arithmetic_intensity:.2f} FLOPs/byte",
+            f"  Ridge Point:            {self.roofline_unfused.ridge_point:.2f} FLOPs/byte",
+            f"  Bottleneck:             {self.roofline_unfused.bottleneck}",
+            f"  Efficiency:             {self.roofline_unfused.efficiency:.1f}%",
+            "",
+            "Roofline Analysis (Fused):",
+            f"  Total FLOPs:            {self.roofline_fused.total_flops:,}",
+            f"  Total Memory Traffic:   {self.roofline_fused.total_bytes:,} bytes",
+            f"  Arithmetic Intensity:   {self.roofline_fused.arithmetic_intensity:.2f} FLOPs/byte",
+            f"  Bottleneck:             {self.roofline_fused.bottleneck}",
+            f"  Efficiency:             {self.roofline_fused.efficiency:.1f}%",
+            "",
+            f"Estimated Speedup:        {self.estimated_speedup:.2f}x",
+        ])
+
+        return "\n".join(lines)
+
+
+def analyze_fusion_potential(graph: 'OpGraph',
+                            peak_flops_per_cycle: float = 1024.0,
+                            peak_bytes_per_cycle: float = 64.0) -> FusionReport:
+    """
+    Convenience function to analyze a graph's fusion potential.
+
+    Args:
+        graph: The operation graph to analyze
+        peak_flops_per_cycle: Hardware peak compute throughput
+        peak_bytes_per_cycle: Hardware peak memory bandwidth
+
+    Returns:
+        FusionReport with complete analysis
+
+    Example:
+        >>> report = analyze_fusion_potential(graph)
+        >>> print(report.summary())
+        >>> if report.roofline_unfused.is_memory_bound:
+        ...     print("Unfused workload is memory-bound, fusion will help!")
+    """
+    analyzer = FusionAnalyzer(
+        peak_flops_per_cycle=peak_flops_per_cycle,
+        peak_bytes_per_cycle=peak_bytes_per_cycle,
+    )
+    return analyzer.analyze(graph)
