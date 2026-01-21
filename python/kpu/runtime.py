@@ -533,6 +533,60 @@ class KPURuntime:
             new_shape.extend(x.shape[end_dim + 1:])
             result = x.reshape(new_shape)
 
+        elif op.opcode == DFXOpCode.ATTENTION:
+            # Multi-head attention with QKV projections
+            # inputs[0] = x [B, S, D]
+            # inputs[1] = w_q [D, D]
+            # inputs[2] = w_k [D, D]
+            # inputs[3] = w_v [D, D]
+            # inputs[4] = w_o [D, D] (optional)
+            x = inputs[0]
+            w_q = inputs[1]
+            w_k = inputs[2]
+            w_v = inputs[3]
+            w_o = inputs[4] if len(inputs) > 4 else None
+
+            num_heads = op.attrs.get('num_heads', 1)
+            is_causal = op.attrs.get('is_causal', False)
+
+            batch_size, seq_len, d_model = x.shape
+            head_dim = d_model // num_heads
+
+            # Project Q, K, V
+            q = np.matmul(x, w_q)  # [B, S, D]
+            k = np.matmul(x, w_k)  # [B, S, D]
+            v = np.matmul(x, w_v)  # [B, S, D]
+
+            # Reshape to [B, S, H, d_k] then transpose to [B, H, S, d_k]
+            q = q.reshape(batch_size, seq_len, num_heads, head_dim).transpose(0, 2, 1, 3)
+            k = k.reshape(batch_size, seq_len, num_heads, head_dim).transpose(0, 2, 1, 3)
+            v = v.reshape(batch_size, seq_len, num_heads, head_dim).transpose(0, 2, 1, 3)
+
+            # Scaled dot-product attention
+            scale = 1.0 / np.sqrt(head_dim)
+            scores = np.matmul(q, k.transpose(0, 1, 3, 2)) * scale  # [B, H, S, S]
+
+            # Apply causal mask if requested
+            if is_causal:
+                causal_mask = np.triu(np.ones((seq_len, seq_len)), k=1) * -1e9
+                scores = scores + causal_mask
+
+            # Softmax
+            exp_scores = np.exp(scores - np.max(scores, axis=-1, keepdims=True))
+            attn_weights = exp_scores / np.sum(exp_scores, axis=-1, keepdims=True)
+
+            # Attention @ V -> [B, H, S, d_k]
+            attn_output = np.matmul(attn_weights, v)
+
+            # Reshape back to [B, S, D]
+            attn_output = attn_output.transpose(0, 2, 1, 3).reshape(batch_size, seq_len, d_model)
+
+            # Output projection if provided
+            if w_o is not None:
+                result = np.matmul(attn_output, w_o)
+            else:
+                result = attn_output
+
         else:
             raise NotImplementedError(f"Op {op.opcode} not implemented in behavioral runtime")
 

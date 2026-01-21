@@ -18,20 +18,22 @@ MAJOR.MINOR.PATCH
 
 ---
 
-## Current Status: v0.2.0 ✅
+## Current Status: v0.5.7 ✅
 
-Released: 2026-01-17
+Released: 2026-01-20
 
 ### What's Complete
 
 | Component | Version | Status |
 |-----------|---------|--------|
 | **C++ Simulator Core** | v0.1.0 | ✅ Phases 1-6 complete |
-| **Python kpu Package** | v0.2.0 | ✅ `@kpu.compile` decorator |
+| **Python kpu Package** | v0.5.7 | ✅ `@kpu.compile` decorator |
 | **torch.compile Backend** | v0.2.0 | ✅ `backend="kpu"` |
-| **BEHAVIORAL Runtime** | v0.2.0 | ✅ Full functional simulation |
-| **CNN Operators** | v0.2.0 | ✅ conv2d, pooling, normalization |
+| **BEHAVIORAL Runtime** | v0.5.7 | ✅ Full functional simulation |
+| **CNN Operators** | v0.5.7 | ✅ conv2d, pooling, normalization |
+| **Transformer Operators** | v0.5.7 | ✅ attention, layernorm, softmax |
 | **MNIST Examples** | v0.2.0 | ✅ MLP and CNN verified |
+| **C++ Kernel Types** | v0.5.7 | ✅ All v0.5.x kernels complete |
 
 ---
 
@@ -185,10 +187,23 @@ src/compiler/
 
 ### Success Criteria
 
-- [ ] Conv2D kernel passes correctness tests
-- [ ] Attention kernel for transformer inference
-- [ ] LayerNorm/Softmax kernels working
-- [ ] All kernels accessible from Python via TRANSACTIONAL
+- [x] Conv2D kernel passes correctness tests (validated in test_v05_kernel_validation.py)
+- [x] Attention kernel for transformer inference (SDPA + MHA working)
+- [x] LayerNorm/Softmax kernels working (validated)
+- [x] All kernels accessible from Python via TRANSACTIONAL (validated)
+
+### Kernels Completed (v0.5.0 - v0.5.7)
+
+| Version | Kernel | Status |
+|---------|--------|--------|
+| v0.5.0 | Conv2D | ✅ Released |
+| v0.5.1 | Attention | ✅ Released |
+| v0.5.2 | LayerNorm | ✅ Released |
+| v0.5.3 | RMSNorm | ✅ Released |
+| v0.5.4 | BatchNorm | ✅ Released |
+| v0.5.5 | Elementwise | ✅ Released |
+| v0.5.6 | Pool2D | ✅ Released |
+| v0.5.7 | Softmax | ✅ Released |
 
 ### Tag: `v0.5-kernels`
 
@@ -449,4 +464,4 @@ git push origin v0.3.0
 ---
 
 *Document created: 2026-01-18*
-*Last updated: 2026-01-18*
+*Last updated: 2026-01-20*
