@@ -1,0 +1,93 @@
+======================================================================
+Image Classification Pipeline on KPU Simulator
+======================================================================
+
+Step 1: Loading ImageNet class labels...
+  Loaded 1000 class labels
+
+Step 2: Loading pretrained ResNet18 model...
+  Parameters: 11,689,512
+
+Step 3: Compiling model with KPU backend...
+  Compilation complete
+
+======================================================================
+Step 4: Classifying Demo Images
+======================================================================
+
+Image 1/5: Expected 'Samoyed'
+--------------------------------------------------
+  Loading image...
+  Preprocessing...
+  Running PyTorch inference...
+  Running KPU inference...
+
+  PyTorch: Samoyed (88.5%)
+  KPU:     Samoyed (88.5%)
+  Correct: YES
+  KPU matches PyTorch: YES
+  Numerical diff: 8.34e-06
+
+Image 2/5: Expected 'golden retriever'
+--------------------------------------------------
+  Loading image...
+  Preprocessing...
+  Running PyTorch inference...
+  Running KPU inference...
+
+  PyTorch: golden retriever (58.5%)
+  KPU:     golden retriever (58.5%)
+  Correct: YES
+  KPU matches PyTorch: YES
+  Numerical diff: 7.87e-06
+
+Image 3/5: Expected 'goldfish'
+--------------------------------------------------
+  Loading image...
+  Preprocessing...
+  Running PyTorch inference...
+  Running KPU inference...
+
+  PyTorch: goldfish (99.5%)
+  KPU:     goldfish (99.5%)
+  Correct: YES
+  KPU matches PyTorch: YES
+  Numerical diff: 7.39e-06
+
+Image 4/5: Expected 'Egyptian cat'
+--------------------------------------------------
+  Loading image...
+  Preprocessing...
+  Running PyTorch inference...
+  Running KPU inference...
+
+  PyTorch: Egyptian cat (54.0%)
+  KPU:     Egyptian cat (54.0%)
+  Correct: YES
+  KPU matches PyTorch: YES
+  Numerical diff: 5.48e-06
+
+Image 5/5: Expected 'German shepherd'
+--------------------------------------------------
+  Loading image...
+  Preprocessing...
+  Running PyTorch inference...
+  Running KPU inference...
+
+  PyTorch: German shepherd (71.6%)
+  KPU:     German shepherd (71.6%)
+  Correct: YES
+  KPU matches PyTorch: YES
+  Numerical diff: 7.63e-06
+
+======================================================================
+Pipeline Summary
+======================================================================
+
+Total images processed: 5
+KPU correct:            5/5 (100%)
+KPU matches PyTorch:    5/5 (100%)
+
+PASSED: KPU predictions match PyTorch exactly for all images!
+
+Image classification pipeline completed successfully!

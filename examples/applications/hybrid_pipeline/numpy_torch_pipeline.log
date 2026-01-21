@@ -1,0 +1,94 @@
+======================================================================
+Hybrid NumPy + PyTorch Pipeline on KPU Simulator
+======================================================================
+
+Loading ImageNet class labels...
+  Loaded 1000 class labels
+
+Loading pretrained ResNet18 model...
+  Parameters: 11,689,512
+
+Compiling model with KPU backend...
+  Compilation complete
+
+======================================================================
+Processing Images with Hybrid NumPy + KPU Pipeline
+======================================================================
+
+Image 1/3: Expected 'Samoyed'
+----------------------------------------------------------------------
+  Phase 1: NumPy Image Loading
+    Raw image shape: (1213, 1546, 3), dtype: float32
+  Phase 2: NumPy Preprocessing
+    After resize: (256, 326, 3)
+    After crop: (224, 224, 3)
+    After normalize: range [-2.12, 2.64]
+  Phase 3: Convert to PyTorch Tensor
+    Tensor shape: torch.Size([1, 3, 224, 224])
+  Phase 4: KPU Model Inference
+    Output shape: torch.Size([1, 1000])
+  Phase 5: NumPy Postprocessing
+
+  Results:
+    KPU prediction: Samoyed (79.9%)
+    PyTorch prediction: Samoyed (79.9%)
+    Correct: YES
+    KPU matches PyTorch: YES
+    Numerical diff: 8.58e-06
+    Output stats: mean=0.000, std=2.866
+
+Image 2/3: Expected 'tiger cat'
+----------------------------------------------------------------------
+  Phase 1: NumPy Image Loading
+    Raw image shape: (375, 500, 3), dtype: float32
+  Phase 2: NumPy Preprocessing
+    After resize: (256, 341, 3)
+    After crop: (224, 224, 3)
+    After normalize: range [-2.12, 2.64]
+  Phase 3: Convert to PyTorch Tensor
+    Tensor shape: torch.Size([1, 3, 224, 224])
+  Phase 4: KPU Model Inference
+    Output shape: torch.Size([1, 1000])
+  Phase 5: NumPy Postprocessing
+
+  Results:
+    KPU prediction: tabby (23.0%)
+    PyTorch prediction: tabby (23.0%)
+    Correct: NO
+    KPU matches PyTorch: YES
+    Numerical diff: 9.54e-06
+    Output stats: mean=0.000, std=2.672
+
+Image 3/3: Expected 'Old English sheepdog'
+----------------------------------------------------------------------
+  Phase 1: NumPy Image Loading
+    Raw image shape: (480, 347, 3), dtype: float32
+  Phase 2: NumPy Preprocessing
+    After resize: (354, 256, 3)
+    After crop: (224, 224, 3)
+    After normalize: range [-2.12, 2.64]
+  Phase 3: Convert to PyTorch Tensor
+    Tensor shape: torch.Size([1, 3, 224, 224])
+  Phase 4: KPU Model Inference
+    Output shape: torch.Size([1, 1000])
+  Phase 5: NumPy Postprocessing
+
+  Results:
+    KPU prediction: Old English sheepdog (96.8%)
+    PyTorch prediction: Old English sheepdog (96.8%)
+    Correct: YES
+    KPU matches PyTorch: YES
+    Numerical diff: 7.75e-06
+    Output stats: mean=0.000, std=2.693
+
+======================================================================
+Pipeline Summary
+======================================================================
+
+Total images processed: 3
+KPU correct:            2/3 (67%)
+KPU matches PyTorch:    3/3 (100%)
+
+PASSED: KPU predictions match PyTorch exactly for all images!
+
+Hybrid NumPy + PyTorch pipeline completed successfully!
