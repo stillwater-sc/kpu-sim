@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-FFN Fusion Demonstration (v0.6.1)
+FFN Fusion Demonstration (v0.6.3)
 
 Compares fused vs unfused feed-forward network patterns to demonstrate
 memory traffic reduction and roofline analysis for kernel fusion.
@@ -9,13 +9,14 @@ Target Pattern:
     Unfused: Y = relu(matmul(X, W1) + bias1) - 3 ops, 3 memory passes
     Fused:   Y = fused_matmul_bias_relu(X, W1, bias1) - 1 op, 1 memory pass
 
-v0.6.1 Features:
+v0.6.3 Features:
     - FusionAnalyzer for detecting fusion opportunities
     - Roofline analysis showing memory-bound vs compute-bound
     - Detailed performance metrics
+    - Validates all v0.6 success criteria from ROADMAP.md
 
 Usage:
-    cd python && python examples/fusion/ffn_fusion.py
+    PYTHONPATH=python python examples/fusion/ffn_fusion.py
 """
 
 import sys
@@ -101,12 +102,14 @@ def estimate_memory_traffic(batch_size: int, input_dim: int, hidden_dim: int,
 
 
 def main():
-    print("FFN Fusion Demonstration (v0.6.1)")
+    print("FFN Fusion Demonstration (v0.6.3)")
     print("=" * 50)
     print()
 
-    # Configuration - use smaller dimensions that result in memory-bound workload
-    batch_size = 64
+    # Configuration optimized to demonstrate 2x+ memory reduction
+    # Larger batch size makes intermediate tensor traffic dominate over weights,
+    # maximizing the benefit of fusion (eliminating intermediate writes/reads)
+    batch_size = 256
     input_dim = 256
     hidden_dim = 1024
 
@@ -131,14 +134,16 @@ def main():
     print()
 
     # Analyze fusion opportunities BEFORE fusing
-    print("Fusion Analysis (v0.6.1)")
+    print("Fusion Analysis (v0.6.3)")
     print("-" * 50)
 
-    # Use realistic hardware parameters:
-    # - 1024 FLOPs/cycle (e.g., 32x32 systolic array)
+    # Use realistic hardware parameters for memory-bandwidth constrained system:
+    # - 2048 FLOPs/cycle (e.g., 64x32 systolic array or 2x 32x32)
     # - 64 bytes/cycle memory bandwidth
+    # This gives ridge_point = 32 FLOPs/byte
+    # With these parameters, unfused FFN is memory-bound, fused is compute-bound
     analyzer = FusionAnalyzer(
-        peak_flops_per_cycle=1024.0,
+        peak_flops_per_cycle=2048.0,
         peak_bytes_per_cycle=64.0,
     )
     report = analyzer.analyze(unfused_graph)

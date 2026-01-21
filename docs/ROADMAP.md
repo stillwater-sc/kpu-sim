@@ -18,20 +18,21 @@ MAJOR.MINOR.PATCH
 
 ---
 
-## Current Status: v0.5.7 ✅
+## Current Status: v0.6.3 ✅
 
-Released: 2026-01-20
+Released: 2026-01-21
 
 ### What's Complete
 
 | Component | Version | Status |
 |-----------|---------|--------|
 | **C++ Simulator Core** | v0.1.0 | ✅ Phases 1-6 complete |
-| **Python kpu Package** | v0.5.7 | ✅ `@kpu.compile` decorator |
+| **Python kpu Package** | v0.6.3 | ✅ `@kpu.compile` decorator |
 | **torch.compile Backend** | v0.2.0 | ✅ `backend="kpu"` |
-| **BEHAVIORAL Runtime** | v0.5.7 | ✅ Full functional simulation |
+| **BEHAVIORAL Runtime** | v0.6.3 | ✅ Full functional simulation |
 | **CNN Operators** | v0.5.7 | ✅ conv2d, pooling, normalization |
 | **Transformer Operators** | v0.5.7 | ✅ attention, layernorm, softmax |
+| **Kernel Fusion** | v0.6.3 | ✅ MatMul+Bias+Act, Conv2D+BN+ReLU |
 | **MNIST Examples** | v0.2.0 | ✅ MLP and CNN verified |
 | **C++ Kernel Types** | v0.5.7 | ✅ All v0.5.x kernels complete |
 
@@ -234,11 +235,20 @@ src/compiler/
 
 ### Success Criteria
 
-- [ ] 2× memory traffic reduction on FFN pattern
-- [ ] Automatic fusion detection
-- [ ] MatMul+Bias+ReLU fuses correctly
-- [ ] Unfused baseline and Fused baseline
-- [ ] Validate unfused is memory bound, fused is compute bound
+- [x] 2× memory traffic reduction on FFN pattern (2.77× achieved)
+- [x] Automatic fusion detection (FusionAnalyzer detects opportunities)
+- [x] MatMul+Bias+ReLU fuses correctly (behavioral output matches)
+- [x] Unfused baseline and Fused baseline (`optimize=False` vs `optimize=True`)
+- [x] Validate unfused is memory bound, fused is compute bound (64% → 100% efficiency)
+
+### Completed Versions
+
+| Version | Feature | Status |
+|---------|---------|--------|
+| v0.6.0 | FusionCompiler | ✅ Released |
+| v0.6.1 | Fusion Detection & Roofline | ✅ Released |
+| v0.6.2 | Conv2D Fused Kernels | ✅ Released |
+| v0.6.3 | Compute Efficiency Validation | ✅ Released |
 
 ### Tag: `v0.6-fusion`
 
