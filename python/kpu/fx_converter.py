@@ -437,7 +437,7 @@ class FXToKPUConverter:
         self.env[node.name] = KPUValue(name=node.name)
 
     def _emit_conv2d(self, node: 'fx.Node'):
-        """Emit 2D convolution."""
+        """Emit 2D convolution (supports grouped and depthwise convolutions)."""
         # torch.conv2d signature: input, weight, bias=None, stride=1, padding=0, dilation=1, groups=1
         # Dynamo may pass these as positional args or kwargs
         kwargs = dict(node.kwargs)
@@ -447,7 +447,7 @@ class FXToKPUConverter:
             weight = self._resolve_value(node.args[1], tensors, params)
             bias = self._resolve_value(node.args[2], tensors, params) if len(node.args) > 2 and node.args[2] is not None else None
 
-            # Get stride and padding from args or kwargs
+            # Get stride, padding, dilation, groups from args or kwargs
             # args: input, weight, bias, stride, padding, dilation, groups
             if len(node.args) > 3:
                 stride = node.args[3]
@@ -459,18 +459,36 @@ class FXToKPUConverter:
             else:
                 padding = kwargs.get('padding', (0, 0))
 
+            # dilation at index 5 (not yet supported, but extract it)
+            if len(node.args) > 5:
+                dilation = node.args[5]
+            else:
+                dilation = kwargs.get('dilation', (1, 1))
+
+            # groups at index 6
+            if len(node.args) > 6:
+                groups = node.args[6]
+            else:
+                groups = kwargs.get('groups', 1)
+
             if isinstance(stride, int):
                 stride = (stride, stride)
             if isinstance(padding, int):
                 padding = (padding, padding)
+            if isinstance(dilation, int):
+                dilation = (dilation, dilation)
 
-            return self._numpy_conv2d(x, weight, bias, stride, padding)
+            # Check for unsupported dilation
+            if dilation != (1, 1):
+                raise NotImplementedError(f"Dilation {dilation} not supported, only (1, 1)")
+
+            return self._numpy_conv2d(x, weight, bias, stride, padding, groups)
 
         self.ops.append(('conv2d', op_fn, [], node.name))
         self.env[node.name] = KPUValue(name=node.name)
 
     def _emit_conv2d_module(self, node: 'fx.Node', module: 'nn.Conv2d'):
-        """Emit conv2d from nn.Conv2d module."""
+        """Emit conv2d from nn.Conv2d module (supports grouped and depthwise)."""
         weight = module.weight.detach().cpu().numpy().astype(np.float32)
         bias = module.bias.detach().cpu().numpy().astype(np.float32) if module.bias is not None else None
 
@@ -482,10 +500,19 @@ class FXToKPUConverter:
 
         stride = module.stride
         padding = module.padding
+        groups = module.groups
+        dilation = module.dilation
+
         if isinstance(stride, int):
             stride = (stride, stride)
         if isinstance(padding, int):
             padding = (padding, padding)
+        if isinstance(dilation, int):
+            dilation = (dilation, dilation)
+
+        # Check for unsupported dilation
+        if dilation != (1, 1):
+            raise NotImplementedError(f"Dilation {dilation} not supported in conv2d, only (1, 1)")
 
         input_name = self._get_arg_name(node.args[0])
 
@@ -493,7 +520,7 @@ class FXToKPUConverter:
             x = tensors[input_name]
             w = params[weight_name]
             b = params.get(bias_name) if bias_name else None
-            return self._numpy_conv2d(x, w, b, stride, padding)
+            return self._numpy_conv2d(x, w, b, stride, padding, groups)
 
         self.ops.append(('conv2d', op_fn, [input_name], node.name))
         self.env[node.name] = KPUValue(name=node.name)
@@ -983,14 +1010,26 @@ class FXToKPUConverter:
     def _numpy_conv2d(self, x: np.ndarray, weight: np.ndarray,
                        bias: Optional[np.ndarray],
                        stride: Tuple[int, int],
-                       padding: Tuple[int, int]) -> np.ndarray:
+                       padding: Tuple[int, int],
+                       groups: int = 1) -> np.ndarray:
         """NumPy implementation of 2D convolution using im2col for performance.
+
+        Supports grouped and depthwise convolutions:
+        - groups=1: Standard convolution
+        - groups=C_in: Depthwise convolution (each channel convolved separately)
+        - groups>1: Grouped convolution (channels split into groups)
 
         im2col unfolds input patches into columns, enabling convolution via
         a single matrix multiplication. This is much faster than nested loops.
         """
         N, C_in, H_in, W_in = x.shape
-        C_out, C_in_w, K_h, K_w = weight.shape
+        C_out, C_in_per_group, K_h, K_w = weight.shape
+
+        # Validate groups parameter
+        assert C_in % groups == 0, f"C_in ({C_in}) must be divisible by groups ({groups})"
+        assert C_out % groups == 0, f"C_out ({C_out}) must be divisible by groups ({groups})"
+        C_in_per_group_expected = C_in // groups
+        C_out_per_group = C_out // groups
 
         H_out = (H_in + 2 * padding[0] - K_h) // stride[0] + 1
         W_out = (W_in + 2 * padding[1] - K_w) // stride[1] + 1
@@ -1003,21 +1042,36 @@ class FXToKPUConverter:
         else:
             x_padded = x
 
-        # im2col: Extract patches and reshape for matmul
-        # Output shape: (N, C_in * K_h * K_w, H_out * W_out)
-        col = self._im2col(x_padded, K_h, K_w, stride, H_out, W_out)
+        if groups == 1:
+            # Standard convolution (original fast path)
+            col = self._im2col(x_padded, K_h, K_w, stride, H_out, W_out)
+            weight_col = weight.reshape(C_out, -1)
+            result = np.zeros((N, C_out, H_out * W_out), dtype=x.dtype)
+            for n in range(N):
+                result[n] = weight_col @ col[n]
+            result = result.reshape(N, C_out, H_out, W_out)
+        else:
+            # Grouped convolution (includes depthwise when groups == C_in)
+            result = np.zeros((N, C_out, H_out, W_out), dtype=x.dtype)
 
-        # Reshape weight: (C_out, C_in * K_h * K_w)
-        weight_col = weight.reshape(C_out, -1)
+            for g in range(groups):
+                # Slice input channels for this group
+                c_in_start = g * C_in_per_group_expected
+                c_in_end = c_in_start + C_in_per_group_expected
+                x_group = x_padded[:, c_in_start:c_in_end, :, :]
 
-        # Convolution as matmul: (C_out, C_in*K*K) @ (N, C_in*K*K, H_out*W_out)
-        # Reshape for batch matmul: result is (N, C_out, H_out * W_out)
-        result = np.zeros((N, C_out, H_out * W_out), dtype=x.dtype)
-        for n in range(N):
-            result[n] = weight_col @ col[n]
+                # Slice output channels (weights) for this group
+                c_out_start = g * C_out_per_group
+                c_out_end = c_out_start + C_out_per_group
+                weight_group = weight[c_out_start:c_out_end]
 
-        # Reshape to (N, C_out, H_out, W_out)
-        result = result.reshape(N, C_out, H_out, W_out)
+                # im2col for this group
+                col_group = self._im2col(x_group, K_h, K_w, stride, H_out, W_out)
+                weight_col = weight_group.reshape(C_out_per_group, -1)
+
+                # Convolve this group
+                for n in range(N):
+                    result[n, c_out_start:c_out_end] = (weight_col @ col_group[n]).reshape(C_out_per_group, H_out, W_out)
 
         if bias is not None:
             result = result + bias.reshape(1, -1, 1, 1)

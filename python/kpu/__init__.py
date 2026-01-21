@@ -27,6 +27,56 @@ Fidelity Levels:
     - CYCLE_ACCURATE: Full timing simulation
 """
 
+# Suppress irrelevant PyTorch C++ warnings (like NNPACK) before any imports
+# These warnings are written directly to stderr from C++ code
+import sys as _sys
+import os as _os
+
+def _install_cpp_warning_filter():
+    """Install a filter to suppress irrelevant PyTorch C++ warnings.
+
+    NNPACK warnings are common when running on systems without NNPACK support,
+    but they're irrelevant when using the KPU backend.
+    """
+    _suppressed = [b'NNPACK', b'Could not initialize NNPACK']
+
+    # Save original stderr fd
+    _stderr_fd = _sys.stderr.fileno()
+    _saved_fd = _os.dup(_stderr_fd)
+
+    # Create pipe to capture stderr
+    _read_fd, _write_fd = _os.pipe()
+    _os.dup2(_write_fd, _stderr_fd)
+    _os.close(_write_fd)
+
+    def _flush_filtered_stderr():
+        """Read captured stderr and write filtered content."""
+        try:
+            _os.set_blocking(_read_fd, False)
+            captured = _os.read(_read_fd, 1024 * 1024)
+            for line in captured.split(b'\n'):
+                if line and not any(s in line for s in _suppressed):
+                    _sys.stderr.buffer.write(line + b'\n')
+                    _sys.stderr.buffer.flush()
+        except (BlockingIOError, OSError):
+            pass
+
+    def _restore_stderr():
+        """Restore original stderr."""
+        _flush_filtered_stderr()
+        _os.dup2(_saved_fd, _stderr_fd)
+        _os.close(_saved_fd)
+        _os.close(_read_fd)
+
+    # Register cleanup at exit
+    import atexit
+    atexit.register(_restore_stderr)
+
+    # Also flush periodically during imports
+    return _flush_filtered_stderr
+
+_flush_stderr = _install_cpp_warning_filter()
+
 __version__ = "0.6.3"
 __author__ = "Stillwater Supercomputing, Inc."
 

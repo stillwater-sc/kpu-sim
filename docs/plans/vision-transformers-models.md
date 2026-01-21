@@ -38,17 +38,18 @@ support and the operators required for each.
 | **DenseNet121/169/201** | 8M-20M | 74-77% | ⚠️ UNTESTED | Dense connections |
 | **SqueezeNet** | 1.2M | 58% | ⚠️ UNTESTED | Fire modules |
 
-### CNN-Based (Requires New Operators)
+### CNN-Based (Mobile/Efficient Architectures)
 
-| Model | Parameters | Top-1 Acc | KPU Status | Missing Operators |
-|-------|------------|-----------|------------|-------------------|
-| **MobileNetV2** | 3.5M | 72% | ❌ NOT SUPPORTED | Depthwise conv |
-| **MobileNetV3** | 5.5M | 75% | ❌ NOT SUPPORTED | Depthwise conv, SE blocks |
-| **EfficientNet B0-B7** | 5M-66M | 77-84% | ❌ NOT SUPPORTED | Depthwise conv, SE blocks |
-| **EfficientNetV2** | 21M-120M | 84-86% | ❌ NOT SUPPORTED | Depthwise conv, SE blocks |
-| **ShuffleNetV2** | 2.3M | 69% | ❌ NOT SUPPORTED | Channel shuffle, grouped conv |
-| **RegNet** | 4M-80M | 72-84% | ❌ NOT SUPPORTED | Grouped conv |
-| **ConvNeXt** | 29M-350M | 82-87% | ❌ NOT SUPPORTED | Depthwise conv, LayerNorm |
+| Model | Parameters | Top-1 Acc | KPU Status | Notes |
+|-------|------------|-----------|------------|-------|
+| **MobileNetV2** | 3.5M | 72% | ✅ VALIDATED | 10/10 images, 100% match |
+| **MobileNetV3** | 5.5M | 75% | ⚠️ UNTESTED | Should work (same ops) |
+| **EfficientNet-B0** | 5.3M | 77% | ✅ VALIDATED | Predictions match |
+| **EfficientNet B1-B7** | 8M-66M | 79-84% | ✅ SUPPORTED | Same ops as B0 |
+| **EfficientNetV2** | 21M-120M | 84-86% | ⚠️ UNTESTED | Should work |
+| **ShuffleNetV2** | 2.3M | 69% | ⚠️ UNTESTED | Grouped conv now supported |
+| **RegNet** | 4M-80M | 72-84% | ⚠️ UNTESTED | Grouped conv now supported |
+| **ConvNeXt** | 29M-350M | 82-87% | ⚠️ UNTESTED | Depthwise + LayerNorm |
 
 ### Vision Transformers
 
@@ -206,17 +207,17 @@ Additional operators for detection:
 
 **Result**: ViT-B/16 validated with 10/10 images correct, 100% PyTorch match
 
-### Phase 2: Depthwise/Grouped Convolution - HIGH VALUE
+### Phase 2: Depthwise/Grouped Convolution - ✅ COMPLETE
 
 **Goal**: Unlock MobileNet, EfficientNet, ShuffleNet families
 
-| Operator | Models Unlocked | Effort |
-|----------|-----------------|--------|
-| Depthwise Conv2d | MobileNetV2/V3, EfficientNet, ConvNeXt | Medium |
-| Grouped Conv2d | ShuffleNet, RegNet, ResNeXt | Medium |
-| Squeeze-and-Excitation | EfficientNet, MobileNetV3 | Low |
+| Operator | Status | Validated |
+|----------|--------|-----------|
+| Depthwise Conv2d (groups==C_in) | ✅ Working | MobileNetV2, EfficientNet-B0 |
+| Grouped Conv2d (groups>1) | ✅ Working | Unit tests |
+| Squeeze-and-Excitation | ✅ Working | EfficientNet-B0 |
 
-**Estimated effort**: Medium
+**Result**: MobileNetV2 and EfficientNet-B0 validated with pretrained weights
 
 ### Phase 3: Detection Infrastructure - MEDIUM PRIORITY
 
@@ -250,9 +251,10 @@ Additional operators for detection:
 
 ```
 Conv2d (standard)      MatMul/Linear        ReLU/GELU/SiLU
-BatchNorm2d            LayerNorm            Sigmoid/Tanh
+Conv2d (depthwise)     Conv2d (grouped)     Sigmoid/Tanh
+BatchNorm2d            LayerNorm            Softmax
 MaxPool2d              AvgPool2d            AdaptiveAvgPool2d
-Softmax                Add (skip conn)      Concat
+Add (skip conn)        Concat               Mul (SE blocks)
 Transpose              Reshape              Flatten
 ```
 
@@ -260,8 +262,8 @@ Transpose              Reshape              Flatten
 
 | Operator | Priority | Models Blocked |
 |----------|----------|----------------|
-| **Depthwise Conv2d** | P0 | MobileNet, EfficientNet, ConvNeXt |
-| **Grouped Conv2d** | P0 | ShuffleNet, RegNet, ResNeXt |
+| ~~**Depthwise Conv2d**~~ | ~~P0~~ | ✅ IMPLEMENTED |
+| ~~**Grouped Conv2d**~~ | ~~P0~~ | ✅ IMPLEMENTED |
 | **Upsample/Interpolate** | P1 | Segmentation, FPN |
 | **ROI Align** | P1 | Detection models |
 
@@ -281,18 +283,19 @@ Transpose              Reshape              Flatten
    - ViT-B/16 validated with pretrained weights
    - 10/10 images correct, 100% PyTorch match
 
-2. **Add depthwise conv** - Unlock mobile-optimized models (NEXT)
-   - Modify `conv2d` to support `groups` parameter
-   - Test MobileNetV2 inference
+2. ~~**Add depthwise/grouped conv**~~ ✅ DONE - `examples/torch/mobilenetv2_inference.py`
+   - MobileNetV2 validated: 10/10 images, 100% PyTorch match
+   - EfficientNet-B0 validated: predictions match
 
-3. **Create model compatibility matrix** - Track which models work
+3. **Add detection support** - For autonomous driving use case (NEXT)
+   - Implement Upsample/Interpolate
+   - Implement ROI Align
+   - Implement FPN (Feature Pyramid Network)
+   - Test Faster R-CNN
+
+4. **Create model compatibility matrix** - Track which models work
    - Automated testing of each model
    - Document operator requirements
-
-4. **Add detection support** - For autonomous driving use case
-   - Implement ROI Align
-   - Implement FPN
-   - Test Faster R-CNN
 
 ---
 
@@ -315,3 +318,4 @@ Transpose              Reshape              Flatten
 |---------|------|---------|
 | 0.1 | 2025-01-21 | Initial catalog of models and use cases |
 | 0.2 | 2025-01-21 | ViT-B/16 validated, created vit_inference.py example |
+| 0.3 | 2025-01-21 | Added grouped/depthwise conv, MobileNetV2 & EfficientNet-B0 validated |

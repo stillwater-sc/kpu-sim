@@ -18,6 +18,8 @@ The backend:
 2. Walks FX nodes and maps to kpu operations
 3. Executes on kpu simulator (BEHAVIORAL/TRANSACTIONAL/CYCLE_ACCURATE)
 4. Returns results compatible with PyTorch
+
+Note: PyTorch C++ warnings (like NNPACK) are filtered in kpu/__init__.py
 """
 
 from __future__ import annotations
