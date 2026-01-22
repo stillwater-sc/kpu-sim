@@ -47,7 +47,7 @@ support and the operators required for each.
 | **EfficientNet-B0** | 5.3M | 77% | ✅ VALIDATED | Predictions match |
 | **EfficientNet B1-B7** | 8M-66M | 79-84% | ✅ SUPPORTED | Same ops as B0 |
 | **EfficientNetV2** | 21M-120M | 84-86% | ⚠️ UNTESTED | Should work |
-| **ShuffleNetV2** | 2.3M | 69% | ❌ NOT SUPPORTED | Channel shuffle not supported |
+| **ShuffleNetV2** | 1.4M-7.4M | 69-74% | ✅ VALIDATED | x0.5, x1.0, x1.5, x2.0 all work |
 | **RegNet** | 4M-80M | 72-84% | ✅ VALIDATED | Grouped conv works |
 | **ConvNeXt** | 29M-350M | 82-87% | ✅ VALIDATED | Depthwise + LayerNorm works |
 
@@ -60,9 +60,9 @@ support and the operators required for each.
 | **ViT-L/16** | 304M | 85.3% | ✅ SUPPORTED | Same ops, larger scale |
 | **ViT-H/14** | 632M | 88.6% | ✅ SUPPORTED | Same ops, larger scale |
 | **DeiT** | 86M | 83.4% | ⚠️ UNTESTED | Same as ViT + distillation token |
-| **Swin-T** | 28M | 81.3% | ❌ NOT SUPPORTED | Shifted windows, relative position |
-| **Swin-S/B/L** | 50M-197M | 83-87% | ❌ NOT SUPPORTED | Same as Swin-T |
-| **MaxViT** | 31M-475M | 83-88% | ❌ NOT SUPPORTED | Grid attention, block attention |
+| **Swin-T** | 28M | 81.3% | ✅ VALIDATED | Shifted windows work |
+| **Swin-S/B** | 50M-88M | 83-85% | ✅ VALIDATED | Same as Swin-T |
+| **MaxViT-T** | 31M | 83% | ✅ VALIDATED | Grid + block attention work |
 
 ### ViT Operator Requirements
 
@@ -288,9 +288,10 @@ Transpose              Reshape              Flatten
 | Operator | Priority | Models Blocked |
 |----------|----------|----------------|
 | **Conv3d** | P2 | Video models |
-| **Transposed Conv2d** | P3 | Some decoders |
-| **Channel Shuffle** | P3 | ShuffleNet |
-| **Shifted Window Attention** | P3 | Swin Transformer |
+| ~~**Transposed Conv2d**~~ | ~~P3~~ | ✅ WORKS VIA FALLBACK |
+| ~~**Channel Shuffle**~~ | ~~P3~~ | ✅ IMPLEMENTED |
+| ~~**Shifted Window Attention**~~ | ~~P3~~ | ✅ IMPLEMENTED |
+| ~~**Grid/Block Attention**~~ | ~~P3~~ | ✅ IMPLEMENTED |
 
 ---
 
@@ -322,6 +323,19 @@ Transpose              Reshape              Flatten
    - DeepLabV3-ResNet50/101: validated
    - LRASPP-MobileNetV3: works with larger numerical diff
 
+6. ~~**Fix ShuffleNet support**~~ ✅ DONE
+   - Fixed fallback to handle tuple/list returns (chunk operation)
+   - Fixed immutable_list conversion for numpy compatibility
+   - ShuffleNetV2 x0.5/x1.0/x1.5/x2.0: all validated
+
+7. ~~**Fix Swin Transformer support**~~ ✅ DONE
+   - Fixed dynamic tensor indexing for relative position bias
+   - Swin-T/S/B: all validated with 1.4-1.9e-04 diff
+
+8. ~~**Fix MaxViT support**~~ ✅ DONE
+   - Fixed avg_pool2d padding support
+   - MaxViT-T: validated with 3.27e-04 diff
+
 ---
 
 ## References
@@ -347,3 +361,6 @@ Transpose              Reshape              Flatten
 | 0.4 | 2025-01-21 | Detection support: FPN, ROI Align, Interpolate validated for Faster R-CNN |
 | 0.5 | 2025-01-21 | Model compatibility matrix: 35 models tested (24 pass, 2 partial, 9 fail) |
 | 0.6 | 2025-01-21 | Dilated convolution support: FCN, DeepLabV3 segmentation models now work |
+| 0.7 | 2025-01-21 | ShuffleNet support: fixed fallback for tuple returns and immutable_list |
+| 0.8 | 2025-01-21 | Swin Transformer: fixed dynamic tensor indexing for relative position bias |
+| 0.9 | 2025-01-21 | MaxViT: fixed avg_pool2d padding; ALL major 2D vision models now supported |

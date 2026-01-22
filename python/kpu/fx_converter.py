@@ -567,17 +567,20 @@ class FXToKPUConverter:
         kwargs = dict(node.kwargs)
         kernel_size = node.args[1] if len(node.args) > 1 else kwargs.get('kernel_size', 2)
         stride = node.args[2] if len(node.args) > 2 else kwargs.get('stride', kernel_size)
+        padding = node.args[3] if len(node.args) > 3 else kwargs.get('padding', 0)
 
         if isinstance(kernel_size, int):
             kernel_size = (kernel_size, kernel_size)
         if isinstance(stride, int):
             stride = (stride, stride)
+        if isinstance(padding, int):
+            padding = (padding, padding)
 
         input_name = self._get_arg_name(node.args[0])
 
         def op_fn(tensors, params):
             x = tensors[input_name]
-            return self._numpy_avg_pool2d(x, kernel_size, stride)
+            return self._numpy_avg_pool2d(x, kernel_size, stride, padding)
 
         self.ops.append(('avg_pool2d', op_fn, [input_name], node.name))
         self.env[node.name] = KPUValue(name=node.name)
@@ -586,17 +589,20 @@ class FXToKPUConverter:
         """Emit average pooling from module."""
         kernel_size = module.kernel_size
         stride = module.stride if module.stride else kernel_size
+        padding = module.padding
 
         if isinstance(kernel_size, int):
             kernel_size = (kernel_size, kernel_size)
         if isinstance(stride, int):
             stride = (stride, stride)
+        if isinstance(padding, int):
+            padding = (padding, padding)
 
         input_name = self._get_arg_name(node.args[0])
 
         def op_fn(tensors, params):
             x = tensors[input_name]
-            return self._numpy_avg_pool2d(x, kernel_size, stride)
+            return self._numpy_avg_pool2d(x, kernel_size, stride, padding)
 
         self.ops.append(('avg_pool2d', op_fn, [input_name], node.name))
         self.env[node.name] = KPUValue(name=node.name)
@@ -904,10 +910,16 @@ class FXToKPUConverter:
         """Emit mean reduction."""
         input_name = self._get_arg_name(node.args[0])
 
+        # Extract dim and keepdim at conversion time to avoid FX immutable types
+        dim = node.args[1] if len(node.args) > 1 else node.kwargs.get('dim', None)
+        keepdim = node.kwargs.get('keepdim', False)
+
+        # Convert immutable_list to tuple for numpy compatibility
+        if dim is not None and hasattr(dim, '__iter__') and not isinstance(dim, (int, type(None))):
+            dim = tuple(dim)
+
         def op_fn(tensors, params):
             x = tensors[input_name]
-            dim = node.args[1] if len(node.args) > 1 else node.kwargs.get('dim', None)
-            keepdim = node.kwargs.get('keepdim', False)
             return np.mean(x, axis=dim, keepdims=keepdim)
 
         self.ops.append(('mean', op_fn, [input_name], node.name))
@@ -917,25 +929,62 @@ class FXToKPUConverter:
         """Emit sum reduction."""
         input_name = self._get_arg_name(node.args[0])
 
+        # Extract dim and keepdim at conversion time to avoid FX immutable types
+        dim = node.args[1] if len(node.args) > 1 else node.kwargs.get('dim', None)
+        keepdim = node.kwargs.get('keepdim', False)
+
+        # Convert immutable_list to tuple for numpy compatibility
+        if dim is not None and hasattr(dim, '__iter__') and not isinstance(dim, (int, type(None))):
+            dim = tuple(dim)
+
         def op_fn(tensors, params):
             x = tensors[input_name]
-            dim = node.args[1] if len(node.args) > 1 else node.kwargs.get('dim', None)
-            keepdim = node.kwargs.get('keepdim', False)
             return np.sum(x, axis=dim, keepdims=keepdim)
 
         self.ops.append(('sum', op_fn, [input_name], node.name))
         self.env[node.name] = KPUValue(name=node.name)
 
     def _emit_getitem(self, node: 'fx.Node'):
-        """Emit getitem (indexing)."""
+        """Emit getitem (indexing).
+
+        Handles both static indices (int, slice, tuple) and dynamic indices
+        (tensors computed at runtime, like relative_position_index in Swin).
+        """
         input_name = self._get_arg_name(node.args[0])
-        index = node.args[1]
+        index_arg = node.args[1]
 
-        def op_fn(tensors, params):
-            x = tensors[input_name]
-            return x[index]
+        # Check if index is a dynamic tensor (FX node) that needs runtime resolution
+        if hasattr(index_arg, 'name'):
+            # Dynamic index - resolve at runtime
+            index_name = index_arg.name
 
-        self.ops.append(('getitem', op_fn, [input_name], node.name))
+            def op_fn(tensors, params):
+                x = tensors[input_name]
+                # Resolve index from tensors or params (can't use 'or' with arrays)
+                if index_name in tensors:
+                    idx = tensors[index_name]
+                elif index_name in params:
+                    idx = params[index_name]
+                elif index_name in self.params:
+                    idx = self.params[index_name]
+                else:
+                    raise ValueError(f"Could not resolve index '{index_name}'")
+                # Convert to appropriate type for numpy indexing
+                if hasattr(idx, 'astype'):
+                    idx = idx.astype(np.int64)
+                return x[idx]
+
+            self.ops.append(('getitem_dynamic', op_fn, [input_name], node.name))
+        else:
+            # Static index - use directly
+            index = index_arg
+
+            def op_fn(tensors, params):
+                x = tensors[input_name]
+                return x[index]
+
+            self.ops.append(('getitem', op_fn, [input_name], node.name))
+
         self.env[node.name] = KPUValue(name=node.name)
 
     def _emit_identity(self, node: 'fx.Node'):
@@ -978,6 +1027,9 @@ class FXToKPUConverter:
             def from_torch(x):
                 if isinstance(x, torch.Tensor):
                     return x.detach().cpu().numpy()
+                elif isinstance(x, (list, tuple)):
+                    # Handle operations that return multiple tensors (like chunk, split)
+                    return type(x)(from_torch(item) for item in x)
                 return x
 
             torch_args = [to_torch(self._resolve_value(a, tensors, params))
@@ -1175,10 +1227,22 @@ class FXToKPUConverter:
 
     def _numpy_avg_pool2d(self, x: np.ndarray,
                           kernel_size: Tuple[int, int],
-                          stride: Tuple[int, int]) -> np.ndarray:
+                          stride: Tuple[int, int],
+                          padding: Tuple[int, int] = (0, 0),
+                          count_include_pad: bool = True) -> np.ndarray:
         """NumPy implementation of average pooling using stride tricks."""
         N, C, H_in, W_in = x.shape
         K_h, K_w = kernel_size
+
+        # Apply padding if needed
+        if padding[0] > 0 or padding[1] > 0:
+            x = np.pad(x, ((0, 0), (0, 0),
+                          (padding[0], padding[0]),
+                          (padding[1], padding[1])),
+                       mode='constant', constant_values=0)
+            H_in = x.shape[2]
+            W_in = x.shape[3]
+
         H_out = (H_in - K_h) // stride[0] + 1
         W_out = (W_in - K_w) // stride[1] + 1
 

@@ -8,11 +8,11 @@ PyTorch Version: 2.9.1
 
 | Status | Count | Percentage |
 |--------|-------|------------|
-| ✅ PASSED | 28 | 74% |
-| ⚠️ PARTIAL | 3 | 8% |
-| ❌ FAILED | 7 | 18% |
+| ✅ PASSED | 37 | 88% |
+| ⚠️ PARTIAL | 3 | 7% |
+| ❌ FAILED | 2 | 5% |
 
-**Total Models Tested:** 38
+**Total Models Tested:** 42
 
 ---
 
@@ -43,7 +43,10 @@ PyTorch Version: 2.9.1
 | MobileNetV3-Large | ✅ PASSED | 5.5M | 5.02e-12 | Squeeze-excitation |
 | EfficientNet-B0 | ✅ PASSED | 5.3M | 4.07e-20 | Compound scaling |
 | EfficientNet-B1 | ✅ PASSED | 7.8M | 3.39e-20 | Compound scaling |
-| ShuffleNetV2-x1.0 | ❌ FAILED | 2.3M | - | Channel shuffle not supported |
+| ShuffleNetV2-x0.5 | ✅ PASSED | 1.4M | 9.31e-10 | Channel shuffle works |
+| ShuffleNetV2-x1.0 | ✅ PASSED | 2.3M | 2.33e-10 | Channel shuffle works |
+| ShuffleNetV2-x1.5 | ✅ PASSED | 3.5M | 1.86e-09 | Channel shuffle works |
+| ShuffleNetV2-x2.0 | ✅ PASSED | 7.4M | 9.31e-10 | Channel shuffle works |
 | RegNet-Y-400MF | ✅ PASSED | 4.3M | 1.58e-08 | Grouped convolutions |
 
 ### Vision Transformers
@@ -55,9 +58,10 @@ PyTorch Version: 2.9.1
 | ViT-L/16 | ✅ PASSED | 304M | ~0 | Same ops as ViT-B |
 | ConvNeXt-Tiny | ✅ PASSED | 29M | 6.71e-04 | Modern CNN |
 | ConvNeXt-Small | ✅ PASSED | 50M | 6.11e-04 | Modern CNN |
-| Swin-T | ❌ FAILED | 28M | - | Shifted windows not supported |
-| Swin-S | ❌ FAILED | 50M | - | Shifted windows not supported |
-| MaxViT-T | ❌ FAILED | 31M | - | Grid attention not supported |
+| Swin-T | ✅ PASSED | 28M | 1.38e-04 | Shifted window attention |
+| Swin-S | ✅ PASSED | 50M | 1.39e-04 | Shifted window attention |
+| Swin-B | ✅ PASSED | 88M | 1.86e-04 | Shifted window attention |
+| MaxViT-T | ✅ PASSED | 31M | 3.27e-04 | Grid + block attention |
 
 ---
 
@@ -113,16 +117,17 @@ PyTorch Version: 2.9.1
 | Arithmetic | Add, Mul, Sub, Div |
 | Detection | ROI Align, Interpolate (bilinear, nearest), FPN |
 | Segmentation | ASPP (Atrous Spatial Pyramid Pooling) |
+| Shuffle | Channel shuffle (via view+transpose+contiguous+chunk) |
+| Attention | Shifted window attention (Swin), Grid/Block attention (MaxViT) |
+| Indexing | Dynamic tensor indexing (relative position bias) |
 
 ### Not Supported ❌
 
 | Operator | Models Blocked | Priority |
 |----------|----------------|----------|
-| Channel Shuffle | ShuffleNet | P3 |
-| Shifted Window Attention | Swin Transformer | P3 |
-| Grid/Block Attention | MaxViT | P3 |
 | Conv3d | Video models | P4 |
-| Transposed Conv2d | Some decoders | P3 |
+
+**Note**: All major 2D vision architectures are now supported including Swin (shifted windows) and MaxViT (grid/block attention).
 
 ---
 
@@ -135,7 +140,11 @@ SqueezeNet shows larger numerical differences (~2e-2) compared to other models. 
 ResNet101 shows larger numerical differences (~9e-2) on deep networks. Consider this when using very deep ResNets.
 
 ### ShuffleNet Channel Shuffle
-ShuffleNet fails due to the `channel_shuffle` operation which uses tensor stride manipulation not currently handled by the KPU backend.
+~~ShuffleNet fails due to the `channel_shuffle` operation which uses tensor stride manipulation not currently handled by the KPU backend.~~
+
+**FIXED**: ShuffleNet now works. The fix involved:
+1. Handling tuple/list returns from operations like `chunk` in the fallback mechanism
+2. Converting FX `immutable_list` types to Python tuples for numpy compatibility
 
 ---
 
@@ -163,3 +172,6 @@ PYTHONPATH=python python examples/torch/model_compatibility.py --category classi
 |---------|------|---------|
 | 0.1 | 2025-01-21 | Initial compatibility matrix |
 | 0.2 | 2025-01-21 | Added dilated convolution support, segmentation models now work |
+| 0.3 | 2025-01-21 | Fixed ShuffleNet: channel shuffle now works via fallback ops |
+| 0.4 | 2025-01-21 | Fixed Swin Transformer: dynamic indexing for relative position bias |
+| 0.5 | 2025-01-21 | Fixed MaxViT: avg_pool2d padding support |
