@@ -77,7 +77,7 @@ def _install_cpp_warning_filter():
 
 _flush_stderr = _install_cpp_warning_filter()
 
-__version__ = "0.7.8"
+__version__ = "0.7.9"
 __author__ = "Stillwater Supercomputing, Inc."
 
 # Fidelity levels
@@ -241,6 +241,18 @@ from .quantization import (
     fp4_range,
     fp4_values,
     fp4_info,
+    # Mixed precision (v0.7.9)
+    MixedPrecisionConfig,
+    MIXED_INT8_FP16,
+    MIXED_INT8_BF16,
+    MIXED_INT4_FP16,
+    MIXED_FP8_FP16,
+    MIXED_FP8_BF16,
+    mixed_precision_linear,
+    mixed_precision_matmul,
+    mixed_precision_conv2d,
+    calculate_mixed_precision_traffic,
+    mixed_precision_info,
     # Memory traffic
     calculate_memory_bytes,
     calculate_matmul_traffic,
@@ -434,6 +446,18 @@ __all__ = [
     "fp4_range",
     "fp4_values",
     "fp4_info",
+    # Mixed precision (v0.7.9)
+    "MixedPrecisionConfig",
+    "MIXED_INT8_FP16",
+    "MIXED_INT8_BF16",
+    "MIXED_INT4_FP16",
+    "MIXED_FP8_FP16",
+    "MIXED_FP8_BF16",
+    "mixed_precision_linear",
+    "mixed_precision_matmul",
+    "mixed_precision_conv2d",
+    "calculate_mixed_precision_traffic",
+    "mixed_precision_info",
     # Memory traffic
     "calculate_memory_bytes",
     "calculate_matmul_traffic",

@@ -1864,6 +1864,319 @@ def fp4_info(format_name: str = "e2m1") -> Dict[str, Any]:
     }
 
 
+# --- Mixed Precision operations (v0.7.9) ---
+
+# Mixed precision configurations for efficient inference:
+# - INT8 weights + FP16 activations: Good accuracy, 4x weight compression
+# - INT8 weights + BF16 activations: Good for training, wider range
+# - INT4 weights + FP16 activations: Aggressive compression, LLM inference
+# - FP8 weights + FP16 activations: Balance of range and precision
+
+class MixedPrecisionConfig:
+    """Configuration for mixed precision computation.
+
+    Attributes:
+        weight_dtype: Data type for weights
+        activation_dtype: Data type for activations
+        accumulator_dtype: Data type for accumulation (usually FP32)
+        output_dtype: Data type for output
+    """
+
+    def __init__(
+        self,
+        weight_dtype: QuantDtype = QuantDtype.INT8,
+        activation_dtype: QuantDtype = QuantDtype.FP16,
+        accumulator_dtype: QuantDtype = QuantDtype.FP32,
+        output_dtype: Optional[QuantDtype] = None,
+    ):
+        self.weight_dtype = weight_dtype
+        self.activation_dtype = activation_dtype
+        self.accumulator_dtype = accumulator_dtype
+        self.output_dtype = output_dtype or activation_dtype
+
+    def __repr__(self) -> str:
+        return (f"MixedPrecisionConfig(weights={self.weight_dtype.value}, "
+                f"activations={self.activation_dtype.value}, "
+                f"accumulator={self.accumulator_dtype.value})")
+
+    @property
+    def weight_bytes(self) -> float:
+        """Bytes per weight element."""
+        return self.weight_dtype.bytes_per_element
+
+    @property
+    def activation_bytes(self) -> float:
+        """Bytes per activation element."""
+        return self.activation_dtype.bytes_per_element
+
+    def memory_reduction_factor(self) -> float:
+        """Calculate memory reduction vs FP32 for typical inference.
+
+        Assumes weights dominate memory (typical for large models).
+        """
+        fp32_bytes = QuantDtype.FP32.bytes_per_element
+        # Weighted average: weights usually 80%+ of memory
+        avg_bytes = 0.8 * self.weight_bytes + 0.2 * self.activation_bytes
+        return fp32_bytes / avg_bytes
+
+
+# Common mixed precision configurations
+MIXED_INT8_FP16 = MixedPrecisionConfig(
+    weight_dtype=QuantDtype.INT8,
+    activation_dtype=QuantDtype.FP16,
+)
+
+MIXED_INT8_BF16 = MixedPrecisionConfig(
+    weight_dtype=QuantDtype.INT8,
+    activation_dtype=QuantDtype.BF16,
+)
+
+MIXED_INT4_FP16 = MixedPrecisionConfig(
+    weight_dtype=QuantDtype.INT4,
+    activation_dtype=QuantDtype.FP16,
+)
+
+MIXED_FP8_FP16 = MixedPrecisionConfig(
+    weight_dtype=QuantDtype.FP8_E4M3,
+    activation_dtype=QuantDtype.FP16,
+)
+
+MIXED_FP8_BF16 = MixedPrecisionConfig(
+    weight_dtype=QuantDtype.FP8_E4M3,
+    activation_dtype=QuantDtype.BF16,
+)
+
+
+def mixed_precision_linear(
+    x: np.ndarray,
+    weight: np.ndarray,
+    bias: Optional[np.ndarray] = None,
+    weight_scale: float = 1.0,
+    weight_zero_point: int = 0,
+    config: MixedPrecisionConfig = MIXED_INT8_FP16,
+) -> np.ndarray:
+    """Perform mixed precision linear layer.
+
+    Weights are stored in low precision (e.g., INT8) and dequantized.
+    Activations are computed in higher precision (e.g., FP16).
+    Accumulation is done in FP32 for accuracy.
+
+    Args:
+        x: Input activations (float32, will be cast to activation_dtype)
+        weight: Quantized weights (int8 or appropriate type)
+        bias: Optional bias (float32)
+        weight_scale: Scale factor for weight dequantization
+        weight_zero_point: Zero point for weight dequantization
+        config: Mixed precision configuration
+
+    Returns:
+        Output tensor (float32)
+    """
+    # Cast activations to target dtype
+    if config.activation_dtype == QuantDtype.FP16:
+        x_act = x.astype(np.float16)
+    elif config.activation_dtype == QuantDtype.BF16:
+        if _ML_DTYPES_AVAILABLE:
+            x_act = x.astype(_BFLOAT16_DTYPE)
+        else:
+            x_act = _emulate_bf16(x.astype(np.float32))
+    else:
+        x_act = x.astype(np.float32)
+
+    # Dequantize weights
+    if config.weight_dtype in (QuantDtype.INT8, QuantDtype.UINT8):
+        w_fp = (weight.astype(np.int32) - weight_zero_point) * weight_scale
+    elif config.weight_dtype == QuantDtype.INT4:
+        w_fp = (weight.astype(np.int32) - weight_zero_point) * weight_scale
+    elif config.weight_dtype in (QuantDtype.FP8_E4M3, QuantDtype.FP8_E5M2):
+        # FP8 weights - just cast to float
+        w_fp = weight.astype(np.float32) * weight_scale
+    else:
+        w_fp = weight.astype(np.float32)
+
+    # Accumulate in FP32
+    x_fp32 = x_act.astype(np.float32) if hasattr(x_act, 'astype') else np.array(x_act, dtype=np.float32)
+    y = np.matmul(x_fp32, w_fp.astype(np.float32).T)
+
+    if bias is not None:
+        y = y + bias.astype(np.float32)
+
+    return y.astype(np.float32)
+
+
+def mixed_precision_matmul(
+    a: np.ndarray,
+    b: np.ndarray,
+    a_scale: float = 1.0,
+    a_zero_point: int = 0,
+    b_scale: float = 1.0,
+    b_zero_point: int = 0,
+    a_dtype: QuantDtype = QuantDtype.FP16,
+    b_dtype: QuantDtype = QuantDtype.INT8,
+) -> np.ndarray:
+    """Perform mixed precision matrix multiplication.
+
+    Args:
+        a: First matrix (activations, typically FP16)
+        b: Second matrix (weights, typically INT8)
+        a_scale, a_zero_point: Quantization params for a (if quantized)
+        b_scale, b_zero_point: Quantization params for b (if quantized)
+        a_dtype: Data type for a
+        b_dtype: Data type for b
+
+    Returns:
+        Result matrix (float32)
+    """
+    # Dequantize/cast a
+    if a_dtype.is_integer:
+        a_fp = (a.astype(np.int32) - a_zero_point) * a_scale
+    elif a_dtype == QuantDtype.FP16:
+        a_fp = a.astype(np.float16).astype(np.float32)
+    elif a_dtype == QuantDtype.BF16:
+        a_fp = a.astype(np.float32)  # Already dequantized or emulated
+    else:
+        a_fp = a.astype(np.float32)
+
+    # Dequantize/cast b
+    if b_dtype.is_integer:
+        b_fp = (b.astype(np.int32) - b_zero_point) * b_scale
+    elif b_dtype == QuantDtype.FP16:
+        b_fp = b.astype(np.float16).astype(np.float32)
+    elif b_dtype == QuantDtype.BF16:
+        b_fp = b.astype(np.float32)
+    else:
+        b_fp = b.astype(np.float32)
+
+    # Matmul in FP32
+    return np.matmul(a_fp, b_fp)
+
+
+def mixed_precision_conv2d(
+    x: np.ndarray,
+    weight: np.ndarray,
+    bias: Optional[np.ndarray] = None,
+    weight_scale: float = 1.0,
+    weight_zero_point: int = 0,
+    stride: Tuple[int, int] = (1, 1),
+    padding: Tuple[int, int] = (0, 0),
+    config: MixedPrecisionConfig = MIXED_INT8_FP16,
+) -> np.ndarray:
+    """Perform mixed precision 2D convolution.
+
+    Args:
+        x: Input tensor [N, C_in, H, W] (will be cast to activation_dtype)
+        weight: Quantized weights [C_out, C_in, kH, kW]
+        bias: Optional bias [C_out]
+        weight_scale: Scale for weight dequantization
+        weight_zero_point: Zero point for weight dequantization
+        stride: Convolution stride
+        padding: Convolution padding
+        config: Mixed precision configuration
+
+    Returns:
+        Output tensor [N, C_out, H_out, W_out] (float32)
+    """
+    # Cast activations
+    if config.activation_dtype == QuantDtype.FP16:
+        x_act = x.astype(np.float16)
+    else:
+        x_act = x.astype(np.float32)
+
+    # Dequantize weights
+    if config.weight_dtype.is_integer:
+        w_fp = (weight.astype(np.int32) - weight_zero_point) * weight_scale
+    else:
+        w_fp = weight.astype(np.float32) * weight_scale
+
+    # Convert to FP32 for computation
+    x_fp32 = x_act.astype(np.float32)
+    w_fp32 = w_fp.astype(np.float32)
+
+    N, C_in, H, W = x_fp32.shape
+    C_out, _, kH, kW = w_fp32.shape
+    sH, sW = stride
+    pH, pW = padding
+
+    # Pad input
+    if pH > 0 or pW > 0:
+        x_fp32 = np.pad(x_fp32, ((0, 0), (0, 0), (pH, pH), (pW, pW)),
+                        mode='constant', constant_values=0)
+
+    H_out = (H + 2 * pH - kH) // sH + 1
+    W_out = (W + 2 * pW - kW) // sW + 1
+
+    output = np.zeros((N, C_out, H_out, W_out), dtype=np.float32)
+
+    for n in range(N):
+        for c_out in range(C_out):
+            for h in range(H_out):
+                for w in range(W_out):
+                    h_start = h * sH
+                    w_start = w * sW
+                    patch = x_fp32[n, :, h_start:h_start+kH, w_start:w_start+kW]
+                    output[n, c_out, h, w] = np.sum(patch * w_fp32[c_out])
+
+    if bias is not None:
+        output = output + bias.reshape(1, -1, 1, 1)
+
+    return output
+
+
+def calculate_mixed_precision_traffic(
+    M: int, K: int, N: int,
+    config: MixedPrecisionConfig,
+) -> Dict[str, int]:
+    """Calculate memory traffic for mixed precision matmul.
+
+    Args:
+        M, K, N: Matrix dimensions (A: MxK, B: KxN, C: MxN)
+        config: Mixed precision configuration
+
+    Returns:
+        Dictionary with traffic breakdown
+    """
+    # A is activations (M x K)
+    a_bytes = int(M * K * config.activation_bytes)
+    # B is weights (K x N)
+    b_bytes = int(K * N * config.weight_bytes)
+    # C is output (M x N) in output dtype
+    c_bytes = int(M * N * config.output_dtype.bytes_per_element)
+
+    total = a_bytes + b_bytes + c_bytes
+
+    # Compare to FP32
+    fp32_total = (M * K + K * N + M * N) * 4
+
+    return {
+        "activations_bytes": a_bytes,
+        "weights_bytes": b_bytes,
+        "output_bytes": c_bytes,
+        "total_bytes": total,
+        "fp32_baseline_bytes": fp32_total,
+        "reduction_factor": fp32_total / total if total > 0 else 1.0,
+    }
+
+
+def mixed_precision_info(config: MixedPrecisionConfig) -> Dict[str, Any]:
+    """Get information about a mixed precision configuration.
+
+    Args:
+        config: Mixed precision configuration
+
+    Returns:
+        Dictionary with configuration details
+    """
+    return {
+        "weight_dtype": config.weight_dtype.value,
+        "activation_dtype": config.activation_dtype.value,
+        "accumulator_dtype": config.accumulator_dtype.value,
+        "output_dtype": config.output_dtype.value,
+        "weight_bytes": config.weight_bytes,
+        "activation_bytes": config.activation_bytes,
+        "memory_reduction_factor": config.memory_reduction_factor(),
+    }
+
+
 # --- Memory traffic calculation ---
 
 def calculate_memory_bytes(
