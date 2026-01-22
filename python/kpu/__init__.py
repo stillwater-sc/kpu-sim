@@ -77,7 +77,7 @@ def _install_cpp_warning_filter():
 
 _flush_stderr = _install_cpp_warning_filter()
 
-__version__ = "0.6.4"
+__version__ = "0.7.0"
 __author__ = "Stillwater Supercomputing, Inc."
 
 # Fidelity levels
@@ -162,6 +162,28 @@ from .fusion import (
     # v0.6.2: Conv2D fusion patterns
     Conv2DBatchNormActivation,
     Conv2DActivation,
+)
+
+# Quantization (v0.7.0+)
+from .quantization import (
+    # Dtypes and config
+    QuantDtype,
+    QuantizationConfig,
+    # Calibration
+    compute_scale_zero_point,
+    compute_per_channel_params,
+    # Quantize/dequantize
+    quantize,
+    dequantize,
+    quantize_per_channel,
+    dequantize_per_channel,
+    # Quantized operations
+    quantized_matmul_int8,
+    quantized_linear_int8,
+    # Memory traffic
+    calculate_memory_bytes,
+    calculate_matmul_traffic,
+    bandwidth_reduction_factor,
 )
 
 # torch.compile backend (optional, requires PyTorch)
@@ -278,6 +300,21 @@ __all__ = [
     # v0.6.2: Conv2D fusion patterns
     "Conv2DBatchNormActivation",
     "Conv2DActivation",
+
+    # Quantization (v0.7.0+)
+    "QuantDtype",
+    "QuantizationConfig",
+    "compute_scale_zero_point",
+    "compute_per_channel_params",
+    "quantize",
+    "dequantize",
+    "quantize_per_channel",
+    "dequantize_per_channel",
+    "quantized_matmul_int8",
+    "quantized_linear_int8",
+    "calculate_memory_bytes",
+    "calculate_matmul_traffic",
+    "bandwidth_reduction_factor",
 
     # torch.compile backend
     "torch_backend",

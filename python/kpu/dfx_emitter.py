@@ -23,14 +23,52 @@ if TYPE_CHECKING:
 
 class DFXDataType(Enum):
     """Data types supported by DFX IR."""
+    # Full precision
     FLOAT32 = "f32"
+    FLOAT64 = "f64"
+
+    # 16-bit types
     FLOAT16 = "f16"
     BFLOAT16 = "bf16"
+
+    # 8-bit float types (v0.7.0+)
+    FLOAT8_E4M3 = "fp8_e4m3"
+    FLOAT8_E5M2 = "fp8_e5m2"
+    FLOAT8_E3M4 = "fp8_e3m4"
+    FLOAT8_E2M5 = "fp8_e2m5"
+
+    # Integer types
     INT32 = "i32"
     INT16 = "i16"
     INT8 = "i8"
     UINT8 = "u8"
+    INT4 = "i4"
+    UINT4 = "u4"
+
+    # Other
     BOOL = "bool"
+
+    @property
+    def bytes_per_element(self) -> float:
+        """Return bytes per element for this dtype."""
+        sizes = {
+            DFXDataType.FLOAT64: 8.0,
+            DFXDataType.FLOAT32: 4.0,
+            DFXDataType.FLOAT16: 2.0,
+            DFXDataType.BFLOAT16: 2.0,
+            DFXDataType.FLOAT8_E4M3: 1.0,
+            DFXDataType.FLOAT8_E5M2: 1.0,
+            DFXDataType.FLOAT8_E3M4: 1.0,
+            DFXDataType.FLOAT8_E2M5: 1.0,
+            DFXDataType.INT32: 4.0,
+            DFXDataType.INT16: 2.0,
+            DFXDataType.INT8: 1.0,
+            DFXDataType.UINT8: 1.0,
+            DFXDataType.INT4: 0.5,
+            DFXDataType.UINT4: 0.5,
+            DFXDataType.BOOL: 1.0,
+        }
+        return sizes.get(self, 4.0)
 
 
 class DFXMemLevel(Enum):
@@ -110,6 +148,15 @@ class DFXOpCode(Enum):
     # Conv2D fused operations (v0.6.2+)
     FUSED_CONV2D_BN_RELU = "fused_conv2d_bn_relu"
     FUSED_CONV2D_RELU = "fused_conv2d_relu"
+
+    # Quantization operations (v0.7.0+)
+    QUANTIZE = "quantize"          # float -> int with scale/zero_point
+    DEQUANTIZE = "dequantize"      # int -> float with scale/zero_point
+
+    # Quantized compute operations (v0.7.0+)
+    QUANTIZED_MATMUL = "quantized_matmul"  # INT8 matmul
+    QUANTIZED_LINEAR = "quantized_linear"  # INT8 linear layer
+    QUANTIZED_CONV2D = "quantized_conv2d"  # INT8 conv2d
 
 
 @dataclass
