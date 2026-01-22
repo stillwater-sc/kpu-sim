@@ -1,0 +1,47 @@
+● v0.7.0 INT8 quantization infrastructure is complete. Here's the summary:
+
+  v0.7.0 INT8 Quantization Implementation
+
+  New Files
+
+  - python/kpu/quantization.py - Core quantization module with:
+    - QuantDtype enum - All quantization types (INT8, FP16, BF16, FP8 variants, INT4, FP4)
+    - QuantizationConfig - Configuration for quantized tensors
+    - compute_scale_zero_point() - Calibration utility
+    - compute_per_channel_params() - Per-channel calibration
+    - quantize() / dequantize() - Core Q/DQ operations
+    - quantized_matmul_int8() - INT8 matrix multiplication
+    - quantized_linear_int8() - INT8 linear layer
+    - calculate_matmul_traffic() - Memory traffic calculation
+    - bandwidth_reduction_factor() - Bandwidth reduction metric
+
+  Modified Files
+
+  - python/kpu/dfx_emitter.py - Added:
+    - Extended DFXDataType with FP8, INT4 types
+    - Added bytes_per_element property
+    - New opcodes: QUANTIZE, DEQUANTIZE, QUANTIZED_MATMUL, etc.
+  - python/kpu/__init__.py - Exports all quantization APIs
+  - docs/plans/v0.7-quantization-gap-analysis.md - Updated with fast bfloat16 notes
+
+  Test Results
+  ┌──────────────────────────┬──────────────────────┐
+  │           Test           │        Result        │
+  ├──────────────────────────┼──────────────────────┤
+  │ Quantize/Dequantize      │ 0.4% max error       │
+  ├──────────────────────────┼──────────────────────┤
+  │ INT8 MatMul accuracy     │ 1.03% relative error │
+  ├──────────────────────────┼──────────────────────┤
+  │ Memory reduction         │ 4.0x (INT8 vs FP32)  │
+  ├──────────────────────────┼──────────────────────┤
+  │ Per-channel quantization │ Working              │
+  └──────────────────────────┴──────────────────────┘
+  Version
+
+  - Updated to v0.7.0 in __init__.py and pyproject.toml
+
+  Would you like me to:
+  1. Create a CHANGELOG entry and commit this work?
+  2. Continue to v0.7.1 (FP16 support)?
+  3. Add more INT8 tests or examples?
+

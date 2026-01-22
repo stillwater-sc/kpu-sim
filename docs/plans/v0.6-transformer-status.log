@@ -1,7 +1,7 @@
-# Current KPU support for Transformers
+Current KPU support for Transformers
 
 Model Categories by Use Case
-```text
+
   ┌───────────────────────┬─────────────────────────────────────────────────────┬───────────────────┐
   │         Task          │                     Key Models                      │    KPU Status     │
   ├───────────────────────┼─────────────────────────────────────────────────────┼───────────────────┤
@@ -24,7 +24,7 @@ Model Categories by Use Case
   │ Depth Estimation      │ MiDaS ⚠️ (ViT variant)                              │ ViT backbone      │
   └───────────────────────┴─────────────────────────────────────────────────────┴───────────────────┘
   Key Finding: ViT May Already Work
-```
+
 
 The basic Vision Transformer uses operators we already support:
   - Patch embedding (Conv2d 16x16)
@@ -37,7 +37,7 @@ The basic Vision Transformer uses operators we already support:
 Recommended first step: Validate ViT-B/16 inference to confirm.
 
 Critical Operator Gaps
-```text
+
   ┌──────────────────┬──────────┬───────────────────────────────────┐
   │     Operator     │ Priority │          Models Unlocked          │
   ├──────────────────┼──────────┼───────────────────────────────────┤
@@ -49,7 +49,7 @@ Critical Operator Gaps
   ├──────────────────┼──────────┼───────────────────────────────────┤
   │ ROI Align        │ P1       │ All detection models              │
   └──────────────────┴──────────┴───────────────────────────────────┘
-```
+
 
 ## Depthwise/Grouped Convolution Support
 
@@ -60,7 +60,7 @@ Modified: python/kpu/fx_converter.py
   - _emit_conv2d() and _emit_conv2d_module() updated to pass groups
 
 Validated Models
-```text
+
   ┌─────────────────┬────────────┬─────────────────────────────┬───────────────────┐
   │      Model      │ Parameters │           Status            │     Precision     │
   ├─────────────────┼────────────┼─────────────────────────────┼───────────────────┤
@@ -68,7 +68,7 @@ Validated Models
   ├─────────────────┼────────────┼─────────────────────────────┼───────────────────┤
   │ EfficientNet-B0 │ 5.3M       │ ✅ Predictions match        │ max diff 1.55e-06 │
   └─────────────────┴────────────┴─────────────────────────────┴───────────────────┘
-```
+
 
 ## New Example Created
 
@@ -120,7 +120,7 @@ All three models now run cleanly without spurious NNPACK warnings.
 Phase 3: Detection Infrastructure - ✅ COMPLETE
 
 All Faster R-CNN neural network components validated on KPU:
-```text
+
   ┌───────────────────────────┬───────────┬──────────┐
   │         Component         │  Status   │ Max Diff │
   ├───────────────────────────┼───────────┼──────────┤
@@ -134,7 +134,7 @@ All Faster R-CNN neural network components validated on KPU:
   ├───────────────────────────┼───────────┼──────────┤
   │ Interpolate (bilinear)    │ ✅ PASSED │ < 1e-5   │
   └───────────────────────────┴───────────┴──────────┘
-```
+
   New example: examples/torch/fasterrcnn_components.py
 
 Note: Full detection models have dynamic post-processing (NMS, proposal filtering) that runs on CPU. All neural network inference components are fully supported on KPU.
@@ -160,7 +160,7 @@ Model Compatibility Results
 
 Classification Models - Highlights
 
-```text
+
   ┌─────────────────────┬──────────────────────────────┬───────────────────────────────────┐
   │      Category       │            Models            │              Status               │
   ├─────────────────────┼──────────────────────────────┼───────────────────────────────────┤
@@ -180,11 +180,11 @@ Classification Models - Highlights
   ├─────────────────────┼──────────────────────────────┼───────────────────────────────────┤
   │ RegNet              │ Y-400MF, Y-800MF             │ ✅ Works                          │
   └─────────────────────┴──────────────────────────────┴───────────────────────────────────┘
-```
+
 
 Failed Models
 
-```text
+
   ┌──────────────────────┬─────────────────┬─────────────────────┐
   │        Model         │     Reason      │  Missing Operator   │
   ├──────────────────────┼─────────────────┼─────────────────────┤
@@ -196,7 +196,7 @@ Failed Models
   ├──────────────────────┼─────────────────┼─────────────────────┤
   │ FCN/DeepLabV3/LRASPP │ Segmentation    │ Dilated convolution │
   └──────────────────────┴─────────────────┴─────────────────────┘
-```
+
 
 New Files Created
 
@@ -218,7 +218,7 @@ Implementation: Modified _numpy_conv2d and _im2col in fx_converter.py to handle 
 
 Segmentation Models Now Working
 
-```text
+
   ┌─────────────────────┬────────────┬──────────┐
   │        Model        │   Status   │ Max Diff │
   ├─────────────────────┼────────────┼──────────┤
@@ -232,11 +232,11 @@ Segmentation Models Now Working
   ├─────────────────────┼────────────┼──────────┤
   │ LRASPP-MobileNetV3  │ ⚠️ PARTIAL │ 1.74e-01 │
   └─────────────────────┴────────────┴──────────┘
-```
+
 
 Updated Compatibility Summary
 
-```text
+
   ┌────────────┬───────┬────────────┐
   │   Status   │ Count │ Percentage │
   ├────────────┼───────┼────────────┤
@@ -246,12 +246,12 @@ Updated Compatibility Summary
   ├────────────┼───────┼────────────┤
   │ ❌ FAILED  │ 7     │ 18%        │
   └────────────┴───────┴────────────┘
-```
+
 Total: 38 models tested
 
 Remaining Gaps (P3 Priority)
 
-```text
+
   ┌──────────────────────────┬──────────────────┐
   │         Operator         │  Models Blocked  │
   ├──────────────────────────┼──────────────────┤
@@ -263,7 +263,7 @@ Remaining Gaps (P3 Priority)
   ├──────────────────────────┼──────────────────┤
   │ Conv3d                   │ Video models     │
   └──────────────────────────┴──────────────────┘
-```
+
 
 The next priority would be addressing one of the P3 gaps (Channel Shuffle for ShuffleNet, or shifted window attention for Swin).
 
@@ -276,7 +276,7 @@ Issues Fixed:
 
 ShuffleNet Results
 
-```text
+
   ┌───────────────────┬───────────┬──────────┐
   │       Model       │  Status   │ Max Diff │
   ├───────────────────┼───────────┼──────────┤
@@ -288,11 +288,11 @@ ShuffleNet Results
   ├───────────────────┼───────────┼──────────┤
   │ ShuffleNetV2-x2.0 │ ✅ PASSED │ 9.31e-10 │
   └───────────────────┴───────────┴──────────┘
-```
+
 
 Updated Compatibility Summary
 
-```text
+
   ┌────────────┬───────┬────────────┐
   │   Status   │ Count │ Percentage │
   ├────────────┼───────┼────────────┤
@@ -302,12 +302,12 @@ Updated Compatibility Summary
   ├────────────┼───────┼────────────┤
   │ ❌ FAILED  │ 6     │ 15%        │
   └────────────┴───────┴────────────┘
-```
+
   Total: 41 models tested
 
 Remaining Gaps (P3 Priority)
 
-```text
+
   ┌──────────────────────────┬──────────────────┐
   │         Operator         │  Models Blocked  │
   ├──────────────────────────┼──────────────────┤
@@ -319,7 +319,7 @@ Remaining Gaps (P3 Priority)
   ├──────────────────────────┼──────────────────┤
   │ Transposed Conv2d        │ Some decoders    │
   └──────────────────────────┴──────────────────┘
-```
+
 
 The next priority would be either:
 
@@ -346,7 +346,7 @@ Fixes Implemented
 
 Final Compatibility
 
-```text
+
   ┌────────────┬───────┬────────────┐
   │   Status   │ Count │ Percentage │
   ├────────────┼───────┼────────────┤
@@ -356,7 +356,7 @@ Final Compatibility
   ├────────────┼───────┼────────────┤
   │ ❌ FAILED  │ 2     │ 5%         │
   └────────────┴───────┴────────────┘
-```
+
   Total: 42 models tested
 
 All Major Architecture Families Now Work
@@ -369,13 +369,13 @@ All Major Architecture Families Now Work
 
 Only Remaining Gap
 
-```text
+
   ┌──────────┬────────────────────────────────┐
   │ Operator │         Models Blocked         │
   ├──────────┼────────────────────────────────┤
   │ Conv3d   │ Video models (R3D, MViT, etc.) │
   └──────────┴────────────────────────────────┘
-```
+
 
 ## Conv3d
 
@@ -396,7 +396,7 @@ Only Remaining Gap
 
 Video models tested:
 
-```text
+
   ┌──────────┬──────────┬────────┐
   │  Model   │ Max Diff │ Status │
   ├──────────┼──────────┼────────┤
@@ -406,7 +406,7 @@ Video models tested:
   ├──────────┼──────────┼────────┤
   │ MC3-18   │ 2.61e-07 │ PASSED │
   └──────────┴──────────┴────────┘
-```
+
 
 Files modified:
 
