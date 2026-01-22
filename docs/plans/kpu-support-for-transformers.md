@@ -212,4 +212,58 @@ The next priorities for expanded coverage would be:
   1. P2: Dilated convolution - Unlocks segmentation models (FCN, DeepLabV3)
   2. P3: Channel shuffle - Unlocks ShuffleNet family
 
+## Dilated Convolution Support
+
+Implementation: Modified _numpy_conv2d and _im2col in fx_converter.py to handle dilation parameter.
+
+Segmentation Models Now Working
+
+```text
+  ┌─────────────────────┬────────────┬──────────┐
+  │        Model        │   Status   │ Max Diff │
+  ├─────────────────────┼────────────┼──────────┤
+  │ FCN-ResNet50        │ ✅ PASSED  │ 7.86e-07 │
+  ├─────────────────────┼────────────┼──────────┤
+  │ FCN-ResNet101       │ ✅ PASSED  │ ~1e-07   │
+  ├─────────────────────┼────────────┼──────────┤
+  │ DeepLabV3-ResNet50  │ ✅ PASSED  │ 7.45e-08 │
+  ├─────────────────────┼────────────┼──────────┤
+  │ DeepLabV3-ResNet101 │ ✅ PASSED  │ 1.12e-07 │
+  ├─────────────────────┼────────────┼──────────┤
+  │ LRASPP-MobileNetV3  │ ⚠️ PARTIAL │ 1.74e-01 │
+  └─────────────────────┴────────────┴──────────┘
+```
+
+Updated Compatibility Summary
+
+```text
+  ┌────────────┬───────┬────────────┐
+  │   Status   │ Count │ Percentage │
+  ├────────────┼───────┼────────────┤
+  │ ✅ PASSED  │ 28    │ 74%        │
+  ├────────────┼───────┼────────────┤
+  │ ⚠️ PARTIAL │ 3     │ 8%         │
+  ├────────────┼───────┼────────────┤
+  │ ❌ FAILED  │ 7     │ 18%        │
+  └────────────┴───────┴────────────┘
+```
+Total: 38 models tested
+
+Remaining Gaps (P3 Priority)
+
+```text
+  ┌──────────────────────────┬──────────────────┐
+  │         Operator         │  Models Blocked  │
+  ├──────────────────────────┼──────────────────┤
+  │ Channel Shuffle          │ ShuffleNet       │
+  ├──────────────────────────┼──────────────────┤
+  │ Shifted Window Attention │ Swin Transformer │
+  ├──────────────────────────┼──────────────────┤
+  │ Grid/Block Attention     │ MaxViT           │
+  ├──────────────────────────┼──────────────────┤
+  │ Conv3d                   │ Video models     │
+  └──────────────────────────┴──────────────────┘
+```
+
+The next priority would be addressing one of the P3 gaps (Channel Shuffle for ShuffleNet, or shifted window attention for Swin).
 

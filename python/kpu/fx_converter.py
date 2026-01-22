@@ -478,11 +478,7 @@ class FXToKPUConverter:
             if isinstance(dilation, int):
                 dilation = (dilation, dilation)
 
-            # Check for unsupported dilation
-            if dilation != (1, 1):
-                raise NotImplementedError(f"Dilation {dilation} not supported, only (1, 1)")
-
-            return self._numpy_conv2d(x, weight, bias, stride, padding, groups)
+            return self._numpy_conv2d(x, weight, bias, stride, padding, dilation, groups)
 
         self.ops.append(('conv2d', op_fn, [], node.name))
         self.env[node.name] = KPUValue(name=node.name)
@@ -510,17 +506,13 @@ class FXToKPUConverter:
         if isinstance(dilation, int):
             dilation = (dilation, dilation)
 
-        # Check for unsupported dilation
-        if dilation != (1, 1):
-            raise NotImplementedError(f"Dilation {dilation} not supported in conv2d, only (1, 1)")
-
         input_name = self._get_arg_name(node.args[0])
 
         def op_fn(tensors, params):
             x = tensors[input_name]
             w = params[weight_name]
             b = params.get(bias_name) if bias_name else None
-            return self._numpy_conv2d(x, w, b, stride, padding, groups)
+            return self._numpy_conv2d(x, w, b, stride, padding, dilation, groups)
 
         self.ops.append(('conv2d', op_fn, [input_name], node.name))
         self.env[node.name] = KPUValue(name=node.name)
@@ -1011,13 +1003,15 @@ class FXToKPUConverter:
                        bias: Optional[np.ndarray],
                        stride: Tuple[int, int],
                        padding: Tuple[int, int],
+                       dilation: Tuple[int, int] = (1, 1),
                        groups: int = 1) -> np.ndarray:
         """NumPy implementation of 2D convolution using im2col for performance.
 
-        Supports grouped and depthwise convolutions:
+        Supports grouped, depthwise, and dilated convolutions:
         - groups=1: Standard convolution
         - groups=C_in: Depthwise convolution (each channel convolved separately)
         - groups>1: Grouped convolution (channels split into groups)
+        - dilation>1: Dilated/atrous convolution (spacing between kernel elements)
 
         im2col unfolds input patches into columns, enabling convolution via
         a single matrix multiplication. This is much faster than nested loops.
@@ -1031,8 +1025,14 @@ class FXToKPUConverter:
         C_in_per_group_expected = C_in // groups
         C_out_per_group = C_out // groups
 
-        H_out = (H_in + 2 * padding[0] - K_h) // stride[0] + 1
-        W_out = (W_in + 2 * padding[1] - K_w) // stride[1] + 1
+        # Compute effective kernel size with dilation
+        # dilation spreads out kernel elements: effective_K = dilation * (K - 1) + 1
+        K_h_eff = dilation[0] * (K_h - 1) + 1
+        K_w_eff = dilation[1] * (K_w - 1) + 1
+
+        # Output dimensions account for effective kernel size
+        H_out = (H_in + 2 * padding[0] - K_h_eff) // stride[0] + 1
+        W_out = (W_in + 2 * padding[1] - K_w_eff) // stride[1] + 1
 
         # Pad input if needed
         if padding[0] > 0 or padding[1] > 0:
@@ -1044,7 +1044,7 @@ class FXToKPUConverter:
 
         if groups == 1:
             # Standard convolution (original fast path)
-            col = self._im2col(x_padded, K_h, K_w, stride, H_out, W_out)
+            col = self._im2col(x_padded, K_h, K_w, stride, dilation, H_out, W_out)
             weight_col = weight.reshape(C_out, -1)
             result = np.zeros((N, C_out, H_out * W_out), dtype=x.dtype)
             for n in range(N):
@@ -1066,7 +1066,7 @@ class FXToKPUConverter:
                 weight_group = weight[c_out_start:c_out_end]
 
                 # im2col for this group
-                col_group = self._im2col(x_group, K_h, K_w, stride, H_out, W_out)
+                col_group = self._im2col(x_group, K_h, K_w, stride, dilation, H_out, W_out)
                 weight_col = weight_group.reshape(C_out_per_group, -1)
 
                 # Convolve this group
@@ -1079,13 +1079,17 @@ class FXToKPUConverter:
         return result
 
     def _im2col(self, x: np.ndarray, K_h: int, K_w: int,
-                stride: Tuple[int, int], H_out: int, W_out: int) -> np.ndarray:
+                stride: Tuple[int, int], dilation: Tuple[int, int],
+                H_out: int, W_out: int) -> np.ndarray:
         """Extract image patches into columns for efficient convolution.
+
+        Supports dilated convolution by sampling at spaced-out positions.
 
         Args:
             x: Input tensor (N, C, H, W) - already padded
             K_h, K_w: Kernel dimensions
             stride: Stride tuple
+            dilation: Dilation tuple (spacing between kernel elements)
             H_out, W_out: Output spatial dimensions
 
         Returns:
@@ -1093,22 +1097,49 @@ class FXToKPUConverter:
         """
         N, C, H, W = x.shape
 
-        # Use stride tricks for efficient patch extraction
-        # Shape of output indices
-        shape = (N, C, K_h, K_w, H_out, W_out)
+        if dilation == (1, 1):
+            # Fast path: use stride tricks for efficient patch extraction
+            # Shape of output indices
+            shape = (N, C, K_h, K_w, H_out, W_out)
 
-        # Compute strides for the view
-        s = x.strides
-        strides = (s[0], s[1], s[2], s[3], s[2] * stride[0], s[3] * stride[1])
+            # Compute strides for the view
+            s = x.strides
+            strides = (s[0], s[1], s[2], s[3], s[2] * stride[0], s[3] * stride[1])
 
-        # Create view of patches
-        patches = np.lib.stride_tricks.as_strided(x, shape=shape, strides=strides)
+            # Create view of patches
+            patches = np.lib.stride_tricks.as_strided(x, shape=shape, strides=strides)
 
-        # Reshape to (N, C * K_h * K_w, H_out * W_out)
-        col = patches.reshape(N, C * K_h * K_w, H_out * W_out)
+            # Reshape to (N, C * K_h * K_w, H_out * W_out)
+            col = patches.reshape(N, C * K_h * K_w, H_out * W_out)
 
-        # Need to make contiguous copy since as_strided returns a view
-        return np.ascontiguousarray(col)
+            # Need to make contiguous copy since as_strided returns a view
+            return np.ascontiguousarray(col)
+        else:
+            # Dilated convolution: sample at spaced positions
+            # This is slower but correct for any dilation
+            col = np.zeros((N, C * K_h * K_w, H_out * W_out), dtype=x.dtype)
+
+            for oh in range(H_out):
+                for ow in range(W_out):
+                    # Starting position in input
+                    h_start = oh * stride[0]
+                    w_start = ow * stride[1]
+
+                    # Output column index
+                    out_idx = oh * W_out + ow
+
+                    # Extract patch with dilation
+                    col_idx = 0
+                    for c in range(C):
+                        for kh in range(K_h):
+                            for kw in range(K_w):
+                                # Dilated position
+                                h_pos = h_start + kh * dilation[0]
+                                w_pos = w_start + kw * dilation[1]
+                                col[:, col_idx, out_idx] = x[:, c, h_pos, w_pos]
+                                col_idx += 1
+
+            return col
 
     def _numpy_max_pool2d(self, x: np.ndarray,
                           kernel_size: Tuple[int, int],

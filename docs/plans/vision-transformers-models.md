@@ -136,10 +136,10 @@ See `examples/torch/fasterrcnn_components.py` for validation.
 
 | Model | Backbone | mIoU (COCO) | KPU Status | Notes |
 |-------|----------|-------------|------------|-------|
-| **FCN** | ResNet50/101 | 60.5/63.7 | ⚠️ PARTIAL | Transposed conv needed |
-| **DeepLabV3** | ResNet50/101 | 66.4/67.4 | ⚠️ PARTIAL | Atrous/dilated conv |
-| **DeepLabV3+** | ResNet101 | 68+ | ⚠️ PARTIAL | ASPP module |
-| **LRASPP** | MobileNetV3 | 57.9 | ❌ NOT SUPPORTED | Depthwise conv |
+| **FCN** | ResNet50/101 | 60.5/63.7 | ✅ VALIDATED | Dilated conv works |
+| **DeepLabV3** | ResNet50/101 | 66.4/67.4 | ✅ VALIDATED | ASPP with dilated conv |
+| **DeepLabV3+** | ResNet101 | 68+ | ✅ SUPPORTED | Same ops as DeepLabV3 |
+| **LRASPP** | MobileNetV3 | 57.9 | ⚠️ PARTIAL | Works but larger numerical diff |
 
 ### Instance Segmentation
 
@@ -279,16 +279,18 @@ Transpose              Reshape              Flatten
 |----------|----------|----------------|
 | ~~**Depthwise Conv2d**~~ | ~~P0~~ | ✅ IMPLEMENTED |
 | ~~**Grouped Conv2d**~~ | ~~P0~~ | ✅ IMPLEMENTED |
-| **Upsample/Interpolate** | P1 | Segmentation, FPN |
-| **ROI Align** | P1 | Detection models |
+| ~~**Upsample/Interpolate**~~ | ~~P1~~ | ✅ IMPLEMENTED |
+| ~~**ROI Align**~~ | ~~P1~~ | ✅ IMPLEMENTED |
+| ~~**Dilated/Atrous Conv2d**~~ | ~~P2~~ | ✅ IMPLEMENTED |
 
 ### Medium Priority Gaps
 
 | Operator | Priority | Models Blocked |
 |----------|----------|----------------|
 | **Conv3d** | P2 | Video models |
-| **Transposed Conv2d** | P2 | FCN segmentation |
-| **Dilated/Atrous Conv2d** | P2 | DeepLabV3 |
+| **Transposed Conv2d** | P3 | Some decoders |
+| **Channel Shuffle** | P3 | ShuffleNet |
+| **Shifted Window Attention** | P3 | Swin Transformer |
 
 ---
 
@@ -310,9 +312,15 @@ Transpose              Reshape              Flatten
    - Note: NMS runs on CPU (dynamic post-processing)
 
 4. ~~**Create model compatibility matrix**~~ ✅ DONE - `docs/model_compatibility.md`
-   - 35 models tested: 24 PASSED, 2 PARTIAL, 9 FAILED
+   - 38 models tested: 28 PASSED, 3 PARTIAL, 7 FAILED
    - Test script: `examples/torch/model_compatibility.py`
-   - Missing ops documented: dilated conv, channel shuffle, shifted windows
+   - Missing ops documented: channel shuffle, shifted windows
+
+5. ~~**Add segmentation support**~~ ✅ DONE
+   - Dilated/atrous convolution: implemented
+   - FCN-ResNet50/101: validated
+   - DeepLabV3-ResNet50/101: validated
+   - LRASPP-MobileNetV3: works with larger numerical diff
 
 ---
 
@@ -338,3 +346,4 @@ Transpose              Reshape              Flatten
 | 0.3 | 2025-01-21 | Added grouped/depthwise conv, MobileNetV2 & EfficientNet-B0 validated |
 | 0.4 | 2025-01-21 | Detection support: FPN, ROI Align, Interpolate validated for Faster R-CNN |
 | 0.5 | 2025-01-21 | Model compatibility matrix: 35 models tested (24 pass, 2 partial, 9 fail) |
+| 0.6 | 2025-01-21 | Dilated convolution support: FCN, DeepLabV3 segmentation models now work |
