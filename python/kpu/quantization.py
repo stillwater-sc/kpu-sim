@@ -1205,6 +1205,291 @@ def fp8_info(format_name: str = "e4m3") -> Dict[str, Any]:
     }
 
 
+# --- INT4 operations (v0.7.7) ---
+
+# INT4 specifications:
+# - Signed INT4: range [-8, 7], 4 bits
+# - Unsigned INT4: range [0, 15], 4 bits
+# - Packed storage: 2 values per byte
+# - 8x memory reduction vs FP32
+
+INT4_SIGNED_MIN = -8
+INT4_SIGNED_MAX = 7
+INT4_UNSIGNED_MIN = 0
+INT4_UNSIGNED_MAX = 15
+
+
+def pack_int4(values: np.ndarray, signed: bool = True) -> np.ndarray:
+    """Pack INT4 values into bytes (2 values per byte).
+
+    Packing format: low nibble first, then high nibble.
+    values[0] -> bits 0-3, values[1] -> bits 4-7
+
+    Args:
+        values: INT4 values as int8 array (must have even length in last dim)
+        signed: If True, values are signed [-8, 7]; else unsigned [0, 15]
+
+    Returns:
+        Packed uint8 array with half the size in last dimension
+    """
+    values = np.asarray(values)
+    original_shape = values.shape
+
+    if original_shape[-1] % 2 != 0:
+        raise ValueError(f"Last dimension must be even for packing, got {original_shape[-1]}")
+
+    # Flatten to 1D for packing, then reshape
+    flat = values.reshape(-1)
+
+    if signed:
+        # Convert signed [-8, 7] to unsigned [0, 15] for packing
+        flat = flat.astype(np.int8)
+        flat = np.where(flat < 0, flat + 16, flat).astype(np.uint8)
+    else:
+        flat = flat.astype(np.uint8)
+
+    # Clip to 4-bit range
+    flat = flat & 0x0F
+
+    # Pack pairs: low nibble from even indices, high nibble from odd indices
+    low = flat[0::2]
+    high = flat[1::2]
+    packed = (low | (high << 4)).astype(np.uint8)
+
+    # Reshape to original shape with last dim halved
+    new_shape = original_shape[:-1] + (original_shape[-1] // 2,)
+    return packed.reshape(new_shape)
+
+
+def unpack_int4(packed: np.ndarray, signed: bool = True) -> np.ndarray:
+    """Unpack INT4 values from packed bytes.
+
+    Args:
+        packed: Packed uint8 array
+        signed: If True, return signed [-8, 7]; else unsigned [0, 15]
+
+    Returns:
+        Unpacked values with last dimension doubled
+    """
+    packed = np.asarray(packed, dtype=np.uint8)
+    original_shape = packed.shape
+
+    # Flatten for unpacking
+    flat = packed.reshape(-1)
+
+    # Extract low and high nibbles
+    low = flat & 0x0F
+    high = (flat >> 4) & 0x0F
+
+    # Interleave: [low0, high0, low1, high1, ...]
+    unpacked = np.empty(len(flat) * 2, dtype=np.uint8)
+    unpacked[0::2] = low
+    unpacked[1::2] = high
+
+    if signed:
+        # Convert unsigned [0, 15] back to signed [-8, 7]
+        unpacked = unpacked.astype(np.int8)
+        unpacked = np.where(unpacked > 7, unpacked - 16, unpacked)
+
+    # Reshape to original shape with last dim doubled
+    new_shape = original_shape[:-1] + (original_shape[-1] * 2,)
+    return unpacked.reshape(new_shape)
+
+
+def quantize_int4(
+    tensor: np.ndarray,
+    scale: float,
+    zero_point: int = 0,
+    signed: bool = True,
+) -> np.ndarray:
+    """Quantize a float tensor to INT4.
+
+    Args:
+        tensor: Input float tensor
+        scale: Scale factor
+        zero_point: Zero point offset (typically 0 for symmetric)
+        signed: If True, quantize to [-8, 7]; else [0, 15]
+
+    Returns:
+        Quantized int8 tensor (not packed; use pack_int4 for storage)
+    """
+    qmin = INT4_SIGNED_MIN if signed else INT4_UNSIGNED_MIN
+    qmax = INT4_SIGNED_MAX if signed else INT4_UNSIGNED_MAX
+
+    # Quantize
+    q = np.round(tensor / scale) + zero_point
+    q = np.clip(q, qmin, qmax)
+
+    return q.astype(np.int8)
+
+
+def dequantize_int4(
+    tensor: np.ndarray,
+    scale: float,
+    zero_point: int = 0,
+) -> np.ndarray:
+    """Dequantize an INT4 tensor back to float.
+
+    Args:
+        tensor: Quantized int tensor (unpacked)
+        scale: Scale factor
+        zero_point: Zero point offset
+
+    Returns:
+        Dequantized float32 tensor
+    """
+    return (tensor.astype(np.float32) - zero_point) * scale
+
+
+def compute_int4_scale_zero_point(
+    tensor: np.ndarray,
+    signed: bool = True,
+    symmetric: bool = True,
+) -> Tuple[float, int]:
+    """Compute scale and zero_point for INT4 quantization.
+
+    Args:
+        tensor: Input tensor to analyze
+        signed: If True, use signed INT4 [-8, 7]
+        symmetric: If True, use symmetric quantization (zero_point=0)
+
+    Returns:
+        (scale, zero_point) tuple
+    """
+    min_val = tensor.min()
+    max_val = tensor.max()
+
+    qmin = INT4_SIGNED_MIN if signed else INT4_UNSIGNED_MIN
+    qmax = INT4_SIGNED_MAX if signed else INT4_UNSIGNED_MAX
+
+    if symmetric:
+        abs_max = max(abs(min_val), abs(max_val))
+        scale = abs_max / max(abs(qmin), qmax)
+        zero_point = 0
+    else:
+        scale = (max_val - min_val) / (qmax - qmin)
+        if scale == 0:
+            scale = 1.0
+        zero_point = int(round(qmin - min_val / scale))
+        zero_point = max(qmin, min(qmax, zero_point))
+
+    return float(scale), int(zero_point)
+
+
+def int4_matmul(
+    a: np.ndarray,
+    b: np.ndarray,
+    scale_a: float,
+    zero_point_a: int,
+    scale_b: float,
+    zero_point_b: int,
+    output_float: bool = True,
+) -> np.ndarray:
+    """Perform INT4 quantized matrix multiplication.
+
+    Inputs should be unpacked INT4 values (as int8).
+    Computation is done by dequantizing to float32.
+
+    Args:
+        a: Quantized input A (int8, unpacked INT4), shape [..., M, K]
+        b: Quantized input B (int8, unpacked INT4), shape [..., K, N]
+        scale_a, zero_point_a: Quantization params for A
+        scale_b, zero_point_b: Quantization params for B
+        output_float: If True, return float32
+
+    Returns:
+        Result matrix (float32)
+    """
+    # Dequantize inputs
+    a_fp = (a.astype(np.int32) - zero_point_a) * scale_a
+    b_fp = (b.astype(np.int32) - zero_point_b) * scale_b
+
+    # Perform matmul in float32
+    c_fp = np.matmul(a_fp, b_fp)
+
+    return c_fp.astype(np.float32)
+
+
+def int4_linear(
+    x: np.ndarray,
+    weight: np.ndarray,
+    bias: Optional[np.ndarray],
+    scale_x: float,
+    zero_point_x: int,
+    scale_w: float,
+    zero_point_w: int,
+    output_float: bool = True,
+) -> np.ndarray:
+    """Perform INT4 quantized linear layer.
+
+    Args:
+        x: Quantized input (int8, unpacked INT4), shape [..., in_features]
+        weight: Quantized weights (int8, unpacked INT4), shape [out_features, in_features]
+        bias: Optional float32 bias, shape [out_features]
+        scale_x, zero_point_x: Input quantization params
+        scale_w, zero_point_w: Weight quantization params
+        output_float: If True, return float32
+
+    Returns:
+        Result tensor (float32)
+    """
+    # Dequantize
+    x_fp = (x.astype(np.int32) - zero_point_x) * scale_x
+    w_fp = (weight.astype(np.int32) - zero_point_w) * scale_w
+
+    # Linear operation: y = x @ w.T + bias
+    y_fp = np.matmul(x_fp, w_fp.T)
+
+    if bias is not None:
+        y_fp = y_fp + bias
+
+    return y_fp.astype(np.float32)
+
+
+def int4_packed_size(num_elements: int) -> int:
+    """Calculate packed storage size for INT4 values.
+
+    Args:
+        num_elements: Number of INT4 values
+
+    Returns:
+        Number of bytes needed for packed storage
+    """
+    return (num_elements + 1) // 2  # Ceiling division
+
+
+def int4_memory_bytes(shape: Tuple[int, ...]) -> int:
+    """Calculate memory bytes for packed INT4 tensor.
+
+    Args:
+        shape: Tensor shape
+
+    Returns:
+        Total bytes (packed storage)
+    """
+    num_elements = 1
+    for dim in shape:
+        num_elements *= dim
+    return int4_packed_size(num_elements)
+
+
+def int4_info() -> Dict[str, Any]:
+    """Get information about INT4 format.
+
+    Returns:
+        Dictionary with INT4 details
+    """
+    return {
+        "signed_range": (INT4_SIGNED_MIN, INT4_SIGNED_MAX),
+        "unsigned_range": (INT4_UNSIGNED_MIN, INT4_UNSIGNED_MAX),
+        "bits": 4,
+        "bytes_per_element": 0.5,
+        "packing": "2 values per byte",
+        "memory_reduction_vs_fp32": 8.0,
+        "memory_reduction_vs_int8": 2.0,
+    }
+
+
 # --- Memory traffic calculation ---
 
 def calculate_memory_bytes(

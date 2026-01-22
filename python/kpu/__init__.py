@@ -77,7 +77,7 @@ def _install_cpp_warning_filter():
 
 _flush_stderr = _install_cpp_warning_filter()
 
-__version__ = "0.7.3"
+__version__ = "0.7.7"
 __author__ = "Stillwater Supercomputing, Inc."
 
 # Fidelity levels
@@ -212,6 +212,21 @@ from .quantization import (
     fp8_range,
     fp8_precision,
     fp8_info,
+    # INT4 operations (v0.7.7)
+    pack_int4,
+    unpack_int4,
+    quantize_int4,
+    dequantize_int4,
+    compute_int4_scale_zero_point,
+    int4_matmul,
+    int4_linear,
+    int4_packed_size,
+    int4_memory_bytes,
+    int4_info,
+    INT4_SIGNED_MIN,
+    INT4_SIGNED_MAX,
+    INT4_UNSIGNED_MIN,
+    INT4_UNSIGNED_MAX,
     # Memory traffic
     calculate_memory_bytes,
     calculate_matmul_traffic,
@@ -376,6 +391,21 @@ __all__ = [
     "fp8_range",
     "fp8_precision",
     "fp8_info",
+    # INT4 operations (v0.7.7)
+    "pack_int4",
+    "unpack_int4",
+    "quantize_int4",
+    "dequantize_int4",
+    "compute_int4_scale_zero_point",
+    "int4_matmul",
+    "int4_linear",
+    "int4_packed_size",
+    "int4_memory_bytes",
+    "int4_info",
+    "INT4_SIGNED_MIN",
+    "INT4_SIGNED_MAX",
+    "INT4_UNSIGNED_MIN",
+    "INT4_UNSIGNED_MAX",
     # Memory traffic
     "calculate_memory_bytes",
     "calculate_matmul_traffic",
