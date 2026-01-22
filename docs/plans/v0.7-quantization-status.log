@@ -45,3 +45,368 @@
   2. Continue to v0.7.1 (FP16 support)?
   3. Add more INT8 tests or examples?
 
+
+● v0.7.1 has been released:
+
+  Commit: 8c578bd - Add FP16 support (v0.7.1)
+
+  Tag: v0.7.1 pushed to origin
+
+  New FP16 APIs:
+  ┌──────────────────────┬────────────────────────────────────────┐
+  │       Function       │              Description               │
+  ├──────────────────────┼────────────────────────────────────────┤
+  │ kpu.fp16_matmul()    │ Half-precision matrix multiplication   │
+  ├──────────────────────┼────────────────────────────────────────┤
+  │ kpu.fp16_linear()    │ FP16 linear layer (y = x @ W.T + bias) │
+  ├──────────────────────┼────────────────────────────────────────┤
+  │ kpu.fp16_conv2d()    │ FP16 2D convolution                    │
+  ├──────────────────────┼────────────────────────────────────────┤
+  │ kpu.cast_to_fp16()   │ Convert tensor to float16              │
+  ├──────────────────────┼────────────────────────────────────────┤
+  │ kpu.cast_from_fp16() │ Convert tensor back to float32         │
+  ├──────────────────────┼────────────────────────────────────────┤
+  │ kpu.fp16_range()     │ Returns (±65504)                       │
+  ├──────────────────────┼────────────────────────────────────────┤
+  │ kpu.fp16_precision() │ Returns machine epsilon (~9.77e-04)    │
+  └──────────────────────┴────────────────────────────────────────┘
+  Test Results:
+  - FP16 matmul relative error: ~0.15%
+  - FP16 linear relative error: ~0.33%
+  - Memory bandwidth reduction: 2x vs FP32
+
+  Next: v0.7.2 (BF16 support using fast bfloat16 from Universal)
+
+● v0.7.2 has been released:
+
+  Commit: 48a00fa - Add BF16 support (v0.7.2)
+
+  Tag: v0.7.2 pushed to origin
+
+  New BF16 APIs:
+  ┌──────────────────────────┬──────────────────────────────┐
+  │         Function         │         Description          │
+  ├──────────────────────────┼──────────────────────────────┤
+  │ kpu.bf16_matmul()        │ BF16 matrix multiplication   │
+  ├──────────────────────────┼──────────────────────────────┤
+  │ kpu.bf16_linear()        │ BF16 linear layer            │
+  ├──────────────────────────┼──────────────────────────────┤
+  │ kpu.bf16_conv2d()        │ BF16 2D convolution          │
+  ├──────────────────────────┼──────────────────────────────┤
+  │ kpu.cast_to_bf16()       │ Convert to bfloat16          │
+  ├──────────────────────────┼──────────────────────────────┤
+  │ kpu.cast_from_bf16()     │ Convert back to float32      │
+  ├──────────────────────────┼──────────────────────────────┤
+  │ kpu.bf16_range()         │ Returns (±3.4e38)            │
+  ├──────────────────────────┼──────────────────────────────┤
+  │ kpu.bf16_precision()     │ Returns epsilon (~0.0078)    │
+  ├──────────────────────────┼──────────────────────────────┤
+  │ kpu.is_bfloat16_native() │ Check if ml_dtypes available │
+  └──────────────────────────┴──────────────────────────────┘
+  BF16 vs FP16 Comparison:
+  ┌────────────┬───────────┬───────────┐
+  │  Property  │   FP16    │   BF16    │
+  ├────────────┼───────────┼───────────┤
+  │ Bytes      │ 2         │ 2         │
+  ├────────────┼───────────┼───────────┤
+  │ Range      │ ±6.5e4    │ ±3.4e38   │
+  ├────────────┼───────────┼───────────┤
+  │ Precision  │ ~3 digits │ ~2 digits │
+  ├────────────┼───────────┼───────────┤
+  │ Rel. Error │ ~0.15%    │ ~2%       │
+  └────────────┴───────────┴───────────┘
+  Optional dependency: pip install stillwater-kpu[bfloat16] for native ml_dtypes support
+
+  Note: For C++ cycle-accurate simulation, the gap analysis doc notes to use Universal's fast bfloat16 class (not the slow cfloat emulation).
+
+  Next: v0.7.3-v0.7.6 (FP8 variants: E2M5, E3M4, E4M3, E5M2)
+
+● v0.7.3 has been released:
+
+  Commit: 0b79c44 - Add FP8 support for all variants (v0.7.3)
+
+  Tag: v0.7.3 pushed to origin
+
+  FP8 Formats Supported:
+  ┌────────┬─────┬──────┬────────┬─────────┬────────────────────────────┐
+  │ Format │ Exp │ Mant │ Range  │ Epsilon │          Use Case          │
+  ├────────┼─────┼──────┼────────┼─────────┼────────────────────────────┤
+  │ E2M5   │ 2   │ 5    │ ±3.9   │ 0.031   │ Gradients (high precision) │
+  ├────────┼─────┼──────┼────────┼─────────┼────────────────────────────┤
+  │ E3M4   │ 3   │ 4    │ ±15.5  │ 0.063   │ General purpose            │
+  ├────────┼─────┼──────┼────────┼─────────┼────────────────────────────┤
+  │ E4M3   │ 4   │ 3    │ ±240   │ 0.125   │ Weights (NVIDIA/OCP)       │
+  ├────────┼─────┼──────┼────────┼─────────┼────────────────────────────┤
+  │ E5M2   │ 5   │ 2    │ ±57344 │ 0.250   │ Activations (wide range)   │
+  └────────┴─────┴──────┴────────┴─────────┴────────────────────────────┘
+  New APIs:
+  ┌─────────────────────┬───────────────────────────┐
+  │      Function       │        Description        │
+  ├─────────────────────┼───────────────────────────┤
+  │ kpu.fp8_matmul()    │ FP8 matrix multiplication │
+  ├─────────────────────┼───────────────────────────┤
+  │ kpu.fp8_linear()    │ FP8 linear layer          │
+  ├─────────────────────┼───────────────────────────┤
+  │ kpu.cast_to_fp8()   │ Convert to FP8            │
+  ├─────────────────────┼───────────────────────────┤
+  │ kpu.cast_from_fp8() │ Convert back to FP32      │
+  ├─────────────────────┼───────────────────────────┤
+  │ kpu.fp8_range()     │ Get format range          │
+  ├─────────────────────┼───────────────────────────┤
+  │ kpu.fp8_precision() │ Get format epsilon        │
+  ├─────────────────────┼───────────────────────────┤
+  │ kpu.fp8_info()      │ Get full format details   │
+  ├─────────────────────┼───────────────────────────┤
+  │ kpu.FP8_E4M3 etc.   │ Format constants          │
+  └─────────────────────┴───────────────────────────┘
+  Performance: 4x memory bandwidth reduction vs FP32
+
+  Note: This release covers v0.7.3-v0.7.6 from the roadmap (all FP8 variants) in a single release.
+
+  Next: v0.7.7 (INT4 support) or continue per your preference.
+
+
+● v0.7.7 has been released:
+
+  Commit: 1ad23c8 - Add INT4 support with packed storage (v0.7.7)
+
+  Tag: v0.7.7 pushed to origin
+
+  INT4 Specifications:
+  ┌──────────┬───────────┬───────────┐
+  │ Property │  Signed   │ Unsigned  │
+  ├──────────┼───────────┼───────────┤
+  │ Range    │ [-8, 7]   │ [0, 15]   │
+  ├──────────┼───────────┼───────────┤
+  │ Values   │ 16        │ 16        │
+  ├──────────┼───────────┼───────────┤
+  │ Storage  │ 0.5 bytes │ 0.5 bytes │
+  └──────────┴───────────┴───────────┘
+  New APIs:
+  ┌─────────────────────────────────────┬───────────────────────────────┐
+  │              Function               │          Description          │
+  ├─────────────────────────────────────┼───────────────────────────────┤
+  │ kpu.pack_int4()                     │ Pack 2 INT4 values per byte   │
+  ├─────────────────────────────────────┼───────────────────────────────┤
+  │ kpu.unpack_int4()                   │ Unpack INT4 values from bytes │
+  ├─────────────────────────────────────┼───────────────────────────────┤
+  │ kpu.quantize_int4()                 │ Quantize float to INT4        │
+  ├─────────────────────────────────────┼───────────────────────────────┤
+  │ kpu.dequantize_int4()               │ Dequantize INT4 to float      │
+  ├─────────────────────────────────────┼───────────────────────────────┤
+  │ kpu.compute_int4_scale_zero_point() │ Calibration                   │
+  ├─────────────────────────────────────┼───────────────────────────────┤
+  │ kpu.int4_matmul()                   │ INT4 matrix multiplication    │
+  ├─────────────────────────────────────┼───────────────────────────────┤
+  │ kpu.int4_linear()                   │ INT4 linear layer             │
+  ├─────────────────────────────────────┼───────────────────────────────┤
+  │ kpu.int4_memory_bytes()             │ Calculate packed size         │
+  └─────────────────────────────────────┴───────────────────────────────┘
+  Memory Comparison (1024x1024 matmul):
+  ┌──────┬─────────┬───────────┐
+  │ Type │ Traffic │ Reduction │
+  ├──────┼─────────┼───────────┤
+  │ FP32 │ 12.6 MB │ 1x        │
+  ├──────┼─────────┼───────────┤
+  │ FP16 │ 6.3 MB  │ 2x        │
+  ├──────┼─────────┼───────────┤
+  │ INT8 │ 3.1 MB  │ 4x        │
+  ├──────┼─────────┼───────────┤
+  │ INT4 │ 1.6 MB  │ 8x        │
+  └──────┴─────────┴───────────┘
+  v0.7.x Quantization Summary:
+  ┌─────────┬───────────┬──────┬──────────────────┐
+  │ Version │   Type    │ Bits │ Memory Reduction │
+  ├─────────┼───────────┼──────┼──────────────────┤
+  │ v0.7.0  │ INT8      │ 8    │ 4x               │
+  ├─────────┼───────────┼──────┼──────────────────┤
+  │ v0.7.1  │ FP16      │ 16   │ 2x               │
+  ├─────────┼───────────┼──────┼──────────────────┤
+  │ v0.7.2  │ BF16      │ 16   │ 2x               │
+  ├─────────┼───────────┼──────┼──────────────────┤
+  │ v0.7.3  │ FP8 (all) │ 8    │ 4x               │
+  ├─────────┼───────────┼──────┼──────────────────┤
+  │ v0.7.7  │ INT4      │ 4    │ 8x               │
+  └─────────┴───────────┴──────┴──────────────────┘
+  Remaining from roadmap: v0.7.8 (FP4), v0.7.9-v0.7.11 (mixed precision, Q/DQ ops, calibration)
+
+● v0.7.8 has been released:
+
+  Commit: 3b7b34b - Add FP4 support with packed storage (v0.7.8)
+
+  Tag: v0.7.8 pushed to origin
+
+  FP4 Formats:
+  ┌────────┬─────┬──────┬─────────────┬───────────────┐
+  │ Format │ Exp │ Mant │    Range    │ Unique Values │
+  ├────────┼─────┼──────┼─────────────┼───────────────┤
+  │ E2M1   │ 2   │ 1    │ [-6, 6]     │ 15            │
+  ├────────┼─────┼──────┼─────────────┼───────────────┤
+  │ E1M2   │ 1   │ 2    │ [-3.5, 3.5] │ 15            │
+  └────────┴─────┴──────┴─────────────┴───────────────┘
+  E2M1 Representable Values:
+  0, ±0.5, ±1.0, ±1.5, ±2.0, ±3.0, ±4.0, ±6.0
+
+  New APIs:
+  ┌─────────────────────────┬───────────────────────────────┐
+  │        Function         │          Description          │
+  ├─────────────────────────┼───────────────────────────────┤
+  │ kpu.fp4_quantize()      │ Quantize float to FP4 codes   │
+  ├─────────────────────────┼───────────────────────────────┤
+  │ kpu.fp4_dequantize()    │ Dequantize FP4 codes to float │
+  ├─────────────────────────┼───────────────────────────────┤
+  │ kpu.pack_fp4()          │ Pack 2 FP4 values per byte    │
+  ├─────────────────────────┼───────────────────────────────┤
+  │ kpu.unpack_fp4()        │ Unpack FP4 values             │
+  ├─────────────────────────┼───────────────────────────────┤
+  │ kpu.fp4_matmul()        │ FP4 matrix multiplication     │
+  ├─────────────────────────┼───────────────────────────────┤
+  │ kpu.fp4_linear()        │ FP4 linear layer              │
+  ├─────────────────────────┼───────────────────────────────┤
+  │ kpu.fp4_values()        │ Get all representable values  │
+  ├─────────────────────────┼───────────────────────────────┤
+  │ kpu.FP4_E2M1 / FP4_E1M2 │ Format constants              │
+  └─────────────────────────┴───────────────────────────────┘
+  Complete v0.7.x Quantization Summary:
+  ┌─────────┬──────┬──────┬──────────────────┬─────────┐
+  │ Version │ Type │ Bits │ Memory Reduction │  Error  │
+  ├─────────┼──────┼──────┼──────────────────┼─────────┤
+  │ v0.7.0  │ INT8 │ 8    │ 4x               │ ~1%     │
+  ├─────────┼──────┼──────┼──────────────────┼─────────┤
+  │ v0.7.1  │ FP16 │ 16   │ 2x               │ ~0.15%  │
+  ├─────────┼──────┼──────┼──────────────────┼─────────┤
+  │ v0.7.2  │ BF16 │ 16   │ 2x               │ ~2%     │
+  ├─────────┼──────┼──────┼──────────────────┼─────────┤
+  │ v0.7.3  │ FP8  │ 8    │ 4x               │ ~10-35% │
+  ├─────────┼──────┼──────┼──────────────────┼─────────┤
+  │ v0.7.7  │ INT4 │ 4    │ 8x               │ ~55-65% │
+  ├─────────┼──────┼──────┼──────────────────┼─────────┤
+  │ v0.7.8  │ FP4  │ 4    │ 8x               │ ~75%+   │
+  └─────────┴──────┴──────┴──────────────────┴─────────┘
+  Remaining from roadmap: v0.7.9 (Mixed precision), v0.7.10 (Q/DQ ops), v0.7.11 (Calibration)
+
+
+● v0.7.9 has been released:
+
+  Commit: 79dad6c - Add mixed precision support (v0.7.9)
+
+  Tag: v0.7.9 pushed to origin
+
+  Predefined Configurations:
+  ┌─────────────────┬─────────┬─────────────┬──────────────────┐
+  │     Config      │ Weights │ Activations │ Memory Reduction │
+  ├─────────────────┼─────────┼─────────────┼──────────────────┤
+  │ MIXED_INT8_FP16 │ INT8    │ FP16        │ ~3.3x            │
+  ├─────────────────┼─────────┼─────────────┼──────────────────┤
+  │ MIXED_INT8_BF16 │ INT8    │ BF16        │ ~3.3x            │
+  ├─────────────────┼─────────┼─────────────┼──────────────────┤
+  │ MIXED_INT4_FP16 │ INT4    │ FP16        │ ~5.0x            │
+  ├─────────────────┼─────────┼─────────────┼──────────────────┤
+  │ MIXED_FP8_FP16  │ FP8     │ FP16        │ ~3.3x            │
+  ├─────────────────┼─────────┼─────────────┼──────────────────┤
+  │ MIXED_FP8_BF16  │ FP8     │ BF16        │ ~3.3x            │
+  └─────────────────┴─────────┴─────────────┴──────────────────┘
+  New APIs:
+  ┌─────────────────────────────────────────┬──────────────────────────────┐
+  │                Function                 │         Description          │
+  ├─────────────────────────────────────────┼──────────────────────────────┤
+  │ kpu.MixedPrecisionConfig                │ Custom configuration class   │
+  ├─────────────────────────────────────────┼──────────────────────────────┤
+  │ kpu.mixed_precision_linear()            │ Mixed precision linear layer │
+  ├─────────────────────────────────────────┼──────────────────────────────┤
+  │ kpu.mixed_precision_matmul()            │ Mixed precision matmul       │
+  ├─────────────────────────────────────────┼──────────────────────────────┤
+  │ kpu.mixed_precision_conv2d()            │ Mixed precision convolution  │
+  ├─────────────────────────────────────────┼──────────────────────────────┤
+  │ kpu.calculate_mixed_precision_traffic() │ Memory traffic analysis      │
+  ├─────────────────────────────────────────┼──────────────────────────────┤
+  │ kpu.mixed_precision_info()              │ Configuration details        │
+  └─────────────────────────────────────────┴──────────────────────────────┘
+  Key Benefit: ~1.5x better accuracy than pure INT8 while maintaining weight compression.
+
+  v0.7.x Quantization Summary:
+  ┌─────────┬────────────────────┬────────┐
+  │ Version │      Feature       │ Status │
+  ├─────────┼────────────────────┼────────┤
+  │ v0.7.0  │ INT8               │ ✓      │
+  ├─────────┼────────────────────┼────────┤
+  │ v0.7.1  │ FP16               │ ✓      │
+  ├─────────┼────────────────────┼────────┤
+  │ v0.7.2  │ BF16               │ ✓      │
+  ├─────────┼────────────────────┼────────┤
+  │ v0.7.3  │ FP8 (all variants) │ ✓      │
+  ├─────────┼────────────────────┼────────┤
+  │ v0.7.7  │ INT4               │ ✓      │
+  ├─────────┼────────────────────┼────────┤
+  │ v0.7.8  │ FP4                │ ✓      │
+  ├─────────┼────────────────────┼────────┤
+  │ v0.7.9  │ Mixed Precision    │ ✓      │
+  └─────────┴────────────────────┴────────┘
+  Remaining: v0.7.10 (Q/DQ ops), v0.7.11 (Calibration)
+
+
+
+● v0.7.10 Complete - Q/DQ operations committed and pushed.
+
+  The v0.7.x quantization series is now at:
+  ┌─────────┬────────────────────┬─────────┐
+  │ Version │      Feature       │ Status  │
+  ├─────────┼────────────────────┼─────────┤
+  │ v0.7.0  │ INT8 quantization  │ ✓       │
+  ├─────────┼────────────────────┼─────────┤
+  │ v0.7.1  │ FP16 support       │ ✓       │
+  ├─────────┼────────────────────┼─────────┤
+  │ v0.7.2  │ BF16 support       │ ✓       │
+  ├─────────┼────────────────────┼─────────┤
+  │ v0.7.3  │ FP8 (all variants) │ ✓       │
+  ├─────────┼────────────────────┼─────────┤
+  │ v0.7.7  │ INT4 support       │ ✓       │
+  ├─────────┼────────────────────┼─────────┤
+  │ v0.7.8  │ FP4 support        │ ✓       │
+  ├─────────┼────────────────────┼─────────┤
+  │ v0.7.9  │ Mixed precision    │ ✓       │
+  ├─────────┼────────────────────┼─────────┤
+  │ v0.7.10 │ Q/DQ operations    │ ✓       │
+  ├─────────┼────────────────────┼─────────┤
+  │ v0.7.11 │ Calibration        │ Pending │
+  └─────────┴────────────────────┴─────────┘
+  The v0.7.10 release adds explicit Quantize/Dequantize operations supporting:
+  - Q() / DQ() functions for ONNX-style graph patterns
+  - fake_quantize() for quantization-aware training (QAT)
+  - qdq_linear(), qdq_matmul(), qdq_conv2d() - high-level ops with Q/DQ
+  - create_qdq_params() for calibration-based parameter creation
+  - quantize_error() for SNR analysis
+  - Per-channel and per-tensor modes
+  - Symmetric and asymmetric quantization
+
+  Ready for v0.7.11 (Calibration) when you want to continue.
+
+
+● v0.7.11 released.
+
+  Tag:    v0.7.11
+  Commit: 14777f7
+
+  The v0.7.x quantization series is now complete:
+  ┌─────────┬────────────────────┬────────┐
+  │ Version │      Feature       │ Status │
+  ├─────────┼────────────────────┼────────┤
+  │ v0.7.0  │ INT8 quantization  │ ✓      │
+  ├─────────┼────────────────────┼────────┤
+  │ v0.7.1  │ FP16 support       │ ✓      │
+  ├─────────┼────────────────────┼────────┤
+  │ v0.7.2  │ BF16 support       │ ✓      │
+  ├─────────┼────────────────────┼────────┤
+  │ v0.7.3  │ FP8 (all variants) │ ✓      │
+  ├─────────┼────────────────────┼────────┤
+  │ v0.7.7  │ INT4 support       │ ✓      │
+  ├─────────┼────────────────────┼────────┤
+  │ v0.7.8  │ FP4 support        │ ✓      │
+  ├─────────┼────────────────────┼────────┤
+  │ v0.7.9  │ Mixed precision    │ ✓      │
+  ├─────────┼────────────────────┼────────┤
+  │ v0.7.10 │ Q/DQ operations    │ ✓      │
+  ├─────────┼────────────────────┼────────┤
+  │ v0.7.11 │ Calibration        │ ✓      │
+  └─────────┴────────────────────┴────────┘
+
