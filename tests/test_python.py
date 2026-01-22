@@ -1,19 +1,33 @@
 #!/usr/bin/env python3
 """
-Test script for the KPU Simulator Python bindings
+Test script for the KPU Simulator Python bindings (C++ native module)
+
+These tests require the C++ native bindings to be built and installed.
+If the native module is not available, tests will be skipped.
+
+To build the native module:
+    cmake --preset release && cmake --build --preset release
+    pip install -e .
 """
 
 import numpy as np
 import time
 import sys
+import pytest
 
+# Try to import the native C++ bindings module
 try:
     import stillwater_kpu as kpu
-    print(f"✓ Successfully imported stillwater_kpu v{kpu.__version__}")
+    NATIVE_AVAILABLE = True
 except ImportError as e:
-    print(f"✗ Failed to import stillwater_kpu: {e}")
-    print("Make sure the module is built and installed correctly")
-    sys.exit(1)
+    NATIVE_AVAILABLE = False
+    kpu = None
+
+# Skip all tests in this module if native bindings are not available
+pytestmark = pytest.mark.skipif(
+    not NATIVE_AVAILABLE,
+    reason="stillwater_kpu native bindings not available (build with cmake first)"
+)
 
 def test_basic_functionality():
     """Test basic simulator functionality with new architecture"""

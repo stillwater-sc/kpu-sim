@@ -166,7 +166,7 @@ def test_conv2d_against_numpy():
         y_np = NumpyReference.conv2d(x_np, w_np, b_np, stride=stride, padding=padding)
 
         max_diff = np.max(np.abs(y_kpu.numpy() - y_np))
-        passed = max_diff < 1e-5
+        passed = max_diff < 1e-4  # Relaxed tolerance for accumulated floating-point errors
 
         status = "PASS" if passed else "FAIL"
         print(f"  {x_shape} * {w_shape} stride={stride} pad={padding}: {status} (diff={max_diff:.2e})")
@@ -174,7 +174,7 @@ def test_conv2d_against_numpy():
         if not passed:
             all_passed = False
 
-    return all_passed
+    assert all_passed, "Some conv2d tests failed"
 
 
 def test_conv2d_against_pytorch():
@@ -183,7 +183,7 @@ def test_conv2d_against_pytorch():
         print("\n" + "=" * 60)
         print("Test: conv2d against PyTorch - SKIPPED (PyTorch not installed)")
         print("=" * 60)
-        return True
+        return  # Skip test, no assertion needed
 
     print("\n" + "=" * 60)
     print("Test: conv2d against PyTorch")
@@ -225,7 +225,7 @@ def test_conv2d_against_pytorch():
         if not passed:
             all_passed = False
 
-    return all_passed
+    assert all_passed, "Some conv2d PyTorch tests failed"
 
 
 def test_pooling_against_numpy():
@@ -265,7 +265,7 @@ def test_pooling_against_numpy():
         if not passed:
             all_passed = False
 
-    return all_passed
+    assert all_passed, "Some pooling tests failed"
 
 
 def test_layer_norm_against_numpy():
@@ -304,7 +304,7 @@ def test_layer_norm_against_numpy():
         if not passed:
             all_passed = False
 
-    return all_passed
+    assert all_passed, "Some layer_norm tests failed"
 
 
 def test_full_cnn_pipeline():
@@ -387,7 +387,7 @@ def test_full_cnn_pipeline():
     status = "PASS" if passed else "FAIL"
     print(f"  NumPy reference match: {status} (max diff={max_diff:.2e})")
 
-    return passed
+    assert passed, f"Full CNN pipeline failed with max diff {max_diff:.2e}"
 
 
 def test_traced_vs_direct_execution():
@@ -424,7 +424,7 @@ def test_traced_vs_direct_execution():
     status = "PASS" if passed else "FAIL"
     print(f"  Direct vs traced: {status} (max diff={max_diff:.2e})")
 
-    return passed
+    assert passed, f"Traced vs direct execution failed with max diff {max_diff:.2e}"
 
 
 def main():

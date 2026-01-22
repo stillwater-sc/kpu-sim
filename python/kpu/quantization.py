@@ -2541,6 +2541,809 @@ def quantize_error(
     }
 
 
+# --- Calibration (v0.7.11) ---
+
+# Calibration is the process of determining optimal quantization parameters
+# (scale and zero_point) by collecting statistics from representative data.
+#
+# Supported methods:
+# - MinMax: Uses observed min/max values (simple, fast)
+# - Percentile: Uses percentile values to handle outliers
+# - MSE: Minimizes mean squared error between original and quantized
+# - Entropy: Minimizes KL divergence (information loss)
+#
+# Workflow:
+# 1. Create a CalibrationObserver for each tensor to calibrate
+# 2. Run representative data through the model, calling observe() on each tensor
+# 3. Call compute_params() to get the optimal QDQParams
+
+
+class CalibrationMethod(Enum):
+    """Calibration methods for determining quantization parameters."""
+    MINMAX = "minmax"           # Simple min/max (fast but sensitive to outliers)
+    PERCENTILE = "percentile"   # Percentile-based (handles outliers)
+    MSE = "mse"                 # Minimize mean squared error
+    ENTROPY = "entropy"         # Minimize KL divergence
+
+
+@dataclass
+class CalibrationStats:
+    """Statistics collected during calibration.
+
+    Attributes:
+        min_val: Minimum observed value
+        max_val: Maximum observed value
+        num_samples: Number of samples observed
+        histogram: Histogram of values (optional, for entropy/mse)
+        bin_edges: Histogram bin edges
+    """
+    min_val: float = float('inf')
+    max_val: float = float('-inf')
+    num_samples: int = 0
+    histogram: Optional[np.ndarray] = None
+    bin_edges: Optional[np.ndarray] = None
+
+    def update(self, tensor: np.ndarray) -> None:
+        """Update statistics with new tensor values."""
+        self.min_val = min(self.min_val, float(np.min(tensor)))
+        self.max_val = max(self.max_val, float(np.max(tensor)))
+        self.num_samples += tensor.size
+
+    def reset(self) -> None:
+        """Reset all statistics."""
+        self.min_val = float('inf')
+        self.max_val = float('-inf')
+        self.num_samples = 0
+        self.histogram = None
+        self.bin_edges = None
+
+
+class CalibrationObserver:
+    """Observer that collects statistics for quantization calibration.
+
+    Example:
+        >>> observer = CalibrationObserver(method=CalibrationMethod.PERCENTILE)
+        >>> for batch in calibration_data:
+        ...     activations = model.forward(batch)
+        ...     observer.observe(activations)
+        >>> params = observer.compute_params()
+    """
+
+    def __init__(
+        self,
+        method: CalibrationMethod = CalibrationMethod.MINMAX,
+        dtype: QuantDtype = QuantDtype.INT8,
+        symmetric: bool = True,
+        percentile: float = 99.99,
+        num_bins: int = 2048,
+        per_channel: bool = False,
+        channel_axis: int = 0,
+    ):
+        """Initialize calibration observer.
+
+        Args:
+            method: Calibration method to use
+            dtype: Target quantization dtype
+            symmetric: Use symmetric quantization (zero_point=0)
+            percentile: Percentile value for PERCENTILE method (default 99.99)
+            num_bins: Number of histogram bins for entropy/mse methods
+            per_channel: Collect per-channel statistics
+            channel_axis: Axis for per-channel calibration
+        """
+        self.method = method
+        self.dtype = dtype
+        self.symmetric = symmetric
+        self.percentile = percentile
+        self.num_bins = num_bins
+        self.per_channel = per_channel
+        self.channel_axis = channel_axis
+
+        # Per-tensor statistics
+        self.stats = CalibrationStats()
+
+        # Per-channel statistics (list of CalibrationStats)
+        self._channel_stats: Optional[list] = None
+
+        # For histogram-based methods
+        self._all_values: list = []  # Collect values for histogram building
+        self._histogram_built = False
+
+    def observe(self, tensor: np.ndarray) -> None:
+        """Observe a tensor and update calibration statistics.
+
+        Args:
+            tensor: Tensor to observe (numpy array)
+        """
+        tensor = np.asarray(tensor, dtype=np.float32)
+
+        if self.per_channel:
+            num_channels = tensor.shape[self.channel_axis]
+            if self._channel_stats is None:
+                self._channel_stats = [CalibrationStats() for _ in range(num_channels)]
+
+            # Update per-channel stats
+            for c in range(num_channels):
+                # Extract channel slice
+                slices = [slice(None)] * tensor.ndim
+                slices[self.channel_axis] = c
+                channel_data = tensor[tuple(slices)]
+                self._channel_stats[c].update(channel_data)
+
+                # Collect values for histogram methods
+                if self.method in (CalibrationMethod.MSE, CalibrationMethod.ENTROPY):
+                    # Store summarized values (subsample for memory efficiency)
+                    if channel_data.size > 10000:
+                        indices = np.random.choice(channel_data.size, 10000, replace=False)
+                        self._all_values.append((c, channel_data.flatten()[indices]))
+                    else:
+                        self._all_values.append((c, channel_data.flatten()))
+        else:
+            # Update global stats
+            self.stats.update(tensor)
+
+            # Collect values for histogram methods
+            if self.method in (CalibrationMethod.MSE, CalibrationMethod.ENTROPY):
+                flat = tensor.flatten()
+                # Subsample for memory efficiency
+                if flat.size > 10000:
+                    indices = np.random.choice(flat.size, 10000, replace=False)
+                    self._all_values.append(flat[indices])
+                else:
+                    self._all_values.append(flat)
+
+    def _build_histogram(self) -> None:
+        """Build histogram from collected values."""
+        if self._histogram_built or not self._all_values:
+            return
+
+        if self.per_channel and self._channel_stats is not None:
+            # Build per-channel histograms
+            for c, stats in enumerate(self._channel_stats):
+                channel_values = [v for ch, v in self._all_values if ch == c]
+                if channel_values:
+                    all_data = np.concatenate(channel_values)
+                    stats.histogram, stats.bin_edges = np.histogram(
+                        all_data, bins=self.num_bins
+                    )
+        else:
+            # Build global histogram
+            all_data = np.concatenate(self._all_values)
+            self.stats.histogram, self.stats.bin_edges = np.histogram(
+                all_data, bins=self.num_bins
+            )
+
+        self._histogram_built = True
+        self._all_values = []  # Free memory
+
+    def compute_params(self) -> QDQParams:
+        """Compute quantization parameters from collected statistics.
+
+        Returns:
+            QDQParams with optimal scale and zero_point
+        """
+        if self.method == CalibrationMethod.MINMAX:
+            return self._compute_minmax()
+        elif self.method == CalibrationMethod.PERCENTILE:
+            return self._compute_percentile()
+        elif self.method == CalibrationMethod.MSE:
+            return self._compute_mse()
+        elif self.method == CalibrationMethod.ENTROPY:
+            return self._compute_entropy()
+        else:
+            raise ValueError(f"Unknown calibration method: {self.method}")
+
+    def _compute_minmax(self) -> QDQParams:
+        """Compute params using min/max values."""
+        if self.per_channel and self._channel_stats is not None:
+            scales = []
+            zero_points = []
+            for stats in self._channel_stats:
+                scale, zp = _calibrate_minmax_range(
+                    stats.min_val, stats.max_val,
+                    self.dtype, self.symmetric
+                )
+                scales.append(scale)
+                zero_points.append(zp)
+            return QDQParams(
+                scale=np.array(scales, dtype=np.float32),
+                zero_point=np.array(zero_points, dtype=np.int32),
+                dtype=self.dtype,
+                axis=self.channel_axis,
+            )
+        else:
+            scale, zp = _calibrate_minmax_range(
+                self.stats.min_val, self.stats.max_val,
+                self.dtype, self.symmetric
+            )
+            return QDQParams(scale=scale, zero_point=zp, dtype=self.dtype)
+
+    def _compute_percentile(self) -> QDQParams:
+        """Compute params using percentile values."""
+        # Need collected values for percentile
+        if not self._all_values:
+            # Fall back to minmax if no values collected
+            return self._compute_minmax()
+
+        if self.per_channel and self._channel_stats is not None:
+            scales = []
+            zero_points = []
+            for c, stats in enumerate(self._channel_stats):
+                channel_values = [v for ch, v in self._all_values if ch == c]
+                if channel_values:
+                    all_data = np.concatenate(channel_values)
+                    low_p = (100 - self.percentile) / 2
+                    high_p = 100 - low_p
+                    min_val = np.percentile(all_data, low_p)
+                    max_val = np.percentile(all_data, high_p)
+                else:
+                    min_val, max_val = stats.min_val, stats.max_val
+                scale, zp = _calibrate_minmax_range(
+                    min_val, max_val, self.dtype, self.symmetric
+                )
+                scales.append(scale)
+                zero_points.append(zp)
+            self._all_values = []  # Free memory
+            return QDQParams(
+                scale=np.array(scales, dtype=np.float32),
+                zero_point=np.array(zero_points, dtype=np.int32),
+                dtype=self.dtype,
+                axis=self.channel_axis,
+            )
+        else:
+            all_data = np.concatenate(self._all_values)
+            low_p = (100 - self.percentile) / 2
+            high_p = 100 - low_p
+            min_val = np.percentile(all_data, low_p)
+            max_val = np.percentile(all_data, high_p)
+            self._all_values = []  # Free memory
+            scale, zp = _calibrate_minmax_range(
+                min_val, max_val, self.dtype, self.symmetric
+            )
+            return QDQParams(scale=scale, zero_point=zp, dtype=self.dtype)
+
+    def _compute_mse(self) -> QDQParams:
+        """Compute params by minimizing MSE."""
+        if not self._all_values:
+            return self._compute_minmax()
+
+        if self.per_channel and self._channel_stats is not None:
+            scales = []
+            zero_points = []
+            for c, stats in enumerate(self._channel_stats):
+                channel_values = [v for ch, v in self._all_values if ch == c]
+                if channel_values:
+                    all_data = np.concatenate(channel_values)
+                    scale, zp = _calibrate_mse_search(
+                        all_data, self.dtype, self.symmetric
+                    )
+                else:
+                    scale, zp = _calibrate_minmax_range(
+                        stats.min_val, stats.max_val,
+                        self.dtype, self.symmetric
+                    )
+                scales.append(scale)
+                zero_points.append(zp)
+            self._all_values = []
+            return QDQParams(
+                scale=np.array(scales, dtype=np.float32),
+                zero_point=np.array(zero_points, dtype=np.int32),
+                dtype=self.dtype,
+                axis=self.channel_axis,
+            )
+        else:
+            all_data = np.concatenate(self._all_values)
+            scale, zp = _calibrate_mse_search(all_data, self.dtype, self.symmetric)
+            self._all_values = []
+            return QDQParams(scale=scale, zero_point=zp, dtype=self.dtype)
+
+    def _compute_entropy(self) -> QDQParams:
+        """Compute params by minimizing KL divergence."""
+        self._build_histogram()
+
+        if self.per_channel and self._channel_stats is not None:
+            scales = []
+            zero_points = []
+            for stats in self._channel_stats:
+                if stats.histogram is not None and stats.bin_edges is not None:
+                    scale, zp = _calibrate_entropy_search(
+                        stats.histogram, stats.bin_edges,
+                        self.dtype, self.symmetric
+                    )
+                else:
+                    scale, zp = _calibrate_minmax_range(
+                        stats.min_val, stats.max_val,
+                        self.dtype, self.symmetric
+                    )
+                scales.append(scale)
+                zero_points.append(zp)
+            return QDQParams(
+                scale=np.array(scales, dtype=np.float32),
+                zero_point=np.array(zero_points, dtype=np.int32),
+                dtype=self.dtype,
+                axis=self.channel_axis,
+            )
+        else:
+            if self.stats.histogram is not None and self.stats.bin_edges is not None:
+                scale, zp = _calibrate_entropy_search(
+                    self.stats.histogram, self.stats.bin_edges,
+                    self.dtype, self.symmetric
+                )
+            else:
+                scale, zp = _calibrate_minmax_range(
+                    self.stats.min_val, self.stats.max_val,
+                    self.dtype, self.symmetric
+                )
+            return QDQParams(scale=scale, zero_point=zp, dtype=self.dtype)
+
+    def reset(self) -> None:
+        """Reset observer to initial state."""
+        self.stats.reset()
+        self._channel_stats = None
+        self._all_values = []
+        self._histogram_built = False
+
+
+def _calibrate_minmax_range(
+    min_val: float,
+    max_val: float,
+    dtype: QuantDtype,
+    symmetric: bool,
+) -> Tuple[float, int]:
+    """Compute scale and zero_point from min/max range.
+
+    Args:
+        min_val: Minimum value
+        max_val: Maximum value
+        dtype: Target dtype
+        symmetric: Use symmetric quantization
+
+    Returns:
+        (scale, zero_point) tuple
+    """
+    qmin, qmax = dtype.qmin, dtype.qmax
+
+    if symmetric:
+        # Symmetric: scale = max(|min|, |max|) / qmax
+        abs_max = max(abs(min_val), abs(max_val))
+        if abs_max == 0:
+            abs_max = 1.0
+        scale = abs_max / max(abs(qmin), abs(qmax))
+        zero_point = 0
+    else:
+        # Asymmetric: map [min, max] to [qmin, qmax]
+        if max_val == min_val:
+            scale = 1.0
+            zero_point = qmin
+        else:
+            scale = (max_val - min_val) / (qmax - qmin)
+            zero_point = int(round(qmin - min_val / scale))
+            zero_point = max(qmin, min(qmax, zero_point))
+
+    return float(scale), int(zero_point)
+
+
+def _calibrate_mse_search(
+    values: np.ndarray,
+    dtype: QuantDtype,
+    symmetric: bool,
+    num_steps: int = 100,
+) -> Tuple[float, int]:
+    """Search for scale that minimizes MSE.
+
+    Args:
+        values: Calibration data
+        dtype: Target dtype
+        symmetric: Use symmetric quantization
+        num_steps: Number of scale candidates to try
+
+    Returns:
+        (scale, zero_point) tuple
+    """
+    qmin, qmax = dtype.qmin, dtype.qmax
+
+    # Get range from data
+    data_min, data_max = float(np.min(values)), float(np.max(values))
+
+    if symmetric:
+        abs_max = max(abs(data_min), abs(data_max))
+        if abs_max == 0:
+            return 1.0, 0
+
+        # Search over different percentile clipping
+        best_scale = abs_max / max(abs(qmin), abs(qmax))
+        best_mse = float('inf')
+
+        for p in np.linspace(0.9, 1.0, num_steps):
+            clip_val = abs_max * p
+            scale = clip_val / max(abs(qmin), abs(qmax))
+
+            # Quantize and compute MSE
+            clipped = np.clip(values, -clip_val, clip_val)
+            q = np.round(clipped / scale).astype(np.int32)
+            q = np.clip(q, qmin, qmax)
+            dq = q.astype(np.float32) * scale
+            mse = np.mean((values - dq) ** 2)
+
+            if mse < best_mse:
+                best_mse = mse
+                best_scale = scale
+
+        return float(best_scale), 0
+    else:
+        if data_max == data_min:
+            return 1.0, qmin
+
+        best_scale = (data_max - data_min) / (qmax - qmin)
+        best_zp = int(round(qmin - data_min / best_scale))
+        best_mse = float('inf')
+
+        # Search over different clipping ranges
+        for p_low in np.linspace(0.0, 0.1, 10):
+            for p_high in np.linspace(0.9, 1.0, 10):
+                clip_min = data_min + (data_max - data_min) * p_low
+                clip_max = data_min + (data_max - data_min) * p_high
+
+                if clip_max <= clip_min:
+                    continue
+
+                scale = (clip_max - clip_min) / (qmax - qmin)
+                zp = int(round(qmin - clip_min / scale))
+                zp = max(qmin, min(qmax, zp))
+
+                # Quantize and compute MSE
+                clipped = np.clip(values, clip_min, clip_max)
+                q = np.round(clipped / scale + zp).astype(np.int32)
+                q = np.clip(q, qmin, qmax)
+                dq = (q.astype(np.float32) - zp) * scale
+                mse = np.mean((values - dq) ** 2)
+
+                if mse < best_mse:
+                    best_mse = mse
+                    best_scale = scale
+                    best_zp = zp
+
+        return float(best_scale), int(best_zp)
+
+
+def _kl_divergence(p: np.ndarray, q: np.ndarray) -> float:
+    """Compute KL divergence D_KL(P || Q).
+
+    Args:
+        p: Reference distribution (normalized)
+        q: Approximation distribution (normalized)
+
+    Returns:
+        KL divergence value
+    """
+    # Add small epsilon for numerical stability
+    p = p + 1e-10
+    q = q + 1e-10
+    p = p / np.sum(p)
+    q = q / np.sum(q)
+
+    # Only compute where p > 0
+    mask = p > 1e-10
+    return float(np.sum(p[mask] * np.log(p[mask] / q[mask])))
+
+
+def _calibrate_entropy_search(
+    histogram: np.ndarray,
+    bin_edges: np.ndarray,
+    dtype: QuantDtype,
+    symmetric: bool,
+) -> Tuple[float, int]:
+    """Search for scale that minimizes KL divergence.
+
+    This implementation searches over different clipping thresholds to find
+    the one that minimizes information loss when quantizing the distribution.
+
+    Args:
+        histogram: Value histogram
+        bin_edges: Histogram bin edges
+        dtype: Target dtype
+        symmetric: Use symmetric quantization
+
+    Returns:
+        (scale, zero_point) tuple
+    """
+    qmin, qmax = dtype.qmin, dtype.qmax
+    num_quant_levels = qmax - qmin + 1
+
+    # Reference distribution
+    ref_hist = histogram.astype(np.float64)
+    total_count = np.sum(ref_hist)
+    if total_count == 0:
+        return 1.0, 0
+
+    num_bins = len(histogram)
+    bin_width = (bin_edges[-1] - bin_edges[0]) / num_bins
+
+    # Get data range from histogram
+    nonzero_bins = np.nonzero(histogram)[0]
+    if len(nonzero_bins) == 0:
+        return 1.0, 0
+
+    data_min = bin_edges[nonzero_bins[0]]
+    data_max = bin_edges[nonzero_bins[-1] + 1]
+    abs_max = max(abs(data_min), abs(data_max))
+
+    if abs_max == 0:
+        return 1.0, 0
+
+    # Initialize with minmax result
+    best_scale, best_zp = _calibrate_minmax_range(data_min, data_max, dtype, symmetric)
+    best_kl = float('inf')
+
+    if symmetric:
+        # For symmetric, search over clip percentages of abs_max
+        # Start from a reasonable minimum (keeping most data) to the full range
+        for clip_pct in np.linspace(0.5, 1.0, 100):
+            clip_val = abs_max * clip_pct
+            scale = clip_val / max(abs(qmin), abs(qmax))
+
+            # Compute KL divergence for this clipping
+            # Create quantized distribution by mapping bins to quant levels
+            quant_hist = np.zeros(num_quant_levels, dtype=np.float64)
+
+            for i in range(num_bins):
+                bin_center = (bin_edges[i] + bin_edges[i + 1]) / 2
+                # Clip and quantize
+                clipped = np.clip(bin_center, -clip_val, clip_val)
+                q_level = int(round(clipped / scale))
+                q_level = max(qmin, min(qmax, q_level))
+                quant_hist[q_level - qmin] += histogram[i]
+
+            # Skip if all zeros
+            if np.sum(quant_hist) == 0:
+                continue
+
+            # Expand quantized distribution back to original bins for KL comparison
+            expanded_hist = np.zeros(num_bins, dtype=np.float64)
+            for q in range(num_quant_levels):
+                dequant_val = (q + qmin) * scale
+                # Find which bin this maps to
+                bin_idx = int((dequant_val - bin_edges[0]) / bin_width)
+                bin_idx = max(0, min(num_bins - 1, bin_idx))
+                expanded_hist[bin_idx] += quant_hist[q]
+
+            # Compute KL divergence
+            kl = _kl_divergence(ref_hist, expanded_hist)
+
+            if kl < best_kl:
+                best_kl = kl
+                best_scale = scale
+
+        return float(best_scale), 0
+
+    else:
+        # For asymmetric, search over clip ranges
+        for low_pct in np.linspace(0.0, 0.2, 20):
+            for high_pct in np.linspace(0.8, 1.0, 20):
+                clip_min = data_min + (data_max - data_min) * low_pct
+                clip_max = data_min + (data_max - data_min) * high_pct
+
+                if clip_max <= clip_min:
+                    continue
+
+                scale = (clip_max - clip_min) / (qmax - qmin)
+                zp = int(round(qmin - clip_min / scale))
+                zp = max(qmin, min(qmax, zp))
+
+                # Create quantized distribution
+                quant_hist = np.zeros(num_quant_levels, dtype=np.float64)
+                for i in range(num_bins):
+                    bin_center = (bin_edges[i] + bin_edges[i + 1]) / 2
+                    clipped = np.clip(bin_center, clip_min, clip_max)
+                    q_level = int(round(clipped / scale + zp))
+                    q_level = max(qmin, min(qmax, q_level))
+                    quant_hist[q_level - qmin] += histogram[i]
+
+                if np.sum(quant_hist) == 0:
+                    continue
+
+                # Expand back
+                expanded_hist = np.zeros(num_bins, dtype=np.float64)
+                for q in range(num_quant_levels):
+                    val = (q + qmin - zp) * scale
+                    bin_idx = int((val - bin_edges[0]) / bin_width)
+                    bin_idx = max(0, min(num_bins - 1, bin_idx))
+                    expanded_hist[bin_idx] += quant_hist[q]
+
+                kl = _kl_divergence(ref_hist, expanded_hist)
+
+                if kl < best_kl:
+                    best_kl = kl
+                    best_scale = scale
+                    best_zp = zp
+
+        return float(best_scale), int(best_zp)
+
+
+def calibrate_minmax(
+    tensor: np.ndarray,
+    dtype: QuantDtype = QuantDtype.INT8,
+    symmetric: bool = True,
+) -> QDQParams:
+    """Simple min/max calibration.
+
+    Args:
+        tensor: Tensor to calibrate
+        dtype: Target quantization dtype
+        symmetric: Use symmetric quantization
+
+    Returns:
+        QDQParams with calibrated scale/zero_point
+    """
+    min_val = float(np.min(tensor))
+    max_val = float(np.max(tensor))
+    scale, zp = _calibrate_minmax_range(min_val, max_val, dtype, symmetric)
+    return QDQParams(scale=scale, zero_point=zp, dtype=dtype)
+
+
+def calibrate_percentile(
+    tensor: np.ndarray,
+    dtype: QuantDtype = QuantDtype.INT8,
+    symmetric: bool = True,
+    percentile: float = 99.99,
+) -> QDQParams:
+    """Percentile-based calibration (handles outliers).
+
+    Args:
+        tensor: Tensor to calibrate
+        dtype: Target quantization dtype
+        symmetric: Use symmetric quantization
+        percentile: Percentile to use (default 99.99)
+
+    Returns:
+        QDQParams with calibrated scale/zero_point
+    """
+    low_p = (100 - percentile) / 2
+    high_p = 100 - low_p
+    min_val = float(np.percentile(tensor, low_p))
+    max_val = float(np.percentile(tensor, high_p))
+    scale, zp = _calibrate_minmax_range(min_val, max_val, dtype, symmetric)
+    return QDQParams(scale=scale, zero_point=zp, dtype=dtype)
+
+
+def calibrate_mse(
+    tensor: np.ndarray,
+    dtype: QuantDtype = QuantDtype.INT8,
+    symmetric: bool = True,
+) -> QDQParams:
+    """MSE-minimizing calibration.
+
+    Args:
+        tensor: Tensor to calibrate
+        dtype: Target quantization dtype
+        symmetric: Use symmetric quantization
+
+    Returns:
+        QDQParams with calibrated scale/zero_point
+    """
+    scale, zp = _calibrate_mse_search(
+        tensor.flatten(), dtype, symmetric
+    )
+    return QDQParams(scale=scale, zero_point=zp, dtype=dtype)
+
+
+def calibrate_entropy(
+    tensor: np.ndarray,
+    dtype: QuantDtype = QuantDtype.INT8,
+    symmetric: bool = True,
+    num_bins: int = 2048,
+) -> QDQParams:
+    """Entropy-minimizing (KL divergence) calibration.
+
+    Args:
+        tensor: Tensor to calibrate
+        dtype: Target quantization dtype
+        symmetric: Use symmetric quantization
+        num_bins: Number of histogram bins
+
+    Returns:
+        QDQParams with calibrated scale/zero_point
+    """
+    histogram, bin_edges = np.histogram(tensor.flatten(), bins=num_bins)
+    scale, zp = _calibrate_entropy_search(histogram, bin_edges, dtype, symmetric)
+    return QDQParams(scale=scale, zero_point=zp, dtype=dtype)
+
+
+def compare_calibration_methods(
+    tensor: np.ndarray,
+    dtype: QuantDtype = QuantDtype.INT8,
+    symmetric: bool = True,
+) -> Dict[str, Dict[str, Any]]:
+    """Compare all calibration methods on a tensor.
+
+    Args:
+        tensor: Tensor to calibrate
+        dtype: Target quantization dtype
+        symmetric: Use symmetric quantization
+
+    Returns:
+        Dictionary mapping method name to {params, error_metrics}
+    """
+    methods = {
+        "minmax": calibrate_minmax,
+        "percentile": calibrate_percentile,
+        "mse": calibrate_mse,
+        "entropy": calibrate_entropy,
+    }
+
+    results = {}
+    for name, calibrate_fn in methods.items():
+        if name == "percentile":
+            params = calibrate_fn(tensor, dtype, symmetric, percentile=99.99)
+        elif name == "entropy":
+            params = calibrate_fn(tensor, dtype, symmetric, num_bins=2048)
+        else:
+            params = calibrate_fn(tensor, dtype, symmetric)
+
+        error = quantize_error(tensor, params)
+        results[name] = {
+            "params": params,
+            "scale": params.scale,
+            "zero_point": params.zero_point,
+            "snr_db": error["snr_db"],
+            "mean_abs_error": error["mean_abs_error"],
+            "max_abs_error": error["max_abs_error"],
+        }
+
+    return results
+
+
+def calibration_info() -> str:
+    """Return information about calibration methods.
+
+    Returns:
+        Multi-line string with calibration method descriptions
+    """
+    return """Calibration Methods (v0.7.11)
+==============================
+
+MinMax (CalibrationMethod.MINMAX)
+  - Uses observed min/max values
+  - Fast and simple
+  - Sensitive to outliers
+  - Best for: well-behaved distributions
+
+Percentile (CalibrationMethod.PERCENTILE)
+  - Uses percentile values (default 99.99%)
+  - Clips outliers
+  - Good balance of speed and accuracy
+  - Best for: distributions with outliers
+
+MSE (CalibrationMethod.MSE)
+  - Minimizes mean squared error
+  - Searches over clipping ranges
+  - Good for minimizing overall error
+  - Best for: accuracy-critical applications
+
+Entropy (CalibrationMethod.ENTROPY)
+  - Minimizes KL divergence (information loss)
+  - Histogram-based
+  - Preserves distribution shape
+  - Best for: maintaining statistical properties
+
+Usage:
+  observer = CalibrationObserver(
+      method=CalibrationMethod.PERCENTILE,
+      dtype=QuantDtype.INT8,
+      symmetric=True,
+  )
+
+  for batch in calibration_data:
+      activations = model(batch)
+      observer.observe(activations)
+
+  params = observer.compute_params()
+
+Quick calibration:
+  params = calibrate_mse(tensor, dtype=QuantDtype.INT8)
+  params = calibrate_percentile(tensor, percentile=99.9)
+"""
+
+
 # --- Memory traffic calculation ---
 
 def calculate_memory_bytes(

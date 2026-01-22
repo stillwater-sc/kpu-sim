@@ -37,11 +37,23 @@ def _install_cpp_warning_filter():
 
     NNPACK warnings are common when running on systems without NNPACK support,
     but they're irrelevant when using the KPU backend.
+
+    Note: This filter is disabled when running under pytest to avoid
+    breaking pytest's capture mechanism.
     """
+    # Skip if running under pytest - the pipe redirection breaks pytest's capture
+    if 'pytest' in _sys.modules or '_pytest' in _sys.modules:
+        return lambda: None
+
+    # Skip if stderr is not a real file (e.g., already redirected)
+    try:
+        _stderr_fd = _sys.stderr.fileno()
+    except (AttributeError, OSError, ValueError):
+        return lambda: None
+
     _suppressed = [b'NNPACK', b'Could not initialize NNPACK']
 
     # Save original stderr fd
-    _stderr_fd = _sys.stderr.fileno()
     _saved_fd = _os.dup(_stderr_fd)
 
     # Create pipe to capture stderr
@@ -77,7 +89,7 @@ def _install_cpp_warning_filter():
 
 _flush_stderr = _install_cpp_warning_filter()
 
-__version__ = "0.7.10"
+__version__ = "0.7.11"
 __author__ = "Stillwater Supercomputing, Inc."
 
 # Fidelity levels
@@ -263,6 +275,16 @@ from .quantization import (
     qdq_conv2d,
     create_qdq_params,
     quantize_error,
+    # Calibration (v0.7.11)
+    CalibrationMethod,
+    CalibrationStats,
+    CalibrationObserver,
+    calibrate_minmax,
+    calibrate_percentile,
+    calibrate_mse,
+    calibrate_entropy,
+    compare_calibration_methods,
+    calibration_info,
     # Memory traffic
     calculate_memory_bytes,
     calculate_matmul_traffic,
@@ -478,6 +500,16 @@ __all__ = [
     "qdq_conv2d",
     "create_qdq_params",
     "quantize_error",
+    # Calibration (v0.7.11)
+    "CalibrationMethod",
+    "CalibrationStats",
+    "CalibrationObserver",
+    "calibrate_minmax",
+    "calibrate_percentile",
+    "calibrate_mse",
+    "calibrate_entropy",
+    "compare_calibration_methods",
+    "calibration_info",
     # Memory traffic
     "calculate_memory_bytes",
     "calculate_matmul_traffic",
