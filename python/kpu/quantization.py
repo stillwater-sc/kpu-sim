@@ -434,6 +434,175 @@ def quantized_linear_int8(
         return quantize(y_fp, scale_out, zero_point_out, QuantDtype.INT8)
 
 
+# --- FP16 operations (v0.7.1) ---
+
+def fp16_matmul(
+    a: np.ndarray,
+    b: np.ndarray,
+    output_fp32: bool = True,
+) -> np.ndarray:
+    """Perform FP16 matrix multiplication using NumPy native float16.
+
+    This uses NumPy's native float16 support for actual half-precision
+    computation, providing realistic FP16 behavior including reduced
+    precision and potential overflow for large values.
+
+    Args:
+        a: Input matrix A, shape [..., M, K]
+        b: Input matrix B, shape [..., K, N]
+        output_fp32: If True, return float32; else return float16
+
+    Returns:
+        Result matrix C, shape [..., M, N]
+    """
+    # Convert to FP16 for computation
+    a_fp16 = a.astype(np.float16)
+    b_fp16 = b.astype(np.float16)
+
+    # Perform matmul in FP16
+    c_fp16 = np.matmul(a_fp16, b_fp16)
+
+    if output_fp32:
+        return c_fp16.astype(np.float32)
+    return c_fp16
+
+
+def fp16_linear(
+    x: np.ndarray,
+    weight: np.ndarray,
+    bias: Optional[np.ndarray] = None,
+    output_fp32: bool = True,
+) -> np.ndarray:
+    """Perform FP16 linear layer (y = x @ weight.T + bias).
+
+    Args:
+        x: Input tensor, shape [..., in_features]
+        weight: Weight matrix, shape [out_features, in_features]
+        bias: Optional bias vector, shape [out_features]
+        output_fp32: If True, return float32; else return float16
+
+    Returns:
+        Output tensor, shape [..., out_features]
+    """
+    # Convert to FP16
+    x_fp16 = x.astype(np.float16)
+    w_fp16 = weight.astype(np.float16)
+
+    # Linear operation: y = x @ w.T
+    y_fp16 = np.matmul(x_fp16, w_fp16.T)
+
+    if bias is not None:
+        bias_fp16 = bias.astype(np.float16)
+        y_fp16 = y_fp16 + bias_fp16
+
+    if output_fp32:
+        return y_fp16.astype(np.float32)
+    return y_fp16
+
+
+def fp16_conv2d(
+    x: np.ndarray,
+    weight: np.ndarray,
+    bias: Optional[np.ndarray] = None,
+    stride: Tuple[int, int] = (1, 1),
+    padding: Tuple[int, int] = (0, 0),
+    output_fp32: bool = True,
+) -> np.ndarray:
+    """Perform FP16 2D convolution.
+
+    Args:
+        x: Input tensor, shape [N, C_in, H, W]
+        weight: Filter weights, shape [C_out, C_in, kH, kW]
+        bias: Optional bias, shape [C_out]
+        stride: Stride (sH, sW)
+        padding: Padding (pH, pW)
+        output_fp32: If True, return float32; else return float16
+
+    Returns:
+        Output tensor, shape [N, C_out, H_out, W_out]
+    """
+    # Convert to FP16
+    x_fp16 = x.astype(np.float16)
+    w_fp16 = weight.astype(np.float16)
+
+    N, C_in, H, W = x_fp16.shape
+    C_out, _, kH, kW = w_fp16.shape
+    sH, sW = stride
+    pH, pW = padding
+
+    # Pad input
+    if pH > 0 or pW > 0:
+        x_fp16 = np.pad(x_fp16, ((0, 0), (0, 0), (pH, pH), (pW, pW)),
+                        mode='constant', constant_values=0)
+
+    # Output dimensions
+    H_out = (H + 2 * pH - kH) // sH + 1
+    W_out = (W + 2 * pW - kW) // sW + 1
+
+    # im2col style convolution in FP16
+    output = np.zeros((N, C_out, H_out, W_out), dtype=np.float16)
+
+    for n in range(N):
+        for c_out in range(C_out):
+            for h in range(H_out):
+                for w in range(W_out):
+                    h_start = h * sH
+                    w_start = w * sW
+                    patch = x_fp16[n, :, h_start:h_start+kH, w_start:w_start+kW]
+                    output[n, c_out, h, w] = np.sum(patch * w_fp16[c_out])
+
+    if bias is not None:
+        bias_fp16 = bias.astype(np.float16)
+        output = output + bias_fp16.reshape(1, -1, 1, 1)
+
+    if output_fp32:
+        return output.astype(np.float32)
+    return output
+
+
+def cast_to_fp16(tensor: np.ndarray) -> np.ndarray:
+    """Cast a tensor to FP16.
+
+    Args:
+        tensor: Input tensor (any dtype)
+
+    Returns:
+        FP16 tensor
+    """
+    return tensor.astype(np.float16)
+
+
+def cast_from_fp16(tensor: np.ndarray) -> np.ndarray:
+    """Cast an FP16 tensor back to FP32.
+
+    Args:
+        tensor: Input FP16 tensor
+
+    Returns:
+        FP32 tensor
+    """
+    return tensor.astype(np.float32)
+
+
+def fp16_range() -> Tuple[float, float]:
+    """Return the representable range of FP16.
+
+    Returns:
+        (min_value, max_value) tuple for FP16
+    """
+    info = np.finfo(np.float16)
+    return (float(info.min), float(info.max))
+
+
+def fp16_precision() -> float:
+    """Return the machine epsilon for FP16.
+
+    Returns:
+        Machine epsilon (smallest representable difference from 1.0)
+    """
+    return float(np.finfo(np.float16).eps)
+
+
 # --- Memory traffic calculation ---
 
 def calculate_memory_bytes(

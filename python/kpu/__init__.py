@@ -77,7 +77,7 @@ def _install_cpp_warning_filter():
 
 _flush_stderr = _install_cpp_warning_filter()
 
-__version__ = "0.7.0"
+__version__ = "0.7.1"
 __author__ = "Stillwater Supercomputing, Inc."
 
 # Fidelity levels
@@ -177,9 +177,17 @@ from .quantization import (
     dequantize,
     quantize_per_channel,
     dequantize_per_channel,
-    # Quantized operations
+    # Quantized operations (INT8)
     quantized_matmul_int8,
     quantized_linear_int8,
+    # FP16 operations (v0.7.1)
+    fp16_matmul,
+    fp16_linear,
+    fp16_conv2d,
+    cast_to_fp16,
+    cast_from_fp16,
+    fp16_range,
+    fp16_precision,
     # Memory traffic
     calculate_memory_bytes,
     calculate_matmul_traffic,
@@ -312,6 +320,15 @@ __all__ = [
     "dequantize_per_channel",
     "quantized_matmul_int8",
     "quantized_linear_int8",
+    # FP16 operations (v0.7.1)
+    "fp16_matmul",
+    "fp16_linear",
+    "fp16_conv2d",
+    "cast_to_fp16",
+    "cast_from_fp16",
+    "fp16_range",
+    "fp16_precision",
+    # Memory traffic
     "calculate_memory_bytes",
     "calculate_matmul_traffic",
     "bandwidth_reduction_factor",
