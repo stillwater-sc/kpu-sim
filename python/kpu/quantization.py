@@ -858,6 +858,353 @@ def bf16_precision() -> float:
     return 0.0078125
 
 
+# --- FP8 operations (v0.7.3) ---
+
+# FP8 format specifications
+# Format: fp8_e{exp}m{mantissa} where exp + mantissa + 1(sign) = 8
+#
+# | Format  | Exp | Mantissa | Range      | Precision | Use Case |
+# |---------|-----|----------|------------|-----------|----------|
+# | E2M5    | 2   | 5        | ±6.0       | High      | Gradients |
+# | E3M4    | 3   | 4        | ±30        | Medium    | General |
+# | E4M3    | 4   | 3        | ±448       | Low       | Weights (NVIDIA) |
+# | E5M2    | 5   | 2        | ±57344     | Very Low  | Activations |
+
+# Try to import ml_dtypes FP8 types (only e4m3fn and e5m2 are available)
+try:
+    import ml_dtypes
+    _FP8_E4M3_DTYPE = getattr(ml_dtypes, 'float8_e4m3fn', None)
+    _FP8_E5M2_DTYPE = getattr(ml_dtypes, 'float8_e5m2', None)
+    _FP8_ML_DTYPES_AVAILABLE = _FP8_E4M3_DTYPE is not None
+except ImportError:
+    _FP8_E4M3_DTYPE = None
+    _FP8_E5M2_DTYPE = None
+    _FP8_ML_DTYPES_AVAILABLE = False
+
+
+class FP8Format:
+    """FP8 format specification."""
+
+    def __init__(self, name: str, exp_bits: int, mantissa_bits: int,
+                 bias: int, has_inf: bool = False, has_nan: bool = True):
+        """Initialize FP8 format.
+
+        Args:
+            name: Format name (e.g., "e4m3")
+            exp_bits: Number of exponent bits
+            mantissa_bits: Number of mantissa bits
+            bias: Exponent bias
+            has_inf: Whether format supports infinity
+            has_nan: Whether format supports NaN
+        """
+        self.name = name
+        self.exp_bits = exp_bits
+        self.mantissa_bits = mantissa_bits
+        self.bias = bias
+        self.has_inf = has_inf
+        self.has_nan = has_nan
+
+        # Calculate range
+        max_exp = (1 << exp_bits) - 1 - (1 if has_nan else 0)
+        self.max_normal = (2 - 2**(-mantissa_bits)) * (2 ** (max_exp - bias))
+        self.min_normal = 2 ** (1 - bias)
+        self.min_subnormal = 2 ** (1 - bias - mantissa_bits)
+
+        # Epsilon (precision)
+        self.epsilon = 2 ** (-mantissa_bits)
+
+    @property
+    def max_value(self) -> float:
+        return self.max_normal
+
+    @property
+    def min_value(self) -> float:
+        return -self.max_normal
+
+
+# Standard FP8 formats
+FP8_E2M5 = FP8Format("e2m5", exp_bits=2, mantissa_bits=5, bias=1)
+FP8_E3M4 = FP8Format("e3m4", exp_bits=3, mantissa_bits=4, bias=3)
+FP8_E4M3 = FP8Format("e4m3", exp_bits=4, mantissa_bits=3, bias=7, has_nan=True)  # NVIDIA/OCP
+FP8_E5M2 = FP8Format("e5m2", exp_bits=5, mantissa_bits=2, bias=15, has_inf=True, has_nan=True)
+
+# Format lookup
+_FP8_FORMATS = {
+    "e2m5": FP8_E2M5,
+    "e3m4": FP8_E3M4,
+    "e4m3": FP8_E4M3,
+    "e5m2": FP8_E5M2,
+}
+
+
+def get_fp8_format(format_name: str) -> FP8Format:
+    """Get FP8 format specification by name.
+
+    Args:
+        format_name: Format name ("e2m5", "e3m4", "e4m3", "e5m2")
+
+    Returns:
+        FP8Format specification
+    """
+    if format_name not in _FP8_FORMATS:
+        raise ValueError(f"Unknown FP8 format: {format_name}. "
+                        f"Available: {list(_FP8_FORMATS.keys())}")
+    return _FP8_FORMATS[format_name]
+
+
+def is_fp8_native(format_name: str = "e4m3") -> bool:
+    """Check if native FP8 support is available via ml_dtypes.
+
+    Args:
+        format_name: FP8 format to check
+
+    Returns:
+        True if ml_dtypes provides native support for this format
+    """
+    if not _FP8_ML_DTYPES_AVAILABLE:
+        return False
+    if format_name in ("e4m3", "e4m3fn"):
+        return _FP8_E4M3_DTYPE is not None
+    if format_name == "e5m2":
+        return _FP8_E5M2_DTYPE is not None
+    return False  # e2m5, e3m4 not in ml_dtypes
+
+
+def _emulate_fp8(value: np.ndarray, fmt: FP8Format) -> np.ndarray:
+    """Emulate FP8 by quantizing float32 to FP8 range and precision.
+
+    This emulation:
+    1. Clips values to FP8 representable range
+    2. Quantizes to FP8 precision (rounds mantissa)
+
+    Args:
+        value: Input float32 array
+        fmt: FP8 format specification
+
+    Returns:
+        Float32 array with values quantized to FP8 precision
+    """
+    x = value.astype(np.float32)
+
+    # Clip to range
+    x = np.clip(x, fmt.min_value, fmt.max_value)
+
+    # Handle zeros
+    zero_mask = (x == 0)
+
+    # Quantize to FP8 precision
+    # For each value, round to nearest representable FP8 value
+    sign = np.sign(x)
+    abs_x = np.abs(x)
+
+    # Avoid log of zero
+    abs_x = np.maximum(abs_x, fmt.min_subnormal)
+
+    # Get exponent and mantissa
+    log2_x = np.log2(abs_x)
+    exp = np.floor(log2_x).astype(np.int32)
+
+    # Clamp exponent to valid range
+    exp = np.clip(exp, 1 - fmt.bias, (1 << fmt.exp_bits) - 2 - fmt.bias)
+
+    # Compute mantissa and round
+    mantissa = abs_x / (2.0 ** exp)  # mantissa in [1, 2)
+    mantissa_bits = fmt.mantissa_bits
+    mantissa_quant = np.round(mantissa * (2 ** mantissa_bits)) / (2 ** mantissa_bits)
+
+    # Reconstruct value
+    result = sign * mantissa_quant * (2.0 ** exp)
+
+    # Restore zeros
+    result[zero_mask] = 0.0
+
+    return result.astype(np.float32)
+
+
+def fp8_matmul(
+    a: np.ndarray,
+    b: np.ndarray,
+    format_name: str = "e4m3",
+    output_fp32: bool = True,
+) -> np.ndarray:
+    """Perform FP8 matrix multiplication.
+
+    Uses ml_dtypes for e4m3/e5m2 if available, otherwise emulates.
+
+    Args:
+        a: Input matrix A, shape [..., M, K]
+        b: Input matrix B, shape [..., K, N]
+        format_name: FP8 format ("e2m5", "e3m4", "e4m3", "e5m2")
+        output_fp32: If True, return float32
+
+    Returns:
+        Result matrix C, shape [..., M, N]
+    """
+    fmt = get_fp8_format(format_name)
+
+    # Check for native support
+    if format_name in ("e4m3", "e4m3fn") and _FP8_E4M3_DTYPE is not None:
+        a_fp8 = a.astype(_FP8_E4M3_DTYPE)
+        b_fp8 = b.astype(_FP8_E4M3_DTYPE)
+        # Compute in float32 (FP8 accumulation would overflow)
+        c = np.matmul(a_fp8.astype(np.float32), b_fp8.astype(np.float32))
+        c_fp8 = c.astype(_FP8_E4M3_DTYPE)
+        if output_fp32:
+            return c_fp8.astype(np.float32)
+        return c_fp8
+    elif format_name == "e5m2" and _FP8_E5M2_DTYPE is not None:
+        a_fp8 = a.astype(_FP8_E5M2_DTYPE)
+        b_fp8 = b.astype(_FP8_E5M2_DTYPE)
+        c = np.matmul(a_fp8.astype(np.float32), b_fp8.astype(np.float32))
+        c_fp8 = c.astype(_FP8_E5M2_DTYPE)
+        if output_fp32:
+            return c_fp8.astype(np.float32)
+        return c_fp8
+    else:
+        # Emulate
+        a_fp8 = _emulate_fp8(a, fmt)
+        b_fp8 = _emulate_fp8(b, fmt)
+        c = np.matmul(a_fp8, b_fp8)
+        return _emulate_fp8(c, fmt)
+
+
+def fp8_linear(
+    x: np.ndarray,
+    weight: np.ndarray,
+    bias: Optional[np.ndarray] = None,
+    format_name: str = "e4m3",
+    output_fp32: bool = True,
+) -> np.ndarray:
+    """Perform FP8 linear layer (y = x @ weight.T + bias).
+
+    Args:
+        x: Input tensor, shape [..., in_features]
+        weight: Weight matrix, shape [out_features, in_features]
+        bias: Optional bias vector, shape [out_features]
+        format_name: FP8 format ("e2m5", "e3m4", "e4m3", "e5m2")
+        output_fp32: If True, return float32
+
+    Returns:
+        Output tensor, shape [..., out_features]
+    """
+    fmt = get_fp8_format(format_name)
+
+    # Quantize inputs
+    if format_name in ("e4m3", "e4m3fn") and _FP8_E4M3_DTYPE is not None:
+        x_fp8 = x.astype(_FP8_E4M3_DTYPE).astype(np.float32)
+        w_fp8 = weight.astype(_FP8_E4M3_DTYPE).astype(np.float32)
+    elif format_name == "e5m2" and _FP8_E5M2_DTYPE is not None:
+        x_fp8 = x.astype(_FP8_E5M2_DTYPE).astype(np.float32)
+        w_fp8 = weight.astype(_FP8_E5M2_DTYPE).astype(np.float32)
+    else:
+        x_fp8 = _emulate_fp8(x, fmt)
+        w_fp8 = _emulate_fp8(weight, fmt)
+
+    # Linear operation
+    y = np.matmul(x_fp8, w_fp8.T)
+
+    if bias is not None:
+        # Bias typically kept in higher precision
+        y = y + bias.astype(np.float32)
+
+    # Quantize output
+    if format_name in ("e4m3", "e4m3fn") and _FP8_E4M3_DTYPE is not None:
+        y_fp8 = y.astype(_FP8_E4M3_DTYPE)
+        if output_fp32:
+            return y_fp8.astype(np.float32)
+        return y_fp8
+    elif format_name == "e5m2" and _FP8_E5M2_DTYPE is not None:
+        y_fp8 = y.astype(_FP8_E5M2_DTYPE)
+        if output_fp32:
+            return y_fp8.astype(np.float32)
+        return y_fp8
+    else:
+        return _emulate_fp8(y, fmt)
+
+
+def cast_to_fp8(tensor: np.ndarray, format_name: str = "e4m3") -> np.ndarray:
+    """Cast a tensor to FP8.
+
+    Args:
+        tensor: Input tensor (any dtype)
+        format_name: FP8 format ("e2m5", "e3m4", "e4m3", "e5m2")
+
+    Returns:
+        FP8 tensor (ml_dtypes type or emulated float32)
+    """
+    if format_name in ("e4m3", "e4m3fn") and _FP8_E4M3_DTYPE is not None:
+        return tensor.astype(_FP8_E4M3_DTYPE)
+    elif format_name == "e5m2" and _FP8_E5M2_DTYPE is not None:
+        return tensor.astype(_FP8_E5M2_DTYPE)
+    else:
+        fmt = get_fp8_format(format_name)
+        return _emulate_fp8(tensor.astype(np.float32), fmt)
+
+
+def cast_from_fp8(tensor: np.ndarray) -> np.ndarray:
+    """Cast an FP8 tensor back to FP32.
+
+    Args:
+        tensor: Input FP8 tensor
+
+    Returns:
+        FP32 tensor
+    """
+    return tensor.astype(np.float32)
+
+
+def fp8_range(format_name: str = "e4m3") -> Tuple[float, float]:
+    """Return the representable range of an FP8 format.
+
+    Args:
+        format_name: FP8 format ("e2m5", "e3m4", "e4m3", "e5m2")
+
+    Returns:
+        (min_value, max_value) tuple
+    """
+    fmt = get_fp8_format(format_name)
+    return (fmt.min_value, fmt.max_value)
+
+
+def fp8_precision(format_name: str = "e4m3") -> float:
+    """Return the machine epsilon for an FP8 format.
+
+    Args:
+        format_name: FP8 format ("e2m5", "e3m4", "e4m3", "e5m2")
+
+    Returns:
+        Machine epsilon
+    """
+    fmt = get_fp8_format(format_name)
+    return fmt.epsilon
+
+
+def fp8_info(format_name: str = "e4m3") -> Dict[str, Any]:
+    """Get detailed information about an FP8 format.
+
+    Args:
+        format_name: FP8 format ("e2m5", "e3m4", "e4m3", "e5m2")
+
+    Returns:
+        Dictionary with format details
+    """
+    fmt = get_fp8_format(format_name)
+    return {
+        "name": fmt.name,
+        "exp_bits": fmt.exp_bits,
+        "mantissa_bits": fmt.mantissa_bits,
+        "bias": fmt.bias,
+        "max_value": fmt.max_value,
+        "min_value": fmt.min_value,
+        "min_normal": fmt.min_normal,
+        "min_subnormal": fmt.min_subnormal,
+        "epsilon": fmt.epsilon,
+        "has_inf": fmt.has_inf,
+        "has_nan": fmt.has_nan,
+        "native_support": is_fp8_native(format_name),
+    }
+
+
 # --- Memory traffic calculation ---
 
 def calculate_memory_bytes(
