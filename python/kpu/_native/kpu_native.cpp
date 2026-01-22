@@ -19,11 +19,12 @@
 #include <stdexcept>
 #include <cmath>
 
-// KPU Simulator includes for transactional models
+// KPU Simulator includes for behavioral and transactional models
 #include <sw/kpu/fidelity/simulation_fidelity.hpp>
 #include <sw/kpu/fidelity/component_config.hpp>
 #include <sw/kpu/models/interfaces/compute_fabric_interface.hpp>
 #include <sw/kpu/models/interfaces/memory_controller_interface.hpp>
+#include <sw/kpu/models/behavioral/compute/compute_fabric.hpp>
 #include <sw/kpu/models/transactional/compute/compute_fabric.hpp>
 #include <sw/kpu/models/transactional/memory/memory_controller.hpp>
 #include <sw/kpu/stats/memory_traffic.hpp>
@@ -132,7 +133,7 @@ struct NativeExecutionStats {
     double page_hit_rate = 0.0;
 
     // Helper to create dict for a memory level
-    py::dict level_to_dict(const LevelMemoryStats& level, const char* name) const {
+    py::dict level_to_dict(const LevelMemoryStats& level) const {
         py::dict d;
         d["read_count"] = level.read_count;
         d["write_count"] = level.write_count;
@@ -167,10 +168,10 @@ struct NativeExecutionStats {
         d["matmul_count"] = matmul_count;
 
         // Memory hierarchy stats (XUE events)
-        d["dram"] = level_to_dict(dram, "dram");
-        d["l3"] = level_to_dict(l3, "l3");
-        d["l2"] = level_to_dict(l2, "l2");
-        d["l1"] = level_to_dict(l1, "l1");
+        d["dram"] = level_to_dict(dram);
+        d["l3"] = level_to_dict(l3);
+        d["l2"] = level_to_dict(l2);
+        d["l1"] = level_to_dict(l1);
 
         // Legacy memory metrics
         d["memory_bytes"] = memory_bytes;
@@ -228,8 +229,22 @@ public:
         : fidelity_(fidelity)
         , clock_frequency_ghz_(CLOCK_FREQUENCY_NOT_SET)
         , clock_frequency_explicitly_set_(false) {
-        // Initialize transactional compute fabric with default config
+        // Initialize behavioral and transactional compute fabrics
+        init_behavioral_models();
         init_transactional_models();
+    }
+
+    void init_behavioral_models() {
+        // Configure behavioral compute fabric for functional correctness
+        sw::kpu::ComputeFabricConfig compute_config;
+        compute_config.fidelity = sw::kpu::SimulationFidelity::BEHAVIORAL;
+        compute_config.array_rows = 16;
+        compute_config.array_cols = 16;
+        compute_config.macs_per_cycle = 256;
+        compute_config.pipeline_depth = 1;  // Behavioral has no pipeline
+        compute_config.enable_statistics = true;
+
+        behavioral_compute_fabric_ = std::make_unique<sw::kpu::BehavioralComputeFabric>(compute_config, 0);
     }
 
     void init_transactional_models() {
@@ -352,6 +367,7 @@ private:
     int fidelity_;
     double clock_frequency_ghz_;
     bool clock_frequency_explicitly_set_;
+    std::unique_ptr<sw::kpu::BehavioralComputeFabric> behavioral_compute_fabric_;
     std::unique_ptr<sw::kpu::TransactionalComputeFabric> compute_fabric_;
     std::unique_ptr<sw::kpu::TransactionalMemoryController> memory_controller_;
 
@@ -401,7 +417,11 @@ private:
     }
 
     /**
-     * @brief Execute a single DFX operation behaviorally using NumPy
+     * @brief Execute a single DFX operation using C++ BehavioralComputeFabric
+     *
+     * This uses the actual C++ simulation infrastructure for compute operations,
+     * ensuring functional correctness is validated through the same code path
+     * that will be used by higher-fidelity simulation modes.
      */
     void execute_op_behavioral(
         const py::dict& op,
@@ -414,7 +434,7 @@ private:
 
         std::string output_name = output_names[0].cast<std::string>();
 
-        // Import numpy
+        // Import numpy for array allocation
         py::module np = py::module::import("numpy");
 
         if (opcode == "matmul") {
@@ -428,133 +448,442 @@ private:
             py::buffer_info b_buf = B.request();
 
             // Get dimensions for FLOP counting
-            py::ssize_t M = a_buf.shape[a_buf.ndim - 2];
-            py::ssize_t K = a_buf.shape[a_buf.ndim - 1];
-            py::ssize_t N = b_buf.shape[b_buf.ndim - 1];
+            uint32_t M = static_cast<uint32_t>(a_buf.shape[a_buf.ndim - 2]);
+            uint32_t K = static_cast<uint32_t>(a_buf.shape[a_buf.ndim - 1]);
+            uint32_t N = static_cast<uint32_t>(b_buf.shape[b_buf.ndim - 1]);
 
-            // Compute result using numpy
-            py::array_t<float> C = np.attr("matmul")(A, B).cast<py::array_t<float>>();
+            // Allocate output array
+            std::vector<py::ssize_t> out_shape;
+            for (int i = 0; i < a_buf.ndim - 1; ++i) {
+                out_shape.push_back(a_buf.shape[i]);
+            }
+            out_shape.push_back(b_buf.shape[b_buf.ndim - 1]);
+
+            py::array_t<float> C = np.attr("zeros")(out_shape, py::arg("dtype") = np.attr("float32")).cast<py::array_t<float>>();
+            py::buffer_info c_buf = C.request();
+
+            // Use C++ BehavioralComputeFabric for matmul
+            sw::kpu::MatMulDescriptor desc;
+            desc.m = M;
+            desc.n = N;
+            desc.k = K;
+
+            behavioral_compute_fabric_->submit_matmul(
+                desc,
+                a_buf.ptr,
+                b_buf.ptr,
+                c_buf.ptr,
+                nullptr
+            );
+
+            // Drain to complete the operation (behavioral is instant)
+            behavioral_compute_fabric_->drain();
+
             tensors[output_name] = C;
 
             // Track FLOPs: 2*M*N*K (multiply-add per element)
-            stats.matmul_flops += 2 * M * N * K;
+            stats.matmul_flops += 2LL * M * N * K;
 
         } else if (opcode == "relu") {
             std::string input_name = input_names[0].cast<std::string>();
             auto X = tensors[input_name];
 
-            py::array_t<float> Y = np.attr("maximum")(X, 0.0f).cast<py::array_t<float>>();
+            py::buffer_info x_buf = X.request();
+            size_t num_elements = static_cast<size_t>(x_buf.size);
+
+            // Allocate output (same shape as input)
+            py::array_t<float> Y = np.attr("empty_like")(X).cast<py::array_t<float>>();
+            py::buffer_info y_buf = Y.request();
+
+            // Use C++ BehavioralComputeFabric for elementwise ReLU
+            sw::kpu::ElementwiseDescriptor desc;
+            desc.op = sw::kpu::ElementwiseOp::RELU;
+            desc.count = static_cast<uint32_t>(num_elements);
+
+            behavioral_compute_fabric_->submit_elementwise(
+                desc,
+                x_buf.ptr,
+                nullptr,  // No second operand for unary op
+                y_buf.ptr,
+                nullptr
+            );
+            behavioral_compute_fabric_->drain();
+
             tensors[output_name] = Y;
 
         } else if (opcode == "gelu") {
             std::string input_name = input_names[0].cast<std::string>();
             auto X = tensors[input_name];
 
-            // GELU approximation: x * 0.5 * (1 + tanh(sqrt(2/pi) * (x + 0.044715 * x^3)))
-            double sqrt_2_pi = std::sqrt(2.0 / M_PI);
-            auto x3 = np.attr("power")(X, 3);
-            auto inner = np.attr("add")(X, np.attr("multiply")(0.044715, x3));
-            auto tanh_arg = np.attr("multiply")(sqrt_2_pi, inner);
-            auto tanh_val = np.attr("tanh")(tanh_arg);
-            auto factor = np.attr("add")(1.0, tanh_val);
-            auto Y = np.attr("multiply")(X, np.attr("multiply")(0.5, factor));
+            py::buffer_info x_buf = X.request();
+            size_t num_elements = static_cast<size_t>(x_buf.size);
 
-            tensors[output_name] = Y.cast<py::array_t<float>>();
+            py::array_t<float> Y = np.attr("empty_like")(X).cast<py::array_t<float>>();
+            py::buffer_info y_buf = Y.request();
+
+            sw::kpu::ElementwiseDescriptor desc;
+            desc.op = sw::kpu::ElementwiseOp::GELU;
+            desc.count = static_cast<uint32_t>(num_elements);
+
+            behavioral_compute_fabric_->submit_elementwise(
+                desc,
+                x_buf.ptr,
+                nullptr,
+                y_buf.ptr,
+                nullptr
+            );
+            behavioral_compute_fabric_->drain();
+
+            tensors[output_name] = Y;
 
         } else if (opcode == "silu") {
             std::string input_name = input_names[0].cast<std::string>();
             auto X = tensors[input_name];
 
-            // SiLU: x * sigmoid(x)
-            auto neg_x = np.attr("negative")(X);
-            auto exp_neg_x = np.attr("exp")(neg_x);
-            auto sigmoid = np.attr("divide")(1.0, np.attr("add")(1.0, exp_neg_x));
-            auto Y = np.attr("multiply")(X, sigmoid);
+            py::buffer_info x_buf = X.request();
+            size_t num_elements = static_cast<size_t>(x_buf.size);
 
-            tensors[output_name] = Y.cast<py::array_t<float>>();
+            py::array_t<float> Y = np.attr("empty_like")(X).cast<py::array_t<float>>();
+            py::buffer_info y_buf = Y.request();
+
+            sw::kpu::ElementwiseDescriptor desc;
+            desc.op = sw::kpu::ElementwiseOp::SILU;
+            desc.count = static_cast<uint32_t>(num_elements);
+
+            behavioral_compute_fabric_->submit_elementwise(
+                desc,
+                x_buf.ptr,
+                nullptr,
+                y_buf.ptr,
+                nullptr
+            );
+            behavioral_compute_fabric_->drain();
+
+            tensors[output_name] = Y;
 
         } else if (opcode == "sigmoid") {
             std::string input_name = input_names[0].cast<std::string>();
             auto X = tensors[input_name];
 
-            auto neg_x = np.attr("negative")(X);
-            auto exp_neg_x = np.attr("exp")(neg_x);
-            auto Y = np.attr("divide")(1.0, np.attr("add")(1.0, exp_neg_x));
+            py::buffer_info x_buf = X.request();
+            size_t num_elements = static_cast<size_t>(x_buf.size);
 
-            tensors[output_name] = Y.cast<py::array_t<float>>();
+            py::array_t<float> Y = np.attr("empty_like")(X).cast<py::array_t<float>>();
+            py::buffer_info y_buf = Y.request();
+
+            sw::kpu::ElementwiseDescriptor desc;
+            desc.op = sw::kpu::ElementwiseOp::SIGMOID;
+            desc.count = static_cast<uint32_t>(num_elements);
+
+            behavioral_compute_fabric_->submit_elementwise(
+                desc,
+                x_buf.ptr,
+                nullptr,
+                y_buf.ptr,
+                nullptr
+            );
+            behavioral_compute_fabric_->drain();
+
+            tensors[output_name] = Y;
 
         } else if (opcode == "tanh") {
             std::string input_name = input_names[0].cast<std::string>();
             auto X = tensors[input_name];
 
-            py::array_t<float> Y = np.attr("tanh")(X).cast<py::array_t<float>>();
+            py::buffer_info x_buf = X.request();
+            size_t num_elements = static_cast<size_t>(x_buf.size);
+
+            py::array_t<float> Y = np.attr("empty_like")(X).cast<py::array_t<float>>();
+            py::buffer_info y_buf = Y.request();
+
+            sw::kpu::ElementwiseDescriptor desc;
+            desc.op = sw::kpu::ElementwiseOp::TANH;
+            desc.count = static_cast<uint32_t>(num_elements);
+
+            behavioral_compute_fabric_->submit_elementwise(
+                desc,
+                x_buf.ptr,
+                nullptr,
+                y_buf.ptr,
+                nullptr
+            );
+            behavioral_compute_fabric_->drain();
+
             tensors[output_name] = Y;
 
         } else if (opcode == "softmax") {
             std::string input_name = input_names[0].cast<std::string>();
             auto X = tensors[input_name];
 
-            // Numerically stable softmax
-            auto max_x = np.attr("max")(X, py::arg("axis") = -1, py::arg("keepdims") = true);
-            auto shifted = np.attr("subtract")(X, max_x);
-            auto exp_x = np.attr("exp")(shifted);
-            auto sum_exp = np.attr("sum")(exp_x, py::arg("axis") = -1, py::arg("keepdims") = true);
-            auto Y = np.attr("divide")(exp_x, sum_exp);
+            py::buffer_info x_buf = X.request();
 
-            tensors[output_name] = Y.cast<py::array_t<float>>();
+            // Softmax along last axis
+            // Shape: [..., dim_size]
+            uint32_t dim_size = static_cast<uint32_t>(x_buf.shape[x_buf.ndim - 1]);
+            uint32_t batch_size = 1;
+            for (int i = 0; i < x_buf.ndim - 1; ++i) {
+                batch_size *= static_cast<uint32_t>(x_buf.shape[i]);
+            }
+
+            py::array_t<float> Y = np.attr("empty_like")(X).cast<py::array_t<float>>();
+            py::buffer_info y_buf = Y.request();
+
+            sw::kpu::SoftmaxDescriptor desc;
+            desc.batch_size = batch_size;
+            desc.dim_size = dim_size;
+            desc.inner_size = 1;  // Softmax on last axis
+
+            behavioral_compute_fabric_->submit_softmax(
+                desc,
+                x_buf.ptr,
+                y_buf.ptr,
+                nullptr
+            );
+            behavioral_compute_fabric_->drain();
+
+            tensors[output_name] = Y;
 
         } else if (opcode == "add") {
             std::string a_name = input_names[0].cast<std::string>();
             std::string b_name = input_names[1].cast<std::string>();
 
-            auto Y = np.attr("add")(tensors[a_name], tensors[b_name]);
-            tensors[output_name] = Y.cast<py::array_t<float>>();
+            auto A = tensors[a_name];
+            auto B = tensors[b_name];
+
+            py::buffer_info a_buf = A.request();
+            py::buffer_info b_buf = B.request();
+
+            // Handle broadcasting - use numpy for shape calculation
+            auto out_arr = np.attr("broadcast_arrays")(A, B);
+            auto out_shape = out_arr.cast<py::list>()[0].attr("shape");
+            py::array_t<float> Y = np.attr("empty")(out_shape, py::arg("dtype") = np.attr("float32")).cast<py::array_t<float>>();
+            py::buffer_info y_buf = Y.request();
+
+            // For simple case (same shape), use C++ fabric
+            if (a_buf.size == b_buf.size && a_buf.size == y_buf.size) {
+                sw::kpu::ElementwiseDescriptor desc;
+                desc.op = sw::kpu::ElementwiseOp::ADD;
+                desc.count = static_cast<uint32_t>(a_buf.size);
+
+                behavioral_compute_fabric_->submit_elementwise(
+                    desc,
+                    a_buf.ptr,
+                    b_buf.ptr,
+                    y_buf.ptr,
+                    nullptr
+                );
+                behavioral_compute_fabric_->drain();
+            } else {
+                // Fall back to numpy for broadcasting
+                Y = np.attr("add")(A, B).cast<py::array_t<float>>();
+            }
+
+            tensors[output_name] = Y;
 
         } else if (opcode == "sub") {
             std::string a_name = input_names[0].cast<std::string>();
             std::string b_name = input_names[1].cast<std::string>();
 
-            auto Y = np.attr("subtract")(tensors[a_name], tensors[b_name]);
-            tensors[output_name] = Y.cast<py::array_t<float>>();
+            auto A = tensors[a_name];
+            auto B = tensors[b_name];
+
+            py::buffer_info a_buf = A.request();
+            py::buffer_info b_buf = B.request();
+
+            auto out_arr = np.attr("broadcast_arrays")(A, B);
+            auto out_shape = out_arr.cast<py::list>()[0].attr("shape");
+            py::array_t<float> Y = np.attr("empty")(out_shape, py::arg("dtype") = np.attr("float32")).cast<py::array_t<float>>();
+            py::buffer_info y_buf = Y.request();
+
+            if (a_buf.size == b_buf.size && a_buf.size == y_buf.size) {
+                sw::kpu::ElementwiseDescriptor desc;
+                desc.op = sw::kpu::ElementwiseOp::SUB;
+                desc.count = static_cast<uint32_t>(a_buf.size);
+
+                behavioral_compute_fabric_->submit_elementwise(
+                    desc,
+                    a_buf.ptr,
+                    b_buf.ptr,
+                    y_buf.ptr,
+                    nullptr
+                );
+                behavioral_compute_fabric_->drain();
+            } else {
+                Y = np.attr("subtract")(A, B).cast<py::array_t<float>>();
+            }
+
+            tensors[output_name] = Y;
 
         } else if (opcode == "mul") {
             std::string a_name = input_names[0].cast<std::string>();
             std::string b_name = input_names[1].cast<std::string>();
 
-            auto Y = np.attr("multiply")(tensors[a_name], tensors[b_name]);
-            tensors[output_name] = Y.cast<py::array_t<float>>();
+            auto A = tensors[a_name];
+            auto B = tensors[b_name];
+
+            py::buffer_info a_buf = A.request();
+            py::buffer_info b_buf = B.request();
+
+            auto out_arr = np.attr("broadcast_arrays")(A, B);
+            auto out_shape = out_arr.cast<py::list>()[0].attr("shape");
+            py::array_t<float> Y = np.attr("empty")(out_shape, py::arg("dtype") = np.attr("float32")).cast<py::array_t<float>>();
+            py::buffer_info y_buf = Y.request();
+
+            if (a_buf.size == b_buf.size && a_buf.size == y_buf.size) {
+                sw::kpu::ElementwiseDescriptor desc;
+                desc.op = sw::kpu::ElementwiseOp::MUL;
+                desc.count = static_cast<uint32_t>(a_buf.size);
+
+                behavioral_compute_fabric_->submit_elementwise(
+                    desc,
+                    a_buf.ptr,
+                    b_buf.ptr,
+                    y_buf.ptr,
+                    nullptr
+                );
+                behavioral_compute_fabric_->drain();
+            } else {
+                Y = np.attr("multiply")(A, B).cast<py::array_t<float>>();
+            }
+
+            tensors[output_name] = Y;
 
         } else if (opcode == "div") {
             std::string a_name = input_names[0].cast<std::string>();
             std::string b_name = input_names[1].cast<std::string>();
 
-            auto Y = np.attr("divide")(tensors[a_name], tensors[b_name]);
-            tensors[output_name] = Y.cast<py::array_t<float>>();
+            auto A = tensors[a_name];
+            auto B = tensors[b_name];
+
+            py::buffer_info a_buf = A.request();
+            py::buffer_info b_buf = B.request();
+
+            auto out_arr = np.attr("broadcast_arrays")(A, B);
+            auto out_shape = out_arr.cast<py::list>()[0].attr("shape");
+            py::array_t<float> Y = np.attr("empty")(out_shape, py::arg("dtype") = np.attr("float32")).cast<py::array_t<float>>();
+            py::buffer_info y_buf = Y.request();
+
+            if (a_buf.size == b_buf.size && a_buf.size == y_buf.size) {
+                sw::kpu::ElementwiseDescriptor desc;
+                desc.op = sw::kpu::ElementwiseOp::DIV;
+                desc.count = static_cast<uint32_t>(a_buf.size);
+
+                behavioral_compute_fabric_->submit_elementwise(
+                    desc,
+                    a_buf.ptr,
+                    b_buf.ptr,
+                    y_buf.ptr,
+                    nullptr
+                );
+                behavioral_compute_fabric_->drain();
+            } else {
+                Y = np.attr("divide")(A, B).cast<py::array_t<float>>();
+            }
+
+            tensors[output_name] = Y;
 
         } else if (opcode == "neg") {
             std::string input_name = input_names[0].cast<std::string>();
-            auto Y = np.attr("negative")(tensors[input_name]);
-            tensors[output_name] = Y.cast<py::array_t<float>>();
+            auto X = tensors[input_name];
+
+            py::buffer_info x_buf = X.request();
+            size_t num_elements = static_cast<size_t>(x_buf.size);
+
+            py::array_t<float> Y = np.attr("empty_like")(X).cast<py::array_t<float>>();
+            py::buffer_info y_buf = Y.request();
+
+            sw::kpu::ElementwiseDescriptor desc;
+            desc.op = sw::kpu::ElementwiseOp::NEG;
+            desc.count = static_cast<uint32_t>(num_elements);
+
+            behavioral_compute_fabric_->submit_elementwise(
+                desc,
+                x_buf.ptr,
+                nullptr,
+                y_buf.ptr,
+                nullptr
+            );
+            behavioral_compute_fabric_->drain();
+
+            tensors[output_name] = Y;
 
         } else if (opcode == "exp") {
             std::string input_name = input_names[0].cast<std::string>();
-            auto Y = np.attr("exp")(tensors[input_name]);
-            tensors[output_name] = Y.cast<py::array_t<float>>();
+            auto X = tensors[input_name];
+
+            py::buffer_info x_buf = X.request();
+            size_t num_elements = static_cast<size_t>(x_buf.size);
+
+            py::array_t<float> Y = np.attr("empty_like")(X).cast<py::array_t<float>>();
+            py::buffer_info y_buf = Y.request();
+
+            sw::kpu::ElementwiseDescriptor desc;
+            desc.op = sw::kpu::ElementwiseOp::EXP;
+            desc.count = static_cast<uint32_t>(num_elements);
+
+            behavioral_compute_fabric_->submit_elementwise(
+                desc,
+                x_buf.ptr,
+                nullptr,
+                y_buf.ptr,
+                nullptr
+            );
+            behavioral_compute_fabric_->drain();
+
+            tensors[output_name] = Y;
 
         } else if (opcode == "log") {
             std::string input_name = input_names[0].cast<std::string>();
-            auto Y = np.attr("log")(tensors[input_name]);
-            tensors[output_name] = Y.cast<py::array_t<float>>();
+            auto X = tensors[input_name];
+
+            py::buffer_info x_buf = X.request();
+            size_t num_elements = static_cast<size_t>(x_buf.size);
+
+            py::array_t<float> Y = np.attr("empty_like")(X).cast<py::array_t<float>>();
+            py::buffer_info y_buf = Y.request();
+
+            sw::kpu::ElementwiseDescriptor desc;
+            desc.op = sw::kpu::ElementwiseOp::LOG;
+            desc.count = static_cast<uint32_t>(num_elements);
+
+            behavioral_compute_fabric_->submit_elementwise(
+                desc,
+                x_buf.ptr,
+                nullptr,
+                y_buf.ptr,
+                nullptr
+            );
+            behavioral_compute_fabric_->drain();
+
+            tensors[output_name] = Y;
 
         } else if (opcode == "sqrt") {
             std::string input_name = input_names[0].cast<std::string>();
-            auto Y = np.attr("sqrt")(tensors[input_name]);
-            tensors[output_name] = Y.cast<py::array_t<float>>();
+            auto X = tensors[input_name];
+
+            py::buffer_info x_buf = X.request();
+            size_t num_elements = static_cast<size_t>(x_buf.size);
+
+            py::array_t<float> Y = np.attr("empty_like")(X).cast<py::array_t<float>>();
+            py::buffer_info y_buf = Y.request();
+
+            sw::kpu::ElementwiseDescriptor desc;
+            desc.op = sw::kpu::ElementwiseOp::SQRT;
+            desc.count = static_cast<uint32_t>(num_elements);
+
+            behavioral_compute_fabric_->submit_elementwise(
+                desc,
+                x_buf.ptr,
+                nullptr,
+                y_buf.ptr,
+                nullptr
+            );
+            behavioral_compute_fabric_->drain();
+
+            tensors[output_name] = Y;
 
         } else if (opcode == "conv2d") {
-            // Conv2D - use scipy.ndimage.correlate for correctness
-            // For behavioral execution, fall back to Python implementation
-            // which is thoroughly tested and works correctly
+            // Conv2D using C++ BehavioralComputeFabric
             std::string x_name = input_names[0].cast<std::string>();
             std::string w_name = input_names[1].cast<std::string>();
 
@@ -564,62 +893,60 @@ private:
             py::buffer_info x_buf = X.request();
             py::buffer_info w_buf = W.request();
 
-            // Extract dimensions for FLOP counting
-            int64_t batch_size = x_buf.shape[0];
-            int64_t in_channels = x_buf.shape[1];
-            int64_t input_h = x_buf.shape[2];
-            int64_t input_w = x_buf.shape[3];
+            // Extract dimensions
+            uint32_t batch_size = static_cast<uint32_t>(x_buf.shape[0]);
+            uint32_t in_channels = static_cast<uint32_t>(x_buf.shape[1]);
+            uint32_t input_h = static_cast<uint32_t>(x_buf.shape[2]);
+            uint32_t input_w = static_cast<uint32_t>(x_buf.shape[3]);
 
-            int64_t out_channels = w_buf.shape[0];
-            int64_t kernel_h = w_buf.shape[2];
-            int64_t kernel_w = w_buf.shape[3];
+            uint32_t out_channels = static_cast<uint32_t>(w_buf.shape[0]);
+            uint32_t kernel_h = static_cast<uint32_t>(w_buf.shape[2]);
+            uint32_t kernel_w = static_cast<uint32_t>(w_buf.shape[3]);
 
             // Get parameters from attrs
             py::dict attrs = op.contains("attrs") ? op["attrs"].cast<py::dict>() : py::dict();
-            int64_t stride_h = 1, stride_w = 1;
-            int64_t pad_h = 0, pad_w = 0;
+            uint32_t stride_h = 1, stride_w = 1;
+            uint32_t pad_h = 0, pad_w = 0;
+            uint32_t dilation_h = 1, dilation_w = 1;
+            uint32_t groups = 1;
 
             if (attrs.contains("stride")) {
                 auto stride = attrs["stride"];
                 if (py::isinstance<py::tuple>(stride)) {
                     auto s = stride.cast<py::tuple>();
-                    stride_h = s[0].cast<int64_t>();
-                    stride_w = s[1].cast<int64_t>();
+                    stride_h = s[0].cast<uint32_t>();
+                    stride_w = s[1].cast<uint32_t>();
                 } else {
-                    stride_h = stride_w = stride.cast<int64_t>();
+                    stride_h = stride_w = stride.cast<uint32_t>();
                 }
             }
             if (attrs.contains("padding")) {
                 auto padding = attrs["padding"];
                 if (py::isinstance<py::tuple>(padding)) {
                     auto p = padding.cast<py::tuple>();
-                    pad_h = p[0].cast<int64_t>();
-                    pad_w = p[1].cast<int64_t>();
+                    pad_h = p[0].cast<uint32_t>();
+                    pad_w = p[1].cast<uint32_t>();
                 } else {
-                    pad_h = pad_w = padding.cast<int64_t>();
+                    pad_h = pad_w = padding.cast<uint32_t>();
                 }
+            }
+            if (attrs.contains("dilation")) {
+                auto dilation = attrs["dilation"];
+                if (py::isinstance<py::tuple>(dilation)) {
+                    auto d = dilation.cast<py::tuple>();
+                    dilation_h = d[0].cast<uint32_t>();
+                    dilation_w = d[1].cast<uint32_t>();
+                } else {
+                    dilation_h = dilation_w = dilation.cast<uint32_t>();
+                }
+            }
+            if (attrs.contains("groups")) {
+                groups = attrs["groups"].cast<uint32_t>();
             }
 
             // Compute output dimensions
-            int64_t output_h = (input_h + 2 * pad_h - kernel_h) / stride_h + 1;
-            int64_t output_w = (input_w + 2 * pad_w - kernel_w) / stride_w + 1;
-
-            // Use scipy.signal.correlate2d or scipy.ndimage for the actual computation
-            // For now, use a simpler approach: reshape and use einsum
-            // Actually, let's use numpy einsum which handles this correctly
-
-            // Pad input if needed
-            py::array_t<float> X_padded;
-            if (pad_h > 0 || pad_w > 0) {
-                py::list pad_width;
-                pad_width.append(py::make_tuple(0, 0));
-                pad_width.append(py::make_tuple(0, 0));
-                pad_width.append(py::make_tuple(pad_h, pad_h));
-                pad_width.append(py::make_tuple(pad_w, pad_w));
-                X_padded = np.attr("pad")(X, pad_width, "constant", py::arg("constant_values")=0.0f).cast<py::array_t<float>>();
-            } else {
-                X_padded = X;
-            }
+            uint32_t output_h = (input_h + 2 * pad_h - dilation_h * (kernel_h - 1) - 1) / stride_h + 1;
+            uint32_t output_w = (input_w + 2 * pad_w - dilation_w * (kernel_w - 1) - 1) / stride_w + 1;
 
             // Create output array
             std::vector<py::ssize_t> out_shape = {
@@ -628,78 +955,323 @@ private:
                 static_cast<py::ssize_t>(output_h),
                 static_cast<py::ssize_t>(output_w)
             };
-            py::array_t<float> result = np.attr("zeros")(out_shape, py::arg("dtype")=np.attr("float32")).cast<py::array_t<float>>();
+            py::array_t<float> result = np.attr("zeros")(out_shape, py::arg("dtype") = np.attr("float32")).cast<py::array_t<float>>();
+            py::buffer_info r_buf = result.request();
 
-            // Extract float data pointers for manual implementation
-            float* x_ptr = static_cast<float*>(X_padded.request().ptr);
-            float* w_ptr = static_cast<float*>(W.request().ptr);
-            float* r_ptr = static_cast<float*>(result.request().ptr);
-
-            // Dimensions after padding
-            int64_t padded_h = input_h + 2 * pad_h;
-            int64_t padded_w = input_w + 2 * pad_w;
-
-            // Manual convolution
-            for (int64_t n = 0; n < batch_size; ++n) {
-                for (int64_t c_out = 0; c_out < out_channels; ++c_out) {
-                    for (int64_t h_out = 0; h_out < output_h; ++h_out) {
-                        for (int64_t w_out = 0; w_out < output_w; ++w_out) {
-                            float val = 0.0f;
-                            for (int64_t c_in = 0; c_in < in_channels; ++c_in) {
-                                for (int64_t kh = 0; kh < kernel_h; ++kh) {
-                                    for (int64_t kw = 0; kw < kernel_w; ++kw) {
-                                        int64_t h_in = h_out * stride_h + kh;
-                                        int64_t w_in = w_out * stride_w + kw;
-                                        // X_padded index: n * C_in * H_padded * W_padded + c_in * H_padded * W_padded + h_in * W_padded + w_in
-                                        int64_t x_idx = n * in_channels * padded_h * padded_w +
-                                                       c_in * padded_h * padded_w +
-                                                       h_in * padded_w + w_in;
-                                        // W index: c_out * C_in * K_h * K_w + c_in * K_h * K_w + kh * K_w + kw
-                                        int64_t w_idx = c_out * in_channels * kernel_h * kernel_w +
-                                                       c_in * kernel_h * kernel_w +
-                                                       kh * kernel_w + kw;
-                                        val += x_ptr[x_idx] * w_ptr[w_idx];
-                                    }
-                                }
-                            }
-                            // Result index: n * C_out * H_out * W_out + c_out * H_out * W_out + h_out * W_out + w_out
-                            int64_t r_idx = n * out_channels * output_h * output_w +
-                                           c_out * output_h * output_w +
-                                           h_out * output_w + w_out;
-                            r_ptr[r_idx] = val;
-                        }
-                    }
-                }
-            }
-
-            // Add bias if present
+            // Get bias pointer if present
+            const float* bias_ptr = nullptr;
             if (input_names.size() > 2) {
                 std::string bias_name = input_names[2].cast<std::string>();
                 if (tensors.count(bias_name) > 0) {
-                    float* bias_ptr = static_cast<float*>(tensors[bias_name].request().ptr);
-                    for (int64_t n = 0; n < batch_size; ++n) {
-                        for (int64_t c = 0; c < out_channels; ++c) {
-                            float b = bias_ptr[c];
-                            for (int64_t h = 0; h < output_h; ++h) {
-                                for (int64_t w = 0; w < output_w; ++w) {
-                                    int64_t r_idx = n * out_channels * output_h * output_w +
-                                                   c * output_h * output_w +
-                                                   h * output_w + w;
-                                    r_ptr[r_idx] += b;
-                                }
-                            }
-                        }
-                    }
+                    bias_ptr = static_cast<const float*>(tensors[bias_name].request().ptr);
                 }
             }
+
+            // Build Conv2D descriptor
+            sw::kpu::Conv2DDescriptor desc;
+            desc.batch_size = batch_size;
+            desc.in_channels = in_channels;
+            desc.in_height = input_h;
+            desc.in_width = input_w;
+            desc.out_channels = out_channels;
+            desc.kernel_height = kernel_h;
+            desc.kernel_width = kernel_w;
+            desc.stride_h = stride_h;
+            desc.stride_w = stride_w;
+            desc.padding_h = pad_h;
+            desc.padding_w = pad_w;
+            desc.dilation_h = dilation_h;
+            desc.dilation_w = dilation_w;
+            desc.groups = groups;
+
+            // Submit to C++ BehavioralComputeFabric
+            behavioral_compute_fabric_->submit_conv2d(
+                desc,
+                x_buf.ptr,
+                w_buf.ptr,
+                bias_ptr,
+                r_buf.ptr,
+                nullptr
+            );
+            behavioral_compute_fabric_->drain();
 
             tensors[output_name] = result;
 
             // Track conv2d FLOPs
-            int64_t gemm_M = batch_size * output_h * output_w;
-            int64_t gemm_K = in_channels * kernel_h * kernel_w;
+            int64_t gemm_M = static_cast<int64_t>(batch_size) * output_h * output_w;
+            int64_t gemm_K = static_cast<int64_t>(in_channels) / groups * kernel_h * kernel_w;
             int64_t gemm_N = out_channels;
             stats.matmul_flops += 2LL * gemm_M * gemm_N * gemm_K;
+
+        } else if (opcode == "max_pool2d" || opcode == "avg_pool2d") {
+            // Pool2D using C++ BehavioralComputeFabric
+            std::string x_name = input_names[0].cast<std::string>();
+            auto X = tensors[x_name];
+
+            py::buffer_info x_buf = X.request();
+
+            uint32_t batch_size = static_cast<uint32_t>(x_buf.shape[0]);
+            uint32_t channels = static_cast<uint32_t>(x_buf.shape[1]);
+            uint32_t input_h = static_cast<uint32_t>(x_buf.shape[2]);
+            uint32_t input_w = static_cast<uint32_t>(x_buf.shape[3]);
+
+            // Get parameters from attrs
+            py::dict attrs = op.contains("attrs") ? op["attrs"].cast<py::dict>() : py::dict();
+            uint32_t kernel_h = 2, kernel_w = 2;
+            uint32_t stride_h = 2, stride_w = 2;
+            uint32_t pad_h = 0, pad_w = 0;
+
+            if (attrs.contains("kernel_size")) {
+                auto ks = attrs["kernel_size"];
+                if (py::isinstance<py::tuple>(ks)) {
+                    auto k = ks.cast<py::tuple>();
+                    kernel_h = k[0].cast<uint32_t>();
+                    kernel_w = k[1].cast<uint32_t>();
+                } else {
+                    kernel_h = kernel_w = ks.cast<uint32_t>();
+                }
+            }
+            if (attrs.contains("stride")) {
+                auto stride = attrs["stride"];
+                if (py::isinstance<py::tuple>(stride)) {
+                    auto s = stride.cast<py::tuple>();
+                    stride_h = s[0].cast<uint32_t>();
+                    stride_w = s[1].cast<uint32_t>();
+                } else {
+                    stride_h = stride_w = stride.cast<uint32_t>();
+                }
+            }
+            if (attrs.contains("padding")) {
+                auto padding = attrs["padding"];
+                if (py::isinstance<py::tuple>(padding)) {
+                    auto p = padding.cast<py::tuple>();
+                    pad_h = p[0].cast<uint32_t>();
+                    pad_w = p[1].cast<uint32_t>();
+                } else {
+                    pad_h = pad_w = padding.cast<uint32_t>();
+                }
+            }
+
+            // Compute output dimensions
+            uint32_t output_h = (input_h + 2 * pad_h - kernel_h) / stride_h + 1;
+            uint32_t output_w = (input_w + 2 * pad_w - kernel_w) / stride_w + 1;
+
+            // Create output array
+            std::vector<py::ssize_t> out_shape = {
+                static_cast<py::ssize_t>(batch_size),
+                static_cast<py::ssize_t>(channels),
+                static_cast<py::ssize_t>(output_h),
+                static_cast<py::ssize_t>(output_w)
+            };
+            py::array_t<float> result = np.attr("zeros")(out_shape, py::arg("dtype") = np.attr("float32")).cast<py::array_t<float>>();
+            py::buffer_info r_buf = result.request();
+
+            sw::kpu::Pool2DDescriptor desc;
+            desc.pool_type = (opcode == "max_pool2d") ? sw::kpu::Pool2DDescriptor::PoolType::MAX : sw::kpu::Pool2DDescriptor::PoolType::AVG;
+            desc.batch_size = batch_size;
+            desc.channels = channels;
+            desc.in_height = input_h;
+            desc.in_width = input_w;
+            desc.kernel_height = kernel_h;
+            desc.kernel_width = kernel_w;
+            desc.stride_h = stride_h;
+            desc.stride_w = stride_w;
+            desc.padding_h = pad_h;
+            desc.padding_w = pad_w;
+
+            behavioral_compute_fabric_->submit_pool2d(
+                desc,
+                x_buf.ptr,
+                r_buf.ptr,
+                nullptr
+            );
+            behavioral_compute_fabric_->drain();
+
+            tensors[output_name] = result;
+
+        } else if (opcode == "adaptive_avg_pool2d") {
+            // Adaptive average pooling
+            std::string x_name = input_names[0].cast<std::string>();
+            auto X = tensors[x_name];
+
+            py::buffer_info x_buf = X.request();
+
+            uint32_t batch_size = static_cast<uint32_t>(x_buf.shape[0]);
+            uint32_t channels = static_cast<uint32_t>(x_buf.shape[1]);
+            uint32_t input_h = static_cast<uint32_t>(x_buf.shape[2]);
+            uint32_t input_w = static_cast<uint32_t>(x_buf.shape[3]);
+
+            // Get target output size from attrs
+            py::dict attrs = op.contains("attrs") ? op["attrs"].cast<py::dict>() : py::dict();
+            uint32_t output_h = 1, output_w = 1;
+
+            if (attrs.contains("output_size")) {
+                auto os = attrs["output_size"];
+                if (py::isinstance<py::tuple>(os)) {
+                    auto o = os.cast<py::tuple>();
+                    output_h = o[0].cast<uint32_t>();
+                    output_w = o[1].cast<uint32_t>();
+                } else {
+                    output_h = output_w = os.cast<uint32_t>();
+                }
+            }
+
+            // Create output array
+            std::vector<py::ssize_t> out_shape = {
+                static_cast<py::ssize_t>(batch_size),
+                static_cast<py::ssize_t>(channels),
+                static_cast<py::ssize_t>(output_h),
+                static_cast<py::ssize_t>(output_w)
+            };
+            py::array_t<float> result = np.attr("zeros")(out_shape, py::arg("dtype") = np.attr("float32")).cast<py::array_t<float>>();
+            py::buffer_info r_buf = result.request();
+
+            sw::kpu::Pool2DDescriptor desc;
+            desc.pool_type = sw::kpu::Pool2DDescriptor::PoolType::ADAPTIVE_AVG;
+            desc.batch_size = batch_size;
+            desc.channels = channels;
+            desc.in_height = input_h;
+            desc.in_width = input_w;
+            desc.target_out_height = output_h;
+            desc.target_out_width = output_w;
+            // Kernel/stride/padding will be computed by the behavioral fabric
+
+            behavioral_compute_fabric_->submit_pool2d(
+                desc,
+                x_buf.ptr,
+                r_buf.ptr,
+                nullptr
+            );
+            behavioral_compute_fabric_->drain();
+
+            tensors[output_name] = result;
+
+        } else if (opcode == "layer_norm" || opcode == "layernorm") {
+            std::string x_name = input_names[0].cast<std::string>();
+            auto X = tensors[x_name];
+
+            py::buffer_info x_buf = X.request();
+
+            // Get weight and bias if present
+            const float* weight_ptr = nullptr;
+            const float* bias_ptr = nullptr;
+
+            if (input_names.size() > 1) {
+                std::string w_name = input_names[1].cast<std::string>();
+                if (tensors.count(w_name) > 0) {
+                    weight_ptr = static_cast<const float*>(tensors[w_name].request().ptr);
+                }
+            }
+            if (input_names.size() > 2) {
+                std::string b_name = input_names[2].cast<std::string>();
+                if (tensors.count(b_name) > 0) {
+                    bias_ptr = static_cast<const float*>(tensors[b_name].request().ptr);
+                }
+            }
+
+            py::array_t<float> Y = np.attr("empty_like")(X).cast<py::array_t<float>>();
+            py::buffer_info y_buf = Y.request();
+
+            // Normalize over the last dimension
+            uint32_t normalized_size = static_cast<uint32_t>(x_buf.shape[x_buf.ndim - 1]);
+            uint32_t batch_size = 1;
+            for (int i = 0; i < x_buf.ndim - 1; ++i) {
+                batch_size *= static_cast<uint32_t>(x_buf.shape[i]);
+            }
+
+            py::dict attrs = op.contains("attrs") ? op["attrs"].cast<py::dict>() : py::dict();
+            float eps = attrs.contains("eps") ? attrs["eps"].cast<float>() : 1e-5f;
+
+            sw::kpu::LayerNormDescriptor desc;
+            desc.batch_size = batch_size;
+            desc.normalized_size = normalized_size;
+            desc.eps = eps;
+
+            behavioral_compute_fabric_->submit_layernorm(
+                desc,
+                x_buf.ptr,
+                weight_ptr,
+                bias_ptr,
+                y_buf.ptr,
+                nullptr
+            );
+            behavioral_compute_fabric_->drain();
+
+            tensors[output_name] = Y;
+
+        } else if (opcode == "batch_norm" || opcode == "batchnorm") {
+            std::string x_name = input_names[0].cast<std::string>();
+            auto X = tensors[x_name];
+
+            py::buffer_info x_buf = X.request();
+
+            // BatchNorm params: weight, bias, running_mean, running_var
+            const float* weight_ptr = nullptr;
+            const float* bias_ptr = nullptr;
+            const float* running_mean_ptr = nullptr;
+            const float* running_var_ptr = nullptr;
+
+            if (input_names.size() > 1) {
+                std::string w_name = input_names[1].cast<std::string>();
+                if (tensors.count(w_name) > 0) {
+                    weight_ptr = static_cast<const float*>(tensors[w_name].request().ptr);
+                }
+            }
+            if (input_names.size() > 2) {
+                std::string b_name = input_names[2].cast<std::string>();
+                if (tensors.count(b_name) > 0) {
+                    bias_ptr = static_cast<const float*>(tensors[b_name].request().ptr);
+                }
+            }
+            if (input_names.size() > 3) {
+                std::string rm_name = input_names[3].cast<std::string>();
+                if (tensors.count(rm_name) > 0) {
+                    running_mean_ptr = static_cast<const float*>(tensors[rm_name].request().ptr);
+                }
+            }
+            if (input_names.size() > 4) {
+                std::string rv_name = input_names[4].cast<std::string>();
+                if (tensors.count(rv_name) > 0) {
+                    running_var_ptr = static_cast<const float*>(tensors[rv_name].request().ptr);
+                }
+            }
+
+            py::array_t<float> Y = np.attr("empty_like")(X).cast<py::array_t<float>>();
+            py::buffer_info y_buf = Y.request();
+
+            // Input is [N, C, H, W]
+            uint32_t batch_size = static_cast<uint32_t>(x_buf.shape[0]);
+            uint32_t num_features = static_cast<uint32_t>(x_buf.shape[1]);
+            uint32_t spatial_size = 1;
+            for (int i = 2; i < x_buf.ndim; ++i) {
+                spatial_size *= static_cast<uint32_t>(x_buf.shape[i]);
+            }
+
+            py::dict attrs = op.contains("attrs") ? op["attrs"].cast<py::dict>() : py::dict();
+            float eps = attrs.contains("eps") ? attrs["eps"].cast<float>() : 1e-5f;
+            float momentum = attrs.contains("momentum") ? attrs["momentum"].cast<float>() : 0.1f;
+
+            sw::kpu::BatchNormDescriptor desc;
+            desc.batch_size = batch_size;
+            desc.num_features = num_features;
+            desc.spatial_size = spatial_size;
+            desc.eps = eps;
+            desc.momentum = momentum;
+            desc.training = false;  // Inference mode
+
+            behavioral_compute_fabric_->submit_batchnorm(
+                desc,
+                x_buf.ptr,
+                weight_ptr,
+                bias_ptr,
+                running_mean_ptr,
+                running_var_ptr,
+                y_buf.ptr,
+                nullptr
+            );
+            behavioral_compute_fabric_->drain();
+
+            tensors[output_name] = Y;
 
         } else {
             throw std::runtime_error("Unsupported opcode in native execution: " + opcode);

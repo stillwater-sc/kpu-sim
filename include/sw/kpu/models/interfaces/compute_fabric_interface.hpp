@@ -34,8 +34,10 @@ enum class ComputeOpType : uint8_t {
     CONV2D,         // 2D convolution
     ELEMENTWISE,    // Element-wise operations (add, mul, relu, etc.)
     REDUCE,         // Reduction operations (sum, max, etc.)
+    POOL2D,         // 2D pooling (max, avg, adaptive)
     SOFTMAX,        // Softmax
-    LAYERNORM       // Layer normalization
+    LAYERNORM,      // Layer normalization
+    BATCHNORM       // Batch normalization
 };
 
 constexpr std::string_view to_string(ComputeOpType op) {
@@ -44,8 +46,10 @@ constexpr std::string_view to_string(ComputeOpType op) {
         case ComputeOpType::CONV2D:      return "CONV2D";
         case ComputeOpType::ELEMENTWISE: return "ELEMENTWISE";
         case ComputeOpType::REDUCE:      return "REDUCE";
+        case ComputeOpType::POOL2D:      return "POOL2D";
         case ComputeOpType::SOFTMAX:     return "SOFTMAX";
         case ComputeOpType::LAYERNORM:   return "LAYERNORM";
+        case ComputeOpType::BATCHNORM:   return "BATCHNORM";
         default: return "UNKNOWN";
     }
 }
@@ -69,6 +73,205 @@ struct MatMulDescriptor {
     uint64_t user_tag = 0;
 };
 
+/// 2D Convolution descriptor
+struct Conv2DDescriptor {
+    // Input dimensions [N, C_in, H_in, W_in]
+    uint32_t batch_size = 1;
+    uint32_t in_channels = 0;
+    uint32_t in_height = 0;
+    uint32_t in_width = 0;
+
+    // Weight dimensions [C_out, C_in/groups, K_h, K_w]
+    uint32_t out_channels = 0;
+    uint32_t kernel_height = 0;
+    uint32_t kernel_width = 0;
+
+    // Convolution parameters
+    uint32_t stride_h = 1;
+    uint32_t stride_w = 1;
+    uint32_t padding_h = 0;
+    uint32_t padding_w = 0;
+    uint32_t dilation_h = 1;
+    uint32_t dilation_w = 1;
+    uint32_t groups = 1;
+
+    // Data format
+    uint8_t element_size = 4;  // Bytes per element
+    bool has_bias = false;
+
+    // User tag for identification
+    uint64_t user_tag = 0;
+
+    // Computed output dimensions
+    uint32_t out_height() const {
+        return (in_height + 2 * padding_h - dilation_h * (kernel_height - 1) - 1) / stride_h + 1;
+    }
+    uint32_t out_width() const {
+        return (in_width + 2 * padding_w - dilation_w * (kernel_width - 1) - 1) / stride_w + 1;
+    }
+
+    // Compute MACs for this convolution
+    uint64_t compute_macs() const {
+        uint64_t out_h = out_height();
+        uint64_t out_w = out_width();
+        uint64_t in_ch_per_group = in_channels / groups;
+        return batch_size * out_channels * out_h * out_w * in_ch_per_group * kernel_height * kernel_width;
+    }
+};
+
+/// Element-wise operation types
+enum class ElementwiseOp : uint8_t {
+    // Binary operations
+    ADD,
+    SUB,
+    MUL,
+    DIV,
+    MAX,
+    MIN,
+
+    // Unary operations (b_data ignored)
+    NEG,
+    ABS,
+    SQRT,
+    EXP,
+    LOG,
+    TANH,
+    SIGMOID,
+    RELU,
+    GELU,
+    SILU,
+
+    // Scalar operations (scalar in b_data[0])
+    ADD_SCALAR,
+    MUL_SCALAR,
+};
+
+constexpr bool is_unary_op(ElementwiseOp op) {
+    return op >= ElementwiseOp::NEG && op <= ElementwiseOp::SILU;
+}
+
+constexpr bool is_scalar_op(ElementwiseOp op) {
+    return op >= ElementwiseOp::ADD_SCALAR;
+}
+
+constexpr std::string_view to_string(ElementwiseOp op) {
+    switch (op) {
+        case ElementwiseOp::ADD: return "ADD";
+        case ElementwiseOp::SUB: return "SUB";
+        case ElementwiseOp::MUL: return "MUL";
+        case ElementwiseOp::DIV: return "DIV";
+        case ElementwiseOp::MAX: return "MAX";
+        case ElementwiseOp::MIN: return "MIN";
+        case ElementwiseOp::NEG: return "NEG";
+        case ElementwiseOp::ABS: return "ABS";
+        case ElementwiseOp::SQRT: return "SQRT";
+        case ElementwiseOp::EXP: return "EXP";
+        case ElementwiseOp::LOG: return "LOG";
+        case ElementwiseOp::TANH: return "TANH";
+        case ElementwiseOp::SIGMOID: return "SIGMOID";
+        case ElementwiseOp::RELU: return "RELU";
+        case ElementwiseOp::GELU: return "GELU";
+        case ElementwiseOp::SILU: return "SILU";
+        case ElementwiseOp::ADD_SCALAR: return "ADD_SCALAR";
+        case ElementwiseOp::MUL_SCALAR: return "MUL_SCALAR";
+        default: return "UNKNOWN";
+    }
+}
+
+/// Element-wise operation descriptor
+struct ElementwiseDescriptor {
+    ElementwiseOp op = ElementwiseOp::ADD;
+    uint64_t count = 0;        // Number of elements
+    uint8_t element_size = 4;  // Bytes per element
+    uint64_t user_tag = 0;
+};
+
+/// 2D Pooling descriptor
+struct Pool2DDescriptor {
+    enum class PoolType : uint8_t { MAX, AVG, ADAPTIVE_AVG };
+
+    PoolType pool_type = PoolType::MAX;
+
+    // Input dimensions [N, C, H_in, W_in]
+    uint32_t batch_size = 1;
+    uint32_t channels = 0;
+    uint32_t in_height = 0;
+    uint32_t in_width = 0;
+
+    // Pooling window
+    uint32_t kernel_height = 0;
+    uint32_t kernel_width = 0;
+    uint32_t stride_h = 0;      // 0 means use kernel size
+    uint32_t stride_w = 0;
+    uint32_t padding_h = 0;
+    uint32_t padding_w = 0;
+
+    // For adaptive pooling: target output size
+    uint32_t target_out_height = 0;
+    uint32_t target_out_width = 0;
+
+    // Data format
+    uint8_t element_size = 4;
+    uint64_t user_tag = 0;
+
+    // Computed output dimensions
+    uint32_t out_height() const {
+        if (pool_type == PoolType::ADAPTIVE_AVG) return target_out_height;
+        uint32_t s_h = stride_h > 0 ? stride_h : kernel_height;
+        return (in_height + 2 * padding_h - kernel_height) / s_h + 1;
+    }
+    uint32_t out_width() const {
+        if (pool_type == PoolType::ADAPTIVE_AVG) return target_out_width;
+        uint32_t s_w = stride_w > 0 ? stride_w : kernel_width;
+        return (in_width + 2 * padding_w - kernel_width) / s_w + 1;
+    }
+};
+
+constexpr std::string_view to_string(Pool2DDescriptor::PoolType pt) {
+    switch (pt) {
+        case Pool2DDescriptor::PoolType::MAX: return "MAX";
+        case Pool2DDescriptor::PoolType::AVG: return "AVG";
+        case Pool2DDescriptor::PoolType::ADAPTIVE_AVG: return "ADAPTIVE_AVG";
+        default: return "UNKNOWN";
+    }
+}
+
+/// Softmax descriptor
+struct SoftmaxDescriptor {
+    uint32_t batch_size = 0;   // Product of all dims before softmax dim
+    uint32_t dim_size = 0;     // Size of softmax dimension
+    uint32_t inner_size = 1;   // Product of all dims after softmax dim
+    uint8_t element_size = 4;
+    uint64_t user_tag = 0;
+
+    uint64_t total_elements() const {
+        return static_cast<uint64_t>(batch_size) * dim_size * inner_size;
+    }
+};
+
+/// Layer normalization descriptor
+struct LayerNormDescriptor {
+    uint32_t batch_size = 0;       // Batch dimension
+    uint32_t normalized_size = 0;  // Size of normalized shape (product)
+    float eps = 1e-5f;
+    bool has_weight = true;
+    bool has_bias = true;
+    uint8_t element_size = 4;
+    uint64_t user_tag = 0;
+};
+
+/// Batch normalization descriptor
+struct BatchNormDescriptor {
+    uint32_t batch_size = 0;
+    uint32_t num_features = 0;  // C dimension
+    uint32_t spatial_size = 0;  // H * W
+    float eps = 1e-5f;
+    float momentum = 0.1f;
+    bool training = false;      // If true, update running stats
+    uint8_t element_size = 4;
+    uint64_t user_tag = 0;
+};
+
 // ============================================================================
 // Compute Fabric Statistics
 // ============================================================================
@@ -80,6 +283,10 @@ struct ComputeFabricStatistics {
     uint64_t conv2ds = 0;
     uint64_t elementwise_ops = 0;
     uint64_t reductions = 0;
+    uint64_t pool2ds = 0;
+    uint64_t softmaxes = 0;
+    uint64_t layernorms = 0;
+    uint64_t batchnorms = 0;
 
     // Compute volume
     uint64_t total_macs = 0;    // Multiply-accumulate operations
@@ -96,8 +303,13 @@ struct ComputeFabricStatistics {
     uint64_t stall_cycles = 0;  // Waiting for data
 
     // Derived metrics
+    uint64_t total_ops() const {
+        return matmuls + conv2ds + elementwise_ops + reductions +
+               pool2ds + softmaxes + layernorms + batchnorms;
+    }
+
     double avg_latency() const {
-        uint64_t ops = matmuls + conv2ds + elementwise_ops + reductions;
+        uint64_t ops = total_ops();
         return ops > 0 ? static_cast<double>(total_compute_cycles) / ops : 0.0;
     }
 
@@ -113,6 +325,7 @@ struct ComputeFabricStatistics {
 
     void reset() {
         matmuls = conv2ds = elementwise_ops = reductions = 0;
+        pool2ds = softmaxes = layernorms = batchnorms = 0;
         total_macs = total_flops = 0;
         total_compute_cycles = 0;
         min_latency = UINT64_MAX;
@@ -163,6 +376,102 @@ public:
         const void* a_data,
         const void* b_data,
         void* c_data,
+        std::function<void()> callback = nullptr) = 0;
+
+    /// Submit a 2D convolution
+    ///
+    /// @param desc Conv2D descriptor
+    /// @param input_data Input tensor [N, C_in, H, W]
+    /// @param weight_data Weight tensor [C_out, C_in/groups, K_h, K_w]
+    /// @param bias_data Optional bias tensor [C_out], nullptr if no bias
+    /// @param output_data Output tensor [N, C_out, H_out, W_out]
+    /// @param callback Optional callback when operation completes
+    /// @return Operation ID if accepted, nullopt if busy
+    virtual std::optional<uint64_t> submit_conv2d(
+        const Conv2DDescriptor& desc,
+        const void* input_data,
+        const void* weight_data,
+        const void* bias_data,
+        void* output_data,
+        std::function<void()> callback = nullptr) = 0;
+
+    /// Submit an element-wise operation
+    ///
+    /// @param desc Elementwise descriptor
+    /// @param a_data First input tensor
+    /// @param b_data Second input tensor (ignored for unary ops)
+    /// @param output_data Output tensor
+    /// @param callback Optional callback when operation completes
+    /// @return Operation ID if accepted, nullopt if busy
+    virtual std::optional<uint64_t> submit_elementwise(
+        const ElementwiseDescriptor& desc,
+        const void* a_data,
+        const void* b_data,
+        void* output_data,
+        std::function<void()> callback = nullptr) = 0;
+
+    /// Submit a 2D pooling operation
+    ///
+    /// @param desc Pool2D descriptor
+    /// @param input_data Input tensor [N, C, H, W]
+    /// @param output_data Output tensor [N, C, H_out, W_out]
+    /// @param callback Optional callback when operation completes
+    /// @return Operation ID if accepted, nullopt if busy
+    virtual std::optional<uint64_t> submit_pool2d(
+        const Pool2DDescriptor& desc,
+        const void* input_data,
+        void* output_data,
+        std::function<void()> callback = nullptr) = 0;
+
+    /// Submit a softmax operation
+    ///
+    /// @param desc Softmax descriptor
+    /// @param input_data Input tensor
+    /// @param output_data Output tensor
+    /// @param callback Optional callback when operation completes
+    /// @return Operation ID if accepted, nullopt if busy
+    virtual std::optional<uint64_t> submit_softmax(
+        const SoftmaxDescriptor& desc,
+        const void* input_data,
+        void* output_data,
+        std::function<void()> callback = nullptr) = 0;
+
+    /// Submit a layer normalization operation
+    ///
+    /// @param desc LayerNorm descriptor
+    /// @param input_data Input tensor
+    /// @param weight_data Optional gamma (scale) tensor
+    /// @param bias_data Optional beta (shift) tensor
+    /// @param output_data Output tensor
+    /// @param callback Optional callback when operation completes
+    /// @return Operation ID if accepted, nullopt if busy
+    virtual std::optional<uint64_t> submit_layernorm(
+        const LayerNormDescriptor& desc,
+        const void* input_data,
+        const void* weight_data,
+        const void* bias_data,
+        void* output_data,
+        std::function<void()> callback = nullptr) = 0;
+
+    /// Submit a batch normalization operation
+    ///
+    /// @param desc BatchNorm descriptor
+    /// @param input_data Input tensor [N, C, H, W]
+    /// @param weight_data Gamma (scale) tensor [C]
+    /// @param bias_data Beta (shift) tensor [C]
+    /// @param running_mean Running mean tensor [C]
+    /// @param running_var Running variance tensor [C]
+    /// @param output_data Output tensor [N, C, H, W]
+    /// @param callback Optional callback when operation completes
+    /// @return Operation ID if accepted, nullopt if busy
+    virtual std::optional<uint64_t> submit_batchnorm(
+        const BatchNormDescriptor& desc,
+        const void* input_data,
+        const void* weight_data,
+        const void* bias_data,
+        const void* running_mean,
+        const void* running_var,
+        void* output_data,
         std::function<void()> callback = nullptr) = 0;
 
     /// Check if fabric can accept more operations

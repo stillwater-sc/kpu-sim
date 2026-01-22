@@ -122,6 +122,10 @@ class Tensor:
             result *= dim
         return result
 
+    def numel(self) -> int:
+        """Total number of elements (PyTorch-compatible alias for size)."""
+        return self.size
+
     @property
     def nbytes(self) -> int:
         """Total bytes."""

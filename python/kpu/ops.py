@@ -740,6 +740,99 @@ def batch_norm2d(x: 'Tensor',
 
 # ========== Convolution Operations ==========
 
+def _im2col(x: np.ndarray, K_h: int, K_w: int, stride: Tuple[int, int],
+            dilation: Tuple[int, int], H_out: int, W_out: int) -> np.ndarray:
+    """
+    Extract image patches for efficient convolution via matrix multiplication.
+
+    Converts [N, C, H, W] input to [N * H_out * W_out, C * K_h * K_w] matrix
+    where each row contains one flattened patch that will be convolved.
+
+    This is the key to fast convolution - instead of 6 nested loops,
+    we extract all patches at once and use a single matmul.
+    """
+    N, C, H, W = x.shape
+
+    # Use stride_tricks to create a view of all patches without copying
+    # This is the fastest way to extract patches in numpy
+    shape = (N, C, H_out, W_out, K_h, K_w)
+    strides = (
+        x.strides[0],                          # batch stride
+        x.strides[1],                          # channel stride
+        x.strides[2] * stride[0],              # output row stride
+        x.strides[3] * stride[1],              # output col stride
+        x.strides[2] * dilation[0],            # kernel row stride
+        x.strides[3] * dilation[1],            # kernel col stride
+    )
+
+    # Create view of patches [N, C, H_out, W_out, K_h, K_w]
+    patches = np.lib.stride_tricks.as_strided(x, shape=shape, strides=strides)
+
+    # Reshape to [N, H_out, W_out, C * K_h * K_w] then [N * H_out * W_out, C * K_h * K_w]
+    col = patches.transpose(0, 2, 3, 1, 4, 5).reshape(N * H_out * W_out, -1)
+
+    return col
+
+
+def _conv2d_im2col(x_padded: np.ndarray, weight: np.ndarray,
+                   stride: Tuple[int, int], dilation: Tuple[int, int],
+                   groups: int, N: int, C_out: int, C_in_per_group: int,
+                   K_h: int, K_w: int, H_out: int, W_out: int) -> np.ndarray:
+    """
+    Optimized conv2d using im2col + matmul.
+
+    Converts convolution to matrix multiplication:
+    - Extract patches: [N * H_out * W_out, C_in * K_h * K_w]
+    - Reshape weights: [C_out, C_in * K_h * K_w]
+    - Matmul: patches @ weights.T -> [N * H_out * W_out, C_out]
+    - Reshape to [N, C_out, H_out, W_out]
+
+    This is ~100-1000x faster than nested Python loops.
+    """
+    if groups == 1:
+        # Standard convolution - most common case
+        # Extract all patches at once
+        col = _im2col(x_padded, K_h, K_w, stride, dilation, H_out, W_out)
+
+        # Reshape weight to [C_out, C_in * K_h * K_w]
+        weight_col = weight.reshape(C_out, -1)
+
+        # Single matmul: [N*H_out*W_out, C_in*K_h*K_w] @ [C_in*K_h*K_w, C_out]
+        out = col @ weight_col.T
+
+        # Reshape to [N, H_out, W_out, C_out] then transpose to [N, C_out, H_out, W_out]
+        result = out.reshape(N, H_out, W_out, C_out).transpose(0, 3, 1, 2)
+    else:
+        # Grouped convolution (e.g., depthwise separable)
+        C_in = x_padded.shape[1]
+        C_in_per_group = C_in // groups
+        C_out_per_group = C_out // groups
+
+        result = np.zeros((N, C_out, H_out, W_out), dtype=x_padded.dtype)
+
+        for g in range(groups):
+            # Extract input channels for this group
+            x_g = x_padded[:, g * C_in_per_group:(g + 1) * C_in_per_group]
+
+            # Extract weight for this group
+            w_g = weight[g * C_out_per_group:(g + 1) * C_out_per_group]
+
+            # im2col for this group
+            col = _im2col(x_g, K_h, K_w, stride, dilation, H_out, W_out)
+
+            # Reshape weight
+            weight_col = w_g.reshape(C_out_per_group, -1)
+
+            # Matmul
+            out = col @ weight_col.T
+
+            # Store result
+            result[:, g * C_out_per_group:(g + 1) * C_out_per_group] = \
+                out.reshape(N, H_out, W_out, C_out_per_group).transpose(0, 3, 1, 2)
+
+    return result
+
+
 def conv2d(x: 'Tensor',
            weight: 'Tensor',
            bias: Optional['Tensor'] = None,
@@ -805,28 +898,11 @@ def conv2d(x: 'Tensor',
         else:
             x_padded = x._data
 
-        # im2col-based convolution for correctness (not optimized)
-        result = np.zeros((N, C_out, H_out, W_out), dtype=x.dtype)
-
-        for n in range(N):
-            for c_out in range(C_out):
-                for h_out in range(H_out):
-                    for w_out in range(W_out):
-                        h_start = h_out * stride[0]
-                        w_start = w_out * stride[1]
-
-                        # Sum over input channels and kernel
-                        val = 0.0
-                        for g in range(groups):
-                            c_in_start = (c_out // (C_out // groups)) * C_in_per_group
-                            for c_in in range(C_in_per_group):
-                                for kh in range(K_h):
-                                    for kw in range(K_w):
-                                        h_in = h_start + kh * dilation[0]
-                                        w_in = w_start + kw * dilation[1]
-                                        val += (x_padded[n, c_in_start + c_in, h_in, w_in] *
-                                                weight._data[c_out, c_in, kh, kw])
-                        result[n, c_out, h_out, w_out] = val
+        # Use optimized im2col-based convolution (converts conv to matmul)
+        # This is ~100-1000x faster than nested loops
+        result = _conv2d_im2col(x_padded, weight._data, stride, dilation,
+                                groups, N, C_out, C_in_per_group,
+                                K_h, K_w, H_out, W_out)
 
         # Add bias
         if bias is not None:
@@ -892,18 +968,21 @@ def max_pool2d(x: 'Tensor',
         else:
             x_padded = x._data
 
-        result = np.zeros((N, C, H_out, W_out), dtype=x.dtype)
+        # Optimized pooling using stride_tricks (avoids nested loops)
+        # Create view of all pooling windows [N, C, H_out, W_out, K_h, K_w]
+        shape = (N, C, H_out, W_out, K_h, K_w)
+        strides = (
+            x_padded.strides[0],                    # batch stride
+            x_padded.strides[1],                    # channel stride
+            x_padded.strides[2] * stride[0],        # output row stride
+            x_padded.strides[3] * stride[1],        # output col stride
+            x_padded.strides[2],                    # kernel row stride
+            x_padded.strides[3],                    # kernel col stride
+        )
+        windows = np.lib.stride_tricks.as_strided(x_padded, shape=shape, strides=strides)
 
-        for n in range(N):
-            for c in range(C):
-                for h_out in range(H_out):
-                    for w_out in range(W_out):
-                        h_start = h_out * stride[0]
-                        w_start = w_out * stride[1]
-                        window = x_padded[n, c,
-                                          h_start:h_start + K_h,
-                                          w_start:w_start + K_w]
-                        result[n, c, h_out, w_out] = np.max(window)
+        # Max over the last two dimensions (kernel dimensions)
+        result = windows.max(axis=(4, 5))
 
         return Tensor(result.astype(x.dtype))
 
@@ -963,18 +1042,21 @@ def avg_pool2d(x: 'Tensor',
         else:
             x_padded = x._data
 
-        result = np.zeros((N, C, H_out, W_out), dtype=x.dtype)
+        # Optimized pooling using stride_tricks (avoids nested loops)
+        # Create view of all pooling windows [N, C, H_out, W_out, K_h, K_w]
+        shape = (N, C, H_out, W_out, K_h, K_w)
+        strides = (
+            x_padded.strides[0],                    # batch stride
+            x_padded.strides[1],                    # channel stride
+            x_padded.strides[2] * stride[0],        # output row stride
+            x_padded.strides[3] * stride[1],        # output col stride
+            x_padded.strides[2],                    # kernel row stride
+            x_padded.strides[3],                    # kernel col stride
+        )
+        windows = np.lib.stride_tricks.as_strided(x_padded, shape=shape, strides=strides)
 
-        for n in range(N):
-            for c in range(C):
-                for h_out in range(H_out):
-                    for w_out in range(W_out):
-                        h_start = h_out * stride[0]
-                        w_start = w_out * stride[1]
-                        window = x_padded[n, c,
-                                          h_start:h_start + K_h,
-                                          w_start:w_start + K_w]
-                        result[n, c, h_out, w_out] = np.mean(window)
+        # Mean over the last two dimensions (kernel dimensions)
+        result = windows.mean(axis=(4, 5))
 
         return Tensor(result.astype(x.dtype))
 
@@ -1010,20 +1092,27 @@ def adaptive_avg_pool2d(x: 'Tensor', output_size: Union[int, Tuple[int, int]]) -
         if x._data is None:
             raise ValueError("Cannot execute adaptive_avg_pool2d on symbolic tensor")
 
-        result = np.zeros((N, C, H_out, W_out), dtype=x.dtype)
-
-        for n in range(N):
-            for c in range(C):
-                for h_out in range(H_out):
-                    for w_out in range(W_out):
-                        # Compute input region for this output
-                        h_start = (h_out * H_in) // H_out
-                        h_end = ((h_out + 1) * H_in) // H_out
-                        w_start = (w_out * W_in) // W_out
-                        w_end = ((w_out + 1) * W_in) // W_out
-
-                        window = x._data[n, c, h_start:h_end, w_start:w_end]
-                        result[n, c, h_out, w_out] = np.mean(window)
+        # Optimize common case: global average pooling (output_size = 1x1)
+        if H_out == 1 and W_out == 1:
+            # Just average over spatial dimensions - very fast
+            result = x._data.mean(axis=(2, 3), keepdims=True)
+        elif H_in % H_out == 0 and W_in % W_out == 0:
+            # Uniform pooling regions - can use reshape + mean
+            pool_h = H_in // H_out
+            pool_w = W_in // W_out
+            # Reshape to [N, C, H_out, pool_h, W_out, pool_w] and mean over pool dims
+            reshaped = x._data.reshape(N, C, H_out, pool_h, W_out, pool_w)
+            result = reshaped.mean(axis=(3, 5))
+        else:
+            # Non-uniform regions - need per-output computation
+            result = np.zeros((N, C, H_out, W_out), dtype=x.dtype)
+            for h_out in range(H_out):
+                for w_out in range(W_out):
+                    h_start = (h_out * H_in) // H_out
+                    h_end = ((h_out + 1) * H_in) // H_out
+                    w_start = (w_out * W_in) // W_out
+                    w_end = ((w_out + 1) * W_in) // W_out
+                    result[:, :, h_out, w_out] = x._data[:, :, h_start:h_end, w_start:w_end].mean(axis=(2, 3))
 
         return Tensor(result.astype(x.dtype))
 

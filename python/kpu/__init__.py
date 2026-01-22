@@ -89,7 +89,7 @@ def _install_cpp_warning_filter():
 
 _flush_stderr = _install_cpp_warning_filter()
 
-__version__ = "0.7.11"
+__version__ = "0.8.0"
 __author__ = "Stillwater Supercomputing, Inc."
 
 # Fidelity levels
@@ -290,6 +290,64 @@ from .quantization import (
     calculate_matmul_traffic,
     bandwidth_reduction_factor,
 )
+
+# Model-Level Execution (v0.8.0+)
+from .model import (
+    Layer,
+    Sequential,
+    Model,
+    Linear,
+    Conv2d,
+    BatchNorm2d,
+    LayerNorm,
+    ReLU,
+    GELU,
+    SiLU,
+    Sigmoid,
+    Tanh,
+    Softmax,
+    MaxPool2d,
+    AvgPool2d,
+    AdaptiveAvgPool2d,
+    Flatten,
+    Dropout,
+    Identity,
+    save_state_dict,
+    load_state_dict_from_file,
+)
+
+from .model_loader import (
+    ModelLoader,
+    LayerSpec,
+    ModelSpec,
+    register_layer,
+    load_model,
+    save_model,
+    LAYER_REGISTRY,
+)
+
+from .inference import (
+    LayerStats,
+    InferenceStats,
+    InferencePipeline,
+    BatchInference,
+    run_inference,
+    profile_model,
+    benchmark_model,
+)
+
+from .memory_planner import (
+    MemoryLevel,
+    TensorAllocation,
+    MemoryPool,
+    MemoryPlan,
+    MemoryPlanner,
+    plan_memory,
+    estimate_memory,
+)
+
+# Pre-built models (v0.8.0+)
+from . import models
 
 # torch.compile backend (optional, requires PyTorch)
 try:
@@ -520,6 +578,61 @@ __all__ = [
     "torch_compile",
     "get_torch_compile_stats",
     "TORCH_AVAILABLE",
+
+    # Model-Level Execution (v0.8.0+)
+    # Base classes
+    "Layer",
+    "Sequential",
+    "Model",
+    # Layer classes
+    "Linear",
+    "Conv2d",
+    "BatchNorm2d",
+    "LayerNorm",
+    # Activation layers
+    "ReLU",
+    "GELU",
+    "SiLU",
+    "Sigmoid",
+    "Tanh",
+    "Softmax",
+    # Pooling layers
+    "MaxPool2d",
+    "AvgPool2d",
+    "AdaptiveAvgPool2d",
+    # Utility layers
+    "Flatten",
+    "Dropout",
+    "Identity",
+    # State dict utilities
+    "save_state_dict",
+    "load_state_dict_from_file",
+    # Model loading
+    "ModelLoader",
+    "LayerSpec",
+    "ModelSpec",
+    "register_layer",
+    "load_model",
+    "save_model",
+    "LAYER_REGISTRY",
+    # Inference
+    "LayerStats",
+    "InferenceStats",
+    "InferencePipeline",
+    "BatchInference",
+    "run_inference",
+    "profile_model",
+    "benchmark_model",
+    # Memory planning
+    "MemoryLevel",
+    "TensorAllocation",
+    "MemoryPool",
+    "MemoryPlan",
+    "MemoryPlanner",
+    "plan_memory",
+    "estimate_memory",
+    # Pre-built models
+    "models",
 ]
 
 

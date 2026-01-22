@@ -49,6 +49,51 @@ public:
         void* c_data,
         std::function<void()> callback = nullptr) override;
 
+    std::optional<uint64_t> submit_conv2d(
+        const Conv2DDescriptor& desc,
+        const void* input_data,
+        const void* weight_data,
+        const void* bias_data,
+        void* output_data,
+        std::function<void()> callback = nullptr) override;
+
+    std::optional<uint64_t> submit_elementwise(
+        const ElementwiseDescriptor& desc,
+        const void* a_data,
+        const void* b_data,
+        void* output_data,
+        std::function<void()> callback = nullptr) override;
+
+    std::optional<uint64_t> submit_pool2d(
+        const Pool2DDescriptor& desc,
+        const void* input_data,
+        void* output_data,
+        std::function<void()> callback = nullptr) override;
+
+    std::optional<uint64_t> submit_softmax(
+        const SoftmaxDescriptor& desc,
+        const void* input_data,
+        void* output_data,
+        std::function<void()> callback = nullptr) override;
+
+    std::optional<uint64_t> submit_layernorm(
+        const LayerNormDescriptor& desc,
+        const void* input_data,
+        const void* weight_data,
+        const void* bias_data,
+        void* output_data,
+        std::function<void()> callback = nullptr) override;
+
+    std::optional<uint64_t> submit_batchnorm(
+        const BatchNormDescriptor& desc,
+        const void* input_data,
+        const void* weight_data,
+        const void* bias_data,
+        const void* running_mean,
+        const void* running_var,
+        void* output_data,
+        std::function<void()> callback = nullptr) override;
+
     bool can_accept() const override { return true; }  // Always accepts
     bool has_pending() const override { return !pending_callbacks_.empty(); }
     size_t pending_count() const override { return pending_callbacks_.size(); }
@@ -133,10 +178,43 @@ private:
     bool tracing_enabled_ = false;
     sw::trace::ResourceTracker* resource_tracker_ = nullptr;
 
-    // Helpers
+    // Helpers - execution functions
     void execute_matmul_fp32(const MatMulDescriptor& desc,
                              const float* a, const float* b, float* c);
+
+    void execute_conv2d_fp32(const Conv2DDescriptor& desc,
+                             const float* input, const float* weight,
+                             const float* bias, float* output);
+
+    void execute_elementwise_fp32(const ElementwiseDescriptor& desc,
+                                  const float* a, const float* b, float* output);
+
+    void execute_pool2d_fp32(const Pool2DDescriptor& desc,
+                             const float* input, float* output);
+
+    void execute_softmax_fp32(const SoftmaxDescriptor& desc,
+                              const float* input, float* output);
+
+    void execute_layernorm_fp32(const LayerNormDescriptor& desc,
+                                const float* input, const float* weight,
+                                const float* bias, float* output);
+
+    void execute_batchnorm_fp32(const BatchNormDescriptor& desc,
+                                const float* input, const float* weight,
+                                const float* bias, const float* running_mean,
+                                const float* running_var, float* output);
+
+    // Latency estimation
     uint32_t estimate_latency(const MatMulDescriptor& desc) const;
+    uint32_t estimate_latency(const Conv2DDescriptor& desc) const;
+    uint32_t estimate_latency(const ElementwiseDescriptor& desc) const;
+    uint32_t estimate_latency(const Pool2DDescriptor& desc) const;
+    uint32_t estimate_latency(const SoftmaxDescriptor& desc) const;
+    uint32_t estimate_latency(const LayerNormDescriptor& desc) const;
+    uint32_t estimate_latency(const BatchNormDescriptor& desc) const;
+
+    // Common callback scheduling
+    void schedule_callback(uint32_t latency, std::function<void()> callback);
 };
 
 } // namespace sw::kpu
