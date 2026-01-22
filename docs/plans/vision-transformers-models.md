@@ -35,21 +35,21 @@ support and the operators required for each.
 | **ResNet101/152** | 44.5M/60.2M | 81.9%/82.3% | ✅ SUPPORTED | Deeper variants |
 | **VGG11/13/16/19** | 133M-144M | 69-74% | ✅ SUPPORTED | Simple sequential, large |
 | **AlexNet** | 61M | 56.5% | ✅ SUPPORTED | Classic architecture |
-| **DenseNet121/169/201** | 8M-20M | 74-77% | ⚠️ UNTESTED | Dense connections |
-| **SqueezeNet** | 1.2M | 58% | ⚠️ UNTESTED | Fire modules |
+| **DenseNet121/169/201** | 8M-20M | 74-77% | ✅ VALIDATED | Dense connections work |
+| **SqueezeNet** | 1.2M | 58% | ⚠️ PARTIAL | Fire modules, larger numerical diff |
 
 ### CNN-Based (Mobile/Efficient Architectures)
 
 | Model | Parameters | Top-1 Acc | KPU Status | Notes |
 |-------|------------|-----------|------------|-------|
 | **MobileNetV2** | 3.5M | 72% | ✅ VALIDATED | 10/10 images, 100% match |
-| **MobileNetV3** | 5.5M | 75% | ⚠️ UNTESTED | Should work (same ops) |
+| **MobileNetV3** | 5.5M | 75% | ✅ VALIDATED | Small and Large variants work |
 | **EfficientNet-B0** | 5.3M | 77% | ✅ VALIDATED | Predictions match |
 | **EfficientNet B1-B7** | 8M-66M | 79-84% | ✅ SUPPORTED | Same ops as B0 |
 | **EfficientNetV2** | 21M-120M | 84-86% | ⚠️ UNTESTED | Should work |
-| **ShuffleNetV2** | 2.3M | 69% | ⚠️ UNTESTED | Grouped conv now supported |
-| **RegNet** | 4M-80M | 72-84% | ⚠️ UNTESTED | Grouped conv now supported |
-| **ConvNeXt** | 29M-350M | 82-87% | ⚠️ UNTESTED | Depthwise + LayerNorm |
+| **ShuffleNetV2** | 2.3M | 69% | ❌ NOT SUPPORTED | Channel shuffle not supported |
+| **RegNet** | 4M-80M | 72-84% | ✅ VALIDATED | Grouped conv works |
+| **ConvNeXt** | 29M-350M | 82-87% | ✅ VALIDATED | Depthwise + LayerNorm works |
 
 ### Vision Transformers
 
@@ -309,9 +309,10 @@ Transpose              Reshape              Flatten
    - All Faster R-CNN NN components work on KPU
    - Note: NMS runs on CPU (dynamic post-processing)
 
-4. **Create model compatibility matrix** - Track which models work (NEXT)
-   - Automated testing of each model
-   - Document operator requirements
+4. ~~**Create model compatibility matrix**~~ ✅ DONE - `docs/model_compatibility.md`
+   - 35 models tested: 24 PASSED, 2 PARTIAL, 9 FAILED
+   - Test script: `examples/torch/model_compatibility.py`
+   - Missing ops documented: dilated conv, channel shuffle, shifted windows
 
 ---
 
@@ -336,3 +337,4 @@ Transpose              Reshape              Flatten
 | 0.2 | 2025-01-21 | ViT-B/16 validated, created vit_inference.py example |
 | 0.3 | 2025-01-21 | Added grouped/depthwise conv, MobileNetV2 & EfficientNet-B0 validated |
 | 0.4 | 2025-01-21 | Detection support: FPN, ROI Align, Interpolate validated for Faster R-CNN |
+| 0.5 | 2025-01-21 | Model compatibility matrix: 35 models tested (24 pass, 2 partial, 9 fail) |

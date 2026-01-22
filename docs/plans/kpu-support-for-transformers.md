@@ -149,3 +149,67 @@ Detection models now supported:
 
 The next priority in the roadmap is "Create model compatibility matrix" for automated testing of each model and documenting operator requirements.
 
+## Model compatibility matrix has been created. Here's the summary:
+
+Model Compatibility Results
+
+- 35 models tested: 
+   - 24 PASSED (69%), 
+   - 2 PARTIAL (6%), 
+   - 9 FAILED (26%)
+
+Classification Models - Highlights
+
+```text
+  ┌─────────────────────┬──────────────────────────────┬───────────────────────────────────┐
+  │      Category       │            Models            │              Status               │
+  ├─────────────────────┼──────────────────────────────┼───────────────────────────────────┤
+  │ ResNet              │ 18, 34, 50, 101              │ ✅ All work (101 has larger diff) │
+  ├─────────────────────┼──────────────────────────────┼───────────────────────────────────┤
+  │ VGG                 │ 11, 16, 19                   │ ✅ All work                       │
+  ├─────────────────────┼──────────────────────────────┼───────────────────────────────────┤
+  │ MobileNet           │ V2, V3-Small, V3-Large       │ ✅ All work                       │
+  ├─────────────────────┼──────────────────────────────┼───────────────────────────────────┤
+  │ EfficientNet        │ B0, B1, B2+                  │ ✅ All work                       │
+  ├─────────────────────┼──────────────────────────────┼───────────────────────────────────┤
+  │ DenseNet            │ 121, 169                     │ ✅ All work                       │
+  ├─────────────────────┼──────────────────────────────┼───────────────────────────────────┤
+  │ Vision Transformers │ ViT-B/16, ViT-B/32, ViT-L/16 │ ✅ All work (exact match!)        │
+  ├─────────────────────┼──────────────────────────────┼───────────────────────────────────┤
+  │ ConvNeXt            │ Tiny, Small                  │ ✅ Works (was untested before)    │
+  ├─────────────────────┼──────────────────────────────┼───────────────────────────────────┤
+  │ RegNet              │ Y-400MF, Y-800MF             │ ✅ Works                          │
+  └─────────────────────┴──────────────────────────────┴───────────────────────────────────┘
+```
+
+Failed Models
+
+```text
+  ┌──────────────────────┬─────────────────┬─────────────────────┐
+  │        Model         │     Reason      │  Missing Operator   │
+  ├──────────────────────┼─────────────────┼─────────────────────┤
+  │ ShuffleNetV2         │ Channel shuffle │ Stride manipulation │
+  ├──────────────────────┼─────────────────┼─────────────────────┤
+  │ Swin-T/S             │ Shifted windows │ Complex indexing    │
+  ├──────────────────────┼─────────────────┼─────────────────────┤
+  │ MaxViT-T             │ Grid attention  │ Broadcast shapes    │
+  ├──────────────────────┼─────────────────┼─────────────────────┤
+  │ FCN/DeepLabV3/LRASPP │ Segmentation    │ Dilated convolution │
+  └──────────────────────┴─────────────────┴─────────────────────┘
+```
+
+New Files Created
+
+  - examples/torch/model_compatibility.py - Automated test script
+  - docs/model_compatibility.md - Full compatibility report
+
+Updated Files
+
+  - docs/plans/vision-transformers-models.md - Updated model statuses
+
+The next priorities for expanded coverage would be:
+
+  1. P2: Dilated convolution - Unlocks segmentation models (FCN, DeepLabV3)
+  2. P3: Channel shuffle - Unlocks ShuffleNet family
+
+
