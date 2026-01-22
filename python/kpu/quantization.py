@@ -1490,6 +1490,380 @@ def int4_info() -> Dict[str, Any]:
     }
 
 
+# --- FP4 operations (v0.7.8) ---
+
+# FP4 format specifications:
+# Common FP4 formats (4 bits = 1 sign + exponent + mantissa):
+# - E2M1: 2-bit exponent, 1-bit mantissa (wider range, less precision)
+# - E1M2: 1-bit exponent, 2-bit mantissa (narrow range, more precision)
+#
+# FP4 E2M1 value table (most common format):
+# | Bits | Value    |
+# |------|----------|
+# | 0000 | +0       |
+# | 0001 | +0.5     |
+# | 0010 | +1.0     |
+# | 0011 | +1.5     |
+# | 0100 | +2.0     |
+# | 0101 | +3.0     |
+# | 0110 | +4.0     |
+# | 0111 | +6.0     |
+# | 1000 | -0       |
+# | 1001 | -0.5     |
+# | 1010 | -1.0     |
+# | 1011 | -1.5     |
+# | 1100 | -2.0     |
+# | 1101 | -3.0     |
+# | 1110 | -4.0     |
+# | 1111 | -6.0     |
+
+class FP4Format:
+    """FP4 format specification."""
+
+    def __init__(self, name: str, exp_bits: int, mantissa_bits: int, bias: int):
+        """Initialize FP4 format.
+
+        Args:
+            name: Format name (e.g., "e2m1")
+            exp_bits: Number of exponent bits
+            mantissa_bits: Number of mantissa bits
+            bias: Exponent bias
+        """
+        self.name = name
+        self.exp_bits = exp_bits
+        self.mantissa_bits = mantissa_bits
+        self.bias = bias
+
+        # Build value lookup table for this format
+        self._build_value_table()
+
+    def _build_value_table(self):
+        """Build lookup table mapping 4-bit codes to float values."""
+        self.code_to_value = {}
+        self.value_to_code = {}
+
+        for code in range(16):
+            sign = -1 if (code & 0x8) else 1
+            unsigned_code = code & 0x7  # Lower 3 bits
+
+            if self.exp_bits == 2 and self.mantissa_bits == 1:
+                # E2M1 format
+                exp_field = (unsigned_code >> 1) & 0x3
+                mant_field = unsigned_code & 0x1
+
+                if exp_field == 0:
+                    # Subnormal
+                    value = sign * mant_field * 0.5
+                else:
+                    # Normal
+                    mantissa = 1.0 + mant_field * 0.5
+                    value = sign * mantissa * (2 ** (exp_field - self.bias))
+
+            elif self.exp_bits == 1 and self.mantissa_bits == 2:
+                # E1M2 format
+                exp_field = (unsigned_code >> 2) & 0x1
+                mant_field = unsigned_code & 0x3
+
+                if exp_field == 0:
+                    # Subnormal
+                    value = sign * mant_field * 0.25
+                else:
+                    # Normal
+                    mantissa = 1.0 + mant_field * 0.25
+                    value = sign * mantissa * (2 ** (exp_field - self.bias))
+            else:
+                # Generic fallback
+                value = sign * unsigned_code * 0.5
+
+            self.code_to_value[code] = float(value)
+
+        # Build reverse mapping (value -> code), handling duplicates
+        # Sort by absolute value for nearest-neighbor quantization
+        sorted_codes = sorted(self.code_to_value.items(),
+                             key=lambda x: (abs(x[1]), x[0]))
+        self._sorted_values = [(v, c) for c, v in sorted_codes]
+
+    @property
+    def max_value(self) -> float:
+        return max(self.code_to_value.values())
+
+    @property
+    def min_value(self) -> float:
+        return min(self.code_to_value.values())
+
+    @property
+    def unique_values(self) -> list:
+        """Return sorted list of unique representable values."""
+        return sorted(set(self.code_to_value.values()))
+
+    def quantize_value(self, x: float) -> int:
+        """Quantize a single float value to nearest FP4 code."""
+        best_code = 0
+        best_dist = float('inf')
+        for value, code in self._sorted_values:
+            dist = abs(x - value)
+            if dist < best_dist:
+                best_dist = dist
+                best_code = code
+        return best_code
+
+    def dequantize_code(self, code: int) -> float:
+        """Convert FP4 code to float value."""
+        return self.code_to_value.get(code & 0xF, 0.0)
+
+
+# Standard FP4 formats
+FP4_E2M1 = FP4Format("e2m1", exp_bits=2, mantissa_bits=1, bias=1)
+FP4_E1M2 = FP4Format("e1m2", exp_bits=1, mantissa_bits=2, bias=0)
+
+# Format lookup
+_FP4_FORMATS = {
+    "e2m1": FP4_E2M1,
+    "e1m2": FP4_E1M2,
+}
+
+
+def get_fp4_format(format_name: str = "e2m1") -> FP4Format:
+    """Get FP4 format specification by name.
+
+    Args:
+        format_name: Format name ("e2m1", "e1m2")
+
+    Returns:
+        FP4Format specification
+    """
+    if format_name not in _FP4_FORMATS:
+        raise ValueError(f"Unknown FP4 format: {format_name}. "
+                        f"Available: {list(_FP4_FORMATS.keys())}")
+    return _FP4_FORMATS[format_name]
+
+
+def fp4_quantize(
+    tensor: np.ndarray,
+    format_name: str = "e2m1",
+    scale: Optional[float] = None,
+) -> np.ndarray:
+    """Quantize float tensor to FP4 codes.
+
+    Args:
+        tensor: Input float tensor
+        format_name: FP4 format ("e2m1", "e1m2")
+        scale: Optional scale factor (if None, auto-computed)
+
+    Returns:
+        Quantized tensor as uint8 (4-bit codes, unpacked)
+    """
+    fmt = get_fp4_format(format_name)
+    tensor = np.asarray(tensor, dtype=np.float32)
+
+    # Auto-compute scale if not provided
+    if scale is None:
+        abs_max = np.abs(tensor).max()
+        if abs_max > 0:
+            scale = abs_max / fmt.max_value
+        else:
+            scale = 1.0
+
+    # Scale input
+    scaled = tensor / scale
+
+    # Vectorized quantization using lookup
+    flat = scaled.reshape(-1)
+    codes = np.zeros(len(flat), dtype=np.uint8)
+    for i, val in enumerate(flat):
+        codes[i] = fmt.quantize_value(val)
+
+    return codes.reshape(tensor.shape), scale
+
+
+def fp4_dequantize(
+    codes: np.ndarray,
+    scale: float,
+    format_name: str = "e2m1",
+) -> np.ndarray:
+    """Dequantize FP4 codes to float tensor.
+
+    Args:
+        codes: Quantized tensor (uint8, 4-bit codes)
+        scale: Scale factor used during quantization
+        format_name: FP4 format ("e2m1", "e1m2")
+
+    Returns:
+        Dequantized float32 tensor
+    """
+    fmt = get_fp4_format(format_name)
+    codes = np.asarray(codes, dtype=np.uint8)
+
+    # Vectorized dequantization
+    flat = codes.reshape(-1)
+    values = np.array([fmt.dequantize_code(c) for c in flat], dtype=np.float32)
+
+    return (values * scale).reshape(codes.shape)
+
+
+def pack_fp4(codes: np.ndarray) -> np.ndarray:
+    """Pack FP4 codes into bytes (2 values per byte).
+
+    Args:
+        codes: FP4 codes as uint8 array (must have even length in last dim)
+
+    Returns:
+        Packed uint8 array with half the size in last dimension
+    """
+    codes = np.asarray(codes, dtype=np.uint8)
+    original_shape = codes.shape
+
+    if original_shape[-1] % 2 != 0:
+        raise ValueError(f"Last dimension must be even for packing, got {original_shape[-1]}")
+
+    flat = codes.reshape(-1)
+    flat = flat & 0x0F  # Ensure 4-bit values
+
+    low = flat[0::2]
+    high = flat[1::2]
+    packed = (low | (high << 4)).astype(np.uint8)
+
+    new_shape = original_shape[:-1] + (original_shape[-1] // 2,)
+    return packed.reshape(new_shape)
+
+
+def unpack_fp4(packed: np.ndarray) -> np.ndarray:
+    """Unpack FP4 codes from packed bytes.
+
+    Args:
+        packed: Packed uint8 array
+
+    Returns:
+        Unpacked codes with last dimension doubled
+    """
+    packed = np.asarray(packed, dtype=np.uint8)
+    original_shape = packed.shape
+
+    flat = packed.reshape(-1)
+    low = flat & 0x0F
+    high = (flat >> 4) & 0x0F
+
+    unpacked = np.empty(len(flat) * 2, dtype=np.uint8)
+    unpacked[0::2] = low
+    unpacked[1::2] = high
+
+    new_shape = original_shape[:-1] + (original_shape[-1] * 2,)
+    return unpacked.reshape(new_shape)
+
+
+def fp4_matmul(
+    a: np.ndarray,
+    b: np.ndarray,
+    scale_a: float,
+    scale_b: float,
+    format_name: str = "e2m1",
+) -> np.ndarray:
+    """Perform FP4 matrix multiplication.
+
+    Inputs should be FP4 codes (unpacked).
+
+    Args:
+        a: FP4 codes for matrix A, shape [..., M, K]
+        b: FP4 codes for matrix B, shape [..., K, N]
+        scale_a: Scale for A
+        scale_b: Scale for B
+        format_name: FP4 format
+
+    Returns:
+        Result matrix (float32)
+    """
+    # Dequantize inputs
+    a_fp = fp4_dequantize(a, scale_a, format_name)
+    b_fp = fp4_dequantize(b, scale_b, format_name)
+
+    # Matmul in float32
+    return np.matmul(a_fp, b_fp)
+
+
+def fp4_linear(
+    x: np.ndarray,
+    weight: np.ndarray,
+    bias: Optional[np.ndarray],
+    scale_x: float,
+    scale_w: float,
+    format_name: str = "e2m1",
+) -> np.ndarray:
+    """Perform FP4 linear layer.
+
+    Args:
+        x: FP4 codes for input, shape [..., in_features]
+        weight: FP4 codes for weights, shape [out_features, in_features]
+        bias: Optional float32 bias
+        scale_x: Scale for input
+        scale_w: Scale for weights
+        format_name: FP4 format
+
+    Returns:
+        Result tensor (float32)
+    """
+    # Dequantize
+    x_fp = fp4_dequantize(x, scale_x, format_name)
+    w_fp = fp4_dequantize(weight, scale_w, format_name)
+
+    # Linear
+    y = np.matmul(x_fp, w_fp.T)
+    if bias is not None:
+        y = y + bias
+
+    return y
+
+
+def fp4_range(format_name: str = "e2m1") -> Tuple[float, float]:
+    """Return the representable range of an FP4 format.
+
+    Args:
+        format_name: FP4 format ("e2m1", "e1m2")
+
+    Returns:
+        (min_value, max_value) tuple
+    """
+    fmt = get_fp4_format(format_name)
+    return (fmt.min_value, fmt.max_value)
+
+
+def fp4_values(format_name: str = "e2m1") -> list:
+    """Return all unique representable values for an FP4 format.
+
+    Args:
+        format_name: FP4 format ("e2m1", "e1m2")
+
+    Returns:
+        Sorted list of all representable values
+    """
+    fmt = get_fp4_format(format_name)
+    return fmt.unique_values
+
+
+def fp4_info(format_name: str = "e2m1") -> Dict[str, Any]:
+    """Get detailed information about an FP4 format.
+
+    Args:
+        format_name: FP4 format ("e2m1", "e1m2")
+
+    Returns:
+        Dictionary with format details
+    """
+    fmt = get_fp4_format(format_name)
+    return {
+        "name": fmt.name,
+        "exp_bits": fmt.exp_bits,
+        "mantissa_bits": fmt.mantissa_bits,
+        "bias": fmt.bias,
+        "max_value": fmt.max_value,
+        "min_value": fmt.min_value,
+        "unique_values": fmt.unique_values,
+        "num_values": len(set(fmt.code_to_value.values())),
+        "bits": 4,
+        "bytes_per_element": 0.5,
+        "memory_reduction_vs_fp32": 8.0,
+    }
+
+
 # --- Memory traffic calculation ---
 
 def calculate_memory_bytes(
