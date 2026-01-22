@@ -77,7 +77,7 @@ def _install_cpp_warning_filter():
 
 _flush_stderr = _install_cpp_warning_filter()
 
-__version__ = "0.7.9"
+__version__ = "0.7.10"
 __author__ = "Stillwater Supercomputing, Inc."
 
 # Fidelity levels
@@ -253,6 +253,16 @@ from .quantization import (
     mixed_precision_conv2d,
     calculate_mixed_precision_traffic,
     mixed_precision_info,
+    # Q/DQ operations (v0.7.10)
+    QDQParams,
+    Q,
+    DQ,
+    fake_quantize,
+    qdq_linear,
+    qdq_matmul,
+    qdq_conv2d,
+    create_qdq_params,
+    quantize_error,
     # Memory traffic
     calculate_memory_bytes,
     calculate_matmul_traffic,
@@ -458,6 +468,16 @@ __all__ = [
     "mixed_precision_conv2d",
     "calculate_mixed_precision_traffic",
     "mixed_precision_info",
+    # Q/DQ operations (v0.7.10)
+    "QDQParams",
+    "Q",
+    "DQ",
+    "fake_quantize",
+    "qdq_linear",
+    "qdq_matmul",
+    "qdq_conv2d",
+    "create_qdq_params",
+    "quantize_error",
     # Memory traffic
     "calculate_memory_bytes",
     "calculate_matmul_traffic",

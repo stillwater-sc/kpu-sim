@@ -2177,6 +2177,370 @@ def mixed_precision_info(config: MixedPrecisionConfig) -> Dict[str, Any]:
     }
 
 
+# --- Q/DQ Operations (v0.7.10) ---
+
+# Q/DQ (Quantize/Dequantize) operations provide explicit graph-level
+# quantization nodes. This pattern is used for:
+# 1. Quantization-aware training (QAT) - fake quantization
+# 2. ONNX-style quantization representation
+# 3. Fine-grained control over quantization points
+#
+# The Q/DQ pattern:
+#   input -> Q -> DQ -> operation -> Q -> DQ -> output
+#
+# During training: Q/DQ simulate quantization error (fake quant)
+# During inference: Q/DQ pairs can be folded into the operation
+
+@dataclass
+class QDQParams:
+    """Parameters for quantize/dequantize operations.
+
+    Attributes:
+        scale: Scale factor for quantization
+        zero_point: Zero point offset
+        dtype: Target quantization dtype
+        axis: Axis for per-channel quantization (None for per-tensor)
+        quant_min: Minimum quantized value (for clipping)
+        quant_max: Maximum quantized value (for clipping)
+    """
+    scale: Union[float, np.ndarray]
+    zero_point: Union[int, np.ndarray] = 0
+    dtype: QuantDtype = QuantDtype.INT8
+    axis: Optional[int] = None
+    quant_min: Optional[int] = None
+    quant_max: Optional[int] = None
+
+    def __post_init__(self):
+        if self.quant_min is None:
+            self.quant_min = self.dtype.qmin
+        if self.quant_max is None:
+            self.quant_max = self.dtype.qmax
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert to dictionary for serialization."""
+        return {
+            "scale": float(self.scale) if np.isscalar(self.scale) else self.scale.tolist(),
+            "zero_point": int(self.zero_point) if np.isscalar(self.zero_point) else self.zero_point.tolist(),
+            "dtype": self.dtype.value,
+            "axis": self.axis,
+            "quant_min": self.quant_min,
+            "quant_max": self.quant_max,
+        }
+
+    @classmethod
+    def from_dict(cls, d: Dict[str, Any]) -> 'QDQParams':
+        """Create from dictionary."""
+        scale = d["scale"]
+        if isinstance(scale, list):
+            scale = np.array(scale, dtype=np.float32)
+        zero_point = d["zero_point"]
+        if isinstance(zero_point, list):
+            zero_point = np.array(zero_point, dtype=np.int32)
+        return cls(
+            scale=scale,
+            zero_point=zero_point,
+            dtype=QuantDtype(d["dtype"]),
+            axis=d.get("axis"),
+            quant_min=d.get("quant_min"),
+            quant_max=d.get("quant_max"),
+        )
+
+
+def Q(
+    x: np.ndarray,
+    params: QDQParams,
+) -> np.ndarray:
+    """Quantize operation (Q node).
+
+    Quantizes input tensor according to parameters.
+
+    Args:
+        x: Input float tensor
+        params: Quantization parameters
+
+    Returns:
+        Quantized integer tensor
+    """
+    if params.axis is not None:
+        # Per-channel quantization
+        scale = np.array(params.scale)
+        zero_point = np.array(params.zero_point)
+
+        # Reshape for broadcasting
+        shape = [1] * x.ndim
+        shape[params.axis] = -1
+        scale = scale.reshape(shape)
+        zero_point = zero_point.reshape(shape)
+
+        q = np.round(x / scale) + zero_point
+    else:
+        # Per-tensor quantization
+        q = np.round(x / params.scale) + params.zero_point
+
+    # Clip to valid range
+    q = np.clip(q, params.quant_min, params.quant_max)
+
+    # Return appropriate integer type
+    if params.dtype in (QuantDtype.INT8,):
+        return q.astype(np.int8)
+    elif params.dtype in (QuantDtype.UINT8,):
+        return q.astype(np.uint8)
+    elif params.dtype in (QuantDtype.INT4, QuantDtype.UINT4):
+        return q.astype(np.int8)  # Store as int8, pack separately
+    else:
+        return q.astype(np.int32)
+
+
+def DQ(
+    x: np.ndarray,
+    params: QDQParams,
+) -> np.ndarray:
+    """Dequantize operation (DQ node).
+
+    Dequantizes integer tensor back to float.
+
+    Args:
+        x: Quantized integer tensor
+        params: Quantization parameters
+
+    Returns:
+        Dequantized float32 tensor
+    """
+    if params.axis is not None:
+        # Per-channel dequantization
+        scale = np.array(params.scale)
+        zero_point = np.array(params.zero_point)
+
+        # Reshape for broadcasting
+        shape = [1] * x.ndim
+        shape[params.axis] = -1
+        scale = scale.reshape(shape)
+        zero_point = zero_point.reshape(shape)
+
+        return (x.astype(np.float32) - zero_point) * scale
+    else:
+        # Per-tensor dequantization
+        return (x.astype(np.float32) - params.zero_point) * params.scale
+
+
+def fake_quantize(
+    x: np.ndarray,
+    params: QDQParams,
+) -> np.ndarray:
+    """Fake quantization (Q followed by DQ).
+
+    Simulates quantization error while keeping values in float.
+    Used for quantization-aware training.
+
+    Args:
+        x: Input float tensor
+        params: Quantization parameters
+
+    Returns:
+        Float tensor with quantization error simulated
+    """
+    return DQ(Q(x, params), params)
+
+
+def qdq_linear(
+    x: np.ndarray,
+    weight: np.ndarray,
+    bias: Optional[np.ndarray],
+    x_params: QDQParams,
+    w_params: QDQParams,
+    output_params: Optional[QDQParams] = None,
+) -> np.ndarray:
+    """Linear layer with Q/DQ operations.
+
+    Applies fake quantization to inputs and weights, performs linear
+    operation, and optionally quantizes output.
+
+    Args:
+        x: Input tensor
+        weight: Weight tensor
+        bias: Optional bias
+        x_params: Quantization params for input
+        w_params: Quantization params for weights
+        output_params: Optional params for output quantization
+
+    Returns:
+        Output tensor (quantized if output_params provided)
+    """
+    # Fake quantize inputs
+    x_fq = fake_quantize(x, x_params)
+    w_fq = fake_quantize(weight, w_params)
+
+    # Linear operation in float
+    y = np.matmul(x_fq, w_fq.T)
+    if bias is not None:
+        y = y + bias
+
+    # Optionally quantize output
+    if output_params is not None:
+        y = fake_quantize(y, output_params)
+
+    return y
+
+
+def qdq_matmul(
+    a: np.ndarray,
+    b: np.ndarray,
+    a_params: QDQParams,
+    b_params: QDQParams,
+    output_params: Optional[QDQParams] = None,
+) -> np.ndarray:
+    """Matrix multiplication with Q/DQ operations.
+
+    Args:
+        a: First matrix
+        b: Second matrix
+        a_params: Quantization params for a
+        b_params: Quantization params for b
+        output_params: Optional params for output quantization
+
+    Returns:
+        Result matrix
+    """
+    a_fq = fake_quantize(a, a_params)
+    b_fq = fake_quantize(b, b_params)
+
+    c = np.matmul(a_fq, b_fq)
+
+    if output_params is not None:
+        c = fake_quantize(c, output_params)
+
+    return c
+
+
+def qdq_conv2d(
+    x: np.ndarray,
+    weight: np.ndarray,
+    bias: Optional[np.ndarray],
+    x_params: QDQParams,
+    w_params: QDQParams,
+    stride: Tuple[int, int] = (1, 1),
+    padding: Tuple[int, int] = (0, 0),
+    output_params: Optional[QDQParams] = None,
+) -> np.ndarray:
+    """2D convolution with Q/DQ operations.
+
+    Args:
+        x: Input tensor [N, C_in, H, W]
+        weight: Filter weights [C_out, C_in, kH, kW]
+        bias: Optional bias [C_out]
+        x_params: Quantization params for input
+        w_params: Quantization params for weights
+        stride: Convolution stride
+        padding: Convolution padding
+        output_params: Optional params for output quantization
+
+    Returns:
+        Output tensor
+    """
+    # Fake quantize inputs
+    x_fq = fake_quantize(x, x_params)
+    w_fq = fake_quantize(weight, w_params)
+
+    N, C_in, H, W = x_fq.shape
+    C_out, _, kH, kW = w_fq.shape
+    sH, sW = stride
+    pH, pW = padding
+
+    # Pad input
+    if pH > 0 or pW > 0:
+        x_fq = np.pad(x_fq, ((0, 0), (0, 0), (pH, pH), (pW, pW)),
+                      mode='constant', constant_values=0)
+
+    H_out = (H + 2 * pH - kH) // sH + 1
+    W_out = (W + 2 * pW - kW) // sW + 1
+
+    output = np.zeros((N, C_out, H_out, W_out), dtype=np.float32)
+
+    for n in range(N):
+        for c_out in range(C_out):
+            for h in range(H_out):
+                for w in range(W_out):
+                    h_start = h * sH
+                    w_start = w * sW
+                    patch = x_fq[n, :, h_start:h_start+kH, w_start:w_start+kW]
+                    output[n, c_out, h, w] = np.sum(patch * w_fq[c_out])
+
+    if bias is not None:
+        output = output + bias.reshape(1, -1, 1, 1)
+
+    if output_params is not None:
+        output = fake_quantize(output, output_params)
+
+    return output
+
+
+def create_qdq_params(
+    tensor: np.ndarray,
+    dtype: QuantDtype = QuantDtype.INT8,
+    symmetric: bool = True,
+    per_channel: bool = False,
+    axis: int = 0,
+) -> QDQParams:
+    """Create Q/DQ parameters from a tensor (calibration).
+
+    Args:
+        tensor: Tensor to calibrate from
+        dtype: Target quantization dtype
+        symmetric: Use symmetric quantization
+        per_channel: Use per-channel quantization
+        axis: Channel axis (if per_channel)
+
+    Returns:
+        QDQParams for the tensor
+    """
+    if per_channel:
+        scales, zero_points = compute_per_channel_params(
+            tensor, axis=axis, dtype=dtype, symmetric=symmetric
+        )
+        return QDQParams(
+            scale=scales,
+            zero_point=zero_points,
+            dtype=dtype,
+            axis=axis,
+        )
+    else:
+        scale, zero_point = compute_scale_zero_point(
+            tensor, dtype=dtype, symmetric=symmetric
+        )
+        return QDQParams(
+            scale=scale,
+            zero_point=zero_point,
+            dtype=dtype,
+        )
+
+
+def quantize_error(
+    x: np.ndarray,
+    params: QDQParams,
+) -> Dict[str, float]:
+    """Compute quantization error metrics.
+
+    Args:
+        x: Original float tensor
+        params: Quantization parameters
+
+    Returns:
+        Dictionary with error metrics
+    """
+    x_fq = fake_quantize(x, params)
+
+    abs_error = np.abs(x - x_fq)
+    rel_error = abs_error / (np.abs(x) + 1e-10)
+
+    return {
+        "mean_abs_error": float(np.mean(abs_error)),
+        "max_abs_error": float(np.max(abs_error)),
+        "mean_rel_error": float(np.mean(rel_error)),
+        "max_rel_error": float(np.max(rel_error)),
+        "snr_db": float(10 * np.log10(np.mean(x**2) / (np.mean(abs_error**2) + 1e-10))),
+    }
+
+
 # --- Memory traffic calculation ---
 
 def calculate_memory_bytes(
