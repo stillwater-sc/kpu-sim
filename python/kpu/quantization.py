@@ -603,6 +603,261 @@ def fp16_precision() -> float:
     return float(np.finfo(np.float16).eps)
 
 
+# --- BF16 operations (v0.7.2) ---
+
+# Try to import ml_dtypes for native bfloat16 support
+try:
+    import ml_dtypes
+    _BFLOAT16_DTYPE = ml_dtypes.bfloat16
+    _ML_DTYPES_AVAILABLE = True
+except ImportError:
+    _BFLOAT16_DTYPE = None
+    _ML_DTYPES_AVAILABLE = False
+
+
+def is_bfloat16_native() -> bool:
+    """Check if native bfloat16 support is available via ml_dtypes.
+
+    Returns:
+        True if ml_dtypes is installed and provides native bfloat16
+    """
+    return _ML_DTYPES_AVAILABLE
+
+
+def _emulate_bf16(value: np.ndarray) -> np.ndarray:
+    """Emulate bfloat16 by truncating float32 mantissa.
+
+    BF16 has the same exponent range as FP32 (8 bits) but only 7 mantissa
+    bits (vs 23 for FP32). This emulation truncates the lower 16 bits
+    of the float32 representation.
+
+    Args:
+        value: Input float32 array
+
+    Returns:
+        Float32 array with precision reduced to bfloat16 equivalent
+    """
+    # View as uint32 to manipulate bits
+    as_float32 = value.astype(np.float32)
+    as_uint32 = as_float32.view(np.uint32)
+    # Zero out lower 16 bits (truncate mantissa to 7 bits)
+    truncated = as_uint32 & 0xFFFF0000
+    # View back as float32
+    return truncated.view(np.float32)
+
+
+def bf16_matmul(
+    a: np.ndarray,
+    b: np.ndarray,
+    output_fp32: bool = True,
+) -> np.ndarray:
+    """Perform BF16 matrix multiplication.
+
+    Uses ml_dtypes.bfloat16 if available, otherwise emulates BF16 precision
+    by truncating float32 mantissa bits.
+
+    BF16 has the same dynamic range as FP32 (8-bit exponent) but reduced
+    precision (7-bit mantissa vs 23-bit). This makes it ideal for deep
+    learning where range matters more than precision.
+
+    Args:
+        a: Input matrix A, shape [..., M, K]
+        b: Input matrix B, shape [..., K, N]
+        output_fp32: If True, return float32; else return bfloat16
+
+    Returns:
+        Result matrix C, shape [..., M, N]
+    """
+    if _ML_DTYPES_AVAILABLE:
+        # Use native bfloat16 via ml_dtypes
+        a_bf16 = a.astype(_BFLOAT16_DTYPE)
+        b_bf16 = b.astype(_BFLOAT16_DTYPE)
+        # ml_dtypes may compute in higher precision internally
+        c_bf16 = np.matmul(a_bf16.astype(np.float32), b_bf16.astype(np.float32))
+        c_bf16 = c_bf16.astype(_BFLOAT16_DTYPE)
+        if output_fp32:
+            return c_bf16.astype(np.float32)
+        return c_bf16
+    else:
+        # Emulate bfloat16 by truncating precision
+        a_bf16 = _emulate_bf16(a)
+        b_bf16 = _emulate_bf16(b)
+        c = np.matmul(a_bf16, b_bf16)
+        c_bf16 = _emulate_bf16(c)
+        return c_bf16
+
+
+def bf16_linear(
+    x: np.ndarray,
+    weight: np.ndarray,
+    bias: Optional[np.ndarray] = None,
+    output_fp32: bool = True,
+) -> np.ndarray:
+    """Perform BF16 linear layer (y = x @ weight.T + bias).
+
+    Args:
+        x: Input tensor, shape [..., in_features]
+        weight: Weight matrix, shape [out_features, in_features]
+        bias: Optional bias vector, shape [out_features]
+        output_fp32: If True, return float32; else return bfloat16
+
+    Returns:
+        Output tensor, shape [..., out_features]
+    """
+    if _ML_DTYPES_AVAILABLE:
+        x_bf16 = x.astype(_BFLOAT16_DTYPE)
+        w_bf16 = weight.astype(_BFLOAT16_DTYPE)
+        # Compute in float32 for accumulation, convert back to bf16
+        y = np.matmul(x_bf16.astype(np.float32), w_bf16.astype(np.float32).T)
+        if bias is not None:
+            bias_bf16 = bias.astype(_BFLOAT16_DTYPE)
+            y = y + bias_bf16.astype(np.float32)
+        y_bf16 = y.astype(_BFLOAT16_DTYPE)
+        if output_fp32:
+            return y_bf16.astype(np.float32)
+        return y_bf16
+    else:
+        # Emulate
+        x_bf16 = _emulate_bf16(x)
+        w_bf16 = _emulate_bf16(weight)
+        y = np.matmul(x_bf16, w_bf16.T)
+        if bias is not None:
+            bias_bf16 = _emulate_bf16(bias)
+            y = y + bias_bf16
+        return _emulate_bf16(y)
+
+
+def bf16_conv2d(
+    x: np.ndarray,
+    weight: np.ndarray,
+    bias: Optional[np.ndarray] = None,
+    stride: Tuple[int, int] = (1, 1),
+    padding: Tuple[int, int] = (0, 0),
+    output_fp32: bool = True,
+) -> np.ndarray:
+    """Perform BF16 2D convolution.
+
+    Args:
+        x: Input tensor, shape [N, C_in, H, W]
+        weight: Filter weights, shape [C_out, C_in, kH, kW]
+        bias: Optional bias, shape [C_out]
+        stride: Stride (sH, sW)
+        padding: Padding (pH, pW)
+        output_fp32: If True, return float32; else return bfloat16
+
+    Returns:
+        Output tensor, shape [N, C_out, H_out, W_out]
+    """
+    if _ML_DTYPES_AVAILABLE:
+        x_bf16 = x.astype(_BFLOAT16_DTYPE)
+        w_bf16 = weight.astype(_BFLOAT16_DTYPE)
+    else:
+        x_bf16 = _emulate_bf16(x)
+        w_bf16 = _emulate_bf16(weight)
+
+    N, C_in, H, W = x.shape
+    C_out, _, kH, kW = weight.shape
+    sH, sW = stride
+    pH, pW = padding
+
+    # Pad input (work in float32 for computation)
+    x_work = x_bf16.astype(np.float32) if _ML_DTYPES_AVAILABLE else x_bf16
+    w_work = w_bf16.astype(np.float32) if _ML_DTYPES_AVAILABLE else w_bf16
+
+    if pH > 0 or pW > 0:
+        x_work = np.pad(x_work, ((0, 0), (0, 0), (pH, pH), (pW, pW)),
+                        mode='constant', constant_values=0)
+
+    # Output dimensions
+    H_out = (H + 2 * pH - kH) // sH + 1
+    W_out = (W + 2 * pW - kW) // sW + 1
+
+    output = np.zeros((N, C_out, H_out, W_out), dtype=np.float32)
+
+    for n in range(N):
+        for c_out in range(C_out):
+            for h in range(H_out):
+                for w in range(W_out):
+                    h_start = h * sH
+                    w_start = w * sW
+                    patch = x_work[n, :, h_start:h_start+kH, w_start:w_start+kW]
+                    output[n, c_out, h, w] = np.sum(patch * w_work[c_out])
+
+    if bias is not None:
+        if _ML_DTYPES_AVAILABLE:
+            bias_work = bias.astype(_BFLOAT16_DTYPE).astype(np.float32)
+        else:
+            bias_work = _emulate_bf16(bias)
+        output = output + bias_work.reshape(1, -1, 1, 1)
+
+    # Convert to bf16
+    if _ML_DTYPES_AVAILABLE:
+        output_bf16 = output.astype(_BFLOAT16_DTYPE)
+        if output_fp32:
+            return output_bf16.astype(np.float32)
+        return output_bf16
+    else:
+        return _emulate_bf16(output)
+
+
+def cast_to_bf16(tensor: np.ndarray) -> np.ndarray:
+    """Cast a tensor to BF16.
+
+    Uses ml_dtypes.bfloat16 if available, otherwise returns emulated
+    bfloat16 as float32 with truncated precision.
+
+    Args:
+        tensor: Input tensor (any dtype)
+
+    Returns:
+        BF16 tensor (ml_dtypes.bfloat16 or emulated float32)
+    """
+    if _ML_DTYPES_AVAILABLE:
+        return tensor.astype(_BFLOAT16_DTYPE)
+    return _emulate_bf16(tensor.astype(np.float32))
+
+
+def cast_from_bf16(tensor: np.ndarray) -> np.ndarray:
+    """Cast a BF16 tensor back to FP32.
+
+    Args:
+        tensor: Input BF16 tensor
+
+    Returns:
+        FP32 tensor
+    """
+    return tensor.astype(np.float32)
+
+
+def bf16_range() -> Tuple[float, float]:
+    """Return the representable range of BF16.
+
+    BF16 has the same exponent range as FP32 (8 bits), so it can
+    represent approximately the same range of values.
+
+    Returns:
+        (min_value, max_value) tuple for BF16
+    """
+    # BF16 uses 8-bit exponent like FP32, so similar range
+    # Max: ~3.4e38, Min: ~-3.4e38 (same as FP32)
+    # But with reduced precision (7-bit mantissa)
+    return (-3.3895313892515355e+38, 3.3895313892515355e+38)
+
+
+def bf16_precision() -> float:
+    """Return the machine epsilon for BF16.
+
+    BF16 has 7 mantissa bits, giving roughly 2-3 decimal digits of precision.
+    Epsilon = 2^-7 ≈ 0.0078125
+
+    Returns:
+        Machine epsilon for bfloat16
+    """
+    # BF16: 1 sign + 8 exponent + 7 mantissa
+    # Epsilon = 2^(-7) = 0.0078125
+    return 0.0078125
+
+
 # --- Memory traffic calculation ---
 
 def calculate_memory_bytes(
