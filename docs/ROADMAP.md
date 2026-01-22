@@ -18,7 +18,7 @@ MAJOR.MINOR.PATCH
 
 ---
 
-## Current Status: v0.6.3 ✅
+## Current Status: v0.6.4 ✅
 
 Released: 2026-01-21
 
@@ -27,14 +27,16 @@ Released: 2026-01-21
 | Component | Version | Status |
 |-----------|---------|--------|
 | **C++ Simulator Core** | v0.1.0 | ✅ Phases 1-6 complete |
-| **Python kpu Package** | v0.6.3 | ✅ `@kpu.compile` decorator |
+| **Python kpu Package** | v0.6.4 | ✅ `@kpu.compile` decorator |
 | **torch.compile Backend** | v0.2.0 | ✅ `backend="kpu"` |
-| **BEHAVIORAL Runtime** | v0.6.3 | ✅ Full functional simulation |
+| **BEHAVIORAL Runtime** | v0.6.4 | ✅ Full functional simulation |
 | **CNN Operators** | v0.5.7 | ✅ conv2d, pooling, normalization |
+| **3D/Video Operators** | v0.6.4 | ✅ conv3d, pool3d, batchnorm3d |
 | **Transformer Operators** | v0.5.7 | ✅ attention, layernorm, softmax |
 | **Kernel Fusion** | v0.6.3 | ✅ MatMul+Bias+Act, Conv2D+BN+ReLU |
 | **MNIST Examples** | v0.2.0 | ✅ MLP and CNN verified |
 | **C++ Kernel Types** | v0.5.7 | ✅ All v0.5.x kernels complete |
+| **Model Compatibility** | v0.6.4 | ✅ 40/45 models (89%) |
 
 ---
 
@@ -249,8 +251,9 @@ src/compiler/
 | v0.6.1 | Fusion Detection & Roofline | ✅ Released |
 | v0.6.2 | Conv2D Fused Kernels | ✅ Released |
 | v0.6.3 | Compute Efficiency Validation | ✅ Released |
+| v0.6.4 | Conv3d & Video Model Support | ✅ Released |
 
-### Tag: `v0.6-fusion`
+### Tag: `v0.6.4`
 
 ---
 

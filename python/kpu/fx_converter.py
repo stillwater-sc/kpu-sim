@@ -207,14 +207,26 @@ class FXToKPUConverter:
         elif target in (F.conv2d, torch.conv2d):
             self._emit_conv2d(node)
 
+        elif target == F.conv3d:
+            self._emit_conv3d(node)
+
         elif target == F.max_pool2d:
             self._emit_max_pool2d(node)
+
+        elif target == F.max_pool3d:
+            self._emit_max_pool3d(node)
 
         elif target == F.avg_pool2d:
             self._emit_avg_pool2d(node)
 
+        elif target == F.avg_pool3d:
+            self._emit_avg_pool3d(node)
+
         elif target == F.adaptive_avg_pool2d:
             self._emit_adaptive_avg_pool2d(node)
+
+        elif target == F.adaptive_avg_pool3d:
+            self._emit_adaptive_avg_pool3d(node)
 
         elif target == F.batch_norm:
             self._emit_batch_norm(node)
@@ -288,10 +300,14 @@ class FXToKPUConverter:
 
         if isinstance(module, nn.Conv2d):
             self._emit_conv2d_module(node, module)
+        elif isinstance(module, nn.Conv3d):
+            self._emit_conv3d_module(node, module)
         elif isinstance(module, nn.Linear):
             self._emit_linear_module(node, module)
         elif isinstance(module, nn.BatchNorm2d):
             self._emit_batch_norm_module(node, module)
+        elif isinstance(module, nn.BatchNorm3d):
+            self._emit_batch_norm3d_module(node, module)
         elif isinstance(module, nn.LayerNorm):
             self._emit_layer_norm_module(node, module)
         elif isinstance(module, nn.ReLU):
@@ -308,10 +324,16 @@ class FXToKPUConverter:
             self._emit_softmax(node)
         elif isinstance(module, nn.MaxPool2d):
             self._emit_max_pool2d_module(node, module)
+        elif isinstance(module, nn.MaxPool3d):
+            self._emit_max_pool3d_module(node, module)
         elif isinstance(module, nn.AvgPool2d):
             self._emit_avg_pool2d_module(node, module)
+        elif isinstance(module, nn.AvgPool3d):
+            self._emit_avg_pool3d_module(node, module)
         elif isinstance(module, nn.AdaptiveAvgPool2d):
             self._emit_adaptive_avg_pool2d_module(node, module)
+        elif isinstance(module, nn.AdaptiveAvgPool3d):
+            self._emit_adaptive_avg_pool3d_module(node, module)
         elif isinstance(module, nn.Flatten):
             self._emit_flatten(node)
         elif isinstance(module, nn.Dropout):
@@ -517,6 +539,82 @@ class FXToKPUConverter:
         self.ops.append(('conv2d', op_fn, [input_name], node.name))
         self.env[node.name] = KPUValue(name=node.name)
 
+    def _emit_conv3d(self, node: 'fx.Node'):
+        """Emit 3D convolution (for video models)."""
+        kwargs = dict(node.kwargs)
+
+        def op_fn(tensors, params):
+            x = self._resolve_value(node.args[0], tensors, params)
+            weight = self._resolve_value(node.args[1], tensors, params)
+            bias = self._resolve_value(node.args[2], tensors, params) if len(node.args) > 2 and node.args[2] is not None else None
+
+            # Get stride, padding, dilation, groups from args or kwargs
+            if len(node.args) > 3:
+                stride = node.args[3]
+            else:
+                stride = kwargs.get('stride', (1, 1, 1))
+
+            if len(node.args) > 4:
+                padding = node.args[4]
+            else:
+                padding = kwargs.get('padding', (0, 0, 0))
+
+            if len(node.args) > 5:
+                dilation = node.args[5]
+            else:
+                dilation = kwargs.get('dilation', (1, 1, 1))
+
+            if len(node.args) > 6:
+                groups = node.args[6]
+            else:
+                groups = kwargs.get('groups', 1)
+
+            if isinstance(stride, int):
+                stride = (stride, stride, stride)
+            if isinstance(padding, int):
+                padding = (padding, padding, padding)
+            if isinstance(dilation, int):
+                dilation = (dilation, dilation, dilation)
+
+            return self._numpy_conv3d(x, weight, bias, stride, padding, dilation, groups)
+
+        self.ops.append(('conv3d', op_fn, [], node.name))
+        self.env[node.name] = KPUValue(name=node.name)
+
+    def _emit_conv3d_module(self, node: 'fx.Node', module: 'nn.Conv3d'):
+        """Emit conv3d from nn.Conv3d module."""
+        weight = module.weight.detach().cpu().numpy().astype(np.float32)
+        bias = module.bias.detach().cpu().numpy().astype(np.float32) if module.bias is not None else None
+
+        weight_name = f"{node.target}.weight"
+        bias_name = f"{node.target}.bias" if bias is not None else None
+        self.params[weight_name] = weight
+        if bias is not None:
+            self.params[bias_name] = bias
+
+        stride = module.stride
+        padding = module.padding
+        groups = module.groups
+        dilation = module.dilation
+
+        if isinstance(stride, int):
+            stride = (stride, stride, stride)
+        if isinstance(padding, int):
+            padding = (padding, padding, padding)
+        if isinstance(dilation, int):
+            dilation = (dilation, dilation, dilation)
+
+        input_name = self._get_arg_name(node.args[0])
+
+        def op_fn(tensors, params):
+            x = tensors[input_name]
+            w = params[weight_name]
+            b = params.get(bias_name) if bias_name else None
+            return self._numpy_conv3d(x, w, b, stride, padding, dilation, groups)
+
+        self.ops.append(('conv3d', op_fn, [input_name], node.name))
+        self.env[node.name] = KPUValue(name=node.name)
+
     def _emit_max_pool2d(self, node: 'fx.Node'):
         """Emit max pooling."""
         kwargs = dict(node.kwargs)
@@ -637,12 +735,136 @@ class FXToKPUConverter:
         self.ops.append(('adaptive_avg_pool2d', op_fn, [input_name], node.name))
         self.env[node.name] = KPUValue(name=node.name)
 
+    # --- 3D Pooling (Video Models) ---
+
+    def _emit_max_pool3d(self, node: 'fx.Node'):
+        """Emit 3D max pooling."""
+        kwargs = dict(node.kwargs)
+        kernel_size = node.args[1] if len(node.args) > 1 else kwargs.get('kernel_size', 2)
+        stride = node.args[2] if len(node.args) > 2 else kwargs.get('stride', kernel_size)
+        padding = node.args[3] if len(node.args) > 3 else kwargs.get('padding', 0)
+
+        if isinstance(kernel_size, int):
+            kernel_size = (kernel_size, kernel_size, kernel_size)
+        if isinstance(stride, int):
+            stride = (stride, stride, stride)
+        if isinstance(padding, int):
+            padding = (padding, padding, padding)
+
+        input_name = self._get_arg_name(node.args[0])
+
+        def op_fn(tensors, params):
+            x = tensors[input_name]
+            return self._numpy_max_pool3d(x, kernel_size, stride, padding)
+
+        self.ops.append(('max_pool3d', op_fn, [input_name], node.name))
+        self.env[node.name] = KPUValue(name=node.name)
+
+    def _emit_max_pool3d_module(self, node: 'fx.Node', module: 'nn.MaxPool3d'):
+        """Emit 3D max pooling from module."""
+        kernel_size = module.kernel_size
+        stride = module.stride if module.stride else kernel_size
+        padding = module.padding
+
+        if isinstance(kernel_size, int):
+            kernel_size = (kernel_size, kernel_size, kernel_size)
+        if isinstance(stride, int):
+            stride = (stride, stride, stride)
+        if isinstance(padding, int):
+            padding = (padding, padding, padding)
+
+        input_name = self._get_arg_name(node.args[0])
+
+        def op_fn(tensors, params):
+            x = tensors[input_name]
+            return self._numpy_max_pool3d(x, kernel_size, stride, padding)
+
+        self.ops.append(('max_pool3d', op_fn, [input_name], node.name))
+        self.env[node.name] = KPUValue(name=node.name)
+
+    def _emit_avg_pool3d(self, node: 'fx.Node'):
+        """Emit 3D average pooling."""
+        kwargs = dict(node.kwargs)
+        kernel_size = node.args[1] if len(node.args) > 1 else kwargs.get('kernel_size', 2)
+        stride = node.args[2] if len(node.args) > 2 else kwargs.get('stride', kernel_size)
+        padding = node.args[3] if len(node.args) > 3 else kwargs.get('padding', 0)
+
+        if isinstance(kernel_size, int):
+            kernel_size = (kernel_size, kernel_size, kernel_size)
+        if isinstance(stride, int):
+            stride = (stride, stride, stride)
+        if isinstance(padding, int):
+            padding = (padding, padding, padding)
+
+        input_name = self._get_arg_name(node.args[0])
+
+        def op_fn(tensors, params):
+            x = tensors[input_name]
+            return self._numpy_avg_pool3d(x, kernel_size, stride, padding)
+
+        self.ops.append(('avg_pool3d', op_fn, [input_name], node.name))
+        self.env[node.name] = KPUValue(name=node.name)
+
+    def _emit_avg_pool3d_module(self, node: 'fx.Node', module: 'nn.AvgPool3d'):
+        """Emit 3D average pooling from module."""
+        kernel_size = module.kernel_size
+        stride = module.stride if module.stride else kernel_size
+        padding = module.padding
+
+        if isinstance(kernel_size, int):
+            kernel_size = (kernel_size, kernel_size, kernel_size)
+        if isinstance(stride, int):
+            stride = (stride, stride, stride)
+        if isinstance(padding, int):
+            padding = (padding, padding, padding)
+
+        input_name = self._get_arg_name(node.args[0])
+
+        def op_fn(tensors, params):
+            x = tensors[input_name]
+            return self._numpy_avg_pool3d(x, kernel_size, stride, padding)
+
+        self.ops.append(('avg_pool3d', op_fn, [input_name], node.name))
+        self.env[node.name] = KPUValue(name=node.name)
+
+    def _emit_adaptive_avg_pool3d(self, node: 'fx.Node'):
+        """Emit 3D adaptive average pooling."""
+        output_size = node.args[1] if len(node.args) > 1 else node.kwargs.get('output_size', (1, 1, 1))
+        if isinstance(output_size, int):
+            output_size = (output_size, output_size, output_size)
+
+        input_name = self._get_arg_name(node.args[0])
+
+        def op_fn(tensors, params):
+            x = tensors[input_name]
+            return self._numpy_adaptive_avg_pool3d(x, output_size)
+
+        self.ops.append(('adaptive_avg_pool3d', op_fn, [input_name], node.name))
+        self.env[node.name] = KPUValue(name=node.name)
+
+    def _emit_adaptive_avg_pool3d_module(self, node: 'fx.Node', module: 'nn.AdaptiveAvgPool3d'):
+        """Emit 3D adaptive average pooling from module."""
+        output_size = module.output_size
+        if isinstance(output_size, int):
+            output_size = (output_size, output_size, output_size)
+
+        input_name = self._get_arg_name(node.args[0])
+
+        def op_fn(tensors, params):
+            x = tensors[input_name]
+            return self._numpy_adaptive_avg_pool3d(x, output_size)
+
+        self.ops.append(('adaptive_avg_pool3d', op_fn, [input_name], node.name))
+        self.env[node.name] = KPUValue(name=node.name)
+
     def _emit_batch_norm(self, node: 'fx.Node'):
         """Emit batch normalization (inference mode).
 
         F.batch_norm signature:
             batch_norm(input, running_mean, running_var, weight=None, bias=None,
                        training=False, momentum=0.1, eps=1e-05)
+
+        Supports both 4D (N,C,H,W) and 5D (N,C,D,H,W) tensors.
         """
         def op_fn(tensors, params):
             x = self._resolve_value(node.args[0], tensors, params)
@@ -653,20 +875,33 @@ class FXToKPUConverter:
             bias = self._resolve_value(node.args[4], tensors, params) if len(node.args) > 4 else None
             eps = node.kwargs.get('eps', 1e-5)
 
+            # Determine reshape based on input dimensions (4D vs 5D)
+            ndim = len(x.shape)
+            if ndim == 4:
+                reshape_dims = (1, -1, 1, 1)
+                spatial_axes = (0, 2, 3)
+            elif ndim == 5:
+                reshape_dims = (1, -1, 1, 1, 1)
+                spatial_axes = (0, 2, 3, 4)
+            else:
+                # Fallback for other dimensions
+                reshape_dims = (1, -1) + (1,) * (ndim - 2)
+                spatial_axes = tuple([0] + list(range(2, ndim)))
+
             if running_mean is not None and running_var is not None:
                 # Use running stats (inference mode)
-                mean = running_mean.reshape(1, -1, 1, 1)
-                var = running_var.reshape(1, -1, 1, 1)
+                mean = running_mean.reshape(reshape_dims)
+                var = running_var.reshape(reshape_dims)
             else:
                 # Compute batch stats (training mode fallback)
-                mean = np.mean(x, axis=(0, 2, 3), keepdims=True)
-                var = np.var(x, axis=(0, 2, 3), keepdims=True)
+                mean = np.mean(x, axis=spatial_axes, keepdims=True)
+                var = np.var(x, axis=spatial_axes, keepdims=True)
 
             y = (x - mean) / np.sqrt(var + eps)
             if weight is not None:
-                y = y * weight.reshape(1, -1, 1, 1)
+                y = y * weight.reshape(reshape_dims)
             if bias is not None:
-                y = y + bias.reshape(1, -1, 1, 1)
+                y = y + bias.reshape(reshape_dims)
             return y
 
         self.ops.append(('batch_norm', op_fn, [], node.name))
@@ -702,6 +937,39 @@ class FXToKPUConverter:
             return y
 
         self.ops.append(('batch_norm', op_fn, [input_name], node.name))
+        self.env[node.name] = KPUValue(name=node.name)
+
+    def _emit_batch_norm3d_module(self, node: 'fx.Node', module: 'nn.BatchNorm3d'):
+        """Emit 3D batch norm from module (video models)."""
+        weight = module.weight.detach().cpu().numpy().astype(np.float32) if module.weight is not None else None
+        bias = module.bias.detach().cpu().numpy().astype(np.float32) if module.bias is not None else None
+        running_mean = module.running_mean.detach().cpu().numpy().astype(np.float32)
+        running_var = module.running_var.detach().cpu().numpy().astype(np.float32)
+        eps = module.eps
+
+        prefix = node.target
+        if weight is not None:
+            self.params[f"{prefix}.weight"] = weight
+        if bias is not None:
+            self.params[f"{prefix}.bias"] = bias
+        self.params[f"{prefix}.running_mean"] = running_mean
+        self.params[f"{prefix}.running_var"] = running_var
+
+        input_name = self._get_arg_name(node.args[0])
+
+        def op_fn(tensors, params):
+            x = tensors[input_name]
+            # 5D tensor: (N, C, D, H, W)
+            mean = params[f"{prefix}.running_mean"].reshape(1, -1, 1, 1, 1)
+            var = params[f"{prefix}.running_var"].reshape(1, -1, 1, 1, 1)
+            y = (x - mean) / np.sqrt(var + eps)
+            if f"{prefix}.weight" in params:
+                y = y * params[f"{prefix}.weight"].reshape(1, -1, 1, 1, 1)
+            if f"{prefix}.bias" in params:
+                y = y + params[f"{prefix}.bias"].reshape(1, -1, 1, 1, 1)
+            return y
+
+        self.ops.append(('batch_norm3d', op_fn, [input_name], node.name))
         self.env[node.name] = KPUValue(name=node.name)
 
     def _emit_layer_norm(self, node: 'fx.Node'):
@@ -1291,6 +1559,227 @@ class FXToKPUConverter:
                 # Vectorize over N and C
                 window = x[:, :, h_start:h_end, w_start:w_end]
                 result[:, :, h_out, w_out] = np.mean(window, axis=(2, 3))
+        return result
+
+    # --- 3D Operations (Video Models) ---
+
+    def _numpy_conv3d(self, x: np.ndarray, weight: np.ndarray,
+                      bias: Optional[np.ndarray],
+                      stride: Tuple[int, int, int],
+                      padding: Tuple[int, int, int],
+                      dilation: Tuple[int, int, int] = (1, 1, 1),
+                      groups: int = 1) -> np.ndarray:
+        """NumPy implementation of 3D convolution using im2col.
+
+        Args:
+            x: Input tensor (N, C_in, D, H, W)
+            weight: Filter weights (C_out, C_in/groups, K_d, K_h, K_w)
+            bias: Optional bias (C_out,)
+            stride: Stride tuple (stride_d, stride_h, stride_w)
+            padding: Padding tuple (pad_d, pad_h, pad_w)
+            dilation: Dilation tuple (dil_d, dil_h, dil_w)
+            groups: Number of groups for grouped convolution
+        """
+        N, C_in, D_in, H_in, W_in = x.shape
+        C_out, C_in_per_group, K_d, K_h, K_w = weight.shape
+
+        # Validate groups parameter
+        assert C_in % groups == 0, f"C_in ({C_in}) must be divisible by groups ({groups})"
+        assert C_out % groups == 0, f"C_out ({C_out}) must be divisible by groups ({groups})"
+        C_in_per_group_expected = C_in // groups
+        C_out_per_group = C_out // groups
+
+        # Compute effective kernel size with dilation
+        K_d_eff = dilation[0] * (K_d - 1) + 1
+        K_h_eff = dilation[1] * (K_h - 1) + 1
+        K_w_eff = dilation[2] * (K_w - 1) + 1
+
+        # Output dimensions
+        D_out = (D_in + 2 * padding[0] - K_d_eff) // stride[0] + 1
+        H_out = (H_in + 2 * padding[1] - K_h_eff) // stride[1] + 1
+        W_out = (W_in + 2 * padding[2] - K_w_eff) // stride[2] + 1
+
+        # Pad input if needed
+        if padding[0] > 0 or padding[1] > 0 or padding[2] > 0:
+            x_padded = np.pad(x, ((0, 0), (0, 0),
+                                  (padding[0], padding[0]),
+                                  (padding[1], padding[1]),
+                                  (padding[2], padding[2])), mode='constant')
+        else:
+            x_padded = x
+
+        if groups == 1:
+            # Standard convolution
+            col = self._im2col_3d(x_padded, K_d, K_h, K_w, stride, dilation, D_out, H_out, W_out)
+            weight_col = weight.reshape(C_out, -1)
+            result = np.zeros((N, C_out, D_out * H_out * W_out), dtype=x.dtype)
+            for n in range(N):
+                result[n] = weight_col @ col[n]
+            result = result.reshape(N, C_out, D_out, H_out, W_out)
+        else:
+            # Grouped convolution
+            result = np.zeros((N, C_out, D_out, H_out, W_out), dtype=x.dtype)
+
+            for g in range(groups):
+                c_in_start = g * C_in_per_group_expected
+                c_in_end = c_in_start + C_in_per_group_expected
+                x_group = x_padded[:, c_in_start:c_in_end, :, :, :]
+
+                c_out_start = g * C_out_per_group
+                c_out_end = c_out_start + C_out_per_group
+                weight_group = weight[c_out_start:c_out_end]
+
+                col_group = self._im2col_3d(x_group, K_d, K_h, K_w, stride, dilation, D_out, H_out, W_out)
+                weight_col = weight_group.reshape(C_out_per_group, -1)
+
+                for n in range(N):
+                    result[n, c_out_start:c_out_end] = (weight_col @ col_group[n]).reshape(C_out_per_group, D_out, H_out, W_out)
+
+        if bias is not None:
+            result = result + bias.reshape(1, -1, 1, 1, 1)
+
+        return result
+
+    def _im2col_3d(self, x: np.ndarray, K_d: int, K_h: int, K_w: int,
+                   stride: Tuple[int, int, int], dilation: Tuple[int, int, int],
+                   D_out: int, H_out: int, W_out: int) -> np.ndarray:
+        """Extract 3D patches into columns for efficient 3D convolution.
+
+        Args:
+            x: Input tensor (N, C, D, H, W) - already padded
+            K_d, K_h, K_w: Kernel dimensions
+            stride: Stride tuple (stride_d, stride_h, stride_w)
+            dilation: Dilation tuple
+            D_out, H_out, W_out: Output spatial dimensions
+
+        Returns:
+            col: (N, C * K_d * K_h * K_w, D_out * H_out * W_out)
+        """
+        N, C, D, H, W = x.shape
+
+        if dilation == (1, 1, 1):
+            # Fast path: use stride tricks
+            shape = (N, C, K_d, K_h, K_w, D_out, H_out, W_out)
+            s = x.strides
+            strides = (s[0], s[1], s[2], s[3], s[4],
+                       s[2] * stride[0], s[3] * stride[1], s[4] * stride[2])
+            patches = np.lib.stride_tricks.as_strided(x, shape=shape, strides=strides)
+            col = patches.reshape(N, C * K_d * K_h * K_w, D_out * H_out * W_out)
+            return np.ascontiguousarray(col)
+        else:
+            # Dilated: slower but correct
+            col = np.zeros((N, C * K_d * K_h * K_w, D_out * H_out * W_out), dtype=x.dtype)
+
+            for od in range(D_out):
+                for oh in range(H_out):
+                    for ow in range(W_out):
+                        d_start = od * stride[0]
+                        h_start = oh * stride[1]
+                        w_start = ow * stride[2]
+                        out_idx = od * H_out * W_out + oh * W_out + ow
+
+                        col_idx = 0
+                        for c in range(C):
+                            for kd in range(K_d):
+                                for kh in range(K_h):
+                                    for kw in range(K_w):
+                                        d_pos = d_start + kd * dilation[0]
+                                        h_pos = h_start + kh * dilation[1]
+                                        w_pos = w_start + kw * dilation[2]
+                                        col[:, col_idx, out_idx] = x[:, c, d_pos, h_pos, w_pos]
+                                        col_idx += 1
+            return col
+
+    def _numpy_max_pool3d(self, x: np.ndarray,
+                          kernel_size: Tuple[int, int, int],
+                          stride: Tuple[int, int, int],
+                          padding: Tuple[int, int, int] = (0, 0, 0)) -> np.ndarray:
+        """NumPy implementation of 3D max pooling."""
+        N, C, D_in, H_in, W_in = x.shape
+        K_d, K_h, K_w = kernel_size
+
+        # Apply padding
+        if padding[0] > 0 or padding[1] > 0 or padding[2] > 0:
+            x = np.pad(x, ((0, 0), (0, 0),
+                          (padding[0], padding[0]),
+                          (padding[1], padding[1]),
+                          (padding[2], padding[2])),
+                       mode='constant', constant_values=-np.inf)
+            D_in = x.shape[2]
+            H_in = x.shape[3]
+            W_in = x.shape[4]
+
+        D_out = (D_in - K_d) // stride[0] + 1
+        H_out = (H_in - K_h) // stride[1] + 1
+        W_out = (W_in - K_w) // stride[2] + 1
+
+        # Use stride tricks
+        shape = (N, C, D_out, H_out, W_out, K_d, K_h, K_w)
+        s = x.strides
+        strides = (s[0], s[1], s[2] * stride[0], s[3] * stride[1], s[4] * stride[2], s[2], s[3], s[4])
+        windows = np.lib.stride_tricks.as_strided(x, shape=shape, strides=strides)
+        return np.max(windows, axis=(5, 6, 7))
+
+    def _numpy_avg_pool3d(self, x: np.ndarray,
+                          kernel_size: Tuple[int, int, int],
+                          stride: Tuple[int, int, int],
+                          padding: Tuple[int, int, int] = (0, 0, 0)) -> np.ndarray:
+        """NumPy implementation of 3D average pooling."""
+        N, C, D_in, H_in, W_in = x.shape
+        K_d, K_h, K_w = kernel_size
+
+        # Apply padding
+        if padding[0] > 0 or padding[1] > 0 or padding[2] > 0:
+            x = np.pad(x, ((0, 0), (0, 0),
+                          (padding[0], padding[0]),
+                          (padding[1], padding[1]),
+                          (padding[2], padding[2])),
+                       mode='constant', constant_values=0)
+            D_in = x.shape[2]
+            H_in = x.shape[3]
+            W_in = x.shape[4]
+
+        D_out = (D_in - K_d) // stride[0] + 1
+        H_out = (H_in - K_h) // stride[1] + 1
+        W_out = (W_in - K_w) // stride[2] + 1
+
+        shape = (N, C, D_out, H_out, W_out, K_d, K_h, K_w)
+        s = x.strides
+        strides = (s[0], s[1], s[2] * stride[0], s[3] * stride[1], s[4] * stride[2], s[2], s[3], s[4])
+        windows = np.lib.stride_tricks.as_strided(x, shape=shape, strides=strides)
+        return np.mean(windows, axis=(5, 6, 7))
+
+    def _numpy_adaptive_avg_pool3d(self, x: np.ndarray,
+                                    output_size: Tuple[int, int, int]) -> np.ndarray:
+        """NumPy implementation of 3D adaptive average pooling."""
+        N, C, D_in, H_in, W_in = x.shape
+        D_out, H_out, W_out = output_size
+
+        # Global average pooling (common case)
+        if D_out == 1 and H_out == 1 and W_out == 1:
+            return np.mean(x, axis=(2, 3, 4), keepdims=True)
+
+        # Uniform case
+        if D_in % D_out == 0 and H_in % H_out == 0 and W_in % W_out == 0:
+            K_d = D_in // D_out
+            K_h = H_in // H_out
+            K_w = W_in // W_out
+            x_reshaped = x.reshape(N, C, D_out, K_d, H_out, K_h, W_out, K_w)
+            return np.mean(x_reshaped, axis=(3, 5, 7))
+
+        # Non-uniform case
+        result = np.zeros((N, C, D_out, H_out, W_out), dtype=x.dtype)
+        for d_out in range(D_out):
+            for h_out in range(H_out):
+                for w_out in range(W_out):
+                    d_start = (d_out * D_in) // D_out
+                    d_end = ((d_out + 1) * D_in) // D_out
+                    h_start = (h_out * H_in) // H_out
+                    h_end = ((h_out + 1) * H_in) // H_out
+                    w_start = (w_out * W_in) // W_out
+                    w_end = ((w_out + 1) * W_in) // W_out
+                    window = x[:, :, d_start:d_end, h_start:h_end, w_start:w_end]
+                    result[:, :, d_out, h_out, w_out] = np.mean(window, axis=(2, 3, 4))
         return result
 
     # --- Helpers ---

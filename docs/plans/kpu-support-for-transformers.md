@@ -376,3 +376,44 @@ Only Remaining Gap
   │ Conv3d   │ Video models (R3D, MViT, etc.) │
   └──────────┴────────────────────────────────┘
 ```
+
+## Conv3d
+
+ Implementation Summary (v0.6.4)
+
+  New operators added to python/kpu/fx_converter.py:
+
+  1. 3D Convolution:
+    - _numpy_conv3d() - NumPy implementation with im2col for 5D tensors
+    - _im2col_3d() - 3D patch extraction with dilation support
+    - _emit_conv3d() and _emit_conv3d_module() - emit functions
+  2. 3D Pooling:
+    - _numpy_max_pool3d(), _numpy_avg_pool3d(), _numpy_adaptive_avg_pool3d()
+    - Corresponding emit functions and module handlers
+  3. 3D Batch Normalization:
+    - _emit_batch_norm3d_module() for nn.BatchNorm3d
+    - Fixed _emit_batch_norm() to dynamically handle 4D and 5D tensors
+
+Video models tested:
+
+```text
+  ┌──────────┬──────────┬────────┐
+  │  Model   │ Max Diff │ Status │
+  ├──────────┼──────────┼────────┤
+  │ R3D-18   │ 7.45e-08 │ PASSED │
+  ├──────────┼──────────┼────────┤
+  │ R2+1D-18 │ 8.94e-08 │ PASSED │
+  ├──────────┼──────────┼────────┤
+  │ MC3-18   │ 2.61e-07 │ PASSED │
+  └──────────┴──────────┴────────┘
+```
+
+Files modified:
+
+  - python/kpu/fx_converter.py - Added 3D operator implementations
+  - python/kpu/__init__.py - Version bump to 0.6.4
+  - python/pyproject.toml - Version bump to 0.6.4
+  - docs/model_compatibility.md - Added video models section, updated operator support
+
+The KPU model compatibility is now at 89% (40/45 models passed) with full support for both 2D and 3D vision architectures including classification, detection, segmentation, and video models.
+

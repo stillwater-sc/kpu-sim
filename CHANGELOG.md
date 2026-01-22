@@ -7,6 +7,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.4] - 2026-01-21
+
+### Added
+- **Conv3d Operator Support** (`python/kpu/fx_converter.py`)
+  - `_numpy_conv3d()` - NumPy implementation of 3D convolution using im2col
+  - `_im2col_3d()` - 3D patch extraction with dilation and grouped convolution support
+  - `_emit_conv3d()` and `_emit_conv3d_module()` - FX graph handlers for F.conv3d and nn.Conv3d
+
+- **3D Pooling Operators** (`python/kpu/fx_converter.py`)
+  - `_numpy_max_pool3d()` - 3D max pooling with stride tricks
+  - `_numpy_avg_pool3d()` - 3D average pooling
+  - `_numpy_adaptive_avg_pool3d()` - Adaptive 3D average pooling (global pooling optimized)
+  - Emit functions for nn.MaxPool3d, nn.AvgPool3d, nn.AdaptiveAvgPool3d
+
+- **BatchNorm3d Support** (`python/kpu/fx_converter.py`)
+  - `_emit_batch_norm3d_module()` - Handler for nn.BatchNorm3d with 5D tensor reshape
+
+- **Video Model Compatibility** (`docs/model_compatibility.md`)
+  - R3D-18: PASSED (diff=8.94e-08)
+  - R2+1D-18: PASSED (diff=1.19e-07)
+  - MC3-18: PASSED (diff=2.09e-07)
+
+### Changed
+- **F.batch_norm Handler** (`python/kpu/fx_converter.py`)
+  - Now dynamically detects input dimensionality (4D vs 5D)
+  - Correctly reshapes mean/var/weight/bias for both 2D and 3D batch normalization
+
+- **Model Compatibility Matrix** (`docs/model_compatibility.md`)
+  - Updated to 45 models tested (40 PASSED, 5 PARTIAL, 0 FAILED)
+  - Added Video Models section
+  - Updated operator support to include 3D operators
+  - Removed Conv3d from "Not Supported" list
+
+### Version
+- Bumped to v0.6.4 in `python/kpu/__init__.py` and `python/pyproject.toml`
+
 ## [0.6.0] - 2026-01-20
 
 ### Added

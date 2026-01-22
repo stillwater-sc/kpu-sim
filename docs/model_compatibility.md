@@ -1,18 +1,18 @@
 # KPU Model Compatibility Matrix
 
-Generated: 2025-01-21
-KPU Version: 0.6.3
+Generated: 2026-01-21
+KPU Version: 0.6.4
 PyTorch Version: 2.9.1
 
 ## Summary
 
 | Status | Count | Percentage |
 |--------|-------|------------|
-| ✅ PASSED | 37 | 88% |
-| ⚠️ PARTIAL | 3 | 7% |
-| ❌ FAILED | 2 | 5% |
+| ✅ PASSED | 40 | 89% |
+| ⚠️ PARTIAL | 5 | 11% |
+| ❌ FAILED | 0 | 0% |
 
-**Total Models Tested:** 42
+**Total Models Tested:** 45
 
 ---
 
@@ -102,16 +102,30 @@ PyTorch Version: 2.9.1
 
 ---
 
+## Video Models
+
+| Model | Status | Parameters | Max Diff | Notes |
+|-------|--------|------------|----------|-------|
+| R3D-18 | ✅ PASSED | 33.4M | 8.94e-08 | 3D ResNet |
+| R2+1D-18 | ✅ PASSED | 31.5M | 1.19e-07 | (2+1)D factorized convolution |
+| MC3-18 | ✅ PASSED | 11.7M | 2.09e-07 | Mixed 3D/2D convolutions |
+
+**Note:** Video models use 5D tensors (N, C, D, H, W) and 3D convolutions. All tested models pass with excellent numerical precision.
+
+---
+
 ## Operator Support Status
 
 ### Currently Supported ✅
 
 | Category | Operators |
 |----------|-----------|
-| Convolution | Conv2d (standard), Conv2d (depthwise), Conv2d (grouped), Conv2d (dilated/atrous) |
-| Normalization | BatchNorm2d, LayerNorm |
+| Convolution 2D | Conv2d (standard), Conv2d (depthwise), Conv2d (grouped), Conv2d (dilated/atrous) |
+| Convolution 3D | Conv3d (standard), Conv3d (grouped) |
+| Normalization | BatchNorm2d, BatchNorm3d, LayerNorm |
 | Activation | ReLU, ReLU6, GELU, SiLU, Sigmoid, Tanh, Softmax |
-| Pooling | MaxPool2d, AvgPool2d, AdaptiveAvgPool2d |
+| Pooling 2D | MaxPool2d, AvgPool2d, AdaptiveAvgPool2d |
+| Pooling 3D | MaxPool3d, AvgPool3d, AdaptiveAvgPool3d |
 | Linear | Linear, MatMul |
 | Shape | Reshape, Transpose, Flatten, Concat |
 | Arithmetic | Add, Mul, Sub, Div |
@@ -123,11 +137,9 @@ PyTorch Version: 2.9.1
 
 ### Not Supported ❌
 
-| Operator | Models Blocked | Priority |
-|----------|----------------|----------|
-| Conv3d | Video models | P4 |
+All major operators for 2D and 3D vision models are now supported.
 
-**Note**: All major 2D vision architectures are now supported including Swin (shifted windows) and MaxViT (grid/block attention).
+**Note**: All major vision architectures are now supported including Swin (shifted windows), MaxViT (grid/block attention), and video models (R3D, R2+1D, MC3).
 
 ---
 
@@ -175,3 +187,4 @@ PYTHONPATH=python python examples/torch/model_compatibility.py --category classi
 | 0.3 | 2025-01-21 | Fixed ShuffleNet: channel shuffle now works via fallback ops |
 | 0.4 | 2025-01-21 | Fixed Swin Transformer: dynamic indexing for relative position bias |
 | 0.5 | 2025-01-21 | Fixed MaxViT: avg_pool2d padding support |
+| 0.6 | 2026-01-21 | Added Conv3d, BatchNorm3d, 3D pooling for video models (R3D, R2+1D, MC3) |
