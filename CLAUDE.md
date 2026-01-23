@@ -455,6 +455,48 @@ After generating code, ask:
 
 4. "Does the behavioral tier still compute correct functional results?"
 
+## Session Governance and Accountability
+
+**MANDATORY: Every development session must produce a decision log.**
+
+### Required Actions
+
+1. **Create a session log** at the end of each session:
+   - Location: `docs/sessions/YYYY-MM-DD_vX.Y_feature_name.md`
+   - Use template: `docs/sessions/SESSION_LOG_TEMPLATE.md`
+
+2. **Document all decisions** made during the session:
+   - Technical choices and rationale
+   - Alternatives considered
+   - Files modified
+
+3. **Document all wrong decisions** (CRITICAL):
+   - If you skip failing tests: WRONG - document it
+   - If you work around a crash instead of fixing it: WRONG - document it
+   - If you declare completion with broken functionality: WRONG - document it
+
+4. **Never skip failing tests**:
+   - A crash is a bug to fix, not a reason to skip
+   - Debug root causes, don't mask symptoms
+   - All tests must pass before declaring completion
+
+### Accountability Rules
+
+| Situation | Wrong Response | Correct Response |
+|-----------|----------------|------------------|
+| Test crashes | Skip the test | Debug and fix the crash |
+| Test fails | Mark as "to be fixed later" | Fix it now |
+| Unclear requirement | Assume and proceed | Ask for clarification |
+| Multiple approaches | Pick randomly | Document trade-offs, recommend one |
+
+### Session Log Checklist
+
+Before ending a session, verify:
+- [ ] Decision log created in `docs/sessions/`
+- [ ] All wrong decisions documented with lessons learned
+- [ ] All tests passing
+- [ ] Commit message references the work done
+
 ## Remember
 
 **This is a multi-fidelity simulator, not just a timing model.**
