@@ -129,21 +129,25 @@ The XUE integration tests had incorrect key expectations that didn't match the a
 
 This indicates tests were written but never verified against the implementation.
 
-### Fusion Test Segfault
-`test_conv2d_bn_relu_detection` in `test_fusion.py` crashes with a segfault in the native module. This is likely batch_norm2d not being handled correctly in the C++ path.
+### Fusion Test Segfault (FIXED)
+`test_conv2d_bn_relu_detection` in `test_fusion.py` crashed with a segfault in the native module.
 
-**Status:** Known issue, needs future fix. Does not block XUE refactoring commit.
+**Root cause:** `execute_batchnorm_fp32` dereferenced `running_mean[c]` and `running_var[c]` without null checks. When `batch_norm2d(y)` was called without providing running statistics, these were nullptr.
+
+**Fix:** Compute batch statistics on-the-fly when running_mean/running_var are nullptr, matching PyTorch training mode behavior. Commit `e4a5847`.
+
+**Status:** FIXED. All 32 fusion tests now pass.
 
 ## Verification Results
 
-After fixes, verified passing tests:
+After all fixes, verified passing tests:
 - 10/10 transformer ops tests
 - 16/16 native execution tests
 - 18/18 XUE integration tests
-- **44 total tests passing**
+- 32/32 fusion tests
+- **76 total tests passing**
 
-Failing tests (known issues):
-- `test_fusion.py::TestConv2DFusionPatterns::test_conv2d_bn_relu_detection` - segfault
+All known issues resolved.
 
 ## Action Items
 
