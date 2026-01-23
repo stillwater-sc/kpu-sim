@@ -762,15 +762,44 @@ void BehavioralComputeFabric::execute_batchnorm_fp32(
     const uint32_t spatial = desc.spatial_size;
     const float eps = desc.eps;
 
-    // For inference (training=false), use running statistics
-    for (uint32_t n = 0; n < N; ++n) {
-        for (uint32_t c = 0; c < C; ++c) {
-            float mean = running_mean[c];
-            float var = running_var[c];
-            float inv_std = 1.0f / std::sqrt(var + eps);
-            float gamma = (weight != nullptr) ? weight[c] : 1.0f;
-            float beta = (bias != nullptr) ? bias[c] : 0.0f;
+    // Process each channel
+    for (uint32_t c = 0; c < C; ++c) {
+        float mean, var;
 
+        if (running_mean != nullptr && running_var != nullptr) {
+            // Use provided running statistics (inference mode)
+            mean = running_mean[c];
+            var = running_var[c];
+        } else {
+            // Compute batch statistics (training mode or missing stats)
+            mean = 0.0f;
+            uint64_t count = 0;
+            for (uint32_t n = 0; n < N; ++n) {
+                for (uint32_t s = 0; s < spatial; ++s) {
+                    uint64_t idx = (n * C + c) * spatial + s;
+                    mean += input[idx];
+                    count++;
+                }
+            }
+            mean /= static_cast<float>(count);
+
+            var = 0.0f;
+            for (uint32_t n = 0; n < N; ++n) {
+                for (uint32_t s = 0; s < spatial; ++s) {
+                    uint64_t idx = (n * C + c) * spatial + s;
+                    float diff = input[idx] - mean;
+                    var += diff * diff;
+                }
+            }
+            var /= static_cast<float>(count);
+        }
+
+        float inv_std = 1.0f / std::sqrt(var + eps);
+        float gamma = (weight != nullptr) ? weight[c] : 1.0f;
+        float beta = (bias != nullptr) ? bias[c] : 0.0f;
+
+        // Apply normalization
+        for (uint32_t n = 0; n < N; ++n) {
             for (uint32_t s = 0; s < spatial; ++s) {
                 uint64_t idx = (n * C + c) * spatial + s;
                 output[idx] = (input[idx] - mean) * inv_std * gamma + beta;
