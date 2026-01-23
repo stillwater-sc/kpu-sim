@@ -67,21 +67,36 @@ Current   Bench-    TRANS-     Add'l     Kernel    Quant-    Model     Prod
 
 | SEMVER | Feature | Description | Files |
 |--------|---------|-------------|-------|
-| v0.3.1 | Microbenchmarks | matmul sweep (64→16K), tile sensitivity | `tests/benchmarks/` |
-| v0.3.2 | Roofline Analysis | Peak vs achieved FLOPS/bandwidth | `tools/benchmark/` |
-| v0.3.3 | XUE Observation Architecture | Event occurrence hierarchy for Operational Analysis | `tools/xue/` |
-| v0.3.4 | Statistics Collection | Cycle breakdown, memory traffic, utilization | `include/sw/kpu/stats/` |
-| v0.3.5 | Performance Regression | CI fails if >5% regression | `.github/workflows/` |
+| v0.3.1 | Microbenchmarks | matmul sweep (64→8K), conv2d sweep, memory BW | `tests/benchmarks/` |
+| v0.3.2 | Roofline Tooling | Plot generation, benchmark runner | `tools/benchmark/` |
+| v0.3.3 | XUE Event Hierarchy | 45+ event types, C++ EventCollector | `include/sw/xue/` |
+| v0.3.4 | XUE pybind11 Bindings | Python API for XUE summary/analysis | `python/kpu/_native/` |
+| v0.3.5 | Analytical Validation | Tests with known solutions (16×16→128×128) | `tests/validation/` |
+| v0.3.6 | XUE Prediction Accuracy | Validate predictions within 10% of actual | `tests/validation/` |
+| v0.3.7 | Regression Baselines | 10+ baselines, CI fails on >5% regression | `.github/workflows/` |
+
+### Completed Versions
+
+| Version | Feature | Status |
+|---------|---------|--------|
+| v0.3.3 | XUE Event Hierarchy | ✅ Released (45+ event types) |
+| v0.3.4 | XUE pybind11 Bindings | ✅ Released (get_xue_summary, get_operational_analysis) |
 
 ### Success Criteria
 
-- [ ] Matmul benchmark 64×64 to 8192×8192
-- [ ] Achieved GFLOPS within 80% of peak for large problems
-- [ ] Memory bandwidth utilization >70% for BW-bound cases
-- [ ] Roofline plot generation
-- [ ] 10+ regression baselines
-- [ ] XUE Event Hierarchy
-- [ ] XUE Performance Engineering validation (simulation vs operational analysis within 10% accuracy)
+- [ ] Matmul benchmark 64×64 to 8192×8192 (v0.3.1)
+- [ ] Achieved GFLOPS within 80% of peak for large problems (v0.3.1)
+- [ ] Memory bandwidth utilization >70% for BW-bound cases (v0.3.1)
+- [ ] Roofline plot generation (v0.3.2)
+- [x] XUE Event Hierarchy (v0.3.3) ✅
+- [x] XUE Python API (v0.3.4) ✅
+- [ ] Analytical validation tests pass (v0.3.5)
+- [ ] XUE predictions within 10% accuracy (v0.3.6)
+- [ ] 10+ regression baselines (v0.3.7)
+
+### Gap Analysis
+
+See `docs/plans/v0.3-benchmarking-gap-analysis.md` for detailed implementation plan.
 
 ### Tag: `v0.3.0-benchmarks`
 
@@ -332,13 +347,13 @@ src/compiler/
 
 ### Features
 
-| Feature | Description | Files |
-|---------|-------------|-------|
-| Model Classes | Layer, Sequential, Model | `python/kpu/model.py` |
-| Model Loader | JSON and ONNX loading | `python/kpu/model_loader.py` |
-| Inference Pipeline | End-to-end execution with stats | `python/kpu/inference.py` |
-| Memory Planning | Optimal buffer allocation | `python/kpu/memory_planner.py` |
-| Reference Models | SqueezeNet, MobileNetV2, MNIST | `python/kpu/models/` |
+| SEMVER |Feature | Description | Files |
+|--------|--------|-------------|-------|
+| v0.8.0 | Model Classes | Layer, Sequential, Model | `python/kpu/model.py` |
+| v0.8.1 | Model Loader | JSON and ONNX loading | `python/kpu/model_loader.py` |
+| v0.8.2 | Inference Pipeline | End-to-end execution with stats | `python/kpu/inference.py` |
+| v0.8.3 | Memory Planning | Optimal buffer allocation | `python/kpu/memory_planner.py` |
+| v0.8.4 | Reference Models | SqueezeNet, MobileNetV2, MNIST | `python/kpu/models/` |
 
 ### Reference Models
 
