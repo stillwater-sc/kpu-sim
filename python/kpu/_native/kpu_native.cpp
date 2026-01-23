@@ -218,9 +218,12 @@ struct NativeExecutionStats {
  * This class provides the interface between the Python kpu package
  * and execution on the KPU hardware model.
  *
- * For BEHAVIORAL mode, it uses NumPy for actual computation.
- * For TRANSACTIONAL mode, it uses the C++ TransactionalComputeFabric
- * for accurate throughput-based timing simulation.
+ * Both BEHAVIORAL and TRANSACTIONAL modes use C++ compute fabrics:
+ * - BEHAVIORAL: Uses C++ BehavioralComputeFabric for functional computation
+ * - TRANSACTIONAL: Uses C++ TransactionalComputeFabric for computation + timing
+ *
+ * All computation is performed in C++ - no NumPy fallback for compute operations.
+ * NumPy is only used for array allocation and memory management.
  *
  * IMPORTANT: For TRANSACTIONAL mode, clock_frequency_ghz must be explicitly
  * set before execution. This prevents silent use of incorrect defaults.
@@ -337,7 +340,7 @@ public:
     ) {
         NativeExecutionStats stats;
 
-        // For behavioral mode, we use pure computation via NumPy
+        // For behavioral mode, use C++ BehavioralComputeFabric for computation
         if (mode == "behavioral" || fidelity_ == FIDELITY_BEHAVIORAL) {
             return execute_behavioral(dfx_json, inputs, stats);
         }
@@ -2856,7 +2859,7 @@ private:
             std::string output_name = op_output_names[0].cast<std::string>();
 
             if (opcode == "matmul") {
-                // Use transactional compute fabric for matmul timing
+                // Use transactional compute fabric for matmul computation and timing
                 std::string a_name = op_input_names[0].cast<std::string>();
                 std::string b_name = op_input_names[1].cast<std::string>();
 
@@ -2871,28 +2874,34 @@ private:
                 uint32_t K = static_cast<uint32_t>(a_buf.shape[a_buf.ndim - 1]);
                 uint32_t N = static_cast<uint32_t>(b_buf.shape[b_buf.ndim - 1]);
 
-                // Execute behavioral computation
-                py::array_t<float> C = np.attr("matmul")(A, B).cast<py::array_t<float>>();
-                tensors[output_name] = C;
+                // Allocate output array
+                std::vector<py::ssize_t> out_shape;
+                for (int i = 0; i < a_buf.ndim - 1; ++i) {
+                    out_shape.push_back(a_buf.shape[i]);
+                }
+                out_shape.push_back(b_buf.shape[b_buf.ndim - 1]);
 
-                // Allocate address for output tensor
+                py::array_t<float> C = np.attr("zeros")(out_shape, py::arg("dtype") = np.attr("float32")).cast<py::array_t<float>>();
                 py::buffer_info c_buf = C.request();
                 size_t c_bytes = static_cast<size_t>(c_buf.size) * sizeof(float);
-                tensor_addresses[output_name] = next_address;
-
-                // Submit to transactional compute fabric for timing
-                sw::kpu::MatMulDescriptor desc;
-                desc.m = M;
-                desc.n = N;
-                desc.k = K;
 
                 // Get data pointers
                 float* a_ptr = static_cast<float*>(a_buf.ptr);
                 float* b_ptr = static_cast<float*>(b_buf.ptr);
                 float* c_ptr = static_cast<float*>(c_buf.ptr);
 
-                // Submit matmul to transactional fabric
+                // Set up matmul descriptor
+                sw::kpu::MatMulDescriptor desc;
+                desc.m = M;
+                desc.n = N;
+                desc.k = K;
+
+                // Submit matmul to transactional fabric (computes AND times)
                 compute_fabric_->submit_matmul(desc, a_ptr, b_ptr, c_ptr, nullptr);
+
+                // Store result and allocate address
+                tensors[output_name] = C;
+                tensor_addresses[output_name] = next_address;
 
                 // Drain to complete the operation
                 compute_fabric_->drain();
@@ -2937,6 +2946,7 @@ private:
             } else if (opcode == "linear") {
                 // Linear: y = x @ W.T (+ b)
                 // Weight is [out_features, in_features], needs transpose
+                // Uses C++ TransactionalComputeFabric for computation and timing
                 std::string x_name = op_input_names[0].cast<std::string>();
                 std::string w_name = op_input_names[1].cast<std::string>();
 
@@ -2951,42 +2961,59 @@ private:
                 uint32_t K = static_cast<uint32_t>(x_buf.shape[x_buf.ndim - 1]);  // in_features
                 uint32_t N = static_cast<uint32_t>(w_buf.shape[w_buf.ndim - 2]);  // out_features
 
-                // Transpose weight: W.T has shape [in_features, out_features]
-                auto W_T = np.attr("transpose")(W).cast<py::array_t<float>>();
-
-                // Execute: y = x @ W.T
-                py::array_t<float> Y = np.attr("matmul")(X, W_T).cast<py::array_t<float>>();
-
-                // Add bias if present
-                if (op_input_names.size() > 2) {
-                    std::string b_name = op_input_names[2].cast<std::string>();
-                    if (tensors.count(b_name) > 0) {
-                        auto B = tensors[b_name];
-                        Y = np.attr("add")(Y, B).cast<py::array_t<float>>();
+                // Transpose weight in C++: W.T has shape [in_features, out_features]
+                std::vector<py::ssize_t> wt_shape = {static_cast<py::ssize_t>(K), static_cast<py::ssize_t>(N)};
+                py::array_t<float> W_T(wt_shape);
+                float* w_ptr = static_cast<float*>(w_buf.ptr);
+                float* wt_ptr = W_T.mutable_data();
+                for (uint32_t i = 0; i < N; ++i) {
+                    for (uint32_t j = 0; j < K; ++j) {
+                        wt_ptr[j * N + i] = w_ptr[i * K + j];
                     }
                 }
 
-                tensors[output_name] = Y;
+                // Allocate output array
+                std::vector<py::ssize_t> y_shape;
+                for (int i = 0; i < x_buf.ndim - 1; ++i) {
+                    y_shape.push_back(x_buf.shape[i]);
+                }
+                y_shape.push_back(N);
 
-                // Allocate address for output tensor
+                py::array_t<float> Y(y_shape);
                 py::buffer_info y_buf = Y.request();
                 size_t y_bytes = static_cast<size_t>(y_buf.size) * sizeof(float);
-                tensor_addresses[output_name] = next_address;
 
-                // Submit matmul to transactional compute fabric for timing
+                // Get data pointers
+                float* x_ptr = static_cast<float*>(x_buf.ptr);
+                float* y_ptr = static_cast<float*>(y_buf.ptr);
+
+                // Set up matmul descriptor and execute via transactional fabric
                 sw::kpu::MatMulDescriptor desc;
                 desc.m = M;
                 desc.n = N;
                 desc.k = K;
 
-                // Get data pointers
-                float* x_ptr = static_cast<float*>(x_buf.ptr);
-                py::buffer_info wt_buf = W_T.request();
-                float* wt_ptr = static_cast<float*>(wt_buf.ptr);
-                float* y_ptr = static_cast<float*>(y_buf.ptr);
-
                 compute_fabric_->submit_matmul(desc, x_ptr, wt_ptr, y_ptr, nullptr);
                 compute_fabric_->drain();
+
+                // Add bias in C++ if present
+                if (op_input_names.size() > 2) {
+                    std::string b_name = op_input_names[2].cast<std::string>();
+                    if (tensors.count(b_name) > 0) {
+                        auto B = tensors[b_name];
+                        py::buffer_info b_buf = B.request();
+                        const float* b_ptr = static_cast<const float*>(b_buf.ptr);
+                        // Add bias: y[i, j] += b[j]
+                        for (uint32_t i = 0; i < M; ++i) {
+                            for (uint32_t j = 0; j < N; ++j) {
+                                y_ptr[i * N + j] += b_ptr[j];
+                            }
+                        }
+                    }
+                }
+
+                tensors[output_name] = Y;
+                tensor_addresses[output_name] = next_address;
 
                 // Track writes through memory hierarchy
                 memory_traffic.record_write(sw::kpu::stats::MemoryLevel::L1, y_bytes);
