@@ -32,6 +32,11 @@
 // v0.4.1: DFX parser for C++ DFX program representation
 #include <sw/kpu/dfx/dfx_parser.hpp>
 
+// v0.5.0: XUE Observation Architecture (C++ backend for event collection)
+#include <sw/xue/event_collector.hpp>
+#include <sw/xue/event_counter.hpp>
+#include <sw/xue/operational_analysis.hpp>
+
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
 #endif
@@ -1273,6 +1278,1315 @@ private:
 
             tensors[output_name] = Y;
 
+        } else if (opcode == "fused_matmul_bias_relu" || opcode == "fused_matmul_relu") {
+            // Fused matmul + optional bias + relu
+            bool has_bias = (opcode == "fused_matmul_bias_relu");
+
+            std::string a_name = input_names[0].cast<std::string>();
+            std::string b_name = input_names[1].cast<std::string>();
+            auto A = tensors.at(a_name);
+            auto B = tensors.at(b_name);
+
+            py::array_t<float> bias;
+            if (has_bias && input_names.size() > 2) {
+                std::string bias_name = input_names[2].cast<std::string>();
+                bias = tensors.at(bias_name);
+            }
+
+            // Get shapes
+            auto a_info = A.request();
+            auto b_info = B.request();
+
+            uint32_t M = static_cast<uint32_t>(a_info.shape[0]);
+            uint32_t K = static_cast<uint32_t>(a_info.shape[1]);
+            uint32_t N = static_cast<uint32_t>(b_info.shape[1]);
+
+            // Allocate output and temp
+            py::array_t<float> temp({M, N});
+            py::array_t<float> Y({M, N});
+            auto temp_buf = temp.request();
+            auto y_buf = Y.request();
+
+            // Step 1: MatMul
+            sw::kpu::MatMulDescriptor matmul_desc;
+            matmul_desc.m = M;
+            matmul_desc.n = N;
+            matmul_desc.k = K;
+
+            behavioral_compute_fabric_->submit_matmul(
+                matmul_desc,
+                static_cast<const float*>(a_info.ptr),
+                static_cast<const float*>(b_info.ptr),
+                static_cast<float*>(temp_buf.ptr),
+                nullptr
+            );
+            behavioral_compute_fabric_->drain();
+
+            // Step 2: Add bias if present
+            float* activation_input = static_cast<float*>(temp_buf.ptr);
+            if (has_bias && input_names.size() > 2) {
+                auto bias_buf = bias.request();
+                sw::kpu::ElementwiseDescriptor add_desc;
+                add_desc.op = sw::kpu::ElementwiseOp::ADD;
+                add_desc.count = M * N;
+
+                // Broadcast add (temp + bias -> temp)
+                // For simplicity, do element-wise with broadcasting in-place
+                float* temp_ptr = static_cast<float*>(temp_buf.ptr);
+                const float* bias_ptr = static_cast<const float*>(bias_buf.ptr);
+                for (uint32_t i = 0; i < M; ++i) {
+                    for (uint32_t j = 0; j < N; ++j) {
+                        temp_ptr[i * N + j] += bias_ptr[j];
+                    }
+                }
+
+                // Record XUE event for bias add
+                sw::xue::xue().record_add(M * N, 0);
+            }
+
+            // Step 3: ReLU
+            sw::kpu::ElementwiseDescriptor relu_desc;
+            relu_desc.op = sw::kpu::ElementwiseOp::RELU;
+            relu_desc.count = M * N;
+
+            behavioral_compute_fabric_->submit_elementwise(
+                relu_desc,
+                activation_input,
+                nullptr,
+                static_cast<float*>(y_buf.ptr),
+                nullptr
+            );
+            behavioral_compute_fabric_->drain();
+
+            tensors[output_name] = Y;
+
+        } else if (opcode == "fused_matmul_bias_gelu") {
+            // Fused matmul + bias + gelu
+            std::string a_name = input_names[0].cast<std::string>();
+            std::string b_name = input_names[1].cast<std::string>();
+            auto A = tensors.at(a_name);
+            auto B = tensors.at(b_name);
+            py::array_t<float> bias;
+            if (input_names.size() > 2) {
+                std::string bias_name = input_names[2].cast<std::string>();
+                bias = tensors.at(bias_name);
+            }
+
+            auto a_info = A.request();
+            auto b_info = B.request();
+
+            uint32_t M = static_cast<uint32_t>(a_info.shape[0]);
+            uint32_t K = static_cast<uint32_t>(a_info.shape[1]);
+            uint32_t N = static_cast<uint32_t>(b_info.shape[1]);
+
+            py::array_t<float> temp({M, N});
+            py::array_t<float> Y({M, N});
+            auto temp_buf = temp.request();
+            auto y_buf = Y.request();
+
+            // MatMul
+            sw::kpu::MatMulDescriptor matmul_desc;
+            matmul_desc.m = M;
+            matmul_desc.n = N;
+            matmul_desc.k = K;
+
+            behavioral_compute_fabric_->submit_matmul(
+                matmul_desc,
+                static_cast<const float*>(a_info.ptr),
+                static_cast<const float*>(b_info.ptr),
+                static_cast<float*>(temp_buf.ptr),
+                nullptr
+            );
+            behavioral_compute_fabric_->drain();
+
+            // Add bias if present
+            if (input_names.size() > 2) {
+                auto bias_buf = bias.request();
+                float* temp_ptr = static_cast<float*>(temp_buf.ptr);
+                const float* bias_ptr = static_cast<const float*>(bias_buf.ptr);
+                for (uint32_t i = 0; i < M; ++i) {
+                    for (uint32_t j = 0; j < N; ++j) {
+                        temp_ptr[i * N + j] += bias_ptr[j];
+                    }
+                }
+                sw::xue::xue().record_add(M * N, 0);
+            }
+
+            // GELU
+            sw::kpu::ElementwiseDescriptor gelu_desc;
+            gelu_desc.op = sw::kpu::ElementwiseOp::GELU;
+            gelu_desc.count = M * N;
+
+            behavioral_compute_fabric_->submit_elementwise(
+                gelu_desc,
+                static_cast<float*>(temp_buf.ptr),
+                nullptr,
+                static_cast<float*>(y_buf.ptr),
+                nullptr
+            );
+            behavioral_compute_fabric_->drain();
+
+            tensors[output_name] = Y;
+
+        } else if (opcode == "fused_matmul_bias_silu") {
+            // Fused matmul + bias + silu
+            std::string a_name = input_names[0].cast<std::string>();
+            std::string b_name = input_names[1].cast<std::string>();
+            auto A = tensors.at(a_name);
+            auto B = tensors.at(b_name);
+            py::array_t<float> bias;
+            if (input_names.size() > 2) {
+                std::string bias_name = input_names[2].cast<std::string>();
+                bias = tensors.at(bias_name);
+            }
+
+            auto a_info = A.request();
+            auto b_info = B.request();
+
+            uint32_t M = static_cast<uint32_t>(a_info.shape[0]);
+            uint32_t K = static_cast<uint32_t>(a_info.shape[1]);
+            uint32_t N = static_cast<uint32_t>(b_info.shape[1]);
+
+            py::array_t<float> temp({M, N});
+            py::array_t<float> Y({M, N});
+            auto temp_buf = temp.request();
+            auto y_buf = Y.request();
+
+            // MatMul
+            sw::kpu::MatMulDescriptor matmul_desc;
+            matmul_desc.m = M;
+            matmul_desc.n = N;
+            matmul_desc.k = K;
+
+            behavioral_compute_fabric_->submit_matmul(
+                matmul_desc,
+                static_cast<const float*>(a_info.ptr),
+                static_cast<const float*>(b_info.ptr),
+                static_cast<float*>(temp_buf.ptr),
+                nullptr
+            );
+            behavioral_compute_fabric_->drain();
+
+            // Add bias if present
+            if (input_names.size() > 2) {
+                auto bias_buf = bias.request();
+                float* temp_ptr = static_cast<float*>(temp_buf.ptr);
+                const float* bias_ptr = static_cast<const float*>(bias_buf.ptr);
+                for (uint32_t i = 0; i < M; ++i) {
+                    for (uint32_t j = 0; j < N; ++j) {
+                        temp_ptr[i * N + j] += bias_ptr[j];
+                    }
+                }
+                sw::xue::xue().record_add(M * N, 0);
+            }
+
+            // SILU
+            sw::kpu::ElementwiseDescriptor silu_desc;
+            silu_desc.op = sw::kpu::ElementwiseOp::SILU;
+            silu_desc.count = M * N;
+
+            behavioral_compute_fabric_->submit_elementwise(
+                silu_desc,
+                static_cast<float*>(temp_buf.ptr),
+                nullptr,
+                static_cast<float*>(y_buf.ptr),
+                nullptr
+            );
+            behavioral_compute_fabric_->drain();
+
+            tensors[output_name] = Y;
+
+        // =====================================================================
+        // Shape Operations (v0.3+ benchmarks)
+        // These are data reorganization ops - no compute, just memory movement
+        // =====================================================================
+        } else if (opcode == "reshape") {
+            // Reshape: change tensor shape without copying data
+            py::dict attrs = op.contains("attrs") ? op["attrs"].cast<py::dict>() : py::dict();
+            std::string x_name = input_names[0].cast<std::string>();
+            auto X = tensors.at(x_name);
+            py::buffer_info x_buf = X.request();
+
+            // Get target shape from attrs
+            auto shape_list = attrs["shape"].cast<py::list>();
+            std::vector<py::ssize_t> new_shape;
+            py::ssize_t total_size = 1;
+            py::ssize_t neg_one_idx = -1;
+
+            for (size_t i = 0; i < py::len(shape_list); ++i) {
+                py::ssize_t dim = shape_list[i].cast<py::ssize_t>();
+                new_shape.push_back(dim);
+                if (dim == -1) {
+                    neg_one_idx = static_cast<py::ssize_t>(i);
+                } else {
+                    total_size *= dim;
+                }
+            }
+
+            // Handle -1 dimension
+            if (neg_one_idx >= 0 && total_size > 0) {
+                new_shape[static_cast<size_t>(neg_one_idx)] = x_buf.size / total_size;
+            }
+
+            // Create reshaped view (no data copy for contiguous tensors)
+            py::array_t<float> Y(new_shape);
+            std::memcpy(Y.mutable_data(), X.data(), static_cast<size_t>(x_buf.size) * sizeof(float));
+
+            // Record XUE data movement event (reshape is memory reorganization)
+            sw::xue::xue().record_dma_transfer(
+                static_cast<uint64_t>(x_buf.size) * sizeof(float),
+                0  // No cycles for behavioral
+            );
+
+            tensors[output_name] = Y;
+            stats.ops_executed++;
+
+        } else if (opcode == "transpose") {
+            // Transpose: permute tensor dimensions
+            py::dict attrs = op.contains("attrs") ? op["attrs"].cast<py::dict>() : py::dict();
+            std::string x_name = input_names[0].cast<std::string>();
+            auto X = tensors.at(x_name);
+            py::buffer_info x_buf = X.request();
+
+            // Get axes from attrs
+            auto axes_list = attrs["axes"].cast<py::list>();
+            std::vector<size_t> axes;
+            for (size_t i = 0; i < py::len(axes_list); ++i) {
+                axes.push_back(axes_list[i].cast<size_t>());
+            }
+
+            // Build new shape and strides
+            std::vector<py::ssize_t> new_shape(x_buf.ndim);
+            for (size_t i = 0; i < axes.size(); ++i) {
+                new_shape[i] = x_buf.shape[axes[i]];
+            }
+
+            // Allocate output and perform transpose
+            py::array_t<float> Y(new_shape);
+            float* y_ptr = Y.mutable_data();
+            const float* x_ptr = static_cast<const float*>(x_buf.ptr);
+
+            // Compute strides for input
+            std::vector<py::ssize_t> x_strides(x_buf.ndim);
+            py::ssize_t stride = 1;
+            for (int i = x_buf.ndim - 1; i >= 0; --i) {
+                x_strides[i] = stride;
+                stride *= x_buf.shape[i];
+            }
+
+            // Compute strides for output
+            std::vector<py::ssize_t> y_strides(x_buf.ndim);
+            stride = 1;
+            for (int i = x_buf.ndim - 1; i >= 0; --i) {
+                y_strides[i] = stride;
+                stride *= new_shape[i];
+            }
+
+            // Transpose via index computation
+            std::vector<py::ssize_t> coords(x_buf.ndim, 0);
+            for (py::ssize_t i = 0; i < x_buf.size; ++i) {
+                // Compute output index
+                py::ssize_t y_idx = 0;
+                for (int d = 0; d < x_buf.ndim; ++d) {
+                    y_idx += coords[axes[d]] * y_strides[d];
+                }
+
+                // Compute input index
+                py::ssize_t x_idx = 0;
+                for (int d = 0; d < x_buf.ndim; ++d) {
+                    x_idx += coords[d] * x_strides[d];
+                }
+
+                y_ptr[y_idx] = x_ptr[x_idx];
+
+                // Increment coordinates
+                for (int d = x_buf.ndim - 1; d >= 0; --d) {
+                    coords[d]++;
+                    if (coords[d] < x_buf.shape[d]) break;
+                    coords[d] = 0;
+                }
+            }
+
+            // Record XUE data movement event
+            sw::xue::xue().record_dma_transfer(
+                static_cast<uint64_t>(x_buf.size) * sizeof(float),
+                0
+            );
+
+            tensors[output_name] = Y;
+            stats.ops_executed++;
+
+        } else if (opcode == "flatten") {
+            // Flatten: collapse dimensions into a single dimension
+            py::dict attrs = op.contains("attrs") ? op["attrs"].cast<py::dict>() : py::dict();
+            std::string x_name = input_names[0].cast<std::string>();
+            auto X = tensors.at(x_name);
+            py::buffer_info x_buf = X.request();
+
+            int start_dim = attrs.contains("start_dim") ?
+                attrs["start_dim"].cast<int>() : 0;
+            int end_dim = attrs.contains("end_dim") ?
+                attrs["end_dim"].cast<int>() : -1;
+
+            // Normalize negative indices
+            int ndim = x_buf.ndim;
+            if (start_dim < 0) start_dim = ndim + start_dim;
+            if (end_dim < 0) end_dim = ndim + end_dim;
+
+            // Build new shape
+            std::vector<py::ssize_t> new_shape;
+            for (int d = 0; d < start_dim; ++d) {
+                new_shape.push_back(x_buf.shape[d]);
+            }
+            py::ssize_t flat_size = 1;
+            for (int d = start_dim; d <= end_dim; ++d) {
+                flat_size *= x_buf.shape[d];
+            }
+            new_shape.push_back(flat_size);
+            for (int d = end_dim + 1; d < ndim; ++d) {
+                new_shape.push_back(x_buf.shape[d]);
+            }
+
+            // Reshape (no data copy for contiguous tensors)
+            py::array_t<float> Y(new_shape);
+            std::memcpy(Y.mutable_data(), X.data(), static_cast<size_t>(x_buf.size) * sizeof(float));
+
+            // Record XUE data movement event
+            sw::xue::xue().record_dma_transfer(
+                static_cast<uint64_t>(x_buf.size) * sizeof(float),
+                0
+            );
+
+            tensors[output_name] = Y;
+            stats.ops_executed++;
+
+        } else if (opcode == "concat") {
+            // Concatenate: join tensors along a dimension
+            py::dict attrs = op.contains("attrs") ? op["attrs"].cast<py::dict>() : py::dict();
+            int dim = attrs.contains("dim") ? attrs["dim"].cast<int>() : 0;
+
+            // Gather all input tensors
+            std::vector<py::array_t<float>> input_arrays;
+            size_t total_bytes = 0;
+            for (size_t i = 0; i < py::len(input_names); ++i) {
+                std::string name = input_names[i].cast<std::string>();
+                input_arrays.push_back(tensors.at(name));
+                py::buffer_info buf = input_arrays.back().request();
+                total_bytes += static_cast<size_t>(buf.size) * sizeof(float);
+            }
+
+            if (input_arrays.empty()) {
+                throw std::runtime_error("concat requires at least one input");
+            }
+
+            // Get shape info from first input
+            py::buffer_info first_buf = input_arrays[0].request();
+            int ndim = first_buf.ndim;
+            if (dim < 0) dim = ndim + dim;
+
+            // Compute output shape - copy from first input's shape
+            std::vector<py::ssize_t> out_shape(first_buf.shape.begin(), first_buf.shape.end());
+            out_shape[dim] = 0;
+            for (const auto& arr : input_arrays) {
+                py::buffer_info buf = arr.request();
+                out_shape[dim] += buf.shape[dim];
+            }
+
+            // Allocate output
+            py::array_t<float> Y(out_shape);
+            float* y_ptr = Y.mutable_data();
+
+            // Compute strides
+            std::vector<py::ssize_t> strides(ndim);
+            py::ssize_t stride = 1;
+            for (int d = ndim - 1; d >= 0; --d) {
+                strides[d] = stride;
+                stride *= out_shape[d];
+            }
+
+            // Copy each input tensor to output
+            py::ssize_t offset = 0;
+            for (const auto& arr : input_arrays) {
+                py::buffer_info buf = arr.request();
+                const float* src = static_cast<const float*>(buf.ptr);
+
+                // For simple cases (dim=0 or contiguous), use memcpy
+                if (dim == 0) {
+                    std::memcpy(y_ptr + offset, src, static_cast<size_t>(buf.size) * sizeof(float));
+                    offset += buf.size;
+                } else {
+                    // General case: copy slice by slice along concat dim
+                    // Compute number of slices before concat dim
+                    py::ssize_t outer_size = 1;
+                    for (int d = 0; d < dim; ++d) {
+                        outer_size *= buf.shape[d];
+                    }
+                    py::ssize_t inner_size = buf.size / outer_size;
+                    py::ssize_t out_inner_size = Y.size() / outer_size;
+                    py::ssize_t this_dim_size = buf.shape[dim];
+                    py::ssize_t after_dim_size = inner_size / this_dim_size;
+
+                    py::ssize_t out_offset = offset * after_dim_size;
+                    for (py::ssize_t o = 0; o < outer_size; ++o) {
+                        std::memcpy(
+                            y_ptr + o * out_inner_size + out_offset,
+                            src + o * inner_size,
+                            static_cast<size_t>(inner_size) * sizeof(float)
+                        );
+                    }
+                    offset += this_dim_size;
+                }
+            }
+
+            // Record XUE data movement event
+            sw::xue::xue().record_dma_transfer(
+                static_cast<uint64_t>(total_bytes),
+                0
+            );
+
+            tensors[output_name] = Y;
+            stats.ops_executed++;
+
+        // =====================================================================
+        // Reduction Operations (v0.3+ benchmarks)
+        // =====================================================================
+        } else if (opcode == "sum" || opcode == "mean" || opcode == "max" || opcode == "min") {
+            py::dict attrs = op.contains("attrs") ? op["attrs"].cast<py::dict>() : py::dict();
+            std::string x_name = input_names[0].cast<std::string>();
+            auto X = tensors.at(x_name);
+            py::buffer_info x_buf = X.request();
+            const float* x_ptr = static_cast<const float*>(x_buf.ptr);
+
+            // Get reduction parameters
+            bool keepdims = attrs.contains("keepdims") ?
+                attrs["keepdims"].cast<bool>() : false;
+
+            // Handle axis parameter (can be None, int, or tuple)
+            std::vector<int> axes;
+            bool reduce_all = false;
+
+            if (!attrs.contains("axis") || attrs["axis"].is_none()) {
+                reduce_all = true;
+            } else {
+                try {
+                    // Try single int
+                    int axis = attrs["axis"].cast<int>();
+                    if (axis < 0) axis = x_buf.ndim + axis;
+                    axes.push_back(axis);
+                } catch (...) {
+                    // Try tuple/list
+                    auto axis_list = attrs["axis"].cast<py::list>();
+                    for (size_t i = 0; i < py::len(axis_list); ++i) {
+                        int axis = axis_list[i].cast<int>();
+                        if (axis < 0) axis = x_buf.ndim + axis;
+                        axes.push_back(axis);
+                    }
+                }
+            }
+
+            py::array_t<float> Y;
+
+            if (reduce_all) {
+                // Reduce all elements to a single value
+                float result = x_ptr[0];
+                if (opcode == "sum") {
+                    result = 0.0f;
+                    for (py::ssize_t i = 0; i < x_buf.size; ++i) {
+                        result += x_ptr[i];
+                    }
+                } else if (opcode == "mean") {
+                    result = 0.0f;
+                    for (py::ssize_t i = 0; i < x_buf.size; ++i) {
+                        result += x_ptr[i];
+                    }
+                    result /= static_cast<float>(x_buf.size);
+                } else if (opcode == "max") {
+                    for (py::ssize_t i = 1; i < x_buf.size; ++i) {
+                        if (x_ptr[i] > result) result = x_ptr[i];
+                    }
+                } else if (opcode == "min") {
+                    for (py::ssize_t i = 1; i < x_buf.size; ++i) {
+                        if (x_ptr[i] < result) result = x_ptr[i];
+                    }
+                }
+
+                if (keepdims) {
+                    std::vector<py::ssize_t> out_shape(x_buf.ndim, 1);
+                    Y = py::array_t<float>(out_shape);
+                } else {
+                    Y = py::array_t<float>({static_cast<py::ssize_t>(1)});
+                }
+                Y.mutable_data()[0] = result;
+
+            } else {
+                // Reduce along specific axes
+                // Build output shape
+                std::vector<py::ssize_t> out_shape;
+                for (int d = 0; d < x_buf.ndim; ++d) {
+                    bool is_reduced = std::find(axes.begin(), axes.end(), d) != axes.end();
+                    if (is_reduced) {
+                        if (keepdims) out_shape.push_back(1);
+                    } else {
+                        out_shape.push_back(x_buf.shape[d]);
+                    }
+                }
+                if (out_shape.empty()) out_shape.push_back(1);
+
+                Y = py::array_t<float>(out_shape);
+                float* y_ptr = Y.mutable_data();
+                py::ssize_t out_size = Y.size();
+
+                // Initialize output
+                if (opcode == "sum" || opcode == "mean") {
+                    std::fill(y_ptr, y_ptr + out_size, 0.0f);
+                } else if (opcode == "max") {
+                    std::fill(y_ptr, y_ptr + out_size, -std::numeric_limits<float>::infinity());
+                } else if (opcode == "min") {
+                    std::fill(y_ptr, y_ptr + out_size, std::numeric_limits<float>::infinity());
+                }
+
+                // Compute input/output strides
+                std::vector<py::ssize_t> x_strides(x_buf.ndim);
+                py::ssize_t stride = 1;
+                for (int d = x_buf.ndim - 1; d >= 0; --d) {
+                    x_strides[d] = stride;
+                    stride *= x_buf.shape[d];
+                }
+
+                std::vector<py::ssize_t> y_strides(out_shape.size());
+                stride = 1;
+                for (int d = static_cast<int>(out_shape.size()) - 1; d >= 0; --d) {
+                    y_strides[d] = stride;
+                    stride *= out_shape[d];
+                }
+
+                // Count elements per output for mean
+                py::ssize_t reduce_count = 1;
+                for (int axis : axes) {
+                    reduce_count *= x_buf.shape[axis];
+                }
+
+                // Iterate over input and accumulate
+                std::vector<py::ssize_t> coords(x_buf.ndim, 0);
+                for (py::ssize_t i = 0; i < x_buf.size; ++i) {
+                    // Compute input index
+                    py::ssize_t x_idx = 0;
+                    for (int d = 0; d < x_buf.ndim; ++d) {
+                        x_idx += coords[d] * x_strides[d];
+                    }
+
+                    // Compute output index (skip reduced dims if not keepdims)
+                    py::ssize_t y_idx = 0;
+                    int out_d = 0;
+                    for (int d = 0; d < x_buf.ndim; ++d) {
+                        bool is_reduced = std::find(axes.begin(), axes.end(), d) != axes.end();
+                        if (!is_reduced || keepdims) {
+                            py::ssize_t coord = is_reduced ? 0 : coords[d];
+                            y_idx += coord * y_strides[out_d];
+                            out_d++;
+                        }
+                    }
+
+                    // Accumulate
+                    float val = x_ptr[x_idx];
+                    if (opcode == "sum" || opcode == "mean") {
+                        y_ptr[y_idx] += val;
+                    } else if (opcode == "max") {
+                        if (val > y_ptr[y_idx]) y_ptr[y_idx] = val;
+                    } else if (opcode == "min") {
+                        if (val < y_ptr[y_idx]) y_ptr[y_idx] = val;
+                    }
+
+                    // Increment coordinates
+                    for (int d = x_buf.ndim - 1; d >= 0; --d) {
+                        coords[d]++;
+                        if (coords[d] < x_buf.shape[d]) break;
+                        coords[d] = 0;
+                    }
+                }
+
+                // Finalize mean
+                if (opcode == "mean") {
+                    for (py::ssize_t i = 0; i < out_size; ++i) {
+                        y_ptr[i] /= static_cast<float>(reduce_count);
+                    }
+                }
+            }
+
+            // Record XUE reduction event
+            sw::xue::xue().record_elementwise(
+                sw::xue::EventType::REDUCE_SUM,  // Use generic reduction type
+                static_cast<uint64_t>(x_buf.size),
+                0
+            );
+
+            tensors[output_name] = Y;
+            stats.ops_executed++;
+
+        // =====================================================================
+        // Fused Convolution Operations (v0.3+ benchmarks)
+        // =====================================================================
+        } else if (opcode == "fused_conv2d_relu") {
+            // Fused: Y = relu(conv2d(X, W) + bias)
+            py::dict attrs = op.contains("attrs") ? op["attrs"].cast<py::dict>() : py::dict();
+
+            std::string x_name = input_names[0].cast<std::string>();
+            std::string w_name = input_names[1].cast<std::string>();
+
+            auto X = tensors.at(x_name);
+            auto W = tensors.at(w_name);
+
+            py::buffer_info x_buf = X.request();
+            py::buffer_info w_buf = W.request();
+
+            // Extract dimensions
+            uint32_t batch_size = static_cast<uint32_t>(x_buf.shape[0]);
+            uint32_t in_channels = static_cast<uint32_t>(x_buf.shape[1]);
+            uint32_t input_h = static_cast<uint32_t>(x_buf.shape[2]);
+            uint32_t input_w = static_cast<uint32_t>(x_buf.shape[3]);
+
+            uint32_t out_channels = static_cast<uint32_t>(w_buf.shape[0]);
+            uint32_t kernel_h = static_cast<uint32_t>(w_buf.shape[2]);
+            uint32_t kernel_w = static_cast<uint32_t>(w_buf.shape[3]);
+
+            // Get parameters from attrs
+            uint32_t stride_h = 1, stride_w = 1;
+            uint32_t pad_h = 0, pad_w = 0;
+            uint32_t dilation_h = 1, dilation_w = 1;
+            uint32_t groups = 1;
+
+            if (attrs.contains("stride")) {
+                auto stride = attrs["stride"];
+                if (py::isinstance<py::tuple>(stride)) {
+                    auto s = stride.cast<py::tuple>();
+                    stride_h = s[0].cast<uint32_t>();
+                    stride_w = s[1].cast<uint32_t>();
+                } else {
+                    stride_h = stride_w = stride.cast<uint32_t>();
+                }
+            }
+            if (attrs.contains("padding")) {
+                auto padding = attrs["padding"];
+                if (py::isinstance<py::tuple>(padding)) {
+                    auto p = padding.cast<py::tuple>();
+                    pad_h = p[0].cast<uint32_t>();
+                    pad_w = p[1].cast<uint32_t>();
+                } else {
+                    pad_h = pad_w = padding.cast<uint32_t>();
+                }
+            }
+            if (attrs.contains("dilation")) {
+                auto dilation = attrs["dilation"];
+                if (py::isinstance<py::tuple>(dilation)) {
+                    auto d = dilation.cast<py::tuple>();
+                    dilation_h = d[0].cast<uint32_t>();
+                    dilation_w = d[1].cast<uint32_t>();
+                } else {
+                    dilation_h = dilation_w = dilation.cast<uint32_t>();
+                }
+            }
+            if (attrs.contains("groups")) {
+                groups = attrs["groups"].cast<uint32_t>();
+            }
+
+            // Compute output dimensions
+            uint32_t output_h = (input_h + 2 * pad_h - dilation_h * (kernel_h - 1) - 1) / stride_h + 1;
+            uint32_t output_w = (input_w + 2 * pad_w - dilation_w * (kernel_w - 1) - 1) / stride_w + 1;
+
+            // Create output array
+            std::vector<py::ssize_t> out_shape = {
+                static_cast<py::ssize_t>(batch_size),
+                static_cast<py::ssize_t>(out_channels),
+                static_cast<py::ssize_t>(output_h),
+                static_cast<py::ssize_t>(output_w)
+            };
+            py::array_t<float> conv_result = np.attr("zeros")(out_shape, py::arg("dtype") = np.attr("float32")).cast<py::array_t<float>>();
+            py::buffer_info r_buf = conv_result.request();
+
+            // Get bias pointer if present
+            const float* bias_ptr = nullptr;
+            py::array_t<float> bias_arr;
+            if (py::len(input_names) > 2) {
+                std::string bias_name = input_names[2].cast<std::string>();
+                if (tensors.count(bias_name) > 0) {
+                    bias_arr = tensors.at(bias_name);
+                    bias_ptr = static_cast<const float*>(bias_arr.request().ptr);
+                }
+            }
+
+            // Build Conv2D descriptor
+            sw::kpu::Conv2DDescriptor desc;
+            desc.batch_size = batch_size;
+            desc.in_channels = in_channels;
+            desc.in_height = input_h;
+            desc.in_width = input_w;
+            desc.out_channels = out_channels;
+            desc.kernel_height = kernel_h;
+            desc.kernel_width = kernel_w;
+            desc.stride_h = stride_h;
+            desc.stride_w = stride_w;
+            desc.padding_h = pad_h;
+            desc.padding_w = pad_w;
+            desc.dilation_h = dilation_h;
+            desc.dilation_w = dilation_w;
+            desc.groups = groups;
+
+            // Submit Conv2D to C++ BehavioralComputeFabric
+            behavioral_compute_fabric_->submit_conv2d(
+                desc,
+                x_buf.ptr,
+                w_buf.ptr,
+                bias_ptr,
+                r_buf.ptr,
+                nullptr
+            );
+            behavioral_compute_fabric_->drain();
+
+            // Apply ReLU in-place
+            float* result_ptr = static_cast<float*>(r_buf.ptr);
+            size_t total_elements = static_cast<size_t>(batch_size) * out_channels * output_h * output_w;
+            for (size_t i = 0; i < total_elements; ++i) {
+                if (result_ptr[i] < 0.0f) result_ptr[i] = 0.0f;
+            }
+
+            // Record XUE events
+            int64_t gemm_M = static_cast<int64_t>(batch_size) * output_h * output_w;
+            int64_t gemm_K = static_cast<int64_t>(in_channels) / groups * kernel_h * kernel_w;
+            int64_t gemm_N = out_channels;
+            stats.matmul_flops += 2LL * gemm_M * gemm_N * gemm_K;
+
+            sw::xue::xue().record_relu(total_elements, 0);
+
+            tensors[output_name] = conv_result;
+            stats.ops_executed++;
+
+        } else if (opcode == "fused_conv2d_bn_relu") {
+            // Fused: Y = relu(batch_norm(conv2d(X, W)))
+            // inputs: [X, W, gamma, beta] (gamma/beta optional)
+            py::dict attrs = op.contains("attrs") ? op["attrs"].cast<py::dict>() : py::dict();
+
+            std::string x_name = input_names[0].cast<std::string>();
+            std::string w_name = input_names[1].cast<std::string>();
+
+            auto X = tensors.at(x_name);
+            auto W = tensors.at(w_name);
+
+            py::buffer_info x_buf = X.request();
+            py::buffer_info w_buf = W.request();
+
+            // Extract dimensions
+            uint32_t batch_size = static_cast<uint32_t>(x_buf.shape[0]);
+            uint32_t in_channels = static_cast<uint32_t>(x_buf.shape[1]);
+            uint32_t input_h = static_cast<uint32_t>(x_buf.shape[2]);
+            uint32_t input_w = static_cast<uint32_t>(x_buf.shape[3]);
+
+            uint32_t out_channels = static_cast<uint32_t>(w_buf.shape[0]);
+            uint32_t kernel_h = static_cast<uint32_t>(w_buf.shape[2]);
+            uint32_t kernel_w = static_cast<uint32_t>(w_buf.shape[3]);
+
+            // Get parameters from attrs
+            uint32_t stride_h = 1, stride_w = 1;
+            uint32_t pad_h = 0, pad_w = 0;
+            uint32_t dilation_h = 1, dilation_w = 1;
+            uint32_t groups = 1;
+            float eps = 1e-5f;
+
+            if (attrs.contains("stride")) {
+                auto stride = attrs["stride"];
+                if (py::isinstance<py::tuple>(stride)) {
+                    auto s = stride.cast<py::tuple>();
+                    stride_h = s[0].cast<uint32_t>();
+                    stride_w = s[1].cast<uint32_t>();
+                } else {
+                    stride_h = stride_w = stride.cast<uint32_t>();
+                }
+            }
+            if (attrs.contains("padding")) {
+                auto padding = attrs["padding"];
+                if (py::isinstance<py::tuple>(padding)) {
+                    auto p = padding.cast<py::tuple>();
+                    pad_h = p[0].cast<uint32_t>();
+                    pad_w = p[1].cast<uint32_t>();
+                } else {
+                    pad_h = pad_w = padding.cast<uint32_t>();
+                }
+            }
+            if (attrs.contains("dilation")) {
+                auto dilation = attrs["dilation"];
+                if (py::isinstance<py::tuple>(dilation)) {
+                    auto d = dilation.cast<py::tuple>();
+                    dilation_h = d[0].cast<uint32_t>();
+                    dilation_w = d[1].cast<uint32_t>();
+                } else {
+                    dilation_h = dilation_w = dilation.cast<uint32_t>();
+                }
+            }
+            if (attrs.contains("groups")) {
+                groups = attrs["groups"].cast<uint32_t>();
+            }
+            if (attrs.contains("eps")) {
+                eps = attrs["eps"].cast<float>();
+            }
+
+            // Compute output dimensions
+            uint32_t output_h = (input_h + 2 * pad_h - dilation_h * (kernel_h - 1) - 1) / stride_h + 1;
+            uint32_t output_w = (input_w + 2 * pad_w - dilation_w * (kernel_w - 1) - 1) / stride_w + 1;
+
+            // Create output array
+            std::vector<py::ssize_t> out_shape = {
+                static_cast<py::ssize_t>(batch_size),
+                static_cast<py::ssize_t>(out_channels),
+                static_cast<py::ssize_t>(output_h),
+                static_cast<py::ssize_t>(output_w)
+            };
+            py::array_t<float> conv_result = np.attr("zeros")(out_shape, py::arg("dtype") = np.attr("float32")).cast<py::array_t<float>>();
+            py::buffer_info r_buf = conv_result.request();
+
+            // Build Conv2D descriptor
+            sw::kpu::Conv2DDescriptor desc;
+            desc.batch_size = batch_size;
+            desc.in_channels = in_channels;
+            desc.in_height = input_h;
+            desc.in_width = input_w;
+            desc.out_channels = out_channels;
+            desc.kernel_height = kernel_h;
+            desc.kernel_width = kernel_w;
+            desc.stride_h = stride_h;
+            desc.stride_w = stride_w;
+            desc.padding_h = pad_h;
+            desc.padding_w = pad_w;
+            desc.dilation_h = dilation_h;
+            desc.dilation_w = dilation_w;
+            desc.groups = groups;
+
+            // Submit Conv2D to C++ BehavioralComputeFabric (no bias for fused BN)
+            behavioral_compute_fabric_->submit_conv2d(
+                desc,
+                x_buf.ptr,
+                w_buf.ptr,
+                nullptr,  // No bias - BN handles this
+                r_buf.ptr,
+                nullptr
+            );
+            behavioral_compute_fabric_->drain();
+
+            float* result_ptr = static_cast<float*>(r_buf.ptr);
+            size_t spatial_size = static_cast<size_t>(output_h) * output_w;
+            size_t total_elements = static_cast<size_t>(batch_size) * out_channels * spatial_size;
+
+            // Apply BatchNorm per channel: (x - mean) / sqrt(var + eps) * gamma + beta
+            // Compute mean and variance per channel
+            std::vector<float> means(out_channels, 0.0f);
+            std::vector<float> vars(out_channels, 0.0f);
+            size_t count_per_channel = static_cast<size_t>(batch_size) * spatial_size;
+
+            // Compute means
+            for (uint32_t n = 0; n < batch_size; ++n) {
+                for (uint32_t c = 0; c < out_channels; ++c) {
+                    for (size_t s = 0; s < spatial_size; ++s) {
+                        size_t idx = n * out_channels * spatial_size + c * spatial_size + s;
+                        means[c] += result_ptr[idx];
+                    }
+                }
+            }
+            for (uint32_t c = 0; c < out_channels; ++c) {
+                means[c] /= static_cast<float>(count_per_channel);
+            }
+
+            // Compute variances
+            for (uint32_t n = 0; n < batch_size; ++n) {
+                for (uint32_t c = 0; c < out_channels; ++c) {
+                    for (size_t s = 0; s < spatial_size; ++s) {
+                        size_t idx = n * out_channels * spatial_size + c * spatial_size + s;
+                        float diff = result_ptr[idx] - means[c];
+                        vars[c] += diff * diff;
+                    }
+                }
+            }
+            for (uint32_t c = 0; c < out_channels; ++c) {
+                vars[c] /= static_cast<float>(count_per_channel);
+            }
+
+            // Get gamma and beta if provided
+            const float* gamma_ptr = nullptr;
+            const float* beta_ptr = nullptr;
+            py::array_t<float> gamma_arr, beta_arr;
+
+            if (py::len(input_names) > 2) {
+                std::string gamma_name = input_names[2].cast<std::string>();
+                if (tensors.count(gamma_name) > 0) {
+                    gamma_arr = tensors.at(gamma_name);
+                    gamma_ptr = static_cast<const float*>(gamma_arr.request().ptr);
+                }
+            }
+            if (py::len(input_names) > 3) {
+                std::string beta_name = input_names[3].cast<std::string>();
+                if (tensors.count(beta_name) > 0) {
+                    beta_arr = tensors.at(beta_name);
+                    beta_ptr = static_cast<const float*>(beta_arr.request().ptr);
+                }
+            }
+
+            // Apply normalization + scale + shift + ReLU
+            for (uint32_t n = 0; n < batch_size; ++n) {
+                for (uint32_t c = 0; c < out_channels; ++c) {
+                    float inv_std = 1.0f / std::sqrt(vars[c] + eps);
+                    float gamma = gamma_ptr ? gamma_ptr[c] : 1.0f;
+                    float beta = beta_ptr ? beta_ptr[c] : 0.0f;
+
+                    for (size_t s = 0; s < spatial_size; ++s) {
+                        size_t idx = n * out_channels * spatial_size + c * spatial_size + s;
+                        float normalized = (result_ptr[idx] - means[c]) * inv_std;
+                        float scaled = normalized * gamma + beta;
+                        // ReLU
+                        result_ptr[idx] = scaled > 0.0f ? scaled : 0.0f;
+                    }
+                }
+            }
+
+            // Record XUE events
+            int64_t gemm_M = static_cast<int64_t>(batch_size) * output_h * output_w;
+            int64_t gemm_K = static_cast<int64_t>(in_channels) / groups * kernel_h * kernel_w;
+            int64_t gemm_N = out_channels;
+            stats.matmul_flops += 2LL * gemm_M * gemm_N * gemm_K;
+
+            // BN operations: mean, var, normalize, scale, shift = 5 ops per element
+            sw::xue::xue().record_elementwise(
+                sw::xue::EventType::ELEM_MUL,
+                total_elements * 5,
+                0
+            );
+            sw::xue::xue().record_relu(total_elements, 0);
+
+            tensors[output_name] = conv_result;
+            stats.ops_executed++;
+
+        // =====================================================================
+        // Transformer Operations (v0.6+ transformers)
+        // =====================================================================
+        } else if (opcode == "softmax") {
+            // Softmax: exp(x - max(x)) / sum(exp(x - max(x)))
+            py::dict attrs = op.contains("attrs") ? op["attrs"].cast<py::dict>() : py::dict();
+            std::string x_name = input_names[0].cast<std::string>();
+            auto X = tensors.at(x_name);
+            py::buffer_info x_buf = X.request();
+
+            // Get axis (default: -1, meaning last axis)
+            int axis = attrs.contains("axis") ? attrs["axis"].cast<int>() : -1;
+            if (axis < 0) axis += x_buf.ndim;
+
+            // Create output array
+            std::vector<py::ssize_t> out_shape(x_buf.shape.begin(), x_buf.shape.end());
+            py::array_t<float> Y(out_shape);
+            float* y_ptr = Y.mutable_data();
+            const float* x_ptr = static_cast<const float*>(x_buf.ptr);
+
+            // Compute strides
+            std::vector<py::ssize_t> strides(static_cast<size_t>(x_buf.ndim));
+            py::ssize_t stride = 1;
+            for (int d = x_buf.ndim - 1; d >= 0; --d) {
+                strides[static_cast<size_t>(d)] = stride;
+                stride *= x_buf.shape[static_cast<size_t>(d)];
+            }
+
+            // Size along softmax axis
+            py::ssize_t axis_size = x_buf.shape[static_cast<size_t>(axis)];
+            py::ssize_t outer_size = x_buf.size / axis_size;
+
+            // Softmax computation: iterate over all slices along axis
+            for (py::ssize_t outer = 0; outer < outer_size; ++outer) {
+                // Compute base index for this slice
+                py::ssize_t base_idx = 0;
+                py::ssize_t remaining = outer;
+                for (int d = x_buf.ndim - 1; d >= 0; --d) {
+                    if (d == axis) continue;
+                    py::ssize_t coord = remaining % x_buf.shape[static_cast<size_t>(d)];
+                    remaining /= x_buf.shape[static_cast<size_t>(d)];
+                    base_idx += coord * strides[static_cast<size_t>(d)];
+                }
+
+                // Find max for numerical stability
+                float max_val = -std::numeric_limits<float>::infinity();
+                for (py::ssize_t i = 0; i < axis_size; ++i) {
+                    float val = x_ptr[base_idx + i * strides[static_cast<size_t>(axis)]];
+                    if (val > max_val) max_val = val;
+                }
+
+                // Compute exp(x - max) and sum
+                float sum_exp = 0.0f;
+                for (py::ssize_t i = 0; i < axis_size; ++i) {
+                    py::ssize_t idx = base_idx + i * strides[static_cast<size_t>(axis)];
+                    float exp_val = std::exp(x_ptr[idx] - max_val);
+                    y_ptr[idx] = exp_val;
+                    sum_exp += exp_val;
+                }
+
+                // Normalize
+                for (py::ssize_t i = 0; i < axis_size; ++i) {
+                    py::ssize_t idx = base_idx + i * strides[static_cast<size_t>(axis)];
+                    y_ptr[idx] /= sum_exp;
+                }
+            }
+
+            // Record XUE event: softmax involves max, exp, sum, div per element
+            sw::xue::xue().record_softmax(static_cast<uint64_t>(x_buf.size), 0);
+
+            tensors[output_name] = Y;
+            stats.ops_executed++;
+
+        } else if (opcode == "layer_norm") {
+            // Layer Normalization: (x - mean) / sqrt(var + eps) * gamma + beta
+            py::dict attrs = op.contains("attrs") ? op["attrs"].cast<py::dict>() : py::dict();
+            std::string x_name = input_names[0].cast<std::string>();
+            auto X = tensors.at(x_name);
+            py::buffer_info x_buf = X.request();
+
+            // Get normalized_shape and eps
+            float eps = attrs.contains("eps") ? attrs["eps"].cast<float>() : 1e-5f;
+
+            // Determine normalization dimensions (default: last dims matching normalized_shape)
+            py::ssize_t norm_size = 1;
+            int norm_dims = 1;  // Default: normalize over last dimension
+            if (attrs.contains("normalized_shape")) {
+                auto shape_list = attrs["normalized_shape"].cast<py::list>();
+                norm_dims = static_cast<int>(py::len(shape_list));
+                norm_size = 1;
+                for (size_t i = 0; i < py::len(shape_list); ++i) {
+                    norm_size *= shape_list[i].cast<py::ssize_t>();
+                }
+            } else {
+                norm_size = x_buf.shape[x_buf.ndim - 1];
+            }
+
+            py::ssize_t batch_size = x_buf.size / norm_size;
+
+            // Get gamma (weight) and beta (bias) if provided
+            const float* gamma_ptr = nullptr;
+            const float* beta_ptr = nullptr;
+            py::array_t<float> gamma_arr, beta_arr;
+
+            if (input_names.size() > 1) {
+                std::string gamma_name = input_names[1].cast<std::string>();
+                if (tensors.count(gamma_name) > 0) {
+                    gamma_arr = tensors.at(gamma_name);
+                    gamma_ptr = static_cast<const float*>(gamma_arr.request().ptr);
+                }
+            }
+            if (input_names.size() > 2) {
+                std::string beta_name = input_names[2].cast<std::string>();
+                if (tensors.count(beta_name) > 0) {
+                    beta_arr = tensors.at(beta_name);
+                    beta_ptr = static_cast<const float*>(beta_arr.request().ptr);
+                }
+            }
+
+            // Create output array
+            std::vector<py::ssize_t> out_shape(x_buf.shape.begin(), x_buf.shape.end());
+            py::array_t<float> Y(out_shape);
+            float* y_ptr = Y.mutable_data();
+            const float* x_ptr = static_cast<const float*>(x_buf.ptr);
+
+            // Normalize each batch element
+            for (py::ssize_t b = 0; b < batch_size; ++b) {
+                py::ssize_t offset = b * norm_size;
+
+                // Compute mean
+                float mean = 0.0f;
+                for (py::ssize_t i = 0; i < norm_size; ++i) {
+                    mean += x_ptr[offset + i];
+                }
+                mean /= static_cast<float>(norm_size);
+
+                // Compute variance
+                float var = 0.0f;
+                for (py::ssize_t i = 0; i < norm_size; ++i) {
+                    float diff = x_ptr[offset + i] - mean;
+                    var += diff * diff;
+                }
+                var /= static_cast<float>(norm_size);
+
+                // Normalize and apply affine transformation
+                float inv_std = 1.0f / std::sqrt(var + eps);
+                for (py::ssize_t i = 0; i < norm_size; ++i) {
+                    float normalized = (x_ptr[offset + i] - mean) * inv_std;
+                    float gamma = gamma_ptr ? gamma_ptr[i] : 1.0f;
+                    float beta = beta_ptr ? beta_ptr[i] : 0.0f;
+                    y_ptr[offset + i] = normalized * gamma + beta;
+                }
+            }
+
+            // Record XUE event: layernorm operations
+            sw::xue::xue().record_layernorm(static_cast<uint64_t>(x_buf.size), 0);
+
+            tensors[output_name] = Y;
+            stats.ops_executed++;
+
+        } else if (opcode == "attention") {
+            // Scaled Dot-Product Attention: softmax(Q @ K^T / sqrt(d_k)) @ V
+            // Pure C++ implementation for reliability
+            py::dict attrs = op.contains("attrs") ? op["attrs"].cast<py::dict>() : py::dict();
+
+            std::string q_name = input_names[0].cast<std::string>();
+            std::string k_name = input_names[1].cast<std::string>();
+            std::string v_name = input_names[2].cast<std::string>();
+
+            auto Q = tensors.at(q_name);
+            auto K = tensors.at(k_name);
+            auto V = tensors.at(v_name);
+
+            py::buffer_info q_buf = Q.request();
+            py::buffer_info k_buf = K.request();
+            py::buffer_info v_buf = V.request();
+
+            const float* q_ptr = static_cast<const float*>(q_buf.ptr);
+            const float* k_ptr = static_cast<const float*>(k_buf.ptr);
+            const float* v_ptr = static_cast<const float*>(v_buf.ptr);
+
+            // Determine dimensions based on tensor rank
+            // Support: 2D [seq, d], 3D [batch, seq, d], 4D [batch, heads, seq, d]
+            py::ssize_t batch_size = 1, num_heads = 1, seq_len, d_k, d_v;
+
+            if (q_buf.ndim == 4) {
+                batch_size = q_buf.shape[0];
+                num_heads = q_buf.shape[1];
+                seq_len = q_buf.shape[2];
+                d_k = q_buf.shape[3];
+                d_v = v_buf.shape[3];
+            } else if (q_buf.ndim == 3) {
+                batch_size = q_buf.shape[0];
+                seq_len = q_buf.shape[1];
+                d_k = q_buf.shape[2];
+                d_v = v_buf.shape[2];
+            } else {  // 2D
+                seq_len = q_buf.shape[0];
+                d_k = q_buf.shape[1];
+                d_v = v_buf.shape[1];
+            }
+
+            // Get scale factor: default is 1/sqrt(d_k)
+            float scale = 1.0f / std::sqrt(static_cast<float>(d_k));
+            if (attrs.contains("scale") && !attrs["scale"].is_none()) {
+                scale = attrs["scale"].cast<float>();
+            }
+
+            // Create output array with same shape as V
+            std::vector<py::ssize_t> out_shape(v_buf.shape.begin(), v_buf.shape.end());
+            py::array_t<float> Y(out_shape);
+            float* y_ptr = Y.mutable_data();
+
+            // Temporary storage for scores and attention weights (per batch/head)
+            size_t score_size = static_cast<size_t>(seq_len * seq_len);
+            std::vector<float> scores(score_size);
+            std::vector<float> attn_weights(score_size);
+
+            // Process each batch and head
+            py::ssize_t total_iterations = batch_size * num_heads;
+            for (py::ssize_t iter = 0; iter < total_iterations; ++iter) {
+                py::ssize_t b = iter / num_heads;
+                py::ssize_t h = iter % num_heads;
+
+                // Compute offset into Q, K, V tensors
+                py::ssize_t qk_offset, v_offset, out_offset;
+                if (q_buf.ndim == 4) {
+                    qk_offset = (b * num_heads + h) * seq_len * d_k;
+                    v_offset = (b * num_heads + h) * seq_len * d_v;
+                    out_offset = (b * num_heads + h) * seq_len * d_v;
+                } else if (q_buf.ndim == 3) {
+                    qk_offset = b * seq_len * d_k;
+                    v_offset = b * seq_len * d_v;
+                    out_offset = b * seq_len * d_v;
+                } else {
+                    qk_offset = 0;
+                    v_offset = 0;
+                    out_offset = 0;
+                }
+
+                // Step 1: Compute scores = Q @ K^T * scale
+                // scores[i, j] = sum_k(Q[i, k] * K[j, k]) * scale
+                for (py::ssize_t i = 0; i < seq_len; ++i) {
+                    for (py::ssize_t j = 0; j < seq_len; ++j) {
+                        float dot = 0.0f;
+                        for (py::ssize_t k = 0; k < d_k; ++k) {
+                            dot += q_ptr[qk_offset + i * d_k + k] *
+                                   k_ptr[qk_offset + j * d_k + k];
+                        }
+                        scores[static_cast<size_t>(i * seq_len + j)] = dot * scale;
+                    }
+                }
+
+                // Step 2: Softmax along last dimension (each row)
+                for (py::ssize_t i = 0; i < seq_len; ++i) {
+                    // Find max for numerical stability
+                    float max_val = scores[static_cast<size_t>(i * seq_len)];
+                    for (py::ssize_t j = 1; j < seq_len; ++j) {
+                        float val = scores[static_cast<size_t>(i * seq_len + j)];
+                        if (val > max_val) max_val = val;
+                    }
+
+                    // Compute exp(x - max) and sum
+                    float sum_exp = 0.0f;
+                    for (py::ssize_t j = 0; j < seq_len; ++j) {
+                        size_t idx = static_cast<size_t>(i * seq_len + j);
+                        float exp_val = std::exp(scores[idx] - max_val);
+                        attn_weights[idx] = exp_val;
+                        sum_exp += exp_val;
+                    }
+
+                    // Normalize
+                    for (py::ssize_t j = 0; j < seq_len; ++j) {
+                        attn_weights[static_cast<size_t>(i * seq_len + j)] /= sum_exp;
+                    }
+                }
+
+                // Step 3: Compute output = attn_weights @ V
+                // output[i, j] = sum_k(attn_weights[i, k] * V[k, j])
+                for (py::ssize_t i = 0; i < seq_len; ++i) {
+                    for (py::ssize_t j = 0; j < d_v; ++j) {
+                        float sum = 0.0f;
+                        for (py::ssize_t k = 0; k < seq_len; ++k) {
+                            sum += attn_weights[static_cast<size_t>(i * seq_len + k)] *
+                                   v_ptr[v_offset + k * d_v + j];
+                        }
+                        y_ptr[out_offset + i * d_v + j] = sum;
+                    }
+                }
+            }
+
+            // Record XUE events for attention computation
+            // Q @ K^T: 2 * batch * heads * seq_len * seq_len * d_k FLOPs
+            int64_t qk_flops = 2LL * batch_size * num_heads * seq_len * seq_len * d_k;
+            // Attention @ V: 2 * batch * heads * seq_len * seq_len * d_v FLOPs
+            int64_t av_flops = 2LL * batch_size * num_heads * seq_len * seq_len * d_v;
+
+            stats.matmul_flops += qk_flops + av_flops;
+            stats.matmul_count += 2 * batch_size * num_heads;  // Two matmuls per attention per batch/head
+
+            // Record XUE events directly (don't use submit_matmul which executes the matmul)
+            // Q @ K^T matmul event
+            sw::xue::xue().record_matmul(
+                static_cast<uint32_t>(seq_len),
+                static_cast<uint32_t>(seq_len),
+                static_cast<uint32_t>(d_k),
+                0  // cycles (behavioral mode)
+            );
+
+            // Attention @ V matmul event
+            sw::xue::xue().record_matmul(
+                static_cast<uint32_t>(seq_len),
+                static_cast<uint32_t>(d_v),
+                static_cast<uint32_t>(seq_len),
+                0  // cycles (behavioral mode)
+            );
+
+            // Record softmax operations
+            sw::xue::xue().record_softmax(
+                static_cast<uint64_t>(batch_size * num_heads * seq_len * seq_len),
+                0
+            );
+
+            tensors[output_name] = Y;
+            stats.ops_executed++;
+
         } else {
             throw std::runtime_error("Unsupported opcode in native execution: " + opcode);
         }
@@ -1866,4 +3180,266 @@ PYBIND11_MODULE(_native, m) {
     m.def("dfx_parser_version", []() -> std::string {
         return "0.4.1";
     }, "Get the DFX parser version");
+
+    // ========================================================================
+    // v0.5.0: XUE Observation Architecture - C++ Backend
+    // ========================================================================
+    //
+    // XUE Methodology: X (Throughput) → U (Utilization) → E (Efficiency)
+    //
+    // The Observation Architecture provides event hierarchies that aggregate
+    // cleanly without logic on the datapath. Events are recorded by C++
+    // simulator components (compute fabric, memory controller). Python
+    // provides read-only access for operational analysis.
+
+    // Get XUE event summary from C++ EventCollector
+    m.def("get_xue_summary", []() -> py::dict {
+        const auto& xue = sw::xue::EventCollector::instance();
+        const auto& counter = xue.counters();
+
+        py::dict result;
+
+        // Aggregate metrics
+        result["total_flops"] = counter.total_flops();
+        result["total_bytes_moved"] = counter.total_bytes_moved();
+        result["dram_bytes"] = counter.dram_bytes();
+        result["arithmetic_intensity"] = counter.arithmetic_intensity();
+
+        // Category breakdowns
+        auto compute_stats = counter.get_category_stats(sw::xue::EventCategory::COMPUTE);
+        auto memory_stats = counter.get_category_stats(sw::xue::EventCategory::MEMORY);
+        auto datamovement_stats = counter.get_category_stats(sw::xue::EventCategory::DATA_MOVEMENT);
+        auto sync_stats = counter.get_category_stats(sw::xue::EventCategory::SYNCHRONIZATION);
+
+        // Compute category
+        py::dict compute;
+        compute["total_events"] = compute_stats.total_events;
+        compute["total_flops"] = compute_stats.total_flops;
+        compute["total_cycles"] = compute_stats.total_cycles;
+        result["compute"] = compute;
+
+        // Compute subcategories
+        auto matmul_stats = counter.get_compute_subcategory_stats(sw::xue::ComputeSubcategory::MATMUL);
+        auto elem_stats = counter.get_compute_subcategory_stats(sw::xue::ComputeSubcategory::ELEMENTWISE);
+        auto reduce_stats = counter.get_compute_subcategory_stats(sw::xue::ComputeSubcategory::REDUCTION);
+        auto special_stats = counter.get_compute_subcategory_stats(sw::xue::ComputeSubcategory::SPECIAL);
+
+        py::dict compute_breakdown;
+        compute_breakdown["matmul_events"] = matmul_stats.total_events;
+        compute_breakdown["matmul_flops"] = matmul_stats.total_flops;
+        compute_breakdown["elementwise_events"] = elem_stats.total_events;
+        compute_breakdown["elementwise_flops"] = elem_stats.total_flops;
+        compute_breakdown["reduction_events"] = reduce_stats.total_events;
+        compute_breakdown["reduction_flops"] = reduce_stats.total_flops;
+        compute_breakdown["special_events"] = special_stats.total_events;
+        compute_breakdown["special_flops"] = special_stats.total_flops;
+        result["compute_breakdown"] = compute_breakdown;
+
+        // Memory category
+        py::dict memory;
+        memory["total_events"] = memory_stats.total_events;
+        memory["total_bytes"] = memory_stats.total_bytes;
+        memory["total_cycles"] = memory_stats.total_cycles;
+        result["memory"] = memory;
+
+        // Memory subcategories (per-level hierarchy)
+        auto dram_stats = counter.get_memory_subcategory_stats(sw::xue::MemorySubcategory::EXTERNAL);
+        auto l3_stats = counter.get_memory_subcategory_stats(sw::xue::MemorySubcategory::L3);
+        auto l2_stats = counter.get_memory_subcategory_stats(sw::xue::MemorySubcategory::L2);
+        auto l1_stats = counter.get_memory_subcategory_stats(sw::xue::MemorySubcategory::L1);
+
+        py::dict memory_hierarchy;
+        py::dict dram, l3, l2, l1;
+
+        dram["events"] = dram_stats.total_events;
+        dram["bytes"] = dram_stats.total_bytes;
+        dram["cycles"] = dram_stats.total_cycles;
+        memory_hierarchy["dram"] = dram;
+
+        l3["events"] = l3_stats.total_events;
+        l3["bytes"] = l3_stats.total_bytes;
+        l3["cycles"] = l3_stats.total_cycles;
+        memory_hierarchy["l3"] = l3;
+
+        l2["events"] = l2_stats.total_events;
+        l2["bytes"] = l2_stats.total_bytes;
+        l2["cycles"] = l2_stats.total_cycles;
+        memory_hierarchy["l2"] = l2;
+
+        l1["events"] = l1_stats.total_events;
+        l1["bytes"] = l1_stats.total_bytes;
+        l1["cycles"] = l1_stats.total_cycles;
+        memory_hierarchy["l1"] = l1;
+
+        result["memory_hierarchy"] = memory_hierarchy;
+
+        // Data movement
+        py::dict data_movement;
+        data_movement["total_events"] = datamovement_stats.total_events;
+        data_movement["total_bytes"] = datamovement_stats.total_bytes;
+        result["data_movement"] = data_movement;
+
+        // Synchronization
+        py::dict sync;
+        sync["total_events"] = sync_stats.total_events;
+        sync["stall_cycles"] = sync_stats.total_cycles;
+        result["synchronization"] = sync;
+
+        // XUE collector state
+        result["enabled"] = xue.is_enabled();
+        result["current_cycle"] = xue.get_cycle();
+
+        return result;
+    }, "Get XUE event summary from C++ EventCollector.\n\n"
+       "Returns a dict with:\n"
+       "  - total_flops: Total floating point operations\n"
+       "  - total_bytes_moved: Total bytes moved through memory hierarchy\n"
+       "  - dram_bytes: External memory traffic\n"
+       "  - arithmetic_intensity: FLOP/byte ratio\n"
+       "  - compute: Compute event category summary\n"
+       "  - compute_breakdown: Per-operation-type breakdown\n"
+       "  - memory: Memory event category summary\n"
+       "  - memory_hierarchy: Per-level (DRAM/L3/L2/L1) breakdown\n"
+       "  - data_movement: Data movement event summary\n"
+       "  - synchronization: Synchronization/stall events");
+
+    // Run operational analysis using roofline model
+    m.def("get_operational_analysis", [](
+            double peak_gflops,
+            double dram_bandwidth_gbs,
+            double clock_ghz) -> py::dict {
+        // Configure hardware model
+        sw::xue::HardwareModel hw;
+        hw.peak_gflops = peak_gflops;
+        hw.dram_bandwidth_gbs = dram_bandwidth_gbs;
+        hw.clock_ghz = clock_ghz;
+
+        // Run analysis
+        sw::xue::OperationalAnalyzer analyzer(hw);
+        const auto& counter = sw::xue::EventCollector::instance().counters();
+        auto result = analyzer.analyze(counter);
+
+        py::dict d;
+
+        // Workload characteristics
+        d["total_flops"] = result.total_flops;
+        d["dram_bytes"] = result.dram_bytes;
+        d["l3_bytes"] = result.l3_bytes;
+        d["l2_bytes"] = result.l2_bytes;
+        d["l1_bytes"] = result.l1_bytes;
+        d["arithmetic_intensity"] = result.arithmetic_intensity;
+        d["l3_arithmetic_intensity"] = result.l3_arithmetic_intensity;
+
+        // Roofline predictions
+        d["predicted_gflops"] = result.predicted_gflops;
+        d["predicted_cycles"] = result.predicted_cycles;
+        d["predicted_runtime_us"] = result.predicted_runtime_us;
+        d["predicted_bottleneck"] = result.predicted_bottleneck;
+
+        // Event breakdown
+        d["matmul_events"] = result.matmul_events;
+        d["elementwise_events"] = result.elementwise_events;
+        d["reduction_events"] = result.reduction_events;
+        d["memory_events"] = result.memory_events;
+        d["sync_events"] = result.sync_events;
+
+        // Hardware model info
+        py::dict hw_info;
+        hw_info["peak_gflops"] = hw.peak_gflops;
+        hw_info["dram_bandwidth_gbs"] = hw.dram_bandwidth_gbs;
+        hw_info["clock_ghz"] = hw.clock_ghz;
+        hw_info["ridge_point_dram"] = hw.ridge_point_dram();
+        hw_info["ridge_point_l3"] = hw.ridge_point_l3();
+        hw_info["ridge_point_l2"] = hw.ridge_point_l2();
+        d["hardware"] = hw_info;
+
+        return d;
+    }, py::arg("peak_gflops") = 1024.0,
+       py::arg("dram_bandwidth_gbs") = 64.0,
+       py::arg("clock_ghz") = 1.0,
+       "Run operational analysis using roofline model.\n\n"
+       "This analyzes the collected XUE events and predicts performance\n"
+       "using the roofline model.\n\n"
+       "Args:\n"
+       "    peak_gflops: Peak compute throughput (default: 1024 for 16x16 systolic)\n"
+       "    dram_bandwidth_gbs: DRAM bandwidth in GB/s (default: 64)\n"
+       "    clock_ghz: Clock frequency in GHz (default: 1.0)\n\n"
+       "Returns:\n"
+       "    Dict with workload characteristics and performance predictions");
+
+    // Validate operational analysis against actual simulation
+    m.def("validate_operational_analysis", [](
+            double actual_gflops,
+            uint64_t actual_cycles,
+            double peak_gflops,
+            double dram_bandwidth_gbs,
+            double clock_ghz) -> py::dict {
+        // Configure hardware model
+        sw::xue::HardwareModel hw;
+        hw.peak_gflops = peak_gflops;
+        hw.dram_bandwidth_gbs = dram_bandwidth_gbs;
+        hw.clock_ghz = clock_ghz;
+
+        // Run validation
+        sw::xue::OperationalAnalyzer analyzer(hw);
+        const auto& counter = sw::xue::EventCollector::instance().counters();
+        auto result = analyzer.validate(counter, actual_gflops, actual_cycles);
+
+        py::dict d;
+
+        // Prediction vs actual
+        d["predicted_gflops"] = result.prediction.predicted_gflops;
+        d["predicted_cycles"] = result.prediction.predicted_cycles;
+        d["actual_gflops"] = result.actual_gflops;
+        d["actual_cycles"] = result.actual_cycles;
+
+        // Error analysis
+        d["gflops_error_percent"] = result.gflops_error_percent;
+        d["cycles_error_percent"] = result.cycles_error_percent;
+        d["within_10_percent"] = result.within_10_percent;
+
+        // Efficiency
+        d["roofline_efficiency"] = result.prediction.roofline_efficiency;
+        d["bottleneck"] = result.prediction.predicted_bottleneck;
+        d["arithmetic_intensity"] = result.prediction.arithmetic_intensity;
+
+        return d;
+    }, py::arg("actual_gflops"),
+       py::arg("actual_cycles"),
+       py::arg("peak_gflops") = 1024.0,
+       py::arg("dram_bandwidth_gbs") = 64.0,
+       py::arg("clock_ghz") = 1.0,
+       "Validate operational analysis against actual simulation results.\n\n"
+       "Args:\n"
+       "    actual_gflops: Achieved GFLOPS from simulation\n"
+       "    actual_cycles: Actual cycles from simulation\n"
+       "    peak_gflops: Peak compute throughput\n"
+       "    dram_bandwidth_gbs: DRAM bandwidth in GB/s\n"
+       "    clock_ghz: Clock frequency in GHz\n\n"
+       "Returns:\n"
+       "    Dict with prediction vs actual comparison and error analysis");
+
+    // Reset XUE event counters
+    m.def("reset_xue_counters", []() {
+        sw::xue::EventCollector::instance().reset();
+    }, "Reset all XUE event counters.\n\n"
+       "Call this before starting a new workload to get fresh event counts.");
+
+    // Enable/disable XUE collection
+    m.def("set_xue_enabled", [](bool enabled) {
+        sw::xue::EventCollector::instance().set_enabled(enabled);
+    }, py::arg("enabled"),
+       "Enable or disable XUE event collection.\n\n"
+       "When disabled, events are not recorded (zero overhead).\n"
+       "This is useful for performance-critical code paths.");
+
+    // Check if XUE is enabled
+    m.def("is_xue_enabled", []() -> bool {
+        return sw::xue::EventCollector::instance().is_enabled();
+    }, "Check if XUE event collection is enabled.");
+
+    // Get XUE version
+    m.def("xue_version", []() -> std::string {
+        return "0.5.0";
+    }, "Get the XUE Observation Architecture version");
 }
