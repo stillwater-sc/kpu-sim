@@ -221,7 +221,9 @@ struct ResourceConfig {
 
     // Compute fabric
     Size systolic_size = 16;                // 16x16 systolic array
-    double compute_throughput_gflops = 1024.0;  // 16×16×2×2GHz = 1024 GFLOPS
+    // Throughput at 1 GHz reference: 16×16×2×1 = 512 GFLOPS
+    // Cycle model: one 256-FMA systolic op per cycle → 512 FLOPs/cycle at 1 GHz
+    double compute_throughput_gflops = 512.0;
 };
 
 // ============================================================================

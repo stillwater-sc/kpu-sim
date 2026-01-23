@@ -157,7 +157,11 @@ struct BenchmarkSuite {
  */
 struct HardwareSpec {
     // Compute
-    double peak_gflops = 1024.0;         ///< Peak compute (16x16 @ 2GHz, 2 ops/cycle)
+    // Peak = systolic_size² × 2 FLOPs/FMA × clock_ghz
+    // At 1 GHz reference: 16×16×2×1 = 512 GFLOPS
+    // The cycle model counts one 256-FMA systolic operation per cycle,
+    // so GFLOPS = FLOPs/cycles gives correct result at 1 GHz reference.
+    double peak_gflops = 512.0;          ///< Peak compute (16x16 @ 1GHz reference, 2 ops/cycle)
     double clock_ghz = 1.0;              ///< Reference clock for cycle conversion
 
     // Memory bandwidth (GB/s)
