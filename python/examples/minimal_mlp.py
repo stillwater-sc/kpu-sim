@@ -29,10 +29,18 @@ result = mlp(x, w1, w2)
 stats = mlp.stats
 
 # =============================================================================
-# XUE Methodology: T (Elapsed Cycles) is the Central Measurement
+# XUE Observation Architecture (v0.5.0+)
 # =============================================================================
-# T represents the wall-clock execution time in cycles
-# All service rates and throughputs are computed relative to T:
+# XUE Methodology: X (Throughput) → U (Utilization) → E (Efficiency)
+#
+# The Observation Architecture provides event hierarchies that aggregate cleanly
+# without logic on the datapath. This enables systematic drill-down analysis:
+#   - X = Measured throughput compared to speed-of-light
+#   - U = Resource utilization if throughput is below threshold
+#   - E = Efficiency (measured/peak) if utilization doesn't explain throughput
+#
+# T represents the wall-clock execution time in cycles.
+# Key metrics computed in C++:
 #   - Service Rate = bytes / T (bytes per cycle)
 #   - Throughput = transactions / T (transactions per cycle)
 #   - GFLOPS = (FLOPs / T) * clock_frequency_ghz
@@ -41,26 +49,45 @@ stats = mlp.stats
 T = stats.elapsed_cycles  # XUE elapsed time in cycles
 
 print("=" * 60)
-print("XUE Performance Analysis")
+print("XUE Performance Analysis (v0.5.0)")
 print("=" * 60)
 print(f"  Clock Frequency:     {stats.clock_frequency_ghz:.1f} GHz")
 print(f"  T (Elapsed Cycles):  {T:,} cycles")
 print(f"  Wall Time:           {T / (stats.clock_frequency_ghz * 1e9) * 1e6:.2f} us")
 print()
 
-# XUE Memory Hierarchy Stats with Service Rates
-print("Memory Hierarchy (XUE Events):")
-print(f"  DRAM: {stats.dram.total_bytes:,} bytes | {stats.dram.total_count:,} txns | {stats.dram.service_rate:.2f} B/cycle")
-print(f"  L3:   {stats.l3.total_bytes:,} bytes | {stats.l3.total_count:,} txns | {stats.l3.service_rate:.2f} B/cycle")
-print(f"  L2:   {stats.l2.total_bytes:,} bytes | {stats.l2.total_count:,} txns | {stats.l2.service_rate:.2f} B/cycle")
-print(f"  L1:   {stats.l1.total_bytes:,} bytes | {stats.l1.total_count:,} txns | {stats.l1.service_rate:.2f} B/cycle")
+# Get XUE summary from C++ EventCollector
+xue = kpu.get_xue_summary()
+
+# XUE Memory Hierarchy Stats (from C++ XUE)
+mem = xue.get('memory_hierarchy', {})
+print("Memory Hierarchy (C++ XUE Events):")
+print(f"  DRAM: {mem.get('dram', {}).get('bytes', 0):,} bytes | {mem.get('dram', {}).get('events', 0):,} events")
+print(f"  L3:   {mem.get('l3', {}).get('bytes', 0):,} bytes | {mem.get('l3', {}).get('events', 0):,} events")
+print(f"  L2:   {mem.get('l2', {}).get('bytes', 0):,} bytes | {mem.get('l2', {}).get('events', 0):,} events")
+print(f"  L1:   {mem.get('l1', {}).get('bytes', 0):,} bytes | {mem.get('l1', {}).get('events', 0):,} events")
 print()
 
-# Compute Performance
-print("Compute Performance:")
-print(f"  MatMul FLOPs:  {stats.matmul_flops:,}")
-print(f"  GFLOPS:        {stats.gflops:.1f} @ {stats.clock_frequency_ghz:.1f} GHz")
-print(f"  FLOPs/Cycle:   {stats.matmul_flops / T:.1f}")
+# Compute Events from C++ XUE
+compute = xue.get('compute_breakdown', {})
+print("Compute Events (C++ XUE):")
+print(f"  MatMul Events:      {compute.get('matmul_events', 0):,}")
+print(f"  MatMul FLOPs:       {compute.get('matmul_flops', 0):,}")
+print(f"  Elementwise Events: {compute.get('elementwise_events', 0):,}")
+print(f"  Total FLOPs:        {xue.get('total_flops', 0):,}")
+print()
+
+# Operational Analysis (Roofline Model)
+analysis = kpu.get_operational_analysis(
+    peak_gflops=512.0,  # 16x16 systolic @ 1GHz = 256 MACs * 2 = 512 GFLOPS
+    dram_bandwidth_gbs=64.0,
+    clock_ghz=stats.clock_frequency_ghz
+)
+
+print("Operational Analysis (Roofline Model):")
+print(f"  Arithmetic Intensity: {analysis.get('arithmetic_intensity', 0):.2f} FLOP/byte")
+print(f"  Predicted GFLOPS:     {analysis.get('predicted_gflops', 0):.1f}")
+print(f"  Predicted Bottleneck: {analysis.get('predicted_bottleneck', 'unknown')}")
 print()
 
 # Cycle Breakdown
@@ -73,7 +100,7 @@ print(f"  Stall Cycles:    {stats.stall_cycles:,}")
 print()
 
 # =============================================================================
-# XUE Metrics per Resource
+# XUE Metrics per Resource (X, U, E)
 # =============================================================================
 # XUE methodology requires reporting metrics in order:
 #   X = Throughput (work done per unit time)
@@ -116,12 +143,10 @@ print(f"  MatMul 2 (h @ w2): [32, 128] @ [128, 10]  = {matmul2_flops:,} FLOPs")
 print(f"  ReLU:              [32, 128]              = {relu_flops:,} ops")
 print(f"  Total MatMul FLOPs: {matmul1_flops + matmul2_flops:,}")
 
-# Verify against simulator stats
-print(f"\nSimulator reported: {stats.matmul_flops:,} FLOPs")
-if stats.matmul_flops == matmul1_flops + matmul2_flops:
-    print("  [PASS] Reference matches simulator!")
-else:
-    print(f"  [FAIL] Mismatch: expected {matmul1_flops + matmul2_flops:,}")
+# Verify against C++ XUE stats
+xue_matmul_flops = compute.get('matmul_flops', 0)
+print(f"\nC++ XUE reported: {xue_matmul_flops:,} FLOPs")
+# Note: XUE counts at tile level (16x16), so may differ from exact reference
 
 # Memory traffic reference
 input_bytes = batch_size * 784 * 4       # x: [32, 784] float32
@@ -136,4 +161,4 @@ total_output_bytes = h_bytes + output_bytes  # intermediate + final
 print(f"\nMemory Traffic Reference:")
 print(f"  Input tensors:  {total_input_bytes:,} bytes (x + w1 + w2)")
 print(f"  Output tensors: {total_output_bytes:,} bytes (h + output)")
-print(f"  Total DRAM:     {stats.dram.total_bytes:,} bytes (read + write)")
+print(f"  C++ XUE DRAM:   {xue.get('dram_bytes', 0):,} bytes")

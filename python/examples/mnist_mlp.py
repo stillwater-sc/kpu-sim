@@ -168,23 +168,31 @@ def main():
             T = stats.elapsed_cycles  # XUE elapsed time in cycles
             print()
             print("=" * 60)
-            print("XUE Performance Analysis")
+            print("XUE Performance Analysis (v0.5.0)")
             print("=" * 60)
             print(f"  Clock Frequency:     {stats.clock_frequency_ghz:.1f} GHz")
             print(f"  T (Elapsed Cycles):  {T:,} cycles")
             print(f"  Wall Time:           {T / (stats.clock_frequency_ghz * 1e9) * 1e6:.2f} us")
             print()
-            print("Memory Hierarchy (XUE Events):")
-            print(f"  DRAM: {stats.dram.total_bytes:,} bytes | {stats.dram.total_count:,} txns | {stats.dram.service_rate:.2f} B/cycle")
-            print(f"  L3:   {stats.l3.total_bytes:,} bytes | {stats.l3.total_count:,} txns | {stats.l3.service_rate:.2f} B/cycle")
-            print(f"  L2:   {stats.l2.total_bytes:,} bytes | {stats.l2.total_count:,} txns | {stats.l2.service_rate:.2f} B/cycle")
-            print(f"  L1:   {stats.l1.total_bytes:,} bytes | {stats.l1.total_count:,} txns | {stats.l1.service_rate:.2f} B/cycle")
+
+            # Get XUE summary from C++ EventCollector
+            xue = kpu.get_xue_summary()
+            mem = xue.get('memory_hierarchy', {})
+            compute_bd = xue.get('compute_breakdown', {})
+
+            print("Memory Hierarchy (C++ XUE Events):")
+            print(f"  DRAM: {mem.get('dram', {}).get('bytes', 0):,} bytes | {mem.get('dram', {}).get('events', 0):,} events")
+            print(f"  L3:   {mem.get('l3', {}).get('bytes', 0):,} bytes | {mem.get('l3', {}).get('events', 0):,} events")
+            print(f"  L2:   {mem.get('l2', {}).get('bytes', 0):,} bytes | {mem.get('l2', {}).get('events', 0):,} events")
+            print(f"  L1:   {mem.get('l1', {}).get('bytes', 0):,} bytes | {mem.get('l1', {}).get('events', 0):,} events")
             print()
-            print("Compute Performance:")
-            print(f"  MatMul FLOPs:  {stats.matmul_flops:,}")
-            print(f"  GFLOPS:        {stats.gflops:.1f} @ {stats.clock_frequency_ghz:.1f} GHz")
-            print(f"  FLOPs/Cycle:   {stats.matmul_flops / T:.1f}")
+
+            print("Compute Events (C++ XUE):")
+            print(f"  MatMul Events:      {compute_bd.get('matmul_events', 0):,}")
+            print(f"  MatMul FLOPs:       {compute_bd.get('matmul_flops', 0):,}")
+            print(f"  Total FLOPs:        {xue.get('total_flops', 0):,}")
             print()
+
             print("Cycle Breakdown:")
             print(f"  Compute Cycles:  {stats.compute_cycles:,}")
             print(f"  Memory Cycles:   {stats.memory_cycles:,}")
@@ -194,7 +202,7 @@ def main():
             print()
 
             # =================================================================
-            # XUE Metrics per Resource
+            # XUE Metrics per Resource (X, U, E)
             # =================================================================
             # XUE methodology requires reporting metrics in order:
             #   X = Throughput (work done per unit time)

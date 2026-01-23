@@ -349,6 +349,225 @@ from .memory_planner import (
 # Pre-built models (v0.8.0+)
 from . import models
 
+# XUE Observation Architecture (v0.5.0+)
+# Provides access to C++ XUE event collection and operational analysis
+def get_xue_summary():
+    """Get XUE event summary from C++ EventCollector.
+
+    Returns:
+        Dict with event counts organized by category:
+        - total_flops: Total floating point operations
+        - total_bytes_moved: Total bytes moved through memory hierarchy
+        - dram_bytes: External memory traffic
+        - arithmetic_intensity: FLOP/byte ratio
+        - compute: Compute event category summary
+        - compute_breakdown: Per-operation-type breakdown
+        - memory: Memory event category summary
+        - memory_hierarchy: Per-level (DRAM/L3/L2/L1) breakdown
+        - data_movement: Data movement event summary
+        - synchronization: Synchronization/stall events
+    """
+    try:
+        from . import _native
+        return _native.get_xue_summary()
+    except ImportError:
+        return {"error": "Native bindings not available"}
+
+
+def get_operational_analysis(peak_gflops=1024.0, dram_bandwidth_gbs=64.0, clock_ghz=1.0):
+    """Run operational analysis using roofline model.
+
+    XUE Methodology: X (Throughput) → U (Utilization) → E (Efficiency)
+    Analyzes collected observation data and predicts performance
+    using the roofline model (Williams et al., 2009).
+
+    Args:
+        peak_gflops: Peak compute throughput (default: 1024 for 16x16 systolic)
+        dram_bandwidth_gbs: DRAM bandwidth in GB/s (default: 64)
+        clock_ghz: Clock frequency in GHz (default: 1.0)
+
+    Returns:
+        Dict with workload characteristics and performance predictions:
+        - total_flops, dram_bytes, arithmetic_intensity
+        - predicted_gflops, predicted_cycles, predicted_bottleneck
+        - matmul_events, elementwise_events, etc.
+        - hardware: Hardware model parameters
+    """
+    try:
+        from . import _native
+        return _native.get_operational_analysis(peak_gflops, dram_bandwidth_gbs, clock_ghz)
+    except ImportError:
+        return {"error": "Native bindings not available"}
+
+
+def validate_operational_analysis(actual_gflops, actual_cycles,
+                                   peak_gflops=1024.0, dram_bandwidth_gbs=64.0, clock_ghz=1.0):
+    """Validate operational analysis against actual simulation results.
+
+    Compares roofline model predictions against actual achieved performance.
+
+    Args:
+        actual_gflops: Achieved GFLOPS from simulation
+        actual_cycles: Actual cycles from simulation
+        peak_gflops: Peak compute throughput
+        dram_bandwidth_gbs: DRAM bandwidth in GB/s
+        clock_ghz: Clock frequency in GHz
+
+    Returns:
+        Dict with prediction vs actual comparison:
+        - predicted_gflops, actual_gflops
+        - gflops_error_percent, cycles_error_percent
+        - within_10_percent: Boolean, True if within 10% accuracy
+        - roofline_efficiency, bottleneck
+    """
+    try:
+        from . import _native
+        return _native.validate_operational_analysis(
+            actual_gflops, actual_cycles, peak_gflops, dram_bandwidth_gbs, clock_ghz)
+    except ImportError:
+        return {"error": "Native bindings not available"}
+
+
+def reset_xue_counters():
+    """Reset all XUE event counters.
+
+    Call this before starting a new workload to get fresh event counts.
+    This is called automatically before each execution in _execute_native().
+    """
+    try:
+        from . import _native
+        _native.reset_xue_counters()
+    except ImportError:
+        pass
+
+
+def set_xue_enabled(enabled: bool):
+    """Enable or disable XUE event collection.
+
+    When disabled, events are not recorded (zero overhead).
+    This is useful for performance-critical code paths.
+
+    Args:
+        enabled: True to enable, False to disable
+    """
+    try:
+        from . import _native
+        _native.set_xue_enabled(enabled)
+    except ImportError:
+        pass
+
+
+def is_xue_enabled() -> bool:
+    """Check if XUE event collection is enabled.
+
+    Returns:
+        True if enabled, False otherwise (or if native bindings unavailable)
+    """
+    try:
+        from . import _native
+        return _native.is_xue_enabled()
+    except ImportError:
+        return False
+
+
+# =============================================================================
+# Native Backend Availability and Strict Mode (v0.8.0+)
+# =============================================================================
+
+def is_native_available() -> bool:
+    """Check if C++ native backend is available.
+
+    The native backend provides:
+    - C++ BehavioralComputeFabric (computes actual values)
+    - C++ TransactionalComputeFabric (timing simulation)
+    - XUE event recording (X/U/E Observation Architecture)
+
+    Returns:
+        True if native bindings are available and functional
+    """
+    try:
+        from . import _native
+        # Actually try to create a runtime to verify it works
+        runtime = _native.create_runtime(0)  # BEHAVIORAL
+        return runtime is not None
+    except (ImportError, Exception):
+        return False
+
+
+def set_strict_native(enabled: bool):
+    """Enable or disable strict native mode.
+
+    When strict_native=True, execution raises RuntimeError if the C++
+    native backend is unavailable (no Python fallback).
+
+    This is recommended for production use to ensure:
+    - Functional computation uses C++ resource models
+    - XUE events are properly recorded
+    - No silent fallback to Python/NumPy shims
+
+    Args:
+        enabled: True to require C++ backend, False to allow Python fallback
+
+    Example:
+        >>> kpu.set_strict_native(True)
+        >>> result = mlp(x, w1, w2)  # Raises RuntimeError if C++ unavailable
+    """
+    from .runtime import KPURuntime
+    KPURuntime._strict_native = enabled
+
+
+def get_strict_native() -> bool:
+    """Get current strict native mode setting.
+
+    Returns:
+        True if strict_native mode is enabled
+    """
+    from .runtime import KPURuntime
+    return KPURuntime._strict_native
+
+
+def get_execution_backend() -> str:
+    """Get the execution backend used by the last execution.
+
+    Returns:
+        One of:
+        - "cpp_behavioral" - C++ BehavioralComputeFabric
+        - "cpp_transactional" - C++ TransactionalComputeFabric
+        - "cpp_cycle_accurate" - C++ cycle-accurate model
+        - "python_fallback" - Pure Python/NumPy (no XUE recording)
+        - "unknown" - No execution has been performed yet
+    """
+    from .runtime import KPURuntime
+    runtime = KPURuntime.get_instance()
+    stats = runtime.get_stats()
+    if stats is None:
+        return "unknown"
+    return stats.execution_backend
+
+
+def verify_native_execution():
+    """Verify that the last execution used the C++ native backend.
+
+    Raises:
+        RuntimeError: If the last execution used Python fallback or no execution occurred
+
+    Example:
+        >>> result = mlp(x, w1, w2)
+        >>> kpu.verify_native_execution()  # Raises if Python fallback was used
+    """
+    backend = get_execution_backend()
+    if backend == "unknown":
+        raise RuntimeError("No execution has been performed yet")
+    if backend == "python_fallback":
+        raise RuntimeError(
+            "Last execution used Python fallback instead of C++ native backend. "
+            "XUE events were NOT recorded. "
+            "Ensure the native module is built: cd python && pip install -e ."
+        )
+    if not backend.startswith("cpp_"):
+        raise RuntimeError(f"Unexpected execution backend: {backend}")
+
+
 # torch.compile backend (optional, requires PyTorch)
 try:
     import torch as _torch  # Check if torch is actually importable
@@ -633,6 +852,21 @@ __all__ = [
     "estimate_memory",
     # Pre-built models
     "models",
+
+    # XUE Observation Architecture (v0.5.0+)
+    "get_xue_summary",
+    "get_operational_analysis",
+    "validate_operational_analysis",
+    "reset_xue_counters",
+    "set_xue_enabled",
+    "is_xue_enabled",
+
+    # Native backend verification (v0.8.0+)
+    "is_native_available",
+    "set_strict_native",
+    "get_strict_native",
+    "get_execution_backend",
+    "verify_native_execution",
 ]
 
 
@@ -643,7 +877,7 @@ def version() -> str:
 
 def info() -> str:
     """Return information about the KPU package."""
-    from .runtime import get_runtime
+    from .runtime import get_runtime, KPURuntime
 
     fidelity_names = {
         BEHAVIORAL: "BEHAVIORAL",
@@ -654,11 +888,32 @@ def info() -> str:
     runtime = get_runtime()
     fidelity_name = fidelity_names.get(runtime.fidelity, "UNKNOWN")
 
+    # Check native backend status
+    native_available = is_native_available()
+    native_initialized = runtime._native_sim is not None
+    strict_mode = KPURuntime._strict_native
+
+    if native_available:
+        if native_initialized:
+            native_status = "available and initialized (C++ execution)"
+        else:
+            native_status = "available but not yet initialized"
+    else:
+        native_status = "NOT AVAILABLE (Python fallback will be used)"
+
+    strict_status = "ENABLED (errors if C++ unavailable)" if strict_mode else "disabled (allows Python fallback)"
+
     torch_status = "available (torch.compile backend registered)" if TORCH_AVAILABLE else "not available (install PyTorch)"
+
+    # Get last execution backend if available
+    last_stats = runtime.get_stats()
+    last_backend = last_stats.execution_backend if last_stats else "no execution yet"
 
     return f"""KPU Python Package v{__version__}
   Fidelity: {fidelity_name}
-  Native bindings: {'available' if runtime._native_sim is not None else 'not available (using pure Python)'}
+  Native bindings: {native_status}
+  Strict native mode: {strict_status}
+  Last execution backend: {last_backend}
   PyTorch integration: {torch_status}
 
 Supported operations:

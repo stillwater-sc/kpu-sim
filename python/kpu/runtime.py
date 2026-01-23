@@ -120,47 +120,45 @@ def _adaptive_avgpool2d_fast(x: np.ndarray, output_size: Tuple[int, int]) -> np.
 
 @dataclass
 class LevelMemoryStats:
-    """Per-level memory hierarchy statistics (XUE events).
+    """Per-level memory hierarchy statistics.
 
-    Tracks reads, writes, bytes, cycles, and transaction sizes for
-    service rate and throughput calculations.
+    Note: In v0.5.0+, XUE event data comes from the C++ EventCollector.
+    Use kpu.get_xue_summary() for detailed XUE analysis.
     """
-    read_count: int = 0
-    write_count: int = 0
-    read_bytes: int = 0
-    write_bytes: int = 0
-    read_cycles: int = 0
-    write_cycles: int = 0
-    transaction_size: int = 64
-    service_rate: float = 0.0  # bytes/cycle
-    throughput: float = 0.0    # transactions/cycle
+    events: int = 0
+    bytes: int = 0
+    cycles: int = 0
 
     @property
     def total_bytes(self) -> int:
-        return self.read_bytes + self.write_bytes
+        """Alias for bytes (backward compatibility)."""
+        return self.bytes
 
     @property
     def total_count(self) -> int:
-        return self.read_count + self.write_count
+        """Alias for events (backward compatibility)."""
+        return self.events
 
 
 @dataclass
 class ExecutionStats:
     """Statistics from kernel execution.
 
-    Extended for v0.4.0+ TRANSACTIONAL runtime with detailed metrics
-    from the C++ transactional simulation models.
+    Extended for v0.5.0+ with C++ XUE Observation Architecture integration.
 
-    XUE Event Tracking:
-      - Per-level memory hierarchy stats (DRAM, L3, L2, L1)
-      - Transaction sizes for service rate calculations
-      - Elapsed cycles (T) for throughput analysis
+    XUE Methodology: X (Throughput) → U (Utilization) → E (Efficiency)
+      The Observation Architecture provides event hierarchies that aggregate
+      cleanly without logic on the datapath, enabling drill-down analysis
+      of resource effectiveness.
+
+      - Use kpu.get_xue_summary() for detailed event breakdown
+      - Use kpu.get_operational_analysis() for roofline predictions
     """
     # Basic timing
     cycles: int = 0
     compute_cycles: int = 0
     memory_cycles: int = 0
-    elapsed_cycles: int = 0  # Wall clock cycles (T) for service rates
+    elapsed_cycles: int = 0  # Wall clock cycles (T)
 
     # Detailed cycle breakdown (TRANSACTIONAL mode)
     busy_cycles: int = 0
@@ -172,7 +170,7 @@ class ExecutionStats:
     total_macs: int = 0
     matmul_count: int = 0
 
-    # Memory hierarchy statistics (XUE events per level)
+    # Memory hierarchy statistics (populated from C++ XUE)
     dram: Optional[LevelMemoryStats] = None
     l3: Optional[LevelMemoryStats] = None
     l2: Optional[LevelMemoryStats] = None
@@ -202,11 +200,17 @@ class ExecutionStats:
     memory_bandwidth_gbps: float = 0.0
     page_hit_rate: float = 0.0
 
-    # Per-level service rates (GB/s = bytes/cycle * clock_ghz)
-    dram_service_rate_gbps: float = 0.0
-    l3_service_rate_gbps: float = 0.0
-    l2_service_rate_gbps: float = 0.0
-    l1_service_rate_gbps: float = 0.0
+    # XUE summary from C++ EventCollector (v0.5.0+)
+    # Use kpu.get_xue_summary() for detailed access
+    xue_summary: Optional[Dict[str, Any]] = None
+
+    # Execution backend identifier (v0.8.0+)
+    # Proves which backend executed the program:
+    #   "cpp_behavioral" - C++ BehavioralComputeFabric
+    #   "cpp_transactional" - C++ TransactionalComputeFabric
+    #   "cpp_cycle_accurate" - C++ cycle-accurate model
+    #   "python_fallback" - Pure Python/NumPy fallback (no XUE)
+    execution_backend: str = "unknown"
 
     def __post_init__(self):
         # Initialize level stats if not provided
@@ -235,9 +239,18 @@ class KPURuntime:
     """
 
     _instance: Optional['KPURuntime'] = None
+    _strict_native: bool = False  # Class-level default
 
-    def __init__(self, fidelity: int = BEHAVIORAL):
+    def __init__(self, fidelity: int = BEHAVIORAL, strict_native: bool = False):
+        """
+        Initialize KPU runtime.
+
+        Args:
+            fidelity: Simulation fidelity level (BEHAVIORAL, TRANSACTIONAL, CYCLE_ACCURATE)
+            strict_native: If True, raise error when C++ backend unavailable (no Python fallback)
+        """
         self.fidelity = fidelity
+        self.strict_native = strict_native
         self._native_sim = None
         self._last_stats: Optional[ExecutionStats] = None
 
@@ -299,9 +312,50 @@ class KPURuntime:
                             program: 'DFXProgram',
                             inputs: List['Tensor']) -> Tuple['Tensor', ExecutionStats]:
         """
-        Execute program using pure Python (computes actual values).
+        Execute program behaviorally (computes actual values).
 
-        This is the functional simulator that verifies correctness.
+        Routes through C++ BehavioralComputeFabric when native bindings are
+        available, enabling XUE event recording. Falls back to pure Python
+        if native bindings are not available (unless strict_native=True).
+
+        Raises:
+            RuntimeError: If strict_native=True and C++ backend unavailable
+        """
+        from .tensor import Tensor
+        import warnings
+
+        # Initialize native simulator if not done yet
+        if self._native_sim is None:
+            self._init_native_sim()
+
+        # Try to use native C++ BehavioralComputeFabric for XUE recording
+        if self._native_sim is not None:
+            return self._execute_native(program, inputs, "behavioral")
+
+        # C++ unavailable - check strict mode
+        if self.strict_native or KPURuntime._strict_native:
+            raise RuntimeError(
+                "C++ native backend unavailable but strict_native=True. "
+                "BEHAVIORAL execution requires C++ BehavioralComputeFabric. "
+                "Ensure the native module is built: cd python && pip install -e ."
+            )
+
+        # Fallback to pure Python with warning
+        warnings.warn(
+            "Falling back to Python behavioral execution (no C++ backend). "
+            "XUE events will NOT be recorded. Set strict_native=True to make this an error.",
+            UserWarning,
+            stacklevel=3
+        )
+        return self._execute_behavioral_python(program, inputs)
+
+    def _execute_behavioral_python(self,
+                                   program: 'DFXProgram',
+                                   inputs: List['Tensor']) -> Tuple['Tensor', ExecutionStats]:
+        """
+        Execute program using pure Python (fallback when native unavailable).
+
+        Note: This path does NOT record XUE events.
         """
         from .tensor import Tensor
         from .dfx_emitter import DFXOpCode
@@ -316,6 +370,8 @@ class KPURuntime:
             tensors[name] = tensor._data
 
         stats = ExecutionStats()
+        # Mark as Python fallback - no C++ resources were used
+        stats.execution_backend = "python_fallback"
 
         # Execute operations in order
         for op in program.ops:
@@ -863,19 +919,13 @@ class KPURuntime:
             self._native_sim = None
 
     def _extract_level_stats(self, level_dict: Dict[str, Any]) -> LevelMemoryStats:
-        """Extract LevelMemoryStats from a dictionary."""
+        """Extract LevelMemoryStats from XUE memory hierarchy dict."""
         if level_dict is None:
             return LevelMemoryStats()
         return LevelMemoryStats(
-            read_count=level_dict.get('read_count', 0),
-            write_count=level_dict.get('write_count', 0),
-            read_bytes=level_dict.get('read_bytes', 0),
-            write_bytes=level_dict.get('write_bytes', 0),
-            read_cycles=level_dict.get('read_cycles', 0),
-            write_cycles=level_dict.get('write_cycles', 0),
-            transaction_size=level_dict.get('transaction_size', 64),
-            service_rate=level_dict.get('service_rate', 0.0),
-            throughput=level_dict.get('throughput', 0.0),
+            events=level_dict.get('events', 0),
+            bytes=level_dict.get('bytes', 0),
+            cycles=level_dict.get('cycles', 0),
         )
 
     def _execute_native(self,
@@ -884,22 +934,30 @@ class KPURuntime:
                         mode: str) -> Tuple['Tensor', ExecutionStats]:
         """Execute using native C++ simulator."""
         from .tensor import Tensor
+        from . import _native
+
+        # Reset XUE counters before execution (v0.5.0+)
+        _native.reset_xue_counters()
 
         # Convert inputs to numpy arrays
         input_arrays = [t._data for t in inputs]
 
-        # Call native simulator
+        # Call native simulator (records XUE events during execution)
         result_data, stats_dict = self._native_sim.execute(
             program.to_dict(),
             input_arrays,
             mode
         )
 
-        # Extract per-level memory stats (XUE events)
-        dram_stats = self._extract_level_stats(stats_dict.get('dram'))
-        l3_stats = self._extract_level_stats(stats_dict.get('l3'))
-        l2_stats = self._extract_level_stats(stats_dict.get('l2'))
-        l1_stats = self._extract_level_stats(stats_dict.get('l1'))
+        # Get XUE summary from C++ EventCollector (v0.5.0+)
+        xue_summary = _native.get_xue_summary()
+
+        # Extract per-level memory stats from XUE memory hierarchy
+        mem_hierarchy = xue_summary.get('memory_hierarchy', {})
+        dram_stats = self._extract_level_stats(mem_hierarchy.get('dram'))
+        l3_stats = self._extract_level_stats(mem_hierarchy.get('l3'))
+        l2_stats = self._extract_level_stats(mem_hierarchy.get('l2'))
+        l1_stats = self._extract_level_stats(mem_hierarchy.get('l1'))
 
         stats = ExecutionStats(
             # Basic timing
@@ -915,7 +973,7 @@ class KPURuntime:
             matmul_flops=stats_dict.get('matmul_flops', 0),
             total_macs=stats_dict.get('total_macs', 0),
             matmul_count=stats_dict.get('matmul_count', 0),
-            # Memory hierarchy stats (XUE events)
+            # Memory hierarchy stats from C++ XUE (v0.5.0+)
             dram=dram_stats,
             l3=l3_stats,
             l2=l2_stats,
@@ -939,11 +997,10 @@ class KPURuntime:
             efficiency=stats_dict.get('efficiency', 0.0),
             memory_bandwidth_gbps=stats_dict.get('memory_bandwidth_gbps', 0.0),
             page_hit_rate=stats_dict.get('page_hit_rate', 0.0),
-            # Per-level service rates
-            dram_service_rate_gbps=stats_dict.get('dram_service_rate_gbps', 0.0),
-            l3_service_rate_gbps=stats_dict.get('l3_service_rate_gbps', 0.0),
-            l2_service_rate_gbps=stats_dict.get('l2_service_rate_gbps', 0.0),
-            l1_service_rate_gbps=stats_dict.get('l1_service_rate_gbps', 0.0),
+            # XUE summary from C++ (v0.5.0+)
+            xue_summary=xue_summary,
+            # Execution backend identifier (v0.8.0+)
+            execution_backend=f"cpp_{mode}",
         )
 
         return Tensor(result_data), stats
