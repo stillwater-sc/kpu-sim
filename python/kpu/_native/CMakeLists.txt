@@ -18,8 +18,10 @@ endif()
 pybind11_add_module(_native kpu_native.cpp)
 
 # Link against pybind11 headers and KPU simulator libraries
+# Note: XUE headers are header-only (constexpr/inline), no library needed
 target_link_libraries(_native PRIVATE
     pybind11::headers
+    kpu_behavioral
     kpu_transactional
     kpu_dfx
 )

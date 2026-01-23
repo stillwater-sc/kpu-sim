@@ -4,6 +4,7 @@
 // ============================================================================
 
 #include <sw/kpu/models/behavioral/memory/memory_controller.hpp>
+#include <sw/xue/event_collector.hpp>
 #include <algorithm>
 #include <cstring>
 #include <stdexcept>
@@ -25,7 +26,7 @@ BehavioralMemoryController::BehavioralMemoryController(const MemoryControllerCon
 
 std::optional<uint64_t> BehavioralMemoryController::submit_read(
     [[maybe_unused]]uint64_t address,
-    [[maybe_unused]]uint32_t size,
+    uint32_t size,
     std::function<void()> callback)
 {
     uint64_t request_id = next_request_id_++;
@@ -44,6 +45,10 @@ std::optional<uint64_t> BehavioralMemoryController::submit_read(
     stats_.total_latency += latency;
     stats_.min_latency = std::min(stats_.min_latency, latency);
     stats_.max_latency = std::max(stats_.max_latency, latency);
+
+    // Record XUE event
+    sw::xue::xue().set_cycle(current_cycle_);
+    sw::xue::xue().record_dram_read(size, latency);
 
     // If zero latency (instant mode), invoke callback immediately
     if (latency == 0) {
@@ -85,6 +90,10 @@ std::optional<uint64_t> BehavioralMemoryController::submit_write(
     stats_.total_latency += latency;
     stats_.min_latency = std::min(stats_.min_latency, latency);
     stats_.max_latency = std::max(stats_.max_latency, latency);
+
+    // Record XUE event
+    sw::xue::xue().set_cycle(current_cycle_);
+    sw::xue::xue().record_dram_write(size, latency);
 
     // If zero latency, invoke callback immediately
     if (latency == 0) {

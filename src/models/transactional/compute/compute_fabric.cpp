@@ -4,6 +4,7 @@
 // ============================================================================
 
 #include <sw/kpu/models/transactional/compute/compute_fabric.hpp>
+#include <sw/xue/event_collector.hpp>
 
 #include <algorithm>
 #include <cmath>
@@ -104,6 +105,10 @@ std::optional<uint64_t> TransactionalComputeFabric::submit_matmul(
     stats_.min_latency = std::min(stats_.min_latency, static_cast<uint64_t>(duration));
     stats_.max_latency = std::max(stats_.max_latency, static_cast<uint64_t>(duration));
 
+    // Record XUE event (tile-level for hardware-accurate counters)
+    sw::xue::xue().set_cycle(current_cycle_);
+    sw::xue::xue().record_matmul(desc.m, desc.n, desc.k, duration);
+
     return op_id;
 }
 
@@ -137,6 +142,11 @@ std::optional<uint64_t> TransactionalComputeFabric::submit_conv2d(
     stats_.min_latency = std::min(stats_.min_latency, static_cast<uint64_t>(duration));
     stats_.max_latency = std::max(stats_.max_latency, static_cast<uint64_t>(duration));
 
+    // Record XUE event
+    sw::xue::xue().set_cycle(current_cycle_);
+    sw::xue::xue().record(sw::xue::EventType::CONV_IM2COL,
+                          sw::xue::EventMetadata::compute(macs * 2, 0, 0, 0));
+
     return op_id;
 }
 
@@ -161,6 +171,34 @@ std::optional<uint64_t> TransactionalComputeFabric::submit_elementwise(
     stats_.total_flops += desc.count;
     stats_.total_compute_cycles += duration;
 
+    // Record XUE event based on operation type
+    sw::xue::xue().set_cycle(current_cycle_);
+    switch (desc.op) {
+        case ElementwiseOp::RELU:
+            sw::xue::xue().record_relu(desc.count, duration);
+            break;
+        case ElementwiseOp::ADD:
+        case ElementwiseOp::ADD_SCALAR:
+            sw::xue::xue().record_add(desc.count, duration);
+            break;
+        case ElementwiseOp::MUL:
+        case ElementwiseOp::MUL_SCALAR:
+            sw::xue::xue().record_mul(desc.count, duration);
+            break;
+        case ElementwiseOp::SIGMOID:
+            sw::xue::xue().record_elementwise(sw::xue::EventType::ELEM_SIGMOID, desc.count, duration);
+            break;
+        case ElementwiseOp::TANH:
+            sw::xue::xue().record_elementwise(sw::xue::EventType::ELEM_TANH, desc.count, duration);
+            break;
+        case ElementwiseOp::GELU:
+            sw::xue::xue().record_elementwise(sw::xue::EventType::ELEM_GELU, desc.count, duration);
+            break;
+        default:
+            sw::xue::xue().record_elementwise(sw::xue::EventType::ELEM_ADD, desc.count, duration);
+            break;
+    }
+
     return op_id;
 }
 
@@ -181,6 +219,18 @@ std::optional<uint64_t> TransactionalComputeFabric::submit_pool2d(
 
     stats_.pool2ds++;
     stats_.total_compute_cycles += duration;
+
+    // Record XUE event
+    sw::xue::xue().set_cycle(current_cycle_);
+    uint64_t output_elements = static_cast<uint64_t>(desc.batch_size) * desc.channels *
+                                desc.out_height() * desc.out_width();
+    if (desc.pool_type == Pool2DDescriptor::PoolType::MAX) {
+        sw::xue::xue().record(sw::xue::EventType::POOL_MAX,
+                              sw::xue::EventMetadata::compute(output_elements, 0, 0, 0));
+    } else {
+        sw::xue::xue().record(sw::xue::EventType::POOL_AVG,
+                              sw::xue::EventMetadata::compute(output_elements, 0, 0, 0));
+    }
 
     return op_id;
 }
@@ -203,6 +253,10 @@ std::optional<uint64_t> TransactionalComputeFabric::submit_softmax(
     stats_.softmaxes++;
     stats_.total_flops += desc.total_elements() * 5;
     stats_.total_compute_cycles += duration;
+
+    // Record XUE event
+    sw::xue::xue().set_cycle(current_cycle_);
+    sw::xue::xue().record_softmax(desc.total_elements(), duration);
 
     return op_id;
 }
@@ -230,6 +284,10 @@ std::optional<uint64_t> TransactionalComputeFabric::submit_layernorm(
     uint64_t total = static_cast<uint64_t>(desc.batch_size) * desc.normalized_size;
     stats_.total_flops += total * 8;
     stats_.total_compute_cycles += duration;
+
+    // Record XUE event
+    sw::xue::xue().set_cycle(current_cycle_);
+    sw::xue::xue().record_layernorm(total, duration);
 
     return op_id;
 }
@@ -261,6 +319,10 @@ std::optional<uint64_t> TransactionalComputeFabric::submit_batchnorm(
     uint64_t total = static_cast<uint64_t>(desc.batch_size) * desc.num_features * desc.spatial_size;
     stats_.total_flops += total * 4;
     stats_.total_compute_cycles += duration;
+
+    // Record XUE event (batchnorm as layernorm for now, similar operation structure)
+    sw::xue::xue().set_cycle(current_cycle_);
+    sw::xue::xue().record_layernorm(total, duration);
 
     return op_id;
 }

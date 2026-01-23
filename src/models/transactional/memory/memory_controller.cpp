@@ -4,6 +4,7 @@
 // ============================================================================
 
 #include <sw/kpu/models/transactional/memory/memory_controller.hpp>
+#include <sw/xue/event_collector.hpp>
 
 #include <algorithm>
 #include <cstring>
@@ -215,6 +216,16 @@ void TransactionalMemoryController::tick() {
         stats_.total_latency += latency;
         stats_.min_latency = std::min(stats_.min_latency, latency);
         stats_.max_latency = std::max(stats_.max_latency, latency);
+
+        // Record XUE event on completion with actual latency
+        sw::xue::xue().set_cycle(current_cycle_);
+        // Use burst size as approximate bytes (actual size not tracked in PendingRequest)
+        uint64_t bytes = config_.timing.tBurst * 8;  // Burst length * 8 bytes per beat
+        if (req.type == MemoryRequestType::READ) {
+            sw::xue::xue().record_dram_read(bytes, latency);
+        } else {
+            sw::xue::xue().record_dram_write(bytes, latency);
+        }
 
         // Invoke callback
         if (req.callback) {

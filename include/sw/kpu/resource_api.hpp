@@ -481,6 +481,7 @@ enum class ElementwiseOp : uint8_t {
     SQRT = 12,
     EXP = 13,
     LOG = 14,
+    SILU = 15,
     // Scalar operations (second operand is scalar, broadcast)
     ADD_SCALAR = 20,
     MUL_SCALAR = 21,
@@ -507,6 +508,7 @@ inline const char* elementwise_op_name(ElementwiseOp op) {
         case ElementwiseOp::SQRT: return "sqrt";
         case ElementwiseOp::EXP: return "exp";
         case ElementwiseOp::LOG: return "log";
+        case ElementwiseOp::SILU: return "silu";
         case ElementwiseOp::ADD_SCALAR: return "add_scalar";
         case ElementwiseOp::MUL_SCALAR: return "mul_scalar";
         case ElementwiseOp::POW_SCALAR: return "pow_scalar";

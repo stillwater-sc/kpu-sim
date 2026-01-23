@@ -16,6 +16,7 @@
 
 #include <sw/kpu/fidelity/simulation_fidelity.hpp>
 #include <sw/kpu/fidelity/component_config.hpp>
+#include <sw/kpu/resource_api.hpp>  // For ElementwiseOp enum
 
 // Forward declarations
 namespace sw::trace {
@@ -119,63 +120,19 @@ struct Conv2DDescriptor {
     }
 };
 
-/// Element-wise operation types
-enum class ElementwiseOp : uint8_t {
-    // Binary operations
-    ADD,
-    SUB,
-    MUL,
-    DIV,
-    MAX,
-    MIN,
+// Note: ElementwiseOp enum is defined in <sw/kpu/resource_api.hpp>
+// Helper functions for element-wise operations:
 
-    // Unary operations (b_data ignored)
-    NEG,
-    ABS,
-    SQRT,
-    EXP,
-    LOG,
-    TANH,
-    SIGMOID,
-    RELU,
-    GELU,
-    SILU,
-
-    // Scalar operations (scalar in b_data[0])
-    ADD_SCALAR,
-    MUL_SCALAR,
-};
-
+/// Check if operation is unary (single input)
 constexpr bool is_unary_op(ElementwiseOp op) {
-    return op >= ElementwiseOp::NEG && op <= ElementwiseOp::SILU;
+    // NEG=10, ABS=11, SQRT=12, EXP=13, LOG=14, SILU=15 (and activations RELU=6, GELU=7, SIGMOID=8, TANH=9)
+    uint8_t v = static_cast<uint8_t>(op);
+    return (v >= 6 && v <= 15);  // All activation and unary ops
 }
 
+/// Check if operation uses a scalar second operand
 constexpr bool is_scalar_op(ElementwiseOp op) {
     return op >= ElementwiseOp::ADD_SCALAR;
-}
-
-constexpr std::string_view to_string(ElementwiseOp op) {
-    switch (op) {
-        case ElementwiseOp::ADD: return "ADD";
-        case ElementwiseOp::SUB: return "SUB";
-        case ElementwiseOp::MUL: return "MUL";
-        case ElementwiseOp::DIV: return "DIV";
-        case ElementwiseOp::MAX: return "MAX";
-        case ElementwiseOp::MIN: return "MIN";
-        case ElementwiseOp::NEG: return "NEG";
-        case ElementwiseOp::ABS: return "ABS";
-        case ElementwiseOp::SQRT: return "SQRT";
-        case ElementwiseOp::EXP: return "EXP";
-        case ElementwiseOp::LOG: return "LOG";
-        case ElementwiseOp::TANH: return "TANH";
-        case ElementwiseOp::SIGMOID: return "SIGMOID";
-        case ElementwiseOp::RELU: return "RELU";
-        case ElementwiseOp::GELU: return "GELU";
-        case ElementwiseOp::SILU: return "SILU";
-        case ElementwiseOp::ADD_SCALAR: return "ADD_SCALAR";
-        case ElementwiseOp::MUL_SCALAR: return "MUL_SCALAR";
-        default: return "UNKNOWN";
-    }
 }
 
 /// Element-wise operation descriptor

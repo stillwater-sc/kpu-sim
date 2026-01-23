@@ -4,6 +4,7 @@
 // ============================================================================
 
 #include <sw/kpu/models/behavioral/compute/compute_fabric.hpp>
+#include <sw/xue/event_collector.hpp>
 
 #include <algorithm>
 #include <cmath>
@@ -72,6 +73,10 @@ std::optional<uint64_t> BehavioralComputeFabric::submit_matmul(
     // Estimate latency and schedule callback
     uint32_t latency = estimate_latency(desc);
 
+    // Record XUE event (tile-level for hardware-accurate counters)
+    sw::xue::xue().set_cycle(current_cycle_);
+    sw::xue::xue().record_matmul(desc.m, desc.n, desc.k, latency);
+
     if (callback) {
         pending_callbacks_.push(PendingCallback{
             .completion_cycle = current_cycle_ + latency,
@@ -117,6 +122,11 @@ std::optional<uint64_t> BehavioralComputeFabric::submit_conv2d(
     uint32_t latency = estimate_latency(desc);
     schedule_callback(latency, callback);
 
+    // Record XUE event
+    sw::xue::xue().set_cycle(current_cycle_);
+    sw::xue::xue().record(sw::xue::EventType::CONV_IM2COL,
+                          sw::xue::EventMetadata::compute(macs * 2, 0, 0, 0));
+
     stats_.total_compute_cycles += latency;
     stats_.min_latency = std::min(stats_.min_latency, static_cast<uint64_t>(latency));
     stats_.max_latency = std::max(stats_.max_latency, static_cast<uint64_t>(latency));
@@ -151,6 +161,34 @@ std::optional<uint64_t> BehavioralComputeFabric::submit_elementwise(
 
     stats_.total_compute_cycles += latency;
 
+    // Record XUE event based on operation type
+    sw::xue::xue().set_cycle(current_cycle_);
+    switch (desc.op) {
+        case ElementwiseOp::RELU:
+            sw::xue::xue().record_relu(desc.count, latency);
+            break;
+        case ElementwiseOp::ADD:
+        case ElementwiseOp::ADD_SCALAR:
+            sw::xue::xue().record_add(desc.count, latency);
+            break;
+        case ElementwiseOp::MUL:
+        case ElementwiseOp::MUL_SCALAR:
+            sw::xue::xue().record_mul(desc.count, latency);
+            break;
+        case ElementwiseOp::SIGMOID:
+            sw::xue::xue().record_elementwise(sw::xue::EventType::ELEM_SIGMOID, desc.count, latency);
+            break;
+        case ElementwiseOp::TANH:
+            sw::xue::xue().record_elementwise(sw::xue::EventType::ELEM_TANH, desc.count, latency);
+            break;
+        case ElementwiseOp::GELU:
+            sw::xue::xue().record_elementwise(sw::xue::EventType::ELEM_GELU, desc.count, latency);
+            break;
+        default:
+            sw::xue::xue().record_elementwise(sw::xue::EventType::ELEM_ADD, desc.count, latency);
+            break;
+    }
+
     return op_id;
 }
 
@@ -177,6 +215,18 @@ std::optional<uint64_t> BehavioralComputeFabric::submit_pool2d(
     schedule_callback(latency, callback);
 
     stats_.total_compute_cycles += latency;
+
+    // Record XUE event
+    sw::xue::xue().set_cycle(current_cycle_);
+    uint64_t output_elements = static_cast<uint64_t>(desc.batch_size) * desc.channels *
+                                desc.out_height() * desc.out_width();
+    if (desc.pool_type == Pool2DDescriptor::PoolType::MAX) {
+        sw::xue::xue().record(sw::xue::EventType::POOL_MAX,
+                              sw::xue::EventMetadata::compute(output_elements, 0, 0, 0));
+    } else {
+        sw::xue::xue().record(sw::xue::EventType::POOL_AVG,
+                              sw::xue::EventMetadata::compute(output_elements, 0, 0, 0));
+    }
 
     return op_id;
 }
@@ -206,6 +256,10 @@ std::optional<uint64_t> BehavioralComputeFabric::submit_softmax(
     schedule_callback(latency, callback);
 
     stats_.total_compute_cycles += latency;
+
+    // Record XUE event
+    sw::xue::xue().set_cycle(current_cycle_);
+    sw::xue::xue().record_softmax(desc.total_elements(), latency);
 
     return op_id;
 }
@@ -240,6 +294,10 @@ std::optional<uint64_t> BehavioralComputeFabric::submit_layernorm(
     schedule_callback(latency, callback);
 
     stats_.total_compute_cycles += latency;
+
+    // Record XUE event
+    sw::xue::xue().set_cycle(current_cycle_);
+    sw::xue::xue().record_layernorm(total_elements, latency);
 
     return op_id;
 }
@@ -278,6 +336,10 @@ std::optional<uint64_t> BehavioralComputeFabric::submit_batchnorm(
     schedule_callback(latency, callback);
 
     stats_.total_compute_cycles += latency;
+
+    // Record XUE event (batchnorm as layernorm for now, similar operation structure)
+    sw::xue::xue().set_cycle(current_cycle_);
+    sw::xue::xue().record_layernorm(total_elements, latency);
 
     return op_id;
 }
