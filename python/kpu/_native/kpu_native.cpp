@@ -1008,7 +1008,7 @@ private:
             int64_t gemm_N = out_channels;
             stats.matmul_flops += 2LL * gemm_M * gemm_N * gemm_K;
 
-        } else if (opcode == "max_pool2d" || opcode == "avg_pool2d") {
+        } else if (opcode == "max_pool2d" || opcode == "maxpool2d" || opcode == "avg_pool2d" || opcode == "avgpool2d") {
             // Pool2D using C++ BehavioralComputeFabric
             std::string x_name = input_names[0].cast<std::string>();
             auto X = tensors[x_name];
@@ -1072,7 +1072,7 @@ private:
             py::buffer_info r_buf = result.request();
 
             sw::kpu::Pool2DDescriptor desc;
-            desc.pool_type = (opcode == "max_pool2d") ? sw::kpu::Pool2DDescriptor::PoolType::MAX : sw::kpu::Pool2DDescriptor::PoolType::AVG;
+            desc.pool_type = (opcode == "max_pool2d" || opcode == "maxpool2d") ? sw::kpu::Pool2DDescriptor::PoolType::MAX : sw::kpu::Pool2DDescriptor::PoolType::AVG;
             desc.batch_size = batch_size;
             desc.channels = channels;
             desc.in_height = input_h;
@@ -2423,16 +2423,102 @@ private:
 
         } else if (opcode == "attention") {
             // Scaled Dot-Product Attention: softmax(Q @ K^T / sqrt(d_k)) @ V
-            // Pure C++ implementation for reliability
+            // Supports both simple attention and full multi-head with QKV projections
             py::dict attrs = op.contains("attrs") ? op["attrs"].cast<py::dict>() : py::dict();
 
-            std::string q_name = input_names[0].cast<std::string>();
-            std::string k_name = input_names[1].cast<std::string>();
-            std::string v_name = input_names[2].cast<std::string>();
+            // Check for QKV projection mode
+            bool include_qkv_projection = attrs.contains("include_qkv_projection") &&
+                                          attrs["include_qkv_projection"].cast<bool>();
+            bool include_output_projection = attrs.contains("include_output_projection") &&
+                                             attrs["include_output_projection"].cast<bool>();
 
-            auto Q = tensors.at(q_name);
-            auto K = tensors.at(k_name);
-            auto V = tensors.at(v_name);
+            py::ssize_t num_heads = 1;
+            if (attrs.contains("num_heads")) {
+                num_heads = attrs["num_heads"].cast<py::ssize_t>();
+            }
+
+            py::array_t<float> Q, K, V;
+            py::ssize_t batch_size, seq_len, d_model, d_k, d_v;
+            py::array_t<float> w_o;  // Output projection weights
+
+            if (include_qkv_projection) {
+                // Multi-head attention with inline QKV projections
+                // Inputs: x, w_q, w_k, w_v, [w_o]
+                std::string x_name = input_names[0].cast<std::string>();
+                std::string wq_name = input_names[1].cast<std::string>();
+                std::string wk_name = input_names[2].cast<std::string>();
+                std::string wv_name = input_names[3].cast<std::string>();
+
+                auto X = tensors.at(x_name);
+                auto W_Q = tensors.at(wq_name);
+                auto W_K = tensors.at(wk_name);
+                auto W_V = tensors.at(wv_name);
+
+                py::buffer_info x_buf = X.request();
+                py::buffer_info wq_buf = W_Q.request();
+
+                // X is [B, S, D]
+                batch_size = x_buf.shape[0];
+                seq_len = x_buf.shape[1];
+                d_model = x_buf.shape[2];
+                d_k = d_model / num_heads;
+                d_v = d_k;
+
+                // Compute Q = X @ W_Q, K = X @ W_K, V = X @ W_V
+                // Each projection: [B, S, D] @ [D, D] = [B, S, D]
+                const float* x_ptr = static_cast<const float*>(x_buf.ptr);
+                const float* wq_ptr = static_cast<const float*>(wq_buf.ptr);
+                const float* wk_ptr = static_cast<const float*>(W_K.request().ptr);
+                const float* wv_ptr = static_cast<const float*>(W_V.request().ptr);
+
+                // Allocate projected Q, K, V
+                std::vector<py::ssize_t> proj_shape = {batch_size, seq_len, d_model};
+                Q = py::array_t<float>(proj_shape);
+                K = py::array_t<float>(proj_shape);
+                V = py::array_t<float>(proj_shape);
+                float* q_ptr = Q.mutable_data();
+                float* k_ptr = K.mutable_data();
+                float* v_ptr = V.mutable_data();
+
+                // Perform projections: output[b,s,d] = sum_i(X[b,s,i] * W[i,d])
+                for (py::ssize_t b = 0; b < batch_size; ++b) {
+                    for (py::ssize_t s = 0; s < seq_len; ++s) {
+                        for (py::ssize_t d = 0; d < d_model; ++d) {
+                            float sum_q = 0.0f, sum_k = 0.0f, sum_v = 0.0f;
+                            for (py::ssize_t i = 0; i < d_model; ++i) {
+                                float x_val = x_ptr[(b * seq_len + s) * d_model + i];
+                                sum_q += x_val * wq_ptr[i * d_model + d];
+                                sum_k += x_val * wk_ptr[i * d_model + d];
+                                sum_v += x_val * wv_ptr[i * d_model + d];
+                            }
+                            py::ssize_t out_idx = (b * seq_len + s) * d_model + d;
+                            q_ptr[out_idx] = sum_q;
+                            k_ptr[out_idx] = sum_k;
+                            v_ptr[out_idx] = sum_v;
+                        }
+                    }
+                }
+
+                // Record projection matmuls in XUE
+                int64_t proj_flops = 2LL * batch_size * seq_len * d_model * d_model;
+                stats.matmul_flops += 3 * proj_flops;  // Q, K, V projections
+                stats.matmul_count += 3;
+
+                // Get output projection weights if present
+                if (include_output_projection && input_names.size() > 4) {
+                    std::string wo_name = input_names[4].cast<std::string>();
+                    w_o = tensors.at(wo_name);
+                }
+            } else {
+                // Simple attention: Q, K, V already provided
+                std::string q_name = input_names[0].cast<std::string>();
+                std::string k_name = input_names[1].cast<std::string>();
+                std::string v_name = input_names[2].cast<std::string>();
+
+                Q = tensors.at(q_name);
+                K = tensors.at(k_name);
+                V = tensors.at(v_name);
+            }
 
             py::buffer_info q_buf = Q.request();
             py::buffer_info k_buf = K.request();
@@ -2442,9 +2528,12 @@ private:
             const float* k_ptr = static_cast<const float*>(k_buf.ptr);
             const float* v_ptr = static_cast<const float*>(v_buf.ptr);
 
-            // Determine dimensions based on tensor rank
+            // Determine dimensions based on tensor rank (for non-projection case)
             // Support: 2D [seq, d], 3D [batch, seq, d], 4D [batch, heads, seq, d]
-            py::ssize_t batch_size = 1, num_heads = 1, seq_len, d_k, d_v;
+            if (!include_qkv_projection) {
+                batch_size = 1;
+                num_heads = 1;
+            }
 
             if (q_buf.ndim == 4) {
                 batch_size = q_buf.shape[0];
@@ -2469,8 +2558,21 @@ private:
                 scale = attrs["scale"].cast<float>();
             }
 
-            // Create output array with same shape as V
-            std::vector<py::ssize_t> out_shape(v_buf.shape.begin(), v_buf.shape.end());
+            // For QKV projection mode, output shape is [B, S, D]
+            // For simple attention, output shape matches V
+            std::vector<py::ssize_t> out_shape;
+            py::ssize_t head_dim = d_k;  // For QKV projection: d_k = d_model / num_heads
+
+            if (include_qkv_projection) {
+                // Output will be [B, S, D] where D = num_heads * head_dim
+                out_shape = {batch_size, seq_len, d_model};
+                head_dim = d_model / num_heads;
+                d_k = head_dim;
+                d_v = head_dim;
+            } else {
+                out_shape = std::vector<py::ssize_t>(v_buf.shape.begin(), v_buf.shape.end());
+            }
+
             py::array_t<float> Y(out_shape);
             float* y_ptr = Y.mutable_data();
 
@@ -2485,30 +2587,32 @@ private:
                 py::ssize_t b = iter / num_heads;
                 py::ssize_t h = iter % num_heads;
 
-                // Compute offset into Q, K, V tensors
-                py::ssize_t qk_offset, v_offset, out_offset;
-                if (q_buf.ndim == 4) {
-                    qk_offset = (b * num_heads + h) * seq_len * d_k;
-                    v_offset = (b * num_heads + h) * seq_len * d_v;
-                    out_offset = (b * num_heads + h) * seq_len * d_v;
-                } else if (q_buf.ndim == 3) {
-                    qk_offset = b * seq_len * d_k;
-                    v_offset = b * seq_len * d_v;
-                    out_offset = b * seq_len * d_v;
-                } else {
-                    qk_offset = 0;
-                    v_offset = 0;
-                    out_offset = 0;
-                }
-
                 // Step 1: Compute scores = Q @ K^T * scale
-                // scores[i, j] = sum_k(Q[i, k] * K[j, k]) * scale
+                // For QKV projection: Q, K, V are [B, S, D] where D = num_heads * head_dim
+                // Head h uses indices [h*head_dim, (h+1)*head_dim) for the last dimension
                 for (py::ssize_t i = 0; i < seq_len; ++i) {
                     for (py::ssize_t j = 0; j < seq_len; ++j) {
                         float dot = 0.0f;
-                        for (py::ssize_t k = 0; k < d_k; ++k) {
-                            dot += q_ptr[qk_offset + i * d_k + k] *
-                                   k_ptr[qk_offset + j * d_k + k];
+                        for (py::ssize_t k = 0; k < head_dim; ++k) {
+                            py::ssize_t q_idx, k_idx;
+                            if (include_qkv_projection) {
+                                // [B, S, D] layout: idx = b*S*D + s*D + h*head_dim + k
+                                q_idx = b * seq_len * d_model + i * d_model + h * head_dim + k;
+                                k_idx = b * seq_len * d_model + j * d_model + h * head_dim + k;
+                            } else if (q_buf.ndim == 4) {
+                                // [B, H, S, d_k] layout
+                                q_idx = (b * num_heads + h) * seq_len * d_k + i * d_k + k;
+                                k_idx = (b * num_heads + h) * seq_len * d_k + j * d_k + k;
+                            } else if (q_buf.ndim == 3) {
+                                // [B, S, d_k] layout (single head)
+                                q_idx = b * seq_len * d_k + i * d_k + k;
+                                k_idx = b * seq_len * d_k + j * d_k + k;
+                            } else {
+                                // [S, d_k] layout
+                                q_idx = i * d_k + k;
+                                k_idx = j * d_k + k;
+                            }
+                            dot += q_ptr[q_idx] * k_ptr[k_idx];
                         }
                         scores[static_cast<size_t>(i * seq_len + j)] = dot * scale;
                     }
@@ -2539,17 +2643,76 @@ private:
                 }
 
                 // Step 3: Compute output = attn_weights @ V
-                // output[i, j] = sum_k(attn_weights[i, k] * V[k, j])
                 for (py::ssize_t i = 0; i < seq_len; ++i) {
-                    for (py::ssize_t j = 0; j < d_v; ++j) {
+                    for (py::ssize_t j = 0; j < head_dim; ++j) {
                         float sum = 0.0f;
                         for (py::ssize_t k = 0; k < seq_len; ++k) {
-                            sum += attn_weights[static_cast<size_t>(i * seq_len + k)] *
-                                   v_ptr[v_offset + k * d_v + j];
+                            py::ssize_t v_idx;
+                            if (include_qkv_projection) {
+                                // [B, S, D] layout
+                                v_idx = b * seq_len * d_model + k * d_model + h * head_dim + j;
+                            } else if (v_buf.ndim == 4) {
+                                // [B, H, S, d_v] layout
+                                v_idx = (b * num_heads + h) * seq_len * d_v + k * d_v + j;
+                            } else if (v_buf.ndim == 3) {
+                                // [B, S, d_v] layout
+                                v_idx = b * seq_len * d_v + k * d_v + j;
+                            } else {
+                                // [S, d_v] layout
+                                v_idx = k * d_v + j;
+                            }
+                            sum += attn_weights[static_cast<size_t>(i * seq_len + k)] * v_ptr[v_idx];
                         }
-                        y_ptr[out_offset + i * d_v + j] = sum;
+                        // Write to output
+                        py::ssize_t out_idx;
+                        if (include_qkv_projection) {
+                            // [B, S, D] layout
+                            out_idx = b * seq_len * d_model + i * d_model + h * head_dim + j;
+                        } else if (v_buf.ndim == 4) {
+                            // [B, H, S, d_v] layout
+                            out_idx = (b * num_heads + h) * seq_len * d_v + i * d_v + j;
+                        } else if (v_buf.ndim == 3) {
+                            // [B, S, d_v] layout
+                            out_idx = b * seq_len * d_v + i * d_v + j;
+                        } else {
+                            // [S, d_v] layout
+                            out_idx = i * d_v + j;
+                        }
+                        y_ptr[out_idx] = sum;
                     }
                 }
+            }
+
+            // Apply output projection if requested: Y = Y @ W_O
+            if (include_output_projection && w_o.size() > 0) {
+                py::buffer_info wo_buf = w_o.request();
+                const float* wo_ptr = static_cast<const float*>(wo_buf.ptr);
+
+                // Create new output for projection result
+                py::array_t<float> Y_proj(out_shape);
+                float* yp_ptr = Y_proj.mutable_data();
+
+                // Y_proj[b, s, d] = sum_i(Y[b, s, i] * W_O[i, d])
+                for (py::ssize_t b = 0; b < batch_size; ++b) {
+                    for (py::ssize_t s = 0; s < seq_len; ++s) {
+                        for (py::ssize_t d = 0; d < d_model; ++d) {
+                            float sum = 0.0f;
+                            for (py::ssize_t i = 0; i < d_model; ++i) {
+                                py::ssize_t y_idx = (b * seq_len + s) * d_model + i;
+                                sum += y_ptr[y_idx] * wo_ptr[i * d_model + d];
+                            }
+                            yp_ptr[(b * seq_len + s) * d_model + d] = sum;
+                        }
+                    }
+                }
+
+                // Record output projection matmul
+                int64_t proj_flops = 2LL * batch_size * seq_len * d_model * d_model;
+                stats.matmul_flops += proj_flops;
+                stats.matmul_count += 1;
+
+                Y = Y_proj;
+                y_ptr = Y.mutable_data();
             }
 
             // Record XUE events for attention computation
