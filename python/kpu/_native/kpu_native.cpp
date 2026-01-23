@@ -682,7 +682,12 @@ private:
                 );
                 behavioral_compute_fabric_->drain();
             } else {
-                // Fall back to numpy for broadcasting
+                // TODO(fabric-broadcasting): C++ BehavioralComputeFabric doesn't support
+                // broadcasting yet. When shapes differ, we fall back to NumPy.
+                // To fix: Implement broadcast_elementwise() in compute_fabric.cpp that:
+                // 1. Computes output shape via NumPy-style broadcasting rules
+                // 2. Iterates with stride-aware indexing for mismatched dimensions
+                // See: numpy broadcasting rules at numpy.org/doc/stable/user/basics.broadcasting.html
                 Y = np.attr("add")(A, B).cast<py::array_t<float>>();
             }
 
@@ -717,6 +722,7 @@ private:
                 );
                 behavioral_compute_fabric_->drain();
             } else {
+                // TODO(fabric-broadcasting): NumPy fallback for broadcasting - see add op
                 Y = np.attr("subtract")(A, B).cast<py::array_t<float>>();
             }
 
@@ -751,6 +757,7 @@ private:
                 );
                 behavioral_compute_fabric_->drain();
             } else {
+                // TODO(fabric-broadcasting): NumPy fallback for broadcasting - see add op
                 Y = np.attr("multiply")(A, B).cast<py::array_t<float>>();
             }
 
@@ -785,6 +792,7 @@ private:
                 );
                 behavioral_compute_fabric_->drain();
             } else {
+                // TODO(fabric-broadcasting): NumPy fallback for broadcasting - see add op
                 Y = np.attr("divide")(A, B).cast<py::array_t<float>>();
             }
 
