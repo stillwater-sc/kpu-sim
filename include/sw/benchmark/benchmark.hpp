@@ -50,6 +50,7 @@ struct BenchmarkResult {
     Size l2_bytes = 0;                   ///< L2 traffic
     double arithmetic_intensity = 0.0;   ///< FLOP per byte from external memory
     double memory_efficiency = 0.0;      ///< Fraction of peak memory bandwidth
+    double achieved_bandwidth_gbs = 0.0; ///< Achieved memory bandwidth in GB/s
 
     // Instruction counts
     size_t total_instructions = 0;
@@ -92,6 +93,15 @@ struct BenchmarkResult {
         } else {
             return "L3-memory-bound";
         }
+    }
+
+    /**
+     * @brief Check if bandwidth target is met for memory-bound ops
+     * @param target_utilization Target bandwidth utilization (default 0.70)
+     * @return true if memory_efficiency >= target
+     */
+    bool meets_bandwidth_target(double target_utilization = 0.70) const {
+        return is_memory_bound() && memory_efficiency >= target_utilization;
     }
 
     /**
@@ -280,6 +290,66 @@ public:
                                      const std::string& name);
 
     // ========================================================================
+    // Memory Bandwidth Benchmarks (v0.3.1)
+    // ========================================================================
+
+    /**
+     * @brief Benchmark an elementwise operation (memory-bound)
+     * @param op Elementwise operation type (ADD, MUL, etc.)
+     * @param total_elements Total number of elements
+     * @param dtype Data type (default FLOAT32)
+     * @return Benchmark result with bandwidth metrics
+     *
+     * Elementwise ops have very low arithmetic intensity (~0.25 FLOP/byte
+     * for binary ops with float32). They are always memory-bound and
+     * useful for measuring peak achievable memory bandwidth.
+     */
+    BenchmarkResult benchmark_elementwise(ElementwiseOp op,
+                                          Size total_elements,
+                                          DataType dtype = DataType::FLOAT32);
+
+    /**
+     * @brief Benchmark a softmax operation (memory-bound)
+     * @param batch_size Number of independent softmax operations
+     * @param reduction_size Size of each softmax reduction
+     * @param dtype Data type (default FLOAT32)
+     * @return Benchmark result with bandwidth metrics
+     *
+     * Softmax has low AI (~1 FLOP/byte) and is typically memory-bound.
+     */
+    BenchmarkResult benchmark_softmax(Size batch_size, Size reduction_size,
+                                      DataType dtype = DataType::FLOAT32);
+
+    /**
+     * @brief Benchmark a layer normalization operation (memory-bound)
+     * @param batch_size Batch size
+     * @param seq_len Sequence length
+     * @param normalized_dim Dimension to normalize over
+     * @param dtype Data type (default FLOAT32)
+     * @return Benchmark result with bandwidth metrics
+     *
+     * LayerNorm has low AI (~0.6 FLOP/byte) and is memory-bound.
+     */
+    BenchmarkResult benchmark_layernorm(Size batch_size, Size seq_len,
+                                        Size normalized_dim,
+                                        DataType dtype = DataType::FLOAT32);
+
+    /**
+     * @brief Benchmark a batch normalization operation (memory-bound)
+     * @param batch_size Batch size
+     * @param channels Number of channels
+     * @param height Spatial height
+     * @param width Spatial width
+     * @param dtype Data type (default FLOAT32)
+     * @return Benchmark result with bandwidth metrics
+     *
+     * BatchNorm inference has low AI (~0.3 FLOP/byte) and is memory-bound.
+     */
+    BenchmarkResult benchmark_batchnorm(Size batch_size, Size channels,
+                                        Size height, Size width,
+                                        DataType dtype = DataType::FLOAT32);
+
+    // ========================================================================
     // Sweep Benchmarks
     // ========================================================================
 
@@ -312,6 +382,29 @@ public:
      * @brief Run activation function comparison
      */
     BenchmarkSuite sweep_activations(Size M, Size N, Size K);
+
+    /**
+     * @brief Run bandwidth-bound operations sweep (v0.3.1)
+     *
+     * Tests a variety of memory-bound operations at different sizes.
+     * Useful for characterizing achievable memory bandwidth and
+     * validating the memory subsystem model.
+     *
+     * @param min_elements Minimum number of elements
+     * @param max_elements Maximum number of elements
+     * @return Suite containing bandwidth benchmark results
+     */
+    BenchmarkSuite sweep_bandwidth_ops(Size min_elements = 4096,
+                                       Size max_elements = 1048576);
+
+    /**
+     * @brief Run memory bandwidth sweep across different sizes
+     * @param op Elementwise operation to benchmark
+     * @param sizes Vector of element counts to test
+     * @return Suite with bandwidth results for each size
+     */
+    BenchmarkSuite sweep_elementwise_sizes(ElementwiseOp op,
+                                           const std::vector<Size>& sizes);
 
     // ========================================================================
     // Roofline Analysis
@@ -551,6 +644,7 @@ inline std::string BenchmarkResult::to_json() const {
     ss << "    \"l2_bytes\": " << l2_bytes << ",\n";
     ss << "    \"arithmetic_intensity\": " << arithmetic_intensity << ",\n";
     ss << "    \"memory_efficiency\": " << memory_efficiency << ",\n";
+    ss << "    \"achieved_bandwidth_gbs\": " << achieved_bandwidth_gbs << ",\n";
     ss << "    \"bottleneck\": \"" << bottleneck() << "\"\n";
     ss << "  },\n";
     ss << "  \"tiling\": {\n";

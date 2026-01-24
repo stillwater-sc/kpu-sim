@@ -266,6 +266,227 @@ BenchmarkResult BenchmarkHarness::benchmark_graph(const KernelGraph& graph,
 }
 
 // ============================================================================
+// Memory Bandwidth Benchmarks (v0.3.1)
+// ============================================================================
+
+BenchmarkResult BenchmarkHarness::benchmark_elementwise(ElementwiseOp op,
+                                                         Size total_elements,
+                                                         DataType dtype) {
+    // Create elementwise kernel
+    std::vector<Size> shape = {total_elements};
+    Kernel kernel = Kernel::create_elementwise(op, shape, dtype);
+
+    BenchmarkResult result;
+    result.name = std::string("elementwise_") + elementwise_op_name(op);
+    result.config = std::to_string(total_elements) + "_elements";
+
+    // Execute
+    ConcurrentExecutor executor(res_config_);
+    auto start = std::chrono::high_resolution_clock::now();
+    Cycle cycles = executor.execute(kernel.program());
+    auto end = std::chrono::high_resolution_clock::now();
+
+    auto util = executor.get_utilization();
+
+    result.cycles = cycles;
+    result.wall_time_us = std::chrono::duration<double, std::micro>(end - start).count();
+    result.flops = kernel.total_flops();
+    result.arithmetic_intensity = kernel.arithmetic_intensity();
+
+    // For elementwise binary ops: read A, read B, write C = 3 * elements * sizeof(dtype)
+    Size elem_size = dtype_size(dtype);
+    result.external_bytes = 3 * total_elements * elem_size;
+
+    if (cycles > 0) {
+        result.gflops = static_cast<double>(result.flops) / static_cast<double>(cycles);
+        result.gflops_at_freq = result.gflops * hw_spec_.clock_ghz;
+
+        // Calculate achieved bandwidth (bytes/cycle at 1 GHz = GB/s)
+        result.achieved_bandwidth_gbs = static_cast<double>(result.external_bytes) / static_cast<double>(cycles);
+        result.memory_efficiency = result.achieved_bandwidth_gbs / hw_spec_.external_bw_gbs;
+    }
+
+    // Efficiency relative to roofline
+    double predicted_gflops = hw_spec_.roofline_gflops(result.arithmetic_intensity);
+    if (predicted_gflops > 0) {
+        result.compute_efficiency = result.gflops / predicted_gflops;
+    }
+
+    result.dma_utilization = util.dma_utilization;
+    result.block_mover_utilization = util.block_mover_utilization;
+    result.streamer_utilization = util.streamer_utilization;
+    result.compute_utilization = util.compute_utilization;
+
+    return result;
+}
+
+BenchmarkResult BenchmarkHarness::benchmark_softmax(Size batch_size, Size reduction_size,
+                                                     DataType dtype) {
+    // Create softmax kernel
+    SoftmaxConfig config;
+    config.shape = {batch_size, reduction_size};
+    config.axis = -1;  // Normalize over last axis
+
+    Kernel kernel = Kernel::create_softmax(config, dtype);
+
+    BenchmarkResult result;
+    result.name = "softmax";
+    result.config = std::to_string(batch_size) + "x" + std::to_string(reduction_size);
+
+    // Execute
+    ConcurrentExecutor executor(res_config_);
+    auto start = std::chrono::high_resolution_clock::now();
+    Cycle cycles = executor.execute(kernel.program());
+    auto end = std::chrono::high_resolution_clock::now();
+
+    auto util = executor.get_utilization();
+
+    result.cycles = cycles;
+    result.wall_time_us = std::chrono::duration<double, std::micro>(end - start).count();
+    result.flops = kernel.total_flops();
+    result.arithmetic_intensity = kernel.arithmetic_intensity();
+
+    // Softmax reads input, writes output = 2 * elements * sizeof(dtype)
+    Size elem_size = dtype_size(dtype);
+    result.external_bytes = 2 * batch_size * reduction_size * elem_size;
+
+    if (cycles > 0) {
+        result.gflops = static_cast<double>(result.flops) / static_cast<double>(cycles);
+        result.gflops_at_freq = result.gflops * hw_spec_.clock_ghz;
+
+        result.achieved_bandwidth_gbs = static_cast<double>(result.external_bytes) / static_cast<double>(cycles);
+        result.memory_efficiency = result.achieved_bandwidth_gbs / hw_spec_.external_bw_gbs;
+    }
+
+    double predicted_gflops = hw_spec_.roofline_gflops(result.arithmetic_intensity);
+    if (predicted_gflops > 0) {
+        result.compute_efficiency = result.gflops / predicted_gflops;
+    }
+
+    result.dma_utilization = util.dma_utilization;
+    result.block_mover_utilization = util.block_mover_utilization;
+    result.streamer_utilization = util.streamer_utilization;
+    result.compute_utilization = util.compute_utilization;
+
+    return result;
+}
+
+BenchmarkResult BenchmarkHarness::benchmark_layernorm(Size batch_size, Size seq_len,
+                                                       Size normalized_dim,
+                                                       DataType dtype) {
+    // Create layernorm kernel
+    LayerNormConfig config;
+    config.batch_size = batch_size;
+    config.seq_len = seq_len;
+    config.normalized_dim = normalized_dim;
+    config.has_weight = true;
+    config.has_bias = true;
+
+    Kernel kernel = Kernel::create_layernorm(config, dtype);
+
+    BenchmarkResult result;
+    result.name = "layernorm";
+    result.config = std::to_string(batch_size) + "x" + std::to_string(seq_len) +
+                    "x" + std::to_string(normalized_dim);
+
+    // Execute
+    ConcurrentExecutor executor(res_config_);
+    auto start = std::chrono::high_resolution_clock::now();
+    Cycle cycles = executor.execute(kernel.program());
+    auto end = std::chrono::high_resolution_clock::now();
+
+    auto util = executor.get_utilization();
+
+    result.cycles = cycles;
+    result.wall_time_us = std::chrono::duration<double, std::micro>(end - start).count();
+    result.flops = kernel.total_flops();
+    result.arithmetic_intensity = kernel.arithmetic_intensity();
+
+    // LayerNorm reads input + gamma + beta, writes output
+    // ~3 * elements for input/output, + 2*D for gamma/beta (amortized over batch*seq)
+    Size elem_size = dtype_size(dtype);
+    Size total_elements = batch_size * seq_len * normalized_dim;
+    result.external_bytes = 2 * total_elements * elem_size + 2 * normalized_dim * elem_size;
+
+    if (cycles > 0) {
+        result.gflops = static_cast<double>(result.flops) / static_cast<double>(cycles);
+        result.gflops_at_freq = result.gflops * hw_spec_.clock_ghz;
+
+        result.achieved_bandwidth_gbs = static_cast<double>(result.external_bytes) / static_cast<double>(cycles);
+        result.memory_efficiency = result.achieved_bandwidth_gbs / hw_spec_.external_bw_gbs;
+    }
+
+    double predicted_gflops = hw_spec_.roofline_gflops(result.arithmetic_intensity);
+    if (predicted_gflops > 0) {
+        result.compute_efficiency = result.gflops / predicted_gflops;
+    }
+
+    result.dma_utilization = util.dma_utilization;
+    result.block_mover_utilization = util.block_mover_utilization;
+    result.streamer_utilization = util.streamer_utilization;
+    result.compute_utilization = util.compute_utilization;
+
+    return result;
+}
+
+BenchmarkResult BenchmarkHarness::benchmark_batchnorm(Size batch_size, Size channels,
+                                                       Size height, Size width,
+                                                       DataType dtype) {
+    // Create batchnorm kernel
+    BatchNormConfig config;
+    config.batch_size = batch_size;
+    config.num_features = channels;
+    config.height = height;
+    config.width = width;
+    config.affine = true;
+
+    Kernel kernel = Kernel::create_batchnorm(config, dtype);
+
+    BenchmarkResult result;
+    result.name = "batchnorm";
+    result.config = std::to_string(batch_size) + "x" + std::to_string(channels) +
+                    "x" + std::to_string(height) + "x" + std::to_string(width);
+
+    // Execute
+    ConcurrentExecutor executor(res_config_);
+    auto start = std::chrono::high_resolution_clock::now();
+    Cycle cycles = executor.execute(kernel.program());
+    auto end = std::chrono::high_resolution_clock::now();
+
+    auto util = executor.get_utilization();
+
+    result.cycles = cycles;
+    result.wall_time_us = std::chrono::duration<double, std::micro>(end - start).count();
+    result.flops = kernel.total_flops();
+    result.arithmetic_intensity = kernel.arithmetic_intensity();
+
+    // BatchNorm reads input + running_mean + running_var + gamma + beta, writes output
+    Size elem_size = dtype_size(dtype);
+    Size total_elements = batch_size * channels * height * width;
+    result.external_bytes = 2 * total_elements * elem_size + 4 * channels * elem_size;
+
+    if (cycles > 0) {
+        result.gflops = static_cast<double>(result.flops) / static_cast<double>(cycles);
+        result.gflops_at_freq = result.gflops * hw_spec_.clock_ghz;
+
+        result.achieved_bandwidth_gbs = static_cast<double>(result.external_bytes) / static_cast<double>(cycles);
+        result.memory_efficiency = result.achieved_bandwidth_gbs / hw_spec_.external_bw_gbs;
+    }
+
+    double predicted_gflops = hw_spec_.roofline_gflops(result.arithmetic_intensity);
+    if (predicted_gflops > 0) {
+        result.compute_efficiency = result.gflops / predicted_gflops;
+    }
+
+    result.dma_utilization = util.dma_utilization;
+    result.block_mover_utilization = util.block_mover_utilization;
+    result.streamer_utilization = util.streamer_utilization;
+    result.compute_utilization = util.compute_utilization;
+
+    return result;
+}
+
+// ============================================================================
 // Sweep Benchmarks
 // ============================================================================
 
@@ -337,6 +558,63 @@ BenchmarkSuite BenchmarkHarness::sweep_activations(Size M, Size N, Size K) {
 
     for (auto act : activations) {
         auto result = benchmark_mlp(M, N, K, act, true);
+        suite.add(result);
+    }
+
+    return suite;
+}
+
+BenchmarkSuite BenchmarkHarness::sweep_bandwidth_ops(Size min_elements, Size max_elements) {
+    BenchmarkSuite suite;
+    suite.name = "bandwidth_ops_sweep";
+    suite.description = "Memory bandwidth characterization across operation types";
+
+    // Generate size sweep (powers of 2)
+    std::vector<Size> sizes;
+    for (Size size = min_elements; size <= max_elements; size *= 2) {
+        sizes.push_back(size);
+    }
+
+    // Test elementwise ADD (binary, AI ~0.08 FLOP/byte for float32)
+    for (Size size : sizes) {
+        auto result = benchmark_elementwise(ElementwiseOp::ADD, size);
+        suite.add(result);
+    }
+
+    // Test softmax (AI ~1 FLOP/byte)
+    for (Size size : sizes) {
+        // Use size as batch_size * reduction_size, split roughly
+        Size batch = 32;
+        Size reduction = size / batch;
+        if (reduction >= 64) {
+            auto result = benchmark_softmax(batch, reduction);
+            suite.add(result);
+        }
+    }
+
+    // Test layernorm (AI ~0.6 FLOP/byte)
+    for (Size size : sizes) {
+        // Typical transformer config: batch*seq * dim
+        Size batch_seq = 128;
+        Size dim = size / batch_seq;
+        if (dim >= 64 && dim <= 4096) {
+            auto result = benchmark_layernorm(1, batch_seq, dim);
+            suite.add(result);
+        }
+    }
+
+    return suite;
+}
+
+BenchmarkSuite BenchmarkHarness::sweep_elementwise_sizes(ElementwiseOp op,
+                                                          const std::vector<Size>& sizes) {
+    BenchmarkSuite suite;
+    suite.name = std::string("elementwise_") + elementwise_op_name(op) + "_sweep";
+    suite.description = "Elementwise " + std::string(elementwise_op_name(op)) +
+                        " bandwidth across sizes";
+
+    for (Size size : sizes) {
+        auto result = benchmark_elementwise(op, size);
         suite.add(result);
     }
 

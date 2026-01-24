@@ -50,11 +50,24 @@ target_link_libraries(efficiency_diagnostic PRIVATE
 kpu_set_target_options(efficiency_diagnostic)
 set_target_properties(efficiency_diagnostic PROPERTIES FOLDER "Benchmarks")
 
+# Bandwidth benchmarks (v0.3.1)
+add_executable(benchmark_bandwidth test_bandwidth_benchmarks.cpp)
+target_link_libraries(benchmark_bandwidth PRIVATE
+    Catch2::Catch2WithMain
+    StillwaterKPU::Benchmark
+)
+kpu_set_target_options(benchmark_bandwidth)
+set_target_properties(benchmark_bandwidth PROPERTIES FOLDER "Benchmarks")
+
+add_test(NAME benchmark_bandwidth COMMAND benchmark_bandwidth)
+set_tests_properties(benchmark_bandwidth PROPERTIES LABELS "benchmark")
+
 # Combined benchmark runner
 add_executable(run_all_benchmarks
     test_matmul_benchmarks.cpp
     test_mlp_benchmarks.cpp
     test_graph_benchmarks.cpp
+    test_bandwidth_benchmarks.cpp
 )
 target_link_libraries(run_all_benchmarks PRIVATE
     Catch2::Catch2WithMain
