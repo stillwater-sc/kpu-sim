@@ -19,7 +19,7 @@ name = "stillwater-kpu"
 version = "0.8.0"  # Keep in sync with kpu/__init__.py
 description = "KPU (Knowledge Processing Unit) Simulator Python API with native C++ backend"
 readme = "README.md"
-license = "Apache-2.0"
+license = {text = "Apache-2.0"}
 authors = [
     {name = "Stillwater Supercomputing, Inc.", email = "info@stillwater-sc.com"}
 ]
