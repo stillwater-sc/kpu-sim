@@ -43,8 +43,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-22.04, macos-13, macos-14, windows-2022]
-        # macos-13 = Intel, macos-14 = Apple Silicon
+        os: [ubuntu-22.04, macos-15, macos-14, windows-2022]
+        # macos-15 = Intel, macos-14 = Apple Silicon
 
     steps:
       - uses: actions/checkout@v4
