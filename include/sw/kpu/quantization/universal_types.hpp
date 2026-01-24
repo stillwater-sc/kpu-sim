@@ -4,9 +4,8 @@
 
 // Universal library headers for scalar types
 // These are header-only and provide software emulation of hardware number formats
-#include <universal/number/bfloat16/bfloat16.hpp>
-#include <universal/number/half/half.hpp>
-#include <universal/number/cfloat/cfloat.hpp>
+#include <universal/number/cfloat/cfloat.hpp>  // Includes half (fp16) typedef
+#include <universal/number/bfloat/bfloat.hpp>  // bfloat16 type
 
 #include <sw/kpu/quantization/scalar_traits.hpp>
 
@@ -17,9 +16,11 @@ namespace sw::kpu {
 // =============================================================================
 
 /// IEEE 754 half-precision float (FP16)
+/// Defined in cfloat.hpp as cfloat<16, 5, uint16_t, true, false, false>
 using fp16_t = sw::universal::half;
 
 /// Brain floating point (BF16) - same exponent range as FP32
+/// Native bfloat16 class from Universal
 using bf16_t = sw::universal::bfloat16;
 
 /// FP8 E4M3 - NVIDIA format (4-bit exponent, 3-bit mantissa)
