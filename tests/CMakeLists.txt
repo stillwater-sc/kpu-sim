@@ -63,6 +63,7 @@ add_subdirectory(dataflow)
 add_subdirectory(xue)
 add_subdirectory(stats)
 add_subdirectory(validation)
+add_subdirectory(quantization)
 
 # Legacy test (in this directory)
 kpu_add_component_test(legacy_test_main "legacy" test_main.cpp)
@@ -210,6 +211,14 @@ add_custom_target(test_validation
     VERBATIM
 )
 set_target_properties(test_validation PROPERTIES FOLDER "Tests/Runners")
+
+add_custom_target(test_quantization
+    COMMAND ${CMAKE_CTEST_COMMAND} -C $<CONFIG> --output-on-failure -L quantization
+    COMMENT "Running quantization infrastructure tests (v0.7)"
+    WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
+    VERBATIM
+)
+set_target_properties(test_quantization PROPERTIES FOLDER "Tests/Runners")
 
 #add_custom_target(test_benchmarks
 #    COMMAND ${CMAKE_CTEST_COMMAND} -C $<CONFIG> --output-on-failure -L benchmark

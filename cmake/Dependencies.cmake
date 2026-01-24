@@ -92,16 +92,36 @@ if(KPU_BUILD_PYTHON_BINDINGS)
         cmake_policy(PUSH)
         cmake_policy(SET CMP0148 OLD)  # Allow pybind11 to use old FindPython modules
     endif()
-    
+
     kpu_add_dependency(pybind11
         GIT_REPOSITORY https://github.com/pybind/pybind11.git
         GIT_TAG v2.13.6  # Latest stable with improved CMake support
         TARGETS pybind11 pybind11_headers
     )
-    
+
     # Restore policy
     if(POLICY CMP0148)
         cmake_policy(POP)
     endif()
+endif()
+
+# Universal library for arbitrary precision number types
+# Provides: bfloat16, half, cfloat (for FP8/FP4 variants), integer
+# This is a header-only library - we only need the include directory
+# We don't process Universal's CMakeLists.txt because it requires config files
+
+FetchContent_Declare(universal
+    GIT_REPOSITORY https://github.com/stillwater-sc/universal.git
+    GIT_TAG v3.77
+    GIT_SHALLOW TRUE
+)
+
+# Only populate, don't add to build (header-only, no targets needed)
+FetchContent_GetProperties(universal)
+if(NOT universal_POPULATED)
+    FetchContent_Populate(universal)
+    # Set include path for targets that need Universal types
+    set(UNIVERSAL_INCLUDE_DIR ${universal_SOURCE_DIR}/include CACHE PATH "Universal library include directory")
+    message(STATUS "Universal library: ${UNIVERSAL_INCLUDE_DIR}")
 endif()
 
