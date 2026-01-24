@@ -2027,3 +2027,42 @@ This was a hallucination failure - I generated text that sounded reasonable but 
   └─────────────────────────────────┴──────────────────────────────────────────────────────────────────────────┘
   Would you like me to commit the remaining documentation/status log changes, or is there something specific about the quantization rework you want to verify first?
 
+
+> have we recovered from the Python sim detour?
+
+
+● Honest answer: Not quite. Here's the current state:
+
+  What Routes to C++
+  ┌─────────────────────────────┬─────────────────────────────┬──────────────────────┐
+  │            Path             │           Backend           │        Status        │
+  ├─────────────────────────────┼─────────────────────────────┼──────────────────────┤
+  │ Runtime.execute(DFXProgram) │ C++ BehavioralComputeFabric │ ✓ Works              │
+  ├─────────────────────────────┼─────────────────────────────┼──────────────────────┤
+  │ XUE event collection        │ C++ (include/sw/xue/)       │ ✓ Fixed this session │
+  └─────────────────────────────┴─────────────────────────────┴──────────────────────┘
+  What Still Uses NumPy (The "Diversion")
+  ┌───────────────────┬─────────────┬──────────────────────────────────────┐
+  │       Path        │   Backend   │               Problem                │
+  ├───────────────────┼─────────────┼──────────────────────────────────────┤
+  │ tensor1 @ tensor2 │ np.matmul() │ Tensor._execute_matmul uses NumPy    │
+  ├───────────────────┼─────────────┼──────────────────────────────────────┤
+  │ tensor1 + tensor2 │ np.add()    │ Tensor._execute_binary_op uses NumPy │
+  ├───────────────────┼─────────────┼──────────────────────────────────────┤
+  │ Quantization ops  │ Python      │ v0.7.x is Python-only                │
+  └───────────────────┴─────────────┴──────────────────────────────────────┘
+  # tensor.py line 344 - This is the problem:
+  def _execute_matmul(self, other: 'Tensor') -> 'Tensor':
+      result = np.matmul(self._data, other._data)  # <-- NumPy, not C++
+      return Tensor(result)
+
+  The Gap
+
+  The Tensor class has two paths:
+  1. Tracing mode → Builds DFXProgram → Execute through C++ ✓
+  2. Direct execution → NumPy ✗
+
+  To complete the rework, direct Tensor operations need to route to C++ BehavioralComputeFabric instead of NumPy. This would require changing _execute_matmul, _execute_binary_op, etc. to call into the native module.
+
+  Would you like me to fix this so all Tensor operations route through C++?
+

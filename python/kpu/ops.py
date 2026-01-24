@@ -4,6 +4,9 @@ KPU operator definitions.
 
 These operators work with KPU Tensors and support both tracing (for compilation)
 and direct execution (for behavioral simulation).
+
+v0.8.1: All operations now route through C++ BehavioralComputeFabric when
+        native module is available. This ensures XUE event recording.
 """
 
 from __future__ import annotations
@@ -12,6 +15,26 @@ from typing import Optional, Union, Tuple, List, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from .tensor import Tensor
+
+# Try to import native module for C++ operations
+_native_available = False
+_native = None
+
+def _init_native():
+    """Initialize native module on first use."""
+    global _native_available, _native
+    if _native is not None:
+        return _native_available
+    try:
+        from . import _native as native_module
+        if hasattr(native_module, 'native_relu'):
+            _native = native_module
+            _native_available = True
+        else:
+            _native_available = False
+    except ImportError:
+        _native_available = False
+    return _native_available
 
 
 def relu(x: 'Tensor') -> 'Tensor':
@@ -35,6 +58,12 @@ def relu(x: 'Tensor') -> 'Tensor':
     else:
         if x._data is None:
             raise ValueError("Cannot execute relu on symbolic tensor")
+        # Try native C++ execution first
+        if _init_native():
+            a = np.ascontiguousarray(x._data, dtype=np.float32)
+            result = _native.native_relu(a)
+            return Tensor(result)
+        # Fallback to NumPy
         result = np.maximum(x._data, 0)
         return Tensor(result)
 
@@ -62,7 +91,12 @@ def gelu(x: 'Tensor') -> 'Tensor':
     else:
         if x._data is None:
             raise ValueError("Cannot execute gelu on symbolic tensor")
-        # Approximate GELU
+        # Try native C++ execution first
+        if _init_native():
+            a = np.ascontiguousarray(x._data, dtype=np.float32)
+            result = _native.native_gelu(a)
+            return Tensor(result)
+        # Fallback to NumPy - Approximate GELU
         result = x._data * 0.5 * (1 + np.tanh(
             np.sqrt(2 / np.pi) * (x._data + 0.044715 * np.power(x._data, 3))
         ))
@@ -90,6 +124,12 @@ def silu(x: 'Tensor') -> 'Tensor':
     else:
         if x._data is None:
             raise ValueError("Cannot execute silu on symbolic tensor")
+        # Try native C++ execution first
+        if _init_native():
+            a = np.ascontiguousarray(x._data, dtype=np.float32)
+            result = _native.native_silu(a)
+            return Tensor(result)
+        # Fallback to NumPy
         result = x._data * (1 / (1 + np.exp(-x._data)))
         return Tensor(result)
 
@@ -115,6 +155,12 @@ def sigmoid(x: 'Tensor') -> 'Tensor':
     else:
         if x._data is None:
             raise ValueError("Cannot execute sigmoid on symbolic tensor")
+        # Try native C++ execution first
+        if _init_native():
+            a = np.ascontiguousarray(x._data, dtype=np.float32)
+            result = _native.native_sigmoid(a)
+            return Tensor(result)
+        # Fallback to NumPy
         result = 1 / (1 + np.exp(-x._data))
         return Tensor(result)
 
@@ -140,6 +186,12 @@ def tanh(x: 'Tensor') -> 'Tensor':
     else:
         if x._data is None:
             raise ValueError("Cannot execute tanh on symbolic tensor")
+        # Try native C++ execution first
+        if _init_native():
+            a = np.ascontiguousarray(x._data, dtype=np.float32)
+            result = _native.native_tanh(a)
+            return Tensor(result)
+        # Fallback to NumPy
         result = np.tanh(x._data)
         return Tensor(result)
 

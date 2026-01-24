@@ -3594,4 +3594,317 @@ PYBIND11_MODULE(_native, m) {
     m.def("xue_version", []() -> std::string {
         return "0.5.0";
     }, "Get the XUE Observation Architecture version");
+
+    // ========================================================================
+    // STANDALONE NATIVE OPERATIONS
+    // ========================================================================
+    // These functions enable direct Tensor operations to route through C++
+    // BehavioralComputeFabric instead of NumPy, ensuring XUE event recording
+    // and proper simulation modeling.
+    // ========================================================================
+
+    // Global BehavioralComputeFabric for direct tensor operations
+    static std::unique_ptr<sw::kpu::BehavioralComputeFabric> g_compute_fabric;
+
+    auto ensure_fabric = []() -> sw::kpu::BehavioralComputeFabric& {
+        if (!g_compute_fabric) {
+            sw::kpu::ComputeFabricConfig config;
+            config.fidelity = sw::kpu::SimulationFidelity::BEHAVIORAL;
+            g_compute_fabric = std::make_unique<sw::kpu::BehavioralComputeFabric>(config, 0);
+        }
+        return *g_compute_fabric;
+    };
+
+    // Native matmul: C = A @ B
+    m.def("native_matmul", [ensure_fabric](py::array_t<float> A, py::array_t<float> B) -> py::array_t<float> {
+        py::buffer_info a_buf = A.request();
+        py::buffer_info b_buf = B.request();
+
+        if (a_buf.ndim < 2 || b_buf.ndim < 2) {
+            throw std::runtime_error("native_matmul requires 2D arrays");
+        }
+
+        // Get dimensions
+        size_t M = a_buf.shape[a_buf.ndim - 2];
+        size_t K = a_buf.shape[a_buf.ndim - 1];
+        size_t N = b_buf.shape[b_buf.ndim - 1];
+
+        if (static_cast<size_t>(b_buf.shape[b_buf.ndim - 2]) != K) {
+            throw std::runtime_error("Matrix dimensions don't match for matmul");
+        }
+
+        // Allocate and zero-initialize output
+        std::vector<py::ssize_t> c_shape = {static_cast<py::ssize_t>(M), static_cast<py::ssize_t>(N)};
+        py::array_t<float> C(c_shape);
+        py::buffer_info c_buf = C.request();
+        std::memset(c_buf.ptr, 0, M * N * sizeof(float));
+
+        // Execute via BehavioralComputeFabric
+        sw::kpu::MatMulDescriptor desc;
+        desc.m = static_cast<uint32_t>(M);
+        desc.n = static_cast<uint32_t>(N);
+        desc.k = static_cast<uint32_t>(K);
+        desc.dtype = sw::kpu::DataType::FLOAT32;
+
+        auto& fabric = ensure_fabric();
+        fabric.submit_matmul(desc,
+                            static_cast<float*>(a_buf.ptr),
+                            static_cast<float*>(b_buf.ptr),
+                            static_cast<float*>(c_buf.ptr),
+                            nullptr);
+        fabric.drain();
+
+        return C;
+    }, py::arg("A"), py::arg("B"),
+       "Native matrix multiplication via C++ BehavioralComputeFabric.\n\n"
+       "Routes through C++ simulation with XUE event recording.\n\n"
+       "Args:\n"
+       "    A: Left matrix [M, K]\n"
+       "    B: Right matrix [K, N]\n\n"
+       "Returns:\n"
+       "    Result matrix [M, N]");
+
+    // Native add: C = A + B (element-wise)
+    m.def("native_add", [ensure_fabric](py::array_t<float> A, py::array_t<float> B) -> py::array_t<float> {
+        py::buffer_info a_buf = A.request();
+        py::buffer_info b_buf = B.request();
+
+        // For now, require same shape (no broadcasting)
+        if (a_buf.size != b_buf.size) {
+            throw std::runtime_error("native_add requires arrays of same size (no broadcasting yet)");
+        }
+
+        // Allocate output with same shape as A
+        py::array_t<float> C(a_buf.shape);
+        py::buffer_info c_buf = C.request();
+
+        // Execute via BehavioralComputeFabric
+        sw::kpu::ElementwiseDescriptor desc;
+        desc.op = sw::kpu::ElementwiseOp::ADD;
+        desc.count = static_cast<uint32_t>(a_buf.size);
+        desc.dtype = sw::kpu::DataType::FLOAT32;
+
+        auto& fabric = ensure_fabric();
+        fabric.submit_elementwise(desc,
+                                 static_cast<float*>(a_buf.ptr),
+                                 static_cast<float*>(b_buf.ptr),
+                                 static_cast<float*>(c_buf.ptr),
+                                 nullptr);
+        fabric.drain();
+
+        return C;
+    }, py::arg("A"), py::arg("B"),
+       "Native element-wise addition via C++ BehavioralComputeFabric.");
+
+    // Native sub: C = A - B (element-wise)
+    m.def("native_sub", [ensure_fabric](py::array_t<float> A, py::array_t<float> B) -> py::array_t<float> {
+        py::buffer_info a_buf = A.request();
+        py::buffer_info b_buf = B.request();
+
+        if (a_buf.size != b_buf.size) {
+            throw std::runtime_error("native_sub requires arrays of same size");
+        }
+
+        py::array_t<float> C(a_buf.shape);
+        py::buffer_info c_buf = C.request();
+
+        sw::kpu::ElementwiseDescriptor desc;
+        desc.op = sw::kpu::ElementwiseOp::SUB;
+        desc.count = static_cast<uint32_t>(a_buf.size);
+        desc.dtype = sw::kpu::DataType::FLOAT32;
+
+        auto& fabric = ensure_fabric();
+        fabric.submit_elementwise(desc,
+                                 static_cast<float*>(a_buf.ptr),
+                                 static_cast<float*>(b_buf.ptr),
+                                 static_cast<float*>(c_buf.ptr),
+                                 nullptr);
+        fabric.drain();
+
+        return C;
+    }, py::arg("A"), py::arg("B"),
+       "Native element-wise subtraction via C++ BehavioralComputeFabric.");
+
+    // Native mul: C = A * B (element-wise)
+    m.def("native_mul", [ensure_fabric](py::array_t<float> A, py::array_t<float> B) -> py::array_t<float> {
+        py::buffer_info a_buf = A.request();
+        py::buffer_info b_buf = B.request();
+
+        if (a_buf.size != b_buf.size) {
+            throw std::runtime_error("native_mul requires arrays of same size");
+        }
+
+        py::array_t<float> C(a_buf.shape);
+        py::buffer_info c_buf = C.request();
+
+        sw::kpu::ElementwiseDescriptor desc;
+        desc.op = sw::kpu::ElementwiseOp::MUL;
+        desc.count = static_cast<uint32_t>(a_buf.size);
+        desc.dtype = sw::kpu::DataType::FLOAT32;
+
+        auto& fabric = ensure_fabric();
+        fabric.submit_elementwise(desc,
+                                 static_cast<float*>(a_buf.ptr),
+                                 static_cast<float*>(b_buf.ptr),
+                                 static_cast<float*>(c_buf.ptr),
+                                 nullptr);
+        fabric.drain();
+
+        return C;
+    }, py::arg("A"), py::arg("B"),
+       "Native element-wise multiplication via C++ BehavioralComputeFabric.");
+
+    // Native div: C = A / B (element-wise)
+    m.def("native_div", [ensure_fabric](py::array_t<float> A, py::array_t<float> B) -> py::array_t<float> {
+        py::buffer_info a_buf = A.request();
+        py::buffer_info b_buf = B.request();
+
+        if (a_buf.size != b_buf.size) {
+            throw std::runtime_error("native_div requires arrays of same size");
+        }
+
+        py::array_t<float> C(a_buf.shape);
+        py::buffer_info c_buf = C.request();
+
+        sw::kpu::ElementwiseDescriptor desc;
+        desc.op = sw::kpu::ElementwiseOp::DIV;
+        desc.count = static_cast<uint32_t>(a_buf.size);
+        desc.dtype = sw::kpu::DataType::FLOAT32;
+
+        auto& fabric = ensure_fabric();
+        fabric.submit_elementwise(desc,
+                                 static_cast<float*>(a_buf.ptr),
+                                 static_cast<float*>(b_buf.ptr),
+                                 static_cast<float*>(c_buf.ptr),
+                                 nullptr);
+        fabric.drain();
+
+        return C;
+    }, py::arg("A"), py::arg("B"),
+       "Native element-wise division via C++ BehavioralComputeFabric.");
+
+    // Native relu: B = max(0, A)
+    m.def("native_relu", [ensure_fabric](py::array_t<float> A) -> py::array_t<float> {
+        py::buffer_info a_buf = A.request();
+
+        py::array_t<float> B(a_buf.shape);
+        py::buffer_info b_buf = B.request();
+
+        sw::kpu::ElementwiseDescriptor desc;
+        desc.op = sw::kpu::ElementwiseOp::RELU;
+        desc.count = static_cast<uint32_t>(a_buf.size);
+        desc.dtype = sw::kpu::DataType::FLOAT32;
+
+        auto& fabric = ensure_fabric();
+        fabric.submit_elementwise(desc,
+                                 static_cast<float*>(a_buf.ptr),
+                                 nullptr,
+                                 static_cast<float*>(b_buf.ptr),
+                                 nullptr);
+        fabric.drain();
+
+        return B;
+    }, py::arg("A"),
+       "Native ReLU activation via C++ BehavioralComputeFabric.");
+
+    // Native sigmoid: B = 1 / (1 + exp(-A))
+    m.def("native_sigmoid", [ensure_fabric](py::array_t<float> A) -> py::array_t<float> {
+        py::buffer_info a_buf = A.request();
+
+        py::array_t<float> B(a_buf.shape);
+        py::buffer_info b_buf = B.request();
+
+        sw::kpu::ElementwiseDescriptor desc;
+        desc.op = sw::kpu::ElementwiseOp::SIGMOID;
+        desc.count = static_cast<uint32_t>(a_buf.size);
+        desc.dtype = sw::kpu::DataType::FLOAT32;
+
+        auto& fabric = ensure_fabric();
+        fabric.submit_elementwise(desc,
+                                 static_cast<float*>(a_buf.ptr),
+                                 nullptr,
+                                 static_cast<float*>(b_buf.ptr),
+                                 nullptr);
+        fabric.drain();
+
+        return B;
+    }, py::arg("A"),
+       "Native sigmoid activation via C++ BehavioralComputeFabric.");
+
+    // Native tanh
+    m.def("native_tanh", [ensure_fabric](py::array_t<float> A) -> py::array_t<float> {
+        py::buffer_info a_buf = A.request();
+
+        py::array_t<float> B(a_buf.shape);
+        py::buffer_info b_buf = B.request();
+
+        sw::kpu::ElementwiseDescriptor desc;
+        desc.op = sw::kpu::ElementwiseOp::TANH;
+        desc.count = static_cast<uint32_t>(a_buf.size);
+        desc.dtype = sw::kpu::DataType::FLOAT32;
+
+        auto& fabric = ensure_fabric();
+        fabric.submit_elementwise(desc,
+                                 static_cast<float*>(a_buf.ptr),
+                                 nullptr,
+                                 static_cast<float*>(b_buf.ptr),
+                                 nullptr);
+        fabric.drain();
+
+        return B;
+    }, py::arg("A"),
+       "Native tanh activation via C++ BehavioralComputeFabric.");
+
+    // Native gelu
+    m.def("native_gelu", [ensure_fabric](py::array_t<float> A) -> py::array_t<float> {
+        py::buffer_info a_buf = A.request();
+
+        py::array_t<float> B(a_buf.shape);
+        py::buffer_info b_buf = B.request();
+
+        sw::kpu::ElementwiseDescriptor desc;
+        desc.op = sw::kpu::ElementwiseOp::GELU;
+        desc.count = static_cast<uint32_t>(a_buf.size);
+        desc.dtype = sw::kpu::DataType::FLOAT32;
+
+        auto& fabric = ensure_fabric();
+        fabric.submit_elementwise(desc,
+                                 static_cast<float*>(a_buf.ptr),
+                                 nullptr,
+                                 static_cast<float*>(b_buf.ptr),
+                                 nullptr);
+        fabric.drain();
+
+        return B;
+    }, py::arg("A"),
+       "Native GELU activation via C++ BehavioralComputeFabric.");
+
+    // Native silu (swish): B = A * sigmoid(A)
+    m.def("native_silu", [ensure_fabric](py::array_t<float> A) -> py::array_t<float> {
+        py::buffer_info a_buf = A.request();
+
+        py::array_t<float> B(a_buf.shape);
+        py::buffer_info b_buf = B.request();
+
+        sw::kpu::ElementwiseDescriptor desc;
+        desc.op = sw::kpu::ElementwiseOp::SILU;
+        desc.count = static_cast<uint32_t>(a_buf.size);
+        desc.dtype = sw::kpu::DataType::FLOAT32;
+
+        auto& fabric = ensure_fabric();
+        fabric.submit_elementwise(desc,
+                                 static_cast<float*>(a_buf.ptr),
+                                 nullptr,
+                                 static_cast<float*>(b_buf.ptr),
+                                 nullptr);
+        fabric.drain();
+
+        return B;
+    }, py::arg("A"),
+       "Native SiLU (Swish) activation via C++ BehavioralComputeFabric.");
+
+    // Check if native ops are available
+    m.def("native_ops_available", []() -> bool {
+        return true;
+    }, "Check if native tensor operations are available.");
 }

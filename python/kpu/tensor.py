@@ -3,7 +3,11 @@
 KPU Tensor class with tracing support for compilation.
 
 During tracing (@kpu.compile), operations on Tensors are recorded
-rather than executed. During execution, operations run on simulator.
+rather than executed. During execution, operations run on C++ simulator.
+
+v0.8.1: All Tensor operations now route through C++ BehavioralComputeFabric
+        when native module is available. This ensures XUE event recording
+        for all operations, not just DFXProgram execution.
 """
 
 from __future__ import annotations
@@ -13,6 +17,26 @@ from dataclasses import dataclass, field
 
 if TYPE_CHECKING:
     from .graph import OpGraph
+
+# Try to import native module for C++ operations
+_native_available = False
+_native = None
+
+def _init_native():
+    """Initialize native module on first use."""
+    global _native_available, _native
+    if _native is not None:
+        return _native_available
+    try:
+        from . import _native as native_module
+        if hasattr(native_module, 'native_matmul'):
+            _native = native_module
+            _native_available = True
+        else:
+            _native_available = False
+    except ImportError:
+        _native_available = False
+    return _native_available
 
 
 @dataclass
@@ -336,26 +360,58 @@ class Tensor:
         return out
 
     # ========== Execution Operations ==========
+    # v0.8.1: These now route through C++ BehavioralComputeFabric when available
 
     def _execute_matmul(self, other: 'Tensor') -> 'Tensor':
-        """Execute matmul directly."""
+        """Execute matmul via C++ BehavioralComputeFabric (with NumPy fallback)."""
         if self._data is None or other._data is None:
             raise ValueError("Cannot execute matmul on symbolic tensors")
+
+        # Try native C++ execution first
+        if _init_native():
+            # Ensure contiguous float32 arrays for C++
+            a = np.ascontiguousarray(self._data, dtype=np.float32)
+            b = np.ascontiguousarray(other._data, dtype=np.float32)
+            result = _native.native_matmul(a, b)
+            return Tensor(result)
+
+        # Fallback to NumPy
         result = np.matmul(self._data, other._data)
         return Tensor(result)
 
     def _execute_binary_op(self, op_name: str, other: 'Tensor') -> 'Tensor':
-        """Execute binary operation directly."""
+        """Execute binary op via C++ BehavioralComputeFabric (with NumPy fallback)."""
         if self._data is None or other._data is None:
             raise ValueError(f"Cannot execute {op_name} on symbolic tensors")
 
-        ops = {
+        # Try native C++ execution first
+        if _init_native():
+            native_ops = {
+                'add': _native.native_add,
+                'sub': _native.native_sub,
+                'mul': _native.native_mul,
+                'div': _native.native_div,
+            }
+            if op_name in native_ops:
+                # Ensure contiguous float32 arrays for C++
+                a = np.ascontiguousarray(self._data, dtype=np.float32)
+                b = np.ascontiguousarray(other._data, dtype=np.float32)
+                # Handle broadcasting by expanding to same shape
+                if a.shape != b.shape:
+                    a, b = np.broadcast_arrays(a, b)
+                    a = np.ascontiguousarray(a)
+                    b = np.ascontiguousarray(b)
+                result = native_ops[op_name](a, b)
+                return Tensor(result)
+
+        # Fallback to NumPy
+        numpy_ops = {
             'add': np.add,
             'sub': np.subtract,
             'mul': np.multiply,
             'div': np.divide,
         }
-        result = ops[op_name](self._data, other._data)
+        result = numpy_ops[op_name](self._data, other._data)
         return Tensor(result)
 
     # ========== Utility ==========
