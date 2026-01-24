@@ -51,9 +51,10 @@ constexpr int FIDELITY_TRANSACTIONAL = 1;
 constexpr int FIDELITY_CYCLE_ACCURATE = 2;
 
 /**
- * @brief Per-level memory statistics
+ * @brief Per-level memory statistics (internal use only)
  *
- * Tracks reads, writes, bytes, and transaction sizes for each memory level.
+ * Used internally by TRANSACTIONAL simulation. Python should use
+ * kpu.get_xue_summary()['memory_hierarchy'] for per-level data.
  */
 struct LevelMemoryStats {
     int64_t read_count = 0;
@@ -67,16 +68,6 @@ struct LevelMemoryStats {
     int64_t total_bytes() const { return read_bytes + write_bytes; }
     int64_t total_count() const { return read_count + write_count; }
     int64_t total_cycles() const { return read_cycles + write_cycles; }
-
-    // Service rate: bytes/cycle (effective bandwidth)
-    double service_rate(int64_t elapsed_cycles) const {
-        return elapsed_cycles > 0 ? static_cast<double>(total_bytes()) / elapsed_cycles : 0.0;
-    }
-
-    // Throughput: transactions/cycle
-    double throughput(int64_t elapsed_cycles) const {
-        return elapsed_cycles > 0 ? static_cast<double>(total_count()) / elapsed_cycles : 0.0;
-    }
 };
 
 /**
@@ -85,17 +76,15 @@ struct LevelMemoryStats {
  * Extended for v0.4.0+ TRANSACTIONAL runtime with detailed metrics
  * from the C++ transactional simulation models.
  *
- * XUE Event Tracking:
- *   - Per-level memory hierarchy stats (DRAM, L3, L2, L1)
- *   - Transaction sizes for service rate calculations
- *   - Elapsed cycles (T) for throughput analysis
+ * Note: Per-level memory hierarchy stats are available via kpu.get_xue_summary()
+ * which provides detailed breakdowns from the C++ XUE EventCollector.
  */
 struct NativeExecutionStats {
     // Basic timing
     int64_t cycles = 0;
     int64_t compute_cycles = 0;
     int64_t memory_cycles = 0;
-    int64_t elapsed_cycles = 0;  // Wall clock cycles (T) for service rates
+    int64_t elapsed_cycles = 0;  // Wall clock cycles
 
     // Detailed cycle breakdown
     int64_t busy_cycles = 0;
@@ -107,13 +96,14 @@ struct NativeExecutionStats {
     int64_t total_macs = 0;
     int64_t matmul_count = 0;
 
-    // Memory hierarchy statistics (XUE events)
+    // Per-level memory stats (internal use by TRANSACTIONAL simulation)
+    // Python should use kpu.get_xue_summary()['memory_hierarchy'] instead
     LevelMemoryStats dram;   // External/DRAM
     LevelMemoryStats l3;     // L3 buffer
     LevelMemoryStats l2;     // L2 buffer
     LevelMemoryStats l1;     // L1 stream
 
-    // Legacy memory metrics (for backward compatibility)
+    // Memory metrics (aggregate, use get_xue_summary() for per-level breakdown)
     int64_t memory_bytes = 0;
     int64_t external_bytes = 0;
 
@@ -137,23 +127,6 @@ struct NativeExecutionStats {
     double memory_bandwidth_gbps = 0.0;
     double page_hit_rate = 0.0;
 
-    // Helper to create dict for a memory level
-    py::dict level_to_dict(const LevelMemoryStats& level) const {
-        py::dict d;
-        d["read_count"] = level.read_count;
-        d["write_count"] = level.write_count;
-        d["read_bytes"] = level.read_bytes;
-        d["write_bytes"] = level.write_bytes;
-        d["read_cycles"] = level.read_cycles;
-        d["write_cycles"] = level.write_cycles;
-        d["total_bytes"] = level.total_bytes();
-        d["total_count"] = level.total_count();
-        d["transaction_size"] = level.transaction_size;
-        d["service_rate"] = level.service_rate(elapsed_cycles);
-        d["throughput"] = level.throughput(elapsed_cycles);
-        return d;
-    }
-
     py::dict to_dict() const {
         py::dict d;
         // Basic timing
@@ -172,13 +145,7 @@ struct NativeExecutionStats {
         d["total_macs"] = total_macs;
         d["matmul_count"] = matmul_count;
 
-        // Memory hierarchy stats (XUE events)
-        d["dram"] = level_to_dict(dram);
-        d["l3"] = level_to_dict(l3);
-        d["l2"] = level_to_dict(l2);
-        d["l1"] = level_to_dict(l1);
-
-        // Legacy memory metrics
+        // Memory metrics
         d["memory_bytes"] = memory_bytes;
         d["external_bytes"] = external_bytes;
 
@@ -201,12 +168,6 @@ struct NativeExecutionStats {
         d["efficiency"] = efficiency;
         d["memory_bandwidth_gbps"] = memory_bandwidth_gbps;
         d["page_hit_rate"] = page_hit_rate;
-
-        // Aggregate service rates (bytes/cycle * clock_ghz = GB/s)
-        d["dram_service_rate_gbps"] = dram.service_rate(elapsed_cycles) * clock_frequency_ghz;
-        d["l3_service_rate_gbps"] = l3.service_rate(elapsed_cycles) * clock_frequency_ghz;
-        d["l2_service_rate_gbps"] = l2.service_rate(elapsed_cycles) * clock_frequency_ghz;
-        d["l1_service_rate_gbps"] = l1.service_rate(elapsed_cycles) * clock_frequency_ghz;
 
         return d;
     }

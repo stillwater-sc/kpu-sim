@@ -119,28 +119,6 @@ def _adaptive_avgpool2d_fast(x: np.ndarray, output_size: Tuple[int, int]) -> np.
 
 
 @dataclass
-class LevelMemoryStats:
-    """Per-level memory hierarchy statistics.
-
-    Note: In v0.5.0+, XUE event data comes from the C++ EventCollector.
-    Use kpu.get_xue_summary() for detailed XUE analysis.
-    """
-    events: int = 0
-    bytes: int = 0
-    cycles: int = 0
-
-    @property
-    def total_bytes(self) -> int:
-        """Alias for bytes (backward compatibility)."""
-        return self.bytes
-
-    @property
-    def total_count(self) -> int:
-        """Alias for events (backward compatibility)."""
-        return self.events
-
-
-@dataclass
 class ExecutionStats:
     """Statistics from kernel execution.
 
@@ -153,6 +131,7 @@ class ExecutionStats:
 
       - Use kpu.get_xue_summary() for detailed event breakdown
       - Use kpu.get_operational_analysis() for roofline predictions
+      - Per-level memory stats: stats.xue_summary['memory_hierarchy']['dram'], etc.
     """
     # Basic timing
     cycles: int = 0
@@ -170,13 +149,7 @@ class ExecutionStats:
     total_macs: int = 0
     matmul_count: int = 0
 
-    # Memory hierarchy statistics (populated from C++ XUE)
-    dram: Optional[LevelMemoryStats] = None
-    l3: Optional[LevelMemoryStats] = None
-    l2: Optional[LevelMemoryStats] = None
-    l1: Optional[LevelMemoryStats] = None
-
-    # Legacy memory traffic metrics (for backward compatibility)
+    # Memory metrics (use xue_summary['memory_hierarchy'] for per-level breakdown)
     memory_bytes: int = 0
     external_bytes: int = 0
 
@@ -201,7 +174,7 @@ class ExecutionStats:
     page_hit_rate: float = 0.0
 
     # XUE summary from C++ EventCollector (v0.5.0+)
-    # Use kpu.get_xue_summary() for detailed access
+    # Contains detailed breakdowns including memory_hierarchy with dram/l3/l2/l1
     xue_summary: Optional[Dict[str, Any]] = None
 
     # Execution backend identifier (v0.8.0+)
@@ -211,17 +184,6 @@ class ExecutionStats:
     #   "cpp_cycle_accurate" - C++ cycle-accurate model
     #   "python_fallback" - Pure Python/NumPy fallback (no XUE)
     execution_backend: str = "unknown"
-
-    def __post_init__(self):
-        # Initialize level stats if not provided
-        if self.dram is None:
-            self.dram = LevelMemoryStats()
-        if self.l3 is None:
-            self.l3 = LevelMemoryStats()
-        if self.l2 is None:
-            self.l2 = LevelMemoryStats()
-        if self.l1 is None:
-            self.l1 = LevelMemoryStats()
 
 
 class KPURuntime:
@@ -918,16 +880,6 @@ class KPURuntime:
             warnings.warn(f"Native bindings failed to initialize: {e}")
             self._native_sim = None
 
-    def _extract_level_stats(self, level_dict: Dict[str, Any]) -> LevelMemoryStats:
-        """Extract LevelMemoryStats from XUE memory hierarchy dict."""
-        if level_dict is None:
-            return LevelMemoryStats()
-        return LevelMemoryStats(
-            events=level_dict.get('events', 0),
-            bytes=level_dict.get('bytes', 0),
-            cycles=level_dict.get('cycles', 0),
-        )
-
     def _execute_native(self,
                         program: 'DFXProgram',
                         inputs: List['Tensor'],
@@ -950,14 +902,8 @@ class KPURuntime:
         )
 
         # Get XUE summary from C++ EventCollector (v0.5.0+)
+        # Per-level memory stats available via xue_summary['memory_hierarchy']
         xue_summary = _native.get_xue_summary()
-
-        # Extract per-level memory stats from XUE memory hierarchy
-        mem_hierarchy = xue_summary.get('memory_hierarchy', {})
-        dram_stats = self._extract_level_stats(mem_hierarchy.get('dram'))
-        l3_stats = self._extract_level_stats(mem_hierarchy.get('l3'))
-        l2_stats = self._extract_level_stats(mem_hierarchy.get('l2'))
-        l1_stats = self._extract_level_stats(mem_hierarchy.get('l1'))
 
         stats = ExecutionStats(
             # Basic timing
@@ -973,12 +919,7 @@ class KPURuntime:
             matmul_flops=stats_dict.get('matmul_flops', 0),
             total_macs=stats_dict.get('total_macs', 0),
             matmul_count=stats_dict.get('matmul_count', 0),
-            # Memory hierarchy stats from C++ XUE (v0.5.0+)
-            dram=dram_stats,
-            l3=l3_stats,
-            l2=l2_stats,
-            l1=l1_stats,
-            # Memory traffic metrics
+            # Memory metrics
             memory_bytes=stats_dict.get('memory_bytes', 0),
             external_bytes=stats_dict.get('external_bytes', 0),
             # Memory controller stats
@@ -997,7 +938,7 @@ class KPURuntime:
             efficiency=stats_dict.get('efficiency', 0.0),
             memory_bandwidth_gbps=stats_dict.get('memory_bandwidth_gbps', 0.0),
             page_hit_rate=stats_dict.get('page_hit_rate', 0.0),
-            # XUE summary from C++ (v0.5.0+)
+            # XUE summary from C++ (contains memory_hierarchy with dram/l3/l2/l1)
             xue_summary=xue_summary,
             # Execution backend identifier (v0.8.0+)
             execution_backend=f"cpp_{mode}",

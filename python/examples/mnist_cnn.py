@@ -238,11 +238,15 @@ def main():
         print(f"  T (Elapsed Cycles):  {T:,} cycles")
         print(f"  Wall Time:           {T / (stats.clock_frequency_ghz * 1e9) * 1e6:.2f} us")
         print()
-        print("Memory Hierarchy (XUE Events):")
-        print(f"  DRAM: {stats.dram.total_bytes:,} bytes | {stats.dram.total_count:,} txns | {stats.dram.service_rate:.2f} B/cycle")
-        print(f"  L3:   {stats.l3.total_bytes:,} bytes | {stats.l3.total_count:,} txns | {stats.l3.service_rate:.2f} B/cycle")
-        print(f"  L2:   {stats.l2.total_bytes:,} bytes | {stats.l2.total_count:,} txns | {stats.l2.service_rate:.2f} B/cycle")
-        print(f"  L1:   {stats.l1.total_bytes:,} bytes | {stats.l1.total_count:,} txns | {stats.l1.service_rate:.2f} B/cycle")
+        print("Memory Hierarchy (from XUE Summary):")
+        # Get per-level stats from xue_summary
+        mem_hierarchy = stats.xue_summary.get('memory_hierarchy', {}) if stats.xue_summary else {}
+        for level in ['dram', 'l3', 'l2', 'l1']:
+            level_stats = mem_hierarchy.get(level, {})
+            level_bytes = level_stats.get('bytes', 0)
+            level_events = level_stats.get('events', 0)
+            service_rate = level_bytes / T if T > 0 else 0.0
+            print(f"  {level.upper():4}: {level_bytes:,} bytes | {level_events:,} txns | {service_rate:.2f} B/cycle")
         print()
         print("Compute Performance:")
         print(f"  MatMul FLOPs:  {stats.matmul_flops:,}")

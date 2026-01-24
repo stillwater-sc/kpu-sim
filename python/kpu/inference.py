@@ -300,8 +300,11 @@ class InferencePipeline:
                 stats.total_compute_cycles = fn_stats.compute_cycles
                 stats.total_memory_cycles = fn_stats.memory_cycles
 
-                if hasattr(fn_stats, 'dram'):
-                    stats.total_memory_bytes = fn_stats.dram.total_bytes
+                # Get DRAM bytes from XUE summary
+                if fn_stats.xue_summary is not None:
+                    mem_hierarchy = fn_stats.xue_summary.get('memory_hierarchy', {})
+                    dram_info = mem_hierarchy.get('dram', {})
+                    stats.total_memory_bytes = dram_info.get('bytes', 0)
 
         # Collect layer stats if profiling enabled
         if self.profile_layers:
