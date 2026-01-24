@@ -1886,11 +1886,8 @@ private:
             }
 
             // Record XUE reduction event
-            sw::xue::xue().record_elementwise(
-                sw::xue::EventType::REDUCE_SUM,  // Use generic reduction type
-                static_cast<uint64_t>(x_buf.size),
-                0
-            );
+            sw::xue::xue().record(sw::xue::EventType::REDUCE_SUM,
+                sw::xue::EventMetadata::compute(static_cast<uint64_t>(x_buf.size)));
 
             tensors[output_name] = Y;
             stats.ops_executed++;
@@ -2223,11 +2220,7 @@ private:
             stats.matmul_flops += 2LL * gemm_M * gemm_N * gemm_K;
 
             // BN operations: mean, var, normalize, scale, shift = 5 ops per element
-            sw::xue::xue().record_elementwise(
-                sw::xue::EventType::ELEM_MUL,
-                total_elements * 5,
-                0
-            );
+            sw::xue::xue().record_mul(total_elements * 5, 0);
             sw::xue::xue().record_relu(total_elements, 0);
 
             tensors[output_name] = conv_result;
@@ -3377,9 +3370,9 @@ PYBIND11_MODULE(_native, m) {
         compute["total_cycles"] = compute_stats.total_cycles;
         result["compute"] = compute;
 
-        // Compute subcategories
-        auto matmul_stats = counter.get_compute_subcategory_stats(sw::xue::ComputeSubcategory::MATMUL);
-        auto elem_stats = counter.get_compute_subcategory_stats(sw::xue::ComputeSubcategory::ELEMENTWISE);
+        // Compute subcategories (v0.4.0: NAMED_OP for matmul, ALU_PRIMITIVE for elementwise)
+        auto matmul_stats = counter.get_compute_subcategory_stats(sw::xue::ComputeSubcategory::NAMED_OP);
+        auto elem_stats = counter.get_compute_subcategory_stats(sw::xue::ComputeSubcategory::ALU_PRIMITIVE);
         auto reduce_stats = counter.get_compute_subcategory_stats(sw::xue::ComputeSubcategory::REDUCTION);
         auto special_stats = counter.get_compute_subcategory_stats(sw::xue::ComputeSubcategory::SPECIAL);
 
@@ -3402,7 +3395,7 @@ PYBIND11_MODULE(_native, m) {
         result["memory"] = memory;
 
         // Memory subcategories (per-level hierarchy)
-        auto dram_stats = counter.get_memory_subcategory_stats(sw::xue::MemorySubcategory::EXTERNAL);
+        auto dram_stats = counter.get_memory_subcategory_stats(sw::xue::MemorySubcategory::DRAM);
         auto l3_stats = counter.get_memory_subcategory_stats(sw::xue::MemorySubcategory::L3);
         auto l2_stats = counter.get_memory_subcategory_stats(sw::xue::MemorySubcategory::L2);
         auto l1_stats = counter.get_memory_subcategory_stats(sw::xue::MemorySubcategory::L1);

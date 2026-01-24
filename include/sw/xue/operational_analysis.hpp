@@ -173,17 +173,30 @@ public:
             result.predicted_cycles = seconds * hw_.clock_ghz * 1e9;
         }
 
-        // Event breakdown
-        auto compute_stats = events.get_category_stats(EventCategory::COMPUTE);
-        auto matmul_stats = events.get_compute_subcategory_stats(ComputeSubcategory::MATMUL);
-        auto elem_stats = events.get_compute_subcategory_stats(ComputeSubcategory::ELEMENTWISE);
+        // Event breakdown - use specific event types for accuracy
+        // Matmul operations (OP_MATMUL + OP_GEMM + OP_CONV2D)
+        result.matmul_events =
+            events.stats(EventType::OP_MATMUL).count.load(std::memory_order_relaxed) +
+            events.stats(EventType::OP_GEMM).count.load(std::memory_order_relaxed) +
+            events.stats(EventType::OP_CONV2D).count.load(std::memory_order_relaxed);
+
+        // Elementwise operations (activation functions, bias add, etc.)
+        result.elementwise_events =
+            events.stats(EventType::OP_RELU).count.load(std::memory_order_relaxed) +
+            events.stats(EventType::OP_GELU).count.load(std::memory_order_relaxed) +
+            events.stats(EventType::OP_SIGMOID).count.load(std::memory_order_relaxed) +
+            events.stats(EventType::OP_TANH).count.load(std::memory_order_relaxed) +
+            events.stats(EventType::OP_BIAS_ADD).count.load(std::memory_order_relaxed) +
+            events.stats(EventType::OP_LAYERNORM).count.load(std::memory_order_relaxed) +
+            events.stats(EventType::OP_BATCHNORM).count.load(std::memory_order_relaxed);
+
+        // Reduction operations
         auto reduce_stats = events.get_compute_subcategory_stats(ComputeSubcategory::REDUCTION);
+        result.reduction_events = reduce_stats.total_events;
+
+        // Memory and sync events
         auto mem_stats = events.get_category_stats(EventCategory::MEMORY);
         auto sync_stats = events.get_category_stats(EventCategory::SYNCHRONIZATION);
-
-        result.matmul_events = matmul_stats.total_events;
-        result.elementwise_events = elem_stats.total_events;
-        result.reduction_events = reduce_stats.total_events;
         result.memory_events = mem_stats.total_events;
         result.sync_events = sync_stats.total_events;
 

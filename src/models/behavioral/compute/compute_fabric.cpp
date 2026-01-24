@@ -4,6 +4,7 @@
 // ============================================================================
 
 #include <sw/kpu/models/behavioral/compute/compute_fabric.hpp>
+#include <sw/kpu/quantization/type_dispatch.hpp>
 #include <sw/xue/event_collector.hpp>
 
 #include <algorithm>
@@ -51,14 +52,24 @@ std::optional<uint64_t> BehavioralComputeFabric::submit_matmul(
     void* c_data,
     std::function<void()> callback)
 {
-    // Execute matmul immediately
-    if (desc.element_size == 4) {
-        execute_matmul_fp32(desc,
-                           static_cast<const float*>(a_data),
-                           static_cast<const float*>(b_data),
-                           static_cast<float*>(c_data));
-    }
-    // TODO: Support other data types (INT8, FP16, BF16)
+    // ==========================================================================
+    // TYPE-DISPATCHED MATMUL EXECUTION
+    // ==========================================================================
+    // The dispatch_matmul() function routes to the appropriate template kernel
+    // based on desc.dtype. Supported types include:
+    //   - FP32: Native float computation
+    //   - FP16, BF16: Universal library 16-bit floats
+    //   - FP8 variants: E4M3, E5M2, E3M4, E2M5 via Universal cfloat
+    //   - FP4: Ultra-low precision via Universal cfloat<4,1>
+    //   - INT8, INT4: Integer quantized with INT32 accumulator
+    //
+    // Type information flow to KPU resources:
+    //   - DMA/BlockMover: Use desc.element_size() for byte calculations
+    //   - Streamer: Use desc.dtype for pack/unpack of sub-byte types (INT4)
+    //   - Compute: Template kernel selected by dtype
+    // ==========================================================================
+    dispatch_matmul(desc.dtype, desc.m, desc.n, desc.k,
+                    a_data, b_data, c_data, desc.accumulate);
 
     uint64_t op_id = next_op_id_++;
 
@@ -73,9 +84,19 @@ std::optional<uint64_t> BehavioralComputeFabric::submit_matmul(
     // Estimate latency and schedule callback
     uint32_t latency = estimate_latency(desc);
 
-    // Record XUE event (tile-level for hardware-accurate counters)
+    // Record XUE events (tile-level for hardware-accurate counters)
     sw::xue::xue().set_cycle(current_cycle_);
     sw::xue::xue().record_matmul(desc.m, desc.n, desc.k, latency);
+
+    // Record memory events for roofline analysis
+    // C[M,N] = A[M,K] @ B[K,N]
+    uint64_t elem_size = dtype_size(desc.dtype);
+    uint64_t a_bytes = static_cast<uint64_t>(desc.m) * desc.k * elem_size;
+    uint64_t b_bytes = static_cast<uint64_t>(desc.k) * desc.n * elem_size;
+    uint64_t c_bytes = static_cast<uint64_t>(desc.m) * desc.n * elem_size;
+    sw::xue::xue().record_dram_read(a_bytes);
+    sw::xue::xue().record_dram_read(b_bytes);
+    sw::xue::xue().record_dram_write(c_bytes);
 
     if (callback) {
         pending_callbacks_.push(PendingCallback{
@@ -99,8 +120,8 @@ std::optional<uint64_t> BehavioralComputeFabric::submit_conv2d(
     void* output_data,
     std::function<void()> callback)
 {
-    // Execute conv2d immediately
-    if (desc.element_size == 4) {
+    // Execute conv2d immediately (FP32 only for now, typed dispatch future work)
+    if (desc.dtype == DataType::FLOAT32) {
         execute_conv2d_fp32(desc,
                            static_cast<const float*>(input_data),
                            static_cast<const float*>(weight_data),
@@ -124,7 +145,7 @@ std::optional<uint64_t> BehavioralComputeFabric::submit_conv2d(
 
     // Record XUE event
     sw::xue::xue().set_cycle(current_cycle_);
-    sw::xue::xue().record(sw::xue::EventType::CONV_IM2COL,
+    sw::xue::xue().record(sw::xue::EventType::OP_IM2COL,
                           sw::xue::EventMetadata::compute(macs * 2, 0, 0, 0));
 
     stats_.total_compute_cycles += latency;
@@ -141,13 +162,46 @@ std::optional<uint64_t> BehavioralComputeFabric::submit_elementwise(
     void* output_data,
     std::function<void()> callback)
 {
-    // Execute elementwise immediately
-    if (desc.element_size == 4) {
-        execute_elementwise_fp32(desc,
-                                 static_cast<const float*>(a_data),
-                                 static_cast<const float*>(b_data),
-                                 static_cast<float*>(output_data));
+    // ==========================================================================
+    // TYPE-DISPATCHED ELEMENTWISE EXECUTION
+    // ==========================================================================
+    // Common activations (ReLU, GELU, SiLU) and binary ops (ADD, MUL) use
+    // type dispatch. Other operations fall back to FP32-only implementation.
+    // ==========================================================================
+    bool dispatched = false;
+    switch (desc.op) {
+        case ElementwiseOp::RELU:
+            dispatch_relu(desc.dtype, a_data, output_data, desc.count);
+            dispatched = true;
+            break;
+        case ElementwiseOp::GELU:
+            dispatch_gelu(desc.dtype, a_data, output_data, desc.count);
+            dispatched = true;
+            break;
+        case ElementwiseOp::SILU:
+            dispatch_silu(desc.dtype, a_data, output_data, desc.count);
+            dispatched = true;
+            break;
+        case ElementwiseOp::ADD:
+            dispatch_add(desc.dtype, a_data, b_data, output_data, desc.count);
+            dispatched = true;
+            break;
+        case ElementwiseOp::MUL:
+            dispatch_mul(desc.dtype, a_data, b_data, output_data, desc.count);
+            dispatched = true;
+            break;
+        default:
+            // Fall back to FP32 implementation for other ops
+            if (desc.dtype == DataType::FLOAT32) {
+                execute_elementwise_fp32(desc,
+                                         static_cast<const float*>(a_data),
+                                         static_cast<const float*>(b_data),
+                                         static_cast<float*>(output_data));
+                dispatched = true;
+            }
+            break;
     }
+    (void)dispatched;  // Silence unused variable warning
 
     uint64_t op_id = next_op_id_++;
 
@@ -176,18 +230,32 @@ std::optional<uint64_t> BehavioralComputeFabric::submit_elementwise(
             sw::xue::xue().record_mul(desc.count, latency);
             break;
         case ElementwiseOp::SIGMOID:
-            sw::xue::xue().record_elementwise(sw::xue::EventType::ELEM_SIGMOID, desc.count, latency);
+            sw::xue::xue().record_sigmoid(desc.count, latency);
             break;
         case ElementwiseOp::TANH:
-            sw::xue::xue().record_elementwise(sw::xue::EventType::ELEM_TANH, desc.count, latency);
+            sw::xue::xue().record_tanh(desc.count, latency);
             break;
         case ElementwiseOp::GELU:
-            sw::xue::xue().record_elementwise(sw::xue::EventType::ELEM_GELU, desc.count, latency);
+            sw::xue::xue().record_gelu(desc.count, latency);
             break;
         default:
-            sw::xue::xue().record_elementwise(sw::xue::EventType::ELEM_ADD, desc.count, latency);
+            sw::xue::xue().record_add(desc.count, latency);
             break;
     }
+
+    // Record memory events for roofline analysis
+    uint64_t elem_size = dtype_size(desc.dtype);
+    uint64_t input_bytes = static_cast<uint64_t>(desc.count) * elem_size;
+    bool is_binary = (desc.op == ElementwiseOp::ADD || desc.op == ElementwiseOp::ADD_SCALAR ||
+                      desc.op == ElementwiseOp::MUL || desc.op == ElementwiseOp::MUL_SCALAR ||
+                      desc.op == ElementwiseOp::SUB || desc.op == ElementwiseOp::DIV);
+    if (is_binary && b_data != nullptr) {
+        sw::xue::xue().record_dram_read(input_bytes);  // A
+        sw::xue::xue().record_dram_read(input_bytes);  // B
+    } else {
+        sw::xue::xue().record_dram_read(input_bytes);  // A (unary ops)
+    }
+    sw::xue::xue().record_dram_write(input_bytes);     // Output
 
     return op_id;
 }
@@ -198,8 +266,8 @@ std::optional<uint64_t> BehavioralComputeFabric::submit_pool2d(
     void* output_data,
     std::function<void()> callback)
 {
-    // Execute pool2d immediately
-    if (desc.element_size == 4) {
+    // Execute pool2d immediately (FP32 only for now)
+    if (desc.dtype == DataType::FLOAT32) {
         execute_pool2d_fp32(desc,
                            static_cast<const float*>(input_data),
                            static_cast<float*>(output_data));
@@ -221,10 +289,10 @@ std::optional<uint64_t> BehavioralComputeFabric::submit_pool2d(
     uint64_t output_elements = static_cast<uint64_t>(desc.batch_size) * desc.channels *
                                 desc.out_height() * desc.out_width();
     if (desc.pool_type == Pool2DDescriptor::PoolType::MAX) {
-        sw::xue::xue().record(sw::xue::EventType::POOL_MAX,
+        sw::xue::xue().record(sw::xue::EventType::OP_POOL_MAX,
                               sw::xue::EventMetadata::compute(output_elements, 0, 0, 0));
     } else {
-        sw::xue::xue().record(sw::xue::EventType::POOL_AVG,
+        sw::xue::xue().record(sw::xue::EventType::OP_POOL_AVG,
                               sw::xue::EventMetadata::compute(output_elements, 0, 0, 0));
     }
 
@@ -237,12 +305,11 @@ std::optional<uint64_t> BehavioralComputeFabric::submit_softmax(
     void* output_data,
     std::function<void()> callback)
 {
-    // Execute softmax immediately
-    if (desc.element_size == 4) {
-        execute_softmax_fp32(desc,
-                            static_cast<const float*>(input_data),
-                            static_cast<float*>(output_data));
-    }
+    // ==========================================================================
+    // TYPE-DISPATCHED SOFTMAX EXECUTION
+    // ==========================================================================
+    dispatch_softmax(desc.dtype, input_data, output_data,
+                     desc.batch_size, desc.dim_size);
 
     uint64_t op_id = next_op_id_++;
 
@@ -272,14 +339,12 @@ std::optional<uint64_t> BehavioralComputeFabric::submit_layernorm(
     void* output_data,
     std::function<void()> callback)
 {
-    // Execute layernorm immediately
-    if (desc.element_size == 4) {
-        execute_layernorm_fp32(desc,
-                              static_cast<const float*>(input_data),
-                              static_cast<const float*>(weight_data),
-                              static_cast<const float*>(bias_data),
-                              static_cast<float*>(output_data));
-    }
+    // ==========================================================================
+    // TYPE-DISPATCHED LAYERNORM EXECUTION
+    // ==========================================================================
+    dispatch_layernorm(desc.dtype, input_data, output_data,
+                       weight_data, bias_data,
+                       desc.batch_size, desc.normalized_size, desc.eps);
 
     uint64_t op_id = next_op_id_++;
 
@@ -312,8 +377,8 @@ std::optional<uint64_t> BehavioralComputeFabric::submit_batchnorm(
     void* output_data,
     std::function<void()> callback)
 {
-    // Execute batchnorm immediately
-    if (desc.element_size == 4) {
+    // Execute batchnorm immediately (FP32 only for now, typed dispatch future work)
+    if (desc.dtype == DataType::FLOAT32) {
         execute_batchnorm_fp32(desc,
                               static_cast<const float*>(input_data),
                               static_cast<const float*>(weight_data),
@@ -381,25 +446,8 @@ void BehavioralComputeFabric::drain() {
 // Helpers
 // ============================================================================
 
-void BehavioralComputeFabric::execute_matmul_fp32(
-    const MatMulDescriptor& desc,
-    const float* a, const float* b, float* c)
-{
-    const uint32_t m = desc.m;
-    const uint32_t n = desc.n;
-    const uint32_t k = desc.k;
-
-    // Simple triple-loop matmul
-    for (uint32_t i = 0; i < m; ++i) {
-        for (uint32_t j = 0; j < n; ++j) {
-            float sum = desc.accumulate ? c[i * n + j] : 0.0f;
-            for (uint32_t p = 0; p < k; ++p) {
-                sum += a[i * k + p] * b[p * n + j];
-            }
-            c[i * n + j] = sum;
-        }
-    }
-}
+// Note: execute_matmul is now handled by dispatch_matmul() in type_dispatch.hpp
+// The typed kernels in quantization/kernels.hpp provide the actual computation.
 
 uint32_t BehavioralComputeFabric::estimate_latency(const MatMulDescriptor& desc) const {
     // Estimate based on throughput

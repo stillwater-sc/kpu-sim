@@ -54,7 +54,7 @@ std::optional<uint64_t> TransactionalComputeFabric::submit_matmul(
     std::function<void()> callback)
 {
     // Execute matmul immediately (data is computed now, timing is simulated)
-    if (desc.element_size == 4) {
+    if (desc.dtype == DataType::FLOAT32) {
         execute_matmul_fp32(desc,
                            static_cast<const float*>(a_data),
                            static_cast<const float*>(b_data),
@@ -121,7 +121,7 @@ std::optional<uint64_t> TransactionalComputeFabric::submit_conv2d(
     std::function<void()> callback)
 {
     // Execute conv2d immediately
-    if (desc.element_size == 4) {
+    if (desc.dtype == DataType::FLOAT32) {
         execute_conv2d_fp32(desc,
                            static_cast<const float*>(input_data),
                            static_cast<const float*>(weight_data),
@@ -144,7 +144,7 @@ std::optional<uint64_t> TransactionalComputeFabric::submit_conv2d(
 
     // Record XUE event
     sw::xue::xue().set_cycle(current_cycle_);
-    sw::xue::xue().record(sw::xue::EventType::CONV_IM2COL,
+    sw::xue::xue().record(sw::xue::EventType::OP_IM2COL,
                           sw::xue::EventMetadata::compute(macs * 2, 0, 0, 0));
 
     return op_id;
@@ -157,7 +157,7 @@ std::optional<uint64_t> TransactionalComputeFabric::submit_elementwise(
     void* output_data,
     std::function<void()> callback)
 {
-    if (desc.element_size == 4) {
+    if (desc.dtype == DataType::FLOAT32) {
         execute_elementwise_fp32(desc,
                                  static_cast<const float*>(a_data),
                                  static_cast<const float*>(b_data),
@@ -186,16 +186,16 @@ std::optional<uint64_t> TransactionalComputeFabric::submit_elementwise(
             sw::xue::xue().record_mul(desc.count, duration);
             break;
         case ElementwiseOp::SIGMOID:
-            sw::xue::xue().record_elementwise(sw::xue::EventType::ELEM_SIGMOID, desc.count, duration);
+            sw::xue::xue().record_sigmoid(desc.count, duration);
             break;
         case ElementwiseOp::TANH:
-            sw::xue::xue().record_elementwise(sw::xue::EventType::ELEM_TANH, desc.count, duration);
+            sw::xue::xue().record_tanh(desc.count, duration);
             break;
         case ElementwiseOp::GELU:
-            sw::xue::xue().record_elementwise(sw::xue::EventType::ELEM_GELU, desc.count, duration);
+            sw::xue::xue().record_gelu(desc.count, duration);
             break;
         default:
-            sw::xue::xue().record_elementwise(sw::xue::EventType::ELEM_ADD, desc.count, duration);
+            sw::xue::xue().record_add(desc.count, duration);
             break;
     }
 
@@ -208,7 +208,7 @@ std::optional<uint64_t> TransactionalComputeFabric::submit_pool2d(
     void* output_data,
     std::function<void()> callback)
 {
-    if (desc.element_size == 4) {
+    if (desc.dtype == DataType::FLOAT32) {
         execute_pool2d_fp32(desc,
                            static_cast<const float*>(input_data),
                            static_cast<float*>(output_data));
@@ -225,10 +225,10 @@ std::optional<uint64_t> TransactionalComputeFabric::submit_pool2d(
     uint64_t output_elements = static_cast<uint64_t>(desc.batch_size) * desc.channels *
                                 desc.out_height() * desc.out_width();
     if (desc.pool_type == Pool2DDescriptor::PoolType::MAX) {
-        sw::xue::xue().record(sw::xue::EventType::POOL_MAX,
+        sw::xue::xue().record(sw::xue::EventType::OP_POOL_MAX,
                               sw::xue::EventMetadata::compute(output_elements, 0, 0, 0));
     } else {
-        sw::xue::xue().record(sw::xue::EventType::POOL_AVG,
+        sw::xue::xue().record(sw::xue::EventType::OP_POOL_AVG,
                               sw::xue::EventMetadata::compute(output_elements, 0, 0, 0));
     }
 
@@ -241,7 +241,7 @@ std::optional<uint64_t> TransactionalComputeFabric::submit_softmax(
     void* output_data,
     std::function<void()> callback)
 {
-    if (desc.element_size == 4) {
+    if (desc.dtype == DataType::FLOAT32) {
         execute_softmax_fp32(desc,
                             static_cast<const float*>(input_data),
                             static_cast<float*>(output_data));
@@ -269,7 +269,7 @@ std::optional<uint64_t> TransactionalComputeFabric::submit_layernorm(
     void* output_data,
     std::function<void()> callback)
 {
-    if (desc.element_size == 4) {
+    if (desc.dtype == DataType::FLOAT32) {
         execute_layernorm_fp32(desc,
                               static_cast<const float*>(input_data),
                               static_cast<const float*>(weight_data),
@@ -302,7 +302,7 @@ std::optional<uint64_t> TransactionalComputeFabric::submit_batchnorm(
     void* output_data,
     std::function<void()> callback)
 {
-    if (desc.element_size == 4) {
+    if (desc.dtype == DataType::FLOAT32) {
         execute_batchnorm_fp32(desc,
                               static_cast<const float*>(input_data),
                               static_cast<const float*>(weight_data),

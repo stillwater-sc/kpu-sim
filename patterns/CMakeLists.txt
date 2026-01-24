@@ -612,6 +612,34 @@ endfunction()
 add_compute_pattern(matmul_validation systolic/matmul_validation.cpp "Systolic")
 add_compute_pattern(tiled_matmul_e2e systolic/tiled_matmul_e2e.cpp "Systolic")
 
+# -----------------------------------------------------------------------------
+# MLP Patterns (Behavioral with XUE)
+# -----------------------------------------------------------------------------
+
+# Helper function to add MLP pattern with behavioral + XUE dependencies
+# Note: XUE is header-only, included via kpu_behavioral
+function(add_mlp_pattern NAME SOURCE_FILE)
+    add_executable(mlp_${NAME}
+        ${CMAKE_CURRENT_SOURCE_DIR}/compute-tile/${SOURCE_FILE}
+    )
+    target_link_libraries(mlp_${NAME} PRIVATE
+        pattern_common
+        compute_pattern_common
+        kpu_behavioral
+        kpu_trace
+    )
+    # Add Universal library include path for quantization type dispatch
+    if(UNIVERSAL_INCLUDE_DIR)
+        target_include_directories(mlp_${NAME} PRIVATE ${UNIVERSAL_INCLUDE_DIR})
+    endif()
+    set_target_properties(mlp_${NAME} PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/patterns/compute
+        FOLDER "Patterns/Compute/MLP"
+    )
+endfunction()
+
+add_mlp_pattern(quantized_characterization mlp/quantized_mlp_characterization.cpp)
+
 # ============================================================================
 # Connection Patterns (TODO)
 # ============================================================================

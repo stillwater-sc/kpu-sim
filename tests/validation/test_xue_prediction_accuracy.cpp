@@ -4,7 +4,7 @@
 // ============================================================================
 // PURPOSE
 // ============================================================================
-// The XUE (eXecution Usage Events) framework provides performance predictions
+// The XUE Observation Architecture framework provides performance predictions
 // based on the roofline model. This test validates that these predictions
 // are accurate within 10% for both compute-bound and memory-bound operations.
 //
@@ -52,7 +52,7 @@ void populate_matmul_events(EventCounter& counter, Size M, Size N, Size K) {
     Size elem_size = 4;  // float32
 
     // Record compute event
-    counter.record(EventType::MATMUL_16x16, EventMetadata::compute(total_flops));
+    counter.record(EventType::OP_MATMUL, EventMetadata::compute(total_flops));
 
     // Record memory events
     counter.record_memory(EventType::DRAM_READ, M * K * elem_size);  // A
@@ -71,7 +71,7 @@ void populate_elementwise_events(EventCounter& counter, Size num_elements) {
     Size elem_size = 4;
     uint64_t bytes_per_tensor = num_elements * elem_size;
 
-    counter.record(EventType::ELEM_ADD, EventMetadata::compute(total_flops));
+    counter.record(EventType::ALU_ADD, EventMetadata::compute(total_flops));
     counter.record_memory(EventType::DRAM_READ, bytes_per_tensor);   // A
     counter.record_memory(EventType::DRAM_READ, bytes_per_tensor);   // B
     counter.record_memory(EventType::DRAM_WRITE, bytes_per_tensor);  // C
