@@ -62,6 +62,7 @@ add_subdirectory(benchmarks)
 add_subdirectory(dataflow)
 add_subdirectory(xue)
 add_subdirectory(stats)
+add_subdirectory(validation)
 
 # Legacy test (in this directory)
 kpu_add_component_test(legacy_test_main "legacy" test_main.cpp)
@@ -201,6 +202,14 @@ add_custom_target(test_stats
     VERBATIM
 )
 set_target_properties(test_stats PROPERTIES FOLDER "Tests/Runners")
+
+add_custom_target(test_validation
+    COMMAND ${CMAKE_CTEST_COMMAND} -C $<CONFIG> --output-on-failure -L validation
+    COMMENT "Running analytical validation tests (v0.3.5)"
+    WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
+    VERBATIM
+)
+set_target_properties(test_validation PROPERTIES FOLDER "Tests/Runners")
 
 #add_custom_target(test_benchmarks
 #    COMMAND ${CMAKE_CTEST_COMMAND} -C $<CONFIG> --output-on-failure -L benchmark
