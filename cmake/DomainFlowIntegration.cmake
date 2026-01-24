@@ -43,7 +43,9 @@ if(KPU_USE_DOMAIN_FLOW)
 
         include(FetchContent)
 
-        # Prevent domain_flow tests from being added to our test suite
+        # Save BUILD_TESTING state before fetching domain_flow
+        # (domain_flow respects BUILD_TESTING, but we want our own tests enabled)
+        set(_KPU_SAVED_BUILD_TESTING ${BUILD_TESTING})
         set(BUILD_TESTING OFF CACHE BOOL "Disable domain_flow tests" FORCE)
 
         FetchContent_Declare(domain_flow
@@ -60,6 +62,10 @@ if(KPU_USE_DOMAIN_FLOW)
         set(CMAKE_POLICY_DEFAULT_CMP0077 NEW)
 
         FetchContent_MakeAvailable(domain_flow)
+
+        # Restore BUILD_TESTING to enable kpu-sim's own tests
+        set(BUILD_TESTING ${_KPU_SAVED_BUILD_TESTING} CACHE BOOL "Enable testing" FORCE)
+        unset(_KPU_SAVED_BUILD_TESTING)
 
         # Set include directory
         set(DOMAIN_FLOW_INCLUDE_DIR "${domain_flow_SOURCE_DIR}/include")

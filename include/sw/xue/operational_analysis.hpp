@@ -35,10 +35,14 @@ namespace sw::xue {
 
 /**
  * @brief Hardware model for operational analysis
+ *
+ * Default values match the KPU simulator at 1 GHz reference clock:
+ * - 16x16 systolic array = 256 MACs/cycle = 512 FLOPs/cycle (FMA)
+ * - Peak GFLOPS = 512 at 1 GHz reference
  */
 struct HardwareModel {
     // Compute capability
-    double peak_gflops = 1024.0;              // 16x16 systolic @ 1 GHz
+    double peak_gflops = 512.0;               // 16x16 systolic @ 1 GHz (256 FMA = 512 FLOP)
     double clock_ghz = 1.0;
 
     // Memory bandwidth (GB/s)
