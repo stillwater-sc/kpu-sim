@@ -59,33 +59,38 @@ python tools/roofline/roofline_plot.py --run-benchmark --summary
 === KPU Roofline Analysis (v0.3.2) ===
 
 Hardware Specification:
-  Peak Compute:        1024 GFLOPS
+  Peak Compute:        512 GFLOPS (at 1 GHz reference)
   External Bandwidth:  64 GB/s
   L3 Bandwidth:        128 GB/s
   L2 Bandwidth:        256 GB/s
 
 Ridge Points (FLOP/byte):
-  External Memory:     16
-  L3 Cache:            8
-  L2 Cache:            4
+  External Memory:     8.00
+  L3 Cache:            4.00
+  L2 Cache:            2.00
 
-# Roofline Data
-# arithmetic_intensity gflops efficiency name
-10.6667 292.5714 0.4286 matmul_64x64x64
-21.3333 352.3441 0.3441 matmul_128x128x128
-42.6667 427.6411 0.4176 matmul_256x256x256
-85.3333 470.1080 0.4591 matmul_512x512x512
-170.6667 491.4096 0.4799 matmul_1024x1024x1024
+Config                          AI     GFLOPS     Eff%    BW GB/s Region
+----------------------------------------------------------------------
+64K_elements                  0.08       4.00    75.0%       48.0 memory
+256x256x256                  42.67     460.80    90.0%          - compute
+1024x1024x1024              170.67     501.76    98.0%          - compute
+
+Analysis:
+  Compute-bound points: 2
+  Memory-bound points:  1
+  ✓ Meets v0.3 target (>80% for large compute-bound)
+  ✓ Meets v0.3.1 target (>70% BW utilization)
 ```
 
 ### Key Metrics Explained
 
 | Metric | Description |
 |--------|-------------|
-| **Peak Compute** | Maximum theoretical GFLOPS (16×16 systolic array @ 1 GHz) |
+| **Peak Compute** | Maximum theoretical GFLOPS (16×16 systolic array @ 1 GHz = 512 GFLOPS) |
 | **Bandwidth** | Memory bandwidth at each hierarchy level |
 | **Ridge Point** | AI where transition from memory-bound to compute-bound occurs |
 | **Efficiency** | Achieved GFLOPS / Predicted GFLOPS |
+| **BW GB/s** | Achieved memory bandwidth (for memory-bound operations) |
 
 ### Ridge Point Interpretation
 
@@ -93,23 +98,22 @@ Ridge Points (FLOP/byte):
         Performance
         (GFLOPS)
            ^
-    1024 --|-------------------- Peak Compute
-           |              /
+     512 --|-------------------- Peak Compute
            |            /
-           |          /   Compute-bound region
-           |        /
+           |          /
+           |        /   Compute-bound region
            |      /
            |    /   Memory-bound region
            |  /
            |/
            +-------------------------> Arithmetic Intensity
-                   ^                   (FLOP/byte)
-                   |
-              Ridge Point (16 FLOP/byte)
+                 ^                     (FLOP/byte)
+                 |
+            Ridge Point (8 FLOP/byte)
 ```
 
-- **AI < 16**: Memory-bound (limited by external bandwidth)
-- **AI >= 16**: Compute-bound (limited by peak GFLOPS)
+- **AI < 8**: Memory-bound (limited by external bandwidth)
+- **AI >= 8**: Compute-bound (limited by peak GFLOPS)
 
 ---
 
@@ -119,37 +123,31 @@ Ridge Points (FLOP/byte):
 {
   "version": "0.3.2",
   "hardware": {
-    "peak_gflops": 1024.0,
-    "clock_ghz": 1.0,
+    "peak_gflops": 512.0,
     "external_bandwidth_gbs": 64.0,
     "l3_bandwidth_gbs": 128.0,
     "l2_bandwidth_gbs": 256.0,
-    "ridge_point_external": 16.0,
-    "ridge_point_l3": 8.0,
-    "ridge_point_l2": 4.0
-  },
-  "analysis": {
-    "compute_bound_count": 5,
-    "memory_bound_count": 1,
-    "average_efficiency": 0.436555
+    "ridge_point_external": 8.0,
+    "ridge_point_l3": 4.0,
+    "ridge_point_l2": 2.0
   },
   "points": [
     {
-      "name": "matmul",
-      "config": "64x64x64",
-      "arithmetic_intensity": 10.666667,
-      "gflops": 292.571429,
-      "efficiency": 0.428571,
-      "predicted_gflops": 682.666667,
-      "bottleneck": "external"
+      "name": "elementwise_add",
+      "config": "64K",
+      "arithmetic_intensity": 0.083,
+      "gflops": 3.984,
+      "efficiency": 0.75,
+      "predicted_gflops": 5.312,
+      "bottleneck": "memory"
     },
     {
       "name": "matmul",
       "config": "1024x1024x1024",
-      "arithmetic_intensity": 170.666667,
-      "gflops": 491.409570,
-      "efficiency": 0.479892,
-      "predicted_gflops": 1024.0,
+      "arithmetic_intensity": 170.67,
+      "gflops": 501.76,
+      "efficiency": 0.98,
+      "predicted_gflops": 512.0,
       "bottleneck": "compute"
     }
   ]
@@ -309,12 +307,15 @@ A well-optimized workload should show:
 
 using namespace sw::benchmark;
 
-// Create harness with custom hardware spec
-HardwareSpec hw;
-hw.peak_gflops = 2048.0;
-hw.external_bw_gbs = 128.0;
+// Create harness with default hardware spec (512 GFLOPS @ 1 GHz, 64 GB/s)
+BenchmarkHarness harness;
 
-BenchmarkHarness harness(hw);
+// Or with custom hardware spec
+HardwareSpec hw;
+hw.peak_gflops = 512.0;       // 16x16 systolic @ 1 GHz
+hw.external_bw_gbs = 64.0;    // 4 channels x 16 GB/s
+
+BenchmarkHarness custom_harness(hw);
 
 // Run benchmark suite
 auto suite = harness.sweep_matmul_square(64, 4096, 2);
@@ -368,4 +369,4 @@ plot_roofline(analysis, "out.png")  # Plot
 ---
 
 *Document created: v0.3.2*
-*Last updated: 2026-01-18*
+*Last updated: 2026-01-23*

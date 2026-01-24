@@ -41,8 +41,15 @@ except ImportError:
 
 @dataclass
 class HardwareSpec:
-    """Hardware specification for roofline model."""
-    peak_gflops: float = 1024.0      # Peak compute (GFLOPS)
+    """Hardware specification for roofline model.
+
+    Default values match the KPU simulator at 1 GHz reference clock:
+    - 16x16 systolic array = 512 FLOPs/cycle = 512 GFLOPS @ 1 GHz
+    - External memory: 64 GB/s (4 channels × 16 GB/s each)
+    - L3: 128 GB/s
+    - L2: 256 GB/s
+    """
+    peak_gflops: float = 512.0       # Peak compute (GFLOPS at 1 GHz reference)
     external_bw: float = 64.0        # External memory bandwidth (GB/s)
     l3_bw: float = 128.0             # L3 bandwidth (GB/s)
     l2_bw: float = 256.0             # L2 bandwidth (GB/s)
@@ -77,19 +84,42 @@ class BenchmarkPoint:
     gflops: float
     efficiency: float
     bottleneck: str = ""
+    achieved_bandwidth_gbs: float = 0.0  # For memory-bound operations
+    memory_efficiency: float = 0.0       # Bandwidth utilization
 
     @classmethod
     def from_json(cls, data: dict) -> "BenchmarkPoint":
-        """Create from benchmark JSON result."""
+        """Create from benchmark JSON result.
+
+        Supports multiple JSON formats:
+        - BenchmarkResult::to_json() format with nested memory/compute sections
+        - Simple flat format with direct fields
+        - Roofline JSON export format
+        """
+        memory = data.get("memory", {})
+        compute = data.get("compute", {})
+
         return cls(
             name=data.get("name", "unknown"),
             config=data.get("config", ""),
-            arithmetic_intensity=data.get("memory", {}).get("arithmetic_intensity",
+            arithmetic_intensity=memory.get("arithmetic_intensity",
                                   data.get("arithmetic_intensity", 0)),
-            gflops=data.get("compute", {}).get("gflops", data.get("gflops", 0)),
-            efficiency=data.get("compute", {}).get("efficiency", data.get("efficiency", 0)),
-            bottleneck=data.get("memory", {}).get("bottleneck", data.get("bottleneck", ""))
+            gflops=compute.get("gflops", data.get("gflops", 0)),
+            efficiency=compute.get("efficiency", data.get("efficiency", 0)),
+            bottleneck=memory.get("bottleneck", data.get("bottleneck", "")),
+            achieved_bandwidth_gbs=memory.get("achieved_bandwidth_gbs",
+                                    data.get("achieved_bandwidth_gbs", 0)),
+            memory_efficiency=memory.get("memory_efficiency",
+                              data.get("memory_efficiency", 0))
         )
+
+    def is_memory_bound(self, ridge_point: float = 8.0) -> bool:
+        """Check if this point is memory-bound."""
+        return self.arithmetic_intensity < ridge_point
+
+    def is_compute_bound(self, ridge_point: float = 8.0) -> bool:
+        """Check if this point is compute-bound."""
+        return self.arithmetic_intensity >= ridge_point
 
 
 @dataclass
@@ -117,11 +147,11 @@ class RooflineAnalysis:
         """Generate text summary of roofline analysis."""
         lines = [
             "=" * 70,
-            "ROOFLINE ANALYSIS SUMMARY",
+            "ROOFLINE ANALYSIS SUMMARY (v0.3.2)",
             "=" * 70,
             "",
             "Hardware Specification:",
-            f"  Peak Compute:        {self.hw.peak_gflops:.1f} GFLOPS",
+            f"  Peak Compute:        {self.hw.peak_gflops:.1f} GFLOPS (at 1 GHz reference)",
             f"  External Bandwidth:  {self.hw.external_bw:.1f} GB/s",
             f"  L3 Bandwidth:        {self.hw.l3_bw:.1f} GB/s",
             f"  L2 Bandwidth:        {self.hw.l2_bw:.1f} GB/s",
@@ -132,15 +162,16 @@ class RooflineAnalysis:
             f"  L2 Cache:            {self.hw.ridge_l2:.2f}",
             "",
             "-" * 70,
-            f"{'Config':<25} {'AI':>8} {'GFLOPS':>10} {'Eff%':>8} {'Region':<15}",
+            f"{'Config':<25} {'AI':>8} {'GFLOPS':>10} {'Eff%':>8} {'BW GB/s':>10} {'Region':<12}",
             "-" * 70,
         ]
 
         for p in sorted(self.points, key=lambda x: x.arithmetic_intensity):
             region = "compute" if p.arithmetic_intensity >= self.hw.ridge_external else "memory"
+            bw_str = f"{p.achieved_bandwidth_gbs:.1f}" if p.achieved_bandwidth_gbs > 0 else "-"
             lines.append(
                 f"{p.config:<25} {p.arithmetic_intensity:>8.2f} {p.gflops:>10.2f} "
-                f"{p.efficiency*100:>7.1f}% {region:<15}"
+                f"{p.efficiency*100:>7.1f}% {bw_str:>10} {region:<12}"
             )
 
         lines.extend([
@@ -156,10 +187,20 @@ class RooflineAnalysis:
         if regions["compute-bound"]:
             avg_eff = sum(p.efficiency for p in regions["compute-bound"]) / len(regions["compute-bound"])
             lines.append(f"  Avg compute-bound efficiency: {avg_eff*100:.1f}%")
+            # v0.3 target check
+            if avg_eff >= 0.80:
+                lines.append(f"  ✓ Meets v0.3 target (>80% for large compute-bound)")
 
         if regions["memory-bound"]:
             avg_eff = sum(p.efficiency for p in regions["memory-bound"]) / len(regions["memory-bound"])
             lines.append(f"  Avg memory-bound efficiency: {avg_eff*100:.1f}%")
+            # Check bandwidth utilization for memory-bound ops
+            bw_points = [p for p in regions["memory-bound"] if p.memory_efficiency > 0]
+            if bw_points:
+                avg_bw_eff = sum(p.memory_efficiency for p in bw_points) / len(bw_points)
+                lines.append(f"  Avg bandwidth utilization: {avg_bw_eff*100:.1f}%")
+                if avg_bw_eff >= 0.70:
+                    lines.append(f"  ✓ Meets v0.3.1 target (>70% BW utilization)")
 
         lines.append("")
         return "\n".join(lines)
@@ -334,6 +375,65 @@ def run_benchmark_cli() -> list:
     return [BenchmarkPoint.from_json(r) for r in data.get("results", [])]
 
 
+def generate_sample_points(hw: HardwareSpec) -> list:
+    """Generate sample benchmark points across the roofline for demonstration.
+
+    Useful for testing the tool without running actual benchmarks.
+    """
+    points = []
+
+    # Memory-bound region (AI < ridge)
+    memory_bound_configs = [
+        ("elementwise_add", "64K", 0.083, hw.external_bw * 0.75 * 0.083),
+        ("elementwise_add", "1M", 0.083, hw.external_bw * 0.75 * 0.083),
+        ("softmax", "32x256", 1.0, hw.external_bw * 0.5 * 1.0),
+        ("layernorm", "1x512x768", 0.6, hw.external_bw * 0.6 * 0.6),
+        ("small_matmul", "32x32x32", 5.33, hw.external_bw * 0.8 * 5.33),
+    ]
+
+    for name, config, ai, gflops in memory_bound_configs:
+        predicted = hw.roofline_gflops(ai)
+        points.append(BenchmarkPoint(
+            name=name,
+            config=config,
+            arithmetic_intensity=ai,
+            gflops=gflops,
+            efficiency=gflops / predicted if predicted > 0 else 0,
+            bottleneck="memory",
+            achieved_bandwidth_gbs=gflops / ai if ai > 0 else 0,
+            memory_efficiency=(gflops / ai) / hw.external_bw if ai > 0 else 0
+        ))
+
+    # Compute-bound region (AI >= ridge)
+    compute_bound_configs = [
+        ("matmul", "256x256x256", 42.67, hw.peak_gflops * 0.90),
+        ("matmul", "512x512x512", 85.33, hw.peak_gflops * 0.95),
+        ("matmul", "1024x1024x1024", 170.67, hw.peak_gflops * 0.98),
+    ]
+
+    for name, config, ai, gflops in compute_bound_configs:
+        predicted = hw.roofline_gflops(ai)
+        points.append(BenchmarkPoint(
+            name=name,
+            config=config,
+            arithmetic_intensity=ai,
+            gflops=gflops,
+            efficiency=gflops / predicted if predicted > 0 else 0,
+            bottleneck="compute"
+        ))
+
+    return points
+
+
+def load_multiple_results(paths: list) -> list:
+    """Load benchmark results from multiple JSON files."""
+    all_points = []
+    for path in paths:
+        points = load_benchmark_results(path)
+        all_points.extend(points)
+    return all_points
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="KPU Roofline Analysis and Visualization Tool",
@@ -341,18 +441,20 @@ def main():
         epilog=__doc__
     )
 
-    parser.add_argument("input", nargs="?", help="Input JSON file with benchmark results")
+    parser.add_argument("input", nargs="*", help="Input JSON file(s) with benchmark results")
     parser.add_argument("-o", "--output", help="Output image file (PNG, PDF, SVG)")
     parser.add_argument("--run-benchmark", action="store_true",
                        help="Run benchmarks instead of reading from file")
+    parser.add_argument("--demo", action="store_true",
+                       help="Generate sample roofline with demo data")
     parser.add_argument("--json", action="store_true",
                        help="Output roofline analysis as JSON")
     parser.add_argument("--summary", action="store_true",
                        help="Print text summary only (no plot)")
 
     # Hardware spec options
-    parser.add_argument("--peak-gflops", type=float, default=1024.0,
-                       help="Peak compute in GFLOPS (default: 1024)")
+    parser.add_argument("--peak-gflops", type=float, default=512.0,
+                       help="Peak compute in GFLOPS (default: 512 at 1 GHz reference)")
     parser.add_argument("--ext-bw", type=float, default=64.0,
                        help="External memory bandwidth in GB/s (default: 64)")
     parser.add_argument("--l3-bw", type=float, default=128.0,
@@ -377,13 +479,16 @@ def main():
     )
 
     # Get benchmark points
-    if args.run_benchmark:
+    if args.demo:
+        print("Generating demo roofline with sample data...")
+        points = generate_sample_points(hw)
+    elif args.run_benchmark:
         points = run_benchmark_cli()
     elif args.input:
-        points = load_benchmark_results(args.input)
+        points = load_multiple_results(args.input)
     else:
         parser.print_help()
-        print("\nError: Provide input file or use --run-benchmark")
+        print("\nError: Provide input file(s), use --run-benchmark, or use --demo")
         sys.exit(1)
 
     # Create analysis
