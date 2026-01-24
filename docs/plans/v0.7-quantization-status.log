@@ -2092,3 +2092,54 @@ This was a hallucination failure - I generated text that sounded reasonable but 
   13921ce Add C++ type dispatch architecture documentation and status log
   3b404d7 Refactor XUE Observation Architecture with hierarchical event tracking
 
+
+● This is a strategic decision. Here's the situation:
+
+  Current State
+  ┌─────────────────┬─────────────────────────────────────────────────────────────┐
+  │    Component    │                           Status                            │
+  ├─────────────────┼─────────────────────────────────────────────────────────────┤
+  │ Version in code │ 0.8.0                                                       │
+  ├─────────────────┼─────────────────────────────────────────────────────────────┤
+  │ Latest git tag  │ v0.7.11                                                     │
+  ├─────────────────┼─────────────────────────────────────────────────────────────┤
+  │ Native module   │ Built via CMake, outputs to python/kpu/_native/_native.*.so │
+  ├─────────────────┼─────────────────────────────────────────────────────────────┤
+  │ PyPI package    │ stillwater-kpu (pure Python packaging via setuptools)       │
+  └─────────────────┴─────────────────────────────────────────────────────────────┘
+  The Problem
+
+  The current pyproject.toml uses pure setuptools - it can't build the C++ native module. The .so file exists because CMake builds it during development, but:
+
+  1. PyPI wheels won't include the native module - setuptools doesn't know how to compile C++
+  2. Users who pip install stillwater-kpu get Python-only - no C++ simulator, falls back to NumPy
+  3. Full simulation requires building from source with CMake
+
+  Options
+
+  Option A: v0.7.12 (Conservative)
+
+  Tag as v0.7.12, release Python package as-is:
+  - Users get Python orchestration + NumPy fallback
+  - C++ simulation requires source build
+  - Defer native wheel infrastructure to v0.8.0
+
+  Option B: v0.8.0 (Full Release)
+
+  Add proper native wheel build infrastructure first:
+  pyproject.toml changes:
+  - Switch to scikit-build-core or meson-python
+  - Add cibuildwheel CI for multi-platform builds
+  Then tag v0.8.0 with full native wheels.
+
+  Option C: v0.8.0 with "source-only native"
+
+  Tag v0.8.0, document that native module requires source build:
+  - PyPI package works (Python fallback)
+  - Full performance requires cmake --build
+  - Plan native wheels for v0.8.1
+
+  My recommendation: Option C for now - the architectural change (Python→C++ routing) is significant enough for v0.8.0, and native wheel infrastructure is a separate concern that shouldn't block the release.
+
+  What's your preference?
+

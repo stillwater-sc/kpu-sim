@@ -1,11 +1,23 @@
+# ============================================================================
+# pyproject.toml - KPU Python Package with Native C++ Extension
+#
+# Uses scikit-build-core for CMake-based native module compilation.
+# The native module provides C++ BehavioralComputeFabric execution with
+# XUE event recording for all tensor operations.
+# ============================================================================
+
 [build-system]
-requires = ["setuptools>=61.0", "wheel"]
-build-backend = "setuptools.build_meta"
+requires = [
+    "scikit-build-core>=0.8.0",
+    "pybind11>=2.11.0",
+    "numpy>=1.20.0",
+]
+build-backend = "scikit_build_core.build"
 
 [project]
 name = "stillwater-kpu"
-version = "0.7.12"  # Keep in sync with kpu/__init__.py
-description = "KPU (Knowledge Processing Unit) Simulator Python API"
+version = "0.8.0"  # Keep in sync with kpu/__init__.py
+description = "KPU (Knowledge Processing Unit) Simulator Python API with native C++ backend"
 readme = "README.md"
 license = "Apache-2.0"
 authors = [
@@ -13,19 +25,22 @@ authors = [
 ]
 requires-python = ">=3.9"
 classifiers = [
-    "Development Status :: 3 - Alpha",
+    "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
     "Intended Audience :: Science/Research",
-    "Operating System :: OS Independent",
+    "Operating System :: POSIX :: Linux",
+    "Operating System :: MacOS",
+    "Operating System :: Microsoft :: Windows",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
+    "Programming Language :: C++",
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
     "Topic :: Software Development :: Compilers",
 ]
-keywords = ["kpu", "simulator", "neural-network", "accelerator", "compiler"]
+keywords = ["kpu", "simulator", "neural-network", "accelerator", "compiler", "hardware-simulation"]
 dependencies = [
     "numpy>=1.20.0",
 ]
@@ -34,6 +49,8 @@ dependencies = [
 dev = [
     "pytest>=7.0.0",
     "pytest-cov>=4.0.0",
+    "build",
+    "twine",
 ]
 torch = [
     "torch>=2.0.0",
@@ -41,15 +58,97 @@ torch = [
 bfloat16 = [
     "ml_dtypes>=0.3.0",
 ]
+all = [
+    "stillwater-kpu[dev,torch,bfloat16]",
+]
 
 [project.urls]
 Homepage = "https://github.com/stillwater-sc/kpu-sim"
-Documentation = "https://github.com/stillwater-sc/kpu-sim/docs"
+Documentation = "https://github.com/stillwater-sc/kpu-sim/tree/main/docs"
 Repository = "https://github.com/stillwater-sc/kpu-sim"
+Issues = "https://github.com/stillwater-sc/kpu-sim/issues"
+Changelog = "https://github.com/stillwater-sc/kpu-sim/blob/main/python/CHANGELOG.md"
 
-[tool.setuptools.packages.find]
-where = ["."]
-include = ["kpu*"]
+# ============================================================================
+# scikit-build-core configuration
+# ============================================================================
+
+[tool.scikit-build]
+# CMake version required
+cmake.version = ">=3.20"
+
+# Build directory (relative to source)
+build-dir = "build/{wheel_tag}"
+
+# CMake build type
+cmake.build-type = "Release"
+
+# Install native module to kpu/_native package
+wheel.install-dir = "kpu/_native"
+
+# Include Python source files in wheel
+wheel.packages = ["kpu"]
+
+# Exclude C++ source files and build artifacts from wheel
+wheel.exclude = [
+    "**.cpp",
+    "**.hpp",
+    "**.h",
+    "**/CMakeLists.txt",
+    "build/**",
+    "**/__pycache__/**",
+    "**/*.pyc",
+]
+
+# Source directory for CMake (relative to pyproject.toml)
+cmake.source-dir = "."
+
+# CMake definitions
+[tool.scikit-build.cmake.define]
+KPU_VERSION = "0.8.0"
+BUILD_SHARED_LIBS = "OFF"
+CMAKE_POSITION_INDEPENDENT_CODE = "ON"
+
+# ============================================================================
+# cibuildwheel configuration for multi-platform builds
+# ============================================================================
+
+[tool.cibuildwheel]
+# Build for Python 3.9-3.12
+build = "cp39-* cp310-* cp311-* cp312-*"
+
+# Skip 32-bit builds and musllinux (for simplicity)
+skip = "*-win32 *-manylinux_i686 *-musllinux*"
+
+# Test the built wheel
+test-requires = ["pytest", "numpy"]
+test-command = "pytest {project}/tests -v -x --ignore={project}/tests/test_torch_backend.py"
+
+# Build configuration
+build-verbosity = 1
+
+[tool.cibuildwheel.linux]
+# Use manylinux2014 for broader compatibility
+manylinux-x86_64-image = "manylinux2014"
+manylinux-aarch64-image = "manylinux2014"
+
+# Install build dependencies
+before-build = "pip install numpy pybind11"
+
+[tool.cibuildwheel.macos]
+# Build universal2 wheels for Apple Silicon + Intel
+archs = ["x86_64", "arm64"]
+
+# Set deployment target for compatibility
+environment = { MACOSX_DEPLOYMENT_TARGET = "10.15" }
+
+[tool.cibuildwheel.windows]
+# Only 64-bit Windows
+archs = ["AMD64"]
+
+# ============================================================================
+# pytest configuration
+# ============================================================================
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -59,4 +158,19 @@ python_functions = ["test_*"]
 addopts = "-v --tb=short"
 markers = [
     "slow: marks tests as slow (deselect with '-m \"not slow\"')",
+]
+
+# ============================================================================
+# Coverage configuration
+# ============================================================================
+
+[tool.coverage.run]
+source = ["kpu"]
+omit = ["kpu/_native/*", "*/tests/*"]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "if TYPE_CHECKING:",
+    "raise NotImplementedError",
 ]

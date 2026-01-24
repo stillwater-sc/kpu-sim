@@ -89,7 +89,7 @@ def _install_cpp_warning_filter():
 
 _flush_stderr = _install_cpp_warning_filter()
 
-__version__ = "0.7.12"
+__version__ = "0.8.0"
 __author__ = "Stillwater Supercomputing, Inc."
 
 # Fidelity levels
