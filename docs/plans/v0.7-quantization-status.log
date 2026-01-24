@@ -2066,3 +2066,29 @@ This was a hallucination failure - I generated text that sounded reasonable but 
 
   Would you like me to fix this so all Tensor operations route through C++?
 
+● All 75 tests pass. The commit fbfd62b has been created successfully.
+
+  Summary of the Python-C++ integration work:
+
+  The "Python diversion" is now fixed. All Tensor operations route through C++ BehavioralComputeFabric:
+  ┌────────────────────────────┬────────┬──────────────────────────────┐
+  │         Operation          │ Before │            After             │
+  ├────────────────────────────┼────────┼──────────────────────────────┤
+  │ x @ y (matmul)             │ NumPy  │ native_matmul → C++          │
+  ├────────────────────────────┼────────┼──────────────────────────────┤
+  │ x + y, x - y, x * y, x / y │ NumPy  │ native_add/sub/mul/div → C++ │
+  ├────────────────────────────┼────────┼──────────────────────────────┤
+  │ relu(x), gelu(x), silu(x)  │ NumPy  │ native_relu/gelu/silu → C++  │
+  ├────────────────────────────┼────────┼──────────────────────────────┤
+  │ sigmoid(x), tanh(x)        │ NumPy  │ native_sigmoid/tanh → C++    │
+  └────────────────────────────┴────────┴──────────────────────────────┘
+  This ensures:
+  1. XUE events are recorded for ALL operations, not just DFXProgram execution
+  2. Proper simulation modeling through BehavioralComputeFabric
+  3. Consistent behavior between direct Tensor operations and compiled graphs
+
+  Current commit history:
+  fbfd62b Route Python behavioral execution through C++ BehavioralComputeFabric
+  13921ce Add C++ type dispatch architecture documentation and status log
+  3b404d7 Refactor XUE Observation Architecture with hierarchical event tracking
+
