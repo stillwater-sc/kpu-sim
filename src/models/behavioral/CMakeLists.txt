@@ -45,6 +45,12 @@ target_include_directories(kpu_behavioral PUBLIC
     ${CMAKE_SOURCE_DIR}/include
 )
 
+# Add Universal library include path for quantization type dispatch
+# Universal provides software emulation of fp16, bf16, fp8 variants, and fp4
+if(UNIVERSAL_INCLUDE_DIR)
+    target_include_directories(kpu_behavioral PRIVATE ${UNIVERSAL_INCLUDE_DIR})
+endif()
+
 # Link dependencies needed by behavioral models
 target_link_libraries(kpu_behavioral
     PUBLIC

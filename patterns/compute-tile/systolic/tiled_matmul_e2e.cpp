@@ -272,7 +272,7 @@ public:
                     desc.m = std::min(hw_.tile_size, M - i * hw_.tile_size);
                     desc.n = std::min(hw_.tile_size, N - j * hw_.tile_size);
                     desc.k = std::min(hw_.tile_size, K - k * hw_.tile_size);
-                    desc.element_size = sizeof(float);
+                    desc.dtype = DataType::FLOAT32;
                     desc.accumulate = (k > 0);
 
                     // Get tile pointers

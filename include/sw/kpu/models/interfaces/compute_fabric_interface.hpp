@@ -17,6 +17,7 @@
 #include <sw/kpu/fidelity/simulation_fidelity.hpp>
 #include <sw/kpu/fidelity/component_config.hpp>
 #include <sw/kpu/resource_api.hpp>  // For ElementwiseOp enum
+#include <sw/kpu/data_types.hpp>    // For DataType enum
 
 // Forward declarations
 namespace sw::trace {
@@ -55,7 +56,77 @@ constexpr std::string_view to_string(ComputeOpType op) {
     }
 }
 
+// =============================================================================
+// TYPE DISPATCH DESIGN - How DataType Propagates Through KPU Resources
+// =============================================================================
+//
+// This section documents how data type information flows from the compute
+// descriptors through the KPU resource hierarchy. Different components need
+// different levels of type awareness:
+//
+// ┌─────────────────────────────────────────────────────────────────────────┐
+// │                        TYPE INFORMATION FLOW                            │
+// │                                                                         │
+// │   User Code                                                             │
+// │       │                                                                 │
+// │       ▼                                                                 │
+// │   MatMulDescriptor { dtype = FP16, ... }                                │
+// │       │                                                                 │
+// │       ├───────────────────┬────────────────────┬─────────────────────┐  │
+// │       │                   │                    │                     │  │
+// │       ▼                   ▼                    ▼                     ▼  │
+// │   Compute Fabric      DMA Engine         BlockMover            Streamer │
+// │   ───────────────     ──────────         ──────────            ──────── │
+// │   Needs: Full         Needs: Size        Needs: Size        Needs: Full │
+// │   DataType for        only (bytes        only (bytes        DataType    │
+// │   template dispatch   per element)       per element)       for pack/   │
+// │   to typed kernels    for burst          for tile           unpack      │
+// │                       calculation        alignment          operations  │
+// │                                                                         │
+// │   FP16 → matmul<fp16>  FP16 → 2 bytes    FP16 → 2 bytes    FP16 → unpack│
+// │   INT8 → matmul<int8>  INT8 → 1 byte     INT8 → 1 byte     INT4 → unpack│
+// │   INT4 → Q/DQ path     INT4 → 0.5 byte*  INT4 → aligned    from packed  │
+// │                        (packed)          to byte           storage      │
+// │                                                                         │
+// └─────────────────────────────────────────────────────────────────────────┘
+//
+// KEY INSIGHT: Storage vs. Compute Type
+// ─────────────────────────────────────
+// - Storage path (DMA, BlockMover): Only needs element_size in bytes
+// - Compute path (Fabric): Needs full dtype for kernel template instantiation
+// - Stream path (Streamer): Needs dtype for packing/unpacking sub-byte types
+//
+// PACKING CONSIDERATIONS:
+// ───────────────────────
+// - INT4: Packed storage (2 elements per byte), requires unpacking to compute
+// - FP4:  Unpacked storage (1 byte per element), uses Universal cfloat<4,1>
+// - All other types: Natural alignment, no packing needed
+//
+// The Streamer must know the semantic DataType (not just byte size) to:
+// 1. Unpack INT4 pairs into separate values for compute
+// 2. Pack compute results back into INT4 storage format
+// 3. Handle Universal library type conversions for FP8/FP4
+//
+// ACCUMULATOR TYPE:
+// ─────────────────
+// The compute fabric automatically selects the appropriate accumulator:
+// - FP16/BF16/FP8/FP4 → FP32 accumulator (prevents overflow)
+// - INT8/INT4 → INT32 accumulator (prevents overflow)
+// - FP32 → FP32 accumulator (native precision)
+//
+// This is handled by ScalarTraits<T>::accumulator_type in quantization/scalar_traits.hpp
+// =============================================================================
+
 /// Matrix multiplication descriptor
+///
+/// Contains all information needed to dispatch a matmul operation:
+/// - Matrix dimensions (M, N, K)
+/// - Data type for compute dispatch
+/// - Memory addresses for data location
+///
+/// The dtype field drives two critical paths:
+/// 1. Compute dispatch: Selects template instantiation (matmul<fp16>, matmul<int8>, etc.)
+/// 2. Resource allocation: Derives element_size for DMA/BlockMover byte calculations
 struct MatMulDescriptor {
     uint32_t m = 0;           // Output rows
     uint32_t n = 0;           // Output columns
@@ -66,8 +137,33 @@ struct MatMulDescriptor {
     uint64_t b_addr = 0;      // B[k, n]
     uint64_t c_addr = 0;      // C[m, n] (output)
 
-    // Data format
-    uint8_t element_size = 4;  // Bytes per element
+    // ==========================================================================
+    // Data Type Specification
+    // ==========================================================================
+    //
+    // dtype: Semantic data type for compute dispatch
+    //   - Used by BehavioralComputeFabric to select template kernel instantiation
+    //   - Used by Streamers to determine packing/unpacking requirements
+    //   - Automatically derives element_size via dtype_size()
+    //
+    // element_size: Physical size in bytes (derived from dtype for consistency)
+    //   - Used by DMA for burst size calculation
+    //   - Used by BlockMover for tile alignment
+    //   - For INT4, this is the STORAGE size (0.5 bytes), not compute size
+    //
+    // Example:
+    //   MatMulDescriptor desc;
+    //   desc.dtype = DataType::FP16;
+    //   // element_size automatically = 2 (from dtype_size(FP16))
+    //   // Compute fabric dispatches to matmul<fp16_t, float>
+    //   // DMA calculates burst as m * k * 2 bytes
+    // ==========================================================================
+    DataType dtype = DataType::FLOAT32;  // Input/output data type
+
+    /// Get element size in bytes (derived from dtype)
+    /// For packed types like INT4, returns storage bytes (1 for 2 elements)
+    uint8_t element_size() const { return static_cast<uint8_t>(dtype_size(dtype)); }
+
     bool accumulate = false;   // Add to existing C vs overwrite
 
     // User tag for identification
@@ -96,8 +192,9 @@ struct Conv2DDescriptor {
     uint32_t dilation_w = 1;
     uint32_t groups = 1;
 
-    // Data format
-    uint8_t element_size = 4;  // Bytes per element
+    // Data format (see MatMulDescriptor for type dispatch documentation)
+    DataType dtype = DataType::FLOAT32;
+    uint8_t element_size() const { return static_cast<uint8_t>(dtype_size(dtype)); }
     bool has_bias = false;
 
     // User tag for identification
@@ -139,7 +236,8 @@ constexpr bool is_scalar_op(ElementwiseOp op) {
 struct ElementwiseDescriptor {
     ElementwiseOp op = ElementwiseOp::ADD;
     uint64_t count = 0;        // Number of elements
-    uint8_t element_size = 4;  // Bytes per element
+    DataType dtype = DataType::FLOAT32;
+    uint8_t element_size() const { return static_cast<uint8_t>(dtype_size(dtype)); }
     uint64_t user_tag = 0;
 };
 
@@ -167,8 +265,9 @@ struct Pool2DDescriptor {
     uint32_t target_out_height = 0;
     uint32_t target_out_width = 0;
 
-    // Data format
-    uint8_t element_size = 4;
+    // Data format (see MatMulDescriptor for type dispatch documentation)
+    DataType dtype = DataType::FLOAT32;
+    uint8_t element_size() const { return static_cast<uint8_t>(dtype_size(dtype)); }
     uint64_t user_tag = 0;
 
     // Computed output dimensions
@@ -198,7 +297,8 @@ struct SoftmaxDescriptor {
     uint32_t batch_size = 0;   // Product of all dims before softmax dim
     uint32_t dim_size = 0;     // Size of softmax dimension
     uint32_t inner_size = 1;   // Product of all dims after softmax dim
-    uint8_t element_size = 4;
+    DataType dtype = DataType::FLOAT32;
+    uint8_t element_size() const { return static_cast<uint8_t>(dtype_size(dtype)); }
     uint64_t user_tag = 0;
 
     uint64_t total_elements() const {
@@ -213,7 +313,8 @@ struct LayerNormDescriptor {
     float eps = 1e-5f;
     bool has_weight = true;
     bool has_bias = true;
-    uint8_t element_size = 4;
+    DataType dtype = DataType::FLOAT32;
+    uint8_t element_size() const { return static_cast<uint8_t>(dtype_size(dtype)); }
     uint64_t user_tag = 0;
 };
 
@@ -225,7 +326,8 @@ struct BatchNormDescriptor {
     float eps = 1e-5f;
     float momentum = 0.1f;
     bool training = false;      // If true, update running stats
-    uint8_t element_size = 4;
+    DataType dtype = DataType::FLOAT32;
+    uint8_t element_size() const { return static_cast<uint8_t>(dtype_size(dtype)); }
     uint64_t user_tag = 0;
 };
 

@@ -4,6 +4,25 @@
 //
 // See docs/SIMULATION_FIDELITY_FRAMEWORK.md for design documentation
 // ============================================================================
+//
+// TYPE DISPATCH ARCHITECTURE:
+// ───────────────────────────
+// The BehavioralComputeFabric uses a type dispatch mechanism to route compute
+// operations to the appropriate typed kernel instantiation. The flow is:
+//
+// 1. User specifies dtype in descriptor (e.g., MatMulDescriptor.dtype = FP16)
+// 2. submit_matmul() calls dispatch_matmul() from type_dispatch.hpp
+// 3. dispatch_matmul() switches on dtype and calls execute_typed_matmul<T, Acc>()
+// 4. execute_typed_matmul uses the template kernels from quantization/kernels.hpp
+//
+// This design separates concerns:
+// - Interface (this file): Operation submission and statistics
+// - Dispatch (type_dispatch.hpp): Runtime-to-compile-time type mapping
+// - Kernels (kernels.hpp): Type-parameterized computation
+//
+// For type propagation to KPU resources, see the documentation in
+// compute_fabric_interface.hpp (MatMulDescriptor section).
+// ============================================================================
 
 #pragma once
 
@@ -13,6 +32,8 @@
 #include <vector>
 
 #include <sw/kpu/models/interfaces/compute_fabric_interface.hpp>
+// Note: type_dispatch.hpp is included in the .cpp file to avoid propagating
+// Universal library dependencies to all code that includes this header.
 
 namespace sw::kpu {
 
@@ -178,9 +199,19 @@ private:
     bool tracing_enabled_ = false;
     sw::trace::ResourceTracker* resource_tracker_ = nullptr;
 
-    // Helpers - execution functions
-    void execute_matmul_fp32(const MatMulDescriptor& desc,
-                             const float* a, const float* b, float* c);
+    // ========================================================================
+    // Execution Functions (Type-Dispatched and FP32 Fallbacks)
+    // ========================================================================
+    // For matmul, the type dispatch mechanism in type_dispatch.hpp handles:
+    // - Runtime DataType to compile-time template instantiation
+    // - Universal library types (fp16_t, bf16_t, fp8eXmY_t, fp4_t)
+    // - Accumulator type selection via ScalarTraits
+    //
+    // For elementwise ops, common activations (ReLU, GELU, SiLU) and binary
+    // ops (ADD, MUL) use type dispatch; others fall back to FP32.
+    //
+    // Conv2D, Pool2D, and BatchNorm currently use FP32 implementations.
+    // ========================================================================
 
     void execute_conv2d_fp32(const Conv2DDescriptor& desc,
                              const float* input, const float* weight,

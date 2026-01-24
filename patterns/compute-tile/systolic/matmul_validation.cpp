@@ -120,7 +120,7 @@ XUEMetrics run_matmul_test(uint32_t M, uint32_t N, uint32_t K,
     desc.m = M;
     desc.n = N;
     desc.k = K;
-    desc.element_size = 4;
+    desc.dtype = DataType::FLOAT32;
 
     fabric.submit_matmul(desc, A.data(), B.data(), C.data(), nullptr);
     fabric.drain();
