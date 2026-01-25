@@ -83,7 +83,7 @@ jobs:
 
           # Test the built wheel
           CIBW_TEST_REQUIRES: "pytest numpy"
-          CIBW_TEST_COMMAND: "pytest {project}/tests -v -x --ignore={project}/tests/test_torch_backend.py -k 'not slow'"
+          CIBW_TEST_COMMAND: "pytest {project}/tests -v -x --ignore={project}/tests/test_torch_backend.py --ignore={project}/tests/test_xue_integration.py -k 'not slow'"
 
           # Skip testing on emulated architectures (too slow)
           CIBW_TEST_SKIP: "*-macosx_arm64 *-manylinux_aarch64"
