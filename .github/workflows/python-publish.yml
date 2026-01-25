@@ -43,8 +43,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-22.04, macos-15, macos-14]
-        # macos-15 = Intel, macos-14 = Apple Silicon
+        os: [ubuntu-22.04, macos-15]
+        # macos-15 = Intel (x86_64)
+        # macos-14 (arm64) disabled: build issue on Apple Silicon
         # windows-2022 disabled: Universal library std::bit_cast MSVC issue
 
     steps:
@@ -67,8 +68,8 @@ jobs:
           # Build for Python 3.9-3.12
           CIBW_BUILD: "cp39-* cp310-* cp311-* cp312-*"
 
-          # Skip 32-bit, musllinux, and PyPy
-          CIBW_SKIP: "*-win32 *-manylinux_i686 *-musllinux* pp*"
+          # Skip 32-bit, musllinux, PyPy, and arm64 (build issues)
+          CIBW_SKIP: "*-win32 *-manylinux_i686 *-musllinux* pp* *-macosx_arm64"
 
           # Use manylinux2014 for broader compatibility
           CIBW_MANYLINUX_X86_64_IMAGE: manylinux2014
