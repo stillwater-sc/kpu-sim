@@ -133,11 +133,10 @@ if(KPU_STANDALONE_BUILD)
     target_compile_features(kpu_transactional_for_python PUBLIC cxx_std_20)
     target_link_libraries(kpu_transactional_for_python PUBLIC kpu_behavioral_for_python nlohmann_json::nlohmann_json)
 
-    # Build kpu_dfx library (minimal subset)
-    # Check if dfx sources exist
-    if(EXISTS "${KPU_SRC_DIR}/dfx/dfx_executor.cpp")
+    # Build kpu_dfx library (DFX parser for Python bindings)
+    # Check if dfx sources exist - only dfx_parser.cpp is needed
+    if(EXISTS "${KPU_SRC_DIR}/dfx/dfx_parser.cpp")
         add_library(kpu_dfx_for_python STATIC
-            ${KPU_SRC_DIR}/dfx/dfx_executor.cpp
             ${KPU_SRC_DIR}/dfx/dfx_parser.cpp
         )
         target_include_directories(kpu_dfx_for_python PUBLIC
@@ -145,12 +144,33 @@ if(KPU_STANDALONE_BUILD)
             ${UNIVERSAL_INCLUDE_DIR}
         )
         target_compile_features(kpu_dfx_for_python PUBLIC cxx_std_20)
-        target_link_libraries(kpu_dfx_for_python PUBLIC kpu_behavioral_for_python nlohmann_json::nlohmann_json)
+        target_link_libraries(kpu_dfx_for_python PUBLIC nlohmann_json::nlohmann_json)
         set(KPU_DFX_LIBRARY kpu_dfx_for_python)
+        message(STATUS "KPU Python: DFX parser library enabled")
     else()
         # DFX not available, create empty interface
+        message(STATUS "KPU Python: DFX sources not found at ${KPU_SRC_DIR}/dfx/dfx_parser.cpp")
         add_library(kpu_dfx_for_python INTERFACE)
         set(KPU_DFX_LIBRARY kpu_dfx_for_python)
+    endif()
+
+    # Build kpu_trace library (TraceEntry to_string implementations for KPU_API)
+    if(EXISTS "${KPU_SRC_DIR}/tools/trace/trace_entry.cpp")
+        add_library(kpu_trace_for_python STATIC
+            ${KPU_SRC_DIR}/tools/trace/trace_entry.cpp
+        )
+        target_include_directories(kpu_trace_for_python PUBLIC
+            ${KPU_INCLUDE_DIR}
+        )
+        target_compile_features(kpu_trace_for_python PUBLIC cxx_std_20)
+        # Define BUILDING_KPU_SIMULATOR to export symbols (not import)
+        target_compile_definitions(kpu_trace_for_python PUBLIC BUILDING_KPU_SIMULATOR)
+        set(KPU_TRACE_LIBRARY kpu_trace_for_python)
+        message(STATUS "KPU Python: Trace library enabled")
+    else()
+        message(STATUS "KPU Python: Trace sources not found at ${KPU_SRC_DIR}/tools/trace/trace_entry.cpp")
+        add_library(kpu_trace_for_python INTERFACE)
+        set(KPU_TRACE_LIBRARY kpu_trace_for_python)
     endif()
 
     # Store include dirs for _native module
@@ -165,6 +185,7 @@ else()
     set(KPU_BEHAVIORAL_LIBRARY kpu_behavioral)
     set(KPU_TRANSACTIONAL_LIBRARY kpu_transactional)
     set(KPU_DFX_LIBRARY kpu_dfx)
+    set(KPU_TRACE_LIBRARY kpu_trace)
     set(KPU_EXTRA_INCLUDES "")
 endif()
 
@@ -183,6 +204,7 @@ target_link_libraries(_native PRIVATE
     ${KPU_BEHAVIORAL_LIBRARY}
     ${KPU_TRANSACTIONAL_LIBRARY}
     ${KPU_DFX_LIBRARY}
+    ${KPU_TRACE_LIBRARY}
 )
 
 target_compile_features(_native PRIVATE cxx_std_20)
