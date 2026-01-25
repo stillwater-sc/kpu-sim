@@ -66,13 +66,18 @@ if(KPU_STANDALONE_BUILD)
         set(KPU_SRC_DIR "${KPU_SIM_ROOT}/src")
         set(KPU_FROM_PARENT ON)
     else()
-        message(STATUS "KPU Python: Fetching kpu-sim from GitHub")
+        message(STATUS "KPU Python: Fetching kpu-sim from GitHub (sources only)")
         FetchContent_Declare(
             kpu_sim
             GIT_REPOSITORY https://github.com/stillwater-sc/kpu-sim.git
             GIT_TAG main
+            GIT_SHALLOW TRUE
         )
-        FetchContent_MakeAvailable(kpu_sim)
+        # Only populate, don't run kpu_sim's CMakeLists.txt (it has packaging/binding deps)
+        FetchContent_GetProperties(kpu_sim)
+        if(NOT kpu_sim_POPULATED)
+            FetchContent_Populate(kpu_sim)
+        endif()
         set(KPU_INCLUDE_DIR "${kpu_sim_SOURCE_DIR}/include")
         set(KPU_SRC_DIR "${kpu_sim_SOURCE_DIR}/src")
         set(KPU_FROM_PARENT OFF)
