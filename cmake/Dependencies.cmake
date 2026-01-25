@@ -108,22 +108,20 @@ endif()
 # Universal library for arbitrary precision number types
 # Provides: bfloat16, half, cfloat (for FP8/FP4 variants), integer
 # This is a header-only library - we only need the include directory
-# We don't process Universal's CMakeLists.txt because it requires config files
+# SOURCE_SUBDIR points to non-existent dir to skip CMakeLists.txt processing
 
 FetchContent_Declare(universal
     GIT_REPOSITORY https://github.com/stillwater-sc/universal.git
     GIT_TAG v3.91
     GIT_SHALLOW TRUE
+    SOURCE_SUBDIR _skip_cmake  # Non-existent subdir prevents CMakeLists.txt processing
 )
 
-# Only populate, don't add to build (header-only, no targets needed)
-FetchContent_GetProperties(universal)
-if(NOT universal_POPULATED)
-    FetchContent_Populate(universal)
-    # Set include path for targets that need Universal types
-    # Universal v3.91+ moved headers under include/sw/, so use that as the include root
-    # This allows old-style includes like <universal/number/cfloat/cfloat.hpp> to work
-    set(UNIVERSAL_INCLUDE_DIR ${universal_SOURCE_DIR}/include/sw CACHE PATH "Universal library include directory")
-    message(STATUS "Universal library: ${UNIVERSAL_INCLUDE_DIR}")
-endif()
+FetchContent_MakeAvailable(universal)
+
+# Set include path for targets that need Universal types
+# Universal v3.91+ moved headers under include/sw/, so use that as the include root
+# This allows old-style includes like <universal/number/cfloat/cfloat.hpp> to work
+set(UNIVERSAL_INCLUDE_DIR ${universal_SOURCE_DIR}/include/sw CACHE PATH "Universal library include directory")
+message(STATUS "Universal library: ${UNIVERSAL_INCLUDE_DIR}")
 
