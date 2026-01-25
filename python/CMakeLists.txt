@@ -34,6 +34,12 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
+# MSVC-specific flags
+if(MSVC)
+    # /Zc:__cplusplus - Report correct __cplusplus value (required for C++20 feature detection)
+    add_compile_options(/Zc:__cplusplus /EHsc)
+endif()
+
 # Find Python
 find_package(Python3 COMPONENTS Interpreter Development.Module REQUIRED)
 
@@ -67,17 +73,15 @@ if(KPU_STANDALONE_BUILD)
         set(KPU_FROM_PARENT ON)
     else()
         message(STATUS "KPU Python: Fetching kpu-sim from GitHub (sources only)")
+        # SOURCE_SUBDIR points to non-existent dir to skip CMakeLists.txt processing
         FetchContent_Declare(
             kpu_sim
             GIT_REPOSITORY https://github.com/stillwater-sc/kpu-sim.git
             GIT_TAG main
             GIT_SHALLOW TRUE
+            SOURCE_SUBDIR _skip_cmake
         )
-        # Only populate, don't run kpu_sim's CMakeLists.txt (it has packaging/binding deps)
-        FetchContent_GetProperties(kpu_sim)
-        if(NOT kpu_sim_POPULATED)
-            FetchContent_Populate(kpu_sim)
-        endif()
+        FetchContent_MakeAvailable(kpu_sim)
         set(KPU_INCLUDE_DIR "${kpu_sim_SOURCE_DIR}/include")
         set(KPU_SRC_DIR "${kpu_sim_SOURCE_DIR}/src")
         set(KPU_FROM_PARENT OFF)
@@ -93,16 +97,15 @@ if(KPU_STANDALONE_BUILD)
     FetchContent_MakeAvailable(nlohmann_json)
 
     # Fetch Universal library (header-only, for quantization types)
+    # SOURCE_SUBDIR points to non-existent dir to skip CMakeLists.txt processing
     FetchContent_Declare(
         universal
         GIT_REPOSITORY https://github.com/stillwater-sc/universal.git
         GIT_TAG v3.91
         GIT_SHALLOW TRUE
+        SOURCE_SUBDIR _skip_cmake
     )
-    FetchContent_GetProperties(universal)
-    if(NOT universal_POPULATED)
-        FetchContent_Populate(universal)
-    endif()
+    FetchContent_MakeAvailable(universal)
     # Universal v3.91+ moved headers under include/sw/, so use that as the include root
     # This allows old-style includes like <universal/number/cfloat/cfloat.hpp> to work
     set(UNIVERSAL_INCLUDE_DIR ${universal_SOURCE_DIR}/include/sw)
