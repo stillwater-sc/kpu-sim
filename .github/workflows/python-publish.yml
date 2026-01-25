@@ -43,8 +43,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-22.04, macos-15, macos-14, windows-2022]
+        os: [ubuntu-22.04, macos-15, macos-14]
         # macos-15 = Intel, macos-14 = Apple Silicon
+        # windows-2022 disabled: Universal library std::bit_cast MSVC issue
 
     steps:
       - uses: actions/checkout@v4
@@ -79,7 +80,6 @@ jobs:
           # Install build dependencies (Linux needs cmake from pip)
           CIBW_BEFORE_BUILD_LINUX: "pip install cmake ninja numpy pybind11"
           CIBW_BEFORE_BUILD_MACOS: "pip install numpy pybind11"
-          CIBW_BEFORE_BUILD_WINDOWS: "pip install numpy pybind11"
 
           # Test the built wheel
           CIBW_TEST_REQUIRES: "pytest numpy"
