@@ -1,19 +1,34 @@
 #pragma once
 // Universal library type aliases and ScalarTraits specializations
 // Provides FP16, BF16, FP8 variants, and FP4 types via sw::universal
+//
+// NOTE: Universal v3.91 has a namespace bug that breaks MSVC compilation.
+// On MSVC, we disable Universal types and provide float-based stubs instead.
+// This allows code comprehension/IntelliSense to work while actual computation
+// uses the full Universal types on Linux/macOS.
 
+#include <sw/kpu/quantization/scalar_traits.hpp>
+
+// Universal library has MSVC compatibility issues (namespace std pollution)
+// Disable on MSVC until upstream fix is available
+#if !defined(_MSC_VER)
+#define KPU_HAS_UNIVERSAL 1
+#endif
+
+#ifdef KPU_HAS_UNIVERSAL
 // Universal library headers for scalar types
 // These are header-only and provide software emulation of hardware number formats
 #include <universal/number/cfloat/cfloat.hpp>    // Includes half (fp16) typedef
 #include <universal/number/bfloat16/bfloat16.hpp>  // bfloat16 type
-
-#include <sw/kpu/quantization/scalar_traits.hpp>
+#endif
 
 namespace sw::kpu {
 
 // =============================================================================
-// Type Aliases for Universal Library Types
+// Type Aliases for Universal Library Types (or stubs on MSVC)
 // =============================================================================
+
+#ifdef KPU_HAS_UNIVERSAL
 
 /// IEEE 754 half-precision float (FP16)
 /// Defined in cfloat.hpp as cfloat<16, 5, uint16_t, true, false, false>
@@ -43,6 +58,69 @@ using fp8e2m5_t = sw::universal::cfloat<8, 2, std::uint8_t, true, true, false>;
 /// Total: 4 bits = 1 sign + 1 exp + 2 mantissa
 /// Storage: unpacked, 1 byte per element (for computation efficiency)
 using fp4_t = sw::universal::cfloat<4, 1, std::uint8_t, true, true, false>;
+
+#else // !KPU_HAS_UNIVERSAL - MSVC stubs
+
+// On MSVC, provide float-based stubs for code comprehension
+// These allow IntelliSense to work; actual computation requires Linux/macOS build
+
+/// Stub type for FP16 on MSVC (uses float internally)
+struct fp16_t {
+    float value;
+    fp16_t() : value(0) {}
+    fp16_t(float v) : value(v) {}
+    operator float() const { return value; }
+};
+
+/// Stub type for BF16 on MSVC (uses float internally)
+struct bf16_t {
+    float value;
+    bf16_t() : value(0) {}
+    bf16_t(float v) : value(v) {}
+    operator float() const { return value; }
+};
+
+/// Stub type for FP8 E4M3 on MSVC
+struct fp8e4m3_t {
+    float value;
+    fp8e4m3_t() : value(0) {}
+    fp8e4m3_t(float v) : value(v) {}
+    operator float() const { return value; }
+};
+
+/// Stub type for FP8 E5M2 on MSVC
+struct fp8e5m2_t {
+    float value;
+    fp8e5m2_t() : value(0) {}
+    fp8e5m2_t(float v) : value(v) {}
+    operator float() const { return value; }
+};
+
+/// Stub type for FP8 E3M4 on MSVC
+struct fp8e3m4_t {
+    float value;
+    fp8e3m4_t() : value(0) {}
+    fp8e3m4_t(float v) : value(v) {}
+    operator float() const { return value; }
+};
+
+/// Stub type for FP8 E2M5 on MSVC
+struct fp8e2m5_t {
+    float value;
+    fp8e2m5_t() : value(0) {}
+    fp8e2m5_t(float v) : value(v) {}
+    operator float() const { return value; }
+};
+
+/// Stub type for FP4 on MSVC
+struct fp4_t {
+    float value;
+    fp4_t() : value(0) {}
+    fp4_t(float v) : value(v) {}
+    operator float() const { return value; }
+};
+
+#endif // KPU_HAS_UNIVERSAL
 
 // =============================================================================
 // ScalarTraits Specializations for Universal Types
