@@ -112,7 +112,7 @@ endif()
 
 FetchContent_Declare(universal
     GIT_REPOSITORY https://github.com/stillwater-sc/universal.git
-    GIT_TAG v3.77
+    GIT_TAG v3.91
     GIT_SHALLOW TRUE
 )
 
