@@ -124,6 +124,7 @@ if(KPU_STANDALONE_BUILD)
     # Build kpu_transactional library (minimal subset)
     add_library(kpu_transactional_for_python STATIC
         ${KPU_SRC_DIR}/models/transactional/compute/compute_fabric.cpp
+        ${KPU_SRC_DIR}/models/transactional/memory/memory_controller.cpp
     )
     target_include_directories(kpu_transactional_for_python PUBLIC
         ${KPU_INCLUDE_DIR}
@@ -137,6 +138,7 @@ if(KPU_STANDALONE_BUILD)
     if(EXISTS "${KPU_SRC_DIR}/dfx/dfx_executor.cpp")
         add_library(kpu_dfx_for_python STATIC
             ${KPU_SRC_DIR}/dfx/dfx_executor.cpp
+            ${KPU_SRC_DIR}/dfx/dfx_parser.cpp
         )
         target_include_directories(kpu_dfx_for_python PUBLIC
             ${KPU_INCLUDE_DIR}
