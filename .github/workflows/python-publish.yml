@@ -43,10 +43,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-22.04, macos-15]
+        os: [ubuntu-22.04, macos-15, windows-2022]
         # macos-15 = Intel (x86_64)
         # macos-14 (arm64) disabled: build issue on Apple Silicon
-        # windows-2022 disabled: Universal library std::bit_cast MSVC issue
+        # windows-2022 re-enabled with Universal v3.91
 
     steps:
       - uses: actions/checkout@v4
@@ -81,6 +81,7 @@ jobs:
           # Install build dependencies (Linux needs cmake from pip)
           CIBW_BEFORE_BUILD_LINUX: "pip install cmake ninja numpy pybind11"
           CIBW_BEFORE_BUILD_MACOS: "pip install numpy pybind11"
+          CIBW_BEFORE_BUILD_WINDOWS: "pip install numpy pybind11"
 
           # Skip wheel testing - main CI already validates code
           # Native module import paths differ between dev and installed wheel
