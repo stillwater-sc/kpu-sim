@@ -103,7 +103,9 @@ if(KPU_STANDALONE_BUILD)
     if(NOT universal_POPULATED)
         FetchContent_Populate(universal)
     endif()
-    set(UNIVERSAL_INCLUDE_DIR ${universal_SOURCE_DIR}/include)
+    # Universal v3.91+ moved headers under include/sw/, so use that as the include root
+    # This allows old-style includes like <universal/number/cfloat/cfloat.hpp> to work
+    set(UNIVERSAL_INCLUDE_DIR ${universal_SOURCE_DIR}/include/sw)
 
     # Build kpu_behavioral library (minimal subset for Python bindings)
     add_library(kpu_behavioral_for_python STATIC

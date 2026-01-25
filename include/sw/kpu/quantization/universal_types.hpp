@@ -4,8 +4,8 @@
 
 // Universal library headers for scalar types
 // These are header-only and provide software emulation of hardware number formats
-#include <universal/number/cfloat/cfloat.hpp>  // Includes half (fp16) typedef
-#include <universal/number/bfloat/bfloat.hpp>  // bfloat16 type
+#include <universal/number/cfloat/cfloat.hpp>    // Includes half (fp16) typedef
+#include <universal/number/bfloat16/bfloat16.hpp>  // bfloat16 type
 
 #include <sw/kpu/quantization/scalar_traits.hpp>
 

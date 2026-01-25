@@ -121,7 +121,9 @@ FetchContent_GetProperties(universal)
 if(NOT universal_POPULATED)
     FetchContent_Populate(universal)
     # Set include path for targets that need Universal types
-    set(UNIVERSAL_INCLUDE_DIR ${universal_SOURCE_DIR}/include CACHE PATH "Universal library include directory")
+    # Universal v3.91+ moved headers under include/sw/, so use that as the include root
+    # This allows old-style includes like <universal/number/cfloat/cfloat.hpp> to work
+    set(UNIVERSAL_INCLUDE_DIR ${universal_SOURCE_DIR}/include/sw CACHE PATH "Universal library include directory")
     message(STATUS "Universal library: ${UNIVERSAL_INCLUDE_DIR}")
 endif()
 
