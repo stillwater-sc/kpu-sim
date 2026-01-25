@@ -303,13 +303,16 @@ TEST_CASE("Universal type conversions", "[quantization][universal]") {
     SECTION("bf16 to float") {
         bf16_t val(3.14f);
         float f = to_float(val);
-        REQUIRE(f == Approx(3.14f).margin(0.01));
+        // bf16 has 7-bit mantissa (~0.8% relative precision)
+        // 3.14 * 0.008 ≈ 0.025, so use margin of 0.02
+        REQUIRE(f == Approx(3.14f).margin(0.02));
     }
 
     SECTION("float to bf16") {
         float f = 2.718f;
         bf16_t val = from_float<bf16_t>(f);
-        REQUIRE(to_float(val) == Approx(2.718f).margin(0.01));
+        // bf16 has 7-bit mantissa (~0.8% relative precision)
+        REQUIRE(to_float(val) == Approx(2.718f).margin(0.02));
     }
 
     SECTION("bf16 matmul with float accumulator") {
