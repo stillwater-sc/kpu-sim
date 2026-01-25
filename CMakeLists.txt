@@ -90,7 +90,8 @@ elseif(CMAKE_CXX_COMPILER_ID STREQUAL "MSVC")
     endforeach()
     
     # Set our own flags
-    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /W3 /EHsc")
+    # /Zc:__cplusplus - Report correct __cplusplus value (required for C++20 feature detection)
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /W3 /EHsc /Zc:__cplusplus")
     set(CMAKE_CXX_FLAGS_DEBUG "/MDd /Zi /Od /D_DEBUG")
     set(CMAKE_CXX_FLAGS_RELEASE "/MD /O2 /DNDEBUG")
     set(CMAKE_CXX_FLAGS_RELWITHDEBINFO "/MD /O2 /Zi /DNDEBUG")
