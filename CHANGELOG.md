@@ -7,6 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-01-26
+
+### Added
+- **Native Wheel Infrastructure** (`python/CMakeLists.txt`, `python/pyproject.toml`)
+  - scikit-build-core integration for CMake-based Python wheel builds
+  - cibuildwheel CI/CD for multi-platform wheels (Linux, macOS, Windows)
+  - Standalone build mode with FetchContent for all dependencies
+  - GitHub Actions workflow for automated PyPI publishing
+
+- **Trace Library for Python Bindings** (`python/CMakeLists.txt`)
+  - `kpu_trace_for_python` static library with TraceEntry to_string implementations
+  - `BUILDING_KPU_SIMULATOR` define for correct MSVC symbol export
+
+### Fixed
+- **DFX Parser Library Build** (`python/CMakeLists.txt`)
+  - Fixed EXISTS check from non-existent `dfx_executor.cpp` to `dfx_parser.cpp`
+  - DFX library now builds correctly in standalone wheel builds
+
+- **MSVC C++20 Feature Detection** (`CMakeLists.txt`, `python/CMakeLists.txt`)
+  - Added `/Zc:__cplusplus` flag for correct `__cplusplus` macro value
+  - Fixes Universal library `std::bit_cast` detection on MSVC
+
+- **Universal Library v3.91 Integration** (`cmake/Dependencies.cmake`)
+  - Updated include path for v3.91 header structure (`include/sw/`)
+  - Fixed bfloat16 header path (`bfloat16/bfloat16.hpp`)
+
+### Changed
+- **Universal Library Version** - Updated from v3.77 to v3.91
+- **pybind11 Version** - Updated to v2.13.6 for improved CMake support
+
 ## [0.6.4] - 2026-01-21
 
 ### Added
