@@ -470,6 +470,19 @@ def is_xue_enabled() -> bool:
         return False
 
 
+def xue_version() -> str:
+    """Get the XUE Observation Architecture version.
+
+    Returns:
+        Version string (e.g., "0.5.0")
+    """
+    try:
+        from . import _native
+        return _native.xue_version()
+    except ImportError:
+        return "unknown"
+
+
 # =============================================================================
 # Native Backend Availability and Strict Mode (v0.8.0+)
 # =============================================================================
@@ -860,6 +873,7 @@ __all__ = [
     "reset_xue_counters",
     "set_xue_enabled",
     "is_xue_enabled",
+    "xue_version",
 
     # Native backend verification (v0.8.0+)
     "is_native_available",
