@@ -1273,9 +1273,10 @@ private:
             uint32_t K = static_cast<uint32_t>(a_info.shape[1]);
             uint32_t N = static_cast<uint32_t>(b_info.shape[1]);
 
-            // Allocate output and temp
-            py::array_t<float> temp({M, N});
-            py::array_t<float> Y({M, N});
+            // Allocate output and temp (zero-init temp since matmul accumulates with beta*C)
+            std::vector<py::ssize_t> mn_shape = {static_cast<py::ssize_t>(M), static_cast<py::ssize_t>(N)};
+            py::array_t<float> temp = np.attr("zeros")(mn_shape, py::arg("dtype") = np.attr("float32")).cast<py::array_t<float>>();
+            py::array_t<float> Y(mn_shape);
             auto temp_buf = temp.request();
             auto y_buf = Y.request();
 
@@ -1351,8 +1352,9 @@ private:
             uint32_t K = static_cast<uint32_t>(a_info.shape[1]);
             uint32_t N = static_cast<uint32_t>(b_info.shape[1]);
 
-            py::array_t<float> temp({M, N});
-            py::array_t<float> Y({M, N});
+            std::vector<py::ssize_t> mn_shape = {static_cast<py::ssize_t>(M), static_cast<py::ssize_t>(N)};
+            py::array_t<float> temp = np.attr("zeros")(mn_shape, py::arg("dtype") = np.attr("float32")).cast<py::array_t<float>>();
+            py::array_t<float> Y(mn_shape);
             auto temp_buf = temp.request();
             auto y_buf = Y.request();
 
@@ -1419,8 +1421,9 @@ private:
             uint32_t K = static_cast<uint32_t>(a_info.shape[1]);
             uint32_t N = static_cast<uint32_t>(b_info.shape[1]);
 
-            py::array_t<float> temp({M, N});
-            py::array_t<float> Y({M, N});
+            std::vector<py::ssize_t> mn_shape = {static_cast<py::ssize_t>(M), static_cast<py::ssize_t>(N)};
+            py::array_t<float> temp = np.attr("zeros")(mn_shape, py::arg("dtype") = np.attr("float32")).cast<py::array_t<float>>();
+            py::array_t<float> Y(mn_shape);
             auto temp_buf = temp.request();
             auto y_buf = Y.request();
 
