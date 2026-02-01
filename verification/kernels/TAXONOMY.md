@@ -435,19 +435,21 @@ re-validates all lower classes.
 
 ## 6. Implementation and Verification Roadmap
 
-### Phase 1: Complete Class 1 (Dense Linear) - CURRENT
+### Phase 1: Complete Class 0 + Class 1 - CURRENT
 
-**Goal:** All MLP models verified at all three fidelity levels.
+**Goal:** Kernel-level verification harnesses for Class 0 (Elementwise) and Class 1 (Dense Linear).
 
 | Task | Priority | Status | Files |
 |------|----------|--------|-------|
+| Create Class 0 elementwise verification harness | P0 | DONE | `verification/kernels/class0_elementwise/verify_elementwise.py` |
+| Create Class 1 matmul verification harness | P0 | DONE | `verification/kernels/class1_dense_linear/verify_matmul.py` |
+| Create Class 1 fused ops verification harness | P0 | DONE | `verification/kernels/class1_dense_linear/verify_fused_ops.py` |
 | Add NumPy ref checks to minimal_mlp.py | P0 | TODO | `python/examples/minimal_mlp.py` |
 | Add NumPy ref checks to xue_validation.py | P0 | TODO | `python/examples/xue_validation.py` |
 | Verify fused ops (matmul+bias+relu/gelu/silu) | P0 | DONE | `kpu_native.cpp` |
 | Verify TRANSACTIONAL roofline within 10% | P1 | Partial | `xue_validation.py` |
 | Implement TEMPORAL matmul (systolic pipeline) | P2 | TODO | `temporal/compute/` |
 | Verify TEMPORAL cycle count vs TRANSACTIONAL | P2 | TODO | New test |
-| Create Class 1 verification harness | P1 | TODO | `verification/class1_dense_linear/` |
 
 **Acceptance criteria:**
 - 3+ MLP configurations verified at BEHAVIORAL (max_diff < 1e-5)
