@@ -1066,7 +1066,7 @@ private:
 
             tensors[output_name] = result;
 
-        } else if (opcode == "adaptive_avg_pool2d") {
+        } else if (opcode == "adaptive_avg_pool2d" || opcode == "adaptive_avgpool2d") {
             // Adaptive average pooling
             std::string x_name = input_names[0].cast<std::string>();
             auto X = tensors[x_name];
@@ -2746,6 +2746,10 @@ private:
         memory_controller_->reset();
         memory_controller_->reset_stats();
 
+        // Reset XUE event collector to avoid double-counting
+        // (fused ops execute behaviorally AND submit to transactional fabric)
+        sw::xue::xue().reset();
+
         // Configure transaction sizes for each memory level (XUE)
         // These represent typical transfer granularities
         stats.dram.transaction_size = 64;   // DRAM burst size (cache line)
@@ -3015,6 +3019,84 @@ private:
                 }
                 stats.total_macs += static_cast<int64_t>(M) * N * K;
                 stats.matmul_count++;
+
+            } else if (opcode == "fused_matmul_relu" || opcode == "fused_matmul_bias_relu" ||
+                       opcode == "fused_matmul_bias_gelu" || opcode == "fused_matmul_bias_silu") {
+                // Fused matmul ops: execute behaviorally for correct values,
+                // but submit the matmul dimensions to transactional compute fabric for timing.
+                // Without this, the large matmul inside fused ops is invisible to the timing model.
+
+                // Extract matmul dimensions from the op attributes
+                py::dict attrs = op.contains("attrs") ? op["attrs"].cast<py::dict>() : py::dict();
+                uint32_t M = 0, K = 0, N = 0;
+
+                if (attrs.contains("M") && attrs.contains("K") && attrs.contains("N")) {
+                    M = attrs["M"].cast<uint32_t>();
+                    K = attrs["K"].cast<uint32_t>();
+                    N = attrs["N"].cast<uint32_t>();
+                } else {
+                    // Infer from input shapes
+                    std::string a_name = op_input_names[0].cast<std::string>();
+                    std::string b_name = op_input_names[1].cast<std::string>();
+                    auto a_buf = tensors[a_name].request();
+                    auto b_buf = tensors[b_name].request();
+                    M = static_cast<uint32_t>(a_buf.shape[a_buf.ndim - 2]);
+                    K = static_cast<uint32_t>(a_buf.shape[a_buf.ndim - 1]);
+                    N = static_cast<uint32_t>(b_buf.shape[b_buf.ndim - 1]);
+                }
+
+                // Execute the fused op behaviorally (computes correct values)
+                execute_op_behavioral(op, tensors, stats);
+
+                // Submit the matmul component to transactional compute fabric for timing
+                sw::kpu::MatMulDescriptor desc;
+                desc.m = M;
+                desc.n = N;
+                desc.k = K;
+                // We don't need the actual data for timing, just the dimensions
+                // Pass nullptr for data pointers - the timing model only needs M, N, K
+                compute_fabric_->submit_matmul(desc, nullptr, nullptr, nullptr, nullptr);
+                compute_fabric_->drain();
+
+                // Track FLOPs for the matmul component
+                stats.matmul_flops += 2LL * M * N * K;
+                stats.total_macs += static_cast<int64_t>(M) * N * K;
+                stats.matmul_count++;
+
+                // Track memory traffic for result
+                if (op_output_names.size() > 0) {
+                    auto result = tensors[output_name];
+                    py::buffer_info result_buf = result.request();
+                    size_t result_bytes = static_cast<size_t>(result_buf.size) * sizeof(float);
+
+                    tensor_addresses[output_name] = next_address;
+
+                    memory_traffic.record_write(sw::kpu::stats::MemoryLevel::L1, result_bytes);
+                    stats.l1.write_bytes += static_cast<int64_t>(result_bytes);
+                    stats.l1.write_count += (result_bytes + stats.l1.transaction_size - 1) / stats.l1.transaction_size;
+
+                    memory_traffic.record_write(sw::kpu::stats::MemoryLevel::L2, result_bytes);
+                    stats.l2.write_bytes += static_cast<int64_t>(result_bytes);
+                    stats.l2.write_count += (result_bytes + stats.l2.transaction_size - 1) / stats.l2.transaction_size;
+
+                    memory_traffic.record_write(sw::kpu::stats::MemoryLevel::L3, result_bytes);
+                    stats.l3.write_bytes += static_cast<int64_t>(result_bytes);
+                    stats.l3.write_count += (result_bytes + stats.l3.transaction_size - 1) / stats.l3.transaction_size;
+
+                    memory_traffic.record_write(sw::kpu::stats::MemoryLevel::EXTERNAL, result_bytes);
+                    stats.dram.write_bytes += static_cast<int64_t>(result_bytes);
+                    stats.dram.write_count += (result_bytes + stats.dram.transaction_size - 1) / stats.dram.transaction_size;
+
+                    constexpr uint32_t CACHE_LINE_SIZE = 64;
+                    for (size_t offset = 0; offset < result_bytes; offset += CACHE_LINE_SIZE) {
+                        uint32_t chunk_size = std::min(static_cast<uint32_t>(CACHE_LINE_SIZE),
+                                                       static_cast<uint32_t>(result_bytes - offset));
+                        memory_controller_->submit_write(next_address + offset, nullptr, chunk_size, nullptr);
+                    }
+
+                    next_address += result_bytes;
+                    stats.memory_bytes += static_cast<int64_t>(result_bytes);
+                }
 
             } else if (opcode == "conv2d") {
                 // Conv2D - execute behaviorally and track FLOPs
@@ -3497,6 +3579,9 @@ PYBIND11_MODULE(_native, m) {
         d["reduction_events"] = result.reduction_events;
         d["memory_events"] = result.memory_events;
         d["sync_events"] = result.sync_events;
+
+        // Ridge point at top level for convenience
+        d["ridge_point"] = hw.ridge_point_dram();
 
         // Hardware model info
         py::dict hw_info;

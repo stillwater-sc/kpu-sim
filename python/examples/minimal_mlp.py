@@ -18,15 +18,37 @@ def mlp(x, w1, w2):
     h = kpu.relu(kpu.matmul(x, w1))
     return kpu.matmul(h, w2)
 
-# Create tensors
+# Create tensors (fixed seed for reproducibility)
+np.random.seed(42)
 batch_size = 32
-x = kpu.Tensor(np.random.randn(batch_size, 784).astype(np.float32))
-w1 = kpu.Tensor(np.random.randn(784, 128).astype(np.float32))
-w2 = kpu.Tensor(np.random.randn(128, 10).astype(np.float32))
+x_np = np.random.randn(batch_size, 784).astype(np.float32)
+w1_np = np.random.randn(784, 128).astype(np.float32)
+w2_np = np.random.randn(128, 10).astype(np.float32)
+
+x = kpu.Tensor(x_np)
+w1 = kpu.Tensor(w1_np)
+w2 = kpu.Tensor(w2_np)
 
 # Execute
 result = mlp(x, w1, w2)
 stats = mlp.stats
+
+# =============================================================================
+# Functional Correctness Verification
+# =============================================================================
+ref = np.maximum(0, x_np @ w1_np) @ w2_np
+result_np = np.array(result.data)
+max_diff = np.max(np.abs(result_np - ref))
+
+print("=" * 60)
+print("Functional Verification")
+print("=" * 60)
+print(f"  Max difference vs NumPy: {max_diff:.6e}")
+if max_diff < 1e-5:
+    print("  [PASS] Results match reference implementation")
+else:
+    print("  [FAIL] Results do not match - check implementation")
+print()
 
 # =============================================================================
 # XUE Observation Architecture (v0.5.0+)

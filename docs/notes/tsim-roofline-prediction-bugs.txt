@@ -1,0 +1,41 @@
+
+  Roofline Prediction Accuracy — Fixed (0.1% error)
+
+  Three bugs were identified and fixed:
+
+  Bug 1: Ridge point not exposed to Python
+
+  - File: python/kpu/_native/kpu_native.cpp:3502
+  - Fix: Added d["ridge_point"] = hw.ridge_point_dram() to expose ridge point at top level of the analysis dict
+
+  Bug 2: Fused ops invisible to transactional timing model (CRITICAL)
+
+  - Root cause: execute_simulated() only handled matmul and linear opcodes through the transactional compute fabric. Fused ops (fused_matmul_relu, fused_matmul_bias_relu, etc.) fell through to execute_op_behavioral() which uses the behavioral compute fabric — no transactional timing.
+  - Impact: For the minimal MLP, the first matmul (32×784×128 = 3.2M MACs) was completely missing from timing. Only the second matmul (32×128×10 = 41K MACs) was timed, giving compute_cycles=168 instead of the correct ~12,720.
+  - Fix: Added explicit handling for all fused matmul ops in execute_simulated() at line ~3019. The handler:
+    a. Executes behaviorally for correct values via execute_op_behavioral()
+    b. Submits matmul dimensions to transactional compute_fabric_->submit_matmul() with null data pointers for timing
+    c. Tracks FLOPs, MACs, and memory traffic
+
+  Bug 3: Null pointer crash guard
+
+  - File: src/models/transactional/compute/compute_fabric.cpp:57
+  - Fix: Added null check before execute_matmul_fp32() call — timing-only submissions skip actual computation
+  - Also: skips XUE recording for timing-only submissions (null data) to avoid double-counting with the behavioral fabric's XUE recording
+
+  Results After Fix
+  ┌─────────────────────┬────────┬───────────┐
+  │       Metric        │ Before │   After   │
+  ├─────────────────────┼────────┼───────────┤
+  │ compute_cycles      │ 168    │ 12,720    │
+  ├─────────────────────┼────────┼───────────┤
+  │ matmul_flops        │ 81,920 │ 6,504,448 │
+  ├─────────────────────┼────────┼───────────┤
+  │ GFLOPS              │ 72.75  │ 511.4     │
+  ├─────────────────────┼────────┼───────────┤
+  │ Roofline prediction │ 512.0  │ 512.0     │
+  ├─────────────────────┼────────┼───────────┤
+  │ Prediction error    │ 86%    │ 0.1%      │
+  └─────────────────────┴────────┴───────────┘
+  The remaining pending tasks are: creating a Class I verification harness, porting SqueezeNet to native @kpu.compile, and adding VGG-16 or ResNet-18. Would you like me to continue with those?
+

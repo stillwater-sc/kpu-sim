@@ -54,7 +54,8 @@ std::optional<uint64_t> TransactionalComputeFabric::submit_matmul(
     std::function<void()> callback)
 {
     // Execute matmul immediately (data is computed now, timing is simulated)
-    if (desc.dtype == DataType::FLOAT32) {
+    // Skip computation if data pointers are null (timing-only submission)
+    if (desc.dtype == DataType::FLOAT32 && a_data && b_data && c_data) {
         execute_matmul_fp32(desc,
                            static_cast<const float*>(a_data),
                            static_cast<const float*>(b_data),
@@ -106,8 +107,12 @@ std::optional<uint64_t> TransactionalComputeFabric::submit_matmul(
     stats_.max_latency = std::max(stats_.max_latency, static_cast<uint64_t>(duration));
 
     // Record XUE event (tile-level for hardware-accurate counters)
-    sw::xue::xue().set_cycle(current_cycle_);
-    sw::xue::xue().record_matmul(desc.m, desc.n, desc.k, duration);
+    // Skip XUE when called with null data pointers (timing-only submission
+    // for fused ops where behavioral fabric already recorded XUE events)
+    if (a_data) {
+        sw::xue::xue().set_cycle(current_cycle_);
+        sw::xue::xue().record_matmul(desc.m, desc.n, desc.k, duration);
+    }
 
     return op_id;
 }

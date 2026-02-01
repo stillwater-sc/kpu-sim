@@ -155,6 +155,24 @@ def main():
     print(f"  Output shape: {result.shape}")
     print(f"  Output dtype: {result.dtype}")
 
+    # Functional correctness verification against NumPy
+    x_np = np.array(x.data)
+    w1_np = np.array(w1.data)
+    b1_np = np.array(b1.data)
+    w2_np = np.array(w2.data)
+    b2_np = np.array(b2.data)
+    ref = np.maximum(0, x_np @ w1_np + b1_np) @ w2_np + b2_np
+    result_np = np.array(result.data)
+    max_diff = np.max(np.abs(result_np - ref))
+
+    print()
+    print("  Functional Verification:")
+    print(f"    Max difference vs NumPy: {max_diff:.6e}")
+    if max_diff < 1e-5:
+        print("    [PASS] Results match reference implementation")
+    else:
+        print("    [FAIL] Results do not match - check implementation")
+
     # Get XUE summary from C++ (identical format to hardware counters)
     print_section("3. XUE Event Summary (from C++ EventCollector)")
     xue = kpu.get_xue_summary()

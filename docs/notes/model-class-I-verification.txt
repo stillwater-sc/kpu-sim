@@ -1,0 +1,35 @@
+ All three tasks are complete. Let me also run the Class I verification harness one more time to make sure everything still passes.
+
+● Bash(python verification/dnn/class_i_harness.py 2>&1)
+  ⎿  ======================================================================
+     Class I DNN Verification Harness
+     ======================================================================
+     … +35 lines (ctrl+o to expand)
+
+● All tasks complete. Here's a summary of what was accomplished:
+
+  Summary
+
+  1. Class I Verification Harness (verification/dnn/class_i_harness.py)
+
+  - Runs 3 MLP models at BEHAVIORAL and TRANSACTIONAL fidelity
+  - Verifies functional correctness (max_diff < 1e-5 vs NumPy)
+  - Verifies FLOP counts (exact match) and roofline predictions (within 10%)
+  - 12/12 tests PASS, roofline error < 0.2%
+
+  2. SqueezeNet ported to @kpu.compile (python/examples/squeezenet_native.py)
+
+  - Full SqueezeNet 1.0 (8 Fire modules, 52 weight tensors) as a flat compiled function
+  - Fixed opcode mismatch: DFX emits adaptive_avgpool2d but C++ expected adaptive_avg_pool2d — updated kpu_native.cpp to accept both
+  - PASS at BEHAVIORAL fidelity (max_diff = 0.0 vs NumPy reference)
+
+  3. VGG-16 implemented (python/examples/vgg16_native.py)
+
+  - 13 conv3x3 layers + 3 FC layers, canonical Class I benchmark
+  - Uses adaptive avg pool for input-size flexibility (tested at 64x64)
+  - PASS at BEHAVIORAL fidelity (max_diff = 0.0 vs NumPy reference)
+
+  Bug fix
+
+  - kpu_native.cpp:1069: Added "adaptive_avgpool2d" as accepted opcode alongside "adaptive_avg_pool2d"
+
