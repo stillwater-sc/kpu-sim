@@ -175,6 +175,11 @@ if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/patterns")
     add_subdirectory(patterns)
 endif()
 
+# Kernel verification executables (standalone debugging programs)
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/verification/kernels/CMakeLists.txt")
+    add_subdirectory(verification/kernels)
+endif()
+
 # High-level Python package (kpu) with native bindings
 if(KPU_BUILD_PYTHON_BINDINGS AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/python/kpu/_native/kpu_native.cpp")
     if(PYBIND11_AVAILABLE)
