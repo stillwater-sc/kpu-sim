@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Kernel Verification Harnesses — Phase 1** (`verification/kernels/`)
+  - `class0_elementwise/verify_elementwise.py` — 12 elementwise ops (relu, gelu, silu,
+    sigmoid, tanh, exp, log, sqrt, softmax, neg, add, mul) tested across 4 shape sweeps
+    (48 test cases, all PASS)
+  - `class1_dense_linear/verify_matmul.py` — Matmul verification with 10 dimension configs
+    at BEHAVIORAL + 4 at TRANSACTIONAL with FLOP count validation and roofline reporting
+    (14 test cases, all PASS)
+  - `class1_dense_linear/verify_fused_ops.py` — 4 fusion patterns (matmul+relu,
+    matmul+bias+relu, matmul+bias+gelu, matmul+bias+silu) across 3 sizes
+    (12 test cases, all PASS)
+
+### Changed
+- **TAXONOMY.md** — Updated Phase 1 roadmap to reflect Class 0 and Class 1 kernel
+  verification harnesses as DONE
+
 ## [0.8.0] - 2026-01-26
 
 ### Added
