@@ -35,3 +35,11 @@ kpu_add_verification_test(verify_residual
 # Class 4: Depthwise Separable and Grouped Convolution
 kpu_add_verification_test(verify_depthwise_conv
     class4_depthwise/verify_depthwise_conv.cpp)
+
+# Class 5: Attention and Sequence Models
+kpu_add_verification_test(verify_attention
+    class5_attention/verify_attention.cpp)
+
+# Class 6: Quantized Inference
+kpu_add_verification_test(verify_quantized
+    class6_quantized/verify_quantized.cpp)
