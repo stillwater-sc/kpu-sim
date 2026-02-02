@@ -20,3 +20,18 @@ kpu_add_verification_test(verify_matmul
 
 kpu_add_verification_test(verify_fused_ops
     class1_dense_linear/verify_fused_ops.cpp)
+
+# Class 2: Spatial Convolution
+kpu_add_verification_test(verify_conv2d
+    class2_spatial_conv/verify_conv2d.cpp)
+
+kpu_add_verification_test(verify_pooling
+    class2_spatial_conv/verify_pooling.cpp)
+
+# Class 3: Multi-Branch and Residual Architectures
+kpu_add_verification_test(verify_residual
+    class3_multi_branch/verify_residual.cpp)
+
+# Class 4: Depthwise Separable and Grouped Convolution
+kpu_add_verification_test(verify_depthwise_conv
+    class4_depthwise/verify_depthwise_conv.cpp)

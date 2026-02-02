@@ -13,6 +13,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <limits>
 #include <string>
 #include <vector>
 
@@ -148,6 +149,176 @@ public:
             case ElementwiseOp::ADD:     return a + b;
             case ElementwiseOp::MUL:     return a * b;
             default:                     return 0.0f;
+        }
+    }
+
+    // ========================================================================
+    // Convenience: run conv2d through fabric, return max abs diff vs reference
+    // ========================================================================
+
+    float run_conv2d(const Conv2DDescriptor& desc,
+                     const float* input, const float* weight,
+                     const float* bias, float* output) {
+        fabric_.submit_conv2d(desc, input, weight, bias, output);
+        fabric_.drain();
+
+        uint32_t H_out = desc.out_height();
+        uint32_t W_out = desc.out_width();
+        size_t out_size = static_cast<size_t>(desc.batch_size) * desc.out_channels * H_out * W_out;
+
+        std::vector<float> ref(out_size);
+        ref_conv2d(desc, input, weight, bias, ref.data());
+        return max_abs_diff(output, ref.data(), out_size);
+    }
+
+    // ========================================================================
+    // Convenience: run pool2d through fabric, return max abs diff vs reference
+    // ========================================================================
+
+    float run_pool2d(const Pool2DDescriptor& desc,
+                     const float* input, float* output) {
+        fabric_.submit_pool2d(desc, input, output);
+        fabric_.drain();
+
+        uint32_t H_out = desc.out_height();
+        uint32_t W_out = desc.out_width();
+        size_t out_size = static_cast<size_t>(desc.batch_size) * desc.channels * H_out * W_out;
+
+        std::vector<float> ref(out_size);
+        ref_pool2d(desc, input, ref.data());
+        return max_abs_diff(output, ref.data(), out_size);
+    }
+
+    // ========================================================================
+    // Reference: Conv2D (NCHW layout, groups support)
+    // ========================================================================
+
+    static void ref_conv2d(const Conv2DDescriptor& desc,
+                           const float* input, const float* weight,
+                           const float* bias, float* output) {
+        const uint32_t N = desc.batch_size;
+        const uint32_t C_in = desc.in_channels;
+        const uint32_t H_in = desc.in_height;
+        const uint32_t W_in = desc.in_width;
+        const uint32_t C_out = desc.out_channels;
+        const uint32_t K_h = desc.kernel_height;
+        const uint32_t K_w = desc.kernel_width;
+        const uint32_t H_out = desc.out_height();
+        const uint32_t W_out = desc.out_width();
+        const uint32_t groups = desc.groups;
+        const uint32_t C_in_per_group = C_in / groups;
+        const uint32_t C_out_per_group = C_out / groups;
+
+        for (uint32_t n = 0; n < N; ++n) {
+            for (uint32_t g = 0; g < groups; ++g) {
+                for (uint32_t co = 0; co < C_out_per_group; ++co) {
+                    uint32_t oc = g * C_out_per_group + co;
+                    for (uint32_t h = 0; h < H_out; ++h) {
+                        for (uint32_t w = 0; w < W_out; ++w) {
+                            float sum = 0.0f;
+                            for (uint32_t ci = 0; ci < C_in_per_group; ++ci) {
+                                uint32_t ic = g * C_in_per_group + ci;
+                                for (uint32_t kh = 0; kh < K_h; ++kh) {
+                                    for (uint32_t kw = 0; kw < K_w; ++kw) {
+                                        int32_t ih = static_cast<int32_t>(h * desc.stride_h + kh * desc.dilation_h)
+                                                     - static_cast<int32_t>(desc.padding_h);
+                                        int32_t iw = static_cast<int32_t>(w * desc.stride_w + kw * desc.dilation_w)
+                                                     - static_cast<int32_t>(desc.padding_w);
+                                        if (ih >= 0 && ih < static_cast<int32_t>(H_in) &&
+                                            iw >= 0 && iw < static_cast<int32_t>(W_in)) {
+                                            uint64_t in_idx = ((static_cast<uint64_t>(n) * C_in + ic) * H_in + ih) * W_in + iw;
+                                            uint64_t w_idx = ((static_cast<uint64_t>(oc) * C_in_per_group + ci) * K_h + kh) * K_w + kw;
+                                            sum += input[in_idx] * weight[w_idx];
+                                        }
+                                    }
+                                }
+                            }
+                            if (bias) sum += bias[oc];
+                            uint64_t out_idx = ((static_cast<uint64_t>(n) * C_out + oc) * H_out + h) * W_out + w;
+                            output[out_idx] = sum;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // ========================================================================
+    // Reference: Pool2D (max, avg, adaptive_avg)
+    // ========================================================================
+
+    static void ref_pool2d(const Pool2DDescriptor& desc,
+                           const float* input, float* output) {
+        const uint32_t N = desc.batch_size;
+        const uint32_t C = desc.channels;
+        const uint32_t H_in = desc.in_height;
+        const uint32_t W_in = desc.in_width;
+        const uint32_t H_out = desc.out_height();
+        const uint32_t W_out = desc.out_width();
+
+        if (desc.pool_type == Pool2DDescriptor::PoolType::ADAPTIVE_AVG) {
+            for (uint32_t n = 0; n < N; ++n) {
+                for (uint32_t c = 0; c < C; ++c) {
+                    for (uint32_t ho = 0; ho < H_out; ++ho) {
+                        for (uint32_t wo = 0; wo < W_out; ++wo) {
+                            uint32_t h_start = (ho * H_in) / H_out;
+                            uint32_t h_end = ((ho + 1) * H_in) / H_out;
+                            uint32_t w_start = (wo * W_in) / W_out;
+                            uint32_t w_end = ((wo + 1) * W_in) / W_out;
+                            float sum = 0.0f;
+                            uint32_t cnt = 0;
+                            for (uint32_t h = h_start; h < h_end; ++h) {
+                                for (uint32_t w = w_start; w < w_end; ++w) {
+                                    sum += input[((static_cast<uint64_t>(n) * C + c) * H_in + h) * W_in + w];
+                                    ++cnt;
+                                }
+                            }
+                            output[((static_cast<uint64_t>(n) * C + c) * H_out + ho) * W_out + wo] = sum / cnt;
+                        }
+                    }
+                }
+            }
+        } else {
+            const uint32_t K_h = desc.kernel_height;
+            const uint32_t K_w = desc.kernel_width;
+            const uint32_t stride_h = desc.stride_h > 0 ? desc.stride_h : K_h;
+            const uint32_t stride_w = desc.stride_w > 0 ? desc.stride_w : K_w;
+
+            for (uint32_t n = 0; n < N; ++n) {
+                for (uint32_t c = 0; c < C; ++c) {
+                    for (uint32_t ho = 0; ho < H_out; ++ho) {
+                        for (uint32_t wo = 0; wo < W_out; ++wo) {
+                            float result;
+                            if (desc.pool_type == Pool2DDescriptor::PoolType::MAX) {
+                                result = -std::numeric_limits<float>::infinity();
+                            } else {
+                                result = 0.0f;
+                            }
+                            uint32_t cnt = 0;
+                            for (uint32_t kh = 0; kh < K_h; ++kh) {
+                                for (uint32_t kw = 0; kw < K_w; ++kw) {
+                                    int32_t ih = static_cast<int32_t>(ho * stride_h + kh) - static_cast<int32_t>(desc.padding_h);
+                                    int32_t iw = static_cast<int32_t>(wo * stride_w + kw) - static_cast<int32_t>(desc.padding_w);
+                                    if (ih >= 0 && ih < static_cast<int32_t>(H_in) &&
+                                        iw >= 0 && iw < static_cast<int32_t>(W_in)) {
+                                        float val = input[((static_cast<uint64_t>(n) * C + c) * H_in + ih) * W_in + iw];
+                                        if (desc.pool_type == Pool2DDescriptor::PoolType::MAX) {
+                                            result = std::max(result, val);
+                                        } else {
+                                            result += val;
+                                        }
+                                        ++cnt;
+                                    }
+                                }
+                            }
+                            if (desc.pool_type == Pool2DDescriptor::PoolType::AVG && cnt > 0) {
+                                result /= cnt;
+                            }
+                            output[((static_cast<uint64_t>(n) * C + c) * H_out + ho) * W_out + wo] = result;
+                        }
+                    }
+                }
+            }
         }
     }
 
