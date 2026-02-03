@@ -7,6 +7,7 @@
  */
 
 #include <sw/kpu/dsl/schedule_compiler.hpp>
+#include <sw/kpu/isa/tile_layout.hpp>
 #include <stdexcept>
 #include <sstream>
 #include <algorithm>
@@ -18,11 +19,15 @@ using namespace isa;
 namespace {
 
 /**
- * @brief Compilation context tracks loop indices and emits instructions
+ * @brief Compilation context tracks loop indices and emits instructions.
+ *
+ * Uses TileLayout to map tile coordinates to physical resources (channels,
+ * L3 tile slots, L2 bank IDs, and addresses).
  */
 struct CompileContext {
     const Schedule& sched;
     DMProgram& prog;
+    std::unique_ptr<TileLayout> layout;
     uint32_t next_id = 0;
 
     // Current tile indices per dimension
@@ -37,6 +42,20 @@ struct CompileContext {
 
     TileCoord current_tile() const {
         return TileCoord{ti, tj, tk};
+    }
+
+    /** Get the TileLocation for a matrix at the current tile indices */
+    TileLocation locate(MatrixID mat) const {
+        if (layout) {
+            return layout->get_tile_location(mat, ti, tj, tk);
+        }
+        // Fallback if no layout (shouldn't happen)
+        TileLocation loc;
+        loc.channel = 0;
+        loc.address = 0;
+        loc.l3_tile_id = static_cast<uint8_t>(current_buf());
+        loc.l2_bank_id = static_cast<uint8_t>(current_buf());
+        return loc;
     }
 
     Size elem_size() const { return sched.get_element_size(); }
@@ -86,8 +105,9 @@ void CompileContext::emit_op(const ScheduleOp& op) {
             }
             tile_bytes = rows * cols * es;
         }
-        uint8_t l3_tile = static_cast<uint8_t>(buf);
-        emit(DMInstruction::dma_load(op.matrix, tile, ext_addr, l3_tile, 0, tile_bytes));
+        auto loc = locate(op.matrix);
+        emit(DMInstruction::dma_load(op.matrix, tile, ext_addr,
+                                     loc.l3_tile_id, loc.address, tile_bytes));
         prog.estimates.external_mem_bytes += tile_bytes;
         prog.estimates.l3_bytes += tile_bytes;
         break;
@@ -107,8 +127,9 @@ void CompileContext::emit_op(const ScheduleOp& op) {
         dops.matrix = op.matrix;
         dops.tile = tile;
         dops.ext_mem_addr = op.im2col.input_base;
-        dops.l3_tile_id = static_cast<uint8_t>(buf);
-        dops.l3_offset = 0;
+        auto loc_g = locate(op.matrix);
+        dops.l3_tile_id = loc_g.l3_tile_id;
+        dops.l3_offset = loc_g.address;
         dops.size_bytes = tile_bytes;
         dops.buffer = buf;
         instr.operands = dops;
@@ -140,10 +161,11 @@ void CompileContext::emit_op(const ScheduleOp& op) {
         dops.matrix = op.matrix;
         dops.tile = tile;
         dops.ext_mem_addr = ext_addr;
-        dops.l3_tile_id = 0;
-        dops.l3_offset = 0;
+        auto loc_s = locate(op.matrix);
+        dops.l3_tile_id = loc_s.l3_tile_id;
+        dops.l3_offset = loc_s.address;
         dops.size_bytes = tile_bytes;
-        dops.buffer = BufferSlot::BUF_0;
+        dops.buffer = buf;
         instr.operands = dops;
         instr.label = "DMA_STORE";
         emit(instr);
@@ -163,9 +185,10 @@ void CompileContext::emit_op(const ScheduleOp& op) {
             Size Ti = sched.get_tile("ti"); Size Tj = sched.get_tile("tj");
             rows = Ti ? Ti : 16; cols = Tj ? Tj : 16;
         }
-        uint8_t src_l3 = static_cast<uint8_t>(buf);
-        uint8_t dst_l2 = static_cast<uint8_t>(buf);
-        emit(DMInstruction::bm_move(op.matrix, tile, src_l3, 0, dst_l2, 0,
+        auto loc_m = locate(op.matrix);
+        emit(DMInstruction::bm_move(op.matrix, tile,
+                                    loc_m.l3_tile_id, loc_m.address,
+                                    loc_m.l2_bank_id, 0,
                                     rows, cols, es, op.transform));
         prog.estimates.l2_bytes += rows * cols * es;
         break;
@@ -181,9 +204,10 @@ void CompileContext::emit_op(const ScheduleOp& op) {
         BlockMoverOperands bops;
         bops.matrix = op.matrix;
         bops.tile = tile;
-        bops.src_l3_tile_id = 0;  // src is L2 (field naming is reused)
+        auto loc_wb = locate(op.matrix);
+        bops.src_l3_tile_id = loc_wb.l2_bank_id;  // src is L2
         bops.src_offset = 0;
-        bops.dst_l2_bank_id = 0;  // dst is L3
+        bops.dst_l2_bank_id = loc_wb.l3_tile_id;  // dst is L3
         bops.dst_offset = 0;
         bops.height = rows;
         bops.width = cols;
@@ -205,16 +229,16 @@ void CompileContext::emit_op(const ScheduleOp& op) {
             Size Tb = sched.get_tile("tb");
             rows = Tb ? Tb : 16; cols = 16;
         }
-        uint8_t l2b = static_cast<uint8_t>(buf);
-        emit(DMInstruction::str_feed_rows(op.matrix, tile, l2b, 0, 0, 0, rows, cols, fs));
+        auto loc_sr = locate(op.matrix);
+        emit(DMInstruction::str_feed_rows(op.matrix, tile, loc_sr.l2_bank_id, 0, 0, 0, rows, cols, fs));
         break;
     }
 
     case ScheduleOpKind::STREAM_COLS: {
         Size Tk = sched.get_tile("tk"); Size Tj = sched.get_tile("tj");
         Size rows = Tk ? Tk : 16; Size cols = Tj ? Tj : 16;
-        uint8_t l2b = static_cast<uint8_t>(buf);
-        emit(DMInstruction::str_feed_cols(op.matrix, tile, l2b, 1, 0, 0, rows, cols, fs));
+        auto loc_sc = locate(op.matrix);
+        emit(DMInstruction::str_feed_cols(op.matrix, tile, loc_sc.l2_bank_id, 1, 0, 0, rows, cols, fs));
         break;
     }
 
@@ -224,7 +248,8 @@ void CompileContext::emit_op(const ScheduleOp& op) {
         StreamerOperands sops;
         sops.matrix = op.matrix;
         sops.tile = tile;
-        sops.l2_bank_id = 0;
+        auto loc_bc = locate(op.matrix);
+        sops.l2_bank_id = loc_bc.l2_bank_id;
         sops.l1_buffer_id = 0;
         sops.l2_addr = 0;
         sops.l1_addr = 0;
@@ -280,14 +305,16 @@ void CompileContext::emit_op(const ScheduleOp& op) {
     case ScheduleOpKind::DRAIN: {
         Size Ti = sched.get_tile("ti"); Size Tj = sched.get_tile("tj");
         Size rows = Ti ? Ti : 16; Size cols = Tj ? Tj : 16;
-        emit(DMInstruction::str_drain(tile, 0, 2, 0, 0, rows, cols, fs));
+        auto loc_d = locate(MatrixID::C);
+        emit(DMInstruction::str_drain(tile, 0, loc_d.l2_bank_id, 0, 0, rows, cols, fs));
         break;
     }
 
     case ScheduleOpKind::DRAIN_FUSED: {
         Size Ti = sched.get_tile("ti"); Size Tj = sched.get_tile("tj");
         Size rows = Ti ? Ti : 16; Size cols = Tj ? Tj : 16;
-        emit(DMInstruction::str_drain(tile, 0, 2, 0, 0, rows, cols, fs,
+        auto loc_df = locate(MatrixID::C);
+        emit(DMInstruction::str_drain(tile, 0, loc_df.l2_bank_id, 0, 0, rows, cols, fs,
                                       true, op.activation, true, 0));
         break;
     }
@@ -297,7 +324,8 @@ void CompileContext::emit_op(const ScheduleOp& op) {
         Size Tb = sched.get_tile("tb");
         Size rows = Tb ? Tb : (Ti ? Ti : 16);
         Size cols = Tj ? Tj : 16;
-        auto instr = DMInstruction::str_drain(tile, 0, 2, 0, 0, rows, cols, fs);
+        auto loc_ds = locate(MatrixID::C);
+        auto instr = DMInstruction::str_drain(tile, 0, loc_ds.l2_bank_id, 0, 0, rows, cols, fs);
         instr.label = "STR_DRAIN_TO_SCRATCH(" + op.scratch_name + ")";
         emit(instr);
         break;
@@ -384,8 +412,26 @@ DMProgram compile_schedule(const Schedule& sched) {
         if (t.id == MatrixID::C) prog.memory_map.c_base = t.base_addr;
     }
 
+    // Build TileLayout from schedule configuration
+    LayoutConfig lcfg;
+    lcfg.num_channels = sched.get_num_channels();
+    lcfg.num_l3_tiles = sched.get_l3_buffers();
+    lcfg.num_l2_banks = sched.get_l2_banks();
+    lcfg.element_size = sched.get_element_size();
+
+    // Compute tile dimensions
+    Size Ti = prog.Ti > 0 ? prog.Ti : 1;
+    Size Tj = prog.Tj > 0 ? prog.Tj : 1;
+    Size Tk = prog.Tk > 0 ? prog.Tk : 1;
+    lcfg.tile_size_bytes = Ti * Tk * lcfg.element_size;  // A-tile size as representative
+    lcfg.m_tiles = prog.M > 0 ? (prog.M + Ti - 1) / Ti : 1;
+    lcfg.n_tiles = prog.N > 0 ? (prog.N + Tj - 1) / Tj : 1;
+    lcfg.k_tiles = prog.K > 0 ? (prog.K + Tk - 1) / Tk : 1;
+
+    auto layout = create_tile_layout(sched.get_layout_policy(), lcfg);
+
     // Compile operations
-    CompileContext ctx{sched, prog};
+    CompileContext ctx{sched, prog, std::move(layout)};
     ctx.emit_ops(sched.operations());
 
     // Halt

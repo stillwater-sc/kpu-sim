@@ -50,6 +50,16 @@ Schedule& Schedule::element_size(Size s) {
     return *this;
 }
 
+Schedule& Schedule::layout_policy(LayoutPolicy policy) {
+    layout_policy_ = policy;
+    return *this;
+}
+
+Schedule& Schedule::num_channels(uint8_t count) {
+    num_channels_ = count;
+    return *this;
+}
+
 LoopScope Schedule::for_tiles(std::string dim) {
     ScheduleOp loop_op;
     loop_op.kind = ScheduleOpKind::FOR_TILES;

@@ -16,6 +16,7 @@
 #include <iostream>
 #include <cassert>
 #include <sstream>
+#include <set>
 
 using namespace sw::kpu;
 using namespace sw::kpu::dsl;
@@ -255,6 +256,148 @@ void test_large_matmul() {
 }
 
 // ============================================================================
+// Test 6: TileLayout Resource Distribution
+// ============================================================================
+
+void test_tile_layout_integration() {
+    std::cout << "\n=== Test: TileLayout Resource Distribution ===\n";
+
+    // Use iteration-aware layout (default) with 4 channels, 4 L3 tiles, 8 L2 banks
+    auto sched = matmul_output_stationary(256, 256, 256, 64, 64, 64);
+    DMProgram prog = compile_schedule(sched);
+
+    // Collect unique L3 tile IDs and L2 bank IDs from DMA and BM instructions
+    std::set<uint8_t> dma_l3_tiles;
+    std::set<uint8_t> bm_src_l3;
+    std::set<uint8_t> bm_dst_l2;
+    std::set<uint8_t> str_l2_banks;
+
+    for (const auto& instr : prog.instructions) {
+        if (instr.opcode == DMOpcode::DMA_LOAD_TILE) {
+            if (auto* d = std::get_if<DMAOperands>(&instr.operands)) {
+                dma_l3_tiles.insert(d->l3_tile_id);
+            }
+        }
+        if (instr.opcode == DMOpcode::BM_MOVE_TILE) {
+            if (auto* b = std::get_if<BlockMoverOperands>(&instr.operands)) {
+                bm_src_l3.insert(b->src_l3_tile_id);
+                bm_dst_l2.insert(b->dst_l2_bank_id);
+            }
+        }
+        if (instr.opcode == DMOpcode::STR_FEED_ROWS ||
+            instr.opcode == DMOpcode::STR_FEED_COLS) {
+            if (auto* s = std::get_if<StreamerOperands>(&instr.operands)) {
+                str_l2_banks.insert(s->l2_bank_id);
+            }
+        }
+    }
+
+    std::cout << "  DMA L3 tile IDs used: " << dma_l3_tiles.size() << " {";
+    for (auto id : dma_l3_tiles) std::cout << " " << (int)id;
+    std::cout << " }\n";
+
+    std::cout << "  BM src L3 IDs used:   " << bm_src_l3.size() << " {";
+    for (auto id : bm_src_l3) std::cout << " " << (int)id;
+    std::cout << " }\n";
+
+    std::cout << "  BM dst L2 IDs used:   " << bm_dst_l2.size() << " {";
+    for (auto id : bm_dst_l2) std::cout << " " << (int)id;
+    std::cout << " }\n";
+
+    std::cout << "  STR L2 bank IDs used: " << str_l2_banks.size() << " {";
+    for (auto id : str_l2_banks) std::cout << " " << (int)id;
+    std::cout << " }\n";
+
+    // With iteration-aware layout and 4 channels, A tiles go to even channels (0,2)
+    // and B tiles go to odd channels (1,3). L3 tile IDs = channel % num_l3_tiles.
+    check(dma_l3_tiles.size() > 1,
+          "DMA uses multiple L3 tile slots (got " + std::to_string(dma_l3_tiles.size()) + ")");
+    check(bm_dst_l2.size() > 1,
+          "BM distributes across multiple L2 banks (got " + std::to_string(bm_dst_l2.size()) + ")");
+    check(str_l2_banks.size() > 1,
+          "Streamer reads from multiple L2 banks (got " + std::to_string(str_l2_banks.size()) + ")");
+
+    // Verify A and B tiles don't always land on the same L3 tile
+    // (iteration-aware should separate them)
+    std::set<uint8_t> a_l3, b_l3;
+    for (const auto& instr : prog.instructions) {
+        if (instr.opcode == DMOpcode::DMA_LOAD_TILE) {
+            if (auto* d = std::get_if<DMAOperands>(&instr.operands)) {
+                if (d->matrix == MatrixID::A) a_l3.insert(d->l3_tile_id);
+                if (d->matrix == MatrixID::B) b_l3.insert(d->l3_tile_id);
+            }
+        }
+    }
+
+    std::cout << "  A tile L3 slots: {";
+    for (auto id : a_l3) std::cout << " " << (int)id;
+    std::cout << " }\n";
+    std::cout << "  B tile L3 slots: {";
+    for (auto id : b_l3) std::cout << " " << (int)id;
+    std::cout << " }\n";
+
+    // With iteration-aware: A on even channels, B on odd channels
+    // So A L3 tiles and B L3 tiles should be different sets
+    bool separated = true;
+    for (auto a_id : a_l3) {
+        if (b_l3.count(a_id)) { separated = false; break; }
+    }
+    check(separated, "A and B tiles use separate L3 slots (iteration-aware layout)");
+}
+
+// ============================================================================
+// Test 7: Layout Policy Selection
+// ============================================================================
+
+void test_layout_policy_selection() {
+    std::cout << "\n=== Test: Layout Policy Selection ===\n";
+
+    // Test with round-robin layout
+    Schedule sched("test_rr");
+    sched.tensor(Tensor{"A", MatrixID::A, {128, 128}, 0x0000, DataType::FP32})
+         .tensor(Tensor{"B", MatrixID::B, {128, 128}, 0x4000, DataType::FP32})
+         .tensor(Tensor{"C", MatrixID::C, {128, 128}, 0x8000, DataType::FP32})
+         .tile("ti", 64).tile("tj", 64).tile("tk", 64)
+         .dataflow(DMProgram::Dataflow::OUTPUT_STATIONARY)
+         .layout_policy(isa::LayoutPolicy::ROUND_ROBIN)
+         .num_channels(4);
+
+    sched.for_tiles("ti")
+        .for_tiles("tj")
+            .for_tiles("tk")
+                .load(MatrixID::A)
+                .load(MatrixID::B)
+                .barrier()
+                .move(MatrixID::A)
+                .move(MatrixID::B)
+                .stream_rows(MatrixID::A)
+                .stream_cols(MatrixID::B)
+            .end()
+            .drain()
+            .writeback(MatrixID::C)
+            .store(MatrixID::C)
+        .end()
+    .end();
+
+    DMProgram prog = compile_schedule(sched);
+
+    check(prog.instructions.size() > 0, "Round-robin schedule compiles");
+    check(prog.instructions.back().opcode == DMOpcode::HALT, "Ends with HALT");
+
+    // Collect L3 tile IDs
+    std::set<uint8_t> l3_tiles;
+    for (const auto& instr : prog.instructions) {
+        if (instr.opcode == DMOpcode::DMA_LOAD_TILE) {
+            if (auto* d = std::get_if<DMAOperands>(&instr.operands)) {
+                l3_tiles.insert(d->l3_tile_id);
+            }
+        }
+    }
+    check(l3_tiles.size() > 1,
+          "Round-robin distributes across L3 tiles (got " + std::to_string(l3_tiles.size()) + ")");
+}
+
+// ============================================================================
 // Main
 // ============================================================================
 
@@ -268,6 +411,8 @@ int main() {
     test_conv2d_schedule();
     test_softmax_schedule();
     test_large_matmul();
+    test_tile_layout_integration();
+    test_layout_policy_selection();
 
     std::cout << "\n" << std::string(60, '*') << "\n";
     std::cout << "Results: " << passed << " passed, " << failed << " failed\n";

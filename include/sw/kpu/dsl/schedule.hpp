@@ -16,6 +16,7 @@
 
 #include <sw/concepts.hpp>
 #include <sw/kpu/isa/data_movement_isa.hpp>
+#include <sw/kpu/isa/tile_layout.hpp>
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -30,6 +31,10 @@ using isa::DMProgram;
 using isa::DMOpcode;
 using isa::BufferSlot;
 using sw::kpu::ActivationType;
+using isa::LayoutPolicy;
+using isa::LayoutConfig;
+using isa::TileLayout;
+using isa::TileLocation;
 
 // ============================================================================
 // Tensor Declaration
@@ -229,6 +234,8 @@ public:
     Schedule& l3_buffers(uint8_t count);
     Schedule& l2_banks(uint8_t count);
     Schedule& element_size(Size s);
+    Schedule& layout_policy(LayoutPolicy policy);
+    Schedule& num_channels(uint8_t count);
 
     // Loop nesting (returns LoopScope for chaining)
     LoopScope for_tiles(std::string dim);
@@ -248,6 +255,8 @@ public:
     Size get_element_size() const { return element_size_; }
     uint8_t get_l3_buffers() const { return l3_buffers_; }
     uint8_t get_l2_banks() const { return l2_banks_; }
+    LayoutPolicy get_layout_policy() const { return layout_policy_; }
+    uint8_t get_num_channels() const { return num_channels_; }
 
     // Find tensor by MatrixID
     const Tensor* find_tensor(MatrixID id) const;
@@ -261,6 +270,8 @@ private:
     Size element_size_ = 4;
     uint8_t l3_buffers_ = 4;
     uint8_t l2_banks_ = 8;
+    LayoutPolicy layout_policy_ = LayoutPolicy::ITERATION_AWARE;
+    uint8_t num_channels_ = 4;
 
     // Top-level operations (loops and ops)
     std::vector<ScheduleOp> ops_;
