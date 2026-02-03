@@ -5,6 +5,7 @@
 add_library(kpu_isa STATIC
     data_movement_isa.cpp
     program_executor.cpp
+    behavioral_program_executor.cpp
     concurrent_executor.cpp
     tile_layout.cpp
     tile_cache.cpp

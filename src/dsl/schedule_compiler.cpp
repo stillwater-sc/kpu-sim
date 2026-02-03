@@ -208,7 +208,7 @@ void CompileContext::emit_op(const ScheduleOp& op) {
         bops.src_l3_tile_id = loc_wb.l2_bank_id;  // src is L2
         bops.src_offset = 0;
         bops.dst_l2_bank_id = loc_wb.l3_tile_id;  // dst is L3
-        bops.dst_offset = 0;
+        bops.dst_offset = loc_wb.address;  // Use same offset as DMA_STORE will read from
         bops.height = rows;
         bops.width = cols;
         bops.element_size = es;
@@ -306,7 +306,8 @@ void CompileContext::emit_op(const ScheduleOp& op) {
         Size Ti = sched.get_tile("ti"); Size Tj = sched.get_tile("tj");
         Size rows = Ti ? Ti : 16; Size cols = Tj ? Tj : 16;
         auto loc_d = locate(MatrixID::C);
-        emit(DMInstruction::str_drain(tile, 0, loc_d.l2_bank_id, 0, 0, rows, cols, fs));
+        // str_drain(tile, l2_bank, l1_buf, l2_addr, l1_addr, height, width, fabric_size)
+        emit(DMInstruction::str_drain(tile, loc_d.l2_bank_id, 0, 0, 0, rows, cols, fs));
         break;
     }
 
@@ -314,7 +315,8 @@ void CompileContext::emit_op(const ScheduleOp& op) {
         Size Ti = sched.get_tile("ti"); Size Tj = sched.get_tile("tj");
         Size rows = Ti ? Ti : 16; Size cols = Tj ? Tj : 16;
         auto loc_df = locate(MatrixID::C);
-        emit(DMInstruction::str_drain(tile, 0, loc_df.l2_bank_id, 0, 0, rows, cols, fs,
+        // str_drain(tile, l2_bank, l1_buf, l2_addr, l1_addr, height, width, fabric_size, ...)
+        emit(DMInstruction::str_drain(tile, loc_df.l2_bank_id, 0, 0, 0, rows, cols, fs,
                                       true, op.activation, true, 0));
         break;
     }
@@ -325,7 +327,8 @@ void CompileContext::emit_op(const ScheduleOp& op) {
         Size rows = Tb ? Tb : (Ti ? Ti : 16);
         Size cols = Tj ? Tj : 16;
         auto loc_ds = locate(MatrixID::C);
-        auto instr = DMInstruction::str_drain(tile, 0, loc_ds.l2_bank_id, 0, 0, rows, cols, fs);
+        // str_drain(tile, l2_bank, l1_buf, l2_addr, l1_addr, height, width, fabric_size)
+        auto instr = DMInstruction::str_drain(tile, loc_ds.l2_bank_id, 0, 0, 0, rows, cols, fs);
         instr.label = "STR_DRAIN_TO_SCRATCH(" + op.scratch_name + ")";
         emit(instr);
         break;

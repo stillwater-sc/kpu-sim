@@ -48,3 +48,28 @@ add_test(NAME serialization_test COMMAND serialization_test)
 set_tests_properties(serialization_test PROPERTIES LABELS isa)
 
 set_target_properties(serialization_test PROPERTIES FOLDER "Tests/ISA")
+
+# Behavioral Program Executor: end-to-end DSL → execute → verify
+add_executable(test_behavioral_program_executor
+    test_behavioral_program_executor.cpp
+)
+
+target_include_directories(test_behavioral_program_executor PRIVATE
+    ${CMAKE_SOURCE_DIR}/include
+)
+
+target_link_libraries(test_behavioral_program_executor
+    PRIVATE
+    kpu_schedules
+    kpu_dsl
+    kpu_isa
+    kpu_components
+    kpu_trace
+)
+
+target_compile_features(test_behavioral_program_executor PUBLIC cxx_std_20)
+
+add_test(NAME test_behavioral_program_executor COMMAND test_behavioral_program_executor)
+set_tests_properties(test_behavioral_program_executor PROPERTIES LABELS "isa;behavioral")
+
+set_target_properties(test_behavioral_program_executor PROPERTIES FOLDER "Tests/ISA")
