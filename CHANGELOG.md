@@ -8,6 +8,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **BehavioralProgramExecutor** (`src/software/isa/behavioral_program_executor.cpp`)
+  - Interprets DMProgram instruction streams using temporal memory components
+  - Executes DMA, BlockMover, and Streamer operations as instant memcpy
+  - Triple-loop matmul computation when A and B tiles arrive at L1
+  - Strided DMA transfers for row-major tiled matrix layouts
+  - Statistics tracking: instructions, loads, stores, computes, bytes transferred
+
+- **End-to-End Matmul Correctness Tests** (`tests/isa/test_behavioral_program_executor.cpp`)
+  - Single-tile matmul (16×16×16)
+  - Multi-tile matmul (64×64×64 with 16×16×16 tiles)
+  - Identity matmul (C = I × A = A)
+  - Reference matmul against naive triple-loop
+  - Execution statistics verification
+
+- **Fidelity Elevation Gap Assessment** (`docs/07-fidelity-elevation/gap-assessment.md`)
+  - Analysis of behavioral/transactional/cycle-accurate tier gaps
+  - Three-phase implementation plan for fidelity elevation
+
 - **Kernel Verification Harnesses — Phase 1** (`verification/kernels/`)
   - `class0_elementwise/verify_elementwise.py` — 12 elementwise ops (relu, gelu, silu,
     sigmoid, tanh, exp, log, sqrt, softmax, neg, add, mul) tested across 4 shape sweeps
@@ -18,6 +36,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `class1_dense_linear/verify_fused_ops.py` — 4 fusion patterns (matmul+relu,
     matmul+bias+relu, matmul+bias+gelu, matmul+bias+silu) across 3 sizes
     (12 test cases, all PASS)
+
+### Fixed
+- **Schedule Compiler WRITEBACK offset** (`src/dsl/schedule_compiler.cpp`)
+  - BM_WRITEBACK now uses `loc.address` from TileLayout instead of hardcoded 0
+  - Fixes data loss when writing C tiles back to L3
+
+- **Schedule Compiler str_drain argument order** (`src/dsl/schedule_compiler.cpp`)
+  - Corrected parameter order: `str_drain(tile, l2_bank, l1_buf, ...)`
+  - All three drain variants (DRAIN, DRAIN_FUSED, DRAIN_TO_SCRATCH) fixed
 
 ### Changed
 - **TAXONOMY.md** — Updated Phase 1 roadmap to reflect Class 0 and Class 1 kernel
