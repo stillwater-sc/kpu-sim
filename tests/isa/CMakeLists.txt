@@ -98,3 +98,28 @@ add_test(NAME test_transactional_program_executor COMMAND test_transactional_pro
 set_tests_properties(test_transactional_program_executor PROPERTIES LABELS "isa;transactional")
 
 set_target_properties(test_transactional_program_executor PROPERTIES FOLDER "Tests/ISA")
+
+# Program Executor Interface: fidelity switching tests
+add_executable(test_program_executor_interface
+    test_program_executor_interface.cpp
+)
+
+target_include_directories(test_program_executor_interface PRIVATE
+    ${CMAKE_SOURCE_DIR}/include
+)
+
+target_link_libraries(test_program_executor_interface
+    PRIVATE
+    kpu_schedules
+    kpu_dsl
+    kpu_isa
+    kpu_components
+    kpu_trace
+)
+
+target_compile_features(test_program_executor_interface PUBLIC cxx_std_20)
+
+add_test(NAME test_program_executor_interface COMMAND test_program_executor_interface)
+set_tests_properties(test_program_executor_interface PROPERTIES LABELS "isa;interface")
+
+set_target_properties(test_program_executor_interface PROPERTIES FOLDER "Tests/ISA")

@@ -1,9 +1,9 @@
-# Transactional Program Executor — Phase 2 Fidelity Elevation
+# Fidelity Elevation — Phases 2 & 3 Complete
 
 **Date:** 2026-02-03
 **Version:** v0.8.x
 **Status:** Complete
-**Tests:** 78/78 passing (27 new tests)
+**Tests:** 79/79 passing (47 new tests)
 
 ## 1. Summary
 
@@ -144,9 +144,58 @@ The test suite covers:
 | Config | 1 | Different bus widths → different cycles |
 | Identity | 1 | C = I × B = B verification |
 
-## 10. Next Steps
+## 10. Phase 3: Fidelity Switching Interface
 
-- **Phase 3: Integration** — Connect TransactionalProgramExecutor to Python runtime
-- **Optional: OFG Executor Wiring** — Add behavioral callbacks to DMA/BM/STR
-  flow executors for more integrated timing (lower priority)
-- **Expand Timing Models** — Add compute timing for matmul operations
+After Phase 2, implemented the unified interface for fidelity switching.
+
+### Phase 3 Scope
+
+| Feature | Status | Tests |
+|---------|--------|-------|
+| IProgramExecutor interface | DONE | N/A |
+| Factory function `create_program_executor()` | DONE | N/A |
+| BehavioralExecutorWrapper | DONE | N/A |
+| TransactionalExecutorWrapper | DONE | N/A |
+| Fidelity switching tests | DONE | 20/20 PASS |
+| Full regression | DONE | 79/79 PASS |
+
+### Phase 3 Files
+
+| File | Action |
+|------|--------|
+| `include/sw/kpu/isa/program_executor_interface.hpp` | CREATE |
+| `src/software/isa/program_executor_interface.cpp` | CREATE |
+| `tests/isa/test_program_executor_interface.cpp` | CREATE |
+| `src/software/isa/CMakeLists.txt` | MODIFY |
+| `tests/isa/CMakeLists.txt` | MODIFY |
+| `CHANGELOG.md` | UPDATE |
+
+### Usage Example
+
+```cpp
+// Create executor with desired fidelity
+auto exec = create_program_executor(SimulationFidelity::TRANSACTIONAL, hw);
+
+// Load and run program
+exec->load_program(prog, a_base, b_base, c_base);
+exec->run();
+
+// Get results (both fidelities produce correct C = A × B)
+std::vector<float> result(M * N);
+hw.external_memory.read(c_base, result.data(), result.size() * sizeof(float));
+
+// Transactional-only: get timing and export trace
+if (exec->fidelity() == SimulationFidelity::TRANSACTIONAL) {
+    std::cout << "Cycles: " << exec->total_cycles() << "\n";
+    exec->export_trace("matmul_trace.json");
+}
+
+// Get statistics
+std::cout << exec->statistics_string();
+```
+
+## 11. Next Steps
+
+- **Python Integration** — Expose IProgramExecutor to Python via pybind11
+- **Compute Timing** — Add systolic array timing model to TransactionalProgramExecutor
+- **Conv2D/Softmax Schedules** — Extend DSL for additional kernel types

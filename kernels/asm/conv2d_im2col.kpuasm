@@ -1,0 +1,77 @@
+; conv2d_im2col.kpuasm
+; 2D Convolution using im2col + matmul
+;
+; Input:  [1, 4, 8, 8]   N=1, Ci=4, H=8, W=8
+; Weight: [8, 4, 3, 3]   Co=8, Ci=4, Kh=3, Kw=3
+; Output: [1, 8, 6, 6]   N=1, Co=8, Oh=6, Ow=6
+;
+; Im2col lowering:
+;   A_col[36, 36] = im2col(input)    36 = 6*6 spatial, 36 = 4*3*3 receptive
+;   B_w  [36, 8]  = reshape(weights) 36 = Ci*Kh*Kw, 8 = Co
+;   C_out[36, 8]  = A_col x B_w
+;
+; For simplicity, we use a single tile covering the entire matrices.
+; Real implementations would tile for larger convolutions.
+;
+; Memory layout:
+;   A_col[36,36]: 36*36*4 = 5184 bytes at 0x0000
+;   B_w[36,8]:    36*8*4  = 1152 bytes at 0x1500
+;   C_out[36,8]:  36*8*4  = 1152 bytes at 0x1A00
+
+.name "conv2d_im2col_simple"
+.version 1
+.dimensions M=36, N=8, K=36
+.tiling Ti=36, Tj=8, Tk=36
+.l1_ki 36
+.dataflow output_stationary
+
+.a_base 0x0000
+.b_base 0x1500
+.c_base 0x1A00
+
+; ============================================================
+; Load im2col patches (A) and weight matrix (B)
+; In a full implementation, DMA_LOAD_GATHER would perform im2col
+; during the load. Here we assume pre-transformed data.
+; Note: Addresses are OFFSETS within the matrix, not absolute.
+; ============================================================
+load_tiles:
+    ; Load A_col: im2col patches (36 x 36 = 1296 elements = 5184 bytes)
+    DMA_LOAD_TILE A, (0,0,0), 0, 0, 0, 5184, BUF_0
+    ; Load B_w: weight matrix (36 x 8 = 288 elements = 1152 bytes)
+    DMA_LOAD_TILE B, (0,0,0), 0, 1, 0, 1152, BUF_0
+    BARRIER
+
+; ============================================================
+; Move to L2
+; ============================================================
+move_to_l2:
+    BM_MOVE_TILE A, (0,0,0), 0, 0, 0, 0, 36, 36, 4, BUF_0
+    BM_MOVE_TILE B, (0,0,0), 1, 0, 1, 0, 36, 8, 4, BUF_0
+    BARRIER
+
+; ============================================================
+; Stream and compute
+; ============================================================
+stream_compute:
+    STR_FEED_ROWS A, (0,0,0), 0, 0, 0, 0, 36, 36, 16, BUF_0
+    STR_FEED_COLS B, (0,0,0), 1, 0, 0, 0, 36, 8, 16, BUF_0
+    BARRIER
+
+; ============================================================
+; Drain output with fused ReLU activation via Vector Engine
+; ============================================================
+drain_with_relu:
+    STR_DRAIN_OUTPUT (0,0,0), 2, 0, 0, 0, 36, 8, 16, BUF_0, VE_ENABLE RELU
+    BARRIER
+
+; ============================================================
+; Writeback to L3 and store to external memory
+; ============================================================
+store_output:
+    BM_WRITEBACK_TILE C, (0,0,0), 2, 0, 2, 0, 36, 8, 4, BUF_0
+    BARRIER
+    DMA_STORE_TILE C, (0,0,0), 0, 2, 0, 1152, BUF_0
+    BARRIER
+
+HALT

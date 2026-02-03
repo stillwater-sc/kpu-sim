@@ -9,6 +9,8 @@ kpu_add_tool(assembler
     DESCRIPTION "KPU assembly language assembler"
     SOURCES
         kpu-assembler/assembler.cpp
+    LIBS
+        kpu_isa
 )
 
 # KPU Debugger

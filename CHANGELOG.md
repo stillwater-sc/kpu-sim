@@ -8,6 +8,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **KPU Assembler** (`include/sw/kpu/isa/assembler.hpp`, `src/software/isa/assembler.cpp`)
+  - Full lexer and parser for KPUASM assembly language
+  - Supports all DMOpcode instructions (DMA, BlockMover, Streamer, Sync, Config)
+  - Directives: `.name`, `.version`, `.dimensions`, `.tiling`, `.l1_ki`, `.dataflow`, `.a_base`, `.b_base`, `.c_base`
+  - Labels, comments (`;` and `#`), tile coordinates `(ti,tj,tk)`, buffer slots
+  - Assembles to DMProgram, serializes to `.kpubin` binary format via ProgramSerializer
+
+- **KPU Assembler Tool** (`tools/development/kpu-assembler/assembler.cpp`)
+  - Command-line assembler: `kpu-assembler input.kpuasm -o output.kpubin`
+  - Options: `--format json`, `--print`, `--stats`, `-h/--help`
+  - Error reporting with filename, line number, and message
+
+- **KPU Loader Tool** (`tools/runtime/kpu-loader/main.cpp`)
+  - Loads `.kpubin` or `.kpujson` programs and executes on simulator
+  - Fidelity switching: `--fidelity behavioral` or `--fidelity transactional`
+  - Input/output tensor files: `--input-a`, `--input-b`, `--output-c`
+  - Trace export: `--trace trace.json` (transactional only)
+  - Options: `--dry-run`, `--stats`, `-v/--verbose`
+
+- **Assembly Kernel Examples** (`kernels/asm/`)
+  - `matmul_16x16x16.kpuasm` — Single-tile output-stationary matmul
+  - `conv2d_im2col.kpuasm` — Conv2D via im2col + matmul with fused ReLU
+  - `softmax_batch.kpuasm` — Multi-pass softmax using Vector Engine ops
+
+- **KPUASM Specification** (`docs/kpuasm-specification.md`)
+  - Complete assembly language reference
+  - Syntax: directives, opcodes, operand formats
+  - Example programs with annotations
+
+- **IProgramExecutor Interface** (`include/sw/kpu/isa/program_executor_interface.hpp`)
+  - Phase 3 of fidelity elevation: unified interface for fidelity switching
+  - `create_program_executor(fidelity, hw)` factory function
+  - Supports BEHAVIORAL and TRANSACTIONAL fidelity levels
+  - Common interface: `load_program()`, `run()`, `total_cycles()`, `export_trace()`
+  - 20 tests for factory, correctness, and fidelity switching
+
 - **TransactionalProgramExecutor** (`src/software/isa/transactional_program_executor.cpp`)
   - Phase 2 of fidelity elevation: behavioral correctness + timing overlay
   - Wraps BehavioralProgramExecutor for functional execution (real data movement)

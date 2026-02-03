@@ -7,10 +7,12 @@ add_library(kpu_isa STATIC
     program_executor.cpp
     behavioral_program_executor.cpp
     transactional_program_executor.cpp
+    program_executor_interface.cpp
     concurrent_executor.cpp
     tile_layout.cpp
     tile_cache.cpp
     program_serializer.cpp
+    assembler.cpp
 )
 
 target_include_directories(kpu_isa PUBLIC

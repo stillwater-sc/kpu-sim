@@ -1,0 +1,93 @@
+; softmax_batch.kpuasm
+; Softmax over last dimension: y[b,i] = exp(x[b,i] - max_b) / sum_b
+;
+; Input:  X[4, 16]  B=4 batch, D=16 dimension
+; Output: Y[4, 16]
+;
+; This is a 3-pass reduction kernel using the Vector Engine (VE):
+;   Pass 1: Find max per row (reduction over D)
+;   Pass 2: Compute exp(x - max) (elementwise over D)
+;   Pass 3: Sum and divide (reduction then elementwise)
+;
+; Memory layout:
+;   X[4,16]:    4*16*4 = 256 bytes at 0x0000
+;   Y[4,16]:    4*16*4 = 256 bytes at 0x0100
+;   max[4]:     4*4    = 16 bytes at 0x0200 (scratch)
+;   sum[4]:     4*4    = 16 bytes at 0x0210 (scratch)
+;   exp_buf[4,16]: 256 bytes at 0x0220 (scratch)
+;
+; Note: This kernel uses VE_REDUCE and VE_ELEMENTWISE opcodes
+; which operate on L1 data via the Vector Engine rather than
+; the systolic array.
+
+.name "softmax_batch_4x16"
+.version 1
+.dimensions M=4, N=16, K=1
+.tiling Ti=4, Tj=16, Tk=1
+.l1_ki 16
+.dataflow output_stationary
+
+.a_base 0x0000
+.b_base 0x0000
+.c_base 0x0100
+
+; ============================================================
+; Load input X to L3
+; Note: Addresses are OFFSETS within the matrix, not absolute.
+; ============================================================
+load_input:
+    DMA_LOAD_TILE A, (0,0,0), 0, 0, 0, 256, BUF_0
+    BARRIER
+
+; ============================================================
+; Move X to L2
+; ============================================================
+move_to_l2:
+    BM_MOVE_TILE A, (0,0,0), 0, 0, 0, 0, 4, 16, 4, BUF_0
+    BARRIER
+
+; ============================================================
+; PASS 1: Find max per row
+; Stream X to L1, apply MAX reduction, write max values to scratch
+; ============================================================
+pass1_max:
+    STR_FEED_ROWS A, (0,0,0), 0, 0, 0, 0, 4, 16, 16, BUF_0
+    VE_REDUCE MAX
+    ; max values now in L1 scratch
+    BARRIER
+
+; ============================================================
+; PASS 2: Compute exp(x - max)
+; Broadcast max to all positions, subtract, exponentiate
+; ============================================================
+pass2_exp:
+    ; Re-stream X for subtraction
+    STR_FEED_ROWS A, (0,0,0), 0, 0, 0, 0, 4, 16, 16, BUF_0
+    VE_ELEMENTWISE SUB
+    VE_ELEMENTWISE EXP
+    ; exp values now in L2 (exp_buf)
+    BARRIER
+
+; ============================================================
+; PASS 3: Sum reduction and final division
+; ============================================================
+pass3_sum_div:
+    ; Reduce exp values to get sum per row
+    VE_REDUCE SUM
+    BARRIER
+    ; Divide exp values by sum
+    VE_ELEMENTWISE DIV
+    BARRIER
+
+; ============================================================
+; Drain final result Y to L2, L3, external memory
+; ============================================================
+store_output:
+    STR_DRAIN_OUTPUT (0,0,0), 1, 0, 0, 0, 4, 16, 16, BUF_0
+    BARRIER
+    BM_WRITEBACK_TILE C, (0,0,0), 1, 0, 1, 0, 4, 16, 4, BUF_0
+    BARRIER
+    DMA_STORE_TILE C, (0,0,0), 0, 1, 0, 256, BUF_0
+    BARRIER
+
+HALT
