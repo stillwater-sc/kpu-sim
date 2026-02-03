@@ -73,3 +73,28 @@ add_test(NAME test_behavioral_program_executor COMMAND test_behavioral_program_e
 set_tests_properties(test_behavioral_program_executor PROPERTIES LABELS "isa;behavioral")
 
 set_target_properties(test_behavioral_program_executor PROPERTIES FOLDER "Tests/ISA")
+
+# Transactional Program Executor: behavioral + timing overlay
+add_executable(test_transactional_program_executor
+    test_transactional_program_executor.cpp
+)
+
+target_include_directories(test_transactional_program_executor PRIVATE
+    ${CMAKE_SOURCE_DIR}/include
+)
+
+target_link_libraries(test_transactional_program_executor
+    PRIVATE
+    kpu_schedules
+    kpu_dsl
+    kpu_isa
+    kpu_components
+    kpu_trace
+)
+
+target_compile_features(test_transactional_program_executor PUBLIC cxx_std_20)
+
+add_test(NAME test_transactional_program_executor COMMAND test_transactional_program_executor)
+set_tests_properties(test_transactional_program_executor PROPERTIES LABELS "isa;transactional")
+
+set_target_properties(test_transactional_program_executor PROPERTIES FOLDER "Tests/ISA")
