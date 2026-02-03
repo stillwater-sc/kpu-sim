@@ -82,6 +82,18 @@ enum class DMOpcode : uint8_t {
     LOOP_BEGIN,             // Start hardware loop
     LOOP_END,               // End hardware loop
 
+    // DMA Gather/Scatter (for im2col and non-contiguous layouts)
+    DMA_LOAD_GATHER,        // Strided gather from external memory to L3
+    DMA_STORE_SCATTER,      // Strided scatter from L3 to external memory
+
+    // Vector Engine operations (via Streamer datapath)
+    VE_ELEMENTWISE,         // Elementwise op on L1 data (SUB, EXP, DIV, etc.)
+    VE_REDUCE,              // Reduction op on L1 data (MAX, SUM)
+
+    // L2 scratch management
+    L2_SCRATCH_WRITE,       // Write scalar/vector to L2 scratch region
+    L2_SCRATCH_READ,        // Read scalar/vector from L2 scratch region
+
     // NOP and special
     NOP,                    // No operation
     HALT                    // End of program

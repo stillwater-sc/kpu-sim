@@ -23,5 +23,11 @@ add_subdirectory(software)
 # System integration
 add_subdirectory(system)
 
+# Schedule DSL
+add_subdirectory(dsl)
+
+# Prototypical kernel schedules
+add_subdirectory(schedules)
+
 # Development tools
 add_subdirectory(tools)

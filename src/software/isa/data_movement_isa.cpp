@@ -282,7 +282,9 @@ size_t DMProgram::num_dma_ops() const {
     for (const auto& instr : instructions) {
         if (instr.opcode == DMOpcode::DMA_LOAD_TILE ||
             instr.opcode == DMOpcode::DMA_STORE_TILE ||
-            instr.opcode == DMOpcode::DMA_PREFETCH_TILE) {
+            instr.opcode == DMOpcode::DMA_PREFETCH_TILE ||
+            instr.opcode == DMOpcode::DMA_LOAD_GATHER ||
+            instr.opcode == DMOpcode::DMA_STORE_SCATTER) {
             ++count;
         }
     }

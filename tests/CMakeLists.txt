@@ -64,6 +64,7 @@ add_subdirectory(xue)
 add_subdirectory(stats)
 add_subdirectory(validation)
 add_subdirectory(quantization)
+add_subdirectory(dsl)
 
 # Legacy test (in this directory)
 kpu_add_component_test(legacy_test_main "legacy" test_main.cpp)
