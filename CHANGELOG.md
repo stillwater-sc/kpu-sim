@@ -8,6 +8,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **TransactionalProgramExecutor** (`src/software/isa/transactional_program_executor.cpp`)
+  - Phase 2 of fidelity elevation: behavioral correctness + timing overlay
+  - Wraps BehavioralProgramExecutor for functional execution (real data movement)
+  - Analytical timing models for DMA, BlockMover, Streamer operations
+  - ResourceTimeline class tracks per-resource availability and makespan
+  - TimingConfig with clock frequencies, bus widths, startup latencies
+  - Chrome Trace export for Perfetto visualization
+  - ASCII timeline generation for terminal output
+  - 27 tests covering correctness, timing, and export functionality
+
 - **BehavioralProgramExecutor** (`src/software/isa/behavioral_program_executor.cpp`)
   - Interprets DMProgram instruction streams using temporal memory components
   - Executes DMA, BlockMover, and Streamer operations as instant memcpy
