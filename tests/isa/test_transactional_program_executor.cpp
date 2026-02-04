@@ -305,7 +305,7 @@ void test_export_chrome_trace() {
     exec.load_program(prog, a_base, b_base, c_base);
     exec.run();
 
-    std::string trace_file = "/tmp/test_transactional_trace.json";
+    std::string trace_file = (std::filesystem::temp_directory_path() / "test_transactional_trace.json").string();
     exec.export_chrome_trace(trace_file);
 
     check(std::filesystem::exists(trace_file), "Trace file created");

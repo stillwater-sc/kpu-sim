@@ -15,6 +15,7 @@
 
 #include <iostream>
 #include <cmath>
+#include <filesystem>
 
 using namespace sw::kpu;
 using namespace sw::kpu::isa;
@@ -274,7 +275,7 @@ void test_export_trace() {
         exec->load_program(prog, a_base, b_base, c_base);
         exec->run();
 
-        bool exported = exec->export_trace("/tmp/behavioral_trace.json");
+        bool exported = exec->export_trace((std::filesystem::temp_directory_path() / "behavioral_trace.json").string());
         check(!exported, "Behavioral export_trace returns false");
     }
 
@@ -284,7 +285,7 @@ void test_export_trace() {
         exec->load_program(prog, a_base, b_base, c_base);
         exec->run();
 
-        bool exported = exec->export_trace("/tmp/transactional_trace.json");
+        bool exported = exec->export_trace((std::filesystem::temp_directory_path() / "transactional_trace.json").string());
         check(exported, "Transactional export_trace returns true");
     }
 }
