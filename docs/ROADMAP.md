@@ -47,12 +47,12 @@ Released: 2026-01-22
 ## Roadmap Overview
 
 ```
-v0.2.0 ──→ v0.3.0 ──→ v0.4.0 ──→ v0.5.0 ──→ v0.6.0 ──→ v0.7.0 ──→ v0.8.0 ──→ v1.0.0
-  │          │          │          │          │          │          │          │
-  │          │          │          │          │          │          │          │
-Current   Bench-    TRANS-     Add'l     Kernel    Quant-    Model     Prod
-          marking   ACTIONAL   Kernels   Fusion    ization   Level     Ready
-                    Runtime    (C++)
+v0.2.0 ──→ v0.3.0 ──→ v0.4.0 ──→ v0.5.0 ──→ v0.6.0 ──→ v0.7.0 ──→ v0.8.0 ──→ v0.9.0 ──→ v1.0.0
+  │          │          │          │          │          │          │          │          │
+  │          │          │          │          │          │          │          │          │
+Current   Bench-    TRANS-     Add'l     Kernel    Quant-    Model     CSP       Prod
+          marking   ACTIONAL   Kernels   Fusion    ization   Level     Timing    Ready
+                    Runtime    (C++)                                   Model
 ```
 
 ---
@@ -377,6 +377,61 @@ src/compiler/
 
 ---
 
+## v0.9.0 - Concurrent Timing Model (CSP Architecture)
+
+**Priority:** CRITICAL PATH TO v1.0.0
+**Effort:** 6-8 weeks
+**Theme:** True dataflow concurrency for accurate timing simulation
+
+### Problem
+
+The current transactional timing model processes instructions sequentially,
+missing the natural concurrency of the KPU's credit-based dataflow. This
+results in **4-8x overestimation** of execution time.
+
+### Solution
+
+Transform timing model to use Communicating Sequential Processes (CSP):
+- DMA, BlockMover, Streamer as concurrent processes
+- Credit-based flow control (not barriers)
+- Tag CAM matching for data availability
+- Work-conserving scheduling (no head-of-line blocking)
+- Livelock prevention mechanisms
+
+### Features
+
+| SEMVER | Feature | Description |
+|--------|---------|-------------|
+| v0.9.0 | CreditPool | Buffer availability tracking |
+| v0.9.1 | TagCAM | Hardware tile matching |
+| v0.9.2 | DMAEngineProcess | Concurrent DMA with queue depth |
+| v0.9.3 | BlockMoverProcess | L3→L2 with credit/tag sync |
+| v0.9.4 | StreamerProcess | L2→L1 with credit/tag sync |
+| v0.9.5 | ConcurrentTimingExecutor | Discrete event simulation |
+| v0.9.6 | Livelock Prevention | Work-conserving, partitioned credits |
+| v0.9.7 | Validation Suite | Analytical model comparison |
+
+### Success Criteria
+
+- [ ] Same functional results as v0.8.x (100% match)
+- [ ] Timing within ±10% of analytical model
+- [ ] DMA channel utilization >80%
+- [ ] No livelock in any test case
+- [ ] Simulation speed >1M cycles/sec
+
+### Detailed Plan
+
+See `docs/plans/v0.9_concurrent_timing_roadmap.md` for:
+- 40 detailed tasks across 4 phases
+- Review gates (G1-G6)
+- Risk register
+- Testing strategy
+- Accountability structure
+
+### Tag: `v0.9.0-concurrent-timing`
+
+---
+
 ## v1.0.0 - Production Ready
 
 **Priority:** HIGH (milestone)
@@ -384,7 +439,7 @@ src/compiler/
 
 ### Requirements for 1.0
 
-- [ ] All v0.x features stable
+- [ ] All v0.x features stable (including v0.9.0 concurrent timing)
 - [ ] CYCLE_ACCURATE mode fully functional
 - [ ] Documentation complete
 - [ ] API stability guaranteed
