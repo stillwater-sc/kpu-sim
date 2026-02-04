@@ -888,3 +888,303 @@ The concurrent model should show:
 - BlockMovers overlapped with DMA (pipelining)
 - Streamers overlapped with BlockMovers
 - Compute overlapped with all of the above
+
+## Livelock Prevention
+
+### Problem Analysis
+
+With credits flowing upstream and data flowing downstream, several livelock
+scenarios can occur:
+
+**Scenario 1: Credit Exhaustion with Wrong Tiles**
+```
+L3 Buffers: [A[0,1], A[0,2], A[0,3], B[0,1], ...] (all 32 full)
+BlockMover waiting for: A[0,0] (not loaded yet!)
+DMA waiting for: L3 credit (none available)
+→ LIVELOCK: Can't load the tile we need because buffers full of "future" tiles
+```
+
+**Scenario 2: Circular Dependency**
+```
+DMA → needs L3 credit → held by tile waiting for BM
+BM  → needs L2 credit → held by tile waiting for STR
+STR → waiting for tile X → can't be loaded (no L3 credit)
+→ LIVELOCK: Circular wait across the pipeline
+```
+
+**Scenario 3: Head-of-Line Blocking**
+```
+BM queue: [A[0,0], A[0,1], A[0,2], ...]
+L3 TagCAM: {A[0,2], A[0,1]} (arrived out of order)
+BM waiting for A[0,0] at head of queue
+A[0,0] still in DRAM (slow bank access)
+→ Tiles behind A[0,0] can't progress even though they're ready
+```
+
+### Solution: Work-Conserving Design
+
+The key insight is that **the hardware doesn't enforce ordering** - only data
+availability matters. The schedule implies an ordering for correctness, but the
+hardware should be **work-conserving**: process any ready work, not just the
+"expected" next item.
+
+#### Principle 1: Process Any Ready Tile (Not Just Head of Queue)
+
+```cpp
+class BlockMoverProcess {
+    std::vector<TimingEvent> tick(Cycle current_cycle) {
+        // DON'T just check queue front:
+        // if (l3_tag_cam.lookup(move_queue_.peek().tile_id)) { ... }
+
+        // DO scan entire queue for any ready tile:
+        for (size_t i = 0; i < move_queue_.size(); ++i) {
+            const auto& tile = move_queue_.at(i);
+            if (l3_tag_cam_.lookup(tile.tile_id) && l2_credits_.acquire()) {
+                move_queue_.remove(i);  // Remove from middle
+                start_transfer(tile);
+                break;
+            }
+        }
+    }
+};
+```
+
+This prevents head-of-line blocking: if A[0,0] is slow but A[0,1] is ready,
+process A[0,1] first.
+
+#### Principle 2: Partitioned Credit Pools
+
+Prevent one matrix from starving another by partitioning credits:
+
+```cpp
+struct PartitionedCredits {
+    CreditPool a_credits;  // Dedicated buffers for A tiles
+    CreditPool b_credits;  // Dedicated buffers for B tiles
+    CreditPool c_credits;  // Dedicated buffers for C tiles
+
+    // Configuration: 32 L3 buffers → 12 A, 12 B, 8 C
+    PartitionedCredits()
+        : a_credits(12), b_credits(12), c_credits(8) {}
+
+    CreditPool& for_matrix(MatrixID m) {
+        switch (m) {
+            case MatrixID::A: return a_credits;
+            case MatrixID::B: return b_credits;
+            case MatrixID::C: return c_credits;
+        }
+    }
+};
+```
+
+Now A tiles can never exhaust all buffers and starve B loads.
+
+#### Principle 3: Bounded Lookahead (Admission Control)
+
+Limit how far ahead any component can get:
+
+```cpp
+class DMAEngineProcess {
+    static constexpr size_t MAX_LOOKAHEAD = 4;  // Max tiles ahead of consumer
+
+    bool can_issue_load(const TileDescriptor& tile) {
+        // Check credit
+        if (!l3_credits_.for_matrix(tile.matrix).available())
+            return false;
+
+        // Check lookahead: how many tiles of this matrix are already in L3?
+        size_t in_flight = l3_tag_cam_.count_matrix(tile.matrix);
+        if (in_flight >= MAX_LOOKAHEAD)
+            return false;  // Too far ahead, let consumer catch up
+
+        return true;
+    }
+};
+```
+
+This prevents the "32 wrong tiles" scenario by limiting how many tiles can
+accumulate waiting for the consumer.
+
+#### Principle 4: Compute-Driven Demand (Pull Model)
+
+Instead of pushing tiles as fast as possible, let compute **pull** what it needs:
+
+```cpp
+class ComputeController {
+    // Compute needs A[ti,tk] and B[tk,tj] for current accumulation
+    TileID needed_a_;
+    TileID needed_b_;
+
+    void tick(Cycle current_cycle) {
+        // Check if both operands are ready
+        if (l2_tag_cam_.lookup(needed_a_) && l2_tag_cam_.lookup(needed_b_)) {
+            // Signal streamers to feed these specific tiles
+            row_streamer_.request_feed(needed_a_);
+            col_streamer_.request_feed(needed_b_);
+
+            // Advance to next accumulation
+            advance_to_next_tiles();
+        }
+    }
+};
+```
+
+This ensures we only pull tiles that compute actually needs, rather than
+speculatively filling buffers.
+
+#### Principle 5: Priority Aging
+
+Tiles that have been waiting longer get higher priority:
+
+```cpp
+struct PrioritizedTile {
+    TileDescriptor tile;
+    Cycle enqueue_cycle;  // When this entered the queue
+
+    // Priority increases with age
+    int priority(Cycle current_cycle) const {
+        return current_cycle - enqueue_cycle;
+    }
+};
+
+class BlockMoverProcess {
+    std::priority_queue<PrioritizedTile, /*...*/, AgePriority> move_queue_;
+
+    void tick(Cycle current_cycle) {
+        // Update priorities based on age
+        // Process highest priority tile that's ready
+        // This prevents starvation of old requests
+    }
+};
+```
+
+### Livelock Detection
+
+Even with prevention, we should detect if livelock occurs:
+
+```cpp
+class LivelockDetector {
+    static constexpr Cycle STALL_THRESHOLD = 1000;  // Cycles without progress
+
+    Cycle last_progress_cycle_ = 0;
+    size_t last_tiles_completed_ = 0;
+
+    void check(Cycle current_cycle, size_t tiles_completed) {
+        if (tiles_completed > last_tiles_completed_) {
+            // Progress made
+            last_progress_cycle_ = current_cycle;
+            last_tiles_completed_ = tiles_completed;
+        } else if (current_cycle - last_progress_cycle_ > STALL_THRESHOLD) {
+            // No progress for too long
+            report_potential_livelock(current_cycle);
+            dump_system_state();  // Credit counts, queue contents, tag CAM state
+        }
+    }
+};
+```
+
+### Credit Reservation Protocol
+
+For guaranteed forward progress, use **two-phase credit reservation**:
+
+```cpp
+class CreditPool {
+    size_t available_;
+    size_t reserved_;  // Committed but not yet used
+
+    // Phase 1: Reserve (tentative)
+    bool reserve() {
+        if (available_ > reserved_) {
+            reserved_++;
+            return true;
+        }
+        return false;
+    }
+
+    // Phase 2: Commit (after data ready)
+    void commit() {
+        assert(reserved_ > 0);
+        reserved_--;
+        available_--;
+    }
+
+    // Cancel reservation if can't proceed
+    void cancel_reservation() {
+        assert(reserved_ > 0);
+        reserved_--;
+    }
+
+    void release() {
+        available_++;
+    }
+};
+```
+
+This allows a component to check if it CAN proceed before committing,
+and back out if other dependencies aren't met.
+
+### Complete Livelock-Free Protocol
+
+```
+DMA Load Protocol:
+1. Check L3 credit available for this matrix
+2. Check lookahead limit not exceeded
+3. If both OK: acquire credit, issue load
+4. On completion: insert into L3 TagCAM
+
+BlockMover Protocol:
+1. Scan queue for ANY tile with L3 TagCAM match
+2. If found: try to acquire L2 credit
+3. If credit OK: start transfer
+4. On completion: remove from L3 TagCAM, insert into L2 TagCAM, release L3 credit
+
+Streamer Protocol:
+1. Wait for compute to request specific tile
+2. Check L2 TagCAM for requested tile
+3. If found: start stream
+4. On completion: remove from L2 TagCAM, release L2 credit, trigger compute
+
+Compute Protocol:
+1. Determine next needed tiles (A[ti,tk], B[tk,tj])
+2. Request from streamers
+3. When both arrive: fire matmul, advance to next k
+4. When k exhausted: drain accumulator, advance to next (ti,tj)
+```
+
+### Invariants to Verify
+
+```cpp
+void verify_no_livelock_conditions() {
+    // Invariant 1: No circular credit dependency
+    assert(!(l3_full() && l2_full() && all_bm_waiting_for_l2_credit()));
+
+    // Invariant 2: At least one component making progress
+    assert(dma_progressing() || bm_progressing() ||
+           str_progressing() || compute_progressing());
+
+    // Invariant 3: Bounded queue depths
+    assert(l3_tag_cam_.size() <= MAX_L3_TILES);
+    assert(l2_tag_cam_.size() <= MAX_L2_TILES);
+
+    // Invariant 4: No tile stuck longer than threshold
+    for (const auto& entry : l3_tag_cam_) {
+        assert(current_cycle_ - entry.arrival_cycle < TILE_STUCK_THRESHOLD);
+    }
+}
+```
+
+### Summary: Livelock Prevention Strategy
+
+| Mechanism | Prevents |
+|-----------|----------|
+| Work-conserving (any ready tile) | Head-of-line blocking |
+| Partitioned credits (per matrix) | Cross-matrix starvation |
+| Bounded lookahead | Buffer exhaustion |
+| Compute-driven pull | Speculative over-fetching |
+| Priority aging | Indefinite starvation |
+| Two-phase reservation | Commit without resources |
+| Livelock detection | Silent hangs |
+
+With these mechanisms, the system guarantees forward progress as long as:
+1. The schedule is valid (no impossible dependencies)
+2. Credit pools are sized to cover pipeline depth
+3. Work queues are finite and bounded
