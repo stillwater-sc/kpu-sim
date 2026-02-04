@@ -34,8 +34,10 @@
 #include <chrono>
 #include <fstream>
 #include <functional>
+#include <map>
 #include <memory>
 #include <string>
+#include <tuple>
 #include <vector>
 
 namespace sw::kpu::isa {
@@ -285,6 +287,30 @@ private:
 
     // Loop state for timing computation (separate from behavioral)
     LoopState timing_loop_state_;
+
+    // Tile arrival tracking - when does each tile arrive at each memory level
+    // Key: (MatrixID, ti, tj, tk) -> Cycle when tile arrives
+    using TileKey = std::tuple<MatrixID, Size, Size, Size>;
+    std::map<TileKey, Cycle> tile_at_l3_;  // After DMA load completes
+    std::map<TileKey, Cycle> tile_at_l2_;  // After BlockMover completes
+
+    // Tile key helper
+    TileKey make_tile_key(MatrixID matrix, const TileCoord& tile) const {
+        return {matrix, tile.ti, tile.tj, tile.tk};
+    }
+
+    // Get when a tile arrives at a memory level (0 if not yet loaded)
+    Cycle tile_l3_arrival(MatrixID matrix, const TileCoord& tile) const {
+        auto key = make_tile_key(matrix, tile);
+        auto it = tile_at_l3_.find(key);
+        return (it != tile_at_l3_.end()) ? it->second : 0;
+    }
+
+    Cycle tile_l2_arrival(MatrixID matrix, const TileCoord& tile) const {
+        auto key = make_tile_key(matrix, tile);
+        auto it = tile_at_l2_.find(key);
+        return (it != tile_at_l2_.end()) ? it->second : 0;
+    }
 
     // Dispatch with timing
     void dispatch_with_timing(const DMInstruction& instr);

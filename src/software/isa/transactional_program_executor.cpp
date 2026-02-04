@@ -162,6 +162,10 @@ void TransactionalProgramExecutor::load_program(const DMProgram& program,
     total_loop_iterations_ = 0;
     timing_loop_state_.reset();
 
+    // Reset tile arrival tracking
+    tile_at_l3_.clear();
+    tile_at_l2_.clear();
+
     // Extract tile dimensions from program
     if (program.Ti > 0) tile_rows_ = program.Ti;
     if (program.Tj > 0) tile_cols_ = program.Tj;
@@ -275,6 +279,8 @@ void TransactionalProgramExecutor::dispatch_with_timing(
         category = "dma";
         total_dma_cycles_ += duration;
         current_cycle_ = end;
+        // Record tile arrival at L3 - tile is available after DMA completes
+        tile_at_l3_[make_tile_key(matrix, tile)] = end;
         break;
     }
 
@@ -303,28 +309,41 @@ void TransactionalProgramExecutor::dispatch_with_timing(
         Size bytes = get_tile_bytes(instr);
         duration = compute_block_mover_cycles(bytes);
         uint8_t bm_id = select_block_mover(matrix, tile);
-        start_cycle = std::max(last_barrier_cycle_, timeline_.block_mover_available(bm_id));
+        // Wait for: barrier, resource available, AND tile to be in L3
+        Cycle tile_ready = tile_l3_arrival(matrix, tile);
+        start_cycle = std::max({last_barrier_cycle_,
+                                timeline_.block_mover_available(bm_id),
+                                tile_ready});
         Cycle end = timeline_.schedule_block_mover(bm_id, start_cycle, duration);
         resource_id = 100 + bm_id;  // Offset for trace thread ID
         category = "block_mover";
         total_bm_cycles_ += duration;
         current_cycle_ = end;
+        // Record tile arrival at L2 - tile is available after BlockMover completes
+        tile_at_l2_[make_tile_key(matrix, tile)] = end;
         break;
     }
 
     case DMOpcode::BM_WRITEBACK_TILE: {
+        // Writeback goes L2 -> L3, so depends on tile being in L2
         const auto& ops = std::get<BlockMoverOperands>(instr.operands);
         matrix = ops.matrix;
         tile = ops.tile;
         Size bytes = get_tile_bytes(instr);
         duration = compute_block_mover_cycles(bytes);
         uint8_t bm_id = select_block_mover(matrix, tile);
-        start_cycle = std::max(last_barrier_cycle_, timeline_.block_mover_available(bm_id));
+        // Wait for: barrier, resource available, AND tile to be in L2
+        Cycle tile_ready = tile_l2_arrival(matrix, tile);
+        start_cycle = std::max({last_barrier_cycle_,
+                                timeline_.block_mover_available(bm_id),
+                                tile_ready});
         Cycle end = timeline_.schedule_block_mover(bm_id, start_cycle, duration);
         resource_id = 100 + bm_id;
         category = "block_mover";
         total_bm_cycles_ += duration;
         current_cycle_ = end;
+        // Tile goes back to L3
+        tile_at_l3_[make_tile_key(matrix, tile)] = end;
         break;
     }
 
@@ -336,7 +355,11 @@ void TransactionalProgramExecutor::dispatch_with_timing(
         Size bytes = ops.height * ops.width * element_size_;
         duration = compute_streamer_cycles(bytes);
         uint8_t str_id = select_streamer(matrix, tile);
-        start_cycle = std::max(last_barrier_cycle_, timeline_.streamer_available(str_id));
+        // Wait for: barrier, resource available, AND tile to be in L2
+        Cycle tile_ready = tile_l2_arrival(matrix, tile);
+        start_cycle = std::max({last_barrier_cycle_,
+                                timeline_.streamer_available(str_id),
+                                tile_ready});
         Cycle end = timeline_.schedule_streamer(str_id, start_cycle, duration);
         resource_id = 200 + str_id;
         category = "streamer";
@@ -393,6 +416,8 @@ void TransactionalProgramExecutor::dispatch_with_timing(
         category = "dma";
         total_dma_cycles_ += duration;
         current_cycle_ = end;
+        // Record tile arrival at L3
+        tile_at_l3_[make_tile_key(matrix, tile)] = end;
         break;
     }
 
@@ -412,20 +437,49 @@ void TransactionalProgramExecutor::dispatch_with_timing(
         break;
     }
 
-    case DMOpcode::BM_MOVE_TILE_AUTO:
-    case DMOpcode::BM_WRITEBACK_AUTO: {
+    case DMOpcode::BM_MOVE_TILE_AUTO: {
         const auto& ops = std::get<AutoBlockMoverOperands>(instr.operands);
         matrix = ops.matrix;
         tile = timing_loop_state_.current_tile();
         Size bytes = tile_rows_ * tile_cols_ * element_size_;
         duration = compute_block_mover_cycles(bytes);
         uint8_t bm_id = select_block_mover(matrix, tile);
-        start_cycle = std::max(last_barrier_cycle_, timeline_.block_mover_available(bm_id));
+        // Wait for: barrier, resource available, AND tile to be in L3
+        Cycle tile_ready = tile_l3_arrival(matrix, tile);
+        start_cycle = std::max({last_barrier_cycle_,
+                                timeline_.block_mover_available(bm_id),
+                                tile_ready});
         Cycle end = timeline_.schedule_block_mover(bm_id, start_cycle, duration);
         resource_id = 100 + bm_id;
         category = "block_mover";
         total_bm_cycles_ += duration;
         current_cycle_ = end;
+        // Record tile arrival at L2
+        tile_at_l2_[make_tile_key(matrix, tile)] = end;
+        break;
+    }
+
+    case DMOpcode::BM_WRITEBACK_AUTO: {
+        // Writeback goes L2 -> L3, so no dependency on L3 arrival
+        // (tile is already in L2 from a previous operation)
+        const auto& ops = std::get<AutoBlockMoverOperands>(instr.operands);
+        matrix = ops.matrix;
+        tile = timing_loop_state_.current_tile();
+        Size bytes = tile_rows_ * tile_cols_ * element_size_;
+        duration = compute_block_mover_cycles(bytes);
+        uint8_t bm_id = select_block_mover(matrix, tile);
+        // For writeback, we need the tile to be in L2 first
+        Cycle tile_ready = tile_l2_arrival(matrix, tile);
+        start_cycle = std::max({last_barrier_cycle_,
+                                timeline_.block_mover_available(bm_id),
+                                tile_ready});
+        Cycle end = timeline_.schedule_block_mover(bm_id, start_cycle, duration);
+        resource_id = 100 + bm_id;
+        category = "block_mover";
+        total_bm_cycles_ += duration;
+        current_cycle_ = end;
+        // Update L3 arrival (tile goes back to L3)
+        tile_at_l3_[make_tile_key(matrix, tile)] = end;
         break;
     }
 
@@ -436,7 +490,11 @@ void TransactionalProgramExecutor::dispatch_with_timing(
         Size bytes = tile_rows_ * tile_cols_ * element_size_;
         duration = compute_streamer_cycles(bytes);
         uint8_t str_id = select_streamer(matrix, tile);
-        start_cycle = std::max(last_barrier_cycle_, timeline_.streamer_available(str_id));
+        // Wait for: barrier, resource available, AND tile to be in L2
+        Cycle tile_ready = tile_l2_arrival(matrix, tile);
+        start_cycle = std::max({last_barrier_cycle_,
+                                timeline_.streamer_available(str_id),
+                                tile_ready});
         Cycle end = timeline_.schedule_streamer(str_id, start_cycle, duration);
         resource_id = 200 + str_id;
         category = "streamer";
