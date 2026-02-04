@@ -40,6 +40,12 @@ void BehavioralProgramExecutor::load_program(
     accumulating_ = false;
     acc_ti_ = 0;
     acc_tj_ = 0;
+    regs_.reset();  // Reset ISA register file
+
+    // Configure address generator with base addresses for AUTO modes
+    regs_.addr().set_base(MatrixID::A, a_base);
+    regs_.addr().set_base(MatrixID::B, b_base);
+    regs_.addr().set_base(MatrixID::C, c_base);
 }
 
 // ============================================================================
@@ -49,18 +55,47 @@ void BehavioralProgramExecutor::load_program(
 bool BehavioralProgramExecutor::run() {
     if (!program_) return false;
 
-    for (const auto& instr : program_->instructions) {
+    const auto& instructions = program_->instructions;
+    size_t pc = 0;
+
+    while (pc < instructions.size()) {
+        const auto& instr = instructions[pc];
+
         if (instr.opcode == DMOpcode::HALT) {
             stats_.instructions_executed++;
             return true;
         }
-        dispatch(instr);
+
+        // Handle loop control with PC manipulation
+        if (instr.opcode == DMOpcode::LOOP_BEGIN) {
+            const auto& ops = std::get<LoopOperands>(instr.operands);
+            regs_.exec_loop_begin(ops, pc);
+            stats_.instructions_executed++;
+            stats_.loop_iterations++;
+            ++pc;
+            continue;
+        }
+
+        if (instr.opcode == DMOpcode::LOOP_END) {
+            const auto& ops = std::get<LoopOperands>(instr.operands);
+            size_t next_pc = regs_.exec_loop_end(ops, pc);
+            stats_.instructions_executed++;
+            if (next_pc != pc + 1) {
+                // Loop continues, branch back
+                stats_.loop_iterations++;
+            }
+            pc = next_pc;
+            continue;
+        }
+
+        dispatch(instr, pc);
         stats_.instructions_executed++;
+        ++pc;
     }
     return true;
 }
 
-void BehavioralProgramExecutor::dispatch(const DMInstruction& instr) {
+void BehavioralProgramExecutor::dispatch(const DMInstruction& instr, [[maybe_unused]] size_t pc) {
     switch (instr.opcode) {
     case DMOpcode::DMA_LOAD_TILE:
     case DMOpcode::DMA_PREFETCH_TILE:
@@ -109,12 +144,78 @@ void BehavioralProgramExecutor::dispatch(const DMInstruction& instr) {
         dispatch_bm_move(std::get<BlockMoverOperands>(instr.operands));
         break;
 
-    // Configuration opcodes — ignored in behavioral
+    // ========================================================================
+    // Configuration opcodes — update register file
+    // ========================================================================
+    case DMOpcode::SET_BASE:
+        regs_.exec_set_base(std::get<BaseAddressOperands>(instr.operands));
+        stats_.config_instructions++;
+        break;
+
+    case DMOpcode::SET_L3_BASE:
+        regs_.exec_set_l3_base(std::get<L3BaseOperands>(instr.operands));
+        stats_.config_instructions++;
+        break;
+
+    case DMOpcode::SET_L2_BASE:
+        regs_.exec_set_l2_base(std::get<L2BaseOperands>(instr.operands));
+        stats_.config_instructions++;
+        break;
+
+    case DMOpcode::SET_STRIDE:
+        regs_.exec_set_stride(std::get<StrideConfigOperands>(instr.operands));
+        stats_.config_instructions++;
+        break;
+
+    case DMOpcode::SET_TILE_DIM:
+        regs_.exec_set_tile_dim(std::get<TileDimOperands>(instr.operands));
+        stats_.config_instructions++;
+        break;
+
+    case DMOpcode::SET_MATRIX_DIM:
+        regs_.exec_set_matrix_dim(std::get<MatrixDimOperands>(instr.operands));
+        stats_.config_instructions++;
+        break;
+
+    // Legacy config (ignored for now)
     case DMOpcode::SET_TILE_SIZE:
     case DMOpcode::SET_BUFFER:
-    case DMOpcode::SET_STRIDE:
+        break;
+
+    // Loop control handled in run() — should not reach here
     case DMOpcode::LOOP_BEGIN:
     case DMOpcode::LOOP_END:
+        break;
+
+    // ========================================================================
+    // AUTO addressing opcodes
+    // ========================================================================
+    case DMOpcode::DMA_LOAD_TILE_AUTO:
+        dispatch_dma_load_auto(std::get<AutoDMAOperands>(instr.operands));
+        break;
+
+    case DMOpcode::DMA_STORE_TILE_AUTO:
+        dispatch_dma_store_auto(std::get<AutoDMAOperands>(instr.operands));
+        break;
+
+    case DMOpcode::BM_MOVE_TILE_AUTO:
+        dispatch_bm_move_auto(std::get<AutoBlockMoverOperands>(instr.operands));
+        break;
+
+    case DMOpcode::BM_WRITEBACK_AUTO:
+        dispatch_bm_writeback_auto(std::get<AutoBlockMoverOperands>(instr.operands));
+        break;
+
+    case DMOpcode::STR_FEED_ROWS_AUTO:
+        dispatch_str_feed_rows_auto(std::get<AutoStreamerOperands>(instr.operands));
+        break;
+
+    case DMOpcode::STR_FEED_COLS_AUTO:
+        dispatch_str_feed_cols_auto(std::get<AutoStreamerOperands>(instr.operands));
+        break;
+
+    case DMOpcode::STR_DRAIN_AUTO:
+        dispatch_str_drain_auto(std::get<AutoStreamerOperands>(instr.operands));
         break;
 
     // Broadcast — treat as a streamer feed for now
@@ -509,6 +610,250 @@ void BehavioralProgramExecutor::get_tile_dims(
         rows = cols = 0;
         break;
     }
+}
+
+// ============================================================================
+// AUTO Addressing: DMA
+// ============================================================================
+
+void BehavioralProgramExecutor::dispatch_dma_load_auto(const AutoDMAOperands& ops) {
+    // Compute external memory address from loop indices
+    Address ext_addr = regs_.compute_ext_addr(ops.matrix);
+
+    // For now, use simplified buffer layout based on matrix
+    uint8_t l3_id = ops.l3_slot;
+    Address l3_offset = regs_.compute_l3_offset(ops.matrix);
+
+    // Get tile dimensions
+    Size tile_rows = 0, tile_cols = 0;
+    get_tile_dims(ops.matrix, tile_rows, tile_cols);
+    Size es = sizeof(float);
+    Size bytes = tile_rows * tile_cols * es;
+
+    if (bytes == 0) return;
+    if (l3_id >= hw_.l3_tiles.size()) return;
+    if (!program_) return;
+
+    // Determine external memory stride based on matrix
+    Size ext_stride = 0;
+    switch (ops.matrix) {
+    case MatrixID::A:
+        ext_stride = program_->K * es;  // A[M,K] row-major
+        break;
+    case MatrixID::B:
+        ext_stride = program_->N * es;  // B[K,N] row-major
+        break;
+    case MatrixID::C:
+        ext_stride = program_->N * es;  // C[M,N] row-major
+        break;
+    default:
+        return;
+    }
+
+    Size row_bytes = tile_cols * es;
+
+    // Strided transfer: read each row from external memory to contiguous L3 storage
+    std::vector<uint8_t> row_buf(row_bytes);
+    for (Size r = 0; r < tile_rows; ++r) {
+        Address src = ext_addr + r * ext_stride;
+        Address dst = l3_offset + r * row_bytes;
+        hw_.external_memory.read(src, row_buf.data(), row_bytes);
+        hw_.l3_tiles[l3_id].write(dst, row_buf.data(), row_bytes);
+    }
+
+    stats_.dma_loads++;
+    stats_.bytes_loaded += bytes;
+}
+
+void BehavioralProgramExecutor::dispatch_dma_store_auto(const AutoDMAOperands& ops) {
+    // Compute external memory address from loop indices
+    Address ext_addr = regs_.compute_ext_addr(ops.matrix);
+
+    // Use simplified buffer layout based on matrix
+    uint8_t l3_id = ops.l3_slot;
+    Address l3_offset = regs_.compute_l3_offset(ops.matrix);
+
+    // Get tile dimensions
+    Size tile_rows = 0, tile_cols = 0;
+    get_tile_dims(ops.matrix, tile_rows, tile_cols);
+    Size es = sizeof(float);
+    Size bytes = tile_rows * tile_cols * es;
+
+    if (bytes == 0) return;
+    if (l3_id >= hw_.l3_tiles.size()) return;
+    if (!program_) return;
+
+    // Determine external memory stride based on matrix
+    Size ext_stride = 0;
+    switch (ops.matrix) {
+    case MatrixID::A:
+        ext_stride = program_->K * es;  // A[M,K] row-major
+        break;
+    case MatrixID::B:
+        ext_stride = program_->N * es;  // B[K,N] row-major
+        break;
+    case MatrixID::C:
+        ext_stride = program_->N * es;  // C[M,N] row-major
+        break;
+    default:
+        return;
+    }
+
+    Size row_bytes = tile_cols * es;
+
+    // Strided transfer: write each row from contiguous L3 storage to external memory
+    std::vector<uint8_t> row_buf(row_bytes);
+    for (Size r = 0; r < tile_rows; ++r) {
+        Address src = l3_offset + r * row_bytes;
+        Address dst = ext_addr + r * ext_stride;
+        hw_.l3_tiles[l3_id].read(src, row_buf.data(), row_bytes);
+        hw_.external_memory.write(dst, row_buf.data(), row_bytes);
+    }
+
+    stats_.dma_stores++;
+    stats_.bytes_stored += bytes;
+}
+
+// ============================================================================
+// AUTO Addressing: BlockMover
+// ============================================================================
+
+void BehavioralProgramExecutor::dispatch_bm_move_auto(const AutoBlockMoverOperands& ops) {
+    // L3 tile -> L2 bank
+    // Compute offsets from register file
+    // Note: BlockMover doesn't need L3 tile ID - it reads from wherever the tile is
+    // For now, use L3 slot 0 (single buffer mode)
+    uint8_t src_l3 = 0;
+    Address src_offset = regs_.compute_l3_offset(ops.matrix);
+    uint8_t dst_l2 = ops.l2_bank;
+    Address dst_offset = regs_.compute_l2_offset(ops.matrix);
+
+    Size tile_rows = 0, tile_cols = 0;
+    get_tile_dims(ops.matrix, tile_rows, tile_cols);
+    Size es = sizeof(float);
+    Size bytes = tile_rows * tile_cols * es;
+
+    if (bytes == 0) return;
+    if (src_l3 >= hw_.l3_tiles.size()) return;
+    if (dst_l2 >= hw_.l2_banks.size()) return;
+
+    std::vector<uint8_t> buf(bytes);
+    hw_.l3_tiles[src_l3].read(src_offset, buf.data(), bytes);
+    hw_.l2_banks[dst_l2].write(dst_offset, buf.data(), bytes);
+
+    stats_.bm_moves++;
+}
+
+void BehavioralProgramExecutor::dispatch_bm_writeback_auto(const AutoBlockMoverOperands& ops) {
+    // L2 bank -> L3 tile
+    uint8_t src_l2 = ops.l2_bank;
+    Address src_offset = regs_.compute_l2_offset(ops.matrix);
+    // For now, use L3 slot 0 (single buffer mode)
+    uint8_t dst_l3 = 0;
+    Address dst_offset = regs_.compute_l3_offset(ops.matrix);
+
+    Size tile_rows = 0, tile_cols = 0;
+    get_tile_dims(ops.matrix, tile_rows, tile_cols);
+    Size es = sizeof(float);
+    Size bytes = tile_rows * tile_cols * es;
+
+    if (bytes == 0) return;
+    if (src_l2 >= hw_.l2_banks.size()) return;
+    if (dst_l3 >= hw_.l3_tiles.size()) return;
+
+    std::vector<uint8_t> buf(bytes);
+    hw_.l2_banks[src_l2].read(src_offset, buf.data(), bytes);
+    hw_.l3_tiles[dst_l3].write(dst_offset, buf.data(), bytes);
+
+    stats_.bm_writebacks++;
+}
+
+// ============================================================================
+// AUTO Addressing: Streamer
+// ============================================================================
+
+void BehavioralProgramExecutor::dispatch_str_feed_rows_auto([[maybe_unused]] const AutoStreamerOperands& ops) {
+    // L2 bank -> L1 buffer (A tile, row streaming)
+    // For now, use L2 bank 0 and derive addresses from register file
+    uint8_t l2_id = 0;
+    Address l2_addr = regs_.compute_l2_offset(MatrixID::A);
+
+    Size tile_rows = 0, tile_cols = 0;
+    get_tile_dims(MatrixID::A, tile_rows, tile_cols);
+    Size bytes = tile_rows * tile_cols * sizeof(float);
+
+    if (bytes == 0) return;
+    if (l2_id >= hw_.l2_banks.size()) return;
+    if (L1_A_BUFFER >= hw_.l1_buffers.size()) return;
+
+    std::vector<uint8_t> buf(bytes);
+    hw_.l2_banks[l2_id].read(l2_addr, buf.data(), bytes);
+    hw_.l1_buffers[L1_A_BUFFER].write(0, buf.data(), bytes);
+
+    a_fed_ = true;
+    stats_.str_feeds++;
+
+    // If both A and B are in L1, fire compute
+    if (a_fed_ && b_fed_) {
+        fire_compute();
+        a_fed_ = false;
+        b_fed_ = false;
+    }
+}
+
+void BehavioralProgramExecutor::dispatch_str_feed_cols_auto([[maybe_unused]] const AutoStreamerOperands& ops) {
+    // L2 bank -> L1 buffer (B tile, column streaming)
+    // For now, use L2 bank 0 and derive addresses from register file
+    uint8_t l2_id = 0;
+    Address l2_addr = regs_.compute_l2_offset(MatrixID::B);
+
+    Size tile_rows = 0, tile_cols = 0;
+    get_tile_dims(MatrixID::B, tile_rows, tile_cols);
+    Size bytes = tile_rows * tile_cols * sizeof(float);
+
+    if (bytes == 0) return;
+    if (l2_id >= hw_.l2_banks.size()) return;
+    if (L1_B_BUFFER >= hw_.l1_buffers.size()) return;
+
+    std::vector<uint8_t> buf(bytes);
+    hw_.l2_banks[l2_id].read(l2_addr, buf.data(), bytes);
+    hw_.l1_buffers[L1_B_BUFFER].write(0, buf.data(), bytes);
+
+    b_fed_ = true;
+    stats_.str_feeds++;
+
+    // If both A and B are in L1, fire compute
+    if (a_fed_ && b_fed_) {
+        fire_compute();
+        a_fed_ = false;
+        b_fed_ = false;
+    }
+}
+
+void BehavioralProgramExecutor::dispatch_str_drain_auto([[maybe_unused]] const AutoStreamerOperands& ops) {
+    // L1 accumulator -> L2 bank (drain C tile)
+    // For now, use L2 bank 0 and derive addresses from register file
+    uint8_t l2_id = 0;
+    Address l2_addr = regs_.compute_l2_offset(MatrixID::C);
+
+    Size tile_rows = 0, tile_cols = 0;
+    get_tile_dims(MatrixID::C, tile_rows, tile_cols);
+    Size bytes = tile_rows * tile_cols * sizeof(float);
+
+    if (bytes == 0) return;
+    if (l2_id >= hw_.l2_banks.size()) return;
+    if (L1_A_BUFFER >= hw_.l1_buffers.size()) return;
+
+    // Read accumulated result from L1 accumulator region
+    Size acc_offset = hw_.l1_buffers[L1_A_BUFFER].get_capacity() / 2;
+    std::vector<uint8_t> buf(bytes);
+    hw_.l1_buffers[L1_A_BUFFER].read(acc_offset, buf.data(), bytes);
+    hw_.l2_banks[l2_id].write(l2_addr, buf.data(), bytes);
+
+    // Reset accumulation state for next output tile
+    accumulating_ = false;
+
+    stats_.str_drains++;
 }
 
 } // namespace sw::kpu::isa

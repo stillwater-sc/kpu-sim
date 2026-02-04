@@ -2,7 +2,7 @@
 
 **Date:** 2026-02-03
 **Version:** v0.8.x
-**Status:** In Progress (Phase 1 Complete)
+**Status:** In Progress (Phase 2 Complete)
 **Tests:** 79/79 passing
 
 ## 1. Summary
@@ -32,7 +32,7 @@ The implementation includes:
 | Assembler: new opcode parsing | DONE | Manual |
 | Factory methods for new instructions | DONE | Compiles |
 | Large matmul assembly example | DONE | Assembles |
-| Loop execution in behavioral executor | PENDING | — |
+| Loop execution in behavioral executor | DONE | 23/23 pass |
 | End-to-end validation | PENDING | — |
 
 ## 3. Technical Decisions
@@ -95,6 +95,14 @@ cmake --preset release && cmake --build --preset release
   kernels/asm/matmul_4096x1024x8192.kpuasm \
   -o kernels/bin/matmul_4096x1024x8192.kpubin --stats
 # Assembled 32 instructions (vs 8.4M tile operations!)
+
+# Run behavioral executor test with loop machinery
+./build/tests/isa/test_behavioral_program_executor
+# All 23 tests pass, including loop machinery test:
+#   - 8 computes (2×2×2 tiles)
+#   - 14 loop iterations
+#   - 16 DMA loads
+#   - All 1024 elements correct (32.0)
 ```
 
 ## 7. Files Modified
@@ -110,13 +118,16 @@ cmake --preset release && cmake --build --preset release
 | `src/software/isa/assembler.cpp` | MODIFY — add new opcode parsers |
 | `kernels/asm/matmul_4096x1024x8192.kpuasm` | CREATE — large matmul example |
 | `docs/plans/large_matmul_component_harnesses.md` | UPDATE — ISA extension design |
+| `include/sw/kpu/isa/behavioral_program_executor.hpp` | MODIFY — add ISARegisterFile, AUTO dispatch methods |
+| `src/software/isa/behavioral_program_executor.cpp` | MODIFY — PC-based execution, loop control, AUTO addressing |
+| `tests/isa/test_behavioral_program_executor.cpp` | MODIFY — add loop machinery test |
 
-## 8. Next Steps
+## 8. Next Steps (Updated)
 
-1. **Implement loop execution in behavioral executor**
-   - Modify BehavioralProgramExecutor to use ISARegisterFile
-   - Execute LOOP_BEGIN/LOOP_END with proper PC control flow
-   - Compute addresses for AUTO opcodes using AddressGenerator
+1. ~~**Implement loop execution in behavioral executor**~~ ✓ DONE
+   - ~~Modify BehavioralProgramExecutor to use ISARegisterFile~~
+   - ~~Execute LOOP_BEGIN/LOOP_END with proper PC control flow~~
+   - ~~Compute addresses for AUTO opcodes using AddressGenerator~~
 
 2. **Implement loop execution in transactional executor**
    - Timing model for loop iteration overhead

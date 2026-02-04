@@ -21,6 +21,7 @@
 #pragma once
 
 #include <sw/kpu/isa/data_movement_isa.hpp>
+#include <sw/kpu/isa/register_file.hpp>
 #include <sw/kpu/models/temporal/memory/l3_tile.hpp>
 #include <sw/kpu/models/temporal/memory/l2_bank.hpp>
 #include <sw/kpu/models/temporal/memory/l1_buffer.hpp>
@@ -65,6 +66,8 @@ public:
         uint64_t str_drains = 0;
         uint64_t compute_invocations = 0;
         uint64_t barriers = 0;
+        uint64_t loop_iterations = 0;
+        uint64_t config_instructions = 0;
         Size bytes_loaded = 0;
         Size bytes_stored = 0;
     };
@@ -105,6 +108,7 @@ private:
     HardwareContext hw_;
     const DMProgram* program_ = nullptr;
     Statistics stats_;
+    ISARegisterFile regs_;  ///< Loop state and address generator
 
     // Base addresses for A, B, C in external memory
     Address a_base_ = 0;
@@ -127,7 +131,7 @@ private:
     bool accumulating_ = false;
 
     // Dispatch methods — one per opcode category
-    void dispatch(const DMInstruction& instr);
+    void dispatch(const DMInstruction& instr, size_t pc);
     void dispatch_dma_load(const DMAOperands& ops);
     void dispatch_dma_store(const DMAOperands& ops);
     void dispatch_bm_move(const BlockMoverOperands& ops);
@@ -136,6 +140,15 @@ private:
     void dispatch_str_feed_cols(const StreamerOperands& ops);
     void dispatch_str_drain(const StreamerOperands& ops);
     void dispatch_barrier();
+
+    // AUTO addressing dispatch methods
+    void dispatch_dma_load_auto(const AutoDMAOperands& ops);
+    void dispatch_dma_store_auto(const AutoDMAOperands& ops);
+    void dispatch_bm_move_auto(const AutoBlockMoverOperands& ops);
+    void dispatch_bm_writeback_auto(const AutoBlockMoverOperands& ops);
+    void dispatch_str_feed_rows_auto(const AutoStreamerOperands& ops);
+    void dispatch_str_feed_cols_auto(const AutoStreamerOperands& ops);
+    void dispatch_str_drain_auto(const AutoStreamerOperands& ops);
 
     /**
      * @brief Fire matmul compute on current L1 tile data

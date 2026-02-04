@@ -423,6 +423,152 @@ void test_execution_statistics() {
 }
 
 // ============================================================================
+// Test 6: Loop machinery execution (LOOP_BEGIN/LOOP_END with AUTO addressing)
+// ============================================================================
+
+void test_loop_machinery() {
+    std::cout << "\n=== Test: Loop Machinery (32×32×32, 2×2×2 tiles) ===\n";
+
+    // Dimensions matching 2×2×2 tiles
+    const Size M = 32, N = 32, K = 32;
+    const Size Ti = 16, Tj = 16, Tk = 16;
+
+    // Create program manually with loop instructions
+    DMProgram prog;
+    prog.name = "loop_matmul_32x32x32";
+    prog.M = M;
+    prog.N = N;
+    prog.K = K;
+    prog.Ti = Ti;
+    prog.Tj = Tj;
+    prog.Tk = Tk;
+    prog.dataflow = DMProgram::Dataflow::OUTPUT_STATIONARY;
+
+    // Configuration instructions using factory methods
+    prog.instructions.push_back(DMInstruction::set_tile_dim(Ti, Tj, Tk, 4));
+
+    // SET_STRIDE for A: row_stride=K*4, tile_i_stride=Ti*K*4, tile_j_stride=Tk*4
+    prog.instructions.push_back(DMInstruction::set_stride(MatrixID::A, K*4, Ti*K*4, Tk*4));
+
+    // SET_STRIDE for B: row_stride=N*4, tile_i_stride=Tk*N*4, tile_j_stride=Tj*4
+    prog.instructions.push_back(DMInstruction::set_stride(MatrixID::B, N*4, Tk*N*4, Tj*4));
+
+    // SET_STRIDE for C: row_stride=N*4, tile_i_stride=Ti*N*4, tile_j_stride=Tj*4
+    prog.instructions.push_back(DMInstruction::set_stride(MatrixID::C, N*4, Ti*N*4, Tj*4));
+
+    // Triple-nested loop: for ti, for tj, for tk
+    Size m_tiles = M / Ti;  // 2
+    Size n_tiles = N / Tj;  // 2
+    Size k_tiles = K / Tk;  // 2
+
+    // LOOP_BEGIN 0, 2, TI
+    prog.instructions.push_back(DMInstruction::loop_begin(0, m_tiles, IndexRole::TI));
+
+    // LOOP_BEGIN 1, 2, TJ
+    prog.instructions.push_back(DMInstruction::loop_begin(1, n_tiles, IndexRole::TJ));
+
+    // LOOP_BEGIN 2, 2, TK
+    prog.instructions.push_back(DMInstruction::loop_begin(2, k_tiles, IndexRole::TK));
+
+    // Inner loop body: DMA load A and B, move to L2, stream to L1
+    prog.instructions.push_back(DMInstruction::dma_load_auto(MatrixID::A, 0));
+    prog.instructions.push_back(DMInstruction::dma_load_auto(MatrixID::B, 1));
+    prog.instructions.push_back(DMInstruction::barrier());
+
+    prog.instructions.push_back(DMInstruction::bm_move_auto(MatrixID::A, 0));
+    prog.instructions.push_back(DMInstruction::bm_move_auto(MatrixID::B, 0));
+    prog.instructions.push_back(DMInstruction::barrier());
+
+    prog.instructions.push_back(DMInstruction::str_feed_rows_auto(0));
+    prog.instructions.push_back(DMInstruction::str_feed_cols_auto(0));
+    prog.instructions.push_back(DMInstruction::barrier());
+
+    // LOOP_END 2 (K loop)
+    prog.instructions.push_back(DMInstruction::loop_end(2));
+
+    // After K loop: drain, writeback, store
+    prog.instructions.push_back(DMInstruction::str_drain_auto(0));
+    prog.instructions.push_back(DMInstruction::barrier());
+
+    prog.instructions.push_back(DMInstruction::bm_writeback_auto(MatrixID::C, 0));
+    prog.instructions.push_back(DMInstruction::barrier());
+
+    prog.instructions.push_back(DMInstruction::dma_store_auto(MatrixID::C, 0));
+    prog.instructions.push_back(DMInstruction::barrier());
+
+    // LOOP_END 1 (J loop)
+    prog.instructions.push_back(DMInstruction::loop_end(1));
+
+    // LOOP_END 0 (I loop)
+    prog.instructions.push_back(DMInstruction::loop_end(0));
+
+    // HALT
+    prog.instructions.push_back(DMInstruction::halt());
+
+    std::cout << "  Program has " << prog.instructions.size() << " instructions\n";
+    std::cout << "  Loop nest: " << m_tiles << "×" << n_tiles << "×" << k_tiles
+              << " = " << m_tiles * n_tiles * k_tiles << " tile ops\n";
+
+    // Hardware setup
+    TestHardware hw;
+
+    Address a_base = 0;
+    Address b_base = M * K * sizeof(float);
+    Address c_base = b_base + K * N * sizeof(float);
+
+    // Initialize A = all 1.0, B = all 1.0
+    std::vector<float> a_data(M * K, 1.0f);
+    std::vector<float> b_data(K * N, 1.0f);
+    hw.ext_mem.write(a_base, a_data.data(), a_data.size() * sizeof(float));
+    hw.ext_mem.write(b_base, b_data.data(), b_data.size() * sizeof(float));
+
+    std::vector<float> c_zero(M * N, 0.0f);
+    hw.ext_mem.write(c_base, c_zero.data(), c_zero.size() * sizeof(float));
+
+    // Execute
+    BehavioralProgramExecutor exec(hw.context());
+    exec.load_program(prog, a_base, b_base, c_base);
+    bool completed = exec.run();
+
+    check(completed, "Program completed (HALT reached)");
+
+    // Read result
+    std::vector<float> c_result(M * N);
+    hw.ext_mem.read(c_base, c_result.data(), c_result.size() * sizeof(float));
+
+    // Verify: ones × ones = K for every element
+    float expected = static_cast<float>(K);
+    int errors = 0;
+    for (Size i = 0; i < M * N; ++i) {
+        if (std::abs(c_result[i] - expected) > 1e-4f) {
+            if (errors < 3) {
+                std::cout << "    C[" << i / N << "," << i % N << "] = "
+                          << c_result[i] << ", expected " << expected << "\n";
+            }
+            errors++;
+        }
+    }
+    check(errors == 0,
+          "All " + std::to_string(M * N) + " elements correct (expected " +
+          std::to_string(expected) + ")");
+
+    // Verify statistics
+    const auto& stats = exec.statistics();
+    std::cout << "  Stats: " << stats.instructions_executed << " instrs executed\n";
+    std::cout << "         " << stats.loop_iterations << " loop iterations\n";
+    std::cout << "         " << stats.config_instructions << " config instrs\n";
+    std::cout << "         " << stats.dma_loads << " DMA loads\n";
+    std::cout << "         " << stats.compute_invocations << " computes\n";
+
+    Size expected_computes = m_tiles * n_tiles * k_tiles;
+    check(stats.compute_invocations == expected_computes,
+          "Compute count: " + std::to_string(expected_computes) +
+          " (got " + std::to_string(stats.compute_invocations) + ")");
+
+    check(stats.loop_iterations > 0, "Loop iterations > 0");
+}
+
+// ============================================================================
 // Main
 // ============================================================================
 
@@ -437,6 +583,7 @@ int main() {
     test_identity_matmul();
     test_reference_matmul();
     test_execution_statistics();
+    test_loop_machinery();
 
     std::cout << "\n" << std::string(60, '*') << "\n";
     std::cout << "Results: " << passed << " passed, " << failed << " failed\n";
