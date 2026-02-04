@@ -8,6 +8,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+
+### Fixed
+- **Chrome Trace Thread Names** — Added phase "M" metadata events to Chrome trace
+  export with human-readable thread names (DMA Channel 0-3, BlockMover 0-3,
+  Streamer 0-3, Loop, Sync, Compute) instead of numeric thread IDs
+
+- **Harness Test Infrastructure**
+  - DMA harness completion callback now properly clears `in_flight_requests_`
+  - BlockMover harness `L2BankArray::allocate()` now supports `set_tile()` for
+    tile ID tracking (previously only `reserve()` recorded tile IDs)
+  - Journey tracking records arrivals at `current_cycle_ + 1` in behavioral mode
+    to ensure non-zero timestamps
+  - Pipeline harness buffer allocation coordination: component harnesses allocate
+    buffers internally, pipeline uses completion callbacks to track buffer IDs
+
+- **Windows CI** — Use `std::filesystem::temp_directory_path()` instead of
+  hardcoded `/tmp/` paths in test files (fixes stack buffer overrun 0xc0000409)
 - **Data Mover Component Test Harness Infrastructure**
   - `PatternHarnessBase<ConfigT>` template class for all harnesses
   - `TileJourneyTracker` for per-tile timing through DRAM→L3→L2→L1→Compute
