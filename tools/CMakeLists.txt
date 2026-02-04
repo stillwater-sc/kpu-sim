@@ -90,6 +90,11 @@ add_subdirectory(calibration)
 add_subdirectory(dfg)
 
 # ============================================================================
+# Harness Tools - Component test harness CLI
+# ============================================================================
+add_subdirectory(harness)
+
+# ============================================================================
 # Legacy C++ tools (deprecated - to be migrated)
 # ============================================================================
 # add_subdirectory(cpp)

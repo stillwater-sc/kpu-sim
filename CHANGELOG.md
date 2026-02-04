@@ -8,6 +8,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Data Mover Component Test Harness Infrastructure**
+  - `PatternHarnessBase<ConfigT>` template class for all harnesses
+  - `TileJourneyTracker` for per-tile timing through DRAM→L3→L2→L1→Compute
+  - `DMAHarness` with L3BufferPool for credit-based DMA testing
+  - `BlockMoverHarness` with L2BankArray for L3→L2 tile movement testing
+  - `StreamerHarness` for L2→L1 streaming and compute integration testing
+  - `DataMovementPipelineHarness` for full integrated pipeline testing
+  - `ScheduleValidator` with static validation, cycle detection, ordering checks
+  - `schedule-runner` CLI tool for schedule experimentation and analysis
+  - Configuration structures: HarnessConfig, DMAHarnessConfig, BlockMoverHarnessConfig,
+    StreamerHarnessConfig, PipelineHarnessConfig
+  - TileID, TileCoord, MatrixID types with comparison and hash support
+  - PipelineSchedule and ScheduleOperation for schedule representation
+  - Comprehensive test suite (12 passing schedule validator tests)
+
 - **Loop Machinery and Address Generation ISA Extensions**
   - `IndexRole` enum (TI, TJ, TK, NONE) for loop-to-tile-index binding
   - New AUTO addressing opcodes: `DMA_LOAD_TILE_AUTO`, `DMA_STORE_TILE_AUTO`,

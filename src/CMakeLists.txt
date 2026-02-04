@@ -31,3 +31,6 @@ add_subdirectory(schedules)
 
 # Development tools
 add_subdirectory(tools)
+
+# Component test harnesses
+add_subdirectory(harness)

@@ -65,6 +65,7 @@ add_subdirectory(stats)
 add_subdirectory(validation)
 add_subdirectory(quantization)
 add_subdirectory(dsl)
+add_subdirectory(harness)
 
 # Legacy test (in this directory)
 kpu_add_component_test(legacy_test_main "legacy" test_main.cpp)
@@ -228,6 +229,14 @@ set_target_properties(test_quantization PROPERTIES FOLDER "Tests/Runners")
 #    VERBATIM
 #)
 #set_target_properties(test_benchmarks PROPERTIES FOLDER "Tests/Runners")
+
+add_custom_target(test_harness
+    COMMAND ${CMAKE_CTEST_COMMAND} -C $<CONFIG> --output-on-failure -L harness
+    COMMENT "Running harness tests"
+    WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
+    VERBATIM
+)
+set_target_properties(test_harness PROPERTIES FOLDER "Tests/Runners")
 
 add_custom_target(test_all_categories
     COMMAND ${CMAKE_CTEST_COMMAND} -C $<CONFIG> --output-on-failure
