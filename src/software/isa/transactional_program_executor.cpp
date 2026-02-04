@@ -678,10 +678,44 @@ void TransactionalProgramExecutor::export_chrome_trace(
     out << "{\n";
     out << "  \"traceEvents\": [\n";
 
-    bool first = true;
+    // Emit thread/process name metadata events first
+    // These give human-readable names to the numeric thread IDs
+    out << "    {\"name\":\"process_name\",\"ph\":\"M\",\"pid\":1,\"tid\":0,"
+        << "\"args\":{\"name\":\"KPU Transactional Executor\"}},\n";
+
+    // DMA channels (tid 0-3)
+    for (int i = 0; i < 4; ++i) {
+        out << "    {\"name\":\"thread_name\",\"ph\":\"M\",\"pid\":1,\"tid\":" << i
+            << ",\"args\":{\"name\":\"DMA Channel " << i << "\"}},\n";
+    }
+
+    // BlockMovers (tid 100-103)
+    for (int i = 0; i < 4; ++i) {
+        out << "    {\"name\":\"thread_name\",\"ph\":\"M\",\"pid\":1,\"tid\":" << (100 + i)
+            << ",\"args\":{\"name\":\"BlockMover " << i << "\"}},\n";
+    }
+
+    // Streamers (tid 200-203)
+    for (int i = 0; i < 4; ++i) {
+        out << "    {\"name\":\"thread_name\",\"ph\":\"M\",\"pid\":1,\"tid\":" << (200 + i)
+            << ",\"args\":{\"name\":\"Streamer " << i << "\"}},\n";
+    }
+
+    // Loop control (tid 300+)
+    out << "    {\"name\":\"thread_name\",\"ph\":\"M\",\"pid\":1,\"tid\":300,"
+        << "\"args\":{\"name\":\"Loop Control\"}},\n";
+
+    // Sync/Control (tid 999)
+    out << "    {\"name\":\"thread_name\",\"ph\":\"M\",\"pid\":1,\"tid\":999,"
+        << "\"args\":{\"name\":\"Sync/Barrier\"}},\n";
+
+    // Compute (tid 1000)
+    out << "    {\"name\":\"thread_name\",\"ph\":\"M\",\"pid\":1,\"tid\":1000,"
+        << "\"args\":{\"name\":\"Compute Fabric\"}}";
+
+    // Now emit the actual trace events
     for (const auto& event : events_) {
-        if (!first) out << ",\n";
-        first = false;
+        out << ",\n";
 
         out << "    {"
             << "\"name\":\"" << event.name << "\","
