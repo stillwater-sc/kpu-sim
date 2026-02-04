@@ -292,6 +292,8 @@ void BlockMoverHarness::process_pending_requests() {
                     bm_stats_.credit_stall_cycles++;
                     break;
                 }
+                // Record the tile_id for auto-allocated bank
+                l2_banks_.set_tile(l2_bank, request.tile_id);
             } else if (!l2_banks_.reserve(l2_bank, request.tile_id)) {
                 // Specified bank not available
                 bm_stats_.credit_stall_cycles++;
@@ -301,8 +303,9 @@ void BlockMoverHarness::process_pending_requests() {
             request.l2_bank_id = l2_bank;
             execute_transfer(request);
 
-            // Record L2 arrival
-            journey_tracker_.record_l2_arrival(request.tile_id, current_cycle_, l2_bank);
+            // Record L2 arrival (use current_cycle_ + 1 to indicate "end of tick")
+            // In behavioral mode, this ensures l2_arrival > 0 for journey tracking
+            journey_tracker_.record_l2_arrival(request.tile_id, current_cycle_ + 1, l2_bank);
         } else {
             // L2 -> L3 transfer
             execute_transfer(request);

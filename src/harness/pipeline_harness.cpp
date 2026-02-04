@@ -206,44 +206,58 @@ bool DataMovementPipelineHarness::execute_operation(const ScheduleOperation& op)
                              config_.dma_config.tile_size;
             }
 
-            uint32_t l3_buf = op.dst_buffer;
-            if (l3_buf == UINT32_MAX) {
-                l3_buf = dma_harness_->l3_buffers().allocate();
-                if (l3_buf == UINT32_MAX) return false;
-            }
-
-            tile_l3_buffers_[op.tile_id] = l3_buf;
-
+            // Let the DMA harness allocate the L3 buffer (pass UINT32_MAX)
+            // The completion callback will record the buffer ID and set up BlockMover
             auto tile_copy = op.tile_id;
             auto callback = [this, tile_copy]() {
                 completed_tiles_[tile_copy] = current_cycle_;
+
+                // Find the L3 buffer that was allocated for this tile
+                // The DMA harness journey tracker should have this info
+                auto journey = dma_harness_->journey_tracker().get_journey(tile_copy);
+                if (journey.has_value()) {
+                    uint32_t l3_buf = journey->get().l3_buffer_id;
+                    if (l3_buf != UINT32_MAX) {
+                        tile_l3_buffers_[tile_copy] = l3_buf;
+                        // Preload BlockMover's L3 so it knows this buffer has valid data
+                        block_mover_harness_->preload_l3_pattern(l3_buf, tile_copy, 16, 16, 2);
+                    }
+                }
             };
 
-            return dma_harness_->request_tile_load(op.tile_id, dram_addr, l3_buf, callback);
+            // Let DMA harness auto-allocate L3 buffer
+            return dma_harness_->request_tile_load(op.tile_id, dram_addr, UINT32_MAX, callback);
         }
 
         case ScheduleOperation::Type::BM_L3_TO_L2: {
+            // Find L3 buffer for this tile (set by DMA completion callback)
             uint32_t l3_buf = op.src_buffer;
             if (l3_buf == UINT32_MAX) {
                 auto it = tile_l3_buffers_.find(op.tile_id);
-                if (it == tile_l3_buffers_.end()) return false;
+                if (it == tile_l3_buffers_.end()) return false;  // DMA hasn't completed yet
                 l3_buf = it->second;
             }
 
-            uint32_t l2_bank = op.dst_buffer;
-            if (l2_bank == UINT32_MAX) {
-                l2_bank = block_mover_harness_->l2_banks().allocate();
-                if (l2_bank == UINT32_MAX) return false;
-            }
-
-            tile_l2_banks_[op.tile_id] = l2_bank;
-
+            // Let BlockMover harness allocate L2 bank - pass UINT32_MAX
+            // The completion callback will set up Streamer's L2
             auto tile_copy = op.tile_id;
             auto callback = [this, tile_copy]() {
                 completed_tiles_[tile_copy] = current_cycle_;
+
+                // Find the L2 bank that was allocated for this tile
+                auto journey = block_mover_harness_->journey_tracker().get_journey(tile_copy);
+                if (journey.has_value()) {
+                    uint32_t l2_bank = journey->get().l2_bank_id;
+                    if (l2_bank != UINT32_MAX) {
+                        tile_l2_banks_[tile_copy] = l2_bank;
+                        // Preload Streamer's L2 so it knows this bank has valid data
+                        streamer_harness_->preload_l2_pattern(l2_bank, tile_copy, 16, 16, 2);
+                    }
+                }
             };
 
-            return block_mover_harness_->move_l3_to_l2(op.tile_id, l3_buf, l2_bank,
+            // Let BlockMover harness auto-allocate L2 bank
+            return block_mover_harness_->move_l3_to_l2(op.tile_id, l3_buf, UINT32_MAX,
                                                         op.transform, callback);
         }
 

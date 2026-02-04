@@ -1,0 +1,101 @@
+ Jetson AGX Orin Performance Analysis
+
+  Key Specifications (64GB model)
+
+  - CUDA Cores: 2048
+  - GPU Clock: ~1.3 GHz (max performance mode)
+  - Official FP32: 5.3 TFLOPS
+  - Measured FP32: 12.9-15 TFLOPS (benchmark data from forum users using torch.mm)
+
+  1024³ GEMM Calculation
+
+  For a 1024×1024×1024 matrix multiply:
+  - Total FLOPs = 2 × 1024³ = 2.147 GFLOPs
+
+  Expected time on Jetson AGX Orin:
+  - At 5.3 TFLOPS (CUDA cores only): 2.147e9 / 5.3e12 = 0.4 ms
+  - At 12.9 TFLOPS (with tensor cores): 2.147e9 / 12.9e12 = 0.17 ms
+
+  Your Math Has an Error
+
+  You calculated 83 ms, but let me verify:
+  - 1B MACs at 128 MACs/clock at 1 GHz
+  - Time = 10⁹ / (128 × 10⁹) = 7.8 ms (not 83 ms)
+
+  Even 7.8 ms is ~20-40× slower than actual hardware.
+
+  Why the Animation Model is Wrong
+
+  The animation models 128 MACs/cycle because:
+  - 4 warp schedulers × 32 threads per warp = 128 simultaneous FMAs
+
+  But Jetson Orin has 2048 CUDA cores, so at peak it does:
+  - 2048 FMAs/cycle = 2048 MACs/cycle (not 128)
+
+  With Little's Law, to sustain 2048 MACs/cycle with 200-cycle latency:
+  - Need 2048 × 200 = 409,600 concurrent threads (~12,800 warps)
+
+  This is why real GPUs have massive register files - to hold all those waiting threads.
+
+  Correcting the Animation
+
+  The animation should either:
+  1. Scale up GPU model: Show many more warps (hundreds) to demonstrate realistic throughput
+  2. Keep small model: But acknowledge it's showing the mechanism of latency hiding, not realistic throughput
+
+  For educational purposes, option 2 is probably better - the animation shows how GPUs hide latency, while the KPU comparison shows that Domain Flow avoids this complexity entirely.
+
+  Shall I update the animation to clarify this (e.g., add a note that this is a simplified model demonstrating the latency-hiding mechanism)?
+
+  Sources:
+  - https://forums.developer.nvidia.com/t/what-is-the-peak-fp32-performance-of-orin-agx/311843
+  - https://www.bradleygannon.com/blog/2024/gemm-on-jetson/
+  - https://forums.developer.nvidia.com/t/so-whats-up-with-orin-agx-clock-speeds-at-15w-and-other-questions/209852
+  - https://www.nvidia.com/content/dam/en-zz/Solutions/gtcf21/jetson-orin/nvidia-jetson-agx-orin-technical-brief.pdf
+
+ but an AGX only has 16 SMs that can contain 32 WARPs max, which is just 512 WARPs, not 12,800. So how is the AGX able to get to 0.4ms for the
+  1024x1024x1024 matmul?
+
+● You're right, and this reveals the flaw in my Little's Law analysis. Let me reconsider.
+
+  The Real Latency Hiding Mechanism
+
+  Jetson AGX Orin (Ampere architecture):
+  - 16 SMs
+  - Max 48-64 warps per SM (Ampere), so let's say ~512-1024 warps total
+  - 2048 CUDA cores total (128 per SM)
+  - 4 warp schedulers per SM → 64 warps can issue per cycle
+
+  Key insight I missed: Warps don't do ONE FMA then wait 200 cycles. A well-optimized GEMM kernel:
+
+  1. Load a tile into shared memory (memory access)
+  2. Compute MANY FMAs on that tile (pure compute, no memory wait)
+  3. Repeat
+
+  For a 16×16 tile with K=16:
+  - Load: 2 × 16 × 16 = 512 elements
+  - Compute: 16 × 16 × 16 = 4096 FMAs
+  - Compute-to-memory ratio: 8:1
+
+  With larger tiles (32×32), this ratio improves to 32:1 or better.
+
+  Why 512 Warps is Enough
+
+  The 200-cycle memory latency only matters during the load phase. If each warp does 100 FMAs per memory access:
+  - 512 warps × 100 FMAs = 51,200 cycles of compute work buffered
+  - That easily covers 200 cycles of memory latency
+
+  The warp scheduler interleaves:
+  - Warps doing compute (ready immediately)
+  - Warps waiting for memory (stalled)
+
+  As long as enough warps are in the compute phase, the cores stay busy.
+
+  The Animation's Model is Pathological
+
+  Our animation assumes 1 FMA per memory access (compute-to-memory ratio of 1:200). That's a worst-case scenario that would make ANY GPU crawl.
+
+  Real GEMM has compute-to-memory ratios of 8:1 to 32:1, which is why 512 warps can sustain 2048 FMAs/cycle.
+
+  Should I update the animation to show tiled GEMM with a realistic compute-to-memory ratio? That would more accurately demonstrate how GPUs achieve high throughput, while still showing the register/warp overhead.
+

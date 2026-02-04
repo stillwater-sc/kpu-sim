@@ -270,18 +270,23 @@ void DMAHarness::process_pending_requests() {
         auto tile_id_copy = request.tile_id;
         auto is_load_copy = request.is_load;
         auto size_copy = request.size;
+        auto l3_buffer_copy = request.l3_buffer_id;  // Capture allocated buffer ID
         auto user_callback = request.callback;
         auto start_cycle = current_cycle_;
+        // Capture the transfer ID for cleanup (next_transfer_id_ will be the engine's returned ID)
+        auto expected_transfer_id = next_transfer_id_;
 
         auto completion_callback = [this, tile_id_copy, is_load_copy,
-                                    size_copy, user_callback, start_cycle]() {
+                                    size_copy, l3_buffer_copy, user_callback,
+                                    start_cycle, expected_transfer_id]() {
             // Record completion timing
             Cycle latency = current_cycle_ - start_cycle;
+            (void)latency;  // Used for debugging/tracing
 
             if (is_load_copy) {
                 // Load completed: tile arrived at L3
                 journey_tracker_.record_dram_fetch_complete(tile_id_copy, current_cycle_);
-                journey_tracker_.record_l3_arrival(tile_id_copy, current_cycle_);
+                journey_tracker_.record_l3_arrival(tile_id_copy, current_cycle_, l3_buffer_copy);
             } else {
                 // Store completed
                 journey_tracker_.record_dram_writeback_complete(tile_id_copy, current_cycle_);
@@ -289,6 +294,9 @@ void DMAHarness::process_pending_requests() {
 
             // Update statistics
             on_transfer_complete(tile_id_copy, is_load_copy, size_copy);
+
+            // Remove from in-flight tracking
+            in_flight_requests_.erase(expected_transfer_id);
 
             // Call user callback if provided
             if (user_callback) {

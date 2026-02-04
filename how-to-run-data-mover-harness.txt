@@ -1,0 +1,30 @@
+● Created docs/kernel-execution-methodology.md with comprehensive guidance on:
+
+  Key Sections:
+
+  1. Overview — Behavioral vs transactional fidelity comparison
+  2. Available Kernels — MatMul, Conv2D, Softmax descriptions
+  3. Step 1: Assembly — Using kpu-assembler to create binaries
+  4. Step 2: Input Data — Python examples for generating test tensors
+  5. Step 3: Behavioral Execution — Fast functional correctness testing
+  6. Step 4: Transactional Execution — Timing analysis with Chrome trace
+  7. Step 5: Visualization — Perfetto trace viewing
+  8. Dry Run Mode — Validation without execution
+  9. Complete Workflow — End-to-end shell script example
+  10. Memory Layouts — Address maps for each kernel
+  11. Troubleshooting — Common issues and solutions
+
+  Example Commands:
+
+  # Assemble
+  ./build/tools/development/kpu-assembler kernels/asm/matmul_16x16x16.kpuasm -o matmul.kpubin
+
+  # Behavioral (fast, correct values)
+  ./build/tools/runtime/kpu-loader matmul.kpubin --fidelity behavioral \
+      --input-a A.bin --input-b B.bin --output-c C.bin --stats
+
+  # Transactional (timing + trace)
+  ./build/tools/runtime/kpu-loader matmul.kpubin --fidelity transactional \
+      --input-a A.bin --input-b B.bin --output-c C.bin \
+      --trace trace.json --stats -v
+

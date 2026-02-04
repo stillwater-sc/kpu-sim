@@ -1,0 +1,23 @@
+  v0.4.0: TRANSACTIONAL Runtime Integration
+  ┌────────────────┬─────────────────────────────────────────────────────────┐
+  │   Component    │                         Change                          │
+  ├────────────────┼─────────────────────────────────────────────────────────┤
+  │ kpu_native.cpp │ Integrated TransactionalComputeFabric for matmul timing │
+  ├────────────────┼─────────────────────────────────────────────────────────┤
+  │ CMakeLists.txt │ Linked native module to kpu_transactional library       │
+  ├────────────────┼─────────────────────────────────────────────────────────┤
+  │ runtime.py     │ Expanded ExecutionStats with 15+ transactional metrics  │
+  ├────────────────┼─────────────────────────────────────────────────────────┤
+  │ Version.cmake  │ Updated fallback version to 0.4.0                       │
+  └────────────────┴─────────────────────────────────────────────────────────┘
+  New Capabilities:
+  - kpu.set_fidelity(kpu.TRANSACTIONAL) enables C++ timing simulation
+  - Detailed cycle breakdown: compute, memory, busy, idle, stall
+  - Performance metrics: GFLOPS, utilization, efficiency
+  - MNIST MLP verified with transactional timing (~409 GFLOPS, 17K cycles for batch-32)
+
+  Remaining for v0.4.x:
+  - TransactionalMemoryController integration (memory timing)
+  - Configuration API for array size, clock frequency
+  - Additional operator support in native code (conv2d, pooling, etc.)
+

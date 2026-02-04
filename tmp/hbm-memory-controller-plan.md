@@ -1,0 +1,267 @@
+# Implementation Plan: HBM2 and HBM3 Memory Controllers
+
+## Overview
+
+Add cycle-accurate HBM2 and HBM3 memory controllers with full pattern test suites, following the established GDDR6/LPDDR5 architecture patterns.
+
+## HBM Architecture Summary
+
+### HBM2 (High Bandwidth Memory Gen 2)
+- **Channels**: 8 per stack (128-bit each)
+- **Pseudo-channels**: 2 per channel (64-bit each), 16 total
+- **Banks**: 16 per pseudo-channel (32 total per channel)
+- **Bank Groups**: 4 per pseudo-channel
+- **Bus Width**: 1024 bits total (8 × 128-bit channels)
+- **Data Rate**: 2.0-3.2 Gbps (HBM2E: up to 3.6 Gbps)
+- **Burst Length**: BL4 (legacy) or pseudo-channel mode
+- **Page Size**: 2KB (legacy) or 1KB (pseudo-channel)
+
+### HBM3 (High Bandwidth Memory Gen 3)
+- **Channels**: 16 per stack (64-bit each)
+- **Pseudo-channels**: 2 per channel (32-bit each), 32 total
+- **Banks**: 16-32 per channel (density dependent)
+- **Bank Groups**: 4-8 per channel
+- **Bus Width**: 1024 bits total (16 × 64-bit channels)
+- **Data Rate**: 5.6-6.4 Gbps (HBM3E: up to 9.6 Gbps)
+- **Burst Length**: BL8
+- **Page Size**: 1KB per pseudo-channel
+
+## Implementation Phases
+
+### Phase 1: Add HBM2 to MemoryTechnology Enum
+**File**: `include/sw/kpu/fidelity/simulation_fidelity.hpp`
+- Add `HBM2` and `HBM2E` to the `MemoryTechnology` enum
+- Update `to_string()` function
+- Update `is_hbm()` helper to include HBM2/HBM2E
+
+### Phase 2: Add Trace ComponentTypes
+**File**: `include/sw/trace/trace_entry.hpp`
+- Add HBM2 component types (HBM2_BANK, HBM2_PSEUDO_CHANNEL, etc.)
+- Add HBM3 component types (HBM3_BANK, HBM3_PSEUDO_CHANNEL, etc.)
+
+### Phase 3: HBM2 Memory Controller
+**Files**:
+- `include/sw/kpu/components/hbm2_memory_controller.hpp` (~600 lines)
+- `src/components/memory/hbm2_memory_controller.cpp` (~1200 lines)
+
+**Key Structures**:
+```cpp
+namespace sw::kpu::hbm2 {
+    struct TimingParams {
+        uint32_t tRCDRD = 12;   // Row to column (read) @ 2GHz
+        uint32_t tRCDWR = 6;    // Row to column (write)
+        uint32_t tRP = 14;      // Row precharge
+        uint32_t tRAS = 28;     // Row active time
+        uint32_t tRC = 42;      // Row cycle
+        uint32_t tRL = 18;      // Read latency
+        uint32_t tWL = 7;       // Write latency
+        uint32_t tWR = 16;      // Write recovery
+        uint32_t tRTP = 6;      // Read to precharge
+        uint32_t tRRD_L = 4;    // ACT to ACT (same bank group)
+        uint32_t tRRD_S = 3;    // ACT to ACT (different bank group)
+        uint32_t tCCD_L = 4;    // CAS to CAS (same bank group)
+        uint32_t tCCD_S = 2;    // CAS to CAS (different bank group)
+        uint32_t tFAW = 16;     // Four activate window
+        uint32_t tRFC = 220;    // Refresh cycle
+        uint32_t tREFI = 3900;  // Refresh interval
+    };
+
+    struct Config {
+        uint8_t num_channels = 8;           // 8 channels per stack
+        uint8_t pseudo_channels_per_channel = 2;  // 2 pseudo-channels per channel
+        uint8_t banks_per_pseudo_channel = 16;    // 16 banks per PC
+        uint8_t bank_groups = 4;
+        uint32_t queue_depth = 64;
+        TimingParams timing;
+        // Address mapping
+        uint32_t row_bits = 14;
+        uint32_t col_bits = 6;
+        uint32_t bank_bits = 4;
+        uint32_t pc_bits = 1;      // Pseudo-channel bit
+        uint32_t channel_bits = 3;
+    };
+}
+```
+
+### Phase 4: HBM3 Memory Controller
+**Files**:
+- `include/sw/kpu/components/hbm3_memory_controller.hpp` (~600 lines)
+- `src/components/memory/hbm3_memory_controller.cpp` (~1200 lines)
+
+**Key Structures**:
+```cpp
+namespace sw::kpu::hbm3 {
+    struct TimingParams {
+        uint32_t tRCD = 8;      // Row to column @ 3.2GHz
+        uint32_t tRP = 8;       // Row precharge
+        uint32_t tRAS = 16;     // Row active time
+        uint32_t tRC = 24;      // Row cycle
+        uint32_t tRL = 8;       // Read latency
+        uint32_t tWL = 4;       // Write latency
+        uint32_t tWR = 12;      // Write recovery
+        uint32_t tRTP = 4;      // Read to precharge
+        uint32_t tRRD_L = 4;    // ACT to ACT (same bank group)
+        uint32_t tRRD_S = 2;    // ACT to ACT (different bank group)
+        uint32_t tCCD_L = 4;    // CAS to CAS (same bank group)
+        uint32_t tCCD_S = 2;    // CAS to CAS (different bank group)
+        uint32_t tFAW = 16;     // Four activate window
+        uint32_t tRFC = 130;    // Refresh cycle (per-bank)
+        uint32_t tREFI = 1950;  // Refresh interval
+        uint32_t tBurst = 4;    // BL8 = 4 cycles at DDR
+    };
+
+    struct Config {
+        uint8_t num_channels = 16;          // 16 channels per stack
+        uint8_t pseudo_channels_per_channel = 2;  // 2 pseudo-channels per channel
+        uint8_t banks_per_pseudo_channel = 16;    // 16 banks per PC (can be 32)
+        uint8_t bank_groups = 4;
+        uint32_t queue_depth = 64;
+        TimingParams timing;
+        // Address mapping
+        uint32_t row_bits = 14;
+        uint32_t col_bits = 5;
+        uint32_t bank_bits = 4;
+        uint32_t pc_bits = 1;
+        uint32_t channel_bits = 4;
+    };
+}
+```
+
+### Phase 5: Update Memory Controller Factory
+**File**: `src/components/memory/memory_controller_factory.cpp`
+- Add includes for HBM2 and HBM3 controllers
+- Update switch cases for HBM2, HBM2E, HBM3, HBM3E
+- Add HBM2 default timing parameters
+
+### Phase 6: Update CMakeLists.txt
+**File**: `src/components/memory/CMakeLists.txt`
+- Add `hbm2_memory_controller.cpp`
+- Add `hbm3_memory_controller.cpp`
+
+### Phase 7: HBM2 Pattern Infrastructure
+**Directory**: `patterns/memory/hbm2/`
+
+```
+patterns/memory/hbm2/
+├── README.md
+├── INVARIANTS.md
+├── common/
+│   ├── hbm2_harness.hpp
+│   └── hbm2_configs.hpp
+├── single-bank/
+│   ├── page_hits.cpp
+│   ├── page_conflicts.cpp
+│   └── mixed_rw.cpp
+├── two-bank/
+│   ├── same_group.cpp
+│   └── diff_groups.cpp
+├── multi-channel/
+│   ├── single_channel.cpp
+│   ├── four_channel.cpp
+│   └── eight_channel.cpp
+├── pseudo-channel/
+│   ├── single_pc.cpp
+│   └── dual_pc.cpp
+├── complex/
+│   ├── stream.cpp
+│   ├── tile_load.cpp
+│   └── multi_dma.cpp
+└── bandwidth/
+    ├── max_bandwidth.cpp
+    └── page_burst.cpp
+```
+
+### Phase 8: HBM3 Pattern Infrastructure
+**Directory**: `patterns/memory/hbm3/`
+
+```
+patterns/memory/hbm3/
+├── README.md
+├── INVARIANTS.md
+├── common/
+│   ├── hbm3_harness.hpp
+│   └── hbm3_configs.hpp
+├── single-bank/
+│   ├── page_hits.cpp
+│   ├── page_conflicts.cpp
+│   └── mixed_rw.cpp
+├── two-bank/
+│   ├── same_group.cpp
+│   └── diff_groups.cpp
+├── multi-channel/
+│   ├── single_channel.cpp
+│   ├── eight_channel.cpp
+│   └── sixteen_channel.cpp
+├── pseudo-channel/
+│   ├── single_pc.cpp
+│   └── dual_pc.cpp
+├── complex/
+│   ├── stream.cpp
+│   ├── tile_load.cpp
+│   └── multi_dma.cpp
+└── bandwidth/
+    ├── max_bandwidth.cpp
+    └── page_burst.cpp
+```
+
+### Phase 9: Update patterns/CMakeLists.txt
+- Add `add_hbm2_pattern()` function
+- Add `add_hbm3_pattern()` function
+- Register all HBM2 and HBM3 patterns
+
+### Phase 10: Create Trace Directories
+**Directories**:
+- `traces/memory/hbm2/` with subdirectories
+- `traces/memory/hbm3/` with subdirectories
+
+### Phase 11: Update Documentation
+- Update `traces/README.md` with HBM2/HBM3 sections
+- Update `docs/memory-characterization.md` with HBM metrics
+- Create session log
+
+## File Summary
+
+### New Files (18 total)
+| File | Lines (est) |
+|------|-------------|
+| `include/sw/kpu/components/hbm2_memory_controller.hpp` | ~600 |
+| `src/components/memory/hbm2_memory_controller.cpp` | ~1200 |
+| `include/sw/kpu/components/hbm3_memory_controller.hpp` | ~600 |
+| `src/components/memory/hbm3_memory_controller.cpp` | ~1200 |
+| `patterns/memory/hbm2/common/hbm2_harness.hpp` | ~250 |
+| `patterns/memory/hbm2/common/hbm2_configs.hpp` | ~200 |
+| `patterns/memory/hbm3/common/hbm3_harness.hpp` | ~250 |
+| `patterns/memory/hbm3/common/hbm3_configs.hpp` | ~200 |
+| HBM2 pattern files (12 patterns) | ~150 each |
+| HBM3 pattern files (12 patterns) | ~150 each |
+| HBM2 README.md, INVARIANTS.md | ~300 |
+| HBM3 README.md, INVARIANTS.md | ~300 |
+
+### Modified Files (6 total)
+| File | Change |
+|------|--------|
+| `include/sw/kpu/fidelity/simulation_fidelity.hpp` | Add HBM2/HBM2E enum |
+| `include/sw/trace/trace_entry.hpp` | Add HBM component types |
+| `src/components/memory/memory_controller_factory.cpp` | Wire up HBM controllers |
+| `src/components/memory/CMakeLists.txt` | Add HBM source files |
+| `patterns/CMakeLists.txt` | Add HBM pattern targets |
+| `traces/README.md` | Document HBM traces |
+
+## Implementation Order
+
+1. **Enum and trace types** (simulation_fidelity.hpp, trace_entry.hpp)
+2. **HBM2 controller** (header + implementation)
+3. **HBM3 controller** (header + implementation)
+4. **Factory updates** (memory_controller_factory.cpp)
+5. **Build system** (CMakeLists.txt files)
+6. **HBM2 patterns** (harness, configs, patterns)
+7. **HBM3 patterns** (harness, configs, patterns)
+8. **Documentation** (README, characterization)
+
+## Key Architectural Decisions
+
+1. **Pseudo-channel modeling**: Each pseudo-channel operates independently with its own bank array, similar to channels but sharing the same physical interface
+2. **Address decoding**: `[row | bank | col | pseudo_channel | channel | byte_offset]`
+3. **Shared namespace patterns**: `sw::kpu::hbm2::` and `sw::kpu::hbm3::`
+4. **Reuse IMemoryController interface**: Full compatibility with existing multi-fidelity framework
+5. **Trace integration**: New ComponentTypes for HBM-specific visualization

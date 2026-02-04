@@ -256,14 +256,15 @@ void StreamerHarness::execute_stream(const StreamRequest& request) {
             // Write to L1 buffer (simplified - just use first buffer)
             l1_buffers_.write(0, data.data(), transfer_size);
 
-            // Record L1 arrival
-            journey_tracker_.record_l1_arrival(request.tile_id, current_cycle_, 0);
+            // Record L1 arrival (use current_cycle_ + 1 to indicate "end of tick")
+            // In behavioral mode, this ensures l1_arrival > 0 for journey tracking
+            journey_tracker_.record_l1_arrival(request.tile_id, current_cycle_ + 1, 0);
 
             // Trigger compute (simplified)
-            journey_tracker_.record_compute_start(request.tile_id, current_cycle_);
+            journey_tracker_.record_compute_start(request.tile_id, current_cycle_ + 1);
             str_stats_.compute_operations += request.height * request.width;
             str_stats_.compute_cycles++;
-            journey_tracker_.record_compute_end(request.tile_id, current_cycle_);
+            journey_tracker_.record_compute_end(request.tile_id, current_cycle_ + 1);
 
             str_stats_.rows_streamed++;
             str_stats_.bytes_l2_to_l1 += transfer_size;
@@ -280,8 +281,8 @@ void StreamerHarness::execute_stream(const StreamRequest& request) {
             l2_banks_.read(request.l2_bank_id, request.l2_offset, data.data(), transfer_size);
             l1_buffers_.write(1, data.data(), transfer_size);
 
-            // Record L1 arrival
-            journey_tracker_.record_l1_arrival(request.tile_id, current_cycle_, 1);
+            // Record L1 arrival (use current_cycle_ + 1 to indicate "end of tick")
+            journey_tracker_.record_l1_arrival(request.tile_id, current_cycle_ + 1, 1);
 
             str_stats_.cols_streamed++;
             str_stats_.bytes_l2_to_l1 += transfer_size;
@@ -313,8 +314,8 @@ void StreamerHarness::execute_stream(const StreamRequest& request) {
             l2_banks_.reserve(request.l2_bank_id, request.tile_id);
             l2_banks_.write(request.l2_bank_id, 0, drain_buffer_.data(), drain_size);
 
-            // Record journey
-            journey_tracker_.record_drain_complete(request.tile_id, current_cycle_);
+            // Record journey (use current_cycle_ + 1 for consistency)
+            journey_tracker_.record_drain_complete(request.tile_id, current_cycle_ + 1);
 
             str_stats_.drains++;
             str_stats_.bytes_l1_to_l2 += drain_size;

@@ -1,0 +1,102 @@
+Here's how to run everything from the python/ directory:
+
+  Phase 1: Core Package (MLP)
+
+  # Run the MNIST MLP example
+  python3 examples/mnist_mlp.py
+
+  # Run basic tests (requires pytest, or use manual test)
+  python3 -c "
+  import sys; sys.path.insert(0, '.')
+  import numpy as np
+  import kpu
+
+  # Quick MLP test
+  @kpu.compile
+  def mlp(x, w1, w2):
+      return kpu.relu(x @ w1) @ w2
+
+  x = kpu.Tensor(np.random.randn(4, 10).astype(np.float32))
+  w1 = kpu.Tensor(np.random.randn(10, 8).astype(np.float32))
+  w2 = kpu.Tensor(np.random.randn(8, 3).astype(np.float32))
+  result = mlp(x, w1, w2)
+  print(f'MLP output: {result.shape}')
+  print(f'DFX ops: {[op.opcode.value for op in mlp.get_dfx().ops]}')
+  "
+
+  Phase 2: CNN Operators
+
+  # Run the MNIST CNN example (validates against NumPy reference)
+  python3 examples/mnist_cnn.py
+
+  # Run CNN validation test suite
+  python3 tests/test_cnn_validation.py
+
+  Phase 3: Real MNIST Validation
+
+  # Quick test with real MNIST data (downloads dataset)
+  python3 -c "
+  import sys; sys.path.insert(0, '.')
+  import numpy as np
+  import kpu
+
+  kpu.set_fidelity(kpu.BEHAVIORAL)
+
+  # Load real MNIST
+  images, labels = kpu.load_mnist(split='test', normalize=True, limit=20)
+  print(f'Loaded {len(images)} MNIST images: {images.shape}')
+
+  # Simple CNN
+  @kpu.compile
+  def cnn(x, w, fc):
+      h = kpu.relu(kpu.conv2d(x, w))
+      h = kpu.max_pool2d(h, kernel_size=2, stride=2)
+      h = h.reshape(h.shape[0], -1)
+      return h @ fc
+
+  np.random.seed(42)
+  w = kpu.Tensor(np.random.randn(8, 1, 3, 3).astype(np.float32) * 0.1)
+  fc = kpu.Tensor(np.random.randn(8*13*13, 10).astype(np.float32) * 0.1)
+
+  # Run inference
+  result = cnn(kpu.Tensor(images[:4]), w, fc)
+  preds = np.argmax(result.numpy(), axis=-1)
+  print(f'Predictions: {preds}')
+  print(f'True labels: {labels[:4]}')
+  "
+
+  # Full validation (slow - pure Python conv2d)
+  # python3 examples/mnist_real_validation.py
+
+  All-in-One Quick Validation
+
+  # Run everything in one command
+  cd /home/stillwater/dev/stillwater/clones/kpu-sim/python
+
+  python3 -c "
+  import sys; sys.path.insert(0, '.')
+  print('=== Phase 1: MLP ===')
+  exec(open('examples/mnist_mlp.py').read())
+  " && \
+  python3 -c "
+  import sys; sys.path.insert(0, '.')
+  print('\n=== Phase 2: CNN ===')
+  exec(open('examples/mnist_cnn.py').read())
+  " && \
+  python3 tests/test_cnn_validation.py
+
+  Key Files Summary
+  ┌───────┬───────────────────────────────────┬────────────────────────────────┐
+  │ Phase │               File                │            Purpose             │
+  ├───────┼───────────────────────────────────┼────────────────────────────────┤
+  │ 1     │ examples/mnist_mlp.py             │ MLP with matmul, relu, add     │
+  ├───────┼───────────────────────────────────┼────────────────────────────────┤
+  │ 2     │ examples/mnist_cnn.py             │ CNN with conv2d, pool, reshape │
+  ├───────┼───────────────────────────────────┼────────────────────────────────┤
+  │ 2     │ tests/test_cnn_validation.py      │ Validation against NumPy       │
+  ├───────┼───────────────────────────────────┼────────────────────────────────┤
+  │ 3     │ examples/mnist_real_validation.py │ Real MNIST (slow)              │
+  ├───────┼───────────────────────────────────┼────────────────────────────────┤
+  │ 3     │ kpu/datasets.py                   │ MNIST data loader              │
+  └───────┴───────────────────────────────────┴────────────────────────────────┘
+

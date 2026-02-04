@@ -99,6 +99,13 @@ public:
         return TileID{};
     }
 
+    /// Set tile ID for a bank (used after allocate())
+    void set_tile(uint32_t bank_id, const TileID& tile_id) {
+        if (bank_id < num_banks_) {
+            bank_tile_ids_[bank_id] = tile_id;
+        }
+    }
+
     /// Write data to bank
     void write(uint32_t bank_id, uint64_t offset, const void* data, size_t size) {
         if (bank_id < num_banks_ && offset + size <= bank_size_) {

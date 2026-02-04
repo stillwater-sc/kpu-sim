@@ -1,0 +1,66 @@
+
+● Based on the existing plan and project state, here are the priorities:
+
+  Pending Work
+
+  1. XUE Observation Architecture Refactoring (Planned)
+
+  Status: Plan complete, implementation not started
+
+  The existing plan at docs/plans/xue-refactoring.md outlines:
+  - Phase 1: Integrate C++ XUE into simulator components (EventCollector calls in compute_fabric, memory_controller)
+  - Phase 2: Add XUE pybind11 bindings (read-only API)
+  - Phase 3: Remove Python XUE code (duplicates C++ functionality)
+  - Phase 4: Validate pre/post-silicon comparison workflow
+
+  Rationale: Python currently duplicates XUE metrics that should come from C++. The C++ XUE infrastructure is complete (79 tests passing) but not integrated into the simulator.
+
+  2. v0.7 C++ Quantization (Planned)
+
+  Status: Design document exists at docs/plans/v0.7-cpp-quantization-design.md
+
+  Universal library v3.91 is now integrated, enabling:
+  - FP16, BF16, FP8 (E4M3, E5M2), FP4 types
+  - Quantization-aware simulation
+  - Mixed-precision compute
+
+  3. Other Items
+
+  - Model compatibility expansion (currently 45 models)
+  - Cycle-accurate memory controller integration
+  - Documentation updates for v0.8.0 release
+
+  ---
+  Recommendation: Continue with XUE Refactoring since:
+  1. Plan is complete and detailed
+  2. Removes technical debt (Python XUE duplication)
+  3. Enables proper pre/post-silicon validation workflow
+  4. C++ infrastructure already exists and is tested
+
+  Would you like to proceed with the XUE refactoring, or focus on something else?
+
+● All 3 XUE tests pass. Let me mark Phase 4 as complete:
+
+● The XUE Observation Architecture refactoring is complete. All 4 phases are finished:
+  ┌───────┬────────────┬───────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+  │ Phase │   Status   │                                                    Summary                                                    │
+  ├───────┼────────────┼───────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+  │ 1     │ ✓ Complete │ C++ XUE integrated into behavioral/transactional compute fabrics and memory controller                        │
+  ├───────┼────────────┼───────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+  │ 2     │ ✓ Complete │ pybind11 bindings expose get_xue_summary(), get_operational_analysis(), validate_operational_analysis(), etc. │
+  ├───────┼────────────┼───────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+  │ 3     │ ✓ Complete │ Python XUE code removed; added missing xue_version() export                                                   │
+  ├───────┼────────────┼───────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+  │ 4     │ ✓ Complete │ Pre/post-silicon workflow validated with xue_validation.py                                                    │
+  └───────┴────────────┴───────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+  Results:
+  - C++ XUE tests: 3/3 passing
+  - FLOP verification: within 0.1% (tiling overhead)
+  - Both BEHAVIORAL and TRANSACTIONAL modes work with XUE event recording
+
+  Key changes this session:
+  - Added xue_version() function export to python/kpu/__init__.py (lines 473-483)
+  - Added "xue_version" to __all__ list
+
+  The XUE architecture now properly follows the hardware observation pipeline model - all event recording and aggregation happens in C++, with Python serving only as a read-only consumer of the event counts. This enables direct comparison between pre-silicon simulation and post-silicon hardware counters.
+
