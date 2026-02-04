@@ -102,20 +102,29 @@ static std::string get_opcode_name(DMOpcode opcode) {
         case DMOpcode::DMA_LOAD_TILE: return "DMA_LOAD";
         case DMOpcode::DMA_STORE_TILE: return "DMA_STORE";
         case DMOpcode::DMA_PREFETCH_TILE: return "DMA_PREFETCH";
+        case DMOpcode::DMA_LOAD_TILE_AUTO: return "DMA_LOAD_AUTO";
+        case DMOpcode::DMA_STORE_TILE_AUTO: return "DMA_STORE_AUTO";
         case DMOpcode::BM_MOVE_TILE: return "BM_MOVE";
         case DMOpcode::BM_TRANSPOSE_TILE: return "BM_TRANSPOSE";
         case DMOpcode::BM_WRITEBACK_TILE: return "BM_WRITEBACK";
         case DMOpcode::BM_RESHAPE_TILE: return "BM_RESHAPE";
+        case DMOpcode::BM_MOVE_TILE_AUTO: return "BM_MOVE_AUTO";
+        case DMOpcode::BM_WRITEBACK_AUTO: return "BM_WRITEBACK_AUTO";
         case DMOpcode::STR_FEED_ROWS: return "STR_FEED_ROWS";
         case DMOpcode::STR_FEED_COLS: return "STR_FEED_COLS";
         case DMOpcode::STR_DRAIN_OUTPUT: return "STR_DRAIN";
         case DMOpcode::STR_BROADCAST_ROW: return "STR_BROADCAST_ROW";
         case DMOpcode::STR_BROADCAST_COL: return "STR_BROADCAST_COL";
+        case DMOpcode::STR_FEED_ROWS_AUTO: return "STR_FEED_ROWS_AUTO";
+        case DMOpcode::STR_FEED_COLS_AUTO: return "STR_FEED_COLS_AUTO";
+        case DMOpcode::STR_DRAIN_AUTO: return "STR_DRAIN_AUTO";
         case DMOpcode::BARRIER: return "BARRIER";
         case DMOpcode::WAIT_DMA: return "WAIT_DMA";
         case DMOpcode::WAIT_BM: return "WAIT_BM";
         case DMOpcode::WAIT_STR: return "WAIT_STR";
         case DMOpcode::SIGNAL: return "SIGNAL";
+        case DMOpcode::LOOP_BEGIN: return "LOOP_BEGIN";
+        case DMOpcode::LOOP_END: return "LOOP_END";
         case DMOpcode::HALT: return "HALT";
         case DMOpcode::NOP: return "NOP";
         default: return "UNKNOWN";
@@ -149,6 +158,9 @@ void TransactionalProgramExecutor::load_program(const DMProgram& program,
     total_bm_cycles_ = 0;
     total_str_cycles_ = 0;
     total_compute_cycles_ = 0;
+    total_loop_overhead_cycles_ = 0;
+    total_loop_iterations_ = 0;
+    timing_loop_state_.reset();
 
     // Extract tile dimensions from program
     if (program.Ti > 0) tile_rows_ = program.Ti;
@@ -163,15 +175,77 @@ bool TransactionalProgramExecutor::run() {
     bool halted = behavioral_.run();
 
     // Phase 2: Compute timing overlay
-    // Iterate through instructions again to compute when each operation would
-    // complete on real hardware. Since behavioral operations are instant, the
-    // timing is independent of execution order.
-    for (const auto& instr : program_->instructions) {
-        dispatch_with_timing(instr);
+    // Iterate through instructions following actual execution path with loops.
+    // Loop control is modeled with timing overhead for loop machinery.
+    const auto& instructions = program_->instructions;
+    size_t pc = 0;
+
+    while (pc < instructions.size()) {
+        const auto& instr = instructions[pc];
 
         if (instr.opcode == DMOpcode::HALT) {
+            dispatch_with_timing(instr);
             break;
         }
+
+        // Handle loop control with PC manipulation (same logic as behavioral)
+        if (instr.opcode == DMOpcode::LOOP_BEGIN) {
+            const auto& ops = std::get<LoopOperands>(instr.operands);
+
+            // Add timing overhead for loop begin
+            Cycle duration = timing_.loop_begin_latency;
+            current_cycle_ += duration;
+            total_loop_overhead_cycles_ += duration;
+            total_loop_iterations_++;
+
+            // Record event
+            record_event("LOOP_BEGIN[" + std::to_string(ops.loop_id) + "]",
+                        "loop", current_cycle_ - duration, current_cycle_,
+                        300 + ops.loop_id, MatrixID::A, TileCoord{0, 0, 0});
+
+            // Initialize loop counter for timing
+            timing_loop_state_.begin_loop(ops.loop_id, ops.loop_count,
+                                         ops.index_role, ops.loop_stride, pc);
+            ++pc;
+            continue;
+        }
+
+        if (instr.opcode == DMOpcode::LOOP_END) {
+            const auto& ops = std::get<LoopOperands>(instr.operands);
+
+            // Add timing overhead for loop end (check + decrement)
+            Cycle duration = timing_.loop_end_latency;
+
+            // Check if loop will continue (branch taken) or exit
+            const auto& lc = timing_loop_state_.get_counter(ops.loop_id);
+            bool will_continue = lc.active && (lc.count + lc.stride < lc.limit);
+
+            if (will_continue) {
+                duration += timing_.loop_branch_taken_latency;
+            } else {
+                duration += timing_.loop_branch_not_taken_latency;
+            }
+
+            current_cycle_ += duration;
+            total_loop_overhead_cycles_ += duration;
+
+            // Record event
+            record_event("LOOP_END[" + std::to_string(ops.loop_id) + "]",
+                        "loop", current_cycle_ - duration, current_cycle_,
+                        300 + ops.loop_id, MatrixID::A, TileCoord{0, 0, 0});
+
+            // Execute loop end (may branch back)
+            size_t next_pc = timing_loop_state_.end_loop(ops.loop_id, pc);
+            if (next_pc != pc + 1) {
+                // Loop continues, branch back - count iteration
+                total_loop_iterations_++;
+            }
+            pc = next_pc;
+            continue;
+        }
+
+        dispatch_with_timing(instr);
+        ++pc;
     }
 
     return halted;
@@ -303,10 +377,144 @@ void TransactionalProgramExecutor::dispatch_with_timing(
         duration = 0;
         break;
 
+    // ========================================================================
+    // AUTO addressing opcodes - use current loop state for tile coordinates
+    // ========================================================================
+    case DMOpcode::DMA_LOAD_TILE_AUTO: {
+        const auto& ops = std::get<AutoDMAOperands>(instr.operands);
+        matrix = ops.matrix;
+        tile = timing_loop_state_.current_tile();
+        Size bytes = tile_rows_ * tile_cols_ * element_size_;
+        duration = compute_dma_cycles(bytes);
+        uint8_t channel = select_dma_channel(matrix, tile);
+        start_cycle = std::max(last_barrier_cycle_, timeline_.dma_available(channel));
+        Cycle end = timeline_.schedule_dma(channel, start_cycle, duration);
+        resource_id = channel;
+        category = "dma";
+        total_dma_cycles_ += duration;
+        current_cycle_ = end;
+        break;
+    }
+
+    case DMOpcode::DMA_STORE_TILE_AUTO: {
+        const auto& ops = std::get<AutoDMAOperands>(instr.operands);
+        matrix = ops.matrix;
+        tile = timing_loop_state_.current_tile();
+        Size bytes = tile_rows_ * tile_cols_ * element_size_;
+        duration = compute_dma_cycles(bytes);
+        uint8_t channel = select_dma_channel(matrix, tile);
+        start_cycle = std::max(last_barrier_cycle_, timeline_.dma_available(channel));
+        Cycle end = timeline_.schedule_dma(channel, start_cycle, duration);
+        resource_id = channel;
+        category = "dma";
+        total_dma_cycles_ += duration;
+        current_cycle_ = end;
+        break;
+    }
+
+    case DMOpcode::BM_MOVE_TILE_AUTO:
+    case DMOpcode::BM_WRITEBACK_AUTO: {
+        const auto& ops = std::get<AutoBlockMoverOperands>(instr.operands);
+        matrix = ops.matrix;
+        tile = timing_loop_state_.current_tile();
+        Size bytes = tile_rows_ * tile_cols_ * element_size_;
+        duration = compute_block_mover_cycles(bytes);
+        uint8_t bm_id = select_block_mover(matrix, tile);
+        start_cycle = std::max(last_barrier_cycle_, timeline_.block_mover_available(bm_id));
+        Cycle end = timeline_.schedule_block_mover(bm_id, start_cycle, duration);
+        resource_id = 100 + bm_id;
+        category = "block_mover";
+        total_bm_cycles_ += duration;
+        current_cycle_ = end;
+        break;
+    }
+
+    case DMOpcode::STR_FEED_ROWS_AUTO:
+    case DMOpcode::STR_FEED_COLS_AUTO: {
+        tile = timing_loop_state_.current_tile();
+        matrix = (instr.opcode == DMOpcode::STR_FEED_ROWS_AUTO) ? MatrixID::A : MatrixID::B;
+        Size bytes = tile_rows_ * tile_cols_ * element_size_;
+        duration = compute_streamer_cycles(bytes);
+        uint8_t str_id = select_streamer(matrix, tile);
+        start_cycle = std::max(last_barrier_cycle_, timeline_.streamer_available(str_id));
+        Cycle end = timeline_.schedule_streamer(str_id, start_cycle, duration);
+        resource_id = 200 + str_id;
+        category = "streamer";
+        total_str_cycles_ += duration;
+        current_cycle_ = end;
+        break;
+    }
+
+    case DMOpcode::STR_DRAIN_AUTO: {
+        tile = timing_loop_state_.current_tile();
+        matrix = MatrixID::C;
+        Size bytes = tile_rows_ * tile_cols_ * element_size_;
+        duration = compute_streamer_cycles(bytes);
+        uint8_t str_id = select_streamer(matrix, tile);
+        start_cycle = std::max(last_barrier_cycle_, timeline_.streamer_available(str_id));
+        Cycle end = timeline_.schedule_streamer(str_id, start_cycle, duration);
+        resource_id = 200 + str_id;
+        category = "streamer";
+        total_str_cycles_ += duration;
+        current_cycle_ = end;
+        break;
+    }
+
+    // ========================================================================
+    // Configuration opcodes - minimal timing (register updates)
+    // ========================================================================
+    case DMOpcode::SET_BASE:
+    case DMOpcode::SET_L3_BASE:
+    case DMOpcode::SET_L2_BASE:
+    case DMOpcode::SET_STRIDE:
+    case DMOpcode::SET_TILE_DIM:
+    case DMOpcode::SET_MATRIX_DIM:
+    case DMOpcode::SET_TILE_SIZE:
+    case DMOpcode::SET_BUFFER:
+        // Configuration instructions: 1 cycle to update registers
+        duration = 1;
+        category = "config";
+        resource_id = 999;
+        current_cycle_ += duration;
+        break;
+
+    // Wait opcodes - synchronization
+    case DMOpcode::WAIT_DMA:
+    case DMOpcode::WAIT_BM:
+    case DMOpcode::WAIT_STR:
+        // Wait is like a partial barrier - wait for specific resources
+        // For simplicity, treat as minimal sync overhead
+        duration = 1;
+        category = "sync";
+        resource_id = 999;
+        current_cycle_ += duration;
+        break;
+
+    case DMOpcode::SIGNAL:
+        duration = 1;
+        category = "sync";
+        resource_id = 999;
+        current_cycle_ += duration;
+        break;
+
+    case DMOpcode::NOP:
+        duration = 1;
+        category = "control";
+        resource_id = 999;
+        current_cycle_ += duration;
+        break;
+
+    // Loop opcodes are handled in run() before dispatch_with_timing()
+    case DMOpcode::LOOP_BEGIN:
+    case DMOpcode::LOOP_END:
+        // Should not reach here - handled in run()
+        break;
+
     default:
         // Other opcodes - minimal timing
         duration = 1;
         category = "other";
+        current_cycle_ += duration;
         break;
     }
 
@@ -443,6 +651,8 @@ TransactionalProgramExecutor::get_timing_stats() const {
     stats.block_mover_cycles = total_bm_cycles_;
     stats.streamer_cycles = total_str_cycles_;
     stats.compute_cycles = total_compute_cycles_;
+    stats.loop_overhead_cycles = total_loop_overhead_cycles_;
+    stats.loop_iterations = total_loop_iterations_;
 
     if (stats.total_cycles > 0) {
         // Utilization is (busy cycles) / (total cycles * num_resources)
@@ -498,6 +708,8 @@ void TransactionalProgramExecutor::export_chrome_trace(
     out << "  \"displayTimeUnit\": \"ns\",\n";
     out << "  \"metadata\": {\n";
     out << "    \"total_cycles\": " << timeline_.makespan() << ",\n";
+    out << "    \"loop_overhead_cycles\": " << total_loop_overhead_cycles_ << ",\n";
+    out << "    \"loop_iterations\": " << total_loop_iterations_ << ",\n";
     out << "    \"reference_clock_mhz\": " << timing_.reference_clock_mhz << "\n";
     out << "  }\n";
     out << "}\n";
@@ -558,6 +770,10 @@ std::string TransactionalProgramExecutor::generate_timeline(size_t width) const 
         << (stats.block_mover_utilization * 100) << "% util)\n";
     oss << "STR: " << stats.streamer_cycles << " cycles ("
         << (stats.streamer_utilization * 100) << "% util)\n";
+    if (stats.loop_overhead_cycles > 0) {
+        oss << "LOOP: " << stats.loop_overhead_cycles << " cycles ("
+            << stats.loop_iterations << " iterations)\n";
+    }
 
     return oss.str();
 }

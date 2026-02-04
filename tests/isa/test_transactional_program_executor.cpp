@@ -474,6 +474,178 @@ void test_identity_matrix_multiplication() {
 }
 
 // ============================================================================
+// Loop Timing Tests
+// ============================================================================
+
+void test_loop_timing_overhead() {
+    std::cout << "test_loop_timing_overhead:\n";
+
+    TestHardware hw;
+
+    // Create a simple program with a loop
+    DMProgram prog;
+    prog.name = "loop_test";
+    prog.M = 32; prog.N = 16; prog.K = 16;
+    prog.Ti = 16; prog.Tj = 16; prog.Tk = 16;
+
+    // Configuration
+    prog.instructions.push_back(DMInstruction::set_tile_dim(16, 16, 16, 4));
+    prog.instructions.push_back(DMInstruction::set_base(MatrixID::A, 0));
+    prog.instructions.push_back(DMInstruction::set_base(MatrixID::B, 2048));
+    prog.instructions.push_back(DMInstruction::set_base(MatrixID::C, 4096));
+    prog.instructions.push_back(DMInstruction::set_stride(MatrixID::A, 64, 1024, 64));
+    prog.instructions.push_back(DMInstruction::set_stride(MatrixID::B, 64, 1024, 64));
+    prog.instructions.push_back(DMInstruction::set_stride(MatrixID::C, 64, 1024, 64));
+
+    // Loop with 2 iterations bound to TI
+    prog.instructions.push_back(DMInstruction::loop_begin(0, 2, IndexRole::TI));
+
+    // Loop body: load, move, stream, drain
+    prog.instructions.push_back(DMInstruction::dma_load_auto(MatrixID::A, 0));
+    prog.instructions.push_back(DMInstruction::dma_load_auto(MatrixID::B, 1));
+    prog.instructions.push_back(DMInstruction::barrier());
+    prog.instructions.push_back(DMInstruction::bm_move_auto(MatrixID::A, 0));
+    prog.instructions.push_back(DMInstruction::bm_move_auto(MatrixID::B, 1));
+    prog.instructions.push_back(DMInstruction::barrier());
+
+    prog.instructions.push_back(DMInstruction::loop_end(0));
+
+    prog.instructions.push_back(DMInstruction::halt());
+
+    // Initialize memory
+    Address a_base = 0;
+    Address b_base = 2048;
+    Address c_base = 4096;
+    std::vector<float> data(1024, 1.0f);
+    hw.ext_mem.write(a_base, data.data(), data.size() * sizeof(float));
+    hw.ext_mem.write(b_base, data.data(), data.size() * sizeof(float));
+
+    TransactionalProgramExecutor exec(hw.context());
+    exec.load_program(prog, a_base, b_base, c_base);
+    exec.run();
+
+    auto stats = exec.get_timing_stats();
+
+    // Verify loop overhead is tracked
+    check(stats.loop_overhead_cycles > 0, "Loop overhead cycles tracked");
+    check(stats.loop_iterations >= 2, "Loop iterations counted");
+
+    std::cout << "    Loop overhead: " << stats.loop_overhead_cycles << " cycles\n";
+    std::cout << "    Loop iterations: " << stats.loop_iterations << "\n";
+    std::cout << "    Total cycles: " << stats.total_cycles << "\n";
+}
+
+void test_nested_loop_timing() {
+    std::cout << "test_nested_loop_timing:\n";
+
+    TestHardware hw;
+
+    // Create a program with nested loops (like output-stationary matmul)
+    DMProgram prog;
+    prog.name = "nested_loop_test";
+    prog.M = 32; prog.N = 32; prog.K = 16;
+    prog.Ti = 16; prog.Tj = 16; prog.Tk = 16;
+
+    // Configuration
+    prog.instructions.push_back(DMInstruction::set_tile_dim(16, 16, 16, 4));
+    prog.instructions.push_back(DMInstruction::set_base(MatrixID::A, 0));
+    prog.instructions.push_back(DMInstruction::set_base(MatrixID::B, 2048));
+    prog.instructions.push_back(DMInstruction::set_base(MatrixID::C, 4096));
+    prog.instructions.push_back(DMInstruction::set_stride(MatrixID::A, 64, 1024, 64));
+    prog.instructions.push_back(DMInstruction::set_stride(MatrixID::B, 64, 1024, 64));
+    prog.instructions.push_back(DMInstruction::set_stride(MatrixID::C, 128, 2048, 64));
+
+    // Outer loop: ti = 0..1 (2 iterations)
+    prog.instructions.push_back(DMInstruction::loop_begin(0, 2, IndexRole::TI));
+
+      // Inner loop: tj = 0..1 (2 iterations)
+      prog.instructions.push_back(DMInstruction::loop_begin(1, 2, IndexRole::TJ));
+
+        // Simple body with auto addressing
+        prog.instructions.push_back(DMInstruction::dma_load_auto(MatrixID::A, 0));
+        prog.instructions.push_back(DMInstruction::barrier());
+
+      prog.instructions.push_back(DMInstruction::loop_end(1));
+
+    prog.instructions.push_back(DMInstruction::loop_end(0));
+
+    prog.instructions.push_back(DMInstruction::halt());
+
+    // Initialize memory
+    Address a_base = 0;
+    Address b_base = 2048;
+    Address c_base = 4096;
+    std::vector<float> data(1024, 1.0f);
+    hw.ext_mem.write(a_base, data.data(), data.size() * sizeof(float));
+
+    TransactionalProgramExecutor exec(hw.context());
+    exec.load_program(prog, a_base, b_base, c_base);
+    exec.run();
+
+    auto stats = exec.get_timing_stats();
+
+    // With 2x2 nested loops, we should have 4 total iterations
+    // plus loop setup/teardown overhead
+    check(stats.loop_overhead_cycles > 0, "Nested loop overhead tracked");
+    check(stats.loop_iterations >= 4, "Nested loop iterations counted (2x2=4+)");
+
+    // Check that events contain loop markers
+    bool has_loop_events = false;
+    for (const auto& event : exec.timing_events()) {
+        if (event.category == "loop") {
+            has_loop_events = true;
+            break;
+        }
+    }
+    check(has_loop_events, "Loop events recorded in trace");
+
+    std::cout << "    Loop overhead: " << stats.loop_overhead_cycles << " cycles\n";
+    std::cout << "    Loop iterations: " << stats.loop_iterations << "\n";
+    std::cout << "    Total cycles: " << stats.total_cycles << "\n";
+}
+
+void test_loop_timing_config() {
+    std::cout << "test_loop_timing_config:\n";
+
+    TestHardware hw1, hw2;
+
+    // Create a program with a loop
+    DMProgram prog;
+    prog.name = "loop_timing_config_test";
+    prog.M = 16; prog.N = 16; prog.K = 16;
+    prog.Ti = 16; prog.Tj = 16; prog.Tk = 16;
+
+    prog.instructions.push_back(DMInstruction::set_tile_dim(16, 16, 16, 4));
+    prog.instructions.push_back(DMInstruction::loop_begin(0, 4, IndexRole::TI));
+    prog.instructions.push_back(DMInstruction::barrier());  // Minimal body
+    prog.instructions.push_back(DMInstruction::loop_end(0));
+    prog.instructions.push_back(DMInstruction::halt());
+
+    // Default timing
+    TransactionalProgramExecutor exec1(hw1.context());
+    exec1.load_program(prog, 0, 0, 0);
+    exec1.run();
+    auto stats1 = exec1.get_timing_stats();
+
+    // Custom timing with higher loop latency
+    TimingConfig slow_loops;
+    slow_loops.loop_begin_latency = 10;
+    slow_loops.loop_end_latency = 5;
+    slow_loops.loop_branch_taken_latency = 5;
+
+    TransactionalProgramExecutor exec2(hw2.context(), slow_loops);
+    exec2.load_program(prog, 0, 0, 0);
+    exec2.run();
+    auto stats2 = exec2.get_timing_stats();
+
+    check(stats2.loop_overhead_cycles > stats1.loop_overhead_cycles,
+          "Higher loop latency config increases overhead");
+
+    std::cout << "    Default loop overhead: " << stats1.loop_overhead_cycles << " cycles\n";
+    std::cout << "    Slow loop overhead: " << stats2.loop_overhead_cycles << " cycles\n";
+}
+
+// ============================================================================
 // Main
 // ============================================================================
 
@@ -501,6 +673,11 @@ int main() {
 
     // Special cases
     test_identity_matrix_multiplication();
+
+    // Loop timing tests
+    test_loop_timing_overhead();
+    test_nested_loop_timing();
+    test_loop_timing_config();
 
     // Summary
     std::cout << "\n=== Summary ===\n";

@@ -29,6 +29,7 @@
 #include <sw/kpu/isa/behavioral_program_executor.hpp>
 #include <sw/kpu/isa/concurrent_executor.hpp>
 #include <sw/kpu/isa/data_movement_isa.hpp>
+#include <sw/kpu/isa/loop_state.hpp>
 
 #include <chrono>
 #include <fstream>
@@ -102,6 +103,13 @@ struct TimingConfig {
     Size systolic_size = 16;  // 16x16 array
     // One systolic pass: array_dim cycles to fill + array_dim to drain
     // For 16x16: 16 cycles to fill west edge, then results flow
+
+    // Loop control timing
+    // These model the overhead of loop machinery in the control unit
+    Cycle loop_begin_latency = 2;      // Cycles to initialize loop counter
+    Cycle loop_end_latency = 1;        // Cycles to check/decrement counter
+    Cycle loop_branch_taken_latency = 1;   // Additional cycles for branch taken
+    Cycle loop_branch_not_taken_latency = 0;  // Branch not taken (fall through)
 
     // Construct from ResourceConfig
     static TimingConfig from_resource_config(const ResourceConfig& rc) {
@@ -205,6 +213,8 @@ public:
         Cycle block_mover_cycles = 0;
         Cycle streamer_cycles = 0;
         Cycle compute_cycles = 0;
+        Cycle loop_overhead_cycles = 0;     // Time spent on loop control
+        size_t loop_iterations = 0;         // Total loop iterations executed
         double dma_utilization = 0.0;
         double block_mover_utilization = 0.0;
         double streamer_utilization = 0.0;
@@ -270,6 +280,11 @@ private:
     Cycle total_bm_cycles_ = 0;
     Cycle total_str_cycles_ = 0;
     Cycle total_compute_cycles_ = 0;
+    Cycle total_loop_overhead_cycles_ = 0;
+    size_t total_loop_iterations_ = 0;
+
+    // Loop state for timing computation (separate from behavioral)
+    LoopState timing_loop_state_;
 
     // Dispatch with timing
     void dispatch_with_timing(const DMInstruction& instr);

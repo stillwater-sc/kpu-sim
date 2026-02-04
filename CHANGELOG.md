@@ -76,6 +76,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Common interface: `load_program()`, `run()`, `total_cycles()`, `export_trace()`
   - 20 tests for factory, correctness, and fidelity switching
 
+- **TransactionalProgramExecutor Loop Execution**
+  - PC-based execution following actual loop control flow (not linear iteration)
+  - Loop timing model: `loop_begin_latency`, `loop_end_latency`,
+    `loop_branch_taken_latency`, `loop_branch_not_taken_latency`
+  - `LoopState` tracking for timing computation (separate from behavioral)
+  - AUTO addressing opcodes with tile coordinates from loop state:
+    `DMA_LOAD_TILE_AUTO`, `DMA_STORE_TILE_AUTO`, `BM_MOVE_TILE_AUTO`,
+    `BM_WRITEBACK_AUTO`, `STR_FEED_ROWS_AUTO`, `STR_FEED_COLS_AUTO`,
+    `STR_DRAIN_AUTO`
+  - Loop statistics in `TimingStats`: `loop_overhead_cycles`, `loop_iterations`
+  - Loop events recorded in Chrome trace with "loop" category
+  - 6 new tests for loop timing overhead, nested loops, and configuration
+  - Total 33 tests passing
+
 - **TransactionalProgramExecutor** (`src/software/isa/transactional_program_executor.cpp`)
   - Phase 2 of fidelity elevation: behavioral correctness + timing overlay
   - Wraps BehavioralProgramExecutor for functional execution (real data movement)
