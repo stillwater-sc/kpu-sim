@@ -377,6 +377,38 @@ src/compiler/
 
 ---
 
+## v0.8.5 - ISA Infrastructure & Harness Testing ✅
+
+**Released:** 2026-02-04
+**Theme:** Program execution infrastructure with timing overlay
+
+### Features
+
+| Feature | Status |
+|---------|--------|
+| BehavioralProgramExecutor | ✅ Complete |
+| TransactionalProgramExecutor | ✅ Complete (with limitation) |
+| IProgramExecutor interface | ✅ Complete |
+| KPU Assembler & Loader | ✅ Complete |
+| Loop machinery (8 hardware counters) | ✅ Complete |
+| AUTO addressing opcodes | ✅ Complete |
+| Data Mover Harness Infrastructure | ✅ Complete |
+| schedule-runner CLI | ✅ Complete |
+| Chrome Trace export | ✅ Complete |
+
+### Known Limitation: Timing Model
+
+The TransactionalProgramExecutor timing model processes instructions sequentially,
+resulting in **4-8x overestimation** of execution time. See CHANGELOG for details.
+
+**Functional correctness is not affected** — computed values are always correct.
+
+**Resolution:** v0.9.0 CSP timing model.
+
+### Tag: `v0.8.5`
+
+---
+
 ## v0.9.0 - Concurrent Timing Model (CSP Architecture)
 
 **Priority:** CRITICAL PATH TO v1.0.0
@@ -415,6 +447,7 @@ Transform timing model to use Communicating Sequential Processes (CSP):
 
 - [ ] Same functional results as v0.8.x (100% match)
 - [ ] Timing within ±10% of analytical model
+- [ ] Compute Tile utilization >95% on blocked matmul
 - [ ] DMA channel utilization >80%
 - [ ] No livelock in any test case
 - [ ] Simulation speed >1M cycles/sec

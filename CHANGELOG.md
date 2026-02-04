@@ -10,21 +10,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 ### Fixed
+
+---
+
+## [0.8.5] - 2026-02-04
+
+### Added
+
 - **Chrome Trace Thread Names** — Added phase "M" metadata events to Chrome trace
   export with human-readable thread names (DMA Channel 0-3, BlockMover 0-3,
   Streamer 0-3, Loop, Sync, Compute) instead of numeric thread IDs
 
-- **Harness Test Infrastructure**
-  - DMA harness completion callback now properly clears `in_flight_requests_`
-  - BlockMover harness `L2BankArray::allocate()` now supports `set_tile()` for
-    tile ID tracking (previously only `reserve()` recorded tile IDs)
-  - Journey tracking records arrivals at `current_cycle_ + 1` in behavioral mode
-    to ensure non-zero timestamps
-  - Pipeline harness buffer allocation coordination: component harnesses allocate
-    buffers internally, pipeline uses completion callbacks to track buffer IDs
-
-- **Windows CI** — Use `std::filesystem::temp_directory_path()` instead of
-  hardcoded `/tmp/` paths in test files (fixes stack buffer overrun 0xc0000409)
 - **Data Mover Component Test Harness Infrastructure**
   - `PatternHarnessBase<ConfigT>` template class for all harnesses
   - `TileJourneyTracker` for per-tile timing through DRAM→L3→L2→L1→Compute
@@ -147,6 +143,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     (12 test cases, all PASS)
 
 ### Fixed
+- **Transactional Timing Data Dependencies** (`src/software/isa/transactional_program_executor.cpp`)
+  - Added tile arrival tracking maps (`tile_at_l3_`, `tile_at_l2_`)
+  - BlockMover now waits for tile to arrive at L3 before starting
+  - Streamer now waits for tile to arrive at L2 before starting
+  - Enforces correct dataflow ordering: DRAM→L3→L2→L1→Compute
+
+- **Harness Test Infrastructure**
+  - DMA harness completion callback now properly clears `in_flight_requests_`
+  - BlockMover harness `L2BankArray::allocate()` now supports `set_tile()` for
+    tile ID tracking (previously only `reserve()` recorded tile IDs)
+  - Journey tracking records arrivals at `current_cycle_ + 1` in behavioral mode
+  - Pipeline harness buffer allocation coordination via completion callbacks
+
+- **Windows CI** — Use `std::filesystem::temp_directory_path()` instead of
+  hardcoded `/tmp/` paths (fixes stack buffer overrun 0xc0000409)
+
 - **Schedule Compiler WRITEBACK offset** (`src/dsl/schedule_compiler.cpp`)
   - BM_WRITEBACK now uses `loc.address` from TileLayout instead of hardcoded 0
   - Fixes data loss when writing C tiles back to L3
@@ -154,6 +166,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Schedule Compiler str_drain argument order** (`src/dsl/schedule_compiler.cpp`)
   - Corrected parameter order: `str_drain(tile, l2_bank, l1_buf, ...)`
   - All three drain variants (DRAIN, DRAIN_FUSED, DRAIN_TO_SCRATCH) fixed
+
+### Known Limitations
+- **TransactionalProgramExecutor Timing Model** — The current timing model processes
+  instructions sequentially, missing natural concurrency of the credit-based dataflow
+  architecture. This results in **4-8x overestimation** of execution time for
+  memory-bound workloads:
+  - DMA operations for A and B matrices are serialized (should be concurrent)
+  - No pipelining between memory hierarchy levels (DMA→BM→STR overlap)
+  - Single instruction stream instead of concurrent component processes
+  - No credit-based flow control modeling
+
+  **Impact:** Timing numbers are directionally correct for relative comparisons
+  but not accurate for absolute performance analysis. Functional results
+  (computed values) are always correct.
+
+  **Resolution:** v0.9.0 will introduce CSP-based concurrent timing model with
+  true dataflow concurrency. See `docs/plans/v0.9_concurrent_timing_roadmap.md`.
 
 ### Changed
 - **TAXONOMY.md** — Updated Phase 1 roadmap to reflect Class 0 and Class 1 kernel
