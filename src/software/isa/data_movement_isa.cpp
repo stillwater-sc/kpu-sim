@@ -274,6 +274,318 @@ DMInstruction DMInstruction::halt() {
 }
 
 // ============================================================================
+// Configuration Factory Methods (for loop machinery)
+// ============================================================================
+
+DMInstruction DMInstruction::set_base(MatrixID mat, Address base_addr) {
+    DMInstruction instr;
+    instr.opcode = DMOpcode::SET_BASE;
+
+    BaseAddressOperands ops;
+    ops.matrix = mat;
+    ops.base_addr = base_addr;
+    instr.operands = ops;
+
+    std::ostringstream oss;
+    oss << "SET_BASE " << (mat == MatrixID::A ? "A" : mat == MatrixID::B ? "B" : "C")
+        << ", 0x" << std::hex << base_addr;
+    instr.label = oss.str();
+
+    return instr;
+}
+
+DMInstruction DMInstruction::set_l3_base(MatrixID mat, Address l3_offset) {
+    DMInstruction instr;
+    instr.opcode = DMOpcode::SET_L3_BASE;
+
+    L3BaseOperands ops;
+    ops.matrix = mat;
+    ops.l3_offset = l3_offset;
+    instr.operands = ops;
+
+    std::ostringstream oss;
+    oss << "SET_L3_BASE " << (mat == MatrixID::A ? "A" : mat == MatrixID::B ? "B" : "C")
+        << ", 0x" << std::hex << l3_offset;
+    instr.label = oss.str();
+
+    return instr;
+}
+
+DMInstruction DMInstruction::set_l2_base(MatrixID mat, Address l2_offset) {
+    DMInstruction instr;
+    instr.opcode = DMOpcode::SET_L2_BASE;
+
+    L2BaseOperands ops;
+    ops.matrix = mat;
+    ops.l2_offset = l2_offset;
+    instr.operands = ops;
+
+    std::ostringstream oss;
+    oss << "SET_L2_BASE " << (mat == MatrixID::A ? "A" : mat == MatrixID::B ? "B" : "C")
+        << ", 0x" << std::hex << l2_offset;
+    instr.label = oss.str();
+
+    return instr;
+}
+
+DMInstruction DMInstruction::set_stride(MatrixID mat, Size row_stride,
+                                        Size tile_i_stride, Size tile_j_stride) {
+    DMInstruction instr;
+    instr.opcode = DMOpcode::SET_STRIDE;
+
+    StrideConfigOperands ops;
+    ops.matrix = mat;
+    ops.row_stride = row_stride;
+    ops.tile_i_stride = tile_i_stride;
+    ops.tile_j_stride = tile_j_stride;
+    instr.operands = ops;
+
+    std::ostringstream oss;
+    oss << "SET_STRIDE " << (mat == MatrixID::A ? "A" : mat == MatrixID::B ? "B" : "C")
+        << ", " << row_stride << ", " << tile_i_stride << ", " << tile_j_stride;
+    instr.label = oss.str();
+
+    return instr;
+}
+
+DMInstruction DMInstruction::set_tile_dim(Size Ti, Size Tj, Size Tk, Size elem_size) {
+    DMInstruction instr;
+    instr.opcode = DMOpcode::SET_TILE_DIM;
+
+    TileDimOperands ops;
+    ops.Ti = Ti;
+    ops.Tj = Tj;
+    ops.Tk = Tk;
+    ops.element_size = elem_size;
+    instr.operands = ops;
+
+    std::ostringstream oss;
+    oss << "SET_TILE_DIM " << Ti << ", " << Tj << ", " << Tk << ", " << elem_size;
+    instr.label = oss.str();
+
+    return instr;
+}
+
+DMInstruction DMInstruction::set_matrix_dim(MatrixID mat, Size rows, Size cols) {
+    DMInstruction instr;
+    instr.opcode = DMOpcode::SET_MATRIX_DIM;
+
+    MatrixDimOperands ops;
+    ops.matrix = mat;
+    ops.rows = rows;
+    ops.cols = cols;
+    instr.operands = ops;
+
+    std::ostringstream oss;
+    oss << "SET_MATRIX_DIM " << (mat == MatrixID::A ? "A" : mat == MatrixID::B ? "B" : "C")
+        << ", " << rows << ", " << cols;
+    instr.label = oss.str();
+
+    return instr;
+}
+
+// ============================================================================
+// Loop Control Factory Methods
+// ============================================================================
+
+DMInstruction DMInstruction::loop_begin(uint8_t loop_id, uint16_t count,
+                                        IndexRole role, uint16_t stride) {
+    DMInstruction instr;
+    instr.opcode = DMOpcode::LOOP_BEGIN;
+
+    LoopOperands ops;
+    ops.loop_id = loop_id;
+    ops.loop_count = count;
+    ops.loop_stride = stride;
+    ops.index_role = role;
+    instr.operands = ops;
+
+    std::ostringstream oss;
+    oss << "LOOP_BEGIN " << static_cast<int>(loop_id) << ", " << count;
+    switch (role) {
+        case IndexRole::TI: oss << ", TI"; break;
+        case IndexRole::TJ: oss << ", TJ"; break;
+        case IndexRole::TK: oss << ", TK"; break;
+        case IndexRole::NONE: break;
+    }
+    instr.label = oss.str();
+
+    return instr;
+}
+
+DMInstruction DMInstruction::loop_end(uint8_t loop_id) {
+    DMInstruction instr;
+    instr.opcode = DMOpcode::LOOP_END;
+
+    LoopOperands ops;
+    ops.loop_id = loop_id;
+    ops.loop_count = 0;
+    ops.loop_stride = 1;
+    ops.index_role = IndexRole::NONE;
+    instr.operands = ops;
+
+    std::ostringstream oss;
+    oss << "LOOP_END " << static_cast<int>(loop_id);
+    instr.label = oss.str();
+
+    return instr;
+}
+
+// ============================================================================
+// AUTO Addressing Factory Methods
+// ============================================================================
+
+DMInstruction DMInstruction::dma_load_auto(MatrixID mat, uint8_t l3_slot, BufferSlot buf) {
+    DMInstruction instr;
+    instr.opcode = DMOpcode::DMA_LOAD_TILE_AUTO;
+
+    AutoDMAOperands ops;
+    ops.matrix = mat;
+    ops.l3_slot = l3_slot;
+    ops.buffer = buf;
+    instr.operands = ops;
+
+    std::ostringstream oss;
+    oss << "DMA_LOAD_TILE_AUTO "
+        << (mat == MatrixID::A ? "A" : mat == MatrixID::B ? "B" : "C")
+        << ", " << static_cast<int>(l3_slot)
+        << ", " << (buf == BufferSlot::BUF_0 ? "BUF_0" : buf == BufferSlot::BUF_1 ? "BUF_1" : "AUTO");
+    instr.label = oss.str();
+
+    return instr;
+}
+
+DMInstruction DMInstruction::dma_store_auto(MatrixID mat, uint8_t l3_slot, BufferSlot buf) {
+    DMInstruction instr;
+    instr.opcode = DMOpcode::DMA_STORE_TILE_AUTO;
+
+    AutoDMAOperands ops;
+    ops.matrix = mat;
+    ops.l3_slot = l3_slot;
+    ops.buffer = buf;
+    instr.operands = ops;
+
+    std::ostringstream oss;
+    oss << "DMA_STORE_TILE_AUTO "
+        << (mat == MatrixID::A ? "A" : mat == MatrixID::B ? "B" : "C")
+        << ", " << static_cast<int>(l3_slot)
+        << ", " << (buf == BufferSlot::BUF_0 ? "BUF_0" : buf == BufferSlot::BUF_1 ? "BUF_1" : "AUTO");
+    instr.label = oss.str();
+
+    return instr;
+}
+
+DMInstruction DMInstruction::bm_move_auto(MatrixID mat, uint8_t l2_bank,
+                                          BufferSlot buf, Transform xform) {
+    DMInstruction instr;
+    instr.opcode = DMOpcode::BM_MOVE_TILE_AUTO;
+
+    AutoBlockMoverOperands ops;
+    ops.matrix = mat;
+    ops.l2_bank = l2_bank;
+    ops.buffer = buf;
+    ops.transform = xform;
+    instr.operands = ops;
+
+    std::ostringstream oss;
+    oss << "BM_MOVE_TILE_AUTO "
+        << (mat == MatrixID::A ? "A" : mat == MatrixID::B ? "B" : "C")
+        << ", " << static_cast<int>(l2_bank)
+        << ", " << (buf == BufferSlot::BUF_0 ? "BUF_0" : buf == BufferSlot::BUF_1 ? "BUF_1" : "AUTO");
+    instr.label = oss.str();
+
+    return instr;
+}
+
+DMInstruction DMInstruction::bm_writeback_auto(MatrixID mat, uint8_t l3_slot, BufferSlot buf) {
+    DMInstruction instr;
+    instr.opcode = DMOpcode::BM_WRITEBACK_AUTO;
+
+    AutoBlockMoverOperands ops;
+    ops.matrix = mat;
+    ops.l2_bank = l3_slot;  // Reuse l2_bank field for l3_slot on writeback
+    ops.buffer = buf;
+    ops.transform = Transform::IDENTITY;
+    instr.operands = ops;
+
+    std::ostringstream oss;
+    oss << "BM_WRITEBACK_AUTO "
+        << (mat == MatrixID::A ? "A" : mat == MatrixID::B ? "B" : "C")
+        << ", " << static_cast<int>(l3_slot)
+        << ", " << (buf == BufferSlot::BUF_0 ? "BUF_0" : buf == BufferSlot::BUF_1 ? "BUF_1" : "AUTO");
+    instr.label = oss.str();
+
+    return instr;
+}
+
+DMInstruction DMInstruction::str_feed_rows_auto(uint8_t l1_buffer, BufferSlot buf) {
+    DMInstruction instr;
+    instr.opcode = DMOpcode::STR_FEED_ROWS_AUTO;
+
+    AutoStreamerOperands ops;
+    ops.l1_buffer = l1_buffer;
+    ops.buffer = buf;
+    ops.ve_enabled = false;
+    ops.ve_activation = ActivationType::NONE;
+    ops.ve_bias_enabled = false;
+    ops.ve_bias_addr = 0;
+    instr.operands = ops;
+
+    std::ostringstream oss;
+    oss << "STR_FEED_ROWS_AUTO " << static_cast<int>(l1_buffer)
+        << ", " << (buf == BufferSlot::BUF_0 ? "BUF_0" : buf == BufferSlot::BUF_1 ? "BUF_1" : "AUTO");
+    instr.label = oss.str();
+
+    return instr;
+}
+
+DMInstruction DMInstruction::str_feed_cols_auto(uint8_t l1_buffer, BufferSlot buf) {
+    DMInstruction instr;
+    instr.opcode = DMOpcode::STR_FEED_COLS_AUTO;
+
+    AutoStreamerOperands ops;
+    ops.l1_buffer = l1_buffer;
+    ops.buffer = buf;
+    ops.ve_enabled = false;
+    ops.ve_activation = ActivationType::NONE;
+    ops.ve_bias_enabled = false;
+    ops.ve_bias_addr = 0;
+    instr.operands = ops;
+
+    std::ostringstream oss;
+    oss << "STR_FEED_COLS_AUTO " << static_cast<int>(l1_buffer)
+        << ", " << (buf == BufferSlot::BUF_0 ? "BUF_0" : buf == BufferSlot::BUF_1 ? "BUF_1" : "AUTO");
+    instr.label = oss.str();
+
+    return instr;
+}
+
+DMInstruction DMInstruction::str_drain_auto(uint8_t l2_bank, BufferSlot buf,
+                                            bool ve_enabled, ActivationType ve_act) {
+    DMInstruction instr;
+    instr.opcode = DMOpcode::STR_DRAIN_AUTO;
+
+    AutoStreamerOperands ops;
+    ops.l1_buffer = l2_bank;  // Reuse l1_buffer field for l2_bank on drain
+    ops.buffer = buf;
+    ops.ve_enabled = ve_enabled;
+    ops.ve_activation = ve_act;
+    ops.ve_bias_enabled = false;
+    ops.ve_bias_addr = 0;
+    instr.operands = ops;
+
+    std::ostringstream oss;
+    oss << "STR_DRAIN_AUTO " << static_cast<int>(l2_bank)
+        << ", " << (buf == BufferSlot::BUF_0 ? "BUF_0" : buf == BufferSlot::BUF_1 ? "BUF_1" : "AUTO");
+    if (ve_enabled) {
+        oss << " +VE";
+    }
+    instr.label = oss.str();
+
+    return instr;
+}
+
+// ============================================================================
 // DMProgram Statistics
 // ============================================================================
 
@@ -284,7 +596,9 @@ size_t DMProgram::num_dma_ops() const {
             instr.opcode == DMOpcode::DMA_STORE_TILE ||
             instr.opcode == DMOpcode::DMA_PREFETCH_TILE ||
             instr.opcode == DMOpcode::DMA_LOAD_GATHER ||
-            instr.opcode == DMOpcode::DMA_STORE_SCATTER) {
+            instr.opcode == DMOpcode::DMA_STORE_SCATTER ||
+            instr.opcode == DMOpcode::DMA_LOAD_TILE_AUTO ||
+            instr.opcode == DMOpcode::DMA_STORE_TILE_AUTO) {
             ++count;
         }
     }
@@ -297,7 +611,9 @@ size_t DMProgram::num_bm_ops() const {
         if (instr.opcode == DMOpcode::BM_MOVE_TILE ||
             instr.opcode == DMOpcode::BM_TRANSPOSE_TILE ||
             instr.opcode == DMOpcode::BM_WRITEBACK_TILE ||
-            instr.opcode == DMOpcode::BM_RESHAPE_TILE) {
+            instr.opcode == DMOpcode::BM_RESHAPE_TILE ||
+            instr.opcode == DMOpcode::BM_MOVE_TILE_AUTO ||
+            instr.opcode == DMOpcode::BM_WRITEBACK_AUTO) {
             ++count;
         }
     }
@@ -311,7 +627,10 @@ size_t DMProgram::num_str_ops() const {
             instr.opcode == DMOpcode::STR_FEED_COLS ||
             instr.opcode == DMOpcode::STR_DRAIN_OUTPUT ||
             instr.opcode == DMOpcode::STR_BROADCAST_ROW ||
-            instr.opcode == DMOpcode::STR_BROADCAST_COL) {
+            instr.opcode == DMOpcode::STR_BROADCAST_COL ||
+            instr.opcode == DMOpcode::STR_FEED_ROWS_AUTO ||
+            instr.opcode == DMOpcode::STR_FEED_COLS_AUTO ||
+            instr.opcode == DMOpcode::STR_DRAIN_AUTO) {
             ++count;
         }
     }

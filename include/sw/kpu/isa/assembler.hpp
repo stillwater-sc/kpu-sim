@@ -231,12 +231,30 @@ private:
     DMInstruction parse_nop();
     DMInstruction parse_halt();
 
+    // Configuration instruction parsing (ISA extensions)
+    DMInstruction parse_set_base();
+    DMInstruction parse_set_l3_base();
+    DMInstruction parse_set_l2_base();
+    DMInstruction parse_set_stride_config();  // Enhanced SET_STRIDE with matrix ID
+    DMInstruction parse_set_tile_dim();
+    DMInstruction parse_set_matrix_dim();
+
+    // AUTO addressing instruction parsing
+    DMInstruction parse_dma_load_tile_auto();
+    DMInstruction parse_dma_store_tile_auto();
+    DMInstruction parse_bm_move_tile_auto();
+    DMInstruction parse_bm_writeback_auto();
+    DMInstruction parse_str_feed_rows_auto();
+    DMInstruction parse_str_feed_cols_auto();
+    DMInstruction parse_str_drain_auto();
+
     // Operand parsing
     MatrixID parse_matrix_id();
     TileCoord parse_tile_coord();
     BufferSlot parse_buffer_slot();
     Transform parse_transform();
     ActivationType parse_activation_type();
+    IndexRole parse_index_role();
     int64_t parse_number();
     Address parse_address();
     std::string parse_string();

@@ -302,9 +302,22 @@ DMProgram Assembler::assemble(const std::string& source, const std::string& file
                 else if (id.text == "SIGNAL") { instr = parse_signal(); }
                 else if (id.text == "SET_TILE_SIZE") { instr = parse_set_tile_size(); }
                 else if (id.text == "SET_BUFFER") { instr = parse_set_buffer(); }
-                else if (id.text == "SET_STRIDE") { instr = parse_set_stride(); }
+                else if (id.text == "SET_BASE") { instr = parse_set_base(); }
+                else if (id.text == "SET_L3_BASE") { instr = parse_set_l3_base(); }
+                else if (id.text == "SET_L2_BASE") { instr = parse_set_l2_base(); }
+                else if (id.text == "SET_STRIDE") { instr = parse_set_stride_config(); }
+                else if (id.text == "SET_TILE_DIM") { instr = parse_set_tile_dim(); }
+                else if (id.text == "SET_MATRIX_DIM") { instr = parse_set_matrix_dim(); }
                 else if (id.text == "LOOP_BEGIN") { instr = parse_loop_begin(); }
                 else if (id.text == "LOOP_END") { instr = parse_loop_end(); }
+                // AUTO addressing opcodes
+                else if (id.text == "DMA_LOAD_TILE_AUTO") { instr = parse_dma_load_tile_auto(); }
+                else if (id.text == "DMA_STORE_TILE_AUTO") { instr = parse_dma_store_tile_auto(); }
+                else if (id.text == "BM_MOVE_TILE_AUTO") { instr = parse_bm_move_tile_auto(); }
+                else if (id.text == "BM_WRITEBACK_AUTO") { instr = parse_bm_writeback_auto(); }
+                else if (id.text == "STR_FEED_ROWS_AUTO") { instr = parse_str_feed_rows_auto(); }
+                else if (id.text == "STR_FEED_COLS_AUTO") { instr = parse_str_feed_cols_auto(); }
+                else if (id.text == "STR_DRAIN_AUTO") { instr = parse_str_drain_auto(); }
                 else if (id.text == "L2_SCRATCH_WRITE") { instr = parse_l2_scratch_write(); }
                 else if (id.text == "L2_SCRATCH_READ") { instr = parse_l2_scratch_read(); }
                 else if (id.text == "NOP") { instr = parse_nop(); }
@@ -852,6 +865,16 @@ DMInstruction Assembler::parse_set_stride() {
     return instr;
 }
 
+IndexRole Assembler::parse_index_role() {
+    Token tok = consume(TokenType::IDENTIFIER, "index role (TI, TJ, TK, or NONE)");
+    if (tok.text == "TI") return IndexRole::TI;
+    if (tok.text == "TJ") return IndexRole::TJ;
+    if (tok.text == "TK") return IndexRole::TK;
+    if (tok.text == "NONE") return IndexRole::NONE;
+    error("invalid index role '" + tok.text + "' (expected TI, TJ, TK, or NONE)");
+    return IndexRole::NONE;  // Unreachable
+}
+
 DMInstruction Assembler::parse_loop_begin() {
     DMInstruction instr;
     instr.opcode = DMOpcode::LOOP_BEGIN;
@@ -859,8 +882,24 @@ DMInstruction Assembler::parse_loop_begin() {
     ops.loop_id = static_cast<uint8_t>(parse_number());
     match(TokenType::COMMA);
     ops.loop_count = static_cast<uint16_t>(parse_number());
-    match(TokenType::COMMA);
-    ops.loop_stride = static_cast<uint16_t>(parse_number());
+
+    // Check for optional index role and stride
+    if (match(TokenType::COMMA)) {
+        // Could be either index_role or loop_stride (for backward compatibility)
+        if (check(TokenType::IDENTIFIER)) {
+            // It's an index role
+            ops.index_role = parse_index_role();
+            ops.loop_stride = 1;  // Default stride
+        } else {
+            // It's a stride (old format)
+            ops.loop_stride = static_cast<uint16_t>(parse_number());
+            ops.index_role = IndexRole::NONE;
+        }
+    } else {
+        ops.loop_stride = 1;
+        ops.index_role = IndexRole::NONE;
+    }
+
     instr.operands = ops;
     return instr;
 }
@@ -871,7 +910,207 @@ DMInstruction Assembler::parse_loop_end() {
     LoopOperands ops;
     ops.loop_id = static_cast<uint8_t>(parse_number());
     ops.loop_count = 0;
-    ops.loop_stride = 0;
+    ops.loop_stride = 1;
+    ops.index_role = IndexRole::NONE;
+    instr.operands = ops;
+    return instr;
+}
+
+// ============================================================================
+// Configuration Instruction Parsing (new ISA extensions)
+// ============================================================================
+
+DMInstruction Assembler::parse_set_base() {
+    DMInstruction instr;
+    instr.opcode = DMOpcode::SET_BASE;
+    BaseAddressOperands ops;
+    ops.matrix = parse_matrix_id();
+    match(TokenType::COMMA);
+    ops.base_addr = parse_address();
+    instr.operands = ops;
+    return instr;
+}
+
+DMInstruction Assembler::parse_set_l3_base() {
+    DMInstruction instr;
+    instr.opcode = DMOpcode::SET_L3_BASE;
+    L3BaseOperands ops;
+    ops.matrix = parse_matrix_id();
+    match(TokenType::COMMA);
+    ops.l3_offset = parse_address();
+    instr.operands = ops;
+    return instr;
+}
+
+DMInstruction Assembler::parse_set_l2_base() {
+    DMInstruction instr;
+    instr.opcode = DMOpcode::SET_L2_BASE;
+    L2BaseOperands ops;
+    ops.matrix = parse_matrix_id();
+    match(TokenType::COMMA);
+    ops.l2_offset = parse_address();
+    instr.operands = ops;
+    return instr;
+}
+
+DMInstruction Assembler::parse_set_stride_config() {
+    DMInstruction instr;
+    instr.opcode = DMOpcode::SET_STRIDE;
+    StrideConfigOperands ops;
+    ops.matrix = parse_matrix_id();
+    match(TokenType::COMMA);
+    ops.row_stride = static_cast<Size>(parse_number());
+    match(TokenType::COMMA);
+    ops.tile_i_stride = static_cast<Size>(parse_number());
+    match(TokenType::COMMA);
+    ops.tile_j_stride = static_cast<Size>(parse_number());
+    instr.operands = ops;
+    return instr;
+}
+
+DMInstruction Assembler::parse_set_tile_dim() {
+    DMInstruction instr;
+    instr.opcode = DMOpcode::SET_TILE_DIM;
+    TileDimOperands ops;
+    ops.Ti = static_cast<Size>(parse_number());
+    match(TokenType::COMMA);
+    ops.Tj = static_cast<Size>(parse_number());
+    match(TokenType::COMMA);
+    ops.Tk = static_cast<Size>(parse_number());
+    // Element size is optional, default to 4 (float32)
+    if (match(TokenType::COMMA)) {
+        ops.element_size = static_cast<Size>(parse_number());
+    } else {
+        ops.element_size = 4;
+    }
+    instr.operands = ops;
+    return instr;
+}
+
+DMInstruction Assembler::parse_set_matrix_dim() {
+    DMInstruction instr;
+    instr.opcode = DMOpcode::SET_MATRIX_DIM;
+    MatrixDimOperands ops;
+    ops.matrix = parse_matrix_id();
+    match(TokenType::COMMA);
+    ops.rows = static_cast<Size>(parse_number());
+    match(TokenType::COMMA);
+    ops.cols = static_cast<Size>(parse_number());
+    instr.operands = ops;
+    return instr;
+}
+
+// ============================================================================
+// AUTO Addressing Instruction Parsing
+// ============================================================================
+
+DMInstruction Assembler::parse_dma_load_tile_auto() {
+    DMInstruction instr;
+    instr.opcode = DMOpcode::DMA_LOAD_TILE_AUTO;
+    AutoDMAOperands ops;
+    ops.matrix = parse_matrix_id();
+    match(TokenType::COMMA);
+    ops.l3_slot = static_cast<uint8_t>(parse_number());
+    match(TokenType::COMMA);
+    ops.buffer = parse_buffer_slot();
+    instr.operands = ops;
+    return instr;
+}
+
+DMInstruction Assembler::parse_dma_store_tile_auto() {
+    DMInstruction instr;
+    instr.opcode = DMOpcode::DMA_STORE_TILE_AUTO;
+    AutoDMAOperands ops;
+    ops.matrix = parse_matrix_id();
+    match(TokenType::COMMA);
+    ops.l3_slot = static_cast<uint8_t>(parse_number());
+    match(TokenType::COMMA);
+    ops.buffer = parse_buffer_slot();
+    instr.operands = ops;
+    return instr;
+}
+
+DMInstruction Assembler::parse_bm_move_tile_auto() {
+    DMInstruction instr;
+    instr.opcode = DMOpcode::BM_MOVE_TILE_AUTO;
+    AutoBlockMoverOperands ops;
+    ops.matrix = parse_matrix_id();
+    match(TokenType::COMMA);
+    ops.l2_bank = static_cast<uint8_t>(parse_number());
+    match(TokenType::COMMA);
+    ops.buffer = parse_buffer_slot();
+    ops.transform = Transform::IDENTITY;
+    instr.operands = ops;
+    return instr;
+}
+
+DMInstruction Assembler::parse_bm_writeback_auto() {
+    DMInstruction instr;
+    instr.opcode = DMOpcode::BM_WRITEBACK_AUTO;
+    AutoBlockMoverOperands ops;
+    ops.matrix = parse_matrix_id();
+    match(TokenType::COMMA);
+    ops.l2_bank = static_cast<uint8_t>(parse_number());  // l3_slot stored in l2_bank
+    match(TokenType::COMMA);
+    ops.buffer = parse_buffer_slot();
+    ops.transform = Transform::IDENTITY;
+    instr.operands = ops;
+    return instr;
+}
+
+DMInstruction Assembler::parse_str_feed_rows_auto() {
+    DMInstruction instr;
+    instr.opcode = DMOpcode::STR_FEED_ROWS_AUTO;
+    AutoStreamerOperands ops;
+    ops.l1_buffer = static_cast<uint8_t>(parse_number());
+    match(TokenType::COMMA);
+    ops.buffer = parse_buffer_slot();
+    ops.ve_enabled = false;
+    ops.ve_activation = ActivationType::NONE;
+    ops.ve_bias_enabled = false;
+    ops.ve_bias_addr = 0;
+    instr.operands = ops;
+    return instr;
+}
+
+DMInstruction Assembler::parse_str_feed_cols_auto() {
+    DMInstruction instr;
+    instr.opcode = DMOpcode::STR_FEED_COLS_AUTO;
+    AutoStreamerOperands ops;
+    ops.l1_buffer = static_cast<uint8_t>(parse_number());
+    match(TokenType::COMMA);
+    ops.buffer = parse_buffer_slot();
+    ops.ve_enabled = false;
+    ops.ve_activation = ActivationType::NONE;
+    ops.ve_bias_enabled = false;
+    ops.ve_bias_addr = 0;
+    instr.operands = ops;
+    return instr;
+}
+
+DMInstruction Assembler::parse_str_drain_auto() {
+    DMInstruction instr;
+    instr.opcode = DMOpcode::STR_DRAIN_AUTO;
+    AutoStreamerOperands ops;
+    ops.l1_buffer = static_cast<uint8_t>(parse_number());  // l2_bank stored in l1_buffer
+    match(TokenType::COMMA);
+    ops.buffer = parse_buffer_slot();
+    ops.ve_enabled = false;
+    ops.ve_activation = ActivationType::NONE;
+    ops.ve_bias_enabled = false;
+    ops.ve_bias_addr = 0;
+
+    // Check for optional VE configuration
+    if (match(TokenType::COMMA)) {
+        Token tok = consume(TokenType::IDENTIFIER, "VE_ENABLE");
+        if (tok.text == "VE_ENABLE") {
+            ops.ve_enabled = true;
+            ops.ve_activation = parse_activation_type();
+        } else {
+            error("expected 'VE_ENABLE'");
+        }
+    }
+
     instr.operands = ops;
     return instr;
 }

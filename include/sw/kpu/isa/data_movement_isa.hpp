@@ -48,23 +48,36 @@ namespace sw::kpu::isa {
  * configuration of DMA, BlockMover, or Streamer.
  */
 enum class DMOpcode : uint8_t {
-    // DMA Operations (External Memory ↔ L3)
+    // DMA Operations (External Memory ↔ L3) - Explicit addressing
     DMA_LOAD_TILE,          // Load a tile from external memory to L3
     DMA_STORE_TILE,         // Store a tile from L3 to external memory
     DMA_PREFETCH_TILE,      // Prefetch a tile (non-blocking)
 
-    // Block Mover Operations (L3 ↔ L2)
+    // DMA Operations - AUTO addressing (computed from loop indices)
+    DMA_LOAD_TILE_AUTO,     // Load tile with address from loop indices
+    DMA_STORE_TILE_AUTO,    // Store tile with address from loop indices
+
+    // Block Mover Operations (L3 ↔ L2) - Explicit addressing
     BM_MOVE_TILE,           // Move tile L3 → L2 (identity)
     BM_TRANSPOSE_TILE,      // Move tile L3 → L2 with transpose
     BM_WRITEBACK_TILE,      // Move tile L2 → L3
     BM_RESHAPE_TILE,        // Move with block reshape
 
-    // Streamer Operations (L2 ↔ L1)
+    // Block Mover Operations - AUTO addressing
+    BM_MOVE_TILE_AUTO,      // Move tile with address from loop indices
+    BM_WRITEBACK_AUTO,      // Writeback with address from loop indices
+
+    // Streamer Operations (L2 ↔ L1) - Explicit addressing
     STR_FEED_ROWS,          // Stream rows to systolic array (A matrix)
     STR_FEED_COLS,          // Stream columns to systolic array (B matrix)
     STR_DRAIN_OUTPUT,       // Drain output from systolic array (C matrix)
     STR_BROADCAST_ROW,      // Broadcast row to all PE columns
     STR_BROADCAST_COL,      // Broadcast column to all PE rows
+
+    // Streamer Operations - AUTO addressing
+    STR_FEED_ROWS_AUTO,     // Stream rows with address from loop indices
+    STR_FEED_COLS_AUTO,     // Stream columns with address from loop indices
+    STR_DRAIN_AUTO,         // Drain output with address from loop indices
 
     // Synchronization Operations
     BARRIER,                // Wait for all pending operations
@@ -73,14 +86,21 @@ enum class DMOpcode : uint8_t {
     WAIT_STR,               // Wait for specific Streamer completion
     SIGNAL,                 // Signal completion token
 
-    // Configuration Operations
-    SET_TILE_SIZE,          // Configure tile dimensions
+    // Configuration Operations - Basic
+    SET_TILE_SIZE,          // Configure tile dimensions (deprecated, use SET_TILE_DIM)
     SET_BUFFER,             // Configure double-buffer selection
-    SET_STRIDE,             // Configure address stride patterns
 
-    // Loop Control (for hardware loop support)
-    LOOP_BEGIN,             // Start hardware loop
-    LOOP_END,               // End hardware loop
+    // Configuration Operations - Register File Setup
+    SET_BASE,               // Set external memory base address for matrix
+    SET_L3_BASE,            // Set L3 base offset for matrix
+    SET_L2_BASE,            // Set L2 base offset for matrix
+    SET_STRIDE,             // Configure address stride patterns
+    SET_TILE_DIM,           // Set tile dimensions (Ti, Tj, Tk)
+    SET_MATRIX_DIM,         // Set matrix dimensions (rows, cols)
+
+    // Loop Control (hardware loops with index roles)
+    LOOP_BEGIN,             // Start hardware loop with index role binding
+    LOOP_END,               // End hardware loop (decrement, branch if nonzero)
 
     // DMA Gather/Scatter (for im2col and non-contiguous layouts)
     DMA_LOAD_GATHER,        // Strided gather from external memory to L3
@@ -158,6 +178,19 @@ enum class Transform : uint8_t {
     SHUFFLE = 3
 };
 
+/**
+ * @brief Index role for loop counter binding
+ *
+ * Associates a hardware loop counter with a tile index dimension.
+ * This enables automatic address computation from loop state.
+ */
+enum class IndexRole : uint8_t {
+    TI = 0,     // Output row tile index (M dimension)
+    TJ = 1,     // Output column tile index (N dimension)
+    TK = 2,     // Reduction tile index (K dimension)
+    NONE = 3    // Generic loop, not tied to tile index
+};
+
 // ============================================================================
 // Instruction Operands
 // ============================================================================
@@ -224,22 +257,132 @@ struct SyncOperands {
 };
 
 /**
- * @brief Loop control operands
+ * @brief Loop control operands (enhanced with index role binding)
+ *
+ * Hardware loops can be bound to tile index dimensions (ti, tj, tk)
+ * for automatic address computation. The loop counter provides the
+ * current value for the bound index role.
  */
 struct LoopOperands {
-    uint16_t loop_count;        // Number of iterations
-    uint8_t loop_id;            // Loop identifier (for nesting)
-    uint16_t loop_stride;       // Tile index stride per iteration
+    uint16_t loop_count;        // Number of iterations (limit)
+    uint8_t loop_id;            // Loop identifier (0-7 for nesting)
+    uint16_t loop_stride;       // Tile index stride per iteration (usually 1)
+    IndexRole index_role;       // Which tile index this loop drives
 };
 
 /**
- * @brief Configuration operands
+ * @brief Configuration operands (legacy, for SET_TILE_SIZE and SET_BUFFER)
  */
 struct ConfigOperands {
     Size Ti, Tj, Tk;            // Tile dimensions
     Size L1_Ki;                 // L1 streaming chunk
     uint8_t buffer_id;          // Buffer to configure
     Size stride_m, stride_n, stride_k;  // Address strides
+};
+
+// ============================================================================
+// Register File Configuration Operands (for loop/address generation)
+// ============================================================================
+
+/**
+ * @brief Base address configuration (SET_BASE)
+ *
+ * Sets the external memory base address for a matrix.
+ * Used by AUTO addressing modes to compute tile addresses.
+ */
+struct BaseAddressOperands {
+    MatrixID matrix;            // Which matrix (A, B, or C)
+    Address base_addr;          // External memory base address (64-bit)
+};
+
+/**
+ * @brief L3 base address configuration (SET_L3_BASE)
+ */
+struct L3BaseOperands {
+    MatrixID matrix;            // Which matrix
+    Address l3_offset;          // L3 base offset (32-bit)
+};
+
+/**
+ * @brief L2 base address configuration (SET_L2_BASE)
+ */
+struct L2BaseOperands {
+    MatrixID matrix;            // Which matrix
+    Address l2_offset;          // L2 base offset (32-bit)
+};
+
+/**
+ * @brief Stride configuration (enhanced SET_STRIDE)
+ *
+ * Configures address stride patterns for a matrix.
+ * Strides are used by AUTO addressing to compute tile addresses:
+ *   addr = base + ti × stride_tile_i + tj × stride_tile_j
+ */
+struct StrideConfigOperands {
+    MatrixID matrix;            // Which matrix
+    Size row_stride;            // Bytes between consecutive rows
+    Size tile_i_stride;         // Bytes between consecutive row tiles
+    Size tile_j_stride;         // Bytes between consecutive column tiles
+};
+
+/**
+ * @brief Tile dimension configuration (SET_TILE_DIM)
+ */
+struct TileDimOperands {
+    Size Ti;                    // Tile height (typically 16)
+    Size Tj;                    // Tile width (typically 16)
+    Size Tk;                    // Reduction tile depth (typically 16)
+    Size element_size;          // Element size in bytes (4 for float32)
+};
+
+/**
+ * @brief Matrix dimension configuration (SET_MATRIX_DIM)
+ */
+struct MatrixDimOperands {
+    MatrixID matrix;            // Which matrix
+    Size rows;                  // Number of rows
+    Size cols;                  // Number of columns
+};
+
+// ============================================================================
+// AUTO Addressing Operands (computed from loop indices)
+// ============================================================================
+
+/**
+ * @brief AUTO DMA operands
+ *
+ * Address is computed at execution time from:
+ *   addr = base[matrix] + ti × stride_tile_i + tj × stride_tile_j + tk × stride_k
+ * Where ti, tj, tk come from the current values of loops bound to those roles.
+ */
+struct AutoDMAOperands {
+    MatrixID matrix;            // Which matrix (determines base + strides)
+    uint8_t l3_slot;            // Which L3 buffer slot
+    BufferSlot buffer;          // Double-buffer selection
+};
+
+/**
+ * @brief AUTO BlockMover operands
+ */
+struct AutoBlockMoverOperands {
+    MatrixID matrix;            // Which matrix
+    uint8_t l2_bank;            // Destination L2 bank
+    BufferSlot buffer;          // Double-buffer selection
+    Transform transform;        // Transformation to apply
+};
+
+/**
+ * @brief AUTO Streamer operands
+ */
+struct AutoStreamerOperands {
+    uint8_t l1_buffer;          // L1 buffer ID
+    BufferSlot buffer;          // Double-buffer selection
+
+    // Vector Engine configuration (for STR_DRAIN_AUTO)
+    bool ve_enabled = false;
+    ActivationType ve_activation = ActivationType::NONE;
+    bool ve_bias_enabled = false;
+    Address ve_bias_addr = 0;
 };
 
 // ============================================================================
@@ -257,13 +400,24 @@ struct DMInstruction {
 
     // Operands (variant for type safety)
     std::variant<
-        std::monostate,         // For NOP, HALT, BARRIER
-        DMAOperands,
-        BlockMoverOperands,
-        StreamerOperands,
-        SyncOperands,
-        LoopOperands,
-        ConfigOperands
+        std::monostate,             // For NOP, HALT, BARRIER
+        DMAOperands,                // Explicit DMA addressing
+        BlockMoverOperands,         // Explicit BlockMover addressing
+        StreamerOperands,           // Explicit Streamer addressing
+        SyncOperands,               // Synchronization
+        LoopOperands,               // Loop control (enhanced with IndexRole)
+        ConfigOperands,             // Legacy configuration
+        // New register file configuration operands
+        BaseAddressOperands,        // SET_BASE
+        L3BaseOperands,             // SET_L3_BASE
+        L2BaseOperands,             // SET_L2_BASE
+        StrideConfigOperands,       // SET_STRIDE (enhanced)
+        TileDimOperands,            // SET_TILE_DIM
+        MatrixDimOperands,          // SET_MATRIX_DIM
+        // AUTO addressing operands
+        AutoDMAOperands,            // DMA_*_AUTO
+        AutoBlockMoverOperands,     // BM_*_AUTO
+        AutoStreamerOperands        // STR_*_AUTO
     > operands;
 
     // Timing hints (from SURE analysis)
@@ -314,6 +468,40 @@ struct DMInstruction {
     static DMInstruction wait(uint32_t op_mask);
     static DMInstruction signal(uint32_t signal_id);
     static DMInstruction halt();
+
+    // Configuration factory methods
+    static DMInstruction set_base(MatrixID mat, Address base_addr);
+    static DMInstruction set_l3_base(MatrixID mat, Address l3_offset);
+    static DMInstruction set_l2_base(MatrixID mat, Address l2_offset);
+    static DMInstruction set_stride(MatrixID mat, Size row_stride,
+                                    Size tile_i_stride, Size tile_j_stride);
+    static DMInstruction set_tile_dim(Size Ti, Size Tj, Size Tk, Size elem_size);
+    static DMInstruction set_matrix_dim(MatrixID mat, Size rows, Size cols);
+
+    // Loop control factory methods
+    static DMInstruction loop_begin(uint8_t loop_id, uint16_t count,
+                                    IndexRole role = IndexRole::NONE,
+                                    uint16_t stride = 1);
+    static DMInstruction loop_end(uint8_t loop_id);
+
+    // AUTO addressing factory methods
+    static DMInstruction dma_load_auto(MatrixID mat, uint8_t l3_slot,
+                                       BufferSlot buf = BufferSlot::BUF_0);
+    static DMInstruction dma_store_auto(MatrixID mat, uint8_t l3_slot,
+                                        BufferSlot buf = BufferSlot::BUF_0);
+    static DMInstruction bm_move_auto(MatrixID mat, uint8_t l2_bank,
+                                      BufferSlot buf = BufferSlot::BUF_0,
+                                      Transform xform = Transform::IDENTITY);
+    static DMInstruction bm_writeback_auto(MatrixID mat, uint8_t l3_slot,
+                                           BufferSlot buf = BufferSlot::BUF_0);
+    static DMInstruction str_feed_rows_auto(uint8_t l1_buffer,
+                                            BufferSlot buf = BufferSlot::BUF_0);
+    static DMInstruction str_feed_cols_auto(uint8_t l1_buffer,
+                                            BufferSlot buf = BufferSlot::BUF_0);
+    static DMInstruction str_drain_auto(uint8_t l2_bank,
+                                        BufferSlot buf = BufferSlot::BUF_0,
+                                        bool ve_enabled = false,
+                                        ActivationType ve_act = ActivationType::NONE);
 };
 
 // ============================================================================

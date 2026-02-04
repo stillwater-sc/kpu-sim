@@ -8,6 +8,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Loop Machinery and Address Generation ISA Extensions**
+  - `IndexRole` enum (TI, TJ, TK, NONE) for loop-to-tile-index binding
+  - New AUTO addressing opcodes: `DMA_LOAD_TILE_AUTO`, `DMA_STORE_TILE_AUTO`,
+    `BM_MOVE_TILE_AUTO`, `BM_WRITEBACK_AUTO`, `STR_FEED_ROWS_AUTO`,
+    `STR_FEED_COLS_AUTO`, `STR_DRAIN_AUTO`
+  - Configuration opcodes: `SET_BASE`, `SET_L3_BASE`, `SET_L2_BASE`,
+    `SET_STRIDE` (enhanced), `SET_TILE_DIM`, `SET_MATRIX_DIM`
+  - `LoopState` class (`include/sw/kpu/isa/loop_state.hpp`) — 8 hardware loop
+    counters with index role binding
+  - `AddressGenerator` class (`include/sw/kpu/isa/address_generator.hpp`) —
+    computes tile addresses from base + loop_index × stride
+  - `ISARegisterFile` class (`include/sw/kpu/isa/register_file.hpp`) —
+    unified register file for loop state and address generation
+  - Large matmul assembly example (`kernels/asm/matmul_4096x1024x8192.kpuasm`) —
+    32 instructions express 8.4M tile operations via loops
+  - Updated assembler to parse all new opcodes and IndexRole syntax
+
 - **KPU Assembler** (`include/sw/kpu/isa/assembler.hpp`, `src/software/isa/assembler.cpp`)
   - Full lexer and parser for KPUASM assembly language
   - Supports all DMOpcode instructions (DMA, BlockMover, Streamer, Sync, Config)

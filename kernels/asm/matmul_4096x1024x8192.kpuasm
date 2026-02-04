@@ -1,0 +1,111 @@
+; ==============================================================================
+; Large MatMul with Loop Machinery
+; ==============================================================================
+;
+; A[4096, 1024] × B[1024, 8192] = C[4096, 8192]
+;
+; M = 4096    (A rows, C rows)
+; K = 1024    (A cols, B rows)
+; N = 8192    (B cols, C cols)
+;
+; FLOPs = 2 × M × N × K = 68,719,476,736 (68.7 GFLOP)
+;
+; Tiling: Ti = Tj = Tk = 16 (systolic array size)
+; - M tiles: 4096/16 = 256
+; - K tiles: 1024/16 = 64
+; - N tiles: 8192/16 = 512
+;
+; Total tile operations: 256 × 512 × 64 = 8,388,608 (8.4M)
+; But this compact program is ~35 instructions!
+;
+; ==============================================================================
+
+.name "matmul_4096x1024x8192"
+.version 2
+.dimensions M=4096, N=8192, K=1024
+.tiling Ti=16, Tj=16, Tk=16
+.dataflow output_stationary
+
+; ==============================================================================
+; Register File Configuration
+; ==============================================================================
+
+; Matrix dimensions (rows, cols)
+SET_MATRIX_DIM A, 4096, 1024
+SET_MATRIX_DIM B, 1024, 8192
+SET_MATRIX_DIM C, 4096, 8192
+
+; Tile dimensions (Ti, Tj, Tk, element_size)
+SET_TILE_DIM 16, 16, 16, 4
+
+; External memory base addresses (set by loader, using placeholders)
+SET_BASE A, 0x00000000
+SET_BASE B, 0x01000000
+SET_BASE C, 0x03000000
+
+; Stride configuration: matrix, row_stride, tile_i_stride, tile_j_stride
+; A[4096, 1024] row-major: row=1024×4=4096, tile_i=16×1024×4=65536, tile_j=16×4=64
+SET_STRIDE A, 4096, 65536, 64
+
+; B[1024, 8192] row-major: row=8192×4=32768, tile_i=16×8192×4=524288, tile_j=16×4=64
+SET_STRIDE B, 32768, 524288, 64
+
+; C[4096, 8192] row-major: row=8192×4=32768, tile_i=16×8192×4=524288, tile_j=16×4=64
+SET_STRIDE C, 32768, 524288, 64
+
+; ==============================================================================
+; Main Loop Nest (Output-Stationary)
+; ==============================================================================
+;
+; Loop order: for ti, for tj, for tk (output tiles outer, reduction inner)
+;
+; C[ti,tj] accumulates in PE registers across all K iterations.
+; After K loop completes, C is drained and stored.
+;
+; ==============================================================================
+
+; Loop 0: ti = 0..255 (output row tiles)
+LOOP_BEGIN 0, 256, TI
+
+  ; Loop 1: tj = 0..511 (output column tiles)
+  LOOP_BEGIN 1, 512, TJ
+
+    ; Loop 2: tk = 0..63 (reduction tiles)
+    LOOP_BEGIN 2, 64, TK
+
+      ; DMA: Load A[ti,tk] and B[tk,tj] from external memory to L3
+      ; Address computed from: base + ti×stride_i + tk×stride_k (for A)
+      ;                        base + tk×stride_i + tj×stride_j (for B)
+      DMA_LOAD_TILE_AUTO A, 0, BUF_0
+      DMA_LOAD_TILE_AUTO B, 1, BUF_0
+      BARRIER
+
+      ; BlockMover: Move tiles L3 → L2
+      BM_MOVE_TILE_AUTO A, 0, BUF_0
+      BM_MOVE_TILE_AUTO B, 1, BUF_0
+      BARRIER
+
+      ; Streamer: Feed tiles to systolic array
+      ; A rows feed from west, B columns feed from north
+      STR_FEED_ROWS_AUTO 0, BUF_0
+      STR_FEED_COLS_AUTO 0, BUF_0
+      ; Compute fires reactively when data arrives
+      BARRIER
+
+    LOOP_END 2
+
+    ; All K tiles accumulated in PEs — drain C[ti,tj]
+    STR_DRAIN_AUTO 2, BUF_0
+    BARRIER
+
+    ; Writeback and store C[ti,tj] to external memory
+    BM_WRITEBACK_AUTO C, 2, BUF_0
+    BARRIER
+    DMA_STORE_TILE_AUTO C, 2, BUF_0
+    BARRIER
+
+  LOOP_END 1
+
+LOOP_END 0
+
+HALT
