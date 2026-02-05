@@ -66,6 +66,7 @@ add_subdirectory(validation)
 add_subdirectory(quantization)
 add_subdirectory(dsl)
 add_subdirectory(harness)
+add_subdirectory(timing)
 
 # Legacy test (in this directory)
 kpu_add_component_test(legacy_test_main "legacy" test_main.cpp)
@@ -237,6 +238,14 @@ add_custom_target(test_harness
     VERBATIM
 )
 set_target_properties(test_harness PROPERTIES FOLDER "Tests/Runners")
+
+add_custom_target(test_timing
+    COMMAND ${CMAKE_CTEST_COMMAND} -C $<CONFIG> --output-on-failure -L timing
+    COMMENT "Running timing model tests (v0.9.0)"
+    WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
+    VERBATIM
+)
+set_target_properties(test_timing PROPERTIES FOLDER "Tests/Runners")
 
 add_custom_target(test_all_categories
     COMMAND ${CMAKE_CTEST_COMMAND} -C $<CONFIG> --output-on-failure

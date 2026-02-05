@@ -1,0 +1,167 @@
+
+● All tests pass. Let me update the todo list to mark completion.
+
+● I've completed v0.9.0 Phase 1: Foundation for the concurrent timing model. Here's a summary of what was created:
+
+  Files Created
+
+  Header files (include/sw/kpu/timing/):
+  - tile_descriptor.hpp - TileID, TileIDHash, TileDescriptor, MemoryLevel, TileLocation
+  - credit_pool.hpp - CreditPool and PartitionedCreditPool classes
+  - tag_cam.hpp - TagCAM class for tile arrival tracking
+  - work_queue.hpp - WorkQueue, PriorityWorkQueue, and TileWorkQueue classes
+  - livelock_detector.hpp - LivelockDetector for detecting stuck simulations
+
+  Test files (tests/timing/):
+  - test_credit_pool.cpp - 16 test cases, 10102 assertions
+  - test_tag_cam.cpp - 17 test cases, 126 assertions
+  - test_work_queue.cpp - 37 test cases, 2119 assertions
+  - CMakeLists.txt - Test registration
+
+  Updated files:
+  - tests/CMakeLists.txt - Added timing subdirectory and test_timing target
+
+  Phase 1 Deliverables (per roadmap)
+  ┌──────────────────────────────────┬────────────────────────────────┐
+  │               Task               │             Status             │
+  ├──────────────────────────────────┼────────────────────────────────┤
+  │ 1.1 CreditPool class             │ Done                           │
+  ├──────────────────────────────────┼────────────────────────────────┤
+  │ 1.2 CreditPool unit tests        │ Done                           │
+  ├──────────────────────────────────┼────────────────────────────────┤
+  │ 1.3 TagCAM class                 │ Done                           │
+  ├──────────────────────────────────┼────────────────────────────────┤
+  │ 1.4 TagCAM unit tests            │ Done                           │
+  ├──────────────────────────────────┼────────────────────────────────┤
+  │ 1.5 WorkQueue template           │ Done                           │
+  ├──────────────────────────────────┼────────────────────────────────┤
+  │ 1.6 WorkQueue unit tests         │ Done                           │
+  ├──────────────────────────────────┼────────────────────────────────┤
+  │ 1.7 TileDescriptor struct        │ Done                           │
+  ├──────────────────────────────────┼────────────────────────────────┤
+  │ 1.8 PartitionedCredits           │ Done (part of credit_pool.hpp) │
+  ├──────────────────────────────────┼────────────────────────────────┤
+  │ 1.9 LivelockDetector class       │ Done                           │
+  ├──────────────────────────────────┼────────────────────────────────┤
+  │ 1.10 Foundation integration test │ Done (tests pass)              │
+  └──────────────────────────────────┴────────────────────────────────┘
+  Test Results
+
+  test_credit_pool: All tests passed (10102 assertions in 16 test cases)
+  test_tag_cam: All tests passed (126 assertions in 17 test cases)
+  test_work_queue: All tests passed (2119 assertions in 37 test cases)
+
+  Next Steps (Phase 2: Component Processes)
+
+  The next phase involves creating the CSP process classes:
+  - DMAEngineProcess (task 2.1-2.2)
+  - BlockMoverProcess (task 2.3-2.4)
+  - StreamerProcess (task 2.5-2.6)
+  - IProcess interface (task 2.7)
+  - Work-conserving scan logic (task 2.8)
+  - Priority aging (task 2.9)
+
+✻ Worked for 12m 20s
+
+● According to the v0.9.0 roadmap, Phase 2: Component Processes is next:
+  ┌─────────┬────────────────────────────────────┬────────────┬───────────────┐
+  │ Task ID │                Task                │ Est. Hours │ Dependencies  │
+  ├─────────┼────────────────────────────────────┼────────────┼───────────────┤
+  │ 2.7     │ Process interface (IProcess)       │ 4h         │ None          │
+  ├─────────┼────────────────────────────────────┼────────────┼───────────────┤
+  │ 2.1     │ DMAEngineProcess class             │ 12h        │ 1.1, 1.3, 1.5 │
+  ├─────────┼────────────────────────────────────┼────────────┼───────────────┤
+  │ 2.2     │ DMAEngineProcess tests             │ 8h         │ 2.1           │
+  ├─────────┼────────────────────────────────────┼────────────┼───────────────┤
+  │ 2.3     │ BlockMoverProcess class            │ 12h        │ 1.1, 1.3, 1.5 │
+  ├─────────┼────────────────────────────────────┼────────────┼───────────────┤
+  │ 2.4     │ BlockMoverProcess tests            │ 8h         │ 2.3           │
+  ├─────────┼────────────────────────────────────┼────────────┼───────────────┤
+  │ 2.5     │ StreamerProcess class              │ 12h        │ 1.1, 1.3, 1.5 │
+  ├─────────┼────────────────────────────────────┼────────────┼───────────────┤
+  │ 2.6     │ StreamerProcess tests              │ 8h         │ 2.5           │
+  ├─────────┼────────────────────────────────────┼────────────┼───────────────┤
+  │ 2.8     │ Work-conserving scan logic         │ 8h         │ 2.1, 2.3, 2.5 │
+  ├─────────┼────────────────────────────────────┼────────────┼───────────────┤
+  │ 2.9     │ Priority aging implementation      │ 4h         │ 2.8           │
+  ├─────────┼────────────────────────────────────┼────────────┼───────────────┤
+  │ 2.10    │ Component process integration test │ 8h         │ 2.1-2.9       │
+  └─────────┴────────────────────────────────────┴────────────┴───────────────┘
+  Deliverables:
+  - include/sw/kpu/timing/process_interface.hpp
+  - include/sw/kpu/timing/dma_engine_process.hpp
+  - include/sw/kpu/timing/block_mover_process.hpp
+  - include/sw/kpu/timing/streamer_process.hpp
+  - src/timing/dma_engine_process.cpp
+  - src/timing/block_mover_process.cpp
+  - src/timing/streamer_process.cpp
+  - Unit tests for each process
+
+  Recommended order:
+  1. IProcess interface (base class for all component processes)
+  2. DMAEngineProcess (simplest - just DRAM↔L3 transfers)
+  3. BlockMoverProcess (L3↔L2 with transforms)
+  4. StreamerProcess (L2→L1→Compute with row/col streaming)
+
+  Should I continue with Phase 2?
+
+
+● All 130 test cases (12,598 assertions) pass. Let me update the todo list and summarize.
+
+● Phase 2 Complete: v0.9.0 Concurrent Timing Model - Component Processes
+
+  I've completed Phase 2 of the Concurrent Timing Model implementation. Here's a summary:
+
+  Files Created/Modified
+
+  New header files:
+  - include/sw/kpu/timing/streamer_process.hpp - L2↔Compute streaming
+
+  Modified header files:
+  - include/sw/kpu/timing/process_interface.hpp - Added TILE_FED_TO_COMPUTE, TILE_DRAINED events
+  - include/sw/kpu/timing/work_queue.hpp - Added dequeue_if, at, remove_at for work-conserving scan
+  - include/sw/kpu/timing/block_mover_process.hpp - Work-conserving scan + priority aging
+  - include/sw/kpu/timing/streamer_process.hpp - Work-conserving scan + priority aging
+
+  New test files:
+  - tests/timing/test_streamer_process.cpp - 18 test cases
+  - tests/timing/test_component_integration.cpp - 9 integration test cases
+
+  Key Features Implemented
+
+  1. StreamerProcess - L2↔L1/Compute transfers
+    - Feed operations (L2→Compute)
+    - Drain operations (Compute→L2)
+    - Row and Column streamer types
+  2. Work-Conserving Scan - Prevents head-of-line blocking
+    - Scans entire queue for any ready work
+    - Processes tiles that arrive out of order
+    - Implemented in BlockMoverProcess and StreamerProcess
+  3. Priority Aging - Prevents starvation
+    - Optional config flag priority_aging
+    - Prefers oldest ready tile (by enqueue_cycle)
+    - Ensures old requests aren't starved by newer ones
+  4. Integration Tests - Full pipeline verification
+    - DMA → BlockMover pipeline
+    - BlockMover → Streamer pipeline
+    - Full round-trip: load → compute → drain → store
+    - Credit flow tests with limited buffers
+    - Multi-component parallel tests
+
+  Test Results
+
+  Total: 130 test cases, 12,598 assertions - ALL PASSED
+
+  - test_credit_pool:        16 cases, 10,102 assertions
+  - test_tag_cam:            17 cases, 126 assertions
+  - test_work_queue:         37 cases, 2,119 assertions
+  - test_dma_engine_process: 14 cases, 59 assertions
+  - test_block_mover_process: 19 cases, 62 assertions
+  - test_streamer_process:   18 cases, 85 assertions
+  - test_component_integration: 9 cases, 45 assertions
+
+  Next Phase (Phase 3)
+
+  The next phase would be implementing the ConcurrentTimingExecutor which orchestrates all component processes, handles program distribution, and provides the main simulation loop. This would complete the v0.9.0 Concurrent Timing Model.
+
+

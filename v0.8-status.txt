@@ -64,3 +64,117 @@
 
   The XUE architecture now properly follows the hardware observation pipeline model - all event recording and aggregation happens in C++, with Python serving only as a read-only consumer of the event counts. This enables direct comparison between pre-silicon simulation and post-silicon hardware counters.
 
+● Looking at the CHANGELOG and plan, here's the v0.8.x status:
+
+  v0.8.x Work Status
+  ┌───────────────────────────────────┬─────────────────────────┬──────────────────────────────────┐
+  │             Work Item             │         Status          │              Notes               │
+  ├───────────────────────────────────┼─────────────────────────┼──────────────────────────────────┤
+  │ Model Classes (v0.8.0)            │ ✅ Complete             │ Python Layer, Sequential, Model  │
+  ├───────────────────────────────────┼─────────────────────────┼──────────────────────────────────┤
+  │ Model Loader (v0.8.1)             │ ✅ Complete             │ JSON loading                     │
+  ├───────────────────────────────────┼─────────────────────────┼──────────────────────────────────┤
+  │ Inference Pipeline (v0.8.2)       │ ✅ Complete             │ End-to-end execution             │
+  ├───────────────────────────────────┼─────────────────────────┼──────────────────────────────────┤
+  │ Memory Planning (v0.8.3)          │ ✅ Complete             │ Buffer allocation                │
+  ├───────────────────────────────────┼─────────────────────────┼──────────────────────────────────┤
+  │ Reference Models (v0.8.4)         │ ✅ Complete             │ SqueezeNet, MobileNet, MNIST     │
+  ├───────────────────────────────────┼─────────────────────────┼──────────────────────────────────┤
+  │ BehavioralProgramExecutor         │ ✅ Complete             │ Functional correctness           │
+  ├───────────────────────────────────┼─────────────────────────┼──────────────────────────────────┤
+  │ TransactionalProgramExecutor      │ ⚠️ Works but Inaccurate │ Sequential timing (bug we found) │
+  ├───────────────────────────────────┼─────────────────────────┼──────────────────────────────────┤
+  │ Data Mover Harness Infrastructure │ ✅ Complete             │ Fixed today                      │
+  ├───────────────────────────────────┼─────────────────────────┼──────────────────────────────────┤
+  │ schedule-runner CLI               │ ✅ Complete             │ Working                          │
+  ├───────────────────────────────────┼─────────────────────────┼──────────────────────────────────┤
+  │ Assembler/Loader Tools            │ ✅ Complete             │ Working                          │
+  └───────────────────────────────────┴─────────────────────────┴──────────────────────────────────┘
+  The Architectural Bug
+
+  The TransactionalProgramExecutor works (produces correct functional results and generates timing), but its timing is inaccurate due to:
+  - Sequential instruction dispatch (no DMA parallelism)
+  - Missing data dependencies (streamers starting before block movers)
+  - No credit-based flow modeling
+
+  Options
+
+  Option A: Ship v0.8.x as-is, fix timing in v0.9.0
+  - Tag v0.8.x with current (inaccurate) timing
+  - v0.9.0 replaces TransactionalProgramExecutor internals with CSP model
+  - Harness infrastructure already built will test v0.9.0
+
+  Option B: Fix timing before v0.8.x release
+  - Delay v0.8.x until CSP timing model is complete
+  - Effectively merge v0.8.x and v0.9.0
+
+  Option C: Deprecate TransactionalProgramExecutor timing
+  - Keep functional execution
+  - Mark timing output as "approximate" until v0.9.0
+  - Document known limitation
+
+  Recommendation
+
+  Option A - The harness infrastructure and executor interface are complete and valuable. The timing inaccuracy is a known limitation that v0.9.0 will fix. We should:
+
+  1. Tag current work as v0.8.5 with release notes documenting the timing limitation
+  2. Proceed to v0.9.0 CSP timing model
+  3. The harness infrastructure (DMAHarness, BlockMoverHarness, etc.) will be reused to test v0.9.0
+
+  The harness components we built (credit pools, journey tracking, validation) are directly applicable to testing the CSP model.
+
+  Would you like me to:
+  1. Update ROADMAP.md to clarify v0.8.x completion status and timing limitation?
+  2. Prepare v0.8.5 release notes?
+  3. Begin v0.9.0 Phase 1 implementation?
+
+
+● Done. v0.8.5 is now documented with the timing limitation. Here's the summary:
+
+  v0.8.5 Release Documentation
+
+  CHANGELOG Entry
+
+  Added under [0.8.5] - 2026-02-04:
+
+  Known Limitations:
+  The TransactionalProgramExecutor timing model processes instructions sequentially,
+  resulting in 4-8x overestimation of execution time for memory-bound workloads.
+  Functional results (computed values) are always correct.
+
+  Resolution: v0.9.0 CSP concurrent timing model.
+
+  ROADMAP Entry
+
+  Added new section documenting v0.8.5 features:
+  ┌───────────────────────────────────┬───────────────────────────────┐
+  │              Feature              │            Status             │
+  ├───────────────────────────────────┼───────────────────────────────┤
+  │ BehavioralProgramExecutor         │ ✅ Complete                   │
+  ├───────────────────────────────────┼───────────────────────────────┤
+  │ TransactionalProgramExecutor      │ ✅ Complete (with limitation) │
+  ├───────────────────────────────────┼───────────────────────────────┤
+  │ IProgramExecutor interface        │ ✅ Complete                   │
+  ├───────────────────────────────────┼───────────────────────────────┤
+  │ KPU Assembler & Loader            │ ✅ Complete                   │
+  ├───────────────────────────────────┼───────────────────────────────┤
+  │ Loop machinery                    │ ✅ Complete                   │
+  ├───────────────────────────────────┼───────────────────────────────┤
+  │ Data Mover Harness Infrastructure │ ✅ Complete                   │
+  ├───────────────────────────────────┼───────────────────────────────┤
+  │ schedule-runner CLI               │ ✅ Complete                   │
+  └───────────────────────────────────┴───────────────────────────────┘
+  Release Path
+
+  v0.8.0 ──→ v0.8.5 ──→ v0.9.0 ──→ v1.0.0
+    │          │          │          │
+  Model     ISA &      CSP        Prod
+  Level     Harness    Timing     Ready
+            (timing    Model
+            limited)
+
+  The timing limitation is clearly documented so users understand that:
+  - Functional results are correct (use BEHAVIORAL or TRANSACTIONAL)
+  - Timing is approximate (4-8x overestimate)
+  - v0.9.0 will fix this with CSP concurrent timing model
+
