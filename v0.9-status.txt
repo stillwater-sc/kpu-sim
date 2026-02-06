@@ -369,3 +369,34 @@
   - examples/schedule/CMakeLists.txt - Build configuration
 
 
+● Session Summary
+
+  Fixed critical bugs in the CSP concurrent timing model:
+  ┌─────────┬─────────────────────────────────────────────────────────────────┐
+  │ Commit  │                               Fix                               │
+  ├─────────┼─────────────────────────────────────────────────────────────────┤
+  │ 45a7bff │ TagCAM reference counting for tile reuse                        │
+  ├─────────┼─────────────────────────────────────────────────────────────────┤
+  │ 8640203 │ Utilization calculation overflow (average stalls per component) │
+  ├─────────┼─────────────────────────────────────────────────────────────────┤
+  │ 06e0950 │ Conditional credit release + DMA L3 check before load           │
+  ├─────────┼─────────────────────────────────────────────────────────────────┤
+  │ 5c9bb0c │ Documentation update                                            │
+  └─────────┴─────────────────────────────────────────────────────────────────┘
+  Key Results:
+
+  64×64×64 MatMul with 64 L3 buffers:
+  - Completes successfully in 941 cycles
+  - 557.16 FLOP/cycle
+  - Utilization: DMA 8.7%, BlockMover 95.7%, Streamer 60.3%
+
+  Known Limitation:
+
+  128×128×128 still experiences tag stalls due to tile reuse semantics - when a tile is moved from L3 to L2, subsequent MOVE operations for the same tile (via ref_count) can't find it in L3. Proper fix requires copy semantics or schedule-level coordination.
+
+  New CLI options:
+  - --l3-buffers <n> - Configure L3 buffer count
+  - --livelock <n> - Configure livelock detection threshold
+
+  Branch is 5 commits ahead of origin/main.
+

@@ -369,10 +369,10 @@ inline void ConcurrentTimingExecutor::create_components() {
             dma_config, l3_credits_, l3_tag_cam_, l2_tag_cam_));
     }
 
-    // Create BlockMovers
+    // Create BlockMovers (IDs 100+)
     for (size_t i = 0; i < config_.num_block_movers; ++i) {
         BlockMoverProcess::Config bm_config;
-        bm_config.mover_id = static_cast<uint32_t>(i);
+        bm_config.mover_id = static_cast<uint32_t>(100 + i);  // 100, 101, 102, ...
         bm_config.bandwidth_gbps = config_.bm_bandwidth_gbps;
         bm_config.startup_latency = config_.bm_startup_latency;
         bm_config.clock_ghz = config_.clock_ghz;
@@ -383,31 +383,31 @@ inline void ConcurrentTimingExecutor::create_components() {
             bm_config, l3_tag_cam_, l3_credits_, l2_credits_, l2_tag_cam_));
     }
 
-    // Create Row Streamers (West edge - for A matrix)
+    // Create Row Streamers (West edge - for A matrix, IDs 200+)
     for (size_t i = 0; i < config_.num_row_streamers; ++i) {
         StreamerProcess::Config str_config;
-        str_config.streamer_id = static_cast<uint32_t>(i);
+        str_config.streamer_id = static_cast<uint32_t>(200 + i);  // 200, 201, ...
         str_config.type = StreamerType::ROW_STREAMER;
         str_config.bandwidth_gbps = config_.str_bandwidth_gbps;
         str_config.startup_latency = config_.str_startup_latency;
         str_config.clock_ghz = config_.clock_ghz;
         str_config.priority_aging = config_.enable_priority_aging;
-        str_config.name = "STR";
+        str_config.name = "RowSTR";
 
         row_streamers_.push_back(std::make_unique<StreamerProcess>(
             str_config, l2_tag_cam_, l2_credits_));
     }
 
-    // Create Column Streamers (North edge - for B matrix)
+    // Create Column Streamers (North edge - for B matrix, IDs 210+)
     for (size_t i = 0; i < config_.num_col_streamers; ++i) {
         StreamerProcess::Config str_config;
-        str_config.streamer_id = static_cast<uint32_t>(i);
+        str_config.streamer_id = static_cast<uint32_t>(210 + i);  // 210, 211, ...
         str_config.type = StreamerType::COL_STREAMER;
         str_config.bandwidth_gbps = config_.str_bandwidth_gbps;
         str_config.startup_latency = config_.str_startup_latency;
         str_config.clock_ghz = config_.clock_ghz;
         str_config.priority_aging = config_.enable_priority_aging;
-        str_config.name = "STR";
+        str_config.name = "ColSTR";
 
         col_streamers_.push_back(std::make_unique<StreamerProcess>(
             str_config, l2_tag_cam_, l2_credits_));
@@ -689,10 +689,46 @@ inline void ConcurrentTimingExecutor::export_chrome_trace(const std::string& fil
 
     file << "{\"traceEvents\":[\n";
 
-    bool first = true;
+    // ========================================================================
+    // Emit process and thread metadata first for human-readable trace display
+    // ========================================================================
+
+    // Process name
+    file << R"({"name":"process_name","ph":"M","pid":1,"tid":0,"args":{"name":"CSP Concurrent Timing Executor"}})";
+
+    // DMA Channel threads (IDs 0-N)
+    for (size_t i = 0; i < config_.num_dma_engines; ++i) {
+        file << ",\n";
+        file << R"({"name":"thread_name","ph":"M","pid":1,"tid":)" << i
+             << R"(,"args":{"name":"DMA Channel )" << i << R"("}})";
+    }
+
+    // BlockMover threads (IDs 100+)
+    for (size_t i = 0; i < config_.num_block_movers; ++i) {
+        file << ",\n";
+        file << R"({"name":"thread_name","ph":"M","pid":1,"tid":)" << (100 + i)
+             << R"(,"args":{"name":"BlockMover )" << i << R"("}})";
+    }
+
+    // Row Streamer threads (IDs 200+)
+    for (size_t i = 0; i < config_.num_row_streamers; ++i) {
+        file << ",\n";
+        file << "{\"name\":\"thread_name\",\"ph\":\"M\",\"pid\":1,\"tid\":" << (200 + i)
+             << ",\"args\":{\"name\":\"Row Streamer " << i << " - A matrix\"}}";
+    }
+
+    // Column Streamer threads (IDs 210+)
+    for (size_t i = 0; i < config_.num_col_streamers; ++i) {
+        file << ",\n";
+        file << "{\"name\":\"thread_name\",\"ph\":\"M\",\"pid\":1,\"tid\":" << (210 + i)
+             << ",\"args\":{\"name\":\"Col Streamer " << i << " - B matrix\"}}";
+    }
+
+    // ========================================================================
+    // Emit timing events
+    // ========================================================================
     for (const auto& event : events_) {
-        if (!first) file << ",\n";
-        first = false;
+        file << ",\n";
         file << event.to_chrome_trace_json();
     }
 
