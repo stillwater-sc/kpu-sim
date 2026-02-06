@@ -9,6 +9,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **CSP Schedule Generators (Phase 4)** — Complete schedule generation infrastructure
+  for livelock-safe DNN operation scheduling:
+  - `IScheduleGenerator` interface with `ScheduleOperation`, `ScheduleResult`,
+    and `ScheduleAnalysis` types
+  - `MatMulScheduleGenerator` with 4 strategies: OUTPUT_STATIONARY, INTERLEAVED_AB
+    (default, livelock-safe), PREFETCH_NEXT, BLOCKED_AB
+  - `Conv2DScheduleGenerator` using im2col transformation for systolic array mapping
+  - `SoftmaxScheduleGenerator` with 4-pass algorithm (max, exp, sum, normalize)
+  - `LayerNormScheduleGenerator` with 3-pass algorithm (mean, variance, normalize)
+  - `BatchNormScheduleGenerator` supporting both training and inference modes
+  - `ScheduleValidator` with static validation rules (VAL-001 to VAL-006) and
+    livelock safety checks (VAL-LL1 to VAL-LL5)
+  - `ScheduleExecutor` for applying schedules to ConcurrentTimingExecutor
+  - `ScheduleAnalysis::analyze()` for detecting interleaving patterns and
+    consecutive operation runs
+
+- **Livelock Test Suite** (`tests/timing/test_livelock_scenarios.cpp`)
+  - 20 test cases covering livelock detection and avoidance scenarios
+  - Tests for PartitionedCreditPool A/B/C segregation
+  - Tests for interleaved vs blocked scheduling strategies
+  - Tests for TagCAM tile arrival tracking
+
+- **Schedule Generator Tests** (`tests/timing/test_schedule_generators.cpp`)
+  - 15 test cases validating MatMul, Conv2D, Softmax, LayerNorm, BatchNorm generators
+  - Strategy comparison tests for OUTPUT_STATIONARY vs INTERLEAVED_AB vs BLOCKED_AB
+  - Tile dimension and operation count validation
+
+- **Schedule Validation Tests** (`tests/timing/test_schedule_validation.cpp`)
+  - 22 test cases covering all validation rules
+  - Empty schedule detection (VAL-001)
+  - Incomplete operation detection (VAL-002)
+  - Livelock safety validation (VAL-LL1 to VAL-LL5)
+
+- **CSP Schedule Demo** (`examples/schedule/csp_schedule_demo.cpp`)
+  - Demonstration of CSP schedule generation for all DNN operations
+  - Shows operation counts, livelock analysis, and validation results
+  - Example configurations for ResNet, VGG, BERT, and transformer workloads
+
 ### Fixed
 
 ---
