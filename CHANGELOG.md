@@ -49,6 +49,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **CreditPool double-release bug** — TagCAM now uses reference counting to support
+  tile reuse. When the same tile is inserted multiple times (e.g., A[ti,tk] used for
+  every tj), ref_count increments instead of failing. Invalidate decrements ref_count,
+  only releasing the credit when it reaches zero. This fixes the overflow error:
+  "CreditPool::release() called but pool is already full"
+
+- **Resource utilization calculation overflow** — Statistics now computes average stalls
+  per component type before subtracting from total_cycles. This prevents unsigned integer
+  underflow when aggregated stall cycles across multiple parallel components exceed the
+  simulation duration. Previous garbage values like 4729934377874243584.0% are now correct.
+
 ---
 
 ## [0.8.5] - 2026-02-04
