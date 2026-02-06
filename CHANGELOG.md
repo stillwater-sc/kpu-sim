@@ -65,6 +65,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   prevents double-release when the same tile is used multiple times. Additionally, DMA
   checks if tiles are already in L3 before acquiring credits, skipping redundant loads.
 
+- **Chrome Trace Visualization Improvements** — Enhanced CSP timing trace export:
+  - Added process_name and thread_name metadata for human-readable component identification
+  - Fixed component ID collisions (DMA 0-N, BlockMover 100+, Row Streamer 200+, Col Streamer 210+)
+  - Added thread_sort_index for dataflow ordering (DMA → BlockMover → Streamer)
+  - Traces now display threads in execution order from top to bottom in Perfetto
+
 ### Changed
 
 - `run_matmul` CLI now supports `--l3-buffers <n>` and `--livelock <n>` for experimentation
