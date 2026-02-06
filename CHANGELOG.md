@@ -70,6 +70,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Fixed component ID collisions (DMA 0-N, BlockMover 100+, Row Streamer 200+, Col Streamer 210+)
   - Added thread_sort_index for dataflow ordering (DMA → BlockMover → Streamer)
   - Traces now display threads in execution order from top to bottom in Perfetto
+  - **Grid topology naming**: Components now show physical grid positions:
+    - DMA channels: `MC0:CH0`, `MC0:CH1`, `MC1:CH0` (Memory Controller + Channel)
+    - BlockMovers: `L3(0,0):BM`, `L3(0,1):BM` (L3 tile grid position)
+    - Streamers: `CT(0,0):RowSTR`, `CT(0,1):ColSTR` (Compute tile position)
+    - Process name: "KPU CSP Executor (2 MCs, 2x2 L3 tiles, 2x2 CTs)"
+  - **Matrix base addresses**: Tiles now show base and DRAM addresses in trace args
+    (e.g., `"tile":"A[0,0,0]","base":"0x1000","addr":"0x1400"`)
 
 ### Changed
 
