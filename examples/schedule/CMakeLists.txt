@@ -19,3 +19,16 @@ target_link_libraries(run_matmul PRIVATE kpu_simulator)
 set_target_properties(run_matmul PROPERTIES
     FOLDER "Examples/Schedule"
 )
+
+# DEPRECATED: Example of incorrect timing model usage
+# This demonstrates what NOT to do - kept for educational purposes
+add_executable(run_matmul_DEPRECATED run_matmul_DEPRECATED.cpp)
+target_link_libraries(run_matmul_DEPRECATED PRIVATE
+    kpu_isa
+    kpu_dsl
+    kpu_schedules
+    kpu_memory_components
+)
+set_target_properties(run_matmul_DEPRECATED PROPERTIES
+    FOLDER "Examples/Schedule/Deprecated"
+)
