@@ -59,6 +59,8 @@ void print_usage(const char* prog) {
     std::cout << "                   output_stationary - C stays in accumulators\n";
     std::cout << "  --trace <file> Export Chrome trace to file\n";
     std::cout << "  --validate     Run schedule validation before execution\n";
+    std::cout << "  --l3-buffers <n>  L3 buffer count (default: 32)\n";
+    std::cout << "  --livelock <n>    Livelock threshold cycles (default: 10000)\n";
     std::cout << "  -h, --help     Show this help\n";
 }
 
@@ -72,6 +74,8 @@ int main(int argc, char* argv[]) {
     std::string strategy_name = "INTERLEAVED_AB";
     std::string trace_file;
     bool validate = false;
+    size_t l3_buffers = 32;
+    size_t livelock_threshold = 10000;
 
     // ========================================
     // Parse arguments
@@ -111,6 +115,10 @@ int main(int argc, char* argv[]) {
             trace_file = argv[++i];
         } else if (strcmp(argv[i], "--validate") == 0) {
             validate = true;
+        } else if (strcmp(argv[i], "--l3-buffers") == 0 && i + 1 < argc) {
+            l3_buffers = std::stoull(argv[++i]);
+        } else if (strcmp(argv[i], "--livelock") == 0 && i + 1 < argc) {
+            livelock_threshold = std::stoull(argv[++i]);
         } else {
             std::cerr << "Unknown option: " << argv[i] << "\n";
             print_usage(argv[0]);
@@ -206,14 +214,14 @@ int main(int argc, char* argv[]) {
 
     ConcurrentTimingExecutor::Config exec_config;
     exec_config.num_dma_engines = 4;
-    exec_config.l3_buffer_count = 32;
+    exec_config.l3_buffer_count = l3_buffers;
     exec_config.num_block_movers = 4;
     exec_config.l2_bank_count = 64;
     exec_config.num_row_streamers = 2;
     exec_config.num_col_streamers = 2;
     exec_config.max_cycles = 10000000;  // 10M cycles max
     exec_config.enable_livelock_detection = true;
-    exec_config.livelock_threshold = 10000;
+    exec_config.livelock_threshold = livelock_threshold;
 
     std::cout << "  DMA engines: " << exec_config.num_dma_engines << "\n";
     std::cout << "  L3 buffers: " << exec_config.l3_buffer_count << "\n";

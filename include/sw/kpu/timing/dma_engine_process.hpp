@@ -55,13 +55,16 @@ public:
      * @param config Engine configuration
      * @param l3_credits Credit pool for L3 buffers (shared)
      * @param l3_tag_cam Tag CAM for L3 tile tracking (shared)
+     * @param l2_tag_cam Tag CAM for L2 tile tracking (for downstream check)
      */
     DMAEngineProcess(const Config& config,
                      CreditPool& l3_credits,
-                     TagCAM& l3_tag_cam)
+                     TagCAM& l3_tag_cam,
+                     TagCAM& l2_tag_cam)
         : config_(config),
           l3_credits_(l3_credits),
           l3_tag_cam_(l3_tag_cam),
+          l2_tag_cam_(l2_tag_cam),
           load_queue_(config.queue_depth * 4),  // Allow some buffering
           store_queue_(config.queue_depth * 4),
           next_slot_id_(0) {
@@ -180,6 +183,7 @@ private:
     Config config_;
     CreditPool& l3_credits_;
     TagCAM& l3_tag_cam_;
+    TagCAM& l2_tag_cam_;
 
     WorkQueue<TileDescriptor> load_queue_;
     WorkQueue<TileDescriptor> store_queue_;
@@ -259,6 +263,28 @@ private:
      */
     void try_issue_loads(Cycle current_cycle, std::vector<TimingEvent>& events) {
         while (!load_queue_.empty() && in_flight_.size() < config_.queue_depth) {
+            const TileDescriptor& peek_tile = load_queue_.peek();
+
+            // Check if tile is already in L3 (supports tile reuse)
+            if (l3_tag_cam_.lookup(peek_tile.tile_id)) {
+                // Tile already in L3 - just increment ref_count, no credit needed
+                TileDescriptor tile = load_queue_.dequeue();
+                auto entry = l3_tag_cam_.match(tile.tile_id);
+                // Insert increments ref_count for existing tiles
+                l3_tag_cam_.insert(tile.tile_id, entry->slot_id, current_cycle);
+
+                events.push_back(TimingEvent(
+                    EventType::TILE_ARRIVED_L3,  // Tile already there
+                    current_cycle,
+                    config_.engine_id,
+                    tile.tile_id,
+                    name()
+                ));
+                events.back().slot_id = entry->slot_id;
+                continue;  // Process next tile
+            }
+
+            // Tile not in L3 - need to load it from DRAM
             // Need L3 credit to proceed
             if (!l3_credits_.acquire()) {
                 // Stalled on credit
@@ -266,7 +292,7 @@ private:
                     EventType::DMA_STALL_CREDIT,
                     current_cycle,
                     config_.engine_id,
-                    load_queue_.peek().tile_id,
+                    peek_tile.tile_id,
                     name()
                 ));
                 stall_cycles_++;
@@ -333,8 +359,11 @@ private:
             uint32_t slot = entry->slot_id;
 
             // Invalidate tile in L3 (it's being written back)
-            l3_tag_cam_.invalidate(store_tile.tile_id);
-            l3_credits_.release();
+            // Only release L3 credit if tile was fully removed (ref_count reached 0)
+            bool credit_released = l3_tag_cam_.invalidate(store_tile.tile_id);
+            if (credit_released) {
+                l3_credits_.release();
+            }
 
             in_flight_.emplace_back(
                 store_tile,
@@ -352,14 +381,16 @@ private:
                 name()
             ));
 
-            events.push_back(TimingEvent(
-                EventType::CREDIT_RELEASED,
-                current_cycle,
-                config_.engine_id,
-                store_tile.tile_id,
-                name()
-            ));
-            events.back().slot_id = slot;
+            if (credit_released) {
+                events.push_back(TimingEvent(
+                    EventType::CREDIT_RELEASED,
+                    current_cycle,
+                    config_.engine_id,
+                    store_tile.tile_id,
+                    name()
+                ));
+                events.back().slot_id = slot;
+            }
         }
     }
 

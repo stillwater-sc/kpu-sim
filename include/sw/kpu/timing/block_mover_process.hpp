@@ -231,8 +231,11 @@ private:
             if (in_flight_is_move_) {
                 // Move complete: tile arrived at L2
                 l2_tag_cam_.insert(in_flight_->tile.tile_id, in_flight_->slot_id, current_cycle);
-                l3_tag_cam_.invalidate(in_flight_->tile.tile_id);
-                l3_credits_.release();
+                // Only release L3 credit if tile was fully removed (ref_count reached 0)
+                bool credit_released = l3_tag_cam_.invalidate(in_flight_->tile.tile_id);
+                if (credit_released) {
+                    l3_credits_.release();
+                }
                 total_tiles_moved_++;
 
                 events.push_back(TimingEvent::duration_event(
@@ -254,18 +257,23 @@ private:
                 ));
                 events.back().slot_id = in_flight_->slot_id;
 
-                events.push_back(TimingEvent(
-                    EventType::CREDIT_RELEASED,
-                    current_cycle,
-                    config_.mover_id,
-                    in_flight_->tile.tile_id,
-                    name()
-                ));
+                if (credit_released) {
+                    events.push_back(TimingEvent(
+                        EventType::CREDIT_RELEASED,
+                        current_cycle,
+                        config_.mover_id,
+                        in_flight_->tile.tile_id,
+                        name()
+                    ));
+                }
             } else {
                 // Writeback complete: tile arrived at L3
                 l3_tag_cam_.insert(in_flight_->tile.tile_id, in_flight_->slot_id, current_cycle);
-                l2_tag_cam_.invalidate(in_flight_->tile.tile_id);
-                l2_credits_.release();
+                // Only release L2 credit if tile was fully removed (ref_count reached 0)
+                bool credit_released = l2_tag_cam_.invalidate(in_flight_->tile.tile_id);
+                if (credit_released) {
+                    l2_credits_.release();
+                }
                 total_tiles_writeback_++;
 
                 events.push_back(TimingEvent::duration_event(
@@ -287,13 +295,15 @@ private:
                 ));
                 events.back().slot_id = in_flight_->slot_id;
 
-                events.push_back(TimingEvent(
-                    EventType::CREDIT_RELEASED,
-                    current_cycle,
-                    config_.mover_id,
-                    in_flight_->tile.tile_id,
-                    name()
-                ));
+                if (credit_released) {
+                    events.push_back(TimingEvent(
+                        EventType::CREDIT_RELEASED,
+                        current_cycle,
+                        config_.mover_id,
+                        in_flight_->tile.tile_id,
+                        name()
+                    ));
+                }
             }
 
             in_flight_.reset();

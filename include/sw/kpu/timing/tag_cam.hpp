@@ -162,11 +162,15 @@ public:
     /**
      * @brief Remove a tile from the CAM (with reference counting)
      * @param tile_id The tile to invalidate
-     * @return true if tile was found (decremented or removed)
+     * @return true if tile was fully removed (ref_count reached 0),
+     *         false if tile was just decremented or not found
      *
      * Decrements the reference count. Only removes the tile when ref_count
      * reaches zero. This supports tile reuse where multiple consumers may
      * need the same tile.
+     *
+     * IMPORTANT: The caller should only release the associated credit when
+     * this returns true, indicating the buffer slot is now free.
      *
      * Called when a tile is consumed and the buffer is freed.
      * This allows the upstream producer to reuse the buffer slot.
@@ -175,16 +179,16 @@ public:
         auto it = entries_.find(tile_id);
         if (it != entries_.end()) {
             if (it->second.ref_count > 1) {
-                // More consumers remaining - just decrement
+                // More consumers remaining - just decrement, don't release credit
                 it->second.ref_count--;
-                return true;
+                return false;  // Tile still in use, don't release credit
             } else {
-                // Last consumer - remove the entry
+                // Last consumer - remove the entry, caller should release credit
                 entries_.erase(it);
-                return true;
+                return true;  // Tile removed, release credit
             }
         }
-        return false;
+        return false;  // Not found
     }
 
     /**

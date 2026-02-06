@@ -366,7 +366,7 @@ inline void ConcurrentTimingExecutor::create_components() {
         dma_config.name = "DMA";
 
         dma_engines_.push_back(std::make_unique<DMAEngineProcess>(
-            dma_config, l3_credits_, l3_tag_cam_));
+            dma_config, l3_credits_, l3_tag_cam_, l2_tag_cam_));
     }
 
     // Create BlockMovers

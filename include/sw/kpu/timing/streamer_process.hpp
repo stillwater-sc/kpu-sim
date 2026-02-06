@@ -228,8 +228,11 @@ private:
         if (in_flight_->is_complete(current_cycle)) {
             if (in_flight_is_feed_) {
                 // Feed complete: tile consumed from L2, fed to compute
-                l2_tag_cam_.invalidate(in_flight_->tile.tile_id);
-                l2_credits_.release();
+                // Only release L2 credit if tile was fully removed (ref_count reached 0)
+                bool credit_released = l2_tag_cam_.invalidate(in_flight_->tile.tile_id);
+                if (credit_released) {
+                    l2_credits_.release();
+                }
                 total_tiles_fed_++;
 
                 events.push_back(TimingEvent::duration_event(
@@ -250,13 +253,15 @@ private:
                     name()
                 ));
 
-                events.push_back(TimingEvent(
-                    EventType::CREDIT_RELEASED,
-                    current_cycle,
-                    config_.streamer_id,
-                    in_flight_->tile.tile_id,
-                    name()
-                ));
+                if (credit_released) {
+                    events.push_back(TimingEvent(
+                        EventType::CREDIT_RELEASED,
+                        current_cycle,
+                        config_.streamer_id,
+                        in_flight_->tile.tile_id,
+                        name()
+                    ));
+                }
             } else {
                 // Drain complete: result tile arrived at L2
                 // Note: slot_id was set when drain started
