@@ -691,37 +691,50 @@ inline void ConcurrentTimingExecutor::export_chrome_trace(const std::string& fil
 
     // ========================================================================
     // Emit process and thread metadata first for human-readable trace display
+    // Sort order follows dataflow: DMA → BlockMover → Streamer (top to bottom)
     // ========================================================================
 
     // Process name
     file << R"({"name":"process_name","ph":"M","pid":1,"tid":0,"args":{"name":"CSP Concurrent Timing Executor"}})";
 
-    // DMA Channel threads (IDs 0-N)
+    // DMA Channel threads (IDs 0-N, sort_index 0+)
     for (size_t i = 0; i < config_.num_dma_engines; ++i) {
         file << ",\n";
         file << R"({"name":"thread_name","ph":"M","pid":1,"tid":)" << i
              << R"(,"args":{"name":"DMA Channel )" << i << R"("}})";
+        file << ",\n";
+        file << R"({"name":"thread_sort_index","ph":"M","pid":1,"tid":)" << i
+             << R"(,"args":{"sort_index":)" << i << R"(}})";
     }
 
-    // BlockMover threads (IDs 100+)
+    // BlockMover threads (IDs 100+, sort_index 10+)
     for (size_t i = 0; i < config_.num_block_movers; ++i) {
         file << ",\n";
         file << R"({"name":"thread_name","ph":"M","pid":1,"tid":)" << (100 + i)
              << R"(,"args":{"name":"BlockMover )" << i << R"("}})";
+        file << ",\n";
+        file << R"({"name":"thread_sort_index","ph":"M","pid":1,"tid":)" << (100 + i)
+             << R"(,"args":{"sort_index":)" << (10 + i) << R"(}})";
     }
 
-    // Row Streamer threads (IDs 200+)
+    // Row Streamer threads (IDs 200+, sort_index 20+)
     for (size_t i = 0; i < config_.num_row_streamers; ++i) {
         file << ",\n";
         file << "{\"name\":\"thread_name\",\"ph\":\"M\",\"pid\":1,\"tid\":" << (200 + i)
              << ",\"args\":{\"name\":\"Row Streamer " << i << " - A matrix\"}}";
+        file << ",\n";
+        file << "{\"name\":\"thread_sort_index\",\"ph\":\"M\",\"pid\":1,\"tid\":" << (200 + i)
+             << ",\"args\":{\"sort_index\":" << (20 + i) << "}}";
     }
 
-    // Column Streamer threads (IDs 210+)
+    // Column Streamer threads (IDs 210+, sort_index 30+)
     for (size_t i = 0; i < config_.num_col_streamers; ++i) {
         file << ",\n";
         file << "{\"name\":\"thread_name\",\"ph\":\"M\",\"pid\":1,\"tid\":" << (210 + i)
              << ",\"args\":{\"name\":\"Col Streamer " << i << " - B matrix\"}}";
+        file << ",\n";
+        file << "{\"name\":\"thread_sort_index\",\"ph\":\"M\",\"pid\":1,\"tid\":" << (210 + i)
+             << ",\"args\":{\"sort_index\":" << (30 + i) << "}}";
     }
 
     // ========================================================================
