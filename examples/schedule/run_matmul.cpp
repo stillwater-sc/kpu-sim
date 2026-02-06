@@ -1,216 +1,309 @@
 /**
  * @file run_matmul.cpp
- * @brief Run a matmul on behavioral or transactional fidelity
+ * @brief Run matmul using CSP concurrent timing model
+ *
+ * This is a kernel performance test for optimizing CSP process concurrency.
+ * It uses the ConcurrentTimingExecutor with credit-based dataflow to model
+ * true concurrency between DMA, BlockMover, and Streamer processes.
  *
  * Build:
  *   cmake --build --preset release --target run_matmul
  *
  * Usage:
- *   ./build/examples/run_matmul [--transactional] [--trace output.json]
+ *   ./build/examples/schedule/run_matmul [options]
+ *
+ * Options:
+ *   -M <size>      Matrix M dimension (default: 64)
+ *   -N <size>      Matrix N dimension (default: 64)
+ *   -K <size>      Matrix K dimension (default: 64)
+ *   --Ti <size>    Tile i dimension (default: 16)
+ *   --Tj <size>    Tile j dimension (default: 16)
+ *   --Tk <size>    Tile k dimension (default: 16)
+ *   --strategy <s> Scheduling strategy: interleaved (default), blocked, output_stationary
+ *   --trace <file> Export Chrome trace to file
+ *   --validate     Run schedule validation before execution
+ *   -h, --help     Show this help
  *
  * Examples:
- *   ./build/examples/run_matmul                          # Behavioral only
- *   ./build/examples/run_matmul --transactional          # With timing
- *   ./build/examples/run_matmul --transactional --trace trace.json
+ *   ./build/examples/schedule/run_matmul
+ *   ./build/examples/schedule/run_matmul -M 128 -N 128 -K 128
+ *   ./build/examples/schedule/run_matmul --strategy blocked --validate
+ *   ./build/examples/schedule/run_matmul --trace trace.json
  */
 
-#include <sw/kpu/isa/behavioral_program_executor.hpp>
-#include <sw/kpu/isa/transactional_program_executor.hpp>
-#include <sw/kpu/dsl/schedule.hpp>
-#include <sw/kpu/dsl/schedule_compiler.hpp>
-#include <sw/kpu/schedules/matmul_schedule.hpp>
-#include <sw/kpu/models/temporal/memory/l3_tile.hpp>
-#include <sw/kpu/models/temporal/memory/l2_bank.hpp>
-#include <sw/kpu/models/temporal/memory/l1_buffer.hpp>
-#include <sw/memory/external_memory.hpp>
+#include <sw/kpu/timing/concurrent_timing_executor.hpp>
+#include <sw/kpu/timing/schedule/matmul_schedule_generator.hpp>
+#include <sw/kpu/timing/schedule/schedule_executor.hpp>
+#include <sw/kpu/timing/schedule/schedule_validator.hpp>
 
 #include <iostream>
-#include <cmath>
+#include <iomanip>
 #include <cstring>
-#include <vector>
+#include <string>
 
-using namespace sw::kpu;
-using namespace sw::kpu::isa;
-using namespace sw::kpu::dsl;
-using namespace sw::kpu::schedules;
+using namespace sw::kpu::timing;
+using namespace sw::kpu::timing::schedule;
+
+void print_usage(const char* prog) {
+    std::cout << "Usage: " << prog << " [options]\n\n";
+    std::cout << "Options:\n";
+    std::cout << "  -M <size>      Matrix M dimension (default: 64)\n";
+    std::cout << "  -N <size>      Matrix N dimension (default: 64)\n";
+    std::cout << "  -K <size>      Matrix K dimension (default: 64)\n";
+    std::cout << "  --Ti <size>    Tile i dimension (default: 16)\n";
+    std::cout << "  --Tj <size>    Tile j dimension (default: 16)\n";
+    std::cout << "  --Tk <size>    Tile k dimension (default: 16)\n";
+    std::cout << "  --strategy <s> Scheduling strategy:\n";
+    std::cout << "                   interleaved (default) - A-B-A-B ordering, livelock-safe\n";
+    std::cout << "                   blocked - All A then all B (can livelock)\n";
+    std::cout << "                   output_stationary - C stays in accumulators\n";
+    std::cout << "  --trace <file> Export Chrome trace to file\n";
+    std::cout << "  --validate     Run schedule validation before execution\n";
+    std::cout << "  -h, --help     Show this help\n";
+}
 
 int main(int argc, char* argv[]) {
     // ========================================
+    // Default configuration
+    // ========================================
+    size_t M = 64, N = 64, K = 64;
+    size_t Ti = 16, Tj = 16, Tk = 16;
+    MatMulScheduleGenerator::Strategy strategy = MatMulScheduleGenerator::Strategy::INTERLEAVED_AB;
+    std::string strategy_name = "INTERLEAVED_AB";
+    std::string trace_file;
+    bool validate = false;
+
+    // ========================================
     // Parse arguments
     // ========================================
-    bool use_transactional = false;
-    std::string trace_file;
-
     for (int i = 1; i < argc; ++i) {
-        if (strcmp(argv[i], "--transactional") == 0 || strcmp(argv[i], "-t") == 0) {
-            use_transactional = true;
-        } else if ((strcmp(argv[i], "--trace") == 0) && i + 1 < argc) {
-            trace_file = argv[++i];
-            use_transactional = true;  // Trace implies transactional
-        } else if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0) {
-            std::cout << "Usage: " << argv[0] << " [--transactional] [--trace output.json]\n";
+        if (strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "--help") == 0) {
+            print_usage(argv[0]);
             return 0;
+        } else if (strcmp(argv[i], "-M") == 0 && i + 1 < argc) {
+            M = std::stoull(argv[++i]);
+        } else if (strcmp(argv[i], "-N") == 0 && i + 1 < argc) {
+            N = std::stoull(argv[++i]);
+        } else if (strcmp(argv[i], "-K") == 0 && i + 1 < argc) {
+            K = std::stoull(argv[++i]);
+        } else if (strcmp(argv[i], "--Ti") == 0 && i + 1 < argc) {
+            Ti = std::stoull(argv[++i]);
+        } else if (strcmp(argv[i], "--Tj") == 0 && i + 1 < argc) {
+            Tj = std::stoull(argv[++i]);
+        } else if (strcmp(argv[i], "--Tk") == 0 && i + 1 < argc) {
+            Tk = std::stoull(argv[++i]);
+        } else if (strcmp(argv[i], "--strategy") == 0 && i + 1 < argc) {
+            std::string s = argv[++i];
+            if (s == "interleaved") {
+                strategy = MatMulScheduleGenerator::Strategy::INTERLEAVED_AB;
+                strategy_name = "INTERLEAVED_AB";
+            } else if (s == "blocked") {
+                strategy = MatMulScheduleGenerator::Strategy::BLOCKED_AB;
+                strategy_name = "BLOCKED_AB";
+            } else if (s == "output_stationary") {
+                strategy = MatMulScheduleGenerator::Strategy::OUTPUT_STATIONARY;
+                strategy_name = "OUTPUT_STATIONARY";
+            } else {
+                std::cerr << "Unknown strategy: " << s << "\n";
+                return 1;
+            }
+        } else if (strcmp(argv[i], "--trace") == 0 && i + 1 < argc) {
+            trace_file = argv[++i];
+        } else if (strcmp(argv[i], "--validate") == 0) {
+            validate = true;
+        } else {
+            std::cerr << "Unknown option: " << argv[i] << "\n";
+            print_usage(argv[0]);
+            return 1;
+        }
+    }
+
+    // Validate dimensions
+    if (M % Ti != 0 || N % Tj != 0 || K % Tk != 0) {
+        std::cerr << "Error: Dimensions must be evenly divisible by tile sizes\n";
+        std::cerr << "  M=" << M << " % Ti=" << Ti << " = " << (M % Ti) << "\n";
+        std::cerr << "  N=" << N << " % Tj=" << Tj << " = " << (N % Tj) << "\n";
+        std::cerr << "  K=" << K << " % Tk=" << Tk << " = " << (K % Tk) << "\n";
+        return 1;
+    }
+
+    // ========================================
+    // Print configuration
+    // ========================================
+    std::cout << "\n";
+    std::cout << "╔══════════════════════════════════════════════════════════════════════╗\n";
+    std::cout << "║     CSP Concurrent Timing Model - MatMul Performance Test            ║\n";
+    std::cout << "╚══════════════════════════════════════════════════════════════════════╝\n\n";
+
+    std::cout << "Problem: C[" << M << "," << N << "] = A[" << M << "," << K
+              << "] x B[" << K << "," << N << "]\n";
+    std::cout << "Tiles:   " << (M/Ti) << " x " << (N/Tj) << " x " << (K/Tk)
+              << " = " << (M/Ti)*(N/Tj)*(K/Tk) << " tile operations\n";
+    std::cout << "Tile size: " << Ti << " x " << Tj << " x " << Tk << "\n";
+    std::cout << "Strategy: " << strategy_name << "\n";
+    std::cout << "FLOPs:   " << 2ULL * M * N * K << "\n\n";
+
+    // ========================================
+    // Generate CSP schedule
+    // ========================================
+    std::cout << "Generating CSP schedule...\n";
+
+    MatMulScheduleGenerator::Config config;
+    config.M = M;
+    config.N = N;
+    config.K = K;
+    config.Ti = Ti;
+    config.Tj = Tj;
+    config.Tk = Tk;
+    config.strategy = strategy;
+
+    MatMulScheduleGenerator generator(config);
+    auto schedule = generator.generate();
+
+    std::cout << "  Schedule: " << schedule.metadata.name << "\n";
+    std::cout << "  Total operations: " << schedule.size() << "\n";
+    std::cout << "  Operation breakdown:\n";
+    std::cout << "    LOAD:      " << std::setw(6) << schedule.count_ops(ScheduleOpType::LOAD) << "\n";
+    std::cout << "    MOVE:      " << std::setw(6) << schedule.count_ops(ScheduleOpType::MOVE) << "\n";
+    std::cout << "    FEED:      " << std::setw(6) << schedule.count_ops(ScheduleOpType::FEED) << "\n";
+    std::cout << "    DRAIN:     " << std::setw(6) << schedule.count_ops(ScheduleOpType::DRAIN) << "\n";
+    std::cout << "    WRITEBACK: " << std::setw(6) << schedule.count_ops(ScheduleOpType::WRITEBACK) << "\n";
+    std::cout << "    STORE:     " << std::setw(6) << schedule.count_ops(ScheduleOpType::STORE) << "\n";
+
+    // ========================================
+    // Analyze schedule for livelock safety
+    // ========================================
+    std::cout << "\nLivelock analysis:\n";
+    auto analysis = ScheduleAnalysis::analyze(schedule);
+    std::cout << "  Max consecutive A ops: " << analysis.max_consecutive_a << "\n";
+    std::cout << "  Max consecutive B ops: " << analysis.max_consecutive_b << "\n";
+    std::cout << "  Interleaved: " << (analysis.is_interleaved ? "YES" : "NO") << "\n";
+    std::cout << "  Livelock-safe: " << (is_livelock_safe(schedule) ? "YES" : "NO") << "\n";
+
+    // ========================================
+    // Validate schedule (optional)
+    // ========================================
+    if (validate) {
+        std::cout << "\nValidating schedule...\n";
+        auto validation = validate_schedule(schedule);
+        std::cout << "  Result: " << (validation.valid ? "PASSED" : "FAILED") << "\n";
+        std::cout << "  Errors: " << validation.count_errors() << "\n";
+        std::cout << "  Warnings: " << validation.count_warnings() << "\n";
+
+        if (!validation.valid) {
+            std::cout << "\nValidation issues:\n";
+            for (const auto& issue : validation.issues) {
+                std::cout << "  " << issue.to_string() << "\n";
+            }
+            return 1;
         }
     }
 
     // ========================================
-    // Configure matmul dimensions
+    // Configure ConcurrentTimingExecutor
     // ========================================
-    // MODIFY THESE to change the problem size:
-    const Size M = 64;   // A rows, C rows
-    const Size N = 64;   // B cols, C cols
-    const Size K = 64;   // A cols, B rows (reduction dimension)
+    std::cout << "\nConfiguring ConcurrentTimingExecutor...\n";
 
-    // Tile sizes (must evenly divide dimensions)
-    const Size Ti = 16;  // Tile rows
-    const Size Tj = 16;  // Tile cols
-    const Size Tk = 16;  // Tile reduction
+    ConcurrentTimingExecutor::Config exec_config;
+    exec_config.num_dma_engines = 4;
+    exec_config.l3_buffer_count = 32;
+    exec_config.num_block_movers = 4;
+    exec_config.l2_bank_count = 64;
+    exec_config.num_row_streamers = 2;
+    exec_config.num_col_streamers = 2;
+    exec_config.max_cycles = 10000000;  // 10M cycles max
+    exec_config.enable_livelock_detection = true;
+    exec_config.livelock_threshold = 10000;
 
-    std::cout << "=== MatMul: C[" << M << "," << N << "] = A[" << M << "," << K
-              << "] x B[" << K << "," << N << "] ===\n";
-    std::cout << "Tiles: " << (M/Ti) << " x " << (N/Tj) << " x " << (K/Tk)
-              << " = " << (M/Ti)*(N/Tj)*(K/Tk) << " tile ops\n";
-    std::cout << "FLOPs: " << 2ULL*M*N*K << "\n";
-    std::cout << "Fidelity: " << (use_transactional ? "TRANSACTIONAL" : "BEHAVIORAL") << "\n\n";
+    std::cout << "  DMA engines: " << exec_config.num_dma_engines << "\n";
+    std::cout << "  L3 buffers: " << exec_config.l3_buffer_count << "\n";
+    std::cout << "  BlockMovers: " << exec_config.num_block_movers << "\n";
+    std::cout << "  L2 banks: " << exec_config.l2_bank_count << "\n";
+    std::cout << "  Row streamers: " << exec_config.num_row_streamers << "\n";
+    std::cout << "  Col streamers: " << exec_config.num_col_streamers << "\n";
 
-    // ========================================
-    // Create hardware context
-    // ========================================
-    size_t mem_size = (M*K + K*N + M*N) * sizeof(float) / 1024 + 16;  // KB
-    ExternalMemory ext_mem(mem_size);
-
-    std::vector<L3Tile> l3_tiles;
-    std::vector<L2Bank> l2_banks;
-    std::vector<L1Buffer> l1_buffers;
-
-    for (int i = 0; i < 4; ++i) l3_tiles.emplace_back(i, 256);   // 256 KB each
-    for (int i = 0; i < 8; ++i) l2_banks.emplace_back(i, 128);   // 128 KB each
-    for (int i = 0; i < 2; ++i) l1_buffers.emplace_back(i, 64);  // 64 KB each
-
-    BehavioralProgramExecutor::HardwareContext hw{ext_mem, l3_tiles, l2_banks, l1_buffers};
+    ConcurrentTimingExecutor executor(exec_config);
 
     // ========================================
-    // Initialize matrices
+    // Execute schedule
     // ========================================
-    Address a_base = 0;
-    Address b_base = M * K * sizeof(float);
-    Address c_base = b_base + K * N * sizeof(float);
+    std::cout << "\nExecuting CSP schedule...\n";
 
-    // A = all 1s, B = all 1s => C should be all K
-    std::vector<float> a_data(M * K, 1.0f);
-    std::vector<float> b_data(K * N, 1.0f);
-    std::vector<float> c_zero(M * N, 0.0f);
+    ScheduleExecutor sched_exec(executor);
+    auto result = sched_exec.execute(schedule);
 
-    ext_mem.write(a_base, a_data.data(), a_data.size() * sizeof(float));
-    ext_mem.write(b_base, b_data.data(), b_data.size() * sizeof(float));
-    ext_mem.write(c_base, c_zero.data(), c_zero.size() * sizeof(float));
+    std::cout << "\n";
+    std::cout << std::string(70, '=') << "\n";
+    std::cout << "Execution Results\n";
+    std::cout << std::string(70, '=') << "\n";
 
-    // ========================================
-    // Generate schedule and compile to program
-    // ========================================
-    auto schedule = matmul_output_stationary(M, N, K, Ti, Tj, Tk);
-    DMProgram program = compile_schedule(schedule);
+    std::cout << "  Status: " << (result.success ? "SUCCESS" : "FAILED") << "\n";
+    std::cout << "  Total cycles: " << result.total_cycles << "\n";
+    std::cout << "  Ops completed: " << result.ops_completed << " / " << result.ops_total << "\n";
 
-    std::cout << "Program: " << program.name << "\n";
-    std::cout << "Instructions: " << program.instructions.size() << "\n\n";
-
-    // ========================================
-    // Execute
-    // ========================================
-    if (use_transactional) {
-        // Transactional: behavioral correctness + timing model
-        TransactionalProgramExecutor exec(hw);
-        exec.load_program(program, a_base, b_base, c_base);
-
-        std::cout << "Running transactional execution...\n";
-        bool halted = exec.run();
-
-        // Get results
-        auto& beh_stats = exec.behavioral_stats();
-        auto timing = exec.get_timing_stats();
-
-        std::cout << "\n--- Behavioral Stats ---\n";
-        std::cout << "Halted: " << (halted ? "yes" : "no") << "\n";
-        std::cout << "Instructions: " << beh_stats.instructions_executed << "\n";
-        std::cout << "DMA loads: " << beh_stats.dma_loads << "\n";
-        std::cout << "DMA stores: " << beh_stats.dma_stores << "\n";
-        std::cout << "BM moves: " << beh_stats.bm_moves << "\n";
-        std::cout << "Compute invocations: " << beh_stats.compute_invocations << "\n";
-
-        std::cout << "\n--- Timing Model ---\n";
-        std::cout << "Total cycles: " << timing.total_cycles << "\n";
-        std::cout << "DMA cycles: " << timing.dma_cycles
-                  << " (" << std::fixed << std::setprecision(1)
-                  << (timing.dma_utilization * 100) << "% util)\n";
-        std::cout << "BlockMover cycles: " << timing.block_mover_cycles
-                  << " (" << (timing.block_mover_utilization * 100) << "% util)\n";
-        std::cout << "Streamer cycles: " << timing.streamer_cycles
-                  << " (" << (timing.streamer_utilization * 100) << "% util)\n";
-        std::cout << "Loop overhead: " << timing.loop_overhead_cycles << " cycles\n";
-        std::cout << "Loop iterations: " << timing.loop_iterations << "\n";
-
-        // Export trace if requested
-        if (!trace_file.empty()) {
-            exec.export_chrome_trace(trace_file);
-            std::cout << "\nTrace exported to: " << trace_file << "\n";
-            std::cout << "View at: https://ui.perfetto.dev\n";
-        }
-
-        // Verify result
-        std::vector<float> c_result(M * N);
-        ext_mem.read(c_base, c_result.data(), c_result.size() * sizeof(float));
-
-        bool correct = true;
-        float expected = static_cast<float>(K);
-        for (size_t i = 0; i < c_result.size(); ++i) {
-            if (std::abs(c_result[i] - expected) > 1e-4f) {
-                correct = false;
-                std::cout << "\nERROR: C[" << i << "] = " << c_result[i]
-                          << ", expected " << expected << "\n";
-                break;
-            }
-        }
-        std::cout << "\nResult: " << (correct ? "CORRECT" : "INCORRECT") << "\n";
-
-    } else {
-        // Behavioral only: functional correctness
-        BehavioralProgramExecutor exec(hw);
-        exec.load_program(program, a_base, b_base, c_base);
-
-        std::cout << "Running behavioral execution...\n";
-        bool halted = exec.run();
-
-        auto& stats = exec.statistics();
-
-        std::cout << "\n--- Behavioral Stats ---\n";
-        std::cout << "Halted: " << (halted ? "yes" : "no") << "\n";
-        std::cout << "Instructions: " << stats.instructions_executed << "\n";
-        std::cout << "DMA loads: " << stats.dma_loads << "\n";
-        std::cout << "DMA stores: " << stats.dma_stores << "\n";
-        std::cout << "BM moves: " << stats.bm_moves << "\n";
-        std::cout << "BM writebacks: " << stats.bm_writebacks << "\n";
-        std::cout << "Streamer feeds: " << stats.str_feeds << "\n";
-        std::cout << "Streamer drains: " << stats.str_drains << "\n";
-        std::cout << "Compute invocations: " << stats.compute_invocations << "\n";
-        std::cout << "Bytes loaded: " << stats.bytes_loaded << "\n";
-        std::cout << "Bytes stored: " << stats.bytes_stored << "\n";
-
-        // Verify result
-        std::vector<float> c_result(M * N);
-        ext_mem.read(c_base, c_result.data(), c_result.size() * sizeof(float));
-
-        bool correct = true;
-        float expected = static_cast<float>(K);
-        for (size_t i = 0; i < c_result.size(); ++i) {
-            if (std::abs(c_result[i] - expected) > 1e-4f) {
-                correct = false;
-                std::cout << "\nERROR: C[" << i << "] = " << c_result[i]
-                          << ", expected " << expected << "\n";
-                break;
-            }
-        }
-        std::cout << "\nResult: " << (correct ? "CORRECT" : "INCORRECT") << "\n";
+    if (result.livelock_detected) {
+        std::cout << "  WARNING: Livelock detected!\n";
     }
 
-    return 0;
+    // ========================================
+    // Print statistics
+    // ========================================
+    auto stats = executor.get_statistics();
+    std::cout << "\nResource Utilization:\n";
+    std::cout << "  DMA utilization:     " << std::fixed << std::setprecision(1)
+              << (stats.dma_utilization() * 100) << "%\n";
+    std::cout << "  BlockMover util:     " << (stats.bm_utilization() * 100) << "%\n";
+    std::cout << "  Streamer util:       " << (stats.str_utilization() * 100) << "%\n";
+
+    std::cout << "\nTile Throughput:\n";
+    double total = static_cast<double>(stats.total_cycles);
+    if (total > 0) {
+        std::cout << "  DMA tiles/cycle:     " << std::setprecision(4)
+                  << (stats.tiles_loaded + stats.tiles_stored) / total << "\n";
+        std::cout << "  BM tiles/cycle:      "
+                  << (stats.tiles_moved + stats.tiles_writeback) / total << "\n";
+        std::cout << "  STR tiles/cycle:     "
+                  << (stats.tiles_fed + stats.tiles_drained) / total << "\n";
+    }
+
+    std::cout << "\nStall Analysis:\n";
+    std::cout << "  DMA credit stalls:   " << stats.dma_credit_stalls << " cycles\n";
+    std::cout << "  BM tag stalls:       " << stats.bm_tag_stalls << " cycles\n";
+    std::cout << "  BM credit stalls:    " << stats.bm_credit_stalls << " cycles\n";
+    std::cout << "  STR tag stalls:      " << stats.str_tag_stalls << " cycles\n";
+    std::cout << "  STR credit stalls:   " << stats.str_credit_stalls << " cycles\n";
+
+    // ========================================
+    // Export trace (optional)
+    // ========================================
+    if (!trace_file.empty()) {
+        std::cout << "\nExporting Chrome trace to: " << trace_file << "\n";
+        executor.export_chrome_trace(trace_file);
+        std::cout << "View at: https://ui.perfetto.dev\n";
+    }
+
+    // ========================================
+    // Performance summary
+    // ========================================
+    std::cout << "\n";
+    std::cout << std::string(70, '=') << "\n";
+    std::cout << "Performance Summary\n";
+    std::cout << std::string(70, '=') << "\n";
+
+    double flops = 2.0 * M * N * K;
+    double cycles = static_cast<double>(result.total_cycles);
+    double flops_per_cycle = flops / cycles;
+
+    std::cout << "  FLOPs: " << std::scientific << std::setprecision(2) << flops << "\n";
+    std::cout << "  Cycles: " << std::fixed << std::setprecision(0) << cycles << "\n";
+    std::cout << "  FLOP/cycle: " << std::setprecision(2) << flops_per_cycle << "\n";
+
+    // Assuming 1 GHz clock for illustrative purposes
+    double clock_ghz = 1.0;
+    double gflops = flops_per_cycle * clock_ghz;
+    std::cout << "  GFLOP/s @ " << clock_ghz << " GHz: " << gflops << "\n";
+
+    std::cout << std::string(70, '=') << "\n\n";
+
+    return result.success ? 0 : 1;
 }

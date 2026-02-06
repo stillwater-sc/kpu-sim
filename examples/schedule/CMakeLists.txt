@@ -15,12 +15,7 @@ set_target_properties(csp_schedule_demo PROPERTIES
 
 # Matmul performance test for CSP process concurrency optimization
 add_executable(run_matmul run_matmul.cpp)
-target_link_libraries(run_matmul PRIVATE
-    kpu_isa
-    kpu_dsl
-    kpu_schedules
-    kpu_memory_components
-)
+target_link_libraries(run_matmul PRIVATE kpu_simulator)
 set_target_properties(run_matmul PROPERTIES
     FOLDER "Examples/Schedule"
 )
