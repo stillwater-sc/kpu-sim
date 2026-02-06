@@ -47,16 +47,9 @@ if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/behavioral)
     add_subdirectory(behavioral)
 endif()
 
-# ============================================================================
-# Standalone matmul runner (behavioral + transactional comparison)
-# ============================================================================
-add_executable(run_matmul run_matmul.cpp)
-target_link_libraries(run_matmul PRIVATE
-    kpu_isa
-    kpu_dsl
-    kpu_schedules
-    kpu_memory_components
-)
+if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/schedule)
+    add_subdirectory(schedule)
+endif()
 
 if(KPU_BUILD_PYTHON_BINDINGS)
     # Python examples are handled by the Python package
