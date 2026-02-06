@@ -165,3 +165,207 @@
   The next phase would be implementing the ConcurrentTimingExecutor which orchestrates all component processes, handles program distribution, and provides the main simulation loop. This would complete the v0.9.0 Concurrent Timing Model.
 
 
+
+● Phase 3 Complete: ConcurrentTimingExecutor Implementation
+
+  The v0.9.0 Concurrent Timing Model is now fully implemented. Here's a summary:
+
+  Completed Components
+
+  Phase 1 - Foundation
+
+  - CreditPool: Bounded credit-based flow control
+  - TagCAM: Content-addressable tile arrival tracking
+  - WorkQueue: FIFO work queue with peek/scan capabilities
+  - LivelockDetector: Progress monitoring and stall detection
+
+  Phase 2 - Component Processes
+
+  - DMAEngineProcess: DRAM↔L3 transfers with credit flow
+  - BlockMoverProcess: L3↔L2 transfers with work-conserving scan and priority aging
+  - StreamerProcess: L2↔Compute transfers (ROW/COL streamers)
+
+  Phase 3 - Integration
+
+  - ConcurrentTimingExecutor: Main orchestrator with:
+    - Multiple DMA engines, BlockMovers, and Streamers
+    - Round-robin work distribution
+    - Credit-based flow control (L3 and L2 pools)
+    - Tag CAM tracking for out-of-order tile arrival
+    - Statistics collection (utilization, stalls, throughput)
+    - Chrome trace and CSV export
+    - Livelock detection integration
+
+  Test Results
+  ┌────────────────────────────┬───────┬────────────┐
+  │         Test Suite         │ Tests │ Assertions │
+  ├────────────────────────────┼───────┼────────────┤
+  │ credit_pool                │ 16    │ 10,102     │
+  ├────────────────────────────┼───────┼────────────┤
+  │ tag_cam                    │ 17    │ 126        │
+  ├────────────────────────────┼───────┼────────────┤
+  │ work_queue                 │ 37    │ 2,119      │
+  ├────────────────────────────┼───────┼────────────┤
+  │ dma_engine_process         │ 14    │ 59         │
+  ├────────────────────────────┼───────┼────────────┤
+  │ block_mover_process        │ 19    │ 62         │
+  ├────────────────────────────┼───────┼────────────┤
+  │ streamer_process           │ 18    │ 85         │
+  ├────────────────────────────┼───────┼────────────┤
+  │ component_integration      │ 9     │ 45         │
+  ├────────────────────────────┼───────┼────────────┤
+  │ concurrent_timing_executor │ 19    │ 80         │
+  ├────────────────────────────┼───────┼────────────┤
+  │ Total                      │ 149   │ 12,678     │
+  └────────────────────────────┴───────┴────────────┘
+
+✻ Crunched for 6m 39s
+
+
+
+● Phase 4 implementation is complete. Here's a summary of what was created:
+
+  Files Created
+
+  Core Framework (Phase 4.1)
+  ┌─────────────────────────────────────────────────────────────────┬───────────────────────────────────────────────────────────────────────────────────┐
+  │                              File                               │                                    Description                                    │
+  ├─────────────────────────────────────────────────────────────────┼───────────────────────────────────────────────────────────────────────────────────┤
+  │ include/sw/kpu/timing/schedule/schedule_generator_interface.hpp │ IScheduleGenerator interface, ScheduleOperation, ScheduleResult, ScheduleAnalysis │
+  ├─────────────────────────────────────────────────────────────────┼───────────────────────────────────────────────────────────────────────────────────┤
+  │ include/sw/kpu/timing/schedule/schedule_executor.hpp            │ ScheduleExecutor for applying schedules to ConcurrentTimingExecutor               │
+  └─────────────────────────────────────────────────────────────────┴───────────────────────────────────────────────────────────────────────────────────┘
+  MatMul Generator (Phase 4.2)
+  File: include/sw/kpu/timing/schedule/matmul_schedule_generator.hpp
+  Description: MatMul generator with 4 strategies: OUTPUT_STATIONARY, INTERLEAVED_AB (default), PREFETCH_NEXT, BLOCKED_AB
+  ────────────────────────────────────────
+  File: tests/timing/test_schedule_generators.cpp
+  Description: Unit tests for schedule generators
+  Livelock Test Suite (Phase 4.3)
+  ┌──────────────────────────────────────────┬──────────────────────────────────────────────────┐
+  │                   File                   │                   Description                    │
+  ├──────────────────────────────────────────┼──────────────────────────────────────────────────┤
+  │ tests/timing/test_livelock_scenarios.cpp │ Comprehensive livelock detection/avoidance tests │
+  └──────────────────────────────────────────┴──────────────────────────────────────────────────┘
+  Schedule Validator (Phase 4.4)
+  ┌───────────────────────────────────────────────────────┬───────────────────────────────────────────────────────────────────────────────┐
+  │                         File                          │                                  Description                                  │
+  ├───────────────────────────────────────────────────────┼───────────────────────────────────────────────────────────────────────────────┤
+  │ include/sw/kpu/timing/schedule/schedule_validator.hpp │ Static validation with VAL-001 through VAL-006 rules + livelock safety checks │
+  ├───────────────────────────────────────────────────────┼───────────────────────────────────────────────────────────────────────────────┤
+  │ tests/timing/test_schedule_validation.cpp             │ Validation tests                                                              │
+  └───────────────────────────────────────────────────────┴───────────────────────────────────────────────────────────────────────────────┘
+  Additional Generators (Phase 4.5)
+  ┌─────────────────────────────────────────────────────────────────┬──────────────────────────────────────────────────┐
+  │                              File                               │                   Description                    │
+  ├─────────────────────────────────────────────────────────────────┼──────────────────────────────────────────────────┤
+  │ include/sw/kpu/timing/schedule/conv2d_schedule_generator.hpp    │ Conv2D generator using im2col transformation     │
+  ├─────────────────────────────────────────────────────────────────┼──────────────────────────────────────────────────┤
+  │ include/sw/kpu/timing/schedule/softmax_schedule_generator.hpp   │ Multi-pass softmax generator                     │
+  ├─────────────────────────────────────────────────────────────────┼──────────────────────────────────────────────────┤
+  │ include/sw/kpu/timing/schedule/layernorm_schedule_generator.hpp │ Multi-pass LayerNorm generator                   │
+  ├─────────────────────────────────────────────────────────────────┼──────────────────────────────────────────────────┤
+  │ include/sw/kpu/timing/schedule/batchnorm_schedule_generator.hpp │ BatchNorm generator (training + inference modes) │
+  └─────────────────────────────────────────────────────────────────┴──────────────────────────────────────────────────┘
+  CMake Integration (Phase 4.6)
+  ┌─────────────────────────────┬──────────────────────────┐
+  │            File             │          Action          │
+  ├─────────────────────────────┼──────────────────────────┤
+  │ tests/timing/CMakeLists.txt │ Added 3 new test targets │
+  └─────────────────────────────┴──────────────────────────┘
+  Test Results
+
+  All 11 timing tests pass:
+  - test_schedule_generators: 83 assertions, 15 test cases
+  - test_livelock_scenarios: 126 assertions, 20 test cases
+  - test_schedule_validation: 39 assertions, 22 test cases
+
+  Key Features
+
+  1. Livelock-Safe Scheduling: Default INTERLEAVED_AB strategy alternates A and B operations to prevent buffer monopolization
+  2. Static Validation: Catches issues before execution including:
+    - VAL-001: Empty schedules
+    - VAL-002: Incomplete tile operations
+    - VAL-003: Non-interleaved schedules
+    - VAL-004: Unbalanced A/B ratios
+    - VAL-006: Operation ordering violations
+    - VAL-LL1-LL5: Livelock safety checks
+  3. Schedule Analysis: Detects interleaving patterns and consecutive operation runs for livelock risk assessment
+
+
+● Yes, we can now create concurrent, CSP-style schedules for all these operations!
+
+  The demonstration shows:
+
+  MatMul Schedules
+
+  - INTERLEAVED_AB (default): Livelock-safe with max consecutive A/B = 1
+  - OUTPUT_STATIONARY: Also safe (max consecutive = 3)
+  - BLOCKED_AB: Not livelock-safe (max consecutive = 8)
+
+  Conv2D Schedules (im2col)
+
+  - Converts convolution to matrix multiplication
+  - Uses interleaved scheduling → livelock-safe
+  - Example: ResNet-50 layer generates 171,696 operations
+
+  Softmax Schedules (multi-pass)
+
+  - Pass 1: Find max (numerical stability)
+  - Pass 2: Compute exp(x - max)
+  - Pass 3: Sum exponentials
+  - Pass 4: Normalize
+
+  LayerNorm/BatchNorm Schedules
+
+  - Multi-pass algorithms for reduction operations
+  - Support both training and inference modes
+
+  Key Features
+  ┌────────────────────────────────────────┬────────┐
+  │                Feature                 │ Status │
+  ├────────────────────────────────────────┼────────┤
+  │ Credit-based dataflow                  │ ✓      │
+  ├────────────────────────────────────────┼────────┤
+  │ Livelock-safe scheduling               │ ✓      │
+  ├────────────────────────────────────────┼────────┤
+  │ Static validation (VAL-001 to VAL-006) │ ✓      │
+  ├────────────────────────────────────────┼────────┤
+  │ Interleaving analysis                  │ ✓      │
+  ├────────────────────────────────────────┼────────┤
+  │ Multi-pass reduction ops               │ ✓      │
+  └────────────────────────────────────────┴────────┘
+  The schedule generation and validation infrastructure is complete. The execution path through ConcurrentTimingExecutor has some bugs in the component processes (DMA, BlockMover, Streamer) that need debugging - this would be Phase 5 work to fix the actual simulation execution.
+
+  Session Log: docs/sessions/2026-02-05_v0.9_csp_schedule_generators.md
+  - Documents all Phase 4 implementation decisions
+  - Lists all 15 files created/modified
+  - Captures the 2 bugs encountered and their fixes (TagCAM remove method, ScheduleAnalysis interleaving)
+  - Includes verification commands and test results (160 passing tests)
+
+  CHANGELOG: Updated CHANGELOG.md under [Unreleased] with:
+  - CSP Schedule Generators (all 6 generators + executor + validator)
+  - Livelock Test Suite (20 test cases)
+  - Schedule Generator Tests (15 test cases)
+  - Schedule Validation Tests (22 test cases)
+  - CSP Schedule Demo example
+
+  Key files from Phase 4:
+  Category: Core Interface
+  Files: schedule_generator_interface.hpp, schedule_executor.hpp
+  ────────────────────────────────────────
+  Category: Generators
+  Files: matmul_schedule_generator.hpp, conv2d_schedule_generator.hpp, softmax_schedule_generator.hpp, layernorm_schedule_generator.hpp,
+    batchnorm_schedule_generator.hpp
+  ────────────────────────────────────────
+  Category: Validation
+  Files: schedule_validator.hpp
+  ────────────────────────────────────────
+  Category: Tests
+  Files: test_schedule_generators.cpp, test_livelock_scenarios.cpp, test_schedule_validation.cpp
+  ────────────────────────────────────────
+  Category: Demo
+  Files: examples/schedule/csp_schedule_demo.cpp - Main demonstration showing CSP schedule generation for MatMul, Conv2D, Softmax, LayerNorm, and BatchNorm
+  - examples/schedule/CMakeLists.txt - Build configuration
+
+
