@@ -24,11 +24,12 @@ struct TagCAMEntry {
     uint32_t slot_id;      ///< Buffer/bank slot where tile resides
     Cycle arrival_cycle;   ///< When the tile arrived at this level
     bool valid;            ///< Whether this entry is valid
+    uint32_t ref_count;    ///< Reference count for tile reuse
 
-    TagCAMEntry() : slot_id(0), arrival_cycle(0), valid(false) {}
+    TagCAMEntry() : slot_id(0), arrival_cycle(0), valid(false), ref_count(0) {}
 
     TagCAMEntry(const TileID& id, uint32_t slot, Cycle arrival)
-        : tile_id(id), slot_id(slot), arrival_cycle(arrival), valid(true) {}
+        : tile_id(id), slot_id(slot), arrival_cycle(arrival), valid(true), ref_count(1) {}
 };
 
 /**
@@ -73,19 +74,25 @@ public:
     }
 
     /**
-     * @brief Insert a tile arrival record
+     * @brief Insert a tile arrival record (with reference counting)
      * @param tile_id The tile that arrived
      * @param slot_id The buffer/bank slot containing the tile
      * @param arrival_cycle When the tile arrived (for timing)
-     * @return true if inserted, false if CAM is full or tile already present
+     * @return true if inserted or ref_count incremented, false if CAM is full
+     *
+     * If the tile is already present, increments reference count instead of
+     * failing. This supports tile reuse where the same tile may be loaded
+     * multiple times in overlapping schedules.
      *
      * Called by the component that pushes data downstream (e.g., DMA engine
      * after completing a load to L3).
      */
     bool insert(const TileID& tile_id, uint32_t slot_id, Cycle arrival_cycle) {
-        // Check if already present
-        if (entries_.count(tile_id) > 0) {
-            return false;  // Duplicate - shouldn't happen in correct operation
+        // Check if already present - increment ref_count
+        auto it = entries_.find(tile_id);
+        if (it != entries_.end()) {
+            it->second.ref_count++;
+            return true;  // Success - tile reuse
         }
 
         // Check capacity
@@ -153,9 +160,13 @@ public:
     }
 
     /**
-     * @brief Remove a tile from the CAM
+     * @brief Remove a tile from the CAM (with reference counting)
      * @param tile_id The tile to invalidate
-     * @return true if tile was found and invalidated
+     * @return true if tile was found (decremented or removed)
+     *
+     * Decrements the reference count. Only removes the tile when ref_count
+     * reaches zero. This supports tile reuse where multiple consumers may
+     * need the same tile.
      *
      * Called when a tile is consumed and the buffer is freed.
      * This allows the upstream producer to reuse the buffer slot.
@@ -163,10 +174,30 @@ public:
     bool invalidate(const TileID& tile_id) {
         auto it = entries_.find(tile_id);
         if (it != entries_.end()) {
-            entries_.erase(it);
-            return true;
+            if (it->second.ref_count > 1) {
+                // More consumers remaining - just decrement
+                it->second.ref_count--;
+                return true;
+            } else {
+                // Last consumer - remove the entry
+                entries_.erase(it);
+                return true;
+            }
         }
         return false;
+    }
+
+    /**
+     * @brief Get the reference count for a tile
+     * @param tile_id The tile to query
+     * @return Reference count (0 if not present)
+     */
+    [[nodiscard]] uint32_t ref_count(const TileID& tile_id) const {
+        auto it = entries_.find(tile_id);
+        if (it != entries_.end() && it->second.valid) {
+            return it->second.ref_count;
+        }
+        return 0;
     }
 
     /**

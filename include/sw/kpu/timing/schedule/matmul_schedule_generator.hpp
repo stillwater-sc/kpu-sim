@@ -218,6 +218,8 @@ private:
      *
      * Loop order: for ti, for tj, for tk
      * C tiles stay in PE accumulators.
+     *
+     * Emits all operations; execution layer handles deduplication.
      */
     void generate_output_stationary(ScheduleResult& result) {
         Size m_tiles = config_.m_tiles();
@@ -229,13 +231,13 @@ private:
             for (Size tj = 0; tj < n_tiles; ++tj) {
                 // Accumulate over K
                 for (Size tk = 0; tk < k_tiles; ++tk) {
-                    // Load A tile
+                    // Load A tile (execution layer deduplicates)
                     auto a_tile = make_tile(isa::MatrixID::A, ti, 0, tk);
                     result.operations.push_back(ScheduleOperation::load(a_tile));
                     result.operations.push_back(ScheduleOperation::move(a_tile));
                     result.operations.push_back(ScheduleOperation::feed(a_tile));
 
-                    // Load B tile
+                    // Load B tile (execution layer deduplicates)
                     auto b_tile = make_tile(isa::MatrixID::B, 0, tj, tk);
                     result.operations.push_back(ScheduleOperation::load(b_tile));
                     result.operations.push_back(ScheduleOperation::move(b_tile, true));  // Transpose B
@@ -254,15 +256,24 @@ private:
     /**
      * @brief Generate interleaved A-B schedule (livelock-safe)
      *
-     * Alternates A and B operations to prevent buffer monopolization.
-     * Each K iteration processes one A tile and one B tile before moving on.
+     * This schedule emits all operations for each tile use. The execution layer
+     * handles deduplication:
+     * - DMA skips loads for tiles already in L3 or in-flight
+     * - BlockMover skips moves for tiles already in L2
+     *
+     * Resource reuse pattern:
+     * - A[ti, tk] is used n_tiles times (once per tj)
+     * - B[tk, tj] is used m_tiles times (once per ti)
+     *
+     * The interleaved A-B ordering alternates between matrix types to prevent
+     * buffer monopolization and ensure livelock-free execution.
      */
     void generate_interleaved_ab(ScheduleResult& result) {
         Size m_tiles = config_.m_tiles();
         Size n_tiles = config_.n_tiles();
         Size k_tiles = config_.k_tiles();
 
-        // For each output tile
+        // For each output tile - process in interleaved A-B fashion
         for (Size ti = 0; ti < m_tiles; ++ti) {
             for (Size tj = 0; tj < n_tiles; ++tj) {
                 // Accumulate over K with interleaved A-B
@@ -271,14 +282,17 @@ private:
                     auto b_tile = make_tile(isa::MatrixID::B, 0, tj, tk);
 
                     // Interleaved: Load A, Load B
+                    // (Execution layer deduplicates if tile already in L3)
                     result.operations.push_back(ScheduleOperation::load(a_tile));
                     result.operations.push_back(ScheduleOperation::load(b_tile));
 
                     // Interleaved: Move A, Move B
+                    // (Execution layer deduplicates if tile already in L2)
                     result.operations.push_back(ScheduleOperation::move(a_tile));
                     result.operations.push_back(ScheduleOperation::move(b_tile, true));
 
                     // Interleaved: Feed A, Feed B
+                    // (Each feed consumes the tile - no deduplication)
                     result.operations.push_back(ScheduleOperation::feed(a_tile));
                     result.operations.push_back(ScheduleOperation::feed(b_tile));
                 }
@@ -296,6 +310,7 @@ private:
      * @brief Generate prefetch-next schedule
      *
      * Overlaps loading of next tiles with processing of current tiles.
+     * Emits all operations; execution layer handles deduplication.
      */
     void generate_prefetch_next(ScheduleResult& result) {
         Size m_tiles = config_.m_tiles();
@@ -308,7 +323,7 @@ private:
                     auto a_tile = make_tile(isa::MatrixID::A, ti, 0, tk);
                     auto b_tile = make_tile(isa::MatrixID::B, 0, tj, tk);
 
-                    // Load current tiles
+                    // Load current tiles (execution layer deduplicates)
                     result.operations.push_back(ScheduleOperation::load(a_tile));
                     result.operations.push_back(ScheduleOperation::load(b_tile));
 
@@ -341,6 +356,7 @@ private:
      *
      * Loads all A tiles for a row, then all B tiles for a column.
      * WARNING: This can cause livelock if buffer space is limited!
+     * Emits all operations; execution layer handles deduplication.
      */
     void generate_blocked_ab(ScheduleResult& result) {
         Size m_tiles = config_.m_tiles();

@@ -212,6 +212,7 @@ private:
             if (it->is_complete(current_cycle)) {
                 if (it->is_load) {
                     // Load complete: tile arrived at L3
+                    // TagCAM now supports reference counting for duplicate tiles
                     l3_tag_cam_.insert(it->tile.tile_id, it->slot_id, current_cycle);
                     total_bytes_loaded_ += it->tile.size_bytes;
 
