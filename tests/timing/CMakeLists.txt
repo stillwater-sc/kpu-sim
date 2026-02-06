@@ -68,3 +68,43 @@ kpu_add_component_test(test_component_integration "timing"
 set_tests_properties(test_component_integration PROPERTIES
     LABELS "timing;integration;v0.9"
 )
+
+# ConcurrentTimingExecutor tests
+kpu_add_component_test(test_concurrent_timing_executor "timing"
+    test_concurrent_timing_executor.cpp
+)
+
+set_tests_properties(test_concurrent_timing_executor PROPERTIES
+    LABELS "timing;executor;v0.9"
+)
+
+# ============================================================================
+# Phase 4: CSP Validation and Schedule Generation Tests
+# ============================================================================
+
+# Schedule Generator tests
+kpu_add_component_test(test_schedule_generators "timing"
+    test_schedule_generators.cpp
+)
+
+set_tests_properties(test_schedule_generators PROPERTIES
+    LABELS "timing;schedule;generators;v0.9"
+)
+
+# Livelock Scenarios tests
+kpu_add_component_test(test_livelock_scenarios "timing"
+    test_livelock_scenarios.cpp
+)
+
+set_tests_properties(test_livelock_scenarios PROPERTIES
+    LABELS "timing;livelock;v0.9"
+)
+
+# Schedule Validation tests
+kpu_add_component_test(test_schedule_validation "timing"
+    test_schedule_validation.cpp
+)
+
+set_tests_properties(test_schedule_validation PROPERTIES
+    LABELS "timing;schedule;validation;v0.9"
+)
