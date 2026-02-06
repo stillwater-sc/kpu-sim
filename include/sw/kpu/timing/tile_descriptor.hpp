@@ -21,6 +21,34 @@ using Address = uint64_t;
 using Size = uint32_t;
 
 // ============================================================================
+// GridPosition - 2D position in the chip grid
+// ============================================================================
+
+/**
+ * @brief 2D position on the chip grid
+ *
+ * Used for:
+ * - Memory tiles: L3(row, col) - position in the memory tile grid
+ * - Compute tiles: CT(row, col) - position in the compute tile grid
+ * - Memory controllers: MC(index) - typically on chip edges
+ */
+struct GridPosition {
+    uint32_t row = 0;
+    uint32_t col = 0;
+
+    GridPosition() = default;
+    GridPosition(uint32_t r, uint32_t c) : row(r), col(c) {}
+
+    std::string to_string() const {
+        return "(" + std::to_string(row) + "," + std::to_string(col) + ")";
+    }
+
+    bool operator==(const GridPosition& other) const {
+        return row == other.row && col == other.col;
+    }
+};
+
+// ============================================================================
 // TileID - Unique identifier for a tile
 // ============================================================================
 
@@ -89,6 +117,9 @@ struct TileDescriptor {
     Address dram_address = 0; // DRAM address for DMA operations
     Size size_bytes = 0;      // Transfer size in bytes
 
+    // Matrix base address (for trace display - shows where matrix starts in DRAM)
+    Address matrix_base_address = 0;  // Base address of the matrix in DRAM
+
     // Tile dimensions (for compute operations)
     Size height = 16;         // Tile height (rows)
     Size width = 16;          // Tile width (columns)
@@ -106,6 +137,18 @@ struct TileDescriptor {
     // Age-based priority (increases over time)
     Size age_priority(Cycle current_cycle) const {
         return static_cast<Size>(current_cycle - enqueue_cycle);
+    }
+
+    // Format tile with base address for trace display
+    // e.g., "A[0,0] @ 0x1000" or just "A[0,0,0]" if no base address set
+    std::string to_string_with_address() const {
+        std::string s = tile_id.to_string();
+        if (matrix_base_address != 0) {
+            char hex[32];
+            snprintf(hex, sizeof(hex), " @ 0x%lX", matrix_base_address);
+            s += hex;
+        }
+        return s;
     }
 };
 

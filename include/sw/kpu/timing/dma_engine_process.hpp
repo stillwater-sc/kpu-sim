@@ -42,12 +42,19 @@ public:
      */
     struct Config {
         uint32_t engine_id = 0;        ///< Unique engine identifier
+        uint32_t mc_id = 0;            ///< Memory controller ID (0-N)
+        uint32_t channel_id = 0;       ///< Channel within MC (0-M)
         Size bus_width_bytes = 64;     ///< Bus width in bytes (64B = 512-bit)
         Cycle startup_latency = 10;    ///< Cycles to start a transfer
         double bandwidth_gbps = 25.6;  ///< Bandwidth per channel in GB/s
         double clock_ghz = 1.0;        ///< Reference clock in GHz
         size_t queue_depth = 8;        ///< Max outstanding transfers
         std::string name = "DMA";      ///< Human-readable name
+
+        /// Generate human-readable name: "MC0:CH0" format
+        std::string display_name() const {
+            return "MC" + std::to_string(mc_id) + ":CH" + std::to_string(channel_id);
+        }
     };
 
     /**
@@ -134,7 +141,7 @@ public:
     }
 
     [[nodiscard]] std::string name() const override {
-        return config_.name + "_" + std::to_string(config_.engine_id);
+        return config_.name;  // Uses display_name() set during creation
     }
 
     void reset() override {
@@ -220,36 +227,44 @@ private:
                     l3_tag_cam_.insert(it->tile.tile_id, it->slot_id, current_cycle);
                     total_bytes_loaded_ += it->tile.size_bytes;
 
-                    events.push_back(TimingEvent::duration_event(
+                    auto event = TimingEvent::duration_event(
                         EventType::DMA_LOAD_COMPLETE,
                         it->start_cycle,
                         it->duration(),
                         config_.engine_id,
                         it->tile.tile_id,
                         name()
-                    ));
-                    events.back().slot_id = it->slot_id;
+                    );
+                    event.slot_id = it->slot_id;
+                    event.matrix_base_address = it->tile.matrix_base_address;
+                    event.dram_address = it->tile.dram_address;
+                    events.push_back(event);
 
-                    events.push_back(TimingEvent(
+                    auto arrived = TimingEvent(
                         EventType::TILE_ARRIVED_L3,
                         current_cycle,
                         config_.engine_id,
                         it->tile.tile_id,
                         name()
-                    ));
-                    events.back().slot_id = it->slot_id;
+                    );
+                    arrived.slot_id = it->slot_id;
+                    arrived.matrix_base_address = it->tile.matrix_base_address;
+                    events.push_back(arrived);
                 } else {
                     // Store complete: tile written to DRAM
                     total_bytes_stored_ += it->tile.size_bytes;
 
-                    events.push_back(TimingEvent::duration_event(
+                    auto event = TimingEvent::duration_event(
                         EventType::DMA_STORE_COMPLETE,
                         it->start_cycle,
                         it->duration(),
                         config_.engine_id,
                         it->tile.tile_id,
                         name()
-                    ));
+                    );
+                    event.matrix_base_address = it->tile.matrix_base_address;
+                    event.dram_address = it->tile.dram_address;
+                    events.push_back(event);
                 }
                 it = in_flight_.erase(it);
             } else {
@@ -273,14 +288,16 @@ private:
                 // Insert increments ref_count for existing tiles
                 l3_tag_cam_.insert(tile.tile_id, entry->slot_id, current_cycle);
 
-                events.push_back(TimingEvent(
+                auto event = TimingEvent(
                     EventType::TILE_ARRIVED_L3,  // Tile already there
                     current_cycle,
                     config_.engine_id,
                     tile.tile_id,
                     name()
-                ));
-                events.back().slot_id = entry->slot_id;
+                );
+                event.slot_id = entry->slot_id;
+                event.matrix_base_address = tile.matrix_base_address;
+                events.push_back(event);
                 continue;  // Process next tile
             }
 
@@ -288,13 +305,15 @@ private:
             // Need L3 credit to proceed
             if (!l3_credits_.acquire()) {
                 // Stalled on credit
-                events.push_back(TimingEvent(
+                auto event = TimingEvent(
                     EventType::DMA_STALL_CREDIT,
                     current_cycle,
                     config_.engine_id,
                     peek_tile.tile_id,
                     name()
-                ));
+                );
+                event.matrix_base_address = peek_tile.matrix_base_address;
+                events.push_back(event);
                 stall_cycles_++;
                 break;
             }
@@ -312,22 +331,27 @@ private:
                 true  // is_load
             );
 
-            events.push_back(TimingEvent(
+            auto start_event = TimingEvent(
                 EventType::DMA_LOAD_START,
                 current_cycle,
                 config_.engine_id,
                 tile.tile_id,
                 name()
-            ));
-            events.back().slot_id = slot;
+            );
+            start_event.slot_id = slot;
+            start_event.matrix_base_address = tile.matrix_base_address;
+            start_event.dram_address = tile.dram_address;
+            events.push_back(start_event);
 
-            events.push_back(TimingEvent(
+            auto credit_event = TimingEvent(
                 EventType::CREDIT_ACQUIRED,
                 current_cycle,
                 config_.engine_id,
                 tile.tile_id,
                 name()
-            ));
+            );
+            credit_event.matrix_base_address = tile.matrix_base_address;
+            events.push_back(credit_event);
         }
     }
 
@@ -342,13 +366,15 @@ private:
             auto entry = l3_tag_cam_.match(tile.tile_id);
             if (!entry.has_value()) {
                 // Stalled on tag match - tile not yet in L3
-                events.push_back(TimingEvent(
+                auto event = TimingEvent(
                     EventType::DMA_STALL_CREDIT,  // Using same event, could add DMA_STALL_TAG
                     current_cycle,
                     config_.engine_id,
                     tile.tile_id,
                     name()
-                ));
+                );
+                event.matrix_base_address = tile.matrix_base_address;
+                events.push_back(event);
                 stall_cycles_++;
                 break;
             }
@@ -373,23 +399,28 @@ private:
                 false  // is_store
             );
 
-            events.push_back(TimingEvent(
+            auto start_event = TimingEvent(
                 EventType::DMA_STORE_START,
                 current_cycle,
                 config_.engine_id,
                 store_tile.tile_id,
                 name()
-            ));
+            );
+            start_event.matrix_base_address = store_tile.matrix_base_address;
+            start_event.dram_address = store_tile.dram_address;
+            events.push_back(start_event);
 
             if (credit_released) {
-                events.push_back(TimingEvent(
+                auto release_event = TimingEvent(
                     EventType::CREDIT_RELEASED,
                     current_cycle,
                     config_.engine_id,
                     store_tile.tile_id,
                     name()
-                ));
-                events.back().slot_id = slot;
+                );
+                release_event.slot_id = slot;
+                release_event.matrix_base_address = store_tile.matrix_base_address;
+                events.push_back(release_event);
             }
         }
     }

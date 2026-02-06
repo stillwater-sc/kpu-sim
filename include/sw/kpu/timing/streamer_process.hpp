@@ -50,6 +50,7 @@ public:
     struct Config {
         uint32_t streamer_id = 0;      ///< Unique streamer identifier
         StreamerType type = StreamerType::ROW_STREAMER;  ///< Streamer type
+        GridPosition compute_tile_pos; ///< Compute tile grid position
         Size bus_width_bytes = 64;     ///< Bus width in bytes
         Cycle startup_latency = 2;     ///< Cycles to start a transfer
         size_t l1_depth = 4;           ///< L1 buffer depth (for double-buffering)
@@ -57,6 +58,12 @@ public:
         double clock_ghz = 1.0;        ///< Reference clock in GHz
         bool priority_aging = false;   ///< If true, prefer oldest ready tile (prevents starvation)
         std::string name = "STR";      ///< Human-readable name
+
+        /// Generate human-readable name: "CT(0,0):RowSTR" or "CT(0,1):ColSTR" format
+        std::string display_name() const {
+            std::string type_str = (type == StreamerType::ROW_STREAMER) ? "RowSTR" : "ColSTR";
+            return "CT" + compute_tile_pos.to_string() + ":" + type_str;
+        }
     };
 
     /**
@@ -138,9 +145,7 @@ public:
     }
 
     [[nodiscard]] std::string name() const override {
-        std::string type_str = (config_.type == StreamerType::ROW_STREAMER)
-                               ? "ROW" : "COL";
-        return config_.name + "_" + type_str + "_" + std::to_string(config_.streamer_id);
+        return config_.name;  // Uses display_name() set during creation
     }
 
     void reset() override {

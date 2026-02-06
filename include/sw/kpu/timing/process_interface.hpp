@@ -116,6 +116,8 @@ struct TimingEvent {
     Cycle duration;           ///< Duration in cycles (for COMPLETE events)
     uint32_t slot_id;         ///< Buffer/bank slot (if applicable)
     std::string component_name; ///< Human-readable component name
+    Address matrix_base_address = 0; ///< Base address of the matrix in DRAM
+    Address dram_address = 0;  ///< DRAM address for this tile
 
     TimingEvent() = default;
 
@@ -151,6 +153,16 @@ struct TimingEvent {
         json += "\"tid\":" + std::to_string(component_id) + ",";
         json += "\"args\":{";
         json += "\"tile\":\"" + tile_id.to_string() + "\"";
+        if (matrix_base_address != 0) {
+            char hex[32];
+            snprintf(hex, sizeof(hex), "0x%lX", matrix_base_address);
+            json += ",\"base\":\"" + std::string(hex) + "\"";
+        }
+        if (dram_address != 0) {
+            char hex[32];
+            snprintf(hex, sizeof(hex), "0x%lX", dram_address);
+            json += ",\"addr\":\"" + std::string(hex) + "\"";
+        }
         if (slot_id > 0) {
             json += ",\"slot\":" + std::to_string(slot_id);
         }

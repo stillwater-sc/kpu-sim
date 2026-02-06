@@ -41,6 +41,7 @@ public:
      */
     struct Config {
         uint32_t mover_id = 0;         ///< Unique mover identifier
+        GridPosition l3_tile_pos;      ///< L3 memory tile grid position
         Size bus_width_bytes = 64;     ///< Bus width in bytes
         Cycle startup_latency = 4;     ///< Cycles to start a transfer
         double bandwidth_gbps = 51.2;  ///< L3↔L2 bandwidth (internal, higher than DRAM)
@@ -48,6 +49,11 @@ public:
         bool supports_transpose = true; ///< Can transpose during move
         bool priority_aging = false;   ///< If true, prefer oldest ready tile (prevents starvation)
         std::string name = "BM";       ///< Human-readable name
+
+        /// Generate human-readable name: "L3(0,0):BM" format
+        std::string display_name() const {
+            return "L3" + l3_tile_pos.to_string() + ":BM";
+        }
     };
 
     /**
@@ -140,7 +146,7 @@ public:
     }
 
     [[nodiscard]] std::string name() const override {
-        return config_.name + "_" + std::to_string(config_.mover_id);
+        return config_.name;  // Uses display_name() set during creation
     }
 
     void reset() override {

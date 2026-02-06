@@ -41,8 +41,16 @@ public:
      * @brief Executor configuration
      */
     struct Config {
+        // Grid topology configuration
+        size_t num_memory_controllers = 2;  ///< Number of memory controllers
+        size_t channels_per_mc = 2;         ///< DMA channels per memory controller
+        size_t l3_tile_rows = 2;            ///< L3 tile grid rows (memory tiles)
+        size_t l3_tile_cols = 2;            ///< L3 tile grid columns
+        size_t compute_tile_rows = 2;       ///< Compute tile grid rows
+        size_t compute_tile_cols = 2;       ///< Compute tile grid columns
+
         // DMA configuration
-        size_t num_dma_engines = 4;       ///< Number of DMA engines
+        size_t num_dma_engines = 4;       ///< Number of DMA engines (= num_mc * channels_per_mc)
         size_t dma_queue_depth = 8;       ///< Max in-flight per DMA engine
         double dma_bandwidth_gbps = 25.6; ///< DMA bandwidth per engine
         Cycle dma_startup_latency = 10;   ///< DMA startup latency
@@ -52,7 +60,7 @@ public:
         size_t l3_buffer_size = 64 * 1024; ///< Size of each L3 buffer (64KB)
 
         // BlockMover configuration
-        size_t num_block_movers = 4;      ///< Number of BlockMovers
+        size_t num_block_movers = 4;      ///< Number of BlockMovers (= l3_tile_rows * l3_tile_cols)
         double bm_bandwidth_gbps = 51.2;  ///< BlockMover bandwidth
         Cycle bm_startup_latency = 4;     ///< BlockMover startup latency
 
@@ -355,59 +363,80 @@ inline ConcurrentTimingExecutor::ConcurrentTimingExecutor(const Config& config)
 }
 
 inline void ConcurrentTimingExecutor::create_components() {
-    // Create DMA engines
-    for (size_t i = 0; i < config_.num_dma_engines; ++i) {
-        DMAEngineProcess::Config dma_config;
-        dma_config.engine_id = static_cast<uint32_t>(i);
-        dma_config.queue_depth = config_.dma_queue_depth;
-        dma_config.bandwidth_gbps = config_.dma_bandwidth_gbps;
-        dma_config.startup_latency = config_.dma_startup_latency;
-        dma_config.clock_ghz = config_.clock_ghz;
-        dma_config.name = "DMA";
+    // Create DMA engines with memory controller and channel assignments
+    // Each MC has channels_per_mc DMA channels
+    size_t engine_idx = 0;
+    for (size_t mc = 0; mc < config_.num_memory_controllers && engine_idx < config_.num_dma_engines; ++mc) {
+        for (size_t ch = 0; ch < config_.channels_per_mc && engine_idx < config_.num_dma_engines; ++ch, ++engine_idx) {
+            DMAEngineProcess::Config dma_config;
+            dma_config.engine_id = static_cast<uint32_t>(engine_idx);
+            dma_config.mc_id = static_cast<uint32_t>(mc);
+            dma_config.channel_id = static_cast<uint32_t>(ch);
+            dma_config.queue_depth = config_.dma_queue_depth;
+            dma_config.bandwidth_gbps = config_.dma_bandwidth_gbps;
+            dma_config.startup_latency = config_.dma_startup_latency;
+            dma_config.clock_ghz = config_.clock_ghz;
+            dma_config.name = dma_config.display_name();
 
-        dma_engines_.push_back(std::make_unique<DMAEngineProcess>(
-            dma_config, l3_credits_, l3_tag_cam_, l2_tag_cam_));
+            dma_engines_.push_back(std::make_unique<DMAEngineProcess>(
+                dma_config, l3_credits_, l3_tag_cam_, l2_tag_cam_));
+        }
     }
 
-    // Create BlockMovers (IDs 100+)
+    // Create BlockMovers (IDs 100+) with L3 tile grid positions
+    // Map to 2D grid: row = i / cols, col = i % cols
     for (size_t i = 0; i < config_.num_block_movers; ++i) {
         BlockMoverProcess::Config bm_config;
         bm_config.mover_id = static_cast<uint32_t>(100 + i);  // 100, 101, 102, ...
+        bm_config.l3_tile_pos = GridPosition(
+            static_cast<uint32_t>(i / config_.l3_tile_cols),
+            static_cast<uint32_t>(i % config_.l3_tile_cols)
+        );
         bm_config.bandwidth_gbps = config_.bm_bandwidth_gbps;
         bm_config.startup_latency = config_.bm_startup_latency;
         bm_config.clock_ghz = config_.clock_ghz;
         bm_config.priority_aging = config_.enable_priority_aging;
-        bm_config.name = "BM";
+        bm_config.name = bm_config.display_name();
 
         block_movers_.push_back(std::make_unique<BlockMoverProcess>(
             bm_config, l3_tag_cam_, l3_credits_, l2_credits_, l2_tag_cam_));
     }
 
     // Create Row Streamers (West edge - for A matrix, IDs 200+)
+    // Row streamers are positioned along the West edge of the compute grid
     for (size_t i = 0; i < config_.num_row_streamers; ++i) {
         StreamerProcess::Config str_config;
         str_config.streamer_id = static_cast<uint32_t>(200 + i);  // 200, 201, ...
         str_config.type = StreamerType::ROW_STREAMER;
+        str_config.compute_tile_pos = GridPosition(
+            static_cast<uint32_t>(i),  // Row index
+            0                          // West edge (column 0)
+        );
         str_config.bandwidth_gbps = config_.str_bandwidth_gbps;
         str_config.startup_latency = config_.str_startup_latency;
         str_config.clock_ghz = config_.clock_ghz;
         str_config.priority_aging = config_.enable_priority_aging;
-        str_config.name = "RowSTR";
+        str_config.name = str_config.display_name();
 
         row_streamers_.push_back(std::make_unique<StreamerProcess>(
             str_config, l2_tag_cam_, l2_credits_));
     }
 
     // Create Column Streamers (North edge - for B matrix, IDs 210+)
+    // Column streamers are positioned along the North edge of the compute grid
     for (size_t i = 0; i < config_.num_col_streamers; ++i) {
         StreamerProcess::Config str_config;
         str_config.streamer_id = static_cast<uint32_t>(210 + i);  // 210, 211, ...
         str_config.type = StreamerType::COL_STREAMER;
+        str_config.compute_tile_pos = GridPosition(
+            0,                          // North edge (row 0)
+            static_cast<uint32_t>(i)    // Column index
+        );
         str_config.bandwidth_gbps = config_.str_bandwidth_gbps;
         str_config.startup_latency = config_.str_startup_latency;
         str_config.clock_ghz = config_.clock_ghz;
         str_config.priority_aging = config_.enable_priority_aging;
-        str_config.name = "ColSTR";
+        str_config.name = str_config.display_name();
 
         col_streamers_.push_back(std::make_unique<StreamerProcess>(
             str_config, l2_tag_cam_, l2_credits_));
@@ -694,44 +723,51 @@ inline void ConcurrentTimingExecutor::export_chrome_trace(const std::string& fil
     // Sort order follows dataflow: DMA → BlockMover → Streamer (top to bottom)
     // ========================================================================
 
-    // Process name
-    file << R"({"name":"process_name","ph":"M","pid":1,"tid":0,"args":{"name":"CSP Concurrent Timing Executor"}})";
+    // Process name with grid topology info
+    file << "{\"name\":\"process_name\",\"ph\":\"M\",\"pid\":1,\"tid\":0,\"args\":{\"name\":\"KPU CSP Executor ("
+         << config_.num_memory_controllers << " MCs, "
+         << config_.l3_tile_rows << "x" << config_.l3_tile_cols << " L3 tiles, "
+         << config_.compute_tile_rows << "x" << config_.compute_tile_cols << " CTs)\"}}";
 
-    // DMA Channel threads (IDs 0-N, sort_index 0+)
-    for (size_t i = 0; i < config_.num_dma_engines; ++i) {
+    // DMA Channel threads - use component names with MC:CH format
+    for (size_t i = 0; i < dma_engines_.size(); ++i) {
+        const auto& engine = dma_engines_[i];
         file << ",\n";
-        file << R"({"name":"thread_name","ph":"M","pid":1,"tid":)" << i
-             << R"(,"args":{"name":"DMA Channel )" << i << R"("}})";
+        file << "{\"name\":\"thread_name\",\"ph\":\"M\",\"pid\":1,\"tid\":" << i
+             << ",\"args\":{\"name\":\"" << engine->name() << " (depth=" << config_.dma_queue_depth << ")\"}}";
         file << ",\n";
-        file << R"({"name":"thread_sort_index","ph":"M","pid":1,"tid":)" << i
-             << R"(,"args":{"sort_index":)" << i << R"(}})";
+        file << "{\"name\":\"thread_sort_index\",\"ph\":\"M\",\"pid\":1,\"tid\":" << i
+             << ",\"args\":{\"sort_index\":" << i << "}}";
     }
 
-    // BlockMover threads (IDs 100+, sort_index 10+)
-    for (size_t i = 0; i < config_.num_block_movers; ++i) {
+    // BlockMover threads - use component names with L3(row,col):BM format
+    for (size_t i = 0; i < block_movers_.size(); ++i) {
+        const auto& mover = block_movers_[i];
         file << ",\n";
-        file << R"({"name":"thread_name","ph":"M","pid":1,"tid":)" << (100 + i)
-             << R"(,"args":{"name":"BlockMover )" << i << R"("}})";
+        file << "{\"name\":\"thread_name\",\"ph\":\"M\",\"pid\":1,\"tid\":" << (100 + i)
+             << ",\"args\":{\"name\":\"" << mover->name() << "\"}}";
         file << ",\n";
-        file << R"({"name":"thread_sort_index","ph":"M","pid":1,"tid":)" << (100 + i)
-             << R"(,"args":{"sort_index":)" << (10 + i) << R"(}})";
+        file << "{\"name\":\"thread_sort_index\",\"ph\":\"M\",\"pid\":1,\"tid\":" << (100 + i)
+             << ",\"args\":{\"sort_index\":" << (10 + i) << "}}";
     }
 
-    // Row Streamer threads (IDs 200+, sort_index 20+)
-    for (size_t i = 0; i < config_.num_row_streamers; ++i) {
+    // Row Streamer threads - use component names with CT(row,col):RowSTR format
+    for (size_t i = 0; i < row_streamers_.size(); ++i) {
+        const auto& streamer = row_streamers_[i];
         file << ",\n";
         file << "{\"name\":\"thread_name\",\"ph\":\"M\",\"pid\":1,\"tid\":" << (200 + i)
-             << ",\"args\":{\"name\":\"Row Streamer " << i << " - A matrix\"}}";
+             << ",\"args\":{\"name\":\"" << streamer->name() << " - A matrix\"}}";
         file << ",\n";
         file << "{\"name\":\"thread_sort_index\",\"ph\":\"M\",\"pid\":1,\"tid\":" << (200 + i)
              << ",\"args\":{\"sort_index\":" << (20 + i) << "}}";
     }
 
-    // Column Streamer threads (IDs 210+, sort_index 30+)
-    for (size_t i = 0; i < config_.num_col_streamers; ++i) {
+    // Column Streamer threads - use component names with CT(row,col):ColSTR format
+    for (size_t i = 0; i < col_streamers_.size(); ++i) {
+        const auto& streamer = col_streamers_[i];
         file << ",\n";
         file << "{\"name\":\"thread_name\",\"ph\":\"M\",\"pid\":1,\"tid\":" << (210 + i)
-             << ",\"args\":{\"name\":\"Col Streamer " << i << " - B matrix\"}}";
+             << ",\"args\":{\"name\":\"" << streamer->name() << " - B matrix\"}}";
         file << ",\n";
         file << "{\"name\":\"thread_sort_index\",\"ph\":\"M\",\"pid\":1,\"tid\":" << (210 + i)
              << ",\"args\":{\"sort_index\":" << (30 + i) << "}}";

@@ -165,6 +165,12 @@ int main(int argc, char* argv[]) {
     config.Tk = Tk;
     config.strategy = strategy;
 
+    // Set matrix base addresses in DRAM (for trace display)
+    // A matrix at 0x0000'1000, B at 0x0010'0000, C at 0x0020'0000
+    config.a_base = 0x00001000;
+    config.b_base = 0x00100000;
+    config.c_base = 0x00200000;
+
     MatMulScheduleGenerator generator(config);
     auto schedule = generator.generate();
 

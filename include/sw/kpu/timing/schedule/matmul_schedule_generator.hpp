@@ -411,8 +411,19 @@ private:
         tile.element_size = config_.element_size;
         tile.size_bytes = config_.tile_size_bytes();
 
-        // Calculate DRAM address
+        // Calculate DRAM address and set matrix base address
         tile.dram_address = calculate_address(matrix, ti, tj, tk);
+        switch (matrix) {
+            case isa::MatrixID::A:
+                tile.matrix_base_address = config_.a_base;
+                break;
+            case isa::MatrixID::B:
+                tile.matrix_base_address = config_.b_base;
+                break;
+            case isa::MatrixID::C:
+                tile.matrix_base_address = config_.c_base;
+                break;
+        }
 
         return tile;
     }
