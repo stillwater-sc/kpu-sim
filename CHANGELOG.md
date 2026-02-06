@@ -60,6 +60,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   underflow when aggregated stall cycles across multiple parallel components exceed the
   simulation duration. Previous garbage values like 4729934377874243584.0% are now correct.
 
+- **Conditional credit release for tile reuse** — DMA, BlockMover, and Streamer now only
+  release credits when `TagCAM::invalidate()` returns true (tile fully removed). This
+  prevents double-release when the same tile is used multiple times. Additionally, DMA
+  checks if tiles are already in L3 before acquiring credits, skipping redundant loads.
+
+### Changed
+
+- `run_matmul` CLI now supports `--l3-buffers <n>` and `--livelock <n>` for experimentation
+
 ---
 
 ## [0.8.5] - 2026-02-04
