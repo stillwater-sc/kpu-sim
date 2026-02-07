@@ -18,6 +18,7 @@
 
 #include <fstream>
 #include <memory>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -73,6 +74,9 @@ public:
         size_t num_col_streamers = 2;     ///< Column streamers (North edge)
         double str_bandwidth_gbps = 102.4; ///< Streamer bandwidth
         Cycle str_startup_latency = 2;    ///< Streamer startup latency
+
+        // Compute configuration
+        Cycle compute_latency = 32;       ///< Cycles for tile computation (after all inputs fed)
 
         // Timing parameters
         double clock_ghz = 1.0;           ///< Reference clock in GHz
@@ -196,6 +200,25 @@ public:
      */
     void schedule_drain(const TileDescriptor& tile, int streamer_id = -1);
 
+    /**
+     * @brief Schedule a compute completion (signals result tile is ready)
+     * @param tile Result tile descriptor (C matrix tile)
+     * @param dependency_tile Last input tile that must be FED before compute starts
+     *
+     * This must be called after all FEED operations for the input tiles
+     * that contribute to this result. DRAIN waits for this before proceeding.
+     * Compute only starts when dependency_tile has been FED to compute.
+     */
+    void schedule_compute(const TileDescriptor& tile, const TileID& dependency_tile);
+
+    /**
+     * @brief Schedule a compute completion (no explicit dependency)
+     * @param tile Result tile descriptor (C matrix tile)
+     *
+     * This version auto-generates a dependency based on the tile ID.
+     */
+    void schedule_compute(const TileDescriptor& tile);
+
     // ========================================================================
     // Simulation Control
     // ========================================================================
@@ -275,6 +298,7 @@ public:
     [[nodiscard]] CreditPool& l2_credits() { return l2_credits_; }
     [[nodiscard]] TagCAM& l3_tag_cam() { return l3_tag_cam_; }
     [[nodiscard]] TagCAM& l2_tag_cam() { return l2_tag_cam_; }
+    [[nodiscard]] TagCAM& compute_result_tag_cam() { return compute_result_tag_cam_; }
 
 private:
     Config config_;
@@ -288,6 +312,20 @@ private:
     // Tag CAMs
     TagCAM l3_tag_cam_;
     TagCAM l2_tag_cam_;
+    TagCAM compute_result_tag_cam_;  ///< Tracks result tiles ready for DRAIN
+
+    // Pending compute operations (tile + dependency + state)
+    struct PendingCompute {
+        TileDescriptor tile;         ///< Result tile (C)
+        TileID dependency_tile;      ///< Last input tile that must be FED
+        Cycle schedule_cycle;        ///< When scheduled
+        Cycle complete_cycle;        ///< When computation will complete (set when started)
+        bool started;                ///< Has computation started?
+    };
+    std::vector<PendingCompute> pending_computes_;
+
+    // Track tiles that have been fed to compute (for COMPUTE dependency checking)
+    std::set<TileID> fed_tiles_;
 
     // Component processes
     std::vector<std::unique_ptr<DMAEngineProcess>> dma_engines_;
@@ -352,7 +390,8 @@ inline ConcurrentTimingExecutor::ConcurrentTimingExecutor(const Config& config)
       l3_credits_(config.l3_buffer_count),
       l2_credits_(config.l2_bank_count),
       l3_tag_cam_(config.l3_buffer_count),
-      l2_tag_cam_(config.l2_bank_count) {
+      l2_tag_cam_(config.l2_bank_count),
+      compute_result_tag_cam_(256) {  // 256 pending compute results max
     create_components();
 
     if (config_.enable_livelock_detection) {
@@ -419,7 +458,7 @@ inline void ConcurrentTimingExecutor::create_components() {
         str_config.name = str_config.display_name();
 
         row_streamers_.push_back(std::make_unique<StreamerProcess>(
-            str_config, l2_tag_cam_, l2_credits_));
+            str_config, l2_tag_cam_, l2_credits_, compute_result_tag_cam_));
     }
 
     // Create Column Streamers (North edge - for B matrix, IDs 210+)
@@ -439,7 +478,7 @@ inline void ConcurrentTimingExecutor::create_components() {
         str_config.name = str_config.display_name();
 
         col_streamers_.push_back(std::make_unique<StreamerProcess>(
-            str_config, l2_tag_cam_, l2_credits_));
+            str_config, l2_tag_cam_, l2_credits_, compute_result_tag_cam_));
     }
 }
 
@@ -493,6 +532,31 @@ inline void ConcurrentTimingExecutor::schedule_drain(const TileDescriptor& tile,
     row_streamers_[streamer % row_streamers_.size()]->schedule_drain(tile);
 }
 
+inline void ConcurrentTimingExecutor::schedule_compute(
+    const TileDescriptor& tile, const TileID& dependency_tile) {
+    // Schedule compute with explicit dependency
+    PendingCompute pc;
+    pc.tile = tile;
+    pc.dependency_tile = dependency_tile;
+    pc.schedule_cycle = current_cycle_;
+    pc.complete_cycle = 0;  // Set when started
+    pc.started = false;
+    pending_computes_.push_back(pc);
+}
+
+inline void ConcurrentTimingExecutor::schedule_compute(const TileDescriptor& tile) {
+    // Auto-generate dependency: last B tile for this output position
+    // C[ti,tj] depends on B[k-1,tj] being fed (or A[ti,k-1])
+    // We use B[*,tj,k_max-1] as dependency (approximation)
+    TileID dep;
+    dep.matrix = isa::MatrixID::B;
+    dep.ti = 0;  // B tiles use tk for first dimension
+    dep.tj = tile.tile_id.tj;
+    dep.tk = tile.tile_id.tk;  // tk=0 for C tiles, so we use the C position
+
+    schedule_compute(tile, dep);
+}
+
 inline bool ConcurrentTimingExecutor::run() {
     while (!is_complete() && current_cycle_ < config_.max_cycles) {
         step();
@@ -523,6 +587,48 @@ inline bool ConcurrentTimingExecutor::run() {
 }
 
 inline bool ConcurrentTimingExecutor::step() {
+    // Step 0a: Check pending computes for dependency satisfaction and start them
+    for (auto& pc : pending_computes_) {
+        if (!pc.started) {
+            // Check if dependency tile has been fed
+            if (fed_tiles_.count(pc.dependency_tile) > 0) {
+                // Dependency satisfied - start compute
+                pc.started = true;
+                pc.complete_cycle = current_cycle_ + config_.compute_latency;
+
+                // Emit COMPUTE_START event
+                TimingEvent event(EventType::COMPUTE_START, current_cycle_, 0,
+                                  pc.tile.tile_id, "Compute");
+                event.matrix_base_address = pc.tile.matrix_base_address;
+                events_.push_back(event);
+            }
+        }
+    }
+
+    // Step 0b: Process completed computes (insert results into compute_result_tag_cam)
+    auto it = pending_computes_.begin();
+    while (it != pending_computes_.end()) {
+        if (it->started && current_cycle_ >= it->complete_cycle) {
+            // Compute completed - result tile is now ready for DRAIN
+            static uint32_t next_compute_slot = 0;
+            uint32_t slot = next_compute_slot++;
+            compute_result_tag_cam_.insert(it->tile.tile_id, slot, current_cycle_);
+
+            // Emit COMPUTE_COMPLETE event
+            TimingEvent event = TimingEvent::duration_event(
+                EventType::COMPUTE_COMPLETE,
+                it->complete_cycle - config_.compute_latency,
+                config_.compute_latency,
+                0, it->tile.tile_id, "Compute");
+            event.matrix_base_address = it->tile.matrix_base_address;
+            events_.push_back(event);
+
+            it = pending_computes_.erase(it);
+        } else {
+            ++it;
+        }
+    }
+
     // Tick all components (order doesn't matter within same cycle)
 
     // 1. Tick DMA engines
@@ -540,12 +646,24 @@ inline bool ConcurrentTimingExecutor::step() {
     // 3. Tick Row Streamers
     for (auto& streamer : row_streamers_) {
         auto str_events = streamer->tick(current_cycle_);
+        // Track tiles that have been fed to compute
+        for (const auto& event : str_events) {
+            if (event.type == EventType::TILE_FED_TO_COMPUTE) {
+                fed_tiles_.insert(event.tile_id);
+            }
+        }
         events_.insert(events_.end(), str_events.begin(), str_events.end());
     }
 
     // 4. Tick Column Streamers
     for (auto& streamer : col_streamers_) {
         auto str_events = streamer->tick(current_cycle_);
+        // Track tiles that have been fed to compute
+        for (const auto& event : str_events) {
+            if (event.type == EventType::TILE_FED_TO_COMPUTE) {
+                fed_tiles_.insert(event.tile_id);
+            }
+        }
         events_.insert(events_.end(), str_events.begin(), str_events.end());
     }
 
@@ -580,6 +698,9 @@ inline void ConcurrentTimingExecutor::reset() {
     l2_credits_.reset();
     l3_tag_cam_.reset();
     l2_tag_cam_.reset();
+    compute_result_tag_cam_.reset();
+    pending_computes_.clear();
+    fed_tiles_.clear();
 
     for (auto& engine : dma_engines_) {
         engine->reset();

@@ -71,13 +71,16 @@ public:
      * @param config Streamer configuration
      * @param l2_tag_cam Tag CAM for L2 tile tracking (shared)
      * @param l2_credits Credit pool for L2 banks (shared)
+     * @param compute_result_tag_cam Tag CAM for compute results (shared) - DRAIN waits for this
      */
     StreamerProcess(const Config& config,
                     TagCAM& l2_tag_cam,
-                    CreditPool& l2_credits)
+                    CreditPool& l2_credits,
+                    TagCAM& compute_result_tag_cam)
         : config_(config),
           l2_tag_cam_(l2_tag_cam),
-          l2_credits_(l2_credits) {
+          l2_credits_(l2_credits),
+          compute_result_tag_cam_(compute_result_tag_cam) {
         // Compute cycles per byte based on bandwidth and clock
         double bytes_per_cycle = config_.bandwidth_gbps / config_.clock_ghz;
         cycles_per_byte_ = 1.0 / bytes_per_cycle;
@@ -154,6 +157,7 @@ public:
         in_flight_.reset();
         stall_cycles_tag_ = 0;
         stall_cycles_credit_ = 0;
+        stall_cycles_compute_ = 0;
         total_tiles_fed_ = 0;
         total_tiles_drained_ = 0;
     }
@@ -178,6 +182,10 @@ public:
         return stall_cycles_credit_;
     }
 
+    [[nodiscard]] Cycle stall_cycles_compute() const {
+        return stall_cycles_compute_;
+    }
+
     [[nodiscard]] size_t total_tiles_fed() const {
         return total_tiles_fed_;
     }
@@ -198,6 +206,7 @@ private:
     Config config_;
     TagCAM& l2_tag_cam_;
     CreditPool& l2_credits_;
+    TagCAM& compute_result_tag_cam_;  ///< DRAIN waits for result in this TagCAM
 
     WorkQueue<TileDescriptor> feed_queue_;
     WorkQueue<TileDescriptor> drain_queue_;
@@ -213,6 +222,7 @@ private:
     // Statistics
     Cycle stall_cycles_tag_ = 0;
     Cycle stall_cycles_credit_ = 0;
+    Cycle stall_cycles_compute_ = 0;
     size_t total_tiles_fed_ = 0;
     size_t total_tiles_drained_ = 0;
 
@@ -376,13 +386,32 @@ private:
     /**
      * @brief Try to start a drain transfer (Compute→L2)
      * @return true if a drain was started
+     *
+     * DRAIN requires:
+     * 1. Result tile is ready in compute (COMPUTE operation completed)
+     * 2. L2 credit is available
      */
     bool try_start_drain(Cycle current_cycle, std::vector<TimingEvent>& events) {
         if (drain_queue_.empty()) return false;
 
         const TileDescriptor& tile = drain_queue_.peek();
 
-        // Check if L2 credit available
+        // First check: Is the compute result ready?
+        auto compute_entry = compute_result_tag_cam_.match(tile.tile_id);
+        if (!compute_entry.has_value()) {
+            // Result not yet ready - still computing
+            events.push_back(TimingEvent(
+                EventType::STR_STALL_COMPUTE,
+                current_cycle,
+                config_.streamer_id,
+                tile.tile_id,
+                name()
+            ));
+            stall_cycles_compute_++;
+            return false;
+        }
+
+        // Second check: Is L2 credit available?
         if (!l2_credits_.acquire()) {
             events.push_back(TimingEvent(
                 EventType::STR_STALL_CREDIT,
@@ -394,6 +423,9 @@ private:
             stall_cycles_credit_++;
             return false;
         }
+
+        // Consume the compute result (remove from compute_result_tag_cam)
+        compute_result_tag_cam_.invalidate(tile.tile_id);
 
         // Start the drain
         TileDescriptor drain_tile = drain_queue_.dequeue();

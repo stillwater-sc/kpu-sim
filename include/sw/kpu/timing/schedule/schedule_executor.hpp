@@ -256,6 +256,10 @@ private:
                 executor_.schedule_feed(op.tile, op.streamer_id);
                 break;
 
+            case ScheduleOpType::COMPUTE:
+                executor_.schedule_compute(op.tile, op.dependency_tile);
+                break;
+
             case ScheduleOpType::DRAIN:
                 executor_.schedule_drain(op.tile, op.streamer_id);
                 break;

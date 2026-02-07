@@ -46,6 +46,7 @@ enum class EventType {
     STR_DRAIN_COMPLETE,  ///< Streamer finished draining result
     STR_STALL_TAG,       ///< Streamer stalled waiting for tile in L2
     STR_STALL_CREDIT,    ///< Streamer stalled waiting for L2 credit (drain)
+    STR_STALL_COMPUTE,   ///< Streamer stalled waiting for compute result
 
     // Compute events
     COMPUTE_START,       ///< Systolic array started computation
@@ -86,6 +87,7 @@ inline const char* to_string(EventType type) {
         case EventType::STR_DRAIN_COMPLETE: return "STR_DRAIN_COMPLETE";
         case EventType::STR_STALL_TAG: return "STR_STALL_TAG";
         case EventType::STR_STALL_CREDIT: return "STR_STALL_CREDIT";
+        case EventType::STR_STALL_COMPUTE: return "STR_STALL_COMPUTE";
         case EventType::COMPUTE_START: return "COMPUTE_START";
         case EventType::COMPUTE_COMPLETE: return "COMPUTE_COMPLETE";
         case EventType::CREDIT_ACQUIRED: return "CREDIT_ACQUIRED";

@@ -49,6 +49,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **DMA 8 concurrent transfers bug** — DMA channels now correctly issue only 1 transfer
+  at a time instead of 8 concurrent. Changed `in_flight_.size() < config_.queue_depth` to
+  `in_flight_.empty()` in `try_issue_loads()` and `try_issue_stores()`. The queue_depth
+  parameter now only limits pending requests, not concurrent in-flight transfers.
+
+- **DRAIN starting at cycle 0 bug** — Added compute modeling so DRAIN operations properly
+  wait for computation to complete before draining results:
+  - Added `COMPUTE` schedule operation type and `schedule_compute()` API
+  - Added `compute_result_tag_cam` to track result tiles ready for draining
+  - DRAIN now waits for the result tile to appear in compute_result_tag_cam
+  - COMPUTE tracks dependency tiles and only starts when dependencies are FED
+  - Added `STR_STALL_COMPUTE` event type for compute dependency stalls
+  - All schedule generators (MatMul, Conv2D, etc.) now emit COMPUTE operations with
+    proper dependency tracking (last B tile for that output column)
+
 - **CreditPool double-release bug** — TagCAM now uses reference counting to support
   tile reuse. When the same tile is inserted multiple times (e.g., A[ti,tk] used for
   every tj), ref_count increments instead of failing. Invalidate decrements ref_count,

@@ -526,6 +526,9 @@ private:
                 case ScheduleOpType::FEED:
                     if (l2_outstanding > 0) l2_outstanding--;
                     break;
+                case ScheduleOpType::COMPUTE:
+                    // COMPUTE doesn't affect memory credits
+                    break;
                 case ScheduleOpType::DRAIN:
                     l2_outstanding++;
                     break;

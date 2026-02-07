@@ -213,8 +213,11 @@ TEST_CASE("ConcurrentTimingExecutor drain and writeback", "[timing][executor]") 
     executor.schedule_move(a_tile);
     executor.schedule_feed(a_tile);
 
-    // Result tile drains from compute to L2, then writes back to L3
+    // Signal compute complete (depends on A tile being fed)
     auto c_tile = make_tile(MatrixID::C, 0, 0);
+    executor.schedule_compute(c_tile, a_tile.tile_id);
+
+    // Result tile drains from compute to L2, then writes back to L3
     executor.schedule_drain(c_tile);
     executor.schedule_writeback(c_tile);
     executor.schedule_store(c_tile);
@@ -505,10 +508,17 @@ TEST_CASE("ConcurrentTimingExecutor matmul pattern", "[timing][executor]") {
         }
     }
 
-    // Schedule result drains
+    // Schedule result drains (with COMPUTE dependency)
     for (Size ti = 0; ti < Ti; ++ti) {
         for (Size tj = 0; tj < Tj; ++tj) {
             auto c_tile = make_tile(MatrixID::C, ti, tj);
+            // COMPUTE depends on last B tile for this column: B[0,tj,Tk-1]
+            TileID last_b;
+            last_b.matrix = MatrixID::B;
+            last_b.ti = 0;
+            last_b.tj = tj;
+            last_b.tk = Tk - 1;
+            executor.schedule_compute(c_tile, last_b);
             executor.schedule_drain(c_tile);
             executor.schedule_writeback(c_tile);
             executor.schedule_store(c_tile);

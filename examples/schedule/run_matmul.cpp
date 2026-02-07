@@ -180,6 +180,7 @@ int main(int argc, char* argv[]) {
     std::cout << "    LOAD:      " << std::setw(6) << schedule.count_ops(ScheduleOpType::LOAD) << "\n";
     std::cout << "    MOVE:      " << std::setw(6) << schedule.count_ops(ScheduleOpType::MOVE) << "\n";
     std::cout << "    FEED:      " << std::setw(6) << schedule.count_ops(ScheduleOpType::FEED) << "\n";
+    std::cout << "    COMPUTE:   " << std::setw(6) << schedule.count_ops(ScheduleOpType::COMPUTE) << "\n";
     std::cout << "    DRAIN:     " << std::setw(6) << schedule.count_ops(ScheduleOpType::DRAIN) << "\n";
     std::cout << "    WRITEBACK: " << std::setw(6) << schedule.count_ops(ScheduleOpType::WRITEBACK) << "\n";
     std::cout << "    STORE:     " << std::setw(6) << schedule.count_ops(ScheduleOpType::STORE) << "\n";

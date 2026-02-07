@@ -48,7 +48,7 @@ public:
         Cycle startup_latency = 10;    ///< Cycles to start a transfer
         double bandwidth_gbps = 25.6;  ///< Bandwidth per channel in GB/s
         double clock_ghz = 1.0;        ///< Reference clock in GHz
-        size_t queue_depth = 8;        ///< Max outstanding transfers
+        size_t queue_depth = 8;        ///< Max pending requests in queue (not concurrent transfers)
         std::string name = "DMA";      ///< Human-readable name
 
         /// Generate human-readable name: "MC0:CH0" format
@@ -275,9 +275,13 @@ private:
 
     /**
      * @brief Try to issue new load transfers
+     *
+     * A DMA channel can only perform ONE transfer at a time.
+     * The queue buffers pending requests, but only one is in-flight.
      */
     void try_issue_loads(Cycle current_cycle, std::vector<TimingEvent>& events) {
-        while (!load_queue_.empty() && in_flight_.size() < config_.queue_depth) {
+        // Only issue if no transfer is currently in-flight
+        while (!load_queue_.empty() && in_flight_.empty()) {
             const TileDescriptor& peek_tile = load_queue_.peek();
 
             // Check if tile is already in L3 (supports tile reuse)
@@ -357,9 +361,12 @@ private:
 
     /**
      * @brief Try to issue new store transfers
+     *
+     * A DMA channel can only perform ONE transfer at a time.
      */
     void try_issue_stores(Cycle current_cycle, std::vector<TimingEvent>& events) {
-        while (!store_queue_.empty() && in_flight_.size() < config_.queue_depth) {
+        // Only issue if no transfer is currently in-flight
+        while (!store_queue_.empty() && in_flight_.empty()) {
             const TileDescriptor& tile = store_queue_.peek();
 
             // Need tile to be in L3 (TagCAM match)

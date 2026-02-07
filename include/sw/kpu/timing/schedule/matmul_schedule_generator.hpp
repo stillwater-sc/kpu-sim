@@ -244,8 +244,15 @@ private:
                     result.operations.push_back(ScheduleOperation::feed(b_tile));
                 }
 
-                // Drain C tile after all K iterations
+                // Signal compute complete, then drain C tile
+                // COMPUTE depends on last B tile being fed: B[0,tj,k-1]
                 auto c_tile = make_tile(isa::MatrixID::C, ti, tj, 0);
+                TileID last_b;
+                last_b.matrix = isa::MatrixID::B;
+                last_b.ti = 0;
+                last_b.tj = tj;
+                last_b.tk = k_tiles - 1;
+                result.operations.push_back(ScheduleOperation::compute(c_tile, last_b));
                 result.operations.push_back(ScheduleOperation::drain(c_tile));
                 result.operations.push_back(ScheduleOperation::writeback(c_tile));
                 result.operations.push_back(ScheduleOperation::store(c_tile));
@@ -297,8 +304,15 @@ private:
                     result.operations.push_back(ScheduleOperation::feed(b_tile));
                 }
 
-                // Drain and store C tile
+                // Signal compute complete, then drain and store C tile
+                // COMPUTE depends on last B tile being fed: B[0,tj,k-1]
                 auto c_tile = make_tile(isa::MatrixID::C, ti, tj, 0);
+                TileID last_b;
+                last_b.matrix = isa::MatrixID::B;
+                last_b.ti = 0;
+                last_b.tj = tj;
+                last_b.tk = k_tiles - 1;
+                result.operations.push_back(ScheduleOperation::compute(c_tile, last_b));
                 result.operations.push_back(ScheduleOperation::drain(c_tile));
                 result.operations.push_back(ScheduleOperation::writeback(c_tile));
                 result.operations.push_back(ScheduleOperation::store(c_tile));
@@ -342,8 +356,15 @@ private:
                     result.operations.push_back(ScheduleOperation::feed(b_tile));
                 }
 
-                // Drain and store C
+                // Signal compute complete, then drain and store C
+                // COMPUTE depends on last B tile being fed: B[0,tj,k-1]
                 auto c_tile = make_tile(isa::MatrixID::C, ti, tj, 0);
+                TileID last_b;
+                last_b.matrix = isa::MatrixID::B;
+                last_b.ti = 0;
+                last_b.tj = tj;
+                last_b.tk = k_tiles - 1;
+                result.operations.push_back(ScheduleOperation::compute(c_tile, last_b));
                 result.operations.push_back(ScheduleOperation::drain(c_tile));
                 result.operations.push_back(ScheduleOperation::writeback(c_tile));
                 result.operations.push_back(ScheduleOperation::store(c_tile));
@@ -387,8 +408,15 @@ private:
                     result.operations.push_back(ScheduleOperation::feed(b_tile));
                 }
 
-                // Drain and store C
+                // Signal compute complete, then drain and store C
+                // COMPUTE depends on last B tile being fed: B[0,tj,k-1]
                 auto c_tile = make_tile(isa::MatrixID::C, ti, tj, 0);
+                TileID last_b;
+                last_b.matrix = isa::MatrixID::B;
+                last_b.ti = 0;
+                last_b.tj = tj;
+                last_b.tk = k_tiles - 1;
+                result.operations.push_back(ScheduleOperation::compute(c_tile, last_b));
                 result.operations.push_back(ScheduleOperation::drain(c_tile));
                 result.operations.push_back(ScheduleOperation::writeback(c_tile));
                 result.operations.push_back(ScheduleOperation::store(c_tile));

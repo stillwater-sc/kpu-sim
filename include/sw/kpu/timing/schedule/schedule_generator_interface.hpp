@@ -32,7 +32,8 @@ enum class ScheduleOpType {
     MOVE,       // BlockMover: L3 -> L2
     WRITEBACK,  // BlockMover: L2 -> L3
     FEED,       // Streamer: L2 -> Compute
-    DRAIN       // Streamer: Compute -> L2
+    COMPUTE,    // Compute: signals result tile ready (after all inputs fed)
+    DRAIN       // Streamer: Compute -> L2 (waits for COMPUTE)
 };
 
 /**
@@ -45,6 +46,7 @@ inline const char* to_string(ScheduleOpType type) {
         case ScheduleOpType::MOVE:      return "MOVE";
         case ScheduleOpType::WRITEBACK: return "WRITEBACK";
         case ScheduleOpType::FEED:      return "FEED";
+        case ScheduleOpType::COMPUTE:   return "COMPUTE";
         case ScheduleOpType::DRAIN:     return "DRAIN";
         default:                        return "UNKNOWN";
     }
@@ -72,6 +74,9 @@ struct ScheduleOperation {
     int engine_id = -1;                     ///< Target DMA engine
     int mover_id = -1;                      ///< Target BlockMover
     int streamer_id = -1;                   ///< Target Streamer
+
+    // For COMPUTE operations: the tile that must be FED before compute starts
+    TileID dependency_tile;                 ///< COMPUTE waits for this tile to be FED
 
     /**
      * @brief Create a LOAD operation
@@ -126,6 +131,24 @@ struct ScheduleOperation {
         op.type = ScheduleOpType::FEED;
         op.tile = tile;
         op.streamer_id = streamer;
+        return op;
+    }
+
+    /**
+     * @brief Create a COMPUTE operation (signals result tile ready)
+     *
+     * COMPUTE must be scheduled after all FEED operations for the input tiles
+     * that contribute to this result tile. DRAIN waits for COMPUTE before
+     * transferring the result from compute fabric to L2.
+     *
+     * @param tile Result tile (C matrix)
+     * @param dependency Last input tile that must be FED before compute starts
+     */
+    static ScheduleOperation compute(const TileDescriptor& tile, const TileID& dependency) {
+        ScheduleOperation op;
+        op.type = ScheduleOpType::COMPUTE;
+        op.tile = tile;
+        op.dependency_tile = dependency;
         return op;
     }
 
@@ -310,6 +333,7 @@ struct ScheduleAnalysis {
     size_t move_ops = 0;
     size_t writeback_ops = 0;
     size_t feed_ops = 0;
+    size_t compute_ops = 0;
     size_t drain_ops = 0;
 
     size_t a_ops = 0;
@@ -340,6 +364,7 @@ struct ScheduleAnalysis {
                 case ScheduleOpType::MOVE:      result.move_ops++; break;
                 case ScheduleOpType::WRITEBACK: result.writeback_ops++; break;
                 case ScheduleOpType::FEED:      result.feed_ops++; break;
+                case ScheduleOpType::COMPUTE:   result.compute_ops++; break;
                 case ScheduleOpType::DRAIN:     result.drain_ops++; break;
             }
 
