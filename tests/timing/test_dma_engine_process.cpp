@@ -1,6 +1,6 @@
 // ============================================================================
 // tests/timing/test_dma_engine_process.cpp
-// Unit tests for DMAEngineProcess
+// Unit tests for DMAEngineProcess with Memory Controller integration
 //
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2024-2025 Stillwater Supercomputing, Inc.
@@ -9,6 +9,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <sw/kpu/timing/dma_engine_process.hpp>
+#include <sw/kpu/timing/memory_controller_process.hpp>
 
 using namespace sw::kpu::timing;
 using namespace sw::kpu::isa;
@@ -26,15 +27,25 @@ static TileDescriptor make_load_tile(MatrixID matrix, Size ti, Size tj, Size tk 
     return desc;
 }
 
-static DMAEngineProcess::Config default_config(uint32_t id = 0) {
+static MemoryControllerProcess::Config default_mc_config(uint32_t id = 0) {
+    MemoryControllerProcess::Config config;
+    config.controller_id = id;
+    config.num_banks = 16;
+    config.t_cl = 10;
+    config.t_rcd = 15;
+    config.t_rp = 15;
+    config.t_burst = 4;
+    config.startup_latency = 5;
+    config.request_queue_depth = 32;
+    config.name = config.display_name();
+    return config;
+}
+
+static DMAEngineProcess::Config default_dma_config(uint32_t id = 0) {
     DMAEngineProcess::Config config;
     config.engine_id = id;
-    config.bus_width_bytes = 64;
-    config.startup_latency = 10;
-    config.bandwidth_gbps = 25.6;
-    config.clock_ghz = 1.0;
-    config.queue_depth = 4;
-    config.name = "DMA";
+    config.queue_depth = 32;
+    config.name = config.display_name();
     return config;
 }
 
@@ -54,11 +65,12 @@ static size_t count_events(const std::vector<TimingEvent>& events, EventType typ
 TEST_CASE("DMAEngineProcess construction", "[timing][dma_process]") {
     CreditPool l3_credits(8);
     TagCAM l3_tag_cam(8);
+    MemoryControllerProcess mc(default_mc_config());
 
-    DMAEngineProcess dma(default_config(0), l3_credits, l3_tag_cam);
+    DMAEngineProcess dma(default_dma_config(0), mc, l3_credits, l3_tag_cam);
 
     REQUIRE(dma.id() == 0);
-    REQUIRE(dma.name() == "DMA_0");
+    REQUIRE(dma.name() == "DMA0");
     REQUIRE(dma.is_idle());
     REQUIRE_FALSE(dma.has_pending_work());
     REQUIRE(dma.is_complete());
@@ -68,55 +80,57 @@ TEST_CASE("DMAEngineProcess construction", "[timing][dma_process]") {
 // Load Tests
 // ============================================================================
 
-TEST_CASE("DMAEngineProcess single load", "[timing][dma_process]") {
+TEST_CASE("DMAEngineProcess single load via MC", "[timing][dma_process]") {
     CreditPool l3_credits(8);
     TagCAM l3_tag_cam(8);
-    auto config = default_config(0);
+    MemoryControllerProcess mc(default_mc_config());
 
-    DMAEngineProcess dma(config, l3_credits, l3_tag_cam);
+    DMAEngineProcess dma(default_dma_config(0), mc, l3_credits, l3_tag_cam);
 
     // Schedule a load
     auto tile = make_load_tile(MatrixID::A, 0, 0, 0, 1024);
     dma.schedule_load(tile);
 
     REQUIRE(dma.has_pending_work());
-    REQUIRE(dma.is_idle());  // Not yet started
+    REQUIRE(dma.is_idle());  // Not yet submitted to MC
 
-    // First tick should start the load
-    auto events = dma.tick(0);
-
-    REQUIRE(count_events(events, EventType::DMA_LOAD_START) == 1);
-    REQUIRE(count_events(events, EventType::CREDIT_ACQUIRED) == 1);
-    REQUIRE_FALSE(dma.is_idle());  // Now busy
-    REQUIRE_FALSE(dma.has_pending_work());  // Removed from queue
+    // Tick DMA - should acquire credit and submit to MC
+    auto dma_events = dma.tick(0);
+    REQUIRE(count_events(dma_events, EventType::CREDIT_ACQUIRED) == 1);
     REQUIRE(l3_credits.available() == 7);  // Credit acquired
+    REQUIRE(mc.has_pending_work());  // Request submitted to MC
 
-    // Tick until complete (startup + transfer time)
-    // 1024 bytes at 25.6 GB/s @ 1GHz = ~40 cycles + 10 startup = ~50 cycles
+    // Tick both MC and DMA until complete
     Cycle cycle = 1;
-    while (!dma.is_idle() && cycle < 100) {
-        events = dma.tick(cycle++);
+    std::vector<TimingEvent> all_events;
+    while ((!mc.is_complete() || !dma.is_complete()) && cycle < 100) {
+        auto mc_events = mc.tick(cycle);
+        all_events.insert(all_events.end(), mc_events.begin(), mc_events.end());
+        dma_events = dma.tick(cycle);
+        all_events.insert(all_events.end(), dma_events.begin(), dma_events.end());
+        cycle++;
     }
 
     // Should have completed
-    REQUIRE(dma.is_idle());
     REQUIRE(dma.is_complete());
     REQUIRE(l3_tag_cam.lookup(tile.tile_id));  // Tile is in L3
+    REQUIRE(count_events(all_events, EventType::TILE_ARRIVED_L3) == 1);
 }
 
 TEST_CASE("DMAEngineProcess load stalls without credit", "[timing][dma_process]") {
     CreditPool l3_credits(1);  // Only 1 credit
     TagCAM l3_tag_cam(8);
+    MemoryControllerProcess mc(default_mc_config());
 
-    DMAEngineProcess dma(default_config(0), l3_credits, l3_tag_cam);
+    DMAEngineProcess dma(default_dma_config(0), mc, l3_credits, l3_tag_cam);
 
     // Schedule two loads
     dma.schedule_load(make_load_tile(MatrixID::A, 0, 0));
     dma.schedule_load(make_load_tile(MatrixID::A, 0, 1));
 
-    // First tick - first load starts, acquires only credit
+    // First tick - first load acquires credit
     auto events = dma.tick(0);
-    REQUIRE(count_events(events, EventType::DMA_LOAD_START) == 1);
+    REQUIRE(count_events(events, EventType::CREDIT_ACQUIRED) == 1);
     REQUIRE(l3_credits.available() == 0);
     REQUIRE(dma.has_pending_work());  // Second load still queued
 
@@ -126,44 +140,23 @@ TEST_CASE("DMAEngineProcess load stalls without credit", "[timing][dma_process]"
     REQUIRE(dma.has_pending_work());  // Still queued
 }
 
-TEST_CASE("DMAEngineProcess multiple concurrent loads", "[timing][dma_process]") {
+TEST_CASE("DMAEngineProcess multiple loads through MC", "[timing][dma_process]") {
     CreditPool l3_credits(8);
     TagCAM l3_tag_cam(8);
-    auto config = default_config(0);
-    config.queue_depth = 4;  // Allow 4 in-flight
+    MemoryControllerProcess mc(default_mc_config());
 
-    DMAEngineProcess dma(config, l3_credits, l3_tag_cam);
+    DMAEngineProcess dma(default_dma_config(0), mc, l3_credits, l3_tag_cam);
 
     // Schedule 4 loads
     for (Size i = 0; i < 4; ++i) {
         dma.schedule_load(make_load_tile(MatrixID::A, 0, i));
     }
 
-    // First tick should start all 4
-    auto events = dma.tick(0);
-    REQUIRE(count_events(events, EventType::DMA_LOAD_START) == 4);
-    REQUIRE(dma.in_flight_count() == 4);
+    // First tick - should submit all to MC (all have credits)
+    auto dma_events = dma.tick(0);
+    REQUIRE(count_events(dma_events, EventType::CREDIT_ACQUIRED) == 4);
     REQUIRE(l3_credits.available() == 4);  // 4 credits acquired
-}
-
-TEST_CASE("DMAEngineProcess respects queue depth", "[timing][dma_process]") {
-    CreditPool l3_credits(8);
-    TagCAM l3_tag_cam(8);
-    auto config = default_config(0);
-    config.queue_depth = 2;  // Only 2 in-flight allowed
-
-    DMAEngineProcess dma(config, l3_credits, l3_tag_cam);
-
-    // Schedule 4 loads
-    for (Size i = 0; i < 4; ++i) {
-        dma.schedule_load(make_load_tile(MatrixID::A, 0, i));
-    }
-
-    // First tick should start only 2
-    auto events = dma.tick(0);
-    REQUIRE(count_events(events, EventType::DMA_LOAD_START) == 2);
-    REQUIRE(dma.in_flight_count() == 2);
-    REQUIRE(dma.has_pending_work());  // 2 more queued
+    REQUIRE(mc.pending_requests() == 4);  // All 4 in MC queue
 }
 
 // ============================================================================
@@ -173,8 +166,9 @@ TEST_CASE("DMAEngineProcess respects queue depth", "[timing][dma_process]") {
 TEST_CASE("DMAEngineProcess store requires tile in L3", "[timing][dma_process]") {
     CreditPool l3_credits(8);
     TagCAM l3_tag_cam(8);
+    MemoryControllerProcess mc(default_mc_config());
 
-    DMAEngineProcess dma(default_config(0), l3_credits, l3_tag_cam);
+    DMAEngineProcess dma(default_dma_config(0), mc, l3_credits, l3_tag_cam);
 
     // Schedule a store without tile in L3
     auto tile = make_load_tile(MatrixID::C, 0, 0);
@@ -182,25 +176,25 @@ TEST_CASE("DMAEngineProcess store requires tile in L3", "[timing][dma_process]")
 
     // Tick - should stall (tile not in L3)
     auto events = dma.tick(0);
+    REQUIRE(count_events(events, EventType::DMA_STALL_TAG) == 1);
     REQUIRE(dma.has_pending_work());  // Still queued
-    REQUIRE(dma.is_idle());  // Nothing in flight
+    REQUIRE(dma.is_idle());  // Nothing submitted to MC
 
     // Add tile to L3 TagCAM (simulating it arrived)
     l3_credits.acquire();  // Simulate credit used
     l3_tag_cam.insert(tile.tile_id, 0, 0);
 
-    // Now tick should start the store
+    // Now tick should submit to MC
     events = dma.tick(1);
-    REQUIRE(count_events(events, EventType::DMA_STORE_START) == 1);
-    REQUIRE_FALSE(l3_tag_cam.lookup(tile.tile_id));  // Tile removed from L3
-    REQUIRE(l3_credits.available() == 8);  // Credit released
+    REQUIRE(mc.has_pending_work());  // Request submitted to MC
 }
 
-TEST_CASE("DMAEngineProcess store releases credit", "[timing][dma_process]") {
+TEST_CASE("DMAEngineProcess store releases credit on completion", "[timing][dma_process]") {
     CreditPool l3_credits(8);
     TagCAM l3_tag_cam(8);
+    MemoryControllerProcess mc(default_mc_config());
 
-    DMAEngineProcess dma(default_config(0), l3_credits, l3_tag_cam);
+    DMAEngineProcess dma(default_dma_config(0), mc, l3_credits, l3_tag_cam);
 
     // Pre-populate L3 with a tile
     auto tile = make_load_tile(MatrixID::C, 0, 0);
@@ -211,11 +205,17 @@ TEST_CASE("DMAEngineProcess store releases credit", "[timing][dma_process]") {
     // Schedule store
     dma.schedule_store(tile);
 
-    // Start store - should release credit
-    auto events = dma.tick(0);
-    REQUIRE(count_events(events, EventType::DMA_STORE_START) == 1);
-    REQUIRE(count_events(events, EventType::CREDIT_RELEASED) == 1);
-    REQUIRE(l3_credits.available() == 8);  // Credit released immediately
+    // Run until complete
+    Cycle cycle = 0;
+    while ((!mc.is_complete() || !dma.is_complete()) && cycle < 100) {
+        mc.tick(cycle);
+        dma.tick(cycle);
+        cycle++;
+    }
+
+    REQUIRE(dma.is_complete());
+    REQUIRE(l3_credits.available() == 8);  // Credit released
+    REQUIRE_FALSE(l3_tag_cam.lookup(tile.tile_id));  // Tile removed from L3
 }
 
 // ============================================================================
@@ -223,28 +223,26 @@ TEST_CASE("DMAEngineProcess store releases credit", "[timing][dma_process]") {
 // ============================================================================
 
 TEST_CASE("DMAEngineProcess interleaved loads and stores", "[timing][dma_process]") {
-    CreditPool l3_credits(4);
-    TagCAM l3_tag_cam(4);
-    auto config = default_config(0);
-    config.queue_depth = 4;
+    CreditPool l3_credits(8);
+    TagCAM l3_tag_cam(8);
+    MemoryControllerProcess mc(default_mc_config());
 
-    DMAEngineProcess dma(config, l3_credits, l3_tag_cam);
+    DMAEngineProcess dma(default_dma_config(0), mc, l3_credits, l3_tag_cam);
 
     // Schedule loads for A tiles
     dma.schedule_load(make_load_tile(MatrixID::A, 0, 0));
     dma.schedule_load(make_load_tile(MatrixID::A, 0, 1));
 
-    // Pre-populate C tiles for store
+    // Pre-populate C tile for store
     auto c_tile = make_load_tile(MatrixID::C, 0, 0);
     l3_credits.acquire();
     l3_tag_cam.insert(c_tile.tile_id, 0, 0);
     dma.schedule_store(c_tile);
 
-    // First tick - should start 2 loads and 1 store
-    auto events = dma.tick(0);
-    REQUIRE(count_events(events, EventType::DMA_LOAD_START) == 2);
-    REQUIRE(count_events(events, EventType::DMA_STORE_START) == 1);
-    REQUIRE(dma.in_flight_count() == 3);
+    // First tick - should submit 2 loads and 1 store to MC
+    auto dma_events = dma.tick(0);
+    REQUIRE(count_events(dma_events, EventType::CREDIT_ACQUIRED) == 2);  // For loads
+    REQUIRE(mc.pending_requests() == 3);  // 2 loads + 1 store
 }
 
 // ============================================================================
@@ -254,25 +252,23 @@ TEST_CASE("DMAEngineProcess interleaved loads and stores", "[timing][dma_process
 TEST_CASE("DMAEngineProcess reset clears state", "[timing][dma_process]") {
     CreditPool l3_credits(8);
     TagCAM l3_tag_cam(8);
+    MemoryControllerProcess mc(default_mc_config());
 
-    DMAEngineProcess dma(default_config(0), l3_credits, l3_tag_cam);
+    DMAEngineProcess dma(default_dma_config(0), mc, l3_credits, l3_tag_cam);
 
-    // Schedule and start some loads
+    // Schedule and submit loads
     dma.schedule_load(make_load_tile(MatrixID::A, 0, 0));
     dma.schedule_load(make_load_tile(MatrixID::A, 0, 1));
     dma.tick(0);
 
-    REQUIRE_FALSE(dma.is_idle());
-    REQUIRE(dma.in_flight_count() > 0);
+    REQUIRE(dma.pending_count() > 0);
 
     // Reset
     dma.reset();
 
     REQUIRE(dma.is_idle());
     REQUIRE(dma.is_complete());
-    REQUIRE(dma.in_flight_count() == 0);
-    REQUIRE(dma.load_queue_depth() == 0);
-    REQUIRE(dma.store_queue_depth() == 0);
+    REQUIRE(dma.pending_count() == 0);
 }
 
 // ============================================================================
@@ -282,8 +278,9 @@ TEST_CASE("DMAEngineProcess reset clears state", "[timing][dma_process]") {
 TEST_CASE("DMAEngineProcess tracks statistics", "[timing][dma_process]") {
     CreditPool l3_credits(8);
     TagCAM l3_tag_cam(8);
+    MemoryControllerProcess mc(default_mc_config());
 
-    DMAEngineProcess dma(default_config(0), l3_credits, l3_tag_cam);
+    DMAEngineProcess dma(default_dma_config(0), mc, l3_credits, l3_tag_cam);
 
     // Complete a load
     auto tile = make_load_tile(MatrixID::A, 0, 0, 0, 2048);
@@ -291,8 +288,10 @@ TEST_CASE("DMAEngineProcess tracks statistics", "[timing][dma_process]") {
 
     // Run until complete
     Cycle cycle = 0;
-    while (!dma.is_complete() && cycle < 200) {
-        dma.tick(cycle++);
+    while ((!mc.is_complete() || !dma.is_complete()) && cycle < 200) {
+        mc.tick(cycle);
+        dma.tick(cycle);
+        cycle++;
     }
 
     REQUIRE(dma.total_bytes_loaded() == 2048);
@@ -306,8 +305,9 @@ TEST_CASE("DMAEngineProcess tracks statistics", "[timing][dma_process]") {
 TEST_CASE("DMAEngineProcess generates correct events", "[timing][dma_process]") {
     CreditPool l3_credits(8);
     TagCAM l3_tag_cam(8);
+    MemoryControllerProcess mc(default_mc_config());
 
-    DMAEngineProcess dma(default_config(0), l3_credits, l3_tag_cam);
+    DMAEngineProcess dma(default_dma_config(0), mc, l3_credits, l3_tag_cam);
 
     auto tile = make_load_tile(MatrixID::A, 0, 0, 0, 512);
     dma.schedule_load(tile);
@@ -315,14 +315,17 @@ TEST_CASE("DMAEngineProcess generates correct events", "[timing][dma_process]") 
     // Collect all events
     std::vector<TimingEvent> all_events;
     Cycle cycle = 0;
-    while (!dma.is_complete() && cycle < 200) {
-        auto events = dma.tick(cycle++);
-        all_events.insert(all_events.end(), events.begin(), events.end());
+    while ((!mc.is_complete() || !dma.is_complete()) && cycle < 200) {
+        auto mc_events = mc.tick(cycle);
+        all_events.insert(all_events.end(), mc_events.begin(), mc_events.end());
+        auto dma_events = dma.tick(cycle);
+        all_events.insert(all_events.end(), dma_events.begin(), dma_events.end());
+        cycle++;
     }
 
-    // Should have: LOAD_START, CREDIT_ACQUIRED, LOAD_COMPLETE, TILE_ARRIVED_L3
-    REQUIRE(count_events(all_events, EventType::DMA_LOAD_START) == 1);
+    // Should have: CREDIT_ACQUIRED, DMA_LOAD_START (from MC), DMA_LOAD_COMPLETE (from MC), TILE_ARRIVED_L3 (from DMA)
     REQUIRE(count_events(all_events, EventType::CREDIT_ACQUIRED) == 1);
+    REQUIRE(count_events(all_events, EventType::DMA_LOAD_START) == 1);
     REQUIRE(count_events(all_events, EventType::DMA_LOAD_COMPLETE) == 1);
     REQUIRE(count_events(all_events, EventType::TILE_ARRIVED_L3) == 1);
 
@@ -334,82 +337,102 @@ TEST_CASE("DMAEngineProcess generates correct events", "[timing][dma_process]") 
     }
 }
 
-TEST_CASE("DMAEngineProcess events have correct tile IDs", "[timing][dma_process]") {
+// ============================================================================
+// MC Command Bus Serialization Tests
+// ============================================================================
+
+TEST_CASE("DMAEngineProcess sees MC command bus serialization", "[timing][dma_process]") {
     CreditPool l3_credits(8);
     TagCAM l3_tag_cam(8);
+    MemoryControllerProcess mc(default_mc_config());
 
-    DMAEngineProcess dma(default_config(0), l3_credits, l3_tag_cam);
+    DMAEngineProcess dma(default_dma_config(0), mc, l3_credits, l3_tag_cam);
 
-    auto tile = make_load_tile(MatrixID::B, 2, 3, 1);
-    dma.schedule_load(tile);
+    // Schedule 2 loads to different banks
+    auto tile0 = make_load_tile(MatrixID::A, 0, 0, 0, 1024);
+    auto tile1 = make_load_tile(MatrixID::A, 0, 1, 0, 1024);
+    tile1.dram_address = 0x00400;  // Different bank
 
-    auto events = dma.tick(0);
+    dma.schedule_load(tile0);
+    dma.schedule_load(tile1);
 
-    // Find the LOAD_START event and check tile ID
-    for (const auto& e : events) {
-        if (e.type == EventType::DMA_LOAD_START) {
-            REQUIRE(e.tile_id == tile.tile_id);
-            REQUIRE(e.component_id == 0);
-        }
-    }
+    // Submit to MC
+    dma.tick(0);
+    REQUIRE(mc.pending_requests() == 2);
+
+    // First MC tick - only ONE command issued
+    auto mc_events = mc.tick(0);
+    int load_starts_at_0 = count_events(mc_events, EventType::DMA_LOAD_START);
+    REQUIRE(load_starts_at_0 == 1);
+
+    // Second MC tick - other command issued
+    mc_events = mc.tick(1);
+    int load_starts_at_1 = count_events(mc_events, EventType::DMA_LOAD_START);
+    REQUIRE(load_starts_at_1 == 1);
+
+    // Total: 2 commands serialized over 2 cycles
+    REQUIRE(mc.pending_requests() == 0);
 }
 
 // ============================================================================
-// Timing Tests
+// Tile Reuse Tests
 // ============================================================================
 
-TEST_CASE("DMAEngineProcess transfer time scales with size", "[timing][dma_process]") {
+TEST_CASE("DMAEngineProcess handles tile already in L3", "[timing][dma_process]") {
     CreditPool l3_credits(8);
     TagCAM l3_tag_cam(8);
-    auto config = default_config(0);
+    MemoryControllerProcess mc(default_mc_config());
 
-    DMAEngineProcess dma(config, l3_credits, l3_tag_cam);
+    DMAEngineProcess dma(default_dma_config(0), mc, l3_credits, l3_tag_cam);
 
-    // Small tile
-    auto small_tile = make_load_tile(MatrixID::A, 0, 0, 0, 256);
-    dma.schedule_load(small_tile);
-
-    Cycle cycle = 0;
-    while (!dma.is_complete() && cycle < 500) {
-        dma.tick(cycle++);
-    }
-    Cycle small_time = cycle;
-
-    dma.reset();
-    l3_tag_cam.reset();
-
-    // Large tile (4x size)
-    auto large_tile = make_load_tile(MatrixID::A, 0, 1, 0, 1024);
-    dma.schedule_load(large_tile);
-
-    cycle = 0;
-    while (!dma.is_complete() && cycle < 500) {
-        dma.tick(cycle++);
-    }
-    Cycle large_time = cycle;
-
-    // Large should take longer (not exactly 4x due to startup overhead)
-    REQUIRE(large_time > small_time);
-}
-
-// ============================================================================
-// Chrome Trace Tests
-// ============================================================================
-
-TEST_CASE("DMAEngineProcess events generate Chrome trace JSON", "[timing][dma_process]") {
-    CreditPool l3_credits(8);
-    TagCAM l3_tag_cam(8);
-
-    DMAEngineProcess dma(default_config(0), l3_credits, l3_tag_cam);
-
+    // Pre-populate tile in L3
     auto tile = make_load_tile(MatrixID::A, 0, 0);
+    l3_credits.acquire();
+    l3_tag_cam.insert(tile.tile_id, 0, 0);
+
+    // Schedule load for same tile
     dma.schedule_load(tile);
 
+    // Tick - should immediately complete (tile already present)
     auto events = dma.tick(0);
+    REQUIRE(count_events(events, EventType::TILE_ARRIVED_L3) == 1);
+    REQUIRE(dma.is_complete());  // Completed immediately
+    REQUIRE_FALSE(mc.has_pending_work());  // Not submitted to MC
+}
 
-    REQUIRE_FALSE(events.empty());
-    std::string json = events[0].to_chrome_trace_json();
-    REQUIRE(json.find("DMA_LOAD_START") != std::string::npos);
-    REQUIRE(json.find("\"pid\":1") != std::string::npos);
-    REQUIRE(json.find("\"tid\":0") != std::string::npos);
+// ============================================================================
+// Multiple DMA Engines Sharing MC
+// ============================================================================
+
+TEST_CASE("Multiple DMA engines share MC", "[timing][dma_process]") {
+    CreditPool l3_credits(16);
+    TagCAM l3_tag_cam(16);
+    MemoryControllerProcess mc(default_mc_config());
+
+    DMAEngineProcess dma0(default_dma_config(0), mc, l3_credits, l3_tag_cam);
+    DMAEngineProcess dma1(default_dma_config(1), mc, l3_credits, l3_tag_cam);
+
+    // Each DMA schedules a load
+    dma0.schedule_load(make_load_tile(MatrixID::A, 0, 0));
+    dma1.schedule_load(make_load_tile(MatrixID::B, 0, 0));
+
+    // Both submit to same MC
+    dma0.tick(0);
+    dma1.tick(0);
+
+    REQUIRE(mc.pending_requests() == 2);
+
+    // Run until both complete
+    Cycle cycle = 1;
+    while ((!mc.is_complete() || !dma0.is_complete() || !dma1.is_complete()) && cycle < 100) {
+        mc.tick(cycle);
+        dma0.tick(cycle);
+        dma1.tick(cycle);
+        cycle++;
+    }
+
+    REQUIRE(dma0.is_complete());
+    REQUIRE(dma1.is_complete());
+    REQUIRE(dma0.total_bytes_loaded() == 1024);
+    REQUIRE(dma1.total_bytes_loaded() == 1024);
 }

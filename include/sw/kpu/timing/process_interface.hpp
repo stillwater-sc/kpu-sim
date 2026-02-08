@@ -24,12 +24,15 @@ namespace sw::kpu::timing {
  * @brief Type of timing event
  */
 enum class EventType {
-    // DMA events
+    // DMA / Memory Controller events
     DMA_LOAD_START,      ///< DMA started loading tile from DRAM
     DMA_LOAD_COMPLETE,   ///< DMA finished loading tile to L3
     DMA_STORE_START,     ///< DMA started storing tile to DRAM
     DMA_STORE_COMPLETE,  ///< DMA finished storing tile to DRAM
     DMA_STALL_CREDIT,    ///< DMA stalled waiting for L3 credit
+    DMA_STALL_TAG,       ///< DMA stalled waiting for tile in L3 (for store)
+    MC_ACCESS_TYPE,      ///< Memory Controller access classification (row hit/miss/empty)
+    MC_BANK_CONFLICT,    ///< Memory Controller bank conflict (different row in same bank)
 
     // BlockMover events
     BM_MOVE_START,       ///< BlockMover started L3→L2 transfer
@@ -75,6 +78,9 @@ inline const char* to_string(EventType type) {
         case EventType::DMA_STORE_START: return "DMA_STORE_START";
         case EventType::DMA_STORE_COMPLETE: return "DMA_STORE_COMPLETE";
         case EventType::DMA_STALL_CREDIT: return "DMA_STALL_CREDIT";
+        case EventType::DMA_STALL_TAG: return "DMA_STALL_TAG";
+        case EventType::MC_ACCESS_TYPE: return "MC_ACCESS_TYPE";
+        case EventType::MC_BANK_CONFLICT: return "MC_BANK_CONFLICT";
         case EventType::BM_MOVE_START: return "BM_MOVE_START";
         case EventType::BM_MOVE_COMPLETE: return "BM_MOVE_COMPLETE";
         case EventType::BM_WRITEBACK_START: return "BM_WRITEBACK_START";
@@ -118,6 +124,7 @@ struct TimingEvent {
     Cycle duration;           ///< Duration in cycles (for COMPLETE events)
     uint32_t slot_id;         ///< Buffer/bank slot (if applicable)
     std::string component_name; ///< Human-readable component name
+    std::string detail;         ///< Additional detail (e.g., "ROW_HIT" for MC_ACCESS_TYPE)
     Address matrix_base_address = 0; ///< Base address of the matrix in DRAM
     Address dram_address = 0;  ///< DRAM address for this tile
 

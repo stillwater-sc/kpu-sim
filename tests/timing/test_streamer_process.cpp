@@ -56,10 +56,11 @@ static size_t count_events(const std::vector<TimingEvent>& events, EventType typ
 TEST_CASE("StreamerProcess construction", "[timing][streamer_process]") {
     CreditPool l2_credits(16);
     TagCAM l2_tag_cam(16);
+    TagCAM compute_result_tag_cam(16);
 
     SECTION("Row streamer") {
         StreamerProcess streamer(default_config(0, StreamerType::ROW_STREAMER),
-                                 l2_tag_cam, l2_credits);
+                                 l2_tag_cam, l2_credits, compute_result_tag_cam);
 
         REQUIRE(streamer.id() == 0);
         REQUIRE(streamer.name() == "STR_ROW_0");
@@ -70,7 +71,7 @@ TEST_CASE("StreamerProcess construction", "[timing][streamer_process]") {
 
     SECTION("Column streamer") {
         StreamerProcess streamer(default_config(1, StreamerType::COL_STREAMER),
-                                 l2_tag_cam, l2_credits);
+                                 l2_tag_cam, l2_credits, compute_result_tag_cam);
 
         REQUIRE(streamer.id() == 1);
         REQUIRE(streamer.name() == "STR_COL_1");
@@ -85,8 +86,9 @@ TEST_CASE("StreamerProcess construction", "[timing][streamer_process]") {
 TEST_CASE("StreamerProcess single feed", "[timing][streamer_process]") {
     CreditPool l2_credits(16);
     TagCAM l2_tag_cam(16);
+    TagCAM compute_result_tag_cam(16);
 
-    StreamerProcess streamer(default_config(0), l2_tag_cam, l2_credits);
+    StreamerProcess streamer(default_config(0), l2_tag_cam, l2_credits, compute_result_tag_cam);
 
     // Pre-populate L2 with tile (simulating it arrived from BlockMover)
     auto tile = make_tile(MatrixID::A, 0, 0, 0, 1024);
@@ -123,8 +125,9 @@ TEST_CASE("StreamerProcess single feed", "[timing][streamer_process]") {
 TEST_CASE("StreamerProcess feed stalls without tile", "[timing][streamer_process]") {
     CreditPool l2_credits(16);
     TagCAM l2_tag_cam(16);
+    TagCAM compute_result_tag_cam(16);
 
-    StreamerProcess streamer(default_config(0), l2_tag_cam, l2_credits);
+    StreamerProcess streamer(default_config(0), l2_tag_cam, l2_credits, compute_result_tag_cam);
 
     // Schedule a feed WITHOUT tile in L2
     auto tile = make_tile(MatrixID::A, 0, 0);
@@ -150,8 +153,9 @@ TEST_CASE("StreamerProcess feed stalls without tile", "[timing][streamer_process
 TEST_CASE("StreamerProcess multiple feeds", "[timing][streamer_process]") {
     CreditPool l2_credits(16);
     TagCAM l2_tag_cam(16);
+    TagCAM compute_result_tag_cam(16);
 
-    StreamerProcess streamer(default_config(0), l2_tag_cam, l2_credits);
+    StreamerProcess streamer(default_config(0), l2_tag_cam, l2_credits, compute_result_tag_cam);
 
     // Pre-populate L2 with multiple tiles
     for (Size i = 0; i < 4; ++i) {
@@ -184,11 +188,15 @@ TEST_CASE("StreamerProcess multiple feeds", "[timing][streamer_process]") {
 TEST_CASE("StreamerProcess single drain", "[timing][streamer_process]") {
     CreditPool l2_credits(16);
     TagCAM l2_tag_cam(16);
+    TagCAM compute_result_tag_cam(16);
 
-    StreamerProcess streamer(default_config(0), l2_tag_cam, l2_credits);
+    StreamerProcess streamer(default_config(0), l2_tag_cam, l2_credits, compute_result_tag_cam);
+
+    // Pre-populate compute_result_tag_cam with result tile (simulating compute complete)
+    auto tile = make_tile(MatrixID::C, 0, 0, 0, 1024);
+    compute_result_tag_cam.insert(tile.tile_id, 0, 0);
 
     // Schedule a drain (result from compute going to L2)
-    auto tile = make_tile(MatrixID::C, 0, 0, 0, 1024);
     streamer.schedule_drain(tile);
 
     REQUIRE(streamer.has_pending_work());
@@ -218,15 +226,19 @@ TEST_CASE("StreamerProcess single drain", "[timing][streamer_process]") {
 TEST_CASE("StreamerProcess drain stalls without credit", "[timing][streamer_process]") {
     CreditPool l2_credits(1);  // Only 1 credit
     TagCAM l2_tag_cam(16);
+    TagCAM compute_result_tag_cam(16);
 
-    StreamerProcess streamer(default_config(0), l2_tag_cam, l2_credits);
+    StreamerProcess streamer(default_config(0), l2_tag_cam, l2_credits, compute_result_tag_cam);
 
     // Use up the only credit
     l2_credits.acquire();
     REQUIRE(l2_credits.available() == 0);
 
-    // Schedule a drain
+    // Pre-populate compute result
     auto tile = make_tile(MatrixID::C, 0, 0);
+    compute_result_tag_cam.insert(tile.tile_id, 0, 0);
+
+    // Schedule a drain
     streamer.schedule_drain(tile);
 
     // Tick - should stall (no credit)
@@ -248,12 +260,14 @@ TEST_CASE("StreamerProcess drain stalls without credit", "[timing][streamer_proc
 TEST_CASE("StreamerProcess multiple drains", "[timing][streamer_process]") {
     CreditPool l2_credits(16);
     TagCAM l2_tag_cam(16);
+    TagCAM compute_result_tag_cam(16);
 
-    StreamerProcess streamer(default_config(0), l2_tag_cam, l2_credits);
+    StreamerProcess streamer(default_config(0), l2_tag_cam, l2_credits, compute_result_tag_cam);
 
-    // Schedule multiple drains
+    // Pre-populate compute results and schedule drains
     for (Size i = 0; i < 4; ++i) {
         auto tile = make_tile(MatrixID::C, 0, i);
+        compute_result_tag_cam.insert(tile.tile_id, static_cast<uint32_t>(i), 0);
         streamer.schedule_drain(tile);
     }
 
@@ -279,16 +293,20 @@ TEST_CASE("StreamerProcess multiple drains", "[timing][streamer_process]") {
 TEST_CASE("StreamerProcess feeds have priority over drains", "[timing][streamer_process]") {
     CreditPool l2_credits(16);
     TagCAM l2_tag_cam(16);
+    TagCAM compute_result_tag_cam(16);
 
-    StreamerProcess streamer(default_config(0), l2_tag_cam, l2_credits);
+    StreamerProcess streamer(default_config(0), l2_tag_cam, l2_credits, compute_result_tag_cam);
 
     // Pre-populate L2 with A tile
     auto a_tile = make_tile(MatrixID::A, 0, 0);
     l2_credits.acquire();
     l2_tag_cam.insert(a_tile.tile_id, 0, 0);
 
-    // Schedule drain first, then feed
+    // Pre-populate compute result for drain
     auto c_tile = make_tile(MatrixID::C, 0, 0);
+    compute_result_tag_cam.insert(c_tile.tile_id, 0, 0);
+
+    // Schedule drain first, then feed
     streamer.schedule_drain(c_tile);
     streamer.schedule_feed(a_tile);
 
@@ -302,8 +320,9 @@ TEST_CASE("StreamerProcess feeds have priority over drains", "[timing][streamer_
 TEST_CASE("StreamerProcess interleaved feeds and drains", "[timing][streamer_process]") {
     CreditPool l2_credits(16);
     TagCAM l2_tag_cam(16);
+    TagCAM compute_result_tag_cam(16);
 
-    StreamerProcess streamer(default_config(0), l2_tag_cam, l2_credits);
+    StreamerProcess streamer(default_config(0), l2_tag_cam, l2_credits, compute_result_tag_cam);
 
     // Pre-populate with A tile
     auto a_tile = make_tile(MatrixID::A, 0, 0);
@@ -311,8 +330,9 @@ TEST_CASE("StreamerProcess interleaved feeds and drains", "[timing][streamer_pro
     l2_tag_cam.insert(a_tile.tile_id, 0, 0);
     streamer.schedule_feed(a_tile);
 
-    // Schedule drain
+    // Pre-populate compute result and schedule drain
     auto c_tile = make_tile(MatrixID::C, 0, 0);
+    compute_result_tag_cam.insert(c_tile.tile_id, 0, 0);
     streamer.schedule_drain(c_tile);
 
     // Run until both complete
@@ -337,8 +357,9 @@ TEST_CASE("StreamerProcess interleaved feeds and drains", "[timing][streamer_pro
 TEST_CASE("StreamerProcess reset clears state", "[timing][streamer_process]") {
     CreditPool l2_credits(16);
     TagCAM l2_tag_cam(16);
+    TagCAM compute_result_tag_cam(16);
 
-    StreamerProcess streamer(default_config(0), l2_tag_cam, l2_credits);
+    StreamerProcess streamer(default_config(0), l2_tag_cam, l2_credits, compute_result_tag_cam);
 
     // Pre-populate and schedule
     auto tile = make_tile(MatrixID::A, 0, 0);
@@ -367,10 +388,11 @@ TEST_CASE("StreamerProcess reset clears state", "[timing][streamer_process]") {
 TEST_CASE("StreamerProcess tracks statistics", "[timing][streamer_process]") {
     CreditPool l2_credits(16);
     TagCAM l2_tag_cam(16);
+    TagCAM compute_result_tag_cam(16);
 
-    StreamerProcess streamer(default_config(0), l2_tag_cam, l2_credits);
+    StreamerProcess streamer(default_config(0), l2_tag_cam, l2_credits, compute_result_tag_cam);
 
-    // Complete some feeds and drains
+    // Complete some feeds
     for (Size i = 0; i < 3; ++i) {
         auto tile = make_tile(MatrixID::A, 0, i);
         l2_credits.acquire();
@@ -378,8 +400,10 @@ TEST_CASE("StreamerProcess tracks statistics", "[timing][streamer_process]") {
         streamer.schedule_feed(tile);
     }
 
+    // Complete some drains
     for (Size i = 0; i < 2; ++i) {
         auto tile = make_tile(MatrixID::C, 0, i);
+        compute_result_tag_cam.insert(tile.tile_id, static_cast<uint32_t>(i), 0);
         streamer.schedule_drain(tile);
     }
 
@@ -401,8 +425,9 @@ TEST_CASE("StreamerProcess tracks statistics", "[timing][streamer_process]") {
 TEST_CASE("StreamerProcess generates correct events", "[timing][streamer_process]") {
     CreditPool l2_credits(16);
     TagCAM l2_tag_cam(16);
+    TagCAM compute_result_tag_cam(16);
 
-    StreamerProcess streamer(default_config(0), l2_tag_cam, l2_credits);
+    StreamerProcess streamer(default_config(0), l2_tag_cam, l2_credits, compute_result_tag_cam);
 
     // Pre-populate with tile
     auto tile = make_tile(MatrixID::A, 0, 0, 0, 512);
@@ -435,10 +460,12 @@ TEST_CASE("StreamerProcess generates correct events", "[timing][streamer_process
 TEST_CASE("StreamerProcess drain events are correct", "[timing][streamer_process]") {
     CreditPool l2_credits(16);
     TagCAM l2_tag_cam(16);
+    TagCAM compute_result_tag_cam(16);
 
-    StreamerProcess streamer(default_config(0), l2_tag_cam, l2_credits);
+    StreamerProcess streamer(default_config(0), l2_tag_cam, l2_credits, compute_result_tag_cam);
 
     auto tile = make_tile(MatrixID::C, 0, 0, 0, 512);
+    compute_result_tag_cam.insert(tile.tile_id, 0, 0);
     streamer.schedule_drain(tile);
 
     // Collect all events
@@ -459,9 +486,10 @@ TEST_CASE("StreamerProcess drain events are correct", "[timing][streamer_process
 TEST_CASE("StreamerProcess events have correct tile IDs", "[timing][streamer_process]") {
     CreditPool l2_credits(16);
     TagCAM l2_tag_cam(16);
+    TagCAM compute_result_tag_cam(16);
 
     StreamerProcess streamer(default_config(0, StreamerType::COL_STREAMER),
-                             l2_tag_cam, l2_credits);
+                             l2_tag_cam, l2_credits, compute_result_tag_cam);
 
     auto tile = make_tile(MatrixID::B, 2, 3, 1);
     l2_credits.acquire();
@@ -486,8 +514,9 @@ TEST_CASE("StreamerProcess events have correct tile IDs", "[timing][streamer_pro
 TEST_CASE("StreamerProcess transfer time scales with size", "[timing][streamer_process]") {
     CreditPool l2_credits(16);
     TagCAM l2_tag_cam(16);
+    TagCAM compute_result_tag_cam(16);
 
-    StreamerProcess streamer(default_config(0), l2_tag_cam, l2_credits);
+    StreamerProcess streamer(default_config(0), l2_tag_cam, l2_credits, compute_result_tag_cam);
 
     // Small tile
     auto small_tile = make_tile(MatrixID::A, 0, 0, 0, 256);
@@ -527,8 +556,9 @@ TEST_CASE("StreamerProcess transfer time scales with size", "[timing][streamer_p
 TEST_CASE("StreamerProcess events generate Chrome trace JSON", "[timing][streamer_process]") {
     CreditPool l2_credits(16);
     TagCAM l2_tag_cam(16);
+    TagCAM compute_result_tag_cam(16);
 
-    StreamerProcess streamer(default_config(0), l2_tag_cam, l2_credits);
+    StreamerProcess streamer(default_config(0), l2_tag_cam, l2_credits, compute_result_tag_cam);
 
     auto tile = make_tile(MatrixID::A, 0, 0);
     l2_credits.acquire();
@@ -552,8 +582,9 @@ TEST_CASE("StreamerProcess work-conserving: processes ready tile not at head",
           "[timing][streamer_process][work_conserving]") {
     CreditPool l2_credits(16);
     TagCAM l2_tag_cam(16);
+    TagCAM compute_result_tag_cam(16);
 
-    StreamerProcess streamer(default_config(0), l2_tag_cam, l2_credits);
+    StreamerProcess streamer(default_config(0), l2_tag_cam, l2_credits, compute_result_tag_cam);
 
     // Schedule feeds in order: [0,0], [0,1], [0,2]
     auto tile0 = make_tile(MatrixID::A, 0, 0);
@@ -587,8 +618,9 @@ TEST_CASE("StreamerProcess work-conserving: skips blocked head, processes ready 
           "[timing][streamer_process][work_conserving]") {
     CreditPool l2_credits(16);
     TagCAM l2_tag_cam(16);
+    TagCAM compute_result_tag_cam(16);
 
-    StreamerProcess streamer(default_config(0), l2_tag_cam, l2_credits);
+    StreamerProcess streamer(default_config(0), l2_tag_cam, l2_credits, compute_result_tag_cam);
 
     // Schedule tiles: [0,0], [0,1], [0,2], [0,3]
     std::vector<TileDescriptor> tiles;

@@ -47,7 +47,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Shows operation counts, livelock analysis, and validation results
   - Example configurations for ResNet, VGG, BERT, and transformer workloads
 
+- **CSP Pipeline Educational Demo** (`examples/schedule/csp_pipeline_demo.cpp`)
+  - Minimal 1×1×1 matmul showing complete dataflow: DRAM → L3 → L2 → Compute → L2 → L3 → DRAM
+  - Transaction log format with cycle-by-cycle credit flow and TagCAM actions
+  - Shows credit acquisition/release patterns (L3 and L2 pools)
+  - Demonstrates TagCAM insert/match/invalidate operations
+  - Educational explanation of CSP synchronization mechanisms
+  - Use `--verbose` flag to include stall events in output
+
 ### Fixed
+
+- **DMA + Memory Controller Architecture** — Implemented correct CSP architecture with
+  proper separation of concerns:
+  - DMA Engine (CSP Process): Handles ISA operations, L3 credit acquisition/release,
+    L3 TagCAM tile tracking, programmable queues
+  - Memory Controller (Communication Resource): Models DRAM command bus contention
+    (1 command/cycle), 16 bank state machines, row hit/miss/empty classification
+  - DMA submits requests to MC via `submit_request()` and polls for completions via
+    `get_completed_transfer(submitter_id)`
+  - Added `submitter_id` tracking so multiple DMA engines can share one MC without
+    losing completions (each DMA only retrieves its own completions)
+  - ConcurrentTimingExecutor creates both MCs and DMAs, wiring them together and
+    ticking in correct order (MC first, then DMA)
+  - Tests: 34 passing across DMA, MC, and component integration tests
 
 - **DMA 8 concurrent transfers bug** — DMA channels now correctly issue only 1 transfer
   at a time instead of 8 concurrent. Changed `in_flight_.size() < config_.queue_depth` to

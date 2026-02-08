@@ -33,13 +33,23 @@ set_tests_properties(test_work_queue PROPERTIES
     LABELS "timing;work_queue;v0.9"
 )
 
-# DMAEngineProcess tests
+# DMAEngineProcess tests (uses MemoryControllerProcess for DRAM access)
+# DMA Engine is the ISA-driven CSP process; MC models DRAM contention
 kpu_add_component_test(test_dma_engine_process "timing"
     test_dma_engine_process.cpp
 )
 
 set_tests_properties(test_dma_engine_process PROPERTIES
     LABELS "timing;dma_engine_process;v0.9"
+)
+
+# MemoryControllerProcess tests (replaces DMAEngineProcess)
+kpu_add_component_test(test_memory_controller "timing"
+    test_memory_controller.cpp
+)
+
+set_tests_properties(test_memory_controller PROPERTIES
+    LABELS "timing;memory_controller;v0.9"
 )
 
 # BlockMoverProcess tests

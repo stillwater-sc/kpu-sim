@@ -28,9 +28,9 @@ static TileDescriptor make_tile(MatrixID matrix, Size ti, Size tj, Size tk = 0,
 
 static ConcurrentTimingExecutor::Config default_config() {
     ConcurrentTimingExecutor::Config config;
-    config.num_dma_engines = 2;
-    config.dma_queue_depth = 4;
-    config.dma_bandwidth_gbps = 25.6;
+    config.num_memory_controllers = 1;
+    config.mc_request_queue_depth = 32;
+    config.mc_bandwidth_gbps = 25.6;
     config.l3_buffer_count = 8;
     config.num_block_movers = 2;
     config.l2_bank_count = 16;
@@ -58,7 +58,7 @@ TEST_CASE("ConcurrentTimingExecutor construction", "[timing][executor]") {
     auto config = default_config();
     ConcurrentTimingExecutor executor(config);
 
-    REQUIRE(executor.num_dma_engines() == 2);
+    REQUIRE(executor.num_memory_controllers() == 1);
     REQUIRE(executor.num_block_movers() == 2);
     REQUIRE(executor.num_row_streamers() == 1);
     REQUIRE(executor.num_col_streamers() == 1);
@@ -68,7 +68,7 @@ TEST_CASE("ConcurrentTimingExecutor construction", "[timing][executor]") {
 
 TEST_CASE("ConcurrentTimingExecutor configuration", "[timing][executor]") {
     ConcurrentTimingExecutor::Config config;
-    config.num_dma_engines = 4;
+    config.num_memory_controllers = 2;  // Two memory controllers
     config.num_block_movers = 4;
     config.num_row_streamers = 2;
     config.num_col_streamers = 2;
@@ -77,7 +77,7 @@ TEST_CASE("ConcurrentTimingExecutor configuration", "[timing][executor]") {
 
     ConcurrentTimingExecutor executor(config);
 
-    REQUIRE(executor.num_dma_engines() == 4);
+    REQUIRE(executor.num_memory_controllers() == 2);
     REQUIRE(executor.num_block_movers() == 4);
     REQUIRE(executor.num_row_streamers() == 2);
     REQUIRE(executor.num_col_streamers() == 2);
@@ -236,12 +236,12 @@ TEST_CASE("ConcurrentTimingExecutor drain and writeback", "[timing][executor]") 
 // Work Distribution Tests
 // ============================================================================
 
-TEST_CASE("ConcurrentTimingExecutor distributes work across DMA engines", "[timing][executor]") {
+TEST_CASE("ConcurrentTimingExecutor distributes work across memory controllers", "[timing][executor]") {
     auto config = default_config();
-    config.num_dma_engines = 4;
+    config.num_memory_controllers = 2;
     ConcurrentTimingExecutor executor(config);
 
-    // Schedule 8 loads - should distribute across 4 engines
+    // Schedule 8 loads - should distribute across memory controllers
     for (Size i = 0; i < 8; ++i) {
         auto tile = make_tile(MatrixID::A, 0, i);
         executor.schedule_load(tile);

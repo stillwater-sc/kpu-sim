@@ -8,6 +8,7 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <sw/kpu/timing/memory_controller_process.hpp>
 #include <sw/kpu/timing/dma_engine_process.hpp>
 #include <sw/kpu/timing/block_mover_process.hpp>
 #include <sw/kpu/timing/streamer_process.hpp>
@@ -28,14 +29,21 @@ static TileDescriptor make_tile(MatrixID matrix, Size ti, Size tj, Size tk = 0,
     return desc;
 }
 
+static MemoryControllerProcess::Config mc_config(uint32_t id = 0) {
+    MemoryControllerProcess::Config config;
+    config.controller_id = id;
+    config.startup_latency = 5;
+    config.bandwidth_gbps = 25.6;
+    config.clock_ghz = 1.0;
+    config.request_queue_depth = 32;
+    config.name = "MC";
+    return config;
+}
+
 static DMAEngineProcess::Config dma_config(uint32_t id = 0) {
     DMAEngineProcess::Config config;
     config.engine_id = id;
-    config.bus_width_bytes = 64;
-    config.startup_latency = 10;
-    config.bandwidth_gbps = 25.6;
-    config.clock_ghz = 1.0;
-    config.queue_depth = 4;
+    config.queue_depth = 32;
     config.name = "DMA";
     return config;
 }
@@ -75,18 +83,19 @@ static size_t count_events(const std::vector<TimingEvent>& events, EventType typ
 }
 
 // ============================================================================
-// DMA → BlockMover Pipeline Tests
+// DMA Engine + MC Pipeline Tests
 // ============================================================================
 
-TEST_CASE("DMA to BlockMover pipeline: single tile", "[timing][integration]") {
+TEST_CASE("DMA Engine to BlockMover pipeline: single tile", "[timing][integration]") {
     // Shared resources
     CreditPool l3_credits(8);
     TagCAM l3_tag_cam(8);
     CreditPool l2_credits(16);
     TagCAM l2_tag_cam(16);
 
-    // Create components
-    DMAEngineProcess dma(dma_config(0), l3_credits, l3_tag_cam);
+    // Create components (DMA uses MC)
+    MemoryControllerProcess mc(mc_config(0));
+    DMAEngineProcess dma(dma_config(0), mc, l3_credits, l3_tag_cam);
     BlockMoverProcess bm(bm_config(0), l3_tag_cam, l3_credits, l2_credits, l2_tag_cam);
 
     // Schedule: DMA loads tile, BM moves it to L2
@@ -100,9 +109,11 @@ TEST_CASE("DMA to BlockMover pipeline: single tile", "[timing][integration]") {
     // Run until both complete
     Cycle cycle = 0;
     std::vector<TimingEvent> all_events;
-    while ((!dma.is_complete() || !bm.is_complete()) && cycle < 500) {
+    while ((!mc.is_complete() || !dma.is_complete() || !bm.is_complete()) && cycle < 500) {
+        auto mc_events = mc.tick(cycle);
         auto dma_events = dma.tick(cycle);
         auto bm_events = bm.tick(cycle);
+        all_events.insert(all_events.end(), mc_events.begin(), mc_events.end());
         all_events.insert(all_events.end(), dma_events.begin(), dma_events.end());
         all_events.insert(all_events.end(), bm_events.begin(), bm_events.end());
         cycle++;
@@ -123,13 +134,14 @@ TEST_CASE("DMA to BlockMover pipeline: single tile", "[timing][integration]") {
     REQUIRE(l2_credits.available() == 15); // One credit held by tile in L2
 }
 
-TEST_CASE("DMA to BlockMover pipeline: multiple tiles", "[timing][integration]") {
+TEST_CASE("DMA Engine to BlockMover pipeline: multiple tiles", "[timing][integration]") {
     CreditPool l3_credits(8);
     TagCAM l3_tag_cam(8);
     CreditPool l2_credits(16);
     TagCAM l2_tag_cam(16);
 
-    DMAEngineProcess dma(dma_config(0), l3_credits, l3_tag_cam);
+    MemoryControllerProcess mc(mc_config(0));
+    DMAEngineProcess dma(dma_config(0), mc, l3_credits, l3_tag_cam);
     BlockMoverProcess bm(bm_config(0), l3_tag_cam, l3_credits, l2_credits, l2_tag_cam);
 
     // Schedule 4 tiles
@@ -144,6 +156,7 @@ TEST_CASE("DMA to BlockMover pipeline: multiple tiles", "[timing][integration]")
     Cycle cycle = 0;
     size_t tiles_arrived_l2 = 0;
     while (tiles_arrived_l2 < 4 && cycle < 1000) {
+        auto mc_events = mc.tick(cycle);
         auto dma_events = dma.tick(cycle);
         auto bm_events = bm.tick(cycle);
         tiles_arrived_l2 += count_events(bm_events, EventType::TILE_ARRIVED_L2);
@@ -166,9 +179,10 @@ TEST_CASE("BlockMover to Streamer pipeline: single tile", "[timing][integration]
     TagCAM l3_tag_cam(8);
     CreditPool l2_credits(16);
     TagCAM l2_tag_cam(16);
+    TagCAM compute_result_tag_cam(16);
 
     BlockMoverProcess bm(bm_config(0), l3_tag_cam, l3_credits, l2_credits, l2_tag_cam);
-    StreamerProcess str(str_config(0), l2_tag_cam, l2_credits);
+    StreamerProcess str(str_config(0), l2_tag_cam, l2_credits, compute_result_tag_cam);
 
     // Pre-populate L3 with tile (simulating DMA completed)
     auto tile = make_tile(MatrixID::A, 0, 0);
@@ -211,10 +225,12 @@ TEST_CASE("Full pipeline: DMA → BlockMover → Streamer", "[timing][integratio
     TagCAM l3_tag_cam(8);
     CreditPool l2_credits(16);
     TagCAM l2_tag_cam(16);
+    TagCAM compute_result_tag_cam(16);
 
-    DMAEngineProcess dma(dma_config(0), l3_credits, l3_tag_cam);
+    MemoryControllerProcess mc(mc_config(0));
+    DMAEngineProcess dma(dma_config(0), mc, l3_credits, l3_tag_cam);
     BlockMoverProcess bm(bm_config(0), l3_tag_cam, l3_credits, l2_credits, l2_tag_cam);
-    StreamerProcess str(str_config(0), l2_tag_cam, l2_credits);
+    StreamerProcess str(str_config(0), l2_tag_cam, l2_credits, compute_result_tag_cam);
 
     // Schedule full pipeline for a tile
     auto tile = make_tile(MatrixID::A, 0, 0);
@@ -225,10 +241,12 @@ TEST_CASE("Full pipeline: DMA → BlockMover → Streamer", "[timing][integratio
     // Run until complete
     Cycle cycle = 0;
     std::vector<TimingEvent> all_events;
-    while ((!dma.is_complete() || !bm.is_complete() || !str.is_complete()) && cycle < 500) {
+    while ((!mc.is_complete() || !dma.is_complete() || !bm.is_complete() || !str.is_complete()) && cycle < 500) {
+        auto mc_events = mc.tick(cycle);
         auto dma_events = dma.tick(cycle);
         auto bm_events = bm.tick(cycle);
         auto str_events = str.tick(cycle);
+        all_events.insert(all_events.end(), mc_events.begin(), mc_events.end());
         all_events.insert(all_events.end(), dma_events.begin(), dma_events.end());
         all_events.insert(all_events.end(), bm_events.begin(), bm_events.end());
         all_events.insert(all_events.end(), str_events.begin(), str_events.end());
@@ -253,10 +271,12 @@ TEST_CASE("Full pipeline: multiple tiles with pipelining", "[timing][integration
     TagCAM l3_tag_cam(8);
     CreditPool l2_credits(16);
     TagCAM l2_tag_cam(16);
+    TagCAM compute_result_tag_cam(16);
 
-    DMAEngineProcess dma(dma_config(0), l3_credits, l3_tag_cam);
+    MemoryControllerProcess mc(mc_config(0));
+    DMAEngineProcess dma(dma_config(0), mc, l3_credits, l3_tag_cam);
     BlockMoverProcess bm(bm_config(0), l3_tag_cam, l3_credits, l2_credits, l2_tag_cam);
-    StreamerProcess str(str_config(0), l2_tag_cam, l2_credits);
+    StreamerProcess str(str_config(0), l2_tag_cam, l2_credits, compute_result_tag_cam);
 
     // Schedule 4 tiles through the full pipeline
     std::vector<TileDescriptor> tiles;
@@ -271,6 +291,7 @@ TEST_CASE("Full pipeline: multiple tiles with pipelining", "[timing][integration
     Cycle cycle = 0;
     size_t tiles_fed = 0;
     while (tiles_fed < 4 && cycle < 2000) {
+        auto mc_events = mc.tick(cycle);
         auto dma_events = dma.tick(cycle);
         auto bm_events = bm.tick(cycle);
         auto str_events = str.tick(cycle);
@@ -293,10 +314,12 @@ TEST_CASE("Full round-trip: load → compute → drain → store", "[timing][int
     TagCAM l3_tag_cam(8);
     CreditPool l2_credits(16);
     TagCAM l2_tag_cam(16);
+    TagCAM compute_result_tag_cam(16);
 
-    DMAEngineProcess dma(dma_config(0), l3_credits, l3_tag_cam);
+    MemoryControllerProcess mc(mc_config(0));
+    DMAEngineProcess dma(dma_config(0), mc, l3_credits, l3_tag_cam);
     BlockMoverProcess bm(bm_config(0), l3_tag_cam, l3_credits, l2_credits, l2_tag_cam);
-    StreamerProcess str(str_config(0), l2_tag_cam, l2_credits);
+    StreamerProcess str(str_config(0), l2_tag_cam, l2_credits, compute_result_tag_cam);
 
     // Load A tile
     auto a_tile = make_tile(MatrixID::A, 0, 0);
@@ -313,16 +336,31 @@ TEST_CASE("Full round-trip: load → compute → drain → store", "[timing][int
     // Run until complete
     Cycle cycle = 0;
     std::vector<TimingEvent> all_events;
+    bool compute_simulated = false;
     while (cycle < 2000) {
+        auto mc_events = mc.tick(cycle);
         auto dma_events = dma.tick(cycle);
         auto bm_events = bm.tick(cycle);
         auto str_events = str.tick(cycle);
+        all_events.insert(all_events.end(), mc_events.begin(), mc_events.end());
         all_events.insert(all_events.end(), dma_events.begin(), dma_events.end());
         all_events.insert(all_events.end(), bm_events.begin(), bm_events.end());
         all_events.insert(all_events.end(), str_events.begin(), str_events.end());
 
+        // Simulate compute: after A tile is fed, C tile becomes available
+        if (!compute_simulated) {
+            for (const auto& e : str_events) {
+                if (e.type == EventType::TILE_FED_TO_COMPUTE) {
+                    // Insert C tile into compute_result_tag_cam to simulate compute done
+                    compute_result_tag_cam.insert(c_tile.tile_id, 0, cycle);
+                    compute_simulated = true;
+                    break;
+                }
+            }
+        }
+
         // Check if fully complete
-        if (dma.is_complete() && bm.is_complete() && str.is_complete()) {
+        if (mc.is_complete() && dma.is_complete() && bm.is_complete() && str.is_complete()) {
             break;
         }
         cycle++;
@@ -348,10 +386,12 @@ TEST_CASE("Credit flow: credits released properly through pipeline", "[timing][i
     TagCAM l3_tag_cam(2);
     CreditPool l2_credits(2);  // Very limited L2
     TagCAM l2_tag_cam(2);
+    TagCAM compute_result_tag_cam(16);
 
-    DMAEngineProcess dma(dma_config(0), l3_credits, l3_tag_cam);
+    MemoryControllerProcess mc(mc_config(0));
+    DMAEngineProcess dma(dma_config(0), mc, l3_credits, l3_tag_cam);
     BlockMoverProcess bm(bm_config(0), l3_tag_cam, l3_credits, l2_credits, l2_tag_cam);
-    StreamerProcess str(str_config(0), l2_tag_cam, l2_credits);
+    StreamerProcess str(str_config(0), l2_tag_cam, l2_credits, compute_result_tag_cam);
 
     // Schedule more tiles than buffer capacity
     for (Size i = 0; i < 4; ++i) {
@@ -365,6 +405,7 @@ TEST_CASE("Credit flow: credits released properly through pipeline", "[timing][i
     Cycle cycle = 0;
     size_t tiles_fed = 0;
     while (tiles_fed < 4 && cycle < 5000) {
+        auto mc_events = mc.tick(cycle);
         auto dma_events = dma.tick(cycle);
         auto bm_events = bm.tick(cycle);
         auto str_events = str.tick(cycle);
@@ -380,15 +421,16 @@ TEST_CASE("Credit flow: credits released properly through pipeline", "[timing][i
 // Multi-Component Tests
 // ============================================================================
 
-TEST_CASE("Multiple DMA engines working in parallel", "[timing][integration]") {
+TEST_CASE("Multiple DMA engines sharing MC", "[timing][integration]") {
     CreditPool l3_credits(16);
     TagCAM l3_tag_cam(16);
 
-    // Create 4 DMA engines
+    // Create 1 MC shared by 4 DMA engines
+    MemoryControllerProcess mc(mc_config(0));
     std::vector<std::unique_ptr<DMAEngineProcess>> dma_engines;
     for (uint32_t i = 0; i < 4; ++i) {
         dma_engines.push_back(std::make_unique<DMAEngineProcess>(
-            dma_config(i), l3_credits, l3_tag_cam));
+            dma_config(i), mc, l3_credits, l3_tag_cam));
     }
 
     // Distribute tiles across engines
@@ -401,6 +443,7 @@ TEST_CASE("Multiple DMA engines working in parallel", "[timing][integration]") {
     Cycle cycle = 0;
     size_t tiles_loaded = 0;
     while (tiles_loaded < 16 && cycle < 1000) {
+        mc.tick(cycle);
         for (auto& engine : dma_engines) {
             auto events = engine->tick(cycle);
             tiles_loaded += count_events(events, EventType::TILE_ARRIVED_L3);

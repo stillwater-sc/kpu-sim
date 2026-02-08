@@ -11,6 +11,7 @@
 #include <sw/kpu/timing/tile_descriptor.hpp>
 #include <sw/kpu/timing/credit_pool.hpp>
 #include <sw/kpu/timing/tag_cam.hpp>
+#include <sw/kpu/timing/memory_controller_process.hpp>
 #include <sw/kpu/timing/dma_engine_process.hpp>
 #include <sw/kpu/timing/block_mover_process.hpp>
 #include <sw/kpu/timing/streamer_process.hpp>
@@ -28,9 +29,13 @@ namespace sw::kpu::timing {
  * @brief Concurrent Timing Executor for KPU data movement simulation
  *
  * The executor orchestrates multiple concurrent component processes:
- * - DMA engines: DRAM ↔ L3 transfers
+ * - Memory Controllers: DRAM access contention (command bus, bank states)
+ * - DMA engines: DRAM ↔ L3 transfers (use MCs for DRAM access)
  * - BlockMovers: L3 ↔ L2 transfers
  * - Streamers: L2 ↔ L1/Compute transfers
+ *
+ * Architecture:
+ *   DMA Engine (CSP Process) --uses--> Memory Controller (Resource)
  *
  * All components operate concurrently with credit-based flow control.
  * The executor advances simulation cycle-by-cycle, collecting timing events
@@ -43,18 +48,25 @@ public:
      */
     struct Config {
         // Grid topology configuration
-        size_t num_memory_controllers = 2;  ///< Number of memory controllers
-        size_t channels_per_mc = 2;         ///< DMA channels per memory controller
+        size_t num_memory_controllers = 1;  ///< Number of memory controllers (1 per DRAM channel)
+        size_t num_dma_engines = 1;         ///< Number of DMA engines
         size_t l3_tile_rows = 2;            ///< L3 tile grid rows (memory tiles)
         size_t l3_tile_cols = 2;            ///< L3 tile grid columns
         size_t compute_tile_rows = 2;       ///< Compute tile grid rows
         size_t compute_tile_cols = 2;       ///< Compute tile grid columns
 
-        // DMA configuration
-        size_t num_dma_engines = 4;       ///< Number of DMA engines (= num_mc * channels_per_mc)
-        size_t dma_queue_depth = 8;       ///< Max in-flight per DMA engine
-        double dma_bandwidth_gbps = 25.6; ///< DMA bandwidth per engine
-        Cycle dma_startup_latency = 10;   ///< DMA startup latency
+        // Memory Controller configuration
+        size_t mc_request_queue_depth = 32; ///< MC request queue depth
+        size_t mc_num_banks = 16;           ///< Banks per MC (LPDDR5: 4 BG × 4 banks)
+        double mc_bandwidth_gbps = 25.6;    ///< MC bandwidth per channel
+        Cycle mc_startup_latency = 5;       ///< MC command startup latency
+        Cycle mc_t_cl = 10;                 ///< CAS latency
+        Cycle mc_t_rcd = 15;                ///< RAS to CAS delay
+        Cycle mc_t_rp = 15;                 ///< Row precharge time
+        Cycle mc_t_burst = 4;               ///< Burst transfer duration
+
+        // DMA Engine configuration
+        size_t dma_queue_depth = 32;        ///< DMA request queue depth
 
         // L3 configuration
         size_t l3_buffer_count = 32;      ///< Number of L3 buffers
@@ -289,6 +301,7 @@ public:
     // Component Access (for testing/debugging)
     // ========================================================================
 
+    [[nodiscard]] size_t num_memory_controllers() const { return memory_controllers_.size(); }
     [[nodiscard]] size_t num_dma_engines() const { return dma_engines_.size(); }
     [[nodiscard]] size_t num_block_movers() const { return block_movers_.size(); }
     [[nodiscard]] size_t num_row_streamers() const { return row_streamers_.size(); }
@@ -328,6 +341,7 @@ private:
     std::set<TileID> fed_tiles_;
 
     // Component processes
+    std::vector<std::unique_ptr<MemoryControllerProcess>> memory_controllers_;
     std::vector<std::unique_ptr<DMAEngineProcess>> dma_engines_;
     std::vector<std::unique_ptr<BlockMoverProcess>> block_movers_;
     std::vector<std::unique_ptr<StreamerProcess>> row_streamers_;
@@ -402,27 +416,52 @@ inline ConcurrentTimingExecutor::ConcurrentTimingExecutor(const Config& config)
 }
 
 inline void ConcurrentTimingExecutor::create_components() {
-    // Create DMA engines with memory controller and channel assignments
-    // Each MC has channels_per_mc DMA channels
-    size_t engine_idx = 0;
-    for (size_t mc = 0; mc < config_.num_memory_controllers && engine_idx < config_.num_dma_engines; ++mc) {
-        for (size_t ch = 0; ch < config_.channels_per_mc && engine_idx < config_.num_dma_engines; ++ch, ++engine_idx) {
-            DMAEngineProcess::Config dma_config;
-            dma_config.engine_id = static_cast<uint32_t>(engine_idx);
-            dma_config.mc_id = static_cast<uint32_t>(mc);
-            dma_config.channel_id = static_cast<uint32_t>(ch);
-            dma_config.queue_depth = config_.dma_queue_depth;
-            dma_config.bandwidth_gbps = config_.dma_bandwidth_gbps;
-            dma_config.startup_latency = config_.dma_startup_latency;
-            dma_config.clock_ghz = config_.clock_ghz;
-            dma_config.name = dma_config.display_name();
+    // ========================================================================
+    // Step 1: Create Memory Controllers (DRAM access contention resource)
+    // ========================================================================
+    // Each MC models a single LPDDR5 channel with correct resource contention:
+    // - Command bus: 1 command per cycle (shared across all banks)
+    // - Bank state machines: Track open row per bank
+    // - Data bus: Occupied during burst transfers
+    for (size_t mc = 0; mc < config_.num_memory_controllers; ++mc) {
+        MemoryControllerProcess::Config mc_config;
+        mc_config.controller_id = static_cast<uint32_t>(mc);
+        mc_config.num_banks = config_.mc_num_banks;
+        mc_config.request_queue_depth = config_.mc_request_queue_depth;
+        mc_config.bandwidth_gbps = config_.mc_bandwidth_gbps;
+        mc_config.startup_latency = config_.mc_startup_latency;
+        mc_config.t_cl = config_.mc_t_cl;
+        mc_config.t_rcd = config_.mc_t_rcd;
+        mc_config.t_rp = config_.mc_t_rp;
+        mc_config.t_burst = config_.mc_t_burst;
+        mc_config.clock_ghz = config_.clock_ghz;
+        mc_config.name = mc_config.display_name();
 
-            dma_engines_.push_back(std::make_unique<DMAEngineProcess>(
-                dma_config, l3_credits_, l3_tag_cam_, l2_tag_cam_));
-        }
+        memory_controllers_.push_back(std::make_unique<MemoryControllerProcess>(mc_config));
     }
 
-    // Create BlockMovers (IDs 100+) with L3 tile grid positions
+    // ========================================================================
+    // Step 2: Create DMA Engines (CSP processes that use MCs)
+    // ========================================================================
+    // DMA engines are the programmable ISA-driven processes.
+    // They handle L3 credit/tag management and use MCs for DRAM access.
+    for (size_t dma = 0; dma < config_.num_dma_engines; ++dma) {
+        DMAEngineProcess::Config dma_config;
+        dma_config.engine_id = static_cast<uint32_t>(dma);
+        dma_config.queue_depth = config_.dma_queue_depth;
+        dma_config.name = dma_config.display_name();
+
+        // Assign DMA to MC (round-robin if more DMAs than MCs)
+        size_t mc_id = dma % memory_controllers_.size();
+
+        dma_engines_.push_back(std::make_unique<DMAEngineProcess>(
+            dma_config, *memory_controllers_[mc_id], l3_credits_, l3_tag_cam_));
+    }
+
+    // ========================================================================
+    // Step 3: Create BlockMovers (L3 ↔ L2)
+    // ========================================================================
+    // BlockMovers handle L3 tile grid positions
     // Map to 2D grid: row = i / cols, col = i % cols
     for (size_t i = 0; i < config_.num_block_movers; ++i) {
         BlockMoverProcess::Config bm_config;
@@ -441,7 +480,9 @@ inline void ConcurrentTimingExecutor::create_components() {
             bm_config, l3_tag_cam_, l3_credits_, l2_credits_, l2_tag_cam_));
     }
 
-    // Create Row Streamers (West edge - for A matrix, IDs 200+)
+    // ========================================================================
+    // Step 4: Create Row Streamers (West edge - for A matrix)
+    // ========================================================================
     // Row streamers are positioned along the West edge of the compute grid
     for (size_t i = 0; i < config_.num_row_streamers; ++i) {
         StreamerProcess::Config str_config;
@@ -461,7 +502,9 @@ inline void ConcurrentTimingExecutor::create_components() {
             str_config, l2_tag_cam_, l2_credits_, compute_result_tag_cam_));
     }
 
-    // Create Column Streamers (North edge - for B matrix, IDs 210+)
+    // ========================================================================
+    // Step 5: Create Column Streamers (North edge - for B matrix)
+    // ========================================================================
     // Column streamers are positioned along the North edge of the compute grid
     for (size_t i = 0; i < config_.num_col_streamers; ++i) {
         StreamerProcess::Config str_config;
@@ -483,17 +526,17 @@ inline void ConcurrentTimingExecutor::create_components() {
 }
 
 inline void ConcurrentTimingExecutor::schedule_load(const TileDescriptor& tile, int engine_id) {
-    uint32_t engine = (engine_id >= 0)
+    uint32_t dma = (engine_id >= 0)
         ? static_cast<uint32_t>(engine_id)
         : select_dma_engine(tile);
-    dma_engines_[engine % dma_engines_.size()]->schedule_load(tile);
+    dma_engines_[dma % dma_engines_.size()]->schedule_load(tile);
 }
 
 inline void ConcurrentTimingExecutor::schedule_store(const TileDescriptor& tile, int engine_id) {
-    uint32_t engine = (engine_id >= 0)
+    uint32_t dma = (engine_id >= 0)
         ? static_cast<uint32_t>(engine_id)
         : select_dma_engine(tile);
-    dma_engines_[engine % dma_engines_.size()]->schedule_store(tile);
+    dma_engines_[dma % dma_engines_.size()]->schedule_store(tile);
 }
 
 inline void ConcurrentTimingExecutor::schedule_move(const TileDescriptor& tile, bool transpose, int mover_id) {
@@ -567,8 +610,8 @@ inline bool ConcurrentTimingExecutor::run() {
             metrics.tiles_dma_completed = 0;
             metrics.tiles_moved = 0;
             metrics.tiles_streamed = 0;
-            for (const auto& engine : dma_engines_) {
-                metrics.tiles_dma_completed += engine->total_bytes_loaded() / 1024;
+            for (const auto& dma : dma_engines_) {
+                metrics.tiles_dma_completed += dma->total_bytes_loaded() / 1024;
             }
             for (const auto& mover : block_movers_) {
                 metrics.tiles_moved += mover->total_tiles_moved();
@@ -629,21 +672,29 @@ inline bool ConcurrentTimingExecutor::step() {
         }
     }
 
-    // Tick all components (order doesn't matter within same cycle)
+    // ========================================================================
+    // Tick all components (order matters for proper MC→DMA completion flow)
+    // ========================================================================
 
-    // 1. Tick DMA engines
-    for (auto& engine : dma_engines_) {
-        auto engine_events = engine->tick(current_cycle_);
-        events_.insert(events_.end(), engine_events.begin(), engine_events.end());
+    // 1. Tick Memory Controllers FIRST (process DRAM commands, generate completions)
+    for (auto& mc : memory_controllers_) {
+        auto mc_events = mc->tick(current_cycle_);
+        events_.insert(events_.end(), mc_events.begin(), mc_events.end());
     }
 
-    // 2. Tick BlockMovers
+    // 2. Tick DMA Engines (poll MC completions, submit new requests)
+    for (auto& dma : dma_engines_) {
+        auto dma_events = dma->tick(current_cycle_);
+        events_.insert(events_.end(), dma_events.begin(), dma_events.end());
+    }
+
+    // 3. Tick BlockMovers
     for (auto& mover : block_movers_) {
         auto mover_events = mover->tick(current_cycle_);
         events_.insert(events_.end(), mover_events.begin(), mover_events.end());
     }
 
-    // 3. Tick Row Streamers
+    // 4. Tick Row Streamers
     for (auto& streamer : row_streamers_) {
         auto str_events = streamer->tick(current_cycle_);
         // Track tiles that have been fed to compute
@@ -655,7 +706,7 @@ inline bool ConcurrentTimingExecutor::step() {
         events_.insert(events_.end(), str_events.begin(), str_events.end());
     }
 
-    // 4. Tick Column Streamers
+    // 5. Tick Column Streamers
     for (auto& streamer : col_streamers_) {
         auto str_events = streamer->tick(current_cycle_);
         // Track tiles that have been fed to compute
@@ -675,18 +726,30 @@ inline bool ConcurrentTimingExecutor::step() {
 
 inline bool ConcurrentTimingExecutor::is_complete() const {
     // Complete when all queues are empty and no in-flight work
-    for (const auto& engine : dma_engines_) {
-        if (!engine->is_idle() || engine->has_pending_work()) return false;
+
+    // Check MCs (should be idle when DMA is complete)
+    for (const auto& mc : memory_controllers_) {
+        if (!mc->is_idle() || mc->has_pending_work()) return false;
     }
+
+    // Check DMA engines
+    for (const auto& dma : dma_engines_) {
+        if (!dma->is_idle() || dma->has_pending_work()) return false;
+    }
+
+    // Check BlockMovers
     for (const auto& mover : block_movers_) {
         if (!mover->is_idle() || mover->has_pending_work()) return false;
     }
+
+    // Check Streamers
     for (const auto& streamer : row_streamers_) {
         if (!streamer->is_idle() || streamer->has_pending_work()) return false;
     }
     for (const auto& streamer : col_streamers_) {
         if (!streamer->is_idle() || streamer->has_pending_work()) return false;
     }
+
     return true;
 }
 
@@ -702,8 +765,11 @@ inline void ConcurrentTimingExecutor::reset() {
     pending_computes_.clear();
     fed_tiles_.clear();
 
-    for (auto& engine : dma_engines_) {
-        engine->reset();
+    for (auto& mc : memory_controllers_) {
+        mc->reset();
+    }
+    for (auto& dma : dma_engines_) {
+        dma->reset();
     }
     for (auto& mover : block_movers_) {
         mover->reset();
@@ -733,11 +799,11 @@ inline ConcurrentTimingExecutor::Statistics ConcurrentTimingExecutor::get_statis
 }
 
 inline void ConcurrentTimingExecutor::collect_statistics(Statistics& stats) const {
-    // Aggregate from DMA engines
-    for (const auto& engine : dma_engines_) {
-        stats.dma_credit_stalls += engine->stall_cycles();
-        stats.bytes_loaded += engine->total_bytes_loaded();
-        stats.bytes_stored += engine->total_bytes_stored();
+    // Aggregate from DMA Engines
+    for (const auto& dma : dma_engines_) {
+        stats.dma_credit_stalls += dma->stall_cycles_credit();
+        stats.bytes_loaded += dma->total_bytes_loaded();
+        stats.bytes_stored += dma->total_bytes_stored();
     }
 
     // Aggregate from BlockMovers
@@ -791,8 +857,8 @@ inline void ConcurrentTimingExecutor::collect_statistics(Statistics& stats) cons
 
 inline size_t ConcurrentTimingExecutor::count_completed_tiles() const {
     size_t count = 0;
-    for (const auto& engine : dma_engines_) {
-        count += engine->total_bytes_loaded() / 1024;  // Approximate tile count
+    for (const auto& dma : dma_engines_) {
+        count += dma->total_bytes_loaded() / 1024;  // Approximate tile count
     }
     for (const auto& mover : block_movers_) {
         count += mover->total_tiles_moved();
@@ -805,10 +871,11 @@ inline size_t ConcurrentTimingExecutor::count_completed_tiles() const {
 
 inline uint32_t ConcurrentTimingExecutor::select_dma_engine(const TileDescriptor& tile) const {
     // Strategy: Round-robin for load balancing
-    uint32_t engine = next_dma_engine_;
+    // For multi-DMA configs, could also use matrix-based assignment
+    uint32_t dma = next_dma_engine_;
     next_dma_engine_ = (next_dma_engine_ + 1) % static_cast<uint32_t>(dma_engines_.size());
-    (void)tile;  // Could use tile info for smarter selection
-    return engine;
+    (void)tile;  // Could use tile matrix for assignment
+    return dma;
 }
 
 inline uint32_t ConcurrentTimingExecutor::select_block_mover(const TileDescriptor& tile) const {
@@ -841,24 +908,36 @@ inline void ConcurrentTimingExecutor::export_chrome_trace(const std::string& fil
 
     // ========================================================================
     // Emit process and thread metadata first for human-readable trace display
-    // Sort order follows dataflow: DMA → BlockMover → Streamer (top to bottom)
+    // Sort order follows dataflow: MC → DMA → BlockMover → Streamer (top to bottom)
     // ========================================================================
 
     // Process name with grid topology info
     file << "{\"name\":\"process_name\",\"ph\":\"M\",\"pid\":1,\"tid\":0,\"args\":{\"name\":\"KPU CSP Executor ("
          << config_.num_memory_controllers << " MCs, "
+         << config_.num_dma_engines << " DMAs, "
          << config_.l3_tile_rows << "x" << config_.l3_tile_cols << " L3 tiles, "
          << config_.compute_tile_rows << "x" << config_.compute_tile_cols << " CTs)\"}}";
 
-    // DMA Channel threads - use component names with MC:CH format
-    for (size_t i = 0; i < dma_engines_.size(); ++i) {
-        const auto& engine = dma_engines_[i];
+    // Memory Controller threads
+    for (size_t i = 0; i < memory_controllers_.size(); ++i) {
+        const auto& mc = memory_controllers_[i];
         file << ",\n";
         file << "{\"name\":\"thread_name\",\"ph\":\"M\",\"pid\":1,\"tid\":" << i
-             << ",\"args\":{\"name\":\"" << engine->name() << " (depth=" << config_.dma_queue_depth << ")\"}}";
+             << ",\"args\":{\"name\":\"" << mc->name() << " (banks=" << config_.mc_num_banks << ")\"}}";
         file << ",\n";
         file << "{\"name\":\"thread_sort_index\",\"ph\":\"M\",\"pid\":1,\"tid\":" << i
              << ",\"args\":{\"sort_index\":" << i << "}}";
+    }
+
+    // DMA Engine threads
+    for (size_t i = 0; i < dma_engines_.size(); ++i) {
+        const auto& dma = dma_engines_[i];
+        file << ",\n";
+        file << "{\"name\":\"thread_name\",\"ph\":\"M\",\"pid\":1,\"tid\":" << (50 + i)
+             << ",\"args\":{\"name\":\"" << dma->name() << "\"}}";
+        file << ",\n";
+        file << "{\"name\":\"thread_sort_index\",\"ph\":\"M\",\"pid\":1,\"tid\":" << (50 + i)
+             << ",\"args\":{\"sort_index\":" << (5 + i) << "}}";
     }
 
     // BlockMover threads - use component names with L3(row,col):BM format

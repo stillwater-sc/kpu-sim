@@ -220,7 +220,7 @@ int main(int argc, char* argv[]) {
     std::cout << "\nConfiguring ConcurrentTimingExecutor...\n";
 
     ConcurrentTimingExecutor::Config exec_config;
-    exec_config.num_dma_engines = 4;
+    exec_config.num_memory_controllers = 1;  // Single MC with correct command bus constraint
     exec_config.l3_buffer_count = l3_buffers;
     exec_config.num_block_movers = 4;
     exec_config.l2_bank_count = 64;
@@ -230,7 +230,7 @@ int main(int argc, char* argv[]) {
     exec_config.enable_livelock_detection = true;
     exec_config.livelock_threshold = livelock_threshold;
 
-    std::cout << "  DMA engines: " << exec_config.num_dma_engines << "\n";
+    std::cout << "  Memory controllers: " << exec_config.num_memory_controllers << "\n";
     std::cout << "  L3 buffers: " << exec_config.l3_buffer_count << "\n";
     std::cout << "  BlockMovers: " << exec_config.num_block_movers << "\n";
     std::cout << "  L2 banks: " << exec_config.l2_bank_count << "\n";

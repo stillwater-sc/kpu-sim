@@ -20,6 +20,13 @@ set_target_properties(run_matmul PROPERTIES
     FOLDER "Examples/Schedule"
 )
 
+# CSP Pipeline Educational Demo - shows credit/debit flow and TagCAM operations
+add_executable(csp_pipeline_demo csp_pipeline_demo.cpp)
+target_link_libraries(csp_pipeline_demo PRIVATE kpu_simulator)
+set_target_properties(csp_pipeline_demo PROPERTIES
+    FOLDER "Examples/Schedule"
+)
+
 # DEPRECATED: Example of incorrect timing model usage
 # This demonstrates what NOT to do - kept for educational purposes
 add_executable(run_matmul_DEPRECATED run_matmul_DEPRECATED.cpp)

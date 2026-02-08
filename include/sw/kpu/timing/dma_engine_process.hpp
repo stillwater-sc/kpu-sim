@@ -2,6 +2,15 @@
 // include/sw/kpu/timing/dma_engine_process.hpp
 // DMA Engine Process for CSP-style concurrent timing simulation
 //
+// The DMA Engine is a programmable ISA-driven process that:
+// - Executes data movement operations (LOAD/STORE tiles)
+// - Manages L3 credit acquisition and release
+// - Tracks tile arrivals in L3 TagCAM
+// - Uses a Memory Controller for actual DRAM access contention
+//
+// Architecture:
+//   DMA Engine (CSP Process) --uses--> Memory Controller (Resource)
+//
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2024-2025 Stillwater Supercomputing, Inc.
 // ============================================================================
@@ -12,6 +21,7 @@
 #include <sw/kpu/timing/credit_pool.hpp>
 #include <sw/kpu/timing/tag_cam.hpp>
 #include <sw/kpu/timing/work_queue.hpp>
+#include <sw/kpu/timing/memory_controller_process.hpp>
 
 #include <cmath>
 #include <optional>
@@ -26,14 +36,16 @@ namespace sw::kpu::timing {
  * - Loading tiles from DRAM to L3 (requires L3 credit)
  * - Storing tiles from L3 to DRAM (requires tile in L3 TagCAM)
  *
+ * The DMA engine uses a Memory Controller for actual DRAM access. Multiple
+ * DMA engines can share a single MC (realistic for multi-channel configs).
+ *
  * Credit flow:
- * - LOAD: Must acquire L3 credit before starting (buffer space needed)
- * - STORE: Must match tile in L3 TagCAM, then invalidate and release credit
+ * - LOAD: Must acquire L3 credit before submitting to MC (buffer space needed)
+ * - STORE: Must match tile in L3 TagCAM before submitting to MC
  *
  * Concurrency:
- * - Supports multiple outstanding transfers (queue_depth)
- * - Each DMA engine is independent
- * - Multiple engines can be used for A, B, C matrices
+ * - DMA engine queues requests, MC processes them with contention
+ * - Multiple DMA engines can share one MC
  */
 class DMAEngineProcess : public IProcess {
 public:
@@ -42,43 +54,52 @@ public:
      */
     struct Config {
         uint32_t engine_id = 0;        ///< Unique engine identifier
-        uint32_t mc_id = 0;            ///< Memory controller ID (0-N)
-        uint32_t channel_id = 0;       ///< Channel within MC (0-M)
-        Size bus_width_bytes = 64;     ///< Bus width in bytes (64B = 512-bit)
-        Cycle startup_latency = 10;    ///< Cycles to start a transfer
-        double bandwidth_gbps = 25.6;  ///< Bandwidth per channel in GB/s
-        double clock_ghz = 1.0;        ///< Reference clock in GHz
-        size_t queue_depth = 8;        ///< Max pending requests in queue (not concurrent transfers)
+        size_t queue_depth = 32;       ///< Max pending requests in queue
         std::string name = "DMA";      ///< Human-readable name
 
-        /// Generate human-readable name: "MC0:CH0" format
+        /// Generate human-readable name
         std::string display_name() const {
-            return "MC" + std::to_string(mc_id) + ":CH" + std::to_string(channel_id);
+            return "DMA" + std::to_string(engine_id);
         }
+    };
+
+    /**
+     * @brief Pending request state
+     */
+    enum class RequestState {
+        WAITING_CREDIT,   ///< Load waiting for L3 credit
+        WAITING_TAG,      ///< Store waiting for tile in L3
+        SUBMITTED,        ///< Submitted to MC, waiting for completion
+        COMPLETED         ///< Completed (will be removed)
+    };
+
+    /**
+     * @brief Pending request tracking
+     */
+    struct PendingRequest {
+        TileDescriptor tile;
+        bool is_load;
+        RequestState state;
+        Cycle enqueue_cycle;
+        uint32_t slot_id = 0;    ///< L3 slot for this tile (for loads)
     };
 
     /**
      * @brief Construct a DMA engine process
      * @param config Engine configuration
+     * @param mc Reference to shared Memory Controller
      * @param l3_credits Credit pool for L3 buffers (shared)
      * @param l3_tag_cam Tag CAM for L3 tile tracking (shared)
-     * @param l2_tag_cam Tag CAM for L2 tile tracking (for downstream check)
      */
     DMAEngineProcess(const Config& config,
+                     MemoryControllerProcess& mc,
                      CreditPool& l3_credits,
-                     TagCAM& l3_tag_cam,
-                     TagCAM& l2_tag_cam)
+                     TagCAM& l3_tag_cam)
         : config_(config),
+          mc_(mc),
           l3_credits_(l3_credits),
           l3_tag_cam_(l3_tag_cam),
-          l2_tag_cam_(l2_tag_cam),
-          load_queue_(config.queue_depth * 4),  // Allow some buffering
-          store_queue_(config.queue_depth * 4),
           next_slot_id_(0) {
-        // Compute cycles per byte based on bandwidth and clock
-        // bandwidth_gbps * 1e9 bytes/sec / (clock_ghz * 1e9 cycles/sec) = bytes/cycle
-        double bytes_per_cycle = config_.bandwidth_gbps / config_.clock_ghz;
-        cycles_per_byte_ = 1.0 / bytes_per_cycle;
     }
 
     /**
@@ -87,12 +108,20 @@ public:
      *
      * The tile will be loaded when:
      * 1. An L3 credit is available
-     * 2. Queue depth allows another in-flight transfer
+     * 2. MC can accept the request
      */
     void schedule_load(const TileDescriptor& tile) {
-        TileDescriptor t = tile;
-        t.enqueue_cycle = current_cycle_;
-        load_queue_.enqueue(t);
+        if (pending_requests_.size() >= config_.queue_depth) {
+            return;  // Queue full
+        }
+
+        PendingRequest req;
+        req.tile = tile;
+        req.is_load = true;
+        req.state = RequestState::WAITING_CREDIT;
+        req.enqueue_cycle = current_cycle_;
+
+        pending_requests_.push_back(req);
     }
 
     /**
@@ -101,12 +130,20 @@ public:
      *
      * The tile will be stored when:
      * 1. The tile is present in L3 (TagCAM match)
-     * 2. Queue depth allows another in-flight transfer
+     * 2. MC can accept the request
      */
     void schedule_store(const TileDescriptor& tile) {
-        TileDescriptor t = tile;
-        t.enqueue_cycle = current_cycle_;
-        store_queue_.enqueue(t);
+        if (pending_requests_.size() >= config_.queue_depth) {
+            return;  // Queue full
+        }
+
+        PendingRequest req;
+        req.tile = tile;
+        req.is_load = false;
+        req.state = RequestState::WAITING_TAG;
+        req.enqueue_cycle = current_cycle_;
+
+        pending_requests_.push_back(req);
     }
 
     /**
@@ -116,24 +153,42 @@ public:
         current_cycle_ = current_cycle;
         std::vector<TimingEvent> events;
 
-        // Step 1: Check for completed transfers
-        check_completions(current_cycle, events);
+        // Step 1: Check for completed transfers from MC
+        process_mc_completions(events);
 
-        // Step 2: Try to issue new loads
-        try_issue_loads(current_cycle, events);
+        // Step 2: Try to acquire credits and submit new loads
+        process_pending_loads(events);
 
-        // Step 3: Try to issue new stores
-        try_issue_stores(current_cycle, events);
+        // Step 3: Try to match tags and submit new stores
+        process_pending_stores(events);
+
+        // Step 4: Remove completed requests
+        remove_completed_requests();
 
         return events;
     }
 
     [[nodiscard]] bool is_idle() const override {
-        return in_flight_.empty();
+        // DMA is idle if no requests are submitted to MC
+        bool has_submitted = false;
+        for (const auto& req : pending_requests_) {
+            if (req.state == RequestState::SUBMITTED) {
+                has_submitted = true;
+                break;
+            }
+        }
+        return !has_submitted;
     }
 
     [[nodiscard]] bool has_pending_work() const override {
-        return !load_queue_.empty() || !store_queue_.empty();
+        return !pending_requests_.empty();
+    }
+
+    /**
+     * @brief Check if DMA engine is complete (no pending or in-flight work)
+     */
+    [[nodiscard]] bool is_complete() const {
+        return pending_requests_.empty();
     }
 
     [[nodiscard]] uint32_t id() const override {
@@ -141,15 +196,14 @@ public:
     }
 
     [[nodiscard]] std::string name() const override {
-        return config_.name;  // Uses display_name() set during creation
+        return config_.name;
     }
 
     void reset() override {
-        load_queue_.reset();
-        store_queue_.reset();
-        in_flight_.clear();
+        pending_requests_.clear();
         next_slot_id_ = 0;
-        stall_cycles_ = 0;
+        stall_cycles_credit_ = 0;
+        stall_cycles_tag_ = 0;
         total_bytes_loaded_ = 0;
         total_bytes_stored_ = 0;
     }
@@ -158,20 +212,28 @@ public:
     // Statistics
     // ========================================================================
 
-    [[nodiscard]] size_t in_flight_count() const {
-        return in_flight_.size();
+    [[nodiscard]] size_t pending_count() const {
+        return pending_requests_.size();
     }
 
-    [[nodiscard]] size_t load_queue_depth() const {
-        return load_queue_.size();
+    [[nodiscard]] size_t submitted_count() const {
+        size_t count = 0;
+        for (const auto& req : pending_requests_) {
+            if (req.state == RequestState::SUBMITTED) count++;
+        }
+        return count;
     }
 
-    [[nodiscard]] size_t store_queue_depth() const {
-        return store_queue_.size();
+    [[nodiscard]] Cycle stall_cycles_credit() const {
+        return stall_cycles_credit_;
+    }
+
+    [[nodiscard]] Cycle stall_cycles_tag() const {
+        return stall_cycles_tag_;
     }
 
     [[nodiscard]] Cycle stall_cycles() const {
-        return stall_cycles_;
+        return stall_cycles_credit_ + stall_cycles_tag_;
     }
 
     [[nodiscard]] size_t total_bytes_loaded() const {
@@ -188,248 +250,174 @@ public:
 
 private:
     Config config_;
+    MemoryControllerProcess& mc_;
     CreditPool& l3_credits_;
     TagCAM& l3_tag_cam_;
-    TagCAM& l2_tag_cam_;
 
-    WorkQueue<TileDescriptor> load_queue_;
-    WorkQueue<TileDescriptor> store_queue_;
-    std::vector<InFlightTransfer> in_flight_;
+    std::vector<PendingRequest> pending_requests_;
 
     Cycle current_cycle_ = 0;
     uint32_t next_slot_id_ = 0;
-    double cycles_per_byte_ = 0.04;  // ~25 bytes/cycle at 25.6 GB/s @ 1GHz
 
     // Statistics
-    Cycle stall_cycles_ = 0;
+    Cycle stall_cycles_credit_ = 0;
+    Cycle stall_cycles_tag_ = 0;
     size_t total_bytes_loaded_ = 0;
     size_t total_bytes_stored_ = 0;
 
     /**
-     * @brief Compute transfer time in cycles
+     * @brief Process completed transfers from MC
      */
-    [[nodiscard]] Cycle compute_transfer_cycles(Size bytes) const {
-        // Transfer time = startup + data transfer
-        Cycle data_cycles = static_cast<Cycle>(std::ceil(bytes * cycles_per_byte_));
-        return config_.startup_latency + data_cycles;
-    }
+    void process_mc_completions(std::vector<TimingEvent>& events) {
+        // Only poll for our own completions using our engine_id
+        while (auto completed = mc_.get_completed_transfer(config_.engine_id)) {
+            // Find matching pending request
+            for (auto& req : pending_requests_) {
+                if (req.state == RequestState::SUBMITTED &&
+                    req.tile.tile_id == completed->tile.tile_id &&
+                    req.is_load == completed->is_load) {
 
-    /**
-     * @brief Check for and process completed transfers
-     */
-    void check_completions(Cycle current_cycle, std::vector<TimingEvent>& events) {
-        auto it = in_flight_.begin();
-        while (it != in_flight_.end()) {
-            if (it->is_complete(current_cycle)) {
-                if (it->is_load) {
-                    // Load complete: tile arrived at L3
-                    // TagCAM now supports reference counting for duplicate tiles
-                    l3_tag_cam_.insert(it->tile.tile_id, it->slot_id, current_cycle);
-                    total_bytes_loaded_ += it->tile.size_bytes;
+                    if (completed->is_load) {
+                        // Load complete: tile arrived at L3
+                        l3_tag_cam_.insert(completed->tile.tile_id, req.slot_id, current_cycle_);
+                        total_bytes_loaded_ += completed->tile.size_bytes;
 
-                    auto event = TimingEvent::duration_event(
-                        EventType::DMA_LOAD_COMPLETE,
-                        it->start_cycle,
-                        it->duration(),
-                        config_.engine_id,
-                        it->tile.tile_id,
-                        name()
-                    );
-                    event.slot_id = it->slot_id;
-                    event.matrix_base_address = it->tile.matrix_base_address;
-                    event.dram_address = it->tile.dram_address;
-                    events.push_back(event);
+                        events.push_back(TimingEvent(
+                            EventType::TILE_ARRIVED_L3,
+                            current_cycle_,
+                            config_.engine_id,
+                            completed->tile.tile_id,
+                            name()
+                        ));
+                    } else {
+                        // Store complete: tile written to DRAM
+                        total_bytes_stored_ += completed->tile.size_bytes;
 
-                    auto arrived = TimingEvent(
-                        EventType::TILE_ARRIVED_L3,
-                        current_cycle,
-                        config_.engine_id,
-                        it->tile.tile_id,
-                        name()
-                    );
-                    arrived.slot_id = it->slot_id;
-                    arrived.matrix_base_address = it->tile.matrix_base_address;
-                    events.push_back(arrived);
-                } else {
-                    // Store complete: tile written to DRAM
-                    total_bytes_stored_ += it->tile.size_bytes;
+                        // Invalidate tile in L3 and release credit
+                        bool released = l3_tag_cam_.invalidate(completed->tile.tile_id);
+                        if (released) {
+                            l3_credits_.release();
+                            events.push_back(TimingEvent(
+                                EventType::CREDIT_RELEASED,
+                                current_cycle_,
+                                config_.engine_id,
+                                completed->tile.tile_id,
+                                name()
+                            ));
+                        }
+                    }
 
-                    auto event = TimingEvent::duration_event(
-                        EventType::DMA_STORE_COMPLETE,
-                        it->start_cycle,
-                        it->duration(),
-                        config_.engine_id,
-                        it->tile.tile_id,
-                        name()
-                    );
-                    event.matrix_base_address = it->tile.matrix_base_address;
-                    event.dram_address = it->tile.dram_address;
-                    events.push_back(event);
+                    req.state = RequestState::COMPLETED;
+                    break;
                 }
-                it = in_flight_.erase(it);
-            } else {
-                ++it;
             }
         }
     }
 
     /**
-     * @brief Try to issue new load transfers
-     *
-     * A DMA channel can only perform ONE transfer at a time.
-     * The queue buffers pending requests, but only one is in-flight.
+     * @brief Try to acquire credits and submit pending loads to MC
      */
-    void try_issue_loads(Cycle current_cycle, std::vector<TimingEvent>& events) {
-        // Only issue if no transfer is currently in-flight
-        while (!load_queue_.empty() && in_flight_.empty()) {
-            const TileDescriptor& peek_tile = load_queue_.peek();
+    void process_pending_loads(std::vector<TimingEvent>& events) {
+        for (auto& req : pending_requests_) {
+            if (!req.is_load || req.state != RequestState::WAITING_CREDIT) {
+                continue;
+            }
 
             // Check if tile is already in L3 (supports tile reuse)
-            if (l3_tag_cam_.lookup(peek_tile.tile_id)) {
+            if (l3_tag_cam_.lookup(req.tile.tile_id)) {
                 // Tile already in L3 - just increment ref_count, no credit needed
-                TileDescriptor tile = load_queue_.dequeue();
-                auto entry = l3_tag_cam_.match(tile.tile_id);
-                // Insert increments ref_count for existing tiles
-                l3_tag_cam_.insert(tile.tile_id, entry->slot_id, current_cycle);
+                auto entry = l3_tag_cam_.match(req.tile.tile_id);
+                l3_tag_cam_.insert(req.tile.tile_id, entry->slot_id, current_cycle_);
 
-                auto event = TimingEvent(
-                    EventType::TILE_ARRIVED_L3,  // Tile already there
-                    current_cycle,
+                events.push_back(TimingEvent(
+                    EventType::TILE_ARRIVED_L3,
+                    current_cycle_,
                     config_.engine_id,
-                    tile.tile_id,
+                    req.tile.tile_id,
                     name()
-                );
-                event.slot_id = entry->slot_id;
-                event.matrix_base_address = tile.matrix_base_address;
-                events.push_back(event);
-                continue;  // Process next tile
+                ));
+
+                req.state = RequestState::COMPLETED;
+                continue;
             }
 
-            // Tile not in L3 - need to load it from DRAM
-            // Need L3 credit to proceed
+            // Need L3 credit
             if (!l3_credits_.acquire()) {
-                // Stalled on credit
-                auto event = TimingEvent(
+                events.push_back(TimingEvent(
                     EventType::DMA_STALL_CREDIT,
-                    current_cycle,
+                    current_cycle_,
                     config_.engine_id,
-                    peek_tile.tile_id,
+                    req.tile.tile_id,
                     name()
-                );
-                event.matrix_base_address = peek_tile.matrix_base_address;
-                events.push_back(event);
-                stall_cycles_++;
-                break;
+                ));
+                stall_cycles_credit_++;
+                continue;  // Try other requests
             }
 
-            // Got credit - issue the load
-            TileDescriptor tile = load_queue_.dequeue();
-            Cycle transfer_cycles = compute_transfer_cycles(tile.size_bytes);
-            uint32_t slot = allocate_slot();
+            // Got credit - submit to MC with our engine_id
+            req.slot_id = allocate_slot();
+            if (!mc_.submit_request(req.tile, true, config_.engine_id)) {
+                // MC queue full - release credit and retry later
+                l3_credits_.release();
+                continue;
+            }
 
-            in_flight_.emplace_back(
-                tile,
-                current_cycle,
-                current_cycle + transfer_cycles,
-                slot,
-                true  // is_load
-            );
+            req.state = RequestState::SUBMITTED;
 
-            auto start_event = TimingEvent(
-                EventType::DMA_LOAD_START,
-                current_cycle,
-                config_.engine_id,
-                tile.tile_id,
-                name()
-            );
-            start_event.slot_id = slot;
-            start_event.matrix_base_address = tile.matrix_base_address;
-            start_event.dram_address = tile.dram_address;
-            events.push_back(start_event);
-
-            auto credit_event = TimingEvent(
+            events.push_back(TimingEvent(
                 EventType::CREDIT_ACQUIRED,
-                current_cycle,
+                current_cycle_,
                 config_.engine_id,
-                tile.tile_id,
+                req.tile.tile_id,
                 name()
-            );
-            credit_event.matrix_base_address = tile.matrix_base_address;
-            events.push_back(credit_event);
+            ));
         }
     }
 
     /**
-     * @brief Try to issue new store transfers
-     *
-     * A DMA channel can only perform ONE transfer at a time.
+     * @brief Try to match tags and submit pending stores to MC
      */
-    void try_issue_stores(Cycle current_cycle, std::vector<TimingEvent>& events) {
-        // Only issue if no transfer is currently in-flight
-        while (!store_queue_.empty() && in_flight_.empty()) {
-            const TileDescriptor& tile = store_queue_.peek();
+    void process_pending_stores(std::vector<TimingEvent>& events) {
+        for (auto& req : pending_requests_) {
+            if (req.is_load || req.state != RequestState::WAITING_TAG) {
+                continue;
+            }
 
             // Need tile to be in L3 (TagCAM match)
-            auto entry = l3_tag_cam_.match(tile.tile_id);
+            auto entry = l3_tag_cam_.match(req.tile.tile_id);
             if (!entry.has_value()) {
-                // Stalled on tag match - tile not yet in L3
-                auto event = TimingEvent(
-                    EventType::DMA_STALL_CREDIT,  // Using same event, could add DMA_STALL_TAG
-                    current_cycle,
+                events.push_back(TimingEvent(
+                    EventType::DMA_STALL_TAG,
+                    current_cycle_,
                     config_.engine_id,
-                    tile.tile_id,
+                    req.tile.tile_id,
                     name()
-                );
-                event.matrix_base_address = tile.matrix_base_address;
-                events.push_back(event);
-                stall_cycles_++;
-                break;
+                ));
+                stall_cycles_tag_++;
+                continue;  // Try other requests
             }
 
-            // Tile is in L3 - start the store
-            TileDescriptor store_tile = store_queue_.dequeue();
-            Cycle transfer_cycles = compute_transfer_cycles(store_tile.size_bytes);
-            uint32_t slot = entry->slot_id;
-
-            // Invalidate tile in L3 (it's being written back)
-            // Only release L3 credit if tile was fully removed (ref_count reached 0)
-            bool credit_released = l3_tag_cam_.invalidate(store_tile.tile_id);
-            if (credit_released) {
-                l3_credits_.release();
+            // Tile is in L3 - submit to MC with our engine_id
+            if (!mc_.submit_request(req.tile, false, config_.engine_id)) {
+                // MC queue full - retry later
+                continue;
             }
 
-            in_flight_.emplace_back(
-                store_tile,
-                current_cycle,
-                current_cycle + transfer_cycles,
-                slot,
-                false  // is_store
-            );
-
-            auto start_event = TimingEvent(
-                EventType::DMA_STORE_START,
-                current_cycle,
-                config_.engine_id,
-                store_tile.tile_id,
-                name()
-            );
-            start_event.matrix_base_address = store_tile.matrix_base_address;
-            start_event.dram_address = store_tile.dram_address;
-            events.push_back(start_event);
-
-            if (credit_released) {
-                auto release_event = TimingEvent(
-                    EventType::CREDIT_RELEASED,
-                    current_cycle,
-                    config_.engine_id,
-                    store_tile.tile_id,
-                    name()
-                );
-                release_event.slot_id = slot;
-                release_event.matrix_base_address = store_tile.matrix_base_address;
-                events.push_back(release_event);
-            }
+            req.state = RequestState::SUBMITTED;
         }
+    }
+
+    /**
+     * @brief Remove completed requests from the list
+     */
+    void remove_completed_requests() {
+        pending_requests_.erase(
+            std::remove_if(pending_requests_.begin(), pending_requests_.end(),
+                [](const PendingRequest& req) {
+                    return req.state == RequestState::COMPLETED;
+                }),
+            pending_requests_.end()
+        );
     }
 
     /**
