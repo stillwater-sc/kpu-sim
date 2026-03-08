@@ -2,6 +2,19 @@
 
 This document provides guidance for Claude Code when working on the KPU-SIM project.
 
+## Quick Commands (Project Skills)
+
+| Command | What It Does |
+|---------|-------------|
+| `/build-test` | Build + run all timing tests, report results |
+| `/test-status` | Quick project health check (build, tests, git) |
+| `/fix-tests` | Find and fix all failing tests systematically |
+| `/validate-architecture` | Audit for credit/dataflow violations |
+| `/new-csp-process <name>` | Generate new CSP component with tests |
+| `/plan <feature>` | Create design plan in docs/plans/ |
+| `/trace-check` | Validate all generated trace files |
+| `/wrapup` | Create changelog + session log |
+
 ## Repository Purpose: Multi-Fidelity Simulation
 
 **READ THIS FIRST** - The KPU simulator is a **multi-fidelity simulation environment**
