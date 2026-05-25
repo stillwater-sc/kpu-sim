@@ -434,3 +434,53 @@
 
   Ready to push to origin when you're ready: git push origin main
 
+● Summary
+
+  I've addressed all the issues and enhancement requests. Here's what was implemented:
+
+  1. Timestamp 0 Behavior Explained
+
+  8 DMA requests at cycle 0: Each DMA channel has queue_depth=8, allowing 8 concurrent in-flight transfers. With 64 L3 buffers (ample credits), all 8 slots issue immediately.
+
+  BlockMover/Streamer "transactions" at cycle 0: These are BM_STALL_TAG and STR_STALL_TAG events (instant markers), NOT actual transfers. They correctly show components waiting for tiles to arrive.
+
+  2. Grid Topology Naming
+  ┌──────────────┬──────────────────┬───────────────────────────────────────────────────┐
+  │  Component   │     Old Name     │                     New Name                      │
+  ├──────────────┼──────────────────┼───────────────────────────────────────────────────┤
+  │ DMA          │ "DMA Channel 0"  │ "MC0:CH0 (depth=8)"                               │
+  ├──────────────┼──────────────────┼───────────────────────────────────────────────────┤
+  │ BlockMover   │ "BlockMover 0"   │ "L3(0,0):BM"                                      │
+  ├──────────────┼──────────────────┼───────────────────────────────────────────────────┤
+  │ Row Streamer │ "Row Streamer 0" │ "CT(0,0):RowSTR - A matrix"                       │
+  ├──────────────┼──────────────────┼───────────────────────────────────────────────────┤
+  │ Col Streamer │ "Col Streamer 0" │ "CT(0,0):ColSTR - B matrix"                       │
+  ├──────────────┼──────────────────┼───────────────────────────────────────────────────┤
+  │ Process      │ generic          │ "KPU CSP Executor (2 MCs, 2x2 L3 tiles, 2x2 CTs)" │
+  └──────────────┴──────────────────┴───────────────────────────────────────────────────┘
+  3. Matrix Base Addresses
+
+  Tile events now include:
+  {"tile":"A[0,0,0]","base":"0x1000","addr":"0x1400"}
+  - base: Matrix base address in DRAM (A @ 0x1000, B @ 0x100000, C @ 0x200000)
+  - addr: Tile DRAM address
+
+  Files Modified
+
+  - tile_descriptor.hpp: Added GridPosition, matrix_base_address
+  - dma_engine_process.hpp: MC/channel config, base addr in events
+  - block_mover_process.hpp: L3 grid position config
+  - streamer_process.hpp: Compute tile grid position config
+  - concurrent_timing_executor.hpp: Grid topology config, enhanced trace
+  - matmul_schedule_generator.hpp: Set matrix_base_address
+  - run_matmul.cpp: Set A/B/C base addresses
+
+  Commits (10 ahead of origin)
+
+  453c99b Update documentation with grid topology enhancements
+  aa04849 Add grid topology and base addresses to Chrome trace
+  ...
+  45a7bff Fix CreditPool double-release bug with TagCAM reference counting
+
+  All 202 test assertions pass (80 + 83 + 39 across timing test suites).
+

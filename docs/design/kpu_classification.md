@@ -1,14 +1,8 @@
 # KPU Compute Fabric classifications
 
-
-
 Based on the Stillwater Supercomputing Domain Flow methodology for systolic arrays, here are five different naming conventions for classifying the array topology by the **SURE**, the timing vector **τ**, and the projection transformation **S**.
 
-
-
 ***
-
-
 
 ### 1. The Triplet Designation
 
