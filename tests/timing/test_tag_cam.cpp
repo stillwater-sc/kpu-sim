@@ -44,13 +44,15 @@ TEST_CASE("TagCAM insert", "[timing][tag_cam]") {
         REQUIRE_FALSE(cam.empty());
     }
 
-    SECTION("Insert rejects duplicate") {
+    SECTION("Insert duplicate increments ref count (tile reuse)") {
         TagCAM cam(4);
         TileID tile = make_tile(MatrixID::A, 0, 0);
 
         REQUIRE(cam.insert(tile, 2, 100));
-        REQUIRE_FALSE(cam.insert(tile, 3, 200));  // Duplicate
-        REQUIRE(cam.size() == 1);
+        REQUIRE(cam.ref_count(tile) == 1);
+        REQUIRE(cam.insert(tile, 3, 200));  // Duplicate -> ref_count++
+        REQUIRE(cam.size() == 1);           // Still one entry
+        REQUIRE(cam.ref_count(tile) == 2);
     }
 
     SECTION("Insert rejects when full") {

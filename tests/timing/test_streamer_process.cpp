@@ -36,7 +36,7 @@ static StreamerProcess::Config default_config(uint32_t id = 0,
     config.l1_depth = 4;
     config.bandwidth_gbps = 102.4;
     config.clock_ghz = 1.0;
-    config.name = "STR";
+    config.name = config.display_name();
     return config;
 }
 
@@ -63,7 +63,7 @@ TEST_CASE("StreamerProcess construction", "[timing][streamer_process]") {
                                  l2_tag_cam, l2_credits, compute_result_tag_cam);
 
         REQUIRE(streamer.id() == 0);
-        REQUIRE(streamer.name() == "STR_ROW_0");
+        REQUIRE(streamer.name() == "CT(0,0):RowSTR");
         REQUIRE(streamer.is_idle());
         REQUIRE_FALSE(streamer.has_pending_work());
         REQUIRE(streamer.streamer_type() == StreamerType::ROW_STREAMER);
@@ -74,7 +74,7 @@ TEST_CASE("StreamerProcess construction", "[timing][streamer_process]") {
                                  l2_tag_cam, l2_credits, compute_result_tag_cam);
 
         REQUIRE(streamer.id() == 1);
-        REQUIRE(streamer.name() == "STR_COL_1");
+        REQUIRE(streamer.name() == "CT(0,0):ColSTR");
         REQUIRE(streamer.streamer_type() == StreamerType::COL_STREAMER);
     }
 }

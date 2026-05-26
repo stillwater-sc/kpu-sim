@@ -33,7 +33,7 @@ static BlockMoverProcess::Config default_config(uint32_t id = 0) {
     config.bandwidth_gbps = 51.2;
     config.clock_ghz = 1.0;
     config.supports_transpose = true;
-    config.name = "BM";
+    config.name = config.display_name();
     return config;
 }
 
@@ -58,7 +58,7 @@ TEST_CASE("BlockMoverProcess construction", "[timing][block_mover_process]") {
     BlockMoverProcess bm(default_config(0), l3_tag_cam, l3_credits, l2_credits, l2_tag_cam);
 
     REQUIRE(bm.id() == 0);
-    REQUIRE(bm.name() == "BM_0");
+    REQUIRE(bm.name() == "L3(0,0):BM");
     REQUIRE(bm.is_idle());
     REQUIRE_FALSE(bm.has_pending_work());
     REQUIRE(bm.is_complete());
