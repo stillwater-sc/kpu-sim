@@ -68,8 +68,11 @@ jobs:
     - name: Configure CMake
       # Configure CMake in a 'build' subdirectory. `CMAKE_BUILD_TYPE` is only required if you are using a single-configuration generator such as make.
       # See https://cmake.org/cmake/help/latest/variable/CMAKE_BUILD_TYPE.html?highlight=cmake_build_type
+      # Use Ninja on Linux (parallelizes by default; much faster than the Unix Makefiles default).
+      # Leave Windows on its default Visual Studio generator, which already parallelizes via MSBuild.
       run: >
         cmake -B ${{ steps.strings.outputs.build-output-dir }}
+        ${{ runner.os == 'Linux' && '-G Ninja' || '' }}
         -DCMAKE_CXX_COMPILER=${{ matrix.cpp_compiler }}
         -DCMAKE_C_COMPILER=${{ matrix.c_compiler }}
         -DCMAKE_BUILD_TYPE=${{ matrix.build_type }}
@@ -83,7 +86,9 @@ jobs:
 
     - name: Build
       # Build your program with the given configuration. Note that --config is needed because the default Windows generator is a multi-config generator (Visual Studio generator).
-      run: cmake --build ${{ steps.strings.outputs.build-output-dir }} --config ${{ matrix.build_type }}
+      # --parallel: explicitly request a parallel build. Ninja (Linux) and MSBuild (Windows) both
+      # respect this; without it, Unix Makefiles would default to single-threaded.
+      run: cmake --build ${{ steps.strings.outputs.build-output-dir }} --config ${{ matrix.build_type }} --parallel
 
     - name: Test
       working-directory: ${{ steps.strings.outputs.build-output-dir }}
