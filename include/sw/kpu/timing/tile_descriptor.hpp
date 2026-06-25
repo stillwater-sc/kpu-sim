@@ -145,7 +145,8 @@ struct TileDescriptor {
         std::string s = tile_id.to_string();
         if (matrix_base_address != 0) {
             char hex[32];
-            snprintf(hex, sizeof(hex), " @ 0x%lX", matrix_base_address);
+            snprintf(hex, sizeof(hex), " @ 0x%llX",
+                     static_cast<unsigned long long>(matrix_base_address));
             s += hex;
         }
         return s;

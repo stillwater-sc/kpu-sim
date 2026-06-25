@@ -164,12 +164,14 @@ struct TimingEvent {
         json += "\"tile\":\"" + tile_id.to_string() + "\"";
         if (matrix_base_address != 0) {
             char hex[32];
-            snprintf(hex, sizeof(hex), "0x%lX", matrix_base_address);
+            snprintf(hex, sizeof(hex), "0x%llX",
+                     static_cast<unsigned long long>(matrix_base_address));
             json += ",\"base\":\"" + std::string(hex) + "\"";
         }
         if (dram_address != 0) {
             char hex[32];
-            snprintf(hex, sizeof(hex), "0x%lX", dram_address);
+            snprintf(hex, sizeof(hex), "0x%llX",
+                     static_cast<unsigned long long>(dram_address));
             json += ",\"addr\":\"" + std::string(hex) + "\"";
         }
         if (slot_id > 0) {

@@ -314,10 +314,18 @@ void test_export_chrome_trace() {
     check(file_size > 0, "Trace file is not empty");
 
     // Check JSON format
-    std::ifstream in(trace_file);
-    char first;
-    in >> first;
-    check(first == '{', "Trace file starts with '{'");
+    // Scope the ifstream so it closes before we try to remove the file —
+    // on Windows std::filesystem::remove() throws filesystem_error if the
+    // file is still open, the uncaught exception propagates out of main(),
+    // and MSVC's std::terminate fast-fails with STATUS_STACK_BUFFER_OVERRUN
+    // (0xC0000409). Linux happily unlinks an open file, hence the
+    // platform-specific behaviour. See issue #3.
+    {
+        std::ifstream in(trace_file);
+        char first = 0;
+        in >> first;
+        check(first == '{', "Trace file starts with '{'");
+    }
 
     std::filesystem::remove(trace_file);
 }
@@ -649,35 +657,41 @@ void test_loop_timing_config() {
 // Main
 // ============================================================================
 
+// Flush stdout after each subtest. Required on Windows MSVC because
+// fatal exits via __fastfail() do not flush stdio buffers — any
+// unflushed output would be lost from the CI log, masking which
+// subtest hit the failure.
+#define RUN_SUBTEST(fn) do { fn(); std::cout << std::flush; } while (0)
+
 int main() {
-    std::cout << "=== TransactionalProgramExecutor Tests ===\n\n";
+    std::cout << "=== TransactionalProgramExecutor Tests ===\n\n" << std::flush;
 
     // Basic tests
-    test_constructs_with_defaults();
-    test_constructs_with_custom_timing();
+    RUN_SUBTEST(test_constructs_with_defaults);
+    RUN_SUBTEST(test_constructs_with_custom_timing);
 
     // Single-tile tests
-    test_single_tile_matmul_correctness();
-    test_single_tile_generates_timing();
+    RUN_SUBTEST(test_single_tile_matmul_correctness);
+    RUN_SUBTEST(test_single_tile_generates_timing);
 
     // Multi-tile tests
-    test_multi_tile_matmul_correctness();
-    test_multi_tile_timing_reasonable();
+    RUN_SUBTEST(test_multi_tile_matmul_correctness);
+    RUN_SUBTEST(test_multi_tile_timing_reasonable);
 
     // Export tests
-    test_export_chrome_trace();
-    test_generate_timeline();
+    RUN_SUBTEST(test_export_chrome_trace);
+    RUN_SUBTEST(test_generate_timeline);
 
     // Configuration tests
-    test_different_timing_configs();
+    RUN_SUBTEST(test_different_timing_configs);
 
     // Special cases
-    test_identity_matrix_multiplication();
+    RUN_SUBTEST(test_identity_matrix_multiplication);
 
     // Loop timing tests
-    test_loop_timing_overhead();
-    test_nested_loop_timing();
-    test_loop_timing_config();
+    RUN_SUBTEST(test_loop_timing_overhead);
+    RUN_SUBTEST(test_nested_loop_timing);
+    RUN_SUBTEST(test_loop_timing_config);
 
     // Summary
     std::cout << "\n=== Summary ===\n";
