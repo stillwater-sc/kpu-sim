@@ -8,6 +8,8 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <filesystem>
+
 #include <sw/kpu/timing/concurrent_timing_executor.hpp>
 
 using namespace sw::kpu::timing;
@@ -391,7 +393,7 @@ TEST_CASE("ConcurrentTimingExecutor Chrome trace export", "[timing][executor]") 
     executor.run();
 
     // Export to temp file
-    std::string temp_file = "/tmp/test_trace.json";
+    std::string temp_file = (std::filesystem::temp_directory_path() / "test_trace.json").string();
     executor.export_chrome_trace(temp_file);
 
     // Verify file exists and has content
@@ -412,7 +414,7 @@ TEST_CASE("ConcurrentTimingExecutor CSV export", "[timing][executor]") {
     executor.run();
 
     // Export to temp file
-    std::string temp_file = "/tmp/test_trace.csv";
+    std::string temp_file = (std::filesystem::temp_directory_path() / "test_trace.csv").string();
     executor.export_csv(temp_file);
 
     // Verify file exists and has content
