@@ -13,6 +13,11 @@ jobs:
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
 
+    # sccache uses the GitHub Actions cache as its storage backend. The action
+    # injects the required credentials when SCCACHE_GHA_ENABLED is set.
+    env:
+      SCCACHE_GHA_ENABLED: "true"
+
     strategy:
       # Set fail-fast to false to ensure that feedback is delivered for all matrix combinations. Consider changing this to true when your workflow is stable.
       fail-fast: false
@@ -58,6 +63,20 @@ jobs:
     - name: Verify CMake version
       run: cmake --version
 
+    - name: Install Ninja
+      uses: seanmiddleditch/gha-setup-ninja@master
+
+    # On Windows we replace the default Visual Studio generator with Ninja so
+    # that CMAKE_*_COMPILER_LAUNCHER (the sccache hook) is honoured — MSBuild
+    # ignores compiler launchers. ilammy/msvc-dev-cmd puts cl.exe on PATH so
+    # Ninja can find the MSVC toolchain.
+    - name: Set up MSVC environment
+      if: runner.os == 'Windows'
+      uses: ilammy/msvc-dev-cmd@v1
+
+    - name: Set up sccache
+      uses: mozilla-actions/sccache-action@v0.0.7
+
     - name: Set reusable strings
       # Turn repeated input strings (such as the build output directory) into step outputs. These step outputs can be used throughout the workflow file.
       id: strings
@@ -66,13 +85,14 @@ jobs:
         echo "build-output-dir=${{ github.workspace }}/build" >> "$GITHUB_OUTPUT"
 
     - name: Configure CMake
-      # Configure CMake in a 'build' subdirectory. `CMAKE_BUILD_TYPE` is only required if you are using a single-configuration generator such as make.
-      # See https://cmake.org/cmake/help/latest/variable/CMAKE_BUILD_TYPE.html?highlight=cmake_build_type
-      # Use Ninja on Linux (parallelizes by default; much faster than the Unix Makefiles default).
-      # Leave Windows on its default Visual Studio generator, which already parallelizes via MSBuild.
+      # Single-config Ninja generator on both platforms so CMAKE_*_COMPILER_LAUNCHER
+      # (sccache) takes effect. Ninja parallelises by default; on Windows we rely
+      # on the MSVC env from ilammy/msvc-dev-cmd above.
       run: >
         cmake -B ${{ steps.strings.outputs.build-output-dir }}
-        ${{ runner.os == 'Linux' && '-G Ninja' || '' }}
+        -G Ninja
+        -DCMAKE_C_COMPILER_LAUNCHER=sccache
+        -DCMAKE_CXX_COMPILER_LAUNCHER=sccache
         -DCMAKE_CXX_COMPILER=${{ matrix.cpp_compiler }}
         -DCMAKE_C_COMPILER=${{ matrix.c_compiler }}
         -DCMAKE_BUILD_TYPE=${{ matrix.build_type }}
@@ -85,10 +105,15 @@ jobs:
         path: ${{ steps.strings.outputs.build-output-dir }}/build_system_info.log
 
     - name: Build
-      # Build your program with the given configuration. Note that --config is needed because the default Windows generator is a multi-config generator (Visual Studio generator).
-      # --parallel: explicitly request a parallel build. Ninja (Linux) and MSBuild (Windows) both
-      # respect this; without it, Unix Makefiles would default to single-threaded.
+      # --parallel is redundant with Ninja (which parallelises by default) but
+      # kept as a belt-and-suspenders.
       run: cmake --build ${{ steps.strings.outputs.build-output-dir }} --config ${{ matrix.build_type }} --parallel
+
+    - name: Show sccache stats
+      # Hit rate / miss count for this run; useful for spotting cold/warm
+      # transitions and cache-thrash regressions in PRs that touch many TUs.
+      if: always()
+      run: sccache --show-stats
 
     - name: Test
       working-directory: ${{ steps.strings.outputs.build-output-dir }}
