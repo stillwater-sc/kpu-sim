@@ -236,7 +236,7 @@ void test_multi_tile_matmul_correctness() {
 }
 
 void test_multi_tile_timing_reasonable() {
-    std::cout << "test_multi_tile_timing_reasonable:\n" << std::flush;
+    std::cout << "test_multi_tile_timing_reasonable:\n";
 
     TestHardware hw;
     const Size M = 32, N = 32, K = 32;
@@ -253,26 +253,15 @@ void test_multi_tile_timing_reasonable() {
     hw.ext_mem.write(a_base, a_data.data(), a_data.size() * sizeof(float));
     hw.ext_mem.write(b_base, b_data.data(), b_data.size() * sizeof(float));
     hw.ext_mem.write(c_base, c_zero.data(), c_zero.size() * sizeof(float));
-    std::cout << "  [DBG] memory primed\n" << std::flush;
 
     auto sched = matmul_output_stationary(M, N, K, Ti, Tj, Tk);
-    std::cout << "  [DBG] schedule built\n" << std::flush;
-
     DMProgram prog = compile_schedule(sched);
-    std::cout << "  [DBG] schedule compiled (" << prog.instructions.size()
-              << " instructions)\n" << std::flush;
 
     TransactionalProgramExecutor exec(hw.context());
-    std::cout << "  [DBG] executor constructed\n" << std::flush;
-
     exec.load_program(prog, a_base, b_base, c_base);
-    std::cout << "  [DBG] program loaded\n" << std::flush;
-
     exec.run();
-    std::cout << "  [DBG] run() returned\n" << std::flush;
 
     auto stats = exec.get_timing_stats();
-    std::cout << "  [DBG] stats fetched\n" << std::flush;
 
     check(stats.total_cycles > 0, "Total cycles is positive");
     check(stats.total_cycles < 1000000, "Total cycles is reasonable (< 1M)");
@@ -291,11 +280,9 @@ void test_multi_tile_timing_reasonable() {
 // ============================================================================
 
 void test_export_chrome_trace() {
-    std::cout << "test_export_chrome_trace:\n" << std::flush;
+    std::cout << "test_export_chrome_trace:\n";
 
     TestHardware hw;
-    std::cout << "  [DBG] hw built\n" << std::flush;
-
     const Size M = 16, N = 16, K = 16;
     const Size Ti = 16, Tj = 16, Tk = 16;
 
@@ -310,46 +297,37 @@ void test_export_chrome_trace() {
     hw.ext_mem.write(a_base, a_data.data(), a_data.size() * sizeof(float));
     hw.ext_mem.write(b_base, b_data.data(), b_data.size() * sizeof(float));
     hw.ext_mem.write(c_base, c_zero.data(), c_zero.size() * sizeof(float));
-    std::cout << "  [DBG] memory primed\n" << std::flush;
 
     auto sched = matmul_output_stationary(M, N, K, Ti, Tj, Tk);
     DMProgram prog = compile_schedule(sched);
-    std::cout << "  [DBG] program compiled\n" << std::flush;
 
     TransactionalProgramExecutor exec(hw.context());
     exec.load_program(prog, a_base, b_base, c_base);
-    std::cout << "  [DBG] program loaded\n" << std::flush;
-
     exec.run();
-    std::cout << "  [DBG] run() returned\n" << std::flush;
 
     std::string trace_file = (std::filesystem::temp_directory_path() / "test_transactional_trace.json").string();
-    std::cout << "  [DBG] trace_file path: " << trace_file << "\n" << std::flush;
-
     exec.export_chrome_trace(trace_file);
-    std::cout << "  [DBG] export_chrome_trace returned\n" << std::flush;
 
-    bool exists = std::filesystem::exists(trace_file);
-    std::cout << "  [DBG] exists()=" << exists << "\n" << std::flush;
-    check(exists, "Trace file created");
-    std::cout << "  [DBG] after check exists\n" << std::flush;
+    check(std::filesystem::exists(trace_file), "Trace file created");
 
     auto file_size = std::filesystem::file_size(trace_file);
-    std::cout << "  [DBG] file_size()=" << file_size << "\n" << std::flush;
     check(file_size > 0, "Trace file is not empty");
-    std::cout << "  [DBG] after check size\n" << std::flush;
 
     // Check JSON format
-    std::ifstream in(trace_file);
-    std::cout << "  [DBG] ifstream opened: " << in.is_open() << "\n" << std::flush;
-    char first = 0;
-    in >> first;
-    std::cout << "  [DBG] first char=" << first << "\n" << std::flush;
-    check(first == '{', "Trace file starts with '{'");
-    std::cout << "  [DBG] after check json\n" << std::flush;
+    // Scope the ifstream so it closes before we try to remove the file —
+    // on Windows std::filesystem::remove() throws filesystem_error if the
+    // file is still open, the uncaught exception propagates out of main(),
+    // and MSVC's std::terminate fast-fails with STATUS_STACK_BUFFER_OVERRUN
+    // (0xC0000409). Linux happily unlinks an open file, hence the
+    // platform-specific behaviour. See issue #3.
+    {
+        std::ifstream in(trace_file);
+        char first = 0;
+        in >> first;
+        check(first == '{', "Trace file starts with '{'");
+    }
 
     std::filesystem::remove(trace_file);
-    std::cout << "  [DBG] remove() returned\n" << std::flush;
 }
 
 // ============================================================================
@@ -679,15 +657,11 @@ void test_loop_timing_config() {
 // Main
 // ============================================================================
 
-// Bracket each subtest with flushed entry/exit markers. On Windows MSVC
-// a stack buffer-overrun (0xC0000409) aborts via __fastfail without
-// flushing stdio, so without explicit flushes we can't tell where the
-// crash is. See issue #3.
-#define RUN_SUBTEST(fn) do {                                          \
-    std::cout << ">>> entering " #fn "\n" << std::flush;              \
-    fn();                                                             \
-    std::cout << "<<< exited "   #fn "\n" << std::flush;              \
-} while (0)
+// Flush stdout after each subtest. Required on Windows MSVC because
+// fatal exits via __fastfail() do not flush stdio buffers — any
+// unflushed output would be lost from the CI log, masking which
+// subtest hit the failure.
+#define RUN_SUBTEST(fn) do { fn(); std::cout << std::flush; } while (0)
 
 int main() {
     std::cout << "=== TransactionalProgramExecutor Tests ===\n\n" << std::flush;
