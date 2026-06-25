@@ -329,18 +329,27 @@ void test_export_chrome_trace() {
     exec.export_chrome_trace(trace_file);
     std::cout << "  [DBG] export_chrome_trace returned\n" << std::flush;
 
-    check(std::filesystem::exists(trace_file), "Trace file created");
+    bool exists = std::filesystem::exists(trace_file);
+    std::cout << "  [DBG] exists()=" << exists << "\n" << std::flush;
+    check(exists, "Trace file created");
+    std::cout << "  [DBG] after check exists\n" << std::flush;
 
     auto file_size = std::filesystem::file_size(trace_file);
+    std::cout << "  [DBG] file_size()=" << file_size << "\n" << std::flush;
     check(file_size > 0, "Trace file is not empty");
+    std::cout << "  [DBG] after check size\n" << std::flush;
 
     // Check JSON format
     std::ifstream in(trace_file);
-    char first;
+    std::cout << "  [DBG] ifstream opened: " << in.is_open() << "\n" << std::flush;
+    char first = 0;
     in >> first;
+    std::cout << "  [DBG] first char=" << first << "\n" << std::flush;
     check(first == '{', "Trace file starts with '{'");
+    std::cout << "  [DBG] after check json\n" << std::flush;
 
     std::filesystem::remove(trace_file);
+    std::cout << "  [DBG] remove() returned\n" << std::flush;
 }
 
 // ============================================================================
