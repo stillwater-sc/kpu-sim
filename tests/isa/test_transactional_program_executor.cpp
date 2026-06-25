@@ -236,7 +236,7 @@ void test_multi_tile_matmul_correctness() {
 }
 
 void test_multi_tile_timing_reasonable() {
-    std::cout << "test_multi_tile_timing_reasonable:\n";
+    std::cout << "test_multi_tile_timing_reasonable:\n" << std::flush;
 
     TestHardware hw;
     const Size M = 32, N = 32, K = 32;
@@ -253,15 +253,26 @@ void test_multi_tile_timing_reasonable() {
     hw.ext_mem.write(a_base, a_data.data(), a_data.size() * sizeof(float));
     hw.ext_mem.write(b_base, b_data.data(), b_data.size() * sizeof(float));
     hw.ext_mem.write(c_base, c_zero.data(), c_zero.size() * sizeof(float));
+    std::cout << "  [DBG] memory primed\n" << std::flush;
 
     auto sched = matmul_output_stationary(M, N, K, Ti, Tj, Tk);
+    std::cout << "  [DBG] schedule built\n" << std::flush;
+
     DMProgram prog = compile_schedule(sched);
+    std::cout << "  [DBG] schedule compiled (" << prog.instructions.size()
+              << " instructions)\n" << std::flush;
 
     TransactionalProgramExecutor exec(hw.context());
+    std::cout << "  [DBG] executor constructed\n" << std::flush;
+
     exec.load_program(prog, a_base, b_base, c_base);
+    std::cout << "  [DBG] program loaded\n" << std::flush;
+
     exec.run();
+    std::cout << "  [DBG] run() returned\n" << std::flush;
 
     auto stats = exec.get_timing_stats();
+    std::cout << "  [DBG] stats fetched\n" << std::flush;
 
     check(stats.total_cycles > 0, "Total cycles is positive");
     check(stats.total_cycles < 1000000, "Total cycles is reasonable (< 1M)");
