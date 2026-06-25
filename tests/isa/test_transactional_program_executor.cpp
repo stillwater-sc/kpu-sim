@@ -649,35 +649,41 @@ void test_loop_timing_config() {
 // Main
 // ============================================================================
 
+// Run a subtest and flush stdout afterward. On Windows MSVC a stack
+// buffer-overrun (0xC0000409) aborts via __fastfail without flushing
+// stdio, so without an explicit flush we can't tell which subtest
+// crashed. See issue #3.
+#define RUN_SUBTEST(fn) do { fn(); std::cout << std::flush; } while (0)
+
 int main() {
-    std::cout << "=== TransactionalProgramExecutor Tests ===\n\n";
+    std::cout << "=== TransactionalProgramExecutor Tests ===\n\n" << std::flush;
 
     // Basic tests
-    test_constructs_with_defaults();
-    test_constructs_with_custom_timing();
+    RUN_SUBTEST(test_constructs_with_defaults);
+    RUN_SUBTEST(test_constructs_with_custom_timing);
 
     // Single-tile tests
-    test_single_tile_matmul_correctness();
-    test_single_tile_generates_timing();
+    RUN_SUBTEST(test_single_tile_matmul_correctness);
+    RUN_SUBTEST(test_single_tile_generates_timing);
 
     // Multi-tile tests
-    test_multi_tile_matmul_correctness();
-    test_multi_tile_timing_reasonable();
+    RUN_SUBTEST(test_multi_tile_matmul_correctness);
+    RUN_SUBTEST(test_multi_tile_timing_reasonable);
 
     // Export tests
-    test_export_chrome_trace();
-    test_generate_timeline();
+    RUN_SUBTEST(test_export_chrome_trace);
+    RUN_SUBTEST(test_generate_timeline);
 
     // Configuration tests
-    test_different_timing_configs();
+    RUN_SUBTEST(test_different_timing_configs);
 
     // Special cases
-    test_identity_matrix_multiplication();
+    RUN_SUBTEST(test_identity_matrix_multiplication);
 
     // Loop timing tests
-    test_loop_timing_overhead();
-    test_nested_loop_timing();
-    test_loop_timing_config();
+    RUN_SUBTEST(test_loop_timing_overhead);
+    RUN_SUBTEST(test_nested_loop_timing);
+    RUN_SUBTEST(test_loop_timing_config);
 
     // Summary
     std::cout << "\n=== Summary ===\n";
