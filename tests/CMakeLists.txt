@@ -20,23 +20,33 @@ endif()
 function(kpu_add_component_test test_name test_category)
     # Create the test executable
     add_executable(${test_name} ${ARGN})
-    
+
     # Link against our core library and Catch2
     target_link_libraries(${test_name}
         PRIVATE
         kpu_simulator       # Includes all component libraries
         Catch2::Catch2WithMain
     )
-    
+
+    # Make tests/common/ available via #include <test_configs.hpp>
+    # for the shared right-sized KPUSimulator::Config factories.
+    # CMAKE_SOURCE_DIR points at the repo root; inside this function
+    # CMAKE_CURRENT_SOURCE_DIR resolves to the caller's subdir, which
+    # is wrong.
+    target_include_directories(${test_name}
+        PRIVATE
+        ${CMAKE_SOURCE_DIR}/tests/common
+    )
+
     # Set folder organization in Solution Explorer
     set_target_properties(${test_name} PROPERTIES FOLDER "Tests/${test_category}")
-    
+
     # Add the test to CTest with category label
     add_test(NAME ${test_name} COMMAND ${test_name})
     set_tests_properties(${test_name} PROPERTIES LABELS ${test_category})
-    
+
     # Install test executable (optional)
-    install(TARGETS ${test_name} 
+    install(TARGETS ${test_name}
         DESTINATION bin/tests
         OPTIONAL
     )
