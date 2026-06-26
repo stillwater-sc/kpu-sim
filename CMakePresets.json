@@ -257,6 +257,20 @@
           "label": "performance"
         }
       }
+    },
+    {
+      "name": "windows-msvc",
+      "displayName": "Windows MSVC Tests (capped concurrency)",
+      "description": "ctest preset bound to the windows-msvc configure preset. Visual Studio's Test Explorer picks this up automatically when the windows-msvc configure preset is active, so the parallel-job cap below is honoured for manual test runs inside the IDE. The cap exists because LPDDR5MemoryController, behavioral_matmul, systolic_array_test, and friends can saturate a Windows workstation's RAM when allowed to fan out unconstrained.",
+      "configurePreset": "windows-msvc",
+      "output": {
+        "outputOnFailure": true
+      },
+      "execution": {
+        "noTestsAction": "error",
+        "stopOnFailure": false,
+        "jobs": 4
+      }
     }
   ],
   "packagePresets": [
