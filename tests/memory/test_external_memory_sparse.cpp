@@ -16,23 +16,32 @@ TEST_CASE("ExternalMemory backend selection", "[memory][external][backend]") {
     }
 
     SECTION("Sparse backend for large memory (auto-select)") {
+        // Pick the smallest capacity that auto-selects sparse
+        // (SPARSE_THRESHOLD_MB = 1024). Sparse doesn't actually
+        // commit the full virtual size, so this is cheap regardless.
         ExternalMemory::Config config;
-        config.capacity_mb = 2048;  // 2GB - should auto-select sparse
+        config.capacity_mb = 1024;
         config.bandwidth_gbps = 100;
         config.auto_backend = true;
 
         ExternalMemory mem(config);
 
-        REQUIRE(mem.get_capacity() == 2048ULL * 1024 * 1024);
+        REQUIRE(mem.get_capacity() == 1024ULL * 1024 * 1024);
         REQUIRE(mem.get_backend() == ExternalMemory::BackendType::Sparse);
         REQUIRE(mem.is_sparse());
     }
 
     SECTION("Force dense backend") {
+        // Pick the smallest capacity that would auto-select sparse
+        // so we still prove the override path (dense bypasses the
+        // SPARSE_THRESHOLD_MB = 1024 cutoff). The previous value
+        // (2048MB) made this test commit 2 GB of contiguous physical
+        // memory and reliably tripped std::bad_alloc on Windows when
+        // other tests were running in parallel.
         ExternalMemory::Config config;
-        config.capacity_mb = 2048;  // Even though large
+        config.capacity_mb = 1024;
         config.backend = ExternalMemory::BackendType::Dense;
-        config.auto_backend = false;  // Don't auto-select
+        config.auto_backend = false;
 
         ExternalMemory mem(config);
 

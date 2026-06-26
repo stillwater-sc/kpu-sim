@@ -127,5 +127,9 @@ add_test(NAME LPDDR5MemoryController COMMAND lpddr5_memory_controller_test)
 set_tests_properties(MemoryMapDebug PROPERTIES LABELS "memory;memmap;debug")
 set_tests_properties(MemoryMap PROPERTIES LABELS "memory;memmap")
 set_tests_properties(SparseMemory PROPERTIES LABELS "memory;sparse")
-set_tests_properties(ExternalMemorySparse PROPERTIES LABELS "memory;external;datacenter")
+set_tests_properties(ExternalMemorySparse PROPERTIES
+    LABELS "memory;external;datacenter"
+    # Each SECTION constructs a multi-hundred-MB-to-1GB ExternalMemory.
+    # Run alone so the OS has enough contiguous physical memory.
+    RUN_SERIAL TRUE)
 set_tests_properties(LPDDR5MemoryController PROPERTIES LABELS "memory;lpddr5;mc")
