@@ -37,15 +37,15 @@ int main(int argc, char* argv[]) {
     const uint8_t CHANNEL = 0;
     const uint8_t BANK = 0;
     const uint32_t START_ROW = 0;
-    const size_t TILE_ROWS = 4;
-    const size_t COLS_PER_ROW = 4;
+    const uint32_t TILE_ROWS = 4;
+    const uint32_t COLS_PER_ROW = 4;
 
     std::cout << "\nSubmitting " << (TILE_ROWS * COLS_PER_ROW) << " reads ("
               << TILE_ROWS << " rows x " << COLS_PER_ROW << " columns)" << std::endl;
 
     // Load tile: multiple columns from consecutive rows
-    for (size_t r = 0; r < TILE_ROWS; ++r) {
-        for (size_t c = 0; c < COLS_PER_ROW; ++c) {
+    for (uint32_t r = 0; r < TILE_ROWS; ++r) {
+        for (uint32_t c = 0; c < COLS_PER_ROW; ++c) {
             harness.submit_read(make_address(CHANNEL, BANK, START_ROW + r, c));
         }
     }

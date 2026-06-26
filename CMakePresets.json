@@ -72,7 +72,7 @@
       "name": "windows-msvc",
       "displayName": "Windows MSVC (No Python)",
       "description": "Windows build using MSVC without Python bindings",
-      "generator": "Visual Studio 17 2022",
+      "generator": "Visual Studio 18 2026",
       "binaryDir": "${sourceDir}/build",
       "condition": {
         "type": "equals",
@@ -98,7 +98,7 @@
       "name": "windows-msvc-python",
       "displayName": "Windows MSVC (With Python)",
       "description": "Windows build using MSVC with Python bindings - requires Python dev libraries",
-      "generator": "Visual Studio 17 2022",
+      "generator": "Visual Studio 18 2026",
       "binaryDir": "${sourceDir}/build",
       "condition": {
         "type": "equals",

@@ -587,7 +587,7 @@ TileDescriptor CycleAccurateDMAEngine::default_tile_mapper(
     tile.l3_offset = static_cast<uint32_t>(transfer.dst_addr);
     tile.size = transfer.size;
     tile.height = 1;
-    tile.width = transfer.size;
+    tile.width = static_cast<uint16_t>(transfer.size);
 
     // Default destination router based on dst_id
     dst_router_id = static_cast<uint8_t>(transfer.dst_id % 16);

@@ -129,7 +129,7 @@ inline Workload make_stream_workload(size_t num_requests = 64) {
         // Spread across banks for parallelism
         uint8_t bank = (i % 16);
         w.requests.push_back({
-            make_address(bank, 100, (i / 16) * 64),
+            make_address(bank, 100, static_cast<uint32_t>((i / 16) * 64)),
             CACHE_LINE_BYTES,
             false
         });
