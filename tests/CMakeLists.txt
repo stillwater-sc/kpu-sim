@@ -68,9 +68,6 @@ add_subdirectory(dsl)
 add_subdirectory(harness)
 add_subdirectory(timing)
 
-# Legacy test (in this directory)
-kpu_add_component_test(legacy_test_main "legacy" test_main.cpp)
-
 # Custom test targets for different categories
 # These targets are defined here because they orchestrate across all subdirectories
 
