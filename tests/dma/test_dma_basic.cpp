@@ -8,6 +8,8 @@
 #include <catch2/catch_approx.hpp>
 #include <sw/kpu/kpu_simulator.hpp>
 
+#include <test_configs.hpp>  // tests/common/
+
 using namespace sw::kpu;
 
 // Test fixture for DMA tests
@@ -17,17 +19,13 @@ public:
     KPUSimulator::Config config;
     std::unique_ptr<KPUSimulator> sim;
 
-    DMATestFixture() {
-        // Standard test configuration
-        config.memory_bank_count = 2;
-        config.memory_bank_capacity_mb = 64;
-        config.memory_bandwidth_gbps = 8;
-        config.l3_tile_count = 4;
-        config.l3_tile_capacity_kb = 256;
-        config.compute_tile_count = 1;
-        config.dma_engine_count = 4;
-
-        sim = std::make_unique<KPUSimulator>(config);
+    DMATestFixture()
+        : config(test_utils::small_config())
+        , sim(std::make_unique<KPUSimulator>(config)) {
+        // small_config() = 2 banks x 4 MB + 4 L3 tiles x 256 KB + ...
+        // ~9 MB total. Suitable for transfers up to ~128 KB
+        // (the "DMA Large Transfer" case here uses half an L3 tile).
+        // See tests/common/test_configs.hpp for the budget rationale.
     }
 
     // Helper to generate test data

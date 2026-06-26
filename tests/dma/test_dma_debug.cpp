@@ -10,7 +10,7 @@ using namespace sw::kpu;
 TEST_CASE("DMA Debug - Component Status", "[dma][debug]") {
     KPUSimulator::Config config;
     config.memory_bank_count = 2;
-    config.memory_bank_capacity_mb = 64;
+    config.memory_bank_capacity_mb = 4;
     config.l3_tile_count = 2;
     config.l3_tile_capacity_kb = 256;
     config.dma_engine_count = 2;
@@ -32,7 +32,7 @@ TEST_CASE("DMA Debug - Component Status", "[dma][debug]") {
 TEST_CASE("DMA Debug - Transfer Verification", "[dma][debug]") {
     KPUSimulator::Config config;
     config.memory_bank_count = 1;
-    config.memory_bank_capacity_mb = 64;
+    config.memory_bank_capacity_mb = 4;
     config.l3_tile_count = 1;
     config.l3_tile_capacity_kb = 256;
     config.dma_engine_count = 1;

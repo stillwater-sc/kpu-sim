@@ -15,8 +15,11 @@ public:
     std::unique_ptr<KPUSimulator> sim;
 
     TensorMovementFixture() {
+        // Max transfer in this file is 128x128 floats = 64 KB.
+        // 4 MB per bank gives ample headroom and avoids the
+        // parallel-test OOM seen on Windows with the previous 128 MB.
         config.memory_bank_count = 2;
-        config.memory_bank_capacity_mb = 128;
+        config.memory_bank_capacity_mb = 4;
         config.memory_bandwidth_gbps = 100;
         config.l3_tile_count = 4;
         config.l3_tile_capacity_kb = 512;
