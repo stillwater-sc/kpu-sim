@@ -5,6 +5,8 @@
 #include <catch2/catch_test_macros.hpp>
 #include <sw/kpu/kpu_simulator.hpp>
 
+#include <test_configs.hpp>  // tests/common/
+
 using namespace sw::kpu;
 
 // Performance tests for DMA Engine
@@ -15,17 +17,13 @@ public:
     KPUSimulator::Config config;
     std::unique_ptr<KPUSimulator> sim;
 
-    DMAPerformanceFixture() {
-        // Max transfer in this file is 8 KB. 4 MB per bank gives
-        // ample headroom and avoids the parallel-test OOM seen on
-        // Windows with the previous 128 MB.
-        config.memory_bank_count = 2;
-        config.memory_bank_capacity_mb = 4;
+    DMAPerformanceFixture()
+        : config(test_utils::small_config()) {
+        // Performance tests need higher bandwidth and bigger tiles
+        // than the default. Max transfer here is 8 KB - small_config()'s
+        // memory sizing is fine.
         config.memory_bandwidth_gbps = 100;
-        config.l3_tile_count = 4;
-        config.l3_tile_capacity_kb = 512;
-        config.dma_engine_count = 4;
-
+        config.l3_tile_capacity_kb   = 512;
         sim = std::make_unique<KPUSimulator>(config);
     }
 };
