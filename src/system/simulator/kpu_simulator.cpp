@@ -560,85 +560,6 @@ Size KPUSimulator::get_page_buffer_capacity(size_t pad_id) const {
     return page_buffers[pad_id].get_capacity();
 }
 
-// High-level test operation
-bool KPUSimulator::run_matmul_test(const MatMulTest& test, size_t memory_bank_id,
-                                  size_t l3_tile_id, size_t compute_tile_id) {
-    reset();
-
-    Size a_size = test.m * test.k * sizeof(float);
-    Size b_size = test.k * test.n * sizeof(float);
-    Size c_size = test.m * test.n * sizeof(float);
-
-    // Addresses in external memory
-    Address ext_a_addr = 0;
-    Address ext_b_addr = a_size;
-    Address ext_c_addr = ext_b_addr + b_size;
-
-    // Addresses in L3 tile
-    Address l3_a_addr = 0;
-    Address l3_b_addr = a_size;
-    Address l3_c_addr = l3_b_addr + b_size;
-
-    try {
-        // Load test data into external memory
-        write_memory_bank(memory_bank_id, ext_a_addr, test.matrix_a.data(), a_size);
-        write_memory_bank(memory_bank_id, ext_b_addr, test.matrix_b.data(), b_size);
-
-        // Set up computation pipeline
-        bool dma_a_complete = false, dma_b_complete = false, compute_complete = false;
-
-        // Compute global addresses for DMA transfers
-        Address global_ext_a_addr = get_external_bank_base(memory_bank_id) + ext_a_addr;
-        Address global_ext_b_addr = get_external_bank_base(memory_bank_id) + ext_b_addr;
-        Address global_l3_a_addr = get_l3_tile_base(l3_tile_id) + l3_a_addr;
-        Address global_l3_b_addr = get_l3_tile_base(l3_tile_id) + l3_b_addr;
-
-        // DMA A and B matrices to L3 tile using convenience methods
-        dma_external_to_l3(0, global_ext_a_addr, global_l3_a_addr, a_size,
-            [&dma_a_complete]() { dma_a_complete = true; });
-        dma_external_to_l3(0, global_ext_b_addr, global_l3_b_addr, b_size,
-            [&dma_b_complete]() { dma_b_complete = true; });
-
-        // Wait for data to be loaded
-        while (!dma_a_complete || !dma_b_complete) {
-            step();
-        }
-
-        // Start matrix multiplication
-        start_matmul(compute_tile_id, l3_tile_id, test.m, test.n, test.k,
-                    l3_a_addr, l3_b_addr, l3_c_addr,
-                    [&compute_complete]() { compute_complete = true; });
-
-        // Wait for computation to complete
-        while (!compute_complete) {
-            step();
-        }
-
-        // DMA result back to external memory using convenience method
-        bool dma_c_complete = false;
-        Address global_ext_c_addr = get_external_bank_base(memory_bank_id) + ext_c_addr;
-        Address global_l3_c_addr = get_l3_tile_base(l3_tile_id) + l3_c_addr;
-        dma_l3_to_external(0, global_l3_c_addr, global_ext_c_addr, c_size,
-            [&dma_c_complete]() { dma_c_complete = true; });
-
-        // Wait for result transfer
-        while (!dma_c_complete) {
-            step();
-        }
-
-        // Verify result
-        std::vector<float> result_c(test.m * test.n);
-        read_memory_bank(memory_bank_id, ext_c_addr, result_c.data(), c_size);
-
-        return test_utils::verify_matmul_result(test.matrix_a, test.matrix_b, result_c,
-                                               test.m, test.n, test.k);
-    }
-    catch (const std::exception& e) {
-        std::cerr << "Error during matmul test: " << e.what() << std::endl;
-        return false;
-    }
-}
-
 // Statistics and monitoring
 double KPUSimulator::get_elapsed_time_ms() const {
     auto now = std::chrono::high_resolution_clock::now();
@@ -876,33 +797,6 @@ KPUSimulator::Config generate_multi_bank_config(size_t num_banks, size_t num_til
     config.compute_tile_count = num_tiles;
     config.dma_engine_count = num_banks + num_tiles; // Plenty of DMA engines
     return config;
-}
-
-bool run_distributed_matmul_test(KPUSimulator& sim, Size matrix_size) {
-    // Generate test case
-    auto test = generate_simple_matmul_test(matrix_size, matrix_size, matrix_size);
-
-    // Use multiple banks and tiles if available
-    size_t num_banks = sim.get_memory_bank_count();
-    size_t num_tiles = sim.get_compute_tile_count();
-
-    if (num_banks < 2 || num_tiles < 1) {
-        std::cout << "Warning: Not enough banks/tiles for distributed test, using defaults" << std::endl;
-        return sim.run_matmul_test(test);
-    }
-
-    std::cout << "Running distributed matmul test with " << num_banks
-              << " banks and " << num_tiles << " tiles..." << std::endl;
-
-    // For now, just use the first bank and tile (can be extended for true distribution)
-    bool result = sim.run_matmul_test(test, 0, 0, 0);
-
-    if (result) {
-        std::cout << "Distributed test passed!" << std::endl;
-        sim.print_component_status();
-    }
-
-    return result;
 }
 
 } // namespace test_utils

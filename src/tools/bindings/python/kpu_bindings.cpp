@@ -298,10 +298,6 @@ PYBIND11_MODULE(stillwater_kpu, m) {
         .def("get_l1_buffer_base", &sw::kpu::KPUSimulator::get_l1_buffer_base,
              "Get the base address of an L1 buffer in the unified address space")
         
-        // High-level operations
-        .def("run_matmul_test", &sw::kpu::KPUSimulator::run_matmul_test,
-             py::arg("test"), py::arg("memory_bank_id") = 0, py::arg("scratchpad_id") = 0, py::arg("compute_tile_id") = 0)
-        
         // Statistics and monitoring
         .def("get_current_cycle", &sw::kpu::KPUSimulator::get_current_cycle)
         .def("get_elapsed_time_ms", &sw::kpu::KPUSimulator::get_elapsed_time_ms)
@@ -319,62 +315,70 @@ PYBIND11_MODULE(stillwater_kpu, m) {
         .def("get_systolic_array_cols", &sw::kpu::KPUSimulator::get_systolic_array_cols, py::arg("tile_id") = 0)
         .def("get_systolic_array_total_pes", &sw::kpu::KPUSimulator::get_systolic_array_total_pes, py::arg("tile_id") = 0)
         
-        // Convenient numpy matrix multiplication
-        .def("run_numpy_matmul", [](sw::kpu::KPUSimulator& self, py::array_t<float> a, py::array_t<float> b,
-                                   size_t memory_bank_id, size_t scratchpad_id, size_t compute_tile_id) {
+        // Convenient numpy matrix multiplication. Uses the direct L1 path:
+        // stage A and B through the chosen memory bank, copy them into the
+        // L1 buffer back-to-back, fire start_matmul with offsets into L1,
+        // step until the callback fires, then read C back from L1.
+        // memory_bank_id / l1_buffer_id / compute_tile_id let the caller
+        // pick which resources to use; the now-removed scratchpad_id arg
+        // has been replaced by l1_buffer_id.
+        .def("run_numpy_matmul", [](sw::kpu::KPUSimulator& self,
+                                   py::array_t<float> a, py::array_t<float> b,
+                                   size_t memory_bank_id,
+                                   size_t l1_buffer_id,
+                                   size_t compute_tile_id) {
             py::buffer_info a_buf = a.request();
             py::buffer_info b_buf = b.request();
-            
+
             if (a_buf.ndim != 2 || b_buf.ndim != 2) {
                 throw std::runtime_error("Input arrays must be 2-dimensional");
             }
-            
-            sw::kpu::Size m = a_buf.shape[0];
-            sw::kpu::Size k = a_buf.shape[1];
-            sw::kpu::Size n = b_buf.shape[1];
-            
+
+            sw::kpu::Size m = static_cast<sw::kpu::Size>(a_buf.shape[0]);
+            sw::kpu::Size k = static_cast<sw::kpu::Size>(a_buf.shape[1]);
+            sw::kpu::Size n = static_cast<sw::kpu::Size>(b_buf.shape[1]);
+
             if (k != static_cast<sw::kpu::Size>(b_buf.shape[0])) {
                 throw std::runtime_error("Matrix dimensions don't match for multiplication");
             }
-            
-            // Create test structure
-            sw::kpu::KPUSimulator::MatMulTest test;
-            test.m = m;
-            test.n = n;
-            test.k = k;
-            
-            // Copy data from numpy arrays
-            test.matrix_a.assign(static_cast<float*>(a_buf.ptr), 
-                               static_cast<float*>(a_buf.ptr) + a_buf.size);
-            test.matrix_b.assign(static_cast<float*>(b_buf.ptr), 
-                               static_cast<float*>(b_buf.ptr) + b_buf.size);
-            
-            // Compute expected result
-            test.expected_c.resize(m * n);
-            for (sw::kpu::Size i = 0; i < m; ++i) {
-                for (sw::kpu::Size j = 0; j < n; ++j) {
-                    float sum = 0.0f;
-                    for (sw::kpu::Size ki = 0; ki < k; ++ki) {
-                        sum += test.matrix_a[i * k + ki] * test.matrix_b[ki * n + j];
-                    }
-                    test.expected_c[i * n + j] = sum;
-                }
+
+            const sw::kpu::Size a_bytes = m * k * sizeof(float);
+            const sw::kpu::Size b_bytes = k * n * sizeof(float);
+            const sw::kpu::Size c_bytes = m * n * sizeof(float);
+
+            // Stage operands through external memory bank.
+            self.write_memory_bank(memory_bank_id, 0,       a_buf.ptr, a_bytes);
+            self.write_memory_bank(memory_bank_id, a_bytes, b_buf.ptr, b_bytes);
+
+            // Copy bank -> L1 at known offsets (A | B | C).
+            std::vector<float> staged_a(m * k), staged_b(k * n);
+            self.read_memory_bank(memory_bank_id, 0,       staged_a.data(), a_bytes);
+            self.read_memory_bank(memory_bank_id, a_bytes, staged_b.data(), b_bytes);
+            const sw::kpu::Address a_off = 0;
+            const sw::kpu::Address b_off = a_off + a_bytes;
+            const sw::kpu::Address c_off = b_off + b_bytes;
+            self.write_l1_buffer(l1_buffer_id, a_off, staged_a.data(), a_bytes);
+            self.write_l1_buffer(l1_buffer_id, b_off, staged_b.data(), b_bytes);
+
+            // Kick off compute and spin until the callback fires.
+            bool done = false;
+            self.start_matmul(compute_tile_id, l1_buffer_id, m, n, k,
+                              a_off, b_off, c_off,
+                              [&done]() { done = true; });
+            while (!done) {
+                self.step();
             }
-            
-            // Run simulation
-            bool success = self.run_matmul_test(test, memory_bank_id, scratchpad_id, compute_tile_id);
-            
-            if (!success) {
-                throw std::runtime_error("Matrix multiplication simulation failed");
-            }
-            
-            // Return result as numpy array
+
+            // Return result as numpy array.
             auto result = py::array_t<float>({m, n});
             py::buffer_info result_buf = result.request();
-            std::copy(test.expected_c.begin(), test.expected_c.end(), static_cast<float*>(result_buf.ptr));
-            
+            self.read_l1_buffer(l1_buffer_id, c_off,
+                                static_cast<float*>(result_buf.ptr), c_bytes);
             return result;
-        }, py::arg("a"), py::arg("b"), py::arg("memory_bank_id") = 0, py::arg("scratchpad_id") = 0, py::arg("compute_tile_id") = 0);
+        }, py::arg("a"), py::arg("b"),
+           py::arg("memory_bank_id") = 0,
+           py::arg("l1_buffer_id") = 0,
+           py::arg("compute_tile_id") = 0);
     
     // Test utilities
     m.def("generate_simple_matmul_test", &sw::kpu::test_utils::generate_simple_matmul_test,
@@ -389,10 +393,7 @@ PYBIND11_MODULE(stillwater_kpu, m) {
     
     m.def("generate_multi_bank_config", &sw::kpu::test_utils::generate_multi_bank_config,
           py::arg("num_banks") = 4, py::arg("num_tiles") = 2);
-    
-    m.def("run_distributed_matmul_test", &sw::kpu::test_utils::run_distributed_matmul_test,
-          py::arg("sim"), py::arg("matrix_size") = 8);
-    
+
     m.def("generate_simple_matmul_test", &sw::kpu::test_utils::generate_simple_matmul_test,
           py::arg("m") = 4, py::arg("n") = 4, py::arg("k") = 4);
     

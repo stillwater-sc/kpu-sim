@@ -298,10 +298,6 @@ public:
     Size get_l1_buffer_capacity(size_t buffer_id) const;
     Size get_page_buffer_capacity(size_t pad_id) const;
     
-    // High-level test operations
-    bool run_matmul_test(const MatMulTest& test, size_t memory_bank_id = 0,
-                        size_t l3_tile_id = 0, size_t compute_tile_id = 0);
-    
     // Statistics and monitoring
     Cycle get_current_cycle() const { return current_cycle; }
     double get_elapsed_time_ms() const;
@@ -392,7 +388,6 @@ namespace test_utils {
     
     // Multi-bank test utilities
     KPU_API KPUSimulator::Config generate_multi_bank_config(size_t num_banks = 4, size_t num_tiles = 2);
-    KPU_API bool run_distributed_matmul_test(KPUSimulator& sim, Size matrix_size = 8);
 }
 
 } // namespace sw::kpu
