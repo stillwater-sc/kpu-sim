@@ -18,9 +18,15 @@ public:
     std::unique_ptr<KPUSimulator> sim;
 
     DMATestFixture() {
-        // Standard test configuration
+        // Standard test configuration.
+        // Max transfer in this file is half an L3 tile = 128 KB
+        // (see TEST_CASE "DMA Large Transfer"). 4 MB per bank gives
+        // a 32x safety margin and avoids OOM on Windows under
+        // parallel test runs - the previous 64 MB was 500x what
+        // the tests use and triggered std::bad_alloc when other
+        // tests landed on the same runner.
         config.memory_bank_count = 2;
-        config.memory_bank_capacity_mb = 64;
+        config.memory_bank_capacity_mb = 4;
         config.memory_bandwidth_gbps = 8;
         config.l3_tile_count = 4;
         config.l3_tile_capacity_kb = 256;
