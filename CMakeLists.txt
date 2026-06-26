@@ -75,6 +75,20 @@ endif()
 enable_testing()
 include(CTest)
 
+# Cap concurrency for the IDE-generated RUN_TESTS / RUN_ALL_TESTS target.
+# Visual Studio's RUN_TESTS target invokes ctest directly and ignores the
+# testPresets section of CMakePresets.json - so the `jobs: 4` setting in
+# testPresets only affects `ctest --preset=...` from the command line.
+# CMAKE_CTEST_ARGUMENTS is the canonical knob the VS (and Xcode) generators
+# bake into RUN_TESTS' command line. Capping at 4 keeps RAM-heavy tests
+# (LPDDR5MemoryController, behavioral_matmul, systolic_array_test, ...) from
+# saturating Windows workstations during manual IDE-driven runs.
+# A user can override the cap on the cmake configure line if needed.
+if(NOT DEFINED CMAKE_CTEST_ARGUMENTS)
+    set(CMAKE_CTEST_ARGUMENTS "-j;4" CACHE STRING
+        "Arguments passed to ctest by IDE RUN_TESTS targets" FORCE)
+endif()
+
 # Compiler-specific options
 if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" OR CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
     add_compile_options(-Wall -Wextra -Wpedantic)
