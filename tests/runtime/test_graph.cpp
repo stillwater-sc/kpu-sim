@@ -25,7 +25,9 @@ protected:
 
     GraphTestFixture() {
         config.memory_bank_count = 2;
-        config.memory_bank_capacity_mb = 64;
+        // 4 MB is plenty for runtime graph tests; the previous 64 MB
+        // contributed to OOM under parallel Windows runs (see #22).
+        config.memory_bank_capacity_mb = 4;
         config.l3_tile_count = 4;
         config.l3_tile_capacity_kb = 128;
         config.l2_bank_count = 8;
