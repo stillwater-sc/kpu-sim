@@ -38,9 +38,12 @@ using namespace sw::kpu::dataflow;
 // ============================================================================
 
 struct MatmulConfig {
-    uint16_t mesh_rows = 2;
-    uint16_t mesh_cols = 2;
-    uint16_t k_tiles = 2;
+    // mesh_rows / mesh_cols match the dataflow library's uint8_t convention
+    // (BlockMoverExecutorConfig, StreamerExecutorConfig). k_tiles stays
+    // uint16_t because K can grow well past 256.
+    uint8_t  mesh_rows = 2;
+    uint8_t  mesh_cols = 2;
+    uint16_t k_tiles   = 2;
 
     // Latencies (cycles)
     uint16_t dma_load_latency = 100;
@@ -209,14 +212,14 @@ private:
 
     void build_dma_graphs() {
         // West edge DMAs load A tiles
-        for (uint16_t i = 0; i < config_.mesh_rows; ++i) {
+        for (uint8_t i = 0; i < config_.mesh_rows; ++i) {
             DMAFlowGraphBuilder builder;
             builder.set_node_id(i)
                    .set_dimensions(config_.mesh_rows, config_.mesh_cols, config_.k_tiles);
 
             // Load all A[i,k] tiles for this row
             for (uint16_t k = 0; k < config_.k_tiles; ++k) {
-                uint8_t dest_l3 = i * config_.mesh_cols;  // First column
+                uint8_t dest_l3 = static_cast<uint8_t>(i * config_.mesh_cols);  // First column
                 builder.add_load_a(i, k, dest_l3);
             }
 
@@ -225,7 +228,7 @@ private:
         }
 
         // North edge DMAs load B tiles
-        for (uint16_t j = 0; j < config_.mesh_cols; ++j) {
+        for (uint8_t j = 0; j < config_.mesh_cols; ++j) {
             DMAFlowGraphBuilder builder;
             builder.set_node_id(j)
                    .set_dimensions(config_.mesh_rows, config_.mesh_cols, config_.k_tiles);
@@ -242,9 +245,9 @@ private:
     }
 
     void build_block_mover_graphs() {
-        for (uint16_t i = 0; i < config_.mesh_rows; ++i) {
-            for (uint16_t j = 0; j < config_.mesh_cols; ++j) {
-                uint8_t node_id = i * config_.mesh_cols + j;
+        for (uint8_t i = 0; i < config_.mesh_rows; ++i) {
+            for (uint8_t j = 0; j < config_.mesh_cols; ++j) {
+                uint8_t node_id = static_cast<uint8_t>(i * config_.mesh_cols + j);
 
                 BlockMoverFlowGraphBuilder builder;
                 builder.set_position(i, j, config_.mesh_cols)
@@ -259,9 +262,9 @@ private:
     }
 
     void build_streamer_graphs() {
-        for (uint16_t i = 0; i < config_.mesh_rows; ++i) {
-            for (uint16_t j = 0; j < config_.mesh_cols; ++j) {
-                uint8_t node_id = i * config_.mesh_cols + j;
+        for (uint8_t i = 0; i < config_.mesh_rows; ++i) {
+            for (uint8_t j = 0; j < config_.mesh_cols; ++j) {
+                uint8_t node_id = static_cast<uint8_t>(i * config_.mesh_cols + j);
 
                 StreamerFlowGraphBuilder builder;
                 builder.set_position(i, j, config_.mesh_cols)
@@ -318,7 +321,7 @@ private:
     void run_dma_phase() {
         // Inject L3 buffer availability and run DMAs
         for (auto& [id, dma] : dma_west_) {
-            uint8_t dest_l3 = id * config_.mesh_cols;
+            uint8_t dest_l3 = static_cast<uint8_t>(id * config_.mesh_cols);
             for (uint16_t k = 0; k < config_.k_tiles; ++k) {
                 dma->inject_buffer_available(Location::L3, dest_l3);
             }
@@ -699,9 +702,9 @@ private:
         // C[i,j] partial sums reduce West→East along row i
 
         // Build BlockMover graphs
-        for (uint16_t i = 0; i < config_.mesh_rows; ++i) {
-            for (uint16_t k = 0; k < config_.mesh_cols; ++k) {
-                uint8_t node_id = i * config_.mesh_cols + k;
+        for (uint8_t i = 0; i < config_.mesh_rows; ++i) {
+            for (uint8_t k = 0; k < config_.mesh_cols; ++k) {
+                uint8_t node_id = static_cast<uint8_t>(i * config_.mesh_cols + k);
 
                 AStationaryBlockMoverBuilder builder;
                 builder.set_position(i, k, config_.mesh_cols)
@@ -714,9 +717,9 @@ private:
         }
 
         // Build Streamer graphs
-        for (uint16_t i = 0; i < config_.mesh_rows; ++i) {
-            for (uint16_t k = 0; k < config_.mesh_cols; ++k) {
-                uint8_t node_id = i * config_.mesh_cols + k;
+        for (uint8_t i = 0; i < config_.mesh_rows; ++i) {
+            for (uint8_t k = 0; k < config_.mesh_cols; ++k) {
+                uint8_t node_id = static_cast<uint8_t>(i * config_.mesh_cols + k);
 
                 AStationaryStreamerBuilder builder;
                 builder.set_position(i, k, config_.mesh_cols)
@@ -732,9 +735,9 @@ private:
         // A-stationary data flow:
         //   - A[i,k] loads to node (i,k) - stationary, one per node
         //   - B[k,j] loads to north edge only (i=0), then flows N→S
-        for (uint16_t i = 0; i < config_.mesh_rows; ++i) {
-            for (uint16_t k = 0; k < config_.mesh_cols; ++k) {
-                uint8_t node_id = i * config_.mesh_cols + k;
+        for (uint8_t i = 0; i < config_.mesh_rows; ++i) {
+            for (uint8_t k = 0; k < config_.mesh_cols; ++k) {
+                uint8_t node_id = static_cast<uint8_t>(i * config_.mesh_cols + k);
 
                 DMAFlowGraphBuilder builder;
                 builder.set_node_id(node_id)
@@ -1095,9 +1098,9 @@ private:
         // C[i,j] partial sums reduce North→South along column j
 
         // Build BlockMover graphs
-        for (uint16_t k = 0; k < config_.mesh_rows; ++k) {
-            for (uint16_t j = 0; j < config_.mesh_cols; ++j) {
-                uint8_t node_id = k * config_.mesh_cols + j;
+        for (uint8_t k = 0; k < config_.mesh_rows; ++k) {
+            for (uint8_t j = 0; j < config_.mesh_cols; ++j) {
+                uint8_t node_id = static_cast<uint8_t>(k * config_.mesh_cols + j);
 
                 BStationaryBlockMoverBuilder builder;
                 builder.set_position(k, j, config_.mesh_cols)
@@ -1110,9 +1113,9 @@ private:
         }
 
         // Build Streamer graphs
-        for (uint16_t k = 0; k < config_.mesh_rows; ++k) {
-            for (uint16_t j = 0; j < config_.mesh_cols; ++j) {
-                uint8_t node_id = k * config_.mesh_cols + j;
+        for (uint8_t k = 0; k < config_.mesh_rows; ++k) {
+            for (uint8_t j = 0; j < config_.mesh_cols; ++j) {
+                uint8_t node_id = static_cast<uint8_t>(k * config_.mesh_cols + j);
 
                 BStationaryStreamerBuilder builder;
                 builder.set_position(k, j, config_.mesh_cols)
@@ -1128,9 +1131,9 @@ private:
         // B-stationary data flow:
         //   - B[k,j] loads to node (k,j) - stationary, one per node
         //   - A[i,k] loads to west edge only (j=0), then flows W→E
-        for (uint16_t k = 0; k < config_.mesh_rows; ++k) {
-            for (uint16_t j = 0; j < config_.mesh_cols; ++j) {
-                uint8_t node_id = k * config_.mesh_cols + j;
+        for (uint8_t k = 0; k < config_.mesh_rows; ++k) {
+            for (uint8_t j = 0; j < config_.mesh_cols; ++j) {
+                uint8_t node_id = static_cast<uint8_t>(k * config_.mesh_cols + j);
 
                 DMAFlowGraphBuilder builder;
                 builder.set_node_id(node_id)
