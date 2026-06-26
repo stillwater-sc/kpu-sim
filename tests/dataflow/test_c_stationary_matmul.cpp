@@ -1569,11 +1569,11 @@ struct BandwidthAnalysis {
         return a_input_tiles + b_input_tiles + c_partial_reads + c_partial_writes + c_output_tiles;
     }
 
-    uint64_t total_dma_bytes(uint32_t tile_bytes) const {
+    uint64_t total_dma_bytes(uint64_t tile_bytes) const {
         return total_dma_tiles() * tile_bytes;
     }
 
-    uint64_t total_mesh_bytes(uint32_t tile_bytes) const {
+    uint64_t total_mesh_bytes(uint64_t tile_bytes) const {
         return mesh_tiles * tile_bytes;
     }
 
