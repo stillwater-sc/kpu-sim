@@ -472,8 +472,12 @@ public:
         auto push_b = graph_.add_fire(Operation::PUSH_TO_L2, {b_l3}, {b_l2}, "push_B");
         graph_.add_edge(join_b, push_b);
 
-        // Forward B south (if not bottom row)
-        uint8_t mesh_rows = graph_.m_tiles;  // Assume square mesh or use m_tiles
+        // Forward B south (if not bottom row).
+        // graph_.m_tiles is uint16_t; using uint8_t here would silently
+        // wrap to 0 for any mesh >= 256 rows and break the bounds check,
+        // so match the source type. Also fixes MSVC C4244 narrowing
+        // warning that propagated to every TU including this header.
+        uint16_t mesh_rows = graph_.m_tiles;  // assumes square mesh
         if (i + 1 < mesh_rows) {
             auto b_south = tile_b(k, j, Location::L3, node_id + mesh_cols_);
             auto send_b = graph_.add_fire(Operation::SEND_SOUTH, {b_l3}, {b_south}, "send_B_south");
