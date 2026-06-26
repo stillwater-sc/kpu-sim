@@ -77,6 +77,20 @@ jobs:
     - name: Set up sccache
       uses: mozilla-actions/sccache-action@v0.0.7
 
+    # Probe the sccache backend before relying on it. If GitHub Actions Cache
+    # is having an incident the sccache server refuses to start, so falling
+    # back to a plain build is strictly better than failing the whole job.
+    # Only when this probe succeeds do we set SCCACHE_LAUNCHER, which the
+    # Configure step uses to conditionally wire CMAKE_*_COMPILER_LAUNCHER.
+    - name: Probe sccache backend
+      shell: bash
+      run: |
+        if sccache --start-server; then
+          echo "SCCACHE_LAUNCHER=sccache" >> "$GITHUB_ENV"
+        else
+          echo "::warning::sccache backend unavailable; building without compile cache"
+        fi
+
     - name: Set reusable strings
       # Turn repeated input strings (such as the build output directory) into step outputs. These step outputs can be used throughout the workflow file.
       id: strings
@@ -87,12 +101,12 @@ jobs:
     - name: Configure CMake
       # Single-config Ninja generator on both platforms so CMAKE_*_COMPILER_LAUNCHER
       # (sccache) takes effect. Ninja parallelises by default; on Windows we rely
-      # on the MSVC env from ilammy/msvc-dev-cmd above.
+      # on the MSVC env from ilammy/msvc-dev-cmd above. The launcher flags are
+      # injected only when the sccache probe succeeded (see previous step).
       run: >
         cmake -B ${{ steps.strings.outputs.build-output-dir }}
         -G Ninja
-        -DCMAKE_C_COMPILER_LAUNCHER=sccache
-        -DCMAKE_CXX_COMPILER_LAUNCHER=sccache
+        ${{ env.SCCACHE_LAUNCHER && format('-DCMAKE_C_COMPILER_LAUNCHER={0} -DCMAKE_CXX_COMPILER_LAUNCHER={0}', env.SCCACHE_LAUNCHER) || '' }}
         -DCMAKE_CXX_COMPILER=${{ matrix.cpp_compiler }}
         -DCMAKE_C_COMPILER=${{ matrix.c_compiler }}
         -DCMAKE_BUILD_TYPE=${{ matrix.build_type }}
@@ -112,7 +126,8 @@ jobs:
     - name: Show sccache stats
       # Hit rate / miss count for this run; useful for spotting cold/warm
       # transitions and cache-thrash regressions in PRs that touch many TUs.
-      if: always()
+      # Skipped when the backend probe failed and we built without sccache.
+      if: env.SCCACHE_LAUNCHER
       run: sccache --show-stats
 
     - name: Test
