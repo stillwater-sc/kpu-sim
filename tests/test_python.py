@@ -159,15 +159,22 @@ def test_multi_bank_configuration():
     
     print(f" Created {simulator.get_memory_bank_count()}-bank, {simulator.get_compute_tile_count()}-tile simulator")
     
-    # Test with distributed matmul
+    # Test the direct numpy path with an 8x8 problem on this multi-bank
+    # config. run_distributed_matmul_test was removed along with the
+    # broken KPUSimulator::run_matmul_test it relied on - see the
+    # CHANGELOG entry for the removal PR.
     try:
-        success = kpu.run_distributed_matmul_test(simulator, 8)
-        if success:
-            print(" Multi-bank distributed test PASSED!")
+        import numpy as np
+        A = np.random.rand(8, 8).astype(np.float32)
+        B = np.random.rand(8, 8).astype(np.float32)
+        C = simulator.run_numpy_matmul(A, B, 0, 0, 0)
+        expected = A @ B
+        if np.allclose(C, expected, atol=1e-4):
+            print(" Multi-bank numpy_matmul PASSED!")
             simulator.print_component_status()
             return True
         else:
-            print("✗ Multi-bank distributed test FAILED!")
+            print("✗ Multi-bank numpy_matmul produced wrong result")
             return False
     except Exception as e:
         print(f"✗ Multi-bank test failed: {e}")
