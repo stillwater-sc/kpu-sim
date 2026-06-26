@@ -95,6 +95,20 @@ if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" OR CMAKE_CXX_COMPILER_ID STREQUAL "Clang
         if(CMAKE_BUILD_TYPE STREQUAL "Release")
         add_compile_options(-O3 -march=native)
     endif()
+    # gcc 13's -O3 constprop pass on std::make_unique produces a stream
+    # of false-positive -Wstringop-overflow warnings claiming plain
+    # struct-field stores write past size-0 regions (e.g. the
+    # init_l2_banks() loop in block_mover_flow_executor.hpp, the bank
+    # group setup in lpddr5_controller.cpp). Confirmed false in audit:
+    # both sites are simple writes inside bounded loops. Tracked in #23.
+    # Suppressed globally on gcc only - clang doesn't fire these and
+    # gcc 14+ has improved the analysis. Also applied at link time
+    # because the release build uses LTO (CMAKE_INTERPROCEDURAL_OPTIMIZATION)
+    # and gcc re-runs the analysis on inlined code during the LTO pass.
+    if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+        add_compile_options(-Wno-stringop-overflow)
+        add_link_options(-Wno-stringop-overflow)
+    endif()
 elseif(CMAKE_CXX_COMPILER_ID STREQUAL "MSVC")
         # Remove problematic default flags
     foreach(flag_var CMAKE_CXX_FLAGS CMAKE_CXX_FLAGS_DEBUG CMAKE_CXX_FLAGS_RELEASE 
