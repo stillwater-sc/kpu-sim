@@ -362,12 +362,12 @@ TEST_CASE("DMAEngineProcess sees MC command bus serialization", "[timing][dma_pr
 
     // First MC tick - only ONE command issued
     auto mc_events = mc.tick(0);
-    int load_starts_at_0 = count_events(mc_events, EventType::DMA_LOAD_START);
+    size_t load_starts_at_0 = count_events(mc_events, EventType::DMA_LOAD_START);
     REQUIRE(load_starts_at_0 == 1);
 
     // Second MC tick - other command issued
     mc_events = mc.tick(1);
-    int load_starts_at_1 = count_events(mc_events, EventType::DMA_LOAD_START);
+    size_t load_starts_at_1 = count_events(mc_events, EventType::DMA_LOAD_START);
     REQUIRE(load_starts_at_1 == 1);
 
     // Total: 2 commands serialized over 2 cycles

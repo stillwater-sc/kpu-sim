@@ -137,14 +137,14 @@ TEST_CASE("MemoryController command bus serializes requests", "[memory_controlle
 
     // First tick: only ONE command should be issued
     auto events0 = mc.tick(0);
-    int load_starts_at_0 = count_events(events0, EventType::DMA_LOAD_START);
+    size_t load_starts_at_0 = count_events(events0, EventType::DMA_LOAD_START);
 
     // Critical check: only 1 LOAD_START at cycle 0, not 2
     REQUIRE(load_starts_at_0 == 1);
 
     // Second tick: the other command should be issued
     auto events1 = mc.tick(1);
-    int load_starts_at_1 = count_events(events1, EventType::DMA_LOAD_START);
+    size_t load_starts_at_1 = count_events(events1, EventType::DMA_LOAD_START);
 
     REQUIRE(load_starts_at_1 == 1);
 
