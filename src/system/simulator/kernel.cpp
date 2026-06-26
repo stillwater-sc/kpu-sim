@@ -359,12 +359,16 @@ Kernel Kernel::create_batchnorm(Size batch_size, Size num_features,
 
 Kernel Kernel::create_elementwise(const ElementwiseConfig& config, DataType dtype) {
     compiler::KernelCompiler compiler;
-    Size total = config.total_elements();
 
-    // Elementwise is simple, compile a small matmul as placeholder
+    // Use a 1x1x1 matmul as the placeholder kernel framework — op_type
+    // and elementwise_config_ are overridden immediately below, so the
+    // placeholder's dimensions don't matter and any per-tile bookkeeping
+    // proportional to N would just be wasted (and large for big shapes:
+    // a vocab head softmax with N ~ 50k blows hundreds of MB on Windows
+    // MSVC). See kernel_test "Language model output" SECTION.
     compiler::CompileOptions opts = compiler::CompileOptions::defaults();
     opts.dtype = dtype;
-    Kernel kernel = compiler.compile_matmul(1, total, 1, opts);
+    Kernel kernel = compiler.compile_matmul(1, 1, 1, opts);
 
     // Override operation type and config
     kernel.op_type_ = KernelOpType::ELEMENTWISE;
@@ -430,12 +434,10 @@ Kernel Kernel::create_elementwise_scalar(ElementwiseOp op,
 Kernel Kernel::create_pool2d(const Pool2DConfig& config, DataType dtype) {
     compiler::KernelCompiler compiler;
 
-    // Pool2D is a spatial reduction operation
-    // Use a small matmul as placeholder for the program
-    Size out_elems = config.output_elements();
+    // 1x1x1 placeholder matmul — see comment in create_elementwise.
     compiler::CompileOptions opts = compiler::CompileOptions::defaults();
     opts.dtype = dtype;
-    Kernel kernel = compiler.compile_matmul(1, out_elems, 1, opts);
+    Kernel kernel = compiler.compile_matmul(1, 1, 1, opts);
 
     // Override operation type and config
     kernel.op_type_ = KernelOpType::POOL2D;
@@ -526,11 +528,10 @@ Kernel Kernel::create_global_avg_pool2d(Size batch_size, Size channels,
 Kernel Kernel::create_softmax(const SoftmaxConfig& config, DataType dtype) {
     compiler::KernelCompiler compiler;
 
-    // Softmax is a reduction operation - use small matmul as placeholder
-    Size total = config.total_elements();
+    // 1x1x1 placeholder matmul — see comment in create_elementwise.
     compiler::CompileOptions opts = compiler::CompileOptions::defaults();
     opts.dtype = dtype;
-    Kernel kernel = compiler.compile_matmul(1, total, 1, opts);
+    Kernel kernel = compiler.compile_matmul(1, 1, 1, opts);
 
     // Override operation type and config
     kernel.op_type_ = KernelOpType::SOFTMAX;
