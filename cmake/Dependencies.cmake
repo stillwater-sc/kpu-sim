@@ -49,30 +49,13 @@ endif()
 
 kpu_add_dependency(spdlog
     GIT_REPOSITORY https://github.com/gabime/spdlog.git
-    GIT_TAG v1.12.0
+    GIT_TAG v1.15.3
     TARGETS spdlog spdlog_header_only
 )
-
-# Configure spdlog to suppress MSVC warnings about deprecated iterators
-# _SILENCE_STDEXT_ARR_ITERS_DEPRECATION_WARNING - Specifically silences the stdext::checked_array_iterator deprecation warnings
-# _SILENCE_ALL_MS_EXT_DEPRECATION_WARNINGS - Silences all Microsoft extension deprecation warnings as a broader catch-all
-#
-#  These definitions are applied to both the spdlog and spdlog_header_only targets, using PRIVATE for the compiled
-#  library and INTERFACE for the header-only version to ensure the definitions propagate to consuming targets.
-
-if(TARGET spdlog AND MSVC)
-    target_compile_definitions(spdlog PRIVATE
-        _SILENCE_STDEXT_ARR_ITERS_DEPRECATION_WARNING
-        _SILENCE_ALL_MS_EXT_DEPRECATION_WARNINGS
-    )
-endif()
-
-if(TARGET spdlog_header_only AND MSVC)
-    target_compile_definitions(spdlog_header_only INTERFACE
-        _SILENCE_STDEXT_ARR_ITERS_DEPRECATION_WARNING
-        _SILENCE_ALL_MS_EXT_DEPRECATION_WARNINGS
-    )
-endif()
+# Note: v1.15.3 bundles fmt v11, which no longer references
+# stdext::checked_array_iterator. Earlier versions (1.12 bundled fmt v9)
+# required _SILENCE_STDEXT_ARR_ITERS_DEPRECATION_WARNING on MSVC, and
+# eventually broke entirely on MSVC 14.51+ where the symbol was removed.
 
 kpu_add_dependency(nlohmann_json
     GIT_REPOSITORY https://github.com/nlohmann/json.git
