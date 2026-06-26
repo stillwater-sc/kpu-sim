@@ -457,7 +457,7 @@ TEST_CASE("DMA System with placement", "[dma][system][integration]") {
             transfer.src_type = DMAMemoryType::DEVICE_MEMORY;
             transfer.src_addr = 0x10000 * row;
             transfer.dst_type = DMAMemoryType::L3_TILE;
-            transfer.dst_id = row * 4 + 3;  // East edge of each row
+            transfer.dst_id = static_cast<uint32_t>(row * 4 + 3);  // East edge of each row
             transfer.size = 64;
 
             system.west_dmas[row]->submit(transfer, [&completed_count]() {
@@ -495,7 +495,7 @@ TEST_CASE("DMA System with placement", "[dma][system][integration]") {
             transfer.src_type = DMAMemoryType::DEVICE_MEMORY;
             transfer.src_addr = 0x20000 * col;
             transfer.dst_type = DMAMemoryType::L3_TILE;
-            transfer.dst_id = 12 + col;  // South edge
+            transfer.dst_id = static_cast<uint32_t>(12 + col);  // South edge
             transfer.size = 64;
 
             system.north_dmas[col]->submit(transfer, [&completed_count]() {
@@ -534,7 +534,7 @@ TEST_CASE("DMA System with placement", "[dma][system][integration]") {
             transfer.src_type = DMAMemoryType::DEVICE_MEMORY;
             transfer.src_addr = 0x10000 * row;
             transfer.dst_type = DMAMemoryType::L3_TILE;
-            transfer.dst_id = row * 4 + 2;
+            transfer.dst_id = static_cast<uint32_t>(row * 4 + 2);
             transfer.size = 64;
 
             system.west_dmas[row]->submit(transfer, [&west_completed]() {
@@ -548,7 +548,7 @@ TEST_CASE("DMA System with placement", "[dma][system][integration]") {
             transfer.src_type = DMAMemoryType::DEVICE_MEMORY;
             transfer.src_addr = 0x20000 * col;
             transfer.dst_type = DMAMemoryType::L3_TILE;
-            transfer.dst_id = 8 + col;
+            transfer.dst_id = static_cast<uint32_t>(8 + col);
             transfer.size = 64;
 
             system.north_dmas[col]->submit(transfer, [&north_completed]() {
