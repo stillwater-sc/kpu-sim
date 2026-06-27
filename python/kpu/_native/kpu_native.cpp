@@ -1753,7 +1753,7 @@ private:
                     auto axis_list = attrs["axis"].cast<py::list>();
                     for (size_t i = 0; i < py::len(axis_list); ++i) {
                         int axis = axis_list[i].cast<int>();
-                        if (axis < 0) axis = x_buf.ndim + axis;
+                        if (axis < 0) axis = static_cast<int>(x_buf.ndim + axis);
                         axes.push_back(axis);
                     }
                 }
@@ -2241,7 +2241,7 @@ private:
 
             // Get axis (default: -1, meaning last axis)
             int axis = attrs.contains("axis") ? attrs["axis"].cast<int>() : -1;
-            if (axis < 0) axis += x_buf.ndim;
+            if (axis < 0) axis += static_cast<int>(x_buf.ndim);
 
             // Create output array
             std::vector<py::ssize_t> out_shape(x_buf.shape.begin(), x_buf.shape.end());
