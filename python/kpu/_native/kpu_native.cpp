@@ -2406,7 +2406,10 @@ private:
             }
 
             py::array_t<float> Q, K, V;
-            py::ssize_t batch_size, seq_len, d_model, d_k, d_v;
+            // Initialise to 0 so gcc -Wmaybe-uninitialized is happy.
+            // These are only consumed inside the same `include_qkv_projection`
+            // branch that assigns them; the analyser can't track that.
+            py::ssize_t batch_size = 0, seq_len = 0, d_model = 0, d_k = 0, d_v = 0;
             py::array_t<float> w_o;  // Output projection weights
 
             if (include_qkv_projection) {

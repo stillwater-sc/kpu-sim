@@ -44,11 +44,12 @@
     },
     {
       "name": "release-werror",
-      "displayName": "Release + warnings-as-errors",
-      "description": "Same as release but with KPU_WERROR=ON (used by CI; opt-in locally). Going through the preset keeps the Ninja generator and parallelism settings.",
+      "displayName": "Release + warnings-as-errors (no LTO)",
+      "description": "Same as release but with KPU_WERROR=ON and LTO turned off. The goal of this preset is to catch warnings, not produce ship-grade binaries; LTO under -Werror was both slow (cumulative ~100 LTRANS processes across parallel link steps) and noisy (gcc 13's LTO pass re-runs analyses that fire false positives we have to suppress). Use the plain `release` preset for optimised builds.",
       "inherits": "release",
       "cacheVariables": {
-        "KPU_WERROR": "ON"
+        "KPU_WERROR": "ON",
+        "CMAKE_INTERPROCEDURAL_OPTIMIZATION": "OFF"
       }
     },
     {

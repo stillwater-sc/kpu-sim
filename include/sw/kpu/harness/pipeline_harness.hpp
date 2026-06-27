@@ -186,7 +186,7 @@ public:
     bool has_pending() const override;
 
     /// Step simulation by specified cycles
-    void step(Cycle cycles);
+    void step(Cycle cycles) override;
 
     // ========================================================================
     // Memory Initialization
