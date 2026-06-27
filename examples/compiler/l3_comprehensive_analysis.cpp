@@ -158,8 +158,11 @@ std::vector<AnalysisResult> analyze_workload(
         // Get tile config
         auto tile_config = optimizer.optimize(workload.shape.M, workload.shape.N, workload.shape.K);
 
-        // Map DataflowStrategy to L2TileScheduler::SchedulingStrategy
-        L2TileScheduler::SchedulingStrategy l2_strategy;
+        // Map DataflowStrategy to L2TileScheduler::SchedulingStrategy.
+        // The switch covers all three enum values but gcc -O3 can't tell;
+        // initialize explicitly to silence -Wmaybe-uninitialized.
+        L2TileScheduler::SchedulingStrategy l2_strategy =
+            L2TileScheduler::SchedulingStrategy::OUTPUT_STATIONARY;
         switch (strategy) {
             case DataflowStrategy::WEIGHT_STATIONARY:
                 l2_strategy = L2TileScheduler::SchedulingStrategy::WEIGHT_STATIONARY;

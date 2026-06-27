@@ -109,6 +109,12 @@ if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" OR CMAKE_CXX_COMPILER_ID STREQUAL "Clang
         add_compile_options(-Wno-stringop-overflow)
         add_link_options(-Wno-stringop-overflow)
     endif()
+    # Warnings-as-errors gate (CI sets KPU_WERROR=ON; locally off by default).
+    # Using add_compile_options instead of CMAKE_CXX_FLAGS so it stacks with
+    # rather than replaces the platform defaults.
+    if(KPU_WERROR)
+        add_compile_options(-Werror)
+    endif()
 elseif(CMAKE_CXX_COMPILER_ID STREQUAL "MSVC")
         # Remove problematic default flags
     foreach(flag_var CMAKE_CXX_FLAGS CMAKE_CXX_FLAGS_DEBUG CMAKE_CXX_FLAGS_RELEASE 
@@ -120,6 +126,11 @@ elseif(CMAKE_CXX_COMPILER_ID STREQUAL "MSVC")
     # Set our own flags
     # /Zc:__cplusplus - Report correct __cplusplus value (required for C++20 feature detection)
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /W3 /EHsc /Zc:__cplusplus")
+
+    # Warnings-as-errors gate (CI sets KPU_WERROR=ON; locally off by default).
+    if(KPU_WERROR)
+        add_compile_options(/WX)
+    endif()
     set(CMAKE_CXX_FLAGS_DEBUG "/MDd /Zi /Od /D_DEBUG")
     set(CMAKE_CXX_FLAGS_RELEASE "/MD /O2 /DNDEBUG")
     set(CMAKE_CXX_FLAGS_RELWITHDEBINFO "/MD /O2 /Zi /DNDEBUG")

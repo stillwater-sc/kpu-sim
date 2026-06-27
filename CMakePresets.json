@@ -34,12 +34,21 @@
     },
     {
       "name": "release",
-      "displayName": "Release Configuration", 
+      "displayName": "Release Configuration",
       "description": "Optimized release build",
       "inherits": "default",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Release",
         "CMAKE_INTERPROCEDURAL_OPTIMIZATION": "ON"
+      }
+    },
+    {
+      "name": "release-werror",
+      "displayName": "Release + warnings-as-errors",
+      "description": "Same as release but with KPU_WERROR=ON (used by CI; opt-in locally). Going through the preset keeps the Ninja generator and parallelism settings.",
+      "inherits": "release",
+      "cacheVariables": {
+        "KPU_WERROR": "ON"
       }
     },
     {
@@ -203,8 +212,14 @@
     },
     {
       "name": "release",
-      "displayName": "Release Build", 
+      "displayName": "Release Build",
       "configurePreset": "release",
+      "configuration": "Release"
+    },
+    {
+      "name": "release-werror",
+      "displayName": "Release Build + warnings-as-errors",
+      "configurePreset": "release-werror",
       "configuration": "Release"
     },
     {

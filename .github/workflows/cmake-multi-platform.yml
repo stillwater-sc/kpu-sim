@@ -99,26 +99,24 @@ jobs:
         echo "build-output-dir=${{ github.workspace }}/build" >> "$GITHUB_OUTPUT"
 
     - name: Configure CMake
-      # Single-config Ninja generator on both platforms so CMAKE_*_COMPILER_LAUNCHER
-      # (sccache) takes effect. Ninja parallelises by default; on Windows we rely
-      # on the MSVC env from ilammy/msvc-dev-cmd above. The launcher flags are
-      # injected only when the sccache probe succeeded (see previous step).
+      # Goes through the `release-werror` preset: Ninja generator, Release
+      # build, CMAKE_INTERPROCEDURAL_OPTIMIZATION=ON (LTO), and KPU_WERROR=ON
+      # (-Werror on gcc/clang, /WX on MSVC). One source of truth shared with
+      # local opt-in builds; prevents the silent fallback to the Make
+      # generator that bites if anyone bypasses --preset.
       #
-      # Warnings-as-errors enforced only in CI (Linux: -Werror, Windows: /WX)
-      # so local builds stay forgiving. The codebase is verified zero-warning
-      # on gcc, clang, and MSVC as of #23; this lock-in prevents regressions.
-      # Project compile flags (-Wall -Wextra -Wpedantic, -Wno-stringop-overflow)
-      # are added by add_compile_options() in CMakeLists.txt and are independent
-      # of CMAKE_CXX_FLAGS, so both sets land on the compile line.
+      # KPU_WERROR is wired up via add_compile_options() in CMakeLists.txt,
+      # not via CMAKE_CXX_FLAGS - that distinction matters on MSVC, where
+      # -DCMAKE_CXX_FLAGS=/WX would overwrite the CMake defaults and silently
+      # drop /EHsc (chrono C4530 cascade).
+      #
+      # Per-matrix compiler choice and sccache launcher are overlaid as
+      # cache-variable overrides on top of the preset.
       run: >
-        cmake -B ${{ steps.strings.outputs.build-output-dir }}
-        -G Ninja
+        cmake --preset release-werror
         ${{ env.SCCACHE_LAUNCHER && format('-DCMAKE_C_COMPILER_LAUNCHER={0} -DCMAKE_CXX_COMPILER_LAUNCHER={0}', env.SCCACHE_LAUNCHER) || '' }}
-        ${{ runner.os == 'Linux' && '-DCMAKE_CXX_FLAGS=-Werror' || '-DCMAKE_CXX_FLAGS=/WX' }}
         -DCMAKE_CXX_COMPILER=${{ matrix.cpp_compiler }}
         -DCMAKE_C_COMPILER=${{ matrix.c_compiler }}
-        -DCMAKE_BUILD_TYPE=${{ matrix.build_type }}
-        -S ${{ github.workspace }}
 
     - name: Upload build system info
       uses: actions/upload-artifact@v4
@@ -128,8 +126,8 @@ jobs:
 
     - name: Build
       # --parallel is redundant with Ninja (which parallelises by default) but
-      # kept as a belt-and-suspenders.
-      run: cmake --build ${{ steps.strings.outputs.build-output-dir }} --config ${{ matrix.build_type }} --parallel
+      # kept as a belt-and-suspenders for any future generator switch.
+      run: cmake --build --preset release-werror --parallel
 
     - name: Show sccache stats
       # Hit rate / miss count for this run; useful for spotting cold/warm

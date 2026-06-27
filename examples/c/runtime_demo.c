@@ -74,6 +74,14 @@ int main(void) {
 
     printf("Creating KPU simulator and runtime...\n\n");
 
+    /* Handles used after `goto cleanup`; initialize to NULL so the
+     * cleanup block can safely test/free them when an early goto fires
+     * before their assignment. Silences -Werror=maybe-uninitialized. */
+    KPUExecutorHandle executor = NULL;
+    float* A2 = NULL;
+    float* B2 = NULL;
+    float* C2 = NULL;
+
     /* Create simulator with default sizes */
     KPUHandle sim = kpu_create(0, 0);
     if (!sim) {
@@ -198,7 +206,7 @@ int main(void) {
 
     printf("Using GraphExecutor for automatic memory management...\n\n");
 
-    KPUExecutorHandle executor = kpu_executor_create(runtime);
+    executor = kpu_executor_create(runtime);
     if (!executor) {
         fprintf(stderr, "Failed to create executor!\n");
         goto cleanup;
@@ -231,9 +239,9 @@ int main(void) {
     }
 
     /* Prepare input data */
-    float* A2 = (float*)malloc(M2 * K2 * sizeof(float));
-    float* B2 = (float*)malloc(K2 * N2 * sizeof(float));
-    float* C2 = (float*)malloc(M2 * N2 * sizeof(float));
+    A2 = (float*)malloc(M2 * K2 * sizeof(float));
+    B2 = (float*)malloc(K2 * N2 * sizeof(float));
+    C2 = (float*)malloc(M2 * N2 * sizeof(float));
 
     fill_random(A2, M2 * K2);
     fill_random(B2, K2 * N2);

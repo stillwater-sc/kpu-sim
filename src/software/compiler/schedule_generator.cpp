@@ -398,7 +398,7 @@ void ScheduleGenerator::apply_double_buffering(Schedule& schedule) {
      */
 
     // Mark buffer IDs for commands
-    Size cmd_idx = 0;
+    [[maybe_unused]] Size cmd_idx = 0;
     int current_buffer = 0;
 
     for (auto& cmd : schedule.commands) {

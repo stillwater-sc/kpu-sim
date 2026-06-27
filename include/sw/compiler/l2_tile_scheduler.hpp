@@ -341,7 +341,7 @@ public:
 
 private:
     TileOptimizer::MemoryHierarchy memory_;
-    Size systolic_size_;
+    [[maybe_unused]] Size systolic_size_;
     ReplacementPolicy policy_;
     SchedulingStrategy strategy_;
 
