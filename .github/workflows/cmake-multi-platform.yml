@@ -103,10 +103,18 @@ jobs:
       # (sccache) takes effect. Ninja parallelises by default; on Windows we rely
       # on the MSVC env from ilammy/msvc-dev-cmd above. The launcher flags are
       # injected only when the sccache probe succeeded (see previous step).
+      #
+      # Warnings-as-errors enforced only in CI (Linux: -Werror, Windows: /WX)
+      # so local builds stay forgiving. The codebase is verified zero-warning
+      # on gcc, clang, and MSVC as of #23; this lock-in prevents regressions.
+      # Project compile flags (-Wall -Wextra -Wpedantic, -Wno-stringop-overflow)
+      # are added by add_compile_options() in CMakeLists.txt and are independent
+      # of CMAKE_CXX_FLAGS, so both sets land on the compile line.
       run: >
         cmake -B ${{ steps.strings.outputs.build-output-dir }}
         -G Ninja
         ${{ env.SCCACHE_LAUNCHER && format('-DCMAKE_C_COMPILER_LAUNCHER={0} -DCMAKE_CXX_COMPILER_LAUNCHER={0}', env.SCCACHE_LAUNCHER) || '' }}
+        ${{ runner.os == 'Linux' && '-DCMAKE_CXX_FLAGS=-Werror' || '-DCMAKE_CXX_FLAGS=/WX' }}
         -DCMAKE_CXX_COMPILER=${{ matrix.cpp_compiler }}
         -DCMAKE_C_COMPILER=${{ matrix.c_compiler }}
         -DCMAKE_BUILD_TYPE=${{ matrix.build_type }}
