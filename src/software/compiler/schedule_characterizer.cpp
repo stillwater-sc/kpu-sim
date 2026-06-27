@@ -34,9 +34,11 @@ std::vector<TensorShape> WorkloadGenerator::generate_ml_workloads(
         std::uniform_int_distribution<Size> dist_log(4, 12);  // 2^4 to 2^12
 
         for (size_t i = 0; i < count; ++i) {
-            Size M = 1 << dist_log(gen);
-            Size N = 1 << dist_log(gen);
-            Size K = 1 << dist_log(gen);
+            // Use Size(1) so the shift is Size-wide. `1 << n` would be int
+            // and trigger MSVC C4334 when assigned to a 64-bit Size.
+            Size M = Size(1) << dist_log(gen);
+            Size N = Size(1) << dist_log(gen);
+            Size K = Size(1) << dist_log(gen);
             shapes.emplace_back(M, N, K);
         }
     }
@@ -57,9 +59,10 @@ std::vector<TensorShape> WorkloadGenerator::generate_ml_workloads(
         std::vector<Size> common_features = {64, 128, 256, 512, 768, 1024, 2048, 4096};
         std::vector<Size> common_hidden = {256, 512, 768, 1024, 1536, 2048, 3072, 4096};
 
-        std::uniform_int_distribution<> batch_dist(0, common_batch.size() - 1);
-        std::uniform_int_distribution<> feat_dist(0, common_features.size() - 1);
-        std::uniform_int_distribution<> hidden_dist(0, common_hidden.size() - 1);
+        // Use size_t template arg so size() doesn't narrow to int (MSVC C4267).
+        std::uniform_int_distribution<size_t> batch_dist(0, common_batch.size() - 1);
+        std::uniform_int_distribution<size_t> feat_dist(0, common_features.size() - 1);
+        std::uniform_int_distribution<size_t> hidden_dist(0, common_hidden.size() - 1);
 
         for (size_t i = 0; i < count; ++i) {
             Size M = common_batch[batch_dist(gen)];
@@ -227,9 +230,10 @@ Cycle ScheduleCharacterizer::calculate_latency(
 
     // Add data movement cycles (simplified: assume overlapped with compute)
     // In reality, use pipelining model
-    Cycle dram_cycles = (schedule.l3_misses * schedule.config.Ti * schedule.config.Tk *
-                        memory_.element_size) / (latency_model_.dram_bandwidth * 1e9 /
-                        latency_model_.clock_freq_ghz / 1e9);
+    Cycle dram_cycles = static_cast<Cycle>(
+        (schedule.l3_misses * schedule.config.Ti * schedule.config.Tk *
+         memory_.element_size) / (latency_model_.dram_bandwidth * 1e9 /
+         latency_model_.clock_freq_ghz / 1e9));
     latency += dram_cycles / 10;  // Assume 90% overlap
 
     return latency;

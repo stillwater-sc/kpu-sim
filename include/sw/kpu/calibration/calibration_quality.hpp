@@ -199,7 +199,7 @@ inline void assess_coverage_quality(
     double empty_pct = ref.page_empty_rate * 100.0;
     double conflict_pct = ref.page_conflict_rate * 100.0;
 
-    int issues_found = 0;
+    [[maybe_unused]] int issues_found = 0;
 
     if (hit_pct < criteria.min_page_hit_pct) {
         QualityIssue issue;
