@@ -68,7 +68,7 @@ Examples:
 // ============================================================================
 
 constexpr uint64_t BANK_BITS = 4;
-constexpr uint64_t ROW_BITS = 16;
+[[maybe_unused]] constexpr uint64_t ROW_BITS = 16;  // documents address layout
 constexpr uint64_t COL_BITS = 10;
 constexpr uint64_t COL_SHIFT = 6;  // 64-byte cache lines
 constexpr uint64_t BANK_SHIFT = COL_SHIFT + COL_BITS;
@@ -233,7 +233,6 @@ bool run_calibration(const CalibrationOptions& opts) {
         pattern_names.push_back(workload.name);
 
         // Submit all requests
-        size_t submitted = 0;
         std::vector<uint8_t> write_data(64, 0xAA);  // Reusable write buffer
 
         for (const auto& [type, addr] : workload.requests) {
@@ -254,10 +253,6 @@ bool run_calibration(const CalibrationOptions& opts) {
                     mc.tick();
                     ++retry_count;
                 }
-            }
-
-            if (id.has_value()) {
-                ++submitted;
             }
 
             // Tick to make progress after submission

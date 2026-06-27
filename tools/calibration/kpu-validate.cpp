@@ -68,7 +68,7 @@ Examples:
 // ============================================================================
 
 constexpr uint64_t BANK_BITS = 4;
-constexpr uint64_t ROW_BITS = 16;
+[[maybe_unused]] constexpr uint64_t ROW_BITS = 16;  // documents address layout
 constexpr uint64_t COL_BITS = 10;
 constexpr uint64_t COL_SHIFT = 6;
 constexpr uint64_t BANK_SHIFT = COL_SHIFT + COL_BITS;

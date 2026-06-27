@@ -1789,7 +1789,7 @@ private:
                     std::vector<py::ssize_t> out_shape(x_buf.ndim, 1);
                     Y = py::array_t<float>(out_shape);
                 } else {
-                    Y = py::array_t<float>({static_cast<py::ssize_t>(1)});
+                    Y = py::array_t<float>(std::vector<py::ssize_t>{static_cast<py::ssize_t>(1)});
                 }
                 Y.mutable_data()[0] = result;
 

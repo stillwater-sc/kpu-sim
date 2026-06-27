@@ -338,7 +338,7 @@ inline void PipelineStats::finalize(double peak_gflops, double peak_bw_gbps, dou
 
     // Memory bandwidth utilization
     if (peak_bw_gbps > 0 && total_cycles > 0) {
-        double bytes = dma_stats.bytes_transferred;
+        double bytes = static_cast<double>(dma_stats.bytes_transferred);
         double seconds = total_cycles / (clock_ghz * 1e9);
         double achieved_bw = (bytes / 1e9) / seconds;
         memory_bandwidth_utilization = achieved_bw / peak_bw_gbps;

@@ -840,7 +840,7 @@ private:
     // Configuration
     CycleAccurateDMAConfig dma_config_;
     MemoryControllerConfig mc_config_;
-    bool include_noc_;
+    [[maybe_unused]] bool include_noc_;
 
     // Components
     std::unique_ptr<CycleAccurateDMAEngine> dma_;

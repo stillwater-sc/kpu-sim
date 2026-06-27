@@ -56,7 +56,7 @@ static const char* format_bytes(KPUSize bytes, char* buf, size_t buf_size) {
 /* Helper: fill array with random values */
 static void fill_random(float* data, size_t count) {
     for (size_t i = 0; i < count; i++) {
-        data[i] = ((float)rand() / RAND_MAX) * 2.0f - 1.0f;
+        data[i] = ((float)rand() / (float)RAND_MAX) * 2.0f - 1.0f;
     }
 }
 
