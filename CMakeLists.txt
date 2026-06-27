@@ -125,7 +125,10 @@ elseif(CMAKE_CXX_COMPILER_ID STREQUAL "MSVC")
     
     # Set our own flags
     # /Zc:__cplusplus - Report correct __cplusplus value (required for C++20 feature detection)
-    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /W3 /EHsc /Zc:__cplusplus")
+    # /utf-8 - Treat source and execution charset as UTF-8 so the Unicode glyphs
+    #          (arrows, box-drawing) in trace/demo output don't trip C4566 under
+    #          code page 1252. The sources are authored in UTF-8.
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /W3 /EHsc /Zc:__cplusplus /utf-8")
 
     # Warnings-as-errors gate (CI sets KPU_WERROR=ON; locally off by default).
     if(KPU_WERROR)
