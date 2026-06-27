@@ -487,7 +487,7 @@ TEST_CASE("PoolAllocator operations", "[allocator]") {
 
     SECTION("Deallocate and reuse") {
         Address addr1 = pool.allocate();
-        Address addr2 = pool.allocate();
+        [[maybe_unused]] Address addr2 = pool.allocate();
 
         REQUIRE(pool.get_allocated_count() == 2);
         REQUIRE(pool.get_free_count() == 8);

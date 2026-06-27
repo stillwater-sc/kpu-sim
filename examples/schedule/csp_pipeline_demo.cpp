@@ -513,7 +513,7 @@ int main(int argc, char* argv[]) {
 
     // Track stall summary per component/tile pair
     std::map<std::pair<std::string, std::string>, std::pair<Cycle, Cycle>> stall_ranges;
-    Cycle last_action_cycle = 0;
+    [[maybe_unused]] Cycle last_action_cycle = 0;
 
     for (const auto& entry : log) {
         bool is_stall = entry.event.find("STALL") != std::string::npos;

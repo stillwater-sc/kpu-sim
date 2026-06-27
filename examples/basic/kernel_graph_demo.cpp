@@ -129,9 +129,9 @@ void demo_diamond_pattern() {
 
     // Diamond pattern:
     //       input
-    //       /   \
-    //    left   right
-    //       \   /
+    //       /   '\'
+    //    left    right
+    //       '\' /
     //       merge
     //
     // This tests parallel execution opportunities

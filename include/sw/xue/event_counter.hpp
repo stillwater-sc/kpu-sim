@@ -207,7 +207,7 @@ struct EventStats {
      * @param observation_cycles Total cycles of observation (T)
      * @return Average delay in cycles
      */
-    double average_delay(uint64_t observation_cycles = 0) const {
+    double average_delay([[maybe_unused]] uint64_t observation_cycles = 0) const {
         uint64_t c = count.load(std::memory_order_relaxed);
         if (c == 0) return 0.0;
 

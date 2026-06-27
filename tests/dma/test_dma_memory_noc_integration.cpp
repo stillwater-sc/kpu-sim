@@ -178,7 +178,7 @@ TEST_CASE("DMA-Memory integration basic", "[dma][memory][integration]") {
         REQUIRE(dma->pending_count() == NUM_TRANSFERS);
 
         // Co-simulate
-        uint64_t cycles = cosimulate(*dma, mc.get(), nullptr, 50000);
+        [[maybe_unused]] uint64_t cycles = cosimulate(*dma, mc.get(), nullptr, 50000);
 
         REQUIRE(completed_count == NUM_TRANSFERS);
         REQUIRE_FALSE(dma->has_pending());
@@ -218,7 +218,7 @@ TEST_CASE("DMA-Memory backpressure handling", "[dma][memory][integration][backpr
         }
 
         // Co-simulate - all should eventually complete
-        uint64_t cycles = cosimulate(*dma, mc.get(), nullptr, 100000);
+        [[maybe_unused]] uint64_t cycles = cosimulate(*dma, mc.get(), nullptr, 100000);
 
         REQUIRE(completed_count == NUM_TRANSFERS);
         REQUIRE_FALSE(dma->has_pending());
@@ -251,9 +251,9 @@ TEST_CASE("DMA-NoC integration basic", "[dma][noc][integration]") {
 
         // Set up NoC delivery callback
         noc->set_delivery_callback(5, [&noc_delivered](
-            const TileDescriptor& tile,
-            uint8_t src, uint8_t dst,
-            uint64_t inject_cycle, uint64_t deliver_cycle)
+            [[maybe_unused]] const TileDescriptor& tile,
+            [[maybe_unused]] uint8_t src, [[maybe_unused]] uint8_t dst,
+            [[maybe_unused]] uint64_t inject_cycle, [[maybe_unused]] uint64_t deliver_cycle)
         {
             noc_delivered = true;
         });
@@ -276,7 +276,7 @@ TEST_CASE("DMA-NoC integration basic", "[dma][noc][integration]") {
         auto mc = create_behavioral_memory_controller();
         dma->bind_memory_controller(mc.get());
 
-        uint64_t cycles = cosimulate(*dma, mc.get(), noc.get(), 10000);
+        [[maybe_unused]] uint64_t cycles = cosimulate(*dma, mc.get(), noc.get(), 10000);
 
         // DMA should complete
         REQUIRE(dma_completed);
@@ -323,7 +323,7 @@ TEST_CASE("DMA-NoC backpressure handling", "[dma][noc][integration][backpressure
         }
 
         // Co-simulate
-        uint64_t cycles = cosimulate(*dma, mc.get(), noc.get(), 50000);
+        [[maybe_unused]] uint64_t cycles = cosimulate(*dma, mc.get(), noc.get(), 50000);
 
         REQUIRE(completed_count == NUM_TRANSFERS);
         REQUIRE_FALSE(dma->has_pending());
@@ -350,8 +350,8 @@ TEST_CASE("Full DMA-Memory-NoC pipeline", "[dma][memory][noc][integration][full]
 
         // Track NoC delivery
         noc->set_delivery_callback(5, [&](
-            const TileDescriptor& tile,
-            uint8_t src, uint8_t dst,
+            [[maybe_unused]] const TileDescriptor& tile,
+            [[maybe_unused]] uint8_t src, [[maybe_unused]] uint8_t dst,
             uint64_t inject_cycle, uint64_t deliver_cycle)
         {
             delivery_latency = deliver_cycle - inject_cycle;
@@ -410,7 +410,7 @@ TEST_CASE("Full DMA-Memory-NoC pipeline", "[dma][memory][noc][integration][full]
         REQUIRE(dma->pending_count() == 4);
 
         // Co-simulate
-        uint64_t cycles = cosimulate(*dma, mc.get(), noc.get(), 100000);
+        [[maybe_unused]] uint64_t cycles = cosimulate(*dma, mc.get(), noc.get(), 100000);
 
         REQUIRE(completed_count == 4);
         REQUIRE_FALSE(dma->has_pending());
@@ -592,7 +592,7 @@ TEST_CASE("DMA-Memory-NoC latency measurement", "[dma][memory][noc][integration]
     dma->bind_noc(noc.get(), 0);
 
     SECTION("Measure single transfer latency") {
-        uint64_t start_cycle = 0;
+        [[maybe_unused]] uint64_t start_cycle = 0;
         uint64_t end_cycle = 0;
 
         DMATransfer transfer;

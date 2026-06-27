@@ -403,7 +403,7 @@ TEST_CASE("XUE Operational Analysis (v0.4.0)", "[xue][analysis][v040]") {
         events.record_compute(EventType::OP_MATMUL, flops);
 
         // Memory traffic (simplified)
-        uint64_t bytes = 3 * M * N * 4;  // A, B, C in float
+        [[maybe_unused]] uint64_t bytes = 3 * M * N * 4;  // A, B, C in float
         events.record_memory(EventType::DRAM_READ, 2 * M * K * 4);
         events.record_memory(EventType::DRAM_WRITE, M * N * 4);
 

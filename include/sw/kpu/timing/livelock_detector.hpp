@@ -266,8 +266,8 @@ public:
      *
      * Call periodically to catch livelock conditions early.
      */
-    bool verify_invariants(const CreditPool& l3_credits,
-                          const CreditPool& l2_credits,
+    bool verify_invariants([[maybe_unused]] const CreditPool& l3_credits,
+                          [[maybe_unused]] const CreditPool& l2_credits,
                           const TagCAM& l3_cam,
                           const TagCAM& l2_cam,
                           Cycle current_cycle,

@@ -2314,7 +2314,7 @@ private:
 
             // Determine normalization dimensions (default: last dims matching normalized_shape)
             py::ssize_t norm_size = 1;
-            int norm_dims = 1;  // Default: normalize over last dimension
+            [[maybe_unused]] int norm_dims = 1;  // Default: normalize over last dimension
             if (attrs.contains("normalized_shape")) {
                 auto shape_list = attrs["normalized_shape"].cast<py::list>();
                 norm_dims = static_cast<int>(py::len(shape_list));

@@ -192,7 +192,7 @@ protected:
         }
     }
 
-    bool can_fire(uint32_t node_id, const FlowNode& node) const override {
+    bool can_fire([[maybe_unused]] uint32_t node_id, const FlowNode& node) const override {
         // For MATMUL, check that both A and B tiles are ready
         if (node.operation == Operation::MATMUL ||
             node.operation == Operation::ACCUMULATE) {
@@ -214,7 +214,7 @@ protected:
     }
 
 private:
-    void execute_feed(uint32_t node_id, const FlowNode& node, bool is_a_operand) {
+    void execute_feed([[maybe_unused]] uint32_t node_id, const FlowNode& node, [[maybe_unused]] bool is_a_operand) {
         // Feed tile from L2 to L1 edge registers
         for (const auto& input : node.inputs) {
             if (input.location == Location::L2 && input.type != OperandType::BUFFER_TOKEN) {
@@ -234,9 +234,10 @@ private:
         }
     }
 
-    void execute_matmul(uint32_t node_id, const FlowNode& node) {
+    void execute_matmul([[maybe_unused]] uint32_t node_id, const FlowNode& node) {
         // Get tile coordinates from inputs
-        uint16_t i = 0, j = 0, k = 0;
+        uint16_t i = 0, j = 0;
+        [[maybe_unused]] uint16_t k = 0;
         for (const auto& input : node.inputs) {
             if (input.type == OperandType::TILE_A) {
                 i = input.coord.i;
@@ -276,7 +277,7 @@ private:
         execute_matmul(node_id, node);
     }
 
-    void execute_drain(uint32_t node_id, const FlowNode& node) {
+    void execute_drain([[maybe_unused]] uint32_t node_id, const FlowNode& node) {
         // Drain result from accumulator to L2
         uint16_t i = accumulator_.i;
         uint16_t j = accumulator_.j;
@@ -301,7 +302,7 @@ private:
         }
     }
 
-    void execute_bias(uint32_t node_id, const FlowNode& node) {
+    void execute_bias([[maybe_unused]] uint32_t node_id, const FlowNode& node) {
         // Bias addition happens in-place in accumulator
         // Outputs the same C tile location as input
         for (const auto& output : node.outputs) {
@@ -309,7 +310,7 @@ private:
         }
     }
 
-    void execute_activate(uint32_t node_id, const FlowNode& node) {
+    void execute_activate([[maybe_unused]] uint32_t node_id, const FlowNode& node) {
         // Activation happens in-place
         for (const auto& output : node.outputs) {
             output_events_.add_ready(output, current_cycle_ + config_.activation_latency);
@@ -419,8 +420,8 @@ public:
 
     /// Add bias and activation after drain
     StreamerFlowGraphBuilder& add_bias_activation() {
-        uint16_t i = graph_.mesh_row;
-        uint16_t j = graph_.mesh_col;
+        [[maybe_unused]] uint16_t i = graph_.mesh_row;
+        [[maybe_unused]] uint16_t j = graph_.mesh_col;
 
         // These would be added after drain
         // For now, just a placeholder
