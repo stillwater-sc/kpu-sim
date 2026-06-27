@@ -150,11 +150,11 @@ TileDataFlowGraph build_systolic_matmul_dfg(const Args& args) {
         for (uint32_t k = 0; k < args.k_tiles; ++k) {
             TileDescriptor tile;
             tile.tensor = TensorId::A;
-            tile.m_tile = m;
-            tile.k_tile = k;
+            tile.m_tile = static_cast<uint16_t>(m);
+            tile.k_tile = static_cast<uint16_t>(k);
             tile.size = tile_M * tile_K * sizeof(float);
 
-            uint8_t dest_l3 = m * args.mesh_cols;  // Column 0
+            uint8_t dest_l3 = static_cast<uint8_t>(m * args.mesh_cols);  // Column 0
             size_t node_id = dfg.add_dma_load(tile, dest_l3);
             dma_load_a[{m, k, 0}] = node_id;
 
@@ -170,11 +170,11 @@ TileDataFlowGraph build_systolic_matmul_dfg(const Args& args) {
         for (uint32_t n = 0; n < args.n_tiles; ++n) {
             TileDescriptor tile;
             tile.tensor = TensorId::B;
-            tile.k_tile = k;
-            tile.n_tile = n;
+            tile.k_tile = static_cast<uint16_t>(k);
+            tile.n_tile = static_cast<uint16_t>(n);
             tile.size = tile_K * tile_N * sizeof(float);
 
-            uint8_t dest_l3 = n;  // Row 0
+            uint8_t dest_l3 = static_cast<uint8_t>(n);  // Row 0
             size_t node_id = dfg.add_dma_load(tile, dest_l3);
             dma_load_b[{k, n, 0}] = node_id;
 
@@ -192,12 +192,12 @@ TileDataFlowGraph build_systolic_matmul_dfg(const Args& args) {
             for (uint32_t n = 0; n < args.n_tiles; ++n) {
                 TileDescriptor a_tile;
                 a_tile.tensor = TensorId::A;
-                a_tile.m_tile = m;
-                a_tile.k_tile = k;
+                a_tile.m_tile = static_cast<uint16_t>(m);
+                a_tile.k_tile = static_cast<uint16_t>(k);
                 a_tile.size = tile_M * tile_K * sizeof(float);
 
-                uint8_t src_l3 = m * args.mesh_cols + (n > 0 ? n - 1 : 0);
-                uint8_t dst_l3 = m * args.mesh_cols + n;
+                uint8_t src_l3 = static_cast<uint8_t>(m * args.mesh_cols + (n > 0 ? n - 1 : 0));
+                uint8_t dst_l3 = static_cast<uint8_t>(m * args.mesh_cols + n);
 
                 if (n == 0) {
                     // First column: DMA load is the source
@@ -216,12 +216,12 @@ TileDataFlowGraph build_systolic_matmul_dfg(const Args& args) {
             for (uint32_t m = 0; m < args.m_tiles; ++m) {
                 TileDescriptor b_tile;
                 b_tile.tensor = TensorId::B;
-                b_tile.k_tile = k;
-                b_tile.n_tile = n;
+                b_tile.k_tile = static_cast<uint16_t>(k);
+                b_tile.n_tile = static_cast<uint16_t>(n);
                 b_tile.size = tile_K * tile_N * sizeof(float);
 
-                uint8_t src_l3 = (m > 0 ? m - 1 : 0) * args.mesh_cols + n;
-                uint8_t dst_l3 = m * args.mesh_cols + n;
+                uint8_t src_l3 = static_cast<uint8_t>((m > 0 ? m - 1 : 0) * args.mesh_cols + n);
+                uint8_t dst_l3 = static_cast<uint8_t>(m * args.mesh_cols + n);
 
                 if (m == 0) {
                     // First row: DMA load is the source
@@ -240,16 +240,16 @@ TileDataFlowGraph build_systolic_matmul_dfg(const Args& args) {
             for (uint32_t n = 0; n < args.n_tiles; ++n) {
                 TileDescriptor a_tile, b_tile, c_tile;
                 a_tile.tensor = TensorId::A;
-                a_tile.m_tile = m;
-                a_tile.k_tile = k;
+                a_tile.m_tile = static_cast<uint16_t>(m);
+                a_tile.k_tile = static_cast<uint16_t>(k);
                 b_tile.tensor = TensorId::B;
-                b_tile.k_tile = k;
-                b_tile.n_tile = n;
+                b_tile.k_tile = static_cast<uint16_t>(k);
+                b_tile.n_tile = static_cast<uint16_t>(n);
                 c_tile.tensor = TensorId::C;
-                c_tile.m_tile = m;
-                c_tile.n_tile = n;
+                c_tile.m_tile = static_cast<uint16_t>(m);
+                c_tile.n_tile = static_cast<uint16_t>(n);
 
-                uint8_t l3_id = m * args.mesh_cols + n;
+                uint8_t l3_id = static_cast<uint8_t>(m * args.mesh_cols + n);
                 size_t matmul_id = dfg.add_matmul(l3_id, tile_M, tile_N, tile_K, a_tile, b_tile, c_tile);
                 matmul_ops[{m, n, k}] = matmul_id;
 
@@ -270,11 +270,11 @@ TileDataFlowGraph build_systolic_matmul_dfg(const Args& args) {
         for (uint32_t n = 0; n < args.n_tiles; ++n) {
             TileDescriptor c_tile;
             c_tile.tensor = TensorId::C;
-            c_tile.m_tile = m;
-            c_tile.n_tile = n;
+            c_tile.m_tile = static_cast<uint16_t>(m);
+            c_tile.n_tile = static_cast<uint16_t>(n);
             c_tile.size = tile_M * tile_N * sizeof(float);
 
-            uint8_t l3_id = m * args.mesh_cols + n;
+            uint8_t l3_id = static_cast<uint8_t>(m * args.mesh_cols + n);
             size_t store_id = dfg.add_dma_store(c_tile, l3_id);
 
             // Depends on final K-step matmul

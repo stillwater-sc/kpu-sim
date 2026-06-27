@@ -157,12 +157,12 @@ int main(int argc, char* argv[]) {
     std::cout << "Generating CSP schedule...\n";
 
     MatMulScheduleGenerator::Config config;
-    config.M = M;
-    config.N = N;
-    config.K = K;
-    config.Ti = Ti;
-    config.Tj = Tj;
-    config.Tk = Tk;
+    config.M = static_cast<Size>(M);
+    config.N = static_cast<Size>(N);
+    config.K = static_cast<Size>(K);
+    config.Ti = static_cast<Size>(Ti);
+    config.Tj = static_cast<Size>(Tj);
+    config.Tk = static_cast<Size>(Tk);
     config.strategy = strategy;
 
     // Set matrix base addresses in DRAM (for trace display)

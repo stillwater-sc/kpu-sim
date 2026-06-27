@@ -197,7 +197,7 @@ public:
     TraceStats computeStats() {
         TraceStats stats;
 
-        stats.total_transactions = transactions_.size();
+        stats.total_transactions = static_cast<int>(transactions_.size());
 
         for (const auto& txn : transactions_) {
             if (txn.type == "READ") {
@@ -237,7 +237,7 @@ public:
 
         // Calculate bandwidth metrics
         stats.total_bytes = stats.read_bytes + stats.write_bytes;
-        stats.active_banks = stats.bank_usage.size();
+        stats.active_banks = static_cast<int>(stats.bank_usage.size());
         int total_cycles = stats.end_cycle - stats.start_cycle;
 
         if (total_cycles > 0) {

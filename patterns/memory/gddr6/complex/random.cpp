@@ -27,7 +27,7 @@ int main(int argc, char* argv[]) {
         } else if (std::strcmp(argv[i], "--no-trace") == 0) {
             export_trace = false;
         } else if (std::strcmp(argv[i], "--seed") == 0 && i + 1 < argc) {
-            seed = std::stoul(argv[++i]);
+            seed = static_cast<uint32_t>(std::stoul(argv[++i]));
         }
     }
 

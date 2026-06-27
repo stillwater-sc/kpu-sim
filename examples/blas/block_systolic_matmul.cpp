@@ -765,19 +765,19 @@ int main(int argc, char* argv[]) {
             config.M = config.N = config.K = 32;
             config.m_tiles = config.n_tiles = config.k_tiles = 4;
         } else if (arg == "-m" && i + 1 < argc) {
-            config.M = config.N = config.K = std::stoul(argv[++i]);
+            config.M = config.N = config.K = static_cast<uint32_t>(std::stoul(argv[++i]));
         } else if (arg == "-t" && i + 1 < argc) {
-            config.m_tiles = config.n_tiles = config.k_tiles = std::stoul(argv[++i]);
+            config.m_tiles = config.n_tiles = config.k_tiles = static_cast<uint32_t>(std::stoul(argv[++i]));
         } else if (arg == "-k" && i + 1 < argc) {
-            config.k_tiles = std::stoul(argv[++i]);
+            config.k_tiles = static_cast<uint32_t>(std::stoul(argv[++i]));
         } else if (arg[0] != '-') {
             // Legacy positional args
-            config.M = config.N = config.K = std::stoul(arg);
+            config.M = config.N = config.K = static_cast<uint32_t>(std::stoul(arg));
             if (i + 1 < argc && argv[i+1][0] != '-') {
-                config.m_tiles = config.n_tiles = std::stoul(argv[++i]);
+                config.m_tiles = config.n_tiles = static_cast<uint32_t>(std::stoul(argv[++i]));
             }
             if (i + 1 < argc && argv[i+1][0] != '-') {
-                config.k_tiles = std::stoul(argv[++i]);
+                config.k_tiles = static_cast<uint32_t>(std::stoul(argv[++i]));
             }
         }
     }

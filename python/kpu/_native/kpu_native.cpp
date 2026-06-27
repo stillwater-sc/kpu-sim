@@ -1544,7 +1544,7 @@ private:
             // Compute strides for input
             std::vector<py::ssize_t> x_strides(x_buf.ndim);
             py::ssize_t stride = 1;
-            for (int i = x_buf.ndim - 1; i >= 0; --i) {
+            for (int i = static_cast<int>(x_buf.ndim - 1); i >= 0; --i) {
                 x_strides[i] = stride;
                 stride *= x_buf.shape[i];
             }
@@ -1552,7 +1552,7 @@ private:
             // Compute strides for output
             std::vector<py::ssize_t> y_strides(x_buf.ndim);
             stride = 1;
-            for (int i = x_buf.ndim - 1; i >= 0; --i) {
+            for (int i = static_cast<int>(x_buf.ndim - 1); i >= 0; --i) {
                 y_strides[i] = stride;
                 stride *= new_shape[i];
             }
@@ -1575,7 +1575,7 @@ private:
                 y_ptr[y_idx] = x_ptr[x_idx];
 
                 // Increment coordinates
-                for (int d = x_buf.ndim - 1; d >= 0; --d) {
+                for (int d = static_cast<int>(x_buf.ndim - 1); d >= 0; --d) {
                     coords[d]++;
                     if (coords[d] < x_buf.shape[d]) break;
                     coords[d] = 0;
@@ -1604,7 +1604,7 @@ private:
                 attrs["end_dim"].cast<int>() : -1;
 
             // Normalize negative indices
-            int ndim = x_buf.ndim;
+            int ndim = static_cast<int>(x_buf.ndim);
             if (start_dim < 0) start_dim = ndim + start_dim;
             if (end_dim < 0) end_dim = ndim + end_dim;
 
@@ -1656,7 +1656,7 @@ private:
 
             // Get shape info from first input
             py::buffer_info first_buf = input_arrays[0].request();
-            int ndim = first_buf.ndim;
+            int ndim = static_cast<int>(first_buf.ndim);
             if (dim < 0) dim = ndim + dim;
 
             // Compute output shape - copy from first input's shape
@@ -1746,7 +1746,7 @@ private:
                 try {
                     // Try single int
                     int axis = attrs["axis"].cast<int>();
-                    if (axis < 0) axis = x_buf.ndim + axis;
+                    if (axis < 0) axis = static_cast<int>(x_buf.ndim + axis);
                     axes.push_back(axis);
                 } catch (...) {
                     // Try tuple/list
@@ -1823,7 +1823,7 @@ private:
                 // Compute input/output strides
                 std::vector<py::ssize_t> x_strides(x_buf.ndim);
                 py::ssize_t stride = 1;
-                for (int d = x_buf.ndim - 1; d >= 0; --d) {
+                for (int d = static_cast<int>(x_buf.ndim - 1); d >= 0; --d) {
                     x_strides[d] = stride;
                     stride *= x_buf.shape[d];
                 }
@@ -1873,7 +1873,7 @@ private:
                     }
 
                     // Increment coordinates
-                    for (int d = x_buf.ndim - 1; d >= 0; --d) {
+                    for (int d = static_cast<int>(x_buf.ndim - 1); d >= 0; --d) {
                         coords[d]++;
                         if (coords[d] < x_buf.shape[d]) break;
                         coords[d] = 0;
@@ -2252,7 +2252,7 @@ private:
             // Compute strides
             std::vector<py::ssize_t> strides(static_cast<size_t>(x_buf.ndim));
             py::ssize_t stride = 1;
-            for (int d = x_buf.ndim - 1; d >= 0; --d) {
+            for (int d = static_cast<int>(x_buf.ndim - 1); d >= 0; --d) {
                 strides[static_cast<size_t>(d)] = stride;
                 stride *= x_buf.shape[static_cast<size_t>(d)];
             }
@@ -2266,7 +2266,7 @@ private:
                 // Compute base index for this slice
                 py::ssize_t base_idx = 0;
                 py::ssize_t remaining = outer;
-                for (int d = x_buf.ndim - 1; d >= 0; --d) {
+                for (int d = static_cast<int>(x_buf.ndim - 1); d >= 0; --d) {
                     if (d == axis) continue;
                     py::ssize_t coord = remaining % x_buf.shape[static_cast<size_t>(d)];
                     remaining /= x_buf.shape[static_cast<size_t>(d)];

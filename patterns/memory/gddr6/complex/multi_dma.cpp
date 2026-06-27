@@ -169,8 +169,8 @@ bool test_double_buffer_dma() {
     // Read DMAs use banks 0-7, write DMAs use banks 8-15
     for (int tile = 0; tile < TILES_PER_DMA; ++tile) {
         for (int dma = 0; dma < NUM_READ_DMAS; ++dma) {
-            uint8_t read_bank = dma;           // Banks 0-7
-            uint8_t write_bank = 8 + dma;      // Banks 8-15
+            uint8_t read_bank = static_cast<uint8_t>(dma);           // Banks 0-7
+            uint8_t write_bank = static_cast<uint8_t>(8 + dma);      // Banks 8-15
             uint32_t row = 100 + tile;
 
             for (int line = 0; line < CACHE_LINES_PER_TILE; ++line) {
@@ -328,7 +328,7 @@ int main(int argc, char* argv[]) {
         constexpr int LINES_TO_TRACE = 8;
 
         for (int dma = 0; dma < 16; ++dma) {
-            uint8_t bank = dma;
+            uint8_t bank = static_cast<uint8_t>(dma);
             uint32_t row = 100;
 
             for (int line = 0; line < LINES_TO_TRACE; ++line) {

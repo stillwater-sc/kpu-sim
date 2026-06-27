@@ -95,7 +95,7 @@ inline Workload make_same_bank_group_workload() {
     for (int bank = 0; bank < 4; ++bank) {
         for (int i = 0; i < 4; ++i) {
             w.requests.push_back({
-                make_address(bank, 100, i * 64),
+                make_address(static_cast<uint8_t>(bank), 100, i * 64),
                 CACHE_LINE_BYTES,
                 false
             });
@@ -109,7 +109,7 @@ inline Workload make_diff_bank_groups_workload() {
     Workload w;
     w.name = "diff_bg";
     for (int bg = 0; bg < 4; ++bg) {
-        uint8_t bank = bg * 8;  // First bank in each group
+        uint8_t bank = static_cast<uint8_t>(bg * 8);  // First bank in each group
         for (int i = 0; i < 4; ++i) {
             w.requests.push_back({
                 make_address(bank, 100, i * 64),
@@ -129,7 +129,7 @@ inline Workload make_stream_workload(size_t num_requests = 64) {
         // Spread across banks for parallelism
         uint8_t bank = (i % 32);
         w.requests.push_back({
-            make_address(bank, 100, (i / 32) * 64),
+            make_address(bank, 100, static_cast<uint32_t>((i / 32) * 64)),
             CACHE_LINE_BYTES,
             false
         });
@@ -184,7 +184,7 @@ inline Workload make_max_bandwidth_workload() {
     // First open all pages (page empty accesses)
     for (int bank = 0; bank < 32; ++bank) {
         w.requests.push_back({
-            make_address(bank, 100, 0),
+            make_address(static_cast<uint8_t>(bank), 100, 0),
             CACHE_LINE_BYTES,
             false
         });
@@ -194,7 +194,7 @@ inline Workload make_max_bandwidth_workload() {
     for (int round = 1; round < 16; ++round) {
         for (int bank = 0; bank < 32; ++bank) {
             w.requests.push_back({
-                make_address(bank, 100, round * 64),
+                make_address(static_cast<uint8_t>(bank), 100, round * 64),
                 CACHE_LINE_BYTES,
                 false
             });

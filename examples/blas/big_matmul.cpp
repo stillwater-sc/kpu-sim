@@ -137,9 +137,9 @@ int main() {
 
     ResourceTracker tracker;
     for (size_t i = 0; i < config.compute_tile_count; ++i)
-        tracker.register_resource(ComponentType::SYSTOLIC_ARRAY, i);
+        tracker.register_resource(ComponentType::SYSTOLIC_ARRAY, static_cast<uint32_t>(i));
     for (size_t i = 0; i < config.dma_engine_count; ++i)
-        tracker.register_resource(ComponentType::DMA_ENGINE, i);
+        tracker.register_resource(ComponentType::DMA_ENGINE, static_cast<uint32_t>(i));
 
     std::vector<std::pair<CycleCount, CycleCount>> wave_ranges;
 
@@ -170,7 +170,7 @@ int main() {
     // Load A tiles
     Size a_tile_size = A_SIZE / NUM_A_L3_TILES;
     for (Size i = 0; i < NUM_A_L3_TILES; ++i) {
-        tracker.mark_busy(ComponentType::DMA_ENGINE, i % config.dma_engine_count,
+        tracker.mark_busy(ComponentType::DMA_ENGINE, static_cast<uint32_t>(i % config.dma_engine_count),
                          kpu.get_current_cycle(), i, "Load A");
         kpu.dma_external_to_l3(i % config.dma_engine_count,
                               ext_base + i * a_tile_size,
@@ -178,13 +178,13 @@ int main() {
     }
     while (dma_done < static_cast<int>(NUM_A_L3_TILES)) kpu.step();
     for (size_t i = 0; i < config.dma_engine_count; ++i)
-        tracker.mark_idle(ComponentType::DMA_ENGINE, i, kpu.get_current_cycle(), "A done");
+        tracker.mark_idle(ComponentType::DMA_ENGINE, static_cast<uint32_t>(i), kpu.get_current_cycle(), "A done");
 
     // Load B tiles
     dma_done = 0;
     Size b_tile_size = B_SIZE / NUM_B_L3_TILES;
     for (Size i = 0; i < NUM_B_L3_TILES; ++i) {
-        tracker.mark_busy(ComponentType::DMA_ENGINE, i % config.dma_engine_count,
+        tracker.mark_busy(ComponentType::DMA_ENGINE, static_cast<uint32_t>(i % config.dma_engine_count),
                          kpu.get_current_cycle(), i + 8, "Load B");
         kpu.dma_external_to_l3(i % config.dma_engine_count,
                               ext_base + A_SIZE + i * b_tile_size,
@@ -192,7 +192,7 @@ int main() {
     }
     while (dma_done < static_cast<int>(NUM_B_L3_TILES)) kpu.step();
     for (size_t i = 0; i < config.dma_engine_count; ++i)
-        tracker.mark_idle(ComponentType::DMA_ENGINE, i, kpu.get_current_cycle(), "B done");
+        tracker.mark_idle(ComponentType::DMA_ENGINE, static_cast<uint32_t>(i), kpu.get_current_cycle(), "B done");
 
     CycleCount load_end = kpu.get_current_cycle();
     std::cout << "Data loaded in " << (load_end - load_start) << " cycles\n";
@@ -213,7 +213,7 @@ int main() {
         // Mark compute tiles busy
         for (Size t = 0; t < TILES_PER_WAVE; ++t) {
             Size ct = wave * TILES_PER_WAVE + t;
-            tracker.mark_busy(ComponentType::SYSTOLIC_ARRAY, ct,
+            tracker.mark_busy(ComponentType::SYSTOLIC_ARRAY, static_cast<uint32_t>(ct),
                             kpu.get_current_cycle(), wave * 100 + t, "Compute");
         }
 
@@ -262,7 +262,7 @@ int main() {
         // Mark compute tiles idle
         for (Size t = 0; t < TILES_PER_WAVE; ++t) {
             Size ct = wave * TILES_PER_WAVE + t;
-            tracker.mark_idle(ComponentType::SYSTOLIC_ARRAY, ct,
+            tracker.mark_idle(ComponentType::SYSTOLIC_ARRAY, static_cast<uint32_t>(ct),
                             kpu.get_current_cycle(), "Done");
         }
 
@@ -270,7 +270,7 @@ int main() {
         CycleCount drain_start = kpu.get_current_cycle();
         dma_done = 0;
         for (Size t = 0; t < TILES_PER_WAVE; ++t) {
-            tracker.mark_busy(ComponentType::DMA_ENGINE, t % config.dma_engine_count,
+            tracker.mark_busy(ComponentType::DMA_ENGINE, static_cast<uint32_t>(t % config.dma_engine_count),
                             kpu.get_current_cycle(), 0, "Drain");
             kpu.dma_l3_to_host(t % config.dma_engine_count,
                               kpu.get_l3_tile_base(12 + t),
@@ -279,7 +279,7 @@ int main() {
         }
         while (dma_done < static_cast<int>(TILES_PER_WAVE)) kpu.step();
         for (size_t i = 0; i < config.dma_engine_count; ++i)
-            tracker.mark_idle(ComponentType::DMA_ENGINE, i, kpu.get_current_cycle(), "Drain done");
+            tracker.mark_idle(ComponentType::DMA_ENGINE, static_cast<uint32_t>(i), kpu.get_current_cycle(), "Drain done");
         drain_total += (kpu.get_current_cycle() - drain_start);
 
         wave_ranges.emplace_back(wave_start, kpu.get_current_cycle());

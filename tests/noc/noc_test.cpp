@@ -155,7 +155,7 @@ TEST_CASE("NoC Concurrent Transfers Without Contention", "[noc]") {
     // Row 3: 12→13
 
     int delivered_count = 0;
-    for (uint8_t i : {1, 5, 9, 13}) {
+    for (uint8_t i : {static_cast<uint8_t>(1), static_cast<uint8_t>(5), static_cast<uint8_t>(9), static_cast<uint8_t>(13)}) {
         noc.set_l3_delivery_callback(i, [&delivered_count](const NoCPacket&, uint64_t) {
             delivered_count++;
         });
@@ -302,13 +302,13 @@ TEST_CASE("NoC Trace Generation", "[noc][trace]") {
     // Inject A tiles flowing East from column 0
     for (int row = 0; row < 4; row++) {
         for (int k = 0; k < 4; k++) {
-            uint8_t src = row * 4;  // Column 0
-            uint8_t dst = row * 4 + 3;  // Column 3
+            uint8_t src = static_cast<uint8_t>(row * 4);  // Column 0
+            uint8_t dst = static_cast<uint8_t>(row * 4 + 3);  // Column 3
 
             TileDescriptor tile;
             tile.tensor = TensorId::A;
-            tile.m_tile = row;
-            tile.k_tile = k;
+            tile.m_tile = static_cast<uint16_t>(row);
+            tile.k_tile = static_cast<uint16_t>(k);
             tile.size = 256;
 
             // Stagger injections to simulate real behavior
@@ -322,13 +322,13 @@ TEST_CASE("NoC Trace Generation", "[noc][trace]") {
     // Inject B tiles flowing South from row 0
     for (int col = 0; col < 4; col++) {
         for (int k = 0; k < 4; k++) {
-            uint8_t src = col;  // Row 0
-            uint8_t dst = 12 + col;  // Row 3
+            uint8_t src = static_cast<uint8_t>(col);  // Row 0
+            uint8_t dst = static_cast<uint8_t>(12 + col);  // Row 3
 
             TileDescriptor tile;
             tile.tensor = TensorId::B;
-            tile.k_tile = k;
-            tile.n_tile = col;
+            tile.k_tile = static_cast<uint16_t>(k);
+            tile.n_tile = static_cast<uint16_t>(col);
             tile.size = 256;
 
             while (noc.inject_l3_to_l3(src, dst, tile, cycle) != TransferResult::SUCCESS) {

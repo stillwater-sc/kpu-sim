@@ -224,7 +224,7 @@ public:
         uint32_t row_bits = 15; // 32K rows
 
         col = (address >> col_bits) & ((1 << col_bits) - 1);
-        bank = (address >> (col_bits + col_bits)) & ((1 << bank_bits) - 1);
+        bank = static_cast<uint8_t>((address >> (col_bits + col_bits)) & ((1 << bank_bits) - 1));
         row = (address >> (col_bits + col_bits + bank_bits)) & ((1 << row_bits) - 1);
 
         // Ensure bank is in range

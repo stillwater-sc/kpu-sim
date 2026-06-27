@@ -349,13 +349,13 @@ int main(int argc, char* argv[]) {
             opts.technology = arg.substr(13);
         }
         else if (arg.rfind("--speed=", 0) == 0) {
-            opts.speed_grade = std::stoul(arg.substr(8));
+            opts.speed_grade = static_cast<uint32_t>(std::stoul(arg.substr(8)));
         }
         else if (arg.rfind("--requests=", 0) == 0) {
             opts.requests_per_workload = std::stoul(arg.substr(11));
         }
         else if (arg.rfind("--seed=", 0) == 0) {
-            opts.seed = std::stoul(arg.substr(7));
+            opts.seed = static_cast<uint32_t>(std::stoul(arg.substr(7)));
         }
         else if (arg == "--verbose" || arg == "-v") {
             opts.verbose = true;

@@ -280,7 +280,7 @@ void NoCRouter::arbitrate_and_forward(uint64_t cycle) {
                 inp.buffer.pop();
 
                 // Update packet state
-                moved_pkt.current_router = config_.get_neighbor_id(id_, out_dir);
+                moved_pkt.current_router = static_cast<uint8_t>(config_.get_neighbor_id(id_, out_dir));
                 moved_pkt.hops_taken++;
 
                 // Send through link
@@ -437,7 +437,7 @@ TransferResult NoC::inject_l3_to_l3(
         event.packet_seq = next_sequence_ - 1;  // We already incremented in create_packet
         event.tile = tile;
         event.flit_index = 0;  // First FLIT
-        event.num_flits = num_flits;
+        event.num_flits = static_cast<uint16_t>(num_flits);
         event.src_router = src_l3;
         event.dst_router = dst_l3;
         tracer_->record_event(event);
@@ -550,8 +550,8 @@ void NoC::step(uint64_t cycle) {
                                 event.port = in_dir;
                                 event.packet_seq = pkt.sequence_num;
                                 event.tile = pkt.tile;
-                                event.flit_index = pkt.num_flits - 1;
-                                event.num_flits = pkt.num_flits;
+                                event.flit_index = static_cast<uint16_t>(pkt.num_flits - 1);
+                                event.num_flits = static_cast<uint16_t>(pkt.num_flits);
                                 event.src_router = i;
                                 event.dst_router = static_cast<uint8_t>(neighbor);
                                 tracer_->record_event(event);
@@ -560,7 +560,7 @@ void NoC::step(uint64_t cycle) {
                                 // FLITs are sent over num_flits cycles
                                 uint64_t send_start_cycle = cycle > pkt.num_flits ?
                                                             cycle - pkt.num_flits : 0;
-                                const uint16_t sample_interval = std::max<uint16_t>(1, pkt.num_flits / 8);
+                                const uint16_t sample_interval = std::max<uint16_t>(1, static_cast<uint16_t>(pkt.num_flits / 8));
                                 for (uint16_t flit = 0; flit < pkt.num_flits; flit += sample_interval) {
                                     NoCTraceEvent flit_event;
                                     flit_event.cycle = send_start_cycle + flit;
@@ -570,7 +570,7 @@ void NoC::step(uint64_t cycle) {
                                     flit_event.packet_seq = pkt.sequence_num;
                                     flit_event.tile = pkt.tile;
                                     flit_event.flit_index = flit;
-                                    flit_event.num_flits = pkt.num_flits;
+                                    flit_event.num_flits = static_cast<uint16_t>(pkt.num_flits);
                                     flit_event.src_router = i;
                                     flit_event.dst_router = static_cast<uint8_t>(neighbor);
                                     tracer_->record_event(flit_event);
@@ -604,8 +604,8 @@ void NoC::deliver_packets(uint64_t cycle) {
                     event.port = PortDirection::LOCAL;
                     event.packet_seq = pkt.sequence_num;
                     event.tile = pkt.tile;
-                    event.flit_index = pkt.num_flits - 1;  // Last FLIT
-                    event.num_flits = pkt.num_flits;
+                    event.flit_index = static_cast<uint16_t>(pkt.num_flits - 1);  // Last FLIT
+                    event.num_flits = static_cast<uint16_t>(pkt.num_flits);
                     event.src_router = pkt.src_router;
                     event.dst_router = i;
                     tracer_->record_event(event);
@@ -618,7 +618,7 @@ void NoC::deliver_packets(uint64_t cycle) {
 
                     // Emit sampled FLIT arrivals (every 16th FLIT to avoid trace bloat)
                     // This gives ~16 progressive fill updates per tile
-                    const uint16_t sample_interval = std::max<uint16_t>(1, pkt.num_flits / 16);
+                    const uint16_t sample_interval = std::max<uint16_t>(1, static_cast<uint16_t>(pkt.num_flits / 16));
                     for (uint16_t flit = 0; flit < pkt.num_flits; flit += sample_interval) {
                         NoCTraceEvent flit_event;
                         flit_event.cycle = first_flit_cycle + flit;
@@ -628,7 +628,7 @@ void NoC::deliver_packets(uint64_t cycle) {
                         flit_event.packet_seq = pkt.sequence_num;
                         flit_event.tile = pkt.tile;
                         flit_event.flit_index = flit;
-                        flit_event.num_flits = pkt.num_flits;
+                        flit_event.num_flits = static_cast<uint16_t>(pkt.num_flits);
                         flit_event.src_router = pkt.src_router;
                         flit_event.dst_router = i;
                         tracer_->record_event(flit_event);
@@ -702,8 +702,8 @@ uint64_t NoC::estimate_latency(uint8_t src, uint8_t dst, uint32_t size_bytes) co
     auto [src_row, src_col] = config_.get_router_pos(src);
     auto [dst_row, dst_col] = config_.get_router_pos(dst);
 
-    uint8_t hops = std::abs(static_cast<int>(src_row) - dst_row) +
-                   std::abs(static_cast<int>(src_col) - dst_col);
+    uint8_t hops = static_cast<uint8_t>(std::abs(static_cast<int>(src_row) - dst_row) +
+                   std::abs(static_cast<int>(src_col) - dst_col));
 
     uint32_t transfer_cycles = (size_bytes + config_.link_bandwidth - 1) /
                                config_.link_bandwidth;

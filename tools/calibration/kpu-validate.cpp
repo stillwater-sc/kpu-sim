@@ -530,7 +530,7 @@ int main(int argc, char* argv[]) {
             opts.requests = std::stoul(arg.substr(11));
         }
         else if (arg.rfind("--seed=", 0) == 0) {
-            opts.seed = std::stoul(arg.substr(7));
+            opts.seed = static_cast<uint32_t>(std::stoul(arg.substr(7)));
         }
         else if (arg.rfind("--threshold=", 0) == 0) {
             opts.threshold = std::stod(arg.substr(12));

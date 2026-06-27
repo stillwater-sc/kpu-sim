@@ -381,7 +381,7 @@ int main() {
         softmax(&logits[digit * OUTPUT_DIM], probs.data(), OUTPUT_DIM);
 
         // Find prediction
-        int predicted = std::max_element(probs.begin(), probs.end()) - probs.begin();
+        int predicted = static_cast<int>(std::max_element(probs.begin(), probs.end()) - probs.begin());
         float confidence = probs[predicted];
 
         bool is_correct = (predicted == digit);

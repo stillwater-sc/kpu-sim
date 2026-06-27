@@ -89,7 +89,7 @@ inline Workload make_page_hit_workload(uint8_t bank = 0, uint32_t row = 100, siz
 
     for (size_t i = 0; i < count; ++i) {
         w.accesses.push_back(MemoryAccess::read(
-            make_address(bank, row, i * 64)
+            make_address(bank, row, static_cast<uint32_t>(i * 64))
         ));
     }
 
@@ -109,7 +109,7 @@ inline Workload make_page_conflict_workload(uint8_t bank = 0, size_t count = 4) 
 
     for (size_t i = 0; i < count; ++i) {
         w.accesses.push_back(MemoryAccess::read(
-            make_address(bank, i * 100, 0)
+            make_address(bank, static_cast<uint32_t>(i * 100), 0)
         ));
     }
 
@@ -129,10 +129,10 @@ inline Workload make_mixed_rw_workload(uint8_t bank = 0, uint32_t row = 100, siz
 
     for (size_t i = 0; i < pairs; ++i) {
         w.accesses.push_back(MemoryAccess::read(
-            make_address(bank, row, i * 128)
+            make_address(bank, row, static_cast<uint32_t>(i * 128))
         ));
         w.accesses.push_back(MemoryAccess::write(
-            make_address(bank, row, i * 128 + 64)
+            make_address(bank, row, static_cast<uint32_t>(i * 128 + 64))
         ));
     }
 
@@ -154,8 +154,8 @@ inline Workload make_two_banks_same_group_workload(uint32_t row = 100, size_t pe
     w.description = "Two banks in same bank group - tests tRRD_L/tCCD_L";
 
     for (size_t i = 0; i < per_bank; ++i) {
-        w.accesses.push_back(MemoryAccess::read(make_address(0, row, i * 64)));  // Bank 0 (BG0)
-        w.accesses.push_back(MemoryAccess::read(make_address(1, row, i * 64)));  // Bank 1 (BG0)
+        w.accesses.push_back(MemoryAccess::read(make_address(0, row, static_cast<uint32_t>(i * 64))));  // Bank 0 (BG0)
+        w.accesses.push_back(MemoryAccess::read(make_address(1, row, static_cast<uint32_t>(i * 64))));  // Bank 1 (BG0)
     }
 
     w.expected.page_empty = 2;
@@ -171,8 +171,8 @@ inline Workload make_two_banks_diff_groups_workload(uint32_t row = 100, size_t p
     w.description = "Two banks in different bank groups - tests tRRD_S/tCCD_S";
 
     for (size_t i = 0; i < per_bank; ++i) {
-        w.accesses.push_back(MemoryAccess::read(make_address(0, row, i * 64)));  // Bank 0 (BG0)
-        w.accesses.push_back(MemoryAccess::read(make_address(4, row, i * 64)));  // Bank 4 (BG1)
+        w.accesses.push_back(MemoryAccess::read(make_address(0, row, static_cast<uint32_t>(i * 64))));  // Bank 0 (BG0)
+        w.accesses.push_back(MemoryAccess::read(make_address(4, row, static_cast<uint32_t>(i * 64))));  // Bank 4 (BG1)
     }
 
     w.expected.page_empty = 2;
@@ -192,9 +192,9 @@ inline Workload make_three_banks_mixed_workload(uint32_t row = 100, size_t per_b
     w.description = "Three banks in different groups - tests multi-bank parallelism";
 
     for (size_t i = 0; i < per_bank; ++i) {
-        w.accesses.push_back(MemoryAccess::read(make_address(0, row, i * 64)));  // BG0
-        w.accesses.push_back(MemoryAccess::read(make_address(4, row, i * 64)));  // BG1
-        w.accesses.push_back(MemoryAccess::read(make_address(8, row, i * 64)));  // BG2
+        w.accesses.push_back(MemoryAccess::read(make_address(0, row, static_cast<uint32_t>(i * 64))));  // BG0
+        w.accesses.push_back(MemoryAccess::read(make_address(4, row, static_cast<uint32_t>(i * 64))));  // BG1
+        w.accesses.push_back(MemoryAccess::read(make_address(8, row, static_cast<uint32_t>(i * 64))));  // BG2
     }
 
     w.expected.page_empty = 3;
@@ -210,9 +210,9 @@ inline Workload make_three_banks_same_group_workload(uint32_t row = 100, size_t 
     w.description = "Three banks in same group - tests bank group limitations";
 
     for (size_t i = 0; i < per_bank; ++i) {
-        w.accesses.push_back(MemoryAccess::read(make_address(0, row, i * 64)));  // Bank 0
-        w.accesses.push_back(MemoryAccess::read(make_address(1, row, i * 64)));  // Bank 1
-        w.accesses.push_back(MemoryAccess::read(make_address(2, row, i * 64)));  // Bank 2
+        w.accesses.push_back(MemoryAccess::read(make_address(0, row, static_cast<uint32_t>(i * 64))));  // Bank 0
+        w.accesses.push_back(MemoryAccess::read(make_address(1, row, static_cast<uint32_t>(i * 64))));  // Bank 1
+        w.accesses.push_back(MemoryAccess::read(make_address(2, row, static_cast<uint32_t>(i * 64))));  // Bank 2
     }
 
     w.expected.page_empty = 3;
@@ -233,7 +233,7 @@ inline Workload make_four_banks_full_group_workload(uint32_t row = 100, size_t r
 
     for (size_t r = 0; r < rounds; ++r) {
         for (uint8_t b = 0; b < 4; ++b) {
-            w.accesses.push_back(MemoryAccess::read(make_address(b, row, r * 64)));
+            w.accesses.push_back(MemoryAccess::read(make_address(b, row, static_cast<uint32_t>(r * 64))));
         }
     }
 
@@ -250,10 +250,10 @@ inline Workload make_four_banks_across_groups_workload(uint32_t row = 100, size_
     w.description = "Four banks, one per bank group - maximum parallelism";
 
     for (size_t i = 0; i < per_bank; ++i) {
-        w.accesses.push_back(MemoryAccess::read(make_address(0, row, i * 64)));   // BG0
-        w.accesses.push_back(MemoryAccess::read(make_address(4, row, i * 64)));   // BG1
-        w.accesses.push_back(MemoryAccess::read(make_address(8, row, i * 64)));   // BG2
-        w.accesses.push_back(MemoryAccess::read(make_address(12, row, i * 64)));  // BG3
+        w.accesses.push_back(MemoryAccess::read(make_address(0, row, static_cast<uint32_t>(i * 64))));   // BG0
+        w.accesses.push_back(MemoryAccess::read(make_address(4, row, static_cast<uint32_t>(i * 64))));   // BG1
+        w.accesses.push_back(MemoryAccess::read(make_address(8, row, static_cast<uint32_t>(i * 64))));   // BG2
+        w.accesses.push_back(MemoryAccess::read(make_address(12, row, static_cast<uint32_t>(i * 64))));  // BG3
     }
 
     w.expected.page_empty = 4;
@@ -274,7 +274,7 @@ inline Workload make_page_hit_burst_workload(uint32_t row = 100, size_t per_bank
     }
     for (size_t i = 1; i < per_bank; ++i) {
         for (uint8_t b = 0; b < 4; ++b) {
-            w.accesses.push_back(MemoryAccess::read(make_address(b * 4, row, i * 64)));
+            w.accesses.push_back(MemoryAccess::read(make_address(b * 4, row, static_cast<uint32_t>(i * 64))));
         }
     }
 
@@ -295,7 +295,7 @@ inline Workload make_strided_workload(uint8_t bank = 0, uint32_t stride_rows = 1
     w.description = "Strided access pattern - models matrix column traversal";
 
     for (size_t i = 0; i < count; ++i) {
-        w.accesses.push_back(MemoryAccess::read(make_address(bank, i * stride_rows, 0)));
+        w.accesses.push_back(MemoryAccess::read(make_address(bank, static_cast<uint32_t>(i * stride_rows), 0)));
     }
 
     w.expected.page_empty = 1;

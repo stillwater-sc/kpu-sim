@@ -338,7 +338,7 @@ private:
         }
 
         for (auto& [id, dma] : dma_north_) {
-            uint8_t dest_l3 = id;
+            uint8_t dest_l3 = static_cast<uint8_t>(id);
             for (uint16_t k = 0; k < config_.k_tiles; ++k) {
                 dma->inject_buffer_available(Location::L3, dest_l3);
             }

@@ -175,8 +175,8 @@ bool test_double_buffer_dma() {
     for (int tile = 0; tile < TILES_PER_DMA; ++tile) {
         // Interleave reads and writes
         for (int dma = 0; dma < NUM_READ_DMAS; ++dma) {
-            uint8_t read_bank = dma;           // Banks 0-3
-            uint8_t write_bank = 4 + dma;      // Banks 4-7
+            uint8_t read_bank = static_cast<uint8_t>(dma);           // Banks 0-3
+            uint8_t write_bank = static_cast<uint8_t>(4 + dma);      // Banks 4-7
             uint32_t row = 100 + tile;
 
             for (int line = 0; line < CACHE_LINES_PER_TILE; ++line) {
