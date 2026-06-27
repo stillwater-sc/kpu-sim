@@ -188,7 +188,7 @@ TileOptimizer::SearchSpace TileOptimizer::calculate_bounds(Size M, Size N, Size 
 
     // Conservative upper bound: assume square tiles
     // 3 × tile^2 ≤ cache_elems (for Ti×Tk + Tk×Tj + Ti×Tj)
-    Size max_tile_sq = std::sqrt(cache_elems / 3.0);
+    Size max_tile_sq = static_cast<Size>(std::sqrt(cache_elems / 3.0));
     max_tile_sq = round_down_to_multiple(max_tile_sq, sys_dim);
 
     space.Ti_max = std::min(M, max_tile_sq);

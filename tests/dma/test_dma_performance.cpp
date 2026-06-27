@@ -43,7 +43,7 @@ TEST_CASE_METHOD(DMAPerformanceFixture, "DMA Performance - Single Transfer Throu
         Address dst = sim->get_l3_tile_base(0);
 
         bool complete = false;
-        size_t cycles = 0;
+        [[maybe_unused]] size_t cycles = 0;
 
         sim->dma_external_to_l3(0, src, dst, size,
             [&complete]() { complete = true; });
