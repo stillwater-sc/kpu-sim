@@ -220,7 +220,7 @@ TEST_CASE("VectorEngine statistics", "[ve][stats]") {
 
     ve.process_row_immediate(input.data(), output.data(), input.size());
 
-    const VEStats& stats = ve.stats();
+    [[maybe_unused]] const VEStats& stats = ve.stats();
     // Stats track operations (may be 0 for immediate mode depending on impl)
 
     SECTION("Reset statistics") {

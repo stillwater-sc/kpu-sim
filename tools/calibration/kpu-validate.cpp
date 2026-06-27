@@ -145,7 +145,7 @@ struct FidelityResults {
 
 FidelityResults run_ca_workload(
     const std::vector<ValidationRequest>& requests,
-    const CalibrationData& cal,
+    [[maybe_unused]] const CalibrationData& cal,
     bool verbose)
 {
     FidelityResults results;

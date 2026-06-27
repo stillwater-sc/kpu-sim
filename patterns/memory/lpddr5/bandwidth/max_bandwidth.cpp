@@ -205,7 +205,7 @@ bool test_gpu_style_access() {
 
     harness.print_stats();
 
-    const auto& stats = harness.stats();
+    [[maybe_unused]] const auto& stats = harness.stats();
     uint64_t total_accesses = NUM_THREADS * ACCESSES_PER_THREAD;
     uint64_t total_bytes = total_accesses * 64;
     double bytes_per_cycle = static_cast<double>(total_bytes) / harness.current_cycle();

@@ -641,6 +641,9 @@ void TransactionalComputeFabric::execute_elementwise_fp32(
         case ElementwiseOp::MUL_SCALAR:
             for (uint64_t i = 0; i < count; ++i) output[i] = a[i] * b[0];
             break;
+        case ElementwiseOp::POW_SCALAR:
+            for (uint64_t i = 0; i < count; ++i) output[i] = std::pow(a[i], b[0]);
+            break;
     }
 }
 

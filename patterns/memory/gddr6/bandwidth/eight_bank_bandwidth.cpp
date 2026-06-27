@@ -166,7 +166,7 @@ bool test_eight_bank_double_buffer() {
 
     harness.print_stats();
 
-    const auto& stats = harness.stats();
+    [[maybe_unused]] const auto& stats = harness.stats();
     uint64_t total_bytes = (32 + 32) * 64;  // 32 reads + 32 writes
     double bytes_per_cycle = static_cast<double>(total_bytes) / harness.current_cycle();
 

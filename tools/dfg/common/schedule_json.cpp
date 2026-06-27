@@ -62,7 +62,7 @@ json to_json(const DFGSchedule& schedule, const TileDataFlowGraph& dfg, bool emb
     return j;
 }
 
-DFGSchedule schedule_from_json(const json& j, const TileDataFlowGraph* dfg) {
+DFGSchedule schedule_from_json(const json& j, [[maybe_unused]] const TileDataFlowGraph* dfg) {
     DFGSchedule schedule;
 
     schedule.makespan = j.value("makespan", int64_t{0});

@@ -127,7 +127,7 @@ struct E2EMetrics {
     uint64_t total_flops = 0;
 
     // XUE for compute
-    double compute_throughput_flops_per_cycle(double clock_ghz) const {
+    double compute_throughput_flops_per_cycle([[maybe_unused]] double clock_ghz) const {
         return total_cycles > 0 ? static_cast<double>(total_flops) / total_cycles : 0.0;
     }
 

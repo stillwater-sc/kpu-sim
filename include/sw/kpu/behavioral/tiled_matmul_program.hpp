@@ -282,12 +282,16 @@ struct TraceEvent {
     uint8_t l3_buffers_occupied = 0;   // How many L3 buffers currently hold tiles
     uint8_t l2_buffers_occupied = 0;   // How many L2 banks currently hold tiles
 
-    // Loop state for visualization
+    // Loop state for visualization. The {} default-member-initializer
+    // matters: without it, aggregate brace-init of TraceEvent that
+    // omits loop_state triggers -Wmissing-field-initializers under -Werror
+    // (~17 sites in this file). With it, the field is value-initialized
+    // and the warning is suppressed.
     struct LoopState {
         uint32_t outer = 0;         // Outer loop position (i)
         uint32_t middle = 0;        // Middle loop position (j)
         uint32_t inner = 0;         // Inner loop position (k)
-    } loop_state;
+    } loop_state{};
 
     std::string operand_id() const {
         std::string id = to_string(operand);

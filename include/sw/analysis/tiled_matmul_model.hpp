@@ -117,10 +117,10 @@ struct TileGeometry {
     Bytes C_tile_bytes() const { return M_tile_size() * N_tile_size() * elem_size; }
 
     // Full strip sizes (for sharing analysis)
-    Bytes A_strip_bytes(size_t m_tile) const {
+    Bytes A_strip_bytes([[maybe_unused]] size_t m_tile) const {
         return M_tile_size() * K * elem_size;
     }
-    Bytes B_strip_bytes(size_t n_tile) const {
+    Bytes B_strip_bytes([[maybe_unused]] size_t n_tile) const {
         return K * N_tile_size() * elem_size;
     }
 
@@ -550,7 +550,7 @@ public:
             }
         }
 
-        Cycles load_end = current_cycle;
+        [[maybe_unused]] Cycles load_end = current_cycle;
 
         // Compute in waves (serialized rows)
         Cycles tile_compute = compute_.tile_compute_cycles();
@@ -595,8 +595,8 @@ public:
         Cycles load_a = data_move_.load_A_tile_cycles();
         Cycles load_b = data_move_.load_B_tile_cycles();
         Cycles subtile_compute = compute_.subtile_compute_cycles();
-        Cycles transfer_a = data_move_.l3_to_l3_A_tile_cycles();
-        Cycles transfer_b = data_move_.l3_to_l3_B_tile_cycles();
+        [[maybe_unused]] Cycles transfer_a = data_move_.l3_to_l3_A_tile_cycles();
+        [[maybe_unused]] Cycles transfer_b = data_move_.l3_to_l3_B_tile_cycles();
 
         // Phase 1: Initial data load
         // Load first K-tile of A and B

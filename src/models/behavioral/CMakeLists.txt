@@ -48,7 +48,9 @@ target_include_directories(kpu_behavioral PUBLIC
 # Add Universal library include path for quantization type dispatch
 # Universal provides software emulation of fp16, bf16, fp8 variants, and fp4
 if(UNIVERSAL_INCLUDE_DIR)
-    target_include_directories(kpu_behavioral PRIVATE ${UNIVERSAL_INCLUDE_DIR})
+    # SYSTEM include: suppresses warnings from third-party Universal headers
+    # (e.g. -Wignored-qualifiers in decimal.hpp) under CI's -Werror gate.
+    target_include_directories(kpu_behavioral SYSTEM PRIVATE ${UNIVERSAL_INCLUDE_DIR})
 endif()
 
 # Link dependencies needed by behavioral models

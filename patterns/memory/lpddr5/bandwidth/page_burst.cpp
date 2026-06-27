@@ -131,7 +131,7 @@ bool test_multi_bank_page_burst() {
 
     harness.print_stats();
 
-    const auto& stats = harness.stats();
+    [[maybe_unused]] const auto& stats = harness.stats();
     int total_accesses = 8 * CACHE_LINES_PER_PAGE;  // 1024 accesses
     uint64_t total_bytes = total_accesses * CACHE_LINE_BYTES;  // 64 KB
     double bytes_per_cycle = static_cast<double>(total_bytes) / harness.current_cycle();

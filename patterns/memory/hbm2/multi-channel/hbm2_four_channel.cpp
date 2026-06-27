@@ -54,7 +54,7 @@ int main() {
     }
 
     const auto& stats = harness.stats();
-    int expected_reads = ACCESSES_PER_CHANNEL * NUM_CHANNELS;
+    uint64_t expected_reads = ACCESSES_PER_CHANNEL * NUM_CHANNELS;
     if (stats.reads != expected_reads) {
         std::cerr << "FAIL: Expected " << expected_reads << " reads, got " << stats.reads << std::endl;
         return 1;

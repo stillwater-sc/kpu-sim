@@ -103,7 +103,7 @@ int main() {
     // Calculate bank utilization
     std::cout << "\n--- Bank Utilization ---" << std::endl;
     uint64_t total_cycles = harness.current_cycle();
-    double theoretical_min_cycles =
+    [[maybe_unused]] double theoretical_min_cycles =
         (BANKS_PER_PC * PAGE_EMPTY_READ_LATENCY) +  // First access to each bank
         ((ACCESSES_PER_BANK - 1) * BANKS_PER_PC * PAGE_HIT_READ_LATENCY / BANKS_PER_PC);  // Pipelined hits
 
