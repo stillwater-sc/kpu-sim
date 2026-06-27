@@ -298,10 +298,10 @@ public:
         uint64_t total_latency_cycles = 0;
 
         double avg_latency_cycles() const {
-            return total_packets > 0 ? static_cast<double>(total_latency_cycles) / total_packets : 0.0;
+            return total_packets > 0 ? static_cast<double>(total_latency_cycles) / static_cast<double>(total_packets) : 0.0;
         }
         double avg_hops() const {
-            return total_packets > 0 ? static_cast<double>(total_hops) / total_packets : 0.0;
+            return total_packets > 0 ? static_cast<double>(total_hops) / static_cast<double>(total_packets) : 0.0;
         }
     };
 

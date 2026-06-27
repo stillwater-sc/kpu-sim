@@ -231,7 +231,7 @@ int main() {
     std::cout << "  Simulated Cycles: " << cycles << "\n";
 
     // Calculate throughput estimates (assuming 1GHz clock)
-    double time_ms = cycles / 1e6;  // cycles / (1e9 cycles/sec) * 1e3 ms/sec
+    double time_ms = static_cast<double>(cycles) / 1e6;  // cycles / (1e9 cycles/sec) * 1e3 ms/sec
     double gflops = (static_cast<double>(kernel.total_flops()) / 1e9) / (time_ms / 1000.0);
 
     std::cout << "  Estimated Time (@ 1GHz): " << std::fixed << std::setprecision(3)

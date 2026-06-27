@@ -250,7 +250,7 @@ int main() {
         Size total_size = wl_l3_schedule.tensor_a_size + wl_l3_schedule.tensor_b_size +
                          wl_l3_schedule.tensor_c_size;
         Size ideal_dram = L3Scheduler::calculate_ideal_dram_traffic(workload);
-        double dram_ratio = static_cast<double>(wl_l3_schedule.total_dram_reads) / ideal_dram;
+        double dram_ratio = static_cast<double>(wl_l3_schedule.total_dram_reads) / static_cast<double>(ideal_dram);
 
         std::cout << "│ " << std::setw(16) << workload.to_string()
                   << " │ " << std::setw(12) << (total_size / 1024)

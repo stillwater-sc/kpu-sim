@@ -159,20 +159,20 @@ struct DMAHarnessStats {
     // Derived metrics
     double avg_transfer_latency() const {
         return transfers_completed > 0
-            ? static_cast<double>(total_transfer_cycles) / transfers_completed
+            ? static_cast<double>(total_transfer_cycles) / static_cast<double>(transfers_completed)
             : 0.0;
     }
 
     double bandwidth_utilization(double peak_gbps, double clock_ghz, Cycle total_cycles) const {
         if (total_cycles == 0 || peak_gbps <= 0) return 0.0;
-        double seconds = total_cycles / (clock_ghz * 1e9);
-        double actual_gbps = (bytes_transferred / 1e9) / seconds;
+        double seconds = static_cast<double>(total_cycles) / (clock_ghz * 1e9);
+        double actual_gbps = (static_cast<double>(bytes_transferred) / 1e9) / seconds;
         return actual_gbps / peak_gbps;
     }
 
     double utilization() const {
         Cycle total = busy_cycles + idle_cycles;
-        return total > 0 ? static_cast<double>(busy_cycles) / total : 0.0;
+        return total > 0 ? static_cast<double>(busy_cycles) / static_cast<double>(total) : 0.0;
     }
 
     /// Reset all statistics
@@ -352,9 +352,9 @@ inline std::string DMAHarnessStats::to_string() const {
     ss << "  Completed:     " << transfers_completed << "\n";
     ss << "  Failed:        " << transfers_failed << "\n";
     ss << "\nData Volume:\n";
-    ss << "  Bytes loaded:  " << (bytes_loaded / 1024.0) << " KB\n";
-    ss << "  Bytes stored:  " << (bytes_stored / 1024.0) << " KB\n";
-    ss << "  Total:         " << (bytes_transferred / 1024.0) << " KB\n";
+    ss << "  Bytes loaded:  " << (static_cast<double>(bytes_loaded) / 1024.0) << " KB\n";
+    ss << "  Bytes stored:  " << (static_cast<double>(bytes_stored) / 1024.0) << " KB\n";
+    ss << "  Total:         " << (static_cast<double>(bytes_transferred) / 1024.0) << " KB\n";
     ss << "\nLatency (cycles):\n";
     ss << "  Average: " << avg_transfer_latency() << "\n";
     ss << "  Min:     " << (min_transfer_latency < UINT64_MAX ? min_transfer_latency : 0) << "\n";

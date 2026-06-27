@@ -54,10 +54,10 @@ struct LatencyStats {
         ++count;
     }
 
-    double mean() const { return count > 0 ? sum / count : 0.0; }
+    double mean() const { return count > 0 ? sum / static_cast<double>(count) : 0.0; }
     double variance() const {
         if (count < 2) return 0.0;
-        return (sum_sq - (sum * sum / count)) / (count - 1);
+        return (sum_sq - (sum * sum / static_cast<double>(count))) / static_cast<double>(count - 1);
     }
     double stddev() const { return std::sqrt(variance()); }
 };
@@ -617,9 +617,9 @@ public:
         std::cout << "========================================" << std::endl;
         std::cout << "Avg Behavioral Error:    "
                   << std::fixed << std::setprecision(1)
-                  << (total_behavioral_error / workloads.size()) << "%" << std::endl;
+                  << (total_behavioral_error / static_cast<double>(workloads.size())) << "%" << std::endl;
         std::cout << "Avg Transactional Error: "
-                  << (total_transactional_error / workloads.size()) << "%" << std::endl;
+                  << (total_transactional_error / static_cast<double>(workloads.size())) << "%" << std::endl;
     }
 
 private:
@@ -707,7 +707,7 @@ private:
         // Estimate per-request latencies from aggregate stats
         uint64_t total = stats.reads + stats.writes;
         if (total > 0 && stats.total_latency > 0) {
-            double avg = static_cast<double>(stats.total_latency) / total;
+            double avg = static_cast<double>(stats.total_latency) / static_cast<double>(total);
             for (size_t i = 0; i < total; ++i) {
                 result.all_latencies.add_sample(static_cast<uint64_t>(avg));
             }

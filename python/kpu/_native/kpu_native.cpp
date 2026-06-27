@@ -3235,14 +3235,14 @@ private:
             double l2_fraction = 0.25;  // L2 is 4x faster than DRAM
             double l1_fraction = 0.125; // L1 is 8x faster than DRAM
 
-            stats.dram.read_cycles = static_cast<int64_t>(stats.dram.read_bytes * dram_fraction / 8);
-            stats.dram.write_cycles = static_cast<int64_t>(stats.dram.write_bytes * dram_fraction / 8);
-            stats.l3.read_cycles = static_cast<int64_t>(stats.l3.read_bytes * l3_fraction / 8);
-            stats.l3.write_cycles = static_cast<int64_t>(stats.l3.write_bytes * l3_fraction / 8);
-            stats.l2.read_cycles = static_cast<int64_t>(stats.l2.read_bytes * l2_fraction / 8);
-            stats.l2.write_cycles = static_cast<int64_t>(stats.l2.write_bytes * l2_fraction / 8);
-            stats.l1.read_cycles = static_cast<int64_t>(stats.l1.read_bytes * l1_fraction / 8);
-            stats.l1.write_cycles = static_cast<int64_t>(stats.l1.write_bytes * l1_fraction / 8);
+            stats.dram.read_cycles = static_cast<int64_t>(static_cast<double>(stats.dram.read_bytes) * dram_fraction / 8);
+            stats.dram.write_cycles = static_cast<int64_t>(static_cast<double>(stats.dram.write_bytes) * dram_fraction / 8);
+            stats.l3.read_cycles = static_cast<int64_t>(static_cast<double>(stats.l3.read_bytes) * l3_fraction / 8);
+            stats.l3.write_cycles = static_cast<int64_t>(static_cast<double>(stats.l3.write_bytes) * l3_fraction / 8);
+            stats.l2.read_cycles = static_cast<int64_t>(static_cast<double>(stats.l2.read_bytes) * l2_fraction / 8);
+            stats.l2.write_cycles = static_cast<int64_t>(static_cast<double>(stats.l2.write_bytes) * l2_fraction / 8);
+            stats.l1.read_cycles = static_cast<int64_t>(static_cast<double>(stats.l1.read_bytes) * l1_fraction / 8);
+            stats.l1.write_cycles = static_cast<int64_t>(static_cast<double>(stats.l1.write_bytes) * l1_fraction / 8);
         }
 
         // Store clock frequency in stats for reporting
@@ -3253,7 +3253,7 @@ private:
         // At 1 GHz: 1 cycle = 1 ns, so FLOPs/cycle = GFLOPS
         // At 2 GHz: 1 cycle = 0.5 ns, so need to multiply by 2
         if (stats.cycles > 0) {
-            stats.gflops = (static_cast<double>(stats.matmul_flops) / stats.cycles) * clock_frequency_ghz_;
+            stats.gflops = (static_cast<double>(stats.matmul_flops) / static_cast<double>(stats.cycles)) * clock_frequency_ghz_;
             stats.utilization = fabric_stats.utilization();
             stats.efficiency = fabric_stats.mac_efficiency(compute_fabric_->peak_macs_per_cycle());
         }
@@ -3267,7 +3267,7 @@ private:
         // Calculate memory bandwidth (bytes/cycle * clock_ghz = GB/s)
         if (stats.memory_cycles > 0) {
             int64_t total_bytes = stats.external_bytes + stats.memory_bytes;
-            stats.memory_bandwidth_gbps = (static_cast<double>(total_bytes) / stats.memory_cycles) * clock_frequency_ghz_;
+            stats.memory_bandwidth_gbps = (static_cast<double>(total_bytes) / static_cast<double>(stats.memory_cycles)) * clock_frequency_ghz_;
         }
 
         // Get output

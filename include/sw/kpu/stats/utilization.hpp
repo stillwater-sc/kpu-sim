@@ -139,7 +139,7 @@ struct ResourceUtilization {
      */
     double utilization() const {
         uint64_t total = total_cycles();
-        return total > 0 ? static_cast<double>(busy_cycles.load()) / total : 0.0;
+        return total > 0 ? static_cast<double>(busy_cycles.load()) / static_cast<double>(total) : 0.0;
     }
 
     /**
@@ -148,7 +148,7 @@ struct ResourceUtilization {
     double efficiency() const {
         uint64_t busy = busy_cycles.load();
         uint64_t stall = stall_cycles.load();
-        return (busy + stall) > 0 ? static_cast<double>(busy) / (busy + stall) : 1.0;
+        return (busy + stall) > 0 ? static_cast<double>(busy) / static_cast<double>(busy + stall) : 1.0;
     }
 
     /**
@@ -156,7 +156,7 @@ struct ResourceUtilization {
      */
     double throughput() const {
         uint64_t total = total_cycles();
-        return total > 0 ? static_cast<double>(operations.load()) / total : 0.0;
+        return total > 0 ? static_cast<double>(operations.load()) / static_cast<double>(total) : 0.0;
     }
 
     void reset() {
@@ -312,7 +312,7 @@ public:
                 ++count;
             }
         }
-        return count > 0 ? sum / count : 0.0;
+        return count > 0 ? sum / static_cast<double>(count) : 0.0;
     }
 
     /**
@@ -326,7 +326,7 @@ public:
             sum += util.utilization();
             ++count;
         }
-        return count > 0 ? sum / count : 0.0;
+        return count > 0 ? sum / static_cast<double>(count) : 0.0;
     }
 
     /**
@@ -420,7 +420,7 @@ private:
             sum += util.utilization();
             ++count;
         }
-        return count > 0 ? sum / count : 0.0;
+        return count > 0 ? sum / static_cast<double>(count) : 0.0;
     }
 
     double average_utilization_unlocked(ResourceType type) const {
@@ -432,7 +432,7 @@ private:
                 ++count;
             }
         }
-        return count > 0 ? sum / count : 0.0;
+        return count > 0 ? sum / static_cast<double>(count) : 0.0;
     }
 
     ResourceUtilization get_aggregate_unlocked(ResourceType type) const {

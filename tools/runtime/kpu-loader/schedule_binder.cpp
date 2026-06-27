@@ -116,7 +116,7 @@ BoundSchedule ScheduleBinder::bind(const dfx::Program& program) {
                         program.tiling.Tj * program.tiling.num_tiles_n *
                         program.tiling.Tk * program.tiling.num_tiles_k;
     double time_seconds = static_cast<double>(schedule.total_cycles) / 1e9;  // Assuming 1 GHz
-    schedule.estimated_throughput = (total_flops / 1e12) / time_seconds;  // TFLOPS
+    schedule.estimated_throughput = (static_cast<double>(total_flops) / 1e12) / time_seconds;  // TFLOPS
 
     return schedule;
 }

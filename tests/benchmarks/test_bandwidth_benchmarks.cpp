@@ -63,7 +63,7 @@ TEST_CASE("Elementwise ADD bandwidth benchmark", "[benchmark][bandwidth][element
         std::cout << "\n=== Elementwise ADD (1M) ===" << std::endl;
         std::cout << "Cycles: " << result.cycles << std::endl;
         std::cout << "External bytes: " << result.external_bytes << " ("
-                  << (result.external_bytes / (1024.0 * 1024.0)) << " MB)" << std::endl;
+                  << (static_cast<double>(result.external_bytes) / (1024.0 * 1024.0)) << " MB)" << std::endl;
         std::cout << "Arithmetic Intensity: " << result.arithmetic_intensity << " FLOP/byte" << std::endl;
         std::cout << "Achieved BW:  " << std::fixed << std::setprecision(2)
                   << result.achieved_bandwidth_gbs << " GB/s" << std::endl;
@@ -247,7 +247,7 @@ TEST_CASE("Bandwidth operations sweep (v0.3.1)", "[benchmark][bandwidth][v031][s
     }
 
     double avg_bw_efficiency = memory_bound_count > 0
-        ? total_bw_efficiency / memory_bound_count : 0.0;
+        ? total_bw_efficiency / static_cast<double>(memory_bound_count) : 0.0;
 
     std::cout << "\n=== BANDWIDTH SUMMARY ===" << std::endl;
     std::cout << "Memory-bound operations: " << memory_bound_count

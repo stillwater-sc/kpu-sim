@@ -116,7 +116,7 @@ TEST_CASE("Transformer FFN block benchmark", "[benchmark][graph][transformer]") 
     // MLP kernels have slightly more FLOPs due to bias and activation
     // Allow 1% tolerance
     REQUIRE(result.flops >= matmul_flops);
-    REQUIRE(result.flops < matmul_flops * 1.01);
+    REQUIRE(static_cast<double>(result.flops) < static_cast<double>(matmul_flops) * 1.01);
 }
 
 TEST_CASE("Diamond pattern graph benchmark", "[benchmark][graph]") {
@@ -198,12 +198,12 @@ TEST_CASE("Graph vs individual kernels comparison", "[benchmark][graph]") {
     std::cout << "Individual total:    " << individual_cycles << " cycles" << std::endl;
     std::cout << "Graph execution:     " << graph_result.cycles << " cycles" << std::endl;
 
-    double overhead = (static_cast<double>(graph_result.cycles) / individual_cycles - 1.0) * 100;
+    double overhead = (static_cast<double>(graph_result.cycles) / static_cast<double>(individual_cycles) - 1.0) * 100;
     std::cout << "Graph overhead:      " << std::fixed << std::setprecision(1)
               << overhead << "%" << std::endl;
 
     // Graph should not have excessive overhead (< 20%)
-    REQUIRE(graph_result.cycles <= individual_cycles * 1.2);
+    REQUIRE(static_cast<double>(graph_result.cycles) <= static_cast<double>(individual_cycles) * 1.2);
 }
 
 TEST_CASE("Graph depth scaling", "[benchmark][graph][scaling]") {

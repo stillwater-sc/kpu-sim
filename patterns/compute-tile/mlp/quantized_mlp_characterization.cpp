@@ -258,7 +258,7 @@ void print_detailed_xue_report(const std::string& workload_name, const MLPConfig
     uint64_t total_mem = weight_bytes + act_bytes;
 
     double arith_intensity = static_cast<double>(analysis.total_flops) /
-                             (total_mem > 0 ? total_mem : 1);
+                             static_cast<double>(total_mem > 0 ? total_mem : 1);
 
     std::cout << "\n";
     std::cout << "================================================================\n";
@@ -348,8 +348,8 @@ int main() {
 
     // Initialize with small deterministic values
     // Use Xavier-like scaling: sqrt(2 / (fan_in + fan_out))
-    float w1_scale = std::sqrt(2.0f / (mnist_cfg.input_dim + mnist_cfg.hidden_dim));
-    float w2_scale = std::sqrt(2.0f / (mnist_cfg.hidden_dim + mnist_cfg.output_dim));
+    float w1_scale = std::sqrt(2.0f / static_cast<float>(mnist_cfg.input_dim + mnist_cfg.hidden_dim));
+    float w2_scale = std::sqrt(2.0f / static_cast<float>(mnist_cfg.hidden_dim + mnist_cfg.output_dim));
 
     for (size_t i = 0; i < w1.size(); ++i) {
         // Deterministic pseudo-random using LCG

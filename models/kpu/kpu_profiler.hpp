@@ -34,8 +34,8 @@ struct ProfileEvent {
 
     double bandwidth_gbps(double cycle_time_ns = 1.0) const {
         if (duration() == 0) return 0.0;
-        double time_sec = duration() * cycle_time_ns * 1e-9;
-        return (bytes_transferred / 1e9) / time_sec;
+        double time_sec = static_cast<double>(duration()) * cycle_time_ns * 1e-9;
+        return (static_cast<double>(bytes_transferred) / 1e9) / time_sec;
     }
 };
 
@@ -168,7 +168,7 @@ public:
             std::cout << std::string(49, '-') << "\n";
 
             for (const auto& [component, cycles] : component_cycles_) {
-                double util = (100.0 * cycles) / total_cycles;
+                double util = (100.0 * static_cast<double>(cycles)) / static_cast<double>(total_cycles);
                 std::cout << std::left << std::setw(25) << component
                           << std::right << std::setw(12) << cycles
                           << std::setw(11) << std::fixed << std::setprecision(1) << util << "%\n";
@@ -185,8 +185,8 @@ public:
             std::cout << std::string(57, '-') << "\n";
 
             for (const auto& [path, stats] : bandwidth_stats_) {
-                double time_sec = stats.cycles * cycle_time_ns * 1e-9;
-                double bw_gbps = time_sec > 0 ? (stats.bytes / 1e9) / time_sec : 0.0;
+                double time_sec = static_cast<double>(stats.cycles) * cycle_time_ns * 1e-9;
+                double bw_gbps = time_sec > 0 ? (static_cast<double>(stats.bytes) / 1e9) / time_sec : 0.0;
 
                 std::cout << std::left << std::setw(20) << path
                           << std::right << std::setw(12) << stats.bytes
@@ -220,7 +220,7 @@ public:
         // Overall summary
         std::cout << "\nOverall:\n";
         std::cout << "  Total cycles: " << total_cycles << "\n";
-        std::cout << "  Total data transferred: " << (total_bytes / 1024.0) << " KB\n";
+        std::cout << "  Total data transferred: " << (static_cast<double>(total_bytes) / 1024.0) << " KB\n";
         std::cout << "  Events recorded: " << completed_events_.size() << "\n";
         std::cout << "========================================\n";
     }

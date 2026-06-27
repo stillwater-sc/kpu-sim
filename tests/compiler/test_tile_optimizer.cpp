@@ -124,7 +124,7 @@ TEST_CASE("TileOptimizer - Large Square Matrix (1024x1024x1024)", "[tile_optimiz
 
     // Calculate theoretical improvement over naive
     Size naive_dram = (M * K + K * N + M * N) * 4;  // 4 bytes per float
-    double improvement = static_cast<double>(naive_dram) / config.dram_accesses;
+    double improvement = static_cast<double>(naive_dram) / static_cast<double>(config.dram_accesses);
     std::cout << "  DRAM access improvement: " << std::fixed << std::setprecision(1)
               << improvement << "x over naive\n";
 
@@ -190,11 +190,11 @@ TEST_CASE("TileOptimizer - Bounded Search vs Analytical", "[tile_optimizer][sear
         print_config("512x512x512 Bounded Search", searched);
 
         // Bounded search should be at least as good as analytical
-        REQUIRE(searched.dram_accesses <= analytical.dram_accesses * 1.1);  // Within 10%
+        REQUIRE(static_cast<double>(searched.dram_accesses) <= static_cast<double>(analytical.dram_accesses) * 1.1);  // Within 10%
 
         std::cout << "\n  Search found improvement: "
                   << std::fixed << std::setprecision(1)
-                  << (100.0 * (analytical.dram_accesses - searched.dram_accesses) / analytical.dram_accesses)
+                  << (100.0 * static_cast<double>(analytical.dram_accesses - searched.dram_accesses) / static_cast<double>(analytical.dram_accesses))
                   << "%\n";
     }
 }
@@ -214,7 +214,7 @@ TEST_CASE("TileOptimizer - Heuristic Refinement", "[tile_optimizer][heuristic]")
     print_config("512x512x512 Heuristic", heuristic);
 
     // Heuristic should be at least as good as analytical
-    REQUIRE(heuristic.dram_accesses <= analytical.dram_accesses * 1.05);  // Within 5%
+    REQUIRE(static_cast<double>(heuristic.dram_accesses) <= static_cast<double>(analytical.dram_accesses) * 1.05);  // Within 5%
 }
 
 TEST_CASE("TileOptimizer - Reuse Factor Calculations", "[tile_optimizer][reuse]") {
@@ -355,7 +355,7 @@ TEST_CASE("TileOptimizer - Arithmetic Intensity", "[tile_optimizer][performance]
         // Calculate naive AI (no tiling)
         Size naive_dram = (M * K + K * N + M * N) * 4;
         Size total_flops = 2 * M * N * K;
-        double naive_ai = static_cast<double>(total_flops) / naive_dram;
+        double naive_ai = static_cast<double>(total_flops) / static_cast<double>(naive_dram);
 
         std::cout << "\nArithmetic Intensity for 512x512x512:\n";
         std::cout << "  Naive (no tiling): " << std::fixed << std::setprecision(2)
@@ -431,7 +431,7 @@ TEST_CASE("TileOptimizer - WS vs OS Comparison", "[tile_optimizer][weight_statio
         std::cout << "    OS: " << os_config.reuse_B << "×\n";
         std::cout << "    WS: " << ws_config.reuse_B << "×\n";
         std::cout << "    WS improvement: "
-                  << (static_cast<double>(ws_config.reuse_B) / os_config.reuse_B) << "×\n";
+                  << (static_cast<double>(ws_config.reuse_B) / static_cast<double>(os_config.reuse_B)) << "×\n";
     }
 
     SECTION("Compare WS vs OS for accumulation workload (large K)") {
@@ -459,8 +459,8 @@ TEST_CASE("TileOptimizer - WS vs OS Comparison", "[tile_optimizer][weight_statio
         std::cout << "    C reuse - WS: " << ws_config.reuse_C << "× (in L2)\n";
         std::cout << "    DRAM - OS: " << os_config.dram_accesses << " bytes\n";
         std::cout << "    DRAM - WS: " << ws_config.dram_accesses << " bytes\n";
-        double os_advantage = 100.0 * (ws_config.dram_accesses - os_config.dram_accesses)
-                            / ws_config.dram_accesses;
+        double os_advantage = 100.0 * static_cast<double>(ws_config.dram_accesses - os_config.dram_accesses)
+                            / static_cast<double>(ws_config.dram_accesses);
         std::cout << "    OS advantage: " << std::fixed << std::setprecision(1)
                   << os_advantage << "%\n";
     }
@@ -504,7 +504,7 @@ TEST_CASE("TileOptimizer - WS PE Capacity Constraint", "[tile_optimizer][weight_
 
         std::cout << "  PE capacity: " << PE_capacity << " bytes\n";
         std::cout << "  B tile size: " << B_size << " bytes ("
-                  << (100.0 * B_size / PE_capacity) << "% of capacity)\n";
+                  << (100.0 * static_cast<double>(B_size) / static_cast<double>(PE_capacity)) << "% of capacity)\n";
     }
 }
 
@@ -600,13 +600,13 @@ TEST_CASE("TileOptimizer - WS Energy Implications", "[tile_optimizer][weight_sta
         std::cout << "    WS: " << ws_config.dram_accesses << " bytes\n";
 
         if (ws_config.dram_accesses < os_config.dram_accesses) {
-            double savings = 100.0 * (os_config.dram_accesses - ws_config.dram_accesses)
-                           / os_config.dram_accesses;
+            double savings = 100.0 * static_cast<double>(os_config.dram_accesses - ws_config.dram_accesses)
+                           / static_cast<double>(os_config.dram_accesses);
             std::cout << "    WS savings: " << std::fixed << std::setprecision(1)
                       << savings << "%\n";
         } else {
-            double overhead = 100.0 * (ws_config.dram_accesses - os_config.dram_accesses)
-                            / os_config.dram_accesses;
+            double overhead = 100.0 * static_cast<double>(ws_config.dram_accesses - os_config.dram_accesses)
+                            / static_cast<double>(os_config.dram_accesses);
             std::cout << "    WS overhead: " << std::fixed << std::setprecision(1)
                       << overhead << "%\n";
         }
@@ -676,7 +676,7 @@ TEST_CASE("TileOptimizer - IS vs OS Comparison", "[tile_optimizer][input_station
         std::cout << "    OS: " << os_config.reuse_A << "×\n";
         std::cout << "    IS: " << is_config.reuse_A << "×\n";
         std::cout << "    IS improvement: "
-                  << (static_cast<double>(is_config.reuse_A) / os_config.reuse_A) << "×\n";
+                  << (static_cast<double>(is_config.reuse_A) / static_cast<double>(os_config.reuse_A)) << "×\n";
     }
 
     SECTION("Compare IS vs OS for accumulation workload (large K)") {
@@ -704,8 +704,8 @@ TEST_CASE("TileOptimizer - IS vs OS Comparison", "[tile_optimizer][input_station
         std::cout << "    C reuse - IS: " << is_config.reuse_C << "× (in L2)\n";
         std::cout << "    DRAM - OS: " << os_config.dram_accesses << " bytes\n";
         std::cout << "    DRAM - IS: " << is_config.dram_accesses << " bytes\n";
-        double os_advantage = 100.0 * (is_config.dram_accesses - os_config.dram_accesses)
-                            / is_config.dram_accesses;
+        double os_advantage = 100.0 * static_cast<double>(is_config.dram_accesses - os_config.dram_accesses)
+                            / static_cast<double>(is_config.dram_accesses);
         std::cout << "    OS advantage: " << std::fixed << std::setprecision(1)
                   << os_advantage << "%\n";
     }
@@ -833,13 +833,13 @@ TEST_CASE("TileOptimizer - IS Energy Implications", "[tile_optimizer][input_stat
         std::cout << "    IS: " << is_config.dram_accesses << " bytes\n";
 
         if (is_config.dram_accesses < os_config.dram_accesses) {
-            double savings = 100.0 * (os_config.dram_accesses - is_config.dram_accesses)
-                           / os_config.dram_accesses;
+            double savings = 100.0 * static_cast<double>(os_config.dram_accesses - is_config.dram_accesses)
+                           / static_cast<double>(os_config.dram_accesses);
             std::cout << "    IS savings: " << std::fixed << std::setprecision(1)
                       << savings << "%\n";
         } else {
-            double overhead = 100.0 * (is_config.dram_accesses - os_config.dram_accesses)
-                            / os_config.dram_accesses;
+            double overhead = 100.0 * static_cast<double>(is_config.dram_accesses - os_config.dram_accesses)
+                            / static_cast<double>(os_config.dram_accesses);
             std::cout << "    IS overhead: " << std::fixed << std::setprecision(1)
                       << overhead << "%\n";
         }

@@ -75,7 +75,7 @@ bool test_concurrent_dma(int num_dmas, int tiles_per_dma) {
     harness.print_stats();
 
     uint64_t total_bytes = total_accesses * CACHE_LINE_BYTES;
-    double bytes_per_cycle = static_cast<double>(total_bytes) / harness.current_cycle();
+    double bytes_per_cycle = static_cast<double>(total_bytes) / static_cast<double>(harness.current_cycle());
 
     std::cout << "\n--- " << num_dmas << "-DMA Analysis ---" << std::endl;
     std::cout << "Total tiles: " << (num_dmas * tiles_per_dma) << std::endl;
@@ -131,7 +131,7 @@ bool test_dma_scaling() {
             num_dmas * TILES_PER_DMA,
             bytes,
             harness.current_cycle(),
-            static_cast<double>(bytes) / harness.current_cycle()
+            static_cast<double>(bytes) / static_cast<double>(harness.current_cycle())
         });
     }
 
@@ -196,7 +196,7 @@ bool test_double_buffer_dma() {
 
     int total_ops = NUM_READ_DMAS * TILES_PER_DMA * CACHE_LINES_PER_TILE * 2;  // reads + writes
     uint64_t total_bytes = total_ops * CACHE_LINE_BYTES;
-    double bytes_per_cycle = static_cast<double>(total_bytes) / harness.current_cycle();
+    double bytes_per_cycle = static_cast<double>(total_bytes) / static_cast<double>(harness.current_cycle());
 
     std::cout << "\n--- Double-Buffer Analysis ---" << std::endl;
     std::cout << "Read DMAs: " << NUM_READ_DMAS << ", Write DMAs: " << NUM_WRITE_DMAS << std::endl;
@@ -250,7 +250,7 @@ bool test_tile_size_impact() {
             lines_per_tile,
             bytes,
             harness.current_cycle(),
-            static_cast<double>(bytes) / harness.current_cycle()
+            static_cast<double>(bytes) / static_cast<double>(harness.current_cycle())
         });
     }
 

@@ -47,13 +47,13 @@ TileOptimizer::TileConfig TileOptimizer::analytical_tiles(Size M, Size N, Size K
     Size cache_elems = cache_size / elem_size;
 
     // Calculate ideal Ti
-    double Ti_ideal = std::sqrt(static_cast<double>(cache_elems) * M / (2.0 * K + M));
+    double Ti_ideal = std::sqrt(static_cast<double>(cache_elems) * static_cast<double>(M) / (2.0 * static_cast<double>(K) + static_cast<double>(M)));
     Size Ti = std::min(M, static_cast<Size>(Ti_ideal));
     Ti = round_down_to_multiple(Ti, sys_dim);
     Ti = std::max(Ti, sys_dim);  // At least one systolic tile
 
     // Calculate ideal Tj
-    double Tj_ideal = std::sqrt(static_cast<double>(cache_elems) * N / (2.0 * K + N));
+    double Tj_ideal = std::sqrt(static_cast<double>(cache_elems) * static_cast<double>(N) / (2.0 * static_cast<double>(K) + static_cast<double>(N)));
     Size Tj = std::min(N, static_cast<Size>(Tj_ideal));
     Tj = round_down_to_multiple(Tj, sys_dim);
     Tj = std::max(Tj, sys_dim);
@@ -188,7 +188,7 @@ TileOptimizer::SearchSpace TileOptimizer::calculate_bounds(Size M, Size N, Size 
 
     // Conservative upper bound: assume square tiles
     // 3 × tile^2 ≤ cache_elems (for Ti×Tk + Tk×Tj + Ti×Tj)
-    Size max_tile_sq = static_cast<Size>(std::sqrt(cache_elems / 3.0));
+    Size max_tile_sq = static_cast<Size>(std::sqrt(static_cast<double>(cache_elems) / 3.0));
     max_tile_sq = round_down_to_multiple(max_tile_sq, sys_dim);
 
     space.Ti_max = std::min(M, max_tile_sq);
@@ -266,7 +266,7 @@ TileOptimizer::TileConfig TileOptimizer::estimate_memory_traffic(Size M, Size N,
 
     // Arithmetic intensity: FLOPs per byte from DRAM
     Size total_flops = 2 * M * N * K;  // 2 ops per element (multiply-add)
-    config.arithmetic_intensity = static_cast<double>(total_flops) / config.dram_accesses;
+    config.arithmetic_intensity = static_cast<double>(total_flops) / static_cast<double>(config.dram_accesses);
 
     return config;
 }
@@ -496,7 +496,7 @@ TileOptimizer::TileConfig TileOptimizer::optimize_weight_stationary(Size M, Size
     // Arithmetic intensity
     Size total_flops = 2 * M * N * K;
     config.arithmetic_intensity = static_cast<double>(total_flops) /
-                                  std::max(Size(1), config.dram_accesses);
+                                  static_cast<double>(std::max(Size(1), config.dram_accesses));
 
     // Step 6: Calculate footprints (WS-specific)
     // L2 holds A + C tiles (NOT B!)
@@ -676,7 +676,7 @@ TileOptimizer::TileConfig TileOptimizer::optimize_input_stationary(Size M, Size 
     // Arithmetic intensity
     Size total_flops = 2 * M * N * K;
     config.arithmetic_intensity = static_cast<double>(total_flops) /
-                                  std::max(Size(1), config.dram_accesses);
+                                  static_cast<double>(std::max(Size(1), config.dram_accesses));
 
     // Step 6: Calculate footprints (IS-specific)
     // L2 holds B + C tiles (NOT A!)

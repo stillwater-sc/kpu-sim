@@ -494,7 +494,7 @@ TestResult run_matmul_test(KPUSimulator& sim, const Options& opts) {
     result.success = true;
 
     // Calculate GFLOPS (2 * M * N * K flops for matmul)
-    double flops = 2.0 * opts.m * opts.n * opts.k;
+    double flops = 2.0 * static_cast<double>(opts.m) * static_cast<double>(opts.n) * static_cast<double>(opts.k);
     result.gflops = (flops / 1e9) / (result.elapsed_ms / 1000.0);
 
     // Clean up
@@ -574,7 +574,7 @@ TestResult run_mlp_test(KPUSimulator& sim, const Options& opts) {
     result.success = true;
 
     // Calculate GFLOPS
-    double flops = 2.0 * opts.m * opts.n * opts.k + opts.m * opts.n * 10; // matmul + approx activation
+    double flops = 2.0 * static_cast<double>(opts.m) * static_cast<double>(opts.n) * static_cast<double>(opts.k) + static_cast<double>(opts.m) * static_cast<double>(opts.n) * 10; // matmul + approx activation
     result.gflops = (flops / 1e9) / (result.elapsed_ms / 1000.0);
 
     // Clean up

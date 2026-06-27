@@ -346,12 +346,12 @@ struct TiledMatmulStats {
     // Utilization
     double compute_utilization() const {
         return total_cycles > 0 ?
-            static_cast<double>(compute_cycles) / total_cycles : 0.0;
+            static_cast<double>(compute_cycles) / static_cast<double>(total_cycles) : 0.0;
     }
 
     double effective_tflops(double clock_ghz) const {
         return total_cycles > 0 ?
-            (static_cast<double>(flops) / total_cycles) * clock_ghz : 0.0;
+            (static_cast<double>(flops) / static_cast<double>(total_cycles)) * clock_ghz : 0.0;
     }
 };
 

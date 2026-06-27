@@ -204,13 +204,13 @@ struct BlockMoverHarnessStats {
     // Derived metrics
     double avg_transfer_latency() const {
         return tiles_moved > 0
-            ? static_cast<double>(total_transfer_cycles) / tiles_moved
+            ? static_cast<double>(total_transfer_cycles) / static_cast<double>(tiles_moved)
             : 0.0;
     }
 
     double utilization() const {
         Cycle total = busy_cycles + idle_cycles;
-        return total > 0 ? static_cast<double>(busy_cycles) / total : 0.0;
+        return total > 0 ? static_cast<double>(busy_cycles) / static_cast<double>(total) : 0.0;
     }
 
     uint64_t get_transform_count(Transform xform) const {
@@ -366,7 +366,7 @@ inline std::string BlockMoverHarnessStats::to_string() const {
     ss << "  L3->L2:        " << l3_to_l2_transfers << "\n";
     ss << "  L2->L3:        " << l2_to_l3_transfers << "\n";
     ss << "\nData Volume:\n";
-    ss << "  Bytes moved:   " << (bytes_moved / 1024.0) << " KB\n";
+    ss << "  Bytes moved:   " << (static_cast<double>(bytes_moved) / 1024.0) << " KB\n";
     ss << "\nTransforms:\n";
     ss << "  Transpose:     " << get_transform_count(Transform::TRANSPOSE) << "\n";
     ss << "  Swizzle 4x4:   " << get_transform_count(Transform::SWIZZLE_4x4) << "\n";

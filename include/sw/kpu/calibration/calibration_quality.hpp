@@ -180,7 +180,7 @@ inline void assess_sample_quality(
             " requests (recommended: " + std::to_string(criteria.recommended_requests) + ")";
         issue.recommendation = "Consider increasing request count for better accuracy";
         assessment.issues.push_back(issue);
-        double ratio = static_cast<double>(ref.total_requests) / criteria.recommended_requests;
+        double ratio = static_cast<double>(ref.total_requests) / static_cast<double>(criteria.recommended_requests);
         assessment.sample_quality_score = 50 + 50 * ratio;
     } else {
         assessment.sample_quality_score = 100;
@@ -480,8 +480,8 @@ inline QualityAssessment assess_calibration_quality(
         0.30 * assessment.factor_quality_score;
 
     // Reduce score for errors and warnings
-    assessment.overall_quality_score -= assessment.error_count() * 15;
-    assessment.overall_quality_score -= assessment.warning_count() * 5;
+    assessment.overall_quality_score -= static_cast<double>(assessment.error_count() * 15);
+    assessment.overall_quality_score -= static_cast<double>(assessment.warning_count() * 5);
     assessment.overall_quality_score = std::max(0.0, assessment.overall_quality_score);
 
     return assessment;

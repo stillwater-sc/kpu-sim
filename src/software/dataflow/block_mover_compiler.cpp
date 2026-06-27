@@ -44,9 +44,9 @@ void CompiledSchedule::print_summary() const {
     std::cout << "\n=== Compiled Schedule Summary ===\n";
     std::cout << "Estimated cycles: " << estimated_cycles << "\n";
     std::cout << "  Compute: " << compute_cycles << " ("
-              << (100.0 * compute_cycles / estimated_cycles) << "%)\n";
+              << (100.0 * static_cast<double>(compute_cycles) / static_cast<double>(estimated_cycles)) << "%)\n";
     std::cout << "  Data movement: " << data_movement_cycles << " ("
-              << (100.0 * data_movement_cycles / estimated_cycles) << "%)\n";
+              << (100.0 * static_cast<double>(data_movement_cycles) / static_cast<double>(estimated_cycles)) << "%)\n";
     std::cout << "\nCommands:\n";
     std::cout << "  Total: " << stats.total_commands << "\n";
     std::cout << "  DMA ops: " << stats.total_dma_ops << "\n";

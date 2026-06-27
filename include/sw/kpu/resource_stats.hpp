@@ -66,17 +66,17 @@ struct MemoryResourceStats {
     // Derived metrics
     double utilization_percent() const {
         return capacity_bytes > 0 ?
-            100.0 * allocated_bytes / capacity_bytes : 0.0;
+            100.0 * static_cast<double>(allocated_bytes) / static_cast<double>(capacity_bytes) : 0.0;
     }
 
     double read_bandwidth_gb_s(double clock_ghz) const {
         return read_cycles > 0 ?
-            (bytes_read / 1e9) / (read_cycles / (clock_ghz * 1e9)) : 0.0;
+            (static_cast<double>(bytes_read) / 1e9) / (static_cast<double>(read_cycles) / (clock_ghz * 1e9)) : 0.0;
     }
 
     double write_bandwidth_gb_s(double clock_ghz) const {
         return write_cycles > 0 ?
-            (bytes_written / 1e9) / (write_cycles / (clock_ghz * 1e9)) : 0.0;
+            (static_cast<double>(bytes_written) / 1e9) / (static_cast<double>(write_cycles) / (clock_ghz * 1e9)) : 0.0;
     }
 
     void reset_counters() {
@@ -117,12 +117,12 @@ struct ComputeResourceStats {
     // Derived metrics
     double utilization_percent() const {
         uint64_t total = compute_cycles + idle_cycles + stall_cycles;
-        return total > 0 ? 100.0 * compute_cycles / total : 0.0;
+        return total > 0 ? 100.0 * static_cast<double>(compute_cycles) / static_cast<double>(total) : 0.0;
     }
 
     double flops_rate(double clock_ghz) const {
         return compute_cycles > 0 ?
-            (total_flops * clock_ghz * 1e9) / compute_cycles : 0.0;
+            (static_cast<double>(total_flops) * clock_ghz * 1e9) / static_cast<double>(compute_cycles) : 0.0;
     }
 
     void reset_counters() {
@@ -172,17 +172,17 @@ struct DataMovementStats {
     // Derived metrics
     double utilization_percent() const {
         uint64_t total = active_cycles + idle_cycles + stall_cycles;
-        return total > 0 ? 100.0 * active_cycles / total : 0.0;
+        return total > 0 ? 100.0 * static_cast<double>(active_cycles) / static_cast<double>(total) : 0.0;
     }
 
     double bandwidth_gb_s(double clock_ghz) const {
         return active_cycles > 0 ?
-            (bytes_transferred / 1e9) / (active_cycles / (clock_ghz * 1e9)) : 0.0;
+            (static_cast<double>(bytes_transferred) / 1e9) / (static_cast<double>(active_cycles) / (clock_ghz * 1e9)) : 0.0;
     }
 
     double avg_latency_cycles() const {
         return transfer_count > 0 ?
-            static_cast<double>(total_latency_cycles) / transfer_count : 0.0;
+            static_cast<double>(total_latency_cycles) / static_cast<double>(transfer_count) : 0.0;
     }
 
     void record_transfer(Size bytes, uint64_t latency_cycles) {

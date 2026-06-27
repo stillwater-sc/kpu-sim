@@ -175,12 +175,12 @@ public:
 
         double hit_rate() const {
             uint64_t total = page_hits + page_conflicts + page_empty;
-            return total > 0 ? static_cast<double>(page_hits) / total : 0.0;
+            return total > 0 ? static_cast<double>(page_hits) / static_cast<double>(total) : 0.0;
         }
 
         double avg_latency() const {
             uint64_t total = reads + writes;
-            return total > 0 ? static_cast<double>(total_latency) / total : 0.0;
+            return total > 0 ? static_cast<double>(total_latency) / static_cast<double>(total) : 0.0;
         }
     };
 

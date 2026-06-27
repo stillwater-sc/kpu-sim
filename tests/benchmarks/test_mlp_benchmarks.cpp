@@ -65,7 +65,7 @@ TEST_CASE("Activation function comparison", "[benchmark][mlp][activation]") {
     std::cout << "Activation Overhead (vs baseline):" << std::endl;
     for (const auto& r : suite.results) {
         if (&r != baseline) {
-            double overhead = (static_cast<double>(r.cycles) / baseline->cycles - 1.0) * 100;
+            double overhead = (static_cast<double>(r.cycles) / static_cast<double>(baseline->cycles) - 1.0) * 100;
             std::cout << "  " << r.name << ": +" << std::fixed << std::setprecision(1)
                       << overhead << "% cycles" << std::endl;
         }

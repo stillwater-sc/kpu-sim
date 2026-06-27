@@ -70,7 +70,7 @@ struct NoCStats {
 
     double average_latency() const {
         return tiles_delivered > 0
-            ? static_cast<double>(total_latency_cycles) / tiles_delivered
+            ? static_cast<double>(total_latency_cycles) / static_cast<double>(tiles_delivered)
             : 0.0;
     }
 };

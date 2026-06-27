@@ -369,17 +369,17 @@ struct ComputeFabricStatistics {
 
     double avg_latency() const {
         uint64_t ops = total_ops();
-        return ops > 0 ? static_cast<double>(total_compute_cycles) / ops : 0.0;
+        return ops > 0 ? static_cast<double>(total_compute_cycles) / static_cast<double>(ops) : 0.0;
     }
 
     double utilization() const {
         uint64_t total = busy_cycles + idle_cycles;
-        return total > 0 ? static_cast<double>(busy_cycles) / total : 0.0;
+        return total > 0 ? static_cast<double>(busy_cycles) / static_cast<double>(total) : 0.0;
     }
 
     double mac_efficiency(uint64_t peak_macs_per_cycle) const {
         if (busy_cycles == 0 || peak_macs_per_cycle == 0) return 0.0;
-        return static_cast<double>(total_macs) / (busy_cycles * peak_macs_per_cycle);
+        return static_cast<double>(total_macs) / static_cast<double>(busy_cycles * peak_macs_per_cycle);
     }
 
     void reset() {

@@ -76,23 +76,23 @@ void print_program_summary(const DMProgram& program) {
 
     std::cout << "\nTraffic Estimates:\n";
     std::cout << "  External memory: " << std::fixed << std::setprecision(2)
-              << (program.estimates.external_mem_bytes / (1024.0 * 1024.0)) << " MB\n";
+              << (static_cast<double>(program.estimates.external_mem_bytes) / (1024.0 * 1024.0)) << " MB\n";
     std::cout << "  L3 traffic:      "
-              << (program.estimates.l3_bytes / (1024.0 * 1024.0)) << " MB\n";
+              << (static_cast<double>(program.estimates.l3_bytes) / (1024.0 * 1024.0)) << " MB\n";
     std::cout << "  L2 traffic:      "
-              << (program.estimates.l2_bytes / (1024.0 * 1024.0)) << " MB\n";
+              << (static_cast<double>(program.estimates.l2_bytes) / (1024.0 * 1024.0)) << " MB\n";
 
     // Calculate minimum traffic and reuse
     Size min_bytes = (program.M * program.K + program.K * program.N +
                      program.M * program.N) * 4;  // float32
-    double reuse = static_cast<double>(program.estimates.external_mem_bytes) / min_bytes;
+    double reuse = static_cast<double>(program.estimates.external_mem_bytes) / static_cast<double>(min_bytes);
 
-    std::cout << "  Minimum external: " << (min_bytes / (1024.0 * 1024.0)) << " MB\n";
+    std::cout << "  Minimum external: " << (static_cast<double>(min_bytes) / (1024.0 * 1024.0)) << " MB\n";
     std::cout << "  Reuse factor:     " << reuse << "x\n";
 
     std::cout << "\nPerformance Metrics:\n";
     Size total_flops = 2ULL * program.M * program.N * program.K;
-    std::cout << "  Total FLOPs:           " << (total_flops / 1e9) << " GFLOPs\n";
+    std::cout << "  Total FLOPs:           " << (static_cast<double>(total_flops) / 1e9) << " GFLOPs\n";
     std::cout << "  Arithmetic intensity:  " << program.estimates.arithmetic_intensity
               << " FLOPs/byte\n";
 }
@@ -316,7 +316,7 @@ void example_tile_size_comparison() {
         std::cout << std::setw(25) << std::left << exp.description
                   << std::setw(12) << std::right << program.instructions.size()
                   << std::setw(12) << std::fixed << std::setprecision(2)
-                  << (program.estimates.external_mem_bytes / (1024.0 * 1024.0)) << " MB"
+                  << (static_cast<double>(program.estimates.external_mem_bytes) / (1024.0 * 1024.0)) << " MB"
                   << std::setw(12) << program.estimates.arithmetic_intensity << " F/B"
                   << std::setw(10) << duration.count() << " us\n";
     }
@@ -570,7 +570,7 @@ With caching, we only load each unique tile once.
 
     std::cout << "  DMA operations:    " << program_cached.num_dma_ops() << "\n";
     std::cout << "  External traffic:  " << std::fixed << std::setprecision(2)
-              << (program_cached.estimates.external_mem_bytes / 1024.0) << " KB\n";
+              << (static_cast<double>(program_cached.estimates.external_mem_bytes) / 1024.0) << " KB\n";
     std::cout << builder_cached.get_cache_stats();
 
     // Build WITHOUT caching
@@ -581,7 +581,7 @@ With caching, we only load each unique tile once.
 
     std::cout << "  DMA operations:    " << program_uncached.num_dma_ops() << "\n";
     std::cout << "  External traffic:  " << std::fixed << std::setprecision(2)
-              << (program_uncached.estimates.external_mem_bytes / 1024.0) << " KB\n";
+              << (static_cast<double>(program_uncached.estimates.external_mem_bytes) / 1024.0) << " KB\n";
 
     // Summary comparison
     std::cout << "\n--- Comparison ---\n";
@@ -592,25 +592,25 @@ With caching, we only load each unique tile once.
     std::cout << "  DMA ops reduced:     " << program_uncached.num_dma_ops()
               << " -> " << program_cached.num_dma_ops()
               << " (" << dma_saved << " fewer, "
-              << std::setprecision(1) << (100.0 * dma_saved / program_uncached.num_dma_ops())
+              << std::setprecision(1) << (100.0 * static_cast<double>(dma_saved) / static_cast<double>(program_uncached.num_dma_ops()))
               << "% reduction)\n";
     std::cout << "  External traffic:    " << std::setprecision(2)
-              << (program_uncached.estimates.external_mem_bytes / 1024.0) << " KB -> "
-              << (program_cached.estimates.external_mem_bytes / 1024.0) << " KB ("
-              << (bytes_saved / 1024.0) << " KB saved)\n";
+              << (static_cast<double>(program_uncached.estimates.external_mem_bytes) / 1024.0) << " KB -> "
+              << (static_cast<double>(program_cached.estimates.external_mem_bytes) / 1024.0) << " KB ("
+              << (static_cast<double>(bytes_saved) / 1024.0) << " KB saved)\n";
 
     // Calculate minimum traffic
     Size min_bytes = (config.M * config.K + config.K * config.N +
                      config.M * config.N) * config.element_size;
-    double reuse_cached = static_cast<double>(program_cached.estimates.external_mem_bytes) / min_bytes;
-    double reuse_uncached = static_cast<double>(program_uncached.estimates.external_mem_bytes) / min_bytes;
+    double reuse_cached = static_cast<double>(program_cached.estimates.external_mem_bytes) / static_cast<double>(min_bytes);
+    double reuse_uncached = static_cast<double>(program_uncached.estimates.external_mem_bytes) / static_cast<double>(min_bytes);
 
     std::cout << "  Reuse factor:        " << std::setprecision(2) << reuse_uncached
               << "x -> " << reuse_cached << "x (1.0x is optimal)\n";
     std::cout << "  Arith. intensity:    " << std::setprecision(1)
-              << (2.0 * config.M * config.N * config.K / program_uncached.estimates.external_mem_bytes)
+              << (2.0 * static_cast<double>(config.M) * static_cast<double>(config.N) * static_cast<double>(config.K) / static_cast<double>(program_uncached.estimates.external_mem_bytes))
               << " -> "
-              << (2.0 * config.M * config.N * config.K / program_cached.estimates.external_mem_bytes)
+              << (2.0 * static_cast<double>(config.M) * static_cast<double>(config.N) * static_cast<double>(config.K) / static_cast<double>(program_cached.estimates.external_mem_bytes))
               << " FLOPs/byte\n";
 }
 

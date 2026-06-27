@@ -1763,7 +1763,7 @@ void print_bandwidth_analysis(const std::string& name,
               << " (" << (a.total_mesh_bytes(tile_bytes) / 1024 / 1024) << " MB)\n";
     std::cout << "  Tile matmuls:       " << std::setw(10) << a.tile_matmuls << "\n";
     std::cout << "  Total FLOPs:        " << std::setw(10) << a.flops(cfg.tile_dim)
-              << " (" << (a.flops(cfg.tile_dim) / 1e9) << " GFLOPs)\n";
+              << " (" << (static_cast<double>(a.flops(cfg.tile_dim)) / 1e9) << " GFLOPs)\n";
 }
 
 TEST_CASE("Large Matmul Bandwidth Analysis - 10x L3 Capacity",
@@ -1847,9 +1847,9 @@ TEST_CASE("Large Matmul Bandwidth Analysis - 10x L3 Capacity",
     std::cout << std::string(90, '=') << "\n";
 
     // Calculate ratios
-    double c_dma = c_analysis.total_dma_bytes(tile_bytes);
-    double a_dma = a_analysis.total_dma_bytes(tile_bytes);
-    double b_dma = b_analysis.total_dma_bytes(tile_bytes);
+    double c_dma = static_cast<double>(c_analysis.total_dma_bytes(tile_bytes));
+    double a_dma = static_cast<double>(a_analysis.total_dma_bytes(tile_bytes));
+    double b_dma = static_cast<double>(b_analysis.total_dma_bytes(tile_bytes));
     double min_dma = std::min({c_dma, a_dma, b_dma});
 
     std::cout << "\nDMA Bandwidth Ratio (relative to best):\n";
@@ -1978,15 +1978,15 @@ struct DoubleBufferTiming {
 
     // Metrics
     double speedup() const {
-        return static_cast<double>(sequential_total()) / pipelined_total;
+        return static_cast<double>(sequential_total()) / static_cast<double>(pipelined_total);
     }
     double dma_hidden_fraction() const {
         if (sequential_dma_cycles == 0) return 0;
         uint64_t hidden = sequential_dma_cycles - (pipelined_total - sequential_compute_cycles);
-        return static_cast<double>(hidden) / sequential_dma_cycles;
+        return static_cast<double>(hidden) / static_cast<double>(sequential_dma_cycles);
     }
     double compute_utilization() const {
-        return static_cast<double>(sequential_compute_cycles) / pipelined_total;
+        return static_cast<double>(sequential_compute_cycles) / static_cast<double>(pipelined_total);
     }
 };
 
@@ -2091,7 +2091,7 @@ DoubleBufferTiming analyze_a_stationary_double_buffer(
 
     // C partial R/W between chunks (if not first/last)
     uint64_t c_partial_tiles = cfg.mesh_rows * cfg.N_tiles;
-    double avg_c_rw_per_chunk = 2.0 * c_partial_tiles * (k_chunks - 1) / k_chunks;
+    double avg_c_rw_per_chunk = 2.0 * static_cast<double>(c_partial_tiles) * static_cast<double>(k_chunks - 1) / static_cast<double>(k_chunks);
 
     uint64_t tiles_per_chunk = a_loads_per_chunk + b_loads_per_chunk +
                                static_cast<uint64_t>(avg_c_rw_per_chunk);
@@ -2127,7 +2127,7 @@ DoubleBufferTiming analyze_b_stationary_double_buffer(
     uint64_t a_loads_per_chunk = cfg.M_tiles * k_tiles_per_chunk;
 
     uint64_t c_partial_tiles = cfg.M_tiles * cfg.mesh_cols;
-    double avg_c_rw_per_chunk = 2.0 * c_partial_tiles * (k_chunks - 1) / k_chunks;
+    double avg_c_rw_per_chunk = 2.0 * static_cast<double>(c_partial_tiles) * static_cast<double>(k_chunks - 1) / static_cast<double>(k_chunks);
 
     uint64_t tiles_per_chunk = a_loads_per_chunk + b_loads_per_chunk +
                                static_cast<uint64_t>(avg_c_rw_per_chunk);
@@ -2344,7 +2344,7 @@ struct TileSizeConfig {
     /// DMA cycles for a D×D FP32 tile
     uint64_t dma_cycles(uint32_t tile_dim) const {
         uint64_t bytes = (uint64_t)tile_dim * tile_dim * 4;
-        uint64_t transfer = static_cast<uint64_t>(bytes / bytes_per_cycle());
+        uint64_t transfer = static_cast<uint64_t>(static_cast<double>(bytes) / bytes_per_cycle());
         return dma_latency + transfer;
     }
 
@@ -2414,7 +2414,7 @@ TEST_CASE("Tile Size Sweep - Find Compute-Bound Regime",
     for (uint32_t d : {16, 32, 48, 64, 96, 128, 192, 256, 384, 512, 768, 1024}) {
         uint64_t dma = cfg.dma_cycles(d);
         uint64_t compute = cfg.compute_cycles(d);
-        double ratio = static_cast<double>(dma) / compute;
+        double ratio = static_cast<double>(dma) / static_cast<double>(compute);
         double ai = cfg.arithmetic_intensity(d);
         std::string bottleneck = cfg.is_compute_bound(d) ? "COMPUTE" : "DMA";
 

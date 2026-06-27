@@ -45,10 +45,10 @@ int main(void) {
 
     printf("   Main memory size: %" PRIu64 " bytes (%.1f MB)\n",
            kpu_main_memory_size(kpu),
-           kpu_main_memory_size(kpu) / (1024.0 * 1024.0));
+           (double)kpu_main_memory_size(kpu) / (1024.0 * 1024.0));
     printf("   Scratchpad size:  %" PRIu64 " bytes (%.1f KB)\n",
            kpu_scratchpad_size(kpu),
-           kpu_scratchpad_size(kpu) / 1024.0);
+           (double)kpu_scratchpad_size(kpu) / 1024.0);
 
     /* =========================================================
      * 2. Create Runtime

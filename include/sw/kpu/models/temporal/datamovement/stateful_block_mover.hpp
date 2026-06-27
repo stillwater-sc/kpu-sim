@@ -148,7 +148,7 @@ struct PendingTransfer {
     }
 
     float progress() const {
-        return bytes_total > 0 ? static_cast<float>(bytes_transferred) / bytes_total : 1.0f;
+        return bytes_total > 0 ? static_cast<float>(bytes_transferred) / static_cast<float>(bytes_total) : 1.0f;
     }
 };
 
@@ -293,7 +293,7 @@ public:
         double utilization() const {
             uint64_t total = cycles_active + cycles_waiting_trigger +
                             cycles_waiting_transfer + cycles_waiting_receive;
-            return total > 0 ? static_cast<double>(cycles_active) / total : 0.0;
+            return total > 0 ? static_cast<double>(cycles_active) / static_cast<double>(total) : 0.0;
         }
     };
 

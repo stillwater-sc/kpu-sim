@@ -93,7 +93,7 @@ struct MatmulConfig {
         std::cout << "  C[" << M << " × " << N << "] = A[" << M << " × " << K
                   << "] × B[" << K << " × " << N << "]\n";
         std::cout << "  Total FLOPs: " << std::fixed << std::setprecision(2)
-                  << (total_flops() / 1e9) << " GFLOPs\n\n";
+                  << (static_cast<double>(total_flops()) / 1e9) << " GFLOPs\n\n";
 
         std::cout << "Tiling:\n";
         std::cout << "  M tiles: " << m_tiles << " (tile size: " << tile_m() << ")\n";
@@ -468,8 +468,8 @@ void analyze_dfg(const TileDataFlowGraph& dfg, const MatmulConfig& config) {
 
     // Estimate throughput
     double systolic_throughput = config.systolic_size * config.systolic_size;  // MACs/cycle
-    double theoretical_compute = config.total_flops() / systolic_throughput;
-    double efficiency = theoretical_compute / critical_path * 100.0;
+    double theoretical_compute = static_cast<double>(config.total_flops()) / systolic_throughput;
+    double efficiency = theoretical_compute / static_cast<double>(critical_path) * 100.0;
 
     std::cout << "  Theoretical compute: " << static_cast<int64_t>(theoretical_compute) << " cycles\n";
     std::cout << "  Efficiency: " << std::fixed << std::setprecision(1) << efficiency << "%\n\n";
@@ -494,11 +494,11 @@ void analyze_schedule(const DFGSchedule& schedule, const MatmulConfig& config) {
     std::cout << "  Makespan: " << schedule.makespan << " cycles\n";
 
     // Estimate wall clock time at 1 GHz
-    double time_ms = schedule.makespan / 1e6;
+    double time_ms = static_cast<double>(schedule.makespan) / 1e6;
     std::cout << "  Time @ 1 GHz: " << std::fixed << std::setprecision(3) << time_ms << " ms\n";
 
     // Throughput
-    double gflops = config.total_flops() / 1e9;
+    double gflops = static_cast<double>(config.total_flops()) / 1e9;
     double throughput = gflops / (time_ms / 1000.0);
     std::cout << "  Throughput: " << std::fixed << std::setprecision(1) << throughput << " GFLOPS\n\n";
 
@@ -529,9 +529,9 @@ void analyze_compiled_schedule(const CompiledSchedule& schedule) {
     std::cout << "Timing Estimates:\n";
     std::cout << "  Total cycles:       " << schedule.estimated_cycles << "\n";
     std::cout << "  Compute cycles:     " << schedule.compute_cycles << " ("
-              << (100.0 * schedule.compute_cycles / schedule.estimated_cycles) << "%)\n";
+              << (100.0 * static_cast<double>(schedule.compute_cycles) / static_cast<double>(schedule.estimated_cycles)) << "%)\n";
     std::cout << "  Data movement:      " << schedule.data_movement_cycles << " ("
-              << (100.0 * schedule.data_movement_cycles / schedule.estimated_cycles) << "%)\n\n";
+              << (100.0 * static_cast<double>(schedule.data_movement_cycles) / static_cast<double>(schedule.estimated_cycles)) << "%)\n\n";
 
     std::cout << "Per-L3 Programs:\n";
     for (uint8_t l3 = 0; l3 < 16; ++l3) {
@@ -636,7 +636,7 @@ void simulate_execution(const CompiledSchedule& compiled, const MatmulConfig& co
     std::cout << "  Simulated cycles: " << cycle << "\n";
     std::cout << "  Simulation time:  " << sim_time.count() << " ms\n";
     std::cout << "  Simulation rate:  " << std::fixed << std::setprecision(1)
-              << (cycle / 1000.0 / sim_time.count()) << " M cycles/sec\n";
+              << (static_cast<double>(cycle) / 1000.0 / static_cast<double>(sim_time.count())) << " M cycles/sec\n";
 
     // Get aggregate stats
     auto stats = array.get_aggregate_stats();
@@ -685,7 +685,7 @@ void simulate_execution(const CompiledSchedule& compiled, const MatmulConfig& co
         std::cout << "  Total bytes:     " << (noc_stats.total_bytes / 1024) << " KB\n";
         if (noc_stats.tiles_delivered > 0) {
             std::cout << "  Avg latency:     " << std::fixed << std::setprecision(1)
-                      << (static_cast<double>(noc_stats.total_latency_cycles) / noc_stats.tiles_delivered)
+                      << (static_cast<double>(noc_stats.total_latency_cycles) / static_cast<double>(noc_stats.tiles_delivered))
                       << " cycles\n";
             std::cout << "  Max latency:     " << noc_stats.max_latency_cycles << " cycles\n";
         }

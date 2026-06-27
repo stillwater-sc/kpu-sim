@@ -671,7 +671,7 @@ void BehavioralComputeFabric::execute_pool2d_fp32(
                                 count++;
                             }
                         }
-                        output[((n * C + c) * H_out + h_out) * W_out + w_out] = sum / count;
+                        output[((n * C + c) * H_out + h_out) * W_out + w_out] = sum / static_cast<float>(count);
                     }
                 }
             }
@@ -716,7 +716,7 @@ void BehavioralComputeFabric::execute_pool2d_fp32(
                         }
 
                         if (desc.pool_type == Pool2DDescriptor::PoolType::AVG && count > 0) {
-                            result /= count;
+                            result /= static_cast<float>(count);
                         }
                         output[((n * C + c) * H_out + h_out) * W_out + w_out] = result;
                     }
@@ -778,7 +778,7 @@ void BehavioralComputeFabric::execute_layernorm_fp32(
         for (uint32_t i = 0; i < norm_size; ++i) {
             mean += x[i];
         }
-        mean /= norm_size;
+        mean /= static_cast<float>(norm_size);
 
         // Compute variance
         float var = 0.0f;
@@ -786,7 +786,7 @@ void BehavioralComputeFabric::execute_layernorm_fp32(
             float diff = x[i] - mean;
             var += diff * diff;
         }
-        var /= norm_size;
+        var /= static_cast<float>(norm_size);
 
         // Normalize
         float inv_std = 1.0f / std::sqrt(var + eps);

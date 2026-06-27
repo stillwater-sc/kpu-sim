@@ -73,7 +73,7 @@ bool test_single_tile_load() {
 
     // Calculate throughput
     uint64_t cycles = harness.current_cycle();
-    double bytes_per_cycle = static_cast<double>(TILE_TOTAL_BYTES) / cycles;
+    double bytes_per_cycle = static_cast<double>(TILE_TOTAL_BYTES) / static_cast<double>(cycles);
     std::cout << "Throughput: " << std::fixed << std::setprecision(2)
               << bytes_per_cycle << " bytes/cycle" << std::endl;
     std::cout << "Cycles per tile: " << cycles << std::endl;
@@ -118,7 +118,7 @@ bool test_multi_bank_tile_load() {
     }
 
     uint64_t cycles = harness.current_cycle();
-    double bytes_per_cycle = static_cast<double>(TILE_TOTAL_BYTES) / cycles;
+    double bytes_per_cycle = static_cast<double>(TILE_TOTAL_BYTES) / static_cast<double>(cycles);
     std::cout << "Throughput: " << std::fixed << std::setprecision(2)
               << bytes_per_cycle << " bytes/cycle" << std::endl;
     std::cout << "Cycles per tile: " << cycles << std::endl;
@@ -296,7 +296,7 @@ bool test_dual_channel_tile_load() {
     }
 
     uint64_t cycles = harness.current_cycle();
-    double bytes_per_cycle = static_cast<double>(TILE_TOTAL_BYTES) / cycles;
+    double bytes_per_cycle = static_cast<double>(TILE_TOTAL_BYTES) / static_cast<double>(cycles);
     std::cout << "Throughput: " << std::fixed << std::setprecision(2)
               << bytes_per_cycle << " bytes/cycle" << std::endl;
     std::cout << "Cycles per tile: " << cycles << std::endl;
@@ -369,14 +369,14 @@ bool test_tile_load_comparison() {
     std::cout << "Multi-bank (4):       " << multi_bank_cycles << " cycles";
     if (multi_bank_cycles < single_bank_cycles) {
         std::cout << " (" << std::fixed << std::setprecision(1)
-                  << (100.0 * (single_bank_cycles - multi_bank_cycles) / single_bank_cycles)
+                  << (100.0 * static_cast<double>(single_bank_cycles - multi_bank_cycles) / static_cast<double>(single_bank_cycles))
                   << "% faster)";
     }
     std::cout << std::endl;
     std::cout << "Dual channel:         " << dual_channel_cycles << " cycles";
     if (dual_channel_cycles < single_bank_cycles) {
         std::cout << " (" << std::fixed << std::setprecision(1)
-                  << (100.0 * (single_bank_cycles - dual_channel_cycles) / single_bank_cycles)
+                  << (100.0 * static_cast<double>(single_bank_cycles - dual_channel_cycles) / static_cast<double>(single_bank_cycles))
                   << "% faster)";
     }
     std::cout << std::endl;

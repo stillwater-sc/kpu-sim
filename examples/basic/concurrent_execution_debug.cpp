@@ -295,9 +295,9 @@ void debug_timing_calculation() {
     // bytes / (GB/s) = bytes / (10^9 bytes/s) = bytes * 10^-9 s = bytes ns
     // At 1 GHz: cycles = bytes / bandwidth_gb_s
 
-    Cycle dma_cycles = static_cast<Cycle>(tile_size_bytes / dma_bw);
-    Cycle bm_cycles = static_cast<Cycle>(tile_size_bytes / bm_bw);
-    Cycle str_cycles = static_cast<Cycle>(tile_size_bytes / str_bw);
+    Cycle dma_cycles = static_cast<Cycle>(static_cast<double>(tile_size_bytes) / dma_bw);
+    Cycle bm_cycles = static_cast<Cycle>(static_cast<double>(tile_size_bytes) / bm_bw);
+    Cycle str_cycles = static_cast<Cycle>(static_cast<double>(tile_size_bytes) / str_bw);
 
     std::cout << "Tile size: " << tile_size_bytes << " bytes (16x16 float32)\n\n";
 

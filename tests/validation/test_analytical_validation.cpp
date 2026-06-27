@@ -97,7 +97,7 @@ constexpr Cycle matmul_min_compute_cycles(Size M, Size N, Size K) {
  * @brief Calculate minimum memory cycles (if memory-bound)
  */
 inline Cycle matmul_min_memory_cycles(Size M, Size N, Size K) {
-    return static_cast<Cycle>(matmul_external_bytes(M, N, K) / EXTERNAL_BW_GBS);
+    return static_cast<Cycle>(static_cast<double>(matmul_external_bytes(M, N, K)) / EXTERNAL_BW_GBS);
 }
 
 /**
@@ -483,7 +483,7 @@ TEST_CASE("Simulator cycles vs analytical minimum", "[analytical][cycles]") {
         Cycle min_cycles = analytical::matmul_min_compute_cycles(N, N, N);
 
         // For large compute-bound ops, overhead should be small
-        double overhead = static_cast<double>(actual_cycles - min_cycles) / min_cycles;
+        double overhead = static_cast<double>(actual_cycles - min_cycles) / static_cast<double>(min_cycles);
 
         std::cout << "1024x1024x1024: actual=" << actual_cycles
                   << ", min=" << min_cycles

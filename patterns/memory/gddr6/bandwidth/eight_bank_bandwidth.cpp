@@ -62,8 +62,8 @@ bool test_eight_bank_bandwidth() {
     const auto& stats = harness.stats();
     uint64_t total_bytes = 64 * 64;  // 64 accesses × 64 bytes
     uint64_t cycles = harness.current_cycle();
-    double bytes_per_cycle = static_cast<double>(total_bytes) / cycles;
-    double hit_ratio = 100.0 * stats.page_hits / (stats.page_hits + stats.page_empty);
+    double bytes_per_cycle = static_cast<double>(total_bytes) / static_cast<double>(cycles);
+    double hit_ratio = 100.0 * static_cast<double>(stats.page_hits) / static_cast<double>(stats.page_hits + stats.page_empty);
 
     std::cout << "\n--- 8-Bank Bandwidth Analysis ---" << std::endl;
     std::cout << "Total bytes: " << total_bytes << std::endl;
@@ -98,7 +98,7 @@ bool test_bank_concurrency_comparison() {
         harness.run_until_complete();
         uint64_t bytes = 4 * ACCESSES_PER_BANK * 64;
         cycles_4bank = harness.current_cycle();
-        bw_4bank = static_cast<double>(bytes) / cycles_4bank;
+        bw_4bank = static_cast<double>(bytes) / static_cast<double>(cycles_4bank);
     }
 
     // 8-bank test (two per group)
@@ -115,7 +115,7 @@ bool test_bank_concurrency_comparison() {
         harness.run_until_complete();
         uint64_t bytes = 8 * ACCESSES_PER_BANK * 64;
         cycles_8bank = harness.current_cycle();
-        bw_8bank = static_cast<double>(bytes) / cycles_8bank;
+        bw_8bank = static_cast<double>(bytes) / static_cast<double>(cycles_8bank);
     }
 
     std::cout << "\n--- Comparison Results ---" << std::endl;
@@ -168,7 +168,7 @@ bool test_eight_bank_double_buffer() {
 
     [[maybe_unused]] const auto& stats = harness.stats();
     uint64_t total_bytes = (32 + 32) * 64;  // 32 reads + 32 writes
-    double bytes_per_cycle = static_cast<double>(total_bytes) / harness.current_cycle();
+    double bytes_per_cycle = static_cast<double>(total_bytes) / static_cast<double>(harness.current_cycle());
 
     std::cout << "\n--- Double Buffer Analysis ---" << std::endl;
     std::cout << "Reads: 32, Writes: 32" << std::endl;

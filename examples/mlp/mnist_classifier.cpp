@@ -46,7 +46,7 @@ public:
 
     // Xavier initialization scaled weights
     void fill_xavier(float* arr, size_t fan_in, size_t fan_out) {
-        float scale = std::sqrt(2.0f / (fan_in + fan_out));
+        float scale = std::sqrt(2.0f / static_cast<float>(fan_in + fan_out));
         std::normal_distribution<float> normal(0.0f, scale);
         for (size_t i = 0; i < fan_in * fan_out; ++i) {
             arr[i] = normal(rng_);
@@ -358,7 +358,7 @@ int main() {
 
     std::cout << "Per-layer breakdown:\n";
     for (const auto& profile : result.layer_profiles) {
-        double pct = 100.0 * profile.cycles / result.total_cycles;
+        double pct = 100.0 * static_cast<double>(profile.cycles) / static_cast<double>(result.total_cycles);
         std::cout << "  " << std::setw(8) << profile.name << ": "
                   << std::setw(10) << profile.cycles << " cycles ("
                   << std::setw(5) << std::setprecision(1) << pct << "%)\n";

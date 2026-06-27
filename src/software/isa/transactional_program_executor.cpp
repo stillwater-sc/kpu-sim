@@ -716,13 +716,13 @@ TransactionalProgramExecutor::get_timing_stats() const {
         // Utilization is (busy cycles) / (total cycles * num_resources)
         // For simplicity, assume 4 of each resource
         stats.dma_utilization = static_cast<double>(total_dma_cycles_) /
-                                (stats.total_cycles * 4);
+                                static_cast<double>(stats.total_cycles * 4);
         stats.block_mover_utilization = static_cast<double>(total_bm_cycles_) /
-                                        (stats.total_cycles * 4);
+                                        static_cast<double>(stats.total_cycles * 4);
         stats.streamer_utilization = static_cast<double>(total_str_cycles_) /
-                                     (stats.total_cycles * 4);
+                                     static_cast<double>(stats.total_cycles * 4);
         stats.compute_utilization = static_cast<double>(total_compute_cycles_) /
-                                    stats.total_cycles;
+                                    static_cast<double>(stats.total_cycles);
     }
 
     return stats;
@@ -820,7 +820,7 @@ std::string TransactionalProgramExecutor::generate_timeline(size_t width) const 
     oss << std::string(width, '=') << "\n";
 
     // Scale factor
-    double scale = static_cast<double>(width - 20) / total;
+    double scale = static_cast<double>(width - 20) / static_cast<double>(total);
 
     // Group events by resource category
     std::map<std::string, std::vector<const TimingEvent*>> by_category;
@@ -839,8 +839,8 @@ std::string TransactionalProgramExecutor::generate_timeline(size_t width) const 
                                                 timing_.reference_clock_mhz);
             Cycle dur_c = static_cast<Cycle>(e->duration_us *
                                               timing_.reference_clock_mhz);
-            size_t start_pos = static_cast<size_t>(start_c * scale);
-            size_t len = std::max<size_t>(1, static_cast<size_t>(dur_c * scale));
+            size_t start_pos = static_cast<size_t>(static_cast<double>(start_c) * scale);
+            size_t len = std::max<size_t>(1, static_cast<size_t>(static_cast<double>(dur_c) * scale));
 
             if (start_pos < bar.size()) {
                 for (size_t i = 0; i < len && start_pos + i < bar.size(); ++i) {

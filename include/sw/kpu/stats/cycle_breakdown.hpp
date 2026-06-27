@@ -158,7 +158,7 @@ public:
      */
     double percentage(CycleCategory cat) const {
         uint64_t total = total_cycles();
-        return total > 0 ? 100.0 * get(cat) / total : 0.0;
+        return total > 0 ? 100.0 * static_cast<double>(get(cat)) / static_cast<double>(total) : 0.0;
     }
 
     /**
@@ -168,7 +168,7 @@ public:
         uint64_t compute = compute_cycles();
         uint64_t stall = stall_cycles();
         return (compute + stall) > 0 ?
-            static_cast<double>(compute) / (compute + stall) : 0.0;
+            static_cast<double>(compute) / static_cast<double>(compute + stall) : 0.0;
     }
 
     /**
@@ -177,7 +177,7 @@ public:
     double utilization() const {
         uint64_t total = total_cycles();
         uint64_t idle = get(CycleCategory::IDLE);
-        return total > 0 ? static_cast<double>(total - idle) / total : 0.0;
+        return total > 0 ? static_cast<double>(total - idle) / static_cast<double>(total) : 0.0;
     }
 
     /**

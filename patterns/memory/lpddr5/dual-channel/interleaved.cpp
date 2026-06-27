@@ -137,7 +137,7 @@ bool test_streaming_read() {
     // Calculate effective bandwidth
     uint64_t total_bytes = 64 * 64;  // 64 cache lines × 64 bytes
     uint64_t cycles = harness.current_cycle();
-    double bytes_per_cycle = static_cast<double>(total_bytes) / cycles;
+    double bytes_per_cycle = static_cast<double>(total_bytes) / static_cast<double>(cycles);
     std::cout << "Effective throughput: " << std::fixed << std::setprecision(2)
               << bytes_per_cycle << " bytes/cycle" << std::endl;
 
@@ -274,7 +274,7 @@ bool test_interleaving_benefit() {
     std::cout << "Interleaved:     " << interleaved_cycles << " cycles" << std::endl;
 
     if (interleaved_cycles < non_interleaved_cycles) {
-        double improvement = 100.0 * (non_interleaved_cycles - interleaved_cycles) / non_interleaved_cycles;
+        double improvement = 100.0 * static_cast<double>(non_interleaved_cycles - interleaved_cycles) / static_cast<double>(non_interleaved_cycles);
         std::cout << "Interleaving provides " << std::fixed << std::setprecision(1)
                   << improvement << "% improvement" << std::endl;
     } else if (interleaved_cycles == non_interleaved_cycles) {
@@ -324,7 +324,7 @@ bool test_tile_load_interleaved() {
     // Calculate throughput
     uint64_t total_bytes = 64 * 64;  // 4KB
     uint64_t cycles = harness.current_cycle();
-    double bytes_per_cycle = static_cast<double>(total_bytes) / cycles;
+    double bytes_per_cycle = static_cast<double>(total_bytes) / static_cast<double>(cycles);
     std::cout << "Tile load throughput: " << std::fixed << std::setprecision(2)
               << bytes_per_cycle << " bytes/cycle" << std::endl;
     std::cout << "Cycles per 4KB tile: " << cycles << std::endl;

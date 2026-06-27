@@ -55,7 +55,7 @@ BenchmarkResult BenchmarkHarness::run(const Kernel& kernel,
 
     // Estimate external bytes from arithmetic intensity
     if (result.arithmetic_intensity > 0) {
-        result.external_bytes = static_cast<Size>(result.flops / result.arithmetic_intensity);
+        result.external_bytes = static_cast<Size>(static_cast<double>(result.flops) / result.arithmetic_intensity);
     }
 
     // Calculate efficiency
@@ -711,7 +711,7 @@ std::string BenchmarkHarness::generate_roofline_json(const BenchmarkSuite& resul
         }
         total_efficiency += r.compute_efficiency;
     }
-    double avg_efficiency = results.results.empty() ? 0 : total_efficiency / results.results.size();
+    double avg_efficiency = results.results.empty() ? 0 : total_efficiency / static_cast<double>(results.results.size());
     ss << "    \"compute_bound_count\": " << compute_bound << ",\n";
     ss << "    \"memory_bound_count\": " << memory_bound << ",\n";
     ss << "    \"average_efficiency\": " << avg_efficiency << "\n";

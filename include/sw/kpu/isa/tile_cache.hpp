@@ -82,7 +82,7 @@ struct TileCacheStats {
 
     double hit_rate() const {
         size_t total = hits + misses;
-        return total > 0 ? static_cast<double>(hits) / total : 0.0;
+        return total > 0 ? static_cast<double>(hits) / static_cast<double>(total) : 0.0;
     }
 
     std::string to_string() const {
@@ -94,8 +94,8 @@ struct TileCacheStats {
             << (hit_rate() * 100) << "%\n";
         oss << "  Evictions:  " << evictions << "\n";
         oss << "  Writebacks: " << writebacks << "\n";
-        oss << "  Bytes loaded: " << (bytes_loaded / 1024.0) << " KB\n";
-        oss << "  Bytes saved:  " << (bytes_saved / 1024.0) << " KB\n";
+        oss << "  Bytes loaded: " << (static_cast<double>(bytes_loaded) / 1024.0) << " KB\n";
+        oss << "  Bytes saved:  " << (static_cast<double>(bytes_saved) / 1024.0) << " KB\n";
         return oss.str();
     }
 };
@@ -191,7 +191,7 @@ public:
      * @return Fraction of capacity used (0.0 to 1.0)
      */
     double utilization() const {
-        return static_cast<double>(used_bytes_) / config_.total_capacity_bytes;
+        return static_cast<double>(used_bytes_) / static_cast<double>(config_.total_capacity_bytes);
     }
 
     /**

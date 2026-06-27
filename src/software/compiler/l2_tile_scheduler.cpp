@@ -273,11 +273,11 @@ void L2TileScheduler::generate_load_sequence(L2Schedule& schedule) {
 
     Size l2_hits = total_accesses - schedule.total_loads;
     schedule.l2_hit_rate = total_accesses > 0
-                          ? (100.0 * l2_hits) / total_accesses
+                          ? (100.0 * static_cast<double>(l2_hits)) / static_cast<double>(total_accesses)
                           : 0.0;
 
     schedule.l3_hit_rate = schedule.total_loads > 0
-                          ? (100.0 * schedule.l3_hits) / schedule.total_loads
+                          ? (100.0 * static_cast<double>(schedule.l3_hits)) / static_cast<double>(schedule.total_loads)
                           : 0.0;
 }
 
@@ -523,7 +523,7 @@ void L2TileScheduler::print_schedule(const L2Schedule& schedule, bool verbose) c
 
     std::cout << "Data Movement:\n";
     std::cout << "  Total Bytes Loaded (L3 -> L2): "
-              << (schedule.total_bytes_loaded / 1024.0 / 1024.0) << " MB\n";
+              << (static_cast<double>(schedule.total_bytes_loaded) / 1024.0 / 1024.0) << " MB\n";
     std::cout << "\n";
 
     if (verbose) {
@@ -632,7 +632,7 @@ void L2TileScheduler::print_reuse_stats(const L2Schedule& schedule) const {
     }
 
     double avg_reuse = schedule.tile_access_count.size() > 0
-                      ? (double)(total_accesses - total_loads) / schedule.tile_access_count.size()
+                      ? (double)(total_accesses - total_loads) / static_cast<double>(schedule.tile_access_count.size())
                       : 0.0;
 
     std::cout << "  Total Accesses: " << total_accesses << "\n";

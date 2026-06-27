@@ -505,7 +505,7 @@ TEST_CASE_METHOD(ComputeFabricTracingFixture, "Trace: ComputeFabric Throughput A
             if (duration > 0 && trace.clock_freq_ghz.has_value()) {
                 // GFLOPS = (2 * num_operations) / (duration_cycles / clock_freq_ghz)
                 // Factor of 2 because each MAC is 2 operations (multiply + add)
-                double ops_per_second = (2.0 * payload.num_operations * trace.clock_freq_ghz.value()) / duration;
+                double ops_per_second = (2.0 * static_cast<double>(payload.num_operations) * trace.clock_freq_ghz.value()) / static_cast<double>(duration);
                 double gflops = ops_per_second; // Already in GFLOPS with 1 GHz clock
 
                 std::cout << payload.m << "x" << payload.n << "x" << payload.k << " | "

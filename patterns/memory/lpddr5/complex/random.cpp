@@ -69,7 +69,7 @@ bool test_random_single_bank() {
     // Random rows = mostly page conflicts
     auto& stats = harness.stats();
     std::cout << "Page conflict ratio: " << std::fixed << std::setprecision(1)
-              << (100.0 * stats.page_conflicts / (stats.page_hits + stats.page_empty + stats.page_conflicts))
+              << (100.0 * static_cast<double>(stats.page_conflicts) / static_cast<double>(stats.page_hits + stats.page_empty + stats.page_conflicts))
               << "%" << std::endl;
 
     if (stats.reads != 16) {
@@ -199,12 +199,12 @@ bool test_random_vs_sequential() {
     std::cout << "Random:     " << random_cycles << " cycles";
     if (random_cycles > sequential_cycles) {
         std::cout << " (" << std::fixed << std::setprecision(1)
-                  << (100.0 * (random_cycles - sequential_cycles) / sequential_cycles)
+                  << (100.0 * static_cast<double>(random_cycles - sequential_cycles) / static_cast<double>(sequential_cycles))
                   << "% slower)";
     }
     std::cout << std::endl;
 
-    double slowdown = static_cast<double>(random_cycles) / sequential_cycles;
+    double slowdown = static_cast<double>(random_cycles) / static_cast<double>(sequential_cycles);
     std::cout << "Random access is " << std::fixed << std::setprecision(1)
               << slowdown << "x slower than sequential" << std::endl;
 
@@ -341,7 +341,7 @@ bool test_sparse_matrix_access() {
     }
 
     // Should have good page hit ratio due to clustering
-    double hit_ratio = 100.0 * stats.page_hits / (stats.page_hits + stats.page_empty + stats.page_conflicts);
+    double hit_ratio = 100.0 * static_cast<double>(stats.page_hits) / static_cast<double>(stats.page_hits + stats.page_empty + stats.page_conflicts);
     std::cout << "Page hit ratio: " << std::fixed << std::setprecision(1)
               << hit_ratio << "%" << std::endl;
 

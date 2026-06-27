@@ -296,7 +296,7 @@ int main() {
     CycleCount total = kpu.get_current_cycle();
     double flops = 2.0 * M * N * K;
     Size peak = TILES_PER_WAVE * config.processor_array_rows * config.processor_array_cols * 2;
-    double eff = (flops / peak) / total * 100.0;
+    double eff = (flops / static_cast<double>(peak)) / static_cast<double>(total) * 100.0;
 
     std::cout << "\nPerformance:\n";
     std::cout << "  Total cycles: " << total << "\n";

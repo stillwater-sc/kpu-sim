@@ -252,7 +252,7 @@ TEST_CASE("ExternalMemory statistics", "[memory][external][stats]") {
 
         ExternalMemory::Stats stats = mem.get_stats();
         std::cout << "After 1GB writes:\n";
-        std::cout << "  Resident: " << (stats.resident_bytes / (1024.0 * 1024)) << " MB\n";
+        std::cout << "  Resident: " << (static_cast<double>(stats.resident_bytes) / (1024.0 * 1024)) << " MB\n";
         std::cout << "  Utilization: " << (stats.utilization * 100) << "%\n";
 
         // Verify that a sample of the data was written correctly

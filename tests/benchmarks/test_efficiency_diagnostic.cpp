@@ -52,12 +52,12 @@ TEST_CASE("64x64x64 Matmul Efficiency Diagnostic", "[diagnostic][efficiency]") {
     Size total_bytes = a_bytes + b_bytes + c_bytes;
 
     std::cout << "=== MEMORY REQUIREMENTS ===\n";
-    std::cout << "A matrix: " << a_bytes / 1024.0 << " KB\n";
-    std::cout << "B matrix: " << b_bytes / 1024.0 << " KB\n";
-    std::cout << "C matrix: " << c_bytes / 1024.0 << " KB\n";
-    std::cout << "Total external: " << total_bytes / 1024.0 << " KB\n";
+    std::cout << "A matrix: " << static_cast<double>(a_bytes) / 1024.0 << " KB\n";
+    std::cout << "B matrix: " << static_cast<double>(b_bytes) / 1024.0 << " KB\n";
+    std::cout << "C matrix: " << static_cast<double>(c_bytes) / 1024.0 << " KB\n";
+    std::cout << "Total external: " << static_cast<double>(total_bytes) / 1024.0 << " KB\n";
     std::cout << "Arithmetic Intensity: " << std::fixed << std::setprecision(2)
-              << (static_cast<double>(total_flops) / total_bytes) << " FLOP/byte\n\n";
+              << (static_cast<double>(total_flops) / static_cast<double>(total_bytes)) << " FLOP/byte\n\n";
 
     // Execute with ConcurrentExecutor
     ResourceConfig config;  // Default config
@@ -67,7 +67,7 @@ TEST_CASE("64x64x64 Matmul Efficiency Diagnostic", "[diagnostic][efficiency]") {
     std::cout << "=== EXECUTION RESULTS ===\n";
     std::cout << "Total cycles (DMA timebase): " << cycles << "\n";
     std::cout << "Ideal compute cycles: " << ideal_compute_cycles << "\n";
-    std::cout << "Overhead: " << ((static_cast<double>(cycles) / ideal_compute_cycles) - 1.0) * 100
+    std::cout << "Overhead: " << ((static_cast<double>(cycles) / static_cast<double>(ideal_compute_cycles)) - 1.0) * 100
               << "%\n\n";
 
     // Utilization stats
@@ -194,7 +194,7 @@ TEST_CASE("Compare efficiency across sizes", "[diagnostic][efficiency]") {
 
         auto util = executor.get_utilization();
 
-        double overhead = ((static_cast<double>(cycles) / ideal) - 1.0) * 100;
+        double overhead = ((static_cast<double>(cycles) / static_cast<double>(ideal)) - 1.0) * 100;
 
         std::cout << std::setw(8) << size
                   << std::setw(12) << cycles

@@ -287,42 +287,42 @@ struct Statistics {
     // Calibration helper methods
     double avg_latency() const {
         uint64_t total = reads + writes;
-        return total > 0 ? static_cast<double>(total_latency) / total : 0.0;
+        return total > 0 ? static_cast<double>(total_latency) / static_cast<double>(total) : 0.0;
     }
 
     double avg_read_latency() const {
-        return reads > 0 ? static_cast<double>(read_latency_total) / reads : 0.0;
+        return reads > 0 ? static_cast<double>(read_latency_total) / static_cast<double>(reads) : 0.0;
     }
 
     double avg_write_latency() const {
-        return writes > 0 ? static_cast<double>(write_latency_total) / writes : 0.0;
+        return writes > 0 ? static_cast<double>(write_latency_total) / static_cast<double>(writes) : 0.0;
     }
 
     double avg_page_hit_latency() const {
-        return page_hit_count > 0 ? static_cast<double>(page_hit_latency_total) / page_hit_count : 0.0;
+        return page_hit_count > 0 ? static_cast<double>(page_hit_latency_total) / static_cast<double>(page_hit_count) : 0.0;
     }
 
     double avg_page_empty_latency() const {
-        return page_empty_count > 0 ? static_cast<double>(page_empty_latency_total) / page_empty_count : 0.0;
+        return page_empty_count > 0 ? static_cast<double>(page_empty_latency_total) / static_cast<double>(page_empty_count) : 0.0;
     }
 
     double avg_page_conflict_latency() const {
-        return page_conflict_count > 0 ? static_cast<double>(page_conflict_latency_total) / page_conflict_count : 0.0;
+        return page_conflict_count > 0 ? static_cast<double>(page_conflict_latency_total) / static_cast<double>(page_conflict_count) : 0.0;
     }
 
     double page_hit_rate() const {
         uint64_t total = page_hits + page_empty + page_conflicts;
-        return total > 0 ? static_cast<double>(page_hits) / total : 0.0;
+        return total > 0 ? static_cast<double>(page_hits) / static_cast<double>(total) : 0.0;
     }
 
     double page_empty_rate() const {
         uint64_t total = page_hits + page_empty + page_conflicts;
-        return total > 0 ? static_cast<double>(page_empty) / total : 0.0;
+        return total > 0 ? static_cast<double>(page_empty) / static_cast<double>(total) : 0.0;
     }
 
     double page_conflict_rate() const {
         uint64_t total = page_hits + page_empty + page_conflicts;
-        return total > 0 ? static_cast<double>(page_conflicts) / total : 0.0;
+        return total > 0 ? static_cast<double>(page_conflicts) / static_cast<double>(total) : 0.0;
     }
 };
 

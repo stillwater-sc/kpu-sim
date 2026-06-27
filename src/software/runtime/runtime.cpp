@@ -358,7 +358,7 @@ void KPURuntime::print_stats() const {
     std::cout << "  Free memory:     " << (get_free_memory() / (1024 * 1024)) << " MB\n";
 
     if (launch_count_ > 0) {
-        double avg_cycles = static_cast<double>(total_cycles_) / launch_count_;
+        double avg_cycles = static_cast<double>(total_cycles_) / static_cast<double>(launch_count_);
         double avg_time_ms = avg_cycles / (config_.clock_ghz * 1e6);
         std::cout << "  Avg cycles/launch: " << std::fixed << std::setprecision(1) << avg_cycles << "\n";
         std::cout << "  Avg time/launch:   " << std::fixed << std::setprecision(3) << avg_time_ms << " ms\n";

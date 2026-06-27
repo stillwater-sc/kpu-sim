@@ -23,7 +23,7 @@ void print_schedule_summary(const char* label, const L2TileScheduler::L2Schedule
               << schedule.l2_hit_rate << "%\n";
     std::cout << "  L3 Hit Rate: " << schedule.l3_hit_rate << "%\n";
     std::cout << "  Data Movement: "
-              << (schedule.total_bytes_loaded / 1024.0 / 1024.0) << " MB\n";
+              << (static_cast<double>(schedule.total_bytes_loaded) / 1024.0 / 1024.0) << " MB\n";
 }
 
 TEST_CASE("L2TileScheduler - Default Configuration", "[l2_tile_scheduler][unit]") {
@@ -300,7 +300,7 @@ TEST_CASE("L2TileScheduler - Tile Reuse Tracking", "[l2_tile_scheduler][reuse]")
 
         INFO("Total accesses: " << total_accesses);
         INFO("Total loads: " << total_loads);
-        INFO("Average reuse: " << (total_accesses - total_loads) / (double)schedule.tile_access_count.size());
+        INFO("Average reuse: " << static_cast<double>(total_accesses - total_loads) / (double)schedule.tile_access_count.size());
 
         // Should have positive reuse
         REQUIRE(total_accesses >= total_loads);
@@ -438,14 +438,14 @@ TEST_CASE("L2TileScheduler - Performance Metrics", "[l2_tile_scheduler][metrics]
 
         if (total_accesses > 0) {
             Size l2_hits = total_accesses - schedule.total_loads;
-            double expected_l2_hit_rate = (100.0 * l2_hits) / total_accesses;
+            double expected_l2_hit_rate = (100.0 * static_cast<double>(l2_hits)) / static_cast<double>(total_accesses);
 
             REQUIRE_THAT(schedule.l2_hit_rate, Catch::Matchers::WithinRel(expected_l2_hit_rate, 0.01));
         }
 
         // Calculate expected L3 hit rate from counts
         if (schedule.total_loads > 0) {
-            double expected_l3_hit_rate = (100.0 * schedule.l3_hits) / schedule.total_loads;
+            double expected_l3_hit_rate = (100.0 * static_cast<double>(schedule.l3_hits)) / static_cast<double>(schedule.total_loads);
 
             REQUIRE_THAT(schedule.l3_hit_rate, Catch::Matchers::WithinRel(expected_l3_hit_rate, 0.01));
         }

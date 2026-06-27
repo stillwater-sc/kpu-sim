@@ -638,7 +638,7 @@ TEST_CASE("Statistics Integration (v0.3.4)", "[stats][integration][v034]") {
         REQUIRE(summary.external_bytes == a_bytes + b_bytes + c_bytes);
 
         // AI = 2*M*N*K / 3*M*N*4 = 2K/12 = 170.67
-        double expected_ai = static_cast<double>(flops) / (a_bytes + b_bytes + c_bytes);
+        double expected_ai = static_cast<double>(flops) / static_cast<double>(a_bytes + b_bytes + c_bytes);
         REQUIRE(summary.arithmetic_intensity == Approx(expected_ai).epsilon(0.01));
     }
 

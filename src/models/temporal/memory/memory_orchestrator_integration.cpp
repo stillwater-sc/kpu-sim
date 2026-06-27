@@ -422,7 +422,7 @@ EDDOMatrixOrchestrator::OrchestrationMetrics EDDOMatrixOrchestrator::get_metrics
         metrics.total_bytes_moved = orchestrator_metrics.total_read_accesses + orchestrator_metrics.total_write_accesses;
         metrics.average_bank_utilization = orchestrator_metrics.average_bank_utilization;
         metrics.total_operations_completed = orchestrator_metrics.completed_storage_operations;
-        metrics.operation_efficiency = orchestrator_metrics.total_cache_hits /
+        metrics.operation_efficiency = static_cast<double>(orchestrator_metrics.total_cache_hits) /
             static_cast<double>(orchestrator_metrics.total_cache_hits + orchestrator_metrics.total_cache_misses + 1);
     }
 

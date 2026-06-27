@@ -972,7 +972,7 @@ BlockMoverArray::AggregateStats BlockMoverArray::get_aggregate_stats() const {
         total_util += s.utilization();
     }
 
-    agg.avg_utilization = movers_.empty() ? 0.0 : total_util / movers_.size();
+    agg.avg_utilization = movers_.empty() ? 0.0 : total_util / static_cast<double>(movers_.size());
 
     return agg;
 }

@@ -349,7 +349,7 @@ ContentionResult NoCMicrobenchmarks::measure_hot_spot(
     // Calculate per-source bandwidth
     for (size_t i = 0; i < sources.size(); ++i) {
         double bw = cycle > 0 ?
-            static_cast<double>(per_source_bytes[i]) / cycle : 0.0;
+            static_cast<double>(per_source_bytes[i]) / static_cast<double>(cycle) : 0.0;
         result.source_bandwidths.push_back(bw);
     }
 
@@ -1334,7 +1334,7 @@ std::string NoCBenchmarkReporter::generate_summary(const NoCBenchmarkHarness::Fu
     ss << "\n--- Operators ---\n";
     for (const auto& r : results.operators.matmul) {
         double gflops = r.total_cycles > 0 ?
-            static_cast<double>(r.total_flops) / r.total_cycles : 0.0;
+            static_cast<double>(r.total_flops) / static_cast<double>(r.total_cycles) : 0.0;
         ss << "  MatMul " << r.config << ": "
            << r.total_cycles << " cycles, "
            << std::fixed << std::setprecision(2) << gflops << " GFLOPS\n";
@@ -1402,7 +1402,7 @@ std::string NoCBenchmarkReporter::generate_markdown_report(
     ss << "|----------|--------|--------|--------|------------|\n";
     for (const auto& r : results.operators.matmul) {
         double gflops = r.total_cycles > 0 ?
-            static_cast<double>(r.total_flops) / r.total_cycles : 0.0;
+            static_cast<double>(r.total_flops) / static_cast<double>(r.total_cycles) : 0.0;
         ss << "| " << r.operator_name
            << " | " << r.config
            << " | " << r.total_cycles
@@ -1430,7 +1430,7 @@ std::string NoCBenchmarkReporter::generate_csv(const NoCBenchmarkHarness::FullRe
 
     for (const auto& r : results.operators.matmul) {
         double bw = r.total_cycles > 0 ?
-            static_cast<double>(r.noc_bytes_transferred) / r.total_cycles : 0.0;
+            static_cast<double>(r.noc_bytes_transferred) / static_cast<double>(r.total_cycles) : 0.0;
         ss << "operator," << r.operator_name << "," << r.config << ","
            << r.total_cycles << "," << r.noc_bytes_transferred << ","
            << r.total_flops << "," << bw << "\n";

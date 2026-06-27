@@ -126,19 +126,19 @@ struct DMAHarnessStats {
     // Derived metrics
     double page_hit_rate() const {
         uint64_t total = page_hits + page_empty + page_conflicts;
-        return total > 0 ? static_cast<double>(page_hits) / total : 0.0;
+        return total > 0 ? static_cast<double>(page_hits) / static_cast<double>(total) : 0.0;
     }
 
     double effective_bandwidth_gbps(double clock_ghz = 2.0) const {
         if (total_cycles == 0) return 0.0;
-        double bytes_per_cycle = static_cast<double>(dma_bytes_transferred) / total_cycles;
+        double bytes_per_cycle = static_cast<double>(dma_bytes_transferred) / static_cast<double>(total_cycles);
         return bytes_per_cycle * clock_ghz;
     }
 
     double memory_utilization() const {
         uint64_t active = memory_reads + memory_writes;
         if (total_cycles == 0) return 0.0;
-        return static_cast<double>(active) / total_cycles;
+        return static_cast<double>(active) / static_cast<double>(total_cycles);
     }
 };
 

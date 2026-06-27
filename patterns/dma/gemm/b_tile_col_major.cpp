@@ -94,7 +94,7 @@ int main(int argc, char* argv[]) {
 
     // Calculate the striding problem
     size_t tile_row_bytes = N_TILE * ELEM_SIZE;  // 256 bytes
-    double tile_row_fraction = static_cast<double>(tile_row_bytes) / B_matrix.pitch_bytes;
+    double tile_row_fraction = static_cast<double>(tile_row_bytes) / static_cast<double>(B_matrix.pitch_bytes);
 
     std::cout << "\nTile row coverage: " << std::fixed << std::setprecision(1)
               << (tile_row_fraction * 100.0) << "% of matrix row" << std::endl;

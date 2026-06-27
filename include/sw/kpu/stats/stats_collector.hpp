@@ -83,18 +83,18 @@ struct StatsSummary {
         ss << "Timing:\n";
         ss << "  Total Cycles:     " << total_cycles << "\n";
         ss << "  Compute Cycles:   " << compute_cycles
-           << " (" << (total_cycles > 0 ? 100.0 * compute_cycles / total_cycles : 0) << "%)\n";
+           << " (" << (total_cycles > 0 ? 100.0 * static_cast<double>(compute_cycles) / static_cast<double>(total_cycles) : 0) << "%)\n";
         ss << "  Stall Cycles:     " << stall_cycles
-           << " (" << (total_cycles > 0 ? 100.0 * stall_cycles / total_cycles : 0) << "%)\n";
+           << " (" << (total_cycles > 0 ? 100.0 * static_cast<double>(stall_cycles) / static_cast<double>(total_cycles) : 0) << "%)\n";
         ss << "  Idle Cycles:      " << idle_cycles
-           << " (" << (total_cycles > 0 ? 100.0 * idle_cycles / total_cycles : 0) << "%)\n";
+           << " (" << (total_cycles > 0 ? 100.0 * static_cast<double>(idle_cycles) / static_cast<double>(total_cycles) : 0) << "%)\n";
         ss << "\nCompute:\n";
         ss << "  Total FLOPs:      " << total_flops << "\n";
         ss << "  Achieved GFLOPS:  " << achieved_gflops << "\n";
         ss << "  Compute Efficiency: " << (compute_efficiency * 100) << "%\n";
         ss << "\nMemory:\n";
-        ss << "  External Traffic: " << (external_bytes / 1e6) << " MB\n";
-        ss << "  Total Traffic:    " << (total_traffic_bytes / 1e6) << " MB\n";
+        ss << "  External Traffic: " << (static_cast<double>(external_bytes) / 1e6) << " MB\n";
+        ss << "  Total Traffic:    " << (static_cast<double>(total_traffic_bytes) / 1e6) << " MB\n";
         ss << "  External BW:      " << external_bw_gbs << " GB/s\n";
         ss << "  Traffic Amp:      " << traffic_amplification << "x\n";
         ss << "\nUtilization:\n";
@@ -323,7 +323,7 @@ public:
         // Compute
         s.total_flops = total_flops_.load();
         s.achieved_gflops = s.total_cycles > 0 ?
-            (static_cast<double>(s.total_flops) / s.total_cycles) * config_.clock_frequency_ghz : 0.0;
+            (static_cast<double>(s.total_flops) / static_cast<double>(s.total_cycles)) * config_.clock_frequency_ghz : 0.0;
         s.compute_efficiency = config_.peak_gflops > 0 ?
             s.achieved_gflops / config_.peak_gflops : 0.0;
 
@@ -341,7 +341,7 @@ public:
 
         // Derived
         s.arithmetic_intensity = s.external_bytes > 0 ?
-            static_cast<double>(s.total_flops) / s.external_bytes : 0.0;
+            static_cast<double>(s.total_flops) / static_cast<double>(s.external_bytes) : 0.0;
 
         // Determine bottleneck using roofline analysis
         double ridge_point = config_.peak_gflops / config_.external_bw_gbs;
@@ -357,7 +357,7 @@ public:
     double arithmetic_intensity() const {
         uint64_t external = memory_.external_bytes();
         uint64_t flops = total_flops_.load();
-        return external > 0 ? static_cast<double>(flops) / external : 0.0;
+        return external > 0 ? static_cast<double>(flops) / static_cast<double>(external) : 0.0;
     }
 
     /**

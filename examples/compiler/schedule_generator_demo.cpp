@@ -38,7 +38,7 @@ void demonstrate_basic_schedule(Size M, Size N, Size K) {
               << config.Tj << " × " << config.Tk << "\n";
     std::cout << "  Reuse factors: A=" << config.reuse_A << "x, B="
               << config.reuse_B << "x, C=" << config.reuse_C << "x\n";
-    std::cout << "  DRAM traffic: " << (config.dram_accesses / (1024.0 * 1024.0))
+    std::cout << "  DRAM traffic: " << (static_cast<double>(config.dram_accesses) / (1024.0 * 1024.0))
               << " MB\n";
     std::cout << "  Arithmetic intensity: " << config.arithmetic_intensity
               << " FLOPs/byte\n";
@@ -111,7 +111,7 @@ void compare_strategies(Size M, Size N, Size K) {
                   << std::setw(12) << std::fixed << std::setprecision(3)
                   << s.estimated_time_ms
                   << std::setw(15) << std::setprecision(2)
-                  << (s.total_dram_bytes / (1024.0 * 1024.0))
+                  << (static_cast<double>(s.total_dram_bytes) / (1024.0 * 1024.0))
                   << std::setw(11) << std::setprecision(1)
                   << s.arithmetic_intensity << "\n";
     };
@@ -123,7 +123,7 @@ void compare_strategies(Size M, Size N, Size K) {
     std::cout << std::string(70, '-') << "\n";
 
     // Analyze speedup
-    double speedup = static_cast<double>(seq_schedule.total_cycles) / pipe_schedule.total_cycles;
+    double speedup = static_cast<double>(seq_schedule.total_cycles) / static_cast<double>(pipe_schedule.total_cycles);
     std::cout << "\nPipelining speedup: " << std::fixed << std::setprecision(2)
               << speedup << "x (" << seq_schedule.total_cycles << " → "
               << pipe_schedule.total_cycles << " cycles)\n";
@@ -253,11 +253,11 @@ void demonstrate_memory_hierarchy() {
     std::cout << "Tiles:  " << config.Ti << "×" << config.Tj << "×" << config.Tk << "\n";
 
     std::cout << "\nMemory Traffic by Level:\n";
-    std::cout << "  DRAM (GDDR6): " << (schedule.total_dram_bytes / (1024.0 * 1024.0))
+    std::cout << "  DRAM (GDDR6): " << (static_cast<double>(schedule.total_dram_bytes) / (1024.0 * 1024.0))
               << " MB\n";
-    std::cout << "  L3 Cache:     " << (schedule.total_l3_bytes / (1024.0 * 1024.0))
+    std::cout << "  L3 Cache:     " << (static_cast<double>(schedule.total_l3_bytes) / (1024.0 * 1024.0))
               << " MB\n";
-    std::cout << "  L2 Cache:     " << (schedule.total_l2_bytes / (1024.0 * 1024.0))
+    std::cout << "  L2 Cache:     " << (static_cast<double>(schedule.total_l2_bytes) / (1024.0 * 1024.0))
               << " MB\n";
 
     std::cout << "\nCommand Breakdown:\n";
@@ -275,7 +275,7 @@ void demonstrate_memory_hierarchy() {
                   << ": " << std::setw(8) << level_names[static_cast<int>(alloc.level)]
                   << " @ 0x" << std::hex << std::setfill('0') << std::setw(8)
                   << alloc.base_addr << std::dec << std::setfill(' ')
-                  << " (" << (alloc.size_bytes / 1024.0) << " KB)\n";
+                  << " (" << (static_cast<double>(alloc.size_bytes) / 1024.0) << " KB)\n";
     }
 }
 

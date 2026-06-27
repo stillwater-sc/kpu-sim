@@ -162,15 +162,15 @@ IdealMetrics ScheduleCharacterizer::calculate_ideal(const TensorShape& shape) {
 
     // Ideal energy: only compute cost + minimum data movement
     Size total_macs = 2 * M * N * K;
-    ideal.ideal_energy = total_macs * energy_model_.mac_pj;
+    ideal.ideal_energy = static_cast<double>(total_macs) * energy_model_.mac_pj;
 
     // Add minimum data movement (read A, B once, write C once)
     Size min_dram_bytes = (M * K + K * N + M * N) * memory_.element_size;
-    ideal.ideal_energy += min_dram_bytes * energy_model_.dram_read_pj;
+    ideal.ideal_energy += static_cast<double>(min_dram_bytes) * energy_model_.dram_read_pj;
 
     // Peak throughput
     Size peak_ops_per_cycle = memory_.systolic_rows * memory_.systolic_cols * 2; // 2 for MAC
-    ideal.peak_throughput = peak_ops_per_cycle * latency_model_.clock_freq_ghz * 1e9;
+    ideal.peak_throughput = static_cast<double>(peak_ops_per_cycle) * latency_model_.clock_freq_ghz * 1e9;
 
     return ideal;
 }
@@ -182,23 +182,23 @@ double ScheduleCharacterizer::calculate_energy(
     double energy = 0;
 
     // DRAM energy (L3 misses)
-    energy += schedule.l3_misses * schedule.config.Ti * schedule.config.Tk *
-              memory_.element_size * energy_model_.dram_read_pj;
+    energy += static_cast<double>(schedule.l3_misses * schedule.config.Ti * schedule.config.Tk *
+              memory_.element_size) * energy_model_.dram_read_pj;
 
     // L3 energy (L2 loads)
-    energy += schedule.total_bytes_loaded * energy_model_.l3_read_pj;
+    energy += static_cast<double>(schedule.total_bytes_loaded) * energy_model_.l3_read_pj;
 
     // L2 energy (all accesses - approximate from total loads)
     Size l2_accesses = schedule.total_bytes_loaded * 2; // Read + some writes
-    energy += l2_accesses * energy_model_.l2_read_pj;
+    energy += static_cast<double>(l2_accesses) * energy_model_.l2_read_pj;
 
     // L1 energy (streaming to systolic array)
     Size l1_accesses = 2 * shape.M * shape.N * shape.K;  // Approximate
-    energy += l1_accesses * energy_model_.l1_read_pj;
+    energy += static_cast<double>(l1_accesses) * energy_model_.l1_read_pj;
 
     // Compute energy (MACs)
     Size total_macs = 2 * shape.M * shape.N * shape.K;
-    energy += total_macs * energy_model_.mac_pj;
+    energy += static_cast<double>(total_macs) * energy_model_.mac_pj;
 
     return energy;
 }
@@ -231,7 +231,7 @@ Cycle ScheduleCharacterizer::calculate_latency(
     // Add data movement cycles (simplified: assume overlapped with compute)
     // In reality, use pipelining model
     Cycle dram_cycles = static_cast<Cycle>(
-        (schedule.l3_misses * schedule.config.Ti * schedule.config.Tk *
+        static_cast<double>(schedule.l3_misses * schedule.config.Ti * schedule.config.Tk *
          memory_.element_size) / (latency_model_.dram_bandwidth * 1e9 /
          latency_model_.clock_freq_ghz / 1e9));
     latency += dram_cycles / 10;  // Assume 90% overlap
@@ -249,8 +249,8 @@ double ScheduleCharacterizer::calculate_utilization(
     // Size systolic_area = memory_.systolic_rows * memory_.systolic_cols;  // Reserved for future use
 
     // Average tile utilization
-    double util_m = std::min(1.0, (double)config.Ti / memory_.systolic_rows);
-    double util_n = std::min(1.0, (double)config.Tj / memory_.systolic_cols);
+    double util_m = std::min(1.0, (double)config.Ti / static_cast<double>(memory_.systolic_rows));
+    double util_n = std::min(1.0, (double)config.Tj / static_cast<double>(memory_.systolic_cols));
 
     return util_m * util_n;
 }
@@ -308,8 +308,8 @@ ScheduleEvaluation ScheduleCharacterizer::evaluate_schedule(
     if (eval.metrics.total_cycles > 0) {
         // Assume 1 GHz clock for GFLOP/s calculation
         double clock_ghz = 1.0;
-        eval.metrics.throughput_gflops = (total_ops / 1e9) * clock_ghz / (eval.metrics.total_cycles / 1e9);
-        eval.metrics.frequency_mhz = (1.0 / eval.metrics.total_cycles) * 1000.0;  // Normalized frequency
+        eval.metrics.throughput_gflops = (static_cast<double>(total_ops) / 1e9) * clock_ghz / (static_cast<double>(eval.metrics.total_cycles) / 1e9);
+        eval.metrics.frequency_mhz = (1.0 / static_cast<double>(eval.metrics.total_cycles)) * 1000.0;  // Normalized frequency
     }
 
     // Calculate total tile size (Ti × Tj × Tk) for Pareto analysis
@@ -320,7 +320,7 @@ ScheduleEvaluation ScheduleCharacterizer::evaluate_schedule(
 
     // Calculate slowdowns
     eval.energy_slowdown = eval.metrics.total_energy / eval.ideal.ideal_energy;
-    eval.latency_slowdown = (double)eval.metrics.total_cycles / eval.ideal.ideal_cycles;
+    eval.latency_slowdown = (double)eval.metrics.total_cycles / static_cast<double>(eval.ideal.ideal_cycles);
 
     return eval;
 }
@@ -414,7 +414,7 @@ ParetoFrontier ScheduleCharacterizer::compute_pareto_frontier(
     std::sort(frontier.points.begin(), frontier.points.end());
 
     frontier.frontier_size = frontier.points.size();
-    frontier.coverage_percentage = 100.0 * frontier.frontier_size / frontier.total_schedules;
+    frontier.coverage_percentage = 100.0 * static_cast<double>(frontier.frontier_size) / static_cast<double>(frontier.total_schedules);
 
     // Store all evaluations for export (user wants to see full design space)
     frontier.all_evaluations = evaluations;

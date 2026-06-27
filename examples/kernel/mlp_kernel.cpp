@@ -257,7 +257,7 @@ int main() {
     std::cout << "  Simulated Cycles: " << cycles << "\n";
 
     // Calculate throughput estimates (assuming 1GHz clock)
-    double time_ms = cycles / 1e6;
+    double time_ms = static_cast<double>(cycles) / 1e6;
     double gflops = (static_cast<double>(mlp_kernel.total_flops()) / 1e9) / (time_ms / 1000.0);
 
     std::cout << "  Estimated Time (@ 1GHz): " << std::fixed << std::setprecision(3)
@@ -325,7 +325,7 @@ int main() {
     std::cout << "  Total L2 traffic: " << format_bytes(fused_l2_traffic) << "\n";
 
     std::cout << "\nMemory traffic reduction: " << std::fixed << std::setprecision(1)
-              << (static_cast<double>(unfused_l2_traffic) / fused_l2_traffic) << "x\n";
+              << (static_cast<double>(unfused_l2_traffic) / static_cast<double>(fused_l2_traffic)) << "x\n";
 
     separator();
     std::cout << "\nMLP kernel demo complete!\n";

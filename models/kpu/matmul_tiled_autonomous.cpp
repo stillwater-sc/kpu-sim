@@ -84,7 +84,7 @@ struct MatMulConfig {
                   << execution_time_ms << " ms\n";
 
         // Calculate theoretical FLOPs: 2*M*N*K (multiply-add counts as 2 ops)
-        double flops = 2.0 * M * N * K;
+        double flops = 2.0 * static_cast<double>(M) * static_cast<double>(N) * static_cast<double>(K);
         if (execution_time_ms > 0) {
             gflops = (flops / 1e9) / (execution_time_ms / 1000.0);
             std::cout << "Performance: " << std::fixed << std::setprecision(2)
@@ -93,7 +93,7 @@ struct MatMulConfig {
 
         // Calculate utilization
         double theoretical_cycles = static_cast<double>(std::max(M, N) * std::max(K, N));
-        double utilization = (theoretical_cycles / total_cycles) * 100.0;
+        double utilization = (theoretical_cycles / static_cast<double>(total_cycles)) * 100.0;
         std::cout << "Array utilization: " << std::fixed << std::setprecision(1)
                   << utilization << "%\n";
         std::cout << "========================================\n";
@@ -200,9 +200,9 @@ bool execute_tiled_matmul(KPUSimulator* kpu, MatMulConfig& config) {
     initialize_matrix(A, config.M, config.K, "sequential");
     initialize_matrix(B, config.K, config.N, "sequential");
 
-    std::cout << "  A: " << (A.size() * sizeof(float) / 1024.0f) << " KB\n";
-    std::cout << "  B: " << (B.size() * sizeof(float) / 1024.0f) << " KB\n";
-    std::cout << "  C: " << (C.size() * sizeof(float) / 1024.0f) << " KB\n";
+    std::cout << "  A: " << (static_cast<float>(A.size() * sizeof(float)) / 1024.0f) << " KB\n";
+    std::cout << "  B: " << (static_cast<float>(B.size() * sizeof(float)) / 1024.0f) << " KB\n";
+    std::cout << "  C: " << (static_cast<float>(C.size() * sizeof(float)) / 1024.0f) << " KB\n";
 
     // CPU reference (if validation enabled)
     std::vector<float> C_ref;

@@ -70,8 +70,8 @@ bool test_max_bandwidth_all_banks() {
     const auto& stats = harness.stats();
     uint64_t total_bytes = 64 * 64;  // 64 accesses × 64 bytes
     uint64_t cycles = harness.current_cycle();
-    double bytes_per_cycle = static_cast<double>(total_bytes) / cycles;
-    double hit_ratio = 100.0 * stats.page_hits / (stats.page_hits + stats.page_empty);
+    double bytes_per_cycle = static_cast<double>(total_bytes) / static_cast<double>(cycles);
+    double hit_ratio = 100.0 * static_cast<double>(stats.page_hits) / static_cast<double>(stats.page_hits + stats.page_empty);
 
     std::cout << "\n--- Maximum Bandwidth Analysis ---" << std::endl;
     std::cout << "Total bytes: " << total_bytes << std::endl;
@@ -109,7 +109,7 @@ bool test_bandwidth_scaling() {
         harness.run_until_complete();
         uint64_t bytes = ACCESSES_PER_BANK * 64;
         results[0] = {1, harness.current_cycle(),
-                      static_cast<double>(bytes) / harness.current_cycle()};
+                      static_cast<double>(bytes) / static_cast<double>(harness.current_cycle())};
     }
 
     // Test with 2 banks (different groups)
@@ -124,7 +124,7 @@ bool test_bandwidth_scaling() {
         harness.run_until_complete();
         uint64_t bytes = 2 * ACCESSES_PER_BANK * 64;
         results[1] = {2, harness.current_cycle(),
-                      static_cast<double>(bytes) / harness.current_cycle()};
+                      static_cast<double>(bytes) / static_cast<double>(harness.current_cycle())};
     }
 
     // Test with 4 banks (one per group)
@@ -139,7 +139,7 @@ bool test_bandwidth_scaling() {
         harness.run_until_complete();
         uint64_t bytes = 4 * ACCESSES_PER_BANK * 64;
         results[2] = {4, harness.current_cycle(),
-                      static_cast<double>(bytes) / harness.current_cycle()};
+                      static_cast<double>(bytes) / static_cast<double>(harness.current_cycle())};
     }
 
     // Test with 8 banks (two per group)
@@ -154,7 +154,7 @@ bool test_bandwidth_scaling() {
         harness.run_until_complete();
         uint64_t bytes = 8 * ACCESSES_PER_BANK * 64;
         results[3] = {8, harness.current_cycle(),
-                      static_cast<double>(bytes) / harness.current_cycle()};
+                      static_cast<double>(bytes) / static_cast<double>(harness.current_cycle())};
     }
 
     // Test with 16 banks (all banks)
@@ -171,7 +171,7 @@ bool test_bandwidth_scaling() {
         harness.run_until_complete();
         uint64_t bytes = 16 * ACCESSES_PER_BANK * 64;
         results[4] = {16, harness.current_cycle(),
-                      static_cast<double>(bytes) / harness.current_cycle()};
+                      static_cast<double>(bytes) / static_cast<double>(harness.current_cycle())};
     }
 
     // Print scaling results
@@ -226,7 +226,7 @@ bool test_gpu_style_access() {
 
     uint64_t total_accesses = NUM_THREADS * ACCESSES_PER_THREAD;
     uint64_t total_bytes = total_accesses * 64;
-    double bytes_per_cycle = static_cast<double>(total_bytes) / harness.current_cycle();
+    double bytes_per_cycle = static_cast<double>(total_bytes) / static_cast<double>(harness.current_cycle());
 
     std::cout << "\n--- GPU-Style Access Analysis ---" << std::endl;
     std::cout << "Threads: " << NUM_THREADS << std::endl;
@@ -262,7 +262,7 @@ bool test_gpu_vs_accelerator() {
         harness.print_stats();
 
         gpu_cycles = harness.current_cycle();
-        gpu_bw = static_cast<double>(TOTAL_ACCESSES * 64) / gpu_cycles;
+        gpu_bw = static_cast<double>(TOTAL_ACCESSES * 64) / static_cast<double>(gpu_cycles);
     }
 
     // Accelerator-style: sequential tiles, 4 banks at a time
@@ -281,7 +281,7 @@ bool test_gpu_vs_accelerator() {
         harness.print_stats();
 
         accel_cycles = harness.current_cycle();
-        accel_bw = static_cast<double>(TOTAL_ACCESSES * 64) / accel_cycles;
+        accel_bw = static_cast<double>(TOTAL_ACCESSES * 64) / static_cast<double>(accel_cycles);
     }
 
     std::cout << "\n--- Comparison ---" << std::endl;
@@ -324,8 +324,8 @@ bool test_sustained_max_bandwidth() {
 
     const auto& stats = harness.stats();
     uint64_t total_bytes = 256 * 64;
-    double bytes_per_cycle = static_cast<double>(total_bytes) / harness.current_cycle();
-    double hit_ratio = 100.0 * stats.page_hits / (stats.page_hits + stats.page_empty);
+    double bytes_per_cycle = static_cast<double>(total_bytes) / static_cast<double>(harness.current_cycle());
+    double hit_ratio = 100.0 * static_cast<double>(stats.page_hits) / static_cast<double>(stats.page_hits + stats.page_empty);
 
     std::cout << "\n--- Sustained Bandwidth Analysis ---" << std::endl;
     std::cout << "Total accesses: 256" << std::endl;

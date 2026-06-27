@@ -173,12 +173,12 @@ HardwareConfigResults evaluate_hardware_config(
 
     results.total_energy = sum_energy;
     results.total_latency = sum_latency;
-    results.avg_energy = sum_energy / all_evals.size();
+    results.avg_energy = sum_energy / static_cast<double>(all_evals.size());
     results.avg_latency = sum_latency / all_evals.size();
-    results.avg_throughput = sum_throughput / all_evals.size();
-    results.avg_energy_slowdown = sum_energy_slowdown / all_evals.size();
-    results.avg_latency_slowdown = sum_latency_slowdown / all_evals.size();
-    results.avg_utilization = sum_utilization / all_evals.size();
+    results.avg_throughput = sum_throughput / static_cast<double>(all_evals.size());
+    results.avg_energy_slowdown = sum_energy_slowdown / static_cast<double>(all_evals.size());
+    results.avg_latency_slowdown = sum_latency_slowdown / static_cast<double>(all_evals.size());
+    results.avg_utilization = sum_utilization / static_cast<double>(all_evals.size());
 
     return results;
 }
@@ -235,7 +235,7 @@ void export_design_space_csv(
          << "Hardware_Cost,Energy_Per_Cost\n";
 
     for (const auto& result : results) {
-        double coverage_pct = 100.0 * result.num_workloads_feasible / result.num_workloads_evaluated;
+        double coverage_pct = 100.0 * static_cast<double>(result.num_workloads_feasible) / static_cast<double>(result.num_workloads_evaluated);
         double energy_per_cost = result.avg_energy / result.hardware_cost;
 
         file << (result.config.l2_size_per_bank / 1024) << ","
@@ -280,7 +280,7 @@ void print_design_space_summary(const std::vector<HardwareConfigResults>& result
     std::cout << "├──────────┼──────────┼──────────────┼──────────────┼──────────┼──────────┼──────────┤\n";
 
     for (const auto& result : results) {
-        double coverage_pct = 100.0 * result.num_workloads_feasible / result.num_workloads_evaluated;
+        double coverage_pct = 100.0 * static_cast<double>(result.num_workloads_feasible) / static_cast<double>(result.num_workloads_evaluated);
         double energy_per_cost = result.avg_energy / result.hardware_cost;
 
         std::cout << "│ " << std::setw(8) << (result.config.l2_size_per_bank / 1024)
@@ -365,7 +365,7 @@ int main() {
         results.push_back(config_results);
 
         std::cout << " Done (Coverage: " << std::fixed << std::setprecision(1)
-                  << (100.0 * config_results.num_workloads_feasible / config_results.num_workloads_evaluated)
+                  << (100.0 * static_cast<double>(config_results.num_workloads_feasible) / static_cast<double>(config_results.num_workloads_evaluated))
                   << "%)\n";
     }
 

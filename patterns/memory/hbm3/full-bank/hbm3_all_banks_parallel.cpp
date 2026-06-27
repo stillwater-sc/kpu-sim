@@ -106,7 +106,7 @@ int main() {
     std::cout << "  Total cycles: " << total_cycles << std::endl;
     std::cout << "  Requests completed: " << stats.reads << std::endl;
     std::cout << "  Avg cycles per request: " << std::fixed << std::setprecision(2)
-              << (double)total_cycles / stats.reads << std::endl;
+              << (double)total_cycles / static_cast<double>(stats.reads) << std::endl;
 
     // Export trace
     std::string trace_path = make_trace_path("full-bank", "hbm3_all_banks_parallel_trace.json");

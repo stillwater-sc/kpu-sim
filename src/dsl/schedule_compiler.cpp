@@ -445,7 +445,7 @@ DMProgram compile_schedule(const Schedule& sched) {
         Size total_flops = 2ULL * prog.M * prog.N * prog.K;
         if (prog.estimates.external_mem_bytes > 0) {
             prog.estimates.arithmetic_intensity =
-                static_cast<double>(total_flops) / prog.estimates.external_mem_bytes;
+                static_cast<double>(total_flops) / static_cast<double>(prog.estimates.external_mem_bytes);
         }
     }
 

@@ -92,14 +92,14 @@ void print_stats(const TiledMatmulStats& stats, double clock_ghz = 1.0) {
     std::cout << "  Loads: " << stats.dma_loads << std::endl;
     std::cout << "  Stores: " << stats.dma_stores << std::endl;
     std::cout << "  Bytes transferred: " << stats.dma_bytes << " ("
-              << (stats.dma_bytes / 1024.0 / 1024.0) << " MB)" << std::endl;
+              << (static_cast<double>(stats.dma_bytes) / 1024.0 / 1024.0) << " MB)" << std::endl;
     std::cout << std::endl;
 
     std::cout << "BlockMover operations:" << std::endl;
     std::cout << "  Pushes: " << stats.bm_pushes << std::endl;
     std::cout << "  Pulls: " << stats.bm_pulls << std::endl;
     std::cout << "  Bytes moved: " << stats.bm_bytes << " ("
-              << (stats.bm_bytes / 1024.0 / 1024.0) << " MB)" << std::endl;
+              << (static_cast<double>(stats.bm_bytes) / 1024.0 / 1024.0) << " MB)" << std::endl;
     std::cout << std::endl;
 
     std::cout << "Streamer operations:" << std::endl;
@@ -289,7 +289,7 @@ int main(int argc, char* argv[]) {
     std::cout << "Pipelined cycles:  " << program.stats().total_cycles << std::endl;
     std::cout << "Speedup: " << std::fixed << std::setprecision(2)
               << (static_cast<double>(program_seq.stats().total_cycles) /
-                  program.stats().total_cycles)
+                  static_cast<double>(program.stats().total_cycles))
               << "x" << std::endl;
 
     return 0;

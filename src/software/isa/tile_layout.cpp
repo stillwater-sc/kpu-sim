@@ -609,7 +609,7 @@ std::string HardwareInterleavedLayout::generate_report() const {
         total_used = c_addresses_.back() + config_.tile_size_bytes;
     }
     Address minimum = config_.total_tiles() * config_.tile_size_bytes;
-    double overhead = 100.0 * (total_used - minimum) / minimum;
+    double overhead = 100.0 * static_cast<double>(total_used - minimum) / static_cast<double>(minimum);
 
     oss << "\nMemory Utilization:\n";
     oss << "  Total address space used: " << total_used << " bytes\n";

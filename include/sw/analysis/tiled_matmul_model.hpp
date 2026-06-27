@@ -156,7 +156,7 @@ struct TileGeometry {
             << ", B=" << K_tile_size() << "×" << N_tile_size() << "\n";
         oss << "Memory: A_tile=" << A_tile_bytes()/1024 << "KB, B_tile=" << B_tile_bytes()/1024
             << "KB, C_tile=" << C_tile_bytes()/1024 << "KB\n";
-        oss << "Total FLOPs: " << total_flops() / 1e9 << " GFLOPs\n";
+        oss << "Total FLOPs: " << static_cast<double>(total_flops()) / 1e9 << " GFLOPs\n";
         return oss.str();
     }
 };
@@ -224,29 +224,29 @@ struct DataMovementModel {
     // External memory → L3 (DMA)
     Cycles load_A_tile_cycles() const {
         return hw.dma_startup_latency +
-               static_cast<Cycles>(geom.A_tile_bytes() / hw.external_to_l3_bw);
+               static_cast<Cycles>(static_cast<double>(geom.A_tile_bytes()) / hw.external_to_l3_bw);
     }
 
     Cycles load_B_tile_cycles() const {
         return hw.dma_startup_latency +
-               static_cast<Cycles>(geom.B_tile_bytes() / hw.external_to_l3_bw);
+               static_cast<Cycles>(static_cast<double>(geom.B_tile_bytes()) / hw.external_to_l3_bw);
     }
 
     // L3 → External (drain C)
     Cycles drain_C_tile_cycles() const {
         return hw.dma_startup_latency +
-               static_cast<Cycles>(geom.C_tile_bytes() / hw.external_to_l3_bw);
+               static_cast<Cycles>(static_cast<double>(geom.C_tile_bytes()) / hw.external_to_l3_bw);
     }
 
     // L3 → L3 transfer (for A/B sharing)
     Cycles l3_to_l3_A_tile_cycles() const {
         return hw.block_mover_startup_latency +
-               static_cast<Cycles>(geom.A_tile_bytes() / hw.l3_to_l3_bw);
+               static_cast<Cycles>(static_cast<double>(geom.A_tile_bytes()) / hw.l3_to_l3_bw);
     }
 
     Cycles l3_to_l3_B_tile_cycles() const {
         return hw.block_mover_startup_latency +
-               static_cast<Cycles>(geom.B_tile_bytes() / hw.l3_to_l3_bw);
+               static_cast<Cycles>(static_cast<double>(geom.B_tile_bytes()) / hw.l3_to_l3_bw);
     }
 
     // Total load time for all A and B (sequential)
@@ -500,18 +500,18 @@ public:
         // Compute utilization
         Cycles max_compute = m.total_cycles * hw_.compute_tile_count;
         m.compute_utilization = max_compute > 0 ?
-            static_cast<double>(m.compute_cycles) / max_compute : 0;
+            static_cast<double>(m.compute_cycles) / static_cast<double>(max_compute) : 0;
 
         // Memory utilization (DMA + block movers)
         Cycles max_memory = m.total_cycles * (hw_.dma_engine_count + hw_.block_mover_count);
         Cycles total_memory = m.load_cycles + m.drain_cycles + m.transfer_cycles;
         m.memory_utilization = max_memory > 0 ?
-            static_cast<double>(total_memory) / max_memory : 0;
+            static_cast<double>(total_memory) / static_cast<double>(max_memory) : 0;
 
         // Efficiency vs theoretical (capped at 100%)
         Cycles theoretical = compute_.theoretical_min_cycles();
         m.overall_efficiency = theoretical > 0 ?
-            std::min(1.0, static_cast<double>(theoretical) / m.total_cycles) : 0;
+            std::min(1.0, static_cast<double>(theoretical) / static_cast<double>(m.total_cycles)) : 0;
 
         // Critical paths
         m.compute_critical_path = find_critical_path(schedule, true);
@@ -699,7 +699,7 @@ private:
 
         for (const auto& ev : timeline) {
             if (ev.cycle > last_cycle) {
-                weighted_compute += compute_active * (ev.cycle - last_cycle);
+                weighted_compute += compute_active * static_cast<double>(ev.cycle - last_cycle);
                 last_cycle = ev.cycle;
             }
 
@@ -715,7 +715,7 @@ private:
         }
 
         m.avg_compute_concurrency = m.total_cycles > 0 ?
-            weighted_compute / m.total_cycles : 0;
+            weighted_compute / static_cast<double>(m.total_cycles) : 0;
     }
 };
 
@@ -758,7 +758,7 @@ inline void print_analysis(const HardwareConfig& hw, const TileGeometry& geom) {
     std::cout << "IMPROVEMENT\n";
     std::cout << std::string(70, '-') << "\n";
     double speedup = static_cast<double>(serial_metrics.total_cycles) /
-                     parallel_metrics.total_cycles;
+                     static_cast<double>(parallel_metrics.total_cycles);
     std::cout << "Speedup: " << std::fixed << std::setprecision(2) << speedup << "x\n";
     std::cout << "Efficiency improvement: " << std::setprecision(1)
               << (parallel_metrics.overall_efficiency - serial_metrics.overall_efficiency) * 100

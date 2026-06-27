@@ -115,7 +115,7 @@ bool test_timing_comparison() {
         std::cout << "Across groups is " << (full_group_cycles - across_groups_cycles)
                   << " cycles faster ("
                   << std::fixed << std::setprecision(1)
-                  << (100.0 * (full_group_cycles - across_groups_cycles) / full_group_cycles)
+                  << (100.0 * static_cast<double>(full_group_cycles - across_groups_cycles) / static_cast<double>(full_group_cycles))
                   << "% improvement)" << std::endl;
     } else {
         std::cout << "No timing difference (may be bus-bound)" << std::endl;

@@ -286,9 +286,9 @@ bool execute_mlp_layer(sw::kpu::KPUSimulator* kpu,
         bias[i] = 0.5f;
     }
 
-    std::cout << "  Input tensor allocated: " << input.size() * sizeof(float) / 1024.0f << " KB\n";
-    std::cout << "  Weight matrix allocated: " << weights.size() * sizeof(float) / 1024.0f << " KB\n";
-    std::cout << "  Bias vector allocated: " << bias.size() * sizeof(float) / 1024.0f << " KB\n";
+    std::cout << "  Input tensor allocated: " << static_cast<float>(input.size() * sizeof(float)) / 1024.0f << " KB\n";
+    std::cout << "  Weight matrix allocated: " << static_cast<float>(weights.size() * sizeof(float)) / 1024.0f << " KB\n";
+    std::cout << "  Bias vector allocated: " << static_cast<float>(bias.size() * sizeof(float)) / 1024.0f << " KB\n";
 
     // Step 2: Transfer from host to KPU memory banks (simulated as direct write)
     std::cout << "\n[2] Host -> KPU Memory Banks (DMA simulation)\n";

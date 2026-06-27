@@ -110,7 +110,7 @@ bool DMAEngine::process_transfers(std::vector<ExternalMemory>& host_memory_regio
         // bytes_per_cycle = (bandwidth_gb_s * 1e9) / (clock_freq_ghz * 1e9)
         //                 = bandwidth_gb_s / clock_freq_ghz
         double bytes_per_cycle = bandwidth_gb_s_ / clock_freq_ghz_;
-        cycles_remaining = static_cast<trace::CycleCount>(std::ceil(transfer.size / bytes_per_cycle));
+        cycles_remaining = static_cast<trace::CycleCount>(std::ceil(static_cast<double>(transfer.size) / bytes_per_cycle));
         if (cycles_remaining == 0) cycles_remaining = 1;  // Minimum 1 cycle
 
         // Allocate buffer for the transfer

@@ -262,7 +262,7 @@ bool test_bandwidth_comparison() {
     std::cout << "Dual channel:   " << dual_cycles << " cycles" << std::endl;
 
     if (dual_cycles < single_cycles) {
-        double speedup = 100.0 * (single_cycles - dual_cycles) / single_cycles;
+        double speedup = 100.0 * static_cast<double>(single_cycles - dual_cycles) / static_cast<double>(single_cycles);
         std::cout << "Dual channel is " << std::fixed << std::setprecision(1)
                   << speedup << "% faster" << std::endl;
     } else {

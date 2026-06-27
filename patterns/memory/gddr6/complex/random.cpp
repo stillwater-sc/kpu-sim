@@ -79,9 +79,9 @@ int main(int argc, char* argv[]) {
     }
 
     // Calculate hit rates
-    double hit_rate = 100.0 * stats.page_hits / NUM_ACCESSES;
-    double conflict_rate = 100.0 * stats.page_conflicts / NUM_ACCESSES;
-    double empty_rate = 100.0 * stats.page_empty / NUM_ACCESSES;
+    double hit_rate = 100.0 * static_cast<double>(stats.page_hits) / NUM_ACCESSES;
+    double conflict_rate = 100.0 * static_cast<double>(stats.page_conflicts) / NUM_ACCESSES;
+    double empty_rate = 100.0 * static_cast<double>(stats.page_empty) / NUM_ACCESSES;
 
     std::cout << "\nRandom Access Analysis:" << std::endl;
     std::cout << "  Page hits: " << stats.page_hits
