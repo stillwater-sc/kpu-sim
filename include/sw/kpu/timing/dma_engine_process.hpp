@@ -187,7 +187,7 @@ public:
     /**
      * @brief Check if DMA engine is complete (no pending or in-flight work)
      */
-    [[nodiscard]] bool is_complete() const {
+    [[nodiscard]] bool is_complete() const override {
         return pending_requests_.empty();
     }
 

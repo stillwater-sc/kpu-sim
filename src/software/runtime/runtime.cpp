@@ -315,7 +315,7 @@ float KPURuntime::elapsed_time(Event start, Event end) const {
 
     // Convert cycles to milliseconds based on clock frequency
     // cycles / (clock_ghz * 1e9 Hz) * 1e3 ms/s = cycles / (clock_ghz * 1e6)
-    return static_cast<float>(delta) / (config_.clock_ghz * 1e6f);
+    return static_cast<float>(static_cast<double>(delta) / (config_.clock_ghz * 1e6));
 }
 
 // ============================================================================

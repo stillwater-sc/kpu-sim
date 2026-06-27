@@ -279,7 +279,7 @@ public:
     /**
      * @brief Check if MC is complete (no pending or in-flight work)
      */
-    [[nodiscard]] bool is_complete() const {
+    [[nodiscard]] bool is_complete() const override {
         return request_queue_.empty() && in_flight_.empty();
     }
 
