@@ -196,7 +196,7 @@ bool KernelGraph::validate(std::string& error) const {
     // Check for cycles by attempting topological sort
     try {
         get_execution_order();
-    } catch (const std::runtime_error& e) {
+    } catch (const std::runtime_error&) {
         error = "Graph contains cycles";
         return false;
     }

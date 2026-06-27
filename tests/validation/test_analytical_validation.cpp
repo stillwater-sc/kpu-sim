@@ -56,8 +56,8 @@ constexpr double PEAK_GFLOPS = 512.0;  // At 1 GHz reference
 
 // Ridge points (FLOP/byte)
 constexpr double RIDGE_EXTERNAL = PEAK_GFLOPS / EXTERNAL_BW_GBS;  // 8.0
-constexpr double RIDGE_L3 = PEAK_GFLOPS / L3_BW_GBS;              // 4.0
-constexpr double RIDGE_L2 = PEAK_GFLOPS / L2_BW_GBS;              // 2.0
+[[maybe_unused]] constexpr double RIDGE_L3 = PEAK_GFLOPS / L3_BW_GBS;  // 4.0
+[[maybe_unused]] constexpr double RIDGE_L2 = PEAK_GFLOPS / L2_BW_GBS;  // 2.0
 
 // Element sizes
 constexpr Size FLOAT32_BYTES = 4;
