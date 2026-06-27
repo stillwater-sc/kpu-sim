@@ -832,7 +832,11 @@ void BehavioralComputeFabric::execute_batchnorm_fp32(
                     count++;
                 }
             }
-            mean /= static_cast<float>(count);
+            // Guard against count == 0 (N * spatial == 0). MSVC C4723 fires
+            // otherwise; in practice valid BatchNorm input has count > 0.
+            if (count > 0) {
+                mean /= static_cast<float>(count);
+            }
 
             var = 0.0f;
             for (uint32_t n = 0; n < N; ++n) {
@@ -842,7 +846,9 @@ void BehavioralComputeFabric::execute_batchnorm_fp32(
                     var += diff * diff;
                 }
             }
-            var /= static_cast<float>(count);
+            if (count > 0) {
+                var /= static_cast<float>(count);
+            }
         }
 
         float inv_std = 1.0f / std::sqrt(var + eps);

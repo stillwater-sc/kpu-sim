@@ -212,7 +212,11 @@ TEST_CASE("SparseMemory thread safety", "[memory][sparse][concurrent]") {
 
         std::vector<std::thread> threads;
         for (int t = 0; t < num_threads; ++t) {
-            threads.emplace_back([&mem, t, writes_per_thread, stride]() {
+            // writes_per_thread is `const int` initialised from a literal,
+            // so it's usable as a constant expression inside the lambda
+            // without being captured. clang -Wunused-lambda-capture flags
+            // unnecessary captures of such bindings.
+            threads.emplace_back([&mem, t, stride]() {
                 for (int i = 0; i < writes_per_thread; ++i) {
                     Size offset = (t * writes_per_thread + i) * stride;
                     if (offset + sizeof(uint64_t) <= mem.size()) {
