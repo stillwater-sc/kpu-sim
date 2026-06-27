@@ -121,8 +121,8 @@ struct DMASystemConfig {
     }
 
     /// Create minimal configuration (one DMA per edge direction)
-    static DMASystemConfig create_minimal(uint8_t mesh_rows,
-                                           uint8_t mesh_cols) {
+    static DMASystemConfig create_minimal([[maybe_unused]] uint8_t mesh_rows,
+                                           [[maybe_unused]] uint8_t mesh_cols) {
         DMASystemConfig config;
 
         // Just one west DMA (position 0)

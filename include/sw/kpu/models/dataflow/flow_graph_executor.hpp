@@ -339,7 +339,7 @@ protected:
     // ========== Virtual Methods for Specialization ==========
 
     /// Called when a node fires - override to implement actual operations
-    virtual void execute_operation(uint32_t node_id, const FlowNode& node) {
+    virtual void execute_operation([[maybe_unused]] uint32_t node_id, [[maybe_unused]] const FlowNode& node) {
         // Default: just mark completion after latency
         // Subclasses override to perform actual memory/compute operations
     }
@@ -351,7 +351,7 @@ protected:
 
     /// Check if a node can fire (beyond just having inputs ready)
     /// Override for additional constraints like resource availability
-    virtual bool can_fire(uint32_t node_id, const FlowNode& node) const {
+    virtual bool can_fire([[maybe_unused]] uint32_t node_id, [[maybe_unused]] const FlowNode& node) const {
         return true;
     }
 

@@ -149,7 +149,7 @@ protected:
         }
     }
 
-    bool can_fire(uint32_t node_id, const FlowNode& node) const override {
+    bool can_fire([[maybe_unused]] uint32_t node_id, const FlowNode& node) const override {
         // Check if we have capacity for more outstanding transfers
         if (node.operation == Operation::LOAD || node.operation == Operation::STORE) {
             if (active_transfers_.size() >= config_.max_outstanding) {
@@ -160,7 +160,7 @@ protected:
     }
 
 private:
-    void execute_load(uint32_t node_id, const FlowNode& node) {
+    void execute_load([[maybe_unused]] uint32_t node_id, const FlowNode& node) {
         // LOAD: Memory -> L3
         // Inputs: BUFFER_AVAILABLE(L3[node])
         // Outputs: TILE_READY(T @ L3[node])
@@ -184,7 +184,7 @@ private:
         }
     }
 
-    void execute_store(uint32_t node_id, const FlowNode& node) {
+    void execute_store([[maybe_unused]] uint32_t node_id, const FlowNode& node) {
         // STORE: L3 -> Memory
         // Inputs: TILE_READY(T @ L3[node])
         // Outputs: (completion signal, buffer becomes available)

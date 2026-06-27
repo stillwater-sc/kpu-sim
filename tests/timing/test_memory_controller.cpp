@@ -235,7 +235,8 @@ TEST_CASE("Row hit is faster than row miss", "[memory_controller][timing]") {
 
     Cycle cycle = 0;
     Cycle first_start = 0, first_complete = 0;
-    Cycle second_start = 0, second_complete = 0;
+    Cycle second_start = 0;
+    [[maybe_unused]] Cycle second_complete = 0;
 
     while (!mc.is_complete()) {
         auto events = mc.tick(cycle);

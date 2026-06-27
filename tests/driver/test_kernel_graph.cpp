@@ -200,9 +200,9 @@ TEST_CASE("KernelGraph execution order", "[kernel_graph][execution]") {
 
     SECTION("Diamond pattern order") {
         //     k1
-        //    /  \
-        //   k2   k3
-        //    \  /
+        //    /  '\'
+        //   k2    k3
+        //    '\' /
         //     k4
         size_t k1 = graph.add_kernel(Kernel::create_matmul(64, 64, 64), "top");
         size_t k2 = graph.add_kernel(Kernel::create_matmul(64, 64, 64), "left");

@@ -389,7 +389,7 @@ TEST_CASE("MatMulScheduleGenerator large problem", "[timing][schedule][matmul]")
     // 16x16x16 = 4096 output tiles
     Size m_tiles = 256 / 16;  // 16
     Size n_tiles = 256 / 16;  // 16
-    Size k_tiles = 256 / 16;  // 16
+    [[maybe_unused]] Size k_tiles = 256 / 16;  // 16
 
     REQUIRE(result.metadata.c_tiles == m_tiles * n_tiles);
     REQUIRE(result.size() > 10000);  // Large schedule

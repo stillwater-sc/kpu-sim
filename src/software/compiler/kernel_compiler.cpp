@@ -473,7 +473,7 @@ isa::OutputStationaryProgramBuilder::Config KernelCompiler::build_program_config
     return config;
 }
 
-DataflowStrategy KernelCompiler::select_dataflow(Size M, Size N, Size K) const {
+DataflowStrategy KernelCompiler::select_dataflow([[maybe_unused]] Size M, [[maybe_unused]] Size N, [[maybe_unused]] Size K) const {
     // Heuristic for dataflow selection:
     // - Output-stationary: balanced M, N, K (general purpose)
     // - Weight-stationary: large M (batch inference), small K*N (weights)

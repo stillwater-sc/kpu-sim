@@ -248,7 +248,7 @@ protected:
         }
     }
 
-    bool can_fire(uint32_t node_id, const FlowNode& node) const override {
+    bool can_fire([[maybe_unused]] uint32_t node_id, const FlowNode& node) const override {
         // For PUSH_TO_L2, check L2 bank availability
         if (node.operation == Operation::PUSH_TO_L2) {
             for (const auto& output : node.outputs) {
@@ -287,7 +287,7 @@ private:
         }
     }
 
-    void execute_push_to_l2(uint32_t node_id, const FlowNode& node) {
+    void execute_push_to_l2([[maybe_unused]] uint32_t node_id, const FlowNode& node) {
         for (const auto& output : node.outputs) {
             if (output.location == Location::L2) {
                 uint8_t bank_id = output.node_id;
@@ -313,7 +313,7 @@ private:
         }
     }
 
-    void execute_pull_from_l2(uint32_t node_id, const FlowNode& node) {
+    void execute_pull_from_l2([[maybe_unused]] uint32_t node_id, const FlowNode& node) {
         for (const auto& input : node.inputs) {
             if (input.location == Location::L2) {
                 uint8_t bank_id = input.node_id;
@@ -339,7 +339,7 @@ private:
         }
     }
 
-    void execute_send(uint32_t node_id, const FlowNode& node, std::optional<uint8_t> dest_node) {
+    void execute_send([[maybe_unused]] uint32_t node_id, const FlowNode& node, std::optional<uint8_t> dest_node) {
         if (!dest_node) return;
 
         for (const auto& input : node.inputs) {
@@ -366,7 +366,7 @@ private:
         }
     }
 
-    void execute_receive(uint32_t node_id, const FlowNode& node) {
+    void execute_receive([[maybe_unused]] uint32_t node_id, const FlowNode& node) {
         // RECEIVE is mostly a synchronization point - the tile is already
         // marked ready by the sender's SEND operation
         // We just need to make the tile available locally

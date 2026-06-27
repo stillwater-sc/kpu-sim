@@ -88,7 +88,7 @@ int main(int argc, char* argv[]) {
     std::cout << "  - Rows are separated by K×elem_size bytes (pitch)" << std::endl;
 
     // Calculate expected page behavior
-    size_t tile_row_bytes = K_TILE * ELEM_SIZE;  // 256 bytes per tile row
+    [[maybe_unused]] size_t tile_row_bytes = K_TILE * ELEM_SIZE;  // 256 bytes per tile row
     size_t rows_per_page = PAGE_SIZE / A_matrix.pitch_bytes;
     size_t estimated_conflicts = A_matrix.estimate_page_conflicts(M_TILE);
 

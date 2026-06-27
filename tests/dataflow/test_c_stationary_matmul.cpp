@@ -326,7 +326,7 @@ private:
                 dma->inject_buffer_available(Location::L3, dest_l3);
             }
 
-            bool success = dma->run();
+            [[maybe_unused]] bool success = dma->run();
             std::cout << "  DMA West[" << id << "]: "
                       << dma->loads_completed() << " loads, "
                       << dma->bytes_transferred() << " bytes\n";
@@ -343,7 +343,7 @@ private:
                 dma->inject_buffer_available(Location::L3, dest_l3);
             }
 
-            bool success = dma->run();
+            [[maybe_unused]] bool success = dma->run();
             std::cout << "  DMA North[" << id << "]: "
                       << dma->loads_completed() << " loads, "
                       << dma->bytes_transferred() << " bytes\n";
@@ -2054,7 +2054,7 @@ DoubleBufferTiming analyze_c_stationary_double_buffer(
     uint64_t tiles_per_c_block = cfg.K_tiles * (cfg.mesh_rows + cfg.mesh_cols);
     uint64_t matmuls_per_c_block = cfg.K_tiles * cfg.mesh_rows * cfg.mesh_cols;
 
-    uint64_t total_tiles = (uint64_t)total_c_blocks * tiles_per_c_block;
+    [[maybe_unused]] uint64_t total_tiles = (uint64_t)total_c_blocks * tiles_per_c_block;
     uint64_t total_matmuls = (uint64_t)total_c_blocks * matmuls_per_c_block;
 
     // With double-buffering at the K-iteration level:
