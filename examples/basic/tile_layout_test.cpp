@@ -215,7 +215,7 @@ We want A and B to be on DIFFERENT channels for maximum bandwidth.
                       << std::setw(15) << conflicts
                       << std::setw(14) << std::fixed << std::setprecision(1) << rate << "%\n";
 
-        } catch (const std::exception& e) {
+        } catch (const std::exception&) {
             std::cout << std::setw(25) << layout_policy_to_string(policy)
                       << std::setw(15) << "ERROR" << "\n";
         }
