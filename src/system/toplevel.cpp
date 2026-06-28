@@ -169,9 +169,9 @@ sw::kpu::KPUSimulator* SystemSimulator::create_kpu_from_config(const KPUConfig& 
         sim_config.l3_layer.capacity_kb = kpu_config.memory.l3_tiles[0].capacity_kb;
     }
 
-    sim_config.l2_bank_count = kpu_config.memory.l2_banks.size();
+    sim_config.l2_layer.num_banks = kpu_config.memory.l2_banks.size();
     if (!kpu_config.memory.l2_banks.empty()) {
-        sim_config.l2_bank_capacity_kb = kpu_config.memory.l2_banks[0].capacity_kb;
+        sim_config.l2_layer.capacity_kb = kpu_config.memory.l2_banks[0].capacity_kb;
     }
 
     // Compute configuration

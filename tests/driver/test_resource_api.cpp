@@ -96,7 +96,7 @@ TEST_CASE("ResourceManager resource discovery", "[resource_api]") {
     config.memory_bank_count = 2;
     config.memory_bank_capacity_mb = 128;  // 128 MB per bank
     config.l3_layer.num_tiles = 4;
-    config.l2_bank_count = 8;
+    config.l2_layer.num_banks = 8;
     config.l1_buffer_count = 4;
     config.page_buffer_count = 2;
     config.compute_tile_count = 2;

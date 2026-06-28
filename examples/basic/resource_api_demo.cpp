@@ -88,8 +88,8 @@ int main() {
     config.l3_layer.num_tiles = 8;
     config.l3_layer.capacity_kb = 512;
 
-    config.l2_bank_count = 16;
-    config.l2_bank_capacity_kb = 128;
+    config.l2_layer.num_banks = 16;
+    config.l2_layer.capacity_kb = 128;
 
     config.l1_buffer_count = 32;
     config.l1_buffer_capacity_kb = 16;

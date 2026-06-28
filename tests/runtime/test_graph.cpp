@@ -30,8 +30,8 @@ protected:
         config.memory_bank_capacity_mb = 4;
         config.l3_layer.num_tiles = 4;
         config.l3_layer.capacity_kb = 128;
-        config.l2_bank_count = 8;
-        config.l2_bank_capacity_kb = 64;
+        config.l2_layer.num_banks = 8;
+        config.l2_layer.capacity_kb = 64;
         config.page_buffer_count = 2;
         config.page_buffer_capacity_kb = 64;
         config.l1_buffer_count = 4;

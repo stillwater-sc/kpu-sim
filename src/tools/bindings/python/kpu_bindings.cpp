@@ -81,8 +81,14 @@ PYBIND11_MODULE(stillwater_kpu, m) {
         .def_property("l3_tile_capacity_kb",
             [](const sw::kpu::KPUSimulator::Config& c) { return c.l3_layer.capacity_kb; },
             [](sw::kpu::KPUSimulator::Config& c, sw::kpu::Size v) { c.l3_layer.capacity_kb = v; })
-        .def_readwrite("l2_bank_count", &sw::kpu::KPUSimulator::Config::l2_bank_count)
-        .def_readwrite("l2_bank_capacity_kb", &sw::kpu::KPUSimulator::Config::l2_bank_capacity_kb)
+        // L2 banks now live in the L2Layer aggregate config; these properties
+        // proxy into config.l2_layer for a uniform layer.
+        .def_property("l2_bank_count",
+            [](const sw::kpu::KPUSimulator::Config& c) { return c.l2_layer.num_banks; },
+            [](sw::kpu::KPUSimulator::Config& c, size_t v) { c.l2_layer.num_banks = v; })
+        .def_property("l2_bank_capacity_kb",
+            [](const sw::kpu::KPUSimulator::Config& c) { return c.l2_layer.capacity_kb; },
+            [](sw::kpu::KPUSimulator::Config& c, sw::kpu::Size v) { c.l2_layer.capacity_kb = v; })
         .def_readwrite("l1_buffer_count", &sw::kpu::KPUSimulator::Config::l1_buffer_count)
         .def_readwrite("l1_buffer_capacity_kb", &sw::kpu::KPUSimulator::Config::l1_buffer_capacity_kb)
         // Compute resources

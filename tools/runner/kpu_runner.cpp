@@ -77,8 +77,8 @@ KPUSimulator::Config convert_config(const SimulatorConfig& sim_config) {
         config.l3_layer.capacity_kb = 256;  // Default
     }
 
-    config.l2_bank_count = sim_config.num_l2_banks;
-    config.l2_bank_capacity_kb = 64;  // Default
+    config.l2_layer.num_banks = sim_config.num_l2_banks;
+    config.l2_layer.capacity_kb = 64;  // Default
 
     // L1 buffers - derived from compute fabric
     config.l1_buffer_count = 0;  // Auto-compute

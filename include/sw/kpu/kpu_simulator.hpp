@@ -39,6 +39,7 @@
 #include <sw/kpu/models/temporal/memory/l3_tile.hpp>
 #include <sw/kpu/models/temporal/memory/l3_layer.hpp>
 #include <sw/kpu/models/temporal/memory/l2_bank.hpp>
+#include <sw/kpu/models/temporal/memory/l2_layer.hpp>
 #include <sw/kpu/models/temporal/memory/l1_buffer.hpp>
 #include <sw/kpu/models/temporal/datamovement/block_mover.hpp>
 #include <sw/kpu/models/temporal/datamovement/streamer.hpp>
@@ -73,8 +74,10 @@ public:
         // Use l3_layer.num_tiles / l3_layer.capacity_kb for a uniform layer, or
         // l3_layer.tile_groups for a non-uniform one.
         L3LayerConfig l3_layer;
-        Size l2_bank_count;
-        Size l2_bank_capacity_kb;
+        // L2 layer: aggregate config (banks). Use l2_layer.num_banks /
+        // l2_layer.capacity_kb for a uniform layer, or l2_layer.bank_groups
+        // for a non-uniform one.
+        L2LayerConfig l2_layer;
         // L1 streaming buffers: DERIVED from processor array configuration
         // For rectangular arrays: 4 × (rows + cols) per compute tile
         // For hexagonal arrays: 12 × side_length per compute tile
@@ -114,7 +117,6 @@ public:
               memory_bandwidth_gbps(0),
               memory_controller_count(0),
               page_buffer_count(0), page_buffer_capacity_kb(0),
-              l2_bank_count(0), l2_bank_capacity_kb(0),
               l1_buffer_count(0), l1_buffer_capacity_kb(0),
               dma_engine_count(0), streamer_count(0),
               compute_tile_count(0),
@@ -145,7 +147,7 @@ private:
     std::vector<ExternalMemory> host_memory_regions;  // Host system memory (NUMA regions)
     std::vector<ExternalMemory> memory_banks;  // KPU local memory banks
     L3Layer l3_layer;  // SoC-wide L3 aggregate: owns L3Tiles, BlockMovers, interconnect
-    std::vector<L2Bank> l2_banks;
+    L2Layer l2_layer;  // SoC-wide L2 aggregate: owns L2Banks
     std::vector<L1Buffer> l1_buffers;  // L1 streaming buffers (compute fabric)
     std::vector<PageBuffer> page_buffers;  // Page buffers (memory controller)
     std::vector<DMAEngine> dma_engines;
@@ -285,7 +287,7 @@ public:
     size_t get_host_memory_region_count() const { return host_memory_regions.size(); }
     size_t get_memory_bank_count() const { return memory_banks.size(); }
     size_t get_l3_tile_count() const { return l3_layer.tile_count(); }
-    size_t get_l2_bank_count() const { return l2_banks.size(); }
+    size_t get_l2_bank_count() const { return l2_layer.bank_count(); }
     size_t get_l1_buffer_count() const { return l1_buffers.size(); }
     size_t get_page_buffer_count() const { return page_buffers.size(); }
     size_t get_compute_tile_count() const { return compute_tiles.size(); }
