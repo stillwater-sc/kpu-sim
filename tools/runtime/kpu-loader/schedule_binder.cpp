@@ -55,7 +55,7 @@ BoundSchedule ScheduleBinder::bind(const dfx::Program& program) {
                      (src_level == dfx::MemoryLevel::L2 && dst_level == dfx::MemoryLevel::L3)) {
                 // Use BlockMover for L3↔L2 transfers
                 bound.block_mover_id = current_block_mover;
-                current_block_mover = (current_block_mover + 1) % config_.block_mover_count;
+                current_block_mover = (current_block_mover + 1) % config_.l3_layer.block_mover_count;
                 schedule.resources.block_movers_used =
                     std::max(schedule.resources.block_movers_used, current_block_mover + 1);
             }
@@ -70,7 +70,7 @@ BoundSchedule ScheduleBinder::bind(const dfx::Program& program) {
 
             // Allocate memory resources
             bound.l3_tile_id = current_l3_tile;
-            current_l3_tile = (current_l3_tile + 1) % config_.l3_tile_count;
+            current_l3_tile = (current_l3_tile + 1) % config_.l3_layer.num_tiles;
 
             bound.l2_bank_id = current_l2_bank;
             current_l2_bank = (current_l2_bank + 1) % config_.l2_bank_count;

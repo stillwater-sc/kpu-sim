@@ -95,13 +95,13 @@ TEST_CASE("ResourceManager resource discovery", "[resource_api]") {
     config.host_memory_region_count = 1;
     config.memory_bank_count = 2;
     config.memory_bank_capacity_mb = 128;  // 128 MB per bank
-    config.l3_tile_count = 4;
+    config.l3_layer.num_tiles = 4;
     config.l2_bank_count = 8;
     config.l1_buffer_count = 4;
     config.page_buffer_count = 2;
     config.compute_tile_count = 2;
     config.dma_engine_count = 4;
-    config.block_mover_count = 4;
+    config.l3_layer.block_mover_count = 4;
     config.streamer_count = 8;
 
     KPUSimulator simulator(config);

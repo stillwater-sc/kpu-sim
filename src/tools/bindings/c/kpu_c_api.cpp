@@ -42,8 +42,8 @@ KPUHandle kpu_create(uint64_t main_memory_size, uint64_t scratchpad_size) {
             (main_memory_size / (1024 * 1024)) : 1024;  // Default 1GB
         config.memory_bandwidth_gbps = 100;
 
-        config.l3_tile_count = 1;
-        config.l3_tile_capacity_kb = (scratchpad_size > 0) ?
+        config.l3_layer.num_tiles = 1;
+        config.l3_layer.capacity_kb = (scratchpad_size > 0) ?
             (scratchpad_size / 1024) : 1024;  // Default 1MB
 
         config.compute_tile_count = 1;

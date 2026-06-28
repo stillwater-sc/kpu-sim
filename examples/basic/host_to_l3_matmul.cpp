@@ -152,8 +152,8 @@ This example demonstrates the full data flow for matrix multiplication:
     config.memory_controller_count = 1;
     config.page_buffer_count = 2;
     config.page_buffer_capacity_kb = 32;
-    config.l3_tile_count = 1;
-    config.l3_tile_capacity_kb = 128;
+    config.l3_layer.num_tiles = 1;
+    config.l3_layer.capacity_kb = 128;
     config.l2_bank_count = 4;
     config.l2_bank_capacity_kb = 64;
     config.l1_buffer_count = 64;
@@ -164,7 +164,7 @@ This example demonstrates the full data flow for matrix multiplication:
     config.processor_array_topology = ProcessorArrayTopology::RECTANGULAR;
     config.use_systolic_array_mode = true;
     config.dma_engine_count = 2;
-    config.block_mover_count = 2;
+    config.l3_layer.block_mover_count = 2;
     config.streamer_count = 4;
 
     // Print configuration
@@ -173,8 +173,8 @@ This example demonstrates the full data flow for matrix multiplication:
               << config.host_memory_region_capacity_mb << " MB\n";
     std::cout << "  External Memory: " << config.memory_bank_count << " banks × "
               << config.memory_bank_capacity_mb << " MB\n";
-    std::cout << "  L3 Tiles:        " << config.l3_tile_count << " × "
-              << config.l3_tile_capacity_kb << " KB\n";
+    std::cout << "  L3 Tiles:        " << config.l3_layer.num_tiles << " × "
+              << config.l3_layer.capacity_kb << " KB\n";
     std::cout << "  L2 Banks:        " << config.l2_bank_count << " × "
               << config.l2_bank_capacity_kb << " KB\n";
     std::cout << "  L1 Buffers:      " << config.l1_buffer_count << " × "

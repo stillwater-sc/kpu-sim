@@ -164,9 +164,9 @@ sw::kpu::KPUSimulator* SystemSimulator::create_kpu_from_config(const KPUConfig& 
     }
 
     // L3 and L2 configuration
-    sim_config.l3_tile_count = kpu_config.memory.l3_tiles.size();
+    sim_config.l3_layer.num_tiles = kpu_config.memory.l3_tiles.size();
     if (!kpu_config.memory.l3_tiles.empty()) {
-        sim_config.l3_tile_capacity_kb = kpu_config.memory.l3_tiles[0].capacity_kb;
+        sim_config.l3_layer.capacity_kb = kpu_config.memory.l3_tiles[0].capacity_kb;
     }
 
     sim_config.l2_bank_count = kpu_config.memory.l2_banks.size();
@@ -185,7 +185,7 @@ sw::kpu::KPUSimulator* SystemSimulator::create_kpu_from_config(const KPUConfig& 
 
     // Data movement configuration
     sim_config.dma_engine_count = kpu_config.data_movement.dma_engines.size();
-    sim_config.block_mover_count = kpu_config.data_movement.block_movers.size();
+    sim_config.l3_layer.block_mover_count = kpu_config.data_movement.block_movers.size();
     sim_config.streamer_count = kpu_config.data_movement.streamers.size();
 
     return new sw::kpu::KPUSimulator(sim_config);
