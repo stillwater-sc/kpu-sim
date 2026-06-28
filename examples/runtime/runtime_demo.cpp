@@ -121,8 +121,8 @@ int main() {
     sim_config.memory_bank_capacity_mb = 256;
     sim_config.l3_layer.num_tiles = 8;
     sim_config.l3_layer.capacity_kb = 512;
-    sim_config.l2_bank_count = 16;
-    sim_config.l2_bank_capacity_kb = 64;
+    sim_config.l2_layer.num_banks = 16;
+    sim_config.l2_layer.capacity_kb = 64;
     sim_config.l1_buffer_count = 4;
     sim_config.l1_buffer_capacity_kb = 64;
     sim_config.dma_engine_count = 4;

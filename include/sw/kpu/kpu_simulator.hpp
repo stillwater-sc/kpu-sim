@@ -74,8 +74,10 @@ public:
         // Use l3_layer.num_tiles / l3_layer.capacity_kb for a uniform layer, or
         // l3_layer.tile_groups for a non-uniform one.
         L3LayerConfig l3_layer;
-        Size l2_bank_count;
-        Size l2_bank_capacity_kb;
+        // L2 layer: aggregate config (banks). Use l2_layer.num_banks /
+        // l2_layer.capacity_kb for a uniform layer, or l2_layer.bank_groups
+        // for a non-uniform one.
+        L2LayerConfig l2_layer;
         // L1 streaming buffers: DERIVED from processor array configuration
         // For rectangular arrays: 4 × (rows + cols) per compute tile
         // For hexagonal arrays: 12 × side_length per compute tile
@@ -115,7 +117,6 @@ public:
               memory_bandwidth_gbps(0),
               memory_controller_count(0),
               page_buffer_count(0), page_buffer_capacity_kb(0),
-              l2_bank_count(0), l2_bank_capacity_kb(0),
               l1_buffer_count(0), l1_buffer_capacity_kb(0),
               dma_engine_count(0), streamer_count(0),
               compute_tile_count(0),

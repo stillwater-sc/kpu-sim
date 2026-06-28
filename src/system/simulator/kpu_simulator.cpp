@@ -29,8 +29,7 @@ KPUSimulator::KPUSimulator(const Config& config) : current_cycle(0) {
     l3_layer = L3Layer(config.l3_layer);
 
     // Initialize the L2 layer aggregate - owns the L2Banks.
-    l2_layer = L2Layer(L2LayerConfig::uniform(config.l2_bank_count,
-                                              config.l2_bank_capacity_kb));
+    l2_layer = L2Layer(config.l2_layer);
 
     // Initialize L1 streaming buffers - part of compute fabric
     l1_buffers.reserve(config.l1_buffer_count);
@@ -127,12 +126,13 @@ KPUSimulator::KPUSimulator(const Config& config) : current_cycle(0) {
         current_addr += capacity;
     }
 
-    // L2 banks
+    // L2 banks (capacities come from the constructed L2 layer; supports
+    // non-uniform banks)
     if (config.l2_bank_base != 0) {
         current_addr = config.l2_bank_base;
     }
-    for (size_t i = 0; i < config.l2_bank_count; ++i) {
-        Size capacity = config.l2_bank_capacity_kb * 1024;
+    for (size_t i = 0; i < l2_layer.bank_count(); ++i) {
+        Size capacity = l2_layer.bank(i).get_capacity();
         address_decoder.add_region(current_addr, capacity, sw::memory::MemoryType::L2_BANK, i,
                                   "L2 Bank " + std::to_string(i));
         current_addr += capacity;

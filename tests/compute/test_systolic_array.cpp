@@ -27,8 +27,8 @@ public:
         config.dma_engine_count = 2;
         config.l3_layer.num_tiles = 4;
         config.l3_layer.capacity_kb = 128;
-        config.l2_bank_count = 8;
-        config.l2_bank_capacity_kb = 64;
+        config.l2_layer.num_banks = 8;
+        config.l2_layer.capacity_kb = 64;
         config.l3_layer.block_mover_count = 4;
         config.streamer_count = 8;
 

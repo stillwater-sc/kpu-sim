@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **BREAKING — L2 memory layer restructuring (#33).** Introduced the `L2Layer`
+  aggregate (owns the `L2Bank` elements) and removed the flat L2 fields from
+  `KPUSimulator::Config`. Migration:
+  - `config.l2_bank_count`        → `config.l2_layer.num_banks`
+  - `config.l2_bank_capacity_kb`  → `config.l2_layer.capacity_kb`
+  - For non-uniform layers, populate `config.l2_layer.bank_groups`
+    (`group → element-config → multiplicity`) instead of the scalar fields.
+  - `config.l2_bank_base` is unchanged. No backward-compatibility shims. Python
+    keeps the `l2_bank_count` / `l2_bank_capacity_kb` attribute names (they proxy
+    into `l2_layer`); the C ABI struct `KPUSimulatorConfig` is unchanged.
+
 - **BREAKING — L3 memory layer restructuring (#32).** Introduced the `L3Layer`
   aggregate (owns the `L3Tile` elements, the per-tile `BlockMover`s, and an
   optional `L3Interconnect`) and removed the flat L3 fields from

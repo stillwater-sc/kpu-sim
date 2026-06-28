@@ -27,8 +27,8 @@ public:
         config.dma_engine_count = 4;
         config.l3_layer.num_tiles = 4;
         config.l3_layer.capacity_kb = 128;
-        config.l2_bank_count = 8;
-        config.l2_bank_capacity_kb = 64;
+        config.l2_layer.num_banks = 8;
+        config.l2_layer.capacity_kb = 64;
         config.l3_layer.block_mover_count = 4;
         config.streamer_count = 8;
 
@@ -311,7 +311,7 @@ TEST_CASE_METHOD(StreamerTestFixture, "Streamer Error Handling", "[streamer][err
     }
 
     SECTION("Validates L2 bank ID bounds") {
-        const size_t invalid_l2_bank_id = config.l2_bank_count + 1;
+        const size_t invalid_l2_bank_id = config.l2_layer.num_banks + 1;
 
         REQUIRE_THROWS_AS(
             sim->start_row_stream(0, invalid_l2_bank_id, 0, 0, 0, 4, 4, 4, 2),
