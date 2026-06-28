@@ -24,11 +24,11 @@ KPUSimulator::KPUSimulator(const Config& config) : current_cycle(0) {
         memory_banks.emplace_back(config.memory_bank_capacity_mb, config.memory_bandwidth_gbps);
     }
 
-    // Initialize L3 tiles - software-managed on-chip buffers
-    l3_tiles.reserve(config.l3_tile_count);
-    for (size_t i = 0; i < config.l3_tile_count; ++i) {
-        l3_tiles.emplace_back(i, config.l3_tile_capacity_kb);
-    }
+    // Initialize the L3 layer aggregate - owns the L3Tiles, the per-tile
+    // BlockMovers, and (optionally) the L3 interconnect.
+    l3_layer = L3Layer(L3LayerConfig::uniform(config.l3_tile_count,
+                                              config.l3_tile_capacity_kb,
+                                              config.block_mover_count));
 
     // Initialize L2 banks - software-managed on-chip buffers
     l2_banks.reserve(config.l2_bank_count);
@@ -66,12 +66,8 @@ KPUSimulator::KPUSimulator(const Config& config) : current_cycle(0) {
         dma_engines.emplace_back(i);
     }
 
-    // Initialize BlockMovers - L3↔L2 data movement with transformations
-    block_movers.reserve(config.block_mover_count);
-    for (size_t i = 0; i < config.block_mover_count; ++i) {
-        size_t associated_l3_tile = i % config.l3_tile_count;
-        block_movers.emplace_back(i, associated_l3_tile);
-    }
+    // BlockMovers (L3↔L2 data movement with transformations) are owned by the
+    // L3 layer; they were constructed above as part of the L3Layer aggregate.
 
     // Initialize Streamers - L2↔L1 streaming for compute fabric
     streamers.reserve(config.streamer_count);
@@ -212,12 +208,12 @@ void KPUSimulator::write_page_buffer(size_t pad_id, Address addr, const void* da
 // L3 and L2 memory operations
 void KPUSimulator::read_l3_tile(size_t tile_id, Address addr, void* data, Size size) {
     validate_l3_tile_id(tile_id);
-    l3_tiles[tile_id].read(addr, data, size);
+    l3_layer.tiles()[tile_id].read(addr, data, size);
 }
 
 void KPUSimulator::write_l3_tile(size_t tile_id, Address addr, const void* data, Size size) {
     validate_l3_tile_id(tile_id);
-    l3_tiles[tile_id].write(addr, data, size);
+    l3_layer.tiles()[tile_id].write(addr, data, size);
 }
 
 void KPUSimulator::read_l2_bank(size_t bank_id, Address addr, void* data, Size size) {
@@ -333,7 +329,7 @@ void KPUSimulator::start_block_transfer(size_t block_mover_id, size_t src_l3_til
     validate_l3_tile_id(src_l3_tile_id);
     validate_l2_bank_id(dst_l2_bank_id);
 
-    block_movers[block_mover_id].enqueue_block_transfer(
+    l3_layer.block_movers()[block_mover_id].enqueue_block_transfer(
         src_l3_tile_id, src_offset, dst_l2_bank_id, dst_offset,
         block_height, block_width, element_size, transform, std::move(callback)
     );
@@ -341,7 +337,7 @@ void KPUSimulator::start_block_transfer(size_t block_mover_id, size_t src_l3_til
 
 bool KPUSimulator::is_block_mover_busy(size_t block_mover_id) {
     validate_block_mover_id(block_mover_id);
-    return block_movers[block_mover_id].is_busy();
+    return l3_layer.block_movers()[block_mover_id].is_busy();
 }
 
 // Streamer operations
@@ -434,7 +430,7 @@ void KPUSimulator::reset() {
     for (auto& bank : memory_banks) {
         bank.reset();
     }
-    for (auto& l3_tile : l3_tiles) {
+    for (auto& l3_tile : l3_layer.tiles()) {
         l3_tile.reset();
     }
     for (auto& l2_bank : l2_banks) {
@@ -452,7 +448,7 @@ void KPUSimulator::reset() {
     for (auto& tile : compute_tiles) {
         tile.reset();
     }
-    for (auto& block_mover : block_movers) {
+    for (auto& block_mover : l3_layer.block_movers()) {
         block_mover.reset();
     }
     for (auto& streamer : streamers) {
@@ -469,7 +465,7 @@ void KPUSimulator::step() {
     for (auto& dma : dma_engines) {
         dma.set_current_cycle(current_cycle);
     }
-    for (auto& block_mover : block_movers) {
+    for (auto& block_mover : l3_layer.block_movers()) {
         block_mover.set_cycle(current_cycle);
     }
     for (auto& streamer : streamers) {
@@ -482,10 +478,10 @@ void KPUSimulator::step() {
     // Then process/update all components
     // DMA engines move data between host/KPU memory and L3 tiles
     for (auto& dma : dma_engines) {
-        dma.process_transfers(host_memory_regions, memory_banks, l3_tiles);
+        dma.process_transfers(host_memory_regions, memory_banks, l3_layer.tiles());
     }
-    for (auto& block_mover : block_movers) {
-        block_mover.process_transfers(l3_tiles, l2_banks);
+    for (auto& block_mover : l3_layer.block_movers()) {
+        block_mover.process_transfers(l3_layer.tiles(), l2_banks);
     }
     for (auto& streamer : streamers) {
         streamer.update(current_cycle, l2_banks, l1_buffers);
@@ -505,7 +501,7 @@ void KPUSimulator::run_until_idle() {
                 break;
             }
         }
-        for (const auto& block_mover : block_movers) {
+        for (const auto& block_mover : l3_layer.block_movers()) {
             if (block_mover.is_busy()) {
                 any_busy = true;
                 break;
@@ -542,7 +538,7 @@ Size KPUSimulator::get_memory_bank_capacity(size_t bank_id) const {
 
 Size KPUSimulator::get_l3_tile_capacity(size_t tile_id) const {
     validate_l3_tile_id(tile_id);
-    return l3_tiles[tile_id].get_capacity();
+    return l3_layer.tiles()[tile_id].get_capacity();
 }
 
 Size KPUSimulator::get_l2_bank_capacity(size_t bank_id) const {
@@ -572,13 +568,13 @@ void KPUSimulator::print_stats() const {
     std::cout << "Simulation cycles: " << current_cycle << std::endl;
     std::cout << "Wall-clock time: " << get_elapsed_time_ms() << " ms" << std::endl;
     std::cout << "Memory banks: " << memory_banks.size() << std::endl;
-    std::cout << "L3 tiles: " << l3_tiles.size() << std::endl;
+    std::cout << "L3 tiles: " << l3_layer.tiles().size() << std::endl;
     std::cout << "L2 banks: " << l2_banks.size() << std::endl;
     std::cout << "L1 buffers: " << l1_buffers.size() << std::endl;
     std::cout << "Page buffers: " << page_buffers.size() << std::endl;
     std::cout << "Compute tiles: " << compute_tiles.size() << std::endl;
     std::cout << "DMA engines: " << dma_engines.size() << std::endl;
-    std::cout << "Block movers: " << block_movers.size() << std::endl;
+    std::cout << "Block movers: " << l3_layer.block_movers().size() << std::endl;
 }
 
 void KPUSimulator::print_component_status() const {
@@ -605,9 +601,9 @@ void KPUSimulator::print_component_status() const {
     }
 
     std::cout << "L3 Tiles:" << std::endl;
-    for (size_t i = 0; i < l3_tiles.size(); ++i) {
-        std::cout << "  L3Tile[" << i << "]: " << l3_tiles[i].get_capacity() / 1024
-                  << " KB, Ready: " << (l3_tiles[i].is_ready() ? "Yes" : "No") << std::endl;
+    for (size_t i = 0; i < l3_layer.tiles().size(); ++i) {
+        std::cout << "  L3Tile[" << i << "]: " << l3_layer.tiles()[i].get_capacity() / 1024
+                  << " KB, Ready: " << (l3_layer.tiles()[i].is_ready() ? "Yes" : "No") << std::endl;
     }
 
     std::cout << "L2 Banks:" << std::endl;
@@ -623,8 +619,8 @@ void KPUSimulator::print_component_status() const {
     }
 
     std::cout << "Block Movers:" << std::endl;
-    for (size_t i = 0; i < block_movers.size(); ++i) {
-        const auto& mover = block_movers[i];
+    for (size_t i = 0; i < l3_layer.block_movers().size(); ++i) {
+        const auto& mover = l3_layer.block_movers()[i];
         std::cout << "  BlockMover[" << i << "]: ";
         std::cout << "Busy: " << (mover.is_busy() ? "Yes" : "No");
         std::cout << ", Queue: " << mover.get_queue_size() << " transfers";
@@ -651,7 +647,7 @@ bool KPUSimulator::is_memory_bank_ready(size_t bank_id) const {
 
 bool KPUSimulator::is_l3_tile_ready(size_t tile_id) const {
     validate_l3_tile_id(tile_id);
-    return l3_tiles[tile_id].is_ready();
+    return l3_layer.tiles()[tile_id].is_ready();
 }
 
 bool KPUSimulator::is_l2_bank_ready(size_t bank_id) const {
@@ -701,7 +697,7 @@ void KPUSimulator::validate_tile_id(size_t tile_id) const {
 }
 
 void KPUSimulator::validate_l3_tile_id(size_t tile_id) const {
-    if (tile_id >= l3_tiles.size()) {
+    if (tile_id >= l3_layer.tiles().size()) {
         throw std::out_of_range("Invalid L3 tile ID: " + std::to_string(tile_id));
     }
 }
@@ -719,7 +715,7 @@ void KPUSimulator::validate_l1_buffer_id(size_t buffer_id) const {
 }
 
 void KPUSimulator::validate_block_mover_id(size_t mover_id) const {
-    if (mover_id >= block_movers.size()) {
+    if (mover_id >= l3_layer.block_movers().size()) {
         throw std::out_of_range("Invalid block mover ID: " + std::to_string(mover_id));
     }
 }
@@ -836,7 +832,7 @@ void KPUSimulator::enable_dma_tracing(size_t dma_id) {
 
 void KPUSimulator::enable_block_mover_tracing(size_t mover_id) {
     validate_block_mover_id(mover_id);
-    block_movers[mover_id].enable_tracing();
+    l3_layer.block_movers()[mover_id].enable_tracing();
 }
 
 void KPUSimulator::enable_streamer_tracing(size_t streamer_id) {
@@ -856,7 +852,7 @@ void KPUSimulator::disable_dma_tracing(size_t dma_id) {
 
 void KPUSimulator::disable_block_mover_tracing(size_t mover_id) {
     validate_block_mover_id(mover_id);
-    block_movers[mover_id].disable_tracing();
+    l3_layer.block_movers()[mover_id].disable_tracing();
 }
 
 void KPUSimulator::disable_streamer_tracing(size_t streamer_id) {
@@ -913,7 +909,7 @@ Address KPUSimulator::get_l3_tile_base(size_t tile_id) const {
     }
     // Then add offsets for L3 tiles before this one
     for (size_t i = 0; i < tile_id; ++i) {
-        base += l3_tiles[i].get_capacity();
+        base += l3_layer.tiles()[i].get_capacity();
     }
     return base;
 }
@@ -928,7 +924,7 @@ Address KPUSimulator::get_l2_bank_base(size_t bank_id) const {
     for (const auto& bank : memory_banks) {
         base += bank.get_capacity();
     }
-    for (const auto& tile : l3_tiles) {
+    for (const auto& tile : l3_layer.tiles()) {
         base += tile.get_capacity();
     }
     // Then add offsets for L2 banks before this one
@@ -948,7 +944,7 @@ Address KPUSimulator::get_l1_buffer_base(size_t buffer_id) const {
     for (const auto& bank : memory_banks) {
         base += bank.get_capacity();
     }
-    for (const auto& tile : l3_tiles) {
+    for (const auto& tile : l3_layer.tiles()) {
         base += tile.get_capacity();
     }
     for (const auto& bank : l2_banks) {
@@ -971,7 +967,7 @@ Address KPUSimulator::get_page_buffer_base(size_t pad_id) const {
     for (const auto& bank : memory_banks) {
         base += bank.get_capacity();
     }
-    for (const auto& tile : l3_tiles) {
+    for (const auto& tile : l3_layer.tiles()) {
         base += tile.get_capacity();
     }
     for (const auto& bank : l2_banks) {

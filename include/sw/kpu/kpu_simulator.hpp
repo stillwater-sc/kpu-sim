@@ -37,6 +37,7 @@
 #include <sw/kpu/models/temporal/memory/controllers/controller_base.hpp>
 #include <sw/kpu/models/temporal/datamovement/dma_engine.hpp>
 #include <sw/kpu/models/temporal/memory/l3_tile.hpp>
+#include <sw/kpu/models/temporal/memory/l3_layer.hpp>
 #include <sw/kpu/models/temporal/memory/l2_bank.hpp>
 #include <sw/kpu/models/temporal/memory/l1_buffer.hpp>
 #include <sw/kpu/models/temporal/datamovement/block_mover.hpp>
@@ -141,13 +142,12 @@ private:
     // Component vectors - value semantics, addressable
     std::vector<ExternalMemory> host_memory_regions;  // Host system memory (NUMA regions)
     std::vector<ExternalMemory> memory_banks;  // KPU local memory banks
-    std::vector<L3Tile> l3_tiles;
+    L3Layer l3_layer;  // SoC-wide L3 aggregate: owns L3Tiles, BlockMovers, interconnect
     std::vector<L2Bank> l2_banks;
     std::vector<L1Buffer> l1_buffers;  // L1 streaming buffers (compute fabric)
     std::vector<PageBuffer> page_buffers;  // Page buffers (memory controller)
     std::vector<DMAEngine> dma_engines;
     std::vector<ComputeFabric> compute_tiles;
-    std::vector<BlockMover> block_movers;
     std::vector<Streamer> streamers;
 
     // Address decoder for unified address space
@@ -282,13 +282,13 @@ public:
     // Configuration queries
     size_t get_host_memory_region_count() const { return host_memory_regions.size(); }
     size_t get_memory_bank_count() const { return memory_banks.size(); }
-    size_t get_l3_tile_count() const { return l3_tiles.size(); }
+    size_t get_l3_tile_count() const { return l3_layer.tile_count(); }
     size_t get_l2_bank_count() const { return l2_banks.size(); }
     size_t get_l1_buffer_count() const { return l1_buffers.size(); }
     size_t get_page_buffer_count() const { return page_buffers.size(); }
     size_t get_compute_tile_count() const { return compute_tiles.size(); }
     size_t get_dma_engine_count() const { return dma_engines.size(); }
-    size_t get_block_mover_count() const { return block_movers.size(); }
+    size_t get_block_mover_count() const { return l3_layer.block_mover_count(); }
     size_t get_streamer_count() const { return streamers.size(); }
 
     Size get_host_memory_region_capacity(size_t region_id) const;
