@@ -57,6 +57,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Zero-warning builds under `-Werror` / `/WX` (#23 Phase 3, #31)** — Resolved every
+  warning surfaced by enabling warnings-as-errors across all three CI compilers. gcc was
+  already clean; clang and MSVC `/W4` exposed conversion warnings the GNU `-Wall -Wextra`
+  builds never see, and because each build stops at the first error they only appeared one
+  file at a time. Each warning class was enumerated wholesale with targeted local clang
+  scans (faithful proxies for the MSVC classes) and fixed in batches:
+  - **169 integer narrowings** (`C4267`/`C4244`, `size_t`/`int` → smaller) across 38 files —
+    explicit `static_cast` at each site (tile indices, bank/channel IDs, sizes, counts).
+  - **~626 float narrowings** (`C4244`, 64-bit int → `double`/`float`) across 152 files —
+    the pervasive cycles/bytes → `double` stats, bandwidth, utilization, and percentage
+    computations; both operands cast on integer/integer ratios.
+  - **`C4566`** — added `/utf-8` to the MSVC compile flags so the Unicode glyphs (arrows,
+    box-drawing) in trace/demo output compile under code page 1252; fixed ~175 files via
+    one config line instead of source churn.
+  - **`C4101`** — removed a single unused `catch` exception binding.
+  - **`C4244` pybind `ssize_t` → `int`** — two negative-axis fixups clang's scan missed.
+  - All ~800 casts are behavior-preserving (they make explicit the conversions the compiler
+    already performed). Verified clean locally under `release-werror` with both gcc and
+    clang, plus clang conversion scans confirming zero remaining narrowings.
+
 - **DMA + Memory Controller Architecture** — Implemented correct CSP architecture with
   proper separation of concerns:
   - DMA Engine (CSP Process): Handles ISA operations, L3 credit acquisition/release,
