@@ -119,14 +119,14 @@ int main() {
     KPUSimulator::Config sim_config;
     sim_config.memory_bank_count = 4;
     sim_config.memory_bank_capacity_mb = 256;
-    sim_config.l3_tile_count = 8;
-    sim_config.l3_tile_capacity_kb = 512;
+    sim_config.l3_layer.num_tiles = 8;
+    sim_config.l3_layer.capacity_kb = 512;
     sim_config.l2_bank_count = 16;
     sim_config.l2_bank_capacity_kb = 64;
     sim_config.l1_buffer_count = 4;
     sim_config.l1_buffer_capacity_kb = 64;
     sim_config.dma_engine_count = 4;
-    sim_config.block_mover_count = 8;
+    sim_config.l3_layer.block_mover_count = 8;
     sim_config.streamer_count = 16;
     sim_config.processor_array_rows = 16;
     sim_config.processor_array_cols = 16;
@@ -142,7 +142,7 @@ int main() {
     KPURuntime runtime(&simulator, rt_config);
 
     std::cout << "  Simulator: " << sim_config.memory_bank_count << " memory banks, "
-              << sim_config.l3_tile_count << " L3 tiles\n";
+              << sim_config.l3_layer.num_tiles << " L3 tiles\n";
     std::cout << "  Runtime:   Clock = " << rt_config.clock_ghz << " GHz\n";
     std::cout << "  Memory:    Total = " << format_bytes(runtime.get_total_memory())
               << ", Free = " << format_bytes(runtime.get_free_memory()) << "\n";

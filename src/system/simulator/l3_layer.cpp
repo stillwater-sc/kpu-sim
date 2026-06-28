@@ -8,14 +8,22 @@ namespace sw::kpu {
 
 L3Layer::L3Layer(const L3LayerConfig& config)
     : config_(config) {
-    // Materialize the L3Tile elements from the tile groups, assigning a global
-    // flat tile_id across all groups so the layer presents a single index space.
+    // Materialize the L3Tile elements, assigning a global flat tile_id so the
+    // layer presents a single index space. Prefer the canonical tile_groups;
+    // otherwise fall back to the uniform (num_tiles x capacity_kb) convenience.
     const size_t total = config_.total_tiles();
     tiles_.reserve(total);
     size_t global_id = 0;
-    for (const auto& group : config_.tile_groups) {
-        for (size_t k = 0; k < group.multiplicity; ++k) {
-            tiles_.emplace_back(global_id, group.tile.capacity_kb);
+    if (!config_.tile_groups.empty()) {
+        for (const auto& group : config_.tile_groups) {
+            for (size_t k = 0; k < group.multiplicity; ++k) {
+                tiles_.emplace_back(global_id, group.tile.capacity_kb);
+                ++global_id;
+            }
+        }
+    } else {
+        for (size_t k = 0; k < config_.num_tiles; ++k) {
+            tiles_.emplace_back(global_id, config_.capacity_kb);
             ++global_id;
         }
     }

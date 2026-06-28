@@ -85,8 +85,8 @@ int main() {
     config.memory_bank_count = 4;
     config.memory_bank_capacity_mb = 16;
 
-    config.l3_tile_count = 8;
-    config.l3_tile_capacity_kb = 512;
+    config.l3_layer.num_tiles = 8;
+    config.l3_layer.capacity_kb = 512;
 
     config.l2_bank_count = 16;
     config.l2_bank_capacity_kb = 128;
@@ -97,7 +97,7 @@ int main() {
     // Configure compute and data movement
     config.compute_tile_count = 8;
     config.dma_engine_count = 4;
-    config.block_mover_count = 8;
+    config.l3_layer.block_mover_count = 8;
     config.streamer_count = 16;
 
     KPUSimulator simulator(config);

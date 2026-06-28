@@ -26,9 +26,7 @@ KPUSimulator::KPUSimulator(const Config& config) : current_cycle(0) {
 
     // Initialize the L3 layer aggregate - owns the L3Tiles, the per-tile
     // BlockMovers, and (optionally) the L3 interconnect.
-    l3_layer = L3Layer(L3LayerConfig::uniform(config.l3_tile_count,
-                                              config.l3_tile_capacity_kb,
-                                              config.block_mover_count));
+    l3_layer = L3Layer(config.l3_layer);
 
     // Initialize L2 banks - software-managed on-chip buffers
     l2_banks.reserve(config.l2_bank_count);
@@ -119,12 +117,13 @@ KPUSimulator::KPUSimulator(const Config& config) : current_cycle(0) {
         current_addr += capacity;
     }
 
-    // L3 tiles
+    // L3 tiles (capacities come from the constructed L3 layer; supports
+    // non-uniform tiles)
     if (config.l3_tile_base != 0) {
         current_addr = config.l3_tile_base;
     }
-    for (size_t i = 0; i < config.l3_tile_count; ++i) {
-        Size capacity = config.l3_tile_capacity_kb * 1024;
+    for (size_t i = 0; i < l3_layer.tile_count(); ++i) {
+        Size capacity = l3_layer.tile(i).get_capacity();
         address_decoder.add_region(current_addr, capacity, sw::memory::MemoryType::L3_TILE, i,
                                   "L3 Tile " + std::to_string(i));
         current_addr += capacity;

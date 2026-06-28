@@ -25,11 +25,11 @@ public:
         config.l1_buffer_capacity_kb = 256;
         config.compute_tile_count = 1;
         config.dma_engine_count = 4;
-        config.l3_tile_count = 4;
-        config.l3_tile_capacity_kb = 128;
+        config.l3_layer.num_tiles = 4;
+        config.l3_layer.capacity_kb = 128;
         config.l2_bank_count = 8;
         config.l2_bank_capacity_kb = 64;
-        config.block_mover_count = 4;
+        config.l3_layer.block_mover_count = 4;
 
         sim = std::make_unique<KPUSimulator>(config);
     }

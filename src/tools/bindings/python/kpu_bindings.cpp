@@ -73,8 +73,14 @@ PYBIND11_MODULE(stillwater_kpu, m) {
         .def_readwrite("memory_bank_capacity_mb", &sw::kpu::KPUSimulator::Config::memory_bank_capacity_mb)
         .def_readwrite("memory_bandwidth_gbps", &sw::kpu::KPUSimulator::Config::memory_bandwidth_gbps)
         // On-chip memory hierarchy
-        .def_readwrite("l3_tile_count", &sw::kpu::KPUSimulator::Config::l3_tile_count)
-        .def_readwrite("l3_tile_capacity_kb", &sw::kpu::KPUSimulator::Config::l3_tile_capacity_kb)
+        // L3 tiles/block movers now live in the L3Layer aggregate config; these
+        // properties proxy into config.l3_layer for a uniform layer.
+        .def_property("l3_tile_count",
+            [](const sw::kpu::KPUSimulator::Config& c) { return c.l3_layer.num_tiles; },
+            [](sw::kpu::KPUSimulator::Config& c, size_t v) { c.l3_layer.num_tiles = v; })
+        .def_property("l3_tile_capacity_kb",
+            [](const sw::kpu::KPUSimulator::Config& c) { return c.l3_layer.capacity_kb; },
+            [](sw::kpu::KPUSimulator::Config& c, sw::kpu::Size v) { c.l3_layer.capacity_kb = v; })
         .def_readwrite("l2_bank_count", &sw::kpu::KPUSimulator::Config::l2_bank_count)
         .def_readwrite("l2_bank_capacity_kb", &sw::kpu::KPUSimulator::Config::l2_bank_capacity_kb)
         .def_readwrite("l1_buffer_count", &sw::kpu::KPUSimulator::Config::l1_buffer_count)
@@ -83,7 +89,10 @@ PYBIND11_MODULE(stillwater_kpu, m) {
         .def_readwrite("compute_tile_count", &sw::kpu::KPUSimulator::Config::compute_tile_count)
         // Data movement engines
         .def_readwrite("dma_engine_count", &sw::kpu::KPUSimulator::Config::dma_engine_count)
-        .def_readwrite("block_mover_count", &sw::kpu::KPUSimulator::Config::block_mover_count)
+        // BlockMovers are owned by the L3 layer; proxy into config.l3_layer.
+        .def_property("block_mover_count",
+            [](const sw::kpu::KPUSimulator::Config& c) { return c.l3_layer.block_mover_count; },
+            [](sw::kpu::KPUSimulator::Config& c, size_t v) { c.l3_layer.block_mover_count = v; })
         .def_readwrite("streamer_count", &sw::kpu::KPUSimulator::Config::streamer_count)
         // Processor array configuration
         .def_readwrite("processor_array_rows", &sw::kpu::KPUSimulator::Config::processor_array_rows)

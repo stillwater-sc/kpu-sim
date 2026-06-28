@@ -45,8 +45,8 @@ inline KPUSimulator::Config minimal_config() {
     c.memory_bank_count         = 1;
     c.memory_bank_capacity_mb   = 1;
     c.memory_bandwidth_gbps     = 8;
-    c.l3_tile_count             = 1;
-    c.l3_tile_capacity_kb       = 64;
+    c.l3_layer.num_tiles        = 1;
+    c.l3_layer.capacity_kb      = 64;
     c.l2_bank_count             = 1;
     c.l2_bank_capacity_kb       = 32;
     c.l1_buffer_count           = 1;
@@ -64,8 +64,8 @@ inline KPUSimulator::Config small_config() {
     c.memory_bank_count         = 2;
     c.memory_bank_capacity_mb   = 4;
     c.memory_bandwidth_gbps     = 8;
-    c.l3_tile_count             = 4;
-    c.l3_tile_capacity_kb       = 256;
+    c.l3_layer.num_tiles        = 4;
+    c.l3_layer.capacity_kb      = 256;
     c.l2_bank_count             = 4;
     c.l2_bank_capacity_kb       = 128;
     c.l1_buffer_count           = 2;
@@ -85,8 +85,8 @@ inline KPUSimulator::Config medium_config() {
     c.memory_bank_count         = 2;
     c.memory_bank_capacity_mb   = 16;
     c.memory_bandwidth_gbps     = 16;
-    c.l3_tile_count             = 4;
-    c.l3_tile_capacity_kb       = 1024;
+    c.l3_layer.num_tiles        = 4;
+    c.l3_layer.capacity_kb      = 1024;
     c.l2_bank_count             = 4;
     c.l2_bank_capacity_kb       = 512;
     c.l1_buffer_count           = 4;

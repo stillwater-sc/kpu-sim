@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **BREAKING — L3 memory layer restructuring (#32).** Introduced the `L3Layer`
+  aggregate (owns the `L3Tile` elements, the per-tile `BlockMover`s, and an
+  optional `L3Interconnect`) and removed the flat L3 fields from
+  `KPUSimulator::Config`. Migration:
+  - `config.l3_tile_count`        → `config.l3_layer.num_tiles`
+  - `config.l3_tile_capacity_kb`  → `config.l3_layer.capacity_kb`
+  - `config.block_mover_count`    → `config.l3_layer.block_mover_count`
+  - For non-uniform layers, populate `config.l3_layer.tile_groups`
+    (`group → element-config → multiplicity`) instead of the scalar fields.
+  - `config.l3_tile_base` is unchanged. No backward-compatibility shims are
+    provided. Python keeps the `l3_tile_count` / `l3_tile_capacity_kb` /
+    `block_mover_count` attribute names (they proxy into `l3_layer`); the C ABI
+    struct `KPUSimulatorConfig` is unchanged.
+
 ### Added
 
 - **CSP Schedule Generators (Phase 4)** — Complete schedule generation infrastructure

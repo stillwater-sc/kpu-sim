@@ -96,8 +96,8 @@ KPUSimulator::Config create_config() {
     config.memory_controller_count = 2;
     config.page_buffer_count = 8;
     config.page_buffer_capacity_kb = 32;
-    config.l3_tile_count = 16;
-    config.l3_tile_capacity_kb = 512;
+    config.l3_layer.num_tiles = 16;
+    config.l3_layer.capacity_kb = 512;
     config.l2_bank_count = 64;
     config.l2_bank_capacity_kb = 32;
     config.l1_buffer_count = 3072;
@@ -108,7 +108,7 @@ KPUSimulator::Config create_config() {
     config.processor_array_topology = ProcessorArrayTopology::RECTANGULAR;
     config.use_systolic_array_mode = true;
     config.dma_engine_count = 4;
-    config.block_mover_count = 16;
+    config.l3_layer.block_mover_count = 16;
     config.streamer_count = 64;
     return config;
 }

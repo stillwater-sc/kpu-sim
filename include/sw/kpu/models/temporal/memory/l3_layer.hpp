@@ -56,9 +56,23 @@ struct L3TileGroup {
 };
 
 /// Configuration for an L3Layer aggregate.
+///
+/// Two ways to describe the tiles:
+///  - **Canonical (non-uniform):** populate `tile_groups` with named
+///    `group -> element-config -> multiplicity` entries.
+///  - **Uniform convenience:** leave `tile_groups` empty and set the scalar
+///    `num_tiles` / `capacity_kb` fields; the layer is then built as `num_tiles`
+///    identical tiles of `capacity_kb`. This is the path used while system
+///    configs remain uniform.
+/// When `tile_groups` is non-empty it takes precedence over the scalar fields.
 struct L3LayerConfig {
     /// Tile groups: group -> element-config -> multiplicity (supports non-uniform layers).
     std::vector<L3TileGroup> tile_groups;
+
+    /// Uniform convenience: number of identical tiles (used iff `tile_groups` empty).
+    size_t num_tiles = 0;
+    /// Uniform convenience: per-tile capacity in KB (used iff `tile_groups` empty).
+    Size capacity_kb = 128;
 
     /// Number of BlockMovers the layer owns (round-robin associated to tiles).
     /// Target micro-architecture is one BlockMover per L3Tile.
@@ -72,24 +86,24 @@ struct L3LayerConfig {
     double block_mover_clock_ghz = 1.0;
     double block_mover_bandwidth_gb_s = 100.0;
 
-    /// Total number of tiles across all groups.
+    /// Total number of tiles: sum of group multiplicities, or the uniform count.
     size_t total_tiles() const {
-        size_t n = 0;
-        for (const auto& g : tile_groups) {
-            n += g.multiplicity;
+        if (!tile_groups.empty()) {
+            size_t n = 0;
+            for (const auto& g : tile_groups) {
+                n += g.multiplicity;
+            }
+            return n;
         }
-        return n;
+        return num_tiles;
     }
 
-    /// Convenience constructor for a uniform layer: `num_tiles` identical tiles
-    /// of `capacity_kb`, with `block_mover_count` movers. Used to bridge the
-    /// legacy flat configuration until per-group config is wired through.
+    /// Convenience factory for a uniform layer.
     static L3LayerConfig uniform(size_t num_tiles, Size capacity_kb,
                                  size_t block_mover_count = 0) {
         L3LayerConfig cfg;
-        if (num_tiles > 0) {
-            cfg.tile_groups.push_back(L3TileGroup{"default", L3TileSpec{capacity_kb}, num_tiles});
-        }
+        cfg.num_tiles = num_tiles;
+        cfg.capacity_kb = capacity_kb;
         cfg.block_mover_count = block_mover_count;
         return cfg;
     }

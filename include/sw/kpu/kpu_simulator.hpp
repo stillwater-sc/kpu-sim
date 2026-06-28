@@ -69,8 +69,10 @@ public:
         Size page_buffer_capacity_kb;
 
         // On-chip memory hierarchy
-        Size l3_tile_count;
-        Size l3_tile_capacity_kb;
+        // L3 layer: aggregate config (tiles, block movers, interconnect).
+        // Use l3_layer.num_tiles / l3_layer.capacity_kb for a uniform layer, or
+        // l3_layer.tile_groups for a non-uniform one.
+        L3LayerConfig l3_layer;
         Size l2_bank_count;
         Size l2_bank_capacity_kb;
         // L1 streaming buffers: DERIVED from processor array configuration
@@ -81,8 +83,9 @@ public:
         Size l1_buffer_capacity_kb;
 
         // Data movement engines
+        // Note: BlockMovers are configured via l3_layer.block_mover_count
+        // (they are owned by the L3 layer).
         Size dma_engine_count;
-        Size block_mover_count;
         Size streamer_count;
 
         // Compute resources
@@ -111,10 +114,9 @@ public:
               memory_bandwidth_gbps(0),
               memory_controller_count(0),
               page_buffer_count(0), page_buffer_capacity_kb(0),
-              l3_tile_count(0), l3_tile_capacity_kb(0),
               l2_bank_count(0), l2_bank_capacity_kb(0),
               l1_buffer_count(0), l1_buffer_capacity_kb(0),
-              dma_engine_count(0), block_mover_count(0), streamer_count(0),
+              dma_engine_count(0), streamer_count(0),
               compute_tile_count(0),
               processor_array_rows(0), processor_array_cols(0),
               processor_array_topology(ProcessorArrayTopology::RECTANGULAR),

@@ -233,8 +233,8 @@ int main() {
     KPUSimulator::Config config;
     config.memory_bank_count = 4;
     config.memory_bank_capacity_mb = 128;
-    config.l3_tile_count = 8;
-    config.l3_tile_capacity_kb = 256;
+    config.l3_layer.num_tiles = 8;
+    config.l3_layer.capacity_kb = 256;
     config.l2_bank_count = 16;
     config.l2_bank_capacity_kb = 64;
     config.l1_buffer_count = 8;

@@ -70,11 +70,11 @@ KPUSimulator::Config convert_config(const SimulatorConfig& sim_config) {
     config.page_buffer_capacity_kb = 32;
 
     // On-chip memory hierarchy
-    config.l3_tile_count = sim_config.num_l3_tiles;
+    config.l3_layer.num_tiles = sim_config.num_l3_tiles;
     if (sim_config.l3_tile) {
-        config.l3_tile_capacity_kb = sim_config.l3_tile->capacity_kb;
+        config.l3_layer.capacity_kb = sim_config.l3_tile->capacity_kb;
     } else {
-        config.l3_tile_capacity_kb = 256;  // Default
+        config.l3_layer.capacity_kb = 256;  // Default
     }
 
     config.l2_bank_count = sim_config.num_l2_banks;
@@ -87,9 +87,9 @@ KPUSimulator::Config convert_config(const SimulatorConfig& sim_config) {
     // Data movement
     config.dma_engine_count = sim_config.num_dma_engines;
     if (sim_config.dma_engine) {
-        config.block_mover_count = sim_config.dma_engine->num_channels;
+        config.l3_layer.block_mover_count = sim_config.dma_engine->num_channels;
     } else {
-        config.block_mover_count = sim_config.num_l3_tiles;
+        config.l3_layer.block_mover_count = sim_config.num_l3_tiles;
     }
     config.streamer_count = sim_config.num_l3_tiles * 4;
 

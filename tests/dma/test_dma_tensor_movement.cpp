@@ -22,7 +22,7 @@ public:
         // covers it; bandwidth and tile capacity are tuned higher
         // for the kind of timings this file exercises.
         config.memory_bandwidth_gbps = 100;
-        config.l3_tile_capacity_kb   = 512;
+        config.l3_layer.capacity_kb   = 512;
         sim = std::make_unique<KPUSimulator>(config);
     }
 
@@ -94,7 +94,7 @@ TEST_CASE_METHOD(TensorMovementFixture, "Tensor Movement - Multiple Tiles", "[dm
     const size_t tile_rows = 16;
     const size_t tile_cols = 16;
     const size_t tile_size = tile_rows * tile_cols * sizeof(float);
-    const size_t num_tiles = std::min(config.l3_tile_count, config.dma_engine_count);
+    const size_t num_tiles = std::min(config.l3_layer.num_tiles, config.dma_engine_count);
 
     // Create different tensors for each tile
     std::vector<std::vector<float>> tiles;
@@ -134,7 +134,7 @@ TEST_CASE_METHOD(TensorMovementFixture, "Tensor Movement - Large Tensor", "[dma]
     const size_t cols = 128;
     const size_t size = rows * cols * sizeof(float);
 
-    REQUIRE(size <= config.l3_tile_capacity_kb * 1024);
+    REQUIRE(size <= config.l3_layer.capacity_kb * 1024);
 
     auto tensor = create_tensor(rows, cols);
     sim->write_memory_bank(0, 0, tensor.data(), size);
