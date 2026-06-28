@@ -68,7 +68,7 @@ Examples:
 // ============================================================================
 
 constexpr uint64_t BANK_BITS = 4;
-constexpr uint64_t ROW_BITS = 16;
+[[maybe_unused]] constexpr uint64_t ROW_BITS = 16;  // documents address layout
 constexpr uint64_t COL_BITS = 10;
 constexpr uint64_t COL_SHIFT = 6;  // 64-byte cache lines
 constexpr uint64_t BANK_SHIFT = COL_SHIFT + COL_BITS;
@@ -233,7 +233,6 @@ bool run_calibration(const CalibrationOptions& opts) {
         pattern_names.push_back(workload.name);
 
         // Submit all requests
-        size_t submitted = 0;
         std::vector<uint8_t> write_data(64, 0xAA);  // Reusable write buffer
 
         for (const auto& [type, addr] : workload.requests) {
@@ -254,10 +253,6 @@ bool run_calibration(const CalibrationOptions& opts) {
                     mc.tick();
                     ++retry_count;
                 }
-            }
-
-            if (id.has_value()) {
-                ++submitted;
             }
 
             // Tick to make progress after submission
@@ -354,13 +349,13 @@ int main(int argc, char* argv[]) {
             opts.technology = arg.substr(13);
         }
         else if (arg.rfind("--speed=", 0) == 0) {
-            opts.speed_grade = std::stoul(arg.substr(8));
+            opts.speed_grade = static_cast<uint32_t>(std::stoul(arg.substr(8)));
         }
         else if (arg.rfind("--requests=", 0) == 0) {
             opts.requests_per_workload = std::stoul(arg.substr(11));
         }
         else if (arg.rfind("--seed=", 0) == 0) {
-            opts.seed = std::stoul(arg.substr(7));
+            opts.seed = static_cast<uint32_t>(std::stoul(arg.substr(7)));
         }
         else if (arg == "--verbose" || arg == "-v") {
             opts.verbose = true;

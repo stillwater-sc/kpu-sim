@@ -83,7 +83,7 @@ int main(int argc, char* argv[]) {
 
     // Triad moves 3 arrays worth of data (2 reads + 1 write)
     // But effective data is just 1 array (the result)
-    double bytes_moved = stats.dma_bytes_transferred;
+    double bytes_moved = static_cast<double>(stats.dma_bytes_transferred);
     double effective_bytes = bytes_moved / 3.0;  // Actual data written
 
     std::cout << "Total bytes moved: " << (bytes_moved / 1024 / 1024) << " MB" << std::endl;
@@ -92,7 +92,7 @@ int main(int argc, char* argv[]) {
     // Bandwidth calculation
     // STREAM Triad counts bytes moved, not effective data
     double achieved_bw = stats.effective_bandwidth_gbps(3.2);
-    double triad_rate = effective_bytes / stats.total_cycles * 3.2;  // GB/s of result data
+    double triad_rate = effective_bytes / static_cast<double>(stats.total_cycles) * 3.2;  // GB/s of result data
 
     std::cout << "\nBandwidth metrics:" << std::endl;
     std::cout << "  Raw bandwidth (all transfers): " << std::fixed << std::setprecision(2)
@@ -105,7 +105,7 @@ int main(int argc, char* argv[]) {
     std::cout << "Reads: " << stats.memory_reads << std::endl;
     std::cout << "Writes: " << stats.memory_writes << std::endl;
     double read_write_ratio = static_cast<double>(stats.memory_reads) /
-                              std::max(uint64_t{1}, stats.memory_writes);
+                              static_cast<double>(std::max(uint64_t{1}, stats.memory_writes));
     std::cout << "Read/Write ratio: " << std::fixed << std::setprecision(2)
               << read_write_ratio << " (expected ~2.0)" << std::endl;
 

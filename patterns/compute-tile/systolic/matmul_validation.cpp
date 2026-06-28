@@ -48,7 +48,7 @@ struct XUEMetrics {
 
     // XUE Metrics
     double throughput_flops_per_cycle() const {
-        return total_cycles > 0 ? static_cast<double>(total_flops) / total_cycles : 0.0;
+        return total_cycles > 0 ? static_cast<double>(total_flops) / static_cast<double>(total_cycles) : 0.0;
     }
 
     double throughput_gflops() const {
@@ -57,13 +57,13 @@ struct XUEMetrics {
 
     double utilization() const {
         uint64_t total = busy_cycles + idle_cycles;
-        return total > 0 ? static_cast<double>(busy_cycles) / total : 0.0;
+        return total > 0 ? static_cast<double>(busy_cycles) / static_cast<double>(total) : 0.0;
     }
 
     double efficiency() const {
         if (busy_cycles == 0 || macs_per_cycle == 0) return 0.0;
         // Efficiency = actual MACs / (busy_cycles * peak MACs/cycle)
-        return static_cast<double>(total_macs) / (busy_cycles * macs_per_cycle);
+        return static_cast<double>(total_macs) / static_cast<double>(busy_cycles * macs_per_cycle);
     }
 
     double peak_gflops() const {

@@ -126,7 +126,7 @@ public:
 
     /// Submit a write request
     std::optional<uint64_t> submit_write(uint64_t address, const std::vector<uint8_t>& data) {
-        return mc_->submit_write(address, data.data(), data.size());
+        return mc_->submit_write(address, data.data(), static_cast<uint32_t>(data.size()));
     }
 
     /// Submit a write request (size only, no actual data)

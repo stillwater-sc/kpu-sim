@@ -17,7 +17,7 @@ using namespace sw::kpu::patterns::hbm2;
 
 /// Print bank distribution histogram
 void print_bank_histogram(const std::vector<int>& bank_counts, int num_channels, int pcs_per_channel, int banks_per_pc) {
-    int total_banks = num_channels * pcs_per_channel * banks_per_pc;
+    [[maybe_unused]] int total_banks = num_channels * pcs_per_channel * banks_per_pc;
     int max_count = 0;
     for (int count : bank_counts) {
         max_count = std::max(max_count, count);

@@ -47,7 +47,7 @@ TEST_CASE("Single tile injection and delivery", "[wormhole][noc]") {
     uint64_t delivery_cycle = 0;
 
     // Set delivery callback
-    noc.set_delivery_callback(1, [&](const TileDescriptor& t, uint8_t src, uint64_t cycle) {
+    noc.set_delivery_callback(1, [&](const TileDescriptor& t, [[maybe_unused]] uint8_t src, uint64_t cycle) {
         delivered = true;
         delivered_tile = t;
         delivery_cycle = cycle;
@@ -83,7 +83,7 @@ TEST_CASE("Single tile injection and delivery", "[wormhole][noc]") {
     // Latency should be approximately equal to number of flits
     // (injection serializes at 1 flit/cycle)
     REQUIRE(delivery_cycle >= expected_flits);
-    REQUIRE(delivery_cycle <= expected_flits + 10);  // Small overhead allowance
+    REQUIRE(delivery_cycle <= static_cast<uint64_t>(expected_flits) + 10);  // Small overhead allowance
 
     // Check statistics
     const auto& stats = noc.stats();
@@ -114,7 +114,7 @@ TEST_CASE("Sequential injection serialization", "[wormhole][noc][bandwidth]") {
     uint64_t tile1_delivery = 0;
     uint64_t tile2_delivery = 0;
 
-    noc.set_delivery_callback(1, [&](const TileDescriptor& t, uint8_t src, uint64_t cycle) {
+    noc.set_delivery_callback(1, [&](const TileDescriptor& t, [[maybe_unused]] uint8_t src, uint64_t cycle) {
         if (t.k_tile == 0) {
             tile1_delivery = cycle;
         } else {
@@ -197,12 +197,12 @@ TEST_CASE("Concurrent East and South transfers", "[wormhole][noc][concurrent]") 
     uint64_t south_delivery = 0;
 
     // R[0,0] → R[0,1] (East)
-    noc.set_delivery_callback(1, [&](const TileDescriptor& t, uint8_t src, uint64_t cycle) {
+    noc.set_delivery_callback(1, [&]([[maybe_unused]] const TileDescriptor& t, [[maybe_unused]] uint8_t src, uint64_t cycle) {
         east_delivery = cycle;
     });
 
     // R[0,1] → R[1,1] (South) - callback on router 5
-    noc.set_delivery_callback(5, [&](const TileDescriptor& t, uint8_t src, uint64_t cycle) {
+    noc.set_delivery_callback(5, [&]([[maybe_unused]] const TileDescriptor& t, [[maybe_unused]] uint8_t src, uint64_t cycle) {
         south_delivery = cycle;
     });
 
@@ -273,7 +273,7 @@ TEST_CASE("Variable tile sizes", "[wormhole][noc]") {
         tile.size = tc.size;
 
         uint64_t delivery_cycle = 0;
-        noc.set_delivery_callback(1, [&](const TileDescriptor& t, uint8_t src, uint64_t cycle) {
+        noc.set_delivery_callback(1, [&]([[maybe_unused]] const TileDescriptor& t, [[maybe_unused]] uint8_t src, uint64_t cycle) {
             delivery_cycle = cycle;
         });
 

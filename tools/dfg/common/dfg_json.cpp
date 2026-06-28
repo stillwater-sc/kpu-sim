@@ -100,13 +100,13 @@ json to_json(const TileDescriptor& tile) {
 TileDescriptor tile_from_json(const json& j) {
     TileDescriptor tile;
     tile.tensor = tensor_id_from_string(j.value("tensor", "A"));
-    tile.m_tile = j.value("m_tile", 0);
-    tile.n_tile = j.value("n_tile", 0);
-    tile.k_tile = j.value("k_tile", 0);
+    tile.m_tile = static_cast<uint16_t>(j.value("m_tile", 0));
+    tile.n_tile = static_cast<uint16_t>(j.value("n_tile", 0));
+    tile.k_tile = static_cast<uint16_t>(j.value("k_tile", 0));
     tile.l3_offset = j.value("l3_offset", 0);
     tile.size = j.value("size", 0);
-    tile.height = j.value("height", 0);
-    tile.width = j.value("width", 0);
+    tile.height = static_cast<uint16_t>(j.value("height", 0));
+    tile.width = static_cast<uint16_t>(j.value("width", 0));
     tile.src_stride = j.value("src_stride", 0);
     tile.dst_stride = j.value("dst_stride", 0);
     return tile;
@@ -160,8 +160,8 @@ DFNode node_from_json(const json& j) {
     node.type = node_type_from_string(j.value("type", "BARRIER"));
     node.name = j.value("name", "");
     node.tile = tile_from_json(j.value("tile", json::object()));
-    node.l3_id = j.value("l3_id", 0);
-    node.l2_bank_id = j.value("l2_bank_id", 0);
+    node.l3_id = static_cast<uint8_t>(j.value("l3_id", 0));
+    node.l2_bank_id = static_cast<uint8_t>(j.value("l2_bank_id", 0));
     node.duration = j.value("duration", 0);
     node.priority = j.value("priority", 0);
 
@@ -174,8 +174,8 @@ DFNode node_from_json(const json& j) {
     }
 
     // Transfer-specific
-    node.src_l3_id = j.value("src_l3_id", 0);
-    node.dst_l3_id = j.value("dst_l3_id", 0);
+    node.src_l3_id = static_cast<uint8_t>(j.value("src_l3_id", 0));
+    node.dst_l3_id = static_cast<uint8_t>(j.value("dst_l3_id", 0));
 
     // Compute-specific
     node.M = j.value("M", 0);
@@ -236,8 +236,8 @@ TimingModel timing_from_json(const json& j) {
     timing.router_latency_cycles = j.value("router_latency_cycles", 1UL);
     timing.link_latency_cycles = j.value("link_latency_cycles", 1UL);
     timing.store_and_forward = j.value("store_and_forward", true);
-    timing.mesh_rows = j.value("mesh_rows", 4);
-    timing.mesh_cols = j.value("mesh_cols", 4);
+    timing.mesh_rows = static_cast<uint8_t>(j.value("mesh_rows", 4));
+    timing.mesh_cols = static_cast<uint8_t>(j.value("mesh_cols", 4));
     return timing;
 }
 

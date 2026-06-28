@@ -364,7 +364,7 @@ TEST_CASE_METHOD(AddressBasedDMAFixture, "Address-Based API: Dynamic Memory Allo
     // Demonstrates how address-based API enables flexible memory allocation
 
     // Simulate a simple allocator that uses any available memory
-    auto allocate = [this](size_t size) -> Address {
+    auto allocate = [](size_t size) -> Address {
         // In a real system, this would search for free space
         // For this test, we'll use different regions based on size
         if (size <= 128 * 1024) {

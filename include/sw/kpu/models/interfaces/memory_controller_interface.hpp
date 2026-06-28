@@ -78,17 +78,17 @@ struct MemoryControllerStatistics {
     // Derived metrics
     double avg_latency() const {
         uint64_t total = reads + writes;
-        return total > 0 ? static_cast<double>(total_latency) / total : 0.0;
+        return total > 0 ? static_cast<double>(total_latency) / static_cast<double>(total) : 0.0;
     }
 
     double hit_rate() const {
         uint64_t total = page_hits + page_empty + page_conflicts;
-        return total > 0 ? static_cast<double>(page_hits) / total : 0.0;
+        return total > 0 ? static_cast<double>(page_hits) / static_cast<double>(total) : 0.0;
     }
 
     double utilization() const {
         uint64_t total = busy_cycles + idle_cycles;
-        return total > 0 ? static_cast<double>(busy_cycles) / total : 0.0;
+        return total > 0 ? static_cast<double>(busy_cycles) / static_cast<double>(total) : 0.0;
     }
 
     uint64_t total_requests() const {

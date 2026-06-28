@@ -56,16 +56,16 @@ struct L3TileStatistics {
 
     // Derived metrics
     double avg_read_latency() const {
-        return reads > 0 ? static_cast<double>(total_read_latency) / reads : 0.0;
+        return reads > 0 ? static_cast<double>(total_read_latency) / static_cast<double>(reads) : 0.0;
     }
 
     double avg_write_latency() const {
-        return writes > 0 ? static_cast<double>(total_write_latency) / writes : 0.0;
+        return writes > 0 ? static_cast<double>(total_write_latency) / static_cast<double>(writes) : 0.0;
     }
 
     double utilization() const {
         uint64_t total = busy_cycles + idle_cycles;
-        return total > 0 ? static_cast<double>(busy_cycles) / total : 0.0;
+        return total > 0 ? static_cast<double>(busy_cycles) / static_cast<double>(total) : 0.0;
     }
 
     uint64_t total_accesses() const {

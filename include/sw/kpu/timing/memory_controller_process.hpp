@@ -279,7 +279,7 @@ public:
     /**
      * @brief Check if MC is complete (no pending or in-flight work)
      */
-    [[nodiscard]] bool is_complete() const {
+    [[nodiscard]] bool is_complete() const override {
         return request_queue_.empty() && in_flight_.empty();
     }
 
@@ -323,7 +323,7 @@ public:
 
     [[nodiscard]] double row_hit_rate() const {
         size_t total = row_hits_ + row_misses_ + row_empty_;
-        return total > 0 ? static_cast<double>(row_hits_) / total : 0.0;
+        return total > 0 ? static_cast<double>(row_hits_) / static_cast<double>(total) : 0.0;
     }
 
     [[nodiscard]] const Config& config() const { return config_; }

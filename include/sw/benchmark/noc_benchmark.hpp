@@ -35,7 +35,7 @@ struct BenchmarkStats {
     uint64_t samples = 0;
 
     double mean() const {
-        return samples > 0 ? static_cast<double>(total_cycles) / samples : 0.0;
+        return samples > 0 ? static_cast<double>(total_cycles) / static_cast<double>(samples) : 0.0;
     }
 
     double variance() const;
@@ -80,11 +80,11 @@ struct ThroughputResult {
 
     // Derived metrics
     double bytes_per_cycle() const {
-        return total_cycles > 0 ? static_cast<double>(total_bytes) / total_cycles : 0.0;
+        return total_cycles > 0 ? static_cast<double>(total_bytes) / static_cast<double>(total_cycles) : 0.0;
     }
 
     double tiles_per_cycle() const {
-        return total_cycles > 0 ? static_cast<double>(total_tiles) / total_cycles : 0.0;
+        return total_cycles > 0 ? static_cast<double>(total_tiles) / static_cast<double>(total_cycles) : 0.0;
     }
 
     double bandwidth_utilization(double peak_bw) const {
@@ -109,7 +109,7 @@ struct ContentionResult {
     double contention_slowdown(double baseline_bw) const {
         double avg_bw = 0;
         for (auto bw : source_bandwidths) avg_bw += bw;
-        avg_bw /= source_bandwidths.size();
+        avg_bw /= static_cast<double>(source_bandwidths.size());
         return baseline_bw > 0 ? avg_bw / baseline_bw : 0.0;
     }
 
@@ -128,7 +128,7 @@ struct PatternResult {
     // Pattern-specific metrics
     double completion_time_cycles() const { return static_cast<double>(total_cycles); }
     double aggregate_bandwidth() const {
-        return total_cycles > 0 ? static_cast<double>(total_bytes) / total_cycles : 0.0;
+        return total_cycles > 0 ? static_cast<double>(total_bytes) / static_cast<double>(total_cycles) : 0.0;
     }
 };
 
@@ -154,17 +154,17 @@ struct OperatorResult {
     // Derived metrics
     double noc_utilization(double peak_bw) const {
         return total_cycles > 0 && peak_bw > 0 ?
-            static_cast<double>(noc_bytes_transferred) / (total_cycles * peak_bw) : 0.0;
+            static_cast<double>(noc_bytes_transferred) / (static_cast<double>(total_cycles) * peak_bw) : 0.0;
     }
 
     double compute_utilization(double peak_flops) const {
         return total_cycles > 0 && peak_flops > 0 ?
-            static_cast<double>(total_flops) / (total_cycles * peak_flops) : 0.0;
+            static_cast<double>(total_flops) / (static_cast<double>(total_cycles) * peak_flops) : 0.0;
     }
 
     double compute_to_noc_ratio() const {
         return noc_wait_cycles > 0 ?
-            static_cast<double>(compute_cycles) / noc_wait_cycles : 0.0;
+            static_cast<double>(compute_cycles) / static_cast<double>(noc_wait_cycles) : 0.0;
     }
 
     bool is_noc_bound() const {

@@ -160,7 +160,7 @@ TEST_CASE("XUE Event Counter (v0.4.0)", "[xue][counter][v040]") {
         counter.record_memory(EventType::DRAM_WRITE, 64 * 64 * 4);     // C
 
         double ai = counter.arithmetic_intensity();
-        REQUIRE(ai == Approx(flops / static_cast<double>(bytes)).epsilon(0.01));
+        REQUIRE(ai == Approx(static_cast<double>(flops) / static_cast<double>(bytes)).epsilon(0.01));
     }
 
     SECTION("Counter reset") {

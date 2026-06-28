@@ -158,8 +158,11 @@ std::vector<AnalysisResult> analyze_workload(
         // Get tile config
         auto tile_config = optimizer.optimize(workload.shape.M, workload.shape.N, workload.shape.K);
 
-        // Map DataflowStrategy to L2TileScheduler::SchedulingStrategy
-        L2TileScheduler::SchedulingStrategy l2_strategy;
+        // Map DataflowStrategy to L2TileScheduler::SchedulingStrategy.
+        // The switch covers all three enum values but gcc -O3 can't tell;
+        // initialize explicitly to silence -Wmaybe-uninitialized.
+        L2TileScheduler::SchedulingStrategy l2_strategy =
+            L2TileScheduler::SchedulingStrategy::OUTPUT_STATIONARY;
         switch (strategy) {
             case DataflowStrategy::WEIGHT_STATIONARY:
                 l2_strategy = L2TileScheduler::SchedulingStrategy::WEIGHT_STATIONARY;
@@ -280,7 +283,7 @@ void print_summary_stats(const std::vector<AnalysisResult>& results) {
             max_overfetch = std::max(max_overfetch, r.overfetch_total);
             min_overfetch = std::min(min_overfetch, r.overfetch_total);
         }
-        avg_overfetch /= aspect_results.size();
+        avg_overfetch /= static_cast<double>(aspect_results.size());
 
         std::cout << aspect << ":\n";
         std::cout << "  Workloads: " << (aspect_results.size() / 3 / 5) << "\n";  // Divide by strategies and L3 sizes
@@ -309,7 +312,7 @@ void print_summary_stats(const std::vector<AnalysisResult>& results) {
         for (const auto& r : strategy_results) {
             avg_overfetch += r.overfetch_total;
         }
-        avg_overfetch /= strategy_results.size();
+        avg_overfetch /= static_cast<double>(strategy_results.size());
 
         std::cout << strategy << ": Average overfetch = " << std::fixed << std::setprecision(2)
                   << avg_overfetch << "× across all workloads\n";

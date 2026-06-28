@@ -54,7 +54,7 @@ struct ExecutionResult {
      * @brief Calculate throughput (ops/cycle)
      */
     [[nodiscard]] double throughput() const {
-        return total_cycles > 0 ? static_cast<double>(ops_completed) / total_cycles : 0.0;
+        return total_cycles > 0 ? static_cast<double>(ops_completed) / static_cast<double>(total_cycles) : 0.0;
     }
 };
 

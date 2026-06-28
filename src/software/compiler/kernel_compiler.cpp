@@ -29,9 +29,9 @@ std::string format_bytes_short(Size bytes) {
 std::string format_bytes_precise(Size bytes) {
     std::ostringstream ss;
     if (bytes >= 1024 * 1024) {
-        ss << std::fixed << std::setprecision(1) << (bytes / (1024.0 * 1024.0)) << " MB";
+        ss << std::fixed << std::setprecision(1) << (static_cast<double>(bytes) / (1024.0 * 1024.0)) << " MB";
     } else if (bytes >= 1024) {
-        ss << std::fixed << std::setprecision(1) << (bytes / 1024.0) << " KB";
+        ss << std::fixed << std::setprecision(1) << (static_cast<double>(bytes) / 1024.0) << " KB";
     } else {
         ss << bytes << " B";
     }
@@ -47,18 +47,18 @@ std::string format_bytes_precise(Size bytes) {
 void OperationBreakdown::compute_bandwidth(double clock_ghz) {
     if (estimated_cycles == 0) return;
 
-    double time_seconds = estimated_cycles / (clock_ghz * 1e9);
+    double time_seconds = static_cast<double>(estimated_cycles) / (clock_ghz * 1e9);
 
     // Compute achieved bandwidth (bytes / time = bytes/second, then to GB/s)
-    bandwidth.external_gbps = (external_memory.total_bytes / time_seconds) / 1e9;
-    bandwidth.l3_l2_gbps = (l3_l2.total_bytes / time_seconds) / 1e9;
-    bandwidth.l2_l1_gbps = (l2_l1.total_bytes / time_seconds) / 1e9;
+    bandwidth.external_gbps = (static_cast<double>(external_memory.total_bytes) / time_seconds) / 1e9;
+    bandwidth.l3_l2_gbps = (static_cast<double>(l3_l2.total_bytes) / time_seconds) / 1e9;
+    bandwidth.l2_l1_gbps = (static_cast<double>(l2_l1.total_bytes) / time_seconds) / 1e9;
 
     // Compute utilization as fraction of peak
     // Peak bandwidth is in bytes/cycle, so peak GB/s = peak_bw * clock_ghz
-    double external_peak_gbps = pipeline.external_peak_bw * clock_ghz;
-    double l3_l2_peak_gbps = pipeline.l3_l2_peak_bw * clock_ghz;
-    double l2_l1_peak_gbps = pipeline.l2_l1_peak_bw * clock_ghz;
+    double external_peak_gbps = static_cast<double>(pipeline.external_peak_bw) * clock_ghz;
+    double l3_l2_peak_gbps = static_cast<double>(pipeline.l3_l2_peak_bw) * clock_ghz;
+    double l2_l1_peak_gbps = static_cast<double>(pipeline.l2_l1_peak_bw) * clock_ghz;
 
     bandwidth.external_utilization = bandwidth.external_gbps / external_peak_gbps;
     bandwidth.l3_l2_utilization = bandwidth.l3_l2_gbps / l3_l2_peak_gbps;

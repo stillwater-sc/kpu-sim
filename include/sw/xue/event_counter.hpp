@@ -217,7 +217,7 @@ struct EventStats {
         // avg_occupancy = occ_int / T
         // arrival_rate = c / T
         // avg_delay = (occ_int / T) / (c / T) = occ_int / c
-        return static_cast<double>(occ_int) / c;
+        return static_cast<double>(occ_int) / static_cast<double>(c);
     }
 
     /**
@@ -226,7 +226,7 @@ struct EventStats {
     double average_occupancy(uint64_t observation_cycles) const {
         if (observation_cycles == 0) return 0.0;
         return static_cast<double>(occupancy_integral.load(std::memory_order_relaxed)) /
-               observation_cycles;
+               static_cast<double>(observation_cycles);
     }
 
     /**
@@ -235,7 +235,7 @@ struct EventStats {
     double throughput(uint64_t observation_cycles) const {
         if (observation_cycles == 0) return 0.0;
         return static_cast<double>(completions.load(std::memory_order_relaxed)) /
-               observation_cycles;
+               static_cast<double>(observation_cycles);
     }
 
     /**
@@ -249,27 +249,27 @@ struct EventStats {
         uint64_t max_occ = max_occupancy.load(std::memory_order_relaxed);
         if (max_occ == 0) return 0.0;
         uint64_t occ_int = occupancy_integral.load(std::memory_order_relaxed);
-        return static_cast<double>(occ_int) / (observation_cycles * max_occ);
+        return static_cast<double>(occ_int) / static_cast<double>(observation_cycles * max_occ);
     }
 
     double avg_bytes() const {
         uint64_t c = count.load(std::memory_order_relaxed);
-        return c > 0 ? static_cast<double>(total_bytes.load(std::memory_order_relaxed)) / c : 0.0;
+        return c > 0 ? static_cast<double>(total_bytes.load(std::memory_order_relaxed)) / static_cast<double>(c) : 0.0;
     }
 
     double avg_flops() const {
         uint64_t c = count.load(std::memory_order_relaxed);
-        return c > 0 ? static_cast<double>(total_flops.load(std::memory_order_relaxed)) / c : 0.0;
+        return c > 0 ? static_cast<double>(total_flops.load(std::memory_order_relaxed)) / static_cast<double>(c) : 0.0;
     }
 
     double avg_cycles() const {
         uint64_t c = count.load(std::memory_order_relaxed);
-        return c > 0 ? static_cast<double>(total_cycles.load(std::memory_order_relaxed)) / c : 0.0;
+        return c > 0 ? static_cast<double>(total_cycles.load(std::memory_order_relaxed)) / static_cast<double>(c) : 0.0;
     }
 
     double avg_latency() const {
         uint64_t comp = completions.load(std::memory_order_relaxed);
-        return comp > 0 ? static_cast<double>(total_latency.load(std::memory_order_relaxed)) / comp : 0.0;
+        return comp > 0 ? static_cast<double>(total_latency.load(std::memory_order_relaxed)) / static_cast<double>(comp) : 0.0;
     }
 
     void update_payload_range(uint64_t bytes) {
@@ -359,12 +359,12 @@ struct AggregateStats {
 
     double average_delay() const {
         if (total_events == 0) return 0.0;
-        return static_cast<double>(total_occupancy_integral) / total_events;
+        return static_cast<double>(total_occupancy_integral) / static_cast<double>(total_events);
     }
 
     double throughput(uint64_t observation_cycles) const {
         if (observation_cycles == 0) return 0.0;
-        return static_cast<double>(total_completions) / observation_cycles;
+        return static_cast<double>(total_completions) / static_cast<double>(observation_cycles);
     }
 };
 
@@ -668,7 +668,7 @@ public:
     double arithmetic_intensity() const {
         uint64_t bytes = dram_bytes();
         if (bytes == 0) return 0.0;
-        return static_cast<double>(total_flops()) / bytes;
+        return static_cast<double>(total_flops()) / static_cast<double>(bytes);
     }
 
     /**
@@ -706,8 +706,8 @@ public:
         if (T == 0) T = 1;  // Avoid division by zero
 
         // Throughput (X)
-        metrics.throughput_flops_per_cycle = static_cast<double>(total_flops()) / T;
-        metrics.throughput_bytes_per_cycle = static_cast<double>(total_bytes_moved()) / T;
+        metrics.throughput_flops_per_cycle = static_cast<double>(total_flops()) / static_cast<double>(T);
+        metrics.throughput_bytes_per_cycle = static_cast<double>(total_bytes_moved()) / static_cast<double>(T);
         metrics.throughput_gflops = metrics.throughput_flops_per_cycle * clock_ghz;
 
         // Utilization (U) - based on occupancy integral
@@ -715,13 +715,13 @@ public:
         auto memory_stats = get_category_stats(EventCategory::MEMORY);
 
         if (compute_stats.total_events > 0) {
-            double avg_compute_occ = static_cast<double>(compute_stats.total_occupancy_integral) / T;
+            double avg_compute_occ = static_cast<double>(compute_stats.total_occupancy_integral) / static_cast<double>(T);
             metrics.compute_utilization = std::min(1.0, avg_compute_occ);
             metrics.avg_compute_delay = compute_stats.average_delay();
         }
 
         if (memory_stats.total_events > 0) {
-            double avg_memory_occ = static_cast<double>(memory_stats.total_occupancy_integral) / T;
+            double avg_memory_occ = static_cast<double>(memory_stats.total_occupancy_integral) / static_cast<double>(T);
             metrics.memory_utilization = std::min(1.0, avg_memory_occ);
             metrics.avg_memory_delay = memory_stats.average_delay();
         }

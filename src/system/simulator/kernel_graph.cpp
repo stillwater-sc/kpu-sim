@@ -196,7 +196,7 @@ bool KernelGraph::validate(std::string& error) const {
     // Check for cycles by attempting topological sort
     try {
         get_execution_order();
-    } catch (const std::runtime_error& e) {
+    } catch (const std::runtime_error&) {
         error = "Graph contains cycles";
         return false;
     }
@@ -267,7 +267,7 @@ KernelGraphStats KernelGraph::compute_stats() const {
     }
 
     if (!nodes_.empty()) {
-        stats.avg_arithmetic_intensity = total_intensity / nodes_.size();
+        stats.avg_arithmetic_intensity = total_intensity / static_cast<double>(nodes_.size());
     }
 
     return stats;
@@ -598,7 +598,7 @@ KernelGraphCompileResult KernelGraph::compile_sequential() const {
     }
     if (total_bytes > 0) {
         result.program.estimates.arithmetic_intensity =
-            static_cast<double>(total_flops) / total_bytes;
+            static_cast<double>(total_flops) / static_cast<double>(total_bytes);
     }
 
     result.success = true;
@@ -840,7 +840,7 @@ void KernelGraph::update_fused_estimates(
     // Recalculate arithmetic intensity with reduced memory traffic
     if (result.program.estimates.external_mem_bytes > 0) {
         result.program.estimates.arithmetic_intensity =
-            static_cast<double>(total_flops) / result.program.estimates.external_mem_bytes;
+            static_cast<double>(total_flops) / static_cast<double>(result.program.estimates.external_mem_bytes);
     }
 
     // Estimate workspace required

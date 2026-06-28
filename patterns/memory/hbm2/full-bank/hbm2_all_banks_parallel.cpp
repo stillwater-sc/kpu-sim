@@ -103,14 +103,14 @@ int main() {
     // Calculate bank utilization
     std::cout << "\n--- Bank Utilization ---" << std::endl;
     uint64_t total_cycles = harness.current_cycle();
-    double theoretical_min_cycles =
+    [[maybe_unused]] double theoretical_min_cycles =
         (BANKS_PER_PC * PAGE_EMPTY_READ_LATENCY) +  // First access to each bank
         ((ACCESSES_PER_BANK - 1) * BANKS_PER_PC * PAGE_HIT_READ_LATENCY / BANKS_PER_PC);  // Pipelined hits
 
     std::cout << "  Total cycles: " << total_cycles << std::endl;
     std::cout << "  Requests completed: " << stats.reads << std::endl;
     std::cout << "  Avg cycles per request: " << std::fixed << std::setprecision(2)
-              << (double)total_cycles / stats.reads << std::endl;
+              << (double)total_cycles / static_cast<double>(stats.reads) << std::endl;
 
     // Export trace
     std::string trace_path = make_trace_path("full-bank", "hbm2_all_banks_parallel_trace.json");

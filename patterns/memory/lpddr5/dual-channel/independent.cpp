@@ -107,9 +107,9 @@ bool test_dual_channel_alternating() {
     // Alternate: CH0-B0, CH1-B0, CH0-B4, CH1-B4, ...
     for (int round = 0; round < 4; ++round) {
         // Channel 0
-        harness.submit_read(make_address_dual(0, round * 4, ROW, round * 64));
+        harness.submit_read(make_address_dual(0, static_cast<uint8_t>(round * 4), ROW, round * 64));
         // Channel 1
-        harness.submit_read(make_address_dual(1, round * 4, ROW, round * 64));
+        harness.submit_read(make_address_dual(1, static_cast<uint8_t>(round * 4), ROW, round * 64));
     }
 
     if (!harness.run_until_complete(20000)) {
@@ -262,7 +262,7 @@ bool test_bandwidth_comparison() {
     std::cout << "Dual channel:   " << dual_cycles << " cycles" << std::endl;
 
     if (dual_cycles < single_cycles) {
-        double speedup = 100.0 * (single_cycles - dual_cycles) / single_cycles;
+        double speedup = 100.0 * static_cast<double>(single_cycles - dual_cycles) / static_cast<double>(single_cycles);
         std::cout << "Dual channel is " << std::fixed << std::setprecision(1)
                   << speedup << "% faster" << std::endl;
     } else {

@@ -505,12 +505,12 @@ ConcurrentExecutor::UtilizationStats ConcurrentExecutor::get_utilization() const
 
     // Utilization = busy_cycles / (makespan * num_resources)
     stats.dma_utilization = static_cast<double>(dma_busy) /
-                           (makespan_ * config_.num_memory_channels);
+                           (static_cast<double>(makespan_) * config_.num_memory_channels);
     stats.block_mover_utilization = static_cast<double>(bm_busy) /
-                                    (makespan_ * config_.num_block_movers);
+                                    (static_cast<double>(makespan_) * config_.num_block_movers);
     stats.streamer_utilization = static_cast<double>(str_busy) /
-                                 (makespan_ * config_.num_streamers);
-    stats.compute_utilization = static_cast<double>(comp_busy) / makespan_;
+                                 (static_cast<double>(makespan_) * config_.num_streamers);
+    stats.compute_utilization = static_cast<double>(comp_busy) / static_cast<double>(makespan_);
 
     return stats;
 }
@@ -542,12 +542,12 @@ std::string TimelineFormatter::format_gantt(
 
     // Calculate scale: cycles per character
     size_t chart_width = width - 20;  // Leave room for labels
-    double scale = static_cast<double>(total_cycles) / chart_width;
+    double scale = static_cast<double>(total_cycles) / static_cast<double>(chart_width);
     if (scale < 1.0) scale = 1.0;
 
     // Calculate timing in nanoseconds (DMA cycles @ 250 MHz = 4ns per cycle)
     double dma_cycle_ns = 1000.0 / config.dma_clock_mhz;  // ns per DMA cycle
-    double total_time_ns = total_cycles * dma_cycle_ns;
+    double total_time_ns = static_cast<double>(total_cycles) * dma_cycle_ns;
     double total_time_us = total_time_ns / 1000.0;
 
     oss << "\n";
@@ -588,8 +588,8 @@ std::string TimelineFormatter::format_gantt(
         // Find all ops for this resource
         for (const auto& op : ops) {
             if (op.resource.type == type && op.resource.index == index) {
-                size_t start_col = static_cast<size_t>(op.start_cycle / scale);
-                size_t end_col = static_cast<size_t>(op.end_cycle / scale);
+                size_t start_col = static_cast<size_t>(static_cast<double>(op.start_cycle) / scale);
+                size_t end_col = static_cast<size_t>(static_cast<double>(op.end_cycle) / scale);
                 if (start_col >= chart_width) start_col = chart_width - 1;
                 if (end_col >= chart_width) end_col = chart_width - 1;
                 if (end_col <= start_col) end_col = start_col + 1;
@@ -654,7 +654,7 @@ std::string TimelineFormatter::format_occupancy_table(
 
     // Calculate timing
     double dma_cycle_ns = 1000.0 / config.dma_clock_mhz;
-    double total_time_ns = total_cycles * dma_cycle_ns;
+    double total_time_ns = static_cast<double>(total_cycles) * dma_cycle_ns;
     double total_time_us = total_time_ns / 1000.0;
 
     oss << "\n";
@@ -708,7 +708,7 @@ std::string TimelineFormatter::format_occupancy_table(
             ResourceId rid{type, i};
             auto it = stats.find(rid);
             if (it != stats.end()) {
-                double util = static_cast<double>(it->second.busy_cycles) / total_cycles * 100.0;
+                double util = static_cast<double>(it->second.busy_cycles) / static_cast<double>(total_cycles) * 100.0;
                 oss << std::setw(15) << std::left << (prefix + "[" + std::to_string(i) + "]")
                     << std::setw(12) << std::right << it->second.busy_cycles
                     << std::setw(12) << it->second.op_count
@@ -727,7 +727,7 @@ std::string TimelineFormatter::format_occupancy_table(
 
         // Aggregate for this resource type
         if (count > 0) {
-            double agg_util = static_cast<double>(total_busy) / (total_cycles * count) * 100.0;
+            double agg_util = static_cast<double>(total_busy) / (static_cast<double>(total_cycles) * count) * 100.0;
             oss << std::setw(15) << std::left << ("  " + prefix + " Total")
                 << std::setw(12) << std::right << total_busy
                 << std::setw(12) << total_ops
@@ -761,8 +761,8 @@ std::string TimelineFormatter::format_cycle_view(
     std::ostringstream oss;
 
     double dma_cycle_ns = 1000.0 / config.dma_clock_mhz;
-    double start_ns = start_cycle * dma_cycle_ns;
-    double end_ns = end_cycle * dma_cycle_ns;
+    double start_ns = static_cast<double>(start_cycle) * dma_cycle_ns;
+    double end_ns = static_cast<double>(end_cycle) * dma_cycle_ns;
 
     oss << "\n";
     oss << std::string(120, '=') << "\n";

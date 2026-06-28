@@ -187,8 +187,8 @@ int cmd_generate(int argc, char* argv[]) {
             std::string value = arg.substr(7);
             size_t x_pos = value.find('x');
             if (x_pos != std::string::npos) {
-                uint32_t rows = std::stoul(value.substr(0, x_pos));
-                uint32_t cols = std::stoul(value.substr(x_pos + 1));
+                uint32_t rows = static_cast<uint32_t>(std::stoul(value.substr(0, x_pos)));
+                uint32_t cols = static_cast<uint32_t>(std::stoul(value.substr(x_pos + 1)));
                 if (!config.noc) {
                     config.noc = NoCConfig{};
                 }

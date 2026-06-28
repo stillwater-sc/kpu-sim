@@ -111,8 +111,11 @@ void analyze_and_export() {
         auto tile_config = optimizer.optimize(wl.M, wl.N, wl.K);
 
         for (const auto& [strategy, strategy_name] : strategies) {
-            // Map DataflowStrategy to L2TileScheduler::SchedulingStrategy
-            L2TileScheduler::SchedulingStrategy l2_strategy;
+            // Map DataflowStrategy to L2TileScheduler::SchedulingStrategy.
+            // Initialize to silence gcc -Wmaybe-uninitialized (the switch
+            // below covers all three enum values but the optimizer can't tell).
+            L2TileScheduler::SchedulingStrategy l2_strategy =
+                L2TileScheduler::SchedulingStrategy::OUTPUT_STATIONARY;
             switch (strategy) {
                 case DataflowStrategy::WEIGHT_STATIONARY:
                     l2_strategy = L2TileScheduler::SchedulingStrategy::WEIGHT_STATIONARY;

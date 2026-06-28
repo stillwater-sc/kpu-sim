@@ -204,7 +204,7 @@ struct StreamerHarnessStats {
 
     double utilization() const {
         Cycle total = busy_cycles + idle_cycles;
-        return total > 0 ? static_cast<double>(busy_cycles) / total : 0.0;
+        return total > 0 ? static_cast<double>(busy_cycles) / static_cast<double>(total) : 0.0;
     }
 
     void reset() {
@@ -353,8 +353,8 @@ inline std::string StreamerHarnessStats::to_string() const {
     ss << "  Broadcasts:    " << broadcasts << "\n";
     ss << "  Drains:        " << drains << "\n";
     ss << "\nData Volume:\n";
-    ss << "  L2->L1:        " << (bytes_l2_to_l1 / 1024.0) << " KB\n";
-    ss << "  L1->L2:        " << (bytes_l1_to_l2 / 1024.0) << " KB\n";
+    ss << "  L2->L1:        " << (static_cast<double>(bytes_l2_to_l1) / 1024.0) << " KB\n";
+    ss << "  L1->L2:        " << (static_cast<double>(bytes_l1_to_l2) / 1024.0) << " KB\n";
     ss << "\nCompute:\n";
     ss << "  Operations:    " << compute_operations << "\n";
     ss << "  Cycles:        " << compute_cycles << "\n";

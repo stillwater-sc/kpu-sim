@@ -288,13 +288,13 @@ L3Schedule L3Scheduler::simulate_l2_execution(
     result.tensor_c_fetched = bytes_fetched_c;
 
     // Calculate overfetch factors
-    result.overfetch_factor_a = static_cast<double>(bytes_fetched_a) / result.tensor_a_size;
-    result.overfetch_factor_b = static_cast<double>(bytes_fetched_b) / result.tensor_b_size;
-    result.overfetch_factor_c = static_cast<double>(bytes_fetched_c) / result.tensor_c_size;
+    result.overfetch_factor_a = static_cast<double>(bytes_fetched_a) / static_cast<double>(result.tensor_a_size);
+    result.overfetch_factor_b = static_cast<double>(bytes_fetched_b) / static_cast<double>(result.tensor_b_size);
+    result.overfetch_factor_c = static_cast<double>(bytes_fetched_c) / static_cast<double>(result.tensor_c_size);
 
     Size total_ideal = result.tensor_a_size + result.tensor_b_size + result.tensor_c_size;
     Size total_fetched = bytes_fetched_a + bytes_fetched_b + bytes_fetched_c;
-    result.overfetch_factor_total = static_cast<double>(total_fetched) / total_ideal;
+    result.overfetch_factor_total = static_cast<double>(total_fetched) / static_cast<double>(total_ideal);
 
     // DRAM traffic
     result.dram_to_l3_bytes = total_fetched;
@@ -303,12 +303,12 @@ L3Schedule L3Scheduler::simulate_l2_execution(
 
     // L3 utilization
     result.l3_capacity_used_peak = simulator.get_peak_occupancy();
-    result.l3_utilization = static_cast<double>(result.l3_capacity_used_peak) / config_.l3_capacity;
+    result.l3_utilization = static_cast<double>(result.l3_capacity_used_peak) / static_cast<double>(config_.l3_capacity);
     result.num_l3_evictions = simulator.get_num_evictions();
 
     // Hit rate
     if (result.l2_tile_loads_total > 0) {
-        result.l3_hit_rate = static_cast<double>(result.l2_tile_loads_hit_l3) / result.l2_tile_loads_total;
+        result.l3_hit_rate = static_cast<double>(result.l2_tile_loads_hit_l3) / static_cast<double>(result.l2_tile_loads_total);
     }
 
     return result;

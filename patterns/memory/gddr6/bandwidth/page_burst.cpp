@@ -68,8 +68,8 @@ bool test_full_page_burst() {
     const auto& stats = harness.stats();
     uint64_t total_bytes = CACHE_LINES_PER_PAGE * CACHE_LINE_BYTES;  // 8 KB
     uint64_t cycles = harness.current_cycle();
-    double bytes_per_cycle = static_cast<double>(total_bytes) / cycles;
-    double hit_rate = 100.0 * stats.page_hits / (stats.page_hits + stats.page_empty);
+    double bytes_per_cycle = static_cast<double>(total_bytes) / static_cast<double>(cycles);
+    double hit_rate = 100.0 * static_cast<double>(stats.page_hits) / static_cast<double>(stats.page_hits + stats.page_empty);
 
     std::cout << "\n--- Full Page Burst Analysis ---" << std::endl;
     std::cout << "Total bytes: " << total_bytes << " (" << (total_bytes / 1024) << " KB)" << std::endl;
@@ -110,10 +110,10 @@ bool test_multi_bank_page_burst() {
 
     harness.print_stats();
 
-    const auto& stats = harness.stats();
+    [[maybe_unused]] const auto& stats = harness.stats();
     int total_accesses = 16 * CACHE_LINES_PER_PAGE;  // 2048 accesses
     uint64_t total_bytes = total_accesses * CACHE_LINE_BYTES;  // 128 KB
-    double bytes_per_cycle = static_cast<double>(total_bytes) / harness.current_cycle();
+    double bytes_per_cycle = static_cast<double>(total_bytes) / static_cast<double>(harness.current_cycle());
 
     std::cout << "\n--- Multi-Bank Page Burst Analysis ---" << std::endl;
     std::cout << "Banks: 16, Pages: 16, Cache lines per page: " << CACHE_LINES_PER_PAGE << std::endl;
@@ -161,8 +161,8 @@ bool test_page_utilization_comparison() {
         results[i] = {
             accesses,
             harness.current_cycle(),
-            static_cast<double>(accesses * CACHE_LINE_BYTES) / harness.current_cycle(),
-            100.0 * stats.page_hits / accesses
+            static_cast<double>(accesses * CACHE_LINE_BYTES) / static_cast<double>(harness.current_cycle()),
+            100.0 * static_cast<double>(stats.page_hits) / accesses
         };
     }
 
@@ -218,7 +218,7 @@ bool test_bank_scaling_page_burst() {
         harness.run_until_complete();
         uint64_t bytes = 4 * CACHE_LINES_PER_PAGE * CACHE_LINE_BYTES;
         results[0] = {4, bytes, harness.current_cycle(),
-                      static_cast<double>(bytes) / harness.current_cycle()};
+                      static_cast<double>(bytes) / static_cast<double>(harness.current_cycle())};
     }
 
     // 8 banks (two per bank group)
@@ -233,7 +233,7 @@ bool test_bank_scaling_page_burst() {
         harness.run_until_complete();
         uint64_t bytes = 8 * CACHE_LINES_PER_PAGE * CACHE_LINE_BYTES;
         results[1] = {8, bytes, harness.current_cycle(),
-                      static_cast<double>(bytes) / harness.current_cycle()};
+                      static_cast<double>(bytes) / static_cast<double>(harness.current_cycle())};
     }
 
     // 16 banks (all)
@@ -250,7 +250,7 @@ bool test_bank_scaling_page_burst() {
         harness.run_until_complete();
         uint64_t bytes = 16 * CACHE_LINES_PER_PAGE * CACHE_LINE_BYTES;
         results[2] = {16, bytes, harness.current_cycle(),
-                      static_cast<double>(bytes) / harness.current_cycle()};
+                      static_cast<double>(bytes) / static_cast<double>(harness.current_cycle())};
     }
 
     std::cout << "\n--- Bank Scaling Results (Full Page Bursts) ---" << std::endl;

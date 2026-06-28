@@ -83,10 +83,10 @@ ScheduleGenerator::Schedule ScheduleGenerator::generate(Size M, Size N, Size K,
         }
     }
 
-    schedule.estimated_time_ms = schedule.total_cycles / (perf_.clock_freq_ghz * 1e6);
+    schedule.estimated_time_ms = static_cast<double>(schedule.total_cycles) / (perf_.clock_freq_ghz * 1e6);
 
     Size total_flops = 2 * M * N * K;
-    schedule.arithmetic_intensity = static_cast<double>(total_flops) / schedule.total_dram_bytes;
+    schedule.arithmetic_intensity = static_cast<double>(total_flops) / static_cast<double>(schedule.total_dram_bytes);
 
     return schedule;
 }
@@ -398,7 +398,7 @@ void ScheduleGenerator::apply_double_buffering(Schedule& schedule) {
      */
 
     // Mark buffer IDs for commands
-    Size cmd_idx = 0;
+    [[maybe_unused]] Size cmd_idx = 0;
     int current_buffer = 0;
 
     for (auto& cmd : schedule.commands) {
@@ -602,7 +602,7 @@ void ScheduleGenerator::print_schedule(const Schedule& schedule, bool verbose) c
         std::cout << "  " << std::setw(12) << std::left << alloc.label
                   << ": 0x" << std::hex << std::setw(8) << std::setfill('0')
                   << alloc.base_addr << std::dec << std::setfill(' ')
-                  << " (" << (alloc.size_bytes / 1024.0) << " KB)\n";
+                  << " (" << (static_cast<double>(alloc.size_bytes) / 1024.0) << " KB)\n";
     }
 
     std::cout << "\nCommand Statistics:\n";
@@ -617,7 +617,7 @@ void ScheduleGenerator::print_schedule(const Schedule& schedule, bool verbose) c
     std::cout << "  Total cycles:    " << schedule.total_cycles << "\n";
     std::cout << "  Estimated time:  " << std::fixed << std::setprecision(3)
               << schedule.estimated_time_ms << " ms\n";
-    std::cout << "  DRAM traffic:    " << (schedule.total_dram_bytes / (1024.0 * 1024.0))
+    std::cout << "  DRAM traffic:    " << (static_cast<double>(schedule.total_dram_bytes) / (1024.0 * 1024.0))
               << " MB\n";
     std::cout << "  Arithmetic int:  " << std::setprecision(2)
               << schedule.arithmetic_intensity << " FLOPs/byte\n";
@@ -654,7 +654,7 @@ std::string ScheduleGenerator::export_json([[maybe_unused]] const Schedule& sche
 Cycle ScheduleGenerator::calculate_transfer_cycles(Size bytes, double bandwidth_gb_s) const {
     // Convert bandwidth from GB/s to bytes/cycle
     double bytes_per_cycle = (bandwidth_gb_s * 1e9) / (perf_.clock_freq_ghz * 1e9);
-    return static_cast<Cycle>(std::ceil(bytes / bytes_per_cycle));
+    return static_cast<Cycle>(std::ceil(static_cast<double>(bytes) / bytes_per_cycle));
 }
 
 Cycle ScheduleGenerator::calculate_compute_cycles(Size M, Size N, Size K) const {

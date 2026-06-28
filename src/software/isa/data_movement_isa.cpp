@@ -680,9 +680,9 @@ std::string OutputStationaryProgramBuilder::get_cache_stats() const {
     oss << "  Hits:       " << tile_cache_.hits << "\n";
     oss << "  Misses:     " << tile_cache_.misses << "\n";
     size_t total = tile_cache_.hits + tile_cache_.misses;
-    double hit_rate = total > 0 ? (100.0 * tile_cache_.hits / total) : 0.0;
+    double hit_rate = total > 0 ? (100.0 * static_cast<double>(tile_cache_.hits) / static_cast<double>(total)) : 0.0;
     oss << "  Hit rate:   " << std::fixed << std::setprecision(1) << hit_rate << "%\n";
-    oss << "  Bytes saved: " << (tile_cache_.bytes_saved / 1024.0) << " KB\n";
+    oss << "  Bytes saved: " << (static_cast<double>(tile_cache_.bytes_saved) / 1024.0) << " KB\n";
     oss << "  Resident tiles: " << tile_cache_.resident_tiles.size() << "\n";
     return oss.str();
 }
@@ -1092,7 +1092,7 @@ DMProgram OutputStationaryProgramBuilder::build() {
     // Calculate final estimates
     Size total_flops = 2 * config_.M * config_.N * config_.K;
     prog.estimates.arithmetic_intensity =
-        static_cast<double>(total_flops) / prog.estimates.external_mem_bytes;
+        static_cast<double>(total_flops) / static_cast<double>(prog.estimates.external_mem_bytes);
 
     return prog;
 }

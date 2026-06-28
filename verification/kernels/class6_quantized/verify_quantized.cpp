@@ -35,7 +35,7 @@ static QuantParams compute_symmetric_params(const float* data, size_t n, int bit
     }
     if (absmax == 0.0f) absmax = 1.0f;
     int qmax = (1 << (bits - 1)) - 1;  // 127 for INT8, 7 for INT4
-    float scale = absmax / qmax;
+    float scale = absmax / static_cast<float>(qmax);
     return { scale, 0 };
 }
 

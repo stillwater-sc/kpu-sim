@@ -44,9 +44,9 @@ void CompiledSchedule::print_summary() const {
     std::cout << "\n=== Compiled Schedule Summary ===\n";
     std::cout << "Estimated cycles: " << estimated_cycles << "\n";
     std::cout << "  Compute: " << compute_cycles << " ("
-              << (100.0 * compute_cycles / estimated_cycles) << "%)\n";
+              << (100.0 * static_cast<double>(compute_cycles) / static_cast<double>(estimated_cycles)) << "%)\n";
     std::cout << "  Data movement: " << data_movement_cycles << " ("
-              << (100.0 * data_movement_cycles / estimated_cycles) << "%)\n";
+              << (100.0 * static_cast<double>(data_movement_cycles) / static_cast<double>(estimated_cycles)) << "%)\n";
     std::cout << "\nCommands:\n";
     std::cout << "  Total: " << stats.total_commands << "\n";
     std::cout << "  DMA ops: " << stats.total_dma_ops << "\n";
@@ -572,7 +572,11 @@ uint8_t BlockMoverCompiler::get_trigger_for_node(size_t node_id) {
 }
 
 std::pair<uint8_t, uint8_t> BlockMoverCompiler::get_mesh_position(uint8_t l3_id) const {
-    return {l3_id / config_.mesh_cols, l3_id % config_.mesh_cols};
+    // C integer promotion bumps uint8_t / uint8_t to int, then the pair
+    // brace-init narrows it back - MSVC C4244 in <utility>. Cast at the
+    // construction site so the narrowing is explicit.
+    return {static_cast<uint8_t>(l3_id / config_.mesh_cols),
+            static_cast<uint8_t>(l3_id % config_.mesh_cols)};
 }
 
 uint8_t BlockMoverCompiler::get_l3_id(uint8_t row, uint8_t col) const {

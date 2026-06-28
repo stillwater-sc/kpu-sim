@@ -273,7 +273,7 @@ public:
                                     ++cnt;
                                 }
                             }
-                            output[((static_cast<uint64_t>(n) * C + c) * H_out + ho) * W_out + wo] = sum / cnt;
+                            output[((static_cast<uint64_t>(n) * C + c) * H_out + ho) * W_out + wo] = sum / static_cast<float>(cnt);
                         }
                     }
                 }
@@ -312,7 +312,7 @@ public:
                                 }
                             }
                             if (desc.pool_type == Pool2DDescriptor::PoolType::AVG && cnt > 0) {
-                                result /= cnt;
+                                result /= static_cast<float>(cnt);
                             }
                             output[((static_cast<uint64_t>(n) * C + c) * H_out + ho) * W_out + wo] = result;
                         }

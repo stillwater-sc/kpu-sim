@@ -352,7 +352,7 @@ void HBM3MemoryController::decode_address(
 
     // Extract channel
     if (channel_bits > 0) {
-        channel = addr & ((1 << channel_bits) - 1);
+        channel = static_cast<uint8_t>(addr & ((1 << channel_bits) - 1));
         addr >>= channel_bits;
     } else {
         channel = 0;
@@ -360,7 +360,7 @@ void HBM3MemoryController::decode_address(
 
     // Extract pseudo-channel
     if (pc_bits > 0) {
-        pc = addr & ((1 << pc_bits) - 1);
+        pc = static_cast<uint8_t>(addr & ((1 << pc_bits) - 1));
         addr >>= pc_bits;
     } else {
         pc = 0;
@@ -371,7 +371,7 @@ void HBM3MemoryController::decode_address(
     addr >>= col_bits;
 
     // Extract bank
-    bank = addr & ((1 << bank_bits) - 1);
+    bank = static_cast<uint8_t>(addr & ((1 << bank_bits) - 1));
     addr >>= bank_bits;
 
     // Extract row

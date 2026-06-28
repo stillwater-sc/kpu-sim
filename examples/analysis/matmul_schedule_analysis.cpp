@@ -406,16 +406,16 @@ std::vector<TilingConfig> enumerate_all_configurations() {
                 cfg.parallel_peak_concurrency = parallel_metrics.peak_compute_concurrency;
 
                 // Derived metrics
-                cfg.speedup = static_cast<double>(cfg.serial_total_cycles) / cfg.parallel_total_cycles;
+                cfg.speedup = static_cast<double>(cfg.serial_total_cycles) / static_cast<double>(cfg.parallel_total_cycles);
 
                 // Arithmetic intensity: FLOPs / bytes moved
                 uint64_t total_flops = 2ULL * M * N * K;
                 size_t total_bytes = M * K * elem_size + K * N * elem_size + M * N * elem_size;
-                cfg.arithmetic_intensity = static_cast<double>(total_flops) / total_bytes;
+                cfg.arithmetic_intensity = static_cast<double>(total_flops) / static_cast<double>(total_bytes);
 
                 // Memory bandwidth (GB/s at 1 GHz)
                 double total_cycles = static_cast<double>(cfg.parallel_total_cycles);
-                cfg.memory_bandwidth_gbps = total_bytes / total_cycles;
+                cfg.memory_bandwidth_gbps = static_cast<double>(total_bytes) / total_cycles;
 
                 cfg.pareto_efficiency = false;  // Will be set later
                 cfg.pareto_memory = false;
@@ -520,8 +520,8 @@ void print_summary_table(const std::vector<TilingConfig>& configs) {
             max_efficiency = cfg.parallel_efficiency;
             best_efficiency = &cfg;
         }
-        if (cfg.total_per_l3 < min_memory && cfg.fits_in_l3) {
-            min_memory = cfg.total_per_l3;
+        if (static_cast<double>(cfg.total_per_l3) < min_memory && cfg.fits_in_l3) {
+            min_memory = static_cast<double>(cfg.total_per_l3);
             best_memory = &cfg;
         }
     }

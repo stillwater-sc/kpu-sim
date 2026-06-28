@@ -289,7 +289,6 @@ int main() {
         d_proj.stride_h = 1; d_proj.stride_w = 1; d_proj.dtype = DataType::FLOAT32;
 
         auto apply_relu6 = [&](std::vector<float>& data) {
-            ElementwiseDescriptor e6;
             // relu6 = min(relu(x), 6) = relu(x) then min(x, 6)
             // Implement as: relu, then clamp via MUL_SCALAR trick...
             // Actually, just do it manually since fabric doesn't have relu6

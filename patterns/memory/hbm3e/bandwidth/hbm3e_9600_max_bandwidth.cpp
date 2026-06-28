@@ -79,8 +79,8 @@ int main() {
     uint64_t total_bytes = total_requests * CACHE_LINE_BYTES;
     uint64_t total_cycles = harness.current_cycle();
     double cycle_time_ns = 1.0 / harness.clock_ghz();  // ns per cycle
-    double total_time_ns = total_cycles * cycle_time_ns;
-    double achieved_bandwidth = (total_bytes / total_time_ns);  // GB/s
+    double total_time_ns = static_cast<double>(total_cycles) * cycle_time_ns;
+    double achieved_bandwidth = (static_cast<double>(total_bytes) / total_time_ns);  // GB/s
 
     std::cout << "\n=== Bandwidth Analysis ===" << std::endl;
     std::cout << "  Total bytes transferred: " << total_bytes << " bytes" << std::endl;

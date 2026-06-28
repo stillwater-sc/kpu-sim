@@ -228,7 +228,7 @@ TileCacheTracker::TileCacheTracker(const TileCache::Config& config)
 {
 }
 
-bool TileCacheTracker::needs_load(MatrixID matrix, TileCoord tile, Size size_bytes,
+bool TileCacheTracker::needs_load(MatrixID matrix, TileCoord tile, [[maybe_unused]] Size size_bytes,
                                    Cycle current_cycle) {
     TileKey key = make_key(matrix, tile);
 

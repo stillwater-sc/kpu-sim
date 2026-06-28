@@ -450,7 +450,7 @@ TEST_CASE("True kernel fusion optimization", "[kernel_graph][fusion][true_fusion
                               fused.program.estimates.external_mem_bytes;
 
         // Allow some tolerance (80% of expected)
-        REQUIRE(actual_savings >= expected_savings * 0.8);
+        REQUIRE(static_cast<double>(actual_savings) >= static_cast<double>(expected_savings) * 0.8);
     }
 
     SECTION("Fused has no DMA_STORE for producer C") {

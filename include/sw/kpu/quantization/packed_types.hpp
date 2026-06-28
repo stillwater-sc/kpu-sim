@@ -46,7 +46,7 @@ struct PackedInt4 {
     constexpr void set(size_t idx, std::int8_t val) {
         std::uint8_t masked = static_cast<std::uint8_t>(val) & 0x0F;
         if (idx == 0) {
-            data = (data & 0x0F) | (masked << 4);
+            data = static_cast<std::uint8_t>((data & 0x0F) | (masked << 4));
         } else {
             data = (data & 0xF0) | masked;
         }

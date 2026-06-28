@@ -66,7 +66,7 @@ bool test_stream_copy() {
     harness.print_stats();
 
     uint64_t total_bytes = STREAM_SIZE * CACHE_LINE_BYTES * 2;
-    double bytes_per_cycle = static_cast<double>(total_bytes) / harness.current_cycle();
+    double bytes_per_cycle = static_cast<double>(total_bytes) / static_cast<double>(harness.current_cycle());
 
     std::cout << "\n--- STREAM Copy Analysis ---" << std::endl;
     std::cout << "Elements: " << (STREAM_SIZE * ELEMENTS_PER_CACHE_LINE) << std::endl;
@@ -114,7 +114,7 @@ bool test_stream_add() {
     harness.print_stats();
 
     uint64_t total_bytes = STREAM_SIZE * CACHE_LINE_BYTES * 3;
-    double bytes_per_cycle = static_cast<double>(total_bytes) / harness.current_cycle();
+    double bytes_per_cycle = static_cast<double>(total_bytes) / static_cast<double>(harness.current_cycle());
 
     std::cout << "\n--- STREAM Add Analysis ---" << std::endl;
     std::cout << "Total bytes: " << total_bytes << " (" << (total_bytes / 1024) << " KB)" << std::endl;
@@ -155,7 +155,7 @@ bool test_stream_triad() {
     harness.print_stats();
 
     uint64_t total_bytes = STREAM_SIZE * CACHE_LINE_BYTES * 3;
-    double bytes_per_cycle = static_cast<double>(total_bytes) / harness.current_cycle();
+    double bytes_per_cycle = static_cast<double>(total_bytes) / static_cast<double>(harness.current_cycle());
 
     std::cout << "\n--- STREAM Triad Analysis ---" << std::endl;
     std::cout << "Total bytes: " << total_bytes << " (" << (total_bytes / 1024) << " KB)" << std::endl;
@@ -194,7 +194,7 @@ bool test_stream_comparison() {
         harness.run_until_complete();
         uint64_t bytes = STREAM_SIZE * CACHE_LINE_BYTES * 2;
         results[0] = {"Copy", 1, 1, harness.current_cycle(),
-                      static_cast<double>(bytes) / harness.current_cycle()};
+                      static_cast<double>(bytes) / static_cast<double>(harness.current_cycle())};
     }
 
     // Scale
@@ -214,7 +214,7 @@ bool test_stream_comparison() {
         harness.run_until_complete();
         uint64_t bytes = STREAM_SIZE * CACHE_LINE_BYTES * 3;
         results[2] = {"Add", 2, 1, harness.current_cycle(),
-                      static_cast<double>(bytes) / harness.current_cycle()};
+                      static_cast<double>(bytes) / static_cast<double>(harness.current_cycle())};
     }
 
     // Triad

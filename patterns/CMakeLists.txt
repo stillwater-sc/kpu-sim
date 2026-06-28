@@ -630,7 +630,8 @@ function(add_mlp_pattern NAME SOURCE_FILE)
     )
     # Add Universal library include path for quantization type dispatch
     if(UNIVERSAL_INCLUDE_DIR)
-        target_include_directories(mlp_${NAME} PRIVATE ${UNIVERSAL_INCLUDE_DIR})
+        # SYSTEM include: silences third-party warnings under CI's -Werror gate.
+        target_include_directories(mlp_${NAME} SYSTEM PRIVATE ${UNIVERSAL_INCLUDE_DIR})
     endif()
     set_target_properties(mlp_${NAME} PROPERTIES
         RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/patterns/compute

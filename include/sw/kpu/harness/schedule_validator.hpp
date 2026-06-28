@@ -145,7 +145,7 @@ public:
     // ========================================================================
 
     /// Check credit invariant (credits never negative)
-    bool check_credit_invariant(HarnessComponent comp, int32_t credits) const {
+    bool check_credit_invariant([[maybe_unused]] HarnessComponent comp, int32_t credits) const {
         return credits >= 0;
     }
 
@@ -423,7 +423,7 @@ inline ScheduleValidationResult ScheduleValidator::check_ordering(
 }
 
 inline bool ScheduleValidator::check_ordering_invariant(
-    const TileID& tile,
+    [[maybe_unused]] const TileID& tile,
     HarnessComponent current_stage,
     const std::set<HarnessComponent>& visited_stages) const
 {

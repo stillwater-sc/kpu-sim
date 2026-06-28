@@ -139,7 +139,7 @@ struct PCIeMailbox {
         descriptor_queue.push(desc);
         std::cout << "  HOST_CPU -> PCIe Mailbox: Enqueued descriptor " << desc.descriptor_id
                   << " (" << desc.description << ", "
-                  << (desc.transfer_size / 1024.0f) << " KB)\n";
+                  << (static_cast<float>(desc.transfer_size) / 1024.0f) << " KB)\n";
     }
 
     PCIeDMADescriptor pop_descriptor() {
@@ -377,9 +377,9 @@ bool execute_single_tile_autonomous(sw::kpu::KPUSimulator* kpu,
         host_bias[i] = 0.5f;
     }
 
-    std::cout << "  Input tensor: " << host_input.size() * sizeof(float) / 1024.0f << " KB\n";
-    std::cout << "  Weight matrix: " << host_weights.size() * sizeof(float) / 1024.0f << " KB\n";
-    std::cout << "  Bias vector: " << host_bias.size() * sizeof(float) / 1024.0f << " KB\n";
+    std::cout << "  Input tensor: " << static_cast<float>(host_input.size() * sizeof(float)) / 1024.0f << " KB\n";
+    std::cout << "  Weight matrix: " << static_cast<float>(host_weights.size() * sizeof(float)) / 1024.0f << " KB\n";
+    std::cout << "  Bias vector: " << static_cast<float>(host_bias.size() * sizeof(float)) / 1024.0f << " KB\n";
 
     // ========================================
     // Step 2: Define memory addresses

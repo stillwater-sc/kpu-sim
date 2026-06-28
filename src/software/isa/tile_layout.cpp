@@ -306,7 +306,7 @@ void IterationAwareLayout::precompute_placements() {
     // Place A tiles on even channels
     for (Size ti = 0; ti < config_.m_tiles; ++ti) {
         for (Size tk = 0; tk < config_.k_tiles; ++tk) {
-            uint8_t channel = 2 * ((ti + tk) % half_channels_);
+            uint8_t channel = static_cast<uint8_t>(2 * ((ti + tk) % half_channels_));
             Size idx = channel_placements_[channel].size();
             Address addr = idx * config_.tile_size_bytes;
             channel_placements_[channel].push_back({MatrixID::A, ti, 0, tk, addr});
@@ -316,7 +316,7 @@ void IterationAwareLayout::precompute_placements() {
     // Place B tiles on odd channels
     for (Size tk = 0; tk < config_.k_tiles; ++tk) {
         for (Size tj = 0; tj < config_.n_tiles; ++tj) {
-            uint8_t channel = 2 * ((tk + tj) % half_channels_) + 1;
+            uint8_t channel = static_cast<uint8_t>(2 * ((tk + tj) % half_channels_) + 1);
             Size idx = channel_placements_[channel].size();
             Address addr = idx * config_.tile_size_bytes;
             channel_placements_[channel].push_back({MatrixID::B, 0, tj, tk, addr});
@@ -326,7 +326,7 @@ void IterationAwareLayout::precompute_placements() {
     // Place C tiles on even channels (not concurrent with A/B loads)
     for (Size ti = 0; ti < config_.m_tiles; ++ti) {
         for (Size tj = 0; tj < config_.n_tiles; ++tj) {
-            uint8_t channel = 2 * ((ti + tj) % half_channels_);
+            uint8_t channel = static_cast<uint8_t>(2 * ((ti + tj) % half_channels_));
             Size idx = channel_placements_[channel].size();
             Address addr = idx * config_.tile_size_bytes;
             channel_placements_[channel].push_back({MatrixID::C, ti, tj, 0, addr});
@@ -340,13 +340,13 @@ Address IterationAwareLayout::lookup_address(MatrixID matrix,
     uint8_t channel;
     switch (matrix) {
         case MatrixID::A:
-            channel = 2 * ((ti + tk) % half_channels_);
+            channel = static_cast<uint8_t>(2 * ((ti + tk) % half_channels_));
             break;
         case MatrixID::B:
-            channel = 2 * ((tk + tj) % half_channels_) + 1;
+            channel = static_cast<uint8_t>(2 * ((tk + tj) % half_channels_) + 1);
             break;
         case MatrixID::C:
-            channel = 2 * ((ti + tj) % half_channels_);
+            channel = static_cast<uint8_t>(2 * ((ti + tj) % half_channels_));
             break;
         default:
             return 0;
@@ -383,13 +383,13 @@ TileLocation IterationAwareLayout::get_tile_location(MatrixID matrix,
     // Channel assignment: A on even, B on odd
     switch (matrix) {
         case MatrixID::A:
-            loc.channel = 2 * ((ti + tk) % half_channels_);
+            loc.channel = static_cast<uint8_t>(2 * ((ti + tk) % half_channels_));
             break;
         case MatrixID::B:
-            loc.channel = 2 * ((tk + tj) % half_channels_) + 1;
+            loc.channel = static_cast<uint8_t>(2 * ((tk + tj) % half_channels_) + 1);
             break;
         case MatrixID::C:
-            loc.channel = 2 * ((ti + tj) % half_channels_);
+            loc.channel = static_cast<uint8_t>(2 * ((ti + tj) % half_channels_));
             break;
     }
 
@@ -513,7 +513,7 @@ void HardwareInterleavedLayout::precompute_addresses() {
     for (Size ti = 0; ti < config_.m_tiles; ++ti) {
         for (Size tk = 0; tk < config_.k_tiles; ++tk) {
             Size local_idx = ti * config_.k_tiles + tk;
-            uint8_t target_channel = 2 * ((ti + tk) % half_channels);
+            uint8_t target_channel = static_cast<uint8_t>(2 * ((ti + tk) % half_channels));
             if (target_channel >= config_.num_channels) {
                 target_channel = 0;  // Fallback for odd channel counts
             }
@@ -528,7 +528,7 @@ void HardwareInterleavedLayout::precompute_addresses() {
     for (Size tk = 0; tk < config_.k_tiles; ++tk) {
         for (Size tj = 0; tj < config_.n_tiles; ++tj) {
             Size local_idx = tk * config_.n_tiles + tj;
-            uint8_t target_channel = 2 * ((tk + tj) % half_channels) + 1;
+            uint8_t target_channel = static_cast<uint8_t>(2 * ((tk + tj) % half_channels) + 1);
             if (target_channel >= config_.num_channels) {
                 target_channel = 1 % config_.num_channels;  // Fallback
             }
@@ -609,7 +609,7 @@ std::string HardwareInterleavedLayout::generate_report() const {
         total_used = c_addresses_.back() + config_.tile_size_bytes;
     }
     Address minimum = config_.total_tiles() * config_.tile_size_bytes;
-    double overhead = 100.0 * (total_used - minimum) / minimum;
+    double overhead = 100.0 * static_cast<double>(total_used - minimum) / static_cast<double>(minimum);
 
     oss << "\nMemory Utilization:\n";
     oss << "  Total address space used: " << total_used << " bytes\n";

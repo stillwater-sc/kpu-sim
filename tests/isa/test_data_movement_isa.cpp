@@ -340,10 +340,10 @@ bool test_large_matmul_program() {
 
     // Check traffic estimates
     std::cout << "\nTraffic Estimates:\n";
-    std::cout << "  External memory: " << (program.estimates.external_mem_bytes / (1024.0 * 1024.0))
+    std::cout << "  External memory: " << (static_cast<double>(program.estimates.external_mem_bytes) / (1024.0 * 1024.0))
               << " MB\n";
-    std::cout << "  L3 traffic: " << (program.estimates.l3_bytes / (1024.0 * 1024.0)) << " MB\n";
-    std::cout << "  L2 traffic: " << (program.estimates.l2_bytes / (1024.0 * 1024.0)) << " MB\n";
+    std::cout << "  L3 traffic: " << (static_cast<double>(program.estimates.l3_bytes) / (1024.0 * 1024.0)) << " MB\n";
+    std::cout << "  L2 traffic: " << (static_cast<double>(program.estimates.l2_bytes) / (1024.0 * 1024.0)) << " MB\n";
 
     // For 1024x1024x1024 with Ti=Tj=Tk=64:
     // Minimum DRAM read = A (4MB) + B (4MB) = 8MB
@@ -353,15 +353,15 @@ bool test_large_matmul_program() {
     // But reuse should keep it much lower than naive
 
     Size min_external = (config.M * config.K + config.K * config.N + config.M * config.N) * 4;
-    double reuse_factor = static_cast<double>(program.estimates.external_mem_bytes) / min_external;
+    double reuse_factor = static_cast<double>(program.estimates.external_mem_bytes) / static_cast<double>(min_external);
 
-    std::cout << "  Minimum external: " << (min_external / (1024.0 * 1024.0)) << " MB\n";
+    std::cout << "  Minimum external: " << (static_cast<double>(min_external) / (1024.0 * 1024.0)) << " MB\n";
     std::cout << "  Reuse factor: " << std::fixed << std::setprecision(2) << reuse_factor << "x\n";
     std::cout << "  Arithmetic intensity: " << program.estimates.arithmetic_intensity << " FLOPs/byte\n";
 
     // 2*M*N*K FLOPs = 2*1024^3 = 2.147B FLOPs
     Size total_flops = 2ULL * config.M * config.N * config.K;
-    std::cout << "  Total FLOPs: " << (total_flops / 1e9) << " GFLOPs\n";
+    std::cout << "  Total FLOPs: " << (static_cast<double>(total_flops) / 1e9) << " GFLOPs\n";
 
     std::string error;
     if (!validate_program(program, error)) {

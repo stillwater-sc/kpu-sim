@@ -95,7 +95,7 @@ int main(int argc, char* argv[]) {
 
     // Calculate page hit rate
     size_t total_accesses = NUM_PER_BANK * NUM_BANKS;
-    double page_hit_rate = 100.0 * stats.page_hits / total_accesses;
+    double page_hit_rate = 100.0 * static_cast<double>(stats.page_hits) / static_cast<double>(total_accesses);
 
     std::cout << "\nThroughput Analysis:" << std::endl;
     std::cout << "  Total accesses: " << total_accesses << std::endl;

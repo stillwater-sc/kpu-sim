@@ -68,7 +68,7 @@ Examples:
 // ============================================================================
 
 constexpr uint64_t BANK_BITS = 4;
-constexpr uint64_t ROW_BITS = 16;
+[[maybe_unused]] constexpr uint64_t ROW_BITS = 16;  // documents address layout
 constexpr uint64_t COL_BITS = 10;
 constexpr uint64_t COL_SHIFT = 6;
 constexpr uint64_t BANK_SHIFT = COL_SHIFT + COL_BITS;
@@ -145,7 +145,7 @@ struct FidelityResults {
 
 FidelityResults run_ca_workload(
     const std::vector<ValidationRequest>& requests,
-    const CalibrationData& cal,
+    [[maybe_unused]] const CalibrationData& cal,
     bool verbose)
 {
     FidelityResults results;
@@ -530,7 +530,7 @@ int main(int argc, char* argv[]) {
             opts.requests = std::stoul(arg.substr(11));
         }
         else if (arg.rfind("--seed=", 0) == 0) {
-            opts.seed = std::stoul(arg.substr(7));
+            opts.seed = static_cast<uint32_t>(std::stoul(arg.substr(7)));
         }
         else if (arg.rfind("--threshold=", 0) == 0) {
             opts.threshold = std::stod(arg.substr(12));

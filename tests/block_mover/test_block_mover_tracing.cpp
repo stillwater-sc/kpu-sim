@@ -433,7 +433,7 @@ TEST_CASE_METHOD(BlockMoverTracingFixture, "Trace: BlockMover Bandwidth Analysis
             if (duration > 0 && trace.clock_freq_ghz.has_value()) {
                 // Effective bandwidth = bytes / (duration_cycles / clock_freq_ghz)
                 double duration_ns = static_cast<double>(duration) / trace.clock_freq_ghz.value();
-                double effective_bw_gb_s = (payload.bytes_transferred / duration_ns);
+                double effective_bw_gb_s = (static_cast<double>(payload.bytes_transferred) / duration_ns);
 
                 std::cout << payload.bytes_transferred << " | "
                          << duration << " | "

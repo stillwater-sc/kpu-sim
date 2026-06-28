@@ -180,7 +180,7 @@ public:
             CycleCount stalled = track.get_state_duration(ResourceState::STALLED);
 
             if (busy + stalled > 0) {
-                double contention = static_cast<double>(stalled) / (busy + stalled);
+                double contention = static_cast<double>(stalled) / static_cast<double>(busy + stalled);
                 if (contention >= contention_threshold) {
                     Bottleneck bn;
                     bn.resource_type = res_id.type;
@@ -256,7 +256,7 @@ public:
             }
 
             ws.avg_concurrent = ws.duration > 0 ?
-                static_cast<double>(weighted_sum) / ws.duration : 0.0;
+                static_cast<double>(weighted_sum) / static_cast<double>(ws.duration) : 0.0;
 
             // Calculate utilization for this wave
             CycleCount compute_busy = 0;
@@ -298,9 +298,9 @@ public:
             CycleCount max_memory = memory_resources * ws.duration;
 
             ws.compute_utilization = max_compute > 0 ?
-                static_cast<double>(compute_busy) / max_compute : 0.0;
+                static_cast<double>(compute_busy) / static_cast<double>(max_compute) : 0.0;
             ws.memory_utilization = max_memory > 0 ?
-                static_cast<double>(memory_busy) / max_memory : 0.0;
+                static_cast<double>(memory_busy) / static_cast<double>(max_memory) : 0.0;
 
             stats.push_back(ws);
         }
@@ -365,7 +365,7 @@ public:
         }
 
         report.avg_concurrency = report.total_duration > 0 ?
-            static_cast<double>(weighted_sum) / report.total_duration : 0.0;
+            static_cast<double>(weighted_sum) / static_cast<double>(report.total_duration) : 0.0;
 
         // Utilization by type
         for (const auto& [type, util] : resource_stats_.avg_utilization) {
@@ -393,7 +393,7 @@ public:
             total_op_duration += t.get_duration_cycles();
         }
         report.overlap_efficiency = total_op_duration > 0 ?
-            static_cast<double>(report.total_overlap_cycles) / total_op_duration : 0.0;
+            static_cast<double>(report.total_overlap_cycles) / static_cast<double>(total_op_duration) : 0.0;
 
         return report;
     }

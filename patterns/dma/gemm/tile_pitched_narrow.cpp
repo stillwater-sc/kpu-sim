@@ -123,7 +123,7 @@ int main(int argc, char* argv[]) {
 
     // Memory efficiency
     // We're only transferring tile_row_bytes out of pitch_bytes per row
-    double data_efficiency = 100.0 * tile_row_bytes / matrix.pitch_bytes;
+    double data_efficiency = 100.0 * static_cast<double>(tile_row_bytes) / static_cast<double>(matrix.pitch_bytes);
     std::cout << "Data efficiency per row: " << std::fixed << std::setprecision(1)
               << data_efficiency << "% (tile vs pitch)" << std::endl;
 

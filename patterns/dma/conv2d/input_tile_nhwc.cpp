@@ -149,7 +149,7 @@ int main(int argc, char* argv[]) {
 
     // Bytes efficiency
     size_t tile_total_bytes = TILE_H * tile_row_bytes;
-    double bytes_per_cycle = static_cast<double>(tile_total_bytes) / stats.total_cycles;
+    double bytes_per_cycle = static_cast<double>(tile_total_bytes) / static_cast<double>(stats.total_cycles);
     std::cout << "Bytes per cycle: " << std::fixed << std::setprecision(2)
               << bytes_per_cycle << std::endl;
 

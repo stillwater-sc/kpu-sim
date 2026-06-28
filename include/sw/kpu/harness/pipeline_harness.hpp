@@ -186,7 +186,7 @@ public:
     bool has_pending() const override;
 
     /// Step simulation by specified cycles
-    void step(Cycle cycles);
+    void step(Cycle cycles) override;
 
     // ========================================================================
     // Memory Initialization
@@ -326,20 +326,20 @@ inline void PipelineStats::finalize(double peak_gflops, double peak_bw_gbps, dou
 
     // Pipeline efficiency
     if (total_cycles > 0) {
-        pipeline_efficiency = static_cast<double>(compute_cycles) / total_cycles;
+        pipeline_efficiency = static_cast<double>(compute_cycles) / static_cast<double>(total_cycles);
     }
 
     // Compute utilization
     if (peak_gflops > 0 && total_cycles > 0) {
         double achieved_gflops = (static_cast<double>(streamer_stats.compute_operations) /
-                                  total_cycles) * clock_ghz;
+                                  static_cast<double>(total_cycles)) * clock_ghz;
         compute_utilization = achieved_gflops / peak_gflops;
     }
 
     // Memory bandwidth utilization
     if (peak_bw_gbps > 0 && total_cycles > 0) {
-        double bytes = dma_stats.bytes_transferred;
-        double seconds = total_cycles / (clock_ghz * 1e9);
+        double bytes = static_cast<double>(dma_stats.bytes_transferred);
+        double seconds = static_cast<double>(total_cycles) / (clock_ghz * 1e9);
         double achieved_bw = (bytes / 1e9) / seconds;
         memory_bandwidth_utilization = achieved_bw / peak_bw_gbps;
     }

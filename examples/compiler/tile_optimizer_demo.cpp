@@ -33,13 +33,13 @@ void print_config(const char* label, const TileOptimizer::TileConfig& config,
 
     std::cout << "Memory Traffic:\n";
     std::cout << "  DRAM:         " << std::fixed << std::setprecision(2)
-              << (config.dram_accesses / (1024.0 * 1024.0)) << " MB\n";
-    std::cout << "  L3:           " << (config.l3_accesses / (1024.0 * 1024.0)) << " MB\n";
-    std::cout << "  L2:           " << (config.l2_accesses / (1024.0 * 1024.0)) << " MB\n\n";
+              << (static_cast<double>(config.dram_accesses) / (1024.0 * 1024.0)) << " MB\n";
+    std::cout << "  L3:           " << (static_cast<double>(config.l3_accesses) / (1024.0 * 1024.0)) << " MB\n";
+    std::cout << "  L2:           " << (static_cast<double>(config.l2_accesses) / (1024.0 * 1024.0)) << " MB\n\n";
 
     std::cout << "Cache Footprint:\n";
-    std::cout << "  L2 footprint: " << (config.l2_footprint / 1024.0) << " KB\n";
-    std::cout << "  L3 footprint: " << (config.l3_footprint / 1024.0) << " KB\n\n";
+    std::cout << "  L2 footprint: " << (static_cast<double>(config.l2_footprint) / 1024.0) << " KB\n";
+    std::cout << "  L3 footprint: " << (static_cast<double>(config.l3_footprint) / 1024.0) << " KB\n\n";
 
     std::cout << "Performance Metrics:\n";
     std::cout << "  Arithmetic Intensity: " << config.arithmetic_intensity
@@ -47,7 +47,7 @@ void print_config(const char* label, const TileOptimizer::TileConfig& config,
 
     // Calculate naive DRAM traffic
     Size naive_dram = (M * K + K * N + M * N) * 4;  // 4 bytes per float32
-    double improvement = static_cast<double>(naive_dram) / config.dram_accesses;
+    double improvement = static_cast<double>(naive_dram) / static_cast<double>(config.dram_accesses);
     std::cout << "  DRAM Reduction:       " << improvement << "x vs naive\n\n";
 
     std::cout << "Validation: " << (config.valid ? "✓ VALID" : "✗ INVALID");
@@ -131,7 +131,7 @@ int main() {
                       << std::setw(3) << cfg.Tj << "×"
                       << std::setw(3) << cfg.Tk << " | "
                       << std::setw(9) << std::fixed << std::setprecision(2)
-                      << (cfg.dram_accesses / (1024.0 * 1024.0)) << " | "
+                      << (static_cast<double>(cfg.dram_accesses) / (1024.0 * 1024.0)) << " | "
                       << std::setw(16) << cfg.arithmetic_intensity << "\n";
         };
 
@@ -141,8 +141,8 @@ int main() {
 
         std::cout << "\nSearch improvement: "
                   << std::setprecision(1)
-                  << (100.0 * (analytical.dram_accesses - searched.dram_accesses)
-                      / analytical.dram_accesses)
+                  << (100.0 * static_cast<double>(analytical.dram_accesses - searched.dram_accesses)
+                      / static_cast<double>(analytical.dram_accesses))
                   << "% reduction in DRAM traffic\n";
     }
 

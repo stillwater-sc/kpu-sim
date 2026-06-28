@@ -175,12 +175,12 @@ public:
 
         double hit_rate() const {
             uint64_t total = page_hits + page_conflicts + page_empty;
-            return total > 0 ? static_cast<double>(page_hits) / total : 0.0;
+            return total > 0 ? static_cast<double>(page_hits) / static_cast<double>(total) : 0.0;
         }
 
         double avg_latency() const {
             uint64_t total = reads + writes;
-            return total > 0 ? static_cast<double>(total_latency) / total : 0.0;
+            return total > 0 ? static_cast<double>(total_latency) / static_cast<double>(total) : 0.0;
         }
     };
 
@@ -224,7 +224,7 @@ public:
         uint32_t row_bits = 15; // 32K rows
 
         col = (address >> col_bits) & ((1 << col_bits) - 1);
-        bank = (address >> (col_bits + col_bits)) & ((1 << bank_bits) - 1);
+        bank = static_cast<uint8_t>((address >> (col_bits + col_bits)) & ((1 << bank_bits) - 1));
         row = (address >> (col_bits + col_bits + bank_bits)) & ((1 << row_bits) - 1);
 
         // Ensure bank is in range

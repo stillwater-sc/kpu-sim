@@ -1544,7 +1544,7 @@ private:
             // Compute strides for input
             std::vector<py::ssize_t> x_strides(x_buf.ndim);
             py::ssize_t stride = 1;
-            for (int i = x_buf.ndim - 1; i >= 0; --i) {
+            for (int i = static_cast<int>(x_buf.ndim - 1); i >= 0; --i) {
                 x_strides[i] = stride;
                 stride *= x_buf.shape[i];
             }
@@ -1552,7 +1552,7 @@ private:
             // Compute strides for output
             std::vector<py::ssize_t> y_strides(x_buf.ndim);
             stride = 1;
-            for (int i = x_buf.ndim - 1; i >= 0; --i) {
+            for (int i = static_cast<int>(x_buf.ndim - 1); i >= 0; --i) {
                 y_strides[i] = stride;
                 stride *= new_shape[i];
             }
@@ -1575,7 +1575,7 @@ private:
                 y_ptr[y_idx] = x_ptr[x_idx];
 
                 // Increment coordinates
-                for (int d = x_buf.ndim - 1; d >= 0; --d) {
+                for (int d = static_cast<int>(x_buf.ndim - 1); d >= 0; --d) {
                     coords[d]++;
                     if (coords[d] < x_buf.shape[d]) break;
                     coords[d] = 0;
@@ -1604,7 +1604,7 @@ private:
                 attrs["end_dim"].cast<int>() : -1;
 
             // Normalize negative indices
-            int ndim = x_buf.ndim;
+            int ndim = static_cast<int>(x_buf.ndim);
             if (start_dim < 0) start_dim = ndim + start_dim;
             if (end_dim < 0) end_dim = ndim + end_dim;
 
@@ -1656,7 +1656,7 @@ private:
 
             // Get shape info from first input
             py::buffer_info first_buf = input_arrays[0].request();
-            int ndim = first_buf.ndim;
+            int ndim = static_cast<int>(first_buf.ndim);
             if (dim < 0) dim = ndim + dim;
 
             // Compute output shape - copy from first input's shape
@@ -1746,14 +1746,14 @@ private:
                 try {
                     // Try single int
                     int axis = attrs["axis"].cast<int>();
-                    if (axis < 0) axis = x_buf.ndim + axis;
+                    if (axis < 0) axis = static_cast<int>(x_buf.ndim + axis);
                     axes.push_back(axis);
                 } catch (...) {
                     // Try tuple/list
                     auto axis_list = attrs["axis"].cast<py::list>();
                     for (size_t i = 0; i < py::len(axis_list); ++i) {
                         int axis = axis_list[i].cast<int>();
-                        if (axis < 0) axis = x_buf.ndim + axis;
+                        if (axis < 0) axis = static_cast<int>(x_buf.ndim + axis);
                         axes.push_back(axis);
                     }
                 }
@@ -1789,7 +1789,7 @@ private:
                     std::vector<py::ssize_t> out_shape(x_buf.ndim, 1);
                     Y = py::array_t<float>(out_shape);
                 } else {
-                    Y = py::array_t<float>({static_cast<py::ssize_t>(1)});
+                    Y = py::array_t<float>(std::vector<py::ssize_t>{static_cast<py::ssize_t>(1)});
                 }
                 Y.mutable_data()[0] = result;
 
@@ -1823,7 +1823,7 @@ private:
                 // Compute input/output strides
                 std::vector<py::ssize_t> x_strides(x_buf.ndim);
                 py::ssize_t stride = 1;
-                for (int d = x_buf.ndim - 1; d >= 0; --d) {
+                for (int d = static_cast<int>(x_buf.ndim - 1); d >= 0; --d) {
                     x_strides[d] = stride;
                     stride *= x_buf.shape[d];
                 }
@@ -1873,7 +1873,7 @@ private:
                     }
 
                     // Increment coordinates
-                    for (int d = x_buf.ndim - 1; d >= 0; --d) {
+                    for (int d = static_cast<int>(x_buf.ndim - 1); d >= 0; --d) {
                         coords[d]++;
                         if (coords[d] < x_buf.shape[d]) break;
                         coords[d] = 0;
@@ -2241,7 +2241,7 @@ private:
 
             // Get axis (default: -1, meaning last axis)
             int axis = attrs.contains("axis") ? attrs["axis"].cast<int>() : -1;
-            if (axis < 0) axis += x_buf.ndim;
+            if (axis < 0) axis += static_cast<int>(x_buf.ndim);
 
             // Create output array
             std::vector<py::ssize_t> out_shape(x_buf.shape.begin(), x_buf.shape.end());
@@ -2252,7 +2252,7 @@ private:
             // Compute strides
             std::vector<py::ssize_t> strides(static_cast<size_t>(x_buf.ndim));
             py::ssize_t stride = 1;
-            for (int d = x_buf.ndim - 1; d >= 0; --d) {
+            for (int d = static_cast<int>(x_buf.ndim - 1); d >= 0; --d) {
                 strides[static_cast<size_t>(d)] = stride;
                 stride *= x_buf.shape[static_cast<size_t>(d)];
             }
@@ -2266,7 +2266,7 @@ private:
                 // Compute base index for this slice
                 py::ssize_t base_idx = 0;
                 py::ssize_t remaining = outer;
-                for (int d = x_buf.ndim - 1; d >= 0; --d) {
+                for (int d = static_cast<int>(x_buf.ndim - 1); d >= 0; --d) {
                     if (d == axis) continue;
                     py::ssize_t coord = remaining % x_buf.shape[static_cast<size_t>(d)];
                     remaining /= x_buf.shape[static_cast<size_t>(d)];
@@ -2406,7 +2406,10 @@ private:
             }
 
             py::array_t<float> Q, K, V;
-            py::ssize_t batch_size, seq_len, d_model, d_k, d_v;
+            // Initialise to 0 so gcc -Wmaybe-uninitialized is happy.
+            // These are only consumed inside the same `include_qkv_projection`
+            // branch that assigns them; the analyser can't track that.
+            py::ssize_t batch_size = 0, seq_len = 0, d_model = 0, d_k = 0, d_v = 0;
             py::array_t<float> w_o;  // Output projection weights
 
             if (include_qkv_projection) {
@@ -3232,14 +3235,14 @@ private:
             double l2_fraction = 0.25;  // L2 is 4x faster than DRAM
             double l1_fraction = 0.125; // L1 is 8x faster than DRAM
 
-            stats.dram.read_cycles = static_cast<int64_t>(stats.dram.read_bytes * dram_fraction / 8);
-            stats.dram.write_cycles = static_cast<int64_t>(stats.dram.write_bytes * dram_fraction / 8);
-            stats.l3.read_cycles = static_cast<int64_t>(stats.l3.read_bytes * l3_fraction / 8);
-            stats.l3.write_cycles = static_cast<int64_t>(stats.l3.write_bytes * l3_fraction / 8);
-            stats.l2.read_cycles = static_cast<int64_t>(stats.l2.read_bytes * l2_fraction / 8);
-            stats.l2.write_cycles = static_cast<int64_t>(stats.l2.write_bytes * l2_fraction / 8);
-            stats.l1.read_cycles = static_cast<int64_t>(stats.l1.read_bytes * l1_fraction / 8);
-            stats.l1.write_cycles = static_cast<int64_t>(stats.l1.write_bytes * l1_fraction / 8);
+            stats.dram.read_cycles = static_cast<int64_t>(static_cast<double>(stats.dram.read_bytes) * dram_fraction / 8);
+            stats.dram.write_cycles = static_cast<int64_t>(static_cast<double>(stats.dram.write_bytes) * dram_fraction / 8);
+            stats.l3.read_cycles = static_cast<int64_t>(static_cast<double>(stats.l3.read_bytes) * l3_fraction / 8);
+            stats.l3.write_cycles = static_cast<int64_t>(static_cast<double>(stats.l3.write_bytes) * l3_fraction / 8);
+            stats.l2.read_cycles = static_cast<int64_t>(static_cast<double>(stats.l2.read_bytes) * l2_fraction / 8);
+            stats.l2.write_cycles = static_cast<int64_t>(static_cast<double>(stats.l2.write_bytes) * l2_fraction / 8);
+            stats.l1.read_cycles = static_cast<int64_t>(static_cast<double>(stats.l1.read_bytes) * l1_fraction / 8);
+            stats.l1.write_cycles = static_cast<int64_t>(static_cast<double>(stats.l1.write_bytes) * l1_fraction / 8);
         }
 
         // Store clock frequency in stats for reporting
@@ -3250,7 +3253,7 @@ private:
         // At 1 GHz: 1 cycle = 1 ns, so FLOPs/cycle = GFLOPS
         // At 2 GHz: 1 cycle = 0.5 ns, so need to multiply by 2
         if (stats.cycles > 0) {
-            stats.gflops = (static_cast<double>(stats.matmul_flops) / stats.cycles) * clock_frequency_ghz_;
+            stats.gflops = (static_cast<double>(stats.matmul_flops) / static_cast<double>(stats.cycles)) * clock_frequency_ghz_;
             stats.utilization = fabric_stats.utilization();
             stats.efficiency = fabric_stats.mac_efficiency(compute_fabric_->peak_macs_per_cycle());
         }
@@ -3264,7 +3267,7 @@ private:
         // Calculate memory bandwidth (bytes/cycle * clock_ghz = GB/s)
         if (stats.memory_cycles > 0) {
             int64_t total_bytes = stats.external_bytes + stats.memory_bytes;
-            stats.memory_bandwidth_gbps = (static_cast<double>(total_bytes) / stats.memory_cycles) * clock_frequency_ghz_;
+            stats.memory_bandwidth_gbps = (static_cast<double>(total_bytes) / static_cast<double>(stats.memory_cycles)) * clock_frequency_ghz_;
         }
 
         // Get output

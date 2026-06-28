@@ -72,8 +72,8 @@ int main() {
     uint64_t total_bytes = stats.reads * CACHE_LINE_BYTES;
     uint64_t total_cycles = harness.current_cycle();
     double clock_ghz = 2.8;  // HBM3-5600 runs at 2.8 GHz CK
-    double time_ns = total_cycles / clock_ghz;
-    double bandwidth_gbps = (total_bytes / time_ns);
+    double time_ns = static_cast<double>(total_cycles) / clock_ghz;
+    double bandwidth_gbps = (static_cast<double>(total_bytes) / time_ns);
 
     std::cout << "\n=== Bandwidth Analysis ===" << std::endl;
     std::cout << "  Total bytes transferred: " << total_bytes << std::endl;

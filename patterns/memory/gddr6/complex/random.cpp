@@ -27,7 +27,7 @@ int main(int argc, char* argv[]) {
         } else if (std::strcmp(argv[i], "--no-trace") == 0) {
             export_trace = false;
         } else if (std::strcmp(argv[i], "--seed") == 0 && i + 1 < argc) {
-            seed = std::stoul(argv[++i]);
+            seed = static_cast<uint32_t>(std::stoul(argv[++i]));
         }
     }
 
@@ -79,9 +79,9 @@ int main(int argc, char* argv[]) {
     }
 
     // Calculate hit rates
-    double hit_rate = 100.0 * stats.page_hits / NUM_ACCESSES;
-    double conflict_rate = 100.0 * stats.page_conflicts / NUM_ACCESSES;
-    double empty_rate = 100.0 * stats.page_empty / NUM_ACCESSES;
+    double hit_rate = 100.0 * static_cast<double>(stats.page_hits) / NUM_ACCESSES;
+    double conflict_rate = 100.0 * static_cast<double>(stats.page_conflicts) / NUM_ACCESSES;
+    double empty_rate = 100.0 * static_cast<double>(stats.page_empty) / NUM_ACCESSES;
 
     std::cout << "\nRandom Access Analysis:" << std::endl;
     std::cout << "  Page hits: " << stats.page_hits

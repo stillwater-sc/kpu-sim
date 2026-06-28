@@ -477,7 +477,7 @@ StorageScheduler::PerformanceMetrics StorageScheduler::get_performance_metrics()
         }
     }
 
-    metrics.average_bank_utilization = static_cast<double>(busy_banks) / num_banks;
+    metrics.average_bank_utilization = static_cast<double>(busy_banks) / static_cast<double>(num_banks);
     metrics.completed_storage_operations = 0; // Would track this in real implementation
 
     return metrics;

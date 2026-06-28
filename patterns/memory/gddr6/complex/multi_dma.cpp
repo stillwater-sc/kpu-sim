@@ -72,7 +72,7 @@ bool test_concurrent_dma(int num_dmas, int tiles_per_dma) {
     harness.print_stats();
 
     uint64_t total_bytes = total_accesses * CACHE_LINE_BYTES;
-    double bytes_per_cycle = static_cast<double>(total_bytes) / harness.current_cycle();
+    double bytes_per_cycle = static_cast<double>(total_bytes) / static_cast<double>(harness.current_cycle());
 
     std::cout << "\n--- " << num_dmas << "-DMA Analysis ---" << std::endl;
     std::cout << "Total tiles: " << (num_dmas * tiles_per_dma) << std::endl;
@@ -127,7 +127,7 @@ bool test_dma_scaling() {
             num_dmas * TILES_PER_DMA,
             bytes,
             harness.current_cycle(),
-            static_cast<double>(bytes) / harness.current_cycle()
+            static_cast<double>(bytes) / static_cast<double>(harness.current_cycle())
         });
     }
 
@@ -169,8 +169,8 @@ bool test_double_buffer_dma() {
     // Read DMAs use banks 0-7, write DMAs use banks 8-15
     for (int tile = 0; tile < TILES_PER_DMA; ++tile) {
         for (int dma = 0; dma < NUM_READ_DMAS; ++dma) {
-            uint8_t read_bank = dma;           // Banks 0-7
-            uint8_t write_bank = 8 + dma;      // Banks 8-15
+            uint8_t read_bank = static_cast<uint8_t>(dma);           // Banks 0-7
+            uint8_t write_bank = static_cast<uint8_t>(8 + dma);      // Banks 8-15
             uint32_t row = 100 + tile;
 
             for (int line = 0; line < CACHE_LINES_PER_TILE; ++line) {
@@ -190,7 +190,7 @@ bool test_double_buffer_dma() {
 
     int total_ops = NUM_READ_DMAS * TILES_PER_DMA * CACHE_LINES_PER_TILE * 2;
     uint64_t total_bytes = total_ops * CACHE_LINE_BYTES;
-    double bytes_per_cycle = static_cast<double>(total_bytes) / harness.current_cycle();
+    double bytes_per_cycle = static_cast<double>(total_bytes) / static_cast<double>(harness.current_cycle());
 
     std::cout << "\n--- Double-Buffer Analysis ---" << std::endl;
     std::cout << "Read DMAs: " << NUM_READ_DMAS << ", Write DMAs: " << NUM_WRITE_DMAS << std::endl;
@@ -239,7 +239,7 @@ bool test_gddr6_vs_lpddr5_dma() {
 
         uint64_t bytes = total_accesses * CACHE_LINE_BYTES;
         results[0] = {"LPDDR5-equiv", 8, bytes, harness.current_cycle(),
-                      static_cast<double>(bytes) / harness.current_cycle()};
+                      static_cast<double>(bytes) / static_cast<double>(harness.current_cycle())};
     }
 
     // GDDR6: use all 16 banks
@@ -262,7 +262,7 @@ bool test_gddr6_vs_lpddr5_dma() {
 
         uint64_t bytes = total_accesses * CACHE_LINE_BYTES;
         results[1] = {"GDDR6-full", 16, bytes, harness.current_cycle(),
-                      static_cast<double>(bytes) / harness.current_cycle()};
+                      static_cast<double>(bytes) / static_cast<double>(harness.current_cycle())};
     }
 
     std::cout << "\n--- GDDR6 vs LPDDR5 DMA Results ---" << std::endl;
@@ -328,7 +328,7 @@ int main(int argc, char* argv[]) {
         constexpr int LINES_TO_TRACE = 8;
 
         for (int dma = 0; dma < 16; ++dma) {
-            uint8_t bank = dma;
+            uint8_t bank = static_cast<uint8_t>(dma);
             uint32_t row = 100;
 
             for (int line = 0; line < LINES_TO_TRACE; ++line) {

@@ -197,7 +197,7 @@ public:
     TraceStats computeStats() {
         TraceStats stats;
 
-        stats.total_transactions = transactions_.size();
+        stats.total_transactions = static_cast<int>(transactions_.size());
 
         for (const auto& txn : transactions_) {
             if (txn.type == "READ") {
@@ -237,7 +237,7 @@ public:
 
         // Calculate bandwidth metrics
         stats.total_bytes = stats.read_bytes + stats.write_bytes;
-        stats.active_banks = stats.bank_usage.size();
+        stats.active_banks = static_cast<int>(stats.bank_usage.size());
         int total_cycles = stats.end_cycle - stats.start_cycle;
 
         if (total_cycles > 0) {
@@ -382,7 +382,7 @@ public:
         std::cout << "  Total Bytes: " << stats.total_bytes;
         if (stats.total_bytes >= 1024) {
             std::cout << " (" << std::fixed << std::setprecision(1)
-                      << (stats.total_bytes / 1024.0) << " KB)";
+                      << (static_cast<double>(stats.total_bytes) / 1024.0) << " KB)";
         }
         std::cout << "\n";
         std::cout << "  Read:  " << stats.read_bytes << " bytes ("
@@ -425,10 +425,10 @@ public:
             std::vector<int> sorted_lat = stats.latencies;
             std::sort(sorted_lat.begin(), sorted_lat.end());
 
-            double avg = std::accumulate(sorted_lat.begin(), sorted_lat.end(), 0.0) / sorted_lat.size();
+            double avg = std::accumulate(sorted_lat.begin(), sorted_lat.end(), 0.0) / static_cast<double>(sorted_lat.size());
             int p50 = sorted_lat[sorted_lat.size() / 2];
-            int p95 = sorted_lat[std::min(sorted_lat.size() - 1, (size_t)(sorted_lat.size() * 0.95))];
-            int p99 = sorted_lat[std::min(sorted_lat.size() - 1, (size_t)(sorted_lat.size() * 0.99))];
+            int p95 = sorted_lat[std::min(sorted_lat.size() - 1, (size_t)(static_cast<double>(sorted_lat.size()) * 0.95))];
+            int p99 = sorted_lat[std::min(sorted_lat.size() - 1, (size_t)(static_cast<double>(sorted_lat.size()) * 0.99))];
 
             std::cout << "\nLatency Distribution (cycles):\n";
             std::cout << "  Min: " << sorted_lat.front()
@@ -521,7 +521,7 @@ public:
         if (!stats.latencies.empty()) {
             std::vector<int> sorted_lat = stats.latencies;
             std::sort(sorted_lat.begin(), sorted_lat.end());
-            double avg = std::accumulate(sorted_lat.begin(), sorted_lat.end(), 0.0) / sorted_lat.size();
+            double avg = std::accumulate(sorted_lat.begin(), sorted_lat.end(), 0.0) / static_cast<double>(sorted_lat.size());
 
             output["latency"] = {
                 {"min", sorted_lat.front()},

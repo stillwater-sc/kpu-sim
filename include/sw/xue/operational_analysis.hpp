@@ -155,11 +155,11 @@ public:
         // Calculate arithmetic intensities
         if (result.dram_bytes > 0) {
             result.arithmetic_intensity =
-                static_cast<double>(result.total_flops) / result.dram_bytes;
+                static_cast<double>(result.total_flops) / static_cast<double>(result.dram_bytes);
         }
         if (result.l3_bytes > 0) {
             result.l3_arithmetic_intensity =
-                static_cast<double>(result.total_flops) / result.l3_bytes;
+                static_cast<double>(result.total_flops) / static_cast<double>(result.l3_bytes);
         }
 
         // Roofline prediction
@@ -168,7 +168,7 @@ public:
 
         // Predict execution time
         if (result.predicted_gflops > 0) {
-            double seconds = result.total_flops / (result.predicted_gflops * 1e9);
+            double seconds = static_cast<double>(result.total_flops) / (result.predicted_gflops * 1e9);
             result.predicted_runtime_us = seconds * 1e6;
             result.predicted_cycles = seconds * hw_.clock_ghz * 1e9;
         }
@@ -221,7 +221,7 @@ public:
         ValidationResult result;
         result.prediction = analyze(events);
         result.actual_gflops = actual_gflops;
-        result.actual_cycles = actual_cycles;
+        result.actual_cycles = static_cast<double>(actual_cycles);
 
         // Calculate errors
         if (actual_gflops > 0) {
@@ -230,7 +230,7 @@ public:
         }
         if (actual_cycles > 0) {
             result.cycles_error_percent = 100.0 *
-                std::abs(result.prediction.predicted_cycles - actual_cycles) / actual_cycles;
+                std::abs(result.prediction.predicted_cycles - static_cast<double>(actual_cycles)) / static_cast<double>(actual_cycles);
         }
 
         result.within_10_percent =
@@ -396,7 +396,7 @@ public:
         double sqrt_M = std::sqrt(static_cast<double>(M_fast));
         uint64_t MNK = M * N * K;
 
-        return static_cast<uint64_t>(std::ceil(MNK / sqrt_M));
+        return static_cast<uint64_t>(std::ceil(static_cast<double>(MNK) / sqrt_M));
     }
 
     /**
@@ -409,7 +409,7 @@ public:
                                       size_t element_size = 4) {
         uint64_t M_fast = fast_memory_bytes / element_size;
         // Need to fit 3 tiles: A, B, C
-        return static_cast<uint64_t>(std::sqrt(M_fast / 3.0));
+        return static_cast<uint64_t>(std::sqrt(static_cast<double>(M_fast) / 3.0));
     }
 
     /**
@@ -422,7 +422,7 @@ public:
                               size_t element_size = 4) {
         if (actual_io_bytes == 0) return 0.0;
         uint64_t io_elements = actual_io_bytes / element_size;
-        return static_cast<double>(total_flops) / io_elements;
+        return static_cast<double>(total_flops) / static_cast<double>(io_elements);
     }
 
     /**

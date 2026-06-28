@@ -53,7 +53,7 @@ std::string format_number(uint64_t n) {
     std::string s = std::to_string(n);
     std::string result;
     int count = 0;
-    for (int i = s.length() - 1; i >= 0; --i) {
+    for (int i = static_cast<int>(s.length()) - 1; i >= 0; --i) {
         if (count > 0 && count % 3 == 0) {
             result = "," + result;
         }

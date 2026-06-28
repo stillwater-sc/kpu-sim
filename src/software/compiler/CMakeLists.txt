@@ -29,7 +29,10 @@ target_link_libraries(kpu_compiler
 if(DOMAIN_FLOW_AVAILABLE)
     target_compile_definitions(kpu_compiler PUBLIC KPU_HAS_DOMAIN_FLOW)
     if(DOMAIN_FLOW_INCLUDE_DIR)
-        target_include_directories(kpu_compiler PUBLIC ${DOMAIN_FLOW_INCLUDE_DIR})
+        # SYSTEM: third-party headers; silences warnings under CI's KPU_WERROR
+        # (-Wunused-parameter and friends in dfa/transformation.hpp,
+        # dfa/dependency_graph.hpp, etc.).
+        target_include_directories(kpu_compiler SYSTEM PUBLIC ${DOMAIN_FLOW_INCLUDE_DIR})
     endif()
 
     # Link domain_flow library

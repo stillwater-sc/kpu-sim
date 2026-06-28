@@ -192,7 +192,7 @@ bool test_timing_comparison() {
         std::cout << "Mixed groups is " << (same_group_cycles - mixed_group_cycles)
                   << " cycles faster ("
                   << std::fixed << std::setprecision(1)
-                  << (100.0 * (same_group_cycles - mixed_group_cycles) / same_group_cycles)
+                  << (100.0 * static_cast<double>(same_group_cycles - mixed_group_cycles) / static_cast<double>(same_group_cycles))
                   << "% improvement)" << std::endl;
     } else if (mixed_group_cycles == same_group_cycles) {
         std::cout << "No timing difference observed (may be dominated by other constraints)" << std::endl;

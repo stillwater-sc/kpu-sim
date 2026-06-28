@@ -111,20 +111,20 @@ struct DMAEngineStatistics {
     // Derived metrics
     double avg_latency() const {
         return transfers_completed > 0
-            ? static_cast<double>(total_latency_cycles) / transfers_completed
+            ? static_cast<double>(total_latency_cycles) / static_cast<double>(transfers_completed)
             : 0.0;
     }
 
     double utilization() const {
         uint64_t total = busy_cycles + idle_cycles;
-        return total > 0 ? static_cast<double>(busy_cycles) / total : 0.0;
+        return total > 0 ? static_cast<double>(busy_cycles) / static_cast<double>(total) : 0.0;
     }
 
     double bandwidth_gbps(double clock_ghz) const {
         uint64_t total_cycles = busy_cycles + idle_cycles;
         if (total_cycles == 0) return 0.0;
-        double seconds = total_cycles / (clock_ghz * 1e9);
-        return (bytes_transferred / 1e9) / seconds;
+        double seconds = static_cast<double>(total_cycles) / (clock_ghz * 1e9);
+        return (static_cast<double>(bytes_transferred) / 1e9) / seconds;
     }
 
     void reset() {

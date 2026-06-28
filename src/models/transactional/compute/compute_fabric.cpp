@@ -641,6 +641,9 @@ void TransactionalComputeFabric::execute_elementwise_fp32(
         case ElementwiseOp::MUL_SCALAR:
             for (uint64_t i = 0; i < count; ++i) output[i] = a[i] * b[0];
             break;
+        case ElementwiseOp::POW_SCALAR:
+            for (uint64_t i = 0; i < count; ++i) output[i] = std::pow(a[i], b[0]);
+            break;
     }
 }
 
@@ -673,7 +676,7 @@ void TransactionalComputeFabric::execute_pool2d_fp32(
                                 cnt++;
                             }
                         }
-                        output[((n * C + c) * H_out + h_out) * W_out + w_out] = sum / cnt;
+                        output[((n * C + c) * H_out + h_out) * W_out + w_out] = sum / static_cast<float>(cnt);
                     }
                 }
             }
@@ -712,7 +715,7 @@ void TransactionalComputeFabric::execute_pool2d_fp32(
                             }
                         }
                         if (desc.pool_type == Pool2DDescriptor::PoolType::AVG && cnt > 0) {
-                            result /= cnt;
+                            result /= static_cast<float>(cnt);
                         }
                         output[((n * C + c) * H_out + ho) * W_out + wo] = result;
                     }
@@ -768,14 +771,14 @@ void TransactionalComputeFabric::execute_layernorm_fp32(
 
         float mean = 0.0f;
         for (uint32_t i = 0; i < norm_size; ++i) mean += x[i];
-        mean /= norm_size;
+        mean /= static_cast<float>(norm_size);
 
         float var = 0.0f;
         for (uint32_t i = 0; i < norm_size; ++i) {
             float diff = x[i] - mean;
             var += diff * diff;
         }
-        var /= norm_size;
+        var /= static_cast<float>(norm_size);
 
         float inv_std = 1.0f / std::sqrt(var + eps);
         for (uint32_t i = 0; i < norm_size; ++i) {

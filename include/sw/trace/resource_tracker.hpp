@@ -351,7 +351,7 @@ public:
                 total_util += utilization_sums[type];
             }
         }
-        stats.overall_utilization = total_util / resources_.size();
+        stats.overall_utilization = total_util / static_cast<double>(resources_.size());
 
         // Concurrency stats from timeline (use unlocked version since we hold the lock)
         auto timeline = get_concurrency_timeline_unlocked(100);
@@ -364,7 +364,7 @@ public:
                 stats.max_concurrency = std::max(stats.max_concurrency, count);
                 stats.min_concurrency = std::min(stats.min_concurrency, count);
             }
-            stats.avg_concurrency = static_cast<double>(sum) / timeline.size();
+            stats.avg_concurrency = static_cast<double>(sum) / static_cast<double>(timeline.size());
         }
 
         return stats;

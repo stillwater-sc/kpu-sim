@@ -103,7 +103,7 @@ bool test_page_hit_burst_sustained() {
 
     // Check page hit ratio
     const auto& stats = harness.stats();
-    double hit_ratio = 100.0 * stats.page_hits / (stats.page_hits + stats.page_empty + stats.page_conflicts);
+    double hit_ratio = 100.0 * static_cast<double>(stats.page_hits) / static_cast<double>(stats.page_hits + stats.page_empty + stats.page_conflicts);
     std::cout << "Page hit ratio: " << std::fixed << std::setprecision(1) << hit_ratio << "%" << std::endl;
 
     if (hit_ratio < 90.0) {
@@ -206,7 +206,7 @@ bool test_hit_vs_conflict_comparison() {
     std::cout << "Page conflicts: " << conflict_cycles << " cycles" << std::endl;
 
     if (hit_cycles < conflict_cycles) {
-        double speedup = 100.0 * (conflict_cycles - hit_cycles) / conflict_cycles;
+        double speedup = 100.0 * static_cast<double>(conflict_cycles - hit_cycles) / static_cast<double>(conflict_cycles);
         std::cout << "Page hits are " << std::fixed << std::setprecision(1)
                   << speedup << "% faster" << std::endl;
         std::cout << "Cycles saved: " << (conflict_cycles - hit_cycles) << std::endl;
@@ -250,7 +250,7 @@ bool test_tile_access_pattern() {
     // Calculate effective bandwidth
     uint64_t total_bytes = 16 * 64;  // 16 cache lines × 64 bytes
     uint64_t cycles = harness.current_cycle();
-    double bytes_per_cycle = static_cast<double>(total_bytes) / cycles;
+    double bytes_per_cycle = static_cast<double>(total_bytes) / static_cast<double>(cycles);
     std::cout << "Effective throughput: " << std::fixed << std::setprecision(2)
               << bytes_per_cycle << " bytes/cycle" << std::endl;
 

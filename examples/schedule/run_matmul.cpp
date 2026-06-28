@@ -157,12 +157,12 @@ int main(int argc, char* argv[]) {
     std::cout << "Generating CSP schedule...\n";
 
     MatMulScheduleGenerator::Config config;
-    config.M = M;
-    config.N = N;
-    config.K = K;
-    config.Ti = Ti;
-    config.Tj = Tj;
-    config.Tk = Tk;
+    config.M = static_cast<Size>(M);
+    config.N = static_cast<Size>(N);
+    config.K = static_cast<Size>(K);
+    config.Ti = static_cast<Size>(Ti);
+    config.Tj = static_cast<Size>(Tj);
+    config.Tk = static_cast<Size>(Tk);
     config.strategy = strategy;
 
     // Set matrix base addresses in DRAM (for trace display)
@@ -274,11 +274,11 @@ int main(int argc, char* argv[]) {
     double total = static_cast<double>(stats.total_cycles);
     if (total > 0) {
         std::cout << "  DMA tiles/cycle:     " << std::setprecision(4)
-                  << (stats.tiles_loaded + stats.tiles_stored) / total << "\n";
+                  << static_cast<double>(stats.tiles_loaded + stats.tiles_stored) / total << "\n";
         std::cout << "  BM tiles/cycle:      "
-                  << (stats.tiles_moved + stats.tiles_writeback) / total << "\n";
+                  << static_cast<double>(stats.tiles_moved + stats.tiles_writeback) / total << "\n";
         std::cout << "  STR tiles/cycle:     "
-                  << (stats.tiles_fed + stats.tiles_drained) / total << "\n";
+                  << static_cast<double>(stats.tiles_fed + stats.tiles_drained) / total << "\n";
     }
 
     std::cout << "\nStall Analysis:\n";
@@ -305,7 +305,7 @@ int main(int argc, char* argv[]) {
     std::cout << "Performance Summary\n";
     std::cout << std::string(70, '=') << "\n";
 
-    double flops = 2.0 * M * N * K;
+    double flops = 2.0 * static_cast<double>(M) * static_cast<double>(N) * static_cast<double>(K);
     double cycles = static_cast<double>(result.total_cycles);
     double flops_per_cycle = flops / cycles;
 

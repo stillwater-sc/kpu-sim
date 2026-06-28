@@ -514,7 +514,7 @@ inline std::string BenchmarkResult::to_detailed_string() const {
 
     ss << "Memory:\n";
     ss << "  External bytes:   " << external_bytes << " ("
-       << (external_bytes / 1024.0) << " KB)\n";
+       << (static_cast<double>(external_bytes) / 1024.0) << " KB)\n";
     ss << "  Arith. Intensity: " << std::fixed << std::setprecision(2)
        << arithmetic_intensity << " FLOP/byte\n";
     ss << "  Bottleneck:       " << bottleneck() << "\n\n";

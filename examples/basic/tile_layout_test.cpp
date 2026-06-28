@@ -58,7 +58,7 @@ void test_layout_policy(LayoutPolicy policy, const LayoutConfig& config) {
             }
         }
 
-        double conflict_rate = 100.0 * conflicts / total_iterations;
+        double conflict_rate = 100.0 * static_cast<double>(conflicts) / static_cast<double>(total_iterations);
         std::cout << "\nConflict Summary:\n";
         std::cout << "  Total iterations: " << total_iterations << "\n";
         std::cout << "  Conflicts: " << conflicts << " (" << std::fixed << std::setprecision(1)
@@ -210,12 +210,12 @@ We want A and B to be on DIFFERENT channels for maximum bandwidth.
                 }
             }
 
-            double rate = 100.0 * conflicts / total;
+            double rate = 100.0 * static_cast<double>(conflicts) / static_cast<double>(total);
             std::cout << std::setw(25) << layout_policy_to_string(policy)
                       << std::setw(15) << conflicts
                       << std::setw(14) << std::fixed << std::setprecision(1) << rate << "%\n";
 
-        } catch (const std::exception& e) {
+        } catch (const std::exception&) {
             std::cout << std::setw(25) << layout_policy_to_string(policy)
                       << std::setw(15) << "ERROR" << "\n";
         }

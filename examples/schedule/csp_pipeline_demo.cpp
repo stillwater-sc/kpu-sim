@@ -82,8 +82,7 @@ public:
     };
 
     EventAnalyzer(size_t l3_cap, size_t l2_cap)
-        : l3_capacity_(l3_cap), l2_capacity_(l2_cap),
-          l3_available_(l3_cap), l2_available_(l2_cap) {}
+        : l3_available_(l3_cap), l2_available_(l2_cap) {}
 
     std::vector<TransactionLogEntry> analyze(const std::vector<TimingEvent>& events) {
         std::vector<TransactionLogEntry> log;
@@ -288,8 +287,6 @@ public:
     }
 
 private:
-    size_t l3_capacity_;
-    size_t l2_capacity_;
     size_t l3_available_;
     size_t l2_available_;
 };

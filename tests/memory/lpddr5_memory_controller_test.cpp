@@ -304,7 +304,7 @@ TEST_CASE("Level4: Four bank operations", "[lpddr5][level4]") {
     SECTION("Full bank group") {
         // Banks 0, 1, 2, 3 are all in bank group 0
         for (int b = 0; b < 4; ++b) {
-            ctx.mc->submit_read(ctx.make_address(b, 100, 0), 64);
+            ctx.mc->submit_read(ctx.make_address(static_cast<uint8_t>(b), 100, 0), 64);
         }
 
         REQUIRE(ctx.run_until_complete());
@@ -317,7 +317,7 @@ TEST_CASE("Level4: Four bank operations", "[lpddr5][level4]") {
     SECTION("tFAW constraint") {
         // Issue 4 activates, then 5th should wait for tFAW
         for (int b = 0; b < 5; ++b) {
-            ctx.mc->submit_read(ctx.make_address(b, 100, 0), 64);
+            ctx.mc->submit_read(ctx.make_address(static_cast<uint8_t>(b), 100, 0), 64);
         }
 
         REQUIRE(ctx.run_until_complete());
@@ -377,7 +377,7 @@ TEST_CASE("Level5: Read sequences", "[lpddr5][level5]") {
     SECTION("Read multi-bank burst") {
         for (int b = 0; b < 4; ++b) {
             for (int i = 0; i < 4; ++i) {
-                ctx.mc->submit_read(ctx.make_address(b, 100, i * 64), 64);
+                ctx.mc->submit_read(ctx.make_address(static_cast<uint8_t>(b), 100, i * 64), 64);
             }
         }
 
@@ -501,7 +501,7 @@ TEST_CASE("Level8: Multi-bank-group concurrency", "[lpddr5][level8]") {
 
     SECTION("All bank groups concurrent") {
         for (int bg = 0; bg < 4; ++bg) {
-            uint8_t bank = bg * 4;  // First bank of each group
+            uint8_t bank = static_cast<uint8_t>(bg * 4);  // First bank of each group
             ctx.mc->submit_read(ctx.make_address(bank, 100, 0), 64);
         }
 
@@ -511,7 +511,7 @@ TEST_CASE("Level8: Multi-bank-group concurrency", "[lpddr5][level8]") {
 
     SECTION("High concurrency - all 16 banks") {
         for (int b = 0; b < 16; ++b) {
-            ctx.mc->submit_read(ctx.make_address(b, 100, 0), 64);
+            ctx.mc->submit_read(ctx.make_address(static_cast<uint8_t>(b), 100, 0), 64);
         }
 
         REQUIRE(ctx.run_until_complete());
@@ -525,7 +525,7 @@ TEST_CASE("Level8: Multi-bank-group concurrency", "[lpddr5][level8]") {
     SECTION("Sustained throughput") {
         for (int round = 0; round < 4; ++round) {
             for (int b = 0; b < 16; ++b) {
-                ctx.mc->submit_read(ctx.make_address(b, 100 + round, 0), 64);
+                ctx.mc->submit_read(ctx.make_address(static_cast<uint8_t>(b), 100 + round, 0), 64);
             }
         }
 
@@ -615,7 +615,7 @@ TEST_CASE("Level9: State space exploration", "[lpddr5][level9]") {
         // Rapid activates within same bank group
         for (int round = 0; round < 10; ++round) {
             for (int b = 0; b < 4; ++b) {  // All in BG0
-                ctx.mc->submit_read(ctx.make_address(b, round * 10, 0), 64);
+                ctx.mc->submit_read(ctx.make_address(static_cast<uint8_t>(b), round * 10, 0), 64);
             }
         }
 
@@ -664,7 +664,7 @@ TEST_CASE("Dual channel operations", "[lpddr5][dualchannel]") {
     SECTION("Channel interleaved") {
         for (int i = 0; i < 16; ++i) {
             uint8_t ch = i % 2;
-            ctx.mc->submit_read(ctx.make_address_dc(ch, i / 2, 100), 64);
+            ctx.mc->submit_read(ctx.make_address_dc(ch, static_cast<uint8_t>(i / 2), 100), 64);
         }
 
         REQUIRE(ctx.run_until_complete());

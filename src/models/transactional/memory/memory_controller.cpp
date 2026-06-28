@@ -293,13 +293,13 @@ void TransactionalMemoryController::decode_address(
     // Channel interleaving
     uint32_t channel_bits = 0;
     for (uint8_t n = config_.num_channels; n > 1; n >>= 1) channel_bits++;
-    channel = addr_shifted & ((1 << channel_bits) - 1);
+    channel = static_cast<uint8_t>(addr_shifted & ((1 << channel_bits) - 1));
     addr_shifted >>= channel_bits;
 
     // Bank interleaving
     uint32_t bank_bits = 0;
     for (uint8_t n = config_.banks_per_channel; n > 1; n >>= 1) bank_bits++;
-    bank = addr_shifted & ((1 << bank_bits) - 1);
+    bank = static_cast<uint8_t>(addr_shifted & ((1 << bank_bits) - 1));
     addr_shifted >>= bank_bits;
 
     // Row is the rest

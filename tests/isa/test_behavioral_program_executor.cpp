@@ -462,13 +462,13 @@ void test_loop_machinery() {
     Size k_tiles = K / Tk;  // 2
 
     // LOOP_BEGIN 0, 2, TI
-    prog.instructions.push_back(DMInstruction::loop_begin(0, m_tiles, IndexRole::TI));
+    prog.instructions.push_back(DMInstruction::loop_begin(0, static_cast<uint16_t>(m_tiles), IndexRole::TI));
 
     // LOOP_BEGIN 1, 2, TJ
-    prog.instructions.push_back(DMInstruction::loop_begin(1, n_tiles, IndexRole::TJ));
+    prog.instructions.push_back(DMInstruction::loop_begin(1, static_cast<uint16_t>(n_tiles), IndexRole::TJ));
 
     // LOOP_BEGIN 2, 2, TK
-    prog.instructions.push_back(DMInstruction::loop_begin(2, k_tiles, IndexRole::TK));
+    prog.instructions.push_back(DMInstruction::loop_begin(2, static_cast<uint16_t>(k_tiles), IndexRole::TK));
 
     // Inner loop body: DMA load A and B, move to L2, stream to L1
     prog.instructions.push_back(DMInstruction::dma_load_auto(MatrixID::A, 0));

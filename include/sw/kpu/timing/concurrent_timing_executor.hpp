@@ -135,15 +135,15 @@ public:
 
         // Utilization (0.0 - 1.0)
         [[nodiscard]] double dma_utilization() const {
-            return total_cycles > 0 ? static_cast<double>(dma_busy_cycles) / total_cycles : 0.0;
+            return total_cycles > 0 ? static_cast<double>(dma_busy_cycles) / static_cast<double>(total_cycles) : 0.0;
         }
 
         [[nodiscard]] double bm_utilization() const {
-            return total_cycles > 0 ? static_cast<double>(bm_busy_cycles) / total_cycles : 0.0;
+            return total_cycles > 0 ? static_cast<double>(bm_busy_cycles) / static_cast<double>(total_cycles) : 0.0;
         }
 
         [[nodiscard]] double str_utilization() const {
-            return total_cycles > 0 ? static_cast<double>(str_busy_cycles) / total_cycles : 0.0;
+            return total_cycles > 0 ? static_cast<double>(str_busy_cycles) / static_cast<double>(total_cycles) : 0.0;
         }
 
         // Bandwidth (GB/s)

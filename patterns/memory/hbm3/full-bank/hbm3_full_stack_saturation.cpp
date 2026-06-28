@@ -109,8 +109,8 @@ int main() {
     uint64_t total_bytes = stats.reads * CACHE_LINE_BYTES;
     uint64_t total_cycles = harness.current_cycle();
     double clock_ghz = 2.8;  // HBM3-5600 @ 2.8 GHz
-    double time_ns = total_cycles / clock_ghz;
-    double bandwidth_gbps = total_bytes / time_ns;
+    double time_ns = static_cast<double>(total_cycles) / clock_ghz;
+    double bandwidth_gbps = static_cast<double>(total_bytes) / time_ns;
 
     std::cout << "\n--- Bandwidth Analysis ---" << std::endl;
     std::cout << "  Total bytes transferred: " << total_bytes << " bytes" << std::endl;
@@ -147,7 +147,7 @@ int main() {
               << (stats.page_hit_rate() * 100.0) << "%" << std::endl;
 
     // Allow variance due to refresh
-    if (stats.page_empty < expected_page_empty * 0.9) {
+    if (static_cast<double>(stats.page_empty) < static_cast<double>(expected_page_empty) * 0.9) {
         std::cerr << "WARNING: Fewer page_empty than expected" << std::endl;
     }
 

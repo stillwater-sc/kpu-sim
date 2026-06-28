@@ -532,7 +532,7 @@ private:
             tid = src_row * mesh_cols + src_col;
         }
 
-        double bw = (duration > 0) ? static_cast<double>(link.bytes) / duration : 0.0;
+        double bw = (duration > 0) ? static_cast<double>(link.bytes) / static_cast<double>(duration) : 0.0;
 
         out << "{\"name\":\"XFER\",\"cat\":\"link\",\"ph\":\"X\","
             << "\"ts\":" << link.start_cycle << ",\"dur\":" << duration

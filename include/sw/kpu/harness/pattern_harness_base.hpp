@@ -302,10 +302,10 @@ bool PatternHarnessBase<ConfigT>::export_trace_impl(
         first = false;
 
         // Calculate timestamps in microseconds
-        double start_us = (entry.cycle_issue / clock_ghz) / 1000.0;
+        double start_us = (static_cast<double>(entry.cycle_issue) / clock_ghz) / 1000.0;
         double duration_us = 0.0;
         if (entry.cycle_complete > entry.cycle_issue) {
-            duration_us = ((entry.cycle_complete - entry.cycle_issue) / clock_ghz) / 1000.0;
+            duration_us = (static_cast<double>(entry.cycle_complete - entry.cycle_issue) / clock_ghz) / 1000.0;
         }
 
         ofs << "  {\"name\": \"" << entry.description << "\", "

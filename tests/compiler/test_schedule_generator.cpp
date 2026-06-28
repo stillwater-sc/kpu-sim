@@ -61,7 +61,7 @@ TEST_CASE("ScheduleGenerator - Small Matrix Schedule", "[schedule_generator][bas
     std::cout << "  Total commands:  " << schedule.commands.size() << "\n";
     std::cout << "  Total cycles:    " << schedule.total_cycles << "\n";
     std::cout << "  Estimated time:  " << schedule.estimated_time_ms << " ms\n";
-    std::cout << "  DRAM traffic:    " << (schedule.total_dram_bytes / (1024.0 * 1024.0)) << " MB\n";
+    std::cout << "  DRAM traffic:    " << (static_cast<double>(schedule.total_dram_bytes) / (1024.0 * 1024.0)) << " MB\n";
 }
 
 TEST_CASE("ScheduleGenerator - Medium Matrix Schedule", "[schedule_generator][medium]") {

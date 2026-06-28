@@ -92,7 +92,7 @@ bool test_stride_2() {
         return false;
     }
     // Should have high page hit ratio (>80%)
-    double hit_ratio = 100.0 * stats.page_hits / (stats.page_hits + stats.page_empty + stats.page_conflicts);
+    double hit_ratio = 100.0 * static_cast<double>(stats.page_hits) / static_cast<double>(stats.page_hits + stats.page_empty + stats.page_conflicts);
     if (hit_ratio < 80.0) {
         std::cerr << "FAIL: Page hit ratio too low: " << hit_ratio << "%" << std::endl;
         return false;
@@ -169,7 +169,7 @@ bool test_matrix_column_access() {
     // Should be mostly page hits
     auto& stats = harness.stats();
     std::cout << "Page hit ratio: " << std::fixed << std::setprecision(1)
-              << (100.0 * stats.page_hits / (stats.page_hits + stats.page_empty + stats.page_conflicts))
+              << (100.0 * static_cast<double>(stats.page_hits) / static_cast<double>(stats.page_hits + stats.page_empty + stats.page_conflicts))
               << "%" << std::endl;
 
     std::cout << "PASS: Matrix column access works correctly" << std::endl;
@@ -272,7 +272,7 @@ bool test_stride_comparison() {
     std::cout << "Stride 4:      " << stride4_cycles << " cycles";
     if (stride4_cycles > sequential_cycles) {
         std::cout << " (" << std::fixed << std::setprecision(1)
-                  << (100.0 * (stride4_cycles - sequential_cycles) / sequential_cycles)
+                  << (100.0 * static_cast<double>(stride4_cycles - sequential_cycles) / static_cast<double>(sequential_cycles))
                   << "% slower)";
     }
     std::cout << std::endl;
@@ -280,7 +280,7 @@ bool test_stride_comparison() {
     std::cout << "Row-crossing:  " << row_crossing_cycles << " cycles";
     if (row_crossing_cycles > sequential_cycles) {
         std::cout << " (" << std::fixed << std::setprecision(1)
-                  << (100.0 * (row_crossing_cycles - sequential_cycles) / sequential_cycles)
+                  << (100.0 * static_cast<double>(row_crossing_cycles - sequential_cycles) / static_cast<double>(sequential_cycles))
                   << "% slower)";
     }
     std::cout << std::endl;

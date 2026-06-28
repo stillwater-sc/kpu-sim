@@ -136,12 +136,12 @@ struct LevelTraffic {
 
     double avg_read_size() const {
         uint64_t count = read_count.load();
-        return count > 0 ? static_cast<double>(read_bytes.load()) / count : 0.0;
+        return count > 0 ? static_cast<double>(read_bytes.load()) / static_cast<double>(count) : 0.0;
     }
 
     double avg_write_size() const {
         uint64_t count = write_count.load();
-        return count > 0 ? static_cast<double>(write_bytes.load()) / count : 0.0;
+        return count > 0 ? static_cast<double>(write_bytes.load()) / static_cast<double>(count) : 0.0;
     }
 
     void reset() {
@@ -294,7 +294,7 @@ public:
     double traffic_amplification() const {
         uint64_t external = external_bytes();
         uint64_t internal = total_traffic() - external;
-        return external > 0 ? static_cast<double>(internal) / external : 0.0;
+        return external > 0 ? static_cast<double>(internal) / static_cast<double>(external) : 0.0;
     }
 
     /**
@@ -303,8 +303,8 @@ public:
     double achieved_bandwidth(MemoryLevel level, double clock_ghz, uint64_t total_cycles) const {
         if (total_cycles == 0) return 0.0;
         uint64_t bytes = total_bytes(level);
-        double seconds = total_cycles / (clock_ghz * 1e9);
-        return (bytes / 1e9) / seconds;  // GB/s
+        double seconds = static_cast<double>(total_cycles) / (clock_ghz * 1e9);
+        return (static_cast<double>(bytes) / 1e9) / seconds;  // GB/s
     }
 
     /**
@@ -376,8 +376,8 @@ public:
         std::ostringstream ss;
         ss << std::fixed << std::setprecision(2);
         ss << "Memory Traffic Summary\n";
-        ss << "  Total Traffic:       " << (total_traffic() / 1e6) << " MB\n";
-        ss << "  External (DRAM):     " << (external_bytes() / 1e6) << " MB\n";
+        ss << "  Total Traffic:       " << (static_cast<double>(total_traffic()) / 1e6) << " MB\n";
+        ss << "  External (DRAM):     " << (static_cast<double>(external_bytes()) / 1e6) << " MB\n";
         ss << "  Traffic Amplification: " << traffic_amplification() << "x\n\n";
 
         ss << "  Level      Read (MB)   Write (MB)   BW (GB/s)   Util%\n";
@@ -389,8 +389,8 @@ public:
             double achieved = achieved_bandwidth(level, clock_ghz, total_cycles);
             double util = bandwidth_utilization(level, clock_ghz, total_cycles) * 100;
             ss << "  " << std::left << std::setw(10) << to_string(level)
-               << std::right << std::setw(10) << (lt.read_bytes.load() / 1e6)
-               << std::setw(12) << (lt.write_bytes.load() / 1e6)
+               << std::right << std::setw(10) << (static_cast<double>(lt.read_bytes.load()) / 1e6)
+               << std::setw(12) << (static_cast<double>(lt.write_bytes.load()) / 1e6)
                << std::setw(12) << achieved
                << std::setw(10) << util << "%\n";
         }

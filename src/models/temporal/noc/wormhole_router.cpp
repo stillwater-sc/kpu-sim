@@ -840,7 +840,7 @@ void WormholeNoC::step(uint64_t cycle) {
 
                     // Record flit hop
                     if (tracer_) {
-                        record_event(WormholeEventType::FLIT_HOP, neighbor_id, in_dir,
+                        record_event(WormholeEventType::FLIT_HOP, static_cast<uint8_t>(neighbor_id), in_dir,
                                     flit.packet_seq, flit.type, 0, flit.total_flits,
                                     flit.tile, flit.src_router, flit.dst_router, cycle);
                     }

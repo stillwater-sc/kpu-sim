@@ -250,7 +250,7 @@ void test_large_matmul() {
 
     // Arithmetic intensity for 1024^3 matmul
     Size total_flops = 2ULL * 1024 * 1024 * 1024;
-    double ai = static_cast<double>(total_flops) / prog.estimates.external_mem_bytes;
+    double ai = static_cast<double>(total_flops) / static_cast<double>(prog.estimates.external_mem_bytes);
     std::cout << "  Arithmetic intensity: " << ai << " FLOPs/byte\n";
     check(ai > 0, "Arithmetic intensity > 0");
 }

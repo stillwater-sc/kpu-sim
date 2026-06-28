@@ -207,7 +207,7 @@ struct MatrixLayout {
         if (tile_height <= 1) return 1.0;
         size_t conflicts = estimate_page_conflicts(tile_height, page_size);
         size_t hits = tile_height - 1 - conflicts;
-        return static_cast<double>(hits) / (tile_height - 1);
+        return static_cast<double>(hits) / static_cast<double>(tile_height - 1);
     }
 
     // ========================================================================

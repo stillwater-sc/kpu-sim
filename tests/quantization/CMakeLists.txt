@@ -10,7 +10,8 @@ target_link_libraries(quantization_tests PRIVATE
 
 # Add Universal library include path if available
 if(UNIVERSAL_INCLUDE_DIR)
-    target_include_directories(quantization_tests PRIVATE ${UNIVERSAL_INCLUDE_DIR})
+    # SYSTEM include: silences third-party warnings under CI's -Werror gate.
+    target_include_directories(quantization_tests SYSTEM PRIVATE ${UNIVERSAL_INCLUDE_DIR})
 endif()
 
 kpu_set_target_options(quantization_tests)
@@ -28,7 +29,8 @@ target_link_libraries(quantized_mlp_tests PRIVATE
 )
 
 if(UNIVERSAL_INCLUDE_DIR)
-    target_include_directories(quantized_mlp_tests PRIVATE ${UNIVERSAL_INCLUDE_DIR})
+    # SYSTEM include: silences third-party warnings under CI's -Werror gate.
+    target_include_directories(quantized_mlp_tests SYSTEM PRIVATE ${UNIVERSAL_INCLUDE_DIR})
 endif()
 
 kpu_set_target_options(quantized_mlp_tests)

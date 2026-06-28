@@ -110,8 +110,8 @@ TEST_CASE("INoC same-router transfer", "[noc_interface][transfer]") {
     bool delivered = false;
     uint8_t delivered_dst = 255;
 
-    noc->set_delivery_callback(0, [&](const TileDescriptor& t, uint8_t src, uint8_t dst,
-                                       uint64_t inject, uint64_t complete) {
+    noc->set_delivery_callback(0, [&](const TileDescriptor& t, [[maybe_unused]] uint8_t src, uint8_t dst,
+                                       [[maybe_unused]] uint64_t inject, [[maybe_unused]] uint64_t complete) {
         delivered = true;
         delivered_dst = dst;
         REQUIRE(t.tensor == TensorId::A);
@@ -159,7 +159,7 @@ TEST_CASE("INoC neighbor transfer", "[noc_interface][transfer]") {
     uint8_t delivered_dst = 255;
 
     noc->set_delivery_callback(1, [&](const TileDescriptor& t, uint8_t src, uint8_t dst,
-                                       uint64_t inject, uint64_t complete) {
+                                       [[maybe_unused]] uint64_t inject, [[maybe_unused]] uint64_t complete) {
         delivered = true;
         delivered_src = src;
         delivered_dst = dst;
@@ -205,8 +205,8 @@ TEST_CASE("INoC multi-hop transfer (DataflowNoC only)", "[noc_interface][transfe
     uint64_t delivery_cycle = 0;
 
     // Corner to corner: router 0 (0,0) to router 15 (3,3)
-    noc->set_delivery_callback(15, [&](const TileDescriptor& t, uint8_t src, uint8_t dst,
-                                        uint64_t inject, uint64_t complete) {
+    noc->set_delivery_callback(15, [&]([[maybe_unused]] const TileDescriptor& t, [[maybe_unused]] uint8_t src, uint8_t dst,
+                                        [[maybe_unused]] uint64_t inject, uint64_t complete) {
         delivered = true;
         delivery_cycle = complete;
         REQUIRE(dst == 15);
@@ -241,8 +241,8 @@ TEST_CASE("INoC global delivery callback (DataflowNoC)", "[noc_interface][callba
 
     size_t delivery_count = 0;
 
-    noc->set_global_delivery_callback([&](const TileDescriptor& t, uint8_t src, uint8_t dst,
-                                           uint64_t inject, uint64_t complete) {
+    noc->set_global_delivery_callback([&]([[maybe_unused]] const TileDescriptor& t, [[maybe_unused]] uint8_t src, [[maybe_unused]] uint8_t dst,
+                                           [[maybe_unused]] uint64_t inject, [[maybe_unused]] uint64_t complete) {
         delivery_count++;
     });
 
@@ -276,8 +276,8 @@ TEST_CASE("INoC global delivery callback (WormholeNoC)", "[noc_interface][callba
 
     size_t delivery_count = 0;
 
-    noc->set_global_delivery_callback([&](const TileDescriptor& t, uint8_t src, uint8_t dst,
-                                           uint64_t inject, uint64_t complete) {
+    noc->set_global_delivery_callback([&]([[maybe_unused]] const TileDescriptor& t, [[maybe_unused]] uint8_t src, [[maybe_unused]] uint8_t dst,
+                                           [[maybe_unused]] uint64_t inject, [[maybe_unused]] uint64_t complete) {
         delivery_count++;
     });
 

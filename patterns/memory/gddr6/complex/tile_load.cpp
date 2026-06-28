@@ -96,7 +96,7 @@ int main(int argc, char* argv[]) {
 
     // Calculate page hit rate
     size_t total_accesses = TILE_ROWS * COLS_PER_ROW;
-    double page_hit_rate = 100.0 * stats.page_hits / total_accesses;
+    double page_hit_rate = 100.0 * static_cast<double>(stats.page_hits) / static_cast<double>(total_accesses);
 
     std::cout << "\nTile Load Analysis:" << std::endl;
     std::cout << "  Tile size: " << TILE_ROWS << " x " << COLS_PER_ROW << std::endl;

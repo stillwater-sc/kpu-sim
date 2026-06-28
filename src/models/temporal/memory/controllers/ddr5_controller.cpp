@@ -324,7 +324,7 @@ void DDR5MemoryController::decode_address(
     uint64_t addr = address >> byte_offset_bits;
 
     if (channel_bits > 0) {
-        channel = addr & ((1 << channel_bits) - 1);
+        channel = static_cast<uint8_t>(addr & ((1 << channel_bits) - 1));
         addr >>= channel_bits;
     } else {
         channel = 0;
@@ -333,7 +333,7 @@ void DDR5MemoryController::decode_address(
     col = addr & ((1 << col_bits) - 1);
     addr >>= col_bits;
 
-    bank = addr & ((1 << bank_bits) - 1);
+    bank = static_cast<uint8_t>(addr & ((1 << bank_bits) - 1));
     addr >>= bank_bits;
 
     row = addr & ((1 << ddr5_config_.row_bits) - 1);

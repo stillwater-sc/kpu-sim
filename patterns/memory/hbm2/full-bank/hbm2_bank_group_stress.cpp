@@ -137,7 +137,7 @@ bool test_mixed_bank_groups() {
         uint64_t cycles_a = harness_bg0.current_cycle();
         std::cout << "    Reads: " << stats_a.reads << ", Cycles: " << cycles_a << std::endl;
         std::cout << "    Throughput: " << std::fixed << std::setprecision(2)
-                  << (double)stats_a.reads / cycles_a * 1000.0 << " reads/1000 cycles" << std::endl;
+                  << (double)stats_a.reads / static_cast<double>(cycles_a) * 1000.0 << " reads/1000 cycles" << std::endl;
 
         // Export trace
         std::string trace_path = make_trace_path("full-bank", "hbm2_bank_group_same_trace.json");
@@ -167,7 +167,7 @@ bool test_mixed_bank_groups() {
         uint64_t cycles_b = harness_all.current_cycle();
         std::cout << "    Reads: " << stats_b.reads << ", Cycles: " << cycles_b << std::endl;
         std::cout << "    Throughput: " << std::fixed << std::setprecision(2)
-                  << (double)stats_b.reads / cycles_b * 1000.0 << " reads/1000 cycles" << std::endl;
+                  << (double)stats_b.reads / static_cast<double>(cycles_b) * 1000.0 << " reads/1000 cycles" << std::endl;
 
         // Export trace
         std::string trace_path = make_trace_path("full-bank", "hbm2_bank_group_cross_trace.json");

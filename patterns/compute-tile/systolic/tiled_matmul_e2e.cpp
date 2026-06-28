@@ -84,11 +84,11 @@ struct MemoryLevelStats {
     uint64_t busy_cycles = 0;
 
     double throughput_bytes_per_cycle(uint64_t total_cycles) const {
-        return total_cycles > 0 ? static_cast<double>(bytes_transferred) / total_cycles : 0.0;
+        return total_cycles > 0 ? static_cast<double>(bytes_transferred) / static_cast<double>(total_cycles) : 0.0;
     }
 
     double utilization(uint64_t total_cycles) const {
-        return total_cycles > 0 ? static_cast<double>(busy_cycles) / total_cycles : 0.0;
+        return total_cycles > 0 ? static_cast<double>(busy_cycles) / static_cast<double>(total_cycles) : 0.0;
     }
 
     void print_xue(uint64_t total_cycles, double clock_ghz) const {
@@ -127,17 +127,17 @@ struct E2EMetrics {
     uint64_t total_flops = 0;
 
     // XUE for compute
-    double compute_throughput_flops_per_cycle(double clock_ghz) const {
-        return total_cycles > 0 ? static_cast<double>(total_flops) / total_cycles : 0.0;
+    double compute_throughput_flops_per_cycle([[maybe_unused]] double clock_ghz) const {
+        return total_cycles > 0 ? static_cast<double>(total_flops) / static_cast<double>(total_cycles) : 0.0;
     }
 
     double compute_utilization() const {
-        return total_cycles > 0 ? static_cast<double>(compute_cycles) / total_cycles : 0.0;
+        return total_cycles > 0 ? static_cast<double>(compute_cycles) / static_cast<double>(total_cycles) : 0.0;
     }
 
     double compute_efficiency(uint32_t peak_macs_per_cycle) const {
         if (compute_cycles == 0 || peak_macs_per_cycle == 0) return 0.0;
-        return static_cast<double>(total_macs) / (compute_cycles * peak_macs_per_cycle);
+        return static_cast<double>(total_macs) / static_cast<double>(compute_cycles * peak_macs_per_cycle);
     }
 
     void print(const HardwareConfig& hw) const {

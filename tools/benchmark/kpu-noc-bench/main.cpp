@@ -254,7 +254,7 @@ void run_single_operator(const Options& opts) {
         std::cout << "  Total FLOPs:     " << result.total_flops << "\n";
 
         double gflops = result.total_cycles > 0 ?
-            static_cast<double>(result.total_flops) / result.total_cycles : 0.0;
+            static_cast<double>(result.total_flops) / static_cast<double>(result.total_cycles) : 0.0;
         std::cout << "  GFLOPS:          " << gflops << "\n";
         std::cout << "  NoC bound:       " << (result.is_noc_bound() ? "Yes" : "No") << "\n";
 
@@ -267,7 +267,7 @@ void run_single_operator(const Options& opts) {
 
         auto print_phase = [](const std::string& name, const OperatorResult& r) {
             double gflops = r.total_cycles > 0 ?
-                static_cast<double>(r.total_flops) / r.total_cycles : 0.0;
+                static_cast<double>(r.total_flops) / static_cast<double>(r.total_cycles) : 0.0;
             std::cout << "  " << name << ":\n";
             std::cout << "    Cycles: " << r.total_cycles
                       << ", FLOPs: " << r.total_flops
@@ -284,7 +284,7 @@ void run_single_operator(const Options& opts) {
         std::cout << "    Cycles: " << result.total.total_cycles << "\n";
         std::cout << "    FLOPs:  " << result.total.total_flops << "\n";
         double total_gflops = result.total.total_cycles > 0 ?
-            static_cast<double>(result.total.total_flops) / result.total.total_cycles : 0.0;
+            static_cast<double>(result.total.total_flops) / static_cast<double>(result.total.total_cycles) : 0.0;
         std::cout << "    GFLOPS: " << total_gflops << "\n";
 
     } else if (opts.operator_name == "softmax") {
@@ -413,7 +413,7 @@ void run_traced_benchmark(const Options& opts, std::shared_ptr<NoCBenchmarkTrace
 
     // Record counter samples throughout the simulation
     for (uint64_t c = 0; c <= cycle; c += 10) {
-        double bw = static_cast<double>(total_bytes) / (cycle > 0 ? cycle : 1);
+        double bw = static_cast<double>(total_bytes) / static_cast<double>(cycle > 0 ? cycle : 1);
         uint32_t active = (c < cycle / 2) ?
             static_cast<uint32_t>(opts.mesh_rows * opts.mesh_cols / 2) :
             static_cast<uint32_t>(opts.mesh_rows * opts.mesh_cols / 4);

@@ -188,19 +188,19 @@ struct TileJourneyStats {
 
     // === Computed Averages ===
     double avg_total_latency() const {
-        return completed_tiles > 0 ? static_cast<double>(sum_total_latency) / completed_tiles : 0.0;
+        return completed_tiles > 0 ? static_cast<double>(sum_total_latency) / static_cast<double>(completed_tiles) : 0.0;
     }
 
     double avg_data_movement_latency() const {
-        return completed_tiles > 0 ? static_cast<double>(sum_data_movement_latency) / completed_tiles : 0.0;
+        return completed_tiles > 0 ? static_cast<double>(sum_data_movement_latency) / static_cast<double>(completed_tiles) : 0.0;
     }
 
     double avg_compute_latency() const {
-        return completed_tiles > 0 ? static_cast<double>(sum_compute_latency) / completed_tiles : 0.0;
+        return completed_tiles > 0 ? static_cast<double>(sum_compute_latency) / static_cast<double>(completed_tiles) : 0.0;
     }
 
     double avg_dram_latency() const {
-        return completed_tiles > 0 ? static_cast<double>(sum_dram_latency) / completed_tiles : 0.0;
+        return completed_tiles > 0 ? static_cast<double>(sum_dram_latency) / static_cast<double>(completed_tiles) : 0.0;
     }
 
     /// Generate summary string

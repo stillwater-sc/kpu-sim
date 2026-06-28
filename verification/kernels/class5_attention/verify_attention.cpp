@@ -56,13 +56,13 @@ static void ref_layernorm(const float* input, const float* weight,
         float* y = output + b * norm_size;
         float mean = 0.0f;
         for (uint32_t i = 0; i < norm_size; ++i) mean += x[i];
-        mean /= norm_size;
+        mean /= static_cast<float>(norm_size);
         float var = 0.0f;
         for (uint32_t i = 0; i < norm_size; ++i) {
             float d = x[i] - mean;
             var += d * d;
         }
-        var /= norm_size;
+        var /= static_cast<float>(norm_size);
         float inv_std = 1.0f / std::sqrt(var + eps);
         for (uint32_t i = 0; i < norm_size; ++i) {
             float n = (x[i] - mean) * inv_std;
