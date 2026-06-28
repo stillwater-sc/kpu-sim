@@ -127,6 +127,7 @@ public:
     BlockMover& block_mover(size_t index);
     const BlockMover& block_mover(size_t index) const;
     std::vector<BlockMover>& block_movers() { return block_movers_; }
+    const std::vector<BlockMover>& block_movers() const { return block_movers_; }
 
     /// Drive all owned BlockMovers one step, pushing tiles down into the L2 layer.
     void process_block_movers(std::vector<L2Bank>& l2_banks);
