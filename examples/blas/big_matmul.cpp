@@ -100,8 +100,8 @@ KPUSimulator::Config create_config() {
     config.l3_layer.capacity_kb = 512;
     config.l2_layer.num_banks = 64;
     config.l2_layer.capacity_kb = 32;
-    config.l1_buffer_count = 3072;
-    config.l1_buffer_capacity_kb = 64;
+    config.l1_layer.num_buffers = 3072;
+    config.l1_layer.capacity_kb = 64;
     config.compute_tile_count = 16;
     config.processor_array_rows = 24;
     config.processor_array_cols = 24;

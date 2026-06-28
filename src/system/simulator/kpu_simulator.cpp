@@ -33,8 +33,7 @@ KPUSimulator::KPUSimulator(const Config& config) : current_cycle(0) {
 
     // Initialize the L1 layer aggregate - owns the L1 stream buffers that feed
     // the compute fabric.
-    l1_layer = L1Layer(L1LayerConfig::uniform(config.l1_buffer_count,
-                                              config.l1_buffer_capacity_kb));
+    l1_layer = L1Layer(config.l1_layer);
 
     // Initialize page buffers - memory controller page buffers
     page_buffers.reserve(config.page_buffer_count);
@@ -137,12 +136,13 @@ KPUSimulator::KPUSimulator(const Config& config) : current_cycle(0) {
         current_addr += capacity;
     }
 
-    // L1 streaming buffers (compute fabric)
+    // L1 streaming buffers (capacities come from the constructed L1 layer;
+    // supports non-uniform buffers)
     if (config.l1_buffer_base != 0) {
         current_addr = config.l1_buffer_base;
     }
-    for (size_t i = 0; i < config.l1_buffer_count; ++i) {
-        Size capacity = config.l1_buffer_capacity_kb * 1024;
+    for (size_t i = 0; i < l1_layer.buffer_count(); ++i) {
+        Size capacity = l1_layer.buffer(i).get_capacity();
         address_decoder.add_region(current_addr, capacity, sw::memory::MemoryType::L1, i,
                                   "L1 Buffer " + std::to_string(i));
         current_addr += capacity;
@@ -784,8 +784,8 @@ KPUSimulator::Config generate_multi_bank_config(size_t num_banks, size_t num_til
     config.memory_bank_count = num_banks;
     config.memory_bank_capacity_mb = 512; // Smaller banks for multi-bank setup
     config.memory_bandwidth_gbps = 16; // Higher bandwidth per bank
-    config.l1_buffer_count = num_tiles; // One L1 buffer per tile
-    config.l1_buffer_capacity_kb = 256;
+    config.l1_layer.num_buffers = num_tiles; // One L1 buffer per tile
+    config.l1_layer.capacity_kb = 256;
     config.compute_tile_count = num_tiles;
     config.dma_engine_count = num_banks + num_tiles; // Plenty of DMA engines
     return config;

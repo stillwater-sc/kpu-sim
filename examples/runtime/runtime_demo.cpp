@@ -123,8 +123,8 @@ int main() {
     sim_config.l3_layer.capacity_kb = 512;
     sim_config.l2_layer.num_banks = 16;
     sim_config.l2_layer.capacity_kb = 64;
-    sim_config.l1_buffer_count = 4;
-    sim_config.l1_buffer_capacity_kb = 64;
+    sim_config.l1_layer.num_buffers = 4;
+    sim_config.l1_layer.capacity_kb = 64;
     sim_config.dma_engine_count = 4;
     sim_config.l3_layer.block_mover_count = 8;
     sim_config.streamer_count = 16;

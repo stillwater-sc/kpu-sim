@@ -91,8 +91,8 @@ int main() {
     config.l2_layer.num_banks = 16;
     config.l2_layer.capacity_kb = 128;
 
-    config.l1_buffer_count = 32;
-    config.l1_buffer_capacity_kb = 16;
+    config.l1_layer.num_buffers = 32;
+    config.l1_layer.capacity_kb = 16;
 
     // Configure compute and data movement
     config.compute_tile_count = 8;

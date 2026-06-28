@@ -79,12 +79,14 @@ public:
         // l2_layer.capacity_kb for a uniform layer, or l2_layer.bank_groups
         // for a non-uniform one.
         L2LayerConfig l2_layer;
-        // L1 streaming buffers: DERIVED from processor array configuration
-        // For rectangular arrays: 4 × (rows + cols) per compute tile
-        // For hexagonal arrays: 12 × side_length per compute tile
-        // See processor_array_topology.hpp for derivation formulas
-        Size l1_buffer_count;           // Auto-computed if 0; set only for testing
-        Size l1_buffer_capacity_kb;
+        // L1 layer: aggregate config (stream buffers feeding the compute fabric).
+        // Use l1_layer.num_buffers / l1_layer.capacity_kb for a uniform layer, or
+        // l1_layer.buffer_groups for a non-uniform one.
+        // The buffer count is typically DERIVED from the processor array
+        // configuration (4 × (rows + cols) per compute tile for rectangular
+        // arrays; see processor_array_topology.hpp) — set l1_layer.num_buffers
+        // accordingly (0 = none / set by the caller).
+        L1LayerConfig l1_layer;
 
         // Data movement engines
         // Note: BlockMovers are configured via l3_layer.block_mover_count
@@ -118,7 +120,6 @@ public:
               memory_bandwidth_gbps(0),
               memory_controller_count(0),
               page_buffer_count(0), page_buffer_capacity_kb(0),
-              l1_buffer_count(0), l1_buffer_capacity_kb(0),
               dma_engine_count(0), streamer_count(0),
               compute_tile_count(0),
               processor_array_rows(0), processor_array_cols(0),

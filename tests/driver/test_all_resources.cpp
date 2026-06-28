@@ -37,8 +37,8 @@ public:
         config.l2_layer.num_banks = 8;
         config.l2_layer.capacity_kb = 64;
 
-        config.l1_buffer_count = 16;
-        config.l1_buffer_capacity_kb = 8;
+        config.l1_layer.num_buffers = 16;
+        config.l1_layer.capacity_kb = 8;
 
         config.page_buffer_count = 4;
         config.page_buffer_capacity_kb = 16;

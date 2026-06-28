@@ -9,6 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **BREAKING — L1 memory layer restructuring (#34).** Introduced the `L1Layer`
+  aggregate (owns the `L1Buffer` stream buffers) and removed the flat L1 fields
+  from `KPUSimulator::Config`. Migration:
+  - `config.l1_buffer_count`        → `config.l1_layer.num_buffers`
+  - `config.l1_buffer_capacity_kb`  → `config.l1_layer.capacity_kb`
+  - For non-uniform layers, populate `config.l1_layer.buffer_groups`
+    (`group → element-config → multiplicity`) instead of the scalar fields.
+  - `config.l1_buffer_base` is unchanged. No backward-compatibility shims. Python
+    keeps the `l1_buffer_count` / `l1_buffer_capacity_kb` attribute names (they
+    proxy into `l1_layer`); the C ABI struct `KPUSimulatorConfig` is unchanged.
+  - `L1Layer` (like `L2Layer`/`L3Layer`) is a monitoring/ownership structure, not
+    a ResourceManager/dataflow API.
+
 - **BREAKING — L2 memory layer restructuring (#33).** Introduced the `L2Layer`
   aggregate (owns the `L2Bank` elements) and removed the flat L2 fields from
   `KPUSimulator::Config`. Migration:

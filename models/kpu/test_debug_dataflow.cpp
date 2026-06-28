@@ -10,8 +10,8 @@ int main() {
     config.memory_bank_count = 1;
     config.l3_layer.num_tiles = 1;
     config.l2_layer.num_banks = 1;
-    config.l1_buffer_count = 1;
-    config.l1_buffer_capacity_kb = 64;
+    config.l1_layer.num_buffers = 1;
+    config.l1_layer.capacity_kb = 64;
     config.compute_tile_count = 1;
     config.l3_layer.block_mover_count = 1;
     config.streamer_count = 2;

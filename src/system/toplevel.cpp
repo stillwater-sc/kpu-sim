@@ -152,9 +152,9 @@ sw::kpu::KPUSimulator* SystemSimulator::create_kpu_from_config(const KPUConfig& 
     }
 
     // L1 buffer configuration (compute fabric)
-    sim_config.l1_buffer_count = kpu_config.memory.l1_buffers.size();
+    sim_config.l1_layer.num_buffers = kpu_config.memory.l1_buffers.size();
     if (!kpu_config.memory.l1_buffers.empty()) {
-        sim_config.l1_buffer_capacity_kb = kpu_config.memory.l1_buffers[0].capacity_kb;
+        sim_config.l1_layer.capacity_kb = kpu_config.memory.l1_buffers[0].capacity_kb;
     }
 
     // Page buffer configuration (memory controller scratchpads)

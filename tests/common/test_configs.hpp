@@ -49,8 +49,8 @@ inline KPUSimulator::Config minimal_config() {
     c.l3_layer.capacity_kb      = 64;
     c.l2_layer.num_banks        = 1;
     c.l2_layer.capacity_kb      = 32;
-    c.l1_buffer_count           = 1;
-    c.l1_buffer_capacity_kb     = 32;
+    c.l1_layer.num_buffers      = 1;
+    c.l1_layer.capacity_kb      = 32;
     c.compute_tile_count        = 1;
     c.dma_engine_count          = 1;
     return c;
@@ -68,8 +68,8 @@ inline KPUSimulator::Config small_config() {
     c.l3_layer.capacity_kb      = 256;
     c.l2_layer.num_banks        = 4;
     c.l2_layer.capacity_kb      = 128;
-    c.l1_buffer_count           = 2;
-    c.l1_buffer_capacity_kb     = 64;
+    c.l1_layer.num_buffers      = 2;
+    c.l1_layer.capacity_kb      = 64;
     c.compute_tile_count        = 2;
     c.dma_engine_count          = 4;
     return c;
@@ -89,8 +89,8 @@ inline KPUSimulator::Config medium_config() {
     c.l3_layer.capacity_kb      = 1024;
     c.l2_layer.num_banks        = 4;
     c.l2_layer.capacity_kb      = 512;
-    c.l1_buffer_count           = 4;
-    c.l1_buffer_capacity_kb     = 256;
+    c.l1_layer.num_buffers      = 4;
+    c.l1_layer.capacity_kb      = 256;
     c.compute_tile_count        = 4;
     c.dma_engine_count          = 8;
     return c;
