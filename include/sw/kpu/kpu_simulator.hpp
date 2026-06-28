@@ -41,6 +41,7 @@
 #include <sw/kpu/models/temporal/memory/l2_bank.hpp>
 #include <sw/kpu/models/temporal/memory/l2_layer.hpp>
 #include <sw/kpu/models/temporal/memory/l1_buffer.hpp>
+#include <sw/kpu/models/temporal/memory/l1_layer.hpp>
 #include <sw/kpu/models/temporal/datamovement/block_mover.hpp>
 #include <sw/kpu/models/temporal/datamovement/streamer.hpp>
 #include <sw/kpu/models/temporal/compute/compute_fabric.hpp>
@@ -148,7 +149,7 @@ private:
     std::vector<ExternalMemory> memory_banks;  // KPU local memory banks
     L3Layer l3_layer;  // SoC-wide L3 aggregate: owns L3Tiles, BlockMovers, interconnect
     L2Layer l2_layer;  // SoC-wide L2 aggregate: owns L2Banks
-    std::vector<L1Buffer> l1_buffers;  // L1 streaming buffers (compute fabric)
+    L1Layer l1_layer;  // SoC-wide L1 aggregate: owns L1 stream buffers (monitoring/ownership)
     std::vector<PageBuffer> page_buffers;  // Page buffers (memory controller)
     std::vector<DMAEngine> dma_engines;
     std::vector<ComputeFabric> compute_tiles;
@@ -288,7 +289,7 @@ public:
     size_t get_memory_bank_count() const { return memory_banks.size(); }
     size_t get_l3_tile_count() const { return l3_layer.tile_count(); }
     size_t get_l2_bank_count() const { return l2_layer.bank_count(); }
-    size_t get_l1_buffer_count() const { return l1_buffers.size(); }
+    size_t get_l1_buffer_count() const { return l1_layer.buffer_count(); }
     size_t get_page_buffer_count() const { return page_buffers.size(); }
     size_t get_compute_tile_count() const { return compute_tiles.size(); }
     size_t get_dma_engine_count() const { return dma_engines.size(); }
