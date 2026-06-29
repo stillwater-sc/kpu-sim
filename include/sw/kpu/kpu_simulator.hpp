@@ -41,6 +41,7 @@
 #include <sw/kpu/models/temporal/memory/l2_bank.hpp>
 #include <sw/kpu/models/temporal/memory/l2_layer.hpp>
 #include <sw/kpu/models/temporal/memory/l1_buffer.hpp>
+#include <sw/kpu/models/temporal/memory/l1_layer.hpp>
 #include <sw/kpu/models/temporal/datamovement/block_mover.hpp>
 #include <sw/kpu/models/temporal/datamovement/streamer.hpp>
 #include <sw/kpu/models/temporal/compute/compute_fabric.hpp>
@@ -78,12 +79,14 @@ public:
         // l2_layer.capacity_kb for a uniform layer, or l2_layer.bank_groups
         // for a non-uniform one.
         L2LayerConfig l2_layer;
-        // L1 streaming buffers: DERIVED from processor array configuration
-        // For rectangular arrays: 4 × (rows + cols) per compute tile
-        // For hexagonal arrays: 12 × side_length per compute tile
-        // See processor_array_topology.hpp for derivation formulas
-        Size l1_buffer_count;           // Auto-computed if 0; set only for testing
-        Size l1_buffer_capacity_kb;
+        // L1 layer: aggregate config (stream buffers feeding the compute fabric).
+        // Use l1_layer.num_buffers / l1_layer.capacity_kb for a uniform layer, or
+        // l1_layer.buffer_groups for a non-uniform one.
+        // The buffer count is typically DERIVED from the processor array
+        // configuration (4 × (rows + cols) per compute tile for rectangular
+        // arrays; see processor_array_topology.hpp) — set l1_layer.num_buffers
+        // accordingly (0 = none / set by the caller).
+        L1LayerConfig l1_layer;
 
         // Data movement engines
         // Note: BlockMovers are configured via l3_layer.block_mover_count
@@ -117,7 +120,6 @@ public:
               memory_bandwidth_gbps(0),
               memory_controller_count(0),
               page_buffer_count(0), page_buffer_capacity_kb(0),
-              l1_buffer_count(0), l1_buffer_capacity_kb(0),
               dma_engine_count(0), streamer_count(0),
               compute_tile_count(0),
               processor_array_rows(0), processor_array_cols(0),
@@ -148,7 +150,7 @@ private:
     std::vector<ExternalMemory> memory_banks;  // KPU local memory banks
     L3Layer l3_layer;  // SoC-wide L3 aggregate: owns L3Tiles, BlockMovers, interconnect
     L2Layer l2_layer;  // SoC-wide L2 aggregate: owns L2Banks
-    std::vector<L1Buffer> l1_buffers;  // L1 streaming buffers (compute fabric)
+    L1Layer l1_layer;  // SoC-wide L1 aggregate: owns L1 stream buffers (monitoring/ownership)
     std::vector<PageBuffer> page_buffers;  // Page buffers (memory controller)
     std::vector<DMAEngine> dma_engines;
     std::vector<ComputeFabric> compute_tiles;
@@ -288,7 +290,7 @@ public:
     size_t get_memory_bank_count() const { return memory_banks.size(); }
     size_t get_l3_tile_count() const { return l3_layer.tile_count(); }
     size_t get_l2_bank_count() const { return l2_layer.bank_count(); }
-    size_t get_l1_buffer_count() const { return l1_buffers.size(); }
+    size_t get_l1_buffer_count() const { return l1_layer.buffer_count(); }
     size_t get_page_buffer_count() const { return page_buffers.size(); }
     size_t get_compute_tile_count() const { return compute_tiles.size(); }
     size_t get_dma_engine_count() const { return dma_engines.size(); }

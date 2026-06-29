@@ -76,7 +76,7 @@ BoundSchedule ScheduleBinder::bind(const dfx::Program& program) {
             current_l2_bank = (current_l2_bank + 1) % config_.l2_layer.num_banks;
 
             bound.l1_buffer_id = current_l1_buffer;
-            current_l1_buffer = (current_l1_buffer + 1) % config_.l1_buffer_count;
+            current_l1_buffer = (current_l1_buffer + 1) % config_.l1_layer.num_buffers;
 
             // Calculate addresses
             bound.source_addr = calculate_address(data_move->source, src_level);

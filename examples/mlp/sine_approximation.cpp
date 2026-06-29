@@ -188,8 +188,8 @@ int main() {
     config.l3_layer.capacity_kb = 128;
     config.l2_layer.num_banks = 8;
     config.l2_layer.capacity_kb = 64;
-    config.l1_buffer_count = 4;
-    config.l1_buffer_capacity_kb = 64;
+    config.l1_layer.num_buffers = 4;
+    config.l1_layer.capacity_kb = 64;
     config.processor_array_rows = 16;
     config.processor_array_cols = 16;
     config.use_systolic_array_mode = true;

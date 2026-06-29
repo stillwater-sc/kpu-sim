@@ -21,8 +21,8 @@ public:
         config.memory_bank_count = 2;
         config.memory_bank_capacity_mb = 64;
         config.memory_bandwidth_gbps = 8;
-        config.l1_buffer_count = 4;
-        config.l1_buffer_capacity_kb = 256;
+        config.l1_layer.num_buffers = 4;
+        config.l1_layer.capacity_kb = 256;
         config.compute_tile_count = 1;
         config.dma_engine_count = 4;
         config.l3_layer.num_tiles = 4;
@@ -320,7 +320,7 @@ TEST_CASE_METHOD(StreamerTestFixture, "Streamer Error Handling", "[streamer][err
     }
 
     SECTION("Validates L1 buffer ID bounds") {
-        const size_t invalid_l1_id = config.l1_buffer_count + 1;
+        const size_t invalid_l1_id = config.l1_layer.num_buffers + 1;
 
         REQUIRE_THROWS_AS(
             sim->start_row_stream(0, 0, invalid_l1_id, 0, 0, 4, 4, 4, 2),

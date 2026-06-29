@@ -17,8 +17,8 @@ int main() {
     config.memory_bank_count = 2;
     config.memory_bank_capacity_mb = 1024;
     config.memory_bandwidth_gbps = 100;
-    config.l1_buffer_count = 2;
-    config.l1_buffer_capacity_kb = 64;
+    config.l1_layer.num_buffers = 2;
+    config.l1_layer.capacity_kb = 64;
     config.compute_tile_count = 2;
     config.dma_engine_count = 2;
     config.processor_array_rows = 16;
@@ -27,7 +27,7 @@ int main() {
 
     std::cout << "Creating KPU with configuration:\n";
     std::cout << "  Memory banks: " << config.memory_bank_count << "\n";
-    std::cout << "  L1 buffers: " << config.l1_buffer_count << "\n";
+    std::cout << "  L1 buffers: " << config.l1_layer.num_buffers << "\n";
     std::cout << "  Compute tiles: " << config.compute_tile_count << "\n\n";
 
     // Create simulator

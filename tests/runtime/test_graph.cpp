@@ -34,8 +34,8 @@ protected:
         config.l2_layer.capacity_kb = 64;
         config.page_buffer_count = 2;
         config.page_buffer_capacity_kb = 64;
-        config.l1_buffer_count = 4;
-        config.l1_buffer_capacity_kb = 64;
+        config.l1_layer.num_buffers = 4;
+        config.l1_layer.capacity_kb = 64;
         config.dma_engine_count = 2;
         config.l3_layer.block_mover_count = 4;
         config.streamer_count = 8;

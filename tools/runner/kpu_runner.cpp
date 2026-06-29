@@ -81,8 +81,8 @@ KPUSimulator::Config convert_config(const SimulatorConfig& sim_config) {
     config.l2_layer.capacity_kb = 64;  // Default
 
     // L1 buffers - derived from compute fabric
-    config.l1_buffer_count = 0;  // Auto-compute
-    config.l1_buffer_capacity_kb = 32;
+    config.l1_layer.num_buffers = 0;  // Auto-compute
+    config.l1_layer.capacity_kb = 32;
 
     // Data movement
     config.dma_engine_count = sim_config.num_dma_engines;

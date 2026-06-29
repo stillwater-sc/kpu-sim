@@ -19,10 +19,22 @@ Concretely:
 - **Keep** the element types `L3Tile`, `L2Bank`, `L1Buffer` exactly as they are —
   they are real, addressable, configurable entities that matter to the machine's
   operation. This is **not** a rename of the elements.
-- **Do not** create an `L1Layer` memory aggregate. The L1 stream buffers are too
-  tightly coupled to the compute fabric; attach `L1Buffer`s to the **compute
-  fabric** and make the **Streamer** the entity that translates L2 bank shape
-  into L1 buffer shape.
+- Introduce an **`L1Layer`** aggregate that owns the `L1Buffer` stream buffers,
+  symmetric with `L2Layer` and `L3Layer`. *(Updated 2026-06-28 — supersedes an
+  earlier draft that folded `L1Buffer` into the `ComputeFabric`; see
+  "On `L1Layer`" below.)*
+
+### Principle: Layers are monitoring/ownership structures, not a dataflow API
+
+`L3Layer` / `L2Layer` / `L1Layer` are **conceptual resource owners** that reflect
+the physical distribution of storage across the SoC. They exist to let us
+**interrogate L3/L2/L1 resources for monitoring and debug** (occupancy, capacity,
+per-element state). They **must NOT** be part of any **ResourceManager API** or be
+used for **domain-flow / dataflow functionality** — precisely because these
+components are physically distributed. The actual data movement, reuse, and
+credit flow through the hierarchy is driven by the **distributed CSP engines**
+(DMA, BlockMover, Streamer) executing a global schedule. *The Layers observe; the
+CSPs drive.*
 
 ## The Defect Being Corrected
 
@@ -92,20 +104,29 @@ mechanics from scratch.
 | L3→L2 mover | `BlockMover` *(retained, ownership moves)* | pushes a tile from its `L3Tile` down into the `L2Layer` | **owned by `L3Layer`**, one attached per `L3Tile` (was a flat `std::vector<BlockMover>` on the simulator, `kpu_simulator.hpp:150`) |
 | L2 layer (whole) | **`L2Layer`** *(new)* | collection of `L2Bank`, layer ports, (interconnect TBD) | aggregate; may be **non-uniform** |
 | L2 element | `L2Bank` *(retained)* | own capacity, ports | addressable element |
-| L1 stream buffers | `L1Buffer` *(retained)* | own capacity, double-buffering | **owned by `ComputeFabric`**, not a memory layer |
+| L1 layer (whole) | **`L1Layer`** *(new)* | collection of `L1Buffer` stream buffers | aggregate; owner for monitoring/debug; may be **non-uniform** |
+| L1 element | `L1Buffer` *(retained)* | own capacity, double-buffering | addressable stream buffer feeding the compute fabric |
 | L2→L1 shape translation | `Streamer` *(existing role, made explicit)* | translates L2 bank shape → L1 buffer shape | the entity that bridges memory layer and compute |
 
-### Why no `L1Layer`
+### On `L1Layer` (decision updated 2026-06-28)
 
-L1 buffers are derived from and lifecycle-bound to the compute tiles
-(`4×(rows+cols)` per tile). Modeling an `L1Layer` peer to `L3Layer`/`L2Layer`
-would create a second owner for buffers that conceptually belong to compute. So:
+An earlier draft argued there should be **no** `L1Layer`: L1 buffers are derived
+from and lifecycle-bound to the compute tiles (`4×(rows+cols)` per tile), so they
+"belong" to the `ComputeFabric`. **That reasoning is rejected:**
 
-- `L1Buffer`s become members of `ComputeFabric` (or a compute-owned sub-struct).
-- The `Streamer` is the explicit bridge: it reads the L2 bank shape and feeds the
-  appropriately shaped L1 buffers for the compute fabric it serves.
-- Issue #34 changes from "introduce L1Layer" to "relocate L1Buffer ownership to
-  the compute fabric and formalize the Streamer's L2→L1 shape translation."
+- It does not distinguish L1 from L2. The size/shape of the `L2Layer`'s `L2Bank`
+  structures is **also** a function of the fabric size and kernel schedule — the
+  same properties that size the L1 buffers. If derivation-from-fabric justified
+  folding L1 into compute, it would equally justify folding L2 into compute,
+  which we do not do.
+- Under the monitoring/ownership framing above, an L1 owner is exactly what we
+  want for efficient inspection of the L1 resources. Symmetry of the hierarchy
+  (L3/L2/L1 each have an owner) is the right model.
+
+So **`L1Layer` is introduced** as a peer of `L2Layer`/`L3Layer`, owning the
+`L1Buffer` stream buffers. It is an *ownership/monitoring* structure only (see the
+principle above) — it is **not** wired into any ResourceManager or dataflow path,
+and the `Streamer` remains the CSP that actually drives L2→L1 movement.
 
 ## Key Requirement: Non-Uniform Layers (heterogeneous compute fabrics)
 
@@ -220,4 +241,4 @@ and must be updated in lockstep.
 | #35 | Tracking: rename L*→L*Layer | **Design epic**: introduce aggregate layers; this plan |
 | #32 | Rename `L3Tile`→`L3Layer` | **Introduce `L3Layer`** aggregate owning retained `L3Tile`s + interconnect + ports; non-uniform tile groups |
 | #33 | Rename `L2Bank`→`L2Layer` | **Introduce `L2Layer`** aggregate owning retained `L2Bank`s + ports; non-uniform bank/port groups |
-| #34 | Rename `L1Buffer`→`L1Layer` | **Relocate `L1Buffer` to `ComputeFabric`**; formalize `Streamer` as L2→L1 shape translator; **no** `L1Layer` |
+| #34 | Rename `L1Buffer`→`L1Layer` | **Introduce `L1Layer`** aggregate owning retained `L1Buffer`s (monitoring/ownership only, not a dataflow API); `Streamer` remains the L2→L1 CSP driver |

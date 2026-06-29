@@ -31,11 +31,9 @@ KPUSimulator::KPUSimulator(const Config& config) : current_cycle(0) {
     // Initialize the L2 layer aggregate - owns the L2Banks.
     l2_layer = L2Layer(config.l2_layer);
 
-    // Initialize L1 streaming buffers - part of compute fabric
-    l1_buffers.reserve(config.l1_buffer_count);
-    for (size_t i = 0; i < config.l1_buffer_count; ++i) {
-        l1_buffers.emplace_back(i, config.l1_buffer_capacity_kb);
-    }
+    // Initialize the L1 layer aggregate - owns the L1 stream buffers that feed
+    // the compute fabric.
+    l1_layer = L1Layer(config.l1_layer);
 
     // Initialize page buffers - memory controller page buffers
     page_buffers.reserve(config.page_buffer_count);
@@ -138,12 +136,13 @@ KPUSimulator::KPUSimulator(const Config& config) : current_cycle(0) {
         current_addr += capacity;
     }
 
-    // L1 streaming buffers (compute fabric)
+    // L1 streaming buffers (capacities come from the constructed L1 layer;
+    // supports non-uniform buffers)
     if (config.l1_buffer_base != 0) {
         current_addr = config.l1_buffer_base;
     }
-    for (size_t i = 0; i < config.l1_buffer_count; ++i) {
-        Size capacity = config.l1_buffer_capacity_kb * 1024;
+    for (size_t i = 0; i < l1_layer.buffer_count(); ++i) {
+        Size capacity = l1_layer.buffer(i).get_capacity();
         address_decoder.add_region(current_addr, capacity, sw::memory::MemoryType::L1, i,
                                   "L1 Buffer " + std::to_string(i));
         current_addr += capacity;
@@ -225,12 +224,12 @@ void KPUSimulator::write_l2_bank(size_t bank_id, Address addr, const void* data,
 
 void KPUSimulator::read_l1_buffer(size_t buffer_id, Address addr, void* data, Size size) {
     validate_l1_buffer_id(buffer_id);
-    l1_buffers[buffer_id].read(addr, data, size);
+    l1_layer.buffers()[buffer_id].read(addr, data, size);
 }
 
 void KPUSimulator::write_l1_buffer(size_t buffer_id, Address addr, const void* data, Size size) {
     validate_l1_buffer_id(buffer_id);
-    l1_buffers[buffer_id].write(addr, data, size);
+    l1_layer.buffers()[buffer_id].write(addr, data, size);
 }
 
 // ===========================================
@@ -433,7 +432,7 @@ void KPUSimulator::reset() {
     for (auto& l2_bank : l2_layer.banks()) {
         l2_bank.reset();
     }
-    for (auto& l1_buffer : l1_buffers) {
+    for (auto& l1_buffer : l1_layer.buffers()) {
         l1_buffer.reset();
     }
     for (auto& pad : page_buffers) {
@@ -481,10 +480,10 @@ void KPUSimulator::step() {
         block_mover.process_transfers(l3_layer.tiles(), l2_layer.banks());
     }
     for (auto& streamer : streamers) {
-        streamer.update(current_cycle, l2_layer.banks(), l1_buffers);
+        streamer.update(current_cycle, l2_layer.banks(), l1_layer.buffers());
     }
     for (auto& tile : compute_tiles) {
-        tile.update(current_cycle, l1_buffers);
+        tile.update(current_cycle, l1_layer.buffers());
     }
 }
 
@@ -545,7 +544,7 @@ Size KPUSimulator::get_l2_bank_capacity(size_t bank_id) const {
 
 Size KPUSimulator::get_l1_buffer_capacity(size_t buffer_id) const {
     validate_l1_buffer_id(buffer_id);
-    return l1_buffers[buffer_id].get_capacity();
+    return l1_layer.buffers()[buffer_id].get_capacity();
 }
 
 Size KPUSimulator::get_page_buffer_capacity(size_t pad_id) const {
@@ -567,7 +566,7 @@ void KPUSimulator::print_stats() const {
     std::cout << "Memory banks: " << memory_banks.size() << std::endl;
     std::cout << "L3 tiles: " << l3_layer.tiles().size() << std::endl;
     std::cout << "L2 banks: " << l2_layer.banks().size() << std::endl;
-    std::cout << "L1 buffers: " << l1_buffers.size() << std::endl;
+    std::cout << "L1 buffers: " << l1_layer.buffers().size() << std::endl;
     std::cout << "Page buffers: " << page_buffers.size() << std::endl;
     std::cout << "Compute tiles: " << compute_tiles.size() << std::endl;
     std::cout << "DMA engines: " << dma_engines.size() << std::endl;
@@ -610,9 +609,9 @@ void KPUSimulator::print_component_status() const {
     }
 
     std::cout << "L1 Buffers (Compute Fabric):" << std::endl;
-    for (size_t i = 0; i < l1_buffers.size(); ++i) {
-        std::cout << "  L1Buffer[" << i << "]: " << l1_buffers[i].get_capacity() / 1024
-                  << " KB, Ready: " << (l1_buffers[i].is_ready() ? "Yes" : "No") << std::endl;
+    for (size_t i = 0; i < l1_layer.buffers().size(); ++i) {
+        std::cout << "  L1Buffer[" << i << "]: " << l1_layer.buffers()[i].get_capacity() / 1024
+                  << " KB, Ready: " << (l1_layer.buffers()[i].is_ready() ? "Yes" : "No") << std::endl;
     }
 
     std::cout << "Block Movers:" << std::endl;
@@ -654,7 +653,7 @@ bool KPUSimulator::is_l2_bank_ready(size_t bank_id) const {
 
 bool KPUSimulator::is_l1_buffer_ready(size_t buffer_id) const {
     validate_l1_buffer_id(buffer_id);
-    return l1_buffers[buffer_id].is_ready();
+    return l1_layer.buffers()[buffer_id].is_ready();
 }
 
 bool KPUSimulator::is_page_buffer_ready(size_t pad_id) const {
@@ -706,7 +705,7 @@ void KPUSimulator::validate_l2_bank_id(size_t bank_id) const {
 }
 
 void KPUSimulator::validate_l1_buffer_id(size_t buffer_id) const {
-    if (buffer_id >= l1_buffers.size()) {
+    if (buffer_id >= l1_layer.buffers().size()) {
         throw std::out_of_range("Invalid L1 buffer ID: " + std::to_string(buffer_id));
     }
 }
@@ -785,8 +784,8 @@ KPUSimulator::Config generate_multi_bank_config(size_t num_banks, size_t num_til
     config.memory_bank_count = num_banks;
     config.memory_bank_capacity_mb = 512; // Smaller banks for multi-bank setup
     config.memory_bandwidth_gbps = 16; // Higher bandwidth per bank
-    config.l1_buffer_count = num_tiles; // One L1 buffer per tile
-    config.l1_buffer_capacity_kb = 256;
+    config.l1_layer.num_buffers = num_tiles; // One L1 buffer per tile
+    config.l1_layer.capacity_kb = 256;
     config.compute_tile_count = num_tiles;
     config.dma_engine_count = num_banks + num_tiles; // Plenty of DMA engines
     return config;
@@ -949,7 +948,7 @@ Address KPUSimulator::get_l1_buffer_base(size_t buffer_id) const {
     }
     // Then add offsets for L1 buffers before this one
     for (size_t i = 0; i < buffer_id; ++i) {
-        base += l1_buffers[i].get_capacity();
+        base += l1_layer.buffers()[i].get_capacity();
     }
     return base;
 }
@@ -970,7 +969,7 @@ Address KPUSimulator::get_page_buffer_base(size_t pad_id) const {
     for (const auto& bank : l2_layer.banks()) {
         base += bank.get_capacity();
     }
-    for (const auto& buffer : l1_buffers) {
+    for (const auto& buffer : l1_layer.buffers()) {
         base += buffer.get_capacity();
     }
     // Then add offsets for page buffers before this one

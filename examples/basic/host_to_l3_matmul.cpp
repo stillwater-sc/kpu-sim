@@ -156,8 +156,8 @@ This example demonstrates the full data flow for matrix multiplication:
     config.l3_layer.capacity_kb = 128;
     config.l2_layer.num_banks = 4;
     config.l2_layer.capacity_kb = 64;
-    config.l1_buffer_count = 64;
-    config.l1_buffer_capacity_kb = 64;
+    config.l1_layer.num_buffers = 64;
+    config.l1_layer.capacity_kb = 64;
     config.compute_tile_count = 1;
     config.processor_array_rows = 8;
     config.processor_array_cols = 8;
@@ -177,8 +177,8 @@ This example demonstrates the full data flow for matrix multiplication:
               << config.l3_layer.capacity_kb << " KB\n";
     std::cout << "  L2 Banks:        " << config.l2_layer.num_banks << " × "
               << config.l2_layer.capacity_kb << " KB\n";
-    std::cout << "  L1 Buffers:      " << config.l1_buffer_count << " × "
-              << config.l1_buffer_capacity_kb << " KB\n";
+    std::cout << "  L1 Buffers:      " << config.l1_layer.num_buffers << " × "
+              << config.l1_layer.capacity_kb << " KB\n";
     std::cout << "  Systolic Array:  " << config.processor_array_rows << "×"
               << config.processor_array_cols << "\n";
 
