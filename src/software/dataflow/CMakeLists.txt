@@ -4,6 +4,7 @@
 set(DATAFLOW_SOURCES
     tile_dataflow_graph.cpp
     block_mover_compiler.cpp
+    fused_mlp_sure.cpp
 )
 
 add_library(kpu_dataflow ${DATAFLOW_SOURCES})
@@ -19,6 +20,17 @@ target_link_libraries(kpu_dataflow
     PUBLIC
         kpu_datamovement_components
 )
+
+# fused_mlp_sure.cpp uses domain_flow as its polyhedral math kernel. Add the
+# include as SYSTEM (so -Wall/-Wextra/-Wpedantic + CI -Werror do not trip on
+# domain_flow's headers), mirroring kpu_compiler. The public header is
+# domain_flow-free, so this stays PRIVATE to the library.
+if(DOMAIN_FLOW_AVAILABLE)
+    target_compile_definitions(kpu_dataflow PRIVATE KPU_HAS_DOMAIN_FLOW)
+    if(DOMAIN_FLOW_INCLUDE_DIR)
+        target_include_directories(kpu_dataflow SYSTEM PRIVATE ${DOMAIN_FLOW_INCLUDE_DIR})
+    endif()
+endif()
 
 set_target_properties(kpu_dataflow PROPERTIES
     CXX_STANDARD 20

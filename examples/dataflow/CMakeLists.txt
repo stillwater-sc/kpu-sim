@@ -8,9 +8,9 @@
 # Only meaningful when domain_flow is available.
 add_executable(fused_mlp_sure_demo fused_mlp_sure_demo.cpp)
 
-# kpu_compiler PUBLIC-exposes KPU_HAS_DOMAIN_FLOW and the domain_flow SYSTEM
-# include path, and links whatever domain_flow needs.
-target_link_libraries(fused_mlp_sure_demo PRIVATE kpu_compiler)
+# Thin client of the reusable FusedMlpSure library (kpu_dataflow). The library's
+# public header is domain_flow-free, so the demo needs no domain_flow setup.
+target_link_libraries(fused_mlp_sure_demo PRIVATE kpu_dataflow)
 
 set_target_properties(fused_mlp_sure_demo PROPERTIES FOLDER "Examples/Dataflow")
 
