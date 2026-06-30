@@ -84,9 +84,11 @@ Y(i, j) = activation( C(i, j, K-1) + b(j) )
 ```
 
 `C` at the terminal face is consumed **in place** by the bias-add and
-activation. The dependence epilogue→accumulation is **intra-domain** (a boundary
-dependence within `D`), not an inter-domain edge. `b(j)` enters at the terminal
-face (broadcast over `i`, `k`). The only value that leaves `D` is `Y(i,j)`.
+activation. The epilogue **reads** the accumulation result `C(i,j,K-1)` — it does
+not feed the accumulation; that dependence (accumulation → epilogue) is
+**intra-domain** (a boundary dependence within `D`), not an inter-domain edge.
+`b(j)` enters at the terminal face (broadcast over `i`, `k`). The only value that
+leaves `D` is `Y(i,j)`.
 
 ### 3.2 Dependence summary
 
@@ -135,15 +137,26 @@ which we bypass by constructing the recurrence system explicitly):
 
 Construction sketch (one fused node, one domain):
 
-1. Build `ConstraintSet` for `0≤i<B, 0≤j<N, 0≤k<K`; `IndexSpace::enumerate()`.
-2. Create `RecurrenceVariable`s `X,W,C,b,Y`; attach dependences via `AffineMap`:
-   `X.dependsOn(X, shift(0,1,0))`, `W.dependsOn(W, shift(1,0,0))`,
-   `C.dependsOn(C, shift(0,0,1))`, plus the terminal-face epilogue for `Y`.
-3. Attach the recurrence system + index space to a `DomainFlowNode`'s
-   `DomainOfComputation`; tag the node (attribute `fused = matmul_bias_<act>`),
-   map `b` and `Y` confluences to the `k=K-1` face.
-4. `applyLinearSchedule(τ)` with `τ=(0,0,1)` to generate wavefronts; sanity-check
-   latency/speed-of-light.
+*Conceptual mapping. The realized B3 path (see "Resolved" below) builds the
+domain and schedule directly from the standalone primitives and does **not**
+construct a `DomainFlowNode`; steps 3–4 describe the graph-IR mapping that B3
+supersedes.*
+
+1. Build `ConstraintSet` for `0≤i<B, 0≤j<N, 0≤k<K`; construct an `IndexSpace`
+   from it (its constructor enumerates the integer points of `D`).
+2. Create `RecurrenceVariable`s `X,W,C` and attach their **uniform** dependences
+   via `AffineMap`: `X.dependsOn(X, shift(0,1,0))`,
+   `W.dependsOn(W, shift(1,0,0))`, `C.dependsOn(C, shift(0,0,1))`. The bias `b`
+   and output `Y` are **not** graph recurrence variables — they are the
+   terminal-face epilogue `Y(i,j) = act(C(i,j,K-1) + b(j))`, applied when a point
+   reaches `k=K-1`. (This is exactly what `fused_mlp_sure.cpp` does: only `X,W,C`
+   are `sw::dfa` recurrence variables.)
+3. *(graph-IR mapping, not taken by B3)* Attach the recurrence system + index
+   space to a `DomainFlowNode`'s `DomainOfComputation`; tag the node (attribute
+   `fused = matmul_bias_<act>`), map `b` and `Y` confluences to the `k=K-1` face.
+4. *(graph-IR mapping, not taken by B3)* `applyLinearSchedule(τ)` with `τ=(0,0,1)`
+   to generate wavefronts. In B3 the schedule is applied directly over the
+   enumerated index space (`ScheduleVector::dot`), as in the demo/library.
 
 ### Resolved: approach B3 (own the fused domain in kpu-sim)
 

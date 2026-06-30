@@ -15,6 +15,7 @@
 
 #include <sw/kpu/dataflow/fused_mlp_sure.hpp>
 
+#include <algorithm>
 #include <cmath>
 #include <iostream>
 #include <vector>

@@ -1,6 +1,7 @@
 #include <sw/kpu/dataflow/fused_mlp_sure.hpp>
 
 #include <cmath>
+#include <limits>
 #include <sstream>
 #include <stdexcept>
 
@@ -57,8 +58,24 @@ FusedMlpSure::FusedMlpSure(const FusedMlpSureConfig& config) : config_(config) {
     const std::size_t B = config_.batch;
     const std::size_t K = config_.in_features;
     const std::size_t N = config_.out_features;
+
+    // Reject degenerate / oversized shapes before deriving the domain. With
+    // K == 0 there is no terminal accumulation face (the epilogue cannot fire);
+    // a 0 in any dimension is an empty operator, not a valid fused MLP layer.
+    // Bounding each dimension by INT_MAX keeps the (i,j,k) index coordinates and
+    // the constraint right-hand sides within the int domain used by the polyhedron.
+    if (B == 0 || K == 0 || N == 0) {
+        throw std::invalid_argument(
+            "FusedMlpSure: batch, in_features, and out_features must all be >= 1");
+    }
+    constexpr std::size_t kMaxDim = static_cast<std::size_t>(std::numeric_limits<int>::max());
+    if (B > kMaxDim || K > kMaxDim || N > kMaxDim) {
+        throw std::invalid_argument(
+            "FusedMlpSure: a dimension exceeds the supported range (INT_MAX)");
+    }
+
     const std::size_t expected = B * N * K;
-    constraint_count_ = (B && K && N) ? 6 : 0;
+    constraint_count_ = 6;
 
 #ifdef KPU_HAS_DOMAIN_FLOW
     // Build the fused domain D = {(i,j,k)} as a single polyhedron via
