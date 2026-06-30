@@ -145,13 +145,28 @@ Construction sketch (one fused node, one domain):
 4. `applyLinearSchedule(τ)` with `τ=(0,0,1)` to generate wavefronts; sanity-check
    latency/speed-of-light.
 
-### Open verification item
+### Resolved: approach B3 (own the fused domain in kpu-sim)
 
-If domain_flow's `DomainOfComputation` / `RecurrenceVariable` API turns out to
-force everything through `elaborate(opType)` and cannot cleanly carry a custom
-boundary recurrence, the minimal fallback is a small **upstream** addition to
-`branes-ai/domain_flow` (a `FUSED_MATMUL_BIAS_ACT` elaboration). This would be
-raised as an explicit decision, not a silent fork.
+Verification of the domain_flow headers settled the open question: a
+`DomainFlowNode`'s domain is elaborated **purely from `opType`**
+(`domain_of_computation.hpp` `elaborate*` switch over `ADD/MATMUL/…`), and
+`RecurrenceVariable` is **decoupled** from the graph path (used only in
+`recurrence_var.hpp` / `dependency_graph.hpp`). There is **no API to attach a
+custom boundary recurrence to a graph node**, so a genuine single-domain fusion
+cannot be expressed through domain_flow's graph IR as-is.
+
+Decision (**B3**): build the fused domain *in kpu-sim* using domain_flow's
+**standalone** primitives — `ConstraintSet` → `IndexSpace` for the merged
+`(i,j,k)` domain, `RecurrenceVariable` + `AffineMap` for the recurrence system,
+`ScheduleVector` for the output-stationary schedule — leaving domain_flow
+unmodified (it is the polyhedral/affine math kernel). Reference implementation:
+`examples/dataflow/fused_mlp_sure_demo.cpp` (self-validating; registered as the
+`fused_mlp_sure_demo` CTest).
+
+The two upstream alternatives are filed against domain_flow so they are not lost:
+- **B1** — fused `MATMUL` epilogue via an output-face activation attribute
+  (bias via existing `Cin`): `branes-ai/domain_flow#1`.
+- **B2** — dedicated `FUSED_MATMUL_BIAS_ACT` operator: `branes-ai/domain_flow#2`.
 
 ## 6. Bridge into kpu-sim
 
