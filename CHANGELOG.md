@@ -49,6 +49,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Fused batched-MLP SURE (`FusedMlpSure`) (#46, epic #45).** Models the fused
+  `Y = activation(X·W + b)` operator as a single System of Uniform Recurrence
+  Equations over one `(i,j,k)` domain, with the bias + activation as boundary
+  recurrences on the terminal accumulation face `k=K-1` (fusion = merged domain,
+  no materialized intermediate tensor).
+  - `include/sw/kpu/dataflow/fused_mlp_sure.hpp` + `src/software/dataflow/fused_mlp_sure.cpp`
+    (in `kpu_dataflow`): a domain_flow-free public API — `FusedMlpSureConfig`,
+    `Activation` (Identity/ReLU/GELU/SiLU/Sigmoid), domain/schedule accessors,
+    and `evaluate(X, W, bias) → Y` (behavioral execution of the fused recurrence).
+  - Built on domain_flow's standalone polyhedral primitives
+    (`ConstraintSet`/`IndexSpace`/`RecurrenceVariable`/`AffineMap`/`ScheduleVector`)
+    as the math kernel — domain_flow itself is unmodified (approach "B3"); the two
+    upstream alternatives are filed as `branes-ai/domain_flow#1`/`#2`.
+  - `examples/dataflow/fused_mlp_sure_demo.cpp` — a runnable, self-validating demo
+    (registered as the `fused_mlp_sure_demo` CTest).
+  - Design: `docs/design/fused-mlp-sure.md`.
+
 - **CSP Schedule Generators (Phase 4)** — Complete schedule generation infrastructure
   for livelock-safe DNN operation scheduling:
   - `IScheduleGenerator` interface with `ScheduleOperation`, `ScheduleResult`,
