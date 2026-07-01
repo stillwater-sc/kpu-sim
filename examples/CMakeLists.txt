@@ -51,6 +51,10 @@ if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/schedule)
     add_subdirectory(schedule)
 endif()
 
+if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/dataflow)
+    add_subdirectory(dataflow)
+endif()
+
 if(KPU_BUILD_PYTHON_BINDINGS)
     # Python examples are handled by the Python package
     if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/python)
