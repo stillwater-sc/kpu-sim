@@ -55,7 +55,8 @@ classDiagram
 
     class TemporalModels {
         <<subsystem>>
-        L3Tile / L2Bank / L1Buffer
+        L3Layer / L2Layer / L1Layer
+        (own L3Tile / L2Bank / L1Buffer)
         DMAEngine / BlockMover / Streamer
         ComputeFabric / SystolicArray
     }
@@ -424,6 +425,22 @@ These are the components owned directly by `KPUSimulator` for the value-computin
 behavioral execution path. They model actual memory contents and perform actual
 matrix arithmetic.
 
+The on-chip storage hierarchy is owned through **layer aggregates**: `KPUSimulator`
+owns one `L3Layer`, one `L2Layer`, and one `L1Layer`, and each layer owns its
+element collection (`L3Tile`s, `L2Bank`s, `L1Buffer`s). The `L3Layer` additionally
+owns the `BlockMover`s (round-robin associated to tiles; target micro-architecture
+is one per tile) and an optional `L3Interconnect`.
+
+**Layers are conceptual resource owners for configuration/monitoring — NOT
+dataflow APIs.** Data movement and credit flow through the hierarchy remain driven
+by the distributed CSP engines (DMA, BlockMover, Streamer); the layers expose
+their element collections by reference (`tiles()` / `banks()` / `buffers()`) for
+those engines to operate on.
+
+Each layer's config supports two shapes: a **uniform convenience** path
+(`num_* + capacity_kb`) and a **canonical non-uniform** path — named
+`group -> element-spec -> multiplicity` entries for heterogeneous fabrics.
+
 ```mermaid
 classDiagram
     class KPUSimulator {
@@ -439,6 +456,56 @@ classDiagram
         +read() / write()
     }
 
+    class L3Layer {
+        -config_ L3LayerConfig
+        -tiles_ vector~L3Tile~
+        -block_movers_ vector~BlockMover~
+        -interconnect_ unique_ptr~L3Interconnect~
+        +tile(i) / tiles()
+        +block_mover(i) / block_movers()
+        +process_block_movers(l2_banks)
+        +has_interconnect() / interconnect()
+        +reset()
+    }
+
+    class L2Layer {
+        -config_ L2LayerConfig
+        -banks_ vector~L2Bank~
+        +bank(i) / banks()
+        +reset()
+    }
+
+    class L1Layer {
+        -config_ L1LayerConfig
+        -buffers_ vector~L1Buffer~
+        +buffer(i) / buffers()
+        +total_capacity_bytes()
+        +reset()
+    }
+
+    class L3LayerConfig {
+        +tile_groups vector~L3TileGroup~
+        +num_tiles / capacity_kb
+        +block_mover_count size_t
+        +enable_interconnect bool
+        +total_tiles()
+        +uniform(n, kb, movers)$
+    }
+
+    class L2LayerConfig {
+        +bank_groups vector~L2BankGroup~
+        +num_banks / capacity_kb
+        +total_banks()
+        +uniform(n, kb)$
+    }
+
+    class L1LayerConfig {
+        +buffer_groups vector~L1BufferGroup~
+        +num_buffers / capacity_kb
+        +total_buffers()
+        +uniform(n, kb)$
+    }
+
     class L3Tile {
         -memory_model vector~uint8_t~
         -capacity Size
@@ -449,17 +516,38 @@ classDiagram
     }
 
     class L2Bank {
-        -storage vector~uint8_t~
+        -memory_model vector~uint8_t~
+        -capacity Size
+        -bank_id size_t
+        +read() / write()
+        +read_cache_line() / write_cache_line()
         +read_block() / write_block()
+        +is_ready() bool
     }
 
     class L1Buffer {
-        -storage vector~uint8_t~
-        +read_block() / write_block()
+        -memory_model vector~uint8_t~
+        -capacity Size
+        -buffer_id size_t
+        +read() / write()
+        +read_stream() / write_stream()
+        +read_matrix_block() / write_matrix_block()
+        +is_ready() bool
+    }
+
+    class L3Interconnect {
+        -links_ vector~InterconnectLink~
+        +inject_packet(packet, cycle)
+        +set_delivery_callback()
+        +step(cycle)
+        +is_idle() / packets_in_flight()
     }
 
     class PageBuffer {
-        +coalesce()
+        -memory_model vector~uint8_t~
+        -capacity Size
+        +read() / write()
+        +is_ready() bool
     }
 
     class DMAEngine {
@@ -474,7 +562,7 @@ classDiagram
     class BlockMover {
         -transfer_queue vector~BlockTransfer~
         -associated_l3_tile_id size_t
-        +enqueue_transfer()
+        +enqueue_block_transfer()
         +update(cycle)
     }
 
@@ -505,20 +593,42 @@ classDiagram
     }
 
     KPUSimulator *-- "many" ExternalMemory : host + banks
-    KPUSimulator *-- "many" L3Tile
-    KPUSimulator *-- "many" L2Bank
-    KPUSimulator *-- "many" L1Buffer
+    KPUSimulator *-- "1" L3Layer
+    KPUSimulator *-- "1" L2Layer
+    KPUSimulator *-- "1" L1Layer
     KPUSimulator *-- "many" PageBuffer
     KPUSimulator *-- "many" DMAEngine
-    KPUSimulator *-- "many" BlockMover
     KPUSimulator *-- "many" Streamer
     KPUSimulator *-- "many" ComputeFabric
     KPUSimulator *-- AddressDecoder
 
+    L3Layer *-- "many" L3Tile
+    L3Layer *-- "many" BlockMover
+    L3Layer *-- "0..1" L3Interconnect
+    L2Layer *-- "many" L2Bank
+    L1Layer *-- "many" L1Buffer
+
+    L3Layer *-- L3LayerConfig
+    L2Layer *-- L2LayerConfig
+    L1Layer *-- L1LayerConfig
+
+    BlockMover ..> L2Bank : pushes tiles to
+    Streamer ..> L2Bank : reads from
+    Streamer ..> L1Buffer : feeds
+    ComputeFabric ..> L1Buffer : consumes
+
     ComputeFabric *-- SystolicArray
     DMAEngine ..> AddressDecoder
     DMAEngine ..> ExternalMemory : transfers
+    DMAEngine ..> L3Tile : pushes tiles to
 ```
+
+`KPUSimulator::Config` embeds the three layer configs (`l3_layer`, `l2_layer`,
+`l1_layer`); BlockMover count and timing live in `l3_layer.block_mover_count` /
+`block_mover_clock_ghz` / `block_mover_bandwidth_gb_s`, not in a top-level field.
+The L1 buffer count is typically *derived* from the processor-array topology
+(4 × (rows + cols) per compute tile for rectangular arrays; see
+`processor_array_topology.hpp`) — that derivation is the caller's responsibility.
 
 ---
 
@@ -643,6 +753,6 @@ classDiagram
 | Timing/CSP | `include/sw/kpu/timing/{concurrent_timing_executor, *_process, process_interface}.hpp` |
 | CSP Primitives | `include/sw/kpu/timing/{credit_pool, tag_cam, work_queue, tile_descriptor}.hpp` |
 | Interfaces & Fidelity | `include/sw/kpu/fidelity/*.hpp`, `include/sw/kpu/models/interfaces/*.hpp` |
-| Temporal | `include/sw/kpu/models/temporal/{memory, datamovement, compute}/*.hpp` |
+| Temporal | `include/sw/kpu/models/temporal/{memory, datamovement, compute}/*.hpp` — layer aggregates in `memory/{l3_layer, l2_layer, l1_layer}.hpp` |
 | Behavioral | `include/sw/kpu/models/behavioral/{compute, memory}/*.hpp` |
 | Trace | `include/sw/kpu/timing/process_interface.hpp` (TimingEvent), exporters in `ConcurrentTimingExecutor` |
