@@ -32,6 +32,7 @@ int main() {
 
     // Create simulator
     sw::kpu::KPUSimulator kpu(config);
+	std::cout << kpu.generate_config_report() << "\n";
 
     std::cout << "KPU created successfully!\n";
     std::cout << "  Using systolic arrays: " << (kpu.is_using_systolic_arrays() ? "Yes" : "No") << "\n";
