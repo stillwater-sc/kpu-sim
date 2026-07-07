@@ -41,8 +41,8 @@ namespace sw::kpu {
 
 /// Per-element (L1Buffer) micro-architecture spec at the temporal-model level.
 struct L1BufferSpec {
-    /// Capacity per buffer in KB.
-    Size capacity_kb = 32;
+    /// Capacity per buffer in bytes.
+	Size capacity_bytes = 64; // 16 elements of 4bytes each, for example. The actual element size is determined by the compute fabric's data type.
 };
 
 /// A named group of identical L1Buffers: element-config bound to a multiplicity.
@@ -54,13 +54,9 @@ struct L1BufferGroup {
 
 /// Configuration for an L1Layer aggregate.
 ///
-/// Two ways to describe the buffers:
-///  - **Canonical (non-uniform):** populate `buffer_groups` with named
+/// **Canonical** way to describe the buffers:
+///  - populate `buffer_groups` with named
 ///    `group -> element-config -> multiplicity` entries.
-///  - **Uniform convenience:** leave `buffer_groups` empty and set the scalar
-///    `num_buffers` / `capacity_kb` fields; the layer is then built as
-///    `num_buffers` identical buffers of `capacity_kb`.
-/// When `buffer_groups` is non-empty it takes precedence over the scalar fields.
 ///
 /// Note: the L1 buffer count is typically *derived* from the processor-array
 /// topology (see processor_array_topology.hpp). That derivation is a caller
@@ -69,29 +65,13 @@ struct L1LayerConfig {
     /// Buffer groups: group -> element-config -> multiplicity (non-uniform layers).
     std::vector<L1BufferGroup> buffer_groups;
 
-    /// Uniform convenience: number of identical buffers (used iff `buffer_groups` empty).
-    size_t num_buffers = 0;
-    /// Uniform convenience: per-buffer capacity in KB (used iff `buffer_groups` empty).
-    Size capacity_kb = 32;
-
-    /// Total number of buffers: sum of group multiplicities, or the uniform count.
+    /// Total number of buffers: sum of group multiplicities.
     size_t total_buffers() const {
-        if (!buffer_groups.empty()) {
-            size_t n = 0;
-            for (const auto& g : buffer_groups) {
-                n += g.multiplicity;
-            }
-            return n;
+        size_t n = 0;
+        for (const auto& g : buffer_groups) {
+            n += g.multiplicity;
         }
-        return num_buffers;
-    }
-
-    /// Convenience factory for a uniform layer.
-    static L1LayerConfig uniform(size_t num_buffers, Size capacity_kb) {
-        L1LayerConfig cfg;
-        cfg.num_buffers = num_buffers;
-        cfg.capacity_kb = capacity_kb;
-        return cfg;
+        return n;
     }
 };
 

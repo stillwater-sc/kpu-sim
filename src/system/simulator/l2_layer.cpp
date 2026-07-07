@@ -10,19 +10,12 @@ L2Layer::L2Layer(const L2LayerConfig& config)
     // Materialize the L2Bank elements, assigning a global flat bank_id so the
     // layer presents a single index space. Prefer the canonical bank_groups;
     // otherwise fall back to the uniform (num_banks x capacity_kb) convenience.
-    const size_t total = config_.total_banks();
-    banks_.reserve(total);
+    const size_t total_banks = config_.total_banks();
+    banks_.reserve(total_banks);
     size_t global_id = 0;
-    if (!config_.bank_groups.empty()) {
-        for (const auto& group : config_.bank_groups) {
-            for (size_t k = 0; k < group.multiplicity; ++k) {
-                banks_.emplace_back(global_id, group.bank.capacity_kb);
-                ++global_id;
-            }
-        }
-    } else {
-        for (size_t k = 0; k < config_.num_banks; ++k) {
-            banks_.emplace_back(global_id, config_.capacity_kb);
+    for (const auto& group : config_.bank_groups) {
+        for (size_t k = 0; k < group.multiplicity; ++k) {
+            banks_.emplace_back(global_id, group.bank.capacity_kb);
             ++global_id;
         }
     }

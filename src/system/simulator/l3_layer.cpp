@@ -11,35 +11,30 @@ L3Layer::L3Layer(const L3LayerConfig& config)
     // Materialize the L3Tile elements, assigning a global flat tile_id so the
     // layer presents a single index space. Prefer the canonical tile_groups;
     // otherwise fall back to the uniform (num_tiles x capacity_kb) convenience.
-    const size_t total = config_.total_tiles();
-    tiles_.reserve(total);
+    const size_t total_tiles = config_.total_tiles();
+    tiles_.reserve(total_tiles);
     size_t global_id = 0;
-    if (!config_.tile_groups.empty()) {
-        for (const auto& group : config_.tile_groups) {
-            for (size_t k = 0; k < group.multiplicity; ++k) {
-                tiles_.emplace_back(global_id, group.tile.capacity_kb);
-                ++global_id;
-            }
-        }
-    } else {
-        for (size_t k = 0; k < config_.num_tiles; ++k) {
-            tiles_.emplace_back(global_id, config_.capacity_kb);
+    for (const auto& group : config_.tile_groups) {
+        for (size_t k = 0; k < group.multiplicity; ++k) {
+            tiles_.emplace_back(global_id, group.tile.capacity_kb);
             ++global_id;
         }
     }
 
-    // Materialize the BlockMovers the layer owns. They are round-robin
-    // associated to tiles (target micro-architecture: one mover per tile).
+    // Materialize the BlockMovers the layer owns. 
+    // Target micro-architecture: four mover per tile, one for each NEWS direction.
+    const size_t total_blockmovers = total_tiles * 4;
+    config_.block_mover_count = total_blockmovers;
     block_movers_.reserve(config_.block_mover_count);
     for (size_t i = 0; i < config_.block_mover_count; ++i) {
-        const size_t associated_tile = total > 0 ? (i % total) : 0;
+        const size_t associated_tile = total_tiles > 0 ? (i / 4) : 0;
         block_movers_.emplace_back(i, associated_tile,
                                    config_.block_mover_clock_ghz,
-                                   config_.block_mover_bandwidth_gb_s);
+                                   config_.block_mover_buswidth_bits);
     }
 
     // Construct the interconnect only when requested (ownership seam).
-    if (config_.enable_interconnect && total > 0) {
+    if (config_.enable_interconnect && total_tiles > 0) {
         interconnect_ = std::make_unique<L3Interconnect>();
     }
 }

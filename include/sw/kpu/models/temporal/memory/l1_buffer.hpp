@@ -36,11 +36,11 @@ namespace sw::kpu {
 class KPU_API L1Buffer {
 private:
     std::vector<std::uint8_t> memory_model;
-    Size capacity;
+    Size capacity_bytes;
     size_t buffer_id;
 
 public:
-    explicit L1Buffer(size_t buffer_id, Size capacity_kb = 32);
+    explicit L1Buffer(size_t buffer_id, Size capacity_bytes);
     ~L1Buffer() = default;
 
     // Memory operations
@@ -61,7 +61,7 @@ public:
                            Size stride = 0);
 
     // Status and configuration
-    Size get_capacity() const { return capacity; }
+    Size get_capacity() const { return capacity_bytes; }
     size_t get_buffer_id() const { return buffer_id; }
     bool is_ready() const { return true; } // Simplified for now
     void reset();

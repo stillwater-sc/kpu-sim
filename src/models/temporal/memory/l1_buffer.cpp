@@ -7,21 +7,21 @@
 namespace sw::kpu {
 
 // L1Buffer implementation - L1 streaming buffers for compute fabric
-L1Buffer::L1Buffer(size_t buffer_id, Size capacity_kb)
-    : capacity(capacity_kb * 1024), buffer_id(buffer_id) {
-    memory_model.resize(capacity);
+L1Buffer::L1Buffer(size_t buffer_id, Size capacity_in_bytes)
+    : capacity_bytes(capacity_in_bytes), buffer_id(buffer_id) {
+    memory_model.resize(capacity_bytes);
     std::fill(memory_model.begin(), memory_model.end(), uint8_t(0));
 }
 
 void L1Buffer::read(Address addr, void* data, Size size) {
-    if (addr + size > capacity) {
+    if (addr + size > capacity_bytes) {
         throw std::out_of_range("L1Buffer read out of bounds");
     }
     std::memcpy(data, memory_model.data() + addr, size);
 }
 
 void L1Buffer::write(Address addr, const void* data, Size size) {
-    if (addr + size > capacity) {
+    if (addr + size > capacity_bytes) {
         throw std::out_of_range("L1Buffer write out of bounds");
     }
     std::memcpy(memory_model.data() + addr, data, size);

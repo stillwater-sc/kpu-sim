@@ -46,6 +46,7 @@
 #include <sw/kpu/models/temporal/memory/l1_layer.hpp>
 #include <sw/kpu/models/temporal/datamovement/block_mover.hpp>
 #include <sw/kpu/models/temporal/datamovement/streamer.hpp>
+#include <sw/kpu/models/temporal/compute/cu_layer.hpp>
 #include <sw/kpu/models/temporal/compute/compute_fabric.hpp>
 
 namespace sw::kpu {
@@ -155,11 +156,12 @@ private:
     // Component vectors - value semantics, addressable
     std::vector<ExternalMemory> host_memory_regions;  // Host system memory (NUMA regions)
     std::vector<ExternalMemory> memory_banks;  // KPU local memory banks
+    std::vector<PageBuffer> page_buffers;  // Page buffers (memory controller)
+    std::vector<DMAEngine> dma_engines;
     L3Layer l3_layer;  // SoC-wide L3 aggregate: owns L3Tiles, BlockMovers, interconnect
     L2Layer l2_layer;  // SoC-wide L2 aggregate: owns L2Banks
     L1Layer l1_layer;  // SoC-wide L1 aggregate: owns L1 stream buffers (monitoring/ownership)
-    std::vector<PageBuffer> page_buffers;  // Page buffers (memory controller)
-    std::vector<DMAEngine> dma_engines;
+	CULayer cu_layer;  // SoC-wide CU aggregate: owns ComputeUnits (monitoring/ownership)
     std::vector<ComputeFabric> compute_tiles;
     std::vector<Streamer> streamers;
 

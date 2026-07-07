@@ -13,16 +13,9 @@ L1Layer::L1Layer(const L1LayerConfig& config)
     const size_t total = config_.total_buffers();
     buffers_.reserve(total);
     size_t global_id = 0;
-    if (!config_.buffer_groups.empty()) {
-        for (const auto& group : config_.buffer_groups) {
-            for (size_t k = 0; k < group.multiplicity; ++k) {
-                buffers_.emplace_back(global_id, group.buffer.capacity_kb);
-                ++global_id;
-            }
-        }
-    } else {
-        for (size_t k = 0; k < config_.num_buffers; ++k) {
-            buffers_.emplace_back(global_id, config_.capacity_kb);
+    for (const auto& group : config_.buffer_groups) {
+        for (size_t k = 0; k < group.multiplicity; ++k) {
+            buffers_.emplace_back(global_id, group.buffer.capacity_bytes);
             ++global_id;
         }
     }

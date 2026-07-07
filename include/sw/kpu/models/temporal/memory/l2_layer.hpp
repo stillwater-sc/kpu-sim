@@ -54,40 +54,20 @@ struct L2BankGroup {
 
 /// Configuration for an L2Layer aggregate.
 ///
-/// Two ways to describe the banks:
-///  - **Canonical (non-uniform):** populate `bank_groups` with named
+/// **Canonical** way to describe the banks:
+///  -  populate `bank_groups` with named
 ///    `group -> element-config -> multiplicity` entries.
-///  - **Uniform convenience:** leave `bank_groups` empty and set the scalar
-///    `num_banks` / `capacity_kb` fields; the layer is then built as `num_banks`
-///    identical banks of `capacity_kb`.
-/// When `bank_groups` is non-empty it takes precedence over the scalar fields.
 struct L2LayerConfig {
     /// Bank groups: group -> element-config -> multiplicity (supports non-uniform layers).
     std::vector<L2BankGroup> bank_groups;
 
-    /// Uniform convenience: number of identical banks (used iff `bank_groups` empty).
-    size_t num_banks = 0;
-    /// Uniform convenience: per-bank capacity in KB (used iff `bank_groups` empty).
-    Size capacity_kb = 64;
-
-    /// Total number of banks: sum of group multiplicities, or the uniform count.
+    /// Total number of banks: sum of group multiplicities.
     size_t total_banks() const {
-        if (!bank_groups.empty()) {
-            size_t n = 0;
-            for (const auto& g : bank_groups) {
-                n += g.multiplicity;
-            }
-            return n;
+        size_t n = 0;
+        for (const auto& g : bank_groups) {
+            n += g.multiplicity;
         }
-        return num_banks;
-    }
-
-    /// Convenience factory for a uniform layer.
-    static L2LayerConfig uniform(size_t num_banks, Size capacity_kb) {
-        L2LayerConfig cfg;
-        cfg.num_banks = num_banks;
-        cfg.capacity_kb = capacity_kb;
-        return cfg;
+        return n;
     }
 };
 
