@@ -1,6 +1,8 @@
 #include <algorithm>
 #include <random>
 #include <iostream>
+#include <iomanip>
+#include <sstream>
 #include <cassert>
 #include <cstring>
 
@@ -10,7 +12,7 @@
 namespace sw::kpu {
 
 // KPUSimulator implementation - clean delegation-based API
-KPUSimulator::KPUSimulator(const Config& config) : current_cycle(0) {
+KPUSimulator::KPUSimulator(const Config& config) : soc_config(config), current_cycle(0) {
     // Initialize host memory regions (NUMA)
     host_memory_regions.reserve(config.host_memory_region_count);
     for (size_t i = 0; i < config.host_memory_region_count; ++i) {
@@ -628,6 +630,260 @@ void KPUSimulator::print_component_status() const {
         std::cout << "  Tile[" << i << "]: Busy: "
                   << (compute_tiles[i].is_busy() ? "Yes" : "No") << std::endl;
     }
+}
+
+// Configuration reporting helpers
+namespace {
+
+std::string fmt_capacity(Size bytes) {
+    constexpr Size KB = 1024;
+    constexpr Size MB = KB * 1024;
+    constexpr Size GB = MB * 1024;
+    std::ostringstream os;
+    if (bytes >= GB && bytes % GB == 0) {
+        os << (bytes / GB) << " GB";
+    } else if (bytes >= MB && bytes % MB == 0) {
+        os << (bytes / MB) << " MB";
+    } else if (bytes >= KB && bytes % KB == 0) {
+        os << (bytes / KB) << " KB";
+    } else {
+        os << bytes << " B";
+    }
+    return os.str();
+}
+
+std::string fmt_addr(Address addr) {
+    std::ostringstream os;
+    os << "0x" << std::hex << std::uppercase
+       << std::setw(12) << std::setfill('0') << addr;
+    return os.str();
+}
+
+std::string fmt_rate(double value, const char* unit) {
+    std::ostringstream os;
+    os << value << " " << unit;
+    return os.str();
+}
+
+// Render a titled ASCII box around pre-formatted content lines.
+void emit_box(std::ostringstream& os, const std::string& title,
+              const std::vector<std::string>& lines, const char* indent) {
+    size_t inner = title.size();
+    for (const auto& l : lines) {
+        inner = std::max(inner, l.size());
+    }
+    const size_t middle = inner + 2;  // one space either side of content
+    const size_t title_pad = middle - title.size() - 2;
+    os << indent << '+' << std::string(title_pad / 2, '-') << ' ' << title << ' '
+       << std::string(title_pad - title_pad / 2, '-') << "+\n";
+    for (const auto& l : lines) {
+        os << indent << "| " << l << std::string(inner - l.size(), ' ') << " |\n";
+    }
+    os << indent << '+' << std::string(middle, '-') << "+\n";
+}
+
+} // namespace
+
+std::string KPUSimulator::generate_config_report() const {
+    const auto& cfg = soc_config;
+    std::ostringstream os;
+
+    const std::string rule(80, '=');
+    const std::string thin_rule(80, '-');
+    os << rule << "\n KPU SoC Configuration Report\n" << rule << "\n\n";
+
+    // ---- Layer summary lines (shared by floorplan and detail sections) ----
+    const size_t l3_tiles = l3_layer.tile_count();
+    const size_t l2_banks = l2_layer.bank_count();
+    const size_t l1_buffers = l1_layer.buffer_count();
+
+    Size l3_total = 0, l2_total = 0, l1_total = 0;
+    for (const auto& t : l3_layer.tiles())   l3_total += t.get_capacity();
+    for (const auto& b : l2_layer.banks())   l2_total += b.get_capacity();
+    for (const auto& b : l1_layer.buffers()) l1_total += b.get_capacity();
+
+    // ---- Floorplan (dataflow order: credits flow UP, data flows DOWN) ----
+    os << "Floorplan (credit-based dataflow: credits flow UP, data flows DOWN)\n\n";
+
+    std::vector<std::string> host_lines;
+    if (host_memory_regions.empty()) {
+        host_lines.push_back("Host Memory     : (none)");
+    } else {
+        host_lines.push_back("Host Memory     : " + std::to_string(host_memory_regions.size())
+            + " region(s) x " + fmt_capacity(cfg.host_memory_region_capacity_mb * 1024 * 1024)
+            + " @ " + fmt_rate(static_cast<double>(cfg.host_memory_bandwidth_gbps), "GB/s"));
+    }
+    emit_box(os, "HOST", host_lines, "    ");
+
+    os << "          |\n"
+       << "          |  " << dma_engines.size() << " DMA engine(s)  (push on L3 credit)\n"
+       << "          v\n";
+
+    std::vector<std::string> soc_lines;
+    if (memory_banks.empty()) {
+        soc_lines.push_back("External Memory : (none)");
+    } else {
+        soc_lines.push_back("External Memory : " + std::to_string(memory_banks.size())
+            + " bank(s) x " + fmt_capacity(cfg.memory_bank_capacity_mb * 1024 * 1024)
+            + " @ " + fmt_rate(static_cast<double>(cfg.memory_bandwidth_gbps), "GB/s"));
+    }
+    soc_lines.push_back("Memory Ctrl     : " + std::to_string(cfg.memory_controller_count)
+        + " controller(s), " + std::to_string(page_buffers.size())
+        + " page buffer(s) x " + fmt_capacity(cfg.page_buffer_capacity_kb * 1024));
+    soc_lines.push_back("      |");
+    soc_lines.push_back("      v  DMA push (on L3 credit)");
+    soc_lines.push_back("L3 Layer        : " + std::to_string(l3_tiles) + " tile(s), "
+        + fmt_capacity(l3_total) + " total   [interconnect: "
+        + (l3_layer.has_interconnect() ? "present" : "none") + "]");
+    soc_lines.push_back("      |");
+    soc_lines.push_back("      v  " + std::to_string(l3_layer.block_mover_count())
+        + " BlockMover(s), push on L2 credit");
+    soc_lines.push_back("L2 Layer        : " + std::to_string(l2_banks) + " bank(s), "
+        + fmt_capacity(l2_total) + " total");
+    soc_lines.push_back("      |");
+    soc_lines.push_back("      v  " + std::to_string(streamers.size())
+        + " Streamer(s), feed on L1 credit");
+    soc_lines.push_back("L1 Layer        : " + std::to_string(l1_buffers)
+        + " stream buffer(s), " + fmt_capacity(l1_total) + " total");
+    soc_lines.push_back("      |");
+    soc_lines.push_back("      v  feed / drain");
+    std::string fabric_line = "Compute Fabric  : " + std::to_string(compute_tiles.size()) + " tile(s)";
+    if (!compute_tiles.empty()) {
+        if (cfg.use_systolic_array_mode) {
+            fabric_line += ", systolic " + std::to_string(get_systolic_array_rows(0))
+                + "x" + std::to_string(get_systolic_array_cols(0))
+                + " (" + std::to_string(get_systolic_array_total_pes(0)) + " PEs)";
+        } else {
+            fabric_line += ", basic matmul (functional)";
+        }
+        fabric_line += ", " + topology_to_string(cfg.processor_array_topology);
+    }
+    soc_lines.push_back(fabric_line);
+    emit_box(os, "KPU SoC", soc_lines, "    ");
+
+    // ---- Asset attribute tables ----
+    os << "\n" << thin_rule << "\nAsset Attributes\n" << thin_rule << "\n";
+
+    os << "\nHost memory regions (" << host_memory_regions.size() << "):\n";
+    for (size_t i = 0; i < host_memory_regions.size(); ++i) {
+        os << "  Region[" << i << "]: " << fmt_capacity(host_memory_regions[i].get_capacity())
+           << " @ " << cfg.host_memory_bandwidth_gbps << " GB/s"
+           << ", base " << fmt_addr(get_host_memory_region_base(i)) << "\n";
+    }
+
+    os << "\nExternal memory banks (" << memory_banks.size() << "):\n";
+    for (size_t i = 0; i < memory_banks.size(); ++i) {
+        os << "  Bank[" << i << "]: " << fmt_capacity(memory_banks[i].get_capacity())
+           << " @ " << cfg.memory_bandwidth_gbps << " GB/s"
+           << ", base " << fmt_addr(get_external_bank_base(i)) << "\n";
+    }
+
+    os << "\nMemory controllers (" << cfg.memory_controller_count
+       << "), page buffers (" << page_buffers.size() << "):\n";
+    for (size_t i = 0; i < page_buffers.size(); ++i) {
+        os << "  PageBuffer[" << i << "]: " << fmt_capacity(page_buffers[i].get_capacity())
+           << ", base " << fmt_addr(get_page_buffer_base(i)) << "\n";
+    }
+
+    os << "\nL3 layer (" << l3_tiles << " tile(s), " << fmt_capacity(l3_total)
+       << " total; interconnect: " << (l3_layer.has_interconnect() ? "present" : "none") << "):\n";
+    if (!cfg.l3_layer.tile_groups.empty()) {
+        os << "  groups:";
+        for (const auto& g : cfg.l3_layer.tile_groups) {
+            os << " " << g.name << " x" << g.multiplicity
+               << " @ " << fmt_capacity(g.tile.capacity_kb * 1024);
+        }
+        os << "\n";
+    } else if (l3_tiles > 0) {
+        os << "  groups: uniform\n";
+    }
+    for (size_t i = 0; i < l3_tiles; ++i) {
+        os << "  L3Tile[" << i << "]: " << fmt_capacity(l3_layer.tiles()[i].get_capacity())
+           << ", base " << fmt_addr(get_l3_tile_base(i)) << "\n";
+    }
+
+    os << "\nBlock movers (" << l3_layer.block_mover_count() << ", owned by L3 layer):\n";
+    for (size_t i = 0; i < l3_layer.block_mover_count(); ++i) {
+        os << "  BlockMover[" << i << "]: serves L3Tile["
+           << l3_layer.block_movers()[i].get_associated_l3_tile() << "], "
+           << fmt_rate(cfg.l3_layer.block_mover_clock_ghz, "GHz") << ", "
+           << fmt_rate(cfg.l3_layer.block_mover_bandwidth_gb_s, "GB/s") << "\n";
+    }
+
+    os << "\nL2 layer (" << l2_banks << " bank(s), " << fmt_capacity(l2_total) << " total):\n";
+    if (!cfg.l2_layer.bank_groups.empty()) {
+        os << "  groups:";
+        for (const auto& g : cfg.l2_layer.bank_groups) {
+            os << " " << g.name << " x" << g.multiplicity
+               << " @ " << fmt_capacity(g.bank.capacity_kb * 1024);
+        }
+        os << "\n";
+    } else if (l2_banks > 0) {
+        os << "  groups: uniform\n";
+    }
+    for (size_t i = 0; i < l2_banks; ++i) {
+        os << "  L2Bank[" << i << "]: " << fmt_capacity(l2_layer.banks()[i].get_capacity())
+           << ", base " << fmt_addr(get_l2_bank_base(i)) << "\n";
+    }
+
+    os << "\nL1 layer (" << l1_buffers << " stream buffer(s), "
+       << fmt_capacity(l1_total) << " total):\n";
+    if (!cfg.l1_layer.buffer_groups.empty()) {
+        os << "  groups:";
+        for (const auto& g : cfg.l1_layer.buffer_groups) {
+            os << " " << g.name << " x" << g.multiplicity
+               << " @ " << fmt_capacity(g.buffer.capacity_kb * 1024);
+        }
+        os << "\n";
+    } else if (l1_buffers > 0) {
+        os << "  groups: uniform\n";
+    }
+    for (size_t i = 0; i < l1_buffers; ++i) {
+        os << "  L1Buffer[" << i << "]: " << fmt_capacity(l1_layer.buffers()[i].get_capacity())
+           << ", base " << fmt_addr(get_l1_buffer_base(i)) << "\n";
+    }
+
+    os << "\nDMA engines (" << dma_engines.size() << "):\n";
+    for (size_t i = 0; i < dma_engines.size(); ++i) {
+        os << "  DMA[" << i << "]: " << fmt_rate(dma_engines[i].get_clock_freq_ghz(), "GHz")
+           << ", " << fmt_rate(dma_engines[i].get_bandwidth_gb_s(), "GB/s") << "\n";
+    }
+
+    os << "\nStreamers (" << streamers.size() << "):\n";
+    for (size_t i = 0; i < streamers.size(); ++i) {
+        os << "  Streamer[" << i << "]: " << fmt_rate(streamers[i].get_clock_freq_ghz(), "GHz")
+           << ", " << fmt_rate(streamers[i].get_bandwidth_gb_s(), "GB/s") << "\n";
+    }
+
+    os << "\nCompute fabric (" << compute_tiles.size() << " tile(s); topology "
+       << topology_to_string(cfg.processor_array_topology) << "):\n";
+    for (size_t i = 0; i < compute_tiles.size(); ++i) {
+        os << "  Tile[" << i << "]: ";
+        if (cfg.use_systolic_array_mode) {
+            os << "systolic " << get_systolic_array_rows(i) << "x" << get_systolic_array_cols(i)
+               << " (" << get_systolic_array_total_pes(i) << " PEs)";
+        } else {
+            os << "basic matmul (functional)";
+        }
+        os << "\n";
+    }
+
+    const auto& regions = address_decoder.get_regions();
+    os << "\nMemory map (" << regions.size() << " region(s)):\n";
+    for (const auto& r : regions) {
+        os << "  " << fmt_addr(r.base) << "  " << std::setw(8) << fmt_capacity(r.size)
+           << "  " << r.name << "\n";
+    }
+
+    return os.str();
+}
+
+void KPUSimulator::print_config_report(std::ostream& os) const {
+    os << generate_config_report();
+}
+
+void KPUSimulator::print_config_report() const {
+    print_config_report(std::cout);
 }
 
 // Component status queries

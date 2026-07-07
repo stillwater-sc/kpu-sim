@@ -8,6 +8,8 @@
 #include <chrono>
 #include <stdexcept>
 #include <iomanip>
+#include <string>
+#include <iosfwd>
 
 // Windows/MSVC compatibility
 #ifdef _MSC_VER
@@ -145,6 +147,11 @@ public:
     };
     
 private:
+    // Snapshot of the construction configuration. Immutable after construction
+    // (no mutator); component collections below are built from it, so it stays
+    // consistent with the instantiated SoC for the simulator's lifetime.
+    Config soc_config;
+
     // Component vectors - value semantics, addressable
     std::vector<ExternalMemory> host_memory_regions;  // Host system memory (NUMA regions)
     std::vector<ExternalMemory> memory_banks;  // KPU local memory banks
@@ -309,6 +316,19 @@ public:
     double get_elapsed_time_ms() const;
     void print_stats() const;
     void print_component_status() const;
+
+    // Configuration reporting
+    // The construction-time configuration this SoC model was built from.
+    const Config& get_config() const { return soc_config; }
+    // Standard SoC configuration report: renders the floorplan (host + on-chip
+    // memory hierarchy + data movers + compute fabric, in dataflow order) and
+    // per-asset attribute tables (counts, capacities, clocks, bandwidths, base
+    // addresses) plus the unified memory map.
+    // Post: non-empty; contains one section per asset class. Does not modify
+    // simulator state.
+    std::string generate_config_report() const;
+    void print_config_report(std::ostream& os) const;
+    void print_config_report() const;  // convenience: writes to std::cout
     
     // Component status queries
     bool is_host_memory_region_ready(size_t region_id) const;

@@ -25,3 +25,6 @@ target_link_libraries(test_config_formatting
     PRIVATE
     StillwaterKPU::System
 )
+
+# KPU SoC configuration report tests
+kpu_add_component_test(test_config_report "system" test_config_report.cpp)
