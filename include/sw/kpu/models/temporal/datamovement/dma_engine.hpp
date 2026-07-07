@@ -184,6 +184,8 @@ public:
     // Status and identification
     size_t get_engine_id() const { return engine_id; }
     size_t get_queue_size() const { return transfer_queue.size(); }
+    double get_clock_freq_ghz() const { return clock_freq_ghz_; }
+    double get_bandwidth_gb_s() const { return bandwidth_gb_s_; }
 };
 
 } // namespace sw::kpu

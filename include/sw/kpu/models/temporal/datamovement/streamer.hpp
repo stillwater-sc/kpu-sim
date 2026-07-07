@@ -172,6 +172,8 @@ public:
     bool is_streaming() const { return current_stream != nullptr && current_stream->is_active; }
     size_t get_queue_size() const { return stream_queue.size(); }
     size_t get_streamer_id() const { return streamer_id; }
+    double get_clock_freq_ghz() const { return clock_freq_ghz_; }
+    double get_bandwidth_gb_s() const { return bandwidth_gb_s_; }
 
     // Configuration helpers
     static Size calculate_stream_cycles(Size matrix_height, Size matrix_width, Size fabric_size);
