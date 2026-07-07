@@ -26,3 +26,4 @@ bokeh>=2.4.0
 tqdm>=4.62.0  # Progress bars
 black>=22.0.0  # Code formatter
 pytest>=6.0.0  # Testing framework
+pillow>=12.3.0 # not directly required, pinned by Snyk to avoid a vulnerability
