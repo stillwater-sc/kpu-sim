@@ -56,7 +56,7 @@ classDiagram
     class TemporalModels {
         <<subsystem>>
         L3Layer / L2Layer / L1Layer
-        (own L3Tile / L2Bank / L1Buffer)
+        own L3Tile / L2Bank / L1Buffer
         DMAEngine / BlockMover / Streamer
         ComputeFabric / SystolicArray
     }
