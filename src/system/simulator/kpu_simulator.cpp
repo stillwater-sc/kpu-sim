@@ -26,22 +26,30 @@ KPUSimulator::KPUSimulator(const Config& config) : soc_config(config), current_c
         memory_banks.emplace_back(config.memory_bank_capacity_mb, config.memory_bandwidth_gbps);
     }
 
-    // Initialize the L3 layer aggregate - owns the L3Tiles, the per-tile
+    // Initialize page buffers - memory controller page buffers
+    page_buffers.reserve(config.page_buffer_count);
+    for (size_t i = 0; i < config.page_buffer_count; ++i) {
+        page_buffers.emplace_back(config.page_buffer_capacity_kb);
+    }
+
+    // Initialize DMA engines - general-purpose data movement
+    dma_engines.reserve(config.dma_engine_count);
+    for (size_t i = 0; i < config.dma_engine_count; ++i) {
+        dma_engines.emplace_back(i);
+    }
+
+    // Initialize the L3 layer aggregate - owns the L3Tiles, the
     // BlockMovers, and (optionally) the L3 interconnect.
     l3_layer = L3Layer(config.l3_layer);
 
     // Initialize the L2 layer aggregate - owns the L2Banks.
     l2_layer = L2Layer(config.l2_layer);
 
-    // Initialize the L1 layer aggregate - owns the L1 stream buffers that feed
-    // the compute fabric.
+    // Initialize the L1 layer aggregate - owns the L1 stream buffers 
+    // that feed the compute fabric.
     l1_layer = L1Layer(config.l1_layer);
 
-    // Initialize page buffers - memory controller page buffers
-    page_buffers.reserve(config.page_buffer_count);
-    for (size_t i = 0; i < config.page_buffer_count; ++i) {
-        page_buffers.emplace_back(config.page_buffer_capacity_kb);
-    }
+
 
     // Initialize compute tiles with systolic array configuration
     compute_tiles.reserve(config.compute_tile_count);
@@ -55,19 +63,14 @@ KPUSimulator::KPUSimulator(const Config& config) : soc_config(config), current_c
                                   config.processor_array_cols);
     }
 
-    // Initialize DMA engines - general-purpose data movement
-    dma_engines.reserve(config.dma_engine_count);
-    for (size_t i = 0; i < config.dma_engine_count; ++i) {
-        dma_engines.emplace_back(i);
-    }
-
-    // BlockMovers (L3↔L2 data movement with transformations) are owned by the
+    // BlockMovers (L3 <->L2 data movement with transformations) are owned by the
     // L3 layer; they were constructed above as part of the L3Layer aggregate.
 
-    // Initialize Streamers - L2↔L1 streaming for compute fabric
+    // Initialize Streamers - L2 <-> L1 streaming for compute fabric
     streamers.reserve(config.streamer_count);
     for (size_t i = 0; i < config.streamer_count; ++i) {
-        streamers.emplace_back(i);
+        streamers.emplace_back(i, config.streamer_clock_ghz,
+                               config.streamer_buswidth_bits);
     }
 
     // ===========================================
@@ -452,6 +455,7 @@ void KPUSimulator::reset() {
     for (auto& streamer : streamers) {
         streamer.reset();
     }
+    cu_layer.reset();
     current_cycle = 0;
     sim_start_time = std::chrono::high_resolution_clock::now();
 }
@@ -659,6 +663,12 @@ std::string fmt_addr(Address addr) {
     return os.str();
 }
 
+std::string fmt_buswidth(int bits) {
+    std::ostringstream os;
+    os << bits << " bits";
+    return os.str();
+}
+
 std::string fmt_rate(double value, const char* unit) {
     std::ostringstream os;
     os << value << " " << unit;
@@ -785,6 +795,12 @@ std::string KPUSimulator::generate_config_report() const {
            << ", base " << fmt_addr(get_page_buffer_base(i)) << "\n";
     }
 
+    os << "\nDMA engines (" << dma_engines.size() << "):\n";
+    for (size_t i = 0; i < dma_engines.size(); ++i) {
+        os << "  DMA[" << i << "]: " << fmt_rate(dma_engines[i].get_clock_freq_ghz(), "GHz")
+            << ", " << fmt_rate(dma_engines[i].get_bandwidth_gb_s(), "GB/s") << "\n";
+    }
+
     os << "\nL3 layer (" << l3_tiles << " tile(s), " << fmt_capacity(l3_total)
        << " total; interconnect: " << (l3_layer.has_interconnect() ? "present" : "none") << "):\n";
     if (!cfg.l3_layer.tile_groups.empty()) {
@@ -807,7 +823,8 @@ std::string KPUSimulator::generate_config_report() const {
         os << "  BlockMover[" << i << "]: serves L3Tile["
            << l3_layer.block_movers()[i].get_associated_l3_tile() << "], "
            << fmt_rate(cfg.l3_layer.block_mover_clock_ghz, "GHz") << ", "
-           << fmt_rate(cfg.l3_layer.block_mover_bandwidth_gb_s, "GB/s") << "\n";
+           << fmt_buswidth(cfg.l3_layer.block_mover_buswidth_bits) << " bus, "
+           << fmt_rate(cfg.l3_layer.block_mover_buswidth_bits/8 * cfg.l3_layer.block_mover_clock_ghz, "GB/s") << "\n";
     }
 
     os << "\nL2 layer (" << l2_banks << " bank(s), " << fmt_capacity(l2_total) << " total):\n";
@@ -826,13 +843,19 @@ std::string KPUSimulator::generate_config_report() const {
            << ", base " << fmt_addr(get_l2_bank_base(i)) << "\n";
     }
 
+    os << "\nStreamers (" << streamers.size() << "):\n";
+    for (size_t i = 0; i < streamers.size(); ++i) {
+        os << "  Streamer[" << i << "]: " << fmt_rate(streamers[i].get_clock_freq_ghz(), "GHz")
+            << ", " << fmt_rate(streamers[i].get_bandwidth_gb_s(), "GB/s") << "\n";
+    }
+
     os << "\nL1 layer (" << l1_buffers << " stream buffer(s), "
        << fmt_capacity(l1_total) << " total):\n";
     if (!cfg.l1_layer.buffer_groups.empty()) {
         os << "  groups:";
         for (const auto& g : cfg.l1_layer.buffer_groups) {
             os << " " << g.name << " x" << g.multiplicity
-               << " @ " << fmt_capacity(g.buffer.capacity_kb * 1024);
+               << " @ " << fmt_capacity(g.buffer.capacity_bytes);
         }
         os << "\n";
     } else if (l1_buffers > 0) {
@@ -841,18 +864,6 @@ std::string KPUSimulator::generate_config_report() const {
     for (size_t i = 0; i < l1_buffers; ++i) {
         os << "  L1Buffer[" << i << "]: " << fmt_capacity(l1_layer.buffers()[i].get_capacity())
            << ", base " << fmt_addr(get_l1_buffer_base(i)) << "\n";
-    }
-
-    os << "\nDMA engines (" << dma_engines.size() << "):\n";
-    for (size_t i = 0; i < dma_engines.size(); ++i) {
-        os << "  DMA[" << i << "]: " << fmt_rate(dma_engines[i].get_clock_freq_ghz(), "GHz")
-           << ", " << fmt_rate(dma_engines[i].get_bandwidth_gb_s(), "GB/s") << "\n";
-    }
-
-    os << "\nStreamers (" << streamers.size() << "):\n";
-    for (size_t i = 0; i < streamers.size(); ++i) {
-        os << "  Streamer[" << i << "]: " << fmt_rate(streamers[i].get_clock_freq_ghz(), "GHz")
-           << ", " << fmt_rate(streamers[i].get_bandwidth_gb_s(), "GB/s") << "\n";
     }
 
     os << "\nCompute fabric (" << compute_tiles.size() << " tile(s); topology "
@@ -1040,8 +1051,7 @@ KPUSimulator::Config generate_multi_bank_config(size_t num_banks, size_t num_til
     config.memory_bank_count = num_banks;
     config.memory_bank_capacity_mb = 512; // Smaller banks for multi-bank setup
     config.memory_bandwidth_gbps = 16; // Higher bandwidth per bank
-    config.l1_layer.num_buffers = num_tiles; // One L1 buffer per tile
-    config.l1_layer.capacity_kb = 256;
+    config.l1_layer.buffer_groups = { {"l1", {256 * 1024}, num_tiles} }; // One 256 KB buffer per tile
     config.compute_tile_count = num_tiles;
     config.dma_engine_count = num_banks + num_tiles; // Plenty of DMA engines
     return config;

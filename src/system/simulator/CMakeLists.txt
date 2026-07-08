@@ -7,6 +7,8 @@ set(KPU_SIMULATOR_SOURCES
     l3_layer.cpp
     l2_layer.cpp
     l1_layer.cpp
+    cu_layer.cpp
+    vu_layer.cpp
     resource_manager.cpp
     kernel.cpp
     kernel_serializer.cpp

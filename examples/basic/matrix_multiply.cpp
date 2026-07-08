@@ -46,8 +46,7 @@ int main() {
     config.memory_bank_count       = 1;
     config.memory_bank_capacity_mb = 1024;
     config.memory_bandwidth_gbps   = 100;
-    config.l1_layer.num_buffers         = 1;
-    config.l1_layer.capacity_kb   = 64;
+    config.l1_layer.buffer_groups  = { {"l1", {64 * 1024}, 1} };
     config.compute_tile_count      = 1;
     config.dma_engine_count        = 1;
 

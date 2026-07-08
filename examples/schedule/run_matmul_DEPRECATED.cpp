@@ -121,7 +121,7 @@ int main(int argc, char* argv[]) {
 
     for (int i = 0; i < 4; ++i) l3_tiles.emplace_back(i, 256);   // 256 KB each
     for (int i = 0; i < 8; ++i) l2_banks.emplace_back(i, 128);   // 128 KB each
-    for (int i = 0; i < 2; ++i) l1_buffers.emplace_back(i, 64);  // 64 KB each
+    for (int i = 0; i < 2; ++i) l1_buffers.emplace_back(i, 64 * 1024);  // 64 KB each
 
     BehavioralProgramExecutor::HardwareContext hw{ext_mem, l3_tiles, l2_banks, l1_buffers};
 

@@ -151,10 +151,11 @@ sw::kpu::KPUSimulator* SystemSimulator::create_kpu_from_config(const KPUConfig& 
         sim_config.memory_bandwidth_gbps = static_cast<sw::kpu::Size>(kpu_config.memory.banks[0].bandwidth_gbps);
     }
 
-    // L1 buffer configuration (compute fabric)
-    sim_config.l1_layer.num_buffers = kpu_config.memory.l1_buffers.size();
+    // L1 buffer configuration (compute fabric); L1BufferSpec is in bytes
     if (!kpu_config.memory.l1_buffers.empty()) {
-        sim_config.l1_layer.capacity_kb = kpu_config.memory.l1_buffers[0].capacity_kb;
+        sim_config.l1_layer.buffer_groups = { {"l1",
+            {static_cast<sw::kpu::Size>(kpu_config.memory.l1_buffers[0].capacity_kb) * 1024},
+            kpu_config.memory.l1_buffers.size()} };
     }
 
     // Page buffer configuration (memory controller scratchpads)
@@ -164,14 +165,16 @@ sw::kpu::KPUSimulator* SystemSimulator::create_kpu_from_config(const KPUConfig& 
     }
 
     // L3 and L2 configuration
-    sim_config.l3_layer.num_tiles = kpu_config.memory.l3_tiles.size();
     if (!kpu_config.memory.l3_tiles.empty()) {
-        sim_config.l3_layer.capacity_kb = kpu_config.memory.l3_tiles[0].capacity_kb;
+        sim_config.l3_layer.tile_groups = { {"l3",
+            {kpu_config.memory.l3_tiles[0].capacity_kb},
+            kpu_config.memory.l3_tiles.size()} };
     }
 
-    sim_config.l2_layer.num_banks = kpu_config.memory.l2_banks.size();
     if (!kpu_config.memory.l2_banks.empty()) {
-        sim_config.l2_layer.capacity_kb = kpu_config.memory.l2_banks[0].capacity_kb;
+        sim_config.l2_layer.bank_groups = { {"l2",
+            {kpu_config.memory.l2_banks[0].capacity_kb},
+            kpu_config.memory.l2_banks.size()} };
     }
 
     // Compute configuration

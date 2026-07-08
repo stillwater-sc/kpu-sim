@@ -8,10 +8,9 @@ int main() {
     // Create minimal config
     KPUSimulator::Config config;
     config.memory_bank_count = 1;
-    config.l3_layer.num_tiles = 1;
-    config.l2_layer.num_banks = 1;
-    config.l1_layer.num_buffers = 1;
-    config.l1_layer.capacity_kb = 64;
+    config.l3_layer.tile_groups = { {"l3", {128}, 1} };
+    config.l2_layer.bank_groups = { {"l2", {64}, 1} };
+    config.l1_layer.buffer_groups = { {"l1", {64 * 1024}, 1} };
     config.compute_tile_count = 1;
     config.l3_layer.block_mover_count = 1;
     config.streamer_count = 2;

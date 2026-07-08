@@ -70,19 +70,20 @@ KPUSimulator::Config convert_config(const SimulatorConfig& sim_config) {
     config.page_buffer_capacity_kb = 32;
 
     // On-chip memory hierarchy
-    config.l3_layer.num_tiles = sim_config.num_l3_tiles;
     if (sim_config.l3_tile) {
-        config.l3_layer.capacity_kb = sim_config.l3_tile->capacity_kb;
+        config.l3_layer.tile_groups = { {"l3", {sim_config.l3_tile->capacity_kb}, sim_config.num_l3_tiles} };
     } else {
-        config.l3_layer.capacity_kb = 256;  // Default
+        config.l3_layer.tile_groups = { {"l3", {256}, sim_config.num_l3_tiles} };  // Default 256 KB
     }
 
-    config.l2_layer.num_banks = sim_config.num_l2_banks;
-    config.l2_layer.capacity_kb = 64;  // Default
+    if (sim_config.l2_bank) {
+        config.l2_layer.bank_groups = { {"l2", {sim_config.l2_bank->capacity_kb}, sim_config.num_l2_banks} };
+    } else {
+        config.l2_layer.bank_groups = { {"l2", {sim_config.l2_capacity_kb}, sim_config.num_l2_banks} };
+    }
 
-    // L1 buffers - derived from compute fabric
-    config.l1_layer.num_buffers = 0;  // Auto-compute
-    config.l1_layer.capacity_kb = 32;
+    // L1 buffers are configured after the compute section below — the count is
+    // derived from the processor-array shape (4 per edge x (rows + cols) per tile).
 
     // Data movement
     config.dma_engine_count = sim_config.num_dma_engines;
@@ -104,6 +105,19 @@ KPUSimulator::Config convert_config(const SimulatorConfig& sim_config) {
     }
     config.processor_array_topology = ProcessorArrayTopology::RECTANGULAR;
     config.use_systolic_array_mode = true;
+
+    // L1 buffers: explicit count if configured, else derived from the
+    // processor-array topology (4 x (rows + cols) per compute tile).
+    {
+        const size_t l1_count = (sim_config.num_l1_buffers > 0)
+            ? sim_config.num_l1_buffers
+            : 4 * (config.processor_array_rows + config.processor_array_cols)
+                  * config.compute_tile_count;
+        const Size l1_capacity_bytes = (sim_config.l1_buffer)
+            ? static_cast<Size>(sim_config.l1_buffer->capacity_kb) * 1024
+            : 32 * 1024;  // Default 32 KB
+        config.l1_layer.buffer_groups = { {"l1", {l1_capacity_bytes}, l1_count} };
+    }
 
     // Address map defaults
     config.host_memory_base = 0;

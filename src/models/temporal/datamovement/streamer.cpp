@@ -28,19 +28,28 @@ static const char* stream_type_to_string(Streamer::StreamType type) {
     }
 }
 
-Streamer::Streamer(size_t streamer_id, double clock_freq_ghz, double bandwidth_gb_s)
+Streamer::Streamer(size_t streamer_id, double clock_freq_ghz, size_t buswidth_bits)
     : current_stream(nullptr)
     , streamer_id(streamer_id)
+    , clock_freq_ghz_(clock_freq_ghz)
+    , buswidth_bits_(buswidth_bits)
+    , bandwidth_gb_s_(buswidth_bits / 8.0 * clock_freq_ghz)
     , tracing_enabled_(false)
     , trace_logger_(&trace::TraceLogger::instance())
-    , clock_freq_ghz_(clock_freq_ghz)
     , current_cycle_(0)
-    , bandwidth_gb_s_(bandwidth_gb_s)
 {
 }
 
 Streamer::Streamer(const Streamer& other)
-    : current_stream(nullptr), streamer_id(other.streamer_id) {
+    : current_stream(nullptr), 
+    streamer_id(other.streamer_id),
+	clock_freq_ghz_(other.clock_freq_ghz_),
+	buswidth_bits_(other.buswidth_bits_),
+	bandwidth_gb_s_(other.bandwidth_gb_s_),
+	tracing_enabled_(other.tracing_enabled_),
+	trace_logger_(other.trace_logger_),
+	current_cycle_(0)  // Start fresh cycle for the new instance
+{
     // Don't copy the current stream state - new instance starts fresh
     // This is appropriate since copying a streamer should create a new independent instance
 }
@@ -48,6 +57,12 @@ Streamer::Streamer(const Streamer& other)
 Streamer& Streamer::operator=(const Streamer& other) {
     if (this != &other) {
         streamer_id = other.streamer_id;
+        clock_freq_ghz_ = other.clock_freq_ghz_;
+        buswidth_bits_ = other.buswidth_bits_;
+        bandwidth_gb_s_ = other.bandwidth_gb_s_;
+        tracing_enabled_ = other.tracing_enabled_;
+        trace_logger_ = other.trace_logger_;
+        current_cycle_ = 0; // Start fresh cycle, mirroring the copy constructor
         current_stream.reset(); // Reset any existing stream
         // Clear any queued streams when copying
         while (!stream_queue.empty()) {

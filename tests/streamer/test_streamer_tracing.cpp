@@ -35,11 +35,11 @@ public:
         l2_banks.emplace_back(1, 64);  // ID 1, 64 KB capacity
 
         // Create 2 L1 buffers of 16KB each
-        l1_buffers.emplace_back(0, 16);  // ID 0, 16 KB capacity
-        l1_buffers.emplace_back(1, 16);  // ID 1, 16 KB capacity
+        l1_buffers.emplace_back(0, 16 * 1024);  // ID 0, 16 KB capacity (bytes)
+        l1_buffers.emplace_back(1, 16 * 1024);  // ID 1, 16 KB capacity (bytes)
 
         // Create Streamer: streamer 0, 1 GHz, 100 GB/s
-        streamer = std::make_unique<Streamer>(0, 1.0, 100.0);
+        streamer = std::make_unique<Streamer>(0, 1.0, 800);  // 800-bit bus @ 1 GHz = 100 GB/s
 
         // Reset and configure tracing
         logger.clear();

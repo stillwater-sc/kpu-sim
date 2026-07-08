@@ -152,12 +152,9 @@ This example demonstrates the full data flow for matrix multiplication:
     config.memory_controller_count = 1;
     config.page_buffer_count = 2;
     config.page_buffer_capacity_kb = 32;
-    config.l3_layer.num_tiles = 1;
-    config.l3_layer.capacity_kb = 128;
-    config.l2_layer.num_banks = 4;
-    config.l2_layer.capacity_kb = 64;
-    config.l1_layer.num_buffers = 64;
-    config.l1_layer.capacity_kb = 64;
+    config.l3_layer.tile_groups = { {"l3", {128}, 1} };
+    config.l2_layer.bank_groups = { {"l2", {64}, 4} };
+    config.l1_layer.buffer_groups = { {"l1", {64 * 1024}, 64} };
     config.compute_tile_count = 1;
     config.processor_array_rows = 8;
     config.processor_array_cols = 8;
@@ -173,12 +170,12 @@ This example demonstrates the full data flow for matrix multiplication:
               << config.host_memory_region_capacity_mb << " MB\n";
     std::cout << "  External Memory: " << config.memory_bank_count << " banks × "
               << config.memory_bank_capacity_mb << " MB\n";
-    std::cout << "  L3 Tiles:        " << config.l3_layer.num_tiles << " × "
-              << config.l3_layer.capacity_kb << " KB\n";
-    std::cout << "  L2 Banks:        " << config.l2_layer.num_banks << " × "
-              << config.l2_layer.capacity_kb << " KB\n";
-    std::cout << "  L1 Buffers:      " << config.l1_layer.num_buffers << " × "
-              << config.l1_layer.capacity_kb << " KB\n";
+    std::cout << "  L3 Tiles:        " << config.l3_layer.total_tiles() << " × "
+              << config.l3_layer.tile_groups[0].tile.capacity_kb << " KB\n";
+    std::cout << "  L2 Banks:        " << config.l2_layer.total_banks() << " × "
+              << config.l2_layer.bank_groups[0].bank.capacity_kb << " KB\n";
+    std::cout << "  L1 Buffers:      " << config.l1_layer.total_buffers() << " × "
+              << config.l1_layer.buffer_groups[0].buffer.capacity_bytes / 1024 << " KB\n";
     std::cout << "  Systolic Array:  " << config.processor_array_rows << "×"
               << config.processor_array_cols << "\n";
 

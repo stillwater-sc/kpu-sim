@@ -65,7 +65,7 @@ struct TestHardware {
 
         l1_buffers.reserve(num_l1);
         for (size_t i = 0; i < num_l1; ++i)
-            l1_buffers.emplace_back(i, l1_kb);
+            l1_buffers.emplace_back(i, l1_kb * 1024);
     }
 
     BehavioralProgramExecutor::HardwareContext context() {

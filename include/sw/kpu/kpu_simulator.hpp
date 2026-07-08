@@ -46,6 +46,7 @@
 #include <sw/kpu/models/temporal/memory/l1_layer.hpp>
 #include <sw/kpu/models/temporal/datamovement/block_mover.hpp>
 #include <sw/kpu/models/temporal/datamovement/streamer.hpp>
+#include <sw/kpu/models/temporal/compute/cu_layer.hpp>
 #include <sw/kpu/models/temporal/compute/compute_fabric.hpp>
 
 namespace sw::kpu {
@@ -74,20 +75,17 @@ public:
 
         // On-chip memory hierarchy
         // L3 layer: aggregate config (tiles, block movers, interconnect).
-        // Use l3_layer.num_tiles / l3_layer.capacity_kb for a uniform layer, or
-        // l3_layer.tile_groups for a non-uniform one.
+        // Populate l3_layer.tile_groups with group -> element-spec ->
+        // multiplicity entries (a single group models a uniform layer).
         L3LayerConfig l3_layer;
-        // L2 layer: aggregate config (banks). Use l2_layer.num_banks /
-        // l2_layer.capacity_kb for a uniform layer, or l2_layer.bank_groups
-        // for a non-uniform one.
+        // L2 layer: aggregate config (banks). Populate l2_layer.bank_groups.
         L2LayerConfig l2_layer;
-        // L1 layer: aggregate config (stream buffers feeding the compute fabric).
-        // Use l1_layer.num_buffers / l1_layer.capacity_kb for a uniform layer, or
-        // l1_layer.buffer_groups for a non-uniform one.
-        // The buffer count is typically DERIVED from the processor array
-        // configuration (4 × (rows + cols) per compute tile for rectangular
-        // arrays; see processor_array_topology.hpp) — set l1_layer.num_buffers
-        // accordingly (0 = none / set by the caller).
+        // L1 layer: aggregate config (stream buffers feeding the compute
+        // fabric). Populate l1_layer.buffer_groups; L1BufferSpec capacities
+        // are in BYTES. The buffer count is typically DERIVED from the
+        // processor array configuration (4 × (rows + cols) per compute tile
+        // for rectangular arrays; see processor_array_topology.hpp) — size
+        // the groups accordingly (empty = no L1 buffers).
         L1LayerConfig l1_layer;
 
         // Data movement engines
@@ -95,6 +93,9 @@ public:
         // (they are owned by the L3 layer).
         Size dma_engine_count;
         Size streamer_count;
+        // Streamer attributes (bandwidth GB/s = buswidth_bits/8 x clock_ghz).
+        double streamer_clock_ghz;
+        size_t streamer_buswidth_bits;
 
         // Compute resources
         Size compute_tile_count;
@@ -123,6 +124,7 @@ public:
               memory_controller_count(0),
               page_buffer_count(0), page_buffer_capacity_kb(0),
               dma_engine_count(0), streamer_count(0),
+              streamer_clock_ghz(1.0), streamer_buswidth_bits(64),
               compute_tile_count(0),
               processor_array_rows(0), processor_array_cols(0),
               processor_array_topology(ProcessorArrayTopology::RECTANGULAR),
@@ -155,11 +157,12 @@ private:
     // Component vectors - value semantics, addressable
     std::vector<ExternalMemory> host_memory_regions;  // Host system memory (NUMA regions)
     std::vector<ExternalMemory> memory_banks;  // KPU local memory banks
+    std::vector<PageBuffer> page_buffers;  // Page buffers (memory controller)
+    std::vector<DMAEngine> dma_engines;
     L3Layer l3_layer;  // SoC-wide L3 aggregate: owns L3Tiles, BlockMovers, interconnect
     L2Layer l2_layer;  // SoC-wide L2 aggregate: owns L2Banks
     L1Layer l1_layer;  // SoC-wide L1 aggregate: owns L1 stream buffers (monitoring/ownership)
-    std::vector<PageBuffer> page_buffers;  // Page buffers (memory controller)
-    std::vector<DMAEngine> dma_engines;
+	CULayer cu_layer;  // SoC-wide CU aggregate: owns ComputeUnits (monitoring/ownership)
     std::vector<ComputeFabric> compute_tiles;
     std::vector<Streamer> streamers;
 

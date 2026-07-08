@@ -85,14 +85,11 @@ int main() {
     config.memory_bank_count = 4;
     config.memory_bank_capacity_mb = 16;
 
-    config.l3_layer.num_tiles = 8;
-    config.l3_layer.capacity_kb = 512;
+    config.l3_layer.tile_groups = { {"l3", {512}, 8} };
 
-    config.l2_layer.num_banks = 16;
-    config.l2_layer.capacity_kb = 128;
+    config.l2_layer.bank_groups = { {"l2", {128}, 16} };
 
-    config.l1_layer.num_buffers = 32;
-    config.l1_layer.capacity_kb = 16;
+    config.l1_layer.buffer_groups = { {"l1", {16 * 1024}, 32} };
 
     // Configure compute and data movement
     config.compute_tile_count = 8;

@@ -17,18 +17,20 @@ int main() {
     config.memory_bank_count = 2;
     config.memory_bank_capacity_mb = 1024;
     config.memory_bandwidth_gbps = 100;
-    config.l1_layer.num_buffers = 2;
-    config.l1_layer.capacity_kb = 64;
+	config.memory_controller_count = 4;
+    config.page_buffer_count = 4;
+	config.page_buffer_capacity_kb = 4;
+	config.l3_layer.tile_groups = { {"l3", {128}, 2} }; // 2 tiles of 128KB each in a uniform group
+	config.l3_layer.block_mover_clock_ghz = 1.0;
+	config.l3_layer.block_mover_buswidth_bits = 512;
+	config.l2_layer.bank_groups = { {"l2", {64}, 8} }; // 8 banks of 64KB each in a uniform group
+	config.l1_layer.buffer_groups = { {"l1", {64}, 32} }; // 32 buffers of 64B each in a uniform group
     config.compute_tile_count = 2;
     config.dma_engine_count = 2;
+    config.streamer_count = 4;
     config.processor_array_rows = 16;
     config.processor_array_cols = 16;
     config.use_systolic_array_mode = true;
-
-    std::cout << "Creating KPU with configuration:\n";
-    std::cout << "  Memory banks: " << config.memory_bank_count << "\n";
-    std::cout << "  L1 buffers: " << config.l1_layer.num_buffers << "\n";
-    std::cout << "  Compute tiles: " << config.compute_tile_count << "\n\n";
 
     // Create simulator
     sw::kpu::KPUSimulator kpu(config);

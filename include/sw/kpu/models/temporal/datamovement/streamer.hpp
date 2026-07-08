@@ -96,13 +96,18 @@ private:
     std::queue<StreamConfig> stream_queue;
     std::unique_ptr<StreamState> current_stream;
     size_t streamer_id;
+    // Attributes
+    double clock_freq_ghz_;
+    size_t buswidth_bits_;
+	// calculated bandwidth in GB/s = (buswidth_bits_/8) * clock_freq_ghz_
+	double bandwidth_gb_s_;
 
     // Tracing support
     bool tracing_enabled_;
     trace::TraceLogger* trace_logger_;
-    double clock_freq_ghz_;
+
+	// Cycle tracking for timing simulation
     Cycle current_cycle_;
-    double bandwidth_gb_s_;
 
     // Internal streaming engine methods
     void initialize_stream_state(const StreamConfig& config);
@@ -141,7 +146,7 @@ private:
     Address calculate_column_address(Size row, Size col) const;
 
 public:
-    explicit Streamer(size_t streamer_id, double clock_freq_ghz = 1.0, double bandwidth_gb_s = 100.0);
+    explicit Streamer(size_t streamer_id, double clock_freq_ghz, size_t buswidth_bits);
     ~Streamer() = default;
 
     // Custom copy and move semantics for std::vector compatibility
@@ -173,6 +178,7 @@ public:
     size_t get_queue_size() const { return stream_queue.size(); }
     size_t get_streamer_id() const { return streamer_id; }
     double get_clock_freq_ghz() const { return clock_freq_ghz_; }
+	size_t get_buswidth_bits() const { return buswidth_bits_; } // Default bus width for L2-L1 streaming
     double get_bandwidth_gb_s() const { return bandwidth_gb_s_; }
 
     // Configuration helpers
