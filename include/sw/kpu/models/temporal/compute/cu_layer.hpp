@@ -56,7 +56,7 @@ struct CUTileSpec {
     PESpec pe;
 };
 
-/// A named group of identical L3Tiles: element-config bound to a multiplicity.
+/// A named group of identical CUTiles: element-config bound to a multiplicity.
 struct CUTileGroup {
     std::string name;          ///< Symbolic group name (e.g. "default", "hbw").
     CUTileSpec tile;           ///< Element configuration shared by the group.

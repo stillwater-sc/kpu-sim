@@ -69,7 +69,8 @@ KPUSimulator::KPUSimulator(const Config& config) : soc_config(config), current_c
     // Initialize Streamers - L2 <-> L1 streaming for compute fabric
     streamers.reserve(config.streamer_count);
     for (size_t i = 0; i < config.streamer_count; ++i) {
-        streamers.emplace_back(i, 1.0, 64); // TODO
+        streamers.emplace_back(i, config.streamer_clock_ghz,
+                               config.streamer_buswidth_bits);
     }
 
     // ===========================================
@@ -454,6 +455,7 @@ void KPUSimulator::reset() {
     for (auto& streamer : streamers) {
         streamer.reset();
     }
+    cu_layer.reset();
     current_cycle = 0;
     sim_start_time = std::chrono::high_resolution_clock::now();
 }
@@ -1049,6 +1051,7 @@ KPUSimulator::Config generate_multi_bank_config(size_t num_banks, size_t num_til
     config.memory_bank_count = num_banks;
     config.memory_bank_capacity_mb = 512; // Smaller banks for multi-bank setup
     config.memory_bandwidth_gbps = 16; // Higher bandwidth per bank
+    config.l1_layer.buffer_groups = { {"l1", {256 * 1024}, num_tiles} }; // One 256 KB buffer per tile
     config.compute_tile_count = num_tiles;
     config.dma_engine_count = num_banks + num_tiles; // Plenty of DMA engines
     return config;

@@ -93,6 +93,9 @@ public:
         // (they are owned by the L3 layer).
         Size dma_engine_count;
         Size streamer_count;
+        // Streamer attributes (bandwidth GB/s = buswidth_bits/8 x clock_ghz).
+        double streamer_clock_ghz;
+        size_t streamer_buswidth_bits;
 
         // Compute resources
         Size compute_tile_count;
@@ -121,6 +124,7 @@ public:
               memory_controller_count(0),
               page_buffer_count(0), page_buffer_capacity_kb(0),
               dma_engine_count(0), streamer_count(0),
+              streamer_clock_ghz(1.0), streamer_buswidth_bits(64),
               compute_tile_count(0),
               processor_array_rows(0), processor_array_cols(0),
               processor_array_topology(ProcessorArrayTopology::RECTANGULAR),

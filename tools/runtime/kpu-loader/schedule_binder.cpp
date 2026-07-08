@@ -46,37 +46,54 @@ BoundSchedule ScheduleBinder::bind(const dfx::Program& program) {
             if (src_level == dfx::MemoryLevel::EXTERNAL ||
                 dst_level == dfx::MemoryLevel::EXTERNAL) {
                 // Use DMA engine for external memory transfers
-                bound.dma_engine_id = current_dma;
-                current_dma = (current_dma + 1) % config_.dma_engine_count;
-                schedule.resources.dma_engines_used =
-                    std::max(schedule.resources.dma_engines_used, current_dma + 1);
+                if (config_.dma_engine_count > 0) {
+                    bound.dma_engine_id = current_dma;
+                    current_dma = (current_dma + 1) % config_.dma_engine_count;
+                    schedule.resources.dma_engines_used =
+                        std::max(schedule.resources.dma_engines_used, current_dma + 1);
+                }
             }
             else if ((src_level == dfx::MemoryLevel::L3 && dst_level == dfx::MemoryLevel::L2) ||
                      (src_level == dfx::MemoryLevel::L2 && dst_level == dfx::MemoryLevel::L3)) {
-                // Use BlockMover for L3↔L2 transfers
-                bound.block_mover_id = current_block_mover;
-                current_block_mover = (current_block_mover + 1) % config_.l3_layer.block_mover_count;
-                schedule.resources.block_movers_used =
-                    std::max(schedule.resources.block_movers_used, current_block_mover + 1);
+                // Use BlockMover for L3↔L2 transfers. block_mover_count == 0
+                // means "auto: 4 per tile" at L3Layer construction time.
+                const size_t mover_count = (config_.l3_layer.block_mover_count > 0)
+                    ? config_.l3_layer.block_mover_count
+                    : config_.l3_layer.total_tiles() * 4;
+                if (mover_count > 0) {
+                    bound.block_mover_id = current_block_mover;
+                    current_block_mover = (current_block_mover + 1) % mover_count;
+                    schedule.resources.block_movers_used =
+                        std::max(schedule.resources.block_movers_used, current_block_mover + 1);
+                }
             }
             else if ((src_level == dfx::MemoryLevel::L2 && dst_level == dfx::MemoryLevel::L1) ||
                      (src_level == dfx::MemoryLevel::L1 && dst_level == dfx::MemoryLevel::L2)) {
                 // Use Streamer for L2↔L1 transfers
-                bound.streamer_id = current_streamer;
-                current_streamer = (current_streamer + 1) % config_.streamer_count;
-                schedule.resources.streamers_used =
-                    std::max(schedule.resources.streamers_used, current_streamer + 1);
+                if (config_.streamer_count > 0) {
+                    bound.streamer_id = current_streamer;
+                    current_streamer = (current_streamer + 1) % config_.streamer_count;
+                    schedule.resources.streamers_used =
+                        std::max(schedule.resources.streamers_used, current_streamer + 1);
+                }
             }
 
-            // Allocate memory resources
-            bound.l3_tile_id = current_l3_tile;
-            current_l3_tile = (current_l3_tile + 1) % config_.l3_layer.total_tiles();
+            // Allocate memory resources. Layers can be legitimately absent
+            // (empty group config), so only rotate when elements exist.
+            if (const size_t n_l3 = config_.l3_layer.total_tiles(); n_l3 > 0) {
+                bound.l3_tile_id = current_l3_tile;
+                current_l3_tile = (current_l3_tile + 1) % n_l3;
+            }
 
-            bound.l2_bank_id = current_l2_bank;
-            current_l2_bank = (current_l2_bank + 1) % config_.l2_layer.total_banks();
+            if (const size_t n_l2 = config_.l2_layer.total_banks(); n_l2 > 0) {
+                bound.l2_bank_id = current_l2_bank;
+                current_l2_bank = (current_l2_bank + 1) % n_l2;
+            }
 
-            bound.l1_buffer_id = current_l1_buffer;
-            current_l1_buffer = (current_l1_buffer + 1) % config_.l1_layer.total_buffers();
+            if (const size_t n_l1 = config_.l1_layer.total_buffers(); n_l1 > 0) {
+                bound.l1_buffer_id = current_l1_buffer;
+                current_l1_buffer = (current_l1_buffer + 1) % n_l1;
+            }
 
             // Calculate addresses
             bound.source_addr = calculate_address(data_move->source, src_level);

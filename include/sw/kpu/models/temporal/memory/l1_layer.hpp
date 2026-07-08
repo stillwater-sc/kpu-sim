@@ -60,7 +60,7 @@ struct L1BufferGroup {
 ///
 /// Note: the L1 buffer count is typically *derived* from the processor-array
 /// topology (see processor_array_topology.hpp). That derivation is a caller
-/// responsibility — set `num_buffers` (or `buffer_groups`) accordingly.
+/// responsibility — populate `buffer_groups` accordingly.
 struct L1LayerConfig {
     /// Buffer groups: group -> element-config -> multiplicity (non-uniform layers).
     std::vector<L1BufferGroup> buffer_groups;
