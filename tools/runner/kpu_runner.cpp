@@ -70,19 +70,16 @@ KPUSimulator::Config convert_config(const SimulatorConfig& sim_config) {
     config.page_buffer_capacity_kb = 32;
 
     // On-chip memory hierarchy
-    config.l3_layer.num_tiles = sim_config.num_l3_tiles;
     if (sim_config.l3_tile) {
-        config.l3_layer.capacity_kb = sim_config.l3_tile->capacity_kb;
+        config.l3_layer.tile_groups = { {"l3", {sim_config.l3_tile->capacity_kb}, sim_config.num_l3_tiles} };
     } else {
-        config.l3_layer.capacity_kb = 256;  // Default
+        config.l3_layer.tile_groups = { {"l3", {256}, sim_config.num_l3_tiles} };  // Default 256 KB
     }
 
-    config.l2_layer.num_banks = sim_config.num_l2_banks;
-    config.l2_layer.capacity_kb = 64;  // Default
+    config.l2_layer.bank_groups = { {"l2", {64}, sim_config.num_l2_banks} };  // Default 64 KB
 
-    // L1 buffers - derived from compute fabric
-    config.l1_layer.num_buffers = 0;  // Auto-compute
-    config.l1_layer.capacity_kb = 32;
+    // L1 buffers - derived from compute fabric (multiplicity 0 = auto-compute)
+    config.l1_layer.buffer_groups = { {"l1", {32 * 1024}, 0} };  // 32 KB per buffer
 
     // Data movement
     config.dma_engine_count = sim_config.num_dma_engines;

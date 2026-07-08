@@ -8,8 +8,7 @@ namespace sw::kpu {
 L1Layer::L1Layer(const L1LayerConfig& config)
     : config_(config) {
     // Materialize the L1Buffer elements, assigning a global flat buffer_id so the
-    // layer presents a single index space. Prefer the canonical buffer_groups;
-    // otherwise fall back to the uniform (num_buffers x capacity_kb) convenience.
+    // layer presents a single index space.
     const size_t total = config_.total_buffers();
     buffers_.reserve(total);
     size_t global_id = 0;

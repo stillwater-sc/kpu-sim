@@ -74,29 +74,57 @@ PYBIND11_MODULE(stillwater_kpu, m) {
         .def_readwrite("memory_bandwidth_gbps", &sw::kpu::KPUSimulator::Config::memory_bandwidth_gbps)
         // On-chip memory hierarchy
         // L3 tiles/block movers now live in the L3Layer aggregate config; these
-        // properties proxy into config.l3_layer for a uniform layer.
+        // properties proxy into config.l3_layer as a single uniform tile group.
         .def_property("l3_tile_count",
-            [](const sw::kpu::KPUSimulator::Config& c) { return c.l3_layer.num_tiles; },
-            [](sw::kpu::KPUSimulator::Config& c, size_t v) { c.l3_layer.num_tiles = v; })
+            [](const sw::kpu::KPUSimulator::Config& c) { return c.l3_layer.total_tiles(); },
+            [](sw::kpu::KPUSimulator::Config& c, size_t v) {
+                sw::kpu::Size cap_kb = c.l3_layer.tile_groups.empty()
+                    ? 128 : c.l3_layer.tile_groups[0].tile.capacity_kb;
+                c.l3_layer.tile_groups = { {"l3", {cap_kb}, v} };
+            })
         .def_property("l3_tile_capacity_kb",
-            [](const sw::kpu::KPUSimulator::Config& c) { return c.l3_layer.capacity_kb; },
-            [](sw::kpu::KPUSimulator::Config& c, sw::kpu::Size v) { c.l3_layer.capacity_kb = v; })
+            [](const sw::kpu::KPUSimulator::Config& c) -> sw::kpu::Size {
+                return c.l3_layer.tile_groups.empty()
+                    ? 128 : c.l3_layer.tile_groups[0].tile.capacity_kb;
+            },
+            [](sw::kpu::KPUSimulator::Config& c, sw::kpu::Size v) {
+                c.l3_layer.tile_groups = { {"l3", {v}, c.l3_layer.total_tiles()} };
+            })
         // L2 banks now live in the L2Layer aggregate config; these properties
-        // proxy into config.l2_layer for a uniform layer.
+        // proxy into config.l2_layer as a single uniform bank group.
         .def_property("l2_bank_count",
-            [](const sw::kpu::KPUSimulator::Config& c) { return c.l2_layer.num_banks; },
-            [](sw::kpu::KPUSimulator::Config& c, size_t v) { c.l2_layer.num_banks = v; })
+            [](const sw::kpu::KPUSimulator::Config& c) { return c.l2_layer.total_banks(); },
+            [](sw::kpu::KPUSimulator::Config& c, size_t v) {
+                sw::kpu::Size cap_kb = c.l2_layer.bank_groups.empty()
+                    ? 64 : c.l2_layer.bank_groups[0].bank.capacity_kb;
+                c.l2_layer.bank_groups = { {"l2", {cap_kb}, v} };
+            })
         .def_property("l2_bank_capacity_kb",
-            [](const sw::kpu::KPUSimulator::Config& c) { return c.l2_layer.capacity_kb; },
-            [](sw::kpu::KPUSimulator::Config& c, sw::kpu::Size v) { c.l2_layer.capacity_kb = v; })
+            [](const sw::kpu::KPUSimulator::Config& c) -> sw::kpu::Size {
+                return c.l2_layer.bank_groups.empty()
+                    ? 64 : c.l2_layer.bank_groups[0].bank.capacity_kb;
+            },
+            [](sw::kpu::KPUSimulator::Config& c, sw::kpu::Size v) {
+                c.l2_layer.bank_groups = { {"l2", {v}, c.l2_layer.total_banks()} };
+            })
         // L1 buffers now live in the L1Layer aggregate config; these properties
-        // proxy into config.l1_layer for a uniform layer.
+        // proxy into config.l1_layer as a single uniform buffer group. The spec
+        // stores capacity in BYTES; the Python attribute stays in KB.
         .def_property("l1_buffer_count",
-            [](const sw::kpu::KPUSimulator::Config& c) { return c.l1_layer.num_buffers; },
-            [](sw::kpu::KPUSimulator::Config& c, size_t v) { c.l1_layer.num_buffers = v; })
+            [](const sw::kpu::KPUSimulator::Config& c) { return c.l1_layer.total_buffers(); },
+            [](sw::kpu::KPUSimulator::Config& c, size_t v) {
+                sw::kpu::Size cap_bytes = c.l1_layer.buffer_groups.empty()
+                    ? 32 * 1024 : c.l1_layer.buffer_groups[0].buffer.capacity_bytes;
+                c.l1_layer.buffer_groups = { {"l1", {cap_bytes}, v} };
+            })
         .def_property("l1_buffer_capacity_kb",
-            [](const sw::kpu::KPUSimulator::Config& c) { return c.l1_layer.capacity_kb; },
-            [](sw::kpu::KPUSimulator::Config& c, sw::kpu::Size v) { c.l1_layer.capacity_kb = v; })
+            [](const sw::kpu::KPUSimulator::Config& c) -> sw::kpu::Size {
+                return c.l1_layer.buffer_groups.empty()
+                    ? 32 : c.l1_layer.buffer_groups[0].buffer.capacity_bytes / 1024;
+            },
+            [](sw::kpu::KPUSimulator::Config& c, sw::kpu::Size v) {
+                c.l1_layer.buffer_groups = { {"l1", {v * 1024}, c.l1_layer.total_buffers()} };
+            })
         // Compute resources
         .def_readwrite("compute_tile_count", &sw::kpu::KPUSimulator::Config::compute_tile_count)
         // Data movement engines

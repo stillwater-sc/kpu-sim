@@ -209,7 +209,7 @@ int main(int argc, char* argv[]) {
         // Create appropriate number of components based on program needs
         for (int i = 0; i < 4; ++i) l3_tiles.emplace_back(i, 256);  // 256KB L3 tiles
         for (int i = 0; i < 8; ++i) l2_banks.emplace_back(i, 128);  // 128KB L2 banks
-        for (int i = 0; i < 2; ++i) l1_buffers.emplace_back(i, 64); // 64KB L1 buffers
+        for (int i = 0; i < 2; ++i) l1_buffers.emplace_back(i, 64 * 1024); // 64KB L1 buffers
 
         sw::kpu::isa::HardwareContext hw{ext_mem, l3_tiles, l2_banks, l1_buffers};
 

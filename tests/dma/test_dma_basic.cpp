@@ -108,7 +108,7 @@ TEST_CASE_METHOD(DMATestFixture, "DMA Basic Transfer - L3 Tile to External", "[d
 
 TEST_CASE_METHOD(DMATestFixture, "DMA Large Transfer", "[dma][large]") {
     // Test with L3 tile capacity
-    const size_t transfer_size = config.l3_layer.capacity_kb * 1024 / 2; // Half tile capacity
+    const size_t transfer_size = config.l3_layer.tile_groups[0].tile.capacity_kb * 1024 / 2; // Half tile capacity
     const Address src_addr = 0x0;
     const Address dst_addr = 0x0;
 
@@ -141,7 +141,7 @@ TEST_CASE_METHOD(DMATestFixture, "DMA Concurrent Transfers", "[dma][concurrent]"
 
     // Setup transfers to different L3 tiles using different DMA engines
     std::vector<std::vector<uint8_t>> test_data_sets;
-    for (size_t i = 0; i < config.l3_layer.num_tiles && i < config.dma_engine_count; ++i) {
+    for (size_t i = 0; i < config.l3_layer.total_tiles() && i < config.dma_engine_count; ++i) {
         auto data = generate_test_pattern(transfer_size, static_cast<uint8_t>(i * 0x10));
         test_data_sets.push_back(data);
 

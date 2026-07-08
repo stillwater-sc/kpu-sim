@@ -48,7 +48,7 @@ struct TestHardware {
     TestHardware() : ext_mem(16) {
         for (int i = 0; i < 4; ++i) l3_tiles.emplace_back(i, 256);
         for (int i = 0; i < 8; ++i) l2_banks.emplace_back(i, 128);
-        for (int i = 0; i < 2; ++i) l1_buffers.emplace_back(i, 64);
+        for (int i = 0; i < 2; ++i) l1_buffers.emplace_back(i, 64 * 1024);
     }
 
     HardwareContext context() {

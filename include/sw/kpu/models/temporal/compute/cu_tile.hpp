@@ -28,13 +28,16 @@ private:
     Size rows, cols;
 
 public:
-    explicit CUTile(size_t tile_id, Size capacity_kb = 128);
+    explicit CUTile(size_t tile_id, Size rows = 16, Size cols = 16)
+        : tile_id(tile_id), rows(rows), cols(cols) {}
     ~CUTile() = default;
 
     // Status and configuration
     size_t get_tile_id() const { return tile_id; }
+    Size get_rows() const { return rows; }
+    Size get_cols() const { return cols; }
     bool is_ready() const { return true; } // Simplified for now
-    void reset();
+    void reset() {} // No dynamic state yet
 };
 
 } // namespace sw::kpu

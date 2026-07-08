@@ -66,24 +66,58 @@ struct VULayerConfig {
 };
 
 // ============================================================================
+// Vector Unit Tile element
+// ============================================================================
+
+/// A single Vector Unit tile: SIMD lanes plus the SFU types it supports.
+class KPU_API VUTile {
+public:
+    explicit VUTile(size_t tile_id, const VUTileSpec& spec)
+        : tile_id_(tile_id), spec_(spec) {}
+
+    size_t get_tile_id() const { return tile_id_; }
+    Size get_vector_width() const { return spec_.vector_width; }
+    const std::vector<SFUType>& supported_sfu() const { return spec_.supported_sfu; }
+    bool is_ready() const { return true; } // Simplified for now
+    void reset() {} // No dynamic state yet
+
+private:
+    size_t tile_id_;
+    VUTileSpec spec_;
+};
+
+// ============================================================================
 // Vector Unit Layer aggregate
 // ============================================================================
 
-/// The whole SoC-wide VU resource. Owns just the Vector Units in all the  
+/// The whole SoC-wide VU resource. Owns just the Vector Units in all the
 /// Compute Tiles.
 class KPU_API VULayer {
 public:
     explicit VULayer(const VULayerConfig& config = {});
     ~VULayer();
 
-    // Non-copyable (owns a unique_ptr); movable.
+    // Non-copyable; movable.
     VULayer(const VULayer&) = delete;
     VULayer& operator=(const VULayer&) = delete;
     VULayer(VULayer&&) noexcept;
     VULayer& operator=(VULayer&&) noexcept;
 
-private:
+    // --- VUTile elements -------------------------------------------------------
+    size_t tile_count() const { return tiles_.size(); }
+    VUTile& tile(size_t index);
+    const VUTile& tile(size_t index) const;
+    std::vector<VUTile>& tiles() { return tiles_; }
+    const std::vector<VUTile>& tiles() const { return tiles_; }
 
+    // --- Lifecycle -----------------------------------------------------------
+    void reset();
+
+    const VULayerConfig& config() const { return config_; }
+
+private:
+    VULayerConfig config_;
+    std::vector<VUTile> tiles_;
 };
 
 } // namespace sw::kpu

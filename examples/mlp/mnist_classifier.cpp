@@ -233,12 +233,9 @@ int main() {
     KPUSimulator::Config config;
     config.memory_bank_count = 4;
     config.memory_bank_capacity_mb = 128;
-    config.l3_layer.num_tiles = 8;
-    config.l3_layer.capacity_kb = 256;
-    config.l2_layer.num_banks = 16;
-    config.l2_layer.capacity_kb = 64;
-    config.l1_layer.num_buffers = 8;
-    config.l1_layer.capacity_kb = 64;
+    config.l3_layer.tile_groups = { {"l3", {256}, 8} };
+    config.l2_layer.bank_groups = { {"l2", {64}, 16} };
+    config.l1_layer.buffer_groups = { {"l1", {64 * 1024}, 8} };
     config.processor_array_rows = 16;
     config.processor_array_cols = 16;
     config.use_systolic_array_mode = true;

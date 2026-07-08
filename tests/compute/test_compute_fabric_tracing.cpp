@@ -31,8 +31,8 @@ public:
         : logger(TraceLogger::instance())
     {
         // Create 2 L1 buffers of 64KB each
-        l1_buffers.emplace_back(0, 64);  // ID 0, 64 KB capacity
-        l1_buffers.emplace_back(1, 64);  // ID 1, 64 KB capacity
+        l1_buffers.emplace_back(0, 64 * 1024);  // ID 0, 64 KB capacity (bytes)
+        l1_buffers.emplace_back(1, 64 * 1024);  // ID 1, 64 KB capacity (bytes)
 
         // Create ComputeFabric instances
         // Basic matmul: tile 0, BASIC_MATMUL, 1 GHz

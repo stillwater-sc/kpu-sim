@@ -14,21 +14,21 @@ CULayer::CULayer(const CULayerConfig& config)
     size_t global_id = 0;
     for (const auto& group : config_.tile_groups) {
         for (size_t k = 0; k < group.multiplicity; ++k) {
-            tiles_.emplace_back(global_id, group.tile.capacity_kb);
+            tiles_.emplace_back(global_id, group.tile.rows, group.tile.cols);
             ++global_id;
         }
     }
 
-    // Materialize the Streamers the layer owns. 
-    // Target micro-architecture: four streamers per tile, one for each NEWS direction.
-    const size_t total_streamers = total_tiles * 4;
-    config_.streamer_count = total_streamers;
+    // Materialize the Streamers the layer owns.
+    // Target micro-architecture: four streamers per tile, one for each NEWS
+    // direction; calculated automatically unless overridden in the config.
+    if (config_.streamer_count == 0) {
+        config_.streamer_count = total_tiles * 4;
+    }
     streamers_.reserve(config_.streamer_count);
     for (size_t i = 0; i < config_.streamer_count; ++i) {
-        const size_t associated_tile = total_tiles > 0 ? (i / 4) : 0;
-        streamers_.emplace_back(i, associated_tile,
-                                   config_.streamer_clock_ghz,
-                                   config_.streamer_buswidth_bits);
+        streamers_.emplace_back(i, config_.streamer_clock_ghz,
+                                config_.streamer_buswidth_bits);
     }
 
     // Construct the vector units only when requested
@@ -62,20 +62,21 @@ Streamer& CULayer::streamer(size_t index) {
         throw std::out_of_range("CULayer::streamer: index " + std::to_string(index) +
                                 " out of range (" + std::to_string(streamers_.size()) + " streamers)");
     }
-    return block_movers_[index];
+    return streamers_[index];
 }
 
 const Streamer& CULayer::streamer(size_t index) const {
     if (index >= streamers_.size()) {
-        throw std::out_of_range("CULayer::block_mover: index " + std::to_string(index) +
+        throw std::out_of_range("CULayer::streamer: index " + std::to_string(index) +
                                 " out of range (" + std::to_string(streamers_.size()) + " streamers)");
     }
     return streamers_[index];
 }
 
-void CULayer::process_streamers(std::vector<Streamer>& streamers) {
+void CULayer::process_streamers(Cycle cycle, std::vector<L2Bank>& l2_banks,
+                                std::vector<L1Buffer>& l1_buffers) {
     for (auto& streamer : streamers_) {
-        streamer.process_transfers(tiles_, l2_banks);
+        streamer.update(cycle, l2_banks, l1_buffers);
     }
 }
 

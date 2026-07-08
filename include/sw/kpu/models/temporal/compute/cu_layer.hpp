@@ -19,14 +19,16 @@
 #endif
 
 #include <sw/concepts.hpp>
-#include <sw/kpu/models/temporal/compute/cu_layer.hpp>
+#include <sw/kpu/models/temporal/compute/cu_tile.hpp>
 #include <sw/kpu/models/temporal/compute/vu_layer.hpp>
 #include <sw/kpu/models/temporal/datamovement/streamer.hpp>
 
 namespace sw::kpu {
 
-// Forward declaration: 
+// Forward declarations: referenced by reference only (process_streamers).
 class ComputeFabric;
+class L2Bank;
+class L1Buffer;
 
 // ============================================================================
 // CU Layer configuration
@@ -107,15 +109,15 @@ public:
     CULayer(CULayer&&) noexcept;
     CULayer& operator=(CULayer&&) noexcept;
 
-    // --- L3Tile elements -----------------------------------------------------
+    // --- CUTile elements -------------------------------------------------------
     size_t tile_count() const { return tiles_.size(); }
-    L3Tile& tile(size_t index);
-    const L3Tile& tile(size_t index) const;
+    CUTile& tile(size_t index);
+    const CUTile& tile(size_t index) const;
 
     /// Direct access to the tile collection, for components whose APIs take a
-    /// `std::vector<CUTileGroup>&` (e.g. the ResourceManager).
-    std::vector<CUTileGroup>& tiles() { return tiles_; }
-    const std::vector<CUTileGroup>& tiles() const { return tiles_; }
+    /// `std::vector<CUTile>&` (e.g. the ResourceManager).
+    std::vector<CUTile>& tiles() { return tiles_; }
+    const std::vector<CUTile>& tiles() const { return tiles_; }
 
     // --- Streamers (owned by the layer) ------------------------------------
     size_t streamer_count() const { return streamers_.size(); }
@@ -124,9 +126,11 @@ public:
     std::vector<Streamer>& streamers() { return streamers_; }
     const std::vector<Streamer>& streamers() const { return streamers_; }
 
-    /// Drive all owned Streamers one step, extracting rows and columns from the 
-    /// L2 layer, and creating a data stream for the ComputeFabric.
-    void process_streamers(std::vector<Streamer>& streamers);
+    /// Drive all owned Streamers one step, extracting rows and columns from the
+    /// L2 layer, and creating a data stream for the ComputeFabric (via the L1
+    /// stream buffers).
+    void process_streamers(Cycle cycle, std::vector<L2Bank>& l2_banks,
+                           std::vector<L1Buffer>& l1_buffers);
     /// Set the simulation cycle on all owned Streamers.
     void set_streamer_cycle(Cycle cycle);
     /// True if any owned Streamers still has work in flight.
@@ -144,7 +148,7 @@ public:
 
 private:
     CULayerConfig config_;
-    std::vector<CUTileGroup> tiles_;
+    std::vector<CUTile> tiles_;
     std::vector<Streamer> streamers_;
 //    std::vector<VUTile> vus_;
 };

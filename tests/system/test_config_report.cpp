@@ -17,13 +17,10 @@ KPUSimulator::Config make_test_config() {
     config.memory_controller_count = 1;
     config.page_buffer_count = 2;
     config.page_buffer_capacity_kb = 64;
-    config.l3_layer.num_tiles = 4;
-    config.l3_layer.capacity_kb = 128;
-    config.l3_layer.block_mover_count = 4;
-    config.l2_layer.num_banks = 8;
-    config.l2_layer.capacity_kb = 64;
-    config.l1_layer.num_buffers = 8;
-    config.l1_layer.capacity_kb = 32;
+    config.l3_layer.tile_groups = { {"l3", {128}, 4} };
+    config.l3_layer.block_mover_count = 4;  // explicit override (default is 4 per tile)
+    config.l2_layer.bank_groups = { {"l2", {64}, 8} };
+    config.l1_layer.buffer_groups = { {"l1", {32 * 1024}, 8} };  // 32 KB each, spec in bytes
     config.dma_engine_count = 2;
     config.streamer_count = 4;
     config.compute_tile_count = 1;
@@ -42,9 +39,9 @@ TEST_CASE("KPUSimulator retains its construction config", "[system][config-repor
     // I1: snapshot matches the constructed SoC
     const auto& cfg = sim.get_config();
     REQUIRE(cfg.memory_bank_count == config.memory_bank_count);
-    REQUIRE(cfg.l3_layer.num_tiles == config.l3_layer.num_tiles);
-    REQUIRE(cfg.l2_layer.num_banks == config.l2_layer.num_banks);
-    REQUIRE(cfg.l1_layer.num_buffers == config.l1_layer.num_buffers);
+    REQUIRE(cfg.l3_layer.total_tiles() == config.l3_layer.total_tiles());
+    REQUIRE(cfg.l2_layer.total_banks() == config.l2_layer.total_banks());
+    REQUIRE(cfg.l1_layer.total_buffers() == config.l1_layer.total_buffers());
     REQUIRE(cfg.l3_layer.total_tiles() == sim.get_l3_tile_count());
     REQUIRE(cfg.l2_layer.total_banks() == sim.get_l2_bank_count());
     REQUIRE(cfg.l1_layer.total_buffers() == sim.get_l1_buffer_count());
@@ -93,7 +90,6 @@ TEST_CASE("Config report renders floorplan and all asset sections", "[system][co
 
     SECTION("non-uniform group summary") {
         auto config = make_test_config();
-        config.l3_layer.num_tiles = 0;
         config.l3_layer.tile_groups = {
             {"default", {128}, 2},
             {"hbw", {256}, 2},

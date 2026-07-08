@@ -8,9 +8,8 @@ namespace sw::kpu {
 
 L3Layer::L3Layer(const L3LayerConfig& config)
     : config_(config) {
-    // Materialize the L3Tile elements, assigning a global flat tile_id so the
-    // layer presents a single index space. Prefer the canonical tile_groups;
-    // otherwise fall back to the uniform (num_tiles x capacity_kb) convenience.
+    // Materialize the L3Tile elements from the canonical tile_groups,
+    // assigning a global flat tile_id so the layer presents a single index space.
     const size_t total_tiles = config_.total_tiles();
     tiles_.reserve(total_tiles);
     size_t global_id = 0;
@@ -21,16 +20,22 @@ L3Layer::L3Layer(const L3LayerConfig& config)
         }
     }
 
-    // Materialize the BlockMovers the layer owns. 
-    // Target micro-architecture: four mover per tile, one for each NEWS direction.
-    const size_t total_blockmovers = total_tiles * 4;
-    config_.block_mover_count = total_blockmovers;
+    // Materialize the BlockMovers the layer owns.
+    // Target micro-architecture: four movers per tile, one for each NEWS
+    // direction; calculated automatically unless overridden in the config.
+    if (config_.block_mover_count == 0) {
+        config_.block_mover_count = total_tiles * 4;
+    }
+    // BlockMover takes an aggregate bandwidth; derive it from the configured
+    // bus width and clock (GB/s = bits/8 * GHz).
+    const double block_mover_bandwidth_gb_s =
+        config_.block_mover_buswidth_bits / 8.0 * config_.block_mover_clock_ghz;
     block_movers_.reserve(config_.block_mover_count);
     for (size_t i = 0; i < config_.block_mover_count; ++i) {
-        const size_t associated_tile = total_tiles > 0 ? (i / 4) : 0;
+        const size_t associated_tile = total_tiles > 0 ? (i / 4) % total_tiles : 0;
         block_movers_.emplace_back(i, associated_tile,
                                    config_.block_mover_clock_ghz,
-                                   config_.block_mover_buswidth_bits);
+                                   block_mover_bandwidth_gb_s);
     }
 
     // Construct the interconnect only when requested (ownership seam).

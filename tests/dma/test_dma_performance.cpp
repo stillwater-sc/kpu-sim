@@ -23,7 +23,9 @@ public:
         // than the default. Max transfer here is 8 KB - small_config()'s
         // memory sizing is fine.
         config.memory_bandwidth_gbps = 100;
-        config.l3_layer.capacity_kb   = 512;
+        for (auto& group : config.l3_layer.tile_groups) {
+            group.tile.capacity_kb = 512;
+        }
         sim = std::make_unique<KPUSimulator>(config);
     }
 };
@@ -65,7 +67,7 @@ TEST_CASE_METHOD(DMAPerformanceFixture, "DMA Performance - Single Transfer Throu
 
 TEST_CASE_METHOD(DMAPerformanceFixture, "DMA Performance - Concurrent Transfers", "[dma][performance]") {
     const size_t transfer_size = 4096;
-    const size_t num_transfers = std::min(config.l3_layer.num_tiles, config.dma_engine_count);
+    const size_t num_transfers = std::min(config.l3_layer.total_tiles(), config.dma_engine_count);
 
     // Setup data for each transfer
     std::vector<std::vector<uint8_t>> data_sets;

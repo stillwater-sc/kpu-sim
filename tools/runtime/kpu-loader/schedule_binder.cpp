@@ -70,13 +70,13 @@ BoundSchedule ScheduleBinder::bind(const dfx::Program& program) {
 
             // Allocate memory resources
             bound.l3_tile_id = current_l3_tile;
-            current_l3_tile = (current_l3_tile + 1) % config_.l3_layer.num_tiles;
+            current_l3_tile = (current_l3_tile + 1) % config_.l3_layer.total_tiles();
 
             bound.l2_bank_id = current_l2_bank;
-            current_l2_bank = (current_l2_bank + 1) % config_.l2_layer.num_banks;
+            current_l2_bank = (current_l2_bank + 1) % config_.l2_layer.total_banks();
 
             bound.l1_buffer_id = current_l1_buffer;
-            current_l1_buffer = (current_l1_buffer + 1) % config_.l1_layer.num_buffers;
+            current_l1_buffer = (current_l1_buffer + 1) % config_.l1_layer.total_buffers();
 
             // Calculate addresses
             bound.source_addr = calculate_address(data_move->source, src_level);

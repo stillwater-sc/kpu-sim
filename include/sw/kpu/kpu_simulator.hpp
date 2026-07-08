@@ -75,20 +75,17 @@ public:
 
         // On-chip memory hierarchy
         // L3 layer: aggregate config (tiles, block movers, interconnect).
-        // Use l3_layer.num_tiles / l3_layer.capacity_kb for a uniform layer, or
-        // l3_layer.tile_groups for a non-uniform one.
+        // Populate l3_layer.tile_groups with group -> element-spec ->
+        // multiplicity entries (a single group models a uniform layer).
         L3LayerConfig l3_layer;
-        // L2 layer: aggregate config (banks). Use l2_layer.num_banks /
-        // l2_layer.capacity_kb for a uniform layer, or l2_layer.bank_groups
-        // for a non-uniform one.
+        // L2 layer: aggregate config (banks). Populate l2_layer.bank_groups.
         L2LayerConfig l2_layer;
-        // L1 layer: aggregate config (stream buffers feeding the compute fabric).
-        // Use l1_layer.num_buffers / l1_layer.capacity_kb for a uniform layer, or
-        // l1_layer.buffer_groups for a non-uniform one.
-        // The buffer count is typically DERIVED from the processor array
-        // configuration (4 × (rows + cols) per compute tile for rectangular
-        // arrays; see processor_array_topology.hpp) — set l1_layer.num_buffers
-        // accordingly (0 = none / set by the caller).
+        // L1 layer: aggregate config (stream buffers feeding the compute
+        // fabric). Populate l1_layer.buffer_groups; L1BufferSpec capacities
+        // are in BYTES. The buffer count is typically DERIVED from the
+        // processor array configuration (4 × (rows + cols) per compute tile
+        // for rectangular arrays; see processor_array_topology.hpp) — size
+        // the groups accordingly (empty = no L1 buffers).
         L1LayerConfig l1_layer;
 
         // Data movement engines

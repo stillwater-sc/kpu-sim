@@ -56,7 +56,7 @@ struct TestHardware {
     TestHardware() : ext_mem(16) {  // 16 KB
         for (int i = 0; i < 4; ++i) l3_tiles.emplace_back(i, 256);  // 256 KB
         for (int i = 0; i < 8; ++i) l2_banks.emplace_back(i, 128);  // 128 KB
-        for (int i = 0; i < 2; ++i) l1_buffers.emplace_back(i, 64); // 64 KB
+        for (int i = 0; i < 2; ++i) l1_buffers.emplace_back(i, 64 * 1024); // 64 KB
     }
 
     BehavioralProgramExecutor::HardwareContext context() {
