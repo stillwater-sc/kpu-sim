@@ -155,6 +155,7 @@ public:
         feed_queue_.reset();
         drain_queue_.reset();
         in_flight_.reset();
+        next_l2_slot_ = 0;
         stall_cycles_tag_ = 0;
         stall_cycles_credit_ = 0;
         stall_cycles_compute_ = 0;
@@ -213,6 +214,7 @@ private:
     std::optional<InFlightTransfer> in_flight_;
 
     Cycle current_cycle_ = 0;
+    uint32_t next_l2_slot_ = 0;
     double cycles_per_byte_ = 0.01;  // ~100 bytes/cycle at 102.4 GB/s @ 1GHz
 
     // For in-flight tracking
@@ -465,9 +467,8 @@ private:
      * @brief Allocate an L2 bank slot (round-robin)
      */
     uint32_t allocate_l2_slot() {
-        static uint32_t next_slot = 0;
-        uint32_t slot = next_slot;
-        next_slot = (next_slot + 1) % static_cast<uint32_t>(l2_tag_cam_.capacity());
+        uint32_t slot = next_l2_slot_;
+        next_l2_slot_ = (next_l2_slot_ + 1) % static_cast<uint32_t>(l2_tag_cam_.capacity());
         return slot;
     }
 };

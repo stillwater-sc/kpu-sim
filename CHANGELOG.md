@@ -7,6 +7,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **CSP timing: multi-tile schedules livelocked in `ConcurrentTimingExecutor` (#61).**
+  `run_matmul` failed with livelock at its default 64x64x64 / 16^3-tile
+  configuration; 128^3 and 256^3 also failed. Four root causes, all in the
+  timing tier headers:
+  - `DMAEngineProcess::schedule_load/schedule_store` silently dropped requests
+    beyond `queue_depth` (32), so most of a schedule's loads never executed and
+    downstream BlockMovers/Streamers tag-stalled forever. The pending list is
+    now an unbounded software staging queue; `queue_depth` bounds concurrently
+    *submitted* MC requests instead.
+  - Credit leak on tile reuse: each duplicate MOVE of an L2-resident tile
+    acquired a new L2 credit, but the ref-counted TagCAM entry releases only
+    one credit when it drains — leaking (uses-1) credits per reused tile.
+    `BlockMoverProcess` now deduplicates moves for L2-resident tiles
+    (ref_count++ without a credit), matching the documented schedule-generator
+    contract ("execution layer deduplicates").
+  - Duplicate in-flight loads: a second load of the same tile could be
+    submitted while the first was still in the MC, double-acquiring L3 credits
+    for one TagCAM entry. Loads now defer when the tile already has a
+    submitted load (resolved via the dedup path on arrival). Work assignment
+    changed from round-robin to tile-affine (hash of TileID) so one tile's
+    operations serialize on one DMA/BlockMover/Streamer and cannot race
+    across processes.
+  - Instance-state bugs: `StreamerProcess::allocate_l2_slot` used a `static`
+    counter shared across all streamer instances; the executor's compute-slot
+    counter was a function-local `static` shared across executor instances and
+    not reset. Both are instance members now.
+  Also: DMA stall accounting now counts at most one stall cycle per tick
+  (matching BlockMover/Streamer semantics) instead of one per pending request,
+  and optional `l3_writeback_credit_reserve` / `l2_drain_credit_reserve`
+  executor knobs (default 0) guard against prefetch starving writeback/drain
+  credit acquisition on extreme schedules. `run_matmul` now completes for
+  32^3 through 256^3 across all strategies (including BLOCKED_AB).
+
 ### Changed
 
 - **BREAKING — L1 memory layer restructuring (#34).** Introduced the `L1Layer`
