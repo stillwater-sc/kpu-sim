@@ -308,14 +308,17 @@ TEST_CASE("MatMulScheduleGenerator prefetch_next", "[timing][schedule][matmul]")
     REQUIRE(result.valid);
     REQUIRE(result.metadata.strategy == "prefetch_next");
 
-    // Prefetch strategy has more loads due to prefetching
+    // Prefetch shifts loads one iteration earlier but must NOT duplicate
+    // them: every LOAD pairs 1:1 with a MOVE (each load inserts an L3
+    // TagCAM reference, each move consumes one; duplicate loads strand
+    // references and L3 credits -> livelock at scale, see #61/#64)
     Size expected_k_tiles = 4;  // 64/16
     Size expected_c_tiles = 4;  // 2x2
 
-    // Each C tile has k_tiles iterations, and each loads A+B
-    // Plus prefetch loads for all but the last iteration
     size_t load_ops = result.count_ops(ScheduleOpType::LOAD);
-    REQUIRE(load_ops > expected_k_tiles * 2 * expected_c_tiles);  // More due to prefetch
+    size_t move_ops = result.count_ops(ScheduleOpType::MOVE);
+    REQUIRE(load_ops == expected_k_tiles * 2 * expected_c_tiles);
+    REQUIRE(load_ops == move_ops);
 }
 
 TEST_CASE("MatMulScheduleGenerator address calculation", "[timing][schedule][matmul]") {

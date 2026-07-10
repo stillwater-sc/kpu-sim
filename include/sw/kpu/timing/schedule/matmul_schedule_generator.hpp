@@ -245,14 +245,10 @@ private:
                 }
 
                 // Signal compute complete, then drain C tile
-                // COMPUTE depends on last B tile being fed: B[0,tj,k-1]
+                // COMPUTE depends on ALL K-slice A and B feeds for this C tile
                 auto c_tile = make_tile(isa::MatrixID::C, ti, tj, 0);
-                TileID last_b;
-                last_b.matrix = isa::MatrixID::B;
-                last_b.ti = 0;
-                last_b.tj = tj;
-                last_b.tk = k_tiles - 1;
-                result.operations.push_back(ScheduleOperation::compute(c_tile, last_b));
+                result.operations.push_back(ScheduleOperation::compute(
+                    c_tile, make_compute_dependencies(ti, tj, k_tiles)));
                 result.operations.push_back(ScheduleOperation::drain(c_tile));
                 result.operations.push_back(ScheduleOperation::writeback(c_tile));
                 result.operations.push_back(ScheduleOperation::store(c_tile));
@@ -305,14 +301,10 @@ private:
                 }
 
                 // Signal compute complete, then drain and store C tile
-                // COMPUTE depends on last B tile being fed: B[0,tj,k-1]
+                // COMPUTE depends on ALL K-slice A and B feeds for this C tile
                 auto c_tile = make_tile(isa::MatrixID::C, ti, tj, 0);
-                TileID last_b;
-                last_b.matrix = isa::MatrixID::B;
-                last_b.ti = 0;
-                last_b.tj = tj;
-                last_b.tk = k_tiles - 1;
-                result.operations.push_back(ScheduleOperation::compute(c_tile, last_b));
+                result.operations.push_back(ScheduleOperation::compute(
+                    c_tile, make_compute_dependencies(ti, tj, k_tiles)));
                 result.operations.push_back(ScheduleOperation::drain(c_tile));
                 result.operations.push_back(ScheduleOperation::writeback(c_tile));
                 result.operations.push_back(ScheduleOperation::store(c_tile));
@@ -337,9 +329,16 @@ private:
                     auto a_tile = make_tile(isa::MatrixID::A, ti, 0, tk);
                     auto b_tile = make_tile(isa::MatrixID::B, 0, tj, tk);
 
-                    // Load current tiles (execution layer deduplicates)
-                    result.operations.push_back(ScheduleOperation::load(a_tile));
-                    result.operations.push_back(ScheduleOperation::load(b_tile));
+                    // Load current tiles only at tk == 0; tiles for tk >= 1
+                    // were already loaded by the previous iteration's
+                    // prefetch. Every LOAD must pair 1:1 with a MOVE:
+                    // each load inserts an L3 TagCAM reference and each move
+                    // consumes one, so duplicate loads leave references (and
+                    // the L3 credit) stranded -> livelock at scale.
+                    if (tk == 0) {
+                        result.operations.push_back(ScheduleOperation::load(a_tile));
+                        result.operations.push_back(ScheduleOperation::load(b_tile));
+                    }
 
                     // Prefetch next tiles if available
                     if (tk + 1 < k_tiles) {
@@ -357,14 +356,10 @@ private:
                 }
 
                 // Signal compute complete, then drain and store C
-                // COMPUTE depends on last B tile being fed: B[0,tj,k-1]
+                // COMPUTE depends on ALL K-slice A and B feeds for this C tile
                 auto c_tile = make_tile(isa::MatrixID::C, ti, tj, 0);
-                TileID last_b;
-                last_b.matrix = isa::MatrixID::B;
-                last_b.ti = 0;
-                last_b.tj = tj;
-                last_b.tk = k_tiles - 1;
-                result.operations.push_back(ScheduleOperation::compute(c_tile, last_b));
+                result.operations.push_back(ScheduleOperation::compute(
+                    c_tile, make_compute_dependencies(ti, tj, k_tiles)));
                 result.operations.push_back(ScheduleOperation::drain(c_tile));
                 result.operations.push_back(ScheduleOperation::writeback(c_tile));
                 result.operations.push_back(ScheduleOperation::store(c_tile));
@@ -409,19 +404,43 @@ private:
                 }
 
                 // Signal compute complete, then drain and store C
-                // COMPUTE depends on last B tile being fed: B[0,tj,k-1]
+                // COMPUTE depends on ALL K-slice A and B feeds for this C tile
                 auto c_tile = make_tile(isa::MatrixID::C, ti, tj, 0);
-                TileID last_b;
-                last_b.matrix = isa::MatrixID::B;
-                last_b.ti = 0;
-                last_b.tj = tj;
-                last_b.tk = k_tiles - 1;
-                result.operations.push_back(ScheduleOperation::compute(c_tile, last_b));
+                result.operations.push_back(ScheduleOperation::compute(
+                    c_tile, make_compute_dependencies(ti, tj, k_tiles)));
                 result.operations.push_back(ScheduleOperation::drain(c_tile));
                 result.operations.push_back(ScheduleOperation::writeback(c_tile));
                 result.operations.push_back(ScheduleOperation::store(c_tile));
             }
         }
+    }
+
+    /**
+     * @brief Build the full COMPUTE dependency set for C[ti,tj]
+     *
+     * Every A[ti,*,k] and B[*,tj,k] K-slice must be FED before the compute
+     * for C[ti,tj] can start. The K-slice count (dependencies / 2) also
+     * scales compute latency in the executor.
+     */
+    std::vector<TileID> make_compute_dependencies(Size ti, Size tj, Size k_tiles) const {
+        std::vector<TileID> deps;
+        deps.reserve(2 * k_tiles);
+        for (Size tk = 0; tk < k_tiles; ++tk) {
+            TileID a;
+            a.matrix = isa::MatrixID::A;
+            a.ti = ti;
+            a.tj = 0;
+            a.tk = tk;
+            deps.push_back(a);
+
+            TileID b;
+            b.matrix = isa::MatrixID::B;
+            b.ti = 0;
+            b.tj = tj;
+            b.tk = tk;
+            deps.push_back(b);
+        }
+        return deps;
     }
 
     /**
