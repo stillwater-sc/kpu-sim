@@ -80,7 +80,7 @@ struct ScheduleOperation {
     // dependency_tile is retained for backward compatibility and holds the
     // last entry of dependency_tiles.
     std::vector<TileID> dependency_tiles;   ///< COMPUTE waits for all of these
-    TileID dependency_tile;                 ///< Last dependency (legacy field)
+    TileID dependency_tile{};               ///< Last dependency (legacy field)
 
     /**
      * @brief Create a LOAD operation

@@ -42,7 +42,7 @@ ConcurrentTimingExecutor::Config make_executor_config() {
 }
 
 MatMulScheduleGenerator::Config make_generator_config(
-    size_t n, MatMulScheduleGenerator::Strategy strategy) {
+    Size n, MatMulScheduleGenerator::Strategy strategy) {
     MatMulScheduleGenerator::Config config;
     config.M = n;
     config.N = n;
@@ -70,7 +70,7 @@ constexpr StrategyCase kStrategies[] = {
 };
 
 struct SizeCase {
-    size_t n;        // M = N = K (16^3 tiles -> n/16 tile grid per dim)
+    Size n;          // M = N = K (16^3 tiles -> n/16 tile grid per dim)
     Cycle ceiling;   // generous total-cycle bound; cycle counts vary across
                      // platforms (work assignment hashes with std::hash)
 };
