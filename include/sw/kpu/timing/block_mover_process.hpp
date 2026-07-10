@@ -48,6 +48,8 @@ public:
         double clock_ghz = 1.0;        ///< Reference clock in GHz
         bool supports_transpose = true; ///< Can transpose during move
         bool priority_aging = false;   ///< If true, prefer oldest ready tile (prevents starvation)
+        size_t l2_credit_reserve = 0;  ///< L2 credits moves may NOT consume (reserved for
+                                       ///< compute-result drains; prevents credit starvation)
         std::string name = "BM";       ///< Human-readable name
 
         /// Generate human-readable name: "L3(0,0):BM" format
@@ -122,7 +124,11 @@ public:
         // Step 1: Check for completed transfer
         check_completion(current_cycle, events);
 
-        // Step 2: If idle, try to start new work
+        // Step 2: Deduplicate moves for tiles already resident in L2
+        // (tile reuse - no transfer, no L2 credit)
+        process_dedup_moves(current_cycle, events);
+
+        // Step 3: If idle, try to start new work
         if (!in_flight_.has_value()) {
             // Priority: moves over writebacks (keep pipeline fed)
             if (!try_start_move(current_cycle, events)) {
@@ -317,6 +323,70 @@ private:
     }
 
     /**
+     * @brief Complete moves for tiles already resident in L2 (tile reuse)
+     *
+     * The schedule emits one MOVE per tile *use*; the execution layer
+     * deduplicates. A duplicate move increments the L2 entry's ref_count
+     * (one ref per pending FEED) WITHOUT acquiring a new L2 credit - the
+     * entry holds exactly one credit for its lifetime. Acquiring a credit
+     * per duplicate move leaks credits (N acquires, 1 release when the
+     * ref_count reaches 0) and exhausts the L2 pool on reuse-heavy
+     * schedules (issue #61).
+     *
+     * The L3 side is still consumed per move: each dedup decrements the
+     * L3 ref_count and releases the L3 credit when it reaches 0.
+     */
+    void process_dedup_moves(Cycle current_cycle, std::vector<TimingEvent>& events) {
+        size_t i = 0;
+        while (i < move_queue_.size()) {
+            const auto& tile = move_queue_.at(i);
+            auto l2_entry = l2_tag_cam_.match(tile.tile_id);
+            auto l3_entry = l3_tag_cam_.match(tile.tile_id);
+            // Dedup only when the tile is present on BOTH sides: resident in
+            // L2 (reuse target) and arrived in L3 (this move's L3 ref is due)
+            if (!l2_entry.has_value() || !l3_entry.has_value()) {
+                ++i;
+                continue;
+            }
+
+            TileDescriptor dedup_tile = move_queue_.remove_at(i);
+            if (i < transpose_flags_.size()) {
+                transpose_flags_.erase(transpose_flags_.begin() +
+                                       static_cast<std::ptrdiff_t>(i));
+            }
+
+            // ref_count++ in L2 (no credit - entry already holds one)
+            l2_tag_cam_.insert(dedup_tile.tile_id, l2_entry->slot_id, current_cycle);
+            // Consume this move's L3 reference
+            bool credit_released = l3_tag_cam_.invalidate(dedup_tile.tile_id);
+            if (credit_released) {
+                l3_credits_.release();
+            }
+            total_tiles_moved_++;
+
+            events.push_back(TimingEvent(
+                EventType::TILE_ARRIVED_L2,
+                current_cycle,
+                config_.mover_id,
+                dedup_tile.tile_id,
+                name()
+            ));
+            events.back().slot_id = l2_entry->slot_id;
+
+            if (credit_released) {
+                events.push_back(TimingEvent(
+                    EventType::CREDIT_RELEASED,
+                    current_cycle,
+                    config_.mover_id,
+                    dedup_tile.tile_id,
+                    name()
+                ));
+            }
+            // Do not advance i - remove_at shifted the next element into i
+        }
+    }
+
+    /**
      * @brief Try to start a move transfer (L3→L2) using work-conserving scan
      * @return true if a move was started
      *
@@ -371,8 +441,11 @@ private:
             return false;
         }
 
-        // Check if L2 credit available
-        if (!l2_credits_.acquire()) {
+        // Check if L2 credit available. Moves may not consume the reserved
+        // credits - those are kept for compute-result drains (Streamer),
+        // which otherwise starve because BlockMovers tick before Streamers.
+        if (l2_credits_.available() <= config_.l2_credit_reserve ||
+            !l2_credits_.acquire()) {
             const auto& tile = move_queue_.at(found_index);
             events.push_back(TimingEvent(
                 EventType::BM_STALL_CREDIT,

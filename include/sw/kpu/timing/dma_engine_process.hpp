@@ -25,6 +25,7 @@
 
 #include <cmath>
 #include <optional>
+#include <unordered_set>
 #include <vector>
 
 namespace sw::kpu::timing {
@@ -54,7 +55,9 @@ public:
      */
     struct Config {
         uint32_t engine_id = 0;        ///< Unique engine identifier
-        size_t queue_depth = 32;       ///< Max pending requests in queue
+        size_t queue_depth = 32;       ///< Max requests concurrently submitted to the MC
+        size_t l3_credit_reserve = 0;  ///< L3 credits loads may NOT consume (reserved for
+                                       ///< downstream writebacks; prevents credit starvation)
         std::string name = "DMA";      ///< Human-readable name
 
         /// Generate human-readable name
@@ -111,10 +114,9 @@ public:
      * 2. MC can accept the request
      */
     void schedule_load(const TileDescriptor& tile) {
-        if (pending_requests_.size() >= config_.queue_depth) {
-            return;  // Queue full
-        }
-
+        // The pending list is a software staging queue and accepts every
+        // scheduled request; the hardware constraint (queue_depth) bounds how
+        // many requests are concurrently SUBMITTED to the memory controller.
         PendingRequest req;
         req.tile = tile;
         req.is_load = true;
@@ -133,10 +135,7 @@ public:
      * 2. MC can accept the request
      */
     void schedule_store(const TileDescriptor& tile) {
-        if (pending_requests_.size() >= config_.queue_depth) {
-            return;  // Queue full
-        }
-
+        // Staging queue accepts every scheduled request (see schedule_load).
         PendingRequest req;
         req.tile = tile;
         req.is_load = false;
@@ -201,6 +200,7 @@ public:
 
     void reset() override {
         pending_requests_.clear();
+        submitted_load_tiles_.clear();
         next_slot_id_ = 0;
         stall_cycles_credit_ = 0;
         stall_cycles_tag_ = 0;
@@ -255,6 +255,7 @@ private:
     TagCAM& l3_tag_cam_;
 
     std::vector<PendingRequest> pending_requests_;
+    std::unordered_set<TileID, TileIDHash> submitted_load_tiles_;
 
     Cycle current_cycle_ = 0;
     uint32_t next_slot_id_ = 0;
@@ -280,6 +281,7 @@ private:
                     if (completed->is_load) {
                         // Load complete: tile arrived at L3
                         l3_tag_cam_.insert(completed->tile.tile_id, req.slot_id, current_cycle_);
+                        submitted_load_tiles_.erase(completed->tile.tile_id);
                         total_bytes_loaded_ += completed->tile.size_bytes;
 
                         events.push_back(TimingEvent(
@@ -318,6 +320,9 @@ private:
      * @brief Try to acquire credits and submit pending loads to MC
      */
     void process_pending_loads(std::vector<TimingEvent>& events) {
+        size_t in_flight = submitted_count();
+        bool credit_stalled = false;
+        TileID stalled_tile{};
         for (auto& req : pending_requests_) {
             if (!req.is_load || req.state != RequestState::WAITING_CREDIT) {
                 continue;
@@ -341,16 +346,31 @@ private:
                 continue;
             }
 
-            // Need L3 credit
-            if (!l3_credits_.acquire()) {
-                events.push_back(TimingEvent(
-                    EventType::DMA_STALL_CREDIT,
-                    current_cycle_,
-                    config_.engine_id,
-                    req.tile.tile_id,
-                    name()
-                ));
-                stall_cycles_credit_++;
+            // Defer if a load for the same tile is already in flight: when it
+            // completes and inserts into L3, this request resolves via the
+            // dedup path above. Submitting a second real load would acquire a
+            // second credit for a single TagCAM entry (which releases only
+            // one credit), leaking credits on reuse-heavy schedules (#61).
+            if (submitted_load_tiles_.count(req.tile.tile_id) > 0) {
+                continue;
+            }
+
+            // Hardware queue slot required beyond this point
+            if (in_flight >= config_.queue_depth) {
+                continue;  // All slots occupied - dedup hits above can still complete
+            }
+
+            // Need L3 credit. Loads may not consume the reserved credits -
+            // those are kept for C-tile writebacks (BlockMover L2->L3).
+            // Without the reserve, greedy prefetch loads re-acquire every
+            // freed credit before a writeback can, starving the downstream
+            // path and wedging the pipeline (credit cycle livelock).
+            if (l3_credits_.available() <= config_.l3_credit_reserve ||
+                !l3_credits_.acquire()) {
+                if (!credit_stalled) {
+                    credit_stalled = true;
+                    stalled_tile = req.tile.tile_id;
+                }
                 continue;  // Try other requests
             }
 
@@ -363,6 +383,8 @@ private:
             }
 
             req.state = RequestState::SUBMITTED;
+            submitted_load_tiles_.insert(req.tile.tile_id);
+            ++in_flight;
 
             events.push_back(TimingEvent(
                 EventType::CREDIT_ACQUIRED,
@@ -372,28 +394,42 @@ private:
                 name()
             ));
         }
+
+        // Stall accounting: at most one stall cycle per tick (matches BM/STR)
+        if (credit_stalled) {
+            events.push_back(TimingEvent(
+                EventType::DMA_STALL_CREDIT,
+                current_cycle_,
+                config_.engine_id,
+                stalled_tile,
+                name()
+            ));
+            stall_cycles_credit_++;
+        }
     }
 
     /**
      * @brief Try to match tags and submit pending stores to MC
      */
     void process_pending_stores(std::vector<TimingEvent>& events) {
+        size_t in_flight = submitted_count();
+        bool tag_stalled = false;
+        TileID stalled_tile{};
         for (auto& req : pending_requests_) {
             if (req.is_load || req.state != RequestState::WAITING_TAG) {
                 continue;
+            }
+            if (in_flight >= config_.queue_depth) {
+                break;  // All hardware queue slots occupied
             }
 
             // Need tile to be in L3 (TagCAM match)
             auto entry = l3_tag_cam_.match(req.tile.tile_id);
             if (!entry.has_value()) {
-                events.push_back(TimingEvent(
-                    EventType::DMA_STALL_TAG,
-                    current_cycle_,
-                    config_.engine_id,
-                    req.tile.tile_id,
-                    name()
-                ));
-                stall_cycles_tag_++;
+                if (!tag_stalled) {
+                    tag_stalled = true;
+                    stalled_tile = req.tile.tile_id;
+                }
                 continue;  // Try other requests
             }
 
@@ -404,6 +440,19 @@ private:
             }
 
             req.state = RequestState::SUBMITTED;
+            ++in_flight;
+        }
+
+        // Stall accounting: at most one stall cycle per tick (matches BM/STR)
+        if (tag_stalled) {
+            events.push_back(TimingEvent(
+                EventType::DMA_STALL_TAG,
+                current_cycle_,
+                config_.engine_id,
+                stalled_tile,
+                name()
+            ));
+            stall_cycles_tag_++;
         }
     }
 

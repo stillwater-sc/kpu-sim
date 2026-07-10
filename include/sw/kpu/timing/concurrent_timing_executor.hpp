@@ -101,6 +101,28 @@ public:
         // Work-conserving and priority aging
         bool enable_work_conserving = true;
         bool enable_priority_aging = false;
+
+        // Credit reserves (optional guard against upstream producers
+        // starving downstream completion paths - see issue #61):
+        // - L3 reserve: credits DMA loads may not consume, kept for C-tile
+        //   writebacks (BlockMover L2->L3)
+        // - L2 reserve: credits BlockMover moves may not consume, kept for
+        //   compute-result drains (Streamer)
+        // Default 0: tile-reuse deduplication (DMA in-flight dedup, BlockMover
+        // move dedup, tile-affine work assignment) removes the credit leaks
+        // that caused livelock, and a reserve of 0 keeps load-only workloads
+        // able to fill the entire pool. Set >0 for schedules with extreme
+        // prefetch depth if writeback/drain starvation is observed.
+        // Effective values are clamped to (pool_size - 1) / 2 so small pools
+        // keep at least half their credits usable by the primary producer.
+        size_t l3_writeback_credit_reserve = 0;
+        size_t l2_drain_credit_reserve = 0;
+
+        /// Reserve clamp: never reserve more than half of (pool - 1)
+        [[nodiscard]] static size_t clamp_reserve(size_t reserve, size_t pool_size) {
+            size_t max_reserve = pool_size > 0 ? (pool_size - 1) / 2 : 0;
+            return reserve < max_reserve ? reserve : max_reserve;
+        }
     };
 
     /**
@@ -350,11 +372,8 @@ private:
     // Livelock detection
     std::unique_ptr<LivelockDetector> livelock_detector_;
 
-    // Round-robin counters for work distribution
-    mutable uint32_t next_dma_engine_ = 0;
-    mutable uint32_t next_block_mover_ = 0;
-    mutable uint32_t next_row_streamer_ = 0;
-    mutable uint32_t next_col_streamer_ = 0;
+    // Slot counter for compute results (instance-local, reset with executor)
+    uint32_t next_compute_slot_ = 0;
 
     // ========================================================================
     // Work Assignment
@@ -449,6 +468,8 @@ inline void ConcurrentTimingExecutor::create_components() {
         DMAEngineProcess::Config dma_config;
         dma_config.engine_id = static_cast<uint32_t>(dma);
         dma_config.queue_depth = config_.dma_queue_depth;
+        dma_config.l3_credit_reserve = Config::clamp_reserve(
+            config_.l3_writeback_credit_reserve, config_.l3_buffer_count);
         dma_config.name = dma_config.display_name();
 
         // Assign DMA to MC (round-robin if more DMAs than MCs)
@@ -474,6 +495,8 @@ inline void ConcurrentTimingExecutor::create_components() {
         bm_config.startup_latency = config_.bm_startup_latency;
         bm_config.clock_ghz = config_.clock_ghz;
         bm_config.priority_aging = config_.enable_priority_aging;
+        bm_config.l2_credit_reserve = Config::clamp_reserve(
+            config_.l2_drain_credit_reserve, config_.l2_bank_count);
         bm_config.name = bm_config.display_name();
 
         block_movers_.push_back(std::make_unique<BlockMoverProcess>(
@@ -653,8 +676,7 @@ inline bool ConcurrentTimingExecutor::step() {
     while (it != pending_computes_.end()) {
         if (it->started && current_cycle_ >= it->complete_cycle) {
             // Compute completed - result tile is now ready for DRAIN
-            static uint32_t next_compute_slot = 0;
-            uint32_t slot = next_compute_slot++;
+            uint32_t slot = next_compute_slot_++;
             compute_result_tag_cam_.insert(it->tile.tile_id, slot, current_cycle_);
 
             // Emit COMPUTE_COMPLETE event
@@ -785,10 +807,7 @@ inline void ConcurrentTimingExecutor::reset() {
         livelock_detector_->reset();
     }
 
-    next_dma_engine_ = 0;
-    next_block_mover_ = 0;
-    next_row_streamer_ = 0;
-    next_col_streamer_ = 0;
+    next_compute_slot_ = 0;
 }
 
 inline ConcurrentTimingExecutor::Statistics ConcurrentTimingExecutor::get_statistics() const {
@@ -870,34 +889,25 @@ inline size_t ConcurrentTimingExecutor::count_completed_tiles() const {
 }
 
 inline uint32_t ConcurrentTimingExecutor::select_dma_engine(const TileDescriptor& tile) const {
-    // Strategy: Round-robin for load balancing
-    // For multi-DMA configs, could also use matrix-based assignment
-    uint32_t dma = next_dma_engine_;
-    next_dma_engine_ = (next_dma_engine_ + 1) % static_cast<uint32_t>(dma_engines_.size());
-    (void)tile;  // Could use tile matrix for assignment
-    return dma;
+    // Strategy: Tile-affine assignment - all operations for the same tile go
+    // to the same engine. Round-robin spreads a reused tile's operations
+    // across engines, which allows concurrent duplicate transfers of the
+    // same tile: each acquires a credit but the ref-counted TagCAM entry
+    // releases only one, leaking credits until the pipeline wedges (#61).
+    return static_cast<uint32_t>(
+        TileIDHash{}(tile.tile_id) % dma_engines_.size());
 }
 
 inline uint32_t ConcurrentTimingExecutor::select_block_mover(const TileDescriptor& tile) const {
-    // Strategy: Round-robin for load balancing
-    uint32_t mover = next_block_mover_;
-    next_block_mover_ = (next_block_mover_ + 1) % static_cast<uint32_t>(block_movers_.size());
-    (void)tile;
-    return mover;
+    // Tile-affine assignment (see select_dma_engine for rationale)
+    return static_cast<uint32_t>(
+        TileIDHash{}(tile.tile_id) % block_movers_.size());
 }
 
 inline uint32_t ConcurrentTimingExecutor::select_streamer(const TileDescriptor& tile, bool is_row) const {
-    if (is_row) {
-        uint32_t streamer = next_row_streamer_;
-        next_row_streamer_ = (next_row_streamer_ + 1) % static_cast<uint32_t>(row_streamers_.size());
-        (void)tile;
-        return streamer;
-    } else {
-        uint32_t streamer = next_col_streamer_;
-        next_col_streamer_ = (next_col_streamer_ + 1) % static_cast<uint32_t>(col_streamers_.size());
-        (void)tile;
-        return streamer;
-    }
+    // Tile-affine assignment (see select_dma_engine for rationale)
+    size_t n = is_row ? row_streamers_.size() : col_streamers_.size();
+    return static_cast<uint32_t>(TileIDHash{}(tile.tile_id) % n);
 }
 
 inline void ConcurrentTimingExecutor::export_chrome_trace(const std::string& filename) const {
