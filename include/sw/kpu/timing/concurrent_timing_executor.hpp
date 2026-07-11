@@ -111,7 +111,10 @@ public:
         Cycle str_startup_latency = 2;    ///< Streamer startup latency
 
         // Compute configuration
-        Cycle compute_latency = 32;       ///< Cycles for tile computation (after all inputs fed)
+        Cycle compute_latency = 32;       ///< Base cycles for tile computation (after all inputs fed)
+        Cycle compute_cycles_per_k_slice = 32;  ///< Additional cycles per K slice beyond the
+                                                ///< first (accumulation depth; K-slice count is
+                                                ///< derived from the COMPUTE dependency set)
 
         // Timing parameters
         double clock_ghz = 1.0;           ///< Reference clock in GHz
@@ -260,13 +263,30 @@ public:
     /**
      * @brief Schedule a compute completion (signals result tile is ready)
      * @param tile Result tile descriptor (C matrix tile)
-     * @param dependency_tile Last input tile that must be FED before compute starts
+     * @param dependency_tile Single input tile that must be FED before
+     *        compute starts (legacy single-dependency form)
      *
      * This must be called after all FEED operations for the input tiles
      * that contribute to this result. DRAIN waits for this before proceeding.
-     * Compute only starts when dependency_tile has been FED to compute.
      */
     void schedule_compute(const TileDescriptor& tile, const TileID& dependency_tile);
+
+    /**
+     * @brief Schedule a compute with the full dependency set
+     * @param tile Result tile descriptor (C matrix tile)
+     * @param dependencies ALL input tiles (every A and B K-slice) that must
+     *        be FED before compute starts
+     *
+     * Compute starts only when every dependency has been FED, and its
+     * latency scales with the K-slice count (dependencies.size() / 2):
+     * latency = compute_latency + (k_slices - 1) * compute_cycles_per_k_slice.
+     *
+     * Feed tracking is per-instance: each dependency requires as many
+     * completed feeds as were scheduled for that tile when this compute was
+     * scheduled, so a feed consumed by an earlier output iteration cannot
+     * satisfy a later iteration's compute.
+     */
+    void schedule_compute(const TileDescriptor& tile, std::vector<TileID> dependencies);
 
     /**
      * @brief Schedule a compute completion (no explicit dependency)
@@ -428,16 +448,17 @@ private:
     TagCAM l2_tag_cam_;
     TagCAM compute_result_tag_cam_;  ///< Tracks result tiles ready for DRAIN
 
-    // Pending compute operations (tile + dependency + state)
+    // Pending compute operations (tile + dependencies + state)
     struct PendingCompute {
         TileDescriptor tile;         ///< Result tile (C)
-        std::vector<std::pair<TileID, size_t>> dependencies;
-        std::vector<std::pair<TileID, size_t>> resident_dependencies;
+        std::vector<std::pair<TileID, size_t>> dependencies;          ///< (tile, required completed-feed count)
+        std::vector<std::pair<TileID, size_t>> resident_dependencies; ///< (tile, required completed-compute count)
         std::unique_ptr<MatMulComputeSpec> matmul;
         std::unique_ptr<FunctionalComputeSpec> functional;
-        Cycle schedule_cycle;        ///< When scheduled
-        Cycle complete_cycle;        ///< When computation will complete (set when started)
-        bool started;                ///< Has computation started?
+        Cycle schedule_cycle = 0;    ///< When scheduled
+        Cycle complete_cycle = 0;    ///< When computation will complete (set when started)
+        Cycle latency = 0;           ///< Computed latency (set when started)
+        bool started = false;        ///< Has computation started?
     };
     std::vector<PendingCompute> pending_computes_;
 
@@ -709,11 +730,21 @@ inline void ConcurrentTimingExecutor::schedule_drain(const TileDescriptor& tile,
 
 inline void ConcurrentTimingExecutor::schedule_compute(
     const TileDescriptor& tile, const TileID& dependency_tile) {
-    // Schedule compute with explicit dependency
+    schedule_compute(tile, std::vector<TileID>{dependency_tile});
+}
+
+inline void ConcurrentTimingExecutor::schedule_compute(
+    const TileDescriptor& tile, std::vector<TileID> dependencies) {
     PendingCompute pc;
     pc.tile = tile;
-    const size_t required = std::max<size_t>(1, scheduled_feed_counts_[dependency_tile]);
-    pc.dependencies.push_back({dependency_tile, required});
+    // Per-instance feed accounting: each dependency requires as many
+    // completed feeds as have been scheduled for that tile so far, so a
+    // feed consumed by an earlier output iteration cannot satisfy a later
+    // iteration's compute.
+    for (const auto& dep : dependencies) {
+        const size_t required = std::max<size_t>(1, scheduled_feed_counts_[dep]);
+        pc.dependencies.push_back({dep, required});
+    }
     pc.schedule_cycle = current_cycle_;
     pc.complete_cycle = 0;  // Set when started
     pc.started = false;
@@ -839,10 +870,19 @@ inline bool ConcurrentTimingExecutor::step() {
     // Step 0a: Check pending computes for dependency satisfaction and start them
     for (auto& pc : pending_computes_) {
         if (!pc.started) {
+            // Compute starts only when every dependency's required
+            // completed-feed (or completed-compute, for resident inputs)
+            // count has been reached - per-instance accounting, not a
+            // was-ever-fed set
             if (dependencies_satisfied(pc)) {
-                // Dependency satisfied - start compute
+                // Latency scales with accumulation depth: the K-slice count
+                // is dependencies/2 (one A and one B tile per K slice)
+                size_t k_slices = pc.dependencies.size() >= 2
+                    ? pc.dependencies.size() / 2 : 1;
+                pc.latency = config_.compute_latency +
+                    static_cast<Cycle>(k_slices - 1) * config_.compute_cycles_per_k_slice;
                 pc.started = true;
-                pc.complete_cycle = current_cycle_ + config_.compute_latency;
+                pc.complete_cycle = current_cycle_ + pc.latency;
 
                 // Emit COMPUTE_START event
                 TimingEvent event(EventType::COMPUTE_START, current_cycle_, 0,
@@ -870,8 +910,8 @@ inline bool ConcurrentTimingExecutor::step() {
             // Emit COMPUTE_COMPLETE event
             TimingEvent event = TimingEvent::duration_event(
                 EventType::COMPUTE_COMPLETE,
-                it->complete_cycle - config_.compute_latency,
-                config_.compute_latency,
+                it->complete_cycle - it->latency,
+                it->latency,
                 0, it->tile.tile_id, "Compute");
             event.matrix_base_address = it->tile.matrix_base_address;
             events_.push_back(event);
@@ -942,6 +982,7 @@ inline bool ConcurrentTimingExecutor::step() {
 inline bool ConcurrentTimingExecutor::is_complete() const {
     // Complete when all queues are empty and no in-flight work
 
+    // Check pending computes (started or waiting on dependencies)
     if (!pending_computes_.empty()) return false;
 
     // Check MCs (should be idle when DMA is complete)

@@ -75,8 +75,12 @@ struct ScheduleOperation {
     int mover_id = -1;                      ///< Target BlockMover
     int streamer_id = -1;                   ///< Target Streamer
 
-    // For COMPUTE operations: the tile that must be FED before compute starts
-    TileID dependency_tile;                 ///< COMPUTE waits for this tile to be FED
+    // For COMPUTE operations: ALL tiles that must be FED before compute
+    // starts (every A and B K-slice contributing to the result tile).
+    // dependency_tile is retained for backward compatibility and holds the
+    // last entry of dependency_tiles.
+    std::vector<TileID> dependency_tiles;   ///< COMPUTE waits for all of these
+    TileID dependency_tile{};               ///< Last dependency (legacy field)
 
     /**
      * @brief Create a LOAD operation
@@ -142,13 +146,36 @@ struct ScheduleOperation {
      * transferring the result from compute fabric to L2.
      *
      * @param tile Result tile (C matrix)
-     * @param dependency Last input tile that must be FED before compute starts
+     * @param dependency Single input tile that must be FED before compute
+     *                   starts (legacy single-dependency form)
      */
     static ScheduleOperation compute(const TileDescriptor& tile, const TileID& dependency) {
         ScheduleOperation op;
         op.type = ScheduleOpType::COMPUTE;
         op.tile = tile;
+        op.dependency_tiles = {dependency};
         op.dependency_tile = dependency;
+        return op;
+    }
+
+    /**
+     * @brief Create a COMPUTE operation with the full dependency set
+     *
+     * @param tile Result tile (C matrix)
+     * @param dependencies ALL input tiles (every A and B K-slice) that must
+     *                     be FED before compute starts; the K-slice count
+     *                     (dependencies.size() / 2) also scales compute
+     *                     latency in the executor
+     */
+    static ScheduleOperation compute(const TileDescriptor& tile,
+                                     std::vector<TileID> dependencies) {
+        ScheduleOperation op;
+        op.type = ScheduleOpType::COMPUTE;
+        op.tile = tile;
+        if (!dependencies.empty()) {
+            op.dependency_tile = dependencies.back();
+        }
+        op.dependency_tiles = std::move(dependencies);
         return op;
     }
 
