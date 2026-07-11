@@ -96,11 +96,17 @@ public:
             executor_.step();
             const auto& events = executor_.events();
             for (; event_cursor < events.size(); ++event_cursor) {
+                // Each completion event retires at most ONE node: nodes are
+                // keyed only by (tile_id, operation), so a program that
+                // schedules the same tile+op more than once (e.g. repeated
+                // FEEDs of a reused tile) must consume one completion per
+                // event, not retire every matching node at once.
                 for (size_t i = 0; i < program.nodes().size(); ++i) {
                     if (!scheduled[i] || completed[i]) continue;
                     if (matches_completion(program.nodes()[i], events[event_cursor])) {
                         completed[i] = true;
                         ++completed_count;
+                        break;
                     }
                 }
             }

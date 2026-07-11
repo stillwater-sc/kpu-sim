@@ -69,6 +69,9 @@ public:
     [[nodiscard]] std::vector<float> forward(const std::vector<float>& input,
                                              Size batch_size) {
         if (layers_.empty()) throw std::runtime_error("MLP has no layers");
+        if (batch_size == 0) {
+            throw std::invalid_argument("MLP batch_size must be non-zero");
+        }
         if (input.size() != static_cast<size_t>(batch_size) * layers_.front().input_dim) {
             throw std::invalid_argument("MLP input count does not match batch and input dimension");
         }
