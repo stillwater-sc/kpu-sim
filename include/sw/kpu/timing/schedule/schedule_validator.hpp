@@ -624,10 +624,8 @@ inline bool is_livelock_safe(const ScheduleResult& schedule,
                              size_t l3_credits,
                              size_t l2_credits) {
     auto analysis = ScheduleAnalysis::analyze(schedule);
-    size_t l3_share = l3_credits / 4;
-    size_t l2_share = l2_credits / 4;
-    size_t share = l3_share < l2_share ? l3_share : l2_share;
-    if (share == 0) share = 1;
+    size_t share = per_matrix_burst_share(static_cast<Size>(l3_credits),
+                                          static_cast<Size>(l2_credits));
     // ScheduleAnalysis counts consecutive OPERATIONS; a resident tile
     // contributes at most two ops to a burst (LOAD + MOVE), so a burst of
     // `share` tiles appears as up to 2*share consecutive same-matrix ops.

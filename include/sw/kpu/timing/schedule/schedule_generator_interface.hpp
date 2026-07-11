@@ -17,6 +17,28 @@
 namespace sw::kpu::timing::schedule {
 
 // ============================================================================
+// Resource Envelope
+// ============================================================================
+
+/**
+ * @brief Per-matrix burst share for a resource envelope (issue #67)
+ *
+ * The canonical formula tying envelope-aware schedule generation to the
+ * capacity-aware livelock check: each matrix may burst at most a quarter of
+ * the smaller credit pool, so an A burst and a B burst can always be
+ * resident simultaneously with half the pool left as headroom for in-flight
+ * drains, C writebacks, and prefetch overlap. Generators bound their bursts
+ * with this; is_livelock_safe(schedule, l3, l2) verifies against it. Keep
+ * both sides on this single definition.
+ */
+[[nodiscard]] inline Size per_matrix_burst_share(Size l3_credits, Size l2_credits) {
+    Size l3_share = l3_credits / 4;
+    Size l2_share = l2_credits / 4;
+    Size share = l3_share < l2_share ? l3_share : l2_share;
+    return share > 0 ? share : 1;
+}
+
+// ============================================================================
 // Schedule Operation Types
 // ============================================================================
 

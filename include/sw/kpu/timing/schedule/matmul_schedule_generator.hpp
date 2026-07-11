@@ -28,10 +28,12 @@ namespace sw::kpu::timing::schedule {
  * - BLOCKED_AB: A bursts then B bursts, blocked over K with burst lengths
  *   derived from the resource envelope (livelock-safe by construction)
  *
- * All strategies are generated against the Config resource envelope
- * (l3_buffer_count/l2_bank_count): burst lengths are bounded so the tile
- * working set provably fits the credit pools and neither matrix can
- * monopolize the buffers the other needs (issue #67).
+ * The Config carries a resource envelope (l3_buffer_count/l2_bank_count).
+ * BLOCKED_AB derives its burst lengths from it so the tile working set
+ * provably fits the credit pools (issue #67); INTERLEAVED_AB and
+ * OUTPUT_STATIONARY are envelope-safe by their op-level interleaving.
+ * Extending envelope-derived blocking to the remaining strategies and
+ * generators is follow-up work tracked in #67.
  *
  * Usage:
  * ```cpp
@@ -95,18 +97,13 @@ public:
          * @brief Per-matrix burst bound derived from the resource envelope
          *
          * A burst of L same-matrix tiles can occupy up to L buffers
-         * concurrently. Bounding each matrix's burst to a quarter of the
-         * L3 pool (and of the L2 pool) guarantees an A-burst and a B-burst
-         * can be resident simultaneously with half the pool left as headroom
-         * for in-flight drains, C writebacks, and cross-iteration overlap -
-         * so neither matrix can monopolize the credits that the other needs
-         * to make forward progress.
+         * concurrently; bounding L keeps an A-burst and a B-burst
+         * simultaneously resident so neither matrix can monopolize the
+         * credits the other needs. Delegates to per_matrix_burst_share() -
+         * the canonical formula shared with is_livelock_safe().
          */
         [[nodiscard]] Size max_burst_tiles() const {
-            Size l3_share = l3_buffer_count / 4;
-            Size l2_share = l2_bank_count / 4;
-            Size share = l3_share < l2_share ? l3_share : l2_share;
-            return share > 0 ? share : 1;
+            return per_matrix_burst_share(l3_buffer_count, l2_bank_count);
         }
 
         /**
