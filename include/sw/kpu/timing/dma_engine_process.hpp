@@ -291,6 +291,9 @@ private:
                             completed->tile.tile_id,
                             name()
                         ));
+                        events.back().slot_id = req.slot_id;
+                        events.back().matrix_base_address = completed->tile.matrix_base_address;
+                        events.back().dram_address = completed->tile.dram_address;
                     } else {
                         // Store complete: tile written to DRAM
                         total_bytes_stored_ += completed->tile.size_bytes;
@@ -341,6 +344,9 @@ private:
                     req.tile.tile_id,
                     name()
                 ));
+                events.back().slot_id = entry->slot_id;
+                events.back().matrix_base_address = req.tile.matrix_base_address;
+                events.back().dram_address = req.tile.dram_address;
 
                 req.state = RequestState::COMPLETED;
                 continue;

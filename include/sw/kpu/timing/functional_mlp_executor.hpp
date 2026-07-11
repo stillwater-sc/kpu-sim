@@ -19,9 +19,9 @@ namespace sw::kpu::timing {
 /**
  * @brief Narrow functional/transactional vertical slice for MLP inference.
  *
- * Each layer executes matmul+bias+activation through the real CSP data path:
- * DMA -> L3 -> BlockMover -> L2 -> Streamer -> Compute -> Drain -> Store.
- * Numeric results become visible only at the modeled compute completion point.
+ * Inputs and weights traverse the real CSP data path. Intermediate activations
+ * remain in compute storage and are consumed directly by the next layer; only
+ * the final result drains through L2/L3 and stores to DRAM.
  */
 class FunctionalMLPExecutor {
 public:
@@ -74,27 +74,72 @@ public:
         }
 
         stats_ = {};
-        std::vector<float> activation = input;
+        ConcurrentTimingExecutor executor(config_);
+        const Address base = 0x100000;
+        auto current = make_tile(isa::MatrixID::A, batch_size,
+                                 layers_.front().input_dim, base, 0);
+        executor.set_tile_payload(current.tile_id,
+                                  TilePayload{batch_size, layers_.front().input_dim, input});
+        executor.schedule_load(current);
+        executor.schedule_move(current);
+        executor.schedule_feed(current);
+
         for (size_t layer_index = 0; layer_index < layers_.size(); ++layer_index) {
-            activation = execute_layer(activation, batch_size, layers_[layer_index], layer_index);
-            ++stats_.layers_completed;
+            const auto& layer = layers_[layer_index];
+            const Address layer_base = base + static_cast<Address>(layer_index) * 0x100000;
+            auto weights = make_tile(isa::MatrixID::B, layer.input_dim, layer.output_dim,
+                                     layer_base + 0x40000, static_cast<Size>(layer_index));
+            auto output = make_tile(isa::MatrixID::C, batch_size, layer.output_dim,
+                                    layer_base + 0x80000, static_cast<Size>(layer_index));
+
+            executor.set_tile_payload(weights.tile_id,
+                                      TilePayload{layer.input_dim, layer.output_dim,
+                                                  layer.weights});
+            executor.schedule_load(weights);
+            executor.schedule_move(weights);
+            executor.schedule_feed(weights);
+
+            ConcurrentTimingExecutor::MatMulComputeSpec compute;
+            compute.a_tiles = {current.tile_id};
+            compute.b_tiles = {weights.tile_id};
+            if (layer_index > 0) compute.resident_tiles = {current.tile_id};
+            compute.bias = layer.bias;
+            compute.activation = layer.activation;
+            executor.schedule_matmul_compute(output, compute);
+            current = output;
         }
-        return activation;
+
+        executor.schedule_drain(current);
+        executor.schedule_writeback(current);
+        executor.schedule_store(current);
+        if (!executor.run()) throw std::runtime_error("Functional CSP MLP execution failed");
+
+        const auto timing = executor.get_statistics();
+        stats_.total_cycles = timing.total_cycles;
+        stats_.total_stall_cycles = timing.dma_credit_stalls + timing.bm_tag_stalls +
+                                    timing.bm_credit_stalls + timing.str_tag_stalls +
+                                    timing.str_credit_stalls;
+        stats_.layers_completed = layers_.size();
+        events_ = executor.events();
+        return executor.tile_payload_at(MemoryLevel::DRAM, current.tile_id).values;
     }
 
     [[nodiscard]] const Statistics& statistics() const { return stats_; }
     [[nodiscard]] const std::vector<Layer>& layers() const { return layers_; }
+    [[nodiscard]] const std::vector<TimingEvent>& events() const { return events_; }
 
 private:
     ConcurrentTimingExecutor::Config config_;
     std::vector<Layer> layers_;
     Statistics stats_;
+    std::vector<TimingEvent> events_;
 
     [[nodiscard]] static TileDescriptor make_tile(isa::MatrixID matrix,
                                                   Size rows, Size cols,
-                                                  Address address) {
+                                                  Address address,
+                                                  Size layer_index) {
         TileDescriptor tile;
-        tile.tile_id = {matrix, 0, 0, 0};
+        tile.tile_id = {matrix, layer_index, 0, 0};
         tile.dram_address = address;
         tile.matrix_base_address = address;
         tile.height = rows;
@@ -104,49 +149,6 @@ private:
         return tile;
     }
 
-    [[nodiscard]] std::vector<float> execute_layer(const std::vector<float>& input,
-                                                   Size batch_size,
-                                                   const Layer& layer,
-                                                   size_t layer_index) {
-        ConcurrentTimingExecutor executor(config_);
-        const Address base = 0x100000 + static_cast<Address>(layer_index) * 0x100000;
-        auto a = make_tile(isa::MatrixID::A, batch_size, layer.input_dim, base);
-        auto b = make_tile(isa::MatrixID::B, layer.input_dim, layer.output_dim, base + 0x40000);
-        auto c = make_tile(isa::MatrixID::C, batch_size, layer.output_dim, base + 0x80000);
-
-        executor.set_tile_payload(a.tile_id, TilePayload{batch_size, layer.input_dim, input});
-        executor.set_tile_payload(b.tile_id, TilePayload{layer.input_dim, layer.output_dim,
-                                                         layer.weights});
-
-        executor.schedule_load(a);
-        executor.schedule_load(b);
-        executor.schedule_move(a);
-        executor.schedule_move(b);
-        executor.schedule_feed(a);
-        executor.schedule_feed(b);
-
-        ConcurrentTimingExecutor::MatMulComputeSpec compute;
-        compute.a_tiles = {a.tile_id};
-        compute.b_tiles = {b.tile_id};
-        compute.bias = layer.bias;
-        compute.activation = layer.activation;
-        executor.schedule_matmul_compute(c, compute);
-        executor.schedule_drain(c);
-        executor.schedule_writeback(c);
-        executor.schedule_store(c);
-
-        if (!executor.run()) {
-            throw std::runtime_error("Functional CSP execution failed for MLP layer " +
-                                     std::to_string(layer_index));
-        }
-
-        const auto timing = executor.get_statistics();
-        stats_.total_cycles += timing.total_cycles;
-        stats_.total_stall_cycles += timing.dma_credit_stalls + timing.bm_tag_stalls +
-                                     timing.bm_credit_stalls + timing.str_tag_stalls +
-                                     timing.str_credit_stalls;
-        return executor.tile_payload(c.tile_id).values;
-    }
 };
 
 } // namespace sw::kpu::timing

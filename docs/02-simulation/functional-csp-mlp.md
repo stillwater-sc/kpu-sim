@@ -6,14 +6,19 @@ semantics.
 
 ## What is unified
 
-`FunctionalMLPExecutor` executes each dense layer through:
+`FunctionalMLPExecutor` executes inputs and weights through:
 
 ```text
 DMA load -> L3 -> BlockMover -> L2 -> Streamer -> Compute
-         -> Drain -> L2 -> Writeback -> L3 -> DMA store
+                                             |
+                              next layer Compute (resident)
+                                             |
+                         final Drain -> L2 -> L3 -> DMA store
 ```
 
-Numeric tile payloads are owned by `ConcurrentTimingExecutor`. A functional
+DRAM, L3, L2, L1, and compute each own distinct serialized byte arrays. Bytes
+are copied only in response to the corresponding CSP completion event and are
+retired when the final TagCAM/credit reference disappears. A functional
 matmul consumes payloads only after every required feed occurrence completes.
 The result becomes visible at the modeled compute-completion cycle, immediately
 before the result tag is published for `DRAIN`.
@@ -40,22 +45,26 @@ The example deliberately configures one L3 buffer and one L2 bank. It must
 produce the correct XOR outputs while reporting non-zero credit/tag stall
 cycles.
 
-## Scope boundary
+## General Domain Flow execution
 
-This is the first honest functional/transactional vertical slice, not the final
-general simulator:
+`FunctionalDomainFlowProgram` represents an arbitrary dependency DAG. Its
+event-driven runner dispatches all ready branches concurrently and completes a
+node only when the matching DMA, BlockMover, Streamer, compute, or store event
+occurs. Nodes can use tiled matmul or a user-supplied functional tile operation,
+which covers elementwise operations, activations, reductions, and new kernels
+without adding another disconnected simulator.
+
+## Current kernel coverage
 
 - Dense FP32 matmul, optional bias, and ReLU are supported.
 - Each MLP layer currently uses one logical A, B, and C tile; the matmul compute
   primitive itself accepts multiple K tiles.
-- Payloads use a functional backing store. Transfers control when values become
-  consumable but do not yet copy bytes through separate physical L3/L2/L1
-  storage arrays.
-- Conv, attention, reductions, mixed precision, and arbitrary Domain Flow
-  programs still need functional compute implementations.
-- `FunctionalMLPExecutor` creates a fresh CSP executor per layer. Cross-layer
-  fusion and persistent on-chip activation residency remain future work.
+- Generic compute callbacks allow arbitrary tile transformations under the same
+  transactional ordering, while optimized built-in implementations for conv,
+  attention, mixed precision, and other kernels remain future library work.
+- Intermediate MLP activations remain in compute storage across layers; only
+  the final activation takes the drain/writeback/store path.
 
-The next extension should lower generated tiled matmul schedules into the same
-functional compute specification, then validate multi-K accumulation and
-multi-output-tile execution against the behavioral oracle.
+The next extension should lower the compiler's existing `TileDataFlowGraph`
+nodes into `FunctionalDomainFlowProgram` and add optimized operator-library
+implementations, without changing the simulator's memory or ordering model.
