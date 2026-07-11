@@ -196,3 +196,50 @@ epic.
 
 Overall (umbrella): every operator row in the Section 1 inventory maps to a
 closed epic, and E18's four model blocks run end-to-end green in CI.
+
+---
+
+## 6. DNN milestone ladder (outreach checkpoints)
+
+Each milestone is an industry-recognizable model that becomes executable
+once a specific epic subset closes. Milestones are ordered by subset
+inclusion, so each rung adds only a few epics to the previous one — and
+each is a public-facing artifact: researchers and customers recognize
+"ResNet on the KPU," not "epic E6 closed."
+
+Every milestone carries the same three-tier definition of done:
+
+- **Demonstrate** — the model (or its defining block) runs end-to-end
+  through the CSP executor with Chrome-trace visualization showing the
+  credit-dataflow in motion (the educational artifact).
+- **Validate** — full functional equivalence against a PyTorch/ONNX oracle
+  (elementwise, per-layer), under default and constrained envelopes.
+- **Benchmark** — cycles, utilization, stall breakdown, roofline position,
+  and envelope sweeps (reusing the #48–#50 sweep machinery), packaged as a
+  reproducible demo + short writeup under `docs/milestones/`.
+
+| Milestone | Model | Epic set required (cumulative) | Ready after |
+|---|---|---|---|
+| **M1** | MLP (XOR / MNIST) | E5 (partial), E10-lite — `unified_xor_mlp` already runs functionally (#66) | **now** — formalize as the baseline demo/benchmark |
+| **M2** | ResNet-18 → ResNet-50 | E0, E2, E4, E5, E6, E7, E9 (BN fold), E10 | Wave 1 + the CNN half of Wave 2 |
+| **M3** | MobileNetV2 + EfficientNet-B0 | same set as M2 — depthwise stresses E6; squeeze-and-excitation is an E7+E5+E2 composition (global pool → 2 small FCs → sigmoid gating) | immediately after M2 |
+| **M4** | Attention head (single MHA, chained → flash-fused) | + E3, E8, E12 | early Wave 3 — the flagship educational demo: same hardware, chained vs. flash, watch the DRAM traffic collapse in the trace |
+| **M5** | Vision Transformer (DeiT-Tiny → ViT-B/16 encoder) | + E9 (LN), E11, E4/E16 (patchify) | mid Wave 3 (needs no KV-cache/RoPE) |
+| **M6** | YOLO (v8n detection) | M2 set + E16 (upsample, concat); NMS stays host-side (standard practice) | parallel to Wave 3 — only E16 from Wave 4 is needed, and E16's true dependencies (E4, E6) close in Wave 1 |
+| **M7** | LLM decoder (GPT-2 small / TinyLlama, token-by-token decode) | + E13, E14, E15 | end of Wave 3 + Wave 4 entry — "the KPU speaks" |
+| **M8** | I-JEPA | M5 set + E1, E17 | Wave 4 — the research-frontier differentiator: no one benchmarks JEPA on novel dataflow hardware |
+
+Notes:
+
+- The ladder validates the wave ordering: Waves 1–2 unlock the **CNN
+  family** (three model milestones from one epic subset), Wave 3 unlocks
+  the **transformer family**, Wave 4 completes **LLM decode and JEPA**.
+- **E16 should be pulled forward** if YOLO matters commercially: its real
+  dependencies (E4, E6) close in Wave 1, so it can run parallel to Wave 3
+  rather than waiting for Wave 4.
+- E18 (model-block validation) is the CI-hardened, permanently-regressed
+  form of M2/M5/M7/M8 — the milestones are the outreach-facing events, E18
+  is what keeps them true afterwards.
+- Tracking: one `DNN Milestone:` issue per rung (label `dnn-milestone`),
+  listing its epic dependency set as a checklist and the three-tier DoD,
+  linked from umbrella #88.
