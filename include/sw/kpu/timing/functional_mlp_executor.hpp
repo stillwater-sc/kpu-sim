@@ -40,10 +40,22 @@ public:
         Cycle total_cycles = 0;
         Cycle total_stall_cycles = 0;
         size_t layers_completed = 0;
+        /// Full per-component breakdown from the underlying executor
+        /// (stall categories, tile throughput, bytes, utilization)
+        ConcurrentTimingExecutor::Statistics timing;
     };
 
     explicit FunctionalMLPExecutor(ConcurrentTimingExecutor::Config config = {})
         : config_(std::move(config)) {}
+
+    /**
+     * @brief Export a Chrome trace of the next forward() to this path
+     *
+     * The executor lives only for the duration of forward(); setting a trace
+     * file makes forward() export the credit-dataflow trace before the
+     * executor is destroyed. View at https://ui.perfetto.dev
+     */
+    void set_trace_file(std::string path) { trace_path_ = std::move(path); }
 
     void add_layer(Size input_dim, Size output_dim,
                    std::vector<float> weights,
@@ -123,7 +135,11 @@ public:
                                     timing.bm_credit_stalls + timing.str_tag_stalls +
                                     timing.str_credit_stalls;
         stats_.layers_completed = layers_.size();
+        stats_.timing = timing;
         events_ = executor.events();
+        if (!trace_path_.empty()) {
+            executor.export_chrome_trace(trace_path_);
+        }
         return executor.tile_payload_at(MemoryLevel::DRAM, current.tile_id).values;
     }
 
@@ -136,6 +152,7 @@ private:
     std::vector<Layer> layers_;
     Statistics stats_;
     std::vector<TimingEvent> events_;
+    std::string trace_path_;
 
     [[nodiscard]] static TileDescriptor make_tile(isa::MatrixID matrix,
                                                   Size rows, Size cols,

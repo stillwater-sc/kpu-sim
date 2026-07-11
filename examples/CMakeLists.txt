@@ -55,6 +55,10 @@ if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/dataflow)
     add_subdirectory(dataflow)
 endif()
 
+if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/milestones)
+    add_subdirectory(milestones)
+endif()
+
 if(KPU_BUILD_PYTHON_BINDINGS)
     # Python examples are handled by the Python package
     if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/python)
