@@ -9,6 +9,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **CSP timing: resource-envelope-aware schedule generation (#67).**
+  `MatMulScheduleGenerator::Config` gains a resource envelope
+  (`l3_buffer_count`/`l2_bank_count`, defaults matching the executor) and a
+  derived per-matrix burst bound (`max_burst_tiles()` = a quarter of the
+  smaller pool). BLOCKED_AB is now livelock-safe **by construction**: an
+  outer K-block loop bounds each A/B burst to the envelope share, so the
+  tile working set provably fits the credit pools - the classic
+  blocked-linear-algebra discipline of deriving block sizes from the memory
+  hierarchy. A capacity-aware `is_livelock_safe(schedule, l3, l2)` overload
+  checks the constructive residency bound (in operations: 2 ops per
+  resident tile) instead of the fixed interleaving heuristic; `run_matmul`
+  generates against and reports the envelope it executes with. Provenance
+  of the original design gap (executor-side partitioned credits designed,
+  built, never wired; safety burden silently moved to schedule ordering)
+  is documented in #67.
+
 - **CSP timing: multi-tile execution regression suite (#64).**
   `tests/timing/test_multi_tile_execution.cpp` executes generated matmul
   schedules end-to-end through `ConcurrentTimingExecutor` across all four

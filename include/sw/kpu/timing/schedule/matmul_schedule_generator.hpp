@@ -25,11 +25,15 @@ namespace sw::kpu::timing::schedule {
  * - OUTPUT_STATIONARY: C tiles stay in accumulators, A and B stream through
  * - INTERLEAVED_AB: A-B-A-B ordering for balanced buffer usage (livelock-safe)
  * - PREFETCH_NEXT: Overlap next tile load with current compute
- * - BLOCKED_AB: All A tiles then all B tiles (livelock-prone with limited credits)
+ * - BLOCKED_AB: A bursts then B bursts, blocked over K with burst lengths
+ *   derived from the resource envelope (livelock-safe by construction)
  *
- * The default INTERLEAVED_AB strategy ensures livelock-free execution by
- * alternating between A and B tile operations, preventing either matrix
- * type from monopolizing buffer resources.
+ * The Config carries a resource envelope (l3_buffer_count/l2_bank_count).
+ * BLOCKED_AB derives its burst lengths from it so the tile working set
+ * provably fits the credit pools (issue #67); INTERLEAVED_AB and
+ * OUTPUT_STATIONARY are envelope-safe by their op-level interleaving.
+ * Extending envelope-derived blocking to the remaining strategies and
+ * generators is follow-up work tracked in #67.
  *
  * Usage:
  * ```cpp
@@ -51,7 +55,9 @@ public:
         OUTPUT_STATIONARY,  ///< C stays in accumulators
         INTERLEAVED_AB,     ///< A-B-A-B ordering (livelock-safe) - DEFAULT
         PREFETCH_NEXT,      ///< Overlap load with compute
-        BLOCKED_AB          ///< All A then all B (can livelock)
+        BLOCKED_AB          ///< A/B bursts blocked over K, burst length bounded
+                            ///< by the resource envelope (livelock-safe by
+                            ///< construction)
     };
 
     /**
@@ -74,10 +80,31 @@ public:
         // Scheduling strategy
         Strategy strategy = Strategy::INTERLEAVED_AB;
 
+        // Resource envelope: the buffer capacities this schedule is generated
+        // against. Blocked strategies derive their burst lengths from these so
+        // the tile working set provably fits the credit pools (issue #67) -
+        // the classic blocked-linear-algebra discipline of sizing blocks to
+        // the memory hierarchy. Defaults match ConcurrentTimingExecutor::Config.
+        Size l3_buffer_count = 32;   ///< L3 credit pool the schedule targets
+        Size l2_bank_count = 64;     ///< L2 credit pool the schedule targets
+
         // Address generation (base addresses in DRAM)
         Address a_base = 0;
         Address b_base = 0;
         Address c_base = 0;
+
+        /**
+         * @brief Per-matrix burst bound derived from the resource envelope
+         *
+         * A burst of L same-matrix tiles can occupy up to L buffers
+         * concurrently; bounding L keeps an A-burst and a B-burst
+         * simultaneously resident so neither matrix can monopolize the
+         * credits the other needs. Delegates to per_matrix_burst_share() -
+         * the canonical formula shared with is_livelock_safe().
+         */
+        [[nodiscard]] Size max_burst_tiles() const {
+            return per_matrix_burst_share(l3_buffer_count, l2_bank_count);
+        }
 
         /**
          * @brief Calculate tile size in bytes
@@ -368,39 +395,55 @@ private:
     }
 
     /**
-     * @brief Generate blocked A-B schedule (can cause livelock)
+     * @brief Generate blocked A-B schedule (livelock-safe by construction)
      *
-     * Loads all A tiles for a row, then all B tiles for a column.
-     * WARNING: This can cause livelock if buffer space is limited!
-     * Emits all operations; execution layer handles deduplication.
+     * Classic blocked-linear-algebra structure: an outer K-block loop
+     * sequences tile residency so the working set provably fits the
+     * resource envelope (issue #67). Within each K block, an A burst is
+     * followed by a B burst; the burst length is bounded by
+     * Config::max_burst_tiles(), which is derived from the L3/L2 credit
+     * pools. An A burst and a B burst can therefore always be resident
+     * simultaneously - neither matrix can monopolize the credits the other
+     * needs, so livelock-safety is a constructive property of the schedule
+     * rather than an empirical hope.
+     *
+     * With a large envelope the block degenerates to the full K loop
+     * (identical to the historical behavior); with a constrained envelope
+     * the K loop is chunked.
      */
     void generate_blocked_ab(ScheduleResult& result) {
         Size m_tiles = config_.m_tiles();
         Size n_tiles = config_.n_tiles();
         Size k_tiles = config_.k_tiles();
+        Size burst = config_.max_burst_tiles();
 
         for (Size ti = 0; ti < m_tiles; ++ti) {
             for (Size tj = 0; tj < n_tiles; ++tj) {
-                // Load ALL A tiles for this row first
-                for (Size tk = 0; tk < k_tiles; ++tk) {
-                    auto a_tile = make_tile(isa::MatrixID::A, ti, 0, tk);
-                    result.operations.push_back(ScheduleOperation::load(a_tile));
-                    result.operations.push_back(ScheduleOperation::move(a_tile));
-                }
+                // Outer K-block loop: each block's bursts fit the envelope
+                for (Size kb = 0; kb < k_tiles; kb += burst) {
+                    Size kend = kb + burst < k_tiles ? kb + burst : k_tiles;
 
-                // Then load ALL B tiles for this column
-                for (Size tk = 0; tk < k_tiles; ++tk) {
-                    auto b_tile = make_tile(isa::MatrixID::B, 0, tj, tk);
-                    result.operations.push_back(ScheduleOperation::load(b_tile));
-                    result.operations.push_back(ScheduleOperation::move(b_tile, true));
-                }
+                    // A burst for this K block (bounded by the envelope)
+                    for (Size tk = kb; tk < kend; ++tk) {
+                        auto a_tile = make_tile(isa::MatrixID::A, ti, 0, tk);
+                        result.operations.push_back(ScheduleOperation::load(a_tile));
+                        result.operations.push_back(ScheduleOperation::move(a_tile));
+                    }
 
-                // Feed tiles
-                for (Size tk = 0; tk < k_tiles; ++tk) {
-                    auto a_tile = make_tile(isa::MatrixID::A, ti, 0, tk);
-                    auto b_tile = make_tile(isa::MatrixID::B, 0, tj, tk);
-                    result.operations.push_back(ScheduleOperation::feed(a_tile));
-                    result.operations.push_back(ScheduleOperation::feed(b_tile));
+                    // B burst for this K block
+                    for (Size tk = kb; tk < kend; ++tk) {
+                        auto b_tile = make_tile(isa::MatrixID::B, 0, tj, tk);
+                        result.operations.push_back(ScheduleOperation::load(b_tile));
+                        result.operations.push_back(ScheduleOperation::move(b_tile, true));
+                    }
+
+                    // Feed this K block's tiles (consumes their residency)
+                    for (Size tk = kb; tk < kend; ++tk) {
+                        auto a_tile = make_tile(isa::MatrixID::A, ti, 0, tk);
+                        auto b_tile = make_tile(isa::MatrixID::B, 0, tj, tk);
+                        result.operations.push_back(ScheduleOperation::feed(a_tile));
+                        result.operations.push_back(ScheduleOperation::feed(b_tile));
+                    }
                 }
 
                 // Signal compute complete, then drain and store C

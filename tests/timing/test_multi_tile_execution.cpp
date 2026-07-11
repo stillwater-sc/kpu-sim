@@ -17,6 +17,7 @@
 #include <sw/kpu/timing/concurrent_timing_executor.hpp>
 #include <sw/kpu/timing/schedule/matmul_schedule_generator.hpp>
 #include <sw/kpu/timing/schedule/schedule_executor.hpp>
+#include <sw/kpu/timing/schedule/schedule_validator.hpp>
 
 #include <string>
 
@@ -139,6 +140,38 @@ TEST_CASE("Multi-tile schedules execute to completion across strategies and size
             }
         }
     }
+}
+
+// ============================================================================
+// Envelope-aware blocked schedules under constrained buffers (issue #67)
+// ============================================================================
+
+TEST_CASE("BLOCKED_AB executes under a constrained resource envelope",
+          "[timing][executor][regression][envelope]") {
+    // A small envelope that the historical all-A-then-all-B ordering would
+    // stress: 8 L3 buffers / 16 L2 banks for an 8-K-slice problem. The
+    // generator must chunk the K loop so the working set fits.
+    auto exec_config = make_executor_config();
+    exec_config.l3_buffer_count = 8;
+    exec_config.l2_bank_count = 16;
+
+    auto gen_config = make_generator_config(
+        128, MatMulScheduleGenerator::Strategy::BLOCKED_AB);
+    gen_config.l3_buffer_count = 8;
+    gen_config.l2_bank_count = 16;
+
+    MatMulScheduleGenerator generator(gen_config);
+    auto schedule = generator.generate();
+    REQUIRE(schedule.valid);
+    REQUIRE(is_livelock_safe(schedule, 8, 16));
+
+    ConcurrentTimingExecutor executor(exec_config);
+    ScheduleExecutor sched_exec(executor);
+    auto result = sched_exec.execute(schedule);
+
+    INFO("cycles=" << result.total_cycles << " error=" << result.error_message);
+    REQUIRE(result.success);
+    REQUIRE_FALSE(result.livelock_detected);
 }
 
 // ============================================================================
