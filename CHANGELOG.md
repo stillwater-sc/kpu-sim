@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **DNN Milestone M1: MLP baseline demo + benchmark (#129).**
+  `examples/milestones/m1_mlp_baseline` packages the first rung of the DNN
+  milestone ladder: XOR 2-4-1 (exact expected outputs) and the canonical
+  MNIST-shape 784-128-64-10 MLP (deterministic synthetic weights,
+  host-oracle validated to 0.0 max abs error) executing with real values on
+  the CSP credit-dataflow pipeline. Benchmarks batch sweep 16/64/256
+  (752 -> 94 cycles/sample amortization) and pipeline sweep; `--trace-dir`
+  exports Chrome traces of the credit dataflow; registered as a CI test so
+  the milestone cannot regress. Writeup with measured numbers:
+  `docs/milestones/M1_mlp_baseline.md`. Supporting: FunctionalMLPExecutor
+  gains `set_trace_file()` and full per-component timing statistics.
+
 - **CSP timing: resource-envelope-aware schedule generation (#67).**
   `MatMulScheduleGenerator::Config` gains a resource envelope
   (`l3_buffer_count`/`l2_bank_count`, defaults matching the executor) and a
