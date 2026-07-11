@@ -17,10 +17,12 @@
 #include <sw/kpu/timing/streamer_process.hpp>
 #include <sw/kpu/timing/livelock_detector.hpp>
 
+#include <algorithm>
 #include <fstream>
 #include <memory>
-#include <set>
+#include <stdexcept>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 namespace sw::kpu::timing {
@@ -43,6 +45,17 @@ namespace sw::kpu::timing {
  */
 class ConcurrentTimingExecutor {
 public:
+    enum class FunctionalActivation {
+        NONE,
+        RELU
+    };
+
+    struct MatMulComputeSpec {
+        std::vector<TileID> a_tiles;
+        std::vector<TileID> b_tiles;
+        std::vector<float> bias;
+        FunctionalActivation activation = FunctionalActivation::NONE;
+    };
     /**
      * @brief Executor configuration
      */
@@ -253,6 +266,41 @@ public:
      */
     void schedule_compute(const TileDescriptor& tile);
 
+    /**
+     * @brief Schedule a value-producing tiled matmul under CSP ordering.
+     *
+     * Every listed A/B tile must complete the feed occurrence that precedes
+     * this call. The numeric result is produced at compute completion and is
+     * then made visible to DRAIN through the normal compute-result TagCAM.
+     */
+    void schedule_matmul_compute(const TileDescriptor& tile,
+                                 const MatMulComputeSpec& spec);
+
+    // ========================================================================
+    // Functional Payload API
+    // ========================================================================
+
+    void set_tile_payload(const TileID& tile_id, TilePayload payload) {
+        if (!payload.valid()) {
+            throw std::invalid_argument("Tile payload dimensions do not match value count");
+        }
+        tile_payloads_[tile_id] = std::move(payload);
+    }
+
+    [[nodiscard]] bool has_tile_payload(const TileID& tile_id) const {
+        return tile_payloads_.find(tile_id) != tile_payloads_.end();
+    }
+
+    [[nodiscard]] const TilePayload& tile_payload(const TileID& tile_id) const {
+        auto it = tile_payloads_.find(tile_id);
+        if (it == tile_payloads_.end()) {
+            throw std::out_of_range("No numeric payload for " + tile_id.to_string());
+        }
+        return it->second;
+    }
+
+    void clear_tile_payloads() { tile_payloads_.clear(); }
+
     // ========================================================================
     // Simulation Control
     // ========================================================================
@@ -352,15 +400,22 @@ private:
     // Pending compute operations (tile + dependency + state)
     struct PendingCompute {
         TileDescriptor tile;         ///< Result tile (C)
-        TileID dependency_tile;      ///< Last input tile that must be FED
+        std::vector<std::pair<TileID, size_t>> dependencies;
+        std::unique_ptr<MatMulComputeSpec> matmul;
         Cycle schedule_cycle;        ///< When scheduled
         Cycle complete_cycle;        ///< When computation will complete (set when started)
         bool started;                ///< Has computation started?
     };
     std::vector<PendingCompute> pending_computes_;
 
-    // Track tiles that have been fed to compute (for COMPUTE dependency checking)
-    std::set<TileID> fed_tiles_;
+    // Count scheduled and completed feed occurrences. Counts are required:
+    // a boolean "ever fed" flag lets a reused tile start a later compute early.
+    std::unordered_map<TileID, size_t, TileIDHash> scheduled_feed_counts_;
+    std::unordered_map<TileID, size_t, TileIDHash> completed_feed_counts_;
+
+    // Numeric values are orthogonal to location/credit metadata but advance
+    // through the same dependency and completion points.
+    std::unordered_map<TileID, TilePayload, TileIDHash> tile_payloads_;
 
     // Component processes
     std::vector<std::unique_ptr<MemoryControllerProcess>> memory_controllers_;
@@ -412,6 +467,9 @@ private:
      * @brief Count progress for livelock detection
      */
     [[nodiscard]] size_t count_completed_tiles() const;
+
+    [[nodiscard]] bool dependencies_satisfied(const PendingCompute& pc) const;
+    void execute_matmul(const PendingCompute& pc);
 };
 
 // ============================================================================
@@ -577,6 +635,7 @@ inline void ConcurrentTimingExecutor::schedule_writeback(const TileDescriptor& t
 }
 
 inline void ConcurrentTimingExecutor::schedule_feed(const TileDescriptor& tile, int streamer_id) {
+    ++scheduled_feed_counts_[tile.tile_id];
     // Determine if this is a row (A) or column (B) tile
     bool is_row = (tile.tile_id.matrix == isa::MatrixID::A);
     uint32_t streamer = (streamer_id >= 0)
@@ -603,11 +662,40 @@ inline void ConcurrentTimingExecutor::schedule_compute(
     // Schedule compute with explicit dependency
     PendingCompute pc;
     pc.tile = tile;
-    pc.dependency_tile = dependency_tile;
+    const size_t required = std::max<size_t>(1, scheduled_feed_counts_[dependency_tile]);
+    pc.dependencies.push_back({dependency_tile, required});
     pc.schedule_cycle = current_cycle_;
     pc.complete_cycle = 0;  // Set when started
     pc.started = false;
-    pending_computes_.push_back(pc);
+    pending_computes_.push_back(std::move(pc));
+}
+
+inline void ConcurrentTimingExecutor::schedule_matmul_compute(
+    const TileDescriptor& tile, const MatMulComputeSpec& spec) {
+    if (spec.a_tiles.empty() || spec.a_tiles.size() != spec.b_tiles.size()) {
+        throw std::invalid_argument("Matmul compute requires paired, non-empty A/B tiles");
+    }
+
+    PendingCompute pc;
+    pc.tile = tile;
+    pc.schedule_cycle = current_cycle_;
+    pc.complete_cycle = 0;
+    pc.started = false;
+    pc.matmul = std::make_unique<MatMulComputeSpec>(spec);
+
+    for (const auto& id : spec.a_tiles) {
+        if (scheduled_feed_counts_[id] == 0) {
+            throw std::invalid_argument("Matmul A tile has no scheduled feed: " + id.to_string());
+        }
+        pc.dependencies.push_back({id, scheduled_feed_counts_[id]});
+    }
+    for (const auto& id : spec.b_tiles) {
+        if (scheduled_feed_counts_[id] == 0) {
+            throw std::invalid_argument("Matmul B tile has no scheduled feed: " + id.to_string());
+        }
+        pc.dependencies.push_back({id, scheduled_feed_counts_[id]});
+    }
+    pending_computes_.push_back(std::move(pc));
 }
 
 inline void ConcurrentTimingExecutor::schedule_compute(const TileDescriptor& tile) {
@@ -656,8 +744,7 @@ inline bool ConcurrentTimingExecutor::step() {
     // Step 0a: Check pending computes for dependency satisfaction and start them
     for (auto& pc : pending_computes_) {
         if (!pc.started) {
-            // Check if dependency tile has been fed
-            if (fed_tiles_.count(pc.dependency_tile) > 0) {
+            if (dependencies_satisfied(pc)) {
                 // Dependency satisfied - start compute
                 pc.started = true;
                 pc.complete_cycle = current_cycle_ + config_.compute_latency;
@@ -675,6 +762,9 @@ inline bool ConcurrentTimingExecutor::step() {
     auto it = pending_computes_.begin();
     while (it != pending_computes_.end()) {
         if (it->started && current_cycle_ >= it->complete_cycle) {
+            if (it->matmul) {
+                execute_matmul(*it);
+            }
             // Compute completed - result tile is now ready for DRAIN
             uint32_t slot = next_compute_slot_++;
             compute_result_tag_cam_.insert(it->tile.tile_id, slot, current_cycle_);
@@ -722,7 +812,7 @@ inline bool ConcurrentTimingExecutor::step() {
         // Track tiles that have been fed to compute
         for (const auto& event : str_events) {
             if (event.type == EventType::TILE_FED_TO_COMPUTE) {
-                fed_tiles_.insert(event.tile_id);
+                ++completed_feed_counts_[event.tile_id];
             }
         }
         events_.insert(events_.end(), str_events.begin(), str_events.end());
@@ -734,7 +824,7 @@ inline bool ConcurrentTimingExecutor::step() {
         // Track tiles that have been fed to compute
         for (const auto& event : str_events) {
             if (event.type == EventType::TILE_FED_TO_COMPUTE) {
-                fed_tiles_.insert(event.tile_id);
+                ++completed_feed_counts_[event.tile_id];
             }
         }
         events_.insert(events_.end(), str_events.begin(), str_events.end());
@@ -748,6 +838,8 @@ inline bool ConcurrentTimingExecutor::step() {
 
 inline bool ConcurrentTimingExecutor::is_complete() const {
     // Complete when all queues are empty and no in-flight work
+
+    if (!pending_computes_.empty()) return false;
 
     // Check MCs (should be idle when DMA is complete)
     for (const auto& mc : memory_controllers_) {
@@ -785,7 +877,8 @@ inline void ConcurrentTimingExecutor::reset() {
     l2_tag_cam_.reset();
     compute_result_tag_cam_.reset();
     pending_computes_.clear();
-    fed_tiles_.clear();
+    scheduled_feed_counts_.clear();
+    completed_feed_counts_.clear();
 
     for (auto& mc : memory_controllers_) {
         mc->reset();
@@ -808,6 +901,58 @@ inline void ConcurrentTimingExecutor::reset() {
     }
 
     next_compute_slot_ = 0;
+}
+
+inline bool ConcurrentTimingExecutor::dependencies_satisfied(const PendingCompute& pc) const {
+    for (const auto& [tile_id, required_count] : pc.dependencies) {
+        auto it = completed_feed_counts_.find(tile_id);
+        size_t completed = it == completed_feed_counts_.end() ? 0 : it->second;
+        if (completed < required_count) return false;
+    }
+    return true;
+}
+
+inline void ConcurrentTimingExecutor::execute_matmul(const PendingCompute& pc) {
+    const auto& spec = *pc.matmul;
+    const auto& first_a = tile_payload(spec.a_tiles.front());
+    const auto& first_b = tile_payload(spec.b_tiles.front());
+    const Size m = first_a.rows;
+    const Size n = first_b.cols;
+
+    if (spec.bias.size() != 0 && spec.bias.size() != n) {
+        throw std::runtime_error("Matmul bias width does not match output tile");
+    }
+
+    TilePayload output;
+    output.rows = m;
+    output.cols = n;
+    output.values.assign(static_cast<size_t>(m) * n, 0.0f);
+
+    for (size_t tile_index = 0; tile_index < spec.a_tiles.size(); ++tile_index) {
+        const auto& a = tile_payload(spec.a_tiles[tile_index]);
+        const auto& b = tile_payload(spec.b_tiles[tile_index]);
+        if (!a.valid() || !b.valid() || a.rows != m || b.cols != n || a.cols != b.rows) {
+            throw std::runtime_error("Incompatible functional matmul tile payloads");
+        }
+        for (Size i = 0; i < m; ++i) {
+            for (Size k = 0; k < a.cols; ++k) {
+                const float av = a.values[static_cast<size_t>(i) * a.cols + k];
+                for (Size j = 0; j < n; ++j) {
+                    output.values[static_cast<size_t>(i) * n + j] +=
+                        av * b.values[static_cast<size_t>(k) * n + j];
+                }
+            }
+        }
+    }
+
+    for (Size i = 0; i < m; ++i) {
+        for (Size j = 0; j < n; ++j) {
+            float& value = output.values[static_cast<size_t>(i) * n + j];
+            if (!spec.bias.empty()) value += spec.bias[j];
+            if (spec.activation == FunctionalActivation::RELU && value < 0.0f) value = 0.0f;
+        }
+    }
+    tile_payloads_[pc.tile.tile_id] = std::move(output);
 }
 
 inline ConcurrentTimingExecutor::Statistics ConcurrentTimingExecutor::get_statistics() const {

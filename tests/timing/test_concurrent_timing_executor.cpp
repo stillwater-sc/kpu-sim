@@ -7,10 +7,12 @@
 // ============================================================================
 
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/catch_approx.hpp>
 
 #include <filesystem>
 
 #include <sw/kpu/timing/concurrent_timing_executor.hpp>
+#include <sw/kpu/timing/functional_mlp_executor.hpp>
 
 using namespace sw::kpu::timing;
 using namespace sw::kpu::isa;
@@ -232,6 +234,101 @@ TEST_CASE("ConcurrentTimingExecutor drain and writeback", "[timing][executor]") 
     REQUIRE(count_events(events, EventType::TILE_DRAINED) == 1);
     REQUIRE(count_events(events, EventType::BM_WRITEBACK_COMPLETE) == 1);
     REQUIRE(count_events(events, EventType::DMA_STORE_COMPLETE) == 1);
+}
+
+TEST_CASE("Functional CSP executor produces XOR MLP values under backpressure",
+          "[timing][executor][functional][mlp]") {
+    const std::vector<float> input = {
+        0.0f, 0.0f,
+        0.0f, 1.0f,
+        1.0f, 0.0f,
+        1.0f, 1.0f
+    };
+    const std::vector<float> w1 = {
+         1.0f,  1.0f, -1.0f, -1.0f,
+         1.0f,  1.0f, -1.0f, -1.0f
+    };
+    const std::vector<float> b1 = {-0.5f, -1.5f, 0.5f, 1.5f};
+    const std::vector<float> w2 = {2.0f, -6.0f, 0.0f, 0.0f};
+    const std::vector<float> b2 = {0.0f};
+
+    auto config = default_config();
+    config.l3_buffer_count = 1;
+    config.l2_bank_count = 1;
+    config.num_block_movers = 1;
+    config.compute_latency = 8;
+    config.max_cycles = 100000;
+
+    FunctionalMLPExecutor mlp(config);
+    mlp.add_layer(2, 4, w1, b1, ConcurrentTimingExecutor::FunctionalActivation::RELU,
+                  "hidden");
+    mlp.add_layer(4, 1, w2, b2, ConcurrentTimingExecutor::FunctionalActivation::NONE,
+                  "output");
+    auto output = mlp.forward(input, 4);
+
+    REQUIRE(output.size() == 4);
+    REQUIRE(output[0] == Catch::Approx(0.0f));
+    REQUIRE(output[1] == Catch::Approx(1.0f));
+    REQUIRE(output[2] == Catch::Approx(1.0f));
+    REQUIRE(output[3] == Catch::Approx(0.0f));
+
+    REQUIRE(mlp.statistics().layers_completed == 2);
+    REQUIRE(mlp.statistics().total_cycles > 0);
+    REQUIRE(mlp.statistics().total_stall_cycles > 0);
+}
+
+TEST_CASE("Repeated tile feeds cannot satisfy a later functional compute early",
+          "[timing][executor][functional][dependency]") {
+    auto config = default_config();
+    config.compute_latency = 4;
+    ConcurrentTimingExecutor executor(config);
+
+    auto a = make_tile(MatrixID::A, 0, 0, 0, 4);
+    a.height = 1; a.width = 1;
+    auto b = make_tile(MatrixID::B, 0, 0, 0, 4);
+    b.height = 1; b.width = 1;
+    auto c0 = make_tile(MatrixID::C, 0, 0, 0, 4);
+    c0.height = 1; c0.width = 1;
+    auto c1 = make_tile(MatrixID::C, 0, 1, 0, 4);
+    c1.height = 1; c1.width = 1;
+
+    executor.set_tile_payload(a.tile_id, TilePayload{1, 1, {2.0f}});
+    executor.set_tile_payload(b.tile_id, TilePayload{1, 1, {3.0f}});
+
+    ConcurrentTimingExecutor::MatMulComputeSpec compute;
+    compute.a_tiles = {a.tile_id};
+    compute.b_tiles = {b.tile_id};
+
+    for (auto* c : {&c0, &c1}) {
+        executor.schedule_load(a);
+        executor.schedule_load(b);
+        executor.schedule_move(a);
+        executor.schedule_move(b);
+        executor.schedule_feed(a);
+        executor.schedule_feed(b);
+        executor.schedule_matmul_compute(*c, compute);
+        executor.schedule_drain(*c);
+        executor.schedule_writeback(*c);
+        executor.schedule_store(*c);
+    }
+
+    REQUIRE(executor.run());
+    REQUIRE(executor.tile_payload(c0.tile_id).values[0] == Catch::Approx(6.0f));
+    REQUIRE(executor.tile_payload(c1.tile_id).values[0] == Catch::Approx(6.0f));
+
+    Cycle second_b_feed = 0;
+    Cycle second_compute_start = 0;
+    size_t b_feeds = 0;
+    for (const auto& event : executor.events()) {
+        if (event.type == EventType::TILE_FED_TO_COMPUTE && event.tile_id == b.tile_id) {
+            if (++b_feeds == 2) second_b_feed = event.cycle;
+        }
+        if (event.type == EventType::COMPUTE_START && event.tile_id == c1.tile_id) {
+            second_compute_start = event.cycle;
+        }
+    }
+    REQUIRE(b_feeds == 2);
+    REQUIRE(second_compute_start >= second_b_feed);
 }
 
 // ============================================================================
