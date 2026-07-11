@@ -2,15 +2,24 @@
 # Documentation generation with Doxygen
 
 if(KPU_BUILD_DOCS)
-    find_package(Doxygen REQUIRED dot)
-    
+    # Degrade gracefully: a missing docs toolchain should not abort the
+    # configure of a code build (the "full" preset enables docs by default).
+    # dot (graphviz) is optional - diagrams are enabled only when present.
+    find_package(Doxygen OPTIONAL_COMPONENTS dot)
+
+    if(NOT DOXYGEN_FOUND)
+        message(WARNING
+            "KPU_BUILD_DOCS=ON but Doxygen was not found - the 'docs' target "
+            "will not be available. Install doxygen (and graphviz for "
+            "diagrams): sudo apt-get install doxygen graphviz")
+    endif()
+
     if(DOXYGEN_FOUND)
         # Doxygen configuration
         set(DOXYGEN_PROJECT_NAME "Stillwater KPU Simulator")
         set(DOXYGEN_PROJECT_NUMBER ${PROJECT_VERSION})
         set(DOXYGEN_PROJECT_BRIEF "Knowledge Processing Unit Simulator")
         set(DOXYGEN_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/docs)
-        set(DOXYGEN_INPUT "${CMAKE_SOURCE_DIR}/include ${CMAKE_SOURCE_DIR}/src ${CMAKE_SOURCE_DIR}/components")
         set(DOXYGEN_FILE_PATTERNS "*.hpp *.cpp *.h *.c *.md")
         set(DOXYGEN_RECURSIVE YES)
         set(DOXYGEN_EXCLUDE_PATTERNS "*/third_party/*" "*/build/*")
@@ -28,7 +37,11 @@ if(KPU_BUILD_DOCS)
         set(DOXYGEN_REFERENCES_RELATION YES)
         set(DOXYGEN_CALL_GRAPH YES)
         set(DOXYGEN_CALLER_GRAPH YES)
-        set(DOXYGEN_HAVE_DOT YES)
+        if(TARGET Doxygen::dot)
+            set(DOXYGEN_HAVE_DOT YES)
+        else()
+            set(DOXYGEN_HAVE_DOT NO)
+        endif()
         set(DOXYGEN_DOT_NUM_THREADS 0)
         set(DOXYGEN_UML_LOOK YES)
         set(DOXYGEN_TEMPLATE_RELATIONS YES)
@@ -49,7 +62,10 @@ if(KPU_BUILD_DOCS)
             COMMENT "Generating API documentation with Doxygen"
         )
         
-        # Install documentation
+        # Install documentation. GNUInstallDirs defines CMAKE_INSTALL_DOCDIR;
+        # without it the destination expands empty and install() errors out.
+        # (Packaging.cmake also includes it, but runs after this module.)
+        include(GNUInstallDirs)
         install(DIRECTORY ${CMAKE_BINARY_DIR}/docs/html/
             DESTINATION ${CMAKE_INSTALL_DOCDIR}
             OPTIONAL
