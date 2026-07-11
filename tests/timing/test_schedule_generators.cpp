@@ -11,6 +11,7 @@
 #include <sw/kpu/timing/schedule/schedule_generator_interface.hpp>
 #include <sw/kpu/timing/schedule/matmul_schedule_generator.hpp>
 #include <sw/kpu/timing/schedule/schedule_executor.hpp>
+#include <sw/kpu/timing/schedule/schedule_validator.hpp>
 
 #include <set>
 
@@ -319,6 +320,73 @@ TEST_CASE("MatMulScheduleGenerator prefetch_next", "[timing][schedule][matmul]")
     size_t move_ops = result.count_ops(ScheduleOpType::MOVE);
     REQUIRE(load_ops == expected_k_tiles * 2 * expected_c_tiles);
     REQUIRE(load_ops == move_ops);
+}
+
+TEST_CASE("MatMulScheduleGenerator blocked_ab derives bursts from the resource envelope",
+          "[timing][schedule][matmul][envelope]") {
+    // 128^3 at 16^3 tiles: k_tiles = 8
+    MatMulScheduleGenerator::Config config;
+    config.M = 128;
+    config.N = 128;
+    config.K = 128;
+    config.Ti = 16;
+    config.Tj = 16;
+    config.Tk = 16;
+    config.strategy = MatMulScheduleGenerator::Strategy::BLOCKED_AB;
+
+    SECTION("constrained envelope chunks the K loop") {
+        // share = min(8/4, 16/4) = 2 tiles -> bursts of 2 tiles
+        // (= at most 4 consecutive same-matrix ops: 2 x (LOAD + MOVE))
+        config.l3_buffer_count = 8;
+        config.l2_bank_count = 16;
+        REQUIRE(config.max_burst_tiles() == 2);
+
+        MatMulScheduleGenerator gen(config);
+        auto schedule = gen.generate();
+        REQUIRE(schedule.valid);
+
+        auto analysis = ScheduleAnalysis::analyze(schedule);
+        REQUIRE(analysis.max_consecutive_a <= 4);
+        REQUIRE(analysis.max_consecutive_b <= 4);
+        REQUIRE(is_livelock_safe(schedule, 8, 16));
+
+        // Blocking must not change total work: LOAD:MOVE:FEED stay 1:1:1
+        size_t loads = schedule.count_ops(ScheduleOpType::LOAD);
+        REQUIRE(loads == schedule.count_ops(ScheduleOpType::MOVE));
+        REQUIRE(loads == schedule.count_ops(ScheduleOpType::FEED));
+        REQUIRE(loads == 2u * 8u * 64u);  // 2 matrices x k_tiles x c_tiles
+    }
+
+    SECTION("large envelope degenerates to the full K loop") {
+        // share = min(32/4, 64/4) = 8 tiles >= k_tiles -> single block,
+        // identical structure to the historical all-A-then-all-B ordering
+        config.l3_buffer_count = 32;
+        config.l2_bank_count = 64;
+        REQUIRE(config.max_burst_tiles() == 8);
+
+        MatMulScheduleGenerator gen(config);
+        auto schedule = gen.generate();
+        REQUIRE(schedule.valid);
+
+        auto analysis = ScheduleAnalysis::analyze(schedule);
+        REQUIRE(analysis.max_consecutive_a == 16);  // 8 tiles x (LOAD + MOVE)
+        REQUIRE(is_livelock_safe(schedule, 32, 64));
+    }
+
+    SECTION("degenerate envelope still makes progress") {
+        // share clamps to 1 tile
+        config.l3_buffer_count = 2;
+        config.l2_bank_count = 2;
+        REQUIRE(config.max_burst_tiles() == 1);
+
+        MatMulScheduleGenerator gen(config);
+        auto schedule = gen.generate();
+        REQUIRE(schedule.valid);
+
+        auto analysis = ScheduleAnalysis::analyze(schedule);
+        REQUIRE(analysis.max_consecutive_a <= 2);
+        REQUIRE(is_livelock_safe(schedule, 2, 2));
+    }
 }
 
 TEST_CASE("MatMulScheduleGenerator address calculation", "[timing][schedule][matmul]") {

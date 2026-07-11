@@ -599,11 +599,41 @@ inline ValidationResult validate_livelock_safety(
 }
 
 /**
- * @brief Quick check if schedule is livelock-safe
+ * @brief Quick check if schedule is livelock-safe (capacity-blind heuristic)
+ *
+ * Uses the fixed interleaving threshold (max 3 consecutive same-matrix ops).
+ * Prefer the capacity-aware overload when the resource envelope is known:
+ * it checks the constructive property the generators guarantee.
  */
 inline bool is_livelock_safe(const ScheduleResult& schedule) {
     auto analysis = ScheduleAnalysis::analyze(schedule);
     return analysis.is_interleaved;
+}
+
+/**
+ * @brief Capacity-aware livelock-safety check (issue #67)
+ *
+ * Verifies the constructive residency bound the generators emit against:
+ * each matrix's longest burst must fit its share of the credit pools
+ * (a quarter of the smaller pool, so an A burst and a B burst can always
+ * be resident simultaneously with headroom for drains and C writebacks).
+ * This is an invariant check of the schedule's working set against the
+ * envelope - not a fixed-threshold heuristic.
+ */
+inline bool is_livelock_safe(const ScheduleResult& schedule,
+                             size_t l3_credits,
+                             size_t l2_credits) {
+    auto analysis = ScheduleAnalysis::analyze(schedule);
+    size_t l3_share = l3_credits / 4;
+    size_t l2_share = l2_credits / 4;
+    size_t share = l3_share < l2_share ? l3_share : l2_share;
+    if (share == 0) share = 1;
+    // ScheduleAnalysis counts consecutive OPERATIONS; a resident tile
+    // contributes at most two ops to a burst (LOAD + MOVE), so a burst of
+    // `share` tiles appears as up to 2*share consecutive same-matrix ops.
+    size_t share_ops = 2 * share;
+    return analysis.max_consecutive_a <= share_ops &&
+           analysis.max_consecutive_b <= share_ops;
 }
 
 } // namespace sw::kpu::timing::schedule

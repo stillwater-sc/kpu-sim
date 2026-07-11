@@ -165,6 +165,11 @@ int main(int argc, char* argv[]) {
     config.Tk = static_cast<Size>(Tk);
     config.strategy = strategy;
 
+    // Generate against the same resource envelope the executor runs with,
+    // so blocked strategies derive burst lengths that provably fit (#67)
+    config.l3_buffer_count = static_cast<Size>(l3_buffers);
+    config.l2_bank_count = 64;
+
     // Set matrix base addresses in DRAM (for trace display)
     // A matrix at 0x0000'1000, B at 0x0010'0000, C at 0x0020'0000
     config.a_base = 0x00001000;
@@ -193,7 +198,8 @@ int main(int argc, char* argv[]) {
     std::cout << "  Max consecutive A ops: " << analysis.max_consecutive_a << "\n";
     std::cout << "  Max consecutive B ops: " << analysis.max_consecutive_b << "\n";
     std::cout << "  Interleaved: " << (analysis.is_interleaved ? "YES" : "NO") << "\n";
-    std::cout << "  Livelock-safe: " << (is_livelock_safe(schedule) ? "YES" : "NO") << "\n";
+    std::cout << "  Livelock-safe (envelope L3=" << l3_buffers << ", L2=64): "
+              << (is_livelock_safe(schedule, l3_buffers, 64) ? "YES" : "NO") << "\n";
 
     // ========================================
     // Validate schedule (optional)
