@@ -257,7 +257,11 @@ private:
                 break;
 
             case ScheduleOpType::COMPUTE:
-                executor_.schedule_compute(op.tile, op.dependency_tile);
+                if (!op.dependency_tiles.empty()) {
+                    executor_.schedule_compute(op.tile, op.dependency_tiles);
+                } else {
+                    executor_.schedule_compute(op.tile, op.dependency_tile);
+                }
                 break;
 
             case ScheduleOpType::DRAIN:

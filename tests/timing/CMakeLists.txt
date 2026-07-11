@@ -118,3 +118,13 @@ kpu_add_component_test(test_schedule_validation "timing"
 set_tests_properties(test_schedule_validation PROPERTIES
     LABELS "timing;schedule;validation;v0.9"
 )
+
+# Multi-tile execution regression (issues #61/#63/#64):
+# executes generated schedules end-to-end across the strategy x size matrix
+kpu_add_component_test(test_multi_tile_execution "timing"
+    test_multi_tile_execution.cpp
+)
+
+set_tests_properties(test_multi_tile_execution PROPERTIES
+    LABELS "timing;executor;regression;v0.9"
+)

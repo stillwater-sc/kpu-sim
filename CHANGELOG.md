@@ -7,7 +7,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **CSP timing: multi-tile execution regression suite (#64).**
+  `tests/timing/test_multi_tile_execution.cpp` executes generated matmul
+  schedules end-to-end through `ConcurrentTimingExecutor` across all four
+  strategies x 32^3/64^3/128^3, asserting completion, no livelock, exact
+  per-stage tile accounting (moves/writebacks/feeds/drains match schedule op
+  counts), and per-tick stall-accounting bounds. Closes the coverage hole
+  that let #61 reach main: no prior test executed a generated multi-tile
+  schedule.
+
 ### Fixed
+
+- **CSP timing: COMPUTE dependencies now cover all K-slice feeds, and
+  compute latency scales with K (#63).** The matmul schedule generators
+  previously keyed COMPUTE for C(ti,tj) to only the last B feed; a compute
+  could start before its A tiles or earlier K slices were fed. COMPUTE now
+  carries the full dependency set (every A(ti,*,k) and B(*,tj,k)), the
+  executor starts compute only when all of them have been fed, and latency
+  is `compute_latency + (k_slices - 1) * compute_cycles_per_k_slice` (new
+  config knob, default 32). `ScheduleOperation` gains a `dependency_tiles`
+  list (the single-dependency field and executor overload remain for
+  backward compatibility); `is_complete()` now also accounts for pending
+  computes. Known remaining approximation: fed-tile tracking is a monotonic
+  was-ever-fed set, so a tile fed for an earlier output iteration satisfies
+  later iterations' dependencies (per-instance accounting arrives with real
+  data movement).
+- **CSP timing: PREFETCH_NEXT strategy livelocked at 128^3 and above** —
+  caught immediately by the new regression suite (#64). The generator
+  emitted each tile's load twice per output iteration (prefetch + current)
+  but only one MOVE, stranding L3 TagCAM references and credits (the same
+  leak class as #61). Loads are now emitted once (at k=0 directly, k>=1 via
+  the previous iteration's prefetch), keeping the LOAD:MOVE pairing 1:1.
 
 - **CSP timing: multi-tile schedules livelocked in `ConcurrentTimingExecutor` (#61).**
   `run_matmul` failed with livelock at its default 64x64x64 / 16^3-tile
