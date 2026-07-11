@@ -25,6 +25,7 @@
 
 #include <cmath>
 #include <cstring>
+#include <filesystem>
 #include <iomanip>
 #include <iostream>
 #include <string>
@@ -207,6 +208,17 @@ int main(int argc, char* argv[]) {
         } else {
             std::cout << "Usage: " << argv[0] << " [--trace-dir DIR]\n";
             return std::strcmp(argv[i], "--help") == 0 ? 0 : 1;
+        }
+    }
+    if (!trace_dir.empty()) {
+        // The trace exporter opens the path directly; create the directory
+        // so a fresh checkout does not silently produce no files
+        std::error_code ec;
+        std::filesystem::create_directories(trace_dir, ec);
+        if (ec) {
+            std::cerr << "Cannot create trace directory '" << trace_dir
+                      << "': " << ec.message() << "\n";
+            return 1;
         }
     }
     auto trace = [&](const std::string& base) {

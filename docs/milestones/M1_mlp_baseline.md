@@ -66,10 +66,11 @@ streamers, 32 L3 buffers / 64 L2 banks; *minimal* = one of everything,
 
 ## What the numbers say
 
-- **Validation is exact.** Max absolute error is 0.0 across all runs: the
-  CSP compute path performs the same fp32 operations as the oracle, in
-  matching accumulation order — the value plane is bit-faithful, not
-  approximately right.
+- **Validation is exact on every tested output.** Max absolute error is
+  0.0 across all runs — every output element equals the host oracle's
+  bit-for-bit. (This establishes output equality, consistent with the CSP
+  compute performing equivalent fp32 arithmetic; internal operation order
+  is not separately instrumented.)
 - **Batch amortization is the headline curve:** 752 → 189 → 94
   cycles/sample from batch 16 → 64 → 256. Weight movement is paid once per
   layer regardless of batch, so larger batches amortize it — the expected
