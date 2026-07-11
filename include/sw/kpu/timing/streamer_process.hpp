@@ -269,6 +269,7 @@ private:
                     in_flight_->tile.tile_id,
                     name()
                 ));
+                events.back().slot_id = in_flight_l2_slot_;
 
                 if (credit_released) {
                     events.push_back(TimingEvent(

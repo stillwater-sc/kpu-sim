@@ -20,6 +20,19 @@ set_target_properties(run_matmul PROPERTIES
     FOLDER "Examples/Schedule"
 )
 
+# Unified functional + CSP timing MLP vertical slice
+add_executable(unified_xor_mlp unified_xor_mlp.cpp)
+target_link_libraries(unified_xor_mlp PRIVATE kpu_simulator)
+set_target_properties(unified_xor_mlp PROPERTIES
+    FOLDER "Examples/Schedule"
+)
+if(KPU_BUILD_TESTS)
+    add_test(NAME unified_xor_mlp COMMAND unified_xor_mlp)
+    set_tests_properties(unified_xor_mlp PROPERTIES
+        LABELS "behavioral;transactional;timing;mlp;v0.9"
+    )
+endif()
+
 # CSP Pipeline Educational Demo - shows credit/debit flow and TagCAM operations
 add_executable(csp_pipeline_demo csp_pipeline_demo.cpp)
 target_link_libraries(csp_pipeline_demo PRIVATE kpu_simulator)

@@ -7,10 +7,13 @@
 // ============================================================================
 
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/catch_approx.hpp>
 
 #include <filesystem>
 
 #include <sw/kpu/timing/concurrent_timing_executor.hpp>
+#include <sw/kpu/timing/functional_mlp_executor.hpp>
+#include <sw/kpu/timing/functional_domain_flow.hpp>
 
 using namespace sw::kpu::timing;
 using namespace sw::kpu::isa;
@@ -232,6 +235,179 @@ TEST_CASE("ConcurrentTimingExecutor drain and writeback", "[timing][executor]") 
     REQUIRE(count_events(events, EventType::TILE_DRAINED) == 1);
     REQUIRE(count_events(events, EventType::BM_WRITEBACK_COMPLETE) == 1);
     REQUIRE(count_events(events, EventType::DMA_STORE_COMPLETE) == 1);
+}
+
+TEST_CASE("Functional CSP executor produces XOR MLP values under backpressure",
+          "[timing][executor][functional][mlp]") {
+    const std::vector<float> input = {
+        0.0f, 0.0f,
+        0.0f, 1.0f,
+        1.0f, 0.0f,
+        1.0f, 1.0f
+    };
+    const std::vector<float> w1 = {
+         1.0f,  1.0f, -1.0f, -1.0f,
+         1.0f,  1.0f, -1.0f, -1.0f
+    };
+    const std::vector<float> b1 = {-0.5f, -1.5f, 0.5f, 1.5f};
+    const std::vector<float> w2 = {2.0f, -6.0f, 0.0f, 0.0f};
+    const std::vector<float> b2 = {0.0f};
+
+    auto config = default_config();
+    config.l3_buffer_count = 1;
+    config.l2_bank_count = 1;
+    config.num_block_movers = 1;
+    config.compute_latency = 8;
+    config.max_cycles = 100000;
+
+    FunctionalMLPExecutor mlp(config);
+    mlp.add_layer(2, 4, w1, b1, ConcurrentTimingExecutor::FunctionalActivation::RELU,
+                  "hidden");
+    mlp.add_layer(4, 1, w2, b2, ConcurrentTimingExecutor::FunctionalActivation::NONE,
+                  "output");
+    auto output = mlp.forward(input, 4);
+
+    REQUIRE(output.size() == 4);
+    REQUIRE(output[0] == Catch::Approx(0.0f));
+    REQUIRE(output[1] == Catch::Approx(1.0f));
+    REQUIRE(output[2] == Catch::Approx(1.0f));
+    REQUIRE(output[3] == Catch::Approx(0.0f));
+
+    REQUIRE(mlp.statistics().layers_completed == 2);
+    REQUIRE(mlp.statistics().total_cycles > 0);
+    REQUIRE(mlp.statistics().total_stall_cycles > 0);
+    REQUIRE(count_events(mlp.events(), EventType::COMPUTE_COMPLETE) == 2);
+    REQUIRE(count_events(mlp.events(), EventType::TILE_DRAINED) == 1);
+    REQUIRE(count_events(mlp.events(), EventType::DMA_STORE_COMPLETE) == 1);
+}
+
+TEST_CASE("Functional payload bytes cross every hierarchy boundary only on CSP completion",
+          "[timing][executor][functional][hierarchy]") {
+    ConcurrentTimingExecutor executor(default_config());
+    auto a = make_tile(MatrixID::A, 3, 0, 0, 4);
+    a.height = 1; a.width = 1;
+    executor.set_tile_payload(a.tile_id, TilePayload{1, 1, {7.0f}});
+    executor.schedule_load(a);
+    executor.schedule_move(a);
+    executor.schedule_feed(a);
+    size_t cursor = 0;
+    bool saw_l3 = false, saw_l2 = false, saw_l1 = false, saw_compute = false;
+    while (!executor.is_complete()) {
+        executor.step();
+        for (; cursor < executor.events().size(); ++cursor) {
+            const auto& event = executor.events()[cursor];
+            if (event.tile_id != a.tile_id) continue;
+            if (event.type == EventType::TILE_ARRIVED_L3) {
+                saw_l3 = executor.has_tile_payload_at(MemoryLevel::L3, a.tile_id);
+            } else if (event.type == EventType::BM_MOVE_COMPLETE) {
+                saw_l2 = executor.has_tile_payload_at(MemoryLevel::L2, a.tile_id);
+            } else if (event.type == EventType::TILE_FED_TO_COMPUTE) {
+                saw_l1 = executor.has_tile_payload_at(MemoryLevel::L1, a.tile_id);
+                saw_compute = executor.has_tile_payload_at(MemoryLevel::COMPUTE, a.tile_id);
+            }
+        }
+    }
+    REQUIRE(saw_l3); REQUIRE(saw_l2); REQUIRE(saw_l1); REQUIRE(saw_compute);
+    REQUIRE(executor.tile_payload_at(MemoryLevel::COMPUTE, a.tile_id).values[0] ==
+            Catch::Approx(7.0f));
+}
+
+TEST_CASE("Functional Domain Flow executes an arbitrary branched DAG",
+          "[timing][executor][functional][domain-flow]") {
+    FunctionalDomainFlowExecutor runner(default_config());
+    auto a = make_tile(MatrixID::A, 7, 0, 0, 4); a.height = 1; a.width = 1;
+    auto b = make_tile(MatrixID::B, 7, 0, 0, 4); b.height = 1; b.width = 1;
+    auto c = make_tile(MatrixID::C, 7, 0, 0, 4); c.height = 1; c.width = 1;
+    auto d = make_tile(MatrixID::C, 8, 0, 0, 4); d.height = 1; d.width = 1;
+    runner.set_tile_payload(a.tile_id, TilePayload{1, 1, {2.0f}});
+    runner.set_tile_payload(b.tile_id, TilePayload{1, 1, {4.0f}});
+
+    using Program = FunctionalDomainFlowProgram;
+    Program program;
+    const size_t load_a = program.add({Program::Operation::LOAD, a, {}, {}});
+    const size_t load_b = program.add({Program::Operation::LOAD, b, {}, {}});
+    const size_t move_a = program.add({Program::Operation::MOVE, a, {}, {load_a}});
+    const size_t move_b = program.add({Program::Operation::MOVE, b, {}, {load_b}});
+    const size_t feed_a = program.add({Program::Operation::FEED, a, {}, {move_a}});
+    const size_t feed_b = program.add({Program::Operation::FEED, b, {}, {move_b}});
+    ConcurrentTimingExecutor::MatMulComputeSpec matmul;
+    matmul.a_tiles = {a.tile_id}; matmul.b_tiles = {b.tile_id};
+    const size_t compute = program.add({Program::Operation::MATMUL, c, matmul,
+                                        {feed_a, feed_b}});
+    Program::Node custom;
+    custom.operation = Program::Operation::COMPUTE;
+    custom.tile = d;
+    custom.predecessors = {compute};
+    custom.compute.input_tiles = {c.tile_id};
+    custom.compute.resident_tiles = {c.tile_id};
+    custom.compute.operation = [](const std::vector<TilePayload>& inputs) {
+        TilePayload result = inputs.at(0);
+        for (float& value : result.values) value += 1.0f;
+        return result;
+    };
+    const size_t transformed = program.add(std::move(custom));
+    const size_t drain = program.add({Program::Operation::DRAIN, d, {}, {transformed}});
+    const size_t writeback = program.add({Program::Operation::WRITEBACK, d, {}, {drain}});
+    program.add({Program::Operation::STORE, d, {}, {writeback}});
+
+    REQUIRE(runner.run(program));
+    REQUIRE(runner.executor().tile_payload_at(MemoryLevel::DRAM, d.tile_id).values[0] ==
+            Catch::Approx(9.0f));
+    REQUIRE(count_events(runner.executor().events(), EventType::DMA_LOAD_COMPLETE) == 2);
+}
+
+TEST_CASE("Repeated tile feeds cannot satisfy a later functional compute early",
+          "[timing][executor][functional][dependency]") {
+    auto config = default_config();
+    config.compute_latency = 4;
+    ConcurrentTimingExecutor executor(config);
+
+    auto a = make_tile(MatrixID::A, 0, 0, 0, 4);
+    a.height = 1; a.width = 1;
+    auto b = make_tile(MatrixID::B, 0, 0, 0, 4);
+    b.height = 1; b.width = 1;
+    auto c0 = make_tile(MatrixID::C, 0, 0, 0, 4);
+    c0.height = 1; c0.width = 1;
+    auto c1 = make_tile(MatrixID::C, 0, 1, 0, 4);
+    c1.height = 1; c1.width = 1;
+
+    executor.set_tile_payload(a.tile_id, TilePayload{1, 1, {2.0f}});
+    executor.set_tile_payload(b.tile_id, TilePayload{1, 1, {3.0f}});
+
+    ConcurrentTimingExecutor::MatMulComputeSpec compute;
+    compute.a_tiles = {a.tile_id};
+    compute.b_tiles = {b.tile_id};
+
+    for (auto* c : {&c0, &c1}) {
+        executor.schedule_load(a);
+        executor.schedule_load(b);
+        executor.schedule_move(a);
+        executor.schedule_move(b);
+        executor.schedule_feed(a);
+        executor.schedule_feed(b);
+        executor.schedule_matmul_compute(*c, compute);
+        executor.schedule_drain(*c);
+        executor.schedule_writeback(*c);
+        executor.schedule_store(*c);
+    }
+
+    REQUIRE(executor.run());
+    REQUIRE(executor.tile_payload(c0.tile_id).values[0] == Catch::Approx(6.0f));
+    REQUIRE(executor.tile_payload(c1.tile_id).values[0] == Catch::Approx(6.0f));
+
+    Cycle second_b_feed = 0;
+    Cycle second_compute_start = 0;
+    size_t b_feeds = 0;
+    for (const auto& event : executor.events()) {
+        if (event.type == EventType::TILE_FED_TO_COMPUTE && event.tile_id == b.tile_id) {
+            if (++b_feeds == 2) second_b_feed = event.cycle;
+        }
+        if (event.type == EventType::COMPUTE_START && event.tile_id == c1.tile_id) {
+            second_compute_start = event.cycle;
+        }
+    }
+    REQUIRE(b_feeds == 2);
+    REQUIRE(second_compute_start >= second_b_feed);
 }
 
 // ============================================================================

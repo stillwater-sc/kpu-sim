@@ -13,6 +13,7 @@
 #include <cstdint>
 #include <functional>
 #include <tuple>
+#include <vector>
 
 namespace sw::kpu::timing {
 
@@ -150,6 +151,23 @@ struct TileDescriptor {
             s += hex;
         }
         return s;
+    }
+};
+
+/**
+ * @brief Numeric contents associated with a tile in the functional timing model.
+ *
+ * Payloads live in the executor rather than in TileDescriptor so descriptors
+ * remain cheap scheduling messages while values have one authoritative home.
+ */
+struct TilePayload {
+    Size rows = 0;
+    Size cols = 0;
+    std::vector<float> values;
+
+    [[nodiscard]] bool valid() const {
+        return rows > 0 && cols > 0 && values.size() ==
+               static_cast<std::size_t>(rows) * static_cast<std::size_t>(cols);
     }
 };
 
