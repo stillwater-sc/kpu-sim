@@ -370,21 +370,23 @@ void ConcurrentExecutor::schedule_instruction(const DMInstruction& instr) {
         // address generation itself is implicit; only timing matters here.
         case DMOpcode::DMA_LOAD_TILE_AUTO:
         case DMOpcode::DMA_STORE_TILE_AUTO: {
+            const auto& ops = std::get<AutoDMAOperands>(instr.operands);
             auto& dma = memory_channels_[auto_rr_ % memory_channels_.size()]
                             .dma_engine;
             completion = dma.schedule_op(earliest, auto_tile_bytes_,
                                          instr.instruction_id, instr.label,
-                                         MatrixID::A, TileCoord{});
+                                         ops.matrix, TileCoord{});
             ++auto_rr_;
             break;
         }
 
         case DMOpcode::BM_MOVE_TILE_AUTO:
         case DMOpcode::BM_WRITEBACK_AUTO: {
+            const auto& ops = std::get<AutoBlockMoverOperands>(instr.operands);
             auto& bm = block_movers_[auto_rr_ % block_movers_.size()];
             completion = bm.schedule_op(earliest, auto_tile_bytes_,
                                         instr.instruction_id, instr.label,
-                                        MatrixID::A, TileCoord{});
+                                        ops.matrix, TileCoord{});
             ++auto_rr_;
             break;
         }
@@ -392,21 +394,31 @@ void ConcurrentExecutor::schedule_instruction(const DMInstruction& instr) {
         case DMOpcode::STR_FEED_ROWS_AUTO:
         case DMOpcode::STR_FEED_COLS_AUTO:
         case DMOpcode::STR_DRAIN_AUTO: {
+            // AutoStreamerOperands carries no matrix; map by opcode
+            // convention (rows feed A, columns feed B, drains produce C)
+            MatrixID mat = instr.opcode == DMOpcode::STR_FEED_ROWS_AUTO
+                ? MatrixID::A
+                : instr.opcode == DMOpcode::STR_FEED_COLS_AUTO
+                    ? MatrixID::B
+                    : MatrixID::C;
             auto& str = streamers_[auto_rr_ % streamers_.size()];
             completion = str.schedule_op(earliest, auto_tile_bytes_,
                                          instr.instruction_id, instr.label,
-                                         MatrixID::A, TileCoord{});
+                                         mat, TileCoord{});
             ++auto_rr_;
             break;
         }
 
         // Vector Engine ops (issue #92): timing envelope of one element per
         // fabric lane-cycle over the current tile; functional semantics land
-        // with the pattern epics (E2/E3)
+        // with the pattern epics (E2/E3). compute_fabric_'s bus_width is an
+        // elements-per-cycle throughput, so pass the ELEMENT count, not bytes
         case DMOpcode::VE_ELEMENTWISE:
         case DMOpcode::VE_REDUCE: {
+            Size tile_elems = auto_elem_size_ > 0
+                ? auto_tile_bytes_ / auto_elem_size_ : auto_tile_bytes_;
             completion = compute_fabric_.schedule_op(
-                earliest, auto_tile_bytes_, instr.instruction_id, instr.label,
+                earliest, tile_elems, instr.instruction_id, instr.label,
                 MatrixID::A, TileCoord{});
             break;
         }

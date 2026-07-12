@@ -641,6 +641,10 @@ isa::DMProgram KernelCompiler::emit_streaming_program(
 
     last_stats_ = CompilationStats{};
     last_stats_.instruction_count = program.instructions.size();
+    last_stats_.estimated_external_bytes = program.estimates.external_mem_bytes;
+    last_stats_.estimated_l3_bytes = program.estimates.l3_bytes;
+    last_stats_.estimated_arithmetic_intensity =
+        program.estimates.arithmetic_intensity;
     last_succeeded_ = true;
     last_error_.clear();
     return program;
@@ -756,7 +760,7 @@ Kernel KernelCompiler::compile_elementwise(const ElementwiseConfig& config,
 
     uint64_t bytes = static_cast<uint64_t>(config.total_elements()) * elem_size;
     auto program = emit_streaming_program("elementwise", passes, tile_elems,
-                                          elem_size, config.total_elements(),
+                                          elem_size, config.total_flops(),
                                           (input_streams + 1) * bytes);
     return Kernel(std::move(program), KernelOpType::ELEMENTWISE, options.dtype);
 }

@@ -23,6 +23,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   streaming ops. Numerical validation of the VE semantics lands with the
   pattern epics (E2/E3); tracked in #18, which stays open for that half.
 
+### Added
+
 - **CSP timing: envelope-mismatch detection (#91, Wave 0).** Schedule
   generators stamp their generation envelope into `ScheduleMetadata`
   (`l3_buffer_count`/`l2_bank_count`; 0 = hand-built/legacy, not checked).
