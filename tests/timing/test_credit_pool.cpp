@@ -321,3 +321,83 @@ TEST_CASE("PartitionedCreditPool livelock prevention scenario", "[timing][credit
     pool.release(PartitionedCreditPool::Matrix::A);
     REQUIRE(pool.acquire(PartitionedCreditPool::Matrix::A));
 }
+
+// ============================================================================
+// CreditPool partition mode (issue #89): PartitionedCreditPool wired behind
+// the CreditPool interface via indexed acquire/release
+// ============================================================================
+
+TEST_CASE("CreditPool partition mode splits capacity per matrix", "[timing][credit_pool][partition]") {
+    CreditPool pool(10);
+    REQUIRE_FALSE(pool.partitioned());
+    pool.partition_equal();  // 10 -> A=3, B=3, C=4 (remainder to C)
+    REQUIRE(pool.partitioned());
+
+    REQUIRE(pool.available(0) == 3);   // A
+    REQUIRE(pool.available(1) == 3);   // B
+    REQUIRE(pool.available(2) == 4);   // C
+    REQUIRE(pool.available() == 10);   // total
+    REQUIRE(pool.capacity() == 10);
+}
+
+TEST_CASE("CreditPool partition isolation: exhausting A leaves B and C usable", "[timing][credit_pool][partition]") {
+    CreditPool pool(9);
+    pool.partition_equal();  // 3/3/3
+
+    REQUIRE(pool.acquire(0));
+    REQUIRE(pool.acquire(0));
+    REQUIRE(pool.acquire(0));
+    REQUIRE_FALSE(pool.acquire(0));    // A exhausted
+
+    REQUIRE(pool.acquire(1));          // B unaffected
+    REQUIRE(pool.acquire(2));          // C unaffected
+    REQUIRE(pool.available() == 4);
+    REQUIRE(pool.outstanding() == 5);
+
+    pool.release(0);
+    REQUIRE(pool.acquire(0));
+}
+
+TEST_CASE("CreditPool partition mode rejects un-indexed acquire/release", "[timing][credit_pool][partition]") {
+    CreditPool pool(6);
+    pool.partition_equal();
+    REQUIRE_THROWS_AS(pool.acquire(), std::logic_error);
+    REQUIRE_THROWS_AS(pool.release(), std::logic_error);
+}
+
+TEST_CASE("CreditPool indexed calls behave as shared when not partitioned", "[timing][credit_pool][partition]") {
+    CreditPool pool(2);
+    REQUIRE(pool.acquire(0));
+    REQUIRE(pool.acquire(1));          // same shared pool
+    REQUIRE_FALSE(pool.acquire(2));    // exhausted regardless of index
+    pool.release(2);
+    REQUIRE(pool.available() == 1);
+    REQUIRE(pool.acquire());           // un-indexed still valid in shared mode
+}
+
+TEST_CASE("CreditPool custom partition validates shares", "[timing][credit_pool][partition]") {
+    CreditPool pool(8);
+    REQUIRE_THROWS_AS(pool.partition(4, 4, 4), std::invalid_argument);  // sums to 12
+    pool.partition(2, 2, 4);
+    REQUIRE(pool.available(2) == 4);
+
+    // Per-partition over-release throws
+    REQUIRE(pool.acquire(2));
+    pool.release(2);
+    REQUIRE_THROWS_AS(pool.release(2), std::overflow_error);
+}
+
+TEST_CASE("CreditPool partitioning requires a quiescent pool; reset keeps partitions", "[timing][credit_pool][partition]") {
+    CreditPool pool(6);
+    REQUIRE(pool.acquire());
+    REQUIRE_THROWS_AS(pool.partition_equal(), std::logic_error);
+    pool.release();
+    pool.partition_equal();
+
+    REQUIRE(pool.acquire(0));
+    REQUIRE(pool.acquire(1));
+    pool.reset();
+    REQUIRE(pool.partitioned());
+    REQUIRE(pool.available() == 6);
+    REQUIRE(pool.available(0) == 2);
+}

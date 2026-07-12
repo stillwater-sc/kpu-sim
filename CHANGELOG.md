@@ -9,6 +9,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **CSP timing: per-matrix credit partitioning wired into the executor
+  (#89, Wave 0 of the pattern-coverage program).** `CreditPool` gains an
+  opt-in partition mode backed by `PartitionedCreditPool` (equal A/B/C
+  split, remainder to C): indexed `acquire/release/available(partition)`
+  overloads match `isa::MatrixID` values and behave identically to the
+  shared calls when unpartitioned, so all processes were converted once
+  and work in both modes; un-indexed calls throw in partition mode to
+  catch missed conversions. `ConcurrentTimingExecutor::Config` gains
+  `partition_l3_credits`/`partition_l2_credits` (default off - partitioning
+  intentionally forbids single-matrix workloads from filling the whole
+  pool); `run_matmul` gains `--partition-credits`. Restores the original
+  v0.9 design's structural livelock prevention: an adversarial A-load
+  flood can no longer starve B traffic (regression-tested both ways), and
+  the full strategy matrix passes partitioned - measurably faster at
+  128^3 (7,132 vs 8,034 cycles) because partitioning curbs greedy
+  prefetch over-filling L3.
+
 - **DNN Milestone M1: MLP baseline demo + benchmark (#129).**
   `examples/milestones/m1_mlp_baseline` packages the first rung of the DNN
   milestone ladder: XOR 2-4-1 (exact expected outputs) and the canonical

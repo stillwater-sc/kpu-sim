@@ -143,6 +143,93 @@ TEST_CASE("Multi-tile schedules execute to completion across strategies and size
 }
 
 // ============================================================================
+// Per-matrix credit partitioning (issue #89)
+// ============================================================================
+
+TEST_CASE("Multi-tile schedules execute under partitioned credits",
+          "[timing][executor][regression][partition]") {
+    // Defense-in-depth mode: the same strategy x size matrix must complete
+    // with per-matrix (A/B/C) credit partitioning enabled
+    for (const auto& strat : kStrategies) {
+        for (size_t n : {Size(64), Size(128)}) {
+            DYNAMIC_SECTION(strat.name << " " << n << "^3 partitioned") {
+                auto gen_config = make_generator_config(static_cast<Size>(n),
+                                                        strat.strategy);
+                MatMulScheduleGenerator generator(gen_config);
+                auto schedule = generator.generate();
+                REQUIRE(schedule.valid);
+
+                auto exec_config = make_executor_config();
+                exec_config.partition_l3_credits = true;
+                exec_config.partition_l2_credits = true;
+                ConcurrentTimingExecutor executor(exec_config);
+                ScheduleExecutor sched_exec(executor);
+                auto result = sched_exec.execute(schedule);
+
+                INFO("strategy=" << strat.name << " n=" << n
+                     << " cycles=" << result.total_cycles
+                     << " error=" << result.error_message);
+                REQUIRE(result.success);
+                REQUIRE_FALSE(result.livelock_detected);
+            }
+        }
+    }
+}
+
+TEST_CASE("Partitioned credits prevent single-matrix buffer monopolization",
+          "[timing][executor][partition]") {
+    // Adversarial pattern no generator emits but a hand-written or dynamic
+    // schedule could: a flood of A loads with NO downstream consumption,
+    // plus one B load. With a shared pool the A flood takes every L3 credit
+    // and the B tile never arrives; with per-matrix partitioning the B
+    // partition is untouchable by A traffic.
+    auto make_flood_tile = [](MatrixID m, Size ti) {
+        TileDescriptor tile;
+        tile.tile_id = {m, ti, 0, 0};
+        tile.dram_address = 0x1000 + static_cast<Address>(ti) * 0x1000;
+        tile.height = 16;
+        tile.width = 16;
+        tile.element_size = 4;
+        tile.size_bytes = 1024;
+        return tile;
+    };
+
+    auto run_flood = [&](bool partitioned) {
+        auto config = make_executor_config();
+        config.l3_buffer_count = 9;  // partitions to 3/3/3
+        config.enable_livelock_detection = false;
+        config.partition_l3_credits = partitioned;
+        ConcurrentTimingExecutor executor(config);
+
+        // 12 A loads against 9 buffers - demand exceeds the pool - and one
+        // B load queued behind them. No moves: the A tiles never leave.
+        for (Size i = 0; i < 12; ++i) {
+            executor.schedule_load(make_flood_tile(MatrixID::A, i));
+        }
+        executor.schedule_load(make_flood_tile(MatrixID::B, 0));
+
+        for (int i = 0; i < 2000 && !executor.is_complete(); ++i) {
+            executor.step();
+        }
+
+        for (const auto& event : executor.events()) {
+            if (event.type == EventType::TILE_ARRIVED_L3 &&
+                event.tile_id.matrix == MatrixID::B) {
+                return true;  // B tile made it into L3
+            }
+        }
+        return false;
+    };
+
+    SECTION("shared pool: the A flood starves B") {
+        REQUIRE_FALSE(run_flood(false));
+    }
+    SECTION("partitioned pool: B arrives despite the A flood") {
+        REQUIRE(run_flood(true));
+    }
+}
+
+// ============================================================================
 // Envelope-aware blocked schedules under constrained buffers (issue #67)
 // ============================================================================
 

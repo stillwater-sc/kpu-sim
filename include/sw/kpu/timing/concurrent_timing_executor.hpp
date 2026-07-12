@@ -128,6 +128,19 @@ public:
         bool enable_work_conserving = true;
         bool enable_priority_aging = false;
 
+        // Per-matrix credit partitioning (issue #89): partitions the L3/L2
+        // credit pools by matrix class (A/B/C, equal split with remainder
+        // to C) via PartitionedCreditPool, restoring the original v0.9
+        // design's structural livelock prevention - no matrix class can
+        // monopolize the buffers another needs, regardless of schedule
+        // ordering. Defense-in-depth for hand-written or third-party
+        // schedules; the shipped generators are constructively safe (#67)
+        // even without it. Off by default because partitioning
+        // intentionally forbids single-matrix workloads (e.g. pure DMA
+        // streaming tests) from filling the whole pool.
+        bool partition_l3_credits = false;
+        bool partition_l2_credits = false;
+
         // Credit reserves (optional guard against upstream producers
         // starving downstream completion paths - see issue #61):
         // - L3 reserve: credits DMA loads may not consume, kept for C-tile
@@ -554,6 +567,12 @@ inline ConcurrentTimingExecutor::ConcurrentTimingExecutor(const Config& config)
       l3_tag_cam_(config.l3_buffer_count),
       l2_tag_cam_(config.l2_bank_count),
       compute_result_tag_cam_(256) {  // 256 pending compute results max
+    if (config_.partition_l3_credits) {
+        l3_credits_.partition_equal();
+    }
+    if (config_.partition_l2_credits) {
+        l2_credits_.partition_equal();
+    }
     create_components();
 
     if (config_.enable_livelock_detection) {

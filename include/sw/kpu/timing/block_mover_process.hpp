@@ -246,7 +246,8 @@ private:
                 // Only release L3 credit if tile was fully removed (ref_count reached 0)
                 bool credit_released = l3_tag_cam_.invalidate(in_flight_->tile.tile_id);
                 if (credit_released) {
-                    l3_credits_.release();
+                    l3_credits_.release(
+                        static_cast<size_t>(in_flight_->tile.tile_id.matrix));
                 }
                 total_tiles_moved_++;
 
@@ -284,7 +285,8 @@ private:
                 // Only release L2 credit if tile was fully removed (ref_count reached 0)
                 bool credit_released = l2_tag_cam_.invalidate(in_flight_->tile.tile_id);
                 if (credit_released) {
-                    l2_credits_.release();
+                    l2_credits_.release(
+                        static_cast<size_t>(in_flight_->tile.tile_id.matrix));
                 }
                 total_tiles_writeback_++;
 
@@ -360,7 +362,7 @@ private:
             // Consume this move's L3 reference
             bool credit_released = l3_tag_cam_.invalidate(dedup_tile.tile_id);
             if (credit_released) {
-                l3_credits_.release();
+                l3_credits_.release(static_cast<size_t>(dedup_tile.tile_id.matrix));
             }
             total_tiles_moved_++;
 
@@ -441,11 +443,15 @@ private:
             return false;
         }
 
-        // Check if L2 credit available. Moves may not consume the reserved
-        // credits - those are kept for compute-result drains (Streamer),
-        // which otherwise starve because BlockMovers tick before Streamers.
-        if (l2_credits_.available() <= config_.l2_credit_reserve ||
-            !l2_credits_.acquire()) {
+        // Check if L2 credit available (from the tile's matrix partition
+        // when the pool is partitioned, per #89). Moves may not consume the
+        // reserved credits - those are kept for compute-result drains
+        // (Streamer), which otherwise starve because BlockMovers tick
+        // before Streamers.
+        const size_t move_part =
+            static_cast<size_t>(move_queue_.at(found_index).tile_id.matrix);
+        if (l2_credits_.available(move_part) <= config_.l2_credit_reserve ||
+            !l2_credits_.acquire(move_part)) {
             const auto& tile = move_queue_.at(found_index);
             events.push_back(TimingEvent(
                 EventType::BM_STALL_CREDIT,
@@ -550,8 +556,10 @@ private:
             return false;
         }
 
-        // Check if L3 credit available
-        if (!l3_credits_.acquire()) {
+        // Check if L3 credit available (writebacks carry C tiles, which have
+        // their own partition when the pool is partitioned, per #89)
+        if (!l3_credits_.acquire(
+                static_cast<size_t>(writeback_queue_.at(found_index).tile_id.matrix))) {
             const auto& tile = writeback_queue_.at(found_index);
             events.push_back(TimingEvent(
                 EventType::BM_STALL_CREDIT,

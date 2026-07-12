@@ -248,7 +248,8 @@ private:
                 // Only release L2 credit if tile was fully removed (ref_count reached 0)
                 bool credit_released = l2_tag_cam_.invalidate(in_flight_->tile.tile_id);
                 if (credit_released) {
-                    l2_credits_.release();
+                    l2_credits_.release(
+                        static_cast<size_t>(in_flight_->tile.tile_id.matrix));
                 }
                 total_tiles_fed_++;
 
@@ -414,8 +415,11 @@ private:
             return false;
         }
 
-        // Second check: Is L2 credit available?
-        if (!l2_credits_.acquire()) {
+        // Second check: Is L2 credit available? (Drains carry C result
+        // tiles, which have their own partition when the pool is
+        // partitioned, per #89 - a flood of A/B moves can never starve
+        // result draining.)
+        if (!l2_credits_.acquire(static_cast<size_t>(tile.tile_id.matrix))) {
             events.push_back(TimingEvent(
                 EventType::STR_STALL_CREDIT,
                 current_cycle,
