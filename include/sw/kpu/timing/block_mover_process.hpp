@@ -241,8 +241,12 @@ private:
 
         if (in_flight_->is_complete(current_cycle)) {
             if (in_flight_is_move_) {
-                // Move complete: tile arrived at L2
-                l2_tag_cam_.insert(in_flight_->tile.tile_id, in_flight_->slot_id, current_cycle);
+                // Move complete: tile arrived at L2. The ref count is seeded
+                // with the tile's consumer count (broadcast 1:1:k, #100);
+                // the ordinary pipeline has consumer_count = 1.
+                l2_tag_cam_.insert(in_flight_->tile.tile_id, in_flight_->slot_id,
+                                   current_cycle,
+                                   in_flight_->tile.consumer_count);
                 // Only release L3 credit if tile was fully removed (ref_count reached 0)
                 bool credit_released = l3_tag_cam_.invalidate(in_flight_->tile.tile_id);
                 if (credit_released) {

@@ -664,3 +664,46 @@ TEST_CASE("Serialization round-trip integrity", "[serialization][roundtrip]") {
         }
     }
 }
+
+// ============================================================================
+// VEOperands round-trip (issue #100, format v2)
+// ============================================================================
+
+TEST_CASE("ProgramSerializer round-trips VEOperands", "[serialization][ve]") {
+    ProgramSerializer serializer;
+
+    DMProgram program;
+    program.name = "ve_roundtrip";
+    program.Ti = 16; program.Tj = 16; program.Tk = 1;
+    program.instructions.push_back(
+        DMInstruction::ve_elementwise(VEOp::SUB, 3, 4, 5));
+    program.instructions.push_back(
+        DMInstruction::ve_elementwise_unary(VEOp::EXP, 1, 2));
+    program.instructions.push_back(
+        DMInstruction::ve_elementwise_scalar(VEOp::POW_S, 0.5f, 6, 7));
+    program.instructions.push_back(DMInstruction::halt());
+
+    auto buffer = serializer.serialize(program);
+    DMProgram loaded = serializer.deserialize(buffer);
+
+    REQUIRE(loaded.instructions.size() == 4);
+
+    const auto& binary = std::get<VEOperands>(loaded.instructions[0].operands);
+    REQUIRE(binary.op == VEOp::SUB);
+    REQUIRE(binary.num_inputs == 2);
+    REQUIRE(binary.l1_src_a == 3);
+    REQUIRE(binary.l1_src_b == 4);
+    REQUIRE(binary.l1_dst == 5);
+
+    const auto& unary = std::get<VEOperands>(loaded.instructions[1].operands);
+    REQUIRE(unary.op == VEOp::EXP);
+    REQUIRE(unary.num_inputs == 1);
+    REQUIRE(unary.l1_src_a == 1);
+    REQUIRE(unary.l1_dst == 2);
+
+    const auto& scalar = std::get<VEOperands>(loaded.instructions[2].operands);
+    REQUIRE(scalar.op == VEOp::POW_S);
+    REQUIRE(scalar.scalar == 0.5f);
+    REQUIRE(scalar.l1_src_a == 6);
+    REQUIRE(scalar.l1_dst == 7);
+}

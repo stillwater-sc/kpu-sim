@@ -88,10 +88,29 @@ public:
      * after completing a load to L3).
      */
     bool insert(const TileID& tile_id, uint32_t slot_id, Cycle arrival_cycle) {
-        // Check if already present - increment ref_count
+        return insert(tile_id, slot_id, arrival_cycle, 1);
+    }
+
+    /**
+     * @brief Insert a tile arrival with a seeded reference count (issue #100)
+     * @param refs Number of pending consumers for this arrival
+     *
+     * Broadcast discipline (docs/plans/e2_broadcast_elementwise_pattern.md):
+     * one MOVE delivering a tile that k feeds will consume seeds the entry
+     * with ref_count = k, instead of accumulating references through k
+     * duplicate moves (the #61 credit-leak class). Credit conservation is
+     * unchanged: the entry holds exactly one credit for its lifetime,
+     * released when the reference count reaches zero. If the tile is
+     * already present, the references are added to the existing entry.
+     */
+    bool insert(const TileID& tile_id, uint32_t slot_id, Cycle arrival_cycle,
+                size_t refs) {
+        if (refs == 0) refs = 1;
+
+        // Check if already present - add references
         auto it = entries_.find(tile_id);
         if (it != entries_.end()) {
-            it->second.ref_count++;
+            it->second.ref_count += refs;
             return true;  // Success - tile reuse
         }
 
@@ -100,7 +119,9 @@ public:
             return false;  // Full
         }
 
-        entries_[tile_id] = TagCAMEntry(tile_id, slot_id, arrival_cycle);
+        TagCAMEntry entry(tile_id, slot_id, arrival_cycle);
+        entry.ref_count = refs;
+        entries_[tile_id] = entry;
         return true;
     }
 

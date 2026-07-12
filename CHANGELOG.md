@@ -9,6 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **VE_ELEMENTWISE functional semantics + broadcast ref-count seeding
+  (#100, epic E2 broadcast/elementwise).** `VEOperands` gives
+  VE_ELEMENTWISE real operands (14 op kinds: binary/unary/scalar forms,
+  L1 src/dst addressing) with factory methods, assembler syntax, and
+  binary serializer round-trip (`.kpubin` format v2, with static_assert
+  drift guards); the behavioral executor applies the ops elementwise over
+  L1 buffers with IEEE semantics, validated exactly against a host oracle
+  - the elementwise share of #18's numerical half. Broadcast (P5):
+  `TileDescriptor.consumer_count` lets one MOVE seed the L2 TagCAM
+  ref-count with the downstream feed count (1:1:k discipline, one credit
+  per entry preserved), tested at TagCAM and BlockMover level. Discovered
+  and filed #144: the serializer cannot round-trip register-file/AUTO
+  operand types (pre-existing; reader throws).
+
 - **CSP pattern-coverage matrix (#93, completes Wave 0).**
   `tests/coverage/pattern_coverage.json` is the machine-checkable operator
   x pattern x lifecycle-stage matrix for the coverage program (21

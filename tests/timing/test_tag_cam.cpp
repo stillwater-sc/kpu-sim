@@ -379,3 +379,40 @@ TEST_CASE("TagCAM work-conserving scan", "[timing][tag_cam]") {
     REQUIRE(oldest->tile_id.matrix == MatrixID::B);
     REQUIRE(oldest->arrival_cycle == 300);
 }
+
+// ============================================================================
+// Seeded reference counts for broadcast (issue #100, epic E2)
+// ============================================================================
+
+TEST_CASE("TagCAM seeded insert supports one-move many-feeds broadcast", "[timing][tag_cam][broadcast]") {
+    TagCAM cam(4);
+    TileID tile{MatrixID::B, 0, 0, 0};
+
+    SECTION("insert with refs=k releases only on the k-th invalidate") {
+        REQUIRE(cam.insert(tile, 0, 100, 3));
+        REQUIRE_FALSE(cam.invalidate(tile));  // 3 -> 2
+        REQUIRE_FALSE(cam.invalidate(tile));  // 2 -> 1
+        REQUIRE(cam.invalidate(tile));        // 1 -> 0: credit release signal
+        REQUIRE_FALSE(cam.lookup(tile));
+    }
+
+    SECTION("seeded insert on an existing entry adds references") {
+        REQUIRE(cam.insert(tile, 0, 100));      // ref 1
+        REQUIRE(cam.insert(tile, 0, 101, 2));   // ref 3
+        REQUIRE_FALSE(cam.invalidate(tile));
+        REQUIRE_FALSE(cam.invalidate(tile));
+        REQUIRE(cam.invalidate(tile));
+    }
+
+    SECTION("refs=0 clamps to 1 (ordinary pipeline)") {
+        REQUIRE(cam.insert(tile, 0, 100, 0));
+        REQUIRE(cam.invalidate(tile));
+    }
+
+    SECTION("seeded insert still respects capacity") {
+        TagCAM small(1);
+        TileID other{MatrixID::A, 1, 0, 0};
+        REQUIRE(small.insert(tile, 0, 100, 5));
+        REQUIRE_FALSE(small.insert(other, 1, 100, 5));
+    }
+}

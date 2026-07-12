@@ -8,6 +8,7 @@
  */
 
 #include <sw/kpu/isa/behavioral_program_executor.hpp>
+#include <cmath>
 #include <cstring>
 #include <stdexcept>
 #include <vector>
@@ -225,10 +226,18 @@ void BehavioralProgramExecutor::dispatch(const DMInstruction& instr, [[maybe_unu
         // (data already in L2, compute reads it directly in softmax path)
         break;
 
-    // Gather/scatter and VE opcodes — annotations, not functional in behavioral
+    case DMOpcode::VE_ELEMENTWISE:
+        // Functional when carrying VEOperands (issue #100); legacy
+        // monostate markers remain no-ops
+        if (std::holds_alternative<VEOperands>(instr.operands)) {
+            execute_ve_elementwise(std::get<VEOperands>(instr.operands));
+        }
+        break;
+
+    // Gather/scatter, VE_REDUCE (E3 scope), and scratch opcodes —
+    // annotations, not functional in behavioral
     case DMOpcode::DMA_LOAD_GATHER:
     case DMOpcode::DMA_STORE_SCATTER:
-    case DMOpcode::VE_ELEMENTWISE:
     case DMOpcode::VE_REDUCE:
     case DMOpcode::L2_SCRATCH_WRITE:
     case DMOpcode::L2_SCRATCH_READ:
@@ -511,6 +520,56 @@ void BehavioralProgramExecutor::dispatch_barrier() {
 // ============================================================================
 // Compute: C += A × B on L1 tile data
 // ============================================================================
+
+void BehavioralProgramExecutor::execute_ve_elementwise(const VEOperands& ops) {
+    if (!program_) return;
+    Size elems = program_->Ti * program_->Tj;
+    if (elems == 0) return;
+    if (ops.l1_src_a >= hw_.l1_buffers.size() ||
+        ops.l1_dst >= hw_.l1_buffers.size()) {
+        return;
+    }
+
+    const Size bytes = elems * sizeof(float);
+    std::vector<float> a(elems);
+    hw_.l1_buffers[ops.l1_src_a].read(0, a.data(), bytes);
+
+    std::vector<float> b;
+    if (ops.num_inputs == 2) {
+        if (ops.l1_src_b >= hw_.l1_buffers.size()) return;
+        b.resize(elems);
+        hw_.l1_buffers[ops.l1_src_b].read(0, b.data(), bytes);
+    }
+
+    // IEEE semantics without domain guards (div-by-zero -> inf, sqrt of
+    // negative -> NaN): the host oracle applies the same std operations,
+    // so validation compares like for like
+    std::vector<float> out(elems);
+    for (Size i = 0; i < elems; ++i) {
+        const float x = a[i];
+        const float y = ops.num_inputs == 2 ? b[i] : ops.scalar;
+        float r = 0.0f;
+        switch (ops.op) {
+            case VEOp::ADD:   r = x + y; break;
+            case VEOp::SUB:   r = x - y; break;
+            case VEOp::MUL:   r = x * y; break;
+            case VEOp::DIV:   r = x / y; break;
+            case VEOp::MAX:   r = x > y ? x : y; break;
+            case VEOp::MIN:   r = x < y ? x : y; break;
+            case VEOp::NEG:   r = -x; break;
+            case VEOp::ABS:   r = std::fabs(x); break;
+            case VEOp::SQRT:  r = std::sqrt(x); break;
+            case VEOp::EXP:   r = std::exp(x); break;
+            case VEOp::LOG:   r = std::log(x); break;
+            case VEOp::ADD_S: r = x + ops.scalar; break;
+            case VEOp::MUL_S: r = x * ops.scalar; break;
+            case VEOp::POW_S: r = std::pow(x, ops.scalar); break;
+        }
+        out[i] = r;
+    }
+
+    hw_.l1_buffers[ops.l1_dst].write(0, out.data(), bytes);
+}
 
 void BehavioralProgramExecutor::fire_compute() {
     if (!program_) return;

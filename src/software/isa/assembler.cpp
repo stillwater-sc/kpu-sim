@@ -765,11 +765,45 @@ DMInstruction Assembler::parse_str_broadcast_col() {
 }
 
 DMInstruction Assembler::parse_ve_elementwise() {
+    // Syntax (issue #100):
+    //   binary:  VE_ELEMENTWISE <OP>, <l1_src_a>, <l1_src_b>, <l1_dst>
+    //   unary:   VE_ELEMENTWISE <OP>, <l1_src>, <l1_dst>
+    //   scalar:  VE_ELEMENTWISE <OP_S> <scalar>, <l1_src>, <l1_dst>
     DMInstruction instr;
     instr.opcode = DMOpcode::VE_ELEMENTWISE;
-    // For now, just consume the operation name
-    consume(TokenType::IDENTIFIER, "elementwise operation");
-    instr.operands = std::monostate{};
+
+    Token op_tok = consume(TokenType::IDENTIFIER, "elementwise operation");
+    VEOp op;
+    if (!ve_op_from_string(op_tok.text, op)) {
+        error("Unknown VE elementwise operation: " + op_tok.text);
+    }
+
+    VEOperands ops;
+    ops.op = op;
+
+    const bool scalar_form =
+        op == VEOp::ADD_S || op == VEOp::MUL_S || op == VEOp::POW_S;
+    const bool unary_form =
+        scalar_form || op == VEOp::NEG || op == VEOp::ABS ||
+        op == VEOp::SQRT || op == VEOp::EXP || op == VEOp::LOG;
+
+    if (scalar_form) {
+        ops.scalar = static_cast<float>(parse_number());
+    }
+    match(TokenType::COMMA);
+    ops.l1_src_a = static_cast<uint8_t>(parse_number());
+    match(TokenType::COMMA);
+    if (unary_form) {
+        ops.num_inputs = 1;
+        ops.l1_dst = static_cast<uint8_t>(parse_number());
+    } else {
+        ops.num_inputs = 2;
+        ops.l1_src_b = static_cast<uint8_t>(parse_number());
+        match(TokenType::COMMA);
+        ops.l1_dst = static_cast<uint8_t>(parse_number());
+    }
+
+    instr.operands = ops;
     return instr;
 }
 

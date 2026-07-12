@@ -14,6 +14,7 @@
 
 #include <iostream>
 #include <cmath>
+#include <functional>
 #include <vector>
 #include <string>
 #include <cassert>
@@ -569,6 +570,77 @@ void test_loop_machinery() {
 }
 
 // ============================================================================
+// Test: VE_ELEMENTWISE functional semantics (issue #100, epic E2)
+// ============================================================================
+
+void test_ve_elementwise() {
+    std::cout << "\n=== Test: VE_ELEMENTWISE semantics (16x16 tiles) ===\n";
+
+    const Size Ti = 16, Tj = 16;
+    const Size elems = Ti * Tj;
+    const Size bytes = elems * sizeof(float);
+
+    // Three L1 buffers: src A (0), src B (1), dst (2)
+    TestHardware hw(16, 4, 256, 8, 128, /*num_l1=*/3, 64);
+
+    // Deterministic inputs (positive so SQRT/LOG are in-domain)
+    std::vector<float> a(elems), b(elems);
+    for (Size i = 0; i < elems; ++i) {
+        a[i] = 0.5f + static_cast<float>(i % 17) * 0.25f;
+        b[i] = 1.0f + static_cast<float>(i % 5) * 0.5f;
+    }
+
+    struct Case {
+        DMInstruction instr;
+        std::function<float(float, float)> ref;
+        std::string name;
+    };
+    std::vector<Case> cases;
+    cases.push_back({DMInstruction::ve_elementwise(VEOp::ADD, 0, 1, 2),
+                     [](float x, float y) { return x + y; }, "ADD"});
+    cases.push_back({DMInstruction::ve_elementwise(VEOp::MUL, 0, 1, 2),
+                     [](float x, float y) { return x * y; }, "MUL"});
+    cases.push_back({DMInstruction::ve_elementwise(VEOp::DIV, 0, 1, 2),
+                     [](float x, float y) { return x / y; }, "DIV"});
+    cases.push_back({DMInstruction::ve_elementwise_unary(VEOp::EXP, 0, 2),
+                     [](float x, float) { return std::exp(x); }, "EXP"});
+    cases.push_back({DMInstruction::ve_elementwise_unary(VEOp::SQRT, 0, 2),
+                     [](float x, float) { return std::sqrt(x); }, "SQRT"});
+    cases.push_back({DMInstruction::ve_elementwise_scalar(VEOp::MUL_S, 2.5f, 0, 2),
+                     [](float x, float) { return x * 2.5f; }, "MUL_S 2.5"});
+
+    for (auto& tc : cases) {
+        // Write inputs directly into L1 and run a one-instruction program
+        hw.l1_buffers[0].write(0, a.data(), bytes);
+        hw.l1_buffers[1].write(0, b.data(), bytes);
+
+        DMProgram program;
+        program.name = "ve_test";
+        program.Ti = Ti;
+        program.Tj = Tj;
+        program.Tk = 1;
+        program.instructions.push_back(tc.instr);
+        program.instructions.push_back(DMInstruction::halt());
+
+        BehavioralProgramExecutor executor(hw.context());
+        executor.load_program(program, 0, 0, 0);
+        bool ran = executor.run();
+
+        std::vector<float> out(elems, -1.0f);
+        hw.l1_buffers[2].read(0, out.data(), bytes);
+
+        float max_err = 0.0f;
+        for (Size i = 0; i < elems; ++i) {
+            float expected = tc.ref(a[i], b[i]);
+            max_err = std::max(max_err, std::fabs(out[i] - expected));
+        }
+        check(ran && max_err == 0.0f,
+              "VE " + tc.name + " exact vs host oracle (max err " +
+              std::to_string(max_err) + ")");
+    }
+}
+
+// ============================================================================
 // Main
 // ============================================================================
 
@@ -584,6 +656,7 @@ int main() {
     test_reference_matmul();
     test_execution_statistics();
     test_loop_machinery();
+    test_ve_elementwise();
 
     std::cout << "\n" << std::string(60, '*') << "\n";
     std::cout << "Results: " << passed << " passed, " << failed << " failed\n";

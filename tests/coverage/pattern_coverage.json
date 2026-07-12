@@ -11,14 +11,30 @@
     "P8": "chained-GEMM fusion (on-chip intermediates)",
     "P9": "append/growing extent"
   },
-  "stages": ["design", "isa_closure", "generator", "functional", "regression"],
-  "statuses": ["done", "partial", "missing"],
+  "stages": [
+    "design",
+    "isa_closure",
+    "generator",
+    "functional",
+    "regression"
+  ],
+  "statuses": [
+    "done",
+    "partial",
+    "missing"
+  ],
   "operators": [
     {
       "name": "matmul",
-      "patterns": ["P1"],
+      "patterns": [
+        "P1"
+      ],
       "epic": 74,
-      "models": ["cv", "llm", "jepa"],
+      "models": [
+        "cv",
+        "llm",
+        "jepa"
+      ],
       "stages": {
         "design": "done",
         "isa_closure": "done",
@@ -30,9 +46,15 @@
     },
     {
       "name": "gemm_family",
-      "patterns": ["P1"],
+      "patterns": [
+        "P1"
+      ],
       "epic": 74,
-      "models": ["cv", "llm", "jepa"],
+      "models": [
+        "cv",
+        "llm",
+        "jepa"
+      ],
       "stages": {
         "design": "partial",
         "isa_closure": "done",
@@ -44,9 +66,15 @@
     },
     {
       "name": "conv2d",
-      "patterns": ["P1", "P2", "P7"],
+      "patterns": [
+        "P1",
+        "P2",
+        "P7"
+      ],
       "epic": 75,
-      "models": ["cv"],
+      "models": [
+        "cv"
+      ],
       "stages": {
         "design": "partial",
         "isa_closure": "partial",
@@ -58,9 +86,14 @@
     },
     {
       "name": "pooling",
-      "patterns": ["P2", "P3"],
+      "patterns": [
+        "P2",
+        "P3"
+      ],
       "epic": 76,
-      "models": ["cv"],
+      "models": [
+        "cv"
+      ],
       "stages": {
         "design": "missing",
         "isa_closure": "partial",
@@ -72,9 +105,15 @@
     },
     {
       "name": "softmax",
-      "patterns": ["P3"],
+      "patterns": [
+        "P3"
+      ],
       "epic": 77,
-      "models": ["cv", "llm", "jepa"],
+      "models": [
+        "cv",
+        "llm",
+        "jepa"
+      ],
       "stages": {
         "design": "partial",
         "isa_closure": "partial",
@@ -86,9 +125,16 @@
     },
     {
       "name": "layernorm",
-      "patterns": ["P3", "P5"],
+      "patterns": [
+        "P3",
+        "P5"
+      ],
       "epic": 78,
-      "models": ["cv", "llm", "jepa"],
+      "models": [
+        "cv",
+        "llm",
+        "jepa"
+      ],
       "stages": {
         "design": "partial",
         "isa_closure": "partial",
@@ -100,9 +146,14 @@
     },
     {
       "name": "rmsnorm",
-      "patterns": ["P3", "P5"],
+      "patterns": [
+        "P3",
+        "P5"
+      ],
       "epic": 78,
-      "models": ["llm"],
+      "models": [
+        "llm"
+      ],
       "stages": {
         "design": "partial",
         "isa_closure": "partial",
@@ -114,9 +165,14 @@
     },
     {
       "name": "batchnorm",
-      "patterns": ["P3", "P5"],
+      "patterns": [
+        "P3",
+        "P5"
+      ],
       "epic": 78,
-      "models": ["cv"],
+      "models": [
+        "cv"
+      ],
       "stages": {
         "design": "partial",
         "isa_closure": "partial",
@@ -128,23 +184,38 @@
     },
     {
       "name": "elementwise",
-      "patterns": ["P5", "P6"],
+      "patterns": [
+        "P5",
+        "P6"
+      ],
       "epic": 71,
-      "models": ["cv", "llm", "jepa"],
+      "models": [
+        "cv",
+        "llm",
+        "jepa"
+      ],
       "stages": {
         "design": "missing",
-        "isa_closure": "partial",
+        "isa_closure": "done",
         "generator": "partial",
         "functional": "missing",
         "regression": "missing"
       },
-      "notes": "VE_ELEMENTWISE opcode is a structural marker (no functional semantics); kernel program op-faithful (#142); two-operand aligned streaming pattern is the epic's core."
+      "notes": "VE_ELEMENTWISE has full operand encoding (VEOperands, format v2), assembler/serializer round-trip, and functional semantics in the behavioral executor (#100); CSP functional path rides FunctionalComputeSpec. Two-operand aligned streaming schedule is E2-T3."
     },
     {
       "name": "epilogue_fused",
-      "patterns": ["P1", "P5", "P6"],
+      "patterns": [
+        "P1",
+        "P5",
+        "P6"
+      ],
       "epic": 79,
-      "models": ["cv", "llm", "jepa"],
+      "models": [
+        "cv",
+        "llm",
+        "jepa"
+      ],
       "stages": {
         "design": "partial",
         "isa_closure": "done",
@@ -156,9 +227,15 @@
     },
     {
       "name": "ffn_fused",
-      "patterns": ["P8", "P6"],
+      "patterns": [
+        "P8",
+        "P6"
+      ],
       "epic": 80,
-      "models": ["llm", "jepa"],
+      "models": [
+        "llm",
+        "jepa"
+      ],
       "stages": {
         "design": "missing",
         "isa_closure": "partial",
@@ -170,9 +247,14 @@
     },
     {
       "name": "gather_scatter",
-      "patterns": ["P4"],
+      "patterns": [
+        "P4"
+      ],
       "epic": 70,
-      "models": ["llm", "jepa"],
+      "models": [
+        "llm",
+        "jepa"
+      ],
       "stages": {
         "design": "missing",
         "isa_closure": "partial",
@@ -184,9 +266,15 @@
     },
     {
       "name": "broadcast",
-      "patterns": ["P5"],
+      "patterns": [
+        "P5"
+      ],
       "epic": 71,
-      "models": ["cv", "llm", "jepa"],
+      "models": [
+        "cv",
+        "llm",
+        "jepa"
+      ],
       "stages": {
         "design": "missing",
         "isa_closure": "partial",
@@ -194,13 +282,19 @@
         "functional": "missing",
         "regression": "missing"
       },
-      "notes": "STR_BROADCAST_ROW/COL opcodes exist as annotation-only no-ops."
+      "notes": "STR_BROADCAST_ROW/COL opcodes timed in ConcurrentExecutor; broadcast ref-count seeding (1:1:k via TileDescriptor.consumer_count, #100) in the CSP tier. Behavioral STR_BROADCAST semantics + resident-operand realization land with E2-T4."
     },
     {
       "name": "online_reduction",
-      "patterns": ["P3"],
+      "patterns": [
+        "P3"
+      ],
       "epic": 72,
-      "models": ["cv", "llm", "jepa"],
+      "models": [
+        "cv",
+        "llm",
+        "jepa"
+      ],
       "stages": {
         "design": "missing",
         "isa_closure": "partial",
@@ -212,9 +306,15 @@
     },
     {
       "name": "layout_transform",
-      "patterns": ["P7"],
+      "patterns": [
+        "P7"
+      ],
       "epic": 73,
-      "models": ["cv", "llm", "jepa"],
+      "models": [
+        "cv",
+        "llm",
+        "jepa"
+      ],
       "stages": {
         "design": "missing",
         "isa_closure": "partial",
@@ -226,9 +326,17 @@
     },
     {
       "name": "attention",
-      "patterns": ["P8", "P3", "P1"],
+      "patterns": [
+        "P8",
+        "P3",
+        "P1"
+      ],
       "epic": 81,
-      "models": ["cv", "llm", "jepa"],
+      "models": [
+        "cv",
+        "llm",
+        "jepa"
+      ],
       "stages": {
         "design": "missing",
         "isa_closure": "partial",
@@ -240,9 +348,14 @@
     },
     {
       "name": "kv_cache",
-      "patterns": ["P9", "P4"],
+      "patterns": [
+        "P9",
+        "P4"
+      ],
       "epic": 82,
-      "models": ["llm"],
+      "models": [
+        "llm"
+      ],
       "stages": {
         "design": "missing",
         "isa_closure": "missing",
@@ -254,9 +367,14 @@
     },
     {
       "name": "rope",
-      "patterns": ["P5", "P6"],
+      "patterns": [
+        "P5",
+        "P6"
+      ],
       "epic": 83,
-      "models": ["llm"],
+      "models": [
+        "llm"
+      ],
       "stages": {
         "design": "missing",
         "isa_closure": "partial",
@@ -268,9 +386,14 @@
     },
     {
       "name": "embedding_logits",
-      "patterns": ["P4", "P1"],
+      "patterns": [
+        "P4",
+        "P1"
+      ],
       "epic": 84,
-      "models": ["llm"],
+      "models": [
+        "llm"
+      ],
       "stages": {
         "design": "missing",
         "isa_closure": "partial",
@@ -282,9 +405,15 @@
     },
     {
       "name": "spatial_boundary",
-      "patterns": ["P7", "P2"],
+      "patterns": [
+        "P7",
+        "P2"
+      ],
       "epic": 85,
-      "models": ["cv", "jepa"],
+      "models": [
+        "cv",
+        "jepa"
+      ],
       "stages": {
         "design": "missing",
         "isa_closure": "missing",
@@ -296,9 +425,14 @@
     },
     {
       "name": "jepa_masking",
-      "patterns": ["P4", "P7"],
+      "patterns": [
+        "P4",
+        "P7"
+      ],
       "epic": 86,
-      "models": ["jepa"],
+      "models": [
+        "jepa"
+      ],
       "stages": {
         "design": "missing",
         "isa_closure": "missing",
@@ -315,9 +449,18 @@
       "issue": 129,
       "achieved": true,
       "requires": [
-        {"operator": "matmul", "stage": "functional"},
-        {"operator": "matmul", "stage": "regression"},
-        {"operator": "epilogue_fused", "stage": "functional"}
+        {
+          "operator": "matmul",
+          "stage": "functional"
+        },
+        {
+          "operator": "matmul",
+          "stage": "regression"
+        },
+        {
+          "operator": "epilogue_fused",
+          "stage": "functional"
+        }
       ]
     },
     {
@@ -325,11 +468,26 @@
       "issue": 130,
       "achieved": false,
       "requires": [
-        {"operator": "conv2d", "stage": "functional"},
-        {"operator": "pooling", "stage": "functional"},
-        {"operator": "batchnorm", "stage": "functional"},
-        {"operator": "epilogue_fused", "stage": "regression"},
-        {"operator": "elementwise", "stage": "functional"}
+        {
+          "operator": "conv2d",
+          "stage": "functional"
+        },
+        {
+          "operator": "pooling",
+          "stage": "functional"
+        },
+        {
+          "operator": "batchnorm",
+          "stage": "functional"
+        },
+        {
+          "operator": "epilogue_fused",
+          "stage": "regression"
+        },
+        {
+          "operator": "elementwise",
+          "stage": "functional"
+        }
       ]
     },
     {
@@ -337,10 +495,22 @@
       "issue": 132,
       "achieved": false,
       "requires": [
-        {"operator": "attention", "stage": "functional"},
-        {"operator": "softmax", "stage": "functional"},
-        {"operator": "online_reduction", "stage": "functional"},
-        {"operator": "layout_transform", "stage": "functional"}
+        {
+          "operator": "attention",
+          "stage": "functional"
+        },
+        {
+          "operator": "softmax",
+          "stage": "functional"
+        },
+        {
+          "operator": "online_reduction",
+          "stage": "functional"
+        },
+        {
+          "operator": "layout_transform",
+          "stage": "functional"
+        }
       ]
     },
     {
@@ -348,12 +518,30 @@
       "issue": 135,
       "achieved": false,
       "requires": [
-        {"operator": "attention", "stage": "regression"},
-        {"operator": "kv_cache", "stage": "functional"},
-        {"operator": "rope", "stage": "functional"},
-        {"operator": "rmsnorm", "stage": "functional"},
-        {"operator": "ffn_fused", "stage": "functional"},
-        {"operator": "embedding_logits", "stage": "functional"}
+        {
+          "operator": "attention",
+          "stage": "regression"
+        },
+        {
+          "operator": "kv_cache",
+          "stage": "functional"
+        },
+        {
+          "operator": "rope",
+          "stage": "functional"
+        },
+        {
+          "operator": "rmsnorm",
+          "stage": "functional"
+        },
+        {
+          "operator": "ffn_fused",
+          "stage": "functional"
+        },
+        {
+          "operator": "embedding_logits",
+          "stage": "functional"
+        }
       ]
     },
     {
@@ -361,10 +549,22 @@
       "issue": 136,
       "achieved": false,
       "requires": [
-        {"operator": "jepa_masking", "stage": "functional"},
-        {"operator": "gather_scatter", "stage": "functional"},
-        {"operator": "attention", "stage": "functional"},
-        {"operator": "layernorm", "stage": "functional"}
+        {
+          "operator": "jepa_masking",
+          "stage": "functional"
+        },
+        {
+          "operator": "gather_scatter",
+          "stage": "functional"
+        },
+        {
+          "operator": "attention",
+          "stage": "functional"
+        },
+        {
+          "operator": "layernorm",
+          "stage": "functional"
+        }
       ]
     }
   ]

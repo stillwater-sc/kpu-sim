@@ -586,6 +586,112 @@ DMInstruction DMInstruction::str_drain_auto(uint8_t l2_bank, BufferSlot buf,
 }
 
 // ============================================================================
+// Vector Engine factory methods (issue #100)
+// ============================================================================
+
+const char* to_string(VEOp op) {
+    switch (op) {
+        case VEOp::ADD:   return "ADD";
+        case VEOp::SUB:   return "SUB";
+        case VEOp::MUL:   return "MUL";
+        case VEOp::DIV:   return "DIV";
+        case VEOp::MAX:   return "MAX";
+        case VEOp::MIN:   return "MIN";
+        case VEOp::NEG:   return "NEG";
+        case VEOp::ABS:   return "ABS";
+        case VEOp::SQRT:  return "SQRT";
+        case VEOp::EXP:   return "EXP";
+        case VEOp::LOG:   return "LOG";
+        case VEOp::ADD_S: return "ADD_S";
+        case VEOp::MUL_S: return "MUL_S";
+        case VEOp::POW_S: return "POW_S";
+    }
+    return "UNKNOWN";
+}
+
+bool ve_op_from_string(const std::string& name, VEOp& op) {
+    static const std::pair<const char*, VEOp> kMap[] = {
+        {"ADD", VEOp::ADD},     {"SUB", VEOp::SUB},   {"MUL", VEOp::MUL},
+        {"DIV", VEOp::DIV},     {"MAX", VEOp::MAX},   {"MIN", VEOp::MIN},
+        {"NEG", VEOp::NEG},     {"ABS", VEOp::ABS},   {"SQRT", VEOp::SQRT},
+        {"EXP", VEOp::EXP},     {"LOG", VEOp::LOG},
+        {"ADD_S", VEOp::ADD_S}, {"MUL_S", VEOp::MUL_S},
+        {"POW_S", VEOp::POW_S},
+    };
+    for (const auto& [key, value] : kMap) {
+        if (name == key) {
+            op = value;
+            return true;
+        }
+    }
+    return false;
+}
+
+DMInstruction DMInstruction::ve_elementwise(VEOp op, uint8_t l1_src_a,
+                                            uint8_t l1_src_b, uint8_t l1_dst) {
+    DMInstruction instr;
+    instr.opcode = DMOpcode::VE_ELEMENTWISE;
+
+    VEOperands ops;
+    ops.op = op;
+    ops.num_inputs = 2;
+    ops.l1_src_a = l1_src_a;
+    ops.l1_src_b = l1_src_b;
+    ops.l1_dst = l1_dst;
+    instr.operands = ops;
+
+    std::ostringstream oss;
+    oss << "VE_ELEMENTWISE " << to_string(op)
+        << ", L1[" << static_cast<int>(l1_src_a) << "]"
+        << ", L1[" << static_cast<int>(l1_src_b) << "]"
+        << " -> L1[" << static_cast<int>(l1_dst) << "]";
+    instr.label = oss.str();
+    return instr;
+}
+
+DMInstruction DMInstruction::ve_elementwise_unary(VEOp op, uint8_t l1_src,
+                                                  uint8_t l1_dst) {
+    DMInstruction instr;
+    instr.opcode = DMOpcode::VE_ELEMENTWISE;
+
+    VEOperands ops;
+    ops.op = op;
+    ops.num_inputs = 1;
+    ops.l1_src_a = l1_src;
+    ops.l1_dst = l1_dst;
+    instr.operands = ops;
+
+    std::ostringstream oss;
+    oss << "VE_ELEMENTWISE " << to_string(op)
+        << ", L1[" << static_cast<int>(l1_src) << "]"
+        << " -> L1[" << static_cast<int>(l1_dst) << "]";
+    instr.label = oss.str();
+    return instr;
+}
+
+DMInstruction DMInstruction::ve_elementwise_scalar(VEOp op, float scalar,
+                                                   uint8_t l1_src,
+                                                   uint8_t l1_dst) {
+    DMInstruction instr;
+    instr.opcode = DMOpcode::VE_ELEMENTWISE;
+
+    VEOperands ops;
+    ops.op = op;
+    ops.num_inputs = 1;
+    ops.scalar = scalar;
+    ops.l1_src_a = l1_src;
+    ops.l1_dst = l1_dst;
+    instr.operands = ops;
+
+    std::ostringstream oss;
+    oss << "VE_ELEMENTWISE " << to_string(op) << " " << scalar
+        << ", L1[" << static_cast<int>(l1_src) << "]"
+        << " -> L1[" << static_cast<int>(l1_dst) << "]";
+    instr.label = oss.str();
+    return instr;
+}
+
+// ============================================================================
 // DMProgram Statistics
 // ============================================================================
 
