@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **CSP pattern-coverage matrix (#93, completes Wave 0).**
+  `tests/coverage/pattern_coverage.json` is the machine-checkable operator
+  x pattern x lifecycle-stage matrix for the coverage program (21
+  operators, 9 pattern classes, 5 stages, truthful current statuses -
+  baseline 8/105 cells done). `test_pattern_coverage` enforces schema
+  consistency and **milestone gates**: a milestone marked achieved must
+  have every required capability at "done", so the matrix cannot
+  overclaim and achieved milestones cannot silently regress. Pattern
+  epics update rows as they land; the model-validation epic (E18)
+  asserts the full matrix through these gates.
+
 ### Fixed
 
 - **Non-matmul Kernel factories now compile their actual op (#92, fixes
