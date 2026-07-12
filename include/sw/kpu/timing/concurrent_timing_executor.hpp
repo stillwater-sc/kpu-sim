@@ -128,6 +128,19 @@ public:
         bool enable_work_conserving = true;
         bool enable_priority_aging = false;
 
+        // Per-matrix credit partitioning (issue #89): partitions the L3/L2
+        // credit pools by matrix class (A/B/C, equal split with remainder
+        // to C) via PartitionedCreditPool, restoring the original v0.9
+        // design's structural livelock prevention - no matrix class can
+        // monopolize the buffers another needs, regardless of schedule
+        // ordering. Defense-in-depth for hand-written or third-party
+        // schedules; the shipped generators are constructively safe (#67)
+        // even without it. Off by default because partitioning
+        // intentionally forbids single-matrix workloads (e.g. pure DMA
+        // streaming tests) from filling the whole pool.
+        bool partition_l3_credits = false;
+        bool partition_l2_credits = false;
+
         // Credit reserves (optional guard against upstream producers
         // starving downstream completion paths - see issue #61):
         // - L3 reserve: credits DMA loads may not consume, kept for C-tile
@@ -554,6 +567,12 @@ inline ConcurrentTimingExecutor::ConcurrentTimingExecutor(const Config& config)
       l3_tag_cam_(config.l3_buffer_count),
       l2_tag_cam_(config.l2_bank_count),
       compute_result_tag_cam_(256) {  // 256 pending compute results max
+    if (config_.partition_l3_credits) {
+        l3_credits_.partition_equal();
+    }
+    if (config_.partition_l2_credits) {
+        l2_credits_.partition_equal();
+    }
     create_components();
 
     if (config_.enable_livelock_detection) {
@@ -597,8 +616,15 @@ inline void ConcurrentTimingExecutor::create_components() {
         DMAEngineProcess::Config dma_config;
         dma_config.engine_id = static_cast<uint32_t>(dma);
         dma_config.queue_depth = config_.dma_queue_depth;
-        dma_config.l3_credit_reserve = Config::clamp_reserve(
-            config_.l3_writeback_credit_reserve, config_.l3_buffer_count);
+        // The writeback reserve is a heuristic guard that per-matrix
+        // partitioning supersedes structurally (the C partition IS the
+        // writeback protection). A pool-clamped reserve can also exceed a
+        // partition's share and block it permanently, so it is disabled in
+        // partition mode.
+        dma_config.l3_credit_reserve = config_.partition_l3_credits
+            ? 0
+            : Config::clamp_reserve(
+                  config_.l3_writeback_credit_reserve, config_.l3_buffer_count);
         dma_config.name = dma_config.display_name();
 
         // Assign DMA to MC (round-robin if more DMAs than MCs)
@@ -624,8 +650,13 @@ inline void ConcurrentTimingExecutor::create_components() {
         bm_config.startup_latency = config_.bm_startup_latency;
         bm_config.clock_ghz = config_.clock_ghz;
         bm_config.priority_aging = config_.enable_priority_aging;
-        bm_config.l2_credit_reserve = Config::clamp_reserve(
-            config_.l2_drain_credit_reserve, config_.l2_bank_count);
+        // Drain reserve disabled in partition mode for the same reason as
+        // the DMA writeback reserve: the C partition supersedes it, and a
+        // pool-clamped reserve can exceed a partition's share
+        bm_config.l2_credit_reserve = config_.partition_l2_credits
+            ? 0
+            : Config::clamp_reserve(
+                  config_.l2_drain_credit_reserve, config_.l2_bank_count);
         bm_config.name = bm_config.display_name();
 
         block_movers_.push_back(std::make_unique<BlockMoverProcess>(

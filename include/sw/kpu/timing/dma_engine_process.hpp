@@ -301,7 +301,8 @@ private:
                         // Invalidate tile in L3 and release credit
                         bool released = l3_tag_cam_.invalidate(completed->tile.tile_id);
                         if (released) {
-                            l3_credits_.release();
+                            l3_credits_.release(
+                                static_cast<size_t>(completed->tile.tile_id.matrix));
                             events.push_back(TimingEvent(
                                 EventType::CREDIT_RELEASED,
                                 current_cycle_,
@@ -366,13 +367,16 @@ private:
                 continue;  // All slots occupied - dedup hits above can still complete
             }
 
-            // Need L3 credit. Loads may not consume the reserved credits -
-            // those are kept for C-tile writebacks (BlockMover L2->L3).
-            // Without the reserve, greedy prefetch loads re-acquire every
-            // freed credit before a writeback can, starving the downstream
-            // path and wedging the pipeline (credit cycle livelock).
-            if (l3_credits_.available() <= config_.l3_credit_reserve ||
-                !l3_credits_.acquire()) {
+            // Need L3 credit (from the tile's matrix partition when the pool
+            // is partitioned, per #89 - partitioning makes the downstream
+            // protection structural). Loads may not consume the reserved
+            // credits - those are kept for C-tile writebacks (BlockMover
+            // L2->L3). Without the reserve, greedy prefetch loads re-acquire
+            // every freed credit before a writeback can, starving the
+            // downstream path and wedging the pipeline (credit cycle livelock).
+            const size_t load_part = static_cast<size_t>(req.tile.tile_id.matrix);
+            if (l3_credits_.available(load_part) <= config_.l3_credit_reserve ||
+                !l3_credits_.acquire(load_part)) {
                 if (!credit_stalled) {
                     credit_stalled = true;
                     stalled_tile = req.tile.tile_id;
@@ -384,7 +388,7 @@ private:
             req.slot_id = allocate_slot();
             if (!mc_.submit_request(req.tile, true, config_.engine_id)) {
                 // MC queue full - release credit and retry later
-                l3_credits_.release();
+                l3_credits_.release(load_part);
                 continue;
             }
 

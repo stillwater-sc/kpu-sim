@@ -61,6 +61,7 @@ void print_usage(const char* prog) {
     std::cout << "  --validate     Run schedule validation before execution\n";
     std::cout << "  --l3-buffers <n>  L3 buffer count (default: 32)\n";
     std::cout << "  --livelock <n>    Livelock threshold cycles (default: 10000)\n";
+    std::cout << "  --partition-credits  Partition L3/L2 credits per matrix (A/B/C)\n";
     std::cout << "  -h, --help     Show this help\n";
 }
 
@@ -74,6 +75,7 @@ int main(int argc, char* argv[]) {
     std::string strategy_name = "INTERLEAVED_AB";
     std::string trace_file;
     bool validate = false;
+    bool partition_credits = false;
     size_t l3_buffers = 32;
     size_t livelock_threshold = 10000;
 
@@ -117,6 +119,8 @@ int main(int argc, char* argv[]) {
             validate = true;
         } else if (strcmp(argv[i], "--l3-buffers") == 0 && i + 1 < argc) {
             l3_buffers = std::stoull(argv[++i]);
+        } else if (strcmp(argv[i], "--partition-credits") == 0) {
+            partition_credits = true;
         } else if (strcmp(argv[i], "--livelock") == 0 && i + 1 < argc) {
             livelock_threshold = std::stoull(argv[++i]);
         } else {
@@ -235,6 +239,8 @@ int main(int argc, char* argv[]) {
     exec_config.max_cycles = 10000000;  // 10M cycles max
     exec_config.enable_livelock_detection = true;
     exec_config.livelock_threshold = livelock_threshold;
+    exec_config.partition_l3_credits = partition_credits;
+    exec_config.partition_l2_credits = partition_credits;
 
     std::cout << "  Memory controllers: " << exec_config.num_memory_controllers << "\n";
     std::cout << "  L3 buffers: " << exec_config.l3_buffer_count << "\n";
