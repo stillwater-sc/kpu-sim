@@ -652,3 +652,113 @@ TEST_CASE("BatchNorm and Conv2D carry the envelope and refuse degenerate shares"
         REQUIRE_FALSE(gen.generate().valid);
     }
 }
+
+// ============================================================================
+// Envelope-mismatch detection (issue #91): generators stamp their envelope
+// into the metadata; ScheduleExecutor and VAL-007 surface disagreements
+// ============================================================================
+
+TEST_CASE("Generators record their envelope in schedule metadata", "[timing][schedule][envelope]") {
+    MatMulScheduleGenerator::Config config;
+    config.M = 32; config.N = 32; config.K = 32;
+    config.Ti = 16; config.Tj = 16; config.Tk = 16;
+    config.l3_buffer_count = 16;
+    config.l2_bank_count = 24;
+
+    MatMulScheduleGenerator gen(config);
+    auto schedule = gen.generate();
+    REQUIRE(schedule.valid);
+    REQUIRE(schedule.metadata.l3_buffer_count == 16);
+    REQUIRE(schedule.metadata.l2_bank_count == 24);
+}
+
+TEST_CASE("ScheduleExecutor warns when the execution envelope differs", "[timing][schedule][envelope]") {
+    MatMulScheduleGenerator::Config gen_config;
+    gen_config.M = 32; gen_config.N = 32; gen_config.K = 32;
+    gen_config.Ti = 16; gen_config.Tj = 16; gen_config.Tk = 16;
+    gen_config.l3_buffer_count = 32;
+    gen_config.l2_bank_count = 64;
+
+    MatMulScheduleGenerator gen(gen_config);
+    auto schedule = gen.generate();
+    REQUIRE(schedule.valid);
+
+    ConcurrentTimingExecutor::Config exec_config;
+    exec_config.max_cycles = 1'000'000;
+
+    SECTION("matching envelope executes without warnings") {
+        exec_config.l3_buffer_count = 32;
+        exec_config.l2_bank_count = 64;
+        ConcurrentTimingExecutor executor(exec_config);
+        ScheduleExecutor sched_exec(executor);
+        auto result = sched_exec.execute(schedule);
+        REQUIRE(result.success);
+        REQUIRE(result.warnings.empty());
+    }
+
+    SECTION("smaller executor pools produce a may-wedge warning") {
+        exec_config.l3_buffer_count = 8;
+        exec_config.l2_bank_count = 16;
+        ConcurrentTimingExecutor executor(exec_config);
+        ScheduleExecutor sched_exec(executor);
+        auto result = sched_exec.execute(schedule);
+        REQUIRE(result.warnings.size() == 1);
+        REQUIRE(result.warnings[0].find("SMALLER") != std::string::npos);
+        REQUIRE(result.warnings[0].find("may wedge") != std::string::npos);
+    }
+
+    SECTION("larger executor pools produce a benign mismatch warning") {
+        exec_config.l3_buffer_count = 128;
+        exec_config.l2_bank_count = 128;
+        ConcurrentTimingExecutor executor(exec_config);
+        ScheduleExecutor sched_exec(executor);
+        auto result = sched_exec.execute(schedule);
+        REQUIRE(result.success);
+        REQUIRE(result.warnings.size() == 1);
+        REQUIRE(result.warnings[0].find("larger") != std::string::npos);
+    }
+
+    SECTION("hand-built schedules without a recorded envelope are not flagged") {
+        ScheduleResult hand_built = schedule;
+        hand_built.metadata.l3_buffer_count = 0;
+        hand_built.metadata.l2_bank_count = 0;
+        exec_config.l3_buffer_count = 8;
+        exec_config.l2_bank_count = 16;
+        ConcurrentTimingExecutor executor(exec_config);
+        ScheduleExecutor sched_exec(executor);
+        auto result = sched_exec.execute(hand_built);
+        REQUIRE(result.warnings.empty());
+    }
+}
+
+TEST_CASE("VAL-007 flags envelope disagreement in validation", "[timing][schedule][envelope][validation]") {
+    MatMulScheduleGenerator::Config config;
+    config.M = 32; config.N = 32; config.K = 32;
+    config.Ti = 16; config.Tj = 16; config.Tk = 16;
+    config.l3_buffer_count = 32;
+    config.l2_bank_count = 64;
+
+    MatMulScheduleGenerator gen(config);
+    auto schedule = gen.generate();
+
+    ScheduleValidator validator;
+
+    SECTION("matching pools raise no VAL-007") {
+        auto result = validator.validate_livelock_safety(schedule, 32, 64);
+        for (const auto& issue : result.issues) {
+            REQUIRE(issue.rule_id != "VAL-007");
+        }
+    }
+
+    SECTION("smaller pools raise VAL-007 with the guarantees-void note") {
+        auto result = validator.validate_livelock_safety(schedule, 8, 16);
+        bool found = false;
+        for (const auto& issue : result.issues) {
+            if (issue.rule_id == "VAL-007") {
+                found = true;
+                REQUIRE(issue.message.find("smaller") != std::string::npos);
+            }
+        }
+        REQUIRE(found);
+    }
+}

@@ -232,6 +232,8 @@ public:
         result.metadata.b_tiles = config_.k_tiles() * config_.n_tiles();
         result.metadata.c_tiles = config_.m_tiles() * config_.n_tiles();
         result.metadata.strategy = strategy_name(config_.strategy);
+        result.metadata.l3_buffer_count = config_.l3_buffer_count;
+        result.metadata.l2_bank_count = config_.l2_bank_count;
 
         result.valid = true;
         return result;

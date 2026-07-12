@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **CSP timing: envelope-mismatch detection (#91, Wave 0).** Schedule
+  generators stamp their generation envelope into `ScheduleMetadata`
+  (`l3_buffer_count`/`l2_bank_count`; 0 = hand-built/legacy, not checked).
+  `ScheduleExecutor::execute` compares it against the executor's configured
+  pools and surfaces a warning in the new `ExecutionResult::warnings` -
+  with a may-wedge note when the executor pools are smaller (which voids
+  the #67/#90 constructive-safety guarantees) and a benign note when
+  larger. `validate_livelock_safety` raises the matching VAL-007 issue.
+  `run_matmul` prints execution warnings.
+
 - **CSP timing: resource envelope on all schedule generators (#90, Wave 0).**
   The conv2d/softmax/layernorm/batchnorm generators now carry the #67
   resource envelope (`l3_buffer_count`/`l2_bank_count`, `max_burst_tiles()`)

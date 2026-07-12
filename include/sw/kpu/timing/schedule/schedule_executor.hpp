@@ -15,6 +15,7 @@
 #include <optional>
 #include <stdexcept>
 #include <string>
+#include <vector>
 
 namespace sw::kpu::timing::schedule {
 
@@ -29,6 +30,7 @@ struct ExecutionResult {
     bool success = false;               ///< Whether execution completed successfully
     Cycle total_cycles = 0;             ///< Total cycles taken
     std::string error_message;          ///< Error message if failed
+    std::vector<std::string> warnings;  ///< Non-fatal issues (e.g. envelope mismatch, #91)
 
     // Per-operation statistics
     size_t ops_completed = 0;           ///< Operations successfully executed
@@ -141,6 +143,8 @@ public:
             return result;
         }
 
+        check_envelope_mismatch(schedule, result);
+
         // Reset executor state
         executor_.reset();
 
@@ -230,6 +234,46 @@ private:
     ConcurrentTimingExecutor& executor_;
     Config config_;
     ProgressCallback progress_callback_;
+
+    /**
+     * @brief Warn when the schedule's generation envelope differs from the
+     *        executor's configured credit pools (issue #91)
+     *
+     * The #67/#90 constructive-safety guarantees (burst bounds, working-set
+     * fit) were established against the generation envelope. Executing under
+     * SMALLER pools voids them - the schedule may wedge; larger pools are
+     * benign but still flagged so the mismatch is visible. Schedules with no
+     * recorded envelope (hand-built or legacy, metadata fields 0) are not
+     * checked.
+     */
+    void check_envelope_mismatch(const ScheduleResult& schedule,
+                                 ExecutionResult& result) const {
+        const auto& meta = schedule.metadata;
+        if (meta.l3_buffer_count == 0 && meta.l2_bank_count == 0) {
+            return;  // envelope not recorded
+        }
+        const auto& exec_config = executor_.config();
+        if (meta.l3_buffer_count == exec_config.l3_buffer_count &&
+            meta.l2_bank_count == exec_config.l2_bank_count) {
+            return;  // envelopes agree
+        }
+        const bool shrunk =
+            exec_config.l3_buffer_count < meta.l3_buffer_count ||
+            exec_config.l2_bank_count < meta.l2_bank_count;
+        std::string warning =
+            "schedule '" + meta.name + "' was generated against envelope L3=" +
+            std::to_string(meta.l3_buffer_count) + "/L2=" +
+            std::to_string(meta.l2_bank_count) +
+            " but the executor is configured with L3=" +
+            std::to_string(exec_config.l3_buffer_count) + "/L2=" +
+            std::to_string(exec_config.l2_bank_count);
+        warning += shrunk
+            ? " - the executor pools are SMALLER: the schedule's working-set "
+              "and burst-safety guarantees do not hold and it may wedge"
+            : " - the executor pools are larger; execution is safe but "
+              "regenerate against the actual envelope for faithful timing";
+        result.warnings.push_back(std::move(warning));
+    }
 
     /**
      * @brief Enqueue a single operation on the executor
