@@ -142,8 +142,34 @@ Cycle ConcurrentExecutor::execute(const DMProgram& program) {
     compute_fabric_.next_available_cycle = 0;
     compute_fabric_.completed_ops.clear();
 
-    // Schedule each instruction
-    for (const auto& instr : program.instructions) {
+    // Schedule each instruction, interpreting hardware loops (issue #92:
+    // per-op streaming programs are loop-based so their instruction streams
+    // stay compact; the timing model expands the loops at execution time)
+    struct LoopFrame { size_t body_start; uint16_t remaining; };
+    std::vector<LoopFrame> loop_stack;
+    auto_tile_bytes_ = 1024;
+    auto_elem_size_ = 4;
+    auto_rr_ = 0;
+    for (size_t pc = 0; pc < program.instructions.size(); ++pc) {
+        const auto& instr = program.instructions[pc];
+        if (instr.opcode == DMOpcode::LOOP_BEGIN) {
+            const auto& ops = std::get<LoopOperands>(instr.operands);
+            uint16_t count = ops.loop_count > 0 ? ops.loop_count : 1;
+            loop_stack.push_back({pc + 1, count});
+            continue;
+        }
+        if (instr.opcode == DMOpcode::LOOP_END) {
+            if (!loop_stack.empty()) {
+                auto& top = loop_stack.back();
+                if (top.remaining > 1) {
+                    --top.remaining;
+                    pc = top.body_start - 1;  // ++pc re-enters the body
+                    continue;
+                }
+                loop_stack.pop_back();
+            }
+            continue;
+        }
         schedule_instruction(instr);
     }
 
@@ -336,6 +362,74 @@ void ConcurrentExecutor::schedule_instruction(const DMInstruction& instr) {
             barrier_time = std::max(barrier_time, compute_fabric_.next_available_cycle);
             last_barrier_cycle_ = barrier_time;
             completion = barrier_time;
+            break;
+        }
+
+        // AUTO-addressed streaming ops (issue #92): scheduled with the tile
+        // geometry from SET_TILE_DIM, round-robined across resources. The
+        // address generation itself is implicit; only timing matters here.
+        case DMOpcode::DMA_LOAD_TILE_AUTO:
+        case DMOpcode::DMA_STORE_TILE_AUTO: {
+            const auto& ops = std::get<AutoDMAOperands>(instr.operands);
+            auto& dma = memory_channels_[auto_rr_ % memory_channels_.size()]
+                            .dma_engine;
+            completion = dma.schedule_op(earliest, auto_tile_bytes_,
+                                         instr.instruction_id, instr.label,
+                                         ops.matrix, TileCoord{});
+            ++auto_rr_;
+            break;
+        }
+
+        case DMOpcode::BM_MOVE_TILE_AUTO:
+        case DMOpcode::BM_WRITEBACK_AUTO: {
+            const auto& ops = std::get<AutoBlockMoverOperands>(instr.operands);
+            auto& bm = block_movers_[auto_rr_ % block_movers_.size()];
+            completion = bm.schedule_op(earliest, auto_tile_bytes_,
+                                        instr.instruction_id, instr.label,
+                                        ops.matrix, TileCoord{});
+            ++auto_rr_;
+            break;
+        }
+
+        case DMOpcode::STR_FEED_ROWS_AUTO:
+        case DMOpcode::STR_FEED_COLS_AUTO:
+        case DMOpcode::STR_DRAIN_AUTO: {
+            // AutoStreamerOperands carries no matrix; map by opcode
+            // convention (rows feed A, columns feed B, drains produce C)
+            MatrixID mat = instr.opcode == DMOpcode::STR_FEED_ROWS_AUTO
+                ? MatrixID::A
+                : instr.opcode == DMOpcode::STR_FEED_COLS_AUTO
+                    ? MatrixID::B
+                    : MatrixID::C;
+            auto& str = streamers_[auto_rr_ % streamers_.size()];
+            completion = str.schedule_op(earliest, auto_tile_bytes_,
+                                         instr.instruction_id, instr.label,
+                                         mat, TileCoord{});
+            ++auto_rr_;
+            break;
+        }
+
+        // Vector Engine ops (issue #92): timing envelope of one element per
+        // fabric lane-cycle over the current tile; functional semantics land
+        // with the pattern epics (E2/E3). compute_fabric_'s bus_width is an
+        // elements-per-cycle throughput, so pass the ELEMENT count, not bytes
+        case DMOpcode::VE_ELEMENTWISE:
+        case DMOpcode::VE_REDUCE: {
+            Size tile_elems = auto_elem_size_ > 0
+                ? auto_tile_bytes_ / auto_elem_size_ : auto_tile_bytes_;
+            completion = compute_fabric_.schedule_op(
+                earliest, tile_elems, instr.instruction_id, instr.label,
+                MatrixID::A, TileCoord{});
+            break;
+        }
+
+        case DMOpcode::SET_TILE_DIM: {
+            const auto& ops = std::get<TileDimOperands>(instr.operands);
+            Size elems = ops.Ti * (ops.Tj > 0 ? ops.Tj : 1) *
+                         (ops.Tk > 0 ? ops.Tk : 1);
+            auto_elem_size_ = ops.element_size > 0 ? ops.element_size : 4;
+            auto_tile_bytes_ = elems * auto_elem_size_;
+            completion = earliest;
             break;
         }
 

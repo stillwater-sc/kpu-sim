@@ -2684,3 +2684,82 @@ TEST_CASE("Softmax common use cases", "[kernel][softmax]") {
         REQUIRE(kernel.softmax_config().num_softmax_ops() == 1 * 1024);
     }
 }
+
+// ============================================================================
+// Op-faithful programs (issue #18 / #92): non-matmul factories must compile
+// their actual op into the DMProgram, not a matmul placeholder. The VE
+// opcodes are structural markers (functional semantics land with the
+// pattern epics E2/E3); movement, tiling, and loop-based compactness are
+// asserted here.
+// ============================================================================
+
+namespace {
+
+size_t count_opcode(const sw::kpu::Kernel& kernel, sw::kpu::isa::DMOpcode op) {
+    size_t n = 0;
+    for (const auto& instr : kernel.program().instructions) {
+        if (instr.opcode == op) ++n;
+    }
+    return n;
+}
+
+} // namespace
+
+TEST_CASE("Non-matmul kernels compile op-faithful programs", "[kernel][programs]") {
+    using sw::kpu::isa::DMOpcode;
+
+    SECTION("softmax carries its 4-pass reduce/elementwise structure") {
+        // The GPT-2-shaped case that #17 shrank the placeholder to dodge:
+        // vocab-sized softmax must be compact (loops) AND faithful
+        auto kernel = Kernel::create_softmax({64, 50257}, -1);
+        REQUIRE(kernel.op_type() == KernelOpType::SOFTMAX);
+        REQUIRE(count_opcode(kernel, DMOpcode::VE_REDUCE) >= 2);       // max, sum
+        REQUIRE(count_opcode(kernel, DMOpcode::VE_ELEMENTWISE) >= 2);  // exp, div
+        REQUIRE(count_opcode(kernel, DMOpcode::LOOP_BEGIN) >= 4);
+        // Loop-based emission keeps vocab-scale programs tiny (anti-OOM)
+        REQUIRE(kernel.program().instructions.size() < 300);
+    }
+
+    SECTION("layernorm carries mean/variance reductions and a normalize pass") {
+        auto kernel = Kernel::create_layernorm(8, 128, 768);
+        REQUIRE(count_opcode(kernel, DMOpcode::VE_REDUCE) >= 2);
+        REQUIRE(count_opcode(kernel, DMOpcode::VE_ELEMENTWISE) >= 1);
+        REQUIRE(count_opcode(kernel, DMOpcode::LOOP_BEGIN) >= 3);
+    }
+
+    SECTION("rmsnorm carries one reduction and one scale pass") {
+        auto kernel = Kernel::create_rmsnorm(8, 128, 768);
+        REQUIRE(count_opcode(kernel, DMOpcode::VE_REDUCE) >= 1);
+        REQUIRE(count_opcode(kernel, DMOpcode::VE_ELEMENTWISE) >= 1);
+    }
+
+    SECTION("batchnorm carries a param preload and an elementwise pass") {
+        auto kernel = Kernel::create_batchnorm(8, 64, 56, 56);
+        REQUIRE(count_opcode(kernel, DMOpcode::VE_ELEMENTWISE) >= 1);
+        REQUIRE(count_opcode(kernel, DMOpcode::VE_REDUCE) == 0);
+        REQUIRE(count_opcode(kernel, DMOpcode::LOOP_BEGIN) >= 2);
+    }
+
+    SECTION("elementwise binary streams two inputs, compact at large shapes") {
+        auto kernel = Kernel::create_elementwise(
+            ElementwiseOp::ADD, {1024, 1024});
+        REQUIRE(count_opcode(kernel, DMOpcode::VE_ELEMENTWISE) >= 1);
+        REQUIRE(count_opcode(kernel, DMOpcode::VE_REDUCE) == 0);
+        REQUIRE(kernel.program().instructions.size() < 100);
+    }
+
+    SECTION("pool2d carries a windowed reduction") {
+        auto kernel = Kernel::create_max_pool2d(1, 64, 56, 56, 2, 2);
+        REQUIRE(count_opcode(kernel, DMOpcode::VE_REDUCE) >= 1);
+        REQUIRE(count_opcode(kernel, DMOpcode::VE_ELEMENTWISE) == 0);
+    }
+
+    SECTION("conv2d is intentionally an im2col GEMM with fused epilogue") {
+        auto kernel = Kernel::create_conv2d(1, 3, 64, 224, 224, 3, 3);
+        const auto& program = kernel.program();
+        // im2col GEMM dimensions, not a 1x1x1 placeholder
+        REQUIRE(program.K == 3 * 3 * 3);   // C_in * Kh * Kw
+        REQUIRE(program.N == 64);          // C_out
+        REQUIRE(program.M > 1);            // batch * H_out * W_out
+    }
+}
