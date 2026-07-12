@@ -358,6 +358,33 @@ public:
                        const CompileOptions& options = CompileOptions::defaults());
 
     // =========================================
+    // Per-op streaming compilers (issue #18/#92)
+    // =========================================
+    //
+    // Each produces an op-faithful DMProgram: loop-based streaming of the
+    // real tile traffic (DMA_LOAD -> BM_MOVE -> STR_FEED per input tile,
+    // STR_DRAIN -> BM_WRITEBACK -> DMA_STORE per output tile) with
+    // VE_ELEMENTWISE / VE_REDUCE instructions marking the per-pass compute.
+    // These replace the matmul-piggyback placeholders that made a "softmax
+    // kernel" execute a matmul. The VE opcodes are structural markers today
+    // (operand encoding and functional semantics land with the
+    // broadcast/elementwise and online-reduction pattern epics, E2/E3);
+    // the movement, tiling, memory traffic, and FLOP accounting are real.
+
+    Kernel compile_softmax(const SoftmaxConfig& config,
+                           const CompileOptions& options = CompileOptions::defaults());
+    Kernel compile_layernorm(const LayerNormConfig& config,
+                             const CompileOptions& options = CompileOptions::defaults());
+    Kernel compile_rmsnorm(const RMSNormConfig& config,
+                           const CompileOptions& options = CompileOptions::defaults());
+    Kernel compile_batchnorm(const BatchNormConfig& config,
+                             const CompileOptions& options = CompileOptions::defaults());
+    Kernel compile_elementwise(const ElementwiseConfig& config,
+                               const CompileOptions& options = CompileOptions::defaults());
+    Kernel compile_pool2d(const Pool2DConfig& config,
+                          const CompileOptions& options = CompileOptions::defaults());
+
+    // =========================================
     // Tile Optimization
     // =========================================
 
@@ -444,6 +471,46 @@ private:
     void count_operations(const isa::DMProgram& program,
                           Size elem_size,
                           const TileOptimizer::TileConfig& tiles);
+
+    // =========================================
+    // Streaming-op emission helpers (issue #18/#92)
+    // =========================================
+
+    /**
+     * @brief One pass of a streaming operator
+     *
+     * A pass streams input_tiles through the pipeline, applies the marked
+     * VE compute per tile, and (when output_tiles > 0) drains/stores that
+     * many result tiles. ve_opcode NOP means pure data movement (e.g. a
+     * parameter preload pass).
+     */
+    struct StreamingPass {
+        std::string label;            ///< Human-readable pass description
+        isa::DMOpcode ve_opcode;      ///< VE_ELEMENTWISE, VE_REDUCE, or NOP
+        Size input_tiles = 0;         ///< Tiles streamed in
+        Size output_tiles = 0;        ///< Result tiles drained/stored
+    };
+
+    /**
+     * @brief Emit a loop-based streaming program from a pass list
+     *
+     * Uses hardware loops (LOOP_BEGIN/END) rather than unrolled per-tile
+     * emission so the instruction stream stays compact regardless of
+     * tensor size (large-shape kernels previously OOMed unrolled builds).
+     */
+    isa::DMProgram emit_streaming_program(
+        const std::string& name,
+        const std::vector<StreamingPass>& passes,
+        Size tile_elems, Size elem_size,
+        uint64_t total_flops, uint64_t external_bytes);
+
+    /**
+     * @brief Append body inside exact hardware loops of total `count`
+     *        iterations (decomposed into <=65535-count loops)
+     */
+    static void append_tile_loop(isa::DMProgram& program, uint8_t loop_id,
+                                 Size count,
+                                 const std::vector<isa::DMInstruction>& body);
 };
 
 } // namespace sw::kpu::compiler

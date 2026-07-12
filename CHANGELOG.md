@@ -7,7 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Added
+### Fixed
+
+- **Non-matmul Kernel factories now compile their actual op (#92, fixes
+  the structural half of #18).** `KernelCompiler` gains per-op streaming
+  compilers (`compile_softmax/layernorm/rmsnorm/batchnorm/elementwise/
+  pool2d`) emitting loop-based DMPrograms with real tile traffic and
+  VE_REDUCE/VE_ELEMENTWISE pass markers - a "softmax kernel" no longer
+  executes a matmul. Loop-based emission keeps vocab-scale programs
+  compact (the unrolled approach behind the #17 Windows OOM is gone for
+  good). conv2d is documented as an intentional im2col+GEMM lowering with
+  fused epilogue. `ConcurrentExecutor` learns to interpret hardware loops
+  (LOOP_BEGIN/END), AUTO-addressed ops (via SET_TILE_DIM geometry), and VE
+  ops for timing - which also un-breaks the bandwidth benchmarks for
+  streaming ops. Numerical validation of the VE semantics lands with the
+  pattern epics (E2/E3); tracked in #18, which stays open for that half.
 
 - **CSP timing: envelope-mismatch detection (#91, Wave 0).** Schedule
   generators stamp their generation envelope into `ScheduleMetadata`

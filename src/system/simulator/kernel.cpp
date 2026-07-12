@@ -79,11 +79,14 @@ Kernel Kernel::create_conv2d(const Conv2DConfig& config,
                              bool has_bias,
                              ActivationType activation,
                              DataType dtype) {
-    // Conv2D uses im2col + GEMM approach
-    // GEMM dimensions: [M, K] @ [K, N] -> [M, N]
-    // where M = batch * H_out * W_out
-    //       K = C_in * kernel_h * kernel_w
-    //       N = C_out
+    // Conv2D is INTENTIONALLY lowered as im2col + GEMM (not a placeholder;
+    // clarifies the question raised in issue #18):
+    //   GEMM dimensions: [M, K] @ [K, N] -> [M, N]
+    //   where M = batch * H_out * W_out
+    //         K = C_in * kernel_h * kernel_w
+    //         N = C_out
+    // with bias + activation fused on the drain path via compile_mlp.
+    // A direct sliding-window lowering is the conv2d pattern epic's scope.
 
     compiler::KernelCompiler compiler;
 
@@ -228,15 +231,11 @@ Kernel Kernel::create_layernorm(const LayerNormConfig& config, DataType dtype) {
     Size S = config.seq_len;
     Size D = config.normalized_dim;
 
-    // LayerNorm is not a matmul, but we create a placeholder program
-    // using a simple matmul structure for resource estimation
-    // In practice, layernorm would use the Vector Engine for reductions
+    // Faithful 3-pass streaming program (mean, variance, normalize+affine)
+    // built on VE_REDUCE / VE_ELEMENTWISE - see KernelCompiler::compile_layernorm
     compiler::CompileOptions opts = compiler::CompileOptions::defaults();
     opts.dtype = dtype;
-
-    // Use a 1xD matmul as placeholder for the reduction operations
-    // This gives reasonable resource estimates for the D-dimension operations
-    Kernel kernel = compiler.compile_matmul(1, D, D, opts);
+    Kernel kernel = compiler.compile_layernorm(config, opts);
 
     // Override operation type to LAYERNORM
     kernel.op_type_ = KernelOpType::LAYERNORM;
@@ -279,13 +278,11 @@ Kernel Kernel::create_rmsnorm(const RMSNormConfig& config, DataType dtype) {
     Size S = config.seq_len;
     Size D = config.normalized_dim;
 
-    // RMSNorm is not a matmul, but we create a placeholder program
-    // using a simple matmul structure for resource estimation
+    // Faithful 2-pass streaming program (mean-of-squares, scale) built on
+    // VE_REDUCE / VE_ELEMENTWISE - see KernelCompiler::compile_rmsnorm
     compiler::CompileOptions opts = compiler::CompileOptions::defaults();
     opts.dtype = dtype;
-
-    // Use a 1xD matmul as placeholder for the reduction operations
-    Kernel kernel = compiler.compile_matmul(1, D, D, opts);
+    Kernel kernel = compiler.compile_rmsnorm(config, opts);
 
     // Override operation type to RMSNORM
     kernel.op_type_ = KernelOpType::RMSNORM;
@@ -321,11 +318,11 @@ Kernel Kernel::create_batchnorm(const BatchNormConfig& config, DataType dtype) {
     Size H = config.height;
     Size W = config.width;
 
-    // BatchNorm is elementwise, but we compile a small matmul as placeholder
-    // for instruction generation (actual compute is per-element)
+    // Faithful streaming program (per-channel param preload + elementwise
+    // normalize pass) - see KernelCompiler::compile_batchnorm
     compiler::CompileOptions opts = compiler::CompileOptions::defaults();
     opts.dtype = dtype;
-    Kernel kernel = compiler.compile_matmul(1, C, C, opts);
+    Kernel kernel = compiler.compile_batchnorm(config, opts);
 
     // Override operation type and config
     kernel.op_type_ = KernelOpType::BATCHNORM;
@@ -360,18 +357,14 @@ Kernel Kernel::create_batchnorm(Size batch_size, Size num_features,
 Kernel Kernel::create_elementwise(const ElementwiseConfig& config, DataType dtype) {
     compiler::KernelCompiler compiler;
 
-    // Use a 1x1x1 matmul as the placeholder kernel framework — op_type
-    // and elementwise_config_ are overridden immediately below, so the
-    // placeholder's dimensions don't matter and any per-tile bookkeeping
-    // proportional to N would just be wasted (and large for big shapes:
-    // a vocab head softmax with N ~ 50k blows hundreds of MB on Windows
-    // MSVC). See kernel_test "Language model output" SECTION.
+    // Faithful streaming program (loop-based, so the instruction stream
+    // stays compact even for vocab-sized shapes - the old unrolled
+    // approach OOMed on Windows MSVC) - see
+    // KernelCompiler::compile_elementwise
     compiler::CompileOptions opts = compiler::CompileOptions::defaults();
     opts.dtype = dtype;
-    Kernel kernel = compiler.compile_matmul(1, 1, 1, opts);
+    Kernel kernel = compiler.compile_elementwise(config, opts);
 
-    // Override operation type and config
-    kernel.op_type_ = KernelOpType::ELEMENTWISE;
     kernel.elementwise_config_ = config;
     kernel.dtype_ = dtype;
 
@@ -434,13 +427,12 @@ Kernel Kernel::create_elementwise_scalar(ElementwiseOp op,
 Kernel Kernel::create_pool2d(const Pool2DConfig& config, DataType dtype) {
     compiler::KernelCompiler compiler;
 
-    // 1x1x1 placeholder matmul — see comment in create_elementwise.
+    // Faithful streaming program (windowed VE_REDUCE) - see
+    // KernelCompiler::compile_pool2d
     compiler::CompileOptions opts = compiler::CompileOptions::defaults();
     opts.dtype = dtype;
-    Kernel kernel = compiler.compile_matmul(1, 1, 1, opts);
+    Kernel kernel = compiler.compile_pool2d(config, opts);
 
-    // Override operation type and config
-    kernel.op_type_ = KernelOpType::POOL2D;
     kernel.pool2d_config_ = config;
     kernel.dtype_ = dtype;
 
@@ -528,13 +520,13 @@ Kernel Kernel::create_global_avg_pool2d(Size batch_size, Size channels,
 Kernel Kernel::create_softmax(const SoftmaxConfig& config, DataType dtype) {
     compiler::KernelCompiler compiler;
 
-    // 1x1x1 placeholder matmul — see comment in create_elementwise.
+    // Faithful 4-pass streaming program (max, exp, sum, normalize) built
+    // on VE_REDUCE / VE_ELEMENTWISE, loop-based so vocab-sized shapes stay
+    // compact - see KernelCompiler::compile_softmax
     compiler::CompileOptions opts = compiler::CompileOptions::defaults();
     opts.dtype = dtype;
-    Kernel kernel = compiler.compile_matmul(1, 1, 1, opts);
+    Kernel kernel = compiler.compile_softmax(config, opts);
 
-    // Override operation type and config
-    kernel.op_type_ = KernelOpType::SOFTMAX;
     kernel.softmax_config_ = config;
     kernel.dtype_ = dtype;
 

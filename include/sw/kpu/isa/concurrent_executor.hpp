@@ -322,6 +322,13 @@ private:
     // Barrier tracking
     Cycle last_barrier_cycle_;
 
+    // AUTO-addressing interpreter state (issue #92): tile geometry from
+    // SET_TILE_DIM and a round-robin counter for resource assignment of
+    // AUTO-addressed ops
+    Size auto_tile_bytes_ = 1024;
+    Size auto_elem_size_ = 4;
+    uint32_t auto_rr_ = 0;
+
     // Tile layout policy
     std::unique_ptr<TileLayout> tile_layout_;
 

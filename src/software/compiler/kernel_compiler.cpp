@@ -551,4 +551,234 @@ void KernelCompiler::count_operations(const isa::DMProgram& program,
     last_stats_.compute_ops = 0;  // Compute is implicit in streaming
 }
 
+// ============================================================================
+// Per-op streaming compilers (issue #18/#92)
+// ============================================================================
+
+namespace {
+
+isa::DMInstruction ve_marker(isa::DMOpcode opcode, std::string label) {
+    isa::DMInstruction instr;
+    instr.opcode = opcode;
+    instr.operands = std::monostate{};
+    instr.label = std::move(label);
+    return instr;
+}
+
+Size ceil_div_sz(Size a, Size b) { return (a + b - 1) / b; }
+
+} // namespace
+
+void KernelCompiler::append_tile_loop(isa::DMProgram& program, uint8_t loop_id,
+                                      Size count,
+                                      const std::vector<isa::DMInstruction>& body) {
+    constexpr Size kMaxLoopCount = 65535;  // LOOP_BEGIN count is uint16_t
+    while (count > 0) {
+        Size chunk = count < kMaxLoopCount ? count : kMaxLoopCount;
+        program.instructions.push_back(isa::DMInstruction::loop_begin(
+            loop_id, static_cast<uint16_t>(chunk)));
+        for (const auto& instr : body) {
+            program.instructions.push_back(instr);
+        }
+        program.instructions.push_back(isa::DMInstruction::loop_end(loop_id));
+        count -= chunk;
+    }
+}
+
+isa::DMProgram KernelCompiler::emit_streaming_program(
+    const std::string& name,
+    const std::vector<StreamingPass>& passes,
+    Size tile_elems, Size elem_size,
+    uint64_t total_flops, uint64_t external_bytes) {
+
+    isa::DMProgram program;
+    program.name = name;
+    program.Ti = tile_elems;   // Streaming ops are 1-D tiled: Ti elements/tile
+    program.Tj = 1;
+    program.Tk = 1;
+
+    // Configuration prologue: tile geometry and base addresses (actual
+    // addresses are bound at load time via the memory map)
+    program.instructions.push_back(
+        isa::DMInstruction::set_tile_dim(tile_elems, 1, 1, elem_size));
+    program.instructions.push_back(
+        isa::DMInstruction::set_base(isa::MatrixID::A, 0));
+    program.instructions.push_back(
+        isa::DMInstruction::set_base(isa::MatrixID::C, 0));
+
+    uint8_t loop_id = 0;
+    for (const auto& pass : passes) {
+        if (pass.input_tiles > 0) {
+            std::vector<isa::DMInstruction> body = {
+                isa::DMInstruction::dma_load_auto(isa::MatrixID::A, 0),
+                isa::DMInstruction::bm_move_auto(isa::MatrixID::A, 0),
+                isa::DMInstruction::str_feed_rows_auto(0),
+            };
+            if (pass.ve_opcode != isa::DMOpcode::NOP) {
+                body.push_back(ve_marker(pass.ve_opcode, pass.label));
+            }
+            append_tile_loop(program, loop_id, pass.input_tiles, body);
+            loop_id = static_cast<uint8_t>(loop_id + 1);
+        }
+        if (pass.output_tiles > 0) {
+            std::vector<isa::DMInstruction> body = {
+                isa::DMInstruction::str_drain_auto(0),
+                isa::DMInstruction::bm_writeback_auto(isa::MatrixID::C, 0),
+                isa::DMInstruction::dma_store_auto(isa::MatrixID::C, 0),
+            };
+            append_tile_loop(program, loop_id, pass.output_tiles, body);
+            loop_id = static_cast<uint8_t>(loop_id + 1);
+        }
+        program.instructions.push_back(isa::DMInstruction::barrier());
+    }
+    program.instructions.push_back(isa::DMInstruction::halt());
+
+    program.estimates.external_mem_bytes = external_bytes;
+    program.estimates.l3_bytes = external_bytes;
+    program.estimates.arithmetic_intensity = external_bytes > 0
+        ? static_cast<double>(total_flops) / static_cast<double>(external_bytes)
+        : 0.0;
+
+    last_stats_ = CompilationStats{};
+    last_stats_.instruction_count = program.instructions.size();
+    last_succeeded_ = true;
+    last_error_.clear();
+    return program;
+}
+
+Kernel KernelCompiler::compile_softmax(const SoftmaxConfig& config,
+                                       const CompileOptions& options) {
+    const Size tile_elems = 256;
+    const Size elem_size = dtype_size(options.dtype);
+    Size data_tiles = ceil_div_sz(config.total_elements(), tile_elems);
+    Size stat_tiles = ceil_div_sz(config.num_softmax_ops(), tile_elems);
+
+    // Numerically stable multi-pass softmax (the online single-pass form
+    // is the E8 pattern epic)
+    std::vector<StreamingPass> passes = {
+        {"softmax P1: running row max (VE_REDUCE MAX)",
+         isa::DMOpcode::VE_REDUCE, data_tiles, stat_tiles},
+        {"softmax P2: exp(x - max) (VE_ELEMENTWISE SUB,EXP)",
+         isa::DMOpcode::VE_ELEMENTWISE, data_tiles, data_tiles},
+        {"softmax P3: row sum of exp (VE_REDUCE SUM)",
+         isa::DMOpcode::VE_REDUCE, data_tiles, stat_tiles},
+        {"softmax P4: normalize by sum (VE_ELEMENTWISE DIV)",
+         isa::DMOpcode::VE_ELEMENTWISE, data_tiles, data_tiles},
+    };
+
+    uint64_t bytes = static_cast<uint64_t>(config.total_elements()) * elem_size;
+    auto program = emit_streaming_program("softmax", passes, tile_elems,
+                                          elem_size, config.total_flops(),
+                                          4 * bytes);
+    return Kernel(std::move(program), KernelOpType::SOFTMAX, options.dtype);
+}
+
+Kernel KernelCompiler::compile_layernorm(const LayerNormConfig& config,
+                                         const CompileOptions& options) {
+    const Size tile_elems = 256;
+    const Size elem_size = dtype_size(options.dtype);
+    Size data_tiles = ceil_div_sz(config.total_elements(), tile_elems);
+    Size group_tiles = ceil_div_sz(config.num_groups(), tile_elems);
+
+    std::vector<StreamingPass> passes = {
+        {"layernorm P1: per-group mean (VE_REDUCE SUM)",
+         isa::DMOpcode::VE_REDUCE, data_tiles, group_tiles},
+        {"layernorm P2: per-group variance (VE_ELEMENTWISE SUB,SQ + VE_REDUCE SUM)",
+         isa::DMOpcode::VE_REDUCE, data_tiles, group_tiles},
+        {"layernorm P3: normalize + affine (VE_ELEMENTWISE)",
+         isa::DMOpcode::VE_ELEMENTWISE, data_tiles, data_tiles},
+    };
+
+    uint64_t bytes = static_cast<uint64_t>(config.total_elements()) * elem_size;
+    auto program = emit_streaming_program("layernorm", passes, tile_elems,
+                                          elem_size, config.total_flops(),
+                                          3 * bytes);
+    return Kernel(std::move(program), KernelOpType::LAYERNORM, options.dtype);
+}
+
+Kernel KernelCompiler::compile_rmsnorm(const RMSNormConfig& config,
+                                       const CompileOptions& options) {
+    const Size tile_elems = 256;
+    const Size elem_size = dtype_size(options.dtype);
+    Size data_tiles = ceil_div_sz(config.total_elements(), tile_elems);
+    Size group_tiles = ceil_div_sz(config.num_groups(), tile_elems);
+
+    // RMSNorm skips mean centering: one reduction pass, one scale pass
+    std::vector<StreamingPass> passes = {
+        {"rmsnorm P1: per-group mean of squares (VE_REDUCE SUMSQ)",
+         isa::DMOpcode::VE_REDUCE, data_tiles, group_tiles},
+        {"rmsnorm P2: x * rsqrt(ms + eps) * gamma (VE_ELEMENTWISE)",
+         isa::DMOpcode::VE_ELEMENTWISE, data_tiles, data_tiles},
+    };
+
+    uint64_t bytes = static_cast<uint64_t>(config.total_elements()) * elem_size;
+    auto program = emit_streaming_program("rmsnorm", passes, tile_elems,
+                                          elem_size, config.total_flops(),
+                                          2 * bytes);
+    return Kernel(std::move(program), KernelOpType::RMSNORM, options.dtype);
+}
+
+Kernel KernelCompiler::compile_batchnorm(const BatchNormConfig& config,
+                                         const CompileOptions& options) {
+    const Size tile_elems = 256;
+    const Size elem_size = dtype_size(options.dtype);
+    Size data_tiles = ceil_div_sz(config.total_elements(), tile_elems);
+    // Per-channel parameters: running mean/var (+ gamma/beta when affine)
+    Size params_per_channel = config.affine ? 4 : 2;
+    Size param_tiles =
+        ceil_div_sz(params_per_channel * config.num_features, tile_elems);
+
+    std::vector<StreamingPass> passes = {
+        {"batchnorm P0: preload per-channel params (no VE)",
+         isa::DMOpcode::NOP, param_tiles, 0},
+        {"batchnorm P1: (x - mean) * rsqrt(var + eps) * gamma + beta (VE_ELEMENTWISE)",
+         isa::DMOpcode::VE_ELEMENTWISE, data_tiles, data_tiles},
+    };
+
+    uint64_t bytes = static_cast<uint64_t>(config.total_elements()) * elem_size;
+    auto program = emit_streaming_program("batchnorm", passes, tile_elems,
+                                          elem_size, config.total_flops(),
+                                          2 * bytes);
+    return Kernel(std::move(program), KernelOpType::BATCHNORM, options.dtype);
+}
+
+Kernel KernelCompiler::compile_elementwise(const ElementwiseConfig& config,
+                                           const CompileOptions& options) {
+    const Size tile_elems = 256;
+    const Size elem_size = dtype_size(options.dtype);
+    Size data_tiles = ceil_div_sz(config.total_elements(), tile_elems);
+    Size input_streams = (config.is_unary || config.is_scalar_b) ? 1 : 2;
+
+    std::vector<StreamingPass> passes = {
+        {"elementwise: apply op per tile (VE_ELEMENTWISE)",
+         isa::DMOpcode::VE_ELEMENTWISE, input_streams * data_tiles, data_tiles},
+    };
+
+    uint64_t bytes = static_cast<uint64_t>(config.total_elements()) * elem_size;
+    auto program = emit_streaming_program("elementwise", passes, tile_elems,
+                                          elem_size, config.total_elements(),
+                                          (input_streams + 1) * bytes);
+    return Kernel(std::move(program), KernelOpType::ELEMENTWISE, options.dtype);
+}
+
+Kernel KernelCompiler::compile_pool2d(const Pool2DConfig& config,
+                                      const CompileOptions& options) {
+    const Size tile_elems = 256;
+    const Size elem_size = dtype_size(options.dtype);
+    Size in_tiles = ceil_div_sz(config.input_elements(), tile_elems);
+    Size out_tiles = ceil_div_sz(config.output_elements(), tile_elems);
+
+    std::vector<StreamingPass> passes = {
+        {"pool2d: windowed reduction (VE_REDUCE MAX/AVG)",
+         isa::DMOpcode::VE_REDUCE, in_tiles, out_tiles},
+    };
+
+    uint64_t in_bytes = static_cast<uint64_t>(config.input_elements()) * elem_size;
+    uint64_t out_bytes = static_cast<uint64_t>(config.output_elements()) * elem_size;
+    auto program = emit_streaming_program("pool2d", passes, tile_elems,
+                                          elem_size, config.total_flops(),
+                                          in_bytes + out_bytes);
+    return Kernel(std::move(program), KernelOpType::POOL2D, options.dtype);
+}
+
 } // namespace sw::kpu::compiler
