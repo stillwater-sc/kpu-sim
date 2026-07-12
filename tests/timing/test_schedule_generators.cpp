@@ -566,7 +566,7 @@ TEST_CASE("LayerNormScheduleGenerator enforces resident affine params against th
     config.Tj = 16;
 
     SECTION("affine params exceed the default envelope share") {
-        config.affine = true;   // 2*48 + 2 = 98 > share 8
+        config.affine = true;   // 2*48 + 3 = 99 > share 8
         LayerNormScheduleGenerator gen(config);
         auto schedule = gen.generate();
         REQUIRE_FALSE(schedule.valid);
@@ -590,11 +590,32 @@ TEST_CASE("LayerNormScheduleGenerator enforces resident affine params against th
 
 TEST_CASE("BatchNorm and Conv2D carry the envelope and refuse degenerate shares",
           "[timing][schedule][envelope]") {
-    SECTION("batchnorm fits the default envelope in both modes") {
+    SECTION("batchnorm training fits the default envelope") {
         BatchNormScheduleGenerator::Config config;
         config.N = 4; config.C = 8; config.H = 16; config.W = 16;
         config.training = true;
         REQUIRE(config.required_working_set() == 5);
+        BatchNormScheduleGenerator gen(config);
+        REQUIRE(gen.generate().valid);
+    }
+
+    SECTION("batchnorm inference all-channel preload is refused at default envelope") {
+        BatchNormScheduleGenerator::Config config;
+        config.N = 4; config.C = 8; config.H = 16; config.W = 16;
+        config.training = false;   // preloads 4*C params: 33 > share 8
+        REQUIRE(config.required_working_set() == 33);
+        BatchNormScheduleGenerator gen(config);
+        auto schedule = gen.generate();
+        REQUIRE_FALSE(schedule.valid);
+        REQUIRE(schedule.error_message.find("working set") != std::string::npos);
+    }
+
+    SECTION("batchnorm inference generates under an adequate envelope") {
+        BatchNormScheduleGenerator::Config config;
+        config.N = 4; config.C = 8; config.H = 16; config.W = 16;
+        config.training = false;
+        config.l3_buffer_count = 256;
+        config.l2_bank_count = 256;   // share 64 >= 33
         BatchNormScheduleGenerator gen(config);
         REQUIRE(gen.generate().valid);
     }

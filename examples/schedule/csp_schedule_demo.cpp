@@ -212,8 +212,9 @@ void demo_layernorm() {
     config.hidden_size = 768;
     config.Ti = 16; config.Tj = 16;
     config.affine = true;
-    // Affine gamma/beta tiles stay resident across every instance:
-    // working set = 2 * hidden_tiles + 2 = 98 tiles (issue #90)
+    // Affine gamma/beta tiles stay resident across every instance, plus
+    // scratch and the streaming input:
+    // working set = 2 * hidden_tiles + 3 = 99 tiles (issue #90)
     config.l3_buffer_count = 512;
     config.l2_bank_count = 512;
 
@@ -247,11 +248,17 @@ void demo_batchnorm() {
         config.H = 56; config.W = 56;
         config.Ti = 16;
         config.training = false;
+        // Inference preloads gamma/beta/mean/var for all 64 channels:
+        // working set = 4*C + 1 = 257 tiles (issue #90)
+        config.l3_buffer_count = 1088;
+        config.l2_bank_count = 1088;
 
         BatchNormScheduleGenerator gen(config);
         auto schedule = gen.generate();
 
         std::cout << "\n  ResNet BatchNorm (inference): [32 x 64 x 56 x 56]" << std::endl;
+        std::cout << "    Working set: " << config.required_working_set()
+                  << " tiles vs envelope share " << config.max_burst_tiles() << std::endl;
         std::cout << "    Uses pre-computed running_mean and running_var" << std::endl;
         std::cout << "    Single-pass: (x - mean) * rsqrt(var + eps) * gamma + beta" << std::endl;
         std::cout << "    Total operations: " << schedule.size() << std::endl;

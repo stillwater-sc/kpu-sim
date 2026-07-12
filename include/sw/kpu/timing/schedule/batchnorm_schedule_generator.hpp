@@ -120,12 +120,14 @@ public:
         /**
          * @brief Peak tile residency this schedule implies
          *
-         * BatchNorm processes channels sequentially: per channel, the
-         * gamma/beta parameter pair plus (in training mode) the mean/var
-         * scratch pair are live alongside the streaming input.
+         * Inference preloads gamma/beta/mean/var for EVERY channel up front
+         * and keeps them resident across all samples: 4*C tiles plus the
+         * streaming input. Training processes channels sequentially: per
+         * channel, the gamma/beta pair plus the mean/var scratch pair are
+         * live alongside the streaming input.
          */
         [[nodiscard]] Size required_working_set() const {
-            return training ? 5 : 3;
+            return training ? 5 : 4 * C + 1;
         }
     };
 

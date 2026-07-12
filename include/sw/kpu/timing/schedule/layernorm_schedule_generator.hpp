@@ -91,14 +91,15 @@ public:
          *
          * With affine parameters, gamma and beta tiles (2 x hidden_tiles)
          * are loaded once up front and stay resident across every instance,
-         * plus the mean/variance scratch pair. Without affine, only the
-         * scratch pair and the streaming input are live. A schedule whose
+         * plus the mean/variance scratch pair and the streaming input tile.
+         * Without affine, only the scratch pair and the streaming input
+         * are live. A schedule whose
          * working set exceeds the envelope share would wedge at runtime,
          * so generate() refuses it a priori (parameter re-streaming or
          * blocking is epic E9 scope, issue #78).
          */
         [[nodiscard]] Size required_working_set() const {
-            return affine ? 2 * hidden_tiles() + 2 : 3;
+            return affine ? 2 * hidden_tiles() + 3 : 3;
         }
 
         /**
