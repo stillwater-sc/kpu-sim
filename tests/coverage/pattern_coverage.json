@@ -1,0 +1,371 @@
+{
+  "description": "Machine-checkable CSP data-movement pattern coverage matrix (issue #93). Pattern epics update operator rows as capabilities land; test_pattern_coverage enforces schema consistency and milestone gates; the model-validation epic (E18, #87) asserts the full matrix. Plan: docs/plans/csp_pattern_coverage_roadmap.md.",
+  "pattern_classes": {
+    "P1": "dense GEMM streaming",
+    "P2": "sliding-window reuse (halo)",
+    "P3": "row-streaming/online reduction",
+    "P4": "gather/scatter (indirect)",
+    "P5": "broadcast",
+    "P6": "two-operand aligned streaming",
+    "P7": "layout transform in flight",
+    "P8": "chained-GEMM fusion (on-chip intermediates)",
+    "P9": "append/growing extent"
+  },
+  "stages": ["design", "isa_closure", "generator", "functional", "regression"],
+  "statuses": ["done", "partial", "missing"],
+  "operators": [
+    {
+      "name": "matmul",
+      "patterns": ["P1"],
+      "epic": 74,
+      "models": ["cv", "llm", "jepa"],
+      "stages": {
+        "design": "done",
+        "isa_closure": "done",
+        "generator": "done",
+        "functional": "done",
+        "regression": "done"
+      },
+      "notes": "Square matmul baseline: envelope-aware generators (#67/#68), value-producing CSP execution (#66), strategy x size x envelope regression (#64), partitioned credits (#89)."
+    },
+    {
+      "name": "gemm_family",
+      "patterns": ["P1"],
+      "epic": 74,
+      "models": ["cv", "llm", "jepa"],
+      "stages": {
+        "design": "partial",
+        "isa_closure": "done",
+        "generator": "missing",
+        "functional": "missing",
+        "regression": "missing"
+      },
+      "notes": "Batched GEMM, strongly rectangular aspect ratios, envelope-aware weight/input-stationary strategies."
+    },
+    {
+      "name": "conv2d",
+      "patterns": ["P1", "P2", "P7"],
+      "epic": 75,
+      "models": ["cv"],
+      "stages": {
+        "design": "partial",
+        "isa_closure": "partial",
+        "generator": "partial",
+        "functional": "missing",
+        "regression": "missing"
+      },
+      "notes": "im2col+GEMM lowering exists (kernel factory, intentional per #18/#142); CSP schedule generator emits DRAIN without COMPUTE (#139); direct sliding-window/halo path missing."
+    },
+    {
+      "name": "pooling",
+      "patterns": ["P2", "P3"],
+      "epic": 76,
+      "models": ["cv"],
+      "stages": {
+        "design": "missing",
+        "isa_closure": "partial",
+        "generator": "partial",
+        "functional": "missing",
+        "regression": "missing"
+      },
+      "notes": "Kernel-level streaming program with VE_REDUCE markers (#142); VE semantics and CSP schedule missing."
+    },
+    {
+      "name": "softmax",
+      "patterns": ["P3"],
+      "epic": 77,
+      "models": ["cv", "llm", "jepa"],
+      "stages": {
+        "design": "partial",
+        "isa_closure": "partial",
+        "generator": "partial",
+        "functional": "missing",
+        "regression": "missing"
+      },
+      "notes": "Multi-pass form only (envelope-checked, #90); online single-pass is the epic's core; schedule generator affected by #139; kernel program op-faithful (#142)."
+    },
+    {
+      "name": "layernorm",
+      "patterns": ["P3", "P5"],
+      "epic": 78,
+      "models": ["cv", "llm", "jepa"],
+      "stages": {
+        "design": "partial",
+        "isa_closure": "partial",
+        "generator": "partial",
+        "functional": "missing",
+        "regression": "missing"
+      },
+      "notes": "Multi-pass generator (envelope-checked, #90; #139 applies); kernel program op-faithful (#142)."
+    },
+    {
+      "name": "rmsnorm",
+      "patterns": ["P3", "P5"],
+      "epic": 78,
+      "models": ["llm"],
+      "stages": {
+        "design": "partial",
+        "isa_closure": "partial",
+        "generator": "partial",
+        "functional": "missing",
+        "regression": "missing"
+      },
+      "notes": "Kernel-level 2-pass streaming program (#142); no CSP schedule generator yet."
+    },
+    {
+      "name": "batchnorm",
+      "patterns": ["P3", "P5"],
+      "epic": 78,
+      "models": ["cv"],
+      "stages": {
+        "design": "partial",
+        "isa_closure": "partial",
+        "generator": "partial",
+        "functional": "missing",
+        "regression": "missing"
+      },
+      "notes": "Multi-pass generator (envelope-checked incl. all-channel preload residency, #90/#140; #139 applies); inference fold is the epic's target."
+    },
+    {
+      "name": "elementwise",
+      "patterns": ["P5", "P6"],
+      "epic": 71,
+      "models": ["cv", "llm", "jepa"],
+      "stages": {
+        "design": "missing",
+        "isa_closure": "partial",
+        "generator": "partial",
+        "functional": "missing",
+        "regression": "missing"
+      },
+      "notes": "VE_ELEMENTWISE opcode is a structural marker (no functional semantics); kernel program op-faithful (#142); two-operand aligned streaming pattern is the epic's core."
+    },
+    {
+      "name": "epilogue_fused",
+      "patterns": ["P1", "P5", "P6"],
+      "epic": 79,
+      "models": ["cv", "llm", "jepa"],
+      "stages": {
+        "design": "partial",
+        "isa_closure": "done",
+        "generator": "partial",
+        "functional": "done",
+        "regression": "partial"
+      },
+      "notes": "matmul+bias+activation: fused drain in the ISA, MatMulComputeSpec computes it functionally (#66), validated numerically in milestone M1 (#137); conv+BN+relu fusion and tiled epilogue generators are the epic's remainder."
+    },
+    {
+      "name": "ffn_fused",
+      "patterns": ["P8", "P6"],
+      "epic": 80,
+      "models": ["llm", "jepa"],
+      "stages": {
+        "design": "missing",
+        "isa_closure": "partial",
+        "generator": "missing",
+        "functional": "partial",
+        "regression": "missing"
+      },
+      "notes": "Multi-layer MLP chains execute functionally with resident intermediates (FunctionalMLPExecutor, #66); SwiGLU gating and the fused-block schedule are missing."
+    },
+    {
+      "name": "gather_scatter",
+      "patterns": ["P4"],
+      "epic": 70,
+      "models": ["llm", "jepa"],
+      "stages": {
+        "design": "missing",
+        "isa_closure": "partial",
+        "generator": "missing",
+        "functional": "missing",
+        "regression": "missing"
+      },
+      "notes": "DMA_LOAD_GATHER/STORE_SCATTER opcodes exist as annotation-only no-ops."
+    },
+    {
+      "name": "broadcast",
+      "patterns": ["P5"],
+      "epic": 71,
+      "models": ["cv", "llm", "jepa"],
+      "stages": {
+        "design": "missing",
+        "isa_closure": "partial",
+        "generator": "missing",
+        "functional": "missing",
+        "regression": "missing"
+      },
+      "notes": "STR_BROADCAST_ROW/COL opcodes exist as annotation-only no-ops."
+    },
+    {
+      "name": "online_reduction",
+      "patterns": ["P3"],
+      "epic": 72,
+      "models": ["cv", "llm", "jepa"],
+      "stages": {
+        "design": "missing",
+        "isa_closure": "partial",
+        "generator": "missing",
+        "functional": "missing",
+        "regression": "missing"
+      },
+      "notes": "VE_REDUCE opcode is a structural marker; running max/sum/mean/var semantics are the epic's core (enables online softmax and flash attention)."
+    },
+    {
+      "name": "layout_transform",
+      "patterns": ["P7"],
+      "epic": 73,
+      "models": ["cv", "llm", "jepa"],
+      "stages": {
+        "design": "missing",
+        "isa_closure": "partial",
+        "generator": "missing",
+        "functional": "missing",
+        "regression": "missing"
+      },
+      "notes": "BM_TRANSPOSE exercised only for B-matrix transpose; BM_RESHAPE, patchify, head split/merge missing."
+    },
+    {
+      "name": "attention",
+      "patterns": ["P8", "P3", "P1"],
+      "epic": 81,
+      "models": ["cv", "llm", "jepa"],
+      "stages": {
+        "design": "missing",
+        "isa_closure": "partial",
+        "generator": "missing",
+        "functional": "missing",
+        "regression": "missing"
+      },
+      "notes": "Kernel factory lowers the QK^T core as a matmul shape only; chained and flash-fused movement patterns missing."
+    },
+    {
+      "name": "kv_cache",
+      "patterns": ["P9", "P4"],
+      "epic": 82,
+      "models": ["llm"],
+      "stages": {
+        "design": "missing",
+        "isa_closure": "missing",
+        "generator": "missing",
+        "functional": "missing",
+        "regression": "missing"
+      },
+      "notes": "Append/growing-extent movement has no ISA or executor support yet."
+    },
+    {
+      "name": "rope",
+      "patterns": ["P5", "P6"],
+      "epic": 83,
+      "models": ["llm"],
+      "stages": {
+        "design": "missing",
+        "isa_closure": "partial",
+        "generator": "missing",
+        "functional": "missing",
+        "regression": "missing"
+      },
+      "notes": "Depends on broadcast + elementwise primitives (E2)."
+    },
+    {
+      "name": "embedding_logits",
+      "patterns": ["P4", "P1"],
+      "epic": 84,
+      "models": ["llm"],
+      "stages": {
+        "design": "missing",
+        "isa_closure": "partial",
+        "generator": "missing",
+        "functional": "missing",
+        "regression": "missing"
+      },
+      "notes": "Gather side depends on E1; logits side on rectangular GEMM (gemm_family)."
+    },
+    {
+      "name": "spatial_boundary",
+      "patterns": ["P7", "P2"],
+      "epic": 85,
+      "models": ["cv", "jepa"],
+      "stages": {
+        "design": "missing",
+        "isa_closure": "missing",
+        "generator": "missing",
+        "functional": "missing",
+        "regression": "missing"
+      },
+      "notes": "Patchify, upsample/interpolation, transposed conv."
+    },
+    {
+      "name": "jepa_masking",
+      "patterns": ["P4", "P7"],
+      "epic": 86,
+      "models": ["jepa"],
+      "stages": {
+        "design": "missing",
+        "isa_closure": "missing",
+        "generator": "missing",
+        "functional": "missing",
+        "regression": "missing"
+      },
+      "notes": "Context/target token gather-scatter by mask indices."
+    }
+  ],
+  "milestones": [
+    {
+      "id": "M1",
+      "issue": 129,
+      "achieved": true,
+      "requires": [
+        {"operator": "matmul", "stage": "functional"},
+        {"operator": "matmul", "stage": "regression"},
+        {"operator": "epilogue_fused", "stage": "functional"}
+      ]
+    },
+    {
+      "id": "M2",
+      "issue": 130,
+      "achieved": false,
+      "requires": [
+        {"operator": "conv2d", "stage": "functional"},
+        {"operator": "pooling", "stage": "functional"},
+        {"operator": "batchnorm", "stage": "functional"},
+        {"operator": "epilogue_fused", "stage": "regression"},
+        {"operator": "elementwise", "stage": "functional"}
+      ]
+    },
+    {
+      "id": "M4",
+      "issue": 132,
+      "achieved": false,
+      "requires": [
+        {"operator": "attention", "stage": "functional"},
+        {"operator": "softmax", "stage": "functional"},
+        {"operator": "online_reduction", "stage": "functional"},
+        {"operator": "layout_transform", "stage": "functional"}
+      ]
+    },
+    {
+      "id": "M7",
+      "issue": 135,
+      "achieved": false,
+      "requires": [
+        {"operator": "attention", "stage": "regression"},
+        {"operator": "kv_cache", "stage": "functional"},
+        {"operator": "rope", "stage": "functional"},
+        {"operator": "rmsnorm", "stage": "functional"},
+        {"operator": "ffn_fused", "stage": "functional"},
+        {"operator": "embedding_logits", "stage": "functional"}
+      ]
+    },
+    {
+      "id": "M8",
+      "issue": 136,
+      "achieved": false,
+      "requires": [
+        {"operator": "jepa_masking", "stage": "functional"},
+        {"operator": "gather_scatter", "stage": "functional"},
+        {"operator": "attention", "stage": "functional"},
+        {"operator": "layernorm", "stage": "functional"}
+      ]
+    }
+  ]
+}
