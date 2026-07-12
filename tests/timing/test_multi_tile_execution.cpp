@@ -16,6 +16,7 @@
 
 #include <sw/kpu/timing/concurrent_timing_executor.hpp>
 #include <sw/kpu/timing/schedule/matmul_schedule_generator.hpp>
+#include <sw/kpu/timing/schedule/elementwise_schedule_generator.hpp>
 #include <sw/kpu/timing/schedule/schedule_executor.hpp>
 #include <sw/kpu/timing/schedule/schedule_validator.hpp>
 
@@ -334,4 +335,56 @@ TEST_CASE("Compute latency scales with the K-slice count",
         }
     }
     REQUIRE(complete_events == 4);  // 2x2 C tiles
+}
+
+// ============================================================================
+// Elementwise execution (issue #101, epic E2): paired streams and the
+// broadcast 1:1:k discipline execute to completion - if the ref seeding
+// were wrong, the broadcast form's later feeds would stall forever
+// ============================================================================
+
+TEST_CASE("Elementwise schedules execute to completion",
+          "[timing][executor][regression][elementwise]") {
+    ElementwiseScheduleGenerator::Config gen_config;
+    gen_config.num_elements = 4096;
+    gen_config.tile_elems = 256;   // 16 data tiles
+
+    auto run = [&](ElementwiseScheduleGenerator::Form form, bool partitioned) {
+        gen_config.form = form;
+        ElementwiseScheduleGenerator gen(gen_config);
+        auto schedule = gen.generate();
+        REQUIRE(schedule.valid);
+
+        auto exec_config = make_executor_config();
+        exec_config.partition_l3_credits = partitioned;
+        exec_config.partition_l2_credits = partitioned;
+        ConcurrentTimingExecutor executor(exec_config);
+        ScheduleExecutor sched_exec(executor);
+        auto result = sched_exec.execute(schedule);
+
+        INFO("form=" << static_cast<int>(form)
+             << " partitioned=" << partitioned
+             << " cycles=" << result.total_cycles
+             << " error=" << result.error_message);
+        REQUIRE(result.success);
+        REQUIRE_FALSE(result.livelock_detected);
+
+        auto stats = executor.get_statistics();
+        REQUIRE(stats.tiles_fed == schedule.count_ops(ScheduleOpType::FEED));
+        REQUIRE(stats.tiles_drained ==
+                schedule.count_ops(ScheduleOpType::DRAIN));
+    };
+
+    SECTION("binary paired streams") {
+        run(ElementwiseScheduleGenerator::Form::BINARY, false);
+    }
+    SECTION("binary paired streams under partitioned credits") {
+        run(ElementwiseScheduleGenerator::Form::BINARY, true);
+    }
+    SECTION("broadcast B: one move, sixteen feeds, one credit") {
+        run(ElementwiseScheduleGenerator::Form::BROADCAST_B, false);
+    }
+    SECTION("unary stream") {
+        run(ElementwiseScheduleGenerator::Form::UNARY, false);
+    }
 }

@@ -197,11 +197,11 @@
       "stages": {
         "design": "missing",
         "isa_closure": "done",
-        "generator": "partial",
+        "generator": "done",
         "functional": "missing",
         "regression": "missing"
       },
-      "notes": "VE_ELEMENTWISE has full operand encoding (VEOperands, format v2), assembler/serializer round-trip, and functional semantics in the behavioral executor (#100); CSP functional path rides FunctionalComputeSpec. Two-operand aligned streaming schedule is E2-T3."
+      "notes": "VE_ELEMENTWISE fully encoded + behavioral semantics (#100); ElementwiseScheduleGenerator with paired two-stream emission, executable COMPUTEs, envelope checks (#101). CSP functional oracle path is E2-T4."
     },
     {
       "name": "epilogue_fused",
@@ -278,11 +278,11 @@
       "stages": {
         "design": "missing",
         "isa_closure": "partial",
-        "generator": "missing",
+        "generator": "done",
         "functional": "missing",
         "regression": "missing"
       },
-      "notes": "STR_BROADCAST_ROW/COL opcodes timed in ConcurrentExecutor; broadcast ref-count seeding (1:1:k via TileDescriptor.consumer_count, #100) in the CSP tier. Behavioral STR_BROADCAST semantics + resident-operand realization land with E2-T4."
+      "notes": "Ref-count seeding (1:1:k) in CSP tier (#100); emit_broadcast_tile helper + BROADCAST_B form executes end-to-end (#101). Behavioral STR_BROADCAST semantics + resident-operand functional path are E2-T4."
     },
     {
       "name": "online_reduction",

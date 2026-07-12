@@ -9,6 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **ElementwiseScheduleGenerator + broadcast emission (#101, epic E2).**
+  The first generator whose every schedule is executable: paired
+  two-stream emission for `C = op(A, B)` (P6 - interleaved A/B pairs, no
+  stream can monopolize the pools, 3-tile working set), unary and
+  broadcast-B forms, COMPUTE operations carrying their full operand
+  dependency sets (resolving #139 for the elementwise family), and
+  envelope checks/stamping per the #90/#91 discipline.
+  `emit_broadcast_tile()` delivers a resident operand once with a seeded
+  consumer count (the #100 1:1:k mechanism) - the broadcast form executes
+  end-to-end (one MOVE, n feeds, one credit), regression-tested with and
+  without partitioned credits. Coverage: elementwise/broadcast generator
+  cells -> done (11/105).
+
 - **VE_ELEMENTWISE functional semantics + broadcast ref-count seeding
   (#100, epic E2 broadcast/elementwise).** `VEOperands` gives
   VE_ELEMENTWISE real operands (14 op kinds: binary/unary/scalar forms,
