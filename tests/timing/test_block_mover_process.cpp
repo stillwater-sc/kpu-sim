@@ -655,3 +655,37 @@ TEST_CASE("BlockMoverProcess priority aging: prevents starvation of old requests
     // Old tile should not be starved - it should be processed first
     REQUIRE(first_processed == old_tile.tile_id);
 }
+
+// ============================================================================
+// Broadcast consumer-count seeding (issue #100, epic E2)
+// ============================================================================
+
+TEST_CASE("BlockMoverProcess seeds L2 ref count with the tile consumer count", "[timing][block_mover_process][broadcast]") {
+    TagCAM l3_tag_cam(8);
+    CreditPool l3_credits(8);
+    CreditPool l2_credits(8);
+    TagCAM l2_tag_cam(8);
+    BlockMoverProcess bm(default_config(0), l3_tag_cam, l3_credits, l2_credits, l2_tag_cam);
+
+    // A broadcast tile: one MOVE, three downstream feeds
+    auto tile = make_tile(MatrixID::B, 0, 0);
+    tile.consumer_count = 3;
+    REQUIRE(l3_credits.acquire());
+    l3_tag_cam.insert(tile.tile_id, 0, 0);
+
+    bm.schedule_move(tile);
+    Cycle cycle = 0;
+    while (!bm.is_idle() || bm.has_pending_work()) {
+        bm.tick(cycle++);
+        REQUIRE(cycle < 1000);
+    }
+
+    // One MOVE consumed exactly one L2 credit...
+    REQUIRE(l2_credits.outstanding() == 1);
+
+    // ...and seeded three references: the credit-release signal fires on
+    // the THIRD invalidate (feed), not the first
+    REQUIRE_FALSE(l2_tag_cam.invalidate(tile.tile_id));
+    REQUIRE_FALSE(l2_tag_cam.invalidate(tile.tile_id));
+    REQUIRE(l2_tag_cam.invalidate(tile.tile_id));
+}

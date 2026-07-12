@@ -389,6 +389,41 @@ struct AutoStreamerOperands {
 // Data Movement Instruction
 // ============================================================================
 
+// ============================================================================
+// Vector Engine Operands (issue #100, epic E2 #71)
+// ============================================================================
+
+/**
+ * @brief Vector Engine elementwise operation kinds
+ *
+ * Binary forms consume two L1 operands; unary forms one; *_S forms apply
+ * a scalar broadcast to one operand. Reduction kinds (running max/sum/
+ * mean/var) belong to VE_REDUCE and are designed in epic E3.
+ */
+enum class VEOp : uint8_t {
+    // Binary (num_inputs = 2)
+    ADD = 0, SUB, MUL, DIV, MAX, MIN,
+    // Unary (num_inputs = 1)
+    NEG, ABS, SQRT, EXP, LOG,
+    // Scalar broadcast (num_inputs = 1 + scalar)
+    ADD_S, MUL_S, POW_S
+};
+
+/**
+ * @brief Vector Engine elementwise operands (VE_ELEMENTWISE)
+ *
+ * Gives VE_ELEMENTWISE real semantics (previously a monostate structural
+ * marker): apply `op` over the addressed L1 buffers, elementwise.
+ */
+struct VEOperands {
+    VEOp op = VEOp::ADD;        // Operation kind
+    uint8_t num_inputs = 2;     // 1 (unary / scalar forms), 2 (binary)
+    float scalar = 0.0f;        // Operand for ADD_S / MUL_S / POW_S
+    uint8_t l1_src_a = 0;       // L1 buffer of operand A
+    uint8_t l1_src_b = 0;       // L1 buffer of operand B (binary forms)
+    uint8_t l1_dst = 0;         // L1 buffer of the result
+};
+
 /**
  * @brief A single data movement instruction
  *
@@ -417,7 +452,9 @@ struct DMInstruction {
         // AUTO addressing operands
         AutoDMAOperands,            // DMA_*_AUTO
         AutoBlockMoverOperands,     // BM_*_AUTO
-        AutoStreamerOperands        // STR_*_AUTO
+        AutoStreamerOperands,       // STR_*_AUTO
+        // Vector Engine operands (issue #100)
+        VEOperands                  // VE_ELEMENTWISE
     > operands;
 
     // Timing hints (from SURE analysis)
@@ -502,7 +539,27 @@ struct DMInstruction {
                                         BufferSlot buf = BufferSlot::BUF_0,
                                         bool ve_enabled = false,
                                         ActivationType ve_act = ActivationType::NONE);
+
+    // Vector Engine factory methods (issue #100)
+    static DMInstruction ve_elementwise(VEOp op,
+                                        uint8_t l1_src_a, uint8_t l1_src_b,
+                                        uint8_t l1_dst);
+    static DMInstruction ve_elementwise_unary(VEOp op,
+                                              uint8_t l1_src, uint8_t l1_dst);
+    static DMInstruction ve_elementwise_scalar(VEOp op, float scalar,
+                                               uint8_t l1_src, uint8_t l1_dst);
 };
+
+/**
+ * @brief Name of a Vector Engine operation (for labels/assembly)
+ */
+const char* to_string(VEOp op);
+
+/**
+ * @brief Parse a Vector Engine operation name (inverse of to_string)
+ * @return true and sets op on success
+ */
+bool ve_op_from_string(const std::string& name, VEOp& op);
 
 // ============================================================================
 // Data Movement Program

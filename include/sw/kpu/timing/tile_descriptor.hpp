@@ -130,6 +130,14 @@ struct TileDescriptor {
     Cycle enqueue_cycle = 0;  // When this was added to work queue
     Size priority = 0;        // Higher = more urgent (for aging)
 
+    // Broadcast consumer count (issue #100): how many downstream feeds
+    // will consume this tile after one MOVE delivers it. The BlockMover
+    // seeds the L2 TagCAM ref_count with this value, making the
+    // one-load-many-feeds (1:1:k) broadcast discipline explicit while
+    // preserving one-credit-per-entry conservation. Default 1 = the
+    // ordinary 1:1:1 pipeline.
+    Size consumer_count = 1;
+
     // Compute size from dimensions
     Size compute_size_bytes() const {
         return height * width * element_size;

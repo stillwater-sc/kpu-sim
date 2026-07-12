@@ -159,6 +159,13 @@ private:
     void fire_compute();
 
     /**
+     * @brief Apply a Vector Engine elementwise operation over L1 buffers
+     *        (issue #100): out = op(a[, b or scalar]) elementwise, over
+     *        the program's Ti x Tj tile
+     */
+    void execute_ve_elementwise(const VEOperands& ops);
+
+    /**
      * @brief Resolve external memory address for a tile
      */
     Address resolve_address(MatrixID matrix, const TileCoord& tile) const;
