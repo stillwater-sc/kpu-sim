@@ -616,8 +616,15 @@ inline void ConcurrentTimingExecutor::create_components() {
         DMAEngineProcess::Config dma_config;
         dma_config.engine_id = static_cast<uint32_t>(dma);
         dma_config.queue_depth = config_.dma_queue_depth;
-        dma_config.l3_credit_reserve = Config::clamp_reserve(
-            config_.l3_writeback_credit_reserve, config_.l3_buffer_count);
+        // The writeback reserve is a heuristic guard that per-matrix
+        // partitioning supersedes structurally (the C partition IS the
+        // writeback protection). A pool-clamped reserve can also exceed a
+        // partition's share and block it permanently, so it is disabled in
+        // partition mode.
+        dma_config.l3_credit_reserve = config_.partition_l3_credits
+            ? 0
+            : Config::clamp_reserve(
+                  config_.l3_writeback_credit_reserve, config_.l3_buffer_count);
         dma_config.name = dma_config.display_name();
 
         // Assign DMA to MC (round-robin if more DMAs than MCs)
@@ -643,8 +650,13 @@ inline void ConcurrentTimingExecutor::create_components() {
         bm_config.startup_latency = config_.bm_startup_latency;
         bm_config.clock_ghz = config_.clock_ghz;
         bm_config.priority_aging = config_.enable_priority_aging;
-        bm_config.l2_credit_reserve = Config::clamp_reserve(
-            config_.l2_drain_credit_reserve, config_.l2_bank_count);
+        // Drain reserve disabled in partition mode for the same reason as
+        // the DMA writeback reserve: the C partition supersedes it, and a
+        // pool-clamped reserve can exceed a partition's share
+        bm_config.l2_credit_reserve = config_.partition_l2_credits
+            ? 0
+            : Config::clamp_reserve(
+                  config_.l2_drain_credit_reserve, config_.l2_bank_count);
         bm_config.name = bm_config.display_name();
 
         block_movers_.push_back(std::make_unique<BlockMoverProcess>(
