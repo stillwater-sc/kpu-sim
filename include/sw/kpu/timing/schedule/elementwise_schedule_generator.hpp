@@ -208,15 +208,24 @@ private:
         tile.tile_id.ti = index;
         tile.tile_id.tj = 0;
         tile.tile_id.tk = 0;
-        tile.height = config_.tile_elems;
+        // Trailing tile of a non-aligned tensor is partial; clamp its
+        // footprint so no load/store reaches past num_elements
+        Size elems = config_.tile_elems;
+        Size offset = index * config_.tile_elems;
+        if (offset + elems > config_.num_elements) {
+            elems = config_.num_elements - offset;
+        }
+        tile.height = elems;
         tile.width = 1;
         tile.element_size = config_.element_size;
-        tile.size_bytes = config_.tile_elems * config_.element_size;
+        tile.size_bytes = elems * config_.element_size;
 
         Address base = matrix == isa::MatrixID::A ? config_.a_base
                      : matrix == isa::MatrixID::B ? config_.b_base
                                                   : config_.c_base;
-        tile.dram_address = base + index * tile.size_bytes;
+        // Stride between tiles stays full-tile; only the last footprint shrinks
+        tile.dram_address =
+            base + offset * config_.element_size;
         tile.matrix_base_address = base;
         return tile;
     }

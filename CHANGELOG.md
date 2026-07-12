@@ -18,9 +18,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   envelope checks/stamping per the #90/#91 discipline.
   `emit_broadcast_tile()` delivers a resident operand once with a seeded
   consumer count (the #100 1:1:k mechanism) - the broadcast form executes
-  end-to-end (one MOVE, n feeds, one credit), regression-tested with and
-  without partitioned credits. Coverage: elementwise/broadcast generator
-  cells -> done (11/105).
+  end-to-end (one MOVE, n feeds, one credit). All three forms are
+  regression-tested with and without partitioned credits; non-tile-aligned
+  tensors clamp the trailing tile's footprint (full-tile stride preserved).
+  Coverage: elementwise/broadcast generator cells -> done (11/105).
 
 - **VE_ELEMENTWISE functional semantics + broadcast ref-count seeding
   (#100, epic E2 broadcast/elementwise).** `VEOperands` gives

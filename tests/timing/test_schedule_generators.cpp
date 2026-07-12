@@ -856,4 +856,27 @@ TEST_CASE("ElementwiseScheduleGenerator emits paired executable schedules",
         REQUIRE_FALSE(schedule.valid);
         REQUIRE(schedule.error_message.find("working set") != std::string::npos);
     }
+
+    SECTION("non-aligned tensor clamps the trailing tile footprint") {
+        config.form = ElementwiseScheduleGenerator::Form::BINARY;
+        config.num_elements = 1000;   // 4 tiles: 256+256+256+232
+        ElementwiseScheduleGenerator gen(config);
+        auto schedule = gen.generate();
+        REQUIRE(schedule.valid);
+        REQUIRE(schedule.count_ops(ScheduleOpType::COMPUTE) == 4);
+
+        // Every load footprint stays within num_elements; the last tile of
+        // each stream shrinks to the remainder while the stride between
+        // tiles stays full-tile
+        const Size full_bytes = 256 * 4;
+        const Size tail_bytes = 232 * 4;
+        for (const auto& op : schedule.operations) {
+            if (op.type != ScheduleOpType::LOAD) continue;
+            const auto& t = op.tile;
+            REQUIRE(t.dram_address - t.matrix_base_address ==
+                    t.tile_id.ti * full_bytes);
+            REQUIRE(t.size_bytes ==
+                    (t.tile_id.ti == 3 ? tail_bytes : full_bytes));
+        }
+    }
 }

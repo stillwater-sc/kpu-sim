@@ -384,7 +384,17 @@ TEST_CASE("Elementwise schedules execute to completion",
     SECTION("broadcast B: one move, sixteen feeds, one credit") {
         run(ElementwiseScheduleGenerator::Form::BROADCAST_B, false);
     }
+    SECTION("broadcast B under partitioned credits") {
+        run(ElementwiseScheduleGenerator::Form::BROADCAST_B, true);
+    }
     SECTION("unary stream") {
         run(ElementwiseScheduleGenerator::Form::UNARY, false);
+    }
+    SECTION("unary stream under partitioned credits") {
+        run(ElementwiseScheduleGenerator::Form::UNARY, true);
+    }
+    SECTION("non-aligned tensor with clamped trailing tile") {
+        gen_config.num_elements = 4000;   // 16 tiles, last one 160 elems
+        run(ElementwiseScheduleGenerator::Form::BINARY, false);
     }
 }
