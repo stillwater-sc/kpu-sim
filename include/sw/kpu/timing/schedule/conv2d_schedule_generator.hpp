@@ -88,6 +88,15 @@ public:
         // Strategy
         Strategy strategy = Strategy::IM2COL_INTERLEAVED;
 
+        // Resource envelope (issue #90): the buffer capacities this schedule
+        // is generated against. Defaults match ConcurrentTimingExecutor.
+        // Both im2col strategies emit fine-grained per-tile interleaving
+        // (working set of one A/B pair in flight), so no burst blocking is
+        // required; the envelope is carried for the generator contract and
+        // capacity-aware validation.
+        Size l3_buffer_count = 32;  ///< L3 credit pool the schedule targets
+        Size l2_bank_count = 64;    ///< L2 credit pool the schedule targets
+
         // Base addresses
         Address input_base = 0;
         Address filter_base = 0;
@@ -134,6 +143,23 @@ public:
         [[nodiscard]] Size tile_size_bytes() const {
             return Ti * Tj * element_size;
         }
+
+        /**
+         * @brief Per-matrix burst bound derived from the resource envelope
+         */
+        [[nodiscard]] Size max_burst_tiles() const {
+            return per_matrix_burst_share(l3_buffer_count, l2_bank_count);
+        }
+
+        /**
+         * @brief Peak tile residency this schedule implies
+         *
+         * The im2col strategies stream one A/B tile pair plus the pending
+         * C tile per iteration.
+         */
+        [[nodiscard]] Size required_working_set() const {
+            return 3;
+        }
     };
 
     /**
@@ -147,6 +173,17 @@ public:
      */
     ScheduleResult generate() override {
         ScheduleResult result;
+
+        if (config_.required_working_set() > config_.max_burst_tiles()) {
+            result.valid = false;
+            result.error_message =
+                "conv2d schedule requires a working set of " +
+                std::to_string(config_.required_working_set()) +
+                " tiles but the resource envelope share is " +
+                std::to_string(config_.max_burst_tiles()) +
+                "; enlarge l3_buffer_count/l2_bank_count";
+            return result;
+        }
 
         // Validate configuration
         if (config_.H_in == 0 || config_.W_in == 0 || config_.C_in == 0) {

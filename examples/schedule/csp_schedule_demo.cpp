@@ -177,11 +177,19 @@ void demo_softmax() {
     config.batch_size = 32;
     config.reduction_dim = 1024;
     config.Ti = 16; config.Tj = 16;
+    // The multi-pass algorithm keeps every exp scratch tile resident between
+    // passes: working set = reduction_tiles + 2 = 66 tiles. Declare an
+    // envelope that fits (share = min(l3,l2)/4 >= 66) or the generator
+    // refuses a priori (issue #90).
+    config.l3_buffer_count = 512;
+    config.l2_bank_count = 512;
 
     SoftmaxScheduleGenerator gen(config);
     auto schedule = gen.generate();
 
     std::cout << "\n  Transformer attention softmax: [32 x 1024]" << std::endl;
+    std::cout << "    Working set: " << config.required_working_set()
+              << " tiles vs envelope share " << config.max_burst_tiles() << std::endl;
     std::cout << "    Multi-pass algorithm:" << std::endl;
     std::cout << "      Pass 1: Find max (numerical stability)" << std::endl;
     std::cout << "      Pass 2: Compute exp(x - max)" << std::endl;
@@ -204,11 +212,18 @@ void demo_layernorm() {
     config.hidden_size = 768;
     config.Ti = 16; config.Tj = 16;
     config.affine = true;
+    // Affine gamma/beta tiles stay resident across every instance, plus
+    // scratch and the streaming input:
+    // working set = 2 * hidden_tiles + 3 = 99 tiles (issue #90)
+    config.l3_buffer_count = 512;
+    config.l2_bank_count = 512;
 
     LayerNormScheduleGenerator gen(config);
     auto schedule = gen.generate();
 
     std::cout << "\n  BERT LayerNorm: [32 x 512 x 768]" << std::endl;
+    std::cout << "    Working set: " << config.required_working_set()
+              << " tiles vs envelope share " << config.max_burst_tiles() << std::endl;
     std::cout << "    Normalized over hidden_size=768" << std::endl;
     std::cout << "    Multi-pass algorithm:" << std::endl;
     std::cout << "      Pass 1: Compute mean" << std::endl;
@@ -233,11 +248,17 @@ void demo_batchnorm() {
         config.H = 56; config.W = 56;
         config.Ti = 16;
         config.training = false;
+        // Inference preloads gamma/beta/mean/var for all 64 channels:
+        // working set = 4*C + 1 = 257 tiles (issue #90)
+        config.l3_buffer_count = 1088;
+        config.l2_bank_count = 1088;
 
         BatchNormScheduleGenerator gen(config);
         auto schedule = gen.generate();
 
         std::cout << "\n  ResNet BatchNorm (inference): [32 x 64 x 56 x 56]" << std::endl;
+        std::cout << "    Working set: " << config.required_working_set()
+                  << " tiles vs envelope share " << config.max_burst_tiles() << std::endl;
         std::cout << "    Uses pre-computed running_mean and running_var" << std::endl;
         std::cout << "    Single-pass: (x - mean) * rsqrt(var + eps) * gamma + beta" << std::endl;
         std::cout << "    Total operations: " << schedule.size() << std::endl;
