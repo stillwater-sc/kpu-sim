@@ -246,7 +246,8 @@ private:
                 // the ordinary pipeline has consumer_count = 1.
                 l2_tag_cam_.insert(in_flight_->tile.tile_id, in_flight_->slot_id,
                                    current_cycle,
-                                   in_flight_->tile.consumer_count);
+                                   static_cast<uint32_t>(
+                                       in_flight_->tile.consumer_count));
                 // Only release L3 credit if tile was fully removed (ref_count reached 0)
                 bool credit_released = l3_tag_cam_.invalidate(in_flight_->tile.tile_id);
                 if (credit_released) {

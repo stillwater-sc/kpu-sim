@@ -104,7 +104,7 @@ public:
      * already present, the references are added to the existing entry.
      */
     bool insert(const TileID& tile_id, uint32_t slot_id, Cycle arrival_cycle,
-                size_t refs) {
+                uint32_t refs) {
         if (refs == 0) refs = 1;
 
         // Check if already present - add references
