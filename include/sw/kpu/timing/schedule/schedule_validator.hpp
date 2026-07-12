@@ -224,6 +224,33 @@ public:
 
         auto analysis = ScheduleAnalysis::analyze(schedule);
 
+        // VAL-007 (issue #91): the schedule's recorded generation envelope
+        // must match the pools it is validated/executed against - the
+        // #67/#90 constructive guarantees were established under that
+        // envelope. Smaller actual pools void them.
+        const auto& meta = schedule.metadata;
+        if ((meta.l3_buffer_count != 0 || meta.l2_bank_count != 0) &&
+            (meta.l3_buffer_count != l3_credits ||
+             meta.l2_bank_count != l2_credits)) {
+            const bool shrunk = l3_credits < meta.l3_buffer_count ||
+                                l2_credits < meta.l2_bank_count;
+            result.issues.push_back({
+                ValidationSeverity::WARNING,
+                "VAL-007",
+                "Schedule was generated against envelope L3=" +
+                    std::to_string(meta.l3_buffer_count) + "/L2=" +
+                    std::to_string(meta.l2_bank_count) +
+                    " but is being validated against L3=" +
+                    std::to_string(l3_credits) + "/L2=" +
+                    std::to_string(l2_credits) +
+                    (shrunk ? " (smaller - constructive safety guarantees "
+                              "do not hold)"
+                            : " (larger - safe, but timing assumptions "
+                              "differ)"),
+                0
+            });
+        }
+
         // Check if consecutive operations exceed available credits
         if (analysis.max_consecutive_a > l3_credits / 2) {
             result.issues.push_back({

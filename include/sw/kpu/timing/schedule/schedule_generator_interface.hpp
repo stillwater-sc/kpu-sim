@@ -256,6 +256,13 @@ struct ScheduleMetadata {
     Size l3_buffers_needed = 0; ///< Minimum L3 buffers required
     Size l2_banks_needed = 0;   ///< Minimum L2 banks required
 
+    // Generation envelope (issue #91): the credit pools this schedule was
+    // generated against (#67/#90 constructive-safety guarantees hold only
+    // under an executor configured with at least these pools). 0 = not
+    // recorded (hand-built or legacy schedule).
+    Size l3_buffer_count = 0;   ///< L3 envelope used at generation time
+    Size l2_bank_count = 0;     ///< L2 envelope used at generation time
+
     // Scheduling strategy metadata
     std::string strategy;       ///< E.g., "OUTPUT_STATIONARY", "INTERLEAVED_AB"
 

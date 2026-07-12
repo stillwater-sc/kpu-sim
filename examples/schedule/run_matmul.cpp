@@ -271,6 +271,9 @@ int main(int argc, char* argv[]) {
     if (result.livelock_detected) {
         std::cout << "  WARNING: Livelock detected!\n";
     }
+    for (const auto& warning : result.warnings) {
+        std::cout << "  WARNING: " << warning << "\n";
+    }
 
     // ========================================
     // Print statistics

@@ -182,6 +182,8 @@ public:
         result.metadata.c_tiles = input_tiles;
 
         result.metadata.strategy = "multi_pass_layernorm";
+        result.metadata.l3_buffer_count = config_.l3_buffer_count;
+        result.metadata.l2_bank_count = config_.l2_bank_count;
         result.valid = true;
 
         return result;

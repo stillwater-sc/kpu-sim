@@ -163,6 +163,8 @@ public:
         result.metadata.c_tiles = input_tiles;  // Same shape output
 
         result.metadata.strategy = "multi_pass_safe_softmax";
+        result.metadata.l3_buffer_count = config_.l3_buffer_count;
+        result.metadata.l2_bank_count = config_.l2_bank_count;
         result.valid = true;
 
         return result;
