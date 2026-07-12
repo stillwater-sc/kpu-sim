@@ -68,6 +68,11 @@ public:
         // Mode
         bool training = false;  ///< Training mode (compute batch stats) vs inference
 
+        // Resource envelope (issue #90): the buffer capacities this schedule
+        // is generated against. Defaults match ConcurrentTimingExecutor.
+        Size l3_buffer_count = 32;  ///< L3 credit pool the schedule targets
+        Size l2_bank_count = 64;    ///< L2 credit pool the schedule targets
+
         // Base addresses
         Address input_base = 0;
         Address output_base = 0;
@@ -104,6 +109,24 @@ public:
         [[nodiscard]] Size tile_size_bytes() const {
             return Ti * element_size;
         }
+
+        /**
+         * @brief Per-matrix burst bound derived from the resource envelope
+         */
+        [[nodiscard]] Size max_burst_tiles() const {
+            return per_matrix_burst_share(l3_buffer_count, l2_bank_count);
+        }
+
+        /**
+         * @brief Peak tile residency this schedule implies
+         *
+         * BatchNorm processes channels sequentially: per channel, the
+         * gamma/beta parameter pair plus (in training mode) the mean/var
+         * scratch pair are live alongside the streaming input.
+         */
+        [[nodiscard]] Size required_working_set() const {
+            return training ? 5 : 3;
+        }
     };
 
     /**
@@ -117,6 +140,17 @@ public:
      */
     ScheduleResult generate() override {
         ScheduleResult result;
+
+        if (config_.required_working_set() > config_.max_burst_tiles()) {
+            result.valid = false;
+            result.error_message =
+                "batchnorm schedule requires a working set of " +
+                std::to_string(config_.required_working_set()) +
+                " tiles but the resource envelope share is " +
+                std::to_string(config_.max_burst_tiles()) +
+                "; enlarge l3_buffer_count/l2_bank_count";
+            return result;
+        }
 
         // Validate configuration
         if (config_.N == 0 || config_.C == 0 || config_.H == 0 || config_.W == 0) {

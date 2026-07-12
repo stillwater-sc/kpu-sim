@@ -9,6 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **CSP timing: resource envelope on all schedule generators (#90, Wave 0).**
+  The conv2d/softmax/layernorm/batchnorm generators now carry the #67
+  resource envelope (`l3_buffer_count`/`l2_bank_count`, `max_burst_tiles()`)
+  and an **a-priori working-set check**: generation refuses with an
+  actionable message when the schedule's implied peak tile residency
+  exceeds the envelope share, instead of wedging at runtime - softmax's
+  multi-pass exp scratch (`reduction_tiles + 2`), layernorm's resident
+  affine params (`2*hidden_tiles + 2`), batchnorm's per-channel stats,
+  conv2d's streaming pair. `csp_schedule_demo` declares fitting envelopes
+  and reports working set vs share. Discovered in the process: these four
+  generators emit DRAIN without COMPUTE and would hang if executed -
+  tracked as #139 for the operator epics.
+
 - **CSP timing: per-matrix credit partitioning wired into the executor
   (#89, Wave 0 of the pattern-coverage program).** `CreditPool` gains an
   opt-in partition mode backed by `PartitionedCreditPool` (equal A/B/C

@@ -58,10 +58,36 @@ public:
         // Element size
         Size element_size = 4;      ///< Bytes per element
 
+        // Resource envelope (issue #90): the buffer capacities this schedule
+        // is generated against. Defaults match ConcurrentTimingExecutor.
+        Size l3_buffer_count = 32;  ///< L3 credit pool the schedule targets
+        Size l2_bank_count = 64;    ///< L2 credit pool the schedule targets
+
         // Base addresses
         Address input_base = 0;
         Address output_base = 0;
         Address scratch_base = 0;   ///< For intermediate results (max, sum)
+
+        /**
+         * @brief Per-matrix burst bound derived from the resource envelope
+         */
+        [[nodiscard]] Size max_burst_tiles() const {
+            return per_matrix_burst_share(l3_buffer_count, l2_bank_count);
+        }
+
+        /**
+         * @brief Peak tile residency this multi-pass schedule implies
+         *
+         * The exp scratch tiles written back in pass 2 stay resident until
+         * pass 4 consumes them, plus the max and sum scratch tiles:
+         * reduction_tiles + 2. A schedule whose working set exceeds the
+         * envelope share would wedge at runtime, so generate() refuses it
+         * a priori (the online single-pass softmax - epic E8, issue #77 -
+         * removes this residency requirement).
+         */
+        [[nodiscard]] Size required_working_set() const {
+            return reduction_tiles() + 2;
+        }
 
         /**
          * @brief Calculate number of batch tiles
@@ -98,6 +124,19 @@ public:
         ScheduleResult result;
 
         // Validate configuration
+        if (config_.required_working_set() > config_.max_burst_tiles()) {
+            result.valid = false;
+            result.error_message =
+                "softmax multi-pass schedule requires a working set of " +
+                std::to_string(config_.required_working_set()) +
+                " tiles (reduction_tiles + 2 scratch) but the resource "
+                "envelope share is " +
+                std::to_string(config_.max_burst_tiles()) +
+                "; enlarge l3_buffer_count/l2_bank_count or use the online "
+                "single-pass softmax (epic E8, issue #77)";
+            return result;
+        }
+
         if (config_.batch_size == 0 || config_.reduction_dim == 0) {
             result.valid = false;
             result.error_message = "Dimensions must be non-zero";

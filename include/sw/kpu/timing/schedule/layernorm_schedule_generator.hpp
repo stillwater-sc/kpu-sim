@@ -67,12 +67,39 @@ public:
         // Has learnable parameters
         bool affine = true;         ///< Whether to apply gamma/beta
 
+        // Resource envelope (issue #90): the buffer capacities this schedule
+        // is generated against. Defaults match ConcurrentTimingExecutor.
+        Size l3_buffer_count = 32;  ///< L3 credit pool the schedule targets
+        Size l2_bank_count = 64;    ///< L2 credit pool the schedule targets
+
         // Base addresses
         Address input_base = 0;
         Address output_base = 0;
         Address gamma_base = 0;     ///< Gamma (scale) parameter
         Address beta_base = 0;      ///< Beta (bias) parameter
         Address scratch_base = 0;   ///< For mean/variance intermediates
+
+        /**
+         * @brief Per-matrix burst bound derived from the resource envelope
+         */
+        [[nodiscard]] Size max_burst_tiles() const {
+            return per_matrix_burst_share(l3_buffer_count, l2_bank_count);
+        }
+
+        /**
+         * @brief Peak tile residency this multi-pass schedule implies
+         *
+         * With affine parameters, gamma and beta tiles (2 x hidden_tiles)
+         * are loaded once up front and stay resident across every instance,
+         * plus the mean/variance scratch pair. Without affine, only the
+         * scratch pair and the streaming input are live. A schedule whose
+         * working set exceeds the envelope share would wedge at runtime,
+         * so generate() refuses it a priori (parameter re-streaming or
+         * blocking is epic E9 scope, issue #78).
+         */
+        [[nodiscard]] Size required_working_set() const {
+            return affine ? 2 * hidden_tiles() + 2 : 3;
+        }
 
         /**
          * @brief Calculate total normalized instances (batch * sequence)
@@ -114,6 +141,19 @@ public:
      */
     ScheduleResult generate() override {
         ScheduleResult result;
+
+        if (config_.required_working_set() > config_.max_burst_tiles()) {
+            result.valid = false;
+            result.error_message =
+                "layernorm multi-pass schedule requires a working set of " +
+                std::to_string(config_.required_working_set()) +
+                " tiles (resident affine params + scratch) but the resource "
+                "envelope share is " +
+                std::to_string(config_.max_burst_tiles()) +
+                "; enlarge l3_buffer_count/l2_bank_count or re-stream the "
+                "parameters (epic E9, issue #78)";
+            return result;
+        }
 
         // Validate configuration
         if (config_.normalized_instances() == 0 || config_.hidden_size == 0) {

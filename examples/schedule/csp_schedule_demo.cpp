@@ -177,11 +177,19 @@ void demo_softmax() {
     config.batch_size = 32;
     config.reduction_dim = 1024;
     config.Ti = 16; config.Tj = 16;
+    // The multi-pass algorithm keeps every exp scratch tile resident between
+    // passes: working set = reduction_tiles + 2 = 66 tiles. Declare an
+    // envelope that fits (share = min(l3,l2)/4 >= 66) or the generator
+    // refuses a priori (issue #90).
+    config.l3_buffer_count = 512;
+    config.l2_bank_count = 512;
 
     SoftmaxScheduleGenerator gen(config);
     auto schedule = gen.generate();
 
     std::cout << "\n  Transformer attention softmax: [32 x 1024]" << std::endl;
+    std::cout << "    Working set: " << config.required_working_set()
+              << " tiles vs envelope share " << config.max_burst_tiles() << std::endl;
     std::cout << "    Multi-pass algorithm:" << std::endl;
     std::cout << "      Pass 1: Find max (numerical stability)" << std::endl;
     std::cout << "      Pass 2: Compute exp(x - max)" << std::endl;
@@ -204,11 +212,17 @@ void demo_layernorm() {
     config.hidden_size = 768;
     config.Ti = 16; config.Tj = 16;
     config.affine = true;
+    // Affine gamma/beta tiles stay resident across every instance:
+    // working set = 2 * hidden_tiles + 2 = 98 tiles (issue #90)
+    config.l3_buffer_count = 512;
+    config.l2_bank_count = 512;
 
     LayerNormScheduleGenerator gen(config);
     auto schedule = gen.generate();
 
     std::cout << "\n  BERT LayerNorm: [32 x 512 x 768]" << std::endl;
+    std::cout << "    Working set: " << config.required_working_set()
+              << " tiles vs envelope share " << config.max_burst_tiles() << std::endl;
     std::cout << "    Normalized over hidden_size=768" << std::endl;
     std::cout << "    Multi-pass algorithm:" << std::endl;
     std::cout << "      Pass 1: Compute mean" << std::endl;

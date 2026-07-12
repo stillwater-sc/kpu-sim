@@ -10,6 +10,10 @@
 
 #include <sw/kpu/timing/schedule/schedule_generator_interface.hpp>
 #include <sw/kpu/timing/schedule/matmul_schedule_generator.hpp>
+#include <sw/kpu/timing/schedule/conv2d_schedule_generator.hpp>
+#include <sw/kpu/timing/schedule/softmax_schedule_generator.hpp>
+#include <sw/kpu/timing/schedule/layernorm_schedule_generator.hpp>
+#include <sw/kpu/timing/schedule/batchnorm_schedule_generator.hpp>
 #include <sw/kpu/timing/schedule/schedule_executor.hpp>
 #include <sw/kpu/timing/schedule/schedule_validator.hpp>
 
@@ -513,4 +517,117 @@ TEST_CASE("MatMulScheduleGenerator default strategy is interleaved", "[timing][s
 
     REQUIRE(result.valid);
     REQUIRE(result.metadata.strategy == "interleaved_ab");
+}
+
+// ============================================================================
+// Resource envelope on the non-matmul generators (issue #90): generation
+// refuses a priori when the schedule's implied working set exceeds the
+// envelope share, instead of wedging at runtime
+// ============================================================================
+
+TEST_CASE("SoftmaxScheduleGenerator enforces its multi-pass working set against the envelope",
+          "[timing][schedule][softmax][envelope]") {
+    SoftmaxScheduleGenerator::Config config;
+    config.batch_size = 32;
+    config.Ti = 16;
+    config.Tj = 16;
+
+    SECTION("small reduction fits the default envelope") {
+        config.reduction_dim = 96;   // 6 tiles + 2 scratch = 8 <= share 8
+        REQUIRE(config.required_working_set() == 8);
+        SoftmaxScheduleGenerator gen(config);
+        REQUIRE(gen.generate().valid);
+    }
+
+    SECTION("transformer-scale reduction is refused under the default envelope") {
+        config.reduction_dim = 1024;  // 64 tiles + 2 scratch = 66 > share 8
+        SoftmaxScheduleGenerator gen(config);
+        auto schedule = gen.generate();
+        REQUIRE_FALSE(schedule.valid);
+        REQUIRE(schedule.error_message.find("working set") != std::string::npos);
+    }
+
+    SECTION("the same reduction generates under an adequate envelope") {
+        config.reduction_dim = 1024;
+        config.l3_buffer_count = 512;
+        config.l2_bank_count = 512;   // share 128 >= 66
+        SoftmaxScheduleGenerator gen(config);
+        REQUIRE(gen.generate().valid);
+    }
+}
+
+TEST_CASE("LayerNormScheduleGenerator enforces resident affine params against the envelope",
+          "[timing][schedule][layernorm][envelope]") {
+    LayerNormScheduleGenerator::Config config;
+    config.batch_size = 4;
+    config.sequence_length = 64;
+    config.hidden_size = 768;   // 48 hidden tiles
+    config.Ti = 16;
+    config.Tj = 16;
+
+    SECTION("affine params exceed the default envelope share") {
+        config.affine = true;   // 2*48 + 2 = 98 > share 8
+        LayerNormScheduleGenerator gen(config);
+        auto schedule = gen.generate();
+        REQUIRE_FALSE(schedule.valid);
+        REQUIRE(schedule.error_message.find("working set") != std::string::npos);
+    }
+
+    SECTION("non-affine streaming fits the default envelope") {
+        config.affine = false;  // working set 3
+        LayerNormScheduleGenerator gen(config);
+        REQUIRE(gen.generate().valid);
+    }
+
+    SECTION("affine generates under an adequate envelope") {
+        config.affine = true;
+        config.l3_buffer_count = 512;
+        config.l2_bank_count = 512;   // share 128 >= 98
+        LayerNormScheduleGenerator gen(config);
+        REQUIRE(gen.generate().valid);
+    }
+}
+
+TEST_CASE("BatchNorm and Conv2D carry the envelope and refuse degenerate shares",
+          "[timing][schedule][envelope]") {
+    SECTION("batchnorm fits the default envelope in both modes") {
+        BatchNormScheduleGenerator::Config config;
+        config.N = 4; config.C = 8; config.H = 16; config.W = 16;
+        config.training = true;
+        REQUIRE(config.required_working_set() == 5);
+        BatchNormScheduleGenerator gen(config);
+        REQUIRE(gen.generate().valid);
+    }
+
+    SECTION("batchnorm training refused under a degenerate envelope") {
+        BatchNormScheduleGenerator::Config config;
+        config.N = 4; config.C = 8; config.H = 16; config.W = 16;
+        config.training = true;
+        config.l3_buffer_count = 8;
+        config.l2_bank_count = 8;    // share 2 < 5
+        BatchNormScheduleGenerator gen(config);
+        auto schedule = gen.generate();
+        REQUIRE_FALSE(schedule.valid);
+        REQUIRE(schedule.error_message.find("working set") != std::string::npos);
+    }
+
+    SECTION("conv2d streams within the default envelope") {
+        Conv2DScheduleGenerator::Config config;
+        config.N = 1; config.H_in = 32; config.W_in = 32; config.C_in = 16;
+        config.C_out = 16; config.Kh = 3; config.Kw = 3;
+        config.padding_h = 1; config.padding_w = 1;
+        Conv2DScheduleGenerator gen(config);
+        auto schedule = gen.generate();
+        REQUIRE(schedule.valid);
+        // Fine-grained interleaving: capacity-aware safety holds at defaults
+        REQUIRE(is_livelock_safe(schedule, 32, 64));
+    }
+
+    SECTION("conv2d refused under a degenerate envelope") {
+        Conv2DScheduleGenerator::Config config;
+        config.l3_buffer_count = 4;
+        config.l2_bank_count = 4;    // share 1 < 3
+        Conv2DScheduleGenerator gen(config);
+        REQUIRE_FALSE(gen.generate().valid);
+    }
 }
