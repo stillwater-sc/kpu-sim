@@ -9,6 +9,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Value-producing elementwise/broadcast execution + host oracles (#102,
+  epic E2).** `FunctionalElementwiseExecutor` bridges the #101 generator to
+  the #66 payload machinery: input tensors ride the real CSP data path
+  (DRAM->L3->L2->L1->compute), every COMPUTE applies real VEOp semantics,
+  and results drain back to DRAM - verified elementwise against an
+  independent host oracle for all 14 VEOps across binary, broadcast-bias,
+  unary, scalar, non-aligned, and partitioned-credit configurations
+  (12k+ assertions). `ScheduleExecutor` gains an opt-in
+  `FunctionalComputeBinder` so ANY generated schedule can run
+  value-producing without touching the timing path. Behavioral
+  STR_BROADCAST_ROW/COL get real resident-operand semantics (deliver L2->L1
+  once, consume many, never fires a compute) with `str_broadcast_row/col`
+  factories - closing the broadcast isa_closure gap. Coverage: 16/105
+  (elementwise+broadcast design/functional cells, broadcast isa_closure).
+
 - **ElementwiseScheduleGenerator + broadcast emission (#101, epic E2).**
   The first generator whose every schedule is executable: paired
   two-stream emission for `C = op(A, B)` (P6 - interleaved A/B pairs, no

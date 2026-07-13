@@ -109,6 +109,20 @@ public:
     using ProgressCallback = std::function<void(size_t current, size_t total)>;
 
     /**
+     * @brief Optional value-plane binding for COMPUTE operations
+     *
+     * When set, each COMPUTE operation is offered to the binder; returning a
+     * FunctionalComputeSpec dispatches it as a value-producing compute (the
+     * #66 payload machinery) instead of a timing-only compute. Returning
+     * nullopt keeps the timing-only path for that operation. Timing behavior
+     * is identical either way: the functional path derives its dependency
+     * accounting from the same scheduled-feed counts.
+     */
+    using FunctionalComputeBinder =
+        std::function<std::optional<ConcurrentTimingExecutor::FunctionalComputeSpec>(
+            const ScheduleOperation&)>;
+
+    /**
      * @brief Construct executor with a timing executor reference
      * @param executor The ConcurrentTimingExecutor to use
      */
@@ -126,6 +140,13 @@ public:
      */
     void set_progress_callback(ProgressCallback callback) {
         progress_callback_ = std::move(callback);
+    }
+
+    /**
+     * @brief Install a value-plane binder for COMPUTE operations
+     */
+    void set_functional_compute_binder(FunctionalComputeBinder binder) {
+        functional_binder_ = std::move(binder);
     }
 
     /**
@@ -234,6 +255,7 @@ private:
     ConcurrentTimingExecutor& executor_;
     Config config_;
     ProgressCallback progress_callback_;
+    FunctionalComputeBinder functional_binder_;
 
     /**
      * @brief Warn when the schedule's generation envelope differs from the
@@ -301,6 +323,12 @@ private:
                 break;
 
             case ScheduleOpType::COMPUTE:
+                if (functional_binder_) {
+                    if (auto spec = functional_binder_(op)) {
+                        executor_.schedule_functional_compute(op.tile, *spec);
+                        break;
+                    }
+                }
                 if (!op.dependency_tiles.empty()) {
                     executor_.schedule_compute(op.tile, op.dependency_tiles);
                 } else {

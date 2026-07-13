@@ -175,6 +175,68 @@ DMInstruction DMInstruction::str_feed_cols(MatrixID mat, TileCoord tile,
     return instr;
 }
 
+namespace {
+
+DMInstruction make_str_broadcast(DMOpcode opcode, const char* mnemonic,
+                                 MatrixID mat, TileCoord tile,
+                                 uint8_t l2_bank, uint8_t l1_buf,
+                                 Address l2_addr, Address l1_addr,
+                                 Size height, Size width, Size fabric_size) {
+    DMInstruction instr;
+    instr.opcode = opcode;
+
+    StreamerOperands ops;
+    ops.matrix = mat;
+    ops.tile = tile;
+    ops.l2_bank_id = l2_bank;
+    ops.l1_buffer_id = l1_buf;
+    ops.l2_addr = l2_addr;
+    ops.l1_addr = l1_addr;
+    ops.height = height;
+    ops.width = width;
+    ops.fabric_size = fabric_size;
+    ops.buffer = BufferSlot::AUTO;
+
+    instr.operands = ops;
+
+    std::ostringstream oss;
+    oss << mnemonic << " ";
+    switch (mat) {
+        case MatrixID::A:
+            oss << "A_tile[" << tile.ti << "," << tile.tk << "]";
+            break;
+        case MatrixID::B:
+            oss << "B_tile[" << tile.tk << "," << tile.tj << "]";
+            break;
+        case MatrixID::C:
+            oss << "C_tile[" << tile.ti << "," << tile.tj << "]";
+            break;
+    }
+    instr.label = oss.str();
+
+    return instr;
+}
+
+} // namespace
+
+DMInstruction DMInstruction::str_broadcast_row(MatrixID mat, TileCoord tile,
+                                               uint8_t l2_bank, uint8_t l1_buf,
+                                               Address l2_addr, Address l1_addr,
+                                               Size height, Size width, Size fabric_size) {
+    return make_str_broadcast(DMOpcode::STR_BROADCAST_ROW, "STR_BCAST_ROW",
+                              mat, tile, l2_bank, l1_buf, l2_addr, l1_addr,
+                              height, width, fabric_size);
+}
+
+DMInstruction DMInstruction::str_broadcast_col(MatrixID mat, TileCoord tile,
+                                               uint8_t l2_bank, uint8_t l1_buf,
+                                               Address l2_addr, Address l1_addr,
+                                               Size height, Size width, Size fabric_size) {
+    return make_str_broadcast(DMOpcode::STR_BROADCAST_COL, "STR_BCAST_COL",
+                              mat, tile, l2_bank, l1_buf, l2_addr, l1_addr,
+                              height, width, fabric_size);
+}
+
 DMInstruction DMInstruction::str_drain(TileCoord tile,
                                        uint8_t l2_bank, uint8_t l1_buf,
                                        Address l2_addr, Address l1_addr,

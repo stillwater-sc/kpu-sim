@@ -138,6 +138,7 @@ private:
     void dispatch_bm_writeback(const BlockMoverOperands& ops);
     void dispatch_str_feed_rows(const StreamerOperands& ops);
     void dispatch_str_feed_cols(const StreamerOperands& ops);
+    void dispatch_str_broadcast(const StreamerOperands& ops);
     void dispatch_str_drain(const StreamerOperands& ops);
     void dispatch_barrier();
 
