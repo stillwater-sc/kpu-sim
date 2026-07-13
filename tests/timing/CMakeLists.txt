@@ -128,3 +128,13 @@ kpu_add_component_test(test_multi_tile_execution "timing"
 set_tests_properties(test_multi_tile_execution PROPERTIES
     LABELS "timing;executor;regression;v0.9"
 )
+
+# Functional elementwise execution with host oracle (issue #102, epic E2):
+# value-producing elementwise/broadcast on the CSP data path
+kpu_add_component_test(test_functional_elementwise "timing"
+    test_functional_elementwise.cpp
+)
+
+set_tests_properties(test_functional_elementwise PROPERTIES
+    LABELS "timing;functional;elementwise;v0.9"
+)

@@ -492,6 +492,25 @@ struct DMInstruction {
                                        Address l2_addr, Address l1_addr,
                                        Size height, Size width, Size fabric_size);
 
+    /**
+     * @brief Broadcast a resident operand from L2 into an L1 buffer
+     *
+     * Delivers the operand ONCE for consumption by any number of subsequent
+     * compute/VE operations (the ISA-level counterpart of the CSP tier's
+     * 1:1:k seeded delivery, issues #100/#102). Unlike str_feed_rows/cols,
+     * a broadcast does not participate in feed pairing - it never triggers
+     * a compute by itself.
+     */
+    static DMInstruction str_broadcast_row(MatrixID mat, TileCoord tile,
+                                           uint8_t l2_bank, uint8_t l1_buf,
+                                           Address l2_addr, Address l1_addr,
+                                           Size height, Size width, Size fabric_size);
+
+    static DMInstruction str_broadcast_col(MatrixID mat, TileCoord tile,
+                                           uint8_t l2_bank, uint8_t l1_buf,
+                                           Address l2_addr, Address l1_addr,
+                                           Size height, Size width, Size fabric_size);
+
     static DMInstruction str_drain(TileCoord tile,
                                    uint8_t l2_bank, uint8_t l1_buf,
                                    Address l2_addr, Address l1_addr,

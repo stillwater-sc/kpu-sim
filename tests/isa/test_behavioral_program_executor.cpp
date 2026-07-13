@@ -641,6 +641,84 @@ void test_ve_elementwise() {
 }
 
 // ============================================================================
+// Test: STR_BROADCAST resident-operand delivery + repeated VE consumption
+// (issue #102, epic E2)
+// ============================================================================
+
+void test_str_broadcast_resident_operand() {
+    std::cout << "\n=== Test: STR_BROADCAST delivers once, VE consumes many ===\n";
+
+    const Size Ti = 16, Tj = 16;
+    const Size elems = Ti * Tj;
+    const Size bytes = elems * sizeof(float);
+
+    // Three L1 buffers: streamed A (0), resident broadcast B (1), dst (2)
+    TestHardware hw(16, 4, 256, 8, 128, /*num_l1=*/3, 64);
+
+    // Resident bias tile staged in L2 bank 0
+    std::vector<float> bias(elems);
+    for (Size i = 0; i < elems; ++i) {
+        bias[i] = -4.0f + static_cast<float>(i % 13) * 0.5f;
+    }
+    hw.l2_banks[0].write(0, bias.data(), bytes);
+
+    // Delivery program: ONE broadcast, then halt. The operand must remain
+    // resident in L1 for every later consumer without re-delivery.
+    {
+        DMProgram program;
+        program.name = "broadcast_delivery";
+        program.Ti = Ti;
+        program.Tj = Tj;
+        program.Tk = 1;
+        program.instructions.push_back(DMInstruction::str_broadcast_col(
+            MatrixID::B, TileCoord{0, 0, 0}, /*l2_bank=*/0, /*l1_buf=*/1,
+            /*l2_addr=*/0, /*l1_addr=*/0, Ti, Tj, 16));
+        program.instructions.push_back(DMInstruction::halt());
+
+        BehavioralProgramExecutor executor(hw.context());
+        executor.load_program(program, 0, 0, 0);
+        bool ran = executor.run();
+        check(ran, "broadcast delivery program runs");
+        check(executor.statistics().str_feeds == 1, "broadcast counts one delivery");
+    }
+
+    // Three consumer tiles, each a separate program run: stream A into L1[0],
+    // VE ADD against the resident B, read the result. B is NEVER re-delivered.
+    for (int tile = 0; tile < 3; ++tile) {
+        std::vector<float> a(elems);
+        for (Size i = 0; i < elems; ++i) {
+            a[i] = static_cast<float>(tile + 1) + static_cast<float>(i % 7) * 0.25f;
+        }
+        hw.l1_buffers[0].write(0, a.data(), bytes);
+
+        DMProgram program;
+        program.name = "broadcast_consume";
+        program.Ti = Ti;
+        program.Tj = Tj;
+        program.Tk = 1;
+        program.instructions.push_back(
+            DMInstruction::ve_elementwise(VEOp::ADD, 0, 1, 2));
+        program.instructions.push_back(DMInstruction::halt());
+
+        BehavioralProgramExecutor executor(hw.context());
+        executor.load_program(program, 0, 0, 0);
+        bool ran = executor.run();
+
+        std::vector<float> out(elems, -1.0f);
+        hw.l1_buffers[2].read(0, out.data(), bytes);
+
+        float max_err = 0.0f;
+        for (Size i = 0; i < elems; ++i) {
+            max_err = std::max(max_err, std::fabs(out[i] - (a[i] + bias[i])));
+        }
+        check(ran && max_err == 0.0f,
+              "consumer tile " + std::to_string(tile) +
+              " reads resident broadcast exactly (max err " +
+              std::to_string(max_err) + ")");
+    }
+}
+
+// ============================================================================
 // Main
 // ============================================================================
 
@@ -657,6 +735,7 @@ int main() {
     test_execution_statistics();
     test_loop_machinery();
     test_ve_elementwise();
+    test_str_broadcast_resident_operand();
 
     std::cout << "\n" << std::string(60, '*') << "\n";
     std::cout << "Results: " << passed << " passed, " << failed << " failed\n";

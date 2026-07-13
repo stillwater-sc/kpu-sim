@@ -219,11 +219,16 @@ void BehavioralProgramExecutor::dispatch(const DMInstruction& instr, [[maybe_unu
         dispatch_str_drain_auto(std::get<AutoStreamerOperands>(instr.operands));
         break;
 
-    // Broadcast — treat as a streamer feed for now
+    // Broadcast: deliver a resident operand L2 -> L1 exactly once, for
+    // consumption by any number of subsequent VE/compute ops (the ISA-level
+    // counterpart of the CSP 1:1:k seeded delivery, issues #100/#102).
+    // Unlike a feed, a broadcast never participates in the A/B feed pairing
+    // and never fires a compute. Legacy monostate markers remain no-ops.
     case DMOpcode::STR_BROADCAST_ROW:
     case DMOpcode::STR_BROADCAST_COL:
-        // Behavioral: broadcast is a no-op annotation
-        // (data already in L2, compute reads it directly in softmax path)
+        if (std::holds_alternative<StreamerOperands>(instr.operands)) {
+            dispatch_str_broadcast(std::get<StreamerOperands>(instr.operands));
+        }
         break;
 
     case DMOpcode::VE_ELEMENTWISE:
@@ -483,6 +488,24 @@ void BehavioralProgramExecutor::dispatch_str_feed_cols(const StreamerOperands& o
         a_fed_ = false;
         b_fed_ = false;
     }
+}
+
+void BehavioralProgramExecutor::dispatch_str_broadcast(const StreamerOperands& ops) {
+    // L2 bank -> L1 buffer, resident-operand delivery: copied once, then
+    // read in place by any number of VE/compute ops. Does NOT set the
+    // a_fed_/b_fed_ pairing flags - a broadcast can never fire a compute.
+    uint8_t l2_id = ops.l2_bank_id;
+    Size bytes = ops.height * ops.width * 4;  // float32
+
+    if (bytes == 0) return;
+    if (l2_id >= hw_.l2_banks.size()) return;
+    if (ops.l1_buffer_id >= hw_.l1_buffers.size()) return;
+
+    std::vector<uint8_t> buf(bytes);
+    hw_.l2_banks[l2_id].read(ops.l2_addr, buf.data(), bytes);
+    hw_.l1_buffers[ops.l1_buffer_id].write(ops.l1_addr, buf.data(), bytes);
+
+    stats_.str_feeds++;
 }
 
 void BehavioralProgramExecutor::dispatch_str_drain(const StreamerOperands& ops) {

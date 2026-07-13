@@ -195,13 +195,13 @@
         "jepa"
       ],
       "stages": {
-        "design": "missing",
+        "design": "done",
         "isa_closure": "done",
         "generator": "done",
-        "functional": "missing",
+        "functional": "done",
         "regression": "missing"
       },
-      "notes": "VE_ELEMENTWISE fully encoded + behavioral semantics (#100); ElementwiseScheduleGenerator with paired two-stream emission, executable COMPUTEs, envelope checks (#101). CSP functional oracle path is E2-T4."
+      "notes": "VE_ELEMENTWISE fully encoded + behavioral semantics (#100); ElementwiseScheduleGenerator with paired two-stream emission, executable COMPUTEs, envelope checks (#101); value-producing CSP execution via FunctionalElementwiseExecutor verified against host oracle across all ops/forms incl. partitioned credits (#102). Design: docs/plans/e2_broadcast_elementwise_pattern.md (#99). Regression matrix is E2-T5."
     },
     {
       "name": "epilogue_fused",
@@ -276,13 +276,13 @@
         "jepa"
       ],
       "stages": {
-        "design": "missing",
-        "isa_closure": "partial",
+        "design": "done",
+        "isa_closure": "done",
         "generator": "done",
-        "functional": "missing",
+        "functional": "done",
         "regression": "missing"
       },
-      "notes": "Ref-count seeding (1:1:k) in CSP tier (#100); emit_broadcast_tile helper + BROADCAST_B form executes end-to-end (#101). Behavioral STR_BROADCAST semantics + resident-operand functional path are E2-T4."
+      "notes": "Ref-count seeding 1:1:k in CSP tier (#100); emit_broadcast_tile + BROADCAST_B form (#101); CSP functional broadcast vs host oracle + behavioral STR_BROADCAST resident-operand delivery semantics with deliver-once/consume-many ISA test (#102). Design: docs/plans/e2_broadcast_elementwise_pattern.md (#99). Regression matrix is E2-T5."
     },
     {
       "name": "online_reduction",
