@@ -156,11 +156,22 @@ void run_cell(Form form, const SizeCase& size, const EnvelopeCase& env) {
     REQUIRE(executor.l3_credits().available() == env.l3);
     REQUIRE(executor.l2_credits().available() == env.l2);
 
-    // Stall sanity
+    // Stall sanity. Stall counters aggregate across ALL components, so
+    // they can legitimately exceed total_cycles (e.g. 3707 stalls in a
+    // 1678-cycle run when several engines wait concurrently); the true
+    // "stalled every cycle" ceiling is total_cycles x stall-capable
+    // components. Hitting it would mean no component ever did work.
     const Cycle stalls = stats.dma_credit_stalls + stats.bm_tag_stalls +
                          stats.bm_credit_stalls + stats.str_tag_stalls +
                          stats.str_credit_stalls;
+    const auto& exec_config = executor.config();
+    const Cycle stall_capable =
+        static_cast<Cycle>(exec_config.num_dma_engines +
+                           exec_config.num_block_movers +
+                           exec_config.num_row_streamers +
+                           exec_config.num_col_streamers);
     REQUIRE(result.total_cycles > 0);
+    REQUIRE(stalls < result.total_cycles * stall_capable);
 
     const Size tiles = gen_config.data_tiles();
     characterization().push_back(
