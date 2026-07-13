@@ -138,3 +138,13 @@ kpu_add_component_test(test_functional_elementwise "timing"
 set_tests_properties(test_functional_elementwise PROPERTIES
     LABELS "timing;functional;elementwise;v0.9"
 )
+
+# Elementwise regression matrix (issue #103, epic E2): form x size x envelope
+# with credit/stall invariants and characterization
+kpu_add_component_test(test_elementwise_regression "timing"
+    test_elementwise_regression.cpp
+)
+
+set_tests_properties(test_elementwise_regression PROPERTIES
+    LABELS "timing;regression;elementwise;v0.9"
+)
