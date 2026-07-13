@@ -9,6 +9,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Elementwise/broadcast regression matrix + characterization (#103,
+  epic E2 COMPLETE).** `test_elementwise_regression` executes the full
+  form x size x envelope matrix (binary/broadcast/unary x 1/16/64-tile +
+  non-aligned x default/constrained-min/partitioned = 36 cells) with
+  invariants stronger than completion: exact per-stage tile accounting
+  (tiles reaching L3 = LOADs + WRITEBACKs, moves/feeds/drains/stores
+  exact) and full credit conservation (every L3/L2 credit returned).
+  The envelope refusal boundary is pinned exact (12 generates, 11
+  refuses), and functional values survive the minimum envelope under
+  partitioned credits on a non-aligned tensor. Characterization recorded
+  on epic #71: constrained-min triples stalls on binary 64-tile
+  (1166 -> 3707) yet costs only 6 extra cycles - the pipeline absorbs
+  envelope pressure; per-tile cost amortizes 242 -> 26 cycles from 1 to
+  64 tiles. Coverage: 18/105; elementwise and broadcast are the first
+  operators complete across all five stages after matmul.
+
 - **Value-producing elementwise/broadcast execution + host oracles (#102,
   epic E2).** `FunctionalElementwiseExecutor` bridges the #101 generator to
   the #66 payload machinery: input tensors ride the real CSP data path

@@ -199,9 +199,9 @@
         "isa_closure": "done",
         "generator": "done",
         "functional": "done",
-        "regression": "missing"
+        "regression": "done"
       },
-      "notes": "VE_ELEMENTWISE fully encoded + behavioral semantics (#100); ElementwiseScheduleGenerator with paired two-stream emission, executable COMPUTEs, envelope checks (#101); value-producing CSP execution via FunctionalElementwiseExecutor verified against host oracle across all ops/forms incl. partitioned credits (#102). Design: docs/plans/e2_broadcast_elementwise_pattern.md (#99). Regression matrix is E2-T5."
+      "notes": "VE_ELEMENTWISE fully encoded + behavioral semantics (#100); ElementwiseScheduleGenerator with paired two-stream emission, executable COMPUTEs, envelope checks (#101); value-producing CSP execution via FunctionalElementwiseExecutor verified against host oracle across all ops/forms incl. partitioned credits (#102). Design: docs/plans/e2_broadcast_elementwise_pattern.md (#99). Regression: form x size x envelope matrix with credit/stall invariants + characterization (#103)."
     },
     {
       "name": "epilogue_fused",
@@ -280,9 +280,9 @@
         "isa_closure": "done",
         "generator": "done",
         "functional": "done",
-        "regression": "missing"
+        "regression": "done"
       },
-      "notes": "Ref-count seeding 1:1:k in CSP tier (#100); emit_broadcast_tile + BROADCAST_B form (#101); CSP functional broadcast vs host oracle + behavioral STR_BROADCAST resident-operand delivery semantics with deliver-once/consume-many ISA test (#102). Design: docs/plans/e2_broadcast_elementwise_pattern.md (#99). Regression matrix is E2-T5."
+      "notes": "Ref-count seeding 1:1:k in CSP tier (#100); emit_broadcast_tile + BROADCAST_B form (#101); CSP functional broadcast vs host oracle + behavioral STR_BROADCAST resident-operand delivery semantics with deliver-once/consume-many ISA test (#102). Design: docs/plans/e2_broadcast_elementwise_pattern.md (#99). Regression: form x size x envelope matrix with credit/stall invariants + characterization (#103)."
     },
     {
       "name": "online_reduction",
