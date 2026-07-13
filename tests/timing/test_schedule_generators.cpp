@@ -10,6 +10,7 @@
 
 #include <sw/kpu/timing/schedule/schedule_generator_interface.hpp>
 #include <sw/kpu/timing/schedule/matmul_schedule_generator.hpp>
+#include <sw/kpu/timing/schedule/elementwise_schedule_generator.hpp>
 #include <sw/kpu/timing/schedule/conv2d_schedule_generator.hpp>
 #include <sw/kpu/timing/schedule/softmax_schedule_generator.hpp>
 #include <sw/kpu/timing/schedule/layernorm_schedule_generator.hpp>
@@ -760,5 +761,122 @@ TEST_CASE("VAL-007 flags envelope disagreement in validation", "[timing][schedul
             }
         }
         REQUIRE(found);
+    }
+}
+
+// ============================================================================
+// ElementwiseScheduleGenerator (issue #101, epic E2): paired two-stream
+// emission, broadcast delivery, and executable COMPUTEs (resolves #139
+// for the elementwise family)
+// ============================================================================
+
+TEST_CASE("ElementwiseScheduleGenerator emits paired executable schedules",
+          "[timing][schedule][elementwise]") {
+    ElementwiseScheduleGenerator::Config config;
+    config.num_elements = 1024;
+    config.tile_elems = 256;   // 4 data tiles
+
+    SECTION("binary form pairs the streams and carries both-operand deps") {
+        config.form = ElementwiseScheduleGenerator::Form::BINARY;
+        ElementwiseScheduleGenerator gen(config);
+        auto schedule = gen.generate();
+        REQUIRE(schedule.valid);
+
+        REQUIRE(schedule.count_ops(ScheduleOpType::LOAD) == 8);   // 4 A + 4 B
+        REQUIRE(schedule.count_ops(ScheduleOpType::MOVE) == 8);
+        REQUIRE(schedule.count_ops(ScheduleOpType::FEED) == 8);
+        REQUIRE(schedule.count_ops(ScheduleOpType::COMPUTE) == 4);
+
+        // Paired interleave: no same-matrix monopolization
+        auto analysis = ScheduleAnalysis::analyze(schedule);
+        REQUIRE(analysis.max_consecutive_a <= 2);
+        REQUIRE(analysis.max_consecutive_b <= 2);
+        REQUIRE(is_livelock_safe(schedule, config.l3_buffer_count,
+                                 config.l2_bank_count));
+
+        // Every COMPUTE depends on exactly its A and B pair (executable,
+        // unlike the #139-affected generators)
+        for (const auto& op : schedule.operations) {
+            if (op.type != ScheduleOpType::COMPUTE) continue;
+            REQUIRE(op.dependency_tiles.size() == 2);
+            REQUIRE(op.dependency_tiles[0].matrix == MatrixID::A);
+            REQUIRE(op.dependency_tiles[1].matrix == MatrixID::B);
+            REQUIRE(op.dependency_tiles[0].ti == op.tile.tile_id.ti);
+        }
+
+        // Envelope stamped (issue #91)
+        REQUIRE(schedule.metadata.l3_buffer_count == 32);
+        REQUIRE(schedule.metadata.l2_bank_count == 64);
+    }
+
+    SECTION("broadcast form delivers B once with a seeded consumer count") {
+        config.form = ElementwiseScheduleGenerator::Form::BROADCAST_B;
+        ElementwiseScheduleGenerator gen(config);
+        auto schedule = gen.generate();
+        REQUIRE(schedule.valid);
+
+        // One B load/move; four B feeds (one per consumer)
+        size_t b_loads = 0, b_moves = 0, b_feeds = 0;
+        for (const auto& op : schedule.operations) {
+            if (op.tile.tile_id.matrix != MatrixID::B) continue;
+            if (op.type == ScheduleOpType::LOAD) ++b_loads;
+            if (op.type == ScheduleOpType::MOVE) {
+                ++b_moves;
+                REQUIRE(op.tile.consumer_count == 4);  // 1:1:k discipline
+            }
+            if (op.type == ScheduleOpType::FEED) ++b_feeds;
+        }
+        REQUIRE(b_loads == 1);
+        REQUIRE(b_moves == 1);
+        REQUIRE(b_feeds == 4);
+
+        // Every COMPUTE depends on its A tile AND the broadcast tile
+        for (const auto& op : schedule.operations) {
+            if (op.type != ScheduleOpType::COMPUTE) continue;
+            REQUIRE(op.dependency_tiles.size() == 2);
+            REQUIRE(op.dependency_tiles[1].matrix == MatrixID::B);
+        }
+    }
+
+    SECTION("unary form streams a single operand") {
+        config.form = ElementwiseScheduleGenerator::Form::UNARY;
+        ElementwiseScheduleGenerator gen(config);
+        auto schedule = gen.generate();
+        REQUIRE(schedule.valid);
+        REQUIRE(schedule.count_ops(ScheduleOpType::LOAD) == 4);
+        REQUIRE(schedule.count_ops(ScheduleOpType::COMPUTE) == 4);
+    }
+
+    SECTION("degenerate envelope is refused a priori") {
+        config.form = ElementwiseScheduleGenerator::Form::BINARY;
+        config.l3_buffer_count = 4;
+        config.l2_bank_count = 4;   // share 1 < working set 3
+        ElementwiseScheduleGenerator gen(config);
+        auto schedule = gen.generate();
+        REQUIRE_FALSE(schedule.valid);
+        REQUIRE(schedule.error_message.find("working set") != std::string::npos);
+    }
+
+    SECTION("non-aligned tensor clamps the trailing tile footprint") {
+        config.form = ElementwiseScheduleGenerator::Form::BINARY;
+        config.num_elements = 1000;   // 4 tiles: 256+256+256+232
+        ElementwiseScheduleGenerator gen(config);
+        auto schedule = gen.generate();
+        REQUIRE(schedule.valid);
+        REQUIRE(schedule.count_ops(ScheduleOpType::COMPUTE) == 4);
+
+        // Every load footprint stays within num_elements; the last tile of
+        // each stream shrinks to the remainder while the stride between
+        // tiles stays full-tile
+        const Size full_bytes = 256 * 4;
+        const Size tail_bytes = 232 * 4;
+        for (const auto& op : schedule.operations) {
+            if (op.type != ScheduleOpType::LOAD) continue;
+            const auto& t = op.tile;
+            REQUIRE(t.dram_address - t.matrix_base_address ==
+                    t.tile_id.ti * full_bytes);
+            REQUIRE(t.size_bytes ==
+                    (t.tile_id.ti == 3 ? tail_bytes : full_bytes));
+        }
     }
 }
