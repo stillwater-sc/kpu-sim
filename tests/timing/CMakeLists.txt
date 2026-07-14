@@ -188,3 +188,13 @@ kpu_add_component_test(test_resident_dependency "timing"
 set_tests_properties(test_resident_dependency PROPERTIES
     LABELS "timing;executor;resident;v0.9"
 )
+
+# Online softmax schedule generator (issue #156, epic E8): single-pass
+# stats + resident (m,l) apply, row-resident / re-streamed realization
+kpu_add_component_test(test_softmax_generator "timing"
+    test_softmax_generator.cpp
+)
+
+set_tests_properties(test_softmax_generator PROPERTIES
+    LABELS "timing;schedule;softmax;v0.9"
+)
