@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Standalone softmax simulator (#165, deliverable B).**
+  `examples/schedule/softmax_simulator` runs the E8 online-softmax schedule
+  one executor cycle at a time and drives the `TileTracker` to print the
+  horizontal L3/L2/L1/array state-transition log: the row streams in, the
+  stats compute produces the `(m, l)` state (visible in the log, e.g.
+  `B[0,0,0]=(-0.69,440)`), that state stays resident in the array and feeds
+  the apply computes, and the normalized `C` tiles drain back out - ending
+  on the per-row softmax-sums-to-1 check. Configurable
+  `--rows/--len/--tile/--l3/--l2`; CI smoke test; how-to-read writeup at
+  `docs/tools/softmax-simulator.md`. Completes issue #165.
+
 - **`TileTracker` horizontal tile-state debug log (#165, deliverable A).**
   Renders the tiles staged in the software-managed memory hierarchy as a
   horizontal per-snapshot band - L3 on the left, L2 to its right,

@@ -52,3 +52,15 @@ target_link_libraries(run_matmul_DEPRECATED PRIVATE
 set_target_properties(run_matmul_DEPRECATED PROPERTIES
     FOLDER "Examples/Schedule/Deprecated"
 )
+
+# Online softmax simulator with tile-state tracker (issue #165)
+add_executable(softmax_simulator softmax_simulator.cpp)
+target_link_libraries(softmax_simulator PRIVATE kpu_simulator)
+set_target_properties(softmax_simulator PROPERTIES FOLDER "Examples/Schedule")
+if(KPU_BUILD_TESTS)
+    # Smoke test: runs the simulator and expects exit 0 (each row sums to 1)
+    add_test(NAME softmax_simulator COMMAND softmax_simulator)
+    set_tests_properties(softmax_simulator PROPERTIES
+        LABELS "timing;softmax;tracker;example;v0.9"
+    )
+endif()
