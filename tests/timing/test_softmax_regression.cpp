@@ -14,6 +14,7 @@
 #include <sw/kpu/timing/schedule/functional_softmax_executor.hpp>
 #include <sw/kpu/timing/schedule/softmax_schedule_generator.hpp>
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <limits>
@@ -180,6 +181,10 @@ TEST_CASE("Online softmax reads the row fewer times than the multi-pass generato
     REQUIRE(online_loads < mp_loads);
     // The online row is read exactly once (row-resident realization)
     REQUIRE(online_loads == on.reduction_elems / on.tile_elems);
+    // Pin the documented 4x: the 4-pass safe-softmax re-reads the row once
+    // per pass (4 passes), the online form reads it once. A regression in
+    // either would break the claim in CHANGELOG/session/coverage notes.
+    REQUIRE(mp_loads == 4 * online_loads);
 }
 
 TEST_CASE("Online softmax characterization report",
