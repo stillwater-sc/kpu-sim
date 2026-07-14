@@ -18,7 +18,8 @@ namespace sw::kpu::isa {
  * @brief Binary format magic number and version
  */
 constexpr uint32_t DMPROGRAM_MAGIC = 0x4B505544;  // "KPUD" in little-endian
-constexpr uint32_t DMPROGRAM_VERSION = 2;  // v2: VEOperands (issue #100)
+constexpr uint32_t DMPROGRAM_VERSION = 3;  // v3: VEReduceOperands (issue #105);
+                                           // v2: VEOperands (issue #100)
 
 /**
  * @brief Error thrown during serialization/deserialization

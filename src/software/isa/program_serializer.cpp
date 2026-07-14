@@ -246,6 +246,11 @@ void ProgramSerializer::write_instruction(std::vector<uint8_t>& buffer, const DM
             write_value(buffer, arg.l1_src_a);
             write_value(buffer, arg.l1_src_b);
             write_value(buffer, arg.l1_dst);
+        } else if constexpr (std::is_same_v<T, VEReduceOperands>) {
+            write_value(buffer, static_cast<uint8_t>(arg.op));
+            write_value(buffer, arg.phase);
+            write_value(buffer, arg.l1_src);
+            write_value(buffer, arg.l1_acc);
         }
         // NOTE: register-file config (SET_BASE family) and AUTO operand
         // types are not yet serialized - pre-existing gap, tracked
@@ -396,6 +401,15 @@ size_t ProgramSerializer::read_instruction(const std::vector<uint8_t>& data, siz
             instr.operands = ops;
             break;
         }
+        case 17: { // VEReduceOperands (issue #105, format v3)
+            VEReduceOperands ops;
+            ops.op = static_cast<VEReduceOp>(read_value<uint8_t>(data, offset));
+            ops.phase = read_value<uint8_t>(data, offset);
+            ops.l1_src = read_value<uint8_t>(data, offset);
+            ops.l1_acc = read_value<uint8_t>(data, offset);
+            instr.operands = ops;
+            break;
+        }
         default:
             throw SerializationError("Unknown operand type: " + std::to_string(operand_type));
     }
@@ -403,15 +417,20 @@ size_t ProgramSerializer::read_instruction(const std::vector<uint8_t>& data, siz
     return offset;
 }
 
-// Guard against variant drift: VEOperands must stay at index 16 (the
-// serialized operand-type tag) unless the format version is bumped again
-static_assert(std::variant_size_v<decltype(DMInstruction::operands)> == 17,
+// Guard against variant drift: the serialized operand-type tag is the
+// variant index, so VEOperands must stay at 16 and VEReduceOperands at 17
+// unless the format version is bumped again
+static_assert(std::variant_size_v<decltype(DMInstruction::operands)> == 18,
               "DMInstruction operand variant changed - update the serializer "
               "cases and bump DMPROGRAM_VERSION");
 static_assert(std::is_same_v<
                   std::variant_alternative_t<16, decltype(DMInstruction::operands)>,
                   VEOperands>,
               "VEOperands moved in the operand variant - update case 16");
+static_assert(std::is_same_v<
+                  std::variant_alternative_t<17, decltype(DMInstruction::operands)>,
+                  VEReduceOperands>,
+              "VEReduceOperands moved in the operand variant - update case 17");
 
 // ============================================================================
 // Memory Map Serialization

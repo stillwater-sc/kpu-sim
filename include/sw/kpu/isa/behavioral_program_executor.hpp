@@ -165,6 +165,7 @@ private:
      *        the program's Ti x Tj tile
      */
     void execute_ve_elementwise(const VEOperands& ops);
+    void execute_ve_reduce(const VEReduceOperands& ops);
 
     /**
      * @brief Resolve external memory address for a tile

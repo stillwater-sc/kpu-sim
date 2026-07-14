@@ -753,6 +753,54 @@ DMInstruction DMInstruction::ve_elementwise_scalar(VEOp op, float scalar,
     return instr;
 }
 
+const char* to_string(VEReduceOp op) {
+    switch (op) {
+        case VEReduceOp::MAX:  return "MAX";
+        case VEReduceOp::MIN:  return "MIN";
+        case VEReduceOp::SUM:  return "SUM";
+        case VEReduceOp::MEAN: return "MEAN";
+        case VEReduceOp::VAR:  return "VAR";
+    }
+    return "UNKNOWN";
+}
+
+bool ve_reduce_op_from_string(const std::string& name, VEReduceOp& op) {
+    static const std::pair<const char*, VEReduceOp> kMap[] = {
+        {"MAX", VEReduceOp::MAX},   {"MIN", VEReduceOp::MIN},
+        {"SUM", VEReduceOp::SUM},   {"MEAN", VEReduceOp::MEAN},
+        {"VAR", VEReduceOp::VAR},
+    };
+    for (const auto& [key, value] : kMap) {
+        if (name == key) {
+            op = value;
+            return true;
+        }
+    }
+    return false;
+}
+
+DMInstruction DMInstruction::ve_reduce(VEReduceOp op, uint8_t l1_src,
+                                       uint8_t l1_acc, uint8_t phase) {
+    DMInstruction instr;
+    instr.opcode = DMOpcode::VE_REDUCE;
+
+    VEReduceOperands ops;
+    ops.op = op;
+    ops.phase = phase;
+    ops.l1_src = l1_src;
+    ops.l1_acc = l1_acc;
+    instr.operands = ops;
+
+    std::ostringstream oss;
+    oss << "VE_REDUCE " << to_string(op)
+        << ", L1[" << static_cast<int>(l1_src) << "]"
+        << " -> acc L1[" << static_cast<int>(l1_acc) << "]";
+    if (phase & VEReducePhase::INIT)     oss << " +INIT";
+    if (phase & VEReducePhase::FINALIZE) oss << " +FINALIZE";
+    instr.label = oss.str();
+    return instr;
+}
+
 // ============================================================================
 // DMProgram Statistics
 // ============================================================================

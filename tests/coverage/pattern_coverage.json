@@ -296,13 +296,13 @@
         "jepa"
       ],
       "stages": {
-        "design": "missing",
-        "isa_closure": "partial",
+        "design": "done",
+        "isa_closure": "done",
         "generator": "missing",
         "functional": "missing",
         "regression": "missing"
       },
-      "notes": "VE_REDUCE opcode is a structural marker; running max/sum/mean/var semantics are the epic's core (enables online softmax and flash attention)."
+      "notes": "VEReduceOperands full encoding (MAX/MIN/SUM scalar + MEAN/VAR moment triplet, INIT/ACCUMULATE/FINALIZE phase flags) with assembler/serializer round-trip (format v3) and behavioral running-combine semantics incl. edge cases; CSP chained-accumulator validated on existing resident-dep machinery (#105). Design #104. Generator/functional/regression are E3-T3/T4/T5."
     },
     {
       "name": "layout_transform",

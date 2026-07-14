@@ -6,6 +6,7 @@
 
 #include <sw/kpu/isa/program_serializer.hpp>
 #include <sw/kpu/isa/data_movement_isa.hpp>
+#include <sw/kpu/isa/assembler.hpp>
 #include <sw/kpu/kernel_serializer.hpp>
 #include <sw/kpu/kernel.hpp>
 
@@ -706,4 +707,88 @@ TEST_CASE("ProgramSerializer round-trips VEOperands", "[serialization][ve]") {
     REQUIRE(scalar.scalar == 0.5f);
     REQUIRE(scalar.l1_src_a == 6);
     REQUIRE(scalar.l1_dst == 7);
+}
+
+// ============================================================================
+// VEReduceOperands round-trip (issue #105, format v3)
+// ============================================================================
+
+TEST_CASE("ProgramSerializer round-trips VEReduceOperands", "[serialization][ve][reduce]") {
+    ProgramSerializer serializer;
+
+    DMProgram program;
+    program.name = "ve_reduce_roundtrip";
+    program.Ti = 16; program.Tj = 16; program.Tk = 1;
+    // Streaming SUM: first tile INIT|ACCUMULATE, then a FINALIZE
+    program.instructions.push_back(DMInstruction::ve_reduce(
+        VEReduceOp::SUM, 0, 3,
+        VEReducePhase::INIT | VEReducePhase::ACCUMULATE));
+    program.instructions.push_back(DMInstruction::ve_reduce(
+        VEReduceOp::SUM, 0, 3, VEReducePhase::ACCUMULATE));
+    program.instructions.push_back(DMInstruction::ve_reduce(
+        VEReduceOp::SUM, 0, 3, VEReducePhase::FINALIZE));
+    // Single-shot VAR: all three phases fused
+    program.instructions.push_back(DMInstruction::ve_reduce(
+        VEReduceOp::VAR, 2, 5,
+        VEReducePhase::INIT | VEReducePhase::ACCUMULATE | VEReducePhase::FINALIZE));
+    program.instructions.push_back(DMInstruction::halt());
+
+    auto buffer = serializer.serialize(program);
+    DMProgram loaded = serializer.deserialize(buffer);
+
+    REQUIRE(loaded.instructions.size() == 5);
+
+    const auto& first = std::get<VEReduceOperands>(loaded.instructions[0].operands);
+    REQUIRE(first.op == VEReduceOp::SUM);
+    REQUIRE(first.phase == (VEReducePhase::INIT | VEReducePhase::ACCUMULATE));
+    REQUIRE(first.l1_src == 0);
+    REQUIRE(first.l1_acc == 3);
+
+    const auto& fin = std::get<VEReduceOperands>(loaded.instructions[2].operands);
+    REQUIRE(fin.op == VEReduceOp::SUM);
+    REQUIRE(fin.phase == VEReducePhase::FINALIZE);
+
+    const auto& var = std::get<VEReduceOperands>(loaded.instructions[3].operands);
+    REQUIRE(var.op == VEReduceOp::VAR);
+    REQUIRE(var.phase ==
+            (VEReducePhase::INIT | VEReducePhase::ACCUMULATE | VEReducePhase::FINALIZE));
+    REQUIRE(var.l1_src == 2);
+    REQUIRE(var.l1_acc == 5);
+}
+
+TEST_CASE("Assembler parses VE_REDUCE with phase flags", "[serialization][ve][reduce][asm]") {
+    Assembler assembler;
+    const std::string source =
+        "VE_REDUCE SUM, 0, 1, INIT\n"       // streaming first tile
+        "VE_REDUCE SUM, 0, 1\n"             // ACCUMULATE implied
+        "VE_REDUCE MEAN, 0, 1, FINALIZE\n"  // finalize only
+        "VE_REDUCE VAR, 2, 3, INIT, FINALIZE\n"
+        "HALT\n";
+
+    DMProgram program = assembler.assemble(source, "reduce_asm.kpuasm");
+
+    // Locate the four VE_REDUCE instructions (directives produce none)
+    std::vector<VEReduceOperands> reds;
+    for (const auto& instr : program.instructions) {
+        if (instr.opcode == DMOpcode::VE_REDUCE) {
+            reds.push_back(std::get<VEReduceOperands>(instr.operands));
+        }
+    }
+    REQUIRE(reds.size() == 4);
+
+    REQUIRE(reds[0].op == VEReduceOp::SUM);
+    REQUIRE(reds[0].phase == (VEReducePhase::INIT | VEReducePhase::ACCUMULATE));
+    REQUIRE(reds[0].l1_src == 0);
+    REQUIRE(reds[0].l1_acc == 1);
+
+    REQUIRE(reds[1].phase == VEReducePhase::ACCUMULATE);  // no flags -> accumulate only
+
+    REQUIRE(reds[2].op == VEReduceOp::MEAN);
+    REQUIRE(reds[2].phase == (VEReducePhase::ACCUMULATE | VEReducePhase::FINALIZE));
+
+    REQUIRE(reds[3].op == VEReduceOp::VAR);
+    REQUIRE(reds[3].phase ==
+            (VEReducePhase::INIT | VEReducePhase::ACCUMULATE | VEReducePhase::FINALIZE));
+    REQUIRE(reds[3].l1_src == 2);
+    REQUIRE(reds[3].l1_acc == 3);
 }

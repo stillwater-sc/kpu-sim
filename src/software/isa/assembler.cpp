@@ -808,10 +808,38 @@ DMInstruction Assembler::parse_ve_elementwise() {
 }
 
 DMInstruction Assembler::parse_ve_reduce() {
+    // VE_REDUCE <OP>, <l1_src>, <l1_acc> [, INIT] [, FINALIZE]
+    // ACCUMULATE is implied; INIT and FINALIZE are optional phase flags.
     DMInstruction instr;
     instr.opcode = DMOpcode::VE_REDUCE;
-    consume(TokenType::IDENTIFIER, "reduction operation");
-    instr.operands = std::monostate{};
+
+    Token op_tok = consume(TokenType::IDENTIFIER, "reduction operation");
+    VEReduceOp op;
+    if (!ve_reduce_op_from_string(op_tok.text, op)) {
+        error("Unknown VE reduction operation: " + op_tok.text);
+    }
+
+    VEReduceOperands ops;
+    ops.op = op;
+    ops.phase = VEReducePhase::ACCUMULATE;
+
+    match(TokenType::COMMA);
+    ops.l1_src = static_cast<uint8_t>(parse_number());
+    match(TokenType::COMMA);
+    ops.l1_acc = static_cast<uint8_t>(parse_number());
+
+    while (match(TokenType::COMMA)) {
+        Token flag = consume(TokenType::IDENTIFIER, "phase flag (INIT or FINALIZE)");
+        if (flag.text == "INIT") {
+            ops.phase |= VEReducePhase::INIT;
+        } else if (flag.text == "FINALIZE") {
+            ops.phase |= VEReducePhase::FINALIZE;
+        } else {
+            error("Unknown VE_REDUCE phase flag: " + flag.text);
+        }
+    }
+
+    instr.operands = ops;
     return instr;
 }
 

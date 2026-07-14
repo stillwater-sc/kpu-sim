@@ -719,6 +719,146 @@ void test_str_broadcast_resident_operand() {
 }
 
 // ============================================================================
+// Test: VE_REDUCE streaming semantics + phase flags + edge cases
+// (issue #105, epic E3)
+// ============================================================================
+
+void test_ve_reduce() {
+    std::cout << "\n=== Test: VE_REDUCE streaming semantics (3 tiles) ===\n";
+
+    const Size Ti = 16, Tj = 16;
+    const Size elems = Ti * Tj;
+    const Size bytes = elems * sizeof(float);
+    const Size acc_bytes = 3 * sizeof(float);   // 3-lane fp32 accumulator
+    const int n_tiles = 3;
+
+    // Deterministic multi-tile stream (both signs, non-trivial for VAR)
+    std::vector<std::vector<float>> tiles(n_tiles, std::vector<float>(elems));
+    for (int k = 0; k < n_tiles; ++k) {
+        for (Size i = 0; i < elems; ++i) {
+            tiles[k][i] = static_cast<float>(k * 100) - 128.0f
+                        + static_cast<float>((i * 7 + k) % 251) * 0.5f;
+        }
+    }
+
+    // Independent host oracle over the whole stream
+    double total_sum = 0.0, total_sumsq = 0.0;
+    double omax = -1e30, omin = 1e30;
+    size_t total_count = 0;
+    for (int k = 0; k < n_tiles; ++k) {
+        for (Size i = 0; i < elems; ++i) {
+            double v = tiles[k][i];
+            total_sum += v; total_sumsq += v * v;
+            omax = std::max(omax, v); omin = std::min(omin, v);
+            ++total_count;
+        }
+    }
+    const double omean = total_sum / total_count;
+    const double ovar = std::max(0.0, total_sumsq / total_count - omean * omean);
+
+    // Run one VE_REDUCE instruction against a persistent accumulator buffer.
+    // Streaming = one instruction per tile (l1[0]=src, l1[1]=acc); the
+    // accumulator persists across program runs because hw owns the buffers.
+    auto run_reduce = [](TestHardware& hw, VEReduceOp op, uint8_t phase,
+                         Size ti, Size tj) {
+        DMProgram p; p.name = "reduce"; p.Ti = ti; p.Tj = tj; p.Tk = 1;
+        p.instructions.push_back(DMInstruction::ve_reduce(op, 0, 1, phase));
+        p.instructions.push_back(DMInstruction::halt());
+        BehavioralProgramExecutor ex(hw.context());
+        ex.load_program(p, 0, 0, 0);
+        ex.run();
+    };
+
+    auto stream_reduce = [&](VEReduceOp op) {
+        TestHardware hw(16, 4, 256, 8, 128, /*num_l1=*/3, 64);
+        for (int k = 0; k < n_tiles; ++k) {
+            hw.l1_buffers[0].write(0, tiles[k].data(), bytes);
+            uint8_t phase = VEReducePhase::ACCUMULATE;
+            if (k == 0) phase |= VEReducePhase::INIT;
+            if (k == n_tiles - 1) phase |= VEReducePhase::FINALIZE;  // fuse finalize
+            run_reduce(hw, op, phase, Ti, Tj);
+        }
+        std::vector<float> acc(3, -1.0f);
+        hw.l1_buffers[1].read(0, acc.data(), acc_bytes);
+        return acc;
+    };
+
+    auto approx = [](double a, double b) {
+        return std::fabs(a - b) <= 1e-3 * (1.0 + std::fabs(b));
+    };
+
+    {
+        auto acc = stream_reduce(VEReduceOp::MAX);
+        check(static_cast<double>(acc[0]) == omax, "VE_REDUCE MAX over 3 tiles");
+    }
+    {
+        auto acc = stream_reduce(VEReduceOp::MIN);
+        check(static_cast<double>(acc[0]) == omin, "VE_REDUCE MIN over 3 tiles");
+    }
+    {
+        auto acc = stream_reduce(VEReduceOp::SUM);
+        check(approx(acc[0], total_sum), "VE_REDUCE SUM over 3 tiles");
+    }
+    {
+        // Finalized MEAN layout: [mean, count, sumsq]
+        auto acc = stream_reduce(VEReduceOp::MEAN);
+        check(approx(acc[0], omean) && acc[1] == static_cast<float>(total_count),
+              "VE_REDUCE MEAN over 3 tiles (mean + count exposed)");
+    }
+    {
+        // Finalized VAR layout: [var, mean, count]
+        auto acc = stream_reduce(VEReduceOp::VAR);
+        check(approx(acc[0], ovar) && approx(acc[1], omean),
+              "VE_REDUCE VAR over 3 tiles (var + mean exposed)");
+    }
+
+    // Single-shot: one tile, INIT|ACCUMULATE|FINALIZE fused
+    {
+        TestHardware hw(16, 4, 256, 8, 128, 3, 64);
+        hw.l1_buffers[0].write(0, tiles[0].data(), bytes);
+        run_reduce(hw, VEReduceOp::SUM,
+                   VEReducePhase::INIT | VEReducePhase::ACCUMULATE |
+                   VEReducePhase::FINALIZE, Ti, Tj);
+        std::vector<float> acc(3);
+        hw.l1_buffers[1].read(0, acc.data(), acc_bytes);
+        double t0 = 0.0; for (Size i = 0; i < elems; ++i) t0 += tiles[0][i];
+        check(approx(acc[0], t0), "VE_REDUCE single-shot SUM (all phases fused)");
+    }
+
+    // Edge: empty reduction (INIT then FINALIZE, no ACCUMULATE) -> NaN
+    {
+        TestHardware hw(16, 4, 256, 8, 128, 3, 64);
+        run_reduce(hw, VEReduceOp::MEAN, VEReducePhase::INIT, Ti, Tj);
+        run_reduce(hw, VEReduceOp::MEAN, VEReducePhase::FINALIZE, Ti, Tj);
+        std::vector<float> acc(3);
+        hw.l1_buffers[1].read(0, acc.data(), acc_bytes);
+        check(std::isnan(acc[0]), "VE_REDUCE MEAN of empty stream -> NaN");
+    }
+    {
+        TestHardware hw(16, 4, 256, 8, 128, 3, 64);
+        run_reduce(hw, VEReduceOp::VAR, VEReducePhase::INIT, Ti, Tj);
+        run_reduce(hw, VEReduceOp::VAR, VEReducePhase::FINALIZE, Ti, Tj);
+        std::vector<float> acc(3);
+        hw.l1_buffers[1].read(0, acc.data(), acc_bytes);
+        check(std::isnan(acc[0]), "VE_REDUCE VAR of empty stream -> NaN");
+    }
+
+    // Edge: single sample -> variance exactly 0
+    {
+        TestHardware hw(16, 4, 256, 8, 128, 3, 64);
+        float one = 42.5f;
+        hw.l1_buffers[0].write(0, &one, static_cast<Size>(sizeof(float)));
+        run_reduce(hw, VEReduceOp::VAR,
+                   VEReducePhase::INIT | VEReducePhase::ACCUMULATE |
+                   VEReducePhase::FINALIZE, 1, 1);
+        std::vector<float> acc(3);
+        hw.l1_buffers[1].read(0, acc.data(), acc_bytes);
+        check(acc[0] == 0.0f && acc[1] == 42.5f,
+              "VE_REDUCE VAR of single sample -> var 0, mean = sample");
+    }
+}
+
+// ============================================================================
 // Main
 // ============================================================================
 
@@ -736,6 +876,7 @@ int main() {
     test_loop_machinery();
     test_ve_elementwise();
     test_str_broadcast_resident_operand();
+    test_ve_reduce();
 
     std::cout << "\n" << std::string(60, '*') << "\n";
     std::cout << "Results: " << passed << " passed, " << failed << " failed\n";
