@@ -9,6 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Online softmax regression matrix + DRAM-traffic payoff (#158, epic E8
+  COMPLETE).** `test_softmax_regression` executes the shape x envelope
+  matrix with invariants stronger than completion (exact per-stage tile
+  accounting, full credit conservation in both credit modes, normalized
+  stall bound), a functional-under-pressure check (exact softmax values at
+  the minimum envelope under partitioned credits), and the
+  single-pass-vs-multi-pass **DRAM-read comparison**: for a 4-tile row the
+  online generator reads the row once (LOAD=4) versus the 4-pass
+  safe-softmax's LOAD=16 - **4x fewer reads**, the online-softmax payoff.
+  `softmax` is now the fifth operator complete across all five lifecycle
+  stages after matmul, elementwise, broadcast, and online_reduction
+  (28/105). Closes epic #77.
+
 - **Value-producing online softmax + host oracle (#157, epic E8).**
   `FunctionalSoftmaxExecutor` bridges the #156 generator to the #66 payload
   machinery: input tiles ride the real CSP data path, the stats COMPUTE

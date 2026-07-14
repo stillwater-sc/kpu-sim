@@ -119,9 +119,9 @@
         "isa_closure": "done",
         "generator": "done",
         "functional": "done",
-        "regression": "missing"
+        "regression": "done"
       },
-      "notes": "Online single-pass softmax (#154 design, #155 resident-dep, #156 generator); FunctionalSoftmaxExecutor value-produces softmax vs host safe-softmax oracle - stats op (m,l) handed to apply computes compute-resident, numerically stable (max-subtracted), edge cases (all-(-inf)->uniform, -inf prefix, non-aligned, partitioned, restreamed) verified (#157). Supersedes 4-pass generator; resolves #139 for softmax. Regression is E8-T5."
+      "notes": "Online single-pass softmax (#154 design, #155 resident-dep, #156 generator); FunctionalSoftmaxExecutor value-produces softmax vs host safe-softmax oracle - stats op (m,l) handed to apply computes compute-resident, numerically stable (max-subtracted), edge cases (all-(-inf)->uniform, -inf prefix, non-aligned, partitioned, restreamed) verified (#157). Supersedes 4-pass generator; resolves #139 for softmax. Regression: shape x envelope matrix with credit/stall invariants + single-pass-vs-multi-pass DRAM payoff (4x fewer reads) + characterization (#158)."
     },
     {
       "name": "layernorm",
