@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Matmul simulator + tile-log discussion.** `examples/schedule/matmul_simulator`
+  drives a tiled `C = A x B` schedule (`MatMulScheduleGenerator`) cycle-by-cycle
+  through the `TileTracker`, so the horizontal L3/L2/L1/array log shows the two
+  operand streams (A rows, B columns) interleaving, each `C[ti,tj]` compute
+  joining over its K-slices in the array, and the results draining out - ending
+  on a `C = A x B` host-oracle check (max error 0). Configurable
+  `--m/--n/--k/--tile`; CI smoke test. Companion doc
+  `docs/tools/matmul-simulator.md` discusses the what/why/how of the matmul tile
+  log and contrasts it with softmax (large data tiles show movement, not content;
+  K-accumulation is a join not a chain; operand reuse is visible).
+
 - **Standalone softmax simulator (#165, deliverable B).**
   `examples/schedule/softmax_simulator` runs the E8 online-softmax schedule
   one executor cycle at a time and drives the `TileTracker` to print the

@@ -129,7 +129,10 @@ if (!exec.is_complete()) {
 This is exactly what `softmax_simulator` does around the E8 online-softmax
 schedule. The approach is **operator-agnostic**: any schedule (matmul,
 reductions, norms, attention) can be driven the same way to get the same trace —
-bind the value ops to the COMPUTEs, seed the inputs, step, observe.
+bind the value ops to the COMPUTEs, seed the inputs, step, observe. See
+[`matmul_simulator`](tools/matmul-simulator.md) for the same view over a
+tiled matmul, where two operand streams (A rows, B columns) interleave and a
+C tile accumulates over its K-slices.
 
 ### Reading a band (worked example)
 
