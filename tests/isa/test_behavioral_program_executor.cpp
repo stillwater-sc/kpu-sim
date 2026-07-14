@@ -729,6 +729,7 @@ void test_ve_reduce() {
     const Size Ti = 16, Tj = 16;
     const Size elems = Ti * Tj;
     const Size bytes = elems * sizeof(float);
+    const Size acc_bytes = 3 * sizeof(float);   // 3-lane fp32 accumulator
     const int n_tiles = 3;
 
     // Deterministic multi-tile stream (both signs, non-trivial for VAR)
@@ -778,7 +779,7 @@ void test_ve_reduce() {
             run_reduce(hw, op, phase, Ti, Tj);
         }
         std::vector<float> acc(3, -1.0f);
-        hw.l1_buffers[1].read(0, acc.data(), 3 * sizeof(float));
+        hw.l1_buffers[1].read(0, acc.data(), acc_bytes);
         return acc;
     };
 
@@ -819,7 +820,7 @@ void test_ve_reduce() {
                    VEReducePhase::INIT | VEReducePhase::ACCUMULATE |
                    VEReducePhase::FINALIZE, Ti, Tj);
         std::vector<float> acc(3);
-        hw.l1_buffers[1].read(0, acc.data(), 3 * sizeof(float));
+        hw.l1_buffers[1].read(0, acc.data(), acc_bytes);
         double t0 = 0.0; for (Size i = 0; i < elems; ++i) t0 += tiles[0][i];
         check(approx(acc[0], t0), "VE_REDUCE single-shot SUM (all phases fused)");
     }
@@ -830,7 +831,7 @@ void test_ve_reduce() {
         run_reduce(hw, VEReduceOp::MEAN, VEReducePhase::INIT, Ti, Tj);
         run_reduce(hw, VEReduceOp::MEAN, VEReducePhase::FINALIZE, Ti, Tj);
         std::vector<float> acc(3);
-        hw.l1_buffers[1].read(0, acc.data(), 3 * sizeof(float));
+        hw.l1_buffers[1].read(0, acc.data(), acc_bytes);
         check(std::isnan(acc[0]), "VE_REDUCE MEAN of empty stream -> NaN");
     }
     {
@@ -838,7 +839,7 @@ void test_ve_reduce() {
         run_reduce(hw, VEReduceOp::VAR, VEReducePhase::INIT, Ti, Tj);
         run_reduce(hw, VEReduceOp::VAR, VEReducePhase::FINALIZE, Ti, Tj);
         std::vector<float> acc(3);
-        hw.l1_buffers[1].read(0, acc.data(), 3 * sizeof(float));
+        hw.l1_buffers[1].read(0, acc.data(), acc_bytes);
         check(std::isnan(acc[0]), "VE_REDUCE VAR of empty stream -> NaN");
     }
 
@@ -846,12 +847,12 @@ void test_ve_reduce() {
     {
         TestHardware hw(16, 4, 256, 8, 128, 3, 64);
         float one = 42.5f;
-        hw.l1_buffers[0].write(0, &one, sizeof(float));
+        hw.l1_buffers[0].write(0, &one, static_cast<Size>(sizeof(float)));
         run_reduce(hw, VEReduceOp::VAR,
                    VEReducePhase::INIT | VEReducePhase::ACCUMULATE |
                    VEReducePhase::FINALIZE, 1, 1);
         std::vector<float> acc(3);
-        hw.l1_buffers[1].read(0, acc.data(), 3 * sizeof(float));
+        hw.l1_buffers[1].read(0, acc.data(), acc_bytes);
         check(acc[0] == 0.0f && acc[1] == 42.5f,
               "VE_REDUCE VAR of single sample -> var 0, mean = sample");
     }

@@ -369,7 +369,7 @@ TEST_CASE("Chained accumulator reduction runs on existing resident-dep machinery
 
     const std::vector<float> values = {2.0f, 4.0f, 6.0f, 8.0f, 10.0f};
     std::vector<TileDescriptor> x;
-    for (size_t k = 0; k < values.size(); ++k) {
+    for (Size k = 0; k < values.size(); ++k) {
         auto tile = make_tile(MatrixID::A, k, 0, 0, 4);
         tile.height = 1; tile.width = 1;
         runner.set_tile_payload(tile.tile_id, TilePayload{1, 1, {values[k]}});
