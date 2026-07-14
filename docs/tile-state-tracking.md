@@ -119,6 +119,11 @@ while (!exec.is_complete() && exec.current_cycle() < exec.config().max_cycles) {
     tracker.observe(exec);                   // records only real transitions
 }
 std::cout << tracker.log();
+// The cap is a guard, not a success condition: a deadlock or a wedged
+// schedule also exits the loop. Check completion before trusting the trace.
+if (!exec.is_complete()) {
+    std::cerr << "schedule did not complete (deadlock or max_cycles)\n";
+}
 ```
 
 This is exactly what `softmax_simulator` does around the E8 online-softmax
@@ -128,7 +133,8 @@ bind the value ops to the COMPUTEs, seed the inputs, step, observe.
 
 ### Reading a band (worked example)
 
-From `softmax_simulator --rows 3 --len 512` (three softmax rows, two tiles each):
+From `softmax_simulator --rows 3 --len 512` (three softmax rows, two tiles each).
+Four bands, **excerpted** from the full trace (some cells elided with `...`):
 
 ```text
 cyc    | L3 buffers                         | L2 banks                           | L1 / array
@@ -140,15 +146,18 @@ cyc    | L3 buffers                         | L2 banks                          
 ```
 
 - **cyc 36** — the first input tile `A[0,0,0]` has arrived at L3.
-- **cyc 120** — three rows are in flight at once: `A[2,1,0]` still in L3, row 1's
-  tiles in L2, row 0's tiles already in the array (`*`). That overlap is the
-  schedule **pipelining** across the batch.
+- **cyc 120** — all three rows are in flight at once: `A[2,1,0]` still in L3,
+  row 1's tiles in L2, row 0's tiles already in the array (`*`). That overlap is
+  the schedule **pipelining** across the batch.
 - **cyc 129** — the stats compute for row 0 has produced `B[0,0,0]=(-0.69,440)`:
   running max `-0.69`, normalizer `440`. It stays resident (its `*` persists) to
   feed row 0's apply computes — no DRAM round-trip.
-- **cyc 204** — both rows finished: `B[0,0,0]` and `B[1,0,0]=(0.31,440)` show the
-  **per-row** stats (each row has its own max), and the normalized outputs
-  `C[0,*]`, `C[1,*]` have been produced.
+- **cyc 204** — rows 0 and 1 have produced their normalized outputs
+  (`C[0,*]`, `C[1,*]`); their **per-row** stats `B[0,0,0]=(-0.69,440)` and
+  `B[1,0,0]=(0.31,440)` differ because each row has its own max. Row 2 is still
+  streaming through L2 in the full trace and finishes a few bands later — this
+  excerpt stops before its outputs form. The run ends when all three rows'
+  softmax sum to 1.
 
 ### Notes and limits when reading larger traces
 
