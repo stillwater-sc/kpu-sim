@@ -117,11 +117,11 @@
       "stages": {
         "design": "done",
         "isa_closure": "done",
-        "generator": "partial",
+        "generator": "done",
         "functional": "missing",
         "regression": "missing"
       },
-      "notes": "Online single-pass softmax design: running max + rescaled sum, row-resident apply, schedule-tier resident-dependency mechanism (#154). isa_closure: ScheduleOperation::resident_tiles + ConcurrentTimingExecutor::schedule_compute(tile,feed,resident) + ScheduleExecutor routing + binder mapping - apply computes consume the running (m,l) state compute-resident, no DRAM round-trip race (#155). Generator/functional/regression are E8-T3/T4/T5; supersedes the 4-pass SoftmaxScheduleGenerator."
+      "notes": "Online single-pass softmax (#154 design, #155 resident-dep mechanism); OnlineSoftmaxScheduleGenerator: stats pass (running max+rescaled sum) + apply pass with (m,l) handed resident to the apply computes (no DRAM round-trip), row-resident/re-streamed realization, executable COMPUTEs, trailing-tile clamp (#156). Supersedes 4-pass generator; resolves #139 for softmax. Functional/regression are E8-T4/T5."
     },
     {
       "name": "layernorm",

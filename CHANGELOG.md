@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **OnlineSoftmaxScheduleGenerator (#156, epic E8).** Single-pass online
+  softmax schedules (pattern P3): a streaming stats pass (running max +
+  rescaled running sum) produces the `(m, l)` state, and the apply pass
+  emits `exp(x - m)/l` consuming that state as a **compute-resident
+  dependency** (the #155 mechanism) - no drain/reload, no DRAM round-trip
+  race, which is what distinguishes it from the reduction ROW_NORMALIZE.
+  Realization is chosen a priori from the envelope (ROW_RESIDENT delivers
+  the row once with `consumer_count=2`; RESTREAMED re-reads it), trailing
+  tiles are clamped, and every COMPUTE is executable. Supersedes the
+  4-pass `SoftmaxScheduleGenerator` and resolves #139 for softmax.
+  Coverage: softmax generator -> done (26/105).
+
 - **Schedule-tier compute-resident dependency mechanism (#155, epic E8).**
   A COMPUTE can now declare `resident_tiles` - inputs it consumes from the
   compute fabric, produced by a prior COMPUTE, rather than via a fresh
