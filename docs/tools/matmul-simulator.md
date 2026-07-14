@@ -38,15 +38,15 @@ hierarchy differently, and the trace makes that visible.
 
 - **Two interleaved input streams, not one.** Softmax streams a single row;
   matmul streams A row-blocks *and* B column-blocks together. In the log you see
-  pairs like `A[0,0,0] A[0,0,1] B[0,0,1] B[0,1,1]` filling L3 — the
-  `interleaved_ab` discipline keeping an A-burst and a B-burst simultaneously
-  resident so neither starves the other (the #67 per-matrix burst share).
+  pairs like `A[0,0] A[0,1] B[0,1] B[1,1]` filling L3 — the `interleaved_ab`
+  discipline keeping an A-burst and a B-burst simultaneously resident so neither
+  starves the other (the #67 per-matrix burst share).
 
 - **K-accumulation is a join, not a chain.** A `C[ti,tj]` compute depends on
-  every A[ti,*,tk] and B[*,tj,tk] K-slice (`2 * k_tiles` feeds); it cannot fire
+  every `A[ti,tk]` and `B[tk,tj]` K-slice (`2 * k_tiles` feeds); it cannot fire
   until all have arrived, and its latency scales with the K-slice count. You see
-  the A/B tiles for both K-slices reach the array (`*`) before `C[0,0,0]`
-  appears — the reduction depth made literal.
+  the A/B tiles for both K-slices reach the array (`*`) before `C[0,0]` appears —
+  the reduction depth made literal.
 
 - **Tiles are large data blocks, so the log shows movement, not content.** A
   softmax stats tile is two numbers `(m, l)` and prints its value; a matmul tile
