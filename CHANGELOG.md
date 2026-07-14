@@ -9,6 +9,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **OnlineReductionScheduleGenerator (#106, epic E3).** Streaming-reduction
+  schedules for pattern class P3, all executable (the #101 discipline):
+  `FULL_REDUCE` and `ROW_STATS` model the accumulation matmul-shaped - a
+  single COMPUTE depends on every streamed input feed with K-scaled
+  latency, so no resident-accumulator chain is needed at the schedule
+  tier and the stats pass has a constant working set of 2 regardless of
+  stream length. `ROW_NORMALIZE` is the two-phase form (stats then apply)
+  whose realization is chosen a priori from the envelope -
+  `ROW_RESIDENT` (row delivered once with `consumer_count=2`, the E2
+  1:1:k discipline) when `reduction_tiles + 2 <= per-matrix burst share`,
+  else `RESTREAMED` (row re-read from DRAM, constant working set 3); the
+  per-row stat round-trips through DRAM and is broadcast to the apply
+  computes via a distinct reload tile. Coverage: online_reduction
+  generator -> done (21/105).
+
 - **VE_REDUCE numerical semantics + ISA closure (#105, epic E3).**
   `VEReduceOperands` gives the previously annotation-only VE_REDUCE real
   encoding: MAX/MIN/SUM scalar accumulators and MEAN/VAR moment triplets

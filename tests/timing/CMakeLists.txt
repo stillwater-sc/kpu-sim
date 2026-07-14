@@ -148,3 +148,13 @@ kpu_add_component_test(test_elementwise_regression "timing"
 set_tests_properties(test_elementwise_regression PROPERTIES
     LABELS "timing;regression;elementwise;v0.9"
 )
+
+# Online reduction schedule generator (issue #106, epic E3): FULL_REDUCE /
+# ROW_STATS / ROW_NORMALIZE with envelope-derived realization
+kpu_add_component_test(test_reduction_generator "timing"
+    test_reduction_generator.cpp
+)
+
+set_tests_properties(test_reduction_generator PROPERTIES
+    LABELS "timing;schedule;reduction;v0.9"
+)
