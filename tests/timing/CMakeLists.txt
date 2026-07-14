@@ -168,3 +168,13 @@ kpu_add_component_test(test_functional_reduction "timing"
 set_tests_properties(test_functional_reduction PROPERTIES
     LABELS "timing;functional;reduction;v0.9"
 )
+
+# Reduction regression matrix (issue #108, epic E3): op x stream-length x
+# envelope with credit/stall invariants and characterization
+kpu_add_component_test(test_reduction_regression "timing"
+    test_reduction_regression.cpp
+)
+
+set_tests_properties(test_reduction_regression PROPERTIES
+    LABELS "timing;regression;reduction;v0.9"
+)

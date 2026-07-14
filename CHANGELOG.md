@@ -9,6 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Reduction regression matrix + characterization (#108, epic E3
+  COMPLETE).** `test_reduction_regression` executes the op x stream-length
+  x envelope matrix (MAX/SUM/VAR x 1/16/64-tile + non-aligned x
+  default/constrained-min/partitioned) with invariants stronger than
+  completion: exact per-stage tile accounting and full credit conservation
+  (both credit modes), plus a normalized stall bound. The envelope refusal
+  boundary is pinned exact (min 8 generates, 4 refuses), and values survive
+  the minimum envelope under partitioned credits on a non-aligned span.
+  Characterization on epic #72: the single K-scaled compute amortizes
+  per-tile cost 193 -> 42 cycles from 1 to 64 tiles. `online_reduction` is
+  now the fourth operator complete across all five stages after matmul,
+  elementwise, and broadcast (23/105). This closes epic #72 and, with the
+  ISA half from #105, closes #18 entirely.
+
 - **Value-producing streaming reduction + host oracles (#107, epic E3).**
   `FunctionalReductionExecutor` bridges the #106 generator to the #66
   payload machinery for the stats forms: input tiles ride the real CSP
