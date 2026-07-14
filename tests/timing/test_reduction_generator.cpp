@@ -67,6 +67,26 @@ TEST_CASE("FULL_REDUCE emits one compute over all streamed feeds",
     REQUIRE(config.required_working_set() == 2);
 }
 
+TEST_CASE("Non-aligned reduction clamps the trailing tile footprint",
+          "[timing][schedule][reduction]") {
+    auto config = base_config();
+    config.form = Form::FULL_REDUCE;
+    config.reduction_elems = 1000;   // 4 tiles: 256+256+256+232
+    OnlineReductionScheduleGenerator gen(config);
+    auto schedule = gen.generate();
+    REQUIRE(schedule.valid);
+
+    const Size full = 256, tail = 232;
+    for (const auto& op : schedule.operations) {
+        if (op.type != ScheduleOpType::LOAD) continue;
+        const auto& tile = op.tile;
+        // Full-tile stride, clamped trailing footprint
+        REQUIRE(tile.dram_address - tile.matrix_base_address ==
+                tile.tile_id.tj * full * config.element_size);
+        REQUIRE(tile.height == (tile.tile_id.tj == 3 ? tail : full));
+    }
+}
+
 TEST_CASE("ROW_STATS emits one compute per row",
           "[timing][schedule][reduction]") {
     auto config = base_config();

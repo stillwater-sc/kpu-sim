@@ -9,6 +9,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Value-producing streaming reduction + host oracles (#107, epic E3).**
+  `FunctionalReductionExecutor` bridges the #106 generator to the #66
+  payload machinery for the stats forms: input tiles ride the real CSP
+  data path, the per-row stat COMPUTE reduces every streamed feed to a
+  finalized statistic (MAX/MIN/SUM/MEAN/VAR, matching the VE_REDUCE ABI -
+  population variance, clamped, empty -> NaN), and the stat drains back to
+  DRAM. Verified against independent host oracles across all five ops,
+  batched rows, partitioned credits, and non-tile-aligned spans - flips
+  `online_reduction.functional` (an M4 gate cell, 22/105). ROW_NORMALIZE's
+  apply-phase numerics are deferred to E8/E9 (its stat needs
+  compute-resident delivery rather than a DRAM round-trip, which would
+  race in the value plane).
+
+### Fixed
+
+- **Reduction generator now clamps non-tile-aligned trailing tiles
+  (#107).** `OnlineReductionScheduleGenerator::make_tile` sized every A/C
+  tile as a full tile, so a `reduction_elems` not divisible by
+  `tile_elems` produced a trailing tile that read past the row end. The
+  trailing footprint is now clamped (inter-tile stride stays full-tile),
+  matching the elementwise generator; caught by the functional oracle.
+
 - **OnlineReductionScheduleGenerator (#106, epic E3).** Streaming-reduction
   schedules for pattern class P3, all executable (the #101 discipline):
   `FULL_REDUCE` and `ROW_STATS` model the accumulation matmul-shaped - a
