@@ -338,21 +338,23 @@ TEST_CASE("tiles_at enumerates per-level occupancy for the tile tracker",
         executor.schedule_feed(*a);
     }
 
-    // Track that at some point each level held a tile, and the L1 arrival
-    // cycle is recorded and monotonic
+    // Track that at some point each level held a tile, and that every tile's
+    // L1 arrival cycle is recorded (tiles_at is TileID-sorted, NOT
+    // arrival-ordered, so no cross-tile monotonicity is implied)
     bool l3_seen = false, l2_seen = false, l1_seen = false;
-    Cycle last_l1_arrival = 0;
-    while (!executor.is_complete()) {
+    const Cycle bound = executor.config().max_cycles;  // don't outrun the guard
+    while (!executor.is_complete() && executor.current_cycle() < bound) {
         executor.step();
         if (!executor.tiles_at(MemoryLevel::L3).empty()) l3_seen = true;
         if (!executor.tiles_at(MemoryLevel::L2).empty()) l2_seen = true;
         for (const auto& id : executor.tiles_at(MemoryLevel::L1)) {
             l1_seen = true;
-            const Cycle arr = executor.tile_arrival_cycle_at(MemoryLevel::L1, id);
-            REQUIRE(arr >= last_l1_arrival);
-            last_l1_arrival = arr;
+            // arrival cycle is recorded and no later than "now"
+            REQUIRE(executor.tile_arrival_cycle_at(MemoryLevel::L1, id) <=
+                    executor.current_cycle());
         }
     }
+    REQUIRE(executor.is_complete());
     REQUIRE(l3_seen); REQUIRE(l2_seen); REQUIRE(l1_seen);
 
     // Both tiles reached the compute fabric with their values intact
@@ -360,6 +362,19 @@ TEST_CASE("tiles_at enumerates per-level occupancy for the tile tracker",
     REQUIRE(compute_tiles == std::vector<TileID>{a0.tile_id, a1.tile_id});
     REQUIRE(executor.tile_payload_at(MemoryLevel::COMPUTE, a0.tile_id).values[0] ==
             Catch::Approx(2.0f));
+    REQUIRE(executor.tile_payload_at(MemoryLevel::COMPUTE, a1.tile_id).values[0] ==
+            Catch::Approx(3.0f));
+
+    // reset() clears the transient (downstream) stores so observers do not
+    // report stale residents, while preserving the seeded DRAM inputs so a
+    // rerun works
+    executor.reset();
+    REQUIRE(executor.tiles_at(MemoryLevel::L3).empty());
+    REQUIRE(executor.tiles_at(MemoryLevel::L2).empty());
+    REQUIRE(executor.tiles_at(MemoryLevel::L1).empty());
+    REQUIRE(executor.tiles_at(MemoryLevel::COMPUTE).empty());
+    REQUIRE(executor.tiles_at(MemoryLevel::DRAM) ==
+            std::vector<TileID>{a0.tile_id, a1.tile_id});   // inputs preserved
 
     // A timing-only executor (no payloads) reports empty occupancy
     ConcurrentTimingExecutor timing_only(default_config());

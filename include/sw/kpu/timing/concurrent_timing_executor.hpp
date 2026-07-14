@@ -1138,6 +1138,15 @@ inline void ConcurrentTimingExecutor::reset() {
     scheduled_compute_counts_.clear();
     completed_compute_counts_.clear();
 
+    // Clear the transient (downstream) payload stores so per-level observers
+    // (tiles_at, #165) do not report stale residents after a reset. DRAM
+    // inputs are preserved: functional executors seed them before calling
+    // execute() -> reset(), and a rerun expects them intact.
+    l3_payloads_.clear();
+    l2_payloads_.clear();
+    l1_payloads_.clear();
+    compute_payloads_.clear();
+
     for (auto& mc : memory_controllers_) {
         mc->reset();
     }
