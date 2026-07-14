@@ -158,3 +158,13 @@ kpu_add_component_test(test_reduction_generator "timing"
 set_tests_properties(test_reduction_generator PROPERTIES
     LABELS "timing;schedule;reduction;v0.9"
 )
+
+# Functional reduction with host oracle (issue #107, epic E3): value-producing
+# FULL_REDUCE / ROW_STATS on the CSP data path
+kpu_add_component_test(test_functional_reduction "timing"
+    test_functional_reduction.cpp
+)
+
+set_tests_properties(test_functional_reduction PROPERTIES
+    LABELS "timing;functional;reduction;v0.9"
+)

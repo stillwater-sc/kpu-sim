@@ -319,15 +319,29 @@ private:
         tile.tile_id.ti = row;
         tile.tile_id.tj = t;
         tile.tile_id.tk = 0;
-        tile.height = config_.tile_elems;
+
+        // A/C tiles span the reduction dimension: the trailing tile of a
+        // non-tile-aligned row is partial, so clamp its footprint (the
+        // inter-tile stride stays full-tile). Stat tiles (B) are per-row.
+        Size elems = config_.tile_elems;
+        if (matrix != isa::MatrixID::B) {
+            const Size within_row = t * config_.tile_elems;
+            if (within_row + elems > config_.reduction_elems) {
+                elems = config_.reduction_elems - within_row;
+            }
+        }
+        tile.height = elems;
         tile.width = 1;
         tile.element_size = config_.element_size;
-        tile.size_bytes = config_.tile_elems * config_.element_size;
-        // Row-major over (row, reduction-tile); stat tiles are one per row
+        tile.size_bytes = elems * config_.element_size;
+
+        // Row-major over (row, reduction-tile) with a full-tile stride; stat
+        // tiles are one per row
+        const Size full_bytes = config_.tile_elems * config_.element_size;
         const Size linear = matrix == isa::MatrixID::B
             ? row
             : row * config_.reduction_tiles() + t;
-        tile.dram_address = base + linear * tile.size_bytes;
+        tile.dram_address = base + linear * full_bytes;
         tile.matrix_base_address = base;
         return tile;
     }

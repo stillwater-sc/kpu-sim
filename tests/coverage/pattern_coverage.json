@@ -299,10 +299,10 @@
         "design": "done",
         "isa_closure": "done",
         "generator": "done",
-        "functional": "missing",
+        "functional": "done",
         "regression": "missing"
       },
-      "notes": "VEReduceOperands + behavioral running-combine + CSP chained-accumulator (#105); OnlineReductionScheduleGenerator FULL_REDUCE/ROW_STATS (single K-scaled compute over all streamed feeds, working set 2) + ROW_NORMALIZE (two-phase, envelope-derived ROW_RESIDENT vs RESTREAMED realization, stat round-trips DRAM + broadcast reload) with executable COMPUTEs (#106). Design #104. Functional/regression are E3-T4/T5."
+      "notes": "VEReduceOperands + behavioral combine + CSP chained accumulator (#105); OnlineReductionScheduleGenerator FULL_REDUCE/ROW_STATS/ROW_NORMALIZE (#106); FunctionalReductionExecutor value-produces FULL_REDUCE/ROW_STATS for all 5 ops vs host oracles incl. partitioned credits + non-aligned spans (#107). ROW_NORMALIZE apply-phase numerics deferred to E8/E9 (stat needs compute-resident delivery, not a DRAM round-trip). Design #104. Regression is E3-T5."
     },
     {
       "name": "layout_transform",
