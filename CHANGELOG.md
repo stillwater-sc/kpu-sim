@@ -9,6 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Value-producing online softmax + host oracle (#157, epic E8).**
+  `FunctionalSoftmaxExecutor` bridges the #156 generator to the #66 payload
+  machinery: input tiles ride the real CSP data path, the stats COMPUTE
+  produces the `(m, l)` state, the apply COMPUTEs consume it
+  **compute-resident** (the #155 mechanism, no DRAM round-trip) and emit
+  `exp(x - m)/l`. Verified elementwise against an independent host
+  safe-softmax oracle across single/batched rows, large logits (numerically
+  stable, no inf/NaN), non-aligned rows, partitioned credits, and the
+  RESTREAMED realization. The design-review edge cases are pinned: a fully
+  masked all-`-inf` row yields the uniform distribution, and an all-`-inf`
+  prefix followed by finite values produces no NaN (the `m == -inf` guard).
+  Flips `softmax.functional` (an M4 gate cell, 27/105).
+
 - **OnlineSoftmaxScheduleGenerator (#156, epic E8).** Single-pass online
   softmax schedules (pattern P3): a streaming stats pass (running max +
   rescaled running sum) produces the `(m, l)` state, and the apply pass
