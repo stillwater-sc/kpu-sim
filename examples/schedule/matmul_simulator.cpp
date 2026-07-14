@@ -23,6 +23,7 @@
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
+#include <exception>
 #include <iostream>
 #include <string>
 #include <vector>
@@ -82,6 +83,7 @@ int main(int argc, char** argv) {
         return 2;
     }
 
+    try {
     MatMulScheduleGenerator::Config cfg;
     cfg.M = M; cfg.N = N; cfg.K = K;
     cfg.Ti = cfg.Tj = cfg.Tk = T;
@@ -162,4 +164,8 @@ int main(int argc, char** argv) {
               << (ok ? "  [OK]" : "  [FAIL]") << "\n";
     std::cout << "\n" << (ok ? "MATMUL OK" : "MATMUL MISMATCH") << "\n";
     return ok ? 0 : 1;
+    } catch (const std::exception& e) {
+        std::cerr << "error: " << e.what() << "\n";
+        return 1;
+    }
 }
