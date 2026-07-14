@@ -208,3 +208,13 @@ kpu_add_component_test(test_functional_softmax "timing"
 set_tests_properties(test_functional_softmax PROPERTIES
     LABELS "timing;functional;softmax;v0.9"
 )
+
+# Online softmax regression matrix (issue #158, epic E8): shape x envelope
+# with credit/stall invariants and single-pass-vs-multi-pass DRAM payoff
+kpu_add_component_test(test_softmax_regression "timing"
+    test_softmax_regression.cpp
+)
+
+set_tests_properties(test_softmax_regression PROPERTIES
+    LABELS "timing;regression;softmax;v0.9"
+)
