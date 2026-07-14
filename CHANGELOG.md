@@ -9,6 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`TileTracker` horizontal tile-state debug log (#165, deliverable A).**
+  Renders the tiles staged in the software-managed memory hierarchy as a
+  horizontal per-snapshot band - L3 on the left, L2 to its right,
+  L1/array on the far right (the direction data flows toward compute) -
+  appended to a log so successive bands read top-to-bottom as the
+  state-transition progression. Each tile cell shows its `TileID` and, when
+  the value plane is active, a compact content summary (e.g. an online
+  softmax stats tile's `(m, l)` pair); in-array tiles are marked `*`.
+  `observe()` dedupes on occupancy change (via `tiles_at`, #165) so the log
+  tracks transitions, not idle cycles; output is deterministic and
+  diffable. A pure observer - no change to executor state. Buffer/credit
+  terminology throughout, never hit/miss/evict.
+
 - **`ConcurrentTimingExecutor::tiles_at(MemoryLevel)` per-level occupancy
   enumerator (#165).** A read-only observer over the value plane that
   returns the full set of tiles resident at a level (sorted, so a rendered

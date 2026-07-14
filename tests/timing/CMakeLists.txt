@@ -218,3 +218,12 @@ kpu_add_component_test(test_softmax_regression "timing"
 set_tests_properties(test_softmax_regression PROPERTIES
     LABELS "timing;regression;softmax;v0.9"
 )
+
+# TileTracker horizontal L3/L2/L1 occupancy log (issue #165)
+kpu_add_component_test(test_tile_tracker "timing"
+    test_tile_tracker.cpp
+)
+
+set_tests_properties(test_tile_tracker PROPERTIES
+    LABELS "timing;tracker;v0.9"
+)
