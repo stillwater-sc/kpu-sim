@@ -378,6 +378,46 @@ public:
         return it->second.payload;
     }
 
+    /**
+     * @brief Enumerate the tiles whose bytes are currently staged at a level
+     *        (issue #165)
+     *
+     * A read-only observer over the value plane, for tile-state tracking /
+     * visualization: unlike has_tile_payload_at (which answers "is THIS tile
+     * here"), this returns the full resident set at `level`, so a tracker can
+     * render L3/L2/L1 occupancy without reaching into executor internals.
+     * The result is sorted (by TileID) so a rendered log is deterministic and
+     * diffable. Payloads are copied downstream as tiles move and erased from
+     * L3/L2 when the buffer's credit is released, so this reflects true
+     * per-level occupancy for a functional-payload run. Empty for a
+     * timing-only run (no payloads set).
+     */
+    [[nodiscard]] std::vector<TileID> tiles_at(MemoryLevel level) const {
+        const auto& store = payload_store(level);
+        std::vector<TileID> ids;
+        ids.reserve(store.size());
+        for (const auto& entry : store) ids.push_back(entry.first);
+        std::sort(ids.begin(), ids.end());
+        return ids;
+    }
+
+    /**
+     * @brief Cycle at which a tile's bytes arrived at `level` (issue #165)
+     * @throws std::out_of_range if the tile is not resident at `level`
+     *
+     * Lets a tracker order or annotate tiles by when they staged in.
+     */
+    [[nodiscard]] Cycle tile_arrival_cycle_at(MemoryLevel level,
+                                              const TileID& tile_id) const {
+        const auto& store = payload_store(level);
+        auto it = store.find(tile_id);
+        if (it == store.end()) {
+            throw std::out_of_range(std::string("No payload at ") + to_string(level) +
+                                    " for " + tile_id.to_string());
+        }
+        return it->second.arrival_cycle;
+    }
+
     void clear_tile_payloads() {
         dram_payloads_.clear(); l3_payloads_.clear(); l2_payloads_.clear();
         l1_payloads_.clear(); compute_payloads_.clear();
