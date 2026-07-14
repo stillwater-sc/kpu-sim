@@ -12,6 +12,7 @@
 #include <sw/kpu/timing/concurrent_timing_executor.hpp>
 #include <sw/kpu/timing/tile_descriptor.hpp>
 
+#include <algorithm>
 #include <cstddef>
 #include <sstream>
 #include <string>
@@ -57,7 +58,7 @@ public:
         std::ostringstream ss;
         ss << pad("cyc", 6) << " | " << pad("L3 buffers", config_.col_width)
            << " | " << pad("L2 banks", config_.col_width)
-           << " | " << "L1 / array\n";
+           << " | " << pad("L1 / array", config_.col_width) << "\n";
         ss << rule();
         return ss.str();
     }
@@ -101,7 +102,7 @@ private:
     std::string rule() const {
         auto dashes = [](std::size_t n) { return std::string(n, '-'); };
         return dashes(6) + "-+-" + dashes(config_.col_width) + "-+-" +
-               dashes(config_.col_width) + "-+-" + dashes(12) + "\n";
+               dashes(config_.col_width) + "-+-" + dashes(config_.col_width) + "\n";
     }
 
     /// One cell: "A[0,2]" plus "=(v0,v1,...)" when a small payload is present.
@@ -136,26 +137,30 @@ private:
         return out;
     }
 
-    /// The rightmost column: L1 tiles plus COMPUTE (array) tiles marked '*'.
-    /// A tile resident at both L1 and COMPUTE is shown once, as in-array,
-    /// since the array is its furthest state.
+    /// The rightmost column: L1 tiles plus COMPUTE (array) tiles marked '*',
+    /// rendered in a single TileID-sorted sequence. A tile resident at both
+    /// L1 and COMPUTE is shown once, as in-array (its furthest state).
     std::string render_l1_array(const ConcurrentTimingExecutor& exec) const {
         const auto l1 = exec.tiles_at(MemoryLevel::L1);
         const auto compute = config_.show_compute_in_l1
             ? exec.tiles_at(MemoryLevel::COMPUTE) : std::vector<TileID>{};
-        std::string out;
         auto in_compute = [&](const TileID& id) {
             for (const auto& c : compute) if (c == id) return true;
             return false;
         };
-        for (const auto& id : l1) {              // L1-only tiles (plain)
-            if (in_compute(id)) continue;
+        // Merge into one sorted list: L1-only tiles + all compute tiles.
+        struct Entry { TileID id; bool in_array; };
+        std::vector<Entry> merged;
+        for (const auto& id : l1) if (!in_compute(id)) merged.push_back({id, false});
+        for (const auto& id : compute) merged.push_back({id, true});
+        std::sort(merged.begin(), merged.end(),
+                  [](const Entry& a, const Entry& b) { return a.id < b.id; });
+
+        std::string out;
+        for (const auto& e : merged) {
             if (!out.empty()) out += " ";
-            out += cell(exec, MemoryLevel::L1, id);
-        }
-        for (const auto& id : compute) {         // in-array tiles ('*')
-            if (!out.empty()) out += " ";
-            out += cell(exec, MemoryLevel::COMPUTE, id) + "*";
+            out += cell(exec, e.in_array ? MemoryLevel::COMPUTE : MemoryLevel::L1, e.id);
+            if (e.in_array) out += "*";
         }
         return out.empty() ? "-" : out;
     }

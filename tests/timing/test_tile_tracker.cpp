@@ -48,6 +48,7 @@ std::string run_and_track(TileTracker& tracker) {
         exec.step();
         tracker.observe(exec);
     }
+    REQUIRE(exec.is_complete());   // fail on cap/deadlock, not silently
     return tracker.log();
 }
 
@@ -79,10 +80,10 @@ TEST_CASE("TileTracker renders a horizontal L3|L2|L1 progression",
     REQUIRE(hpos_l3 < hpos_l2);      // L3 left of L2
     REQUIRE(hpos_l2 < hpos_l1);      // L2 left of L1/array
 
-    // The tile appears in each column at some snapshot, in flow order.
-    // Parse bands (skip header + rule) and record when A[0,0,0] shows in
-    // the L3, L2, and L1/array segments.
-    bool in_l3 = false, in_l2 = false, in_l1 = false;
+    // Record the FIRST cycle the tile shows in each column, and assert it
+    // actually flowed L3 -> L2 -> L1/array (not merely appeared in each).
+    constexpr long kNever = -1;
+    long first_l3 = kNever, first_l2 = kNever, first_l1 = kNever;
     std::istringstream ls(log);
     std::string line;
     while (std::getline(ls, line)) {
@@ -90,13 +91,16 @@ TEST_CASE("TileTracker renders a horizontal L3|L2|L1 progression",
         if (line.find("L3 buffers") != std::string::npos) continue;  // header
         auto cols = columns(line);
         if (cols.size() < 4) continue;  // cyc, L3, L2, L1
-        if (cols[1].find("A[0,0,0]") != std::string::npos) in_l3 = true;
-        if (cols[2].find("A[0,0,0]") != std::string::npos) in_l2 = true;
-        if (cols[3].find("A[0,0,0]") != std::string::npos) in_l1 = true;
+        const long cyc = std::stol(cols[0]);
+        if (first_l3 == kNever && cols[1].find("A[0,0,0]") != std::string::npos) first_l3 = cyc;
+        if (first_l2 == kNever && cols[2].find("A[0,0,0]") != std::string::npos) first_l2 = cyc;
+        if (first_l1 == kNever && cols[3].find("A[0,0,0]") != std::string::npos) first_l1 = cyc;
     }
-    REQUIRE(in_l3);
-    REQUIRE(in_l2);
-    REQUIRE(in_l1);
+    REQUIRE(first_l3 != kNever);
+    REQUIRE(first_l2 != kNever);
+    REQUIRE(first_l1 != kNever);
+    REQUIRE(first_l3 <= first_l2);   // reaches L3 no later than L2
+    REQUIRE(first_l2 <= first_l1);   // reaches L2 no later than L1/array
 }
 
 TEST_CASE("TileTracker shows tile content and marks the array",
