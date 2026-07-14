@@ -5,7 +5,7 @@
 log**: what tiles occupy each level of the software-managed memory hierarchy,
 snapshot by snapshot, so a human can watch the data-movement schedule execute.
 
-```
+```text
 softmax_simulator [--rows R] [--len N] [--tile T] [--l3 C] [--l2 C]
 ```
 
@@ -20,7 +20,7 @@ systolic array (compute storage).
 
 Sample (`softmax_simulator`, default 1 row x 512, two tiles):
 
-```
+```text
 Online softmax simulator  —  online_row_resident  (1 row(s) x 512, tile 256, envelope L3=32/L2=64)
 
 cyc    | L3 buffers                         | L2 banks                           | L1 / array                        
@@ -48,11 +48,11 @@ Result: each row's softmax sums to 1
 SOFTMAX OK
 ```
 
-Reading it: the two input tiles `A[0,0]`/`A[0,1]` stream `DRAM -> L3 -> L2 ->
-L1/array`; the **stats compute** produces `B[0,0]=(m,l)` — here `(-0.69, 440)`,
+Reading it: the two input tiles `A[0,0,0]`/`A[0,1,0]` stream `DRAM -> L3 -> L2 ->
+L1/array`; the **stats compute** produces `B[0,0,0]=(m,l)` — here `(-0.69, 440)`,
 the running max and the exp-sum normalizer — which then stays **resident in the
 array** (the E8 compute-resident hand-off, no DRAM round-trip) and feeds the
-**apply computes** that emit the normalized `C[0,0]`/`C[0,1]`; those drain back
+**apply computes** that emit the normalized `C[0,0,0]`/`C[0,1,0]`; those drain back
 `array -> L2 -> L3 -> DRAM`. The run ends on the softmax correctness check:
 each row sums to 1.
 

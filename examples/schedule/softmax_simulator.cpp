@@ -76,12 +76,28 @@ long arg(int argc, char** argv, const char* flag, long def) {
 } // namespace
 
 int main(int argc, char** argv) {
+    // Read + validate each option: atol treats malformed input as 0, and a
+    // negative value would wrap to a huge Size, so require strictly positive.
+    struct Opt { const char* flag; long def; };
+    long vals[5];
+    const Opt opts[5] = {{"--rows", 1}, {"--len", 512}, {"--tile", 256},
+                         {"--l3", 32}, {"--l2", 64}};
+    for (int i = 0; i < 5; ++i) {
+        vals[i] = arg(argc, argv, opts[i].flag, opts[i].def);
+        if (vals[i] <= 0) {
+            std::cerr << "error: " << opts[i].flag << " must be a positive integer\n"
+                      << "usage: softmax_simulator [--rows R] [--len N] [--tile T]"
+                         " [--l3 C] [--l2 C]\n";
+            return 2;
+        }
+    }
+
     OnlineSoftmaxScheduleGenerator::Config cfg;
-    cfg.num_rows       = static_cast<Size>(arg(argc, argv, "--rows", 1));
-    cfg.reduction_elems = static_cast<Size>(arg(argc, argv, "--len", 512));
-    cfg.tile_elems     = static_cast<Size>(arg(argc, argv, "--tile", 256));
-    cfg.l3_buffer_count = static_cast<Size>(arg(argc, argv, "--l3", 32));
-    cfg.l2_bank_count  = static_cast<Size>(arg(argc, argv, "--l2", 64));
+    cfg.num_rows       = static_cast<Size>(vals[0]);
+    cfg.reduction_elems = static_cast<Size>(vals[1]);
+    cfg.tile_elems     = static_cast<Size>(vals[2]);
+    cfg.l3_buffer_count = static_cast<Size>(vals[3]);
+    cfg.l2_bank_count  = static_cast<Size>(vals[4]);
     cfg.in_base = 0x100000; cfg.stat_base = 0x200000; cfg.out_base = 0x300000;
 
     auto schedule = OnlineSoftmaxScheduleGenerator(cfg).generate();
