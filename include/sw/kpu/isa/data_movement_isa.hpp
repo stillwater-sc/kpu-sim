@@ -425,6 +425,46 @@ struct VEOperands {
 };
 
 /**
+ * @brief Vector Engine reduction operation kinds (VE_REDUCE)
+ *
+ * MAX/MIN/SUM carry a single scalar accumulator lane; MEAN/VAR carry a
+ * moment triplet [count, sum, sumsq]. See the accumulator ABI in
+ * docs/plans/e3_online_reduction_pattern.md (epic E3, issue #105).
+ */
+enum class VEReduceOp : uint8_t {
+    MAX = 0, MIN, SUM, MEAN, VAR
+};
+
+/**
+ * @brief VE_REDUCE phase flags (a set, not an enum)
+ *
+ * A streamed reduction is INIT|ACCUMULATE on the first tile, ACCUMULATE
+ * on the middle tiles, and FINALIZE (alone or fused) on the last; a
+ * single-tile reduction is INIT|ACCUMULATE|FINALIZE in one instruction.
+ */
+namespace VEReducePhase {
+constexpr uint8_t INIT       = 0x1;  // write the op identity into the state lanes
+constexpr uint8_t ACCUMULATE = 0x2;  // combine l1_src into the state
+constexpr uint8_t FINALIZE   = 0x4;  // convert state -> finalized stat lanes
+} // namespace VEReducePhase
+
+/**
+ * @brief Vector Engine reduction operands (VE_REDUCE)
+ *
+ * Gives VE_REDUCE real semantics (previously a monostate structural
+ * marker): fold `l1_src` into the 3-lane fp32 accumulator at offset 0 of
+ * `l1_acc` per `op`, gated by `phase`. The element count of l1_src rides
+ * the SET_TILE_DIM auto state, like VE_ELEMENTWISE; the accumulator is
+ * always three fp32 lanes regardless of the source element width.
+ */
+struct VEReduceOperands {
+    VEReduceOp op = VEReduceOp::SUM;
+    uint8_t phase = VEReducePhase::INIT | VEReducePhase::ACCUMULATE;
+    uint8_t l1_src = 0;         // L1 buffer of the tile being consumed
+    uint8_t l1_acc = 0;         // L1 buffer holding the accumulator state
+};
+
+/**
  * @brief A single data movement instruction
  *
  * Instructions are the units of the Data Movement ISA. They encode
@@ -454,7 +494,9 @@ struct DMInstruction {
         AutoBlockMoverOperands,     // BM_*_AUTO
         AutoStreamerOperands,       // STR_*_AUTO
         // Vector Engine operands (issue #100)
-        VEOperands                  // VE_ELEMENTWISE
+        VEOperands,                 // VE_ELEMENTWISE
+        // Vector Engine reduction operands (issue #105)
+        VEReduceOperands            // VE_REDUCE
     > operands;
 
     // Timing hints (from SURE analysis)
@@ -567,6 +609,11 @@ struct DMInstruction {
                                               uint8_t l1_src, uint8_t l1_dst);
     static DMInstruction ve_elementwise_scalar(VEOp op, float scalar,
                                                uint8_t l1_src, uint8_t l1_dst);
+
+    // Vector Engine reduction factory (issue #105)
+    static DMInstruction ve_reduce(
+        VEReduceOp op, uint8_t l1_src, uint8_t l1_acc,
+        uint8_t phase = VEReducePhase::INIT | VEReducePhase::ACCUMULATE);
 };
 
 /**
@@ -579,6 +626,17 @@ const char* to_string(VEOp op);
  * @return true and sets op on success
  */
 bool ve_op_from_string(const std::string& name, VEOp& op);
+
+/**
+ * @brief Name of a Vector Engine reduction operation (for labels/assembly)
+ */
+const char* to_string(VEReduceOp op);
+
+/**
+ * @brief Parse a Vector Engine reduction operation name (inverse of to_string)
+ * @return true and sets op on success
+ */
+bool ve_reduce_op_from_string(const std::string& name, VEReduceOp& op);
 
 // ============================================================================
 // Data Movement Program

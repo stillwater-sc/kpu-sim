@@ -9,6 +9,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **VE_REDUCE numerical semantics + ISA closure (#105, epic E3).**
+  `VEReduceOperands` gives the previously annotation-only VE_REDUCE real
+  encoding: MAX/MIN/SUM scalar accumulators and MEAN/VAR moment triplets
+  `[count, sum, sumsq]`, gated by INIT/ACCUMULATE/FINALIZE phase flags,
+  over a fixed 3-lane fp32 accumulator ABI. Behavioral executor runs the
+  streaming combine with defined edge semantics (empty -> NaN, single
+  sample -> variance 0, population divisor, clamp so cancellation never
+  yields negative variance); assembler parses
+  `VE_REDUCE op, src, acc [, INIT] [, FINALIZE]`; serializer round-trips
+  at format v3 (variant 17 -> 18, guarded by static_asserts). The CSP
+  accumulator needs no executor change - a reduction is a chain of
+  functional computes targeting the accumulator tile with resident-dep
+  ordering, validated end-to-end. Closes the ISA half of #18 for
+  reductions. Coverage: online_reduction design + isa_closure -> done
+  (20/105).
+
 - **Elementwise/broadcast regression matrix + characterization (#103,
   epic E2 COMPLETE).** `test_elementwise_regression` executes the full
   form x size x envelope matrix (binary/broadcast/unary x 1/16/64-tile +

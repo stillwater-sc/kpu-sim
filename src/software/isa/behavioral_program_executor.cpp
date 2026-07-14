@@ -10,6 +10,7 @@
 #include <sw/kpu/isa/behavioral_program_executor.hpp>
 #include <cmath>
 #include <cstring>
+#include <limits>
 #include <stdexcept>
 #include <vector>
 #include <iostream>
@@ -239,11 +240,18 @@ void BehavioralProgramExecutor::dispatch(const DMInstruction& instr, [[maybe_unu
         }
         break;
 
-    // Gather/scatter, VE_REDUCE (E3 scope), and scratch opcodes —
-    // annotations, not functional in behavioral
+    case DMOpcode::VE_REDUCE:
+        // Functional when carrying VEReduceOperands (issue #105); legacy
+        // monostate markers remain no-ops
+        if (std::holds_alternative<VEReduceOperands>(instr.operands)) {
+            execute_ve_reduce(std::get<VEReduceOperands>(instr.operands));
+        }
+        break;
+
+    // Gather/scatter and scratch opcodes — annotations, not functional
+    // in behavioral
     case DMOpcode::DMA_LOAD_GATHER:
     case DMOpcode::DMA_STORE_SCATTER:
-    case DMOpcode::VE_REDUCE:
     case DMOpcode::L2_SCRATCH_WRITE:
     case DMOpcode::L2_SCRATCH_READ:
         break;
@@ -592,6 +600,101 @@ void BehavioralProgramExecutor::execute_ve_elementwise(const VEOperands& ops) {
     }
 
     hw_.l1_buffers[ops.l1_dst].write(0, out.data(), bytes);
+}
+
+void BehavioralProgramExecutor::execute_ve_reduce(const VEReduceOperands& ops) {
+    if (!program_) return;
+    if (ops.l1_acc >= hw_.l1_buffers.size()) return;
+
+    // The accumulator is three contiguous fp32 lanes at offset 0 of l1_acc,
+    // regardless of op (the E3 ABI). MAX/MIN/SUM use lane 0; MEAN/VAR use
+    // all three as [count, sum, sumsq] until FINALIZE.
+    constexpr Size kAccLanes = 3;
+    float state[kAccLanes];
+    hw_.l1_buffers[ops.l1_acc].read(0, state, kAccLanes * sizeof(float));
+
+    const bool do_init  = ops.phase & VEReducePhase::INIT;
+    const bool do_accum = ops.phase & VEReducePhase::ACCUMULATE;
+    const bool do_final = ops.phase & VEReducePhase::FINALIZE;
+
+    if (do_init) {
+        switch (ops.op) {
+            case VEReduceOp::MAX: state[0] = -std::numeric_limits<float>::infinity(); break;
+            case VEReduceOp::MIN: state[0] =  std::numeric_limits<float>::infinity(); break;
+            case VEReduceOp::SUM: state[0] = 0.0f; break;
+            case VEReduceOp::MEAN:
+            case VEReduceOp::VAR: state[0] = 0.0f; state[1] = 0.0f; state[2] = 0.0f; break;
+        }
+    }
+
+    if (do_accum) {
+        Size elems = program_->Ti * program_->Tj;
+        if (elems > 0 && ops.l1_src < hw_.l1_buffers.size()) {
+            std::vector<float> src(elems);
+            hw_.l1_buffers[ops.l1_src].read(0, src.data(), elems * sizeof(float));
+            // Local reduce over the tile, then combine into the running state
+            switch (ops.op) {
+                case VEReduceOp::MAX:
+                    for (Size i = 0; i < elems; ++i)
+                        if (src[i] > state[0]) state[0] = src[i];
+                    break;
+                case VEReduceOp::MIN:
+                    for (Size i = 0; i < elems; ++i)
+                        if (src[i] < state[0]) state[0] = src[i];
+                    break;
+                case VEReduceOp::SUM:
+                    for (Size i = 0; i < elems; ++i) state[0] += src[i];
+                    break;
+                case VEReduceOp::MEAN:
+                case VEReduceOp::VAR: {
+                    double sum = 0.0, sumsq = 0.0;  // double local accum, fp32 state
+                    for (Size i = 0; i < elems; ++i) {
+                        sum += src[i];
+                        sumsq += static_cast<double>(src[i]) * src[i];
+                    }
+                    state[0] += static_cast<float>(elems);
+                    state[1] += static_cast<float>(sum);
+                    state[2] += static_cast<float>(sumsq);
+                    break;
+                }
+            }
+        }
+    }
+
+    if (do_final) {
+        const float nan = std::numeric_limits<float>::quiet_NaN();
+        switch (ops.op) {
+            case VEReduceOp::MAX:
+            case VEReduceOp::MIN:
+            case VEReduceOp::SUM:
+                // state[0] is already the stat
+                break;
+            case VEReduceOp::MEAN: {
+                const float count = state[0], sum = state[1], sumsq = state[2];
+                const float mean = count > 0.0f ? sum / count : nan;
+                // Finalized layout: [mean, count, sumsq]
+                state[0] = mean; state[1] = count; state[2] = sumsq;
+                break;
+            }
+            case VEReduceOp::VAR: {
+                const float count = state[0], sum = state[1], sumsq = state[2];
+                float mean = nan, var = nan;
+                if (count > 0.0f) {
+                    mean = sum / count;
+                    // Population variance; clamp so cancellation never yields
+                    // a negative value (single sample is exactly 0)
+                    var = count == 1.0f
+                        ? 0.0f
+                        : std::max(0.0f, sumsq / count - mean * mean);
+                }
+                // Finalized layout: [var, mean, count]
+                state[0] = var; state[1] = mean; state[2] = count;
+                break;
+            }
+        }
+    }
+
+    hw_.l1_buffers[ops.l1_acc].write(0, state, kAccLanes * sizeof(float));
 }
 
 void BehavioralProgramExecutor::fire_compute() {

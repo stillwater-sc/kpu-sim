@@ -356,6 +356,68 @@ TEST_CASE("Functional Domain Flow executes an arbitrary branched DAG",
     REQUIRE(count_events(runner.executor().events(), EventType::DMA_LOAD_COMPLETE) == 2);
 }
 
+TEST_CASE("Chained accumulator reduction runs on existing resident-dep machinery",
+          "[timing][executor][functional][reduction]") {
+    // E3-T2 validation (issue #105): a streaming reduction is a chain of
+    // functional computes whose target IS the accumulator tile, each
+    // (except the first) taking the accumulator as a resident dependency.
+    // The #66 per-instance resident accounting enforces the chain order:
+    // COMPUTE_k requires k completed computes of the accumulator, so it
+    // cannot fire before COMPUTE_{k-1}. The first compute must NOT list the
+    // accumulator (required=max(1,0)=1 would deadlock) - init on first touch.
+    FunctionalDomainFlowExecutor runner(default_config());
+
+    const std::vector<float> values = {2.0f, 4.0f, 6.0f, 8.0f, 10.0f};
+    std::vector<TileDescriptor> x;
+    for (size_t k = 0; k < values.size(); ++k) {
+        auto tile = make_tile(MatrixID::A, k, 0, 0, 4);
+        tile.height = 1; tile.width = 1;
+        runner.set_tile_payload(tile.tile_id, TilePayload{1, 1, {values[k]}});
+        x.push_back(tile);
+    }
+    auto acc = make_tile(MatrixID::C, 0, 0, 0, 4);
+    acc.height = 1; acc.width = 1;
+
+    using Program = FunctionalDomainFlowProgram;
+    Program program;
+    size_t prev_compute = 0;
+    for (size_t k = 0; k < x.size(); ++k) {
+        const size_t load = program.add({Program::Operation::LOAD, x[k], {}, {}});
+        const size_t move = program.add({Program::Operation::MOVE, x[k], {}, {load}});
+        const size_t feed = program.add({Program::Operation::FEED, x[k], {}, {move}});
+
+        Program::Node compute;
+        compute.operation = Program::Operation::COMPUTE;
+        compute.tile = acc;
+        if (k == 0) {
+            // Init on first touch: input is X_0 only, no resident accumulator
+            compute.predecessors = {feed};
+            compute.compute.input_tiles = {x[k].tile_id};
+            compute.compute.operation = [](const std::vector<TilePayload>& in) {
+                return in.at(0);  // seed the accumulator
+            };
+        } else {
+            // Combine: accumulator (resident) + this tile
+            compute.predecessors = {feed, prev_compute};
+            compute.compute.input_tiles = {x[k].tile_id, acc.tile_id};
+            compute.compute.resident_tiles = {acc.tile_id};
+            compute.compute.operation = [](const std::vector<TilePayload>& in) {
+                TilePayload out = in.at(0);
+                out.values[0] += in.at(1).values[0];  // running sum
+                return out;
+            };
+        }
+        prev_compute = program.add(std::move(compute));
+    }
+    const size_t drain = program.add({Program::Operation::DRAIN, acc, {}, {prev_compute}});
+    const size_t wb = program.add({Program::Operation::WRITEBACK, acc, {}, {drain}});
+    program.add({Program::Operation::STORE, acc, {}, {wb}});
+
+    REQUIRE(runner.run(program));
+    REQUIRE(runner.executor().tile_payload_at(MemoryLevel::DRAM, acc.tile_id).values[0] ==
+            Catch::Approx(30.0f));  // 2+4+6+8+10
+}
+
 TEST_CASE("Repeated tile feeds cannot satisfy a later functional compute early",
           "[timing][executor][functional][dependency]") {
     auto config = default_config();
