@@ -25,13 +25,21 @@ two stat passes (one for max, one for sum):
 ```text
 m = -inf ; l = 0
 for each tile X_t in the row:              # stats pass (one pass)
-    m_t   = max(X_t)
+    m_t = max(X_t)
+    if m_t == -inf: continue               # all-(-inf) tile contributes nothing;
+                                           # skipping avoids exp(-inf - -inf) = NaN
     m_new = max(m, m_t)
     l     = l * exp(m - m_new) + sum_j exp(X_t[j] - m_new)   # rescale on new max
     m     = m_new
 for each tile X_t in the row:              # apply pass
-    Y_t = exp(X_t - m) / l
+    Y_t = (l > 0) ? exp(X_t - m) / l : 1/N # nonempty all-(-inf) row -> uniform
 ```
+
+The `m_t == -inf` guard is load-bearing: on the first tile `m` is still
+`-inf`, so without it `exp(m - m_new) = exp(-inf - -inf) = NaN` would
+poison `l` for an all-`-inf` prefix. With it, `m` stays `-inf` until a
+finite element arrives (then `exp(-inf - finite) = 0`, no NaN), and a
+whole-row-`-inf` case leaves `l = 0`, handled by the apply fallback.
 
 The load-bearing move is `l * exp(m - m_new)`: when a later tile raises
 the max, every exp already accumulated into `l` was taken against the old
@@ -52,9 +60,14 @@ finalized `(m, l)`. Two realizations, chosen a priori by the envelope
 (the #67 discipline), exactly as E3's ROW_NORMALIZE:
 
 1. **Row-resident** (`reduction_tiles + 2 <= per_matrix_burst_share`):
-   the row tiles are delivered once with `consumer_count = 2` (the E2
-   1:1:k discipline, k=2) — fed for stats, fed again for apply — and
-   `(m, l)` reaches the apply computes as a **compute-resident
+   each row tile is loaded from DRAM **once** (one LOAD + one MOVE) and
+   retained in L2 across both phases via `consumer_count = 2` (the E2
+   1:1:k discipline, k=2), which seeds the L2 TagCAM ref-count to 2 at
+   MOVE time. Two FEEDs then consume the same resident L2 tile — the
+   first for stats, the second for apply — and the L2 credit is released
+   only after the second FEED. So the movement per row tile is
+   `LOAD, MOVE, FEED(stats), FEED(apply)`: **one** DRAM read, **two**
+   feeds. `(m, l)` reaches the apply computes as a **compute-resident
    dependency** (Section 2). DRAM traffic: 1 read + 1 write per element,
    the online-softmax payoff over the 4-pass generator's extra scratch
    round-trips.
@@ -113,12 +126,25 @@ value tiers:
   `m_new = max(m, tile_max)`, `l = l*exp(m-m_new) + Σexp(tile-m_new)`.
   The apply op reads the row tile and resident `[m, l]` and emits
   `exp(x - m)/l`.
-- **Behavioral ISA:** extends the `VE_REDUCE` accumulator (issue #105)
-  with an online-softmax op kind whose two-lane state is `[m, l]` and
-  whose ACCUMULATE carries the rescale; FINALIZE is a no-op (state already
-  holds `m` and `l`). Empty row → `l = 0`; the apply guards `l == 0`
-  (all-`-inf` row) by emitting a uniform distribution, matching a host
-  safe-softmax reference.
+- **Behavioral ISA:** softmax on the behavioral tier is a *program* of
+  the existing `VE_REDUCE` (running max/sum) and `VE_ELEMENTWISE`
+  (sub/exp/div) ops — the `KernelCompiler` already emits one — not a new
+  single op. (This is the T2 refinement of the T1 design: the genuinely
+  new capability is the schedule-tier resident dependency, Section 2, not
+  an ISA op.) The `[m, l]` running state lives in the CSP functional
+  binder above, which is where the online movement pattern is validated.
+
+**Edge cases (defined, pinned in T4/T5), distinct from each other:**
+
+- **Empty row** (`reduction_elems == 0`): rejected at generation
+  (dimensions must be non-zero) — softmax over zero elements is undefined,
+  so `1/N` is never evaluated with `N == 0`.
+- **Nonempty all-`-inf` row** (every element `-inf`, e.g. a fully masked
+  attention row): the stats guard leaves `l = 0` and `m = -inf`; the
+  apply emits the **uniform** distribution `1/N` over the row's `N`
+  elements, matching a host safe-softmax reference that special-cases the
+  degenerate normalizer. This is a real case in masked attention, not a
+  theoretical one.
 
 ## 4. Deliverables mapped to the epic tasks
 
@@ -135,10 +161,14 @@ value tiers:
   new `schedule_compute` overload must record `resident_dependencies`
   exactly as matmul/functional already do, and the existing matmul/
   reduction paths must be unaffected (T2 keeps them green).
-- **Numerical stability**: the rescale must use the *updated* max; the
-  oracle compares against a host safe-softmax with relative tolerance
-  (exp/division amplify fp error). Empty / all-`-inf` rows are defined
-  (uniform), pinned in T4/T5.
+- **Numerical stability**: the rescale must use the *updated* max, and the
+  `m_t == -inf` guard (Section 1) must precede it to avoid
+  `exp(-inf - -inf) = NaN`. The oracle compares against a host
+  safe-softmax with relative tolerance (exp/division amplify fp error).
+  The two degenerate rows are handled distinctly (Section 3): empty rows
+  are rejected at generation, nonempty all-`-inf` rows emit uniform.
+  Both, plus an all-`-inf` *prefix* followed by finite values, are pinned
+  in T4/T5.
 - **Realization selection** reuses E3's envelope formula; the row-resident
   `consumer_count = 2` delivery holds an L2 credit across both phases —
   T5 asserts credit conservation on the realization boundary.
