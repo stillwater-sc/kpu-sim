@@ -198,3 +198,13 @@ kpu_add_component_test(test_softmax_generator "timing"
 set_tests_properties(test_softmax_generator PROPERTIES
     LABELS "timing;schedule;softmax;v0.9"
 )
+
+# Functional online softmax with host oracle (issue #157, epic E8):
+# value-producing single-pass softmax on the CSP data path
+kpu_add_component_test(test_functional_softmax "timing"
+    test_functional_softmax.cpp
+)
+
+set_tests_properties(test_functional_softmax PROPERTIES
+    LABELS "timing;functional;softmax;v0.9"
+)

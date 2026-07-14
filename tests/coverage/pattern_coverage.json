@@ -118,10 +118,10 @@
         "design": "done",
         "isa_closure": "done",
         "generator": "done",
-        "functional": "missing",
+        "functional": "done",
         "regression": "missing"
       },
-      "notes": "Online single-pass softmax (#154 design, #155 resident-dep mechanism); OnlineSoftmaxScheduleGenerator: stats pass (running max+rescaled sum) + apply pass with (m,l) handed resident to the apply computes (no DRAM round-trip), row-resident/re-streamed realization, executable COMPUTEs, trailing-tile clamp (#156). Supersedes 4-pass generator; resolves #139 for softmax. Functional/regression are E8-T4/T5."
+      "notes": "Online single-pass softmax (#154 design, #155 resident-dep, #156 generator); FunctionalSoftmaxExecutor value-produces softmax vs host safe-softmax oracle - stats op (m,l) handed to apply computes compute-resident, numerically stable (max-subtracted), edge cases (all-(-inf)->uniform, -inf prefix, non-aligned, partitioned, restreamed) verified (#157). Supersedes 4-pass generator; resolves #139 for softmax. Regression is E8-T5."
     },
     {
       "name": "layernorm",
