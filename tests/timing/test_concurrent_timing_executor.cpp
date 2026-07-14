@@ -312,6 +312,75 @@ TEST_CASE("Functional payload bytes cross every hierarchy boundary only on CSP c
             Catch::Approx(7.0f));
 }
 
+TEST_CASE("tiles_at enumerates per-level occupancy for the tile tracker",
+          "[timing][executor][functional][tracker]") {
+    // Issue #165: tiles_at(level) is the observer the tile-state tracker
+    // needs - it returns the full resident set at a level (not just "is
+    // this one tile here"), sorted for a deterministic log.
+    ConcurrentTimingExecutor executor(default_config());
+
+    // Two A tiles streaming in; check occupancy migrates DRAM -> L3 -> L2 ->
+    // L1/compute as each tile advances.
+    auto a0 = make_tile(MatrixID::A, 0, 0, 0, 4); a0.height = 1; a0.width = 1;
+    auto a1 = make_tile(MatrixID::A, 1, 0, 0, 4); a1.height = 1; a1.width = 1;
+    executor.set_tile_payload(a0.tile_id, TilePayload{1, 1, {2.0f}});
+    executor.set_tile_payload(a1.tile_id, TilePayload{1, 1, {3.0f}});
+
+    // Before running, both tiles are staged at DRAM only
+    REQUIRE(executor.tiles_at(MemoryLevel::DRAM) ==
+            std::vector<TileID>{a0.tile_id, a1.tile_id});   // sorted
+    REQUIRE(executor.tiles_at(MemoryLevel::L3).empty());
+    REQUIRE(executor.tiles_at(MemoryLevel::L2).empty());
+
+    for (auto* a : {&a0, &a1}) {
+        executor.schedule_load(*a);
+        executor.schedule_move(*a);
+        executor.schedule_feed(*a);
+    }
+
+    // Track that at some point each level held a tile, and that every tile's
+    // L1 arrival cycle is recorded (tiles_at is TileID-sorted, NOT
+    // arrival-ordered, so no cross-tile monotonicity is implied)
+    bool l3_seen = false, l2_seen = false, l1_seen = false;
+    const Cycle bound = executor.config().max_cycles;  // don't outrun the guard
+    while (!executor.is_complete() && executor.current_cycle() < bound) {
+        executor.step();
+        if (!executor.tiles_at(MemoryLevel::L3).empty()) l3_seen = true;
+        if (!executor.tiles_at(MemoryLevel::L2).empty()) l2_seen = true;
+        for (const auto& id : executor.tiles_at(MemoryLevel::L1)) {
+            l1_seen = true;
+            // arrival cycle is recorded and no later than "now"
+            REQUIRE(executor.tile_arrival_cycle_at(MemoryLevel::L1, id) <=
+                    executor.current_cycle());
+        }
+    }
+    REQUIRE(executor.is_complete());
+    REQUIRE(l3_seen); REQUIRE(l2_seen); REQUIRE(l1_seen);
+
+    // Both tiles reached the compute fabric with their values intact
+    auto compute_tiles = executor.tiles_at(MemoryLevel::COMPUTE);
+    REQUIRE(compute_tiles == std::vector<TileID>{a0.tile_id, a1.tile_id});
+    REQUIRE(executor.tile_payload_at(MemoryLevel::COMPUTE, a0.tile_id).values[0] ==
+            Catch::Approx(2.0f));
+    REQUIRE(executor.tile_payload_at(MemoryLevel::COMPUTE, a1.tile_id).values[0] ==
+            Catch::Approx(3.0f));
+
+    // reset() clears the transient (downstream) stores so observers do not
+    // report stale residents, while preserving the seeded DRAM inputs so a
+    // rerun works
+    executor.reset();
+    REQUIRE(executor.tiles_at(MemoryLevel::L3).empty());
+    REQUIRE(executor.tiles_at(MemoryLevel::L2).empty());
+    REQUIRE(executor.tiles_at(MemoryLevel::L1).empty());
+    REQUIRE(executor.tiles_at(MemoryLevel::COMPUTE).empty());
+    REQUIRE(executor.tiles_at(MemoryLevel::DRAM) ==
+            std::vector<TileID>{a0.tile_id, a1.tile_id});   // inputs preserved
+
+    // A timing-only executor (no payloads) reports empty occupancy
+    ConcurrentTimingExecutor timing_only(default_config());
+    REQUIRE(timing_only.tiles_at(MemoryLevel::DRAM).empty());
+}
+
 TEST_CASE("Functional Domain Flow executes an arbitrary branched DAG",
           "[timing][executor][functional][domain-flow]") {
     FunctionalDomainFlowExecutor runner(default_config());

@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`ConcurrentTimingExecutor::tiles_at(MemoryLevel)` per-level occupancy
+  enumerator (#165).** A read-only observer over the value plane that
+  returns the full set of tiles resident at a level (sorted, so a rendered
+  log is deterministic and diffable), plus `tile_arrival_cycle_at`. Unlike
+  `has_tile_payload_at` (which answers "is THIS tile here"), this lets a
+  tile-state tracker render L3/L2/L1 occupancy without reaching into
+  executor internals - the prerequisite for the standalone softmax
+  simulator and horizontal tile-state debug log (#165 deliverables A/B).
+  Pure observer: no change to credit or scheduling semantics.
+
 - **Online softmax regression matrix + DRAM-traffic payoff (#158, epic E8
   COMPLETE).** `test_softmax_regression` executes the shape x envelope
   matrix with invariants stronger than completion (exact per-stage tile
