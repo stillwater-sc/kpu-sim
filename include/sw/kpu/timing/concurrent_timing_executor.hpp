@@ -302,6 +302,24 @@ public:
     void schedule_compute(const TileDescriptor& tile, std::vector<TileID> dependencies);
 
     /**
+     * @brief Schedule a compute with both fed and compute-resident inputs
+     * @param tile Result tile descriptor
+     * @param feed_dependencies input tiles that must be FED before compute
+     * @param resident_dependencies input tiles produced by a PRIOR compute
+     *        that stay in the compute fabric (no fresh feed) - each requires
+     *        that many completed computes of the producing tile
+     *
+     * The timing-tier counterpart of MatMulComputeSpec/FunctionalComputeSpec
+     * resident_tiles, for schedules (e.g. online softmax, issue #155) whose
+     * apply computes consume a running-stat tile resident rather than via a
+     * DRAM round-trip. A resident dependency cannot be satisfied until the
+     * producing compute completes, so it orders the chain without a race.
+     */
+    void schedule_compute(const TileDescriptor& tile,
+                          std::vector<TileID> feed_dependencies,
+                          std::vector<TileID> resident_dependencies);
+
+    /**
      * @brief Schedule a compute completion (no explicit dependency)
      * @param tile Result tile descriptor (C matrix tile)
      *
@@ -779,6 +797,29 @@ inline void ConcurrentTimingExecutor::schedule_compute(
     pc.schedule_cycle = current_cycle_;
     pc.complete_cycle = 0;  // Set when started
     pc.started = false;
+    pending_computes_.push_back(std::move(pc));
+}
+
+inline void ConcurrentTimingExecutor::schedule_compute(
+    const TileDescriptor& tile, std::vector<TileID> feed_dependencies,
+    std::vector<TileID> resident_dependencies) {
+    PendingCompute pc;
+    pc.tile = tile;
+    for (const auto& dep : feed_dependencies) {
+        const size_t required = std::max<size_t>(1, scheduled_feed_counts_[dep]);
+        pc.dependencies.push_back({dep, required});
+    }
+    // Resident inputs are gated on the producing compute having completed,
+    // not on a fresh feed (the #66 completed-compute accounting)
+    for (const auto& dep : resident_dependencies) {
+        const size_t required = std::max<size_t>(1, scheduled_compute_counts_[dep]);
+        pc.resident_dependencies.push_back({dep, required});
+    }
+    pc.schedule_cycle = current_cycle_;
+    pc.complete_cycle = 0;
+    pc.started = false;
+    // This compute may itself be a resident source for a later compute
+    ++scheduled_compute_counts_[tile.tile_id];
     pending_computes_.push_back(std::move(pc));
 }
 

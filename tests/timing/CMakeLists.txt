@@ -178,3 +178,13 @@ kpu_add_component_test(test_reduction_regression "timing"
 set_tests_properties(test_reduction_regression PROPERTIES
     LABELS "timing;regression;reduction;v0.9"
 )
+
+# Schedule-tier resident-dependency mechanism (issue #155, epic E8):
+# compute-resident inputs (online softmax / norm apply hand-off)
+kpu_add_component_test(test_resident_dependency "timing"
+    test_resident_dependency.cpp
+)
+
+set_tests_properties(test_resident_dependency PROPERTIES
+    LABELS "timing;executor;resident;v0.9"
+)

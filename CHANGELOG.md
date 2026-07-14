@@ -9,6 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Schedule-tier compute-resident dependency mechanism (#155, epic E8).**
+  A COMPUTE can now declare `resident_tiles` - inputs it consumes from the
+  compute fabric, produced by a prior COMPUTE, rather than via a fresh
+  FEED. `ConcurrentTimingExecutor::schedule_compute(tile, feed, resident)`
+  records them as resident dependencies (the #66 completed-compute
+  accounting), `ScheduleExecutor` routes COMPUTEs carrying `resident_tiles`
+  there, and the `FunctionalComputeBinder` maps them onto
+  `FunctionalComputeSpec::resident_tiles`. This lets a running-stat tile
+  (online-softmax `(m, l)`, norm mean/var) reach the apply computes
+  ordered and race-free - no DRAM round-trip - which is exactly what
+  E3-T4 deferred. Built once here, reused by softmax (E8), norms (E9), and
+  the reduction ROW_NORMALIZE apply phase. Coverage: softmax design +
+  isa_closure -> done (25/105).
+
 - **Reduction regression matrix + characterization (#108, epic E3
   COMPLETE).** `test_reduction_regression` executes the op x stream-length
   x envelope matrix (MAX/SUM/VAR x 1/16/64-tile + non-aligned x

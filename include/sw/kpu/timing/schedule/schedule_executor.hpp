@@ -329,7 +329,11 @@ private:
                         break;
                     }
                 }
-                if (!op.dependency_tiles.empty()) {
+                if (!op.resident_tiles.empty()) {
+                    // Timing-tier compute with compute-resident inputs (#155)
+                    executor_.schedule_compute(op.tile, op.dependency_tiles,
+                                               op.resident_tiles);
+                } else if (!op.dependency_tiles.empty()) {
                     executor_.schedule_compute(op.tile, op.dependency_tiles);
                 } else {
                     executor_.schedule_compute(op.tile, op.dependency_tile);
