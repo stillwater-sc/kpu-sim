@@ -131,8 +131,22 @@ int main(int argc, char** argv) {
     }
     for (const auto& op : schedule.operations) enqueue(exec, op);
 
-    // Drive one cycle at a time, tracking every occupancy transition
-    TileTracker tracker;
+    // Drive one cycle at a time, tracking every occupancy transition.
+    // Label tiles with their 2D submatrix index: A is rows x depth (ti,tk),
+    // B is depth x cols (tk,tj), C is rows x cols (ti,tj) - the unused third
+    // axis of the M/N/K grid is dropped, so A[0,0,1] reads as A[0,1].
+    TileTracker::Config tcfg;
+    tcfg.label = [](const TileID& id) {
+        auto ij = [](Size a, Size b) {
+            return "[" + std::to_string(a) + "," + std::to_string(b) + "]";
+        };
+        switch (id.matrix) {
+            case MatrixID::A: return "A" + ij(id.ti, id.tk);
+            case MatrixID::B: return "B" + ij(id.tk, id.tj);
+            default:          return "C" + ij(id.ti, id.tj);
+        }
+    };
+    TileTracker tracker(tcfg);
     tracker.observe(exec);
     while (!exec.is_complete() && exec.current_cycle() < exec.config().max_cycles) {
         exec.step();

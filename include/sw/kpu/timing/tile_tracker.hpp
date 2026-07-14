@@ -14,6 +14,7 @@
 
 #include <algorithm>
 #include <cstddef>
+#include <functional>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -48,6 +49,14 @@ public:
         std::size_t col_width = 34;   ///< width of each level column
         std::size_t max_values = 3;   ///< values shown per tile cell (else elided)
         bool show_compute_in_l1 = true;  ///< fold COMPUTE (array) into the L1 column
+
+        /// How a tile is named in a cell. The default prints the full
+        /// (ti,tj,tk) TileID. A tile coordinate is really a 2D submatrix
+        /// index living in the 3D M/N/K grid (each matrix uses only two axes,
+        /// the third is 0), so a caller that knows its operator's convention
+        /// can supply a 2D label - e.g. matmul: A[ti,tk], B[tk,tj], C[ti,tj].
+        std::function<std::string(const TileID&)> label =
+            [](const TileID& id) { return id.to_string(); };
     };
 
     TileTracker() = default;
@@ -108,7 +117,7 @@ private:
     /// One cell: "A[0,2]" plus "=(v0,v1,...)" when a small payload is present.
     std::string cell(const ConcurrentTimingExecutor& exec, MemoryLevel level,
                      const TileID& id) const {
-        std::string c = id.to_string();
+        std::string c = config_.label(id);
         if (exec.has_tile_payload_at(level, id)) {
             const auto& p = exec.tile_payload_at(level, id);
             if (!p.values.empty() && p.values.size() <= config_.max_values) {

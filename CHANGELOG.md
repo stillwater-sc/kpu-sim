@@ -9,6 +9,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Tile tracker: 2D submatrix labels + array liveness (#165 follow-up).**
+  `TileTracker::Config::label` lets a driver name tiles by their 2D
+  submatrix index instead of the raw 3-tuple `TileID`: a tile coordinate
+  lives in the 3D M/N/K grid but each matrix uses only two axes (the third
+  is a placeholder 0), so the matmul simulator now prints `A[ti,tk]` /
+  `B[tk,tj]` / `C[ti,tj]` and softmax `[row,tile]` - e.g. `A[0,0,1]` reads
+  as `A[0,1]`, unambiguously a different submatrix from `A[0,0]`.
+
+### Fixed
+
+- **Value-plane payload retirement (#165 follow-up).** The executor freed
+  L3/L2 payloads on credit release but never freed the transient L1/COMPUTE
+  (array) copies, so `tiles_at`/`TileTracker` showed every tile that ever
+  reached the array and a long run grew memory unbounded. A compute now
+  retires each consumed input whose payload no pending compute still needs
+  (respecting the reuse of an A row-tile across several C tiles, and never
+  freeing the compute's own result - the accumulator case), and a result is
+  freed when it drains. The array column now shows only tiles still in play
+  and drains to empty.
+
 - **Matmul simulator + tile-log discussion.** `examples/schedule/matmul_simulator`
   drives a tiled `C = A x B` schedule (`MatMulScheduleGenerator`) cycle-by-cycle
   through the `TileTracker`, so the horizontal L3/L2/L1/array log shows the two

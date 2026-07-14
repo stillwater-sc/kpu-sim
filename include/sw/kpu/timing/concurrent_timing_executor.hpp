@@ -602,6 +602,29 @@ private:
     [[nodiscard]] size_t count_completed_tiles() const;
 
     [[nodiscard]] bool dependencies_satisfied(const PendingCompute& pc) const;
+
+    /**
+     * @brief Is this tile still an input of any pending (not-yet-fired) compute?
+     *
+     * Used to retire consumed payloads (issue #165 follow-up): a fed or
+     * resident input may be shared by several computes, so its L1/COMPUTE
+     * payload can only be freed once no pending compute still needs it.
+     */
+    [[nodiscard]] bool tile_needed_by_pending_compute(const TileID& id) const {
+        for (const auto& pc : pending_computes_) {
+            for (const auto& dep : pc.dependencies)
+                if (dep.first == id) return true;
+            for (const auto& dep : pc.resident_dependencies)
+                if (dep.first == id) return true;
+        }
+        return false;
+    }
+
+    /// Free a tile's transient array-side (L1 + COMPUTE) payloads.
+    void retire_array_payload(const TileID& id) {
+        l1_payloads_.erase(id);
+        compute_payloads_.erase(id);
+    }
     void execute_matmul(const PendingCompute& pc);
     void execute_functional(const PendingCompute& pc);
     void apply_payload_event(const TimingEvent& event);
@@ -1028,7 +1051,27 @@ inline bool ConcurrentTimingExecutor::step() {
             event.matrix_base_address = it->tile.matrix_base_address;
             events_.push_back(event);
 
+            // Collect this compute's input tiles before removing it, so we can
+            // retire any whose payload no consumer still needs (issue #165):
+            // the array holds a tile only while it is actively being consumed.
+            const TileID result_id = it->tile.tile_id;
+            std::vector<TileID> consumed_inputs;
+            consumed_inputs.reserve(it->dependencies.size() +
+                                    it->resident_dependencies.size());
+            for (const auto& d : it->dependencies) consumed_inputs.push_back(d.first);
+            for (const auto& d : it->resident_dependencies) consumed_inputs.push_back(d.first);
+
             it = pending_computes_.erase(it);
+
+            if (functional_payloads_enabled_) {
+                for (const auto& id : consumed_inputs) {
+                    // Never retire the compute's OWN result (the accumulator
+                    // pattern makes a tile both a resident input and the
+                    // result); it must survive for its DRAIN.
+                    if (id == result_id) continue;
+                    if (!tile_needed_by_pending_compute(id)) retire_array_payload(id);
+                }
+            }
         } else {
             ++it;
         }
@@ -1308,6 +1351,12 @@ inline void ConcurrentTimingExecutor::apply_payload_event(const TimingEvent& eve
         case EventType::TILE_DRAINED:
             copy_payload(MemoryLevel::COMPUTE, MemoryLevel::L1, event.tile_id, event.component_id);
             copy_payload(MemoryLevel::L1, MemoryLevel::L2, event.tile_id, event.slot_id);
+            // The result has moved to L2; free its array-side copies unless a
+            // pending compute still holds it resident (issue #165).
+            if (functional_payloads_enabled_ &&
+                !tile_needed_by_pending_compute(event.tile_id)) {
+                retire_array_payload(event.tile_id);
+            }
             break;
         case EventType::BM_WRITEBACK_COMPLETE:
             copy_payload(MemoryLevel::L2, MemoryLevel::L3, event.tile_id, event.slot_id);
