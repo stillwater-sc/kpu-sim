@@ -101,8 +101,14 @@ struct ScheduleOperation {
     // starts (every A and B K-slice contributing to the result tile).
     // dependency_tile is retained for backward compatibility and holds the
     // last entry of dependency_tiles.
-    std::vector<TileID> dependency_tiles;   ///< COMPUTE waits for all of these
+    std::vector<TileID> dependency_tiles;   ///< COMPUTE waits for all of these (fed)
     TileID dependency_tile{};               ///< Last dependency (legacy field)
+
+    // Compute-resident inputs (issue #155): tiles a COMPUTE consumes from
+    // compute storage, produced by a PRIOR compute, rather than via a fresh
+    // FEED - e.g. the running (m, l) state of online softmax handed to the
+    // apply computes. Empty for ordinary computes.
+    std::vector<TileID> resident_tiles;
 
     /**
      * @brief Create a LOAD operation
@@ -198,6 +204,28 @@ struct ScheduleOperation {
             op.dependency_tile = dependencies.back();
         }
         op.dependency_tiles = std::move(dependencies);
+        return op;
+    }
+
+    /**
+     * @brief Create a COMPUTE with both fed and compute-resident inputs
+     *
+     * @param tile Result tile
+     * @param fed_dependencies input tiles that must be FED before compute
+     * @param resident_dependencies input tiles produced by a prior COMPUTE
+     *        that stay resident in the compute fabric (issue #155)
+     */
+    static ScheduleOperation compute(const TileDescriptor& tile,
+                                     std::vector<TileID> fed_dependencies,
+                                     std::vector<TileID> resident_dependencies) {
+        ScheduleOperation op;
+        op.type = ScheduleOpType::COMPUTE;
+        op.tile = tile;
+        if (!fed_dependencies.empty()) {
+            op.dependency_tile = fed_dependencies.back();
+        }
+        op.dependency_tiles = std::move(fed_dependencies);
+        op.resident_tiles = std::move(resident_dependencies);
         return op;
     }
 
