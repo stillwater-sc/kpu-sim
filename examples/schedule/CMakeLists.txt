@@ -64,3 +64,14 @@ if(KPU_BUILD_TESTS)
         LABELS "timing;softmax;tracker;example;v0.9"
     )
 endif()
+
+# Matmul simulator with tile-state tracker (companion to softmax_simulator)
+add_executable(matmul_simulator matmul_simulator.cpp)
+target_link_libraries(matmul_simulator PRIVATE kpu_simulator)
+set_target_properties(matmul_simulator PROPERTIES FOLDER "Examples/Schedule")
+if(KPU_BUILD_TESTS)
+    add_test(NAME matmul_simulator COMMAND matmul_simulator)
+    set_tests_properties(matmul_simulator PROPERTIES
+        LABELS "timing;matmul;tracker;example;v0.9"
+    )
+endif()
