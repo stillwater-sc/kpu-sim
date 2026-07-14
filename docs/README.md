@@ -159,6 +159,9 @@ The KPU is NOT a stored-program processor. It uses credit-based dataflow:
 - No demand-fetching - only push with credit
 
 See [KPU Execution Model](01-architecture/kpu-execution-model.md) for details.
+To *watch* a schedule execute as tiles migrate through the hierarchy, see
+[Tracking Schedules as Tile-State Movement](tile-state-tracking.md) and the
+[softmax simulator](tools/softmax-simulator.md).
 
 ---
 
