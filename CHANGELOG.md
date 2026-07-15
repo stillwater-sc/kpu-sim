@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **BatchNorm-inference scale/shift fold helper — E9-T2 (#179).** BN inference
+  folds exactly to a per-channel affine `y = x·scale[c] + shift[c]`
+  (`scale = γ/√(var+ε)`, `shift = β − mean·scale`), so it is a per-channel
+  broadcast op on the existing `FunctionalComputeSpec` value path — **no new
+  executor kernel**. New `include/sw/kpu/timing/schedule/batchnorm_affine.hpp`:
+  `bn_fold` (4 raw params → scale/shift, halving resident params `4C+1 → 2C+1`),
+  `batchnorm_apply` (the fast path), and `batchnorm_reference` (an independent
+  direct 4-param oracle). `test_batchnorm_affine` verifies the fold math, that
+  the folded apply reproduces the direct reference, a hand-computed case,
+  per-channel application, and the guards. Coverage: `batchnorm` design (T1 #178)
+  + isa_closure → done. This is the same fold conv2d T4 uses for conv+BN.
+
 - **Conv2D regression matrix + characterization — E6-T5 (#123); completes the
   conv2d coverage row.** `test_conv2d_regression` executes a shape × strategy ×
   envelope matrix (6 shapes incl. 1×1, strided, 5×5, batched, non-tile-aligned ×

@@ -170,6 +170,16 @@ set_tests_properties(test_conv2d_regression PROPERTIES
     LABELS "timing;regression;conv2d;v0.9"
 )
 
+# BatchNorm-inference scale/shift fold helper unit tests (issue #179, epic E9):
+# fold math, folded-apply vs the direct 4-param reference, and guards
+kpu_add_component_test(test_batchnorm_affine "timing"
+    test_batchnorm_affine.cpp
+)
+
+set_tests_properties(test_batchnorm_affine PROPERTIES
+    LABELS "timing;functional;batchnorm;v0.9"
+)
+
 # Functional elementwise execution with host oracle (issue #102, epic E2):
 # value-producing elementwise/broadcast on the CSP data path
 kpu_add_component_test(test_functional_elementwise "timing"
