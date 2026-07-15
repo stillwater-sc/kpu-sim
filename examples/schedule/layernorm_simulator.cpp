@@ -22,6 +22,7 @@
 #include <sw/kpu/timing/tile_tracker.hpp>
 #include <sw/kpu/timing/schedule/online_softmax_schedule_generator.hpp>
 
+#include <algorithm>
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
@@ -76,13 +77,15 @@ long arg(int argc, char** argv, const char* flag, long def) {
 
 int main(int argc, char** argv) {
     struct Opt { const char* flag; long def; };
-    long vals[3];
-    const Opt opts[3] = {{"--rows", 1}, {"--len", 512}, {"--tile", 256}};
-    for (int i = 0; i < 3; ++i) {
+    long vals[4];
+    const Opt opts[4] = {{"--rows", 1}, {"--len", 512}, {"--tile", 256},
+                         {"--max-cycles", 2'000'000}};
+    for (int i = 0; i < 4; ++i) {
         vals[i] = arg(argc, argv, opts[i].flag, opts[i].def);
         if (vals[i] <= 0) {
             std::cerr << "error: " << opts[i].flag << " must be a positive integer\n"
-                      << "usage: layernorm_simulator [--rows R] [--len N] [--tile T]\n";
+                      << "usage: layernorm_simulator [--rows R] [--len N] [--tile T]"
+                         " [--max-cycles C]\n";
             return 2;
         }
     }
@@ -117,7 +120,7 @@ int main(int argc, char** argv) {
               << ", eps " << kEps << ")\n\n";
 
     ConcurrentTimingExecutor::Config ecfg;
-    ecfg.max_cycles = 2'000'000;
+    ecfg.max_cycles = static_cast<Cycle>(vals[3]);   // --max-cycles
     ConcurrentTimingExecutor exec(ecfg);
 
     // Seed the input row tiles (matrix A) from the data
@@ -188,30 +191,38 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    // Correctness: each output tile matches the host LayerNorm reference
+    // Correctness: every output element matches the host LayerNorm reference.
+    // Fail closed - a NaN, a missing tile, or a duplicated store must not pass.
     std::cout << "Result: y = gamma * (x - mean)/sqrt(var + eps) + beta\n";
     double max_err = 0.0;
-    for (Size r = 0; r < R; ++r) {
-        // host mean/var over the row
+    bool finite_ok = true;
+    std::vector<int> covered(static_cast<std::size_t>(R) * F, 0);  // times each element was stored
+    for (const auto& op : schedule.operations) {
+        if (op.type != ScheduleOpType::STORE) continue;
+        const auto id = op.tile.tile_id;
+        if (id.matrix != MatrixID::C) continue;
+        const Size r = id.ti, off = id.tj * T;
+        // host mean/var for this row
         double sum = 0.0, sumsq = 0.0;
         for (Size i = 0; i < F; ++i) { sum += data[r * F + i]; sumsq += static_cast<double>(data[r*F+i]) * data[r*F+i]; }
-        const double mean = sum / F;
-        const double var = std::max(0.0, sumsq / F - mean * mean);
+        const double mean = sum / F, var = std::max(0.0, sumsq / F - mean * mean);
         const double inv = 1.0 / std::sqrt(var + kEps);
-        for (const auto& op : schedule.operations) {
-            if (op.type != ScheduleOpType::STORE) continue;
-            const auto id = op.tile.tile_id;
-            if (id.matrix != MatrixID::C || id.ti != r) continue;
-            const auto& p = exec.tile_payload_at(MemoryLevel::DRAM, id);
-            const Size off = id.tj * T;
-            for (std::size_t i = 0; i < p.values.size(); ++i) {
-                const double want = gamma[off + i] * (data[r * F + off + i] - mean) * inv + beta[off + i];
-                max_err = std::max(max_err, std::abs(p.values[i] - want));
-            }
+        const auto& p = exec.tile_payload_at(MemoryLevel::DRAM, id);
+        for (std::size_t i = 0; i < p.values.size(); ++i) {
+            if (!std::isfinite(p.values[i])) finite_ok = false;
+            const double want = gamma[off + i] * (data[r * F + off + i] - mean) * inv + beta[off + i];
+            max_err = std::max(max_err, std::abs(static_cast<double>(p.values[i]) - want));
+            ++covered[r * F + off + i];
         }
     }
-    const bool ok = max_err < 1e-3;
+    // Every output element must be stored exactly once
+    bool coverage_ok = true;
+    for (int c : covered) if (c != 1) { coverage_ok = false; break; }
+
+    const bool ok = finite_ok && coverage_ok && max_err < 1e-3;
     std::cout << "  max abs error vs host oracle: " << max_err
+              << (finite_ok ? "" : "  [non-finite output]")
+              << (coverage_ok ? "" : "  [missing/duplicate output tile]")
               << (ok ? "  [OK]" : "  [FAIL]") << "\n";
     std::cout << "\n" << (ok ? "LAYERNORM OK" : "LAYERNORM MISMATCH") << "\n";
     return ok ? 0 : 1;

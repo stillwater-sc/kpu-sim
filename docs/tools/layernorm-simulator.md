@@ -8,7 +8,7 @@ snapshot. It is a third companion to the [softmax](softmax-simulator.md) and
 [Tracking Schedules as Tile-State Movement](../tile-state-tracking.md).
 
 ```text
-layernorm_simulator [--rows R] [--len N] [--tile T]
+layernorm_simulator [--rows R] [--len N] [--tile T] [--max-cycles C]
 ```
 
 Default: `1 row x 512 features`, tile 256.
