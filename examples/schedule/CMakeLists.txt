@@ -75,3 +75,14 @@ if(KPU_BUILD_TESTS)
         LABELS "timing;matmul;tracker;example;v0.9"
     )
 endif()
+
+# LayerNorm simulator with tile-state tracker (companion to softmax_simulator)
+add_executable(layernorm_simulator layernorm_simulator.cpp)
+target_link_libraries(layernorm_simulator PRIVATE kpu_simulator)
+set_target_properties(layernorm_simulator PROPERTIES FOLDER "Examples/Schedule")
+if(KPU_BUILD_TESTS)
+    add_test(NAME layernorm_simulator COMMAND layernorm_simulator)
+    set_tests_properties(layernorm_simulator PROPERTIES
+        LABELS "timing;layernorm;tracker;example;v0.9"
+    )
+endif()
