@@ -9,6 +9,7 @@
 #pragma once
 
 #include <sw/kpu/timing/schedule/schedule_generator_interface.hpp>
+#include <sw/kpu/timing/schedule/elementwise_schedule_generator.hpp>  // emit_broadcast_tile
 
 #include <sstream>
 
@@ -76,6 +77,14 @@ public:
         // Base addresses
         Address input_base = 0;
         Address output_base = 0;
+        // Inference (folded) parameters: y = x*scale[c] + shift[c], where
+        // scale = gamma/sqrt(var+eps), shift = beta - mean*scale (see
+        // batchnorm_affine.hpp / docs/plans/e9_batchnorm_pattern.md). The fold
+        // is done at param-prep time so inference loads two [C] vectors, not
+        // four - halving resident params to 2C+1.
+        Address scale_base = 0;         ///< Folded scale parameter [C]
+        Address shift_base = 0;         ///< Folded shift parameter [C]
+        // Raw parameters (used by training mode, which computes batch stats).
         Address gamma_base = 0;         ///< Scale parameter [C]
         Address beta_base = 0;          ///< Bias parameter [C]
         Address running_mean_base = 0;  ///< Running mean [C]
@@ -120,14 +129,14 @@ public:
         /**
          * @brief Peak tile residency this schedule implies
          *
-         * Inference preloads gamma/beta/mean/var for EVERY channel up front
-         * and keeps them resident across all samples: 4*C tiles plus the
-         * streaming input. Training processes channels sequentially: per
-         * channel, the gamma/beta pair plus the mean/var scratch pair are
-         * live alongside the streaming input.
+         * Inference preloads the FOLDED scale/shift for EVERY channel up front
+         * and keeps them resident across all samples: 2*C tiles plus the
+         * streaming input (the fold halves this from the raw 4*C+1). Training
+         * processes channels sequentially: per channel, the gamma/beta pair
+         * plus the mean/var scratch pair are live alongside the streaming input.
          */
         [[nodiscard]] Size required_working_set() const {
-            return training ? 5 : 4 * C + 1;
+            return training ? 5 : 2 * C + 1;
         }
     };
 
@@ -179,7 +188,9 @@ public:
 
         Size input_tiles = config_.N * config_.C * config_.spatial_tiles();
         result.metadata.a_tiles = input_tiles;
-        result.metadata.b_tiles = config_.C;  // Parameters per channel
+        // Two folded params per channel at inference (scale + shift); training
+        // loads gamma + beta per channel (mean/var are computed into scratch).
+        result.metadata.b_tiles = 2 * config_.C;
         result.metadata.c_tiles = input_tiles;
 
         result.metadata.strategy = config_.training ? "training_batchnorm" : "inference_batchnorm";
@@ -218,47 +229,51 @@ private:
     /**
      * @brief Generate inference mode schedule
      *
-     * Uses pre-computed running_mean and running_var.
-     * For each channel: y = gamma * (x - mean) / sqrt(var + eps) + beta
+     * Uses the precomputed folded scale/shift: y = x*scale[c] + shift[c]. The
+     * per-channel scale/shift are broadcast operands (P5): each is delivered
+     * once (LOAD + MOVE with a consumer count) and stays resident across all
+     * N*spatial-tile consumptions of its channel. Every output tile is an
+     * executable per-channel affine COMPUTE depending on the streamed input
+     * tile plus that channel's resident scale/shift (resolving the batchnorm
+     * half of #139: the schedule no longer emits a DRAIN with no producer).
      */
     void generate_inference_mode(ScheduleResult& result) {
         Size spatial_tiles = config_.spatial_tiles();
+        Size consumers_per_channel = config_.N * spatial_tiles;
 
-        // Load all channel parameters once
+        // Preload the folded scale/shift for every channel (all-channel
+        // resident, 2C tiles). Broadcast delivery: one LOAD + one MOVE each,
+        // the MOVE carrying the consumer count so the operand holds a single
+        // L2 credit across its whole consumption span.
         for (Size c = 0; c < config_.C; ++c) {
-            auto gamma_tile = make_param_tile(c, ParamType::GAMMA);
-            auto beta_tile = make_param_tile(c, ParamType::BETA);
-            auto mean_tile = make_param_tile(c, ParamType::MEAN);
-            auto var_tile = make_param_tile(c, ParamType::VAR);
-
-            result.operations.push_back(ScheduleOperation::load(gamma_tile));
-            result.operations.push_back(ScheduleOperation::load(beta_tile));
-            result.operations.push_back(ScheduleOperation::load(mean_tile));
-            result.operations.push_back(ScheduleOperation::load(var_tile));
-
-            result.operations.push_back(ScheduleOperation::move(gamma_tile));
-            result.operations.push_back(ScheduleOperation::move(beta_tile));
-            result.operations.push_back(ScheduleOperation::move(mean_tile));
-            result.operations.push_back(ScheduleOperation::move(var_tile));
+            emit_broadcast_tile(result, make_param_tile(c, ParamType::SCALE),
+                                consumers_per_channel);
+            emit_broadcast_tile(result, make_param_tile(c, ParamType::SHIFT),
+                                consumers_per_channel);
         }
 
-        // Process each sample
+        // Stream the input; each output tile is a per-channel affine COMPUTE.
         for (Size n = 0; n < config_.N; ++n) {
-            // Process each channel
             for (Size c = 0; c < config_.C; ++c) {
-                // Load parameters for this channel (may be cached)
-                auto gamma_tile = make_param_tile(c, ParamType::GAMMA);
-                result.operations.push_back(ScheduleOperation::feed(gamma_tile));
+                auto scale_tile = make_param_tile(c, ParamType::SCALE);
+                auto shift_tile = make_param_tile(c, ParamType::SHIFT);
 
-                // Process spatial tiles for this (n, c)
                 for (Size si = 0; si < spatial_tiles; ++si) {
                     auto input_tile = make_input_tile(n, c, si);
                     result.operations.push_back(ScheduleOperation::load(input_tile));
                     result.operations.push_back(ScheduleOperation::move(input_tile));
                     result.operations.push_back(ScheduleOperation::feed(input_tile));
-                    // VE performs: (x - mean) * rsqrt(var + eps) * gamma + beta
 
+                    // The (n, si)-th consumption of this channel's resident
+                    // scale/shift broadcast operands.
+                    result.operations.push_back(ScheduleOperation::feed(scale_tile));
+                    result.operations.push_back(ScheduleOperation::feed(shift_tile));
+
+                    // y = x * scale[c] + shift[c] (a Vector Engine affine).
                     auto output_tile = make_output_tile(n, c, si);
+                    result.operations.push_back(ScheduleOperation::compute(
+                        output_tile, {input_tile.tile_id, scale_tile.tile_id,
+                                      shift_tile.tile_id}));
                     result.operations.push_back(ScheduleOperation::drain(output_tile));
                     result.operations.push_back(ScheduleOperation::writeback(output_tile));
                     result.operations.push_back(ScheduleOperation::store(output_tile));
@@ -342,7 +357,9 @@ private:
         }
     }
 
-    enum class ParamType { GAMMA, BETA, MEAN, VAR };
+    // GAMMA/BETA/MEAN/VAR are the raw params (training); SCALE/SHIFT are the
+    // folded inference params. tj distinguishes them within a channel's B tiles.
+    enum class ParamType { GAMMA, BETA, MEAN, VAR, SCALE, SHIFT };
 
     /**
      * @brief Create input tile descriptor
@@ -406,12 +423,14 @@ private:
         tile.element_size = config_.element_size;
         tile.size_bytes = config_.element_size;
 
-        Address base;
+        Address base = 0;
         switch (ptype) {
             case ParamType::GAMMA: base = config_.gamma_base; break;
             case ParamType::BETA:  base = config_.beta_base; break;
             case ParamType::MEAN:  base = config_.running_mean_base; break;
             case ParamType::VAR:   base = config_.running_var_base; break;
+            case ParamType::SCALE: base = config_.scale_base; break;
+            case ParamType::SHIFT: base = config_.shift_base; break;
         }
         tile.dram_address = base + c * config_.element_size;
 
