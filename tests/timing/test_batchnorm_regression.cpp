@@ -125,15 +125,16 @@ void run_cell(const BNCase& c, const EnvelopeMode& e) {
     REQUIRE(schedule.count_ops(ScheduleOpType::COMPUTE) ==
             schedule.count_ops(ScheduleOpType::DRAIN));
 
+    const auto& ec = executor.config();
+
     // Credit conservation: every L3/L2 credit returned (broadcast params too).
-    REQUIRE(executor.l3_credits().available() == exec_config(c, e).l3_buffer_count);
-    REQUIRE(executor.l2_credits().available() == exec_config(c, e).l2_bank_count);
+    REQUIRE(executor.l3_credits().available() == ec.l3_buffer_count);
+    REQUIRE(executor.l2_credits().available() == ec.l2_bank_count);
 
     // Stall sanity.
     const Cycle stalls = stats.dma_credit_stalls + stats.bm_tag_stalls +
                          stats.bm_credit_stalls + stats.str_tag_stalls +
                          stats.str_credit_stalls;
-    const auto& ec = executor.config();
     const Cycle stall_capable =
         static_cast<Cycle>(ec.num_dma_engines + ec.num_block_movers +
                            ec.num_row_streamers + ec.num_col_streamers);
