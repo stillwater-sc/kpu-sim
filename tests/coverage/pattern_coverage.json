@@ -79,10 +79,10 @@
         "design": "done",
         "isa_closure": "done",
         "generator": "done",
-        "functional": "missing",
+        "functional": "done",
         "regression": "missing"
       },
-      "notes": "Design: im2col+GEMM lowering (T1 #119). ISA/executor closure (T2 #120): host-side im2col patchify helper (conv2d_im2col.hpp) materializes A_col; value path's MatMulComputeSpec bias+ReLU epilogue covers conv, no new executor kernel. Generator (T3 #121): Conv2DScheduleGenerator now emits executable COMPUTE with the full A/B K-slice dependency set (resolves the conv2d half of #139), so generated schedules execute livelock-free; envelope stamping + working-set validation already present. Remaining: functional value oracle (T4 #122) and regression matrix (T5 #123). Gather-load (DMA_LOAD_GATHER) and direct sliding-window/halo path are placeholders/follow-ons."
+      "notes": "Design: im2col+GEMM lowering (T1 #119). ISA/executor closure (T2 #120): host-side im2col patchify helper (conv2d_im2col.hpp) materializes A_col; value path's MatMulComputeSpec bias+ReLU epilogue covers conv, no new executor kernel. Generator (T3 #121): Conv2DScheduleGenerator emits executable COMPUTE with the full A/B K-slice dependency set (resolves the conv2d half of #139), schedules execute livelock-free. Functional (T4 #122): value-producing conv2d on the CSP executor (seeded A_col/B_w, MatMulComputeSpec bias+ReLU) verified elementwise vs a direct-conv host oracle across stride/pad/1x1/bias/ReLU/batch (test_functional_conv2d); conv2d_simulator tile-log artifact. Remaining: regression matrix (T5 #123). Gather-load (DMA_LOAD_GATHER) and direct sliding-window/halo path are placeholders/follow-ons."
     },
     {
       "name": "pooling",

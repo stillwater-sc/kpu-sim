@@ -150,6 +150,16 @@ set_tests_properties(test_conv2d_execution PROPERTIES
     LABELS "timing;conv2d;executor;regression;v0.9"
 )
 
+# Conv2D functional integration + host oracle (issue #122, epic E6):
+# value-producing im2col+GEMM conv2d on the CSP executor vs. a direct-conv oracle
+kpu_add_component_test(test_functional_conv2d "timing"
+    test_functional_conv2d.cpp
+)
+
+set_tests_properties(test_functional_conv2d PROPERTIES
+    LABELS "timing;functional;conv2d;v0.9"
+)
+
 # Functional elementwise execution with host oracle (issue #102, epic E2):
 # value-producing elementwise/broadcast on the CSP data path
 kpu_add_component_test(test_functional_elementwise "timing"
