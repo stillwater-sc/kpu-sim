@@ -191,6 +191,16 @@ set_tests_properties(test_batchnorm_execution PROPERTIES
     LABELS "timing;batchnorm;executor;regression;v0.9"
 )
 
+# BatchNorm functional integration + host oracle (issue #181, epic E9):
+# value-producing BN inference on the CSP executor vs a direct 4-param oracle
+kpu_add_component_test(test_functional_batchnorm "timing"
+    test_functional_batchnorm.cpp
+)
+
+set_tests_properties(test_functional_batchnorm PROPERTIES
+    LABELS "timing;functional;batchnorm;v0.9"
+)
+
 # Functional elementwise execution with host oracle (issue #102, epic E2):
 # value-producing elementwise/broadcast on the CSP data path
 kpu_add_component_test(test_functional_elementwise "timing"

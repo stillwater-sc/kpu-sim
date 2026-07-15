@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **BatchNorm functional integration + host oracle — E9-T4 (#181); satisfies the
+  `batchnorm.functional` M2 gate cell.** Value-producing BN inference on the CSP
+  executor: the streamed input tiles and the folded per-channel `scale/shift`
+  (E9-T2 `bn_fold`) are seeded as tile payloads, and the schedule runs through the
+  `ScheduleExecutor` functional-compute binder applying `y = x·scale + shift`
+  (per-channel), checked elementwise against `batchnorm_reference` (the direct
+  4-param formula). `test_functional_batchnorm` covers spatial-tile / single-tile
+  / batch / large-C shapes. New `examples/schedule/batchnorm_simulator` drives the
+  schedule cycle-by-cycle through the `TileTracker`, showing the per-channel
+  `scale/shift` broadcast params arriving and staying **resident** (with their
+  values) while input tiles stream and the affine computes drain — ending on the
+  oracle check (geometry flags). Coverage: `batchnorm.functional` → done;
+  regression T5 #182 remains.
+
 ### Fixed
 
 - **BatchNorm inference generator emitted DRAIN without COMPUTE (batchnorm half
