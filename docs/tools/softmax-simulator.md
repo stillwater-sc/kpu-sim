@@ -26,21 +26,21 @@ Online softmax simulator  —  online_row_resident  (1 row(s) x 512, tile 256, e
 cyc    | L3 buffers                         | L2 banks                           | L1 / array                        
 -------+------------------------------------+------------------------------------+-----------------------------------
 0      | -                                  | -                                  | -
-36     | A[0,0,0]                           | -                                  | -
-37     | A[0,0,0] A[0,1,0]                  | -                                  | -
-60     | A[0,1,0]                           | A[0,0,0]                           | -
-72     | A[0,1,0]                           | A[0,0,0]                           | A[0,0,0]*
-84     | -                                  | A[0,1,0]                           | A[0,0,0]*
-96     | -                                  | A[0,1,0]                           | A[0,0,0]* A[0,1,0]*
-108    | -                                  | -                                  | A[0,0,0]* A[0,1,0]*
-129    | -                                  | -                                  | A[0,0,0]* A[0,1,0]* B[0,0,0]=(-0.69,440)*
-162    | -                                  | -                                  | A[0,0,0]* A[0,1,0]* B[0,0,0]=(-0.69,440)* C[0,0,0]* C[0,1,0]*
-174    | -                                  | C[0,0,0]                           | A[0,0,0]* A[0,1,0]* B[0,0,0]=(-0.69,440)* C[0,0,0]* C[0,1,0]*
-186    | -                                  | C[0,0,0] C[0,1,0]                  | A[0,0,0]* A[0,1,0]* B[0,0,0]=(-0.69,440)* C[0,0,0]* C[0,1,0]*
-199    | C[0,0,0]                           | C[0,1,0]                           | A[0,0,0]* A[0,1,0]* B[0,0,0]=(-0.69,440)* C[0,0,0]* C[0,1,0]*
-223    | C[0,0,0] C[0,1,0]                  | -                                  | A[0,0,0]* A[0,1,0]* B[0,0,0]=(-0.69,440)* C[0,0,0]* C[0,1,0]*
-250    | C[0,1,0]                           | -                                  | A[0,0,0]* A[0,1,0]* B[0,0,0]=(-0.69,440)* C[0,0,0]* C[0,1,0]*
-274    | -                                  | -                                  | A[0,0,0]* A[0,1,0]* B[0,0,0]=(-0.69,440)* C[0,0,0]* C[0,1,0]*
+36     | A[0,0]                             | -                                  | -
+37     | A[0,0] A[0,1]                      | -                                  | -
+60     | A[0,1]                             | A[0,0]                             | -
+72     | A[0,1]                             | A[0,0]                             | A[0,0]*
+84     | -                                  | A[0,1]                             | A[0,0]*
+96     | -                                  | A[0,1]                             | A[0,0]* A[0,1]*
+108    | -                                  | -                                  | A[0,0]* A[0,1]*
+129    | -                                  | -                                  | A[0,0]* A[0,1]* B[0,0]=(-0.69,440)*
+162    | -                                  | -                                  | C[0,0]* C[0,1]*
+174    | -                                  | C[0,0]                             | C[0,1]*
+186    | -                                  | C[0,0] C[0,1]                      | -
+199    | C[0,0]                             | C[0,1]                             | -
+223    | C[0,0] C[0,1]                      | -                                  | -
+250    | C[0,1]                             | -                                  | -
+274    | -                                  | -                                  | -
 
 Result: each row's softmax sums to 1
   row 0: sum = 1  [OK]
@@ -48,13 +48,15 @@ Result: each row's softmax sums to 1
 SOFTMAX OK
 ```
 
-Reading it: the two input tiles `A[0,0,0]`/`A[0,1,0]` stream `DRAM -> L3 -> L2 ->
-L1/array`; the **stats compute** produces `B[0,0,0]=(m,l)` — here `(-0.69, 440)`,
-the running max and the exp-sum normalizer — which then stays **resident in the
-array** (the E8 compute-resident hand-off, no DRAM round-trip) and feeds the
-**apply computes** that emit the normalized `C[0,0,0]`/`C[0,1,0]`; those drain back
-`array -> L2 -> L3 -> DRAM`. The run ends on the softmax correctness check:
-each row sums to 1.
+Reading it: tiles carry their 2D `[row, tile]` index. The two input tiles
+`A[0,0]`/`A[0,1]` stream `DRAM -> L3 -> L2 -> L1/array`; the **stats compute**
+produces `B[0,0]=(m,l)` — here `(-0.69, 440)`, the running max and the exp-sum
+normalizer — which then stays **resident in the array** (the E8 compute-resident
+hand-off, no DRAM round-trip) and feeds the **apply computes** that emit the
+normalized `C[0,0]`/`C[0,1]`. Once row 0's applies fire, its inputs and its stat
+**retire** from the array (cyc 162), leaving only the outputs, which drain back
+`array -> L2 -> L3 -> DRAM`. The run ends on the softmax correctness check: each
+row sums to 1.
 
 These are **buffers, not caches** — the log reads as tile *arrived* / *resident*
 / credit *returned*, never hit/miss/evict.

@@ -29,10 +29,18 @@ cyc    | L3 buffers      | L2 banks        | L1 / array
 
 with L3 on the left, L2 to its right, and L1/array on the far right — the same
 left-to-right order data physically flows toward the compute fabric. Each cell
-names a resident tile (`A[0,0,0]`) and, when the value plane is active, shows a
-compact summary of its **content** (e.g. an online-softmax stats tile
-`B[0,0,0]=(-0.69,440)` carrying its running max and exp-sum). An `*` marks a
-tile resident in the array (compute storage).
+names a resident tile and, when the value plane is active, shows a compact
+summary of its **content** (e.g. an online-softmax stats tile
+`B[0,0]=(-0.69,440)` carrying its running max and exp-sum). An `*` marks a tile
+resident in the array (compute storage).
+
+Tiles carry a **2D submatrix index**. A `TileID` is a coordinate in the 3D
+M/N/K tile grid `(ti, tj, tk)`, but each matrix uses only two of those axes (the
+third is a placeholder pinned to 0), so a driver labels tiles with the two live
+axes — matmul as `A[ti,tk]` / `B[tk,tj]` / `C[ti,tj]`, softmax as `[row, tile]`.
+`A[0,1]` is thus row-block 0, K-block 1 — a genuinely different submatrix from
+`A[0,0]`. (`TileTracker::Config::label` sets the convention; the raw 3-tuple is
+the default.)
 
 A band is emitted only when occupancy *changes*, so reading the bands
 top-to-bottom is reading the schedule's **state-transition trace** — not a
@@ -137,39 +145,51 @@ C tile accumulates over its K-slices.
 ### Reading a band (worked example)
 
 From `softmax_simulator --rows 3 --len 512` (three softmax rows, two tiles each).
-Four bands, **excerpted** from the full trace (some cells elided with `...`):
+Tiles use their 2D `[row, tile]` index (the softmax driver drops the unused K
+axis). Five bands, **excerpted** from the full trace:
 
 ```text
 cyc    | L3 buffers                         | L2 banks                           | L1 / array
 -------+------------------------------------+------------------------------------+-----------------------------------
-36     | A[0,0,0]                           | -                                  | -
-120    | A[2,1,0]                           | A[1,0,0] A[1,1,0] A[2,0,0]         | A[0,0,0]* A[0,1,0]* A[1,0,0]*
-129    | A[2,1,0]                           | A[1,0,0] A[1,1,0] A[2,0,0]         | ... A[1,0,0]* B[0,0,0]=(-0.69,440)*
-204    | -                                  | -                                  | ... B[0,0,0]=(-0.69,440)* B[1,0,0]=(0.31,440)* C[0,0,0]* C[0,1,0]* C[1,0,0]* C[1,1,0]*
+36     | A[0,0]                             | -                                  | -
+120    | A[2,1]                             | A[1,0] A[1,1] A[2,0]               | A[0,0]* A[0,1]* A[1,0]*
+129    | A[2,1]                             | A[1,0] A[1,1] A[2,0]               | A[0,0]* A[0,1]* A[1,0]* B[0,0]=(-0.69,440)*
+162    | -                                  | A[2,0] A[2,1]                      | A[1,0]* A[1,1]* C[0,0]* C[0,1]*
+204    | -                                  | -                                  | A[2,0]* A[2,1]* C[0,0]* C[0,1]* C[1,0]* C[1,1]*
 ```
 
-- **cyc 36** — the first input tile `A[0,0,0]` has arrived at L3.
-- **cyc 120** — all three rows are in flight at once: `A[2,1,0]` still in L3,
+- **cyc 36** — the first input tile `A[0,0]` (row 0, reduction-tile 0) has
+  arrived at L3.
+- **cyc 120** — all three rows are in flight at once: `A[2,1]` still in L3,
   row 1's tiles in L2, row 0's tiles already in the array (`*`). That overlap is
   the schedule **pipelining** across the batch.
-- **cyc 129** — the stats compute for row 0 has produced `B[0,0,0]=(-0.69,440)`:
+- **cyc 129** — the stats compute for row 0 has produced `B[0,0]=(-0.69,440)`:
   running max `-0.69`, normalizer `440`. It stays resident (its `*` persists) to
   feed row 0's apply computes — no DRAM round-trip.
-- **cyc 204** — rows 0 and 1 have produced their normalized outputs
-  (`C[0,*]`, `C[1,*]`); their **per-row** stats `B[0,0,0]=(-0.69,440)` and
-  `B[1,0,0]=(0.31,440)` differ because each row has its own max. Row 2 is still
-  streaming through L2 in the full trace and finishes a few bands later — this
-  excerpt stops before its outputs form. The run ends when all three rows'
-  softmax sum to 1.
+- **cyc 162** — row 0 is done: its normalized outputs `C[0,0]`, `C[0,1]` have
+  formed, and its inputs `A[0,*]` **and** its stat `B[0,0]` have **retired** from
+  the array (no compute needs them any more). Only tiles still in play remain.
+- **cyc 204** — rows 0 and 1 have produced their outputs `C[0,*]`, `C[1,*]`;
+  row 2's inputs `A[2,*]` are still resident. The run ends when all three rows'
+  softmax sum to 1 and the array drains empty.
+
+### Tile liveness — the array holds only what is active
+
+The L1/array column shows only tiles **currently in play**: a fed input while a
+compute that needs it is still pending, a result until it drains, and a resident
+tile (like softmax's `(m, l)`) until no pending compute holds it. When a compute
+completes, its consumed inputs **retire** from the array unless another pending
+compute still needs them (an A row-tile feeds several C tiles, so it lingers
+until its last consumer fires); a result retires when it drains. So the array
+fills as the pipeline warms, then drains to empty — you can watch a matmul's
+`C` tiles leave the array and stream back out `L2 -> L3 -> DRAM` at the end.
+
+(This retirement also fixes a real value-plane leak: the executor already frees
+L3/L2 payloads on credit release, and now frees the transient L1/array copies
+too, so a long simulation no longer grows memory with every tile it moves.)
 
 ### Notes and limits when reading larger traces
 
-- **The L1/array column accumulates.** Compute-storage payloads persist (that
-  persistence is what enables the resident hand-off), so by the end of a run the
-  array column lists every tile that ever reached compute. This is faithful to
-  the model, but the rightmost column grows with the schedule; read it as
-  "everything that has reached the array so far," and watch the **left** columns
-  (L3/L2) for the live streaming front.
 - **Columns truncate** at `TileTracker::Config::col_width` (default 34). Widen
   it, or use a smaller `--tile` / `--len`, for wide rows.
 - The tracker only sees tiles once the **value plane** is active (payloads seeded);

@@ -38,15 +38,15 @@ hierarchy differently, and the trace makes that visible.
 
 - **Two interleaved input streams, not one.** Softmax streams a single row;
   matmul streams A row-blocks *and* B column-blocks together. In the log you see
-  pairs like `A[0,0,0] A[0,0,1] B[0,0,1] B[0,1,1]` filling L3 — the
-  `interleaved_ab` discipline keeping an A-burst and a B-burst simultaneously
-  resident so neither starves the other (the #67 per-matrix burst share).
+  pairs like `A[0,0] A[0,1] B[0,1] B[1,1]` filling L3 — the `interleaved_ab`
+  discipline keeping an A-burst and a B-burst simultaneously resident so neither
+  starves the other (the #67 per-matrix burst share).
 
 - **K-accumulation is a join, not a chain.** A `C[ti,tj]` compute depends on
-  every A[ti,*,tk] and B[*,tj,tk] K-slice (`2 * k_tiles` feeds); it cannot fire
+  every `A[ti,tk]` and `B[tk,tj]` K-slice (`2 * k_tiles` feeds); it cannot fire
   until all have arrived, and its latency scales with the K-slice count. You see
-  the A/B tiles for both K-slices reach the array (`*`) before `C[0,0,0]`
-  appears — the reduction depth made literal.
+  the A/B tiles for both K-slices reach the array (`*`) before `C[0,0]` appears —
+  the reduction depth made literal.
 
 - **Tiles are large data blocks, so the log shows movement, not content.** A
   softmax stats tile is two numbers `(m, l)` and prints its value; a matmul tile
@@ -72,35 +72,59 @@ hierarchy differently, and the trace makes that visible.
 From `matmul_simulator` (default `C[32x32]=A*B`, tile 16, `interleaved_ab`).
 Excerpted from the full trace (`...` elides cells):
 
+Tiles are labelled with their **2D submatrix index** (see the naming note
+below): `A[ti,tk]`, `B[tk,tj]`, `C[ti,tj]`.
+
 ```text
 cyc    | L3 buffers                         | L2 banks                           | L1 / array
 -------+------------------------------------+------------------------------------+-----------------------------------
-38     | A[0,0,0] A[0,0,1] B[0,0,1]         | -                                  | -
-74     | A[0,0,1] B[0,1,1]                  | A[0,0,0] B[0,0,1]                  | A[0,0,0]* B[0,0,1]*
-159    | -                                  | -                                  | A[0,0,0]* A[0,0,1]* A[1,0,0]* A[1,0,1]* B[0,0,0]* B[0,0,1]* B[0,1,0]* B[0,1,1]*
-187    | -                                  | -                                  | ... B[0,1,1]* C[0,0,0]*
-248    | C[0,0,0] C[0,1,0]                  | C[1,0,0] C[1,1,0]                  | ... C[0,0,0]* C[0,1,0]* C[1,0,0]* C[1,1,0]*
+38     | A[0,0] A[0,1] B[0,1]               | -                                  | -
+88     | A[1,0] A[1,1] B[0,0] B[0,1]        | A[0,1] B[1,1]                      | A[0,0]* B[1,0]*
+159    | -                                  | -                                  | A[0,0]* A[0,1]* A[1,0]* A[1,1]* B[0,0]* B[0,1]* B[1,0]* B[1,1]*
+187    | -                                  | -                                  | ... B[1,1]* C[0,0]*
+211    | -                                  | C[0,0]                             | A[1,0]* A[1,1]* B[0,0]* B[0,1]* B[1,0]* B[1,1]* C[0,1]*
+311    | C[1,1]                             | -                                  | -
+335    | -                                  | -                                  | -
 ```
 
-- **cyc 38** — A and B tiles stream into L3 **interleaved**: two A K-slices and
-  a B K-slice already staged. Neither operand is allowed to monopolize the
+- **cyc 38** — A and B tiles stream into L3 **interleaved** (`A[0,0] A[0,1] B[0,1]`):
+  two A K-slices and a B tile already staged. Neither operand monopolizes the
   buffers.
-- **cyc 74** — the pipeline is filling: `A[0,0,0]`/`B[0,0,1]` in the array (`*`),
-  their successors one boundary behind in L2, more in L3.
-- **cyc 159** — all K-slices of A and B for the first outputs are resident in the
-  array: `A[0,0,*]`, `A[1,0,*]`, `B[*,*,*]`. The **join** is complete, so a
-  compute can fire.
-- **cyc 187** — the first result `C[0,0,0]` appears — `A[0,0,0]*B[0,0,0] +
-  A[0,0,1]*B[0,1,0]` accumulated over the two K-slices.
-- **cyc 248** — the four output tiles `C[0,0]`, `C[0,1]`, `C[1,0]`, `C[1,1]`
-  drain back out through L2/L3 toward DRAM. The run then checks `C = A x B`
-  against the host reference (max abs error 0 for integer operands).
+- **cyc 88** — the pipeline is filling: `A[0,0]`/`B[1,0]` in the array (`*`),
+  successors one boundary behind in L2, more in L3.
+- **cyc 159** — all K-slices for the first outputs are resident: `A[0,*]`,
+  `A[1,*]`, `B[*,*]`. The **join** is complete, so a compute can fire.
+- **cyc 187** — the first result `C[0,0]` appears — `A[0,0]*B[0,0] +
+  A[0,1]*B[1,0]` accumulated over the two K-slices.
+- **cyc 211** — `C[0,0]` has drained to L2 and its finished inputs have
+  **retired** from the array; `C[0,1]` is the next result. The array holds only
+  tiles still in play.
+- **cyc 311 → 335** — the output tiles drain back out through L2/L3 toward DRAM
+  and the array empties. The run then checks `C = A x B` against the host
+  reference (max abs error 0 for integer operands).
 
-The rightmost column accumulates all resident A/B/C tiles (compute payloads
-persist); read the **left** columns for the live streaming front, and note the
-strategy in the header (`interleaved_ab`). Other strategies
+Note the strategy in the header (`interleaved_ab`); other strategies
 (`output_stationary`, `blocked_ab`, `prefetch_next`) produce visibly different
 streaming orders in the same view.
+
+## A note on tile naming
+
+A `TileID` is a coordinate in the 3D **M/N/K tile grid** `(ti, tj, tk)`, but each
+matrix only uses **two** of those axes — the third is a placeholder pinned to 0:
+
+| matrix | shape | live axes | placeholder |
+|--------|-------|-----------|-------------|
+| A | M x K | `(ti, tk)` — row-block, K-block | `tj = 0` |
+| B | K x N | `(tk, tj)` — K-block, col-block | `ti = 0` |
+| C | M x N | `(ti, tj)` — row-block, col-block | `tk = 0` |
+
+So the raw `TileID` `A[0,0,1]` is **not** submatrix `A[0,0]` — its meaningful
+second coordinate is the *third* slot (`tk = 1`, a K-column block), and the
+middle `0` is dead weight. In 2D that tile is `A[0,1]`: row-block 0, K-block 1,
+i.e. `A[0:16, 16:32]`. The simulator drops the placeholder axis and prints the
+2D submatrix index, so `A[0,0]` and `A[0,1]` are genuinely different blocks of A.
+(`TileTracker::Config::label` lets any driver supply its operator's convention;
+the raw 3-tuple `TileID::to_string()` remains the default.)
 
 ## Under the hood
 

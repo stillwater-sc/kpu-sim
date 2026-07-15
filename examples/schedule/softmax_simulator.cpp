@@ -140,8 +140,17 @@ int main(int argc, char** argv) {
     }
     for (const auto& op : schedule.operations) enqueue(exec, op, cfg.reduction_elems);
 
-    // Drive one cycle at a time, tracking every occupancy transition
-    TileTracker tracker;
+    // Drive one cycle at a time, tracking every occupancy transition.
+    // Softmax tiles index (row, reduction-tile) in (ti, tj); the K axis is
+    // unused (tk=0), so label 2D as X[ti,tj] rather than the full X[ti,tj,tk].
+    TileTracker::Config tcfg;
+    tcfg.label = [](const TileID& id) {
+        const char* m = id.matrix == MatrixID::A ? "A"
+                      : id.matrix == MatrixID::B ? "B" : "C";
+        return std::string(m) + "[" + std::to_string(id.ti) + "," +
+               std::to_string(id.tj) + "]";
+    };
+    TileTracker tracker(tcfg);
     tracker.observe(exec);
     while (!exec.is_complete() && exec.current_cycle() < exec.config().max_cycles) {
         exec.step();
