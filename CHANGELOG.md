@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **LayerNorm simulator + tile-log discussion.** `examples/schedule/layernorm_simulator`
+  drives a LayerNorm schedule cycle-by-cycle through the `TileTracker`, showing
+  the row streaming in, the stats compute producing the `(mean, var)` tile
+  (visible in the log, e.g. `B[0,0]=(-0.115,0.0525)`) staying resident and
+  feeding the affine-normalize apply computes, and the outputs draining out -
+  ending on a host `y = gamma*(x-mean)/sqrt(var+eps)+beta` oracle check (max
+  error ~1e-7). Configurable `--rows/--len/--tile`; CI smoke test. Companion doc
+  `docs/tools/layernorm-simulator.md` shows layernorm is the *same* P3 movement
+  pattern as softmax (so it reuses the online row-reduction schedule), told
+  apart only by the statistic content `(mean, var)` vs `(max, exp-sum)` and the
+  apply.
+
 - **Tile tracker: 2D submatrix labels + array liveness (#165 follow-up).**
   `TileTracker::Config::label` lets a driver name tiles by their 2D
   submatrix index instead of the raw 3-tuple `TileID`: a tile coordinate
