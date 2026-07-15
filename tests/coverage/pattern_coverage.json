@@ -176,11 +176,11 @@
       "stages": {
         "design": "done",
         "isa_closure": "done",
-        "generator": "partial",
+        "generator": "done",
         "functional": "missing",
         "regression": "missing"
       },
-      "notes": "Design (T1 #178): BN inference folds to a per-channel affine y=x*scale+shift (scale=gamma/sqrt(var+eps), shift=beta-mean*scale) on the FunctionalComputeSpec broadcast path, no new kernel; docs/plans/e9_batchnorm_pattern.md. ISA/executor closure (T2 #179): host-side fold helper batchnorm_affine.hpp (bn_fold, batchnorm_apply, batchnorm_reference oracle); confirmed the broadcast-affine value path covers BN, no new executor kernel; fold halves resident params 4C+1->2C+1. Remaining: generator emits DRAIN without COMPUTE (#139 applies, T3 #180); functional T4 #181, regression T5 #182. Training (P3 reduction) is an E9 follow-on."
+      "notes": "Design (T1 #178): BN inference folds to a per-channel affine y=x*scale+shift (scale=gamma/sqrt(var+eps), shift=beta-mean*scale) on the FunctionalComputeSpec broadcast path, no new kernel; docs/plans/e9_batchnorm_pattern.md. ISA/executor closure (T2 #179): host-side fold helper batchnorm_affine.hpp (bn_fold, batchnorm_apply, batchnorm_reference oracle); no new executor kernel. Generator (T3 #180): BatchNormScheduleGenerator inference loads folded scale/shift as per-channel broadcast operands (emit_broadcast_tile, consumer_count) and emits an executable per-channel affine COMPUTE (input + resident scale/shift) before each drain (resolves the batchnorm half of #139); working set folded 4C+1->2C+1. Remaining: functional T4 #181, regression T5 #182. Training (P3 reduction) is an E9 follow-on."
     },
     {
       "name": "elementwise",

@@ -180,6 +180,17 @@ set_tests_properties(test_batchnorm_affine PROPERTIES
     LABELS "timing;functional;batchnorm;v0.9"
 )
 
+# BatchNorm inference schedule execution regression (issue #180, epic E9): the
+# generator now emits COMPUTE (resolving the batchnorm half of #139), so
+# generated schedules execute livelock-free through the executor
+kpu_add_component_test(test_batchnorm_execution "timing"
+    test_batchnorm_execution.cpp
+)
+
+set_tests_properties(test_batchnorm_execution PROPERTIES
+    LABELS "timing;batchnorm;executor;regression;v0.9"
+)
+
 # Functional elementwise execution with host oracle (issue #102, epic E2):
 # value-producing elementwise/broadcast on the CSP data path
 kpu_add_component_test(test_functional_elementwise "timing"

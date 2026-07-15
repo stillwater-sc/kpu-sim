@@ -603,8 +603,8 @@ TEST_CASE("BatchNorm and Conv2D carry the envelope and refuse degenerate shares"
     SECTION("batchnorm inference all-channel preload is refused at default envelope") {
         BatchNormScheduleGenerator::Config config;
         config.N = 4; config.C = 8; config.H = 16; config.W = 16;
-        config.training = false;   // preloads 4*C params: 33 > share 8
-        REQUIRE(config.required_working_set() == 33);
+        config.training = false;   // preloads folded 2*C params: 17 > share 8
+        REQUIRE(config.required_working_set() == 17);  // 2*C + 1, C = 8
         BatchNormScheduleGenerator gen(config);
         auto schedule = gen.generate();
         REQUIRE_FALSE(schedule.valid);
@@ -616,7 +616,7 @@ TEST_CASE("BatchNorm and Conv2D carry the envelope and refuse degenerate shares"
         config.N = 4; config.C = 8; config.H = 16; config.W = 16;
         config.training = false;
         config.l3_buffer_count = 256;
-        config.l2_bank_count = 256;   // share 64 >= 33
+        config.l2_bank_count = 256;   // share 64 >= 17
         BatchNormScheduleGenerator gen(config);
         REQUIRE(gen.generate().valid);
     }

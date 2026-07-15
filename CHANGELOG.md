@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **BatchNorm inference generator emitted DRAIN without COMPUTE (batchnorm half
+  of #139) — E9-T3 (#180).** `BatchNormScheduleGenerator` inference now loads the
+  folded `scale/shift` (two `[C]` vectors, not four raw params) as per-channel
+  **broadcast operands** (`emit_broadcast_tile`, so each is delivered once and
+  held resident across its channel's `N·spatial-tile` consumptions), and emits an
+  executable per-channel affine COMPUTE (`y = x·scale[c] + shift[c]`, depending on
+  the streamed input tile + the channel's resident scale/shift) before each drain.
+  Before this the drain had no producer and an executed BN schedule deadlocked.
+  The fold halves the working set (`4C+1 → 2C+1`). New regression
+  `test_batchnorm_execution` runs the generated schedules through the executor
+  (timing-only) across batch/large-C/non-tile-aligned cases, asserting a COMPUTE
+  per output tile, livelock-free completion, and the exact `2C+1` envelope
+  boundary. Coverage: `batchnorm` generator stage → done (functional T4 #181,
+  regression T5 #182 remain).
+
 ### Added
 
 - **BatchNorm-inference scale/shift fold helper — E9-T2 (#179).** BN inference
