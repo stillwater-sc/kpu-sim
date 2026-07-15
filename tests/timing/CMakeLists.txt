@@ -160,6 +160,16 @@ set_tests_properties(test_functional_conv2d PROPERTIES
     LABELS "timing;functional;conv2d;v0.9"
 )
 
+# Conv2D execution regression matrix (issue #123, epic E6): shape x strategy x
+# envelope with credit/stall invariants, envelope boundary, and characterization
+kpu_add_component_test(test_conv2d_regression "timing"
+    test_conv2d_regression.cpp
+)
+
+set_tests_properties(test_conv2d_regression PROPERTIES
+    LABELS "timing;regression;conv2d;v0.9"
+)
+
 # Functional elementwise execution with host oracle (issue #102, epic E2):
 # value-producing elementwise/broadcast on the CSP data path
 kpu_add_component_test(test_functional_elementwise "timing"

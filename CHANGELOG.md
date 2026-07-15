@@ -9,6 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Conv2D regression matrix + characterization — E6-T5 (#123); completes the
+  conv2d coverage row.** `test_conv2d_regression` executes a shape × strategy ×
+  envelope matrix (6 shapes incl. 1×1, strided, 5×5, batched, non-tile-aligned ×
+  both im2col strategies × {default, constrained-min, partitioned}) with, per
+  cell: exact per-stage tile accounting, L3/L2 credit conservation, a
+  COMPUTE-per-drain check (the #139 lock-in), and a stall-sanity bound. Adds an
+  exact envelope-refusal boundary (working set 3: 12 credits generate, 11
+  refused a priori), a functional-under-credit-pressure oracle cell (values
+  survive the minimum partitioned envelope), and a printed characterization
+  report (cycles, cyc/ctile, stalls, DMA/streamer utilization). With this, the
+  `conv2d` row is **done across all five stages** (design/isa/generator/
+  functional/regression, E6 T1–T5).
+
 - **Conv2D functional integration + host oracle — E6-T4 (#122).** Value-producing
   conv2d on the CSP executor: the im2col `A_col` patches and reshaped `B_w`
   weights (E6-T2 helpers) are seeded as tile payloads, the

@@ -80,9 +80,9 @@
         "isa_closure": "done",
         "generator": "done",
         "functional": "done",
-        "regression": "missing"
+        "regression": "done"
       },
-      "notes": "Design: im2col+GEMM lowering (T1 #119). ISA/executor closure (T2 #120): host-side im2col patchify helper (conv2d_im2col.hpp) materializes A_col; value path's MatMulComputeSpec bias+ReLU epilogue covers conv, no new executor kernel. Generator (T3 #121): Conv2DScheduleGenerator emits executable COMPUTE with the full A/B K-slice dependency set (resolves the conv2d half of #139), schedules execute livelock-free. Functional (T4 #122): value-producing conv2d on the CSP executor (seeded A_col/B_w, MatMulComputeSpec bias+ReLU) verified elementwise vs a direct-conv host oracle across stride/pad/1x1/bias/ReLU/batch (test_functional_conv2d); conv2d_simulator tile-log artifact. Remaining: regression matrix (T5 #123). Gather-load (DMA_LOAD_GATHER) and direct sliding-window/halo path are placeholders/follow-ons."
+      "notes": "im2col+GEMM conv2d complete across all five stages (E6 T1-T5, #119-#123). T1 #119: design. T2 #120: host-side im2col patchify helper (conv2d_im2col.hpp) materializes A_col; value path's MatMulComputeSpec bias+ReLU epilogue covers conv, no new executor kernel. T3 #121: Conv2DScheduleGenerator emits executable COMPUTE with the full A/B K-slice dependency set (resolves the conv2d half of #139). T4 #122: value-producing conv2d verified elementwise vs a direct-conv oracle across stride/pad/1x1/bias/ReLU/batch (test_functional_conv2d) + conv2d_simulator tile-log. T5 #123: shape x strategy x envelope regression matrix with per-stage tile accounting, credit conservation, stall invariants, exact envelope-refusal boundary, functional-under-credit-pressure oracle, and cycle/utilization characterization (test_conv2d_regression). conv2d.functional (largest M2 gate cell) satisfied. Gather-load (DMA_LOAD_GATHER) and direct sliding-window/halo/depthwise/grouped are E6/M3 follow-ons."
     },
     {
       "name": "pooling",
