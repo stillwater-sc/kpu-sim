@@ -129,6 +129,16 @@ set_tests_properties(test_multi_tile_execution PROPERTIES
     LABELS "timing;executor;regression;v0.9"
 )
 
+# Conv2D im2col patchify helper unit tests (issue #120, epic E6):
+# geometry, padding zeros, and A_col @ B_w vs. a direct-conv reference
+kpu_add_component_test(test_conv2d_im2col "timing"
+    test_conv2d_im2col.cpp
+)
+
+set_tests_properties(test_conv2d_im2col PROPERTIES
+    LABELS "timing;functional;conv2d;v0.9"
+)
+
 # Functional elementwise execution with host oracle (issue #102, epic E2):
 # value-producing elementwise/broadcast on the CSP data path
 kpu_add_component_test(test_functional_elementwise "timing"

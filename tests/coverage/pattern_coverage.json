@@ -76,13 +76,13 @@
         "cv"
       ],
       "stages": {
-        "design": "partial",
-        "isa_closure": "partial",
+        "design": "done",
+        "isa_closure": "done",
         "generator": "partial",
         "functional": "missing",
         "regression": "missing"
       },
-      "notes": "im2col+GEMM lowering exists (kernel factory, intentional per #18/#142); CSP schedule generator emits DRAIN without COMPUTE (#139); direct sliding-window/halo path missing."
+      "notes": "Design: im2col+GEMM lowering (T1 #119). ISA/executor closure (T2 #120): host-side im2col patchify helper (conv2d_im2col.hpp) materializes A_col; value path's MatMulComputeSpec bias+ReLU epilogue covers conv, no new executor kernel. Remaining: generator emits DRAIN without COMPUTE (#139, T3 #121); functional/regression = T4/T5. Gather-load (DMA_LOAD_GATHER) and direct sliding-window/halo path are placeholders/follow-ons."
     },
     {
       "name": "pooling",
