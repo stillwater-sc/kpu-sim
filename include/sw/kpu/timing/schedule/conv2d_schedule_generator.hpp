@@ -295,8 +295,12 @@ private:
                     result.operations.push_back(ScheduleOperation::feed(b_tile));
                 }
 
-                // Drain and store output tile
+                // Compute the output tile, then drain and store it. COMPUTE
+                // depends on every K-slice A and B feed for this C tile; without
+                // it the DRAIN has no producer (the conv2d half of #139).
                 auto c_tile = make_tile(isa::MatrixID::C, ti, tj, 0);
+                result.operations.push_back(ScheduleOperation::compute(
+                    c_tile, make_compute_dependencies(ti, tj, k_tiles)));
                 result.operations.push_back(ScheduleOperation::drain(c_tile));
                 result.operations.push_back(ScheduleOperation::writeback(c_tile));
                 result.operations.push_back(ScheduleOperation::store(c_tile));
@@ -328,13 +332,42 @@ private:
                     result.operations.push_back(ScheduleOperation::feed(b_tile));
                 }
 
-                // Output tile
+                // Compute, then drain and store the output tile (see #139).
                 auto c_tile = make_tile(isa::MatrixID::C, ti, tj, 0);
+                result.operations.push_back(ScheduleOperation::compute(
+                    c_tile, make_compute_dependencies(ti, tj, k_tiles)));
                 result.operations.push_back(ScheduleOperation::drain(c_tile));
                 result.operations.push_back(ScheduleOperation::writeback(c_tile));
                 result.operations.push_back(ScheduleOperation::store(c_tile));
             }
         }
+    }
+
+    /**
+     * @brief Build the COMPUTE dependency set for output tile C[ti, tj]:
+     *        every K-slice A[ti, 0, tk] and B[0, tj, tk] feed (matches the
+     *        matmul generator, since conv2d lowers to that GEMM).
+     */
+    std::vector<TileID> make_compute_dependencies(Size ti, Size tj,
+                                                  Size k_tiles) const {
+        std::vector<TileID> deps;
+        deps.reserve(2 * k_tiles);
+        for (Size tk = 0; tk < k_tiles; ++tk) {
+            TileID a;
+            a.matrix = isa::MatrixID::A;
+            a.ti = ti;
+            a.tj = 0;
+            a.tk = tk;
+            deps.push_back(a);
+
+            TileID b;
+            b.matrix = isa::MatrixID::B;
+            b.ti = 0;
+            b.tj = tj;
+            b.tk = tk;
+            deps.push_back(b);
+        }
+        return deps;
     }
 
     /**

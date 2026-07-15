@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Conv2D schedule generator emitted DRAIN without COMPUTE (conv2d half of
+  #139) — E6-T3 (#121).** `Conv2DScheduleGenerator` now emits
+  `ScheduleOperation::compute(c_tile, ...)` with the full A/B K-slice dependency
+  set before each drain, in both `IM2COL_INTERLEAVED` and
+  `IM2COL_OUTPUT_STATIONARY` paths (mirroring the matmul generator, since conv2d
+  lowers to that GEMM). Before this the drain had no producer, so an executed
+  conv2d schedule deadlocked. New regression `test_conv2d_execution` runs the
+  generated schedules through the `ConcurrentTimingExecutor` (timing-only) across
+  both strategies × 3×3-s1p1 / 1×1-pointwise / 3×3-strided cases, asserting a
+  COMPUTE per output tile and livelock-free completion. Coverage: `conv2d`
+  generator stage → done (functional/regression remain T4 #122 / T5 #123).
+
 ### Added
 
 - **Conv2D im2col patchify helper — E6-T2 ISA/executor closure (#120).**

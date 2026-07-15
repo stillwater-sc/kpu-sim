@@ -78,11 +78,11 @@
       "stages": {
         "design": "done",
         "isa_closure": "done",
-        "generator": "partial",
+        "generator": "done",
         "functional": "missing",
         "regression": "missing"
       },
-      "notes": "Design: im2col+GEMM lowering (T1 #119). ISA/executor closure (T2 #120): host-side im2col patchify helper (conv2d_im2col.hpp) materializes A_col; value path's MatMulComputeSpec bias+ReLU epilogue covers conv, no new executor kernel. Remaining: generator emits DRAIN without COMPUTE (#139, T3 #121); functional/regression = T4/T5. Gather-load (DMA_LOAD_GATHER) and direct sliding-window/halo path are placeholders/follow-ons."
+      "notes": "Design: im2col+GEMM lowering (T1 #119). ISA/executor closure (T2 #120): host-side im2col patchify helper (conv2d_im2col.hpp) materializes A_col; value path's MatMulComputeSpec bias+ReLU epilogue covers conv, no new executor kernel. Generator (T3 #121): Conv2DScheduleGenerator now emits executable COMPUTE with the full A/B K-slice dependency set (resolves the conv2d half of #139), so generated schedules execute livelock-free; envelope stamping + working-set validation already present. Remaining: functional value oracle (T4 #122) and regression matrix (T5 #123). Gather-load (DMA_LOAD_GATHER) and direct sliding-window/halo path are placeholders/follow-ons."
     },
     {
       "name": "pooling",

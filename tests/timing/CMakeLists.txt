@@ -139,6 +139,17 @@ set_tests_properties(test_conv2d_im2col PROPERTIES
     LABELS "timing;functional;conv2d;v0.9"
 )
 
+# Conv2D schedule execution regression (issue #121, epic E6): the generator
+# now emits COMPUTE (resolving the conv2d half of #139), so generated schedules
+# execute livelock-free through the executor
+kpu_add_component_test(test_conv2d_execution "timing"
+    test_conv2d_execution.cpp
+)
+
+set_tests_properties(test_conv2d_execution PROPERTIES
+    LABELS "timing;conv2d;executor;regression;v0.9"
+)
+
 # Functional elementwise execution with host oracle (issue #102, epic E2):
 # value-producing elementwise/broadcast on the CSP data path
 kpu_add_component_test(test_functional_elementwise "timing"
