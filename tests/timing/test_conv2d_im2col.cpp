@@ -119,6 +119,46 @@ TEST_CASE("conv2d geometry: floored output extents and GEMM dims", "[conv2d][im2
     }
 }
 
+TEST_CASE("conv2d im2col: public guards reject malformed input", "[conv2d][im2col]") {
+    Conv2DGeometry g;
+    g.C_in = 2; g.H_in = 4; g.W_in = 4; g.C_out = 3; g.Kh = 3; g.Kw = 3;
+    REQUIRE(g.valid());
+
+    const auto input = ramp(g.input_elems());
+    const auto filter = ramp(g.filter_elems());
+
+    SECTION("invalid geometry throws") {
+        Conv2DGeometry bad = g;
+        bad.Kh = 9;  // kernel larger than padded input -> H_out() == 0
+        REQUIRE_FALSE(bad.valid());
+        REQUIRE_THROWS_AS(im2col_nchw(std::vector<float>(bad.input_elems()), bad),
+                          std::invalid_argument);
+        REQUIRE_THROWS_AS(filter_to_bw_nchw(std::vector<float>(bad.filter_elems()), bad),
+                          std::invalid_argument);
+        REQUIRE_THROWS_AS(conv2d_reference(std::vector<float>(bad.input_elems()),
+                                           std::vector<float>(bad.filter_elems()), {}, bad),
+                          std::invalid_argument);
+    }
+    SECTION("input size mismatch throws") {
+        REQUIRE_THROWS_AS(im2col_nchw(std::vector<float>(input.size() + 1), g),
+                          std::invalid_argument);
+        REQUIRE_THROWS_AS(conv2d_reference(std::vector<float>(input.size() + 1), filter, {}, g),
+                          std::invalid_argument);
+    }
+    SECTION("filter size mismatch throws") {
+        REQUIRE_THROWS_AS(filter_to_bw_nchw(std::vector<float>(filter.size() - 1), g),
+                          std::invalid_argument);
+        REQUIRE_THROWS_AS(conv2d_reference(input, std::vector<float>(filter.size() - 1), {}, g),
+                          std::invalid_argument);
+    }
+    SECTION("bias must be C_out or empty") {
+        REQUIRE_THROWS_AS(conv2d_reference(input, filter, std::vector<float>(g.C_out + 1), g),
+                          std::invalid_argument);
+        REQUIRE_NOTHROW(conv2d_reference(input, filter, {}, g));
+        REQUIRE_NOTHROW(conv2d_reference(input, filter, std::vector<float>(g.C_out), g));
+    }
+}
+
 TEST_CASE("conv2d im2col: padding produces explicit zeros", "[conv2d][im2col]") {
     // 1 batch, 1 channel, 3x3 input, 3x3 kernel, pad 1 -> 3x3 output. The
     // top-left output position's receptive field has its top row and left

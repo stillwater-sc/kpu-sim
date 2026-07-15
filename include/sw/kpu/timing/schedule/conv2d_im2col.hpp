@@ -33,10 +33,35 @@
 #include <sw/kpu/timing/tile_descriptor.hpp>  // Size, TilePayload
 
 #include <cstddef>
+#include <cstdint>
 #include <stdexcept>
 #include <vector>
 
 namespace sw::kpu::timing::schedule {
+
+namespace detail {
+
+/**
+ * @brief Map an output position + filter tap to its (padded) input coordinate.
+ *
+ * Computes the signed source coordinate `out*stride + k - pad` and reports
+ * whether it lands inside `[0, extent)`. On an in-bounds hit `coord` is set;
+ * an out-of-bounds coordinate is a padding position (returns false, `coord`
+ * untouched). The signed intermediate is `std::int64_t` (not `long`, which is
+ * only 32-bit on LLP64/Windows) so the range is independent of `Size`'s width.
+ * Shared by im2col_nchw and conv2d_reference so the two stay in lock-step when
+ * dilation/grouped conv extend this logic (E6/M3 follow-ons).
+ */
+[[nodiscard]] inline bool padded_coord(Size out, Size stride, Size k, Size pad,
+                                       Size extent, Size& coord) {
+    const std::int64_t c = static_cast<std::int64_t>(out * stride + k) -
+                           static_cast<std::int64_t>(pad);
+    if (c < 0 || c >= static_cast<std::int64_t>(extent)) return false;
+    coord = static_cast<Size>(c);
+    return true;
+}
+
+} // namespace detail
 
 /**
  * @brief Conv2D geometry (groups = 1, dilation = 1) and its GEMM lowering.
@@ -118,20 +143,18 @@ im2col_nchw(const std::vector<float>& input, const Conv2DGeometry& geom) {
                 const Size m = (n * Hout + ho) * Wout + wo;
                 for (Size ci = 0; ci < geom.C_in; ++ci) {
                     for (Size kh = 0; kh < geom.Kh; ++kh) {
-                        // Signed source coordinate; negative or >= extent is padding.
-                        const long ih = static_cast<long>(ho * geom.stride_h + kh) -
-                                        static_cast<long>(geom.pad_h);
-                        const bool h_in = ih >= 0 && ih < static_cast<long>(geom.H_in);
+                        Size ih = 0;  // padding positions leave a_col at 0
+                        const bool h_in = detail::padded_coord(
+                            ho, geom.stride_h, kh, geom.pad_h, geom.H_in, ih);
                         for (Size kw = 0; kw < geom.Kw; ++kw) {
-                            const long iw = static_cast<long>(wo * geom.stride_w + kw) -
-                                            static_cast<long>(geom.pad_w);
-                            const bool w_in = iw >= 0 && iw < static_cast<long>(geom.W_in);
+                            Size iw = 0;
+                            const bool w_in = detail::padded_coord(
+                                wo, geom.stride_w, kw, geom.pad_w, geom.W_in, iw);
                             const Size k = (ci * geom.Kh + kh) * geom.Kw + kw;
                             if (h_in && w_in) {
                                 const std::size_t src =
                                     ((static_cast<std::size_t>(n) * geom.C_in + ci) *
-                                         geom.H_in + static_cast<Size>(ih)) *
-                                        geom.W_in + static_cast<Size>(iw);
+                                         geom.H_in + ih) * geom.W_in + iw;
                                 a_col[static_cast<std::size_t>(m) * K + k] = input[src];
                             }
                             // else: padded position stays 0.0f
@@ -211,17 +234,18 @@ conv2d_reference(const std::vector<float>& input, const std::vector<float>& filt
                     float acc = bias.empty() ? 0.0f : bias[co];
                     for (Size ci = 0; ci < geom.C_in; ++ci) {
                         for (Size kh = 0; kh < geom.Kh; ++kh) {
-                            const long ih = static_cast<long>(ho * geom.stride_h + kh) -
-                                            static_cast<long>(geom.pad_h);
-                            if (ih < 0 || ih >= static_cast<long>(geom.H_in)) continue;
+                            Size ih = 0;
+                            if (!detail::padded_coord(ho, geom.stride_h, kh,
+                                                      geom.pad_h, geom.H_in, ih))
+                                continue;
                             for (Size kw = 0; kw < geom.Kw; ++kw) {
-                                const long iw = static_cast<long>(wo * geom.stride_w + kw) -
-                                                static_cast<long>(geom.pad_w);
-                                if (iw < 0 || iw >= static_cast<long>(geom.W_in)) continue;
+                                Size iw = 0;
+                                if (!detail::padded_coord(wo, geom.stride_w, kw,
+                                                          geom.pad_w, geom.W_in, iw))
+                                    continue;
                                 const std::size_t xs =
                                     ((static_cast<std::size_t>(n) * geom.C_in + ci) *
-                                         geom.H_in + static_cast<Size>(ih)) *
-                                        geom.W_in + static_cast<Size>(iw);
+                                         geom.H_in + ih) * geom.W_in + iw;
                                 const std::size_t fs =
                                     ((static_cast<std::size_t>(co) * geom.C_in + ci) *
                                          geom.Kh + kh) * geom.Kw + kw;
