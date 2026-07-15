@@ -98,3 +98,14 @@ if(KPU_BUILD_TESTS)
         LABELS "timing;conv2d;tracker;example;v0.9"
     )
 endif()
+
+# BatchNorm simulator with tile-state tracker (folded affine; issue #181, epic E9)
+add_executable(batchnorm_simulator batchnorm_simulator.cpp)
+target_link_libraries(batchnorm_simulator PRIVATE kpu_simulator)
+set_target_properties(batchnorm_simulator PROPERTIES FOLDER "Examples/Schedule")
+if(KPU_BUILD_TESTS)
+    add_test(NAME batchnorm_simulator COMMAND batchnorm_simulator)
+    set_tests_properties(batchnorm_simulator PROPERTIES
+        LABELS "timing;batchnorm;tracker;example;v0.9"
+    )
+endif()
