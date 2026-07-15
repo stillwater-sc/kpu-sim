@@ -86,3 +86,15 @@ if(KPU_BUILD_TESTS)
         LABELS "timing;layernorm;tracker;example;v0.9"
     )
 endif()
+
+# Conv2D simulator with tile-state tracker (im2col+GEMM; issue #122, epic E6)
+add_executable(conv2d_simulator conv2d_simulator.cpp)
+target_link_libraries(conv2d_simulator PRIVATE kpu_simulator)
+set_target_properties(conv2d_simulator PROPERTIES FOLDER "Examples/Schedule")
+if(KPU_BUILD_TESTS)
+    # Smoke test: runs the simulator and expects exit 0 (oracle match)
+    add_test(NAME conv2d_simulator COMMAND conv2d_simulator)
+    set_tests_properties(conv2d_simulator PROPERTIES
+        LABELS "timing;conv2d;tracker;example;v0.9"
+    )
+endif()

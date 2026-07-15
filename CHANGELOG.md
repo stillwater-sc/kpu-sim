@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Conv2D functional integration + host oracle — E6-T4 (#122).** Value-producing
+  conv2d on the CSP executor: the im2col `A_col` patches and reshaped `B_w`
+  weights (E6-T2 helpers) are seeded as tile payloads, the
+  `Conv2DScheduleGenerator` schedule runs through the value-producing matmul path
+  (`schedule_matmul_compute` with per-output-channel bias + ReLU on the COMPUTE),
+  and every drained C tile is checked elementwise against `conv2d_reference`.
+  `test_functional_conv2d` covers both strategies × {3×3 s1p1, 1×1 pointwise, 3×3
+  strided, per-channel bias, conv+bias+ReLU, batch N=2} (max error 0 with bounded
+  operands). New `examples/schedule/conv2d_simulator` drives the schedule
+  cycle-by-cycle through the `TileTracker`, showing im2col patch tiles
+  `A[patch,k]` and weight tiles `B[k,cout]` streaming L3→L2→L1/array, the
+  `C[patch,cout]` K-accumulate in the array, and the drain — ending on the oracle
+  check (`--bias`/`--relu`/geometry flags). Coverage: `conv2d.functional` → done
+  (the largest M2 gate cell); regression matrix remains T5 #123.
+
 ### Fixed
 
 - **Conv2D schedule generator emitted DRAIN without COMPUTE (conv2d half of
