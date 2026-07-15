@@ -52,7 +52,7 @@ std::vector<float> block(const std::vector<float>& mat, Size cols,
 
 // Enqueue a matmul schedule with a fused bias/activation epilogue and run it.
 struct CellStats {
-    Size store_ops = 0, out_tiles = 0;
+    std::size_t store_ops = 0, out_tiles = 0;  // count_ops() is size_t (MSVC C4267)
     Cycle cycles = 0, stalls = 0;
     double dma_util = 0.0, str_util = 0.0;
 };
