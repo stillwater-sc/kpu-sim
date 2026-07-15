@@ -107,7 +107,7 @@ ConcurrentTimingExecutor::Config exec_config(const EnvelopeCase& env) {
 
 struct CellResult {
     std::string shape, strategy, envelope;
-    Size c_tiles = 0;
+    std::size_t c_tiles = 0;  // count_ops() is size_t; keep it in that domain (MSVC C4267)
     Cycle cycles = 0;
     double cycles_per_ctile = 0.0;
     Cycle stalls = 0;
@@ -166,7 +166,7 @@ void run_cell(const ConvCase& c, Strategy s, const EnvelopeCase& env) {
     REQUIRE(result.total_cycles > 0);
     REQUIRE(stalls < result.total_cycles * stall_capable);
 
-    const Size c_tiles = schedule.count_ops(ScheduleOpType::STORE);
+    const std::size_t c_tiles = schedule.count_ops(ScheduleOpType::STORE);
     characterization().push_back(
         {c.name, strategy_name(s), env.name, c_tiles, result.total_cycles,
          static_cast<double>(result.total_cycles) / static_cast<double>(c_tiles),
@@ -279,7 +279,9 @@ TEST_CASE("Conv2D functional correctness under credit pressure",
                 const double want =
                     ref[((static_cast<std::size_t>(n) * g.C_out + co) * Hout + ho) *
                             Wout + wo];
-                max_err = std::max(max_err, std::abs(p.values[r * T + cc] - want));
+                const double got = p.values[r * T + cc];
+                REQUIRE(std::isfinite(got));  // NaN would slip past std::max
+                max_err = std::max(max_err, std::abs(got - want));
             }
     }
     REQUIRE(max_err < 1e-3);
