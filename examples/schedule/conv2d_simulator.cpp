@@ -83,6 +83,10 @@ int main(int argc, char** argv) {
             std::cerr << "error: invalid conv geometry (check sizes/padding)\n";
             return 2;
         }
+        if (T == 0) {
+            std::cerr << "error: --tile must be > 0\n";
+            return 2;
+        }
         if (g.M() % T || g.C_out % T || g.K() % T) {
             std::cerr << "error: --tile " << T << " must divide M=" << g.M()
                       << ", C_out=" << g.C_out << ", and K=" << g.K() << "\n";
