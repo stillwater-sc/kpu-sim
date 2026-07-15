@@ -211,6 +211,17 @@ set_tests_properties(test_batchnorm_regression PROPERTIES
     LABELS "timing;regression;batchnorm;v0.9"
 )
 
+# Fused-epilogue regression (issue #188, epic E10): matmul + bias + activation
+# (fused, no intermediate DRAM round-trip) + a conv+BN+ReLU composition cell,
+# value-checked vs a host oracle, with the fusion invariant + characterization
+kpu_add_component_test(test_epilogue_fused_regression "timing"
+    test_epilogue_fused_regression.cpp
+)
+
+set_tests_properties(test_epilogue_fused_regression PROPERTIES
+    LABELS "timing;regression;epilogue;v0.9"
+)
+
 # Functional elementwise execution with host oracle (issue #102, epic E2):
 # value-producing elementwise/broadcast on the CSP data path
 kpu_add_component_test(test_functional_elementwise "timing"

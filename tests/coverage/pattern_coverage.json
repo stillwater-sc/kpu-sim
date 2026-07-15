@@ -217,13 +217,13 @@
         "jepa"
       ],
       "stages": {
-        "design": "partial",
+        "design": "done",
         "isa_closure": "done",
         "generator": "partial",
         "functional": "done",
-        "regression": "partial"
+        "regression": "done"
       },
-      "notes": "matmul+bias+activation: fused drain in the ISA, MatMulComputeSpec computes it functionally (#66), validated numerically in milestone M1 (#137); conv+BN+relu fusion and tiled epilogue generators are the epic's remainder."
+      "notes": "Fused epilogue = per-output-column bias + activation applied in the compute (MatMulComputeSpec, #66), so the pre-bias accumulator never round-trips to DRAM. Design (T1 #187): docs/plans/e10_fused_epilogue_pattern.md (consolidation - the fuse was already functional). Functional: validated in M1 (#137, matmul+bias+ReLU) and E6-T4 (#122, conv+bias/BN+ReLU). Regression (T5 #188): test_epilogue_fused_regression - bias(none/per-col) x activation(NONE/RELU) x shape x envelope value-checked vs Y=act(A@B+bias), plus a conv+BN+ReLU composition cell and the fusion invariant (STORE count == output tiles, no extra epilogue store) + credit conservation + characterization. epilogue_fused.regression (M2 gate cell) satisfied. generator stays PARTIAL: the dedicated tiled fused-epilogue / DRAIN-path VE generator (#47) and activations beyond ReLU (GELU/SiLU/...) are E10 follow-ons off the M2 path."
     },
     {
       "name": "ffn_fused",

@@ -9,6 +9,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Fused-epilogue regression — E10-T5 (#188); satisfies the
+  `epilogue_fused.regression` M2 gate cell.** The fused epilogue (per-output-column
+  bias + activation applied in the compute, so the pre-bias accumulator never
+  round-trips to DRAM) was already functional (`MatMulComputeSpec`, validated in M1
+  and E6-T4); `test_epilogue_fused_regression` locks it in as its own coverage row:
+  bias (none/per-column) × activation (NONE/RELU) × shape × envelope, value-checked
+  elementwise against a host oracle `Y = act(A@B + bias)` (including a
+  clamp-everything ReLU cell), plus a **conv+BN+ReLU composition** cell (the ResNet
+  residual-block epilogue, folding BN scale into the conv weights and BN shift into
+  the fused bias) and the **fusion invariant** (exactly one STORE per output tile —
+  no extra store for the epilogue), with per-stage tile accounting, credit
+  conservation, and characterization. Coverage: `epilogue_fused` design +
+  regression → done; the dedicated tiled-epilogue generator (#47) and activations
+  beyond ReLU stay E10 follow-ons off the M2 path (`generator` remains partial).
+
 - **BatchNorm regression matrix + characterization — E9-T5 (#182); completes the
   batchnorm coverage row.** `test_batchnorm_regression` executes a shape ×
   envelope matrix (4 shapes incl. batch, large-C, non-tile-aligned spatial ×
