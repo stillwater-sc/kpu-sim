@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **BatchNorm regression matrix + characterization — E9-T5 (#182); completes the
+  batchnorm coverage row.** `test_batchnorm_regression` executes a shape ×
+  envelope matrix (4 shapes incl. batch, large-C, non-tile-aligned spatial ×
+  {ample, minimum, partitioned}, each envelope sized to the case's `2C+1`) with,
+  per cell: exact per-stage tile accounting, L3/L2 credit conservation, a
+  COMPUTE-per-drain check (#139 lock-in), and a stall-sanity bound. Adds an exact
+  `2C+1` envelope-refusal boundary (share 9 generates, 8 refused), a
+  functional-under-credit-pressure oracle cell (values survive the minimum
+  partitioned envelope), and a printed characterization report. With this, the
+  `batchnorm` row is **done across all five stages** (E9 T1–T5).
+
 - **BatchNorm functional integration + host oracle — E9-T4 (#181); satisfies the
   `batchnorm.functional` M2 gate cell.** Value-producing BN inference on the CSP
   executor: the streamed input tiles and the folded per-channel `scale/shift`

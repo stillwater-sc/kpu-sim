@@ -178,9 +178,9 @@
         "isa_closure": "done",
         "generator": "done",
         "functional": "done",
-        "regression": "missing"
+        "regression": "done"
       },
-      "notes": "Design (T1 #178): BN inference folds to a per-channel affine y=x*scale+shift (scale=gamma/sqrt(var+eps), shift=beta-mean*scale) on the FunctionalComputeSpec broadcast path, no new kernel; docs/plans/e9_batchnorm_pattern.md. ISA/executor closure (T2 #179): host-side fold helper batchnorm_affine.hpp (bn_fold, batchnorm_apply, batchnorm_reference oracle); no new executor kernel. Generator (T3 #180): BatchNormScheduleGenerator inference loads folded scale/shift as per-channel broadcast operands (emit_broadcast_tile) and emits executable per-channel affine COMPUTE (resolves the batchnorm half of #139); working set folded 4C+1->2C+1. Functional (T4 #181): value-producing BN inference on the CSP executor (FunctionalComputeSpec binder applying y=x*scale+shift) verified elementwise vs the direct 4-param oracle across spatial-tile/single-tile/batch/large-C (test_functional_batchnorm) + batchnorm_simulator tile-log showing scale/shift residency. batchnorm.functional (M2 gate cell) satisfied. Remaining: regression T5 #182. Training (P3 reduction) is an E9 follow-on."
+      "notes": "BatchNorm inference complete across all five stages (E9 batchnorm T1-T5, #178-#182). T1 #178: design - BN inference folds to a per-channel affine y=x*scale+shift (scale=gamma/sqrt(var+eps), shift=beta-mean*scale) on the FunctionalComputeSpec broadcast path, no new kernel; docs/plans/e9_batchnorm_pattern.md. T2 #179: host-side fold helper batchnorm_affine.hpp (bn_fold, batchnorm_apply, batchnorm_reference oracle). T3 #180: generator loads folded scale/shift as per-channel broadcast operands (emit_broadcast_tile) and emits executable affine COMPUTE (resolves the batchnorm half of #139); working set 4C+1->2C+1. T4 #181: value-producing BN vs the direct 4-param oracle (test_functional_batchnorm) + batchnorm_simulator. T5 #182: shape x envelope regression matrix with per-stage tile accounting, credit conservation, stall invariants, exact 2C+1 refusal boundary, functional-under-credit-pressure oracle, and characterization (test_batchnorm_regression). batchnorm.functional (M2 gate cell) satisfied. Training (P3 reduction) is an E9 follow-on."
     },
     {
       "name": "elementwise",
