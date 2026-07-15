@@ -9,6 +9,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Conv2D im2col patchify helper — E6-T2 ISA/executor closure (#120).**
+  `include/sw/kpu/timing/schedule/conv2d_im2col.hpp` adds the only conv-specific
+  host-side capability the functional tier needs: `im2col_nchw` materializes the
+  `A_col` operand `[M=N·Hout·Wout, K=Cin·Kh·Kw]` from an NCHW input (explicit
+  zeros for padded taps), `filter_to_bw_nchw` reshapes the filter to `B_w`
+  `[K, Cout]` with a shared K ordering, and `conv2d_reference` is the direct-conv
+  host oracle. `Conv2DGeometry` carries the floored `Hout/Wout` and the GEMM
+  dims. Confirmed the value path needs **no new executor kernel**: the existing
+  `MatMulComputeSpec` bias (per output channel) + ReLU epilogue in
+  `execute_matmul` covers conv. Unit test `test_conv2d_im2col` cross-checks
+  `A_col @ B_w` against the independent direct-conv reference (stride, padding,
+  1×1, non-square kernel, batch, bias, ReLU) plus a hand-computed tiny case.
+  Coverage: `conv2d` design + isa_closure → done (generator/functional/regression
+  are T3/T4/T5). Gather-load (`DMA_LOAD_GATHER`) stays a placeholder follow-on.
+
 - **LayerNorm simulator + tile-log discussion.** `examples/schedule/layernorm_simulator`
   drives a LayerNorm schedule cycle-by-cycle through the `TileTracker`, showing
   the row streaming in, the stats compute producing the `(mean, var)` tile
