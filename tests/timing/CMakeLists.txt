@@ -243,6 +243,16 @@ set_tests_properties(test_pooling_execution PROPERTIES
     LABELS "timing;pooling;executor;regression;v0.9"
 )
 
+# Pooling functional integration + host oracle (issue #194, epic E7): value-
+# producing max/avg/global pooling on the CSP executor vs pool2d_reference
+kpu_add_component_test(test_functional_pooling "timing"
+    test_functional_pooling.cpp
+)
+
+set_tests_properties(test_functional_pooling PROPERTIES
+    LABELS "timing;functional;pooling;v0.9"
+)
+
 # Functional elementwise execution with host oracle (issue #102, epic E2):
 # value-producing elementwise/broadcast on the CSP data path
 kpu_add_component_test(test_functional_elementwise "timing"

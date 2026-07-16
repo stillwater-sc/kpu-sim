@@ -148,8 +148,9 @@ private:
                 std::vector<TileID> deps;
                 deps.reserve(plane_tiles);
                 for (Size pt = 0; pt < plane_tiles; ++pt) {
-                    auto in = make_tile(isa::MatrixID::A, n * config_.geom.C + c, pt,
-                                        config_.Ti);
+                    // Each plane tile is a Ti-element chunk of the flattened
+                    // H*W plane ([Ti, 1]); plane_tiles = ceil(H*W / Ti).
+                    auto in = make_tile(isa::MatrixID::A, n * config_.geom.C + c, pt, 1);
                     result.operations.push_back(ScheduleOperation::load(in));
                     result.operations.push_back(ScheduleOperation::move(in));
                     result.operations.push_back(ScheduleOperation::feed(in));

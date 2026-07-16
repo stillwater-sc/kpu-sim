@@ -9,6 +9,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Pooling functional integration + host oracle — E7-T4 (#194); satisfies the
+  `pooling.functional` M2 gate cell — the LAST of the five.** Value-producing
+  max/avg/global pooling on the CSP executor: the per-channel window rows (max/avg)
+  or plane chunks (global average) are seeded as tile payloads, the
+  `PoolingScheduleGenerator` schedule runs through the `ScheduleExecutor`
+  functional-compute binder applying the reduce (MAX / MEAN), and the drained
+  outputs are checked elementwise against `pool2d_reference` /
+  `global_avg_pool_reference`. `test_functional_pooling` covers max (padded) / avg
+  / global / batched. New `examples/schedule/pooling_simulator` drives the schedule
+  cycle-by-cycle through the `TileTracker`, showing a channel's window block
+  streaming and reducing to the pooled output; ends on the oracle check. Coverage:
+  `pooling.functional` → done. **With this, all five M2 ResNet gate cells (conv2d,
+  elementwise, batchnorm, epilogue_fused, pooling) are satisfied**; pooling
+  regression (T5 #195) remains for the row, and the M2 ResNet demo (#130) is the
+  remaining milestone deliverable.
+
 - **Pooling schedule generator — E7-T3 (#193).** `PoolingScheduleGenerator` emits
   an **executable reduce COMPUTE per output tile** before each drain, so — unlike
   the pre-existing norm/conv generators — pooling never has the #139

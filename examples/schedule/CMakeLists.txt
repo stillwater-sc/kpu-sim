@@ -109,3 +109,14 @@ if(KPU_BUILD_TESTS)
         LABELS "timing;batchnorm;tracker;example;v0.9"
     )
 endif()
+
+# Pooling simulator with tile-state tracker (windowed reduce; issue #194, epic E7)
+add_executable(pooling_simulator pooling_simulator.cpp)
+target_link_libraries(pooling_simulator PRIVATE kpu_simulator)
+set_target_properties(pooling_simulator PROPERTIES FOLDER "Examples/Schedule")
+if(KPU_BUILD_TESTS)
+    add_test(NAME pooling_simulator COMMAND pooling_simulator)
+    set_tests_properties(pooling_simulator PROPERTIES
+        LABELS "timing;pooling;tracker;example;v0.9"
+    )
+endif()
