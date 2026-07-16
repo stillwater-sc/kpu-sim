@@ -263,6 +263,16 @@ set_tests_properties(test_pooling_regression PROPERTIES
     LABELS "timing;regression;pooling;v0.9"
 )
 
+# M2 ResNet BasicBlock DFG on the CSP executor (issue #201, milestone M2):
+# a KernelGraph residual block executed through GraphCspExecutor vs a host oracle
+kpu_add_component_test(test_m2_resnet_block "timing"
+    test_m2_resnet_block.cpp
+)
+
+set_tests_properties(test_m2_resnet_block PROPERTIES
+    LABELS "timing;m2;resnet;v0.9"
+)
+
 # Functional elementwise execution with host oracle (issue #102, epic E2):
 # value-producing elementwise/broadcast on the CSP data path
 kpu_add_component_test(test_functional_elementwise "timing"
