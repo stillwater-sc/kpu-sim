@@ -91,8 +91,12 @@ run_conv2d_fused(const std::vector<float>& input, const std::vector<float>& filt
     using MatrixID = sw::kpu::isa::MatrixID;
 
     const Size M = geom.M(), N = geom.C_out, K = geom.K();
-    if (M % T || N % T || K % T)
-        throw std::invalid_argument("run_conv2d_fused: T must divide M, C_out, K");
+    if (T == 0 || M % T || N % T || K % T)
+        throw std::invalid_argument("run_conv2d_fused: T must be > 0 and divide M, C_out, K");
+    if (input.size() != static_cast<std::size_t>(geom.N) * geom.C_in * geom.H_in * geom.W_in)
+        throw std::invalid_argument("run_conv2d_fused: input size does not match geometry");
+    if (filter.size() != static_cast<std::size_t>(N) * geom.C_in * geom.Kh * geom.Kw)
+        throw std::invalid_argument("run_conv2d_fused: filter size does not match geometry");
     if (bn && (bn->scale.size() != static_cast<std::size_t>(N) ||
                bn->shift.size() != static_cast<std::size_t>(N)))
         throw std::invalid_argument("run_conv2d_fused: bn scale/shift size must be C_out");
@@ -200,7 +204,7 @@ run_elementwise(sw::kpu::isa::VEOp op, const std::vector<float>& a,
         throw std::invalid_argument("run_elementwise: operand size mismatch");
 
     ElementwiseScheduleGenerator::Config gcfg;
-    gcfg.num_elements = a.size();
+    gcfg.num_elements = static_cast<Size>(a.size());
     gcfg.tile_elems = 256;
     gcfg.form = ElementwiseScheduleGenerator::Form::BINARY;
     gcfg.a_base = 0x100000; gcfg.b_base = 0x400000; gcfg.c_base = 0x700000;

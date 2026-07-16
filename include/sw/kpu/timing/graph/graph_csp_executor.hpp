@@ -219,12 +219,20 @@ private:
     }
 
     static Conv2DGeometry conv_geom(const sw::kpu::Conv2DConfig& c) {
+        // Conv2DConfig uses sw::kpu::Size (64-bit); Conv2DGeometry uses the
+        // timing Size (32-bit) - cast to avoid MSVC C4267.
         Conv2DGeometry g;
-        g.N = c.batch_size; g.C_in = c.in_channels; g.H_in = c.input_height;
-        g.W_in = c.input_width; g.C_out = c.out_channels;
-        g.Kh = c.kernel_height; g.Kw = c.kernel_width;
-        g.stride_h = c.stride_h; g.stride_w = c.stride_w;
-        g.pad_h = c.padding_h; g.pad_w = c.padding_w;
+        g.N = static_cast<Size>(c.batch_size);
+        g.C_in = static_cast<Size>(c.in_channels);
+        g.H_in = static_cast<Size>(c.input_height);
+        g.W_in = static_cast<Size>(c.input_width);
+        g.C_out = static_cast<Size>(c.out_channels);
+        g.Kh = static_cast<Size>(c.kernel_height);
+        g.Kw = static_cast<Size>(c.kernel_width);
+        g.stride_h = static_cast<Size>(c.stride_h);
+        g.stride_w = static_cast<Size>(c.stride_w);
+        g.pad_h = static_cast<Size>(c.padding_h);
+        g.pad_w = static_cast<Size>(c.padding_w);
         return g;
     }
 };
