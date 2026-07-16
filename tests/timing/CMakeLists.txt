@@ -293,6 +293,16 @@ set_tests_properties(test_m2_resnet_head PROPERTIES
     LABELS "timing;m2;resnet;v0.9"
 )
 
+# M2 full ResNet-18 network (issue #206, milestone M2): the complete network built
+# via resnet18.hpp, executed end-to-end as a KernelGraph DFG on the CSP executor
+kpu_add_component_test(test_m2_resnet18 "timing"
+    test_m2_resnet18.cpp
+)
+
+set_tests_properties(test_m2_resnet18 PROPERTIES
+    LABELS "timing;m2;resnet;v0.9"
+)
+
 # Functional elementwise execution with host oracle (issue #102, epic E2):
 # value-producing elementwise/broadcast on the CSP data path
 kpu_add_component_test(test_functional_elementwise "timing"

@@ -18,3 +18,15 @@ if(KPU_BUILD_TESTS)
         LABELS "timing;mlp;milestone;v0.9"
     )
 endif()
+
+add_executable(m2_resnet m2_resnet.cpp)
+target_link_libraries(m2_resnet PRIVATE kpu_simulator)
+set_target_properties(m2_resnet PROPERTIES
+    FOLDER "Examples/Milestones"
+)
+if(KPU_BUILD_TESTS)
+    add_test(NAME m2_resnet COMMAND m2_resnet)
+    set_tests_properties(m2_resnet PROPERTIES
+        LABELS "timing;resnet;milestone;v0.9"
+    )
+endif()
