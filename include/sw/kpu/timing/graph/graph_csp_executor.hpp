@@ -44,6 +44,11 @@ struct NodeData {
     // BATCHNORM raw inference params [C]:
     std::vector<float> gamma, beta, mean, var;
     float eps = 1e-5f;
+    // MATMUL (FC) params: weight [fc_K, fc_N] row-major, optional bias [fc_N].
+    // Dims are carried here because create_matmul exposes no config accessor.
+    std::vector<float> fc_weight, fc_bias;
+    Size fc_M = 0, fc_K = 0, fc_N = 0;
+    bool fc_relu = false;
 };
 
 /**
@@ -154,6 +159,27 @@ public:
                     } else {
                         throw std::runtime_error("GraphCspExecutor: unsupported elementwise op");
                     }
+                    last = id;
+                    break;
+                }
+                case KernelOpType::POOL2D: {
+                    const auto& pc = k.pool2d_config();
+                    if (pc.pool_type != sw::kpu::PoolType::GLOBAL_AVG)
+                        throw std::runtime_error("GraphCspExecutor: only GLOBAL_AVG pooling supported");
+                    schedule::Pool2DGeometry pg;
+                    pg.N = static_cast<Size>(pc.batch_size);
+                    pg.C = static_cast<Size>(pc.channels);
+                    pg.H = static_cast<Size>(pc.input_height);
+                    pg.W = static_cast<Size>(pc.input_width);
+                    out[id] = run_global_avg_pool(input_of(g, id, out, input), pg, result.stats);
+                    last = id;
+                    break;
+                }
+                case KernelOpType::MATMUL: {
+                    if (!nd) throw std::runtime_error("GraphCspExecutor: missing NodeData for matmul node");
+                    out[id] = run_matmul(input_of(g, id, out, input), nd->fc_weight,
+                                         nd->fc_M, nd->fc_N, nd->fc_K, nd->fc_bias,
+                                         nd->fc_relu, T, result.stats);
                     last = id;
                     break;
                 }

@@ -283,6 +283,16 @@ set_tests_properties(test_m2_resnet18_tower PROPERTIES
     LABELS "timing;m2;resnet;v0.9"
 )
 
+# M2 ResNet head: global-avg-pool -> FC as a KernelGraph DFG on the CSP executor
+# (issue #203, milestone M2) - completes the operator set (POOL2D + MATMUL)
+kpu_add_component_test(test_m2_resnet_head "timing"
+    test_m2_resnet_head.cpp
+)
+
+set_tests_properties(test_m2_resnet_head PROPERTIES
+    LABELS "timing;m2;resnet;v0.9"
+)
+
 # Functional elementwise execution with host oracle (issue #102, epic E2):
 # value-producing elementwise/broadcast on the CSP data path
 kpu_add_component_test(test_functional_elementwise "timing"
