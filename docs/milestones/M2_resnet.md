@@ -57,7 +57,7 @@ pipeline overlap *within* each op, not operator-branch overlap (a named follow-o
 
 ### Example benchmark output (scaled demo)
 
-```
+```text
 configuration           nodes   ops     cycles    cyc/op   dmaStl    bmStl   strStl
 resnet18 (base)            39    22      39881      1813     4322     7696     2939
 resnet18 [2,2,2,2]         67    38      51469      1354     7290    13548     5043

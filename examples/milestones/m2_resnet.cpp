@@ -39,6 +39,7 @@ struct Row {
     std::string name;
     std::size_t nodes = 0, ops = 0;
     bool pass = false;
+    bool dot_ok = true;   // false if a requested --dot write failed
     float max_err = 0.0f;
     RunStats stats;
 };
@@ -47,9 +48,11 @@ Row run_spec(const std::string& name, const ResNet18Spec& spec,
              const std::string& dot_path) {
     sw::kpu::KernelGraph g;
     auto net = build_resnet18(g, spec);
+    bool dot_ok = true;
     if (!dot_path.empty()) {
         std::ofstream f(dot_path);
-        if (f) f << g.to_dot(true);
+        f << g.to_dot(true);
+        dot_ok = static_cast<bool>(f);   // open + write succeeded
     }
 
     GraphCspExecutor exec;
@@ -60,6 +63,7 @@ Row run_spec(const std::string& name, const ResNet18Spec& spec,
     r.nodes = net.num_nodes;
     r.ops = result.stats.ops;
     r.stats = result.stats;
+    r.dot_ok = dot_ok;
     r.pass = result.output.size() == net.oracle.size();
     for (std::size_t i = 0; i < result.output.size() && i < net.oracle.size(); ++i)
         r.max_err = std::max(r.max_err, std::abs(result.output[i] - net.oracle[i]));
@@ -131,8 +135,14 @@ int main(int argc, char* argv[]) {
               << " graph nodes execute as " << rows.front().ops << " CSP ops.\n";
     std::cout << "  Validation: " << (all_pass ? "ALL PASS" : "FAILURES PRESENT")
               << " (oracle: composed whole-network host reference, tol 5e-3)\n";
-    if (!dot_path.empty())
-        std::cout << "  KernelGraph written to " << dot_path << " (Graphviz dot)\n";
+    if (!dot_path.empty()) {
+        if (rows.front().dot_ok) {
+            std::cout << "  KernelGraph written to " << dot_path << " (Graphviz dot)\n";
+        } else {
+            std::cerr << "  error: could not write KernelGraph to " << dot_path << "\n";
+            all_pass = false;
+        }
+    }
     std::cout << "\n";
     return all_pass ? 0 : 1;
 }

@@ -50,6 +50,7 @@ struct ResNet18Spec {
     std::vector<Size> stage_channels = {16, 16, 16, 16};
     Size blocks_per_stage = 1;                          // fast default; [2,2,2,2] in the tower test
     Size num_classes = 16;
+    Size tile = 16;   ///< GEMM tile size; batch/channels/num_classes must be multiples
     float eps = 1e-3f;
     std::uint64_t seed = 1000;
 };
@@ -72,8 +73,9 @@ inline std::vector<float> rn_synth(std::size_t n, std::uint64_t seed, float scal
     std::uint64_t s = seed * 2654435761ULL + 12345ULL;
     for (auto& x : v) {
         s = s * 6364136223846793005ULL + 1442695040888963407ULL;
-        auto bits = static_cast<std::uint32_t>(s >> 33);
-        x = (static_cast<float>(bits) / static_cast<float>(0x7FFFFFFF) - 1.0f) * scale;
+        auto bits = static_cast<std::uint32_t>(s >> 33);   // [0, 0x7FFFFFFF]
+        // Map to [-scale, +scale] (both signs, so ReLU/fusion are exercised).
+        x = (2.0f * static_cast<float>(bits) / static_cast<float>(0x7FFFFFFF) - 1.0f) * scale;
     }
     return v;
 }
@@ -136,6 +138,22 @@ inline std::vector<float> rn_conv_bn(const std::vector<float>& x, const std::vec
     using sw::kpu::Kernel;
     using sw::kpu::ElementwiseOp;
     using sw::kpu::ActivationType;
+
+    // Every conv/FC GEMM is tiled at sp.tile; batch (the FC/conv M axis),
+    // channels (K/N), and num_classes (FC N) must be nonzero multiples so the
+    // dimensions are tile-aligned. Fail fast with a clear message here rather
+    // than deep inside a runner.
+    if (sp.tile == 0 || sp.batch == 0 || sp.batch % sp.tile != 0)
+        throw std::invalid_argument("build_resnet18: batch must be a nonzero multiple of tile");
+    if (sp.in_channels == 0 || sp.in_channels % sp.tile != 0)
+        throw std::invalid_argument("build_resnet18: in_channels must be a nonzero multiple of tile");
+    if (sp.num_classes == 0 || sp.num_classes % sp.tile != 0)
+        throw std::invalid_argument("build_resnet18: num_classes must be a nonzero multiple of tile");
+    for (Size ch : sp.stage_channels)
+        if (ch == 0 || ch % sp.tile != 0)
+            throw std::invalid_argument("build_resnet18: stage channels must be nonzero multiples of tile");
+    if (sp.height == 0 || sp.width == 0 || sp.stage_channels.empty() || sp.blocks_per_stage == 0)
+        throw std::invalid_argument("build_resnet18: invalid geometry");
 
     ResNet18 net;
     auto& nd = net.node_data;
