@@ -17,7 +17,10 @@ operators**, executed on the credit-based CSP executor, so we exercise in one
 artifact: the operators (conv, pool, folded-BN, ReLU epilogue, residual add,
 global-average-pool, FC), the **fusions** (conv+BN fold, conv+bias+ReLU
 epilogue), and the **layout/graph transformations** (im2col, topological
-scheduling, residual-branch parallelism). Deliver M1's three-tier DoD:
+scheduling, residual-branch structure + fusible-pair analysis). M2 executes
+nodes sequentially in topological order — the measured concurrency is the
+tile-level pipeline overlap *within* each op, not operator-branch parallelism
+(that is a named follow-on, §5). Deliver M1's three-tier DoD:
 
 - **Demonstrate:** the graph runs end-to-end through the CSP executor; a
   `--trace-dir` exports Perfetto Chrome traces of the credit dataflow.
@@ -35,7 +38,8 @@ wired together — bridging them *is* M2:
   `add_kernel(Kernel::create_conv2d/batchnorm/pool2d/global_avg_pool2d/
   elementwise/matmul, ...)`, `add_edge(prod, cons, "C", "A")`, plus the passes we
   want to exercise: `get_execution_order` (topological), `get_execution_levels`
-  (the residual **skip-branch parallelism**), `find_fusible_pairs`, `to_dot`
+  (the residual **skip-branch structural independence**, for analysis + viz),
+  `find_fusible_pairs`, `to_dot`
   (visualization). Every ResNet kernel factory already exists. **But**
   `compile()` lowers to the ISA `DMProgram` (sequential fallback) — *not* the
   credit-dataflow CSP value path, and it does not produce oracle-validated
@@ -71,12 +75,19 @@ Concretely, three pieces:
    skip), global-average-pool, FC. ResNet-18 first; ResNet-50 (bottleneck) is a
    follow-on. `to_dot` emits the graph for the writeup.
 
-2. **Graph→CSP executor** (the new bridge) — walks `get_execution_order`, and for
-   each kernel node runs the matching schedule generator on a shared
+2. **Graph→CSP executor** (the new bridge) — walks `get_execution_order`
+   (topological) and runs each kernel node **sequentially** on a shared
    `ConcurrentTimingExecutor`, seeding the node's input tiles from the producing
    node's output activation (kept resident/in-DRAM between nodes) and reading its
    output back — the same seed/binder pattern the per-op functional tests use.
-   It applies the **fusions** as it lowers:
+   The parallelism M2 measures is the **tile-level** concurrency *within* each op
+   (DMA / BlockMover / Streamer / compute overlap on the pipeline), not
+   operator-graph-level branch overlap: nodes execute one at a time in topo
+   order. `get_execution_levels` / `find_fusible_pairs` are used for **graph
+   analysis, visualization, and the fusion decision** (§below), not to run
+   independent operators concurrently — concurrent multi-node scheduling on the
+   executor is a named follow-on (see §5). It applies the **fusions** as it
+   lowers:
    - **conv+BN fold** (`batchnorm_affine::bn_fold`): a `conv→batchnorm` edge folds
      BN's scale/shift into the conv's weight columns + bias — one GEMM, no
      standalone BN pass (the E6-T4 / E9 fold).
@@ -86,9 +97,14 @@ Concretely, three pieces:
    - **im2col layout** (`conv2d_im2col`): conv lowers to a GEMM over the unfolded
      `A_col` (the standard conv→matmul transform).
    - **residual add**: the `ElementwiseScheduleGenerator` ADD joins the block
-     output with the (possibly 1×1-projected) skip tensor — the DAG's
-     `execution_levels` express that the skip branch is independent of the main
-     branch.
+     output with the (possibly 1×1-projected) skip tensor. The skip is a
+     **data-availability** property, not concurrent execution: the skip tensor is
+     produced by an upstream node and kept resident/in-DRAM until the ADD consumes
+     it, so both the main-branch output and the skip are present when the ADD runs
+     (both branches are earlier in the topo order). `get_execution_levels` reports
+     that the two branches are *structurally* independent — the design records
+     that for the graph viz and as the hook for the concurrent-scheduling
+     follow-on, but M2 does not run them in parallel.
 
 3. **Whole-network host oracle** — composes the per-op references
    (`conv2d_reference`, `batchnorm_reference`, `pool2d_reference`,
@@ -109,7 +125,8 @@ real today:
   validated in isolation this program; M2 tests them *in composition*);
 - **layout transform**: conv→im2col→GEMM;
 - **graph transformations**: `KernelGraph`'s topological schedule, execution-level
-  extraction (residual-branch parallelism), and `find_fusible_pairs` (which the
+  extraction (residual-branch structural independence — used for viz/analysis, not
+  concurrent operator execution), and `find_fusible_pairs` (which the
   bridge consults to decide where to apply the fold/epilogue).
 
 Extending the DFX tiling/dataflow-strategy compiler to conv/pool/BN (so the
@@ -136,8 +153,15 @@ skip-branch DAG structure). ResNet-18 is stacking blocks + stem + GAP + FC.
   oracle is computed from the same weights, so validation is exact-to-fp32.
   Loading *trained* ResNet weights (ONNX/PyTorch) is the E15 runtime path,
   deferred (M1 made the same call).
-- **In:** ResNet-18 inference (BasicBlock). **Follow-on:** ResNet-50 (bottleneck
-  block, 1×1→3×3→1×1), trained-weight loading, and the full DFX conv compiler.
+- **In:** ResNet-18 inference (BasicBlock), executed **sequentially in
+  topological order** on the shared CSP executor. **Follow-on:** ResNet-50
+  (bottleneck block, 1×1→3×3→1×1), trained-weight loading, the full DFX conv
+  compiler, and **concurrent multi-node scheduling** — running the
+  execution-level-independent branches (e.g. the residual skip vs the main branch)
+  concurrently on the executor rather than one node at a time. The latter is what
+  would turn `get_execution_levels` from an analysis/viz aid into measured
+  operator-branch parallelism; it is explicitly out of M2's scope so the demo's
+  benchmark numbers describe sequential per-op execution.
 
 ## 7. Risks
 
