@@ -9,6 +9,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **M2 ResNet-18 residual tower as a KernelGraph DFG — M2-T3 part A (#203).** The
+  full ResNet-18 residual tower (stem 3x3 conv->BN->ReLU + four stages of stacked
+  BasicBlocks, `[2,2,2,2]`, the first block of stages 2-4 stride-2 downsampling
+  with a 1x1 projection skip) built as a single `KernelGraph` (65 nodes) and
+  executed end-to-end on the CSP value path through `GraphCspExecutor`, validated
+  elementwise against a composed whole-tower host oracle. `test_m2_resnet18_tower`
+  threads the oracle in lockstep with the graph build (same deterministic
+  weights), runs the DFG, and matches at max-error 0 across the 17-conv depth;
+  fusion collapses the 65 graph nodes to 36 CSP ops (every BN folded into its
+  conv, every block-internal ReLU fused as an epilogue). All skips are explicit
+  graph edges (identity or projection) so stacked blocks thread correctly; batch
+  N=16 keeps every conv GEMM's M = N*Hout*Wout tile-aligned. Uses only the
+  conv/BN/ReLU/residual-add bridge from M2-T2; the GAP+FC head + pooling/matmul
+  runners are part B. Milestone M2 (#130), design docs/plans/m2_resnet_dfg.md.
+
 - **M2 ResNet BasicBlock as a KernelGraph DFG on the CSP executor — M2-T2 (#201).**
   The graph->CSP bridge: `GraphCspExecutor` walks a `KernelGraph` in topological
   order and runs each operator node on the schedule-generator value path
