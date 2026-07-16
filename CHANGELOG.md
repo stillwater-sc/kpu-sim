@@ -9,6 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **M3 depthwise convolution + ReLU6 on the CSP executor — M3-T2 (#209).**
+  `run_depthwise_conv` delivers depthwise conv (`groups = C`) by reusing the E7
+  pooling per-channel window unfold for movement (`pool_window_channel`, 0-filled
+  at padding) and reducing each window row by a **dot-product with that channel's
+  folded filter** (a weighted sum) instead of pooling's max/mean - the M3 design's
+  decision, so depthwise is a Vector-Engine op with no new kernel. Optional folded
+  BatchNorm and a ReLU6 (`min(max(x,0),6)`) epilogue apply in the reduce.
+  `run_relu6` adds the standalone clamp. `test_m3_depthwise` validates the runner
+  elementwise against a host depthwise reference (3x3 s1p1, 3x3 s2p1 downsample,
+  and folded BN + ReLU6). Validated at channel counts up to 16; the underlying
+  pooling windowed schedule deadlocks at C >= 32 (#210, a pre-existing E7
+  limitation) - larger-C depthwise is blocked on that fix. Milestone M3 (#131),
+  design docs/plans/m3_mobilenet_dfg.md.
+
 - **DNN Milestone M2: ResNet-18 as a DFG on the CSP executor — M2-T4 (#206);
   milestone #130 achieved.** The full ResNet-18 (stem + four stages of
   BasicBlocks with stride-2 downsampling + 1x1 projections + global-average-pool +

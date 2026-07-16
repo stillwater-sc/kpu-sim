@@ -303,6 +303,16 @@ set_tests_properties(test_m2_resnet18 PROPERTIES
     LABELS "timing;m2;resnet;v0.9"
 )
 
+# M3 depthwise conv (issue #209, milestone M3): per-channel window unfold + filter
+# dot-product reduce on the CSP executor vs a host depthwise reference; ReLU6
+kpu_add_component_test(test_m3_depthwise "timing"
+    test_m3_depthwise.cpp
+)
+
+set_tests_properties(test_m3_depthwise PROPERTIES
+    LABELS "timing;m3;mobilenet;v0.9"
+)
+
 # Functional elementwise execution with host oracle (issue #102, epic E2):
 # value-producing elementwise/broadcast on the CSP data path
 kpu_add_component_test(test_functional_elementwise "timing"
