@@ -26,8 +26,12 @@
 #include <sw/kpu/timing/schedule/batchnorm_affine.hpp>
 #include <sw/kpu/timing/schedule/matmul_schedule_generator.hpp>
 #include <sw/kpu/timing/schedule/functional_elementwise_executor.hpp>
+#include <sw/kpu/timing/schedule/pooling_window.hpp>
+#include <sw/kpu/timing/schedule/pooling_schedule_generator.hpp>
+#include <sw/kpu/timing/schedule/schedule_executor.hpp>
 
 #include <cstddef>
+#include <optional>
 #include <stdexcept>
 #include <vector>
 
@@ -227,6 +231,150 @@ run_elementwise(sw::kpu::isa::VEOp op, const std::vector<float>& a,
 run_relu(const std::vector<float>& x, RunStats& stats) {
     return run_elementwise(sw::kpu::isa::VEOp::MAX, x,
                            std::vector<float>(x.size(), 0.0f), stats);
+}
+
+/**
+ * @brief Run a matmul C = act(A @ W + bias) on the CSP executor (the FC layer).
+ *
+ * A is [M, K] row-major, W is [K, N] row-major. Reuses the value-producing GEMM
+ * path (schedule_matmul_compute) with the bias + activation epilogue.
+ *
+ * @param T tile size (must divide M, N, K)
+ */
+[[nodiscard]] inline std::vector<float>
+run_matmul(const std::vector<float>& a, const std::vector<float>& w,
+           Size M, Size N, Size K, const std::vector<float>& bias, bool relu,
+           Size T, RunStats& stats) {
+    using schedule::MatMulScheduleGenerator;
+    using MatrixID = sw::kpu::isa::MatrixID;
+    if (T == 0 || M % T || N % T || K % T)
+        throw std::invalid_argument("run_matmul: T must be > 0 and divide M, N, K");
+    if (a.size() != static_cast<std::size_t>(M) * K)
+        throw std::invalid_argument("run_matmul: A size does not match M*K");
+    if (w.size() != static_cast<std::size_t>(K) * N)
+        throw std::invalid_argument("run_matmul: W size does not match K*N");
+    if (!bias.empty() && bias.size() != static_cast<std::size_t>(N))
+        throw std::invalid_argument("run_matmul: bias size must be N or empty");
+
+    MatMulScheduleGenerator::Config cfg;
+    cfg.M = M; cfg.N = N; cfg.K = K; cfg.Ti = cfg.Tj = cfg.Tk = T;
+    cfg.a_base = 0x100000; cfg.b_base = 0x400000; cfg.c_base = 0x700000;
+    auto schedule = MatMulScheduleGenerator(cfg).generate();
+    if (!schedule.valid)
+        throw std::runtime_error("run_matmul: schedule refused: " + schedule.error_message);
+
+    ConcurrentTimingExecutor::Config ecfg; ecfg.max_cycles = 20'000'000;
+    ConcurrentTimingExecutor exec(ecfg);
+    for (const auto& op : schedule.operations) {
+        if (op.type != schedule::ScheduleOpType::LOAD) continue;
+        const auto id = op.tile.tile_id;
+        if (id.matrix == MatrixID::A)
+            exec.set_tile_payload(id, TilePayload{T, T, detail::block(a, K, id.ti, id.tk, T)});
+        else
+            exec.set_tile_payload(id, TilePayload{T, T, detail::block(w, N, id.tk, id.tj, T)});
+    }
+    for (const auto& op : schedule.operations) {
+        using schedule::ScheduleOpType;
+        switch (op.type) {
+            case ScheduleOpType::LOAD:      exec.schedule_load(op.tile, op.engine_id); break;
+            case ScheduleOpType::MOVE:      exec.schedule_move(op.tile, op.transpose, op.mover_id); break;
+            case ScheduleOpType::FEED:      exec.schedule_feed(op.tile, op.streamer_id); break;
+            case ScheduleOpType::DRAIN:     exec.schedule_drain(op.tile, op.streamer_id); break;
+            case ScheduleOpType::WRITEBACK: exec.schedule_writeback(op.tile, op.mover_id); break;
+            case ScheduleOpType::STORE:     exec.schedule_store(op.tile, op.engine_id); break;
+            case ScheduleOpType::COMPUTE: {
+                ConcurrentTimingExecutor::MatMulComputeSpec spec;
+                for (const auto& dep : op.dependency_tiles) {
+                    if (dep.matrix == MatrixID::A) spec.a_tiles.push_back(dep);
+                    else                            spec.b_tiles.push_back(dep);
+                }
+                if (!bias.empty()) {
+                    const Size tj = op.tile.tile_id.tj;
+                    spec.bias.assign(bias.begin() + static_cast<std::ptrdiff_t>(tj * T),
+                                     bias.begin() + static_cast<std::ptrdiff_t>(tj * T + T));
+                }
+                if (relu) spec.activation = ConcurrentTimingExecutor::FunctionalActivation::RELU;
+                exec.schedule_matmul_compute(op.tile, spec);
+                break;
+            }
+        }
+    }
+    while (!exec.is_complete() && exec.current_cycle() < exec.config().max_cycles)
+        exec.step();
+    if (!exec.is_complete()) throw std::runtime_error("run_matmul: did not complete");
+    detail::accumulate(stats, exec);
+
+    std::vector<float> c(static_cast<std::size_t>(M) * N);
+    for (const auto& op : schedule.operations) {
+        if (op.type != schedule::ScheduleOpType::STORE) continue;
+        const auto id = op.tile.tile_id;
+        const auto& p = exec.tile_payload_at(MemoryLevel::DRAM, id);
+        for (Size r = 0; r < T; ++r)
+            for (Size col = 0; col < T; ++col)
+                c[(id.ti * T + r) * N + (id.tj * T + col)] = p.values[r * T + col];
+    }
+    return c;
+}
+
+/**
+ * @brief Global average pool on the CSP executor: mean over the H*W plane per
+ *        (n, c). Input is NCHW; output is [N*C] row-major (the [N,C,1,1] tensor).
+ *
+ * Tiles the plane in Ti = H*W chunks so any spatial extent works (plane % Ti == 0).
+ */
+[[nodiscard]] inline std::vector<float>
+run_global_avg_pool(const std::vector<float>& input,
+                    const schedule::Pool2DGeometry& geom, RunStats& stats) {
+    using namespace sw::kpu::timing::schedule;
+    if (input.size() != geom.elems())
+        throw std::invalid_argument("run_global_avg_pool: input size does not match geometry");
+    const Size plane = geom.H * geom.W;
+    const Size Ti = plane;  // one chunk per channel: plane % Ti == 0 always
+
+    PoolingScheduleGenerator::Config cfg;
+    cfg.geom = geom; cfg.mode = PoolingScheduleGenerator::Mode::GLOBAL_AVG; cfg.Ti = Ti;
+    cfg.input_base = 0x100000; cfg.output_base = 0x400000;
+    auto schedule = PoolingScheduleGenerator(cfg).generate();
+    if (!schedule.valid)
+        throw std::runtime_error("run_global_avg_pool: schedule refused: " + schedule.error_message);
+
+    ConcurrentTimingExecutor::Config ecfg; ecfg.max_cycles = 20'000'000;
+    ConcurrentTimingExecutor exec(ecfg);
+    for (const auto& op : schedule.operations) {
+        if (op.type != ScheduleOpType::LOAD) continue;
+        const auto id = op.tile.tile_id;
+        const std::size_t base = static_cast<std::size_t>(id.ti) * plane + id.tj * Ti;
+        exec.set_tile_payload(id, TilePayload{Ti, 1,
+            std::vector<float>(input.begin() + static_cast<std::ptrdiff_t>(base),
+                               input.begin() + static_cast<std::ptrdiff_t>(base + Ti))});
+    }
+
+    ScheduleExecutor sched_exec(exec);
+    sched_exec.set_functional_compute_binder(
+        [plane](const ScheduleOperation& op)
+            -> std::optional<ConcurrentTimingExecutor::FunctionalComputeSpec> {
+            ConcurrentTimingExecutor::FunctionalComputeSpec spec;
+            spec.input_tiles = op.dependency_tiles;
+            spec.operation = [plane](const std::vector<TilePayload>& in) {
+                float s = 0.0f;
+                for (const auto& t : in) for (float v : t.values) s += v;
+                return TilePayload{1, 1, {s / static_cast<float>(plane)}};
+            };
+            return spec;
+        });
+    auto result = sched_exec.execute(schedule);
+    if (!result.success)
+        throw std::runtime_error("run_global_avg_pool: execution failed: " + result.error_message);
+    stats.total_cycles += result.total_cycles;
+    ++stats.ops;
+
+    std::vector<float> out(static_cast<std::size_t>(geom.N) * geom.C);
+    for (const auto& op : schedule.operations) {
+        if (op.type != ScheduleOpType::STORE) continue;
+        const auto id = op.tile.tile_id;
+        out[id.ti] = exec.tile_payload_at(MemoryLevel::DRAM, id).values.at(0);
+    }
+    return out;
 }
 
 } // namespace sw::kpu::timing::graph

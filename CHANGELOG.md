@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **M2 ResNet classification head (GAP -> FC) on the CSP executor — M2-T3 part B
+  (#203).** Completes the ResNet-18 operator set: `run_global_avg_pool` (mean over
+  the H*W plane per channel, tiling the plane as one chunk so any spatial extent
+  works) and `run_matmul` (the FC GEMM with a bias + ReLU epilogue), plus
+  `GraphCspExecutor` **POOL2D** (global-average) and **MATMUL** dispatch. FC
+  weights/dims ride in `NodeData` (create_matmul exposes no config accessor).
+  `test_m2_resnet_head` builds a `GAP -> FC` `KernelGraph`, executes it through
+  the bridge, and validates the classification output vs a host oracle (with and
+  without FC ReLU), asserting both ops run on the CSP executor. With this and the
+  ResNet-18 tower (part A), every ResNet-18 operator executes as a DFG on the CSP
+  value path. Milestone M2 (#130).
+
 - **M2 ResNet-18 residual tower as a KernelGraph DFG — M2-T3 part A (#203).** The
   full ResNet-18 residual tower (stem 3x3 conv->BN->ReLU + four stages of stacked
   BasicBlocks, `[2,2,2,2]`, the first block of stages 2-4 stride-2 downsampling
