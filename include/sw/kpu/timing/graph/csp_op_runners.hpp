@@ -404,7 +404,7 @@ run_depthwise_conv(const std::vector<float>& input,
 
     ScheduleExecutor se(exec);
     se.set_functional_compute_binder(
-        [&fw, &fb, K, C, relu6](const ScheduleOperation& op)
+        [&fw, &fb, K, relu6](const ScheduleOperation& op)
             -> std::optional<ConcurrentTimingExecutor::FunctionalComputeSpec> {
             const Size c = op.tile.tile_id.ti;               // output channel
             ConcurrentTimingExecutor::FunctionalComputeSpec spec;
@@ -425,7 +425,6 @@ run_depthwise_conv(const std::vector<float>& input,
             };
             return spec;
         });
-    (void)C;
     auto result = se.execute(schedule);
     if (!result.success)
         throw std::runtime_error("run_depthwise_conv: execution failed: " + result.error_message);
