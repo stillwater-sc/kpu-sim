@@ -111,6 +111,18 @@ TEST_CASE("M3 depthwise conv on the CSP executor matches host reference",
         auto ref = depthwise_reference(x, f, g, nullptr, nullptr, nullptr, nullptr, 0.0f, false);
         REQUIRE(maxerr(csp, ref) < 1e-4f);
     }
+    SECTION("C=48 exceeds the old 256 compute-result cap (#210)") {
+        // 48 channels * (N*Hout*Wout / 16) output tiles = 48*16 = 768 drains,
+        // past the old hardcoded 256-entry compute-result CAM that deadlocked
+        // depthwise/pooling at high channel counts.
+        auto g = geom(16, 48, 4, 4, 3, 1, 1);
+        auto x = synth(g.elems(), 11, 1.0f);
+        auto f = synth(static_cast<std::size_t>(g.C) * g.window(), 12, 0.5f);
+        auto csp = run_depthwise_conv(x, g, f, nullptr, {}, false, 16, st);
+        auto ref = depthwise_reference(x, f, g, nullptr, nullptr, nullptr, nullptr, 0.0f, false);
+        REQUIRE(csp.size() == ref.size());
+        REQUIRE(maxerr(csp, ref) < 1e-4f);
+    }
     SECTION("with folded BN + ReLU6") {
         auto g = geom(16, 16, 4, 4, 3, 1, 1);
         auto x = synth(g.elems(), 5, 1.0f);

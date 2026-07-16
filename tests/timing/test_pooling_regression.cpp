@@ -191,6 +191,22 @@ TEST_CASE("Pooling envelope refusal boundary (working set 3)",
     REQUIRE(refused.error_message.find("working set") != std::string::npos);
 }
 
+TEST_CASE("Pooling windowed drains >256 result tiles (#210)",
+          "[timing][regression][pooling][deadlock]") {
+    // Regression for #210: the compute-result ready-set was hardcoded to 256
+    // entries and silently dropped results past that, head-of-line-blocking the
+    // FIFO drain forever. This schedule produces C * ceil(out_spatial/Ti) = 512
+    // output/COMPUTE/DRAIN tiles, well past the old cap; before the fix DRAIN
+    // wedged at exactly 255. N=1 so run_windowed_cell's per-channel value-check
+    // (ref[ti*M + tj*Ti + r]) is exact; the >256 count comes from C * spatial.
+    auto g = geom(1, 32, 32, 32, 2, 2, 2, 0);   // out_spatial 16*16=256, 16 tiles/ch
+    const std::size_t out_tiles =
+        static_cast<std::size_t>(g.C) *
+        ((static_cast<std::size_t>(g.out_spatial()) + 15) / 16);
+    REQUIRE(out_tiles > 256);   // guard: this case must exercise the >256 path
+    run_windowed_cell(g, PoolType::MAX, kEnvelopes[0], "max_2x2s2_c32/default");
+}
+
 TEST_CASE("Pooling characterization report", "[timing][regression][pooling][report]") {
     const auto& rows = characterization();
     if (rows.empty()) { SUCCEED("matrix did not run"); return; }
