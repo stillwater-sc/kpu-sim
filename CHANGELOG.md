@@ -9,6 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Pooling schedule generator — E7-T3 (#193).** `PoolingScheduleGenerator` emits
+  an **executable reduce COMPUTE per output tile** before each drain, so — unlike
+  the pre-existing norm/conv generators — pooling never has the #139
+  DRAIN-without-COMPUTE defect. Two modes: `WINDOWED` (per channel, per Ti-block
+  of output positions, the `[Ti, Kh*Kw]` window block is reduced per row — MAX or
+  MEAN) and `GLOBAL_AVG` (per channel, the whole `H*W` plane streamed and reduced
+  to one value). The pool op rides in Config/metadata; the reduce is the existing
+  `VE_REDUCE` bound at execution, so movement is pool-op-agnostic. New
+  `test_pooling_execution` runs the generated schedules through the executor
+  (timing-only) across windowed max/avg, batch, non-tile-aligned, and global-avg
+  cases, asserting a COMPUTE per output tile, livelock-free completion, and the
+  envelope-refusal boundary. Coverage: `pooling` generator → done.
+
 - **Pooling window-patchify helper — E7-T2 ISA/executor closure (#192).** Pooling
   reduces each channel over a spatial window; the M2 realization is a per-channel
   im2col window unfold reduced by the existing `VE_REDUCE` (MAX/MEAN), so **no new

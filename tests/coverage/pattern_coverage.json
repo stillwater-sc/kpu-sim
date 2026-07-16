@@ -97,11 +97,11 @@
       "stages": {
         "design": "done",
         "isa_closure": "done",
-        "generator": "partial",
+        "generator": "done",
         "functional": "missing",
         "regression": "missing"
       },
-      "notes": "Design (T1 #190): max/avg pooling = per-channel im2col window unfold [Hout*Wout, Kh*Kw] reduced by existing VE_REDUCE (MAX/MEAN); global avg pool = E3 full-spatial per-channel reduce; reuses E6 patchify + E3 reduce, no new kernel; docs/plans/e7_pooling_pattern.md. ISA/executor closure (T2 #192): host-side pooling_window.hpp (Pool2DGeometry, pool_window_channel with -inf fill for MAX / 0+valid-count for AVG, reduce_window_row, pool2d_reference + global_avg_pool_reference oracles matching ref_pool2d count-excludes-padding); confirmed VE_REDUCE {MAX,MEAN} + functional/reduction value path cover pooling, no new executor kernel. Remaining: generator (T3 #193), functional (T4 #194), regression (T5 #195). Direct/halo P2 is an E7 follow-on off the M2 path."
+      "notes": "Design (T1 #190): max/avg pooling = per-channel im2col window unfold [Hout*Wout, Kh*Kw] reduced by existing VE_REDUCE (MAX/MEAN); global avg pool = E3 full-spatial per-channel reduce; reuses E6 patchify + E3 reduce, no new kernel; docs/plans/e7_pooling_pattern.md. ISA/executor closure (T2 #192): host-side pooling_window.hpp (Pool2DGeometry, pool_window_channel -inf/0+count fill, reduce_window_row, pool2d_reference + global_avg_pool_reference oracles). Generator (T3 #193): PoolingScheduleGenerator emits an executable reduce COMPUTE per output tile before each drain (WINDOWED: [Ti, Kh*Kw] window block reduced per row; GLOBAL_AVG: whole H*W plane reduced per channel) - executable from the start, no #139; envelope stamping. Remaining: functional (T4 #194), regression (T5 #195). Direct/halo P2 is an E7 follow-on off the M2 path."
     },
     {
       "name": "softmax",

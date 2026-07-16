@@ -232,6 +232,17 @@ set_tests_properties(test_pooling_window PROPERTIES
     LABELS "timing;functional;pooling;v0.9"
 )
 
+# Pooling schedule execution regression (issue #193, epic E7): the generator is
+# executable from the start (reduce COMPUTE per output tile), so generated
+# schedules execute livelock-free through the executor
+kpu_add_component_test(test_pooling_execution "timing"
+    test_pooling_execution.cpp
+)
+
+set_tests_properties(test_pooling_execution PROPERTIES
+    LABELS "timing;pooling;executor;regression;v0.9"
+)
+
 # Functional elementwise execution with host oracle (issue #102, epic E2):
 # value-producing elementwise/broadcast on the CSP data path
 kpu_add_component_test(test_functional_elementwise "timing"
