@@ -317,6 +317,145 @@ run_matmul(const std::vector<float>& a, const std::vector<float>& w,
 }
 
 /**
+ * @brief Depthwise convolution on the CSP executor (M3-T2, #209).
+ *
+ * Each output channel is the 2D conv of a single input channel with its own
+ * Kh*Kw filter (groups = C). Reuses the E7 pooling per-channel window unfold for
+ * movement (pool_window_channel, 0-filled at padding) and reduces each window row
+ * by a dot-product with that channel's folded filter (a weighted sum) - the M3
+ * design's decision. Optional folded BatchNorm and a ReLU6 epilogue apply in the
+ * reduce, so depthwise+BN+ReLU6 is one CSP op.
+ *
+ *   y[n,c,ho,wo] = act( sum_k window(n,c,ho,wo)[k] * filter[c][k] + bias[c] )
+ *
+ * @param filter per-channel filters, size C*Kh*Kw (row-major [C, Kh, Kw])
+ * @param bn     optional folded BatchNorm affine (size C), or nullptr
+ * @param bias   optional per-channel bias (size C), or empty
+ * @param relu6  apply ReLU6 = min(max(x,0),6) as the epilogue
+ * @param T      tile size (must divide N*Hout*Wout)
+ *
+ * @note Validated at channel counts up to 16. The underlying pooling windowed
+ *       schedule currently deadlocks at C >= 32 (issue #210) - a pre-existing
+ *       E7 limitation, not the reduce; larger-C depthwise is blocked on that fix.
+ */
+[[nodiscard]] inline std::vector<float>
+run_depthwise_conv(const std::vector<float>& input,
+                   const schedule::Pool2DGeometry& geom,
+                   const std::vector<float>& filter, const BatchNormAffine* bn,
+                   const std::vector<float>& bias, bool relu6, Size T, RunStats& stats) {
+    using namespace sw::kpu::timing::schedule;
+    const Size C = geom.C, K = geom.window();
+    const Size Hout = geom.H_out(), Wout = geom.W_out();
+    const Size Mpos = geom.N * Hout * Wout;                 // positions per channel
+    if (input.size() != geom.elems())
+        throw std::invalid_argument("run_depthwise_conv: input size does not match geometry");
+    if (filter.size() != static_cast<std::size_t>(C) * K)
+        throw std::invalid_argument("run_depthwise_conv: filter size must be C*Kh*Kw");
+    if (T == 0 || Mpos % T != 0)
+        throw std::invalid_argument("run_depthwise_conv: T must be > 0 and divide N*Hout*Wout");
+    if (bn && bn->scale.size() != static_cast<std::size_t>(C))
+        throw std::invalid_argument("run_depthwise_conv: bn size must be C");
+    if (!bias.empty() && bias.size() != static_cast<std::size_t>(C))
+        throw std::invalid_argument("run_depthwise_conv: bias size must be C");
+
+    // Fold BN into the per-channel filter + bias.
+    std::vector<float> fw(filter);
+    std::vector<float> fb(bias.empty() ? std::vector<float>(C, 0.0f) : bias);
+    if (bn) {
+        for (Size c = 0; c < C; ++c) {
+            for (Size k = 0; k < K; ++k) fw[c * K + k] *= bn->scale[c];
+            fb[c] = fb[c] * bn->scale[c] + bn->shift[c];
+        }
+    }
+
+    // Per-(n,c) window rows [Hout*Wout, K], 0-filled at padding (AVG mode).
+    std::vector<std::vector<float>> win(static_cast<std::size_t>(geom.N) * C);
+    for (Size n = 0; n < geom.N; ++n)
+        for (Size c = 0; c < C; ++c)
+            win[static_cast<std::size_t>(n) * C + c] =
+                pool_window_channel(input, geom, n, c, PoolType::AVG).rows;
+
+    PoolingScheduleGenerator::Config cfg;
+    cfg.geom = geom; cfg.mode = PoolingScheduleGenerator::Mode::WINDOWED; cfg.Ti = T;
+    cfg.l3_buffer_count = 128; cfg.l2_bank_count = 128;
+    cfg.input_base = 0x100000; cfg.output_base = 0x400000;
+    auto schedule = PoolingScheduleGenerator(cfg).generate();
+    if (!schedule.valid)
+        throw std::runtime_error("run_depthwise_conv: schedule refused: " + schedule.error_message);
+
+    ConcurrentTimingExecutor::Config ecfg;
+    ecfg.max_cycles = 50'000'000;
+    ecfg.l3_buffer_count = 128; ecfg.l2_bank_count = 128;
+    ConcurrentTimingExecutor exec(ecfg);
+    // Seed each window tile (channel c = id.ti, output-tile ti = id.tj).
+    for (const auto& op : schedule.operations) {
+        if (op.type != ScheduleOpType::LOAD) continue;
+        const auto id = op.tile.tile_id;
+        const Size c = id.ti, tb = id.tj;
+        std::vector<float> blk(static_cast<std::size_t>(T) * K);
+        for (Size r = 0; r < T; ++r) {
+            const Size p = tb * T + r;                       // flattened position
+            const Size n = p / (Hout * Wout), m = p % (Hout * Wout);
+            const auto& wr = win[static_cast<std::size_t>(n) * C + c];
+            for (Size k = 0; k < K; ++k) blk[r * K + k] = wr[static_cast<std::size_t>(m) * K + k];
+        }
+        exec.set_tile_payload(id, TilePayload{T, K, std::move(blk)});
+    }
+
+    ScheduleExecutor se(exec);
+    se.set_functional_compute_binder(
+        [&fw, &fb, K, relu6](const ScheduleOperation& op)
+            -> std::optional<ConcurrentTimingExecutor::FunctionalComputeSpec> {
+            const Size c = op.tile.tile_id.ti;               // output channel
+            ConcurrentTimingExecutor::FunctionalComputeSpec spec;
+            spec.input_tiles = op.dependency_tiles;          // {window tile}
+            spec.operation = [&fw, &fb, K, c, relu6](const std::vector<TilePayload>& in) {
+                const auto& x = in.at(0);                    // [Ti, K]
+                const float* f = &fw[static_cast<std::size_t>(c) * K];
+                const float b = fb[c];
+                TilePayload out{x.rows, 1, std::vector<float>(x.rows)};
+                for (Size r = 0; r < x.rows; ++r) {
+                    const float* row = &x.values[static_cast<std::size_t>(r) * K];
+                    float acc = b;
+                    for (Size k = 0; k < K; ++k) acc += row[k] * f[k];
+                    if (relu6) acc = std::min(std::max(0.0f, acc), 6.0f);
+                    out.values[r] = acc;
+                }
+                return out;
+            };
+            return spec;
+        });
+    auto result = se.execute(schedule);
+    if (!result.success)
+        throw std::runtime_error("run_depthwise_conv: execution failed: " + result.error_message);
+    stats.total_cycles += result.total_cycles;
+    ++stats.ops;
+
+    // Read output [C, Mpos] (per-channel positions) -> NCHW.
+    std::vector<float> y(static_cast<std::size_t>(geom.N) * C * Hout * Wout);
+    for (const auto& op : schedule.operations) {
+        if (op.type != ScheduleOpType::STORE) continue;
+        const auto id = op.tile.tile_id;
+        const Size c = id.ti, tb = id.tj;
+        const auto& p = exec.tile_payload_at(MemoryLevel::DRAM, id);
+        for (Size r = 0; r < T; ++r) {
+            const Size pos = tb * T + r;
+            const Size n = pos / (Hout * Wout), m = pos % (Hout * Wout);
+            const Size ho = m / Wout, wo = m % Wout;
+            y[((static_cast<std::size_t>(n) * C + c) * Hout + ho) * Wout + wo] = p.values[r];
+        }
+    }
+    return y;
+}
+
+/// ReLU6 = min(max(x, 0), 6) on the CSP executor (two elementwise ops).
+[[nodiscard]] inline std::vector<float>
+run_relu6(const std::vector<float>& x, RunStats& stats) {
+    auto r = run_elementwise(sw::kpu::isa::VEOp::MAX, x, std::vector<float>(x.size(), 0.0f), stats);
+    return run_elementwise(sw::kpu::isa::VEOp::MIN, r, std::vector<float>(x.size(), 6.0f), stats);
+}
+
+/**
  * @brief Global average pool on the CSP executor: mean over the H*W plane per
  *        (n, c). Input is NCHW; output is [N*C] row-major (the [N,C,1,1] tensor).
  *
