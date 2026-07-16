@@ -9,6 +9,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **M2 ResNet BasicBlock as a KernelGraph DFG on the CSP executor — M2-T2 (#201).**
+  The graph->CSP bridge: `GraphCspExecutor` walks a `KernelGraph` in topological
+  order and runs each operator node on the schedule-generator value path
+  (`csp_op_runners.hpp`: `run_conv2d_fused` = im2col->GEMM with an optional folded
+  BatchNorm + bias/activation epilogue, `run_elementwise`/`run_relu`), threading
+  activations between nodes and applying the operator fusions as it lowers —
+  **conv+BN fold** (a CONV2D's sole-consumer BATCHNORM folds into its
+  weights+bias) and **conv+ReLU fused epilogue** (a CONV2D/folded-conv's
+  sole-consumer ReLU applies in-compute), so a `conv->BN->ReLU` chain collapses to
+  one GEMM. `test_m2_resnet_block` builds a ResNet BasicBlock (identity skip and
+  1x1-projection skip) as a `KernelGraph` (conv/BN/ReLU/residual-add nodes),
+  executes it through the bridge, and validates elementwise against a composed
+  host oracle (conv2d_reference + batchnorm_reference + add/ReLU) at 1e-3 — while
+  asserting the fusion fired (7 graph nodes -> 4 CSP ops for the identity block,
+  9 -> 5 for the projection). Nodes execute sequentially in topological order
+  (the design's honest scope). Milestone M2 (#130), design docs/plans/m2_resnet_dfg.md.
+
 - **Pooling regression matrix + characterization — E7-T5 (#195); completes the
   pooling coverage row.** `test_pooling_regression` executes a pool-type × shape ×
   envelope matrix (max/avg × shapes × {default, minimum, partitioned}) with, per
