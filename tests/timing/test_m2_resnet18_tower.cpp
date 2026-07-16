@@ -203,7 +203,11 @@ TEST_CASE("M2 ResNet-18 residual tower on the CSP executor",
     auto result = exec.run(g, input, nd, /*T*/16);
 
     REQUIRE(result.output.size() == ox.size());
-    REQUIRE(result.stats.ops > 0);
+    // Lock in the fusion contract: the 65-node graph collapses to exactly 36 CSP
+    // ops - stem conv (1), and per block conv1+conv2+add+relu2 (4) plus conv_proj
+    // for each downsample block (3). A regression in BN-fold or ReLU-fusion would
+    // change this count. (1 + 8*4 + 3*1 = 36.)
+    REQUIRE(result.stats.ops == 36);
     float max_err = 0.0f;
     for (std::size_t i = 0; i < ox.size(); ++i)
         max_err = std::max(max_err, std::abs(result.output[i] - ox[i]));
