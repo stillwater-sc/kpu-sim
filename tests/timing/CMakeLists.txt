@@ -253,6 +253,16 @@ set_tests_properties(test_functional_pooling PROPERTIES
     LABELS "timing;functional;pooling;v0.9"
 )
 
+# Pooling execution regression matrix (issue #195, epic E7): pool-type x shape x
+# envelope with value checks, credit/stall invariants, boundary, characterization
+kpu_add_component_test(test_pooling_regression "timing"
+    test_pooling_regression.cpp
+)
+
+set_tests_properties(test_pooling_regression PROPERTIES
+    LABELS "timing;regression;pooling;v0.9"
+)
+
 # Functional elementwise execution with host oracle (issue #102, epic E2):
 # value-producing elementwise/broadcast on the CSP data path
 kpu_add_component_test(test_functional_elementwise "timing"
