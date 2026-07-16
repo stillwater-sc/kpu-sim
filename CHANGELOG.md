@@ -9,6 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Pooling window-patchify helper — E7-T2 ISA/executor closure (#192).** Pooling
+  reduces each channel over a spatial window; the M2 realization is a per-channel
+  im2col window unfold reduced by the existing `VE_REDUCE` (MAX/MEAN), so **no new
+  executor kernel**. New `include/sw/kpu/timing/schedule/pooling_window.hpp`:
+  `Pool2DGeometry` (floored `Hout/Wout`), `pool_window_channel` (materializes a
+  channel's `[Hout*Wout, Kh*Kw]` windows with the pooling-specific fill: `-inf`
+  for MAX so padding never wins, `0` + a per-row valid-count for AVG so the mean
+  excludes padding), `reduce_window_row` (the MAX/MEAN reduce), and
+  `pool2d_reference` / `global_avg_pool_reference` oracles (matching `ref_pool2d`
+  count-excludes-padding). `test_pooling_window` verifies window+reduce vs the
+  direct reference (max/avg × window/stride/pad/non-square), hand cases, the
+  padding semantics, global avg pool, and guards. Coverage: `pooling` design
+  (T1 #190) + isa_closure → done.
+
 - **Fused-epilogue regression — E10-T5 (#188); satisfies the
   `epilogue_fused.regression` M2 gate cell.** The fused epilogue (per-output-column
   bias + activation applied in the compute, so the pre-bias accumulator never

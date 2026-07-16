@@ -222,6 +222,16 @@ set_tests_properties(test_epilogue_fused_regression PROPERTIES
     LABELS "timing;regression;epilogue;v0.9"
 )
 
+# Pooling window-patchify helper unit tests (issue #192, epic E7): geometry,
+# window unfold + reduce vs a direct reference, padding semantics, global avg
+kpu_add_component_test(test_pooling_window "timing"
+    test_pooling_window.cpp
+)
+
+set_tests_properties(test_pooling_window PROPERTIES
+    LABELS "timing;functional;pooling;v0.9"
+)
+
 # Functional elementwise execution with host oracle (issue #102, epic E2):
 # value-producing elementwise/broadcast on the CSP data path
 kpu_add_component_test(test_functional_elementwise "timing"

@@ -95,13 +95,13 @@
         "cv"
       ],
       "stages": {
-        "design": "missing",
-        "isa_closure": "partial",
+        "design": "done",
+        "isa_closure": "done",
         "generator": "partial",
         "functional": "missing",
         "regression": "missing"
       },
-      "notes": "Kernel-level streaming program with VE_REDUCE markers (#142); VE semantics and CSP schedule missing."
+      "notes": "Design (T1 #190): max/avg pooling = per-channel im2col window unfold [Hout*Wout, Kh*Kw] reduced by existing VE_REDUCE (MAX/MEAN); global avg pool = E3 full-spatial per-channel reduce; reuses E6 patchify + E3 reduce, no new kernel; docs/plans/e7_pooling_pattern.md. ISA/executor closure (T2 #192): host-side pooling_window.hpp (Pool2DGeometry, pool_window_channel with -inf fill for MAX / 0+valid-count for AVG, reduce_window_row, pool2d_reference + global_avg_pool_reference oracles matching ref_pool2d count-excludes-padding); confirmed VE_REDUCE {MAX,MEAN} + functional/reduction value path cover pooling, no new executor kernel. Remaining: generator (T3 #193), functional (T4 #194), regression (T5 #195). Direct/halo P2 is an E7 follow-on off the M2 path."
     },
     {
       "name": "softmax",
