@@ -99,9 +99,9 @@
         "isa_closure": "done",
         "generator": "done",
         "functional": "done",
-        "regression": "missing"
+        "regression": "done"
       },
-      "notes": "Design (T1 #190): max/avg pooling = per-channel im2col window unfold reduced by existing VE_REDUCE (MAX/MEAN); global avg pool = E3 full-spatial per-channel reduce; reuses E6 patchify + E3 reduce, no new kernel; docs/plans/e7_pooling_pattern.md. ISA/executor closure (T2 #192): pooling_window.hpp (pool_window_channel, reduce_window_row, pool2d_reference + global_avg_pool_reference oracles). Generator (T3 #193): PoolingScheduleGenerator emits an executable reduce COMPUTE per output tile (WINDOWED per-row window reduce / GLOBAL_AVG per-channel plane reduce), no #139. Functional (T4 #194): value-producing max/avg/global pooling on the CSP executor (ScheduleExecutor functional binder applying the reduce) verified elementwise vs pool2d_reference / global_avg_pool_reference across max(padded)/avg/global/batch (test_functional_pooling) + pooling_simulator tile-log. pooling.functional (LAST M2 gate cell) satisfied. Remaining: regression T5 #195. Direct/halo P2 is an E7 follow-on off the M2 path."
+      "notes": "Pooling complete across all five stages (E7 T1-T5, #190/#196/#197/#198 + T5 #195). Max/avg pooling = per-channel im2col window unfold reduced by existing VE_REDUCE (MAX/MEAN); global avg pool = E3 full-spatial per-channel reduce; reuses E6 patchify + E3 reduce, no new kernel. T2 pooling_window.hpp (pool_window_channel, reduce_window_row, pool2d_reference/global_avg_pool_reference oracles). T3 PoolingScheduleGenerator (executable reduce COMPUTE per output tile, no #139; WINDOWED per-row / GLOBAL_AVG plane). T4 value-producing max/avg/global vs oracle (test_functional_pooling) + pooling_simulator. T5 pool-type x shape x envelope regression matrix with value checks, per-stage tile accounting, credit conservation, stall invariants, working-set-3 refusal boundary, characterization (test_pooling_regression). pooling.functional (last M2 gate cell) satisfied. Direct/halo P2 is an E7 follow-on off the M2 path. docs/plans/e7_pooling_pattern.md."
     },
     {
       "name": "softmax",

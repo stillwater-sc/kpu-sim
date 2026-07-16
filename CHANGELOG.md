@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Pooling regression matrix + characterization — E7-T5 (#195); completes the
+  pooling coverage row.** `test_pooling_regression` executes a pool-type × shape ×
+  envelope matrix (max/avg × shapes × {default, minimum, partitioned}) with, per
+  cell: a value check against `pool2d_reference`, exact per-stage tile accounting,
+  L3/L2 credit conservation, a COMPUTE-per-drain check (#139 lock-in), and a
+  stall-sanity bound. Adds the working-set-3 envelope-refusal boundary and a
+  characterization report (pooling is DMA-bound). With this, the `pooling` row is
+  **done across all five stages** (E7 T1–T5) — and since `pooling.functional` was
+  the last of the five M2 ResNet gate cells, **all M2 capability cells are now
+  complete** (the M2 ResNet demo, #130, remains as the milestone deliverable).
+
 - **Pooling functional integration + host oracle — E7-T4 (#194); satisfies the
   `pooling.functional` M2 gate cell — the LAST of the five.** Value-producing
   max/avg/global pooling on the CSP executor: the per-channel window rows (max/avg)
