@@ -273,6 +273,16 @@ set_tests_properties(test_m2_resnet_block PROPERTIES
     LABELS "timing;m2;resnet;v0.9"
 )
 
+# M2 ResNet-18 residual tower (issue #203, milestone M2): stem + 4 stages of
+# stacked BasicBlocks executed as a KernelGraph DFG on the CSP executor
+kpu_add_component_test(test_m2_resnet18_tower "timing"
+    test_m2_resnet18_tower.cpp
+)
+
+set_tests_properties(test_m2_resnet18_tower PROPERTIES
+    LABELS "timing;m2;resnet;v0.9"
+)
+
 # Functional elementwise execution with host oracle (issue #102, epic E2):
 # value-producing elementwise/broadcast on the CSP data path
 kpu_add_component_test(test_functional_elementwise "timing"
