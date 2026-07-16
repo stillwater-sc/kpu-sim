@@ -9,6 +9,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **DNN Milestone M2: ResNet-18 as a DFG on the CSP executor — M2-T4 (#206);
+  milestone #130 achieved.** The full ResNet-18 (stem + four stages of
+  BasicBlocks with stride-2 downsampling + 1x1 projections + global-average-pool +
+  FC) is built via a reusable `include/sw/kpu/timing/graph/resnet18.hpp` builder
+  and executed end-to-end on the credit-based CSP value path through
+  `GraphCspExecutor`, with the conv+BN and conv+ReLU fusions applied. Delivers the
+  three-tier DoD: **demonstrate** (`examples/milestones/m2_resnet` runs the network
+  and emits the `KernelGraph` via `--dot`), **validate** (`test_m2_resnet18` checks
+  the classification output elementwise vs a composed whole-network host oracle,
+  max error ~3e-8, plus the block/tower/head tests), and **benchmark** (a cycles /
+  ops / cyc-per-op / DMA-BM-STR stall table across a spec sweep). Fusion payoff:
+  the `[2,2,2,2]` network's 67 graph nodes execute as 38 CSP ops (every BN folded,
+  every block ReLU fused). Writeup `docs/milestones/M2_resnet.md`; coverage
+  manifest M2 marked achieved. Demo dims are scaled for a fast CSP simulation
+  (batch 16 for FC/conv tile alignment; uniform channels keep the GAP's N*C
+  reductions small); the `[2,2,2,2]` residual depth with channel growth is
+  validated by `test_m2_resnet18_tower`.
+
 - **M2 ResNet classification head (GAP -> FC) on the CSP executor — M2-T3 part B
   (#203).** Completes the ResNet-18 operator set: `run_global_avg_pool` (mean over
   the H*W plane per channel, tiling the plane as one chunk so any spatial extent

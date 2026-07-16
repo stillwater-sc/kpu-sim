@@ -466,7 +466,7 @@
     {
       "id": "M2",
       "issue": 130,
-      "achieved": false,
+      "achieved": true,
       "requires": [
         {
           "operator": "conv2d",
