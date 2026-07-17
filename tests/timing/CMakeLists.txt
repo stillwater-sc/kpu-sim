@@ -323,6 +323,16 @@ set_tests_properties(test_m3_mobilenet_block PROPERTIES
     LABELS "timing;m3;mobilenet;v0.9"
 )
 
+# M3-T4 full MobileNetV2 network (milestone M3, #131): whole network as a
+# KernelGraph DFG on the CSP value path vs a composed host oracle.
+kpu_add_component_test(test_m3_mobilenet "timing"
+    test_m3_mobilenet.cpp
+)
+
+set_tests_properties(test_m3_mobilenet PROPERTIES
+    LABELS "timing;m3;mobilenet;v0.9"
+)
+
 # Functional elementwise execution with host oracle (issue #102, epic E2):
 # value-producing elementwise/broadcast on the CSP data path
 kpu_add_component_test(test_functional_elementwise "timing"
