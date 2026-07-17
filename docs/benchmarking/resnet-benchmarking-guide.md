@@ -132,9 +132,10 @@ Consequences for benchmarking:
 3. **Nodes execute sequentially in topological order.** Measured concurrency is the
    tile-level pipeline overlap *within* each op — not operator-branch overlap. So
    utilization here answers "how busy is each mover *while an op runs*," not "how
-   well are independent branches overlapped." Concurrent branch scheduling is a
-   named follow-on; until it lands, do not read low aggregate utilization as a
-   dataflow-scheduling failure — some of it is the sequential-node assumption.
+   well are independent branches overlapped." A mover reading 80%+ busy therefore
+   means it is well-fed within ops; it does **not** account for cross-branch overlap
+   the sequential walk leaves on the table. Concurrent branch scheduling is a named
+   follow-on (§7).
 4. **Weights are deterministic synthetic**, oracle from the same weights → exact
    validation. Trained-weight loading (ONNX/PyTorch) is an E15 follow-on; it does
    not change timing, only the values.
@@ -169,36 +170,37 @@ directly. Any new spec must keep batch/channels/classes as `tile` multiples.
 
 ```text
   configuration           nodes   ops     cycles    cyc/op   dmaStl    bmStl   strStl     maxErr  check
-  resnet18 (base)            39    22      39881      1813     4322     7696     2939    6.0e-08   PASS
-  resnet18 [2,2,2,2]         67    38      51469      1354     7290    13548     5043    6.0e-08   PASS
-  resnet18 (batch 32)        39    22      72169      3280    10226     8061     2171    6.0e-08   PASS
+  resnet18 (base)            39    22      39881      1813     7016    99797    26511    6.0e-08   PASS
+  resnet18 [2,2,2,2]         67    38      51469      1354     9984   108557    29951    6.0e-08   PASS
+  resnet18 (batch 32)        39    22      72169      3280    16430   196470    49551    6.0e-08   PASS
 
   utilization              dmaU%    bmU%   strU%  tilesLd  tilesMv  tilesFd    ldGB/s    stGB/s
-  resnet18 (base)           19.9    25.9    28.9     1161     1094     1094      16.2       1.7
-  resnet18 [2,2,2,2]        27.2    34.8    38.9     1997     1886     1886      21.9       2.2
-  resnet18 (batch 32)       11.5    22.9    24.9     2322     2188     2188      16.7       1.9
+  resnet18 (base)           82.4    37.5    83.4     1805     1438     1438      18.5       2.9
+  resnet18 [2,2,2,2]        80.6    47.3    85.5     2773     2318     2318      25.4       4.0
+  resnet18 (batch 32)       77.2    32.0    82.9     3610     2876     2876      19.3       3.2
 ```
 
 Reading it:
 - **Fusion payoff:** `[2,2,2,2]` runs 67 graph nodes as **38 CSP ops** (every BN
   folded, every block-internal ReLU fused). Base `[1,1,1,1]` = 39 nodes → 22 ops.
-- **BlockMover is the dominant staller** in the base and deep configs (`bmStl` >
-  `dmaStl` > `strStl`) — the L3→L2 stage is the first place to look for buffer
-  pressure. Batch 32 flips DMA to the top staller (more bytes from DRAM).
-- **Utilization is low (≈12–39%) and rises with depth.** The `[2,2,2,2]` config is
-  the most utilized; batch 32 is the *least* DMA-utilized (11.5%) — more DRAM
-  traffic, more waiting. Most of the low absolute number is the **sequential-node**
-  execution model (§3, sequential-node assumption): only within-op tile overlap is
-  captured, so cross-branch idle shows up as underutilization. That is the headline
-  finding for the study and the motivation for concurrent branch scheduling (§7).
-- **cyc/op is not efficiency** — it is total cycles / op count, inflated by stalls.
+- **BlockMover (L3→L2) is the bottleneck stage.** It carries by far the most stall
+  cycles (`bmStl` ≫ `strStl` > `dmaStl`) *and* the lowest utilization (32–47% vs.
+  77–85% for DMA and Streamer) — the two views agree: the L3→L2 move is where the
+  pipeline waits. It is the first place to add buffering / rebalance credits.
+- **DMA and Streamer run 77–85% busy;** deeper (`[2,2,2,2]`) lifts BlockMover
+  utilization (47%) as more work amortizes the moves, while batch 32 pushes it
+  *down* (32%) — more per-move DRAM traffic, more waiting.
 - **`ldGB/s`/`stGB/s`** are at an assumed 1.0 GHz clock (so GB/s == bytes/cycle);
   the unit is a knob, the *ratio* between configs is the signal.
+- **cyc/op is not efficiency** — it is total cycles / op count, inflated by stalls.
 
-Note the stall columns and the utilization columns are **not** simple complements
-(dmaStl 4322 « the implied idle from dmaU 19.9%) — the executor derives busy from
-per-component stall accounting with clamping and multi-component averaging, so read
-utilization as the executor's own metric, not `1 − stall/total` (see §6).
+Two accounting notes so the columns are not misread:
+- **Stall columns are summed across all parallel components and all ops**, so a
+  value can exceed `cycles` (e.g. `bmStl` 99797 > 39881 with ~4 BlockMovers). They
+  are a workload stall total, not a per-component fraction.
+- **Utilization normalizes per component** (`busy = cycles − stalls/N`), so it is
+  *not* `1 − stall/cycles` on the raw columns. The two are consistent once you
+  divide the stall column by the component count (see §6).
 
 ---
 
@@ -223,22 +225,30 @@ the whole-network ratio is `Σ busy / Σ total_cycles`.
 
 ### How `busy` is derived — and why utilization ≠ 1 − stall/total
 
-`busy` is **not** something you can recompute from the printed stall columns. The
-executor derives it inside `collect_statistics`
-(`concurrent_timing_executor.hpp`): per component type it averages stalls across
-the N parallel components, subtracts from that op's `total_cycles`, and **clamps to
-zero** when the averaged stall exceeds the op's span. Summed over ops, the result
-does not equal `1 − Σstall/Σtotal` (the base row shows `dmaStl`=4322 alongside
-`dmaU`=19.9%, which are not complements). Practical consequences:
+`busy` is **not** `cycles − stall column`. The executor derives it inside
+`collect_statistics` (`concurrent_timing_executor.hpp`): per component type it
+averages stalls across the **N parallel components**, subtracts that from the op's
+`total_cycles`, and clamps to zero if the averaged stall exceeds the op span. So
+`busy = cycles − stalls/N`, and the printed stall column is the *un-normalized*
+`stalls` (summed over all N and all ops) — which is why `bmStl` (99797, ~4
+movers) dwarfs `cycles` (39881) while `bmU` is a sane 37.5%. Divide the stall
+column by the component count before comparing it to a utilization.
 
+**Consistency invariant (regression-checked):** because `busy ≥ cycles − stalls`
+per op, the aggregate satisfies `busy + stalls ≥ cycles` for every mover. This is
+exactly what the earlier, buggy version violated — some ops added `cycles` to the
+denominator without adding their `busy`/`stalls`, understating utilization to
+≈12–39%. `tests/timing/test_resnet_utilization.cpp` asserts the invariant so that
+regression cannot return.
+
+Practical guidance:
 - Treat utilization as the **executor's own relative metric**, good for A/B
-  comparison across configs and before/after a scheduler change — **not** as a
-  validated absolute "fraction of peak." Validating/refining the busy derivation
-  (e.g. counting measured active cycles directly instead of `total − avg_stall`) is
-  a worthwhile follow-on in its own right.
-- The low absolute values (≈12–39%) are dominated by the **sequential-node** model
-  (§3): cross-branch idle is real idle here, so higher utilization is exactly what
-  concurrent branch scheduling (§7) should buy.
+  comparison across configs and before/after a scheduler change — **not** a
+  validated absolute "fraction of peak." Refining `busy` to a directly-measured
+  active-cycle count (instead of `cycles − stalls/N`) is follow-on §7 item 1b.
+- The signal in the current numbers is the **spread between movers** (BlockMover
+  32–47% vs. DMA/Streamer 77–85%), which localizes the L3→L2 bottleneck — not the
+  absolute level.
 
 ### Caveat: compute-fabric utilization is not in this path
 

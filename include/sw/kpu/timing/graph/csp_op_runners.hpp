@@ -82,13 +82,14 @@ struct RunStats {
     }
 
     // Effective DRAM bandwidth (GB/s) at an assumed clock: bytes / (cycles/clock).
+    // A non-positive clock (or zero cycles) yields 0.0 rather than inf/NaN.
     [[nodiscard]] double effective_load_bandwidth(double clock_ghz) const {
-        if (total_cycles == 0) return 0.0;
+        if (clock_ghz <= 0.0 || total_cycles == 0) return 0.0;
         const double seconds = static_cast<double>(total_cycles) / (clock_ghz * 1e9);
         return static_cast<double>(bytes_loaded) / (seconds * 1e9);
     }
     [[nodiscard]] double effective_store_bandwidth(double clock_ghz) const {
-        if (total_cycles == 0) return 0.0;
+        if (clock_ghz <= 0.0 || total_cycles == 0) return 0.0;
         const double seconds = static_cast<double>(total_cycles) / (clock_ghz * 1e9);
         return static_cast<double>(bytes_stored) / (seconds * 1e9);
     }
@@ -106,9 +107,13 @@ inline std::vector<float> block(const std::vector<float>& mat, Size cols,
     return b;
 }
 
-inline void accumulate(RunStats& s, const ConcurrentTimingExecutor& exec) {
-    const auto st = exec.get_statistics();
-    s.total_cycles += exec.current_cycle();
+// Fold one op's executor Statistics into the running RunStats. EVERY
+// RunStats-producing runner must call this (directly, or via the executor
+// overload) so busy cycles / tiles / bytes land in the numerators for the same
+// ops whose total_cycles land in the denominator. Instrumenting total_cycles
+// without busy understates utilization (see resnet-benchmarking-guide.md).
+inline void accumulate(RunStats& s, const ConcurrentTimingExecutor::Statistics& st) {
+    s.total_cycles += st.total_cycles;
     s.dma_stalls += st.dma_credit_stalls;
     s.bm_stalls += st.bm_tag_stalls + st.bm_credit_stalls;
     s.str_stalls += st.str_tag_stalls + st.str_credit_stalls;
@@ -122,6 +127,12 @@ inline void accumulate(RunStats& s, const ConcurrentTimingExecutor& exec) {
     s.bytes_loaded += st.bytes_loaded;
     s.bytes_stored += st.bytes_stored;
     ++s.ops;
+}
+
+// Statistics.total_cycles == executor.current_cycle(), so this is equivalent to
+// accumulating from the executor's live statistics.
+inline void accumulate(RunStats& s, const ConcurrentTimingExecutor& exec) {
+    accumulate(s, exec.get_statistics());
 }
 
 } // namespace detail
@@ -275,8 +286,7 @@ run_elementwise(sw::kpu::isa::VEOp op, const std::vector<float>& a,
     if (!result.execution.success)
         throw std::runtime_error("run_elementwise: execution failed: " +
                                  result.execution.error_message);
-    stats.total_cycles += result.execution.total_cycles;
-    ++stats.ops;
+    detail::accumulate(stats, result.execution.stats);
     return result.values;
 }
 
@@ -311,8 +321,7 @@ run_ve_unary(sw::kpu::isa::VEOp op, const std::vector<float>& x, float scalar,
     if (!result.execution.success)
         throw std::runtime_error("run_ve_unary: execution failed: " +
                                  result.execution.error_message);
-    stats.total_cycles += result.execution.total_cycles;
-    ++stats.ops;
+    detail::accumulate(stats, result.execution.stats);
     return result.values;
 }
 
@@ -562,8 +571,7 @@ run_depthwise_conv(const std::vector<float>& input,
     auto result = se.execute(schedule);
     if (!result.success)
         throw std::runtime_error("run_depthwise_conv: execution failed: " + result.error_message);
-    stats.total_cycles += result.total_cycles;
-    ++stats.ops;
+    detail::accumulate(stats, exec);
 
     // Read output [C, Mpos] (per-channel positions) -> NCHW.
     std::vector<float> y(static_cast<std::size_t>(geom.N) * C * Hout * Wout);
@@ -638,8 +646,7 @@ run_global_avg_pool(const std::vector<float>& input,
     auto result = sched_exec.execute(schedule);
     if (!result.success)
         throw std::runtime_error("run_global_avg_pool: execution failed: " + result.error_message);
-    stats.total_cycles += result.total_cycles;
-    ++stats.ops;
+    detail::accumulate(stats, exec);
 
     std::vector<float> out(static_cast<std::size_t>(geom.N) * geom.C);
     for (const auto& op : schedule.operations) {

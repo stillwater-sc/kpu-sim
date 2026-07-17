@@ -59,14 +59,26 @@ pipeline overlap *within* each op, not operator-branch overlap (a named follow-o
 
 ```text
 configuration           nodes   ops     cycles    cyc/op   dmaStl    bmStl   strStl
-resnet18 (base)            39    22      39881      1813     4322     7696     2939
-resnet18 [2,2,2,2]         67    38      51469      1354     7290    13548     5043
-resnet18 (batch 32)        39    22      72169      3280    10226     8061     2171
+resnet18 (base)            39    22      39881      1813     7016    99797    26511
+resnet18 [2,2,2,2]         67    38      51469      1354     9984   108557    29951
+resnet18 (batch 32)        39    22      72169      3280    16430   196470    49551
+
+utilization              dmaU%    bmU%   strU%  tilesLd  tilesMv  tilesFd    ldGB/s
+resnet18 (base)           82.4    37.5    83.4     1805     1438     1438      18.5
+resnet18 [2,2,2,2]        80.6    47.3    85.5     2773     2318     2318      25.4
+resnet18 (batch 32)       77.2    32.0    82.9     3610     2876     2876      19.3
 ```
 
 **Fusion payoff:** the `[2,2,2,2]` network's 67 graph nodes execute as **38 CSP
 ops** — every BatchNorm folded into its conv, every block-internal ReLU fused as
 an epilogue. The base `[1,1,1,1]` scale runs 39 nodes as 22 ops.
+
+**Movement-fabric utilization** (busy/total per mover, summed over ops) shows the
+**L3→L2 BlockMover as the bottleneck** — 32–47% busy and by far the most stall
+cycles, vs. 77–85% for DMA and the Streamer. Stall columns are summed across all
+parallel components (so they can exceed `cycles`); see
+`docs/benchmarking/resnet-benchmarking-guide.md` for the full metric definitions
+and the utilization consistency invariant.
 
 ## Scope & scaling notes
 
