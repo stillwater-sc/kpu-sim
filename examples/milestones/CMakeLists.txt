@@ -30,3 +30,16 @@ if(KPU_BUILD_TESTS)
         LABELS "timing;resnet;milestone;v0.9"
     )
 endif()
+
+# M3: MobileNetV2 demo + benchmark (issue #131)
+add_executable(m3_mobilenet m3_mobilenet.cpp)
+target_link_libraries(m3_mobilenet PRIVATE kpu_simulator)
+set_target_properties(m3_mobilenet PROPERTIES
+    FOLDER "Examples/Milestones"
+)
+if(KPU_BUILD_TESTS)
+    add_test(NAME m3_mobilenet COMMAND m3_mobilenet)
+    set_tests_properties(m3_mobilenet PROPERTIES
+        LABELS "timing;mobilenet;milestone;v0.9"
+    )
+endif()

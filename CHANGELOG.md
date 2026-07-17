@@ -9,6 +9,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Full MobileNetV2 network as a KernelGraph DFG on the CSP executor — M3-T4
+  (#131), MobileNetV2 milestone achieved.** `build_mobilenetv2`
+  (`include/sw/kpu/timing/graph/mobilenetv2.hpp`) assembles the whole network
+  (stem `3x3 conv->BN->ReLU6` + inverted-residual bottleneck stack + `1x1` head
+  conv `->BN->ReLU6` + global-average-pool + FC) as a reusable `KernelGraph`
+  builder with matching per-node weights and a composed host oracle, executed
+  end-to-end through `GraphCspExecutor`. Every operator lowers through the M2/M3
+  bridge unchanged: BN folds into each conv, pointwise `1x1` convs dispatch to
+  im2col->GEMM and depthwise convs (`groups == Cin`) to the pooling-window path,
+  ReLU6 runs as a standalone VE clamp, and the identity residuals join via
+  explicit graph edges (so blocks thread correctly through the stack - the
+  external-input fallback would resolve to the whole-network input). Delivered
+  demonstrate / validate / benchmark: `examples/milestones/m3_mobilenet.cpp`
+  (`--dot` KernelGraph export + a base/deeper/batch-32 sweep with cycles/ops/stall
+  table), `test_m3_mobilenet` (full network vs oracle, `max_err ~1e-7`, +
+  tile-alignment guard), and writeup `docs/milestones/M3_mobilenet.md`. Milestone
+  M3 (#131); EfficientNet-B0 MBConv + SE remains a tracked follow-on.
+
 - **MobileNetV2 inverted-residual block as a KernelGraph DFG on the CSP executor
   — M3-T3 (#131).** The inverted-residual bottleneck (`1x1 expand -> BN -> ReLU6
   -> 3x3 depthwise -> BN -> ReLU6 -> 1x1 project -> BN`, with a residual add when
