@@ -343,6 +343,16 @@ set_tests_properties(test_m3_efficientnet_block PROPERTIES
     LABELS "timing;m3;efficientnet;v0.9"
 )
 
+# M3 full EfficientNet-B0 network (milestone M3, #131): whole network (MBConv+SE)
+# as a KernelGraph DFG on the CSP value path vs a composed host oracle.
+kpu_add_component_test(test_m3_efficientnet "timing"
+    test_m3_efficientnet.cpp
+)
+
+set_tests_properties(test_m3_efficientnet PROPERTIES
+    LABELS "timing;m3;efficientnet;v0.9"
+)
+
 # Livelock detector progress regression: backward-path + compute progress must
 # count, so drain-heavy ops (large depthwise) do not false-trip the detector.
 kpu_add_component_test(test_livelock_progress "timing"

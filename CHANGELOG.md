@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Full EfficientNet-B0 network as a KernelGraph DFG on the CSP executor —
+  M3 (#131), EfficientNet-B0 achieved.** `build_efficientnet_b0`
+  (`include/sw/kpu/timing/graph/efficientnet.hpp`) assembles the whole network
+  (stem + MBConv+SE bottleneck stack + `1x1` head conv + global-average-pool +
+  FC) as a reusable `KernelGraph` builder with matching per-node weights and a
+  composed host oracle (including the SE gate), executed end-to-end through
+  `GraphCspExecutor`. Beyond MobileNetV2 each block adds a squeeze-and-excitation
+  gate (`GAP → FC_reduce → ReLU → FC_expand → sigmoid → channel-broadcast
+  multiply`) and per-stage depthwise kernel sizes (3x3 and 5x5). Delivered
+  demonstrate / validate / benchmark: `examples/milestones/m3_efficientnet.cpp`
+  (`--dot` + a base / +5x5 sweep), `test_m3_efficientnet` (full network vs oracle,
+  `max_err ~6e-8`, + tile-alignment guard including the SE reduce dim), and
+  writeup `docs/milestones/M3_efficientnet.md`. Reuses the `run_sigmoid` /
+  `run_channel_broadcast_mul` runners and the depthwise/livelock fixes; SiLU
+  approximated by ReLU6 for the M3 subset. Milestone M3 (#131).
+
 ### Fixed
 
 - **Livelock detector false-tripped on drain-heavy ops (large depthwise).** The
