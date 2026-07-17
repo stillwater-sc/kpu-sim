@@ -231,34 +231,47 @@ inline std::vector<float> mb_dw_conv_bn(const std::vector<float>& x, const std::
             const Size in_ch = cur_ch;
             const Size out_ch = st.c;
             const Size hidden = st.t * in_ch;
+            // MobileNetV2's t==1 bottleneck has NO expansion conv - it goes
+            // straight from the input into the depthwise (hidden == in_ch).
+            const bool expand = (st.t > 1);
             const bool residual = (stride == 1 && in_ch == out_ch);
             const Size Hd = out_dim(cur_H, 3, stride, 1), Wd = out_dim(cur_W, 3, stride, 1);
 
-            auto cce = mb_conv_cfg(N, in_ch, hidden, cur_H, cur_W, 1, 1, 0);              // expand 1x1
             auto ccd = mb_conv_cfg(N, hidden, hidden, cur_H, cur_W, 3, stride, 1, hidden); // depthwise 3x3
             auto ccp = mb_conv_cfg(N, hidden, out_ch, Hd, Wd, 1, 1, 0);                    // project 1x1
-            auto we = mb_synth(static_cast<std::size_t>(hidden) * in_ch, seed, 0.12f);
             auto wd = mb_synth(static_cast<std::size_t>(hidden) * 9, seed + 1, 0.25f);
             auto wp = mb_synth(static_cast<std::size_t>(out_ch) * hidden, seed + 2, 0.12f);
-            auto bne = mb_bn(hidden, seed, sp.eps), bnd = mb_bn(hidden, seed + 1, sp.eps),
-                 bnp = mb_bn(out_ch, seed + 2, sp.eps);
+            auto bnd = mb_bn(hidden, seed + 1, sp.eps), bnp = mb_bn(out_ch, seed + 2, sp.eps);
 
-            auto ce = g.add_kernel(Kernel::create_conv2d(cce, false, ActivationType::NONE), "expand");
-            auto be = g.add_kernel(Kernel::create_batchnorm(N, hidden, cur_H, cur_W, bne.eps), "bn_e");
-            auto re = g.add_kernel(Kernel::create_elementwise(ElementwiseOp::RELU6, {hidden * cur_H * cur_W}), "relu6_e");
+            // Expansion (1x1 -> BN -> ReLU6), only when t > 1. dw_in is the node
+            // and activation feeding the depthwise: the expanded output, or the
+            // block input directly for t == 1.
+            std::size_t dw_in_node = in_node;
+            std::vector<float> dw_in = ox;
+            if (expand) {
+                auto cce = mb_conv_cfg(N, in_ch, hidden, cur_H, cur_W, 1, 1, 0);
+                auto we  = mb_synth(static_cast<std::size_t>(hidden) * in_ch, seed, 0.12f);
+                auto bne = mb_bn(hidden, seed, sp.eps);
+                auto ce = g.add_kernel(Kernel::create_conv2d(cce, false, ActivationType::NONE), "expand");
+                auto be = g.add_kernel(Kernel::create_batchnorm(N, hidden, cur_H, cur_W, bne.eps), "bn_e");
+                auto re = g.add_kernel(Kernel::create_elementwise(ElementwiseOp::RELU6, {hidden * cur_H * cur_W}), "relu6_e");
+                g.add_edge(in_node, ce); g.add_edge(ce, be); g.add_edge(be, re);
+                nd[ce].filter = we; mb_set_bn(nd[be], bne);
+                dw_in = mb_pw_conv_bn(ox, we, cce, bne, true);
+                dw_in_node = re;
+            }
+
             auto cd = g.add_kernel(Kernel::create_conv2d(ccd, false, ActivationType::NONE), "depthwise");
             auto bd = g.add_kernel(Kernel::create_batchnorm(N, hidden, Hd, Wd, bnd.eps), "bn_d");
             auto rd = g.add_kernel(Kernel::create_elementwise(ElementwiseOp::RELU6, {hidden * Hd * Wd}), "relu6_d");
             auto cp = g.add_kernel(Kernel::create_conv2d(ccp, false, ActivationType::NONE), "project");
             auto bp = g.add_kernel(Kernel::create_batchnorm(N, out_ch, Hd, Wd, bnp.eps), "bn_p");
-            g.add_edge(in_node, ce); g.add_edge(ce, be); g.add_edge(be, re); g.add_edge(re, cd);
-            g.add_edge(cd, bd); g.add_edge(bd, rd); g.add_edge(rd, cp); g.add_edge(cp, bp);
-            nd[ce].filter = we; mb_set_bn(nd[be], bne);
+            g.add_edge(dw_in_node, cd); g.add_edge(cd, bd); g.add_edge(bd, rd);
+            g.add_edge(rd, cp); g.add_edge(cp, bp);
             nd[cd].filter = wd; mb_set_bn(nd[bd], bnd);
             nd[cp].filter = wp; mb_set_bn(nd[bp], bnp);
 
-            auto e = mb_pw_conv_bn(ox, we, cce, bne, true);
-            auto d = mb_dw_conv_bn(e, wd, ccd, bnd, true);
+            auto d = mb_dw_conv_bn(dw_in, wd, ccd, bnd, true);
             auto p = mb_pw_conv_bn(d, wp, ccp, bnp, false);   // linear bottleneck
 
             std::size_t sink = bp;

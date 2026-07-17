@@ -38,7 +38,9 @@ reusing the M2 bridge unchanged and the M3 depthwise/ReLU6 dispatch:
 - **inverted-residual bottleneck stack** — each block is `1×1 expand → BN → ReLU6
   → 3×3 depthwise (stride s) → BN → ReLU6 → 1×1 project → BN`, with an **identity
   residual** (an explicit graph edge, so blocks thread correctly through the
-  stack) when `stride == 1 && Cin == Cout`. The project is a *linear* bottleneck
+  stack) when `stride == 1 && Cin == Cout`. As in real MobileNetV2, the `t == 1`
+  bottleneck omits the expansion conv and feeds the input straight into the
+  depthwise. The project is a *linear* bottleneck
   (no activation), and there is **no activation after the residual add** — the
   MobileNetV2 distinction from ResNet.
 - **head** — `1×1 conv → BN → ReLU6 → global-average-pool → FC`.
