@@ -58,7 +58,7 @@ Row run_spec(const std::string& name, const MobileNetV2Spec& spec,
     }
 
     GraphCspExecutor exec;
-    auto result = exec.run(g, net.input, net.node_data, /*T*/16);
+    auto result = exec.run(g, net.input, net.node_data, spec.tile);
 
     Row r;
     r.name = name;
@@ -67,9 +67,15 @@ Row run_spec(const std::string& name, const MobileNetV2Spec& spec,
     r.stats = result.stats;
     r.dot_ok = dot_ok;
     r.pass = result.output.size() == net.oracle.size();
-    for (std::size_t i = 0; i < result.output.size() && i < net.oracle.size(); ++i)
-        r.max_err = std::max(r.max_err, std::abs(result.output[i] - net.oracle[i]));
-    r.pass = r.pass && r.max_err < 5e-3f;
+    bool finite = true;
+    for (std::size_t i = 0; i < result.output.size() && i < net.oracle.size(); ++i) {
+        const float d = std::abs(result.output[i] - net.oracle[i]);
+        // std::max(x, NaN) returns x, so a NaN would be silently masked -
+        // flag non-finite outputs/diffs explicitly.
+        if (!std::isfinite(result.output[i]) || !std::isfinite(d)) finite = false;
+        r.max_err = std::max(r.max_err, d);
+    }
+    r.pass = r.pass && finite && r.max_err < 5e-3f;
     return r;
 }
 

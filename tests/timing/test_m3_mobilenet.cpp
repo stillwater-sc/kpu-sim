@@ -36,8 +36,13 @@ TEST_CASE("M3 MobileNetV2 full network on the CSP executor matches host oracle",
     REQUIRE(result.output.size() == static_cast<std::size_t>(sp.batch) * sp.num_classes);
 
     float max_err = 0.0f;
-    for (std::size_t i = 0; i < net.oracle.size(); ++i)
+    for (std::size_t i = 0; i < net.oracle.size(); ++i) {
+        // std::max(x, NaN) returns x, so require finite values before comparing
+        // (a NaN output would otherwise slip past the max_err bound).
+        REQUIRE(std::isfinite(result.output[i]));
+        REQUIRE(std::isfinite(net.oracle[i]));
         max_err = std::max(max_err, std::abs(result.output[i] - net.oracle[i]));
+    }
     INFO("max_err=" << max_err << " nodes=" << net.num_nodes
          << " ops=" << result.stats.ops << " cycles=" << result.stats.total_cycles);
     REQUIRE(max_err < 5e-3f);

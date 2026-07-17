@@ -191,6 +191,8 @@ inline std::vector<float> mb_dw_conv_bn(const std::vector<float>& x, const std::
         throw std::invalid_argument("build_mobilenetv2: in/head/class channels must be multiples of tile");
     if (sp.height == 0 || sp.width == 0 || sp.stages.empty())
         throw std::invalid_argument("build_mobilenetv2: invalid geometry");
+    if (!std::isfinite(sp.eps) || sp.eps <= 0.0f)
+        throw std::invalid_argument("build_mobilenetv2: eps must be finite and positive");
     for (const auto& st : sp.stages)
         if (st.t == 0 || !aligned(st.c) || st.n == 0 || (st.s != 1 && st.s != 2))
             throw std::invalid_argument("build_mobilenetv2: invalid stage");
