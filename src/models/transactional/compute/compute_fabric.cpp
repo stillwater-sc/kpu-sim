@@ -621,6 +621,11 @@ void TransactionalComputeFabric::execute_elementwise_fp32(
         case ElementwiseOp::RELU:
             for (uint64_t i = 0; i < count; ++i) output[i] = std::max(0.0f, a[i]);
             break;
+        case ElementwiseOp::RELU6:
+            // ReLU6(x) = min(max(x, 0), 6) - MobileNetV2 activation.
+            for (uint64_t i = 0; i < count; ++i)
+                output[i] = std::min(std::max(0.0f, a[i]), 6.0f);
+            break;
         case ElementwiseOp::GELU:
             for (uint64_t i = 0; i < count; ++i) {
                 float x = a[i];
