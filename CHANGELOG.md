@@ -9,6 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Movement-fabric utilization surfaced in the ResNet benchmark.** `RunStats`
+  (`csp_op_runners.hpp`) now aggregates the executor's per-op
+  `ConcurrentTimingExecutor::get_statistics()` — `{dma,bm,str}_busy_cycles`,
+  `tiles_{loaded,stored,moved,fed}`, `bytes_{loaded,stored}` — and exposes
+  `{dma,bm,str}_utilization()` (`Σ busy / Σ total_cycles`) plus
+  `effective_{load,store}_bandwidth(clock_ghz)`. The `m2_resnet` demo prints a new
+  utilization table (dmaU%/bmU%/strU%, tiles moved/fed/loaded, effective GB/s
+  at an assumed 1.0 GHz clock). Utilization is the executor's own busy/total ratio
+  — a *relative* metric across configs, not a validated absolute (busy is derived
+  from stall accounting; see the guide). New research guide
+  `docs/benchmarking/resnet-benchmarking-guide.md` documents the assets,
+  assumptions, howto, current results, and the utilization derivation + limits.
+
 - **SiLU/swish activation on the CSP value path — M3 polish (#131).** `run_silu`
   (`csp_op_runners.hpp`) computes `x·sigmoid(x)` on the CSP executor (sigmoid via
   the four-VE-op `run_sigmoid`, then a binary multiply), and `GraphCspExecutor`

@@ -41,12 +41,57 @@ using schedule::Conv2DGeometry;
 using schedule::BatchNormAffine;
 
 /// Accumulated CSP-execution stats across the ops of a graph run.
+///
+/// Nodes execute sequentially (GraphCspExecutor topological walk), so each op runs
+/// on a fresh ConcurrentTimingExecutor and its per-op Statistics are additive. The
+/// movement-fabric activity below is summed the same way as the stall/cycle totals.
+///
+/// Utilization is the executor's own busy/total ratio, aggregated as
+/// Sum(busy) / Sum(total_cycles). busy is derived by the executor from its
+/// per-component stall accounting (ConcurrentTimingExecutor::collect_statistics);
+/// because nodes run sequentially, treat these as a relative activity metric for
+/// comparing configurations, not a validated absolute
+/// (see docs/benchmarking/resnet-benchmarking-guide.md, section 6).
 struct RunStats {
     Cycle total_cycles = 0;
     Cycle dma_stalls = 0;
     Cycle bm_stalls = 0;
     Cycle str_stalls = 0;
     std::size_t ops = 0;
+
+    // Movement-fabric activity (summed per-op).
+    Cycle dma_busy = 0;
+    Cycle bm_busy = 0;
+    Cycle str_busy = 0;
+    std::size_t tiles_loaded = 0;
+    std::size_t tiles_stored = 0;
+    std::size_t tiles_moved = 0;
+    std::size_t tiles_fed = 0;
+    std::size_t bytes_loaded = 0;
+    std::size_t bytes_stored = 0;
+
+    // Utilization (0.0 - 1.0) = busy / total_cycles, over the whole run.
+    [[nodiscard]] double dma_utilization() const {
+        return total_cycles ? static_cast<double>(dma_busy) / static_cast<double>(total_cycles) : 0.0;
+    }
+    [[nodiscard]] double bm_utilization() const {
+        return total_cycles ? static_cast<double>(bm_busy) / static_cast<double>(total_cycles) : 0.0;
+    }
+    [[nodiscard]] double str_utilization() const {
+        return total_cycles ? static_cast<double>(str_busy) / static_cast<double>(total_cycles) : 0.0;
+    }
+
+    // Effective DRAM bandwidth (GB/s) at an assumed clock: bytes / (cycles/clock).
+    [[nodiscard]] double effective_load_bandwidth(double clock_ghz) const {
+        if (total_cycles == 0) return 0.0;
+        const double seconds = static_cast<double>(total_cycles) / (clock_ghz * 1e9);
+        return static_cast<double>(bytes_loaded) / (seconds * 1e9);
+    }
+    [[nodiscard]] double effective_store_bandwidth(double clock_ghz) const {
+        if (total_cycles == 0) return 0.0;
+        const double seconds = static_cast<double>(total_cycles) / (clock_ghz * 1e9);
+        return static_cast<double>(bytes_stored) / (seconds * 1e9);
+    }
 };
 
 namespace detail {
@@ -67,6 +112,15 @@ inline void accumulate(RunStats& s, const ConcurrentTimingExecutor& exec) {
     s.dma_stalls += st.dma_credit_stalls;
     s.bm_stalls += st.bm_tag_stalls + st.bm_credit_stalls;
     s.str_stalls += st.str_tag_stalls + st.str_credit_stalls;
+    s.dma_busy += st.dma_busy_cycles;
+    s.bm_busy += st.bm_busy_cycles;
+    s.str_busy += st.str_busy_cycles;
+    s.tiles_loaded += st.tiles_loaded;
+    s.tiles_stored += st.tiles_stored;
+    s.tiles_moved += st.tiles_moved;
+    s.tiles_fed += st.tiles_fed;
+    s.bytes_loaded += st.bytes_loaded;
+    s.bytes_stored += st.bytes_stored;
     ++s.ops;
 }
 
