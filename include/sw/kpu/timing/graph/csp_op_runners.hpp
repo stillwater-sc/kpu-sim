@@ -278,6 +278,18 @@ run_sigmoid(const std::vector<float>& x, RunStats& stats) {
 }
 
 /**
+ * @brief SiLU / swish = x * sigmoid(x) on the CSP executor (EfficientNet activation).
+ *
+ * Composed on the value path: sigmoid(x) (four VE ops, run_sigmoid) then a binary
+ * multiply against x - five VE ops total.
+ */
+[[nodiscard]] inline std::vector<float>
+run_silu(const std::vector<float>& x, RunStats& stats) {
+    auto sig = run_sigmoid(x, stats);
+    return run_elementwise(sw::kpu::isa::VEOp::MUL, x, sig, stats);
+}
+
+/**
  * @brief Channel-broadcast multiply for the squeeze-and-excitation gate: scale
  *        an [N,C,H,W] activation by a per-channel [N,C] gate on the CSP executor.
  *

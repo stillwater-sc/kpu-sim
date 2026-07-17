@@ -11,14 +11,27 @@
 // ============================================================================
 
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/matchers/catch_matchers_floating_point.hpp>
 
 #include <sw/kpu/kernel_graph.hpp>
 #include <sw/kpu/timing/graph/efficientnet.hpp>
 
 #include <algorithm>
 #include <cmath>
+#include <vector>
 
 using namespace sw::kpu::timing::graph;
+
+TEST_CASE("M3 run_silu matches x*sigmoid(x) on the CSP executor",
+          "[timing][m3][efficientnet]") {
+    RunStats st;
+    std::vector<float> x(64);
+    for (std::size_t i = 0; i < x.size(); ++i) x[i] = -4.0f + 0.125f * static_cast<float>(i);
+    auto y = run_silu(x, st);
+    REQUIRE(y.size() == x.size());
+    for (std::size_t i = 0; i < x.size(); ++i)
+        REQUIRE_THAT(y[i], Catch::Matchers::WithinAbs(x[i] / (1.0f + std::exp(-x[i])), 1e-5));
+}
 
 TEST_CASE("M3 EfficientNet-B0 full network on the CSP executor matches host oracle",
           "[timing][m3][efficientnet]") {
