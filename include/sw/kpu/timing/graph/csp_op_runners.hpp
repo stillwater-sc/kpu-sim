@@ -234,6 +234,73 @@ run_relu(const std::vector<float>& x, RunStats& stats) {
 }
 
 /**
+ * @brief Run a unary/scalar VE op (NEG/EXP/... or ADD_S/MUL_S/POW_S) on the CSP
+ *        executor via the value-producing functional path (UNARY form).
+ */
+[[nodiscard]] inline std::vector<float>
+run_ve_unary(sw::kpu::isa::VEOp op, const std::vector<float>& x, float scalar,
+             RunStats& stats) {
+    using schedule::ElementwiseScheduleGenerator;
+    using schedule::FunctionalElementwiseExecutor;
+
+    ElementwiseScheduleGenerator::Config gcfg;
+    gcfg.num_elements = static_cast<Size>(x.size());
+    gcfg.tile_elems = 256;
+    gcfg.form = ElementwiseScheduleGenerator::Form::UNARY;
+    gcfg.a_base = 0x100000; gcfg.b_base = 0x400000; gcfg.c_base = 0x700000;
+
+    ConcurrentTimingExecutor::Config ecfg;
+    ecfg.max_cycles = 20'000'000;
+
+    FunctionalElementwiseExecutor exec(gcfg, ecfg);
+    auto result = exec.run(op, x, {}, scalar);
+    if (!result.execution.success)
+        throw std::runtime_error("run_ve_unary: execution failed: " +
+                                 result.execution.error_message);
+    stats.total_cycles += result.execution.total_cycles;
+    ++stats.ops;
+    return result.values;
+}
+
+/**
+ * @brief Sigmoid = 1/(1 + e^-x) on the CSP executor (EfficientNet SE gate).
+ *
+ * The Vector Engine has no sigmoid op, so it is composed from four unary/scalar
+ * VE ops on the value path: POW_S(ADD_S(EXP(NEG(x)), 1), -1).
+ */
+[[nodiscard]] inline std::vector<float>
+run_sigmoid(const std::vector<float>& x, RunStats& stats) {
+    using VEOp = sw::kpu::isa::VEOp;
+    auto t = run_ve_unary(VEOp::NEG, x, 0.0f, stats);          // -x
+    t = run_ve_unary(VEOp::EXP, t, 0.0f, stats);               // e^-x
+    t = run_ve_unary(VEOp::ADD_S, t, 1.0f, stats);             // 1 + e^-x
+    return run_ve_unary(VEOp::POW_S, t, -1.0f, stats);         // 1/(1 + e^-x)
+}
+
+/**
+ * @brief Channel-broadcast multiply for the squeeze-and-excitation gate: scale
+ *        an [N,C,H,W] activation by a per-channel [N,C] gate on the CSP executor.
+ *
+ * Each activation element (n,c,h,w) is multiplied by gate[n,c]. Because both are
+ * row-major, the gate index of activation element i is i / (H*W) where the plane
+ * size H*W = activation.size()/gate.size(), so no explicit geometry is needed.
+ * The gate is expanded host-side (like run_relu's zeros / run_matmul's blocking)
+ * and the C*H*W multiplies run on the CSP data path via a binary MUL.
+ */
+[[nodiscard]] inline std::vector<float>
+run_channel_broadcast_mul(const std::vector<float>& activation,
+                          const std::vector<float>& gate, RunStats& stats) {
+    if (gate.empty() || activation.size() % gate.size() != 0)
+        throw std::invalid_argument(
+            "run_channel_broadcast_mul: activation size must be a multiple of gate size");
+    const std::size_t plane = activation.size() / gate.size();
+    std::vector<float> gate_full(activation.size());
+    for (std::size_t i = 0; i < activation.size(); ++i)
+        gate_full[i] = gate[i / plane];
+    return run_elementwise(sw::kpu::isa::VEOp::MUL, activation, gate_full, stats);
+}
+
+/**
  * @brief Run a matmul C = act(A @ W + bias) on the CSP executor (the FC layer).
  *
  * A is [M, K] row-major, W is [K, N] row-major. Reuses the value-producing GEMM
@@ -334,9 +401,10 @@ run_matmul(const std::vector<float>& a, const std::vector<float>& w,
  * @param relu6  apply ReLU6 = min(max(x,0),6) as the epilogue
  * @param T      tile size (must divide N*Hout*Wout)
  *
- * @note Validated at channel counts up to 16. The underlying pooling windowed
- *       schedule currently deadlocks at C >= 32 (issue #210) - a pre-existing
- *       E7 limitation, not the reduce; larger-C depthwise is blocked on that fix.
+ * @note The #210 compute-result-CAM cap is fixed, so high channel counts work
+ *       (validated to C=48, 768 output tiles). Very large output-tile counts
+ *       (roughly a few thousand, e.g. hidden=64 at 8x8 spatial) can still trip
+ *       the executor's livelock detector; keep per-op tile counts modest.
  */
 [[nodiscard]] inline std::vector<float>
 run_depthwise_conv(const std::vector<float>& input,

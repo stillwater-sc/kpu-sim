@@ -9,6 +9,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **EfficientNet MBConv block with squeeze-and-excitation on the CSP executor —
+  M3 (#131).** The EfficientNet MBConv bottleneck (inverted residual + an SE gate
+  between the depthwise and the project) runs as a `KernelGraph` DFG through
+  `GraphCspExecutor`, validated vs a composed host oracle
+  (`test_m3_efficientnet_block`, max_err < 2e-3). Two new CSP value-path runners
+  (`csp_op_runners.hpp`): **`run_sigmoid`** = `1/(1+e^-x)` composed from four
+  unary/scalar VE ops (`POW_S(ADD_S(EXP(NEG(x)),1),-1)` - the Vector Engine has no
+  sigmoid op), and **`run_channel_broadcast_mul`** = the SE scale, a per-channel
+  `[N,C]` gate times an `[N,C,H,W]` activation (gate index `i/(H·W)`, geometry-free,
+  the `C·H·W` multiplies run on the CSP data path). `GraphCspExecutor` gains
+  `ElementwiseOp::SIGMOID` dispatch and an `ElementwiseOp::MUL` arm that routes to
+  the channel-broadcast multiply when the two operands differ in size (the SE
+  scale) and to a plain product otherwise. The SE gate = `GAP → FC_reduce → ReLU
+  → FC_expand → sigmoid → channel-broadcast-multiply`, reusing GAP + matmul (with
+  ReLU epilogue) + the new runners; SiLU/swish is approximated by ReLU6 for the M3
+  subset (per the design). Also corrected a stale `run_depthwise_conv` note (the
+  #210 CAM cap is fixed; C=48 works).
+
 - **Full MobileNetV2 network as a KernelGraph DFG on the CSP executor — M3-T4
   (#131), MobileNetV2 milestone achieved.** `build_mobilenetv2`
   (`include/sw/kpu/timing/graph/mobilenetv2.hpp`) assembles the whole network

@@ -333,6 +333,16 @@ set_tests_properties(test_m3_mobilenet PROPERTIES
     LABELS "timing;m3;mobilenet;v0.9"
 )
 
+# M3 EfficientNet MBConv + squeeze-and-excitation block (milestone M3, #131): SE
+# gate (GAP->FC->ReLU->FC->sigmoid->channel-broadcast-mul) on the CSP value path.
+kpu_add_component_test(test_m3_efficientnet_block "timing"
+    test_m3_efficientnet_block.cpp
+)
+
+set_tests_properties(test_m3_efficientnet_block PROPERTIES
+    LABELS "timing;m3;efficientnet;v0.9"
+)
+
 # Functional elementwise execution with host oracle (issue #102, epic E2):
 # value-producing elementwise/broadcast on the CSP data path
 kpu_add_component_test(test_functional_elementwise "timing"
