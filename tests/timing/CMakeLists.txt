@@ -303,6 +303,17 @@ set_tests_properties(test_m2_resnet18 PROPERTIES
     LABELS "timing;m2;resnet;v0.9"
 )
 
+# ResNet movement-fabric utilization: asserts the RunStats utilization invariant
+# (busy + stalls >= cycles per mover) so every RunStats-producing op contributes
+# both numerator and denominator (guards the PR #220 instrumentation fix)
+kpu_add_component_test(test_resnet_utilization "timing"
+    test_resnet_utilization.cpp
+)
+
+set_tests_properties(test_resnet_utilization PROPERTIES
+    LABELS "timing;resnet;benchmark;utilization"
+)
+
 # M3 depthwise conv (issue #209, milestone M3): per-channel window unfold + filter
 # dot-product reduce on the CSP executor vs a host depthwise reference; ReLU6
 kpu_add_component_test(test_m3_depthwise "timing"

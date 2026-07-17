@@ -9,6 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Movement-fabric utilization surfaced in the ResNet benchmark.** `RunStats`
+  (`csp_op_runners.hpp`) now aggregates the executor's per-op
+  `ConcurrentTimingExecutor::get_statistics()` — `{dma,bm,str}_busy_cycles`,
+  `tiles_{loaded,stored,moved,fed}`, `bytes_{loaded,stored}` — and exposes
+  `{dma,bm,str}_utilization()` (`Σ busy / Σ total_cycles`) plus
+  `effective_{load,store}_bandwidth(clock_ghz)` (guarded to return 0.0 for a
+  non-positive clock). The `m2_resnet` demo prints a new utilization table
+  (dmaU%/bmU%/strU%, tiles moved/fed/loaded, effective GB/s at an assumed 1.0 GHz
+  clock). The corrected numbers localize the **L3→L2 BlockMover as the bottleneck**
+  (32–47% busy vs. 77–85% for DMA/Streamer). New research guide
+  `docs/benchmarking/resnet-benchmarking-guide.md` documents the assets,
+  assumptions, howto, results, and the utilization derivation + limits.
+
 - **SiLU/swish activation on the CSP value path — M3 polish (#131).** `run_silu`
   (`csp_op_runners.hpp`) computes `x·sigmoid(x)` on the CSP executor (sigmoid via
   the four-VE-op `run_sigmoid`, then a binary multiply), and `GraphCspExecutor`
@@ -36,6 +49,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   approximated by ReLU6 for the M3 subset. Milestone M3 (#131).
 
 ### Fixed
+
+- **ResNet utilization was understated by inconsistent instrumentation.** Four
+  RunStats-producing runners (`run_elementwise`, `run_ve_unary`,
+  `run_depthwise_conv`, `run_global_avg_pool`) added only `total_cycles`/`ops` to
+  `RunStats`, so their cycles inflated the utilization denominator while their busy
+  cycles/tiles/bytes never reached the numerator — reporting ≈12–39% utilization
+  where the movement fabric actually runs 32–85%. Threaded the full
+  `ConcurrentTimingExecutor::Statistics` through `ScheduleExecutor::ExecutionResult`
+  so every runner folds its stats via `detail::accumulate`.
+  `tests/timing/test_resnet_utilization.cpp` asserts the consistency invariant
+  (`busy + stalls ≥ cycles` per mover) so the regression cannot return. Found in
+  CodeRabbit review of PR #220.
 
 - **Livelock detector false-tripped on drain-heavy ops (large depthwise).** The
   `ConcurrentTimingExecutor`'s livelock detector was fed only forward-path

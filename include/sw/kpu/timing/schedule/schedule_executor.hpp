@@ -41,6 +41,11 @@ struct ExecutionResult {
     Cycle bm_cycles = 0;
     Cycle str_cycles = 0;
 
+    // Full executor statistics (busy cycles, tiles, bytes, utilization helpers).
+    // Populated from ConcurrentTimingExecutor::get_statistics() on completion so
+    // callers that only see the ExecutionResult can still aggregate utilization.
+    ConcurrentTimingExecutor::Statistics stats;
+
     // Livelock detection
     bool livelock_detected = false;     ///< True if livelock was detected
     Cycle stall_duration = 0;           ///< Cycles spent stalled
@@ -212,6 +217,7 @@ public:
         result.dma_cycles = stats.dma_credit_stalls;
         result.bm_cycles = stats.bm_tag_stalls + stats.bm_credit_stalls;
         result.str_cycles = stats.str_tag_stalls + stats.str_credit_stalls;
+        result.stats = stats;
 
         return result;
     }
