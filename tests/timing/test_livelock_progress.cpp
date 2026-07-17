@@ -78,6 +78,10 @@ TEST_CASE("Livelock detector counts backward-path progress (no false trip on dra
         });
 
     auto result = se.execute(sch);
+    // The run must actually last longer than the stall threshold, otherwise the
+    // drain-back phase is never long enough to exercise the detector and the
+    // regression would pass vacuously.
+    REQUIRE(result.total_cycles > ec.livelock_threshold);
     REQUIRE(result.success);
     REQUIRE_FALSE(result.livelock_detected);
     REQUIRE(exec.get_statistics().tiles_stored == sch.count_ops(ScheduleOpType::STORE));

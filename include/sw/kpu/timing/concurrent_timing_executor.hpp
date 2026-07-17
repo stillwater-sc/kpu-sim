@@ -983,12 +983,24 @@ inline bool ConcurrentTimingExecutor::run() {
             // spends a long phase draining results to DRAM after every input has
             // been fed; tracking only the forward path plateaus there and
             // false-trips the detector on a compute/drain-heavy-but-progressing
-            // schedule (e.g. depthwise with thousands of output tiles).
-            const Statistics st = get_statistics();
+            // schedule (e.g. depthwise with thousands of output tiles). Read the
+            // cheap monotonic component counters directly (NOT get_statistics(),
+            // which rescans the whole event history on every 100-cycle check).
             LivelockDetector::ProgressMetrics metrics;
-            metrics.tiles_dma_completed = st.tiles_loaded + st.tiles_stored;
-            metrics.tiles_moved = st.tiles_moved + st.tiles_writeback;
-            metrics.tiles_streamed = st.tiles_fed + st.tiles_drained;
+            metrics.tiles_dma_completed = 0;
+            metrics.tiles_moved = 0;
+            metrics.tiles_streamed = 0;
+            for (const auto& dma : dma_engines_)
+                metrics.tiles_dma_completed +=
+                    (dma->total_bytes_loaded() + dma->total_bytes_stored()) / 1024;
+            for (const auto& mover : block_movers_)
+                metrics.tiles_moved +=
+                    mover->total_tiles_moved() + mover->total_tiles_writeback();
+            for (const auto& streamer : row_streamers_)
+                metrics.tiles_streamed +=
+                    streamer->total_tiles_fed() + streamer->total_tiles_drained();
+            for (const auto& streamer : col_streamers_)
+                metrics.tiles_streamed += streamer->total_tiles_fed();
             metrics.compute_ops_completed = next_compute_slot_;
             auto result = livelock_detector_->check(current_cycle_, metrics);
             if (result.livelock_detected) {
