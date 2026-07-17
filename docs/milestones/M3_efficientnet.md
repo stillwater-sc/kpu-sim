@@ -24,6 +24,9 @@ Beyond the MobileNetV2 milestone, EfficientNet-B0 adds:
   Vector Engine has no sigmoid, so `1/(1+e^-x)` is composed from four unary/scalar
   VE ops) and **`run_channel_broadcast_mul`** (the SE scale, a per-channel `[N,C]`
   gate × `[N,C,H,W]` activation).
+- **SiLU/swish activation** (`x·sigmoid(x)`) — the real EfficientNet activation,
+  on the CSP value path via `run_silu` (`run_sigmoid` then a binary multiply);
+  the bridge dispatches `ElementwiseOp::SILU`.
 - **Per-stage depthwise kernel sizes** (3×3 and 5×5) — `run_depthwise_conv`
   handles arbitrary `Kh×Kw`; the livelock-detector fix (counting backward-path +
   compute progress) lets wider/deeper depthwise run.
@@ -64,8 +67,8 @@ Dimensions are scaled for a fast CSP simulation (as the other milestones), with
 the tile-alignment discipline: batch and all channel counts — **including the SE
 reduce dim** — are multiples of the tile size, so the SE reduction uses a
 tile-aligned floor (16) rather than the real `Cin/4` at these small widths.
-**SiLU/swish is approximated by ReLU6** for the M3 subset (documented; a dedicated
-SiLU activation is a follow-on). The DFX tiling/dataflow compiler remains
+Activations are the real **SiLU/swish** (`x·sigmoid(x)`), not the earlier ReLU6
+approximation. The DFX tiling/dataflow compiler remains
 matmul-only — M3 tests operator-level fusions + the SE composition, not a full CNN
 compiler.
 

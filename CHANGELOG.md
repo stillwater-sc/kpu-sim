@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **SiLU/swish activation on the CSP value path — M3 polish (#131).** `run_silu`
+  (`csp_op_runners.hpp`) computes `x·sigmoid(x)` on the CSP executor (sigmoid via
+  the four-VE-op `run_sigmoid`, then a binary multiply), and `GraphCspExecutor`
+  dispatches `ElementwiseOp::SILU` to it (the fabric's typed `dispatch_silu`
+  already existed). `build_efficientnet_b0` now uses **real SiLU** for its stem /
+  expand / depthwise / head activations instead of the ReLU6 approximation, so
+  EfficientNet-B0 is architecturally faithful. `test_m3_efficientnet` adds a
+  `run_silu` unit test (matches `x·sigmoid(x)` to 1e-5) and the full network still
+  validates (`max_err < 5e-3`).
+
 - **Full EfficientNet-B0 network as a KernelGraph DFG on the CSP executor —
   M3 (#131), EfficientNet-B0 achieved.** `build_efficientnet_b0`
   (`include/sw/kpu/timing/graph/efficientnet.hpp`) assembles the whole network

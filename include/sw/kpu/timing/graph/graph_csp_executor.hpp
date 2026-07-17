@@ -201,6 +201,9 @@ public:
                     } else if (op == ElementwiseOp::SIGMOID) {
                         // EfficientNet SE gate: 1/(1+e^-x) composed from VE ops.
                         out[id] = run_sigmoid(input_of(g, id, out, input), result.stats);
+                    } else if (op == ElementwiseOp::SILU) {
+                        // EfficientNet activation: x * sigmoid(x).
+                        out[id] = run_silu(input_of(g, id, out, input), result.stats);
                     } else if (op == ElementwiseOp::MUL) {
                         // Two operands: a full elementwise product when equal
                         // length, else the squeeze-and-excitation channel-

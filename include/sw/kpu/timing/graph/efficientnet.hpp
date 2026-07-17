@@ -8,9 +8,9 @@
 // Executed through GraphCspExecutor on the CSP value path. Beyond MobileNetV2 the
 // MBConv block adds a squeeze-and-excitation gate between the depthwise and the
 // project: GAP -> FC_reduce -> ReLU -> FC_expand -> sigmoid -> channel-broadcast
-// multiply. Depthwise convs use per-stage kernel sizes (3 or 5). SiLU/swish is
-// approximated by ReLU6 for the M3 subset (per the design). Dims are scaled for a
-// fast CSP demo; batch N keeps every conv GEMM's M = N*Hout*Wout tile-aligned.
+// multiply. Depthwise convs use per-stage kernel sizes (3 or 5). Activations are
+// SiLU/swish (x*sigmoid(x)) as in the real model. Dims are scaled for a fast CSP
+// demo; batch N keeps every conv GEMM's M = N*Hout*Wout tile-aligned.
 //
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2024-2026 Stillwater Supercomputing, Inc.
@@ -114,24 +114,23 @@ inline EfBN ef_bn(Size C, std::uint64_t seed, float eps) {
 inline void ef_set_bn(NodeData& nd, const EfBN& bn) {
     nd.gamma = bn.gamma; nd.beta = bn.beta; nd.mean = bn.mean; nd.var = bn.var; nd.eps = bn.eps;
 }
-inline void ef_relu6_ip(std::vector<float>& v) {
-    for (auto& x : v) x = std::min(std::max(0.0f, x), 6.0f);
-}
+inline float ef_silu(float x) { return x / (1.0f + std::exp(-x)); }   // x * sigmoid(x)
+inline void ef_silu_ip(std::vector<float>& v) { for (auto& x : v) x = ef_silu(x); }
 
-// Standard (pointwise) conv -> BN inference -> optional ReLU6. NCHW.
+// Standard (pointwise) conv -> BN inference -> optional SiLU. NCHW.
 inline std::vector<float> ef_pw_conv_bn(const std::vector<float>& x, const std::vector<float>& w,
-                                        const sw::kpu::Conv2DConfig& cc, const EfBN& bn, bool relu6) {
+                                        const sw::kpu::Conv2DConfig& cc, const EfBN& bn, bool silu) {
     const auto g = ef_geom(cc);
     auto z = schedule::conv2d_reference(x, w, {}, g, false);
     schedule::BatchNormGeometry bg; bg.N = g.N; bg.C = g.C_out; bg.H = g.H_out(); bg.W = g.W_out();
     auto y = schedule::batchnorm_reference(z, bn.gamma, bn.beta, bn.mean, bn.var, bn.eps, bg);
-    if (relu6) ef_relu6_ip(y);
+    if (silu) ef_silu_ip(y);
     return y;
 }
 
-// Per-channel depthwise conv (kxk) -> BN inference -> optional ReLU6. NCHW.
+// Per-channel depthwise conv (kxk) -> BN inference -> optional SiLU. NCHW.
 inline std::vector<float> ef_dw_conv_bn(const std::vector<float>& x, const std::vector<float>& filter,
-                                        const sw::kpu::Conv2DConfig& cc, const EfBN& bn, bool relu6) {
+                                        const sw::kpu::Conv2DConfig& cc, const EfBN& bn, bool silu) {
     const auto g = ef_geom(cc);
     const Size Hout = g.H_out(), Wout = g.W_out();
     std::vector<float> y(static_cast<std::size_t>(g.N) * g.C_out * Hout * Wout);
@@ -154,7 +153,7 @@ inline std::vector<float> ef_dw_conv_bn(const std::vector<float>& x, const std::
                         }
                     }
                     acc = acc * scale + shift;
-                    if (relu6) acc = std::min(std::max(0.0f, acc), 6.0f);
+                    if (silu) acc = ef_silu(acc);
                     y[((static_cast<std::size_t>(n) * g.C_out + c) * Hout + ho) * Wout + wo] = acc;
                 }
         }
@@ -225,7 +224,7 @@ inline std::vector<float> ef_matmul(const std::vector<float>& a, const std::vect
         auto bn = ef_bn(sp.stem_channels, seed, sp.eps);
         auto c = g.add_kernel(Kernel::create_conv2d(cc, false, ActivationType::NONE), "stem_conv");
         auto b = g.add_kernel(Kernel::create_batchnorm(N, sp.stem_channels, cur_H, cur_W, sp.eps), "stem_bn");
-        auto r = g.add_kernel(Kernel::create_elementwise(ElementwiseOp::RELU6, {sp.stem_channels * cur_H * cur_W}), "stem_relu6");
+        auto r = g.add_kernel(Kernel::create_elementwise(ElementwiseOp::SILU, {sp.stem_channels * cur_H * cur_W}), "stem_silu");
         g.add_edge(c, b); g.add_edge(b, r);
         nd[c].filter = w; ef_set_bn(nd[b], bn);
         ox = ef_pw_conv_bn(ox, w, cc, bn, true);
@@ -259,7 +258,7 @@ inline std::vector<float> ef_matmul(const std::vector<float>& a, const std::vect
                 auto bne = ef_bn(hidden, seed, sp.eps);
                 auto ce = g.add_kernel(Kernel::create_conv2d(cce, false, ActivationType::NONE), "expand");
                 auto be = g.add_kernel(Kernel::create_batchnorm(N, hidden, cur_H, cur_W, bne.eps), "bn_e");
-                auto re = g.add_kernel(Kernel::create_elementwise(ElementwiseOp::RELU6, {hidden * cur_H * cur_W}), "relu6_e");
+                auto re = g.add_kernel(Kernel::create_elementwise(ElementwiseOp::SILU, {hidden * cur_H * cur_W}), "silu_e");
                 g.add_edge(in_node, ce); g.add_edge(ce, be); g.add_edge(be, re);
                 nd[ce].filter = we; ef_set_bn(nd[be], bne);
                 dw_in = ef_pw_conv_bn(ox, we, cce, bne, true);
@@ -269,7 +268,7 @@ inline std::vector<float> ef_matmul(const std::vector<float>& a, const std::vect
             // Depthwise -> BN -> ReLU6  => A
             auto cd = g.add_kernel(Kernel::create_conv2d(ccd, false, ActivationType::NONE), "depthwise");
             auto bd = g.add_kernel(Kernel::create_batchnorm(N, hidden, Hd, Wd, bnd.eps), "bn_d");
-            auto rd = g.add_kernel(Kernel::create_elementwise(ElementwiseOp::RELU6, {hidden * Hd * Wd}), "relu6_d");
+            auto rd = g.add_kernel(Kernel::create_elementwise(ElementwiseOp::SILU, {hidden * Hd * Wd}), "silu_d");
             g.add_edge(dw_in_node, cd); g.add_edge(cd, bd); g.add_edge(bd, rd);
             nd[cd].filter = wd; ef_set_bn(nd[bd], bnd);
             auto A = ef_dw_conv_bn(dw_in, wd, ccd, bnd, true);
@@ -339,7 +338,7 @@ inline std::vector<float> ef_matmul(const std::vector<float>& a, const std::vect
         auto bn = ef_bn(sp.head_channels, seed, sp.eps);
         auto c = g.add_kernel(Kernel::create_conv2d(cc, false, ActivationType::NONE), "head_conv");
         auto b = g.add_kernel(Kernel::create_batchnorm(N, sp.head_channels, cur_H, cur_W, sp.eps), "head_bn");
-        auto r = g.add_kernel(Kernel::create_elementwise(ElementwiseOp::RELU6, {sp.head_channels * cur_H * cur_W}), "head_relu6");
+        auto r = g.add_kernel(Kernel::create_elementwise(ElementwiseOp::SILU, {sp.head_channels * cur_H * cur_W}), "head_silu");
         g.add_edge(in_node, c); g.add_edge(c, b); g.add_edge(b, r);
         nd[c].filter = w; ef_set_bn(nd[b], bn);
         ox = ef_pw_conv_bn(ox, w, cc, bn, true);
