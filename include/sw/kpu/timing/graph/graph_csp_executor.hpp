@@ -198,6 +198,26 @@ public:
                         // MobileNetV2 activation clamp min(max(x,0),6), run as a
                         // standalone VE op (the design's permitted clamp form).
                         out[id] = run_relu6(input_of(g, id, out, input), result.stats);
+                    } else if (op == ElementwiseOp::SIGMOID) {
+                        // EfficientNet SE gate: 1/(1+e^-x) composed from VE ops.
+                        out[id] = run_sigmoid(input_of(g, id, out, input), result.stats);
+                    } else if (op == ElementwiseOp::MUL) {
+                        // Two operands: a full elementwise product when equal
+                        // length, else the squeeze-and-excitation channel-
+                        // broadcast (larger = [N,C,H,W] activation, smaller =
+                        // per-channel [N,C] gate).
+                        auto ins = edge_inputs(g, id, out);
+                        if (ins.size() < 2)
+                            throw std::runtime_error("GraphCspExecutor: MUL needs two operands");
+                        const std::vector<float>& a = *ins[0];
+                        const std::vector<float>& b = *ins[1];
+                        if (a.size() == b.size()) {
+                            out[id] = run_elementwise(sw::kpu::isa::VEOp::MUL, a, b, result.stats);
+                        } else {
+                            const std::vector<float>& act  = a.size() >= b.size() ? a : b;
+                            const std::vector<float>& gate = a.size() >= b.size() ? b : a;
+                            out[id] = run_channel_broadcast_mul(act, gate, result.stats);
+                        }
                     } else {
                         throw std::runtime_error("GraphCspExecutor: unsupported elementwise op");
                     }
