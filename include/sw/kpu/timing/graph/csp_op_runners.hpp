@@ -402,9 +402,9 @@ run_matmul(const std::vector<float>& a, const std::vector<float>& w,
  * @param T      tile size (must divide N*Hout*Wout)
  *
  * @note The #210 compute-result-CAM cap is fixed, so high channel counts work
- *       (validated to C=48, 768 output tiles). Very large output-tile counts
- *       (roughly a few thousand, e.g. hidden=64 at 8x8 spatial) can still trip
- *       the executor's livelock detector; keep per-op tile counts modest.
+ *       (validated to C=48, and hidden=64 at 8x8 = 65536 outputs / 4096 output
+ *       tiles once the livelock detector was taught to count backward-path and
+ *       compute progress, not just load/move/feed).
  */
 [[nodiscard]] inline std::vector<float>
 run_depthwise_conv(const std::vector<float>& input,
