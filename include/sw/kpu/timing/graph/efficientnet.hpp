@@ -178,10 +178,10 @@ inline std::vector<float> ef_matmul(const std::vector<float>& a, const std::vect
 /**
  * @brief Build EfficientNet-B0 into `g`; return weights + input + oracle.
  *
- * Topology: stem (3x3 s1 conv -> BN -> ReLU6) + a stack of MBConv+SE bottlenecks
- * (1x1 expand -> BN -> ReLU6 -> kxk depthwise -> BN -> ReLU6 -> SE gate -> 1x1
+ * Topology: stem (3x3 s1 conv -> BN -> SiLU) + a stack of MBConv+SE bottlenecks
+ * (1x1 expand -> BN -> SiLU -> kxk depthwise -> BN -> SiLU -> SE gate -> 1x1
  * project -> BN, with an identity residual when stride==1 and Cin==Cout; the
- * t==1 stage omits the expansion) + a 1x1 head conv -> BN -> ReLU6 + global-
+ * t==1 stage omits the expansion) + a 1x1 head conv -> BN -> SiLU + global-
  * average-pool + FC. Execute the returned graph through GraphCspExecutor and
  * compare its output to `oracle` (tol ~5e-3).
  */
@@ -216,7 +216,7 @@ inline std::vector<float> ef_matmul(const std::vector<float>& a, const std::vect
     Size cur_ch = sp.in_channels, cur_H = sp.height, cur_W = sp.width;
     auto out_dim = [](Size in, Size K, Size stride, Size pad) { return (in + 2 * pad - K) / stride + 1; };
 
-    // ----- stem: 3x3 s1 conv -> BN -> ReLU6 -----------------------------------
+    // ----- stem: 3x3 s1 conv -> BN -> SiLU -----------------------------------
     std::size_t in_node;
     {
         auto cc = ef_conv_cfg(N, sp.in_channels, sp.stem_channels, cur_H, cur_W, 3, 1, 1);
@@ -249,7 +249,7 @@ inline std::vector<float> ef_matmul(const std::vector<float>& a, const std::vect
             auto wp = ef_synth(static_cast<std::size_t>(out_ch) * hidden, seed + 2, 0.12f);
             auto bnd = ef_bn(hidden, seed + 1, sp.eps), bnp = ef_bn(out_ch, seed + 2, sp.eps);
 
-            // Expansion (only t > 1): 1x1 -> BN -> ReLU6.
+            // Expansion (only t > 1): 1x1 -> BN -> SiLU.
             std::size_t dw_in_node = in_node;
             std::vector<float> dw_in = ox;
             if (expand) {
@@ -265,7 +265,7 @@ inline std::vector<float> ef_matmul(const std::vector<float>& a, const std::vect
                 dw_in_node = re;
             }
 
-            // Depthwise -> BN -> ReLU6  => A
+            // Depthwise -> BN -> SiLU  => A
             auto cd = g.add_kernel(Kernel::create_conv2d(ccd, false, ActivationType::NONE), "depthwise");
             auto bd = g.add_kernel(Kernel::create_batchnorm(N, hidden, Hd, Wd, bnd.eps), "bn_d");
             auto rd = g.add_kernel(Kernel::create_elementwise(ElementwiseOp::SILU, {hidden * Hd * Wd}), "silu_d");
@@ -331,7 +331,7 @@ inline std::vector<float> ef_matmul(const std::vector<float>& a, const std::vect
         }
     }
 
-    // ----- head: 1x1 conv -> BN -> ReLU6 --------------------------------------
+    // ----- head: 1x1 conv -> BN -> SiLU --------------------------------------
     {
         auto cc = ef_conv_cfg(N, cur_ch, sp.head_channels, cur_H, cur_W, 1, 1, 0);
         auto w  = ef_synth(static_cast<std::size_t>(sp.head_channels) * cur_ch, seed, 0.12f);
