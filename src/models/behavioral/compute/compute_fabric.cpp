@@ -174,6 +174,10 @@ std::optional<uint64_t> BehavioralComputeFabric::submit_elementwise(
             dispatch_relu(desc.dtype, a_data, output_data, desc.count);
             dispatched = true;
             break;
+        case ElementwiseOp::RELU6:
+            dispatch_relu6(desc.dtype, a_data, output_data, desc.count);
+            dispatched = true;
+            break;
         case ElementwiseOp::GELU:
             dispatch_gelu(desc.dtype, a_data, output_data, desc.count);
             dispatched = true;

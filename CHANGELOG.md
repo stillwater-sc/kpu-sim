@@ -21,8 +21,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   identically; a new `ElementwiseOp::RELU6` runs as a standalone clamp
   (`run_relu6`, the design's permitted form). Fusion Pass 2 never folds an
   activation onto a depthwise node (`run_depthwise_conv` applies only ReLU6, so a
-  fused plain-RELU could not be honored). `ElementwiseOp::RELU6` also implemented
-  in the behavioral and transactional compute fabrics. This M3 block reuses the
+  fused plain-RELU could not be honored), and the bridge rejects a depthwise
+  channel multiplier (`Cout != Cin`) rather than mis-sizing the result.
+  `ElementwiseOp::RELU6` is a first-class typed activation - `kernels::relu6` +
+  `dispatch_relu6` across all float formats (FP32/FP16/BF16/FP8/FP4), routed
+  through the behavioral fabric's typed dispatch alongside RELU/GELU/SILU (the
+  transactional fabric stays FP32-only, consistent with its other elementwise
+  ops). This M3 block reuses the
   M2 pointwise-conv / BN-fold / residual-add path unchanged and exercises the
   #210 fix (depthwise at realistic channel counts). Design
   docs/plans/m3_mobilenet_dfg.md.

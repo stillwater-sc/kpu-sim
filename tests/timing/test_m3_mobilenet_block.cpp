@@ -252,3 +252,21 @@ TEST_CASE("M3 MobileNetV2 inverted-residual block (stride-2 downsample, no skip)
     INFO("downsample max_err=" << max_err);
     REQUIRE(max_err < 1e-3f);
 }
+
+TEST_CASE("M3 depthwise channel multiplier (Cout != Cin) is rejected",
+          "[timing][m3][mobilenet]") {
+    // groups == Cin also admits a channel-multiplier depthwise (Cout = k*Cin);
+    // run_depthwise_conv produces one output channel per input channel, so the
+    // bridge must reject k>1 rather than silently mis-size the result.
+    const G N = 16, C = 16, H = 8, W = 8;
+    auto cc = conv_cfg(N, C, 2 * C, H, W, 3, 1, 1, /*groups*/C);   // Cout = 2*Cin
+    auto x = synth(static_cast<std::size_t>(N) * C * H * W, 3, 1.0f);
+
+    KernelGraph g;
+    std::unordered_map<std::size_t, NodeData> nd;
+    auto cd = g.add_kernel(Kernel::create_conv2d(cc, false, ActivationType::NONE), "dw_mult");
+    nd[cd].filter = synth(static_cast<std::size_t>(C) * 9, 4, 0.3f);
+
+    GraphCspExecutor exec;
+    REQUIRE_THROWS_AS(exec.run(g, x, nd, /*T*/16), std::runtime_error);
+}

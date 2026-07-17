@@ -150,7 +150,15 @@ public:
                     // nodes (never fused onto depthwise - see fusion Pass 2),
                     // so relu6 is always false here; run_depthwise_conv applies
                     // only ReLU6, so a fused plain-RELU must not reach it.
-                    if (cc.groups > 1 && cc.groups == cc.in_channels) {
+                    const bool depthwise = cc.groups > 1 && cc.groups == cc.in_channels;
+                    // groups == Cin also admits a channel-multiplier depthwise
+                    // (Cout = k*Cin, k>1); run_depthwise_conv produces exactly
+                    // one output channel per input channel, so reject k>1 rather
+                    // than silently mis-size the result.
+                    if (depthwise && cc.out_channels != cc.in_channels)
+                        throw std::runtime_error(
+                            "GraphCspExecutor: depthwise channel multiplier (Cout != Cin) unsupported");
+                    if (depthwise) {
                         schedule::Pool2DGeometry pg;
                         pg.N = static_cast<Size>(cc.batch_size);
                         pg.C = static_cast<Size>(cc.in_channels);
