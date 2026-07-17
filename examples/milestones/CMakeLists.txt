@@ -43,3 +43,16 @@ if(KPU_BUILD_TESTS)
         LABELS "timing;mobilenet;milestone;v0.9"
     )
 endif()
+
+# M3: EfficientNet-B0 demo + benchmark (issue #131)
+add_executable(m3_efficientnet m3_efficientnet.cpp)
+target_link_libraries(m3_efficientnet PRIVATE kpu_simulator)
+set_target_properties(m3_efficientnet PROPERTIES
+    FOLDER "Examples/Milestones"
+)
+if(KPU_BUILD_TESTS)
+    add_test(NAME m3_efficientnet COMMAND m3_efficientnet)
+    set_tests_properties(m3_efficientnet PROPERTIES
+        LABELS "timing;efficientnet;milestone;v0.9"
+    )
+endif()
