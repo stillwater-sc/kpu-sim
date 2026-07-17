@@ -313,6 +313,16 @@ set_tests_properties(test_m3_depthwise PROPERTIES
     LABELS "timing;m3;mobilenet;v0.9"
 )
 
+# M3 MobileNetV2 inverted-residual block (milestone M3): expand/depthwise/project
+# + ReLU6 + residual as a KernelGraph DFG on the CSP value path vs a host oracle.
+kpu_add_component_test(test_m3_mobilenet_block "timing"
+    test_m3_mobilenet_block.cpp
+)
+
+set_tests_properties(test_m3_mobilenet_block PROPERTIES
+    LABELS "timing;m3;mobilenet;v0.9"
+)
+
 # Functional elementwise execution with host oracle (issue #102, epic E2):
 # value-producing elementwise/broadcast on the CSP data path
 kpu_add_component_test(test_functional_elementwise "timing"

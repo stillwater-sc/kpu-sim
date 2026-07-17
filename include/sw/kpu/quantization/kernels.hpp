@@ -199,6 +199,17 @@ void relu(const Scalar* X, Scalar* Y, size_t count) {
     }
 }
 
+/// ReLU6 activation: Y = min(max(0, X), 6) - MobileNetV2 activation
+template<typename Scalar>
+void relu6(const Scalar* X, Scalar* Y, size_t count) {
+    const Scalar zero = Scalar(0);
+    const Scalar six = Scalar(6);
+    for (size_t i = 0; i < count; ++i) {
+        const Scalar x = X[i];
+        Y[i] = (x < zero) ? zero : (x > six ? six : x);
+    }
+}
+
 /// In-place ReLU activation
 template<typename Scalar>
 void relu_inplace(Scalar* X, size_t count) {

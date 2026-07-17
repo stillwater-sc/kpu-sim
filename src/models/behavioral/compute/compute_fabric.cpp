@@ -174,6 +174,10 @@ std::optional<uint64_t> BehavioralComputeFabric::submit_elementwise(
             dispatch_relu(desc.dtype, a_data, output_data, desc.count);
             dispatched = true;
             break;
+        case ElementwiseOp::RELU6:
+            dispatch_relu6(desc.dtype, a_data, output_data, desc.count);
+            dispatched = true;
+            break;
         case ElementwiseOp::GELU:
             dispatch_gelu(desc.dtype, a_data, output_data, desc.count);
             dispatched = true;
@@ -612,6 +616,11 @@ void BehavioralComputeFabric::execute_elementwise_fp32(
             break;
         case ElementwiseOp::RELU:
             for (uint64_t i = 0; i < count; ++i) output[i] = std::max(0.0f, a[i]);
+            break;
+        case ElementwiseOp::RELU6:
+            // ReLU6(x) = min(max(x, 0), 6) - MobileNetV2 activation.
+            for (uint64_t i = 0; i < count; ++i)
+                output[i] = std::min(std::max(0.0f, a[i]), 6.0f);
             break;
         case ElementwiseOp::GELU:
             // GELU(x) = x * 0.5 * (1 + tanh(sqrt(2/pi) * (x + 0.044715 * x^3)))

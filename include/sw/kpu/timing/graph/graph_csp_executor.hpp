@@ -106,6 +106,11 @@ public:
             if (g.get_kernel(*prod).op_type() == KernelOpType::CONV2D) conv = *prod;
             else if (auto it = bn_to_conv.find(*prod); it != bn_to_conv.end()) conv = it->second;
             if (conv != static_cast<std::size_t>(-1)) {
+                // Never fuse onto a depthwise conv: run_depthwise_conv applies
+                // only ReLU6, so a fused plain-RELU could not be honored and
+                // would be silently dropped - keep it as a standalone node.
+                const auto& conv_cc = g.get_kernel(conv).conv2d_config();
+                if (conv_cc.groups > 1 && conv_cc.groups == conv_cc.in_channels) continue;
                 fuse_relu[conv] = id;
                 consumed[id] = true;
             }
@@ -136,7 +141,40 @@ public:
                         bn = &affine;
                     }
                     const bool relu = fuse_relu.count(id) > 0;
-                    auto y = run_conv2d_fused(x, nd->filter, geom, bn, nd->bias, relu, T, result.stats);
+                    std::vector<float> y;
+                    // Depthwise conv (groups == Cin, MobileNet): each output
+                    // channel is the 2D conv of a single input channel with its
+                    // own filter - delivered via the pooling-window unfold +
+                    // per-channel filter reduce (run_depthwise_conv), not im2col
+                    // GEMM. BN folds identically. Activations stay standalone
+                    // nodes (never fused onto depthwise - see fusion Pass 2),
+                    // so relu6 is always false here; run_depthwise_conv applies
+                    // only ReLU6, so a fused plain-RELU must not reach it.
+                    const bool depthwise = cc.groups > 1 && cc.groups == cc.in_channels;
+                    // groups == Cin also admits a channel-multiplier depthwise
+                    // (Cout = k*Cin, k>1); run_depthwise_conv produces exactly
+                    // one output channel per input channel, so reject k>1 rather
+                    // than silently mis-size the result.
+                    if (depthwise && cc.out_channels != cc.in_channels)
+                        throw std::runtime_error(
+                            "GraphCspExecutor: depthwise channel multiplier (Cout != Cin) unsupported");
+                    if (depthwise) {
+                        schedule::Pool2DGeometry pg;
+                        pg.N = static_cast<Size>(cc.batch_size);
+                        pg.C = static_cast<Size>(cc.in_channels);
+                        pg.H = static_cast<Size>(cc.input_height);
+                        pg.W = static_cast<Size>(cc.input_width);
+                        pg.Kh = static_cast<Size>(cc.kernel_height);
+                        pg.Kw = static_cast<Size>(cc.kernel_width);
+                        pg.stride_h = static_cast<Size>(cc.stride_h);
+                        pg.stride_w = static_cast<Size>(cc.stride_w);
+                        pg.pad_h = static_cast<Size>(cc.padding_h);
+                        pg.pad_w = static_cast<Size>(cc.padding_w);
+                        y = run_depthwise_conv(x, pg, nd->filter, bn, nd->bias,
+                                               /*relu6*/ false, T, result.stats);
+                    } else {
+                        y = run_conv2d_fused(x, nd->filter, geom, bn, nd->bias, relu, T, result.stats);
+                    }
                     out[id] = y;
                     // Fused BN / ReLU nodes alias this output for their consumers.
                     if (auto it = fold_bn.find(id); it != fold_bn.end()) out[it->second] = y;
@@ -156,6 +194,10 @@ public:
                         out[id] = run_elementwise(sw::kpu::isa::VEOp::ADD, a, b, result.stats);
                     } else if (op == ElementwiseOp::RELU) {
                         out[id] = run_relu(input_of(g, id, out, input), result.stats);
+                    } else if (op == ElementwiseOp::RELU6) {
+                        // MobileNetV2 activation clamp min(max(x,0),6), run as a
+                        // standalone VE op (the design's permitted clamp form).
+                        out[id] = run_relu6(input_of(g, id, out, input), result.stats);
                     } else {
                         throw std::runtime_error("GraphCspExecutor: unsupported elementwise op");
                     }

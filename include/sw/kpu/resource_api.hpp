@@ -482,6 +482,7 @@ enum class ElementwiseOp : uint8_t {
     EXP = 13,
     LOG = 14,
     SILU = 15,
+    RELU6 = 16,   // min(max(x,0),6) - MobileNetV2 activation (M3)
     // Scalar operations (second operand is scalar, broadcast)
     ADD_SCALAR = 20,
     MUL_SCALAR = 21,
@@ -509,6 +510,7 @@ inline const char* elementwise_op_name(ElementwiseOp op) {
         case ElementwiseOp::EXP: return "exp";
         case ElementwiseOp::LOG: return "log";
         case ElementwiseOp::SILU: return "silu";
+        case ElementwiseOp::RELU6: return "relu6";
         case ElementwiseOp::ADD_SCALAR: return "add_scalar";
         case ElementwiseOp::MUL_SCALAR: return "mul_scalar";
         case ElementwiseOp::POW_SCALAR: return "pow_scalar";

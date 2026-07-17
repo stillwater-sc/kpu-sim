@@ -98,6 +98,14 @@ void execute_typed_relu(const void* input, void* output, uint64_t count) {
                   static_cast<size_t>(count));
 }
 
+/// Execute ReLU6 with explicit scalar type
+template<typename Scalar>
+void execute_typed_relu6(const void* input, void* output, uint64_t count) {
+    kernels::relu6(static_cast<const Scalar*>(input),
+                   static_cast<Scalar*>(output),
+                   static_cast<size_t>(count));
+}
+
 /// Execute GELU with explicit scalar type
 template<typename Scalar>
 void execute_typed_gelu(const void* input, void* output, uint64_t count) {
@@ -315,6 +323,39 @@ inline void dispatch_relu(DataType dtype, const void* input, void* output, uint6
         default:
             throw std::invalid_argument(
                 "Unsupported DataType for ReLU dispatch: " + dtype_name(dtype));
+    }
+}
+
+/// Dispatch elementwise ReLU6 based on DataType
+inline void dispatch_relu6(DataType dtype, const void* input, void* output, uint64_t count) {
+    switch (dtype) {
+        case DataType::FLOAT32:
+            detail::execute_typed_relu6<float>(input, output, count);
+            break;
+        case DataType::FLOAT16:
+            detail::execute_typed_relu6<fp16_t>(input, output, count);
+            break;
+        case DataType::BFLOAT16:
+            detail::execute_typed_relu6<bf16_t>(input, output, count);
+            break;
+        case DataType::FP8_E4M3:
+            detail::execute_typed_relu6<fp8e4m3_t>(input, output, count);
+            break;
+        case DataType::FP8_E5M2:
+            detail::execute_typed_relu6<fp8e5m2_t>(input, output, count);
+            break;
+        case DataType::FP8_E3M4:
+            detail::execute_typed_relu6<fp8e3m4_t>(input, output, count);
+            break;
+        case DataType::FP8_E2M5:
+            detail::execute_typed_relu6<fp8e2m5_t>(input, output, count);
+            break;
+        case DataType::FP4:
+            detail::execute_typed_relu6<fp4_t>(input, output, count);
+            break;
+        default:
+            throw std::invalid_argument(
+                "Unsupported DataType for ReLU6 dispatch: " + dtype_name(dtype));
     }
 }
 
