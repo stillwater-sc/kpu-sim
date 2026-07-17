@@ -343,6 +343,16 @@ set_tests_properties(test_m3_efficientnet_block PROPERTIES
     LABELS "timing;m3;efficientnet;v0.9"
 )
 
+# Livelock detector progress regression: backward-path + compute progress must
+# count, so drain-heavy ops (large depthwise) do not false-trip the detector.
+kpu_add_component_test(test_livelock_progress "timing"
+    test_livelock_progress.cpp
+)
+
+set_tests_properties(test_livelock_progress PROPERTIES
+    LABELS "timing;livelock;regression;v0.9"
+)
+
 # Functional elementwise execution with host oracle (issue #102, epic E2):
 # value-producing elementwise/broadcast on the CSP data path
 kpu_add_component_test(test_functional_elementwise "timing"

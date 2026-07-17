@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Livelock detector false-tripped on drain-heavy ops (large depthwise).** The
+  `ConcurrentTimingExecutor`'s livelock detector was fed only forward-path
+  progress (DMA bytes *loaded*, `BlockMover` forward moves, streamer feeds), so
+  once a large operation had fed all its inputs, the remaining COMPUTE → DRAIN →
+  WRITEBACK → STORE phase showed no tracked progress; if that phase exceeded the
+  10000-cycle stall threshold the detector aborted a *progressing* run
+  (`run_depthwise_conv: execution failed: Livelock detected` at e.g. hidden=64 @
+  8x8, ~4096 output tiles). The metrics now count all pipeline stages - forward
+  (load/move/feed), backward (store/writeback/drain) via the full `get_statistics`,
+  and compute (`next_compute_slot_`) - so a genuine livelock (no progress in *any*
+  stage) is still caught while a compute/drain-heavy schedule is not.
+  `test_livelock_progress` locks it in (a windowed pool with a low stall threshold
+  completes without a false trip; fails before the fix). Depthwise now runs to
+  65536 outputs (4096 tiles) with detection on. `run_depthwise_conv` note updated.
+
 ### Added
 
 - **EfficientNet MBConv block with squeeze-and-excitation on the CSP executor —
