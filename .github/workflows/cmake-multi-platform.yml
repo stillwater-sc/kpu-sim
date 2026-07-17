@@ -76,6 +76,13 @@ jobs:
 
     - name: Set up sccache
       uses: mozilla-actions/sccache-action@v0.0.7
+      # The action can hard-fail during a GitHub Actions Cache incident (its
+      # setup call returns an HTML error page -> HttpError), which would kill
+      # the job before the probe/fallback below runs. sccache is a build-speed
+      # optimization, never a correctness dependency, so a setup failure must
+      # not fail the build: let the job continue and fall through to the probe,
+      # which then wires a plain (uncached) build.
+      continue-on-error: true
 
     # Probe the sccache backend before relying on it. If GitHub Actions Cache
     # is having an incident the sccache server refuses to start, so falling

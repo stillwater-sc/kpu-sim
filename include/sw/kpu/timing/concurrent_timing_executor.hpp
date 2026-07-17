@@ -647,7 +647,7 @@ inline ConcurrentTimingExecutor::ConcurrentTimingExecutor(const Config& config)
       l2_credits_(config.l2_bank_count),
       l3_tag_cam_(config.l3_buffer_count),
       l2_tag_cam_(config.l2_bank_count),
-      compute_result_tag_cam_(256) {  // 256 pending compute results max
+      compute_result_tag_cam_(256) {  // initial reserve; grows with the schedule (#210)
     if (config_.partition_l3_credits) {
         l3_credits_.partition_equal();
     }
@@ -1038,8 +1038,21 @@ inline bool ConcurrentTimingExecutor::step() {
                 execute_functional(*it);
             }
             ++completed_compute_counts_[it->tile.tile_id];
-            // Compute completed - result tile is now ready for DRAIN
+            // Compute completed - result tile is now ready for DRAIN.
+            //
+            // The compute-result CAM is a ready-set of finished-but-undrained
+            // results, not a fixed hardware buffer (the DRAIN acquires its own
+            // L2 credit downstream). When many computes finish ahead of the
+            // FIFO drain, occupancy is bounded by the schedule, not by any
+            // physical resource, so grow the CAM rather than let insert() drop
+            // the result: a dropped result leaves its DRAIN head-of-line
+            // blocked forever (#210 - manifested at >256 output tiles, e.g.
+            // pooling/depthwise at C>=17 with the old hardcoded 256 limit).
             uint32_t slot = next_compute_slot_++;
+            if (compute_result_tag_cam_.full()) {
+                compute_result_tag_cam_.set_capacity(
+                    compute_result_tag_cam_.size() + 1);
+            }
             compute_result_tag_cam_.insert(it->tile.tile_id, slot, current_cycle_);
 
             // Emit COMPUTE_COMPLETE event

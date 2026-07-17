@@ -18,10 +18,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   BatchNorm and a ReLU6 (`min(max(x,0),6)`) epilogue apply in the reduce.
   `run_relu6` adds the standalone clamp. `test_m3_depthwise` validates the runner
   elementwise against a host depthwise reference (3x3 s1p1, 3x3 s2p1 downsample,
-  and folded BN + ReLU6). Validated at channel counts up to 16; the underlying
-  pooling windowed schedule deadlocks at C >= 32 (#210, a pre-existing E7
-  limitation) - larger-C depthwise is blocked on that fix. Milestone M3 (#131),
-  design docs/plans/m3_mobilenet_dfg.md.
+  C=48 past the old compute-result cap, and folded BN + ReLU6). High channel
+  counts were initially blocked by the compute-result-CAM deadlock at C >= 17,
+  since fixed (#210, see Fixed). Milestone M3 (#131), design
+  docs/plans/m3_mobilenet_dfg.md.
 
 - **DNN Milestone M2: ResNet-18 as a DFG on the CSP executor — M2-T4 (#206);
   milestone #130 achieved.** The full ResNet-18 (stem + four stages of
@@ -180,6 +180,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   regression T5 #182 remains.
 
 ### Fixed
+
+- **Compute-result CAM silently dropped results past a hardcoded 256, wedging the
+  drain at high tile counts (#210).** `ConcurrentTimingExecutor`'s
+  `compute_result_tag_cam_` — the ready-set of finished-but-undrained compute
+  results — was constructed with a fixed capacity of 256, and the `insert()` at
+  compute completion **ignored the full-CAM return value**. Once a schedule
+  produced more than 256 output tiles (pooling/depthwise at `C >= 17`), computes
+  raced ahead of the FIFO drain, the CAM saturated, and every result past 256 was
+  discarded; the discarded result's `DRAIN` then head-of-line-blocked forever
+  (observed wedging at exactly 255 completed drains). The compute-result CAM
+  models no fixed hardware buffer — the drain acquires its own L2 credit
+  downstream — so its occupancy is bounded by the schedule, not a physical
+  resource. Fix: a grow-only `TagCAM::set_capacity`, and the executor grows the
+  CAM when full instead of dropping the result. This unblocks larger-`C` depthwise
+  conv and pooling (M3, #131). Regressions: `test_pooling_regression` now drains
+  512 result tiles (`C=32`) livelock-free, `test_m3_depthwise` validates
+  `run_depthwise_conv` at `C=48` (768 drains), and `test_tag_cam` covers the
+  grow-only `set_capacity`.
 
 - **BatchNorm inference generator emitted DRAIN without COMPUTE (batchnorm half
   of #139) — E9-T3 (#180).** `BatchNormScheduleGenerator` inference now loads the

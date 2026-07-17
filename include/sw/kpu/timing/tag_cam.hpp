@@ -242,6 +242,24 @@ public:
     }
 
     /**
+     * @brief Grow the capacity to at least @p new_capacity (grow-only)
+     * @param new_capacity Desired minimum capacity
+     *
+     * Only ever increases capacity; a request to shrink is ignored so the
+     * invariant "capacity >= current size" always holds. Used for CAMs whose
+     * occupancy is bounded by the schedule rather than by a fixed hardware
+     * buffer count (e.g. the compute-result ready-set): sizing them to the
+     * schedule prevents silently dropping entries when the underlying
+     * dynamically-grown storage would otherwise exceed a hardcoded limit.
+     */
+    void set_capacity(size_t new_capacity) {
+        if (new_capacity > capacity_) {
+            capacity_ = new_capacity;
+            entries_.reserve(capacity_);
+        }
+    }
+
+    /**
      * @brief Check if CAM is empty
      * @return true if no tiles are tracked
      */

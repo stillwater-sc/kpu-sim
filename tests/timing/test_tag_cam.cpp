@@ -416,3 +416,25 @@ TEST_CASE("TagCAM seeded insert supports one-move many-feeds broadcast", "[timin
         REQUIRE_FALSE(small.insert(other, 1, 100, 5));
     }
 }
+
+TEST_CASE("TagCAM set_capacity grows to admit more entries (#210)", "[timing][tag_cam]") {
+    TagCAM cam(1);
+    TileID a{MatrixID::A, 0, 0, 0};
+    TileID b{MatrixID::A, 1, 0, 0};
+
+    REQUIRE(cam.insert(a, 0, 100));
+    REQUIRE(cam.full());
+    REQUIRE_FALSE(cam.insert(b, 1, 100));   // rejected at capacity 1
+
+    cam.set_capacity(2);                    // grow the compute-result-style CAM
+    REQUIRE(cam.capacity() == 2);
+    REQUIRE(cam.insert(b, 1, 100));         // now admitted
+    REQUIRE(cam.size() == 2);
+
+    SECTION("set_capacity is grow-only and never shrinks below current size") {
+        cam.set_capacity(1);                // request to shrink is ignored
+        REQUIRE(cam.capacity() == 2);
+        REQUIRE(cam.lookup(a));
+        REQUIRE(cam.lookup(b));
+    }
+}
