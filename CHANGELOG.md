@@ -9,6 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Compute FLOP efficiency / roofline for the ResNet benchmark.** During the graph
+  walk `GraphCspExecutor` accumulates `RunStats::total_macs` from the GEMM ops
+  (`conv.gemm_M·gemm_N·gemm_K`, which handles `groups`/depthwise, plus
+  `fc_M·fc_N·fc_K`); fused BN/ReLU, residual adds, and pooling carry no GEMM.
+  `RunStats` exposes `total_flops()` (2/MAC), `achieved_gflops(clock)`,
+  `arithmetic_intensity()` (FLOPs/DRAM byte), `compute_efficiency(peak_flops/cycle)`,
+  and `roofline_efficiency(peak_gflops, ext_bw, clock)`, using the matmul harness's
+  16×16-PE / 512-GFLOP-@1GHz / 64-GB/s convention. The `m2_resnet` demo prints a
+  compute table (MFLOP, GFLOP/s, peak%, arithmetic intensity, roofline%, mem/cmp
+  bound). Result: ResNet is **memory-bound** (AI ≈ 5.2 < 8 ridge, ~22–29% of peak),
+  independently corroborating the DRAM-saturated movement-fabric finding.
+  `test_resnet_utilization.cpp` adds a precise single-matmul MAC anchor
+  (`total_macs == M·N·K`) and bounded-efficiency asserts.
+
 - **Movement-fabric utilization surfaced in the ResNet benchmark.** `RunStats`
   (`csp_op_runners.hpp`) now aggregates the executor's per-op
   `ConcurrentTimingExecutor::get_statistics()` — `{dma,bm,str}_busy_cycles`,

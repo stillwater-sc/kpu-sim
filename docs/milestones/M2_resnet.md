@@ -67,6 +67,11 @@ utilization              dmaU%    bmU%   strU%  tilesLd  tilesMv  tilesFd    ldG
 resnet18 (base)           84.6    14.1    10.7     1805     1438     1438      18.5
 resnet18 [2,2,2,2]        77.9    18.4    13.9     2773     2318     2318      25.4
 resnet18 (batch 32)       92.3    14.9    11.8     3610     2876     2876      19.3
+
+compute                    MFLOP   GFLOP/s  peakEff%   AI(F/B)  roofEff%   bound
+resnet18 (base)             4.48     112.4      21.9      5.25      33.4     mem
+resnet18 [2,2,2,2]          7.73     150.1      29.3      5.11      45.9     mem
+resnet18 (batch 32)         8.96     124.2      24.3      5.54      35.1     mem
 ```
 
 **Fusion payoff:** the `[2,2,2,2]` network's 67 graph nodes execute as **38 CSP
@@ -79,6 +84,11 @@ the **DRAM→L3 DMA as the near-saturated bottleneck** (78–92% active, 92% at 
 it**: the scaled network is DRAM-bandwidth-bound. Stall columns are summed across
 all parallel components (so they can exceed `cycles`); see
 `docs/benchmarking/resnet-benchmarking-guide.md` for the full metric definitions.
+
+**Compute FLOP efficiency** confirms the same story from the arithmetic side:
+arithmetic intensity ≈ 5.2 FLOP/byte is below the 8 FLOP/byte ridge of a 16×16 PE
+array (512 GFLOP/s @ 1 GHz) with 64 GB/s DRAM, so every config is **memory-bound**,
+reaching only ~22–29% of compute peak.
 
 ## Scope & scaling notes
 

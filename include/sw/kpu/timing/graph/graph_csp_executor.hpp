@@ -128,6 +128,10 @@ public:
                     const auto& cc = k.conv2d_config();
                     if (!nd) throw std::runtime_error("GraphCspExecutor: missing NodeData for conv node");
                     Conv2DGeometry geom = conv_geom(cc);
+                    // MACs = gemm_M * gemm_N * gemm_K; gemm_K = (Cin/groups)*Kh*Kw
+                    // so this is correct for grouped/depthwise convs too.
+                    result.stats.total_macs += static_cast<std::uint64_t>(cc.gemm_M())
+                                             * cc.gemm_N() * cc.gemm_K();
                     // input: this conv's graph predecessor output, else external input.
                     const std::vector<float>& x = input_of(g, id, out, input);
 
@@ -242,6 +246,8 @@ public:
                 }
                 case KernelOpType::MATMUL: {
                     if (!nd) throw std::runtime_error("GraphCspExecutor: missing NodeData for matmul node");
+                    result.stats.total_macs += static_cast<std::uint64_t>(nd->fc_M)
+                                             * nd->fc_N * nd->fc_K;
                     out[id] = run_matmul(input_of(g, id, out, input), nd->fc_weight,
                                          nd->fc_M, nd->fc_N, nd->fc_K, nd->fc_bias,
                                          nd->fc_relu, T, result.stats);

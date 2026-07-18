@@ -24,12 +24,16 @@
 // ============================================================================
 
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/catch_approx.hpp>
 #include <catch2/matchers/catch_matchers_floating_point.hpp>
 
 #include <sw/kpu/kernel_graph.hpp>
 #include <sw/kpu/timing/graph/resnet18.hpp>
 
 #include <cmath>
+#include <cstdint>
+#include <unordered_map>
+#include <vector>
 
 using namespace sw::kpu::timing::graph;
 using sw::kpu::timing::Cycle;
@@ -82,7 +86,43 @@ TEST_CASE("ResNet RunStats utilization is directly measured and consistent",
         REQUIRE(st.tiles_loaded > 0);
         REQUIRE(st.tiles_moved > 0);
         REQUIRE(st.bytes_loaded > 0);
+
+        // Compute FLOP efficiency (roofline). GEMM MACs are counted, FLOPs = 2*MACs,
+        // and the efficiencies are bounded fractions.
+        REQUIRE(st.total_macs > 0);
+        REQUIRE(st.total_flops() == Catch::Approx(2.0 * static_cast<double>(st.total_macs)));
+        REQUIRE(st.arithmetic_intensity() > 0.0);
+        REQUIRE(st.achieved_gflops(1.0) > 0.0);
+        const double peak_eff = st.compute_efficiency(/*peak_flops_per_cycle*/ 512.0);
+        REQUIRE(peak_eff > 0.0);
+        REQUIRE(peak_eff <= 1.0);                     // cannot exceed the array peak
+        const double roof_eff = st.roofline_efficiency(512.0, 64.0, 1.0);
+        REQUIRE(roof_eff > 0.0);
+        REQUIRE(std::isfinite(roof_eff));
+        REQUIRE(roof_eff <= 1.0 + 1e-9);              // cannot beat the roofline
     }
+}
+
+TEST_CASE("GraphCspExecutor counts GEMM MACs from the FC matmul",
+          "[timing][resnet][flops]") {
+    // A single matmul node: MACs must equal M*N*K exactly (the FC hook), and the
+    // fused/pool/elementwise ops that carry no GEMM contribute nothing.
+    const sw::kpu::Size M = 32, N = 16, K = 48;   // tile-aligned (T = 16)
+    sw::kpu::KernelGraph g;
+    const auto mm = g.add_kernel(sw::kpu::Kernel::create_matmul(M, N, K), "mm");
+
+    std::unordered_map<std::size_t, NodeData> nd;
+    nd[mm].fc_M = M; nd[mm].fc_N = N; nd[mm].fc_K = K;
+    nd[mm].fc_weight.assign(static_cast<std::size_t>(K) * N, 0.1f);
+    nd[mm].fc_bias.assign(N, 0.0f);
+    const std::vector<float> input(static_cast<std::size_t>(M) * K, 0.5f);
+
+    GraphCspExecutor exec;
+    const auto result = exec.run(g, input, nd, /*T*/ 16);
+
+    const std::uint64_t expected = static_cast<std::uint64_t>(M) * N * K;   // 24576
+    REQUIRE(result.stats.total_macs == expected);
+    REQUIRE(result.stats.total_flops() == Catch::Approx(2.0 * static_cast<double>(expected)));
 }
 
 TEST_CASE("RunStats effective bandwidth guards the clock argument",

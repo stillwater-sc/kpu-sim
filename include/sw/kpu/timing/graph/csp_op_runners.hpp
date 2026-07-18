@@ -30,7 +30,9 @@
 #include <sw/kpu/timing/schedule/pooling_schedule_generator.hpp>
 #include <sw/kpu/timing/schedule/schedule_executor.hpp>
 
+#include <algorithm>
 #include <cstddef>
+#include <cstdint>
 #include <optional>
 #include <stdexcept>
 #include <vector>
@@ -72,6 +74,11 @@ struct RunStats {
     std::size_t bytes_loaded = 0;
     std::size_t bytes_stored = 0;
 
+    // Multiply-accumulates performed by the GEMM ops (conv im2col + FC matmul),
+    // accumulated during the graph walk. Fused BatchNorm, ReLU epilogues, residual
+    // adds, and pooling are not GEMMs and contribute no MACs.
+    std::uint64_t total_macs = 0;
+
     // Utilization (0.0 - 1.0) = busy / total_cycles, over the whole run.
     [[nodiscard]] double dma_utilization() const {
         return total_cycles ? static_cast<double>(dma_busy) / static_cast<double>(total_cycles) : 0.0;
@@ -94,6 +101,41 @@ struct RunStats {
         if (clock_ghz <= 0.0 || total_cycles == 0) return 0.0;
         const double seconds = static_cast<double>(total_cycles) / (clock_ghz * 1e9);
         return static_cast<double>(bytes_stored) / (seconds * 1e9);
+    }
+
+    // ---- Compute FLOP efficiency (roofline) ---------------------------------
+    // Conventions match the matmul benchmark harness (sw::benchmark::HardwareSpec):
+    // 2 FLOPs per MAC, achieved GFLOP/s = FLOP/cycle * clock, peak/bandwidth
+    // supplied by the caller (no PE-array peak lives in the timing config).
+
+    /// Total floating-point operations (2 per MAC).
+    [[nodiscard]] double total_flops() const { return 2.0 * static_cast<double>(total_macs); }
+
+    /// Achieved compute throughput (GFLOP/s) at the given clock.
+    [[nodiscard]] double achieved_gflops(double clock_ghz) const {
+        return total_cycles ? total_flops() / static_cast<double>(total_cycles) * clock_ghz : 0.0;
+    }
+
+    /// Arithmetic intensity: FLOPs per byte of external (DRAM) traffic.
+    [[nodiscard]] double arithmetic_intensity() const {
+        const std::size_t bytes = bytes_loaded + bytes_stored;
+        return bytes ? total_flops() / static_cast<double>(bytes) : 0.0;
+    }
+
+    /// Fraction of the compute fabric's peak (clock-independent): achieved
+    /// FLOP/cycle divided by peak FLOP/cycle (e.g. 16*16*2 = 512 for a 16x16 PE).
+    [[nodiscard]] double compute_efficiency(double peak_flops_per_cycle) const {
+        return (total_cycles && peak_flops_per_cycle > 0.0)
+            ? total_flops() / (static_cast<double>(total_cycles) * peak_flops_per_cycle)
+            : 0.0;
+    }
+
+    /// Fraction of the roofline ceiling min(AI * bandwidth, peak) at the given
+    /// clock - i.e. how close to the attainable (memory- or compute-bound) limit.
+    [[nodiscard]] double roofline_efficiency(double peak_gflops, double ext_bw_gbs,
+                                             double clock_ghz) const {
+        const double roof = std::min(arithmetic_intensity() * ext_bw_gbs, peak_gflops);
+        return roof > 0.0 ? achieved_gflops(clock_ghz) / roof : 0.0;
     }
 };
 

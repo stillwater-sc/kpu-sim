@@ -12,9 +12,10 @@ reports **cycles / ops / stall-cycles** plus **movement-fabric utilization**
 (DMA/BlockMover/Streamer busy%, tiles, effective DRAM bandwidth). Utilization is a
 **directly measured** active-cycle count (each component counts the cycles a
 transfer occupied it) — not the earlier `cycles − stalls/N` heuristic — so idle
-cycles are excluded and the numbers are a true activity fraction. The demo prints a
-second "utilization" table. What is *not* yet available is compute-fabric FLOP
-efficiency (§6 caveat) — that is the next research task.
+cycles are excluded and the numbers are a true activity fraction. It also reports
+**compute FLOP efficiency** (GEMM MACs vs a 16×16 PE-array peak, arithmetic
+intensity, and roofline position — §6), which independently confirms the workload
+is memory-bound. The demo prints a "utilization" table and a "compute" table.
 
 ---
 
@@ -180,6 +181,11 @@ directly. Any new spec must keep batch/channels/classes as `tile` multiples.
   resnet18 (base)           84.6    14.1    10.7     1805     1438     1438      18.5       2.9
   resnet18 [2,2,2,2]        77.9    18.4    13.9     2773     2318     2318      25.4       4.0
   resnet18 (batch 32)       92.3    14.9    11.8     3610     2876     2876      19.3       3.2
+
+  compute                    MFLOP   GFLOP/s  peakEff%   AI(F/B)  roofEff%   bound
+  resnet18 (base)             4.48     112.4      21.9      5.25      33.4     mem
+  resnet18 [2,2,2,2]          7.73     150.1      29.3      5.11      45.9     mem
+  resnet18 (batch 32)         8.96     124.2      24.3      5.54      35.1     mem
 ```
 
 Reading it:
@@ -198,6 +204,9 @@ Reading it:
 - **`ldGB/s`/`stGB/s`** are at an assumed 1.0 GHz clock (so GB/s == bytes/cycle);
   the unit is a knob, the *ratio* between configs is the signal.
 - **cyc/op is not efficiency** — it is total cycles / op count, inflated by stalls.
+- **Compute confirms it from the other side:** arithmetic intensity ≈ 5.2 FLOP/byte
+  is below the 8 FLOP/byte ridge, so every config is **memory-bound** (`bound=mem`),
+  reaching only ~22–29% of the 16×16 array's peak. Full detail in §6.
 
 One accounting note so the columns are not misread:
 - **Stall columns are summed across all parallel components and all ops**, so a
@@ -273,16 +282,49 @@ Practical guidance:
 - The signal is the **DMA near-saturation (78–92%) vs. starved on-chip movers
   (11–18%)**: the workload is DRAM-bandwidth-bound at this scale.
 
-### Caveat: compute-fabric utilization is not in this path
+### Compute FLOP efficiency (roofline position)
 
-`Statistics` covers the **movement** fabric (DMA / BlockMover / Streamer) and DRAM
-bandwidth. It does **not** carry a compute-fabric FLOP-efficiency number the way
-the standalone `kpu-benchmark` matmul harness does (`tools/benchmark/`, whose
-`baseline.json` has `utilization.compute` and `gflops`/`efficiency`). If the study
-needs "what fraction of peak MACs are we hitting on ResNet's convs," that is a
-separate metric: compute the network's total MACs (known from the graph) and divide
-by `total_cycles × peak_MACs_per_cycle`. That is research task #2, and it belongs
-either in the demo or in a ResNet row added to the `kpu-benchmark` harness.
+`RunStats` now also carries the **compute** side. During the graph walk the GEMM
+ops accumulate `total_macs` (`conv.gemm_M·gemm_N·gemm_K`, which handles `groups`,
+plus `fc_M·fc_N·fc_K`); fused BatchNorm, ReLU epilogues, residual adds, and pooling
+carry no GEMM and contribute nothing. From that:
+
+```cpp
+r.stats.total_flops();                       // 2 * total_macs
+r.stats.achieved_gflops(clock_ghz);          // FLOP/cycle * clock
+r.stats.arithmetic_intensity();              // FLOPs per DRAM byte
+r.stats.compute_efficiency(512.0);           // achieved / peak FLOP/cycle
+r.stats.roofline_efficiency(512.0, 64.0, 1.0); // achieved / min(AI*bw, peak)
+```
+
+Conventions match the matmul `kpu-benchmark` harness (`sw::benchmark::HardwareSpec`):
+a **16×16 PE array, 2 FLOP/MAC → 512 GFLOP/s peak at 1 GHz**, **64 GB/s** external
+DRAM, ridge point `512/64 = 8` FLOP/byte. The demo prints a compute table:
+
+```text
+  compute                    MFLOP   GFLOP/s  peakEff%   AI(F/B)  roofEff%   bound
+  resnet18 (base)             4.48     112.4      21.9      5.25      33.4     mem
+  resnet18 [2,2,2,2]          7.73     150.1      29.3      5.11      45.9     mem
+  resnet18 (batch 32)         8.96     124.2      24.3      5.54      35.1     mem
+```
+
+Reading it, and how it corroborates the movement story:
+- **Arithmetic intensity ≈ 5.2 FLOP/byte < the 8 ridge → memory-bound.** This is the
+  *same* conclusion the movement fabric gave (DMA at 78–92%), now from the compute
+  side: the scaled network does too little arithmetic per DRAM byte to saturate the
+  PE array.
+- **peakEff 22–29%** — only about a quarter of the 16×16 array's peak is reached,
+  because compute is starved behind DRAM.
+- **roofEff 33–46%** — even against the *memory* ceiling (AI·64) there is headroom:
+  movement stalls and the sequential-node walk keep it below the attainable limit.
+- **Deeper `[2,2,2,2]` is best** on both (29% / 46%): more arithmetic amortizes each
+  load, nudging toward the ridge.
+- These are **relative** numbers on a scaled topology (§3) — the *shape* (memory-
+  bound, quarter-peak) is the signal, not the absolute GFLOP/s.
+
+Follow-ons: a full-resolution ResNet (higher AI, likely still memory-bound at this
+buffer sizing) and a per-layer AI breakdown to find which convs are compute- vs
+memory-bound.
 
 ---
 
@@ -295,12 +337,11 @@ Ordered by dependency:
 1b. ~~**Refine `busy` to a directly-measured active-cycle count**~~ — **done**:
    each component now counts, in its `tick()`, the cycles a transfer occupied it, so
    utilization excludes idle cycles and is a measured activity fraction (§6).
-2. **Compute utilization / FLOP efficiency** — MACs / (`total_cycles` × peak). Lets
-   you say "roofline position" for each config. **Now the top open task** — the
-   movement fabric being DRAM-bound (§5) makes the compute-side story the next
-   question.
+2. ~~**Compute FLOP efficiency / roofline position**~~ — **done** (§6): the demo
+   prints MFLOP, GFLOP/s, peak efficiency, arithmetic intensity, and roofline
+   position; the network is memory-bound (AI ≈ 5.2 < 8), corroborating §5.
 3. **Occupancy timeline** — wire `TileTracker` into the demo (behind a flag) to see
-   which buffer level saturates during the forward pass.
+   which buffer level saturates during the forward pass. **Now the top open task.**
 4. **Full-scale ResNet-18** — larger spatial dims + `[2,2,2,2]` + channel growth as
    a benchmark spec (slow; run offline, not in CI). Needed before any number is
    quoted as representative.
