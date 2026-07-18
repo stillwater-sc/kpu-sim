@@ -130,5 +130,6 @@ cmake --build --preset release --target m2_resnet
 ./build/examples/milestones/m2_resnet --dot resnet18.dot   # + KernelGraph
 ./build/examples/milestones/m2_resnet --occupancy          # buffer-occupancy timeline
 ./build/examples/milestones/m2_resnet --full               # representative-scale offline run (~50s)
-ctest -R m2_resnet                               # CI smoke test
+./build/examples/milestones/m2_resnet --json               # machine-readable sweep
+ctest -R "m2_resnet|resnet_regression"           # CI smoke test + regression check
 ```

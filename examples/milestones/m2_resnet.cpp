@@ -52,6 +52,7 @@ struct Row {
     bool dot_ok = true;   // false if a requested --dot write failed
     float max_err = 0.0f;
     RunStats stats;
+    ResNet18Spec spec;    // the config that produced this row (for --json)
 };
 
 Row run_spec(const std::string& name, const ResNet18Spec& spec,
@@ -73,6 +74,7 @@ Row run_spec(const std::string& name, const ResNet18Spec& spec,
     r.nodes = net.num_nodes;
     r.ops = result.stats.ops;
     r.stats = result.stats;
+    r.spec = spec;
     r.dot_ok = dot_ok;
     r.pass = result.output.size() == net.oracle.size();
     for (std::size_t i = 0; i < result.output.size() && i < net.oracle.size(); ++i)
@@ -284,11 +286,78 @@ int run_full() {
     return rows.front().pass ? 0 : 1;
 }
 
+// The default scaled sweep: base, [2,2,2,2] depth, wider batch. dot_path (if set)
+// emits the base config's KernelGraph.
+std::vector<Row> build_sweep(const std::string& dot_path) {
+    std::vector<Row> rows;
+    ResNet18Spec base;
+    rows.push_back(run_spec("resnet18 (base)", base, dot_path));
+    ResNet18Spec deeper = base; deeper.blocks_per_stage = 2;   // [2,2,2,2]
+    rows.push_back(run_spec("resnet18 [2,2,2,2]", deeper, {}));
+    ResNet18Spec batch32 = base; batch32.batch = 32;
+    rows.push_back(run_spec("resnet18 (batch 32)", batch32, {}));
+    return rows;
+}
+
+// Machine-readable sweep results (for the regression baseline + external tooling).
+// The metrics are deterministic (fixed-seed synthetic weights), so integer fields
+// reproduce exactly run-to-run; floats to enough precision for a tolerance check.
+void emit_json(const std::vector<Row>& rows) {
+    std::cout << std::setprecision(9) << std::boolalpha;
+    std::cout << "{\n"
+                 "  \"name\": \"resnet18\",\n"
+                 "  \"description\": \"ResNet-18 on the CSP timing executor (deterministic scaled sweep)\",\n"
+                 "  \"clock_ghz\": " << kAssumedClockGHz << ",\n"
+                 "  \"peak_gflops\": " << kPeakGflops << ",\n"
+                 "  \"ext_bw_gbs\": " << kExtBwGbs << ",\n"
+                 "  \"results\": [\n";
+    for (std::size_t i = 0; i < rows.size(); ++i) {
+        const Row& r = rows[i];
+        const RunStats& s = r.stats;
+        const ResNet18Spec& sp = r.spec;
+        std::cout << "    {\n"
+                     "      \"name\": \"" << r.name << "\",\n"
+                     "      \"config\": {\"batch\": " << sp.batch
+                  << ", \"in_channels\": " << sp.in_channels
+                  << ", \"height\": " << sp.height << ", \"width\": " << sp.width
+                  << ", \"stage_channels\": [";
+        for (std::size_t c = 0; c < sp.stage_channels.size(); ++c)
+            std::cout << (c ? "," : "") << sp.stage_channels[c];
+        std::cout << "], \"blocks_per_stage\": " << sp.blocks_per_stage
+                  << ", \"num_classes\": " << sp.num_classes
+                  << ", \"tile\": " << sp.tile << "},\n"
+                     "      \"timing\": {\"cycles\": " << s.total_cycles
+                  << ", \"critical_path_cycles\": " << s.critical_path_cycles
+                  << ", \"ops\": " << s.ops << ", \"nodes\": " << r.nodes << "},\n"
+                     "      \"stalls\": {\"dma\": " << s.dma_stalls
+                  << ", \"block_mover\": " << s.bm_stalls
+                  << ", \"streamer\": " << s.str_stalls << "},\n"
+                     "      \"throughput\": {\"tiles_loaded\": " << s.tiles_loaded
+                  << ", \"tiles_moved\": " << s.tiles_moved
+                  << ", \"tiles_fed\": " << s.tiles_fed
+                  << ", \"bytes_loaded\": " << s.bytes_loaded
+                  << ", \"bytes_stored\": " << s.bytes_stored << "},\n"
+                     "      \"utilization\": {\"dma\": " << s.dma_utilization()
+                  << ", \"block_mover\": " << s.bm_utilization()
+                  << ", \"streamer\": " << s.str_utilization() << "},\n"
+                     "      \"compute\": {\"macs\": " << s.total_macs
+                  << ", \"gflops\": " << s.achieved_gflops(kAssumedClockGHz)
+                  << ", \"peak_efficiency\": " << s.compute_efficiency(kPeakFlopsPerCycle)
+                  << ", \"arithmetic_intensity\": " << s.arithmetic_intensity()
+                  << ", \"roofline_efficiency\": "
+                  << s.roofline_efficiency(kPeakGflops, kExtBwGbs, kAssumedClockGHz) << "},\n"
+                     "      \"validation\": {\"max_err\": " << r.max_err
+                  << ", \"pass\": " << r.pass << "}\n"
+                     "    }" << (i + 1 < rows.size() ? "," : "") << "\n";
+    }
+    std::cout << "  ]\n}\n" << std::defaultfloat << std::noboolalpha;
+}
+
 } // namespace
 
 int main(int argc, char* argv[]) {
     std::string dot_path;
-    bool occupancy = false, full = false;
+    bool occupancy = false, full = false, json = false;
     for (int i = 1; i < argc; ++i) {
         if (std::strcmp(argv[i], "--dot") == 0 && i + 1 < argc) {
             dot_path = argv[++i];
@@ -296,22 +365,30 @@ int main(int argc, char* argv[]) {
             occupancy = true;
         } else if (std::strcmp(argv[i], "--full") == 0) {
             full = true;
+        } else if (std::strcmp(argv[i], "--json") == 0) {
+            json = true;
         } else {
-            std::cout << "Usage: " << argv[0] << " [--dot FILE | --occupancy | --full]\n";
+            std::cout << "Usage: " << argv[0]
+                      << " [--dot FILE | --occupancy | --full | --json]\n";
             return std::strcmp(argv[i], "--help") == 0 ? 0 : 1;
         }
     }
 
-    // --occupancy and --full are focused modes that do not build the whole-network
-    // graph the way the default sweep does, so --dot has nothing to emit alongside
-    // them; reject the combination rather than silently ignore --dot.
-    if (occupancy || full) {
+    // --json emits ONLY the machine-readable sweep (for the regression baseline);
+    // it and the other focused modes do not pair with --dot.
+    if (occupancy || full || json) {
         if (!dot_path.empty()) {
-            std::cerr << "error: --" << (occupancy ? "occupancy" : "full")
+            std::cerr << "error: --" << (occupancy ? "occupancy" : full ? "full" : "json")
                       << " and --dot are mutually exclusive\n";
             return 2;
         }
-        return occupancy ? run_occupancy() : run_full();
+        if (occupancy) return run_occupancy();
+        if (full) return run_full();
+        const auto rows = build_sweep({});
+        emit_json(rows);
+        bool pass = true;
+        for (const auto& r : rows) pass = pass && r.pass;
+        return pass ? 0 : 1;
     }
 
     std::cout << "\n"
@@ -322,18 +399,7 @@ int main(int argc, char* argv[]) {
         "FC); outputs are validated elementwise against a host oracle.\n"
         "======================================================================\n\n";
 
-    std::vector<Row> rows;
-
-    // Default scaled demo, plus two sweeps: wider batch, and deeper channels.
-    ResNet18Spec base;                                   // batch 16, 16ch 8x8
-    rows.push_back(run_spec("resnet18 (base)", base, dot_path));
-
-    ResNet18Spec deeper = base; deeper.blocks_per_stage = 2;   // [2,2,2,2]
-    rows.push_back(run_spec("resnet18 [2,2,2,2]", deeper, {}));
-
-    ResNet18Spec batch32 = base; batch32.batch = 32;
-    rows.push_back(run_spec("resnet18 (batch 32)", batch32, {}));
-
+    const std::vector<Row> rows = build_sweep(dot_path);
     print_all_tables(rows);
 
     bool all_pass = true;

@@ -1,0 +1,165 @@
+{
+  "name": "resnet18",
+  "description": "ResNet-18 on the CSP timing executor (deterministic scaled sweep)",
+  "clock_ghz": 1,
+  "peak_gflops": 512,
+  "ext_bw_gbs": 64,
+  "results": [
+    {
+      "name": "resnet18 (base)",
+      "config": {
+        "batch": 16,
+        "in_channels": 16,
+        "height": 4,
+        "width": 4,
+        "stage_channels": [
+          16,
+          16,
+          16,
+          16
+        ],
+        "blocks_per_stage": 1,
+        "num_classes": 16,
+        "tile": 16
+      },
+      "timing": {
+        "cycles": 39881,
+        "critical_path_cycles": 39119,
+        "ops": 22,
+        "nodes": 39
+      },
+      "stalls": {
+        "dma": 7016,
+        "block_mover": 99797,
+        "streamer": 26511
+      },
+      "throughput": {
+        "tiles_loaded": 1805,
+        "tiles_moved": 1438,
+        "tiles_fed": 1438,
+        "bytes_loaded": 738304,
+        "bytes_stored": 114688
+      },
+      "utilization": {
+        "dma": 0.846092124,
+        "block_mover": 0.141069682,
+        "streamer": 0.106893007
+      },
+      "compute": {
+        "macs": 2240512,
+        "gflops": 112.359871,
+        "peak_efficiency": 0.219452872,
+        "arithmetic_intensity": 5.25330132,
+        "roofline_efficiency": 0.334194228
+      },
+      "validation": {
+        "max_err": 5.96046448e-08,
+        "pass": true
+      }
+    },
+    {
+      "name": "resnet18 [2,2,2,2]",
+      "config": {
+        "batch": 16,
+        "in_channels": 16,
+        "height": 4,
+        "width": 4,
+        "stage_channels": [
+          16,
+          16,
+          16,
+          16
+        ],
+        "blocks_per_stage": 2,
+        "num_classes": 16,
+        "tile": 16
+      },
+      "timing": {
+        "cycles": 51469,
+        "critical_path_cycles": 50707,
+        "ops": 38,
+        "nodes": 67
+      },
+      "stalls": {
+        "dma": 9984,
+        "block_mover": 108557,
+        "streamer": 29951
+      },
+      "throughput": {
+        "tiles_loaded": 2773,
+        "tiles_moved": 2318,
+        "tiles_fed": 2318,
+        "bytes_loaded": 1307648,
+        "bytes_stored": 204800
+      },
+      "utilization": {
+        "dma": 0.77901261,
+        "block_mover": 0.184382832,
+        "streamer": 0.139248868
+      },
+      "compute": {
+        "macs": 3862528,
+        "gflops": 150.091434,
+        "peak_efficiency": 0.293147331,
+        "arithmetic_intensity": 5.10765064,
+        "roofline_efficiency": 0.459150168
+      },
+      "validation": {
+        "max_err": 5.96046448e-08,
+        "pass": true
+      }
+    },
+    {
+      "name": "resnet18 (batch 32)",
+      "config": {
+        "batch": 32,
+        "in_channels": 16,
+        "height": 4,
+        "width": 4,
+        "stage_channels": [
+          16,
+          16,
+          16,
+          16
+        ],
+        "blocks_per_stage": 1,
+        "num_classes": 16,
+        "tile": 16
+      },
+      "timing": {
+        "cycles": 72169,
+        "critical_path_cycles": 71333,
+        "ops": 22,
+        "nodes": 39
+      },
+      "stalls": {
+        "dma": 16430,
+        "block_mover": 196470,
+        "streamer": 49551
+      },
+      "throughput": {
+        "tiles_loaded": 3610,
+        "tiles_moved": 2876,
+        "tiles_fed": 2876,
+        "bytes_loaded": 1389568,
+        "bytes_stored": 229376
+      },
+      "utilization": {
+        "dma": 0.923235738,
+        "block_mover": 0.148845072,
+        "streamer": 0.118139367
+      },
+      "compute": {
+        "macs": 4481024,
+        "gflops": 124.181408,
+        "peak_efficiency": 0.242541812,
+        "arithmetic_intensity": 5.53573688,
+        "roofline_efficiency": 0.350510607
+      },
+      "validation": {
+        "max_err": 5.96046448e-08,
+        "pass": true
+      }
+    }
+  ]
+}
