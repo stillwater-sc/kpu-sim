@@ -202,13 +202,20 @@ int main(int argc, char* argv[]) {
         } else if (std::strcmp(argv[i], "--occupancy") == 0) {
             occupancy = true;
         } else {
-            std::cout << "Usage: " << argv[0] << " [--dot FILE] [--occupancy]\n";
+            std::cout << "Usage: " << argv[0] << " [--dot FILE | --occupancy]\n";
             return std::strcmp(argv[i], "--help") == 0 ? 0 : 1;
         }
     }
 
-    // Occupancy timeline is a focused debug view of the buffer hierarchy.
-    if (occupancy) return run_occupancy();
+    // Occupancy timeline is a focused debug view of the buffer hierarchy; it does
+    // not build the whole-network graph, so --dot has nothing to emit alongside it.
+    if (occupancy) {
+        if (!dot_path.empty()) {
+            std::cerr << "error: --occupancy and --dot are mutually exclusive\n";
+            return 2;
+        }
+        return run_occupancy();
+    }
 
     std::cout << "\n"
         "======================================================================\n"
