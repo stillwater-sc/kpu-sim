@@ -29,6 +29,22 @@ if(KPU_BUILD_TESTS)
     set_tests_properties(m2_resnet PROPERTIES
         LABELS "timing;resnet;milestone;v0.9"
     )
+
+    # ResNet benchmark regression: diff `m2_resnet --json` against the committed
+    # deterministic baseline (integer metrics exact, floats within tolerance).
+    # Tracks cycles / utilization / compute metrics over time in CI. Skipped if no
+    # Python 3 interpreter is available.
+    find_package(Python3 COMPONENTS Interpreter QUIET)
+    if(Python3_Interpreter_FOUND)
+        add_test(NAME resnet_regression COMMAND
+            ${Python3_EXECUTABLE}
+            ${CMAKE_SOURCE_DIR}/scripts/resnet_regression_check.py check
+            --binary $<TARGET_FILE:m2_resnet>
+            --baseline ${CMAKE_SOURCE_DIR}/tests/benchmarks/resnet_baseline.json)
+        set_tests_properties(resnet_regression PROPERTIES
+            LABELS "timing;resnet;benchmark;regression"
+        )
+    endif()
 endif()
 
 # M3: MobileNetV2 demo + benchmark (issue #131)

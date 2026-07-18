@@ -20,7 +20,9 @@ is memory-bound. The demo prints a "utilization" table and a "compute" table,
 `--full` runs a channel-growing `[2,2,2,2]` config offline to confirm the findings
 survive realistic scale (§6). A "concurrency" table reports the idealized
 branch-overlap critical path — for ResNet the headroom is ≤ 2%, so the
-sequential-node execution model costs almost nothing (§6).
+sequential-node execution model costs almost nothing (§6). `--json` exports the
+sweep, and a committed baseline + the `resnet_regression` ctest track every metric
+against drift in CI (§6).
 
 ---
 
@@ -169,8 +171,16 @@ dot -Tpng resnet18.dot -o resnet18.png     # optional, needs graphviz
 # Representative-scale offline run: channel growth + [2,2,2,2] depth (~50 s)
 ./build/examples/milestones/m2_resnet --full
 
-# CI smoke test (default scaled sweep only; --full/--occupancy are not in CI)
-ctest -R m2_resnet
+# Machine-readable sweep (for the regression baseline + external tooling)
+./build/examples/milestones/m2_resnet --json
+
+# CI smoke test + regression check (default sweep; --full/--occupancy are not in CI)
+ctest -R "m2_resnet|resnet_regression"
+
+# Regenerate the committed baseline after an intentional timing change
+python3 scripts/resnet_regression_check.py generate \
+  --binary ./build/examples/milestones/m2_resnet \
+  --baseline tests/benchmarks/resnet_baseline.json
 ```
 
 To sweep configurations beyond the three built-in rows, add rows to the sweep
@@ -414,6 +424,28 @@ the only one that matters. (The model is validated in
 `test_resnet_utilization.cpp`: a single-node graph is a chain, `critCyc == seqCyc`;
 the ResNet graph has branches, `critCyc < seqCyc`.)
 
+### JSON export + CI regression tracking
+
+`m2_resnet --json` emits the sweep as machine-readable JSON — per config: `config`,
+`timing` (cycles, critical path, ops, nodes), `stalls`, `throughput` (tiles/bytes),
+`utilization`, `compute` (macs, GFLOP/s, efficiencies, AI), `validation`. The sweep
+is **deterministic** (fixed-seed synthetic weights), so integer metrics reproduce
+exactly run-to-run and across platforms (integer schedule logic); the derived floats
+are IEEE-deterministic to well within `1e-6`.
+
+That determinism makes a tight regression check possible.
+`tests/benchmarks/resnet_baseline.json` is the committed snapshot;
+`scripts/resnet_regression_check.py check --binary <m2_resnet> --baseline <file>`
+diffs a fresh run against it — **integer metrics exact, floats within `1e-6`** — and
+exits non-zero on any drift. It is wired as the **`resnet_regression` ctest**, so it
+runs in the standard multi-platform CI on every PR (a ctest rather than a graft into
+the matmul-specific `benchmark-regression` workflow: it gets all-platform coverage
+on every change and avoids that workflow's artifact-baseline machinery). `max_err`
+is excluded from the diff — it is the one non-deterministic field (fp reduction
+order / FMA differ across compilers); correctness is enforced separately by the
+`m2_resnet` PASS check. If a change intentionally moves the numbers, regenerate:
+`resnet_regression_check.py generate ...`.
+
 ---
 
 ## 7. Research roadmap
@@ -444,10 +476,18 @@ Ordered by dependency:
    assumption costs almost nothing and true concurrent multi-op execution (a large
    executor rewrite) is **not worth building** for this workload. The DMA-bandwidth
    lever remains the only one that matters.
-6. **JSON output + regression baseline** — emit the same schema as
-   `tests/benchmarks/baselines/baseline.json` and add ResNet to the
-   `benchmark-regression` workflow so utilization is tracked over time. **Now the top
-   open task.**
+6. ~~**JSON output + regression baseline**~~ — **done** (§6): `m2_resnet --json`
+   emits the sweep as structured JSON; a committed baseline
+   (`tests/benchmarks/resnet_baseline.json`) + `scripts/resnet_regression_check.py`
+   are wired as the `resnet_regression` ctest, so every metric is diffed against the
+   baseline on every CI run (all platforms). Deterministic integer metrics must match
+   exactly; floats within `1e-6`.
+
+**All roadmap items (1–6) are complete.** Open follow-ons carried in the items above:
+a true full-resolution run (needs a native large-K/grouped schedule), a per-layer AI
+breakdown, and — only if a non-ResNet workload ever motivates it — real concurrent
+multi-op execution. For ResNet the study's conclusion is settled and triangulated
+from five angles: **the workload is DRAM-bandwidth-bound; nothing else binds.**
 
 ---
 
@@ -464,4 +504,7 @@ Ordered by dependency:
 | Milestone writeup | `docs/milestones/M2_resnet.md` |
 | Design plan | `docs/plans/m2_resnet_dfg.md` |
 | Validation tests | `tests/timing/test_m2_resnet*.cpp` |
+| Metric + concurrency tests | `tests/timing/test_resnet_utilization.cpp` |
+| Regression baseline | `tests/benchmarks/resnet_baseline.json` |
+| Regression check script | `scripts/resnet_regression_check.py` |
 | Matmul benchmark harness (utilization reference) | `tools/benchmark/kpu-benchmark/` |

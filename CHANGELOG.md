@@ -9,6 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **ResNet benchmark JSON export + CI regression tracking.** `m2_resnet --json`
+  emits the deterministic sweep as structured JSON (config, timing, stalls,
+  throughput, utilization, compute). A committed baseline
+  (`tests/benchmarks/resnet_baseline.json`) plus
+  `scripts/resnet_regression_check.py` (generate/check) are wired as the
+  `resnet_regression` ctest, so every ResNet metric is diffed against the baseline on
+  every multi-platform CI run — integer metrics exact (deterministic schedule logic),
+  floats within `1e-6`. `max_err` is excluded (fp reduction order differs across
+  compilers; correctness is enforced by the `m2_resnet` PASS check). A ctest rather
+  than a graft into the matmul-specific `benchmark-regression` workflow, for
+  all-platform coverage on every change. Sweep construction refactored into a shared
+  `build_sweep` helper.
+
 - **Concurrency-headroom (branch-overlap) analysis in the ResNet benchmark.**
   `GraphCspExecutor` now records each executed node's cycle cost during the walk and
   computes the DAG **critical path** — `finish[n] = cost[n] + max over predecessors
