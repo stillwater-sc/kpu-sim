@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Buffer-occupancy timeline for the ResNet benchmark (`m2_resnet --occupancy`).**
+  `run_conv2d_fused` gains an optional per-cycle `CycleObserver` (empty by default,
+  so the normal path is untouched); the demo drives a representative 1×1 projection
+  conv one cycle at a time and renders the `TileTracker` **L3 | L2 | L1/array**
+  occupancy bands plus **peak simultaneous occupancy per level** vs capacity. The
+  peaks sit far below capacity (L3 4/32, L2 2/64), so buffers are not the binding
+  resource at this scale — corroborating the DMA-bandwidth-bound finding from the
+  utilization and compute-efficiency views. `test_resnet_utilization.cpp` adds a
+  case asserting the observer fires and does not perturb the result.
+
 - **Compute FLOP efficiency / roofline for the ResNet benchmark.** During the graph
   walk `GraphCspExecutor` accumulates `RunStats::total_macs` from the GEMM ops
   (`conv.gemm_M·gemm_N·gemm_K`, which handles `groups`/depthwise, plus

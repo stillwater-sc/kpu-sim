@@ -118,5 +118,6 @@ reaching only ~22–29% of compute peak.
 cmake --build --preset release --target m2_resnet
 ./build/examples/milestones/m2_resnet            # benchmark table + validation
 ./build/examples/milestones/m2_resnet --dot resnet18.dot   # + KernelGraph
+./build/examples/milestones/m2_resnet --occupancy          # buffer-occupancy timeline
 ctest -R m2_resnet                               # CI smoke test
 ```
