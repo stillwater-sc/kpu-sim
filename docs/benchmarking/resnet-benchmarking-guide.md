@@ -239,13 +239,20 @@ transfer actually occupied it that cycle:
   (`in_flight_.has_value()`). Zero-latency dedup moves and the drain compute-wait do
   **not** count.
 
-`collect_statistics` sums these across the N parallel components and divides by N,
-so `busy` is the mean active cycles per component and `utilization = busy /
+`collect_statistics` sums these across the N parallel components and divides by N
+(in floating point, so the per-component mean is exact — not integer-floored), so
+`busy` is the mean active cycles per component and `utilization = busy /
 total_cycles ∈ [0,1]` is the mean fraction of time a component of that type was
-transferring. This is a genuine activity measurement — the three per-cycle outcomes
-(WORKING / STALLED / IDLE) are distinguished, and only WORKING counts. (The former
-`cycles − stalls/N` heuristic counted IDLE as busy, inflating and mis-ranking the
-movers; a directly-measured counter was follow-on 1b, now done.)
+transferring. Only WORKING cycles count — the former `cycles − stalls/N` heuristic
+counted IDLE as busy, inflating and mis-ranking the movers; a directly-measured
+counter was follow-on 1b, now done.
+
+For the single-transfer **BlockMover/Streamer** the per-cycle outcome is exactly one
+of WORKING / STALLED / IDLE (`active` and `stall` cannot both fire in a tick). The
+**DMA holds multiple requests**, so a tick can *both* count active (one request
+`SUBMITTED`) *and* record a stall (another request waiting on an L3 credit) — for
+the DMA, `active` and `stall` may overlap in a cycle. `active` still never exceeds
+`total_cycles` (one increment per tick), so utilization stays in `[0,1]`.
 
 **Stall columns are still un-normalized** (summed over all N and all ops), which is
 why `bmStl` (99797, ~4 movers) exceeds `cycles` (39881). Utilization normalizes;

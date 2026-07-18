@@ -59,10 +59,12 @@ struct RunStats {
     Cycle str_stalls = 0;
     std::size_t ops = 0;
 
-    // Movement-fabric activity (summed per-op).
-    Cycle dma_busy = 0;
-    Cycle bm_busy = 0;
-    Cycle str_busy = 0;
+    // Movement-fabric activity (summed per-op). busy is fractional: each op's
+    // per-component mean active cycles is exact (not integer-floored), so the
+    // whole-network sum carries that precision.
+    double dma_busy = 0.0;
+    double bm_busy = 0.0;
+    double str_busy = 0.0;
     std::size_t tiles_loaded = 0;
     std::size_t tiles_stored = 0;
     std::size_t tiles_moved = 0;

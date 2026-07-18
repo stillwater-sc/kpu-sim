@@ -664,6 +664,38 @@ TEST_CASE("ConcurrentTimingExecutor utilization", "[timing][executor]") {
     REQUIRE(stats.str_utilization() <= 1.0);
 }
 
+TEST_CASE("ConcurrentTimingExecutor busy cycles are a fractional (unfloored) mean",
+          "[timing][executor][utilization]") {
+    // A single move routes to exactly one BlockMover for L cycles. With one mover
+    // the reported per-component-mean busy IS L; with three movers the other two
+    // are idle, so the raw active sum is still L and the mean must be the EXACT
+    // L / 3. Hence busy(3 movers) * 3 == busy(1 mover). A regression to integer
+    // per-component division would floor L/3 and break this whenever 3 does not
+    // divide L (the exact case the fractional-precision fix protects against).
+    auto busy_for = [](size_t n_bm) {
+        auto cfg = default_config();
+        cfg.num_block_movers = n_bm;
+        ConcurrentTimingExecutor exec(cfg);
+        // 512-byte tile -> L = 14 move cycles, deliberately NOT divisible by 3 so
+        // the fractional mean L/3 differs from floor(L/3).
+        auto tile = make_tile(MatrixID::A, 0, 0, /*tk*/ 0, /*size_bytes*/ 512);
+        exec.schedule_load(tile);
+        exec.schedule_move(tile);
+        exec.schedule_feed(tile);
+        exec.run();
+        return exec.get_statistics().bm_busy_cycles;  // per-component mean (double)
+    };
+
+    const double busy1 = busy_for(1);   // == L (single mover, no division)
+    const double busy3 = busy_for(3);   // == L / 3, exact fractional mean
+    REQUIRE(busy1 > 0.0);
+    // Guard the test itself: L must not be divisible by 3, or floor == exact and
+    // the check below could not distinguish a regression.
+    REQUIRE(static_cast<long>(busy1) % 3 != 0);
+    REQUIRE(busy1 == Catch::Approx(static_cast<double>(static_cast<long>(busy1))));  // integer
+    REQUIRE(busy3 * 3.0 == Catch::Approx(busy1));   // exact mean, not floor(L/3)
+}
+
 // ============================================================================
 // Step-by-Step Execution Tests
 // ============================================================================

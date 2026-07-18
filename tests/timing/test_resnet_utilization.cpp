@@ -43,15 +43,16 @@ RunStats run_resnet(const ResNet18Spec& sp) {
     return exec.run(g, net.input, net.node_data, /*T*/16).stats;
 }
 
-// Directly measured active cycles: 0 < busy <= cycles (util in (0,1]), per mover.
-void check_mover(const char* who, Cycle busy, Cycle total, double util) {
+// Directly measured active cycles (fractional per-component mean): 0 < busy <=
+// cycles (util in (0,1]), per mover.
+void check_mover(const char* who, double busy, Cycle total, double util) {
     INFO(who << ": busy=" << busy << " total=" << total << " util=" << util);
-    REQUIRE(busy > 0);                         // active counter wired into tick()
-    REQUIRE(busy <= total);                    // utilization <= 1 (no over-count)
+    REQUIRE(busy > 0.0);                        // active counter wired into tick()
+    REQUIRE(busy <= static_cast<double>(total)); // utilization <= 1 (no over-count)
     REQUIRE(util >= 0.0);
     REQUIRE(util <= 1.0);
     REQUIRE_THAT(util, Catch::Matchers::WithinAbs(
-        total > 0 ? static_cast<double>(busy) / static_cast<double>(total) : 0.0, 1e-12));
+        total > 0 ? busy / static_cast<double>(total) : 0.0, 1e-12));
 }
 
 } // namespace
