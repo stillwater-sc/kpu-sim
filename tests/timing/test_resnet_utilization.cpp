@@ -103,6 +103,35 @@ TEST_CASE("ResNet RunStats utilization is directly measured and consistent",
     }
 }
 
+TEST_CASE("run_conv2d_fused cycle observer fires without perturbing results",
+          "[timing][resnet][occupancy]") {
+    // The observer backs the demo's --occupancy TileTracker timeline. It must be
+    // invoked each cycle and must not change execution (same output, same cycles).
+    sw::kpu::timing::schedule::Conv2DGeometry geom;
+    geom.N = 2; geom.C_in = 32; geom.H_in = 4; geom.W_in = 4;
+    geom.C_out = 16; geom.Kh = 1; geom.Kw = 1;
+    const std::vector<float> input(geom.input_elems(), 0.1f);
+    const std::vector<float> filter(
+        static_cast<std::size_t>(geom.C_out) * geom.C_in * geom.Kh * geom.Kw, 0.01f);
+
+    RunStats s_ref;
+    const auto y_ref = run_conv2d_fused(input, filter, geom, nullptr, {}, false, 16, s_ref);
+
+    std::size_t ticks = 0, peak_l3 = 0;
+    RunStats s_obs;
+    const auto y_obs = run_conv2d_fused(
+        input, filter, geom, nullptr, {}, false, 16, s_obs,
+        [&](const sw::kpu::timing::ConcurrentTimingExecutor& e) {
+            ++ticks;
+            peak_l3 = std::max(peak_l3, e.tiles_at(sw::kpu::timing::MemoryLevel::L3).size());
+        });
+
+    REQUIRE(ticks > 0);                      // observer actually ran
+    REQUIRE(peak_l3 > 0);                     // tiles were staged in L3
+    REQUIRE(y_obs == y_ref);                  // observation must not perturb results
+    REQUIRE(s_obs.total_cycles == s_ref.total_cycles);
+}
+
 TEST_CASE("GraphCspExecutor counts GEMM MACs from the FC matmul",
           "[timing][resnet][flops]") {
     // A single matmul node: MACs must equal M*N*K exactly (the FC hook), and the

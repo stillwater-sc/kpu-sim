@@ -15,7 +15,8 @@ transfer occupied it) — not the earlier `cycles − stalls/N` heuristic — so
 cycles are excluded and the numbers are a true activity fraction. It also reports
 **compute FLOP efficiency** (GEMM MACs vs a 16×16 PE-array peak, arithmetic
 intensity, and roofline position — §6), which independently confirms the workload
-is memory-bound. The demo prints a "utilization" table and a "compute" table.
+is memory-bound. The demo prints a "utilization" table and a "compute" table, and
+`--occupancy` renders a `TileTracker` L3|L2|L1/array buffer-occupancy timeline.
 
 ---
 
@@ -157,6 +158,9 @@ cmake --build --preset release --target m2_resnet
 # Emit the KernelGraph for inspection
 ./build/examples/milestones/m2_resnet --dot resnet18.dot
 dot -Tpng resnet18.dot -o resnet18.png     # optional, needs graphviz
+
+# Buffer-occupancy timeline (L3|L2|L1/array bands + peak occupancy per level)
+./build/examples/milestones/m2_resnet --occupancy
 
 # CI smoke test
 ctest -R m2_resnet
@@ -326,6 +330,27 @@ Follow-ons: a full-resolution ResNet (higher AI, likely still memory-bound at th
 buffer sizing) and a per-layer AI breakdown to find which convs are compute- vs
 memory-bound.
 
+### Occupancy timeline — which buffer level saturates
+
+`m2_resnet --occupancy` runs a representative layer (a 1×1 projection conv) one
+executor cycle at a time and renders, via `TileTracker`, the horizontal
+**L3 | L2 | L1/array** occupancy bands — one row per occupancy *transition* (idle
+cycles are elided), `*` marking a tile in the compute array. You watch A/B tiles
+arrive at L3, move to L2, feed L1/array, the computes produce C tiles, and those
+drain back out to DRAM — all in credit-managed **buffers** (arrive / resident /
+credit-returned, never hit/miss/evict). It closes with a **peak simultaneous
+occupancy** line per level against that level's capacity:
+
+```text
+  peak simultaneous occupancy:  L3 4/32   L2 2/64   L1 6   array 6
+```
+
+The headline: **no buffer level saturates** — peak L3/L2 occupancy sits far below
+the credit counts. So buffers are *not* the binding resource at this scale; the
+constraint is DMA throughput, exactly the §5 diagnosis from the other two angles. A
+peak *at* capacity would flag that level as the binding buffer (the first place to
+add credits) — a check to re-run once the network is scaled up (task 4).
+
 ---
 
 ## 7. Research roadmap
@@ -340,11 +365,13 @@ Ordered by dependency:
 2. ~~**Compute FLOP efficiency / roofline position**~~ — **done** (§6): the demo
    prints MFLOP, GFLOP/s, peak efficiency, arithmetic intensity, and roofline
    position; the network is memory-bound (AI ≈ 5.2 < 8), corroborating §5.
-3. **Occupancy timeline** — wire `TileTracker` into the demo (behind a flag) to see
-   which buffer level saturates during the forward pass. **Now the top open task.**
+3. ~~**Occupancy timeline**~~ — **done** (§6): `m2_resnet --occupancy` renders the
+   `TileTracker` L3|L2|L1/array bands for a representative conv plus peak occupancy
+   per level. Peaks sit far below capacity (L3 4/32, L2 2/64) — buffers are **not**
+   the bottleneck, corroborating the DMA-bandwidth-bound finding.
 4. **Full-scale ResNet-18** — larger spatial dims + `[2,2,2,2]` + channel growth as
-   a benchmark spec (slow; run offline, not in CI). Needed before any number is
-   quoted as representative.
+   a benchmark spec (slow; run offline, not in CI). **Now the top open task** —
+   needed before any number is quoted as representative.
 5. **Concurrent branch scheduling** — the sequential-node assumption caps
    achievable utilization; overlapping execution-level-independent branches is the
    architectural lever the utilization study will eventually motivate.

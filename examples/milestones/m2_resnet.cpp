@@ -23,13 +23,15 @@
  * reflect within-op pipeline activity, not cross-branch overlap - a relative
  * metric for comparing configs. See docs/benchmarking/resnet-benchmarking-guide.md.
  *
- * Usage: m2_resnet [--dot FILE]
+ * Usage: m2_resnet [--dot FILE] [--occupancy]
  * Writeup: docs/milestones/M2_resnet.md
  */
 
 #include <sw/kpu/kernel_graph.hpp>
 #include <sw/kpu/timing/graph/resnet18.hpp>
+#include <sw/kpu/timing/tile_tracker.hpp>
 
+#include <algorithm>
 #include <cmath>
 #include <cstring>
 #include <fstream>
@@ -39,6 +41,7 @@
 #include <vector>
 
 using namespace sw::kpu::timing::graph;
+using namespace sw::kpu::timing;   // ConcurrentTimingExecutor, TileTracker, MemoryLevel
 
 namespace {
 
@@ -134,18 +137,78 @@ void print_compute_row(const Row& r) {
               << "\n" << std::defaultfloat;
 }
 
+// Occupancy timeline: run one representative ResNet conv (the stem im2col GEMM)
+// cycle-by-cycle and render the L3 | L2 | L1/array tile bands via TileTracker,
+// plus the peak simultaneous occupancy per level - i.e. which level saturates.
+int run_occupancy() {
+    // A small but representative ResNet layer: a 1x1 projection conv (batch 2,
+    // 32->16 channels, 4x4), im2col GEMM M=32 x N=16 x K=32, tiled 16^3 - few
+    // enough tiles to read the L3->L2->L1->array flow, while still exercising the
+    // full credit-managed hierarchy.
+    Conv2DGeometry geom;
+    geom.N = 2; geom.C_in = 32; geom.H_in = 4; geom.W_in = 4;
+    geom.C_out = 16; geom.Kh = 1; geom.Kw = 1;
+    geom.stride_h = geom.stride_w = 1; geom.pad_h = geom.pad_w = 0;
+    const Size T = 16;
+
+    // Values are irrelevant to occupancy; fill with constants.
+    std::vector<float> input(geom.input_elems(), 0.1f);
+    std::vector<float> filter(
+        static_cast<std::size_t>(geom.C_out) * geom.C_in * geom.Kh * geom.Kw, 0.01f);
+
+    TileTracker tracker;
+    std::size_t pk_l3 = 0, pk_l2 = 0, pk_l1 = 0, pk_arr = 0;
+    auto observe = [&](const ConcurrentTimingExecutor& e) {
+        tracker.observe(e);
+        pk_l3  = std::max(pk_l3,  e.tiles_at(MemoryLevel::L3).size());
+        pk_l2  = std::max(pk_l2,  e.tiles_at(MemoryLevel::L2).size());
+        pk_l1  = std::max(pk_l1,  e.tiles_at(MemoryLevel::L1).size());
+        pk_arr = std::max(pk_arr, e.tiles_at(MemoryLevel::COMPUTE).size());
+    };
+
+    RunStats stats;
+    (void)run_conv2d_fused(input, filter, geom, /*bn*/ nullptr, /*bias*/ {},
+                           /*relu*/ false, T, stats, observe);
+
+    const ConcurrentTimingExecutor::Config cap;   // capacities the runner used (defaults)
+    std::cout <<
+        "\n======================================================================\n"
+        "Occupancy timeline - 1x1 projection conv im2col GEMM (M=" << geom.M()
+        << " x N=" << geom.Ncols() << " x K=" << geom.K() << ", tile " << T << ")\n"
+        "L3 | L2 | L1/array tile bands, one row per occupancy transition ('*' = in\n"
+        "array). Credit-managed BUFFERS: tiles arrive, stay resident, return credit\n"
+        "- never hit/miss/evict.\n"
+        "======================================================================\n\n";
+    std::cout << tracker.log() << "\n";
+    std::cout << "  peak simultaneous occupancy:  L3 " << pk_l3 << "/" << cap.l3_buffer_count
+              << "   L2 " << pk_l2 << "/" << cap.l2_bank_count
+              << "   L1 " << pk_l1 << "   array " << pk_arr << "\n"
+              << "  (L3/L2 peaks are shown against their buffer/bank credit counts; a\n"
+              << "   peak at capacity means that level is the pipeline's binding buffer.)\n"
+              << "  total cycles " << stats.total_cycles << ", DMA util "
+              << std::fixed << std::setprecision(1) << 100.0 * stats.dma_utilization()
+              << "%\n" << std::defaultfloat;
+    return 0;
+}
+
 } // namespace
 
 int main(int argc, char* argv[]) {
     std::string dot_path;
+    bool occupancy = false;
     for (int i = 1; i < argc; ++i) {
         if (std::strcmp(argv[i], "--dot") == 0 && i + 1 < argc) {
             dot_path = argv[++i];
+        } else if (std::strcmp(argv[i], "--occupancy") == 0) {
+            occupancy = true;
         } else {
-            std::cout << "Usage: " << argv[0] << " [--dot FILE]\n";
+            std::cout << "Usage: " << argv[0] << " [--dot FILE] [--occupancy]\n";
             return std::strcmp(argv[i], "--help") == 0 ? 0 : 1;
         }
     }
+
+    // Occupancy timeline is a focused debug view of the buffer hierarchy.
+    if (occupancy) return run_occupancy();
 
     std::cout << "\n"
         "======================================================================\n"

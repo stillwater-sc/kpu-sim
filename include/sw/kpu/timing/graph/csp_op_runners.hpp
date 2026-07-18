@@ -33,6 +33,7 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <optional>
 #include <stdexcept>
 #include <vector>
@@ -41,6 +42,11 @@ namespace sw::kpu::timing::graph {
 
 using schedule::Conv2DGeometry;
 using schedule::BatchNormAffine;
+
+/// Optional per-cycle observer, invoked with the live executor after each step()
+/// (and once before the first). Used to drive a TileTracker occupancy timeline;
+/// empty by default so the normal execution path pays nothing.
+using CycleObserver = std::function<void(const ConcurrentTimingExecutor&)>;
 
 /// Accumulated CSP-execution stats across the ops of a graph run.
 ///
@@ -199,7 +205,8 @@ inline void accumulate(RunStats& s, const ConcurrentTimingExecutor& exec) {
 [[nodiscard]] inline std::vector<float>
 run_conv2d_fused(const std::vector<float>& input, const std::vector<float>& filter,
                  const Conv2DGeometry& geom, const BatchNormAffine* bn,
-                 const std::vector<float>& bias, bool relu, Size T, RunStats& stats) {
+                 const std::vector<float>& bias, bool relu, Size T, RunStats& stats,
+                 const CycleObserver& on_cycle = {}) {
     using schedule::MatMulScheduleGenerator;
     using MatrixID = sw::kpu::isa::MatrixID;
 
@@ -277,8 +284,11 @@ run_conv2d_fused(const std::vector<float>& input, const std::vector<float>& filt
             }
         }
     }
-    while (!exec.is_complete() && exec.current_cycle() < exec.config().max_cycles)
+    if (on_cycle) on_cycle(exec);
+    while (!exec.is_complete() && exec.current_cycle() < exec.config().max_cycles) {
         exec.step();
+        if (on_cycle) on_cycle(exec);
+    }
     if (!exec.is_complete())
         throw std::runtime_error("run_conv2d_fused: schedule did not complete");
     detail::accumulate(stats, exec);
