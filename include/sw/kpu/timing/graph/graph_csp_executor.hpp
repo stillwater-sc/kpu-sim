@@ -118,10 +118,12 @@ public:
 
         // --- topological execution --------------------------------------------
         std::size_t last = 0;
+        std::unordered_map<std::size_t, Cycle> node_cost;   // executed cycles per node
         for (auto id : g.get_execution_order()) {
-            if (consumed.count(id)) continue;
+            if (consumed.count(id)) continue;   // fused/folded: no execution, cost 0
             const auto& k = g.get_kernel(id);
             const NodeData* nd = data_or_null(node_data, id);
+            const Cycle cost_before = result.stats.total_cycles;
 
             switch (k.op_type()) {
                 case KernelOpType::CONV2D: {
@@ -257,7 +259,33 @@ public:
                 default:
                     throw std::runtime_error("GraphCspExecutor: unsupported kernel op type");
             }
+            node_cost[id] = result.stats.total_cycles - cost_before;
         }
+
+        // Idealized concurrent-branch-overlap latency: the DAG critical path with
+        // independent branches overlapping (finish[n] = cost[n] + max over
+        // predecessors of finish[p]). Consumed (fused/folded) nodes have cost 0,
+        // so they pass their producer's finish through to consumers unchanged. The
+        // ADD nodes' two incoming branches take a max (overlap), not a sum - that
+        // is exactly the residual skip vs. main-path overlap. Resource-unbounded,
+        // so an upper bound on what concurrent scheduling could buy.
+        {
+            std::unordered_map<std::size_t, Cycle> finish;
+            Cycle crit = 0;
+            for (auto id : g.get_execution_order()) {
+                Cycle pred_max = 0;
+                for (auto eidx : g.incoming_edges(id)) {
+                    auto it = finish.find(g.get_edge(eidx).from_node);
+                    if (it != finish.end()) pred_max = std::max(pred_max, it->second);
+                }
+                auto cit = node_cost.find(id);
+                const Cycle f = pred_max + (cit != node_cost.end() ? cit->second : 0);
+                finish[id] = f;
+                crit = std::max(crit, f);
+            }
+            result.stats.critical_path_cycles = crit;
+        }
+
         result.output = out.at(last);
         return result;
     }
