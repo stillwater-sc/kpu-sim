@@ -232,6 +232,24 @@ void print_all_tables(const std::vector<Row>& rows) {
                  "  roofEff = achieved/min(AI*bw, peak); bound = mem below the "
               << std::setprecision(0) << kRidgeAI << " FLOP/byte ridge, else cmp.\n"
               << std::defaultfloat;
+
+    // Concurrency headroom: sequential cycles vs the idealized branch-overlap
+    // critical path (upper bound on what concurrent branch scheduling could buy).
+    std::cout << "\n  " << std::left << std::setw(22) << "concurrency" << std::right
+              << std::setw(11) << "seqCyc" << std::setw(11) << "critCyc"
+              << std::setw(9) << "ovlp x" << "\n";
+    std::cout << "  " << std::string(51, '-') << "\n";
+    for (const auto& r : rows)
+        std::cout << "  " << std::left << std::setw(22) << r.name << std::right
+                  << std::setw(11) << r.stats.total_cycles
+                  << std::setw(11) << r.stats.critical_path_cycles
+                  << std::setw(9) << std::fixed << std::setprecision(2) << r.stats.overlap_speedup()
+                  << "\n" << std::defaultfloat;
+    std::cout << "\n  Nodes execute sequentially today; critCyc is the DAG critical"
+                 " path if\n  execution-level-independent branches (e.g. a residual's"
+                 " 1x1 projection\n  skip vs. its main path) overlapped with unbounded"
+                 " resources. ovlp = seqCyc/\n  critCyc is the resource-free UPPER"
+                 " bound on that speedup.\n";
 }
 
 // Full-scale offline run: realistic channel growth (64->512) + [2,2,2,2] depth +

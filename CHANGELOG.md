@@ -9,6 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Concurrency-headroom (branch-overlap) analysis in the ResNet benchmark.**
+  `GraphCspExecutor` now records each executed node's cycle cost during the walk and
+  computes the DAG **critical path** — `finish[n] = cost[n] + max over predecessors
+  of finish[p]`, so execution-level-independent branches (a residual's 1×1 projection
+  skip vs. its main path) overlap (a `max`, not a sum) with unbounded resources —
+  exposed as `RunStats::critical_path_cycles` and `overlap_speedup()`. The demo
+  prints a "concurrency" table (seqCyc / critCyc / ovlp×). Finding: **≤ 2%** — ResNet
+  is essentially a chain, so the sequential-node execution model costs almost nothing
+  and true concurrent multi-op execution is not worth building for this workload; the
+  DMA-bandwidth lever remains the only one that matters. It is an idealized
+  resource-free upper bound. `test_resnet_utilization.cpp` validates it: a single-node
+  graph is a chain (`critCyc == seqCyc`, speedup 1.0); the ResNet graph has branches
+  (`critCyc < seqCyc`).
+
 - **Representative-scale offline ResNet run (`m2_resnet --full`).** Runs one
   channel-growing config — batch 16, stem 16ch 8×8, stages `{16,32,64,128}×2` (true
   `[2,2,2,2]` depth with stride-2 downsampling + 1×1 projections) — through the same

@@ -18,7 +18,9 @@ intensity, and roofline position — §6), which independently confirms the work
 is memory-bound. The demo prints a "utilization" table and a "compute" table,
 `--occupancy` renders a `TileTracker` L3|L2|L1/array buffer-occupancy timeline, and
 `--full` runs a channel-growing `[2,2,2,2]` config offline to confirm the findings
-survive realistic scale (§6).
+survive realistic scale (§6). A "concurrency" table reports the idealized
+branch-overlap critical path — for ResNet the headroom is ≤ 2%, so the
+sequential-node execution model costs almost nothing (§6).
 
 ---
 
@@ -384,6 +386,34 @@ What scaling up changes — and what it doesn't:
   is K = 4608, hundreds of K-slices per output tile). `--full` trades absolute size
   for the *structure* that matters — growth + depth + downsampling.
 
+### Concurrency headroom — how much would branch overlap buy?
+
+Nodes execute strictly sequentially today (§3), so a fair question is how much the
+sequential-node assumption itself costs. The demo now answers it with an idealized
+**critical-path** model: give each executed node its measured cycle cost, then
+compute `finish[n] = cost[n] + max over predecessors of finish[p]` — so
+execution-level-independent branches (a residual's 1×1 projection skip vs. its main
+`conv→conv` path) *overlap* (a `max`, not a sum), with **unbounded resources**. The
+critical path is the resource-free **upper bound** on what concurrent branch
+scheduling could achieve:
+
+```text
+  concurrency          seqCyc   critCyc   ovlp x
+  resnet18 (base)       39881    39119     1.02
+  resnet18 [2,2,2,2]    51469    50707     1.02
+  resnet18 (batch 32)   72169    71333     1.01
+```
+
+The headline: **≤ 2%.** ResNet's DAG is essentially a chain — its only parallelism
+is the short 1×1 projection skips in the three downsampling blocks, and those convs
+are so cheap they hide almost entirely behind the main path even when *serial*. So
+the sequential-node assumption is **not** leaving meaningful performance on the
+table for this workload, and true concurrent multi-op execution (a large executor
+rewrite) is not worth building for ResNet — the DMA-bandwidth lever from §5 remains
+the only one that matters. (The model is validated in
+`test_resnet_utilization.cpp`: a single-node graph is a chain, `critCyc == seqCyc`;
+the ResNet graph has branches, `critCyc < seqCyc`.)
+
 ---
 
 ## 7. Research roadmap
@@ -408,13 +438,16 @@ Ordered by dependency:
    but it stays memory-bound and DMA-saturated — the diagnosis holds at scale.
    Remaining: a true full-resolution run (needs a native grouped/large-K schedule to
    be tractable) and a per-layer AI breakdown.
-5. **Concurrent branch scheduling** — the sequential-node assumption caps
-   achievable utilization; overlapping execution-level-independent branches is the
-   architectural lever the utilization study will eventually motivate. **Now the top
-   open task.**
+5. ~~**Concurrent branch scheduling (headroom analysis)**~~ — **done** (§6): the
+   demo prints the idealized branch-overlap critical path (`seqCyc`/`critCyc`/`ovlp`).
+   Finding: **≤ 2%** — ResNet's DAG is essentially a chain, so the sequential-node
+   assumption costs almost nothing and true concurrent multi-op execution (a large
+   executor rewrite) is **not worth building** for this workload. The DMA-bandwidth
+   lever remains the only one that matters.
 6. **JSON output + regression baseline** — emit the same schema as
    `tests/benchmarks/baselines/baseline.json` and add ResNet to the
-   `benchmark-regression` workflow so utilization is tracked over time.
+   `benchmark-regression` workflow so utilization is tracked over time. **Now the top
+   open task.**
 
 ---
 

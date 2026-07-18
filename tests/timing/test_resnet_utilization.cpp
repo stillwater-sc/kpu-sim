@@ -100,6 +100,15 @@ TEST_CASE("ResNet RunStats utilization is directly measured and consistent",
         REQUIRE(roof_eff > 0.0);
         REQUIRE(std::isfinite(roof_eff));
         REQUIRE(roof_eff <= 1.0 + 1e-9);              // cannot beat the roofline
+
+        // Concurrency headroom (idealized branch overlap). The critical path never
+        // exceeds the sequential total, and is strictly less for ResNet because the
+        // residual projection skips create some branch parallelism.
+        REQUIRE(st.critical_path_cycles > 0);
+        REQUIRE(st.critical_path_cycles <= st.total_cycles);
+        REQUIRE(st.critical_path_cycles < st.total_cycles);   // branches overlap
+        REQUIRE(st.overlap_speedup() > 1.0);
+        REQUIRE(st.overlap_speedup() <= static_cast<double>(st.total_cycles));
     }
 }
 
@@ -152,6 +161,11 @@ TEST_CASE("GraphCspExecutor counts GEMM MACs from the FC matmul",
     const std::uint64_t expected = static_cast<std::uint64_t>(M) * N * K;   // 24576
     REQUIRE(result.stats.total_macs == expected);
     REQUIRE(result.stats.total_flops() == Catch::Approx(2.0 * static_cast<double>(expected)));
+
+    // A single node is a chain: no independent branches, so the critical path
+    // equals the sequential total and the overlap speedup is exactly 1.0.
+    REQUIRE(result.stats.critical_path_cycles == result.stats.total_cycles);
+    REQUIRE(result.stats.overlap_speedup() == Catch::Approx(1.0));
 }
 
 TEST_CASE("RunStats effective bandwidth guards the clock argument",

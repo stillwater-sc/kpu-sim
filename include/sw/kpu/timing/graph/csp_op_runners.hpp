@@ -67,6 +67,12 @@ struct RunStats {
     Cycle str_stalls = 0;
     std::size_t ops = 0;
 
+    // Idealized concurrent-branch-overlap latency: the DAG critical path assuming
+    // execution-level-independent ops run concurrently with unbounded resources.
+    // <= total_cycles; equal when the graph is a chain. An upper bound on what
+    // concurrent branch scheduling could buy (ignores DMA/mover contention).
+    Cycle critical_path_cycles = 0;
+
     // Movement-fabric activity (summed per-op). busy is fractional: each op's
     // per-component mean active cycles is exact (not integer-floored), so the
     // whole-network sum carries that precision.
@@ -113,6 +119,15 @@ struct RunStats {
     // Conventions match the matmul benchmark harness (sw::benchmark::HardwareSpec):
     // 2 FLOPs per MAC, achieved GFLOP/s = FLOP/cycle * clock, peak/bandwidth
     // supplied by the caller (no PE-array peak lives in the timing config).
+
+    /// Best-case speedup from overlapping execution-level-independent branches
+    /// (resource-unconstrained upper bound): sequential cycles / critical path.
+    /// 1.0 for a chain graph; > 1 when independent branches could overlap.
+    [[nodiscard]] double overlap_speedup() const {
+        return critical_path_cycles
+            ? static_cast<double>(total_cycles) / static_cast<double>(critical_path_cycles)
+            : 1.0;
+    }
 
     /// Total floating-point operations (2 per MAC).
     [[nodiscard]] double total_flops() const { return 2.0 * static_cast<double>(total_macs); }
