@@ -15,8 +15,10 @@ transfer occupied it) — not the earlier `cycles − stalls/N` heuristic — so
 cycles are excluded and the numbers are a true activity fraction. It also reports
 **compute FLOP efficiency** (GEMM MACs vs a 16×16 PE-array peak, arithmetic
 intensity, and roofline position — §6), which independently confirms the workload
-is memory-bound. The demo prints a "utilization" table and a "compute" table, and
-`--occupancy` renders a `TileTracker` L3|L2|L1/array buffer-occupancy timeline.
+is memory-bound. The demo prints a "utilization" table and a "compute" table,
+`--occupancy` renders a `TileTracker` L3|L2|L1/array buffer-occupancy timeline, and
+`--full` runs a channel-growing `[2,2,2,2]` config offline to confirm the findings
+survive realistic scale (§6).
 
 ---
 
@@ -162,7 +164,10 @@ dot -Tpng resnet18.dot -o resnet18.png     # optional, needs graphviz
 # Buffer-occupancy timeline (L3|L2|L1/array bands + peak occupancy per level)
 ./build/examples/milestones/m2_resnet --occupancy
 
-# CI smoke test
+# Representative-scale offline run: channel growth + [2,2,2,2] depth (~50 s)
+./build/examples/milestones/m2_resnet --full
+
+# CI smoke test (default scaled sweep only; --full/--occupancy are not in CI)
 ctest -R m2_resnet
 ```
 
@@ -351,6 +356,34 @@ constraint is DMA throughput, exactly the §5 diagnosis from the other two angle
 peak *at* capacity would flag that level as the binding buffer (the first place to
 add credits) — a check to re-run once the network is scaled up (task 4).
 
+### Representative-scale offline run (`--occupancy`'s bigger sibling, `--full`)
+
+The §5 tables use a deliberately tiny topology (4×4, uniform 16 channels) so the
+demo is CI-fast. Before quoting any number as representative you must check the
+findings survive **channel growth and real depth**. `m2_resnet --full` runs one
+offline config — batch 16, stem 16ch 8×8, stages **{16, 32, 64, 128} ×2** (the true
+`[2,2,2,2]` depth with stride-2 downsampling + 1×1 projections) — in ≈ 50 s:
+
+```text
+  configuration       nodes  ops   cycles    cyc/op   dmaStl    bmStl   strStl    maxErr  check
+  resnet18 (full)        67   38   393927    10366   161274  1019258   244014   1.1e-06  PASS
+  utilization          dmaU%  bmU%  strU%  ...  ldGB/s  stGB/s
+  resnet18 (full)       84.5  15.7  16.1   ...   21.8    2.8
+  compute              MFLOP  GFLOP/s  peakEff%  AI(F/B)  roofEff%  bound
+  resnet18 (full)      73.99   187.8    36.7     7.62     38.5     mem
+```
+
+What scaling up changes — and what it doesn't:
+- **Arithmetic intensity rises 5.2 → 7.6 FLOP/byte**, right up against the 8 ridge:
+  more channels means more FLOPs reused per DRAM byte. **Compute efficiency climbs
+  too, 22–29% → 37%.**
+- **But it is still `mem`-bound and still DMA-saturated (84.5%)** — the memory-bound
+  diagnosis *holds* at realistic proportions; scale moves it toward the ridge, not
+  across it. That is the answer task 4 exists to give.
+- Not full 224×224 (intractable cycle-by-cycle: a stage-4 3×3 conv on 512 channels
+  is K = 4608, hundreds of K-slices per output tile). `--full` trades absolute size
+  for the *structure* that matters — growth + depth + downsampling.
+
 ---
 
 ## 7. Research roadmap
@@ -369,12 +402,16 @@ Ordered by dependency:
    `TileTracker` L3|L2|L1/array bands for a representative conv plus peak occupancy
    per level. Peaks sit far below capacity (L3 4/32, L2 2/64) — buffers are **not**
    the bottleneck, corroborating the DMA-bandwidth-bound finding.
-4. **Full-scale ResNet-18** — larger spatial dims + `[2,2,2,2]` + channel growth as
-   a benchmark spec (slow; run offline, not in CI). **Now the top open task** —
-   needed before any number is quoted as representative.
+4. ~~**Representative-scale ResNet-18**~~ — **done** (§6): `m2_resnet --full` runs a
+   `{16,32,64,128}×2` channel-growing `[2,2,2,2]` config offline (~50 s, not in CI).
+   Finding: AI rises 5.2 → 7.6 (toward the ridge) and peak efficiency 22–29% → 37%,
+   but it stays memory-bound and DMA-saturated — the diagnosis holds at scale.
+   Remaining: a true full-resolution run (needs a native grouped/large-K schedule to
+   be tractable) and a per-layer AI breakdown.
 5. **Concurrent branch scheduling** — the sequential-node assumption caps
    achievable utilization; overlapping execution-level-independent branches is the
-   architectural lever the utilization study will eventually motivate.
+   architectural lever the utilization study will eventually motivate. **Now the top
+   open task.**
 6. **JSON output + regression baseline** — emit the same schema as
    `tests/benchmarks/baselines/baseline.json` and add ResNet to the
    `benchmark-regression` workflow so utilization is tracked over time.

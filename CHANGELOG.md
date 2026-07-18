@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Representative-scale offline ResNet run (`m2_resnet --full`).** Runs one
+  channel-growing config — batch 16, stem 16ch 8×8, stages `{16,32,64,128}×2` (true
+  `[2,2,2,2]` depth with stride-2 downsampling + 1×1 projections) — through the same
+  benchmark / utilization / compute tables in ~50 s (offline; not in the CI smoke
+  test, which keeps the default scaled sweep). It confirms the findings survive
+  realistic proportions: arithmetic intensity rises 5.2 → 7.6 FLOP/byte (toward the
+  8 ridge) and compute efficiency 22–29% → 37%, but the network stays memory-bound
+  and DMA-saturated (84.5%) — the diagnosis holds at scale. `--full`/`--occupancy`
+  are rejected in combination with `--dot`. Table-printing refactored into a shared
+  `print_all_tables` helper (no output change on the default path).
+
 - **Buffer-occupancy timeline for the ResNet benchmark (`m2_resnet --occupancy`).**
   `run_conv2d_fused` gains an optional per-cycle `CycleObserver` (empty by default,
   so the normal path is untouched); the demo drives a representative 1×1 projection
