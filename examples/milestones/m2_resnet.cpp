@@ -163,12 +163,13 @@ int main(int argc, char* argv[]) {
               << std::setw(10) << "ldGB/s" << std::setw(10) << "stGB/s" << "\n";
     std::cout << "  " << std::string(93, '-') << "\n";
     for (const auto& r : rows) print_util_row(r);
-    std::cout << "\n  Utilization = Sum(busy)/Sum(total) per mover, the executor's"
-                 " reported ratio\n  (get_statistics), summed over the sequentially"
-                 " executed ops; GB/s at "
+    std::cout << "\n  Utilization = Sum(active)/Sum(total) per mover: directly"
+                 " measured cycles a\n  transfer occupied each component (excludes"
+                 " stalled + idle), summed over the\n  sequentially executed ops;"
+                 " GB/s at "
               << std::fixed << std::setprecision(1) << kAssumedClockGHz
-              << " GHz\n  assumed clock. Relative metric - see"
-                 " docs/benchmarking/resnet-benchmarking-guide.md.\n"
+              << " GHz assumed clock. See\n"
+                 "  docs/benchmarking/resnet-benchmarking-guide.md.\n"
               << std::defaultfloat;
 
     std::cout << "\n  Fusion: BatchNorm folded into conv, ReLU fused as the conv"

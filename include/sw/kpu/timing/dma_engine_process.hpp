@@ -164,6 +164,12 @@ public:
         // Step 4: Remove completed requests
         remove_completed_requests();
 
+        // Direct active-cycle measurement (follow-on 1b): this cycle counts as
+        // active iff the MC is transferring on our behalf (>=1 SUBMITTED request).
+        // This is measured, not derived from total - stalls, so idle cycles (no
+        // request queued) are correctly excluded from utilization.
+        if (!is_idle()) ++active_cycles_;
+
         return events;
     }
 
@@ -204,6 +210,7 @@ public:
         next_slot_id_ = 0;
         stall_cycles_credit_ = 0;
         stall_cycles_tag_ = 0;
+        active_cycles_ = 0;
         total_bytes_loaded_ = 0;
         total_bytes_stored_ = 0;
     }
@@ -236,6 +243,12 @@ public:
         return stall_cycles_credit_ + stall_cycles_tag_;
     }
 
+    /// Directly measured cycles the engine was actively transferring (a request
+    /// SUBMITTED to the MC). Excludes both stalled and idle cycles.
+    [[nodiscard]] Cycle active_cycles() const {
+        return active_cycles_;
+    }
+
     [[nodiscard]] size_t total_bytes_loaded() const {
         return total_bytes_loaded_;
     }
@@ -263,6 +276,7 @@ private:
     // Statistics
     Cycle stall_cycles_credit_ = 0;
     Cycle stall_cycles_tag_ = 0;
+    Cycle active_cycles_ = 0;
     size_t total_bytes_loaded_ = 0;
     size_t total_bytes_stored_ = 0;
 

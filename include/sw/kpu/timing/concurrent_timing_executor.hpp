@@ -170,7 +170,9 @@ public:
     struct Statistics {
         Cycle total_cycles = 0;
 
-        // Component busy cycles
+        // Component busy cycles: directly measured active (transferring) cycles,
+        // averaged per component. Measured per cycle in each component's tick(),
+        // NOT derived from total - stalls, so idle cycles are excluded.
         Cycle dma_busy_cycles = 0;
         Cycle bm_busy_cycles = 0;
         Cycle str_busy_cycles = 0;
@@ -1407,9 +1409,11 @@ inline ConcurrentTimingExecutor::Statistics ConcurrentTimingExecutor::get_statis
 }
 
 inline void ConcurrentTimingExecutor::collect_statistics(Statistics& stats) const {
-    // Aggregate from DMA Engines
+    // Aggregate from DMA Engines. dma_busy_cycles accumulates the raw sum of
+    // directly measured active cycles here, then is normalized per component below.
     for (const auto& dma : dma_engines_) {
         stats.dma_credit_stalls += dma->stall_cycles_credit();
+        stats.dma_busy_cycles += dma->active_cycles();
         stats.bytes_loaded += dma->total_bytes_loaded();
         stats.bytes_stored += dma->total_bytes_stored();
     }
@@ -1418,6 +1422,7 @@ inline void ConcurrentTimingExecutor::collect_statistics(Statistics& stats) cons
     for (const auto& mover : block_movers_) {
         stats.bm_tag_stalls += mover->stall_cycles_tag();
         stats.bm_credit_stalls += mover->stall_cycles_credit();
+        stats.bm_busy_cycles += mover->active_cycles();
         stats.tiles_moved += mover->total_tiles_moved();
         stats.tiles_writeback += mover->total_tiles_writeback();
     }
@@ -1426,12 +1431,14 @@ inline void ConcurrentTimingExecutor::collect_statistics(Statistics& stats) cons
     for (const auto& streamer : row_streamers_) {
         stats.str_tag_stalls += streamer->stall_cycles_tag();
         stats.str_credit_stalls += streamer->stall_cycles_credit();
+        stats.str_busy_cycles += streamer->active_cycles();
         stats.tiles_fed += streamer->total_tiles_fed();
         stats.tiles_drained += streamer->total_tiles_drained();
     }
     for (const auto& streamer : col_streamers_) {
         stats.str_tag_stalls += streamer->stall_cycles_tag();
         stats.str_credit_stalls += streamer->stall_cycles_credit();
+        stats.str_busy_cycles += streamer->active_cycles();
         stats.tiles_fed += streamer->total_tiles_fed();
     }
 
@@ -1444,23 +1451,20 @@ inline void ConcurrentTimingExecutor::collect_statistics(Statistics& stats) cons
         }
     }
 
-    // Compute average busy cycles per component type
-    // Stalls are aggregated across N parallel components, so divide by N to get
-    // average stalls per component, then subtract from total_cycles.
-    // This gives utilization as average activity across all components of that type.
+    // Normalize the directly measured active cycles to a per-component average
+    // (follow-on 1b). busy_cycles now holds the raw sum of measured active cycles
+    // across the N parallel components of each type; dividing by N gives the
+    // average active cycles per component, so utilization = busy/total_cycles is
+    // the mean fraction of time a component of that type was transferring. Unlike
+    // the former total - avg_stall heuristic, this excludes idle cycles (a
+    // component with nothing queued) rather than counting them as busy.
     size_t n_dma = dma_engines_.size();
     size_t n_bm = block_movers_.size();
     size_t n_str = row_streamers_.size() + col_streamers_.size();
 
-    // Compute average stalls per component, capped to prevent underflow
-    Cycle avg_dma_stalls = n_dma > 0 ? stats.dma_credit_stalls / n_dma : 0;
-    Cycle avg_bm_stalls = n_bm > 0 ? (stats.bm_tag_stalls + stats.bm_credit_stalls) / n_bm : 0;
-    Cycle avg_str_stalls = n_str > 0 ? (stats.str_tag_stalls + stats.str_credit_stalls) / n_str : 0;
-
-    // Busy = total - average stalls, capped at 0 to prevent underflow
-    stats.dma_busy_cycles = avg_dma_stalls < stats.total_cycles ? stats.total_cycles - avg_dma_stalls : 0;
-    stats.bm_busy_cycles = avg_bm_stalls < stats.total_cycles ? stats.total_cycles - avg_bm_stalls : 0;
-    stats.str_busy_cycles = avg_str_stalls < stats.total_cycles ? stats.total_cycles - avg_str_stalls : 0;
+    if (n_dma > 0) stats.dma_busy_cycles /= n_dma; else stats.dma_busy_cycles = 0;
+    if (n_bm > 0)  stats.bm_busy_cycles  /= n_bm;  else stats.bm_busy_cycles = 0;
+    if (n_str > 0) stats.str_busy_cycles /= n_str; else stats.str_busy_cycles = 0;
 }
 
 inline size_t ConcurrentTimingExecutor::count_completed_tiles() const {

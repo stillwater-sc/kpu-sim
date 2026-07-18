@@ -46,11 +46,11 @@ using schedule::BatchNormAffine;
 /// on a fresh ConcurrentTimingExecutor and its per-op Statistics are additive. The
 /// movement-fabric activity below is summed the same way as the stall/cycle totals.
 ///
-/// Utilization is the executor's own busy/total ratio, aggregated as
-/// Sum(busy) / Sum(total_cycles). busy is derived by the executor from its
-/// per-component stall accounting (ConcurrentTimingExecutor::collect_statistics);
-/// because nodes run sequentially, treat these as a relative activity metric for
-/// comparing configurations, not a validated absolute
+/// Utilization is Sum(busy) / Sum(total_cycles) per mover. busy is the executor's
+/// DIRECTLY MEASURED active-cycle count (each component counts, in its tick(), the
+/// cycles a transfer actually occupied it) averaged per component — not derived
+/// from total - stalls, so idle cycles are excluded. Because nodes run
+/// sequentially this captures within-op activity, not cross-branch overlap
 /// (see docs/benchmarking/resnet-benchmarking-guide.md, section 6).
 struct RunStats {
     Cycle total_cycles = 0;
