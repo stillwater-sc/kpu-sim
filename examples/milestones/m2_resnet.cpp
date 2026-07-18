@@ -82,6 +82,14 @@ Row run_spec(const std::string& name, const ResNet18Spec& spec,
 // at 1.0 GHz, GB/s == bytes/cycle, so this only sets the reported unit.
 constexpr double kAssumedClockGHz = 1.0;
 
+// Compute-roofline hardware constants (sw::benchmark::HardwareSpec convention):
+// a 16x16 systolic array at 2 FLOP/MAC gives 512 FLOP/cycle = 512 GFLOP/s @ 1 GHz;
+// external DRAM bandwidth 64 GB/s. Ridge point = 512/64 = 8 FLOP/byte.
+constexpr double kPeakFlopsPerCycle = 512.0;   // 16*16*2
+constexpr double kPeakGflops        = 512.0;   // at kAssumedClockGHz
+constexpr double kExtBwGbs          = 64.0;
+constexpr double kRidgeAI           = kPeakGflops / kExtBwGbs;   // 8 FLOP/byte
+
 void print_row(const Row& r) {
     double cyc_per_op = r.ops ? static_cast<double>(r.stats.total_cycles) / static_cast<double>(r.ops) : 0.0;
     std::cout << "  " << std::left << std::setw(22) << r.name << std::right
@@ -109,6 +117,20 @@ void print_util_row(const Row& r) {
               << std::setw(9) << r.stats.tiles_fed
               << std::setw(10) << std::setprecision(1) << r.stats.effective_load_bandwidth(kAssumedClockGHz)
               << std::setw(10) << r.stats.effective_store_bandwidth(kAssumedClockGHz)
+              << "\n" << std::defaultfloat;
+}
+
+void print_compute_row(const Row& r) {
+    const double ai = r.stats.arithmetic_intensity();
+    std::cout << "  " << std::left << std::setw(22) << r.name << std::right
+              << std::fixed
+              << std::setw(10) << std::setprecision(2) << r.stats.total_flops() / 1e6   // MFLOP
+              << std::setw(10) << std::setprecision(1) << r.stats.achieved_gflops(kAssumedClockGHz)
+              << std::setw(10) << std::setprecision(1) << 100.0 * r.stats.compute_efficiency(kPeakFlopsPerCycle)
+              << std::setw(10) << std::setprecision(2) << ai
+              << std::setw(10) << std::setprecision(1)
+              << 100.0 * r.stats.roofline_efficiency(kPeakGflops, kExtBwGbs, kAssumedClockGHz)
+              << std::setw(8) << (ai < kRidgeAI ? "mem" : "cmp")
               << "\n" << std::defaultfloat;
 }
 
@@ -170,6 +192,22 @@ int main(int argc, char* argv[]) {
               << std::fixed << std::setprecision(1) << kAssumedClockGHz
               << " GHz assumed clock. See\n"
                  "  docs/benchmarking/resnet-benchmarking-guide.md.\n"
+              << std::defaultfloat;
+
+    // Compute FLOP efficiency (roofline position).
+    std::cout << "\n  " << std::left << std::setw(22) << "compute" << std::right
+              << std::setw(10) << "MFLOP" << std::setw(10) << "GFLOP/s"
+              << std::setw(10) << "peakEff%" << std::setw(10) << "AI(F/B)"
+              << std::setw(10) << "roofEff%" << std::setw(8) << "bound" << "\n";
+    std::cout << "  " << std::string(80, '-') << "\n";
+    for (const auto& r : rows) print_compute_row(r);
+    std::cout << "\n  GEMM FLOPs (conv im2col + FC, 2/MAC) vs a "
+              << std::fixed << std::setprecision(0) << kPeakGflops
+              << " GFLOP/s peak (16x16 PE @ "
+              << std::setprecision(1) << kAssumedClockGHz << " GHz) and "
+              << std::setprecision(0) << kExtBwGbs << " GB/s DRAM. peakEff = achieved/peak;\n"
+                 "  roofEff = achieved/min(AI*bw, peak); bound = mem below the "
+              << std::setprecision(0) << kRidgeAI << " FLOP/byte ridge, else cmp.\n"
               << std::defaultfloat;
 
     std::cout << "\n  Fusion: BatchNorm folded into conv, ReLU fused as the conv"
