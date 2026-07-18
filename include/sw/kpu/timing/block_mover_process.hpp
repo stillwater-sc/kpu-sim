@@ -136,6 +136,12 @@ public:
             }
         }
 
+        // Direct active-cycle measurement (follow-on 1b): this cycle counts as
+        // active iff a transfer (move or writeback) occupies it. Measured, not
+        // derived from total - stalls, so idle cycles are excluded. Zero-latency
+        // dedup moves (step 2) do not occupy the bus and are not counted.
+        if (in_flight_.has_value()) ++active_cycles_;
+
         return events;
     }
 
@@ -163,6 +169,7 @@ public:
         next_l2_slot_ = 0;
         stall_cycles_tag_ = 0;
         stall_cycles_credit_ = 0;
+        active_cycles_ = 0;
         total_tiles_moved_ = 0;
         total_tiles_writeback_ = 0;
     }
@@ -185,6 +192,12 @@ public:
 
     [[nodiscard]] Cycle stall_cycles_credit() const {
         return stall_cycles_credit_;
+    }
+
+    /// Directly measured cycles a transfer (move or writeback) occupied the mover.
+    /// Excludes stalled and idle cycles, and zero-latency dedup moves.
+    [[nodiscard]] Cycle active_cycles() const {
+        return active_cycles_;
     }
 
     [[nodiscard]] size_t total_tiles_moved() const {
@@ -222,6 +235,7 @@ private:
     // Statistics
     Cycle stall_cycles_tag_ = 0;
     Cycle stall_cycles_credit_ = 0;
+    Cycle active_cycles_ = 0;
     size_t total_tiles_moved_ = 0;
     size_t total_tiles_writeback_ = 0;
 

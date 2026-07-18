@@ -132,6 +132,12 @@ public:
             }
         }
 
+        // Direct active-cycle measurement (follow-on 1b): this cycle counts as
+        // active iff a transfer (feed or drain) occupies it. Measured, not derived
+        // from total - stalls, so idle cycles and the drain compute-wait are
+        // excluded from utilization.
+        if (in_flight_.has_value()) ++active_cycles_;
+
         return events;
     }
 
@@ -159,6 +165,7 @@ public:
         stall_cycles_tag_ = 0;
         stall_cycles_credit_ = 0;
         stall_cycles_compute_ = 0;
+        active_cycles_ = 0;
         total_tiles_fed_ = 0;
         total_tiles_drained_ = 0;
     }
@@ -185,6 +192,12 @@ public:
 
     [[nodiscard]] Cycle stall_cycles_compute() const {
         return stall_cycles_compute_;
+    }
+
+    /// Directly measured cycles a transfer (feed or drain) occupied the streamer.
+    /// Excludes stalled (incl. drain compute-wait) and idle cycles.
+    [[nodiscard]] Cycle active_cycles() const {
+        return active_cycles_;
     }
 
     [[nodiscard]] size_t total_tiles_fed() const {
@@ -225,6 +238,7 @@ private:
     Cycle stall_cycles_tag_ = 0;
     Cycle stall_cycles_credit_ = 0;
     Cycle stall_cycles_compute_ = 0;
+    Cycle active_cycles_ = 0;
     size_t total_tiles_fed_ = 0;
     size_t total_tiles_drained_ = 0;
 

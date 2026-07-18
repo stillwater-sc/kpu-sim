@@ -9,10 +9,12 @@ milestone writeup. For the milestone framing see
 
 **TL;DR of the current state:** ResNet-18 runs end-to-end, oracle-validated, and
 reports **cycles / ops / stall-cycles** plus **movement-fabric utilization**
-(DMA/BlockMover/Streamer busy%, tiles, effective DRAM bandwidth). The utilization
-plumbing described in §6 is **implemented** — the demo prints a second
-"utilization" table. What is *not* yet available is compute-fabric FLOP efficiency
-(§6 caveat) — that is the next research task.
+(DMA/BlockMover/Streamer busy%, tiles, effective DRAM bandwidth). Utilization is a
+**directly measured** active-cycle count (each component counts the cycles a
+transfer occupied it) — not the earlier `cycles − stalls/N` heuristic — so idle
+cycles are excluded and the numbers are a true activity fraction. The demo prints a
+second "utilization" table. What is *not* yet available is compute-fabric FLOP
+efficiency (§6 caveat) — that is the next research task.
 
 ---
 
@@ -175,32 +177,34 @@ directly. Any new spec must keep batch/channels/classes as `tile` multiples.
   resnet18 (batch 32)        39    22      72169      3280    16430   196470    49551    6.0e-08   PASS
 
   utilization              dmaU%    bmU%   strU%  tilesLd  tilesMv  tilesFd    ldGB/s    stGB/s
-  resnet18 (base)           82.4    37.5    83.4     1805     1438     1438      18.5       2.9
-  resnet18 [2,2,2,2]        80.6    47.3    85.5     2773     2318     2318      25.4       4.0
-  resnet18 (batch 32)       77.2    32.0    82.9     3610     2876     2876      19.3       3.2
+  resnet18 (base)           84.6    14.1    10.7     1805     1438     1438      18.5       2.9
+  resnet18 [2,2,2,2]        77.9    18.4    13.9     2773     2318     2318      25.4       4.0
+  resnet18 (batch 32)       92.3    14.9    11.8     3610     2876     2876      19.3       3.2
 ```
 
 Reading it:
 - **Fusion payoff:** `[2,2,2,2]` runs 67 graph nodes as **38 CSP ops** (every BN
   folded, every block-internal ReLU fused). Base `[1,1,1,1]` = 39 nodes → 22 ops.
-- **BlockMover (L3→L2) is the bottleneck stage.** It carries by far the most stall
-  cycles (`bmStl` ≫ `strStl` > `dmaStl`) *and* the lowest utilization (32–47% vs.
-  77–85% for DMA and Streamer) — the two views agree: the L3→L2 move is where the
-  pipeline waits. It is the first place to add buffering / rebalance credits.
-- **DMA and Streamer run 77–85% busy;** deeper (`[2,2,2,2]`) lifts BlockMover
-  utilization (47%) as more work amortizes the moves, while batch 32 pushes it
-  *down* (32%) — more per-move DRAM traffic, more waiting.
+- **DMA (DRAM→L3) is the near-saturated bottleneck** — 78–92% active, and **batch
+  32 drives it to 92%** (the most DRAM-bound config). At this scale the network is
+  bandwidth-bound on the DRAM load path.
+- **The on-chip movers starve behind it:** BlockMover 14–18%, Streamer 11–14%
+  active. They are not the throughput limiter — they spend most cycles waiting for
+  the DMA to deliver tiles (note `bmStl`/`strStl` are large: much *waiting*, little
+  *transferring*). Widening DRAM bandwidth / adding DMA engines is the lever, not
+  more on-chip buffering.
+- **Deeper (`[2,2,2,2]`)** lifts on-chip utilization slightly (more work amortizes
+  each load) and eases DMA to 78%.
 - **`ldGB/s`/`stGB/s`** are at an assumed 1.0 GHz clock (so GB/s == bytes/cycle);
   the unit is a knob, the *ratio* between configs is the signal.
 - **cyc/op is not efficiency** — it is total cycles / op count, inflated by stalls.
 
-Two accounting notes so the columns are not misread:
+One accounting note so the columns are not misread:
 - **Stall columns are summed across all parallel components and all ops**, so a
   value can exceed `cycles` (e.g. `bmStl` 99797 > 39881 with ~4 BlockMovers). They
-  are a workload stall total, not a per-component fraction.
-- **Utilization normalizes per component** (`busy = cycles − stalls/N`), so it is
-  *not* `1 − stall/cycles` on the raw columns. The two are consistent once you
-  divide the stall column by the component count (see §6).
+  are a workload stall total, not a per-component fraction — high `bmStl` with low
+  `bmU%` means the BlockMovers *wait* a lot but rarely *transfer*, consistent with
+  starving behind the DMA.
 
 ---
 
@@ -223,32 +227,51 @@ The demo prints these as the "utilization" table. Because nodes run sequentially
 a fresh `ConcurrentTimingExecutor` per op, the per-op `Statistics` are additive and
 the whole-network ratio is `Σ busy / Σ total_cycles`.
 
-### How `busy` is derived — and why utilization ≠ 1 − stall/total
+### How `busy` is measured — directly, not derived
 
-`busy` is **not** `cycles − stall column`. The executor derives it inside
-`collect_statistics` (`concurrent_timing_executor.hpp`): per component type it
-averages stalls across the **N parallel components**, subtracts that from the op's
-`total_cycles`, and clamps to zero if the averaged stall exceeds the op span. So
-`busy = cycles − stalls/N`, and the printed stall column is the *un-normalized*
-`stalls` (summed over all N and all ops) — which is why `bmStl` (99797, ~4
-movers) dwarfs `cycles` (39881) while `bmU` is a sane 37.5%. Divide the stall
-column by the component count before comparing it to a utilization.
+`busy` is a **directly measured active-cycle count**. Every cycle, in each
+component's `tick()`, the component increments an `active_cycles_` counter iff a
+transfer actually occupied it that cycle:
 
-**Consistency invariant (regression-checked):** because `busy ≥ cycles − stalls`
-per op, the aggregate satisfies `busy + stalls ≥ cycles` for every mover. This is
-exactly what the earlier, buggy version violated — some ops added `cycles` to the
-denominator without adding their `busy`/`stalls`, understating utilization to
-≈12–39%. `tests/timing/test_resnet_utilization.cpp` asserts the invariant so that
-regression cannot return.
+- **DMA** — a request is `SUBMITTED` (the memory controller is transferring on its
+  behalf).
+- **BlockMover / Streamer** — an `InFlightTransfer` occupies the cycle
+  (`in_flight_.has_value()`). Zero-latency dedup moves and the drain compute-wait do
+  **not** count.
+
+`collect_statistics` sums these across the N parallel components and divides by N
+(in floating point, so the per-component mean is exact — not integer-floored), so
+`busy` is the mean active cycles per component and `utilization = busy /
+total_cycles ∈ [0,1]` is the mean fraction of time a component of that type was
+transferring. Only WORKING cycles count — the former `cycles − stalls/N` heuristic
+counted IDLE as busy, inflating and mis-ranking the movers; a directly-measured
+counter was follow-on 1b, now done.
+
+For the single-transfer **BlockMover/Streamer** the per-cycle outcome is exactly one
+of WORKING / STALLED / IDLE (`active` and `stall` cannot both fire in a tick). The
+**DMA holds multiple requests**, so a tick can *both* count active (one request
+`SUBMITTED`) *and* record a stall (another request waiting on an L3 credit) — for
+the DMA, `active` and `stall` may overlap in a cycle. `active` still never exceeds
+`total_cycles` (one increment per tick), so utilization stays in `[0,1]`.
+
+**Stall columns are still un-normalized** (summed over all N and all ops), which is
+why `bmStl` (99797, ~4 movers) exceeds `cycles` (39881). Utilization normalizes;
+the stall column does not. High `bmStl` **with** low `bmU%` is the signature of a
+stage that waits a lot but rarely transfers — i.e. starves behind an upstream
+bottleneck (here the DMA).
+
+**Regression check:** `tests/timing/test_resnet_utilization.cpp` asserts, per mover,
+`0 < busy ≤ total_cycles` (util in `(0,1]`), that not every mover is pinned at 100%
+(idle is genuinely excluded), and accessor consistency `util == busy/total`. A
+component whose counter was never wired into its `tick()` would read a flat `busy=0`
+and fail.
 
 Practical guidance:
-- Treat utilization as the **executor's own relative metric**, good for A/B
-  comparison across configs and before/after a scheduler change — **not** a
-  validated absolute "fraction of peak." Refining `busy` to a directly-measured
-  active-cycle count (instead of `cycles − stalls/N`) is follow-on §7 item 1b.
-- The signal in the current numbers is the **spread between movers** (BlockMover
-  32–47% vs. DMA/Streamer 77–85%), which localizes the L3→L2 bottleneck — not the
-  absolute level.
+- Utilization is now a **measured activity fraction**, usable as an absolute (with
+  the caveat that it is a per-component mean and, under the sequential-node walk,
+  excludes cross-branch overlap — see §3).
+- The signal is the **DMA near-saturation (78–92%) vs. starved on-chip movers
+  (11–18%)**: the workload is DRAM-bandwidth-bound at this scale.
 
 ### Caveat: compute-fabric utilization is not in this path
 
@@ -269,12 +292,13 @@ Ordered by dependency:
 
 1. ~~**Surface movement utilization**~~ — **done** (§6): the demo prints per-mover
    `busy/total`, tiles, and effective bandwidth.
-1b. **Validate/refine the `busy` derivation** — the current busy is
-   `total − avg_stall` with clamping (§6), which is not a measured active-cycle
-   count. Add a direct active-cycle counter per component so utilization becomes a
-   defensible absolute, not just a relative metric.
+1b. ~~**Refine `busy` to a directly-measured active-cycle count**~~ — **done**:
+   each component now counts, in its `tick()`, the cycles a transfer occupied it, so
+   utilization excludes idle cycles and is a measured activity fraction (§6).
 2. **Compute utilization / FLOP efficiency** — MACs / (`total_cycles` × peak). Lets
-   you say "roofline position" for each config.
+   you say "roofline position" for each config. **Now the top open task** — the
+   movement fabric being DRAM-bound (§5) makes the compute-side story the next
+   question.
 3. **Occupancy timeline** — wire `TileTracker` into the demo (behind a flag) to see
    which buffer level saturates during the forward pass.
 4. **Full-scale ResNet-18** — larger spatial dims + `[2,2,2,2]` + channel growth as

@@ -64,21 +64,21 @@ resnet18 [2,2,2,2]         67    38      51469      1354     9984   108557    29
 resnet18 (batch 32)        39    22      72169      3280    16430   196470    49551
 
 utilization              dmaU%    bmU%   strU%  tilesLd  tilesMv  tilesFd    ldGB/s
-resnet18 (base)           82.4    37.5    83.4     1805     1438     1438      18.5
-resnet18 [2,2,2,2]        80.6    47.3    85.5     2773     2318     2318      25.4
-resnet18 (batch 32)       77.2    32.0    82.9     3610     2876     2876      19.3
+resnet18 (base)           84.6    14.1    10.7     1805     1438     1438      18.5
+resnet18 [2,2,2,2]        77.9    18.4    13.9     2773     2318     2318      25.4
+resnet18 (batch 32)       92.3    14.9    11.8     3610     2876     2876      19.3
 ```
 
 **Fusion payoff:** the `[2,2,2,2]` network's 67 graph nodes execute as **38 CSP
 ops** — every BatchNorm folded into its conv, every block-internal ReLU fused as
 an epilogue. The base `[1,1,1,1]` scale runs 39 nodes as 22 ops.
 
-**Movement-fabric utilization** (busy/total per mover, summed over ops) shows the
-**L3→L2 BlockMover as the bottleneck** — 32–47% busy and by far the most stall
-cycles, vs. 77–85% for DMA and the Streamer. Stall columns are summed across all
-parallel components (so they can exceed `cycles`); see
-`docs/benchmarking/resnet-benchmarking-guide.md` for the full metric definitions
-and the utilization consistency invariant.
+**Movement-fabric utilization** — directly measured active cycles per mover — shows
+the **DRAM→L3 DMA as the near-saturated bottleneck** (78–92% active, 92% at batch
+32), with the on-chip BlockMover (14–18%) and Streamer (11–14%) **starving behind
+it**: the scaled network is DRAM-bandwidth-bound. Stall columns are summed across
+all parallel components (so they can exceed `cycles`); see
+`docs/benchmarking/resnet-benchmarking-guide.md` for the full metric definitions.
 
 ## Scope & scaling notes
 

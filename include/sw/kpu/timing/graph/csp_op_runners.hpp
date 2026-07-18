@@ -46,11 +46,11 @@ using schedule::BatchNormAffine;
 /// on a fresh ConcurrentTimingExecutor and its per-op Statistics are additive. The
 /// movement-fabric activity below is summed the same way as the stall/cycle totals.
 ///
-/// Utilization is the executor's own busy/total ratio, aggregated as
-/// Sum(busy) / Sum(total_cycles). busy is derived by the executor from its
-/// per-component stall accounting (ConcurrentTimingExecutor::collect_statistics);
-/// because nodes run sequentially, treat these as a relative activity metric for
-/// comparing configurations, not a validated absolute
+/// Utilization is Sum(busy) / Sum(total_cycles) per mover. busy is the executor's
+/// DIRECTLY MEASURED active-cycle count (each component counts, in its tick(), the
+/// cycles a transfer actually occupied it) averaged per component — not derived
+/// from total - stalls, so idle cycles are excluded. Because nodes run
+/// sequentially this captures within-op activity, not cross-branch overlap
 /// (see docs/benchmarking/resnet-benchmarking-guide.md, section 6).
 struct RunStats {
     Cycle total_cycles = 0;
@@ -59,10 +59,12 @@ struct RunStats {
     Cycle str_stalls = 0;
     std::size_t ops = 0;
 
-    // Movement-fabric activity (summed per-op).
-    Cycle dma_busy = 0;
-    Cycle bm_busy = 0;
-    Cycle str_busy = 0;
+    // Movement-fabric activity (summed per-op). busy is fractional: each op's
+    // per-component mean active cycles is exact (not integer-floored), so the
+    // whole-network sum carries that precision.
+    double dma_busy = 0.0;
+    double bm_busy = 0.0;
+    double str_busy = 0.0;
     std::size_t tiles_loaded = 0;
     std::size_t tiles_stored = 0;
     std::size_t tiles_moved = 0;

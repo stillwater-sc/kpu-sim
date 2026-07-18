@@ -17,10 +17,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `effective_{load,store}_bandwidth(clock_ghz)` (guarded to return 0.0 for a
   non-positive clock). The `m2_resnet` demo prints a new utilization table
   (dmaU%/bmU%/strU%, tiles moved/fed/loaded, effective GB/s at an assumed 1.0 GHz
-  clock). The corrected numbers localize the **L3→L2 BlockMover as the bottleneck**
-  (32–47% busy vs. 77–85% for DMA/Streamer). New research guide
-  `docs/benchmarking/resnet-benchmarking-guide.md` documents the assets,
-  assumptions, howto, results, and the utilization derivation + limits.
+  clock). New research guide `docs/benchmarking/resnet-benchmarking-guide.md`
+  documents the assets, assumptions, howto, results, and the utilization
+  derivation + limits. (The bottleneck reading from this entry's stall-derived
+  `busy` was **superseded** by the directly-measured counter in the "Changed"
+  entry below, which identifies the DMA — not the BlockMover — as the bottleneck.)
 
 - **SiLU/swish activation on the CSP value path — M3 polish (#131).** `run_silu`
   (`csp_op_runners.hpp`) computes `x·sigmoid(x)` on the CSP executor (sigmoid via
@@ -47,6 +48,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   writeup `docs/milestones/M3_efficientnet.md`. Reuses the `run_sigmoid` /
   `run_channel_broadcast_mul` runners and the depthwise/livelock fixes; SiLU
   approximated by ReLU6 for the M3 subset. Milestone M3 (#131).
+
+### Changed
+
+- **Movement-fabric utilization is now directly measured (follow-on 1b).** Each CSP
+  component (`DMAEngineProcess`, `BlockMoverProcess`, `StreamerProcess`) counts, in
+  its `tick()`, the cycles a transfer actually occupied it (DMA: a `SUBMITTED`
+  request; BM/STR: an in-flight transfer — dedup moves and the drain compute-wait
+  excluded), exposed via `active_cycles()`. `collect_statistics` now populates
+  `{dma,bm,str}_busy_cycles` from this measured count (averaged per component)
+  instead of the `total_cycles − stalls/N` heuristic, so utilization excludes idle
+  cycles and is a true activity fraction. The corrected reading flips the ResNet
+  bottleneck story: the **DRAM→L3 DMA is near-saturated (78–92%)** while the on-chip
+  BlockMover (14–18%) and Streamer (11–14%) starve behind it — the scaled network is
+  DRAM-bandwidth-bound (the former heuristic mis-ranked the L3→L2 mover as the
+  bottleneck by counting its idle cycles as busy). The per-component mean is kept in
+  floating point (`busy_cycles` is now `double`) so it is exact rather than
+  integer-floored — a floor would systematically undercount whenever N does not
+  divide the active sum. `tests/timing/test_resnet_utilization.cpp` updated to the
+  direct-counting invariants (`0 < busy ≤ cycles`, not all movers pinned at 100%),
+  and `test_concurrent_timing_executor.cpp` adds a non-divisible component-count
+  regression (`busy(3 movers)·3 == busy(1 mover)`); demo, `M2_resnet.md`, and the
+  benchmarking guide regenerated.
 
 ### Fixed
 
