@@ -119,5 +119,6 @@ cmake --build --preset release --target m2_resnet
 ./build/examples/milestones/m2_resnet            # benchmark table + validation
 ./build/examples/milestones/m2_resnet --dot resnet18.dot   # + KernelGraph
 ./build/examples/milestones/m2_resnet --occupancy          # buffer-occupancy timeline
+./build/examples/milestones/m2_resnet --full               # representative-scale offline run (~50s)
 ctest -R m2_resnet                               # CI smoke test
 ```

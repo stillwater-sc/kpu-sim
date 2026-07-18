@@ -191,30 +191,109 @@ int run_occupancy() {
     return 0;
 }
 
+// The three benchmark tables (timing+stalls, movement utilization, compute FLOP
+// efficiency) for a set of already-run configurations.
+void print_all_tables(const std::vector<Row>& rows) {
+    std::cout << "  " << std::left << std::setw(22) << "configuration" << std::right
+              << std::setw(7) << "nodes" << std::setw(6) << "ops"
+              << std::setw(11) << "cycles" << std::setw(10) << "cyc/op"
+              << std::setw(9) << "dmaStl" << std::setw(9) << "bmStl"
+              << std::setw(9) << "strStl" << std::setw(11) << "maxErr"
+              << std::setw(7) << "check" << "\n";
+    std::cout << "  " << std::string(97, '-') << "\n";
+    for (const auto& r : rows) print_row(r);
+
+    std::cout << "\n  " << std::left << std::setw(22) << "utilization" << std::right
+              << std::setw(8) << "dmaU%" << std::setw(8) << "bmU%" << std::setw(8) << "strU%"
+              << std::setw(9) << "tilesLd" << std::setw(9) << "tilesMv" << std::setw(9) << "tilesFd"
+              << std::setw(10) << "ldGB/s" << std::setw(10) << "stGB/s" << "\n";
+    std::cout << "  " << std::string(93, '-') << "\n";
+    for (const auto& r : rows) print_util_row(r);
+    std::cout << "\n  Utilization = Sum(active)/Sum(total) per mover: directly"
+                 " measured cycles a\n  transfer occupied each component (excludes"
+                 " stalled + idle), summed over the\n  sequentially executed ops;"
+                 " GB/s at "
+              << std::fixed << std::setprecision(1) << kAssumedClockGHz
+              << " GHz assumed clock. See\n"
+                 "  docs/benchmarking/resnet-benchmarking-guide.md.\n"
+              << std::defaultfloat;
+
+    std::cout << "\n  " << std::left << std::setw(22) << "compute" << std::right
+              << std::setw(10) << "MFLOP" << std::setw(10) << "GFLOP/s"
+              << std::setw(10) << "peakEff%" << std::setw(10) << "AI(F/B)"
+              << std::setw(10) << "roofEff%" << std::setw(8) << "bound" << "\n";
+    std::cout << "  " << std::string(80, '-') << "\n";
+    for (const auto& r : rows) print_compute_row(r);
+    std::cout << "\n  GEMM FLOPs (conv im2col + FC, 2/MAC) vs a "
+              << std::fixed << std::setprecision(0) << kPeakGflops
+              << " GFLOP/s peak (16x16 PE @ "
+              << std::setprecision(1) << kAssumedClockGHz << " GHz) and "
+              << std::setprecision(0) << kExtBwGbs << " GB/s DRAM. peakEff = achieved/peak;\n"
+                 "  roofEff = achieved/min(AI*bw, peak); bound = mem below the "
+              << std::setprecision(0) << kRidgeAI << " FLOP/byte ridge, else cmp.\n"
+              << std::defaultfloat;
+}
+
+// Full-scale offline run: realistic channel growth (64->512) + [2,2,2,2] depth +
+// larger spatial. Slow (cycle-by-cycle over many more tiles) - not in the CI
+// smoke test, which runs the default no-arg scaled sweep.
+int run_full() {
+    // Representative-scale (not full 224x224, which is intractable cycle-by-cycle):
+    // realistic channel GROWTH (16->128) across four stages with stride-2
+    // downsampling + 1x1 projections, at the true [2,2,2,2] depth. The scaled
+    // spatial (8x8) keeps a whole forward pass to a few million cycles.
+    ResNet18Spec full;
+    full.batch = 16;
+    full.in_channels = 16;
+    full.height = full.width = 8;
+    full.stage_channels = {16, 32, 64, 128};
+    full.blocks_per_stage = 2;
+    full.num_classes = 16;
+
+    std::cout << "\n"
+        "======================================================================\n"
+        "Representative-scale ResNet-18 (offline) - batch " << full.batch << ", stem "
+        << full.in_channels << "ch " << full.height << "x" << full.width
+        << ", stages {16,32,64,128} x2\n"
+        "([2,2,2,2] with stride-2 downsampling + 1x1 projections), "
+        << full.num_classes << " classes. Channel growth + real depth; slow.\n"
+        "======================================================================\n\n";
+
+    std::vector<Row> rows{ run_spec("resnet18 (full)", full, {}) };
+    print_all_tables(rows);
+    std::cout << "\n  Validation: " << (rows.front().pass ? "PASS" : "FAIL")
+              << " (oracle: composed whole-network host reference, tol 5e-3)\n\n";
+    return rows.front().pass ? 0 : 1;
+}
+
 } // namespace
 
 int main(int argc, char* argv[]) {
     std::string dot_path;
-    bool occupancy = false;
+    bool occupancy = false, full = false;
     for (int i = 1; i < argc; ++i) {
         if (std::strcmp(argv[i], "--dot") == 0 && i + 1 < argc) {
             dot_path = argv[++i];
         } else if (std::strcmp(argv[i], "--occupancy") == 0) {
             occupancy = true;
+        } else if (std::strcmp(argv[i], "--full") == 0) {
+            full = true;
         } else {
-            std::cout << "Usage: " << argv[0] << " [--dot FILE | --occupancy]\n";
+            std::cout << "Usage: " << argv[0] << " [--dot FILE | --occupancy | --full]\n";
             return std::strcmp(argv[i], "--help") == 0 ? 0 : 1;
         }
     }
 
-    // Occupancy timeline is a focused debug view of the buffer hierarchy; it does
-    // not build the whole-network graph, so --dot has nothing to emit alongside it.
-    if (occupancy) {
+    // --occupancy and --full are focused modes that do not build the whole-network
+    // graph the way the default sweep does, so --dot has nothing to emit alongside
+    // them; reject the combination rather than silently ignore --dot.
+    if (occupancy || full) {
         if (!dot_path.empty()) {
-            std::cerr << "error: --occupancy and --dot are mutually exclusive\n";
+            std::cerr << "error: --" << (occupancy ? "occupancy" : "full")
+                      << " and --dot are mutually exclusive\n";
             return 2;
         }
-        return run_occupancy();
+        return occupancy ? run_occupancy() : run_full();
     }
 
     std::cout << "\n"
@@ -237,48 +316,10 @@ int main(int argc, char* argv[]) {
     ResNet18Spec batch32 = base; batch32.batch = 32;
     rows.push_back(run_spec("resnet18 (batch 32)", batch32, {}));
 
-    std::cout << "  " << std::left << std::setw(22) << "configuration" << std::right
-              << std::setw(7) << "nodes" << std::setw(6) << "ops"
-              << std::setw(11) << "cycles" << std::setw(10) << "cyc/op"
-              << std::setw(9) << "dmaStl" << std::setw(9) << "bmStl"
-              << std::setw(9) << "strStl" << std::setw(11) << "maxErr"
-              << std::setw(7) << "check" << "\n";
-    std::cout << "  " << std::string(97, '-') << "\n";
+    print_all_tables(rows);
 
     bool all_pass = true;
-    for (const auto& r : rows) { print_row(r); all_pass = all_pass && r.pass; }
-
-    // Movement-fabric utilization (busy/total per mover, tiles, effective BW).
-    std::cout << "\n  " << std::left << std::setw(22) << "utilization" << std::right
-              << std::setw(8) << "dmaU%" << std::setw(8) << "bmU%" << std::setw(8) << "strU%"
-              << std::setw(9) << "tilesLd" << std::setw(9) << "tilesMv" << std::setw(9) << "tilesFd"
-              << std::setw(10) << "ldGB/s" << std::setw(10) << "stGB/s" << "\n";
-    std::cout << "  " << std::string(93, '-') << "\n";
-    for (const auto& r : rows) print_util_row(r);
-    std::cout << "\n  Utilization = Sum(active)/Sum(total) per mover: directly"
-                 " measured cycles a\n  transfer occupied each component (excludes"
-                 " stalled + idle), summed over the\n  sequentially executed ops;"
-                 " GB/s at "
-              << std::fixed << std::setprecision(1) << kAssumedClockGHz
-              << " GHz assumed clock. See\n"
-                 "  docs/benchmarking/resnet-benchmarking-guide.md.\n"
-              << std::defaultfloat;
-
-    // Compute FLOP efficiency (roofline position).
-    std::cout << "\n  " << std::left << std::setw(22) << "compute" << std::right
-              << std::setw(10) << "MFLOP" << std::setw(10) << "GFLOP/s"
-              << std::setw(10) << "peakEff%" << std::setw(10) << "AI(F/B)"
-              << std::setw(10) << "roofEff%" << std::setw(8) << "bound" << "\n";
-    std::cout << "  " << std::string(80, '-') << "\n";
-    for (const auto& r : rows) print_compute_row(r);
-    std::cout << "\n  GEMM FLOPs (conv im2col + FC, 2/MAC) vs a "
-              << std::fixed << std::setprecision(0) << kPeakGflops
-              << " GFLOP/s peak (16x16 PE @ "
-              << std::setprecision(1) << kAssumedClockGHz << " GHz) and "
-              << std::setprecision(0) << kExtBwGbs << " GB/s DRAM. peakEff = achieved/peak;\n"
-                 "  roofEff = achieved/min(AI*bw, peak); bound = mem below the "
-              << std::setprecision(0) << kRidgeAI << " FLOP/byte ridge, else cmp.\n"
-              << std::defaultfloat;
+    for (const auto& r : rows) all_pass = all_pass && r.pass;
 
     std::cout << "\n  Fusion: BatchNorm folded into conv, ReLU fused as the conv"
                  " epilogue -\n  the base network's " << rows.front().nodes
