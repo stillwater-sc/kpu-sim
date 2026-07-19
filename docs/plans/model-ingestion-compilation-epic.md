@@ -243,7 +243,9 @@ the compiler side (ISA producer) proceed in parallel against the binary contract
   `DomainFlowIntegration.cmake` (unblocks Windows; keeps the dep header-only + MLIR-free).
 - Define & version the **KPU binary program format (D5)**: serialize a
   `ScheduleResult` (+ fabric config + resource bindings) into the `dfx` `.kpu` object;
-  write the *KPU binary functional spec* doc.
+  write the *KPU binary functional spec* doc. Apply the versioning requirements
+  (R1–R9, `.kpu` §3) from `dfg-kpu-versioning.md` — version stamp + `min_consumer`
+  gate + profile/capability dimension + golden-binary conformance corpus.
 - Add a **program reader** in kpu-sim that loads a `.kpu` and runs it through the
   existing `ScheduleExecutor`/`ConcurrentTimingExecutor` — **no inline generation**.
 - **DoD:** the ResNet schedule → serialize `.kpu` → read back → execute → **identical
@@ -326,8 +328,9 @@ same binary, validated against P0's golden.
 
 ## 9. Open questions (remaining, D1–D4 resolved)
 
-1. `.dfg` contract versioning: extend domain_flow's existing text format in place, or
-   introduce a versioned schema alongside it? (Affects Phase 0.)
+1. ~~`.dfg` contract versioning~~ — **analyzed** in `dfg-kpu-versioning.md`: version
+   `.dfg` **in place** (3 axes + `min_consumer` gate + profile dimension + golden
+   corpus), and version the `.kpu` binary from day one. Feeds Phase 0.
 2. Epic sub-issue granularity — one per phase, or per phase-DoD?
 3. Fine sequencing vs. M4 (agreed: run alongside) — which phases interleave with M4
    vs. run after it?
