@@ -1,6 +1,6 @@
 # Epic: Real-DNN Ingestion & Compilation (ONNX/PyTorch → domain_flow → KPU)
 
-**Status:** Approved direction (decisions D1–D4 resolved 2026-07-19) — implementation not started.
+**Status:** Approved direction (decisions D1–D5 resolved 2026-07-19) — implementation not started.
 **Author:** planning session 2026-07-19.
 **Scope:** two repos — `kpu-sim` and `branes-ai/domain_flow` (consumed via FetchContent).
 
@@ -25,8 +25,14 @@
 
 Replace the hand-written DNN facsimiles (`resnet18.hpp`, `mobilenetv2.hpp`,
 `efficientnet.hpp`, `m2_resnet.cpp`) with a real pipeline: **load a trained DNN from
-disk (ONNX / PyTorch), compile it through the domain_flow compiler into a cached
-binary KPU program, and execute that program on the simulator.**
+disk, compile it through the domain_flow compiler into a cached binary KPU program,
+and execute that program on the simulator.**
+
+**Input scope:** the ingestion path for this epic is **ONNX only** (D1: direct
+`ONNX → DomainFlowGraph`). **PyTorch is supported by exporting to ONNX upstream**
+(`torch.onnx` / `torch.export → ONNX`), *not* by a native `.pt`/TorchScript reader —
+domain_flow's `torch` importer is a stub (§2.1), and a native path is a later,
+separate milestone. `.pt` in the diagram below denotes that upstream export step.
 
 **Separation of concerns (the load-bearing principle).** domain_flow is the
 *compiler*; kpu-sim is the *hardware simulator*. **All compilation/lowering happens
@@ -98,7 +104,8 @@ full LLVM/MLIR 20.x build (`DOMAINFLOW_MLIR_TOOLS=ON`, default OFF).
 | Host/DRAM memory model (`ExternalMemory`, HOST_MEMORY) | ✅ exists, **off the exec path** | `include/sw/memory/external_memory.hpp:32` |
 | **Program cache** (compiled-graph persistence) | ❌ none | only single-`Kernel` `KernelSerializer` + tools-only `.kpu` |
 | `KernelGraph`-level serialization | ❌ none | — |
-| Schedule generators (matmul/conv2d/…) → `ScheduleResult` on CSP executor | ✅ the de-facto "KPU program", but **generated per-op at runtime, never serialized** | `include/sw/kpu/timing/schedule/*` |
+| Schedule generators (matmul/conv2d/…) → `ScheduleResult` on the **CSP cycle-accurate** executor (`ConcurrentTimingExecutor`) | ✅ the benchmarked timing path, but **generated per-op at runtime, never serialized** | `include/sw/kpu/timing/schedule/*` |
+| **ISA binary program path**: `DMProgram` (DMInstruction stream) → **`.kpubin`** (versioned: `DMPROGRAM_MAGIC` + `DMPROGRAM_VERSION`, magic-checked) / `.kpujson`, via `ProgramSerializer`; loaded by **`kpu-loader`**; executed by `IProgramExecutor` (**Behavioral / Transactional** wrappers) | ✅ a real, **serialized, versioned** binary + reader + loader + executors — but on behavioral/transactional fidelity, **not** the CSP cycle-accurate model | `include/sw/kpu/isa/program_serializer.hpp`, `behavioral_program_executor.hpp`, `program_executor_interface.cpp`, `tools/runtime/kpu-loader/` |
 
 **Execution seam.** Today: `GraphCspExecutor::run(KernelGraph, input, node_data, T)`
 (`graph_csp_executor.hpp:70`) — but note this seam *generates* the schedule inline,
@@ -119,7 +126,7 @@ model is therefore the **binary program reader** (P0) plus `ResourceManager` set
 | G3 | **`.dfg` → executed `KernelGraph`** (not the dead-end `ComputationalGraph`); real tensor metadata + topo sort; full op-config mapping | kpu-sim | 🟠 |
 | G4 | **`.dfg` contract formalization** — versioned op set + shapes/dtypes + weight references shared by both repos | both | 🟠 the API between the repos |
 | G5 | **Operator-set alignment** — domain_flow `DomainFlowOperator` (~40, TOSA; no softmax/layernorm/attention) vs kpu-sim `KernelOpType` (12; has them) | both | 🟠 |
-| G6 | **Compile → serialized binary KPU program** (schedules + tiling/dataflow strategy) — the *compiler backend* | domain_flow (relocated) + `.kpu` format owned by kpu-sim | 🟠 backend logic exists in kpu-sim's generators; must relocate + serialize |
+| G6 | **Compile → serialized binary KPU program** (schedules + tiling/dataflow strategy) — the *compiler backend* | domain_flow (relocated) + `.kpubin` format owned by kpu-sim | 🟠 backend logic exists in kpu-sim's generators; must relocate + serialize |
 | G6b | **Binary program reader/executor + KPU functional-spec conformance** | kpu-sim | 🟠 net-new; `ScheduleExecutor` executes, but nothing deserializes a program |
 | G7 | **Program cache** (keyed compiled-program store, load-from-cache fast path) | kpu-sim | 🟠 net-new |
 | G8 | **Op→resource binding / data-path personalization** wired to the real executor | kpu-sim | 🟠 prototype in `tools/schedule_binder.hpp`, unconnected |
@@ -157,19 +164,28 @@ These change the shape of the plan; recommendations given, but they are yours.
   graph-walking schedule-generation are *compiler-backend* concerns (§5) — the
   simulator runtime keeps only the executor.
 
-- **D4 — Compiled-program artifact = the binary KPU program.** Reuse the existing
-  **`sw::kpu::compiler::dfx` `.kpu` object file** (already "serializable, PTX-for-KPU")
-  as the binary-program format rather than inventing one. It is the *lowered* form
-  (D5), distinct from the `DomainFlowGraph` source.
+- **D4 — Canonical binary artifact = the ISA `.kpubin` (`DMProgram`).** The repo
+  already has a **serialized, versioned** ISA binary: `DMProgram` →
+  `ProgramSerializer` → `.kpubin` (magic + `DMPROGRAM_VERSION`) / `.kpujson`, with a
+  `kpu-loader` and `IProgramExecutor`s. **This is the canonical binary KPU program**
+  (D5) — Phase 0 builds on it, not the greenfield `dfx` `.kpu` object. *Two things to
+  reconcile (Phase 0 decisions, not yet settled):* (1) the higher-level `dfx` `.kpu`
+  object file — does the compiler emit it as an intermediate that lowers to `.kpubin`,
+  or is it dropped? (2) `.kpubin`/`DMProgram` executes today on **behavioral/
+  transactional** models, while the **cycle-accurate CSP** timing model (the
+  benchmarked one) runs a non-serialized `ScheduleResult` — so either the CSP executor
+  gains a `DMProgram`/`.kpubin` front-end, or the binary format carries a
+  schedule/tiling section the CSP path consumes, or the two paths unify. Resolving
+  this is the heart of Phase 0/2.
 
 - **D5 — The KPU binary functional spec is the contract; kpu-sim owns it, the
-  compiler targets it.** kpu-sim defines the binary program format + the execution
-  semantics (the "ISA": the sequence of DMA/BlockMover/Streamer/COMPUTE/DRAIN/
-  WRITEBACK/STORE operations with tile + resource operands — i.e. a serialized
-  `ScheduleResult` + fabric config + resource bindings). domain_flow emits binaries
-  conforming to it. **kpu-sim reads and executes; it never compiles.** *(Recommended:
-  formalize the format as a versioned spec doc + a golden-binary conformance suite so
-  the two repos stay in lockstep.)*
+  compiler targets it.** The spec is embodied by the existing ISA binary
+  (`DMProgram`/`.kpubin`, D4): the instruction stream of DMA/BlockMover/Streamer/
+  COMPUTE/DRAIN/WRITEBACK/STORE ops with tile + resource operands + memory map, with a
+  versioned header. domain_flow emits binaries conforming to it. **kpu-sim reads and
+  executes; it never compiles.** *(Recommended: promote the existing `.kpubin` header
+  to the full versioned spec per `dfg-kpu-versioning.md`, with a golden-binary
+  conformance suite so the two repos stay in lockstep.)*
 
 ### 4a. The compiler/hardware boundary & the two artifacts (D3 + D5)
 
@@ -178,7 +194,7 @@ Two artifacts, two owners, one hard boundary — this is the crux of the design:
 | Artifact | Representation | Produced by | Consumed by | Carries |
 |---|---|---|---|---|
 | **Source / compute IR** | `sw::dfa::DomainFlowGraph` (`.dfg`) | domain_flow front-end | domain_flow passes | operators, shapes/dtypes, op attrs, weight *references* |
-| **Binary KPU program** (the contract) | `.kpu` object (per the KPU binary functional spec) | **domain_flow compiler** (lowering) | **kpu-sim** (execution) | the op/tile/resource *schedule* — the "ISA" the KPU runs |
+| **Binary KPU program** (the contract) | `.kpubin` (`DMProgram`, per the KPU binary functional spec) | **domain_flow compiler** (lowering) | **kpu-sim** (execution) | the op/tile/resource *schedule* — the "ISA" the KPU runs |
 | Model weights/data | weight blob → HOST_MEMORY | (model file) | kpu-sim `ResourceManager` | tensor values (Phase 5) / shapes (early) |
 
 The boundary is the **binary KPU program**. Everything *left* of it (ONNX import,
@@ -214,15 +230,20 @@ The hard boundary is between **[C]** and **[D]**: the binary KPU program.
 
 | Stage | Owner | Input → Output | Reuse / build |
 |---|---|---|---|
-| **[A]** front-end | **domain_flow** | `.onnx`/`.pt` → `DomainFlowGraph` | new direct ONNX reader (D1) |
+| **[A]** front-end | **domain_flow** | `.onnx` → `DomainFlowGraph` | new direct ONNX reader (D1). `.pt` is out of scope — export to ONNX upstream (§ Goal note) |
 | **[B]** passes / KPU backend | **domain_flow** | `DomainFlowGraph` → tiled/scheduled lowering | relocate kpu-sim's schedule generators here (shared `kpu-backend`) |
-| **[C]** emit binary program | **domain_flow** | lowering → `.kpu` binary (per the spec, D5) | reuse the `dfx` `.kpu` object format |
-| **[D]** program cache | kpu-sim | `.kpu` ↔ cache keyed by (op sig, shapes, dtype, fabric cfg) | net-new (small) |
-| **[E]** load + execute | **kpu-sim** | read `.kpu` + weights; `ResourceManager` sets up fabric; run | reader + productionize `ScheduleBinder`; keep `ScheduleExecutor`/`ConcurrentTimingExecutor` |
+| **[C]** emit binary program | **domain_flow** | lowering → **`.kpubin`** (`DMProgram`, per the spec, D4/D5) | reuse `ProgramSerializer`'s versioned format |
+| **[D]** program cache | kpu-sim | `.kpubin` ↔ cache keyed by *(op sig, shapes, dtype, fabric cfg, **ISA/ABI version, compiler version, opset+type-sys version, target profile**)* | net-new (small) |
+| **[E]** load + execute | **kpu-sim** | read `.kpubin` (via `ProgramSerializer`/`kpu-loader`) + weights; `ResourceManager` sets up fabric; run | reader exists; reconcile ISA-executor vs CSP timing path (D4); productionize `ScheduleBinder` |
 
-**Spec doc (D5):** the `.kpu` binary format + execution semantics are written up as
-the *KPU binary functional spec* (versioned), with a golden-binary conformance suite
-run by kpu-sim — the single artifact that keeps compiler and simulator in lockstep.
+`.dfg` (the `DomainFlowGraph` source IR) is **compiler-internal**; kpu-sim's runtime
+**execution** input is `.kpubin`, not `.dfg`. kpu-sim reads model *data/weights* into
+`HOST_MEMORY` (Phase 5) but does not consume `.dfg` to execute.
+
+**Spec doc (D5):** the `.kpubin` binary format + execution semantics are written up as
+the *KPU binary functional spec* (versioned per `dfg-kpu-versioning.md`), with a
+golden-binary conformance suite run by kpu-sim — the single artifact keeping compiler
+and simulator in lockstep.
 
 ---
 
@@ -241,41 +262,45 @@ the compiler side (ISA producer) proceed in parallel against the binary contract
 ### Phase 0 — KPU binary program spec + simulator reader/executor  *(kpu-sim)*
 - **Build hygiene** (§4a prereq): force domain_flow's optional tools OFF in
   `DomainFlowIntegration.cmake` (unblocks Windows; keeps the dep header-only + MLIR-free).
-- Define & version the **KPU binary program format (D5)**: serialize a
-  `ScheduleResult` (+ fabric config + resource bindings) into the `dfx` `.kpu` object;
-  write the *KPU binary functional spec* doc. Apply the versioning requirements
-  (R1–R9, `.kpu` §3) from `dfg-kpu-versioning.md` — version stamp + `min_consumer`
-  gate + profile/capability dimension + golden-binary conformance corpus.
-- Add a **program reader** in kpu-sim that loads a `.kpu` and runs it through the
-  existing `ScheduleExecutor`/`ConcurrentTimingExecutor` — **no inline generation**.
-- **DoD:** the ResNet schedule → serialize `.kpu` → read back → execute → **identical
-  cycles** to the inline path (guarded by `resnet_regression`). Proves kpu-sim
-  consumes a binary program.
+- Promote the **existing `.kpubin` (`DMProgram`) format (D4)** to the versioned **KPU
+  binary functional spec (D5)**: extend `ProgramSerializer`'s header per
+  `dfg-kpu-versioning.md` (R1–R9 + `.kpu`/`.kpubin` §3 — version stamp + `min_consumer`
+  gate + profile/capability dimension) and write the spec doc + golden-binary
+  conformance corpus.
+- **Reconcile the two execution paths (the crux, D4):** the `.kpubin`/`DMProgram`
+  reader + `IProgramExecutor` exist but on behavioral/transactional models; the
+  cycle-accurate CSP path (`ConcurrentTimingExecutor`) runs a non-serialized
+  `ScheduleResult`. Decide + implement: give the CSP path a `.kpubin` front-end, or
+  carry the schedule in the binary, or unify — so kpu-sim executes a *deserialized*
+  program with **no inline generation**.
+- **DoD:** the ResNet program → serialize `.kpubin` → read back → execute on the CSP
+  timing model → **identical cycles** to the inline path (guarded by
+  `resnet_regression`). Proves kpu-sim consumes a binary program.
 
 ### Phase 1 — Hardware-identical execution: ResourceManager setup + host memory  *(kpu-sim)*
 - Execute the binary program through the **hardware flow**: `ResourceManager`
   allocates/sets up fabric resources per the program, deposits DNN data (shapes) in
   `HOST_MEMORY`, signals "ready → start", executes — the same APIs a real KPU exposes.
-- **DoD:** `m2_resnet --run-program model.kpu` executes a serialized program end-to-end
+- **DoD:** `m2_resnet --run-program model.kpubin` executes a serialized program end-to-end
   through the resource-manager APIs; timing matches the direct path.
 
 ### Phase 2 — Relocate the KPU compiler backend to domain_flow  *(domain_flow / shared lib)*
 - Move kpu-sim's schedule-generation (tiling/scheduling/dataflow strategy — the
   matmul/conv2d/… generators + graph-walk) into domain_flow (or a shared
-  `kpu-backend` library the compiler links). domain_flow: `DomainFlowGraph` → `.kpu`
+  `kpu-backend` library the compiler links). domain_flow: `DomainFlowGraph` → `.kpubin`
   binary conforming to the spec (D5). Retire kpu-sim's `ComputationalGraph`.
-- **DoD:** domain_flow emits a `.kpu` from a `DomainFlowGraph` that kpu-sim executes
+- **DoD:** domain_flow emits a `.kpubin` from a `DomainFlowGraph` that kpu-sim executes
   with **identical results to P0's golden** (conformance suite passes).
 
 ### Phase 3 — Direct `ONNX → DomainFlowGraph` front-end  *(domain_flow; gap G1)*
 - Per D1: direct ONNX-protobuf → `DomainFlowGraph` reader (no MLIR) for the CNN op
   set — map ONNX ops → `DomainFlowOperator`, read tensor **shapes** (values optional,
-  D2). Then P2's backend compiles it to `.kpu`.
-- **DoD:** torchvision `resnet18.onnx` → `DomainFlowGraph` → `.kpu` → runs on kpu-sim
+  D2). Then P2's backend compiles it to `.kpubin`.
+- **DoD:** torchvision `resnet18.onnx` → `DomainFlowGraph` → `.kpubin` → runs on kpu-sim
   with **correct topology + timing** (numerical output not yet validated — P5).
 
 ### Phase 4 — Program cache + data-path personalization  *(kpu-sim; G7, G8)*
-- **Program cache**: keyed compiled `.kpu` programs (op sig, shapes, dtype, fabric
+- **Program cache**: keyed compiled `.kpubin` programs (op sig, shapes, dtype, fabric
   cfg) → fast-load on repeat. Productionize `ScheduleBinder` to bind program ops →
   concrete fabric resources (DMA/BM/STR ids, L3/L2/L1) = "personalize the data path".
 - **DoD:** second run fast-loads from cache (no recompile); the bound program runs on
@@ -292,7 +317,7 @@ the compiler side (ISA producer) proceed in parallel against the binary contract
 
 ## 7. Recommended first increment (thin vertical slice)
 
-**Phase 0 for ResNet-18: serialize the ResNet schedule to a `.kpu` binary, read it
+**Phase 0 for ResNet-18: serialize the ResNet schedule to a `.kpubin` binary, read it
 back, and execute it.** Proves the pivot — build hygiene → binary program format
 (D5) → kpu-sim reader → `ScheduleExecutor` → **identical cycles** to the inline path
 — **without** the compiler backend (P2), the ONNX front-end (P3), or weight values
@@ -326,11 +351,11 @@ same binary, validated against P0's golden.
   executor unchanged (fed by a *generated* `KernelGraph`); `resnet_regression` guards
   identical cycles.
 
-## 9. Open questions (remaining, D1–D4 resolved)
+## 9. Open questions (remaining, D1–D5 resolved)
 
 1. ~~`.dfg` contract versioning~~ — **analyzed** in `dfg-kpu-versioning.md`: version
    `.dfg` **in place** (3 axes + `min_consumer` gate + profile dimension + golden
-   corpus), and version the `.kpu` binary from day one. Feeds Phase 0.
+   corpus), and version the `.kpubin` binary from day one. Feeds Phase 0.
 2. Epic sub-issue granularity — one per phase, or per phase-DoD?
 3. Fine sequencing vs. M4 (agreed: run alongside) — which phases interleave with M4
    vs. run after it?

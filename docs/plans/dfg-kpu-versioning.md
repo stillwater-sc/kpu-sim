@@ -1,13 +1,14 @@
-# Versioning the `.dfg` source IR and the `.kpu` binary program
+# Versioning the `.dfg` source IR and the `.kpubin` binary program
 
 **Status:** requirements analysis (companion to `model-ingestion-compilation-epic.md`,
 epic #229). Resolves the plan's §9 Q1.
 
 **Motivation:** ONNX, StableHLO, and TOSA/MLIR all carry explicit version numbers and
 compatibility policies. domain_flow's `.dfg` today has **none** — no format version,
-and the `DomainFlowOperator` enum is an *implicit, unversioned* opset. The `.kpu`
-binary program (the compiler↔simulator ABI, epic decision D5) has the same gap and a
-higher stakes. This note extracts the versioning requirements from prior art.
+and the `DomainFlowOperator` enum is an *implicit, unversioned* opset. The `.kpubin`
+binary program (the compiler↔simulator ABI, epic decision D4/D5) has a partial header
+(magic + version) but lacks the full stamp. This note extracts the versioning
+requirements from prior art.
 
 ---
 
@@ -78,44 +79,74 @@ capabilities, a consumer advertises supported ones, mismatch is a clean refusal.
 | **R8** | **Defined unknown-op/attr policy**: strict-fail on unknown *ops* in a required opset; additive-tolerant on optional *attrs*. | ONNX, StableHLO |
 | **R9** | **Explicit compatibility windows**, documented and **CI-tested** with a golden-`.dfg` corpus. | StableHLO |
 
-### Proposed `.dfg` versioned preamble (the current format has none)
+### Illustrative `.dfg` versioned preamble (the current format has none)
 
-```
-DFG 1.0                       # R1a format version (MAJOR.MINOR)
-PRODUCER domain_flow 0.4.2    # R1c producer + version
-OPSET   stillwater.dfa 3      # R1b/R2 (domain, opset_version) — repeatable
-MIN_CONSUMER 1.0              # R4 minimum reader; older readers refuse
-PROFILE fp32                  # R6 datatype/capability profile(s)
-TYPESYS mlir-tensor 1         # R7 type-string grammar version
+The example below is **illustrative** — it shows the *fields* the requirements imply,
+not the final grammar. The **complete, normative grammar** (exact field order,
+repetition, semver comparison + bump rules, legacy-file policy, and the precise
+refusal behavior for malformed / unsupported-version / capability-mismatch /
+unknown-op cases) is a **Phase 0 deliverable** of the epic (issue #230), written once
+and shared by producer (domain_flow) and consumer (kpu-sim's loader).
+
+```text
+DFG 1.0.0                     # R1a/R3 format version (MAJOR.MINOR.PATCH semver)
+MIN_CONSUMER 1.0.0            # R4 minimum reader format version; older readers refuse
+PRODUCER domain_flow 0.4.2    # R1c producer name + semver
+BAD_PRODUCERS domain_flow 0.4.0  # R4 known-bad producer blocklist (repeatable)
+OPSET   stillwater.dfa 3.0.0  # R1b/R2/R3 (domain, opset semver) — repeatable
+TYPESYS mlir-tensor 1.0.0     # R7 type-string grammar semver
+REQUIRES_PROFILE fp32         # R6 profiles this artifact NEEDS (repeatable)
+                              #    (consumer separately advertises SUPPORTS_PROFILE;
+                              #     REQUIRES ⊄ SUPPORTS ⇒ clean refusal)
 ... existing DIRECTED/NODES/EDGES/ADJACENCY body ...
 ```
 
+Semver comparison (R3): a consumer accepts an artifact iff its reader format version
+≥ `MIN_CONSUMER`, the producer is not in its `BAD_PRODUCERS` set, each required
+`OPSET`/`TYPESYS` MAJOR matches a supported one (MINOR/PATCH additive-tolerant, R8),
+and `REQUIRES_PROFILE ⊆ SUPPORTS_PROFILE`; otherwise it refuses with a specific
+diagnostic. Unknown *ops* in a required opset are hard errors; unknown optional
+*attrs* are ignored (R8).
+
 ---
 
-## 3. The `.kpu` binary program needs its own, stricter versioning
+## 3. The `.kpubin` binary program needs its own, stricter versioning
 
-`.dfg` is the compiler-front-facing *source* IR. The **`.kpu` binary program is the
-hardware ABI** — the D5 contract between the domain_flow compiler and the simulated
-KPU — and a binary ABI is exactly where versioning matters most. It needs its **own**
-version stamp:
-- **(a) ISA / format version** of the binary program.
+`.dfg` is the compiler-front-facing *source* IR. The **`.kpubin` binary program (the
+`DMProgram` ISA stream) is the hardware ABI** — the D5 contract between the
+domain_flow compiler and the simulated KPU (epic decision D4) — and a binary ABI is
+exactly where versioning matters most.
+
+**Prior art already in-repo:** `ProgramSerializer` (`src/software/isa/program_serializer.cpp`)
+already writes a header with `DMPROGRAM_MAGIC` + `DMPROGRAM_VERSION` and magic-checks
+on read ("format v2"). That is the **seed** — Phase 0 extends it to the full stamp:
+- **(a) ISA / format version** — already present (`DMPROGRAM_VERSION`); add a
+  `MIN_CONSUMER` gate (R4) so an old loader refuses a too-new binary cleanly.
 - **(b) KPU functional-spec profile it targets** — fabric config + datatype support.
-  The R6 capability dimension is load-bearing here: an int8 program on an fp32-only
-  fabric must be **rejected, not mis-run**.
-- **(c) producer compiler version.**
+  The R6 capability dimension is load-bearing: an int8 program on an fp32-only fabric
+  must be **rejected, not mis-run**. (Not represented in the current header.)
+- **(c) producer compiler version** (+ `bad_producers`, R4). (Not present today.)
 
 Treat it like a StableHLO portable artifact: freeze-on-release + `min_consumer` gate +
-a **golden-binary conformance suite** — which is already the epic's D5 / Phase 0
-deliverable. kpu-sim owns this spec (it is the hardware); the compiler targets it.
+a **golden-binary conformance suite** — the epic's D5 / Phase 0 deliverable (#230).
+kpu-sim owns this spec (it is the hardware); the compiler targets it. **Do not add a
+second binary format** — extend `.kpubin`/`ProgramSerializer`; the higher-level `dfx`
+`.kpu` object's fate (intermediate vs dropped) is a separate Phase 0 decision (epic
+D4).
 
 ---
 
 ## 4. Recommendation
 
 - **Version `.dfg` in place** by adding the preamble (§2) — do **not** fork a parallel
-  schema; extend the existing text format so kpu-sim's current reader evolves rather
-  than a second path appearing.
-- **Version `.kpu` from day one** (Phase 0) — it is the ABI; retrofitting a version
-  onto an unversioned binary contract later is far more expensive.
+  schema; extend domain_flow's existing text format. `.dfg` is **compiler-internal**
+  (the source IR that ONNX imports into and passes rewrite); it is versioned for the
+  *compiler front-end*, **not** as a kpu-sim runtime input. kpu-sim's runtime
+  execution contract is the `.kpubin` binary (epic D4/D5), not `.dfg`.
+- **Version `.kpubin` from day one** (Phase 0) by extending the existing
+  `ProgramSerializer` header (§3) — it is the ABI; retrofitting a fuller version onto a
+  binary contract later is far more expensive.
+- **One binary format, one source format** — do not add a third path; the `dfx` `.kpu`
+  object's status (intermediate vs dropped) is a Phase 0 decision (epic D4).
 - **Enforce with golden corpora** in CI for both — a version policy that isn't tested
   rots (StableHLO's discipline).
