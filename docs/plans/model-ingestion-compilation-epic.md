@@ -18,6 +18,15 @@
   the **KPU binary functional spec** (the binary program format + execution
   semantics); the domain_flow compiler *targets* it; kpu-sim *reads and executes* the
   binary with hardware-identical APIs. This is the crux — see §1 and §4a.
+- **D6 — the portable program is a layered *tile/stream* program; the engine config
+  is a driver JIT.** The KPU is a reactive dataflow fabric: the program articulates
+  the streams into/out of the fabric (not the DMA/BM/Streamer engines), and lowering
+  it to a specific device's data-path config is a **driver JIT** step (modeled in
+  kpu-sim now, migrates to the real driver — PTX→SASS). The program is layered:
+  **L0 tile-sequences** (functional reference) then **L1 stream signatures** (timing).
+  `DMProgram`/`ScheduleResult` are the JIT-output / movement layers, **not** the
+  portable program. **Refines Phase 0** — see `kpu-program-model.md`. Multi-compute-
+  tile executor modeling is a separate simulator-capability issue.
 
 ---
 
