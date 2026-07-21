@@ -5,10 +5,11 @@ harness in this directory (`tile_characterize.cpp`). For the metric *definitions
 the modeling rationale see `docs/tools/tile-characterization.md`; for the operator /
 kernel context see `docs/plans/plasma-tile-algorithms.md`.
 
-The harness sweeps **(algorithm × size × tile-shape × compute-tiles × topology)** and,
-for each cell, (1) builds the L0 tile program, (2) runs the functional reference and
-**validates** it against an oracle, and (3) reports structural + first-order modeled
-performance/energy metrics.
+Each invocation selects **one** algorithm via `--algo`; the harness then sweeps
+**(size × tile-shape × compute-tiles × topology)** and, for each cell, (1) builds the
+L0 tile program, (2) runs the functional reference and **validates** it against an
+oracle, and (3) reports structural + first-order modeled performance/energy metrics.
+Comparing matmul vs. LU is two separate invocations.
 
 ---
 
@@ -47,13 +48,15 @@ build/examples/characterize/tile_characterize \
 | `--disasm` | print the tile sequence of the first cell | — |
 | `--no-validate` | skip the functional oracle check | (validate on) |
 
-Every factor flag is comma-separated → a **full-factorial** sweep (one row per cell).
+The **list-valued** factor flags (`--sizes`, `--tiles`, `--compute-tiles`,
+`--topology`) are comma-separated → a **full-factorial** sweep (one row per cell).
+`--algo` selects a single algorithm per run.
 
 ## 3. Read the output
 
 Each row is one experiment cell:
 
-```
+```text
 algo   size tile  CF topology      macs        AI    crit_path   makespan  cmp_util  bound  energy_pJ    err
 matmul  128   32   1 checkerboard   2.1e+06   7.11       576.0    14976.0     0.55   mov    1.4e+07        0
 matmul  128   32  16 checkerboard   2.1e+06   7.11       576.0      768.0     0.67   mov    1.4e+07        0
@@ -116,8 +119,9 @@ tile_characterize --algo lu     --sizes 128 --tiles 32 --compute-tiles 1,4,16,64
 tile_characterize --algo matmul --sizes 128 --tiles 32 --compute-tiles 1,4,16,64 --topology checkerboard
 
 # (b) Compute vs movement bound: watch the `bound` column and AI.
-tile_characterize --algo matmul --sizes 256 --tiles 32 --compute-tiles 16 \
-    --bytes-per-cycle 16,256          # note: sweep by running twice; bandwidth is a single value per run
+#     --bytes-per-cycle takes ONE value, so run it twice to compare bandwidths:
+tile_characterize --algo matmul --sizes 256 --tiles 32 --compute-tiles 16 --bytes-per-cycle 16
+tile_characterize --algo matmul --sizes 256 --tiles 32 --compute-tiles 16 --bytes-per-cycle 256
 
 # (c) Tiling <-> reuse: bigger tiles raise AI and cut movement-bound makespan/energy.
 tile_characterize --algo matmul --sizes 256 --tiles 16,32,64 --compute-tiles 16 --topology single
