@@ -163,10 +163,10 @@ Do we have what the PLASMA methodology needs? Per primitive family:
 |---|---|---|---|---|
 | **P1** | MAC / GEMM array | all | **Have** — the compute fabric is a systolic MAC array; L0 `MATMUL_ACCUM` proven | none |
 | **P2** | Triangular substitution (dependent MAC + divide) | TRSM, GESSM, POTRF, GETRF | **Partial** — functional reference has TRSM; fabric support for a substitution *dataflow* (vs. GEMM) is unmodeled | Model a TRSM fabric configuration / decide it runs on the VE; needs P3 divide |
-| **P3** | Scalar divide / reciprocal / **sqrt** | GETRF, TRSM (divide); POTRF, QR (sqrt) | **Gap** — the fabric is MAC-only; no divide/sqrt unit is modeled | Add a scalar/special-function capability (fabric or VE); required before Cholesky/QR |
+| **P3** | Scalar divide / reciprocal / **sqrt** | GETRF, TRSM (divide); POTRF, QR (sqrt) | **Gap** ([#242](https://github.com/stillwater-sc/kpu-sim/issues/242)) — the fabric is MAC-only; no divide/sqrt unit is modeled | Add a scalar/special-function capability (fabric or VE); required before Cholesky/QR |
 | **P4** | Reductions: sum-of-squares, **argmax-with-index** | QR norms (sum); pivoting (argmax) | **Partial** — `VE_REDUCE` exists (sum/max); argmax **with index** for pivoting is unconfirmed | Confirm/add index-returning argmax reduction |
-| **P5** | Data-dependent row permute (pivot swap) | GETRF, LASWP, TSTRF | **Gap** — no row-exchange primitive; movers do tile moves, not value-selected row swaps | Decide: BlockMover-driven row swap vs. VE permute; model it |
-| **P6** | On-chip tile residency + reuse moves (L3↔L3 / L2) | all factor kernels (diagonal reused across row/col) | **Gap** — timing tier is single-compute-tile; L3/L2 are credit pools, no inter-tile reuse move | The separate multi-compute-tile executor issue (§4a of the program model) |
+| **P5** | Data-dependent row permute (pivot swap) | GETRF, LASWP, TSTRF | **Gap** ([#243](https://github.com/stillwater-sc/kpu-sim/issues/243)) — no row-exchange primitive; movers do tile moves, not value-selected row swaps | Decide: BlockMover-driven row swap vs. VE permute; model it (incl. P4 argmax-with-index) |
+| **P6** | On-chip tile residency + reuse moves (L3↔L3 / L2) | all factor kernels (diagonal reused across row/col) | **Gap** ([#244](https://github.com/stillwater-sc/kpu-sim/issues/244)) — timing tier is single-compute-tile; L3/L2 are credit pools, no inter-tile reuse move | The separate multi-compute-tile executor issue (§4a of the program model) |
 | **P7** | In-place tile RMW + DAG scheduling on tile deps | all | **Partial** — L0 reference does in-place RMW; DAG recovery/placement is the driver-JIT pass (§4a), not yet built | Increment 3 (placement pass) |
 
 **Bottom line.** GEMM-class work (P1) is fully supported and the confined-pivoting
@@ -174,10 +174,12 @@ tile LU (§3.2a) runs today in the L0 functional reference. To support the **ful
 PLASMA methodology** the KPU/simulator is missing four capabilities, in rough order
 of leverage:
 1. **P3 scalar special functions** (divide + sqrt) — gates Cholesky, QR, and honest
-   TRSM/GETRF.
+   TRSM/GETRF. → [#242](https://github.com/stillwater-sc/kpu-sim/issues/242)
 2. **P5 pivoting** (argmax + row swap) — gates partial-pivot and pairwise-pivot LU.
+   → [#243](https://github.com/stillwater-sc/kpu-sim/issues/243)
 3. **P6 multi-compute-tile residency + reuse moves** — gates *executing* any
-   multi-tile factorization on more than one CF tile (already tracked separately).
+   multi-tile factorization on more than one CF tile.
+   → [#244](https://github.com/stillwater-sc/kpu-sim/issues/244)
 4. **P2 triangular-substitution fabric mode** — gates hardware-faithful TRSM timing.
 
 These are hardware-capability questions the simulator must answer (which fidelity
@@ -235,11 +237,14 @@ compute fabric / VE / mover, or is marked an explicit **gap** with an issue:
 - **P1 MAC:** already covered by the matmul timing tests.
 - **P2 TRSM mode:** probe that a triangular-substitution schedule runs on the fabric
   (or is declared VE-owned).
-- **P3 divide/sqrt:** probe the compute ISA for a reciprocal/sqrt op; **currently a
-  gap** → file an issue for a scalar/special-function capability.
-- **P4 argmax-with-index:** probe `VE_REDUCE` for index-returning max; confirm or gap.
-- **P5 row-swap:** probe a value-selected row exchange (BlockMover or VE); **gap**.
-- **P6 multi-CF residency/reuse:** blocked on the multi-compute-tile executor issue.
+- **P3 divide/sqrt:** probe the compute ISA for a reciprocal/sqrt op; **gap →
+  [#242](https://github.com/stillwater-sc/kpu-sim/issues/242)** (scalar special-functions).
+- **P4 argmax-with-index:** probe `VE_REDUCE` for index-returning max; tracked with
+  P5 in [#243](https://github.com/stillwater-sc/kpu-sim/issues/243).
+- **P5 row-swap:** probe a value-selected row exchange (BlockMover or VE); **gap →
+  [#243](https://github.com/stillwater-sc/kpu-sim/issues/243)** (pivoting).
+- **P6 multi-CF residency/reuse:** blocked on the multi-compute-tile executor issue
+  **[#244](https://github.com/stillwater-sc/kpu-sim/issues/244)**.
 - **P7 DAG placement:** covered once the driver-JIT placement pass (increment 3) lands.
 
 Deliverable: a `plasma_capability.json` (kernel × primitive × {have|gap|planned})
@@ -255,8 +260,10 @@ credits and mover capability.
 1. **Now:** Level 0/1 rows that need no new HW primitive — standalone TRSM
    left/right residual tests, SYRK, GESSM, and the triangular-solve operator.
 2. **Next:** the pairwise-pivot LU (TSTRF/SSSSM, validated by solve residual — it
-   needs the P5 pivoting primitive), and the Level 2 capability matrix that turns the
-   P3/P4/P5 gaps into filed issues.
+   needs the P5 pivoting primitive), and the Level 2 capability matrix backing the
+   filed gap issues (P3 [#242](https://github.com/stillwater-sc/kpu-sim/issues/242),
+   P4/P5 [#243](https://github.com/stillwater-sc/kpu-sim/issues/243),
+   P6 [#244](https://github.com/stillwater-sc/kpu-sim/issues/244)).
 3. **Then:** POTRF/Cholesky and QR once P3 (sqrt/divide) is modeled; multi-CF (P6);
    and the L1/timing level.
 
