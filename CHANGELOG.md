@@ -135,6 +135,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **domain_flow FetchContent no longer drags in Matplot++ / CGAL / LLVM (fixes the
+  Windows configure break).** kpu-sim consumes domain_flow only as a header-only
+  library, so `cmake/DomainFlowIntegration.cmake` now force-sets its optional tool
+  subprojects OFF before `FetchContent_MakeAvailable`
+  (`DOMAINFLOW_MATPLOT_TOOLS`→Matplot++, `DOMAINFLOW_VISUALIZATION`→CGAL/Qt6,
+  `DOMAINFLOW_MLIR_TOOLS`→LLVM, plus `DSE`/`DATABASE_TOOLS`/`TOOLS`). These default
+  OFF upstream but could be turned back on by an inherited preset/cache value; the
+  `FORCE` is authoritative, so configuring with `-DDOMAINFLOW_VISUALIZATION=ON` (etc.)
+  no longer fails on the missing packages. Phase 0 of the model-ingestion epic
+  (#230); keeps the dependency header-only + MLIR-free.
+
 - **ResNet utilization was understated by inconsistent instrumentation.** Four
   RunStats-producing runners (`run_elementwise`, `run_ve_unary`,
   `run_depthwise_conv`, `run_global_avg_pool`) added only `total_cycles`/`ops` to
