@@ -20,7 +20,17 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
         -Wstrict-null-sentinel -Wstrict-overflow=5 -Wswitch-default
         -Wundef -Wno-unused
     )
-    
+
+    # On newer x86 CI runners, `-march=native` enables a partial AVX10.1 target
+    # feature (`+avx10.1-256`), which Clang flags via -Winvalid-feature-combination
+    # ("will be promoted to avx10.1-512") and -Werror then turns fatal. It is a
+    # benign codegen-tuning note, not a source issue, so silence it for Clang.
+    # (GCC has no such warning; it builds cleanly with the same -march=native.)
+    if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+        list(APPEND KPU_WARNING_FLAGS -Wno-invalid-feature-combination)
+    endif()
+
+
     # Architecture-specific optimizations
     if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64")
         list(APPEND KPU_CXX_FLAGS_RELEASE "-march=native -mtune=native")

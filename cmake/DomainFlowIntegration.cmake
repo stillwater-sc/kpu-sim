@@ -61,6 +61,22 @@ if(KPU_USE_DOMAIN_FLOW)
         # Set this before MakeAvailable to prevent policy warnings
         set(CMAKE_POLICY_DEFAULT_CMP0077 NEW)
 
+        # kpu-sim consumes domain_flow ONLY as a header-only library (the dfa IR +
+        # polyhedral math). Force its optional tool subprojects OFF so the fetched
+        # dependency never drags in heavy external packages or builds executables we
+        # do not use. Each defaults OFF in domain_flow, but a value inherited from a
+        # parent preset/cache can turn it back on; FORCE here is authoritative.
+        # (CMAKE_ARGS in FetchContent_Declare is ignored for the add_subdirectory
+        #  model, so these must be cache-set here, like BUILD_TESTING above.)
+        #   MATPLOT_TOOLS -> Matplot++ | VISUALIZATION -> CGAL/Qt6 | MLIR_TOOLS -> LLVM/MLIR
+        # This also fixes the Windows configure break (missing Matplot++ / CGAL).
+        set(DOMAINFLOW_MATPLOT_TOOLS  OFF CACHE BOOL "kpu-sim: no domain_flow plot tools"    FORCE)
+        set(DOMAINFLOW_VISUALIZATION  OFF CACHE BOOL "kpu-sim: no domain_flow viz tools"     FORCE)
+        set(DOMAINFLOW_MLIR_TOOLS     OFF CACHE BOOL "kpu-sim: no domain_flow MLIR tools"    FORCE)
+        set(DOMAINFLOW_DSE            OFF CACHE BOOL "kpu-sim: no domain_flow DSE tools"     FORCE)
+        set(DOMAINFLOW_DATABASE_TOOLS OFF CACHE BOOL "kpu-sim: no domain_flow DB tools"      FORCE)
+        set(DOMAINFLOW_TOOLS          OFF CACHE BOOL "kpu-sim: no domain_flow dfg/rdg tools" FORCE)
+
         FetchContent_MakeAvailable(domain_flow)
 
         # Restore BUILD_TESTING to enable kpu-sim's own tests
