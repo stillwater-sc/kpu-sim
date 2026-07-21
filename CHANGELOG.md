@@ -9,6 +9,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **L0 `TileProgram` — the portable program's tile-sequence layer (#230, epic
+  #229).** A device-independent, timing-free representation of a tiled
+  linear-algebra operator: an ordered sequence of tiles fed into / drained from
+  logical fabric ports plus the tile-level compute over them, carrying **no
+  engine/bank ids and no stream/timing** (those belong to L1 and the driver JIT,
+  per `docs/plans/kpu-program-model.md`). Because processing the tile sequence
+  with tile-level compute yields the correct numeric result, L0 alone is a **pure
+  functional reference** (`TileProgramReference`). New headers under
+  `include/sw/kpu/program/`: `tile_program.hpp` (types + `disassemble()`),
+  `tile_program_reference.hpp` (functional executor), and derivations
+  `derive/matmul_tile_program.hpp` and `derive/lu_tile_program.hpp`. Beyond matmul
+  (the trivial case), an **LU factorization with neighbor (pairwise) pivoting** is
+  derived to prove the abstraction generalizes to all dense factorizations — it
+  exercises cross-tile dependencies, a shrinking trailing submatrix, and
+  data-dependent control (a pivot decision in one tile op flowing to trailing-tile
+  row swaps via `PivotApply`). The LU trailing update reuses `MatMulAccum`
+  (`alpha=-1`), the matmul/trailing-update unification. Tests
+  (`tests/program/test_tile_program.cpp`): matmul reproduces naive matmul exactly
+  (and under non-divisible tiling), and LU reconstructs `P·A = L·U`.
+
 - **ResNet benchmark JSON export + CI regression tracking.** `m2_resnet --json`
   emits the deterministic sweep as structured JSON (config, timing, stalls,
   throughput, utilization, compute). A committed baseline

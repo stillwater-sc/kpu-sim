@@ -78,6 +78,7 @@ add_subdirectory(dsl)
 add_subdirectory(harness)
 add_subdirectory(timing)
 add_subdirectory(coverage)
+add_subdirectory(program)
 
 # Custom test targets for different categories
 # These targets are defined here because they orchestrate across all subdirectories
