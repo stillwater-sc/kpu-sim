@@ -32,6 +32,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   matmul exactly (and under non-divisible tiling); tile-LU reconstructs `P·A = L·U`
   across blocked, single-tile, 3×3-grid, and clamped-trailing-block cases.
 
+- **Tile-program characterization / design-of-experiments harness
+  (`examples/characterize/tile_characterize`, `docs/tools/tile-characterization.md`).**
+  Drives the L0 `TileProgram` layer across a grid of (algorithm × size × tile-shape ×
+  compute-tiles × topology) to validate, trace, and characterize linear-algebra tile
+  programs — the instrument for discovering domain-flow allocation/layout principles
+  (the analogue of CUDA occupancy-vs-resources). New headers under
+  `include/sw/kpu/program/characterize/`: `device_model.hpp` (parameterized device +
+  cost/energy model), `tile_dag.hpp` (recovers the tile-dependency DAG from each op's
+  declared tile I/O; critical path + list-scheduled makespan on finite compute
+  tiles/movement lanes), and `characterization.hpp` (structural + modeled metrics:
+  MAC/byte volume, arithmetic intensity, footprint, makespan, utilization,
+  compute/movement-bound, energy, feasibility; CSV/JSON + Chrome-trace emitters). The
+  `--compute-tiles` sweep quantifies each operator's concurrency ceiling (matmul
+  scales to its critical path; LU saturates early on panel dependencies), and the
+  cost knobs surface the movement-bound regime and the tile-size/reuse trade-off.
+  Tests: `tests/program/test_tile_characterize.cpp` (DAG concurrency + metrics) plus a
+  `tile_characterize_smoke` ctest.
+
 - **PLASMA tile-algorithm decomposition + KPU HW-requirements assessment + test
   plan (`docs/plans/plasma-tile-algorithms.md`).** Summarizes how the PLASMA API
   tiles Cholesky / LU (confined and pairwise pivoting) / QR / triangular solve into

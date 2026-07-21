@@ -14,3 +14,12 @@ kpu_add_component_test(test_tile_program "program"
 set_tests_properties(test_tile_program PROPERTIES
     LABELS "program;tile_program;v0.9"
 )
+
+# TileProgram characterization (tile-DAG concurrency + modeled metrics)
+kpu_add_component_test(test_tile_characterize "program"
+    test_tile_characterize.cpp
+)
+
+set_tests_properties(test_tile_characterize PROPERTIES
+    LABELS "program;characterize;v0.9"
+)
