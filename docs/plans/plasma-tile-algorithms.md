@@ -138,11 +138,15 @@ reflectors. No pivoting for basic QR (column pivoting is an add-on).
 
 ### 3.4 Triangular solve (`A·X = B`, A triangular) — {TRSM, GEMM}
 ```text
-for k:                    # forward (lower) or backward (upper) sweep
+# forward substitution (A lower triangular): k = 0 .. nt-1
+for k:
   TRSM  X[k] <- A[k,k]
-  for i≠k: GEMM B[i] -= A[i,k]·X[k]
+  for i>k: GEMM B[i] -= A[i,k]·X[k]     # update only the UNsolved blocks below k
+# backward substitution (A upper triangular): iterate k = nt-1 .. 0 with i<k
 ```
-Pure P1+P2; this is also the "solve" phase after LU/Cholesky/QR factorization.
+Only the still-unsolved side is updated (`i>k` forward, `i<k` backward); touching
+already-solved blocks would corrupt them. Pure P1+P2; this is also the "solve" phase
+after LU/Cholesky/QR factorization.
 
 **Observation:** every operator is `{diagonal factor} + {pairwise/panel propagation}
 + {TRSM apply} + {GEMM trailing update}`. Cover that shape and you cover dense direct
@@ -197,7 +201,8 @@ validating it in isolation by local reconstruction/identity:
 | GEMM (`MATMUL_ACCUM`) | ✅ done | vs. naive matmul, exact |
 | GETRF (`LU_DIAG_FACTOR`) | ✅ done | single-tile `P·A=L·U` |
 | LASWP (`PIVOT_APPLY`) | ✅ done | permutation replay matches ipiv |
-| TRSM lower/upper | ✅ done | `T·X == B` residual |
+| TRSM lower-left | ◑ via LU | left path exercised by the LU `P·A=L·U` test; standalone `T·X==B` residual = direct check (todo) |
+| TRSM upper-right | ◑ via LU | right path (LU L-column-panel) exercised by the LU test; standalone `X·T==B` residual = direct check (todo) |
 | SYRK | ▫ todo | `C == C0 − A·Aᵀ` |
 | POTRF | ▫ todo (needs P3 sqrt) | `L·Lᵀ == A` |
 | GESSM | ▫ todo | `== L^{-1}·P·A` |
@@ -247,9 +252,11 @@ not only compute correctly but are *schedulable and deadlock-free* under the dev
 credits and mover capability.
 
 ### Sequencing
-1. **Now:** Level 0/1 rows that need no new HW primitive — SYRK, GESSM, triangular-
-   solve operator, and the pairwise-pivot LU (TSTRF/SSSSM) validated by solve residual.
-2. **Next:** Level 2 capability matrix — turns the P3/P4/P5 gaps into filed issues.
+1. **Now:** Level 0/1 rows that need no new HW primitive — standalone TRSM
+   left/right residual tests, SYRK, GESSM, and the triangular-solve operator.
+2. **Next:** the pairwise-pivot LU (TSTRF/SSSSM, validated by solve residual — it
+   needs the P5 pivoting primitive), and the Level 2 capability matrix that turns the
+   P3/P4/P5 gaps into filed issues.
 3. **Then:** POTRF/Cholesky and QR once P3 (sqrt/divide) is modeled; multi-CF (P6);
    and the L1/timing level.
 

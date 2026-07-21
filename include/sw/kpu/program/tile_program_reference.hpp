@@ -48,6 +48,7 @@ public:
     RunSummary run(TileProgram& program) {
         pivots_.clear();
         perm_.clear();
+        swaps_performed_ = 0;   // reset up front so a throw mid-run can't leak a stale count
         RunSummary sum;
         for (const auto& op : program.ops()) {
             ++sum.ops;
@@ -63,7 +64,6 @@ public:
         }
         sum.row_swaps = swaps_performed_;
         sum.permutation = perm_;
-        swaps_performed_ = 0;
         return sum;
     }
 
