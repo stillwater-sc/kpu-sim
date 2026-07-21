@@ -79,6 +79,42 @@ The fabric's computation (the SURE / recurrence + array dims). Device-independen
 L0+L1 → TRANSACTIONAL/CYCLE_ACCURATE timing. This is exactly the multi-fidelity tier
 split (`docs/SIMULATION_FIDELITY_FRAMEWORK.md`).
 
+## 3a. Explicit tile propagation — every op declares its full tile I/O
+
+**Rule:** every L0 `TileOp` declares the *complete* set of tiles it reads and
+writes, and its kernel touches **no tile it did not declare**. The program stays
+a flat, valid serial order, but because tile I/O is complete, the driver JIT can
+recover the **tile-dependency DAG** (RAW/WAR/WAW over tiles) and thus which ops
+are independent — the prerequisite for placing work on more than one compute
+tile (§4a). An op that reaches beyond its declared tiles hides dataflow and
+defeats placement.
+
+Matmul already obeys this (one `MatMulAccum` per `(ti,tj,tk)`, reading exactly
+`A[ti,tk]`,`B[tk,tj]`, writing `C[ti,tj]`), and so does the LU **trailing
+update**. The one place that must be decomposed the same way is the LU **panel
+factorization**: the down-the-tile-column propagation must be *in the program*,
+not collapsed into a single op that implicitly spans the column. The **tile-LU**
+(PLASMA-style) form makes it explicit:
+
+```
+for k:
+  A[k,k]                 = GETRF(A[k,k])              # factor the diagonal tile (in-tile pivoting)
+  for i>k: A[i,k],A[k,k] = TS_PIV(A[i,k], A[k,k])     # pairwise-eliminate each sub-diagonal tile
+                                                       #   against the diagonal — rows exchanged
+                                                       #   ONLY between the two neighboring tiles
+  for j>k: A[k,j]        = TRSM(A[k,k], A[k,j])        # U row-panel
+  for i>k,j>k: A[i,j]   -= A[i,k] . A[k,j]             # trailing update = matmul (alpha=-1)
+```
+
+**Where "neighbor pivoting" actually lives:** it is the *tile-pairwise* exchange
+in `TS_PIV` — a nearest-neighbor operation between adjacent tiles in a column,
+chosen precisely because a global column pivot search would break tile locality
+on a dataflow fabric. `P·A = L·U` with `P` a product of these local tile-pair
+exchanges. (The first L0 cut — issue #230, PR #238 — took a shortcut: a single
+`LU_PANEL_FACTOR A[k,k]` op whose kernel reaches the whole column through the
+shared matrix buffer. Correct numbers, but the multi-tile propagation is
+invisible. This section is the corrected model to implement.)
+
 ## 4. Derivation from the DFG, and the driver JIT
 
 **Streams are derivable from the DFG operators** (domain_flow already has the math):
@@ -104,6 +140,42 @@ So the driver JIT is: **portable program → feasibility check → data-path con
 on failure it re-tiles/re-schedules (which changes the stream) or refuses. It may
 **cache** the lowered config per (program, device) in the program cache.
 
+## 4a. Device descriptor + placement (the driver JIT's target)
+
+**The spatial layout is not in L0 — by design.** One device-independent
+`TileProgram` runs on a single L3/CF set, on a NEWS arrangement, or on a
+checkerboard; only the **driver-JIT mapping** differs, never the program. The
+placement is specified by two things the JIT owns (neither exists yet — this is
+increment 3):
+
+**(1) Device descriptor** — the target KPU's spatial resources:
+- **topology** of the L3/CF fabric: `single` (one L3 + one CF), `NEWS` (four L3
+  tiles on the N/E/W/S edges feeding one central CF), or `checkerboard` (a 2-D
+  grid of interleaved L3/CF tiles with nearest-neighbor L3↔L3 links);
+- per-tile **capacities** (L3/L2/L1 bytes), **mover capability** (BM/Streamer
+  reshape / gather / fan-out), and credit/buffer counts.
+
+**(2) Placement pass** (in the driver JIT) — maps the L0 program onto that device:
+- recover the tile-dependency DAG from each op's declared tile I/O (§3a);
+- assign L0 logical tiles → physical L3 tiles and L0 compute ops → physical CF
+  tiles over space **and** time (a space-time schedule);
+- check feasibility (capacity / mover-capability / deadlock, §4) — infeasible ⇒
+  re-tile (a different L0) or refuse;
+- emit the data-path config (`.kpubin`, the SASS-analog).
+
+**The same LU/matmul program on each topology:**
+| Topology | How the placement pass maps it |
+|---|---|
+| **single L3/CF** | the whole DAG is time-multiplexed through one L3 + one CF; independent tile ops serialize |
+| **NEWS + 1 central CF** | operand tiles staged on the surrounding N/E/W/S L3 tiles feed the central CF's West/North input ports; results drain South — matching the port names L0 already uses |
+| **checkerboard** | independent tile ops (e.g. the trailing-update GEMMs for different `(i,j)`) run on **different CF tiles concurrently**; inter-tile reuse becomes on-chip **L3→L3 block moves** between neighbors |
+
+**Simulator coupling:** the checkerboard mapping is only *executable/measurable*
+once the timing executor models **multiple CF tiles** (today it is single-compute-
+tile; L3/L2 are credit pools). That is the separate multi-compute-tile
+simulator-capability issue — the descriptor/placement design here says *what* to
+target; the executor work is *what runs it*.
+
 ## 5. Why `DMProgram` and `ScheduleResult` both mismodel this
 
 | IR | What it is | Why it's not the portable program |
@@ -120,15 +192,21 @@ tile reuse (the multi-tile gaps).
 ## 6. Reshaped Phase 0 (supersedes "serialize ScheduleResult")
 
 1. **L0 tile-sequence representation + functional reference** — a device-independent
-   tile-sequence program derived from the DFG (matmul first), and a functional
-   reference calculation that processes it to the correct result (validated against
-   the ResNet oracle). *This is the new first increment* (per the "define the outer
-   loop first, it's enough for functional validation" decision).
+   tile-sequence program (a fresh `TileProgram` type — see §7) with **explicit tile
+   propagation (§3a)**: every op declares its full tile I/O, and multi-tile
+   operators (LU panel factorization) are decomposed into tile-LU ops, not
+   monolithic kernels. A functional reference processes it to the correct result
+   (matmul validated against the ResNet oracle; LU validated by `P·A=L·U`).
+   *Status:* first cut landed (PR #238, matmul + neighbor-pivot LU); **remaining:
+   refactor the LU panel to the explicit tile-LU form of §3a** (the shortcut noted
+   there).
 2. **L1 stream signatures** — add the spatial/temporal stream layer for timing;
    drive the cycle-accurate CSP model from it (replacing inline generation).
-3. **Driver JIT** (modeled in kpu-sim) — lower L0/L1 → device data-path config with
-   the feasibility analysis (§4); + the **`.kpubin` disassembler** showing the
-   per-engine DMA / BlockMover / Streamer programs (the JIT output).
+3. **Driver JIT** (modeled in kpu-sim) — the **device descriptor + placement pass
+   (§4a)**: lower L0/L1 → device data-path config for a chosen topology
+   (single / NEWS / checkerboard) with the feasibility analysis (§4); + the
+   **`.kpubin` disassembler** showing the per-engine DMA / BlockMover / Streamer
+   programs (the JIT output).
 4. **Serialize the portable program** (versioned per `dfg-kpu-versioning.md`);
    round-trip → identical cycles (`resnet_regression`).
 
@@ -139,7 +217,15 @@ program, tracked apart from the format/serializer.
 
 ## 7. Open questions
 
-- L0 tile-sequence concrete schema: extend/reframe `ScheduleResult`, or a fresh
-  `TileProgram` type (leaving `ScheduleResult` as an internal CSP artifact)?
-- Where the feasibility analysis (§4) is authored so it is shared by the driver-JIT
-  model here and the eventual real driver.
+- ~~L0 tile-sequence concrete schema: extend/reframe `ScheduleResult`, or a fresh
+  `TileProgram` type?~~ **Resolved:** a fresh `TileProgram` type (PR #238),
+  leaving `ScheduleResult` as an internal CSP artifact.
+- `TS_PIV` numerics: tile-pairwise (neighbor) pivoting is stable enough for the
+  dataflow model but weaker than global partial pivoting — decide the acceptance
+  bar (reconstruction tolerance / conditioning) for the operator conformance
+  corpus.
+- Device-descriptor scope (§4a): the minimal fields the placement pass needs
+  (topology + capacities + mover capability + credits) vs. what defers to the
+  timing model.
+- Where the feasibility analysis (§4) and the placement pass (§4a) are authored so
+  they are shared by the driver-JIT model here and the eventual real driver.
