@@ -96,24 +96,33 @@ factorization**: the down-the-tile-column propagation must be *in the program*,
 not collapsed into a single op that implicitly spans the column. The **tile-LU**
 (PLASMA-style) form makes it explicit:
 
-```
+```text
 for k:
-  A[k,k]                 = GETRF(A[k,k])              # factor the diagonal tile (in-tile pivoting)
-  for i>k: A[i,k],A[k,k] = TS_PIV(A[i,k], A[k,k])     # pairwise-eliminate each sub-diagonal tile
-                                                       #   against the diagonal — rows exchanged
-                                                       #   ONLY between the two neighboring tiles
-  for j>k: A[k,j]        = TRSM(A[k,k], A[k,j])        # U row-panel
-  for i>k,j>k: A[i,j]   -= A[i,k] . A[k,j]             # trailing update = matmul (alpha=-1)
+  A[k,k] = GETRF(A[k,k])                     # factor the diagonal tile (in-tile pivoting)
+  # fold each sub-diagonal tile into the factorization, TWO TILES AT A TIME
+  # (flat reduction tree: A[k,k] is the running common partner, reused down the column):
+  for i = k+1 .. nt-1:
+    A[i,k], A[k,k] = TS_PIV(A[i,k], A[k,k])  # pairwise factor of ONE tile pair;
+                                             #   rows are exchanged only within this pair
+  for j>k: A[k,j]      = TRSM(A[k,k], A[k,j])  # U row-panel
+  for i>k,j>k: A[i,j] -= A[i,k] . A[k,j]       # trailing update = matmul (alpha=-1)
 ```
 
-**Where "neighbor pivoting" actually lives:** it is the *tile-pairwise* exchange
-in `TS_PIV` — a nearest-neighbor operation between adjacent tiles in a column,
-chosen precisely because a global column pivot search would break tile locality
-on a dataflow fabric. `P·A = L·U` with `P` a product of these local tile-pair
-exchanges. (The first L0 cut — issue #230, PR #238 — took a shortcut: a single
-`LU_PANEL_FACTOR A[k,k]` op whose kernel reaches the whole column through the
-shared matrix buffer. Correct numbers, but the multi-tile propagation is
-invisible. This section is the corrected model to implement.)
+**Where "neighbor pivoting" actually lives:** it is the *pairwise* exchange in
+`TS_PIV` — each `TSTRF` couples exactly **two tiles at a time** (bounded fan-in),
+so no global column pivot search is needed (that search is what would break tile
+locality on a dataflow fabric). *Which* two tiles pair is set by a **reduction
+tree**: PLASMA's default **flat** tree folds each sub-diagonal tile against the
+diagonal `A[k,k]` in sequence — the diagonal is the reused common partner (shown
+above), so exchanges are pairwise but not necessarily between physically adjacent
+tiles; a **binary** tree instead reduces adjacent tiles pairwise up the column for
+more parallelism (the strict nearest-neighbor variant). The tree is a scheduling
+degree of freedom; either way `P·A = L·U` with `P` a product of these local
+tile-pair exchanges, and no op ever touches more than two column tiles. (The first
+L0 cut — issue #230, PR #238 — took a shortcut: a single `LU_PANEL_FACTOR A[k,k]`
+op whose kernel reaches the whole column through the shared matrix buffer. Correct
+numbers, but the multi-tile propagation is invisible. This section is the corrected
+model to implement.)
 
 ## 4. Derivation from the DFG, and the driver JIT
 
@@ -164,6 +173,7 @@ increment 3):
 - emit the data-path config (`.kpubin`, the SASS-analog).
 
 **The same LU/matmul program on each topology:**
+
 | Topology | How the placement pass maps it |
 |---|---|
 | **single L3/CF** | the whole DAG is time-multiplexed through one L3 + one CF; independent tile ops serialize |
