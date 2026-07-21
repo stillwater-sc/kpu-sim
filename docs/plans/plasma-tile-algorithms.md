@@ -30,9 +30,10 @@ Two properties matter for a dataflow fabric:
 1. **Locality** — every kernel touches only a few tiles, so it maps to tile-resident
    compute (L3/L2/L1 + fabric) with no global data motion.
 2. **Nearest-neighbor factorization** — where pivoting/orthogonalization would
-   otherwise need global communication, PLASMA uses *pairwise* (tile-by-tile) kernels
-   (`TSTRF`/`TSQRT`) so all coupling is between **adjacent tiles** — the property the
-   KPU's neighbor-pivoting requirement is really about.
+   otherwise need global communication, PLASMA uses *pairwise* kernels
+   (`TSTRF`/`TSQRT`) that couple exactly **two tiles at a time** (bounded fan-in) —
+   the locality property the KPU's neighbor-pivoting requirement is really about
+   (which two tiles pair is a reduction-tree choice; see §3.2b).
 
 ---
 
@@ -81,7 +82,7 @@ Notation: `nt` block-columns; `k` is the panel index; the trailing submatrix shr
 as `k` advances.
 
 ### 3.1 Cholesky (SPD, no pivoting) — {POTRF, TRSM, SYRK, GEMM}
-```
+```text
 for k:
   POTRF A[k,k]                              # L_kk L_kkᵀ = A[k,k]
   for i>k: TRSM  A[i,k] <- A[k,k]           # L[i,k] = A[i,k] L_kk^{-ᵀ}
@@ -92,7 +93,7 @@ Simplest factorization: no pivoting (P5 not needed), but needs **sqrt** (P3).
 
 ### 3.2 LU — two pivoting modes
 **(a) Confined (block) pivoting — {GETRF, LASWP, TRSM, GEMM}** *(implemented in L0)*
-```
+```text
 for k:
   GETRF A[k,k]                              # factor diagonal tile, within-tile partial pivot
   for g<k: LASWP A[k,g] (ipiv_k)            # replay swaps onto already-computed L (left)
@@ -106,7 +107,7 @@ adequate for well-conditioned / diagonally-dominant systems; can fail if a diago
 tile is ill-conditioned though the whole matrix is fine.
 
 **(b) Incremental / pairwise (neighbor) pivoting — {GETRF, GESSM, TSTRF, SSSSM}**
-```
+```text
 for k:
   GETRF A[k,k]                              # factor diagonal tile
   for j>k: GESSM A[k,j] <- A[k,k], ipiv_kk  # apply L_kk^{-1} + pivots to the row-block
@@ -114,12 +115,17 @@ for k:
     TSTRF A[k,k], A[i,k]                     # pairwise-factor diagonal + sub-diagonal tile
     for j>k: SSSSM A[k,j], A[i,j] <- A[i,k], ipiv_ik   # apply the pairwise transform
 ```
-Pivoting is **between adjacent tiles** (`TSTRF` exchanges rows across the tile
-boundary) — the dataflow-faithful "neighbor pivoting". Numerically stronger than
+Each `TSTRF` couples exactly **two tiles at a time** (`TSTRF` exchanges rows across
+one tile-pair boundary) — the dataflow-faithful "neighbor pivoting". Which two
+tiles pair is a **reduction-tree** choice: the *flat* tree above folds each
+sub-diagonal tile against the diagonal `A[k,k]` (the reused common partner, so
+pairwise but not physically adjacent when `i>k+1`); a *binary* tree reduces
+adjacent tiles pairwise up the column (strict nearest-neighbor, more parallel).
+Numerically stronger than
 (a); this is the target variant for ill-conditioned inputs. **Not yet implemented.**
 
 ### 3.3 QR — {GEQRT, TSQRT, ORMQR/UNMQR, TSMQR}
-```
+```text
 for k:
   GEQRT A[k,k]                              # Householder QR of the diagonal tile -> R_kk, reflectors T
   for j>k: ORMQR A[k,j] <- A[k,k], T        # apply Qᵀ to the row-block
@@ -131,7 +137,7 @@ Same pairwise structure as LU-(b). Adds **norm/sqrt** (P3) for the Householder
 reflectors. No pivoting for basic QR (column pivoting is an add-on).
 
 ### 3.4 Triangular solve (`A·X = B`, A triangular) — {TRSM, GEMM}
-```
+```text
 for k:                    # forward (lower) or backward (upper) sweep
   TRSM  X[k] <- A[k,k]
   for i≠k: GEMM B[i] -= A[i,k]·X[k]
