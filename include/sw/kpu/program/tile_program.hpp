@@ -83,23 +83,29 @@ enum class PortKind { Input, Output };
 // device-independent kernels; the tile *sequence* over them is the program.
 // Grows as more operators are covered.
 // ----------------------------------------------------------------------------
+// The tile-kernel names follow the PLASMA tile-algorithm API (GETRF/LASWP/TRSM/
+// GEMM), one op per tile, so multi-tile linear algebra is an explicit DAG of tile
+// kernels with complete per-op tile I/O (§3a of docs/plans/kpu-program-model.md;
+// catalog + HW requirements in docs/plans/plasma-tile-algorithms.md).
 enum class TileOpKind {
-    Feed,          // inject an input tile into a logical port (structural; L1 attaches streams)
-    Drain,         // extract a result tile from a logical port (structural)
-    MatMulAccum,   // out += alpha * (A_tile . B_tile)  — the systolic MAC; also the LU trailing update
-    LuPanelFactor, // factor column panel k in place w/ neighbor (pairwise) pivoting -> unit-L + U + pivots
-    TrsmLeft,      // solve L_kk . X = B in place (forward-substitution; unit-lower-triangular L on the left)
-    PivotApply,    // replay a recorded neighbor-pivot row permutation onto a trailing tile-column
+    Feed,           // inject an input tile into a logical port (structural; L1 attaches streams)
+    Drain,          // extract a result tile from a logical port (structural)
+    MatMulAccum,    // GEMM: out += alpha * (A_tile . B_tile) — the systolic MAC; LU trailing update (alpha=-1)
+    LuDiagFactor,   // GETRF: factor the diagonal tile in place with within-tile partial pivoting -> L\U + pivots
+    PivotApply,     // LASWP: replay the diagonal tile's row swaps onto another tile in the same row-block
+    TrsmLowerLeft,  // TRSM: X := unit-lower(A[k,k])^{-1} . X   (U row-panel: U[k,j] = L_kk^{-1} A[k,j])
+    TrsmUpperRight, // TRSM: X := X . upper(A[k,k])^{-1}        (L col-panel: L[i,k] = A[i,k] U_kk^{-1})
 };
 
 inline const char* to_string(TileOpKind k) {
     switch (k) {
-        case TileOpKind::Feed:          return "FEED";
-        case TileOpKind::Drain:         return "DRAIN";
-        case TileOpKind::MatMulAccum:   return "MATMUL_ACCUM";
-        case TileOpKind::LuPanelFactor: return "LU_PANEL_FACTOR";
-        case TileOpKind::TrsmLeft:      return "TRSM_LEFT";
-        case TileOpKind::PivotApply:    return "PIVOT_APPLY";
+        case TileOpKind::Feed:           return "FEED";
+        case TileOpKind::Drain:          return "DRAIN";
+        case TileOpKind::MatMulAccum:    return "MATMUL_ACCUM";    // GEMM
+        case TileOpKind::LuDiagFactor:   return "LU_DIAG_FACTOR";  // GETRF
+        case TileOpKind::PivotApply:     return "PIVOT_APPLY";     // LASWP
+        case TileOpKind::TrsmLowerLeft:  return "TRSM_LOWER_LEFT";
+        case TileOpKind::TrsmUpperRight: return "TRSM_UPPER_RIGHT";
     }
     return "?";
 }

@@ -33,11 +33,11 @@ public:
         std::size_t ops = 0;
         std::size_t feeds = 0;
         std::size_t drains = 0;
-        std::size_t computes = 0;   // MatMulAccum
-        std::size_t panel_factors = 0;
-        std::size_t trsms = 0;
-        std::size_t pivot_applies = 0;
-        std::size_t neighbor_swaps = 0;   // total adjacent row swaps performed
+        std::size_t computes = 0;   // MatMulAccum (GEMM)
+        std::size_t diag_factors = 0;   // LuDiagFactor (GETRF)
+        std::size_t trsms = 0;          // TrsmLowerLeft + TrsmUpperRight
+        std::size_t pivot_applies = 0;  // PivotApply (LASWP)
+        std::size_t row_swaps = 0;      // total within-tile row swaps performed by GETRF
         // Row permutation produced by pivoting (LU): perm[i] = original row now at
         // position i. Identity when no pivoting occurred. Sized to the largest
         // square operand touched by a LuPanelFactor (0 if none).
@@ -52,15 +52,16 @@ public:
         for (const auto& op : program.ops()) {
             ++sum.ops;
             switch (op.kind) {
-                case TileOpKind::Feed:          ++sum.feeds; break;   // structural (L1 attaches streams)
-                case TileOpKind::Drain:         ++sum.drains; break;  // structural
-                case TileOpKind::MatMulAccum:   exec_matmul_accum(program, op); ++sum.computes; break;
-                case TileOpKind::LuPanelFactor: exec_lu_panel_factor(program, op); ++sum.panel_factors; break;
-                case TileOpKind::TrsmLeft:      exec_trsm_left(program, op); ++sum.trsms; break;
-                case TileOpKind::PivotApply:    exec_pivot_apply(program, op); ++sum.pivot_applies; break;
+                case TileOpKind::Feed:           ++sum.feeds; break;   // structural (L1 attaches streams)
+                case TileOpKind::Drain:          ++sum.drains; break;  // structural
+                case TileOpKind::MatMulAccum:    exec_matmul_accum(program, op); ++sum.computes; break;
+                case TileOpKind::LuDiagFactor:   exec_lu_diag_factor(program, op); ++sum.diag_factors; break;
+                case TileOpKind::PivotApply:     exec_pivot_apply(program, op); ++sum.pivot_applies; break;
+                case TileOpKind::TrsmLowerLeft:  exec_trsm_lower_left(program, op); ++sum.trsms; break;
+                case TileOpKind::TrsmUpperRight: exec_trsm_upper_right(program, op); ++sum.trsms; break;
             }
         }
-        sum.neighbor_swaps = swaps_performed_;
+        sum.row_swaps = swaps_performed_;
         sum.permutation = perm_;
         swaps_performed_ = 0;
         return sum;
@@ -111,62 +112,81 @@ private:
             }
     }
 
-    // Factor column panel k (the block-column at tile-col == outputs[0].tj) in
-    // place, over rows [k*T, rows), with neighbor (pairwise) pivoting. Stores the
-    // unit-lower L multipliers below the diagonal and U on/above it, and records
-    // the adjacent row swaps into op.pivot_slot for the trailing PivotApply ops.
+    // GETRF: factor the diagonal tile A[k,k] in place with within-tile partial
+    // pivoting. Pivot search and row swaps are confined to this tile's rows, and
+    // applied here only to this tile's columns; the SAME swaps are replayed onto
+    // the rest of the row-block by explicit PivotApply (LASWP) ops — so the total
+    // effect is a full-row interchange and the factorization stays P.A = L.U with
+    // extractable L,U (P block-diagonal in the tile grid). Records the swaps
+    // (absolute rows) into op.pivot_slot and advances the global permutation.
     //
-    // Neighbor pivoting: at each pivot column only the immediately-adjacent row
-    // below is considered, and rows are exchanged only if that neighbor has the
-    // larger magnitude. This keeps all data movement nearest-neighbor (systolic-
-    // friendly) — the deliberately dataflow-faithful pivot scheme. The recorded
-    // swaps compose into a permutation P with P.A = L.U.
-    void exec_lu_panel_factor(TileProgram& prog, const TileOp& op) {
+    // Pivoting is confined to the diagonal tile (a valid restricted-pivoting tile
+    // scheme). Cross-tile pairwise pivoting (PLASMA TSTRF/SSSSM) is the numerically
+    // stronger variant tracked separately — see docs/plans/plasma-tile-algorithms.md.
+    void exec_lu_diag_factor(TileProgram& prog, const TileOp& op) {
         TensorOperand& A = prog.operand(op.outputs.at(0).operand);
         ensure_perm(A.rows);
         auto& swaps = pivots_[op.pivot_slot];
         swaps.clear();
 
-        const Dim tj = op.outputs.at(0).tj;      // panel block-column
-        const Dim c0 = A.col_begin(tj);          // first panel column
-        const Dim c1 = A.col_end(tj);            // one past last panel column
-        const Dim rN = A.rows;
+        const Dim ti = op.outputs.at(0).ti;
+        const Dim tj = op.outputs.at(0).tj;
+        const Dim r0 = A.row_begin(ti), r1 = A.row_end(ti);   // diagonal tile row range
+        const Dim c0 = A.col_begin(tj), c1 = A.col_end(tj);   // diagonal tile col range
+        const Dim n = std::min(r1 - r0, c1 - c0);             // square block dimension
 
-        for (Dim c = c0; c < c1; ++c) {
-            const Dim p = c;                     // pivot sits on the diagonal
-            // neighbor pivot: compare with the immediate row below only
-            if (p + 1 < rN &&
-                std::fabs(A.at(p + 1, c)) > std::fabs(A.at(p, c))) {
-                // exchange rows p, p+1 across columns [0, c1): left (finalized L)
-                // + panel. Trailing columns [c1, cols) are swapped by PivotApply.
-                for (Dim col = 0; col < c1; ++col)
-                    std::swap(A.at(p, col), A.at(p + 1, col));
-                std::swap(perm_[p], perm_[p + 1]);
-                swaps.emplace_back(p, p + 1);
+        for (Dim d = 0; d < n; ++d) {
+            const Dim p = r0 + d;        // pivot row (global)
+            const Dim c = c0 + d;        // pivot column (global)
+            // partial pivot: largest magnitude in column c among this tile's rows
+            Dim best = p;
+            float bestval = std::fabs(A.at(p, c));
+            for (Dim r = p + 1; r < r1; ++r) {
+                const float v = std::fabs(A.at(r, c));
+                if (v > bestval) { bestval = v; best = r; }
+            }
+            if (best != p) {
+                for (Dim col = c0; col < c1; ++col)          // swap within this tile only
+                    std::swap(A.at(p, col), A.at(best, col));
+                std::swap(perm_[p], perm_[best]);
+                swaps.emplace_back(p, best);
                 ++swaps_performed_;
             }
             const float pv = A.at(p, c);
-            if (pv == 0.0f) continue;            // singular column; leave as-is
-            for (Dim r = p + 1; r < rN; ++r) {
+            if (pv == 0.0f) continue;                        // singular column; leave as-is
+            for (Dim r = p + 1; r < r1; ++r) {
                 const float f = A.at(r, c) / pv;
-                A.at(r, c) = f;                  // store L multiplier
+                A.at(r, c) = f;                              // store L multiplier
                 for (Dim col = c + 1; col < c1; ++col)
-                    A.at(r, col) -= f * A.at(p, col);   // eliminate within panel columns
+                    A.at(r, col) -= f * A.at(p, col);        // eliminate within the tile
             }
         }
     }
 
-    // Solve L_kk . X = B in place, with L_kk the unit-lower-triangular part of the
-    // diagonal tile (inputs[0]) and B the row-panel tile (outputs[0]). Forward
+    // LASWP: replay the diagonal tile's recorded row swaps (op.pivot_slot) onto
+    // another tile in the same row-block (this op's output tile-column). This is
+    // the pivot decision from GETRF propagating explicitly to the rest of the row.
+    void exec_pivot_apply(TileProgram& prog, const TileOp& op) {
+        TensorOperand& A = prog.operand(op.outputs.at(0).operand);
+        const Dim tj = op.outputs.at(0).tj;
+        const Dim col0 = A.col_begin(tj), col1 = A.col_end(tj);
+        auto it = pivots_.find(op.pivot_slot);
+        if (it == pivots_.end()) return;         // no swaps recorded for this panel
+        for (const auto& [ra, rb] : it->second)
+            for (Dim col = col0; col < col1; ++col)
+                std::swap(A.at(ra, col), A.at(rb, col));
+    }
+
+    // TRSM (left, unit-lower): X := unit-lower(A[k,k])^{-1} . X in place. Forward
     // substitution; the implicit unit diagonal means no division. Produces the U
     // row-panel U[k,j] = L_kk^{-1} . A[k,j].
-    void exec_trsm_left(TileProgram& prog, const TileOp& op) {
-        const TileCoord& lc = op.inputs.at(0);   // diagonal block A[k,k]
+    void exec_trsm_lower_left(TileProgram& prog, const TileOp& op) {
+        const TileCoord& lc = op.inputs.at(0);   // diagonal block A[k,k] (holds L_kk)
         const TileCoord& xc = op.outputs.at(0);  // A[k,j] (in place)
         const TensorOperand& L = prog.operand(lc.operand);
         TensorOperand& X = prog.operand(xc.operand);
 
-        const Dim lr0 = L.row_begin(lc.ti);      // diagonal block row/col origin
+        const Dim lr0 = L.row_begin(lc.ti);
         const Dim lc0 = L.col_begin(lc.tj);
         const Dim xr0 = X.row_begin(xc.ti), xr1 = X.row_end(xc.ti);
         const Dim xc0 = X.col_begin(xc.tj), xc1 = X.col_end(xc.tj);
@@ -182,18 +202,29 @@ private:
             }
     }
 
-    // Replay the recorded neighbor-pivot swaps (from op.pivot_slot) onto a
-    // trailing tile-column: apply each row exchange to the tile's column range.
-    // This is the pivot decision from LuPanelFactor flowing into trailing tiles.
-    void exec_pivot_apply(TileProgram& prog, const TileOp& op) {
-        TensorOperand& A = prog.operand(op.outputs.at(0).operand);
-        const Dim tj = op.outputs.at(0).tj;
-        const Dim col0 = A.col_begin(tj), col1 = A.col_end(tj);
-        auto it = pivots_.find(op.pivot_slot);
-        if (it == pivots_.end()) return;         // no swaps recorded for this panel
-        for (const auto& [ra, rb] : it->second)
-            for (Dim col = col0; col < col1; ++col)
-                std::swap(A.at(ra, col), A.at(rb, col));
+    // TRSM (right, upper): X := X . upper(A[k,k])^{-1} in place. Computes the L
+    // column-panel L[i,k] = A[i,k] . U_kk^{-1}. U_kk has a non-unit diagonal, so
+    // each column solve divides by the diagonal.
+    void exec_trsm_upper_right(TileProgram& prog, const TileOp& op) {
+        const TileCoord& uc = op.inputs.at(0);   // diagonal block A[k,k] (holds U_kk)
+        const TileCoord& xc = op.outputs.at(0);  // A[i,k] (in place)
+        const TensorOperand& U = prog.operand(uc.operand);
+        TensorOperand& X = prog.operand(xc.operand);
+
+        const Dim ur0 = U.row_begin(uc.ti);
+        const Dim uc0 = U.col_begin(uc.tj);
+        const Dim xr0 = X.row_begin(xc.ti), xr1 = X.row_end(xc.ti);
+        const Dim xc0 = X.col_begin(xc.tj), xc1 = X.col_end(xc.tj);
+        const Dim m = xr1 - xr0;                 // rows of X
+        const Dim w = xc1 - xc0;                 // cols of X (== U dimension)
+
+        for (Dim a = 0; a < m; ++a)
+            for (Dim c = 0; c < w; ++c) {
+                float v = X.at(xr0 + a, xc0 + c);
+                for (Dim b = 0; b < c; ++b)      // strictly-above-diagonal U only
+                    v -= X.at(xr0 + a, xc0 + b) * U.at(ur0 + b, uc0 + c);
+                X.at(xr0 + a, xc0 + c) = v / U.at(ur0 + c, uc0 + c);
+            }
     }
 };
 

@@ -20,14 +20,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `include/sw/kpu/program/`: `tile_program.hpp` (types + `disassemble()`),
   `tile_program_reference.hpp` (functional executor), and derivations
   `derive/matmul_tile_program.hpp` and `derive/lu_tile_program.hpp`. Beyond matmul
-  (the trivial case), an **LU factorization with neighbor (pairwise) pivoting** is
-  derived to prove the abstraction generalizes to all dense factorizations — it
-  exercises cross-tile dependencies, a shrinking trailing submatrix, and
-  data-dependent control (a pivot decision in one tile op flowing to trailing-tile
-  row swaps via `PivotApply`). The LU trailing update reuses `MatMulAccum`
-  (`alpha=-1`), the matmul/trailing-update unification. Tests
-  (`tests/program/test_tile_program.cpp`): matmul reproduces naive matmul exactly
-  (and under non-divisible tiling), and LU reconstructs `P·A = L·U`.
+  (the trivial case), an **LU factorization** is derived to prove the abstraction
+  generalizes to all dense factorizations — it exercises cross-tile dependencies, a
+  shrinking trailing submatrix, and data-dependent pivot control. The LU is
+  decomposed into an **explicit DAG of PLASMA-style tile kernels** (§3a of the
+  program model): `LU_DIAG_FACTOR` (GETRF, within-tile pivoting), `PIVOT_APPLY`
+  (LASWP), `TRSM_LOWER_LEFT`/`TRSM_UPPER_RIGHT` (U row-panel / L column-panel), and
+  `MATMUL_ACCUM` (GEMM trailing update, `alpha=-1`) — every op declares its full
+  tile I/O so the multi-tile column propagation is in the program, not hidden in a
+  kernel. Tests (`tests/program/test_tile_program.cpp`): matmul reproduces naive
+  matmul exactly (and under non-divisible tiling); tile-LU reconstructs `P·A = L·U`
+  across blocked, single-tile, 3×3-grid, and clamped-trailing-block cases.
+
+- **PLASMA tile-algorithm decomposition + KPU HW-requirements assessment + test
+  plan (`docs/plans/plasma-tile-algorithms.md`).** Summarizes how the PLASMA API
+  tiles Cholesky / LU (confined and pairwise pivoting) / QR / triangular solve into
+  tile kernels, maps each kernel's primitive needs (MAC, triangular substitution,
+  divide/sqrt, argmax pivoting, row-swap, on-chip reuse) onto KPU hardware with a
+  gap analysis (P3 scalar special-functions, P5 pivoting, P6 multi-compute-tile
+  reuse, P2 TRSM fabric mode are the gaps), and defines a four-level test plan
+  (per-kernel functional → per-operator functional → HW-capability probes →
+  L1/timing) to validate whether the required functionality exists.
 
 - **ResNet benchmark JSON export + CI regression tracking.** `m2_resnet --json`
   emits the deterministic sweep as structured JSON (config, timing, stalls,
