@@ -9,22 +9,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- **L1 stream signatures — the spatial/temporal layer over L0 (Phase 0 increment 2,
-  #230).** L1 turns each L0 tile-into-port (`Feed`/`Drain`) into an **element stream**
-  and each tile-compute into a **systolic wavefront**, giving physically-shaped timing
-  *without changing values* (L0 stays the functional reference). New headers under
-  `include/sw/kpu/program/stream/`: `stream_signature.hpp` (`StreamSignature` — edge,
-  lanes, per-element lane + wavefront skew, rate; `WavefrontTiming` — the
-  fill+reduce+drain latency; `StreamProgram` keyed by L0 op index, with
-  `disassemble()`), and `derive/matmul_streams.hpp`. The matmul derivation encodes the
-  output-stationary systolic schedule `σ(i,j,k)=i+j+k`: `A→West` (lane = row, `t=i+k`),
-  `B→North` (lane = col, `t=j+k`), `C→South` drain (`t=i+j+K−1`); one `T×T×T`
-  tile-compute has latency `3(T−1)+1` (e.g. 46 for T=16) instead of a lumped MAC cost.
-  Design note `docs/plans/l1-stream-signatures.md` (schedule, signature model,
-  derivation, and the integration path — feeding `WavefrontTiming` into the
-  characterization DAG and eventually the cycle-accurate CSP model). Tests
-  (`tests/program/test_stream_signature.cpp`): signature/skew/lane correctness,
-  wavefront latency (incl. clamped trailing tiles), and value-orthogonality.
+- **L1 stream signatures — the spatial/temporal layer over L0, parameterized by the
+  space-time mapping (Phase 0 increment 2, #230).** L1 turns each L0 tile-into-port into
+  an **element stream** and each tile-compute into a **systolic wavefront**, giving
+  physically-shaped timing *without changing values* (L0 stays the functional
+  reference). The streams are **a function of the space-time mapping** (which operand is
+  stationary), so L1 is parameterized by a `SpaceTimeMap` (schedule τ + projection u)
+  and also records the **network** the streams require. New headers under
+  `include/sw/kpu/program/stream/`: `stream_signature.hpp` (`SpaceTimeMap` with the four
+  canonical projections; `StreamSignature` — role/flow/edge/lane-skew/**element-stride
+  (bubble)**; `WavefrontTiming` — fill+reduce+drain latency; `NetworkOverlay` —
+  Mesh2D vs. Hexagonal + overlay; `StreamProgram` + `disassemble()`) and
+  `derive/matmul_streams.hpp`. The derivation covers the dataflow taxonomy:
+  **output-stationary** (C held; A→West, B→North, **C evacuates North with a bubble** —
+  draining South would collide with B and sibling C; the northbound traversal spaces
+  successive results two cycles apart → stride 2), **weight(B)-stationary** and
+  **A-stationary** (C exits East dense, Mesh2D), and **fully-streaming** (`u=τ=[1,1,1]`
+  aligned → contention-free **hexagonal** array needing a network overlay on a 2-D
+  mesh). One `T×T×T` tile-compute has latency `3(T−1)+1` (46 for T=16) instead of a
+  lumped MAC cost. Design note `docs/plans/l1-stream-signatures.md`. Tests
+  (`tests/program/test_stream_signature.cpp`): the taxonomy roles, the
+  output-stationary evacuation bubble, the mesh-vs-hex network, wavefront latency
+  (incl. clamped tiles), and value-orthogonality.
 
 - **L0 `TileProgram` — the portable program's tile-sequence layer (#230, epic
   #229).** A device-independent, timing-free representation of a tiled
