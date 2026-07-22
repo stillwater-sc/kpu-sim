@@ -51,6 +51,12 @@ struct Metrics {
 
     // feasibility
     bool feasible = true;                // peak_live_tiles fits L3 (if bounded)
+
+    // dataflow (populated only when an L1 StreamProgram is supplied)
+    std::string dataflow;                // space-time mapping name
+    std::string stationary;              // stationary operand ("" = none/hex)
+    int c_bubble = 0;                    // C-drain bubble (0 = dense)
+    std::string network;                 // required fabric ("Mesh2D" / "Hexagonal(+overlay)")
 };
 
 // Peak number of simultaneously-live tiles over program order (footprint proxy):
@@ -91,7 +97,10 @@ inline std::size_t distinct_tiles(const TileProgram& prog) {
 
 // Compute all metrics for a program on a device (does not run the functional
 // reference — the harness owns correctness because it knows the algorithm/oracle).
-inline Metrics characterize_program(const TileProgram& prog, const DeviceDescriptor& dev) {
+// Supplying an L1 StreamProgram makes the schedule systolic + dataflow-sensitive and
+// populates the dataflow metrics.
+inline Metrics characterize_program(const TileProgram& prog, const DeviceDescriptor& dev,
+                                    const stream::StreamProgram* l1 = nullptr) {
     Metrics m;
     m.ops = prog.ops().size();
     m.feeds  = prog.count(TileOpKind::Feed);
@@ -99,8 +108,16 @@ inline Metrics characterize_program(const TileProgram& prog, const DeviceDescrip
     m.computes = prog.count(TileOpKind::MatMulAccum) + prog.count(TileOpKind::LuDiagFactor) +
                  prog.count(TileOpKind::TrsmLowerLeft) + prog.count(TileOpKind::TrsmUpperRight);
 
-    TileDag dag(prog, dev);
+    TileDag dag(prog, dev, l1);
     auto sch = dag.list_schedule();
+
+    if (l1) {
+        m.dataflow = l1->map.name;
+        m.stationary = l1->map.stationary_operand();   // from the projection (C is held then drained)
+        if (const auto* c = l1->signature("C")) m.c_bubble = c->bubble();
+        m.network = stream::to_string(l1->network.required);
+        if (l1->network.needs_overlay_on_mesh) m.network += "+overlay";
+    }
 
     m.total_macs = dag.total_macs();
     m.total_move_bytes = dag.total_move_bytes();
@@ -152,8 +169,9 @@ inline std::string metrics_csv_row(const Metrics& m) {
 // so the tile program's organization and ordering are directly observable. Time
 // unit = modeled cycles.
 inline void write_chrome_trace(const TileProgram& prog, const DeviceDescriptor& dev,
-                               const std::string& path) {
-    TileDag dag(prog, dev);
+                               const std::string& path,
+                               const stream::StreamProgram* l1 = nullptr) {
+    TileDag dag(prog, dev, l1);   // same schedule (incl. L1 dataflow timing) as reported
     dag.list_schedule();
     std::ofstream f(path);
     if (!f) {

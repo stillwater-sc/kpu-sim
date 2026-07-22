@@ -23,6 +23,7 @@
 #include <sw/kpu/program/derive/matmul_tile_program.hpp>
 #include <sw/kpu/program/derive/lu_tile_program.hpp>
 #include <sw/kpu/program/characterize/characterization.hpp>
+#include <sw/kpu/program/stream/derive/matmul_streams.hpp>
 
 #include <cmath>
 #include <cstdint>
@@ -129,6 +130,21 @@ DeviceDescriptor make_device(const std::string& topo, Dim cf,
     return d;
 }
 
+bool known_dataflow(const std::string& n) {
+    return n == "output-stationary" || n == "os" ||
+           n == "weight-stationary" || n == "ws" ||
+           n == "a-stationary"      || n == "as" ||
+           n == "fully-streaming"   || n == "hex";
+}
+
+// dataflow name (or alias) -> space-time mapping (caller must pre-validate via known_dataflow)
+stream::SpaceTimeMap map_for(const std::string& name) {
+    if (name == "weight-stationary" || name == "ws") return stream::SpaceTimeMap::b_stationary();
+    if (name == "a-stationary"      || name == "as") return stream::SpaceTimeMap::a_stationary();
+    if (name == "fully-streaming"   || name == "hex") return stream::SpaceTimeMap::fully_streaming();
+    return stream::SpaceTimeMap::output_stationary();   // "output-stationary" / "os"
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -141,6 +157,8 @@ int main(int argc, char** argv) {
             "  --tiles T[,T...]           tile dimension(s)      (default 32)\n"
             "  --compute-tiles C[,C...]   CF tile count(s)       (default 1,4,16)\n"
             "  --topology single|news|checkerboard[,...] (default single)\n"
+            "  --dataflow output-stationary|weight-stationary|a-stationary|fully-streaming[,...]\n"
+            "             (matmul only; aliases os/ws/as/hex; systolic L1 timing + network)\n"
             "  --macs-per-cycle F  --bytes-per-cycle F  --pj-per-mac F  --pj-per-byte F\n"
             "  --l3-tiles N               L3 capacity in tiles for feasibility (0=unbounded)\n"
             "  --csv FILE   --json FILE   --trace FILE (first cell)  --disasm  --no-validate\n";
@@ -152,6 +170,7 @@ int main(int argc, char** argv) {
     const auto tiles = parse_ints(arg(a, "--tiles", "32"));
     const auto cfs   = parse_ints(arg(a, "--compute-tiles", "1,4,16"));
     const auto topos = parse_strs(arg(a, "--topology", "single"));
+    const auto dataflows = parse_strs(arg(a, "--dataflow", "output-stationary"));  // matmul only
     const double macs_pc  = std::stod(arg(a, "--macs-per-cycle", "256"));
     const double bytes_pc = std::stod(arg(a, "--bytes-per-cycle", "64"));
     const double pj_mac   = std::stod(arg(a, "--pj-per-mac", "1.0"));
@@ -163,12 +182,27 @@ int main(int argc, char** argv) {
     const std::string trace_path = arg(a, "--trace", "");
     const bool disasm = has_flag(a, "--disasm");
 
+    // dataflow sweep applies to matmul (L1 systolic timing); LU has no stream deriver.
+    if (algo != "lu")
+        for (const auto& df : dataflows)
+            if (!known_dataflow(df)) {
+                std::cerr << "error: unknown --dataflow '" << df << "' "
+                             "(expected output-stationary|weight-stationary|a-stationary|"
+                             "fully-streaming, or os/ws/as/hex)\n";
+                return 2;
+            }
+    const std::vector<std::string> dfs = (algo == "lu")
+        ? std::vector<std::string>{"-"} : dataflows;
+
     std::ostringstream csv, json;
-    csv << "algo,size,tile,compute_tiles,topology,func_max_err," << metrics_csv_header() << "\n";
+    csv << "algo,size,tile,compute_tiles,topology,dataflow,stationary,c_bubble,network,func_max_err,"
+        << metrics_csv_header() << "\n";
     json << "[\n";
 
-    std::cout << "algo   size tile  CF topology      macs        AI    crit_path   makespan  cmp_util  bound  energy_pJ    err\n";
-    std::cout << "----------------------------------------------------------------------------------------------------------------\n";
+    std::cout << "algo   size tile  CF topology    dataflow          stat bub network            "
+                 "makespan  cmp_util  bound  energy_pJ    err\n";
+    std::cout << "------------------------------------------------------------------------------------"
+                 "-------------------------------------\n";
 
     bool did_trace = false, did_disasm = false, first_json = true;
     for (const auto& topo : topos)
@@ -176,7 +210,6 @@ int main(int argc, char** argv) {
             for (Dim tile : tiles) {
                 if (tile > size) continue;
                 for (Dim cf : cfs) {
-                    // build the program
                     TileProgram prog =
                         (algo == "lu") ? derive_lu_tile_program(size, tile)
                                        : derive_matmul_tile_program(size, size, size, tile, tile, tile);
@@ -186,42 +219,52 @@ int main(int argc, char** argv) {
                                              : validate_matmul(prog, size, size, size);
 
                     DeviceDescriptor dev = make_device(topo, cf, macs_pc, bytes_pc, pj_mac, pj_byte, l3_tiles);
-                    Metrics m = characterize_program(prog, dev);
 
-                    // first cell: dump the tile sequence / trace on request
-                    if (disasm && !did_disasm) { std::cout << "\n" << prog.disassemble() << "\n"; did_disasm = true; }
-                    if (!trace_path.empty() && !did_trace) {
-                        write_chrome_trace(prog, dev, trace_path);
-                        std::cout << "[trace] wrote " << trace_path << " (chrome://tracing)\n";
-                        did_trace = true;
+                    for (const auto& df : dfs) {
+                        stream::StreamProgram l1;
+                        const stream::StreamProgram* l1p = nullptr;
+                        if (algo != "lu") { l1 = stream::derive_matmul_streams(prog, map_for(df)); l1p = &l1; }
+                        Metrics m = characterize_program(prog, dev, l1p);
+
+                        if (disasm && !did_disasm) { std::cout << "\n" << prog.disassemble() << "\n"; did_disasm = true; }
+                        if (!trace_path.empty() && !did_trace) {
+                            write_chrome_trace(prog, dev, trace_path, l1p);
+                            std::cout << "[trace] wrote " << trace_path << " (chrome://tracing)\n";
+                            did_trace = true;
+                        }
+
+                        char line[320];
+                        std::snprintf(line, sizeof(line),
+                            "%-6s %4u %4u %3u %-10s %-17s %-4s %3d %-18s %9.1f %8.2f %5s %10.3g %8.1g\n",
+                            algo.c_str(), size, tile, cf, topo.c_str(), df.c_str(),
+                            m.stationary.empty() ? "-" : m.stationary.c_str(), m.c_bubble,
+                            m.network.empty() ? "-" : m.network.c_str(),
+                            m.makespan_cycles, m.compute_util, m.compute_bound ? "cmp" : "mov",
+                            m.energy_total_pj, err);
+                        std::cout << line;
+
+                        csv << algo << ',' << size << ',' << tile << ',' << cf << ',' << topo << ','
+                            << df << ',' << (m.stationary.empty() ? "-" : m.stationary) << ','
+                            << m.c_bubble << ',' << (m.network.empty() ? "-" : m.network) << ','
+                            << err << ',' << metrics_csv_row(m) << "\n";
+                        if (!first_json) json << ",\n";
+                        first_json = false;
+                        json << "  {\"algo\":\"" << algo << "\",\"size\":" << size << ",\"tile\":" << tile
+                             << ",\"compute_tiles\":" << cf << ",\"topology\":\"" << topo
+                             << "\",\"dataflow\":\"" << df << "\",\"stationary\":\"" << m.stationary
+                             << "\",\"c_bubble\":" << m.c_bubble << ",\"network\":\"" << m.network
+                             << "\",\"func_max_err\":" << err
+                             << ",\"macs\":" << m.total_macs << ",\"arith_intensity\":" << m.arithmetic_intensity
+                             << ",\"critical_path\":" << m.critical_path_cycles
+                             << ",\"makespan\":" << m.makespan_cycles
+                             << ",\"lower_bound\":" << m.lower_bound_cycles
+                             << ",\"compute_util\":" << m.compute_util
+                             << ",\"movement_util\":" << m.movement_util
+                             << ",\"compute_bound\":" << (m.compute_bound ? "true" : "false")
+                             << ",\"peak_live_tiles\":" << m.peak_live_tiles
+                             << ",\"energy_total_pj\":" << m.energy_total_pj
+                             << ",\"feasible\":" << (m.feasible ? "true" : "false") << "}";
                     }
-
-                    char line[256];
-                    std::snprintf(line, sizeof(line),
-                        "%-6s %4u %4u %3u %-12s %9.3g %6.2f %11.1f %10.1f %8.2f %5s %10.3g %8.1g\n",
-                        algo.c_str(), size, tile, cf, topo.c_str(),
-                        m.total_macs, m.arithmetic_intensity, m.critical_path_cycles,
-                        m.makespan_cycles, m.compute_util, m.compute_bound ? "cmp" : "mov",
-                        m.energy_total_pj, err);
-                    std::cout << line;
-
-                    csv << algo << ',' << size << ',' << tile << ',' << cf << ',' << topo << ','
-                        << err << ',' << metrics_csv_row(m) << "\n";
-                    if (!first_json) json << ",\n";
-                    first_json = false;
-                    json << "  {\"algo\":\"" << algo << "\",\"size\":" << size << ",\"tile\":" << tile
-                         << ",\"compute_tiles\":" << cf << ",\"topology\":\"" << topo
-                         << "\",\"func_max_err\":" << err
-                         << ",\"macs\":" << m.total_macs << ",\"arith_intensity\":" << m.arithmetic_intensity
-                         << ",\"critical_path\":" << m.critical_path_cycles
-                         << ",\"makespan\":" << m.makespan_cycles
-                         << ",\"lower_bound\":" << m.lower_bound_cycles
-                         << ",\"compute_util\":" << m.compute_util
-                         << ",\"movement_util\":" << m.movement_util
-                         << ",\"compute_bound\":" << (m.compute_bound ? "true" : "false")
-                         << ",\"peak_live_tiles\":" << m.peak_live_tiles
-                         << ",\"energy_total_pj\":" << m.energy_total_pj
-                         << ",\"feasible\":" << (m.feasible ? "true" : "false") << "}";
                 }
             }
     json << "\n]\n";

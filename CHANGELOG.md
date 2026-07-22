@@ -9,6 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Dataflow sweep in the characterization harness (`--dataflow`).** The
+  characterization DAG now accepts an optional L1 `StreamProgram`
+  (`characterize_program(prog, dev, l1)` / `TileDag(..., l1)`): with it, compute ops
+  take their systolic **wavefront latency** and the C drain is stretched by its
+  **bubble**, so the schedule becomes systolic and **dataflow-sensitive**. `Metrics`
+  gains `dataflow`/`stationary`/`c_bubble`/`network`. `tile_characterize --dataflow
+  output-stationary|weight-stationary|a-stationary|fully-streaming` (aliases
+  `os`/`ws`/`as`/`hex`, matmul only) sweeps the array space-time mapping alongside
+  size/tile/compute-tiles/topology, surfacing the tradeoff: output-stationary is
+  Mesh2D-friendly but pays a drain bubble (slower makespan); weight/A-stationary drain
+  densely; fully-streaming (hex) is dense/contention-free but requires a
+  `Hexagonal+overlay` network. The no-L1 path is unchanged (backward-compatible).
+  Test + README recipe added.
+
 - **L1 stream signatures — the spatial/temporal layer over L0, parameterized by the
   space-time mapping (Phase 0 increment 2, #230).** L1 turns each L0 tile-into-port into
   an **element stream** and each tile-compute into a **systolic wavefront**, giving

@@ -41,6 +41,7 @@ build/examples/characterize/tile_characterize \
 | `--tiles T[,T...]` | tile dimension(s) | `32` |
 | `--compute-tiles C[,C...]` | CF tile count(s) — the **concurrency sweep** | `1,4,16` |
 | `--topology single\|news\|checkerboard[,...]` | spatial layout (sets movement lanes) | `single` |
+| `--dataflow output-stationary\|weight-stationary\|a-stationary\|fully-streaming[,...]` | **array dataflow** (L1 space-time mapping; matmul only; aliases `os`/`ws`/`as`/`hex`) | `output-stationary` |
 | `--macs-per-cycle` `--bytes-per-cycle` `--pj-per-mac` `--pj-per-byte` | device cost knobs | `256 / 64 / 1 / 20` |
 | `--l3-tiles N` | L3 budget in tiles for feasibility (`0` = unbounded) | `0` |
 | `--csv FILE` `--json FILE` | write the full metric table | — |
@@ -49,33 +50,40 @@ build/examples/characterize/tile_characterize \
 | `--no-validate` | skip the functional oracle check | (validate on) |
 
 The **list-valued** factor flags (`--sizes`, `--tiles`, `--compute-tiles`,
-`--topology`) are comma-separated → a **full-factorial** sweep (one row per cell).
-`--algo` selects a single algorithm per run.
+`--topology`, `--dataflow`) are comma-separated → a **full-factorial** sweep (one row
+per cell). `--algo` selects a single algorithm per run.
+
+When a `--dataflow` is given for matmul, the schedule is timed by the **L1 stream
+signatures** (`docs/plans/l1-stream-signatures.md`) — compute ops take their systolic
+wavefront latency and the C drain is stretched by its bubble — so the makespan and the
+`stat`/`bub`/`network` columns become **dataflow-sensitive**.
 
 ## 3. Read the output
 
 Each row is one experiment cell:
 
 ```text
-algo   size tile  CF topology      macs        AI    crit_path   makespan  cmp_util  bound  energy_pJ    err
-matmul  128   32   1 checkerboard   2.1e+06   7.11       576.0    14976.0     0.55   mov    1.4e+07        0
-matmul  128   32  16 checkerboard   2.1e+06   7.11       576.0      768.0     0.67   mov    1.4e+07        0
+algo   size tile  CF topology    dataflow          stat bub network            makespan  cmp_util  bound  energy_pJ    err
+matmul  256   32   4 single     output-stationary C      1 Mesh2D               36864.0     0.33   mov   1.07e+08        0
+matmul  256   32   4 single     weight-stationary B      0 Mesh2D               34816.0     0.35   mov   1.07e+08        0
+matmul  256   32   4 single     fully-streaming   -      0 Hexagonal+overlay    34816.0     0.35   mov   1.07e+08        0
 ```
 
 | Column | Meaning |
 |---|---|
-| `macs` | total multiply-accumulates (exact) |
-| `AI` | arithmetic intensity = flops / byte moved (higher = more reuse) |
-| `crit_path` | modeled makespan at **unlimited** compute tiles (dependency-limited floor) |
-| `makespan` | list-scheduled modeled cycles on this device |
-| `cmp_util` | compute-tile utilization on this device |
+| `dataflow` | the array space-time mapping (which operand is held stationary) |
+| `stat` | the stationary operand (`C`/`B`/`A`; `-` for fully-streaming) |
+| `bub` | the C-drain **bubble** (`1` for output-stationary, `0` for the dense dataflows) |
+| `network` | required fabric — `Mesh2D` or `Hexagonal+overlay` |
+| `makespan` | list-scheduled cycles (systolic + dataflow-sensitive when `--dataflow` is set) |
+| `cmp_util` | compute-tile utilization |
 | `bound` | `cmp` = compute-bound, `mov` = movement-bound |
 | `energy_pJ` | modeled total energy (compute + movement + leakage) |
 | `err` | functional `max_err` vs. the oracle (`0` for integer matmul; ~`1e-6` for LU); `-1` if `--no-validate` |
 
 **`err` is the correctness check** — a nonzero-beyond-tolerance `err` means the tile
-program computed the wrong answer. The CSV/JSON carry the full metric set (peak live
-tiles, movement bytes, lower bound, movement utilization, feasibility, …).
+program computed the wrong answer. The CSV/JSON carry the full metric set (macs,
+arithmetic intensity, critical path, peak live tiles, movement bytes, feasibility, …).
 
 ## 4. See the tile sequence
 
@@ -128,6 +136,13 @@ tile_characterize --algo matmul --sizes 256 --tiles 16,32,64 --compute-tiles 16 
 
 # (d) Feasibility: does the working set fit the L3 budget?
 tile_characterize --algo matmul --sizes 256 --tiles 32 --compute-tiles 16 --l3-tiles 8
+
+# (e) Dataflow choice: which array mapping (stationary operand + network)?
+#     output-stationary is mesh-friendly but pays a drain bubble; weight/A-stationary
+#     drain densely; fully-streaming (hex) is dense/contention-free but needs a hex
+#     network overlay. Watch the stat / bub / network / makespan columns.
+tile_characterize --algo matmul --sizes 256 --tiles 32 --compute-tiles 4 \
+    --dataflow output-stationary,weight-stationary,a-stationary,fully-streaming
 ```
 
 ## 7. Caveats

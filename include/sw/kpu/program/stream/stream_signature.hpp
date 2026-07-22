@@ -54,6 +54,16 @@ struct SpaceTimeMap {
 
     // schedule/projection aligned (τ ∥ u) → the contention-free hexagonal case.
     bool aligned() const { return parallel(tau, proj); }
+
+    // The operand held stationary is the one whose propagation direction is ∥ u
+    // (C for proj=k, B for proj=i, A for proj=j; "" when nothing is stationary/hex).
+    std::string stationary_operand() const {
+        if (proj == Vec3{1, 1, 1}) return "";
+        if (proj == Vec3{0, 0, 1}) return "C";
+        if (proj == Vec3{1, 0, 0}) return "B";
+        if (proj == Vec3{0, 1, 0}) return "A";
+        return "";
+    }
 };
 
 // Matmul variable propagation directions (the axis each is invariant along).
