@@ -19,6 +19,7 @@
 
 #include <sw/kpu/program/tile_program.hpp>
 #include <sw/kpu/program/characterize/device_model.hpp>
+#include <sw/kpu/program/stream/stream_signature.hpp>
 
 #include <algorithm>
 #include <cstddef>
@@ -46,7 +47,14 @@ struct DagNode {
 
 class TileDag {
 public:
-    TileDag(const TileProgram& prog, const DeviceDescriptor& dev) : dev_(dev) {
+    // Without an L1 StreamProgram, compute/movement durations use the first-order
+    // lumped model (device_model.hpp). With one, compute ops take their systolic
+    // WAVEFRONT latency and Drain ops are stretched by the C-stream bubble — so the
+    // schedule becomes systolic and DATAFLOW-sensitive (output-stationary pays the
+    // drain-bubble penalty; weight/A-stationary and hex drain densely).
+    TileDag(const TileProgram& prog, const DeviceDescriptor& dev,
+            const stream::StreamProgram* l1 = nullptr)
+        : dev_(dev), l1_(l1) {
         build_(prog);
     }
 
@@ -144,7 +152,35 @@ public:
 
 private:
     DeviceDescriptor dev_;
+    const stream::StreamProgram* l1_ = nullptr;
     std::vector<DagNode> nodes_;
+
+    // L1-timed duration (systolic cycles): compute = wavefront latency; Drain = the
+    // C stream drained down its lanes at the C signature's element stride (the bubble
+    // stretches it); Feed = the tile filled at one element/cycle/lane.
+    double l1_duration_(const TileOp& op, std::size_t idx, double fallback) const {
+        if (op.kind == TileOpKind::MatMulAccum) {
+            auto it = l1_->computes.find(idx);
+            if (it != l1_->computes.end()) return static_cast<double>(it->second.latency());
+        } else if (op.kind == TileOpKind::Drain) {
+            if (const auto* c = l1_->signature("C")) {
+                const double per_lane = c->lanes > 0
+                    ? static_cast<double>(c->element_count()) / c->lanes : 0.0;
+                return c->element_stride * per_lane;   // bubble (stride>1) stretches the drain
+            }
+        } else if (op.kind == TileOpKind::Feed) {
+            // dense fill: element_count / lanes cycles (stride 1). A stationary operand
+            // still preloads into the array (lanes==0), so cost it over its rows rather
+            // than falling back to the byte model (which would wrongly penalize it).
+            const std::string& t = op.inputs.empty() ? std::string() : op.inputs[0].operand;
+            if (const auto* s = l1_->signature(t)) {
+                const double lanes = s->lanes > 0 ? static_cast<double>(s->lanes)
+                                   : (s->rows > 0 ? static_cast<double>(s->rows) : 1.0);
+                return static_cast<double>(s->element_count()) / lanes;
+            }
+        }
+        return fallback;
+    }
 
     double height_(std::size_t i, std::vector<double>& memo) const {
         if (memo[i] >= 0) return memo[i];
@@ -237,6 +273,9 @@ private:
             nodes_[i].duration = nodes_[i].work.is_compute
                 ? nodes_[i].work.macs / std::max(1.0, dev_.fabric_macs_per_cycle)
                 : nodes_[i].work.bytes / std::max(1.0, dev_.bytes_per_cycle);
+
+            // L1-timed override: systolic wavefront for compute, bubble-scaled drain.
+            if (l1_) nodes_[i].duration = l1_duration_(op, i, nodes_[i].duration);
 
             // classify reads / writes
             std::vector<const TileCoord*> reads, writes;

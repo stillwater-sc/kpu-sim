@@ -12,6 +12,7 @@
 #include <sw/kpu/program/derive/matmul_tile_program.hpp>
 #include <sw/kpu/program/derive/lu_tile_program.hpp>
 #include <sw/kpu/program/characterize/characterization.hpp>
+#include <sw/kpu/program/stream/derive/matmul_streams.hpp>
 
 using namespace sw::kpu::program;
 using namespace sw::kpu::program::characterize;
@@ -87,6 +88,37 @@ TEST_CASE("characterize reports structural + modeled metrics", "[program][charac
     CHECK(m.makespan_cycles >= m.lower_bound_cycles);   // schedule >= lower bound
     CHECK(m.energy_total_pj > 0.0);
     CHECK(m.energy_total_pj == Approx(m.energy_compute_pj + m.energy_move_pj + m.energy_leak_pj));
+}
+
+TEST_CASE("dataflow sweep: L1 makes the schedule systolic + dataflow-sensitive",
+          "[program][characterize]") {
+    TileProgram prog = derive_matmul_tile_program(128, 128, 128, 32, 32, 32);
+    // enough compute tiles that the drain (not compute) shapes the makespan
+    DeviceDescriptor d = DeviceDescriptor::checkerboard(16);
+
+    stream::StreamProgram os = stream::derive_matmul_streams(prog, stream::SpaceTimeMap::output_stationary());
+    stream::StreamProgram ws = stream::derive_matmul_streams(prog, stream::SpaceTimeMap::b_stationary());
+    stream::StreamProgram hx = stream::derive_matmul_streams(prog, stream::SpaceTimeMap::fully_streaming());
+
+    Metrics mo = characterize_program(prog, d, &os);
+    Metrics mw = characterize_program(prog, d, &ws);
+    Metrics mh = characterize_program(prog, d, &hx);
+
+    // dataflow metrics are populated from L1
+    CHECK(mo.stationary == "C");
+    CHECK(mw.stationary == "B");
+    CHECK(mo.c_bubble == 1);          // output-stationary pays a drain bubble
+    CHECK(mw.c_bubble == 0);          // weight-stationary drains densely
+    CHECK(mo.network == "Mesh2D");
+    CHECK(mh.network.find("Hexagonal") != std::string::npos);
+
+    // the drain bubble makes output-stationary slower than the dense dataflows
+    CHECK(mo.makespan_cycles > mw.makespan_cycles);
+
+    // without L1 the dataflow fields stay empty (backward-compatible path)
+    Metrics plain = characterize_program(prog, d);
+    CHECK(plain.dataflow.empty());
+    CHECK(plain.makespan_cycles > 0.0);
 }
 
 TEST_CASE("feasibility gates on L3 tile capacity", "[program][characterize]") {
