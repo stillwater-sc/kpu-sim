@@ -169,8 +169,9 @@ inline std::string metrics_csv_row(const Metrics& m) {
 // so the tile program's organization and ordering are directly observable. Time
 // unit = modeled cycles.
 inline void write_chrome_trace(const TileProgram& prog, const DeviceDescriptor& dev,
-                               const std::string& path) {
-    TileDag dag(prog, dev);
+                               const std::string& path,
+                               const stream::StreamProgram* l1 = nullptr) {
+    TileDag dag(prog, dev, l1);   // same schedule (incl. L1 dataflow timing) as reported
     dag.list_schedule();
     std::ofstream f(path);
     if (!f) {

@@ -157,26 +157,33 @@ private:
 
     // L1-timed duration (systolic cycles): compute = wavefront latency; Drain = the
     // C stream drained down its lanes at the C signature's element stride (the bubble
-    // stretches it); Feed = the tile filled at one element/cycle/lane.
-    double l1_duration_(const TileOp& op, std::size_t idx, double fallback) const {
+    // stretches it); Feed = the tile filled at one element/cycle/lane. Movement timing
+    // uses the op's ACTUAL (clamped) tile extent, not the nominal signature shape, so
+    // trailing tiles at non-divisible dimensions are timed correctly.
+    double l1_duration_(const TileProgram& prog, const TileOp& op,
+                        std::size_t idx, double fallback) const {
         if (op.kind == TileOpKind::MatMulAccum) {
             auto it = l1_->computes.find(idx);
-            if (it != l1_->computes.end()) return static_cast<double>(it->second.latency());
-        } else if (op.kind == TileOpKind::Drain) {
+            return it != l1_->computes.end() ? static_cast<double>(it->second.latency()) : fallback;
+        }
+        // boundary Feed/Drain: numerator = this op's actual element count
+        const TileCoord& tile = op.inputs.empty() ? op.outputs[0] : op.inputs[0];
+        Dim rows = 0, cols = 0;
+        extent(prog, tile, rows, cols);
+        const double elements = static_cast<double>(rows) * cols;
+        if (op.kind == TileOpKind::Drain) {
             if (const auto* c = l1_->signature("C")) {
-                const double per_lane = c->lanes > 0
-                    ? static_cast<double>(c->element_count()) / c->lanes : 0.0;
-                return c->element_stride * per_lane;   // bubble (stride>1) stretches the drain
+                const double lanes = c->lanes > 0 ? static_cast<double>(c->lanes)
+                                   : (cols > 0 ? static_cast<double>(cols) : 1.0);
+                return c->element_stride * (elements / lanes);   // bubble stretches the drain
             }
         } else if (op.kind == TileOpKind::Feed) {
-            // dense fill: element_count / lanes cycles (stride 1). A stationary operand
-            // still preloads into the array (lanes==0), so cost it over its rows rather
-            // than falling back to the byte model (which would wrongly penalize it).
-            const std::string& t = op.inputs.empty() ? std::string() : op.inputs[0].operand;
-            if (const auto* s = l1_->signature(t)) {
+            // A stationary operand still preloads into the array (lanes==0), so cost it
+            // over its rows rather than falling back to the byte model.
+            if (const auto* s = l1_->signature(tile.operand)) {
                 const double lanes = s->lanes > 0 ? static_cast<double>(s->lanes)
-                                   : (s->rows > 0 ? static_cast<double>(s->rows) : 1.0);
-                return static_cast<double>(s->element_count()) / lanes;
+                                   : (rows > 0 ? static_cast<double>(rows) : 1.0);
+                return elements / lanes;
             }
         }
         return fallback;
@@ -275,7 +282,7 @@ private:
                 : nodes_[i].work.bytes / std::max(1.0, dev_.bytes_per_cycle);
 
             // L1-timed override: systolic wavefront for compute, bubble-scaled drain.
-            if (l1_) nodes_[i].duration = l1_duration_(op, i, nodes_[i].duration);
+            if (l1_) nodes_[i].duration = l1_duration_(prog, op, i, nodes_[i].duration);
 
             // classify reads / writes
             std::vector<const TileCoord*> reads, writes;

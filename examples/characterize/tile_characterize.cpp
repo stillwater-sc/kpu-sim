@@ -130,12 +130,19 @@ DeviceDescriptor make_device(const std::string& topo, Dim cf,
     return d;
 }
 
-// dataflow name (or alias) -> space-time mapping
+bool known_dataflow(const std::string& n) {
+    return n == "output-stationary" || n == "os" ||
+           n == "weight-stationary" || n == "ws" ||
+           n == "a-stationary"      || n == "as" ||
+           n == "fully-streaming"   || n == "hex";
+}
+
+// dataflow name (or alias) -> space-time mapping (caller must pre-validate via known_dataflow)
 stream::SpaceTimeMap map_for(const std::string& name) {
     if (name == "weight-stationary" || name == "ws") return stream::SpaceTimeMap::b_stationary();
     if (name == "a-stationary"      || name == "as") return stream::SpaceTimeMap::a_stationary();
     if (name == "fully-streaming"   || name == "hex") return stream::SpaceTimeMap::fully_streaming();
-    return stream::SpaceTimeMap::output_stationary();   // "output-stationary" / "os" / default
+    return stream::SpaceTimeMap::output_stationary();   // "output-stationary" / "os"
 }
 
 } // namespace
@@ -176,6 +183,14 @@ int main(int argc, char** argv) {
     const bool disasm = has_flag(a, "--disasm");
 
     // dataflow sweep applies to matmul (L1 systolic timing); LU has no stream deriver.
+    if (algo != "lu")
+        for (const auto& df : dataflows)
+            if (!known_dataflow(df)) {
+                std::cerr << "error: unknown --dataflow '" << df << "' "
+                             "(expected output-stationary|weight-stationary|a-stationary|"
+                             "fully-streaming, or os/ws/as/hex)\n";
+                return 2;
+            }
     const std::vector<std::string> dfs = (algo == "lu")
         ? std::vector<std::string>{"-"} : dataflows;
 
@@ -213,7 +228,7 @@ int main(int argc, char** argv) {
 
                         if (disasm && !did_disasm) { std::cout << "\n" << prog.disassemble() << "\n"; did_disasm = true; }
                         if (!trace_path.empty() && !did_trace) {
-                            write_chrome_trace(prog, dev, trace_path);
+                            write_chrome_trace(prog, dev, trace_path, l1p);
                             std::cout << "[trace] wrote " << trace_path << " (chrome://tracing)\n";
                             did_trace = true;
                         }
