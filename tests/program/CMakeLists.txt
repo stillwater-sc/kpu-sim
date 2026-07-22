@@ -23,3 +23,12 @@ kpu_add_component_test(test_tile_characterize "program"
 set_tests_properties(test_tile_characterize PROPERTIES
     LABELS "program;characterize;v0.9"
 )
+
+# L1 stream signatures (spatial/temporal layer over L0)
+kpu_add_component_test(test_stream_signature "program"
+    test_stream_signature.cpp
+)
+
+set_tests_properties(test_stream_signature PROPERTIES
+    LABELS "program;stream;v0.9"
+)
