@@ -94,6 +94,16 @@ if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" OR CMAKE_CXX_COMPILER_ID STREQUAL "Clang
     add_compile_options(-Wall -Wextra -Wpedantic)
         if(CMAKE_BUILD_TYPE STREQUAL "Release")
         add_compile_options(-O3 -march=native)
+        # `-march=native` on newer CI runners enables a partial AVX10.1 feature that
+        # Clang flags via -Winvalid-feature-combination, which -Werror turns fatal.
+        # Suppress it GLOBALLY for Clang so targets that don't route through
+        # kpu_set_target_options (e.g. kpu_trace, kpu_transactional) are covered too —
+        # the per-target suppression in cmake/CompilerOptions.cmake missed them, which
+        # only surfaced when sccache went down and they recompiled from scratch.
+        # (GCC has no such warning and builds cleanly with the same -march=native.)
+        if(CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
+            add_compile_options(-Wno-invalid-feature-combination)
+        endif()
     endif()
     # gcc 13's -O3 constprop pass on std::make_unique produces a stream
     # of false-positive -Wstringop-overflow warnings claiming plain
