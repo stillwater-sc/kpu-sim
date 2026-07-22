@@ -85,6 +85,34 @@ matmul  256   32   4 single     fully-streaming   -      0 Hexagonal+overlay    
 program computed the wrong answer. The CSV/JSON carry the full metric set (macs,
 arithmetic intensity, critical path, peak live tiles, movement bytes, feasibility, …).
 
+### What is `makespan`?
+
+**Makespan** is a scheduling-theory term for the **total elapsed time to finish all the
+work** — the cycle on which the *last* tile-op completes, measured from the start. It is
+**not** the sum of every op's duration (that would be everything run one-at-a-time);
+because tile-ops run concurrently on the available hardware, the makespan is the
+*wall-clock span* of the whole schedule. Read it as **"how many cycles does this entire
+tiled operator take on this device?"** — lower is faster.
+
+The harness computes it by (1) building the **tile-dependency DAG** (every feed/compute/
+drain is a node; edges are data dependencies), (2) giving each node a duration in cycles
+(the first-order lumped model, or the L1 systolic durations when `--dataflow` is set),
+(3) running a greedy list scheduler that packs those ops onto the device's *finite*
+resources (`--compute-tiles` compute units + movement lanes) respecting dependencies,
+and (4) taking the finish time of the last op.
+
+It sits between two reference points:
+
+- **`crit_path`** — the makespan with *unlimited* compute tiles: the dependency-limited
+  floor. You can never beat the longest chain of dependent ops.
+- **`lower_bound`** — `max(crit_path, compute_work / #tiles, movement_work / #lanes)`: a
+  provable floor combining the chain limit and the resource-saturation limits.
+
+so `makespan ≥ lower_bound ≥ crit_path`, and as you add compute tiles the makespan falls
+*toward* the critical path until dependencies or movement bandwidth dominate — the
+"concurrency ceiling" of recipe (a). Like all timing here it is in **modeled cycles**
+(first-order; for *relative* comparison across configurations, not an absolute runtime).
+
 ## 4. See the tile sequence
 
 ```console
