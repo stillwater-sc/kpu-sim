@@ -2,8 +2,8 @@
 
 | | |
 |---|---|
-| **Status** | **Proposed** — awaiting review; nothing here is decided until accepted |
-| **Date** | 2026-09-18 |
+| **Status** | **Accepted** (2026-09-19) — see §7 for the answers recorded on acceptance |
+| **Date** | proposed 2026-09-18, accepted 2026-09-19 |
 | **Issue** | #253 |
 | **Context docs** | `docs/architecture/program-execution-assessment.md` (#252), `docs/plans/kpu-program-model.md` (D6), `docs/plans/model-ingestion-compilation-epic.md` (#229) |
 | **Affects** | #229, #230, #231, #254, #255, #256, #257 |
@@ -186,10 +186,10 @@ Each retirement gets its own issue after acceptance, per #253's definition of do
 | `TransactionalProgramExecutor` (DMProgram) | **Freeze** now, then retire | when the L0 transactional executor reaches matmul parity and `kpu-loader` is repointed |
 | `BehavioralProgramExecutor` (DMProgram) | **Freeze**, then retire | when nothing needs to execute `.kpubin` outside the CSP tier |
 | `isa::ConcurrentExecutor` (timing-only, behind `KPURuntime` and the C API) | **Retire** | when the runtime routes through the factory (#257) |
-| Legacy `isa::ProgramExecutor` | **Retire** | now; its dependents are `tests/isa/test_data_movement_isa.cpp` and `examples/basic/data_movement_isa_matmul.cpp`, which retire with it |
-| OFG flow executors (`models/dataflow/`) | **Retire** (`execute_operation` is a no-op) | now; its dependents are three tests in `tests/dataflow/` and `examples/behavioral/ofg_trace_demo.cpp`. **`CLAUDE.md` currently lists these under "USE THESE"** as the correct dataflow reference, so that section must be rewritten in the same change |
+| Legacy `isa::ProgramExecutor` | **Freeze**, then retire | when the new path covers its tests' intent; its dependents are `tests/isa/test_data_movement_isa.cpp` and `examples/basic/data_movement_isa_matmul.cpp`, which retire with it |
+| OFG flow executors (`models/dataflow/`) | **Freeze**, then retire (`execute_operation` is a no-op) | when the new path covers its tests' intent; its dependents are three tests in `tests/dataflow/` and `examples/behavioral/ofg_trace_demo.cpp`. **`CLAUDE.md` currently lists these under "USE THESE"** as the correct dataflow reference — that section is corrected **now**, not on deletion, because it points readers at a no-op compute path |
 | `models/transactional` component classes | **Retire from the program path** (no C++ callers) | with the Python rework (#257), their only consumer |
-| `models/behavioral` orchestrator and executors | **Retire** | now; its only external dependent is `examples/behavioral/matmul_behavioral.cpp` |
+| `models/behavioral` orchestrator and executors | **Freeze**, then retire | when the new path covers its intent; its only external dependent is `examples/behavioral/matmul_behavioral.cpp` |
 | `KPUSimulator` temporal components | **Keep as a component library** for fidelity elevation (e.g. LPDDR5); no program-execution path | — |
 
 ### D7 — How DNN operators enter
@@ -257,27 +257,56 @@ parallel graph bridge.
 5. Over a size sweep, its makespan is within the documented band of the CSP tier.
 6. The same file, with the same checks, then runs tile LU (confined pivoting).
 
-## 7. Open questions for the reviewers
+## 7. Answers recorded on acceptance
 
-1. **Accept D4?** Exact values at TRANSACTIONAL changes the tier contract in `CLAUDE.md`
-   and the fidelity framework doc.
-2. **Retirement timing.** Retire the "now" items in D6 immediately, or freeze everything
-   until the new executor reaches matmul parity?
-3. **Statistical variance.** The fidelity framework describes TRANSACTIONAL timing as
-   "mean + variance." Start deterministic, with calibrated means only, and add variance
-   once calibration data exists?
-4. **L1 at TRANSACTIONAL.** Should L1 wavefront latencies be required, or optional with
-   a lumped fallback, as the harness does today? The proposal is optional.
-5. **The CSP value tolerance** for D5, especially for LU and softmax.
-6. **Naming.** A working name for the executor, such as `TileTransactionExecutor`, to use
-   in the implementation plan.
+1. **D4 accepted.** The transactional tier computes exact values. `CLAUDE.md`'s fidelity
+   table and the Level 1 section of `docs/02-simulation/fidelity-framework.md` are
+   updated to match (see §8).
+2. **Retirement timing: freeze now, delete at parity.** All 7 engines in D6 are frozen
+   immediately — no new features, no new callers, no new tests. Each is deleted only once
+   the replacement covers what it did:
+   - the two DMProgram program executors, when the transactional executor reaches matmul
+     parity and `kpu-loader` is repointed;
+   - `isa::ConcurrentExecutor`, when the runtime routes through the D2 factory (#257);
+   - the legacy `isa::ProgramExecutor`, the OFG flow executors and the `models/behavioral`
+     orchestrator, when the new path covers their tests' intent.
 
-## 8. On acceptance
+   Their existing tests and examples stay green until then, so no coverage is dropped
+   ahead of a replacement. The `CLAUDE.md` "Implementation Reference" rewrite is **not**
+   deferred with them: that section points readers at a no-op compute path today, so it
+   is corrected now (§8).
+3. **Statistical variance: deterministic first.** Calibrated means only, with a recorded
+   seed. Variance is added once there is CSP calibration data to fit it to, and is
+   tracked as a follow-on, not part of the first executor.
+4. **L1 at TRANSACTIONAL: optional.** When an L1 `StreamProgram` is present, compute ops
+   take their systolic wavefront latency and drains are stretched by the C-stream bubble.
+   Without it, the first-order lumped model applies. This is what the harness already
+   does (`tile_dag.hpp:163-190`), so dataflow-sensitivity is opt-in rather than a
+   prerequisite.
+5. **Value tolerances (D5).**
+   - Transactional versus the L0 reference: **bit-exact**, no tolerance. Both run the same
+     kernels in a dependency-respecting order, and WAW ordering fixes accumulation order.
+     Any difference is a bug, not rounding.
+   - Cycle-accurate versus the L0 reference: **relative error only**, since accumulation
+     order legitimately differs. Adopt the tolerances already in use on the CSP path as
+     the starting point — 1e-4 for the MLP oracle, 5e-3 for the composed CNN references —
+     and set the LU and softmax bars from measurement when those first run at
+     cycle-accurate fidelity, rather than guessing here.
+6. **Name: `TileTransactionExecutor`**, in namespace `sw::kpu::program`. It names what it
+   executes (tile transactions) and where it sits (the L0 program layer), and does not
+   collide with the existing `TransactionalProgramExecutor` it eventually replaces.
 
-- Set the status to **Accepted** and record the answers to §7.
-- File one issue per retirement in D6, one for the transactional executor's
-  implementation plan, and one for the L0 serializer (split from #230).
-- Update `CLAUDE.md`: the fidelity table (D4), the "Implementation Reference" section
-  (D6), and a one-paragraph statement of the authorities (D5).
-- Update `docs/02-simulation/fidelity-framework.md` Level 1 (D4).
-- Re-point #230, #231, #254, #255, #256 and #257 as listed in §5.
+## 8. Follow-up work
+
+Tracked separately; this ADR does not carry the implementation.
+
+- [ ] Implementation plan and issue for `TileTransactionExecutor` (D3's seven requirements)
+- [ ] L0 program serializer, versioned, split out of #230 and sequenced **ahead** of the
+      driver JIT
+- [ ] One freeze/retirement issue per engine in D6, each naming its deletion condition
+      from §7.2
+- [ ] `CLAUDE.md`: fidelity table (D4), the "Implementation Reference" section (D6, now),
+      and a statement of the authorities (D5)
+- [ ] `docs/02-simulation/fidelity-framework.md`: Level 1 (D4)
+- [ ] Re-point #230, #231, #254, #255, #256 and #257 per §5
+- [ ] Statistical variance for transactional timing, after calibration (§7.3)
