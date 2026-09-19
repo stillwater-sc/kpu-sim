@@ -308,7 +308,8 @@ Tracked separately; this ADR does not carry the implementation.
 | **#267** | Align `CLAUDE.md` (fidelity table, "Implementation Reference", authorities) and the fidelity framework's Level 1; waits on #251 |
 | **#268** | Statistical variance for transactional timing, after calibration (§7.3) |
 
-Still to do, not yet filed as issues:
+Done as issue hygiene rather than new work:
 
-- [ ] Re-point #230, #231, #254, #255, #256 and #257 per §5 — issue-hygiene comments on
-      each, not new work
+- [x] Re-pointed #230, #231, #254, #255, #256 and #257 per §5 (comments on each,
+      2026-09-19). One open recommendation: **#254 should close as superseded by #264**,
+      since every requirement in it is now part of that issue.
