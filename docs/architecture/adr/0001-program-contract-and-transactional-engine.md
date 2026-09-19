@@ -300,13 +300,15 @@ parallel graph bridge.
 
 Tracked separately; this ADR does not carry the implementation.
 
-- [ ] Implementation plan and issue for `TileTransactionExecutor` (D3's seven requirements)
-- [ ] L0 program serializer, versioned, split out of #230 and sequenced **ahead** of the
-      driver JIT
-- [ ] One freeze/retirement issue per engine in D6, each naming its deletion condition
-      from §7.2
-- [ ] `CLAUDE.md`: fidelity table (D4), the "Implementation Reference" section (D6, now),
-      and a statement of the authorities (D5)
-- [ ] `docs/02-simulation/fidelity-framework.md`: Level 1 (D4)
-- [ ] Re-point #230, #231, #254, #255, #256 and #257 per §5
-- [ ] Statistical variance for transactional timing, after calibration (§7.3)
+| Issue | Work |
+|---|---|
+| **#264** | `TileTransactionExecutor` — the TRANSACTIONAL tier executor (D3's seven requirements), design note first |
+| **#265** | L0 portable-program serializer, versioned; split out of #230 and sequenced **ahead** of the driver JIT |
+| **#266** | Freeze and retire the superseded engines (D6), with each deletion condition from §7.2 |
+| **#267** | Align `CLAUDE.md` (fidelity table, "Implementation Reference", authorities) and the fidelity framework's Level 1; waits on #251 |
+| **#268** | Statistical variance for transactional timing, after calibration (§7.3) |
+
+Still to do, not yet filed as issues:
+
+- [ ] Re-point #230, #231, #254, #255, #256 and #257 per §5 — issue-hygiene comments on
+      each, not new work
