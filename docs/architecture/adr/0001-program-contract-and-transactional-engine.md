@@ -120,6 +120,59 @@ A single factory selects the executor from `SimulationFidelity`. It is the **onl
 place fidelity is read for program execution. `kpu-loader`, `KPURuntime`, the C API and
 the Python backend all route through it (#257).
 
+#### D2.1 — The load contract (how host code supplies these)
+
+The existing interface cannot express D2's inputs, and that gap has to be named rather
+than left to the implementation. Today `create_program_executor(SimulationFidelity,
+HardwareContext&)` returns an `IProgramExecutor` whose `load_program(const DMProgram&,
+a_base, b_base, c_base)` takes a DMProgram and three base addresses
+(`include/sw/kpu/isa/program_executor_interface.hpp:49,114`). `HardwareContext` carries
+memory components — no placement, no `DeviceDescriptor`.
+
+The decision:
+
+1. **A second, additive interface** for the portable program, rather than overloading the
+   DMProgram one:
+
+   ```cpp
+   struct TileExecutionRequest {              // everything the tiers need, one struct
+       TileProgram&              program;     // mutated in place: values live in operands
+       const Placement&          placement;   // default single-topology until #230 incr. 3
+       const DeviceDescriptor&   device;
+       const stream::StreamProgram* streams = nullptr;   // optional (§7.4)
+       std::uint64_t             seed = 0;
+   };
+
+   class ITileProgramExecutor {               // BEHAVIORAL + TRANSACTIONAL
+       virtual RunResult run(const TileExecutionRequest&) = 0;
+   };
+
+   std::unique_ptr<ITileProgramExecutor>
+   create_tile_program_executor(SimulationFidelity, const TileExecutionRequest&);
+   ```
+
+2. **Tensor binding replaces base addresses.** Values live in `TensorOperand::values`
+   inside the program, named by operand, so the A/B/C base-address triple disappears
+   rather than being generalized. `kpu-loader`'s hardcoded A/B/C and fixed buffer counts
+   (`tools/runtime/kpu-loader/main.cpp:185-213`) are replaced by operand-named bindings.
+   Host memory residency for real weights stays #231's job on the cycle-accurate path.
+3. **Ownership.** The caller owns the program and the device descriptor. The **placement
+   is produced by the driver JIT** and owned by the request; until #230 increment 3 lands,
+   a `Placement::single(device)` factory supplies the default. Placement is an explicit
+   object from the start, so the JIT later replaces a value rather than introducing a
+   parameter.
+4. **`SimulationFidelity::CYCLE_ACCURATE` on this interface is a distinct path**, not a
+   third implementation of `ITileProgramExecutor`: it lowers L0 → data-path config via the
+   JIT and runs the CSP engine. Until that lowering exists (#230 increments 2–3) the
+   factory **throws with a message naming the missing capability** instead of returning
+   `nullptr`, which is the current failure mode
+   (`program_executor_interface.cpp:140-143`).
+5. **The legacy DMProgram interface is frozen, not migrated.** `IProgramExecutor` and its
+   two implementations keep their present contract until they retire (§7.2), so no adapter
+   is written between the two interfaces — the deliberate alternative to a migration
+   shim. #257's factory routing is complete when every host surface reaches **either** the
+   new interface or the CSP path, and nothing reaches a timing-only executor by default.
+
 The transactional tier needs the JIT's **placement** (which L3 tiles and which compute
 tiles an op uses; D6 §4a). It does **not** need the per-engine DMA/BlockMover/Streamer
 instruction streams. Until the placement pass lands (#230 increment 3), the executor
@@ -185,10 +238,10 @@ Each retirement gets its own issue after acceptance, per #253's definition of do
 | CSP `ConcurrentTimingExecutor` + wrappers | **Keep**: CYCLE_ACCURATE tier; gains a front end from the JIT output (#230 increments 2–3) | — |
 | `TransactionalProgramExecutor` (DMProgram) | **Freeze** now, then retire | when the L0 transactional executor reaches matmul parity and `kpu-loader` is repointed |
 | `BehavioralProgramExecutor` (DMProgram) | **Freeze**, then retire | when nothing needs to execute `.kpubin` outside the CSP tier |
-| `isa::ConcurrentExecutor` (timing-only, behind `KPURuntime` and the C API) | **Retire** | when the runtime routes through the factory (#257) |
+| `isa::ConcurrentExecutor` (timing-only, behind `KPURuntime` and the C API) | **Freeze**, then retire | when the runtime routes through the factory (#257); frozen first per §7.2 |
 | Legacy `isa::ProgramExecutor` | **Freeze**, then retire | when the new path covers its tests' intent; its dependents are `tests/isa/test_data_movement_isa.cpp` and `examples/basic/data_movement_isa_matmul.cpp`, which retire with it |
 | OFG flow executors (`models/dataflow/`) | **Freeze**, then retire (`execute_operation` is a no-op) | when the new path covers its tests' intent; its dependents are three tests in `tests/dataflow/` and `examples/behavioral/ofg_trace_demo.cpp`. **`CLAUDE.md` currently lists these under "USE THESE"** as the correct dataflow reference — that section is corrected **now**, not on deletion, because it points readers at a no-op compute path |
-| `models/transactional` component classes | **Retire from the program path** (no C++ callers) | with the Python rework (#257), their only consumer |
+| `models/transactional` component classes | **Freeze**, then retire from the program path (no C++ callers) | with the Python rework (#257), their only consumer; frozen first per §7.2 |
 | `models/behavioral` orchestrator and executors | **Freeze**, then retire | when the new path covers its intent; its only external dependent is `examples/behavioral/matmul_behavioral.cpp` |
 | `KPUSimulator` temporal components | **Keep as a component library** for fidelity elevation (e.g. LPDDR5); no program-execution path | — |
 
@@ -260,21 +313,32 @@ parallel graph bridge.
 ## 7. Answers recorded on acceptance
 
 1. **D4 accepted.** The transactional tier computes exact values. `CLAUDE.md`'s fidelity
-   table and the Level 1 section of `docs/02-simulation/fidelity-framework.md` are
-   updated to match (see §8).
-2. **Retirement timing: freeze now, delete at parity.** All 7 engines in D6 are frozen
-   immediately — no new features, no new callers, no new tests. Each is deleted only once
-   the replacement covers what it did:
-   - the two DMProgram program executors, when the transactional executor reaches matmul
-     parity and `kpu-loader` is repointed;
-   - `isa::ConcurrentExecutor`, when the runtime routes through the D2 factory (#257);
-   - the legacy `isa::ProgramExecutor`, the OFG flow executors and the `models/behavioral`
-     orchestrator, when the new path covers their tests' intent.
+   table and the Level 1 section of `docs/02-simulation/fidelity-framework.md` **still say
+   otherwise and are pending** — tracked in #267, which waits on #251 because that PR
+   rewrites the same sections. Until #267 lands, those two documents state the old
+   statistical-value contract and the ADR overrides them.
+2. **Retirement timing: freeze now, delete at parity.** All seven D6 targets are frozen
+   immediately — no new features, no new callers, no new tests — and each is deleted only
+   on its **own** condition. They are not interchangeable:
 
-   Their existing tests and examples stay green until then, so no coverage is dropped
-   ahead of a replacement. The `CLAUDE.md` "Implementation Reference" rewrite is **not**
-   deferred with them: that section points readers at a no-op compute path today, so it
-   is corrected now (§8).
+   | # | Target | Deletion condition |
+   |---|---|---|
+   | 1 | `TransactionalProgramExecutor` (DMProgram) | `TileTransactionExecutor` reaches matmul parity **and** `kpu-loader` is repointed |
+   | 2 | `BehavioralProgramExecutor` (DMProgram) | no component needs to execute `.kpubin` outside the cycle-accurate tier — **not** shared with row 1, since `.kpubin` consumers may outlive the transactional one |
+   | 3 | `isa::ConcurrentExecutor` (timing-only) | the runtime and C API route through the D2 factory (#257) |
+   | 4 | Legacy `isa::ProgramExecutor` | the new path covers the intent of `tests/isa/test_data_movement_isa.cpp` and `examples/basic/data_movement_isa_matmul.cpp` |
+   | 5 | OFG flow executors (`models/dataflow/`) | the new path covers the intent of the three `tests/dataflow/` tests and `examples/behavioral/ofg_trace_demo.cpp` |
+   | 6 | `models/transactional` component classes | the Python native path stops consuming them (#257), their only consumer |
+   | 7 | `models/behavioral` orchestrator and executors | the new path covers the intent of `examples/behavioral/matmul_behavioral.cpp` |
+
+   Every existing test and example stays green until its row's condition is met, so no
+   coverage is dropped ahead of a replacement. Rows 3 and 6 are marked **Retire** in D6's
+   table because nothing legitimate depends on them today; they are still frozen first, so
+   the sequencing here governs.
+
+   The `CLAUDE.md` "Implementation Reference" rewrite is **not** deferred with row 5: that
+   section points readers at a no-op compute path today, so it is corrected as part of
+   #267 rather than at deletion time.
 3. **Statistical variance: deterministic first.** Calibrated means only, with a recorded
    seed. Variance is added once there is CSP calibration data to fit it to, and is
    tracked as a follow-on, not part of the first executor.
@@ -287,11 +351,21 @@ parallel graph bridge.
    - Transactional versus the L0 reference: **bit-exact**, no tolerance. Both run the same
      kernels in a dependency-respecting order, and WAW ordering fixes accumulation order.
      Any difference is a bug, not rounding.
-   - Cycle-accurate versus the L0 reference: **relative error only**, since accumulation
-     order legitimately differs. Adopt the tolerances already in use on the CSP path as
-     the starting point — 1e-4 for the MLP oracle, 5e-3 for the composed CNN references —
-     and set the LU and softmax bars from measurement when those first run at
-     cycle-accurate fidelity, rather than guessing here.
+   - Cycle-accurate versus the L0 reference: **mixed absolute/relative**, since
+     accumulation order legitimately differs. A pure relative error is undefined at a zero
+     reference and unstable near zero — common in these tensors, where ReLU zeroes
+     activations and triangular factors carry structural zeros. The comparator is:
+
+     ```
+     pass  ⟺  |actual − reference| ≤ atol + rtol · |reference|     (elementwise)
+     ```
+
+     with **`atol = 1e-6`** for float32, and `rtol` taken from the tolerances already in
+     use on the CSP path: **1e-4** for the MLP oracle, **5e-3** for the composed CNN
+     references. Report max absolute *and* max relative error, excluding from the relative
+     figure any element whose reference magnitude is below `atol`. The LU and softmax
+     `rtol` bars are set from measurement when those first run at cycle-accurate fidelity,
+     rather than guessed here — but they use this same comparator.
 6. **Name: `TileTransactionExecutor`**, in namespace `sw::kpu::program`. It names what it
    executes (tile transactions) and where it sits (the L0 program layer), and does not
    collide with the existing `TransactionalProgramExecutor` it eventually replaces.
