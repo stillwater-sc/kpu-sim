@@ -244,6 +244,11 @@ int main(int argc, char** argv) {
                                 return 2;
                             }
                             f << dag.to_dot(prog, prog.name() + "  [" + dev.label() + "]");
+                            f.close();   // a buffered write or close can fail after a good open
+                            if (!f) {
+                                std::cerr << "error: failed writing --dot file '" << dot_path << "'\n";
+                                return 2;
+                            }
                             std::cout << "[dot] wrote " << dot_path
                                       << " (dot -Tsvg " << dot_path << " -o dag.svg)\n";
                             did_dot = true;

@@ -121,15 +121,18 @@ public:
 
             std::ostringstream lbl;
             lbl << n.op_index << ": " << to_string(n.kind);
+            // Operand names are caller-provided (TileCoord::operand is a free string),
+            // so every coordinate is escaped. The label as a WHOLE must not be escaped:
+            // its "\\n" separators are intentional DOT line breaks.
             if (!op.outputs.empty()) {
-                lbl << "\\n" << op.outputs[0].to_string();
+                lbl << "\\n" << escape_(op.outputs[0].to_string());
                 if (!op.inputs.empty()) {
                     lbl << " <- ";
                     for (std::size_t k = 0; k < op.inputs.size(); ++k)
-                        lbl << (k ? " " : "") << op.inputs[k].to_string();
+                        lbl << (k ? " " : "") << escape_(op.inputs[k].to_string());
                 }
             } else if (!op.inputs.empty()) {
-                lbl << "\\n" << op.inputs[0].to_string();
+                lbl << "\\n" << escape_(op.inputs[0].to_string());
             }
             if (op.pivot_slot >= 0) lbl << "\\npivot#" << op.pivot_slot;
             lbl << "\\n" << fmt_(n.duration) << " cyc";

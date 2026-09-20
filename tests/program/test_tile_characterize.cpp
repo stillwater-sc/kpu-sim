@@ -186,3 +186,23 @@ TEST_CASE("to_dot exports the tile-dependency DAG", "[program][characterize][dot
         CHECK(again.to_dot(prog, "lu") == structural);
     }
 }
+
+TEST_CASE("to_dot escapes caller-provided operand names", "[program][characterize][dot]") {
+    // TileCoord::operand is a free string, so a name carrying a quote or a backslash
+    // would otherwise terminate the DOT label early and corrupt the graph.
+    TileProgram prog("quoting");
+    prog.add_operand(TensorOperand("A\"x\\y", 4, 4, 4, 4));
+    TileOp feed;
+    feed.kind = TileOpKind::Feed;
+    feed.inputs = {TileCoord{"A\"x\\y", 0, 0}};
+    feed.port = "West";
+    prog.push(std::move(feed));
+
+    const std::string dot = TileDag(prog, DeviceDescriptor::single()).to_dot(prog, "q\"t");
+
+    // every quote inside the file is either a delimiter or escaped: no bare " survives
+    // in the label text, and the intentional \n separators are untouched.
+    CHECK(dot.find("A\\\"x\\\\y") != std::string::npos);   // escaped operand name present
+    CHECK(dot.find("label=\"q\\\"t\"") != std::string::npos); // escaped title present
+    CHECK(dot.find("\\n") != std::string::npos);              // line separators intact
+}
