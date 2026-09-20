@@ -201,6 +201,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **L0 tile kernels extracted into `tile_kernels.hpp` (increment 1 of #264).** The
+  per-op arithmetic of each `TileOpKind` (GEMM/MatMulAccum, GETRF, LASWP, both TRSM
+  variants) and the transient state it carries between ops (pivot slots + row
+  permutation) moved out of `TileProgramReference`'s private section into a shared
+  header: `TileKernelState` plus `apply(TileProgram&, const TileOp&, TileKernelState&)`.
+  `TileProgramReference` is now just the **in-order driver** over those kernels plus its
+  run summary; its public API and arithmetic are unchanged, and its tests pass
+  unmodified (the refactor's acceptance criterion). This is what makes the forthcoming
+  `TileTransactionExecutor` (the TRANSACTIONAL tier, ADR 0001) **bit-identical by
+  construction** rather than by testing: a dataflow-order driver calls the same kernels,
+  and since every op declares its full tile I/O, WAW ordering on an output tile
+  preserves accumulation order. Pure refactor — no behavior change.
+
 - **Movement-fabric utilization is now directly measured (follow-on 1b).** Each CSP
   component (`DMAEngineProcess`, `BlockMoverProcess`, `StreamerProcess`) counts, in
   its `tick()`, the cycles a transfer actually occupied it (DMA: a `SUBMITTED`
