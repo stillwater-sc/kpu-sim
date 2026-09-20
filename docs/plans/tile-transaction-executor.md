@@ -262,7 +262,8 @@ harness's O(n²) ready-scan is explicitly not the model here.
 models produce doubles, so the conversion has to be pinned down:
 
 - **Round up:** `cycles = ceil(duration_double)`. Truncation would let sub-cycle work become
-  0 and silently contradict §9's "compute cycles are never 0".
+  0, silently contradicting §9: aggregate compute cycles must be positive whenever the run
+  contains a non-zero-work compute op.
 - **Positive floor:** any op with **non-zero work** costs **at least 1 cycle**, even after
   rounding. A 1-element tile compute is cheap, not free.
 - **Genuinely zero-work ops cost 0 cycles** and complete at the current time. The two cases
