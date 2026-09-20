@@ -308,7 +308,10 @@ today, so multi-CF coefficients are **extrapolation** until #244 lands. Any resu
 
 `RunResult` carries, besides the mutated operand buffers:
 
-- **timeline**: per op — kind, start, finish, resource, waited-on reason
+- **timeline**: per op — kind, start, finish, resource, waited-on reason, and
+  **`zero_work`** (bool), set for the zero-duration cases §7.1 enumerates. Without that
+  flag a reader cannot tell deliberate reuse — a feed of an already-resident tile — from
+  work that went missing, which is exactly the distinction the reuse model needs to show.
 - **stats**: run-level aggregates — makespan; **aggregate compute cycles**, summed over
   compute ops only, which is `0` exactly when the run contains no non-zero-work compute op
   and positive otherwise; per-hop busy cycles and utilization; peak residency per level;
