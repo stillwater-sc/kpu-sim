@@ -18,6 +18,7 @@
 #pragma once
 
 #include <sw/kpu/program/tile_program.hpp>
+#include <sw/kpu/program/tile_dependencies.hpp>
 #include <sw/kpu/program/characterize/device_model.hpp>
 #include <sw/kpu/program/stream/stream_signature.hpp>
 
@@ -27,6 +28,7 @@
 #include <map>
 #include <sstream>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace sw::kpu::program::characterize {
@@ -62,6 +64,10 @@ public:
     }
 
     const std::vector<DagNode>& nodes() const { return nodes_; }
+
+    // The recovered dependency model (tile + pivot-slot hazards, typed edges).
+    // Shared with the executor: see include/sw/kpu/program/tile_dependencies.hpp.
+    const TileDependencies& dependencies() const { return deps_; }
 
     double total_macs() const {
         double s = 0; for (auto& n : nodes_) s += n.work.macs; return s;
@@ -148,23 +154,29 @@ public:
         }
 
         os << "\n";
-        for (const DagNode& n : nodes_) {
-            std::vector<std::size_t> succ = n.succs;
-            std::sort(succ.begin(), succ.end());
-            for (std::size_t s : succ) {
-                // a pivot-slot edge is data-dependent control, not tile dataflow:
-                // draw it dashed so the two kinds of dependency stay distinguishable
-                const TileOp& pop = ops[n.op_index];
-                const TileOp& cop = ops[nodes_[s].op_index];
-                const bool pivot_edge = pop.kind == TileOpKind::LuDiagFactor &&
-                                        cop.kind == TileOpKind::PivotApply &&
-                                        pop.pivot_slot >= 0 &&
-                                        pop.pivot_slot == cop.pivot_slot;
-                os << "  n" << n.op_index << " -> n" << nodes_[s].op_index;
-                if (pivot_edge)
-                    os << " [style=dashed, label=\"pivot#" << pop.pivot_slot << "\"]";
-                os << ";\n";
-            }
+        // Edge styling comes from the recovered dependency KIND, not from guessing at
+        // op kinds: solid = true dataflow (RAW / feed availability), dotted = an
+        // anti-dependency that only protects storage reuse, dashed = pivot-slot
+        // control. One line per op pair, taking the most significant kind.
+        std::map<std::pair<std::size_t, std::size_t>, TileDepEdge> per_pair;
+        auto significance = [](TileDepKind k) {
+            if (is_pivot_dependency(k)) return 2;
+            if (is_anti_dependency(k)) return 0;
+            return 1;                                   // RAW / feed
+        };
+        for (const TileDepEdge& e : deps_.edges) {
+            auto key = std::make_pair(e.from, e.to);
+            auto it = per_pair.find(key);
+            if (it == per_pair.end() || significance(e.kind) > significance(it->second.kind))
+                per_pair[key] = e;
+        }
+        for (const auto& [pair, e] : per_pair) {
+            os << "  n" << pair.first << " -> n" << pair.second;
+            if (is_pivot_dependency(e.kind))
+                os << " [style=dashed, label=\"" << escape_(e.subject) << "\"]";
+            else if (is_anti_dependency(e.kind))
+                os << " [style=dotted, color=\"#9ca3af\"]";
+            os << ";\n";
         }
         os << "}\n";
         return os.str();
@@ -235,6 +247,7 @@ private:
     DeviceDescriptor dev_;
     const stream::StreamProgram* l1_ = nullptr;
     std::vector<DagNode> nodes_;
+    TileDependencies deps_;
 
     // DOT helpers: compact cycle figures, and quoting for label text.
     static std::string fmt_(double v) {
@@ -351,23 +364,9 @@ private:
         const auto& ops = prog.ops();
         nodes_.resize(ops.size());
 
-        // hazard tracking
-        std::map<std::string, long> last_writer;                 // tile-key -> op
-        std::map<std::string, std::vector<std::size_t>> readers; // tile-key -> readers since last write
-        std::map<int, long> slot_writer;                         // pivot slot -> op
-        std::map<std::string, long> last_feed;                   // tile-key -> Feed that made it available
-
-        auto key = [](const TileCoord& c) {
-            return c.operand + "#" + std::to_string(c.ti) + "#" + std::to_string(c.tj);
-        };
-        auto add_dep = [&](std::size_t consumer, long producer) {
-            if (producer < 0 || static_cast<std::size_t>(producer) == consumer) return;
-            auto& preds = nodes_[consumer].preds;
-            if (std::find(preds.begin(), preds.end(), static_cast<std::size_t>(producer)) == preds.end()) {
-                preds.push_back(static_cast<std::size_t>(producer));
-                nodes_[static_cast<std::size_t>(producer)].succs.push_back(consumer);
-            }
-        };
+        // Dependency recovery is NOT duplicated here: one implementation serves the
+        // analysis and the executor alike (tile_dependencies.hpp).
+        deps_ = build_tile_dependencies(prog);
 
         for (std::size_t i = 0; i < ops.size(); ++i) {
             const TileOp& op = ops[i];
@@ -381,58 +380,11 @@ private:
             // L1-timed override: systolic wavefront for compute, bubble-scaled drain.
             if (l1_) nodes_[i].duration = l1_duration_(prog, op, i, nodes_[i].duration);
 
-            // classify reads / writes
-            std::vector<const TileCoord*> reads, writes;
-            switch (op.kind) {
-                case TileOpKind::Feed:
-                    // A Feed is a movement SOURCE: it makes an input tile available.
-                    // Record it so consumers depend on it (RAW below), but do NOT
-                    // treat it as a destructive write — repeated feeds of a shared
-                    // input tile must stay independent, else independent output-tile
-                    // computations would serialize through their shared input.
-                    if (!op.inputs.empty()) last_feed[key(op.inputs[0])] = static_cast<long>(i);
-                    break;
-                case TileOpKind::Drain:         if (!op.outputs.empty()) reads.push_back(&op.outputs[0]); break;
-                case TileOpKind::MatMulAccum:
-                    reads.push_back(&op.inputs[0]); reads.push_back(&op.inputs[1]);
-                    reads.push_back(&op.outputs[0]); writes.push_back(&op.outputs[0]); // RMW accumulate
-                    break;
-                case TileOpKind::LuDiagFactor:
-                    reads.push_back(&op.outputs[0]); writes.push_back(&op.outputs[0]);
-                    if (op.pivot_slot >= 0) slot_writer[op.pivot_slot] = static_cast<long>(i);
-                    break;
-                case TileOpKind::PivotApply:
-                    reads.push_back(&op.outputs[0]); writes.push_back(&op.outputs[0]);
-                    if (op.pivot_slot >= 0) {
-                        auto it = slot_writer.find(op.pivot_slot);
-                        if (it != slot_writer.end()) add_dep(i, it->second);
-                    }
-                    break;
-                case TileOpKind::TrsmLowerLeft:
-                case TileOpKind::TrsmUpperRight:
-                    reads.push_back(&op.inputs[0]);
-                    reads.push_back(&op.outputs[0]); writes.push_back(&op.outputs[0]);
-                    break;
-            }
-
-            for (const TileCoord* t : reads) {
-                const std::string k = key(*t);
-                auto it = last_writer.find(k);
-                if (it != last_writer.end()) add_dep(i, it->second);     // RAW (on-chip producer)
-                auto fit = last_feed.find(k);
-                if (fit != last_feed.end()) add_dep(i, fit->second);     // wait for the input feed
-                readers[k].push_back(i);
-            }
-            for (const TileCoord* t : writes) {
-                const std::string k = key(*t);
-                auto it = last_writer.find(k);
-                if (it != last_writer.end()) add_dep(i, it->second);     // WAW
-                for (std::size_t rdr : readers[k]) add_dep(i, static_cast<long>(rdr)); // WAR
-                last_writer[k] = static_cast<long>(i);
-                readers[k].clear();
-            }
+            nodes_[i].preds = deps_.preds[i];
+            nodes_[i].succs = deps_.succs[i];
         }
     }
+
 };
 
 } // namespace sw::kpu::program::characterize

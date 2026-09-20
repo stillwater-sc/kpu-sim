@@ -15,6 +15,15 @@ set_tests_properties(test_tile_program PROPERTIES
     LABELS "program;tile_program;v0.9"
 )
 
+# L0 dependency model (tile + pivot-slot hazards, diagnosis)
+kpu_add_component_test(test_tile_dependencies "program"
+    test_tile_dependencies.cpp
+)
+
+set_tests_properties(test_tile_dependencies PROPERTIES
+    LABELS "program;deps;v0.9"
+)
+
 # TileProgram characterization (tile-DAG concurrency + modeled metrics)
 kpu_add_component_test(test_tile_characterize "program"
     test_tile_characterize.cpp

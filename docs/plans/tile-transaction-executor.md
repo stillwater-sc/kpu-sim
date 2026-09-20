@@ -83,7 +83,8 @@ criterion.
 ### 3.2 Why dataflow order gives the same numbers
 
 - **Accumulation order.** `MatMulAccum` is a read-modify-write on its output tile
-  (`tile_dag.hpp:299-302` already records it that way). Successive K-slices into the same
+  (`tile_dependencies.hpp` records it that way, emitting `TileWaw` between successive
+  accumulations). Successive K-slices into the same
   `C[ti,tj]` are WAW-ordered, so they retain **program order**, and float summation order
   is unchanged.
 - **Disjointness.** Independent ops write disjoint tiles, by declared tile I/O (D6 §3a).
@@ -104,12 +105,15 @@ overwriting a slot while earlier `PivotApply`s still have to read it** — and
 (`tile_program_reference.hpp:129-130`).
 
 Today's derivation is safe by luck: `slot = k`, unique per panel
-(`derive/lu_tile_program.hpp:48`). In dataflow order that safety must be explicit. The
-executor will:
+(`derive/lu_tile_program.hpp:48`). In dataflow order that safety must be explicit.
 
-- add **WAR/WAW edges on pivot slots**, exactly as it does for tiles; and
-- **validate single-assignment** of each slot at load time, and refuse a program that
-  reuses one, until the anti-dependency is modeled.
+**Closed in increment 2** (`include/sw/kpu/program/tile_dependencies.hpp`): pivot slots
+now carry `PivotRaw`, **`PivotWar`** and **`PivotWaw`** edges, modelled exactly as tile
+hazards are. Slot reuse is therefore *correct* rather than lucky, which supersedes the
+interim plan to refuse a program that reuses a slot — refusing would reject a program the
+model now orders properly. Reuse is still **reported** (`reused_pivot_slots()`), because it
+serializes panels that would otherwise be independent, so a generator doing it by accident
+should find out.
 
 ## 4. The firing rule
 
@@ -139,8 +143,9 @@ program rather than optimizing it.
 > **Why not reuse `TileDag::list_schedule`?** It is a greedy critical-path-first list
 > scheduler (`tile_dag.hpp:94-151`) — an optimizer that *chooses* an order, which is the
 > placement pass's job, and it rescans every node per pick (O(n²)). It stays in the
-> harness as the analytical lower bound and design-of-experiments tool. The executor
-> borrows its **dependency construction**, not its scheduling.
+> harness as the analytical lower bound and design-of-experiments tool. Since increment 2
+> the **dependency construction is shared** (`tile_dependencies.hpp`, which `TileDag` now
+> delegates to); what the executor does not borrow is the *scheduling*.
 
 ### Stall and refusal
 
@@ -341,8 +346,13 @@ placement and profile cannot be compared with another number.
 ## 10. Increments
 
 1. **Extract the tile kernels** (§3.1). Reference tests pass unchanged. No behavior change.
-2. **Dependency model**: tiles plus pivot-slot RAW/WAR/WAW, slot single-assignment
-   validation, stall diagnosis. Reuses `TileDag`'s construction.
+2. **Dependency model** — **done, for the model itself.** Tile RAW/WAR/WAW, feed
+   availability, and pivot-slot RAW/WAR/WAW, with typed edges, reuse reporting and
+   blocked-op diagnosis (`build_tile_dependencies`,
+   `TileDependencies::explain_blocked`). The only consumer wired to it so far is
+   **`TileDag`**, which now delegates instead of carrying a second copy. Executor reuse —
+   firing against these edges and using `explain_blocked` for stall diagnosis — is
+   increment 3; nothing calls it from an executor yet, because no executor exists.
 3. **Executor skeleton**: event engine, firing rule, compute resources only, no capacity
    limits. Acceptance: **bit-exact** GEMM and tile LU versus the reference, including
    ragged trailing tiles; non-zero compute cycles scaling with M, N, K and tile size;
