@@ -12,10 +12,11 @@
 //   - pivot-slot hazards: the data-dependent control LU has and GEMM does not —
 //     LuDiagFactor records row swaps into a slot and PivotApply replays them.
 //
-// One recovery, many consumers: TileDag list-schedules it and draws it, and the
-// transactional executor fires against it (docs/plans/tile-transaction-executor.md
-// §4). Keeping it in one place is what stops an analysis and an execution from
-// disagreeing about what is legal.
+// One recovery, many consumers. Today: TileDag list-schedules it and draws it.
+// Planned (increment 3, docs/plans/tile-transaction-executor.md §4): the
+// transactional executor fires against these edges and uses explain_blocked() for
+// stall diagnosis. Keeping the recovery in one place is what stops an analysis and
+// an execution from disagreeing about what is legal.
 //
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2024-2025 Stillwater Supercomputing, Inc.
@@ -28,6 +29,7 @@
 #include <algorithm>
 #include <cstddef>
 #include <map>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -115,10 +117,20 @@ struct TileDependencies {
     // docs/plans/tile-transaction-executor.md §4, "Stall and refusal").
     std::vector<TileDepEdge> blocking_edges(std::size_t op,
                                             const std::vector<bool>& completed) const {
+        // A short snapshot would silently skip predecessors outside the vector and
+        // report an op as unblocked when it is not — the worst possible answer from a
+        // diagnostic. Refuse it instead.
+        if (completed.size() != op_count())
+            throw std::invalid_argument(
+                "TileDependencies: completion snapshot has " +
+                std::to_string(completed.size()) + " entries, expected " +
+                std::to_string(op_count()));
+        if (op >= op_count())
+            throw std::out_of_range("TileDependencies: op index " + std::to_string(op) +
+                                    " out of range (" + std::to_string(op_count()) + " ops)");
         std::vector<TileDepEdge> out;
         for (const TileDepEdge& e : edges)
-            if (e.to == op && e.from < completed.size() && !completed[e.from])
-                out.push_back(e);
+            if (e.to == op && !completed[e.from]) out.push_back(e);
         return out;
     }
 

@@ -14,6 +14,7 @@
 #include <sw/kpu/program/characterize/tile_dag.hpp>
 
 #include <algorithm>
+#include <stdexcept>
 #include <string>
 
 using namespace sw::kpu::program;
@@ -75,14 +76,26 @@ TEST_CASE("tile hazards are recovered from declared tile I/O", "[program][deps]"
     }
 
     SECTION("pairs are deduplicated in preds, and every reason is kept in edges") {
+        std::size_t pair_count = 0;
         for (std::size_t i = 0; i < d.op_count(); ++i) {
             auto v = d.preds[i];
             const auto before = v.size();
             std::sort(v.begin(), v.end());
             v.erase(std::unique(v.begin(), v.end()), v.end());
-            CHECK(v.size() == before);
+            CHECK(v.size() == before);          // no duplicate pair in preds
+            pair_count += before;
         }
-        CHECK(d.edges.size() >= d.preds.size());
+        // At least one typed edge per deduplicated pair, and strictly more when a pair
+        // is ordered for several reasons. Comparing against op_count would prove nothing.
+        CHECK(d.edges.size() >= pair_count);
+
+        // Every typed edge must be reflected in BOTH adjacency lists.
+        for (const TileDepEdge& e : d.edges) {
+            const auto& p = d.preds[e.to];
+            const auto& s = d.succs[e.from];
+            CHECK(std::find(p.begin(), p.end(), e.from) != p.end());
+            CHECK(std::find(s.begin(), s.end(), e.to) != s.end());
+        }
     }
 
     SECTION("matmul has no pivot edges at all") {
@@ -159,6 +172,13 @@ TEST_CASE("dependency diagnosis explains why an op is blocked", "[program][deps]
         const std::string why = d.explain_blocked(prog, last, completed);
         CHECK(why.find("waits on") != std::string::npos);
         CHECK(why.find("op " + std::to_string(blockers.front().from)) != std::string::npos);
+    }
+
+    SECTION("a wrong-sized completion snapshot is refused, not silently mis-answered") {
+        std::vector<bool> too_short(d.op_count() - 1, false);
+        CHECK_THROWS_AS(d.blocking_edges(d.op_count() - 1, too_short), std::invalid_argument);
+        CHECK_THROWS_AS(d.explain_blocked(prog, 0, too_short), std::invalid_argument);
+        CHECK_THROWS_AS(d.blocking_edges(d.op_count(), completed), std::out_of_range);
     }
 
     SECTION("completing the predecessors clears the blockers") {

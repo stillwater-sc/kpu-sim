@@ -346,11 +346,13 @@ placement and profile cannot be compared with another number.
 ## 10. Increments
 
 1. **Extract the tile kernels** (§3.1). Reference tests pass unchanged. No behavior change.
-2. **Dependency model** — **done.** Tile RAW/WAR/WAW, feed availability, and
-   pivot-slot RAW/WAR/WAW, with typed edges, reuse reporting and blocked-op diagnosis
-   (`build_tile_dependencies`, `TileDependencies::explain_blocked`). `TileDag` now
-   *delegates* to it rather than carrying a second copy, so the analysis and the executor
-   cannot disagree about what is legal.
+2. **Dependency model** — **done, for the model itself.** Tile RAW/WAR/WAW, feed
+   availability, and pivot-slot RAW/WAR/WAW, with typed edges, reuse reporting and
+   blocked-op diagnosis (`build_tile_dependencies`,
+   `TileDependencies::explain_blocked`). The only consumer wired to it so far is
+   **`TileDag`**, which now delegates instead of carrying a second copy. Executor reuse —
+   firing against these edges and using `explain_blocked` for stall diagnosis — is
+   increment 3; nothing calls it from an executor yet, because no executor exists.
 3. **Executor skeleton**: event engine, firing rule, compute resources only, no capacity
    limits. Acceptance: **bit-exact** GEMM and tile LU versus the reference, including
    ragged trailing tiles; non-zero compute cycles scaling with M, N, K and tile size;
