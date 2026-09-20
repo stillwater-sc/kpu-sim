@@ -38,7 +38,7 @@ authority.
 | Input | Source | Notes |
 |---|---|---|
 | `TileProgram` | `include/sw/kpu/program/tile_program.hpp` | the portable program (ADR D1) |
-| Placement | driver JIT (#230 incr. 3); **default single-topology until then** | logical tile → L3 tile, compute op → CF tile |
+| Placement | driver JIT (#230 incr. 3); until then a **real `Placement` object** from `Placement::single(device)` | logical tile → L3 tile, compute op → CF tile. Decided: an explicit object from day one, so the JIT later replaces a *value* rather than forcing a signature change |
 | `DeviceDescriptor` | `include/sw/kpu/program/characterize/device_model.hpp` | extended per §5 |
 | `StreamProgram` (optional) | `include/sw/kpu/program/stream/stream_signature.hpp` | ADR §7.4: systolic latencies when present, lumped model otherwise |
 
@@ -119,8 +119,17 @@ An op is **ready** when all three hold (ADR D3.2):
    has completed.
 2. **Inputs resident** — every declared input tile is resident at the buffer level its
    consumer reads from, on the CF tile the placement assigned.
-3. **Credit available** — a free slot exists for each output tile at its destination level,
-   plus a free resource of the required kind (CF tile for compute, hop lane for movement).
+3. **Credit available** — a free slot exists for each output tile that this op
+   **materializes**, plus a free resource of the required kind (CF tile for compute, hop
+   lane for movement).
+
+   **An already-resident output acquires no second credit.** `MatMulAccum` writes the same
+   `C[ti,tj]` on every K-slice; only the first accumulation materializes that tile and takes
+   a slot, and the rest reuse it. Requiring a free slot per output *op* would refuse valid
+   programs whenever capacity is full — a blocked accumulation that already owns its
+   destination. The slot is returned only after the tile's last consumer completes (§5),
+   which for an accumulated output is its `Drain` or final reader, not the last
+   accumulation.
 
 A ready op **fires immediately**; there is no priority search and no lookahead. When more
 than one op is ready for the same free resource, the tie-break is **lowest op index**,
@@ -135,9 +144,12 @@ program rather than optimizing it.
 
 ### Stall and refusal
 
-- If no op is ready and ops remain, the run **stops and refuses** with a diagnosis: which
-  ops are waiting, on which tiles or credits, and which level is exhausted. A wedged run
-  must never be reported as a slow one.
+- The run **stops and refuses** only when **all three** hold: no op is ready, **the event
+  queue is empty**, and no resource is in flight. An empty ready set on its own is the
+  normal state between pipeline stages — a transfer or a compute is outstanding and its
+  completion event will release successors — so refusing on that alone would reject valid
+  runs. The refusal carries a diagnosis: which ops are waiting, on which tiles or credits,
+  and which level is exhausted. A wedged run must never be reported as a slow one.
 - A cheap **pre-execution check** reuses the harness's static feasibility test
   (`characterization.hpp:143`, peak live tiles versus L3 capacity) to refuse an
   over-committed program before executing anything.
@@ -198,6 +210,21 @@ models each hop separately (ADR D3.4):
   multi-compute-tile execution lands (#244). Modeling them now keeps the descriptor honest
   about what the topology can do.
 
+### 6.1 Lane and bandwidth semantics (normative)
+
+Left ambiguous, the same descriptor yields different makespans in different
+implementations, which would make calibration meaningless. So:
+
+- **Every `*_bytes_per_cycle` is per lane, not aggregate.** A hop's peak throughput is
+  `lanes × bytes_per_cycle`.
+- **One transfer occupies exactly one lane** for its whole duration. Transfers are not
+  striped across lanes.
+- **Lanes give concurrency, never speed-up.** A single transfer's duration is independent of
+  how many lanes are idle: `duration = ceil(bytes / bytes_per_cycle)` on its one lane. More
+  lanes let more transfers overlap; they never shorten one transfer.
+- A transfer occupies its lane from start to completion, with no preemption and no
+  re-ordering once started.
+
 **Minimum viable scope:** DRAM→L3 and L3→CF (L2 and L1 collapsed into one hop). The table
 is the target; the first increment may collapse the on-chip hops, provided the collapse is
 a descriptor setting rather than a hardcoded assumption.
@@ -223,6 +250,25 @@ in events, no idle-cycle stepping. Target scale: **10⁶ tile ops** without path
 memory growth, since a real ResNet or a large GEMM at T=16 produces very many tile ops. The
 harness's O(n²) ready-scan is explicitly not the model here.
 
+### 7.1 Cycle quantization and zero-work ops (normative)
+
+`Cycle` is `uint64_t` (`include/sw/kpu/timing/tile_descriptor.hpp:20`), while the cost
+models produce doubles, so the conversion has to be pinned down:
+
+- **Round up:** `cycles = ceil(duration_double)`. Truncation would let sub-cycle work become
+  0 and silently contradict §9's "compute cycles are never 0".
+- **Positive floor:** any op with **non-zero work** costs **at least 1 cycle**, even after
+  rounding. A 1-element tile compute is cheap, not free.
+- **Genuinely zero-work ops cost 0 cycles** and complete at the current time. The two cases
+  are a `Feed`/`Drain` of a tile already resident at the target level (§5), and a
+  degenerate tile with an empty extent. They still appear in the timeline, marked
+  `zero_work`, so a reader can see the reuse rather than wonder where the transfer went.
+- **Zero-duration events cannot stall the engine.** Each op fires exactly once, so a
+  zero-duration completion is popped at the current time, may enqueue successors at that
+  same time, and the heap drains monotonically: time never moves backwards, and the total
+  number of events is bounded by the op count. Ties at equal time are broken by op index, so
+  a chain of zero-work ops resolves in program order within one timestamp.
+
 ## 8. Calibration against the cycle-accurate tier
 
 Transactional timing is only as good as its calibration (ADR D3.5, D5).
@@ -239,9 +285,13 @@ and per-op-kind fixed overheads.
    the fit is not scored on its own training points.
 4. Commit the coefficients as a named device profile, with the fit report next to it.
 
-**CI guard:** a test asserts the error band on a small fixed sweep, so calibration drift
-fails a build rather than quietly degrading. The band starts wide and is tightened as the
-model improves; the initial value is proposed in §11 rather than asserted here.
+**The band (decided):** **median ≤ 10%, p95 ≤ 25%** relative makespan error against the CSP
+tier. A model that clears that is calibrated for GEMM; one that does not is reported as
+uncalibrated rather than quietly shipped.
+
+**CI guard:** a test asserts the band on a small fixed sweep, so calibration drift fails a
+build rather than degrading quietly. The band may be tightened as the model improves; it is
+not to be loosened without a recorded reason in the fit report.
 
 **Known limitation, to state in the fit report:** the CSP tier is single-compute-tile
 today, so multi-CF coefficients are **extrapolation** until #244 lands. Any result with
@@ -254,8 +304,20 @@ today, so multi-CF coefficients are **extrapolation** until #244 lands. Any resu
 - **timeline**: per op — kind, start, finish, resource, waited-on reason
 - **stats**: makespan, compute cycles (never 0), per-hop busy cycles and utilization, peak
   residency per level, credit stalls per level, MACs and bytes
-- **bounds**: the analytical lower bound (critical path, compute work / C, move work / M),
-  so a result can be read against what was achievable
+- **bounds**: the analytical lower bound, computed against the **executor's own** resource
+  model, not the harness's aggregate one:
+
+  ```
+  lower_bound = max( critical_path,
+                     compute_work / compute_tiles,
+                     max over hops h of ( work(h) / (lanes(h) × bytes_per_cycle(h)) ) )
+  ```
+
+  The harness's `lower_bound` (`tile_dag.hpp:147`) divides total movement work by one
+  aggregate `move_lanes`, which is a different — and weaker — bound now that movement is
+  per hop (§6). Both may be reported, but the executor's bound is labelled as such, and a
+  harness-derived figure is labelled `harness_bound` so the two are never compared as if
+  they were the same quantity.
 - **provenance**: device profile name, placement used, whether L1 was present, the seed,
   and whether any coefficient was extrapolated
 
@@ -283,15 +345,18 @@ fidelity with correct values". Increments 4–6 are what make the timing worth q
 
 ## 11. Open questions
 
-1. **Initial error band.** What median and p95 relative makespan error against CSP counts
-   as calibrated for GEMM — 10%/25%, or looser to start?
+Questions 1 and 4 were answered on #269 and are recorded in the sections they affect;
+they are kept here, struck through, so the decision trail stays readable.
+
+1. ~~**Initial error band.**~~ **Answered (2026-09-20): median ≤ 10%, p95 ≤ 25%** relative
+   makespan error against CSP. Recorded in §8 and asserted in CI.
 2. **L2/L1 collapse.** Is one on-chip hop acceptable for the first calibrated version, or
    should BlockMover and Streamer be separate from the start?
 3. **Drain semantics.** Does a `Drain` return the tile's L3 credit immediately, or does the
    tile stay resident until the program's last reference to it?
-4. **Placement interface.** Should the default single-topology placement be a real
-   `Placement` object the JIT later replaces, or an implicit "everything on CF 0"? A real
-   object costs a little now and avoids a retrofit.
+4. ~~**Placement interface.**~~ **Answered (2026-09-20): a real `Placement` object**, which
+   the JIT later replaces. `Placement::single(device)` supplies the default, so no retrofit
+   is needed when #230 increment 3 lands. Recorded in §2.
 5. **Where DNN tile kinds land** (ADR D7): in `tile_kernels.hpp` beside the linear-algebra
    kernels, or in a separate `dnn_tile_kernels.hpp`? This decides whether one header grows
    without bound.
