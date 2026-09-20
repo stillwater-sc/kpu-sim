@@ -173,6 +173,12 @@ Rules:
 - **Credit acquire** happens when a tile's transfer into a level begins; **credit return**
   happens when the tile's **last consumer at that level** completes. Last-use is computed
   statically from the DAG, so returns are deterministic.
+- **A `Drain` is a consumer, not a deallocator.** It reads its tile, so it does **not**
+  release the slot on its own. The slot is released when the last consumer at that level
+  completes — which is often, but not always, that `Drain`: a tile drained and then read
+  again by a later op keeps its slot until that later read finishes. This is the exact rule,
+  not an implementation choice, because differing release timing would produce different
+  capacity stalls and different refusals from the same program.
 - **Residency is checked before movement.** A `Feed` of a tile already resident at the
   target level costs nothing — this is how on-chip reuse appears (D6 §3, "tile residency +
   re-injection"), and it is the main thing the tier must get right for tiled GEMM, where
@@ -302,8 +308,12 @@ today, so multi-CF coefficients are **extrapolation** until #244 lands. Any resu
 `RunResult` carries, besides the mutated operand buffers:
 
 - **timeline**: per op — kind, start, finish, resource, waited-on reason
-- **stats**: makespan, compute cycles (never 0), per-hop busy cycles and utilization, peak
-  residency per level, credit stalls per level, MACs and bytes
+- **stats**: run-level aggregates — makespan; **aggregate compute cycles**, summed over
+  compute ops only, which is `0` exactly when the run contains no non-zero-work compute op
+  and positive otherwise; per-hop busy cycles and utilization; peak residency per level;
+  credit stalls per level; MACs and bytes. Zero-work ops (a resident-tile `Feed`/`Drain`, an
+  empty extent — §7.1) contribute nothing here and are never counted as compute work. The
+  per-op view lives in `timeline`; `stats` never repeats it per op.
 - **bounds**: the analytical lower bound, computed against the **executor's own** resource
   model, not the harness's aggregate one:
 
@@ -352,8 +362,9 @@ they are kept here, struck through, so the decision trail stays readable.
    makespan error against CSP. Recorded in §8 and asserted in CI.
 2. **L2/L1 collapse.** Is one on-chip hop acceptable for the first calibrated version, or
    should BlockMover and Streamer be separate from the start?
-3. **Drain semantics.** Does a `Drain` return the tile's L3 credit immediately, or does the
-   tile stay resident until the program's last reference to it?
+3. ~~**Drain semantics.**~~ **Resolved in §5 (2026-09-20):** a `Drain` is a consumer, not a
+   deallocator — the slot is released when the last consumer at that level completes, which
+   may or may not be the `Drain` itself.
 4. ~~**Placement interface.**~~ **Answered (2026-09-20): a real `Placement` object**, which
    the JIT later replaces. `Placement::single(device)` supplies the default, so no retrofit
    is needed when #230 increment 3 lands. Recorded in §2.
