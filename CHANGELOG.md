@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Graphviz export of the tile-dependency DAG (`TileDag::to_dot`, `tile_characterize
+  --dot FILE`).** The DAG the driver JIT recovers from each op's declared tile I/O is now
+  emittable as a renderable graph: one node per tile op with its tile I/O and duration,
+  one edge per dependency, compute ops and movement ops distinguished by fill, and
+  **pivot-slot edges drawn dashed** so the data-dependent control GETRF imposes on the
+  trailing LASWP ops is visible as something other than tile dataflow. Emitted after the
+  list schedule, so nodes also carry `t=[start,finish)` and their resource (`CF0`,
+  `lane0`) — making it an architecture diagram of the algorithm: what must be ordered,
+  and what could run concurrently given more compute tiles. Output is deterministic
+  (nodes in op order, successors sorted) and parses under `dot -Tsvg`. Test + README
+  recipe added.
+
 - **Dataflow sweep in the characterization harness (`--dataflow`).** The
   characterization DAG now accepts an optional L1 `StreamProgram`
   (`characterize_program(prog, dev, l1)` / `TileDag(..., l1)`): with it, compute ops
