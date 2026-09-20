@@ -7,17 +7,23 @@ description: Add a new trace invariant (INV-XXX) to the LPDDR5 validation suite 
 
 Migrated out of CLAUDE.md so it loads only when an invariant is actually being added.
 
-## Existing invariants to enforce
+## Existing invariants
 
-| ID | Description | Severity |
-|----|-------------|----------|
-| INV-001 | Every txn_id must have exactly ONE data operation | ERROR |
-| INV-002 | ACTIVATE/PRECHARGE must belong to valid transactions | ERROR |
-| INV-003 | Commands must be temporally ordered correctly | ERROR |
-| INV-100 | tRCD constraint (ACT to READ/WRITE) | WARNING |
-| INV-101 | tRP constraint (PRE to ACT) | ERROR |
+**Do not keep a copy of the list here.** `patterns/memory/lpddr5/INVARIANTS.md` is
+authoritative for definitions, and `trace_validator.py`'s `validate()` is authoritative for
+what is actually enforced. The two already differ — the validator registers 8 IDs while
+INVARIANTS.md documents 13 — so a third copy in this skill would only add a way to pick a
+duplicate ID.
 
-`patterns/memory/lpddr5/INVARIANTS.md` is authoritative — read it before adding an ID.
+Before choosing an ID, read both:
+
+```bash
+grep -oE 'INV-[0-9]+' patterns/memory/lpddr5/INVARIANTS.md | sort -u          # documented
+grep -oE "invariant='INV-[0-9]+'" patterns/memory/lpddr5/common/trace_validator.py | sort -u  # enforced
+```
+
+Ranges in use, per INVARIANTS.md's own sections: `INV-0xx` trace structure, `INV-1xx`
+timing constraints, `INV-2xx` visualization. Pick the next unused number in the right range.
 
 ## Steps
 

@@ -193,8 +193,10 @@ Claude Code must follow this workflow for any code that produces artifacts:
 python3 patterns/memory/lpddr5/common/trace_validator.py <trace_file.json>
 ```
 
-Add `--json` for machine-readable output. Non-zero exit means invariants were violated —
-parse the violations and fix the root cause, never the symptom.
+Add `--json` for machine-readable output. Exit codes are distinct and must be handled
+differently: **1** = invariants violated, so parse the violations and fix the root cause,
+never the symptom; **2** = the trace file could not be read or parsed, so there are no
+violations to parse — fix the trace generation or the path instead.
 
 **When to Run:**
 - After generating any trace file

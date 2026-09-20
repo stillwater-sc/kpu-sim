@@ -37,9 +37,13 @@ When trace-generation C++ code changes (migrated from CLAUDE.md):
 1. Modify the HTML visualization code
 2. Run the validator over all traces:
    ```bash
+   status=0
    for f in traces/memory/lpddr5/single-bank/*.json; do
-     python3 patterns/memory/lpddr5/common/trace_validator.py "$f"
+     python3 patterns/memory/lpddr5/common/trace_validator.py "$f" || status=1
    done
+   [ "$status" -eq 0 ]
    ```
+   The accumulator matters: a bare loop returns only the LAST validator's status, so an
+   earlier violation followed by a passing final trace would look like success.
 3. Test the visualization in a browser
 4. When passed: commit
