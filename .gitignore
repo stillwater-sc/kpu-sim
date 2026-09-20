@@ -75,3 +75,6 @@ tests/benchmarks/baselines/
 
 # pyenv files
 .python-version
+
+# clangd index (created by the clangd-lsp language server)
+.cache/
