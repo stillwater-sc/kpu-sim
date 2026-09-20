@@ -9,6 +9,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Shared L0 dependency model (`tile_dependencies.hpp`, increment 2 of #264).** The
+  recovery of "what must be ordered" is now one implementation with typed edges:
+  `TileRaw`/`TileWar`/`TileWaw` over tiles, `FeedAvailable` for a consumer waiting on the
+  Feed that made its input available, and `PivotRaw`/**`PivotWar`**/**`PivotWaw`** for the
+  data-dependent control LU has and GEMM does not. The two pivot anti-dependency kinds are
+  new and close a latent hazard: `LuDiagFactor` clears its slot on entry, so without them a
+  later panel could clear a slot that earlier `PivotApply` ops still had to read — safe
+  today only because the derivation happens to use a unique slot per panel. Slot reuse is
+  now correctly ordered, and merely *reported* (`reused_pivot_slots()`) since it serializes
+  otherwise-independent panels. Adds blocked-op diagnosis (`blocking_edges`,
+  `explain_blocked`), which is what turns a wedged run into a diagnosis rather than a hang.
+  `TileDag` delegates to the shared model instead of carrying a second copy, so an analysis
+  and an execution cannot disagree about legality, and `--dot` now styles edges from the
+  recovered **kind** (solid = dataflow, dotted = anti-dependency, dashed = pivot control)
+  rather than inferring it from op kinds.
+
 - **Graphviz export of the tile-dependency DAG (`TileDag::to_dot`, `tile_characterize
   --dot FILE`).** The DAG the driver JIT recovers from each op's declared tile I/O is now
   emittable as a renderable graph: one node per tile op with its tile I/O and duration,
