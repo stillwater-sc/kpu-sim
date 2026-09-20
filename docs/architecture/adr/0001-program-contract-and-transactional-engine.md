@@ -96,7 +96,7 @@ DAG/resource model (for timing).
 - **Against:** it steps every cycle, so it is the cycle-accurate tier by construction.
   Using it as the transactional tier gives up driver 3.
 
-## 4. Decision (proposed)
+## 4. Decision
 
 ### D1 — The portable program is the L0 `TileProgram`, per D6
 
