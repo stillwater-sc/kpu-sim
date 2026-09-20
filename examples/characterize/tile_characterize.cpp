@@ -161,7 +161,8 @@ int main(int argc, char** argv) {
             "             (matmul only; aliases os/ws/as/hex; systolic L1 timing + network)\n"
             "  --macs-per-cycle F  --bytes-per-cycle F  --pj-per-mac F  --pj-per-byte F\n"
             "  --l3-tiles N               L3 capacity in tiles for feasibility (0=unbounded)\n"
-            "  --csv FILE   --json FILE   --trace FILE (first cell)  --disasm  --no-validate\n";
+            "  --csv FILE   --json FILE   --trace FILE (first cell)  --disasm  --no-validate\n"
+            "  --dot FILE                 Graphviz tile-dependency DAG of the first cell\n";
         return 0;
     }
 
@@ -180,6 +181,7 @@ int main(int argc, char** argv) {
     const std::string csv_path = arg(a, "--csv", "");
     const std::string json_path = arg(a, "--json", "");
     const std::string trace_path = arg(a, "--trace", "");
+    const std::string dot_path = arg(a, "--dot", "");
     const bool disasm = has_flag(a, "--disasm");
 
     // dataflow sweep applies to matmul (L1 systolic timing); LU has no stream deriver.
@@ -204,7 +206,7 @@ int main(int argc, char** argv) {
     std::cout << "------------------------------------------------------------------------------------"
                  "-------------------------------------\n";
 
-    bool did_trace = false, did_disasm = false, first_json = true;
+    bool did_trace = false, did_disasm = false, did_dot = false, first_json = true;
     for (const auto& topo : topos)
         for (Dim size : sizes)
             for (Dim tile : tiles) {
@@ -231,6 +233,20 @@ int main(int argc, char** argv) {
                             write_chrome_trace(prog, dev, trace_path, l1p);
                             std::cout << "[trace] wrote " << trace_path << " (chrome://tracing)\n";
                             did_trace = true;
+                        }
+                        if (!dot_path.empty() && !did_dot) {
+                            // schedule first, so the DOT carries start/finish/worker too
+                            TileDag dag(prog, dev, l1p);
+                            dag.list_schedule();
+                            std::ofstream f(dot_path);
+                            if (!f) {
+                                std::cerr << "error: cannot write --dot file '" << dot_path << "'\n";
+                                return 2;
+                            }
+                            f << dag.to_dot(prog, prog.name() + "  [" + dev.label() + "]");
+                            std::cout << "[dot] wrote " << dot_path
+                                      << " (dot -Tsvg " << dot_path << " -o dag.svg)\n";
+                            did_dot = true;
                         }
 
                         char line[320];

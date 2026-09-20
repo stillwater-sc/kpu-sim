@@ -23,7 +23,10 @@
 
 #include <algorithm>
 #include <cstddef>
+#include <iomanip>
 #include <map>
+#include <sstream>
+#include <string>
 #include <vector>
 
 namespace sw::kpu::program::characterize {
@@ -88,6 +91,81 @@ public:
         // analytical lower bound = max(critical path, compute_work/C, move_work/M)
         double lower_bound = 0.0;
     };
+
+    // ------------------------------------------------------------------------
+    // Graphviz export of the recovered tile-dependency DAG.
+    //
+    // This is the program's *structure* as the driver JIT sees it: one node per
+    // tile op with its declared tile I/O, and one edge per dependency
+    // (tile RAW/WAR/WAW plus the pivot-slot producer->consumer edges). Render with
+    //   dot -Tsvg tile_dag.dot -o tile_dag.svg
+    //
+    // Call AFTER list_schedule() to get start/finish/worker annotations; before it,
+    // nodes carry structure and durations only. Output is deterministic: nodes in op
+    // order, successors sorted.
+    // ------------------------------------------------------------------------
+    std::string to_dot(const TileProgram& prog, const std::string& title = {}) const {
+        const auto& ops = prog.ops();
+        std::ostringstream os;
+        os << "digraph TileDag {\n";
+        os << "  rankdir=TB;\n";
+        os << "  graph [fontname=\"Helvetica\", labelloc=t";
+        if (!title.empty()) os << ", label=\"" << escape_(title) << "\"";
+        os << "];\n";
+        os << "  node [fontname=\"Helvetica\", fontsize=10, shape=box, style=\"rounded,filled\"];\n";
+        os << "  edge [fontname=\"Helvetica\", fontsize=8];\n\n";
+
+        for (std::size_t i = 0; i < nodes_.size(); ++i) {
+            const DagNode& n = nodes_[i];
+            const TileOp& op = ops[n.op_index];
+
+            std::ostringstream lbl;
+            lbl << n.op_index << ": " << to_string(n.kind);
+            if (!op.outputs.empty()) {
+                lbl << "\\n" << op.outputs[0].to_string();
+                if (!op.inputs.empty()) {
+                    lbl << " <- ";
+                    for (std::size_t k = 0; k < op.inputs.size(); ++k)
+                        lbl << (k ? " " : "") << op.inputs[k].to_string();
+                }
+            } else if (!op.inputs.empty()) {
+                lbl << "\\n" << op.inputs[0].to_string();
+            }
+            if (op.pivot_slot >= 0) lbl << "\\npivot#" << op.pivot_slot;
+            lbl << "\\n" << fmt_(n.duration) << " cyc";
+            // schedule annotations, present only once list_schedule() has run
+            if (n.finish > 0.0)
+                lbl << "\\nt=[" << fmt_(n.start) << "," << fmt_(n.finish) << ") "
+                    << (n.work.is_compute ? "CF" : "lane") << n.worker;
+
+            // compute ops are the fabric's work; movement ops are the machinery
+            const char* fill = n.work.is_compute ? "\"#dbeafe\"" : "\"#fef3c7\"";
+            os << "  n" << n.op_index << " [label=\"" << lbl.str() << "\", fillcolor="
+               << fill << "];\n";
+        }
+
+        os << "\n";
+        for (const DagNode& n : nodes_) {
+            std::vector<std::size_t> succ = n.succs;
+            std::sort(succ.begin(), succ.end());
+            for (std::size_t s : succ) {
+                // a pivot-slot edge is data-dependent control, not tile dataflow:
+                // draw it dashed so the two kinds of dependency stay distinguishable
+                const TileOp& pop = ops[n.op_index];
+                const TileOp& cop = ops[nodes_[s].op_index];
+                const bool pivot_edge = pop.kind == TileOpKind::LuDiagFactor &&
+                                        cop.kind == TileOpKind::PivotApply &&
+                                        pop.pivot_slot >= 0 &&
+                                        pop.pivot_slot == cop.pivot_slot;
+                os << "  n" << n.op_index << " -> n" << nodes_[s].op_index;
+                if (pivot_edge)
+                    os << " [style=dashed, label=\"pivot#" << pop.pivot_slot << "\"]";
+                os << ";\n";
+            }
+        }
+        os << "}\n";
+        return os.str();
+    }
 
     // Greedy critical-path-first list schedule over the full DAG, with two resource
     // pools (compute tiles, movement lanes). Fills node.start/finish/worker.
@@ -154,6 +232,22 @@ private:
     DeviceDescriptor dev_;
     const stream::StreamProgram* l1_ = nullptr;
     std::vector<DagNode> nodes_;
+
+    // DOT helpers: compact cycle figures, and quoting for label text.
+    static std::string fmt_(double v) {
+        std::ostringstream os;
+        os << std::fixed << std::setprecision(v < 10.0 ? 1 : 0) << v;
+        return os.str();
+    }
+    static std::string escape_(const std::string& s) {
+        std::string out;
+        out.reserve(s.size());
+        for (char c : s) {
+            if (c == '"' || c == '\\') out.push_back('\\');
+            out.push_back(c);
+        }
+        return out;
+    }
 
     // L1-timed duration (systolic cycles): compute = wavefront latency; Drain = the
     // C stream drained down its lanes at the C signature's element stride (the bubble

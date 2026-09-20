@@ -137,3 +137,52 @@ TEST_CASE("feasibility gates on L3 tile capacity", "[program][characterize]") {
     DeviceDescriptor unbounded = DeviceDescriptor::single();  // l3_tiles == 0
     CHECK(characterize_program(prog, unbounded).feasible == true);
 }
+
+TEST_CASE("to_dot exports the tile-dependency DAG", "[program][characterize][dot]") {
+    // LU exercises both edge kinds: tile dataflow AND the pivot-slot edge that
+    // carries a GETRF pivot decision to the trailing LASWP ops.
+    TileProgram prog = derive_lu_tile_program(64, 32);
+    TileDag dag(prog, DeviceDescriptor::single());
+
+    const std::string structural = dag.to_dot(prog, "lu");
+
+    SECTION("one node per op, one edge per dependency") {
+        std::size_t nodes = 0, edges = 0;
+        for (std::size_t i = 0; (i = structural.find(" [label=\"", i)) != std::string::npos; ++i) ++nodes;
+        for (std::size_t i = 0; (i = structural.find(" -> ", i)) != std::string::npos; ++i) ++edges;
+        CHECK(nodes == prog.ops().size());
+
+        std::size_t dep_count = 0;
+        for (const auto& n : dag.nodes()) dep_count += n.succs.size();
+        CHECK(edges == dep_count);
+    }
+
+    SECTION("valid, renderable DOT with the program title") {
+        CHECK(structural.rfind("digraph TileDag {", 0) == 0);
+        CHECK(structural.find("label=\"lu\"") != std::string::npos);
+        CHECK(structural.back() == '\n');
+        // balanced braces — the minimum for `dot` to parse it
+        std::size_t open = 0, close = 0;
+        for (char c : structural) { open += (c == '{'); close += (c == '}'); }
+        CHECK(open == close);
+    }
+
+    SECTION("pivot-slot edges are distinguishable from tile dataflow") {
+        CHECK(structural.find("style=dashed, label=\"pivot#0\"") != std::string::npos);
+    }
+
+    SECTION("schedule annotations appear only after list_schedule") {
+        CHECK(structural.find("t=[") == std::string::npos);   // structure only
+
+        TileDag scheduled(prog, DeviceDescriptor::single());
+        scheduled.list_schedule();
+        const std::string timed = scheduled.to_dot(prog);
+        CHECK(timed.find("t=[") != std::string::npos);
+        CHECK(timed.find("CF0") != std::string::npos);        // compute resource id
+    }
+
+    SECTION("deterministic across identical runs") {
+        TileDag again(prog, DeviceDescriptor::single());
+        CHECK(again.to_dot(prog, "lu") == structural);
+    }
+}

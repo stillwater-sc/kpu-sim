@@ -47,6 +47,7 @@ build/examples/characterize/tile_characterize \
 | `--csv FILE` `--json FILE` | write the full metric table | — |
 | `--trace FILE` | Chrome trace of the **first** cell | — |
 | `--disasm` | print the tile sequence of the first cell | — |
+| `--dot FILE` | Graphviz **tile-dependency DAG** of the first cell | — |
 | `--no-validate` | skip the functional oracle check | (validate on) |
 
 The **list-valued** factor flags (`--sizes`, `--tiles`, `--compute-tiles`,
@@ -123,7 +124,21 @@ build/examples/characterize/tile_characterize --algo lu --sizes 64 --tiles 32 --
 build/examples/characterize/tile_characterize --algo lu --sizes 128 --tiles 32 \
     --compute-tiles 16 --topology checkerboard --trace lu.json
 # then open chrome://tracing (or ui.perfetto.dev) and load lu.json
+
+# write the tile-dependency DAG and render it
+build/examples/characterize/tile_characterize --algo lu --sizes 64 --tiles 32 \
+    --compute-tiles 1 --dot lu_dag.dot
+dot -Tsvg lu_dag.dot -o lu_dag.svg
 ```
+
+`--dot` is the program's *structure* rather than its timeline: one node per tile op
+carrying its declared tile I/O and duration, and one edge per dependency. Compute ops
+are blue, movement ops amber, and a **dashed** edge is a pivot-slot dependency — the
+data-dependent control that GETRF's pivot decision imposes on the trailing LASWP ops,
+which is exactly what distinguishes LU from a pure dataflow GEMM. The graph is emitted
+after the list schedule, so each node also shows `t=[start,finish)` and the resource it
+landed on (`CF0`, `lane0`). That makes the DAG a readable architecture diagram of the
+algorithm: what must be ordered, and what could run concurrently given more tiles.
 
 ## 5. Test it
 
