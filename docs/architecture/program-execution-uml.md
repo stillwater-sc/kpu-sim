@@ -66,12 +66,15 @@ one program, three tiers — is what ADR 0001 decided and what #264 and #265 imp
 classDiagram
     class TileProgram {
         -string name_
-        -vector~TensorOperand~ operands_
+        -operands_ : name to TensorOperand
+        -vector~string~ order_
         -vector~TileOp~ ops_
-        +add_operand(TensorOperand) TensorOperand
-        +push(TileOp)
-        +operand(name) TensorOperand
-        +ops() vector~TileOp~
+        +add_operand(TensorOperand) TensorOperand&
+        +push(TileOp) void
+        +operand(name) TensorOperand&
+        +has_operand(name) bool
+        +operand_order() vector~string~&
+        +ops() vector~TileOp~&
         +disassemble() string
     }
     class TensorOperand {
@@ -324,7 +327,11 @@ classDiagram
         +execute(ScheduleResult) ExecutionResult
     }
     class GraphCspExecutor {
-        +run(KernelGraph) RunStats
+        +run(KernelGraph, input, ...) Result
+    }
+    class Result {
+        +vector~float~ output
+        +RunStats stats
     }
     class FunctionalMLPExecutor {
         +add_layer(...)
@@ -349,6 +356,7 @@ classDiagram
     ScheduleExecutor ..> ConcurrentTimingExecutor
     GraphCspExecutor ..> IScheduleGenerator : per node
     GraphCspExecutor ..> ConcurrentTimingExecutor
+    GraphCspExecutor ..> Result : returns output + stats
     FunctionalMLPExecutor ..> ConcurrentTimingExecutor
     FunctionalSoftmaxExecutor ..> ConcurrentTimingExecutor
     FunctionalElementwiseExecutor ..> ConcurrentTimingExecutor
@@ -376,7 +384,7 @@ sequenceDiagram
     participant CP as CreditPool + TagCAM
 
     App->>KG: build_resnet18(spec)
-    App->>GX: run(graph)
+    App->>GX: run(graph, input tensor)
     loop per node in topological order
         GX->>Gen: generate(op config)
         Gen-->>GX: ScheduleResult
@@ -390,8 +398,8 @@ sequenceDiagram
         end
         CTE-->>GX: ExecutionResult with values + cycles
     end
-    GX-->>App: RunStats: cycles, MACs, utilization
-    App->>App: compare against host reference, tol 5e-3
+    GX-->>App: Result: output tensor + RunStats (cycles, MACs, utilization)
+    App->>App: compare output against host reference, tol 5e-3
 ```
 
 ## 5. Sequence — an L0 tile program today [today]
