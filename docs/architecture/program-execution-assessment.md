@@ -17,8 +17,15 @@ changed since, so those binaries still match the code.
 
 **A functional transactional simulator that executes programs doesn't exist yet, but it's
 closer than the issue list suggests.** A matmul program can already go from a file to
-correct numbers at transactional fidelity. What's missing is not operators. It's one
-agreed program format, one executor that takes it, and honest timing in that executor.
+correct numbers at transactional fidelity.
+
+**For the first rung — GEMM and the BLAS core — what's missing is not operators.** It is one
+agreed program format, one executor that takes it, and honest timing in that executor. The
+later rungs are a different story: bias and activation are not executed from a program,
+pooling variants, LayerNorm/RMSNorm, GELU, attention, gather, RoPE and KV-cache do not
+exist on the value path at all (§"Operator coverage matrix" and §P4/P5). Operator coverage
+is emphatically **not** complete; it is simply not what blocks the first executable
+program.
 
 M1, M2 and M3 computed real values, but only as hand-built C++ graphs with synthetic
 weights at toy sizes (ResNet is 16 channels x 4x4 by default; the demo says 224x224 is
@@ -36,10 +43,10 @@ mostly re-routes work that already exists.
 |---|---|---|
 | Load a program file and execute it at transactional fidelity | **Works for matmul only** | `.kpuasm` → `kpu-assembler` → `.kpubin` → `kpu-loader --fidelity transactional`; a random 16x16x16 run matched the reference to float32 precision (`tools/runtime/kpu-loader/main.cpp:164-296`) |
 | Transactional timing on that path | **Broken** | `ResourceTimeline::schedule_compute` is never called, so runs report "Compute cycles: 0" (`src/software/isa/transactional_program_executor.cpp:57,160`); timing is a post-hoc overlay with no credits or buffer capacity |
-| Compute in program executors | **Matmul only** | hardwired triple loop (`src/software/isa/behavioral_program_executor.cpp:700-745`); bias and activation are serialized but no executor reads `ve_activation` |
+| Compute in program executors | **Tile compute: matmul only** | the tile-compute step is a hardwired triple loop (`src/software/isa/behavioral_program_executor.cpp:700-745`). The `VE_ELEMENTWISE` and `VE_REDUCE` opcodes *do* execute (`:235-247`), so the program path is matmul + VE ops, not matmul alone. What is silently lost is the fused epilogue: bias and activation are serialized into the program but no executor reads `ve_activation` |
 | Programs produced by a compiler | **None can be loaded** | 4 incompatible formats (`.kpubin` DMProgram, `.kpukernel`, DFX `.kpu`, unsaveable L0/L1); `kpu-kernel-compiler` fails on its own test graph ("No matrix operations found in graph"); #144 throws on operand types 7-15 (`program_serializer.cpp:414`); committed `kernels/bin/*.kpubin` no longer load (opcodes renumbered with no version bump) |
-| Execution engines | **8 overlapping engines** | the July plan counted 4; see the inventory below |
-| Fidelity selection | **Decorative except one path** | honored only in `create_program_executor`; CYCLE_ACCURATE returns `nullptr` there (`program_executor_interface.cpp:140-143`); `create_compute_fabric` and `create_l3_tile` have no callers (only their interface declarations); zero references to fidelity anywhere in `include/sw/kpu/timing/` |
+| Execution engines | **8 overlapping engines, plus 3 supporting paths** | the July plan counted 4. The 8 are rows 1–8 of the inventory; the supporting paths are the Python runtime, the L0 functional reference and the characterization harness, which are not retirement candidates on the same footing |
+| Fidelity selection | **Decorative except one path** | honored only in `create_program_executor`; CYCLE_ACCURATE returns `nullptr` there (`program_executor_interface.cpp:140-143`). `create_compute_fabric` and `create_l3_tile` are **defined** (`src/models/temporal/compute/compute_fabric_factory.cpp:14`, `src/models/temporal/memory/l3_tile_factory.cpp:14`) and their CYCLE_ACCURATE branches do fall back to the transactional component — but nothing calls either factory. Zero references to fidelity anywhere in `include/sw/kpu/timing/` |
 | Richest value path | **CSP `ConcurrentTimingExecutor`** | runs all M1-M3 operators with real credit, tag-CAM and queue contention; but no program front end, steps every cycle (`:978-980`), unbounded compute concurrency (`:1020-1036`), and compute latency comes from the K-slice count while ignoring tile size (`:1030-1033`) |
 | L0 `TileProgram` (#230) | **In-memory reference only** | matmul plus LU with pivoting confined to the diagonal tile (`include/sw/kpu/program/derive/lu_tile_program.hpp:8,18`); not serializable, and nothing lowers it to any executor |
 | Real model ingestion | **Absent in C++** | no safetensors/npy/onnx/state_dict readers in `include/` or `src/`; the Python `torch.compile(backend="kpu_transactional")` path recomputes every output in NumPy (`python/kpu/fx_converter.py:1987-1990`) and falls back to torch for unknown ops |
@@ -58,9 +65,9 @@ mostly re-routes work that already exists.
 | behavioral orchestrator / MLP executor | ad hoc | yes | none (instant) | isolated |
 | OFG flow executors | OperandFlowGraph | **no** (`execute_operation` is a no-op) | credit/token | wired-not |
 | **CSP `ConcurrentTimingExecutor`** + wrappers (`ScheduleExecutor`, `GraphCspExecutor`, Functional{MLP,DomainFlow,Elementwise,Reduction,Softmax}) | schedules / KernelGraph | yes, float32 payloads | cycle-stepped with credits, tag CAM, queues | partial; closest to the goal |
-| Python `NativeKPURuntime` | DFX JSON | stats only; values recomputed in NumPy | transactional components | partial, bypasses the tiled machine |
-| L0 `TileProgramReference` | TileProgram | yes | none by design | works as a reference |
-| characterization harness | TileProgram + `DeviceDescriptor` | checks against the reference | analytical list schedule on finite tiles/lanes | works for design-of-experiments |
+| Python `NativeKPURuntime` *(supporting path, not one of the 8)* | DFX JSON | stats only; values recomputed in NumPy | transactional components | partial, bypasses the tiled machine |
+| L0 `TileProgramReference` *(supporting path, not one of the 8)* | TileProgram | yes | none by design | works as a reference |
+| characterization harness *(supporting path, not one of the 8)* | TileProgram + `DeviceDescriptor` | checks against the reference | analytical list schedule on finite tiles/lanes | works for design-of-experiments |
 
 ### Places where the simulator reports results it didn't compute
 
@@ -127,8 +134,9 @@ enough. The driver JIT and DMProgram are what "hardware-identical execution" (#2
 - **#230:** split increments 3 (driver JIT) and 4 (versioned serialization) into their own
   issues. Fix the definition of done: it requires "neighbor-pivot LU", but the code only
   pivots within the diagonal tile.
-- **#144:** the serializer drops operand types 7-15. Still on the path under option B,
-  because DMProgram remains the JIT output.
+- **#144:** the serializer **throws** for operand types 7-15 — the writer's switch has no
+  cases for them, so the default branch raises `SerializationError`. Still on the path under
+  option B, because DMProgram remains the JIT output.
 - **New issue:** format versioning for opcodes, regenerating the broken `kernels/bin`
   corpus, and a compile → file → load → execute → check-values acceptance test.
 
@@ -263,7 +271,8 @@ Process fix: use "Closes #N" in sub-task PRs so this doesn't build up again.
 Spot-checked directly in the source rather than taken from the sub-reports:
 `program_executor_interface.cpp:140-143` (CYCLE_ACCURATE returns `nullptr`);
 `schedule_compute` defined but never called; no `ve_activation` reader in either executor;
-`create_compute_fabric`/`create_l3_tile` have only interface declarations, no callers;
+`create_compute_fabric`/`create_l3_tile` are defined (`compute_fabric_factory.cpp:14`,
+`l3_tile_factory.cpp:14`) but have no callers;
 zero fidelity references under `include/sw/kpu/timing/`; `lu_tile_program.hpp:8,18`
 (confined, not pairwise, pivoting); no float64 in `DataType`; `fx_converter.py:1987-1990`
 (NumPy recomputation); `graph_csp_executor.hpp:259-260` (throws on other op types); no
