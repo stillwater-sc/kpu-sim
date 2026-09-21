@@ -9,6 +9,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`TileTransactionExecutor` — the TRANSACTIONAL tier executes L0 programs
+  (increment 3 of #264).** An L0 `TileProgram` now runs on a tier that returns **exact
+  values and tile-granularity timing from one run**: an event engine ordered by
+  `(time, op index)`, the firing rule against the shared dependency model, a real
+  `Placement` (unpinned over the device's compute tiles, or a JIT-style pinned
+  assignment), compute-tile and movement-lane resources, §7.1 cycle quantization (round
+  up, >= 1 cycle for non-zero work, zero-work ops marked in the timeline), stall refusal
+  carrying an `explain_blocked` diagnosis instead of hanging, and a result with timeline,
+  stats, analytical lower bound and **provenance** (device, placement, L1 used, seed,
+  `calibrated=false`, `extrapolated` when more than one compute tile). Values are
+  **bit-identical** to `TileProgramReference` because both drive the same kernels and a
+  dependency-respecting order cannot differ — verified on a deliberately ragged
+  37x29x23 GEMM (every trailing tile clamped) and on tile LU including its pivot
+  permutation and swap count. Timing is structurally right but **uncalibrated**, and its
+  provenance says so; calibration is increment 6. Also extracts the structural work model
+  and L1 duration into `tile_work.hpp`, which `TileDag` now shares, so the harness and the
+  executor cost an op identically.
+
 - **Shared L0 dependency model (`tile_dependencies.hpp`, increment 2 of #264).** The
   recovery of "what must be ordered" is now one implementation with typed edges:
   `TileRaw`/`TileWar`/`TileWaw` over tiles, `FeedAvailable` for a consumer waiting on the

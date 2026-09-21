@@ -353,10 +353,16 @@ placement and profile cannot be compared with another number.
    **`TileDag`**, which now delegates instead of carrying a second copy. Executor reuse —
    firing against these edges and using `explain_blocked` for stall diagnosis — is
    increment 3; nothing calls it from an executor yet, because no executor exists.
-3. **Executor skeleton**: event engine, firing rule, compute resources only, no capacity
-   limits. Acceptance: **bit-exact** GEMM and tile LU versus the reference, including
-   ragged trailing tiles; non-zero compute cycles scaling with M, N, K and tile size;
-   identical cycles across repeated runs.
+3. **Executor skeleton** — **done.** `TileTransactionExecutor`
+   (`include/sw/kpu/program/tile_transaction_executor.hpp`): event engine over
+   `(time, op index)`, the §4 firing rule against the shared dependency model, a real
+   `Placement` (unpinned or JIT-style pinned), compute-tile and movement-lane resources,
+   §7.1 quantization, stall refusal with `explain_blocked` diagnosis, and a
+   `RunResult` carrying timeline, stats, bounds and provenance. Acceptance met: **bit-exact**
+   GEMM (37x29x23 on a 16-tile, so every trailing tile is clamped) and tile LU — values,
+   permutation and swap count — versus the reference; compute cycles non-zero and scaling
+   with M, N, K and tile size; identical cycles and timeline across repeated runs. No
+   capacity limits yet, so the refusal path is unreachable until increment 4.
 4. **Credits and capacity** (§5), including residency-based reuse and refusal of
    over-committed programs.
 5. **Per-hop movement** (§6), starting from DRAM→L3 plus a collapsed on-chip hop.

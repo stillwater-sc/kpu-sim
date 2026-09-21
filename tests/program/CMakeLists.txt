@@ -15,6 +15,15 @@ set_tests_properties(test_tile_program PROPERTIES
     LABELS "program;tile_program;v0.9"
 )
 
+# TRANSACTIONAL tier executor (event engine + firing rule)
+kpu_add_component_test(test_tile_transaction_executor "program"
+    test_tile_transaction_executor.cpp
+)
+
+set_tests_properties(test_tile_transaction_executor PROPERTIES
+    LABELS "program;transactional;executor;v0.9"
+)
+
 # L0 dependency model (tile + pivot-slot hazards, diagnosis)
 kpu_add_component_test(test_tile_dependencies "program"
     test_tile_dependencies.cpp
