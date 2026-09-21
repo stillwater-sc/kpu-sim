@@ -16,6 +16,7 @@
 #include <sw/kpu/program/stream/derive/matmul_streams.hpp>
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstring>
 #include <vector>
@@ -243,4 +244,55 @@ TEST_CASE("L1 stream signatures change the timing, not the values",
     CHECK(timed.provenance.l1_timing);
     CHECK_FALSE(lumped.provenance.l1_timing);
     CHECK(timed.stats.makespan != lumped.stats.makespan);   // systolic latencies applied
+}
+
+TEST_CASE("one executor can run repeatedly without leaking state",
+          "[program][transactional]") {
+    // The kernels carry pivot slots and a row permutation between ops, so an
+    // executor that does not reset them produces WRONG values on its second LU run.
+    // Every other test here uses a fresh executor, which is exactly why this case
+    // needs its own: the leak is invisible unless an instance is reused.
+    const Dim N = 64, T = 32;
+    const DeviceDescriptor dev = DeviceDescriptor::single();
+    const Placement pl = Placement::single(dev.compute_tiles);
+
+    TileProgram fresh_prog = derive_lu_tile_program(N, T);
+    fill_lu(fresh_prog, N);
+    TileTransactionExecutor fresh;
+    TileExecutionRequest fresh_req{fresh_prog, pl, dev, nullptr, 7};
+    const auto expected = fresh.run(fresh_req);
+
+    TileTransactionExecutor reused;
+    for (int pass = 0; pass < 3; ++pass) {
+        TileProgram prog = derive_lu_tile_program(N, T);
+        fill_lu(prog, N);
+        TileExecutionRequest req{prog, pl, dev, nullptr, 7};
+        const auto got = reused.run(req);
+
+        CHECK(bit_identical(fresh_prog.operand("A").values, prog.operand("A").values));
+        CHECK(got.summary.permutation == expected.summary.permutation);
+        CHECK(got.summary.row_swaps == expected.summary.row_swaps);
+        CHECK(got.stats.makespan == expected.stats.makespan);
+    }
+}
+
+TEST_CASE("the ready set scales to large programs", "[program][transactional][scale]") {
+    // Many movement ops sit ready while one lane retires them one at a time. A sorted
+    // ready vector rescans and re-sorts per completion, which is O(n^2 log n): this
+    // program took 116 s that way versus 0.17 s with index-keyed heaps. The budget is a
+    // regression guard with ~170x headroom, not a benchmark.
+    const Dim M = 128, T = 4;
+    TileProgram prog = derive_matmul_tile_program(M, M, M, T, T, T);
+    fill_matmul(prog, M, M);
+    REQUIRE(prog.ops().size() > 50000);
+
+    const DeviceDescriptor dev = DeviceDescriptor::single();
+    const auto t0 = std::chrono::steady_clock::now();
+    const auto result = run_transactional(prog, dev, Placement::single(dev.compute_tiles));
+    const auto seconds = std::chrono::duration<double>(
+        std::chrono::steady_clock::now() - t0).count();
+
+    CHECK(result.stats.ops == prog.ops().size());
+    CHECK(result.stats.compute_cycles > 0);
+    CHECK(seconds < 30.0);
 }

@@ -40,6 +40,7 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <queue>
 #include <stdexcept>
 #include <string>
@@ -114,6 +115,12 @@ public:
         const auto& ops = prog.ops();
         const auto& dev = req.device;
 
+        // Reset the kernel state up front, exactly as TileProgramReference::run does.
+        // Without this, reusing one executor leaks a previous run's pivot slots and row
+        // permutation into the next, so the second LU run would be WRONG. Every test
+        // happened to use a fresh executor, which is precisely why this needed catching.
+        state_.clear();
+
         const TileDependencies deps = build_tile_dependencies(prog);
 
         TileRunResult result;
@@ -144,19 +151,6 @@ public:
         const Dim n_lanes = std::max<Dim>(dev.move_lanes, 1);
         std::vector<bool> cf_busy(n_cf, false), lane_busy(n_lanes, false);
 
-        // ---- dependency bookkeeping ----------------------------------------
-        std::vector<std::size_t> pred_remaining(ops.size());
-        for (std::size_t i = 0; i < ops.size(); ++i) pred_remaining[i] = deps.preds[i].size();
-        std::vector<bool> completed(ops.size(), false);
-        std::vector<bool> fired(ops.size(), false);
-
-        // Ready ops, kept sorted so the lowest op index — the order the compiler
-        // emitted — always wins a contended resource. That keeps the executor
-        // faithful to the program instead of optimizing it.
-        std::vector<std::size_t> ready;
-        for (std::size_t i = 0; i < ops.size(); ++i)
-            if (pred_remaining[i] == 0) ready.push_back(i);
-
         // Completion events, earliest first; ties broken by op index so a run is
         // reproducible regardless of container order.
         struct Event {
@@ -172,45 +166,67 @@ public:
         std::size_t remaining = ops.size();
         Cycle cf_busy_cycles = 0, lane_busy_cycles = 0;
 
+        // ---- dependency bookkeeping ----------------------------------------
+        std::vector<std::size_t> pred_remaining(ops.size());
+        for (std::size_t i = 0; i < ops.size(); ++i) pred_remaining[i] = deps.preds[i].size();
+        std::vector<bool> completed(ops.size(), false);
+        std::vector<bool> fired(ops.size(), false);
+
+        // Ready ops live in min-heaps keyed by op index, so the lowest index — the
+        // order the compiler emitted — always wins a contended resource, and neither
+        // firing nor unblocking ever rescans the ready set. A single sorted vector is
+        // O(n^2 log n) at scale: a 1120x1120x1120 GEMM at T=16 emits over 10^6 ops,
+        // most of them feeds that sit ready while one lane retires them one at a time.
+        // Heaps keep it O(log n) per op, which is what the 10^6-op target needs.
+        using ReadyHeap = std::priority_queue<std::size_t, std::vector<std::size_t>,
+                                              std::greater<std::size_t>>;
+        ReadyHeap ready_move;         // movement lanes are interchangeable
+        ReadyHeap ready_compute;      // unpinned: any free compute tile will do
+        // Pinned placements need per-tile queues: an op pinned to a busy tile must not
+        // block an op pinned to a free one.
+        std::vector<ReadyHeap> ready_pinned(req.placement.is_pinned() ? n_cf : 0);
+
+        auto enqueue = [&](std::size_t op) {
+            if (!work[op].is_compute) { ready_move.push(op); return; }
+            Dim pinned = 0;
+            if (req.placement.compute_tile_for(op, pinned) && pinned < n_cf)
+                ready_pinned[pinned].push(op);
+            else
+                ready_compute.push(op);
+        };
+        for (std::size_t i = 0; i < ops.size(); ++i)
+            if (pred_remaining[i] == 0) enqueue(i);
+
+
+        auto fire = [&](std::size_t op, ResourceKind kind, Dim id) {
+            (kind == ResourceKind::ComputeTile ? cf_busy : lane_busy)[id] = true;
+            fired[op] = true;
+
+            TileOpRecord& rec = result.timeline[op];
+            rec.resource = kind;
+            rec.resource_id = id;
+            rec.start = now;
+            rec.finish = now + duration[op];
+
+            // Values are applied at FIRE time, in event order. Dependencies are
+            // satisfied by construction, so this is exactly the reference's order for
+            // anything that interacts — hence bit-identical results.
+            apply(req.program, ops[op], state_);
+            events.push(Event{rec.finish, op});
+        };
+
         auto try_fire = [&]() {
-            // Fire every ready op that can get a resource, lowest index first.
-            for (std::size_t k = 0; k < ready.size();) {
-                const std::size_t op = ready[k];
-                const bool is_compute = work[op].is_compute;
-                Dim chosen = 0;
-                bool got = false;
-
-                if (is_compute) {
-                    Dim pinned = 0;
-                    if (req.placement.compute_tile_for(op, pinned)) {
-                        if (pinned < n_cf && !cf_busy[pinned]) { chosen = pinned; got = true; }
-                    } else {
-                        for (Dim t = 0; t < n_cf; ++t)
-                            if (!cf_busy[t]) { chosen = t; got = true; break; }
-                    }
-                } else {
-                    for (Dim t = 0; t < n_lanes; ++t)
-                        if (!lane_busy[t]) { chosen = t; got = true; break; }
+            for (Dim l = 0; l < n_lanes && !ready_move.empty(); ++l)
+                if (!lane_busy[l]) { fire(ready_move.top(), ResourceKind::MoveLane, l);
+                                     ready_move.pop(); }
+            for (Dim t = 0; t < n_cf && !ready_compute.empty(); ++t)
+                if (!cf_busy[t]) { fire(ready_compute.top(), ResourceKind::ComputeTile, t);
+                                   ready_compute.pop(); }
+            for (Dim t = 0; t < ready_pinned.size(); ++t)
+                if (!cf_busy[t] && !ready_pinned[t].empty()) {
+                    fire(ready_pinned[t].top(), ResourceKind::ComputeTile, t);
+                    ready_pinned[t].pop();
                 }
-                if (!got) { ++k; continue; }           // resource busy: this op waits
-
-                (is_compute ? cf_busy : lane_busy)[chosen] = true;
-                fired[op] = true;
-
-                TileOpRecord& rec = result.timeline[op];
-                rec.resource = is_compute ? ResourceKind::ComputeTile : ResourceKind::MoveLane;
-                rec.resource_id = chosen;
-                rec.start = now;
-                rec.finish = now + duration[op];
-
-                // Values are applied at FIRE time, in event order. Dependencies are
-                // satisfied by construction, so this is exactly the reference's
-                // order for anything that interacts — hence bit-identical results.
-                apply(req.program, ops[op], state_);
-
-                events.push(Event{rec.finish, op});
-                ready.erase(ready.begin() + static_cast<long>(k));
-            }
         };
 
         try_fire();
@@ -246,9 +262,8 @@ public:
                 }
 
                 for (std::size_t s : deps.succs[op])
-                    if (--pred_remaining[s] == 0) ready.push_back(s);
+                    if (--pred_remaining[s] == 0) enqueue(s);
             }
-            std::sort(ready.begin(), ready.end());
             try_fire();
         }
 
