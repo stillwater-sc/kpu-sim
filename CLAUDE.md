@@ -25,8 +25,12 @@ that supports three tiers of modeling abstraction:
 | Tier | Purpose | Speed | Computes Values? |
 |------|---------|-------|------------------|
 | **BEHAVIORAL** | Functional correctness, software bring-up | ~100-1000x | **YES** |
-| **TRANSACTIONAL** | Architecture exploration, bottleneck ID | ~10-100x | Statistical |
-| **CYCLE_ACCURATE** | Performance analysis, timing validation | 1x (baseline) | Via integration |
+| **TRANSACTIONAL** | Architecture exploration, bottleneck ID | ~10-100x | **YES — exact**, bit-identical to BEHAVIORAL |
+| **CYCLE_ACCURATE** | Performance analysis, timing validation | 1x (baseline) | **YES** — float32, within tolerance of BEHAVIORAL |
+
+**Every tier computes values.** The tiers differ in the *timing* they model, not in whether
+the arithmetic happens (ADR 0001 D4). A tier that returns timing without values is not a
+cheaper simulation — it is an unvalidated one.
 
 ### The Multi-Fidelity Philosophy
 
@@ -55,6 +59,20 @@ The progression works as follows:
 
 **Non-negotiable:** the BEHAVIORAL tier computes actual values and propagates results.
 A behavioral component that only models timing is wrong.
+
+### Who is authoritative for what
+
+Two questions come up constantly — "is this number right?" and "is this timing right?" —
+and they have different answers (ADR 0001 D5). Don't re-derive this:
+
+| Question | Authority | The bar for everyone else |
+|----------|-----------|---------------------------|
+| **Values** | the L0 `TileProgramReference` (`include/sw/kpu/program/tile_program_reference.hpp`) | the transactional tier must match it **bit-exactly** — it runs the same kernels, so any difference is a bug, not rounding. The cycle-accurate tier matches within a relative tolerance, because its accumulation order legitimately differs. |
+| **Timing** | the cycle-accurate CSP tier (`include/sw/kpu/timing/`) | the transactional tier is **calibrated against it** and reports its error band. An uncalibrated timing number must say so in its provenance rather than be quoted as measured. |
+
+The comparator for a tolerance check is `|actual - reference| <= atol + rtol * |reference|`
+with `atol = 1e-6` for float32 — a bare relative error is undefined at zero, and zeros are
+everywhere here (ReLU, structural zeros in triangular factors).
 
 ---
 
@@ -131,18 +149,35 @@ distinction leads to incorrect implementations.
 
 **USE THESE (correct dataflow semantics):**
 ```
-include/sw/kpu/models/dataflow/
-├── flow_graph_executor.hpp       # Base dataflow executor
-├── dma_flow_executor.hpp         # DMA with credit semantics
-├── block_mover_flow_executor.hpp # BlockMover with credit/push
-└── streamer_flow_executor.hpp    # Streamer with credit/push
+include/sw/kpu/timing/                    # cycle-accurate: the live credit model
+├── concurrent_timing_executor.hpp        # credits, tag CAM, queues, tick order
+├── credit_pool.hpp                       # credit accounting (+ partitioned mode)
+├── tag_cam.hpp                           # out-of-order tile-arrival matching
+└── {dma,block_mover,streamer,memory_controller}_process.hpp   # push-with-credit
+
+include/sw/kpu/program/                   # tile granularity
+├── tile_transaction_executor.hpp         # transactional tier: fires on credit + residency
+└── tile_dependencies.hpp                 # what must be ordered, and why
 ```
 
-**AVOID THESE (incorrect cache semantics - deprecated):**
+**AVOID THESE:**
 ```
 include/sw/kpu/behavioral/
-├── l3_cache_model.hpp            # WRONG: Cache semantics
+├── l3_cache_model.hpp            # WRONG: cache semantics
+
+include/sw/kpu/models/dataflow/   # FROZEN, retiring (#266)
+├── flow_graph_executor.hpp       # base execute_operation() is an empty default
+├── dma_flow_executor.hpp         # tracks tile coords + accumulator STATE only
+├── block_mover_flow_executor.hpp #   — no numeric payload anywhere in these files
+└── streamer_flow_executor.hpp
 ```
+
+The `models/dataflow/` path used to be listed as the reference to follow. It is not. Its
+executors move **tile identity and credit state, never values**: the base
+`execute_operation()` is an empty default, and where the three subclasses do override it
+they update coordinates and accumulator bookkeeping. So the files model the credit *shapes*
+faithfully while computing nothing — which makes them a misleading template. Read
+`include/sw/kpu/timing/` for the credit model that carries real payloads.
 
 ### Before Writing KPU Code, Ask:
 

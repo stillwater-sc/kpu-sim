@@ -34,17 +34,24 @@ The KPU simulator supports multiple levels of simulation fidelity, allowing user
 - Unit testing
 - CI/CD pipelines
 
-### Level 1: TRANSACTIONAL (Approximate)
+### Level 1: TRANSACTIONAL (Approximate timing, exact values)
 
 **Purpose**: Early architecture exploration, performance estimation
 
 | Aspect | Behavior |
 |--------|----------|
-| Timing | Statistical (mean + variance) |
+| **Values** | **Exact — bit-identical to BEHAVIORAL** (ADR 0001 D4) |
+| Timing | Approximate: calibrated means today, distributions later (#268) |
 | State | Aggregate (busy/idle) |
 | Queuing | Basic contention modeling |
 | Contention | Queue depth limits |
 | Speed | ~10-100x faster than cycle-accurate |
+
+> **"Approximate" describes the timing, never the values.** This tier shares the L0 tile
+> kernels with the functional reference, so its arithmetic is the same arithmetic — that is
+> what makes it usable for validating programs and not only for estimating their cost. An
+> earlier version of this table implied statistical values; ADR 0001 D4 settled it the
+> other way.
 
 **Use Cases**:
 - Architecture design space exploration
