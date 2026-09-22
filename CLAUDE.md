@@ -22,15 +22,20 @@ that supports three tiers of modeling abstraction:
 
 ### Simulation Fidelity Tiers
 
-| Tier | Purpose | Speed | Computes Values? |
-|------|---------|-------|------------------|
-| **BEHAVIORAL** | Functional correctness, software bring-up | ~100-1000x | **YES** |
-| **TRANSACTIONAL** | Architecture exploration, bottleneck ID | ~10-100x | **YES — exact**, bit-identical to BEHAVIORAL |
-| **CYCLE_ACCURATE** | Performance analysis, timing validation | 1x (baseline) | **YES** — float32, within tolerance of BEHAVIORAL |
+**CSP is the program layer, not a fidelity** (ADR 0002). One CSP program — derived from a
+Domain Flow Program — is executed by every level; what differs is **how finely the level
+decomposes a CSP transaction**.
 
-**Every tier computes values.** The tiers differ in the *timing* they model, not in whether
-the arithmetic happens (ADR 0001 D4). A tier that returns timing without values is not a
-cheaper simulation — it is an unvalidated one.
+| Level | Decomposes a transaction into | Speed | Computes Values? |
+|-------|-------------------------------|-------|------------------|
+| **L-B** behavioral | a whole block move, atomic | ~100-1000x | **YES** |
+| **L-T1** block-sequential | one tile move, under credits and capacity | ~10-100x | **YES — exact**, bit-identical to L-B |
+| **L-T2** resource transactional | `read`/`write` per resource; `push` into the compute tile | — | **YES — exact**, bit-identical to L-B |
+| **L-CA** cycle-accurate | protocol events, per cycle | 1x (baseline) | **YES** — within tolerance of L-B |
+
+**Every level computes values.** Decomposition changes *when* things happen, never *what*
+is computed. A level that returns timing without values is not a cheaper simulation — it is
+an unvalidated one. Full model: `docs/architecture/adr/0002-csp-interpretations-and-virtual-platform.md`.
 
 ### The Multi-Fidelity Philosophy
 
