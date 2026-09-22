@@ -90,10 +90,11 @@ SoC. That demands one object you load and drive, not a collection of executors.
    (device + engines)──▶ EngineDeployment: processes, channels,  │
                     │                     resource pools         │
    program (DFP/CSP)──▶ ProgramImage                             │
-   data ────────────┼──▶ Backdoor: write/read ANY addressable      │
+   test state space ┼──▶ Backdoor (simulation-only, NOT a bus):  │
+   (pre/post cond.) │      poses or collects the state of ANY    │
                     │      resource — HOST, DRAM, L3, L2, L1,    │
-                    │      CF register files (bypasses the       │
-                    │      modelled datapath)                    │
+                    │      CF register files. No physical        │
+                    │      manifestation in the SUT (§3.4)       │
                     │                                            │
                     │  run(level) ─▶ IInterpreter ─▶ RunResult   │
                     │  step()     ─▶ one transaction at `level`  │
@@ -156,11 +157,13 @@ public:
 };
 ```
 
-`Backdoor` is the out-of-band use of each resource's own `load`/`store` state transactions
-(§3.3), over the global address map (§3.4). It already half-exists:
-`ResourceManager::{write,read,copy,memset}` addresses resources directly, and `HOST_MEMORY`
-is already a resource type. It is **timing-free by construction** and flagged in the run's
-provenance, so nobody mistakes a backdoor-staged tensor for one that was DMA'd.
+`Backdoor` is a **separate, simulation-only interface** (§3.4) between any resource's state
+and the conceptual test state space. It is *not* the resources' own `load`/`store`, which
+are physical and local. `ResourceManager::{write,read,copy,memset}` is the closest existing
+primitive, but it is a starting point to build on, not the contract — the backdoor must stay
+distinguishable in the code from anything the SUT can physically do. It is **timing-free by
+construction** and flagged in the run's provenance, so nobody mistakes a backdoor-staged
+tensor for one that was DMA'd.
 
 Its purpose is to make the simulator and its tests tractable: put the model into a state
 whose response is known, run one transaction, read the response back.
@@ -212,37 +215,81 @@ op decomposes into **a push out of the compute tile, followed by writes down the
 hierarchy** — never a read of the fabric. The op keeps its name; the decomposition is what
 matters.
 
-**State transactions** — the same on every resource:
+**State-management transactions** — the same on every resource, and **physical**:
 
 ```
 clear      reset      single-step      load      store
 ```
 
+These are operations the System Under Test can actually perform, between resources that are
+actually connected. A resource `load`/`store` references **local** memory state over a real
+port: the DMA engine executes a load from DRAM and stores a block into L3 because a bus
+exists between them. They are modelled, they cost time, and a program can cause them.
+
 This uniform control surface is what makes deployment automatable: a harness can bring any
 resource to a known state, advance it, and snapshot it without knowing which kind of
-resource it is holding. It is also exactly what the backdoor needs (§3.4) — the backdoor is
-not a separate mechanism but these same `load`/`store` transactions issued **out of band**,
-with no timing effect and a provenance flag recording that they were used.
+resource it is holding.
 
-### 3.4 Addressability, and why that implies multi-device
+**The backdoor is NOT these transactions** (§3.4). Conflating the two would let the
+simulator model a machine that cannot exist.
 
-The backdoor's job is to set up a state whose response is known, then read the response
-back. That only works if **every resource is addressable** — not just DRAM, but each L3
-tile, L2 bank, L1 vector, and compute-tile register file.
+### 3.4 The backdoor: a global operator with no physical manifestation
 
-So the platform carries a **global address map** over `(device, resource-kind, instance,
-offset)`. Once the map spans resources rather than a flat memory, spanning *devices* costs
-nothing extra structurally — which is why this ADR adopts multi-device from the start
-rather than retrofitting it. A single-device deployment is then just a map with one device
-in it.
+**The backdoor is not a re-use of the resources' own state transactions. It is a separate,
+simulation-only mechanism, and it is deliberately unphysical.**
+
+A resource's `load`/`store` (§3.3) is *local*: it moves state between resources a bus
+connects. The backdoor is *global*: it connects **any** resource's state to a **conceptual
+test state space** that holds pre-conditions and post-conditions. A backdoor load of L1
+drops a row or column straight into an L1 streaming buffer from that space. **No physical
+bus or port could ever connect L1 to it** — the test state space is a conceptual device,
+not a component of the System Under Test.
+
+That is the whole point: it is *truly* a back door. It follows that:
+
+| | Resource state transactions (§3.3) | Backdoor |
+|---|---|---|
+| Exists in the SUT | **yes** — real ports and buses | **no** — conceptual |
+| Scope | local, between connected resources | global, any resource ↔ test state space |
+| Costs time | yes, modelled | no, out of band |
+| A program can cause one | yes | **never** |
+| Implemented by | the modelled resource | the simulation harness |
+
+**Invariants this imposes:**
+
+1. **The backdoor gets its own interface.** It must not be expressed in terms of, or routed
+   through, any state-management functionality that has a physical manifestation in the
+   SUT. Reusing the physical surface would make the unphysical path indistinguishable from
+   the physical one at the point where it matters — in the model's own code.
+2. **No CSP program can emit a backdoor transaction.** If a program could, the simulator
+   would be executing a machine that cannot be built. The backdoor belongs to the harness
+   and to tests, never to the program layer.
+3. **Backdoor use is recorded in provenance**, because a state established this way may be
+   *unreachable by any program*. That is exactly its value for testing — you can pose a
+   situation the datapath would take a million cycles to construct — and exactly its risk:
+   a model validated only from backdoor-established states has never exercised the paths
+   that would reach them physically.
+
+**Addressability.** Posing and reading a situation requires every resource's state to be
+*nameable*: not just DRAM, but each L3 tile, L2 bank, L1 vector and compute-tile register
+file. The platform therefore carries a **global naming map** over `(device, resource-kind,
+instance, offset)`.
+
+This map is a **simulation-side naming scheme**, not a physical address space the hardware
+implements. The SUT keeps its own real address spaces for the transactions that actually
+travel its buses; the backdoor map exists so a test can say *which state* it means. Once
+the map spans resources rather than a flat memory, spanning *devices* costs nothing extra
+structurally — which is why this ADR adopts multi-device from the start rather than
+retrofitting it. A single-device deployment is then just a map with one device in it.
 
 Two consequences worth stating:
 
-- **Tests become state-in / state-out.** Backdoor-`store` a known L2 bank content, push one
-  tile down the datapath, then backdoor-`load` the compute tile's output register: a unit
-  test of the fabric with no program at all. Both ends use the *state* surface; only the
-  middle step touches the datapath, which is what keeps this consistent with the compute
-  tile being push-only (§3.3). That is a materially different test style from "run a
+- **Tests become state-in / state-out.** Inject a known L2 bank content **through the
+  backdoor**, push one tile down the datapath, then read the compute tile's output register
+  **through the backdoor**: a unit test of the fabric with no program at all. Only the
+  middle step touches the SUT; both ends come from the conceptual test state space, which is
+  why this is consistent with the compute tile being push-only on the datapath (§3.3) — the
+  backdoor is not a datapath (§3.4). That is a materially different test style from "run a
   program and compare the answer", and it is the one that finds protocol bugs.
 - **Every level shares the map.** Addressing is a property of the platform, not of an
   interpreter, so a backdoor setup written for L-T2 works unchanged at L-CA.
@@ -339,8 +386,15 @@ is exactly "write and test Domain Flow Programs at different abstraction levels"
    understands read and write, except the compute tile, which only understands push. That
    makes the vocabulary small, uniform and calibratable.
 3. **The backdoor exists to simplify the simulator and its tests**, by setting up a state
-   whose response is known and reading the result back. It is therefore timing-free and
-   out-of-band by design: writing sets up a situation, reading collects it.
+   whose response is known and reading the result back. It is timing-free and out of band:
+   writing poses a situation, reading collects it.
+   **Correction (2026-09-22):** an earlier draft described it as the out-of-band use of each
+   resource's own `load`/`store`. That was wrong and is now §3.4. Resource `load`/`store` is
+   *physical and local* — the DMA engine loads from DRAM and stores into L3 because a bus
+   exists. The backdoor is *global and unphysical*: it connects any resource's state to a
+   conceptual test state space, and no bus could ever connect an L1 streaming buffer to
+   that space. It therefore gets its own interface and may never be expressed through
+   state-management functionality that the SUT physically implements.
 4. **Multi-device from the start**, and for a specific reason: the backdoor requires every
    resource to be reachable, which means **every resource must be addressable** (§3.4).
    Once the address map spans resources, spanning devices is the same mechanism.
