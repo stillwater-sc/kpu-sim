@@ -7,6 +7,7 @@
 | **Issue** | #253 |
 | **Context docs** | `docs/architecture/program-execution-assessment.md` (#252), `docs/plans/kpu-program-model.md` (D6), `docs/plans/model-ingestion-compilation-epic.md` (#229) |
 | **Affects** | #229, #230, #231, #254, #255, #256, #257 |
+| **Amended by** | **ADR 0002** (2026-09-22) — the tier/engine *naming* in D2. CSP is a program layer, not a fidelity; the engines are interpreters of one program at different transaction granularities. D1–D7's decisions stand. |
 
 ---
 
