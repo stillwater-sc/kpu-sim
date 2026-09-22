@@ -198,10 +198,19 @@ tile is never read **by the datapath**, while the backdoor reads its registers o
 exactly as it reads an L2 bank. A model that let a streamer *read* a compute tile would be
 the violation; a test that inspects its registers is not.
 
-*Open for confirmation:* this reads "the compute tile only understands push" as covering
-both directions — operands pushed in, results pushed out. If a result exit is modelled as
-something other than a push (a drain the streamer initiates, say), the compute tile's data
-vocabulary gains a second verb and §2.2's L-T2 row changes with it.
+**Settled (2026-09-22): the compute tile pushes results out. There is no drain that pulls
+from it.** `push` is therefore the tile's complete data vocabulary in both directions, and
+nothing — streamer, block mover or backdoor datapath — reaches into the array to fetch a
+value.
+
+One naming consequence worth flagging, because it will mislead otherwise: the L0 program
+already has a **`Drain` op**, and "drain" sounds like a pull. It is not one. It is the
+program-level *extraction sequence*, and the code already works this way — a completed
+compute pushes its result into the result tag CAM (`compute_result_tag_cam_`, "tracks
+result tiles ready for DRAIN") and the extraction then matches on it. So at L-T2 a `Drain`
+op decomposes into **a push out of the compute tile, followed by writes down the
+hierarchy** — never a read of the fabric. The op keeps its name; the decomposition is what
+matters.
 
 **State transactions** — the same on every resource:
 
@@ -335,7 +344,11 @@ is exactly "write and test Domain Flow Programs at different abstraction levels"
 4. **Multi-device from the start**, and for a specific reason: the backdoor requires every
    resource to be reachable, which means **every resource must be addressable** (§3.4).
    Once the address map spans resources, spanning devices is the same mechanism.
-5. **Question withdrawn — it was malformed.** I asked whether L-T2 "subsumes the `.kpubin`
+5. **The compute tile pushes results out; there is no drain that pulls.** `push` is its
+   complete data vocabulary in both directions (§3.3). The L0 `Drain` op is an extraction
+   *sequence*, not a pull, and decomposes at L-T2 into a push out of the tile followed by
+   writes down the hierarchy.
+6. **Question withdrawn — it was malformed.** I asked whether L-T2 "subsumes the `.kpubin`
    path", which presupposed that a fidelity level might execute a *different program*.
    It does not: **every level executes the same program articulation**; what differs is
    that L-T2's models articulate lower-level state transactions — a DMA read, an L3 write
