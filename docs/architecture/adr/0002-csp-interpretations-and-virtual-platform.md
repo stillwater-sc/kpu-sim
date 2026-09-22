@@ -142,11 +142,14 @@ public:
 
     // --- state: a run starts from an immutable snapshot, never from whatever the
     // previous run left behind, or the "pure function" claim below is false.
-    StateSnapshot snapshot() const;                        // digestible; goes in provenance
+    StateSnapshot snapshot() const;                        // capture the staged situation
     void          restore(const StateSnapshot&);           // reset to a known situation
 
-    // --- execute
-    RunResult run(ProgramHandle, ExecutionLevel);          // implies restore(initial_state)
+    // --- execute: the snapshot is an EXPLICIT ARGUMENT, not an implied ambient state.
+    // run() restores it first, and its digest is part of the run identity and the
+    // provenance. Passing it makes "which state did this run start from?" answerable
+    // from the call site rather than from execution history.
+    RunResult run(ProgramHandle, ExecutionLevel, const StateSnapshot& initial_state);
     StepCursor step_begin(ProgramHandle, ExecutionLevel);  // single-step at that granularity
     bool       step(StepCursor&);                          // one transaction per call
 
@@ -322,9 +325,21 @@ A deployment is **data, not code**:
   state, so a run that reads state a previous run left behind is not reproducible and must
   not be cached. The platform therefore takes an **immutable state snapshot** as part of the
   run identity: `run()` restores it first, its digest goes into the cache key and the
-  provenance, and two runs with the same four inputs are guaranteed to agree. A test that
-  wants the previous situation restores an explicit snapshot rather than relying on
-  residue.
+  provenance, and two runs with the same four inputs are guaranteed to agree.
+
+  **The snapshot is passed, not implied.** The flow is explicit:
+
+  ```cpp
+  platform.backdoor().stage(...);                        // pose the situation
+  const StateSnapshot initial = platform.snapshot();     // capture it
+  auto result = platform.run(prog, level, initial);      // restore it, then execute
+  ```
+
+  Taking `initial_state` as an argument rather than reading whatever the platform happens
+  to hold is what makes the identity checkable at the call site: a reviewer can see which
+  state a run started from without reconstructing the history of backdoor writes that
+  preceded it, and a cache key cannot silently disagree with the state that was actually
+  restored.
 
 ## 4. Driver architecture
 
