@@ -18,7 +18,7 @@ This document provides guidance for Claude Code when working on the KPU-SIM proj
 ## Repository Purpose: Multi-Fidelity Simulation
 
 **READ THIS FIRST** - The KPU simulator is a **multi-fidelity simulation environment**
-that supports three tiers of modeling abstraction:
+that interprets one program at **four levels** of transaction granularity:
 
 ### Simulation Fidelity Tiers
 
@@ -29,7 +29,7 @@ decomposes a CSP transaction**.
 | Level | Decomposes a transaction into | Speed | Computes Values? |
 |-------|-------------------------------|-------|------------------|
 | **L-B** behavioral | a whole block move, atomic | ~100-1000x | **YES** |
-| **L-T1** block-sequential | one tile move, under credits and capacity | ~10-100x | **YES — exact**, bit-identical to L-B |
+| **L-T1** block-sequential | one tile move (finite-buffer credits and capacity arrive in #264 increment 4) | ~10-100x | **YES — exact**, bit-identical to L-B |
 | **L-T2** resource transactional | `read`/`write` per resource; `push` into the compute tile | — | **YES — exact**, bit-identical to L-B |
 | **L-CA** cycle-accurate | protocol events, per cycle | 1x (baseline) | **YES** — within tolerance of L-B |
 
@@ -65,8 +65,8 @@ The progression works as follows:
 **Non-negotiable:** the BEHAVIORAL tier computes actual values and propagates results.
 A behavioral component that only models timing is wrong.
 
-**Authorities:** values answer to the L0 `TileProgramReference`, timing to the
-cycle-accurate CSP tier. Before comparing either, read D5 and §7.5 of
+**Authorities:** values answer to the L0 `TileProgramReference`, timing to **L-CA**, the
+cycle-accurate level. Before comparing either, read D5 and §7.5 of
 `docs/architecture/adr/0001-program-contract-and-transactional-engine.md` — they give
 the required bar per tier (bit-exact vs tolerance) and the comparator to use.
 

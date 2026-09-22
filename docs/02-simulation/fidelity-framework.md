@@ -49,18 +49,19 @@ Two consequences follow, and they are what make the levels worth having:
 
 ### Level L-T1: BLOCK-SEQUENTIAL TRANSACTIONAL
 
-**Purpose**: Does the sequencing work under finite buffers?
+**Purpose**: Does the sequencing hold up once moves take time and resources are contended?
 
 | Aspect | Behavior |
 |--------|----------|
 | **Values** | **Exact — bit-identical to L-B** |
 | Transaction granularity | one tile / block move |
-| Timing | per-move duration; calibrated means today, distributions later (#268) |
-| State | tile-granularity credits and capacity per buffer level |
+| Timing | per-move duration, **uncalibrated today** — every run reports `calibrated: false` in its provenance until the calibration step of #264 increment 6 lands. Distributions are later still (#268) |
+| State | compute tiles and movement lanes are contended. **Finite-buffer credits and capacity are NOT yet enforced** — that is #264 increment 4 |
 | Speed | ~10-100x faster than cycle-accurate |
 
-**Answers**: does the program deliver the right tiles, in the right order, under finite
-buffers?
+**Answers today**: does the program deliver the right tiles in the right order, and how does
+its makespan move with resources? **Not yet**: whether it survives finite buffers — do not
+rely on this level for capacity validation until increment 4.
 
 ### Level L-T2: RESOURCE TRANSACTIONAL
 
@@ -83,7 +84,7 @@ streamer read, a push into the compute tile.
 
 | Aspect | Behavior |
 |--------|----------|
-| **Values** | Exact, within tolerance of L-B (accumulation order may differ) |
+| **Values** | **Within tolerance of L-B** — accumulation order legitimately differs, so this level is checked against a tolerance, never for bit-equality |
 | Transaction granularity | protocol events, per cycle |
 | Timing | per-cycle protocol timing, full state machines |
 | Queuing | realistic scheduling (FR-FCFS, etc.) |

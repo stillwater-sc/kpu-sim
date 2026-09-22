@@ -64,9 +64,12 @@ flowchart TB
     DAG --> MET
 ```
 
-The one gap worth naming: today `KernelGraph` reaches the cycle-accurate tier directly,
-while `TileProgram` reaches only the reference and the analysis harness. Closing that —
-one program, three tiers — is what ADR 0001 decided and what #264 and #265 implement.
+What runs today, precisely: `TileProgram` reaches **L-B** (`TileProgramReference`), **L-T1**
+(`TileTransactionExecutor`, increments 1–3 of #264) and the analysis harness, while
+`KernelGraph` reaches **L-CA** through `GraphCspExecutor`. Two paths are still planned: the
+**L-T2** resource interpreter, and the **driver JIT** that would let an L0 program reach
+L-CA. Closing those — one program, every level — is what ADR 0001 and ADR 0002 decided and
+what #264 and #265 implement.
 
 ---
 
@@ -446,11 +449,16 @@ sequenceDiagram
 
 ## 6. Sequence — L-T1 transactional execution [today, except loading from a file]
 
-This is the L-T1 interpreter, and increments 1–3 of #264 shipped it: ops fire on
-dependencies and resources rather than in program order, values stay bit-identical to the
-reference, and the run reports timeline, stats and provenance. **One step is still
-planned:** the program arrives from a file only once #265 lands the L0 serializer — today
-it is constructed in memory. Capacity and residency arrive with increment 4.
+This is the L-T1 interpreter, and increments 1–3 of #264 shipped the flow below: ops fire
+on **dependencies and free resources** rather than in program order, values stay
+bit-identical to the reference, and the run reports timeline, stats and provenance.
+
+**Two steps are not here yet**, and the diagram marks the first:
+- **finite-buffer credits and capacity** (increment 4) — L-T1 today contends compute tiles
+  and movement lanes, but does not enforce buffer occupancy, so it cannot yet answer
+  "does this survive finite buffers?";
+- **loading from a file** — the program is constructed in memory until #265 lands the L0
+  serializer.
 
 ```mermaid
 sequenceDiagram
@@ -459,7 +467,7 @@ sequenceDiagram
     participant F as executor factory
     participant TTE as TileTransactionExecutor
     participant Dep as dependency model
-    participant Cred as credits + residency
+    participant Res as resources (CF tiles, lanes)
     participant K as TileKernels
 
     Host->>Host: deserialize TileProgram from file
@@ -469,12 +477,13 @@ sequenceDiagram
     Host->>TTE: run(request)
     TTE->>Dep: recover tile + pivot-slot edges
     loop until no ops remain
-        TTE->>Cred: inputs resident? output credit? resource free?
-        Cred-->>TTE: ready set
+        TTE->>Res: dependencies met? a compute tile or lane free?
+        Res-->>TTE: ready set
+        Note over TTE,Res: increment 4 adds: inputs resident? output credit?<br/>and releases the slot after the last consumer
         TTE->>K: apply(program, op, state) for the fired op
         K-->>TTE: values mutated in place
         TTE->>TTE: schedule completion event, advance to next event time
-        TTE->>Cred: release slot after last consumer
+        TTE->>Res: release the resource on completion
     end
     TTE-->>Host: RunResult: values, timeline, stats, provenance
     Host->>Host: assert bit-exact vs TileProgramReference
