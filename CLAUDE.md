@@ -60,19 +60,10 @@ The progression works as follows:
 **Non-negotiable:** the BEHAVIORAL tier computes actual values and propagates results.
 A behavioral component that only models timing is wrong.
 
-### Who is authoritative for what
-
-Two questions come up constantly — "is this number right?" and "is this timing right?" —
-and they have different answers (ADR 0001 D5). Don't re-derive this:
-
-| Question | Authority | The bar for everyone else |
-|----------|-----------|---------------------------|
-| **Values** | the L0 `TileProgramReference` (`include/sw/kpu/program/tile_program_reference.hpp`) | the transactional tier must match it **bit-exactly** — it runs the same kernels, so any difference is a bug, not rounding. The cycle-accurate tier matches within a relative tolerance, because its accumulation order legitimately differs. |
-| **Timing** | the cycle-accurate CSP tier (`include/sw/kpu/timing/`) | the transactional tier is **calibrated against it** and reports its error band. An uncalibrated timing number must say so in its provenance rather than be quoted as measured. |
-
-The comparator for a tolerance check is `|actual - reference| <= atol + rtol * |reference|`
-with `atol = 1e-6` for float32 — a bare relative error is undefined at zero, and zeros are
-everywhere here (ReLU, structural zeros in triangular factors).
+**Authorities:** values answer to the L0 `TileProgramReference`, timing to the
+cycle-accurate CSP tier. Before comparing either, read D5 and §7.5 of
+`docs/architecture/adr/0001-program-contract-and-transactional-engine.md` — they give
+the required bar per tier (bit-exact vs tolerance) and the comparator to use.
 
 ---
 
@@ -84,7 +75,7 @@ The KPU implements a **credit-based dataflow execution model**. This is fundamen
 different from stored-program (von Neumann) architectures. Failure to understand this
 distinction leads to incorrect implementations.
 
-**Authoritative Reference:** `docs/kpu-execution-model.md`
+**Authoritative Reference:** `docs/01-architecture/kpu-execution-model.md`
 
 ### Core Principle: Credits UP, Data DOWN
 
