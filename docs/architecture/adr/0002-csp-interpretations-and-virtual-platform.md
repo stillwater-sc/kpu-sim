@@ -2,8 +2,8 @@
 
 | | |
 |---|---|
-| **Status** | **Proposed** — for review |
-| **Date** | 2026-09-22 |
+| **Status** | **Accepted** (2026-09-22) |
+| **Date** | proposed and accepted 2026-09-22 |
 | **Supersedes** | the tier/engine naming in ADR 0001 D2 (not its choice of portable program) |
 | **Context docs** | `docs/plans/kpu-program-model.md` (D6), `docs/architecture/adr/0001-program-contract-and-transactional-engine.md` |
 
@@ -408,3 +408,29 @@ is exactly "write and test Domain Flow Programs at different abstraction levels"
    that L-T2's models articulate lower-level state transactions — a DMA read, an L3 write
    by the block mover. `.kpubin` is a driver-JIT artifact for one device, not a program
    layer belonging to a fidelity.
+
+## 7. On acceptance
+
+**Correct what already encodes the old framing:**
+
+- [ ] PR #275 — `fidelity-framework.md` frames the tiers as value/timing fidelity; under
+      this ADR it is transaction granularity. Its value correction stays right either way.
+- [ ] `docs/architecture/program-execution-uml.md` — §1/§3 headings call the cycle-accurate
+      engine "the CSP tier", and the level set needs L-T2.
+- [ ] ADR 0001 — carries a forward pointer to this ADR for the tier/engine naming.
+- [ ] `TileTransactionExecutor` is the **L-T1 block-sequential interpreter**; naming to
+      follow, behaviour unchanged.
+
+**New work this opens** (issues to file):
+
+- [ ] Derive explicit **CSP processes and channels** from the DFP — today `TileProgram` is
+      the block-sequential projection with the structure implicit (§5.1).
+- [ ] **L-T2 resource-transactional interpreter** over the fixed vocabulary of §3.3.
+- [ ] **VirtualPlatform**: deployment spec, global naming map, `run(level)`, `step()`,
+      snapshot/restore, provenance.
+- [ ] **Backdoor** as its own interface, with the §3.4 invariants enforced — not routed
+      through any physically-manifested state path.
+- [ ] **`kpu-run`** driver: `--program`, `--deploy`, `--level`, `--step`.
+
+**Unchanged:** #264 increment 4 (tile-granularity credits and capacity) is exactly what
+L-T1 is for.
