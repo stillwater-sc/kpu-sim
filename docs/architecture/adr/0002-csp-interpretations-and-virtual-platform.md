@@ -52,7 +52,7 @@ needs a disassembler for inspection, but no source syntax or parser.
 |---|---|---|---|
 | **L-B** behavioral | whole block move, atomic | none | is the CSP program functionally correct? |
 | **L-T1** block-sequential transactional | one tile / block move | per-move duration, tile-granularity credits and capacity | does the sequencing deliver the right tiles, in the right order, under finite buffers? |
-| **L-T2** resource transactional | the fixed per-resource vocabulary of §3.2: `read`/`write` on every resource, `push` on the compute tile | per-transaction, queueing per engine / port / bank | where is the bandwidth or occupancy bottleneck? |
+| **L-T2** resource transactional | the fixed per-resource vocabulary of §3.3: `read`/`write` on every resource, `push` on the compute tile | per-transaction, queueing per engine / port / bank | where is the bandwidth or occupancy bottleneck? |
 | **L-CA** cycle-accurate | protocol events, per cycle | FSMs, arbitration, DRAM timing | protocol compliance; the calibration ground truth |
 
 **The process structure is identical at every level.** A `BlockMover` is the same CSP
@@ -90,15 +90,42 @@ SoC. That demands one object you load and drive, not a collection of executors.
    (device + engines)──▶ EngineDeployment: processes, channels,  │
                     │                     resource pools         │
    program (DFP/CSP)──▶ ProgramImage                             │
-   data ────────────┼──▶ Backdoor: write/read HOST|DRAM|L3|L2|L1 │
-                    │      (bypasses the modeled datapath)       │
+   data ────────────┼──▶ Backdoor: write/read ANY addressable      │
+                    │      resource — HOST, DRAM, L3, L2, L1,    │
+                    │      CF register files (bypasses the       │
+                    │      modelled datapath)                    │
                     │                                            │
                     │  run(level) ─▶ IInterpreter ─▶ RunResult   │
                     │  step()     ─▶ one transaction at `level`  │
                     └────────────────────────────────────────────┘
 ```
 
-### 3.1 API sketch
+### 3.1 The lowering boundary: who turns a DFP into a CSP program
+
+The platform accepts **only** a `CspProgram`. Lowering is a separate, testable step that
+happens before load:
+
+```cpp
+// owned by the compiler side (domain_flow; relocating per #232), not by the platform
+CspProgram lower_to_csp(const DomainFlowProgram&, const LoweringOptions&);
+```
+
+`kpu-run --program X` decides by what X is:
+
+```
+X is a .dfg / DFP        ──▶ lower_to_csp(dfp, opts) ──▶ CspProgram ──▶ load_program()
+X is a serialized CSP IR ──▶ deserialize            ──▶ CspProgram ──▶ load_program()
+```
+
+Keeping the boundary sharp buys two things. The platform never depends on the compiler, so
+it can execute a CSP program whose DFP is unavailable — the case every regression corpus
+needs. And lowering stays independently testable: the same DFP lowered twice must produce
+an identical CSP program, which is a cheap and strong compiler test.
+
+`LoweringOptions` carries the tiling and schedule choices; those are compiler decisions, not
+platform ones, and they belong in the program's provenance.
+
+### 3.2 API sketch
 
 ```cpp
 enum class ExecutionLevel { Behavioral, BlockSequential, ResourceTransactional, CycleAccurate };
@@ -110,10 +137,15 @@ public:
     // --- load: program and data arrive through the backdoor, not through the datapath,
     // so staging weights never distorts the timing of the run that follows.
     ProgramHandle load_program(const CspProgram&);
-    Backdoor&     backdoor();                              // write/read HOST|DRAM|L3|L2|L1
+    Backdoor&     backdoor();   // any addressable resource (§3.4), CF register files included
+
+    // --- state: a run starts from an immutable snapshot, never from whatever the
+    // previous run left behind, or the "pure function" claim below is false.
+    StateSnapshot snapshot() const;                        // digestible; goes in provenance
+    void          restore(const StateSnapshot&);           // reset to a known situation
 
     // --- execute
-    RunResult run(ProgramHandle, ExecutionLevel);
+    RunResult run(ProgramHandle, ExecutionLevel);          // implies restore(initial_state)
     StepCursor step_begin(ProgramHandle, ExecutionLevel);  // single-step at that granularity
     bool       step(StepCursor&);                          // one transaction per call
 
@@ -125,7 +157,7 @@ public:
 ```
 
 `Backdoor` is the out-of-band use of each resource's own `load`/`store` state transactions
-(§3.2), over the global address map (§3.3). It already half-exists:
+(§3.3), over the global address map (§3.4). It already half-exists:
 `ResourceManager::{write,read,copy,memset}` addresses resources directly, and `HOST_MEMORY`
 is already a resource type. It is **timing-free by construction** and flagged in the run's
 provenance, so nobody mistakes a backdoor-staged tensor for one that was DMA'd.
@@ -137,7 +169,7 @@ whose response is known, run one transaction, read the response back.
 at L-T1 you step block moves, at L-T2 you step DMA bursts and L2 reads. The unit of
 stepping *is* the level.
 
-### 3.2 The resource model: a fixed transaction vocabulary
+### 3.3 The resource model: a fixed transaction vocabulary
 
 Every modelled resource exposes **two small, fixed surfaces**. This is what keeps L-T2
 calibratable and keeps the interpreters from growing per-device special cases.
@@ -155,9 +187,21 @@ calibratable and keeps the interpreters from growing per-device special cases.
 | **Compute tile** | **`push` only** |
 
 The compute tile is the exception because it is a reactive fabric, not a memory: operands
-are pushed into it and results are pushed out of it. It is never *read* — nothing addresses
-a value inside the array and pulls it. *(Reading of "only understands push" as covering both
-directions; correct me if a result exit is modelled as something other than a push.)*
+are pushed into it and results are pushed out of it. Nothing on the **data path** addresses
+a value inside the array and pulls it.
+
+**The two surfaces are not the same surface.** `push` is the compute tile's entire *data
+transaction* vocabulary. `load`/`store` are *state transactions*, available on every
+resource including the compute tile's register files, and they are how the backdoor reads a
+result out (§3.4). So the state-in/state-out test below is consistent with "push only": the
+tile is never read **by the datapath**, while the backdoor reads its registers out of band,
+exactly as it reads an L2 bank. A model that let a streamer *read* a compute tile would be
+the violation; a test that inspects its registers is not.
+
+*Open for confirmation:* this reads "the compute tile only understands push" as covering
+both directions — operands pushed in, results pushed out. If a result exit is modelled as
+something other than a push (a drain the streamer initiates, say), the compute tile's data
+vocabulary gains a second verb and §2.2's L-T2 row changes with it.
 
 **State transactions** — the same on every resource:
 
@@ -167,11 +211,11 @@ clear      reset      single-step      load      store
 
 This uniform control surface is what makes deployment automatable: a harness can bring any
 resource to a known state, advance it, and snapshot it without knowing which kind of
-resource it is holding. It is also exactly what the backdoor needs (§3.3) — the backdoor is
+resource it is holding. It is also exactly what the backdoor needs (§3.4) — the backdoor is
 not a separate mechanism but these same `load`/`store` transactions issued **out of band**,
 with no timing effect and a provenance flag recording that they were used.
 
-### 3.3 Addressability, and why that implies multi-device
+### 3.4 Addressability, and why that implies multi-device
 
 The backdoor's job is to set up a state whose response is known, then read the response
 back. That only works if **every resource is addressable** — not just DRAM, but each L3
@@ -185,14 +229,16 @@ in it.
 
 Two consequences worth stating:
 
-- **Tests become state-in / state-out.** Write a known L2 bank content, push one tile,
-  read the compute tile's output register: a unit test of the fabric with no program at
-  all. That is a materially different test style from "run a program and compare the
-  answer", and it is the one that finds protocol bugs.
+- **Tests become state-in / state-out.** Backdoor-`store` a known L2 bank content, push one
+  tile down the datapath, then backdoor-`load` the compute tile's output register: a unit
+  test of the fabric with no program at all. Both ends use the *state* surface; only the
+  middle step touches the datapath, which is what keeps this consistent with the compute
+  tile being push-only (§3.3). That is a materially different test style from "run a
+  program and compare the answer", and it is the one that finds protocol bugs.
 - **Every level shares the map.** Addressing is a property of the platform, not of an
   interpreter, so a backdoor setup written for L-T2 works unchanged at L-CA.
 
-### 3.4 Engine deployment — automate, coordinate, scale
+### 3.5 Engine deployment — automate, coordinate, scale
 
 A deployment is **data, not code**:
 
@@ -212,9 +258,17 @@ A deployment is **data, not code**:
   The characterization harness becomes a *consumer* of the platform rather than a parallel
   path — which is the G9 "must connect, not add a fourth path" discipline applied to
   drivers.
-- **Scale:** a run is a pure function of `(program, data, deployment, level)`. Sweeps are
-  lists of deployments; results are cacheable and parallelizable; CI runs the same function
-  with a small deployment that a design-space exploration runs with hundreds.
+- **Scale:** a run is a pure function of **`(program, initial_state, deployment, level)`**.
+  Sweeps are lists of deployments; results are cacheable and parallelizable; CI runs the
+  same function with a small deployment that a design-space exploration runs with hundreds.
+
+  **`initial_state` is the whole input, not just "data".** Backdoor writes mutate resource
+  state, so a run that reads state a previous run left behind is not reproducible and must
+  not be cached. The platform therefore takes an **immutable state snapshot** as part of the
+  run identity: `run()` restores it first, its digest goes into the cache key and the
+  provenance, and two runs with the same four inputs are guaranteed to agree. A test that
+  wants the previous situation restores an explicit snapshot rather than relying on
+  residue.
 
 ## 4. Driver architecture
 
