@@ -1,0 +1,289 @@
+# ADR 0002 — CSP is a program layer, not a fidelity; and the virtual-platform driver
+
+| | |
+|---|---|
+| **Status** | **Proposed** — for review |
+| **Date** | 2026-09-22 |
+| **Supersedes** | the tier/engine naming in ADR 0001 D2 (not its choice of portable program) |
+| **Context docs** | `docs/plans/kpu-program-model.md` (D6), `docs/architecture/adr/0001-program-contract-and-transactional-engine.md` |
+
+---
+
+## 1. The error being corrected
+
+ADR 0001 and everything downstream of it (the UML doc, the executor design note) used
+**"CSP tier"** as a synonym for **CYCLE_ACCURATE**, and treated the three fidelities as
+three different engines consuming different inputs.
+
+That is a category error. **CSP — communicating sequential processes — is the sequencing
+mechanism of domain flow.** It is a *program layer*: the processes (DMA, BlockMover,
+Streamer, compute tile) and the tile sequences they exchange, which get a tile to the
+compute fabric in the right order. Cycle-accurate is not the CSP layer; it is one
+**interpretation** of a CSP program. The transactional levels are other interpretations of
+**the same program**.
+
+Concretely: a block linear-algebra operator has a CSP program that moves matrix/tensor
+tiles. You can validate that program functionally by treating each block move as atomic.
+The DMA and L3/L2/L1 scratchpad layers, however, operate at finer granularity, so a
+*further* interpretation articulates each block move into resource transactions — a DMA
+block read, an L2 streamer read. Every model executes the same Domain Flow Program; they
+differ in **how finely they decompose its transactions**, and therefore in what they can
+tell you.
+
+## 2. The corrected layer model
+
+### 2.1 Program layers (what gets executed)
+
+| Layer | What it is | Where it lives today |
+|---|---|---|
+| **DFP — Domain Flow Program** | the recurrence / SURE over an index space with an affine schedule; the source of truth | `domain_flow` (external) |
+| **CSP program** | the sequencing lowering: processes + channels + the ordered tile sequences each process moves. This is what a "block linear-algebra operator" *is* at the machine level | `TileProgram` (L0) is today's block-sequential form; its explicit process/channel structure is the gap (§5.1) |
+| **Stream signatures** | how a tile becomes an element stream at an array edge, with wavefront timing | `StreamProgram` (L1) |
+| **Resource programs** | *derived per interpretation*: each block move decomposed into DMA bursts, L3/L2/L1 reads and writes, compute-tile pushes | the decomposition is the interpreter's job (§2.2); the vocabulary exists in `DMOpcode` |
+
+The DFP is authored; **the CSP program is derived from it** and never hand-written; the
+resource transactions are derived from the CSP program by whichever interpreter is running.
+**Nothing below the DFP is a separate program to maintain** — which is why the CSP layer
+needs a disassembler for inspection, but no source syntax or parser.
+
+### 2.2 Execution levels (how the same program is interpreted)
+
+| Level | Transaction granularity | Time model | The question it answers |
+|---|---|---|---|
+| **L-B** behavioral | whole block move, atomic | none | is the CSP program functionally correct? |
+| **L-T1** block-sequential transactional | one tile / block move | per-move duration, tile-granularity credits and capacity | does the sequencing deliver the right tiles, in the right order, under finite buffers? |
+| **L-T2** resource transactional | the fixed per-resource vocabulary of §3.2: `read`/`write` on every resource, `push` on the compute tile | per-transaction, queueing per engine / port / bank | where is the bandwidth or occupancy bottleneck? |
+| **L-CA** cycle-accurate | protocol events, per cycle | FSMs, arbitration, DRAM timing | protocol compliance; the calibration ground truth |
+
+**The process structure is identical at every level.** A `BlockMover` is the same CSP
+process in all four; what changes is whether its move is one atomic event, one timed
+transfer, a sequence of bank-level transactions, or a per-cycle protocol exchange.
+
+This replaces "fidelity = which engine you pick" with **fidelity = how deeply the
+interpreter decomposes a CSP transaction**. It also explains why values must be identical
+across levels: decomposition changes *when* things happen, never *what* is computed.
+
+### 2.3 Cross-level contracts
+
+These are what make the levels worth having, rather than four unrelated simulators:
+
+1. **Values are level-invariant.** Every level drives the same tile kernels. L-B, L-T1 and
+   L-T2 are **bit-exact** to each other (same accumulation order, fixed by the program's
+   WAW ordering). L-CA matches within a stated tolerance where its order legitimately
+   differs.
+2. **Each finer level calibrates the coarser one.** L-T1 is calibrated against L-T2, and
+   L-T2 against L-CA. An uncalibrated level reports that in its provenance rather than
+   being quoted as measured.
+3. **Timing is monotone in detail, not in value.** A finer level may be faster or slower;
+   what it may not do is contradict the coarser level's *ordering* of the program.
+4. **If a level needs information the CSP program does not carry, that is a program-model
+   gap** — fix the program layer, never special-case the interpreter.
+
+## 3. The virtual platform
+
+The simulator is the foundation of a virtual platform that behaves like the physical KPU
+SoC. That demands one object you load and drive, not a collection of executors.
+
+```
+                    ┌────────────────────────────────────────────┐
+   deployment spec  │            VirtualPlatform                 │
+   (device + engines)──▶ EngineDeployment: processes, channels,  │
+                    │                     resource pools         │
+   program (DFP/CSP)──▶ ProgramImage                             │
+   data ────────────┼──▶ Backdoor: write/read HOST|DRAM|L3|L2|L1 │
+                    │      (bypasses the modeled datapath)       │
+                    │                                            │
+                    │  run(level) ─▶ IInterpreter ─▶ RunResult   │
+                    │  step()     ─▶ one transaction at `level`  │
+                    └────────────────────────────────────────────┘
+```
+
+### 3.1 API sketch
+
+```cpp
+enum class ExecutionLevel { Behavioral, BlockSequential, ResourceTransactional, CycleAccurate };
+
+class VirtualPlatform {
+public:
+    explicit VirtualPlatform(const DeploymentSpec&);       // engines + capacities + bandwidths
+
+    // --- load: program and data arrive through the backdoor, not through the datapath,
+    // so staging weights never distorts the timing of the run that follows.
+    ProgramHandle load_program(const CspProgram&);
+    Backdoor&     backdoor();                              // write/read HOST|DRAM|L3|L2|L1
+
+    // --- execute
+    RunResult run(ProgramHandle, ExecutionLevel);
+    StepCursor step_begin(ProgramHandle, ExecutionLevel);  // single-step at that granularity
+    bool       step(StepCursor&);                          // one transaction per call
+
+    // --- observe
+    const Timeline& timeline() const;                      // per transaction, at the run's level
+    const Stats&    stats() const;
+    const Provenance& provenance() const;                  // deployment, level, calibration state
+};
+```
+
+`Backdoor` is the out-of-band use of each resource's own `load`/`store` state transactions
+(§3.2), over the global address map (§3.3). It already half-exists:
+`ResourceManager::{write,read,copy,memset}` addresses resources directly, and `HOST_MEMORY`
+is already a resource type. It is **timing-free by construction** and flagged in the run's
+provenance, so nobody mistakes a backdoor-staged tensor for one that was DMA'd.
+
+Its purpose is to make the simulator and its tests tractable: put the model into a state
+whose response is known, run one transaction, read the response back.
+
+`step()` is what makes the platform usable for writing and testing Domain Flow Programs:
+at L-T1 you step block moves, at L-T2 you step DMA bursts and L2 reads. The unit of
+stepping *is* the level.
+
+### 3.2 The resource model: a fixed transaction vocabulary
+
+Every modelled resource exposes **two small, fixed surfaces**. This is what keeps L-T2
+calibratable and keeps the interpreters from growing per-device special cases.
+
+**Data transactions** — fixed per resource type:
+
+| Resource | Data transactions |
+|---|---|
+| Memory device | `read`, `write` |
+| Memory controller | `read`, `write` |
+| DMA controller | `read`, `write` |
+| Block mover | `read`, `write` |
+| Streamer | `read`, `write` |
+| NoC | `read`, `write` |
+| **Compute tile** | **`push` only** |
+
+The compute tile is the exception because it is a reactive fabric, not a memory: operands
+are pushed into it and results are pushed out of it. It is never *read* — nothing addresses
+a value inside the array and pulls it. *(Reading of "only understands push" as covering both
+directions; correct me if a result exit is modelled as something other than a push.)*
+
+**State transactions** — the same on every resource:
+
+```
+clear      reset      single-step      load      store
+```
+
+This uniform control surface is what makes deployment automatable: a harness can bring any
+resource to a known state, advance it, and snapshot it without knowing which kind of
+resource it is holding. It is also exactly what the backdoor needs (§3.3) — the backdoor is
+not a separate mechanism but these same `load`/`store` transactions issued **out of band**,
+with no timing effect and a provenance flag recording that they were used.
+
+### 3.3 Addressability, and why that implies multi-device
+
+The backdoor's job is to set up a state whose response is known, then read the response
+back. That only works if **every resource is addressable** — not just DRAM, but each L3
+tile, L2 bank, L1 vector, and compute-tile register file.
+
+So the platform carries a **global address map** over `(device, resource-kind, instance,
+offset)`. Once the map spans resources rather than a flat memory, spanning *devices* costs
+nothing extra structurally — which is why this ADR adopts multi-device from the start
+rather than retrofitting it. A single-device deployment is then just a map with one device
+in it.
+
+Two consequences worth stating:
+
+- **Tests become state-in / state-out.** Write a known L2 bank content, push one tile,
+  read the compute tile's output register: a unit test of the fabric with no program at
+  all. That is a materially different test style from "run a program and compare the
+  answer", and it is the one that finds protocol bugs.
+- **Every level shares the map.** Addressing is a property of the platform, not of an
+  interpreter, so a backdoor setup written for L-T2 works unchanged at L-CA.
+
+### 3.4 Engine deployment — automate, coordinate, scale
+
+A deployment is **data, not code**:
+
+```jsonc
+{
+  "topology": "checkerboard", "compute_tiles": 16,
+  "dma":      { "engines": 4, "bytes_per_cycle": 64, "burst": 256 },
+  "l3":       { "tiles": 8, "banks": 8, "capacity_tiles": 32 },
+  "l2":       { "banks_per_tile": 8 }, "l1": { "vectors": 4 },
+  "movers":   { "block_movers": 4, "streamers": 4 }
+}
+```
+
+- **Automate:** `EngineDeployment::from_spec()` instantiates the processes, channels and
+  resource pools. No engine is constructed by hand in a test or a demo.
+- **Coordinate:** one `VirtualPlatform` owns the deployment; every driver goes through it.
+  The characterization harness becomes a *consumer* of the platform rather than a parallel
+  path — which is the G9 "must connect, not add a fourth path" discipline applied to
+  drivers.
+- **Scale:** a run is a pure function of `(program, data, deployment, level)`. Sweeps are
+  lists of deployments; results are cacheable and parallelizable; CI runs the same function
+  with a small deployment that a design-space exploration runs with hundreds.
+
+## 4. Driver architecture
+
+One interface, four implementations, all fed by the platform:
+
+```cpp
+class IInterpreter {
+public:
+    virtual RunResult run(const CspProgram&, EngineDeployment&, const RunOptions&) = 0;
+    virtual bool      step(StepCursor&) = 0;               // one transaction at this level
+    virtual ExecutionLevel level() const = 0;
+};
+```
+
+| Interpreter | Level | Status |
+|---|---|---|
+| `BehavioralInterpreter` | L-B | **exists** — `TileProgramReference` |
+| `BlockSequentialInterpreter` | L-T1 | **exists** — `TileTransactionExecutor` (#264 increments 1–3), to be reframed under this name |
+| `ResourceTransactionalInterpreter` | L-T2 | **missing** — the main new work |
+| `CycleAccurateInterpreter` | L-CA | **exists in substance** — `ConcurrentTimingExecutor` + the four processes, but consumes `ScheduleResult` rather than the CSP program |
+
+The driver application is then thin and level-agnostic:
+
+```console
+kpu-run --program lu.csp --deploy checkerboard16.json --level resource-transactional \
+        --data A=a.bin --step --timeline out.json
+```
+
+Because the level is a flag, the same command validates a program functionally, then
+measures it at two transaction granularities, then checks it against cycle-accurate — which
+is exactly "write and test Domain Flow Programs at different abstraction levels".
+
+## 5. What this changes in flight
+
+1. **§5.1 — the CSP program needs explicit processes and channels, derived from the DFP.**
+   Today `TileProgram` is a flat tile sequence with logical ports: the block-sequential
+   *projection* of a CSP program, with the process/channel structure implicit. L-T2 needs
+   it explicit, because a DMA burst belongs to the DMA process and an L3 write belongs to
+   the block mover. This is derivation work, not language design (§6.1).
+2. **ADR 0001 D2's tier table is renamed, not reversed.** Its decisions stand: L0 is the
+   portable program, values answer to the reference, one factory selects the engine. What
+   changes is that the engines are *interpreters of one program at different transaction
+   granularities*, and "CSP" stops being used as a fidelity name.
+3. **`TileTransactionExecutor` is L-T1** — correctly built, wrongly named. Increment 4
+   (credits and capacity) is still exactly the right next step, because tile-granularity
+   capacity is what L-T1 is *for*.
+4. **PR #275 should be held.** Its `fidelity-framework.md` edit frames the tiers as
+   value/timing fidelity; under this ADR the framing is transaction granularity. The
+   value-correction half stays right either way.
+5. **The UML doc §1/§3 headings need the same correction**, and gain L-T2.
+
+## 6. Answers recorded (2026-09-22)
+
+1. **The CSP program is derived from the DFP.** It is never hand-authored, so it needs no
+   source language or parser — an in-memory IR with a disassembler is sufficient, and
+   `--program` names a DFP or a serialized CSP IR, not a file anyone writes by hand. §5.1's
+   work is therefore *deriving* explicit processes and channels, not designing a syntax.
+2. **The L-T2 transaction set is fixed per resource type** — see §3.3. Every resource
+   understands read and write, except the compute tile, which only understands push. That
+   makes the vocabulary small, uniform and calibratable.
+3. **The backdoor exists to simplify the simulator and its tests**, by setting up a state
+   whose response is known and reading the result back. It is therefore timing-free and
+   out-of-band by design: writing sets up a situation, reading collects it.
+4. **Multi-device from the start**, and for a specific reason: the backdoor requires every
+   resource to be reachable, which means **every resource must be addressable** (§3.4).
+   Once the address map spans resources, spanning devices is the same mechanism.
+5. **Question withdrawn — it was malformed.** I asked whether L-T2 "subsumes the `.kpubin`
+   path", which presupposed that a fidelity level might execute a *different program*.
+   It does not: **every level executes the same program articulation**; what differs is
+   that L-T2's models articulate lower-level state transactions — a DMA read, an L3 write
+   by the block mover. `.kpubin` is a driver-JIT artifact for one device, not a program
+   layer belonging to a fidelity.
