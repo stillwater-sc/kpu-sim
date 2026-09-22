@@ -6,9 +6,16 @@ and `docs/architecture/adr/0001-program-contract-and-transactional-engine.md` (w
 engine owns which tier).
 
 **How to read it.** Everything marked **[today]** exists and runs. Everything marked
-**[planned]** is decided in ADR 0001 but not yet built, and is drawn dashed. The frozen
-engines (the DMProgram executors, the OFG flow executors — ADR 0001 D6) are deliberately
-absent: they are not part of the path forward.
+**[planned]** is decided but not yet built, and is drawn dashed. The frozen engines (the
+DMProgram executors, the OFG flow executors — ADR 0001 D6) are deliberately absent: they
+are not part of the path forward.
+
+**On naming (ADR 0002):** **CSP is the program layer, not a fidelity.** The engines below
+are *interpreters* of one CSP program at different **transaction granularities** — L-B
+(atomic block move), L-T1 (tile move), L-T2 (per-resource `read`/`write`, `push` into the
+compute tile), L-CA (per-cycle protocol). `ConcurrentTimingExecutor` is the **L-CA
+interpreter**; calling it "the CSP tier" — as an earlier version of this document did —
+confuses a program layer with a fidelity.
 
 ---
 
@@ -29,10 +36,11 @@ flowchart TB
         SP["StreamProgram (L1)<br/>stream signatures, wavefronts"]
     end
 
-    subgraph TIERS["Execution tiers"]
-        REF["TileProgramReference<br/>BEHAVIORAL [today]"]
-        TTE["TileTransactionExecutor<br/>TRANSACTIONAL [planned]"]
-        CSP["ConcurrentTimingExecutor<br/>CYCLE_ACCURATE [today]"]
+    subgraph TIERS["Interpreters — one CSP program, four granularities"]
+        REF["TileProgramReference<br/>L-B behavioral [today]"]
+        TTE["TileTransactionExecutor<br/>L-T1 block-sequential [today]"]
+        RTX["ResourceTransactionalInterpreter<br/>L-T2 resource [planned]"]
+        CSP["ConcurrentTimingExecutor<br/>L-CA cycle-accurate [today]"]
     end
 
     subgraph ANA["Analysis"]
@@ -43,20 +51,25 @@ flowchart TB
     DFG -.->|"planned front end"| TP
     KG -->|"GraphCspExecutor [today]"| CSP
     TP --> REF
-    TP -.-> TTE
+    TP --> TTE
+    TP -.-> RTX
     TP --> DAG
     SP --> DAG
     SP -.-> TTE
     TP -.->|"driver JIT, planned"| CSP
     REF --> MET
-    TTE -.-> MET
+    TTE --> MET
+    RTX -.-> MET
     CSP --> MET
     DAG --> MET
 ```
 
-The one gap worth naming: today `KernelGraph` reaches the cycle-accurate tier directly,
-while `TileProgram` reaches only the reference and the analysis harness. Closing that —
-one program, three tiers — is what ADR 0001 decided and what #264 and #265 implement.
+What runs today, precisely: `TileProgram` reaches **L-B** (`TileProgramReference`), **L-T1**
+(`TileTransactionExecutor`, increments 1–3 of #264) and the analysis harness, while
+`KernelGraph` reaches **L-CA** through `GraphCspExecutor`. Two paths are still planned: the
+**L-T2** resource interpreter, and the **driver JIT** that would let an L0 program reach
+L-CA. Closing those — one program, every level — is what ADR 0001 and ADR 0002 decided and
+what #264 and #265 implement.
 
 ---
 
@@ -220,7 +233,7 @@ against it.
 
 ---
 
-## 3. The cycle-accurate tier (CSP)
+## 3. The L-CA interpreter (cycle-accurate)
 
 ```mermaid
 classDiagram
@@ -434,11 +447,18 @@ sequenceDiagram
     Dag-->>CLI: Graphviz DAG
 ```
 
-## 6. Sequence — the target transactional execution [planned]
+## 6. Sequence — L-T1 transactional execution [today, except loading from a file]
 
-The path ADR 0001 decided and #264/#265 implement. Note where it differs from §5: the
-program arrives **from a file**, and ops fire on credits and residency instead of in
-program order.
+This is the L-T1 interpreter, and increments 1–3 of #264 shipped the flow below: ops fire
+on **dependencies and free resources** rather than in program order, values stay
+bit-identical to the reference, and the run reports timeline, stats and provenance.
+
+**Two steps are not here yet**, and the diagram marks the first:
+- **finite-buffer credits and capacity** (increment 4) — L-T1 today contends compute tiles
+  and movement lanes, but does not enforce buffer occupancy, so it cannot yet answer
+  "does this survive finite buffers?";
+- **loading from a file** — the program is constructed in memory until #265 lands the L0
+  serializer.
 
 ```mermaid
 sequenceDiagram
@@ -447,7 +467,7 @@ sequenceDiagram
     participant F as executor factory
     participant TTE as TileTransactionExecutor
     participant Dep as dependency model
-    participant Cred as credits + residency
+    participant Res as resources (CF tiles, lanes)
     participant K as TileKernels
 
     Host->>Host: deserialize TileProgram from file
@@ -457,12 +477,13 @@ sequenceDiagram
     Host->>TTE: run(request)
     TTE->>Dep: recover tile + pivot-slot edges
     loop until no ops remain
-        TTE->>Cred: inputs resident? output credit? resource free?
-        Cred-->>TTE: ready set
+        TTE->>Res: dependencies met? a compute tile or lane free?
+        Res-->>TTE: ready set
+        Note over TTE,Res: increment 4 adds: inputs resident? output credit?<br/>and releases the slot after the last consumer
         TTE->>K: apply(program, op, state) for the fired op
         K-->>TTE: values mutated in place
         TTE->>TTE: schedule completion event, advance to next event time
-        TTE->>Cred: release slot after last consumer
+        TTE->>Res: release the resource on completion
     end
     TTE-->>Host: RunResult: values, timeline, stats, provenance
     Host->>Host: assert bit-exact vs TileProgramReference
@@ -488,7 +509,10 @@ sequenceDiagram
 | `ScheduleExecutor`, functional executors | `include/sw/kpu/timing/schedule/` |
 | `GraphCspExecutor`, `RunStats`, model specs | `include/sw/kpu/timing/graph/` |
 | `KernelGraph`, `KernelNode`, `KernelEdge` | `include/sw/kpu/kernel_graph.hpp` |
-| `TileTransactionExecutor`, `Placement` **[planned]** | `docs/plans/tile-transaction-executor.md` |
+| `TileTransactionExecutor`, `TileExecutionRequest`, `TileRunResult` | `include/sw/kpu/program/tile_transaction_executor.hpp` |
+| `Placement` | `include/sw/kpu/program/placement.hpp` |
+| `TileDependencies`, `TileDepKind` | `include/sw/kpu/program/tile_dependencies.hpp` |
+| `TileWork`, `tile_work_of`, `quantize_cycles` | `include/sw/kpu/program/tile_work.hpp` |
 
 ## 8. Deliberate omissions
 

@@ -16,70 +16,95 @@ The KPU simulator supports multiple levels of simulation fidelity, allowing user
 
 ## Fidelity Levels
 
-### Level 0: BEHAVIORAL (Functional)
+### The organising idea: fidelity is transaction granularity
+
+**CSP — communicating sequential processes — is the program layer, not a fidelity**
+(ADR 0002). One CSP program, derived from a Domain Flow Program, is executed by every
+level below. What changes between levels is **how finely the interpreter decomposes a CSP
+transaction**, and therefore what the run can tell you.
+
+Two consequences follow, and they are what make the levels worth having:
+
+- **Values are level-invariant.** Every level drives the same tile kernels, so decomposition
+  changes *when* things happen, never *what* is computed. L-B, L-T1 and L-T2 are bit-exact
+  to one another; L-CA matches within a stated tolerance where its accumulation order
+  legitimately differs.
+- **Each finer level calibrates the coarser one**, and an uncalibrated level says so in its
+  provenance rather than being quoted as measured.
+
+### Level L-B: BEHAVIORAL (functional)
 
 **Purpose**: Functional correctness verification, software bring-up
 
 | Aspect | Behavior |
 |--------|----------|
-| Timing | Instant or fixed latency |
-| State | Minimal (data storage only) |
-| Queuing | None |
-| Contention | None |
+| **Values** | **Exact** |
+| Transaction granularity | a whole block move, atomic |
+| Timing | none |
 | Speed | ~100-1000x faster than cycle-accurate |
 
-**Use Cases**:
-- Software/firmware development
-- Functional verification
-- Unit testing
-- CI/CD pipelines
+**Answers**: is the CSP program functionally correct?
 
-### Level 1: TRANSACTIONAL (Approximate timing, exact values)
+**Use Cases**: software/firmware development, functional verification, unit testing, CI.
 
-**Purpose**: Early architecture exploration, performance estimation
+### Level L-T1: BLOCK-SEQUENTIAL TRANSACTIONAL
+
+**Purpose**: Does the sequencing hold up once moves take time and resources are contended?
 
 | Aspect | Behavior |
 |--------|----------|
-| **Values** | **Exact — bit-identical to BEHAVIORAL** (ADR 0001 D4) |
-| Timing | Approximate: calibrated means today, distributions later (#268) |
-| State | Aggregate (busy/idle) |
-| Queuing | Basic contention modeling |
-| Contention | Queue depth limits |
+| **Values** | **Exact — bit-identical to L-B** |
+| Transaction granularity | one tile / block move |
+| Timing | per-move duration, **uncalibrated today** — every run reports `calibrated: false` in its provenance until the calibration step of #264 increment 6 lands. Distributions are later still (#268) |
+| State | compute tiles and movement lanes are contended. **Finite-buffer credits and capacity are NOT yet enforced** — that is #264 increment 4 |
 | Speed | ~10-100x faster than cycle-accurate |
 
-> **"Approximate" describes the timing, never the values.** This tier shares the L0 tile
-> kernels with the functional reference, so its arithmetic is the same arithmetic — that is
-> what makes it usable for validating programs and not only for estimating their cost. An
-> earlier version of this table implied statistical values; ADR 0001 D4 settled it the
-> other way.
+**Answers today**: does the program deliver the right tiles in the right order, and how does
+its makespan move with resources? **Not yet**: whether it survives finite buffers — do not
+rely on this level for capacity validation until increment 4.
 
-**Use Cases**:
-- Architecture design space exploration
-- Workload characterization
-- Bottleneck identification
-- Power/performance estimation
+### Level L-T2: RESOURCE TRANSACTIONAL
 
-### Level 2: CYCLE_ACCURATE (Detailed)
-
-**Purpose**: Precise performance analysis, timing validation
+**Purpose**: Where is the bandwidth or occupancy bottleneck?
 
 | Aspect | Behavior |
 |--------|----------|
-| Timing | Per-cycle protocol timing |
-| State | Full state machine |
-| Queuing | Realistic scheduling (FR-FCFS, etc.) |
-| Contention | Bank conflicts, bus arbitration |
-| Speed | Baseline (1x) |
+| **Values** | **Exact — bit-identical to L-B** |
+| Transaction granularity | the fixed per-resource vocabulary: `read`/`write` on every resource, `push` on the compute tile |
+| Timing | per transaction, with queueing per engine, port and bank |
+| State | per-resource queues and occupancy |
 
-**Use Cases**:
-- Performance analysis
-- Timing closure verification
-- Hardware/software co-design
-- Trace generation for validation
+**Answers**: which resource actually limits this program? A block move here articulates
+into what the hardware really does — a DMA read, an L3 write by the block mover, an L2
+streamer read, a push into the compute tile.
+
+### Level L-CA: CYCLE_ACCURATE (detailed)
+
+**Purpose**: Precise performance analysis, timing validation, calibration ground truth
+
+| Aspect | Behavior |
+|--------|----------|
+| **Values** | **Within tolerance of L-B** — accumulation order legitimately differs, so this level is checked against a tolerance, never for bit-equality |
+| Transaction granularity | protocol events, per cycle |
+| Timing | per-cycle protocol timing, full state machines |
+| Queuing | realistic scheduling (FR-FCFS, etc.) |
+| Contention | bank conflicts, bus arbitration |
+| Speed | baseline (1x) |
+
+**Answers**: is the protocol right, and what do the coarser levels calibrate against?
+
+**Use Cases**: performance analysis, timing closure, hardware/software co-design, trace
+generation for validation.
 
 ---
 
 ## Component Fidelity Matrix
+
+> **Note:** this matrix predates ADR 0002's four-level model. Its BEHAVIORAL,
+> TRANSACTIONAL and CYCLE_ACCURATE columns correspond to **L-B**, **L-T1** and **L-CA**.
+> The **L-T2** column — each component's fixed `read`/`write` (`push` for the compute tile)
+> vocabulary and its queueing — is added as the resource interpreter lands, rather than
+> guessed at here.
 
 Each KPU component supports the following fidelity levels:
 

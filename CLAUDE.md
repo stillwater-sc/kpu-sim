@@ -18,19 +18,24 @@ This document provides guidance for Claude Code when working on the KPU-SIM proj
 ## Repository Purpose: Multi-Fidelity Simulation
 
 **READ THIS FIRST** - The KPU simulator is a **multi-fidelity simulation environment**
-that supports three tiers of modeling abstraction:
+that interprets one program at **four levels** of transaction granularity:
 
 ### Simulation Fidelity Tiers
 
-| Tier | Purpose | Speed | Computes Values? |
-|------|---------|-------|------------------|
-| **BEHAVIORAL** | Functional correctness, software bring-up | ~100-1000x | **YES** |
-| **TRANSACTIONAL** | Architecture exploration, bottleneck ID | ~10-100x | **YES — exact**, bit-identical to BEHAVIORAL |
-| **CYCLE_ACCURATE** | Performance analysis, timing validation | 1x (baseline) | **YES** — float32, within tolerance of BEHAVIORAL |
+**CSP is the program layer, not a fidelity** (ADR 0002). One CSP program — derived from a
+Domain Flow Program — is executed by every level; what differs is **how finely the level
+decomposes a CSP transaction**.
 
-**Every tier computes values.** The tiers differ in the *timing* they model, not in whether
-the arithmetic happens (ADR 0001 D4). A tier that returns timing without values is not a
-cheaper simulation — it is an unvalidated one.
+| Level | Decomposes a transaction into | Speed | Computes Values? |
+|-------|-------------------------------|-------|------------------|
+| **L-B** behavioral | a whole block move, atomic | ~100-1000x | **YES** |
+| **L-T1** block-sequential | one tile move (finite-buffer credits and capacity arrive in #264 increment 4) | ~10-100x | **YES — exact**, bit-identical to L-B |
+| **L-T2** resource transactional | `read`/`write` per resource; `push` into the compute tile | — | **YES — exact**, bit-identical to L-B |
+| **L-CA** cycle-accurate | protocol events, per cycle | 1x (baseline) | **YES** — within tolerance of L-B |
+
+**Every level computes values.** Decomposition changes *when* things happen, never *what*
+is computed. A level that returns timing without values is not a cheaper simulation — it is
+an unvalidated one. Full model: `docs/architecture/adr/0002-csp-interpretations-and-virtual-platform.md`.
 
 ### The Multi-Fidelity Philosophy
 
@@ -60,8 +65,8 @@ The progression works as follows:
 **Non-negotiable:** the BEHAVIORAL tier computes actual values and propagates results.
 A behavioral component that only models timing is wrong.
 
-**Authorities:** values answer to the L0 `TileProgramReference`, timing to the
-cycle-accurate CSP tier. Before comparing either, read D5 and §7.5 of
+**Authorities:** values answer to the L0 `TileProgramReference`, timing to **L-CA**, the
+cycle-accurate level. Before comparing either, read D5 and §7.5 of
 `docs/architecture/adr/0001-program-contract-and-transactional-engine.md` — they give
 the required bar per tier (bit-exact vs tolerance) and the comparator to use.
 
