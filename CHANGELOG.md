@@ -275,6 +275,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **ADR 0002: CSP is a program layer, not a fidelity — fidelity is transaction
+  granularity.** The documented simulation model is reframed from a value/timing fidelity
+  ladder into **four levels of transaction granularity over one program**: **L-B**
+  behavioral (atomic block move), **L-T1** block-sequential (one tile move),
+  **L-T2** resource-transactional (`read`/`write` per resource, `push` into the compute
+  tile) and **L-CA** cycle-accurate (per-cycle protocol). Communicating Sequential
+  Processes are the **sequencing mechanism of the Domain Flow Program**, derived from it
+  and never hand-authored, so CSP has a transactional *and* a cycle-accurate
+  interpretation rather than being a tier of its own. **Every level computes values** —
+  bit-exact for L-B/L-T1/L-T2, within tolerance for L-CA — because decomposition changes
+  *when* things happen and never *what* is computed; a level that returns timing without
+  values is not a cheaper simulation but an unvalidated one. Adds the fixed per-resource
+  transaction vocabulary, the **backdoor** as a global, unphysical, simulation-only
+  operator with its own interface (never routed through the resources' own physical
+  `load`/`store`), a virtual platform whose run is a pure function of
+  `(program, initial_state, deployment, level)`, and a level-agnostic driver
+  architecture. `TileTransactionExecutor` is the **L-T1 interpreter** — correctly built,
+  and still to be renamed. `docs/architecture/adr/0002-*.md`; ADR 0001's decisions stand
+  with its D2 tier table renamed, not reversed. Follow-ups filed as #281-#286.
+
 - **L0 tile kernels extracted into `tile_kernels.hpp` (increment 1 of #264).** The
   per-op arithmetic of each `TileOpKind` (GEMM/MatMulAccum, GETRF, LASWP, both TRSM
   variants) and the transient state it carries between ops (pivot slots + row
