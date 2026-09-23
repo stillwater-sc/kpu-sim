@@ -387,35 +387,53 @@ public:
             return found;
         };
 
+        // Passes REPEAT while one of them fires something. Firing changes both the seeker
+        // and the residency set, so an op in a queue this pass already walked past can
+        // become admissible before the pass ends: the move queue is scanned before compute,
+        // and a compute firing can hand the seeker to a movement op. Stopping after one
+        // pass leaves that lane idle until the next completion and books a credit stall
+        // against capacity that was in fact available.
+        //
+        // The repeat is amortised, not quadratic: a pass only repeats when it fired at
+        // least one op, and the run fires each op exactly once.
+        //
+        // A stall is therefore counted only on a pass that fires NOTHING anywhere. Counting
+        // per failed queue scan would charge a stall to a moment that the very next pass
+        // resolves.
         auto try_fire = [&]() {
             bool any = false;
-            seeker = earliest_slot_seeker();
-            auto fired_seeker = [&](std::size_t op) {      // advance to the next one
-                if (seeker == static_cast<long>(op)) seeker = earliest_slot_seeker();
-            };
-            for (Dim l = 0; l < n_lanes && !ready_move.empty(); ++l) {
-                if (lane_busy[l]) continue;
-                std::size_t op = 0;
-                if (!take_admissible(ready_move, op)) { credit_stalls += !exhaustive; break; }
-                fire(op, ResourceKind::MoveLane, l);
-                fired_seeker(op);
-                any = true;
-            }
-            for (Dim t = 0; t < n_cf && !ready_compute.empty(); ++t) {
-                if (cf_busy[t]) continue;
-                std::size_t op = 0;
-                if (!take_admissible(ready_compute, op)) { credit_stalls += !exhaustive; break; }
-                fire(op, ResourceKind::ComputeTile, t);
-                fired_seeker(op);
-                any = true;
-            }
-            for (Dim t = 0; t < ready_pinned.size(); ++t) {
-                if (cf_busy[t] || ready_pinned[t].empty()) continue;
-                std::size_t op = 0;
-                if (!take_admissible(ready_pinned[t], op)) { credit_stalls += !exhaustive; continue; }
-                fire(op, ResourceKind::ComputeTile, t);
-                fired_seeker(op);
-                any = true;
+            for (bool pass_progress = true; pass_progress; ) {
+                pass_progress = false;
+                std::size_t pass_stalls = 0;
+                seeker = earliest_slot_seeker();
+                auto fired_seeker = [&](std::size_t op) {    // advance to the next one
+                    if (seeker == static_cast<long>(op)) seeker = earliest_slot_seeker();
+                };
+                for (Dim l = 0; l < n_lanes && !ready_move.empty(); ++l) {
+                    if (lane_busy[l]) continue;
+                    std::size_t op = 0;
+                    if (!take_admissible(ready_move, op)) { ++pass_stalls; break; }
+                    fire(op, ResourceKind::MoveLane, l);
+                    fired_seeker(op);
+                    any = pass_progress = true;
+                }
+                for (Dim t = 0; t < n_cf && !ready_compute.empty(); ++t) {
+                    if (cf_busy[t]) continue;
+                    std::size_t op = 0;
+                    if (!take_admissible(ready_compute, op)) { ++pass_stalls; break; }
+                    fire(op, ResourceKind::ComputeTile, t);
+                    fired_seeker(op);
+                    any = pass_progress = true;
+                }
+                for (Dim t = 0; t < ready_pinned.size(); ++t) {
+                    if (cf_busy[t] || ready_pinned[t].empty()) continue;
+                    std::size_t op = 0;
+                    if (!take_admissible(ready_pinned[t], op)) { ++pass_stalls; continue; }
+                    fire(op, ResourceKind::ComputeTile, t);
+                    fired_seeker(op);
+                    any = pass_progress = true;
+                }
+                if (!pass_progress && !exhaustive) credit_stalls += pass_stalls;
             }
             return any;
         };
