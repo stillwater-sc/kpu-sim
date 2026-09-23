@@ -14,9 +14,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   residency, and refuses an over-committed program with a diagnosis instead of wedging.
   The invariant that makes the credit model deadlock-free is that **new slots are acquired
   in program order**: the weaker rule ("do not promote a later ready op past an earlier
-  one") wedges at every budget **below the unbounded run's peak residency** — measured at
-  29 tiles for this program, so it fails at 25 even though the program's live set is only
-  21 — because feeds are dependency-ready immediately and take every slot, while the
+  one") wedges at every **finite positive capacity below the unbounded run's peak
+  residency** — measured at 29 tiles for this program, so it fails at 25 even though the
+  program's live set is only 21 (`l3_tiles == 0` means unbounded, not zero capacity) — because feeds are dependency-ready immediately and take every slot, while the
   computes that would retire those tiles are waiting on those very feeds. At 29 or more it
   is capacity-equivalent to unbounded and cannot deadlock, so the rule is not universally
   broken; what it cannot do is run in a budget between the true live set (21) and its own

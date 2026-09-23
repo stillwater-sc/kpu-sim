@@ -304,7 +304,8 @@ public:
         //
         // Measured failure of the weaker rule, on a 64^3 T=16 GEMM whose live set is 21
         // tiles and whose greedy (unbounded) peak residency is 29: it WEDGES at every
-        // budget below 29 — 25 included, comfortably above the 21 it actually needs — and
+        // FINITE POSITIVE capacity below 29 — 25 included, comfortably above the 21 it
+        // actually needs, and noting that l3_tiles == 0 means unbounded here, not zero — and
         // succeeds at 29 or more, where it is capacity-equivalent to unbounded and so
         // cannot deadlock. The rule is therefore not universally broken; it simply cannot
         // use a budget between the true live set and its own greedy peak, which is exactly
