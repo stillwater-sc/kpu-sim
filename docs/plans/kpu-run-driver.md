@@ -141,10 +141,25 @@ lists. #286 renders this; it does not come for free with it.
    `BUILD_TESTING` is empty and `examples/characterize`'s smoke test had **never
    registered**. The guard is `KPU_BUILD_TESTS`; both are fixed, which is why the suite
    went from 150 to 155 tests.
-2. **Device knobs.** `--l3-tiles`, `--dram-lanes`, `--dram-bytes-per-cycle`,
-   `--onchip-lanes`, `--onchip-bytes-per-cycle`, `--compute-tiles`, `--move-lanes`,
-   `--streams`; plus `--timeline` (D5). This is what makes the per-hop model (#264
-   increment 5) usable by a human.
+2. **Device knobs and the timeline.** — **done.** The knobs are **per CSP process**, since
+   #292 established that movement is a chain and lanes belong to the process:
+   `--dma-engines`, `--block-movers`, `--streamers`, `--noc-links` with a
+   `--*-bytes-per-cycle` each, plus `--compute-tiles`, `--l3-tiles`, `--macs-per-cycle`
+   and `--streams <dataflow>`. (This entry previously listed `--dram-lanes` and
+   `--onchip-lanes`, which were the collapsed model's knobs and no longer exist.)
+
+   `--timeline out.json` writes Chrome Trace Event Format through the existing exporter,
+   **one event per hop** — a transfer's legs run on different processes at different
+   times, and collapsing them into one span would hide exactly what the chain exists to
+   show. As D5 warned, this was a mapping to write: `TileOpRecord`/`HopRecord` →
+   `TraceEntry` in `driver/timeline_trace.hpp`, since nothing serialized those records.
+   Each hop lands on the trace component matching its process (`DMA_ENGINE`,
+   `BLOCK_MOVER`, `STREAMER`), carries the bytes it moved, and its interval is asserted
+   to equal the leg's interval exactly.
+
+   `--timeline` is **refused** when only L-B was asked for, because L-B models no
+   intervals; and `--streams` is refused for LU, which has no stream derivation, rather
+   than silently ignoring the flag.
 3. **`--step`** with the cursor of D4, at L-B and L-T1.
 4. **Program from a file**, once #265 lands, so `--program foo.l0` is literal rather than
    a derivation spec.

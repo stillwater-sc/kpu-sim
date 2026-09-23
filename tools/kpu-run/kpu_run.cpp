@@ -15,6 +15,8 @@
 // ============================================================================
 #include <sw/kpu/program/driver/execution_level.hpp>
 #include <sw/kpu/program/driver/program_spec.hpp>
+#include <sw/kpu/program/driver/timeline_trace.hpp>
+#include <sw/trace/trace_exporter.hpp>
 
 #include <cstring>
 #include <iomanip>
@@ -26,6 +28,31 @@ using namespace sw::kpu::program;
 using namespace sw::kpu::program::driver;
 
 namespace {
+
+// Bandwidths are doubles, and std::stod has the same hazards as std::stoul: it throws
+// on junk, accepts trailing characters, and would abort the process rather than exit 2.
+bool parse_rate(const std::vector<std::string>& a, const char* key, double fallback,
+                double& out, std::string& error) {
+    const std::string raw = arg(a, key, "");
+    if (raw.empty()) { out = fallback; return true; }
+    try {
+        std::size_t consumed = 0;
+        const double v = std::stod(raw, &consumed);
+        if (consumed != raw.size()) {
+            error = std::string(key) + ": '" + raw + "' has trailing characters";
+            return false;
+        }
+        if (!(v > 0.0)) {
+            error = std::string(key) + ": '" + raw + "' must be positive";
+            return false;
+        }
+        out = v;
+        return true;
+    } catch (const std::exception&) {
+        error = std::string(key) + ": '" + raw + "' is not a number";
+        return false;
+    }
+}
 
 void usage() {
     std::cout <<
@@ -42,8 +69,21 @@ R"(kpu-run — execute a Domain Flow Program at one or more levels and compare t
   --dma-engines <n>         DMA engines   (DRAM<->L3)    (default 1)
   --block-movers <n>        BlockMovers   (L3<->L2)      (default 1)
   --streamers <n>           Streamers     (L2<->L1)      (default 1)
+  --noc-links <n>           NoC links     (L3->L3 reuse) (default 0 = none)
+  --dma-bytes-per-cycle <b> per DMA engine               (default 64)
+  --bm-bytes-per-cycle <b>  per BlockMover               (default 128)
+  --str-bytes-per-cycle <b> per Streamer                 (default 256)
+  --noc-bytes-per-cycle <b> per NoC link                 (default 128)
+  --macs-per-cycle <m>      one compute tile's throughput (default 256)
+  --streams <dataflow>      derive an L1 stream program: output-stationary|os,
+                            weight-stationary|ws, a-stationary|as,
+                            fully-streaming|hex  (matmul only)
+  --timeline <file.json>    Chrome Trace Event Format, one event PER HOP
   --no-compare              run the levels, do not diff values
   -h, --help
+
+Every *-bytes-per-cycle is PER LANE, never aggregate: lanes give concurrency, never
+speed-up (design note §6.3).
 
 Values are compared bit-exactly against the behavioral level, which is the
 authority (ADR 0001 D5). A disagreement exits 1.
@@ -160,10 +200,44 @@ int main(int argc, char** argv) {
         std::cerr << "kpu-run: " << err << "\n";
         return 2;
     }
+    if (!dim_opt("--noc-links", 0, ds.noc_links)) {
+        std::cerr << "kpu-run: " << err << "\n";
+        return 2;
+    }
+    if (!parse_rate(a, "--dma-bytes-per-cycle", ds.dma_bytes_per_cycle,
+                    ds.dma_bytes_per_cycle, err) ||
+        !parse_rate(a, "--bm-bytes-per-cycle", ds.bm_bytes_per_cycle,
+                    ds.bm_bytes_per_cycle, err) ||
+        !parse_rate(a, "--str-bytes-per-cycle", ds.str_bytes_per_cycle,
+                    ds.str_bytes_per_cycle, err) ||
+        !parse_rate(a, "--noc-bytes-per-cycle", ds.noc_bytes_per_cycle,
+                    ds.noc_bytes_per_cycle, err) ||
+        !parse_rate(a, "--macs-per-cycle", ds.macs_per_cycle, ds.macs_per_cycle, err)) {
+        std::cerr << "kpu-run: " << err << "\n";
+        return 2;
+    }
     if (ds.compute_tiles == 0) {
         std::cerr << "kpu-run: --compute-tiles must be non-zero\n";
         return 2;
     }
+
+    // An L1 stream program is matmul-only, and saying so beats deriving an empty one and
+    // reporting timing that silently ignored the flag.
+    const std::string dataflow = arg(a, "--streams", "");
+    if (!dataflow.empty()) {
+        if (!known_dataflow(dataflow)) {
+            std::cerr << "kpu-run: unknown --streams '" << dataflow
+                      << "' (output-stationary|os, weight-stationary|ws, "
+                         "a-stationary|as, fully-streaming|hex)\n";
+            return 2;
+        }
+        if (ps.algo != "matmul") {
+            std::cerr << "kpu-run: --streams is derived for matmul only, not '"
+                      << ps.algo << "'\n";
+            return 2;
+        }
+    }
+    const std::string timeline_path = arg(a, "--timeline", "");
     if (!known_topology(ds.topology)) {
         std::cerr << "kpu-run: unknown --topology '" << ds.topology
                   << "' (single | news | checkerboard)\n";
@@ -211,20 +285,50 @@ int main(int argc, char** argv) {
     // the models rather than of leftover state.
     std::vector<TileProgram> programs;
     std::vector<RunOutcome> outcomes;
+    std::vector<stream::StreamProgram> streams;
     programs.reserve(levels.size());
+    streams.reserve(levels.size());
     for (ExecutionLevel l : levels) {
         try {
             // derive() and fill() throw too -- on an operand a spec does not declare, for
             // one -- so they belong inside the guard rather than beside it.
             programs.push_back(derive(ps));
             fill(programs.back(), ps);
+            // The stream program is derived PER PROGRAM: it indexes ops of the program it
+            // was derived from, so sharing one across levels would alias the wrong ops.
+            streams.push_back(dataflow.empty()
+                                  ? stream::StreamProgram{}
+                                  : stream::derive_matmul_streams(programs.back(),
+                                                                  map_for(dataflow)));
             outcomes.push_back(run_at(l, programs.back(), device,
-                                     Placement::single(device.compute_tiles)));
+                                     Placement::single(device.compute_tiles),
+                                     dataflow.empty() ? nullptr : &streams.back()));
         } catch (const std::exception& e) {
             std::cerr << "kpu-run: " << e.what() << "\n";
             return 2;
         }
         print_run(outcomes.back());
+    }
+
+    // --timeline: one event per hop, from the level that models resources. L-B has no
+    // intervals to report, so there is nothing to write from it.
+    if (!timeline_path.empty()) {
+        std::size_t src = levels.size();
+        for (std::size_t i = 0; i < levels.size(); ++i)
+            if (!outcomes[i].timeline.empty()) src = i;
+        if (src == levels.size()) {
+            std::cerr << "kpu-run: --timeline needs a level that models resources; "
+                      << "L-B reports no intervals\n";
+            return 2;
+        }
+        const auto entries = to_trace_entries(programs[src], outcomes[src].timeline,
+                                              device.element_bytes);
+        if (!sw::trace::ChromeTraceExporter::export_traces(timeline_path, entries)) {
+            std::cerr << "kpu-run: could not write '" << timeline_path << "'\n";
+            return 2;
+        }
+        std::cout << "\ntimeline  " << entries.size() << " events (one per hop) from "
+                  << short_name(levels[src]) << " -> " << timeline_path << "\n";
     }
 
     if (!compare || levels.size() < 2) {

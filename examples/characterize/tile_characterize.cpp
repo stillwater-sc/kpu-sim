@@ -112,20 +112,9 @@ DeviceDescriptor make_device(const std::string& topo, Dim cf,
     return sw::kpu::program::driver::make_device(s);
 }
 
-bool known_dataflow(const std::string& n) {
-    return n == "output-stationary" || n == "os" ||
-           n == "weight-stationary" || n == "ws" ||
-           n == "a-stationary"      || n == "as" ||
-           n == "fully-streaming"   || n == "hex";
-}
-
-// dataflow name (or alias) -> space-time mapping (caller must pre-validate via known_dataflow)
-stream::SpaceTimeMap map_for(const std::string& name) {
-    if (name == "weight-stationary" || name == "ws") return stream::SpaceTimeMap::b_stationary();
-    if (name == "a-stationary"      || name == "as") return stream::SpaceTimeMap::a_stationary();
-    if (name == "fully-streaming"   || name == "hex") return stream::SpaceTimeMap::fully_streaming();
-    return stream::SpaceTimeMap::output_stationary();   // "output-stationary" / "os"
-}
+// The dataflow name -> space-time mapping is shared with kpu-run (#285 §D1).
+using sw::kpu::program::driver::known_dataflow;
+using sw::kpu::program::driver::map_for;
 
 } // namespace
 

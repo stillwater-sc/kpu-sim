@@ -18,6 +18,7 @@
 #include <sw/kpu/program/characterize/device_model.hpp>
 #include <sw/kpu/program/derive/lu_tile_program.hpp>
 #include <sw/kpu/program/derive/matmul_tile_program.hpp>
+#include <sw/kpu/program/stream/derive/matmul_streams.hpp>
 #include <sw/kpu/program/tile_program.hpp>
 
 #include <cstdint>
@@ -133,6 +134,23 @@ inline const char* result_operand(const ProgramSpec& s) {
     return s.algo == "lu" ? "A" : "C";      // LU factors in place
 }
 
+// ---- the L1 stream program (optional) ---------------------------------------
+// The dataflow name -> space-time mapping, shared with tile_characterize for the same
+// reason as everything else here: two spellings of "output-stationary" drift.
+inline bool known_dataflow(const std::string& n) {
+    return n == "output-stationary" || n == "os" ||
+           n == "weight-stationary" || n == "ws" ||
+           n == "a-stationary"      || n == "as" ||
+           n == "fully-streaming"   || n == "hex";
+}
+
+inline stream::SpaceTimeMap map_for(const std::string& name) {
+    if (name == "weight-stationary" || name == "ws") return stream::SpaceTimeMap::b_stationary();
+    if (name == "a-stationary"      || name == "as") return stream::SpaceTimeMap::a_stationary();
+    if (name == "fully-streaming"   || name == "hex") return stream::SpaceTimeMap::fully_streaming();
+    return stream::SpaceTimeMap::output_stationary();   // "output-stationary" / "os"
+}
+
 // ---- what device to run it on ----------------------------------------------
 // Movement is per CSP process (design note §6): DMA (DRAM<->L3), BlockMover
 // (L3<->L2) and Streamer (L2<->L1) each own their lanes. There is no aggregate
@@ -149,6 +167,8 @@ struct DeviceSpec {
     double bm_bytes_per_cycle = 128.0;
     Dim streamers = 1;
     double str_bytes_per_cycle = 256.0;
+    Dim noc_links = 0;                      // 0 = topology declares no L3<->L3 path
+    double noc_bytes_per_cycle = 128.0;
 
     // Analytical-harness coefficients; the executor does not use these.
     double bytes_per_cycle = 64.0;
@@ -186,6 +206,8 @@ inline characterize::DeviceDescriptor make_device(const DeviceSpec& s) {
     d.bm_bytes_per_cycle = s.bm_bytes_per_cycle;
     d.streamers = s.streamers;
     d.str_bytes_per_cycle = s.str_bytes_per_cycle;
+    d.noc_links = s.noc_links;
+    d.noc_bytes_per_cycle = s.noc_bytes_per_cycle;
     return d;
 }
 

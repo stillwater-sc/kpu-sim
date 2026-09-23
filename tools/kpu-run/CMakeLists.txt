@@ -45,6 +45,51 @@ if(KPU_BUILD_TESTS)
     set_tests_properties(kpu_run_refuses_unimplemented_level PROPERTIES
         LABELS "program;driver")
 
+    # --timeline must write a trace the existing tooling can read, and must REFUSE when
+    # only L-B was asked for, since L-B models no intervals to write.
+    add_test(NAME kpu_run_timeline_written
+        COMMAND ${CMAKE_COMMAND}
+            -DCMD=$<TARGET_FILE:run>
+            -DARGS=--algo$<SEMICOLON>matmul$<SEMICOLON>--size$<SEMICOLON>32$<SEMICOLON>--tile$<SEMICOLON>16$<SEMICOLON>--timeline$<SEMICOLON>${CMAKE_CURRENT_BINARY_DIR}/kpu_run_timeline.json
+            -DEXPECT_CODE=0
+            -DMUST_MATCH=events..one.per.hop
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/expect_exit.cmake
+    )
+    set_tests_properties(kpu_run_timeline_written PROPERTIES LABELS "program;driver")
+
+    add_test(NAME kpu_run_timeline_refused_without_timing
+        COMMAND ${CMAKE_COMMAND}
+            -DCMD=$<TARGET_FILE:run>
+            -DARGS=--level$<SEMICOLON>behavioral$<SEMICOLON>--timeline$<SEMICOLON>${CMAKE_CURRENT_BINARY_DIR}/should_not_exist.json
+            -DEXPECT_CODE=2
+            -DMUST_MATCH=needs.a.level.that.models.resources
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/expect_exit.cmake
+    )
+    set_tests_properties(kpu_run_timeline_refused_without_timing PROPERTIES
+        LABELS "program;driver")
+
+    # An unknown dataflow, and a dataflow on an algorithm that has no stream derivation,
+    # must both be refused rather than silently ignored.
+    add_test(NAME kpu_run_rejects_bad_streams
+        COMMAND ${CMAKE_COMMAND}
+            -DCMD=$<TARGET_FILE:run>
+            -DARGS=--streams$<SEMICOLON>sideways
+            -DEXPECT_CODE=2
+            -DMUST_MATCH=unknown.--streams
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/expect_exit.cmake
+    )
+    set_tests_properties(kpu_run_rejects_bad_streams PROPERTIES LABELS "program;driver")
+
+    add_test(NAME kpu_run_rejects_streams_for_lu
+        COMMAND ${CMAKE_COMMAND}
+            -DCMD=$<TARGET_FILE:run>
+            -DARGS=--algo$<SEMICOLON>lu$<SEMICOLON>--streams$<SEMICOLON>os
+            -DEXPECT_CODE=2
+            -DMUST_MATCH=matmul.only
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/expect_exit.cmake
+    )
+    set_tests_properties(kpu_run_rejects_streams_for_lu PROPERTIES LABELS "program;driver")
+
     # Bad numeric input must also exit 2 rather than abort: an uncaught std::stoul throw
     # is SIGABRT, which CI cannot distinguish from a crash in the model.
     add_test(NAME kpu_run_rejects_bad_number
