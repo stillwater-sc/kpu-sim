@@ -11,7 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Per-hop movement in the L-T1 executor (increment 5 of #264).** Movement is modelled
   **per hop** instead of as one aggregate lane pool: **DRAM→L3** (the DMA, against DRAM
-  bandwidth) and **L3→CF** (the on-chip movers) each have their own lane count and their
+  bandwidth) and **L3→L1** (the on-chip movers — BlockMover and Streamer collapsed into one
+  stage, since the compute fabric reads only L1) each have their own lane count and their
   own **per-lane** bandwidth, so the bottleneck that usually decides the makespan — DRAM,
   not on-chip movement — is finally expressible. A `Feed` expands into the hop chain
   needed to reach its consumer, skipping hops residency already satisfies; a `Drain` is

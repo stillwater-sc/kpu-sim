@@ -75,13 +75,19 @@ inline const char* to_string(ResourceKind r) {
 // Which physical stage a movement transfer occupies (design note §6). `Collapsed` is the
 // single aggregate pool the descriptor selects by leaving the per-hop lane counts at 0 —
 // the pre-increment-5 model, kept as a descriptor setting rather than a code path.
-enum class Hop { Collapsed, DramToL3, OnChip };
+//
+// THE COMPUTE FABRIC TALKS ONLY TO L1. No hop terminates at the fabric: movement ends in
+// L1, and the fabric is fed from there. `L3ToL1` therefore collapses the BlockMover's
+// L3→L2 and the Streamer's L2→L1 into one stage — it is two hops modelled as one, not a
+// path from L3 into the fabric. Splitting L2 out later refines this stage; it does not
+// extend it past L1.
+enum class Hop { Collapsed, DramToL3, L3ToL1 };
 
 inline const char* to_string(Hop h) {
     switch (h) {
         case Hop::Collapsed: return "move";
         case Hop::DramToL3:  return "dram->l3";
-        case Hop::OnChip:    return "l3->cf";
+        case Hop::L3ToL1:    return "l3->l1";
     }
     return "?";
 }
@@ -136,7 +142,9 @@ struct TileRunStats {
 struct TileRunProvenance {
     std::string device;             // DeviceDescriptor::label()
     std::string placement;          // Placement::label()
-    bool l1_timing = false;         // were systolic latencies used?
+    // Was the L1 stream timing model used? That model is SYSTOLIC — one realization of a
+    // domain flow compute engine, not what the fabric is (see ADR 0002 §3.3).
+    bool l1_timing = false;
     std::uint64_t seed = 0;
     bool calibrated = false;        // increment 6 sets this
     bool extrapolated = false;      // compute_tiles > 1 is uncalibrated (ADR §8)
@@ -275,7 +283,7 @@ public:
         if (dev.per_hop_movement()) {
             hop_specs.push_back({Hop::DramToL3, std::max<Dim>(dev.dram_lanes, 1),
                                  dev.dram_bytes_per_cycle});
-            hop_specs.push_back({Hop::OnChip, std::max<Dim>(dev.onchip_lanes, 1),
+            hop_specs.push_back({Hop::L3ToL1, std::max<Dim>(dev.onchip_lanes, 1),
                                  dev.onchip_bytes_per_cycle});
         } else {
             hop_specs.push_back({Hop::Collapsed, n_lanes, dev.bytes_per_cycle});
@@ -302,9 +310,10 @@ public:
         //     tile satisfies it entirely and the feed is free. This is increment 4's
         //     behaviour and is preserved bit-for-bit.
         //   - PER-HOP: L3 residency satisfies only DRAM->L3. The tile still has to reach
-        //     the fabric, so the on-chip hop still runs. This is strictly more faithful,
-        //     and it is why the two descriptors disagree on makespan. Making a feed free
-        //     again needs L2/L1 residency, which is not modelled yet.
+        //     L1, which is the only layer the fabric reads, so the L3->L1 hop still runs.
+        //     This is strictly more faithful, and it is why the two descriptors disagree
+        //     on makespan. Making a feed free again needs L1 (and later L2) residency,
+        //     which is not modelled yet.
         auto build_chain = [&](std::size_t op, bool resident) {
             std::vector<std::size_t> chain;                  // indices into hop_specs
             if (work[op].bytes <= 0.0) return chain;         // nothing to move
@@ -313,12 +322,12 @@ public:
                 return chain;
             }
             const bool outbound = ops[op].kind == TileOpKind::Drain;
-            if (outbound) {                                  // CF -> L3 -> DRAM
-                chain.push_back(hop_index(Hop::OnChip));
+            if (outbound) {                                  // L1 -> L3 -> DRAM
+                chain.push_back(hop_index(Hop::L3ToL1));     // same movers, reversed
                 chain.push_back(hop_index(Hop::DramToL3));
-            } else {                                         // DRAM -> L3 -> CF
+            } else {                                         // DRAM -> L3 -> L1
                 if (!resident) chain.push_back(hop_index(Hop::DramToL3));
-                chain.push_back(hop_index(Hop::OnChip));
+                chain.push_back(hop_index(Hop::L3ToL1));
             }
             return chain;
         };

@@ -236,9 +236,15 @@ implementations, which would make calibration meaningless. So:
 - A transfer occupies its lane from start to completion, with no preemption and no
   re-ordering once started.
 
-**Minimum viable scope:** DRAM→L3 and L3→CF (L2 and L1 collapsed into one hop). The table
-is the target; the first increment may collapse the on-chip hops, provided the collapse is
-a descriptor setting rather than a hardcoded assumption.
+**Minimum viable scope:** DRAM→L3 and **L3→L1** (the BlockMover's L3→L2 and the Streamer's
+L2→L1 collapsed into one hop). The table is the target; the first increment may collapse the
+on-chip hops, provided the collapse is a descriptor setting rather than a hardcoded
+assumption.
+
+**Movement ends at L1.** The compute fabric reads **only** the L1 layer, so no hop
+terminates at the fabric and the collapsed on-chip stage is L3→L1, never "L3→CF". An earlier
+revision of this section used that phrasing; it was wrong, and splitting L2 out later
+*refines* this stage rather than extending it past L1.
 
 ## 7. Durations and the event engine
 
@@ -387,14 +393,15 @@ placement and profile cannot be compared with another number.
    asserted — two independent implementations of the same question agreeing.
    **L2/L1 capacity is NOT here**: §5 counts it per compute tile, so it waits for the
    placement pass to bind tiles to compute tiles (increment 5).
-5. **Per-hop movement** (§6) — **done for DRAM→L3 and L3→CF.** Movement is no longer one
+5. **Per-hop movement** (§6) — **done for DRAM→L3 and L3→L1.** Movement is no longer one
    aggregate pool: each hop has its own lanes and its own per-lane bandwidth, so DRAM
    bandwidth is expressible as the bottleneck it usually is. Per §6.1 the semantics are
    asserted rather than assumed — one transfer occupies one lane for its whole duration,
    and **lanes give concurrency, never speed-up** (a single transfer's cycles are
    independent of how many lanes sit idle). A `Feed` expands into the hop chain needed to
-   reach its consumer, skipping hops residency satisfies, and a `Drain` is the reverse
-   chain; hops for one tile are **pipelined**, so hop *n+1* starts when hop *n* completes.
+   reach its consumer — which means **L1, the only layer the fabric reads** — skipping hops
+   residency satisfies; a `Drain` is the reverse chain. Hops for one tile are
+   **pipelined**, so hop *n+1* starts when hop *n* completes.
    **The collapse is a descriptor setting, not a code path** (§6 requires this): leaving
    `dram_lanes`/`onchip_lanes` at 0 yields one `Hop::Collapsed` over `move_lanes`, which
    reproduces every increment-4 number exactly.
@@ -403,8 +410,7 @@ placement and profile cannot be compared with another number.
    disagree on makespan for the same program. Under the collapsed descriptor a single hop
    stands for the whole DRAM→CF path, so an L3-resident tile satisfies it entirely and the
    feed is free — increment 4's behaviour, preserved. Under per-hop movement L3 residency
-   satisfies only DRAM→L3; the tile still has to reach the fabric, so the on-chip hop still
-   runs. Making a resident feed free again requires L1/L2 residency, which is not modelled
+   satisfies only DRAM→L3; the tile still has to reach L1, so the L3→L1 hop still runs. Making a resident feed free again requires L1/L2 residency, which is not modelled
    yet. Measured on a 64³ T=16 GEMM: 144 movement ops, 96 resident feeds, and exactly
    **48 = 144 − 96** DRAM transfers against 144 on-chip ones.
 

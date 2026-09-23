@@ -629,7 +629,7 @@ TEST_CASE("the collapsed descriptor keeps the single-pool movement model",
     const auto r = run_gemm_on(DeviceDescriptor::single());
     REQUIRE(r.stats.hop_busy_cycles.count(Hop::Collapsed) == 1);
     CHECK(r.stats.hop_busy_cycles.count(Hop::DramToL3) == 0);
-    CHECK(r.stats.hop_busy_cycles.count(Hop::OnChip) == 0);
+    CHECK(r.stats.hop_busy_cycles.count(Hop::L3ToL1) == 0);
 
     // A resident feed moves nothing, so it records no hop at all; everything else records
     // exactly one.
@@ -650,7 +650,7 @@ TEST_CASE("DRAM bandwidth is expressible as the bottleneck, separately from on-c
     const auto four = run_gemm_on(dram_starved(4));
 
     CHECK(one.stats.hop_utilization.at(Hop::DramToL3) > 0.95);   // DRAM is saturated
-    CHECK(one.stats.hop_utilization.at(Hop::OnChip) < 0.10);     // on-chip is idle
+    CHECK(one.stats.hop_utilization.at(Hop::L3ToL1) < 0.10);     // on-chip is idle
     CHECK(one.stats.makespan > run_gemm_on(DeviceDescriptor::single()).stats.makespan);
 
     // More lanes shorten the run by overlapping transfers...
@@ -709,11 +709,14 @@ TEST_CASE("residency skips the hops it satisfies, and only those",
           "[program][transactional][hops]") {
     const auto r = run_gemm_on(dram_starved(2));
     // A tiled GEMM re-feeds one B[tk,tj] down a column of output tiles. Under per-hop
-    // movement an L3-resident tile skips DRAM->L3 but still has to reach the fabric, so
-    // it is NOT free — unlike the collapsed model, where the single hop stands for the
-    // whole path. That difference is the model getting more faithful, not a regression.
+    // movement an L3-resident tile skips DRAM->L3 but still has to reach L1 — the only
+    // layer the compute fabric reads — so it is NOT free, unlike the collapsed model where
+    // the single hop stands for the whole path. That difference is the model getting more
+    // faithful, not a regression.
+    // EVERY movement op crosses L3->L1: inbound to reach the fabric, outbound to leave it.
+    // Nothing skips this hop, because nothing else can talk to the fabric.
     const std::size_t movements = r.stats.movements;
-    CHECK(r.stats.hop_transfers.at(Hop::OnChip) == movements);
+    CHECK(r.stats.hop_transfers.at(Hop::L3ToL1) == movements);
     CHECK(r.stats.hop_transfers.at(Hop::DramToL3) == movements - r.stats.resident_feeds);
     CHECK(r.stats.resident_feeds > 0);        // the reuse is real in this program
 }

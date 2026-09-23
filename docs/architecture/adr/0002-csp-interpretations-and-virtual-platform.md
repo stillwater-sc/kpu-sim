@@ -196,6 +196,31 @@ The compute tile is the exception because it is a reactive fabric, not a memory:
 are pushed into it and results are pushed out of it. Nothing on the **data path** addresses
 a value inside the array and pulls it.
 
+**The compute fabric talks only to L1** (clarified 2026-09-23). Its sole data interface is
+the L1 layer: operands are pushed in from L1 and results are pushed back out to L1, and no
+transaction connects it to L2, L3 or DRAM. Movement therefore *ends at L1* — a hop chain
+runs DRAM→L3→L2→L1 and stops, and any model whose movement terminates "at the fabric" has
+mislabelled its last hop. Collapsing L3→L2 and L2→L1 into one modelled stage is allowed
+(#264 increment 5 does exactly that); collapsing *past* L1 is not, because it would imply a
+port that does not exist.
+
+**The compute fabric is a domain flow compute engine** (clarified 2026-09-23). This is a
+containment, and the direction matters:
+
+> A domain flow compute engine **can be** a systolic array.
+> A systolic array **is not** a domain flow compute engine.
+
+So "systolic array" is one realization of the fabric, never a definition of it, and the two
+terms are not interchangeable. The practical consequences for this repo:
+
+- A **timing model** may legitimately be systolic — the L1 stream timing is, and says so.
+  That is a statement about one realization's latencies, not about what the fabric is.
+- A **structural or semantic** claim must not assume systolic behaviour: wavefront shape,
+  fixed operand skew, a rigid two-dimensional array, or a schedule that only a systolic
+  array admits. A domain flow engine is not obliged to have any of them.
+- Naming that equates the two (`ComputeFabric / SystolicArray`) describes today's
+  implementation, not the architecture, and should not be read as the definition.
+
 **The two surfaces are not the same surface.** `push` is the compute tile's entire *data
 transaction* vocabulary. `load`/`store` are *state transactions*, available on every
 resource including the compute tile's register files, and they are how the backdoor reads a

@@ -59,9 +59,13 @@ struct DeviceDescriptor {
 
     // Movement, per hop (#264 increment 5, design note §6) -----------------------
     // A tile does not cross the machine in one step: DRAM->L3 is realized by the DMA
-    // against DRAM bandwidth, and L3->CF by the on-chip movers. Modelling them as one
-    // aggregate pool cannot express the bottleneck that usually decides the makespan,
-    // which is DRAM rather than on-chip movement.
+    // against DRAM bandwidth, and L3->L1 by the on-chip movers (BlockMover L3->L2 and
+    // Streamer L2->L1, collapsed into one stage here). Modelling them as one aggregate
+    // pool cannot express the bottleneck that usually decides the makespan, which is DRAM
+    // rather than on-chip movement.
+    //
+    // Movement ends at L1: THE COMPUTE FABRIC READS ONLY L1, so no hop terminates at the
+    // fabric and `onchip_*` never describes a path into it.
     //
     // THE COLLAPSE IS A DESCRIPTOR SETTING, NOT A HARDCODED ASSUMPTION (§6). Leaving
     // `dram_lanes` and `onchip_lanes` at 0 yields ONE collapsed hop over `move_lanes`
@@ -70,7 +74,7 @@ struct DeviceDescriptor {
     Dim    dram_lanes            = 0;       // 0 = collapsed (use move_lanes)
     double dram_bytes_per_cycle  = 64.0;    // per lane, DRAM<->L3
     Dim    onchip_lanes          = 0;       // 0 = collapsed (use move_lanes)
-    double onchip_bytes_per_cycle = 256.0;  // per lane, L3<->CF; on-chip is the faster hop
+    double onchip_bytes_per_cycle = 256.0;  // per lane, L3<->L1; on-chip is the faster hop
 
     // Per §6.1, every *_bytes_per_cycle above is PER LANE, never aggregate: a hop's peak
     // throughput is lanes x bytes_per_cycle, one transfer occupies exactly one lane for
