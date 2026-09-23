@@ -90,7 +90,7 @@ enum class PortKind { Input, Output };
 enum class TileOpKind {
     Feed,           // inject an input tile into a logical port (structural; L1 attaches streams)
     Drain,          // extract a result tile from a logical port (structural)
-    MatMulAccum,    // GEMM: out += alpha * (A_tile . B_tile) — the systolic MAC; LU trailing update (alpha=-1)
+    MatMulAccum,    // GEMM: out += alpha * (A_tile . B_tile) — the fabric MAC; LU trailing update (alpha=-1)
     LuDiagFactor,   // GETRF: factor the diagonal tile in place with within-tile partial pivoting -> L\U + pivots
     PivotApply,     // LASWP: replay the diagonal tile's row swaps onto another tile in the same row-block
     TrsmLowerLeft,  // TRSM: X := unit-lower(A[k,k])^{-1} . X   (U row-panel: U[k,j] = L_kk^{-1} A[k,j])
