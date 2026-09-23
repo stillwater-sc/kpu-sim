@@ -375,8 +375,12 @@ placement and profile cannot be compared with another number.
    op past an earlier ready one" rule wedged at every finite capacity, because feeds are
    ready immediately and take every slot while the computes that would retire those tiles
    are not ready yet. Program-order acquisition bounds the live set by the program-order
-   live set, so any budget at or above `peak_live_tiles` completes and anything below it
-   refuses — a boundary that now coincides exactly with the harness's static check.
+   live set, so any budget at or above `peak_live_tiles` is **sufficient** — it is
+   guaranteed to complete. It is not always **necessary**: residency reuse and ops that
+   need no new slot can reorder enough that a smaller budget still runs (the shared-reader
+   regression program has a static peak of 6 and completes in 5). For the derived matmul
+   program the two coincide exactly, 21 completing and 20 refusing, and that equality is
+   asserted — two independent implementations of the same question agreeing.
    **L2/L1 capacity is NOT here**: §5 counts it per compute tile, so it waits for the
    placement pass to bind tiles to compute tiles (increment 5).
 5. **Per-hop movement** (§6), starting from DRAM→L3 plus a collapsed on-chip hop.

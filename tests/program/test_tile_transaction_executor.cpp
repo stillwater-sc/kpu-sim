@@ -417,3 +417,94 @@ TEST_CASE("runs stay deterministic under capacity pressure",
     for (std::size_t i = 0; i < a.timeline.size(); ++i)
         CHECK(a.timeline[i].start == b.timeline[i].start);
 }
+
+// ----------------------------------------------------------------------------
+// Regression: a tile is released when its LAST USER COMPLETES, not at the
+// highest-indexed user.
+//
+// `TileDependencies` orders writer->reader and deliberately leaves reader->reader
+// unordered, so two readers of one tile are concurrent and the higher-INDEXED one can
+// finish FIRST. Releasing the tile on it frees a slot an earlier reader still holds,
+// which under-counts residency and lets a run fit in an L3 budget that cannot actually
+// hold its live set.
+//
+// Getting this observable took some care, and the shape of the program is the argument:
+//
+//   - the short reader must be UNGATED, so it can start early under capacity pressure.
+//     It accumulates into a tile that was fed explicitly, so it needs no new slot and
+//     program-order slot acquisition does not hold it behind the long reader. Every
+//     earlier attempt failed here: capacity pressure serialised the two readers and
+//     destroyed the out-of-order completion the bug needs.
+//   - the claimant must become ready exactly when the short reader completes, so it is
+//     the op that would consume a prematurely freed slot.
+//
+// This case was VERIFIED TO DISCRIMINATE: built against the old highest-index release,
+// `l3_tiles = 4` completes with `peak_l3_residency` reported as 4 while five tiles are
+// really live. With release-on-last-completion it is correctly refused.
+// ----------------------------------------------------------------------------
+namespace {
+
+TileProgram build_shared_reader_program() {
+    TileProgram p("shared-reader");
+    p.add_operand(TensorOperand("A", 16, 16, 16, 16));
+    p.add_operand(TensorOperand("B", 16, 24, 16, 16));   // B[0,1] is 16x8 -> less work
+    p.add_operand(TensorOperand("C", 16, 24, 16, 16));   // C[0,1] is 16x8
+    p.add_operand(TensorOperand("H",  8, 16,  8, 16));
+    p.add_operand(TensorOperand("G", 16, 16, 16, 16));
+    auto feed = [&](const char* o, Dim i, Dim j) {
+        TileOp f; f.kind = TileOpKind::Feed; f.port_kind = PortKind::Input; f.port = "West";
+        f.inputs = {TileCoord{o, i, j}}; p.push(std::move(f));
+    };
+    auto drain = [&](const char* o, Dim i, Dim j) {
+        TileOp d; d.kind = TileOpKind::Drain; d.port_kind = PortKind::Output; d.port = "South";
+        d.outputs = {TileCoord{o, i, j}}; p.push(std::move(d));
+    };
+    auto mac = [&](TileCoord i0, TileCoord i1, TileCoord o) {
+        TileOp m; m.kind = TileOpKind::MatMulAccum; m.inputs = {i0, i1}; m.outputs = {o};
+        p.push(std::move(m));
+    };
+    feed("A", 0, 0);                              // 0
+    feed("B", 0, 1);                              // 1
+    feed("C", 0, 1);                              // 2  so op6 needs no new slot
+    feed("H", 0, 0);                              // 3
+    feed("B", 0, 0);                              // 4
+    mac({"A",0,0}, {"B",0,0}, {"C",0,0});         // 5  LONG  reader of A[0,0]
+    mac({"A",0,0}, {"B",0,1}, {"C",0,1});         // 6  SHORT reader of A[0,0], ungated
+    mac({"C",0,1}, {"H",0,0}, {"G",0,0});         // 7  claimant of the freed slot
+    drain("C", 0, 0); drain("C", 0, 1); drain("G", 0, 0);   // 8, 9, 10
+    return p;
+}
+
+TileRunResult run_shared_reader(Dim l3_tiles) {
+    TileProgram p = build_shared_reader_program();
+    auto& A = p.operand("A");
+    for (std::size_t i = 0; i < A.values.size(); ++i) A.values[i] = float(i % 7) - 3.0f;
+    auto& B = p.operand("B");
+    for (std::size_t i = 0; i < B.values.size(); ++i) B.values[i] = float(i % 5) - 2.0f;
+    DeviceDescriptor dev = DeviceDescriptor::single();
+    dev.compute_tiles = 2;                        // the two readers must be able to overlap
+    dev.l3_tiles = l3_tiles;
+    return run_transactional(p, dev, Placement::single(2));
+}
+
+} // namespace
+
+TEST_CASE("a shared tile is held until its last reader completes, not its last index",
+          "[program][transactional][capacity]") {
+    SECTION("the premise: the higher-indexed reader really does finish first") {
+        const auto r = run_shared_reader(0);          // unbounded: no capacity interference
+        CHECK(r.timeline[6].finish < r.timeline[5].finish);
+        CHECK(r.timeline[6].start < r.timeline[5].start);
+    }
+
+    SECTION("five tiles are genuinely live, so five is enough and four is refused") {
+        const auto ok = run_shared_reader(5);
+        CHECK(ok.stats.peak_l3_residency == 5);
+        CHECK(ok.timeline[6].finish < ok.timeline[5].finish);   // still out of order
+
+        // The regression. Releasing A[0,0] at op6 (its highest-indexed user) while op5
+        // still reads it makes this budget look sufficient: the old logic completed here
+        // and reported a peak of 4.
+        REQUIRE_THROWS_AS(run_shared_reader(4), std::runtime_error);
+    }
+}

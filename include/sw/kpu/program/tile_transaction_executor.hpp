@@ -316,8 +316,10 @@ public:
         // contribute to hold-and-wait.
         //
         // This bounds the live set by the PROGRAM-ORDER live set, so any capacity at or
-        // above `peak_live_tiles(prog)` is guaranteed to complete, and a smaller budget
-        // stalls and then refuses with a diagnosis rather than wedging silently.
+        // above `peak_live_tiles(prog)` is SUFFICIENT — guaranteed to complete. It is not
+        // always necessary: reuse and zero-slot ops can reorder enough that a smaller
+        // budget still runs. Below the requirement the run stalls and then refuses with a
+        // diagnosis rather than wedging silently.
         // Concurrency survives: resident-tile ops still fire in parallel, which is exactly
         // the reuse the tier exists to reward.
         std::size_t slot_cursor = 0;          // monotone: never revisits a fired op
@@ -339,11 +341,31 @@ public:
         //
         // (b) A blocked head must not hide cheap work behind it. An op whose tiles are all
         //     resident needs no slots and is admissible whatever the seeker is, so leaving
-        //     it queued behind a slot-starved op idles a resource for nothing. The scan is
-        //     WINDOWED: rescanning a whole heap would reintroduce exactly the O(n^2) the
-        //     heaps were introduced to remove, and a resident op deeper than the window
-        //     loses nothing but a turn — the head usually clears on the next completion.
+        //     it queued behind a slot-starved op idles a resource for nothing. try_fire
+        //     therefore takes the lowest-index ADMISSIBLE op, not the head.
+        //
+        //     The scan is WINDOWED in the hot path and EXHAUSTIVE only where a miss would
+        //     be fatal, because neither alone is acceptable:
+        //
+        //       - window only is unsound. If 33+ consecutive queued ops all need slots the
+        //         seeker cannot afford and the one op that would release a slot sits past
+        //         the window, nothing fires, nothing is in flight, and a perfectly feasible
+        //         program gets a wedge diagnosis. A false refusal is the worst failure this
+        //         executor has.
+        //       - always exhaustive is unusable. MEASURED: at a tight budget nearly every
+        //         queued feed is inadmissible, so the scan walks the whole backlog on every
+        //         completion. A 512^3 T=16 GEMM (99,328 ops) went from 559 ms unbounded to
+        //         290,473 ms at its peak live set — 520x, growing quadratically (the same
+        //         run at 256^3 costs 3.8 s). That is the O(n^2) the ready heaps exist to
+        //         avoid, reintroduced through the back door.
+        //
+        //     So: the window runs per firing decision, and the exhaustive pass runs only as
+        //     a precondition of throwing — see the wedge branch below. Progress is
+        //     guaranteed whenever anything is in flight, since every completion re-enters
+        //     try_fire; the only truly stuck state is an empty event queue, which is
+        //     exactly where the exhaustive retry sits. Cost in the common case: zero.
         static constexpr std::size_t kScanWindow = 32;
+        bool exhaustive = false;          // set only on the wedge path, never in steady state
         long seeker = -1;
         auto admissible = [&](std::size_t op) {
             if (needed_slots(op) == 0) return true;      // takes nothing new
@@ -355,17 +377,18 @@ public:
         auto take_admissible = [&](ReadyHeap& h, std::size_t& out) {
             std::vector<std::size_t> deferred;
             bool found = false;
-            while (!h.empty() && deferred.size() < kScanWindow) {
+            while (!h.empty() && (exhaustive || deferred.size() < kScanWindow)) {
                 const std::size_t op = h.top();
                 h.pop();
                 if (admissible(op)) { out = op; found = true; break; }
                 deferred.push_back(op);
             }
-            for (std::size_t d : deferred) h.push(d);
+            for (std::size_t d : deferred) h.push(d);                // order is by index
             return found;
         };
 
         auto try_fire = [&]() {
+            bool any = false;
             seeker = earliest_slot_seeker();
             auto fired_seeker = [&](std::size_t op) {      // advance to the next one
                 if (seeker == static_cast<long>(op)) seeker = earliest_slot_seeker();
@@ -373,29 +396,43 @@ public:
             for (Dim l = 0; l < n_lanes && !ready_move.empty(); ++l) {
                 if (lane_busy[l]) continue;
                 std::size_t op = 0;
-                if (!take_admissible(ready_move, op)) { ++credit_stalls; break; }
+                if (!take_admissible(ready_move, op)) { credit_stalls += !exhaustive; break; }
                 fire(op, ResourceKind::MoveLane, l);
                 fired_seeker(op);
+                any = true;
             }
             for (Dim t = 0; t < n_cf && !ready_compute.empty(); ++t) {
                 if (cf_busy[t]) continue;
                 std::size_t op = 0;
-                if (!take_admissible(ready_compute, op)) { ++credit_stalls; break; }
+                if (!take_admissible(ready_compute, op)) { credit_stalls += !exhaustive; break; }
                 fire(op, ResourceKind::ComputeTile, t);
                 fired_seeker(op);
+                any = true;
             }
             for (Dim t = 0; t < ready_pinned.size(); ++t) {
                 if (cf_busy[t] || ready_pinned[t].empty()) continue;
                 std::size_t op = 0;
-                if (!take_admissible(ready_pinned[t], op)) { ++credit_stalls; continue; }
+                if (!take_admissible(ready_pinned[t], op)) { credit_stalls += !exhaustive; continue; }
                 fire(op, ResourceKind::ComputeTile, t);
                 fired_seeker(op);
+                any = true;
             }
+            return any;
         };
 
         try_fire();
         while (remaining > 0) {
             if (events.empty()) {
+                // Before declaring a wedge, look PAST the scan window. This is the one
+                // place the full scan is worth its cost: the alternative is refusing a
+                // program that can actually run. It is also the one place it stays cheap,
+                // because reaching an empty event queue with work left is rare — every
+                // steady-state firing decision took the windowed path.
+                exhaustive = true;
+                const bool progress = try_fire();
+                exhaustive = false;
+                if (progress) continue;
+
                 // Nothing running, nothing able to fire: a genuine wedge. Diagnose it
                 // rather than hang or silently return a short run (design note §4).
                 // With capacity modelled this path is reachable, and the usual cause is
