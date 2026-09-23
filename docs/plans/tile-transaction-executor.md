@@ -372,9 +372,13 @@ placement and profile cannot be compared with another number.
    residency and lets a run exceed the capacity being enforced. §5 already specified the
    completion rule; the refcount is what implements it. **Slots are acquired in PROGRAM ORDER**, which
    is the invariant that makes the model deadlock-free: the weaker "don't promote a ready
-   op past an earlier ready one" rule wedged at every finite capacity, because feeds are
-   ready immediately and take every slot while the computes that would retire those tiles
-   are not ready yet. Program-order acquisition bounds the live set by the program-order
+   op past an earlier ready one" rule wedges at every finite positive capacity below the
+   unbounded run's peak residency — 29 tiles here, so it fails at 25 despite the live set
+   being 21; `l3_tiles == 0` denotes unbounded, not zero capacity — because
+   feeds are ready immediately and take every slot while the computes that would retire
+   those tiles are not ready yet. At 29 or above it matches unbounded and cannot deadlock,
+   so what the weaker rule really lacks is the ability to run between the true live set and
+   its own greedy peak. Program-order acquisition bounds the live set by the program-order
    live set, so any budget at or above `peak_live_tiles` is **sufficient** — it is
    guaranteed to complete. It is not always **necessary**: residency reuse and ops that
    need no new slot can reorder enough that a smaller budget still runs (the shared-reader
