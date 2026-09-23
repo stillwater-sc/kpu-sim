@@ -114,6 +114,9 @@ struct RunOutcome {
     // Present only for levels that model resources.
     std::optional<TileRunStats> stats;
     std::optional<TileRunProvenance> provenance;
+    // Per-op records, including each movement op's per-hop intervals. Empty at L-B,
+    // which models no time and therefore has no intervals to report.
+    std::vector<TileOpRecord> timeline;
 };
 
 // ----------------------------------------------------------------------------
@@ -153,6 +156,7 @@ inline RunOutcome run_at(ExecutionLevel level, TileProgram& prog,
             out.lower_bound = r.stats.lower_bound;
             out.stats = r.stats;
             out.provenance = r.provenance;
+            out.timeline = r.timeline;
             out.has_timing = true;
             return out;
         }

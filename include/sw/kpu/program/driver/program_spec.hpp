@@ -18,6 +18,7 @@
 #include <sw/kpu/program/characterize/device_model.hpp>
 #include <sw/kpu/program/derive/lu_tile_program.hpp>
 #include <sw/kpu/program/derive/matmul_tile_program.hpp>
+#include <sw/kpu/program/stream/derive/matmul_streams.hpp>
 #include <sw/kpu/program/tile_program.hpp>
 
 #include <cstdint>
@@ -56,6 +57,32 @@ inline bool has_flag(const std::vector<std::string>& a, const std::string& k) {
     return false;
 }
 
+// Is the option PRESENT at all? `arg()` cannot say: it returns the fallback both when an
+// option is absent and when it is the last token with no value, so a terminal `--timeline`
+// looks exactly like no `--timeline`. For a flag that must carry a value, those are
+// different errors and only one of them is silent.
+inline bool arg_present(const std::vector<std::string>& a, const std::string& k) {
+    for (const auto& s : a) if (s == k) return true;
+    return false;
+}
+
+// A required value: present, non-empty, and not another option. Without the last check a
+// trailing `--timeline --step` would write a trace to a file called "--step".
+inline bool arg_required(const std::vector<std::string>& a, const std::string& k,
+                         std::string& out, std::string& error) {
+    for (std::size_t i = 0; i < a.size(); ++i) {
+        if (a[i] != k) continue;
+        if (i + 1 >= a.size()) { error = k + ": missing value"; return false; }
+        if (!a[i + 1].empty() && a[i + 1][0] == '-') {
+            error = k + ": missing value (next token is '" + a[i + 1] + "')";
+            return false;
+        }
+        out = a[i + 1];
+        return true;
+    }
+    return true;                 // absent: leave `out` at its default
+}
+
 // A CHECKED unsigned parse, because std::stoul is the wrong tool for a CLI: it throws on
 // "abc", it happily accepts "12abc", and it wraps "-1" to ULONG_MAX without complaint --
 // so `--compute-tiles -1` becomes an enormous count rather than an error. An uncaught
@@ -65,11 +92,11 @@ inline bool has_flag(const std::vector<std::string>& a, const std::string& k) {
 // It also catches `--size --tile 16`, where arg() hands back the NEXT FLAG as the value.
 inline bool parse_dim(const std::vector<std::string>& a, const std::string& key,
                       std::uint32_t fallback, std::uint32_t& out, std::string& error) {
-    const std::string raw = arg(a, key, std::to_string(fallback));
+    std::string raw = std::to_string(fallback);
+    if (!arg_required(a, key, raw, error)) return false;
     if (raw.empty()) { error = key + ": empty value"; return false; }
     if (raw[0] == '-') {
-        error = key + ": '" + raw + "' is not a non-negative integer" +
-                (raw.size() > 1 && raw[1] == '-' ? " (did a value get omitted?)" : "");
+        error = key + ": '" + raw + "' is not a non-negative integer";
         return false;
     }
     try {
@@ -133,6 +160,23 @@ inline const char* result_operand(const ProgramSpec& s) {
     return s.algo == "lu" ? "A" : "C";      // LU factors in place
 }
 
+// ---- the L1 stream program (optional) ---------------------------------------
+// The dataflow name -> space-time mapping, shared with tile_characterize for the same
+// reason as everything else here: two spellings of "output-stationary" drift.
+inline bool known_dataflow(const std::string& n) {
+    return n == "output-stationary" || n == "os" ||
+           n == "weight-stationary" || n == "ws" ||
+           n == "a-stationary"      || n == "as" ||
+           n == "fully-streaming"   || n == "hex";
+}
+
+inline stream::SpaceTimeMap map_for(const std::string& name) {
+    if (name == "weight-stationary" || name == "ws") return stream::SpaceTimeMap::b_stationary();
+    if (name == "a-stationary"      || name == "as") return stream::SpaceTimeMap::a_stationary();
+    if (name == "fully-streaming"   || name == "hex") return stream::SpaceTimeMap::fully_streaming();
+    return stream::SpaceTimeMap::output_stationary();   // "output-stationary" / "os"
+}
+
 // ---- what device to run it on ----------------------------------------------
 // Movement is per CSP process (design note §6): DMA (DRAM<->L3), BlockMover
 // (L3<->L2) and Streamer (L2<->L1) each own their lanes. There is no aggregate
@@ -149,6 +193,8 @@ struct DeviceSpec {
     double bm_bytes_per_cycle = 128.0;
     Dim streamers = 1;
     double str_bytes_per_cycle = 256.0;
+    Dim noc_links = 0;                      // 0 = topology declares no L3<->L3 path
+    double noc_bytes_per_cycle = 128.0;
 
     // Analytical-harness coefficients; the executor does not use these.
     double bytes_per_cycle = 64.0;
@@ -186,6 +232,8 @@ inline characterize::DeviceDescriptor make_device(const DeviceSpec& s) {
     d.bm_bytes_per_cycle = s.bm_bytes_per_cycle;
     d.streamers = s.streamers;
     d.str_bytes_per_cycle = s.str_bytes_per_cycle;
+    d.noc_links = s.noc_links;
+    d.noc_bytes_per_cycle = s.noc_bytes_per_cycle;
     return d;
 }
 

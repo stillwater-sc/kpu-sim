@@ -9,6 +9,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`kpu-run` device knobs and `--timeline` (increment 2 of #285).** The per-process
+  movement model is now reachable from the command line: `--dma-engines`,
+  `--block-movers`, `--streamers` and `--noc-links`, each with its own
+  `--*-bytes-per-cycle`, plus `--compute-tiles`, `--l3-tiles`, `--macs-per-cycle` and
+  `--streams <dataflow>` to derive an L1 stream program. Every rate is **per lane, never
+  aggregate**, which the usage text states because §6.3 makes it normative — lanes give
+  concurrency, never speed-up.
+
+  **`--timeline out.json` writes Chrome Trace Event Format, one event per hop.** A
+  transfer's legs run on different processes at different times, so collapsing them into
+  a single span would hide exactly what the movement chain exists to show: which process a
+  tile is waiting on. Each leg lands on the trace component matching its governing process
+  (`DMA_ENGINE`, `BLOCK_MOVER`, `STREAMER`), carries the bytes it moved, and its event
+  interval is **asserted to equal the leg's interval exactly** — a trace that disagrees
+  with the run it came from is worse than no trace. Compute events carry MAC counts and the
+  kernel name. On a 48³ GEMM that is 180 events: 153 transfers — 18 fresh feeds × 3 legs,
+  36 reuse chains × 2, 9 drains × 3 — and 27 computes.
+
+  This was the **mapping D5 said had to be written**: `ChromeTraceExporter` consumes
+  `TraceEntry` and nothing in the repo serialized `TileOpRecord` or `HopRecord`, so
+  "reuse the format" was a constraint rather than a free connection. It lives in
+  `driver/timeline_trace.hpp`, and `tools/trace/` plus `tools/visualization/` read the
+  output unchanged.
+
+  Refusals rather than silent no-ops: `--timeline` with only L-B selected is refused,
+  because L-B models no intervals to write; `--streams` is refused for LU, which has no
+  stream derivation; and an unknown dataflow is refused rather than defaulting. The
+  dataflow-name mapping moved into the header shared with `tile_characterize`, so the two
+  tools cannot disagree on what `output-stationary` means.
+
 - **`kpu-run`, the driver that tests the simulation models against each other (increment 1
   of #285).** A Domain Flow Program can now be executed from a command line and the levels
   compared: `kpu-run --algo matmul|lu --size --tile --level behavioral|block-sequential|all`

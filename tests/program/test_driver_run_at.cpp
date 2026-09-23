@@ -11,9 +11,11 @@
 
 #include <sw/kpu/program/driver/execution_level.hpp>
 #include <sw/kpu/program/driver/program_spec.hpp>
+#include <sw/kpu/program/driver/timeline_trace.hpp>
 
 #include <cstring>
 #include <string>
+#include <variant>
 #include <vector>
 
 using namespace sw::kpu::program;
@@ -149,4 +151,204 @@ TEST_CASE("the shared spec builds the device the executor actually schedules on"
     CHECK(d.label().find("dma2") != std::string::npos);
     CHECK(d.label().find("bm3") != std::string::npos);
     CHECK(d.label().find("str4") != std::string::npos);
+}
+
+// ============================================================================
+// Increment 2 — the timeline mapping (§D5)
+//
+// Nothing serialized TileOpRecord or HopRecord before this, so "reuse the trace
+// format" meant writing the mapping. These tests pin the property that makes the
+// mapping worth having: ONE EVENT PER HOP, so a transfer's legs stay separable.
+// ============================================================================
+
+TEST_CASE("the timeline emits one event per hop, not one per op",
+          "[program][driver][timeline]") {
+    ProgramSpec ps;
+    ps.size = 48;
+    ps.tile = 16;
+    TileProgram p = derive(ps);
+    fill(p, ps);
+    DeviceSpec ds;
+    const auto device = make_device(ds);
+    const auto out = run_at(ExecutionLevel::BlockSequential, p, device,
+                            Placement::single(device.compute_tiles));
+    REQUIRE_FALSE(out.timeline.empty());
+
+    const auto entries = to_trace_entries(p, out.timeline, device.element_bytes);
+
+    // Count the legs the run actually recorded, then require exactly that many events
+    // plus one for each op that recorded no leg (compute, and anything residency freed).
+    std::size_t hops = 0, hopless = 0;
+    for (const auto& rec : out.timeline) {
+        if (rec.hops.empty()) ++hopless; else hops += rec.hops.size();
+    }
+    REQUIRE(hops > 0);
+    CHECK(entries.size() == hops + hopless);
+    // A per-op mapping would have produced far fewer: the whole point is that a
+    // transfer's legs remain separable.
+    CHECK(entries.size() > out.timeline.size());
+}
+
+TEST_CASE("each event lands on the component that performed the leg",
+          "[program][driver][timeline]") {
+    ProgramSpec ps;
+    ps.size = 48;
+    ps.tile = 16;
+    TileProgram p = derive(ps);
+    fill(p, ps);
+    DeviceSpec ds;
+    const auto device = make_device(ds);
+    const auto out = run_at(ExecutionLevel::BlockSequential, p, device,
+                            Placement::single(device.compute_tiles));
+    const auto entries = to_trace_entries(p, out.timeline, device.element_bytes);
+
+    // The hop names its governing process, and the trace vocabulary has one component per
+    // process, so this must be a faithful rename rather than a guess.
+    CHECK(component_of(Hop::DmaDramToL3) == sw::trace::ComponentType::DMA_ENGINE);
+    CHECK(component_of(Hop::DmaL3ToDram) == sw::trace::ComponentType::DMA_ENGINE);
+    CHECK(component_of(Hop::BlockMoverL3ToL2) == sw::trace::ComponentType::BLOCK_MOVER);
+    CHECK(component_of(Hop::BlockMoverL2ToL3) == sw::trace::ComponentType::BLOCK_MOVER);
+    CHECK(component_of(Hop::StreamerL2ToL1) == sw::trace::ComponentType::STREAMER);
+    CHECK(component_of(Hop::StreamerL1ToL2) == sw::trace::ComponentType::STREAMER);
+
+    // Every event's interval must be the leg's interval, exactly: a trace whose spans
+    // disagree with the run it came from is worse than no trace.
+    std::size_t checked = 0;
+    std::size_t e = 0;
+    for (const auto& rec : out.timeline) {
+        if (rec.hops.empty()) { ++e; continue; }
+        for (const auto& hr : rec.hops) {
+            REQUIRE(e < entries.size());
+            CHECK(entries[e].cycle_issue == hr.start);
+            CHECK(entries[e].cycle_complete == hr.finish);
+            CHECK(entries[e].component_type == component_of(hr.hop));
+            CHECK(entries[e].component_id == hr.lane);
+            CHECK(entries[e].description.find(to_string(hr.hop)) != std::string::npos);
+            ++e;
+            ++checked;
+        }
+    }
+    CHECK(checked > 0);
+    CHECK(e == entries.size());
+}
+
+TEST_CASE("compute events carry MAC counts and movement events carry bytes",
+          "[program][driver][timeline]") {
+    ProgramSpec ps;
+    ps.size = 32;
+    ps.tile = 16;
+    TileProgram p = derive(ps);
+    fill(p, ps);
+    DeviceSpec ds;
+    const auto device = make_device(ds);
+    const auto out = run_at(ExecutionLevel::BlockSequential, p, device,
+                            Placement::single(device.compute_tiles));
+    const auto entries = to_trace_entries(p, out.timeline, device.element_bytes);
+
+    std::size_t with_macs = 0, with_bytes = 0;
+    for (const auto& en : entries) {
+        if (const auto* c = std::get_if<sw::trace::ComputePayload>(&en.payload)) {
+            CHECK(c->num_operations > 0);
+            CHECK_FALSE(c->kernel_name.empty());
+            ++with_macs;
+        } else if (const auto* d = std::get_if<sw::trace::DMAPayload>(&en.payload)) {
+            CHECK(d->bytes_transferred > 0);
+            ++with_bytes;
+        }
+    }
+    CHECK(with_macs > 0);
+    CHECK(with_bytes > 0);
+}
+
+TEST_CASE("a stream program changes timing and leaves values alone",
+          "[program][driver][timeline]") {
+    // --streams derives the L1 stream program, whose drain bubble lands on the Streamer
+    // legs. It must move the clock without touching the arithmetic.
+    ProgramSpec ps;
+    ps.size = 48;
+    ps.tile = 16;
+    DeviceSpec ds;
+    const auto device = make_device(ds);
+
+    auto run = [&](bool use_streams, std::vector<float>& values) {
+        TileProgram p = derive(ps);
+        fill(p, ps);
+        stream::StreamProgram sp;
+        if (use_streams) sp = stream::derive_matmul_streams(p, map_for("output-stationary"));
+        const auto o = run_at(ExecutionLevel::BlockSequential, p, device,
+                              Placement::single(device.compute_tiles),
+                              use_streams ? &sp : nullptr);
+        values = p.operand(result_operand(ps)).values;
+        return o;
+    };
+    std::vector<float> plain_vals, stream_vals;
+    const auto plain = run(false, plain_vals);
+    const auto streamed = run(true, stream_vals);
+
+    CHECK(streamed.makespan != plain.makespan);        // the clock moved
+    CHECK(bit_identical(plain_vals, stream_vals));     // the values did not
+    CHECK(streamed.provenance->l1_timing);
+    CHECK_FALSE(plain.provenance->l1_timing);
+}
+
+TEST_CASE("the NoC has no trace identity, and the mapping refuses to invent one",
+          "[program][driver][timeline]") {
+    // Mapping an L3->L3 leg onto BLOCK_MOVER would put NoC lane 0 and BlockMover lane 0 on
+    // the same track, misreporting the occupancy of both. Picking a component for a link
+    // the trace vocabulary does not model is a decision about that vocabulary, so this
+    // refuses instead.
+    CHECK_THROWS_AS(component_of(Hop::BlockMoverL3ToL3), std::invalid_argument);
+    // The other three are faithful renames and must not throw.
+    CHECK_NOTHROW(component_of(Hop::DmaDramToL3));
+    CHECK_NOTHROW(component_of(Hop::BlockMoverL3ToL2));
+    CHECK_NOTHROW(component_of(Hop::StreamerL2ToL1));
+
+    // The guard is unreachable today: no chain contains an L3->L3 leg, even with NoC links
+    // configured, so a run still traces cleanly.
+    ProgramSpec ps;
+    ps.size = 32;
+    ps.tile = 16;
+    TileProgram p = derive(ps);
+    fill(p, ps);
+    DeviceSpec ds;
+    ds.noc_links = 4;
+    const auto device = make_device(ds);
+    const auto out = run_at(ExecutionLevel::BlockSequential, p, device,
+                            Placement::single(device.compute_tiles));
+    for (const auto& rec : out.timeline)
+        for (const auto& hr : rec.hops)
+            CHECK(hr.hop != Hop::BlockMoverL3ToL3);
+    CHECK_NOTHROW(to_trace_entries(p, out.timeline, device.element_bytes));
+}
+
+TEST_CASE("an option present without a value is an error, not an absence",
+          "[program][driver]") {
+    // arg() cannot tell those apart: it returns the fallback both when an option is absent
+    // and when it is the last token. For a flag that must carry a value those are
+    // different errors, and only one of them is silent.
+    std::string out, err;
+    const std::vector<std::string> terminal{"--size", "32", "--timeline"};
+    CHECK(arg_present(terminal, "--timeline"));
+    CHECK_FALSE(arg_required(terminal, "--timeline", out, err));
+    CHECK(err.find("missing value") != std::string::npos);
+
+    // A following flag is not a value either, or `--timeline --step` writes a trace to a
+    // file called "--step".
+    const std::vector<std::string> flag_as_value{"--timeline", "--step"};
+    err.clear();
+    CHECK_FALSE(arg_required(flag_as_value, "--timeline", out, err));
+    CHECK(err.find("--step") != std::string::npos);
+
+    // Absent leaves the default alone and is NOT an error.
+    out = "untouched";
+    err.clear();
+    const std::vector<std::string> absent{"--size", "32"};
+    CHECK(arg_required(absent, "--timeline", out, err));
+    CHECK(out == "untouched");
+    CHECK(err.empty());
+
+    // And a real value is taken.
+    const std::vector<std::string> given{"--timeline", "run.json"};
+    CHECK(arg_required(given, "--timeline", out, err));
+    CHECK(out == "run.json");
 }
