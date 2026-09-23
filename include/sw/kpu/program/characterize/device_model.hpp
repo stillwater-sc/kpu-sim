@@ -44,7 +44,12 @@ struct DeviceDescriptor {
     // Concurrency / capacity ---------------------------------------------------
     Dim compute_tiles = 1;      // # CF tiles that can run tile-compute ops concurrently
     Dim move_lanes    = 1;      // # concurrent movement channels (DMA/BM/Streamer aggregate)
-    Dim l3_tiles      = 0;      // L3 capacity, in tiles (0 = unbounded → skip feasibility)
+    // L3 capacity, counted IN TILES. 0 = unbounded, which is what a design-space sweep
+    // wants and what preserves pre-capacity behaviour. Enforced dynamically by
+    // TileTransactionExecutor as well as checked statically by the harness.
+    // L2/L1 capacity is per COMPUTE TILE, so it waits for the placement pass to bind
+    // tiles to compute tiles (#264 increment 5) — no field here until it is enforced.
+    Dim l3_tiles      = 0;
 
     // Throughput ---------------------------------------------------------------
     double fabric_macs_per_cycle = 256.0;   // MAC throughput of ONE CF tile

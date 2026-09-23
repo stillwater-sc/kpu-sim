@@ -14,6 +14,7 @@
 #include <sw/kpu/program/derive/lu_tile_program.hpp>
 #include <sw/kpu/program/derive/matmul_tile_program.hpp>
 #include <sw/kpu/program/stream/derive/matmul_streams.hpp>
+#include <sw/kpu/program/characterize/characterization.hpp>
 
 #include <algorithm>
 #include <chrono>
@@ -295,4 +296,124 @@ TEST_CASE("the ready set scales to large programs", "[program][transactional][sc
     CHECK(result.stats.ops == prog.ops().size());
     CHECK(result.stats.compute_cycles > 0);
     CHECK(seconds < 30.0);
+}
+
+// ============================================================================
+// Increment 4 — L3 capacity, credits, residency reuse, refusal
+// ============================================================================
+
+TEST_CASE("capacity at the program's peak live set completes; one below refuses",
+          "[program][transactional][capacity]") {
+    // The harness computes peak_live_tiles statically; the executor enforces capacity
+    // dynamically. They are independent implementations of the same question, so their
+    // feasibility boundary must coincide EXACTLY — if it does not, one of them is wrong.
+    const Dim M = 64, N = 64, K = 64, T = 16;
+    const std::size_t peak =
+        characterize::peak_live_tiles(derive_matmul_tile_program(M, N, K, T, T, T));
+    REQUIRE(peak > 1);
+
+    auto run_with = [&](Dim l3_tiles) {
+        TileProgram p = derive_matmul_tile_program(M, N, K, T, T, T);
+        fill_matmul(p, K, N);
+        DeviceDescriptor dev = DeviceDescriptor::single();
+        dev.l3_tiles = l3_tiles;
+        return run_transactional(p, dev, Placement::single(dev.compute_tiles));
+    };
+
+    SECTION("exactly the static peak is enough") {
+        const auto at_peak = run_with(static_cast<Dim>(peak));
+        CHECK(at_peak.stats.peak_l3_residency <= peak);
+        CHECK(at_peak.stats.l3_credit_stalls > 0);      // it was genuinely tight
+    }
+
+    SECTION("one tile short is refused, with a diagnosis naming the budget") {
+        try {
+            run_with(static_cast<Dim>(peak - 1));
+            FAIL("expected a refusal at one tile below the peak live set");
+        } catch (const std::runtime_error& e) {
+            const std::string msg = e.what();
+            CHECK(msg.find("no op can fire") != std::string::npos);
+            CHECK(msg.find("L3 slot") != std::string::npos);      // says WHY, not just that
+            CHECK(msg.find("live set") != std::string::npos);     // and what to do about it
+        }
+    }
+}
+
+TEST_CASE("capacity pressure throttles rather than corrupting",
+          "[program][transactional][capacity]") {
+    const Dim M = 64, N = 64, K = 64, T = 16;
+    const std::size_t peak =
+        characterize::peak_live_tiles(derive_matmul_tile_program(M, N, K, T, T, T));
+
+    TileProgram ref_prog = derive_matmul_tile_program(M, N, K, T, T, T);
+    fill_matmul(ref_prog, K, N);
+    TileProgramReference ref;
+    ref.run(ref_prog);
+
+    auto run_with = [&](Dim l3_tiles) {
+        TileProgram p = derive_matmul_tile_program(M, N, K, T, T, T);
+        fill_matmul(p, K, N);
+        DeviceDescriptor dev = DeviceDescriptor::single();
+        dev.l3_tiles = l3_tiles;
+        auto r = run_transactional(p, dev, Placement::single(dev.compute_tiles));
+        return std::pair{r, std::move(p)};
+    };
+
+    auto [unbounded, up] = run_with(0);
+    auto [tight, tp]     = run_with(static_cast<Dim>(peak));
+
+    SECTION("values are unaffected by how tight the buffer is") {
+        CHECK(bit_identical(ref_prog.operand("C").values, up.operand("C").values));
+        CHECK(bit_identical(ref_prog.operand("C").values, tp.operand("C").values));
+    }
+    SECTION("a tighter buffer costs time and reports the stalls that caused it") {
+        CHECK(tight.stats.makespan > unbounded.stats.makespan);
+        CHECK(tight.stats.l3_credit_stalls > 0);
+        CHECK(unbounded.stats.l3_credit_stalls == 0);
+    }
+    SECTION("residency is bounded by the budget, and unbounded runs exceed it") {
+        CHECK(tight.stats.peak_l3_residency <= peak);
+        CHECK(unbounded.stats.peak_l3_residency > peak);   // the natural live set is larger
+    }
+}
+
+TEST_CASE("a tile already resident is re-fed for free", "[program][transactional][capacity]") {
+    // Tiled GEMM re-feeds one B[tk,tj] across a column of output tiles. Charging for
+    // those re-feeds would misprice exactly the reuse this tier exists to reward.
+    TileProgram p = derive_matmul_tile_program(64, 64, 64, 16, 16, 16);
+    fill_matmul(p, 64, 64);
+    const DeviceDescriptor dev = DeviceDescriptor::single();
+    const auto r = run_transactional(p, dev, Placement::single(dev.compute_tiles));
+
+    REQUIRE(r.stats.resident_feeds > 0);
+    CHECK(r.stats.zero_work_ops >= r.stats.resident_feeds);
+
+    std::size_t free_feeds = 0;
+    for (const auto& rec : r.timeline)
+        if (rec.kind == TileOpKind::Feed && rec.zero_work) {
+            CHECK(rec.finish == rec.start);        // genuinely costs nothing
+            ++free_feeds;
+        }
+    CHECK(free_feeds == r.stats.resident_feeds);
+}
+
+TEST_CASE("runs stay deterministic under capacity pressure",
+          "[program][transactional][capacity]") {
+    const std::size_t peak =
+        characterize::peak_live_tiles(derive_lu_tile_program(96, 32));
+    auto once = [&]() {
+        TileProgram p = derive_lu_tile_program(96, 32);
+        fill_lu(p, 96);
+        DeviceDescriptor dev = DeviceDescriptor::checkerboard(4);
+        dev.l3_tiles = static_cast<Dim>(peak);
+        return run_transactional(p, dev, Placement::single(4));
+    };
+    const auto a = once();
+    const auto b = once();
+    CHECK(a.stats.makespan == b.stats.makespan);
+    CHECK(a.stats.l3_credit_stalls == b.stats.l3_credit_stalls);
+    CHECK(a.stats.peak_l3_residency == b.stats.peak_l3_residency);
+    REQUIRE(a.timeline.size() == b.timeline.size());
+    for (std::size_t i = 0; i < a.timeline.size(); ++i)
+        CHECK(a.timeline[i].start == b.timeline[i].start);
 }

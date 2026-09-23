@@ -6,9 +6,11 @@
 // Decided by ADR 0001 (docs/architecture/adr/0001-program-contract-and-
 // transactional-engine.md); designed in docs/plans/tile-transaction-executor.md.
 //
-// INCREMENT 3 SCOPE (design note §10): the event engine and the firing rule,
-// with compute-tile and movement-lane resources. Deliberately NOT yet:
-//   - buffer capacity / credits and residency-based reuse (increment 4);
+// SCOPE (design note §10): the event engine and the firing rule (increment 3), plus
+// L3 buffer capacity, credits and residency-based reuse (increment 4). Deliberately
+// NOT yet:
+//   - L2/L1 capacity, which §5 counts PER COMPUTE TILE and therefore waits for the
+//     placement pass to bind tiles to compute tiles (increment 5);
 //   - per-hop movement, DRAM→L3 vs on-chip (increment 5);
 //   - calibration against the cycle-accurate tier (increment 6);
 //   - reachability through the fidelity factory (increment 7).
@@ -42,6 +44,7 @@
 #include <cstdint>
 #include <functional>
 #include <queue>
+#include <set>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -85,6 +88,12 @@ struct TileRunStats {
     double movement_utilization = 0.0;
     std::size_t ops = 0, computes = 0, movements = 0, zero_work_ops = 0;
     double total_macs = 0.0, total_move_bytes = 0.0;
+    // Capacity (increment 4). A stall is an op that was dependency-ready and had a free
+    // resource but could not get an L3 slot — the signal that the buffer, not the
+    // fabric, is the limit.
+    std::size_t l3_credit_stalls = 0;
+    std::size_t peak_l3_residency = 0;    // in tiles; compare against DeviceDescriptor::l3_tiles
+    std::size_t resident_feeds = 0;       // feeds that cost nothing because the tile was already there
     // Analytical floor under THIS executor's resource model (design note §9).
     double lower_bound = 0.0;
 };
@@ -144,6 +153,47 @@ public:
             result.timeline[i].zero_work = !has_work;
         }
 
+        // ---- L3 capacity, residency and tile lifetimes (increment 4) --------
+        // A tile occupies an L3 slot from the moment it becomes resident — fed in, or
+        // materialised as an op's output — until its LAST USE completes. Last use is
+        // computed statically here, so credit returns are deterministic and a Drain
+        // behaves as a consumer rather than a deallocator: it frees the slot only when
+        // it happens to be the last op that touches the tile.
+        auto tile_key = [](const TileCoord& c) {
+            return c.operand + "#" + std::to_string(c.ti) + "#" + std::to_string(c.tj);
+        };
+        std::map<std::string, std::size_t> last_use;      // tile -> last op touching it
+        std::vector<std::vector<std::string>> op_tiles(ops.size());   // tiles each op touches
+        for (std::size_t i = 0; i < ops.size(); ++i) {
+            for (const TileCoord& c : ops[i].inputs)  { last_use[tile_key(c)] = i; op_tiles[i].push_back(tile_key(c)); }
+            for (const TileCoord& c : ops[i].outputs) { last_use[tile_key(c)] = i; op_tiles[i].push_back(tile_key(c)); }
+        }
+
+        const Dim l3_capacity = dev.l3_tiles;             // 0 = unbounded
+        std::set<std::string> resident;                   // tiles holding an L3 slot
+        std::size_t peak_residency = 0, credit_stalls = 0, resident_feeds = 0;
+
+        // What this op would have to make resident in order to run.
+        auto needed_slots = [&](std::size_t op) {
+            std::size_t n = 0;
+            for (const std::string& k : op_tiles[op])
+                if (!resident.count(k)) ++n;
+            return n;
+        };
+        auto has_capacity = [&](std::size_t op) {
+            if (l3_capacity == 0) return true;            // unbounded
+            const std::size_t need = needed_slots(op);
+            return resident.size() + need <= l3_capacity;
+        };
+        auto acquire = [&](std::size_t op) {
+            for (const std::string& k : op_tiles[op]) resident.insert(k);
+            peak_residency = std::max(peak_residency, resident.size());
+        };
+        auto release_after = [&](std::size_t op) {
+            for (const std::string& k : op_tiles[op])
+                if (last_use.count(k) && last_use[k] == op) resident.erase(k);
+        };
+
         // ---- resources -----------------------------------------------------
         // Compute tiles come from the placement (the JIT's decision); movement
         // lanes from the device. Per-hop movement is increment 5.
@@ -202,42 +252,116 @@ public:
             (kind == ResourceKind::ComputeTile ? cf_busy : lane_busy)[id] = true;
             fired[op] = true;
 
+            // Residency is checked BEFORE movement: a Feed of a tile already in L3 moves
+            // nothing, so it costs nothing (§5, and the zero-work case of §7.1).
+            const bool feed_of_resident =
+                ops[op].kind == TileOpKind::Feed && !ops[op].inputs.empty() &&
+                resident.count(tile_key(ops[op].inputs[0])) != 0;
+            const Cycle dur = feed_of_resident ? 0 : duration[op];
+            if (feed_of_resident) ++resident_feeds;
+
+            acquire(op);                       // hold the slots for every tile it touches
+
             TileOpRecord& rec = result.timeline[op];
             rec.resource = kind;
             rec.resource_id = id;
+            rec.zero_work = rec.zero_work || feed_of_resident;
             rec.start = now;
-            rec.finish = now + duration[op];
+            rec.finish = now + dur;
 
             // Values are applied at FIRE time, in event order. Dependencies are
             // satisfied by construction, so this is exactly the reference's order for
             // anything that interacts — hence bit-identical results.
             apply(req.program, ops[op], state_);
             events.push(Event{rec.finish, op});
+            duration[op] = dur;                // so the stats and bounds see what it cost
+        };
+
+        // Credits GATE, they never reorder — and the invariant has to be stronger than
+        // "don't promote a later READY op past an earlier one".
+        //
+        // Measured failure of the weaker rule: a 64^3 T=16 GEMM whose peak live set is 21
+        // tiles deadlocked at EVERY finite capacity, 25 included. The feeds are
+        // dependency-ready immediately, so they eagerly take every slot; the computes that
+        // would retire those tiles are not ready yet (they are waiting on those same
+        // feeds), so they never get counted as "earlier waiters", and once the slots are
+        // gone the computes cannot obtain the one slot they need for their output. Classic
+        // hold-and-wait, and no ordering among READY ops can break it.
+        //
+        // The invariant that does: NEW SLOTS ARE ACQUIRED IN PROGRAM ORDER. An op may take
+        // slots only when no earlier unfired op still needs any. An op needing no new slots
+        // — every tile it touches is already resident — fires freely, because it cannot
+        // contribute to hold-and-wait.
+        //
+        // This bounds the live set by the PROGRAM-ORDER live set, so any capacity at or
+        // above `peak_live_tiles(prog)` is guaranteed to complete, and a smaller budget
+        // stalls and then refuses with a diagnosis rather than wedging silently.
+        // Concurrency survives: resident-tile ops still fire in parallel, which is exactly
+        // the reuse the tier exists to reward.
+        std::size_t slot_cursor = 0;          // monotone: never revisits a fired op
+        auto earliest_slot_seeker = [&]() -> long {
+            if (l3_capacity == 0) return -1;  // unbounded: no ordering constraint at all
+            while (slot_cursor < ops.size() && fired[slot_cursor]) ++slot_cursor;
+            for (std::size_t i = slot_cursor; i < ops.size(); ++i)
+                if (!fired[i] && needed_slots(i) > 0) return static_cast<long>(i);
+            return -1;
         };
 
         auto try_fire = [&]() {
-            for (Dim l = 0; l < n_lanes && !ready_move.empty(); ++l)
-                if (!lane_busy[l]) { fire(ready_move.top(), ResourceKind::MoveLane, l);
-                                     ready_move.pop(); }
-            for (Dim t = 0; t < n_cf && !ready_compute.empty(); ++t)
-                if (!cf_busy[t]) { fire(ready_compute.top(), ResourceKind::ComputeTile, t);
-                                   ready_compute.pop(); }
-            for (Dim t = 0; t < ready_pinned.size(); ++t)
-                if (!cf_busy[t] && !ready_pinned[t].empty()) {
-                    fire(ready_pinned[t].top(), ResourceKind::ComputeTile, t);
-                    ready_pinned[t].pop();
-                }
+            const long seeker = earliest_slot_seeker();
+            auto admissible = [&](std::size_t op) {
+                if (needed_slots(op) == 0) return true;      // takes nothing new
+                if (!has_capacity(op)) return false;         // cannot fit
+                return seeker < 0 || static_cast<long>(op) == seeker;
+            };
+            for (Dim l = 0; l < n_lanes && !ready_move.empty(); ++l) {
+                if (lane_busy[l]) continue;
+                const std::size_t op = ready_move.top();
+                if (!admissible(op)) { ++credit_stalls; break; }
+                fire(op, ResourceKind::MoveLane, l);
+                ready_move.pop();
+            }
+            for (Dim t = 0; t < n_cf && !ready_compute.empty(); ++t) {
+                if (cf_busy[t]) continue;
+                const std::size_t op = ready_compute.top();
+                if (!admissible(op)) { ++credit_stalls; break; }
+                fire(op, ResourceKind::ComputeTile, t);
+                ready_compute.pop();
+            }
+            for (Dim t = 0; t < ready_pinned.size(); ++t) {
+                if (cf_busy[t] || ready_pinned[t].empty()) continue;
+                const std::size_t op = ready_pinned[t].top();
+                if (!admissible(op)) { ++credit_stalls; continue; }
+                fire(op, ResourceKind::ComputeTile, t);
+                ready_pinned[t].pop();
+            }
         };
 
         try_fire();
         while (remaining > 0) {
             if (events.empty()) {
-                // Nothing running and nothing ready: a genuine wedge. Diagnose it
+                // Nothing running, nothing able to fire: a genuine wedge. Diagnose it
                 // rather than hang or silently return a short run (design note §4).
+                // With capacity modelled this path is reachable, and the usual cause is
+                // an L3 budget too small for the program's live set — so say that first,
+                // with the numbers, before dumping dependency chains.
                 std::string why;
-                for (std::size_t i = 0; i < ops.size() && why.size() < 800; ++i)
+                std::size_t blocked_on_credit = 0;
+                for (std::size_t i = 0; i < ops.size(); ++i)
+                    if (!completed[i] && !fired[i] && pred_remaining[i] == 0 && !has_capacity(i))
+                        ++blocked_on_credit;
+
+                if (blocked_on_credit > 0) {
+                    why = "\n  " + std::to_string(blocked_on_credit) +
+                          " op(s) are dependency-ready but cannot get an L3 slot: " +
+                          std::to_string(resident.size()) + " of " +
+                          std::to_string(l3_capacity) + " tiles resident. The program's "
+                          "live set does not fit this L3 budget — raise l3_tiles, or "
+                          "re-tile so fewer tiles are live at once.";
+                }
+                for (std::size_t i = 0; i < ops.size() && why.size() < 1200; ++i)
                     if (!completed[i] && !fired[i])
-                        why += "\n" + deps.explain_blocked(prog, i, completed);
+                        why += "\n  " + deps.explain_blocked(prog, i, completed);
                 throw std::runtime_error(
                     "TileTransactionExecutor: no op can fire and nothing is in flight; " +
                     std::to_string(remaining) + " ops remain." + why);
@@ -260,6 +384,8 @@ public:
                     lane_busy[rec.resource_id] = false;
                     lane_busy_cycles += duration[op];
                 }
+
+                release_after(op);          // slots whose last consumer just completed
 
                 for (std::size_t s : deps.succs[op])
                     if (--pred_remaining[s] == 0) enqueue(s);
@@ -287,6 +413,10 @@ public:
         st.lower_bound = std::max({critical_path_(deps, duration),
                                    double(st.compute_cycles) / double(n_cf),
                                    double(st.movement_cycles) / double(n_lanes)});
+
+        st.l3_credit_stalls = credit_stalls;
+        st.peak_l3_residency = peak_residency;
+        st.resident_feeds = resident_feeds;
 
         result.summary = summarize_(prog);
         return result;
