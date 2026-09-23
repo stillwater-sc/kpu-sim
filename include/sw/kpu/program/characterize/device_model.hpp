@@ -44,7 +44,11 @@ struct DeviceDescriptor {
 
     // Concurrency / capacity ---------------------------------------------------
     Dim compute_tiles = 1;      // # CF tiles that can run tile-compute ops concurrently
-    Dim move_lanes    = 1;      // COLLAPSED movement: one pool for every hop (see hops())
+    // Aggregate movement concurrency for the ANALYTICAL harness only (lumped_duration,
+    // TileDag). The executor does not use it: it schedules per process, above. Kept
+    // because the first-order analytical model is a different tier with a different job,
+    // not because movement is ever one pool.
+    Dim move_lanes    = 1;
     // L3 capacity, counted IN TILES. 0 = unbounded, which is what a design-space sweep
     // wants and what preserves pre-capacity behaviour. Enforced dynamically by
     // TileTransactionExecutor as well as checked statically by the harness.
@@ -54,34 +58,46 @@ struct DeviceDescriptor {
 
     // Throughput ---------------------------------------------------------------
     double fabric_macs_per_cycle = 256.0;   // MAC throughput of ONE CF tile
-    double bytes_per_cycle       = 64.0;    // ONE collapsed movement lane's bandwidth
+    double bytes_per_cycle       = 64.0;    // analytical harness only (see move_lanes)
     double element_bytes         = 4.0;     // fp32
 
-    // Movement, per hop (#264 increment 5, design note §6) -----------------------
-    // A tile does not cross the machine in one step: DRAM->L3 is realized by the DMA
-    // against DRAM bandwidth, and L3->L1 by the on-chip movers (BlockMover L3->L2 and
-    // Streamer L2->L1, collapsed into one stage here). Modelling them as one aggregate
-    // pool cannot express the bottleneck that usually decides the makespan, which is DRAM
-    // rather than on-chip movement.
+    // Movement, per CSP process (#264 increment 5, design note §6) ---------------
+    // A tile does not cross the machine in one step, and IT CANNOT CROSS IT IN TWO
+    // EITHER. Each leg is governed by its own CSP process over its own physical pathway:
     //
-    // Movement ends at L1: THE COMPUTE FABRIC READS ONLY L1, so no hop terminates at the
-    // fabric and `onchip_*` never describes a path into it.
+    //   DMA         DRAM <-> L3
+    //   BlockMover  L3 <-> L2, and L3 -> L3 across the NoC (reuse)
+    //   Streamer    L2 <-> L1
     //
-    // THE COLLAPSE IS A DESCRIPTOR SETTING, NOT A HARDCODED ASSUMPTION (§6). Leaving
-    // `dram_lanes` and `onchip_lanes` at 0 yields ONE collapsed hop over `move_lanes`
-    // and `bytes_per_cycle` — identical to pre-increment-5 behaviour, which is what
-    // existing harness sweeps depend on. Setting either splits the chain in two.
-    Dim    dram_lanes            = 0;       // 0 = collapsed (use move_lanes)
-    double dram_bytes_per_cycle  = 64.0;    // per lane, DRAM<->L3
-    Dim    onchip_lanes          = 0;       // 0 = collapsed (use move_lanes)
-    double onchip_bytes_per_cycle = 256.0;  // per lane, L3<->L1; on-chip is the faster hop
+    // The fabric reads only L1, and the L1 stream buffers push elements into it — that is
+    // not a mover, so it owns no lanes and no bandwidth.
+    //
+    // THERE IS NO COLLAPSED MODE. L3->L2 and L2->L1 are distinct processes over distinct
+    // pathways, so one stage standing for both describes a machine that cannot be built.
+    // A span always contains all of its hops; residency changes only where a chain
+    // STARTS (a tile already in L3 begins at the BlockMover), never which hops it has.
+    // An earlier revision offered a two-pool descriptor with a collapsed single-pool
+    // fallback. It was REMOVED rather than deprecated: a mode that models an unbuildable
+    // machine has no valid use, so keeping it for compatibility would only preserve wrong
+    // answers.
+    //
+    // Lanes belong to the process: inbound and outbound legs share one pool, because
+    // there is one set of BlockMovers, not one per direction.
+    Dim    dma_engines            = 1;
+    double dma_bytes_per_cycle    = 64.0;    // per engine, DRAM <-> L3
+    Dim    block_movers           = 1;
+    double bm_bytes_per_cycle     = 128.0;   // per mover, L3 <-> L2
+    Dim    streamers              = 1;
+    double str_bytes_per_cycle    = 256.0;   // per streamer, L2 <-> L1
+    Dim    noc_links              = 0;       // 0 = topology declares no L3<->L3 path
+    double noc_bytes_per_cycle    = 128.0;   // per link, L3 -> L3 (reuse)
 
-    // Per §6.1, every *_bytes_per_cycle above is PER LANE, never aggregate: a hop's peak
-    // throughput is lanes x bytes_per_cycle, one transfer occupies exactly one lane for
-    // its whole duration, and lanes give concurrency, never speed-up. Left ambiguous, the
-    // same descriptor would yield different makespans in different implementations and
+    // Per §6.3, every *_bytes_per_cycle above is PER LANE, never aggregate: a process's
+    // peak throughput is lanes x bytes_per_cycle, one transfer occupies exactly one lane
+    // for its whole duration, and lanes give concurrency, never speed-up. Left ambiguous,
+    // the same descriptor would yield different makespans in different implementations and
     // calibration would mean nothing.
-    bool per_hop_movement() const { return dram_lanes > 0 || onchip_lanes > 0; }
+
 
     // Energy (pJ), illustrative — movement >> compute is the headline principle ---
     double pj_per_mac                 = 1.0;
@@ -108,12 +124,10 @@ struct DeviceDescriptor {
     }
 
     std::string label() const {
-        if (per_hop_movement())
-            return std::string(to_string(topology)) + "/cf" + std::to_string(compute_tiles) +
-                   "/dram" + std::to_string(std::max<Dim>(dram_lanes, 1)) +
-                   "/onchip" + std::to_string(std::max<Dim>(onchip_lanes, 1));
         return std::string(to_string(topology)) + "/cf" + std::to_string(compute_tiles) +
-               "/ml" + std::to_string(move_lanes);
+               "/dma" + std::to_string(std::max<Dim>(dma_engines, 1)) +
+               "/bm" + std::to_string(std::max<Dim>(block_movers, 1)) +
+               "/str" + std::to_string(std::max<Dim>(streamers, 1));
     }
 };
 
