@@ -428,24 +428,38 @@ is exactly "write and test Domain Flow Programs at different abstraction levels"
 
 **Correct what already encodes the old framing:**
 
-- [ ] PR #275 — `fidelity-framework.md` frames the tiers as value/timing fidelity; under
-      this ADR it is transaction granularity. Its value correction stays right either way.
-- [ ] `docs/architecture/program-execution-uml.md` — §1/§3 headings call the cycle-accurate
-      engine "the CSP tier", and the level set needs L-T2.
-- [ ] ADR 0001 — carries a forward pointer to this ADR for the tier/engine naming.
+- [x] PR #275 — `fidelity-framework.md` framed the tiers as value/timing fidelity; it now
+      leads with transaction granularity (#278). The value correction stayed right either way.
+- [x] `docs/architecture/program-execution-uml.md` — the "CSP tier" headings are gone and the
+      level set carries L-T2 (#278).
+- [x] ADR 0001 — carries the forward pointer for the tier/engine naming.
 - [ ] `TileTransactionExecutor` is the **L-T1 block-sequential interpreter**; naming to
-      follow, behaviour unchanged.
+      follow, behaviour unchanged. **Still outstanding** — no `BlockSequentialInterpreter`
+      exists yet, and the rename is cheapest once #283 introduces the sibling it is named
+      against.
 
-**New work this opens** (issues to file):
+**New work this opens — filed 2026-09-23:**
 
-- [ ] Derive explicit **CSP processes and channels** from the DFP — today `TileProgram` is
-      the block-sequential projection with the structure implicit (§5.1).
-- [ ] **L-T2 resource-transactional interpreter** over the fixed vocabulary of §3.3.
-- [ ] **VirtualPlatform**: deployment spec, global naming map, `run(level)`, `step()`,
-      snapshot/restore, provenance.
-- [ ] **Backdoor** as its own interface, with the §3.4 invariants enforced — not routed
-      through any physically-manifested state path.
-- [ ] **`kpu-run`** driver: `--program`, `--deploy`, `--level`, `--step`.
+- [x] **#281** — derive explicit **CSP processes and channels** from the DFP; today
+      `TileProgram` is the block-sequential projection with the structure implicit (§5.1).
+- [x] **#283** — **L-T2 resource-transactional interpreter** over the fixed vocabulary of
+      §3.3. Depends on #281 and #282.
+- [x] **#282** — **VirtualPlatform**: deployment spec, global naming map, `run(level)`,
+      `step()`, snapshot/restore, provenance. Blocks #283, #284 and #285.
+- [x] **#284** — **Backdoor** as its own interface, with the §3.4 invariants enforced — not
+      routed through any physically-manifested state path. Depends on #282.
+- [x] **#285** — **`kpu-run`** driver: `--program`, `--deploy`, `--level`, `--step`.
+      Depends on #282, #283 and #265.
+
+**Filed alongside, not from this ADR:**
+
+- [x] **#286** — transaction visualization: single-step plus **station occupancy** at
+      L3/L2/L1 and the compute-fabric PEs. Not an ADR 0002 decision, but it is the
+      observability counterpart to the credit model this ADR's levels are built on, and it
+      is what would have caught the #279 release bug from a trace rather than from review.
+
+Dependency order for the five: **#281 and #282 first** (neither is blocked), then **#283**,
+with **#284** and **#285** following #282. #286 is usable for L3 at L-T1 before any of them.
 
 **Unchanged:** #264 increment 4 (tile-granularity credits and capacity) is exactly what
 L-T1 is for.
