@@ -9,6 +9,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **L3 credits, capacity and residency reuse in the L-T1 executor (increment 4 of
+  #264).** The transactional tier now enforces **L3 buffer capacity in tiles**, rewards
+  residency, and refuses an over-committed program with a diagnosis instead of wedging.
+  The invariant that makes the credit model deadlock-free is that **new slots are acquired
+  in program order**: the weaker rule ("do not promote a later ready op past an earlier
+  one") wedged at *every* finite capacity — 25 slots for a program whose peak live set is
+  21 — because feeds are dependency-ready immediately and take every slot, while the
+  computes that would retire those tiles are waiting on those very feeds. An op whose
+  tiles are all resident fires freely, since it cannot contribute to hold-and-wait, so
+  reuse keeps its concurrency. On a 64x64x64 GEMM at tile 16 (static `peak_live_tiles` =
+  21): unbounded 1184 cycles with peak residency 29; 25 tiles 1216 with 20 credit stalls;
+  21 tiles 1312 with 32 stalls; 20 tiles refused. For this program the dynamic feasibility
+  boundary coincides **exactly** with the harness's independent static check, and that
+  equality is asserted — though `peak_live_tiles` is **sufficient, not necessary**, since
+  reuse and zero-slot ops can make a smaller budget work. Also: a feed of an
+  already-resident tile moves nothing so it costs nothing (marked `zero_work`; a tiled
+  GEMM re-feeds one `B[tk,tj]` down a column of output tiles, and charging for those would
+  misprice the reuse this tier exists to reward), credits are returned when a tile's
+  **last user completes** rather than at its highest-indexed user (readers of one tile are
+  deliberately unordered, so the higher-indexed one can finish first and free a slot an
+  earlier reader still holds), and the stats `l3_credit_stalls`, `peak_l3_residency` and
+  `resident_feeds`. **L2/L1 capacity is not here**: the design note counts it per compute
+  tile, so it waits for the placement pass (increment 5).
+
 - **`TileTransactionExecutor` — the TRANSACTIONAL tier executes L0 programs
   (increment 3 of #264).** An L0 `TileProgram` now runs on a tier that returns **exact
   values and tile-granularity timing from one run**: an event engine ordered by
