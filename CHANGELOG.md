@@ -9,31 +9,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- **Per-hop movement in the L-T1 executor (increment 5 of #264).** Movement is modelled
-  **per hop** instead of as one aggregate lane pool: **DRAM→L3** (the DMA, against DRAM
-  bandwidth) and **L3→L1** (the on-chip movers — BlockMover and Streamer collapsed into one
-  stage, since the compute fabric reads only L1) each have their own lane count and their
-  own **per-lane** bandwidth, so the bottleneck that usually decides the makespan — DRAM,
-  not on-chip movement — is finally expressible. A `Feed` expands into the hop chain
-  needed to reach its consumer, skipping hops residency already satisfies; a `Drain` is
-  the reverse chain; and hops for one tile are **pipelined**, so hop *n+1* starts as soon
-  as hop *n* completes while different tiles occupy different hops concurrently. The §6.1
-  semantics are **asserted, not assumed**, because ambiguity there would make calibration
-  meaningless: one transfer occupies exactly one lane for its whole duration, and **lanes
-  give concurrency, never speed-up** — adding idle lanes never shortens a single transfer
-  (measured constant at 64 cycles across 1, 2 and 8 lanes). On a DRAM-starved 64³ GEMM the
-  DRAM hop runs at 99% utilization while the on-chip hop sits under 10%, and adding DRAM
-  lanes cuts the makespan (3096 → 1656 → 1256) while total DRAM busy cycles stay fixed at
-  3072 — concurrency and speed-up, separated in cycles. **The collapse is a descriptor
-  setting, not a code path**: leaving `dram_lanes`/`onchip_lanes` at 0 gives one collapsed
-  hop over `move_lanes` and reproduces every increment-4 number exactly. Values are
-  unchanged and bit-identical to `TileProgramReference` under per-hop movement —
-  decomposition changes *when*, never *what*. New stats `hop_busy_cycles`,
-  `hop_utilization`, `hop_transfers` and `hop_lane_stalls`, plus per-hop intervals on each
-  timeline record; the analytical floor now takes the **busiest hop** rather than an
-  average, since one hop's lanes cannot carry another hop's traffic. **Per-CF-tile lanes
-  and L2/L1 capacity are not here**: both need a static binding of compute ops to compute
-  tiles, which belongs with the placement pass.
+- **Movement as a chain of CSP processes in the L-T1 executor (increment 5 of #264).**
+  Movement is modelled **per process**, each reading one physical memory and writing the
+  next: **DMA** (DRAM↔L3), **BlockMover** (L3↔L2, and L3→L3 across the NoC for reuse) and
+  **Streamer** (L2↔L1). Lanes belong to the process, so inbound and outbound legs share one
+  pool — there is one set of BlockMovers, not one per direction — and each process is its
+  own bottleneck candidate, which is what makes DRAM bandwidth expressible as the limit it
+  usually is. A `Feed` traverses DMA→BlockMover→Streamer, a `Drain` the reverse, and hops
+  for one tile are **pipelined**: hop *n+1* starts as soon as hop *n* completes, while
+  different tiles occupy different hops concurrently. §6.3's semantics are **asserted, not
+  assumed**, because ambiguity there would make calibration meaningless: one transfer holds
+  exactly one lane for its whole duration, and **lanes give concurrency, never speed-up**
+  (measured constant across 1, 2 and 8 lanes). On a DMA-starved 64³ GEMM the DMA runs at
+  100% utilization and **attains the analytical floor** while the streamers sit under 5%;
+  adding engines cuts the makespan (3072 → 1584 → 1248) with total DMA busy cycles fixed.
+  The L1 stream cost — `l1_duration`'s drain bubble — lands on the **Streamer legs**, which
+  are the hops that touch the stream buffers, leaving the DMA and BlockMover legs on the
+  byte model.
+
+  **Hops do not collapse, and the first implementation of this increment wrongly assumed
+  they could.** It offered a single-pool "collapsed" mode and treated the collapse as a
+  descriptor setting. The physical pathways for a shortcut do not exist: L3→L2 and L2→L1 are
+  distinct processes, so **a span always contains all of its hops**. The collapsed mode is
+  **removed, not deprecated** — a mode that models an unbuildable machine has no valid use.
+  Residency now changes only where a chain *starts*: a tile already in L3 begins at the
+  BlockMover, which makes reuse **cheaper by one leg rather than free**, and the
+  `resident_feeds` count is of chains that re-entered rather than of transfers that cost
+  nothing. Movement also **ends at L1**, since that is the fabric's only data interface;
+  the L1 buffers push elements into the fabric, which is not a mover and owns no lanes.
+  New stats `hop_busy_cycles` and `hop_transfers` per leg, `mover_busy_cycles`,
+  `mover_utilization` and `mover_lanes` per process, and `hop_lane_stalls`; the analytical
+  floor takes the **busiest process**, since one process's lanes cannot carry another's
+  traffic. Values are unchanged and bit-identical to `TileProgramReference` —
+  decomposition changes *when*, never *what*. **Per-CF-tile lane attribution and L2/L1
+  capacity are not here**: both need a static binding of compute ops to compute tiles.
 
 - **L3 credits, capacity and residency reuse in the L-T1 executor (increment 4 of
   #264).** The transactional tier now enforces **L3 buffer capacity in tiles**, rewards

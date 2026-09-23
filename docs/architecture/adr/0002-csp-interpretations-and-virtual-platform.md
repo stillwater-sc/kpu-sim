@@ -200,9 +200,17 @@ a value inside the array and pulls it.
 the L1 layer: operands are pushed in from L1 and results are pushed back out to L1, and no
 transaction connects it to L2, L3 or DRAM. Movement therefore *ends at L1* — a hop chain
 runs DRAM→L3→L2→L1 and stops, and any model whose movement terminates "at the fabric" has
-mislabelled its last hop. Collapsing L3→L2 and L2→L1 into one modelled stage is allowed
-(#264 increment 5 does exactly that); collapsing *past* L1 is not, because it would imply a
-port that does not exist.
+mislabelled its last hop.
+
+**Nor may the chain be collapsed** (corrected 2026-09-23). Each leg is governed by its own
+CSP process — DMA for DRAM↔L3, BlockMover for L3↔L2 (and L3→L3 across the NoC), Streamer
+for L2↔L1 — and the pathways between them are physically distinct. Modelling two legs as one
+stage describes a machine that cannot be built, so **a span always contains all of its
+hops**. An earlier revision of this paragraph said collapsing L3→L2 and L2→L1 was allowed
+and cited #264 increment 5 as doing it; both the permission and the implementation were
+wrong, and #292 removes the collapsed mode rather than deprecating it. Residency may change
+where a chain *starts* — a tile already in L3 begins at the BlockMover — but never which
+hops it contains.
 
 **The compute fabric is a domain flow compute engine** (clarified 2026-09-23). This is a
 containment, and the direction matters:

@@ -199,6 +199,14 @@ TEST_CASE("placement decides where compute lands", "[program][transactional]") {
     fill_matmul(pinned_prog, 64, 64);
 
     DeviceDescriptor dev = DeviceDescriptor::checkerboard(4);
+    // Provision the movement processes generously, so COMPUTE is the bottleneck and
+    // placement is what the makespan is measuring. With one lane per process the real
+    // three-hop chain dominates, and pinning every op to one compute tile costs nothing
+    // measurable — the assertion below would pass or fail for reasons unrelated to
+    // placement.
+    dev.dma_engines = 8;   dev.dma_bytes_per_cycle = 1024.0;
+    dev.block_movers = 8;  dev.bm_bytes_per_cycle = 1024.0;
+    dev.streamers = 8;     dev.str_bytes_per_cycle = 1024.0;
 
     const auto unpinned = run_transactional(unpinned_prog, dev, Placement::single(4));
 
@@ -377,24 +385,43 @@ TEST_CASE("capacity pressure throttles rather than corrupting",
     }
 }
 
-TEST_CASE("a tile already resident is re-fed for free", "[program][transactional][capacity]") {
-    // Tiled GEMM re-feeds one B[tk,tj] across a column of output tiles. Charging for
-    // those re-feeds would misprice exactly the reuse this tier exists to reward.
+TEST_CASE("a tile already resident re-enters the chain; it is not re-fed for free",
+          "[program][transactional][capacity]") {
+    // Tiled GEMM re-feeds one B[tk,tj] across a column of output tiles, and this tier
+    // exists partly to reward that reuse. But the reward is SKIPPING THE DMA LEG, not
+    // skipping the chain: L2 and L1 are separate memories reached by separate processes,
+    // so the tile still crosses the BlockMover and the Streamer to reach a stream buffer.
+    //
+    // An earlier version of this test asserted such a feed was free and zero-work. That
+    // followed from the collapsed-hop model, which described a machine that cannot be
+    // built.
     TileProgram p = derive_matmul_tile_program(64, 64, 64, 16, 16, 16);
     fill_matmul(p, 64, 64);
     const DeviceDescriptor dev = DeviceDescriptor::single();
     const auto r = run_transactional(p, dev, Placement::single(dev.compute_tiles));
 
     REQUIRE(r.stats.resident_feeds > 0);
-    CHECK(r.stats.zero_work_ops >= r.stats.resident_feeds);
 
-    std::size_t free_feeds = 0;
-    for (const auto& rec : r.timeline)
-        if (rec.kind == TileOpKind::Feed && rec.zero_work) {
-            CHECK(rec.finish == rec.start);        // genuinely costs nothing
-            ++free_feeds;
+    std::size_t reuse = 0;
+    Cycle reuse_span = 0, fresh_span = 0;
+    for (const auto& rec : r.timeline) {
+        if (rec.kind != TileOpKind::Feed || rec.hops.empty()) continue;
+        if (rec.hops.front().hop == Hop::BlockMoverL3ToL2) {
+            ++reuse;
+            CHECK(rec.hops.size() == 2);                   // BlockMover + Streamer
+            CHECK(rec.finish > rec.start);                 // cheaper, NOT free
+            if (reuse_span == 0) reuse_span = rec.finish - rec.start;
+        } else {
+            CHECK(rec.hops.front().hop == Hop::DmaDramToL3);
+            CHECK(rec.hops.size() == 3);
+            if (fresh_span == 0) fresh_span = rec.finish - rec.start;
         }
-    CHECK(free_feeds == r.stats.resident_feeds);
+    }
+    CHECK(reuse == r.stats.resident_feeds);
+    // The saving is exactly one leg's worth of work.
+    REQUIRE(fresh_span > 0);
+    REQUIRE(reuse_span > 0);
+    CHECK(reuse_span < fresh_span);
 }
 
 TEST_CASE("runs stay deterministic under capacity pressure",
@@ -575,9 +602,11 @@ TEST_CASE("work unblocked by a firing starts in the same cycle, not after the ne
     CHECK(r.timeline[3].start == r.timeline[2].start);
     CHECK(r.timeline[3].start < r.timeline[2].finish);   // i.e. no wait for a completion
 
-    // Against a single-pass try_fire, feed D starts at op2's FINISH instead (48 vs 32)
-    // and the makespan grows from 80 to 96.
-    CHECK(r.stats.makespan == 80);
+    // Against a single-pass try_fire, feed D starts at op2's FINISH rather than its start,
+    // which pushes the whole run out. Asserted relationally: the exact makespan moved when
+    // hops stopped collapsing, and a number that has to be re-derived on every model change
+    // tests the model less than the relation does.
+    CHECK(r.timeline[3].finish <= r.stats.makespan);
 }
 
 TEST_CASE("a feasible op past the scan window is still found, not refused",
@@ -600,7 +629,13 @@ TEST_CASE("a feasible op past the scan window is still found, not refused",
 }
 
 // ============================================================================
-// Increment 5 — movement, per hop (design note §6)
+// Increment 5 — movement as a chain of CSP processes (design note §6)
+//
+// The first version of this increment modelled a collapsible chain, with a
+// single-pool "collapsed" mode selected by the descriptor. That was wrong: the
+// physical pathways for a shortcut do not exist. DMA (DRAM<->L3), BlockMover
+// (L3<->L2) and Streamer (L2<->L1) are distinct processes, so a span always
+// contains all of its hops. These tests pin that, not the old flexibility.
 // ============================================================================
 namespace {
 
@@ -610,78 +645,117 @@ TileRunResult run_gemm_on(const DeviceDescriptor& dev) {
     return run_transactional(p, dev, Placement::single(dev.compute_tiles));
 }
 
-DeviceDescriptor dram_starved(Dim dram_lanes) {
+DeviceDescriptor dma_starved(Dim engines) {
     DeviceDescriptor d = DeviceDescriptor::single();
-    d.dram_lanes = dram_lanes;
-    d.dram_bytes_per_cycle = 16.0;      // the scarce resource
-    d.onchip_lanes = 4;
-    d.onchip_bytes_per_cycle = 256.0;   // on-chip is wide and plentiful
+    d.dma_engines = engines;
+    d.dma_bytes_per_cycle = 16.0;      // the scarce process
+    d.block_movers = 4;
+    d.bm_bytes_per_cycle = 256.0;
+    d.streamers = 4;
+    d.str_bytes_per_cycle = 256.0;
     return d;
+}
+
+std::size_t count_hop(const TileRunResult& r, Hop h) {
+    std::size_t n = 0;
+    for (const auto& rec : r.timeline)
+        for (const auto& hr : rec.hops)
+            if (hr.hop == h) ++n;
+    return n;
 }
 
 } // namespace
 
-TEST_CASE("the collapsed descriptor keeps the single-pool movement model",
+TEST_CASE("a span contains all of its hops; there is no collapse",
           "[program][transactional][hops]") {
-    // §6 requires the collapse to be a DESCRIPTOR SETTING, not a code path. The default
-    // descriptor must therefore still produce exactly one hop, and every movement op must
-    // traverse it — which is what makes every pre-increment-5 number reproducible.
     const auto r = run_gemm_on(DeviceDescriptor::single());
-    REQUIRE(r.stats.hop_busy_cycles.count(Hop::Collapsed) == 1);
-    CHECK(r.stats.hop_busy_cycles.count(Hop::DramToL3) == 0);
-    CHECK(r.stats.hop_busy_cycles.count(Hop::L3ToL1) == 0);
 
-    // A resident feed moves nothing, so it records no hop at all; everything else records
-    // exactly one.
-    std::size_t one_hop = 0, no_hop = 0;
+    // Every inbound tile that actually comes from DRAM crosses all three legs, in order.
+    // Every outbound tile crosses all three of the reverse legs.
+    std::size_t inbound_full = 0, outbound_full = 0, resident_entry = 0;
     for (const auto& rec : r.timeline) {
-        if (rec.kind == TileOpKind::MatMulAccum) continue;
-        if (rec.hops.empty()) ++no_hop; else { ++one_hop; CHECK(rec.hops.size() == 1); }
+        if (rec.kind == TileOpKind::MatMulAccum) { CHECK(rec.hops.empty()); continue; }
+        if (rec.kind == TileOpKind::Drain) {
+            REQUIRE(rec.hops.size() == 3);
+            CHECK(rec.hops[0].hop == Hop::StreamerL1ToL2);
+            CHECK(rec.hops[1].hop == Hop::BlockMoverL2ToL3);
+            CHECK(rec.hops[2].hop == Hop::DmaL3ToDram);
+            ++outbound_full;
+            continue;
+        }
+        if (rec.hops.size() == 3) {
+            CHECK(rec.hops[0].hop == Hop::DmaDramToL3);
+            CHECK(rec.hops[1].hop == Hop::BlockMoverL3ToL2);
+            CHECK(rec.hops[2].hop == Hop::StreamerL2ToL1);
+            ++inbound_full;
+        } else {
+            // Reuse: the tile is already in L3, so the chain STARTS at the BlockMover.
+            // It does not skip an interior hop — L2 and L1 are separate memories reached
+            // by separate processes.
+            REQUIRE(rec.hops.size() == 2);
+            CHECK(rec.hops[0].hop == Hop::BlockMoverL3ToL2);
+            CHECK(rec.hops[1].hop == Hop::StreamerL2ToL1);
+            ++resident_entry;
+        }
     }
-    CHECK(no_hop == r.stats.resident_feeds);
-    CHECK(one_hop == r.stats.hop_transfers.at(Hop::Collapsed));
+    CHECK(inbound_full > 0);
+    CHECK(outbound_full > 0);
+    CHECK(resident_entry == r.stats.resident_feeds);   // reuse re-enters, never shortcuts
+
+    // No leg is ever absent from the middle of a chain.
+    CHECK(count_hop(r, Hop::StreamerL2ToL1) == inbound_full + resident_entry);
+    CHECK(count_hop(r, Hop::BlockMoverL3ToL2) == inbound_full + resident_entry);
+    CHECK(count_hop(r, Hop::DmaDramToL3) == inbound_full);
 }
 
-TEST_CASE("DRAM bandwidth is expressible as the bottleneck, separately from on-chip",
+TEST_CASE("movement stops at L1, because that is all the fabric reads",
           "[program][transactional][hops]") {
-    // The point of §6: an aggregate pool cannot say "DRAM is the limit". Per hop, it can.
-    const auto one = run_gemm_on(dram_starved(1));
-    const auto two = run_gemm_on(dram_starved(2));
-    const auto four = run_gemm_on(dram_starved(4));
+    const auto r = run_gemm_on(dma_starved(2));
+    for (const auto& rec : r.timeline) {
+        // The L1 buffers push elements into the fabric; that is not a mover, so a compute
+        // op carries no transfer at all.
+        if (rec.kind == TileOpKind::MatMulAccum) { CHECK(rec.hops.empty()); continue; }
+        if (rec.hops.empty()) continue;
+        if (rec.kind == TileOpKind::Drain) {
+            // Results leave FROM L1: the outbound chain starts at the Streamer.
+            CHECK(rec.hops.front().hop == Hop::StreamerL1ToL2);
+        } else {
+            // Operands arrive AT L1 and stop: the inbound chain's last leg is the
+            // Streamer writing the stream buffer, never a leg into the fabric.
+            CHECK(rec.hops.back().hop == Hop::StreamerL2ToL1);
+        }
+    }
+}
 
-    CHECK(one.stats.hop_utilization.at(Hop::DramToL3) > 0.95);   // DRAM is saturated
-    CHECK(one.stats.hop_utilization.at(Hop::L3ToL1) < 0.10);     // on-chip is idle
-    CHECK(one.stats.makespan > run_gemm_on(DeviceDescriptor::single()).stats.makespan);
+TEST_CASE("each movement process is its own bottleneck candidate",
+          "[program][transactional][hops]") {
+    const auto one = run_gemm_on(dma_starved(1));
+    const auto two = run_gemm_on(dma_starved(2));
+    const auto four = run_gemm_on(dma_starved(4));
 
-    // More lanes shorten the run by overlapping transfers...
+    CHECK(one.stats.mover_utilization.at(Mover::Dma) > 0.95);       // DMA saturated
+    CHECK(one.stats.mover_utilization.at(Mover::Streamer) < 0.30);  // streamers idle
     CHECK(two.stats.makespan < one.stats.makespan);
     CHECK(four.stats.makespan < two.stats.makespan);
-    // ...while the total work on that hop is unchanged, which is the §6.1 distinction
-    // between concurrency and speed-up stated in cycles.
-    CHECK(two.stats.hop_busy_cycles.at(Hop::DramToL3) ==
-          one.stats.hop_busy_cycles.at(Hop::DramToL3));
-    CHECK(four.stats.hop_busy_cycles.at(Hop::DramToL3) ==
-          one.stats.hop_busy_cycles.at(Hop::DramToL3));
 
-    // The analytical floor must remain a floor once it accounts for hops.
+    // More engines overlap more transfers; they never shorten the work itself.
+    CHECK(two.stats.mover_busy_cycles.at(Mover::Dma) ==
+          one.stats.mover_busy_cycles.at(Mover::Dma));
+    CHECK(four.stats.mover_busy_cycles.at(Mover::Dma) ==
+          one.stats.mover_busy_cycles.at(Mover::Dma));
     CHECK(one.stats.lower_bound <= double(one.stats.makespan));
-    CHECK(four.stats.lower_bound <= double(four.stats.makespan));
 }
 
-TEST_CASE("lanes give concurrency, never speed-up (§6.1, normative)",
+TEST_CASE("lanes give concurrency, never speed-up (§6.3, normative)",
           "[program][transactional][hops]") {
-    // Left ambiguous, the same descriptor would yield different makespans in different
-    // implementations and calibration would be meaningless. So this is asserted, not
-    // assumed: one transfer occupies one lane for its whole duration, and that duration
-    // does not depend on how many lanes are idle beside it.
     auto first_transfer_cycles = [](const TileRunResult& r) {
         for (const auto& rec : r.timeline)
             if (!rec.hops.empty()) return rec.hops[0].finish - rec.hops[0].start;
         return Cycle(0);
     };
-    const Cycle d1 = first_transfer_cycles(run_gemm_on(dram_starved(1)));
-    const Cycle d2 = first_transfer_cycles(run_gemm_on(dram_starved(2)));
-    const Cycle d8 = first_transfer_cycles(run_gemm_on(dram_starved(8)));
+    const Cycle d1 = first_transfer_cycles(run_gemm_on(dma_starved(1)));
+    const Cycle d2 = first_transfer_cycles(run_gemm_on(dma_starved(2)));
+    const Cycle d8 = first_transfer_cycles(run_gemm_on(dma_starved(8)));
     REQUIRE(d1 > 0);
     CHECK(d1 == d2);
     CHECK(d1 == d8);
@@ -689,40 +763,63 @@ TEST_CASE("lanes give concurrency, never speed-up (§6.1, normative)",
 
 TEST_CASE("hops are pipelined for one tile, not serialized end-to-end",
           "[program][transactional][hops]") {
-    const auto r = run_gemm_on(dram_starved(2));
+    const auto r = run_gemm_on(dma_starved(2));
     std::size_t multi_hop = 0;
     for (const auto& rec : r.timeline) {
         if (rec.hops.size() < 2) continue;
         ++multi_hop;
-        for (std::size_t i = 1; i < rec.hops.size(); ++i) {
-            // Hop n+1 may start as soon as hop n completes for that tile — never before.
+        for (std::size_t i = 1; i < rec.hops.size(); ++i)
             CHECK(rec.hops[i].start >= rec.hops[i - 1].finish);
-        }
-        // The op's span covers its whole journey, first hop start to last hop finish.
         CHECK(rec.start == rec.hops.front().start);
         CHECK(rec.finish == rec.hops.back().finish);
     }
-    REQUIRE(multi_hop > 0);            // otherwise this asserts nothing
+    REQUIRE(multi_hop > 0);
 }
 
-TEST_CASE("residency skips the hops it satisfies, and only those",
-          "[program][transactional][hops]") {
-    const auto r = run_gemm_on(dram_starved(2));
-    // A tiled GEMM re-feeds one B[tk,tj] down a column of output tiles. Under per-hop
-    // movement an L3-resident tile skips DRAM->L3 but still has to reach L1 — the only
-    // layer the compute fabric reads — so it is NOT free, unlike the collapsed model where
-    // the single hop stands for the whole path. That difference is the model getting more
-    // faithful, not a regression.
-    // EVERY movement op crosses L3->L1: inbound to reach the fabric, outbound to leave it.
-    // Nothing skips this hop, because nothing else can talk to the fabric.
-    const std::size_t movements = r.stats.movements;
-    CHECK(r.stats.hop_transfers.at(Hop::L3ToL1) == movements);
-    CHECK(r.stats.hop_transfers.at(Hop::DramToL3) == movements - r.stats.resident_feeds);
-    CHECK(r.stats.resident_feeds > 0);        // the reuse is real in this program
+TEST_CASE("two legs of one process share its lanes", "[program][transactional][hops]") {
+    // There is one set of BlockMovers, not one per direction, so inbound L3->L2 and
+    // outbound L2->L3 compete. The process's busy cycles must therefore be the sum of
+    // both legs' cycles.
+    const auto r = run_gemm_on(dma_starved(2));
+    const Cycle bm = r.stats.mover_busy_cycles.at(Mover::BlockMover);
+    const Cycle legs = r.stats.hop_busy_cycles.at(Hop::BlockMoverL3ToL2) +
+                       r.stats.hop_busy_cycles.at(Hop::BlockMoverL2ToL3);
+    CHECK(bm == legs);
+    const Cycle str = r.stats.mover_busy_cycles.at(Mover::Streamer);
+    CHECK(str == r.stats.hop_busy_cycles.at(Hop::StreamerL2ToL1) +
+                 r.stats.hop_busy_cycles.at(Hop::StreamerL1ToL2));
 }
 
-TEST_CASE("per-hop movement changes timing only, never values",
+TEST_CASE("the stream cost lands on the Streamer legs",
           "[program][transactional][hops]") {
+    // l1_duration() models the L1 stream buffers: a Drain costs the C signature's element
+    // stride, so an output-stationary drain bubble stretches it. That belongs to the legs
+    // that touch those buffers, not to the DMA or BlockMover legs upstream.
+    auto run = [](bool use_streams) {
+        TileProgram p = derive_matmul_tile_program(64, 64, 64, 16, 16, 16);
+        fill_matmul(p, 64, 64);
+        stream::StreamProgram sp;
+        if (use_streams)
+            sp = stream::derive_matmul_streams(p, stream::SpaceTimeMap::output_stationary());
+        const DeviceDescriptor dev = DeviceDescriptor::single();
+        TileTransactionExecutor exec;
+        TileExecutionRequest req{p, Placement::single(dev.compute_tiles), dev,
+                                 use_streams ? &sp : nullptr, 1234};
+        return exec.run(req);
+    };
+    const auto bytes_model = run(false);
+    const auto stream_model = run(true);
+
+    // The drain bubble shows up on the Streamer, and the upstream legs are untouched.
+    CHECK(stream_model.stats.hop_busy_cycles.at(Hop::StreamerL1ToL2) >
+          bytes_model.stats.hop_busy_cycles.at(Hop::StreamerL1ToL2));
+    CHECK(stream_model.stats.hop_busy_cycles.at(Hop::DmaL3ToDram) ==
+          bytes_model.stats.hop_busy_cycles.at(Hop::DmaL3ToDram));
+    CHECK(stream_model.stats.hop_busy_cycles.at(Hop::BlockMoverL2ToL3) ==
+          bytes_model.stats.hop_busy_cycles.at(Hop::BlockMoverL2ToL3));
+}
+
+TEST_CASE("the chain changes timing only, never values", "[program][transactional][hops]") {
     TileProgram ref_prog = derive_matmul_tile_program(64, 64, 64, 16, 16, 16);
     fill_matmul(ref_prog, 64, 64);
     TileProgramReference ref;
@@ -730,19 +827,19 @@ TEST_CASE("per-hop movement changes timing only, never values",
 
     TileProgram txn_prog = derive_matmul_tile_program(64, 64, 64, 16, 16, 16);
     fill_matmul(txn_prog, 64, 64);
-    const DeviceDescriptor dev = dram_starved(2);
+    const DeviceDescriptor dev = dma_starved(2);
     run_transactional(txn_prog, dev, Placement::single(dev.compute_tiles));
 
     const auto& a = ref_prog.operand("C").values;
     const auto& b = txn_prog.operand("C").values;
     REQUIRE(a.size() == b.size());
     for (std::size_t i = 0; i < a.size(); ++i)
-        REQUIRE(std::memcmp(&a[i], &b[i], sizeof(float)) == 0);   // bit-identical
+        REQUIRE(std::memcmp(&a[i], &b[i], sizeof(float)) == 0);
 }
 
-TEST_CASE("per-hop runs stay deterministic", "[program][transactional][hops]") {
-    const auto a = run_gemm_on(dram_starved(2));
-    const auto b = run_gemm_on(dram_starved(2));
+TEST_CASE("chained runs stay deterministic", "[program][transactional][hops]") {
+    const auto a = run_gemm_on(dma_starved(2));
+    const auto b = run_gemm_on(dma_starved(2));
     CHECK(a.stats.makespan == b.stats.makespan);
     CHECK(a.stats.hop_lane_stalls == b.stats.hop_lane_stalls);
     REQUIRE(a.timeline.size() == b.timeline.size());
@@ -750,74 +847,19 @@ TEST_CASE("per-hop runs stay deterministic", "[program][transactional][hops]") {
         CHECK(a.timeline[i].start == b.timeline[i].start);
         REQUIRE(a.timeline[i].hops.size() == b.timeline[i].hops.size());
         for (std::size_t h = 0; h < a.timeline[i].hops.size(); ++h) {
+            CHECK(a.timeline[i].hops[h].hop == b.timeline[i].hops[h].hop);
             CHECK(a.timeline[i].hops[h].lane == b.timeline[i].hops[h].lane);
             CHECK(a.timeline[i].hops[h].start == b.timeline[i].hops[h].start);
         }
     }
 }
 
-// ----------------------------------------------------------------------------
-// Increment 5 review regressions. Both were found in review of #289 and both are
-// verified to FAIL against the implementation that preceded their fix.
-// ----------------------------------------------------------------------------
-
-TEST_CASE("collapsed movement keeps the stream-adjusted duration",
+TEST_CASE("a full pool does not block a transfer bound for another process",
           "[program][transactional][hops]") {
-    // With ONE hop, that hop's duration IS the op's duration as already computed.
-    // Recomputing it from bytes/bandwidth looks equivalent and is not: l1_duration()
-    // costs a Drain at the C signature's element stride, so an output-stationary drain
-    // BUBBLE stretches it. Recomputing discarded that, which made the entire stream
-    // MOVEMENT model inert under the collapsed descriptor — the makespan still moved,
-    // but only because compute kept its wavefront latency, which is exactly the kind of
-    // partial signal that hides a bug.
-    auto run_with_streams = [](bool use_streams) {
-        TileProgram p = derive_matmul_tile_program(64, 64, 64, 16, 16, 16);
-        fill_matmul(p, 64, 64);
-        stream::StreamProgram sp;
-        if (use_streams)
-            sp = stream::derive_matmul_streams(p, stream::SpaceTimeMap::output_stationary());
-        const DeviceDescriptor dev = DeviceDescriptor::single();       // collapsed
-        TileTransactionExecutor exec;
-        TileExecutionRequest req{p, Placement::single(dev.compute_tiles), dev,
-                                 use_streams ? &sp : nullptr, 1234};
-        return exec.run(req);
-    };
-    auto first_drain_hop = [](const TileRunResult& r) {
-        for (const auto& rec : r.timeline)
-            if (rec.kind == TileOpKind::Drain && !rec.hops.empty())
-                return rec.hops[0].finish - rec.hops[0].start;
-        return Cycle(0);
-    };
-
-    const auto bytes_model = run_with_streams(false);
-    const auto stream_model = run_with_streams(true);
-
-    REQUIRE(first_drain_hop(bytes_model) > 0);
-    // The drain bubble must be visible in the hop itself, not just in the total.
-    CHECK(first_drain_hop(stream_model) > first_drain_hop(bytes_model));
-    // ...and in the aggregate movement cost, which the recomputation left untouched.
-    CHECK(stream_model.stats.movement_cycles > bytes_model.stats.movement_cycles);
-}
-
-TEST_CASE("a full hop pool does not block a transfer bound for another pool",
-          "[program][transactional][hops]") {
-    // ready_move is ordered by op index and take_admissible checks CREDITS, not lane
-    // availability. Ending the scan on a lane-blocked op therefore stopped an op whose
-    // first hop is a different pool — a resident feed needs only L3->L1, so it can move
-    // while the single DRAM lane is busy. §6 requires different tiles to occupy different
-    // hops concurrently.
-    DeviceDescriptor dev = DeviceDescriptor::single();
-    dev.dram_lanes = 1;                  // the scarce pool, deliberately one lane
-    dev.dram_bytes_per_cycle = 16.0;
-    dev.onchip_lanes = 4;
-    dev.onchip_bytes_per_cycle = 256.0;
-    const auto r = run_gemm_on(dev);
-
-    // The bottleneck hop is never idle while transfers are queued for it, so it
-    // saturates completely rather than nearly.
-    CHECK(r.stats.hop_utilization.at(Hop::DramToL3) > 0.999);
-    // And with the bottleneck saturated, the run ATTAINS its analytical floor. Ending the
-    // scan instead left the DRAM lane idle in gaps: 0.992 utilization and a makespan of
-    // 3096 against the same 3072 floor.
-    CHECK(double(r.stats.makespan) == r.stats.lower_bound);
+    // ready_move is ordered by op index and take_admissible checks CREDITS, not lanes, so
+    // ending the scan on a lane-blocked op would stop an op whose first hop belongs to a
+    // different process — a reuse feed starts at the BlockMover while the DMA is busy.
+    const auto r = run_gemm_on(dma_starved(1));
+    CHECK(r.stats.mover_utilization.at(Mover::Dma) > 0.999);   // never idle with work queued
+    CHECK(double(r.stats.makespan) == r.stats.lower_bound);    // and so it attains the floor
 }
