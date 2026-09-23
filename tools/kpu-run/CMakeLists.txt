@@ -28,12 +28,33 @@ if(KPU_BUILD_TESTS)
     )
     set_tests_properties(kpu_run_lu_compare PROPERTIES LABELS "program;driver")
 
-    # A level with no interpreter must be refused, not silently substituted.
+    # A level with no interpreter must be refused, NOT silently substituted -- and the
+    # assertion has to be able to tell those apart. PASS_REGULAR_EXPRESSION cannot: it
+    # makes CTest ignore the exit code, and the string "not implemented (#283)" appears in
+    # the tool's NORMAL header on every run, so a regression that fell back to behavioral
+    # would still match. The wrapper asserts exit code 2 and forbids the run header.
     add_test(NAME kpu_run_refuses_unimplemented_level
-        COMMAND run --level resource-transactional
+        COMMAND ${CMAKE_COMMAND}
+            -DCMD=$<TARGET_FILE:run>
+            -DARGS=--level$<SEMICOLON>resource-transactional
+            -DEXPECT_CODE=2
+            -DMUST_MATCH=kpu-run:.resource-transactional:.*not.implemented..#283.
+            -DMUST_NOT_MATCH=values.vs
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/expect_exit.cmake
     )
     set_tests_properties(kpu_run_refuses_unimplemented_level PROPERTIES
-        LABELS "program;driver"
-        PASS_REGULAR_EXPRESSION "not implemented \\(#283\\)"
-        WILL_FAIL FALSE)
+        LABELS "program;driver")
+
+    # Bad numeric input must also exit 2 rather than abort: an uncaught std::stoul throw
+    # is SIGABRT, which CI cannot distinguish from a crash in the model.
+    add_test(NAME kpu_run_rejects_bad_number
+        COMMAND ${CMAKE_COMMAND}
+            -DCMD=$<TARGET_FILE:run>
+            -DARGS=--size$<SEMICOLON>abc
+            -DEXPECT_CODE=2
+            -DMUST_MATCH=--size
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/expect_exit.cmake
+    )
+    set_tests_properties(kpu_run_rejects_bad_number PROPERTIES
+        LABELS "program;driver")
 endif()

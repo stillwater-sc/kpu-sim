@@ -70,6 +70,10 @@ TEST_CASE("a level with no interpreter is refused, never substituted",
     ProgramSpec ps;
     TileProgram p = derive(ps);
     fill(p, ps);
+    // Snapshot the result operand, so "nothing ran" is checkable. Asserting only that the
+    // vector is non-empty would pass even if run_at had computed a full result into it --
+    // the vector is sized by derive(), not by the run.
+    const std::vector<float> c_before = p.operand("C").values;
     const DeviceSpec ds;
     const auto device = make_device(ds);
 
@@ -82,8 +86,9 @@ TEST_CASE("a level with no interpreter is refused, never substituted",
         // The refusal has to say where to follow it up, or it is just a dead end.
         CHECK(not_implemented_reason(l).find("#283") != std::string::npos);
     }
-    // And nothing ran: the program still holds its inputs, not a result.
-    CHECK(p.operand("C").values.size() > 0);
+    // And nothing ran: the operand is bit-for-bit what fill() left there.
+    REQUIRE_FALSE(c_before.empty());
+    CHECK(bit_identical(p.operand("C").values, c_before));
 }
 
 TEST_CASE("L-B reports that it models no timing, rather than a timing of zero",

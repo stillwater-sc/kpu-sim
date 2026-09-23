@@ -56,6 +56,38 @@ inline bool has_flag(const std::vector<std::string>& a, const std::string& k) {
     return false;
 }
 
+// A CHECKED unsigned parse, because std::stoul is the wrong tool for a CLI: it throws on
+// "abc", it happily accepts "12abc", and it wraps "-1" to ULONG_MAX without complaint --
+// so `--compute-tiles -1` becomes an enormous count rather than an error. An uncaught
+// throw also aborts with SIGABRT, which a CI job cannot tell apart from a crash in the
+// model. Returns false and fills `error` instead.
+//
+// It also catches `--size --tile 16`, where arg() hands back the NEXT FLAG as the value.
+inline bool parse_dim(const std::vector<std::string>& a, const std::string& key,
+                      std::uint32_t fallback, std::uint32_t& out, std::string& error) {
+    const std::string raw = arg(a, key, std::to_string(fallback));
+    if (raw.empty()) { error = key + ": empty value"; return false; }
+    if (raw[0] == '-') {
+        error = key + ": '" + raw + "' is not a non-negative integer" +
+                (raw.size() > 1 && raw[1] == '-' ? " (did a value get omitted?)" : "");
+        return false;
+    }
+    try {
+        std::size_t consumed = 0;
+        const unsigned long v = std::stoul(raw, &consumed);
+        if (consumed != raw.size()) {
+            error = key + ": '" + raw + "' has trailing characters";
+            return false;
+        }
+        if (v > 0xFFFFFFFFul) { error = key + ": '" + raw + "' is out of range"; return false; }
+        out = static_cast<std::uint32_t>(v);
+        return true;
+    } catch (const std::exception&) {
+        error = key + ": '" + raw + "' is not an integer";
+        return false;
+    }
+}
+
 // ---- what program to run ---------------------------------------------------
 struct ProgramSpec {
     std::string algo = "matmul";     // "matmul" | "lu"

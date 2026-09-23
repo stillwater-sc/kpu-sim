@@ -124,10 +124,23 @@ int main(int argc, char** argv) {
     const std::vector<std::string> a(argv + 1, argv + argc);
     if (has_flag(a, "--help") || has_flag(a, "-h")) { usage(); return 0; }
 
+    // Every numeric option goes through the checked parse: an uncaught std::stoul throw
+    // would abort with SIGABRT, which a CI job cannot tell apart from a crash in the
+    // model, and the usage contract above promises exit 2.
+    std::string err;
+    auto dim_opt = [&](const char* key, std::uint32_t fallback, Dim& out) {
+        std::uint32_t v = 0;
+        if (!parse_dim(a, key, fallback, v, err)) return false;
+        out = static_cast<Dim>(v);
+        return true;
+    };
+
     ProgramSpec ps;
     ps.algo = arg(a, "--algo", "matmul");
-    ps.size = static_cast<Dim>(std::stoul(arg(a, "--size", "64")));
-    ps.tile = static_cast<Dim>(std::stoul(arg(a, "--tile", "16")));
+    if (!dim_opt("--size", 64, ps.size) || !dim_opt("--tile", 16, ps.tile)) {
+        std::cerr << "kpu-run: " << err << "\n";
+        return 2;
+    }
     if (!known_algo(ps.algo)) {
         std::cerr << "kpu-run: unknown --algo '" << ps.algo << "' (matmul | lu)\n";
         return 2;
@@ -139,11 +152,18 @@ int main(int argc, char** argv) {
 
     DeviceSpec ds;
     ds.topology = arg(a, "--topology", "single");
-    ds.compute_tiles = static_cast<Dim>(std::stoul(arg(a, "--compute-tiles", "1")));
-    ds.l3_tiles = static_cast<Dim>(std::stoul(arg(a, "--l3-tiles", "0")));
-    ds.dma_engines = static_cast<Dim>(std::stoul(arg(a, "--dma-engines", "1")));
-    ds.block_movers = static_cast<Dim>(std::stoul(arg(a, "--block-movers", "1")));
-    ds.streamers = static_cast<Dim>(std::stoul(arg(a, "--streamers", "1")));
+    if (!dim_opt("--compute-tiles", 1, ds.compute_tiles) ||
+        !dim_opt("--l3-tiles", 0, ds.l3_tiles) ||
+        !dim_opt("--dma-engines", 1, ds.dma_engines) ||
+        !dim_opt("--block-movers", 1, ds.block_movers) ||
+        !dim_opt("--streamers", 1, ds.streamers)) {
+        std::cerr << "kpu-run: " << err << "\n";
+        return 2;
+    }
+    if (ds.compute_tiles == 0) {
+        std::cerr << "kpu-run: --compute-tiles must be non-zero\n";
+        return 2;
+    }
     if (!known_topology(ds.topology)) {
         std::cerr << "kpu-run: unknown --topology '" << ds.topology
                   << "' (single | news | checkerboard)\n";
@@ -193,9 +213,11 @@ int main(int argc, char** argv) {
     std::vector<RunOutcome> outcomes;
     programs.reserve(levels.size());
     for (ExecutionLevel l : levels) {
-        programs.push_back(derive(ps));
-        fill(programs.back(), ps);
         try {
+            // derive() and fill() throw too -- on an operand a spec does not declare, for
+            // one -- so they belong inside the guard rather than beside it.
+            programs.push_back(derive(ps));
+            fill(programs.back(), ps);
             outcomes.push_back(run_at(l, programs.back(), device,
                                      Placement::single(device.compute_tiles)));
         } catch (const std::exception& e) {
@@ -229,9 +251,15 @@ int main(int argc, char** argv) {
             std::cout << "identical\n";
         } else {
             all_agree = false;
+            // print_run() leaves std::fixed and a small precision on the stream, which
+            // would render a one-bit disagreement as "expected 1.234 got 1.234" -- the one
+            // diagnostic line for a failure, hiding the failure. Hex float is exact.
             std::cout << "DISAGREES: " << d.differing << " element(s), first at ["
-                      << d.first_index << "] expected " << d.expected
-                      << " got " << d.actual << "\n";
+                      << d.first_index << "] expected "
+                      << std::defaultfloat << std::setprecision(9) << d.expected
+                      << " got " << d.actual
+                      << "  (" << std::hexfloat << d.expected << " vs " << d.actual
+                      << std::defaultfloat << ")\n";
         }
         // LU carries a permutation and a swap count that a value diff would miss.
         if (std::string(operand) == "A") {
