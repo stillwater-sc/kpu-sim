@@ -755,3 +755,69 @@ TEST_CASE("per-hop runs stay deterministic", "[program][transactional][hops]") {
         }
     }
 }
+
+// ----------------------------------------------------------------------------
+// Increment 5 review regressions. Both were found in review of #289 and both are
+// verified to FAIL against the implementation that preceded their fix.
+// ----------------------------------------------------------------------------
+
+TEST_CASE("collapsed movement keeps the stream-adjusted duration",
+          "[program][transactional][hops]") {
+    // With ONE hop, that hop's duration IS the op's duration as already computed.
+    // Recomputing it from bytes/bandwidth looks equivalent and is not: l1_duration()
+    // costs a Drain at the C signature's element stride, so an output-stationary drain
+    // BUBBLE stretches it. Recomputing discarded that, which made the entire stream
+    // MOVEMENT model inert under the collapsed descriptor — the makespan still moved,
+    // but only because compute kept its wavefront latency, which is exactly the kind of
+    // partial signal that hides a bug.
+    auto run_with_streams = [](bool use_streams) {
+        TileProgram p = derive_matmul_tile_program(64, 64, 64, 16, 16, 16);
+        fill_matmul(p, 64, 64);
+        stream::StreamProgram sp;
+        if (use_streams)
+            sp = stream::derive_matmul_streams(p, stream::SpaceTimeMap::output_stationary());
+        const DeviceDescriptor dev = DeviceDescriptor::single();       // collapsed
+        TileTransactionExecutor exec;
+        TileExecutionRequest req{p, Placement::single(dev.compute_tiles), dev,
+                                 use_streams ? &sp : nullptr, 1234};
+        return exec.run(req);
+    };
+    auto first_drain_hop = [](const TileRunResult& r) {
+        for (const auto& rec : r.timeline)
+            if (rec.kind == TileOpKind::Drain && !rec.hops.empty())
+                return rec.hops[0].finish - rec.hops[0].start;
+        return Cycle(0);
+    };
+
+    const auto bytes_model = run_with_streams(false);
+    const auto stream_model = run_with_streams(true);
+
+    REQUIRE(first_drain_hop(bytes_model) > 0);
+    // The drain bubble must be visible in the hop itself, not just in the total.
+    CHECK(first_drain_hop(stream_model) > first_drain_hop(bytes_model));
+    // ...and in the aggregate movement cost, which the recomputation left untouched.
+    CHECK(stream_model.stats.movement_cycles > bytes_model.stats.movement_cycles);
+}
+
+TEST_CASE("a full hop pool does not block a transfer bound for another pool",
+          "[program][transactional][hops]") {
+    // ready_move is ordered by op index and take_admissible checks CREDITS, not lane
+    // availability. Ending the scan on a lane-blocked op therefore stopped an op whose
+    // first hop is a different pool — a resident feed needs only L3->L1, so it can move
+    // while the single DRAM lane is busy. §6 requires different tiles to occupy different
+    // hops concurrently.
+    DeviceDescriptor dev = DeviceDescriptor::single();
+    dev.dram_lanes = 1;                  // the scarce pool, deliberately one lane
+    dev.dram_bytes_per_cycle = 16.0;
+    dev.onchip_lanes = 4;
+    dev.onchip_bytes_per_cycle = 256.0;
+    const auto r = run_gemm_on(dev);
+
+    // The bottleneck hop is never idle while transfers are queued for it, so it
+    // saturates completely rather than nearly.
+    CHECK(r.stats.hop_utilization.at(Hop::DramToL3) > 0.999);
+    // And with the bottleneck saturated, the run ATTAINS its analytical floor. Ending the
+    // scan instead left the DRAM lane idle in gaps: 0.992 utilization and a makespan of
+    // 3096 against the same 3072 floor.
+    CHECK(double(r.stats.makespan) == r.stats.lower_bound);
+}

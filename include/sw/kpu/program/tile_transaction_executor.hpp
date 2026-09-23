@@ -301,6 +301,17 @@ public:
                 if (!hop_lane_busy[hi][l]) { out = l; return true; }
             return false;
         };
+        // Is there ANY hop with a free lane? If not, no movement op can start whatever its
+        // chain, so the scheduler must not pop the ready heap to discover that — with one
+        // collapsed lane that popped every queued transfer on every pass, which is the
+        // O(n^2) the heaps exist to prevent (measured: 60s vs 0.17s on a 128^3 T=4 GEMM).
+        auto any_hop_lane_free = [&]() {
+            for (std::size_t hi = 0; hi < hop_specs.size(); ++hi) {
+                Dim l = 0;
+                if (free_lane_on(hi, l)) return true;
+            }
+            return false;
+        };
 
         // The chain a movement op traverses, in order, with residency-satisfied hops
         // dropped (§6). Two deliberately different residency semantics, because the
@@ -331,7 +342,15 @@ public:
             }
             return chain;
         };
+        // With ONE hop, that hop's duration IS the op's duration as already computed —
+        // including any stream adjustment. Recomputing it from bytes/bandwidth looks
+        // equivalent and is not: l1_duration() costs a Drain at the C signature's element
+        // stride, so an output-stationary drain BUBBLE stretches it, and a Feed at
+        // elements/lanes. Recomputing threw both away, which silently erased the effect
+        // the stream model exists to express. Collapsed is the pre-increment-5 model
+        // exactly, so it defers to the value that model produced.
         auto hop_duration = [&](std::size_t op, std::size_t hi) {
+            if (!dev.per_hop_movement()) return duration[op];
             return quantize_cycles(work[op].bytes / std::max(1.0, hop_specs[hi].bytes_per_cycle),
                                    work[op].bytes > 0.0);
         };
@@ -601,6 +620,12 @@ public:
         // resolves.
         auto try_fire = [&]() {
             bool any = false;
+            // Movement ops held out because their FIRST hop had no free lane. They are
+            // credit-admissible, so ending the scan on them would stop an op whose first
+            // hop is a DIFFERENT pool from starting — and §6 requires different tiles to
+            // occupy different hops concurrently. Restored once the passes finish, so each
+            // is taken out at most once per call and the min-heap puts the order back.
+            std::vector<std::size_t> lane_blocked;
             for (bool pass_progress = true; pass_progress; ) {
                 pass_progress = false;
                 std::size_t pass_stalls = 0;
@@ -613,8 +638,9 @@ public:
                 // needs belongs to that hop's pool. Which hop that is depends on residency
                 // (an L3-resident feed skips DRAM->L3), so it is resolved here rather than
                 // assumed.
-                for (;;) {
+                for (std::size_t held = 0;;) {
                     if (ready_move.empty()) break;
+                    if (!any_hop_lane_free()) break;     // nothing can move: do not pop
                     std::size_t op = 0;
                     if (!take_admissible(ready_move, op)) { ++pass_stalls; break; }
                     const bool resident_feed =
@@ -623,9 +649,15 @@ public:
                     const std::vector<std::size_t> c = build_chain(op, resident_feed);
                     Dim lane = 0;
                     if (!c.empty() && !free_lane_on(c[0], lane)) {
-                        ready_move.push(op);          // put it back; the lane is the limit
+                        // This op's pool is full, but another pool may be free and a
+                        // later op may want it, so hold this one out rather than ending
+                        // the scan. Bounded by the same window take_admissible uses: an
+                        // unbounded hold-out drains the whole heap when every queued
+                        // transfer wants the busy pool.
+                        lane_blocked.push_back(op);
                         ++hop_lane_stalls;
-                        break;
+                        if (++held >= kScanWindow) break;
+                        continue;
                     }
                     fire(op, ResourceKind::MoveLane, lane);
                     fired_seeker(op);
@@ -649,6 +681,7 @@ public:
                 }
                 if (!pass_progress && !exhaustive) credit_stalls += pass_stalls;
             }
+            for (std::size_t op : lane_blocked) ready_move.push(op);
             return any;
         };
 
