@@ -95,6 +95,11 @@ add_subdirectory(dfg)
 add_subdirectory(harness)
 
 # ============================================================================
+# Driver — execute a Domain Flow Program and compare the levels (#285)
+# ============================================================================
+add_subdirectory(kpu-run)
+
+# ============================================================================
 # Legacy C++ tools (deprecated - to be migrated)
 # ============================================================================
 # add_subdirectory(cpp)

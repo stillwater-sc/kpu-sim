@@ -24,6 +24,7 @@
 #include <sw/kpu/program/derive/lu_tile_program.hpp>
 #include <sw/kpu/program/characterize/characterization.hpp>
 #include <sw/kpu/program/stream/derive/matmul_streams.hpp>
+#include <sw/kpu/program/driver/program_spec.hpp>
 
 #include <cmath>
 #include <cstdint>
@@ -38,29 +39,14 @@ using namespace sw::kpu::program::characterize;
 
 namespace {
 
-std::vector<std::uint32_t> parse_ints(const std::string& csv) {
-    std::vector<std::uint32_t> out;
-    std::stringstream ss(csv);
-    std::string tok;
-    while (std::getline(ss, tok, ',')) if (!tok.empty()) out.push_back(std::stoul(tok));
-    return out;
-}
-std::vector<std::string> parse_strs(const std::string& csv) {
-    std::vector<std::string> out;
-    std::stringstream ss(csv);
-    std::string tok;
-    while (std::getline(ss, tok, ',')) if (!tok.empty()) out.push_back(tok);
-    return out;
-}
-
-std::string arg(const std::vector<std::string>& a, const std::string& k, const std::string& def) {
-    for (std::size_t i = 0; i + 1 < a.size(); ++i) if (a[i] == k) return a[i + 1];
-    return def;
-}
-bool has_flag(const std::vector<std::string>& a, const std::string& k) {
-    for (const auto& s : a) if (s == k) return true;
-    return false;
-}
+// Argument helpers, the program/device mapping and the operand fills all come from
+// sw/kpu/program/driver/program_spec.hpp, shared with kpu-run (#285 §D1). Two copies
+// of "what --tiles means" drift, and then a bug reproduces in one tool and not the
+// other.
+using sw::kpu::program::driver::arg;
+using sw::kpu::program::driver::has_flag;
+using sw::kpu::program::driver::parse_ints;
+using sw::kpu::program::driver::parse_strs;
 
 // ---- build + validate each algorithm ---------------------------------------
 float validate_matmul(TileProgram& prog, Dim M, Dim N, Dim K) {
@@ -115,19 +101,15 @@ float validate_lu(TileProgram& prog, Dim N) {
 DeviceDescriptor make_device(const std::string& topo, Dim cf,
                              double macs_per_cycle, double bytes_per_cycle,
                              double pj_mac, double pj_byte, Dim l3_tiles) {
-    DeviceDescriptor d = DeviceDescriptor::single();
-    if (topo == "news") d = DeviceDescriptor::news();
-    else if (topo == "checkerboard") d = DeviceDescriptor::checkerboard(cf);
-    d.compute_tiles = cf;
-    if (topo == "single") d.move_lanes = 1;
-    else if (topo == "news") d.move_lanes = 4;
-    else d.move_lanes = cf;
-    d.fabric_macs_per_cycle = macs_per_cycle;
-    d.bytes_per_cycle = bytes_per_cycle;
-    d.pj_per_mac = pj_mac;
-    d.pj_per_byte = pj_byte;
-    d.l3_tiles = l3_tiles;
-    return d;
+    sw::kpu::program::driver::DeviceSpec s;
+    s.topology = topo;
+    s.compute_tiles = cf;
+    s.macs_per_cycle = macs_per_cycle;
+    s.bytes_per_cycle = bytes_per_cycle;
+    s.pj_per_mac = pj_mac;
+    s.pj_per_byte = pj_byte;
+    s.l3_tiles = l3_tiles;
+    return sw::kpu::program::driver::make_device(s);
 }
 
 bool known_dataflow(const std::string& n) {

@@ -9,6 +9,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`kpu-run`, the driver that tests the simulation models against each other (increment 1
+  of #285).** A Domain Flow Program can now be executed from a command line and the levels
+  compared: `kpu-run --algo matmul|lu --size --tile --level behavioral|block-sequential|all`
+  derives the program, runs it at every level that has an interpreter, prints timing and
+  provenance, and **diffs the values bit-exactly against the behavioral level**, which is
+  the authority (ADR 0001 D5). A disagreement exits non-zero, because values are
+  level-invariant (ADR 0002 §2) — decomposition changes *when* things happen, never *what*
+  is computed — so a disagreement is a model bug by construction rather than a judgement
+  call. That makes this a **differential test**, which matters because a level returning
+  plausible *timing* while computing wrong *values* is the failure mode this simulator is
+  most exposed to: timing is what everyone looks at. LU is additionally compared on its
+  **pivot permutation and swap count**, which a value diff alone would miss. Until now the
+  L-T1 executor — credits, capacity, residency reuse, the movement chain — was reachable
+  only from unit tests: `tile_characterize` drives the analytical harness and the
+  behavioral reference, and never included the executor at all.
+
+  Two structural decisions keep it from becoming a parallel path. `run_at()` in
+  `driver/execution_level.hpp` is **the only function that names a level**, so it is the
+  seam `VirtualPlatform` (#282) takes over and the one place the L-T2 interpreter (#283)
+  adds a case — the driver itself never names an executor type. And the argument→program
+  and argument→device mapping lives in `driver/program_spec.hpp`, **shared with
+  `tile_characterize`**, because two copies of "what `--tile` means" drift and then a bug
+  reproduces in one tool and not the other. A level with **no** interpreter is refused with
+  its issue number and never silently substituted, and the run header prints which levels
+  were *not* run so a clean report cannot be mistaken for full coverage.
+
+### Fixed
+
+- **`examples/characterize`'s smoke test had never registered.** The project calls
+  `enable_testing()` without including CTest, so `BUILD_TESTING` is empty and the
+  `if(BUILD_TESTING)` guard silently registered nothing; the guard in this project is
+  `KPU_BUILD_TESTS`. Found while registering the `kpu-run` tests, which walked into the
+  same trap. A test that never runs is worse than no test, because it reads as coverage —
+  the suite went from 150 to 155 tests once both were corrected.
+
 - **Movement as a chain of CSP processes in the L-T1 executor (increment 5 of #264).**
   Movement is modelled **per process**, each reading one physical memory and writing the
   next: **DMA** (DRAM↔L3), **BlockMover** (L3↔L2, and L3→L3 across the NoC for reuse) and
