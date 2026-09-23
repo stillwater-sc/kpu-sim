@@ -24,6 +24,15 @@ set_tests_properties(test_tile_transaction_executor PROPERTIES
     LABELS "program;transactional;executor;v0.9"
 )
 
+# The driver seam: one function maps a level to an interpreter (#285)
+kpu_add_component_test(test_driver_run_at "program"
+    test_driver_run_at.cpp
+)
+
+set_tests_properties(test_driver_run_at PROPERTIES
+    LABELS "program;driver;v0.9"
+)
+
 # L0 dependency model (tile + pivot-slot hazards, diagnosis)
 kpu_add_component_test(test_tile_dependencies "program"
     test_tile_dependencies.cpp

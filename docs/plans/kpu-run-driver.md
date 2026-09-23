@@ -127,9 +127,20 @@ lists. #286 renders this; it does not come for free with it.
 
 ## 5. Increments
 
-1. **Run and compare.** `kpu-run --algo matmul|lu --sizes --tiles --level behavioral|block-sequential|all`,
-   value diff against L-B, timing + provenance printed, non-zero exit on disagreement.
-   Shared derivation extracted (D1) and the `run_at` seam in place (D2).
+1. **Run and compare.** — **done.** `kpu-run --algo matmul|lu --size --tile --level`,
+   diffing values bit-exactly against L-B and exiting non-zero on disagreement. The shared
+   derivation is extracted to `driver/program_spec.hpp` and `tile_characterize` now uses it
+   (D1), and `run_at` is the only function that names a level (D2). A level with no
+   interpreter is refused with its issue number, and the header prints which levels were
+   *not* run so a clean report is not mistaken for full coverage.
+
+   LU is compared on its **pivot permutation and swap count** as well as its values, since
+   a value diff alone would miss reordered pivoting.
+
+   Registering the CLI tests turned up a latent bug: this project never includes CTest, so
+   `BUILD_TESTING` is empty and `examples/characterize`'s smoke test had **never
+   registered**. The guard is `KPU_BUILD_TESTS`; both are fixed, which is why the suite
+   went from 150 to 155 tests.
 2. **Device knobs.** `--l3-tiles`, `--dram-lanes`, `--dram-bytes-per-cycle`,
    `--onchip-lanes`, `--onchip-bytes-per-cycle`, `--compute-tiles`, `--move-lanes`,
    `--streams`; plus `--timeline` (D5). This is what makes the per-hop model (#264
