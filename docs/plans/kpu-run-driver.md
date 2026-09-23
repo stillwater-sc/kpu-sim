@@ -104,11 +104,26 @@ L-T1's timeline already records hop intervals, so its step cursor is a projectio
 the executor produces today rather than new machinery. This is the hook #286 needs, which
 is why it is in the plan and not deferred.
 
-### D5 — Output goes through the existing trace path
+### D5 — Reuse the existing trace **format**, and write the mapping into it
 
-`--timeline out.json` writes through `include/sw/trace/trace_exporter.hpp` (Chrome Trace
-Event Format), so `tools/trace/` and `tools/visualization/` read it unchanged. No new
-format. Per-hop intervals and station occupancy are what #286 then renders.
+`--timeline out.json` emits Chrome Trace Event Format via
+`include/sw/trace/trace_exporter.hpp`, so `tools/trace/` and `tools/visualization/` read it
+unchanged. **No new format** is a constraint on the output, not a claim that the plumbing
+exists — and the distinction is the whole of increment 2's cost:
+
+- `ChromeTraceExporter::export_traces` consumes `std::vector<TraceEntry>` (component +
+  transaction records with DMA/compute/memory payloads), and
+  `ResourceTrackerExporter::export_to_chrome_trace` consumes
+  `std::map<ResourceId, ResourceTrack>` (occupancy tracks). **Neither consumes L-T1's
+  `TileOpRecord` or `HopRecord`**, and nothing in the repo serializes them today.
+- Nothing serializes the occupancy stats either — `hop_busy_cycles`, `hop_utilization`,
+  `peak_l3_residency` exist only in `TileRunStats`, read by tests.
+
+So `--timeline` is a **mapping** to write: `TileOpRecord`/`HopRecord` → `TraceEntry`, one
+event per hop so a transfer's legs appear separately rather than as one span. Station
+occupancy aims at `ResourceTrack` instead, which is the type designed for it — but that
+also needs the residency *series* the executor does not emit, which is the first gap #286
+lists. #286 renders this; it does not come for free with it.
 
 ## 5. Increments
 
