@@ -29,13 +29,23 @@
 
 namespace sw::kpu {
 
-// Compute fabric
+// Compute fabric — a DOMAIN FLOW COMPUTE ENGINE.
+//
+// A domain flow compute engine CAN BE a systolic array; a systolic array IS NOT a domain
+// flow compute engine. So SYSTOLIC_ARRAY below is one execution strategy the fabric can
+// operate as, never a definition of it: `systolic_array` stays null unless that strategy
+// is configured. Structural assumptions that only a systolic array admits — wavefront
+// shape, fixed operand skew, a rigid 2-D array — do not belong in this class. Systolic
+// TIMING is a different matter and is legitimate (ADR 0002 §3.3).
+//
+// L1 is the fabric's ONLY data interface: MatMulConfig addresses are L1 addresses and
+// update() takes the L1 buffers. There is no path from here to L2, L3 or DRAM.
 class KPU_API ComputeFabric {
 public:
-    // Configuration options for compute fabric
+    // Which strategy this fabric executes with. Neither one defines the fabric.
     enum class ComputeType {
         BASIC_MATMUL,    // Simple triple-loop matrix multiplication
-        SYSTOLIC_ARRAY   // Hardware systolic array implementation
+        SYSTOLIC_ARRAY   // Operate as a systolic array (one realization)
     };
 
     struct MatMulConfig {
@@ -57,7 +67,8 @@ private:
     size_t tile_id;  // Which compute tile this fabric represents
     ComputeType compute_type;
 
-    // Systolic array (when enabled) - using float as default scalar type
+    // The systolic realization, instantiated only when that strategy is selected — hence
+    // a pointer that is legitimately null, not an always-present part of the fabric.
     std::unique_ptr<SystolicArray<float>> systolic_array;
 
     // Tracing support

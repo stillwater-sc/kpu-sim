@@ -58,7 +58,7 @@ classDiagram
         L3Layer / L2Layer / L1Layer
         own L3Tile / L2Bank / L1Buffer
         DMAEngine / BlockMover / Streamer
-        ComputeFabric / SystolicArray
+        ComputeFabric (may own a SystolicArray)
     }
 
     class BehavioralModels {
@@ -573,6 +573,7 @@ classDiagram
     }
 
     class ComputeFabric {
+        <<domain flow compute engine>>
         -current_op MatMulConfig
         -compute_type ComputeType
         -systolic_array unique_ptr~SystolicArray~
@@ -581,7 +582,14 @@ classDiagram
         +is_busy()
     }
 
+    class ComputeType {
+        <<enumeration>>
+        BASIC_MATMUL
+        SYSTOLIC_ARRAY
+    }
+
     class SystolicArray~T~ {
+        <<one realization>>
         -pe_array vector~vector~PE~~
         -a_stream / b_stream / c_stream
         -rows / cols Size
@@ -615,13 +623,38 @@ classDiagram
     BlockMover ..> L2Bank : pushes tiles to
     Streamer ..> L2Bank : reads from
     Streamer ..> L1Buffer : feeds
-    ComputeFabric ..> L1Buffer : consumes
+    ComputeFabric ..> L1Buffer : its ONLY data interface
 
-    ComputeFabric *-- SystolicArray
+    ComputeFabric *-- "0..1" SystolicArray : operates as, when configured
+    ComputeFabric ..> ComputeType : selects strategy
     DMAEngine ..> AddressDecoder
     DMAEngine ..> ExternalMemory : transfers
     DMAEngine ..> L3Tile : pushes tiles to
 ```
+
+### The ComputeFabric is not a SystolicArray
+
+Two facts the diagram above encodes, both easy to get backwards:
+
+**The fabric is a domain flow compute engine.** A domain flow compute engine *can be* a
+systolic array; a systolic array *is not* a domain flow compute engine. The containment runs
+one way only, so `SystolicArray` is a **realization** the fabric can operate as — selected
+by `ComputeType::SYSTOLIC_ARRAY`, alongside `BASIC_MATMUL` — and never a definition of what
+the fabric is. The code already reflects this: `systolic_array` is a `unique_ptr` that is
+null unless that strategy is configured, which is why the relationship is `"0..1"` rather
+than a plain composition. An earlier revision of this document listed the two as
+`ComputeFabric / SystolicArray`, which read as a synonym pair; that was wrong.
+
+The practical rule: a **timing** model may legitimately be systolic, and several here are.
+A **structural or semantic** claim may not assume systolic behaviour — wavefront shape,
+fixed operand skew, a rigid two-dimensional array, or a schedule only a systolic array
+admits. See ADR 0002 §3.3.
+
+**L1 is the fabric's only data interface.** Operands reach it from L1 and results go back to
+L1; nothing connects it to L2, L3 or DRAM. `MatMulConfig` carries `a_addr`/`b_addr`/`c_addr`
+plus an `l1_buffer_id`, and `update()` takes the L1 buffers — there is no path to any other
+layer, by construction. Movement models therefore *end at L1* (#264 increment 5), and a hop
+that terminates "at the fabric" is a mislabelled last hop.
 
 `KPUSimulator::Config` embeds the three layer configs (`l3_layer`, `l2_layer`,
 `l1_layer`); BlockMover count and timing live in `l3_layer.block_mover_count` /
