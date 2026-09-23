@@ -364,8 +364,13 @@ placement and profile cannot be compared with another number.
    with M, N, K and tile size; identical cycles and timeline across repeated runs. No
    capacity limits yet, so the refusal path is unreachable until increment 4.
 4. **Credits and capacity** (§5) — **done for L3.** Tile-granularity L3 slots with
-   residency-based reuse (a feed of a resident tile costs nothing), release at last use,
-   and refusal with a capacity diagnosis. **Slots are acquired in PROGRAM ORDER**, which
+   residency-based reuse (a feed of a resident tile costs nothing), release when the
+   *last user completes*, and refusal with a capacity diagnosis. The release is a
+   credit-return refcount, not a statically chosen highest-index user: readers of one
+   tile are deliberately unordered, so the highest-indexed reader can finish first, and
+   releasing on it frees a slot an earlier reader still holds — which undercounts
+   residency and lets a run exceed the capacity being enforced. §5 already specified the
+   completion rule; the refcount is what implements it. **Slots are acquired in PROGRAM ORDER**, which
    is the invariant that makes the model deadlock-free: the weaker "don't promote a ready
    op past an earlier ready one" rule wedged at every finite capacity, because feeds are
    ready immediately and take every slot while the computes that would retire those tiles

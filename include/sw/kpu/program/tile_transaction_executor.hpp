@@ -43,6 +43,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <map>
 #include <queue>
 #include <set>
 #include <stdexcept>
@@ -155,18 +156,33 @@ public:
 
         // ---- L3 capacity, residency and tile lifetimes (increment 4) --------
         // A tile occupies an L3 slot from the moment it becomes resident — fed in, or
-        // materialised as an op's output — until its LAST USE completes. Last use is
-        // computed statically here, so credit returns are deterministic and a Drain
-        // behaves as a consumer rather than a deallocator: it frees the slot only when
-        // it happens to be the last op that touches the tile.
+        // materialised as an op's output — until EVERY op that touches it has completed.
+        // The slot is freed by counting unfinished users down to zero, which is the
+        // credit rule as written: a consumer returns its credit when it is done with the
+        // data. The tempting shortcut — release at the highest-indexed user, computed
+        // statically — is wrong, because readers of one tile are deliberately NOT ordered
+        // against each other. Two macs reading the same A tile on different compute tiles
+        // are concurrent, their durations differ once per-op stream costs are applied, and
+        // the higher-indexed one can finish first. Releasing on it frees a slot an earlier
+        // reader still holds, which undercounts `resident` and lets the run exceed the very
+        // capacity this increment exists to enforce.
+        //
+        // A Drain is therefore a consumer, not a deallocator: it frees the tile only when
+        // it happens to be the last user still outstanding.
         auto tile_key = [](const TileCoord& c) {
             return c.operand + "#" + std::to_string(c.ti) + "#" + std::to_string(c.tj);
         };
-        std::map<std::string, std::size_t> last_use;      // tile -> last op touching it
-        std::vector<std::vector<std::string>> op_tiles(ops.size());   // tiles each op touches
+        std::map<std::string, std::size_t> unfinished_users;           // tile -> users left
+        std::vector<std::vector<std::string>> op_tiles(ops.size());    // tiles each op touches
         for (std::size_t i = 0; i < ops.size(); ++i) {
-            for (const TileCoord& c : ops[i].inputs)  { last_use[tile_key(c)] = i; op_tiles[i].push_back(tile_key(c)); }
-            for (const TileCoord& c : ops[i].outputs) { last_use[tile_key(c)] = i; op_tiles[i].push_back(tile_key(c)); }
+            // Deduplicated: an in-place op naming one tile as both input and output holds
+            // ONE slot and is ONE user of it, so it must not be counted twice — neither in
+            // `needed_slots` nor in the user count.
+            std::set<std::string> unique_tiles;
+            for (const TileCoord& c : ops[i].inputs)  unique_tiles.insert(tile_key(c));
+            for (const TileCoord& c : ops[i].outputs) unique_tiles.insert(tile_key(c));
+            op_tiles[i].assign(unique_tiles.begin(), unique_tiles.end());
+            for (const std::string& k : op_tiles[i]) ++unfinished_users[k];
         }
 
         const Dim l3_capacity = dev.l3_tiles;             // 0 = unbounded
@@ -190,8 +206,14 @@ public:
             peak_residency = std::max(peak_residency, resident.size());
         };
         auto release_after = [&](std::size_t op) {
-            for (const std::string& k : op_tiles[op])
-                if (last_use.count(k) && last_use[k] == op) resident.erase(k);
+            for (const std::string& k : op_tiles[op]) {
+                auto it = unfinished_users.find(k);
+                if (it == unfinished_users.end()) continue;
+                if (--it->second == 0) {          // last user done -> credit returned
+                    resident.erase(k);
+                    unfinished_users.erase(it);
+                }
+            }
         };
 
         // ---- resources -----------------------------------------------------
@@ -307,33 +329,67 @@ public:
             return -1;
         };
 
+        // Only ONE op can be the seeker, so every other slot-needing op is inadmissible
+        // by construction. Two consequences, both handled below.
+        //
+        // (a) The seeker has to be re-read after it fires. Computing it once per try_fire
+        //     lets at most one new-slot op start per call, so the remaining free lanes idle
+        //     until the next completion even when capacity is sitting there unused — a
+        //     makespan and credit_stalls artefact of the bookkeeping, not of the credits.
+        //
+        // (b) A blocked head must not hide cheap work behind it. An op whose tiles are all
+        //     resident needs no slots and is admissible whatever the seeker is, so leaving
+        //     it queued behind a slot-starved op idles a resource for nothing. The scan is
+        //     WINDOWED: rescanning a whole heap would reintroduce exactly the O(n^2) the
+        //     heaps were introduced to remove, and a resident op deeper than the window
+        //     loses nothing but a turn — the head usually clears on the next completion.
+        static constexpr std::size_t kScanWindow = 32;
+        long seeker = -1;
+        auto admissible = [&](std::size_t op) {
+            if (needed_slots(op) == 0) return true;      // takes nothing new
+            if (!has_capacity(op)) return false;         // cannot fit
+            return seeker < 0 || static_cast<long>(op) == seeker;
+        };
+        // Lowest-index admissible op, deferring the entries it looks past and restoring
+        // them so heap order (and therefore the run) stays deterministic.
+        auto take_admissible = [&](ReadyHeap& h, std::size_t& out) {
+            std::vector<std::size_t> deferred;
+            bool found = false;
+            while (!h.empty() && deferred.size() < kScanWindow) {
+                const std::size_t op = h.top();
+                h.pop();
+                if (admissible(op)) { out = op; found = true; break; }
+                deferred.push_back(op);
+            }
+            for (std::size_t d : deferred) h.push(d);
+            return found;
+        };
+
         auto try_fire = [&]() {
-            const long seeker = earliest_slot_seeker();
-            auto admissible = [&](std::size_t op) {
-                if (needed_slots(op) == 0) return true;      // takes nothing new
-                if (!has_capacity(op)) return false;         // cannot fit
-                return seeker < 0 || static_cast<long>(op) == seeker;
+            seeker = earliest_slot_seeker();
+            auto fired_seeker = [&](std::size_t op) {      // advance to the next one
+                if (seeker == static_cast<long>(op)) seeker = earliest_slot_seeker();
             };
             for (Dim l = 0; l < n_lanes && !ready_move.empty(); ++l) {
                 if (lane_busy[l]) continue;
-                const std::size_t op = ready_move.top();
-                if (!admissible(op)) { ++credit_stalls; break; }
+                std::size_t op = 0;
+                if (!take_admissible(ready_move, op)) { ++credit_stalls; break; }
                 fire(op, ResourceKind::MoveLane, l);
-                ready_move.pop();
+                fired_seeker(op);
             }
             for (Dim t = 0; t < n_cf && !ready_compute.empty(); ++t) {
                 if (cf_busy[t]) continue;
-                const std::size_t op = ready_compute.top();
-                if (!admissible(op)) { ++credit_stalls; break; }
+                std::size_t op = 0;
+                if (!take_admissible(ready_compute, op)) { ++credit_stalls; break; }
                 fire(op, ResourceKind::ComputeTile, t);
-                ready_compute.pop();
+                fired_seeker(op);
             }
             for (Dim t = 0; t < ready_pinned.size(); ++t) {
                 if (cf_busy[t] || ready_pinned[t].empty()) continue;
-                const std::size_t op = ready_pinned[t].top();
-                if (!admissible(op)) { ++credit_stalls; continue; }
+                std::size_t op = 0;
+                if (!take_admissible(ready_pinned[t], op)) { ++credit_stalls; continue; }
                 fire(op, ResourceKind::ComputeTile, t);
-                ready_pinned[t].pop();
+                fired_seeker(op);
             }
         };
 
