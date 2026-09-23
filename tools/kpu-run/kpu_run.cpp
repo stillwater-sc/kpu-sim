@@ -15,12 +15,14 @@
 // ============================================================================
 #include <sw/kpu/program/driver/execution_level.hpp>
 #include <sw/kpu/program/driver/program_spec.hpp>
+#include <sw/kpu/program/driver/step_cursor.hpp>
 #include <sw/kpu/program/driver/timeline_trace.hpp>
 #include <sw/trace/trace_exporter.hpp>
 
 #include <cstring>
 #include <iomanip>
 #include <iostream>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -83,6 +85,10 @@ R"(kpu-run — execute a Domain Flow Program at one or more levels and compare t
                             weight-stationary|ws, a-stationary|as,
                             fully-streaming|hex  (matmul only)
   --timeline <file.json>    Chrome Trace Event Format, one event PER HOP
+  --step                    single-step: one line per transaction at that level
+                            (L-B: one op applied; L-T1: op fired / hop start / hop
+                            end / op completed)
+  --step-limit <n>          stop after n steps, 0 = all      (default 40)
   --no-compare              run the levels, do not diff values
   -h, --help
 
@@ -245,8 +251,16 @@ int main(int argc, char** argv) {
             return 2;
         }
     }
+    // Keeps main's required-value parsing (an option present without a value is an error,
+    // not an absence) and adds increment 3's stepping options on top.
     std::string timeline_path;
     if (!arg_required(a, "--timeline", timeline_path, err)) {
+        std::cerr << "kpu-run: " << err << "\n";
+        return 2;
+    }
+    const bool do_step = has_flag(a, "--step");
+    Dim step_limit = 40;
+    if (!dim_opt("--step-limit", 40, step_limit)) {
         std::cerr << "kpu-run: " << err << "\n";
         return 2;
     }
@@ -320,6 +334,54 @@ int main(int argc, char** argv) {
             return 2;
         }
         print_run(outcomes.back());
+    }
+
+    // --step: walk one level's transactions. At L-B this RE-EXECUTES the program one op
+    // at a time on a fresh copy, so it is genuine stepping; at L-T1 it replays the run
+    // just performed, because the executor's schedule depends on the whole program.
+    if (do_step) {
+        const ExecutionLevel target = levels.back();     // the finest level that ran
+        std::size_t src = levels.size();
+        for (std::size_t i = 0; i < levels.size(); ++i)
+            if (levels[i] == target) src = i;
+        TileProgram stepped = derive(ps);
+        fill(stepped, ps);
+        std::unique_ptr<Stepper> cur;
+        try {
+            cur = make_stepper(target, stepped, outcomes[src].timeline);
+        } catch (const std::exception& e) {
+            std::cerr << "kpu-run: " << e.what() << "\n";
+            return 2;
+        }
+        std::cout << "\nstepping " << short_name(target) << ": " << cur->size()
+                  << " steps"
+                  << (cur->models_time() ? " (replay of the run above)"
+                                         : " (re-executed one op at a time)")
+                  << (step_limit && cur->size() > step_limit
+                          ? ", showing the first " + std::to_string(step_limit)
+                          : "")
+                  << "\n";
+        std::size_t shown = 0;
+        while (cur->step()) {
+            if (step_limit && shown >= step_limit) break;
+            std::cout << "  " << std::setw(5) << std::right << cur->position() << "  "
+                      << std::left << describe(cur->current(), cur->models_time());
+            if (cur->models_time()) {
+                std::cout << "   in-flight " << cur->in_flight();
+                for (const auto& kv : cur->lanes_busy())
+                    if (kv.second)
+                        std::cout << "  [" << to_string(kv.first) << " " << kv.second << "]";
+            }
+            std::cout << "\n";
+            ++shown;
+        }
+        // Station occupancy (L3/L2/L1 tile counts) is deliberately absent: the executor
+        // keeps its resident set internal and publishes only the peak, which is the first
+        // gap #286 lists. Reporting lane occupancy and calling it station occupancy would
+        // be the wrong kind of helpful. Only say so where lanes were shown at all.
+        if (cur->models_time())
+            std::cout << "  (lane occupancy shown; station occupancy needs the residency "
+                         "series the executor does not emit yet -- #286)\n";
     }
 
     // --timeline: one event per hop, from the level that models resources. L-B has no

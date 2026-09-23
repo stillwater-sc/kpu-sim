@@ -160,7 +160,28 @@ lists. #286 renders this; it does not come for free with it.
    `--timeline` is **refused** when only L-B was asked for, because L-B models no
    intervals; and `--streams` is refused for LU, which has no stream derivation, rather
    than silently ignoring the flag.
-3. **`--step`** with the cursor of D4, at L-B and L-T1.
+3. **`--step`** with the cursor of D4, at L-B and L-T1. — **done.** `--step` prints one
+   line per transaction, `--step-limit n` windows it.
+
+   **The two levels step by different mechanisms, and the difference is honest rather
+   than incidental.** L-B *executes*: `apply()` is public, so the cursor holds the kernel
+   state and applies one op per step, and values are observably incomplete partway
+   through — which is what makes it useful for debugging arithmetic. L-T1 *replays* the
+   recorded timeline, because the executor is an event engine whose schedule depends on
+   the whole program; pausing it mid-flight would be a different executor. §D4 called the
+   L-T1 cursor a projection of data the executor already produces, and that is exactly
+   what it is. The consequence worth stating: values cannot be inspected mid-replay.
+
+   Ordering is the part that makes a replay readable, and it is asserted: a fire precedes
+   its first leg, a leg's end precedes the next leg's start (they share a cycle — that is
+   what pipelining means), every leg closes before the op completes, and cycles never go
+   backwards. Lane occupancy per process is tracked and conserved — every lane taken is
+   given back, so the count returns to zero.
+
+   **Station occupancy is deliberately absent.** How many tiles sit in L3, L2 or L1 at a
+   given cycle needs the residency *series*, which the executor does not emit — the first
+   gap #286 lists. The stepper reports lane occupancy and says so; calling lane occupancy
+   "station occupancy" would be the wrong kind of helpful.
 4. **Program from a file**, once #265 lands, so `--program foo.l0` is literal rather than
    a derivation spec.
 5. **Platform + L-T2**: `run_at` delegates to `VirtualPlatform` (#282) and gains the L-T2

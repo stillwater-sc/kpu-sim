@@ -9,6 +9,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`kpu-run --step`: single-stepping at each level's own granularity (increment 3 of
+  #285).** One step is one transaction *at that level* — at L-B one `TileOp` applied, at
+  L-T1 an op firing, a hop starting or finishing, or an op completing. `--step-limit n`
+  windows the output.
+
+  **The two levels step by different mechanisms**, and the distinction is stated rather
+  than blurred. L-B **executes**: `apply()` is public, so the cursor holds the kernel state
+  and applies one op per step, which means values are observably incomplete partway
+  through — the property that makes it useful for debugging arithmetic. L-T1 **replays** the
+  recorded timeline, because the executor is an event engine whose schedule depends on the
+  whole program, so "pausing it" would be a different executor. Values therefore cannot be
+  inspected mid-replay at L-T1, and the tool says which mechanism it used.
+
+  What makes a replay readable is the ordering, and it is asserted: a fire precedes its
+  first leg, a leg's end precedes the next leg's start (they share a cycle — that is what
+  pipelining *is*), every leg closes before its op completes, and cycles never run
+  backwards. Lane occupancy per movement process is tracked and **conserved**: every lane
+  taken is given back, so the count returns to zero, and it never exceeds what the device
+  has. The stream shows cross-process concurrency directly — a reuse feed entering at the
+  BlockMover can complete while a fresh feed's DMA leg is still running.
+
+  **Station occupancy is deliberately absent.** How many tiles sit in L3, L2 or L1 at a
+  cycle needs the residency *series*, which the executor does not emit; that is the first
+  gap #286 lists. The stepper reports lane occupancy and says exactly that, because calling
+  lane occupancy "station occupancy" would be the wrong kind of helpful.
+
 - **`kpu-run` device knobs and `--timeline` (increment 2 of #285).** The per-process
   movement model is now reachable from the command line: `--dma-engines`,
   `--block-movers`, `--streamers` and `--noc-links`, each with its own

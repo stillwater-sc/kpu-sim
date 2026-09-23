@@ -102,6 +102,29 @@ if(KPU_BUILD_TESTS)
     )
     set_tests_properties(kpu_run_rejects_valueless_option PROPERTIES LABELS "program;driver")
 
+    # --step must produce a readable transaction stream at each level, and the two levels
+    # step by different mechanisms: L-T1 replays the run, L-B re-executes.
+    add_test(NAME kpu_run_step_block_sequential
+        COMMAND ${CMAKE_COMMAND}
+            -DCMD=$<TARGET_FILE:run>
+            -DARGS=--algo$<SEMICOLON>matmul$<SEMICOLON>--size$<SEMICOLON>32$<SEMICOLON>--tile$<SEMICOLON>16$<SEMICOLON>--step$<SEMICOLON>--step-limit$<SEMICOLON>8
+            -DEXPECT_CODE=0
+            -DMUST_MATCH=hop-start.*dma:dram->l3
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/expect_exit.cmake
+    )
+    set_tests_properties(kpu_run_step_block_sequential PROPERTIES LABELS "program;driver")
+
+    add_test(NAME kpu_run_step_behavioral
+        COMMAND ${CMAKE_COMMAND}
+            -DCMD=$<TARGET_FILE:run>
+            -DARGS=--algo$<SEMICOLON>matmul$<SEMICOLON>--size$<SEMICOLON>32$<SEMICOLON>--tile$<SEMICOLON>16$<SEMICOLON>--level$<SEMICOLON>behavioral$<SEMICOLON>--step$<SEMICOLON>--step-limit$<SEMICOLON>4
+            -DEXPECT_CODE=0
+            -DMUST_MATCH=re-executed.one.op.at.a.time
+            -DMUST_NOT_MATCH=hop-start
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/expect_exit.cmake
+    )
+    set_tests_properties(kpu_run_step_behavioral PROPERTIES LABELS "program;driver")
+
     # Bad numeric input must also exit 2 rather than abort: an uncaught std::stoul throw
     # is SIGABRT, which CI cannot distinguish from a crash in the model.
     add_test(NAME kpu_run_rejects_bad_number
