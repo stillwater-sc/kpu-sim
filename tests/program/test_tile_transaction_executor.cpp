@@ -508,3 +508,93 @@ TEST_CASE("a shared tile is held until its last reader completes, not its last i
         REQUIRE_THROWS_AS(run_shared_reader(4), std::runtime_error);
     }
 }
+
+// ----------------------------------------------------------------------------
+// Regression: the two scheduling rules that make credits gate WITHOUT idling
+// resources. Both of these were shipped without a test and both were caught in
+// review; each fixture below was verified to FAIL against the implementation that
+// preceded the fix, which is the only thing that makes it a regression test.
+// ----------------------------------------------------------------------------
+namespace {
+
+// One firing hands the seeker to a movement op whose queue this pass already walked
+// past. Movement is scanned before compute, so without repeating the pass the lane
+// waits for an unrelated completion.
+TileProgram build_same_pass_program() {
+    TileProgram p("same-pass");
+    p.add_operand(TensorOperand("A", 16, 16, 16, 16));
+    p.add_operand(TensorOperand("B", 16, 16, 16, 16));
+    p.add_operand(TensorOperand("C", 16, 16, 16, 16));
+    p.add_operand(TensorOperand("D", 16, 16, 16, 16));
+    auto feed = [&](const char* o) {
+        TileOp f; f.kind = TileOpKind::Feed; f.port_kind = PortKind::Input; f.port = "West";
+        f.inputs = {TileCoord{o, 0, 0}}; p.push(std::move(f));
+    };
+    auto drain = [&](const char* o) {
+        TileOp d; d.kind = TileOpKind::Drain; d.port_kind = PortKind::Output; d.port = "South";
+        d.outputs = {TileCoord{o, 0, 0}}; p.push(std::move(d));
+    };
+    feed("A");                                          // 0
+    feed("B");                                          // 1
+    TileOp m; m.kind = TileOpKind::MatMulAccum;         // 2  the seeker; fires this pass
+    m.inputs = {TileCoord{"A",0,0}, TileCoord{"B",0,0}}; m.outputs = {TileCoord{"C",0,0}};
+    p.push(std::move(m));
+    feed("D");                                          // 3  the seeker advances to here
+    drain("C"); drain("D");                             // 4, 5
+    return p;
+}
+
+// n feeds, each needing a slot, ahead of the drains that return the credits. At a small
+// budget the queued blocked prefix is far longer than the 32-entry scan window, so the
+// op that would release a slot is only reachable by the exhaustive pass.
+TileProgram build_deep_queue_program(Dim n) {
+    TileProgram p("deep-queue");
+    p.add_operand(TensorOperand("A", 16 * n, 16, 16, 16));      // n tiles, A[i,0]
+    for (Dim i = 0; i < n; ++i) {
+        TileOp f; f.kind = TileOpKind::Feed; f.port_kind = PortKind::Input; f.port = "West";
+        f.inputs = {TileCoord{"A", i, 0}}; p.push(std::move(f));
+    }
+    for (Dim i = 0; i < n; ++i) {
+        TileOp d; d.kind = TileOpKind::Drain; d.port_kind = PortKind::Output; d.port = "South";
+        d.outputs = {TileCoord{"A", i, 0}}; p.push(std::move(d));
+    }
+    return p;
+}
+
+} // namespace
+
+TEST_CASE("work unblocked by a firing starts in the same cycle, not after the next completion",
+          "[program][transactional][capacity]") {
+    TileProgram p = build_same_pass_program();
+    DeviceDescriptor dev = DeviceDescriptor::single();
+    dev.l3_tiles = 4;                       // finite, so the program-order seeker binds
+    const auto r = run_transactional(p, dev, Placement::single(dev.compute_tiles));
+
+    // op2 (the mac) is the seeker and fires; the seeker then advances to op3 (feed D),
+    // whose queue was scanned BEFORE op2's. Both must start in the same cycle.
+    CHECK(r.timeline[3].start == r.timeline[2].start);
+    CHECK(r.timeline[3].start < r.timeline[2].finish);   // i.e. no wait for a completion
+
+    // Against a single-pass try_fire, feed D starts at op2's FINISH instead (48 vs 32)
+    // and the makespan grows from 80 to 96.
+    CHECK(r.stats.makespan == 80);
+}
+
+TEST_CASE("a feasible op past the scan window is still found, not refused",
+          "[program][transactional][capacity]") {
+    const Dim n = 40, budget = 5;
+    // The blocked prefix must exceed the 32-entry window for this to test anything.
+    STATIC_REQUIRE(n - budget > 32);
+
+    TileProgram p = build_deep_queue_program(n);
+    DeviceDescriptor dev = DeviceDescriptor::single();
+    dev.l3_tiles = budget;
+    const auto r = run_transactional(p, dev, Placement::single(dev.compute_tiles));
+
+    CHECK(r.stats.ops == std::size_t(2 * n));
+    CHECK(r.stats.peak_l3_residency == budget);         // the budget was respected
+    CHECK(r.timeline.back().finish == r.stats.makespan);
+
+    // Without the exhaustive pass that runs before declaring a wedge, the drain that
+    // would return a credit sits 35 entries deep and this run is REFUSED outright.
+}
