@@ -90,6 +90,18 @@ if(KPU_BUILD_TESTS)
     )
     set_tests_properties(kpu_run_rejects_streams_for_lu PROPERTIES LABELS "program;driver")
 
+    # An option present without its value must be an ERROR, not a silent absence: a
+    # terminal --timeline previously read as "no timeline requested".
+    add_test(NAME kpu_run_rejects_valueless_option
+        COMMAND ${CMAKE_COMMAND}
+            -DCMD=$<TARGET_FILE:run>
+            -DARGS=--size$<SEMICOLON>32$<SEMICOLON>--tile$<SEMICOLON>16$<SEMICOLON>--timeline
+            -DEXPECT_CODE=2
+            -DMUST_MATCH=--timeline:.missing.value
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/expect_exit.cmake
+    )
+    set_tests_properties(kpu_run_rejects_valueless_option PROPERTIES LABELS "program;driver")
+
     # Bad numeric input must also exit 2 rather than abort: an uncaught std::stoul throw
     # is SIGABRT, which CI cannot distinguish from a crash in the model.
     add_test(NAME kpu_run_rejects_bad_number

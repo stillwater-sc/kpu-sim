@@ -33,8 +33,10 @@ namespace {
 // on junk, accepts trailing characters, and would abort the process rather than exit 2.
 bool parse_rate(const std::vector<std::string>& a, const char* key, double fallback,
                 double& out, std::string& error) {
-    const std::string raw = arg(a, key, "");
-    if (raw.empty()) { out = fallback; return true; }
+    if (!arg_present(a, key)) { out = fallback; return true; }
+    std::string raw;
+    if (!arg_required(a, key, raw, error)) return false;   // terminal, or a flag as value
+    if (raw.empty()) { error = std::string(key) + ": empty value"; return false; }
     try {
         std::size_t consumed = 0;
         const double v = std::stod(raw, &consumed);
@@ -70,6 +72,8 @@ R"(kpu-run — execute a Domain Flow Program at one or more levels and compare t
   --block-movers <n>        BlockMovers   (L3<->L2)      (default 1)
   --streamers <n>           Streamers     (L2<->L1)      (default 1)
   --noc-links <n>           NoC links     (L3->L3 reuse) (default 0 = none)
+                            Sizes the pool only: no program emits an L3->L3 leg
+                            until multi-compute-tile execution lands (#244).
   --dma-bytes-per-cycle <b> per DMA engine               (default 64)
   --bm-bytes-per-cycle <b>  per BlockMover               (default 128)
   --str-bytes-per-cycle <b> per Streamer                 (default 256)
@@ -223,8 +227,12 @@ int main(int argc, char** argv) {
 
     // An L1 stream program is matmul-only, and saying so beats deriving an empty one and
     // reporting timing that silently ignored the flag.
-    const std::string dataflow = arg(a, "--streams", "");
-    if (!dataflow.empty()) {
+    std::string dataflow;
+    if (!arg_required(a, "--streams", dataflow, err)) {
+        std::cerr << "kpu-run: " << err << "\n";
+        return 2;
+    }
+    if (arg_present(a, "--streams") && !dataflow.empty()) {
         if (!known_dataflow(dataflow)) {
             std::cerr << "kpu-run: unknown --streams '" << dataflow
                       << "' (output-stationary|os, weight-stationary|ws, "
@@ -237,7 +245,11 @@ int main(int argc, char** argv) {
             return 2;
         }
     }
-    const std::string timeline_path = arg(a, "--timeline", "");
+    std::string timeline_path;
+    if (!arg_required(a, "--timeline", timeline_path, err)) {
+        std::cerr << "kpu-run: " << err << "\n";
+        return 2;
+    }
     if (!known_topology(ds.topology)) {
         std::cerr << "kpu-run: unknown --topology '" << ds.topology
                   << "' (single | news | checkerboard)\n";

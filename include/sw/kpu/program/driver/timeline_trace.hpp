@@ -24,22 +24,35 @@
 #include <sw/kpu/program/tile_work.hpp>
 #include <sw/trace/trace_entry.hpp>
 
+#include <stdexcept>
 #include <string>
 #include <vector>
 
 namespace sw::kpu::program::driver {
 
 // Which component performs a leg. The hop names its governing CSP process, and the
-// trace vocabulary already has one entry per process, so this is a rename rather
-// than a modelling decision.
+// trace vocabulary has one entry per process for three of the four, so those are a
+// rename rather than a modelling decision.
+//
+// THE NoC HAS NO TRACE IDENTITY YET, AND THIS REFUSES TO INVENT ONE. Mapping an
+// L3->L3 leg onto BLOCK_MOVER would put NoC lane 0 and BlockMover lane 0 on the same
+// track, misreporting the occupancy of both — and picking a component for a link the
+// vocabulary does not model is a decision about that vocabulary, not about this
+// mapping. No program emits this leg today: `build_chain` has no path to it, and the
+// L3<->L3 hop stays unused until multi-compute-tile execution lands (#244). So the
+// guard is unreachable, and it is here to make sure whoever makes the leg reachable
+// has to give it a real identity rather than inherit a wrong one.
 inline sw::trace::ComponentType component_of(Hop h) {
     switch (mover_of(h)) {
         case Mover::Dma:        return sw::trace::ComponentType::DMA_ENGINE;
         case Mover::BlockMover: return sw::trace::ComponentType::BLOCK_MOVER;
         case Mover::Streamer:   return sw::trace::ComponentType::STREAMER;
-        case Mover::Noc:        return sw::trace::ComponentType::BLOCK_MOVER;   // NoC leg
+        case Mover::Noc:        break;
     }
-    return sw::trace::ComponentType::DMA_ENGINE;
+    throw std::invalid_argument(
+        std::string("timeline_trace: ") + to_string(h) +
+        " has no trace component: the NoC needs its own identity in sw::trace::"
+        "ComponentType before an L3->L3 leg can be traced (#244)");
 }
 
 // Movement is a transfer; compute is a matmul. READ/WRITE would have to pick a

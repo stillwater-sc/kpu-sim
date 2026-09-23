@@ -57,6 +57,32 @@ inline bool has_flag(const std::vector<std::string>& a, const std::string& k) {
     return false;
 }
 
+// Is the option PRESENT at all? `arg()` cannot say: it returns the fallback both when an
+// option is absent and when it is the last token with no value, so a terminal `--timeline`
+// looks exactly like no `--timeline`. For a flag that must carry a value, those are
+// different errors and only one of them is silent.
+inline bool arg_present(const std::vector<std::string>& a, const std::string& k) {
+    for (const auto& s : a) if (s == k) return true;
+    return false;
+}
+
+// A required value: present, non-empty, and not another option. Without the last check a
+// trailing `--timeline --step` would write a trace to a file called "--step".
+inline bool arg_required(const std::vector<std::string>& a, const std::string& k,
+                         std::string& out, std::string& error) {
+    for (std::size_t i = 0; i < a.size(); ++i) {
+        if (a[i] != k) continue;
+        if (i + 1 >= a.size()) { error = k + ": missing value"; return false; }
+        if (!a[i + 1].empty() && a[i + 1][0] == '-') {
+            error = k + ": missing value (next token is '" + a[i + 1] + "')";
+            return false;
+        }
+        out = a[i + 1];
+        return true;
+    }
+    return true;                 // absent: leave `out` at its default
+}
+
 // A CHECKED unsigned parse, because std::stoul is the wrong tool for a CLI: it throws on
 // "abc", it happily accepts "12abc", and it wraps "-1" to ULONG_MAX without complaint --
 // so `--compute-tiles -1` becomes an enormous count rather than an error. An uncaught
@@ -66,11 +92,11 @@ inline bool has_flag(const std::vector<std::string>& a, const std::string& k) {
 // It also catches `--size --tile 16`, where arg() hands back the NEXT FLAG as the value.
 inline bool parse_dim(const std::vector<std::string>& a, const std::string& key,
                       std::uint32_t fallback, std::uint32_t& out, std::string& error) {
-    const std::string raw = arg(a, key, std::to_string(fallback));
+    std::string raw = std::to_string(fallback);
+    if (!arg_required(a, key, raw, error)) return false;
     if (raw.empty()) { error = key + ": empty value"; return false; }
     if (raw[0] == '-') {
-        error = key + ": '" + raw + "' is not a non-negative integer" +
-                (raw.size() > 1 && raw[1] == '-' ? " (did a value get omitted?)" : "");
+        error = key + ": '" + raw + "' is not a non-negative integer";
         return false;
     }
     try {

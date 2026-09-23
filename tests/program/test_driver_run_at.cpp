@@ -290,3 +290,65 @@ TEST_CASE("a stream program changes timing and leaves values alone",
     CHECK(streamed.provenance->l1_timing);
     CHECK_FALSE(plain.provenance->l1_timing);
 }
+
+TEST_CASE("the NoC has no trace identity, and the mapping refuses to invent one",
+          "[program][driver][timeline]") {
+    // Mapping an L3->L3 leg onto BLOCK_MOVER would put NoC lane 0 and BlockMover lane 0 on
+    // the same track, misreporting the occupancy of both. Picking a component for a link
+    // the trace vocabulary does not model is a decision about that vocabulary, so this
+    // refuses instead.
+    CHECK_THROWS_AS(component_of(Hop::BlockMoverL3ToL3), std::invalid_argument);
+    // The other three are faithful renames and must not throw.
+    CHECK_NOTHROW(component_of(Hop::DmaDramToL3));
+    CHECK_NOTHROW(component_of(Hop::BlockMoverL3ToL2));
+    CHECK_NOTHROW(component_of(Hop::StreamerL2ToL1));
+
+    // The guard is unreachable today: no chain contains an L3->L3 leg, even with NoC links
+    // configured, so a run still traces cleanly.
+    ProgramSpec ps;
+    ps.size = 32;
+    ps.tile = 16;
+    TileProgram p = derive(ps);
+    fill(p, ps);
+    DeviceSpec ds;
+    ds.noc_links = 4;
+    const auto device = make_device(ds);
+    const auto out = run_at(ExecutionLevel::BlockSequential, p, device,
+                            Placement::single(device.compute_tiles));
+    for (const auto& rec : out.timeline)
+        for (const auto& hr : rec.hops)
+            CHECK(hr.hop != Hop::BlockMoverL3ToL3);
+    CHECK_NOTHROW(to_trace_entries(p, out.timeline, device.element_bytes));
+}
+
+TEST_CASE("an option present without a value is an error, not an absence",
+          "[program][driver]") {
+    // arg() cannot tell those apart: it returns the fallback both when an option is absent
+    // and when it is the last token. For a flag that must carry a value those are
+    // different errors, and only one of them is silent.
+    std::string out, err;
+    const std::vector<std::string> terminal{"--size", "32", "--timeline"};
+    CHECK(arg_present(terminal, "--timeline"));
+    CHECK_FALSE(arg_required(terminal, "--timeline", out, err));
+    CHECK(err.find("missing value") != std::string::npos);
+
+    // A following flag is not a value either, or `--timeline --step` writes a trace to a
+    // file called "--step".
+    const std::vector<std::string> flag_as_value{"--timeline", "--step"};
+    err.clear();
+    CHECK_FALSE(arg_required(flag_as_value, "--timeline", out, err));
+    CHECK(err.find("--step") != std::string::npos);
+
+    // Absent leaves the default alone and is NOT an error.
+    out = "untouched";
+    err.clear();
+    const std::vector<std::string> absent{"--size", "32"};
+    CHECK(arg_required(absent, "--timeline", out, err));
+    CHECK(out == "untouched");
+    CHECK(err.empty());
+
+    // And a real value is taken.
+    const std::vector<std::string> given{"--timeline", "run.json"};
+    CHECK(arg_required(given, "--timeline", out, err));
+    CHECK(out == "run.json");
+}
