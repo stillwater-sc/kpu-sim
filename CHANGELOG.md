@@ -9,6 +9,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Per-hop movement in the L-T1 executor (increment 5 of #264).** Movement is modelled
+  **per hop** instead of as one aggregate lane pool: **DRAM→L3** (the DMA, against DRAM
+  bandwidth) and **L3→CF** (the on-chip movers) each have their own lane count and their
+  own **per-lane** bandwidth, so the bottleneck that usually decides the makespan — DRAM,
+  not on-chip movement — is finally expressible. A `Feed` expands into the hop chain
+  needed to reach its consumer, skipping hops residency already satisfies; a `Drain` is
+  the reverse chain; and hops for one tile are **pipelined**, so hop *n+1* starts as soon
+  as hop *n* completes while different tiles occupy different hops concurrently. The §6.1
+  semantics are **asserted, not assumed**, because ambiguity there would make calibration
+  meaningless: one transfer occupies exactly one lane for its whole duration, and **lanes
+  give concurrency, never speed-up** — adding idle lanes never shortens a single transfer
+  (measured constant at 64 cycles across 1, 2 and 8 lanes). On a DRAM-starved 64³ GEMM the
+  DRAM hop runs at 99% utilization while the on-chip hop sits under 10%, and adding DRAM
+  lanes cuts the makespan (3096 → 1656 → 1256) while total DRAM busy cycles stay fixed at
+  3072 — concurrency and speed-up, separated in cycles. **The collapse is a descriptor
+  setting, not a code path**: leaving `dram_lanes`/`onchip_lanes` at 0 gives one collapsed
+  hop over `move_lanes` and reproduces every increment-4 number exactly. Values are
+  unchanged and bit-identical to `TileProgramReference` under per-hop movement —
+  decomposition changes *when*, never *what*. New stats `hop_busy_cycles`,
+  `hop_utilization`, `hop_transfers` and `hop_lane_stalls`, plus per-hop intervals on each
+  timeline record; the analytical floor now takes the **busiest hop** rather than an
+  average, since one hop's lanes cannot carry another hop's traffic. **Per-CF-tile lanes
+  and L2/L1 capacity are not here**: both need a static binding of compute ops to compute
+  tiles, which belongs with the placement pass.
+
 - **L3 credits, capacity and residency reuse in the L-T1 executor (increment 4 of
   #264).** The transactional tier now enforces **L3 buffer capacity in tiles**, rewards
   residency, and refuses an over-committed program with a diagnosis instead of wedging.

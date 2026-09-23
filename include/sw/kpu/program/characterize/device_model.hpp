@@ -17,6 +17,7 @@
 
 #include <sw/kpu/program/tile_program.hpp>
 
+#include <algorithm>
 #include <string>
 
 namespace sw::kpu::program::characterize {
@@ -43,7 +44,7 @@ struct DeviceDescriptor {
 
     // Concurrency / capacity ---------------------------------------------------
     Dim compute_tiles = 1;      // # CF tiles that can run tile-compute ops concurrently
-    Dim move_lanes    = 1;      // # concurrent movement channels (DMA/BM/Streamer aggregate)
+    Dim move_lanes    = 1;      // COLLAPSED movement: one pool for every hop (see hops())
     // L3 capacity, counted IN TILES. 0 = unbounded, which is what a design-space sweep
     // wants and what preserves pre-capacity behaviour. Enforced dynamically by
     // TileTransactionExecutor as well as checked statically by the harness.
@@ -53,8 +54,30 @@ struct DeviceDescriptor {
 
     // Throughput ---------------------------------------------------------------
     double fabric_macs_per_cycle = 256.0;   // MAC throughput of ONE CF tile
-    double bytes_per_cycle       = 64.0;    // ONE movement lane's bandwidth
+    double bytes_per_cycle       = 64.0;    // ONE collapsed movement lane's bandwidth
     double element_bytes         = 4.0;     // fp32
+
+    // Movement, per hop (#264 increment 5, design note §6) -----------------------
+    // A tile does not cross the machine in one step: DRAM->L3 is realized by the DMA
+    // against DRAM bandwidth, and L3->CF by the on-chip movers. Modelling them as one
+    // aggregate pool cannot express the bottleneck that usually decides the makespan,
+    // which is DRAM rather than on-chip movement.
+    //
+    // THE COLLAPSE IS A DESCRIPTOR SETTING, NOT A HARDCODED ASSUMPTION (§6). Leaving
+    // `dram_lanes` and `onchip_lanes` at 0 yields ONE collapsed hop over `move_lanes`
+    // and `bytes_per_cycle` — identical to pre-increment-5 behaviour, which is what
+    // existing harness sweeps depend on. Setting either splits the chain in two.
+    Dim    dram_lanes            = 0;       // 0 = collapsed (use move_lanes)
+    double dram_bytes_per_cycle  = 64.0;    // per lane, DRAM<->L3
+    Dim    onchip_lanes          = 0;       // 0 = collapsed (use move_lanes)
+    double onchip_bytes_per_cycle = 256.0;  // per lane, L3<->CF; on-chip is the faster hop
+
+    // Per §6.1, every *_bytes_per_cycle above is PER LANE, never aggregate: a hop's peak
+    // throughput is lanes x bytes_per_cycle, one transfer occupies exactly one lane for
+    // its whole duration, and lanes give concurrency, never speed-up. Left ambiguous, the
+    // same descriptor would yield different makespans in different implementations and
+    // calibration would mean nothing.
+    bool per_hop_movement() const { return dram_lanes > 0 || onchip_lanes > 0; }
 
     // Energy (pJ), illustrative — movement >> compute is the headline principle ---
     double pj_per_mac                 = 1.0;
@@ -81,6 +104,10 @@ struct DeviceDescriptor {
     }
 
     std::string label() const {
+        if (per_hop_movement())
+            return std::string(to_string(topology)) + "/cf" + std::to_string(compute_tiles) +
+                   "/dram" + std::to_string(std::max<Dim>(dram_lanes, 1)) +
+                   "/onchip" + std::to_string(std::max<Dim>(onchip_lanes, 1));
         return std::string(to_string(topology)) + "/cf" + std::to_string(compute_tiles) +
                "/ml" + std::to_string(move_lanes);
     }

@@ -72,13 +72,40 @@ inline const char* to_string(ResourceKind r) {
     return r == ResourceKind::ComputeTile ? "CF" : "lane";
 }
 
+// Which physical stage a movement transfer occupies (design note §6). `Collapsed` is the
+// single aggregate pool the descriptor selects by leaving the per-hop lane counts at 0 —
+// the pre-increment-5 model, kept as a descriptor setting rather than a code path.
+enum class Hop { Collapsed, DramToL3, OnChip };
+
+inline const char* to_string(Hop h) {
+    switch (h) {
+        case Hop::Collapsed: return "move";
+        case Hop::DramToL3:  return "dram->l3";
+        case Hop::OnChip:    return "l3->cf";
+    }
+    return "?";
+}
+
+// One transfer of one tile across one hop, on one lane, start to finish with no
+// preemption (§6.1).
+struct HopRecord {
+    Hop hop = Hop::Collapsed;
+    Dim lane = 0;
+    Cycle start = 0, finish = 0;
+};
+
 struct TileOpRecord {
     std::size_t op_index = 0;
     TileOpKind kind{};
-    Cycle start = 0, finish = 0;
+    Cycle start = 0, finish = 0;   // the op's whole span: first hop start -> last hop finish
     ResourceKind resource = ResourceKind::ComputeTile;
-    Dim resource_id = 0;
-    bool zero_work = false;      // resident/degenerate: real, and visibly free (§7.1)
+    Dim resource_id = 0;           // compute tile, or the lane of the FIRST hop
+    bool zero_work = false;        // resident/degenerate: real, and visibly free (§7.1)
+    // Per-hop occupancy, in chain order. Empty for compute ops and for movement that
+    // residency made free. A tile's hops are PIPELINED: hop n+1 starts when hop n
+    // completes for that tile, so these intervals abut but the op as a whole can span
+    // several lanes over its lifetime.
+    std::vector<HopRecord> hops;
 };
 
 struct TileRunStats {
@@ -95,6 +122,13 @@ struct TileRunStats {
     std::size_t l3_credit_stalls = 0;
     std::size_t peak_l3_residency = 0;    // in tiles; compare against DeviceDescriptor::l3_tiles
     std::size_t resident_feeds = 0;       // feeds that cost nothing because the tile was already there
+    // Per-hop movement (increment 5). Populated for whichever hops the descriptor models;
+    // with the collapsed descriptor only Hop::Collapsed is non-zero, so a reader can tell
+    // which movement model produced these numbers without consulting the descriptor.
+    std::map<Hop, Cycle> hop_busy_cycles;         // summed lane occupancy per hop
+    std::map<Hop, double> hop_utilization;        // busy / (lanes * makespan)
+    std::map<Hop, std::size_t> hop_transfers;     // transfers that actually moved bytes
+    std::size_t hop_lane_stalls = 0;              // a transfer ready to advance, no lane free
     // Analytical floor under THIS executor's resource model (design note §9).
     double lower_bound = 0.0;
 };
@@ -221,13 +255,91 @@ public:
         // lanes from the device. Per-hop movement is increment 5.
         const Dim n_cf = std::max<Dim>(req.placement.compute_tiles(), 1);
         const Dim n_lanes = std::max<Dim>(dev.move_lanes, 1);
-        std::vector<bool> cf_busy(n_cf, false), lane_busy(n_lanes, false);
+        std::vector<bool> cf_busy(n_cf, false);
+
+        // ---- movement, per hop (increment 5, §6) ---------------------------
+        // A tile does not cross the machine in one step. Each hop is its own pool of
+        // lanes with its own per-lane bandwidth, so DRAM bandwidth — usually the real
+        // bottleneck — is expressible separately from on-chip movement.
+        //
+        // The COLLAPSED descriptor is the same mechanism with one hop, not a second code
+        // path: that is what §6 means by "the collapse is a descriptor setting rather than
+        // a hardcoded assumption", and it is why every pre-increment-5 number is
+        // reproduced exactly when the per-hop lane counts are left at 0.
+        struct HopSpec {
+            Hop hop;
+            Dim lanes;
+            double bytes_per_cycle;      // PER LANE (§6.1), never aggregate
+        };
+        std::vector<HopSpec> hop_specs;
+        if (dev.per_hop_movement()) {
+            hop_specs.push_back({Hop::DramToL3, std::max<Dim>(dev.dram_lanes, 1),
+                                 dev.dram_bytes_per_cycle});
+            hop_specs.push_back({Hop::OnChip, std::max<Dim>(dev.onchip_lanes, 1),
+                                 dev.onchip_bytes_per_cycle});
+        } else {
+            hop_specs.push_back({Hop::Collapsed, n_lanes, dev.bytes_per_cycle});
+        }
+        std::vector<std::vector<bool>> hop_lane_busy;
+        for (const HopSpec& h : hop_specs) hop_lane_busy.emplace_back(h.lanes, false);
+
+        auto hop_index = [&](Hop h) -> std::size_t {
+            for (std::size_t i = 0; i < hop_specs.size(); ++i)
+                if (hop_specs[i].hop == h) return i;
+            return 0;
+        };
+        auto free_lane_on = [&](std::size_t hi, Dim& out) {
+            for (Dim l = 0; l < hop_specs[hi].lanes; ++l)
+                if (!hop_lane_busy[hi][l]) { out = l; return true; }
+            return false;
+        };
+
+        // The chain a movement op traverses, in order, with residency-satisfied hops
+        // dropped (§6). Two deliberately different residency semantics, because the
+        // descriptor means different things:
+        //
+        //   - COLLAPSED: one hop stands for the whole DRAM->CF path, so an L3-resident
+        //     tile satisfies it entirely and the feed is free. This is increment 4's
+        //     behaviour and is preserved bit-for-bit.
+        //   - PER-HOP: L3 residency satisfies only DRAM->L3. The tile still has to reach
+        //     the fabric, so the on-chip hop still runs. This is strictly more faithful,
+        //     and it is why the two descriptors disagree on makespan. Making a feed free
+        //     again needs L2/L1 residency, which is not modelled yet.
+        auto build_chain = [&](std::size_t op, bool resident) {
+            std::vector<std::size_t> chain;                  // indices into hop_specs
+            if (work[op].bytes <= 0.0) return chain;         // nothing to move
+            if (!dev.per_hop_movement()) {
+                if (!resident) chain.push_back(0);
+                return chain;
+            }
+            const bool outbound = ops[op].kind == TileOpKind::Drain;
+            if (outbound) {                                  // CF -> L3 -> DRAM
+                chain.push_back(hop_index(Hop::OnChip));
+                chain.push_back(hop_index(Hop::DramToL3));
+            } else {                                         // DRAM -> L3 -> CF
+                if (!resident) chain.push_back(hop_index(Hop::DramToL3));
+                chain.push_back(hop_index(Hop::OnChip));
+            }
+            return chain;
+        };
+        auto hop_duration = [&](std::size_t op, std::size_t hi) {
+            return quantize_cycles(work[op].bytes / std::max(1.0, hop_specs[hi].bytes_per_cycle),
+                                   work[op].bytes > 0.0);
+        };
+
+        // In-flight movement: which chain an op is on, and how far along it is.
+        std::vector<std::vector<std::size_t>> chain_of(ops.size());
+        std::vector<std::size_t> stage_of(ops.size(), 0);
+        std::size_t hop_lane_stalls = 0;
+        std::map<Hop, Cycle> hop_busy;
+        std::map<Hop, std::size_t> hop_transfers;
 
         // Completion events, earliest first; ties broken by op index so a run is
         // reproducible regardless of container order.
         struct Event {
             Cycle at;
             std::size_t op;
+            std::size_t stage;                         // which hop of the chain finished
             bool operator<(const Event& o) const {     // std::priority_queue is a max-heap
                 return at != o.at ? at > o.at : op > o.op;
             }
@@ -236,7 +348,7 @@ public:
 
         Cycle now = 0;
         std::size_t remaining = ops.size();
-        Cycle cf_busy_cycles = 0, lane_busy_cycles = 0;
+        Cycle cf_busy_cycles = 0;
 
         // ---- dependency bookkeeping ----------------------------------------
         std::vector<std::size_t> pred_remaining(ops.size());
@@ -270,33 +382,105 @@ public:
             if (pred_remaining[i] == 0) enqueue(i);
 
 
+        // Start an op. For compute that is the whole story; for movement it starts the
+        // FIRST hop of the chain, and later hops are started by advance_hops() as each
+        // one completes. `id` is the compute tile, or the lane on that first hop.
         auto fire = [&](std::size_t op, ResourceKind kind, Dim id) {
-            (kind == ResourceKind::ComputeTile ? cf_busy : lane_busy)[id] = true;
             fired[op] = true;
 
-            // Residency is checked BEFORE movement: a Feed of a tile already in L3 moves
-            // nothing, so it costs nothing (§5, and the zero-work case of §7.1).
+            // Residency is checked BEFORE movement: a Feed of a tile already in L3 skips
+            // the hops that residency satisfies (§5, §6, and the zero-work case of §7.1).
             const bool feed_of_resident =
                 ops[op].kind == TileOpKind::Feed && !ops[op].inputs.empty() &&
                 resident.count(tile_key(ops[op].inputs[0])) != 0;
-            const Cycle dur = feed_of_resident ? 0 : duration[op];
-            if (feed_of_resident) ++resident_feeds;
 
             acquire(op);                       // hold the slots for every tile it touches
 
             TileOpRecord& rec = result.timeline[op];
             rec.resource = kind;
             rec.resource_id = id;
-            rec.zero_work = rec.zero_work || feed_of_resident;
             rec.start = now;
-            rec.finish = now + dur;
+
+            if (kind == ResourceKind::ComputeTile) {
+                cf_busy[id] = true;
+                rec.finish = now + duration[op];
+                apply(req.program, ops[op], state_);
+                events.push(Event{rec.finish, op, 0});
+                return;
+            }
+
+            chain_of[op] = build_chain(op, feed_of_resident);
+            stage_of[op] = 0;
+            if (chain_of[op].empty()) {        // residency made it free, or nothing to move
+                if (feed_of_resident) ++resident_feeds;
+                rec.zero_work = true;
+                rec.finish = now;
+                duration[op] = 0;
+                apply(req.program, ops[op], state_);
+                events.push(Event{rec.finish, op, 0});
+                return;
+            }
+            if (feed_of_resident) ++resident_feeds;   // still counted: it skipped a hop
+
+            // Total cost is the sum over the hops it actually traverses, so the stats and
+            // the analytical bound see the whole journey rather than one leg of it.
+            Cycle total = 0;
+            for (std::size_t hi : chain_of[op]) total += hop_duration(op, hi);
+            duration[op] = total;
 
             // Values are applied at FIRE time, in event order. Dependencies are
             // satisfied by construction, so this is exactly the reference's order for
             // anything that interacts — hence bit-identical results.
             apply(req.program, ops[op], state_);
-            events.push(Event{rec.finish, op});
-            duration[op] = dur;                // so the stats and bounds see what it cost
+
+            const std::size_t hi = chain_of[op][0];
+            hop_lane_busy[hi][id] = true;
+            const Cycle d = hop_duration(op, hi);
+            rec.hops.push_back(HopRecord{hop_specs[hi].hop, id, now, now + d});
+            rec.finish = now + d;              // provisional: extended as hops complete
+            ++hop_transfers[hop_specs[hi].hop];
+            events.push(Event{now + d, op, 0});
+        };
+
+        // Advance in-flight transfers whose next hop has a free lane.
+        //
+        // HOP ADVANCEMENT IS NEVER CREDIT-GATED, and that is load-bearing. The op already
+        // took its slots when it fired, so making it re-qualify against the program-order
+        // seeker would let an op hold slots while the seeker waits for slots it cannot
+        // get — hold-and-wait reintroduced through the movement model, which is exactly
+        // the deadlock the acquisition rule exists to prevent. In-flight work is also
+        // advanced FIRST in each pass, ahead of starting new ops, so a transfer already
+        // holding L3 slots is never starved by newly admitted work that would delay its
+        // release.
+        //
+        // Pending transfers are held in a min-heap PER HOP rather than rescanned: the
+        // whole point of the ready heaps is to keep the scheduler off O(n^2), and an
+        // O(ops) sweep per pass would put it straight back.
+        std::vector<ReadyHeap> hop_pending(hop_specs.size());
+
+        auto start_stage = [&](std::size_t op, std::size_t stage, std::size_t hi, Dim lane) {
+            hop_lane_busy[hi][lane] = true;
+            stage_of[op] = stage;
+            const Cycle d = hop_duration(op, hi);
+            result.timeline[op].hops.push_back(HopRecord{hop_specs[hi].hop, lane, now, now + d});
+            result.timeline[op].finish = now + d;
+            ++hop_transfers[hop_specs[hi].hop];
+            events.push(Event{now + d, op, stage});
+        };
+
+        auto advance_hops = [&]() {
+            bool any = false;
+            for (std::size_t hi = 0; hi < hop_specs.size(); ++hi) {
+                while (!hop_pending[hi].empty()) {
+                    Dim lane = 0;
+                    if (!free_lane_on(hi, lane)) { ++hop_lane_stalls; break; }
+                    const std::size_t op = hop_pending[hi].top();
+                    hop_pending[hi].pop();
+                    start_stage(op, stage_of[op] + 1, hi, lane);
+                    any = true;
+                }
+            }
+            return any;
         };
 
         // Credits GATE, they never reorder — and the invariant has to be stronger than
@@ -411,15 +595,30 @@ public:
             for (bool pass_progress = true; pass_progress; ) {
                 pass_progress = false;
                 std::size_t pass_stalls = 0;
+                if (advance_hops()) any = pass_progress = true;   // in-flight work first
                 seeker = earliest_slot_seeker();
                 auto fired_seeker = [&](std::size_t op) {    // advance to the next one
                     if (seeker == static_cast<long>(op)) seeker = earliest_slot_seeker();
                 };
-                for (Dim l = 0; l < n_lanes && !ready_move.empty(); ++l) {
-                    if (lane_busy[l]) continue;
+                // A movement op enters on the FIRST hop of its chain, so the lane it
+                // needs belongs to that hop's pool. Which hop that is depends on residency
+                // (an L3-resident feed skips DRAM->L3), so it is resolved here rather than
+                // assumed.
+                for (;;) {
+                    if (ready_move.empty()) break;
                     std::size_t op = 0;
                     if (!take_admissible(ready_move, op)) { ++pass_stalls; break; }
-                    fire(op, ResourceKind::MoveLane, l);
+                    const bool resident_feed =
+                        ops[op].kind == TileOpKind::Feed && !ops[op].inputs.empty() &&
+                        resident.count(tile_key(ops[op].inputs[0])) != 0;
+                    const std::vector<std::size_t> c = build_chain(op, resident_feed);
+                    Dim lane = 0;
+                    if (!c.empty() && !free_lane_on(c[0], lane)) {
+                        ready_move.push(op);          // put it back; the lane is the limit
+                        ++hop_lane_stalls;
+                        break;
+                    }
+                    fire(op, ResourceKind::MoveLane, lane);
                     fired_seeker(op);
                     any = pass_progress = true;
                 }
@@ -489,19 +688,29 @@ public:
             now = at;
             while (!events.empty() && events.top().at == at) {
                 const std::size_t op = events.top().op;
+                const std::size_t stage = events.top().stage;
                 events.pop();
-                completed[op] = true;
-                --remaining;
 
                 TileOpRecord& rec = result.timeline[op];
                 if (rec.resource == ResourceKind::ComputeTile) {
                     cf_busy[rec.resource_id] = false;
                     cf_busy_cycles += duration[op];
-                } else {
-                    lane_busy[rec.resource_id] = false;
-                    lane_busy_cycles += duration[op];
+                } else if (!chain_of[op].empty()) {
+                    // A HOP finished, which is not the same as the OP finishing. Free the
+                    // lane, bank its occupancy, and either hand the tile to the next hop
+                    // or, if this was the last, complete the op.
+                    const std::size_t hi = chain_of[op][stage];
+                    const HopRecord& hr = rec.hops[stage];
+                    hop_lane_busy[hi][hr.lane] = false;
+                    hop_busy[hop_specs[hi].hop] += hr.finish - hr.start;
+                    if (stage + 1 < chain_of[op].size()) {
+                        hop_pending[chain_of[op][stage + 1]].push(op);
+                        continue;            // still in flight: not completed, not counted
+                    }
                 }
 
+                completed[op] = true;
+                --remaining;
                 release_after(op);          // slots whose last consumer just completed
 
                 for (std::size_t s : deps.succs[op])
@@ -521,15 +730,34 @@ public:
             if (work[i].is_compute) { ++st.computes; st.compute_cycles += duration[i]; }
             else                    { ++st.movements; st.movement_cycles += duration[i]; }
         }
+        Cycle all_hop_busy = 0;
+        Dim all_hop_lanes = 0;
+        double hop_floor = 0.0;
+        for (const HopSpec& h : hop_specs) {
+            const Cycle busy = hop_busy.count(h.hop) ? hop_busy[h.hop] : 0;
+            all_hop_busy += busy;
+            all_hop_lanes = static_cast<Dim>(all_hop_lanes + h.lanes);
+            st.hop_busy_cycles[h.hop] = busy;
+            st.hop_transfers[h.hop] = hop_transfers.count(h.hop) ? hop_transfers[h.hop] : 0;
+            // Each hop is its own bottleneck candidate: the floor is the BUSIEST hop, not
+            // the average, because a hop's lanes cannot help another hop's traffic.
+            hop_floor = std::max(hop_floor, double(busy) / double(std::max<Dim>(h.lanes, 1)));
+        }
         if (st.makespan > 0) {
             st.compute_utilization =
                 static_cast<double>(cf_busy_cycles) / (double(n_cf) * double(st.makespan));
             st.movement_utilization =
-                static_cast<double>(lane_busy_cycles) / (double(n_lanes) * double(st.makespan));
+                static_cast<double>(all_hop_busy) /
+                (double(std::max<Dim>(all_hop_lanes, 1)) * double(st.makespan));
+            for (const HopSpec& h : hop_specs)
+                st.hop_utilization[h.hop] =
+                    double(st.hop_busy_cycles[h.hop]) /
+                    (double(std::max<Dim>(h.lanes, 1)) * double(st.makespan));
         }
         st.lower_bound = std::max({critical_path_(deps, duration),
                                    double(st.compute_cycles) / double(n_cf),
-                                   double(st.movement_cycles) / double(n_lanes)});
+                                   hop_floor});
+        st.hop_lane_stalls = hop_lane_stalls;
 
         st.l3_credit_stalls = credit_stalls;
         st.peak_l3_residency = peak_residency;
