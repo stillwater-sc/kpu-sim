@@ -363,8 +363,26 @@ placement and profile cannot be compared with another number.
    permutation and swap count — versus the reference; compute cycles non-zero and scaling
    with M, N, K and tile size; identical cycles and timeline across repeated runs. No
    capacity limits yet, so the refusal path is unreachable until increment 4.
-4. **Credits and capacity** (§5), including residency-based reuse and refusal of
-   over-committed programs.
+4. **Credits and capacity** (§5) — **done for L3.** Tile-granularity L3 slots with
+   residency-based reuse (a feed of a resident tile costs nothing), release when the
+   *last user completes*, and refusal with a capacity diagnosis. The release is a
+   credit-return refcount, not a statically chosen highest-index user: readers of one
+   tile are deliberately unordered, so the highest-indexed reader can finish first, and
+   releasing on it frees a slot an earlier reader still holds — which undercounts
+   residency and lets a run exceed the capacity being enforced. §5 already specified the
+   completion rule; the refcount is what implements it. **Slots are acquired in PROGRAM ORDER**, which
+   is the invariant that makes the model deadlock-free: the weaker "don't promote a ready
+   op past an earlier ready one" rule wedged at every finite capacity, because feeds are
+   ready immediately and take every slot while the computes that would retire those tiles
+   are not ready yet. Program-order acquisition bounds the live set by the program-order
+   live set, so any budget at or above `peak_live_tiles` is **sufficient** — it is
+   guaranteed to complete. It is not always **necessary**: residency reuse and ops that
+   need no new slot can reorder enough that a smaller budget still runs (the shared-reader
+   regression program has a static peak of 6 and completes in 5). For the derived matmul
+   program the two coincide exactly, 21 completing and 20 refusing, and that equality is
+   asserted — two independent implementations of the same question agreeing.
+   **L2/L1 capacity is NOT here**: §5 counts it per compute tile, so it waits for the
+   placement pass to bind tiles to compute tiles (increment 5).
 5. **Per-hop movement** (§6), starting from DRAM→L3 plus a collapsed on-chip hop.
 6. **Calibration** (§8) with the CI band, plus the device profile and fit report.
 7. **Wire to the ADR D2 factory** so `SimulationFidelity::TRANSACTIONAL` reaches it, and

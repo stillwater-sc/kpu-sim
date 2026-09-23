@@ -29,7 +29,7 @@ decomposes a CSP transaction**.
 | Level | Decomposes a transaction into | Speed | Computes Values? |
 |-------|-------------------------------|-------|------------------|
 | **L-B** behavioral | a whole block move, atomic | ~100-1000x | **YES** |
-| **L-T1** block-sequential | one tile move (finite-buffer credits and capacity arrive in #264 increment 4) | ~10-100x | **YES — exact**, bit-identical to L-B |
+| **L-T1** block-sequential | one tile move, under L3 tile credits (L2/L1 capacity arrives with the placement pass) | ~10-100x | **YES — exact**, bit-identical to L-B |
 | **L-T2** resource transactional | `read`/`write` per resource; `push` into the compute tile | — | **YES — exact**, bit-identical to L-B |
 | **L-CA** cycle-accurate | protocol events, per cycle | 1x (baseline) | **YES** — within tolerance of L-B |
 

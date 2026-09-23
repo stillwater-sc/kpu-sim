@@ -14,6 +14,7 @@
 #include <sw/kpu/program/derive/lu_tile_program.hpp>
 #include <sw/kpu/program/derive/matmul_tile_program.hpp>
 #include <sw/kpu/program/stream/derive/matmul_streams.hpp>
+#include <sw/kpu/program/characterize/characterization.hpp>
 
 #include <algorithm>
 #include <chrono>
@@ -295,4 +296,305 @@ TEST_CASE("the ready set scales to large programs", "[program][transactional][sc
     CHECK(result.stats.ops == prog.ops().size());
     CHECK(result.stats.compute_cycles > 0);
     CHECK(seconds < 30.0);
+}
+
+// ============================================================================
+// Increment 4 — L3 capacity, credits, residency reuse, refusal
+// ============================================================================
+
+TEST_CASE("capacity at the program's peak live set completes; one below refuses",
+          "[program][transactional][capacity]") {
+    // The harness computes peak_live_tiles statically; the executor enforces capacity
+    // dynamically. They are independent implementations of the same question, so their
+    // feasibility boundary must coincide EXACTLY — if it does not, one of them is wrong.
+    const Dim M = 64, N = 64, K = 64, T = 16;
+    const std::size_t peak =
+        characterize::peak_live_tiles(derive_matmul_tile_program(M, N, K, T, T, T));
+    REQUIRE(peak > 1);
+
+    auto run_with = [&](Dim l3_tiles) {
+        TileProgram p = derive_matmul_tile_program(M, N, K, T, T, T);
+        fill_matmul(p, K, N);
+        DeviceDescriptor dev = DeviceDescriptor::single();
+        dev.l3_tiles = l3_tiles;
+        return run_transactional(p, dev, Placement::single(dev.compute_tiles));
+    };
+
+    SECTION("exactly the static peak is enough") {
+        const auto at_peak = run_with(static_cast<Dim>(peak));
+        CHECK(at_peak.stats.peak_l3_residency <= peak);
+        CHECK(at_peak.stats.l3_credit_stalls > 0);      // it was genuinely tight
+    }
+
+    SECTION("one tile short is refused, with a diagnosis naming the budget") {
+        try {
+            run_with(static_cast<Dim>(peak - 1));
+            FAIL("expected a refusal at one tile below the peak live set");
+        } catch (const std::runtime_error& e) {
+            const std::string msg = e.what();
+            CHECK(msg.find("no op can fire") != std::string::npos);
+            CHECK(msg.find("L3 slot") != std::string::npos);      // says WHY, not just that
+            CHECK(msg.find("live set") != std::string::npos);     // and what to do about it
+        }
+    }
+}
+
+TEST_CASE("capacity pressure throttles rather than corrupting",
+          "[program][transactional][capacity]") {
+    const Dim M = 64, N = 64, K = 64, T = 16;
+    const std::size_t peak =
+        characterize::peak_live_tiles(derive_matmul_tile_program(M, N, K, T, T, T));
+
+    TileProgram ref_prog = derive_matmul_tile_program(M, N, K, T, T, T);
+    fill_matmul(ref_prog, K, N);
+    TileProgramReference ref;
+    ref.run(ref_prog);
+
+    auto run_with = [&](Dim l3_tiles) {
+        TileProgram p = derive_matmul_tile_program(M, N, K, T, T, T);
+        fill_matmul(p, K, N);
+        DeviceDescriptor dev = DeviceDescriptor::single();
+        dev.l3_tiles = l3_tiles;
+        auto r = run_transactional(p, dev, Placement::single(dev.compute_tiles));
+        return std::pair{r, std::move(p)};
+    };
+
+    auto [unbounded, up] = run_with(0);
+    auto [tight, tp]     = run_with(static_cast<Dim>(peak));
+
+    SECTION("values are unaffected by how tight the buffer is") {
+        CHECK(bit_identical(ref_prog.operand("C").values, up.operand("C").values));
+        CHECK(bit_identical(ref_prog.operand("C").values, tp.operand("C").values));
+    }
+    SECTION("a tighter buffer costs time and reports the stalls that caused it") {
+        CHECK(tight.stats.makespan > unbounded.stats.makespan);
+        CHECK(tight.stats.l3_credit_stalls > 0);
+        CHECK(unbounded.stats.l3_credit_stalls == 0);
+    }
+    SECTION("residency is bounded by the budget, and unbounded runs exceed it") {
+        CHECK(tight.stats.peak_l3_residency <= peak);
+        CHECK(unbounded.stats.peak_l3_residency > peak);   // the natural live set is larger
+    }
+}
+
+TEST_CASE("a tile already resident is re-fed for free", "[program][transactional][capacity]") {
+    // Tiled GEMM re-feeds one B[tk,tj] across a column of output tiles. Charging for
+    // those re-feeds would misprice exactly the reuse this tier exists to reward.
+    TileProgram p = derive_matmul_tile_program(64, 64, 64, 16, 16, 16);
+    fill_matmul(p, 64, 64);
+    const DeviceDescriptor dev = DeviceDescriptor::single();
+    const auto r = run_transactional(p, dev, Placement::single(dev.compute_tiles));
+
+    REQUIRE(r.stats.resident_feeds > 0);
+    CHECK(r.stats.zero_work_ops >= r.stats.resident_feeds);
+
+    std::size_t free_feeds = 0;
+    for (const auto& rec : r.timeline)
+        if (rec.kind == TileOpKind::Feed && rec.zero_work) {
+            CHECK(rec.finish == rec.start);        // genuinely costs nothing
+            ++free_feeds;
+        }
+    CHECK(free_feeds == r.stats.resident_feeds);
+}
+
+TEST_CASE("runs stay deterministic under capacity pressure",
+          "[program][transactional][capacity]") {
+    const std::size_t peak =
+        characterize::peak_live_tiles(derive_lu_tile_program(96, 32));
+    auto once = [&]() {
+        TileProgram p = derive_lu_tile_program(96, 32);
+        fill_lu(p, 96);
+        DeviceDescriptor dev = DeviceDescriptor::checkerboard(4);
+        dev.l3_tiles = static_cast<Dim>(peak);
+        return run_transactional(p, dev, Placement::single(4));
+    };
+    const auto a = once();
+    const auto b = once();
+    CHECK(a.stats.makespan == b.stats.makespan);
+    CHECK(a.stats.l3_credit_stalls == b.stats.l3_credit_stalls);
+    CHECK(a.stats.peak_l3_residency == b.stats.peak_l3_residency);
+    REQUIRE(a.timeline.size() == b.timeline.size());
+    for (std::size_t i = 0; i < a.timeline.size(); ++i)
+        CHECK(a.timeline[i].start == b.timeline[i].start);
+}
+
+// ----------------------------------------------------------------------------
+// Regression: a tile is released when its LAST USER COMPLETES, not at the
+// highest-indexed user.
+//
+// `TileDependencies` orders writer->reader and deliberately leaves reader->reader
+// unordered, so two readers of one tile are concurrent and the higher-INDEXED one can
+// finish FIRST. Releasing the tile on it frees a slot an earlier reader still holds,
+// which under-counts residency and lets a run fit in an L3 budget that cannot actually
+// hold its live set.
+//
+// Getting this observable took some care, and the shape of the program is the argument:
+//
+//   - the short reader must be UNGATED, so it can start early under capacity pressure.
+//     It accumulates into a tile that was fed explicitly, so it needs no new slot and
+//     program-order slot acquisition does not hold it behind the long reader. Every
+//     earlier attempt failed here: capacity pressure serialised the two readers and
+//     destroyed the out-of-order completion the bug needs.
+//   - the claimant must become ready exactly when the short reader completes, so it is
+//     the op that would consume a prematurely freed slot.
+//
+// This case was VERIFIED TO DISCRIMINATE: built against the old highest-index release,
+// `l3_tiles = 4` completes with `peak_l3_residency` reported as 4 while five tiles are
+// really live. With release-on-last-completion it is correctly refused.
+// ----------------------------------------------------------------------------
+namespace {
+
+TileProgram build_shared_reader_program() {
+    TileProgram p("shared-reader");
+    p.add_operand(TensorOperand("A", 16, 16, 16, 16));
+    p.add_operand(TensorOperand("B", 16, 24, 16, 16));   // B[0,1] is 16x8 -> less work
+    p.add_operand(TensorOperand("C", 16, 24, 16, 16));   // C[0,1] is 16x8
+    p.add_operand(TensorOperand("H",  8, 16,  8, 16));
+    p.add_operand(TensorOperand("G", 16, 16, 16, 16));
+    auto feed = [&](const char* o, Dim i, Dim j) {
+        TileOp f; f.kind = TileOpKind::Feed; f.port_kind = PortKind::Input; f.port = "West";
+        f.inputs = {TileCoord{o, i, j}}; p.push(std::move(f));
+    };
+    auto drain = [&](const char* o, Dim i, Dim j) {
+        TileOp d; d.kind = TileOpKind::Drain; d.port_kind = PortKind::Output; d.port = "South";
+        d.outputs = {TileCoord{o, i, j}}; p.push(std::move(d));
+    };
+    auto mac = [&](TileCoord i0, TileCoord i1, TileCoord o) {
+        TileOp m; m.kind = TileOpKind::MatMulAccum; m.inputs = {i0, i1}; m.outputs = {o};
+        p.push(std::move(m));
+    };
+    feed("A", 0, 0);                              // 0
+    feed("B", 0, 1);                              // 1
+    feed("C", 0, 1);                              // 2  so op6 needs no new slot
+    feed("H", 0, 0);                              // 3
+    feed("B", 0, 0);                              // 4
+    mac({"A",0,0}, {"B",0,0}, {"C",0,0});         // 5  LONG  reader of A[0,0]
+    mac({"A",0,0}, {"B",0,1}, {"C",0,1});         // 6  SHORT reader of A[0,0], ungated
+    mac({"C",0,1}, {"H",0,0}, {"G",0,0});         // 7  claimant of the freed slot
+    drain("C", 0, 0); drain("C", 0, 1); drain("G", 0, 0);   // 8, 9, 10
+    return p;
+}
+
+TileRunResult run_shared_reader(Dim l3_tiles) {
+    TileProgram p = build_shared_reader_program();
+    auto& A = p.operand("A");
+    for (std::size_t i = 0; i < A.values.size(); ++i) A.values[i] = float(i % 7) - 3.0f;
+    auto& B = p.operand("B");
+    for (std::size_t i = 0; i < B.values.size(); ++i) B.values[i] = float(i % 5) - 2.0f;
+    DeviceDescriptor dev = DeviceDescriptor::single();
+    dev.compute_tiles = 2;                        // the two readers must be able to overlap
+    dev.l3_tiles = l3_tiles;
+    return run_transactional(p, dev, Placement::single(2));
+}
+
+} // namespace
+
+TEST_CASE("a shared tile is held until its last reader completes, not its last index",
+          "[program][transactional][capacity]") {
+    SECTION("the premise: the higher-indexed reader really does finish first") {
+        const auto r = run_shared_reader(0);          // unbounded: no capacity interference
+        CHECK(r.timeline[6].finish < r.timeline[5].finish);
+        CHECK(r.timeline[6].start < r.timeline[5].start);
+    }
+
+    SECTION("five tiles are genuinely live, so five is enough and four is refused") {
+        const auto ok = run_shared_reader(5);
+        CHECK(ok.stats.peak_l3_residency == 5);
+        CHECK(ok.timeline[6].finish < ok.timeline[5].finish);   // still out of order
+
+        // The regression. Releasing A[0,0] at op6 (its highest-indexed user) while op5
+        // still reads it makes this budget look sufficient: the old logic completed here
+        // and reported a peak of 4.
+        REQUIRE_THROWS_AS(run_shared_reader(4), std::runtime_error);
+    }
+}
+
+// ----------------------------------------------------------------------------
+// Regression: the two scheduling rules that make credits gate WITHOUT idling
+// resources. Both of these were shipped without a test and both were caught in
+// review; each fixture below was verified to FAIL against the implementation that
+// preceded the fix, which is the only thing that makes it a regression test.
+// ----------------------------------------------------------------------------
+namespace {
+
+// One firing hands the seeker to a movement op whose queue this pass already walked
+// past. Movement is scanned before compute, so without repeating the pass the lane
+// waits for an unrelated completion.
+TileProgram build_same_pass_program() {
+    TileProgram p("same-pass");
+    p.add_operand(TensorOperand("A", 16, 16, 16, 16));
+    p.add_operand(TensorOperand("B", 16, 16, 16, 16));
+    p.add_operand(TensorOperand("C", 16, 16, 16, 16));
+    p.add_operand(TensorOperand("D", 16, 16, 16, 16));
+    auto feed = [&](const char* o) {
+        TileOp f; f.kind = TileOpKind::Feed; f.port_kind = PortKind::Input; f.port = "West";
+        f.inputs = {TileCoord{o, 0, 0}}; p.push(std::move(f));
+    };
+    auto drain = [&](const char* o) {
+        TileOp d; d.kind = TileOpKind::Drain; d.port_kind = PortKind::Output; d.port = "South";
+        d.outputs = {TileCoord{o, 0, 0}}; p.push(std::move(d));
+    };
+    feed("A");                                          // 0
+    feed("B");                                          // 1
+    TileOp m; m.kind = TileOpKind::MatMulAccum;         // 2  the seeker; fires this pass
+    m.inputs = {TileCoord{"A",0,0}, TileCoord{"B",0,0}}; m.outputs = {TileCoord{"C",0,0}};
+    p.push(std::move(m));
+    feed("D");                                          // 3  the seeker advances to here
+    drain("C"); drain("D");                             // 4, 5
+    return p;
+}
+
+// n feeds, each needing a slot, ahead of the drains that return the credits. At a small
+// budget the queued blocked prefix is far longer than the 32-entry scan window, so the
+// op that would release a slot is only reachable by the exhaustive pass.
+TileProgram build_deep_queue_program(Dim n) {
+    TileProgram p("deep-queue");
+    p.add_operand(TensorOperand("A", 16 * n, 16, 16, 16));      // n tiles, A[i,0]
+    for (Dim i = 0; i < n; ++i) {
+        TileOp f; f.kind = TileOpKind::Feed; f.port_kind = PortKind::Input; f.port = "West";
+        f.inputs = {TileCoord{"A", i, 0}}; p.push(std::move(f));
+    }
+    for (Dim i = 0; i < n; ++i) {
+        TileOp d; d.kind = TileOpKind::Drain; d.port_kind = PortKind::Output; d.port = "South";
+        d.outputs = {TileCoord{"A", i, 0}}; p.push(std::move(d));
+    }
+    return p;
+}
+
+} // namespace
+
+TEST_CASE("work unblocked by a firing starts in the same cycle, not after the next completion",
+          "[program][transactional][capacity]") {
+    TileProgram p = build_same_pass_program();
+    DeviceDescriptor dev = DeviceDescriptor::single();
+    dev.l3_tiles = 4;                       // finite, so the program-order seeker binds
+    const auto r = run_transactional(p, dev, Placement::single(dev.compute_tiles));
+
+    // op2 (the mac) is the seeker and fires; the seeker then advances to op3 (feed D),
+    // whose queue was scanned BEFORE op2's. Both must start in the same cycle.
+    CHECK(r.timeline[3].start == r.timeline[2].start);
+    CHECK(r.timeline[3].start < r.timeline[2].finish);   // i.e. no wait for a completion
+
+    // Against a single-pass try_fire, feed D starts at op2's FINISH instead (48 vs 32)
+    // and the makespan grows from 80 to 96.
+    CHECK(r.stats.makespan == 80);
+}
+
+TEST_CASE("a feasible op past the scan window is still found, not refused",
+          "[program][transactional][capacity]") {
+    const Dim n = 40, budget = 5;
+    // The blocked prefix must exceed the 32-entry window for this to test anything.
+    STATIC_REQUIRE(n - budget > 32);
+
+    TileProgram p = build_deep_queue_program(n);
+    DeviceDescriptor dev = DeviceDescriptor::single();
+    dev.l3_tiles = budget;
+    const auto r = run_transactional(p, dev, Placement::single(dev.compute_tiles));
+
+    CHECK(r.stats.ops == std::size_t(2 * n));
+    CHECK(r.stats.peak_l3_residency == budget);         // the budget was respected
+    CHECK(r.timeline.back().finish == r.stats.makespan);
+
+    // Without the exhaustive pass that runs before declaring a wedge, the drain that
+    // would return a credit sits 35 entries deep and this run is REFUSED outright.
 }

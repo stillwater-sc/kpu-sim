@@ -56,12 +56,13 @@ Two consequences follow, and they are what make the levels worth having:
 | **Values** | **Exact — bit-identical to L-B** |
 | Transaction granularity | one tile / block move |
 | Timing | per-move duration, **uncalibrated today** — every run reports `calibrated: false` in its provenance until the calibration step of #264 increment 6 lands. Distributions are later still (#268) |
-| State | compute tiles and movement lanes are contended. **Finite-buffer credits and capacity are NOT yet enforced** — that is #264 increment 4 |
+| State | compute tiles and movement lanes are contended, and **L3 buffer capacity is enforced in tiles**: slots are acquired in program order, a feed of a resident tile is free, and a budget below the program's live set is refused with a diagnosis. **L2/L1 capacity is not yet enforced** — it is counted per compute tile and waits for the placement pass (#264 increment 5) |
 | Speed | ~10-100x faster than cycle-accurate |
 
-**Answers today**: does the program deliver the right tiles in the right order, and how does
-its makespan move with resources? **Not yet**: whether it survives finite buffers — do not
-rely on this level for capacity validation until increment 4.
+**Answers today**: does the program deliver the right tiles in the right order, how does its
+makespan move with resources, and **does it fit a given L3 budget**? The feasibility
+boundary coincides with the harness's static `peak_live_tiles`. **Not yet**: whether it fits
+L2 and L1, which are per-compute-tile and arrive with the placement pass.
 
 ### Level L-T2: RESOURCE TRANSACTIONAL
 
