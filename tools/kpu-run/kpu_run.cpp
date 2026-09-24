@@ -316,6 +316,16 @@ int main(int argc, char** argv) {
                       << not_implemented_reason(l) << ")";
     std::cout << "\n\n";
 
+    // One place decides what an emitted file records, so the two emit paths cannot drift.
+    // The dataflow is stored under the MAP'S OWN NAME rather than the CLI alias, because the
+    // file has to be readable by something that never saw this command line.
+    auto emit_options = [&]() {
+        serialize::WriteOptions opt;
+        opt.include_values = true;
+        if (!dataflow.empty()) opt.dataflow = map_for(dataflow).name;
+        return opt;
+    };
+
     // --emit-l0 writes the program BEFORE anything executes, so the file is an input
     // rather than a snapshot of a finished run. Written as a test case (values inline),
     // because a corpus entry that needed an external fill step would not be self-contained.
@@ -339,7 +349,7 @@ int main(int argc, char** argv) {
             std::cerr << "kpu-run: cannot write '" << emit_path << "'\n";
             return 2;
         }
-        serialize::write_l0(out, *to_emit, serialize::WriteOptions{/*include_values=*/true});
+        serialize::write_l0(out, *to_emit, emit_options());
         out.close();
         if (!out) {
             std::cerr << "kpu-run: failed while writing '" << emit_path << "'\n";
@@ -390,8 +400,7 @@ int main(int argc, char** argv) {
             std::cerr << "kpu-run: cannot write '" << emit_result_path << "'\n";
             return 2;
         }
-        serialize::write_l0(out, programs.back(),
-                            serialize::WriteOptions{/*include_values=*/true});
+        serialize::write_l0(out, programs.back(), emit_options());
         out.close();
         if (!out) {
             std::cerr << "kpu-run: failed while writing '" << emit_result_path << "'\n";

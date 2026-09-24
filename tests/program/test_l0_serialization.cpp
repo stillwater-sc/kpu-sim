@@ -16,6 +16,7 @@
 #include <sw/kpu/program/driver/execution_level.hpp>
 #include <sw/kpu/program/driver/program_spec.hpp>
 #include <sw/kpu/program/serialize/l0_format.hpp>
+#include <sw/kpu/program/stream/derive/matmul_streams.hpp>
 
 #include <cmath>
 #include <cstring>
@@ -121,8 +122,8 @@ TEST_CASE("the file is text a human can read and diff", "[program][serialize]") 
 
     // Pinned literally, so a version bump has to be DELIBERATE: an accidental one would
     // silently change what older readers accept, which is the failure this axis exists to
-    // prevent. 1.1.0 added the VALUES_ROW record.
-    CHECK(text.rfind("KPUL0 1.1.0", 0) == 0);           // magic first, version with it
+    // prevent. 1.2.0 added the STREAMS record; 1.1.0 added VALUES_ROW.
+    CHECK(text.rfind("KPUL0 1.2.0", 0) == 0);           // magic first, version with it
     // A kernel is still readable by a 1.0.0 reader, because nothing was added to it.
     CHECK(text.find("MIN_CONSUMER 1.0.0\n") != std::string::npos);
     // The op set did NOT change: a new container record is not a new operator.
@@ -552,30 +553,35 @@ TEST_CASE("a partially or inconsistently valued file is refused",
         return FormatError::Cause::Truncated;
     };
     const std::string pre = "KPUL0 1.0.0\nMIN_CONSUMER 1.0.0\n";
+    // A preamble that DEMANDS what its records need. Every section below that carries
+    // VALUES inline uses this one, so each is refused for the reason it is testing rather
+    // than for an inconsistent preamble -- a fixture that fails the wrong gate guards
+    // nothing, which the two version fixtures already taught this file once.
+    const std::string pre_valued = "KPUL0 1.1.0\nMIN_CONSUMER 1.1.0\n";
     const std::string a2 = "OPERAND \"A\" rows=2 cols=2 tile_rows=2 tile_cols=2\n";
 
     SECTION("a missing row: a partial test case would compute a partial answer") {
-        CHECK(cause_of(pre + "VALUES inline\n" + a2 +
+        CHECK(cause_of(pre_valued + "VALUES inline\n" + a2 +
                        "VALUES_ROW \"A\" 0 1 2\nEND\n") ==
               FormatError::Cause::MalformedRecord);
     }
     SECTION("the wrong number of values in a row") {
-        CHECK(cause_of(pre + "VALUES inline\n" + a2 +
+        CHECK(cause_of(pre_valued + "VALUES inline\n" + a2 +
                        "VALUES_ROW \"A\" 0 1 2 3\nVALUES_ROW \"A\" 1 4 5\nEND\n") ==
               FormatError::Cause::MalformedRecord);
     }
     SECTION("a duplicated row, where the later one would silently win") {
-        CHECK(cause_of(pre + "VALUES inline\n" + a2 +
+        CHECK(cause_of(pre_valued + "VALUES inline\n" + a2 +
                        "VALUES_ROW \"A\" 0 1 2\nVALUES_ROW \"A\" 0 3 4\nEND\n") ==
               FormatError::Cause::MalformedRecord);
     }
     SECTION("a row outside the operand") {
-        CHECK(cause_of(pre + "VALUES inline\n" + a2 +
+        CHECK(cause_of(pre_valued + "VALUES inline\n" + a2 +
                        "VALUES_ROW \"A\" 0 1 2\nVALUES_ROW \"A\" 5 3 4\nEND\n") ==
               FormatError::Cause::MalformedRecord);
     }
     SECTION("a row for an operand that does not exist") {
-        CHECK(cause_of(pre + "VALUES inline\n" + a2 +
+        CHECK(cause_of(pre_valued + "VALUES inline\n" + a2 +
                        "VALUES_ROW \"A\" 0 1 2\nVALUES_ROW \"A\" 1 3 4\n"
                        "VALUES_ROW \"Z\" 0 9 9\nEND\n") ==
               FormatError::Cause::MalformedRecord);
@@ -593,7 +599,7 @@ TEST_CASE("a partially or inconsistently valued file is refused",
     }
     SECTION("a complete, consistent test case loads") {
         LoadInfo info;
-        CHECK_NOTHROW(from_string(pre + "VALUES inline\n" + a2 +
+        CHECK_NOTHROW(from_string(pre_valued + "VALUES inline\n" + a2 +
                                   "VALUES_ROW \"A\" 0 1 2\nVALUES_ROW \"A\" 1 3 4\nEND\n",
                                   &info));
     }
@@ -630,11 +636,18 @@ TEST_CASE("a test case demands a reader that understands values, a kernel does n
     CHECK_FALSE(k.has_values);
     CHECK(t.has_values);
 
-    // And the gate bites in the direction that protects this reader: a file needing a
-    // newer one is refused rather than partially understood.
+    // And the gate bites in the direction that protects this reader: a file needing a newer
+    // one is refused rather than partially understood.
+    //
+    // Expressed RELATIVE to the reader rather than as a literal. A hardcoded "future"
+    // version goes stale the moment the format moves -- this case said 1.2.0 and silently
+    // stopped testing anything when the reader BECAME 1.2.0, which is the same staleness
+    // trap the corpus refusal fixture hit.
+    const Version newer{reader_version().major, reader_version().minor + 1, 0};
     try {
-        from_string("KPUL0 1.2.0\nMIN_CONSUMER 1.2.0\nEND\n");
-        FAIL("expected a refusal");
+        from_string("KPUL0 " + reader_version().str() + "\nMIN_CONSUMER " + newer.str() +
+                    "\nEND\n");
+        FAIL("expected a refusal for MIN_CONSUMER " + newer.str());
     } catch (const FormatError& e) {
         CHECK(e.cause() == FormatError::Cause::UnsupportedVersion);
     }
@@ -652,4 +665,235 @@ TEST_CASE("write_l0 keeps its two-argument form", "[program][serialize]") {
     write_l0(two_arg, p);                       // must compile and mean "no values"
     CHECK(two_arg.str().find("VALUES none\n") != std::string::npos);
     CHECK(two_arg.str() == to_string(p));
+}
+
+// ============================================================================
+// Increment 4 — the L1 stream annotation (ADR §7.4, optional at TRANSACTIONAL)
+//
+// The file records the DATAFLOW CHOICE, not the derived annotations. A
+// StreamProgram's signatures, network, wavefront timings and array extents are all
+// functions of the space-time map and the program, so storing them would be
+// caching a pure function -- and a cache can contradict its input. A file that
+// records the choice cannot be internally inconsistent.
+// ============================================================================
+
+TEST_CASE("the stream annotation round-trips as a choice, and re-derives",
+          "[program][serialize][streams]") {
+    ProgramSpec ps;
+    ps.algo = "matmul";
+    ps.size = 48;
+    ps.tile = 16;
+
+    for (const char* alias : {"output-stationary", "weight-stationary", "a-stationary",
+                              "fully-streaming"}) {
+        TileProgram p = derive(ps);
+        fill(p, ps);
+        const auto map = map_for(alias);
+
+        LoadInfo info;
+        const TileProgram back = from_string(to_test_case(p, map.name), &info);
+        CHECK(info.has_streams);
+        CHECK(info.dataflow == map.name);
+
+        // The point of storing the choice: the consumer re-derives, and gets the same
+        // annotation the writer had. Compared through the disassembly, which is the
+        // StreamProgram's own account of itself.
+        TileProgram reloaded = back;
+        const auto original_sp = stream::derive_matmul_streams(p, map);
+        const auto rederived_sp = stream::derive_matmul_streams(reloaded, map_for(alias));
+        CHECK(rederived_sp.disassemble() == original_sp.disassemble());
+    }
+}
+
+TEST_CASE("a program with no annotation says so, and none is invented",
+          "[program][serialize][streams]") {
+    ProgramSpec ps;
+    ps.algo = "matmul";
+    ps.size = 32;
+    ps.tile = 16;
+    TileProgram p = derive(ps);
+    fill(p, ps);
+
+    const std::string text = to_test_case(p);          // no dataflow
+    CHECK(text.find("STREAMS") == std::string::npos);
+
+    LoadInfo info;
+    from_string(text, &info);
+    CHECK_FALSE(info.has_streams);
+    CHECK(info.dataflow.empty());
+}
+
+TEST_CASE("an annotated file demands a reader that understands annotations",
+          "[program][serialize][streams]") {
+    // The rule this format already states, applied to the record that just arrived: a
+    // STREAMS record carries semantics, so a 1.1.0 reader -- which would SKIP it and execute
+    // with no L1 timing while reporting success -- must refuse. Same silent-wrong-answer
+    // shape as VALUES_ROW on a 1.0.0 reader, one level down.
+    ProgramSpec ps;
+    ps.algo = "matmul";
+    ps.size = 32;
+    ps.tile = 16;
+    TileProgram p = derive(ps);
+    fill(p, ps);
+
+    CHECK(to_test_case(p).find("MIN_CONSUMER 1.1.0\n") != std::string::npos);
+    CHECK(to_test_case(p, "output-stationary").find("MIN_CONSUMER 1.2.0\n") !=
+          std::string::npos);
+    // And a kernel with an annotation but no values still needs 1.2.0: the demand follows
+    // the RECORDS PRESENT, not a single flag.
+    WriteOptions kernel_with_streams;
+    kernel_with_streams.dataflow = "output-stationary";
+    const std::string text = to_string(p, kernel_with_streams);
+    CHECK(text.find("VALUES none\n") != std::string::npos);
+    CHECK(text.find("MIN_CONSUMER 1.2.0\n") != std::string::npos);
+
+    CHECK(min_consumer_for(false, false).str() == "1.0.0");
+    CHECK(min_consumer_for(true, false).str() == "1.1.0");
+    CHECK(min_consumer_for(false, true).str() == "1.2.0");
+    CHECK(min_consumer_for(true, true).str() == "1.2.0");
+}
+
+TEST_CASE("a dataflow this build cannot reconstruct is refused, not ignored",
+          "[program][serialize][streams]") {
+    // Ignoring it would execute with different L1 timing than the file describes while
+    // reporting success -- so it is refused, and the diagnostic lists what IS reconstructible
+    // rather than leaving the writer to guess.
+    auto cause_of = [](const std::string& text) {
+        try {
+            from_string(text);
+        } catch (const FormatError& e) {
+            return e.cause();
+        }
+        FAIL("expected a FormatError");
+        return FormatError::Cause::Truncated;
+    };
+    const std::string pre = "KPUL0 1.2.0\nMIN_CONSUMER 1.2.0\n";
+    CHECK(cause_of(pre + "STREAMS dataflow=\"diagonal-hopping\"\nEND\n") ==
+          FormatError::Cause::MalformedRecord);
+    CHECK(cause_of(pre + "STREAMS\nEND\n") == FormatError::Cause::MalformedRecord);
+    CHECK(cause_of(pre + "STREAMS dataflow=\"\"\nEND\n") ==
+          FormatError::Cause::MalformedRecord);
+
+    // Every name the format claims to know must actually be reconstructible, or the list is
+    // a lie.
+    for (const std::string& name : known_dataflows()) {
+        CHECK(is_known_dataflow(name));
+        CHECK_NOTHROW(from_string(pre + "STREAMS dataflow=" + "\"" + name + "\"\nEND\n"));
+        // and it must be a name map_for() round-trips, not merely a string in a list
+        CHECK(map_for(name).name == name);
+    }
+}
+
+// ----------------------------------------------------------------------------
+// A file must not be able to contradict its own preamble (review of #300)
+// ----------------------------------------------------------------------------
+TEST_CASE("the writer refuses a dataflow its own reader would reject",
+          "[program][serialize][streams]") {
+    // read_l0 refuses an unknown dataflow, so a writer that accepted one would emit a file
+    // ITS OWN READER REJECTS -- discovered later, from the artifact, on someone else's
+    // machine. Validating on the way out makes that impossible to produce.
+    TileProgram prog("tiny");
+    prog.add_operand(TensorOperand("A", 2, 2, 2, 2));
+
+    WriteOptions bad;
+    bad.dataflow = "sideways";
+    REQUIRE_THROWS_AS(to_string(prog, bad), FormatError);
+
+    // A CLI ALIAS is refused too, and that is the interesting half: "ws" is a name this
+    // repo uses constantly, it is not a canonical dataflow, and a file carrying it would
+    // not load. The format layer knows known_dataflows() and nothing about anyone's command
+    // line, so the caller converts -- which is what map_for() is for.
+    WriteOptions alias;
+    alias.dataflow = "ws";
+    REQUIRE_THROWS_AS(to_string(prog, alias), FormatError);
+    try {
+        to_string(prog, alias);
+    } catch (const FormatError& e) {
+        CHECK(e.cause() == FormatError::Cause::MalformedRecord);
+        // The diagnostic has to say what WOULD work, or the writer is left guessing.
+        CHECK(std::string(e.what()).find(known_dataflows().front()) != std::string::npos);
+    }
+
+    // And every canonical name is writable, so the refusal above is a real gate and not a
+    // blanket one.
+    for (const std::string& name : known_dataflows()) {
+        WriteOptions ok;
+        ok.dataflow = name;
+        CHECK_NOTHROW(to_string(prog, ok));
+    }
+}
+
+TEST_CASE("a preamble that does not cover its own records is refused",
+          "[program][serialize][streams]") {
+    // The version rule, enforced on the way IN. A file carrying STREAMS while declaring
+    // MIN_CONSUMER 1.1.0 loads on this reader AND on a 1.1.0 reader -- which skips the
+    // record and runs with no L1 timing, reporting success for a run the file does not
+    // describe. The declaration must cover the content, or the gate is decoration.
+    const std::string a2 = "OPERAND \"A\" rows=2 cols=2 tile_rows=2 tile_cols=2\n";
+    auto cause_of = [](const std::string& text) {
+        try {
+            from_string(text);
+        } catch (const FormatError& e) {
+            return e.cause();
+        }
+        FAIL("expected a FormatError");
+        return FormatError::Cause::Truncated;
+    };
+
+    CHECK(cause_of("KPUL0 1.2.0\nMIN_CONSUMER 1.1.0\nVALUES none\n"
+                   "STREAMS dataflow=\"" + known_dataflows().front() + "\"\n" + a2 +
+                   "END\n") == FormatError::Cause::MalformedPreamble);
+
+    // The same rule, one version down: values under a 1.0.0 demand.
+    CHECK(cause_of("KPUL0 1.1.0\nMIN_CONSUMER 1.0.0\nVALUES inline\n" + a2 +
+                   "VALUES_ROW \"A\" 0 1 2\nVALUES_ROW \"A\" 1 3 4\nEND\n") ==
+          FormatError::Cause::MalformedPreamble);
+
+    // ONE-DIRECTIONAL: demanding MORE than the content needs is fine. A conservative
+    // producer, or a fixture built to exercise the gate, must still load -- and the refusal
+    // fixture in the corpus depends on exactly this.
+    CHECK_NOTHROW(from_string("KPUL0 1.2.0\nMIN_CONSUMER " + reader_version().str() +
+                              "\nVALUES none\n" + a2 + "END\n"));
+}
+
+TEST_CASE("a repeated preamble record is refused, not silently replaced",
+          "[program][serialize]") {
+    // Two STREAMS records with different dataflows leave the file holding two conflicting
+    // choices while LoadInfo reports one -- the last. That is the same self-contradiction
+    // shape as VALUES none beside VALUES_ROW, which this reader already refuses, so the
+    // rule is the general one: a preamble field appears at most once.
+    const std::string a2 = "OPERAND \"A\" rows=2 cols=2 tile_rows=2 tile_cols=2\n";
+    auto cause_of = [](const std::string& text) {
+        try {
+            from_string(text);
+        } catch (const FormatError& e) {
+            return e.cause();
+        }
+        FAIL("expected a FormatError");
+        return FormatError::Cause::Truncated;
+    };
+    REQUIRE(known_dataflows().size() >= 2);
+
+    CHECK(cause_of("KPUL0 1.2.0\nMIN_CONSUMER 1.2.0\nVALUES none\n"
+                   "STREAMS dataflow=\"" + known_dataflows()[0] + "\"\n"
+                   "STREAMS dataflow=\"" + known_dataflows()[1] + "\"\n" + a2 + "END\n") ==
+          FormatError::Cause::MalformedPreamble);
+
+    // Not special to STREAMS: a second PROGRAM would rename the program, a second VALUES
+    // would flip whether it carries inputs.
+    CHECK(cause_of("KPUL0 1.0.0\nMIN_CONSUMER 1.0.0\nPROGRAM \"one\"\nPROGRAM \"two\"\n"
+                   "VALUES none\n" + a2 + "END\n") == FormatError::Cause::MalformedPreamble);
+    CHECK(cause_of("KPUL0 1.0.0\nMIN_CONSUMER 1.0.0\nVALUES none\nVALUES none\n" + a2 +
+                   "END\n") == FormatError::Cause::MalformedPreamble);
+    CHECK(cause_of("KPUL0 1.0.0\nMIN_CONSUMER 1.0.0\nMIN_CONSUMER 1.0.0\nVALUES none\n" +
+                   a2 + "END\n") == FormatError::Cause::MalformedPreamble);
+
+    // A file written by this build must of course still load -- the rule catches malformed
+    // input, not our own output.
+    TileProgram prog("tiny");
+    prog.add_operand(TensorOperand("A", 2, 2, 2, 2));
+    WriteOptions opt;
+    opt.include_values = true;
+    opt.dataflow = known_dataflows().front();
+    CHECK_NOTHROW(from_string(to_string(prog, opt)));
 }
