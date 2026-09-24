@@ -12,6 +12,7 @@ that is not tested is a version policy that will be wrong.
 |---|---|
 | `<case>.l0` | the program with its **inputs** inline — a test case |
 | `<case>.result.l0` | the same program **after execution** — the expected outputs |
+| `matmul_32x32x32_t16_kernel.l0` | a **kernel**: structure only, `VALUES none`, `MIN_CONSUMER 1.0.0` |
 | `needs_a_newer_reader.l0` | **hand-written**: a supported container version with `MIN_CONSUMER 9.0.0`, so only the min_consumer gate can refuse it |
 | `needs_a_newer_container.l0` | **hand-written**: `KPUL0 9.0.0`, so only the container-major check can refuse it |
 
@@ -23,6 +24,20 @@ wrong reason guards nothing.
 
 Two files per case rather than one, because LU factors `A` **in place**: a single
 post-execution snapshot would have overwritten the input it was supposed to preserve.
+
+**The kernel entry is here because `VALUES none` is a mode the format supports.** Without a
+checked-in file written that way, the kernel path existed only in a round-trip test that
+never touched a file, and a reader change could have broken it in CI's blind spot. Its
+`MIN_CONSUMER` is `1.0.0` and that is the property it guards: a structure-only file needs
+nothing beyond the original reader, so demanding more would lock out a consumer for no
+reason. Its **container** line is deliberately unasserted — a file that still loads on a
+newer reader is the whole point of the version policy.
+
+It carries no expected-output half, because a program with no inputs has no answer to
+record. `test_l0_corpus` runs it the way `kpu-run --program ... --fill-inputs` does: inputs
+are **synthesized** first, and every level must then agree. Executing it as loaded would run
+on zeros, where every level agrees about nothing — which is why the driver refuses that
+combination outright.
 
 ## How CI uses them
 
@@ -108,3 +123,10 @@ the fixture was to exercise `UnsupportedVersion`.
 
 `needs_a_newer_reader.l0` is never regenerated. It is hand-written on purpose, so no tool
 can quietly bring it in line with the current version.
+
+The kernel entry has no `--emit-l0` form, because `kpu-run` writes test cases: every emitted
+file carries its inputs, which is what makes a corpus entry self-contained. The kernel file
+is `serialize::to_string(derive_matmul_tile_program(32, 32, 32, 16, 16, 16))` — the default
+`WriteOptions`, no values — and `test_l0_corpus` asserts exactly that equality, so a
+derivation change or a format change fails there and forces the version question rather than
+being absorbed silently.

@@ -151,6 +151,111 @@ if(KPU_BUILD_TESTS)
     )
     set_tests_properties(kpu_run_emit_after_agreement PROPERTIES LABELS "program;driver")
 
+    # ---- a program from a FILE (#265 increment 5) --------------------------------
+    # The point of the whole serialization effort: until this worked, every program the
+    # simulator ran was one the simulator wrote. The corpus files are absolute paths
+    # because these wrappers run with no WORKING_DIRECTORY of their own.
+    set(_corpus ${CMAKE_SOURCE_DIR}/tests/program/corpus)
+
+    add_test(NAME kpu_run_program_from_file
+        COMMAND ${CMAKE_COMMAND}
+            -DCMD=$<TARGET_FILE:run>
+            -DARGS=--program$<SEMICOLON>${_corpus}/matmul_48x48x48_t16.l0
+            -DEXPECT_CODE=0
+            -DMUST_MATCH=values:.from.file.*values.vs.L-B.*OK:.every.level
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/expect_exit.cmake
+    )
+    set_tests_properties(kpu_run_program_from_file PROPERTIES LABELS "program;driver")
+
+    # A kernel carries no values, and running it anyway would have every level agree on
+    # ZEROS -- a green result that proves nothing. Refused, and the refusal names the way out.
+    add_test(NAME kpu_run_program_refuses_valueless
+        COMMAND ${CMAKE_COMMAND}
+            -DCMD=$<TARGET_FILE:run>
+            -DARGS=--program$<SEMICOLON>${_corpus}/matmul_32x32x32_t16_kernel.l0
+            -DEXPECT_CODE=2
+            -DMUST_MATCH=carries.no.values.*--fill-inputs
+            -DMUST_NOT_MATCH=values.vs
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/expect_exit.cmake
+    )
+    set_tests_properties(kpu_run_program_refuses_valueless PROPERTIES
+        LABELS "program;driver")
+
+    add_test(NAME kpu_run_program_fill_inputs
+        COMMAND ${CMAKE_COMMAND}
+            -DCMD=$<TARGET_FILE:run>
+            -DARGS=--program$<SEMICOLON>${_corpus}/matmul_32x32x32_t16_kernel.l0$<SEMICOLON>--fill-inputs
+            -DEXPECT_CODE=0
+            -DMUST_MATCH=values:.synthesized.*OK:.every.level
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/expect_exit.cmake
+    )
+    set_tests_properties(kpu_run_program_fill_inputs PROPERTIES LABELS "program;driver")
+
+    # ...and the other direction: a file that HAS values must not have them replaced, or
+    # the run is no longer the one the file describes.
+    add_test(NAME kpu_run_program_refuses_replacing_values
+        COMMAND ${CMAKE_COMMAND}
+            -DCMD=$<TARGET_FILE:run>
+            -DARGS=--program$<SEMICOLON>${_corpus}/matmul_48x48x48_t16.l0$<SEMICOLON>--fill-inputs
+            -DEXPECT_CODE=2
+            -DMUST_MATCH=carries.its.own.values
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/expect_exit.cmake
+    )
+    set_tests_properties(kpu_run_program_refuses_replacing_values PROPERTIES
+        LABELS "program;driver")
+
+    # A file AND a derivation spec describe two different programs. Picking one silently
+    # would make the tool report the flags it was given and execute something else.
+    add_test(NAME kpu_run_program_rejects_derivation_spec
+        COMMAND ${CMAKE_COMMAND}
+            -DCMD=$<TARGET_FILE:run>
+            -DARGS=--program$<SEMICOLON>${_corpus}/matmul_48x48x48_t16.l0$<SEMICOLON>--algo$<SEMICOLON>lu
+            -DEXPECT_CODE=2
+            -DMUST_MATCH=--program.and.--algo.cannot.be.combined
+            -DMUST_NOT_MATCH=values.vs
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/expect_exit.cmake
+    )
+    set_tests_properties(kpu_run_program_rejects_derivation_spec PROPERTIES
+        LABELS "program;driver")
+
+    # A refusal from the READER has to surface as a diagnostic and exit 2, not as an
+    # uncaught FormatError -- which would abort, and CI cannot tell an abort from a crash
+    # in the model.
+    add_test(NAME kpu_run_program_refuses_newer_reader
+        COMMAND ${CMAKE_COMMAND}
+            -DCMD=$<TARGET_FILE:run>
+            -DARGS=--program$<SEMICOLON>${_corpus}/needs_a_newer_reader.l0
+            -DEXPECT_CODE=2
+            -DMUST_MATCH=requires.a.reader
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/expect_exit.cmake
+    )
+    set_tests_properties(kpu_run_program_refuses_newer_reader PROPERTIES
+        LABELS "program;driver")
+
+    # A loaded program has no algo to gate --streams on, so the refusal comes from the
+    # derivation -- which throws about the operand it could not find. The FLAG has to appear
+    # in the diagnostic, or "no operand 'C'" is all the user sees.
+    add_test(NAME kpu_run_program_names_the_flag_for_streams
+        COMMAND ${CMAKE_COMMAND}
+            -DCMD=$<TARGET_FILE:run>
+            -DARGS=--program$<SEMICOLON>${_corpus}/lu_64_t16.l0$<SEMICOLON>--streams$<SEMICOLON>os
+            -DEXPECT_CODE=2
+            -DMUST_MATCH=--streams.output-stationary:.*no.matmul.stream.derivation
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/expect_exit.cmake
+    )
+    set_tests_properties(kpu_run_program_names_the_flag_for_streams PROPERTIES
+        LABELS "program;driver")
+
+    add_test(NAME kpu_run_program_missing_file
+        COMMAND ${CMAKE_COMMAND}
+            -DCMD=$<TARGET_FILE:run>
+            -DARGS=--program$<SEMICOLON>${CMAKE_CURRENT_BINARY_DIR}/no_such_program.l0
+            -DEXPECT_CODE=2
+            -DMUST_MATCH=cannot.read
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/expect_exit.cmake
+    )
+    set_tests_properties(kpu_run_program_missing_file PROPERTIES LABELS "program;driver")
+
     # Bad numeric input must also exit 2 rather than abort: an uncaught std::stoul throw
     # is SIGABRT, which CI cannot distinguish from a crash in the model.
     add_test(NAME kpu_run_rejects_bad_number

@@ -9,6 +9,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`kpu-run --program foo.l0`: the driver executes a program it did not derive (#265
+  increment 5 / #285 increment 4).** "Load a program and execute it" is now literally true of
+  something — until this landed, every program the simulator ran was one the simulator wrote.
+
+  **A file and a derivation spec are refused together**, naming the flag that conflicts.
+  Letting one win silently would make the tool report the flags it was given and execute
+  something else, which is exactly the failure this driver exists to detect in the models.
+
+  **A program carrying no values is refused unless inputs are synthesized.** Running it as
+  loaded would have every level agree on zeros: a green report about nothing, which is worse
+  than a refusal because nobody looks twice at a pass. `--fill-inputs` fills them, and the
+  converse is refused too — a file that *has* values must not have them replaced, or the run
+  is no longer the one the file describes.
+
+  `fill_inputs` fills **the operands the program reads**, and the rule is "read at all", not
+  "read before it is written". Tile LU factors `A` in place and its *first* op declares
+  `A[k,k]` as an **output**, so a read-before-written rule fills nothing and leaves the
+  factorisation to run on a zero matrix and report success at every level.
+
+  The value mix was wrong in a way every obvious check passed: `h + 131*r + 17*c` left the
+  integer part **constant along each row** — `17*c` vanishes mod 17 — so each row held eight
+  distinct values spanning a range of 1.0. Deterministic, exact, non-zero, distinct per
+  operand, and near-degenerate, which is what defeats a differential test: a level that read
+  a neighbouring element would still have computed almost the right answer. Caught by
+  asserting how many distinct values a row and a column hold.
+
+  **The comparison now reads every operand, not the result.** It read one — `C` for matmul,
+  `A` for LU — which cannot see a level that scribbled on an *input* while computing the
+  right output, and a loaded program has no spec to ask a result operand of. The pivot
+  permutation and swap count are compared unconditionally for the same reason: a file does
+  not announce which kernel it is.
+
+  A file's `STREAMS` record supplies `--streams`; an explicit `--streams` overrides it and
+  says so where the value is printed. `tests/program/corpus/matmul_32x32x32_t16_kernel.l0`
+  adds the `VALUES none` case to the golden corpus, since that mode previously existed only
+  in a round-trip test that never touched a file.
+
 - **L0 programs can carry their L1 stream annotation (#265 increment 4).** A
   `STREAMS dataflow="..."` record, reported back through `LoadInfo{has_streams, dataflow}`
   (ADR §7.4 — optional at the transactional level).

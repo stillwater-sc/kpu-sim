@@ -252,10 +252,18 @@ TEST_CASE("both version gates refuse, and each is exercised on its own",
     // And the container-major check, on its own.
     refuses("needs_a_newer_container.l0");
 
-    // The first fixture must really be past the container gate, or it is the old test again.
+    // The first fixture must really be past the container gate, or it is the old test
+    // again. Asserted by CONSTRUCTION rather than by pinning its container line to a
+    // literal: lower only its MIN_CONSUMER and the same bytes must load, which proves the
+    // min_consumer gate was the only thing refusing them. A literal version here would
+    // stop meaning anything the moment the format reached it.
     const std::string text = read_file(std::string(kCorpus) + "needs_a_newer_reader.l0");
-    CHECK(text.rfind("KPUL0 1.1.0", 0) == 0);
-    CHECK(text.find("MIN_CONSUMER 9.0.0\n") != std::string::npos);
+    const std::string demand = "MIN_CONSUMER 9.0.0\n";
+    const std::size_t at = text.find(demand);
+    REQUIRE(at != std::string::npos);
+    std::string relaxed = text;
+    relaxed.replace(at, demand.size(), "MIN_CONSUMER " + reader_version().str() + "\n");
+    CHECK_NOTHROW(from_string(relaxed));
 }
 
 TEST_CASE("every corpus program still matches what the derivation produces today",
@@ -275,4 +283,56 @@ TEST_CASE("every corpus program still matches what the derivation produces today
         INFO("corpus input " << c.input);
         CHECK(to_test_case(fresh) == read_file(std::string(kCorpus) + c.input));
     }
+}
+
+TEST_CASE("the corpus's kernel case carries no values, and runs once they are synthesized",
+          "[program][serialize][corpus]") {
+    // The VALUES-none mode is a mode the format supports, so something has to load a file
+    // written in it. Without this entry the kernel path existed only in a round-trip test
+    // that never touched a file, and a reader change could break it in CI's blind spot.
+    const std::string path = std::string(kCorpus) + "matmul_32x32x32_t16_kernel.l0";
+    const std::string text = read_file(path);
+
+    // A structure-only file must stay readable by the OLDEST reader. That is the property
+    // this fixture guards: nothing in it needs 1.1.0 or 1.2.0, so demanding either would
+    // lock out a consumer for no reason. Its CONTAINER line is deliberately unasserted --
+    // a file that still loads on a newer reader is the whole point of the version policy.
+    CHECK(text.find("VALUES none\n") != std::string::npos);
+    CHECK(text.find("MIN_CONSUMER 1.0.0\n") != std::string::npos);
+    CHECK(text.find("VALUES_ROW") == std::string::npos);
+
+    LoadInfo info;
+    const TileProgram kernel = from_string(text, &info);
+    CHECK_FALSE(info.has_values);
+    CHECK_FALSE(info.has_streams);
+
+    // Still what the derivation emits today -- the same staleness check the valued cases
+    // get, and it doubles as byte stability, so a format change fails here and forces the
+    // version question rather than being absorbed silently.
+    ProgramSpec ps;
+    ps.algo = "matmul";
+    ps.size = 32;
+    ps.tile = 16;
+    CHECK(to_string(derive(ps)) == text);
+
+    // And it executes, identically at every level, once inputs are SYNTHESIZED -- which is
+    // `kpu-run --program ... --fill-inputs`. Executing it as loaded would run on zeros and
+    // agree at every level about nothing, which is why the driver refuses that.
+    const DeviceSpec ds;
+    const auto device = make_device(ds);
+    std::vector<TileProgram> ran;
+    for (ExecutionLevel level : all_levels()) {
+        if (!level_implemented(level)) continue;
+        ran.push_back(kernel);
+        fill_inputs(ran.back());
+        run_at(level, ran.back(), device, Placement::single(device.compute_tiles));
+    }
+    REQUIRE(ran.size() >= 2);
+    for (std::size_t i = 1; i < ran.size(); ++i)
+        for (const std::string& key : ran[0].operand_order())
+            CHECK(bits_equal(ran[0].operand(key).values, ran[i].operand(key).values));
+
+    bool produced = false;
+    for (float v : ran[0].operand("C").values) produced = produced || (v != 0.0f);
+    CHECK(produced);
 }

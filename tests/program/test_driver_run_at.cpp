@@ -13,9 +13,12 @@
 #include <sw/kpu/program/driver/program_spec.hpp>
 #include <sw/kpu/program/driver/step_cursor.hpp>
 #include <sw/kpu/program/driver/timeline_trace.hpp>
+#include <sw/kpu/program/serialize/l0_format.hpp>
 
+#include <cmath>
 #include <cstring>
 #include <map>
+#include <set>
 #include <string>
 #include <variant>
 #include <vector>
@@ -608,4 +611,179 @@ TEST_CASE("a zero-work op fires before it completes, even sharing one cycle",
     CHECK(fired[0]);
     CHECK(fired[1]);
     CHECK(cur.in_flight() == 0);        // and nothing is left dangling
+}
+
+// ----------------------------------------------------------------------------
+// A program that came from a FILE (#265 increment 5 / #285 increment 4)
+// ----------------------------------------------------------------------------
+TEST_CASE("the program's inputs are the operands it READS", "[program][driver][file]") {
+    // The rule is "read at all", not "read before it is written", and tile LU is why.
+    ProgramSpec mm;
+    mm.algo = "matmul"; mm.size = 32; mm.tile = 16;
+    CHECK(program_inputs(derive(mm)) == std::vector<std::string>{"A", "B"});
+
+    ProgramSpec lu;
+    lu.algo = "lu"; lu.size = 32; lu.tile = 16;
+    // LU factors A IN PLACE, and its FIRST op (LuDiagFactor) declares A[k,k] as an OUTPUT.
+    // A read-before-written rule would classify A as produced and return nothing here --
+    // leaving a loaded LU kernel to factor a zero matrix and report success at every level.
+    CHECK(program_inputs(derive(lu)) == std::vector<std::string>{"A"});
+}
+
+TEST_CASE("synthesized inputs fill only what the program reads",
+          "[program][driver][file]") {
+    ProgramSpec ps;
+    ps.algo = "matmul"; ps.size = 32; ps.tile = 16;
+    TileProgram p = derive(ps);
+    fill_inputs(p);
+
+    // C is produced, so pre-filling it would make a value comparison compare the fill.
+    for (float v : p.operand("C").values) CHECK(v == 0.0f);
+
+    for (const char* name : {"A", "B"}) {
+        const auto& t = p.operand(name);
+        bool any_nonzero = false;
+        for (float v : t.values) {
+            any_nonzero = any_nonzero || (v != 0.0f);
+            // EXACTLY REPRESENTABLE: a multiple of 1/8 needs no rounding, so the fill is
+            // reproducible on a host whose instruction selection differs (-march=native).
+            CHECK(v * 8.0f == std::floor(v * 8.0f));
+            CHECK(std::isfinite(v));
+        }
+        CHECK(any_nonzero);
+    }
+
+    // Two operands must not receive the same pattern, or a level that swapped them would
+    // still compute the right answer.
+    CHECK_FALSE(bit_identical(p.operand("A").values, p.operand("B").values));
+
+    // And a row must not be nearly constant. `h + 131*r + 17*c` passed every check above
+    // while producing an integer part CONSTANT ALONG EACH ROW -- 17*c vanishes mod 17 --
+    // so each row held eight distinct values spanning a range of 1.0. A level that read a
+    // neighbouring element would have computed almost the right answer.
+    const auto& A = p.operand("A");
+    std::set<float> in_row_0, in_col_0;
+    for (Dim c = 0; c < A.cols; ++c) in_row_0.insert(A.at(0, c));
+    for (Dim r = 0; r < A.rows; ++r) in_col_0.insert(A.at(r, 0));
+    CHECK(in_row_0.size() > 8);
+    CHECK(in_col_0.size() > 8);
+}
+
+TEST_CASE("synthesized inputs are the same on every call", "[program][driver][file]") {
+    // The driver fills each level's copy independently, so a fill that varied between
+    // calls would make every comparison meaningless -- and it would fail as a DISAGREEMENT
+    // between the models, which is the most expensive way to find out.
+    ProgramSpec ps;
+    ps.algo = "lu"; ps.size = 32; ps.tile = 16;
+    TileProgram a = derive(ps), b = derive(ps);
+    fill_inputs(a);
+    fill_inputs(b);
+    CHECK(bit_identical(a.operand("A").values, b.operand("A").values));
+}
+
+TEST_CASE("a kernel from a file, filled, computes identically at every level",
+          "[program][driver][file]") {
+    // The path the driver takes for `--program kernel.l0 --fill-inputs`: nothing here
+    // calls fill(), because a loaded program has no ProgramSpec behind it to fill from.
+    using namespace sw::kpu::program::serialize;
+    for (const char* algo : {"matmul", "lu"}) {
+        ProgramSpec ps;
+        ps.algo = algo; ps.size = 32; ps.tile = 16;
+
+        // Written as a KERNEL: structure only, no values (increment 1's mode).
+        const std::string text = to_string(derive(ps));
+        LoadInfo info;
+        const TileProgram kernel = from_string(text, &info);
+        REQUIRE_FALSE(info.has_values);
+
+        const DeviceSpec ds;
+        const auto device = make_device(ds);
+        std::vector<TileProgram> ran;
+        for (ExecutionLevel level : all_levels()) {
+            if (!level_implemented(level)) continue;
+            ran.push_back(kernel);              // a pristine copy per level, as kpu-run does
+            fill_inputs(ran.back());
+            run_at(level, ran.back(), device, Placement::single(device.compute_tiles));
+        }
+        REQUIRE(ran.size() >= 2);
+
+        // Every operand, not just the result: a level that scribbled on an INPUT while
+        // computing the right output is a model bug the old one-operand check could not see.
+        for (std::size_t i = 1; i < ran.size(); ++i)
+            for (const std::string& key : ran[0].operand_order())
+                CHECK(bit_identical(ran[0].operand(key).values,
+                                    ran[i].operand(key).values));
+
+        // The synthesized inputs must actually have driven a computation. A kernel run on
+        // zeros also agrees at every level, and agreeing on nothing is the failure this
+        // whole path exists to avoid.
+        bool produced_something = false;
+        for (float v : ran[0].operand(result_operand(ps)).values)
+            produced_something = produced_something || (v != 0.0f);
+        CHECK(produced_something);
+    }
+}
+
+TEST_CASE("a test case from a file runs without being filled at all",
+          "[program][driver][file]") {
+    // `--program case.l0` with no --fill-inputs, and the driver REFUSES the other
+    // combination: a file carrying values must not have them replaced, or the run is no
+    // longer the one the file describes.
+    using namespace sw::kpu::program::serialize;
+    ProgramSpec ps;
+    ps.algo = "matmul"; ps.size = 32; ps.tile = 16;
+    TileProgram authored = derive(ps);
+    fill(authored, ps);
+
+    LoadInfo info;
+    TileProgram loaded = from_string(to_test_case(authored), &info);
+    REQUIRE(info.has_values);
+
+    const DeviceSpec ds;
+    const auto device = make_device(ds);
+    TileProgram reference = authored;
+    run_at(ExecutionLevel::BlockSequential, loaded, device,
+           Placement::single(device.compute_tiles));
+    run_at(ExecutionLevel::BlockSequential, reference, device,
+           Placement::single(device.compute_tiles));
+    for (const std::string& key : reference.operand_order())
+        CHECK(bit_identical(reference.operand(key).values, loaded.operand(key).values));
+}
+
+TEST_CASE("a file's dataflow annotation drives the run it describes",
+          "[program][driver][file]") {
+    // `--program` with a STREAMS record: the driver re-derives the StreamProgram from the
+    // NAME, so the timing the file describes is the timing that runs. Asserted through
+    // map_for, which is the only thing standing between a recorded name and a different map.
+    using namespace sw::kpu::program::serialize;
+    ProgramSpec ps;
+    ps.algo = "matmul"; ps.size = 32; ps.tile = 16;
+    TileProgram authored = derive(ps);
+    fill(authored, ps);
+
+    WriteOptions opt;
+    opt.include_values = true;
+    opt.dataflow = map_for("ws").name;
+    LoadInfo info;
+    TileProgram loaded = from_string(to_string(authored, opt), &info);
+    REQUIRE(info.has_streams);
+    REQUIRE(info.dataflow == map_for("ws").name);
+
+    // The recorded name must reconstruct the SAME map, not merely a valid one.
+    CHECK(map_for(info.dataflow).name == map_for("ws").name);
+
+    const DeviceSpec ds;
+    const auto device = make_device(ds);
+    auto streams = stream::derive_matmul_streams(loaded, map_for(info.dataflow));
+    const auto annotated = run_at(ExecutionLevel::BlockSequential, loaded, device,
+                                  Placement::single(device.compute_tiles), &streams);
+    TileProgram plain = from_string(to_test_case(authored));
+    const auto bare = run_at(ExecutionLevel::BlockSequential, plain, device,
+                             Placement::single(device.compute_tiles));
+    // The annotation is not decoration: it changes the L1 timing.
+    CHECK(annotated.makespan != bare.makespan);
+    // And not the values.
+    for (const std::string& key : plain.operand_order())
+        CHECK(bit_identical(plain.operand(key).values,
+                            loaded.operand(key).values));
 }
