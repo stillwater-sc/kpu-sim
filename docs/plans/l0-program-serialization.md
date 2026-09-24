@@ -83,6 +83,22 @@ Values are the exception: a large operand belongs in a side file or an explicitl
 block, not in decimal text. That choice is deferred until a program with real weights exists
 to measure, and the format reserves a record for it rather than guessing now.
 
+**Measured, before building increment 2 on an assumption** (2026-09-24):
+
+| encoding | finite values | non-finite |
+|---|---|---|
+| `std::hexfloat` | **does not round-trip through iostreams** — inexact even with the manipulator set on input, because libstdc++ `operator>>` does not parse hex floats | fails to parse |
+| decimal at `max_digits10` | **exact for every finite value tried**: `1.0000001f`, `-0.0f`, denormal min, `FLT_MIN`, `FLT_MAX`, π, `1e-7` | fails to parse |
+
+So the encoding is **decimal at `max_digits10` through a classic-locale stream** — which is
+also the readable choice, and the same rule already applied to `alpha`. Hexfloat looked like
+the obvious answer for exactness and is simply wrong here.
+
+**Non-finite values need explicit tokens.** `inf`, `-inf` and `nan` fail to parse via
+`operator>>` in both encodings, so the writer emits them as literal tokens and the reader
+recognises them rather than relying on the stream. They are not hypothetical: a masked
+attention value is `-inf`, and this repo does softmax and attention work.
+
 ## 6. Increments
 
 1. **Round-trip without values.** — **done.** `serialize/l0_format.hpp` writes and reads the
