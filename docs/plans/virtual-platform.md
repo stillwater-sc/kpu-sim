@@ -195,11 +195,38 @@ real implementation appears, and that is when the shape of the interface is know
    and non-negative — zero energy is a legitimate modelling choice, a negative one is not),
    the flag reports it under its own name, and the property is asserted directly rather than
    implied: **anything `validate()` accepts can be written and read back.**
-2. **`VirtualPlatform` with state.** `load_program`, `snapshot`, `restore`,
-   `run(handle, level, const StateSnapshot&)` restoring **first**, and the coverage-tagged
-   digest of §3. Tests: two runs with the same four inputs agree on the bytes; a second run
-   cannot observe what the first left behind; a snapshot taken at one coverage never compares
-   equal to one taken at another.
+2. **`VirtualPlatform` with state** — **done.** `load_program`, `snapshot`, `restore`,
+   `run(handle, level, const StateSnapshot&)` restoring **first**, the coverage-tagged digest
+   of §3, and a `RunIdentity` naming all four inputs.
+
+   **Tile LU is what makes the reproducibility test mean anything.** It factors `A` in place,
+   so running it on its own output gives a different answer — which is what distinguishes
+   "the restore worked" from "the program happens to be idempotent". A matmul that zeroes and
+   re-accumulates `C` would pass either way, so on its own it proves nothing. The test asserts
+   both halves: same snapshot twice gives the same answer, *and* the previous output gives a
+   different one.
+
+   **The restore is platform-wide, and that has a usage consequence worth writing down.** A
+   run resets *every* loaded program, not only the one it executes — it has to, or the
+   snapshot's digest would claim state the run did not restore and the identity would be a
+   promise the platform does not keep. So a caller comparing several runs must capture each
+   result as it is produced; reading `platform.program(h)` after a loop reads the input the
+   last restore put back. The differential test got exactly this wrong first, and its own
+   assertion caught it — which is the cheapest place to learn it.
+
+   **The program digest covers structure, the snapshot covers values.** Folding values into
+   the program digest would make two of the four inputs cover the same bytes, and "identical
+   inputs" would stop meaning four independent things.
+
+   **The coverage guard is at compile time.** A `StateSnapshot` is never deserialized — it
+   only ever comes from this platform in this process — so an unknown coverage cannot arrive
+   at runtime, and a check for one would be unreachable code pretending to be a safeguard.
+   `restore()` switches exhaustively instead, so #283 breaks the build at the site that has to
+   learn to restore the new coverage.
+
+   A `ProgramHandle` is strongly typed and not default-usable: a bare `std::size_t` would let
+   an uninitialised value index a program, and the failure would be a run of the **wrong
+   program** reporting success.
 3. **The naming map**, identity only, over a two-device deployment: parse, format, and
    `exists()`, with a declared-resource sweep asserting that the map's domain is exactly the
    deployment's.
@@ -217,11 +244,11 @@ From the issue, with the honest status of each:
 
 - [x] a deployment spec round-trips — **increment 1**, as canonical byte-exactness plus
       idempotent normalization of a non-canonical spec (§8)
-- [ ] `run()` restores the passed snapshot first, and its digest is in the cache key and the
+- [x] `run()` restores the passed snapshot first, and its digest is in the cache key and the
       provenance — **increment 2**
-- [ ] two runs with identical inputs produce identical results, asserted — **increment 2**,
+- [x] two runs with identical inputs produce identical results, asserted — **increment 2**,
       by comparing bytes rather than digests (§4)
-- [ ] a run that reads state a previous run left behind is impossible by construction —
+- [x] a run that reads state a previous run left behind is impossible by construction —
       **increment 2**
 - [ ] no test or demo constructs an engine directly; the characterization harness goes
       through the platform — **increment 4**, within the boundary of §6

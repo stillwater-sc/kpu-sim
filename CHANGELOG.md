@@ -22,6 +22,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`VirtualPlatform`: a run is a pure function of its four inputs (#282 increment 2).**
+  `load_program`, `snapshot`, `restore`, and `run(handle, level, const StateSnapshot&)` which
+  **restores the state first**. `run_at()` took three of ADR 0002 §3.5's four inputs, so the
+  purity claim was false in a specific, checkable way: a run read whatever the previous one
+  left in the program's operands. `RunIdentity` now names all four, and the fields a level
+  does not model ride along in the result.
+
+  **Tile LU is what makes the reproducibility test mean anything.** It factors `A` in place,
+  so running it on its own output gives a different answer — which distinguishes "the restore
+  worked" from "the program happens to be idempotent". A matmul that zeroes and re-accumulates
+  `C` would pass either way, so both halves are asserted.
+
+  **The restore is platform-wide, and a caller has to know it.** A run resets *every* loaded
+  program, not only the one it executes — it must, or the snapshot's digest would claim state
+  the run did not restore. So results are captured as they are produced; reading
+  `platform.program(h)` after a loop reads the input the last restore put back. The
+  differential test got this wrong first and its own assertion caught it.
+
+  The program digest covers **structure** and the snapshot covers **values**, so the four
+  inputs stay four independent things. The coverage tag is inside the snapshot digest, so a
+  future L-T2 snapshot cannot collide with a v1 one whenever their operands match; the guard
+  against an unknown coverage is an exhaustive `switch`, because a `StateSnapshot` is never
+  deserialized and a runtime check would be unreachable code pretending to be a safeguard.
+
 - **A deployment is data: one machine description, JSON at its edge (#282 increment 1).**
   `DeploymentSpec` (ADR 0002 §3.5) with `from_json`/`to_json`, `deployment_digest`,
   `device_view()` projecting a `DeviceDescriptor`, and `unmodelled_fields()` naming what a
