@@ -138,6 +138,19 @@ if(KPU_BUILD_TESTS)
     )
     set_tests_properties(kpu_run_step_limit_is_exact PROPERTIES LABELS "program;driver")
 
+    # --emit-l0-result must be written only AFTER the comparison agrees, so a run whose
+    # levels disagreed cannot leave a file that looks like a golden expected output. The
+    # ordering is the observable contract: OK before wrote.
+    add_test(NAME kpu_run_emit_after_agreement
+        COMMAND ${CMAKE_COMMAND}
+            -DCMD=$<TARGET_FILE:run>
+            -DARGS=--algo$<SEMICOLON>matmul$<SEMICOLON>--size$<SEMICOLON>32$<SEMICOLON>--tile$<SEMICOLON>16$<SEMICOLON>--emit-l0$<SEMICOLON>${CMAKE_CURRENT_BINARY_DIR}/emit.l0$<SEMICOLON>--emit-l0-result$<SEMICOLON>${CMAKE_CURRENT_BINARY_DIR}/emit.result.l0
+            -DEXPECT_CODE=0
+            -DMUST_MATCH=OK:.every.level.computes.identical.values.*wrote
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/expect_exit.cmake
+    )
+    set_tests_properties(kpu_run_emit_after_agreement PROPERTIES LABELS "program;driver")
+
     # Bad numeric input must also exit 2 rather than abort: an uncaught std::stoul throw
     # is SIGABRT, which CI cannot distinguish from a crash in the model.
     add_test(NAME kpu_run_rejects_bad_number

@@ -1,0 +1,11 @@
+KPUL0 9.0.0
+# The other half: a container MAJOR this reader cannot parse, so it must refuse before
+# trying. Hand-written and never regenerated, like its sibling.
+MIN_CONSUMER 1.0.0
+OPSET tile 1.0.0
+PRODUCER hand-written 1.0.0
+PROGRAM "from a newer container"
+VALUES none
+OPERAND "A" rows=16 cols=16 tile_rows=16 tile_cols=16
+OP kind=FEED in=A:0,0 port_kind=input port="West"
+END

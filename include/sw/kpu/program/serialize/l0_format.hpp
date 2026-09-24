@@ -481,6 +481,10 @@ struct LoadInfo {
 inline TileProgram read_l0(std::istream& is, LoadInfo* info = nullptr) {
     std::string line;
     // ---- preamble -----------------------------------------------------------
+    // THE MAGIC IS THE FIRST LINE, with nothing before it -- not even a comment. A file
+    // has to be identifiable by its opening bytes, which is the whole job of a magic, and
+    // anything permitted in front of it defeats that. Comments are allowed on every line
+    // AFTER it.
     if (!std::getline(is, line))
         throw FormatError(FormatError::Cause::Truncated, "l0: empty input");
     {

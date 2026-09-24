@@ -150,7 +150,63 @@ attention value is `-inf`, and this repo does softmax and attention work.
    whose preamble says `VALUES none` while carrying `VALUES_ROW` records are all refused. A
    test case that silently lost some of its inputs is worse than one that will not load,
    because it would run and produce an answer nobody could tell was wrong.
-3. **Golden corpus in CI**: matmul and tile LU, checked in, loaded and executed.
+3. **Golden corpus in CI** — **done.** `tests/program/corpus/` holds matmul 48³ and tile LU
+   64, each as a pair: `<case>.l0` carrying the **inputs** and `<case>.result.l0` carrying
+   the **expected outputs**. Two files rather than one because LU factors `A` **in place** —
+   a single post-execution snapshot would have overwritten the input it was meant to
+   preserve.
+
+   `test_l0_corpus` loads each input, executes it at every implemented level, and compares
+   **every operand** against the expected file. No `fill()` call appears in the test: a
+   corpus entry has to be self-contained or it is not evidence.
+
+   **The recorded answers are compared within a tolerance, not bit-exactly**, and the reason
+   is specific: Release builds with `-march=native -mtune=native`, so instruction selection
+   follows the host CPU and two machines differ in the last bits. The first version compared
+   bit-exactly and passed locally — which was luck, not evidence, because `fill_matmul`
+   produces exact quarter-integers and matmul's arithmetic stays exactly representable. LU
+   divides, and CI failed on LU alone, identically at both levels, which is what
+   distinguishes a machine difference from a model disagreement. Bit-exactness is asserted
+   where it is genuinely promised: **same machine**, corpus file versus fresh derivation.
+
+   Three further checks, each answering a different question:
+
+   - **byte-stable re-serialization**. Deliberately strict, and it will fail on any format
+     change — that is the point, and verified to bite: tampering with one field makes two
+     assertions fail.
+   - **a hand-written refusal fixture** declaring `MIN_CONSUMER 9.0.0`, which must fail to
+     load. Never regenerated, precisely so no tool can quietly bring it in line.
+   - **derivation equivalence**, kept separate from the execution check because they can
+     diverge: a derivation change leaves the corpus executing correctly while silently
+     making it stale, and conflating the two would hide which moved.
+
+   Regeneration is a documented command (`kpu-run --emit-l0 / --emit-l0-result`) rather than
+   a script, and the corpus README asks the question that matters before you run it: **does
+   this change need a version bump?** Regenerating without answering that turns a corpus
+   into a rubber stamp — the files still load, because the code that reads them also wrote
+   them.
+
+   **Fixture values must be exactly representable, or the inputs are not reproducible
+   either.** `driver::fill` now emits only values that need no rounding — matmul's `A` in
+   quarters and `B` in eighths, LU in eighths; the per-operand granularity is incidental, the
+   no-rounding property is the point. The LU fill used `* 0.1f`, leaving 3129 off-diagonal values
+   inexact, and CI failed on the LU corpus **input**, not its output. Verified by hashing
+   the regenerated file identically under four different optimisation, ISA and
+   FP-contraction settings. Exact inputs do not buy exact *outputs*, because LU divides —
+   which is why recorded answers keep their tolerance.
+
+   **The bytes are the evidence, so nothing may transform them.** `*.l0` is marked `-text`
+   in `.gitattributes` and `--emit-l0` writes in binary mode. Both are needed for the same
+   reason: a byte-stability check cannot survive an encoding that depends on the platform
+   that checked the file out or wrote it. This was not theoretical — CI went red on all three
+   builds while the corpus was green locally, because a Windows checkout had rewritten every
+   LF as CRLF. Reproduced locally by converting a corpus file to CRLF, which fails exactly
+   the three cases CI failed.
+
+   **The corpus earned its place immediately**: the first draft of the refusal fixture put a
+   comment before the magic line, and the test caught it — reporting `NotAnL0File` where the
+   fixture was meant to exercise `UnsupportedVersion`. The magic must be the first line,
+   with nothing before it, because a file has to be identifiable by its opening bytes.
 4. **Stream annotations** alongside (ADR §7.4).
 5. **`kpu-run --program`** — increment 4 of #285, which is the point of all of this.
 

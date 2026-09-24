@@ -16,13 +16,16 @@
 #include <sw/kpu/program/driver/execution_level.hpp>
 #include <sw/kpu/program/driver/program_spec.hpp>
 #include <sw/kpu/program/driver/step_cursor.hpp>
+#include <sw/kpu/program/serialize/l0_format.hpp>
 #include <sw/kpu/program/driver/timeline_trace.hpp>
 #include <sw/trace/trace_exporter.hpp>
 
 #include <cstring>
+#include <fstream>
 #include <iomanip>
 #include <iostream>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -84,6 +87,10 @@ R"(kpu-run — execute a Domain Flow Program at one or more levels and compare t
   --streams <dataflow>      derive an L1 stream program: output-stationary|os,
                             weight-stationary|ws, a-stationary|as,
                             fully-streaming|hex  (matmul only)
+  --emit-l0 <file.l0>       write the program BEFORE execution: a test case, inputs
+                            inline. This is how the golden corpus is regenerated
+  --emit-l0-result <file.l0>  write it AFTER execution: the same program with results,
+                            which is the corpus's expected-output half
   --timeline <file.json>    Chrome Trace Event Format, one event PER HOP
   --step                    single-step: one line per transaction at that level
                             (L-B: one op applied; L-T1: op fired / hop start / hop
@@ -253,8 +260,10 @@ int main(int argc, char** argv) {
     }
     // Keeps main's required-value parsing (an option present without a value is an error,
     // not an absence) and adds increment 3's stepping options on top.
-    std::string timeline_path;
-    if (!arg_required(a, "--timeline", timeline_path, err)) {
+    std::string timeline_path, emit_path, emit_result_path;
+    if (!arg_required(a, "--timeline", timeline_path, err) ||
+        !arg_required(a, "--emit-l0", emit_path, err) ||
+        !arg_required(a, "--emit-l0-result", emit_result_path, err)) {
         std::cerr << "kpu-run: " << err << "\n";
         return 2;
     }
@@ -307,6 +316,38 @@ int main(int argc, char** argv) {
                       << not_implemented_reason(l) << ")";
     std::cout << "\n\n";
 
+    // --emit-l0 writes the program BEFORE anything executes, so the file is an input
+    // rather than a snapshot of a finished run. Written as a test case (values inline),
+    // because a corpus entry that needed an external fill step would not be self-contained.
+    if (!emit_path.empty()) {
+        // derive() and fill() throw, and this path had them OUTSIDE a handler -- so
+        // --emit-l0 would exit through an uncaught exception while every other path returns
+        // 2. The run loop already had this fixed once; writing a new path reintroduced it.
+        std::optional<TileProgram> to_emit;
+        try {
+            to_emit.emplace(derive(ps));
+            fill(*to_emit, ps);
+        } catch (const std::exception& e) {
+            std::cerr << "kpu-run: " << e.what() << "\n";
+            return 2;
+        }
+        // BINARY, so the bytes do not depend on the platform that wrote them: a text-mode
+        // stream on Windows would translate every \n into \r\n, and a format with a
+        // byte-stability check cannot have a platform-dependent encoding.
+        std::ofstream out(emit_path, std::ios::binary);
+        if (!out) {
+            std::cerr << "kpu-run: cannot write '" << emit_path << "'\n";
+            return 2;
+        }
+        serialize::write_l0(out, *to_emit, serialize::WriteOptions{/*include_values=*/true});
+        out.close();
+        if (!out) {
+            std::cerr << "kpu-run: failed while writing '" << emit_path << "'\n";
+            return 2;
+        }
+        std::cout << "wrote  " << emit_path << "  (test case, inputs inline)\n";
+    }
+
     // Each level gets its OWN program, filled identically, so the comparison is of
     // the models rather than of leftover state.
     std::vector<TileProgram> programs;
@@ -335,6 +376,31 @@ int main(int argc, char** argv) {
         }
         print_run(outcomes.back());
     }
+
+    // --emit-l0-result is written AFTER the value comparison, never before. Writing it here
+    // would leave a result file from a run whose levels DISAGREED: kpu-run returns 1, but
+    // the file sits there looking like a golden expected output, and the corpus could be
+    // seeded from a run that failed its own check. Deferred to emit_result_if_agreed(),
+    // called after the comparison -- and immediately when there is nothing to compare (one
+    // level, or --no-compare), since then there is no verdict to wait for.
+    auto emit_result_if_agreed = [&]() -> int {
+        if (emit_result_path.empty()) return 0;
+        std::ofstream out(emit_result_path, std::ios::binary);   // see --emit-l0 above
+        if (!out) {
+            std::cerr << "kpu-run: cannot write '" << emit_result_path << "'\n";
+            return 2;
+        }
+        serialize::write_l0(out, programs.back(),
+                            serialize::WriteOptions{/*include_values=*/true});
+        out.close();
+        if (!out) {
+            std::cerr << "kpu-run: failed while writing '" << emit_result_path << "'\n";
+            return 2;
+        }
+        std::cout << "wrote  " << emit_result_path << "  (results, from "
+                  << short_name(levels.back()) << ")\n";
+        return 0;
+    };
 
     // --step: walk one level's transactions. At L-B this RE-EXECUTES the program one op
     // at a time on a fresh copy, so it is genuine stepping; at L-T1 it replays the run
@@ -416,7 +482,7 @@ int main(int argc, char** argv) {
     if (!compare || levels.size() < 2) {
         if (compare && levels.size() < 2)
             std::cout << "\nonly one level ran, so there is nothing to compare\n";
-        return 0;
+        return emit_result_if_agreed();     // no verdict to wait for
     }
 
     // L-B is the authority for values (ADR 0001 D5).
@@ -465,8 +531,13 @@ int main(int argc, char** argv) {
     if (!all_agree) {
         std::cout << "\nFAILED: the levels do not compute the same values. Decomposition "
                      "changes WHEN, never WHAT (ADR 0002 §2), so this is a model bug.\n";
+        if (!emit_result_path.empty())
+            std::cout << "not writing " << emit_result_path
+                      << ": a run whose levels disagree must not become an expected "
+                         "output\n";
         return 1;
     }
     std::cout << "\nOK: every level computes identical values.\n";
+    if (const int rc = emit_result_if_agreed()) return rc;
     return 0;
 }

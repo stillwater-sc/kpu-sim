@@ -1,0 +1,18 @@
+KPUL0 1.1.0
+# A hand-written fixture, NOT generated. Its job is to FAIL to load, exercising the
+# MIN_CONSUMER gate (R4) specifically.
+#
+# The container version is DELIBERATELY one this reader supports. An earlier draft said
+# KPUL0 9.0.0, and review caught that the reader rejects that at the container-major check
+# BEFORE it ever reads MIN_CONSUMER -- so the fixture passed with UnsupportedVersion even if
+# the min_consumer gate were broken. A test that passes for the wrong reason guards nothing.
+#
+# needs_a_newer_container.l0 covers the container check separately.
+MIN_CONSUMER 9.0.0
+OPSET tile 1.0.0
+PRODUCER hand-written 1.0.0
+PROGRAM "needs a newer reader"
+VALUES none
+OPERAND "A" rows=16 cols=16 tile_rows=16 tile_cols=16
+OP kind=FEED in=A:0,0 port_kind=input port="West"
+END

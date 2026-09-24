@@ -1,0 +1,9 @@
+# The L0 golden corpus: the BYTES ARE THE EVIDENCE.
+#
+# These files are compared byte for byte by tests/program/test_l0_corpus, so git must never
+# transform them on checkout. Without this, a Windows checkout rewrites every LF as CRLF and
+# the byte-stability check fails there while passing on Linux -- which is exactly what
+# happened in CI on #299: three builds red on a corpus that was green locally.
+#
+# A golden corpus whose bytes depend on the platform that checked it out is not golden.
+*.l0 -text
