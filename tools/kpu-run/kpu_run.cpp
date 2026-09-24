@@ -25,6 +25,7 @@
 #include <iomanip>
 #include <iostream>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -319,8 +320,17 @@ int main(int argc, char** argv) {
     // rather than a snapshot of a finished run. Written as a test case (values inline),
     // because a corpus entry that needed an external fill step would not be self-contained.
     if (!emit_path.empty()) {
-        TileProgram to_emit = derive(ps);
-        fill(to_emit, ps);
+        // derive() and fill() throw, and this path had them OUTSIDE a handler -- so
+        // --emit-l0 would exit through an uncaught exception while every other path returns
+        // 2. The run loop already had this fixed once; writing a new path reintroduced it.
+        std::optional<TileProgram> to_emit;
+        try {
+            to_emit.emplace(derive(ps));
+            fill(*to_emit, ps);
+        } catch (const std::exception& e) {
+            std::cerr << "kpu-run: " << e.what() << "\n";
+            return 2;
+        }
         // BINARY, so the bytes do not depend on the platform that wrote them: a text-mode
         // stream on Windows would translate every \n into \r\n, and a format with a
         // byte-stability check cannot have a platform-dependent encoding.
@@ -329,7 +339,7 @@ int main(int argc, char** argv) {
             std::cerr << "kpu-run: cannot write '" << emit_path << "'\n";
             return 2;
         }
-        serialize::write_l0(out, to_emit, serialize::WriteOptions{/*include_values=*/true});
+        serialize::write_l0(out, *to_emit, serialize::WriteOptions{/*include_values=*/true});
         out.close();
         if (!out) {
             std::cerr << "kpu-run: failed while writing '" << emit_path << "'\n";
@@ -367,10 +377,14 @@ int main(int argc, char** argv) {
         print_run(outcomes.back());
     }
 
-    // --emit-l0-result writes the program AFTER execution: the corpus's expected-output
-    // half. Taken from the FINEST level that ran, since every level must agree on values
-    // anyway and a disagreement would already have failed the comparison below.
-    if (!emit_result_path.empty()) {
+    // --emit-l0-result is written AFTER the value comparison, never before. Writing it here
+    // would leave a result file from a run whose levels DISAGREED: kpu-run returns 1, but
+    // the file sits there looking like a golden expected output, and the corpus could be
+    // seeded from a run that failed its own check. Deferred to emit_result_if_agreed(),
+    // called after the comparison -- and immediately when there is nothing to compare (one
+    // level, or --no-compare), since then there is no verdict to wait for.
+    auto emit_result_if_agreed = [&]() -> int {
+        if (emit_result_path.empty()) return 0;
         std::ofstream out(emit_result_path, std::ios::binary);   // see --emit-l0 above
         if (!out) {
             std::cerr << "kpu-run: cannot write '" << emit_result_path << "'\n";
@@ -385,7 +399,8 @@ int main(int argc, char** argv) {
         }
         std::cout << "wrote  " << emit_result_path << "  (results, from "
                   << short_name(levels.back()) << ")\n";
-    }
+        return 0;
+    };
 
     // --step: walk one level's transactions. At L-B this RE-EXECUTES the program one op
     // at a time on a fresh copy, so it is genuine stepping; at L-T1 it replays the run
@@ -467,7 +482,7 @@ int main(int argc, char** argv) {
     if (!compare || levels.size() < 2) {
         if (compare && levels.size() < 2)
             std::cout << "\nonly one level ran, so there is nothing to compare\n";
-        return 0;
+        return emit_result_if_agreed();     // no verdict to wait for
     }
 
     // L-B is the authority for values (ADR 0001 D5).
@@ -516,8 +531,13 @@ int main(int argc, char** argv) {
     if (!all_agree) {
         std::cout << "\nFAILED: the levels do not compute the same values. Decomposition "
                      "changes WHEN, never WHAT (ADR 0002 §2), so this is a model bug.\n";
+        if (!emit_result_path.empty())
+            std::cout << "not writing " << emit_result_path
+                      << ": a run whose levels disagree must not become an expected "
+                         "output\n";
         return 1;
     }
     std::cout << "\nOK: every level computes identical values.\n";
+    if (const int rc = emit_result_if_agreed()) return rc;
     return 0;
 }

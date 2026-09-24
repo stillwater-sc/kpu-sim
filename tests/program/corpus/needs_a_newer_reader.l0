@@ -1,16 +1,17 @@
-KPUL0 9.0.0
-# A hand-written fixture, NOT generated: it declares a reader this build cannot be, and its
-# job is to FAIL to load. If a future change makes it load, the min_consumer gate has
-# stopped working -- the failure that let kernels/bin/*.kpubin rot, and the reason R4 exists.
+KPUL0 1.1.0
+# A hand-written fixture, NOT generated. Its job is to FAIL to load, exercising the
+# MIN_CONSUMER gate (R4) specifically.
 #
-# Note the magic is the FIRST line, with comments after it: a file has to be identifiable by
-# its opening bytes, so nothing may precede the magic. The first draft of this fixture put
-# the comment first and the corpus test caught it -- reporting NotAnL0File where the point
-# was to exercise UnsupportedVersion.
+# The container version is DELIBERATELY one this reader supports. An earlier draft said
+# KPUL0 9.0.0, and review caught that the reader rejects that at the container-major check
+# BEFORE it ever reads MIN_CONSUMER -- so the fixture passed with UnsupportedVersion even if
+# the min_consumer gate were broken. A test that passes for the wrong reason guards nothing.
+#
+# needs_a_newer_container.l0 covers the container check separately.
 MIN_CONSUMER 9.0.0
-OPSET tile 9.0.0
+OPSET tile 1.0.0
 PRODUCER hand-written 1.0.0
-PROGRAM "from the future"
+PROGRAM "needs a newer reader"
 VALUES none
 OPERAND "A" rows=16 cols=16 tile_rows=16 tile_cols=16
 OP kind=FEED in=A:0,0 port_kind=input port="West"

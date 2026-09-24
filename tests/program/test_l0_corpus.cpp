@@ -51,18 +51,35 @@ bool bits_equal(const std::vector<float>& a, const std::vector<float>& b) {
     return true;
 }
 
+// The spec lives WITH the case, so a new corpus entry cannot be added to one check and
+// forgotten by another -- which is exactly what happened: derivation equivalence covered
+// matmul only, so a change to derive_lu_tile_program would have left the LU input stale
+// while every other check still passed.
 struct Case {
     const char* name;
     const char* input;
     const char* expected;
+    const char* algo;
+    Dim size;
+    Dim tile;
 };
 
 const std::vector<Case>& cases() {
     static const std::vector<Case> c = {
-        {"matmul 48^3 t16", "matmul_48x48x48_t16.l0", "matmul_48x48x48_t16.result.l0"},
-        {"tile LU 64 t16",  "lu_64_t16.l0",           "lu_64_t16.result.l0"},
+        {"matmul 48^3 t16", "matmul_48x48x48_t16.l0", "matmul_48x48x48_t16.result.l0",
+         "matmul", 48, 16},
+        {"tile LU 64 t16",  "lu_64_t16.l0",           "lu_64_t16.result.l0",
+         "lu", 64, 16},
     };
     return c;
+}
+
+ProgramSpec spec_of(const Case& c) {
+    ProgramSpec ps;
+    ps.algo = c.algo;
+    ps.size = c.size;
+    ps.tile = c.tile;
+    return ps;
 }
 
 } // namespace
@@ -159,28 +176,20 @@ TEST_CASE("executing a corpus file is bit-identical to executing a fresh derivat
     // program. This is the check that catches executor or derivation drift, and it is kept
     // separate from the recorded-answer comparison because the two fail for different
     // reasons and conflating them hides which one moved.
-    struct Spec { const char* file; const char* algo; Dim size; Dim tile; };
-    const std::vector<Spec> specs = {
-        {"matmul_48x48x48_t16.l0", "matmul", 48, 16},
-        {"lu_64_t16.l0",           "lu",     64, 16},
-    };
-    for (const Spec& sp : specs) {
-        ProgramSpec ps;
-        ps.algo = sp.algo;
-        ps.size = sp.size;
-        ps.tile = sp.tile;
+    for (const Case& sp : cases()) {
+        const ProgramSpec ps = spec_of(sp);
         const DeviceSpec ds;
         const auto device = make_device(ds);
 
         for (ExecutionLevel level : all_levels()) {
             if (!level_implemented(level)) continue;
-            TileProgram from_file = from_string(read_file(std::string(kCorpus) + sp.file));
+            TileProgram from_file = from_string(read_file(std::string(kCorpus) + sp.input));
             TileProgram fresh = derive(ps);
             fill(fresh, ps);
             run_at(level, from_file, device, Placement::single(device.compute_tiles));
             run_at(level, fresh, device, Placement::single(device.compute_tiles));
             for (const std::string& key : fresh.operand_order()) {
-                INFO(std::string(sp.file) + " at " + short_name(level) + ", operand " + key);
+                INFO(std::string(sp.input) + " at " + short_name(level) + ", operand " + key);
                 CHECK(bits_equal(from_file.operand(key).values, fresh.operand(key).values));
             }
         }
@@ -219,34 +228,51 @@ TEST_CASE("the corpus files declare the versions they actually need",
     }
 }
 
-TEST_CASE("the hand-written future file still refuses to load",
+TEST_CASE("both version gates refuse, and each is exercised on its own",
           "[program][serialize][corpus]") {
-    // This fixture is never regenerated -- it is hand-written precisely so no tool can
-    // quietly bring it in line with the current version. If it starts loading, the
-    // min_consumer gate has stopped working, which is exactly how the .kpubin corpus
-    // rotted.
+    // Two fixtures, because one cannot test both gates. An earlier single fixture declared
+    // KPUL0 9.0.0 AND MIN_CONSUMER 9.0.0, and the reader rejects the container major BEFORE
+    // reading MIN_CONSUMER -- so it passed with UnsupportedVersion even if the min_consumer
+    // gate were broken. A test that passes for the wrong reason guards nothing.
+    //
+    // Both are hand-written and never regenerated, so no tool can quietly bring them in
+    // line with the current version.
+    auto refuses = [](const char* file) {
+        const std::string text = read_file(std::string(kCorpus) + file);
+        try {
+            from_string(text);
+            FAIL(std::string(file) + " must not load");
+        } catch (const FormatError& e) {
+            CHECK(e.cause() == FormatError::Cause::UnsupportedVersion);
+        }
+    };
+    // MIN_CONSUMER 9.0.0 with a container version this reader DOES support, so the only
+    // thing that can refuse it is the min_consumer gate itself.
+    refuses("needs_a_newer_reader.l0");
+    // And the container-major check, on its own.
+    refuses("needs_a_newer_container.l0");
+
+    // The first fixture must really be past the container gate, or it is the old test again.
     const std::string text = read_file(std::string(kCorpus) + "needs_a_newer_reader.l0");
-    try {
-        from_string(text);
-        FAIL("a file declaring MIN_CONSUMER 9.0.0 must not load");
-    } catch (const FormatError& e) {
-        CHECK(e.cause() == FormatError::Cause::UnsupportedVersion);
-    }
+    CHECK(text.rfind("KPUL0 1.1.0", 0) == 0);
+    CHECK(text.find("MIN_CONSUMER 9.0.0\n") != std::string::npos);
 }
 
-TEST_CASE("a corpus program still matches what the derivation produces today",
+TEST_CASE("every corpus program still matches what the derivation produces today",
           "[program][serialize][corpus]") {
-    // Separate from the execution check, and it answers a different question: the one
-    // above asks "does this file still compute its answer", this asks "is the file still
-    // what our derivation would emit". Those can diverge -- a derivation change keeps the
-    // corpus executing correctly while silently making it stale -- and conflating them
-    // would hide which of the two moved.
-    ProgramSpec ps;
-    ps.algo = "matmul";
-    ps.size = 48;
-    ps.tile = 16;
-    TileProgram fresh = derive(ps);
-    fill(fresh, ps);
-    const std::string corpus = read_file(std::string(kCorpus) + cases()[0].input);
-    CHECK(to_test_case(fresh) == corpus);
+    // Separate from the execution check, and it answers a different question: that one asks
+    // "does this file still compute its answer", this asks "is the file still what our
+    // derivation would emit". They diverge -- a derivation change keeps the corpus
+    // executing correctly while silently making it stale -- so conflating them would hide
+    // which of the two moved.
+    //
+    // EVERY case, driven by the case list. This covered matmul only, which meant a change
+    // to the LU derivation would have gone unnoticed while every check still passed.
+    for (const Case& c : cases()) {
+        const ProgramSpec ps = spec_of(c);
+        TileProgram fresh = derive(ps);
+        fill(fresh, ps);
+        INFO("corpus input " << c.input);
+        CHECK(to_test_case(fresh) == read_file(std::string(kCorpus) + c.input));
+    }
 }

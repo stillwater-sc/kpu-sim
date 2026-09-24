@@ -12,7 +12,14 @@ that is not tested is a version policy that will be wrong.
 |---|---|
 | `<case>.l0` | the program with its **inputs** inline — a test case |
 | `<case>.result.l0` | the same program **after execution** — the expected outputs |
-| `needs_a_newer_reader.l0` | **hand-written**, declares `MIN_CONSUMER 9.0.0`, and must **fail** to load |
+| `needs_a_newer_reader.l0` | **hand-written**: a supported container version with `MIN_CONSUMER 9.0.0`, so only the min_consumer gate can refuse it |
+| `needs_a_newer_container.l0` | **hand-written**: `KPUL0 9.0.0`, so only the container-major check can refuse it |
+
+Two refusal fixtures rather than one, because a single file cannot test both gates. An
+earlier draft declared `KPUL0 9.0.0` *and* `MIN_CONSUMER 9.0.0` — and the reader rejects the
+container major **before** reading `MIN_CONSUMER`, so the fixture passed with
+`UnsupportedVersion` even if the min_consumer gate were broken. A test that passes for the
+wrong reason guards nothing.
 
 Two files per case rather than one, because LU factors `A` **in place**: a single
 post-execution snapshot would have overwritten the input it was supposed to preserve.
