@@ -37,6 +37,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   decision with the version question answered: the corpus carries no `STREAMS` record, so
   its `min_consumer` stays 1.1.0 while its container line moves to 1.2.0.
 
+  **A file cannot contradict its own preamble**, three ways, all found in review. The
+  *writer* now validates the dataflow it is given, because `read_l0` refuses an unknown name
+  and a writer that accepted one would emit a file **its own reader rejects** — discovered
+  later, from the artifact, on another machine. Aliases are refused rather than normalized:
+  this layer knows `known_dataflows()` and nothing about anyone's command line. The *reader*
+  now retains the declared `MIN_CONSUMER` and requires it to **cover the records present**,
+  because a file carrying `STREAMS` under a 1.1.0 demand was accepted here *and* by a 1.1.0
+  reader — which skips the record and reports success for a run the file does not describe.
+  The rule is one-directional: demanding more than the content needs still loads, which is
+  what the corpus refusal fixture depends on. And a **repeated preamble record** is refused
+  rather than silently replaced: two `STREAMS` records left the file holding two conflicting
+  choices while `LoadInfo` reported the last one.
+
 - **A golden corpus of L0 programs, loaded and executed in CI (#265 increment 3).**
   `tests/program/corpus/` holds matmul 48³ and tile LU 64 as pairs — `<case>.l0` with the
   **inputs**, `<case>.result.l0` with the **expected outputs**. Two files rather than one

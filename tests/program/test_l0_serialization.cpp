@@ -553,30 +553,35 @@ TEST_CASE("a partially or inconsistently valued file is refused",
         return FormatError::Cause::Truncated;
     };
     const std::string pre = "KPUL0 1.0.0\nMIN_CONSUMER 1.0.0\n";
+    // A preamble that DEMANDS what its records need. Every section below that carries
+    // VALUES inline uses this one, so each is refused for the reason it is testing rather
+    // than for an inconsistent preamble -- a fixture that fails the wrong gate guards
+    // nothing, which the two version fixtures already taught this file once.
+    const std::string pre_valued = "KPUL0 1.1.0\nMIN_CONSUMER 1.1.0\n";
     const std::string a2 = "OPERAND \"A\" rows=2 cols=2 tile_rows=2 tile_cols=2\n";
 
     SECTION("a missing row: a partial test case would compute a partial answer") {
-        CHECK(cause_of(pre + "VALUES inline\n" + a2 +
+        CHECK(cause_of(pre_valued + "VALUES inline\n" + a2 +
                        "VALUES_ROW \"A\" 0 1 2\nEND\n") ==
               FormatError::Cause::MalformedRecord);
     }
     SECTION("the wrong number of values in a row") {
-        CHECK(cause_of(pre + "VALUES inline\n" + a2 +
+        CHECK(cause_of(pre_valued + "VALUES inline\n" + a2 +
                        "VALUES_ROW \"A\" 0 1 2 3\nVALUES_ROW \"A\" 1 4 5\nEND\n") ==
               FormatError::Cause::MalformedRecord);
     }
     SECTION("a duplicated row, where the later one would silently win") {
-        CHECK(cause_of(pre + "VALUES inline\n" + a2 +
+        CHECK(cause_of(pre_valued + "VALUES inline\n" + a2 +
                        "VALUES_ROW \"A\" 0 1 2\nVALUES_ROW \"A\" 0 3 4\nEND\n") ==
               FormatError::Cause::MalformedRecord);
     }
     SECTION("a row outside the operand") {
-        CHECK(cause_of(pre + "VALUES inline\n" + a2 +
+        CHECK(cause_of(pre_valued + "VALUES inline\n" + a2 +
                        "VALUES_ROW \"A\" 0 1 2\nVALUES_ROW \"A\" 5 3 4\nEND\n") ==
               FormatError::Cause::MalformedRecord);
     }
     SECTION("a row for an operand that does not exist") {
-        CHECK(cause_of(pre + "VALUES inline\n" + a2 +
+        CHECK(cause_of(pre_valued + "VALUES inline\n" + a2 +
                        "VALUES_ROW \"A\" 0 1 2\nVALUES_ROW \"A\" 1 3 4\n"
                        "VALUES_ROW \"Z\" 0 9 9\nEND\n") ==
               FormatError::Cause::MalformedRecord);
@@ -594,7 +599,7 @@ TEST_CASE("a partially or inconsistently valued file is refused",
     }
     SECTION("a complete, consistent test case loads") {
         LoadInfo info;
-        CHECK_NOTHROW(from_string(pre + "VALUES inline\n" + a2 +
+        CHECK_NOTHROW(from_string(pre_valued + "VALUES inline\n" + a2 +
                                   "VALUES_ROW \"A\" 0 1 2\nVALUES_ROW \"A\" 1 3 4\nEND\n",
                                   &info));
     }
@@ -777,4 +782,118 @@ TEST_CASE("a dataflow this build cannot reconstruct is refused, not ignored",
         // and it must be a name map_for() round-trips, not merely a string in a list
         CHECK(map_for(name).name == name);
     }
+}
+
+// ----------------------------------------------------------------------------
+// A file must not be able to contradict its own preamble (review of #300)
+// ----------------------------------------------------------------------------
+TEST_CASE("the writer refuses a dataflow its own reader would reject",
+          "[program][serialize][streams]") {
+    // read_l0 refuses an unknown dataflow, so a writer that accepted one would emit a file
+    // ITS OWN READER REJECTS -- discovered later, from the artifact, on someone else's
+    // machine. Validating on the way out makes that impossible to produce.
+    TileProgram prog("tiny");
+    prog.add_operand(TensorOperand("A", 2, 2, 2, 2));
+
+    WriteOptions bad;
+    bad.dataflow = "sideways";
+    REQUIRE_THROWS_AS(to_string(prog, bad), FormatError);
+
+    // A CLI ALIAS is refused too, and that is the interesting half: "ws" is a name this
+    // repo uses constantly, it is not a canonical dataflow, and a file carrying it would
+    // not load. The format layer knows known_dataflows() and nothing about anyone's command
+    // line, so the caller converts -- which is what map_for() is for.
+    WriteOptions alias;
+    alias.dataflow = "ws";
+    REQUIRE_THROWS_AS(to_string(prog, alias), FormatError);
+    try {
+        to_string(prog, alias);
+    } catch (const FormatError& e) {
+        CHECK(e.cause() == FormatError::Cause::MalformedRecord);
+        // The diagnostic has to say what WOULD work, or the writer is left guessing.
+        CHECK(std::string(e.what()).find(known_dataflows().front()) != std::string::npos);
+    }
+
+    // And every canonical name is writable, so the refusal above is a real gate and not a
+    // blanket one.
+    for (const std::string& name : known_dataflows()) {
+        WriteOptions ok;
+        ok.dataflow = name;
+        CHECK_NOTHROW(to_string(prog, ok));
+    }
+}
+
+TEST_CASE("a preamble that does not cover its own records is refused",
+          "[program][serialize][streams]") {
+    // The version rule, enforced on the way IN. A file carrying STREAMS while declaring
+    // MIN_CONSUMER 1.1.0 loads on this reader AND on a 1.1.0 reader -- which skips the
+    // record and runs with no L1 timing, reporting success for a run the file does not
+    // describe. The declaration must cover the content, or the gate is decoration.
+    const std::string a2 = "OPERAND \"A\" rows=2 cols=2 tile_rows=2 tile_cols=2\n";
+    auto cause_of = [](const std::string& text) {
+        try {
+            from_string(text);
+        } catch (const FormatError& e) {
+            return e.cause();
+        }
+        FAIL("expected a FormatError");
+        return FormatError::Cause::Truncated;
+    };
+
+    CHECK(cause_of("KPUL0 1.2.0\nMIN_CONSUMER 1.1.0\nVALUES none\n"
+                   "STREAMS dataflow=\"" + known_dataflows().front() + "\"\n" + a2 +
+                   "END\n") == FormatError::Cause::MalformedPreamble);
+
+    // The same rule, one version down: values under a 1.0.0 demand.
+    CHECK(cause_of("KPUL0 1.1.0\nMIN_CONSUMER 1.0.0\nVALUES inline\n" + a2 +
+                   "VALUES_ROW \"A\" 0 1 2\nVALUES_ROW \"A\" 1 3 4\nEND\n") ==
+          FormatError::Cause::MalformedPreamble);
+
+    // ONE-DIRECTIONAL: demanding MORE than the content needs is fine. A conservative
+    // producer, or a fixture built to exercise the gate, must still load -- and the refusal
+    // fixture in the corpus depends on exactly this.
+    CHECK_NOTHROW(from_string("KPUL0 1.2.0\nMIN_CONSUMER " + reader_version().str() +
+                              "\nVALUES none\n" + a2 + "END\n"));
+}
+
+TEST_CASE("a repeated preamble record is refused, not silently replaced",
+          "[program][serialize]") {
+    // Two STREAMS records with different dataflows leave the file holding two conflicting
+    // choices while LoadInfo reports one -- the last. That is the same self-contradiction
+    // shape as VALUES none beside VALUES_ROW, which this reader already refuses, so the
+    // rule is the general one: a preamble field appears at most once.
+    const std::string a2 = "OPERAND \"A\" rows=2 cols=2 tile_rows=2 tile_cols=2\n";
+    auto cause_of = [](const std::string& text) {
+        try {
+            from_string(text);
+        } catch (const FormatError& e) {
+            return e.cause();
+        }
+        FAIL("expected a FormatError");
+        return FormatError::Cause::Truncated;
+    };
+    REQUIRE(known_dataflows().size() >= 2);
+
+    CHECK(cause_of("KPUL0 1.2.0\nMIN_CONSUMER 1.2.0\nVALUES none\n"
+                   "STREAMS dataflow=\"" + known_dataflows()[0] + "\"\n"
+                   "STREAMS dataflow=\"" + known_dataflows()[1] + "\"\n" + a2 + "END\n") ==
+          FormatError::Cause::MalformedPreamble);
+
+    // Not special to STREAMS: a second PROGRAM would rename the program, a second VALUES
+    // would flip whether it carries inputs.
+    CHECK(cause_of("KPUL0 1.0.0\nMIN_CONSUMER 1.0.0\nPROGRAM \"one\"\nPROGRAM \"two\"\n"
+                   "VALUES none\n" + a2 + "END\n") == FormatError::Cause::MalformedPreamble);
+    CHECK(cause_of("KPUL0 1.0.0\nMIN_CONSUMER 1.0.0\nVALUES none\nVALUES none\n" + a2 +
+                   "END\n") == FormatError::Cause::MalformedPreamble);
+    CHECK(cause_of("KPUL0 1.0.0\nMIN_CONSUMER 1.0.0\nMIN_CONSUMER 1.0.0\nVALUES none\n" +
+                   a2 + "END\n") == FormatError::Cause::MalformedPreamble);
+
+    // A file written by this build must of course still load -- the rule catches malformed
+    // input, not our own output.
+    TileProgram prog("tiny");
+    prog.add_operand(TensorOperand("A", 2, 2, 2, 2));
+    WriteOptions opt;
+    opt.include_values = true;
+    opt.dataflow = known_dataflows().front();
+    CHECK_NOTHROW(from_string(to_string(prog, opt)));
 }

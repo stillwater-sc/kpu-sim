@@ -36,6 +36,7 @@
 #include <locale>
 #include <map>
 #include <ostream>
+#include <set>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -272,7 +273,24 @@ inline void write_l0(std::ostream& os, const TileProgram& prog, const WriteOptio
     // reproducible from a named map cannot be represented by this version. Nothing in the
     // repo produces one -- every StreamProgram comes from derive_matmul_streams(prog, map)
     // -- and the reader refuses an unknown dataflow name rather than guessing.
-    if (!opt.dataflow.empty()) os << "STREAMS dataflow=" << detail::quote(opt.dataflow) << "\n";
+    //
+    // VALIDATED HERE, not only on the way back in. read_l0 refuses an unknown dataflow, so
+    // a writer that accepted one would emit a file ITS OWN READER REJECTS -- and the caller
+    // would discover it on some other machine, from a file that is already the artifact.
+    // Aliases are deliberately NOT normalized: this layer knows the canonical names in
+    // known_dataflows() and nothing about anyone's command line, so accepting "ws" here
+    // would put alias knowledge in the format. The caller converts.
+    if (!opt.dataflow.empty()) {
+        if (!is_known_dataflow(opt.dataflow)) {
+            std::string known;
+            for (const std::string& k : known_dataflows())
+                known += (known.empty() ? "" : ", ") + k;
+            throw FormatError(FormatError::Cause::MalformedRecord,
+                              "l0: STREAMS: refusing to write unknown dataflow '" +
+                              opt.dataflow + "': the readable names are " + known);
+        }
+        os << "STREAMS dataflow=" << detail::quote(opt.dataflow) << "\n";
+    }
 
     for (const std::string& key : prog.operand_order()) {
         const TensorOperand& op = prog.operand(key);
@@ -546,6 +564,14 @@ inline TileProgram read_l0(std::istream& is, LoadInfo* info = nullptr) {
 
     std::string name, declared_dataflow;
     bool declares_values = false, saw_min_consumer = false, saw_end = false;
+    // RETAINED, not merely checked against this reader. What a file DEMANDS and what its
+    // contents NEED are two different things, and only the second is derivable here.
+    Version declared_min{0, 0, 0};
+    // A preamble field appears at most once. Without this a second record silently wins:
+    // two STREAMS records with different dataflows leave the file holding two conflicting
+    // choices while LoadInfo reports one, which is the same shape as every other
+    // self-contradiction this reader refuses.
+    std::set<std::string> seen_preamble;
     TileProgram prog;
     std::vector<TileOp> ops;
     std::vector<TensorOperand> operands;
@@ -562,6 +588,14 @@ inline TileProgram read_l0(std::istream& is, LoadInfo* info = nullptr) {
         std::map<std::string, std::string> f;
         const std::string kw = detail::split_fields(rec, f);
 
+        if (kw == "MIN_CONSUMER" || kw == "PROGRAM" || kw == "VALUES" || kw == "STREAMS" ||
+            kw == "OPSET" || kw == "PRODUCER") {
+            if (!seen_preamble.insert(kw).second)
+                throw FormatError(FormatError::Cause::MalformedPreamble,
+                                  "l0: " + kw + " appears more than once: a second record "
+                                  "would silently replace the first");
+        }
+
         if (kw == "MIN_CONSUMER") {
             // R4, the requirement with teeth: the FILE says which reader it needs,
             // and an older one refuses cleanly instead of mis-parsing.
@@ -573,6 +607,7 @@ inline TileProgram read_l0(std::istream& is, LoadInfo* info = nullptr) {
                 throw FormatError(FormatError::Cause::UnsupportedVersion,
                                   "l0: file requires a reader >= " + need.str() +
                                   "; this build is " + reader_version().str());
+            declared_min = need;
             saw_min_consumer = true;
         } else if (kw == "PROGRAM") {
             // The name is one quoted positional token. Routed through the same keyed
@@ -783,6 +818,25 @@ inline TileProgram read_l0(std::istream& is, LoadInfo* info = nullptr) {
                                       "\" is missing row " + std::to_string(r) +
                                       ": a partially valued program would compute a "
                                       "partial answer");
+    }
+
+    // THE DECLARATION MUST COVER THE CONTENT. A file carrying STREAMS while declaring
+    // MIN_CONSUMER 1.1.0 loads here and is ALSO accepted by a 1.1.0 reader, which skips the
+    // record and runs with no L1 timing at all -- reporting success for a run the file does
+    // not describe. The same argument applies to VALUES inline under 1.0.0, so the rule is
+    // the general one: what the content needs, the preamble must demand.
+    //
+    // One-directional on purpose: a file may demand MORE than its content needs (a
+    // conservative producer, or a fixture built to exercise the gate), and that costs
+    // nothing but readers.
+    {
+        const Version needed = min_consumer_for(declares_values, !declared_dataflow.empty());
+        if (!(needed <= declared_min))
+            throw FormatError(FormatError::Cause::MalformedPreamble,
+                              "l0: the file declares MIN_CONSUMER " + declared_min.str() +
+                              " but its records need " + needed.str() +
+                              ": a reader at the declared version would skip them and run "
+                              "something the file does not describe");
     }
 
     if (info) {
