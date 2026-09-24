@@ -183,9 +183,24 @@ lists. #286 renders this; it does not come for free with it.
    conserved for **every** process.
 
    **Station occupancy is deliberately absent.** How many tiles sit in L3, L2 or L1 at a
-   given cycle needs the residency *series*, which the executor does not emit — the first
-   gap #286 lists. The stepper reports lane occupancy and says so; calling lane occupancy
-   "station occupancy" would be the wrong kind of helpful.
+   given cycle needs the residency *series*, which the executor does not emit — a gap #286
+   lists. The stepper reports lane occupancy and says so; calling lane occupancy "station
+   occupancy" would be the wrong kind of helpful.
+
+   **A line per event does not create an understanding of concurrency, and this increment
+   does not claim it does.** The KPU is a parallel machine whose pipeline stages are
+   *spatially separated*, so events are concurrent across the pipeline and sequential at a
+   resource. A stream imposes one total order, and concurrency is the *absence* of order —
+   a sequence can only ever imply it. The `in-flight` count and lane tallies on each line
+   are summary statistics, not structure, and the record carries **no causality at all**:
+   `StepEvent` has no field naming the event that unblocked it, so nothing can distinguish
+   "these happened together" from "this happened *because* that finished".
+
+   What this increment does contribute is the right *shape*: the `StepEvent` stream is
+   separated from its rendering (`describe()` lives in the driver, not the cursor), so it
+   is a usable recording primitive. Turning it into a record with **spatial resource
+   addresses** — from #282's naming map, not a scheme invented here — plus causality edges,
+   and a viewer that lays resources out spatially and slices by resource, is **#286**.
 4. **Program from a file**, once #265 lands, so `--program foo.l0` is literal rather than
    a derivation spec.
 5. **Platform + L-T2**: `run_at` delegates to `VirtualPlatform` (#282) and gains the L-T2

@@ -33,9 +33,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   BlockMover can complete while a fresh feed's DMA leg is still running.
 
   **Station occupancy is deliberately absent.** How many tiles sit in L3, L2 or L1 at a
-  cycle needs the residency *series*, which the executor does not emit; that is the first
-  gap #286 lists. The stepper reports lane occupancy and says exactly that, because calling
-  lane occupancy "station occupancy" would be the wrong kind of helpful.
+  cycle needs the residency *series*, which the executor does not emit; that is a gap #286
+  lists. The stepper reports lane occupancy and says exactly that, because calling lane
+  occupancy "station occupancy" would be the wrong kind of helpful.
+
+  **And a line per event does not create an understanding of concurrency** — this is stated
+  because it would otherwise be assumed. The KPU's pipeline stages are *spatially
+  separated*, so events are concurrent across the pipeline and sequential at a resource; a
+  stream imposes one total order, and concurrency is the absence of order. The record also
+  carries **no causality**: nothing names the event that unblocked another. What this does
+  contribute is the right shape — the event stream is separated from its rendering, making
+  it a usable recording primitive. The spatial record (resource addresses from #282's
+  naming map) plus causality edges and a spatially organizing viewer are **#286**.
 
 - **`kpu-run` device knobs and `--timeline` (increment 2 of #285).** The per-process
   movement model is now reachable from the command line: `--dma-engines`,
