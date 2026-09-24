@@ -1,0 +1,7 @@
+{
+  "topology": "checkerboard", "compute_tiles": 16,
+  "dma":      { "engines": 4, "bytes_per_cycle": 64, "burst": 256 },
+  "l3":       { "tiles": 8, "banks": 8, "capacity_tiles": 32 },
+  "l2":       { "banks_per_tile": 8 }, "l1": { "vectors": 4 },
+  "movers":   { "block_movers": 4, "streamers": 4 }
+}

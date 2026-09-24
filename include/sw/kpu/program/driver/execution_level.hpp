@@ -20,6 +20,7 @@
 
 #include <sw/kpu/program/characterize/device_model.hpp>
 #include <sw/kpu/program/placement.hpp>
+#include <sw/kpu/program/platform/deployment_spec.hpp>
 #include <sw/kpu/program/stream/stream_signature.hpp>
 #include <sw/kpu/program/tile_program.hpp>
 #include <sw/kpu/program/tile_program_reference.hpp>
@@ -99,6 +100,64 @@ inline std::string not_implemented_reason(ExecutionLevel l) {
         default:
             return "";
     }
+}
+
+// ----------------------------------------------------------------------------
+// What a level does NOT model, out of what the deployment declared
+// ----------------------------------------------------------------------------
+// A DeploymentSpec is a superset of what any level schedules on (§3.3 belongs to L-T2),
+// so device_view() drops fields. Dropping them quietly is the failure this answers: a
+// spec that says `"l3": {"banks": 8}` and a run that schedules as though L3 had no banks
+// agree on nothing, and the report would not say so.
+//
+// It is the same statement as not_implemented_reason(), one layer down. That one keeps a
+// clean report from being mistaken for full coverage across LEVELS; this one keeps it from
+// being mistaken for full coverage of the MACHINE.
+//
+// The table says what the IMPLEMENTATION models, not what a level is supposed to model.
+// L-T2 rows therefore read false until #283 makes each one true as it implements it —
+// claiming otherwise would describe code that does not exist.
+inline bool level_models(ExecutionLevel l, platform::SpecField f) {
+    using platform::SpecField;
+    switch (f) {
+        case SpecField::L3Capacity:
+            // Enforced by TileTransactionExecutor (#264 increment 4) and by the
+            // cycle-accurate credit model; L-B has no buffers to bound.
+            return l == ExecutionLevel::BlockSequential ||
+                   l == ExecutionLevel::CycleAccurate;
+        case SpecField::L3Tiles:
+            // The MODULE count, which nothing schedules on yet -- it exists for the
+            // naming map (#282 increment 3). Not the capacity: see DeviceSpecification::L3.
+            return false;
+        case SpecField::L3Banks:
+        case SpecField::L2BanksPerTile:
+        case SpecField::L1Vectors:
+        case SpecField::DmaBurst:
+            return false;                        // §3.3 resource vocabulary -- #283
+    }
+    return false;
+}
+
+// One line per declared-but-unmodelled field, ready to print or to assert on. Returned
+// rather than logged, so the caller decides where it belongs -- a header line, the
+// provenance, or a test.
+//
+// Bandwidths are NOT listed at L-B even though it models no time at all: the outcome
+// already states "timing: not modelled at this level", and repeating it per field would
+// bury the resource-model fields this exists to surface.
+inline std::vector<std::string> unmodelled_fields(ExecutionLevel l,
+                                                  const platform::DeploymentSpec& spec,
+                                                  Dim device = 0) {
+    std::vector<std::string> out;
+    if (spec.devices.empty()) return out;
+    const platform::DeviceSpecification& d = spec.device(device);
+    for (platform::SpecField f : platform::all_spec_fields()) {
+        if (!platform::declared(d, f) || level_models(l, f)) continue;
+        out.push_back(std::string(platform::to_string(f)) + " declared (" +
+                      platform::declared_value(d, f) + ") but not modelled at " +
+                      short_name(l));
+    }
+    return out;
 }
 
 // ----------------------------------------------------------------------------

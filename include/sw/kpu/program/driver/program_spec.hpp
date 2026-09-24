@@ -17,6 +17,7 @@
 
 #include <sw/kpu/program/characterize/device_model.hpp>
 #include <sw/kpu/program/derive/lu_tile_program.hpp>
+#include <sw/kpu/program/platform/deployment_spec.hpp>
 #include <sw/kpu/program/derive/matmul_tile_program.hpp>
 #include <sw/kpu/program/stream/derive/matmul_streams.hpp>
 #include <sw/kpu/program/tile_program.hpp>
@@ -291,39 +292,56 @@ struct DeviceSpec {
     double pj_per_byte = 20.0;
 };
 
-inline bool known_topology(const std::string& t) {
-    return t == "single" || t == "news" || t == "checkerboard";
+// One spelling of the topology names, in the layer that owns the machine description.
+// Two copies drifted apart once already, which is the whole argument of this header.
+inline bool known_topology(const std::string& t) { return platform::known_topology_name(t); }
+
+// ---- the CLI builds a DEPLOYMENT, not a descriptor --------------------------
+// The flags are unchanged; what they produce is now the one machine description
+// (platform/deployment_spec.hpp), and the DeviceDescriptor the executors schedule on is
+// a VIEW of it. Building the descriptor directly here is what made the CLI a fifth
+// description of a device, and a fifth description is a fifth thing to disagree.
+//
+// DeviceSpec carries only what a flag can say. The §3.3 resource fields (L3 banks, L2
+// banks per compute tile, L1 vectors, DMA burst) are left ABSENT rather than defaulted,
+// because absent means "not declared" and a default is not a declaration -- see the
+// spec header. `--deploy` (increment 4) is how those get set.
+inline platform::DeploymentSpec make_deployment(const DeviceSpec& s) {
+    if (!known_topology(s.topology))
+        throw std::invalid_argument("unknown --topology '" + s.topology + "'");
+    platform::DeviceSpecification d;
+    d.name = "dev0";
+    d.topology = s.topology;
+    d.compute_tiles = s.compute_tiles;
+    d.macs_per_cycle = s.macs_per_cycle;
+    // `--l3-tiles` is a CAPACITY in tiles, which is what the credit model bounds -- not
+    // the number of L3 modules. The spec keeps those apart on purpose.
+    d.l3.capacity_tiles = s.l3_tiles;
+    d.dma.engines = s.dma_engines;
+    d.dma.bytes_per_cycle = s.dma_bytes_per_cycle;
+    d.movers.block_movers = s.block_movers;
+    d.movers.bm_bytes_per_cycle = s.bm_bytes_per_cycle;
+    d.movers.streamers = s.streamers;
+    d.movers.str_bytes_per_cycle = s.str_bytes_per_cycle;
+    d.movers.noc_links = s.noc_links;
+    d.movers.noc_bytes_per_cycle = s.noc_bytes_per_cycle;
+    d.analytical.bytes_per_cycle = s.bytes_per_cycle;
+    d.analytical.pj_per_mac = s.pj_per_mac;
+    d.analytical.pj_per_byte = s.pj_per_byte;
+
+    platform::DeploymentSpec spec;
+    spec.devices = {d};
+    // The flags can still describe an impossible machine (`--compute-tiles 0`), and the
+    // spec is where that is caught -- once, rather than once per tool.
+    const std::string bad = spec.validate();
+    if (!bad.empty()) throw std::invalid_argument(bad);
+    return spec;
 }
 
+// Kept as the one-line projection, because every existing caller wants the descriptor
+// and should not have to learn about deployments to get one.
 inline characterize::DeviceDescriptor make_device(const DeviceSpec& s) {
-    using characterize::DeviceDescriptor;
-    DeviceDescriptor d = DeviceDescriptor::single();
-    if (s.topology == "news") d = DeviceDescriptor::news();
-    else if (s.topology == "checkerboard") d = DeviceDescriptor::checkerboard(s.compute_tiles);
-    else if (!known_topology(s.topology))
-        throw std::invalid_argument("unknown --topology '" + s.topology + "'");
-
-    d.compute_tiles = s.compute_tiles;
-    // Aggregate lanes, for the analytical harness only (see DeviceDescriptor).
-    if (s.topology == "single") d.move_lanes = 1;
-    else if (s.topology == "news") d.move_lanes = 4;
-    else d.move_lanes = s.compute_tiles;
-
-    d.fabric_macs_per_cycle = s.macs_per_cycle;
-    d.bytes_per_cycle = s.bytes_per_cycle;
-    d.pj_per_mac = s.pj_per_mac;
-    d.pj_per_byte = s.pj_per_byte;
-    d.l3_tiles = s.l3_tiles;
-
-    d.dma_engines = s.dma_engines;
-    d.dma_bytes_per_cycle = s.dma_bytes_per_cycle;
-    d.block_movers = s.block_movers;
-    d.bm_bytes_per_cycle = s.bm_bytes_per_cycle;
-    d.streamers = s.streamers;
-    d.str_bytes_per_cycle = s.str_bytes_per_cycle;
-    d.noc_links = s.noc_links;
-    d.noc_bytes_per_cycle = s.noc_bytes_per_cycle;
-    return d;
+    return make_deployment(s).device_view();
 }
 
 } // namespace sw::kpu::program::driver
