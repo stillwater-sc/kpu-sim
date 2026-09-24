@@ -168,14 +168,25 @@ public:
             events_.push_back(done);
         }
 
-        // Order matters more than it looks. Within one cycle and one op: the fire precedes
-        // its first leg starting, a leg's finish precedes the NEXT leg's start (they share
-        // a cycle, which is what pipelining means), and the last finish precedes the op
-        // completing. Sorting by (cycle, op, leg, kind) gets all three, where sorting by
-        // cycle alone would interleave them arbitrarily and make a replay unreadable.
+        // Order matters more than it looks, and it has to MIRROR THE EXECUTOR rather than
+        // merely be self-consistent. At one cycle the executor processes completions first
+        // and only then fires ready ops, so within a cycle every RELEASE precedes every
+        // ACQUIRE — across ops, not just within one.
+        //
+        // Sorting by (cycle, op, leg, kind) alone got this wrong and the replay reported
+        // occupancy ABOVE CAPACITY: a lower-indexed op taking a lane sorted before a
+        // higher-indexed op giving one back at the same cycle, so the count incremented
+        // before it decremented. Measured on the DEFAULT one-lane-per-process device:
+        // 2 BlockMovers busy where the device has 1.
+        //
+        // Phase first fixes that and keeps the within-op guarantees, because a leg's finish
+        // is a release and the next leg's start is an acquire: the fire precedes its first
+        // leg, a leg's finish precedes the next leg's start (they share a cycle, which is
+        // what pipelining means), and the last finish precedes the op completing.
         std::stable_sort(events_.begin(), events_.end(),
                          [](const StepEvent& a, const StepEvent& b) {
             if (a.at != b.at) return a.at < b.at;
+            if (phase(a.kind) != phase(b.kind)) return phase(a.kind) < phase(b.kind);
             if (a.op_index != b.op_index) return a.op_index < b.op_index;
             if (a.leg != b.leg) return a.leg < b.leg;
             return rank(a.kind) < rank(b.kind);
@@ -207,6 +218,17 @@ public:
     std::size_t in_flight() const override { return in_flight_; }
 
 private:
+    // Releases before acquires, which is the order the executor itself uses.
+    static int phase(StepKind k) {
+        switch (k) {
+            case StepKind::HopFinished:
+            case StepKind::OpCompleted: return 0;      // gives a lane back
+            case StepKind::OpFired:
+            case StepKind::HopStarted:
+            case StepKind::OpApplied:   return 1;      // takes one
+        }
+        return 1;
+    }
     static int rank(StepKind k) {
         switch (k) {
             case StepKind::OpFired:     return 0;

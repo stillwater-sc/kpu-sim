@@ -22,12 +22,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   whole program, so "pausing it" would be a different executor. Values therefore cannot be
   inspected mid-replay at L-T1, and the tool says which mechanism it used.
 
-  What makes a replay readable is the ordering, and it is asserted: a fire precedes its
-  first leg, a leg's end precedes the next leg's start (they share a cycle — that is what
-  pipelining *is*), every leg closes before its op completes, and cycles never run
-  backwards. Lane occupancy per movement process is tracked and **conserved**: every lane
-  taken is given back, so the count returns to zero, and it never exceeds what the device
-  has. The stream shows cross-process concurrency directly — a reuse feed entering at the
+  What makes a replay readable is the ordering, and it has to **mirror the executor** rather
+  than merely be self-consistent: at one cycle the executor processes completions first and
+  only then fires ready ops, so within a cycle every *release* precedes every *acquire* —
+  **across** ops, not only within one. Asserted, along with a fire preceding its first leg,
+  a leg's end preceding the next leg's start (they share a cycle — that is what pipelining
+  *is*), every leg closing before its op completes, cycles never running backwards, and lane
+  occupancy conserved for **every** process: every lane taken is given back, the count
+  returns to zero, and it never exceeds what the device has. The stream shows cross-process concurrency directly — a reuse feed entering at the
   BlockMover can complete while a fresh feed's DMA leg is still running.
 
   **Station occupancy is deliberately absent.** How many tiles sit in L3, L2 or L1 at a

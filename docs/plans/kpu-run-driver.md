@@ -172,11 +172,15 @@ lists. #286 renders this; it does not come for free with it.
    L-T1 cursor a projection of data the executor already produces, and that is exactly
    what it is. The consequence worth stating: values cannot be inspected mid-replay.
 
-   Ordering is the part that makes a replay readable, and it is asserted: a fire precedes
-   its first leg, a leg's end precedes the next leg's start (they share a cycle — that is
-   what pipelining means), every leg closes before the op completes, and cycles never go
-   backwards. Lane occupancy per process is tracked and conserved — every lane taken is
-   given back, so the count returns to zero.
+   Ordering is the part that makes a replay readable, and it must **mirror the executor**
+   rather than merely be self-consistent: at one cycle the executor processes completions
+   first and only then fires ready ops, so within a cycle every *release* precedes every
+   *acquire* — across ops, not just within one. Getting that wrong made the replay report
+   occupancy **above capacity** (2 BlockMovers busy on a one-mover device), because a lower-
+   indexed op's acquire sorted ahead of a higher-indexed op's release. Asserted now, along
+   with a fire preceding its first leg, a leg's end preceding the next leg's start, every leg
+   closing before its op completes, cycles never running backwards, and lane occupancy
+   conserved for **every** process.
 
    **Station occupancy is deliberately absent.** How many tiles sit in L3, L2 or L1 at a
    given cycle needs the residency *series*, which the executor does not emit — the first

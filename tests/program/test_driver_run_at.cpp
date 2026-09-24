@@ -491,21 +491,71 @@ TEST_CASE("lane occupancy is conserved across a replay", "[program][driver][step
     const auto out = run_at(ExecutionLevel::BlockSequential, p, device,
                             Placement::single(device.compute_tiles));
 
+    auto lanes_of = [&](Mover m) -> Dim {
+        switch (m) {
+            case Mover::Dma:        return device.dma_engines;
+            case Mover::BlockMover: return device.block_movers;
+            case Mover::Streamer:   return device.streamers;
+            case Mover::Noc:        return device.noc_links;
+        }
+        return 0;
+    };
     BlockSequentialStepper cur(out.timeline);
     std::size_t peak_dma = 0;
     while (cur.step()) {
+        // EVERY process, not just the DMA. An earlier version of this test checked only
+        // Mover::Dma and therefore missed a real over-capacity report on the BlockMover:
+        // the replay incremented a lane count before decrementing it, because it ordered a
+        // lower-indexed op's acquire ahead of a higher-indexed op's release at the same
+        // cycle. A conservation test that examines one resource is not a conservation test.
         for (const auto& kv : cur.lanes_busy()) {
-            // Never more lanes busy than the device has.
-            const Dim have = device.dma_engines;
-            if (kv.first == Mover::Dma) {
-                CHECK(kv.second <= have);
-                peak_dma = std::max(peak_dma, kv.second);
-            }
+            const Dim have = lanes_of(kv.first);
+            if (have) CHECK(kv.second <= have);
+            if (kv.first == Mover::Dma) peak_dma = std::max(peak_dma, kv.second);
         }
     }
     CHECK(peak_dma > 0);
     for (const auto& kv : cur.lanes_busy()) CHECK(kv.second == 0);
     CHECK(cur.in_flight() == 0);
+}
+
+TEST_CASE("a replay never reports more lanes busy than the device has",
+          "[program][driver][step]") {
+    // The default device has ONE lane per process, which is where the ordering bug showed:
+    // a release and an acquire at the same cycle, across two ops. Sweeping the tight
+    // configurations is the point -- generous ones hide it.
+    for (const char* algo : {"matmul", "lu"}) {
+        for (Dim engines : {Dim(1), Dim(2)}) {
+            ProgramSpec ps;
+            ps.algo = algo;
+            ps.size = 48;
+            ps.tile = 16;
+            DeviceSpec ds;
+            ds.dma_engines = engines;
+            ds.block_movers = 1;          // deliberately the scarcest
+            ds.streamers = 1;
+            const auto device = make_device(ds);
+            TileProgram p = derive(ps);
+            fill(p, ps);
+            const auto out = run_at(ExecutionLevel::BlockSequential, p, device,
+                                    Placement::single(device.compute_tiles));
+            BlockSequentialStepper cur(out.timeline);
+            std::size_t peak_bm = 0;
+            while (cur.step()) {
+                const auto& busy = cur.lanes_busy();
+                auto it = busy.find(Mover::BlockMover);
+                if (it != busy.end()) {
+                    CHECK(it->second <= device.block_movers);
+                    peak_bm = std::max(peak_bm, it->second);
+                }
+                auto dma = busy.find(Mover::Dma);
+                if (dma != busy.end()) CHECK(dma->second <= device.dma_engines);
+                auto str = busy.find(Mover::Streamer);
+                if (str != busy.end()) CHECK(str->second <= device.streamers);
+            }
+            CHECK(peak_bm > 0);                     // the BlockMover really was used
+        }
+    }
 }
 
 TEST_CASE("a level with no interpreter has no stepper either",
