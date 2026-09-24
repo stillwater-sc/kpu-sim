@@ -21,6 +21,7 @@
 #include <sw/kpu/program/driver/timeline_trace.hpp>
 #include <sw/trace/trace_exporter.hpp>
 
+#include <cmath>
 #include <cstring>
 #include <fstream>
 #include <iomanip>
@@ -50,8 +51,11 @@ bool parse_rate(const std::vector<std::string>& a, const char* key, double fallb
             error = std::string(key) + ": '" + raw + "' has trailing characters";
             return false;
         }
-        if (!(v > 0.0)) {
-            error = std::string(key) + ": '" + raw + "' must be positive";
+        // FINITE, not merely positive: std::stod parses "inf", and an infinite bandwidth
+        // is not a fast machine -- it is a makespan of 0 or a NaN reported as a result.
+        // The deployment refuses it too, but the flag's own name belongs in the message.
+        if (!std::isfinite(v) || !(v > 0.0)) {
+            error = std::string(key) + ": '" + raw + "' must be finite and positive";
             return false;
         }
         out = v;

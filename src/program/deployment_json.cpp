@@ -236,9 +236,14 @@ std::string to_json(const DeploymentSpec& spec) {
     json devices = json::array();
     for (const DeviceSpecification& d : spec.devices) devices.push_back(write_device(d));
     root["devices"] = devices;
-    // Ordered output: nlohmann's default json keeps keys sorted, so the canonical bytes do
-    // not depend on insertion order above. Two spaces and a trailing newline make a spec
-    // file reviewable in a diff, which is the same reason the L0 format is text.
+    // THE CANONICAL BYTES DEPEND ON INSERTION ORDER, because `json` is ordered_json (see
+    // above). Reordering an assignment in write_device() therefore changes every
+    // deployment_digest -- it is a format change, not a cosmetic one, and the checked-in
+    // fixture in tests/program/deploy is what makes that visible instead of silent.
+    //
+    // An earlier version of this comment claimed the opposite, left over from the sorted
+    // default. Two spaces and a trailing newline make a spec file reviewable in a diff,
+    // which is the same reason the L0 format is text.
     return root.dump(2) + "\n";
 }
 

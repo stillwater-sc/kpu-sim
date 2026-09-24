@@ -39,6 +39,7 @@
 #include <sw/kpu/program/characterize/device_model.hpp>
 #include <sw/kpu/program/platform/digest.hpp>
 
+#include <cmath>
 #include <optional>
 #include <string>
 #include <vector>
@@ -146,6 +147,14 @@ inline bool known_topology_name(const std::string& t) {
     return t == "single" || t == "news" || t == "checkerboard";
 }
 
+// Every double in a spec has to survive the JSON round trip, and a non-finite one does not:
+// it serializes as `null`. So "finite" is a representability requirement, not a taste.
+inline bool finite_positive(double v) { return std::isfinite(v) && v > 0.0; }
+inline bool finite_non_negative(double v) { return std::isfinite(v) && v >= 0.0; }
+
+inline constexpr const char* kFinitePos = " must be finite and positive";
+inline constexpr const char* kFiniteNonNeg = " must be finite and non-negative";
+
 inline std::string DeploymentSpec::validate() const {
     if (devices.empty()) return "a deployment needs at least one device";
     for (std::size_t i = 0; i < devices.size(); ++i) {
@@ -163,20 +172,37 @@ inline std::string DeploymentSpec::validate() const {
                    "' (single | news | checkerboard)";
         if (d.compute_tiles == 0) return where + ": compute_tiles must be non-zero";
         if (d.element_bytes == 0) return where + ": element_bytes must be non-zero";
-        if (!(d.macs_per_cycle > 0.0)) return where + ": macs_per_cycle must be positive";
+        // FINITE, not merely positive. `!(x > 0.0)` lets +inf through, and an infinite
+        // bandwidth is not a fast machine -- it is a makespan of 0 or a NaN, reported as
+        // a result. It is reachable: std::stod parses "inf", so `--dma-bytes-per-cycle inf`
+        // reached this check and passed it.
+        //
+        // It also broke the round-trip the digest depends on, which is the worse half:
+        // nlohmann writes a non-finite double as JSON `null`, and null is not a number, so
+        // a spec this function ACCEPTED could serialize to bytes it then REFUSED to read
+        // back. A validator that admits values the format cannot represent is not a
+        // validator.
+        if (!finite_positive(d.macs_per_cycle)) return where + ": macs_per_cycle" + kFinitePos;
         if (d.dma.engines == 0) return where + ": dma.engines must be non-zero";
-        if (!(d.dma.bytes_per_cycle > 0.0))
-            return where + ": dma.bytes_per_cycle must be positive";
+        if (!finite_positive(d.dma.bytes_per_cycle))
+            return where + ": dma.bytes_per_cycle" + kFinitePos;
         if (d.movers.block_movers == 0) return where + ": movers.block_movers must be non-zero";
-        if (!(d.movers.bm_bytes_per_cycle > 0.0))
-            return where + ": movers.bm_bytes_per_cycle must be positive";
+        if (!finite_positive(d.movers.bm_bytes_per_cycle))
+            return where + ": movers.bm_bytes_per_cycle" + kFinitePos;
         if (d.movers.streamers == 0) return where + ": movers.streamers must be non-zero";
-        if (!(d.movers.str_bytes_per_cycle > 0.0))
-            return where + ": movers.str_bytes_per_cycle must be positive";
-        if (!(d.movers.noc_bytes_per_cycle > 0.0))
-            return where + ": movers.noc_bytes_per_cycle must be positive";
-        if (!(d.analytical.bytes_per_cycle > 0.0))
-            return where + ": analytical.bytes_per_cycle must be positive";
+        if (!finite_positive(d.movers.str_bytes_per_cycle))
+            return where + ": movers.str_bytes_per_cycle" + kFinitePos;
+        if (!finite_positive(d.movers.noc_bytes_per_cycle))
+            return where + ": movers.noc_bytes_per_cycle" + kFinitePos;
+        if (!finite_positive(d.analytical.bytes_per_cycle))
+            return where + ": analytical.bytes_per_cycle" + kFinitePos;
+        // The ENERGY coefficients were not validated at all. Zero is a legitimate modelling
+        // choice -- "ignore compute energy" -- so they are finite and non-negative rather
+        // than positive.
+        if (!finite_non_negative(d.analytical.pj_per_mac))
+            return where + ": analytical.pj_per_mac" + kFiniteNonNeg;
+        if (!finite_non_negative(d.analytical.pj_per_byte))
+            return where + ": analytical.pj_per_byte" + kFiniteNonNeg;
         // Zero is legal for the optional counts only in the sense that declaring zero
         // of a resource is a statement; a zero BANK count is not, since a memory with
         // no banks cannot hold anything.

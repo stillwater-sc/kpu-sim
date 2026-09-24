@@ -16,7 +16,9 @@
 #include <sw/kpu/program/driver/program_spec.hpp>
 #include <sw/kpu/program/platform/deployment_json.hpp>
 
+#include <cmath>
 #include <fstream>
+#include <limits>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -366,4 +368,100 @@ TEST_CASE("the digest tracks the spec, not the spelling", "[program][platform][d
     CHECK(deployment_digest(base) != deployment_digest(banked));
 
     CHECK(deployment_digest(base).size() == 16);
+}
+
+// ----------------------------------------------------------------------------
+// Review of #302
+// ----------------------------------------------------------------------------
+TEST_CASE("a non-finite number is not a fast machine", "[program][platform][deploy]") {
+    // `!(x > 0.0)` lets +inf through, and it is REACHABLE: std::stod parses "inf", so
+    // `--dma-bytes-per-cycle inf` reached the old check and passed it. An infinite
+    // bandwidth is a makespan of 0 or a NaN, reported as a result.
+    const double inf = std::numeric_limits<double>::infinity();
+    const double nan = std::numeric_limits<double>::quiet_NaN();
+
+    for (double bad : {inf, -inf, nan}) {
+        DeploymentSpec spec;
+        spec.device(0).dma.bytes_per_cycle = bad;
+        CHECK_FALSE(spec.validate().empty());
+
+        DeploymentSpec macs;
+        macs.device(0).macs_per_cycle = bad;
+        CHECK_FALSE(macs.validate().empty());
+
+        DeploymentSpec bm;
+        bm.device(0).movers.bm_bytes_per_cycle = bad;
+        CHECK_FALSE(bm.validate().empty());
+
+        DeploymentSpec str;
+        str.device(0).movers.str_bytes_per_cycle = bad;
+        CHECK_FALSE(str.validate().empty());
+
+        DeploymentSpec noc;
+        noc.device(0).movers.noc_bytes_per_cycle = bad;
+        CHECK_FALSE(noc.validate().empty());
+
+        DeploymentSpec an;
+        an.device(0).analytical.bytes_per_cycle = bad;
+        CHECK_FALSE(an.validate().empty());
+
+        // The energy coefficients were not validated AT ALL.
+        DeploymentSpec mac_energy;
+        mac_energy.device(0).analytical.pj_per_mac = bad;
+        CHECK_FALSE(mac_energy.validate().empty());
+
+        DeploymentSpec byte_energy;
+        byte_energy.device(0).analytical.pj_per_byte = bad;
+        CHECK_FALSE(byte_energy.validate().empty());
+    }
+
+    // Zero energy is a legitimate modelling choice -- "ignore compute energy" -- so the
+    // coefficients are finite and NON-NEGATIVE rather than positive. A negative one is not.
+    DeploymentSpec free_compute;
+    free_compute.device(0).analytical.pj_per_mac = 0.0;
+    free_compute.device(0).analytical.pj_per_byte = 0.0;
+    CHECK(free_compute.validate().empty());
+
+    DeploymentSpec negative;
+    negative.device(0).analytical.pj_per_mac = -1.0;
+    CHECK_FALSE(negative.validate().empty());
+}
+
+TEST_CASE("anything validate() accepts can be written and read back",
+          "[program][platform][deploy]") {
+    // THE PROPERTY THE NON-FINITE CHECK REALLY PROTECTS. nlohmann writes a non-finite
+    // double as JSON `null`, and null is not a number -- so a spec that validate() accepted
+    // could serialize to bytes from_json() then REFUSED. A validator that admits values the
+    // format cannot represent is not a validator, and the digest that keys a cache would be
+    // taken over bytes nobody can load.
+    const double inf = std::numeric_limits<double>::infinity();
+    DeploymentSpec poisoned;
+    poisoned.device(0).dma.bytes_per_cycle = inf;
+    REQUIRE_FALSE(poisoned.validate().empty());          // refused, so it never gets written
+    CHECK(to_json(poisoned).find("null") != std::string::npos);   // and this is why
+
+    // Every spec this file builds and accepts survives the round trip.
+    for (const DeploymentSpec& spec : {DeploymentSpec{}, rich_spec()}) {
+        REQUIRE(spec.validate().empty());
+        CHECK_NOTHROW(from_json(to_json(spec)));
+    }
+}
+
+TEST_CASE("the canonical key order is part of the format",
+          "[program][platform][deploy]") {
+    // The output is ordered_json, so the bytes depend on the order write_device() assigns
+    // in -- reordering an assignment changes every deployment_digest. That makes the order
+    // a format decision, so it is asserted rather than left to whoever edits next. The
+    // checked-in fixture would also catch it; this says WHY it failed.
+    const std::string text = to_json(DeploymentSpec{});
+    const std::size_t name = text.find("\"name\"");
+    const std::size_t topology = text.find("\"topology\"");
+    const std::size_t compute = text.find("\"compute_tiles\"");
+    const std::size_t dma = text.find("\"dma\"");
+    const std::size_t analytical = text.find("\"analytical\"");
+    REQUIRE(name != std::string::npos);
+    CHECK(name < topology);
+    CHECK(topology < compute);
+    CHECK(compute < dma);
+    CHECK(dma < analytical);
 }

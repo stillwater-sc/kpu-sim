@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **A non-finite bandwidth was accepted as a machine (#302 review).** `!(x > 0.0)` lets `+inf`
+  through and `std::stod` parses `"inf"`, so `--dma-bytes-per-cycle inf` validated — an
+  infinite bandwidth being a makespan of 0 or a NaN reported as a result. The worse half was
+  not the reported one: nlohmann writes a non-finite double as JSON `null`, so a spec
+  `validate()` **accepted** could serialize to bytes `from_json()` **refused**, violating the
+  round-trip invariant the deployment digest depends on with values the validator itself
+  admitted. Every double is now finite-checked, `analytical.pj_per_mac` / `pj_per_byte` are
+  validated at all (finite and non-negative, since zero energy is a legitimate modelling
+  choice), the flag reports the problem under its own name, and the property is asserted
+  directly: anything `validate()` accepts can be written and read back.
+
 ### Added
 
 - **A deployment is data: one machine description, JSON at its edge (#282 increment 1).**

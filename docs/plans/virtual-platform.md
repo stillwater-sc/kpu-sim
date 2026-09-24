@@ -182,6 +182,19 @@ real implementation appears, and that is when the shape of the interface is know
    A **refactor guard** pins every field of `make_device()` across all three topologies.
    Every timing number in the repo depends on them, so a field shifted by the indirection
    would move calibration and makespans everywhere while every other test still passed.
+
+   **Review found a hole in the validation, and the interesting half was not the one
+   reported.** `!(x > 0.0)` accepts `+inf`, and `std::stod` parses `"inf"`, so
+   `--dma-bytes-per-cycle inf` passed — an infinite bandwidth being a makespan of 0 or a NaN
+   reported as a result. But nlohmann writes a non-finite double as JSON `null`, so a spec
+   `validate()` **accepted** could serialize to bytes `from_json()` **refused**: the
+   round-trip invariant the digest depends on was violated by values the validator itself
+   admitted, and a cache key would have been taken over bytes nobody can load. A validator
+   that admits values the format cannot represent is not a validator. Every double is
+   finite-checked now, `analytical.pj_per_mac` / `pj_per_byte` are validated at all (finite
+   and non-negative — zero energy is a legitimate modelling choice, a negative one is not),
+   the flag reports it under its own name, and the property is asserted directly rather than
+   implied: **anything `validate()` accepts can be written and read back.**
 2. **`VirtualPlatform` with state.** `load_program`, `snapshot`, `restore`,
    `run(handle, level, const StateSnapshot&)` restoring **first**, and the coverage-tagged
    digest of §3. Tests: two runs with the same four inputs agree on the bytes; a second run
