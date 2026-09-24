@@ -19,13 +19,33 @@ post-execution snapshot would have overwritten the input it was supposed to pres
 
 ## How CI uses them
 
-`test_l0_corpus` loads each `<case>.l0`, executes it at every implemented level, and
-compares **every operand** against `<case>.result.l0`. It also re-serializes both files and
-requires the output to be **byte-identical** to what is checked in.
+`test_l0_corpus` makes **two separate claims**, and keeping them apart matters because they
+fail for different reasons:
 
-That byte-stability check is deliberate and will fail on any format change — which is the
-point. It is not a nuisance to route around: the checked-in files are the evidence that old
-files still work.
+| Claim | Scope | Strictness |
+|---|---|---|
+| the recorded answer is still the answer | **cross-machine** | within tolerance (`atol 1e-5`, `rtol 1e-4`) |
+| executing a corpus file equals executing a fresh derivation | **same machine** | **bit-identical** |
+| re-serializing a corpus file reproduces it | any | **byte-identical** |
+
+**Why the recorded answers are not compared bit-exactly.** This project builds Release with
+`-march=native -mtune=native`, so instruction selection — FMA contraction, vectorisation
+width, reduction order — follows the *host CPU*. Two machines compute different last bits for
+the same program, and no checked-in file can promise otherwise.
+
+The first version of this corpus did compare bit-exactly and passed locally, which was luck
+rather than evidence: `fill_matmul` produces exact quarter-integers, so matmul's arithmetic
+stays exactly representable whatever the compiler emits. Tile LU divides, its intermediates
+are not representable, and **CI failed on LU alone** — on both levels identically, which is
+what distinguishes a machine difference from a model disagreement.
+
+The tolerance still has teeth: perturbing one recorded element by 50% fails the check by four
+orders of magnitude. It catches an op that starts computing something else, which is what a
+golden output is for; it does not pretend to catch a differing last bit.
+
+The byte-stability check *is* exact and will fail on any format change — which is the point.
+It is not a nuisance to route around: the checked-in files are the evidence that old files
+still load.
 
 ## The bytes are the evidence
 

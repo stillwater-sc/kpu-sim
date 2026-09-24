@@ -21,6 +21,7 @@
 #include <sw/kpu/program/driver/program_spec.hpp>
 #include <sw/kpu/program/serialize/l0_format.hpp>
 
+#include <cmath>
 #include <cstring>
 #include <fstream>
 #include <sstream>
@@ -66,11 +67,60 @@ const std::vector<Case>& cases() {
 
 } // namespace
 
+// The recorded answers are compared WITHIN A TOLERANCE, not bit-exactly, and the reason is
+// specific rather than defensive: this project builds Release with `-march=native
+// -mtune=native`, so instruction selection -- FMA contraction, vectorisation width,
+// reduction order -- follows the HOST CPU. Two machines therefore compute different last
+// bits for the same program, and no checked-in file can promise otherwise.
+//
+// The first version of this corpus compared bit-exactly and passed locally, which was luck
+// rather than evidence: fill_matmul produces exact quarter-integers, so matmul's arithmetic
+// stays exactly representable whatever the compiler emits. Tile LU divides, its
+// intermediates are not representable, and CI failed on LU alone -- on both levels
+// identically, which is what distinguishes a machine difference from a model disagreement.
+//
+// So the corpus makes TWO SEPARATE claims, and conflating them is what produced the
+// overclaim:
+//   - CROSS-MACHINE: the recorded answer is still the answer, within tolerance. This
+//     catches an op that starts computing something else.
+//   - SAME-MACHINE: executing the corpus file is BIT-IDENTICAL to executing a freshly
+//     derived program. This catches executor and derivation drift, where bit-exactness is
+//     genuinely promised.
+namespace {
+
+// Chosen for cross-machine FP variation in a float accumulation, not borrowed from the
+// L-CA timing band: a differing last bit amplified through a 64-wide factorisation is
+// still small in relative terms, while a wrong kernel is not.
+constexpr double kAtol = 1e-5;
+constexpr double kRtol = 1e-4;
+
+bool close_enough(const std::vector<float>& got, const std::vector<float>& want,
+                  std::string& why) {
+    if (got.size() != want.size()) {
+        why = "size " + std::to_string(got.size()) + " vs " + std::to_string(want.size());
+        return false;
+    }
+    for (std::size_t i = 0; i < got.size(); ++i) {
+        const double a = got[i], b = want[i];
+        if (std::isnan(a) && std::isnan(b)) continue;
+        const double tol = kAtol + kRtol * std::abs(b);
+        if (!(std::abs(a - b) <= tol)) {
+            std::ostringstream ss;
+            ss << "element " << i << ": got " << a << ", expected " << b
+               << " (tolerance " << tol << ")";
+            why = ss.str();
+            return false;
+        }
+    }
+    return true;
+}
+
+} // namespace
+
 TEST_CASE("every corpus program loads and computes its recorded answer",
           "[program][serialize][corpus]") {
-    // The claim the corpus exists to defend: a file written earlier still executes to the
-    // same values today. Two files per case, because LU factors A IN PLACE -- a single
-    // post-execution snapshot would have overwritten the input it was meant to preserve.
+    // Two files per case, because LU factors A IN PLACE -- a single post-execution snapshot
+    // would have overwritten the input it was meant to preserve.
     for (const Case& c : cases()) {
         const std::string input_path = std::string(kCorpus) + c.input;
         const std::string expected_path = std::string(kCorpus) + c.expected;
@@ -91,9 +141,47 @@ TEST_CASE("every corpus program loads and computes its recorded answer",
             run_at(level, prog, device, Placement::single(device.compute_tiles));
 
             for (const std::string& key : expected.operand_order()) {
-                INFO(std::string(c.name) + " at " + short_name(level) + ", operand " + key);
                 REQUIRE(prog.has_operand(key));
-                CHECK(bits_equal(prog.operand(key).values, expected.operand(key).values));
+                std::string why;
+                const bool ok = close_enough(prog.operand(key).values,
+                                             expected.operand(key).values, why);
+                INFO(std::string(c.name) + " at " + short_name(level) + ", operand " + key
+                     << ": " << why);
+                CHECK(ok);
+            }
+        }
+    }
+}
+
+TEST_CASE("executing a corpus file is bit-identical to executing a fresh derivation",
+          "[program][serialize][corpus]") {
+    // Where bit-exactness IS promised: one machine, one build, two routes to the same
+    // program. This is the check that catches executor or derivation drift, and it is kept
+    // separate from the recorded-answer comparison because the two fail for different
+    // reasons and conflating them hides which one moved.
+    struct Spec { const char* file; const char* algo; Dim size; Dim tile; };
+    const std::vector<Spec> specs = {
+        {"matmul_48x48x48_t16.l0", "matmul", 48, 16},
+        {"lu_64_t16.l0",           "lu",     64, 16},
+    };
+    for (const Spec& sp : specs) {
+        ProgramSpec ps;
+        ps.algo = sp.algo;
+        ps.size = sp.size;
+        ps.tile = sp.tile;
+        const DeviceSpec ds;
+        const auto device = make_device(ds);
+
+        for (ExecutionLevel level : all_levels()) {
+            if (!level_implemented(level)) continue;
+            TileProgram from_file = from_string(read_file(std::string(kCorpus) + sp.file));
+            TileProgram fresh = derive(ps);
+            fill(fresh, ps);
+            run_at(level, from_file, device, Placement::single(device.compute_tiles));
+            run_at(level, fresh, device, Placement::single(device.compute_tiles));
+            for (const std::string& key : fresh.operand_order()) {
+                INFO(std::string(sp.file) + " at " + short_name(level) + ", operand " + key);
+                CHECK(bits_equal(from_file.operand(key).values, fresh.operand(key).values));
             }
         }
     }

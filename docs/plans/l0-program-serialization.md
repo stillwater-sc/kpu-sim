@@ -160,6 +160,15 @@ attention value is `-inf`, and this repo does softmax and attention work.
    **every operand** against the expected file. No `fill()` call appears in the test: a
    corpus entry has to be self-contained or it is not evidence.
 
+   **The recorded answers are compared within a tolerance, not bit-exactly**, and the reason
+   is specific: Release builds with `-march=native -mtune=native`, so instruction selection
+   follows the host CPU and two machines differ in the last bits. The first version compared
+   bit-exactly and passed locally — which was luck, not evidence, because `fill_matmul`
+   produces exact quarter-integers and matmul's arithmetic stays exactly representable. LU
+   divides, and CI failed on LU alone, identically at both levels, which is what
+   distinguishes a machine difference from a model disagreement. Bit-exactness is asserted
+   where it is genuinely promised: **same machine**, corpus file versus fresh derivation.
+
    Three further checks, each answering a different question:
 
    - **byte-stable re-serialization**. Deliberately strict, and it will fail on any format
