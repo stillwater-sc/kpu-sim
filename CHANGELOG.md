@@ -9,6 +9,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The L0 portable program can be written to a file and read back (#265 increment 1).**
+  `serialize/l0_format.hpp` serializes a `TileProgram` — the operand registry with logical
+  *and* tile shapes, so ragged trailing tiles are recoverable, and the op list with declared
+  tile I/O, `alpha`, port kind and port, pivot slot and label. ADR 0001 D1 makes L0 the
+  portable program, so this is the format that has to survive; until now every program the
+  simulator ran was one the simulator wrote.
+
+  The test is not that it parses but that it is **portable**: the reloaded program is
+  asserted to execute **bit-identically at both L-B and L-T1**, with matching makespan and,
+  for LU, matching swap count and row permutation. Structural equality alone would not be
+  enough — a silently dropped field leaves two programs that look alike and compute
+  differently.
+
+  **Text, line-oriented**, deliberately: L0 files are op lists rather than weights, so being
+  greppable, diffable and reviewable in a pull request is worth more than parse speed for a
+  format whose consumer then runs a far longer simulation — and a golden corpus whose rot
+  shows in a diff cannot rot quietly, which is exactly how `kernels/bin/*.kpubin` died
+  (opcodes renumbered with no version bump; those files now abort with `std::get: wrong index
+  for variant`). Op fields are **keyed** rather than positional, so a new optional attribute
+  is a new key old readers ignore and no existing field moves.
+
+  Three version axes (R1/R3): container format, op set, and producer — the last carrying the
+  **build** version, since reusing the format version there would make the field useless for
+  what R4's `bad_producers` list needs it for. Refusals carry a cause, so a caller can
+  distinguish "not for me" from "broken" without parsing a message: a newer major format, a
+  `MIN_CONSUMER` this reader cannot satisfy, an unknown op, a missing required field, a
+  missing `MIN_CONSUMER`, and a file that ends before `END` are each refused with a
+  diagnostic. An unknown **optional** field is ignored, so a minor producer bump stays
+  readable (R8, both halves). Values are increment 2, and `VALUES none` says so in the file —
+  a program with values is a test case, one without is a kernel, and inferring that from
+  zeros is not telling.
+
 - **`kpu-run --step`: single-stepping at each level's own granularity (increment 3 of
   #285).** One step is one transaction *at that level* — at L-B one `TileOp` applied, at
   L-T1 an op firing, a hop starting or finishing, or an op completing. `--step-limit n`
