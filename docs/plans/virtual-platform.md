@@ -227,9 +227,41 @@ real implementation appears, and that is when the shape of the interface is know
    A `ProgramHandle` is strongly typed and not default-usable: a bare `std::size_t` would let
    an uninitialised value index a program, and the failure would be a run of the **wrong
    program** reporting success.
-3. **The naming map**, identity only, over a two-device deployment: parse, format, and
-   `exists()`, with a declared-resource sweep asserting that the map's domain is exactly the
-   deployment's.
+3. **The naming map** — **done.** `ResourceName`, `format`/`parse_resource_name`,
+   `ResourceMap{exists, index_of, enumerate, why_not, require}`, identity only.
+
+   **A name carries a PATH, not an instance number.** L2 banks and L1 vectors are per
+   *compute tile* and L3 banks are per L3 module, so an address is `dev/cf[2]/l2[3]`, not a
+   flattened `(kind, instance)` pair. Flattening would have to fold two indices into one and
+   lose the structure — the same class of error as conflating `l3.tiles` with
+   `l3.capacity_tiles`, where the wrong number looks entirely plausible. The issue's own
+   definition of done forces this: an L2 bank cannot be addressed without its compute tile.
+
+   **Devices are addressed by name, not by index**, since a positional address would move
+   silently when a deployment is reordered. That made the device name part of the grammar, so
+   `validate()` now refuses a name containing `/[]+` — a device nothing can address is a
+   device the backdoor cannot reach, and learning that at the first backdoor write is far
+   worse than learning it at deployment.
+
+   **The map's domain is exactly what the deployment declares.** An undeclared `l3.banks`
+   means this machine's bank structure is unspecified, so `dev0/l3[0]/bank[0]` names nothing
+   and does not resolve — and declaring one level does not imply the next: L3 modules can
+   exist while banks remain unaddressable. `why_not()` distinguishes **undeclared** from
+   **out of range**, because those are different problems with different fixes and collapsing
+   them sends the reader to the wrong one.
+
+   Two resources are declared by *inference* rather than by a field, and the inference is
+   stated where it is made: a device's **DRAM**, because `validate()` requires at least one
+   DMA engine and a DMA moves DRAM↔L3, so engines with no DRAM side would have nothing to
+   read; and a compute tile's **register file**, because the fabric cannot hold an operand
+   without one. Neither has a count to declare.
+
+   **The offset is carried but never bounded**, and that is said rather than implied: a spec
+   declares no sizes — no bytes per L3 tile, no L2 bank width — so nothing here can check an
+   offset. Sizes are an additive field (R8) that #283 needs anyway to give a resource
+   contents. The offset is also **not part of identity**: two writes at different offsets are
+   two writes to the same resource, and counting them as two stations would be wrong for
+   #286.
 4. **`kpu-run --deploy spec.json`**, and the characterization harness becomes a consumer of
    the platform rather than a parallel path. The flags stay; `--deploy` replaces them, and
    giving both is refused for the same reason `--program` and `--algo` are.
@@ -252,7 +284,7 @@ From the issue, with the honest status of each:
       **increment 2**
 - [ ] no test or demo constructs an engine directly; the characterization harness goes
       through the platform — **increment 4**, within the boundary of §6
-- [ ] the naming map resolves an L3 tile, an L2 bank, an L1 vector and a compute-tile
+- [x] the naming map resolves an L3 tile, an L2 bank, an L1 vector and a compute-tile
       register file on a two-device deployment — **increment 3**, as *identity*; resolving to
       **state** is #283, because the state does not exist yet (§5)
 

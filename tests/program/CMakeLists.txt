@@ -55,6 +55,15 @@ set_tests_properties(test_deployment_spec PROPERTIES
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
 )
 
+# The global naming map: every declared resource, addressable (#282 increment 3)
+kpu_add_component_test(test_resource_map "program"
+    test_resource_map.cpp
+)
+
+set_tests_properties(test_resource_map PROPERTIES
+    LABELS "program;platform;names;v0.9"
+)
+
 # The platform owns the deployment and the state (#282 increment 2)
 kpu_add_component_test(test_virtual_platform "program"
     test_virtual_platform.cpp

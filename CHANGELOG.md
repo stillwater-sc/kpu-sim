@@ -22,6 +22,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The global naming map: every declared resource, addressable (#282 increment 3).**
+  `ResourceName` with `format`/`parse_resource_name`, and `ResourceMap` with `exists`,
+  `index_of`, `enumerate`, `why_not` and `require`. Identity only — *"does this resource exist
+  in this deployment?"* is answerable from the spec, *"what is in it?"* needs #283. Both the
+  backdoor (#284) and the spatial event record (#286) have to name and enumerate resources
+  before anything can read one, so holding the map back until state exists would block both
+  for nothing.
+
+  **A name carries a path, not an instance number**: L2 banks and L1 vectors are per *compute
+  tile* and L3 banks are per L3 module, so an address is `dev/cf[2]/l2[3]`. Flattening two
+  indices into one would lose the machine's structure — the same class of error as conflating
+  `l3.tiles` with `l3.capacity_tiles`.
+
+  **Devices are addressed by name**, since a positional address moves when a deployment is
+  reordered. That makes the device name part of the grammar, so `validate()` now refuses a
+  name containing `/[]+`: a device nothing can address is a device the backdoor cannot reach.
+
+  **The map's domain is exactly what the deployment declares.** An undeclared `l3.banks` means
+  the bank structure is unspecified, so `dev0/l3[0]/bank[0]` resolves to nothing — and
+  declaring one level does not imply the next. `why_not()` separates **undeclared** from **out
+  of range**, which are different problems with different fixes. Two resources are declared by
+  inference and say so where it is made: a device's DRAM (a DMA with no DRAM side would have
+  nothing to read) and a compute tile's register file.
+
+  The offset is carried, formatted and **never bounded** — a spec declares no sizes, so
+  nothing here can check one — and it is **not part of identity**: two writes at different
+  offsets are two writes to the same resource.
+
 - **`VirtualPlatform`: a run is a pure function of its four inputs (#282 increment 2).**
   `load_program`, `snapshot`, `restore`, and `run(handle, level, const StateSnapshot&)` which
   **restores the state first**. `run_at()` took three of ADR 0002 §3.5's four inputs, so the
