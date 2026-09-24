@@ -235,14 +235,69 @@ attention value is `-inf`, and this repo does softmax and attention work.
    The bump invalidated the checked-in corpus, which is the discipline working: regeneration
    is a decision, and the answer here was that the corpus files carry no `STREAMS` record, so
    their `min_consumer` stays 1.1.0 while their container line becomes 1.2.0.
-5. **`kpu-run --program`** — increment 4 of #285, which is the point of all of this.
+5. **`kpu-run --program`** — increment 4 of #285, which is the point of all of this —
+   **done.** `--program foo.l0` loads and executes, so "load a program and execute it" is
+   literally true of something for the first time: until now every program the simulator ran
+   was one the simulator wrote.
+
+   **A file and a derivation spec are refused together**, naming the flag that conflicts.
+   Letting one win silently means the tool reports the flags it was given and executes
+   something else, which is the failure this driver exists to detect in the *models* — there
+   is no excuse for building it into the driver.
+
+   **A program that carries no values is refused unless inputs are synthesized.** Running it
+   as loaded would have every level agree on zeros: a green report about nothing, which is
+   worse than a refusal because nobody looks twice at a pass. `--fill-inputs` fills them, and
+   the converse is refused too — a file that *has* values must not have them replaced, or the
+   run is no longer the one the file describes.
+
+   `fill_inputs` fills **the operands the program reads**, and the rule is "read at all", not
+   "read before it is written". The difference is not cosmetic: tile LU factors `A` in place
+   and its *first* op (`LuDiagFactor`) declares `A[k,k]` as an **output**, so a
+   read-before-written rule classifies `A` as produced, fills nothing, and leaves the
+   factorisation to run on a zero matrix and report success at every level. An in-place
+   operand is both read and written, and it still needs an input.
+
+   Its values are exactly representable for the reason increment 3 established at length, and
+   the first version of the mix was **wrong in a way every obvious check passed**: `h + 131*r
+   + 17*c` made the integer part constant along each row, because `17*c` vanishes mod 17, so
+   every row held eight distinct values spanning a range of 1.0. Deterministic, exact,
+   non-zero, different per operand — and near-degenerate, which is precisely what defeats a
+   differential test: a level that read a neighbouring element would still have computed
+   almost the right answer. The assertion that caught it asks how many distinct values a row
+   and a column hold.
+
+   No numerical-stability promise is made, and saying so is better than hoping. A square
+   operand gets a dominant diagonal, which keeps a factorisation well behaved in practice,
+   but nothing here can guarantee it: a program whose inputs need structure should **carry its
+   values**. That is what `VALUES inline` is for.
+
+   **A file's `STREAMS` record supplies `--streams`**, and an explicit `--streams` overrides
+   it and says so where the value is printed. Reporting the file's choice next to a run that
+   used a different map would be a report of the wrong thing.
+
+   **The comparison now reads every operand, not the result.** It read one — `C` for matmul,
+   `A` for LU — which cannot see a level that scribbled on an *input* while computing the
+   right output, and a loaded program has no spec to ask a result operand of in the first
+   place. The pivot permutation and swap count are compared unconditionally for the same
+   reason: a file does not announce which kernel it is, and for a program without pivoting
+   both sides are `0` and empty.
 
 ## 7. Definition of done for the issue
 
-- [ ] `TileProgram` → file → `TileProgram` round-trips, and the reloaded program executes
+- [x] `TileProgram` → file → `TileProgram` round-trips, and the reloaded program executes
       **bit-identically** to the in-memory one on matmul and tile LU
-- [ ] An unsupported version, a corrupt preamble and an unknown op each produce a readable
-      diagnostic — never a variant crash, never a silent mis-parse
-- [ ] The golden corpus loads and executes in CI
-- [ ] A derived GEMM, written to a file, loads and runs through `run_at` at L-T1 with the
+- [x] An unsupported version, a corrupt preamble and an unknown op each produce a readable
+      diagnostic — never a variant crash, never a silent mis-parse. Through the *tool* as
+      well as the library: `kpu-run --program` surfaces a `FormatError` as exit 2, because an
+      uncaught throw aborts and CI cannot tell an abort from a crash in the model
+- [x] The golden corpus loads and executes in CI
+- [x] A derived GEMM, written to a file, loads and runs through `run_at` at L-T1 with the
       same values as the in-memory program
+
+One thing this issue **did not** settle, and it is worth recording rather than leaving for
+someone to rediscover: **an L0 file does not distinguish an operand the host initializes
+from one the program produces.** `program_inputs` infers it from the op list, which is right
+for every kernel here and is still an inference. A format that meant to be a durable
+interface would say so in the `OPERAND` record. That is an additive attribute (R8), so it
+costs no bump when something needs it.

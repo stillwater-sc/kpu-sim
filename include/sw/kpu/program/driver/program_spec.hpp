@@ -22,6 +22,7 @@
 #include <sw/kpu/program/tile_program.hpp>
 
 #include <cstdint>
+#include <set>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -165,6 +166,73 @@ inline void fill(TileProgram& p, const ProgramSpec& s) {
         A.values[i] = float((i * 7 + 1) % 13) - 6.0f + 0.25f * float(i % 3);
     for (std::size_t i = 0; i < B.values.size(); ++i)
         B.values[i] = float((i * 5 + 2) % 11) - 5.0f - 0.125f * float(i % 5);
+}
+
+// ---- values for a program nobody derived --------------------------------------
+// A loaded L0 program has no ProgramSpec behind it, so fill() -- which knows "A" and "B" by
+// name -- cannot be used. These two work from the OP LIST instead.
+
+// The operands the program READS. An operand that appears in some op's `inputs` needs a
+// value; one that appears only in `outputs` is produced, and pre-filling it would make a
+// value comparison compare the fill rather than the model.
+//
+// The rule is "read AT ALL", not "read before it is written", and the difference is not
+// cosmetic. Tile LU factors A IN PLACE and its FIRST op (LuDiagFactor) declares A[k,k] as an
+// OUTPUT, so a read-before-written rule marks A as produced and fills NOTHING -- leaving the
+// factorisation to run on a zero matrix and report success. An in-place operand is both read
+// and written, and it still needs an input.
+inline std::vector<std::string> program_inputs(const TileProgram& p) {
+    std::vector<std::string> order;
+    std::set<std::string> seen;
+    for (const TileOp& op : p.ops())
+        for (const TileCoord& c : op.inputs)
+            if (seen.insert(c.operand).second) order.push_back(c.operand);
+    return order;
+}
+
+// Deterministic values for every operand the program reads, derived from the OPERAND NAME
+// and the element position -- so two operands never get the same pattern, and the same file
+// fills identically on every machine and at every level.
+//
+// EVERY VALUE IS EXACTLY REPRESENTABLE, for the reason fill() states at length: Release
+// builds with `-march=native`, so a value that needed rounding would differ between hosts
+// and no run of a checked-in file could be reproduced elsewhere.
+//
+// NO NUMERICAL-STABILITY PROMISE IS MADE, and that is worth saying rather than hoping. A
+// square operand gets a dominant diagonal, which keeps a factorisation well behaved in
+// practice, but nothing here can guarantee it: a program whose inputs need structure (a
+// specific conditioning, a symmetry, a sparsity pattern) should CARRY ITS VALUES rather than
+// have them invented. That is what `VALUES inline` is for.
+inline void fill_inputs(TileProgram& p) {
+    for (const std::string& name : program_inputs(p)) {
+        TensorOperand& t = p.operand(name);
+        std::uint32_t h = 2166136261u;                      // FNV-1a over the operand name
+        for (char ch : name) {
+            h ^= static_cast<std::uint32_t>(static_cast<unsigned char>(ch));
+            h *= 16777619u;
+        }
+        const bool square = (t.rows == t.cols);
+        for (Dim r = 0; r < t.rows; ++r)
+            for (Dim c = 0; c < t.cols; ++c) {
+                // MIXED, not a linear combination of r and c. `h + 131*r + 17*c` looks
+                // adequate and is not: 17*c vanishes mod 17, so the integer part of a value
+                // was CONSTANT ALONG EACH ROW and only the eighths varied -- every row spanned
+                // a range of 1.0 with eight distinct values. Near-degenerate inputs weaken
+                // exactly what this fill is for: a level that transposed an index, or read a
+                // neighbouring element, would still produce a nearly identical answer.
+                std::uint32_t k = h;
+                k ^= r * 2654435761u; k *= 2246822519u;
+                k ^= c * 3266489917u; k *= 668265263u;
+                k ^= k >> 15;
+                // Integers in [-8, 8] plus a multiple of 1/8: no rounding anywhere.
+                float v = float(k % 17) - 8.0f + 0.125f * float((k >> 8) % 8);
+                // A dominant diagonal for a square operand, which is what keeps an in-place
+                // factorisation from pivoting on noise. It is a nudge, not a guarantee (see
+                // above): off-diagonal row sums grow with the operand and this term does not.
+                if (square && r == c) v += 32.0f;
+                t.at(r, c) = v;
+            }
+    }
 }
 
 // The operand a run's result lands in, which is what a comparison reads.

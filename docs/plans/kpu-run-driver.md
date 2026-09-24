@@ -201,8 +201,14 @@ lists. #286 renders this; it does not come for free with it.
    is a usable recording primitive. Turning it into a record with **spatial resource
    addresses** — from #282's naming map, not a scheme invented here — plus causality edges,
    and a viewer that lays resources out spatially and slices by resource, is **#286**.
-4. **Program from a file**, once #265 lands, so `--program foo.l0` is literal rather than
-   a derivation spec.
+4. **Program from a file** — **done**, now that #265 has landed: `--program foo.l0` is
+   literal rather than a derivation spec, and refused *together* with `--algo/--size/--tile`
+   rather than silently picking one. A file with no values is refused unless `--fill-inputs`
+   synthesizes them (every level agreeing on zeros is a green report about nothing), and a
+   file that carries values will not have them replaced. A `STREAMS` record supplies
+   `--streams`; an explicit `--streams` overrides it and says so. The value comparison moved
+   from the result operand to **every** operand, which is both what a loaded program needs
+   and strictly stronger for a derived one.
 5. **Platform + L-T2**: `run_at` delegates to `VirtualPlatform` (#282) and gains the L-T2
    case (#283). The characterizer becomes a consumer of the same path.
 

@@ -65,6 +65,11 @@ void usage() {
     std::cout <<
 R"(kpu-run — execute a Domain Flow Program at one or more levels and compare them.
 
+  --program <file.l0>       execute a program FROM A FILE (#265). Mutually exclusive
+                            with --algo/--size/--tile: a spec that says two different
+                            things is a usage error, not a choice for the tool to make
+  --fill-inputs             synthesize inputs for a --program file that carries none.
+                            Only the operands the program READS are filled
   --algo <matmul|lu>        program to derive            (default matmul)
   --size <n>                square problem size          (default 64)
   --tile <n>                tile size                    (default 16)
@@ -86,7 +91,9 @@ R"(kpu-run — execute a Domain Flow Program at one or more levels and compare t
   --macs-per-cycle <m>      one compute tile's throughput (default 256)
   --streams <dataflow>      derive an L1 stream program: output-stationary|os,
                             weight-stationary|ws, a-stationary|as,
-                            fully-streaming|hex  (matmul only)
+                            fully-streaming|hex  (matmul only). A --program file that
+                            carries a STREAMS record supplies this; an explicit
+                            --streams overrides it and says so
   --emit-l0 <file.l0>       write the program BEFORE execution: a test case, inputs
                             inline. This is how the golden corpus is regenerated
   --emit-l0-result <file.l0>  write it AFTER execution: the same program with results,
@@ -103,7 +110,8 @@ Every *-bytes-per-cycle is PER LANE, never aggregate: lanes give concurrency, ne
 speed-up (design note §6.3).
 
 Values are compared bit-exactly against the behavioral level, which is the
-authority (ADR 0001 D5). A disagreement exits 1.
+authority (ADR 0001 D5), over EVERY operand rather than just the result: a level
+that scribbled on an input is a model bug too. A disagreement exits 1.
 )";
 }
 
@@ -192,18 +200,82 @@ int main(int argc, char** argv) {
         return true;
     };
 
+    // --program is the point of #265: until a program can come from a FILE, every program
+    // this simulator runs is one the simulator wrote, and "load a program and execute it" is
+    // not literally true of anything.
+    std::string program_path;
+    if (!arg_required(a, "--program", program_path, err)) {
+        std::cerr << "kpu-run: " << err << "\n";
+        return 2;
+    }
+    const bool from_file = !program_path.empty();
+
     ProgramSpec ps;
     ps.algo = arg(a, "--algo", "matmul");
     if (!dim_opt("--size", 64, ps.size) || !dim_opt("--tile", 16, ps.tile)) {
         std::cerr << "kpu-run: " << err << "\n";
         return 2;
     }
-    if (!known_algo(ps.algo)) {
-        std::cerr << "kpu-run: unknown --algo '" << ps.algo << "' (matmul | lu)\n";
-        return 2;
+    // A file AND a derivation spec describe two different programs. Letting one win
+    // silently means a run reports the flags it was given and executes something else --
+    // so this is refused, and the refusal names the flag that conflicts.
+    if (from_file) {
+        for (const char* k : {"--algo", "--size", "--tile"})
+            if (arg_present(a, k)) {
+                std::cerr << "kpu-run: --program and " << k << " cannot be combined: the "
+                             "file already says what program to run\n";
+                return 2;
+            }
+    } else {
+        if (!known_algo(ps.algo)) {
+            std::cerr << "kpu-run: unknown --algo '" << ps.algo << "' (matmul | lu)\n";
+            return 2;
+        }
+        if (ps.tile == 0 || ps.size == 0) {
+            std::cerr << "kpu-run: --size and --tile must be non-zero\n";
+            return 2;
+        }
     }
-    if (ps.tile == 0 || ps.size == 0) {
-        std::cerr << "kpu-run: --size and --tile must be non-zero\n";
+
+    // Load it. A refusal must be a DIAGNOSTIC and an exit code -- never a variant crash
+    // and never a silent mis-parse -- which is why read_l0 throws FormatError with a cause
+    // rather than returning a half-built program.
+    std::optional<TileProgram> loaded;
+    serialize::LoadInfo info;
+    if (from_file) {
+        std::ifstream in(program_path, std::ios::binary);   // see --emit-l0 on binary mode
+        if (!in) {
+            std::cerr << "kpu-run: cannot read '" << program_path << "'\n";
+            return 2;
+        }
+        try {
+            loaded.emplace(serialize::read_l0(in, &info));
+        } catch (const std::exception& e) {
+            std::cerr << "kpu-run: " << program_path << ": " << e.what() << "\n";
+            return 2;
+        }
+    }
+
+    // Inputs. A program that carries no values would execute on zeros and report success,
+    // which is the one outcome worse than refusing: every level would agree, on nothing.
+    const bool want_fill = has_flag(a, "--fill-inputs");
+    if (from_file) {
+        if (!info.has_values && !want_fill) {
+            std::cerr << "kpu-run: " << program_path << " carries no values (VALUES none), "
+                         "so every level would agree on zeros. Pass --fill-inputs to "
+                         "synthesize inputs, or use a file written as a test case\n";
+            return 2;
+        }
+        if (info.has_values && want_fill) {
+            std::cerr << "kpu-run: " << program_path << " carries its own values; "
+                         "--fill-inputs would replace them and the run would no longer be "
+                         "the one the file describes\n";
+            return 2;
+        }
+        if (want_fill) fill_inputs(*loaded);
+    } else if (want_fill) {
+        std::cerr << "kpu-run: --fill-inputs applies to --program only; a derived program "
+                     "is filled from its spec\n";
         return 2;
     }
 
@@ -252,11 +324,24 @@ int main(int argc, char** argv) {
                          "a-stationary|as, fully-streaming|hex)\n";
             return 2;
         }
-        if (ps.algo != "matmul") {
+        // Gated on the ALGO, so it can only be checked for a derived program. A loaded
+        // program has no algo -- only ops -- so the check there is the derivation itself,
+        // which throws on a program it cannot map.
+        if (!from_file && ps.algo != "matmul") {
             std::cerr << "kpu-run: --streams is derived for matmul only, not '"
                       << ps.algo << "'\n";
             return 2;
         }
+    }
+    // A file may carry its own STREAMS record, which is a dataflow CHOICE the consumer
+    // re-derives from. It supplies --streams when --streams is absent; when both are given
+    // and they differ, the CLI wins and SAYS SO -- a run whose L1 timing came from a
+    // different map than the file records must not be silent about it.
+    std::string stream_note;
+    if (from_file && info.has_streams) {
+        if (dataflow.empty()) dataflow = info.dataflow;
+        else if (map_for(dataflow).name != info.dataflow)
+            stream_note = " (overrides the file's " + info.dataflow + ")";
     }
     // Keeps main's required-value parsing (an option present without a value is an error,
     // not an absence) and adds increment 3's stepping options on top.
@@ -303,8 +388,21 @@ int main(int argc, char** argv) {
     const auto device = make_device(ds);
     const bool compare = !has_flag(a, "--no-compare");
 
-    std::cout << "program  " << ps.label() << "\n"
-              << "device   " << device.label() << "\n"
+    std::cout << "program  " << (from_file ? program_path : ps.label()) << "\n";
+    // What the FILE turned out to carry, stated rather than assumed. "values: from file"
+    // versus "synthesized" is the difference between a test case and a timing exercise, and
+    // a reader of the output should never have to guess which one ran.
+    if (from_file)
+        std::cout << "         \"" << loaded->name() << "\"  "
+                  << loaded->operand_order().size() << " operands, "
+                  << loaded->ops().size() << " ops   values: "
+                  << (info.has_values ? "from file" : "synthesized (--fill-inputs)")
+                  // The EFFECTIVE dataflow, not the one the file records. Printing the file's
+                  // choice next to a run that used a different map would be a report of the
+                  // wrong thing -- so the override is named where the value is shown.
+                  << (dataflow.empty() ? "" : "   streams: " + map_for(dataflow).name)
+                  << stream_note << "\n";
+    std::cout << "device   " << device.label() << "\n"
               << "levels   ";
     for (std::size_t i = 0; i < levels.size(); ++i)
         std::cout << (i ? ", " : "") << short_name(levels[i]);
@@ -326,6 +424,18 @@ int main(int argc, char** argv) {
         return opt;
     };
 
+    // ONE place decides where a program comes from. The run loop, --step and --emit-l0 each
+    // need their own copy, and three copies of the "derive or load" decision would drift --
+    // the failure mode being a --step that steps a different program than the one that ran.
+    // A loaded program is COPIED rather than re-read: the copy is taken from the pristine
+    // load, so no level can be handed state a previous level mutated.
+    auto make_program = [&]() -> TileProgram {
+        if (loaded) return *loaded;
+        TileProgram p = derive(ps);
+        fill(p, ps);
+        return p;
+    };
+
     // --emit-l0 writes the program BEFORE anything executes, so the file is an input
     // rather than a snapshot of a finished run. Written as a test case (values inline),
     // because a corpus entry that needed an external fill step would not be self-contained.
@@ -335,8 +445,7 @@ int main(int argc, char** argv) {
         // 2. The run loop already had this fixed once; writing a new path reintroduced it.
         std::optional<TileProgram> to_emit;
         try {
-            to_emit.emplace(derive(ps));
-            fill(*to_emit, ps);
+            to_emit.emplace(make_program());
         } catch (const std::exception& e) {
             std::cerr << "kpu-run: " << e.what() << "\n";
             return 2;
@@ -369,14 +478,27 @@ int main(int argc, char** argv) {
         try {
             // derive() and fill() throw too -- on an operand a spec does not declare, for
             // one -- so they belong inside the guard rather than beside it.
-            programs.push_back(derive(ps));
-            fill(programs.back(), ps);
+            programs.push_back(make_program());
             // The stream program is derived PER PROGRAM: it indexes ops of the program it
             // was derived from, so sharing one across levels would alias the wrong ops.
-            streams.push_back(dataflow.empty()
-                                  ? stream::StreamProgram{}
-                                  : stream::derive_matmul_streams(programs.back(),
-                                                                  map_for(dataflow)));
+            //
+            // Its failure gets its OWN handler, because the derivation throws about the
+            // thing it could not find -- "no operand 'C'" -- and for a program that came
+            // from a FILE there is no algo to gate on beforehand, so that bare message is
+            // all the user would see. The flag that caused it belongs in the diagnostic.
+            if (dataflow.empty()) {
+                streams.push_back(stream::StreamProgram{});
+            } else {
+                try {
+                    streams.push_back(stream::derive_matmul_streams(programs.back(),
+                                                                    map_for(dataflow)));
+                } catch (const std::exception& e) {
+                    std::cerr << "kpu-run: --streams " << map_for(dataflow).name
+                              << ": this program has no matmul stream derivation ("
+                              << e.what() << ")\n";
+                    return 2;
+                }
+            }
             outcomes.push_back(run_at(l, programs.back(), device,
                                      Placement::single(device.compute_tiles),
                                      dataflow.empty() ? nullptr : &streams.back()));
@@ -419,8 +541,7 @@ int main(int argc, char** argv) {
         std::size_t src = levels.size();
         for (std::size_t i = 0; i < levels.size(); ++i)
             if (levels[i] == target) src = i;
-        TileProgram stepped = derive(ps);
-        fill(stepped, ps);
+        TileProgram stepped = make_program();
         std::unique_ptr<Stepper> cur;
         try {
             cur = make_stepper(target, stepped, outcomes[src].timeline);
@@ -499,41 +620,50 @@ int main(int argc, char** argv) {
     for (std::size_t i = 0; i < levels.size(); ++i)
         if (levels[i] == ExecutionLevel::Behavioral) authority = i;
 
-    const char* operand = result_operand(ps);
+    // EVERY operand, not just the result. The comparison used to read one operand -- "C" for
+    // matmul, "A" for LU -- which cannot see a level that scribbled on an INPUT while
+    // computing the right output, and a loaded program has no spec to ask for a result
+    // operand in the first place. Comparing the whole registry answers both.
     std::cout << "\nvalues vs " << short_name(levels[authority])
-              << " (bit-exact, operand " << operand << ")\n";
+              << " (bit-exact, every operand)\n";
     bool all_agree = true;
     for (std::size_t i = 0; i < levels.size(); ++i) {
         if (i == authority) continue;
-        const Diff d = compare_bitwise(programs[authority].operand(operand).values,
-                                       programs[i].operand(operand).values);
         std::cout << "  " << std::left << std::setw(24) << to_string(levels[i]);
-        if (d.identical) {
-            std::cout << "identical\n";
-        } else {
-            all_agree = false;
+        bool level_agrees = true;
+        for (const std::string& name : programs[authority].operand_order()) {
+            const Diff d = compare_bitwise(programs[authority].operand(name).values,
+                                           programs[i].operand(name).values);
+            if (d.identical) continue;
+            if (level_agrees) std::cout << "\n";
+            level_agrees = all_agree = false;
             // print_run() leaves std::fixed and a small precision on the stream, which
             // would render a one-bit disagreement as "expected 1.234 got 1.234" -- the one
             // diagnostic line for a failure, hiding the failure. Hex float is exact.
-            std::cout << "DISAGREES: " << d.differing << " element(s), first at ["
-                      << d.first_index << "] expected "
+            std::cout << "        operand " << name << " DISAGREES: " << d.differing
+                      << " element(s), first at [" << d.first_index << "] expected "
                       << std::defaultfloat << std::setprecision(9) << d.expected
                       << " got " << d.actual
                       << "  (" << std::hexfloat << d.expected << " vs " << d.actual
                       << std::defaultfloat << ")\n";
         }
-        // LU carries a permutation and a swap count that a value diff would miss.
-        if (std::string(operand) == "A") {
-            if (outcomes[i].summary.row_swaps != outcomes[authority].summary.row_swaps) {
-                all_agree = false;
-                std::cout << "        DISAGREES on row swaps: "
-                          << outcomes[authority].summary.row_swaps << " vs "
-                          << outcomes[i].summary.row_swaps << "\n";
-            }
-            if (outcomes[i].summary.permutation != outcomes[authority].summary.permutation) {
-                all_agree = false;
-                std::cout << "        DISAGREES on the row permutation\n";
-            }
+        if (level_agrees) {
+            const std::size_t n = programs[authority].operand_order().size();
+            std::cout << "identical (" << n << (n == 1 ? " operand)\n" : " operands)\n");
+        }
+        // The pivot permutation and the swap count are compared UNCONDITIONALLY rather than
+        // for LU only: a program loaded from a file does not announce which kernel it is,
+        // and for a program with no pivoting both sides are 0 and empty, so the check costs
+        // nothing where it does not apply.
+        if (outcomes[i].summary.row_swaps != outcomes[authority].summary.row_swaps) {
+            all_agree = false;
+            std::cout << "        DISAGREES on row swaps: "
+                      << outcomes[authority].summary.row_swaps << " vs "
+                      << outcomes[i].summary.row_swaps << "\n";
+        }
+        if (outcomes[i].summary.permutation != outcomes[authority].summary.permutation) {
+            all_agree = false;
+            std::cout << "        DISAGREES on the row permutation\n";
         }
     }
 
