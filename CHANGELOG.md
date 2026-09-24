@@ -9,6 +9,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **L0 programs can carry their L1 stream annotation (#265 increment 4).** A
+  `STREAMS dataflow="..."` record, reported back through `LoadInfo{has_streams, dataflow}`
+  (ADR §7.4 — optional at the transactional level).
+
+  **The file records the choice, not its consequences.** A `StreamProgram`'s signatures,
+  network overlay, wavefront timings and array extents are all functions of the space-time
+  map and the program, so serializing them would be caching a pure function — and a cache
+  can contradict its input. A file that records the choice cannot be internally
+  inconsistent, and the consumer re-derives. The cost is stated rather than hidden: a
+  hand-tuned annotation not reproducible from a named map cannot be represented by this
+  version, nothing in the repo produces one, and an unknown dataflow name is **refused**
+  rather than guessed — ignoring it would execute with different L1 timing than the file
+  describes while reporting success.
+
+  The name stored is the map's **own** name rather than a CLI alias, so a file is readable
+  by something that never saw the command line. Asserting that round-trip found a real
+  hole: `map_for("weight(B)-stationary")` fell through to the default and returned
+  *output*-stationary — silently the wrong dataflow. `map_for` now accepts both spellings,
+  and `map_for(m.name).name == m.name` holds for every preset.
+
+  Container format **1.2.0**, with `min_consumer` following the **records present**: a file
+  carrying `STREAMS` demands 1.2.0, because a 1.1.0 reader would skip the record and run
+  with no L1 timing at all; a file without it still demands only 1.0.0 or 1.1.0. That is
+  the rule increment 2 established, applied rather than rediscovered. The bump invalidated
+  the checked-in corpus — the discipline working as intended — and regenerating it was a
+  decision with the version question answered: the corpus carries no `STREAMS` record, so
+  its `min_consumer` stays 1.1.0 while its container line moves to 1.2.0.
+
 - **A golden corpus of L0 programs, loaded and executed in CI (#265 increment 3).**
   `tests/program/corpus/` holds matmul 48³ and tile LU 64 as pairs — `<case>.l0` with the
   **inputs**, `<case>.result.l0` with the **expected outputs**. Two files rather than one

@@ -175,17 +175,26 @@ inline const char* result_operand(const ProgramSpec& s) {
 // ---- the L1 stream program (optional) ---------------------------------------
 // The dataflow name -> space-time mapping, shared with tile_characterize for the same
 // reason as everything else here: two spellings of "output-stationary" drift.
+// Accepts the CLI aliases AND each map's OWN name, so map_for(m.name).name == m.name for
+// every preset. That round-trip is load-bearing: a serialized program records the map's own
+// name, and a reader passing it back through map_for() must get the same map. Without the
+// canonical names here, map_for("weight(B)-stationary") fell through to the default and
+// returned OUTPUT-stationary -- silently the wrong dataflow, which is exactly the failure
+// the serializer refuses unknown names to avoid.
 inline bool known_dataflow(const std::string& n) {
     return n == "output-stationary" || n == "os" ||
-           n == "weight-stationary" || n == "ws" ||
-           n == "a-stationary"      || n == "as" ||
-           n == "fully-streaming"   || n == "hex";
+           n == "weight-stationary" || n == "ws" || n == "weight(B)-stationary" ||
+           n == "a-stationary"      || n == "as" || n == "A-stationary" ||
+           n == "fully-streaming"   || n == "hex" || n == "fully-streaming(hex)";
 }
 
 inline stream::SpaceTimeMap map_for(const std::string& name) {
-    if (name == "weight-stationary" || name == "ws") return stream::SpaceTimeMap::b_stationary();
-    if (name == "a-stationary"      || name == "as") return stream::SpaceTimeMap::a_stationary();
-    if (name == "fully-streaming"   || name == "hex") return stream::SpaceTimeMap::fully_streaming();
+    if (name == "weight-stationary" || name == "ws" || name == "weight(B)-stationary")
+        return stream::SpaceTimeMap::b_stationary();
+    if (name == "a-stationary" || name == "as" || name == "A-stationary")
+        return stream::SpaceTimeMap::a_stationary();
+    if (name == "fully-streaming" || name == "hex" || name == "fully-streaming(hex)")
+        return stream::SpaceTimeMap::fully_streaming();
     return stream::SpaceTimeMap::output_stationary();   // "output-stationary" / "os"
 }
 

@@ -207,7 +207,34 @@ attention value is `-inf`, and this repo does softmax and attention work.
    comment before the magic line, and the test caught it — reporting `NotAnL0File` where the
    fixture was meant to exercise `UnsupportedVersion`. The magic must be the first line,
    with nothing before it, because a file has to be identifiable by its opening bytes.
-4. **Stream annotations** alongside (ADR §7.4).
+4. **Stream annotations** alongside (ADR §7.4) — **done.** A `STREAMS dataflow="..."`
+   record, and `LoadInfo{has_streams, dataflow}`.
+
+   **The file records the CHOICE, not its consequences.** A `StreamProgram`'s signatures,
+   network overlay, wavefront timings and array extents are all functions of the space-time
+   map and the program, so writing them would be caching a pure function — and a cache can
+   contradict its input. A file that records the choice cannot be internally inconsistent,
+   and the consumer re-derives. The cost is stated rather than hidden: a hand-tuned
+   annotation that is *not* reproducible from a named map cannot be represented, nothing in
+   the repo produces one, and an unknown dataflow name is **refused** rather than guessed —
+   ignoring it would execute with different L1 timing than the file describes while
+   reporting success.
+
+   The name stored is the map's **own** name, not a CLI alias, so a file is readable by
+   something that never saw the command line. That exposed a real hole:
+   `map_for("weight(B)-stationary")` fell through to the default and returned
+   *output*-stationary — silently the wrong dataflow, for exactly the round-trip this record
+   exists to support. `map_for` now accepts both spellings and `map_for(m.name).name ==
+   m.name` holds for every preset, asserted.
+
+   Container format **1.2.0**, and `min_consumer` follows the **records present**: a file
+   with `STREAMS` demands 1.2.0 because a 1.1.0 reader would skip the record and run with no
+   L1 timing at all. A file without it still demands only 1.0.0 or 1.1.0. That is the rule
+   increment 2 wrote down, applied without needing to be rediscovered.
+
+   The bump invalidated the checked-in corpus, which is the discipline working: regeneration
+   is a decision, and the answer here was that the corpus files carry no `STREAMS` record, so
+   their `min_consumer` stays 1.1.0 while their container line becomes 1.2.0.
 5. **`kpu-run --program`** — increment 4 of #285, which is the point of all of this.
 
 ## 7. Definition of done for the issue

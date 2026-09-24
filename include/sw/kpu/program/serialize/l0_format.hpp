@@ -72,13 +72,29 @@ struct Version {
 
 inline constexpr const char* kMagic = "KPUL0";
 
+// The dataflow names this build can reconstruct, which are the SpaceTimeMap presets' own
+// names rather than the CLI's aliases -- the file records what the map calls itself, so a
+// write/read pair cannot disagree about spelling.
+inline const std::vector<std::string>& known_dataflows() {
+    static const std::vector<std::string> v = {
+        "output-stationary", "weight(B)-stationary", "A-stationary", "fully-streaming(hex)",
+    };
+    return v;
+}
+
+inline bool is_known_dataflow(const std::string& name) {
+    for (const std::string& k : known_dataflows()) if (k == name) return true;
+    return false;
+}
+
 // What this build writes, and what it can read.
 //
-// 1.1.0 ADDS THE VALUES_ROW RECORD. The op set did not change, which is why the two axes
-// are separate: a new container record is not a new operator.
-inline Version format_version()  { return {1, 1, 0}; }   // container structure
+// 1.1.0 added the VALUES_ROW record; 1.2.0 adds STREAMS. The op set has not changed for
+// either, which is why the two axes are separate: a new container record is not a new
+// operator.
+inline Version format_version()  { return {1, 2, 0}; }   // container structure
 inline Version opset_version()   { return {1, 0, 0}; }   // the TileOpKind surface
-inline Version reader_version()  { return {1, 1, 0}; }   // what THIS reader supports
+inline Version reader_version()  { return {1, 2, 0}; }   // what THIS reader supports
 
 // The oldest reader that can be trusted with this file, which depends on WHAT IS IN IT
 // rather than on who wrote it. This is the whole mechanism of R4, and getting it wrong is
@@ -92,7 +108,12 @@ inline Version reader_version()  { return {1, 1, 0}; }   // what THIS reader sup
 // THE RULE for future changes: a new record that carries SEMANTICS must raise
 // min_consumer for files that use it; a new optional ATTRIBUTE need not, because ignoring
 // it is harmless by construction (R8).
-inline Version min_consumer_for(bool has_values) {
+// Applying the rule this header already states: a STREAMS record carries SEMANTICS, so a
+// file using it must demand a reader that understands it. A 1.1.0 reader would skip STREAMS
+// and execute with no L1 timing at all -- the same class of silent wrong answer that
+// VALUES_ROW would have produced on a 1.0.0 reader.
+inline Version min_consumer_for(bool has_values, bool has_streams = false) {
+    if (has_streams) return Version{1, 2, 0};
     return has_values ? Version{1, 1, 0} : Version{1, 0, 0};
 }
 
@@ -228,15 +249,30 @@ inline std::string coord_list(const std::vector<TileCoord>& v) {
 // never has to infer it from zeros (design note §3).
 struct WriteOptions {
     bool include_values = false;
+    // The L1 stream annotation, as the DATAFLOW CHOICE rather than its consequences.
+    // Empty means none (ADR §7.4: annotations are optional at the transactional level).
+    std::string dataflow;
 };
 
 inline void write_l0(std::ostream& os, const TileProgram& prog, const WriteOptions& opt = {}) {
     os << kMagic << " " << format_version().str() << "\n";
-    os << "MIN_CONSUMER " << min_consumer_for(opt.include_values).str() << "\n";
+    os << "MIN_CONSUMER "
+       << min_consumer_for(opt.include_values, !opt.dataflow.empty()).str() << "\n";
     os << "OPSET tile " << opset_version().str() << "\n";
     os << "PRODUCER kpu-sim " << producer_version().str() << "\n";
     os << "PROGRAM " << detail::quote(prog.name()) << "\n";
     os << "VALUES " << (opt.include_values ? "inline" : "none") << "\n";
+    // THE CHOICE, NOT THE DERIVED ANNOTATIONS. A StreamProgram's signatures, network,
+    // wavefront timings and array extents are all functions of the space-time map and the
+    // program, so writing them would be storing a cache of a pure function -- and a cache
+    // can contradict its input. A file that records the choice cannot be internally
+    // inconsistent, and the consumer re-derives.
+    //
+    // The cost is stated rather than hidden: a hand-tuned StreamProgram that is NOT
+    // reproducible from a named map cannot be represented by this version. Nothing in the
+    // repo produces one -- every StreamProgram comes from derive_matmul_streams(prog, map)
+    // -- and the reader refuses an unknown dataflow name rather than guessing.
+    if (!opt.dataflow.empty()) os << "STREAMS dataflow=" << detail::quote(opt.dataflow) << "\n";
 
     for (const std::string& key : prog.operand_order()) {
         const TensorOperand& op = prog.operand(key);
@@ -475,6 +511,10 @@ inline TileOpKind parse_kind(const std::string& s) {
 // What the reader found, so a caller never infers "kernel or test case" from zeros.
 struct LoadInfo {
     bool has_values = false;     // the file declared VALUES inline and carried them
+    // The L1 stream annotation, if any. The CALLER re-derives the StreamProgram from this
+    // plus the program; the file stores the choice, not its consequences.
+    bool has_streams = false;
+    std::string dataflow;
 };
 
 // Read a program. Throws FormatError, never a variant or bad_alloc surprise.
@@ -504,7 +544,7 @@ inline TileProgram read_l0(std::istream& is, LoadInfo* info = nullptr) {
                               " is newer than this reader (" + reader_version().str() + ")");
     }
 
-    std::string name;
+    std::string name, declared_dataflow;
     bool declares_values = false, saw_min_consumer = false, saw_end = false;
     TileProgram prog;
     std::vector<TileOp> ops;
@@ -548,6 +588,24 @@ inline TileProgram read_l0(std::istream& is, LoadInfo* info = nullptr) {
                                   "l0: VALUES: expected 'inline' or 'none', got '" + rest +
                                   "'");
             declares_values = (rest == "inline");
+        } else if (kw == "STREAMS") {
+            // An unknown dataflow is REFUSED, not ignored: this build could not reconstruct
+            // the annotation, so it would execute with different L1 timing than the file
+            // describes while reporting success. That is the same silent-wrong-answer shape
+            // the version gate exists to prevent, one level down.
+            const auto it = f.find("dataflow");
+            if (it == f.end() || it->second.empty())
+                throw FormatError(FormatError::Cause::MalformedRecord,
+                                  "l0: STREAMS: missing dataflow");
+            if (!is_known_dataflow(it->second)) {
+                std::string known;
+                for (const std::string& k : known_dataflows())
+                    known += (known.empty() ? "" : ", ") + k;
+                throw FormatError(FormatError::Cause::MalformedRecord,
+                                  "l0: STREAMS: unknown dataflow '" + it->second +
+                                  "': this build can reconstruct " + known);
+            }
+            declared_dataflow = it->second;
         } else if (kw == "VALUES_ROW") {
             // "VALUES_ROW <quoted operand> <row> v0 v1 ..." -- positional after the name,
             // because a row is a list and keying each element would be noise.
@@ -727,7 +785,11 @@ inline TileProgram read_l0(std::istream& is, LoadInfo* info = nullptr) {
                                       "partial answer");
     }
 
-    if (info) info->has_values = declares_values;
+    if (info) {
+        info->has_values = declares_values;
+        info->has_streams = !declared_dataflow.empty();
+        info->dataflow = declared_dataflow;
+    }
     return out;
 }
 
@@ -746,7 +808,16 @@ inline TileProgram from_string(const std::string& text, LoadInfo* info = nullptr
 // A test case carries its inputs; a kernel does not. Both are wanted, so the caller says
 // which it is writing rather than the writer guessing from the contents.
 inline std::string to_test_case(const TileProgram& prog) {
-    return to_string(prog, WriteOptions{/*include_values=*/true});
+    WriteOptions opt;
+    opt.include_values = true;
+    return to_string(prog, opt);
+}
+
+inline std::string to_test_case(const TileProgram& prog, const std::string& dataflow) {
+    WriteOptions opt;
+    opt.include_values = true;
+    opt.dataflow = dataflow;
+    return to_string(prog, opt);
 }
 
 } // namespace sw::kpu::program::serialize
