@@ -253,3 +253,154 @@ TEST_CASE("an unknown optional field is ignored, so a minor bump stays readable"
     CHECK(p.ops()[0].port == "West");
     CHECK(p.operand("A").rows == 16);
 }
+
+// ============================================================================
+// Adversarial input. The first version of this file tested the happy path and the
+// version gates thoroughly, and barely tested hostile content -- its one escaping
+// case covered the two characters I happened to think of. Every case below was a
+// real defect found in review.
+// ============================================================================
+
+TEST_CASE("control characters in a value cannot forge records",
+          "[program][serialize][adversarial]") {
+    // The reader is getline()-based, so a literal newline inside a value splits one
+    // record into two -- and a value containing a line reading END would terminate the
+    // read early, silently dropping every op after it. That is a program that loads
+    // successfully and computes something else.
+    TileProgram p("name\nEND\nOP kind=FEED in=A:0,0");
+    p.add_operand(TensorOperand("A", 16, 16, 16, 16));
+    TileOp f;
+    f.kind = TileOpKind::Feed;
+    f.port_kind = PortKind::Input;
+    f.port = "West";
+    f.inputs = {TileCoord{"A", 0, 0}};
+    f.label = "tab\there\r\nand a newline";
+    p.push(std::move(f));
+
+    const std::string text = to_string(p);
+    // The forged END must not appear as a record of its own.
+    CHECK(text.find("\nEND\nOP kind=FEED") == std::string::npos);
+    CHECK(text.find("\\n") != std::string::npos);        // encoded, not literal
+
+    const TileProgram back = from_string(text);
+    CHECK(back.name() == p.name());                      // and decoded symmetrically
+    REQUIRE(back.ops().size() == 1);                     // nothing was dropped or forged
+    CHECK(back.ops()[0].label == p.ops()[0].label);
+}
+
+TEST_CASE("an operand name containing the coordinate grammar round-trips",
+          "[program][serialize][adversarial]") {
+    // TensorOperand names are free strings and coord() used to write them raw, so a name
+    // with a space, ':' or ';' produced a file write_l0() emitted and read_l0() refused.
+    const std::string awkward = "odd name:with;grammar,chars";
+    TileProgram p("awkward operands");
+    p.add_operand(TensorOperand(awkward, 32, 32, 16, 16));
+    TileOp f;
+    f.kind = TileOpKind::Feed;
+    f.port_kind = PortKind::Input;
+    f.port = "West";
+    f.inputs = {TileCoord{awkward, 1, 1}};
+    p.push(std::move(f));
+
+    const TileProgram back = from_string(to_string(p));
+    REQUIRE(back.ops().size() == 1);
+    REQUIRE(back.ops()[0].inputs.size() == 1);
+    CHECK(back.ops()[0].inputs[0].operand == awkward);
+    CHECK(back.ops()[0].inputs[0].ti == 1);
+    CHECK(back.ops()[0].inputs[0].tj == 1);
+    CHECK(back.operand(awkward).rows == 32);
+}
+
+TEST_CASE("alpha survives with enough digits to compute the same answer",
+          "[program][serialize][adversarial]") {
+    // The default 6 significant digits do not round-trip a float: 1.0000001f writes as
+    // "1" and reads back as 1.0f, so the reloaded program computes a DIFFERENT RESULT --
+    // breaking the bit-identical claim the format rests on. The original tests used only
+    // alpha=-1, which is exact, so they could not see this.
+    for (float alpha : {1.0000001f, -0.5f, 3.14159265f, 1e-7f, -1.0f}) {
+        TileProgram p("alpha fidelity");
+        p.add_operand(TensorOperand("A", 16, 16, 16, 16));
+        p.add_operand(TensorOperand("B", 16, 16, 16, 16));
+        p.add_operand(TensorOperand("C", 16, 16, 16, 16));
+        TileOp m;
+        m.kind = TileOpKind::MatMulAccum;
+        m.inputs = {TileCoord{"A", 0, 0}, TileCoord{"B", 0, 0}};
+        m.outputs = {TileCoord{"C", 0, 0}};
+        m.alpha = alpha;
+        p.push(std::move(m));
+
+        const TileProgram back = from_string(to_string(p));
+        REQUIRE(back.ops().size() == 1);
+        // Bit-exact, not approximately equal: a coefficient that differs in the last bit
+        // makes the two programs different programs.
+        CHECK(std::memcmp(&back.ops()[0].alpha, &alpha, sizeof(float)) == 0);
+    }
+}
+
+TEST_CASE("a hostile number cannot become an enormous allocation",
+          "[program][serialize][adversarial]") {
+    auto cause_of = [](const std::string& text) {
+        try {
+            from_string(text);
+        } catch (const FormatError& e) {
+            return e.cause();
+        }
+        FAIL("expected a FormatError");
+        return FormatError::Cause::Truncated;
+    };
+    const std::string pre = "KPUL0 1.0.0\nMIN_CONSUMER 1.0.0\n";
+
+    // std::stoul accepts a sign: "-1" would become ULONG_MAX, the cast to Dim would make
+    // it UINT32_MAX, and TensorOperand would then try to allocate rows*cols floats -- an
+    // oversized allocation or a length_error thrown from OUTSIDE read_l0, which a caller
+    // catching FormatError would not catch.
+    CHECK(cause_of(pre + "OPERAND \"A\" rows=-1 cols=16 tile_rows=16 tile_cols=16\nEND\n") ==
+          FormatError::Cause::MalformedRecord);
+    CHECK(cause_of(pre + "OPERAND \"A\" rows= 16 cols=16 tile_rows=16 tile_cols=16\nEND\n") ==
+          FormatError::Cause::MalformedRecord);
+    // Above Dim's range, which the cast would otherwise truncate silently.
+    CHECK(cause_of(pre + "OPERAND \"A\" rows=4294967296 cols=16 tile_rows=16 "
+                         "tile_cols=16\nEND\n") == FormatError::Cause::MalformedRecord);
+    // pivot is cast to int, so it needs its own bound.
+    CHECK(cause_of(pre + "OPERAND \"A\" rows=16 cols=16 tile_rows=16 tile_cols=16\n"
+                         "OP kind=LU_DIAG_FACTOR out=A:0,0 pivot=99999999999\nEND\n") ==
+          FormatError::Cause::MalformedRecord);
+}
+
+TEST_CASE("the reader validates a program against its own registry",
+          "[program][serialize][adversarial]") {
+    auto cause_of = [](const std::string& text) {
+        try {
+            from_string(text);
+        } catch (const FormatError& e) {
+            return e.cause();
+        }
+        FAIL("expected a FormatError");
+        return FormatError::Cause::Truncated;
+    };
+    const std::string pre = "KPUL0 1.0.0\nMIN_CONSUMER 1.0.0\n";
+    const std::string a16 = "OPERAND \"A\" rows=16 cols=16 tile_rows=16 tile_cols=16\n";
+
+    SECTION("a duplicate operand is a FormatError, not a foreign exception") {
+        // add_operand() throws std::invalid_argument, which a caller catching FormatError
+        // would not catch -- so the reader has to check first.
+        CHECK(cause_of(pre + a16 + a16 + "END\n") == FormatError::Cause::MalformedRecord);
+    }
+    SECTION("an op naming an undeclared operand fails at LOAD, not at execution") {
+        CHECK(cause_of(pre + a16 + "OP kind=FEED in=Z:0,0\nEND\n") ==
+              FormatError::Cause::MalformedRecord);
+    }
+    SECTION("a tile outside the operand's grid is refused, not left to index past the end") {
+        // This is the one that mattered most: unchecked, execution indexes
+        // TensorOperand::values beyond its length -- undefined behaviour from a file the
+        // loader accepted.
+        CHECK(cause_of(pre + a16 + "OP kind=FEED in=A:1,0\nEND\n") ==
+              FormatError::Cause::MalformedRecord);
+        CHECK(cause_of(pre + a16 + "OP kind=DRAIN out=A:0,7\nEND\n") ==
+              FormatError::Cause::MalformedRecord);
+    }
+    SECTION("a valid in-range coordinate still loads") {
+        CHECK_NOTHROW(from_string(pre + "OPERAND \"A\" rows=32 cols=32 tile_rows=16 "
+                                        "tile_cols=16\nOP kind=FEED in=A:1,1\nEND\n"));
+    }
+}
