@@ -148,5 +148,15 @@ D4).
   binary contract later is far more expensive.
 - **One binary format, one source format** — do not add a third path; the `dfx` `.kpu`
   object's status (intermediate vs dropped) is a Phase 0 decision (epic D4).
+
+  **Superseded for the portable layer by ADR 0001 D1 (2026-09-24).** That ADR makes the
+  **L0 `TileProgram`** the portable program and demotes `.kpubin`/DMProgram to driver-JIT
+  output for one device. So the artifact this section calls "the ABI" is no longer the
+  portable one, and L0 needs a durable serialized form of its own — see
+  `docs/plans/l0-program-serialization.md` (#265). The instinct still holds as a limit on
+  *quantity*: that is **one** added format, `.dfg` stays compiler-internal, and the
+  requirements below (R1, R3, R4, R5, R8, R9) apply to it. Treating `.kpubin` as the
+  portable format instead was considered and rejected by the ADR, because it bakes in a
+  device and a placement.
 - **Enforce with golden corpora** in CI for both — a version policy that isn't tested
   rots (StableHLO's discipline).
