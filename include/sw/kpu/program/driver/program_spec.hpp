@@ -135,16 +135,28 @@ inline TileProgram derive(const ProgramSpec& s) {
     throw std::invalid_argument("unknown --algo '" + s.algo + "' (matmul | lu)");
 }
 
-// Deterministic, non-trivial operand values. Identical for every level, which is
-// the precondition for comparing their results at all: a run whose inputs differ
-// tells you nothing about the models.
+// Deterministic, non-trivial operand values. Identical for every level, which is the
+// precondition for comparing their results at all: a run whose inputs differ tells you
+// nothing about the models.
+//
+// EVERY VALUE HERE IS EXACTLY REPRESENTABLE, and that is a requirement rather than a
+// coincidence. This project builds Release with `-march=native`, so the compiler may
+// contract `a - b * c` into an FMA -- a single rounding instead of two -- and the result
+// then depends on the HOST CPU. If the fill itself needs rounding, the input values differ
+// between machines, and no checked-in golden file can be reproduced elsewhere.
+//
+// That is not hypothetical: the LU fill used `* 0.1f`, which left 3129 of its off-diagonal
+// values inexact, and CI failed on the LU corpus INPUT -- not its output. With a power of
+// two the product is exact, so single and double rounding agree because neither rounds.
 inline void fill(TileProgram& p, const ProgramSpec& s) {
     if (s.algo == "lu") {
         auto& A = p.operand("A");
         for (Dim i = 0; i < s.size; ++i)
             for (Dim j = 0; j < s.size; ++j)
+                // Diagonally dominant, for a stable factorisation, and every term a
+                // multiple of 1/8.
                 A.at(i, j) = (i == j) ? 4.0f + float((i * 3) % 5)
-                                      : 0.5f - float((i * 7 + j * 3) % 9) * 0.1f;
+                                      : 0.5f - float((i * 7 + j * 3) % 9) * 0.125f;
         return;
     }
     auto& A = p.operand("A");

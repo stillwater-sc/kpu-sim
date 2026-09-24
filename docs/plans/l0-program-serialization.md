@@ -186,6 +186,14 @@ attention value is `-inf`, and this repo does softmax and attention work.
    into a rubber stamp — the files still load, because the code that reads them also wrote
    them.
 
+   **Fixture values must be exactly representable, or the inputs are not reproducible
+   either.** `driver::fill` now emits only values that need no rounding — multiples of 1/4
+   for matmul, 1/8 for LU. The LU fill used `* 0.1f`, leaving 3129 off-diagonal values
+   inexact, and CI failed on the LU corpus **input**, not its output. Verified by hashing
+   the regenerated file identically under four different optimisation, ISA and
+   FP-contraction settings. Exact inputs do not buy exact *outputs*, because LU divides —
+   which is why recorded answers keep their tolerance.
+
    **The bytes are the evidence, so nothing may transform them.** `*.l0` is marked `-text`
    in `.gitattributes` and `--emit-l0` writes in binary mode. Both are needed for the same
    reason: a byte-stability check cannot survive an encoding that depends on the platform

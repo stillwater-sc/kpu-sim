@@ -35,7 +35,22 @@ fail for different reasons:
 | executing a corpus file equals executing a fresh derivation | **same machine** | **bit-identical** |
 | re-serializing a corpus file reproduces it | any | **byte-identical** |
 
-**Why the recorded answers are not compared bit-exactly.** This project builds Release with
+**Why every fixture value must be exactly representable.** `driver::fill` produces only
+values that need no rounding — multiples of 1/4 for matmul, 1/8 for LU. That is a
+requirement, not a coincidence: Release builds with `-march=native`, so host-specific code
+generation is free to compute `a - b * c` with one rounding instead of two, and a value that
+needs rounding can therefore differ between machines. If the *inputs* differ, no checked-in
+file can be reproduced anywhere else.
+
+The LU fill used `* 0.1f`, which left **3129** of its off-diagonal values inexact, and CI
+failed on the LU corpus **input** — not its output. With a power of two the product is exact,
+so nothing rounds and there is nothing for code generation to vary. Verified: the LU input
+file now hashes identically under `-O0`, `-O3 -march=native -ffp-contract=fast`,
+`-O3 -march=x86-64 -ffp-contract=off` and `-O2 -ffp-contract=fast`.
+
+**Why the recorded answers are still not compared bit-exactly.** Exact *inputs* do not make
+exact *outputs*: LU divides, so its intermediates need rounding no matter how the inputs are
+chosen, and those are the values host-specific code generation can vary. This project builds Release with
 `-march=native -mtune=native`, so instruction selection — FMA contraction, vectorisation
 width, reduction order — follows the *host CPU*. Two machines compute different last bits for
 the same program, and no checked-in file can promise otherwise.
