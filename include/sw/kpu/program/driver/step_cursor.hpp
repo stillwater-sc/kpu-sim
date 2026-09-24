@@ -186,7 +186,7 @@ public:
         std::stable_sort(events_.begin(), events_.end(),
                          [](const StepEvent& a, const StepEvent& b) {
             if (a.at != b.at) return a.at < b.at;
-            if (phase(a.kind) != phase(b.kind)) return phase(a.kind) < phase(b.kind);
+            if (phase(a) != phase(b)) return phase(a) < phase(b);
             if (a.op_index != b.op_index) return a.op_index < b.op_index;
             if (a.leg != b.leg) return a.leg < b.leg;
             return rank(a.kind) < rank(b.kind);
@@ -219,6 +219,27 @@ public:
 
 private:
     // Releases before acquires, which is the order the executor itself uses.
+    //
+    // A ZERO-WORK OP IS THE EXCEPTION, and it has to be expressed as a property of the
+    // EVENT rather than as a special case between two events. Such an op has no hops and
+    // start == finish, so its fire and its completion share a cycle; ranking every
+    // completion ahead of every fire would complete it BEFORE it fired, breaking the
+    // lifecycle invariant and leaving in_flight() stuck at 1.
+    //
+    // A same-op exception would be worse than the bug: it would make the comparator
+    // INTRANSITIVE -- fire(0) < complete(0) by the exception, complete(0) < complete(1) and
+    // complete(1) < fire(0) by phase -- which is a cycle, and undefined behaviour in
+    // std::sort. Deriving the phase from the event's own fields keeps the comparator a
+    // pure tuple comparison, so it stays a strict weak ordering.
+    //
+    // Putting a zero-work fire in the release phase is safe because it takes no lane:
+    // there is nothing for it to acquire.
+    static int phase(const StepEvent& e) {
+        if (e.zero_work &&
+            (e.kind == StepKind::OpFired || e.kind == StepKind::OpCompleted))
+            return 0;                              // keep the pair in op-local rank order
+        return phase(e.kind);
+    }
     static int phase(StepKind k) {
         switch (k) {
             case StepKind::HopFinished:

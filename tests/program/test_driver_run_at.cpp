@@ -568,3 +568,44 @@ TEST_CASE("a level with no interpreter has no stepper either",
                              ExecutionLevel::CycleAccurate})
         CHECK_THROWS_AS(make_stepper(l, p, empty), std::invalid_argument);
 }
+
+TEST_CASE("a zero-work op fires before it completes, even sharing one cycle",
+          "[program][driver][step]") {
+    // Releases are ordered before acquires within a cycle to mirror the executor, but a
+    // zero-work op has no hops and start == finish, so its fire and its completion share a
+    // cycle. Ranking every completion ahead of every fire would complete it BEFORE it
+    // fired and leave in_flight() stuck at 1.
+    //
+    // No derived program produces such an op today -- verified: zero_work_ops is 0 for
+    // matmul and LU at every size tried -- so this builds the timeline by hand rather than
+    // asserting against a run that cannot exercise it.
+    std::vector<TileOpRecord> timeline;
+
+    TileOpRecord instant{};             // the zero-work op, sharing one cycle
+    instant.op_index = 0;
+    instant.kind = TileOpKind::Feed;
+    instant.start = 8;
+    instant.finish = 8;
+    instant.zero_work = true;
+    timeline.push_back(instant);
+
+    TileOpRecord moving{};              // a real transfer completing at the same cycle
+    moving.op_index = 1;
+    moving.kind = TileOpKind::Feed;
+    moving.start = 0;
+    moving.finish = 8;
+    moving.hops.push_back(HopRecord{Hop::DmaDramToL3, 0, 0, 8});
+    timeline.push_back(moving);
+
+    BlockSequentialStepper cur(timeline);
+    std::map<std::size_t, bool> fired;
+    while (cur.step()) {
+        const StepEvent& e = cur.current();
+        if (e.kind == StepKind::OpFired) fired[e.op_index] = true;
+        if (e.kind == StepKind::HopStarted || e.kind == StepKind::OpCompleted)
+            CHECK(fired[e.op_index]);   // nothing happens to an op before it fires
+    }
+    CHECK(fired[0]);
+    CHECK(fired[1]);
+    CHECK(cur.in_flight() == 0);        // and nothing is left dangling
+}
