@@ -110,6 +110,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`--deploy spec.json`, and both tools run through the platform (#282 increment 4).**
+  `kpu-run --deploy` and `tile_characterize --deploy` take the machine from a deployment spec;
+  giving a device flag alongside it is refused, because two descriptions of a machine is the
+  same usage error as `--program` beside `--algo`.
+
+  **`kpu-run` no longer calls `run_at` directly.** It loads each level's program into a
+  `VirtualPlatform`, takes one snapshot, and runs each level from it, so every run carries a
+  complete identity (`run id L-B prog:… state:… deploy:…`). Doing so immediately exercised the
+  trap the platform documents: results must be captured as they are produced, because the next
+  run's restore resets every program.
+
+  **The characterization harness executed outside the platform** — its *validation* called
+  `TileProgramReference` directly, which was the "fourth execution path" #282 names. That now
+  runs at L-B through a platform, one per sweep cell (a single platform for the whole sweep
+  would make each cell restore every earlier one). Its *characterization* stays an analytical
+  estimate and is deliberately not routed through a level: giving an estimate a fidelity level
+  would claim something it does not have.
+
+  **With `--deploy`, the machine axes come from the spec.** The first version left them at
+  their flag defaults, so a spec saying `checkerboard, 16` was swept as `single, 1/4/16` —
+  silently measuring a different machine than the one described. ADR 0002 §3.5 sweeps machines
+  as a *list of deployments*, not as axes over one spec. Every sweep row now carries the
+  deployment digest, since a row naming only its axes cannot be told apart from one measured on
+  a different spec with the same topology.
+
+  The unmodelled-field report is now **one line per level** rather than one per field: a fully
+  declared spec printed eleven near-identical lines, and a report nobody reads is no better
+  than one never written.
+
+### Fixed
+
+- **`tile_characterize` accepted numbers that were not numbers.** Its flags were bare
+  `std::stod`/`std::stoul`: `"abc"` threw uncaught (SIGABRT, which CI cannot distinguish from a
+  crash in the model), `"-2"` wrapped to an enormous sweep count, and `"inf"` was accepted as a
+  bandwidth. All of them now go through the shared checked parse, which `kpu-run`'s local
+  `parse_rate` also became — a local copy is how "what `--macs-per-cycle` means" drifts between
+  two tools.
+
 - **The global naming map: every declared resource, addressable (#282 increment 3).**
   `ResourceName` with `format`/`parse_resource_name`, and `ResourceMap` with `exists`,
   `index_of`, `enumerate`, `why_not` and `require`. Identity only — *"does this resource exist

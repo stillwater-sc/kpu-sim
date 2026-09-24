@@ -16,6 +16,7 @@
 #include <sw/kpu/program/driver/execution_level.hpp>
 #include <sw/kpu/program/driver/program_spec.hpp>
 #include <sw/kpu/program/platform/deployment_json.hpp>
+#include <sw/kpu/program/platform/virtual_platform.hpp>
 #include <sw/kpu/program/driver/step_cursor.hpp>
 #include <sw/kpu/program/serialize/l0_format.hpp>
 #include <sw/kpu/program/driver/timeline_trace.hpp>
@@ -36,34 +37,12 @@ using namespace sw::kpu::program::driver;
 
 namespace {
 
-// Bandwidths are doubles, and std::stod has the same hazards as std::stoul: it throws
-// on junk, accepts trailing characters, and would abort the process rather than exit 2.
+// Bandwidths go through the SHARED checked parse (program_spec.hpp), so this tool and
+// tile_characterize agree on what "--macs-per-cycle inf" means. A local copy drifted once
+// already in this repo's history; §D1 exists to stop it.
 bool parse_rate(const std::vector<std::string>& a, const char* key, double fallback,
                 double& out, std::string& error) {
-    if (!arg_present(a, key)) { out = fallback; return true; }
-    std::string raw;
-    if (!arg_required(a, key, raw, error)) return false;   // terminal, or a flag as value
-    if (raw.empty()) { error = std::string(key) + ": empty value"; return false; }
-    try {
-        std::size_t consumed = 0;
-        const double v = std::stod(raw, &consumed);
-        if (consumed != raw.size()) {
-            error = std::string(key) + ": '" + raw + "' has trailing characters";
-            return false;
-        }
-        // FINITE, not merely positive: std::stod parses "inf", and an infinite bandwidth
-        // is not a fast machine -- it is a makespan of 0 or a NaN reported as a result.
-        // The deployment refuses it too, but the flag's own name belongs in the message.
-        if (!std::isfinite(v) || !(v > 0.0)) {
-            error = std::string(key) + ": '" + raw + "' must be finite and positive";
-            return false;
-        }
-        out = v;
-        return true;
-    } catch (const std::exception&) {
-        error = std::string(key) + ": '" + raw + "' is not a number";
-        return false;
-    }
+    return parse_double(a, key, fallback, /*require_positive=*/true, out, error);
 }
 
 void usage() {
@@ -80,6 +59,9 @@ R"(kpu-run — execute a Domain Flow Program at one or more levels and compare t
   --tile <n>                tile size                    (default 16)
   --level <name|all>        behavioral | block-sequential | resource-transactional
                             | cycle-accurate | all       (default all)
+  --deploy <file.json>      the machine, as a deployment spec (ADR 0002 §3.5). Mutually
+                            exclusive with the device flags below: a spec and a flag
+                            that describe different machines is a usage error
   --topology <t>            single | news | checkerboard  (default single)
   --compute-tiles <n>       compute fabric tiles         (default 1)
   --l3-tiles <n>            L3 capacity in tiles, 0=unbounded (default 0)
@@ -350,9 +332,10 @@ int main(int argc, char** argv) {
     }
     // Keeps main's required-value parsing (an option present without a value is an error,
     // not an absence) and adds increment 3's stepping options on top.
-    std::string timeline_path, emit_path, emit_result_path;
+    std::string timeline_path, emit_path, emit_result_path, deploy_path;
     if (!arg_required(a, "--timeline", timeline_path, err) ||
         !arg_required(a, "--emit-l0", emit_path, err) ||
+        !arg_required(a, "--deploy", deploy_path, err) ||
         !arg_required(a, "--emit-l0-result", emit_result_path, err)) {
         std::cerr << "kpu-run: " << err << "\n";
         return 2;
@@ -390,14 +373,38 @@ int main(int argc, char** argv) {
         levels.push_back(*parsed);
     }
 
-    // The flags build a DEPLOYMENT, and the descriptor the executors schedule on is a view
-    // of it (#282 increment 1). One machine description, two views.
+    // The machine comes from a SPEC FILE or from the flags, never from both: two
+    // descriptions of a machine is the same usage error as --program beside --algo, and
+    // silently preferring one would make the tool report the flags it was given and run
+    // something else.
+    //
+    // The flags build a deployment too (#282 increment 1), so there is one machine
+    // description either way and the descriptor the executors schedule on is a view of it.
     std::optional<platform::DeploymentSpec> deployment;
-    try {
-        deployment.emplace(make_deployment(ds));
-    } catch (const std::exception& e) {
-        std::cerr << "kpu-run: " << e.what() << "\n";
-        return 2;
+    if (!deploy_path.empty()) {
+        static const char* kDeviceFlags[] = {
+            "--topology", "--compute-tiles", "--l3-tiles", "--dma-engines", "--block-movers",
+            "--streamers", "--noc-links", "--dma-bytes-per-cycle", "--bm-bytes-per-cycle",
+            "--str-bytes-per-cycle", "--noc-bytes-per-cycle", "--macs-per-cycle"};
+        for (const char* k : kDeviceFlags)
+            if (arg_present(a, k)) {
+                std::cerr << "kpu-run: --deploy and " << k << " cannot be combined: the "
+                             "spec already says what machine to run on\n";
+                return 2;
+            }
+        try {
+            deployment.emplace(platform::read_spec_file(deploy_path));
+        } catch (const std::exception& e) {
+            std::cerr << "kpu-run: " << e.what() << "\n";
+            return 2;
+        }
+    } else {
+        try {
+            deployment.emplace(make_deployment(ds));
+        } catch (const std::exception& e) {
+            std::cerr << "kpu-run: " << e.what() << "\n";
+            return 2;
+        }
     }
     const auto device = deployment->device_view();
     const bool compare = !has_flag(a, "--no-compare");
@@ -427,12 +434,21 @@ int main(int argc, char** argv) {
         if (!level_implemented(l))
             std::cout << "\n         (" << short_name(l) << " not run: "
                       << not_implemented_reason(l) << ")";
-    // ...and what of the MACHINE is not being modelled. A deployment is a superset of
-    // what any level schedules on, so a declared field can be dropped by the projection --
+    // ...and what of the MACHINE is not being modelled. A deployment is a superset of what
+    // any level schedules on, so a declared field can be dropped by the projection --
     // quietly, unless it is said here.
-    for (ExecutionLevel l : levels)
-        for (const std::string& line : unmodelled_fields(l, *deployment))
-            std::cout << "\n         (" << line << ")";
+    //
+    // ONE LINE PER LEVEL, not one per field. A fully declared spec has six such fields and
+    // two levels ran, which printed eleven near-identical lines -- and a report nobody reads
+    // is no better than one that was never written.
+    for (ExecutionLevel l : levels) {
+        const auto fields = unmodelled(l, *deployment);
+        if (fields.empty()) continue;
+        std::cout << "\n         (" << short_name(l) << " ignores: ";
+        for (std::size_t i = 0; i < fields.size(); ++i)
+            std::cout << (i ? ", " : "") << platform::to_string(fields[i]);
+        std::cout << ")";
+    }
     std::cout << "\n\n";
 
     // One place decides what an emitted file records, so the two emit paths cannot drift.
@@ -488,41 +504,73 @@ int main(int argc, char** argv) {
         std::cout << "wrote  " << emit_path << "  (test case, inputs inline)\n";
     }
 
-    // Each level gets its OWN program, filled identically, so the comparison is of
-    // the models rather than of leftover state.
-    std::vector<TileProgram> programs;
-    std::vector<RunOutcome> outcomes;
+    // EVERY RUN GOES THROUGH THE PLATFORM (#282 increment 4). The driver used to call
+    // run_at() directly, which made it a second path to execution beside the platform -- and
+    // "one VirtualPlatform owns the deployment; every driver goes through it" (ADR 0002 §3.5)
+    // is the discipline that keeps a result reproducible: the platform takes the initial
+    // state as an argument, so the run identity is complete.
+    std::optional<platform::VirtualPlatform> vp;
+    std::vector<platform::ProgramHandle> handles;
     std::vector<stream::StreamProgram> streams;
-    programs.reserve(levels.size());
     streams.reserve(levels.size());
-    for (ExecutionLevel l : levels) {
-        try {
+    try {
+        vp.emplace(*deployment);
+        // Each level gets its OWN program, filled identically, so the comparison is of the
+        // models rather than of leftover state.
+        for (std::size_t i = 0; i < levels.size(); ++i) {
             // derive() and fill() throw too -- on an operand a spec does not declare, for
             // one -- so they belong inside the guard rather than beside it.
-            programs.push_back(make_program());
-            // The stream program is derived PER PROGRAM: it indexes ops of the program it
-            // was derived from, so sharing one across levels would alias the wrong ops.
-            //
-            // Its failure gets its OWN handler, because the derivation throws about the
-            // thing it could not find -- "no operand 'C'" -- and for a program that came
-            // from a FILE there is no algo to gate on beforehand, so that bare message is
-            // all the user would see. The flag that caused it belongs in the diagnostic.
-            if (dataflow.empty()) {
-                streams.push_back(stream::StreamProgram{});
-            } else {
-                try {
-                    streams.push_back(stream::derive_matmul_streams(programs.back(),
-                                                                    map_for(dataflow)));
-                } catch (const std::exception& e) {
-                    std::cerr << "kpu-run: --streams " << map_for(dataflow).name
-                              << ": this program has no matmul stream derivation ("
-                              << e.what() << ")\n";
-                    return 2;
-                }
-            }
-            outcomes.push_back(run_at(l, programs.back(), device,
-                                     Placement::single(device.compute_tiles),
-                                     dataflow.empty() ? nullptr : &streams.back()));
+            handles.push_back(vp->load_program(make_program()));
+        }
+    } catch (const std::exception& e) {
+        std::cerr << "kpu-run: " << e.what() << "\n";
+        return 2;
+    }
+
+    // The stream program is derived PER PROGRAM: it indexes ops of the program it was
+    // derived from, so sharing one across levels would alias the wrong ops.
+    //
+    // Its failure gets its OWN handler, because the derivation throws about the thing it
+    // could not find -- "no operand 'C'" -- and for a program that came from a FILE there is
+    // no algo to gate on beforehand, so that bare message is all the user would see. The flag
+    // that caused it belongs in the diagnostic.
+    for (const platform::ProgramHandle& h : handles) {
+        if (dataflow.empty()) {
+            streams.push_back(stream::StreamProgram{});
+            continue;
+        }
+        try {
+            streams.push_back(stream::derive_matmul_streams(vp->program(h), map_for(dataflow)));
+        } catch (const std::exception& e) {
+            std::cerr << "kpu-run: --streams " << map_for(dataflow).name
+                      << ": this program has no matmul stream derivation (" << e.what()
+                      << ")\n";
+            return 2;
+        }
+    }
+
+    // ONE snapshot, taken before anything runs, so every level starts from the same state --
+    // which is what makes the comparison a test of the models. Its digest is part of each
+    // run's identity.
+    const platform::StateSnapshot initial = vp->snapshot();
+
+    // RESULTS ARE CAPTURED AS THEY ARE PRODUCED, not read back afterwards. run() restores
+    // the snapshot platform-wide, so the NEXT run resets every program -- including the one
+    // that just produced an answer. Reading vp->program(h) after the loop would read the
+    // INPUT the last restore put back, and the comparison would diff a result against an
+    // input. (test_virtual_platform learned this the same way.)
+    std::vector<TileProgram> programs;
+    std::vector<RunOutcome> outcomes;
+    programs.reserve(levels.size());
+    for (std::size_t i = 0; i < levels.size(); ++i) {
+        try {
+            const auto r = vp->run(handles[i], levels[i], initial,
+                                   Placement::single(device.compute_tiles),
+                                   dataflow.empty() ? nullptr : &streams[i]);
+            outcomes.push_back(r.outcome);
+            programs.push_back(vp->program(handles[i]));
+            if (i == 0)
+                std::cout << "run id   " << r.identity.str() << "\n\n";
         } catch (const std::exception& e) {
             std::cerr << "kpu-run: " << e.what() << "\n";
             return 2;

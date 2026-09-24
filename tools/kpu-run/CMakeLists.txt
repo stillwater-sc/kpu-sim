@@ -156,6 +156,7 @@ if(KPU_BUILD_TESTS)
     # simulator ran was one the simulator wrote. The corpus files are absolute paths
     # because these wrappers run with no WORKING_DIRECTORY of their own.
     set(_corpus ${CMAKE_SOURCE_DIR}/tests/program/corpus)
+    set(_deploy ${CMAKE_SOURCE_DIR}/tests/program/deploy)
 
     add_test(NAME kpu_run_program_from_file
         COMMAND ${CMAKE_COMMAND}
@@ -245,6 +246,65 @@ if(KPU_BUILD_TESTS)
     )
     set_tests_properties(kpu_run_program_names_the_flag_for_streams PROPERTIES
         LABELS "program;driver")
+
+    # ---- the machine as a spec (#282 increment 4) ---------------------------------
+    add_test(NAME kpu_run_deploy_from_spec
+        COMMAND ${CMAKE_COMMAND}
+            -DCMD=$<TARGET_FILE:run>
+            -DARGS=--size$<SEMICOLON>32$<SEMICOLON>--tile$<SEMICOLON>16$<SEMICOLON>--deploy$<SEMICOLON>${_deploy}/adr_checkerboard16.json
+            -DEXPECT_CODE=0
+            -DMUST_MATCH=checkerboard.cf16.*run.id.*OK:.every.level
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/expect_exit.cmake
+    )
+    set_tests_properties(kpu_run_deploy_from_spec PROPERTIES LABELS "program;driver")
+
+    # A spec AND a device flag describe two machines. Picking one silently would make the
+    # tool report the flags it was given and run something else.
+    add_test(NAME kpu_run_deploy_rejects_device_flags
+        COMMAND ${CMAKE_COMMAND}
+            -DCMD=$<TARGET_FILE:run>
+            -DARGS=--deploy$<SEMICOLON>${_deploy}/canonical_single.json$<SEMICOLON>--topology$<SEMICOLON>news
+            -DEXPECT_CODE=2
+            -DMUST_MATCH=--deploy.and.--topology.cannot.be.combined
+            -DMUST_NOT_MATCH=values.vs
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/expect_exit.cmake
+    )
+    set_tests_properties(kpu_run_deploy_rejects_device_flags PROPERTIES LABELS "program;driver")
+
+    # A declared field the level does not model is REPORTED, compactly -- one line per level
+    # rather than one per field, which is what made an 11-line report nobody would read.
+    add_test(NAME kpu_run_reports_unmodelled_fields
+        COMMAND ${CMAKE_COMMAND}
+            -DCMD=$<TARGET_FILE:run>
+            -DARGS=--size$<SEMICOLON>32$<SEMICOLON>--tile$<SEMICOLON>16$<SEMICOLON>--deploy$<SEMICOLON>${_deploy}/adr_checkerboard16.json
+            -DEXPECT_CODE=0
+            -DMUST_MATCH=L-T1.ignores:.*l3.banks.*l1.vectors
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/expect_exit.cmake
+    )
+    set_tests_properties(kpu_run_reports_unmodelled_fields PROPERTIES LABELS "program;driver")
+
+    # Multi-device execution is not implemented, and running device 0 while ignoring the rest
+    # would be a deployment described and a machine run that are not the same machine.
+    add_test(NAME kpu_run_refuses_multi_device
+        COMMAND ${CMAKE_COMMAND}
+            -DCMD=$<TARGET_FILE:run>
+            -DARGS=--size$<SEMICOLON>32$<SEMICOLON>--tile$<SEMICOLON>16$<SEMICOLON>--deploy$<SEMICOLON>${_deploy}/two_devices.json
+            -DEXPECT_CODE=2
+            -DMUST_MATCH=multi-device.execution.is.not.implemented
+            -DMUST_NOT_MATCH=OK:.every.level
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/expect_exit.cmake
+    )
+    set_tests_properties(kpu_run_refuses_multi_device PROPERTIES LABELS "program;driver")
+
+    add_test(NAME kpu_run_deploy_missing_file
+        COMMAND ${CMAKE_COMMAND}
+            -DCMD=$<TARGET_FILE:run>
+            -DARGS=--deploy$<SEMICOLON>${CMAKE_CURRENT_BINARY_DIR}/no_such_deploy.json
+            -DEXPECT_CODE=2
+            -DMUST_MATCH=cannot.read
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/expect_exit.cmake
+    )
+    set_tests_properties(kpu_run_deploy_missing_file PROPERTIES LABELS "program;driver")
 
     add_test(NAME kpu_run_program_missing_file
         COMMAND ${CMAKE_COMMAND}
