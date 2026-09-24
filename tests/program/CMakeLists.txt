@@ -33,6 +33,17 @@ set_tests_properties(test_l0_serialization PROPERTIES
     LABELS "program;serialize;v0.9"
 )
 
+# The L0 golden corpus: checked-in files that CI loads and executes (#265)
+kpu_add_component_test(test_l0_corpus "program"
+    test_l0_corpus.cpp
+)
+
+# Paths are relative to the project root, following tests/compiler's convention.
+set_tests_properties(test_l0_corpus PROPERTIES
+    LABELS "program;serialize;corpus;v0.9"
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+)
+
 # The driver seam: one function maps a level to an interpreter (#285)
 kpu_add_component_test(test_driver_run_at "program"
     test_driver_run_at.cpp

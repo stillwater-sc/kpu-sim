@@ -16,10 +16,12 @@
 #include <sw/kpu/program/driver/execution_level.hpp>
 #include <sw/kpu/program/driver/program_spec.hpp>
 #include <sw/kpu/program/driver/step_cursor.hpp>
+#include <sw/kpu/program/serialize/l0_format.hpp>
 #include <sw/kpu/program/driver/timeline_trace.hpp>
 #include <sw/trace/trace_exporter.hpp>
 
 #include <cstring>
+#include <fstream>
 #include <iomanip>
 #include <iostream>
 #include <memory>
@@ -84,6 +86,10 @@ R"(kpu-run — execute a Domain Flow Program at one or more levels and compare t
   --streams <dataflow>      derive an L1 stream program: output-stationary|os,
                             weight-stationary|ws, a-stationary|as,
                             fully-streaming|hex  (matmul only)
+  --emit-l0 <file.l0>       write the program BEFORE execution: a test case, inputs
+                            inline. This is how the golden corpus is regenerated
+  --emit-l0-result <file.l0>  write it AFTER execution: the same program with results,
+                            which is the corpus's expected-output half
   --timeline <file.json>    Chrome Trace Event Format, one event PER HOP
   --step                    single-step: one line per transaction at that level
                             (L-B: one op applied; L-T1: op fired / hop start / hop
@@ -253,8 +259,10 @@ int main(int argc, char** argv) {
     }
     // Keeps main's required-value parsing (an option present without a value is an error,
     // not an absence) and adds increment 3's stepping options on top.
-    std::string timeline_path;
-    if (!arg_required(a, "--timeline", timeline_path, err)) {
+    std::string timeline_path, emit_path, emit_result_path;
+    if (!arg_required(a, "--timeline", timeline_path, err) ||
+        !arg_required(a, "--emit-l0", emit_path, err) ||
+        !arg_required(a, "--emit-l0-result", emit_result_path, err)) {
         std::cerr << "kpu-run: " << err << "\n";
         return 2;
     }
@@ -307,6 +315,26 @@ int main(int argc, char** argv) {
                       << not_implemented_reason(l) << ")";
     std::cout << "\n\n";
 
+    // --emit-l0 writes the program BEFORE anything executes, so the file is an input
+    // rather than a snapshot of a finished run. Written as a test case (values inline),
+    // because a corpus entry that needed an external fill step would not be self-contained.
+    if (!emit_path.empty()) {
+        TileProgram to_emit = derive(ps);
+        fill(to_emit, ps);
+        std::ofstream out(emit_path);
+        if (!out) {
+            std::cerr << "kpu-run: cannot write '" << emit_path << "'\n";
+            return 2;
+        }
+        serialize::write_l0(out, to_emit, serialize::WriteOptions{/*include_values=*/true});
+        out.close();
+        if (!out) {
+            std::cerr << "kpu-run: failed while writing '" << emit_path << "'\n";
+            return 2;
+        }
+        std::cout << "wrote  " << emit_path << "  (test case, inputs inline)\n";
+    }
+
     // Each level gets its OWN program, filled identically, so the comparison is of
     // the models rather than of leftover state.
     std::vector<TileProgram> programs;
@@ -334,6 +362,26 @@ int main(int argc, char** argv) {
             return 2;
         }
         print_run(outcomes.back());
+    }
+
+    // --emit-l0-result writes the program AFTER execution: the corpus's expected-output
+    // half. Taken from the FINEST level that ran, since every level must agree on values
+    // anyway and a disagreement would already have failed the comparison below.
+    if (!emit_result_path.empty()) {
+        std::ofstream out(emit_result_path);
+        if (!out) {
+            std::cerr << "kpu-run: cannot write '" << emit_result_path << "'\n";
+            return 2;
+        }
+        serialize::write_l0(out, programs.back(),
+                            serialize::WriteOptions{/*include_values=*/true});
+        out.close();
+        if (!out) {
+            std::cerr << "kpu-run: failed while writing '" << emit_result_path << "'\n";
+            return 2;
+        }
+        std::cout << "wrote  " << emit_result_path << "  (results, from "
+                  << short_name(levels.back()) << ")\n";
     }
 
     // --step: walk one level's transactions. At L-B this RE-EXECUTES the program one op

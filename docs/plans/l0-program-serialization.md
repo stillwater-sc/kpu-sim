@@ -150,7 +150,37 @@ attention value is `-inf`, and this repo does softmax and attention work.
    whose preamble says `VALUES none` while carrying `VALUES_ROW` records are all refused. A
    test case that silently lost some of its inputs is worse than one that will not load,
    because it would run and produce an answer nobody could tell was wrong.
-3. **Golden corpus in CI**: matmul and tile LU, checked in, loaded and executed.
+3. **Golden corpus in CI** — **done.** `tests/program/corpus/` holds matmul 48³ and tile LU
+   64, each as a pair: `<case>.l0` carrying the **inputs** and `<case>.result.l0` carrying
+   the **expected outputs**. Two files rather than one because LU factors `A` **in place** —
+   a single post-execution snapshot would have overwritten the input it was meant to
+   preserve.
+
+   `test_l0_corpus` loads each input, executes it at every implemented level, and compares
+   **every operand** against the expected file. No `fill()` call appears in the test: a
+   corpus entry has to be self-contained or it is not evidence.
+
+   Three further checks, each answering a different question:
+
+   - **byte-stable re-serialization**. Deliberately strict, and it will fail on any format
+     change — that is the point, and verified to bite: tampering with one field makes two
+     assertions fail.
+   - **a hand-written refusal fixture** declaring `MIN_CONSUMER 9.0.0`, which must fail to
+     load. Never regenerated, precisely so no tool can quietly bring it in line.
+   - **derivation equivalence**, kept separate from the execution check because they can
+     diverge: a derivation change leaves the corpus executing correctly while silently
+     making it stale, and conflating the two would hide which moved.
+
+   Regeneration is a documented command (`kpu-run --emit-l0 / --emit-l0-result`) rather than
+   a script, and the corpus README asks the question that matters before you run it: **does
+   this change need a version bump?** Regenerating without answering that turns a corpus
+   into a rubber stamp — the files still load, because the code that reads them also wrote
+   them.
+
+   **The corpus earned its place immediately**: the first draft of the refusal fixture put a
+   comment before the magic line, and the test caught it — reporting `NotAnL0File` where the
+   fixture was meant to exercise `UnsupportedVersion`. The magic must be the first line,
+   with nothing before it, because a file has to be identifiable by its opening bytes.
 4. **Stream annotations** alongside (ADR §7.4).
 5. **`kpu-run --program`** — increment 4 of #285, which is the point of all of this.
 

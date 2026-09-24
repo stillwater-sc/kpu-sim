@@ -9,6 +9,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **A golden corpus of L0 programs, loaded and executed in CI (#265 increment 3).**
+  `tests/program/corpus/` holds matmul 48³ and tile LU 64 as pairs — `<case>.l0` with the
+  **inputs**, `<case>.result.l0` with the **expected outputs**. Two files rather than one
+  because LU factors `A` **in place**, so a single post-execution snapshot would have
+  overwritten the input it was meant to preserve. `test_l0_corpus` loads each input, runs it
+  at every implemented level, and compares **every operand** against the expected file —
+  with no `fill()` call anywhere, because a corpus entry that needs an external step is not
+  evidence.
+
+  This exists because `kernels/bin/*.kpubin` rotted: opcodes renumbered with no version
+  bump, and those files now abort with `std::get: wrong index for variant`. A version policy
+  that is not tested is a version policy that will be wrong.
+
+  Three further checks, each answering a different question: **byte-stable
+  re-serialization** (strict on purpose — it will fail on any format change, and is verified
+  to bite when a single field is tampered with); a **hand-written refusal fixture**
+  declaring `MIN_CONSUMER 9.0.0` that must fail to load, never regenerated so no tool can
+  quietly bring it in line; and **derivation equivalence**, kept separate from the execution
+  check because those can diverge — a derivation change leaves the corpus executing
+  correctly while silently making it stale.
+
+  Regeneration is a documented command rather than a script: `kpu-run` gains `--emit-l0`
+  (the program before execution — a test case) and `--emit-l0-result` (after execution — the
+  expected half). The corpus README asks the question that matters *before* regenerating:
+  does this change need a version bump? Regenerating without answering that turns a corpus
+  into a rubber stamp, since the code that reads the files also wrote them.
+
+  **The corpus earned its place immediately.** The first draft of the refusal fixture put a
+  comment before the magic line, and the test caught it — reporting `NotAnL0File` where the
+  fixture was meant to exercise `UnsupportedVersion`. The magic must be the **first line**,
+  with nothing before it, because a file has to be identifiable by its opening bytes; that
+  rule is now stated where a reader of the code will meet it.
+
 - **L0 programs can carry their values, so a file can be a test case (#265 increment 2).**
   `to_test_case()` writes `VALUES inline` plus one **`VALUES_ROW` per operand row**, and
   `read_l0` reports through `LoadInfo{has_values}` whether it loaded a **kernel** or a
