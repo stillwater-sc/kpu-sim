@@ -36,8 +36,10 @@ fail for different reasons:
 | re-serializing a corpus file reproduces it | any | **byte-identical** |
 
 **Why every fixture value must be exactly representable.** `driver::fill` produces only
-values that need no rounding — multiples of 1/4 for matmul, 1/8 for LU. That is a
-requirement, not a coincidence: Release builds with `-march=native`, so host-specific code
+values that need no rounding: matmul's `A` in quarters and `B` in **eighths**, LU in eighths.
+The per-operand granularity is incidental — the property that matters is that none of them
+round. That is a requirement, not a coincidence: Release builds with `-march=native`, so
+host-specific code
 generation is free to compute `a - b * c` with one rounding instead of two, and a value that
 needs rounding can therefore differ between machines. If the *inputs* differ, no checked-in
 file can be reproduced anywhere else.

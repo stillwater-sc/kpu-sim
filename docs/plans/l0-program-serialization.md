@@ -187,8 +187,9 @@ attention value is `-inf`, and this repo does softmax and attention work.
    them.
 
    **Fixture values must be exactly representable, or the inputs are not reproducible
-   either.** `driver::fill` now emits only values that need no rounding — multiples of 1/4
-   for matmul, 1/8 for LU. The LU fill used `* 0.1f`, leaving 3129 off-diagonal values
+   either.** `driver::fill` now emits only values that need no rounding — matmul's `A` in
+   quarters and `B` in eighths, LU in eighths; the per-operand granularity is incidental, the
+   no-rounding property is the point. The LU fill used `* 0.1f`, leaving 3129 off-diagonal values
    inexact, and CI failed on the LU corpus **input**, not its output. Verified by hashing
    the regenerated file identically under four different optimisation, ISA and
    FP-contraction settings. Exact inputs do not buy exact *outputs*, because LU divides —
