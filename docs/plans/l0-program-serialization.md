@@ -120,7 +120,26 @@ attention value is `-inf`, and this repo does softmax and attention work.
    `PRODUCER` carries the **build** version, not the format version — reusing the format
    version there would make the field useless for the thing R4's `bad_producers` list needs
    it for.
-2. **Values, optionally**, with the reader able to say whether it got a kernel or a test case.
+2. **Values, optionally** — **done.** `WriteOptions{include_values}` (or `to_test_case()`)
+   emits `VALUES inline` plus one **`VALUES_ROW` per operand row**, and `read_l0` fills a
+   `LoadInfo{has_values}` so the caller never infers "kernel or test case" from zeros — an
+   all-zero operand is a legitimate kernel input, and guessing would make the two
+   indistinguishable.
+
+   One record per *row* is what keeps the text justification honest: a one-element change
+   moves **one line** in a diff, which is asserted. A whole operand per line would make
+   every change look like a rewrite.
+
+   Values are decimal at `max_digits10` through a classic-locale stream, with `inf`,
+   `-inf` and `nan` as explicit tokens (§5). Verified bit-exact — via `memcmp`, so `-0.0f`
+   is distinguished from `0.0f` — across `1.0000001f`, denormal min, `FLT_MIN`, `FLT_MAX`,
+   `lowest()`, π, `1e-7`, both infinities and NaN.
+
+   **Strict about completeness**, deliberately: a missing row, a wrong value count, a
+   duplicated row, a row outside the operand, a row for an undeclared operand, and a file
+   whose preamble says `VALUES none` while carrying `VALUES_ROW` records are all refused. A
+   test case that silently lost some of its inputs is worse than one that will not load,
+   because it would run and produce an answer nobody could tell was wrong.
 3. **Golden corpus in CI**: matmul and tile LU, checked in, loaded and executed.
 4. **Stream annotations** alongside (ADR §7.4).
 5. **`kpu-run --program`** — increment 4 of #285, which is the point of all of this.

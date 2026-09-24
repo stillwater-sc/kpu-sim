@@ -17,7 +17,9 @@
 #include <sw/kpu/program/driver/program_spec.hpp>
 #include <sw/kpu/program/serialize/l0_format.hpp>
 
+#include <cmath>
 #include <cstring>
+#include <limits>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -402,5 +404,192 @@ TEST_CASE("the reader validates a program against its own registry",
     SECTION("a valid in-range coordinate still loads") {
         CHECK_NOTHROW(from_string(pre + "OPERAND \"A\" rows=32 cols=32 tile_rows=16 "
                                         "tile_cols=16\nOP kind=FEED in=A:1,1\nEND\n"));
+    }
+}
+
+// ============================================================================
+// Increment 2 — values, optionally
+//
+// A program WITH values is a test case; one without is a kernel. The file says
+// which, so a reader never infers it from zeros -- an all-zero operand is a
+// legitimate kernel input, and guessing would make the two indistinguishable.
+// ============================================================================
+
+TEST_CASE("a test case carries its inputs, and executes without being re-filled",
+          "[program][serialize][values]") {
+    // The whole point of carrying values: the file is self-contained. If the reloaded
+    // program needed fill() to compute the right answer, the file would not be a test case
+    // at all -- it would be a kernel with a misleading preamble.
+    for (const char* algo : {"matmul", "lu"}) {
+        ProgramSpec ps;
+        ps.algo = algo;
+        ps.size = 48;
+        ps.tile = 16;
+
+        TileProgram original = derive(ps);
+        fill(original, ps);
+
+        LoadInfo info;
+        TileProgram reloaded = from_string(to_test_case(original), &info);
+        CHECK(info.has_values);
+
+        // Inputs are bit-identical before anything runs.
+        for (const std::string& key : original.operand_order())
+            CHECK(bits_equal(reloaded.operand(key).values, original.operand(key).values));
+
+        // And the reloaded program computes the same answer with NO fill() call.
+        const DeviceSpec ds;
+        const auto device = make_device(ds);
+        TileProgram ref = derive(ps);
+        fill(ref, ps);
+        run_at(ExecutionLevel::BlockSequential, ref, device,
+               Placement::single(device.compute_tiles));
+        run_at(ExecutionLevel::BlockSequential, reloaded, device,
+               Placement::single(device.compute_tiles));
+        CHECK(bits_equal(ref.operand(result_operand(ps)).values,
+                         reloaded.operand(result_operand(ps)).values));
+    }
+}
+
+TEST_CASE("a kernel says it has no values, and carries none",
+          "[program][serialize][values]") {
+    ProgramSpec ps;
+    ps.algo = "matmul";
+    ps.size = 32;
+    ps.tile = 16;
+    TileProgram filled = derive(ps);
+    fill(filled, ps);
+
+    // Written as a kernel, the values are deliberately dropped -- and the file says so,
+    // which is what lets a reader tell this from a test case whose inputs are all zero.
+    const std::string kernel = to_string(filled);
+    CHECK(kernel.find("VALUES none\n") != std::string::npos);
+    CHECK(kernel.find("VALUES_ROW") == std::string::npos);
+
+    LoadInfo info;
+    const TileProgram back = from_string(kernel, &info);
+    CHECK_FALSE(info.has_values);
+    for (float v : back.operand("A").values) CHECK(v == 0.0f);
+}
+
+TEST_CASE("values are exact, including the ones a stream cannot parse",
+          "[program][serialize][values]") {
+    // Measured before this was written: hexfloat does not round-trip through iostreams,
+    // and inf/-inf/nan parse in NEITHER encoding, so they need explicit tokens. A masked
+    // attention value is -inf, so this is a real case rather than a curiosity.
+    TileProgram p("awkward values");
+    p.add_operand(TensorOperand("A", 2, 6, 2, 6));
+    auto& A = p.operand("A");
+    A.at(0, 0) = 1.0000001f;                                   // needs 9 digits
+    A.at(0, 1) = -0.0f;                                        // sign of zero matters
+    A.at(0, 2) = std::numeric_limits<float>::denorm_min();
+    A.at(0, 3) = std::numeric_limits<float>::max();
+    A.at(0, 4) = -std::numeric_limits<float>::infinity();      // an attention mask
+    A.at(0, 5) = std::numeric_limits<float>::infinity();
+    A.at(1, 0) = std::numeric_limits<float>::quiet_NaN();
+    A.at(1, 1) = 3.14159265f;
+    A.at(1, 2) = 1e-7f;
+    A.at(1, 3) = std::numeric_limits<float>::lowest();
+    A.at(1, 4) = std::numeric_limits<float>::min();
+    A.at(1, 5) = -1.0f;
+
+    const std::string text = to_test_case(p);
+    CHECK(text.find("-inf") != std::string::npos);
+    CHECK(text.find("nan") != std::string::npos);
+
+    const TileProgram back = from_string(text);
+    const auto& B = back.operand("A");
+    for (Dim r = 0; r < 2; ++r)
+        for (Dim c = 0; c < 6; ++c) {
+            const float want = A.at(r, c), got = B.at(r, c);
+            if (std::isnan(want)) { CHECK(std::isnan(got)); continue; }
+            // memcmp, not ==, so -0.0f is distinguished from 0.0f.
+            CHECK(std::memcmp(&got, &want, sizeof(float)) == 0);
+        }
+}
+
+TEST_CASE("values are written one row per record, so a diff is readable",
+          "[program][serialize][values]") {
+    // §5's justification for text only holds if a change shows up small. One record per
+    // row means a changed row is one changed line; a whole operand per line would make
+    // every change look like a rewrite.
+    ProgramSpec ps;
+    ps.algo = "matmul";
+    ps.size = 32;
+    ps.tile = 16;
+    TileProgram a = derive(ps);
+    fill(a, ps);
+    TileProgram b = derive(ps);
+    fill(b, ps);
+    b.operand("A").at(7, 3) = 42.5f;          // one element differs
+
+    const std::string ta = to_test_case(a), tb = to_test_case(b);
+    std::istringstream sa(ta), sb(tb);
+    std::string la, lb;
+    std::size_t differing = 0, total = 0;
+    while (std::getline(sa, la) && std::getline(sb, lb)) {
+        ++total;
+        if (la != lb) ++differing;
+    }
+    CHECK(total > 32);                         // there are per-row records
+    CHECK(differing == 1);                     // and a one-element change moves one line
+}
+
+TEST_CASE("a partially or inconsistently valued file is refused",
+          "[program][serialize][values]") {
+    auto cause_of = [](const std::string& text) {
+        try {
+            from_string(text);
+        } catch (const FormatError& e) {
+            return e.cause();
+        }
+        FAIL("expected a FormatError");
+        return FormatError::Cause::Truncated;
+    };
+    const std::string pre = "KPUL0 1.0.0\nMIN_CONSUMER 1.0.0\n";
+    const std::string a2 = "OPERAND \"A\" rows=2 cols=2 tile_rows=2 tile_cols=2\n";
+
+    SECTION("a missing row: a partial test case would compute a partial answer") {
+        CHECK(cause_of(pre + "VALUES inline\n" + a2 +
+                       "VALUES_ROW \"A\" 0 1 2\nEND\n") ==
+              FormatError::Cause::MalformedRecord);
+    }
+    SECTION("the wrong number of values in a row") {
+        CHECK(cause_of(pre + "VALUES inline\n" + a2 +
+                       "VALUES_ROW \"A\" 0 1 2 3\nVALUES_ROW \"A\" 1 4 5\nEND\n") ==
+              FormatError::Cause::MalformedRecord);
+    }
+    SECTION("a duplicated row, where the later one would silently win") {
+        CHECK(cause_of(pre + "VALUES inline\n" + a2 +
+                       "VALUES_ROW \"A\" 0 1 2\nVALUES_ROW \"A\" 0 3 4\nEND\n") ==
+              FormatError::Cause::MalformedRecord);
+    }
+    SECTION("a row outside the operand") {
+        CHECK(cause_of(pre + "VALUES inline\n" + a2 +
+                       "VALUES_ROW \"A\" 0 1 2\nVALUES_ROW \"A\" 5 3 4\nEND\n") ==
+              FormatError::Cause::MalformedRecord);
+    }
+    SECTION("a row for an operand that does not exist") {
+        CHECK(cause_of(pre + "VALUES inline\n" + a2 +
+                       "VALUES_ROW \"A\" 0 1 2\nVALUES_ROW \"A\" 1 3 4\n"
+                       "VALUES_ROW \"Z\" 0 9 9\nEND\n") ==
+              FormatError::Cause::MalformedRecord);
+    }
+    SECTION("a file that contradicts itself about carrying inputs") {
+        // VALUES none plus VALUES_ROW records: one of the two is a lie, and guessing which
+        // would mean either dropping inputs or claiming a kernel is a test case.
+        CHECK(cause_of(pre + "VALUES none\n" + a2 +
+                       "VALUES_ROW \"A\" 0 1 2\nEND\n") ==
+              FormatError::Cause::MalformedRecord);
+    }
+    SECTION("an unrecognised VALUES mode") {
+        CHECK(cause_of(pre + "VALUES sideband\n" + a2 + "END\n") ==
+              FormatError::Cause::MalformedPreamble);
+    }
+    SECTION("a complete, consistent test case loads") {
+        LoadInfo info;
+        CHECK_NOTHROW(from_string(pre + "VALUES inline\n" + a2 +
+                                  "VALUES_ROW \"A\" 0 1 2\nVALUES_ROW \"A\" 1 3 4\nEND\n",
+                                  &info));
     }
 }

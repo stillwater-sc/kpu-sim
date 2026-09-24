@@ -28,6 +28,7 @@
 #include <sw/kpu/version.hpp>
 
 #include <cctype>
+#include <cmath>
 #include <cstdint>
 #include <istream>
 #include <iomanip>
@@ -160,7 +161,18 @@ inline std::string coord(const TileCoord& c) {
 }
 
 // Enough digits to round-trip a float exactly, and independent of the caller's locale.
+//
+// MEASURED, not assumed: decimal at max_digits10 round-trips every finite value tried
+// (1.0000001f, -0.0f, denormal min, FLT_MIN, FLT_MAX, pi, 1e-7). std::hexfloat -- the
+// canonical advice for exact float text -- does NOT: libstdc++'s operator>> will not parse
+// a hex float even with the manipulator set, so it reads back inexactly. See
+// docs/plans/l0-program-serialization.md §5.
+//
+// NON-FINITE VALUES GET EXPLICIT TOKENS, because operator>> parses none of inf/-inf/nan in
+// either encoding. They are not hypothetical: a masked attention value is -inf.
 inline std::string exact_float(float f) {
+    if (std::isnan(f)) return "nan";
+    if (std::isinf(f)) return f < 0.0f ? "-inf" : "inf";
     std::ostringstream os;
     os.imbue(std::locale::classic());
     os << std::setprecision(std::numeric_limits<float>::max_digits10) << f;
@@ -168,6 +180,9 @@ inline std::string exact_float(float f) {
 }
 
 inline float parse_float(const std::string& s, const std::string& where) {
+    if (s == "nan")  return std::numeric_limits<float>::quiet_NaN();
+    if (s == "inf")  return std::numeric_limits<float>::infinity();
+    if (s == "-inf") return -std::numeric_limits<float>::infinity();
     std::istringstream is(s);
     is.imbue(std::locale::classic());       // never the caller's decimal separator
     float v = 0.0f;
@@ -189,16 +204,20 @@ inline std::string coord_list(const std::vector<TileCoord>& v) {
 
 } // namespace detail
 
-// Write `prog`'s structure. Values are increment 2; `VALUES none` says so IN THE
-// FILE, so a reader knows it holds a kernel rather than a test case whose inputs
-// happened to be zero (design note §3).
-inline void write_l0(std::ostream& os, const TileProgram& prog) {
+// What to include. Values are optional BY DESIGN, not by omission: a program with
+// values is a TEST CASE, one without is a KERNEL, and the file says which so a reader
+// never has to infer it from zeros (design note §3).
+struct WriteOptions {
+    bool include_values = false;
+};
+
+inline void write_l0(std::ostream& os, const TileProgram& prog, const WriteOptions& opt) {
     os << kMagic << " " << format_version().str() << "\n";
     os << "MIN_CONSUMER " << format_version().str() << "\n";
     os << "OPSET tile " << opset_version().str() << "\n";
     os << "PRODUCER kpu-sim " << producer_version().str() << "\n";
     os << "PROGRAM " << detail::quote(prog.name()) << "\n";
-    os << "VALUES none\n";
+    os << "VALUES " << (opt.include_values ? "inline" : "none") << "\n";
 
     for (const std::string& key : prog.operand_order()) {
         const TensorOperand& op = prog.operand(key);
@@ -207,6 +226,21 @@ inline void write_l0(std::ostream& os, const TileProgram& prog) {
         os << "OPERAND " << detail::quote(op.name) << " rows=" << op.rows
            << " cols=" << op.cols << " tile_rows=" << op.tile_rows
            << " tile_cols=" << op.tile_cols << "\n";
+    }
+
+    // One record PER ROW, so a changed row is one changed line in a diff -- the property
+    // that makes a checked-in corpus reviewable, which is why the format is text at all.
+    // A whole operand on one line would make any change look like a total rewrite.
+    if (opt.include_values) {
+        for (const std::string& key : prog.operand_order()) {
+            const TensorOperand& tensor = prog.operand(key);
+            for (Dim r = 0; r < tensor.rows; ++r) {
+                os << "VALUES_ROW " << detail::quote(tensor.name) << " " << r;
+                for (Dim c = 0; c < tensor.cols; ++c)
+                    os << " " << detail::exact_float(tensor.at(r, c));
+                os << "\n";
+            }
+        }
     }
 
     for (const TileOp& op : prog.ops()) {
@@ -419,8 +453,13 @@ inline TileOpKind parse_kind(const std::string& s) {
 
 } // namespace detail
 
+// What the reader found, so a caller never infers "kernel or test case" from zeros.
+struct LoadInfo {
+    bool has_values = false;     // the file declared VALUES inline and carried them
+};
+
 // Read a program. Throws FormatError, never a variant or bad_alloc surprise.
-inline TileProgram read_l0(std::istream& is) {
+inline TileProgram read_l0(std::istream& is, LoadInfo* info = nullptr) {
     std::string line;
     // ---- preamble -----------------------------------------------------------
     if (!std::getline(is, line))
@@ -443,10 +482,15 @@ inline TileProgram read_l0(std::istream& is) {
     }
 
     std::string name;
-    bool has_values = false, saw_min_consumer = false, saw_end = false;
+    bool declares_values = false, saw_min_consumer = false, saw_end = false;
     TileProgram prog;
     std::vector<TileOp> ops;
     std::vector<TensorOperand> operands;
+    // Rows are collected as they arrive and applied after the registry exists, because a
+    // VALUES_ROW can legally precede or follow its OPERAND and neither order should be
+    // privileged by the parser.
+    struct PendingRow { std::string operand; Dim row; std::vector<float> values; };
+    std::vector<PendingRow> rows;
 
     while (std::getline(is, line)) {
         const std::string rec = detail::trim(line);
@@ -476,7 +520,44 @@ inline TileProgram read_l0(std::istream& is) {
             name = kv.count("name") ? kv["name"] : "";
         } else if (kw == "VALUES") {
             const std::string rest = detail::trim(rec.substr(kw.size()));
-            has_values = (rest == "inline");
+            if (rest != "inline" && rest != "none")
+                throw FormatError(FormatError::Cause::MalformedPreamble,
+                                  "l0: VALUES: expected 'inline' or 'none', got '" + rest +
+                                  "'");
+            declares_values = (rest == "inline");
+        } else if (kw == "VALUES_ROW") {
+            // "VALUES_ROW <quoted operand> <row> v0 v1 ..." -- positional after the name,
+            // because a row is a list and keying each element would be noise.
+            const std::string rest = detail::trim(rec.substr(kw.size()));
+            std::map<std::string, std::string> kv;
+            detail::split_fields("VALUES_ROW name=" + rest, kv);
+            PendingRow pr;
+            pr.operand = kv.count("name") ? kv["name"] : "";
+            if (pr.operand.empty())
+                throw FormatError(FormatError::Cause::MalformedRecord,
+                                  "l0: VALUES_ROW: missing operand name");
+            // Skip past the quoted name to reach the positional numbers.
+            std::size_t p = rest.find('"');
+            if (p != std::string::npos) {
+                ++p;
+                while (p < rest.size() && rest[p] != '"') {
+                    if (rest[p] == '\\' && p + 1 < rest.size()) ++p;
+                    ++p;
+                }
+                if (p < rest.size()) ++p;
+            } else {
+                p = rest.find(' ');
+            }
+            std::istringstream nums(p == std::string::npos ? std::string()
+                                                          : rest.substr(p));
+            std::string tok;
+            if (!(nums >> tok))
+                throw FormatError(FormatError::Cause::MalformedRecord,
+                                  "l0: VALUES_ROW \"" + pr.operand + "\": missing row index");
+            pr.row = detail::to_dim(tok, "VALUES_ROW row");
+            while (nums >> tok)
+                pr.values.push_back(detail::parse_float(tok, "VALUES_ROW value"));
+            rows.push_back(std::move(pr));
         } else if (kw == "OPERAND") {
             // The name is the first positional token, quoted; the rest are keyed.
             const std::string rest = detail::trim(rec.substr(kw.size()));
@@ -572,20 +653,77 @@ inline TileProgram read_l0(std::istream& is) {
     }
 
     for (TileOp& o : ops) out.push(std::move(o));
-    (void)has_values;          // increment 2
+
+    // ---- values ------------------------------------------------------------
+    // Strict, deliberately. A test case that silently lost some of its inputs is worse
+    // than one that refuses to load: it would run, and produce an answer nobody could
+    // tell was wrong.
+    if (!rows.empty() && !declares_values)
+        throw FormatError(FormatError::Cause::MalformedRecord,
+                          "l0: VALUES_ROW records present but the preamble says "
+                          "'VALUES none': the file contradicts itself about whether it "
+                          "carries inputs");
+
+    if (declares_values) {
+        std::map<std::string, std::vector<bool>> filled;
+        for (const std::string& key : out.operand_order())
+            filled[key].assign(out.operand(key).rows, false);
+
+        for (const PendingRow& pr : rows) {
+            if (!out.has_operand(pr.operand))
+                throw FormatError(FormatError::Cause::MalformedRecord,
+                                  "l0: VALUES_ROW \"" + pr.operand +
+                                  "\": no such operand is declared");
+            TensorOperand& tensor = out.operand(pr.operand);
+            if (pr.row >= tensor.rows)
+                throw FormatError(FormatError::Cause::MalformedRecord,
+                                  "l0: VALUES_ROW \"" + pr.operand + "\" row " +
+                                  std::to_string(pr.row) + " is outside its " +
+                                  std::to_string(tensor.rows) + " rows");
+            if (pr.values.size() != tensor.cols)
+                throw FormatError(FormatError::Cause::MalformedRecord,
+                                  "l0: VALUES_ROW \"" + pr.operand + "\" row " +
+                                  std::to_string(pr.row) + " has " +
+                                  std::to_string(pr.values.size()) + " values, expected " +
+                                  std::to_string(tensor.cols));
+            if (filled[pr.operand][pr.row])
+                throw FormatError(FormatError::Cause::MalformedRecord,
+                                  "l0: VALUES_ROW \"" + pr.operand + "\" row " +
+                                  std::to_string(pr.row) + " appears twice");
+            for (Dim c = 0; c < tensor.cols; ++c) tensor.at(pr.row, c) = pr.values[c];
+            filled[pr.operand][pr.row] = true;
+        }
+
+        for (const auto& [key, seen] : filled)
+            for (std::size_t r = 0; r < seen.size(); ++r)
+                if (!seen[r])
+                    throw FormatError(FormatError::Cause::MalformedRecord,
+                                      "l0: VALUES inline, but operand \"" + key +
+                                      "\" is missing row " + std::to_string(r) +
+                                      ": a partially valued program would compute a "
+                                      "partial answer");
+    }
+
+    if (info) info->has_values = declares_values;
     return out;
 }
 
 // Convenience round-trip helpers, so callers do not each reinvent the streams.
-inline std::string to_string(const TileProgram& prog) {
+inline std::string to_string(const TileProgram& prog, const WriteOptions& opt = {}) {
     std::ostringstream os;
-    write_l0(os, prog);
+    write_l0(os, prog, opt);
     return os.str();
 }
 
-inline TileProgram from_string(const std::string& text) {
+inline TileProgram from_string(const std::string& text, LoadInfo* info = nullptr) {
     std::istringstream is(text);
-    return read_l0(is);
+    return read_l0(is, info);
+}
+
+// A test case carries its inputs; a kernel does not. Both are wanted, so the caller says
+// which it is writing rather than the writer guessing from the contents.
+inline std::string to_test_case(const TileProgram& prog) {
+    return to_string(prog, WriteOptions{/*include_values=*/true});
 }
 
 } // namespace sw::kpu::program::serialize

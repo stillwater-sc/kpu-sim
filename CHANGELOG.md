@@ -9,6 +9,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **L0 programs can carry their values, so a file can be a test case (#265 increment 2).**
+  `to_test_case()` writes `VALUES inline` plus one **`VALUES_ROW` per operand row**, and
+  `read_l0` reports through `LoadInfo{has_values}` whether it loaded a **kernel** or a
+  **test case** — the caller never has to infer it from zeros, since an all-zero operand is
+  a legitimate kernel input and guessing would make the two indistinguishable. A reloaded
+  test case executes to the same answer **with no `fill()` call**, which is what makes the
+  file self-contained rather than a kernel with a misleading preamble.
+
+  **Float encoding was measured rather than assumed**, and the obvious answer was wrong:
+  `std::hexfloat` — the canonical advice for exact float text — does **not** round-trip
+  through iostreams, because libstdc++'s `operator>>` will not parse a hex float even with
+  the manipulator set. Decimal at `max_digits10` through a classic-locale stream *is* exact
+  for every finite value tried. And `inf`, `-inf` and `nan` parse in **neither** encoding,
+  so they are written as explicit tokens; that is not a curiosity, since a masked attention
+  value is `-inf` and this repo does softmax and attention work. Exactness is asserted with
+  `memcmp`, so `-0.0f` is distinguished from `0.0f`.
+
+  One record per **row** keeps the text justification honest: a one-element change moves one
+  line in a diff, which is asserted. A whole operand per line would make every change look
+  like a rewrite.
+
+  **Strict about completeness**: a missing row, a wrong value count, a duplicated row, a row
+  outside the operand, a row naming an undeclared operand, and a file whose preamble says
+  `VALUES none` while carrying `VALUES_ROW` records are each refused with a diagnostic. A
+  test case that silently lost inputs is worse than one that will not load — it would run,
+  and produce an answer nobody could tell was wrong.
+
 - **The L0 portable program can be written to a file and read back (#265 increment 1).**
   `serialize/l0_format.hpp` serializes a `TileProgram` — the operand registry with logical
   *and* tile shapes, so ragged trailing tiles are recoverable, and the op list with declared
