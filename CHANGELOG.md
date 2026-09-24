@@ -36,6 +36,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   test case that silently lost inputs is worse than one that will not load — it would run,
   and produce an answer nobody could tell was wrong.
 
+  The container format is **1.1.0** for the new `VALUES_ROW` record, and `min_consumer` is
+  computed from the file's **content** rather than its producer: a test case demands 1.1.0,
+  while a kernel stays readable by a 1.0.0 reader because nothing was added to it. That
+  asymmetry is the point of a per-file gate — a blanket bump would orphan readable files,
+  and *no* bump would let a 1.0.0 reader skip every value record and execute a test case
+  with zero inputs. The op-set version is unchanged, because a new container record is not a
+  new operator.
+
 - **The L0 portable program can be written to a file and read back (#265 increment 1).**
   `serialize/l0_format.hpp` serializes a `TileProgram` — the operand registry with logical
   *and* tile shapes, so ragged trailing tiles are recoverable, and the op list with declared

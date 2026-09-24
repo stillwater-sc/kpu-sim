@@ -73,9 +73,28 @@ struct Version {
 inline constexpr const char* kMagic = "KPUL0";
 
 // What this build writes, and what it can read.
-inline Version format_version()  { return {1, 0, 0}; }   // container structure
+//
+// 1.1.0 ADDS THE VALUES_ROW RECORD. The op set did not change, which is why the two axes
+// are separate: a new container record is not a new operator.
+inline Version format_version()  { return {1, 1, 0}; }   // container structure
 inline Version opset_version()   { return {1, 0, 0}; }   // the TileOpKind surface
-inline Version reader_version()  { return {1, 0, 0}; }   // what THIS reader supports
+inline Version reader_version()  { return {1, 1, 0}; }   // what THIS reader supports
+
+// The oldest reader that can be trusted with this file, which depends on WHAT IS IN IT
+// rather than on who wrote it. This is the whole mechanism of R4, and getting it wrong is
+// silent: a 1.0.0 reader does not know VALUES_ROW, so it would SKIP every value record,
+// accept the file, and execute a test case with zero-initialised inputs -- a confident
+// wrong answer rather than a refusal.
+//
+// A kernel stays readable by 1.0.0 because nothing was added to it. The asymmetry is the
+// point: a blanket bump would needlessly orphan files that are still perfectly readable.
+//
+// THE RULE for future changes: a new record that carries SEMANTICS must raise
+// min_consumer for files that use it; a new optional ATTRIBUTE need not, because ignoring
+// it is harmless by construction (R8).
+inline Version min_consumer_for(bool has_values) {
+    return has_values ? Version{1, 1, 0} : Version{1, 0, 0};
+}
 
 // R1c: who produced the file, at ITS OWN version. Reusing the format version here
 // would make the field useless for the thing it exists for -- identifying a
@@ -211,9 +230,9 @@ struct WriteOptions {
     bool include_values = false;
 };
 
-inline void write_l0(std::ostream& os, const TileProgram& prog, const WriteOptions& opt) {
+inline void write_l0(std::ostream& os, const TileProgram& prog, const WriteOptions& opt = {}) {
     os << kMagic << " " << format_version().str() << "\n";
-    os << "MIN_CONSUMER " << format_version().str() << "\n";
+    os << "MIN_CONSUMER " << min_consumer_for(opt.include_values).str() << "\n";
     os << "OPSET tile " << opset_version().str() << "\n";
     os << "PRODUCER kpu-sim " << producer_version().str() << "\n";
     os << "PROGRAM " << detail::quote(prog.name()) << "\n";

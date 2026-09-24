@@ -119,8 +119,13 @@ TEST_CASE("the file is text a human can read and diff", "[program][serialize]") 
     ps.tile = 16;
     const std::string text = to_string(derive(ps));
 
-    CHECK(text.rfind("KPUL0 1.0.0", 0) == 0);           // magic first, version with it
+    // Pinned literally, so a version bump has to be DELIBERATE: an accidental one would
+    // silently change what older readers accept, which is the failure this axis exists to
+    // prevent. 1.1.0 added the VALUES_ROW record.
+    CHECK(text.rfind("KPUL0 1.1.0", 0) == 0);           // magic first, version with it
+    // A kernel is still readable by a 1.0.0 reader, because nothing was added to it.
     CHECK(text.find("MIN_CONSUMER 1.0.0\n") != std::string::npos);
+    // The op set did NOT change: a new container record is not a new operator.
     CHECK(text.find("OPSET tile 1.0.0\n") != std::string::npos);
     CHECK(text.find("VALUES none\n") != std::string::npos);   // a kernel, not a test case
     CHECK(text.find("OPERAND \"A\" rows=32 cols=32 tile_rows=16 tile_cols=16\n") !=
@@ -592,4 +597,59 @@ TEST_CASE("a partially or inconsistently valued file is refused",
                                   "VALUES_ROW \"A\" 0 1 2\nVALUES_ROW \"A\" 1 3 4\nEND\n",
                                   &info));
     }
+}
+
+TEST_CASE("a test case demands a reader that understands values, a kernel does not",
+          "[program][serialize][values]") {
+    // R4's mechanism, and getting it wrong is silent rather than loud: a 1.0.0 reader does
+    // not know VALUES_ROW, so it would SKIP every value record, accept the file, and
+    // execute a test case with zero-initialised inputs. A confident wrong answer is the
+    // worst possible outcome for a format whose purpose is reproducibility.
+    ProgramSpec ps;
+    ps.algo = "matmul";
+    ps.size = 32;
+    ps.tile = 16;
+    TileProgram p = derive(ps);
+    fill(p, ps);
+
+    const std::string kernel = to_string(p);
+    const std::string test_case = to_test_case(p);
+
+    // The demand depends on WHAT IS IN THE FILE, not on who wrote it.
+    CHECK(kernel.find("MIN_CONSUMER 1.0.0\n") != std::string::npos);
+    CHECK(test_case.find("MIN_CONSUMER 1.1.0\n") != std::string::npos);
+    // A kernel stays readable by the older reader, because nothing was added to it -- a
+    // blanket bump would orphan files that are still perfectly readable.
+    CHECK(min_consumer_for(false).str() == "1.0.0");
+    CHECK(min_consumer_for(true).str() == "1.1.0");
+
+    // Both still load here, since this build is the newer reader.
+    LoadInfo k, t;
+    CHECK_NOTHROW(from_string(kernel, &k));
+    CHECK_NOTHROW(from_string(test_case, &t));
+    CHECK_FALSE(k.has_values);
+    CHECK(t.has_values);
+
+    // And the gate bites in the direction that protects this reader: a file needing a
+    // newer one is refused rather than partially understood.
+    try {
+        from_string("KPUL0 1.2.0\nMIN_CONSUMER 1.2.0\nEND\n");
+        FAIL("expected a refusal");
+    } catch (const FormatError& e) {
+        CHECK(e.cause() == FormatError::Cause::UnsupportedVersion);
+    }
+}
+
+TEST_CASE("write_l0 keeps its two-argument form", "[program][serialize]") {
+    // Removing the overload would break callers compiled against increment 1 for no
+    // benefit -- the default is what makes the new option additive.
+    ProgramSpec ps;
+    ps.algo = "matmul";
+    ps.size = 16;
+    ps.tile = 16;
+    const TileProgram p = derive(ps);
+    std::ostringstream two_arg;
+    write_l0(two_arg, p);                       // must compile and mean "no values"
+    CHECK(two_arg.str().find("VALUES none\n") != std::string::npos);
+    CHECK(two_arg.str() == to_string(p));
 }

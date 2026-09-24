@@ -53,8 +53,18 @@ Applied, with the reason each one is not ceremony:
 - **R1/R3 — three axes, semver.** Format version, op-set version, producer. The op set is
   the `TileOpKind` surface; it versions separately from the container because adding an op
   is not the same kind of change as adding a field.
-- **R4 — `min_consumer` gate.** The file declares the minimum reader it needs, and an older
-  reader **refuses cleanly**. This is the requirement with teeth: `kernels/bin/*.kpubin`
+- **R4 — `min_consumer` gate, computed from the file's CONTENT.** The file declares the
+  minimum reader it needs, and an older reader **refuses cleanly**. The demand depends on
+  what is in the file, not on who wrote it: a **test case** requires 1.1.0 because a 1.0.0
+  reader does not know `VALUES_ROW` and would skip every value record, accept the file, and
+  execute with zero-initialised inputs — a confident wrong answer rather than a refusal. A
+  **kernel** stays readable by 1.0.0, because nothing was added to it, and a blanket bump
+  would needlessly orphan files that are still perfectly readable.
+
+  **The bump rule for future changes:** a new record carrying *semantics* must raise
+  `min_consumer` for files that use it; a new optional *attribute* need not, because
+  ignoring it is harmless by construction (R8). A new container record is also **not** a new
+  operator — the op-set axis stays where it is, which is why the axes are separate. This is the requirement with teeth: `kernels/bin/*.kpubin`
   renumbered opcodes with no version bump and those files now abort with `std::get: wrong
   index for variant`. A crash is not a diagnostic.
 - **R5 — add-only, freeze on release.** Field and op numbering never reused. Enforced by the
