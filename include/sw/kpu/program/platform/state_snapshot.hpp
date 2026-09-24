@@ -127,28 +127,41 @@ inline ProgramState capture(const TileProgram& prog, std::size_t handle) {
     return st;
 }
 
-// Write one program's operands back. STRICT about shape: an operand the snapshot does
-// not carry, or a size that does not match, means the snapshot and the program are not
-// about the same thing -- and half-restoring would start a run from a state nobody
-// described while reporting success.
-inline void apply(const ProgramState& st, TileProgram& prog) {
+// CHECKING IS SEPARATE FROM WRITING, and that separation is the whole point. An earlier
+// version validated and assigned in one loop, so a snapshot whose SECOND program did not
+// match left the FIRST one already overwritten -- the platform then held a mix of old and
+// new state, which is exactly the "state nobody described" that restore() claims to refuse.
+// A partial restore is worse than a refused one, because the run proceeds and reports
+// success.
+//
+// So: check() answers "is this snapshot about this program?" without touching it, and
+// assign() cannot fail. restore() checks EVERY program before it writes ANY.
+//
+// STRICT about shape on purpose: an operand the snapshot does not carry, or a size that
+// does not match, means the snapshot and the program are not about the same thing.
+// Returns the problem, or empty when there is none.
+inline std::string check(const ProgramState& st, const TileProgram& prog) {
     if (st.operands.size() != prog.operand_order().size())
-        throw std::invalid_argument(
-            "snapshot: program \"" + prog.name() + "\" has " +
-            std::to_string(prog.operand_order().size()) + " operands, the snapshot carries " +
-            std::to_string(st.operands.size()));
+        return "snapshot: program \"" + prog.name() + "\" has " +
+               std::to_string(prog.operand_order().size()) + " operands, the snapshot carries " +
+               std::to_string(st.operands.size());
     for (const auto& [name, values] : st.operands) {
         if (!prog.has_operand(name))
-            throw std::invalid_argument("snapshot: no operand \"" + name + "\" in program \"" +
-                                        prog.name() + "\"");
-        auto& tensor = prog.operand(name);
-        if (tensor.values.size() != values.size())
-            throw std::invalid_argument(
-                "snapshot: operand \"" + name + "\" holds " +
-                std::to_string(tensor.values.size()) + " values, the snapshot carries " +
-                std::to_string(values.size()));
-        tensor.values = values;
+            return "snapshot: no operand \"" + name + "\" in program \"" + prog.name() + "\"";
+        if (prog.operand(name).values.size() != values.size())
+            return "snapshot: operand \"" + name + "\" holds " +
+                   std::to_string(prog.operand(name).values.size()) +
+                   " values, the snapshot carries " + std::to_string(values.size());
     }
+    return {};
+}
+
+// Write one program's operands back. Throws only via check(), so a caller that has already
+// checked cannot be left half-applied.
+inline void apply(const ProgramState& st, TileProgram& prog) {
+    const std::string bad = check(st, prog);
+    if (!bad.empty()) throw std::invalid_argument(bad);
+    for (const auto& [name, values] : st.operands) prog.operand(name).values = values;
 }
 
 } // namespace sw::kpu::program::platform

@@ -42,6 +42,7 @@
 #include <sw/kpu/program/platform/deployment_spec.hpp>
 
 #include <cstdint>
+#include <limits>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -204,12 +205,18 @@ inline ResourceName parse_resource_name(const std::string& text) {
     if (plus != std::string::npos) {
         const std::string digits = body.substr(plus + 1);
         if (digits.empty()) throw NameError(where + "'+' with no offset");
-        unsigned long long v = 0;
+        std::uint64_t v = 0;
         for (char c : digits) {
             if (c < '0' || c > '9') throw NameError(where + "offset is not a number");
-            const unsigned long long next = v * 10 + static_cast<unsigned long long>(c - '0');
-            if (next < v) throw NameError(where + "offset is out of range");
-            v = next;
+            const std::uint64_t d = static_cast<std::uint64_t>(c - '0');
+            // CHECKED BEFORE THE MULTIPLY, not after. `next < v` looks like an overflow test
+            // and is not one: for v = 3689348814741910323, v*10 wraps to a value GREATER
+            // than v, so "+36893488147419103230" parsed clean and produced a wrong offset --
+            // the precise failure this parser exists to prevent, in the code that claims to
+            // prevent it.
+            if (v > (std::numeric_limits<std::uint64_t>::max() - d) / 10)
+                throw NameError(where + "offset is out of range");
+            v = v * 10 + d;
         }
         n.offset = v;
         body = body.substr(0, plus);

@@ -9,6 +9,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Three holes the #303 review found, each in code that claimed to prevent exactly it.**
+  - `restore()` **half-restored before throwing.** `apply()` validated and assigned in one
+    loop, so a snapshot whose *second* program did not match left the *first* already
+    overwritten — the platform then held a mix of old and new state while the header comment
+    described a refusal that had not happened. A partial restore is worse than a refused one,
+    because the run proceeds and reports success. Checking is now separate from writing
+    (`check()` / `apply()`), and every entry is validated before any is written. A snapshot
+    naming one program **twice** is refused too: the count check alone passed `{0, 0}` on a
+    two-program platform and left program 1 holding whatever it held.
+  - **The resource-name offset overflow check was not one.** `next < v` looks like an overflow
+    test, but for `v = 3689348814741910323`, `v * 10` wraps to a value *greater* than `v` — so
+    `dev0/dram+36893488147419103230` parsed clean and produced a wrong offset, in the parser
+    whose comment says a checked parse exists so bad text becomes an error rather than a wrong
+    number. The bound is now checked *before* the multiply, and the largest legal offset is
+    asserted to still be accepted so the bound is exact rather than conservative.
+  - **A multi-device deployment silently ran device 0.** `run_at()` receives `device_view()`
+    and `unmodelled_fields()` inspects device 0, so every other device was ignored *without
+    being reported* — a deployment described and a machine run that are not the same machine.
+    Refused, naming the device count. The naming map stays multi-device on purpose: naming a
+    resource and executing on it are different capabilities, and only one exists.
+
+- **A test that stood behind the headline property and proved nothing.** The check for "the
+  inputs really were the same inputs, by bytes and not by hash" compared
+  `canonical_bytes().size()` of a snapshot taken *after* the run. Operand shapes never change,
+  so it passed unconditionally. It now restores the snapshot and compares the bytes.
+
+### Fixed
+
 - **A non-finite bandwidth was accepted as a machine (#302 review).** `!(x > 0.0)` lets `+inf`
   through and `std::stod` parses `"inf"`, so `--dma-bytes-per-cycle inf` validated — an
   infinite bandwidth being a makespan of 0 or a NaN reported as a result. The worse half was

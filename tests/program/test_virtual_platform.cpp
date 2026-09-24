@@ -77,9 +77,15 @@ TEST_CASE("the same four inputs produce the same result", "[program][platform][r
         CHECK(first.identity == second.identity);
         CHECK(first.outcome.makespan == second.outcome.makespan);
         CHECK(all_operands_identical(after_first, platform.program(h)));
-        // The inputs really were the same inputs, by bytes and not by hash.
-        CHECK(platform.snapshot().canonical_bytes().size() ==
-              initial.canonical_bytes().size());
+
+        // THE INPUTS REALLY WERE THE SAME INPUTS, BY BYTES AND NOT BY HASH -- which is the
+        // claim docs/plans/virtual-platform.md §4 makes and the reason the digest is not the
+        // identity. The first version of this compared canonical_bytes().SIZE() of a snapshot
+        // taken AFTER the run: operand shapes never change, so it passed unconditionally and
+        // proved nothing. It was the one assertion standing behind the headline property.
+        platform.restore(initial);
+        CHECK(platform.snapshot().canonical_bytes() == initial.canonical_bytes());
+        CHECK(initial.canonical_bytes().size() > 64);   // not two empty strings
     }
 }
 
@@ -382,4 +388,93 @@ TEST_CASE("a snapshot refuses to be applied to a program of another shape",
     CHECK_THROWS_AS(apply(renamed, p), std::invalid_argument);
 
     CHECK_NOTHROW(apply(capture(p, 0), p));
+}
+
+// ----------------------------------------------------------------------------
+// Review of #303
+// ----------------------------------------------------------------------------
+TEST_CASE("a snapshot that does not fit is refused WITHOUT half-restoring",
+          "[program][platform][state]") {
+    // The failure the header comment claimed was impossible and was not: apply() validated
+    // and assigned in one loop, so a snapshot whose SECOND program did not match left the
+    // FIRST already overwritten. The platform then held a mix of old and new state, and the
+    // run proceeded and reported success -- worse than a refusal, because nothing said so.
+    VirtualPlatform platform = default_platform();
+    const ProgramHandle a = platform.load_program(filled("matmul"));
+    const ProgramHandle b = platform.load_program(filled("lu"));
+    const StateSnapshot good = platform.snapshot();
+
+    // Break the SECOND entry only, leaving the first perfectly restorable.
+    StateSnapshot broken = good;
+    REQUIRE(broken.programs().size() == 2);
+    broken.programs()[1].operands.front().second.pop_back();
+
+    // Move both programs away from the snapshot, so a restore would be observable.
+    platform.program(a).operand("A").values[0] += 1.0f;
+    platform.program(b).operand("A").values[0] += 1.0f;
+    const StateSnapshot moved = platform.snapshot();
+
+    CHECK_THROWS_AS(platform.restore(broken), std::invalid_argument);
+    // NOTHING was written: the platform still holds exactly what it held before the attempt.
+    CHECK(platform.snapshot().canonical_bytes() == moved.canonical_bytes());
+
+    // ...and a good snapshot still restores both, so the check is not simply refusing
+    // everything.
+    CHECK_NOTHROW(platform.restore(good));
+    CHECK(platform.snapshot().canonical_bytes() == good.canonical_bytes());
+}
+
+TEST_CASE("a snapshot naming one program twice is refused", "[program][platform][state]") {
+    // The COUNT check alone passes {0, 0} on a two-program platform, and program 1 would be
+    // left holding whatever it held -- a silent partial restore that the count made look
+    // complete.
+    VirtualPlatform platform = default_platform();
+    platform.load_program(filled("matmul"));
+    platform.load_program(filled("lu"));
+    StateSnapshot duplicated = platform.snapshot();
+    REQUIRE(duplicated.programs().size() == 2);
+    duplicated.programs()[1] = duplicated.programs()[0];      // both name program 0
+
+    CHECK_THROWS_AS(platform.restore(duplicated), std::invalid_argument);
+    try {
+        platform.restore(duplicated);
+        FAIL("a duplicated program handle must be refused");
+    } catch (const std::invalid_argument& e) {
+        CHECK(std::string(e.what()).find("twice") != std::string::npos);
+    }
+}
+
+TEST_CASE("a multi-device deployment cannot be run, and says why",
+          "[program][platform][run]") {
+    // run_at() receives device_view() -- device 0 -- and unmodelled_fields() inspects device
+    // 0, so a two-device deployment would schedule the first machine and ignore the rest
+    // WITHOUT REPORTING IT. Naming a resource (increment 3, multi-device on purpose) and
+    // executing on it are different capabilities; this is the one that does not exist.
+    DeviceSpecification a;
+    a.name = "left";
+    DeviceSpecification b;
+    b.name = "right";
+    DeploymentSpec spec;
+    spec.devices = {a, b};
+
+    VirtualPlatform platform(spec);                 // constructing is fine: naming works
+    const ProgramHandle h = platform.load_program(filled("matmul"));
+    const StateSnapshot initial = platform.snapshot();
+    CHECK(platform.deployment().device_count() == 2);
+
+    try {
+        platform.run(h, ExecutionLevel::BlockSequential, initial);
+        FAIL("a multi-device run must be refused");
+    } catch (const std::invalid_argument& e) {
+        const std::string what = e.what();
+        CHECK(what.find("multi-device") != std::string::npos);
+        CHECK(what.find("2 devices") != std::string::npos);
+    }
+
+    // One device still runs, so the guard is a guard and not a blanket.
+    DeploymentSpec one;
+    one.devices = {a};
+    VirtualPlatform single(one);
+    const ProgramHandle sh = single.load_program(filled("matmul"));
+    CHECK_NOTHROW(single.run(sh, ExecutionLevel::BlockSequential, single.snapshot()));
 }

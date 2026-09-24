@@ -10,6 +10,8 @@
 
 #include <sw/kpu/program/platform/resource_map.hpp>
 
+#include <cstdint>
+#include <limits>
 #include <set>
 #include <string>
 #include <vector>
@@ -81,6 +83,11 @@ TEST_CASE("a name round-trips through text", "[program][platform][names]") {
     with_offset.offset = 64;
     CHECK(format(with_offset) == "left/cf[1]/l2[2]+64");
     CHECK(parse_resource_name("left/cf[1]/l2[2]+64").offset == 64);
+    // The largest offset that fits is accepted, so the bound is exact rather than
+    // conservative -- an off-by-one there would reject a legal address.
+    CHECK(parse_resource_name("left/l3[0]+18446744073709551615").offset ==
+          std::numeric_limits<std::uint64_t>::max());
+    CHECK_THROWS_AS(parse_resource_name("left/l3[0]+18446744073709551616"), NameError);
     CHECK(format(map.require("left/l3[0]")) == "left/l3[0]");
     CHECK(parse_resource_name("left/l3[0]+0").offset == 0);
     CHECK(format(parse_resource_name("left/l3[0]+0")) == "left/l3[0]");
@@ -234,7 +241,14 @@ TEST_CASE("a malformed address is refused with the text in the message",
                             "dev0/dram/bank[0]",      // dram has no children
                             "dev0/cf[0]/l2[0]/x[1]",  // too deep
                             "dev0/l3[0]+",            // '+' with no offset
-                            "dev0/l3[0]+x"}) {        // offset not a number
+                            "dev0/l3[0]+x",           // offset not a number
+                            // WRAPS PAST 2^64 WITHOUT EXCEEDING THE PREVIOUS VALUE. The
+                            // first overflow test compared v*10+d against v, which is not an
+                            // overflow test: 3689348814741910323*10 wraps to a LARGER
+                            // number, so this parsed clean and produced a wrong offset --
+                            // the exact failure a checked parser exists to prevent.
+                            "dev0/dram+36893488147419103230",
+                            "dev0/dram+99999999999999999999999"}) {
         INFO("address '" << bad << "'");
         CHECK_THROWS_AS(parse_resource_name(bad), NameError);
     }

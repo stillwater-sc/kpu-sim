@@ -169,12 +169,29 @@ public:
                 "snapshot: covers " + std::to_string(snap.programs().size()) +
                 " program(s), the platform holds " + std::to_string(programs_.size()) +
                 ": restoring it would leave the rest holding state nobody described");
+        // EVERY ENTRY IS CHECKED BEFORE ANY IS WRITTEN. Checking and writing in one pass
+        // left the platform holding a MIX of old and new state when a later program did not
+        // match -- the earlier ones were already overwritten, and the comment above then
+        // described a refusal that had not happened. A partial restore is worse than a
+        // refused one: the run proceeds and reports success.
+        std::vector<bool> seen(programs_.size(), false);
         for (const ProgramState& st : snap.programs()) {
             if (st.program >= programs_.size())
                 throw std::invalid_argument("snapshot: program handle " +
                                             std::to_string(st.program) + " is not loaded");
-            apply(st, programs_[st.program]);
+            // The count check alone is not enough: {0, 0} on a two-program platform passes
+            // it and leaves program 1 holding whatever it held.
+            if (seen[st.program])
+                throw std::invalid_argument("snapshot: program handle " +
+                                            std::to_string(st.program) +
+                                            " appears twice, so one program would be left "
+                                            "unrestored");
+            seen[st.program] = true;
+            const std::string bad = check(st, programs_[st.program]);
+            if (!bad.empty()) throw std::invalid_argument(bad);
         }
+        for (const ProgramState& st : snap.programs())
+            apply(st, programs_[st.program]);          // checked above; cannot throw now
     }
 
     // ---- execute ------------------------------------------------------------
@@ -199,6 +216,20 @@ public:
                           const StateSnapshot& initial, const Placement& placement,
                           const stream::StreamProgram* streams = nullptr) {
         const std::size_t i = checked(h);
+        // MULTI-DEVICE EXECUTION IS NOT IMPLEMENTED, and silently running device 0 would be
+        // the worst possible version of that: run_at() receives device_view() (device 0) and
+        // unmodelled_fields() inspects device 0, so every other device would be ignored
+        // WITHOUT BEING REPORTED -- a deployment described and a machine run that are not the
+        // same machine.
+        //
+        // The naming map (increment 3) is multi-device on purpose, because #284 needs every
+        // resource addressable. Naming a resource and executing on it are different
+        // capabilities, and this is the one that does not exist yet.
+        if (spec_.device_count() > 1)
+            throw std::invalid_argument(
+                "platform: this deployment has " + std::to_string(spec_.device_count()) +
+                " devices, and multi-device execution is not implemented -- run_at() would "
+                "schedule device 0 and ignore the rest without saying so");
         restore(initial);
 
         PlatformRunResult result;
