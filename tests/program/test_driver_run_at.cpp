@@ -11,9 +11,11 @@
 
 #include <sw/kpu/program/driver/execution_level.hpp>
 #include <sw/kpu/program/driver/program_spec.hpp>
+#include <sw/kpu/program/driver/step_cursor.hpp>
 #include <sw/kpu/program/driver/timeline_trace.hpp>
 
 #include <cstring>
+#include <map>
 #include <string>
 #include <variant>
 #include <vector>
@@ -351,4 +353,259 @@ TEST_CASE("an option present without a value is an error, not an absence",
     const std::vector<std::string> given{"--timeline", "run.json"};
     CHECK(arg_required(given, "--timeline", out, err));
     CHECK(out == "run.json");
+}
+
+// ============================================================================
+// Increment 3 — single-stepping (§D4)
+//
+// One step is one transaction AT THAT LEVEL. The two levels differ in kind, not
+// just in grain: L-B steps by executing, L-T1 steps by replaying, and the tests
+// hold each to what it actually claims.
+// ============================================================================
+
+TEST_CASE("behavioral stepping executes, one op at a time", "[program][driver][step]") {
+    ProgramSpec ps;
+    ps.size = 32;
+    ps.tile = 16;
+
+    // Stepping every op must land in the same place as running the level outright. If it
+    // did not, the stepper would be showing a different computation than the one it claims
+    // to be stepping through.
+    TileProgram whole = derive(ps);
+    fill(whole, ps);
+    const DeviceSpec ds;
+    run_at(ExecutionLevel::Behavioral, whole, make_device(ds), Placement::single(1));
+
+    TileProgram stepped = derive(ps);
+    fill(stepped, ps);
+    BehavioralStepper cur(stepped);
+    CHECK(cur.size() == stepped.ops().size());
+    CHECK_FALSE(cur.models_time());
+
+    std::size_t steps = 0;
+    while (cur.step()) {
+        CHECK(cur.current().kind == StepKind::OpApplied);
+        CHECK(cur.current().op_index == steps);
+        ++steps;
+    }
+    CHECK(steps == stepped.ops().size());
+    CHECK(bit_identical(whole.operand(result_operand(ps)).values,
+                        stepped.operand(result_operand(ps)).values));
+}
+
+TEST_CASE("behavioral stepping shows values forming", "[program][driver][step]") {
+    // The reason real execution beats a replay at L-B: the result is observably
+    // incomplete partway through, which is what makes it useful for debugging arithmetic.
+    ProgramSpec ps;
+    ps.size = 32;
+    ps.tile = 16;
+    TileProgram p = derive(ps);
+    fill(p, ps);
+    BehavioralStepper cur(p);
+
+    const std::vector<float> before = p.operand("C").values;
+    std::size_t taken = 0;
+    while (taken < cur.size() / 2 && cur.step()) ++taken;
+    const std::vector<float> midway = p.operand("C").values;
+    while (cur.step()) {}
+    const std::vector<float> after = p.operand("C").values;
+
+    CHECK_FALSE(bit_identical(before, midway));    // something happened
+    CHECK_FALSE(bit_identical(midway, after));     // and it was not finished
+}
+
+TEST_CASE("block-sequential steps are ordered so a replay reads correctly",
+          "[program][driver][step]") {
+    ProgramSpec ps;
+    ps.size = 48;
+    ps.tile = 16;
+    TileProgram p = derive(ps);
+    fill(p, ps);
+    const DeviceSpec ds;
+    const auto device = make_device(ds);
+    const auto out = run_at(ExecutionLevel::BlockSequential, p, device,
+                            Placement::single(device.compute_tiles));
+    REQUIRE_FALSE(out.timeline.empty());
+
+    BlockSequentialStepper cur(out.timeline);
+    CHECK(cur.models_time());
+
+    // Two events per leg (start, end) plus a fire and a completion per op.
+    std::size_t legs = 0;
+    for (const auto& rec : out.timeline) legs += rec.hops.size();
+    CHECK(cur.size() == legs * 2 + out.timeline.size() * 2);
+
+    Cycle last_cycle = 0;
+    std::map<std::size_t, std::size_t> open_legs;      // op -> legs currently open
+    std::map<std::size_t, bool> fired, completed;
+    std::size_t steps = 0;
+    while (cur.step()) {
+        const StepEvent& e = cur.current();
+        CHECK(e.at >= last_cycle);                     // never goes backwards
+        last_cycle = e.at;
+        switch (e.kind) {
+            case StepKind::OpFired:
+                CHECK_FALSE(fired[e.op_index]);        // fired exactly once
+                fired[e.op_index] = true;
+                break;
+            case StepKind::HopStarted:
+                CHECK(fired[e.op_index]);              // a leg cannot precede the fire
+                ++open_legs[e.op_index];
+                break;
+            case StepKind::HopFinished:
+                CHECK(open_legs[e.op_index] > 0);      // and cannot end before it starts
+                --open_legs[e.op_index];
+                break;
+            case StepKind::OpCompleted:
+                CHECK(fired[e.op_index]);
+                CHECK(open_legs[e.op_index] == 0);     // every leg closed first
+                CHECK_FALSE(completed[e.op_index]);
+                completed[e.op_index] = true;
+                break;
+            case StepKind::OpApplied:
+                FAIL("L-T1 does not apply: it replays");
+                break;
+        }
+        ++steps;
+    }
+    CHECK(steps == cur.size());
+    for (const auto& rec : out.timeline) {
+        CHECK(fired[rec.op_index]);
+        CHECK(completed[rec.op_index]);
+    }
+}
+
+TEST_CASE("lane occupancy is conserved across a replay", "[program][driver][step]") {
+    // Every lane taken is given back, so the count returns to zero. A leak here would mean
+    // the replay disagrees with the run about which process is busy -- which is the one
+    // thing a stepper is for.
+    ProgramSpec ps;
+    ps.size = 48;
+    ps.tile = 16;
+    TileProgram p = derive(ps);
+    fill(p, ps);
+    DeviceSpec ds;
+    ds.dma_engines = 2;
+    ds.block_movers = 2;
+    const auto device = make_device(ds);
+    const auto out = run_at(ExecutionLevel::BlockSequential, p, device,
+                            Placement::single(device.compute_tiles));
+
+    auto lanes_of = [&](Mover m) -> Dim {
+        switch (m) {
+            case Mover::Dma:        return device.dma_engines;
+            case Mover::BlockMover: return device.block_movers;
+            case Mover::Streamer:   return device.streamers;
+            case Mover::Noc:        return device.noc_links;
+        }
+        return 0;
+    };
+    BlockSequentialStepper cur(out.timeline);
+    std::size_t peak_dma = 0;
+    while (cur.step()) {
+        // EVERY process, not just the DMA. An earlier version of this test checked only
+        // Mover::Dma and therefore missed a real over-capacity report on the BlockMover:
+        // the replay incremented a lane count before decrementing it, because it ordered a
+        // lower-indexed op's acquire ahead of a higher-indexed op's release at the same
+        // cycle. A conservation test that examines one resource is not a conservation test.
+        for (const auto& kv : cur.lanes_busy()) {
+            const Dim have = lanes_of(kv.first);
+            if (have) CHECK(kv.second <= have);
+            if (kv.first == Mover::Dma) peak_dma = std::max(peak_dma, kv.second);
+        }
+    }
+    CHECK(peak_dma > 0);
+    for (const auto& kv : cur.lanes_busy()) CHECK(kv.second == 0);
+    CHECK(cur.in_flight() == 0);
+}
+
+TEST_CASE("a replay never reports more lanes busy than the device has",
+          "[program][driver][step]") {
+    // The default device has ONE lane per process, which is where the ordering bug showed:
+    // a release and an acquire at the same cycle, across two ops. Sweeping the tight
+    // configurations is the point -- generous ones hide it.
+    for (const char* algo : {"matmul", "lu"}) {
+        for (Dim engines : {Dim(1), Dim(2)}) {
+            ProgramSpec ps;
+            ps.algo = algo;
+            ps.size = 48;
+            ps.tile = 16;
+            DeviceSpec ds;
+            ds.dma_engines = engines;
+            ds.block_movers = 1;          // deliberately the scarcest
+            ds.streamers = 1;
+            const auto device = make_device(ds);
+            TileProgram p = derive(ps);
+            fill(p, ps);
+            const auto out = run_at(ExecutionLevel::BlockSequential, p, device,
+                                    Placement::single(device.compute_tiles));
+            BlockSequentialStepper cur(out.timeline);
+            std::size_t peak_bm = 0;
+            while (cur.step()) {
+                const auto& busy = cur.lanes_busy();
+                auto it = busy.find(Mover::BlockMover);
+                if (it != busy.end()) {
+                    CHECK(it->second <= device.block_movers);
+                    peak_bm = std::max(peak_bm, it->second);
+                }
+                auto dma = busy.find(Mover::Dma);
+                if (dma != busy.end()) CHECK(dma->second <= device.dma_engines);
+                auto str = busy.find(Mover::Streamer);
+                if (str != busy.end()) CHECK(str->second <= device.streamers);
+            }
+            CHECK(peak_bm > 0);                     // the BlockMover really was used
+        }
+    }
+}
+
+TEST_CASE("a level with no interpreter has no stepper either",
+          "[program][driver][step]") {
+    ProgramSpec ps;
+    TileProgram p = derive(ps);
+    fill(p, ps);
+    const std::vector<TileOpRecord> empty;
+    for (ExecutionLevel l : {ExecutionLevel::ResourceTransactional,
+                             ExecutionLevel::CycleAccurate})
+        CHECK_THROWS_AS(make_stepper(l, p, empty), std::invalid_argument);
+}
+
+TEST_CASE("a zero-work op fires before it completes, even sharing one cycle",
+          "[program][driver][step]") {
+    // Releases are ordered before acquires within a cycle to mirror the executor, but a
+    // zero-work op has no hops and start == finish, so its fire and its completion share a
+    // cycle. Ranking every completion ahead of every fire would complete it BEFORE it
+    // fired and leave in_flight() stuck at 1.
+    //
+    // No derived program produces such an op today -- verified: zero_work_ops is 0 for
+    // matmul and LU at every size tried -- so this builds the timeline by hand rather than
+    // asserting against a run that cannot exercise it.
+    std::vector<TileOpRecord> timeline;
+
+    TileOpRecord instant{};             // the zero-work op, sharing one cycle
+    instant.op_index = 0;
+    instant.kind = TileOpKind::Feed;
+    instant.start = 8;
+    instant.finish = 8;
+    instant.zero_work = true;
+    timeline.push_back(instant);
+
+    TileOpRecord moving{};              // a real transfer completing at the same cycle
+    moving.op_index = 1;
+    moving.kind = TileOpKind::Feed;
+    moving.start = 0;
+    moving.finish = 8;
+    moving.hops.push_back(HopRecord{Hop::DmaDramToL3, 0, 0, 8});
+    timeline.push_back(moving);
+
+    BlockSequentialStepper cur(timeline);
+    std::map<std::size_t, bool> fired;
+    while (cur.step()) {
+        const StepEvent& e = cur.current();
+        if (e.kind == StepKind::OpFired) fired[e.op_index] = true;
+        if (e.kind == StepKind::HopStarted || e.kind == StepKind::OpCompleted)
+            CHECK(fired[e.op_index]);   // nothing happens to an op before it fires
+    }
+    CHECK(fired[0]);
+    CHECK(fired[1]);
+    CHECK(cur.in_flight() == 0);        // and nothing is left dangling
 }
