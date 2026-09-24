@@ -83,11 +83,43 @@ Values are the exception: a large operand belongs in a side file or an explicitl
 block, not in decimal text. That choice is deferred until a program with real weights exists
 to measure, and the format reserves a record for it rather than guessing now.
 
+**Measured, before building increment 2 on an assumption** (2026-09-24):
+
+| encoding | finite values | non-finite |
+|---|---|---|
+| `std::hexfloat` | **does not round-trip through iostreams** — inexact even with the manipulator set on input, because libstdc++ `operator>>` does not parse hex floats | fails to parse |
+| decimal at `max_digits10` | **exact for every finite value tried**: `1.0000001f`, `-0.0f`, denormal min, `FLT_MIN`, `FLT_MAX`, π, `1e-7` | fails to parse |
+
+So the encoding is **decimal at `max_digits10` through a classic-locale stream** — which is
+also the readable choice, and the same rule already applied to `alpha`. Hexfloat looked like
+the obvious answer for exactness and is simply wrong here.
+
+**Non-finite values need explicit tokens.** `inf`, `-inf` and `nan` fail to parse via
+`operator>>` in both encodings, so the writer emits them as literal tokens and the reader
+recognises them rather than relying on the stream. They are not hypothetical: a masked
+attention value is `-inf`, and this repo does softmax and attention work.
+
 ## 6. Increments
 
-1. **Round-trip without values.** Write and read the registry and op list; assert the
-   reloaded program is structurally identical and **executes bit-identically** at L-B and
-   L-T1. Version preamble with `min_consumer` and a clean refusal on an unsupported version.
+1. **Round-trip without values.** — **done.** `serialize/l0_format.hpp` writes and reads the
+   operand registry and op list; the reloaded program is asserted structurally identical
+   **and to execute bit-identically at both L-B and L-T1**, with matching makespan and (for
+   LU) matching swap count and permutation. Structural equality alone would not be enough —
+   a silently dropped field can leave two programs that look alike and compute differently.
+
+   Op fields are **keyed** (`kind=`, `in=`, `out=`) rather than positional, which is what
+   makes the add-only rule cheap: a new optional attribute is a new key that old readers
+   ignore, and no existing field moves.
+
+   Refusals carry a `FormatError::Cause`, so a caller can tell "not for me" from "broken"
+   without parsing a message: `NotAnL0File`, `MalformedPreamble`, `UnsupportedVersion`,
+   `UnknownOp`, `MalformedRecord`, `Truncated`. A missing `MIN_CONSUMER` is refused rather
+   than assumed, and a file ending before `END` is refused because a partial program would
+   execute a partial answer.
+
+   `PRODUCER` carries the **build** version, not the format version — reusing the format
+   version there would make the field useless for the thing R4's `bad_producers` list needs
+   it for.
 2. **Values, optionally**, with the reader able to say whether it got a kernel or a test case.
 3. **Golden corpus in CI**: matmul and tile LU, checked in, loaded and executed.
 4. **Stream annotations** alongside (ADR §7.4).

@@ -24,6 +24,15 @@ set_tests_properties(test_tile_transaction_executor PROPERTIES
     LABELS "program;transactional;executor;v0.9"
 )
 
+# The L0 portable program as a file (#265)
+kpu_add_component_test(test_l0_serialization "program"
+    test_l0_serialization.cpp
+)
+
+set_tests_properties(test_l0_serialization PROPERTIES
+    LABELS "program;serialize;v0.9"
+)
+
 # The driver seam: one function maps a level to an interpreter (#285)
 kpu_add_component_test(test_driver_run_at "program"
     test_driver_run_at.cpp
