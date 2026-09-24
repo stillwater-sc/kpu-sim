@@ -27,6 +27,17 @@ That byte-stability check is deliberate and will fail on any format change — w
 point. It is not a nuisance to route around: the checked-in files are the evidence that old
 files still work.
 
+## The bytes are the evidence
+
+`*.l0` is marked `-text` in `.gitattributes`, so git never converts line endings on these
+files, and `--emit-l0` writes them in **binary** mode. Both are required for the same reason:
+a byte-stability check cannot survive an encoding that depends on the platform that checked
+the file out or wrote it.
+
+This was not theoretical. CI went red on three builds while the corpus was green locally,
+because a Windows checkout had rewritten every LF as CRLF and the re-serialization comparison
+saw different bytes.
+
 ## Regenerating, which is a decision and not a chore
 
 ```

@@ -177,6 +177,14 @@ attention value is `-inf`, and this repo does softmax and attention work.
    into a rubber stamp — the files still load, because the code that reads them also wrote
    them.
 
+   **The bytes are the evidence, so nothing may transform them.** `*.l0` is marked `-text`
+   in `.gitattributes` and `--emit-l0` writes in binary mode. Both are needed for the same
+   reason: a byte-stability check cannot survive an encoding that depends on the platform
+   that checked the file out or wrote it. This was not theoretical — CI went red on all three
+   builds while the corpus was green locally, because a Windows checkout had rewritten every
+   LF as CRLF. Reproduced locally by converting a corpus file to CRLF, which fails exactly
+   the three cases CI failed.
+
    **The corpus earned its place immediately**: the first draft of the refusal fixture put a
    comment before the magic line, and the test caught it — reporting `NotAnL0File` where the
    fixture was meant to exercise `UnsupportedVersion`. The magic must be the first line,

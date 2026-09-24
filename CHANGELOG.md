@@ -36,6 +36,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   does this change need a version bump? Regenerating without answering that turns a corpus
   into a rubber stamp, since the code that reads the files also wrote them.
 
+  **The bytes are the evidence, so nothing may transform them**: `*.l0` is `-text` in
+  `.gitattributes` and `--emit-l0` writes in binary mode, because a byte-stability check
+  cannot survive an encoding that depends on the platform that checked the file out or wrote
+  it. Not theoretical — CI went red on all three builds while the corpus was green locally,
+  since a Windows checkout had rewritten every LF as CRLF.
+
   **The corpus earned its place immediately.** The first draft of the refusal fixture put a
   comment before the magic line, and the test caught it — reporting `NotAnL0File` where the
   fixture was meant to exercise `UnsupportedVersion`. The magic must be the **first line**,

@@ -321,7 +321,10 @@ int main(int argc, char** argv) {
     if (!emit_path.empty()) {
         TileProgram to_emit = derive(ps);
         fill(to_emit, ps);
-        std::ofstream out(emit_path);
+        // BINARY, so the bytes do not depend on the platform that wrote them: a text-mode
+        // stream on Windows would translate every \n into \r\n, and a format with a
+        // byte-stability check cannot have a platform-dependent encoding.
+        std::ofstream out(emit_path, std::ios::binary);
         if (!out) {
             std::cerr << "kpu-run: cannot write '" << emit_path << "'\n";
             return 2;
@@ -368,7 +371,7 @@ int main(int argc, char** argv) {
     // half. Taken from the FINEST level that ran, since every level must agree on values
     // anyway and a disagreement would already have failed the comparison below.
     if (!emit_result_path.empty()) {
-        std::ofstream out(emit_result_path);
+        std::ofstream out(emit_result_path, std::ios::binary);   // see --emit-l0 above
         if (!out) {
             std::cerr << "kpu-run: cannot write '" << emit_result_path << "'\n";
             return 2;
