@@ -7,3 +7,11 @@
 #
 # A golden corpus whose bytes depend on the platform that checked it out is not golden.
 *.l0 -text
+
+# Deployment spec fixtures, for the same reason: test_deployment_spec compares the canonical
+# JSON byte for byte, so a CRLF rewrite on a Windows checkout would fail there and nowhere
+# else. Verified by converting the fixture and watching exactly that assertion break.
+#
+# Scoped to the fixture directory rather than all *.json: generated traces and tool output
+# are not evidence and have no reason to be pinned.
+tests/program/deploy/*.json -text

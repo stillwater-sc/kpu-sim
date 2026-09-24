@@ -1,0 +1,31 @@
+{
+  "devices": [
+    {
+      "name": "dev0",
+      "topology": "single",
+      "compute_tiles": 1,
+      "macs_per_cycle": 256.0,
+      "element_bytes": 4,
+      "dma": {
+        "engines": 1,
+        "bytes_per_cycle": 64.0
+      },
+      "l3": {
+        "capacity_tiles": 0
+      },
+      "movers": {
+        "block_movers": 1,
+        "bm_bytes_per_cycle": 128.0,
+        "streamers": 1,
+        "str_bytes_per_cycle": 256.0,
+        "noc_links": 0,
+        "noc_bytes_per_cycle": 128.0
+      },
+      "analytical": {
+        "bytes_per_cycle": 64.0,
+        "pj_per_mac": 1.0,
+        "pj_per_byte": 20.0
+      }
+    }
+  ]
+}

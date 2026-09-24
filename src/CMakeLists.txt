@@ -12,6 +12,9 @@
 # ============================================================================
 
 # DFX parser (Python kpu package format)
+# L0 program layer (compiled units; the rest of program/ is header-only)
+add_subdirectory(program)
+
 add_subdirectory(dfx)
 
 # Simulation models (by fidelity level)

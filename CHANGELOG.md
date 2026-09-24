@@ -9,6 +9,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **A deployment is data: one machine description, JSON at its edge (#282 increment 1).**
+  `DeploymentSpec` (ADR 0002 §3.5) with `from_json`/`to_json`, `deployment_digest`,
+  `device_view()` projecting a `DeviceDescriptor`, and `unmodelled_fields()` naming what a
+  level declared but does not model.
+
+  **It is *the* device description, not a fifth one.** The repo already described a machine in
+  four places — CLI flags, `DeviceDescriptor`, `Placement`, and the ADR's JSON. Adding a peer
+  would repeat, one layer up, the mistake this program exists to undo. So `DeviceSpec` now
+  builds a spec, `DeviceDescriptor` is a projection of it, and `Placement` stays separate
+  because it is a property of a *run*, not of the machine.
+
+  The spec is a strict superset of what any level schedules on — L3 banks, L2 banks per tile,
+  L1 vectors and DMA burst belong to §3.3, which is L-T2 — so the projection drops fields, and
+  a level now **says which ones**. `--l3-tiles 8 --level behavioral` reports *"l3.capacity_tiles
+  declared (8) but not modelled at L-B"* rather than scheduling as though the flag were absent.
+  Absent and default are kept distinct (`std::optional`) precisely so that report cannot
+  become noise: a default value is not a declaration.
+
+  **The round-trip claim is precise rather than convenient.** Canonical bytes round-trip
+  byte-exactly; a non-canonical spec normalizes once and is stable after that. The stronger
+  claim would be false the moment someone writes `64` where a double belongs — and ADR §3.5's
+  own example does. Both halves are tested, and the byte check is verified to bite: tampering
+  with one field, or converting the fixture to CRLF, each breaks exactly one assertion. The
+  CRLF case is why `tests/program/deploy/*.json` is `-text` in `.gitattributes` *before* CI
+  found it the way #299 did.
+
+  ADR §3.5's flat spelling loads, and its `"burst"` key is read as `burst_bytes`: someone will
+  paste that example, and a format refusing the spelling its own authority shows makes the
+  documentation a trap. Giving both spellings is refused, and so is an unknown key — with the
+  keys that would work named, because a silently ignored `"compute_tile"` means the machine is
+  not the one the file describes while the run reports success.
+
+  `l3.tiles` (how many L3 modules) and `l3.capacity_tiles` (how many tile-sized buffers) are
+  kept apart, because `DeviceDescriptor::l3_tiles` is the *capacity* despite its name. A
+  refactor guard pins every field of `make_device()` across all three topologies: every timing
+  number in the repo depends on them, so a field shifted by the new indirection would move
+  calibration and makespans everywhere while every other test still passed.
+
 - **`kpu-run --program foo.l0`: the driver executes a program it did not derive (#265
   increment 5 / #285 increment 4).** "Load a program and execute it" is now literally true of
   something — until this landed, every program the simulator ran was one the simulator wrote.

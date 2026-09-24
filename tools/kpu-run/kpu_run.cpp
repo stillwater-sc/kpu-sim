@@ -15,6 +15,7 @@
 // ============================================================================
 #include <sw/kpu/program/driver/execution_level.hpp>
 #include <sw/kpu/program/driver/program_spec.hpp>
+#include <sw/kpu/program/platform/deployment_json.hpp>
 #include <sw/kpu/program/driver/step_cursor.hpp>
 #include <sw/kpu/program/serialize/l0_format.hpp>
 #include <sw/kpu/program/driver/timeline_trace.hpp>
@@ -385,7 +386,16 @@ int main(int argc, char** argv) {
         levels.push_back(*parsed);
     }
 
-    const auto device = make_device(ds);
+    // The flags build a DEPLOYMENT, and the descriptor the executors schedule on is a view
+    // of it (#282 increment 1). One machine description, two views.
+    std::optional<platform::DeploymentSpec> deployment;
+    try {
+        deployment.emplace(make_deployment(ds));
+    } catch (const std::exception& e) {
+        std::cerr << "kpu-run: " << e.what() << "\n";
+        return 2;
+    }
+    const auto device = deployment->device_view();
     const bool compare = !has_flag(a, "--no-compare");
 
     std::cout << "program  " << (from_file ? program_path : ps.label()) << "\n";
@@ -402,8 +412,9 @@ int main(int argc, char** argv) {
                   // wrong thing -- so the override is named where the value is shown.
                   << (dataflow.empty() ? "" : "   streams: " + map_for(dataflow).name)
                   << stream_note << "\n";
-    std::cout << "device   " << device.label() << "\n"
-              << "levels   ";
+    std::cout << "device   " << deployment->label()
+              << "   digest " << platform::deployment_digest(*deployment) << "\n";
+    std::cout << "levels   ";
     for (std::size_t i = 0; i < levels.size(); ++i)
         std::cout << (i ? ", " : "") << short_name(levels[i]);
     // Say out loud what is NOT being run, so a clean report is not mistaken for
@@ -412,6 +423,12 @@ int main(int argc, char** argv) {
         if (!level_implemented(l))
             std::cout << "\n         (" << short_name(l) << " not run: "
                       << not_implemented_reason(l) << ")";
+    // ...and what of the MACHINE is not being modelled. A deployment is a superset of
+    // what any level schedules on, so a declared field can be dropped by the projection --
+    // quietly, unless it is said here.
+    for (ExecutionLevel l : levels)
+        for (const std::string& line : unmodelled_fields(l, *deployment))
+            std::cout << "\n         (" << line << ")";
     std::cout << "\n\n";
 
     // One place decides what an emitted file records, so the two emit paths cannot drift.

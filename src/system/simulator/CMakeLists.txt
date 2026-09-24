@@ -42,6 +42,7 @@ target_link_libraries(kpu_simulator
         kpu_components          # New component-based architecture
         kpu_compiler            # Kernel compilation (TileOptimizer, etc.)
         kpu_isa                 # ISA (DMProgram, OutputStationaryProgramBuilder)
+        kpu_program             # L0 program layer (DeploymentSpec JSON)
     PRIVATE
         $<TARGET_NAME_IF_EXISTS:Threads::Threads>
         $<TARGET_NAME_IF_EXISTS:fmt::fmt>

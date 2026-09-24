@@ -44,6 +44,17 @@ set_tests_properties(test_l0_corpus PROPERTIES
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
 )
 
+# A deployment is data: one machine description, JSON at its edge (#282)
+kpu_add_component_test(test_deployment_spec "program"
+    test_deployment_spec.cpp
+)
+
+# Paths are relative to the project root, following test_l0_corpus.
+set_tests_properties(test_deployment_spec PROPERTIES
+    LABELS "program;platform;deploy;v0.9"
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+)
+
 # The driver seam: one function maps a level to an interpreter (#285)
 kpu_add_component_test(test_driver_run_at "program"
     test_driver_run_at.cpp
