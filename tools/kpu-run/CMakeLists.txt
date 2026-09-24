@@ -125,6 +125,19 @@ if(KPU_BUILD_TESTS)
     )
     set_tests_properties(kpu_run_step_behavioral PROPERTIES LABELS "program;driver")
 
+    # --step-limit says "stop after n steps", and at L-B a step APPLIES an op, so stopping
+    # late would execute more than it showed. The reported position makes that checkable.
+    add_test(NAME kpu_run_step_limit_is_exact
+        COMMAND ${CMAKE_COMMAND}
+            -DCMD=$<TARGET_FILE:run>
+            -DARGS=--size$<SEMICOLON>32$<SEMICOLON>--tile$<SEMICOLON>16$<SEMICOLON>--level$<SEMICOLON>behavioral$<SEMICOLON>--step$<SEMICOLON>--step-limit$<SEMICOLON>4
+            -DEXPECT_CODE=0
+            -DMUST_MATCH=stopped.after.4.of
+            -DMUST_NOT_MATCH=stopped.after.5.of
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/expect_exit.cmake
+    )
+    set_tests_properties(kpu_run_step_limit_is_exact PROPERTIES LABELS "program;driver")
+
     # Bad numeric input must also exit 2 rather than abort: an uncaught std::stoul throw
     # is SIGABRT, which CI cannot distinguish from a crash in the model.
     add_test(NAME kpu_run_rejects_bad_number

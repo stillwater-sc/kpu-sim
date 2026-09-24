@@ -362,8 +362,12 @@ int main(int argc, char** argv) {
                           : "")
                   << "\n";
         std::size_t shown = 0;
-        while (cur->step()) {
-            if (step_limit && shown >= step_limit) break;
+        // The limit is checked BEFORE advancing, because a step is not free: at L-B
+        // step() APPLIES the next op, so testing afterwards executed one more op than it
+        // showed, and at L-T1 it advanced the replay's occupancy counters past what was
+        // printed. --step-limit says "stop after n steps", so it has to stop.
+        while (!step_limit || shown < step_limit) {
+            if (!cur->step()) break;
             std::cout << "  " << std::setw(5) << std::right << cur->position() << "  "
                       << std::left << describe(cur->current(), cur->models_time());
             if (cur->models_time()) {
@@ -379,6 +383,10 @@ int main(int argc, char** argv) {
         // keeps its resident set internal and publishes only the peak, which is the first
         // gap #286 lists. Reporting lane occupancy and calling it station occupancy would
         // be the wrong kind of helpful. Only say so where lanes were shown at all.
+        // Report where it stopped, so "stop after n steps" is checkable from outside
+        // rather than a claim in the help text.
+        std::cout << "  stopped after " << cur->position() << " of " << cur->size()
+                  << " steps\n";
         if (cur->models_time())
             std::cout << "  (lane occupancy shown; station occupancy needs the residency "
                          "series the executor does not emit yet -- #286)\n";
