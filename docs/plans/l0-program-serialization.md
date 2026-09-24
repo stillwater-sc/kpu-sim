@@ -53,8 +53,18 @@ Applied, with the reason each one is not ceremony:
 - **R1/R3 — three axes, semver.** Format version, op-set version, producer. The op set is
   the `TileOpKind` surface; it versions separately from the container because adding an op
   is not the same kind of change as adding a field.
-- **R4 — `min_consumer` gate.** The file declares the minimum reader it needs, and an older
-  reader **refuses cleanly**. This is the requirement with teeth: `kernels/bin/*.kpubin`
+- **R4 — `min_consumer` gate, computed from the file's CONTENT.** The file declares the
+  minimum reader it needs, and an older reader **refuses cleanly**. The demand depends on
+  what is in the file, not on who wrote it: a **test case** requires 1.1.0 because a 1.0.0
+  reader does not know `VALUES_ROW` and would skip every value record, accept the file, and
+  execute with zero-initialised inputs — a confident wrong answer rather than a refusal. A
+  **kernel** stays readable by 1.0.0, because nothing was added to it, and a blanket bump
+  would needlessly orphan files that are still perfectly readable.
+
+  **The bump rule for future changes:** a new record carrying *semantics* must raise
+  `min_consumer` for files that use it; a new optional *attribute* need not, because
+  ignoring it is harmless by construction (R8). A new container record is also **not** a new
+  operator — the op-set axis stays where it is, which is why the axes are separate. This is the requirement with teeth: `kernels/bin/*.kpubin`
   renumbered opcodes with no version bump and those files now abort with `std::get: wrong
   index for variant`. A crash is not a diagnostic.
 - **R5 — add-only, freeze on release.** Field and op numbering never reused. Enforced by the
@@ -120,7 +130,26 @@ attention value is `-inf`, and this repo does softmax and attention work.
    `PRODUCER` carries the **build** version, not the format version — reusing the format
    version there would make the field useless for the thing R4's `bad_producers` list needs
    it for.
-2. **Values, optionally**, with the reader able to say whether it got a kernel or a test case.
+2. **Values, optionally** — **done.** `WriteOptions{include_values}` (or `to_test_case()`)
+   emits `VALUES inline` plus one **`VALUES_ROW` per operand row**, and `read_l0` fills a
+   `LoadInfo{has_values}` so the caller never infers "kernel or test case" from zeros — an
+   all-zero operand is a legitimate kernel input, and guessing would make the two
+   indistinguishable.
+
+   One record per *row* is what keeps the text justification honest: a one-element change
+   moves **one line** in a diff, which is asserted. A whole operand per line would make
+   every change look like a rewrite.
+
+   Values are decimal at `max_digits10` through a classic-locale stream, with `inf`,
+   `-inf` and `nan` as explicit tokens (§5). Verified bit-exact — via `memcmp`, so `-0.0f`
+   is distinguished from `0.0f` — across `1.0000001f`, denormal min, `FLT_MIN`, `FLT_MAX`,
+   `lowest()`, π, `1e-7`, both infinities and NaN.
+
+   **Strict about completeness**, deliberately: a missing row, a wrong value count, a
+   duplicated row, a row outside the operand, a row for an undeclared operand, and a file
+   whose preamble says `VALUES none` while carrying `VALUES_ROW` records are all refused. A
+   test case that silently lost some of its inputs is worse than one that will not load,
+   because it would run and produce an answer nobody could tell was wrong.
 3. **Golden corpus in CI**: matmul and tile LU, checked in, loaded and executed.
 4. **Stream annotations** alongside (ADR §7.4).
 5. **`kpu-run --program`** — increment 4 of #285, which is the point of all of this.
