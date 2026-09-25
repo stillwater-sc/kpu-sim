@@ -158,14 +158,22 @@ So the guest memory map is part of the ABI, not a platform detail:
 | region | guest (RV64GC) | KPU | why |
 |---|---|---|---|
 | orchestrator RAM — code, stack, its own allocator | **RW** | — | it is a program; it needs memory |
-| **the loadable's tables** — everything in the `.kpuld` except the tensors | **R** | — | increment 4's orchestrator reads its operator and tensor tables IN PLACE, which is what the container was chosen for. **Read-only**: a program does not rewrite its own program, and a writable copy would let the run diverge from the artifact its identity names |
+| **the loadable's METADATA TABLES only** — the operator, tensor and profile tables; **not** the orchestration ELF, **not** the external tensor data | **R** | — | increment 4's orchestrator reads these IN PLACE, which is what the container was chosen for. **Read-only**: a program does not rewrite its own program, and a writable copy would let the run diverge from the artifact its identity names |
 | descriptor and completion rings | **RW** | **R/W** | shared deliberately, and they carry no payload (§6.2) |
 | **tensor DRAM** | **NO ACCESS** | **DMA only** | the datapath is the only way to a tensor |
 
-The loadable's tables and the tensor data are **different regions with different rules**, which
-is the memory-map consequence of separating program from data. The ELF image is a third thing
-again: the platform loads it into orchestrator RAM before the guest starts, so it is not a
-region the guest maps for itself.
+**The `.kpuld` is not one region.** Its three parts land in three places, and scoping the row
+above to the metadata tables *only* is what keeps that unambiguous:
+
+| part of the loadable | where it ends up |
+|---|---|
+| metadata tables — operators, tensors, profile | the read-only region above, mapped and read in place |
+| the orchestration **ELF** | loaded by the platform into **orchestrator RAM** before the guest starts — already guest-readable there, and not part of the tables region |
+| external tensor **data** (referenced, not contained) | **tensor DRAM**, which the guest cannot touch |
+
+An earlier wording said "everything in the `.kpuld` except the tensors", which put the ELF in
+two regions at once. That is the memory-map consequence of separating program from data: three
+parts, three rules, and a container that names them separately.
 
 **`PLACE` is the only way a tensor byte moves, and the memory map is what makes that true
 rather than merely intended.** A direct guest read of tensor DRAM must fault, and §9's
