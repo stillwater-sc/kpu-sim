@@ -111,8 +111,8 @@ as background.
 `CLAUDE.md` is emphatic that the KPU is **not** a stored-program machine: credits flow up, data
 flows down, and a component pushes only when it holds a credit. That rule is about the
 **datapath** — DMA, BlockMover, Streamer, compute fabric. It is not violated by a manager core,
-and the reason a manager core is the right answer is exactly the reason given: resource
-management is a **dependency set**, and a dependency set is what sequential code is good at.
+and the reason a manager core is the right answer is because resource management is a **dependency set**, 
+and organizing a dependency set is what sequential code is good at.
 
 | | orchestrator (RISC-V) | KPU datapath |
 |---|---|---|
@@ -121,12 +121,12 @@ management is a **dependency set**, and a dependency set is what sequential code
 | touches | descriptors and completions | tiles |
 | may block | yes, on a completion | never on the orchestrator |
 
-**The orchestrator must have no data path into L3/L2/L1.** It issues descriptors and reads
-completions; it does not read or write tile contents. Two reasons, and the second is the one
-that bites:
+**The orchestrator cannot have a data path into L3/L2/L1.** It issues descriptors and reads
+completions; it does not read or write tile contents. Two fundamental reasons:
 
-- a datapath through the orchestrator would make the KPU von Neumann in practice while the
-  documentation said otherwise, which is how an architecture rots;
+- a datapath between the orchestrator and the L3/L2/L1 memory resources would create a physical
+  structure thst is not nearest neighbor, and thus not consistent with VLSI constraints:
+  connectivity, energy, cost
 - an MMIO window into buffer contents *is* a backdoor. #284 owns the backdoor deliberately:
   it is simulation-only, unphysical, and **flagged in a run's provenance** so nobody mistakes a
   staged tensor for a moved one. A second, unflagged one arriving through the orchestration ABI
@@ -154,11 +154,12 @@ peak host memory is the working set rather than the model.
 must say which. Hashing 100 GB at load time defeats the purpose of mapping it; claiming a
 verified digest that was not computed is worse than claiming nothing. This is the same rule the
 platform work arrived at for `unmodelled_fields` and for `StateSnapshot`'s coverage tag: a field
-that says "checked" when nothing checked it is a lie with a long half-life. So `RunIdentity`
-gains a data component that is the **declared** digest plus a verification state.
+that says "checked" when nothing checked it is bad design and cannot stand in the architecture. 
+This implies that `RunIdentity` gains a data component that is the **declared** digest plus a 
+verification state.
 
 **64-bit device addresses regardless of the orchestrator's XLEN.** A 32-bit manager core is
-attractive (§10) and cannot address a 100 GB tensor space. The descriptor fields are therefore
+attractive (§10) but cannot address a 100 GB tensor space. The descriptor fields are therefore
 64-bit by construction, and the orchestrator manipulates them as opaque pairs if it is RV32.
 Getting this wrong is a format change later, so it is a decision now.
 
@@ -170,7 +171,7 @@ Getting this wrong is a format change later, so it is a decision now.
 | **FlatBuffers, our own schema** | **recommended.** Zero-copy reads — the orchestrator reads its operator and tensor tables in place, no parse, no heap. Add-only schema evolution matches R8 by construction. Proven by TFLM for precisely this job. Costs a new dependency and a schema compiler in the build, and requires the verifier to be used rather than trusted. |
 | **a custom binary** | rejected, with evidence rather than taste: `ProgramSerializer`/`.kpubin` is the hand-rolled binary this repo already has, and `kernels/bin/*.kpubin` **rotted** — opcodes renumbered with no version bump, and those files now abort with `std::get: wrong index for variant`. Reinventing offsets, alignment, verification and evolution is how that happened. |
 
-Two things the schema must get right on day one, because both are expensive later:
+Two things the schema must get right to avoid costly redesign later:
 
 - **Verification is not optional.** A malformed loadable must be **refused with a cause**, in
   the shape #265 established (`NotAnL0File`, `MalformedPreamble`, `UnsupportedVersion`, …), not
@@ -195,7 +196,7 @@ is the resource-management dependency set the manager core exists to track.
 
 ### 6.2 The descriptor vocabulary
 
-A descriptor ring in simulated memory, a doorbell register, a completion ring, an interrupt.
+A descriptor ring in simulated memory, a doorbell register, a completion ring, a notifier, an interrupt.
 Descriptor kinds — note that none of them carries payload (§3):
 
 | descriptor | meaning | mover |
@@ -223,7 +224,7 @@ The fabric is not uniform: some tiles have a fixed ISA (a VIO tile, an FFT tile)
 programmable and execute a domain flow program as data is pushed into them.
 
 - `DeviceSpecification` (#282) gains a **compute-tile kind** list — additive, R8:
-  `{fixed:vio, fixed:fft, programmable}`.
+  `{fixed:vio, fixed:fft, fixed:systolic_matmul, programmable:precisions}`.
 - The loadable's operator table says which kind each operator **requires**.
 - Loading a loadable against a deployment that lacks the kind is **refused**. This is the R6
   capability dimension the versioning plan already asked for, finally with a home: *"an int8
@@ -232,6 +233,14 @@ programmable and execute a domain flow program as data is pushed into them.
 - A programmable tile's behaviour comes from a domain-flow program `CONFIGURE`d into it, and it
   **executes as data arrives** — which is the credit-based datapath, not a stored-program one.
   A fixed tile takes no program and its `LAUNCH` names an operator it implements.
+- A programmable tile is still constrained by its data path. For Convolution operators, we may
+  specialize on INT8 representation and INT32 accumulation. For Activation/Softmax we may want
+  FP32. For QP we might need FP64. The operators represent the algorithms, the arithmetic
+  types of the data path represent the computer arithmetic in which the operator is executed.
+  They clearly need to match for tile allocation to make sense for the operator.
+- The KPU will likely have a 'general' tile that has is domain flow program programmable, with
+  a data path that can contain all possible use cases. This will not be energy efficient but
+  it provides a parallel compute engine that is functional.
 
 ### 6.4 Runtime decisions need a status surface — metadata, never payload
 
@@ -280,7 +289,46 @@ Two identity consequences follow, both in the shape of #282's "four inputs were 
 
 ### 6.5 Deadlock-freedom is now the orchestrator's problem, and it is a measured one
 
-This is the substantive engineering risk in the whole plan, and it is not hypothetical.
+This is the substantive engineering risk in the whole plan, and must be guarded religiously. 
+
+The L-B executor is whole-block-move, atomic block-algebraic execution model.  It reflects 
+the functional execution of the block-algebra, and is constrained by bufferization and occupancy. 
+If the bufferization yields a valid allocation, L-B will deliver a validation of the block-algebra 
+sequencing. This is the behavioral functional test functionality for the algorithm executing 
+on a Domain Flow Architecture.
+
+Because the hardware would be very inefficient if it was block-based atomic, the CSP resources
+have a smaller read/write granularity than blocks. The L-T1 is the sequence modeling of these
+smaller constituent reads/writes that the block moves are implemented as. L-T1 is a functional
+verification of the hardware sequencing.
+
+The L-T1 executor is tile-sequence based, and the next level down in detail execution model. 
+L-T1 (block-sequential) — the unit is one tile move. A transaction is a whole tile crossing 
+one leg of the chain, and the model tracks:
+
+- the hop chain per span: DMA (DRAM→L3), BlockMover (L3→L2), Streamer (L2→L1), and the return 
+  legs — never collapsed, since a span always contains all its hops
+- lanes per CSP process, shared between directions; one transfer occupies one lane for its 
+  whole duration, so lanes give concurrency, never speed-up
+- L3 credits and capacity in tiles, with slots acquired in program order (the invariant that 
+  makes it deadlock-free)
+- residency reuse: a tile already in L3 starts its chain at the BlockMover
+- duration as bytes ÷ the relevant process's bytes-per-cycle
+
+What L-T1 does not model: anything inside a tile move. A tile crosses a leg as one atomic interval. 
+L3 banks, L2 banks per compute tile, L1 vectors and DMA burst size are all fields the deployment 
+can declare and L-T1 ignores — which is exactly why unmodelled_fields() exists and why 
+"--l3-tiles 8 --level behavioral" prints what it dropped.
+
+L-T2 (resource-transactional) — the unit becomes a read/write per resource, plus a push into 
+the compute tile, over the fixed transaction vocabulary of ADR 0002 §3.3. That is where the 
+§3.3 resource model starts to take hold: bank counts, vector counts and burst sizes become 
+schedulable rather than declared, so bank conflicts, burst granularity and per-resource port 
+contention can appear in the timing. A single tile move at L-T1 becomes many
+resource transactions at L-T2.
+
+The L-CA executor models the resource reads/writes at the clock cycle level. This is the
+performance validation simulation modeling of the low level hardware execution.
 
 The L-T1 executor is deadlock-free because of one invariant: **new slots are acquired in program
 order** — an op may take slots only when no earlier unfired op still needs any. An op that needs
@@ -293,7 +341,7 @@ measured at 29 tiles for the derived matmul, so it fails at 25 even though the t
 21. Feeds are ready immediately and take every slot; the computes that would retire those tiles
 are not ready yet. Classic hold-and-wait, and no ordering *among ready ops* breaks it.
 
-**A runtime allocator is exactly the thing that can violate this.** If the orchestrator places
+**A runtime allocator is the machine that can violate this.** If the orchestrator places
 tiles in whatever order looks locally good, it reproduces the weaker rule and inherits its
 wedge. Options:
 
@@ -311,8 +359,9 @@ simulator is the worst failure mode available, because it produces no evidence a
 
 ## 7. Renode
 
-Renode gives a RISC-V ISS, a platform description (`.repl`), an MMIO peripheral model, virtual
-time, GDB and a scriptable console. We supply the KPU peripheral. Note that this repo has
+Renode provides a broad range of Instruction Set Simulators to emulate x86, ARM, and RISC-V.
+The KPU design is going to use the RISC-V ISS, a platform description (`.repl`), an MMIO peripheral model, 
+virtual time, GDB and a scriptable console. We supply the KPU peripheral. Note that this repo has
 **neither a RISC-V nor a .NET surface today**, so increment 4 is where the new-technology risk
 concentrates (§9).
 
@@ -437,13 +486,20 @@ virtual platform; 5–6 are what make it interesting.
 1. **Container format.** FlatBuffers is the recommendation (§5). ONNX-with-external-data is the
    alternative worth arguing for if interoperability with other runtimes matters more than a
    small consumer.
+   Answer: Both but FlatBuffers first. ONNX is a DNN serialization format, so it is lacking
+   a proper orchestration representation, which is typically inferred from the computational
+   graph that is contained in the ONNX file. Start with FlatBuffers plus orchestration so that
+   we explore this state space.
 2. **Orchestrator ISA and environment.** RV32IMAC bare-metal is smallest and most TFLM-like;
    RV64GC makes ordinary C++ and 64-bit addressing easy. §4's 64-bit **descriptor** fields are
    required either way — this is about the core, not the ABI. **Q4's answer tilts this**: a
    runtime allocator is real, non-trivial code that must be maintained and cross-compiled, so
    ordinary C++ tooling is worth more than a small core.
+   Answer: RV64GC and potentially the Vector extension so that the orchestrator also has the
+   capability to solve computational problems, such as Activation, Bias, and Softmax.
 3. **Renode bridge.** IPC to the C++ platform (recommended), versus a C# reimplementation
    (rejected here), versus something closer to Renode's Verilator channel.
+   Answer: IPC to C++
 4. ~~How much decides at runtime.~~ **Answered (2026-09-25): the orchestration program makes
    real placement decisions at runtime.** The consequences are folded in: §6.4 (a status surface
    of metadata, never payload; an ABI that can refuse; determinism as a requirement), §6.5
@@ -453,9 +509,11 @@ virtual platform; 5–6 are what make it interesting.
    settled**: program-order acquisition in increment 2, reserve-then-launch from increment 3.
 5. **Name and extension.** `.kpuld` ("loadable", after NVDLA's term, which this repo already
    cites as its reference architecture).
+   Answer: .kpuld
 6. **Does this become ADR 0003?** It moves a boundary #229 named and amends a recommendation in
    the versioning plan. Both were recorded decisions, so amending them by plan alone is thinner
    than they deserve.
+   Answer: yes, this becomes ADR 0003
 
 ## 11. Deferred, with the reason rather than the label
 
