@@ -322,10 +322,36 @@ real implementation appears, and that is when the shape of the interface is know
    **The report is one line per level, not one per field.** A fully declared spec has six such
    fields and two levels run, which printed eleven near-identical lines — and a report nobody
    reads is no better than one never written.
-5. **`step_begin` / `step` on the platform**, reusing the existing `Stepper`, so #286 and
-   L-T2 have one stepping seam rather than two.
+5. **`step_begin` / `step` on the platform** — **done.** `VirtualPlatform::Cursor`, reusing
+   `driver::make_stepper`, so #286 and L-T2 have one stepping seam rather than two. `kpu-run
+   --step` goes through it; it used to build its own `Stepper` over its own program copy, which
+   was the second seam.
 
-Increments 1–2 are what unblock #283. Increment 3 is what unblocks #284 and #286.
+   **The two levels step by different mechanisms, and the cursor says which rather than
+   papering over it.** At L-B a step *executes*: the platform's state advances as you step, and
+   a caller can watch values form. At L-T1 there is no meaningful half a schedule — credits,
+   residency and lane contention are decided across the whole program — so `step_begin()` runs
+   to completion and the cursor *replays* that run's timeline, meaning the state is already
+   final before the first `step()`.
+
+   `Cursor::executes()` is what a caller must consult before believing a step advanced
+   anything. Hiding the difference behind a uniform interface would make "step until the value
+   appears" a loop that terminates at one level and never at the other — a uniformity that
+   costs more than it saves.
+
+   `step_begin()` restores the passed snapshot **first**, exactly as `run()` does: stepping is
+   execution, so it carries the same identity requirement, and a cursor begun from ambient
+   state would be a walk through a run nobody can reproduce. The multi-device guard is now
+   stated **once** and used by both, because stepping at L-B succeeding where running at L-B is
+   refused is the kind of inconsistency found by whoever builds on the seam rather than by
+   whoever wrote it.
+
+   One cost accepted rather than hidden: at L-T1 `kpu-run --step` runs the program a second
+   time, because the cursor produces its own run. Threading an already-finished timeline in
+   would be precisely the second path the seam exists to remove.
+
+Increments 1–2 are what unblock #283. Increment 3 is what unblocks #284 and #286, and
+increment 5 gives #286 the stepping seam it records events from.
 
 ## 9. Definition of done, and what is deferred
 

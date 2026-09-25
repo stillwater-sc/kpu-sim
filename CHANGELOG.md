@@ -110,6 +110,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Stepping on the platform (#282 increment 5).** `VirtualPlatform::step_begin` returns a
+  `Cursor` built from `driver::make_stepper`, and `kpu-run --step` goes through it — it used to
+  build its own `Stepper` over its own program copy, which was a second stepping seam beside
+  the platform's. #286 and L-T2 both need one.
+
+  **The two levels step by different mechanisms and the cursor says which.** At L-B a step
+  *executes*, so the platform's state advances as you step and a caller can watch values form.
+  At L-T1 there is no meaningful half a schedule — credits, residency and lane contention are
+  decided across the whole program — so `step_begin()` runs to completion and the cursor
+  *replays* that run, meaning the state is already final before the first `step()`.
+  `Cursor::executes()` is what a caller consults before believing a step advanced anything;
+  hiding that behind a uniform interface would make "step until the value appears" a loop that
+  terminates at one level and never at the other.
+
+  `step_begin()` restores the passed snapshot **first**, as `run()` does, because stepping is
+  execution and carries the same identity requirement. The multi-device guard is now stated once
+  and used by both — stepping at L-B succeeding where running at L-B is refused is the kind of
+  inconsistency found by whoever builds on the seam, not by whoever wrote it.
+
 - **`--deploy spec.json`, and both tools run through the platform (#282 increment 4).**
   `kpu-run --deploy` and `tile_characterize --deploy` take the machine from a deployment spec;
   giving a device flag alongside it is refused, because two descriptions of a machine is the

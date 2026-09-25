@@ -21,6 +21,7 @@
 using namespace sw::kpu::program;
 using namespace sw::kpu::program::driver;
 using namespace sw::kpu::program::platform;
+using sw::kpu::program::Cycle;
 
 namespace {
 
@@ -715,4 +716,127 @@ TEST_CASE("every RunIdentity field is either compared or a declared label, and a
     // exception is deliberate rather than an oversight.
     CHECK(text.find(digest_of(base.placement)) != std::string::npos);
     CHECK(text.find("place0") == std::string::npos);
+}
+
+// ----------------------------------------------------------------------------
+// Stepping on the platform (#282 increment 5)
+// ----------------------------------------------------------------------------
+TEST_CASE("at L-B a step executes, so the state advances as you step",
+          "[program][platform][step]") {
+    VirtualPlatform platform = default_platform();
+    const ProgramHandle h = platform.load_program(filled("matmul"));
+    const StateSnapshot initial = platform.snapshot();
+
+    auto cur = platform.step_begin(h, ExecutionLevel::Behavioral, initial);
+    CHECK(cur.executes());
+    CHECK(cur.level() == ExecutionLevel::Behavioral);
+    CHECK(cur.program() == h);
+    // There is no run behind an L-B cursor, because nothing has run: the steps ARE the run.
+    CHECK_FALSE(cur.run_result().has_value());
+    CHECK(cur.size() == platform.program(h).ops().size());
+
+    // Nothing computed yet.
+    bool before = false;
+    for (float v : platform.program(h).operand("C").values) before = before || (v != 0.0f);
+    CHECK_FALSE(before);
+
+    // Step to the end and the result appears -- in the PLATFORM's program, which is what
+    // "stepping advances the state" means.
+    std::size_t taken = 0;
+    while (cur.step()) ++taken;
+    CHECK(taken == cur.size());
+    CHECK(cur.position() == cur.size());
+    bool after = false;
+    for (float v : platform.program(h).operand("C").values) after = after || (v != 0.0f);
+    CHECK(after);
+
+    // And it is the same answer run() gives, which is the only thing that makes stepping a
+    // way to understand a run rather than a separate model.
+    VirtualPlatform reference = default_platform();
+    const ProgramHandle rh = reference.load_program(filled("matmul"));
+    reference.run(rh, ExecutionLevel::Behavioral, reference.snapshot());
+    CHECK(all_operands_identical(reference.program(rh), platform.program(h)));
+}
+
+TEST_CASE("at L-T1 a step replays a finished run, and the cursor says so",
+          "[program][platform][step]") {
+    // The executor's schedule depends on the WHOLE program -- credits, residency and lane
+    // contention are decided across it -- so there is no meaningful half a schedule.
+    // step_begin() runs to completion and the cursor walks the timeline that run produced.
+    // A caller that believed stepping advanced the state would be wrong here, which is why
+    // executes() exists rather than a uniform pretence.
+    VirtualPlatform platform = default_platform();
+    const ProgramHandle h = platform.load_program(filled("matmul"));
+    const StateSnapshot initial = platform.snapshot();
+
+    auto cur = platform.step_begin(h, ExecutionLevel::BlockSequential, initial);
+    CHECK_FALSE(cur.executes());
+    REQUIRE(cur.run_result().has_value());
+    CHECK(cur.run_result()->outcome.makespan > 0);
+    CHECK(cur.run_result()->identity.level == ExecutionLevel::BlockSequential);
+
+    // The state is ALREADY FINAL before the first step.
+    bool computed = false;
+    for (float v : platform.program(h).operand("C").values) computed = computed || (v != 0.0f);
+    CHECK(computed);
+
+    std::size_t taken = 0;
+    Cycle last = 0;
+    while (cur.step()) {
+        // A replay is ordered in time, which is what makes it readable.
+        CHECK(cur.current().at >= last);
+        last = cur.current().at;
+        ++taken;
+    }
+    CHECK(taken > 0);
+    CHECK(taken == cur.size());
+    CHECK(last == cur.run_result()->outcome.makespan);
+}
+
+TEST_CASE("a cursor starts from the snapshot it was given", "[program][platform][step]") {
+    // Stepping is execution, so it carries the same identity requirement as run(): a cursor
+    // begun from ambient state would be a walk through a run nobody can reproduce.
+    VirtualPlatform platform = default_platform();
+    const ProgramHandle h = platform.load_program(filled("lu"));
+    const StateSnapshot initial = platform.snapshot();
+
+    auto first = platform.step_begin(h, ExecutionLevel::Behavioral, initial);
+    std::vector<std::size_t> ops_first;
+    while (first.step()) ops_first.push_back(first.current().op_index);
+    const TileProgram after_first = platform.program(h);
+
+    // Begun again from the SAME snapshot -- not from the state the first walk left.
+    auto second = platform.step_begin(h, ExecutionLevel::Behavioral, initial);
+    std::vector<std::size_t> ops_second;
+    while (second.step()) ops_second.push_back(second.current().op_index);
+    CHECK(ops_first == ops_second);
+    CHECK(all_operands_identical(after_first, platform.program(h)));
+}
+
+TEST_CASE("a level with no stepper is refused, and so is a multi-device deployment",
+          "[program][platform][step]") {
+    VirtualPlatform platform = default_platform();
+    const ProgramHandle h = platform.load_program(filled("matmul"));
+    const StateSnapshot initial = platform.snapshot();
+    CHECK_THROWS_AS(platform.step_begin(h, ExecutionLevel::ResourceTransactional, initial),
+                    std::invalid_argument);
+    CHECK_THROWS_AS(platform.step_begin(h, ExecutionLevel::CycleAccurate, initial),
+                    std::invalid_argument);
+    CHECK_THROWS_AS(platform.step_begin(ProgramHandle{}, ExecutionLevel::Behavioral, initial),
+                    std::invalid_argument);
+
+    // THE SAME GUARD AS run(). Stepping at L-B would otherwise succeed where running at L-B
+    // is refused, and an inconsistency like that gets discovered by whoever builds on the
+    // seam rather than by whoever wrote it.
+    DeviceSpecification a, b;
+    a.name = "left";
+    b.name = "right";
+    DeploymentSpec two;
+    two.devices = {a, b};
+    VirtualPlatform multi(two);
+    const ProgramHandle mh = multi.load_program(filled("matmul"));
+    const StateSnapshot ms = multi.snapshot();
+    CHECK_THROWS_AS(multi.step_begin(mh, ExecutionLevel::Behavioral, ms),
+                    std::invalid_argument);
+    CHECK_THROWS_AS(multi.run(mh, ExecutionLevel::Behavioral, ms), std::invalid_argument);
 }

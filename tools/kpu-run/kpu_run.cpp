@@ -602,26 +602,45 @@ int main(int argc, char** argv) {
         return 0;
     };
 
-    // --step: walk one level's transactions. At L-B this RE-EXECUTES the program one op
-    // at a time on a fresh copy, so it is genuine stepping; at L-T1 it replays the run
-    // just performed, because the executor's schedule depends on the whole program.
+    // --step: walk one level's transactions, THROUGH THE PLATFORM (#282 increment 5). The
+    // driver used to build its own Stepper over its own program copy, which made stepping a
+    // second seam beside the platform's -- and #286 and L-T2 both need one. step_begin()
+    // restores the snapshot first, so a stepped walk has the same identity a run does.
+    //
+    // The mechanism still differs by level and the cursor still says which: at L-B a step
+    // EXECUTES, at L-T1 step_begin runs to completion and the cursor replays that run,
+    // because the executor's schedule is decided across the whole program.
     if (do_step) {
         const ExecutionLevel target = levels.back();     // the finest level that ran
         std::size_t src = levels.size();
         for (std::size_t i = 0; i < levels.size(); ++i)
             if (levels[i] == target) src = i;
-        TileProgram stepped = make_program();
-        std::unique_ptr<Stepper> cur;
+        std::optional<platform::VirtualPlatform::Cursor> cur;
         try {
-            cur = make_stepper(target, stepped, outcomes[src].timeline);
+            // A program of its own, so the walk does not consume a captured result. At L-T1
+            // this runs the program a second time, which is the price of having one stepping
+            // seam instead of two -- and the alternative, threading an already-finished
+            // timeline in, is exactly the second path the seam exists to remove.
+            // The initial state is restored BEFORE the extra program is loaded, so the
+            // snapshot the walk starts from holds every program at its inputs rather than at
+            // whatever the comparison runs left behind. Snapshotting first would have folded
+            // those results into the stepped run's identity -- not wrong, but a run identity
+            // that quietly depends on what ran before it is exactly the thing the platform
+            // exists to prevent.
+            vp->restore(initial);
+            const platform::ProgramHandle sh = vp->load_program(make_program());
+            const platform::StateSnapshot staged = vp->snapshot();
+            cur.emplace(vp->step_begin(sh, target, staged,
+                                       Placement::single(device.compute_tiles),
+                                       dataflow.empty() ? nullptr : &streams[src]));
         } catch (const std::exception& e) {
             std::cerr << "kpu-run: " << e.what() << "\n";
             return 2;
         }
         std::cout << "\nstepping " << short_name(target) << ": " << cur->size()
                   << " steps"
-                  << (cur->models_time() ? " (replay of the run above)"
-                                         : " (re-executed one op at a time)")
+                  << (cur->executes() ? " (re-executed one op at a time)"
+                                      : " (replay of the run above)")
                   << (step_limit && cur->size() > step_limit
                           ? ", showing the first " + std::to_string(step_limit)
                           : "")
@@ -633,11 +652,12 @@ int main(int argc, char** argv) {
         // printed. --step-limit says "stop after n steps", so it has to stop.
         while (!step_limit || shown < step_limit) {
             if (!cur->step()) break;
+            const bool timed = !cur->executes();
             std::cout << "  " << std::setw(5) << std::right << cur->position() << "  "
-                      << std::left << describe(cur->current(), cur->models_time());
-            if (cur->models_time()) {
-                std::cout << "   in-flight " << cur->in_flight();
-                for (const auto& kv : cur->lanes_busy())
+                      << std::left << describe(cur->current(), timed);
+            if (timed) {
+                std::cout << "   in-flight " << cur->stepper().in_flight();
+                for (const auto& kv : cur->stepper().lanes_busy())
                     if (kv.second)
                         std::cout << "  [" << to_string(kv.first) << " " << kv.second << "]";
             }
@@ -652,7 +672,7 @@ int main(int argc, char** argv) {
         // rather than a claim in the help text.
         std::cout << "  stopped after " << cur->position() << " of " << cur->size()
                   << " steps\n";
-        if (cur->models_time())
+        if (!cur->executes())
             std::cout << "  (lane occupancy shown; station occupancy needs the residency "
                          "series the executor does not emit yet -- #286)\n";
     }
