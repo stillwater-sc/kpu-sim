@@ -144,6 +144,32 @@ completions; it does not read or write tile contents. Two fundamental reasons:
 A reviewer should be able to check both properties by reading the descriptor vocabulary (§6.2)
 and finding no descriptor that carries payload.
 
+### 3.1 The guest memory map — the door §3 left open
+
+The rule above says "no data path into L3/L2/L1" and says **nothing about DRAM**, which is
+where the tensors are. Review caught that, and it matters more than the MMIO case it was
+derived from, because the hole appears **by default**: in an ordinary Renode platform a RAM
+region *is* mapped into the guest's address space, so an orchestrator could read a weight with
+a plain `ld` — bypassing `PLACE`, the DMA, the credit model and the entire timing argument,
+while the run reported success.
+
+So the guest memory map is part of the ABI, not a platform detail:
+
+| region | guest (RV64GC) | KPU | why |
+|---|---|---|---|
+| orchestrator RAM — code, stack, its own allocator | **RW** | — | it is a program; it needs memory |
+| descriptor and completion rings | **RW** | **R/W** | shared on purpose, and they carry no payload (§6.2) |
+| **tensor DRAM** | **NO ACCESS** | **DMA only** | the datapath is the only way to a tensor |
+
+**`PLACE` is the only way a tensor byte moves, and the memory map is what makes that true
+rather than merely intended.** A direct guest read of tensor DRAM must fault, and §9's
+increment 4 owes a Renode test that it does — a negative test, because the property is an
+absence and an absence is exactly what a happy-path test cannot show.
+
+This is the same argument as the backdoor's: #284 is unphysical *and flagged in provenance*, so
+nobody mistakes a staged tensor for a moved one. A guest-visible DRAM region would be a
+backdoor that is neither.
+
 ## 4. Separating program from data, concretely
 
 A tensor table entry carries what the **DMA** needs and nothing the orchestrator needs:
@@ -475,8 +501,9 @@ is then tested against.
    FlatBuffers tables in place, run on the ISS, with the KPU peripheral bridging to the C++
    platform. **Done when:** the model produces the same values as increment 2's host build
    **and the recorded descriptor traces are identical** — a differential test between two
-   compilations of one program, not a smoke test — and the L-B time policy of §7.3 is visible
-   in the provenance. **This is the expensive increment**: new toolchain, new language surface,
+   compilations of one program, not a smoke test — the L-B time policy of §7.3 is visible in
+   the provenance, and **a direct guest read of tensor DRAM faults** (§3.1), which is a
+   negative test because the property is an absence. **This is the expensive increment**: new toolchain, new language surface,
    new IPC. Note it is now *less* risky than in the first draft, because the semantics were
    settled in increment 2 by the same source rather than by a different artifact.
 5. **Heterogeneous compute tiles.** Fixed-ISA (VIO, FFT) and programmable DFP tiles; the

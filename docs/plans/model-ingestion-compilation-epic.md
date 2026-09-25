@@ -173,6 +173,25 @@ These change the shape of the plan; recommendations given, but they are yours.
   graph-walking schedule-generation are *compiler-backend* concerns (§5) — the
   simulator runtime keeps only the executor.
 
+> **Superseded 2026-09-25 for the BOUNDARY artifact — D4 and D5 below.** ADR 0001 D1 made the
+> L0 `TileProgram` the portable program, and
+> `docs/plans/program-encapsulation-and-orchestration.md` (#305) makes the **`.kpuld` loadable**
+> the artifact that crosses the compiler/hardware boundary. So:
+>
+> * **`.kpuld` is the boundary artifact and the versioned ABI.** R1, R3, R4, R5, R8, R9 and
+>   **R6's capability profile** apply to it. It carries L0 programs, an ELF orchestration image
+>   and *references* to tensor data — program and data separated, which D4/D5 never anticipated
+>   and a 100 GB model requires.
+> * **`.kpubin`/`DMProgram` remains only as an INTERNAL, per-device JIT artifact**, which is
+>   what ADR 0001 demoted it to. Where the text below calls it "the canonical binary KPU
+>   program", "the contract", or the thing the compiler emits and kpu-sim loads, read `.kpuld`.
+>   Its own versioning requirement is now the weaker one that fits an internal artifact: it must
+>   remain **identifiable and version-stamped** (it already is), but it is not the cross-repo ABI
+>   and needs no `min_consumer` negotiation with a compiler that no longer emits it.
+> * **D4's two open reconciliation questions are unchanged in substance** — they are about which
+>   executor consumes a lowered schedule, which is orthogonal to which artifact crosses the
+>   boundary.
+
 - **D4 — Canonical binary artifact = the ISA `.kpubin` (`DMProgram`).** The repo
   already has a **serialized, versioned** ISA binary: `DMProgram` →
   `ProgramSerializer` → `.kpubin` (magic + `DMPROGRAM_VERSION`) / `.kpujson`, with a
@@ -257,11 +276,21 @@ The hard boundary is between **[C]** and **[D]**: the binary KPU program.
 | **[D]** program cache | kpu-sim | `.kpubin` ↔ cache keyed by *(op sig, shapes, dtype, fabric cfg, **ISA/ABI version, compiler version, opset+type-sys version, target profile**)* | net-new (small) |
 | **[E]** load + execute | **kpu-sim** | read `.kpubin` (via `ProgramSerializer`/`kpu-loader`) + weights; `ResourceManager` sets up fabric; run | reader exists; reconcile ISA-executor vs CSP timing path (D4); productionize `ScheduleBinder` |
 
-`.dfg` (the `DomainFlowGraph` source IR) is **compiler-internal**; kpu-sim's runtime
-**execution** input is `.kpubin`, not `.dfg`. kpu-sim reads model *data/weights* into
-`HOST_MEMORY` (Phase 5) but does not consume `.dfg` to execute.
+> **Superseded 2026-09-25 for stages [C], [D] and [E]:** the artifact emitted, cached and
+> loaded is the **`.kpuld` loadable** (#305), not `.kpubin`. The stage *owners* and *shapes* are
+> unchanged — domain_flow emits, kpu-sim caches and executes — and the cache key gains the
+> loadable's own digest alongside the versions already listed. Stage [E] also changes in kind
+> rather than only in name: a loadable's weights are **mapped, not read**, so "read `.kpubin` +
+> weights" becomes "read the loadable and map its external tensors", which is the whole point of
+> separating the two.
 
-**Spec doc (D5):** the `.kpubin` binary format + execution semantics are written up as
+`.dfg` (the `DomainFlowGraph` source IR) is **compiler-internal**; kpu-sim's runtime
+**execution** input is the **`.kpuld` loadable** (#305; `.kpubin` where the text above still
+says so), not `.dfg`. kpu-sim reads model *data/weights* into `HOST_MEMORY` (Phase 5) but does
+not consume `.dfg` to execute.
+
+**Spec doc (D5):** — *as of 2026-09-25 this is the `.kpuld` loadable's spec, per #305; the
+sentence below is the original wording.* The `.kpubin` binary format + execution semantics are written up as
 the *KPU binary functional spec* (versioned per `dfg-kpu-versioning.md`), with a
 golden-binary conformance suite run by kpu-sim — the single artifact keeping compiler
 and simulator in lockstep.

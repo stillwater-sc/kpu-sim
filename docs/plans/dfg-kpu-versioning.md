@@ -112,6 +112,21 @@ diagnostic. Unknown *ops* in a required opset are hard errors; unknown optional
 
 ## 3. The `.kpubin` binary program needs its own, stricter versioning
 
+> **Superseded 2026-09-25 — this section's subject is now the `.kpuld` loadable.** ADR 0001 D1
+> demoted `.kpubin`/`DMProgram` to driver-JIT output for one device, and #305 supplies the
+> artifact that actually crosses the compiler/hardware boundary. Read this section as being
+> about **`.kpuld`**, and specifically:
+>
+> | requirement | applies to |
+> |---|---|
+> | R1 magic, R3 semver, **R4 `min_consumer` + producer/`bad_producers`**, R5, R8 add-only, R9 | **`.kpuld`** — it is the ABI |
+> | **R6 capability profile** — fabric config, dtypes, and now **compute-tile kinds** | **`.kpuld`**, where it finally has a home: a loadable declares what it needs and is refused on a deployment that lacks it |
+> | "must remain identifiable and version-stamped" | **`.kpubin`**, as an internal per-device artifact. It already is (`DMPROGRAM_MAGIC` + `DMPROGRAM_VERSION`), and that is now sufficient: nothing outside this repo emits or consumes it |
+>
+> So "**do not add a second binary format** — extend `.kpubin`" below is superseded too. There is
+> still one binary format; it is `.kpuld`, and `.kpubin` is an implementation detail behind the
+> JIT rather than a peer. The paragraph's instinct was right and its subject moved.
+
 `.dfg` is the compiler-front-facing *source* IR. The **`.kpubin` binary program (the
 `DMProgram` ISA stream) is the hardware ABI** — the D5 contract between the
 domain_flow compiler and the simulated KPU (epic decision D4) — and a binary ABI is
