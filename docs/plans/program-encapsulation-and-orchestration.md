@@ -497,6 +497,9 @@ virtual platform; 5–6 are what make it interesting.
    ordinary C++ tooling is worth more than a small core.
    Answer: RV64GC and potentially the Vector extension so that the orchestrator also has the
    capability to solve computational problems, such as Activation, Bias, and Softmax.
+   This would also enable incremental KPU acceleration. With an RV64GCV, we would have a CPU
+   that could execute the whole compute graph, albeit, slowly. Then, as we implement KPU
+   functionality, we can incrementally offload operators to the KPU.
 3. **Renode bridge.** IPC to the C++ platform (recommended), versus a C# reimplementation
    (rejected here), versus something closer to Renode's Verilator channel.
    Answer: IPC to C++
