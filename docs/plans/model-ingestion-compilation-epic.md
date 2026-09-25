@@ -210,7 +210,19 @@ The boundary is the **binary KPU program**. Everything *left* of it (ONNX import
 graph rewrite, tiling, scheduling, KPU-backend lowering) is **compiler** work in
 domain_flow. Everything *right* of it (load program + data, set up resources,
 execute with hardware-identical APIs) is **hardware-simulator** work in kpu-sim.
-kpu-sim **never lowers**. This dissolves gaps **G3, G5, G9** (no dual graph, no
+kpu-sim **never lowers**.
+
+> **Amended 2026-09-25 — the boundary artifact is the KPU loadable, not `.kpubin`.**
+> ADR 0001 D1 made the L0 `TileProgram` the portable program and demoted `.kpubin`/`DMProgram`
+> to driver-JIT output for one device, which left this row naming an artifact that no longer
+> crosses the boundary. `docs/plans/program-encapsulation-and-orchestration.md` supplies the
+> replacement: a **`.kpuld` loadable** carrying L0 programs, an ELF orchestration image for a
+> RISC-V manager core, and **references** to tensor data rather than the data itself.
+> **The shape of this section's argument is unchanged** — one hard boundary, compiler to its
+> left, simulator to its right, kpu-sim never lowers — only the artifact's identity moves, and
+> it moves the way ADR 0001 already pushed it. The "Model weights/data" row becomes load-bearing
+> rather than a Phase 5 afterthought: program and data are separated *by construction*, because
+> tens to hundreds of gigabytes of tensors cannot be packaged with the program. This dissolves gaps **G3, G5, G9** (no dual graph, no
 op-mapping impedance, no path proliferation) *and* correctly places the compiler
 where it belongs.
 

@@ -158,5 +158,15 @@ D4).
   requirements below (R1, R3, R4, R5, R8, R9) apply to it. Treating `.kpubin` as the
   portable format instead was considered and rejected by the ADR, because it bakes in a
   device and a placement.
+
+  **The binary format this section asked for arrives in
+  `docs/plans/program-encapsulation-and-orchestration.md` (2026-09-25).** The **KPU loadable**
+  (`.kpuld`, FlatBuffers) is the artifact that crosses the compiler/hardware boundary: it carries
+  L0 programs, an ELF orchestration image for a RISC-V manager core, and **references** to tensor
+  data rather than the data itself — because a model with hundreds of gigabytes of weights cannot
+  be a section of a file you load. So this is still *one* binary format and *one* source format,
+  and the requirements below (R1, R3, R4, R5, R8, R9) apply to it, plus **R6's capability
+  dimension**, which finally has a home: a loadable declares the compute-tile kinds and dtypes it
+  needs and is refused on a deployment that lacks them, rather than mis-run.
 - **Enforce with golden corpora** in CI for both — a version policy that isn't tested
   rots (StableHLO's discipline).
