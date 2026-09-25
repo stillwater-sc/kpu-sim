@@ -17,7 +17,11 @@
 #include <sw/kpu/program/tile_program.hpp>
 
 #include <array>
+#include <iomanip>
+#include <limits>
+#include <locale>
 #include <map>
+#include <sstream>
 #include <string>
 #include <vector>
 
@@ -139,6 +143,27 @@ struct NetworkOverlay {
     std::vector<std::array<int, 2>> stream_directions;   // distinct array flow directions
 };
 
+namespace detail {
+
+// A LOSSLESS double, because std::to_string gives six decimal places and this text is
+// digested: `rate` values 1.0 and 1.0000001 rendered identically, so two annotations that
+// schedule differently shared an identity.
+//
+// This is the same mistake #265 increment 2 found in the L0 format, where `alpha` at six
+// digits wrote 1.0000001f as "1" and the reloaded program computed a different answer. The
+// fix is the same -- max_digits10 through a CLASSIC-LOCALE stream, since an imbued locale
+// writes "1,5" -- and it is duplicated here rather than shared because serialize/ sits ABOVE
+// stream/ and this header must not reach up into it. Six lines of duplication is the cheaper
+// of the two wrongs; a layering inversion is not.
+inline std::string exact(double v) {
+    std::ostringstream os;
+    os.imbue(std::locale::classic());
+    os << std::setprecision(std::numeric_limits<double>::max_digits10) << v;
+    return os.str();
+}
+
+} // namespace detail
+
 // ============================================================================
 // StreamProgram — the L1 layer over an L0 matmul TileProgram for one SpaceTimeMap.
 // ============================================================================
@@ -155,6 +180,45 @@ struct StreamProgram {
     }
 
     std::string disassemble() const;
+
+    // EVERY FIELD, for a run identity. disassemble() is for a human: it prints ONE
+    // representative wavefront and only the A/B/C signatures, so two StreamPrograms that
+    // schedule differently can render the same text. An identity built on it -- or on the
+    // map's name alone -- would call two different runs the same run, which is the one thing
+    // an identity must never do.
+    //
+    // Everything the L1 cost model reads is here: the map, the array extents, the network,
+    // every signature, and every compute wavefront. A field added to any of those structs and
+    // not added here silently widens the set of runs that share an identity, so this listing
+    // is part of their definition rather than a convenience beside it.
+    std::string canonical_bytes() const {
+        // THE MAP'S NAME IS NOT IN HERE. It is a label, and the rule that it is not compared
+        // has to be true of the bytes as well as of the comment: with the name inside, a
+        // caller who renamed a map and changed nothing else got a different identity for the
+        // same run. What a map DOES is tau and proj, and those are here.
+        std::string out = "map";
+        for (int v : map.tau) out += " " + std::to_string(v);
+        for (int v : map.proj) out += " " + std::to_string(v);
+        out += "\narray " + std::to_string(array_rows) + " " + std::to_string(array_cols);
+        out += "\nnetwork " + std::string(to_string(network.required)) + " " +
+               (network.needs_overlay_on_mesh ? "1" : "0");
+        for (const auto& d : network.stream_directions)
+            out += " (" + std::to_string(d[0]) + "," + std::to_string(d[1]) + ")";
+        // std::map iterates in key order, so the rendering does not depend on insertion.
+        for (const auto& [var, sg] : signatures) {
+            out += "\nsig " + var + " " + to_string(sg.role) + " " + to_string(sg.edge) +
+                   " flow(" + std::to_string(sg.flow[0]) + "," + std::to_string(sg.flow[1]) +
+                   ") skew=" + std::to_string(sg.lane_skew) +
+                   " stride=" + std::to_string(sg.element_stride) +
+                   " lanes=" + std::to_string(sg.lanes) +
+                   " rows=" + std::to_string(sg.rows) + " cols=" + std::to_string(sg.cols) +
+                   " rate=" + detail::exact(sg.rate);
+        }
+        for (const auto& [op, w] : computes)
+            out += "\nwave " + std::to_string(op) + " " + std::to_string(w.array_rows) + " " +
+                   std::to_string(w.array_cols) + " " + std::to_string(w.k_depth);
+        return out;
+    }
 };
 
 // ---- disassembly -----------------------------------------------------------

@@ -7,6 +7,94 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **A test that closes the run-identity class instead of its instances.** Four review rounds on
+  #303 found the same shape of bug: a `RunIdentity` field that was not compared when it should
+  have been (`placement`, the stream content), or not rendered when it was compared
+  (`stream_digest`), or compared while the comment called it a label (the map name). Fixing each
+  instance leaves the class open, and the class is "someone adds a field and forgets one of the
+  two". The test now walks every field, asserting each is either compared **and** rendered or a
+  **declared label** that is rendered and not compared — and a **structured binding** over
+  `RunIdentity` makes adding a member a *compile error* in that test rather than a silent
+  omission. Verified by adding a field and watching the build fail with "only 7 names provided
+  for structured binding … decomposes into 8 elements". Same technique, and same reason, as the
+  exhaustive `switch` over `StateCoverage`.
+
+### Fixed
+
+- **Three round-4 findings on #303, two of them in code written the same day as its own
+  lesson.**
+  - **The stream digest contained the map's *name*** while the comment beside it said the name
+    is a label outside the comparison. So renaming a map and changing nothing else produced a
+    different identity for the same run — the code contradicting its own documentation. The
+    name is gone from the bytes (what a map *does* is `tau` and `proj`, which remain) and stays
+    in `RunIdentity::dataflow`.
+  - **`std::to_string(double)` gives six decimal places**, so `rate` values `1.0` and
+    `1.0000001` digested identically and two annotations that schedule differently shared an
+    identity. This is precisely the mistake #265 increment 2 found in the L0 format's `alpha`,
+    repeated in a file written the same day. Rendered at `max_digits10` through a
+    classic-locale stream, duplicated rather than shared because `serialize/` sits *above*
+    `stream/` and a layering inversion is the more expensive of the two wrongs.
+  - **`RunIdentity::str()` printed the map name but not the stream digest**, so two runs that
+    `operator==` correctly distinguishes rendered identically in provenance. A provenance line
+    that cannot tell two runs apart is not provenance. Every compared component is rendered
+    now, with the name in brackets because it is what a reader recognises.
+
+### Fixed
+
+- **Three more gaps from the #303 review, two of them in guards added by the previous round.**
+  - **A count is not a cover.** `check()` compared operand counts, so a snapshot carrying
+    `{A, A}` for a three-operand program passed — and `apply()` then wrote `A` twice and left
+    `B` untouched. That is the partial restore the check exists to prevent, one level below
+    where the first round closed it. Operand names must now be unique as well as complete.
+  - **`RunIdentity` omitted two of the inputs `run()` actually takes.** ADR 0002 §3.5 names
+    four; the function takes **six**. `placement` changes which compute tile an op lands on and
+    so the schedule, and the L1 stream annotation changes per-op timing, so two runs differing
+    only in those compared **equal**. Both are recorded now: the placement as its whole
+    assignment rather than `label()` (two different pinned placements over the same compute
+    tiles share a label), and the annotation as the space-time map's **name** — a
+    `StreamProgram` is a pure function of `(program, map)` and both are already in the
+    identity. That reasoning — the L0 format's, from #265 increment 4 — held for every
+    `StreamProgram` this repo *derives* and was an assumption about the **caller** stated in a
+    comment, so review rightly pushed further: `run()` takes a pointer, a caller can change a
+    wavefront depth or an element stride, and the name would have called two different runs
+    identical. The identity now digests the annotation's **content**
+    (`StreamProgram::canonical_bytes()`), and the map's name is kept beside it as a label that
+    is deliberately not compared. An assumption a type cannot enforce does not belong in an
+    identity.
+  - **`ProgramHandle::operator<` ignored validity**, so an unset handle and the first loaded
+    one were equivalent under `<` while differing under `==` — a `std::set` keyed on handles
+    would silently keep one of the two.
+
+### Fixed
+
+- **Three holes the #303 review found, each in code that claimed to prevent exactly it.**
+  - `restore()` **half-restored before throwing.** `apply()` validated and assigned in one
+    loop, so a snapshot whose *second* program did not match left the *first* already
+    overwritten — the platform then held a mix of old and new state while the header comment
+    described a refusal that had not happened. A partial restore is worse than a refused one,
+    because the run proceeds and reports success. Checking is now separate from writing
+    (`check()` / `apply()`), and every entry is validated before any is written. A snapshot
+    naming one program **twice** is refused too: the count check alone passed `{0, 0}` on a
+    two-program platform and left program 1 holding whatever it held.
+  - **The resource-name offset overflow check was not one.** `next < v` looks like an overflow
+    test, but for `v = 3689348814741910323`, `v * 10` wraps to a value *greater* than `v` — so
+    `dev0/dram+36893488147419103230` parsed clean and produced a wrong offset, in the parser
+    whose comment says a checked parse exists so bad text becomes an error rather than a wrong
+    number. The bound is now checked *before* the multiply, and the largest legal offset is
+    asserted to still be accepted so the bound is exact rather than conservative.
+  - **A multi-device deployment silently ran device 0.** `run_at()` receives `device_view()`
+    and `unmodelled_fields()` inspects device 0, so every other device was ignored *without
+    being reported* — a deployment described and a machine run that are not the same machine.
+    Refused, naming the device count. The naming map stays multi-device on purpose: naming a
+    resource and executing on it are different capabilities, and only one exists.
+
+- **A test that stood behind the headline property and proved nothing.** The check for "the
+  inputs really were the same inputs, by bytes and not by hash" compared
+  `canonical_bytes().size()` of a snapshot taken *after* the run. Operand shapes never change,
+  so it passed unconditionally. It now restores the snapshot and compares the bytes.
+
 ### Fixed
 
 - **A non-finite bandwidth was accepted as a machine (#302 review).** `!(x > 0.0)` lets `+inf`
@@ -21,6 +109,61 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   directly: anything `validate()` accepts can be written and read back.
 
 ### Added
+
+- **The global naming map: every declared resource, addressable (#282 increment 3).**
+  `ResourceName` with `format`/`parse_resource_name`, and `ResourceMap` with `exists`,
+  `index_of`, `enumerate`, `why_not` and `require`. Identity only — *"does this resource exist
+  in this deployment?"* is answerable from the spec, *"what is in it?"* needs #283. Both the
+  backdoor (#284) and the spatial event record (#286) have to name and enumerate resources
+  before anything can read one, so holding the map back until state exists would block both
+  for nothing.
+
+  **A name carries a path, not an instance number**: L2 banks and L1 vectors are per *compute
+  tile* and L3 banks are per L3 module, so an address is `dev/cf[2]/l2[3]`. Flattening two
+  indices into one would lose the machine's structure — the same class of error as conflating
+  `l3.tiles` with `l3.capacity_tiles`.
+
+  **Devices are addressed by name**, since a positional address moves when a deployment is
+  reordered. That makes the device name part of the grammar, so `validate()` now refuses a
+  name containing `/[]+`: a device nothing can address is a device the backdoor cannot reach.
+
+  **The map's domain is exactly what the deployment declares.** An undeclared `l3.banks` means
+  the bank structure is unspecified, so `dev0/l3[0]/bank[0]` resolves to nothing — and
+  declaring one level does not imply the next. `why_not()` separates **undeclared** from **out
+  of range**, which are different problems with different fixes. Two resources are declared by
+  inference and say so where it is made: a device's DRAM (a DMA with no DRAM side would have
+  nothing to read) and a compute tile's register file.
+
+  The offset is carried, formatted and **never bounded** — a spec declares no sizes, so
+  nothing here can check one — and it is **not part of identity**: two writes at different
+  offsets are two writes to the same resource.
+
+- **`VirtualPlatform`: a run is a pure function of its inputs (#282 increment 2).**
+  `load_program`, `snapshot`, `restore`, and `run(handle, level, const StateSnapshot&)` which
+  **restores the state first**. `run_at()` took three of ADR 0002 §3.5's four inputs, so the
+  purity claim was false in a specific, checkable way: a run read whatever the previous one
+  left in the program's operands. `RunIdentity` names them — **six**, not four: ADR 0002 §3.5
+  lists `(program, initial_state, deployment, level)`, and `run()` also takes a `Placement` and
+  an optional L1 stream annotation, both of which change what happens. Neither is an incidental
+  option, and the entry above records how each is identified. The fields a level does not model
+  ride along in the result.
+
+  **Tile LU is what makes the reproducibility test mean anything.** It factors `A` in place,
+  so running it on its own output gives a different answer — which distinguishes "the restore
+  worked" from "the program happens to be idempotent". A matmul that zeroes and re-accumulates
+  `C` would pass either way, so both halves are asserted.
+
+  **The restore is platform-wide, and a caller has to know it.** A run resets *every* loaded
+  program, not only the one it executes — it must, or the snapshot's digest would claim state
+  the run did not restore. So results are captured as they are produced; reading
+  `platform.program(h)` after a loop reads the input the last restore put back. The
+  differential test got this wrong first and its own assertion caught it.
+
+  The program digest covers **structure** and the snapshot covers **values**, so the four
+  inputs stay four independent things. The coverage tag is inside the snapshot digest, so a
+  future L-T2 snapshot cannot collide with a v1 one whenever their operands match; the guard
+  against an unknown coverage is an exhaustive `switch`, because a `StateSnapshot` is never
+  deserialized and a runtime check would be unreachable code pretending to be a safeguard.
 
 - **A deployment is data: one machine description, JSON at its edge (#282 increment 1).**
   `DeploymentSpec` (ADR 0002 §3.5) with `from_json`/`to_json`, `deployment_digest`,

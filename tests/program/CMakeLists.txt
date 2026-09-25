@@ -55,6 +55,24 @@ set_tests_properties(test_deployment_spec PROPERTIES
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
 )
 
+# The global naming map: every declared resource, addressable (#282 increment 3)
+kpu_add_component_test(test_resource_map "program"
+    test_resource_map.cpp
+)
+
+set_tests_properties(test_resource_map PROPERTIES
+    LABELS "program;platform;names;v0.9"
+)
+
+# The platform owns the deployment and the state (#282 increment 2)
+kpu_add_component_test(test_virtual_platform "program"
+    test_virtual_platform.cpp
+)
+
+set_tests_properties(test_virtual_platform PROPERTIES
+    LABELS "program;platform;v0.9"
+)
+
 # The driver seam: one function maps a level to an interpreter (#285)
 kpu_add_component_test(test_driver_run_at "program"
     test_driver_run_at.cpp

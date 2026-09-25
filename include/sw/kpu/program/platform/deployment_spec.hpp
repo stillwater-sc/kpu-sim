@@ -147,6 +147,13 @@ inline bool known_topology_name(const std::string& t) {
     return t == "single" || t == "news" || t == "checkerboard";
 }
 
+// A device name is also an ADDRESS: the naming map spells a resource
+// "<device>/cf[2]/l2[3]+64" (resource_map.hpp), so these four characters are the grammar
+// and a name containing one would be unparseable. Enforced in validate(), because a device
+// nothing can address is a device the backdoor (#284) cannot reach -- and finding that out
+// at the first backdoor write is far worse than finding it at deployment.
+inline constexpr const char* kAddressReservedChars = "/[]+";
+
 // Every double in a spec has to survive the JSON round trip, and a non-finite one does not:
 // it serializes as `null`. So "finite" is a representability requirement, not a taste.
 inline bool finite_positive(double v) { return std::isfinite(v) && v > 0.0; }
@@ -167,6 +174,10 @@ inline std::string DeploymentSpec::validate() const {
         for (std::size_t j = 0; j < i; ++j)
             if (devices[j].name == d.name)
                 return where + ": duplicate device name; a name has to identify one device";
+        if (d.name.find_first_of(kAddressReservedChars) != std::string::npos)
+            return where + ": a device name may not contain any of " +
+                   kAddressReservedChars + ", because those characters are the resource "
+                   "address grammar";
         if (!known_topology_name(d.topology))
             return where + ": unknown topology '" + d.topology +
                    "' (single | news | checkerboard)";

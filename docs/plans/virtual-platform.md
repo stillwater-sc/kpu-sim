@@ -90,6 +90,27 @@ that they are — which is why that check was worth its strictness. The deployme
 the same property, so **spec round-trip byte-stability is an increment-1 test**, not an
 afterthought.
 
+**The four-tuple is really a six-tuple, and the ADR does not say so.** `run()` also takes a
+`Placement` and an optional L1 stream annotation, and both change what happens: the placement
+decides which compute tile an op lands on, the annotation decides per-op timing. An identity
+over four of six inputs calls two different runs the same run, which review caught. Both are
+recorded — the placement as its whole assignment rather than its label, since two different
+pinned placements over the same compute tiles share a label; the annotation as a **digest of
+its content**.
+
+The annotation's identity went through two answers, and the second is the one that holds. The
+first recorded the map's **name**, justified by "a `StreamProgram` is a pure function of
+`(program, map)`" — the reasoning #265 increment 4 settled on for the file format. That is true
+of every `StreamProgram` this repo *derives*, and it was an **assumption about the caller**
+stated in a comment: `run()` takes a pointer, so a caller can change a wavefront's depth or an
+element stride, get a different makespan, and the name would have recorded the two runs as
+identical. An assumption a type cannot enforce does not belong in an identity, so the content is
+digested and the name is kept beside it as a label that is not compared.
+
+This is worth flagging upward: §3.5's "pure function of `(program, initial_state, deployment,
+level)`" is the shape of the claim, not its arity. `Placement` is deliberately not part of the
+deployment (§2 above), so it is a fifth input by construction.
+
 **The digest is for provenance and cache lookup. It is not the identity claim.** The issue's
 definition of done says *"two runs with identical `(program, initial_state, deployment,
 level)` produce identical results — asserted, not assumed"*, and asserting that through a
@@ -195,14 +216,73 @@ real implementation appears, and that is when the shape of the interface is know
    and non-negative — zero energy is a legitimate modelling choice, a negative one is not),
    the flag reports it under its own name, and the property is asserted directly rather than
    implied: **anything `validate()` accepts can be written and read back.**
-2. **`VirtualPlatform` with state.** `load_program`, `snapshot`, `restore`,
-   `run(handle, level, const StateSnapshot&)` restoring **first**, and the coverage-tagged
-   digest of §3. Tests: two runs with the same four inputs agree on the bytes; a second run
-   cannot observe what the first left behind; a snapshot taken at one coverage never compares
-   equal to one taken at another.
-3. **The naming map**, identity only, over a two-device deployment: parse, format, and
-   `exists()`, with a declared-resource sweep asserting that the map's domain is exactly the
-   deployment's.
+2. **`VirtualPlatform` with state** — **done.** `load_program`, `snapshot`, `restore`,
+   `run(handle, level, const StateSnapshot&)` restoring **first**, the coverage-tagged digest
+   of §3, and a `RunIdentity` naming all four inputs.
+
+   **Tile LU is what makes the reproducibility test mean anything.** It factors `A` in place,
+   so running it on its own output gives a different answer — which is what distinguishes
+   "the restore worked" from "the program happens to be idempotent". A matmul that zeroes and
+   re-accumulates `C` would pass either way, so on its own it proves nothing. The test asserts
+   both halves: same snapshot twice gives the same answer, *and* the previous output gives a
+   different one.
+
+   **The restore is platform-wide, and that has a usage consequence worth writing down.** A
+   run resets *every* loaded program, not only the one it executes — it has to, or the
+   snapshot's digest would claim state the run did not restore and the identity would be a
+   promise the platform does not keep. So a caller comparing several runs must capture each
+   result as it is produced; reading `platform.program(h)` after a loop reads the input the
+   last restore put back. The differential test got exactly this wrong first, and its own
+   assertion caught it — which is the cheapest place to learn it.
+
+   **The program digest covers structure, the snapshot covers values.** Folding values into
+   the program digest would make two of the four inputs cover the same bytes, and "identical
+   inputs" would stop meaning four independent things.
+
+   **The coverage guard is at compile time.** A `StateSnapshot` is never deserialized — it
+   only ever comes from this platform in this process — so an unknown coverage cannot arrive
+   at runtime, and a check for one would be unreachable code pretending to be a safeguard.
+   `restore()` switches exhaustively instead, so #283 breaks the build at the site that has to
+   learn to restore the new coverage.
+
+   A `ProgramHandle` is strongly typed and not default-usable: a bare `std::size_t` would let
+   an uninitialised value index a program, and the failure would be a run of the **wrong
+   program** reporting success.
+3. **The naming map** — **done.** `ResourceName`, `format`/`parse_resource_name`,
+   `ResourceMap{exists, index_of, enumerate, why_not, require}`, identity only.
+
+   **A name carries a PATH, not an instance number.** L2 banks and L1 vectors are per
+   *compute tile* and L3 banks are per L3 module, so an address is `dev/cf[2]/l2[3]`, not a
+   flattened `(kind, instance)` pair. Flattening would have to fold two indices into one and
+   lose the structure — the same class of error as conflating `l3.tiles` with
+   `l3.capacity_tiles`, where the wrong number looks entirely plausible. The issue's own
+   definition of done forces this: an L2 bank cannot be addressed without its compute tile.
+
+   **Devices are addressed by name, not by index**, since a positional address would move
+   silently when a deployment is reordered. That made the device name part of the grammar, so
+   `validate()` now refuses a name containing `/[]+` — a device nothing can address is a
+   device the backdoor cannot reach, and learning that at the first backdoor write is far
+   worse than learning it at deployment.
+
+   **The map's domain is exactly what the deployment declares.** An undeclared `l3.banks`
+   means this machine's bank structure is unspecified, so `dev0/l3[0]/bank[0]` names nothing
+   and does not resolve — and declaring one level does not imply the next: L3 modules can
+   exist while banks remain unaddressable. `why_not()` distinguishes **undeclared** from
+   **out of range**, because those are different problems with different fixes and collapsing
+   them sends the reader to the wrong one.
+
+   Two resources are declared by *inference* rather than by a field, and the inference is
+   stated where it is made: a device's **DRAM**, because `validate()` requires at least one
+   DMA engine and a DMA moves DRAM↔L3, so engines with no DRAM side would have nothing to
+   read; and a compute tile's **register file**, because the fabric cannot hold an operand
+   without one. Neither has a count to declare.
+
+   **The offset is carried but never bounded**, and that is said rather than implied: a spec
+   declares no sizes — no bytes per L3 tile, no L2 bank width — so nothing here can check an
+   offset. Sizes are an additive field (R8) that #283 needs anyway to give a resource
+   contents. The offset is also **not part of identity**: two writes at different offsets are
+   two writes to the same resource, and counting them as two stations would be wrong for
+   #286.
 4. **`kpu-run --deploy spec.json`**, and the characterization harness becomes a consumer of
    the platform rather than a parallel path. The flags stay; `--deploy` replaces them, and
    giving both is refused for the same reason `--program` and `--algo` are.
@@ -217,15 +297,15 @@ From the issue, with the honest status of each:
 
 - [x] a deployment spec round-trips — **increment 1**, as canonical byte-exactness plus
       idempotent normalization of a non-canonical spec (§8)
-- [ ] `run()` restores the passed snapshot first, and its digest is in the cache key and the
+- [x] `run()` restores the passed snapshot first, and its digest is in the cache key and the
       provenance — **increment 2**
-- [ ] two runs with identical inputs produce identical results, asserted — **increment 2**,
+- [x] two runs with identical inputs produce identical results, asserted — **increment 2**,
       by comparing bytes rather than digests (§4)
-- [ ] a run that reads state a previous run left behind is impossible by construction —
+- [x] a run that reads state a previous run left behind is impossible by construction —
       **increment 2**
 - [ ] no test or demo constructs an engine directly; the characterization harness goes
       through the platform — **increment 4**, within the boundary of §6
-- [ ] the naming map resolves an L3 tile, an L2 bank, an L1 vector and a compute-tile
+- [x] the naming map resolves an L3 tile, an L2 bank, an L1 vector and a compute-tile
       register file on a two-device deployment — **increment 3**, as *identity*; resolving to
       **state** is #283, because the state does not exist yet (§5)
 
