@@ -568,6 +568,16 @@ TEST_CASE("the identity covers the placement and the dataflow too",
                                           Placement::single(4), &tampered);
     CHECK(tampered_run.identity.dataflow == annotated.identity.dataflow);   // ...and so is the label
     CHECK_FALSE(tampered_run.identity == annotated.identity);               // but not the identity
+    // ...and the RENDERED provenance distinguishes them too. str() printed the name and not
+    // the digest, so two runs operator== correctly told apart rendered identically -- and a
+    // provenance line that cannot tell two runs apart is not provenance.
+    CHECK(tampered_run.identity.str() != annotated.identity.str());
+    // Every compared component appears in the rendering, which is what makes that true.
+    CHECK(annotated.identity.str().find(annotated.identity.stream_digest) != std::string::npos);
+    CHECK(annotated.identity.str().find(annotated.identity.program_digest) != std::string::npos);
+    CHECK(annotated.identity.str().find(annotated.identity.snapshot_digest) != std::string::npos);
+    CHECK(annotated.identity.str().find(annotated.identity.deployment_digest) != std::string::npos);
+    CHECK(unpinned.identity.str().find("flow:") == std::string::npos);   // none to report
 
     // Same for a signature field the L1 cost model reads.
     auto strided = streams;
@@ -577,6 +587,34 @@ TEST_CASE("the identity covers the placement and the dataflow too",
                                          Placement::single(4), &strided);
     CHECK_FALSE(strided_run.identity == annotated.identity);
 
+    // A RATE THAT DIFFERS BEYOND SIX DECIMALS MUST STILL DIFFER. std::to_string(double) gives
+    // six decimal places, so 1.0 and 1.0000001 rendered identically and two annotations that
+    // schedule differently shared an identity. That is the same mistake #265 increment 2 found
+    // in the L0 format's `alpha`, in a file written the same day -- which is why the assertion
+    // is here rather than left to the reader's trust in max_digits10.
+    auto fine = streams;
+    REQUIRE_FALSE(fine.signatures.empty());
+    fine.signatures.begin()->second.rate = 1.0;
+    auto finer = streams;
+    finer.signatures.begin()->second.rate = 1.0000001;
+    CHECK(fine.canonical_bytes() != finer.canonical_bytes());
+    const auto fine_run = platform.run(h, ExecutionLevel::BlockSequential, initial,
+                                      Placement::single(4), &fine);
+    const auto finer_run = platform.run(h, ExecutionLevel::BlockSequential, initial,
+                                       Placement::single(4), &finer);
+    CHECK_FALSE(fine_run.identity == finer_run.identity);
+
+    // THE NAME REALLY IS OUTSIDE THE COMPARISON. The rule was stated in a comment while the
+    // name sat inside the digested bytes, so renaming a map and changing nothing else gave a
+    // different identity for the same run -- the code contradicting its own documentation.
+    auto renamed = streams;
+    renamed.map.name = "a-different-label";
+    CHECK(renamed.canonical_bytes() == streams.canonical_bytes());
+    const auto renamed_run = platform.run(h, ExecutionLevel::BlockSequential, initial,
+                                         Placement::single(4), &renamed);
+    CHECK(renamed_run.identity == annotated.identity);            // same run...
+    CHECK(renamed_run.identity.dataflow != annotated.identity.dataflow);   // ...different label
+
     // ...while an identical annotation, freshly derived, digests the same -- so the check is
     // about CONTENT and not about object identity.
     auto rederived = stream::derive_matmul_streams(platform.program(h), map_for("ws"));
@@ -584,6 +622,11 @@ TEST_CASE("the identity covers the placement and the dataflow too",
     const auto rederived_run = platform.run(h, ExecutionLevel::BlockSequential, initial,
                                            Placement::single(4), &rederived);
     CHECK(rederived_run.identity == annotated.identity);
+
+    // And two DIFFERENT maps still differ, so dropping the name from the bytes did not make
+    // the four presets indistinguishable -- what a map does is tau and proj, and those remain.
+    CHECK(stream::derive_matmul_streams(platform.program(h), map_for("os")).canonical_bytes() !=
+          streams.canonical_bytes());
 
     // Same six inputs, same identity -- the property all of this exists to support.
     const auto again = platform.run(h, ExecutionLevel::BlockSequential, initial,

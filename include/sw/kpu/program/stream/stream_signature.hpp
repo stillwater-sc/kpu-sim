@@ -17,7 +17,11 @@
 #include <sw/kpu/program/tile_program.hpp>
 
 #include <array>
+#include <iomanip>
+#include <limits>
+#include <locale>
 #include <map>
+#include <sstream>
 #include <string>
 #include <vector>
 
@@ -139,6 +143,27 @@ struct NetworkOverlay {
     std::vector<std::array<int, 2>> stream_directions;   // distinct array flow directions
 };
 
+namespace detail {
+
+// A LOSSLESS double, because std::to_string gives six decimal places and this text is
+// digested: `rate` values 1.0 and 1.0000001 rendered identically, so two annotations that
+// schedule differently shared an identity.
+//
+// This is the same mistake #265 increment 2 found in the L0 format, where `alpha` at six
+// digits wrote 1.0000001f as "1" and the reloaded program computed a different answer. The
+// fix is the same -- max_digits10 through a CLASSIC-LOCALE stream, since an imbued locale
+// writes "1,5" -- and it is duplicated here rather than shared because serialize/ sits ABOVE
+// stream/ and this header must not reach up into it. Six lines of duplication is the cheaper
+// of the two wrongs; a layering inversion is not.
+inline std::string exact(double v) {
+    std::ostringstream os;
+    os.imbue(std::locale::classic());
+    os << std::setprecision(std::numeric_limits<double>::max_digits10) << v;
+    return os.str();
+}
+
+} // namespace detail
+
 // ============================================================================
 // StreamProgram — the L1 layer over an L0 matmul TileProgram for one SpaceTimeMap.
 // ============================================================================
@@ -167,7 +192,11 @@ struct StreamProgram {
     // not added here silently widens the set of runs that share an identity, so this listing
     // is part of their definition rather than a convenience beside it.
     std::string canonical_bytes() const {
-        std::string out = "map " + map.name;
+        // THE MAP'S NAME IS NOT IN HERE. It is a label, and the rule that it is not compared
+        // has to be true of the bytes as well as of the comment: with the name inside, a
+        // caller who renamed a map and changed nothing else got a different identity for the
+        // same run. What a map DOES is tau and proj, and those are here.
+        std::string out = "map";
         for (int v : map.tau) out += " " + std::to_string(v);
         for (int v : map.proj) out += " " + std::to_string(v);
         out += "\narray " + std::to_string(array_rows) + " " + std::to_string(array_cols);
@@ -183,7 +212,7 @@ struct StreamProgram {
                    " stride=" + std::to_string(sg.element_stride) +
                    " lanes=" + std::to_string(sg.lanes) +
                    " rows=" + std::to_string(sg.rows) + " cols=" + std::to_string(sg.cols) +
-                   " rate=" + std::to_string(sg.rate);
+                   " rate=" + detail::exact(sg.rate);
         }
         for (const auto& [op, w] : computes)
             out += "\nwave " + std::to_string(op) + " " + std::to_string(w.array_rows) + " " +

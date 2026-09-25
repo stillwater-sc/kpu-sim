@@ -120,11 +120,18 @@ struct RunIdentity {
                stream_digest == o.stream_digest && level == o.level;
     }
 
+    // EVERY COMPARED COMPONENT IS RENDERED. str() printed the map's NAME and not the digest,
+    // so two annotations with the same name and different wavefronts -- which operator==
+    // correctly distinguishes -- rendered identically in the provenance. A provenance line
+    // that cannot tell two runs apart is not provenance; the name rides along in brackets
+    // because it is what a reader recognises.
     std::string str() const {
-        return std::string(driver::short_name(level)) + " prog:" + program_digest +
-               " state:" + snapshot_digest + " deploy:" + deployment_digest +
-               " place:" + digest_of(placement) +
-               (dataflow.empty() ? "" : " flow:" + dataflow);
+        std::string out = std::string(driver::short_name(level)) + " prog:" + program_digest +
+                          " state:" + snapshot_digest + " deploy:" + deployment_digest +
+                          " place:" + digest_of(placement);
+        if (!stream_digest.empty())
+            out += " flow:" + stream_digest + (dataflow.empty() ? "" : "(" + dataflow + ")");
+        return out;
     }
 };
 

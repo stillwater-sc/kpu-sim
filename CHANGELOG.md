@@ -9,6 +9,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Three round-4 findings on #303, two of them in code written the same day as its own
+  lesson.**
+  - **The stream digest contained the map's *name*** while the comment beside it said the name
+    is a label outside the comparison. So renaming a map and changing nothing else produced a
+    different identity for the same run — the code contradicting its own documentation. The
+    name is gone from the bytes (what a map *does* is `tau` and `proj`, which remain) and stays
+    in `RunIdentity::dataflow`.
+  - **`std::to_string(double)` gives six decimal places**, so `rate` values `1.0` and
+    `1.0000001` digested identically and two annotations that schedule differently shared an
+    identity. This is precisely the mistake #265 increment 2 found in the L0 format's `alpha`,
+    repeated in a file written the same day. Rendered at `max_digits10` through a
+    classic-locale stream, duplicated rather than shared because `serialize/` sits *above*
+    `stream/` and a layering inversion is the more expensive of the two wrongs.
+  - **`RunIdentity::str()` printed the map name but not the stream digest**, so two runs that
+    `operator==` correctly distinguishes rendered identically in provenance. A provenance line
+    that cannot tell two runs apart is not provenance. Every compared component is rendered
+    now, with the name in brackets because it is what a reader recognises.
+
+### Fixed
+
 - **Three more gaps from the #303 review, two of them in guards added by the previous round.**
   - **A count is not a cover.** `check()` compared operand counts, so a snapshot carrying
     `{A, A}` for a three-operand program passed — and `apply()` then wrote `A` twice and left
