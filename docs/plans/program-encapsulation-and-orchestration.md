@@ -1,6 +1,7 @@
 # Encapsulating the program, separating the data, and orchestrating from RISC-V
 
-**Status:** reviewed; two decisions recorded below. Not yet implemented.
+**Status:** accepted; §10 closed (see below). Increment 1 in progress.
+**Issue:** #305, which **blocks** #283 (L-T2), #284 (the backdoor) and #286 (the event record)
 **Prompted by:** the #265/#282 work, which exposed that there is no *unit of deployment*
 **Relates to:** #229 (model ingestion, §4a's compiler/hardware boundary), ADR 0001 D1 (L0 is
 the portable program), ADR 0002 (four levels, `VirtualPlatform`),
@@ -10,15 +11,23 @@ the portable program), ADR 0002 (four levels, `VirtualPlatform`),
 
 ## Decided on review (2026-09-25)
 
-- **The orchestration program makes real placement decisions at runtime**, rather than replaying
-  a schedule the compiler baked. Consequences are folded into §6.4 (a status surface of metadata,
-  never payload; an ABI that can refuse; determinism as a requirement), §6.5 (deadlock-freedom
-  becomes the orchestrator's problem) and §7.1 (one orchestrator source, two targets).
-- **Allocation: program-order acquisition first, then reserve-then-launch** (§6.5). The existing
-  deadlock proof applies verbatim in increment 2, and out-of-order placement is bought
-  deliberately in increment 3 rather than assumed.
+§10 is closed. Two answers were given explicitly; the rest confirm this document's own
+recommendations, which is what accepting the plan means. Each is restated here so that a
+misread is visible and cheap to correct rather than buried in the section it came from.
 
-Everything else in §10 is still open.
+| | decision |
+|---|---|
+| **Q1 container** | **FlatBuffers**, our own schema (§5). ONNX stays the *ingestion* format upstream; a hand-rolled binary is rejected on the evidence of `.kpubin`'s rot |
+| **Q2 orchestrator** | **RV64GC**, ordinary C++ toolchain (§7.1). A runtime allocator is real code maintained for two targets, which is worth more than a small core. Descriptor address fields stay **64-bit** regardless (§4) |
+| **Q3 Renode bridge** | **IPC to the C++ `VirtualPlatform`** — shared memory for the DRAM region, a socket for descriptors and completions, imitating Renode's Verilator channel. **Not** a C# reimplementation: that would be a fifth engine in a fifth language (§7.2) |
+| **Q4 runtime decisions** | **The orchestration program makes real placement decisions at runtime**, rather than replaying a baked schedule. Consequences in §6.4 (a status surface of metadata, never payload; an ABI that can refuse; determinism as a requirement), §6.5 and §7.1 |
+| **Q4a allocation** | **Program-order acquisition first, then reserve-then-launch** (§6.5). The existing deadlock proof applies verbatim in increment 2; out-of-order placement is bought deliberately in increment 3 |
+| **Q5 name** | **`.kpuld`**, after NVDLA's "loadable", the reference architecture this repo already cites |
+| **Q6 ADR** | **Yes — ADR 0003**, written when increment 1 lands and the format is real rather than proposed. It amends a boundary #229 named and a recommendation the versioning plan made, and amending recorded decisions by plan alone is thinner than they deserve |
+
+The one question these answers *open* is recorded where it belongs rather than here: §6.5's
+allocation rule constrains how much freedom the orchestrator has, and increment 3 is where the
+reserve-then-launch proof has to be written down rather than assumed.
 
 ---
 
@@ -69,7 +78,7 @@ right and is still the wrong container here (§5).
     │  domain_flow passes + KPU backend                         (#229 [B])
     ▼
 ══════════════ compiler / hardware boundary ══════════════
-  KPU loadable  (.kpuld)           ← THIS PLAN: the unit of deployment
+  KPU loadable  (.kpuld)           ← #305: the unit of deployment
     ├── manifest: versions, min_consumer, producer, required machine profile
     ├── orchestration program: an ELF that DECIDES placement at runtime (§6.4, §7.1)
     ├── operator table → an L0 TileProgram each              (#265 format)
@@ -481,7 +490,7 @@ is then tested against.
 Increments 1–3 are the ones that make the encapsulation real; 4 is the one that makes it a
 virtual platform; 5–6 are what make it interesting.
 
-## 10. Open questions — decisions I should not make alone
+## 10. The questions, and where their answers went
 
 1. **Container format.** FlatBuffers is the recommendation (§5). ONNX-with-external-data is the
    alternative worth arguing for if interoperability with other runtimes matters more than a
