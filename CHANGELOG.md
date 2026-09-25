@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **A test that closes the run-identity class instead of its instances.** Four review rounds on
+  #303 found the same shape of bug: a `RunIdentity` field that was not compared when it should
+  have been (`placement`, the stream content), or not rendered when it was compared
+  (`stream_digest`), or compared while the comment called it a label (the map name). Fixing each
+  instance leaves the class open, and the class is "someone adds a field and forgets one of the
+  two". The test now walks every field, asserting each is either compared **and** rendered or a
+  **declared label** that is rendered and not compared — and a **structured binding** over
+  `RunIdentity` makes adding a member a *compile error* in that test rather than a silent
+  omission. Verified by adding a field and watching the build fail with "only 7 names provided
+  for structured binding … decomposes into 8 elements". Same technique, and same reason, as the
+  exhaustive `switch` over `StateCoverage`.
+
 ### Fixed
 
 - **Three round-4 findings on #303, two of them in code written the same day as its own

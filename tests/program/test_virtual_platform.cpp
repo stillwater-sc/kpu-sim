@@ -646,3 +646,73 @@ TEST_CASE("an unset handle sorts apart from the first loaded one",
     std::set<ProgramHandle> keys{unset, first};
     CHECK(keys.size() == 2);
 }
+
+// ----------------------------------------------------------------------------
+// Closing the class, rather than the instances
+// ----------------------------------------------------------------------------
+TEST_CASE("every RunIdentity field is either compared or a declared label, and all are rendered",
+          "[program][platform][run]") {
+    // FOUR REVIEW ROUNDS ON THIS PR FOUND THE SAME SHAPE OF BUG: a field of RunIdentity that
+    // was not compared when it should have been (placement, the stream content), or not
+    // rendered when it was compared (stream_digest), or compared when the comment said it was
+    // a label (the map name). Fixing each instance leaves the class open, and the class is
+    // "someone adds a field and forgets one of the two".
+    //
+    // So this test walks every field. The STRUCTURED BINDING below is the tripwire: its arity
+    // must match RunIdentity exactly, so adding a member is a COMPILE ERROR here rather than a
+    // silent omission -- the same technique as the exhaustive switch over StateCoverage, and
+    // for the same reason. A designated-initializer aggregate would NOT do: a new member would
+    // just default-initialise and the test would still build.
+    const RunIdentity base{"prog0", "state0", "deploy0", "place0", "flow0", "the-label",
+                           ExecutionLevel::BlockSequential};
+    {
+        const auto& [program, state, deployment, placement, stream, dataflow, level] = base;
+        (void)program; (void)state; (void)deployment;
+        (void)placement; (void)stream; (void)dataflow; (void)level;
+    }
+
+    // ---- the COMPARED fields: perturbing any one must change == AND str() ----------------
+    auto perturbed = [&](auto&& mutate) {
+        RunIdentity o = base;
+        mutate(o);
+        return o;
+    };
+    const std::vector<std::pair<const char*, RunIdentity>> compared = {
+        {"program_digest",    perturbed([](RunIdentity& o) { o.program_digest += "x"; })},
+        {"snapshot_digest",   perturbed([](RunIdentity& o) { o.snapshot_digest += "x"; })},
+        {"deployment_digest", perturbed([](RunIdentity& o) { o.deployment_digest += "x"; })},
+        {"placement",         perturbed([](RunIdentity& o) { o.placement += "x"; })},
+        {"stream_digest",     perturbed([](RunIdentity& o) { o.stream_digest += "x"; })},
+        {"level",             perturbed([](RunIdentity& o) { o.level = ExecutionLevel::Behavioral; })},
+    };
+    for (const auto& [field, other] : compared) {
+        INFO("field " << field);
+        CHECK_FALSE(other == base);                       // it is part of the identity...
+        CHECK(other.str() != base.str());                 // ...and it is visible in provenance
+    }
+    CHECK(base == base);
+
+    // ---- the DECLARED LABEL: not compared, but still rendered ---------------------------
+    // `dataflow` is the map's name. Two annotations with identical content ARE the same
+    // annotation whatever they are called, so it must NOT be compared -- and it must still be
+    // rendered, because it is what a reader recognises. Both halves are asserted, since the
+    // first version of this code got the comparison wrong and a later one got the rendering
+    // wrong.
+    const RunIdentity relabelled = perturbed([](RunIdentity& o) { o.dataflow = "other-label"; });
+    CHECK(relabelled == base);
+    CHECK(relabelled.str() != base.str());
+
+    // Every compared string appears verbatim in the rendering, so "rendered" is not satisfied
+    // by a digest of a digest.
+    const std::string text = base.str();
+    for (const std::string& part : {base.program_digest, base.snapshot_digest,
+                                    base.deployment_digest, base.stream_digest, base.dataflow}) {
+        INFO("part " << part);
+        CHECK(text.find(part) != std::string::npos);
+    }
+    // The placement is rendered as a digest of its bytes rather than verbatim, because a
+    // pinned assignment is one number per op and would swamp the line. Stated here so the
+    // exception is deliberate rather than an oversight.
+    CHECK(text.find(digest_of(base.placement)) != std::string::npos);
+    CHECK(text.find("place0") == std::string::npos);
+}
