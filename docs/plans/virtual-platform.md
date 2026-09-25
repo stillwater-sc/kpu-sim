@@ -283,13 +283,75 @@ real implementation appears, and that is when the shape of the interface is know
    contents. The offset is also **not part of identity**: two writes at different offsets are
    two writes to the same resource, and counting them as two stations would be wrong for
    #286.
-4. **`kpu-run --deploy spec.json`**, and the characterization harness becomes a consumer of
-   the platform rather than a parallel path. The flags stay; `--deploy` replaces them, and
-   giving both is refused for the same reason `--program` and `--algo` are.
-5. **`step_begin` / `step` on the platform**, reusing the existing `Stepper`, so #286 and
-   L-T2 have one stepping seam rather than two.
+4. **`kpu-run --deploy spec.json`, and both tools become consumers of the platform** —
+   **done.** The flags stay; `--deploy` replaces them, and giving both is refused for the same
+   reason `--program` and `--algo` are.
 
-Increments 1–2 are what unblock #283. Increment 3 is what unblocks #284 and #286.
+   **`kpu-run` no longer calls `run_at` directly.** It loads each level's program into a
+   `VirtualPlatform`, takes ONE snapshot, and runs each level from it — so every run carries a
+   complete identity (`run id L-B prog:… state:… deploy:…`). Routing it through the platform
+   immediately exercised the trap the platform documents: results must be captured as they are
+   produced, because the next run's restore resets every program. Reading them back after the
+   loop would have diffed a result against an input.
+
+   **The characterization harness executed outside the platform, and that was the "fourth
+   execution path" the issue names** — not its characterization, which is a first-order
+   *analytical* model and is deliberately not routed through a level (giving an estimate a
+   fidelity level would claim something it does not have), but its **validation**, which
+   called `TileProgramReference` directly. That now runs at L-B through a platform, one per
+   sweep cell — a single platform for the whole sweep would make each cell's run restore every
+   earlier cell, since `restore()` is platform-wide.
+
+   **With `--deploy`, the machine axes come from the spec.** Leaving them at their flag
+   defaults swept `single, 1/4/16` for a spec that said `checkerboard, 16` — the machine
+   described and the machine measured being different, silently, which is the exact failure
+   this issue exists to remove. ADR 0002 §3.5 sweeps machines as a **list of deployments**, not
+   as axes over one spec, so the axis flags are refused alongside `--deploy` and there is
+   nothing to reconcile.
+
+   Each sweep row now carries the **deployment digest**, because a row naming only the axes it
+   swept cannot be told apart from a row measured on a different spec with the same topology.
+
+   Two things fixed while here, both flagged earlier and both in scope once the arg parsing was
+   being touched: the harness's numeric flags were bare `std::stod`/`std::stoul` — `"abc"`
+   threw uncaught (SIGABRT, which CI cannot tell from a crash in the model), `"-2"` wrapped to
+   an enormous sweep count, and `"inf"` was accepted as a bandwidth — and `kpu-run`'s local
+   `parse_rate` is now the shared checked parse, so both tools agree on what a rate flag
+   accepts. A local copy is how "what `--macs-per-cycle` means" drifts.
+
+   **The report is one line per level, not one per field.** A fully declared spec has six such
+   fields and two levels run, which printed eleven near-identical lines — and a report nobody
+   reads is no better than one never written.
+5. **`step_begin` / `step` on the platform** — **done.** `VirtualPlatform::Cursor`, reusing
+   `driver::make_stepper`, so #286 and L-T2 have one stepping seam rather than two. `kpu-run
+   --step` goes through it; it used to build its own `Stepper` over its own program copy, which
+   was the second seam.
+
+   **The two levels step by different mechanisms, and the cursor says which rather than
+   papering over it.** At L-B a step *executes*: the platform's state advances as you step, and
+   a caller can watch values form. At L-T1 there is no meaningful half a schedule — credits,
+   residency and lane contention are decided across the whole program — so `step_begin()` runs
+   to completion and the cursor *replays* that run's timeline, meaning the state is already
+   final before the first `step()`.
+
+   `Cursor::executes()` is what a caller must consult before believing a step advanced
+   anything. Hiding the difference behind a uniform interface would make "step until the value
+   appears" a loop that terminates at one level and never at the other — a uniformity that
+   costs more than it saves.
+
+   `step_begin()` restores the passed snapshot **first**, exactly as `run()` does: stepping is
+   execution, so it carries the same identity requirement, and a cursor begun from ambient
+   state would be a walk through a run nobody can reproduce. The multi-device guard is now
+   stated **once** and used by both, because stepping at L-B succeeding where running at L-B is
+   refused is the kind of inconsistency found by whoever builds on the seam rather than by
+   whoever wrote it.
+
+   One cost accepted rather than hidden: at L-T1 `kpu-run --step` runs the program a second
+   time, because the cursor produces its own run. Threading an already-finished timeline in
+   would be precisely the second path the seam exists to remove.
+
+Increments 1–2 are what unblock #283. Increment 3 is what unblocks #284 and #286, and
+increment 5 gives #286 the stepping seam it records events from.
 
 ## 9. Definition of done, and what is deferred
 
@@ -303,8 +365,10 @@ From the issue, with the honest status of each:
       by comparing bytes rather than digests (§4)
 - [x] a run that reads state a previous run left behind is impossible by construction —
       **increment 2**
-- [ ] no test or demo constructs an engine directly; the characterization harness goes
-      through the platform — **increment 4**, within the boundary of §6
+- [x] no test or demo constructs an engine directly; the characterization harness goes
+      through the platform — **increment 4**, within the boundary of §6: the harness's
+      *execution* (its validation) goes through the platform; its *characterization* is an
+      analytical estimate and is deliberately not given a fidelity level
 - [x] the naming map resolves an L3 tile, an L2 bank, an L1 vector and a compute-tile
       register file on a two-device deployment — **increment 3**, as *identity*; resolving to
       **state** is #283, because the state does not exist yet (§5)

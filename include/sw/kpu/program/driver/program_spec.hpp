@@ -22,6 +22,7 @@
 #include <sw/kpu/program/stream/derive/matmul_streams.hpp>
 #include <sw/kpu/program/tile_program.hpp>
 
+#include <cmath>
 #include <cstdint>
 #include <set>
 #include <sstream>
@@ -32,11 +33,38 @@
 namespace sw::kpu::program::driver {
 
 // ---- argument helpers ------------------------------------------------------
+// THROWS rather than wrapping. std::stoul turns "-2" into an enormous count without
+// complaining, and an uncaught throw on "abc" is SIGABRT -- which a CI job cannot tell
+// apart from a crash in the model. A sweep list is command-line text, so it gets the same
+// treatment as every other flag here.
 inline std::vector<std::uint32_t> parse_ints(const std::string& csv) {
     std::vector<std::uint32_t> out;
     std::stringstream ss(csv);
     std::string tok;
-    while (std::getline(ss, tok, ',')) if (!tok.empty()) out.push_back(std::stoul(tok));
+    while (std::getline(ss, tok, ',')) {
+        if (tok.empty()) continue;
+        if (tok[0] == '-')
+            throw std::invalid_argument("'" + tok + "' is not a non-negative integer");
+        // ONLY THE stoul CALL IS INSIDE THE try. With the checks in there too, the catch for
+        // std::invalid_argument caught this function's OWN diagnostics and relabelled them:
+        // "12abc" reported "is not an integer" instead of "has trailing characters", and an
+        // out-of-range value reported the same. The exit code was right and the message sent
+        // the reader to the wrong problem, which is the more expensive half.
+        std::size_t consumed = 0;
+        unsigned long v = 0;
+        try {
+            v = std::stoul(tok, &consumed);
+        } catch (const std::out_of_range&) {
+            throw std::invalid_argument("'" + tok + "' is out of range");
+        } catch (const std::invalid_argument&) {
+            throw std::invalid_argument("'" + tok + "' is not an integer");
+        }
+        if (consumed != tok.size())
+            throw std::invalid_argument("'" + tok + "' has trailing characters");
+        if (v > 0xFFFFFFFFul)
+            throw std::invalid_argument("'" + tok + "' is out of range");
+        out.push_back(static_cast<std::uint32_t>(v));
+    }
     return out;
 }
 
@@ -113,6 +141,42 @@ inline bool parse_dim(const std::vector<std::string>& a, const std::string& key,
         return true;
     } catch (const std::exception&) {
         error = key + ": '" + raw + "' is not an integer";
+        return false;
+    }
+}
+
+// A CHECKED double, for the same reasons as parse_dim and with one extra: std::stod
+// PARSES "inf", and an infinite bandwidth is not a fast machine -- it is a makespan of 0 or
+// a NaN reported as a result. Shared by both tools, because two copies of "what
+// --macs-per-cycle accepts" drift and then a bug reproduces in one tool and not the other
+// (§D1).
+//
+// `require_positive` distinguishes a RATE from a COEFFICIENT: a bandwidth of zero is not a
+// machine, but zero energy per MAC is a legitimate modelling choice ("ignore compute
+// energy").
+inline bool parse_double(const std::vector<std::string>& a, const std::string& key,
+                         double fallback, bool require_positive, double& out,
+                         std::string& error) {
+    if (!arg_present(a, key)) { out = fallback; return true; }
+    std::string raw;
+    if (!arg_required(a, key, raw, error)) return false;   // terminal, or a flag as value
+    if (raw.empty()) { error = key + ": empty value"; return false; }
+    try {
+        std::size_t consumed = 0;
+        const double v = std::stod(raw, &consumed);
+        if (consumed != raw.size()) {
+            error = key + ": '" + raw + "' has trailing characters";
+            return false;
+        }
+        if (!std::isfinite(v) || (require_positive ? !(v > 0.0) : !(v >= 0.0))) {
+            error = key + ": '" + raw + "' must be finite and " +
+                    (require_positive ? "positive" : "non-negative");
+            return false;
+        }
+        out = v;
+        return true;
+    } catch (const std::exception&) {
+        error = key + ": '" + raw + "' is not a number";
         return false;
     }
 }

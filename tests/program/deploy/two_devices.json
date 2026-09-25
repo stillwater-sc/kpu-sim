@@ -1,0 +1,74 @@
+{
+  "devices": [
+    {
+      "name": "west",
+      "topology": "single",
+      "compute_tiles": 1,
+      "macs_per_cycle": 256.0,
+      "element_bytes": 4,
+      "dma": {
+        "engines": 1,
+        "bytes_per_cycle": 64.0
+      },
+      "l3": {
+        "tiles": 2,
+        "banks": 4,
+        "capacity_tiles": 0
+      },
+      "l2": {
+        "banks_per_tile": 2
+      },
+      "l1": {
+        "vectors": 2
+      },
+      "movers": {
+        "block_movers": 1,
+        "bm_bytes_per_cycle": 128.0,
+        "streamers": 1,
+        "str_bytes_per_cycle": 256.0,
+        "noc_links": 0,
+        "noc_bytes_per_cycle": 128.0
+      },
+      "analytical": {
+        "bytes_per_cycle": 64.0,
+        "pj_per_mac": 1.0,
+        "pj_per_byte": 20.0
+      }
+    },
+    {
+      "name": "east",
+      "topology": "checkerboard",
+      "compute_tiles": 4,
+      "macs_per_cycle": 256.0,
+      "element_bytes": 4,
+      "dma": {
+        "engines": 2,
+        "bytes_per_cycle": 64.0
+      },
+      "l3": {
+        "tiles": 4,
+        "banks": 8,
+        "capacity_tiles": 16
+      },
+      "l2": {
+        "banks_per_tile": 4
+      },
+      "l1": {
+        "vectors": 2
+      },
+      "movers": {
+        "block_movers": 2,
+        "bm_bytes_per_cycle": 128.0,
+        "streamers": 2,
+        "str_bytes_per_cycle": 256.0,
+        "noc_links": 1,
+        "noc_bytes_per_cycle": 128.0
+      },
+      "analytical": {
+        "bytes_per_cycle": 64.0,
+        "pj_per_mac": 1.0,
+        "pj_per_byte": 20.0
+      }
+    }
+  ]
+}

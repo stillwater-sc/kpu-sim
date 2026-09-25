@@ -138,25 +138,36 @@ inline bool level_models(ExecutionLevel l, platform::SpecField f) {
     return false;
 }
 
-// One line per declared-but-unmodelled field, ready to print or to assert on. Returned
-// rather than logged, so the caller decides where it belongs -- a header line, the
-// provenance, or a test.
+// The fields a deployment DECLARED that this level does not model. The fields themselves,
+// so a caller can render them however it needs -- one sentence each for a provenance record,
+// or one compact line per level for a header -- without a second function deciding which
+// fields those are. Two renderings of one list drift; two lists of one thing drift worse.
 //
-// Bandwidths are NOT listed at L-B even though it models no time at all: the outcome
-// already states "timing: not modelled at this level", and repeating it per field would
-// bury the resource-model fields this exists to surface.
+// Bandwidths are NOT listed at L-B even though it models no time at all: the outcome already
+// states "timing: not modelled at this level", and repeating it per field would bury the
+// resource-model fields this exists to surface.
+inline std::vector<platform::SpecField> unmodelled(ExecutionLevel l,
+                                                   const platform::DeploymentSpec& spec,
+                                                   Dim device = 0) {
+    std::vector<platform::SpecField> out;
+    if (spec.devices.empty()) return out;
+    const platform::DeviceSpecification& d = spec.device(device);
+    for (platform::SpecField f : platform::all_spec_fields())
+        if (platform::declared(d, f) && !level_models(l, f)) out.push_back(f);
+    return out;
+}
+
+// One sentence per field, ready to print or to assert on.
 inline std::vector<std::string> unmodelled_fields(ExecutionLevel l,
                                                   const platform::DeploymentSpec& spec,
                                                   Dim device = 0) {
     std::vector<std::string> out;
     if (spec.devices.empty()) return out;
     const platform::DeviceSpecification& d = spec.device(device);
-    for (platform::SpecField f : platform::all_spec_fields()) {
-        if (!platform::declared(d, f) || level_models(l, f)) continue;
+    for (platform::SpecField f : unmodelled(l, spec, device))
         out.push_back(std::string(platform::to_string(f)) + " declared (" +
                       platform::declared_value(d, f) + ") but not modelled at " +
                       short_name(l));
-    }
     return out;
 }
 

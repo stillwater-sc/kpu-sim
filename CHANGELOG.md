@@ -7,6 +7,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **A live use-after-free in the stepping seam (#304 review).** An L-B `Cursor`'s stepper holds
+  a `TileProgram&` into the platform's program container, which was a `std::vector` — so a
+  `load_program()` while a cursor was alive could reallocate and every later `step()` wrote
+  through a dangling reference. Not theoretical: a test that loads a second program mid-walk
+  **SIGSEGVs** before the fix. The container is a `std::deque`, whose `push_back` never
+  invalidates references to existing elements; every use was `size()`, `operator[]` or `at()`,
+  which behave identically. Loading while stepping is an ordinary thing to do, and #286 builds
+  its event record on this cursor.
+- **`parse_ints` relabelled its own diagnostics.** The bounds checks sat inside the `try`, so
+  the `catch (const std::invalid_argument&)` caught this function's own messages and replaced
+  them: `--sizes 12abc` reported "is not an integer" instead of "has trailing characters", and
+  an out-of-range value reported the same. The exit code was right and the message sent the
+  reader to the wrong problem, which is the more expensive half. Only the `std::stoul` call is
+  inside the `try` now.
+- **A terminal `--deploy` silently swept the default machine.** `tile_characterize` read it with
+  `arg()`, which returns the fallback `""` when the flag is the last token, and then took the
+  flag-built branch and exited 0 — the silent machine mismatch that increment 4 exists to
+  remove, in the change that removes it. It uses `arg_required`, as `kpu-run` already did.
+- **`tile_characterize` accepted numbers that were not numbers.** Its flags were bare
+  `std::stod`/`std::stoul`: `"abc"` threw uncaught (SIGABRT, which CI cannot distinguish from a
+  crash in the model), `"-2"` wrapped to an enormous sweep count, and `"inf"` was accepted as a
+  bandwidth. All of them now go through the shared checked parse, which `kpu-run`'s local
+  `parse_rate` also became — a local copy is how "what `--macs-per-cycle` means" drifts between
+  two tools.
+- **Feature entries had drifted under a `### Fixed` heading.** A `### Fixed` group inserted
+  above the increment 4/5 features classified them, and everything after them, as fixes. The
+  heading is gone and its entry moved here. `## [Unreleased]` in this file is a run of
+  change-set groups rather than one `Added`/`Fixed` pair, so the fix is local: an earlier
+  attempt to "consolidate" the section would have deleted 640 lines, including a `### Changed`
+  group, and was reverted.
+
 ### Added
 
 - **A test that closes the run-identity class instead of its instances.** Four review rounds on
@@ -109,6 +142,54 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   directly: anything `validate()` accepts can be written and read back.
 
 ### Added
+
+- **Stepping on the platform (#282 increment 5).** `VirtualPlatform::step_begin` returns a
+  `Cursor` built from `driver::make_stepper`, and `kpu-run --step` goes through it — it used to
+  build its own `Stepper` over its own program copy, which was a second stepping seam beside
+  the platform's. #286 and L-T2 both need one.
+
+  **The two levels step by different mechanisms and the cursor says which.** At L-B a step
+  *executes*, so the platform's state advances as you step and a caller can watch values form.
+  At L-T1 there is no meaningful half a schedule — credits, residency and lane contention are
+  decided across the whole program — so `step_begin()` runs to completion and the cursor
+  *replays* that run, meaning the state is already final before the first `step()`.
+  `Cursor::executes()` is what a caller consults before believing a step advanced anything;
+  hiding that behind a uniform interface would make "step until the value appears" a loop that
+  terminates at one level and never at the other.
+
+  `step_begin()` restores the passed snapshot **first**, as `run()` does, because stepping is
+  execution and carries the same identity requirement. The multi-device guard is now stated once
+  and used by both — stepping at L-B succeeding where running at L-B is refused is the kind of
+  inconsistency found by whoever builds on the seam, not by whoever wrote it.
+
+- **`--deploy spec.json`, and both tools run through the platform (#282 increment 4).**
+  `kpu-run --deploy` and `tile_characterize --deploy` take the machine from a deployment spec;
+  giving a device flag alongside it is refused, because two descriptions of a machine is the
+  same usage error as `--program` beside `--algo`.
+
+  **`kpu-run` no longer calls `run_at` directly.** It loads each level's program into a
+  `VirtualPlatform`, takes one snapshot, and runs each level from it, so every run carries a
+  complete identity (`run id L-B prog:… state:… deploy:…`). Doing so immediately exercised the
+  trap the platform documents: results must be captured as they are produced, because the next
+  run's restore resets every program.
+
+  **The characterization harness executed outside the platform** — its *validation* called
+  `TileProgramReference` directly, which was the "fourth execution path" #282 names. That now
+  runs at L-B through a platform, one per sweep cell (a single platform for the whole sweep
+  would make each cell restore every earlier one). Its *characterization* stays an analytical
+  estimate and is deliberately not routed through a level: giving an estimate a fidelity level
+  would claim something it does not have.
+
+  **With `--deploy`, the machine axes come from the spec.** The first version left them at
+  their flag defaults, so a spec saying `checkerboard, 16` was swept as `single, 1/4/16` —
+  silently measuring a different machine than the one described. ADR 0002 §3.5 sweeps machines
+  as a *list of deployments*, not as axes over one spec. Every sweep row now carries the
+  deployment digest, since a row naming only its axes cannot be told apart from one measured on
+  a different spec with the same topology.
+
+  The unmodelled-field report is now **one line per level** rather than one per field: a fully
+  declared spec printed eleven near-identical lines, and a report nobody reads is no better
+  than one never written.
 
 - **The global naming map: every declared resource, addressable (#282 increment 3).**
   `ResourceName` with `format`/`parse_resource_name`, and `ResourceMap` with `exists`,

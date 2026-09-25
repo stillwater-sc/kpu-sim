@@ -28,8 +28,8 @@
 //     a name with nothing behind it.
 //   * `Backdoor` (§3.4, #284). The snapshot is the surface it will write through, and
 //     the coverage tag exists partly for it.
-//   * `step()` (§3.2). Increment 5, reusing the existing Stepper, so #286 and L-T2 get
-//     one stepping seam rather than two.
+// `step()` (§3.2) is here as of increment 5, reusing driver::make_stepper so #286 and L-T2
+// get ONE stepping seam rather than two.
 //
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2024-2025 Stillwater Supercomputing, Inc.
@@ -37,6 +37,7 @@
 #pragma once
 
 #include <sw/kpu/program/driver/execution_level.hpp>
+#include <sw/kpu/program/driver/step_cursor.hpp>
 // The JSON header is declaration-only, so this stays a std-only include graph; the
 // definition of deployment_digest() lives in kpu_program, which kpu_simulator links.
 #include <sw/kpu/program/platform/deployment_json.hpp>
@@ -44,6 +45,9 @@
 #include <sw/kpu/program/platform/state_snapshot.hpp>
 #include <sw/kpu/program/serialize/l0_format.hpp>
 
+#include <deque>
+#include <memory>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -251,20 +255,7 @@ public:
                           const StateSnapshot& initial, const Placement& placement,
                           const stream::StreamProgram* streams = nullptr) {
         const std::size_t i = checked(h);
-        // MULTI-DEVICE EXECUTION IS NOT IMPLEMENTED, and silently running device 0 would be
-        // the worst possible version of that: run_at() receives device_view() (device 0) and
-        // unmodelled_fields() inspects device 0, so every other device would be ignored
-        // WITHOUT BEING REPORTED -- a deployment described and a machine run that are not the
-        // same machine.
-        //
-        // The naming map (increment 3) is multi-device on purpose, because #284 needs every
-        // resource addressable. Naming a resource and executing on it are different
-        // capabilities, and this is the one that does not exist yet.
-        if (spec_.device_count() > 1)
-            throw std::invalid_argument(
-                "platform: this deployment has " + std::to_string(spec_.device_count()) +
-                " devices, and multi-device execution is not implemented -- run_at() would "
-                "schedule device 0 and ignore the rest without saying so");
+        require_single_device();
         restore(initial);
 
         PlatformRunResult result;
@@ -289,6 +280,80 @@ public:
                    Placement::single(spec_.device_view().compute_tiles), nullptr);
     }
 
+    // ---- step ---------------------------------------------------------------
+    // ONE TRANSACTION PER CALL, at the granularity the level defines (§3.2: "the unit of
+    // stepping IS the level").
+    //
+    // THE TWO LEVELS STEP BY DIFFERENT MECHANISMS, and the cursor says which rather than
+    // papering over it:
+    //
+    //   L-B   EXECUTES. Each step applies the next op for real, so the platform's state
+    //         advances as you step and a caller can read values forming.
+    //   L-T1  REPLAYS. The executor's schedule depends on the WHOLE program -- credits,
+    //         residency and lane contention are decided across it -- so there is no
+    //         meaningful "half a schedule". step_begin() therefore RUNS THE PROGRAM TO
+    //         COMPLETION first and the cursor walks the timeline that run produced.
+    //
+    // That difference is not an implementation detail a caller can ignore: at L-T1 the
+    // state is already final before the first step() call. `executes()` on the cursor is
+    // what a caller must consult before believing that stepping advanced anything, and
+    // hiding it behind a uniform interface would make "step until the value appears" a
+    // loop that never terminates at one level and works at the other.
+    class Cursor {
+    public:
+        driver::Stepper& stepper() const { return *stepper_; }
+        // True when a step APPLIES work (L-B); false when it walks a finished run (L-T1).
+        bool executes() const { return !stepper_->models_time(); }
+        ExecutionLevel level() const { return level_; }
+        ProgramHandle program() const { return handle_; }
+        // Present only for a replay, because only a replay has a run behind it.
+        const std::optional<PlatformRunResult>& run_result() const { return run_; }
+
+        bool step() { return stepper_->step(); }
+        const driver::StepEvent& current() const { return stepper_->current(); }
+        std::size_t position() const { return stepper_->position(); }
+        std::size_t size() const { return stepper_->size(); }
+
+    private:
+        friend class VirtualPlatform;
+        std::unique_ptr<driver::Stepper> stepper_;
+        ExecutionLevel level_{};
+        ProgramHandle handle_;
+        std::optional<PlatformRunResult> run_;
+    };
+
+    // Restores `initial` FIRST, exactly as run() does -- stepping is execution, so it has
+    // the same identity requirement, and a cursor begun from ambient state would be a
+    // walk through a run nobody can reproduce.
+    Cursor step_begin(ProgramHandle h, ExecutionLevel level, const StateSnapshot& initial,
+                      const Placement& placement,
+                      const stream::StreamProgram* streams = nullptr) {
+        const std::size_t i = checked(h);
+        // THE SAME GUARD AS run(), because stepping IS execution. Without it, stepping at L-B
+        // would succeed on a deployment that running at L-B refuses -- an inconsistency a
+        // caller would have no way to make sense of, and the kind that gets discovered by
+        // someone building on the seam rather than by whoever wrote it.
+        require_single_device();
+        Cursor cur;
+        cur.level_ = level;
+        cur.handle_ = h;
+        if (level == ExecutionLevel::BlockSequential) {
+            // The whole run happens here; see the note above on why there is no half a
+            // schedule. run() restores the snapshot, so this cursor is reproducible.
+            cur.run_ = run(h, level, initial, placement, streams);
+            cur.stepper_ = driver::make_stepper(level, programs_[i], cur.run_->outcome.timeline);
+        } else {
+            restore(initial);
+            cur.stepper_ = driver::make_stepper(level, programs_[i], {});
+        }
+        return cur;
+    }
+
+    Cursor step_begin(ProgramHandle h, ExecutionLevel level, const StateSnapshot& initial) {
+        return step_begin(h, level, initial,
+                          Placement::single(spec_.device_view().compute_tiles), nullptr);
+    }
+
     // THE PROGRAM'S STRUCTURE, NOT ITS VALUES. Values are the `initial_state` input and
     // already have their own digest; folding them in here would make two of the four
     // inputs cover the same bytes, and "identical inputs" would stop meaning four
@@ -300,6 +365,24 @@ public:
     }
 
 private:
+    // MULTI-DEVICE EXECUTION IS NOT IMPLEMENTED, and silently using device 0 would be the
+    // worst possible version of that: run_at() receives device_view() (device 0) and
+    // unmodelled_fields() inspects device 0, so every other device would be ignored WITHOUT
+    // BEING REPORTED -- a deployment described and a machine run that are not the same
+    // machine.
+    //
+    // The naming map (increment 3) is multi-device on purpose, because #284 needs every
+    // resource addressable. Naming a resource and executing on it are different capabilities,
+    // and this is the one that does not exist yet. Stated once so run() and step_begin()
+    // cannot disagree about it.
+    void require_single_device() const {
+        if (spec_.device_count() > 1)
+            throw std::invalid_argument(
+                "platform: this deployment has " + std::to_string(spec_.device_count()) +
+                " devices, and multi-device execution is not implemented -- run_at() would "
+                "schedule device 0 and ignore the rest without saying so");
+    }
+
     std::size_t checked(ProgramHandle h) const {
         if (!h.valid())
             throw std::invalid_argument("platform: an unset ProgramHandle names no program");
@@ -311,7 +394,16 @@ private:
 
     DeploymentSpec spec_;
     std::string deployment_digest_;
-    std::vector<TileProgram> programs_;
+    // A DEQUE, NOT A VECTOR, and this is load-bearing rather than a preference. An L-B
+    // Cursor's BehavioralStepper holds a `TileProgram&` into this container, so a later
+    // load_program() on a vector could REALLOCATE and every subsequent step() would write
+    // through a dangling reference. It is not a theoretical hazard: the test that loads a
+    // second program mid-walk SIGSEGVs with a vector here.
+    //
+    // std::deque::push_back never invalidates references to existing elements, and every use
+    // above is size(), operator[] or at(), all of which behave identically. Loading while
+    // stepping is an ordinary thing to do, and #286 builds its event record on this cursor.
+    std::deque<TileProgram> programs_;
 };
 
 } // namespace sw::kpu::program::platform
