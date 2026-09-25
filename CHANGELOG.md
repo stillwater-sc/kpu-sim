@@ -9,6 +9,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Three more gaps from the #303 review, two of them in guards added by the previous round.**
+  - **A count is not a cover.** `check()` compared operand counts, so a snapshot carrying
+    `{A, A}` for a three-operand program passed — and `apply()` then wrote `A` twice and left
+    `B` untouched. That is the partial restore the check exists to prevent, one level below
+    where the first round closed it. Operand names must now be unique as well as complete.
+  - **`RunIdentity` omitted two of the inputs `run()` actually takes.** ADR 0002 §3.5 names
+    four; the function takes **six**. `placement` changes which compute tile an op lands on and
+    so the schedule, and the L1 stream annotation changes per-op timing, so two runs differing
+    only in those compared **equal**. Both are recorded now: the placement as its whole
+    assignment rather than `label()` (two different pinned placements over the same compute
+    tiles share a label), and the annotation as the space-time map's **name** — a
+    `StreamProgram` is a pure function of `(program, map)` and both are already in the
+    identity, which is the same reasoning the L0 format settled on in #265 increment 4.
+  - **`ProgramHandle::operator<` ignored validity**, so an unset handle and the first loaded
+    one were equivalent under `<` while differing under `==` — a `std::set` keyed on handles
+    would silently keep one of the two.
+
+### Fixed
+
 - **Three holes the #303 review found, each in code that claimed to prevent exactly it.**
   - `restore()` **half-restored before throwing.** `apply()` validated and assigned in one
     loop, so a snapshot whose *second* program did not match left the *first* already

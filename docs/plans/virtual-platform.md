@@ -90,6 +90,19 @@ that they are — which is why that check was worth its strictness. The deployme
 the same property, so **spec round-trip byte-stability is an increment-1 test**, not an
 afterthought.
 
+**The four-tuple is really a six-tuple, and the ADR does not say so.** `run()` also takes a
+`Placement` and an optional L1 stream annotation, and both change what happens: the placement
+decides which compute tile an op lands on, the annotation decides per-op timing. An identity
+over four of six inputs calls two different runs the same run, which review caught. Both are
+recorded — the placement as its whole assignment rather than its label, since two different
+pinned placements over the same compute tiles share a label; the annotation as its space-time
+map's **name**, because a `StreamProgram` is a pure function of `(program, map)` and both are
+already in the identity (the reasoning #265 increment 4 settled on for the file format).
+
+This is worth flagging upward: §3.5's "pure function of `(program, initial_state, deployment,
+level)`" is the shape of the claim, not its arity. `Placement` is deliberately not part of the
+deployment (§2 above), so it is a fifth input by construction.
+
 **The digest is for provenance and cache lookup. It is not the identity claim.** The issue's
 definition of done says *"two runs with identical `(program, initial_state, deployment,
 level)` produce identical results — asserted, not assumed"*, and asserting that through a

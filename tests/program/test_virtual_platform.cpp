@@ -14,6 +14,7 @@
 #include <sw/kpu/program/platform/virtual_platform.hpp>
 
 #include <cstring>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -477,4 +478,97 @@ TEST_CASE("a multi-device deployment cannot be run, and says why",
     VirtualPlatform single(one);
     const ProgramHandle sh = single.load_program(filled("matmul"));
     CHECK_NOTHROW(single.run(sh, ExecutionLevel::BlockSequential, single.snapshot()));
+}
+
+// ----------------------------------------------------------------------------
+// Second review of #303
+// ----------------------------------------------------------------------------
+TEST_CASE("a snapshot naming one operand twice is refused", "[program][platform][state]") {
+    // A COUNT IS NOT A COVER. {A, A} on a two-operand program passes the count check, and
+    // apply() then writes A twice and leaves B untouched -- the partial restore the check
+    // exists to prevent, one level below where it was first closed.
+    const ProgramSpec ps = spec_for("matmul");
+    TileProgram p = derive(ps);
+    fill(p, ps);
+    REQUIRE(p.operand_order().size() == 3);
+
+    ProgramState doubled = capture(p, 0);
+    doubled.operands[1] = doubled.operands[0];        // A, A, C -- count still 3
+    CHECK_FALSE(check(doubled, p).empty());
+    CHECK(check(doubled, p).find("twice") != std::string::npos);
+    CHECK_THROWS_AS(apply(doubled, p), std::invalid_argument);
+
+    // ...and through the platform, nothing is written.
+    VirtualPlatform platform = default_platform();
+    const ProgramHandle h = platform.load_program(p);
+    StateSnapshot broken = platform.snapshot();
+    broken.programs()[0].operands[1] = broken.programs()[0].operands[0];
+    platform.program(h).operand("B").values[0] += 1.0f;
+    const StateSnapshot moved = platform.snapshot();
+    CHECK_THROWS_AS(platform.restore(broken), std::invalid_argument);
+    CHECK(platform.snapshot().canonical_bytes() == moved.canonical_bytes());
+}
+
+TEST_CASE("the identity covers the placement and the dataflow too",
+          "[program][platform][run]") {
+    // ADR 0002 §3.5 names four inputs; run() takes SIX. `placement` changes which compute tile
+    // an op lands on and so the schedule, and the L1 annotation changes per-op timing -- so
+    // two runs differing only in those must not compare equal.
+    VirtualPlatform platform(make_deployment([] {
+        DeviceSpec ds;
+        ds.compute_tiles = 4;
+        return ds;
+    }()));
+    const ProgramHandle h = platform.load_program(filled("matmul"));
+    const StateSnapshot initial = platform.snapshot();
+
+    const auto unpinned = platform.run(h, ExecutionLevel::BlockSequential, initial,
+                                       Placement::single(4), nullptr);
+    // A pinned placement over the SAME compute tiles: label() cannot tell these apart, which
+    // is exactly why the identity records the assignment instead of the label.
+    std::vector<Dim> assignment(platform.program(h).ops().size(), 0);
+    const auto pinned_a = platform.run(h, ExecutionLevel::BlockSequential, initial,
+                                       Placement::pinned(assignment, 4), nullptr);
+    std::vector<Dim> other = assignment;
+    other.back() = 3;
+    const auto pinned_b = platform.run(h, ExecutionLevel::BlockSequential, initial,
+                                       Placement::pinned(other, 4), nullptr);
+
+    CHECK(Placement::single(4).label() != Placement::pinned(assignment, 4).label());
+    CHECK(Placement::pinned(assignment, 4).label() == Placement::pinned(other, 4).label());
+    CHECK_FALSE(unpinned.identity == pinned_a.identity);
+    CHECK_FALSE(pinned_a.identity == pinned_b.identity);      // the label would have matched
+    CHECK(pinned_a.identity.program_digest == pinned_b.identity.program_digest);
+
+    // The dataflow is recorded as the map's NAME, because a StreamProgram is a pure function
+    // of (program, map) and both are already in the identity (#265 increment 4's reasoning).
+    auto streams = stream::derive_matmul_streams(platform.program(h), map_for("ws"));
+    const auto annotated = platform.run(h, ExecutionLevel::BlockSequential, initial,
+                                       Placement::single(4), &streams);
+    CHECK(annotated.identity.dataflow == map_for("ws").name);
+    CHECK(unpinned.identity.dataflow.empty());
+    CHECK_FALSE(annotated.identity == unpinned.identity);
+
+    auto other_flow = stream::derive_matmul_streams(platform.program(h), map_for("as"));
+    const auto annotated_b = platform.run(h, ExecutionLevel::BlockSequential, initial,
+                                         Placement::single(4), &other_flow);
+    CHECK_FALSE(annotated.identity == annotated_b.identity);
+
+    // Same six inputs, same identity -- the property all of this exists to support.
+    const auto again = platform.run(h, ExecutionLevel::BlockSequential, initial,
+                                    Placement::single(4), &streams);
+    CHECK(again.identity == annotated.identity);
+}
+
+TEST_CASE("an unset handle sorts apart from the first loaded one",
+          "[program][platform][state]") {
+    // Comparing only the index made them equivalent under <, so a std::set or map keyed on
+    // handles would silently keep one of the two.
+    VirtualPlatform platform = default_platform();
+    const ProgramHandle unset;
+    const ProgramHandle first = platform.load_program(filled("matmul"));
+    CHECK_FALSE(unset == first);
+    CHECK((unset < first) != (first < unset));          // strictly ordered, either way round
+    std::set<ProgramHandle> keys{unset, first};
+    CHECK(keys.size() == 2);
 }

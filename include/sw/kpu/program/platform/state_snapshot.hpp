@@ -41,6 +41,7 @@
 #include <sw/kpu/program/tile_program.hpp>
 
 #include <cstring>
+#include <set>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -145,9 +146,17 @@ inline std::string check(const ProgramState& st, const TileProgram& prog) {
         return "snapshot: program \"" + prog.name() + "\" has " +
                std::to_string(prog.operand_order().size()) + " operands, the snapshot carries " +
                std::to_string(st.operands.size());
+    // A COUNT IS NOT A COVER. {A, A} on a two-operand program passes the count check, and
+    // apply() then writes A twice and leaves B untouched -- the partial restore this whole
+    // check exists to prevent, one level below where it was first closed. Uniqueness plus a
+    // matching count is what makes "every operand is covered exactly once" true.
+    std::set<std::string> seen;
     for (const auto& [name, values] : st.operands) {
         if (!prog.has_operand(name))
             return "snapshot: no operand \"" + name + "\" in program \"" + prog.name() + "\"";
+        if (!seen.insert(name).second)
+            return "snapshot: operand \"" + name + "\" appears twice in the snapshot for \"" +
+                   prog.name() + "\", so another operand would be left unrestored";
         if (prog.operand(name).values.size() != values.size())
             return "snapshot: operand \"" + name + "\" holds " +
                    std::to_string(prog.operand(name).values.size()) +

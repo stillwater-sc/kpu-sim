@@ -84,6 +84,18 @@ public:
                std::to_string(compute_tiles_);
     }
 
+    // The WHOLE placement, for a run identity. label() is for a human and is deliberately
+    // short, which makes it ambiguous here: two DIFFERENT pinned assignments over the same
+    // compute tiles share a label, and a run identity built from it would call two different
+    // runs the same run. The assignment itself is the thing that changes scheduling, so it
+    // is what gets recorded.
+    std::string canonical_bytes() const {
+        std::string out = (mode_ == Mode::Pinned ? "pinned " : "unpinned ");
+        out += std::to_string(compute_tiles_);
+        for (Dim t : op_to_cf_) out += " " + std::to_string(t);
+        return out;
+    }
+
 private:
     Mode mode_ = Mode::Unpinned;
     Dim compute_tiles_ = 1;

@@ -71,7 +71,13 @@ public:
     bool operator==(const ProgramHandle& o) const {
         return valid_ == o.valid_ && index_ == o.index_;
     }
-    bool operator<(const ProgramHandle& o) const { return index_ < o.index_; }
+    // VALIDITY FIRST. An unset handle and the first loaded one differ under ==, and
+    // comparing only the index made them equivalent under < -- so a std::set or map keyed on
+    // handles would silently keep one of the two.
+    bool operator<(const ProgramHandle& o) const {
+        if (valid_ != o.valid_) return valid_ < o.valid_;
+        return index_ < o.index_;
+    }
 
 private:
     friend class VirtualPlatform;
@@ -83,20 +89,36 @@ private:
 // ----------------------------------------------------------------------------
 // The four inputs, named
 // ----------------------------------------------------------------------------
+// ADR 0002 §3.5 names FOUR inputs; run() actually takes SIX, and the identity has to say so
+// or it is not an identity. `placement` changes which compute tile an op lands on, and so the
+// schedule; the L1 stream annotation changes per-op timing. Two runs differing only in those
+// would have compared EQUAL -- and the whole point of the identity is that they cannot.
+//
+// The stream annotation is recorded as the SPACE-TIME MAP'S NAME rather than a digest of the
+// derived StreamProgram, for the reason #265 increment 4 settled for the file format: a
+// StreamProgram is a pure function of (program, map), both already in the identity, so the
+// map's name identifies it. That holds as long as nothing hand-builds a StreamProgram that
+// its own map would not reproduce -- nothing in this repo does, and the L0 format cannot
+// represent one.
 struct RunIdentity {
     std::string program_digest;      // the program's STRUCTURE (see below)
     std::string snapshot_digest;     // the coverage tag + the state it covers
     std::string deployment_digest;   // the canonical spec bytes
+    std::string placement;           // the whole assignment, not its label
+    std::string dataflow;            // the L1 space-time map's name; empty when none
     ExecutionLevel level{};
 
     bool operator==(const RunIdentity& o) const {
         return program_digest == o.program_digest && snapshot_digest == o.snapshot_digest &&
-               deployment_digest == o.deployment_digest && level == o.level;
+               deployment_digest == o.deployment_digest && placement == o.placement &&
+               dataflow == o.dataflow && level == o.level;
     }
 
     std::string str() const {
         return std::string(driver::short_name(level)) + " prog:" + program_digest +
-               " state:" + snapshot_digest + " deploy:" + deployment_digest;
+               " state:" + snapshot_digest + " deploy:" + deployment_digest +
+               " place:" + digest_of(placement) +
+               (dataflow.empty() ? "" : " flow:" + dataflow);
     }
 };
 
@@ -236,6 +258,8 @@ public:
         result.identity.program_digest = program_digest(programs_[i]);
         result.identity.snapshot_digest = initial.digest();
         result.identity.deployment_digest = deployment_digest_;
+        result.identity.placement = placement.canonical_bytes();
+        result.identity.dataflow = streams ? streams->map.name : std::string();
         result.identity.level = level;
         result.unmodelled = driver::unmodelled_fields(level, spec_);
         result.outcome = driver::run_at(level, programs_[i], spec_.device_view(), placement,
