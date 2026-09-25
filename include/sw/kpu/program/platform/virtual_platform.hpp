@@ -94,24 +94,30 @@ private:
 // schedule; the L1 stream annotation changes per-op timing. Two runs differing only in those
 // would have compared EQUAL -- and the whole point of the identity is that they cannot.
 //
-// The stream annotation is recorded as the SPACE-TIME MAP'S NAME rather than a digest of the
-// derived StreamProgram, for the reason #265 increment 4 settled for the file format: a
-// StreamProgram is a pure function of (program, map), both already in the identity, so the
-// map's name identifies it. That holds as long as nothing hand-builds a StreamProgram that
-// its own map would not reproduce -- nothing in this repo does, and the L0 format cannot
-// represent one.
+// The stream annotation is identified by a DIGEST OF ITS CONTENT, not by its map's name. The
+// name was the first answer, justified by "a StreamProgram is a pure function of (program,
+// map)" -- which is true of every StreamProgram this repo DERIVES, and was an ASSUMPTION
+// ABOUT THE CALLER stated in a comment. run() takes a pointer: a caller can hand it a
+// StreamProgram whose wavefront timing or element stride has been changed, run_at will produce
+// a different makespan, and the name would have recorded the two runs as identical.
+//
+// An assumption a type cannot enforce does not belong in an identity, so the content is
+// digested instead. The name is kept beside it as a LABEL and is deliberately not compared:
+// two annotations with identical content ARE the same annotation whatever they are called, and
+// comparing both would be two sources of truth for one input.
 struct RunIdentity {
     std::string program_digest;      // the program's STRUCTURE (see below)
     std::string snapshot_digest;     // the coverage tag + the state it covers
     std::string deployment_digest;   // the canonical spec bytes
     std::string placement;           // the whole assignment, not its label
-    std::string dataflow;            // the L1 space-time map's name; empty when none
+    std::string stream_digest;        // the annotation's CONTENT; empty when there is none
+    std::string dataflow;             // the map's name -- a LABEL, not compared (see above)
     ExecutionLevel level{};
 
     bool operator==(const RunIdentity& o) const {
         return program_digest == o.program_digest && snapshot_digest == o.snapshot_digest &&
                deployment_digest == o.deployment_digest && placement == o.placement &&
-               dataflow == o.dataflow && level == o.level;
+               stream_digest == o.stream_digest && level == o.level;
     }
 
     std::string str() const {
@@ -259,6 +265,8 @@ public:
         result.identity.snapshot_digest = initial.digest();
         result.identity.deployment_digest = deployment_digest_;
         result.identity.placement = placement.canonical_bytes();
+        result.identity.stream_digest =
+            streams ? digest_of(streams->canonical_bytes()) : std::string();
         result.identity.dataflow = streams ? streams->map.name : std::string();
         result.identity.level = level;
         result.unmodelled = driver::unmodelled_fields(level, spec_);

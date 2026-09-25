@@ -554,6 +554,37 @@ TEST_CASE("the identity covers the placement and the dataflow too",
                                          Placement::single(4), &other_flow);
     CHECK_FALSE(annotated.identity == annotated_b.identity);
 
+    // A TAMPERED ANNOTATION MUST NOT SHARE AN IDENTITY. The first version recorded the map's
+    // NAME, justified by "a StreamProgram is a pure function of (program, map)" -- true of
+    // every one this repo derives, and an assumption about the CALLER stated in a comment.
+    // run() takes a pointer, so a caller can change a wavefront's depth or an element stride,
+    // get a different makespan, and the name would have called the two runs identical. An
+    // assumption a type cannot enforce does not belong in an identity.
+    auto tampered = streams;
+    REQUIRE_FALSE(tampered.computes.empty());
+    tampered.computes.begin()->second.k_depth += 1;
+    CHECK(tampered.map.name == streams.map.name);          // the NAME is unchanged...
+    const auto tampered_run = platform.run(h, ExecutionLevel::BlockSequential, initial,
+                                          Placement::single(4), &tampered);
+    CHECK(tampered_run.identity.dataflow == annotated.identity.dataflow);   // ...and so is the label
+    CHECK_FALSE(tampered_run.identity == annotated.identity);               // but not the identity
+
+    // Same for a signature field the L1 cost model reads.
+    auto strided = streams;
+    REQUIRE_FALSE(strided.signatures.empty());
+    strided.signatures.begin()->second.element_stride += 1;
+    const auto strided_run = platform.run(h, ExecutionLevel::BlockSequential, initial,
+                                         Placement::single(4), &strided);
+    CHECK_FALSE(strided_run.identity == annotated.identity);
+
+    // ...while an identical annotation, freshly derived, digests the same -- so the check is
+    // about CONTENT and not about object identity.
+    auto rederived = stream::derive_matmul_streams(platform.program(h), map_for("ws"));
+    CHECK(rederived.canonical_bytes() == streams.canonical_bytes());
+    const auto rederived_run = platform.run(h, ExecutionLevel::BlockSequential, initial,
+                                           Placement::single(4), &rederived);
+    CHECK(rederived_run.identity == annotated.identity);
+
     // Same six inputs, same identity -- the property all of this exists to support.
     const auto again = platform.run(h, ExecutionLevel::BlockSequential, initial,
                                     Placement::single(4), &streams);

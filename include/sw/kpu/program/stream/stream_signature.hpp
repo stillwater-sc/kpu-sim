@@ -155,6 +155,41 @@ struct StreamProgram {
     }
 
     std::string disassemble() const;
+
+    // EVERY FIELD, for a run identity. disassemble() is for a human: it prints ONE
+    // representative wavefront and only the A/B/C signatures, so two StreamPrograms that
+    // schedule differently can render the same text. An identity built on it -- or on the
+    // map's name alone -- would call two different runs the same run, which is the one thing
+    // an identity must never do.
+    //
+    // Everything the L1 cost model reads is here: the map, the array extents, the network,
+    // every signature, and every compute wavefront. A field added to any of those structs and
+    // not added here silently widens the set of runs that share an identity, so this listing
+    // is part of their definition rather than a convenience beside it.
+    std::string canonical_bytes() const {
+        std::string out = "map " + map.name;
+        for (int v : map.tau) out += " " + std::to_string(v);
+        for (int v : map.proj) out += " " + std::to_string(v);
+        out += "\narray " + std::to_string(array_rows) + " " + std::to_string(array_cols);
+        out += "\nnetwork " + std::string(to_string(network.required)) + " " +
+               (network.needs_overlay_on_mesh ? "1" : "0");
+        for (const auto& d : network.stream_directions)
+            out += " (" + std::to_string(d[0]) + "," + std::to_string(d[1]) + ")";
+        // std::map iterates in key order, so the rendering does not depend on insertion.
+        for (const auto& [var, sg] : signatures) {
+            out += "\nsig " + var + " " + to_string(sg.role) + " " + to_string(sg.edge) +
+                   " flow(" + std::to_string(sg.flow[0]) + "," + std::to_string(sg.flow[1]) +
+                   ") skew=" + std::to_string(sg.lane_skew) +
+                   " stride=" + std::to_string(sg.element_stride) +
+                   " lanes=" + std::to_string(sg.lanes) +
+                   " rows=" + std::to_string(sg.rows) + " cols=" + std::to_string(sg.cols) +
+                   " rate=" + std::to_string(sg.rate);
+        }
+        for (const auto& [op, w] : computes)
+            out += "\nwave " + std::to_string(op) + " " + std::to_string(w.array_rows) + " " +
+                   std::to_string(w.array_cols) + " " + std::to_string(w.k_depth);
+        return out;
+    }
 };
 
 // ---- disassembly -----------------------------------------------------------

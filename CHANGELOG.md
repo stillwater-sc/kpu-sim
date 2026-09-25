@@ -21,7 +21,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     assignment rather than `label()` (two different pinned placements over the same compute
     tiles share a label), and the annotation as the space-time map's **name** — a
     `StreamProgram` is a pure function of `(program, map)` and both are already in the
-    identity, which is the same reasoning the L0 format settled on in #265 increment 4.
+    identity. That reasoning — the L0 format's, from #265 increment 4 — held for every
+    `StreamProgram` this repo *derives* and was an assumption about the **caller** stated in a
+    comment, so review rightly pushed further: `run()` takes a pointer, a caller can change a
+    wavefront depth or an element stride, and the name would have called two different runs
+    identical. The identity now digests the annotation's **content**
+    (`StreamProgram::canonical_bytes()`), and the map's name is kept beside it as a label that
+    is deliberately not compared. An assumption a type cannot enforce does not belong in an
+    identity.
   - **`ProgramHandle::operator<` ignored validity**, so an unset handle and the first loaded
     one were equivalent under `<` while differing under `==` — a `std::set` keyed on handles
     would silently keep one of the two.
@@ -97,12 +104,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   nothing here can check one — and it is **not part of identity**: two writes at different
   offsets are two writes to the same resource.
 
-- **`VirtualPlatform`: a run is a pure function of its four inputs (#282 increment 2).**
+- **`VirtualPlatform`: a run is a pure function of its inputs (#282 increment 2).**
   `load_program`, `snapshot`, `restore`, and `run(handle, level, const StateSnapshot&)` which
   **restores the state first**. `run_at()` took three of ADR 0002 §3.5's four inputs, so the
   purity claim was false in a specific, checkable way: a run read whatever the previous one
-  left in the program's operands. `RunIdentity` now names all four, and the fields a level
-  does not model ride along in the result.
+  left in the program's operands. `RunIdentity` names them — **six**, not four: ADR 0002 §3.5
+  lists `(program, initial_state, deployment, level)`, and `run()` also takes a `Placement` and
+  an optional L1 stream annotation, both of which change what happens. Neither is an incidental
+  option, and the entry above records how each is identified. The fields a level does not model
+  ride along in the result.
 
   **Tile LU is what makes the reproducibility test mean anything.** It factors `A` in place,
   so running it on its own output gives a different answer — which distinguishes "the restore

@@ -95,9 +95,17 @@ afterthought.
 decides which compute tile an op lands on, the annotation decides per-op timing. An identity
 over four of six inputs calls two different runs the same run, which review caught. Both are
 recorded — the placement as its whole assignment rather than its label, since two different
-pinned placements over the same compute tiles share a label; the annotation as its space-time
-map's **name**, because a `StreamProgram` is a pure function of `(program, map)` and both are
-already in the identity (the reasoning #265 increment 4 settled on for the file format).
+pinned placements over the same compute tiles share a label; the annotation as a **digest of
+its content**.
+
+The annotation's identity went through two answers, and the second is the one that holds. The
+first recorded the map's **name**, justified by "a `StreamProgram` is a pure function of
+`(program, map)`" — the reasoning #265 increment 4 settled on for the file format. That is true
+of every `StreamProgram` this repo *derives*, and it was an **assumption about the caller**
+stated in a comment: `run()` takes a pointer, so a caller can change a wavefront's depth or an
+element stride, get a different makespan, and the name would have recorded the two runs as
+identical. An assumption a type cannot enforce does not belong in an identity, so the content is
+digested and the name is kept beside it as a label that is not compared.
 
 This is worth flagging upward: §3.5's "pure function of `(program, initial_state, deployment,
 level)`" is the shape of the claim, not its arity. `Placement` is deliberately not part of the
