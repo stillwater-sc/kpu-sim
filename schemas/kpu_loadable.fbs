@@ -1,0 +1,208 @@
+// ============================================================================
+// schemas/kpu_loadable.fbs
+// The KPU loadable (.kpuld) — the unit of deployment (#305).
+//
+// THIS FILE IS THE SOURCE OF TRUTH for the container. The C++ header is generated
+// from it by flatc at build time and is NOT checked in, so the two cannot drift.
+//
+// Three layers, each doing what it is good at:
+//   orchestration CODE   an ELF image, embedded (small: kilobytes)
+//   the PACKAGE          this schema — zero-copy, so an orchestrator reads its own
+//                        tables IN PLACE, with no parse step and no heap
+//   tensor DATA          EXTERNAL, referenced. A 70-billion-parameter model is not a
+//                        section of a file you load; it is a region you map.
+//
+// RULES THIS SCHEMA FOLLOWS, each with a reason that has already cost this repo
+// something:
+//
+//   * ADD-ONLY EVOLUTION (R8). New fields go at the END of a table with a default, so
+//     an older reader ignores them. Never renumber, never reorder, never remove.
+//   * ABSENT IS NOT A DEFAULT. Optional scalars are declared `= null`, which puts the
+//     absence in the TYPE rather than leaving a reader to infer it from a value — and
+//     keeps it from reaching past the generated API to find out. #282 increment 1 learned
+//     that a report of what a level ignored becomes noise the moment those two are
+//     confused.
+//   * 64-BIT ADDRESSES AND EXTENTS ALWAYS, whatever the orchestrator's XLEN. An RV32
+//     manager core cannot address a 100 GB tensor space; it manipulates these as opaque
+//     pairs. Narrowing them later is a format change.
+//   * ONE REPRESENTATION PER THING. An operator's tile program is the #265 L0 TEXT,
+//     verbatim, not a re-encoding of it in FlatBuffers tables. L0 is already versioned,
+//     corpus-tested and byte-stable; a second encoding of the same program is the
+//     "two descriptions drift" failure this project keeps undoing.
+//
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2024-2025 Stillwater Supercomputing, Inc.
+// ============================================================================
+
+namespace sw.kpu.loadable.fb;
+
+// ----------------------------------------------------------------------------
+// Versions (R1/R3/R4)
+// ----------------------------------------------------------------------------
+struct Version {
+  major:ushort;
+  minor:ushort;
+  patch:ushort;
+}
+
+// ----------------------------------------------------------------------------
+// Element types. The capability profile below lists which of these a loadable
+// needs, so an int8 program on an fp32-only fabric is REFUSED rather than mis-run
+// (the versioning plan's R6, stated there and homeless until now).
+// ----------------------------------------------------------------------------
+enum ScalarType : ubyte {
+  F32 = 0,
+  F16 = 1,
+  BF16 = 2,
+  I32 = 3,
+  I8 = 4,
+  U8 = 5,
+}
+
+// The compute fabric is NOT uniform: some tiles have a fixed ISA, others take a
+// domain flow program and execute as data is pushed into them.
+enum ComputeTileKind : ubyte {
+  Programmable = 0,   // takes a DomainFlowProgram (see below)
+  FixedVio = 1,
+  FixedFft = 2,
+}
+
+// ----------------------------------------------------------------------------
+// A tensor, which lives OUTSIDE this file
+// ----------------------------------------------------------------------------
+table TensorRef {
+  name:string (required);
+  dtype:ScalarType;
+  // Logical extents, then the tiling. Both 64-bit: a single activation can exceed
+  // 2^32 elements.
+  shape:[ulong] (required);
+  tile_shape:[ulong];              // absent = untiled
+
+  // Where it lives in the simulated DRAM space. The DMA reads it from here; the
+  // orchestrator never does (§3 of the plan: no descriptor carries payload).
+  device_address:ulong;
+  size_bytes:ulong;
+
+  // Where the bytes really are. Absent for a tensor the run PRODUCES rather than
+  // consumes — an output has no source, and that is how the two are told apart.
+  source_uri:string;
+  source_offset:ulong;
+  source_length:ulong;
+
+  // DECLARED by the producer. Whether anyone CHECKED it is a property of a load, not
+  // of the file, so it is deliberately NOT a field here: hashing 100 GB at load time
+  // defeats the purpose of mapping it, and a file that claimed "verified" would be
+  // asserting something only the loader can know. The loader records the verification
+  // state in the run's provenance instead.
+  content_digest:string;
+}
+
+// ----------------------------------------------------------------------------
+// A domain flow program, for a programmable compute tile
+// ----------------------------------------------------------------------------
+// `form` names the representation rather than assuming one, because increment 5 is
+// where that is decided and a format change would be the alternative.
+table DomainFlowProgram {
+  name:string (required);
+  form:string (required);
+  payload:[ubyte] (required);
+}
+
+// ----------------------------------------------------------------------------
+// One operator
+// ----------------------------------------------------------------------------
+table Operator {
+  name:string (required);
+
+  // THE #265 L0 TEXT, VERBATIM. Not a re-encoding: L0 already has a versioned format,
+  // a golden corpus and a byte-stability test, and a second encoding of the same
+  // program would be a second thing to keep in step. A consequence worth stating: this
+  // loadable's `min_consumer` must cover the L0 `MIN_CONSUMER` of every program it
+  // embeds, or a reader could accept the container and choke on its contents.
+  l0_program:string (required);
+
+  // Which kind of compute tile this operator needs. Checked against the deployment.
+  requires_tile:ComputeTileKind;
+
+  // For a programmable tile, the DomainFlowProgram by name.
+  domain_flow_program:string;
+
+  // The L1 space-time map's NAME, or absent for no annotation. The name, not the
+  // derived StreamProgram: the annotation is a pure function of (program, map), which
+  // is what #265 increment 4 settled for a FILE — and a file can only contain what a
+  // writer put in it, so the reasoning holds here where it did not hold for a pointer
+  // parameter.
+  dataflow:string;
+
+  // Tensor names this operator reads and writes, in the L0 program's operand order.
+  inputs:[string];
+  outputs:[string];
+}
+
+// ----------------------------------------------------------------------------
+// The orchestration program
+// ----------------------------------------------------------------------------
+enum OrchestrationKind : ubyte {
+  RiscvElf = 0,
+}
+
+table Orchestration {
+  kind:OrchestrationKind;
+  // Embedded, because an orchestrator image is kilobytes. Tensors are external
+  // because they are gigabytes; the asymmetry is the whole point of the container.
+  image:[ubyte] (required);
+  entry_symbol:string;
+}
+
+// ----------------------------------------------------------------------------
+// What machine this loadable needs (R6, the capability dimension)
+// ----------------------------------------------------------------------------
+// Checked against a DeploymentSpec at load and REFUSED on mismatch. "Rejected, not
+// mis-run" is the versioning plan's phrasing for the dtype case; compute-tile kind is
+// the same argument in another dimension.
+table MachineProfile {
+  min_compute_tiles:uint = 1;
+  required_tile_kinds:[ComputeTileKind];
+  required_dtypes:[ScalarType];
+  // 0 means "no requirement", matching DeviceDescriptor::l3_tiles where 0 is unbounded.
+  min_l3_capacity_tiles:uint = 0;
+  // `= null` makes these OPTIONAL SCALARS, which is FlatBuffers' own way of saying that
+  // absent is not a default. Without it a reader cannot tell "the loadable does not care
+  // about L3 modules" from "it requires zero of them", and it would have to reach past the
+  // generated API to find out -- which is the schema failing to state what it means.
+  required_l3_modules:uint = null;
+  required_l2_banks_per_tile:uint = null;
+  required_l1_vectors:uint = null;
+}
+
+// ----------------------------------------------------------------------------
+// The file
+// ----------------------------------------------------------------------------
+table Loadable {
+  // The container's own version, and the oldest reader that can be trusted with this
+  // file. `min_consumer` is DERIVED FROM THE RECORDS PRESENT by the writer, never
+  // hand-set — the rule #265 increment 2 established and increment 4 applied.
+  format_version:Version (required);
+  min_consumer:Version (required);
+
+  // The BUILD that wrote it, so R4's `bad_producers` has something to match. Not the
+  // format version: reusing that here would make the field useless for the one thing
+  // it is for.
+  producer:string (required);
+  producer_version:Version (required);
+
+  name:string;
+  profile:MachineProfile (required);
+
+  operators:[Operator] (required);
+  tensors:[TensorRef] (required);
+  domain_flow_programs:[DomainFlowProgram];
+
+  // Absent = operators and data with no orchestrator, which is a legitimate loadable:
+  // it is what increment 1 can write and what a host-side driver can still run.
+  orchestration:Orchestration;
+}
+
+root_type Loadable;
+file_identifier "KPLD";
+file_extension "kpuld";

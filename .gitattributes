@@ -15,3 +15,9 @@
 # Scoped to the fixture directory rather than all *.json: generated traces and tool output
 # are not evidence and have no reason to be pinned.
 tests/program/deploy/*.json -text
+
+# The KPU loadable (#305) is BINARY and byte-compared, so git must never transform it.
+# Added with the format's first commit rather than after CI finds it: the L0 corpus cost
+# #299 several rounds to learn that a CRLF rewrite on a Windows checkout breaks a
+# byte-stability check, and a binary container makes that worse, not better.
+*.kpuld -text -diff

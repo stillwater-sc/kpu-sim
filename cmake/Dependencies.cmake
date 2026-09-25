@@ -57,6 +57,27 @@ kpu_add_dependency(spdlog
 # required _SILENCE_STDEXT_ARR_ITERS_DEPRECATION_WARNING on MSVC, and
 # eventually broke entirely on MSVC 14.51+ where the symbol was removed.
 
+# FlatBuffers, for the KPU loadable container (#305).
+#
+# Every option this project does not want is forced OFF *before* FetchContent runs, which is
+# the lesson cmake/DomainFlowIntegration.cmake already wrote down: an optional tool in a
+# dependency drags in heavy packages and broke the Windows configure until it was disabled up
+# front. flatc IS wanted -- the schema is the source of truth and the generated header is built
+# from it rather than checked in -- but its tests, samples, benchmarks and install rules are not.
+set(FLATBUFFERS_BUILD_FLATC       ON  CACHE BOOL "" FORCE)   # the schema compiler, wanted
+set(FLATBUFFERS_BUILD_FLATLIB     ON  CACHE BOOL "" FORCE)
+set(FLATBUFFERS_BUILD_TESTS       OFF CACHE BOOL "" FORCE)
+set(FLATBUFFERS_BUILD_FLATHASH    OFF CACHE BOOL "" FORCE)
+set(FLATBUFFERS_BUILD_BENCHMARKS  OFF CACHE BOOL "" FORCE)
+set(FLATBUFFERS_INSTALL           OFF CACHE BOOL "" FORCE)
+set(FLATBUFFERS_BUILD_CPP17       ON  CACHE BOOL "" FORCE)
+
+kpu_add_dependency(flatbuffers
+    GIT_REPOSITORY https://github.com/google/flatbuffers.git
+    GIT_TAG v24.3.25
+    TARGETS flatbuffers flatc
+)
+
 kpu_add_dependency(nlohmann_json
     GIT_REPOSITORY https://github.com/nlohmann/json.git
     GIT_TAG v3.11.3  # Latest stable version

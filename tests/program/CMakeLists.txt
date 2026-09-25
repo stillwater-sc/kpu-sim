@@ -44,6 +44,16 @@ set_tests_properties(test_l0_corpus PROPERTIES
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
 )
 
+# The KPU loadable container: the unit of deployment (#305 increment 1)
+kpu_add_component_test(test_loadable "program"
+    test_loadable.cpp
+)
+
+set_tests_properties(test_loadable PROPERTIES
+    LABELS "program;loadable;v0.9"
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+)
+
 # A deployment is data: one machine description, JSON at its edge (#282)
 kpu_add_component_test(test_deployment_spec "program"
     test_deployment_spec.cpp
