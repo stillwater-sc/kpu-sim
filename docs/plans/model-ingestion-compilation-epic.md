@@ -223,7 +223,7 @@ Two artifacts, two owners, one hard boundary — this is the crux of the design:
 |---|---|---|---|---|
 | **Source / compute IR** | `sw::dfa::DomainFlowGraph` (`.dfg`) | domain_flow front-end | domain_flow passes | operators, shapes/dtypes, op attrs, weight *references* |
 | **Binary KPU program** (the contract) | `.kpubin` (`DMProgram`, per the KPU binary functional spec) | **domain_flow compiler** (lowering) | **kpu-sim** (execution) | the op/tile/resource *schedule* — the "ISA" the KPU runs |
-| Model weights/data | weight blob → HOST_MEMORY | (model file) | kpu-sim `ResourceManager` | tensor values (Phase 5) / shapes (early) |
+| Model weights/data | **referenced by the loadable, MAPPED into the simulated DRAM space** (not a blob read into `HOST_MEMORY` — see the weights contract below) | (model file, external) | the **DMA**, through `PLACE` | tensor values, by reference |
 
 The boundary is the **binary KPU program**. Everything *left* of it (ONNX import,
 graph rewrite, tiling, scheduling, KPU-backend lowering) is **compiler** work in
@@ -286,8 +286,22 @@ The hard boundary is between **[C]** and **[D]**: the binary KPU program.
 
 `.dfg` (the `DomainFlowGraph` source IR) is **compiler-internal**; kpu-sim's runtime
 **execution** input is the **`.kpuld` loadable** (#305; `.kpubin` where the text above still
-says so), not `.dfg`. kpu-sim reads model *data/weights* into `HOST_MEMORY` (Phase 5) but does
-not consume `.dfg` to execute.
+says so), not `.dfg`. kpu-sim does not consume `.dfg` to execute.
+
+> **The weights contract, superseding 2026-09-25 — and this supersedes EVERY "reads weights
+> into `HOST_MEMORY`" statement in this document**, including G2, the §1 diagram's "deposit DNN
+> data in HOST_MEMORY", and the Phase 5 notes. Naming them here rather than annotating each one,
+> because a contract stated seven times is a contract that will disagree with itself:
+>
+> **Tensor data is REFERENCED and MAPPED, never read into a host buffer.** A loadable carries
+> `(uri, offset, length, digest)` per tensor and the DMA reads from the simulated DRAM space that
+> the file backs. Reading a weight blob into `HOST_MEMORY` is not a smaller version of this — it
+> is incompatible with it, because #305 increment 6 requires a model whose tensors **exceed host
+> RAM** to run with peak memory tracking the *working set*. A `read` would make that criterion
+> unreachable, which is exactly why the instruction is replaced rather than softened.
+>
+> `HOST_MEMORY`/`ExternalMemory` remains the *model of DRAM* — the thing the mapping is mapped
+> into and the DMA reads from. What changes is that nothing copies gigabytes into it first.
 
 **Spec doc (D5):** — *as of 2026-09-25 this is the `.kpuld` loadable's spec, per #305; the
 sentence below is the original wording.* The `.kpubin` binary format + execution semantics are written up as

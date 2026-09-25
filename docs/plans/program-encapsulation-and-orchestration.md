@@ -158,8 +158,14 @@ So the guest memory map is part of the ABI, not a platform detail:
 | region | guest (RV64GC) | KPU | why |
 |---|---|---|---|
 | orchestrator RAM — code, stack, its own allocator | **RW** | — | it is a program; it needs memory |
-| descriptor and completion rings | **RW** | **R/W** | shared on purpose, and they carry no payload (§6.2) |
+| **the loadable's tables** — everything in the `.kpuld` except the tensors | **R** | — | increment 4's orchestrator reads its operator and tensor tables IN PLACE, which is what the container was chosen for. **Read-only**: a program does not rewrite its own program, and a writable copy would let the run diverge from the artifact its identity names |
+| descriptor and completion rings | **RW** | **R/W** | shared deliberately, and they carry no payload (§6.2) |
 | **tensor DRAM** | **NO ACCESS** | **DMA only** | the datapath is the only way to a tensor |
+
+The loadable's tables and the tensor data are **different regions with different rules**, which
+is the memory-map consequence of separating program from data. The ELF image is a third thing
+again: the platform loads it into orchestrator RAM before the guest starts, so it is not a
+region the guest maps for itself.
 
 **`PLACE` is the only way a tensor byte moves, and the memory map is what makes that true
 rather than merely intended.** A direct guest read of tensor DRAM must fault, and §9's
@@ -478,8 +484,26 @@ is then tested against.
 1. **The container.** FlatBuffers schema, writer, verifying reader with refusal causes, and a
    golden corpus. No RISC-V, no Renode. Producer: a tool that takes derived L0 programs plus a
    tensor file and emits a `.kpuld`. **Done when:** byte-stable round-trip; an external tensor
-   too large to inline is referenced and read through the DMA; malformed, too-new and
-   capability-mismatched fixtures are each refused with the right cause.
+   too large to inline is **referenced**, with the file's size shown to be independent of the
+   tensor's; malformed and capability-mismatched loadables are each refused with the right
+   cause.
+
+   **Two clauses moved out of this increment rather than fudged.** *"…and read through the
+   DMA"* needs something that executes, which is increment 2 — nothing here can read a tensor,
+   so claiming it would be claiming a test that does not exist. And a **too-new fixture** needs
+   a writer that can emit a version this build does not support; that is a deliberate
+   escape hatch, and it belongs with the golden corpus (below) rather than inside the writer's
+   normal API.
+
+   **Capability checking has three outcomes, not two,** and that is a design decision this
+   increment made rather than inherited. *Satisfied* and *mismatched* are obvious; the third is
+   **unverifiable** — a `DeploymentSpec` declares no compute-tile kinds and no dtype support, so
+   an FFT or int8 requirement can be neither confirmed nor refuted. Refusing would reject
+   machines that may well be capable; passing silently would break "rejected, not mis-run" in
+   the direction that hurts. So it is *reported*, exactly as `unmodelled_fields` reports a
+   declared deployment field a level does not model — the same discipline pointed the other way.
+   Increment 5 adds the kinds, and tile-kind requirements move from unverifiable to refusable
+   at that point.
 2. **Orchestration semantics, with a deciding orchestrator.** The §6.2 descriptor vocabulary,
    the §6.4 status surface, and the orchestrator itself — written once, built here for the host
    and run against `VirtualPlatform` (#282). Allocation follows **program-order acquisition**
@@ -507,7 +531,9 @@ is then tested against.
    new IPC. Note it is now *less* risky than in the first draft, because the semantics were
    settled in increment 2 by the same source rather than by a different artifact.
 5. **Heterogeneous compute tiles.** Fixed-ISA (VIO, FFT) and programmable DFP tiles; the
-   capability check of §6.3. **Done when:** a loadable requiring an FFT tile is refused on a
+   capability check of §6.3 — which is where `DeviceSpecification` gains compute-tile kinds, and
+   therefore where a tile-kind requirement stops being *unverifiable* (increment 1) and becomes
+   *refusable*. **Done when:** a loadable requiring an FFT tile is refused on a
    deployment without one, and a programmable tile computes from a `CONFIGURE`d domain-flow
    program as data is pushed in.
 6. **Scale.** ONNX in (#229 [A]) → a loadable with external weights, mapped not loaded.
