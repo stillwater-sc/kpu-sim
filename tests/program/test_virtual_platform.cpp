@@ -840,3 +840,61 @@ TEST_CASE("a level with no stepper is refused, and so is a multi-device deployme
                     std::invalid_argument);
     CHECK_THROWS_AS(multi.run(mh, ExecutionLevel::Behavioral, ms), std::invalid_argument);
 }
+
+// ----------------------------------------------------------------------------
+// Review of #304
+// ----------------------------------------------------------------------------
+TEST_CASE("loading a program while a cursor is live does not invalidate it",
+          "[program][platform][step]") {
+    // AN L-B STEPPER HOLDS A TileProgram& INTO THE PLATFORM'S CONTAINER. With a
+    // std::vector, a later load_program() can reallocate and every subsequent step() writes
+    // through a dangling reference. Loading a second program while stepping the first is an
+    // ordinary thing to do -- and #286 builds its event record on this cursor, so the seam
+    // has to survive it.
+    //
+    // std::deque::push_back never invalidates references to existing elements, which is what
+    // makes this test pass rather than merely usually pass.
+    VirtualPlatform platform = default_platform();
+    const ProgramHandle h = platform.load_program(filled("matmul"));
+    const StateSnapshot initial = platform.snapshot();
+
+    auto cur = platform.step_begin(h, ExecutionLevel::Behavioral, initial);
+    REQUIRE(cur.executes());
+    CHECK(cur.step());                       // one step, then grow the container
+
+    // Enough appends to force a vector to reallocate several times over.
+    for (int i = 0; i < 16; ++i) platform.load_program(filled("lu"));
+    CHECK(platform.program_count() == 17);
+
+    while (cur.step()) {}
+    CHECK(cur.position() == cur.size());
+
+    // The stepped program holds the right answer, which is what a dangling write would have
+    // destroyed.
+    VirtualPlatform reference = default_platform();
+    const ProgramHandle rh = reference.load_program(filled("matmul"));
+    reference.run(rh, ExecutionLevel::Behavioral, reference.snapshot());
+    CHECK(all_operands_identical(reference.program(rh), platform.program(h)));
+}
+
+TEST_CASE("a sweep list reports the cause it actually found", "[program][driver]") {
+    // The inner throws were INSIDE the try, so the catch for std::invalid_argument caught
+    // this function's OWN diagnostics and relabelled them: "12abc" reported "is not an
+    // integer" rather than "has trailing characters", and an out-of-range value reported the
+    // same. The exit code was right and the message sent the reader somewhere else.
+    auto why = [](const char* csv) {
+        try {
+            parse_ints(csv);
+        } catch (const std::invalid_argument& e) {
+            return std::string(e.what());
+        }
+        return std::string("<accepted>");
+    };
+    CHECK(why("12abc").find("trailing characters") != std::string::npos);
+    CHECK(why("4294967296").find("out of range") != std::string::npos);
+    CHECK(why("99999999999999999999999").find("out of range") != std::string::npos);
+    CHECK(why("abc").find("not an integer") != std::string::npos);
+    CHECK(why("-2").find("non-negative") != std::string::npos);
+    CHECK(why("32,64") == "<accepted>");
+    CHECK(parse_ints("32,64") == std::vector<std::uint32_t>{32, 64});
+}

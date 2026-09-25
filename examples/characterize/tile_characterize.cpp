@@ -200,7 +200,15 @@ int main(int argc, char** argv) {
     // description kpu-run uses (#282 increment 1). The sweep then varies topology and
     // compute-tiles per cell; everything else the spec says is kept, which is how a spec's
     // resource fields reach a cell at all.
-    const std::string deploy_path = arg(a, "--deploy", "");
+    // arg_required, NOT arg(): a terminal `--deploy` returns the fallback "" from arg(), and
+    // this function would then have swept the flag-built default machine and exited 0 -- the
+    // silent machine mismatch the comment below calls the failure this change removes, in the
+    // change that removes it. kpu-run already used arg_required for exactly this.
+    std::string deploy_path;
+    if (!sw::kpu::program::driver::arg_required(a, "--deploy", deploy_path, perr)) {
+        std::cerr << "error: " << perr << "\n";
+        return 2;
+    }
     platform::DeploymentSpec base;
     try {
         if (!deploy_path.empty()) {

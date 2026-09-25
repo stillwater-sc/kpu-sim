@@ -45,19 +45,25 @@ inline std::vector<std::uint32_t> parse_ints(const std::string& csv) {
         if (tok.empty()) continue;
         if (tok[0] == '-')
             throw std::invalid_argument("'" + tok + "' is not a non-negative integer");
+        // ONLY THE stoul CALL IS INSIDE THE try. With the checks in there too, the catch for
+        // std::invalid_argument caught this function's OWN diagnostics and relabelled them:
+        // "12abc" reported "is not an integer" instead of "has trailing characters", and an
+        // out-of-range value reported the same. The exit code was right and the message sent
+        // the reader to the wrong problem, which is the more expensive half.
+        std::size_t consumed = 0;
+        unsigned long v = 0;
         try {
-            std::size_t consumed = 0;
-            const unsigned long v = std::stoul(tok, &consumed);
-            if (consumed != tok.size())
-                throw std::invalid_argument("'" + tok + "' has trailing characters");
-            if (v > 0xFFFFFFFFul)
-                throw std::invalid_argument("'" + tok + "' is out of range");
-            out.push_back(static_cast<std::uint32_t>(v));
+            v = std::stoul(tok, &consumed);
         } catch (const std::out_of_range&) {
             throw std::invalid_argument("'" + tok + "' is out of range");
         } catch (const std::invalid_argument&) {
             throw std::invalid_argument("'" + tok + "' is not an integer");
         }
+        if (consumed != tok.size())
+            throw std::invalid_argument("'" + tok + "' has trailing characters");
+        if (v > 0xFFFFFFFFul)
+            throw std::invalid_argument("'" + tok + "' is out of range");
+        out.push_back(static_cast<std::uint32_t>(v));
     }
     return out;
 }

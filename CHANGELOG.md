@@ -7,6 +7,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **A live use-after-free in the stepping seam (#304 review).** An L-B `Cursor`'s stepper holds
+  a `TileProgram&` into the platform's program container, which was a `std::vector` — so a
+  `load_program()` while a cursor was alive could reallocate and every later `step()` wrote
+  through a dangling reference. Not theoretical: a test that loads a second program mid-walk
+  **SIGSEGVs** before the fix. The container is a `std::deque`, whose `push_back` never
+  invalidates references to existing elements; every use was `size()`, `operator[]` or `at()`,
+  which behave identically. Loading while stepping is an ordinary thing to do, and #286 builds
+  its event record on this cursor.
+- **`parse_ints` relabelled its own diagnostics.** The bounds checks sat inside the `try`, so
+  the `catch (const std::invalid_argument&)` caught this function's own messages and replaced
+  them: `--sizes 12abc` reported "is not an integer" instead of "has trailing characters", and
+  an out-of-range value reported the same. The exit code was right and the message sent the
+  reader to the wrong problem, which is the more expensive half. Only the `std::stoul` call is
+  inside the `try` now.
+- **A terminal `--deploy` silently swept the default machine.** `tile_characterize` read it with
+  `arg()`, which returns the fallback `""` when the flag is the last token, and then took the
+  flag-built branch and exited 0 — the silent machine mismatch that increment 4 exists to
+  remove, in the change that removes it. It uses `arg_required`, as `kpu-run` already did.
+- **`tile_characterize` accepted numbers that were not numbers.** Its flags were bare
+  `std::stod`/`std::stoul`: `"abc"` threw uncaught (SIGABRT, which CI cannot distinguish from a
+  crash in the model), `"-2"` wrapped to an enormous sweep count, and `"inf"` was accepted as a
+  bandwidth. All of them now go through the shared checked parse, which `kpu-run`'s local
+  `parse_rate` also became — a local copy is how "what `--macs-per-cycle` means" drifts between
+  two tools.
+- **Feature entries had drifted under a `### Fixed` heading.** A `### Fixed` group inserted
+  above the increment 4/5 features classified them, and everything after them, as fixes. The
+  heading is gone and its entry moved here. `## [Unreleased]` in this file is a run of
+  change-set groups rather than one `Added`/`Fixed` pair, so the fix is local: an earlier
+  attempt to "consolidate" the section would have deleted 640 lines, including a `### Changed`
+  group, and was reverted.
+
 ### Added
 
 - **A test that closes the run-identity class instead of its instances.** Four review rounds on
@@ -157,15 +190,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   The unmodelled-field report is now **one line per level** rather than one per field: a fully
   declared spec printed eleven near-identical lines, and a report nobody reads is no better
   than one never written.
-
-### Fixed
-
-- **`tile_characterize` accepted numbers that were not numbers.** Its flags were bare
-  `std::stod`/`std::stoul`: `"abc"` threw uncaught (SIGABRT, which CI cannot distinguish from a
-  crash in the model), `"-2"` wrapped to an enormous sweep count, and `"inf"` was accepted as a
-  bandwidth. All of them now go through the shared checked parse, which `kpu-run`'s local
-  `parse_rate` also became — a local copy is how "what `--macs-per-cycle` means" drifts between
-  two tools.
 
 - **The global naming map: every declared resource, addressable (#282 increment 3).**
   `ResourceName` with `format`/`parse_resource_name`, and `ResourceMap` with `exists`,

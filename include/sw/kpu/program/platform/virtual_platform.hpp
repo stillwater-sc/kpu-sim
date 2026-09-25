@@ -45,6 +45,7 @@
 #include <sw/kpu/program/platform/state_snapshot.hpp>
 #include <sw/kpu/program/serialize/l0_format.hpp>
 
+#include <deque>
 #include <memory>
 #include <optional>
 #include <stdexcept>
@@ -393,7 +394,16 @@ private:
 
     DeploymentSpec spec_;
     std::string deployment_digest_;
-    std::vector<TileProgram> programs_;
+    // A DEQUE, NOT A VECTOR, and this is load-bearing rather than a preference. An L-B
+    // Cursor's BehavioralStepper holds a `TileProgram&` into this container, so a later
+    // load_program() on a vector could REALLOCATE and every subsequent step() would write
+    // through a dangling reference. It is not a theoretical hazard: the test that loads a
+    // second program mid-walk SIGSEGVs with a vector here.
+    //
+    // std::deque::push_back never invalidates references to existing elements, and every use
+    // above is size(), operator[] or at(), all of which behave identically. Loading while
+    // stepping is an ordinary thing to do, and #286 builds its event record on this cursor.
+    std::deque<TileProgram> programs_;
 };
 
 } // namespace sw::kpu::program::platform
