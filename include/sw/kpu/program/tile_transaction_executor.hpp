@@ -58,12 +58,52 @@ using Cycle = std::uint64_t;
 // TileExecutionRequest — everything a tier needs, in one struct (ADR D2.1).
 // The program is mutated in place: values live in its operand buffers.
 // ----------------------------------------------------------------------------
+// THE NAME OF A TILE, and the one spelling of it.
+//
+// This was a lambda inside run(), which was fine while nothing outside the executor needed
+// to name a tile. `initially_resident` below changes that: an orchestrator that seeds a
+// resident tile has to produce exactly the key the executor compares against, and a caller
+// copying a format out of a lambda is the "two spellings drift" failure waiting to happen --
+// it cost this seam its first test, which seeded "A[0,0]" and silently matched nothing.
+//
+// Not TileCoord::str(): that is for humans and uses "A[0,1]". This is a key, and the two
+// have different jobs, so they are allowed to differ -- but each has exactly one definition.
+inline std::string tile_key(const TileCoord& c) {
+    return c.operand + "#" + std::to_string(c.ti) + "#" + std::to_string(c.tj);
+}
+
 struct TileExecutionRequest {
     TileProgram& program;
     const Placement& placement;
     const characterize::DeviceDescriptor& device;
     const stream::StreamProgram* streams = nullptr;   // optional (design note §7.4)
     std::uint64_t seed = 0;                           // recorded; unused until timing is stochastic
+
+    // TILES THAT ARE ALREADY IN L3 WHEN THIS RUN STARTS, by tile key ("A[0,1]").
+    //
+    // Empty is the old behaviour and stays the default: a run that begins with nothing
+    // resident. A non-empty set is what makes the KPU STATEFUL ACROSS RUNS (#305): an
+    // orchestrator that placed a tile for one operator can tell the next operator it is
+    // still there, and the observable consequence is that the tile's chain SKIPS THE DMA
+    // LEG -- visible in stats.hop_transfers[Hop::DmaDramToL3] and in resident_feeds.
+    //
+    // THEIR LIFETIME BELONGS TO THE CALLER. A tile placed here has no recorded consumer
+    // count from this program, so the completion rule never frees it and it holds its slot
+    // for the whole run. That is not a leak: it is the orchestrator's tile, released by an
+    // orchestrator decision (a RELEASE descriptor), not by this executor guessing. An
+    // executor that freed it would be freeing something it does not own -- the same
+    // ownership mistake the per-tile refcount fixed within a run.
+    //
+    // They count against L3 capacity, because they occupy slots. A caller that seeds more
+    // than the capacity gets the ordinary capacity refusal with a diagnosis, which is the
+    // correct answer rather than a special case.
+    //
+    // `= {}` is not decoration: every field above carries a default so a caller can
+    // brace-initialize the first three and omit the rest, and without one this addition
+    // breaks every such caller under -Werror=missing-field-initializers. Adding a field to
+    // an aggregate others initialize positionally is a compatibility event, and the type's
+    // own convention is how it stays a compatible one.
+    std::set<std::string> initially_resident = {};
 };
 
 enum class ResourceKind { ComputeTile, MoveLane };
@@ -275,9 +315,6 @@ public:
         //
         // A Drain is therefore a consumer, not a deallocator: it frees the tile only when
         // it happens to be the last user still outstanding.
-        auto tile_key = [](const TileCoord& c) {
-            return c.operand + "#" + std::to_string(c.ti) + "#" + std::to_string(c.tj);
-        };
         std::map<std::string, std::size_t> unfinished_users;           // tile -> users left
         std::vector<std::vector<std::string>> op_tiles(ops.size());    // tiles each op touches
         for (std::size_t i = 0; i < ops.size(); ++i) {
@@ -292,8 +329,11 @@ public:
         }
 
         const Dim l3_capacity = dev.l3_tiles;             // 0 = unbounded
-        std::set<std::string> resident;                   // tiles holding an L3 slot
-        std::size_t peak_residency = 0, credit_stalls = 0, resident_feeds = 0;
+        // Seeded from the request, so a tile an orchestrator already placed is not placed
+        // again. See TileExecutionRequest::initially_resident on why these are never freed
+        // here: their lifetime belongs to whoever placed them.
+        std::set<std::string> resident = req.initially_resident;
+        std::size_t peak_residency = resident.size(), credit_stalls = 0, resident_feeds = 0;
 
         // What this op would have to make resident in order to run.
         auto needed_slots = [&](std::size_t op) {

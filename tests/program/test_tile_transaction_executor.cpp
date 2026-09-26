@@ -863,3 +863,92 @@ TEST_CASE("a full pool does not block a transfer bound for another process",
     CHECK(r.stats.mover_utilization.at(Mover::Dma) > 0.999);   // never idle with work queued
     CHECK(double(r.stats.makespan) == r.stats.lower_bound);    // and so it attains the floor
 }
+
+// ----------------------------------------------------------------------------
+// Statefulness across runs (#305 increment 2's enabling seam)
+// ----------------------------------------------------------------------------
+TEST_CASE("a tile seeded resident skips its DMA leg", "[program][transactional][resident]") {
+    // What makes the KPU STATEFUL ACROSS RUNS: an orchestrator that placed a tile for one
+    // operator tells the next operator it is still there, and the tile's chain starts at the
+    // BlockMover instead of the DMA. The proof is a MEASURED reduction in DRAM->L3 transfers,
+    // not an assertion that a flag was read.
+    auto derive32 = [] { return derive_matmul_tile_program(32, 32, 32, 16, 16, 16); };
+    auto fill32 = [](TileProgram& p) {
+        auto& A = p.operand("A");
+        auto& B = p.operand("B");
+        for (std::size_t i = 0; i < A.values.size(); ++i) A.values[i] = float(i % 7) - 3.0f;
+        for (std::size_t i = 0; i < B.values.size(); ++i) B.values[i] = float(i % 5) - 2.0f;
+    };
+    DeviceDescriptor dev;                       // the default single-tile device
+
+    auto run_with = [&](const std::set<std::string>& seed) {
+        TileProgram p = derive32();
+        fill32(p);
+        const Placement pl = Placement::single(dev.compute_tiles);
+        TileExecutionRequest req{p, pl, dev};
+        req.initially_resident = seed;
+        TileTransactionExecutor ex;
+        return ex.run(req);
+    };
+    auto dma_transfers = [](const TileRunResult& r) {
+        const auto it = r.stats.hop_transfers.find(Hop::DmaDramToL3);
+        return it == r.stats.hop_transfers.end() ? std::size_t{0} : it->second;
+    };
+
+    const TileRunResult cold = run_with({});
+    // Seeded with every A and B tile this 2x2 tiling touches, spelled with the PUBLIC
+    // tile_key -- the first version of this test invented "A[0,0]" and matched nothing,
+    // which is why the key has one definition now instead of a lambda's worth.
+    const TileRunResult warm = run_with({tile_key(TileCoord{"A", 0, 0}),
+                                         tile_key(TileCoord{"A", 0, 1}),
+                                         tile_key(TileCoord{"B", 0, 0}),
+                                         tile_key(TileCoord{"B", 1, 0})});
+
+    CHECK(dma_transfers(cold) == 8);
+    CHECK(dma_transfers(warm) == 4);            // the four seeded tiles are not re-fetched
+    CHECK(warm.stats.resident_feeds > cold.stats.resident_feeds);
+    CHECK(warm.stats.makespan < cold.stats.makespan);
+
+    // VALUES ARE UNCHANGED. Residency is a statement about where a tile IS, never about what
+    // it contains, so telling the executor a tile is resident must not change the answer --
+    // if it did, the seam would be a way to compute something else quickly.
+    TileProgram reference = derive32();
+    fill32(reference);
+    TileProgramReference ref;
+    ref.run(reference);
+    TileProgram seeded = derive32();
+    fill32(seeded);
+    {
+        const Placement pl = Placement::single(dev.compute_tiles);
+        TileExecutionRequest req{seeded, pl, dev};
+        req.initially_resident = {tile_key(TileCoord{"A", 0, 0}), tile_key(TileCoord{"B", 0, 0})};
+        TileTransactionExecutor ex;
+        ex.run(req);
+    }
+    for (std::size_t i = 0; i < reference.operand("C").values.size(); ++i)
+        REQUIRE(reference.operand("C").values[i] == seeded.operand("C").values[i]);
+}
+
+TEST_CASE("seeded tiles count against capacity and are refused honestly",
+          "[program][transactional][resident]") {
+    // They occupy slots, so seeding more than the machine holds is the ORDINARY capacity
+    // refusal with a diagnosis -- not a special case, and not a wedge. #305 increment 2 needs
+    // this: a runtime allocator must be able to be told "no".
+    DeviceDescriptor dev;
+    dev.l3_tiles = 4;                            // a small, bounded L3
+
+    TileProgram p = derive_matmul_tile_program(32, 32, 32, 16, 16, 16);
+    {
+        auto& A = p.operand("A");
+        auto& B = p.operand("B");
+        for (std::size_t i = 0; i < A.values.size(); ++i) A.values[i] = float(i % 7) - 3.0f;
+        for (std::size_t i = 0; i < B.values.size(); ++i) B.values[i] = float(i % 5) - 2.0f;
+    }
+    const Placement pl = Placement::single(dev.compute_tiles);
+    TileExecutionRequest req{p, pl, dev};
+    // Four seeded tiles fill the whole L3, leaving nothing for the run's own working set.
+    req.initially_resident = {tile_key(TileCoord{"A", 0, 0}), tile_key(TileCoord{"A", 0, 1}),
+                              tile_key(TileCoord{"B", 0, 0}), tile_key(TileCoord{"B", 1, 0})};
+    TileTransactionExecutor ex;
+    CHECK_THROWS_AS(ex.run(req), std::runtime_error);
+}
