@@ -47,6 +47,7 @@
 
 #include <deque>
 #include <memory>
+#include <set>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -114,6 +115,8 @@ struct RunIdentity {
     std::string snapshot_digest;     // the coverage tag + the state it covers
     std::string deployment_digest;   // the canonical spec bytes
     std::string placement;           // the whole assignment, not its label
+    std::string residency;           // tiles seeded AND tiles retained; empty when the run
+                                     // starts cold and keeps nothing
     std::string stream_digest;        // the annotation's CONTENT; empty when there is none
     std::string dataflow;             // the map's name -- a LABEL, not compared (see above)
     ExecutionLevel level{};
@@ -121,7 +124,8 @@ struct RunIdentity {
     bool operator==(const RunIdentity& o) const {
         return program_digest == o.program_digest && snapshot_digest == o.snapshot_digest &&
                deployment_digest == o.deployment_digest && placement == o.placement &&
-               stream_digest == o.stream_digest && level == o.level;
+               residency == o.residency && stream_digest == o.stream_digest &&
+               level == o.level;
     }
 
     // EVERY COMPARED COMPONENT IS RENDERED. str() printed the map's NAME and not the digest,
@@ -133,6 +137,7 @@ struct RunIdentity {
         std::string out = std::string(driver::short_name(level)) + " prog:" + program_digest +
                           " state:" + snapshot_digest + " deploy:" + deployment_digest +
                           " place:" + digest_of(placement);
+        if (!residency.empty()) out += " resident:" + digest_of(residency);
         if (!stream_digest.empty())
             out += " flow:" + stream_digest + (dataflow.empty() ? "" : "(" + dataflow + ")");
         return out;
@@ -251,9 +256,22 @@ public:
     // Reading platform.program(h[0]) after the loop reads the INPUT that the last run's
     // restore put back, not the answer it computed. test_virtual_platform got this wrong
     // first and the assertion caught it, which is the cheapest place to learn it.
+    // `initially_resident` is a RUN INPUT, not a hint: a seeded tile's chain skips the DMA
+    // leg, so two runs differing only in it produce different makespans and different
+    // transfer counts. It therefore belongs in the identity as well as the signature --
+    // which is where the "four inputs were really six" lesson lands for the seventh.
+    //
+    // `retained_by_caller` travels with it and lands in the SAME identity field, because the
+    // two are one decision -- which tiles the caller holds, before and after -- and a run
+    // differing only in what it retains has a different makespan too. One field with two
+    // labelled halves keeps the class-closing test's rule (compared AND rendered) intact
+    // without pretending they are interchangeable.
     PlatformRunResult run(ProgramHandle h, ExecutionLevel level,
                           const StateSnapshot& initial, const Placement& placement,
-                          const stream::StreamProgram* streams = nullptr) {
+                          const stream::StreamProgram* streams = nullptr,
+                          const std::set<std::string>& initially_resident = {},
+                          const std::set<std::string>& retained_by_caller = {},
+                          std::size_t foreign_held_slots = 0) {
         const std::size_t i = checked(h);
         require_single_device();
         restore(initial);
@@ -268,8 +286,11 @@ public:
         result.identity.dataflow = streams ? streams->map.name : std::string();
         result.identity.level = level;
         result.unmodelled = driver::unmodelled_fields(level, spec_);
+        result.identity.residency =
+            residency_key(initially_resident, retained_by_caller, foreign_held_slots);
         result.outcome = driver::run_at(level, programs_[i], spec_.device_view(), placement,
-                                       streams);
+                                       streams, 0, initially_resident, retained_by_caller,
+                                       foreign_held_slots);
         return result;
     }
 
@@ -352,6 +373,36 @@ public:
     Cursor step_begin(ProgramHandle h, ExecutionLevel level, const StateSnapshot& initial) {
         return step_begin(h, level, initial,
                           Placement::single(spec_.device_view().compute_tiles), nullptr);
+    }
+
+    // A stable rendering of the RESIDENCY DECISION -- what is already there, and what must
+    // still be there at the end. std::set iterates in order, so the key does not depend on the
+    // order a caller inserted in: two orchestrators that chose the same tiles by different
+    // routes made the same decision and must share an identity.
+    //
+    // LENGTH-PREFIXED, because a separator is not a serialization. Nothing constrains a tile
+    // key's characters -- `TileCoord::operand` takes any string -- so joining with ";" made
+    // one rendering ambiguous: the single key `A#0#0;B#0#0` and the two-key set
+    // {`A#0#0`, `B#0#0`} produced identical bytes, and two runs seeding different tiles would
+    // then compare EQUAL in the identity while producing different makespans. An identity that
+    // can collide is worse than no identity, because it is trusted.
+    static std::string residency_key(const std::set<std::string>& initial,
+                                     const std::set<std::string>& retained,
+                                     std::size_t foreign) {
+        auto render = [](const std::set<std::string>& keys) {
+            std::string out;
+            for (const std::string& k : keys) out += std::to_string(k.size()) + ":" + k;
+            return out;
+        };
+        // A cold run that keeps nothing renders EMPTY, not "i[]r[]": `str()` and the
+        // identity's own comment both read "empty when the run starts cold", and a rendering
+        // that is never empty would quietly make every run look as though it had made a
+        // residency decision.
+        if (initial.empty() && retained.empty() && foreign == 0) return std::string();
+        // The two sets are different claims, so the rendering must not let a key move between
+        // them unnoticed -- hence one field, two labelled halves, rather than a merge.
+        return "i[" + render(initial) + "]r[" + render(retained) + "]f" +
+               std::to_string(foreign);
     }
 
     // THE PROGRAM'S STRUCTURE, NOT ITS VALUES. Values are the `initial_state` input and

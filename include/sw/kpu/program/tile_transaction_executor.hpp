@@ -58,12 +58,97 @@ using Cycle = std::uint64_t;
 // TileExecutionRequest — everything a tier needs, in one struct (ADR D2.1).
 // The program is mutated in place: values live in its operand buffers.
 // ----------------------------------------------------------------------------
+// THE NAME OF A TILE, and the one spelling of it.
+//
+// This was a lambda inside run(), which was fine while nothing outside the executor needed
+// to name a tile. `initially_resident` below changes that: an orchestrator that seeds a
+// resident tile has to produce exactly the key the executor compares against, and a caller
+// copying a format out of a lambda is the "two spellings drift" failure waiting to happen --
+// it cost this seam its first test, which seeded "A[0,0]" and silently matched nothing.
+//
+// Not TileCoord::str(): that is for humans and uses "A[0,1]". This is a key, and the two
+// have different jobs, so they are allowed to differ -- but each has exactly one definition.
+inline std::string tile_key(const TileCoord& c) {
+    return c.operand + "#" + std::to_string(c.ti) + "#" + std::to_string(c.tj);
+}
+
 struct TileExecutionRequest {
     TileProgram& program;
     const Placement& placement;
     const characterize::DeviceDescriptor& device;
     const stream::StreamProgram* streams = nullptr;   // optional (design note §7.4)
     std::uint64_t seed = 0;                           // recorded; unused until timing is stochastic
+
+    // TILES THAT ARE ALREADY IN L3 WHEN THIS RUN STARTS, by tile key.
+    //
+    // Spell the key with tile_key() above -- "A#0#1", not TileCoord::str()'s "A[0,1]". A
+    // caller that writes the human spelling by hand matches nothing and is told nothing,
+    // which is how this seam lost its first test; naming the format here and pointing at
+    // the one function that produces it is the whole reason tile_key() is public.
+    //
+    // Empty is the old behaviour and stays the default: a run that begins with nothing
+    // resident. A non-empty set is what makes the KPU STATEFUL ACROSS RUNS (#305): an
+    // orchestrator that placed a tile for one operator can tell the next operator it is
+    // still there, and the observable consequence is that the tile's chain SKIPS THE DMA
+    // LEG -- visible in stats.hop_transfers[Hop::DmaDramToL3] and in resident_feeds.
+    //
+    // THEIR LIFETIME BELONGS TO THE CALLER, and that takes an explicit exemption rather
+    // than falling out of the bookkeeping. A seeded tile the program also touches DOES get
+    // a consumer count like any other, so the completion rule would free it the moment its
+    // last reader finished -- handing a slot the orchestrator still believes it holds to an
+    // unrelated tile. The release rule therefore skips seeded keys: they are released by an
+    // orchestrator decision (a RELEASE descriptor), not by this executor guessing. An
+    // executor that freed them would be freeing what it does not own -- the same ownership
+    // mistake the per-tile refcount fixed within a run.
+    //
+    // So a seeded tile holds its slot for the WHOLE run, which is a real cost: the budget
+    // this program needs is its own live set PLUS what the caller is holding, and a run can
+    // refuse at a capacity the same program accepts cold. That is the honest answer, not a
+    // regression.
+    //
+    // They count against L3 capacity, because they occupy slots. A caller that seeds more
+    // than the capacity is refused BEFORE anything is scheduled, with both numbers -- see
+    // run(), which cannot leave that to the ordinary per-op check.
+    //
+    // `= {}` is not decoration: every field above carries a default so a caller can
+    // brace-initialize the first three and omit the rest, and without one this addition
+    // breaks every such caller under -Werror=missing-field-initializers. Adding a field to
+    // an aggregate others initialize positionally is a compatibility event, and the type's
+    // own convention is how it stays a compatible one.
+    std::set<std::string> initially_resident = {};
+
+    // TILES THE CALLER WILL STILL BE HOLDING WHEN THIS RUN ENDS, by tile_key.
+    //
+    // `initially_resident` says a tile is already there; this says a tile must still be there
+    // afterwards. They are different claims and both are needed, because an orchestrator that
+    // places a tile for THIS run and intends to reuse it in the NEXT one can say neither with
+    // the other: the tile is not resident at the start (it has to be fetched), and the
+    // completion rule would return its credit at its last reader -- so a later run that
+    // seeded it would be claiming a residency the machine did not provide, skipping a DMA leg
+    // for a tile whose slot had been handed to something else. That is a timing result
+    // credited to a reuse that never happened, which is worse than a slow model.
+    //
+    // So a retained tile occupies its slot from the moment it becomes resident to the end of
+    // the run, exempt from release exactly as a seeded tile is. It does NOT skip the DMA leg:
+    // it is not there yet, and this run is what puts it there.
+    //
+    // The cost is real and is the point: `initially_resident` plus `retained_by_caller` is
+    // what the caller holds at the end, and a run whose union exceeds the L3 is refused up
+    // front, because it cannot finish.
+    std::set<std::string> retained_by_caller = {};
+
+    // SLOTS THE CALLER HOLDS THAT THIS PROGRAM DOES NOT NAME. A count, not keys, because
+    // there is nothing here to name: an orchestrator holding a tile for a LATER operator
+    // occupies a slot throughout a run whose program never mentions that tile, so it has no
+    // operand and therefore no tile_key in this program's vocabulary.
+    //
+    // Leaving it out was a quiet overstatement of available capacity: the executor would place
+    // up to `l3_tiles` tiles of its own while the caller held more, and the run would report a
+    // peak residency the machine could not have delivered. Keys could not fix it -- a synthetic
+    // key can collide with a real operand name, since `TileCoord::operand` is an arbitrary
+    // string, and a collision would silently mark a real tile resident and skip its DMA leg.
+    // A count cannot collide with anything.
+    std::size_t foreign_held_slots = 0;
 };
 
 enum class ResourceKind { ComputeTile, MoveLane };
@@ -275,9 +360,6 @@ public:
         //
         // A Drain is therefore a consumer, not a deallocator: it frees the tile only when
         // it happens to be the last user still outstanding.
-        auto tile_key = [](const TileCoord& c) {
-            return c.operand + "#" + std::to_string(c.ti) + "#" + std::to_string(c.tj);
-        };
         std::map<std::string, std::size_t> unfinished_users;           // tile -> users left
         std::vector<std::vector<std::string>> op_tiles(ops.size());    // tiles each op touches
         for (std::size_t i = 0; i < ops.size(); ++i) {
@@ -292,8 +374,54 @@ public:
         }
 
         const Dim l3_capacity = dev.l3_tiles;             // 0 = unbounded
-        std::set<std::string> resident;                   // tiles holding an L3 slot
-        std::size_t peak_residency = 0, credit_stalls = 0, resident_feeds = 0;
+        // Seeded from the request, so a tile an orchestrator already placed is not placed
+        // again. See TileExecutionRequest::initially_resident on why these are never freed
+        // here: their lifetime belongs to whoever placed them.
+        std::set<std::string> resident = req.initially_resident;
+        // Slots this program cannot name, occupied for its whole duration. Every capacity
+        // question below is asked about resident.size() + foreign, never resident.size() alone.
+        const std::size_t foreign = req.foreign_held_slots;
+        std::size_t peak_residency = resident.size() + foreign;
+        std::size_t credit_stalls = 0, resident_feeds = 0;
+
+        // SEEDED MORE THAN THE MACHINE HOLDS: refuse here, before anything is scheduled.
+        // The per-op check below cannot catch it, because it only runs when an op needs a
+        // NEW slot -- so a program whose every tile is already seeded, or one with no ops
+        // at all, would run to completion over an L3 that was overfull from cycle zero and
+        // report a peak residency above its own capacity.
+        if (l3_capacity != 0 && resident.size() + foreign > static_cast<std::size_t>(l3_capacity))
+            throw std::runtime_error(
+                "TileTransactionExecutor: " + std::to_string(resident.size() + foreign) +
+                " tiles were seeded resident or held elsewhere by the caller (" +
+                std::to_string(foreign) + " unnamed) but this L3 holds " +
+                std::to_string(l3_capacity) + ". The initial residency does not fit the L3 "
+                "budget — raise l3_tiles, or release tiles before this run.");
+
+        // The caller's tiles, exempt from the completion rule. See
+        // TileExecutionRequest::initially_resident on why this exemption has to be written
+        // down instead of emerging: a seeded tile the program reads has a consumer count
+        // like any other, and counting it down to zero would free a slot we do not own.
+        //
+        // SEEDED and RETAINED differ at the START of the run -- one is already there, the
+        // other is not -- and are identical at the END, since both are still held. The
+        // release rule is an end-of-life rule, so it is the UNION that matters here.
+        std::set<std::string> held = req.initially_resident;
+        held.insert(req.retained_by_caller.begin(), req.retained_by_caller.end());
+
+        // A run whose caller-held set does not fit cannot finish: nothing ever releases those
+        // slots, so the wedge is certain. Saying so here names the cause; reaching it through
+        // the wedge path would report a dependency stall and make the reader find the cause.
+        if (l3_capacity != 0 && held.size() + foreign > static_cast<std::size_t>(l3_capacity))
+            throw std::runtime_error(
+                "TileTransactionExecutor: the caller holds " +
+                std::to_string(held.size() + foreign) +
+                " tiles at the end of this run (" +
+                std::to_string(req.initially_resident.size()) + " seeded, " +
+                std::to_string(held.size() - req.initially_resident.size()) +
+                " newly retained, " + std::to_string(foreign) +
+                " unnamed) but this L3 holds " + std::to_string(l3_capacity) +
+                ". Nothing releases a held tile, so the run cannot complete — retain "
+                "fewer tiles, or raise l3_tiles.");
 
         // What this op would have to make resident in order to run.
         auto needed_slots = [&](std::size_t op) {
@@ -305,18 +433,18 @@ public:
         auto has_capacity = [&](std::size_t op) {
             if (l3_capacity == 0) return true;            // unbounded
             const std::size_t need = needed_slots(op);
-            return resident.size() + need <= l3_capacity;
+            return resident.size() + foreign + need <= l3_capacity;
         };
         auto acquire = [&](std::size_t op) {
             for (const std::string& k : op_tiles[op]) resident.insert(k);
-            peak_residency = std::max(peak_residency, resident.size());
+            peak_residency = std::max(peak_residency, resident.size() + foreign);
         };
         auto release_after = [&](std::size_t op) {
             for (const std::string& k : op_tiles[op]) {
                 auto it = unfinished_users.find(k);
                 if (it == unfinished_users.end()) continue;
                 if (--it->second == 0) {          // last user done -> credit returned
-                    resident.erase(k);
+                    if (held.count(k) == 0) resident.erase(k);     // not ours to free
                     unfinished_users.erase(it);
                 }
             }
@@ -755,7 +883,7 @@ public:
                 if (blocked_on_credit > 0) {
                     why = "\n  " + std::to_string(blocked_on_credit) +
                           " op(s) are dependency-ready but cannot get an L3 slot: " +
-                          std::to_string(resident.size()) + " of " +
+                          std::to_string(resident.size() + foreign) + " of " +
                           std::to_string(l3_capacity) + " tiles resident. The program's "
                           "live set does not fit this L3 budget — raise l3_tiles, or "
                           "re-tile so fewer tiles are live at once.";

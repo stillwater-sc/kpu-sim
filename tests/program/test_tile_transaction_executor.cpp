@@ -863,3 +863,302 @@ TEST_CASE("a full pool does not block a transfer bound for another process",
     CHECK(r.stats.mover_utilization.at(Mover::Dma) > 0.999);   // never idle with work queued
     CHECK(double(r.stats.makespan) == r.stats.lower_bound);    // and so it attains the floor
 }
+
+// ----------------------------------------------------------------------------
+// Statefulness across runs (#305 increment 2's enabling seam)
+// ----------------------------------------------------------------------------
+TEST_CASE("a tile seeded resident skips its DMA leg", "[program][transactional][resident]") {
+    // What makes the KPU STATEFUL ACROSS RUNS: an orchestrator that placed a tile for one
+    // operator tells the next operator it is still there, and the tile's chain starts at the
+    // BlockMover instead of the DMA. The proof is a MEASURED reduction in DRAM->L3 transfers,
+    // not an assertion that a flag was read.
+    auto derive32 = [] { return derive_matmul_tile_program(32, 32, 32, 16, 16, 16); };
+    auto fill32 = [](TileProgram& p) {
+        auto& A = p.operand("A");
+        auto& B = p.operand("B");
+        for (std::size_t i = 0; i < A.values.size(); ++i) A.values[i] = float(i % 7) - 3.0f;
+        for (std::size_t i = 0; i < B.values.size(); ++i) B.values[i] = float(i % 5) - 2.0f;
+    };
+    DeviceDescriptor dev;                       // the default single-tile device
+
+    auto run_with = [&](const std::set<std::string>& seed) {
+        TileProgram p = derive32();
+        fill32(p);
+        const Placement pl = Placement::single(dev.compute_tiles);
+        TileExecutionRequest req{p, pl, dev};
+        req.initially_resident = seed;
+        TileTransactionExecutor ex;
+        return ex.run(req);
+    };
+    auto dma_transfers = [](const TileRunResult& r) {
+        const auto it = r.stats.hop_transfers.find(Hop::DmaDramToL3);
+        return it == r.stats.hop_transfers.end() ? std::size_t{0} : it->second;
+    };
+
+    const TileRunResult cold = run_with({});
+    // Seeded with every A and B tile this 2x2 tiling touches, spelled with the PUBLIC
+    // tile_key -- the first version of this test invented "A[0,0]" and matched nothing,
+    // which is why the key has one definition now instead of a lambda's worth.
+    const TileRunResult warm = run_with({tile_key(TileCoord{"A", 0, 0}),
+                                         tile_key(TileCoord{"A", 0, 1}),
+                                         tile_key(TileCoord{"B", 0, 0}),
+                                         tile_key(TileCoord{"B", 1, 0})});
+
+    CHECK(dma_transfers(cold) == 8);
+    CHECK(dma_transfers(warm) == 4);            // the four seeded tiles are not re-fetched
+    CHECK(warm.stats.resident_feeds > cold.stats.resident_feeds);
+    CHECK(warm.stats.makespan < cold.stats.makespan);
+
+    // VALUES ARE UNCHANGED. Residency is a statement about where a tile IS, never about what
+    // it contains, so telling the executor a tile is resident must not change the answer --
+    // if it did, the seam would be a way to compute something else quickly.
+    TileProgram reference = derive32();
+    fill32(reference);
+    TileProgramReference ref;
+    ref.run(reference);
+    TileProgram seeded = derive32();
+    fill32(seeded);
+    {
+        const Placement pl = Placement::single(dev.compute_tiles);
+        TileExecutionRequest req{seeded, pl, dev};
+        req.initially_resident = {tile_key(TileCoord{"A", 0, 0}), tile_key(TileCoord{"B", 0, 0})};
+        TileTransactionExecutor ex;
+        ex.run(req);
+    }
+    for (std::size_t i = 0; i < reference.operand("C").values.size(); ++i)
+        REQUIRE(reference.operand("C").values[i] == seeded.operand("C").values[i]);
+}
+
+TEST_CASE("seeded tiles count against capacity and are refused honestly",
+          "[program][transactional][resident]") {
+    // They occupy slots, so seeding more than the machine holds is the ORDINARY capacity
+    // refusal with a diagnosis -- not a special case, and not a wedge. #305 increment 2 needs
+    // this: a runtime allocator must be able to be told "no".
+    DeviceDescriptor dev;
+    dev.l3_tiles = 4;                            // a small, bounded L3
+
+    TileProgram p = derive_matmul_tile_program(32, 32, 32, 16, 16, 16);
+    {
+        auto& A = p.operand("A");
+        auto& B = p.operand("B");
+        for (std::size_t i = 0; i < A.values.size(); ++i) A.values[i] = float(i % 7) - 3.0f;
+        for (std::size_t i = 0; i < B.values.size(); ++i) B.values[i] = float(i % 5) - 2.0f;
+    }
+    const Placement pl = Placement::single(dev.compute_tiles);
+    TileExecutionRequest req{p, pl, dev};
+    // Four seeded tiles fill the whole L3, leaving nothing for the run's own working set.
+    req.initially_resident = {tile_key(TileCoord{"A", 0, 0}), tile_key(TileCoord{"A", 0, 1}),
+                              tile_key(TileCoord{"B", 0, 0}), tile_key(TileCoord{"B", 1, 0})};
+    TileTransactionExecutor ex;
+    CHECK_THROWS_AS(ex.run(req), std::runtime_error);
+}
+
+TEST_CASE("a seeded tile holds its slot for the whole run",
+          "[program][transactional][resident]") {
+    // THE CALLER'S TILE IS NOT THE EXECUTOR'S TO FREE. A seeded tile the program also reads
+    // gets a consumer count like any other, so the completion rule would return its credit
+    // the moment its last reader finished -- handing a slot the orchestrator still believes
+    // it holds to an unrelated tile, and letting true occupancy exceed the very capacity
+    // this tier enforces. The release rule therefore exempts seeded keys.
+    //
+    // Measured rather than asserted, and measured on the one thing the exemption changes:
+    // the SMALLEST L3 the run fits in. A tile held from cycle zero to the end costs a slot
+    // the cold run reuses, so the seeded minimum must be strictly larger. Without the
+    // exemption the two minima are equal -- verified by reverting it.
+    auto build = [] {
+        TileProgram p = derive_matmul_tile_program(32, 32, 32, 16, 16, 16);
+        auto& A = p.operand("A");
+        auto& B = p.operand("B");
+        for (std::size_t i = 0; i < A.values.size(); ++i) A.values[i] = float(i % 7) - 3.0f;
+        for (std::size_t i = 0; i < B.values.size(); ++i) B.values[i] = float(i % 5) - 2.0f;
+        return p;
+    };
+    // The smallest capacity at which this program completes, with `seed` already resident.
+    auto minimum_l3 = [&](const std::set<std::string>& seed) {
+        for (Dim cap = 1; cap <= 40; ++cap) {
+            TileProgram p = build();
+            DeviceDescriptor dev;
+            dev.l3_tiles = cap;
+            const Placement pl = Placement::single(dev.compute_tiles);
+            TileExecutionRequest req{p, pl, dev};
+            req.initially_resident = seed;
+            TileTransactionExecutor ex;
+            try {
+                ex.run(req);
+                return std::size_t(cap);
+            } catch (const std::runtime_error&) {
+                continue;                       // too small: refused, as it should be
+            }
+        }
+        return std::size_t(0);                  // no capacity worked, which would be a bug
+    };
+
+    // A(0,0) is read by two macs, both early, and cold its slot is reused afterwards.
+    const std::size_t cold = minimum_l3({});
+    const std::size_t held = minimum_l3({tile_key(TileCoord{"A", 0, 0})});
+
+    REQUIRE(cold > 0);
+    REQUIRE(held > 0);
+    CHECK(held > cold);                         // the held slot is not available for reuse
+}
+
+TEST_CASE("seeding more than the L3 holds is refused before anything is scheduled",
+          "[program][transactional][resident]") {
+    // The per-op capacity check runs only when an op needs a NEW slot, so it cannot see an
+    // L3 that was already overfull at cycle zero. A program with no ops is the cleanest
+    // witness: without an up-front check it completes and reports a peak residency ABOVE
+    // its own capacity, which is a measurement of a machine that cannot exist.
+    TileProgram p;                               // no operands, no ops
+    DeviceDescriptor dev;
+    dev.l3_tiles = 2;
+    const Placement pl = Placement::single(dev.compute_tiles);
+    TileExecutionRequest req{p, pl, dev};
+    req.initially_resident = {tile_key(TileCoord{"A", 0, 0}), tile_key(TileCoord{"A", 0, 1}),
+                              tile_key(TileCoord{"A", 1, 0})};
+    TileTransactionExecutor ex;
+    REQUIRE_THROWS_AS(ex.run(req), std::runtime_error);
+
+    // And it says which numbers disagree, because "refused" without them is not a
+    // diagnosis an orchestrator can act on.
+    try {
+        ex.run(req);
+    } catch (const std::runtime_error& e) {
+        const std::string what = e.what();
+        CHECK(what.find("3 tiles were seeded") != std::string::npos);
+        CHECK(what.find("L3 holds 2") != std::string::npos);
+    }
+
+    // Unbounded L3 (l3_tiles == 0) still means unbounded: any seed is fine.
+    DeviceDescriptor unbounded;
+    unbounded.l3_tiles = 0;
+    TileProgram q;
+    const Placement pl2 = Placement::single(unbounded.compute_tiles);
+    TileExecutionRequest ok{q, pl2, unbounded};
+    ok.initially_resident = req.initially_resident;
+    CHECK_NOTHROW(ex.run(ok));
+}
+
+TEST_CASE("a retained tile is not released either, and costs a slot per tile",
+          "[program][transactional][resident]") {
+    // RETENTION IS THE OTHER HALF OF RESIDENCY. `initially_resident` says a tile is already
+    // there; `retained_by_caller` says a tile must still be there afterwards. An orchestrator
+    // that places a tile for THIS run and reuses it in the NEXT one can say neither with the
+    // other -- the tile is not resident yet, and the completion rule would return its credit at
+    // its last reader, so the next run would seed a tile whose slot had been handed away and
+    // skip a DMA leg it still owed. That is a timing result credited to a reuse that did not
+    // happen, which is worse than a slow model.
+    //
+    // Measured the same way as seeding: on the smallest L3 the run fits in, which grows by
+    // exactly one per retained tile because nothing ever frees them.
+    auto build = [] {
+        TileProgram p = derive_matmul_tile_program(32, 32, 32, 16, 16, 16);
+        auto& A = p.operand("A");
+        auto& B = p.operand("B");
+        for (std::size_t i = 0; i < A.values.size(); ++i) A.values[i] = float(i % 7) - 3.0f;
+        for (std::size_t i = 0; i < B.values.size(); ++i) B.values[i] = float(i % 5) - 2.0f;
+        return p;
+    };
+    auto minimum_l3 = [&](const std::set<std::string>& retained) {
+        for (Dim cap = 1; cap <= 40; ++cap) {
+            TileProgram p = build();
+            DeviceDescriptor dev;
+            dev.l3_tiles = cap;
+            const Placement pl = Placement::single(dev.compute_tiles);
+            TileExecutionRequest req{p, pl, dev};
+            req.retained_by_caller = retained;
+            TileTransactionExecutor ex;
+            try {
+                ex.run(req);
+                return std::size_t(cap);
+            } catch (const std::runtime_error&) {
+                continue;
+            }
+        }
+        return std::size_t(0);
+    };
+
+    const std::size_t none = minimum_l3({});
+    const std::size_t one  = minimum_l3({tile_key(TileCoord{"A", 0, 0})});
+    const std::size_t two  = minimum_l3({tile_key(TileCoord{"A", 0, 0}),
+                                         tile_key(TileCoord{"A", 0, 1})});
+    REQUIRE(none > 0);
+    CHECK(one == none + 1);
+    CHECK(two == none + 2);
+
+    // And a retained set that cannot fit is refused UP FRONT rather than wedging: nothing
+    // releases a held tile, so the wedge is certain and the cause is known before the first
+    // op fires. The diagnosis separates the two halves, because "6 held" tells a caller
+    // nothing about which decision to change.
+    TileProgram p = build();
+    DeviceDescriptor dev;
+    dev.l3_tiles = 2;
+    const Placement pl = Placement::single(dev.compute_tiles);
+    TileExecutionRequest req{p, pl, dev};
+    req.initially_resident = {tile_key(TileCoord{"A", 0, 0})};
+    req.retained_by_caller = {tile_key(TileCoord{"B", 0, 0}), tile_key(TileCoord{"B", 1, 0})};
+    TileTransactionExecutor ex;
+    try {
+        ex.run(req);
+        FAIL("a caller-held set larger than the L3 must be refused");
+    } catch (const std::runtime_error& e) {
+        const std::string what = e.what();
+        CHECK(what.find("caller holds 3 tiles") != std::string::npos);
+        CHECK(what.find("1 seeded") != std::string::npos);
+        CHECK(what.find("2 newly retained") != std::string::npos);
+    }
+}
+
+TEST_CASE("slots this program cannot name still count against its L3",
+          "[program][transactional][resident]") {
+    // A caller holding a tile for some OTHER program occupies a slot throughout this one, and
+    // this program has no name for it: no operand, so no tile_key. Counted rather than named,
+    // because a synthetic key can collide with a real operand name -- `TileCoord::operand` is an
+    // arbitrary string -- and a collision would mark a real tile resident and skip its DMA leg.
+    //
+    // Left uncounted it is a quiet overstatement of capacity: the run places up to the full L3
+    // while slots are already gone, and reports a peak residency the machine could not have
+    // delivered. Measured on the smallest L3 the run fits in, which grows by exactly the count.
+    auto build = [] {
+        TileProgram p = derive_matmul_tile_program(32, 32, 32, 16, 16, 16);
+        auto& A = p.operand("A");
+        auto& B = p.operand("B");
+        for (std::size_t i = 0; i < A.values.size(); ++i) A.values[i] = float(i % 7) - 3.0f;
+        for (std::size_t i = 0; i < B.values.size(); ++i) B.values[i] = float(i % 5) - 2.0f;
+        return p;
+    };
+    auto minimum_l3 = [&](std::size_t foreign) {
+        for (Dim cap = 1; cap <= 40; ++cap) {
+            TileProgram p = build();
+            DeviceDescriptor dev;
+            dev.l3_tiles = cap;
+            const Placement pl = Placement::single(dev.compute_tiles);
+            TileExecutionRequest req{p, pl, dev};
+            req.foreign_held_slots = foreign;
+            TileTransactionExecutor ex;
+            try {
+                ex.run(req);
+                return std::size_t(cap);
+            } catch (const std::runtime_error&) {
+                continue;
+            }
+        }
+        return std::size_t(0);
+    };
+    const std::size_t none = minimum_l3(0);
+    REQUIRE(none > 0);
+    CHECK(minimum_l3(1) == none + 1);
+    CHECK(minimum_l3(3) == none + 3);
+
+    // And the peak residency REPORTS them, because a peak that omits occupied slots is a
+    // measurement of a machine that was never that empty.
+    TileProgram p = build();
+    DeviceDescriptor dev;                        // unbounded L3: the peak is the program's own
+    const Placement pl = Placement::single(dev.compute_tiles);
+    TileExecutionRequest bare{p, pl, dev};
+    TileTransactionExecutor ex;
+    const std::size_t bare_peak = ex.run(bare).stats.peak_l3_residency;
+    TileProgram q = build();
+    TileExecutionRequest occupied{q, pl, dev};
+    occupied.foreign_held_slots = 5;
+    CHECK(ex.run(occupied).stats.peak_l3_residency == bare_peak + 5);
+}

@@ -44,6 +44,15 @@ set_tests_properties(test_l0_corpus PROPERTIES
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
 )
 
+# The deciding orchestrator: descriptors, status, program-order acquisition (#305 inc. 2)
+kpu_add_component_test(test_orchestrator "program"
+    test_orchestrator.cpp
+)
+
+set_tests_properties(test_orchestrator PROPERTIES
+    LABELS "program;orchestration;v0.9"
+)
+
 # The KPU loadable container: the unit of deployment (#305 increment 1)
 kpu_add_component_test(test_loadable "program"
     test_loadable.cpp

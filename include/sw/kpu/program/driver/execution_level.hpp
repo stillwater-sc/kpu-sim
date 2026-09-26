@@ -27,6 +27,7 @@
 #include <sw/kpu/program/tile_transaction_executor.hpp>
 
 #include <optional>
+#include <set>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -176,6 +177,11 @@ inline std::vector<std::string> unmodelled_fields(ExecutionLevel l,
 // ----------------------------------------------------------------------------
 struct RunOutcome {
     ExecutionLevel level{};
+    // Inputs this level could not represent, in its own words. Distinct from
+    // `unmodelled_fields`, which is about what the DEPLOYMENT declared: this is about what the
+    // CALLER passed. Both exist for the same reason -- an input that vanishes silently makes a
+    // clean report mean less than it appears to.
+    std::vector<std::string> unmodelled_inputs;
     bool has_timing = false;         // L-B computes values but models no time
     Cycle makespan = 0;
     double lower_bound = 0.0;
@@ -197,11 +203,28 @@ struct RunOutcome {
 // Throws std::invalid_argument for a level with no interpreter. It does not fall
 // back.
 // ----------------------------------------------------------------------------
+// Tiles already resident when the run starts, by `tile_key`. Threaded through rather than
+// smuggled in, because it changes what a run does: a seeded tile's chain skips the DMA leg, so
+// two runs differing only in this produce different makespans and different transfer counts.
+// An input that changes the result belongs in the signature -- and, once the platform carries
+// it, in the run identity.
+//
+// `retained_by_caller` is the other half of the same input and travels with it: tiles this run
+// must leave resident, which the executor therefore may not release. A caller that seeds without
+// retaining is claiming a residency the next run cannot rely on.
+//
+// `foreign_held_slots` is the third: slots the caller holds for some OTHER program, which this
+// one cannot name and must not be allowed to use.
+//
+// Empty is the old behaviour and the default: a run that begins cold and keeps nothing.
 inline RunOutcome run_at(ExecutionLevel level, TileProgram& prog,
                          const characterize::DeviceDescriptor& device,
                          const Placement& placement,
                          const stream::StreamProgram* streams = nullptr,
-                         std::uint64_t seed = 0) {
+                         std::uint64_t seed = 0,
+                         const std::set<std::string>& initially_resident = {},
+                         const std::set<std::string>& retained_by_caller = {},
+                         std::size_t foreign_held_slots = 0) {
     RunOutcome out;
     out.level = level;
 
@@ -210,6 +233,25 @@ inline RunOutcome run_at(ExecutionLevel level, TileProgram& prog,
             // L-B applies every op in program order and models no time at all.
             // Reporting makespan 0 here would read as "instant"; has_timing says
             // "not modelled", which is a different claim.
+            // L-B MODELS NO RESOURCES AT ALL, so residency is not merely unmodelled here --
+            // it is meaningless. Silently ignoring a non-empty set would let a caller believe
+            // L-B honoured a placement decision it cannot represent, which is the same class
+            // of quiet lie as a timing-free level advancing a clock. Reported, not ignored.
+            if (!initially_resident.empty())
+                out.unmodelled_inputs.push_back(
+                    "initially_resident (" + std::to_string(initially_resident.size()) +
+                    " tiles) declared, but L-B models no buffers, so residency has no meaning "
+                    "at this level");
+            if (!retained_by_caller.empty())
+                out.unmodelled_inputs.push_back(
+                    "retained_by_caller (" + std::to_string(retained_by_caller.size()) +
+                    " tiles) declared, but L-B models no buffers, so retention has no meaning "
+                    "at this level");
+            if (foreign_held_slots > 0)
+                out.unmodelled_inputs.push_back(
+                    "foreign_held_slots (" + std::to_string(foreign_held_slots) +
+                    ") declared, but L-B models no buffers, so an occupied slot has no meaning "
+                    "at this level");
             TileProgramReference ref;
             out.summary = ref.run(prog);
             out.ops = out.summary.ops;
@@ -219,6 +261,9 @@ inline RunOutcome run_at(ExecutionLevel level, TileProgram& prog,
         case ExecutionLevel::BlockSequential: {
             TileTransactionExecutor exec;
             TileExecutionRequest req{prog, placement, device, streams, seed};
+            req.initially_resident = initially_resident;
+            req.retained_by_caller = retained_by_caller;
+            req.foreign_held_slots = foreign_held_slots;
             const TileRunResult r = exec.run(req);
             out.summary = r.summary;
             out.ops = r.stats.ops;

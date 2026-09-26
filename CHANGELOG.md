@@ -7,6 +7,108 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **A deciding orchestrator over the `.kpuld` container (#305 increment 2).** The loadable says
+  which operators to run and where the tensors are; it does not say which tiles to keep in L3,
+  when to give a slot back, or what to do when the machine is full. Those are runtime decisions
+  (§10 Q4), and `orchestration::orchestrate()` is what makes them. It sees a `StatusView` —
+  inventory, occupancy, credits — and issues `Descriptor`s, **none of which has a payload
+  field**; a structured binding over both types makes adding one a compile error in the test
+  rather than a silent backdoor, which is the same technique the run-identity test uses and for
+  the same reason. The data plane is a separate `TensorStore` on the executor's side, because
+  §3's rule ("no descriptor and no status read carries payload") has to survive contact with an
+  implementation that must move bytes somehow.
+  - Allocation is **program-order acquisition**, inherited rather than invented: this
+    orchestrator completes each operator before starting the next, so there is never an earlier
+    unfired operator holding slots while a later one waits, and the L-T1 deadlock-freedom proof
+    applies verbatim. Increment 3 buys more freedom deliberately, with a new argument.
+  - **The ABI can say no.** `RefusedInsufficientCredit` is a result, not an exception: a static
+    schedule may block on credit because the compiler proved it fits, but a runtime allocator
+    that blocks has hung. A 2-tile L3 refuses with the operator name and the slot arithmetic,
+    and the refusal is in the trace.
+  - Values are bit-exact against the in-process path at both L-B and L-T1, and the descriptor
+    trace is byte-identical across runs with exactly one completion per descriptor — ADR 0002
+    §3.5's "a run is a pure function of its inputs", checked rather than assumed.
+- **The KPU can be stateful across runs (#305 increment 2's enabling seam).**
+  `TileExecutionRequest::initially_resident` lets a caller name the tiles already in L3 when a
+  run starts, so a tile the previous operator placed is not fetched again: its chain starts at
+  the BlockMover, not the DMA. Measured on matmul 32³/t16 — `dma=8` cold, `dma=4` warm — which
+  is a transfer count rather than a flag. Keys are spelled by `program::tile_key()`, now public
+  for exactly this reason: the first version of the test invented `"A[0,0]"` where the executor
+  writes `"A#0#0"`, matched nothing, and reported success.
+
+### Fixed
+
+- **Retention held every tile an operator read, not just the ones a later operator wants
+  (#308 review, round 3).** Holding a tile nobody will read again buys nothing and costs a slot
+  for the whole run, which can refuse a run that fits — the same argument as releasing before
+  asking, applied to retention. Measured on the smallest L3 a three-GEMM chain fits in: **8**
+  slots with reuse off, **12** with reuse on and filtered, **21** unfiltered. Twenty-one slots
+  to save four fetches. Retention is filtered by what a later operator reads now, and the test
+  asserts the difference is exactly the four tiles it keeps.
+  - The releases moved with it. A pass that released "tiles no remaining operator reads" at the
+    *top* of each operator could never fire once retention is filtered, since nothing enters the
+    resident set unless a later operator reads it — so it was code that could not run, asserting
+    something untrue about where the decision is made. Credits go back at the **end** of the run
+    that finished with them, which is one launch earlier than before, so the property that pass
+    existed for is stronger rather than weaker. `PLACE` now pairs with `RELEASE`.
+- **Slots the caller holds that a program cannot name were uncounted.** Chasing the retention fix
+  surfaced it: a tile held for operator *i+2* that operator *i+1* never reads has no operand in
+  *i+1*'s program, hence no tile key, so the executor could not be told about it by name — and it
+  placed up to the full L3 while those slots were already gone. Measured on a three-GEMM chain
+  with a gap: the middle operator reported a peak of **9** where the true occupancy was **13**.
+  `TileExecutionRequest::foreign_held_slots` is a **count**, not keys, because a synthetic key can
+  collide with a real operand name (`TileCoord::operand` is an arbitrary string) and a collision
+  would mark a real tile resident and skip its DMA leg. Every capacity question now asks about
+  resident + foreign, and the peak reports them.
+- **The statefulness measurement was inflated, and the residency keys were in the wrong
+  vocabulary (#308 review, round 2).** Two findings that together undid most of what the
+  DMA-reduction proof claimed.
+  - *The orchestrator seeded the tiles its own `PLACE` descriptors had just asked for.* It added
+    each placed tile to `resident` before the launch and then passed `resident` as
+    `initially_resident`, so the executor skipped the DMA leg for tiles that were never fetched:
+    `gemm0` paid **zero** DRAM→L3 transfers in the warm run, and the "saving" was the whole
+    traffic rather than the reuse. A tile becomes resident when the run that fetches it has run,
+    and the orchestrator records it there now.
+  - *Resident keys were named by TENSOR where the executor compares by OPERAND.* `gemm1`'s
+    operand A is tensor H, so a tensor-keyed seed matches nothing the executor knows — or worse,
+    matches the wrong operand. Both names travel together now (`ReadTile`), and the test fixture
+    was renamed so its tensors are **X/W/H/Y**, disjoint from the kernel's A/B/C: while they
+    coincided, this bug reproduced as "all tests pass".
+  - The statefulness test no longer asserts only that the number went down. It pins the saving
+    to **exactly the four shared weight tiles**, and asserts that `gemm0` pays the same either
+    way — the two assertions that catch both bugs, verified by reintroducing each.
+- **A retained tile is now a thing a caller can say, because the orchestrator's claim needed
+  backing.** `TileExecutionRequest::retained_by_caller` says "this run must leave these tiles
+  resident", which `initially_resident` cannot express for a tile the run is about to fetch.
+  Without it the executor returned the credit at the tile's last reader, the slot could be handed
+  to another tile inside that same run, and the **next** run would seed a tile that was no longer
+  there and skip a DMA leg it still owed — a timing result credited to a reuse that never
+  happened. Retention costs exactly one slot per tile (measured: the minimum L3 goes 6 → 7 → 8),
+  and a caller-held set that cannot fit is refused up front, since nothing releases a held tile.
+- **`RunIdentity::residency` could collide (#308 review).** The seeded set was joined with `";"`,
+  and nothing constrains a tile key's characters — so the single key `A#0#0;B#0#0` and the
+  two-key set {`A#0#0`, `B#0#0`} rendered identically, and two runs seeding different tiles
+  compared **equal** in the identity while producing different makespans. An identity that can
+  collide is worse than none, because it is trusted. Length-prefixed now, with the seeded and
+  retained halves labelled separately, and still empty for a cold run that keeps nothing.
+- **Two seeded-residency bugs where the header promised what the code did not do (#308 review).**
+  Both are the same shape — a contract stated in a comment and enforced nowhere.
+  - *A seeded tile was freed by the executor.* Every tile an op touches gets a consumer count,
+    seeded or not, so the completion rule returned the credit for a caller-owned tile the moment
+    its last reader finished — handing a slot the orchestrator still believed it held to an
+    unrelated tile, and letting true occupancy exceed the capacity this tier exists to enforce.
+    The release rule now exempts seeded keys explicitly. The cost is real and is the honest
+    answer: a held tile occupies a slot the cold run reuses, so the smallest L3 the program fits
+    in **grows** (measured 6 → 7), and the test asserts exactly that, because reverting the
+    exemption makes the two minima equal.
+  - *Seeding more than the L3 holds was not always refused.* The capacity check runs only when
+    an op needs a **new** slot, so an L3 that was overfull at cycle zero went unnoticed whenever
+    no op needed one — a program with no ops completed and reported a peak residency above its
+    own capacity, which is a measurement of a machine that cannot be built. The check is now
+    up front, before anything is scheduled, and names both numbers.
+
 ### Fixed
 
 - **A live use-after-free in the stepping seam (#304 review).** An L-B `Cursor`'s stepper holds

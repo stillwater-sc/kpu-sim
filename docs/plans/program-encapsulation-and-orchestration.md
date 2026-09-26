@@ -260,6 +260,21 @@ Descriptor kinds — note that none of them carries payload (§3):
 built for the backdoor and the event record; this is its third consumer, which is the evidence
 that building it as *identity* before *state* was right.
 
+**`PLACE` expresses residency intent; at L-T1 it is not independently TIMED.** This is a
+limitation of the levels, not of the ABI, and it is stated here so increment 3 does not inherit
+it as an assumption. At L-T1 the unit of transaction is a tile move *inside* a run: the executor
+decides when each leg happens, under credits, across the whole program. There is no standalone
+"move this tile now" to issue. So a `PLACE` tells the platform that a tile is — or should be —
+resident when the next `LAUNCH` runs, and the executor honours it by starting that tile's chain
+below the DMA.
+
+The *effect* is real and measurable: seeding four tiles of a matmul 32³/t16 halves its DRAM→L3
+transfers, 8 down to 4, and shortens the makespan. What is missing is a **latency for the PLACE
+itself** — it has no completion cycle of its own until the §3.3 resource vocabulary exists.
+That is #283, and it is exactly the kind of "the report is not a measurement" gap that
+`has_timing == false` and `unmodelled_fields` exist to keep visible: a `Completion` for a
+`PLACE` at L-T1 reports `cycles = 0` and says so, rather than inventing a plausible number.
+
 **No collapsed hops.** `PLACE` names one leg. A tile reaching L1 from DRAM is three descriptors,
 because it is three CSP processes over three physical pathways — the span always contains all of
 its hops, and a descriptor that claimed to move DRAM→L1 would describe a machine that cannot be
@@ -512,10 +527,87 @@ is then tested against.
    declared deployment field a level does not model — the same discipline pointed the other way.
    Increment 5 adds the kinds, and tile-kind requirements move from unverifiable to refusable
    at that point.
-2. **Orchestration semantics, with a deciding orchestrator.** The §6.2 descriptor vocabulary,
-   the §6.4 status surface, and the orchestrator itself — written once, built here for the host
-   and run against `VirtualPlatform` (#282). Allocation follows **program-order acquisition**
-   (§6.5), the cheapest rule for which the existing deadlock proof applies verbatim.
+2. **Orchestration semantics, with a deciding orchestrator** — **done.** The §6.2 descriptor
+   vocabulary, the §6.4 status surface, and the orchestrator itself — one source, built here for
+   the host and run against `VirtualPlatform` (#282). Allocation follows **program-order
+   acquisition** (§6.5), and the existing deadlock proof applies verbatim because the
+   orchestrator completes each operator before starting the next: there is never an earlier
+   unfired operator holding slots while a later one waits.
+
+   **The platform needed a seam before any of this was possible.** The executor modelled
+   residency reuse *within* a run but its resident set was a local, so every run began cold.
+   `TileExecutionRequest::initially_resident` — threaded through `run_at` and
+   `VirtualPlatform::run` — is that seam, and it made `RunIdentity` grow a **seventh** field,
+   since a seeded tile's chain skips the DMA leg and two runs differing only there produce
+   different makespans. The class-closing test from #303 caught that at compile time, which is
+   what it was built for.
+
+   **What L-T1 lets an orchestrator decide, exactly: L3 residency and nothing below it.** The
+   executor schedules the L3→L2 and L2→L1 legs itself, across the whole program, under credits.
+   So the descriptors issued here are `PLACE` on the DMA leg and `RELEASE`; the wider vocabulary
+   is the ABI's, and #283 makes the other legs real. A `PLACE` completion therefore reports
+   `timed = false` rather than `cycles = 0` — the distinction `has_timing` draws one layer down.
+
+   **The statefulness proof needed the right witness.** A shared *input* tensor, not the first
+   operator's output: after a writeback an output is in DRAM, so keeping it "resident" would
+   mean re-fetching it. Two GEMMs sharing a weight tensor is both the honest test and the real
+   case — a weight read by layer after layer — and the proof is a **measured** drop in DRAM→L3
+   transfers, not a flag.
+
+   Two bugs worth recording, because both were the same mistake at different scales. The
+   orchestrator first treated a loadable's **tensor** names as L0 **operand** names: they
+   coincide only by accident, and the consequence was two operators reading and writing one
+   tensor, the second accumulating onto the first's result, and an output that came out doubled.
+   And the residency test first spelled a tile key `"A[0,0]"` where the executor writes
+   `"A#0#0"`, matched nothing, and reported success with the transfer count unchanged. Both are
+   the "two spellings of one thing" failure; `tile_key` is a public function now and the operand
+   binding is explicit and count-checked.
+
+   **A third pair, found in review, both of the shape "the header promised what the code did not
+   do".** A seeded tile the program also reads gets a consumer count like any other, so the
+   completion rule freed a *caller-owned* tile the moment its last reader finished — handing back
+   a slot the orchestrator still believed it held. The release rule exempts seeded keys
+   explicitly now, and the exemption has a price worth stating rather than hiding: a held tile
+   occupies a slot the cold run reuses, so **the budget a run needs is its own live set plus what
+   the caller is holding**, and the same program can refuse at a capacity it accepts cold. The
+   other: the capacity check runs only when an op needs a *new* slot, so an L3 that was overfull
+   at cycle zero went unnoticed whenever no op needed one — a program with no ops completed and
+   reported a peak residency above its own capacity. It is checked up front now. Increment 3
+   inherits both as stated contracts, not as comments.
+
+   **And a fourth, which is why the proof is now an equation rather than an inequality.** The
+   first version of this orchestrator added a tile to its resident set at `PLACE` time and then
+   seeded the executor with that set — so every tile looked warm, `gemm0` paid no DMA at all, and
+   `warm < cold` was true for the wrong reason. Compounding it, the seeded keys were named by
+   **tensor** where the executor compares by **operand**; the fixture's tensors were A/B/C/D, the
+   kernel's operands are A/B/C, and the two spellings agreed by coincidence, so the confusion was
+   invisible. The fixture's tensors are X/W/H/Y now, the test pins the saving to *exactly* the
+   four shared weight tiles, and each bug was reintroduced to confirm the assertions bite.
+
+   That fix exposed the real gap: a tile placed for *this* run is not resident at its start, so
+   `initially_resident` cannot express "keep it". Without a way to say so the executor returned
+   the credit at the tile's last reader, the slot could be reused inside the same run, and the
+   next run would seed a tile that was gone — skipping a DMA leg it owed. `retained_by_caller`
+   is that statement, and the two together are what the caller holds: **seeded** before,
+   **retained** after. A held set that cannot fit is refused up front, because nothing releases
+   it. This is the vocabulary increment 3's reserve-then-launch reserves *with*.
+
+   **And retention needed a policy, not just a mechanism.** The first version retained every tile
+   an operator read. On a three-GEMM chain the smallest L3 that fits went 8 (no reuse) → 12
+   (filtered) → **21** (unfiltered): twenty-one slots to save four fetches, and a refusal at every
+   capacity between. Retention is filtered by what a later operator reads, which also moved the
+   releases: a pass that freed stale tiles at the *top* of each operator can never fire once
+   nothing enters the resident set unless a later operator reads it. Credits go back at the end of
+   the run that finished with them — one launch earlier than before — so `PLACE` pairs with
+   `RELEASE` and the "release before asking" property is stronger.
+
+   That fix surfaced the last gap: a tile held for operator *i+2* that operator *i+1* never reads
+   has **no name in i+1's program**, so it cannot be seeded or retained there, and the executor
+   placed up to the full L3 while those slots were gone — a middle operator reporting a peak of 9
+   against a true occupancy of 13. `foreign_held_slots` is a count rather than keys, because a
+   synthetic key can collide with a real operand name. This is what makes the L3 arithmetic a
+   statement about the machine rather than about one program's view of it, which is the
+   precondition for increment 3 reserving across operators at all.
    **Done when:** a two-operator model (GEMM → bias+activation epilogue) runs from a loadable
    and agrees **bit-exactly** with the in-process path at L-B and L-T1; **statefulness is
    proved** — the second operator consumes a tile the first left resident and no second `PLACE`
