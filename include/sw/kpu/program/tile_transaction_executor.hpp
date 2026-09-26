@@ -116,6 +116,26 @@ struct TileExecutionRequest {
     // an aggregate others initialize positionally is a compatibility event, and the type's
     // own convention is how it stays a compatible one.
     std::set<std::string> initially_resident = {};
+
+    // TILES THE CALLER WILL STILL BE HOLDING WHEN THIS RUN ENDS, by tile_key.
+    //
+    // `initially_resident` says a tile is already there; this says a tile must still be there
+    // afterwards. They are different claims and both are needed, because an orchestrator that
+    // places a tile for THIS run and intends to reuse it in the NEXT one can say neither with
+    // the other: the tile is not resident at the start (it has to be fetched), and the
+    // completion rule would return its credit at its last reader -- so a later run that
+    // seeded it would be claiming a residency the machine did not provide, skipping a DMA leg
+    // for a tile whose slot had been handed to something else. That is a timing result
+    // credited to a reuse that never happened, which is worse than a slow model.
+    //
+    // So a retained tile occupies its slot from the moment it becomes resident to the end of
+    // the run, exempt from release exactly as a seeded tile is. It does NOT skip the DMA leg:
+    // it is not there yet, and this run is what puts it there.
+    //
+    // The cost is real and is the point: `initially_resident` plus `retained_by_caller` is
+    // what the caller holds at the end, and a run whose union exceeds the L3 is refused up
+    // front, because it cannot finish.
+    std::set<std::string> retained_by_caller = {};
 };
 
 enum class ResourceKind { ComputeTile, MoveLane };
@@ -363,7 +383,25 @@ public:
         // TileExecutionRequest::initially_resident on why this exemption has to be written
         // down instead of emerging: a seeded tile the program reads has a consumer count
         // like any other, and counting it down to zero would free a slot we do not own.
-        const std::set<std::string>& seeded = req.initially_resident;
+        //
+        // SEEDED and RETAINED differ at the START of the run -- one is already there, the
+        // other is not -- and are identical at the END, since both are still held. The
+        // release rule is an end-of-life rule, so it is the UNION that matters here.
+        std::set<std::string> held = req.initially_resident;
+        held.insert(req.retained_by_caller.begin(), req.retained_by_caller.end());
+
+        // A run whose caller-held set does not fit cannot finish: nothing ever releases those
+        // slots, so the wedge is certain. Saying so here names the cause; reaching it through
+        // the wedge path would report a dependency stall and make the reader find the cause.
+        if (l3_capacity != 0 && held.size() > static_cast<std::size_t>(l3_capacity))
+            throw std::runtime_error(
+                "TileTransactionExecutor: the caller holds " + std::to_string(held.size()) +
+                " tiles at the end of this run (" +
+                std::to_string(req.initially_resident.size()) + " seeded, " +
+                std::to_string(held.size() - req.initially_resident.size()) +
+                " newly retained) but this L3 holds " + std::to_string(l3_capacity) +
+                ". Nothing releases a held tile, so the run cannot complete — retain "
+                "fewer tiles, or raise l3_tiles.");
 
         // What this op would have to make resident in order to run.
         auto needed_slots = [&](std::size_t op) {
@@ -386,7 +424,7 @@ public:
                 auto it = unfinished_users.find(k);
                 if (it == unfinished_users.end()) continue;
                 if (--it->second == 0) {          // last user done -> credit returned
-                    if (seeded.count(k) == 0) resident.erase(k);   // not ours to free
+                    if (held.count(k) == 0) resident.erase(k);     // not ours to free
                     unfinished_users.erase(it);
                 }
             }

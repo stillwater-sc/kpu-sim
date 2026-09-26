@@ -1037,3 +1037,73 @@ TEST_CASE("seeding more than the L3 holds is refused before anything is schedule
     ok.initially_resident = req.initially_resident;
     CHECK_NOTHROW(ex.run(ok));
 }
+
+TEST_CASE("a retained tile is not released either, and costs a slot per tile",
+          "[program][transactional][resident]") {
+    // RETENTION IS THE OTHER HALF OF RESIDENCY. `initially_resident` says a tile is already
+    // there; `retained_by_caller` says a tile must still be there afterwards. An orchestrator
+    // that places a tile for THIS run and reuses it in the NEXT one can say neither with the
+    // other -- the tile is not resident yet, and the completion rule would return its credit at
+    // its last reader, so the next run would seed a tile whose slot had been handed away and
+    // skip a DMA leg it still owed. That is a timing result credited to a reuse that did not
+    // happen, which is worse than a slow model.
+    //
+    // Measured the same way as seeding: on the smallest L3 the run fits in, which grows by
+    // exactly one per retained tile because nothing ever frees them.
+    auto build = [] {
+        TileProgram p = derive_matmul_tile_program(32, 32, 32, 16, 16, 16);
+        auto& A = p.operand("A");
+        auto& B = p.operand("B");
+        for (std::size_t i = 0; i < A.values.size(); ++i) A.values[i] = float(i % 7) - 3.0f;
+        for (std::size_t i = 0; i < B.values.size(); ++i) B.values[i] = float(i % 5) - 2.0f;
+        return p;
+    };
+    auto minimum_l3 = [&](const std::set<std::string>& retained) {
+        for (Dim cap = 1; cap <= 40; ++cap) {
+            TileProgram p = build();
+            DeviceDescriptor dev;
+            dev.l3_tiles = cap;
+            const Placement pl = Placement::single(dev.compute_tiles);
+            TileExecutionRequest req{p, pl, dev};
+            req.retained_by_caller = retained;
+            TileTransactionExecutor ex;
+            try {
+                ex.run(req);
+                return std::size_t(cap);
+            } catch (const std::runtime_error&) {
+                continue;
+            }
+        }
+        return std::size_t(0);
+    };
+
+    const std::size_t none = minimum_l3({});
+    const std::size_t one  = minimum_l3({tile_key(TileCoord{"A", 0, 0})});
+    const std::size_t two  = minimum_l3({tile_key(TileCoord{"A", 0, 0}),
+                                         tile_key(TileCoord{"A", 0, 1})});
+    REQUIRE(none > 0);
+    CHECK(one == none + 1);
+    CHECK(two == none + 2);
+
+    // And a retained set that cannot fit is refused UP FRONT rather than wedging: nothing
+    // releases a held tile, so the wedge is certain and the cause is known before the first
+    // op fires. The diagnosis separates the two halves, because "6 held" tells a caller
+    // nothing about which decision to change.
+    TileProgram p = build();
+    DeviceDescriptor dev;
+    dev.l3_tiles = 2;
+    const Placement pl = Placement::single(dev.compute_tiles);
+    TileExecutionRequest req{p, pl, dev};
+    req.initially_resident = {tile_key(TileCoord{"A", 0, 0})};
+    req.retained_by_caller = {tile_key(TileCoord{"B", 0, 0}), tile_key(TileCoord{"B", 1, 0})};
+    TileTransactionExecutor ex;
+    try {
+        ex.run(req);
+        FAIL("a caller-held set larger than the L3 must be refused");
+    } catch (const std::runtime_error& e) {
+        const std::string what = e.what();
+        CHECK(what.find("caller holds 3 tiles") != std::string::npos);
+        CHECK(what.find("1 seeded") != std::string::npos);
+        CHECK(what.find("2 newly retained") != std::string::npos);
+    }
+}

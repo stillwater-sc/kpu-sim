@@ -209,13 +209,18 @@ struct RunOutcome {
 // An input that changes the result belongs in the signature -- and, once the platform carries
 // it, in the run identity.
 //
-// Empty is the old behaviour and the default: a run that begins cold.
+// `retained_by_caller` is the other half of the same input and travels with it: tiles this run
+// must leave resident, which the executor therefore may not release. A caller that seeds without
+// retaining is claiming a residency the next run cannot rely on.
+//
+// Empty is the old behaviour and the default: a run that begins cold and keeps nothing.
 inline RunOutcome run_at(ExecutionLevel level, TileProgram& prog,
                          const characterize::DeviceDescriptor& device,
                          const Placement& placement,
                          const stream::StreamProgram* streams = nullptr,
                          std::uint64_t seed = 0,
-                         const std::set<std::string>& initially_resident = {}) {
+                         const std::set<std::string>& initially_resident = {},
+                         const std::set<std::string>& retained_by_caller = {}) {
     RunOutcome out;
     out.level = level;
 
@@ -233,6 +238,11 @@ inline RunOutcome run_at(ExecutionLevel level, TileProgram& prog,
                     "initially_resident (" + std::to_string(initially_resident.size()) +
                     " tiles) declared, but L-B models no buffers, so residency has no meaning "
                     "at this level");
+            if (!retained_by_caller.empty())
+                out.unmodelled_inputs.push_back(
+                    "retained_by_caller (" + std::to_string(retained_by_caller.size()) +
+                    " tiles) declared, but L-B models no buffers, so retention has no meaning "
+                    "at this level");
             TileProgramReference ref;
             out.summary = ref.run(prog);
             out.ops = out.summary.ops;
@@ -243,6 +253,7 @@ inline RunOutcome run_at(ExecutionLevel level, TileProgram& prog,
             TileTransactionExecutor exec;
             TileExecutionRequest req{prog, placement, device, streams, seed};
             req.initially_resident = initially_resident;
+            req.retained_by_caller = retained_by_caller;
             const TileRunResult r = exec.run(req);
             out.summary = r.summary;
             out.ops = r.stats.ops;

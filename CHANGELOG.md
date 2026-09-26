@@ -40,6 +40,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The statefulness measurement was inflated, and the residency keys were in the wrong
+  vocabulary (#308 review, round 2).** Two findings that together undid most of what the
+  DMA-reduction proof claimed.
+  - *The orchestrator seeded the tiles its own `PLACE` descriptors had just asked for.* It added
+    each placed tile to `resident` before the launch and then passed `resident` as
+    `initially_resident`, so the executor skipped the DMA leg for tiles that were never fetched:
+    `gemm0` paid **zero** DRAM→L3 transfers in the warm run, and the "saving" was the whole
+    traffic rather than the reuse. A tile becomes resident when the run that fetches it has run,
+    and the orchestrator records it there now.
+  - *Resident keys were named by TENSOR where the executor compares by OPERAND.* `gemm1`'s
+    operand A is tensor H, so a tensor-keyed seed matches nothing the executor knows — or worse,
+    matches the wrong operand. Both names travel together now (`ReadTile`), and the test fixture
+    was renamed so its tensors are **X/W/H/Y**, disjoint from the kernel's A/B/C: while they
+    coincided, this bug reproduced as "all tests pass".
+  - The statefulness test no longer asserts only that the number went down. It pins the saving
+    to **exactly the four shared weight tiles**, and asserts that `gemm0` pays the same either
+    way — the two assertions that catch both bugs, verified by reintroducing each.
+- **A retained tile is now a thing a caller can say, because the orchestrator's claim needed
+  backing.** `TileExecutionRequest::retained_by_caller` says "this run must leave these tiles
+  resident", which `initially_resident` cannot express for a tile the run is about to fetch.
+  Without it the executor returned the credit at the tile's last reader, the slot could be handed
+  to another tile inside that same run, and the **next** run would seed a tile that was no longer
+  there and skip a DMA leg it still owed — a timing result credited to a reuse that never
+  happened. Retention costs exactly one slot per tile (measured: the minimum L3 goes 6 → 7 → 8),
+  and a caller-held set that cannot fit is refused up front, since nothing releases a held tile.
+- **`RunIdentity::residency` could collide (#308 review).** The seeded set was joined with `";"`,
+  and nothing constrains a tile key's characters — so the single key `A#0#0;B#0#0` and the
+  two-key set {`A#0#0`, `B#0#0`} rendered identically, and two runs seeding different tiles
+  compared **equal** in the identity while producing different makespans. An identity that can
+  collide is worse than none, because it is trusted. Length-prefixed now, with the seeded and
+  retained halves labelled separately, and still empty for a cold run that keeps nothing.
 - **Two seeded-residency bugs where the header promised what the code did not do (#308 review).**
   Both are the same shape — a contract stated in a comment and enforced nowhere.
   - *A seeded tile was freed by the executor.* Every tile an op touches gets a consumer count,

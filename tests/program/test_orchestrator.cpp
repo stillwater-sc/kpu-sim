@@ -38,11 +38,18 @@ std::string l0_matmul(unsigned n, unsigned t) {
     return sw::kpu::program::serialize::to_string(sw::kpu::program::driver::derive(ps));
 }
 
-// TWO GEMMS SHARING THEIR SECOND OPERAND. The shared input is what makes statefulness
-// observable, and it is also the real case: a weight tensor read by layer after layer. The
-// first operator's OUTPUT would not serve — after a writeback it is in DRAM, so keeping it
-// "resident" would mean re-fetching it, which saves nothing.
-Loadable two_gemms_sharing_b() {
+// TWO GEMMS SHARING A WEIGHT TENSOR. The shared input is what makes statefulness observable,
+// and it is also the real case: a weight tensor read by layer after layer. The first operator's
+// OUTPUT would not serve — after a writeback it is in DRAM, so keeping it "resident" would mean
+// re-fetching it, which saves nothing.
+//
+// NO TENSOR IS NAMED LIKE AN OPERAND, deliberately. The kernel's operands are A/B/C whatever
+// the model calls them, so a fixture whose tensors are also A/B/C cannot tell a tensor-keyed
+// bug from an operand-keyed one: both spellings agree by coincidence, and a review finding
+// about exactly that confusion reproduced as "all tests pass". X/W/H/Y are disjoint from
+// A/B/C, so any place the two vocabularies are mixed up now shows up as a wrong answer or a
+// missed reuse.
+Loadable two_gemms_sharing_weights() {
     Loadable l;
     l.name = "gemm-gemm-shared-weights";
 
@@ -61,25 +68,26 @@ Loadable two_gemms_sharing_b() {
         }
         return t;
     };
-    l.tensors = {tensor("A", 0x1000, true), tensor("B", 0x2000, true),
-                 tensor("C", 0x3000, false), tensor("D", 0x4000, false)};
+    // X = activations in, W = the shared weights, H = the hidden result, Y = the output.
+    l.tensors = {tensor("X", 0x1000, true), tensor("W", 0x2000, true),
+                 tensor("H", 0x3000, false), tensor("Y", 0x4000, false)};
 
     Operator first;
     first.name = "gemm0";
     first.l0_program = l0_matmul(32, 16);
-    first.inputs = {"A", "B"};        // -> the program's operands A, B
-    first.outputs = {"C"};            // -> its operand C
+    first.inputs = {"X", "W"};        // -> the program's operands A, B
+    first.outputs = {"H"};            // -> its operand C
 
-    // The second GEMM consumes the first's output and reads B AGAIN. Its L0 program uses the
+    // The second GEMM consumes the first's output and reads W AGAIN. Its L0 program uses the
     // same operand names -- A/B/C, because that is what the kernel calls them -- and the
     // binding maps those onto different TENSORS. Without that indirection both operators
     // would read and write the same tensor, the second would accumulate onto the first's
-    // result, and C would come out doubled. Which is exactly what happened.
+    // result, and the hidden result would come out doubled. Which is exactly what happened.
     Operator second;
     second.name = "gemm1";
     second.l0_program = l0_matmul(32, 16);
-    second.inputs = {"C", "B"};       // C from gemm0, and B shared
-    second.outputs = {"D"};
+    second.inputs = {"H", "W"};       // H from gemm0, and W shared -> operands A, B
+    second.outputs = {"Y"};
 
     l.operators = {first, second};
     l.profile.min_compute_tiles = 1;
@@ -87,8 +95,8 @@ Loadable two_gemms_sharing_b() {
 }
 
 void fill_inputs(TensorStore& s) {
-    auto& a = s.values("A");
-    auto& b = s.values("B");
+    auto& a = s.values("X");
+    auto& b = s.values("W");
     for (std::size_t i = 0; i < a.size(); ++i) a[i] = float(i % 7) - 3.0f;
     for (std::size_t i = 0; i < b.size(); ++i) b[i] = float(i % 5) - 2.0f;
 }
@@ -114,7 +122,7 @@ TEST_CASE("a loadable runs, and computes what the in-process path computes",
     // hand-driven one must agree BIT-EXACTLY -- and disagreement is a bug signal by
     // construction rather than a judgement call.
     for (ExecutionLevel level : {ExecutionLevel::Behavioral, ExecutionLevel::BlockSequential}) {
-        const Loadable l = two_gemms_sharing_b();
+        const Loadable l = two_gemms_sharing_weights();
         TensorStore store;
         for (const TensorRef& t : l.tensors) store.declare(t);
         fill_inputs(store);
@@ -131,17 +139,17 @@ TEST_CASE("a loadable runs, and computes what the in-process path computes",
 
         // The in-process path: the same program, the same inputs, run directly.
         TileProgram direct = sw::kpu::program::serialize::from_string(l.operators[0].l0_program);
-        direct.operand("A").values = store.values("A");
-        direct.operand("B").values = store.values("B");
+        direct.operand("A").values = store.values("X");
+        direct.operand("B").values = store.values("W");
         const auto dev = sw::kpu::program::driver::make_device(DeviceSpec{});
         sw::kpu::program::driver::run_at(level, direct, dev,
                                         sw::kpu::program::Placement::single(dev.compute_tiles));
         // gemm0's output, which gemm1 no longer overwrites.
-        CHECK(bit_identical(direct.operand("C").values, store.values("C")));
+        CHECK(bit_identical(direct.operand("C").values, store.values("H")));
         // ...and gemm1 produced something of its own from it.
-        bool d_computed = false;
-        for (float v : store.values("D")) d_computed = d_computed || (v != 0.0f);
-        CHECK(d_computed);
+        bool y_computed = false;
+        for (float v : store.values("Y")) y_computed = y_computed || (v != 0.0f);
+        CHECK(y_computed);
     }
 }
 
@@ -149,7 +157,7 @@ TEST_CASE("statefulness is proved by a measured reduction in DMA traffic",
           "[program][orchestration][resident]") {
     // The second DoD clause, and the reason it is a TRANSFER COUNT rather than a flag: a
     // boolean saying "reuse happened" can be true while nothing was saved.
-    const Loadable l = two_gemms_sharing_b();
+    const Loadable l = two_gemms_sharing_weights();
 
     auto run_with_reuse = [&](bool reuse) {
         TensorStore store;
@@ -169,6 +177,33 @@ TEST_CASE("statefulness is proved by a measured reduction in DMA traffic",
 
     // Every tile fetched twice, once per operator, versus fetched once and kept.
     CHECK(warm.dma_transfers() < cold.dma_transfers());
+
+    // AND THE SAVING IS EXACTLY THE SHARED TILES -- four, tensor B's 2x2 tiling -- which is
+    // the assertion that makes this a reuse measurement instead of a number that merely got
+    // smaller. Two ways to be wrong were both live before review:
+    //
+    //   * seeding the tiles this operator's own PLACEs just asked for. Every tile then looks
+    //     resident, gemm0 pays no DMA at all, and the "saving" is the whole traffic.
+    //   * seeding TENSOR keys where the executor compares OPERAND keys. The shared weights are
+    //     tensor W read through operand B, so a tensor-keyed seed ("W#0#0") matches nothing the
+    //     executor knows and the saving drops to ZERO. It reads as "reuse does not work", which
+    //     is why this fixture's tensors are X/W/H/Y: while they were A/B/C/D the two spellings
+    //     agreed by coincidence and the bug was invisible.
+    //
+    // Both inflate this number, so pinning it down catches both.
+    auto dma_of = [](const RunOutcome& o) {
+        if (!o.stats) return std::size_t{0};
+        const auto it = o.stats->hop_transfers.find(sw::kpu::program::Hop::DmaDramToL3);
+        return it == o.stats->hop_transfers.end() ? std::size_t{0} : it->second;
+    };
+    REQUIRE(cold.per_operator.size() == 2);
+    REQUIRE(warm.per_operator.size() == 2);
+    // gemm0 runs FIRST, so nothing can be resident for it: it pays in full either way.
+    CHECK(dma_of(warm.per_operator[0]) == dma_of(cold.per_operator[0]));
+    CHECK(dma_of(warm.per_operator[0]) > 0);
+    // gemm1 saves the four shared W tiles, and nothing else. Its other input is tensor H,
+    // which gemm0 WROTE rather than placed -- it is in DRAM, so it is fetched.
+    CHECK(dma_of(cold.per_operator[1]) - dma_of(warm.per_operator[1]) == 4);
 
     // NO SECOND PLACE for a tile that stayed resident. Counted from the trace, which is
     // what the orchestrator actually decided rather than what the executor happened to do.
@@ -196,15 +231,15 @@ TEST_CASE("statefulness is proved by a measured reduction in DMA traffic",
     on.reuse_shared_inputs = true;
     orchestrate(l, pa, a_store, off);
     orchestrate(l, pb, b_store, on);
-    CHECK(bit_identical(a_store.values("C"), b_store.values("C")));
-    CHECK(bit_identical(a_store.values("D"), b_store.values("D")));
+    CHECK(bit_identical(a_store.values("H"), b_store.values("H")));
+    CHECK(bit_identical(a_store.values("Y"), b_store.values("Y")));
 }
 
 TEST_CASE("the recorded trace is identical across runs", "[program][orchestration]") {
     // The third DoD clause. ADR 0002 §3.5 says a run is a pure function of its inputs; a
     // DECIDING orchestrator keeps that true only if its decisions derive from those inputs
     // alone. The way to check a "provided that" is to record what it decided and compare.
-    const Loadable l = two_gemms_sharing_b();
+    const Loadable l = two_gemms_sharing_weights();
     auto once = [&] {
         TensorStore store;
         for (const TensorRef& t : l.tensors) store.declare(t);
@@ -233,7 +268,7 @@ TEST_CASE("a machine too small refuses with a diagnosis, never a hang",
     // merely possible. For a static schedule a block on insufficient credit is fine, because
     // the compiler proved the schedule fits. For a runtime allocator a block is a HANG and a
     // refusal is a DECISION POINT.
-    const Loadable l = two_gemms_sharing_b();
+    const Loadable l = two_gemms_sharing_weights();
     TensorStore store;
     for (const TensorRef& t : l.tensors) store.declare(t);
     fill_inputs(store);
@@ -284,7 +319,7 @@ TEST_CASE("a PLACE reports that it was not timed, rather than reporting zero",
     // At L-T1 the executor decides when each leg happens, across the whole run, so a PLACE
     // has no latency of its own (#305 §6.2). `cycles = 0` with `timed = false` says that;
     // `cycles = 0` alone would be a measurement invented out of an absence.
-    const Loadable l = two_gemms_sharing_b();
+    const Loadable l = two_gemms_sharing_weights();
     TensorStore store;
     for (const TensorRef& t : l.tensors) store.declare(t);
     fill_inputs(store);

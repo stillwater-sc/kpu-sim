@@ -180,23 +180,51 @@ std::map<std::string, std::string> operand_binding(const program::TileProgram& p
 
 namespace {
 
-// Every tile an operator's program READS, in first-appearance order. Reads, not writes: a
-// tile the operator produces is not something to place -- it is something the launch
-// creates. Same distinction as `program_inputs` draws for operands, one level down.
-// NAMED BY TENSOR, not by operand. Residency is a fact about the machine and persists
-// across operators, so two operators reading one tensor must produce the SAME tile key --
-// which they do not if the key is built from the kernel's local operand name.
-std::vector<TileRef> tiles_read(const program::TileProgram& prog,
-                                const std::map<std::string, std::string>& binding) {
-    std::vector<TileRef> out;
-    std::set<std::string> seen;
+// Every tile an operator's program READS, in first-appearance order, IN BOTH VOCABULARIES.
+// Reads, not writes: a tile the operator produces is not something to place -- it is something
+// the launch creates. Same distinction as `program_inputs` draws for operands, one level down.
+//
+// TWO NAMES FOR ONE TILE, and both are needed, which is why they travel together:
+//
+//   tensor key    "B#0#0"  -- the MACHINE's name. Residency is a fact about the machine and
+//                             persists across operators, so two operators reading one tensor
+//                             must agree on this key.
+//   operand key   "B#0#0"  -- the KERNEL's name, and equal to the above only by coincidence.
+//                             For gemm1 the binding is operand A -> tensor C, so the tensor
+//                             key is "C#0#0" and the operand key is "A#0#0".
+//
+// The executor compares against OPERAND keys, because it builds them from the program in front
+// of it. Handing it a tensor key was a live bug: gemm1's A tiles (tensor C) were not recognised
+// as resident and re-ran their DMA leg, while its OUTPUT operand C was matched against resident
+// tensor C and exempted from release. B only worked because its two names happened to coincide
+// -- exactly the coincidence that made the operand binding explicit in the first place.
+struct ReadTile {
+    TileRef tensor_tile;        // what the loadable calls it
+    std::string operand_key;    // what this program calls it, in the executor's spelling
+};
+
+std::vector<ReadTile> reads_of(const program::TileProgram& prog,
+                               const std::map<std::string, std::string>& binding) {
+    std::vector<ReadTile> out;
+    std::set<std::string> seen;                  // by OPERAND key: two operands may share one
+                                                 // tensor, and each is a separate seeding fact
     for (const program::TileOp& op : prog.ops())
         for (const program::TileCoord& c : op.inputs) {
             const auto it = binding.find(c.operand);
             if (it == binding.end()) continue;
-            TileRef t{it->second, c.ti, c.tj};
-            if (seen.insert(t.key()).second) out.push_back(t);
+            const std::string okey = program::tile_key(c);
+            if (!seen.insert(okey).second) continue;
+            out.push_back(ReadTile{TileRef{it->second, c.ti, c.tj}, okey});
         }
+    return out;
+}
+
+// The distinct TENSOR tiles of those reads -- what placement decisions are made about.
+std::vector<TileRef> tiles_read(const std::vector<ReadTile>& reads) {
+    std::vector<TileRef> out;
+    std::set<std::string> seen;
+    for (const ReadTile& r : reads)
+        if (seen.insert(r.tensor_tile.key()).second) out.push_back(r.tensor_tile);
     return out;
 }
 
@@ -263,7 +291,9 @@ OrchestrationResult orchestrate(const loadable::Loadable& l,
             result.diagnosis = e.what();
             return result;
         }
-        const std::vector<TileRef> needed = tiles_read(prog, binding);
+        const std::vector<ReadTile> reads = reads_of(prog, binding);
+        const std::vector<TileRef> needed = tiles_read(reads);
+
 
         // ---- decide what to place ------------------------------------------
         std::vector<TileRef> to_place;
@@ -289,6 +319,14 @@ OrchestrationResult orchestrate(const loadable::Loadable& l,
             // bookkeeping, not a move -- and saying "not modelled" beats reporting 0.
             complete(id, CompletionStatus::Done, /*timed=*/false, 0, {t});
         }
+
+        // WHAT WAS ALREADY THERE, sampled after the releases and before anything is placed.
+        // `resident` is about to change: the PLACE loop no longer writes to it, but the run
+        // that follows does, and seeding the executor with the post-place set would tell it
+        // that tiles THIS RUN is fetching were already in L3 -- skipping the very DMA legs the
+        // PLACE descriptors just asked for, and turning the reuse measurement into "we claimed
+        // everything was warm".
+        const std::set<std::string> resident_before = resident;
 
         // ---- can the machine take them? ------------------------------------
         StatusView status(spec, resident, l3_capacity);
@@ -323,10 +361,10 @@ OrchestrationResult orchestrate(const loadable::Loadable& l,
                                                         {0},
                                                         0};
             const std::uint64_t id = issue(d);
-            if (opt.reuse_shared_inputs) {
-                resident.insert(t.key());
-                resident_refs.emplace(t.key(), t);
-            }
+            // NOT added to `resident` yet -- see `resident_before` above. A tile becomes
+            // resident when the run that fetches it has run, and until then the only honest
+            // statement about it is the RETENTION below: "this run must leave it there".
+            //
             // A PLACE has no completion cycle of its own at L-T1 (#305 §6.2): the executor
             // decides when the leg happens, inside the launch. Reporting a number here would
             // be inventing one.
@@ -342,13 +380,26 @@ OrchestrationResult orchestrate(const loadable::Loadable& l,
         launch.target = op.name;
         const std::uint64_t launch_id = issue(launch);
 
+        // ---- what the machine is told, in the machine's spelling ------------
+        // SEEDED: tiles that were resident BEFORE this operator's places. These skip the DMA
+        // leg, because they are already there.
+        // RETAINED: tiles this run must leave resident, so the executor may not return their
+        // credits at their last reader. Without this the orchestrator's claim to hold them is
+        // not backed by the machine -- the slot could be reused inside this very run, and the
+        // NEXT run would seed a tile that is no longer there and skip a leg it owes.
+        std::set<std::string> seeded, retained;
+        for (const ReadTile& r : reads) {
+            if (resident_before.count(r.tensor_tile.key())) seeded.insert(r.operand_key);
+            if (opt.reuse_shared_inputs) retained.insert(r.operand_key);
+        }
+
         const auto handle = platform.load_program(prog);
         const auto snapshot = platform.snapshot();
         RunOutcome outcome;
         try {
             const auto run = platform.run(handle, opt.level, snapshot,
                                           program::Placement::single(dev.compute_tiles),
-                                          nullptr, resident);
+                                          nullptr, seeded, retained);
             outcome = run.outcome;
         } catch (const std::exception& e) {
             complete(launch_id, CompletionStatus::RefusedUnsupported, false, 0, {}, e.what());
@@ -360,6 +411,15 @@ OrchestrationResult orchestrate(const loadable::Loadable& l,
 
         for (const auto& [operand, tensor] : binding)
             tensors.store_from(platform.program(handle), operand, tensor);
+
+        // NOW the placed tiles are resident: the run that fetched them has run, and it was
+        // told to leave them there. Recording it earlier would be a claim about a machine
+        // state that did not exist yet.
+        if (opt.reuse_shared_inputs)
+            for (const TileRef& t : to_place) {
+                resident.insert(t.key());
+                resident_refs.emplace(t.key(), t);
+            }
 
         for (const std::string& u : outcome.unmodelled_inputs) result.unmodelled.push_back(u);
         result.per_operator.push_back(outcome);

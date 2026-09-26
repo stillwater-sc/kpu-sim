@@ -574,6 +574,23 @@ is then tested against.
    at cycle zero went unnoticed whenever no op needed one — a program with no ops completed and
    reported a peak residency above its own capacity. It is checked up front now. Increment 3
    inherits both as stated contracts, not as comments.
+
+   **And a fourth, which is why the proof is now an equation rather than an inequality.** The
+   first version of this orchestrator added a tile to its resident set at `PLACE` time and then
+   seeded the executor with that set — so every tile looked warm, `gemm0` paid no DMA at all, and
+   `warm < cold` was true for the wrong reason. Compounding it, the seeded keys were named by
+   **tensor** where the executor compares by **operand**; the fixture's tensors were A/B/C/D, the
+   kernel's operands are A/B/C, and the two spellings agreed by coincidence, so the confusion was
+   invisible. The fixture's tensors are X/W/H/Y now, the test pins the saving to *exactly* the
+   four shared weight tiles, and each bug was reintroduced to confirm the assertions bite.
+
+   That fix exposed the real gap: a tile placed for *this* run is not resident at its start, so
+   `initially_resident` cannot express "keep it". Without a way to say so the executor returned
+   the credit at the tile's last reader, the slot could be reused inside the same run, and the
+   next run would seed a tile that was gone — skipping a DMA leg it owed. `retained_by_caller`
+   is that statement, and the two together are what the caller holds: **seeded** before,
+   **retained** after. A held set that cannot fit is refused up front, because nothing releases
+   it. This is the vocabulary increment 3's reserve-then-launch reserves *with*.
    **Done when:** a two-operator model (GEMM → bias+activation epilogue) runs from a loadable
    and agrees **bit-exactly** with the in-process path at L-B and L-T1; **statefulness is
    proved** — the second operator consumes a tile the first left resident and no second `PLACE`

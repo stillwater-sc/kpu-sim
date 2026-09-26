@@ -729,6 +729,46 @@ TEST_CASE("every RunIdentity field is either compared or a declared label, and a
     CHECK(text.find("resid0") == std::string::npos);
 }
 
+TEST_CASE("the residency decision is serialized unambiguously", "[program][platform][run]") {
+    // A SEPARATOR IS NOT A SERIALIZATION. Nothing constrains a tile key's characters --
+    // `TileCoord::operand` takes any string -- so joining a set with ";" made one rendering
+    // ambiguous: the single key `A#0#0;B#0#0` and the two-key set {`A#0#0`, `B#0#0`} produced
+    // identical bytes. Two runs seeding different tiles then compared EQUAL in the identity
+    // while producing different makespans, and an identity that can collide is worse than no
+    // identity, because it is trusted. Length prefixes fix it.
+    //
+    // The seeds here match no tile in the program on purpose: what is under test is the
+    // RENDERING of a decision, and identical behaviour is what leaves the identity as the only
+    // thing that can tell the two runs apart.
+    VirtualPlatform platform = default_platform();
+    const ProgramHandle h = platform.load_program(filled("matmul"));
+    const StateSnapshot initial = platform.snapshot();
+    const Placement pl = Placement::single(platform.deployment().device_view().compute_tiles);
+
+    const auto one_key = platform.run(h, ExecutionLevel::BlockSequential, initial, pl, nullptr,
+                                      {"A#0#0;B#0#0"});
+    const auto two_keys = platform.run(h, ExecutionLevel::BlockSequential, initial, pl, nullptr,
+                                       {"A#0#0", "B#0#0"});
+    CHECK_FALSE(one_key.identity == two_keys.identity);
+    CHECK(one_key.identity.program_digest == two_keys.identity.program_digest);
+
+    // SEEDED and RETAINED are different claims about the same key, so moving a key between
+    // them must change the identity: one says "already there", the other "must still be there
+    // afterwards", and they produce different transfer counts.
+    const auto seeded = platform.run(h, ExecutionLevel::BlockSequential, initial, pl, nullptr,
+                                     {"A#0#0"}, {});
+    const auto retained = platform.run(h, ExecutionLevel::BlockSequential, initial, pl, nullptr,
+                                       {}, {"A#0#0"});
+    CHECK_FALSE(seeded.identity == retained.identity);
+
+    // A cold run that keeps nothing still renders EMPTY, not "i[]r[]" -- the field's own
+    // comment says "empty when the run starts cold", and a rendering that is never empty would
+    // make every run look as though it had made a residency decision.
+    const auto cold = platform.run(h, ExecutionLevel::BlockSequential, initial, pl, nullptr);
+    CHECK(cold.identity.residency.empty());
+    CHECK(cold.identity.str().find("resident:") == std::string::npos);
+}
+
 // ----------------------------------------------------------------------------
 // Stepping on the platform (#282 increment 5)
 // ----------------------------------------------------------------------------
