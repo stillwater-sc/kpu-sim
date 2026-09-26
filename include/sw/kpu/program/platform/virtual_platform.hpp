@@ -47,6 +47,7 @@
 
 #include <deque>
 #include <memory>
+#include <set>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -114,6 +115,7 @@ struct RunIdentity {
     std::string snapshot_digest;     // the coverage tag + the state it covers
     std::string deployment_digest;   // the canonical spec bytes
     std::string placement;           // the whole assignment, not its label
+    std::string residency;           // tiles seeded resident; empty when the run starts cold
     std::string stream_digest;        // the annotation's CONTENT; empty when there is none
     std::string dataflow;             // the map's name -- a LABEL, not compared (see above)
     ExecutionLevel level{};
@@ -121,7 +123,8 @@ struct RunIdentity {
     bool operator==(const RunIdentity& o) const {
         return program_digest == o.program_digest && snapshot_digest == o.snapshot_digest &&
                deployment_digest == o.deployment_digest && placement == o.placement &&
-               stream_digest == o.stream_digest && level == o.level;
+               residency == o.residency && stream_digest == o.stream_digest &&
+               level == o.level;
     }
 
     // EVERY COMPARED COMPONENT IS RENDERED. str() printed the map's NAME and not the digest,
@@ -133,6 +136,7 @@ struct RunIdentity {
         std::string out = std::string(driver::short_name(level)) + " prog:" + program_digest +
                           " state:" + snapshot_digest + " deploy:" + deployment_digest +
                           " place:" + digest_of(placement);
+        if (!residency.empty()) out += " resident:" + digest_of(residency);
         if (!stream_digest.empty())
             out += " flow:" + stream_digest + (dataflow.empty() ? "" : "(" + dataflow + ")");
         return out;
@@ -251,9 +255,14 @@ public:
     // Reading platform.program(h[0]) after the loop reads the INPUT that the last run's
     // restore put back, not the answer it computed. test_virtual_platform got this wrong
     // first and the assertion caught it, which is the cheapest place to learn it.
+    // `initially_resident` is a RUN INPUT, not a hint: a seeded tile's chain skips the DMA
+    // leg, so two runs differing only in it produce different makespans and different
+    // transfer counts. It therefore belongs in the identity as well as the signature --
+    // which is where the "four inputs were really six" lesson lands for the seventh.
     PlatformRunResult run(ProgramHandle h, ExecutionLevel level,
                           const StateSnapshot& initial, const Placement& placement,
-                          const stream::StreamProgram* streams = nullptr) {
+                          const stream::StreamProgram* streams = nullptr,
+                          const std::set<std::string>& initially_resident = {}) {
         const std::size_t i = checked(h);
         require_single_device();
         restore(initial);
@@ -268,8 +277,9 @@ public:
         result.identity.dataflow = streams ? streams->map.name : std::string();
         result.identity.level = level;
         result.unmodelled = driver::unmodelled_fields(level, spec_);
+        result.identity.residency = residency_key(initially_resident);
         result.outcome = driver::run_at(level, programs_[i], spec_.device_view(), placement,
-                                       streams);
+                                       streams, 0, initially_resident);
         return result;
     }
 
@@ -352,6 +362,15 @@ public:
     Cursor step_begin(ProgramHandle h, ExecutionLevel level, const StateSnapshot& initial) {
         return step_begin(h, level, initial,
                           Placement::single(spec_.device_view().compute_tiles), nullptr);
+    }
+
+    // A stable rendering of the seeded set. std::set iterates in order, so the key does not
+    // depend on the order a caller inserted in -- two orchestrators that chose the same tiles
+    // by different routes made the same decision and must share an identity.
+    static std::string residency_key(const std::set<std::string>& keys) {
+        std::string out;
+        for (const std::string& k : keys) out += k + ";";
+        return out;
     }
 
     // THE PROGRAM'S STRUCTURE, NOT ITS VALUES. Values are the `initial_state` input and

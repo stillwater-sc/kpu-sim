@@ -39,6 +39,7 @@ add_custom_target(kpu_loadable_schema DEPENDS ${KPU_LOADABLE_GEN_HDR})
 add_library(kpu_program
     deployment_json.cpp
     loadable.cpp
+    orchestrator.cpp
     ${KPU_LOADABLE_GEN_HDR}
 )
 add_dependencies(kpu_program kpu_loadable_schema)

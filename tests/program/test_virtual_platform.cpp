@@ -664,12 +664,14 @@ TEST_CASE("every RunIdentity field is either compared or a declared label, and a
     // silent omission -- the same technique as the exhaustive switch over StateCoverage, and
     // for the same reason. A designated-initializer aggregate would NOT do: a new member would
     // just default-initialise and the test would still build.
-    const RunIdentity base{"prog0", "state0", "deploy0", "place0", "flow0", "the-label",
+    const RunIdentity base{"prog0",  "state0",     "deploy0", "place0",
+                           "resid0", "flow0",      "the-label",
                            ExecutionLevel::BlockSequential};
     {
-        const auto& [program, state, deployment, placement, stream, dataflow, level] = base;
-        (void)program; (void)state; (void)deployment;
-        (void)placement; (void)stream; (void)dataflow; (void)level;
+        const auto& [program, state, deployment, placement, residency, stream, dataflow,
+                     level] = base;
+        (void)program; (void)state; (void)deployment; (void)placement;
+        (void)residency; (void)stream; (void)dataflow; (void)level;
     }
 
     // ---- the COMPARED fields: perturbing any one must change == AND str() ----------------
@@ -683,6 +685,11 @@ TEST_CASE("every RunIdentity field is either compared or a declared label, and a
         {"snapshot_digest",   perturbed([](RunIdentity& o) { o.snapshot_digest += "x"; })},
         {"deployment_digest", perturbed([](RunIdentity& o) { o.deployment_digest += "x"; })},
         {"placement",         perturbed([](RunIdentity& o) { o.placement += "x"; })},
+        // Added when #305 increment 2 made seeded residency a run input: a seeded tile's
+        // chain skips the DMA leg, so two runs differing only here produce different
+        // makespans. The tripwire below is what forced this entry rather than letting the
+        // field be compared-but-unrendered, or rendered-but-uncompared.
+        {"residency",         perturbed([](RunIdentity& o) { o.residency += "x"; })},
         {"stream_digest",     perturbed([](RunIdentity& o) { o.stream_digest += "x"; })},
         {"level",             perturbed([](RunIdentity& o) { o.level = ExecutionLevel::Behavioral; })},
     };
@@ -711,11 +718,15 @@ TEST_CASE("every RunIdentity field is either compared or a declared label, and a
         INFO("part " << part);
         CHECK(text.find(part) != std::string::npos);
     }
-    // The placement is rendered as a digest of its bytes rather than verbatim, because a
-    // pinned assignment is one number per op and would swamp the line. Stated here so the
-    // exception is deliberate rather than an oversight.
+    // The placement and the seeded residency are rendered as DIGESTS rather than verbatim,
+    // because a pinned assignment is one number per op and a resident set is one key per
+    // tile -- either would swamp the line. Stated here so the exceptions are deliberate
+    // rather than oversights, and asserted both ways: the digest appears, the raw bytes do
+    // not.
     CHECK(text.find(digest_of(base.placement)) != std::string::npos);
     CHECK(text.find("place0") == std::string::npos);
+    CHECK(text.find(digest_of(base.residency)) != std::string::npos);
+    CHECK(text.find("resid0") == std::string::npos);
 }
 
 // ----------------------------------------------------------------------------
