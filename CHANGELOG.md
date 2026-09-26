@@ -7,6 +7,55 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **A deciding orchestrator over the `.kpuld` container (#305 increment 2).** The loadable says
+  which operators to run and where the tensors are; it does not say which tiles to keep in L3,
+  when to give a slot back, or what to do when the machine is full. Those are runtime decisions
+  (§10 Q4), and `orchestration::orchestrate()` is what makes them. It sees a `StatusView` —
+  inventory, occupancy, credits — and issues `Descriptor`s, **none of which has a payload
+  field**; a structured binding over both types makes adding one a compile error in the test
+  rather than a silent backdoor, which is the same technique the run-identity test uses and for
+  the same reason. The data plane is a separate `TensorStore` on the executor's side, because
+  §3's rule ("no descriptor and no status read carries payload") has to survive contact with an
+  implementation that must move bytes somehow.
+  - Allocation is **program-order acquisition**, inherited rather than invented: this
+    orchestrator completes each operator before starting the next, so there is never an earlier
+    unfired operator holding slots while a later one waits, and the L-T1 deadlock-freedom proof
+    applies verbatim. Increment 3 buys more freedom deliberately, with a new argument.
+  - **The ABI can say no.** `RefusedInsufficientCredit` is a result, not an exception: a static
+    schedule may block on credit because the compiler proved it fits, but a runtime allocator
+    that blocks has hung. A 2-tile L3 refuses with the operator name and the slot arithmetic,
+    and the refusal is in the trace.
+  - Values are bit-exact against the in-process path at both L-B and L-T1, and the descriptor
+    trace is byte-identical across runs with exactly one completion per descriptor — ADR 0002
+    §3.5's "a run is a pure function of its inputs", checked rather than assumed.
+- **The KPU can be stateful across runs (#305 increment 2's enabling seam).**
+  `TileExecutionRequest::initially_resident` lets a caller name the tiles already in L3 when a
+  run starts, so a tile the previous operator placed is not fetched again: its chain starts at
+  the BlockMover, not the DMA. Measured on matmul 32³/t16 — `dma=8` cold, `dma=4` warm — which
+  is a transfer count rather than a flag. Keys are spelled by `program::tile_key()`, now public
+  for exactly this reason: the first version of the test invented `"A[0,0]"` where the executor
+  writes `"A#0#0"`, matched nothing, and reported success.
+
+### Fixed
+
+- **Two seeded-residency bugs where the header promised what the code did not do (#308 review).**
+  Both are the same shape — a contract stated in a comment and enforced nowhere.
+  - *A seeded tile was freed by the executor.* Every tile an op touches gets a consumer count,
+    seeded or not, so the completion rule returned the credit for a caller-owned tile the moment
+    its last reader finished — handing a slot the orchestrator still believed it held to an
+    unrelated tile, and letting true occupancy exceed the capacity this tier exists to enforce.
+    The release rule now exempts seeded keys explicitly. The cost is real and is the honest
+    answer: a held tile occupies a slot the cold run reuses, so the smallest L3 the program fits
+    in **grows** (measured 6 → 7), and the test asserts exactly that, because reverting the
+    exemption makes the two minima equal.
+  - *Seeding more than the L3 holds was not always refused.* The capacity check runs only when
+    an op needs a **new** slot, so an L3 that was overfull at cycle zero went unnoticed whenever
+    no op needed one — a program with no ops completed and reported a peak residency above its
+    own capacity, which is a measurement of a machine that cannot be built. The check is now
+    up front, before anything is scheduled, and names both numbers.
+
 ### Fixed
 
 - **A live use-after-free in the stepping seam (#304 review).** An L-B `Cursor`'s stepper holds

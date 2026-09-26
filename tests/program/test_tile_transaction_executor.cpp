@@ -952,3 +952,88 @@ TEST_CASE("seeded tiles count against capacity and are refused honestly",
     TileTransactionExecutor ex;
     CHECK_THROWS_AS(ex.run(req), std::runtime_error);
 }
+
+TEST_CASE("a seeded tile holds its slot for the whole run",
+          "[program][transactional][resident]") {
+    // THE CALLER'S TILE IS NOT THE EXECUTOR'S TO FREE. A seeded tile the program also reads
+    // gets a consumer count like any other, so the completion rule would return its credit
+    // the moment its last reader finished -- handing a slot the orchestrator still believes
+    // it holds to an unrelated tile, and letting true occupancy exceed the very capacity
+    // this tier enforces. The release rule therefore exempts seeded keys.
+    //
+    // Measured rather than asserted, and measured on the one thing the exemption changes:
+    // the SMALLEST L3 the run fits in. A tile held from cycle zero to the end costs a slot
+    // the cold run reuses, so the seeded minimum must be strictly larger. Without the
+    // exemption the two minima are equal -- verified by reverting it.
+    auto build = [] {
+        TileProgram p = derive_matmul_tile_program(32, 32, 32, 16, 16, 16);
+        auto& A = p.operand("A");
+        auto& B = p.operand("B");
+        for (std::size_t i = 0; i < A.values.size(); ++i) A.values[i] = float(i % 7) - 3.0f;
+        for (std::size_t i = 0; i < B.values.size(); ++i) B.values[i] = float(i % 5) - 2.0f;
+        return p;
+    };
+    // The smallest capacity at which this program completes, with `seed` already resident.
+    auto minimum_l3 = [&](const std::set<std::string>& seed) {
+        for (Dim cap = 1; cap <= 40; ++cap) {
+            TileProgram p = build();
+            DeviceDescriptor dev;
+            dev.l3_tiles = cap;
+            const Placement pl = Placement::single(dev.compute_tiles);
+            TileExecutionRequest req{p, pl, dev};
+            req.initially_resident = seed;
+            TileTransactionExecutor ex;
+            try {
+                ex.run(req);
+                return std::size_t(cap);
+            } catch (const std::runtime_error&) {
+                continue;                       // too small: refused, as it should be
+            }
+        }
+        return std::size_t(0);                  // no capacity worked, which would be a bug
+    };
+
+    // A(0,0) is read by two macs, both early, and cold its slot is reused afterwards.
+    const std::size_t cold = minimum_l3({});
+    const std::size_t held = minimum_l3({tile_key(TileCoord{"A", 0, 0})});
+
+    REQUIRE(cold > 0);
+    REQUIRE(held > 0);
+    CHECK(held > cold);                         // the held slot is not available for reuse
+}
+
+TEST_CASE("seeding more than the L3 holds is refused before anything is scheduled",
+          "[program][transactional][resident]") {
+    // The per-op capacity check runs only when an op needs a NEW slot, so it cannot see an
+    // L3 that was already overfull at cycle zero. A program with no ops is the cleanest
+    // witness: without an up-front check it completes and reports a peak residency ABOVE
+    // its own capacity, which is a measurement of a machine that cannot exist.
+    TileProgram p;                               // no operands, no ops
+    DeviceDescriptor dev;
+    dev.l3_tiles = 2;
+    const Placement pl = Placement::single(dev.compute_tiles);
+    TileExecutionRequest req{p, pl, dev};
+    req.initially_resident = {tile_key(TileCoord{"A", 0, 0}), tile_key(TileCoord{"A", 0, 1}),
+                              tile_key(TileCoord{"A", 1, 0})};
+    TileTransactionExecutor ex;
+    REQUIRE_THROWS_AS(ex.run(req), std::runtime_error);
+
+    // And it says which numbers disagree, because "refused" without them is not a
+    // diagnosis an orchestrator can act on.
+    try {
+        ex.run(req);
+    } catch (const std::runtime_error& e) {
+        const std::string what = e.what();
+        CHECK(what.find("3 tiles were seeded") != std::string::npos);
+        CHECK(what.find("L3 holds 2") != std::string::npos);
+    }
+
+    // Unbounded L3 (l3_tiles == 0) still means unbounded: any seed is fine.
+    DeviceDescriptor unbounded;
+    unbounded.l3_tiles = 0;
+    TileProgram q;
+    const Placement pl2 = Placement::single(unbounded.compute_tiles);
+    TileExecutionRequest ok{q, pl2, unbounded};
+    ok.initially_resident = req.initially_resident;
+    CHECK_NOTHROW(ex.run(ok));
+}

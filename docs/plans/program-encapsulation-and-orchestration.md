@@ -562,6 +562,18 @@ is then tested against.
    `"A#0#0"`, matched nothing, and reported success with the transfer count unchanged. Both are
    the "two spellings of one thing" failure; `tile_key` is a public function now and the operand
    binding is explicit and count-checked.
+
+   **A third pair, found in review, both of the shape "the header promised what the code did not
+   do".** A seeded tile the program also reads gets a consumer count like any other, so the
+   completion rule freed a *caller-owned* tile the moment its last reader finished — handing back
+   a slot the orchestrator still believed it held. The release rule exempts seeded keys
+   explicitly now, and the exemption has a price worth stating rather than hiding: a held tile
+   occupies a slot the cold run reuses, so **the budget a run needs is its own live set plus what
+   the caller is holding**, and the same program can refuse at a capacity it accepts cold. The
+   other: the capacity check runs only when an op needs a *new* slot, so an L3 that was overfull
+   at cycle zero went unnoticed whenever no op needed one — a program with no ops completed and
+   reported a peak residency above its own capacity. It is checked up front now. Increment 3
+   inherits both as stated contracts, not as comments.
    **Done when:** a two-operator model (GEMM → bias+activation epilogue) runs from a loadable
    and agrees **bit-exactly** with the in-process path at L-B and L-T1; **statefulness is
    proved** — the second operator consumes a tile the first left resident and no second `PLACE`

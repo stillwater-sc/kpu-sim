@@ -79,7 +79,12 @@ struct TileExecutionRequest {
     const stream::StreamProgram* streams = nullptr;   // optional (design note §7.4)
     std::uint64_t seed = 0;                           // recorded; unused until timing is stochastic
 
-    // TILES THAT ARE ALREADY IN L3 WHEN THIS RUN STARTS, by tile key ("A[0,1]").
+    // TILES THAT ARE ALREADY IN L3 WHEN THIS RUN STARTS, by tile key.
+    //
+    // Spell the key with tile_key() above -- "A#0#1", not TileCoord::str()'s "A[0,1]". A
+    // caller that writes the human spelling by hand matches nothing and is told nothing,
+    // which is how this seam lost its first test; naming the format here and pointing at
+    // the one function that produces it is the whole reason tile_key() is public.
     //
     // Empty is the old behaviour and stays the default: a run that begins with nothing
     // resident. A non-empty set is what makes the KPU STATEFUL ACROSS RUNS (#305): an
@@ -87,16 +92,23 @@ struct TileExecutionRequest {
     // still there, and the observable consequence is that the tile's chain SKIPS THE DMA
     // LEG -- visible in stats.hop_transfers[Hop::DmaDramToL3] and in resident_feeds.
     //
-    // THEIR LIFETIME BELONGS TO THE CALLER. A tile placed here has no recorded consumer
-    // count from this program, so the completion rule never frees it and it holds its slot
-    // for the whole run. That is not a leak: it is the orchestrator's tile, released by an
+    // THEIR LIFETIME BELONGS TO THE CALLER, and that takes an explicit exemption rather
+    // than falling out of the bookkeeping. A seeded tile the program also touches DOES get
+    // a consumer count like any other, so the completion rule would free it the moment its
+    // last reader finished -- handing a slot the orchestrator still believes it holds to an
+    // unrelated tile. The release rule therefore skips seeded keys: they are released by an
     // orchestrator decision (a RELEASE descriptor), not by this executor guessing. An
-    // executor that freed it would be freeing something it does not own -- the same
-    // ownership mistake the per-tile refcount fixed within a run.
+    // executor that freed them would be freeing what it does not own -- the same ownership
+    // mistake the per-tile refcount fixed within a run.
+    //
+    // So a seeded tile holds its slot for the WHOLE run, which is a real cost: the budget
+    // this program needs is its own live set PLUS what the caller is holding, and a run can
+    // refuse at a capacity the same program accepts cold. That is the honest answer, not a
+    // regression.
     //
     // They count against L3 capacity, because they occupy slots. A caller that seeds more
-    // than the capacity gets the ordinary capacity refusal with a diagnosis, which is the
-    // correct answer rather than a special case.
+    // than the capacity is refused BEFORE anything is scheduled, with both numbers -- see
+    // run(), which cannot leave that to the ordinary per-op check.
     //
     // `= {}` is not decoration: every field above carries a default so a caller can
     // brace-initialize the first three and omit the rest, and without one this addition
@@ -335,6 +347,24 @@ public:
         std::set<std::string> resident = req.initially_resident;
         std::size_t peak_residency = resident.size(), credit_stalls = 0, resident_feeds = 0;
 
+        // SEEDED MORE THAN THE MACHINE HOLDS: refuse here, before anything is scheduled.
+        // The per-op check below cannot catch it, because it only runs when an op needs a
+        // NEW slot -- so a program whose every tile is already seeded, or one with no ops
+        // at all, would run to completion over an L3 that was overfull from cycle zero and
+        // report a peak residency above its own capacity.
+        if (l3_capacity != 0 && resident.size() > static_cast<std::size_t>(l3_capacity))
+            throw std::runtime_error(
+                "TileTransactionExecutor: " + std::to_string(resident.size()) +
+                " tiles were seeded resident but this L3 holds " +
+                std::to_string(l3_capacity) + ". The initial residency does not fit the L3 "
+                "budget — raise l3_tiles, or release tiles before this run.");
+
+        // The caller's tiles, exempt from the completion rule. See
+        // TileExecutionRequest::initially_resident on why this exemption has to be written
+        // down instead of emerging: a seeded tile the program reads has a consumer count
+        // like any other, and counting it down to zero would free a slot we do not own.
+        const std::set<std::string>& seeded = req.initially_resident;
+
         // What this op would have to make resident in order to run.
         auto needed_slots = [&](std::size_t op) {
             std::size_t n = 0;
@@ -356,7 +386,7 @@ public:
                 auto it = unfinished_users.find(k);
                 if (it == unfinished_users.end()) continue;
                 if (--it->second == 0) {          // last user done -> credit returned
-                    resident.erase(k);
+                    if (seeded.count(k) == 0) resident.erase(k);   // not ours to free
                     unfinished_users.erase(it);
                 }
             }
