@@ -213,6 +213,9 @@ struct RunOutcome {
 // must leave resident, which the executor therefore may not release. A caller that seeds without
 // retaining is claiming a residency the next run cannot rely on.
 //
+// `foreign_held_slots` is the third: slots the caller holds for some OTHER program, which this
+// one cannot name and must not be allowed to use.
+//
 // Empty is the old behaviour and the default: a run that begins cold and keeps nothing.
 inline RunOutcome run_at(ExecutionLevel level, TileProgram& prog,
                          const characterize::DeviceDescriptor& device,
@@ -220,7 +223,8 @@ inline RunOutcome run_at(ExecutionLevel level, TileProgram& prog,
                          const stream::StreamProgram* streams = nullptr,
                          std::uint64_t seed = 0,
                          const std::set<std::string>& initially_resident = {},
-                         const std::set<std::string>& retained_by_caller = {}) {
+                         const std::set<std::string>& retained_by_caller = {},
+                         std::size_t foreign_held_slots = 0) {
     RunOutcome out;
     out.level = level;
 
@@ -243,6 +247,11 @@ inline RunOutcome run_at(ExecutionLevel level, TileProgram& prog,
                     "retained_by_caller (" + std::to_string(retained_by_caller.size()) +
                     " tiles) declared, but L-B models no buffers, so retention has no meaning "
                     "at this level");
+            if (foreign_held_slots > 0)
+                out.unmodelled_inputs.push_back(
+                    "foreign_held_slots (" + std::to_string(foreign_held_slots) +
+                    ") declared, but L-B models no buffers, so an occupied slot has no meaning "
+                    "at this level");
             TileProgramReference ref;
             out.summary = ref.run(prog);
             out.ops = out.summary.ops;
@@ -254,6 +263,7 @@ inline RunOutcome run_at(ExecutionLevel level, TileProgram& prog,
             TileExecutionRequest req{prog, placement, device, streams, seed};
             req.initially_resident = initially_resident;
             req.retained_by_caller = retained_by_caller;
+            req.foreign_held_slots = foreign_held_slots;
             const TileRunResult r = exec.run(req);
             out.summary = r.summary;
             out.ops = r.stats.ops;

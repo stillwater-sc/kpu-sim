@@ -1107,3 +1107,58 @@ TEST_CASE("a retained tile is not released either, and costs a slot per tile",
         CHECK(what.find("2 newly retained") != std::string::npos);
     }
 }
+
+TEST_CASE("slots this program cannot name still count against its L3",
+          "[program][transactional][resident]") {
+    // A caller holding a tile for some OTHER program occupies a slot throughout this one, and
+    // this program has no name for it: no operand, so no tile_key. Counted rather than named,
+    // because a synthetic key can collide with a real operand name -- `TileCoord::operand` is an
+    // arbitrary string -- and a collision would mark a real tile resident and skip its DMA leg.
+    //
+    // Left uncounted it is a quiet overstatement of capacity: the run places up to the full L3
+    // while slots are already gone, and reports a peak residency the machine could not have
+    // delivered. Measured on the smallest L3 the run fits in, which grows by exactly the count.
+    auto build = [] {
+        TileProgram p = derive_matmul_tile_program(32, 32, 32, 16, 16, 16);
+        auto& A = p.operand("A");
+        auto& B = p.operand("B");
+        for (std::size_t i = 0; i < A.values.size(); ++i) A.values[i] = float(i % 7) - 3.0f;
+        for (std::size_t i = 0; i < B.values.size(); ++i) B.values[i] = float(i % 5) - 2.0f;
+        return p;
+    };
+    auto minimum_l3 = [&](std::size_t foreign) {
+        for (Dim cap = 1; cap <= 40; ++cap) {
+            TileProgram p = build();
+            DeviceDescriptor dev;
+            dev.l3_tiles = cap;
+            const Placement pl = Placement::single(dev.compute_tiles);
+            TileExecutionRequest req{p, pl, dev};
+            req.foreign_held_slots = foreign;
+            TileTransactionExecutor ex;
+            try {
+                ex.run(req);
+                return std::size_t(cap);
+            } catch (const std::runtime_error&) {
+                continue;
+            }
+        }
+        return std::size_t(0);
+    };
+    const std::size_t none = minimum_l3(0);
+    REQUIRE(none > 0);
+    CHECK(minimum_l3(1) == none + 1);
+    CHECK(minimum_l3(3) == none + 3);
+
+    // And the peak residency REPORTS them, because a peak that omits occupied slots is a
+    // measurement of a machine that was never that empty.
+    TileProgram p = build();
+    DeviceDescriptor dev;                        // unbounded L3: the peak is the program's own
+    const Placement pl = Placement::single(dev.compute_tiles);
+    TileExecutionRequest bare{p, pl, dev};
+    TileTransactionExecutor ex;
+    const std::size_t bare_peak = ex.run(bare).stats.peak_l3_residency;
+    TileProgram q = build();
+    TileExecutionRequest occupied{q, pl, dev};
+    occupied.foreign_held_slots = 5;
+    CHECK(ex.run(occupied).stats.peak_l3_residency == bare_peak + 5);
+}

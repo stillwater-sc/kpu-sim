@@ -591,6 +591,23 @@ is then tested against.
    is that statement, and the two together are what the caller holds: **seeded** before,
    **retained** after. A held set that cannot fit is refused up front, because nothing releases
    it. This is the vocabulary increment 3's reserve-then-launch reserves *with*.
+
+   **And retention needed a policy, not just a mechanism.** The first version retained every tile
+   an operator read. On a three-GEMM chain the smallest L3 that fits went 8 (no reuse) → 12
+   (filtered) → **21** (unfiltered): twenty-one slots to save four fetches, and a refusal at every
+   capacity between. Retention is filtered by what a later operator reads, which also moved the
+   releases: a pass that freed stale tiles at the *top* of each operator can never fire once
+   nothing enters the resident set unless a later operator reads it. Credits go back at the end of
+   the run that finished with them — one launch earlier than before — so `PLACE` pairs with
+   `RELEASE` and the "release before asking" property is stronger.
+
+   That fix surfaced the last gap: a tile held for operator *i+2* that operator *i+1* never reads
+   has **no name in i+1's program**, so it cannot be seeded or retained there, and the executor
+   placed up to the full L3 while those slots were gone — a middle operator reporting a peak of 9
+   against a true occupancy of 13. `foreign_held_slots` is a count rather than keys, because a
+   synthetic key can collide with a real operand name. This is what makes the L3 arithmetic a
+   statement about the machine rather than about one program's view of it, which is the
+   precondition for increment 3 reserving across operators at all.
    **Done when:** a two-operator model (GEMM → bias+activation epilogue) runs from a loadable
    and agrees **bit-exactly** with the in-process path at L-B and L-T1; **statefulness is
    proved** — the second operator consumes a tile the first left resident and no second `PLACE`

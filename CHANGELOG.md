@@ -40,6 +40,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Retention held every tile an operator read, not just the ones a later operator wants
+  (#308 review, round 3).** Holding a tile nobody will read again buys nothing and costs a slot
+  for the whole run, which can refuse a run that fits — the same argument as releasing before
+  asking, applied to retention. Measured on the smallest L3 a three-GEMM chain fits in: **8**
+  slots with reuse off, **12** with reuse on and filtered, **21** unfiltered. Twenty-one slots
+  to save four fetches. Retention is filtered by what a later operator reads now, and the test
+  asserts the difference is exactly the four tiles it keeps.
+  - The releases moved with it. A pass that released "tiles no remaining operator reads" at the
+    *top* of each operator could never fire once retention is filtered, since nothing enters the
+    resident set unless a later operator reads it — so it was code that could not run, asserting
+    something untrue about where the decision is made. Credits go back at the **end** of the run
+    that finished with them, which is one launch earlier than before, so the property that pass
+    existed for is stronger rather than weaker. `PLACE` now pairs with `RELEASE`.
+- **Slots the caller holds that a program cannot name were uncounted.** Chasing the retention fix
+  surfaced it: a tile held for operator *i+2* that operator *i+1* never reads has no operand in
+  *i+1*'s program, hence no tile key, so the executor could not be told about it by name — and it
+  placed up to the full L3 while those slots were already gone. Measured on a three-GEMM chain
+  with a gap: the middle operator reported a peak of **9** where the true occupancy was **13**.
+  `TileExecutionRequest::foreign_held_slots` is a **count**, not keys, because a synthetic key can
+  collide with a real operand name (`TileCoord::operand` is an arbitrary string) and a collision
+  would mark a real tile resident and skip its DMA leg. Every capacity question now asks about
+  resident + foreign, and the peak reports them.
 - **The statefulness measurement was inflated, and the residency keys were in the wrong
   vocabulary (#308 review, round 2).** Two findings that together undid most of what the
   DMA-reduction proof claimed.

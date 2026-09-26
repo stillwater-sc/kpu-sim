@@ -270,7 +270,8 @@ public:
                           const StateSnapshot& initial, const Placement& placement,
                           const stream::StreamProgram* streams = nullptr,
                           const std::set<std::string>& initially_resident = {},
-                          const std::set<std::string>& retained_by_caller = {}) {
+                          const std::set<std::string>& retained_by_caller = {},
+                          std::size_t foreign_held_slots = 0) {
         const std::size_t i = checked(h);
         require_single_device();
         restore(initial);
@@ -285,9 +286,11 @@ public:
         result.identity.dataflow = streams ? streams->map.name : std::string();
         result.identity.level = level;
         result.unmodelled = driver::unmodelled_fields(level, spec_);
-        result.identity.residency = residency_key(initially_resident, retained_by_caller);
+        result.identity.residency =
+            residency_key(initially_resident, retained_by_caller, foreign_held_slots);
         result.outcome = driver::run_at(level, programs_[i], spec_.device_view(), placement,
-                                       streams, 0, initially_resident, retained_by_caller);
+                                       streams, 0, initially_resident, retained_by_caller,
+                                       foreign_held_slots);
         return result;
     }
 
@@ -384,7 +387,8 @@ public:
     // then compare EQUAL in the identity while producing different makespans. An identity that
     // can collide is worse than no identity, because it is trusted.
     static std::string residency_key(const std::set<std::string>& initial,
-                                     const std::set<std::string>& retained) {
+                                     const std::set<std::string>& retained,
+                                     std::size_t foreign) {
         auto render = [](const std::set<std::string>& keys) {
             std::string out;
             for (const std::string& k : keys) out += std::to_string(k.size()) + ":" + k;
@@ -394,10 +398,11 @@ public:
         // identity's own comment both read "empty when the run starts cold", and a rendering
         // that is never empty would quietly make every run look as though it had made a
         // residency decision.
-        if (initial.empty() && retained.empty()) return std::string();
+        if (initial.empty() && retained.empty() && foreign == 0) return std::string();
         // The two sets are different claims, so the rendering must not let a key move between
         // them unnoticed -- hence one field, two labelled halves, rather than a merge.
-        return "i[" + render(initial) + "]r[" + render(retained) + "]";
+        return "i[" + render(initial) + "]r[" + render(retained) + "]f" +
+               std::to_string(foreign);
     }
 
     // THE PROGRAM'S STRUCTURE, NOT ITS VALUES. Values are the `initial_state` input and

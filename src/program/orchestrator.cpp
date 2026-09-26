@@ -294,31 +294,26 @@ OrchestrationResult orchestrate(const loadable::Loadable& l,
         const std::vector<ReadTile> reads = reads_of(prog, binding);
         const std::vector<TileRef> needed = tiles_read(reads);
 
+        // WHAT A LATER OPERATOR STILL WANTS -- from i+1 on, so this operator's own reads do not
+        // count. It is the only lookahead the orchestrator does, and it decides two things: what
+        // is worth keeping past this launch, and therefore what is worth paying an L3 slot for
+        // during it.
+        const std::set<std::string> wanted_later = tensors_read_after(l, i + 1);
+
 
         // ---- decide what to place ------------------------------------------
         std::vector<TileRef> to_place;
         for (const TileRef& t : needed)
             if (!resident.count(t.key())) to_place.push_back(t);
 
-        // ---- decide what to give back, BEFORE asking for more --------------
-        // A tile no remaining operator reads is dead weight. Releasing first is what lets a
-        // bounded machine run a chain longer than its L3: asking for credit before
-        // returning what is finished would refuse a run that fits.
-        const std::set<std::string> still_wanted = tensors_read_after(l, i);
-        std::vector<TileRef> to_release;
-        for (const auto& [key, ref] : resident_refs)
-            if (!still_wanted.count(ref.tensor)) to_release.push_back(ref);
-        for (const TileRef& t : to_release) {
-            Descriptor d;
-            d.kind = DescriptorKind::Release;
-            d.tile = t;
-            const std::uint64_t id = issue(d);
-            resident.erase(t.key());
-            resident_refs.erase(t.key());
-            // A RELEASE has no latency of its own at this level -- returning a credit is
-            // bookkeeping, not a move -- and saying "not modelled" beats reporting 0.
-            complete(id, CompletionStatus::Done, /*timed=*/false, 0, {t});
-        }
+        // GIVING BACK HAPPENS AT THE END OF THE PREVIOUS OPERATOR, not here. A pass that
+        // released "tiles no remaining operator reads" at this point could never fire once
+        // retention is filtered by `wanted_later`: nothing enters `resident` unless a later
+        // operator reads it, so by the time this operator runs there is nothing stale to find.
+        // The property that pass existed for -- release before asking, so a bounded machine can
+        // run a chain longer than its L3 -- is STRONGER now, because the credits went back one
+        // launch earlier. Keeping the pass as well would be code that cannot run, asserting
+        // something untrue about where the decision is made.
 
         // WHAT WAS ALREADY THERE, sampled after the releases and before anything is placed.
         // `resident` is about to change: the PLACE loop no longer writes to it, but the run
@@ -390,7 +385,25 @@ OrchestrationResult orchestrate(const loadable::Loadable& l,
         std::set<std::string> seeded, retained;
         for (const ReadTile& r : reads) {
             if (resident_before.count(r.tensor_tile.key())) seeded.insert(r.operand_key);
-            if (opt.reuse_shared_inputs) retained.insert(r.operand_key);
+            // RETAIN ONLY WHAT A LATER OPERATOR READS. Holding a tile nobody will read again
+            // buys nothing and costs a slot for the whole run, which can refuse a run that
+            // fits -- the same argument as releasing before asking, applied to retention. The
+            // executor frees the rest at their last reader, which is what it is for.
+            if (opt.reuse_shared_inputs && wanted_later.count(r.tensor_tile.tensor))
+                retained.insert(r.operand_key);
+        }
+
+        // SLOTS THIS PROGRAM CANNOT NAME. A tile held for operator i+2 that operator i+1 never
+        // reads has no operand in i+1's program, so it has no key the executor could compare --
+        // and leaving it out would let this run place up to the full L3 while the orchestrator
+        // held more, reporting a peak residency the machine could not have delivered. Counted
+        // instead of named, because a synthetic key can collide with a real operand name.
+        std::size_t foreign = 0;
+        {
+            std::set<std::string> named;
+            for (const ReadTile& r : reads) named.insert(r.tensor_tile.key());
+            for (const auto& [key, ref] : resident_refs)
+                if (!named.count(key)) ++foreign;
         }
 
         const auto handle = platform.load_program(prog);
@@ -399,7 +412,7 @@ OrchestrationResult orchestrate(const loadable::Loadable& l,
         try {
             const auto run = platform.run(handle, opt.level, snapshot,
                                           program::Placement::single(dev.compute_tiles),
-                                          nullptr, seeded, retained);
+                                          nullptr, seeded, retained, foreign);
             outcome = run.outcome;
         } catch (const std::exception& e) {
             complete(launch_id, CompletionStatus::RefusedUnsupported, false, 0, {}, e.what());
@@ -412,14 +425,34 @@ OrchestrationResult orchestrate(const loadable::Loadable& l,
         for (const auto& [operand, tensor] : binding)
             tensors.store_from(platform.program(handle), operand, tensor);
 
-        // NOW the placed tiles are resident: the run that fetched them has run, and it was
-        // told to leave them there. Recording it earlier would be a claim about a machine
-        // state that did not exist yet.
+        // NOW the placed tiles are resident -- the ones this run was told to keep. The run that
+        // fetched them has run, and recording it earlier would be a claim about a machine state
+        // that did not exist yet. Only the retained ones: a tile the executor was allowed to
+        // free at its last reader is NOT resident afterwards, and recording it would be the
+        // unsound claim `retained_by_caller` exists to prevent.
         if (opt.reuse_shared_inputs)
-            for (const TileRef& t : to_place) {
-                resident.insert(t.key());
-                resident_refs.emplace(t.key(), t);
-            }
+            for (const TileRef& t : to_place)
+                if (wanted_later.count(t.tensor)) {
+                    resident.insert(t.key());
+                    resident_refs.emplace(t.key(), t);
+                }
+
+        // WHAT THIS RUN FINISHED WITH. The credits came back inside the launch, at each tile's
+        // last reader; these descriptors record the DECISION not to keep them, which was made
+        // before the launch (it is what `retained` leaves out) and is reported after it because
+        // that is when it took effect. A PLACE therefore pairs with a RELEASE, and a tile that
+        // neither was retained nor released would be a slot nobody accounted for.
+        std::set<std::string> given_back;                 // two operands can share one tensor
+        for (const ReadTile& r : reads) {
+            const std::string key = r.tensor_tile.key();
+            if (resident.count(key)) continue;            // kept, so not given back
+            if (!given_back.insert(key).second) continue; // one tile, one credit, one RELEASE
+            Descriptor d;
+            d.kind = DescriptorKind::Release;
+            d.tile = r.tensor_tile;
+            const std::uint64_t id = issue(d);
+            complete(id, CompletionStatus::Done, /*timed=*/false, 0, {r.tensor_tile});
+        }
 
         for (const std::string& u : outcome.unmodelled_inputs) result.unmodelled.push_back(u);
         result.per_operator.push_back(outcome);

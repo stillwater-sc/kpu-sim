@@ -94,12 +94,62 @@ Loadable two_gemms_sharing_weights() {
     return l;
 }
 
+// THREE OPERATORS WITH A GAP: W is read by the first and the THIRD, and not by the second.
+// That gap is the case a two-operator chain cannot produce -- during the middle run the
+// orchestrator holds four W tiles that the middle program never mentions, so they have no
+// operand name and therefore no tile key in its vocabulary. They still occupy L3.
+Loadable three_gemms_with_a_gap() {
+    Loadable l;
+    l.name = "gemm-gemm-gemm-reuse-across-a-gap";
+
+    auto tensor = [](const char* name, std::uint64_t addr, bool is_input) {
+        TensorRef t;
+        t.name = name;
+        t.shape = {32, 32};
+        t.tile_shape = {16, 16};
+        t.device_address = addr;
+        t.size_bytes = 32 * 32 * 4;
+        if (is_input) {
+            t.source_uri = "weights.bin";
+            t.source_offset = addr;
+            t.source_length = 32 * 32 * 4;
+            t.content_digest = "declared00000000";
+        }
+        return t;
+    };
+    l.tensors = {tensor("X", 0x1000, true), tensor("W", 0x2000, true),
+                 tensor("V", 0x5000, true), tensor("H", 0x3000, false),
+                 tensor("G", 0x6000, false), tensor("Y", 0x4000, false)};
+
+    auto gemm = [](const char* name, std::vector<std::string> in, std::vector<std::string> out) {
+        Operator o;
+        o.name = name;
+        o.l0_program = l0_matmul(32, 16);
+        o.inputs = std::move(in);
+        o.outputs = std::move(out);
+        return o;
+    };
+    l.operators = {gemm("gemm0", {"X", "W"}, {"H"}),
+                   gemm("gemm1", {"H", "V"}, {"G"}),     // does not mention W
+                   gemm("gemm2", {"G", "W"}, {"Y"})};    // wants it again
+    l.profile.min_compute_tiles = 1;
+    return l;
+}
+
 void fill_inputs(TensorStore& s) {
     auto& a = s.values("X");
     auto& b = s.values("W");
     for (std::size_t i = 0; i < a.size(); ++i) a[i] = float(i % 7) - 3.0f;
     for (std::size_t i = 0; i < b.size(); ++i) b[i] = float(i % 5) - 2.0f;
+    if (s.has("V")) {
+        auto& v = s.values("V");
+        for (std::size_t i = 0; i < v.size(); ++i) v[i] = float(i % 3) - 1.0f;
+    }
 }
+
+// The final output of a whole orchestrated run, for "the answer does not depend on the
+// placement decisions" -- which is the level-invariance claim applied to residency.
+std::vector<float> final_output(const Loadable& l, const char* tensor, bool reuse);
 
 VirtualPlatform fresh(std::uint32_t l3_tiles = 0) {
     DeviceSpec ds;
@@ -112,6 +162,18 @@ bool bit_identical(const std::vector<float>& a, const std::vector<float>& b) {
     for (std::size_t i = 0; i < a.size(); ++i)
         if (std::memcmp(&a[i], &b[i], sizeof(float)) != 0) return false;
     return true;
+}
+
+std::vector<float> final_output(const Loadable& l, const char* tensor, bool reuse) {
+    TensorStore store;
+    for (const TensorRef& t : l.tensors) store.declare(t);
+    fill_inputs(store);
+    VirtualPlatform platform = fresh();
+    OrchestratorOptions opt;
+    opt.level = ExecutionLevel::BlockSequential;
+    opt.reuse_shared_inputs = reuse;
+    orchestrate(l, platform, store, opt);
+    return store.values(tensor);
 }
 
 } // namespace
@@ -233,6 +295,87 @@ TEST_CASE("statefulness is proved by a measured reduction in DMA traffic",
     orchestrate(l, pb, b_store, on);
     CHECK(bit_identical(a_store.values("H"), b_store.values("H")));
     CHECK(bit_identical(a_store.values("Y"), b_store.values("Y")));
+}
+
+TEST_CASE("a tile held across a run that never names it still occupies L3",
+          "[program][orchestration][resident]") {
+    // THE CASE A TWO-OPERATOR CHAIN CANNOT PRODUCE. W is read by gemm0 and gemm2, not by gemm1,
+    // so during gemm1's run the orchestrator holds four W tiles that gemm1's program never
+    // mentions. They have no operand there, so they have no tile key either -- and a slot with
+    // no key is a slot the executor cannot be told about by name.
+    //
+    // Left uncounted it is a quiet overstatement of capacity: gemm1 would place up to the full
+    // L3 while four slots were already gone, and report a peak residency the machine could not
+    // have delivered. `foreign_held_slots` is a COUNT for exactly this reason -- a synthetic key
+    // could collide with a real operand name, and a collision would mark a real tile resident
+    // and skip its DMA leg.
+    const Loadable l = three_gemms_with_a_gap();
+
+    auto run_with_reuse = [&](bool reuse) {
+        TensorStore store;
+        for (const TensorRef& t : l.tensors) store.declare(t);
+        fill_inputs(store);
+        VirtualPlatform platform = fresh();
+        OrchestratorOptions opt;
+        opt.level = ExecutionLevel::BlockSequential;
+        opt.reuse_shared_inputs = reuse;
+        return orchestrate(l, platform, store, opt);
+    };
+    const OrchestrationResult cold = run_with_reuse(false);
+    const OrchestrationResult warm = run_with_reuse(true);
+    REQUIRE_FALSE(cold.refused);
+    REQUIRE_FALSE(warm.refused);
+    REQUIRE(warm.per_operator.size() == 3);
+
+    auto peak_of = [](const RunOutcome& o) {
+        return o.stats ? o.stats->peak_l3_residency : std::size_t{0};
+    };
+    // gemm1's own working set is identical either way -- same program, same inputs. The whole
+    // difference is the four W tiles held through it, and they show up in the peak.
+    CHECK(peak_of(warm.per_operator[1]) == peak_of(cold.per_operator[1]) + 4);
+
+    // And the reuse survives the gap: gemm2 reads W without a second PLACE for any of its tiles.
+    std::size_t w_places = 0;
+    for (const Descriptor& d : warm.trace.issued)
+        if (d.kind == DescriptorKind::Place && d.tile.tensor == "W") ++w_places;
+    CHECK(w_places == 4);                        // placed once, by gemm0, and never again
+
+    // Values do not depend on any of it.
+    CHECK(bit_identical(final_output(l, "Y", false), final_output(l, "Y", true)));
+}
+
+TEST_CASE("reuse costs only the tiles it actually keeps", "[program][orchestration][resident]") {
+    // RETAINING A TILE NOBODY WILL READ AGAIN buys nothing and costs a slot for the whole run,
+    // which can refuse a run that fits -- the same argument as releasing before asking, applied
+    // to retention. So retention is filtered by what a LATER operator reads.
+    //
+    // Measured on the smallest L3 the whole chain fits in, which is where the difference is
+    // visible as a refusal rather than as a number in a stats block:
+    //
+    //   reuse off                    8 slots   (each operator's own live set, nothing held)
+    //   reuse on, filtered          12 slots   (+4: tensor W, held across gemm1 for gemm2)
+    //   reuse on, UNFILTERED        21 slots   (every read tile of every operator held)
+    //
+    // The last row is what this assertion exists to keep out: 21 slots to save four fetches.
+    const Loadable l = three_gemms_with_a_gap();
+    auto min_cap = [&](bool reuse) {
+        for (std::uint32_t cap = 1; cap <= 60; ++cap) {
+            TensorStore store;
+            for (const TensorRef& t : l.tensors) store.declare(t);
+            fill_inputs(store);
+            VirtualPlatform platform = fresh(cap);
+            OrchestratorOptions opt;
+            opt.level = ExecutionLevel::BlockSequential;
+            opt.reuse_shared_inputs = reuse;
+            if (!orchestrate(l, platform, store, opt).refused) return std::size_t(cap);
+        }
+        return std::size_t(0);                   // nothing worked, which would be a bug
+    };
+    const std::size_t cold = min_cap(false);
+    const std::size_t warm = min_cap(true);
+    REQUIRE(cold > 0);
+    REQUIRE(warm > 0);
+    CHECK(warm == cold + 4);                     // exactly the four tiles it keeps
 }
 
 TEST_CASE("the recorded trace is identical across runs", "[program][orchestration]") {

@@ -136,6 +136,19 @@ struct TileExecutionRequest {
     // what the caller holds at the end, and a run whose union exceeds the L3 is refused up
     // front, because it cannot finish.
     std::set<std::string> retained_by_caller = {};
+
+    // SLOTS THE CALLER HOLDS THAT THIS PROGRAM DOES NOT NAME. A count, not keys, because
+    // there is nothing here to name: an orchestrator holding a tile for a LATER operator
+    // occupies a slot throughout a run whose program never mentions that tile, so it has no
+    // operand and therefore no tile_key in this program's vocabulary.
+    //
+    // Leaving it out was a quiet overstatement of available capacity: the executor would place
+    // up to `l3_tiles` tiles of its own while the caller held more, and the run would report a
+    // peak residency the machine could not have delivered. Keys could not fix it -- a synthetic
+    // key can collide with a real operand name, since `TileCoord::operand` is an arbitrary
+    // string, and a collision would silently mark a real tile resident and skip its DMA leg.
+    // A count cannot collide with anything.
+    std::size_t foreign_held_slots = 0;
 };
 
 enum class ResourceKind { ComputeTile, MoveLane };
@@ -365,17 +378,22 @@ public:
         // again. See TileExecutionRequest::initially_resident on why these are never freed
         // here: their lifetime belongs to whoever placed them.
         std::set<std::string> resident = req.initially_resident;
-        std::size_t peak_residency = resident.size(), credit_stalls = 0, resident_feeds = 0;
+        // Slots this program cannot name, occupied for its whole duration. Every capacity
+        // question below is asked about resident.size() + foreign, never resident.size() alone.
+        const std::size_t foreign = req.foreign_held_slots;
+        std::size_t peak_residency = resident.size() + foreign;
+        std::size_t credit_stalls = 0, resident_feeds = 0;
 
         // SEEDED MORE THAN THE MACHINE HOLDS: refuse here, before anything is scheduled.
         // The per-op check below cannot catch it, because it only runs when an op needs a
         // NEW slot -- so a program whose every tile is already seeded, or one with no ops
         // at all, would run to completion over an L3 that was overfull from cycle zero and
         // report a peak residency above its own capacity.
-        if (l3_capacity != 0 && resident.size() > static_cast<std::size_t>(l3_capacity))
+        if (l3_capacity != 0 && resident.size() + foreign > static_cast<std::size_t>(l3_capacity))
             throw std::runtime_error(
-                "TileTransactionExecutor: " + std::to_string(resident.size()) +
-                " tiles were seeded resident but this L3 holds " +
+                "TileTransactionExecutor: " + std::to_string(resident.size() + foreign) +
+                " tiles were seeded resident or held elsewhere by the caller (" +
+                std::to_string(foreign) + " unnamed) but this L3 holds " +
                 std::to_string(l3_capacity) + ". The initial residency does not fit the L3 "
                 "budget — raise l3_tiles, or release tiles before this run.");
 
@@ -393,13 +411,15 @@ public:
         // A run whose caller-held set does not fit cannot finish: nothing ever releases those
         // slots, so the wedge is certain. Saying so here names the cause; reaching it through
         // the wedge path would report a dependency stall and make the reader find the cause.
-        if (l3_capacity != 0 && held.size() > static_cast<std::size_t>(l3_capacity))
+        if (l3_capacity != 0 && held.size() + foreign > static_cast<std::size_t>(l3_capacity))
             throw std::runtime_error(
-                "TileTransactionExecutor: the caller holds " + std::to_string(held.size()) +
+                "TileTransactionExecutor: the caller holds " +
+                std::to_string(held.size() + foreign) +
                 " tiles at the end of this run (" +
                 std::to_string(req.initially_resident.size()) + " seeded, " +
                 std::to_string(held.size() - req.initially_resident.size()) +
-                " newly retained) but this L3 holds " + std::to_string(l3_capacity) +
+                " newly retained, " + std::to_string(foreign) +
+                " unnamed) but this L3 holds " + std::to_string(l3_capacity) +
                 ". Nothing releases a held tile, so the run cannot complete — retain "
                 "fewer tiles, or raise l3_tiles.");
 
@@ -413,11 +433,11 @@ public:
         auto has_capacity = [&](std::size_t op) {
             if (l3_capacity == 0) return true;            // unbounded
             const std::size_t need = needed_slots(op);
-            return resident.size() + need <= l3_capacity;
+            return resident.size() + foreign + need <= l3_capacity;
         };
         auto acquire = [&](std::size_t op) {
             for (const std::string& k : op_tiles[op]) resident.insert(k);
-            peak_residency = std::max(peak_residency, resident.size());
+            peak_residency = std::max(peak_residency, resident.size() + foreign);
         };
         auto release_after = [&](std::size_t op) {
             for (const std::string& k : op_tiles[op]) {
@@ -863,7 +883,7 @@ public:
                 if (blocked_on_credit > 0) {
                     why = "\n  " + std::to_string(blocked_on_credit) +
                           " op(s) are dependency-ready but cannot get an L3 slot: " +
-                          std::to_string(resident.size()) + " of " +
+                          std::to_string(resident.size() + foreign) + " of " +
                           std::to_string(l3_capacity) + " tiles resident. The program's "
                           "live set does not fit this L3 budget — raise l3_tiles, or "
                           "re-tile so fewer tiles are live at once.";
