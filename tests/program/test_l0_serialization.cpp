@@ -514,6 +514,44 @@ TEST_CASE("values are exact, including the ones a stream cannot parse",
         }
 }
 
+TEST_CASE("a value a float cannot hold is refused, not silently changed",
+          "[program][serialize][values][adversarial]") {
+    // Read via double, a number outside float's range parses cleanly -- so the reader has
+    // to refuse it explicitly. Narrowing 1e100 is undefined behaviour, and 1e-100 would
+    // quietly become 0.0f: an input changed by loading it.
+    auto cause_of = [](const std::string& text) {
+        try {
+            from_string(text);
+        } catch (const FormatError& e) {
+            return e.cause();
+        }
+        FAIL("expected a FormatError");
+        return FormatError::Cause::Truncated;
+    };
+    const std::string valued = "KPUL0 1.1.0\nMIN_CONSUMER 1.1.0\nVALUES inline\n"
+                               "OPERAND \"A\" rows=1 cols=1 tile_rows=1 tile_cols=1\n";
+    const std::string kernel = "KPUL0 1.0.0\nMIN_CONSUMER 1.0.0\n"
+                               "OPERAND \"A\" rows=16 cols=16 tile_rows=16 tile_cols=16\n"
+                               "OPERAND \"B\" rows=16 cols=16 tile_rows=16 tile_cols=16\n"
+                               "OPERAND \"C\" rows=16 cols=16 tile_rows=16 tile_cols=16\n";
+    const std::string mm = "OP kind=" + std::string(to_string(TileOpKind::MatMulAccum)) +
+                           " in=A:0,0;B:0,0 out=C:0,0 alpha=";
+
+    for (const char* bad : {"1e100", "-1e100", "3.5e38", "1e-100", "-1e-100", "1e-46"}) {
+        INFO(bad);
+        CHECK(cause_of(valued + "VALUES_ROW \"A\" 0 " + bad + "\nEND\n") ==
+              FormatError::Cause::MalformedRecord);
+        CHECK(cause_of(kernel + mm + bad + "\nEND\n") == FormatError::Cause::MalformedRecord);
+    }
+
+    // The edges that ARE floats still load: an explicit zero, and both range limits.
+    for (const char* ok : {"0", "-0", "3.40282347e+38", "-3.40282347e+38", "1.40129846e-45"}) {
+        INFO(ok);
+        CHECK_NOTHROW(from_string(valued + "VALUES_ROW \"A\" 0 " + ok + "\nEND\n"));
+        CHECK_NOTHROW(from_string(kernel + mm + ok + "\nEND\n"));
+    }
+}
+
 TEST_CASE("values are written one row per record, so a diff is readable",
           "[program][serialize][values]") {
     // §5's justification for text only holds if a change shows up small. One record per

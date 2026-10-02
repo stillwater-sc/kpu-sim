@@ -28,3 +28,12 @@
 ## Follow-up
 - Consider a macOS job in `.github/workflows/cmake-multi-platform.yml`; both failures
   were macOS-only and invisible to CI.
+
+## Review follow-up (PR #309)
+- My `isinf`-after-narrowing check was itself wrong: narrowing a finite double outside
+  float's range is undefined behaviour, so the check came too late. Range is now checked
+  before the cast, against FLT_MAX + half an ulp (`0x1.ffffffp+127`).
+- A nonzero value that narrows to zero (`1e-100`) is now refused instead of silently
+  loading as 0.0f. Denormals are still kept exactly.
+- New test: "a value a float cannot hold is refused, not silently changed", covering
+  VALUES_ROW and OP alpha. ctest: 187/187.

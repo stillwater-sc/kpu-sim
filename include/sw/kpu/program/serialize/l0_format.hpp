@@ -234,12 +234,24 @@ inline float parse_float(const std::string& s, const std::string& where) {
     is.imbue(std::locale::classic());       // never the caller's decimal separator
     double d = 0.0;
     is >> d;
-    const float v = static_cast<float>(d);
-    // Overflow is judged after narrowing: FLT_MAX's own 9-digit text is slightly above
-    // FLT_MAX as a double, yet rounds back to it.
-    if (!is || !is.eof() || std::isinf(v))
+    if (!is || !is.eof())
         throw FormatError(FormatError::Cause::MalformedRecord,
                           "l0: " + where + ": '" + s + "' is not a number");
+    // RANGE IS CHECKED BEFORE THE CAST: narrowing a finite double outside float's range is
+    // undefined behaviour, so testing the result for inf afterwards would be too late. The
+    // bound is FLT_MAX plus half an ulp, the first value that rounds to inf, rather than
+    // FLT_MAX itself -- FLT_MAX's own 9-digit text is slightly above FLT_MAX as a double,
+    // yet rounds back to it.
+    constexpr double kFirstOverflow = 0x1.ffffffp+127;
+    if (std::fabs(d) >= kFirstOverflow)
+        throw FormatError(FormatError::Cause::MalformedRecord,
+                          "l0: " + where + ": '" + s + "' is outside the range of a float");
+    const float v = static_cast<float>(d);
+    // Underflow to zero would silently change the value; a denormal is kept exactly.
+    if (v == 0.0f && d != 0.0)
+        throw FormatError(FormatError::Cause::MalformedRecord,
+                          "l0: " + where + ": '" + s + "' is too small for a float, and "
+                          "would read back as zero");
     return v;
 }
 
