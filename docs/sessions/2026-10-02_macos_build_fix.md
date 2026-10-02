@@ -25,9 +25,11 @@
 - `cmake --build build`: clean.
 - `ctest`: 187/187 passed.
 
-## Follow-up
-- Consider a macOS job in `.github/workflows/cmake-multi-platform.yml`; both failures
-  were macOS-only and invisible to CI.
+## CI coverage
+- Added `macos-latest` / Apple Clang to `.github/workflows/cmake-multi-platform.yml`.
+  The Linux clang job links libstdc++, so before this no CI job exercised libc++.
+- Verified locally first with CI's own preset (`release-werror`, -Werror): clean build,
+  `ctest -LE "performance|benchmark"` 179/179.
 
 ## Review follow-up (PR #309)
 - My `isinf`-after-narrowing check was itself wrong: narrowing a finite double outside

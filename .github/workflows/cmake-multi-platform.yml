@@ -26,10 +26,16 @@ jobs:
       # 1. <Windows, Release, latest MSVC compiler toolchain on the default runner image, default generator>
       # 2. <Linux, Release, latest GCC compiler toolchain on the default runner image, default generator>
       # 3. <Linux, Release, latest Clang compiler toolchain on the default runner image, default generator>
+      # 4. <macOS, Release, Apple Clang (libc++) on the default runner image, default generator>
+      #
+      # macOS is here for libc++, not for the OS: the Linux clang job links libstdc++, so
+      # without it no job runs libc++ at all. Two macOS-only failures reached main unseen
+      # that way -- fmt 10.x not compiling under Apple Clang, and libc++'s operator>> refusing
+      # a denormal float (see docs/sessions/2026-10-02_macos_build_fix.md).
       #
       # To add more build types (Release, Debug, RelWithDebInfo, etc.) customize the build_type list.
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        os: [ubuntu-latest, windows-latest, macos-latest]
         build_type: [Release]
         c_compiler: [gcc, clang, cl]
         include:
@@ -42,12 +48,19 @@ jobs:
           - os: ubuntu-latest
             c_compiler: clang
             cpp_compiler: clang++
+          - os: macos-latest
+            c_compiler: clang
+            cpp_compiler: clang++
         exclude:
           - os: windows-latest
             c_compiler: gcc
           - os: windows-latest
             c_compiler: clang
           - os: ubuntu-latest
+            c_compiler: cl
+          - os: macos-latest
+            c_compiler: gcc
+          - os: macos-latest
             c_compiler: cl
 
     steps:
