@@ -224,11 +224,20 @@ inline float parse_float(const std::string& s, const std::string& where) {
     if (s == "nan")  return std::numeric_limits<float>::quiet_NaN();
     if (s == "inf")  return std::numeric_limits<float>::infinity();
     if (s == "-inf") return -std::numeric_limits<float>::infinity();
+    // Read as double, then narrow. libc++'s operator>> into a float fails on a denormal
+    // (strtof reports ERANGE, and the stream turns that into failbit), so denorm_min did not
+    // read back on macOS; as a double it is an ordinary value. Narrowing is exact for what
+    // exact_float writes: 9 significant digits put the text within ~5e-9 (relative) of its
+    // float, far from any rounding midpoint, so the double step cannot double-round.
+    // std::from_chars(float) would avoid the detour, but needs macOS 26 at runtime.
     std::istringstream is(s);
     is.imbue(std::locale::classic());       // never the caller's decimal separator
-    float v = 0.0f;
-    is >> v;
-    if (!is || !is.eof())
+    double d = 0.0;
+    is >> d;
+    const float v = static_cast<float>(d);
+    // Overflow is judged after narrowing: FLT_MAX's own 9-digit text is slightly above
+    // FLT_MAX as a double, yet rounds back to it.
+    if (!is || !is.eof() || std::isinf(v))
         throw FormatError(FormatError::Cause::MalformedRecord,
                           "l0: " + where + ": '" + s + "' is not a number");
     return v;

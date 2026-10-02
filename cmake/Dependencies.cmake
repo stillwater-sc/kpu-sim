@@ -84,9 +84,11 @@ kpu_add_dependency(nlohmann_json
     TARGETS nlohmann_json
 )
 
+# fmt 11.2.0 matches the copy spdlog v1.15.3 bundles. fmt 10.x fails to compile under
+# Apple Clang 21 (FMT_STRING is "not a constant expression" in its consteval checks).
 kpu_add_dependency(fmt
     GIT_REPOSITORY https://github.com/fmtlib/fmt.git
-    GIT_TAG 10.1.1
+    GIT_TAG 11.2.0
     TARGETS fmt fmt-header-only
 )
 
