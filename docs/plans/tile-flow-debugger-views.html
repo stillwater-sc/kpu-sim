@@ -1,0 +1,825 @@
+<title>KPU Tile-Flow Debugger</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Sans+Condensed:wght@500;600&display=swap">
+<style>
+/* Layout: an instrument panel. Each step is a band: the physical view on the left, the logical
+   view and diagnostics on the right, with one shared time cursor across the page. */
+:root {
+  --bg: #f4f5f6;
+  --panel: #fcfcfb;
+  --ink: #15181c;
+  --ink-2: #4a5059;
+  --ink-3: #7b828c;
+  --line: #d9dce0;
+  --grid: #e8eaed;
+  --die: #eceef0;
+  --l3: #dfe3e8;
+  --cf: #e6e2da;
+  --cpu: #dcdfe9;
+  --slot-empty: #f7f8f9;
+  --op1: #2a78d6;  /* gemm0       categorical slot 1 */
+  --op2: #eb6834;  /* bias_relu   categorical slot 2 */
+  --op3: #1baf7a;  /* gemm1       categorical slot 3 */
+  --crit: #d03b3b;
+  --warn: #fab219;
+  --good: #0ca30c;
+  --accent: #2a5db0;
+  --hatch: #b9bec6;
+  --font-ui: "IBM Plex Sans", "Segoe UI", system-ui, sans-serif;
+  --font-head: "IBM Plex Sans Condensed", "Arial Narrow", "IBM Plex Sans", sans-serif;
+  --font-data: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #121416; --panel: #1a1c1f; --ink: #eef0f2; --ink-2: #b9bfc7; --ink-3: #8a919b;
+    --line: #2e3237; --grid: #25292d; --die: #202327; --l3: #2a3038; --cf: #322e28; --cpu: #2a2d3a;
+    --slot-empty: #23272b; --op1: #3987e5; --op2: #d95926; --op3: #199e70; --accent: #7aa7ea;
+    --hatch: #4a5058; color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #121416; --panel: #1a1c1f; --ink: #eef0f2; --ink-2: #b9bfc7; --ink-3: #8a919b;
+  --line: #2e3237; --grid: #25292d; --die: #202327; --l3: #2a3038; --cf: #322e28; --cpu: #2a2d3a;
+  --slot-empty: #23272b; --op1: #3987e5; --op2: #d95926; --op3: #199e70; --accent: #7aa7ea;
+  --hatch: #4a5058; color-scheme: dark;
+}
+* { box-sizing: border-box; }
+body { background: var(--bg); color: var(--ink); font-family: var(--font-ui); font-size: 14px; line-height: 1.5; }
+.wrap { max-width: 1320px; margin: 0 auto; padding-inline: 20px; padding-block: 24px 64px; display: grid; gap: 28px; }
+header.top { display: grid; gap: 10px; }
+.eyebrow { font-family: var(--font-data); font-size: 12px; letter-spacing: .06em; text-transform: uppercase; color: var(--ink-3); }
+h1 { font-family: var(--font-head); font-weight: 600; font-size: clamp(26px, 3.4vw, 36px); margin: 0; letter-spacing: -.01em; text-wrap: balance; }
+h2 { font-family: var(--font-head); font-weight: 600; font-size: 22px; margin: 0; text-wrap: balance; }
+h3 { font-size: 13px; font-weight: 600; margin: 0; color: var(--ink-2); letter-spacing: .02em; }
+p { margin: 0; max-width: 72ch; color: var(--ink-2); }
+.synthetic { display: flex; gap: 10px; align-items: flex-start; border: 1px dashed var(--line); background: var(--panel); padding: 10px 14px; border-radius: 6px; max-width: 900px; }
+.synthetic b { color: var(--ink); }
+.tag { font-family: var(--font-data); font-size: 11px; border: 1px solid var(--line); border-radius: 3px; padding: 1px 6px; color: var(--ink-2); white-space: nowrap; }
+
+/* transport: the shared time cursor */
+.transport { position: sticky; top: env(safe-area-inset-top, 0px); z-index: 5; background: color-mix(in srgb, var(--bg) 92%, transparent); backdrop-filter: blur(6px); border-bottom: 1px solid var(--line); padding-block: 10px; display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
+.transport button, .seg button, select { font: 500 13px var(--font-ui); color: var(--ink); background: var(--panel); border: 1px solid var(--line); border-radius: 5px; padding: 5px 12px; cursor: pointer; }
+.transport button:hover, .seg button:hover { border-color: var(--ink-3); }
+button:focus-visible, select:focus-visible, input:focus-visible, canvas:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.transport input[type=range] { flex: 1 1 280px; min-width: 0; accent-color: var(--accent); }
+.clock { font-family: var(--font-data); font-variant-numeric: tabular-nums; font-size: 13px; min-width: 15ch; }
+.phase-now { font-family: var(--font-data); font-size: 12px; color: var(--ink-2); }
+
+.ladder { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 8px; }
+.ladder a { display: grid; gap: 2px; text-decoration: none; color: inherit; background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 10px 12px; }
+.ladder a:hover { border-color: var(--ink-3); }
+.ladder .lv { font-family: var(--font-data); font-size: 12px; color: var(--accent); }
+.ladder .nm { font-weight: 600; }
+.ladder .q { font-size: 12px; color: var(--ink-3); }
+.ladder .future { opacity: .6; }
+
+section.step { display: grid; gap: 14px; }
+.step-head { display: grid; gap: 6px; border-top: 2px solid var(--ink); padding-top: 12px; }
+.step-head .num { font-family: var(--font-data); font-size: 12px; color: var(--ink-3); }
+.grid2 { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr); gap: 16px; align-items: start; }
+.panel { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 14px; display: grid; gap: 10px; min-width: 0; }
+.panel-head { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+.canvas-box { position: relative; width: 100%; }
+canvas { display: block; width: 100%; }
+.legend { display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 12px; color: var(--ink-2); align-items: center; }
+.sw { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 6px; vertical-align: -1px; }
+.hatch-sw { background: repeating-linear-gradient(45deg, var(--hatch) 0 2px, transparent 2px 5px); border: 1px solid var(--hatch); }
+.seg { display: inline-flex; flex-wrap: wrap; gap: 4px; }
+.seg button[aria-pressed="true"] { background: var(--ink); color: var(--panel); border-color: var(--ink); }
+.caption { font-size: 12px; color: var(--ink-3); max-width: 80ch; }
+
+.inspector { font-size: 13px; display: grid; gap: 8px; }
+.inspector .kv { display: grid; grid-template-columns: auto 1fr; gap: 2px 14px; font-family: var(--font-data); font-size: 12px; font-variant-numeric: tabular-nums; }
+.inspector .kv span:nth-child(odd) { color: var(--ink-3); }
+.meter { height: 8px; border-radius: 4px; background: var(--grid); overflow: hidden; }
+.meter > i { display: block; height: 100%; background: var(--accent); }
+.meter.over > i { background: var(--crit); }
+
+.diag { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.diag li { display: grid; grid-template-columns: auto 1fr; gap: 10px; align-items: start; font-size: 13px; }
+.chip { font: 600 11px var(--font-data); text-transform: uppercase; letter-spacing: .04em; border-radius: 3px; padding: 2px 6px; white-space: nowrap; border: 1px solid; }
+.chip.crit { color: var(--crit); border-color: var(--crit); }
+.chip.warn { color: var(--ink); border-color: var(--warn); background: color-mix(in srgb, var(--warn) 22%, transparent); }
+.chip.info { color: var(--ink-2); border-color: var(--line); }
+.diag b { font-weight: 600; }
+.diag button { font: inherit; color: var(--accent); background: none; border: 0; padding: 0; cursor: pointer; text-decoration: underline; text-underline-offset: 2px; }
+
+table { border-collapse: collapse; width: 100%; font-size: 12px; font-variant-numeric: tabular-nums; }
+th, td { text-align: right; padding: 5px 8px; border-bottom: 1px solid var(--grid); white-space: nowrap; }
+th:first-child, td:first-child { text-align: left; }
+th { font-weight: 600; color: var(--ink-3); font-size: 11px; text-transform: uppercase; letter-spacing: .04em; }
+td { font-family: var(--font-data); }
+tr.sel td { background: color-mix(in srgb, var(--accent) 14%, transparent); }
+tbody tr { cursor: pointer; }
+tbody tr:hover td { background: var(--grid); }
+.tbl-scroll { overflow-x: auto; max-height: 320px; overflow-y: auto; }
+
+.tooltip { position: fixed; pointer-events: none; z-index: 20; background: var(--panel); color: var(--ink); border: 1px solid var(--line); border-radius: 6px; padding: 8px 10px; font-size: 12px; box-shadow: 0 6px 20px rgba(0,0,0,.18); max-width: 300px; }
+.tooltip .t { font-weight: 600; margin-bottom: 4px; }
+.tooltip .r { font-family: var(--font-data); font-variant-numeric: tabular-nums; color: var(--ink-2); }
+
+.review { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 10px; }
+.review div { background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 10px 12px; font-size: 13px; color: var(--ink-2); }
+.review b { color: var(--ink); display: block; margin-bottom: 2px; font-family: var(--font-data); font-size: 12px; }
+@media (max-width: 900px) {
+  .grid2 { grid-template-columns: minmax(0, 1fr); }
+  .ladder { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (prefers-reduced-motion: reduce) { * { scroll-behavior: auto !important; } }
+</style>
+
+<div class="wrap">
+  <header class="top">
+    <div class="eyebrow">kpu-sim · design review · extends #286</div>
+    <h1>KPU Tile-Flow Debugger</h1>
+    <p>Three hypothesized views of one run on a CPU + KPU SoC: the system-level schedule of tile movement, the lineage of tiles that meet in one compute tile, and a heat map of activity and energy on the floorplan. All three share one time cursor and one key: the naming-map resource that every event is recorded against.</p>
+    <div class="synthetic"><span class="tag">synthetic</span><span><b>Nothing on this page is simulator output.</b> The schedule is generated in the page so that the views can be judged before the record exists: 3 operators on an 8×8 checkerboard (32 L3 tiles, 32 compute tiles), an attached RV64 CPU, and four memory controllers. A hot spot and a misaligned operand are planted on purpose so that the diagnostics have something to find.</span></div>
+  </header>
+
+  <nav class="ladder" aria-label="Level of detail">
+    <a href="#heat"><span class="lv">S0 · die</span><span class="nm">Blocks</span><span class="q">Where is the activity?</span></a>
+    <a href="#schedule"><span class="lv">S1 · array</span><span class="nm">Tile pixels</span><span class="q">Is the schedule flowing?</span></a>
+    <a href="#schedule"><span class="lv">S2 · station</span><span class="nm">One buffer</span><span class="q">What is in it, who waits?</span></a>
+    <a href="#lineage"><span class="lv">S3 · tile</span><span class="nm">Lineage</span><span class="q">Why was this late?</span></a>
+    <a class="future" href="#review"><span class="lv">S4 · fabric</span><span class="nm">PE wavefront</span><span class="q">L-CA only, later</span></a>
+  </nav>
+
+  <div class="transport" role="group" aria-label="Time cursor">
+    <button id="play" type="button">Play</button>
+    <button id="stepBack" type="button" aria-label="Step back 50 cycles">−50</button>
+    <button id="stepFwd" type="button" aria-label="Step forward 50 cycles">+50</button>
+    <input id="scrub" type="range" min="0" max="1000" value="0" aria-label="Cycle">
+    <span class="clock" id="clock">cycle 0</span>
+    <span class="phase-now" id="phaseNow"></span>
+  </div>
+
+  <!-- ============ STEP 1 ============ -->
+  <section class="step" id="schedule">
+    <div class="step-head">
+      <span class="num">Step 1 of 3</span>
+      <h2>System schedule: validate occupancy and flow</h2>
+      <p>Physical on the left: every resident tile is one pixel in an L3 slot, colored by operator, and transits draw as streaks. Logical on the right: the same stations as swimlanes over time. Click a block to inspect it, and click a swimlane to move the cursor.</p>
+    </div>
+    <div class="grid2">
+      <div class="panel">
+        <div class="panel-head"><h3>1a · Floorplan at the cursor (S1)</h3><span class="tag">generated:checkerboard 8×8</span></div>
+        <div class="canvas-box"><canvas id="fp" tabindex="0" aria-label="SoC floorplan with resident tiles at the current cycle"></canvas></div>
+        <div class="legend" id="opLegend"></div>
+      </div>
+      <div class="panel">
+        <div class="panel-head"><h3>Inspector (S2)</h3><span class="tag" id="inspTag">select a block</span></div>
+        <div class="inspector" id="insp"><p class="caption">Click an L3 tile, a compute tile, a memory controller or the CPU on the floorplan.</p></div>
+        <h3>Diagnostics</h3>
+        <ul class="diag" id="diag"></ul>
+      </div>
+    </div>
+    <div class="panel">
+      <div class="panel-head"><h3>1b · Station swimlanes: occupancy ÷ capacity, hue = dominant operator</h3><span class="tag">LOD pyramid k = auto</span></div>
+      <div class="canvas-box"><canvas id="lanes" tabindex="0" aria-label="Occupancy swimlanes per station over time"></canvas></div>
+      <div class="legend"><span><span class="sw" style="background:var(--crit)"></span>▲ over capacity (a bug signal, not a hot spot)</span><span>opacity = fill fraction</span><span>CPU row: descriptors per bin · DRAM rows: DMA lanes busy · CF rows: compute busy</span></div>
+    </div>
+    <div class="panel">
+      <div class="panel-head"><h3>1c · Operator phase strip: tiles resident per operator</h3><span class="caption">overlap = the prefetch freedom from reserve-then-launch</span></div>
+      <div class="canvas-box"><canvas id="phase" aria-label="Operator phases over time"></canvas></div>
+    </div>
+  </section>
+
+  <!-- ============ STEP 2 ============ -->
+  <section class="step" id="lineage">
+    <div class="step-head">
+      <span class="num">Step 2 of 3</span>
+      <h2>Tile lineage: follow the tiles that meet in one compute tile</h2>
+      <p>Pick a compute. The view takes its backward causal slice: the descriptor that licensed each operand, the DMA, every buffer it sat in, and the wait before compute. A line is thick while resident, thin while in transit and dotted while waiting, and each wait is labelled with its cause.</p>
+    </div>
+    <div class="grid2">
+      <div class="panel">
+        <div class="panel-head"><h3 id="linTitle">2a · Metro view</h3><span class="tag" id="linTag"></span></div>
+        <div class="canvas-box"><canvas id="metro" aria-label="Lineage of the selected compute's operand tiles"></canvas></div>
+        <div class="legend"><span><span class="sw" style="background:var(--op1)"></span>A operand</span><span><span class="sw" style="background:var(--op2)"></span>B operand</span><span><span class="sw" style="background:var(--op3)"></span>compute</span><span>━ resident · ─ transit · ┄ waiting (cause labelled)</span></div>
+      </div>
+      <div class="panel">
+        <div class="panel-head"><h3>2b · Alignment at the CF</h3><label class="caption" for="cfPick">compute tile <select id="cfPick"></select></label></div>
+        <div class="tbl-scroll"><table id="align"><thead><tr><th>task</th><th>op</th><th>A in L1</th><th>B in L1</th><th>skew</th><th>start delay</th><th>cause</th></tr></thead><tbody></tbody></table></div>
+        <p class="caption">Skew = last operand arrival − first. Start delay = compute start − last arrival. A large skew means one operand sat in L1 waiting for its partner: the misalignment signal.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ STEP 3 ============ -->
+  <section class="step" id="heat">
+    <div class="step-head">
+      <span class="num">Step 3 of 3</span>
+      <h2>Heat: activity, then energy, then temperature</h2>
+      <p>The S0 die view aggregated over a time window. Energy is attributed per event with the constants from <code>characterize/device_model.hpp</code> (20 pJ/byte moved, 1 pJ/MAC, 5 pJ leakage per tile per cycle). Thermal is a diffusion model over the floorplan and says so.</p>
+    </div>
+    <div class="grid2">
+      <div class="panel">
+        <div class="panel-head">
+          <div class="seg" role="group" aria-label="Metric" id="metricSeg">
+            <button type="button" data-m="occ" aria-pressed="true">Occupancy-time</button>
+            <button type="button" data-m="bytes" aria-pressed="false">Bytes moved</button>
+            <button type="button" data-m="energy" aria-pressed="false">Energy</button>
+            <button type="button" data-m="thermal" aria-pressed="false">Thermal (model)</button>
+          </div>
+          <label class="caption" for="winPick">window <select id="winPick"></select></label>
+        </div>
+        <div class="canvas-box"><canvas id="heatc" tabindex="0" aria-label="Heat map on the floorplan"></canvas></div>
+        <div class="legend" id="heatLegend"></div>
+      </div>
+      <div class="panel">
+        <h3>Top blocks in this window</h3>
+        <div class="tbl-scroll"><table id="heatTbl"><thead><tr><th>block</th><th id="heatCol">value</th><th>share</th></tr></thead><tbody></tbody></table></div>
+        <p class="caption" id="heatNote"></p>
+      </div>
+    </div>
+  </section>
+
+  <section class="step" id="review">
+    <div class="step-head"><span class="num">For the review</span><h2>Decisions these views depend on</h2></div>
+    <div class="review">
+      <div><b>Q1 · format</b>A columnar <code>.tflow</code> bundle (typed arrays + LOD pyramid), with Chrome trace kept as a derived export. This supersedes #286's "no new format" clause.</div>
+      <div><b>Q2 · L3 at L-T1</b>Today L3 is a pooled capacity. These slot pixels need the executor to bind each tile to a concrete L3 tile and slot. Until it does, the view draws one pooled station.</div>
+      <div><b>Q3 · floorplan source</b>Generated from the deployment (shown here), or imported from the real SoC floorplan and validated against the naming map.</div>
+      <div><b>Q4 · CPU detail</b>One block, or cores + SRAM + descriptor rings as separate blocks, so that MMIO traffic lands where it physically is.</div>
+      <div><b>Q5 · viewer tech</b>Plain static HTML with Canvas2D/WebGL and no build step, as on this page.</div>
+      <div><b>Q6 · color budget</b>Three operator hues validate together. Real models color by operator class and distinguish individual operators on hover.</div>
+    </div>
+  </section>
+</div>
+<div class="tooltip" id="tip" hidden></div>
+
+<script>
+(() => {
+"use strict";
+// ---------------------------------------------------------------- utilities
+const $ = id => document.getElementById(id);
+const tok = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+function rng(seed) { return () => { seed |= 0; seed = seed + 0x6D2B79F5 | 0; let t = Math.imul(seed ^ seed >>> 15, 1 | seed); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }; }
+const R = rng(305);
+function fit(canvas, cssH) {
+  const w = canvas.parentElement.clientWidth, dpr = window.devicePixelRatio || 1;
+  canvas.style.height = cssH + "px";
+  canvas.width = Math.max(1, Math.round(w * dpr)); canvas.height = Math.round(cssH * dpr);
+  const ctx = canvas.getContext("2d"); ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  return { ctx, w, h: cssH };
+}
+const fmt = n => n.toLocaleString("en-US");
+const tip = $("tip");
+function showTip(e, html) { tip.innerHTML = html; tip.hidden = false; const x = Math.min(e.clientX + 14, innerWidth - tip.offsetWidth - 8); const y = Math.min(e.clientY + 14, innerHeight - tip.offsetHeight - 8); tip.style.left = x + "px"; tip.style.top = y + "px"; }
+function hideTip() { tip.hidden = true; }
+
+// ---------------------------------------------------------------- the SoC (generated floorplan)
+const N = 8, DW = 780, DH = 650;
+const ARR = { x: 214, y: 56, cs: 67 };            // die units
+const L3 = [], CF = [];
+const cellAt = {};
+for (let r = 0; r < N; r++) for (let c = 0; c < N; c++) {
+  const x = ARR.x + c * ARR.cs, y = ARR.y + r * ARR.cs;
+  if ((r + c) % 2 === 0) { const b = { kind: "L3", id: L3.length, r, c, x, y, w: ARR.cs - 4, h: ARR.cs - 4, cap: 63 /* 8×8 grid; the last cell is the router hub */ }; b.name = `dev0/l3[${b.id}]`; L3.push(b); cellAt[r + "," + c] = b; }
+  else { const b = { kind: "CF", id: CF.length, r, c, x, y, w: ARR.cs - 4, h: ARR.cs - 4 }; b.name = `dev0/cf[${b.id}]`; CF.push(b); cellAt[r + "," + c] = b; }
+}
+const MC = [
+  { kind: "MC", id: 0, x: 240, y: 10, w: 190, h: 36 }, { kind: "MC", id: 1, x: 520, y: 10, w: 190, h: 36 },
+  { kind: "MC", id: 2, x: 240, y: 604, w: 190, h: 36 }, { kind: "MC", id: 3, x: 520, y: 604, w: 190, h: 36 },
+];
+MC.forEach(m => m.name = `dev0/mc[${m.id}]`);
+const CPU = { kind: "CPU", id: 0, x: 14, y: 56, w: 180, h: 330, name: "cpu0" };
+const IO = { kind: "IO", id: 0, x: 14, y: 400, w: 180, h: 192, name: "io0" };
+const blocks = [CPU, IO, ...MC, ...L3, ...CF];
+const center = b => [b.x + b.w / 2, b.y + b.h / 2];
+const mcOf = l3 => (l3.r < N / 2 ? 0 : 2) + (l3.c < N / 2 ? 0 : 1);
+// BlockMovers live on the L3 tile, one per edge that faces a compute tile (0 N, 1 E, 2 S, 3 W).
+const EDGE = ["N", "E", "S", "W"];
+function edgeIndex(l3, cf) { return cf.r < l3.r ? 0 : cf.c > l3.c ? 1 : cf.r > l3.r ? 2 : 3; }
+function moverPoint(l3, e) { const [cx, cy] = center(l3); const hw = l3.w / 2, hh = l3.h / 2; return [[cx, l3.y], [l3.x + l3.w, cy], [cx, l3.y + l3.h], [l3.x, cy]][e]; }
+function hubPoint(l3) { return [l3.x + l3.w - 7, l3.y + l3.h - 7]; }
+L3.forEach(l => { l.edges = [0, 1, 2, 3].filter(e => { const [dr, dc] = [[-1, 0], [0, 1], [1, 0], [0, -1]][e]; const b = cellAt[(l.r + dr) + "," + (l.c + dc)]; return b && b.kind === "CF"; }); });
+function neighborsL3(cf) { const out = []; for (const [dr, dc] of [[-1,0],[1,0],[0,-1],[0,1]]) { const b = cellAt[(cf.r+dr)+","+(cf.c+dc)]; if (b && b.kind === "L3") out.push(b); } return out; }
+
+// ---------------------------------------------------------------- the workload (synthetic)
+const OPS = [
+  { name: "gemm0", cls: "GEMM", token: "--op1", tasks: 40, comp: 46, inputs: 2 },
+  { name: "bias_relu", cls: "elementwise", token: "--op2", tasks: 14, comp: 18, inputs: 1 },
+  { name: "gemm1", cls: "GEMM", token: "--op3", tasks: 40, comp: 46, inputs: 2 },
+];
+const HOT_L3 = 13, HOT_CFS = [5, 6, 9, 10, 13, 14, 17, 18, 21, 22, 25, 26], LATE_CF = 9;
+const LANES = 6, DMA_CYC = 38, BM_CYC = 14, STR_CYC = 7, NOC_CYC = 22, TILE_BYTES = 1024, TILE_MACS = 4096;
+const laneFree = MC.map(() => new Array(LANES).fill(0));
+const residency = [];   // {tile, st:'L3'|'L2'|'L1', sid, t0, t1, op}
+const transits = [];    // {tile, kind:'DMA'|'NOC'|'BM'|'STR', from:[x,y], to:[x,y], t0, t1, op, mc}
+const computes = [];    // {cf, op, task, t0, t1, a, b}
+const descriptors = []; // {t, kind, text, op}
+const tiles = [];       // {id, op, role, label, cf, task}
+const dmaBusy = MC.map(() => []); // intervals [s,e]
+
+function dma(mcId, req) {
+  const lanes = laneFree[mcId]; let best = 0;
+  for (let i = 1; i < lanes.length; i++) if (lanes[i] < lanes[best]) best = i;
+  const s = Math.max(req, lanes[best]), e = s + DMA_CYC + Math.floor(R() * 10);
+  lanes[best] = e; dmaBusy[mcId].push([s, e]);
+  return [s, e];
+}
+
+const state = CF.map((cf, i) => ({ prevEnd: 40 + i * 9 + Math.floor(R() * 30), bTile: null, bUses: 0, startedOp: -1 }));
+const TASK_LIST = [];
+OPS.forEach((op, oi) => { for (let k = 0; k < op.tasks; k++) TASK_LIST.push([oi, k]); });
+
+TASK_LIST.forEach(([oi, k], gk) => {
+  const op = OPS[oi];
+  CF.forEach(cf => {
+    const st = state[cf.id];
+    if (st.startedOp !== oi) {
+      st.startedOp = oi;
+      descriptors.push({ t: Math.max(0, st.prevEnd - 120), kind: "RESERVE", text: `RESERVE ${op.name} for cf[${cf.id}]`, op: oi });
+      st.bTile = null; st.bUses = 0;
+    }
+    const nbs = neighborsL3(cf);
+    const req = Math.max(0, st.prevEnd - 3 * (op.comp + 8));     // the orchestrator prefetches ~3 tasks ahead
+    const operandReady = [];
+    const roles = op.inputs === 2 ? ["A", "B"] : ["X"];
+    let entry = { cf: cf.id, op: oi, task: k, a: null, b: null };
+    roles.forEach((role, ri) => {
+      // B (weights) is reused for 4 consecutive tasks: resident longer, fetched once.
+      if (role === "B" && st.bTile && st.bUses < 4) {
+        st.bUses++;
+        const t = st.bTile;
+        const l1s = Math.max(t.l2Arrive, st.prevEnd - STR_CYC - 4);
+        const l1a = l1s + STR_CYC;
+        operandReady.push({ role, t1: l1a, tile: t, l1s, l1a, reused: true, cause: "data" });
+        return;
+      }
+      let l3 = nbs[(k + ri) % nbs.length];
+      let viaNoc = false;
+      const hot = oi === 2 && HOT_CFS.includes(cf.id);
+      if (hot) { l3 = L3[HOT_L3]; viaNoc = !nbs.includes(l3); }
+      const tid = tiles.length;
+      const label = `${op.name}.${role}[${Math.floor(k / 4)},${(k + cf.id) % 8}]`;
+      const tile = { id: tid, op: oi, role, label, cf: cf.id, task: k };
+      tiles.push(tile);
+      descriptors.push({ t: req, kind: "PLACE", text: `PLACE ${label} → l3[${l3.id}]`, op: oi });
+      const m = mcOf(l3);
+      const [ds, de] = dma(m, req + Math.floor(R() * 6));
+      transits.push({ tile: tid, kind: "DMA", from: center(MC[m]), to: center(l3), t0: ds, t1: de, op: oi, mc: m });
+      let l2s = Math.max(de + 2, st.prevEnd - (BM_CYC + STR_CYC + 30));
+      if (viaNoc) l2s += 30 + Math.floor(R() * 60) + (cf.id === LATE_CF ? 70 : 0);
+      const holdL3 = (role === "B" ? 4 * (op.comp + 6) : 0) + (hot ? 11 * (op.comp + 6) : 0);   // weights stay for reuse; the planted bug holds the hot tile's too
+      const moveCyc = viaNoc ? NOC_CYC + BM_CYC : BM_CYC;
+      if (viaNoc) {
+        // hub to hub over the NoC, driven by the source L3 tile, then the relay's facing-edge BlockMover
+        const relay = nbs.reduce((a, b) => (Math.hypot(b.r - l3.r, b.c - l3.c) < Math.hypot(a.r - l3.r, a.c - l3.c) ? b : a));
+        const e = edgeIndex(relay, cf);
+        transits.push({ tile: tid, kind: "NOC", from: hubPoint(l3), to: hubPoint(relay), t0: l2s, t1: l2s + NOC_CYC, op: oi, l3: l3.id, relay: relay.id });
+        transits.push({ tile: tid, kind: "BM", from: moverPoint(relay, e), to: center(cf), t0: l2s + NOC_CYC, t1: l2s + moveCyc, op: oi, l3: relay.id, edge: e, cf: cf.id });
+        tile.relay = relay.id;
+      } else {
+        const e = edgeIndex(l3, cf);
+        transits.push({ tile: tid, kind: "BM", from: moverPoint(l3, e), to: center(cf), t0: l2s, t1: l2s + moveCyc, op: oi, l3: l3.id, edge: e, cf: cf.id });
+      }
+      const l2a = l2s + moveCyc;
+      const l1s = Math.max(l2a + 1, st.prevEnd - STR_CYC - 6);
+      const l1a = l1s + STR_CYC;
+      tile.l2Arrive = l2a;
+      residency.push({ tile: tid, st: "L3", sid: l3.id, t0: de, t1: l2s + holdL3, op: oi });
+      tile.l3 = l3.id; tile.dma = [ds, de]; tile.req = req; tile.l2s = l2s; tile.l2a = l2a; tile.viaNoc = viaNoc; tile.mc = m;
+      operandReady.push({ role, t1: l1a, tile, l1s, l1a, reused: false, cause: viaNoc ? "NoC distance" : (ds - req > 20 ? "DMA lane" : "data") });
+      if (role === "B") { st.bTile = tile; st.bUses = 1; }
+    });
+    const lastArr = Math.max(...operandReady.map(o => o.l1a));
+    const start = Math.max(st.prevEnd + 2, lastArr + 1);
+    const end = start + op.comp + Math.floor(R() * 6);
+    descriptors.push({ t: start - 1, kind: "LAUNCH", text: `LAUNCH ${op.name}#${k} on cf[${cf.id}]`, op: oi });
+    operandReady.forEach(o => {
+      residency.push({ tile: o.tile.id, st: "L1", sid: cf.id, t0: o.l1a, t1: end, op: oi });
+      if (!o.reused) {
+        const l2End = o.role === "B" ? end + 3 * (op.comp + 8) : o.l1s;
+        residency.push({ tile: o.tile.id, st: "L2", sid: cf.id, t0: o.tile.l2a, t1: l2End, op: oi });
+      }
+      transits.push({ tile: o.tile.id, kind: "STR", from: center(cf), to: center(cf), t0: o.l1s, t1: o.l1a, op: oi, cf: cf.id });
+      if (o.role === "A" || o.role === "X") entry.a = o; else entry.b = o;
+    });
+    entry.t0 = start; entry.t1 = end; entry.lastArr = lastArr;
+    entry.cause = operandReady.reduce((w, o) => (o.l1a === lastArr ? o.cause : w), "data");
+    if (start > lastArr + 3) entry.cause = "CF busy";
+    computes.push(entry);
+    st.prevEnd = end;
+  });
+});
+descriptors.sort((a, b) => a.t - b.t);
+const T_END = Math.max(...computes.map(c => c.t1)) + 40;
+
+// ---------------------------------------------------------------- derived: slot binding + occupancy
+// Interval coloring per L3 tile: first free slot; none free -> OVER CAPACITY (drawn, never hidden).
+const l3Res = L3.map(() => []);
+residency.filter(r => r.st === "L3").forEach(r => l3Res[r.sid].push(r));
+const overIntervals = L3.map(() => []);
+l3Res.forEach((list, li) => {
+  list.sort((a, b) => a.t0 - b.t0);
+  const freeAt = new Array(L3[li].cap).fill(-1);
+  list.forEach(r => {
+    let s = -1; for (let i = 0; i < freeAt.length; i++) if (freeAt[i] <= r.t0) { s = i; break; }
+    if (s >= 0) { r.slot = s; freeAt[s] = r.t1; } else { r.slot = -1; overIntervals[li].push(r); }
+  });
+});
+function occAt(list, t) { let n = 0; for (const r of list) if (r.t0 <= t && t < r.t1) n++; return n; }
+
+// Swimlane bins: the LOD pyramid level chosen for this width.
+const NB = 220, BIN = T_END / NB;
+function binAccum(intervals, nb = NB) {
+  const tot = new Float32Array(nb), byOp = [new Float32Array(nb), new Float32Array(nb), new Float32Array(nb)], peak = new Float32Array(nb);
+  for (const r of intervals) {
+    const b0 = Math.max(0, Math.floor(r.t0 / BIN)), b1 = Math.min(nb - 1, Math.floor((r.t1 - 1e-6) / BIN));
+    for (let b = b0; b <= b1; b++) {
+      const ov = Math.min(r.t1, (b + 1) * BIN) - Math.max(r.t0, b * BIN);
+      if (ov > 0) { tot[b] += ov / BIN; byOp[r.op][b] += ov / BIN; }
+    }
+  }
+  return { tot, byOp, peak };
+}
+const rows = [];
+{
+  const cpuEv = descriptors.map(d => ({ t0: d.t, t1: d.t + 4, op: d.op }));
+  const b = binAccum(cpuEv); let mx = 0; b.tot.forEach(v => mx = Math.max(mx, v));
+  rows.push({ group: "CPU", label: "cpu0", block: CPU, cap: mx || 1, ...b });
+  MC.forEach(m => { const iv = transits.filter(x => x.kind === "DMA" && x.mc === m.id); const bb = binAccum(iv); rows.push({ group: "DRAM / DMA", label: `mc[${m.id}]`, block: m, cap: LANES, ...bb }); });
+  L3.forEach(l => { const bb = binAccum(l3Res[l.id]); rows.push({ group: "L3 tiles", label: `l3[${l.id}]`, block: l, cap: l.cap, ...bb }); });
+  CF.forEach(c => { const iv = computes.filter(x => x.cf === c.id).map(x => ({ t0: x.t0, t1: x.t1, op: x.op })); const bb = binAccum(iv); rows.push({ group: "Compute tiles", label: `cf[${c.id}]`, block: c, cap: 1, ...bb }); });
+}
+// exact over-capacity bins for L3 rows (from the slot binding, not the mean)
+rows.forEach(rw => { rw.over = new Uint8Array(NB); if (rw.block.kind === "L3") overIntervals[rw.block.id].forEach(r => { for (let b = Math.floor(r.t0 / BIN); b <= Math.min(NB - 1, Math.floor(r.t1 / BIN)); b++) rw.over[b] = 1; }); });
+
+// operator phases
+const phaseSpan = OPS.map((_, oi) => { const rs = residency.filter(r => r.op === oi); return [Math.min(...rs.map(r => r.t0)), Math.max(...rs.map(r => r.t1))]; });
+const phaseCount = OPS.map((_, oi) => binAccum(residency.filter(r => r.op === oi)).tot);
+
+// ---------------------------------------------------------------- diagnostics
+function diagnostics() {
+  const out = [];
+  const hot = L3[HOT_L3], ov = overIntervals[HOT_L3];
+  let peak = 0, overCycles = 0, peakT = 0;
+  if (ov.length) {
+    const t0 = Math.min(...ov.map(r => r.t0)), t1 = Math.max(...ov.map(r => r.t1));
+    for (let t = t0; t < t1; t += 4) { const o = occAt(l3Res[HOT_L3], t); if (o > hot.cap) overCycles += 4; if (o > peak) { peak = o; peakT = t; } }
+  }
+  if (overCycles) out.push({ sev: "crit", label: "over capacity", html: `<b>l3[${HOT_L3}]</b> holds more tiles than its ${hot.cap} slots for ${fmt(overCycles)} cycles (peak ${peak}/${hot.cap}). gemm1's operands from ${HOT_CFS.length} compute tiles were all placed here and held for reuse. <button data-t="${peakT}" data-b="L3:${HOT_L3}">Go to cycle ${fmt(peakT)}</button>` });
+  const lateRows = computes.filter(c => c.cf === LATE_CF && c.op === 2 && c.a && c.b).map(c => ({ c, skew: Math.abs(c.a.l1a - c.b.l1a) }));
+  const worst = lateRows.reduce((w, x) => (x.skew > w.skew ? x : w), { skew: 0 });
+  if (worst.c) out.push({ sev: "warn", label: "misaligned", html: `<b>cf[${LATE_CF}]</b> operand skew up to ${worst.skew} cycles in gemm1. B arrives over the NoC from l3[${HOT_L3}], which is not one of its neighbours: the block crosses the NoC hub to hub and then enters through the relay tile's BlockMover. <button data-lin="${computes.indexOf(worst.c)}">Open lineage</button>` });
+  const means = L3.map(l => { let s = 0; const r = rows.find(x => x.block === l); r.tot.forEach(v => s += v); return s / NB; });
+  const mu = means.reduce((a, b) => a + b, 0) / means.length, sd = Math.sqrt(means.reduce((a, b) => a + (b - mu) ** 2, 0) / means.length);
+  out.push({ sev: "info", label: "imbalance", html: `L3 mean occupancy varies with CV ${(sd / mu).toFixed(2)}. Busiest is <b>l3[${means.indexOf(Math.max(...means))}]</b> and quietest is <b>l3[${means.indexOf(Math.min(...means))}]</b>.` });
+  let dmaBound = 0;
+  for (let b = 0; b < NB; b++) { const allBusy = rows.filter(r => r.group === "DRAM / DMA").some(r => r.tot[b] >= LANES * 0.95); const cfIdle = rows.filter(r => r.group === "Compute tiles").filter(r => r.tot[b] < 0.2).length; if (allBusy && cfIdle >= 4) dmaBound++; }
+  out.push({ sev: "info", label: "DMA-bound", html: `${Math.round(100 * dmaBound / NB)}% of the run has a memory controller's DMA lanes saturated while 4 or more compute tiles idle.` });
+  return out;
+}
+
+// ---------------------------------------------------------------- shared time cursor
+let T = Math.round(T_END * 0.62), playing = false, selected = { kind: "L3", id: HOT_L3 };
+const scrub = $("scrub"); scrub.max = Math.round(T_END);
+function phaseAt(t) { return OPS.map((o, i) => (t >= phaseSpan[i][0] && t <= phaseSpan[i][1] ? o.name : null)).filter(Boolean).join(" + ") || "idle"; }
+function setT(t) { T = Math.max(0, Math.min(T_END, Math.round(t))); scrub.value = T; $("clock").textContent = `cycle ${fmt(T)} / ${fmt(Math.round(T_END))}`; $("phaseNow").textContent = `active: ${phaseAt(T)}`; drawFloorplan(); drawLanes(); drawPhase(); renderInspector(); }
+scrub.addEventListener("input", () => setT(+scrub.value));
+$("stepBack").onclick = () => setT(T - 50);
+$("stepFwd").onclick = () => setT(T + 50);
+let last = 0;
+function tick(ts) { if (!playing) return; const dt = last ? ts - last : 16; last = ts; setT(T + dt * 0.9); if (T >= T_END) { playing = false; $("play").textContent = "Play"; } else requestAnimationFrame(tick); }
+$("play").onclick = () => { playing = !playing; $("play").textContent = playing ? "Pause" : "Play"; last = 0; if (playing) { if (T >= T_END) T = 0; requestAnimationFrame(tick); } };
+
+// ---------------------------------------------------------------- 1a floorplan
+const opColor = oi => tok(OPS[oi].token);
+let fpGeom = null;
+function drawDie(ctx, s, ox, oy, fillFor) {
+  ctx.fillStyle = tok("--die"); ctx.fillRect(ox, oy, DW * s, DH * s);
+  ctx.strokeStyle = tok("--line"); ctx.lineWidth = 1; ctx.strokeRect(ox + .5, oy + .5, DW * s - 1, DH * s - 1);
+  for (const b of blocks) {
+    ctx.fillStyle = fillFor ? fillFor(b) : tok(b.kind === "L3" ? "--l3" : b.kind === "CF" ? "--cf" : "--cpu");
+    ctx.fillRect(ox + b.x * s, oy + b.y * s, b.w * s, b.h * s);
+  }
+}
+function label(ctx, text, x, y, size = 10, color = tok("--ink-3"), align = "left") { ctx.fillStyle = color; ctx.font = `500 ${size}px ${tok("--font-data")}`; ctx.textAlign = align; ctx.textBaseline = "top"; ctx.fillText(text, x, y); }
+function drawFloorplan() {
+  const cv = $("fp"); const w = cv.parentElement.clientWidth; const s = w / DW; const { ctx } = fit(cv, Math.round(DH * s));
+  fpGeom = { s, ox: 0, oy: 0 };
+  drawDie(ctx, s, 0, 0);
+  // CPU detail: cores, SRAM, rings, and recent descriptors
+  const cx = CPU.x * s, cy = CPU.y * s;
+  label(ctx, "CPU  RV64GC ×4", cx + 8, cy + 8, 11, tok("--ink-2"));
+  for (let i = 0; i < 4; i++) { ctx.strokeStyle = tok("--line"); ctx.strokeRect(cx + 8 + (i % 2) * 40 * s * 2.1, cy + 28 + Math.floor(i / 2) * 30 * s * 1.6, 70 * s, 40 * s); }
+  label(ctx, "SRAM · desc/cpl rings", cx + 8, cy + 28 + 110 * s, 9);
+  const recent = descriptors.filter(d => d.t <= T && d.t > T - 60).slice(-5);
+  const rate = descriptors.filter(d => d.t <= T && d.t > T - 100).length;
+  label(ctx, `${rate} descriptors / 100 cyc`, cx + 8, cy + 140 * s + 30, 9, tok("--ink-2"));
+  recent.forEach((d, i) => label(ctx, d.text.length > 30 ? d.text.slice(0, 29) + "…" : d.text, cx + 8, cy + 160 * s + 34 + i * 13, 9, opColor(d.op)));
+  label(ctx, "IO / PCIe", IO.x * s + 8, IO.y * s + 8, 10);
+  MC.forEach(m => {
+    const busy = laneFree[m.id] && dmaBusy[m.id].filter(([a, b]) => a <= T && T < b).length;
+    label(ctx, `MC${m.id} · PHY   DMA ${busy}/${LANES}`, m.x * s + 6, m.y * s + 6, 10, tok("--ink-2"));
+    ctx.fillStyle = tok("--accent"); ctx.fillRect(m.x * s + 6, (m.y + m.h) * s - 8, (m.w * s - 12) * busy / LANES, 3);
+  });
+  // L3 slots: one pixel per resident tile
+  const live = residency.filter(r => r.t0 <= T && T < r.t1);
+  const slotPad = 7 * s, sz = (ARR.cs - 4) * s - 2 * slotPad, sp = sz / 8;
+  // BlockMovers on CF-facing edges (lit while moving), and the NoC router hub
+  const bmBusy = new Set(transits.filter(x => x.kind === "BM" && x.t0 <= T && T < x.t1).map(x => x.l3 + ":" + x.edge));
+  const bmOp = {}; transits.forEach(x => { if (x.kind === "BM" && x.t0 <= T && T < x.t1) bmOp[x.l3 + ":" + x.edge] = x.op; });
+  L3.forEach(l => {
+    l.edges.forEach(e => {
+      const [mx, my] = moverPoint(l, e), horiz = e === 0 || e === 2, len = 22, th = 4;
+      const key = l.id + ":" + e;
+      ctx.fillStyle = bmBusy.has(key) ? opColor(bmOp[key]) : tok("--ink-3");
+      ctx.globalAlpha = bmBusy.has(key) ? 1 : .45;
+      const ix = e === 1 ? -th : e === 3 ? 0 : -len / 2, iy = e === 2 ? -th : e === 0 ? 0 : -len / 2;
+      ctx.fillRect((mx + ix) * s, (my + iy) * s, (horiz ? len : th) * s, (horiz ? th : len) * s);
+      ctx.globalAlpha = 1;
+    });
+    const [hx, hy] = hubPoint(l), nocBusy = transits.some(x => x.kind === "NOC" && x.t0 <= T && T < x.t1 && (x.l3 === l.id || x.relay === l.id));
+    ctx.fillStyle = nocBusy ? tok("--ink") : tok("--panel"); ctx.strokeStyle = tok("--ink-3"); ctx.lineWidth = 1;
+    ctx.fillRect((hx - 4) * s, (hy - 4) * s, 8 * s, 8 * s); ctx.strokeRect((hx - 4) * s + .5, (hy - 4) * s + .5, 8 * s - 1, 8 * s - 1);
+  });
+  L3.forEach(l => {
+    const x0 = l.x * s + slotPad, y0 = l.y * s + slotPad;
+    ctx.fillStyle = tok("--slot-empty");
+    for (let i = 0; i < 63; i++) ctx.fillRect(x0 + (i % 8) * sp + .5, y0 + Math.floor(i / 8) * sp + .5, sp - 1, sp - 1);
+  });
+  const overNow = new Array(L3.length).fill(0);
+  live.forEach(r => {
+    if (r.st !== "L3") return;
+    if (r.slot < 0) { overNow[r.sid]++; return; }
+    const l = L3[r.sid], x0 = l.x * s + slotPad, y0 = l.y * s + slotPad;
+    ctx.fillStyle = opColor(r.op);
+    ctx.fillRect(x0 + (r.slot % 8) * sp + .5, y0 + Math.floor(r.slot / 8) * sp + .5, sp - 1, sp - 1);
+  });
+  overNow.forEach((n, i) => { if (!n) return; const l = L3[i]; ctx.strokeStyle = tok("--crit"); ctx.lineWidth = 2; ctx.strokeRect(l.x * s + 1, l.y * s + 1, l.w * s - 2, l.h * s - 2); ctx.fillStyle = tok("--crit"); ctx.font = `600 ${Math.max(9, 10 * s)}px ${tok("--font-data")}`; ctx.textAlign = "right"; ctx.textBaseline = "bottom"; ctx.fillText(`▲+${n}`, (l.x + l.w) * s - 2, (l.y + l.h) * s - 1); });
+  // CF: PE array busy, L2 (16 cells) and L1 (4 cells)
+  CF.forEach(c => {
+    const x0 = c.x * s + 3 * s, y0 = c.y * s + 3 * s, W = c.w * s - 6 * s;
+    const busy = computes.find(k => k.cf === c.id && k.t0 <= T && T < k.t1);
+    ctx.fillStyle = busy ? opColor(busy.op) : tok("--slot-empty");
+    ctx.globalAlpha = busy ? .85 : 1; ctx.fillRect(x0, y0, W, W * .5); ctx.globalAlpha = 1;
+    const l2 = live.filter(r => r.st === "L2" && r.sid === c.id), l1 = live.filter(r => r.st === "L1" && r.sid === c.id);
+    const cw = (W * .62) / 4, ch = (W * .44) / 4;
+    for (let i = 0; i < 16; i++) { const r = l2[i]; ctx.fillStyle = r ? opColor(r.op) : tok("--slot-empty"); ctx.fillRect(x0 + (i % 4) * cw + .5, y0 + W * .54 + Math.floor(i / 4) * ch + .5, cw - 1, ch - 1); }
+    for (let i = 0; i < 4; i++) { const r = l1[i]; ctx.fillStyle = r ? opColor(r.op) : tok("--slot-empty"); ctx.fillRect(x0 + W * .68, y0 + W * .54 + i * ch + .5, W * .32, ch - 1); }
+  });
+  // transits as streaks with a moving head
+  ctx.lineWidth = 1.5;
+  transits.forEach(x => {
+    if (!(x.t0 <= T && T < x.t1) || x.kind === "STR") return;
+    const p = (T - x.t0) / (x.t1 - x.t0);
+    const ax = x.from[0] * s, ay = x.from[1] * s, bx = x.to[0] * s, by = x.to[1] * s;
+    const hx = ax + (bx - ax) * p, hy = ay + (by - ay) * p;
+    ctx.strokeStyle = opColor(x.op); ctx.globalAlpha = x.kind === "NOC" ? .9 : .35;
+    ctx.setLineDash(x.kind === "NOC" ? [4, 3] : []);
+    ctx.beginPath(); ctx.moveTo(ax, ay); ctx.lineTo(hx, hy); ctx.stroke();
+    ctx.globalAlpha = 1; ctx.setLineDash([]);
+    ctx.fillStyle = opColor(x.op); ctx.beginPath(); ctx.arc(hx, hy, 2.2, 0, 7); ctx.fill();
+  });
+  // selection
+  const sb = selBlock(); if (sb) { ctx.strokeStyle = tok("--ink"); ctx.lineWidth = 2; ctx.strokeRect(sb.x * s - 1, sb.y * s - 1, sb.w * s + 2, sb.h * s + 2); }
+  label(ctx, "L3 tile: banks (slots) + BlockMover per CF-facing edge + NoC hub ▪ · CF: PE array / L2 ×16 / L1 ×4 + Streamers", ARR.x * s, (ARR.y + N * ARR.cs) * s + 2, 9);
+}
+function selBlock() { if (!selected) return null; return selected.kind === "L3" ? L3[selected.id] : selected.kind === "CF" ? CF[selected.id] : selected.kind === "MC" ? MC[selected.id] : selected.kind === "CPU" ? CPU : null; }
+function hitBlock(cv, e, s) { const r = cv.getBoundingClientRect(); const x = (e.clientX - r.left) / s, y = (e.clientY - r.top) / s; return blocks.find(b => x >= b.x && x <= b.x + b.w && y >= b.y && y <= b.y + b.h); }
+$("fp").addEventListener("click", e => { const b = hitBlock($("fp"), e, fpGeom.s); if (b && b.kind !== "IO") { selected = { kind: b.kind, id: b.id }; drawFloorplan(); renderInspector(); } });
+$("fp").addEventListener("mousemove", e => { const b = hitBlock($("fp"), e, fpGeom.s); if (!b) return hideTip(); showTip(e, `<div class="t">${b.name}</div><div class="r">click to inspect</div>`); });
+$("fp").addEventListener("mouseleave", hideTip);
+
+// ---------------------------------------------------------------- inspector (S2)
+function renderInspector() {
+  const b = selBlock(); const el = $("insp"); if (!b) return;
+  $("inspTag").textContent = b.name;
+  if (b.kind === "L3") {
+    const live = l3Res[b.id].filter(r => r.t0 <= T && T < r.t1); const n = live.length;
+    const byOp = OPS.map((_, i) => live.filter(r => r.op === i).length);
+    const waiting = transits.filter(x => x.kind === "DMA" && x.to[0] === center(b)[0] && x.to[1] === center(b)[1] && x.t0 > T && x.t0 < T + 80).length;
+    const over = n > b.cap;
+    el.innerHTML = `<div class="kv"><span>occupancy</span><span>${n} / ${b.cap} slots ${over ? '<b style="color:var(--crit)">▲ over capacity</b>' : ""}</span><span>by operator</span><span>${OPS.map((o, i) => `${o.name} ${byOp[i]}`).join(" · ")}</span><span>arriving ≤80 cyc</span><span>${waiting} tiles (DMA in flight)</span><span>BlockMovers</span><span>${b.edges.map(e => { const busy = transits.some(x => x.kind === "BM" && x.l3 === b.id && x.edge === e && x.t0 <= T && T < x.t1); const cf = CF.find(c => neighborsL3(c).includes(b) && edgeIndex(b, c) === e); return `bm[${EDGE[e]}]→cf[${cf.id}]${busy ? "●" : ""}`; }).join(" ")}</span><span>NoC hub</span><span>${transits.filter(x => x.kind === "NOC" && x.t0 <= T && T < x.t1 && (x.l3 === b.id || x.relay === b.id)).length} moves in flight</span></div><div class="meter ${over ? "over" : ""}"><i style="width:${Math.min(100, 100 * n / b.cap)}%"></i></div><p class="caption">${live.slice(0, 8).map(r => tiles[r.tile].label).join(", ")}${n > 8 ? `, … ${n - 8} more` : ""}</p>`;
+  } else if (b.kind === "CF") {
+    const cur = computes.find(k => k.cf === b.id && k.t0 <= T && T < k.t1);
+    const l2 = residency.filter(r => r.st === "L2" && r.sid === b.id && r.t0 <= T && T < r.t1).length;
+    const l1 = residency.filter(r => r.st === "L1" && r.sid === b.id && r.t0 <= T && T < r.t1);
+    const done = computes.filter(k => k.cf === b.id && k.t1 <= T); const busyC = done.reduce((a, k) => a + (k.t1 - k.t0), 0);
+    el.innerHTML = `<div class="kv"><span>computing</span><span>${cur ? `${OPS[cur.op].name} task ${cur.task} (${cur.t1 - T} cyc left)` : "idle"}</span><span>L2</span><span>${l2} / 16 tiles</span><span>L1</span><span>${l1.length} / 4: ${l1.map(r => tiles[r.tile].role).join(" ") || "empty"}</span><span>utilization so far</span><span>${T ? Math.round(100 * busyC / T) : 0}%</span><span>fed by</span><span>${neighborsL3(b).map(l => `l3[${l.id}]/bm[${EDGE[edgeIndex(l, b)]}]`).join(" ")}</span></div><p class="caption">Its block bandwidth is the BlockMovers on its neighbours' facing edges, which run in the L3 clock domain. The L2 and L1 cells are drawn as if modelled. At L-T1 they are not, and the real viewer hatches them (rule §3.6).</p>`;
+    $("cfPick").value = b.id; renderAlign();
+  } else if (b.kind === "MC") {
+    const busy = dmaBusy[b.id].filter(([a, c]) => a <= T && T < c).length; const moved = dmaBusy[b.id].filter(([, c]) => c <= T).length;
+    el.innerHTML = `<div class="kv"><span>DMA lanes busy</span><span>${busy} / ${LANES}</span><span>tiles moved so far</span><span>${fmt(moved)} (${fmt(moved * TILE_BYTES / 1024)} KiB)</span><span>serves</span><span>${L3.filter(l => mcOf(l) === b.id).length} L3 tiles in its quadrant</span></div>`;
+  } else if (b.kind === "CPU") {
+    const recent = descriptors.filter(d => d.t <= T).slice(-8).reverse();
+    el.innerHTML = `<div class="kv"><span>descriptors issued</span><span>${fmt(descriptors.filter(d => d.t <= T).length)}</span></div><p class="caption">Latest descriptors (the #305 trace, placed on the CPU block):</p><div class="kv">${recent.map(d => `<span>${fmt(d.t)}</span><span>${d.text}</span>`).join("")}</div>`;
+  }
+}
+
+// ---------------------------------------------------------------- 1b swimlanes
+let laneGeom = null;
+function drawLanes() {
+  const cv = $("lanes"); const rh = 6, gutter = 78, groupGap = 10;
+  const groups = [...new Set(rows.map(r => r.group))];
+  const H = rows.length * rh + groups.length * groupGap + 30;
+  const { ctx, w } = fit(cv, H);
+  const pw = w - gutter - 6, bw = pw / NB;
+  ctx.fillStyle = tok("--panel"); ctx.fillRect(0, 0, w, H);
+  let y = 4; const rowY = [];
+  groups.forEach(g => {
+    const rs = rows.filter(r => r.group === g);
+    label(ctx, g, 0, y + 1, 10, tok("--ink-2"));
+    rs.forEach(r => {
+      rowY.push([r, y]);
+      ctx.fillStyle = tok("--grid"); ctx.fillRect(gutter, y + rh - .5, pw, .5);
+      for (let b = 0; b < NB; b++) {
+        const v = r.tot[b]; if (v <= 0.001 && !r.over[b]) continue;
+        let dom = 0; for (let o = 1; o < 3; o++) if (r.byOp[o][b] > r.byOp[dom][b]) dom = o;
+        if (r.over[b]) { ctx.globalAlpha = 1; ctx.fillStyle = tok("--crit"); }
+        else { ctx.globalAlpha = Math.max(.12, Math.min(1, v / r.cap)); ctx.fillStyle = opColor(dom); }
+        ctx.fillRect(gutter + b * bw, y, Math.max(1, bw - .3), rh - 1);
+      }
+      ctx.globalAlpha = 1; y += rh;
+    });
+    y += groupGap;
+  });
+  // axis
+  const ay = y - groupGap + 6;
+  ctx.fillStyle = tok("--line"); ctx.fillRect(gutter, ay, pw, 1);
+  const step = Math.pow(10, Math.floor(Math.log10(T_END / 6))); const nice = step * (T_END / step > 30 ? 5 : 2);
+  for (let t = 0; t <= T_END; t += nice) { const x = gutter + t / T_END * pw; ctx.fillRect(x, ay, 1, 4); label(ctx, fmt(t), x, ay + 6, 10, tok("--ink-3"), "center"); }
+  label(ctx, "cycle", gutter + pw, ay + 6, 10, tok("--ink-3"), "right");
+  // cursor
+  const cx = gutter + T / T_END * pw; ctx.fillStyle = tok("--ink"); ctx.fillRect(cx - .5, 0, 1.5, ay);
+  laneGeom = { gutter, pw, rowY, rh };
+}
+function laneHit(e) { const r = $("lanes").getBoundingClientRect(); const x = e.clientX - r.left, y = e.clientY - r.top; const { gutter, pw, rowY, rh } = laneGeom; if (x < gutter || x > gutter + pw) return null; const b = Math.floor((x - gutter) / pw * NB); const hit = rowY.find(([, ry]) => y >= ry && y < ry + rh); return hit ? { row: hit[0], b, t: (x - gutter) / pw * T_END } : { b, t: (x - gutter) / pw * T_END }; }
+$("lanes").addEventListener("mousemove", e => {
+  const h = laneHit(e); if (!h || !h.row) return hideTip();
+  const r = h.row, b = h.b; const unit = r.group === "L3 tiles" ? "tiles" : r.group === "DRAM / DMA" ? "lanes busy" : r.group === "CPU" ? "desc (rel.)" : "busy";
+  const mix = OPS.map((o, i) => `${o.name} ${(r.byOp[i][b]).toFixed(r.cap > 1 ? 1 : 2)}`).join("<br>");
+  showTip(e, `<div class="t">${r.block.name} · cycles ${fmt(Math.round(b * BIN))}–${fmt(Math.round((b + 1) * BIN))}</div><div class="r">${r.tot[b].toFixed(r.cap > 1 ? 1 : 2)} ${unit} of ${r.cap === 1 ? "1" : r.cap}${r.over[b] ? ' <b style="color:var(--crit)">▲ over capacity</b>' : ""}<br>${mix}</div>`);
+});
+$("lanes").addEventListener("mouseleave", hideTip);
+$("lanes").addEventListener("click", e => { const h = laneHit(e); if (!h) return; if (h.row && ["L3", "CF", "MC", "CPU"].includes(h.row.block.kind)) selected = { kind: h.row.block.kind, id: h.row.block.id }; setT(h.t); });
+
+// ---------------------------------------------------------------- 1c phase strip
+function drawPhase() {
+  const cv = $("phase"); const rh = 26, gutter = 78; const { ctx, w } = fit(cv, OPS.length * (rh + 6) + 4);
+  const pw = w - gutter - 6;
+  OPS.forEach((o, i) => {
+    const y = 2 + i * (rh + 6), arr = phaseCount[i]; let mx = 0; arr.forEach(v => mx = Math.max(mx, v));
+    label(ctx, o.name, 0, y + 7, 11, tok("--ink-2"));
+    ctx.fillStyle = tok("--grid"); ctx.fillRect(gutter, y + rh, pw, 1);
+    ctx.fillStyle = opColor(i); ctx.globalAlpha = .28;
+    ctx.beginPath(); ctx.moveTo(gutter, y + rh);
+    for (let b = 0; b < NB; b++) ctx.lineTo(gutter + (b + .5) / NB * pw, y + rh - (arr[b] / mx) * (rh - 2));
+    ctx.lineTo(gutter + pw, y + rh); ctx.closePath(); ctx.fill(); ctx.globalAlpha = 1;
+    ctx.strokeStyle = opColor(i); ctx.lineWidth = 2; ctx.beginPath();
+    for (let b = 0; b < NB; b++) { const x = gutter + (b + .5) / NB * pw, yy = y + rh - (arr[b] / mx) * (rh - 2); b ? ctx.lineTo(x, yy) : ctx.moveTo(x, yy); }
+    ctx.stroke();
+    const pk = arr.indexOf(mx); label(ctx, `peak ${Math.round(mx)}`, gutter + (pk + .5) / NB * pw + 4, y, 10, tok("--ink-2"));
+  });
+  const cx = gutter + T / T_END * pw; ctx.fillStyle = tok("--ink"); ctx.fillRect(cx - .5, 0, 1.5, OPS.length * (rh + 6));
+}
+
+// ---------------------------------------------------------------- step 2: lineage
+let linSel = 0;
+const cfPick = $("cfPick");
+CF.forEach(c => { const o = document.createElement("option"); o.value = c.id; o.textContent = `cf[${c.id}]`; cfPick.appendChild(o); });
+cfPick.onchange = () => { renderAlign(); };
+function renderAlign() {
+  const cf = +cfPick.value; const tb = $("align").querySelector("tbody");
+  const list = computes.map((c, i) => [c, i]).filter(([c]) => c.cf === cf && c.a && c.b);
+  tb.innerHTML = list.map(([c, i]) => { const sk = Math.abs(c.a.l1a - c.b.l1a), dl = c.t0 - c.lastArr; return `<tr data-i="${i}" class="${i === linSel ? "sel" : ""}"><td>${OPS[c.op].name}#${c.task}</td><td>${OPS[c.op].cls}</td><td>${fmt(c.a.l1a)}</td><td>${fmt(c.b.l1a)}</td><td style="${sk > 60 ? "color:var(--crit);font-weight:600" : ""}">${sk}${sk > 60 ? " ▲" : ""}</td><td>${dl}</td><td>${c.cause}</td></tr>`; }).join("");
+  tb.querySelectorAll("tr").forEach(tr => tr.onclick = () => { linSel = +tr.dataset.i; renderAlign(); drawMetro(); });
+}
+function drawMetro() {
+  const c = computes[linSel]; const cv = $("metro");
+  const stages = ["CPU", "DRAM", "L3", "L2", "L1", "CF"]; const rh = 44, gutter = 46, top = 26;
+  const { ctx, w } = fit(cv, stages.length * rh + top + 30); const pw = w - gutter - 96;
+  const ops = [c.a, c.b].filter(Boolean);
+  const t0 = Math.min(...ops.map(o => o.tile.req ?? o.l1s)) - 20, t1 = c.t1 + 20;
+  const X = t => gutter + (t - t0) / (t1 - t0) * pw; const Y = i => top + i * rh + rh / 2;
+  stages.forEach((s, i) => { ctx.fillStyle = tok("--grid"); ctx.fillRect(gutter, Y(i), pw, 1); label(ctx, s, 0, Y(i) - 6, 11, tok("--ink-2")); });
+  const roleColor = { A: tok("--op1"), X: tok("--op1"), B: tok("--op2") };
+  const lane = { A: -5, X: -5, B: 5 };
+  ops.forEach(o => {
+    const tl = o.tile, col = roleColor[tl.role], dy = lane[tl.role];
+    ctx.strokeStyle = col; ctx.fillStyle = col;
+    const seg = (ta, sa, tb, sb, mode) => { ctx.lineWidth = mode === "res" ? 4 : mode === "wait" ? 2 : 1.5; ctx.setLineDash(mode === "wait" ? [2, 3] : []); ctx.beginPath(); ctx.moveTo(X(ta), Y(sa) + dy); ctx.lineTo(X(tb), Y(sb) + dy); ctx.stroke(); ctx.setLineDash([]); };
+    if (!o.reused) {
+      ctx.beginPath(); ctx.arc(X(tl.req), Y(0) + dy, 4, 0, 7); ctx.fill();
+      
+      seg(tl.req, 0, tl.dma[0], 1, "transit");
+      if (tl.dma[0] - tl.req > 4) { seg(tl.dma[0] - (tl.dma[0] - tl.req) * .0, 1, tl.dma[0], 1, "wait"); }
+      seg(tl.dma[0], 1, tl.dma[1], 2, "transit");
+      seg(tl.dma[1], 2, tl.l2s, 2, "res");
+      if (tl.viaNoc) label(ctx, `NoC l3[${tl.l3}]→hub l3[${tl.relay}]→bm`, X(tl.l2s) + 4, Y(2) + dy + 4, 9, tok("--ink-2"));
+      seg(tl.l2s, 2, tl.l2a, 3, "transit");
+      seg(tl.l2a, 3, o.l1s, 3, "res");
+    } else {
+      label(ctx, `${tl.role} reused from task ${tl.task}`, X(o.l1s) - 4, Y(3) + dy - 14, 9, tok("--ink-3"), "right");
+      seg(o.l1s - 30, 3, o.l1s, 3, "res");
+    }
+    seg(o.l1s, 3, o.l1a, 4, "transit");
+    seg(o.l1a, 4, c.t0, 4, o.l1a < c.lastArr ? "wait" : "res");
+    if (c.lastArr - o.l1a > 8) label(ctx, `waits ${c.lastArr - o.l1a} cyc for partner`, X(o.l1a) + 4, Y(4) + dy + (dy < 0 ? -14 : 4), 9, tok("--ink-2"));
+    seg(c.t0, 4, c.t0, 5, "transit");
+    label(ctx, `PLACE ${tl.label}`, X(tl.req ?? o.l1s) + 8, Y(0) + (dy < 0 ? -20 : 6), 9, tok("--ink-2"));
+  });
+  ctx.fillStyle = tok("--op3"); ctx.fillRect(X(c.t0), Y(5) - 5, Math.max(2, X(c.t1) - X(c.t0)), 10);
+  label(ctx, `compute ${c.t1 - c.t0} cyc`, X(c.t1) + 4, Y(5) - 6, 10, tok("--ink-2"));
+  const sk = c.a && c.b ? Math.abs(c.a.l1a - c.b.l1a) : 0;
+  ctx.fillStyle = tok("--line"); ctx.fillRect(gutter, top + stages.length * rh - 4, pw, 1);
+  [t0, (t0 + t1) / 2, t1].forEach((t, i) => label(ctx, fmt(Math.round(t)), X(t), top + stages.length * rh, 10, tok("--ink-3"), ["left", "center", "right"][i]));
+  $("linTitle").textContent = `2a · Metro view: ${OPS[c.op].name}#${c.task} on cf[${c.cf}]`;
+  $("linTag").textContent = `skew ${sk} · cause: ${c.cause}`;
+}
+
+// ---------------------------------------------------------------- step 3: heat
+const SEQ_BLUE_L = ["#cde2fb", "#9ec5f4", "#6da7ec", "#3987e5", "#2a78d6", "#1c5cab", "#104281", "#0d366b"];
+const SEQ_BLUE_D = ["#1b2738", "#1d3554", "#1c4878", "#1c5cab", "#2a78d6", "#5598e7", "#86b6ef", "#b7d3f6"];
+const SEQ_ORA_L = ["#fde4d6", "#fbc9ae", "#f7a984", "#f08a5c", "#eb6834", "#c9501f", "#9c3b14", "#702a0e"];
+const SEQ_ORA_D = ["#2e1f18", "#4a2a1b", "#6a351e", "#8f4220", "#d95926", "#e9814f", "#f3a67e", "#fbcdb2"];
+const isDark = () => tok("--bg") === "#121416";
+function ramp(stops, v) { v = Math.max(0, Math.min(1, v)); const p = v * (stops.length - 1), i = Math.floor(p), f = p - i; const a = stops[i], b = stops[Math.min(stops.length - 1, i + 1)]; const h = s => [1, 3, 5].map(k => parseInt(s.slice(k, k + 2), 16)); const A = h(a), B = h(b); return `rgb(${A.map((x, k) => Math.round(x + (B[k] - x) * f)).join(",")})`; }
+let metric = "occ";
+const windows = [["whole run", 0, T_END], ...OPS.map((o, i) => [`${o.name} phase`, phaseSpan[i][0], phaseSpan[i][1]]), ["cursor ±250", -1, -1]];
+windows.forEach((w, i) => { const o = document.createElement("option"); o.value = i; o.textContent = w[0]; $("winPick").appendChild(o); });
+$("winPick").onchange = drawHeat;
+document.querySelectorAll("#metricSeg button").forEach(b => b.onclick = () => { metric = b.dataset.m; document.querySelectorAll("#metricSeg button").forEach(x => x.setAttribute("aria-pressed", x === b ? "true" : "false")); drawHeat(); });
+function overlap(a0, a1, b0, b1) { return Math.max(0, Math.min(a1, b1) - Math.max(a0, b0)); }
+function heatValues(w0, w1) {
+  const v = new Map(blocks.map(b => [b, 0]));
+  if (metric === "occ") {
+    residency.forEach(r => { const b = r.st === "L3" ? L3[r.sid] : CF[r.sid]; v.set(b, v.get(b) + overlap(r.t0, r.t1, w0, w1)); });
+  } else {
+    transits.forEach(x => { const f = overlap(x.t0, x.t1, w0, w1) / (x.t1 - x.t0); if (!f) return; const bytes = TILE_BYTES * f;
+      if (x.kind === "DMA") { v.set(MC[x.mc], v.get(MC[x.mc]) + bytes); const l = blocks.find(b => b.kind === "L3" && center(b)[0] === x.to[0] && center(b)[1] === x.to[1]); v.set(l, v.get(l) + bytes); }
+      else if (x.kind === "BM") { v.set(L3[x.l3], v.get(L3[x.l3]) + bytes); }                       // the mover's host: the L3 tile
+      else if (x.kind === "NOC") { v.set(L3[x.l3], v.get(L3[x.l3]) + bytes / 2); v.set(L3[x.relay], v.get(L3[x.relay]) + bytes / 2); }   // both router hubs
+      else if (x.kind === "STR") { v.set(CF[x.cf], v.get(CF[x.cf]) + bytes); } });
+    descriptors.forEach(d => { if (d.t >= w0 && d.t < w1) v.set(CPU, v.get(CPU) + 64); });   // MMIO ring traffic, 64 B records
+    if (metric !== "bytes") {
+      v.forEach((x, b) => v.set(b, x * 20));                                                        // 20 pJ / byte moved
+      computes.forEach(c => { const f = overlap(c.t0, c.t1, w0, w1) / (c.t1 - c.t0); if (f) v.set(CF[c.cf], v.get(CF[c.cf]) + f * TILE_MACS * (c.op === 1 ? .1 : 1)); }); // 1 pJ / MAC
+      [...L3, ...CF].forEach(b => v.set(b, v.get(b) + 5 * (w1 - w0)));                               // 5 pJ leakage / tile / cycle
+    }
+  }
+  return v;
+}
+function thermalGrid(v) {
+  const G = 4, gx = Math.ceil(DW / G), gy = Math.ceil(DH / G); let T0 = new Float32Array(gx * gy);
+  v.forEach((val, b) => { const area = (b.w / G) * (b.h / G); for (let y = Math.floor(b.y / G); y < Math.ceil((b.y + b.h) / G); y++) for (let x = Math.floor(b.x / G); x < Math.ceil((b.x + b.w) / G); x++) T0[y * gx + x] += val / area; });
+  let src = T0, a = new Float32Array(src), bb = new Float32Array(gx * gy);
+  for (let it = 0; it < 60; it++) { for (let y = 0; y < gy; y++) for (let x = 0; x < gx; x++) { const i = y * gx + x; const n = (x > 0 ? a[i - 1] : 0) + (x < gx - 1 ? a[i + 1] : 0) + (y > 0 ? a[i - gx] : 0) + (y < gy - 1 ? a[i + gx] : 0); bb[i] = 0.2 * src[i] + 0.2 * n * 0.98 + 0.0 * a[i]; } [a, bb] = [bb, a]; }
+  return { g: a, gx, gy, G };
+}
+function drawHeat() {
+  const wi = +$("winPick").value; let [, w0, w1] = windows[wi]; if (w0 < 0) { w0 = Math.max(0, T - 250); w1 = Math.min(T_END, T + 250); }
+  const cv = $("heatc"); const w = cv.parentElement.clientWidth, s = w / DW; const { ctx } = fit(cv, Math.round(DH * s));
+  const v = heatValues(w0, w1); const dark = isDark();
+  const stops = metric === "occ" || metric === "bytes" ? (dark ? SEQ_BLUE_D : SEQ_BLUE_L) : (dark ? SEQ_ORA_D : SEQ_ORA_L);
+  let mx = 0; v.forEach((x, b) => { if (b.kind !== "IO") mx = Math.max(mx, x); });
+  if (metric === "thermal") {
+    drawDie(ctx, s, 0, 0, () => tok("--die"));
+    const { g, gx, gy, G } = thermalGrid(v); let gm = 0; g.forEach(x => gm = Math.max(gm, x));
+    for (let y = 0; y < gy; y++) for (let x = 0; x < gx; x++) { ctx.fillStyle = ramp(stops, g[y * gx + x] / gm); ctx.fillRect(x * G * s, y * G * s, G * s + .6, G * s + .6); }
+    blocks.forEach(b => { ctx.strokeStyle = tok("--line"); ctx.globalAlpha = .6; ctx.strokeRect(b.x * s + .5, b.y * s + .5, b.w * s - 1, b.h * s - 1); ctx.globalAlpha = 1; });
+    mx = gm;
+  } else {
+    drawDie(ctx, s, 0, 0, b => (b.kind === "IO" || (metric === "occ" && b.kind !== "L3" && b.kind !== "CF") ? tok("--die") : ramp(stops, v.get(b) / (mx || 1))));
+    if (metric === "occ") label(ctx, "no tile residency: see Bytes or Energy", (CPU.x + 6) * s, (CPU.y + 22) * s, 9, tok("--ink-3"));
+  }
+  label(ctx, "CPU", (CPU.x + 6) * s, (CPU.y + 6) * s, 10, tok("--ink"));
+  MC.forEach(m => label(ctx, `MC${m.id}`, (m.x + 6) * s, (m.y + 6) * s, 10, tok("--ink")));
+  label(ctx, "IO (not modelled)", (IO.x + 6) * s, (IO.y + 6) * s, 10, tok("--ink-3"));
+  ctx.save(); ctx.beginPath(); ctx.rect(IO.x * s, (IO.y + 22) * s, IO.w * s, (IO.h - 22) * s); ctx.clip();
+  ctx.strokeStyle = tok("--hatch"); ctx.lineWidth = 1;
+  for (let k = -IO.h; k < IO.w; k += 8) { ctx.beginPath(); ctx.moveTo((IO.x + k) * s, (IO.y + IO.h) * s); ctx.lineTo((IO.x + k + IO.h) * s, IO.y * s); ctx.stroke(); }
+  ctx.restore();
+  const unit = { occ: "tile·cycles", bytes: "bytes", energy: "pJ", thermal: "relative ΔT" }[metric];
+  const fmtV = x => metric === "thermal" ? x.toFixed(2) : x >= 1e6 ? (x / 1e6).toFixed(2) + " M" : x >= 1e3 ? (x / 1e3).toFixed(1) + " k" : Math.round(x) + "";
+  const grad = Array.from({ length: 24 }, (_, i) => ramp(stops, i / 23)).join(",");
+  $("heatLegend").innerHTML = `<span>0</span><span style="display:inline-block;width:160px;height:10px;border-radius:2px;background:linear-gradient(90deg,${grad})"></span><span>${metric === "thermal" ? "max" : fmtV(mx)} ${unit}</span><span>window ${fmt(Math.round(w0))}–${fmt(Math.round(w1))} · level L-T1 (synthetic)</span><span><span class="sw hatch-sw"></span>not modelled</span>`;
+  const total = [...v.entries()].filter(([b]) => b.kind !== "IO" && (metric !== "occ" || b.kind === "L3" || b.kind === "CF")).reduce((a, [, x]) => a + x, 0) || 1;
+  const top = [...v.entries()].filter(([b]) => b.kind !== "IO" && (metric !== "occ" || b.kind === "L3" || b.kind === "CF")).sort((a, b) => b[1] - a[1]).slice(0, 10);
+  $("heatCol").textContent = metric === "thermal" ? "energy (pJ, source)" : unit;
+  $("heatTbl").querySelector("tbody").innerHTML = top.map(([b, x]) => `<tr><td>${b.name}</td><td>${metric === "thermal" ? fmtV(x).replace(/\.\d+$/, "") : fmtV(x)}</td><td>${(100 * x / total).toFixed(1)}%</td></tr>`).join("");
+  $("heatNote").textContent = metric === "thermal" ? "Thermal is a model, not a measurement: a 2D diffusion over the floorplan, sourced from the energy map. It shows where heat would concentrate, not a temperature." : metric === "energy" ? "Energy per block is bytes × 20 pJ (movement), plus MACs × 1 pJ (compute), plus 5 pJ per tile per cycle (leakage). These are the device_model.hpp constants, attributed per event instead of totalled." : metric === "bytes" ? "Bytes are charged to the hardware that moved them, in its own clock domain. DMA goes to the memory controller and the receiving L3 tile. BlockMover moves go to the source L3 tile, which hosts the mover. NoC moves are split between the two router hubs. Streamer moves go to the compute tile. The CPU row is descriptor-ring traffic (64-byte records)." : "Occupancy-time is the sum over resident tiles of the cycles each spent in the block during the window: the area under the swimlane.";
+  cv.onmousemove = e => { const b = hitBlock(cv, e, s); if (!b) return hideTip(); showTip(e, `<div class="t">${b.name}</div><div class="r">${b.kind === "IO" ? "not modelled" : fmtV(v.get(b)) + " " + (metric === "thermal" ? "pJ (source)" : unit)}</div>`); };
+  cv.onmouseleave = hideTip;
+}
+
+// ---------------------------------------------------------------- legends, diagnostics, boot
+function renderLegends() {
+  $("opLegend").innerHTML = OPS.map((o, i) => `<span><span class="sw" style="background:${opColor(i)}"></span>${o.name} (${o.cls})</span>`).join("") + `<span><span class="sw" style="background:var(--slot-empty);border:1px solid var(--line)"></span>free slot</span><span><span class="sw" style="border:2px solid var(--crit)"></span>▲ over capacity</span><span><span class="sw" style="background:var(--ink-3)"></span>BlockMover on L3 edge (lit = moving)</span><span><span class="sw" style="border:1px solid var(--ink-3)"></span>NoC router hub</span><span>- - NoC hop, hub to hub</span>`;
+  $("diag").innerHTML = diagnostics().map(d => `<li><span class="chip ${d.sev}">${d.sev === "crit" ? "▲ " : d.sev === "warn" ? "! " : ""}${d.label}</span><span>${d.html}</span></li>`).join("");
+  $("diag").querySelectorAll("button[data-t]").forEach(b => b.onclick = () => { const [k, id] = b.dataset.b.split(":"); selected = { kind: k, id: +id }; setT(+b.dataset.t); $("fp").scrollIntoView({ behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth", block: "center" }); });
+  $("diag").querySelectorAll("button[data-lin]").forEach(b => b.onclick = () => { linSel = +b.dataset.lin; cfPick.value = computes[linSel].cf; renderAlign(); drawMetro(); $("lineage").scrollIntoView({ behavior: "auto" }); });
+}
+function worstSkew() { let best = 0, bi = 0; computes.forEach((c, i) => { if (c.a && c.b) { const s = Math.abs(c.a.l1a - c.b.l1a); if (s > best) { best = s; bi = i; } } }); return bi; }
+linSel = worstSkew(); cfPick.value = computes[linSel].cf;
+function drawAll() { renderLegends(); setT(T); renderAlign(); drawMetro(); drawHeat(); }
+drawAll();
+let rz; addEventListener("resize", () => { clearTimeout(rz); rz = setTimeout(drawAll, 120); });
+matchMedia("(prefers-color-scheme: dark)").addEventListener("change", drawAll);
+new MutationObserver(drawAll).observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
+})();
+</script>
