@@ -281,8 +281,9 @@ run.tflow/
   floorplan.json     SocFloorplan
   residency.bin      Uint32 tile, Uint32 station, Float64 t0, t1     (little-endian, columnar)
   transit.bin  compute.bin  cause.bin  descriptor.bin
-  lod/k{0..K}.bin    per (station, 2^k-cycle bin): occupancy mean/max, top-4 operator mix,
-                     transfers, bytes, stall-cycles by cause, energy-pJ
+  lod/k{0..K}.bin    per (station, 2^k-cycle bin): occupancy-time sum and max, occupancy-time
+                     per operator CLASS (exact), transfers, bytes, stall-cycles by cause,
+                     energy-pJ; plus a top-4 per-operator hint (lossy, display only)
 ```
 
 Columnar typed arrays load straight into `Float64Array`/`Uint32Array` with no parse step,
@@ -307,7 +308,11 @@ and Perfetto renders tracks, not die plots. The time-major export stays availabl
 **Time** is a pyramid of power-of-two bins. The viewer picks the finest `k` that keeps at most
 ~1 bin per screen pixel. Zooming swaps `k` the way a map swaps tiles. Aggregates are
 **conserving**: a bin at level `k+1` is exactly the merge of its two children, and that is
-tested (§5).
+tested (§5). Every conserved field merges by sum or max: occupancy-time is stored as a sum,
+not a mean, and the operator mix is stored per operator *class* (a bounded set, Q6), so the
+merge is exact. The per-operator top-4 is the one field that cannot merge exactly, since a
+fifth operator can enter a parent's top four. It is kept only as a display hint, recomputed
+from raw events at the level it is stored, and excluded from the conservation rule.
 
 **Budget** (the reason the pyramid exists). The 512³/T16 GEMM is about 99k ops, which gives
 roughly 300k transits and about 200k residency intervals. A T256-class array has 256 L3 ×
@@ -354,9 +359,10 @@ These are the hypothesized views. The companion artifact shows each one on synth
 
 - **(3a) Activity heat**, per floorplan block: occupancy-time, bytes moved, transactions per
   cycle. It uses one sequential ramp, over a selectable time window. Activity is **charged to
-  the block that hosts the hardware doing it**. A BlockMove or NoC transfer heats the source
-  L3 tile (its mover, its router hub), not the destination CF. A DMA burst heats its memory
-  controller's DMA engine, and every router hub it crosses on the way to its destination. The
+  the block that hosts the hardware doing it**. A BlockMove into a CF heats the source L3
+  tile's mover, not the destination CF. A NoC transfer, whether a BlockMover L3→L3 move or a
+  DMA burst, heats **every router hub and link on its route**, and the burst's originator (the
+  source L3 tile's mover, or the memory controller's DMA engine) is charged for driving it. The
   CF is charged for its Streamers and its compute. Charging moves to the CF would put the L3 tiles' power in the
   wrong clock domain.
 - **(3b) Energy.** Per-event attribution: `pj_per_byte × bytes` on transits, `pj_per_mac ×
