@@ -26,8 +26,12 @@ std::string hex(std::uint64_t v) {
 
 // ---- the bus ----------------------------------------------------------------
 void Bus::add(Region r) {
+    // Two FAULT regions may overlap: a loadable may legitimately alias tensors (an in-place
+    // operator), and either way the address traps. Anything overlapping RAM or MMIO is refused,
+    // because then one address would mean two things.
     for (const Region& o : regions_)
-        if (r.base < o.base + o.size && o.base < r.base + r.size)
+        if (!(r.kind == Kind::Fault && o.kind == Kind::Fault) &&
+            r.base < o.base + o.size && o.base < r.base + r.size)
             throw std::invalid_argument("bus: " + r.label + " at " + hex(r.base) +
                                         " overlaps " + o.label + " at " + hex(o.base));
     regions_.push_back(std::move(r));
@@ -170,6 +174,9 @@ void KpuMmioDevice::service_descriptors() {
 }
 
 void KpuMmioDevice::flush_completions() {
+    // A ring not yet programmed holds nothing: completions wait in the backlog until it is,
+    // rather than a doorbell rung early dividing by a zero ring size.
+    if (cring_size_ == 0) return;
     // A completion that spans records goes in whole or waits: a reader must never see the
     // head of one before its continuation exists.
     while (!backlog_.empty()) {
@@ -255,7 +262,7 @@ void KpuMmioDevice::write_reg(std::uint64_t off, std::uint64_t v) {
             service_descriptors();
             return;
         case CRING_BASE:   cring_base_ = v; cring_head_ = cring_tail_ = 0; return;
-        case CRING_SIZE:   cring_size_ = v; cring_head_ = cring_tail_ = 0; return;
+        case CRING_SIZE:   cring_size_ = v; cring_head_ = cring_tail_ = 0; flush_completions(); return;
         case CRING_TAIL:
             if (cring_size_ == 0 || v >= cring_size_)
                 throw BusFault("kpu: completion acknowledge " + std::to_string(v) +

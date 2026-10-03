@@ -241,6 +241,12 @@ void KpuDevice::submit(const Descriptor& d) {
                        "\": no programmable compute tile is modelled before #305 increment 5");
             return;
     }
+    // A kind byte outside the vocabulary -- possible on the wire, where decode cannot know what
+    // a guest meant. EVERY descriptor gets exactly one completion, so it is refused by name
+    // rather than dropped, which would surface as a misleading "no completion" protocol error.
+    refuse(d, CompletionStatus::RefusedUnsupported, RefusalCause::Unsupported,
+           "descriptor " + std::to_string(d.id) + ": kind " +
+               std::to_string(static_cast<unsigned>(d.kind)) + " is not in the vocabulary");
 }
 
 void KpuDevice::do_reserve(const Descriptor& d) {

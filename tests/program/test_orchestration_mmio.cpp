@@ -19,6 +19,8 @@
 
 #include <sw/kpu/orchestration/mmio.hpp>
 
+#include <memory>
+
 using namespace orchestration_fixtures;
 namespace abi = sw::kpu::orchestration::abi;
 
@@ -302,4 +304,81 @@ TEST_CASE("the status surface reports placement through MMIO as it does directly
     }
     CHECK(direct.inventory() == mmio.inventory());
     CHECK_FALSE(mmio.inventory().empty());
+}
+
+TEST_CASE("a descriptor kind outside the vocabulary is refused, not dropped",
+          "[program][orchestration][mmio]") {
+    // Every descriptor gets exactly one completion. A kind byte the device does not know --
+    // possible on the wire -- must come back as a refusal naming it, not as silence that the
+    // orchestrator would misreport as "no completion".
+    const Loadable l = two_gemms_sharing_weights();
+    Descriptor bad;
+    bad.id = 7;
+    bad.kind = static_cast<DescriptorKind>(0x7F);
+
+    TensorStore sd, sm;
+    VirtualPlatform pd = fresh(), pm = fresh();
+    KpuDevice dd(l, pd, sd, ExecutionLevel::BlockSequential);
+    KpuDevice dm(l, pm, sm, ExecutionLevel::BlockSequential);
+    DirectPort direct(dd);
+    MmioSystem system(dm);
+    for (KpuPort* port : {static_cast<KpuPort*>(&direct), &system.port()}) {
+        port->submit(bad);
+        Completion c;
+        REQUIRE(port->poll_completion(c));
+        CHECK(c.descriptor_id == 7);
+        CHECK(c.status == CompletionStatus::RefusedUnsupported);
+        CHECK(c.cause == RefusalCause::Unsupported);
+        CHECK(c.diagnosis.find("127") != std::string::npos);
+        CHECK_FALSE(port->poll_completion(c));
+    }
+}
+
+TEST_CASE("a doorbell rung before the completion ring exists waits, rather than crashing",
+          "[program][orchestration][mmio]") {
+    // Increment 4's guest can ring the doorbell in any order it likes. Completions posted before
+    // the completion ring is programmed wait in the device's backlog and appear once it is.
+    const Loadable l = two_gemms_sharing_weights();
+    TensorStore store;
+    VirtualPlatform platform = fresh();
+    KpuDevice device(l, platform, store, ExecutionLevel::BlockSequential);
+    const abi::NameTable names(l, platform.deployment());
+    const std::uint64_t base = MmioSystem::kCtrlBase;
+    std::vector<std::uint8_t> ctrl(0x4000, 0);
+    KpuMmioDevice regs(device, ctrl, base, names);
+
+    regs.write_reg(abi::reg::DRING_BASE, base);
+    regs.write_reg(abi::reg::DRING_SIZE, 4);
+    Descriptor fence;
+    fence.id = 1;
+    fence.kind = DescriptorKind::Fence;
+    const abi::DescriptorRecord rec = abi::encode(fence, names);
+    std::copy(rec.begin(), rec.end(), ctrl.begin());
+    CHECK_NOTHROW(regs.write_reg(abi::reg::DRING_TAIL, 1));        // no completion ring yet
+    CHECK(regs.read_reg(abi::reg::IRQ_STATUS) == 0);
+
+    regs.write_reg(abi::reg::CRING_BASE, base + 0x1000);
+    regs.write_reg(abi::reg::CRING_SIZE, 4);                         // now it exists
+    CHECK(regs.read_reg(abi::reg::IRQ_STATUS) == 1);
+    CHECK(regs.read_reg(abi::reg::CRING_HEAD) == 1);
+}
+
+TEST_CASE("aliased tensors still map, and still fault", "[program][orchestration][mmio]") {
+    // A loadable may alias two tensors (an in-place operator). Overlapping FAULT regions are
+    // allowed; the address traps either way. Overlap with RAM or MMIO stays a refusal.
+    Loadable l = two_gemms_sharing_weights();
+    l.tensors[3].device_address = l.tensors[2].device_address + 0x100;   // Y overlaps H
+    TensorStore store;
+    VirtualPlatform platform = fresh();
+    KpuDevice device(l, platform, store, ExecutionLevel::BlockSequential);
+    std::unique_ptr<MmioSystem> system;
+    REQUIRE_NOTHROW(system = std::make_unique<MmioSystem>(device));
+    CHECK_THROWS_AS(system->bus().read64(l.tensors[3].device_address), BusFault);
+
+    Loadable clash = two_gemms_sharing_weights();
+    clash.tensors[0].device_address = MmioSystem::kCtrlBase;            // over control memory
+    TensorStore store2;
+    VirtualPlatform platform2 = fresh();
+    KpuDevice device2(clash, platform2, store2, ExecutionLevel::BlockSequential);
+    CHECK_THROWS_AS(MmioSystem(device2), std::invalid_argument);
 }

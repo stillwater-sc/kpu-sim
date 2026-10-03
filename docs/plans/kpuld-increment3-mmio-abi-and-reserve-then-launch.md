@@ -62,7 +62,7 @@ cannot be stated.
 │   DirectPort      │   │   MmioPort                                           │
 │                   │   │                                                      │
 │ function calls,   │   │  encode ──► descriptor ring ─┐    ┌── completion ring │
-│ structs in/out    │   │  (64 B each, ControlMemory)  │    │   (32 B each)     │
+│ structs in/out    │   │  (64 B each, ControlMemory)  │    │   (64 B each)     │
 │                   │   │  write DRING_TAIL = DOORBELL │    │   read CRING_HEAD │
 │ (inc. 2 shape,    │   │  read  STATUS_* registers    │    │   write CRING_TAIL│
 │  the reference)   │   │                              ▼    │                   │
@@ -185,7 +185,7 @@ struct Descriptor {
 which one (§3.3). `TileRef` (with names) stays as the orchestrator's internal vocabulary and
 the trace's rendering. `TileId` is what crosses the ABI.
 
-**Refusals become structured.** A free-text `diagnosis` cannot cross a 32-byte completion
+**Refusals become structured.** A free-text `diagnosis` cannot cross a fixed-size completion
 record. Both ports would also need to produce byte-identical text, which is easiest to
 guarantee if neither of them writes it:
 
@@ -345,7 +345,7 @@ speed-up.
 ### 3.6 The MMIO layout
 
 All addresses are **64-bit** regardless of XLEN (parent §4). Register offsets are from
-`KPU_MMIO_BASE`. Descriptors are 64 bytes and completions 32 bytes, little-endian, fixed
+`KPU_MMIO_BASE`. Descriptors and completions are 64 bytes each (as implemented; §8.2), little-endian, fixed
 layout, and `static_assert`ed:
 
 | offset | register | access | meaning |
@@ -364,7 +364,7 @@ layout, and `static_assert`ed:
 | 0x0A0 | `MAN_OP` / `MAN_*` | WO / RO | operator manifest, one field per register (counts, bound, tile list by index) |
 | 0x0C0 | `IRQ_STATUS` / `IRQ_ACK` | RO / W1C | completion-pending notifier |
 
-`Completion::released` takes at most 2 inline `TileId`s per record. A RELEASE releases
+`Completion::released` takes at most 1 inline `TileId` per record (§8.2). A RELEASE releases
 exactly one tile, so in practice that is always enough. A completion with more sets a `more`
 flag and continues in the next record. That keeps the record fixed-size, and the case is
 tested rather than assumed.
@@ -436,7 +436,7 @@ suite plus a captured trace digest are the bar for that.
    before *k* when granted; fall back without prefetch on refusal.
 6. **The ABI and MMIO transport.**
    - New `include/sw/kpu/orchestration/abi.hpp`: register offsets, `WireDescriptor` (64 B),
-     `WireCompletion` (32 B), `encode`/`decode`, `static_assert`s on size and offsets.
+     `WireCompletion` (64 B, §8.2), `encode`/`decode`, `static_assert`s on size and offsets.
    - New `include/sw/kpu/orchestration/mmio.hpp`, `src/program/mmio.cpp`: `ControlMemory`, `Bus`
      (range map, fault ranges, access log), `KpuMmioDevice`, `MmioPort`.
 7. **Tests** (§5): new `tests/program/test_orchestration_mmio.cpp` and

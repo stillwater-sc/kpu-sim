@@ -40,6 +40,19 @@ inline constexpr std::size_t kCompletionBytes = 64;
 using DescriptorRecord = std::array<std::uint8_t, kDescriptorBytes>;
 using CompletionRecord = std::array<std::uint8_t, kCompletionBytes>;
 
+// THE LAYOUT, CHECKED. The last field of each record (see the table below) ends exactly at the
+// record size, and records move as aligned 64-bit words. The encoders write through byte
+// offsets, so a field placed past the end would be out-of-bounds writes rather than a compile
+// error -- these are what make widening a record a compile error instead.
+inline constexpr std::size_t kDescriptorLastField = 56, kDescriptorLastWidth = 8;   // wait_for
+inline constexpr std::size_t kCompletionLastField = 60, kCompletionLastWidth = 4;   // zero
+static_assert(kDescriptorLastField + kDescriptorLastWidth == kDescriptorBytes,
+              "descriptor layout must end at the record size");
+static_assert(kCompletionLastField + kCompletionLastWidth == kCompletionBytes,
+              "completion layout must end at the record size");
+static_assert(kDescriptorBytes % 8 == 0 && kCompletionBytes % 8 == 0,
+              "records are moved as aligned 64-bit words");
+
 // ----------------------------------------------------------------------------
 // Register map, offsets from the KPU MMIO base
 // ----------------------------------------------------------------------------
