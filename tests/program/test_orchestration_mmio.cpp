@@ -357,10 +357,36 @@ TEST_CASE("a doorbell rung before the completion ring exists waits, rather than 
     CHECK_NOTHROW(regs.write_reg(abi::reg::DRING_TAIL, 1));        // no completion ring yet
     CHECK(regs.read_reg(abi::reg::IRQ_STATUS) == 0);
 
-    regs.write_reg(abi::reg::CRING_BASE, base + 0x1000);
-    regs.write_reg(abi::reg::CRING_SIZE, 4);                         // now it exists
+    // A REFUSAL rung early too: its diagnosis must survive the wait, not be dropped because
+    // the DIAG area did not exist yet when it was posted.
+    Descriptor configure;
+    configure.id = 2;
+    configure.kind = DescriptorKind::Configure;
+    const abi::DescriptorRecord rec2 = abi::encode(configure, names);
+    std::copy(rec2.begin(), rec2.end(), ctrl.begin() + abi::kDescriptorBytes);
+    CHECK_NOTHROW(regs.write_reg(abi::reg::DRING_TAIL, 2));
+
+    // Size BEFORE base -- the ABI does not order them -- must not post into address 0.
+    CHECK_NOTHROW(regs.write_reg(abi::reg::CRING_SIZE, 4));
+    CHECK(regs.read_reg(abi::reg::IRQ_STATUS) == 0);
+    regs.write_reg(abi::reg::CRING_BASE, base + 0x1000);             // now it exists
+    CHECK(regs.read_reg(abi::reg::CRING_HEAD) == 1);                 // the fence; the refusal waits for DIAG
+    regs.write_reg(abi::reg::DIAG_BASE, base + 0x2000);
+    regs.write_reg(abi::reg::DIAG_SIZE, 0x1000);
+    CHECK(regs.read_reg(abi::reg::CRING_HEAD) == 2);
     CHECK(regs.read_reg(abi::reg::IRQ_STATUS) == 1);
-    CHECK(regs.read_reg(abi::reg::CRING_HEAD) == 1);
+
+    abi::CompletionRecord out{};
+    std::copy(ctrl.begin() + 0x1000 + abi::kCompletionBytes,
+              ctrl.begin() + 0x1000 + 2 * abi::kCompletionBytes, out.begin());
+    bool more = false;
+    std::uint32_t off = 0, len = 0;
+    const Completion refused = abi::decode(out, names, more, off, len);
+    CHECK(refused.descriptor_id == 2);
+    CHECK(refused.status == CompletionStatus::RefusedUnsupported);
+    REQUIRE(len > 0);
+    const std::string text(reinterpret_cast<const char*>(ctrl.data()) + 0x2000 + off, len);
+    CHECK(text.find("CONFIGURE") != std::string::npos);
 }
 
 TEST_CASE("aliased tensors still map, and still fault", "[program][orchestration][mmio]") {

@@ -165,32 +165,31 @@ void KpuMmioDevice::service_descriptors() {
         dring_head_ = (dring_head_ + 1) % dring_size_;
     }
     Completion c;
-    while (dev_.pop_completion(c)) {
-        const auto [off, len] = write_diag(c.diagnosis);
-        for (const abi::CompletionRecord& r : abi::encode(c, names_, off, len))
-            backlog_.push_back(r);
-    }
+    while (dev_.pop_completion(c)) backlog_.push_back(std::move(c));
     flush_completions();
 }
 
 void KpuMmioDevice::flush_completions() {
-    // A ring not yet programmed holds nothing: completions wait in the backlog until it is,
-    // rather than a doorbell rung early dividing by a zero ring size.
-    if (cring_size_ == 0) return;
-    // A completion that spans records goes in whole or waits: a reader must never see the
-    // head of one before its continuation exists.
+    // Nothing is posted until the guest has set the ring up -- base AND size, in whichever order
+    // it writes them -- and a completion carrying a diagnosis waits for the DIAG area too, so
+    // that early setup order can neither crash the device nor lose a refusal's text.
+    if (cring_size_ == 0 || cring_base_ == 0) return;
     while (!backlog_.empty()) {
-        std::size_t span = 1;
-        while (span <= backlog_.size() && backlog_[span - 1][19] != 0) ++span;
-        std::uint64_t used = (cring_head_ + cring_size_ - cring_tail_) % cring_size_;
+        const Completion& c = backlog_.front();
+        if (!c.diagnosis.empty() && (diag_size_ == 0 || diag_base_ == 0)) return;
+        // A completion that spans records goes in whole or waits: a reader must never see the
+        // head of one before its continuation exists.
+        const std::size_t span = c.released.size() > 1 ? c.released.size() : 1;
+        const std::uint64_t used = (cring_head_ + cring_size_ - cring_tail_) % cring_size_;
         if (used + span > cring_size_ - 1) return;            // full: wait for an acknowledge
-        for (std::size_t i = 0; i < span; ++i) {
+        const auto [off, len] = write_diag(c.diagnosis);
+        for (const abi::CompletionRecord& r : abi::encode(c, names_, off, len)) {
             std::memcpy(ctrl_at(cring_base_ + cring_head_ * abi::kCompletionBytes,
                                 abi::kCompletionBytes),
-                        backlog_.front().data(), abi::kCompletionBytes);
-            backlog_.pop_front();
+                        r.data(), abi::kCompletionBytes);
             cring_head_ = (cring_head_ + 1) % cring_size_;
         }
+        backlog_.pop_front();
     }
 }
 
@@ -261,7 +260,7 @@ void KpuMmioDevice::write_reg(std::uint64_t off, std::uint64_t v) {
             dring_tail_ = v;
             service_descriptors();
             return;
-        case CRING_BASE:   cring_base_ = v; cring_head_ = cring_tail_ = 0; return;
+        case CRING_BASE:   cring_base_ = v; cring_head_ = cring_tail_ = 0; flush_completions(); return;
         case CRING_SIZE:   cring_size_ = v; cring_head_ = cring_tail_ = 0; flush_completions(); return;
         case CRING_TAIL:
             if (cring_size_ == 0 || v >= cring_size_)
@@ -289,8 +288,8 @@ void KpuMmioDevice::write_reg(std::uint64_t off, std::uint64_t v) {
             return;
         }
         case MAN_READ_IDX: man_read_ = v; return;
-        case DIAG_BASE:    diag_base_ = v; diag_cursor_ = 0; return;
-        case DIAG_SIZE:    diag_size_ = v; diag_cursor_ = 0; return;
+        case DIAG_BASE:    diag_base_ = v; diag_cursor_ = 0; flush_completions(); return;
+        case DIAG_SIZE:    diag_size_ = v; diag_cursor_ = 0; flush_completions(); return;
         case IRQ_ACK:      return;   // the notifier is level-triggered on head != tail
         default:
             throw BusFault("kpu: write of register " + hex(off) + ", which does not exist");

@@ -116,7 +116,9 @@ private:
     std::uint64_t diag_base_ = 0, diag_size_ = 0, diag_cursor_ = 0;
     std::uint64_t inv_index_ = 0, res_tensor_ = 0, res_ti_ = 0, res_tj_ = 0;
     std::uint64_t man_op_ = 0, man_read_ = 0, man_err_off_ = 0, man_err_len_ = 0;
-    std::deque<abi::CompletionRecord> backlog_;   // completions waiting for ring space
+    // Completions waiting to be posted, kept UNENCODED: encoding writes the diagnosis text,
+    // so it waits until the completion ring and (for a refusal) the DIAG area exist.
+    std::deque<Completion> backlog_;
 };
 
 // ----------------------------------------------------------------------------
