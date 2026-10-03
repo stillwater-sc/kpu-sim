@@ -7,7 +7,7 @@
 the portable program), ADR 0002 (four levels, `VirtualPlatform`),
 `docs/plans/dfg-kpu-versioning.md` (R1–R9), `docs/09-virtual-platform/virtual_platform_analysis.md`
 (NVDLA loadable reference), `docs/09-virtual-platform/qemu-vs-userspace-runtime.md`
-**Likely outcome:** ADR 0003 on acceptance, because it moves a boundary #229 already named
+**Outcome:** ADR 0003 (`docs/architecture/adr/0003-loadable-and-orchestration-abi.md`), because it moves a boundary #229 already named
 
 ## Decided on review (2026-09-25)
 
