@@ -26,7 +26,7 @@ correct, not buried in the section it came from.
 | **Q5 viewer** | **Plain static HTML + Canvas2D**, with WebGL for dense pixel layers, and no build step |
 | **Q6 colour** | **By operator class**, with individual operators on hover and in the phase strip |
 | **Q7 NoC topology** | **A folded 2D torus over the L3 hubs.** Two rows of the checkerboard form one loop around one torus dimension, and two columns one loop around the other. The 8×8 checkerboard is a 4×4 torus: 4 loops per dimension, 8 L3 hubs per loop, and every link equidistant. The **fold ends are the ports** where traffic enters or leaves a loop, and the DMA channels attach there. This connectivity is a **first pass**: the block schedules decide what is added or removed (§3.1) |
-| **Q8 BlockMover count** | **Derived** from the topology. A declared value that disagrees is reported. First pass: every L3 tile has four BlockMovers, to the compute tiles abutting it W/N/E/S |
+| **Q8 BlockMover count** | **Derived** from the topology, one BlockMover per L3 edge that abuts a compute tile. A declared value that disagrees is reported. First pass: an interior L3 tile has four, to the compute tiles abutting it W/N/E/S. A boundary tile abuts fewer, and how it is treated is part of the connectivity study (§3.1) |
 
 ---
 
@@ -217,8 +217,8 @@ and one column loop, so it has four links.
 - **Connectivity is a first pass, settled by measurement.** The block schedules decide which
   links and ports are worth having. Showing, per link and per port, how the schedules use
   them is part of what this debugger is for (§3.5, link-level activity).
-- **First pass for the BlockMovers:** every L3 tile has four, one to each compute tile abutting
-  it W/N/E/S. On the array boundary a finite checkerboard leaves some L3 edges with no abutting
+- **First pass for the BlockMovers:** one per abutting compute tile, so an interior L3 tile has
+  four, W/N/E/S. On the array boundary a finite checkerboard leaves some L3 edges with no abutting
   compute tile. Whether those tiles get a mover toward the fold port, or the array is bordered
   so that every L3 tile is interior, is part of the same connectivity study.
 

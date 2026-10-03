@@ -251,7 +251,7 @@ tbody tr:hover td { background: var(--grid); }
       <div><b>Q5 · viewer</b>Plain static HTML with Canvas2D and no build step, as this page is.</div>
       <div><b>Q6 · colour</b>By operator class: GEMM and elementwise here, with operators named on hover and in the phase strip.</div>
       <div><b>Q7 · NoC</b>A folded 2D torus over the L3 hubs: 4×4 loops, 8 hubs per loop. DMAs enter at the fold-end ports. This connectivity is a first pass that the schedules will settle.</div>
-      <div><b>Q8 · BlockMovers</b>Derived from the layout. First pass: four per L3 tile, one to each abutting compute tile.</div>
+      <div><b>Q8 · BlockMovers</b>Derived from the layout: one per L3 edge that abuts a compute tile. Interior tiles have four; boundary tiles have fewer, as drawn, pending the connectivity study.</div>
     </div>
   </section>
 </div>
