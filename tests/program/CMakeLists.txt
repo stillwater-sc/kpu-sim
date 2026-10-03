@@ -53,6 +53,24 @@ set_tests_properties(test_orchestrator PROPERTIES
     LABELS "program;orchestration;v0.9"
 )
 
+# The call ABI as MMIO: rings, doorbell, status registers, the payload-free bus (#305 inc. 3)
+kpu_add_component_test(test_orchestration_mmio "program"
+    test_orchestration_mmio.cpp
+)
+
+set_tests_properties(test_orchestration_mmio PROPERTIES
+    LABELS "program;orchestration;v0.9"
+)
+
+# Reserve-then-launch: R1-R4, the freedom, the wedge, and sufficiency (#305 inc. 3)
+kpu_add_component_test(test_reservation "program"
+    test_reservation.cpp
+)
+
+set_tests_properties(test_reservation PROPERTIES
+    LABELS "program;orchestration;v0.9"
+)
+
 # The KPU loadable container: the unit of deployment (#305 increment 1)
 kpu_add_component_test(test_loadable "program"
     test_loadable.cpp

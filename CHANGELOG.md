@@ -9,6 +9,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The call ABI as MMIO, and reserve-then-launch (#305 increment 3).** The orchestrator no
+  longer holds the machine. `KpuDevice` owns the data plane, the platform, the credit ledger and
+  the reservation table; the decider (`run_orchestrator`) reaches it only through a `KpuPort`,
+  of which there are two: `DirectPort` (function calls) and `MmioPort` (a 64-byte descriptor
+  ring, a doorbell, a completion ring, status and manifest registers, over a logged `Bus`).
+  `orchestrate()` keeps increment 2's signature and gains `transport` and `policy` options.
+  - **Identical through MMIO, byte for byte.** Both transports drive the same device with the
+    same orchestrator, so the descriptor traces, the values (L-B and L-T1), the DMA counts and
+    the per-operator peak residencies are compared exactly; any difference is a transport bug.
+  - **No payload, checked on the run as well as the type.** Wire records hold indices, counts
+    and flags only. Tensor DRAM is mapped on the orchestrator's bus as a FAULT, and two runs
+    whose inputs differ in every element produce byte-identical bus logs (non-interference).
+    Both checks were confirmed to fail when the property is broken.
+  - **Reserve-then-launch.** A `RESERVE` claims an operator's slots atomically, granted in
+    operator order and refused rather than queued (R1-R4 in `kpu_device.hpp`, with the
+    deadlock-freedom argument). `AllocationPolicy::ReserveThenLaunch` reserves the next operator
+    when it fits and places for it before the current launch -- the order program-order
+    acquisition forbids -- and treats a refused reservation as a decision point. The greedy
+    shape without reservations is kept as a test-only ablation, and the device refuses it naming
+    the later operator holding the credits rather than hanging.
+  - **A granted reservation completes.** The bound is `peak_live_tiles + retained`, checked by
+    the device at launch; a capacity sweep asserts no executor refusal ever follows a grant, and
+    the bound minus one fails that sweep. Increment 2's minimum L3 for the three-GEMM chain was
+    its own `|tiles to place|` check (8 cold / 12 warm); the machine's is 6 / 10.
+  - `RELEASE` now travels before the `LAUNCH` it governs (`kReleaseAtLastRead`) and completes
+    after it, so completion order is no longer issue order; tests match completions by id.
 - **A deciding orchestrator over the `.kpuld` container (#305 increment 2).** The loadable says
   which operators to run and where the tensors are; it does not say which tiles to keep in L3,
   when to give a slot back, or what to do when the machine is full. Those are runtime decisions

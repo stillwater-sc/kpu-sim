@@ -8,7 +8,7 @@
 //
 // WHAT IT MAY TOUCH, and what it may not:
 //
-//   sees        a StatusView -- inventory, occupancy, credits, completions. METADATA.
+//   sees        a KpuPort -- status counts, manifests, completions. METADATA.
 //   issues      Descriptors -- none of which carries payload.
 //   never       a tensor element. Not one.
 //
@@ -32,6 +32,16 @@
 // applies VERBATIM, which is the whole reason increment 2 uses this rule and increment 3
 // buys more freedom deliberately, with a new argument, rather than by assumption.
 //
+// INCREMENT 3 makes the rule the DEVICE's to enforce rather than the orchestrator's to keep:
+// every operator's slots are claimed by an atomic RESERVE, granted in operator order (R1-R4
+// in kpu_device.hpp, with the proof). `ProgramOrder` reserves each operator just before
+// placing for it, which is increment 2's behaviour restated as reservations.
+// `ReserveThenLaunch` also reserves the NEXT operator when the machine can take it, and
+// places for it BEFORE the current launch -- an order program-order acquisition forbids.
+//
+// THE ORCHESTRATOR NO LONGER HOLDS THE MACHINE. It reaches the device through a KpuPort and
+// nothing else; the TensorStore and the VirtualPlatform are the device's (kpu_device.hpp).
+//
 // ---------------------------------------------------------------------------
 // WHAT L-T1 LETS AN ORCHESTRATOR DECIDE, exactly
 // ---------------------------------------------------------------------------
@@ -52,6 +62,8 @@
 
 #include <sw/kpu/loadable/loadable.hpp>
 #include <sw/kpu/orchestration/descriptor.hpp>
+#include <sw/kpu/orchestration/kpu_device.hpp>
+#include <sw/kpu/orchestration/port.hpp>
 #include <sw/kpu/orchestration/status.hpp>
 #include <sw/kpu/program/driver/execution_level.hpp>
 #include <sw/kpu/program/platform/virtual_platform.hpp>
@@ -66,48 +78,26 @@ using program::driver::ExecutionLevel;
 using program::driver::RunOutcome;
 
 // ----------------------------------------------------------------------------
-// The data plane — the machine's side, not the orchestrator's
-// ----------------------------------------------------------------------------
-// Tensors live OUTSIDE the operator programs, which is what the loadable's separation
-// means at run time. An operator's L0 program has its own operand arrays; this holds the
-// tensors those arrays are views of, and copying between the two is the DMA's job modelled
-// at this level.
-//
-// It is deliberately NOT reachable from the orchestrator (§3). The orchestrator decides
-// which tiles move; this is what moving them does.
-class TensorStore {
-public:
-    void declare(const loadable::TensorRef& t);
-    bool has(const std::string& name) const;
-    std::vector<float>& values(const std::string& name);
-    const std::vector<float>& values(const std::string& name) const;
-
-    // Copy a TENSOR into an operator program's OPERAND, and back out after the launch.
-    //
-    // The two are named separately on purpose. A loadable's tensors are the model's -- "A",
-    // "layer3.weight" -- and an L0 program's operands are the kernel's, which for a derived
-    // matmul are always A/B/C whatever the model calls them. Treating one name as the other
-    // works only while they coincide, and the first version of this did exactly that: both
-    // operators then read and wrote the SAME tensor, the second accumulated onto the first's
-    // result, and C came out doubled.
-    //
-    // Shapes must agree: a mismatch means the loadable and the L0 program disagree about a
-    // tensor, which is a refusal rather than a truncating copy.
-    void load_into(program::TileProgram& prog, const std::string& operand,
-                   const std::string& tensor) const;
-    void store_from(const program::TileProgram& prog, const std::string& operand,
-                    const std::string& tensor);
-
-private:
-    std::map<std::string, std::vector<float>> values_;
-    std::map<std::string, std::vector<std::uint64_t>> shapes_;
-};
-
-// ----------------------------------------------------------------------------
 // Options and result
 // ----------------------------------------------------------------------------
+enum class AllocationPolicy : std::uint8_t {
+    ProgramOrder,        // reserve operator k just before placing for it (increment 2's rule)
+    ReserveThenLaunch,   // also reserve k+1 when it fits, and place for it before LAUNCH k
+    // TEST-ONLY: the WRONG shape of plan §3.3 -- place k+1's tiles, then k's, with no
+    // reservations at all. Paired with DeviceOptions::enforce_reservations = false it shows
+    // the hold-and-wait wedge, which the device must REFUSE rather than hang on.
+    GreedyPrefetch,
+};
+
+const char* to_string(AllocationPolicy p);
+
+enum class Transport : std::uint8_t { Direct, Mmio };
+
 struct OrchestratorOptions {
     ExecutionLevel level = ExecutionLevel::BlockSequential;
+    AllocationPolicy policy = AllocationPolicy::ProgramOrder;
+    Transport transport = Transport::Direct;
+    DeviceOptions device{};
     // Keep a tile resident when a later operator will read it. This is the decision that
     // makes the KPU stateful: with it off, every operator starts cold and the machine's
     // storage hierarchy is decoration.
@@ -129,19 +119,26 @@ struct OrchestrationResult {
     std::vector<std::string> unmodelled;
 
     std::size_t dma_transfers() const;     // summed over operators, for the reuse proof
+
+    // MMIO transport only: every orchestrator-side bus access, digested. Two runs whose tensor
+    // VALUES differ must produce the same digest -- the non-interference form of "no status
+    // read carries payload" (plan §3.7). Empty and zero on the direct transport.
+    std::string bus_log_digest;
+    std::size_t bus_accesses = 0;
 };
 
-// Which TENSOR each of an operator's OPERANDS is, derived from the L0 program's structure
-// and the loadable's declared order.
+// THE DECIDER. Reaches the machine through `port` alone; it is handed no TensorStore and no
+// platform. Fills `trace`, `operator_names`, `refused` and `diagnosis`; what the launches did
+// (`per_operator`, `unmodelled`) is the device's evidence and is filled by the caller.
 //
-// Positional, as the schema says: the operator's `inputs` line up with the operands the
-// program READS, in first-appearance order, and its `outputs` with the operands it only
-// writes. Positional and therefore checkable -- a count mismatch is a refusal, because a
-// loadable that names two inputs for a three-operand kernel does not describe a run.
-std::map<std::string, std::string> operand_binding(const program::TileProgram& prog,
-                                                   const loadable::Operator& op);
+// The loadable is read for METADATA only -- operator names, which tensors each reads -- which
+// is what an RV guest reading its own FlatBuffers tables in place will see. Tensor data is
+// external to it by construction.
+OrchestrationResult run_orchestrator(const loadable::Loadable& l, KpuPort& port,
+                                     const OrchestratorOptions& opt = {});
 
-// Run a loadable. Decides placement as it goes; records every decision in the trace.
+// Run a loadable end to end: build the device, the chosen transport, and run the decider.
+// Kept with increment 2's signature, so every caller from then is unchanged.
 OrchestrationResult orchestrate(const loadable::Loadable& l,
                                 program::platform::VirtualPlatform& platform,
                                 TensorStore& tensors,

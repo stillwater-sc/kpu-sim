@@ -40,6 +40,9 @@ add_library(kpu_program
     deployment_json.cpp
     loadable.cpp
     orchestrator.cpp
+    kpu_device.cpp
+    abi.cpp
+    mmio.cpp
     ${KPU_LOADABLE_GEN_HDR}
 )
 add_dependencies(kpu_program kpu_loadable_schema)

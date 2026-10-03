@@ -1,19 +1,19 @@
 // ============================================================================
 // src/program/orchestrator.cpp
-// The deciding orchestrator (#305 increment 2). See the header for what it may and may
-// not touch, and for why program-order acquisition is inherited rather than invented.
+// The deciding orchestrator (#305 increments 2-3). See the header for what it may and may
+// not touch, and kpu_device.hpp for the reservation rules it decides under.
 //
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2024-2025 Stillwater Supercomputing, Inc.
 // ============================================================================
 #include <sw/kpu/orchestration/orchestrator.hpp>
 
+#include <sw/kpu/orchestration/mmio.hpp>
+
 #include <sw/kpu/program/platform/digest.hpp>
 #include <sw/kpu/program/serialize/l0_format.hpp>
 
 #include <set>
-#include <sstream>
-#include <stdexcept>
 
 namespace sw::kpu::orchestration {
 
@@ -25,6 +25,7 @@ const char* to_string(DescriptorKind k) {
         case DescriptorKind::Configure: return "CONFIGURE";
         case DescriptorKind::Launch:    return "LAUNCH";
         case DescriptorKind::Fence:     return "FENCE";
+        case DescriptorKind::Reserve:   return "RESERVE";
     }
     return "?";
 }
@@ -38,15 +39,41 @@ const char* to_string(CompletionStatus s) {
     return "?";
 }
 
+const char* to_string(RefusalCause c) {
+    switch (c) {
+        case RefusalCause::None:                  return "none";
+        case RefusalCause::InsufficientCredit:    return "insufficient-credit";
+        case RefusalCause::ReservationOutOfOrder: return "out-of-order";
+        case RefusalCause::NoReservation:         return "no-reservation";
+        case RefusalCause::ReservationExceeded:   return "reservation-exceeded";
+        case RefusalCause::Unsupported:           return "unsupported";
+    }
+    return "?";
+}
+
+const char* to_string(AllocationPolicy p) {
+    switch (p) {
+        case AllocationPolicy::ProgramOrder:      return "program-order";
+        case AllocationPolicy::ReserveThenLaunch: return "reserve-then-launch";
+        case AllocationPolicy::GreedyPrefetch:    return "greedy-prefetch";
+    }
+    return "?";
+}
+
 std::string Descriptor::str() const {
     std::string out = std::to_string(id) + " " + to_string(kind);
     switch (kind) {
         case DescriptorKind::Place:
             out += " " + tile.str() + " " + program::to_string(leg) + " -> " +
                    program::platform::format(resource);
+            if (!target.empty()) out += " for " + target;
             break;
         case DescriptorKind::Release:
             out += " " + tile.str();
+            if (flags & kReleaseAtLastRead) out += " at-last-read";
+            break;
+        case DescriptorKind::Reserve:
+            out += " " + target + " slots=" + std::to_string(slots);
             break;
         case DescriptorKind::Configure:
         case DescriptorKind::Launch:
@@ -65,6 +92,7 @@ std::string Completion::str() const {
     // apart for the same reason RunOutcome::has_timing does.
     out += timed ? " cycles=" + std::to_string(cycles) : " cycles=not-modelled";
     for (const TileRef& t : released) out += " released:" + t.str();
+    if (cause != RefusalCause::None) out += std::string(" cause=") + orchestration::to_string(cause);
     if (!diagnosis.empty()) out += " (" + diagnosis + ")";
     return out;
 }
@@ -91,142 +119,8 @@ std::size_t OrchestrationResult::dma_transfers() const {
     return n;
 }
 
-// ---- the data plane ---------------------------------------------------------
-void TensorStore::declare(const loadable::TensorRef& t) {
-    std::uint64_t n = 1;
-    for (std::uint64_t d : t.shape) n *= d;
-    values_[t.name].assign(static_cast<std::size_t>(n), 0.0f);
-    shapes_[t.name] = t.shape;
-}
-
-bool TensorStore::has(const std::string& name) const { return values_.count(name) != 0; }
-
-std::vector<float>& TensorStore::values(const std::string& name) {
-    const auto it = values_.find(name);
-    if (it == values_.end())
-        throw std::invalid_argument("tensor store: no tensor \"" + name + "\"");
-    return it->second;
-}
-
-const std::vector<float>& TensorStore::values(const std::string& name) const {
-    const auto it = values_.find(name);
-    if (it == values_.end())
-        throw std::invalid_argument("tensor store: no tensor \"" + name + "\"");
-    return it->second;
-}
-
-void TensorStore::load_into(program::TileProgram& prog, const std::string& operand,
-                            const std::string& tensor) const {
-    if (!prog.has_operand(operand)) return;
-    const std::vector<float>& src = values(tensor);
-    auto& dst = prog.operand(operand).values;
-    // SHAPES MUST AGREE. A truncating copy would let the loadable and the L0 program
-    // disagree about a tensor while the run reported success -- which is the silent
-    // wrong answer this whole layer is built to avoid.
-    if (src.size() != dst.size())
-        throw std::invalid_argument(
-            "tensor store: tensor \"" + tensor + "\" holds " + std::to_string(src.size()) +
-            " values, operand \"" + operand + "\" holds " + std::to_string(dst.size()));
-    dst = src;
-}
-
-void TensorStore::store_from(const program::TileProgram& prog, const std::string& operand,
-                             const std::string& tensor) {
-    if (!prog.has_operand(operand)) return;
-    const auto& src = prog.operand(operand).values;
-    std::vector<float>& dst = values(tensor);
-    if (src.size() != dst.size())
-        throw std::invalid_argument(
-            "tensor store: tensor \"" + tensor + "\" holds " + std::to_string(dst.size()) +
-            " values, operand \"" + operand + "\" holds " + std::to_string(src.size()));
-    dst = src;
-}
-
-std::map<std::string, std::string> operand_binding(const program::TileProgram& prog,
-                                                   const loadable::Operator& op) {
-    // The operands the program READS, in first-appearance order -- the same rule
-    // driver::program_inputs uses, and for the same reason: "read at all", not "read before
-    // written", because an in-place kernel reads and writes one operand and still needs an
-    // input.
-    std::vector<std::string> reads;
-    std::set<std::string> seen;
-    for (const program::TileOp& o : prog.ops())
-        for (const program::TileCoord& c : o.inputs)
-            if (seen.insert(c.operand).second) reads.push_back(c.operand);
-    // ...and the ones it only writes.
-    std::vector<std::string> writes;
-    std::set<std::string> written;
-    for (const program::TileOp& o : prog.ops())
-        for (const program::TileCoord& c : o.outputs)
-            if (!seen.count(c.operand) && written.insert(c.operand).second)
-                writes.push_back(c.operand);
-
-    if (reads.size() != op.inputs.size())
-        throw std::invalid_argument(
-            "operator \"" + op.name + "\": its program reads " +
-            std::to_string(reads.size()) + " operand(s), the loadable names " +
-            std::to_string(op.inputs.size()) + " input tensor(s)");
-    if (writes.size() != op.outputs.size())
-        throw std::invalid_argument(
-            "operator \"" + op.name + "\": its program writes " +
-            std::to_string(writes.size()) + " operand(s), the loadable names " +
-            std::to_string(op.outputs.size()) + " output tensor(s)");
-
-    std::map<std::string, std::string> out;
-    for (std::size_t i = 0; i < reads.size(); ++i) out[reads[i]] = op.inputs[i];
-    for (std::size_t i = 0; i < writes.size(); ++i) out[writes[i]] = op.outputs[i];
-    return out;
-}
 
 namespace {
-
-// Every tile an operator's program READS, in first-appearance order, IN BOTH VOCABULARIES.
-// Reads, not writes: a tile the operator produces is not something to place -- it is something
-// the launch creates. Same distinction as `program_inputs` draws for operands, one level down.
-//
-// TWO NAMES FOR ONE TILE, and both are needed, which is why they travel together:
-//
-//   tensor key    "B#0#0"  -- the MACHINE's name. Residency is a fact about the machine and
-//                             persists across operators, so two operators reading one tensor
-//                             must agree on this key.
-//   operand key   "B#0#0"  -- the KERNEL's name, and equal to the above only by coincidence.
-//                             For gemm1 the binding is operand A -> tensor C, so the tensor
-//                             key is "C#0#0" and the operand key is "A#0#0".
-//
-// The executor compares against OPERAND keys, because it builds them from the program in front
-// of it. Handing it a tensor key was a live bug: gemm1's A tiles (tensor C) were not recognised
-// as resident and re-ran their DMA leg, while its OUTPUT operand C was matched against resident
-// tensor C and exempted from release. B only worked because its two names happened to coincide
-// -- exactly the coincidence that made the operand binding explicit in the first place.
-struct ReadTile {
-    TileRef tensor_tile;        // what the loadable calls it
-    std::string operand_key;    // what this program calls it, in the executor's spelling
-};
-
-std::vector<ReadTile> reads_of(const program::TileProgram& prog,
-                               const std::map<std::string, std::string>& binding) {
-    std::vector<ReadTile> out;
-    std::set<std::string> seen;                  // by OPERAND key: two operands may share one
-                                                 // tensor, and each is a separate seeding fact
-    for (const program::TileOp& op : prog.ops())
-        for (const program::TileCoord& c : op.inputs) {
-            const auto it = binding.find(c.operand);
-            if (it == binding.end()) continue;
-            const std::string okey = program::tile_key(c);
-            if (!seen.insert(okey).second) continue;
-            out.push_back(ReadTile{TileRef{it->second, c.ti, c.tj}, okey});
-        }
-    return out;
-}
-
-// The distinct TENSOR tiles of those reads -- what placement decisions are made about.
-std::vector<TileRef> tiles_read(const std::vector<ReadTile>& reads) {
-    std::vector<TileRef> out;
-    std::set<std::string> seen;
-    for (const ReadTile& r : reads)
-        if (seen.insert(r.tensor_tile.key()).second) out.push_back(r.tensor_tile);
-    return out;
-}
 
 // Which tensors a later operator still reads. What the orchestrator needs in order to know
 // what is worth keeping, and it is the ONLY lookahead it does -- deciding on the basis of
@@ -240,224 +134,248 @@ std::set<std::string> tensors_read_after(const loadable::Loadable& l, std::size_
 
 } // namespace
 
-// ---- the orchestrator -------------------------------------------------------
-OrchestrationResult orchestrate(const loadable::Loadable& l,
-                                program::platform::VirtualPlatform& platform,
-                                TensorStore& tensors,
-                                const OrchestratorOptions& opt) {
+// ---- the decider ------------------------------------------------------------
+OrchestrationResult run_orchestrator(const loadable::Loadable& l, KpuPort& port,
+                                     const OrchestratorOptions& opt) {
     OrchestrationResult result;
     std::uint64_t next_id = 1;
+    const std::size_t n = l.operators.size();
 
-    for (const loadable::TensorRef& t : l.tensors)
-        if (!tensors.has(t.name)) tensors.declare(t);
+    if (port.operator_count() != n) {
+        result.refused = true;
+        result.diagnosis = "the device holds " + std::to_string(port.operator_count()) +
+                           " operator(s), the loadable names " + std::to_string(n);
+        return result;
+    }
 
-    const auto& spec = platform.deployment();
-    const program::characterize::DeviceDescriptor dev = spec.device_view();
-    const std::size_t l3_capacity = dev.l3_tiles;
-
-    // What the ORCHESTRATOR believes is resident. Its own bookkeeping, not a peek into the
-    // executor: it placed these tiles and it owns their lifetime, which is exactly the
-    // contract TileExecutionRequest::initially_resident states from the other side.
-    std::set<std::string> resident;
-    std::map<std::string, TileRef> resident_refs;
+    // What the ORCHESTRATOR has decided to hold across launches, by tensor key. The device
+    // keeps the authoritative ledger; this is the decider's memory of its own decisions, which
+    // is what it plans with. The two agreeing is checked by every test that measures reuse.
+    std::set<std::string> held;
+    std::vector<bool> reserved(n, false);
+    std::vector<std::set<std::string>> placed(n);      // PLACEd ahead of the operator's turn
 
     auto issue = [&](Descriptor d) {
         d.id = next_id++;
         result.trace.issued.push_back(d);
+        port.submit(d);
         return d.id;
     };
-    auto complete = [&](std::uint64_t id, CompletionStatus st, bool timed, program::Cycle cyc,
-                        std::vector<TileRef> released = {}, std::string why = {}) {
+    // Collect everything the device has posted, in the order it posted it. Completion order is
+    // NOT issue order: a RELEASE at last read completes after the LAUNCH it governs.
+    auto drain = [&] {
         Completion c;
-        c.descriptor_id = id;
-        c.status = st;
-        c.timed = timed;
-        c.cycles = cyc;
-        c.released = std::move(released);
-        c.diagnosis = std::move(why);
-        result.trace.completions.push_back(c);
+        while (port.poll_completion(c)) result.trace.completions.push_back(std::move(c));
+    };
+    // The completion for `id`. The device never blocks, so if it is not there after a drain it
+    // never will be -- and the honest response is a refusal naming the protocol bug, not a loop.
+    auto await = [&](std::uint64_t id, Completion& out) {
+        drain();
+        for (auto it = result.trace.completions.rbegin(); it != result.trace.completions.rend();
+             ++it)
+            if (it->descriptor_id == id) {
+                out = *it;
+                return true;
+            }
+        out = Completion{};
+        out.descriptor_id = id;
+        out.status = CompletionStatus::RefusedUnsupported;
+        out.cause = RefusalCause::Unsupported;
+        out.diagnosis = "descriptor " + std::to_string(id) +
+                        " has no completion; the device never blocks, so this is a protocol "
+                        "error, not a wait";
+        return false;
+    };
+    auto stop = [&](const Completion& c) {
+        result.refused = true;
+        result.diagnosis = c.diagnosis;
+        return result;
     };
 
-    for (std::size_t i = 0; i < l.operators.size(); ++i) {
-        const loadable::Operator& op = l.operators[i];
+    // WHERE A PLACE LANDS, from the device's own inventory rather than a spelling the
+    // orchestrator assumes. The first L3 tile: at L-T1 the executor does not distinguish L3
+    // tiles, and naming one is the ABI's job, not a placement decision this level can make.
+    program::platform::ResourceName l3_target;
+    for (const auto& r : port.inventory())
+        if (r.kind == program::platform::ResourceKind::L3Tile) {
+            l3_target = r;
+            break;
+        }
+
+    auto place = [&](std::size_t op, const TileRef& t, Completion& c) {
+        Descriptor d;
+        d.kind = DescriptorKind::Place;
+        d.tile = t;
+        // ONE LEG. At L-T1 the orchestrator orders the DMA leg only; the BlockMover and
+        // Streamer legs are the executor's, scheduled across the run under credits.
+        d.leg = program::Hop::DmaDramToL3;
+        d.resource = l3_target;
+        d.target = l.operators[op].name;
+        return await(issue(d), c) && c.status == CompletionStatus::Done;
+    };
+    auto reserve = [&](std::size_t op, std::uint32_t slots, Completion& c) {
+        Descriptor d;
+        d.kind = DescriptorKind::Reserve;
+        d.target = l.operators[op].name;
+        d.slots = slots;
+        return await(issue(d), c) && c.status == CompletionStatus::Done;
+    };
+    // How many of an operator's read tiles it will keep past its own launch.
+    auto retained_count = [&](const OperatorManifest& m, std::size_t op) {
+        if (!opt.reuse_shared_inputs) return std::size_t{0};
+        const std::set<std::string> later = tensors_read_after(l, op + 1);
+        std::size_t k = 0;
+        for (const TileRef& t : m.reads)
+            if (later.count(t.tensor)) ++k;
+        return k;
+    };
+
+    for (std::size_t k = 0; k < n; ++k) {
+        const loadable::Operator& op = l.operators[k];
         result.operator_names.push_back(op.name);
 
-        program::TileProgram prog = program::serialize::from_string(op.l0_program);
-        std::map<std::string, std::string> binding;
-        try {
-            binding = operand_binding(prog, op);
-        } catch (const std::exception& e) {
+        const OperatorManifest m = port.manifest(static_cast<std::uint32_t>(k));
+        if (!m.valid) {
             result.refused = true;
-            result.diagnosis = e.what();
-            return result;
-        }
-        const std::vector<ReadTile> reads = reads_of(prog, binding);
-        const std::vector<TileRef> needed = tiles_read(reads);
-
-        // WHAT A LATER OPERATOR STILL WANTS -- from i+1 on, so this operator's own reads do not
-        // count. It is the only lookahead the orchestrator does, and it decides two things: what
-        // is worth keeping past this launch, and therefore what is worth paying an L3 slot for
-        // during it.
-        const std::set<std::string> wanted_later = tensors_read_after(l, i + 1);
-
-
-        // ---- decide what to place ------------------------------------------
-        std::vector<TileRef> to_place;
-        for (const TileRef& t : needed)
-            if (!resident.count(t.key())) to_place.push_back(t);
-
-        // GIVING BACK HAPPENS AT THE END OF THE PREVIOUS OPERATOR, not here. A pass that
-        // released "tiles no remaining operator reads" at this point could never fire once
-        // retention is filtered by `wanted_later`: nothing enters `resident` unless a later
-        // operator reads it, so by the time this operator runs there is nothing stale to find.
-        // The property that pass existed for -- release before asking, so a bounded machine can
-        // run a chain longer than its L3 -- is STRONGER now, because the credits went back one
-        // launch earlier. Keeping the pass as well would be code that cannot run, asserting
-        // something untrue about where the decision is made.
-
-        // WHAT WAS ALREADY THERE, sampled after the releases and before anything is placed.
-        // `resident` is about to change: the PLACE loop no longer writes to it, but the run
-        // that follows does, and seeding the executor with the post-place set would tell it
-        // that tiles THIS RUN is fetching were already in L3 -- skipping the very DMA legs the
-        // PLACE descriptors just asked for, and turning the reuse measurement into "we claimed
-        // everything was warm".
-        const std::set<std::string> resident_before = resident;
-
-        // ---- can the machine take them? ------------------------------------
-        StatusView status(spec, resident, l3_capacity);
-        if (!status.can_place(to_place.size())) {
-            // THE ABI SAYS NO, and the orchestrator reports a decision point rather than
-            // hanging. This is the case a static schedule never meets, because the compiler
-            // proved its schedule fits; a runtime allocator meets it and must survive it.
-            Descriptor d;
-            d.kind = DescriptorKind::Place;
-            d.tile = to_place.empty() ? TileRef{} : to_place.front();
-            const std::uint64_t id = issue(d);
-            std::ostringstream why;
-            why << "operator \"" << op.name << "\" needs " << to_place.size()
-                << " new L3 slot(s), " << status.credits_available() << " available of "
-                << l3_capacity << " (" << status.resident_count() << " resident)";
-            complete(id, CompletionStatus::RefusedInsufficientCredit, false, 0, {}, why.str());
-            result.refused = true;
-            result.diagnosis = why.str();
+            result.diagnosis = m.error;
             return result;
         }
 
-        for (const TileRef& t : to_place) {
+        // WHAT A LATER OPERATOR STILL WANTS -- from k+1 on, so this operator's own reads do not
+        // count. It decides what is worth keeping past this launch, and therefore what is
+        // worth paying an L3 slot for during it.
+        const std::set<std::string> wanted_later = tensors_read_after(l, k + 1);
+        auto keep = [&](const TileRef& t) {
+            return opt.reuse_shared_inputs && wanted_later.count(t.tensor) != 0;
+        };
+
+        // ---- one ledger, one spelling ----------------------------------------
+        // The device's credit ledger is authoritative; `held` is the orchestrator's memory of
+        // its own decisions. Read the status surface and refuse if they disagree, rather than
+        // plan against a machine that is not there -- the "two spellings of one fact" failure
+        // increment 2 kept meeting, caught at the point it would start to matter.
+        const StatusSnapshot status = port.read_status();
+        if (status.held != held.size() || status.completed != k) {
+            result.refused = true;
+            result.diagnosis = "before operator \"" + op.name + "\": the device holds " +
+                               std::to_string(status.held) + " tile(s) and has completed " +
+                               std::to_string(status.completed) +
+                               " operator(s); the orchestrator decided " +
+                               std::to_string(held.size()) + " and " + std::to_string(k);
+            return result;
+        }
+
+        Completion c;
+
+        // ---- reserve: all or none, in operator order (R1, R2) ----------------
+        // THE ABI SAYS NO, and the orchestrator reports a decision point rather than hanging.
+        // The reservation is the SUFFICIENT bound (plan §3.4), so a granted one completes.
+        if (opt.policy != AllocationPolicy::GreedyPrefetch && !reserved[k]) {
+            if (!reserve(k, m.bound(retained_count(m, k)), c)) return stop(c);
+            reserved[k] = true;
+        }
+
+        // ---- place AHEAD: the freedom program-order acquisition forbids -------
+        // Only with a granted reservation for k+1 (or under the test-only greedy ablation,
+        // which has none and is how the wedge is shown). Tiles k also reads are left to their
+        // turn: k places or keeps them itself, and one tile is one slot.
+        if (opt.policy != AllocationPolicy::ProgramOrder && k + 1 < n) {
+            const OperatorManifest next = port.manifest(static_cast<std::uint32_t>(k + 1));
+            if (next.valid) {
+                const std::uint32_t next_bound = next.bound(retained_count(next, k + 1));
+                bool granted = opt.policy == AllocationPolicy::GreedyPrefetch;
+                if (opt.policy == AllocationPolicy::ReserveThenLaunch && !reserved[k + 1]) {
+                    if (reserve(k + 1, next_bound, c)) {
+                        reserved[k + 1] = true;
+                        granted = true;
+                    } else if (c.cause != RefusalCause::InsufficientCredit) {
+                        return stop(c);
+                    }
+                    // InsufficientCredit: the DECISION POINT. The machine cannot take k+1 yet;
+                    // run k without prefetching, and k+1 reserves on its own turn.
+                }
+                if (granted) {
+                    std::set<std::string> mine;
+                    for (const TileRef& t : m.reads) mine.insert(t.key());
+                    // NEVER AHEAD OF ITS PRODUCER. A tile of a tensor operator k is about to
+                    // WRITE does not exist yet in its final form; placing it before k runs
+                    // would be a read-after-write hazard. At L-T1 it would not change a value
+                    // (the leg is charged inside k+1's run), which is exactly why it has to be
+                    // excluded by rule rather than caught by a value comparison.
+                    const std::set<std::string> produced(op.outputs.begin(), op.outputs.end());
+                    for (const TileRef& t : next.reads) {
+                        const std::string key = t.key();
+                        if (held.count(key) || mine.count(key) || placed[k + 1].count(key) ||
+                            produced.count(t.tensor))
+                            continue;
+                        if (opt.policy == AllocationPolicy::ReserveThenLaunch &&
+                            placed[k + 1].size() >= next_bound)
+                            break;                       // stay inside the reservation (R3)
+                        if (!place(k + 1, t, c)) return stop(c);
+                        placed[k + 1].insert(key);
+                    }
+                }
+            }
+        }
+
+        // ---- place this operator's tiles --------------------------------------
+        for (const TileRef& t : m.reads) {
+            const std::string key = t.key();
+            if (held.count(key) || placed[k].count(key)) continue;
+            if (!place(k, t, c)) return stop(c);
+        }
+
+        // ---- release at last read: decided BEFORE the launch it governs -------
+        // The device needs this at launch time, to know which credits come back at each
+        // tile's last reader. Holding a tile nobody will read again buys nothing and costs a
+        // slot for the whole run, so everything not kept for a later operator is released.
+        for (const TileRef& t : m.reads) {
+            if (keep(t)) continue;
             Descriptor d;
-            d.kind = DescriptorKind::Place;
+            d.kind = DescriptorKind::Release;
             d.tile = t;
-            // ONE LEG. At L-T1 the orchestrator orders the DMA leg only; the BlockMover and
-            // Streamer legs are the executor's, scheduled across the run under credits.
-            // See the header on why the vocabulary is wider than what this level uses.
-            d.leg = program::Hop::DmaDramToL3;
-            d.resource = program::platform::ResourceName{spec.device(0).name,
-                                                        program::platform::ResourceKind::L3Tile,
-                                                        {0},
-                                                        0};
-            const std::uint64_t id = issue(d);
-            // NOT added to `resident` yet -- see `resident_before` above. A tile becomes
-            // resident when the run that fetches it has run, and until then the only honest
-            // statement about it is the RETENTION below: "this run must leave it there".
-            //
-            // A PLACE has no completion cycle of its own at L-T1 (#305 §6.2): the executor
-            // decides when the leg happens, inside the launch. Reporting a number here would
-            // be inventing one.
-            complete(id, CompletionStatus::Done, /*timed=*/false, 0);
+            d.flags = kReleaseAtLastRead;
+            issue(d);                                    // completes after the launch
         }
 
-        // ---- launch --------------------------------------------------------
-        for (const auto& [operand, tensor] : binding)
-            tensors.load_into(prog, operand, tensor);
-
+        // ---- launch ------------------------------------------------------------
         Descriptor launch;
         launch.kind = DescriptorKind::Launch;
         launch.target = op.name;
-        const std::uint64_t launch_id = issue(launch);
+        if (!await(issue(launch), c) || c.status != CompletionStatus::Done) return stop(c);
+        drain();
 
-        // ---- what the machine is told, in the machine's spelling ------------
-        // SEEDED: tiles that were resident BEFORE this operator's places. These skip the DMA
-        // leg, because they are already there.
-        // RETAINED: tiles this run must leave resident, so the executor may not return their
-        // credits at their last reader. Without this the orchestrator's claim to hold them is
-        // not backed by the machine -- the slot could be reused inside this very run, and the
-        // NEXT run would seed a tile that is no longer there and skip a leg it owes.
-        std::set<std::string> seeded, retained;
-        for (const ReadTile& r : reads) {
-            if (resident_before.count(r.tensor_tile.key())) seeded.insert(r.operand_key);
-            // RETAIN ONLY WHAT A LATER OPERATOR READS. Holding a tile nobody will read again
-            // buys nothing and costs a slot for the whole run, which can refuse a run that
-            // fits -- the same argument as releasing before asking, applied to retention. The
-            // executor frees the rest at their last reader, which is what it is for.
-            if (opt.reuse_shared_inputs && wanted_later.count(r.tensor_tile.tensor))
-                retained.insert(r.operand_key);
+        for (const TileRef& t : m.reads) {
+            if (keep(t)) held.insert(t.key());
+            else held.erase(t.key());
         }
-
-        // SLOTS THIS PROGRAM CANNOT NAME. A tile held for operator i+2 that operator i+1 never
-        // reads has no operand in i+1's program, so it has no key the executor could compare --
-        // and leaving it out would let this run place up to the full L3 while the orchestrator
-        // held more, reporting a peak residency the machine could not have delivered. Counted
-        // instead of named, because a synthetic key can collide with a real operand name.
-        std::size_t foreign = 0;
-        {
-            std::set<std::string> named;
-            for (const ReadTile& r : reads) named.insert(r.tensor_tile.key());
-            for (const auto& [key, ref] : resident_refs)
-                if (!named.count(key)) ++foreign;
-        }
-
-        const auto handle = platform.load_program(prog);
-        const auto snapshot = platform.snapshot();
-        RunOutcome outcome;
-        try {
-            const auto run = platform.run(handle, opt.level, snapshot,
-                                          program::Placement::single(dev.compute_tiles),
-                                          nullptr, seeded, retained, foreign);
-            outcome = run.outcome;
-        } catch (const std::exception& e) {
-            complete(launch_id, CompletionStatus::RefusedUnsupported, false, 0, {}, e.what());
-            result.refused = true;
-            result.diagnosis = e.what();
-            return result;
-        }
-        complete(launch_id, CompletionStatus::Done, outcome.has_timing, outcome.makespan);
-
-        for (const auto& [operand, tensor] : binding)
-            tensors.store_from(platform.program(handle), operand, tensor);
-
-        // NOW the placed tiles are resident -- the ones this run was told to keep. The run that
-        // fetched them has run, and recording it earlier would be a claim about a machine state
-        // that did not exist yet. Only the retained ones: a tile the executor was allowed to
-        // free at its last reader is NOT resident afterwards, and recording it would be the
-        // unsound claim `retained_by_caller` exists to prevent.
-        if (opt.reuse_shared_inputs)
-            for (const TileRef& t : to_place)
-                if (wanted_later.count(t.tensor)) {
-                    resident.insert(t.key());
-                    resident_refs.emplace(t.key(), t);
-                }
-
-        // WHAT THIS RUN FINISHED WITH. The credits came back inside the launch, at each tile's
-        // last reader; these descriptors record the DECISION not to keep them, which was made
-        // before the launch (it is what `retained` leaves out) and is reported after it because
-        // that is when it took effect. A PLACE therefore pairs with a RELEASE, and a tile that
-        // neither was retained nor released would be a slot nobody accounted for.
-        std::set<std::string> given_back;                 // two operands can share one tensor
-        for (const ReadTile& r : reads) {
-            const std::string key = r.tensor_tile.key();
-            if (resident.count(key)) continue;            // kept, so not given back
-            if (!given_back.insert(key).second) continue; // one tile, one credit, one RELEASE
-            Descriptor d;
-            d.kind = DescriptorKind::Release;
-            d.tile = r.tensor_tile;
-            const std::uint64_t id = issue(d);
-            complete(id, CompletionStatus::Done, /*timed=*/false, 0, {r.tensor_tile});
-        }
-
-        for (const std::string& u : outcome.unmodelled_inputs) result.unmodelled.push_back(u);
-        result.per_operator.push_back(outcome);
     }
 
+    drain();
+    return result;
+}
+
+// ---- the end-to-end entry point --------------------------------------------
+OrchestrationResult orchestrate(const loadable::Loadable& l,
+                                program::platform::VirtualPlatform& platform,
+                                TensorStore& tensors,
+                                const OrchestratorOptions& opt) {
+    KpuDevice device(l, platform, tensors, opt.level, opt.device);
+    OrchestrationResult result;
+    if (opt.transport == Transport::Mmio) {
+        MmioSystem system(device);
+        result = run_orchestrator(l, system.port(), opt);
+        result.bus_log_digest = system.bus().log_digest();
+        result.bus_accesses = system.bus().log().size();
+    } else {
+        DirectPort port(device);
+        result = run_orchestrator(l, port, opt);
+    }
+    // What the launches did is the DEVICE's evidence, recorded beside the trace rather than
+    // read through the ABI -- the orchestrator never needed it to decide.
+    result.per_operator = device.outcomes();
+    for (const RunOutcome& o : result.per_operator)
+        for (const std::string& u : o.unmodelled_inputs) result.unmodelled.push_back(u);
     return result;
 }
 

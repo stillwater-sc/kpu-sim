@@ -1,6 +1,6 @@
 # Encapsulating the program, separating the data, and orchestrating from RISC-V
 
-**Status:** accepted; §10 closed (see below). Increment 1 in progress.
+**Status:** accepted; §10 closed (see below). Increments 1–3 done; increment 4 next.
 **Issue:** #305, which **blocks** #283 (L-T2), #284 (the backdoor) and #286 (the event record)
 **Prompted by:** the #265/#282 work, which exposed that there is no *unit of deployment*
 **Relates to:** #229 (model ingestion, §4a's compiler/hardware boundary), ADR 0001 D1 (L0 is
@@ -614,7 +614,11 @@ is then tested against.
    is issued for it; the **recorded trace is byte-identical across two runs** (§6.4
    determinism); and a capacity too small to satisfy a reservation produces a **refusal with a
    diagnosis, never a hang** (§6.5).
-3. **The call ABI as MMIO, and reserve-then-launch.** Descriptor ring, doorbell, completion
+3. **The call ABI as MMIO, and reserve-then-launch** — **done.** Detailed design and what the
+   implementation found: `docs/plans/kpuld-increment3-mmio-abi-and-reserve-then-launch.md`.
+   The orchestrator reaches the machine only through a `KpuPort`; the device owns the ledger
+   and enforces R1–R4; the minimum L3 for the three-GEMM chain is now the machine's (6 / 10),
+   not increment 2's `|to_place|` check (8 / 12). Descriptor ring, doorbell, completion
    ring, status surface. The same orchestrator drives the same model through MMIO instead of
    direct calls, and allocation moves from program-order acquisition to **reserve-then-launch**
    (§6.5), which is what buys out-of-order placement. **Done when:** identical values and

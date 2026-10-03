@@ -75,7 +75,14 @@ enum class DescriptorKind : std::uint8_t {
     Configure,  // load a domain-flow program into a programmable compute tile
     Launch,     // run an operator, given where its operands already are
     Fence,      // order a completion against a later descriptor
+    Reserve,    // claim `slots` L3 credits for operator `target`, ALL OR NONE (#305 inc. 3)
 };
+
+// RELEASE flags. A release the device needs to know about AT LAUNCH TIME travels before the
+// launch it governs: "this launch is the tile's last reader, do not keep it". Its completion
+// is posted after that launch, because that is when the credit actually comes back -- so
+// completion order is not issue order, deliberately.
+inline constexpr std::uint32_t kReleaseAtLastRead = 1u;
 
 const char* to_string(DescriptorKind k);
 
@@ -88,12 +95,20 @@ struct Descriptor {
     Hop leg = Hop::DmaDramToL3;        // ONE leg; see the header on why it cannot be two
     ResourceName resource;             // where it lands, in the #282 naming map's spelling
 
-    // CONFIGURE / LAUNCH
-    std::string target;                // operator name, or domain-flow program name
+    // RESERVE / PLACE / LAUNCH: the operator. CONFIGURE: the domain-flow program.
+    // A PLACE names its operator because a placement is made UNDER A RESERVATION, and the
+    // device has to know which one (R3).
+    std::string target;
     Dim compute_tile = 0;
 
     // FENCE
     std::uint64_t wait_for = 0;        // a descriptor id whose completion must precede this
+
+    // RESERVE
+    std::uint32_t slots = 0;           // L3 credits claimed, atomically
+
+    // RELEASE
+    std::uint32_t flags = 0;           // kReleaseAtLastRead
 
     // There is deliberately NO payload field, and there never will be. See the header.
 
@@ -114,6 +129,22 @@ enum class CompletionStatus : std::uint8_t {
 
 const char* to_string(CompletionStatus s);
 
+// WHY a descriptor was refused, as a number an orchestrator can branch on. The text in
+// `Completion::diagnosis` is for a person; this is for the decider, which must tell "the
+// machine is full, choose again" from "you asked out of order, which is your bug".
+enum class RefusalCause : std::uint8_t {
+    None,
+    InsufficientCredit,        // R2: not enough free L3 slots; never queued
+    ReservationOutOfOrder,     // R1/R4: an earlier operator holds no reservation / is not done
+    NoReservation,             // R3/R4: a PLACE or LAUNCH for an operator holding no reservation
+    ReservationExceeded,       // R3/R4: the operator needs more than it reserved
+    Unsupported,               // the level, the program or the request cannot be served
+};
+
+const char* to_string(RefusalCause c);
+
+inline constexpr std::uint32_t kNoOperator = 0xFFFFFFFFu;
+
 struct Completion {
     std::uint64_t descriptor_id = 0;
     CompletionStatus status = CompletionStatus::Done;
@@ -130,6 +161,15 @@ struct Completion {
 
     std::vector<TileRef> released;      // credits this completion returned
     std::string diagnosis;              // non-empty exactly when status != Done
+
+    // THE ARITHMETIC OF A REFUSAL, as numbers. They cross the MMIO ABI as fixed-width fields,
+    // so they are 32-bit here too: a type that held more than the wire would make the two
+    // transports disagree on exactly the values a refusal is about.
+    RefusalCause cause = RefusalCause::None;
+    std::uint32_t needed = 0;           // slots asked for
+    std::uint32_t available = 0;        // slots free when refused (0xFFFFFFFF = unbounded)
+    std::uint32_t capacity = 0;         // L3 capacity in tiles (0 = unbounded)
+    std::uint32_t blocking_op = kNoOperator;   // operator index that stands in the way
 
     std::string str() const;
 };
