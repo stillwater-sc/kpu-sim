@@ -57,12 +57,21 @@ struct Hand {
           device(l, platform, store, ExecutionLevel::BlockSequential),
           port(device) {}
 
+    // Completions are matched BY ID and the rest are kept: a RELEASE at last read completes
+    // after the LAUNCH it governs, so a completion for an earlier descriptor can arrive while
+    // waiting for a later one, and dropping it would lose it silently.
+    std::vector<Completion> backlog;
     Completion send(Descriptor d) {
         d.id = next++;
         port.submit(d);
         Completion c;
-        while (port.poll_completion(c))
-            if (c.descriptor_id == d.id) return c;
+        while (port.poll_completion(c)) backlog.push_back(c);
+        for (auto it = backlog.begin(); it != backlog.end(); ++it)
+            if (it->descriptor_id == d.id) {
+                Completion out = *it;
+                backlog.erase(it);
+                return out;
+            }
         FAIL("no completion for descriptor " << d.id);
         return c;
     }
