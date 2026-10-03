@@ -242,14 +242,16 @@ tbody tr:hover td { background: var(--grid); }
   </section>
 
   <section class="step" id="review">
-    <div class="step-head"><span class="num">For the review</span><h2>Decisions these views depend on</h2></div>
+    <div class="step-head"><span class="num">Decided on review, 2026-10-03</span><h2>Decisions these views now follow</h2></div>
     <div class="review">
-      <div><b>Q1 · format</b>A columnar <code>.tflow</code> bundle (typed arrays + LOD pyramid), with Chrome trace kept as a derived export. This supersedes #286's "no new format" clause.</div>
-      <div><b>Q2 · L3 at L-T1</b>Today L3 is a pooled capacity. These slot pixels need the executor to bind each tile to a concrete L3 tile and slot. Until it does, the view draws one pooled station.</div>
-      <div><b>Q3 · floorplan source</b>Generated from the deployment (shown here), or imported from the real SoC floorplan and validated against the naming map.</div>
-      <div><b>Q4 · CPU detail</b>One block, or cores + SRAM + descriptor rings as separate blocks, so that MMIO traffic lands where it physically is.</div>
-      <div><b>Q5 · viewer tech</b>Plain static HTML with Canvas2D/WebGL and no build step, as on this page.</div>
-      <div><b>Q6 · color budget</b>Three operator hues validate together. Real models color by operator class and distinguish individual operators on hover.</div>
+      <div><b>Q1 · format</b>A columnar <code>.tflow</code> bundle (typed arrays + LOD pyramid). Chrome trace stays as a derived export; #286 is amended.</div>
+      <div><b>Q2 · L3 at L-T1</b>Pooled first. The slot pixels here assume slot binding, which is a later, reviewed executor change.</div>
+      <div><b>Q3 · floorplan</b>The generator is the reference until a real floorplan exists. The T64 has 64 compute tiles; this page's 8×8 array is illustrative.</div>
+      <div><b>Q4 · CPU</b>Cores, SRAM and the descriptor/completion rings are separate blocks, as drawn.</div>
+      <div><b>Q5 · viewer</b>Plain static HTML with Canvas2D and no build step, as this page is.</div>
+      <div><b>Q6 · colour</b>By operator class: GEMM and elementwise here, with operators named on hover and in the phase strip.</div>
+      <div><b>Q7 · NoC</b>A folded 2D torus over the L3 hubs: 4×4 loops, 8 hubs per loop. DMAs enter at the fold-end ports. This connectivity is a first pass that the schedules will settle.</div>
+      <div><b>Q8 · BlockMovers</b>Derived from the layout. First pass: four per L3 tile, one to each abutting compute tile.</div>
     </div>
   </section>
 </div>
@@ -301,13 +303,57 @@ function edgeIndex(l3, cf) { return cf.r < l3.r ? 0 : cf.c > l3.c ? 1 : cf.r > l
 function moverPoint(l3, e) { const [cx, cy] = center(l3); const hw = l3.w / 2, hh = l3.h / 2; return [[cx, l3.y], [l3.x + l3.w, cy], [cx, l3.y + l3.h], [l3.x, cy]][e]; }
 function hubPoint(l3) { return [l3.x + l3.w - 7, l3.y + l3.h - 7]; }
 L3.forEach(l => { l.edges = [0, 1, 2, 3].filter(e => { const [dr, dc] = [[-1, 0], [0, 1], [1, 0], [0, -1]][e]; const b = cellAt[(l.r + dr) + "," + (l.c + dc)]; return b && b.kind === "CF"; }); });
+// The NoC: a FOLDED 2D TORUS over the L3 router hubs (plan Q7). Two rows form one loop around X,
+// two columns one loop around Y; the 8×8 checkerboard is a 4×4 torus of loops, 8 hubs per loop.
+// The fold-end link of every loop is a PORT where traffic enters or leaves it; DMAs attach there.
+const l3At = (r, c) => { const b = cellAt[r + "," + c]; return b && b.kind === "L3" ? b : null; };
+const ROW_RINGS = [], COL_RINGS = [];
+for (let p = 0; p < N / 2; p++) {
+  const row = [], col = [];
+  for (let c = 0; c < N; c += 2) row.push(l3At(2 * p, c));
+  for (let c = N - 1; c > 0; c -= 2) row.push(l3At(2 * p + 1, c));
+  for (let r = 0; r < N; r += 2) col.push(l3At(r, 2 * p));
+  for (let r = N - 1; r > 0; r -= 2) col.push(l3At(r, 2 * p + 1));
+  ROW_RINGS.push(row); COL_RINGS.push(col);
+}
+L3.forEach(l => { l.rowRing = Math.floor(l.r / 2); l.rowPos = ROW_RINGS[l.rowRing].indexOf(l); l.colRing = Math.floor(l.c / 2); l.colPos = COL_RINGS[l.colRing].indexOf(l); });
+const RING = 8, NOC_HOP = 6;
+// shorter way around a ring, as the list of hubs visited (inclusive)
+function ringWalk(ring, i, j) { const f = (j - i + RING) % RING, b = (i - j + RING) % RING, d = f <= b ? 1 : -1, n = Math.min(f, b); const out = []; for (let k = 0; k <= n; k++) out.push(ring[(i + d * k + RING) % RING]); return out; }
+// dimension-ordered: ride the row loop to a hub on the destination's column loop, then that loop
+function route(a, b) {
+  if (a === b) return [a];
+  const ra = ROW_RINGS[a.rowRing], cq = COL_RINGS[b.colRing];
+  let best = null;
+  ra.filter(n => n.colRing === b.colRing).forEach(m => { const p = ringWalk(ra, a.rowPos, m.rowPos).concat(ringWalk(cq, m.colPos, b.colPos).slice(1)); if (!best || p.length < best.length) best = p; });
+  return best;
+}
+// fold-end ports: N/S on column loops (where the MCs' DMAs attach), W/E on row loops
+const PORTS = [];
+COL_RINGS.forEach((ring, q) => {
+  const ax = (hubPoint(ring[7])[0] + hubPoint(ring[0])[0]) / 2, bx = (hubPoint(ring[3])[0] + hubPoint(ring[4])[0]) / 2;
+  PORTS.push({ name: `noc/port[col${q}.N]`, side: "N", ring, enter: [7, 0], pt: [ax, ARR.y - 5], used: 0 });
+  PORTS.push({ name: `noc/port[col${q}.S]`, side: "S", ring, enter: [3, 4], pt: [bx, ARR.y + N * ARR.cs + 1], used: 0 });
+});
+ROW_RINGS.forEach((ring, p) => {
+  const ay = (hubPoint(ring[7])[1] + hubPoint(ring[0])[1]) / 2, by = (hubPoint(ring[3])[1] + hubPoint(ring[4])[1]) / 2;
+  PORTS.push({ name: `noc/port[row${p}.W]`, side: "W", ring, enter: [7, 0], pt: [ARR.x - 5, ay], used: 0 });
+  PORTS.push({ name: `noc/port[row${p}.E]`, side: "E", ring, enter: [3, 4], pt: [ARR.x + N * ARR.cs + 1, by], used: 0 });
+});
+// A DMA burst enters the destination's column loop at the port on its memory controller's side.
+function dmaPath(l3, mc) {
+  const port = PORTS.find(pt => pt.ring === COL_RINGS[l3.colRing] && pt.side === (mc < 2 ? "N" : "S"));
+  const [e0, e1] = port.enter, k = l3.colPos;
+  const viaA = ringWalk(port.ring, e0, k), viaB = ringWalk(port.ring, e1, k);
+  return { port, hubs: viaA.length <= viaB.length ? viaA : viaB };
+}
 function neighborsL3(cf) { const out = []; for (const [dr, dc] of [[-1,0],[1,0],[0,-1],[0,1]]) { const b = cellAt[(cf.r+dr)+","+(cf.c+dc)]; if (b && b.kind === "L3") out.push(b); } return out; }
 
 // ---------------------------------------------------------------- the workload (synthetic)
 const OPS = [
   { name: "gemm0", cls: "GEMM", token: "--op1", tasks: 40, comp: 46, inputs: 2 },
   { name: "bias_relu", cls: "elementwise", token: "--op2", tasks: 14, comp: 18, inputs: 1 },
-  { name: "gemm1", cls: "GEMM", token: "--op3", tasks: 40, comp: 46, inputs: 2 },
+  { name: "gemm1", cls: "GEMM", token: "--op1", tasks: 40, comp: 46, inputs: 2 },   // colour = operator CLASS (plan Q6)
 ];
 const HOT_L3 = 13, HOT_CFS = [5, 6, 9, 10, 13, 14, 17, 18, 21, 22, 25, 26], LATE_CF = 9;
 const LANES = 6, DMA_CYC = 38, BM_CYC = 14, STR_CYC = 7, NOC_CYC = 22, TILE_BYTES = 1024, TILE_MACS = 4096;
@@ -365,24 +411,30 @@ TASK_LIST.forEach(([oi, k], gk) => {
       tiles.push(tile);
       descriptors.push({ t: req, kind: "PLACE", text: `PLACE ${label} → l3[${l3.id}]`, op: oi });
       const m = mcOf(l3);
-      const [ds, de] = dma(m, req + Math.floor(R() * 6));
-      transits.push({ tile: tid, kind: "DMA", from: center(MC[m]), to: center(l3), t0: ds, t1: de, op: oi, mc: m });
+      const [ds, de0] = dma(m, req + Math.floor(R() * 6));
+      const dp = dmaPath(l3, m); dp.port.used++;
+      const de = de0 + dp.hubs.length * NOC_HOP;
+      transits.push({ tile: tid, kind: "DMA", pts: [center(MC[m]), dp.port.pt], t0: ds, t1: de0, op: oi, mc: m, dst: l3.id });
+      transits.push({ tile: tid, kind: "NOC", src: "dma", pts: [dp.port.pt, ...dp.hubs.map(hubPoint)], hubs: dp.hubs.map(h => h.id), t0: de0, t1: de, op: oi });
+      tile.hopsIn = dp.hubs.length; tile.port = dp.port.name;
       let l2s = Math.max(de + 2, st.prevEnd - (BM_CYC + STR_CYC + 30));
       if (viaNoc) l2s += 30 + Math.floor(R() * 60) + (cf.id === LATE_CF ? 70 : 0);
       const holdL3 = (role === "B" ? 4 * (op.comp + 6) : 0) + (hot ? 11 * (op.comp + 6) : 0);   // weights stay for reuse; the planted bug holds the hot tile's too
-      const moveCyc = viaNoc ? NOC_CYC + BM_CYC : BM_CYC;
+      const moveCyc = viaNoc ? 0 : BM_CYC;
       if (viaNoc) {
         // hub to hub over the NoC, driven by the source L3 tile, then the relay's facing-edge BlockMover
-        const relay = nbs.reduce((a, b) => (Math.hypot(b.r - l3.r, b.c - l3.c) < Math.hypot(a.r - l3.r, a.c - l3.c) ? b : a));
-        const e = edgeIndex(relay, cf);
-        transits.push({ tile: tid, kind: "NOC", from: hubPoint(l3), to: hubPoint(relay), t0: l2s, t1: l2s + NOC_CYC, op: oi, l3: l3.id, relay: relay.id });
-        transits.push({ tile: tid, kind: "BM", from: moverPoint(relay, e), to: center(cf), t0: l2s + NOC_CYC, t1: l2s + moveCyc, op: oi, l3: relay.id, edge: e, cf: cf.id });
-        tile.relay = relay.id;
+        // the relay is the neighbour of the CF reached in the fewest torus hops
+        let relay = nbs[0], path = route(l3, relay);
+        nbs.forEach(nb => { const pth = route(l3, nb); if (pth.length < path.length) { relay = nb; path = pth; } });
+        const e = edgeIndex(relay, cf), nocCyc = (path.length - 1) * NOC_HOP + 8;
+        transits.push({ tile: tid, kind: "NOC", src: "bm", pts: path.map(hubPoint), hubs: path.map(h => h.id), t0: l2s, t1: l2s + nocCyc, op: oi, l3: l3.id, relay: relay.id });
+        transits.push({ tile: tid, kind: "BM", from: moverPoint(relay, e), to: center(cf), t0: l2s + nocCyc, t1: l2s + nocCyc + BM_CYC, op: oi, l3: relay.id, edge: e, cf: cf.id });
+        tile.relay = relay.id; tile.nocHops = path.length - 1;
       } else {
         const e = edgeIndex(l3, cf);
         transits.push({ tile: tid, kind: "BM", from: moverPoint(l3, e), to: center(cf), t0: l2s, t1: l2s + moveCyc, op: oi, l3: l3.id, edge: e, cf: cf.id });
       }
-      const l2a = l2s + moveCyc;
+      const l2a = viaNoc ? transits[transits.length - 1].t1 : l2s + moveCyc;
       const l1s = Math.max(l2a + 1, st.prevEnd - STR_CYC - 6);
       const l1a = l1s + STR_CYC;
       tile.l2Arrive = l2a;
@@ -477,6 +529,9 @@ function diagnostics() {
   let dmaBound = 0;
   for (let b = 0; b < NB; b++) { const allBusy = rows.filter(r => r.group === "DRAM / DMA").some(r => r.tot[b] >= LANES * 0.95); const cfIdle = rows.filter(r => r.group === "Compute tiles").filter(r => r.tot[b] < 0.2).length; if (allBusy && cfIdle >= 4) dmaBound++; }
   out.push({ sev: "info", label: "DMA-bound", html: `${Math.round(100 * dmaBound / NB)}% of the run has a memory controller's DMA lanes saturated while 4 or more compute tiles idle.` });
+  const sides = ["N", "S", "W", "E"].map(sd => [sd, PORTS.filter(p => p.side === sd).reduce((a, p) => a + p.used, 0)]);
+  const idle = PORTS.filter(p => !p.used).length;
+  out.push({ sev: "info", label: "connectivity", html: `Fold-end ports carried ${sides.map(([sd, n]) => `${sd} ${fmt(n)}`).join(" · ")} DMA bursts. <b>${idle} of ${PORTS.length}</b> ports are idle in this schedule: candidates to remove, or to attach DMA channels to.` });
   return out;
 }
 
@@ -510,13 +565,17 @@ function drawFloorplan() {
   drawDie(ctx, s, 0, 0);
   // CPU detail: cores, SRAM, rings, and recent descriptors
   const cx = CPU.x * s, cy = CPU.y * s;
-  label(ctx, "CPU  RV64GC ×4", cx + 8, cy + 8, 11, tok("--ink-2"));
-  for (let i = 0; i < 4; i++) { ctx.strokeStyle = tok("--line"); ctx.strokeRect(cx + 8 + (i % 2) * 40 * s * 2.1, cy + 28 + Math.floor(i / 2) * 30 * s * 1.6, 70 * s, 40 * s); }
-  label(ctx, "SRAM · desc/cpl rings", cx + 8, cy + 28 + 110 * s, 9);
+  label(ctx, "CPU  RV64GC", cx + 6 * s, cy + 6 * s, 10, tok("--ink-2"));
+  const sub_ = (x, y, w, h, text, lit) => { ctx.fillStyle = lit ? tok("--accent") : tok("--panel"); ctx.globalAlpha = lit ? .35 : 1; ctx.fillRect(cx + x * s, cy + y * s, w * s, h * s); ctx.globalAlpha = 1; ctx.strokeStyle = tok("--line"); ctx.strokeRect(cx + x * s + .5, cy + y * s + .5, w * s - 1, h * s - 1); label(ctx, text, cx + (x + 4) * s, cy + (y + 4) * s, 9); };
+  const issuing = descriptors.filter(d => d.t <= T && d.t > T - 20);
+  for (let i = 0; i < 4; i++) sub_(8 + (i % 2) * 84, 26 + Math.floor(i / 2) * 40, 80, 36, `hart${i}`, issuing.some((d, k) => k % 4 === i));
+  sub_(8, 108, 164, 30, "SRAM", false);
+  sub_(8, 142, 80, 26, "desc ring", issuing.length > 0);
+  sub_(92, 142, 80, 26, "cpl ring", descriptors.some(d => d.t <= T - 4 && d.t > T - 24));
   const recent = descriptors.filter(d => d.t <= T && d.t > T - 60).slice(-5);
   const rate = descriptors.filter(d => d.t <= T && d.t > T - 100).length;
-  label(ctx, `${rate} descriptors / 100 cyc`, cx + 8, cy + 140 * s + 30, 9, tok("--ink-2"));
-  recent.forEach((d, i) => label(ctx, d.text.length > 30 ? d.text.slice(0, 29) + "…" : d.text, cx + 8, cy + 160 * s + 34 + i * 13, 9, opColor(d.op)));
+  label(ctx, `${rate} descriptors / 100 cyc`, cx + 8 * s, cy + 176 * s, 9, tok("--ink-2"));
+  recent.forEach((d, i) => label(ctx, d.text.length > 30 ? d.text.slice(0, 29) + "…" : d.text, cx + 8 * s, cy + 176 * s + 14 + i * 13, 9, opColor(d.op)));
   label(ctx, "IO / PCIe", IO.x * s + 8, IO.y * s + 8, 10);
   MC.forEach(m => {
     const busy = laneFree[m.id] && dmaBusy[m.id].filter(([a, b]) => a <= T && T < b).length;
@@ -539,7 +598,7 @@ function drawFloorplan() {
       ctx.fillRect((mx + ix) * s, (my + iy) * s, (horiz ? len : th) * s, (horiz ? th : len) * s);
       ctx.globalAlpha = 1;
     });
-    const [hx, hy] = hubPoint(l), nocBusy = transits.some(x => x.kind === "NOC" && x.t0 <= T && T < x.t1 && (x.l3 === l.id || x.relay === l.id));
+    const [hx, hy] = hubPoint(l), nocBusy = transits.some(x => x.kind === "NOC" && x.t0 <= T && T < x.t1 && x.hubs.includes(l.id));
     ctx.fillStyle = nocBusy ? tok("--ink") : tok("--panel"); ctx.strokeStyle = tok("--ink-3"); ctx.lineWidth = 1;
     ctx.fillRect((hx - 4) * s, (hy - 4) * s, 8 * s, 8 * s); ctx.strokeRect((hx - 4) * s + .5, (hy - 4) * s + .5, 8 * s - 1, 8 * s - 1);
   });
@@ -568,22 +627,31 @@ function drawFloorplan() {
     for (let i = 0; i < 16; i++) { const r = l2[i]; ctx.fillStyle = r ? opColor(r.op) : tok("--slot-empty"); ctx.fillRect(x0 + (i % 4) * cw + .5, y0 + W * .54 + Math.floor(i / 4) * ch + .5, cw - 1, ch - 1); }
     for (let i = 0; i < 4; i++) { const r = l1[i]; ctx.fillStyle = r ? opColor(r.op) : tok("--slot-empty"); ctx.fillRect(x0 + W * .68, y0 + W * .54 + i * ch + .5, W * .32, ch - 1); }
   });
-  // transits as streaks with a moving head
+  // the torus: every hub-to-hub link, faint; fold-end ports as marks on the array edge
+  ctx.strokeStyle = tok("--ink-3"); ctx.lineWidth = 1; ctx.globalAlpha = .22;
+  [...ROW_RINGS, ...COL_RINGS].forEach(ring => ring.forEach((h, i) => { const a = hubPoint(h), b = hubPoint(ring[(i + 1) % RING]); ctx.beginPath(); ctx.moveTo(a[0] * s, a[1] * s); ctx.lineTo(b[0] * s, b[1] * s); ctx.stroke(); }));
+  ctx.globalAlpha = 1;
+  PORTS.forEach(pt => { ctx.fillStyle = pt.used ? tok("--ink-2") : tok("--panel"); ctx.strokeStyle = tok("--ink-3"); ctx.beginPath(); ctx.arc(pt.pt[0] * s, pt.pt[1] * s, 3, 0, 7); ctx.fill(); ctx.stroke(); });
+  // transits: a streak along the path so far, and a moving head
   ctx.lineWidth = 1.5;
   transits.forEach(x => {
     if (!(x.t0 <= T && T < x.t1) || x.kind === "STR") return;
-    const p = (T - x.t0) / (x.t1 - x.t0);
-    const ax = x.from[0] * s, ay = x.from[1] * s, bx = x.to[0] * s, by = x.to[1] * s;
-    const hx = ax + (bx - ax) * p, hy = ay + (by - ay) * p;
-    ctx.strokeStyle = opColor(x.op); ctx.globalAlpha = x.kind === "NOC" ? .9 : .35;
+    const pts = x.pts || [x.from, x.to];
+    const seg = []; let L = 0;
+    for (let i = 1; i < pts.length; i++) { const d = Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1]); seg.push(d); L += d; }
+    let rem = L * (T - x.t0) / (x.t1 - x.t0), hx = pts[0][0], hy = pts[0][1];
+    ctx.strokeStyle = opColor(x.op); ctx.globalAlpha = x.kind === "NOC" ? .85 : .4;
     ctx.setLineDash(x.kind === "NOC" ? [4, 3] : []);
-    ctx.beginPath(); ctx.moveTo(ax, ay); ctx.lineTo(hx, hy); ctx.stroke();
-    ctx.globalAlpha = 1; ctx.setLineDash([]);
-    ctx.fillStyle = opColor(x.op); ctx.beginPath(); ctx.arc(hx, hy, 2.2, 0, 7); ctx.fill();
+    ctx.beginPath(); ctx.moveTo(pts[0][0] * s, pts[0][1] * s);
+    for (let i = 1; i < pts.length && rem > 0; i++) {
+      const f = Math.min(1, rem / (seg[i - 1] || 1)); hx = pts[i - 1][0] + (pts[i][0] - pts[i - 1][0]) * f; hy = pts[i - 1][1] + (pts[i][1] - pts[i - 1][1]) * f;
+      ctx.lineTo(hx * s, hy * s); rem -= seg[i - 1];
+    }
+    ctx.stroke(); ctx.globalAlpha = 1; ctx.setLineDash([]);
+    ctx.fillStyle = opColor(x.op); ctx.beginPath(); ctx.arc(hx * s, hy * s, 2.2, 0, 7); ctx.fill();
   });
   // selection
   const sb = selBlock(); if (sb) { ctx.strokeStyle = tok("--ink"); ctx.lineWidth = 2; ctx.strokeRect(sb.x * s - 1, sb.y * s - 1, sb.w * s + 2, sb.h * s + 2); }
-  label(ctx, "L3 tile: banks (slots) + BlockMover per CF-facing edge + NoC hub ▪ · CF: PE array / L2 ×16 / L1 ×4 + Streamers", ARR.x * s, (ARR.y + N * ARR.cs) * s + 2, 9);
 }
 function selBlock() { if (!selected) return null; return selected.kind === "L3" ? L3[selected.id] : selected.kind === "CF" ? CF[selected.id] : selected.kind === "MC" ? MC[selected.id] : selected.kind === "CPU" ? CPU : null; }
 function hitBlock(cv, e, s) { const r = cv.getBoundingClientRect(); const x = (e.clientX - r.left) / s, y = (e.clientY - r.top) / s; return blocks.find(b => x >= b.x && x <= b.x + b.w && y >= b.y && y <= b.y + b.h); }
@@ -598,9 +666,9 @@ function renderInspector() {
   if (b.kind === "L3") {
     const live = l3Res[b.id].filter(r => r.t0 <= T && T < r.t1); const n = live.length;
     const byOp = OPS.map((_, i) => live.filter(r => r.op === i).length);
-    const waiting = transits.filter(x => x.kind === "DMA" && x.to[0] === center(b)[0] && x.to[1] === center(b)[1] && x.t0 > T && x.t0 < T + 80).length;
+    const waiting = transits.filter(x => x.kind === "DMA" && x.dst === b.id && x.t0 > T && x.t0 < T + 80).length;
     const over = n > b.cap;
-    el.innerHTML = `<div class="kv"><span>occupancy</span><span>${n} / ${b.cap} slots ${over ? '<b style="color:var(--crit)">▲ over capacity</b>' : ""}</span><span>by operator</span><span>${OPS.map((o, i) => `${o.name} ${byOp[i]}`).join(" · ")}</span><span>arriving ≤80 cyc</span><span>${waiting} tiles (DMA in flight)</span><span>BlockMovers</span><span>${b.edges.map(e => { const busy = transits.some(x => x.kind === "BM" && x.l3 === b.id && x.edge === e && x.t0 <= T && T < x.t1); const cf = CF.find(c => neighborsL3(c).includes(b) && edgeIndex(b, c) === e); return `bm[${EDGE[e]}]→cf[${cf.id}]${busy ? "●" : ""}`; }).join(" ")}</span><span>NoC hub</span><span>${transits.filter(x => x.kind === "NOC" && x.t0 <= T && T < x.t1 && (x.l3 === b.id || x.relay === b.id)).length} moves in flight</span></div><div class="meter ${over ? "over" : ""}"><i style="width:${Math.min(100, 100 * n / b.cap)}%"></i></div><p class="caption">${live.slice(0, 8).map(r => tiles[r.tile].label).join(", ")}${n > 8 ? `, … ${n - 8} more` : ""}</p>`;
+    el.innerHTML = `<div class="kv"><span>occupancy</span><span>${n} / ${b.cap} slots ${over ? '<b style="color:var(--crit)">▲ over capacity</b>' : ""}</span><span>by operator</span><span>${OPS.map((o, i) => `${o.name} ${byOp[i]}`).join(" · ")}</span><span>arriving ≤80 cyc</span><span>${waiting} tiles (DMA in flight)</span><span>BlockMovers</span><span>${b.edges.map(e => { const busy = transits.some(x => x.kind === "BM" && x.l3 === b.id && x.edge === e && x.t0 <= T && T < x.t1); const cf = CF.find(c => neighborsL3(c).includes(b) && edgeIndex(b, c) === e); return `bm[${EDGE[e]}]→cf[${cf.id}]${busy ? "●" : ""}`; }).join(" ")}</span><span>NoC hub</span><span>row loop ${b.rowRing} · pos ${b.rowPos}; col loop ${b.colRing} · pos ${b.colPos}</span><span>through this hub</span><span>${transits.filter(x => x.kind === "NOC" && x.t0 <= T && T < x.t1 && x.hubs.includes(b.id)).length} bursts in flight</span></div><div class="meter ${over ? "over" : ""}"><i style="width:${Math.min(100, 100 * n / b.cap)}%"></i></div><p class="caption">${live.slice(0, 8).map(r => tiles[r.tile].label).join(", ")}${n > 8 ? `, … ${n - 8} more` : ""}</p>`;
   } else if (b.kind === "CF") {
     const cur = computes.find(k => k.cf === b.id && k.t0 <= T && T < k.t1);
     const l2 = residency.filter(r => r.st === "L2" && r.sid === b.id && r.t0 <= T && T < r.t1).length;
@@ -716,7 +784,7 @@ function drawMetro() {
       if (tl.dma[0] - tl.req > 4) { seg(tl.dma[0] - (tl.dma[0] - tl.req) * .0, 1, tl.dma[0], 1, "wait"); }
       seg(tl.dma[0], 1, tl.dma[1], 2, "transit");
       seg(tl.dma[1], 2, tl.l2s, 2, "res");
-      if (tl.viaNoc) label(ctx, `NoC l3[${tl.l3}]→hub l3[${tl.relay}]→bm`, X(tl.l2s) + 4, Y(2) + dy + 4, 9, tok("--ink-2"));
+      if (tl.viaNoc) label(ctx, `NoC ${tl.nocHops} hops l3[${tl.l3}]→l3[${tl.relay}], then bm`, X(tl.l2s) + 4, Y(2) + dy + 4, 9, tok("--ink-2"));
       seg(tl.l2s, 2, tl.l2a, 3, "transit");
       seg(tl.l2a, 3, o.l1s, 3, "res");
     } else {
@@ -757,9 +825,9 @@ function heatValues(w0, w1) {
     residency.forEach(r => { const b = r.st === "L3" ? L3[r.sid] : CF[r.sid]; v.set(b, v.get(b) + overlap(r.t0, r.t1, w0, w1)); });
   } else {
     transits.forEach(x => { const f = overlap(x.t0, x.t1, w0, w1) / (x.t1 - x.t0); if (!f) return; const bytes = TILE_BYTES * f;
-      if (x.kind === "DMA") { v.set(MC[x.mc], v.get(MC[x.mc]) + bytes); const l = blocks.find(b => b.kind === "L3" && center(b)[0] === x.to[0] && center(b)[1] === x.to[1]); v.set(l, v.get(l) + bytes); }
+      if (x.kind === "DMA") { v.set(MC[x.mc], v.get(MC[x.mc]) + bytes); }                             // the DMA engine at the MC
       else if (x.kind === "BM") { v.set(L3[x.l3], v.get(L3[x.l3]) + bytes); }                       // the mover's host: the L3 tile
-      else if (x.kind === "NOC") { v.set(L3[x.l3], v.get(L3[x.l3]) + bytes / 2); v.set(L3[x.relay], v.get(L3[x.relay]) + bytes / 2); }   // both router hubs
+      else if (x.kind === "NOC") { x.hubs.forEach(h => v.set(L3[h], v.get(L3[h]) + bytes)); if (x.src === "bm") v.set(L3[x.l3], v.get(L3[x.l3]) + bytes); }   // every hub on the route, plus the BlockMover that drove it
       else if (x.kind === "STR") { v.set(CF[x.cf], v.get(CF[x.cf]) + bytes); } });
     descriptors.forEach(d => { if (d.t >= w0 && d.t < w1) v.set(CPU, v.get(CPU) + 64); });   // MMIO ring traffic, 64 B records
     if (metric !== "bytes") {
@@ -808,14 +876,15 @@ function drawHeat() {
   const top = [...v.entries()].filter(([b]) => b.kind !== "IO" && (metric !== "occ" || b.kind === "L3" || b.kind === "CF")).sort((a, b) => b[1] - a[1]).slice(0, 10);
   $("heatCol").textContent = metric === "thermal" ? "energy (pJ, source)" : unit;
   $("heatTbl").querySelector("tbody").innerHTML = top.map(([b, x]) => `<tr><td>${b.name}</td><td>${metric === "thermal" ? fmtV(x).replace(/\.\d+$/, "") : fmtV(x)}</td><td>${(100 * x / total).toFixed(1)}%</td></tr>`).join("");
-  $("heatNote").textContent = metric === "thermal" ? "Thermal is a model, not a measurement: a 2D diffusion over the floorplan, sourced from the energy map. It shows where heat would concentrate, not a temperature." : metric === "energy" ? "Energy per block is bytes × 20 pJ (movement), plus MACs × 1 pJ (compute), plus 5 pJ per tile per cycle (leakage). These are the device_model.hpp constants, attributed per event instead of totalled." : metric === "bytes" ? "Bytes are charged to the hardware that moved them, in its own clock domain. DMA goes to the memory controller and the receiving L3 tile. BlockMover moves go to the source L3 tile, which hosts the mover. NoC moves are split between the two router hubs. Streamer moves go to the compute tile. The CPU row is descriptor-ring traffic (64-byte records)." : "Occupancy-time is the sum over resident tiles of the cycles each spent in the block during the window: the area under the swimlane.";
+  $("heatNote").textContent = metric === "thermal" ? "Thermal is a model, not a measurement: a 2D diffusion over the floorplan, sourced from the energy map. It shows where heat would concentrate, not a temperature." : metric === "energy" ? "Energy per block is bytes × 20 pJ (movement), plus MACs × 1 pJ (compute), plus 5 pJ per tile per cycle (leakage). These are the device_model.hpp constants, attributed per event instead of totalled." : metric === "bytes" ? "Bytes are charged to the hardware that moved them, in its own clock domain. A DMA burst charges its memory controller's DMA engine, then every router hub it crosses from the fold-end port to the destination. A BlockMover move charges the source L3 tile, which hosts the mover, and a NoC move also charges every hub on its route. Streamer moves charge the compute tile. The CPU figure is descriptor-ring traffic (64-byte records)." : "Occupancy-time is the sum over resident tiles of the cycles each spent in the block during the window: the area under the swimlane.";
   cv.onmousemove = e => { const b = hitBlock(cv, e, s); if (!b) return hideTip(); showTip(e, `<div class="t">${b.name}</div><div class="r">${b.kind === "IO" ? "not modelled" : fmtV(v.get(b)) + " " + (metric === "thermal" ? "pJ (source)" : unit)}</div>`); };
   cv.onmouseleave = hideTip;
 }
 
 // ---------------------------------------------------------------- legends, diagnostics, boot
 function renderLegends() {
-  $("opLegend").innerHTML = OPS.map((o, i) => `<span><span class="sw" style="background:${opColor(i)}"></span>${o.name} (${o.cls})</span>`).join("") + `<span><span class="sw" style="background:var(--slot-empty);border:1px solid var(--line)"></span>free slot</span><span><span class="sw" style="border:2px solid var(--crit)"></span>▲ over capacity</span><span><span class="sw" style="background:var(--ink-3)"></span>BlockMover on L3 edge (lit = moving)</span><span><span class="sw" style="border:1px solid var(--ink-3)"></span>NoC router hub</span><span>- - NoC hop, hub to hub</span>`;
+  const classes = [...new Set(OPS.map(o => o.cls))];
+  $("opLegend").innerHTML = classes.map(c => { const i = OPS.findIndex(o => o.cls === c); return `<span><span class="sw" style="background:${opColor(i)}"></span>${c}: ${OPS.filter(o => o.cls === c).map(o => o.name).join(", ")}</span>`; }).join("") + `<span><span class="sw" style="background:var(--slot-empty);border:1px solid var(--line)"></span>free slot</span><span><span class="sw" style="border:2px solid var(--crit)"></span>▲ over capacity</span><span><span class="sw" style="background:var(--ink-3)"></span>BlockMover on L3 edge (lit = moving)</span><span><span class="sw" style="border:1px solid var(--ink-3)"></span>NoC router hub</span><span>- - NoC burst, hub to hub</span><span>● fold-end port (filled = carries DMA bursts)</span><span>NoC: folded 4×4 torus over the L3 hubs</span>`;
   $("diag").innerHTML = diagnostics().map(d => `<li><span class="chip ${d.sev}">${d.sev === "crit" ? "▲ " : d.sev === "warn" ? "! " : ""}${d.label}</span><span>${d.html}</span></li>`).join("");
   $("diag").querySelectorAll("button[data-t]").forEach(b => b.onclick = () => { const [k, id] = b.dataset.b.split(":"); selected = { kind: k, id: +id }; setT(+b.dataset.t); $("fp").scrollIntoView({ behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth", block: "center" }); });
   $("diag").querySelectorAll("button[data-lin]").forEach(b => b.onclick = () => { linSel = +b.dataset.lin; cfPick.value = computes[linSel].cf; renderAlign(); drawMetro(); $("lineage").scrollIntoView({ behavior: "auto" }); });

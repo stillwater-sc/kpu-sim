@@ -1,7 +1,7 @@
 # Tile-Flow Debugger: a hierarchical view of tile movement over the CPU/KPU SoC floorplan
 
 **Date:** 2026-10-03
-**Status:** Design (for review)
+**Status:** Design; §7 answered on review (2026-10-03)
 **Companion:** `docs/plans/tile-flow-debugger-views.html`, the hypothesized views on a synthetic schedule (open in a browser)
 **Issue:** extends #286 (spatial event record and viewer). This plan is #286's viewer half made
 concrete, plus the floorplan layer #286 does not yet name.
@@ -10,6 +10,23 @@ events), #283 (L-T2, where the record becomes dense enough to need every LOD lev
 **Relates to:** `docs/01-architecture/kpu-architecture.md` §5.1 (checkerboard floorplan),
 ADR 0002 §3.3–3.4 (resource vocabulary, naming map), ADR 0003 D4 (the CPU is the attached
 orchestrator, not a host)
+
+## Decided on review (2026-10-03)
+
+All of §7 is answered. Each answer is restated here so a misread is visible and cheap to
+correct, not buried in the section it came from.
+
+| | decision |
+|---|---|
+| **Q1 format** | **A new columnar `.tflow` bundle** (§3.3). Chrome trace stays as a derived export. #286's "no new trace format" clause is amended by this decision |
+| **Q2 L3 at L-T1** | **Pooled first.** Step 1 draws L3 as one pooled station, labelled as such. Slot binding (step 6) is a separate, reviewed executor model change |
+| **Q3a floorplan source** | **The generator is the reference** until a real SoC floorplan exists. The importer comes later |
+| **Q3b T64 size** | **64 compute tiles.** The checkerboard dimensions in `kpu-architecture.md` §5.2.1 are wrong and are corrected with the §5.1 amendment (step 1). The 8×8 diagram in §3.1 stays illustrative |
+| **Q4 CPU detail** | **Cores + SRAM + descriptor/completion rings** as separate blocks |
+| **Q5 viewer** | **Plain static HTML + Canvas2D**, with WebGL for dense pixel layers, and no build step |
+| **Q6 colour** | **By operator class**, with individual operators on hover and in the phase strip |
+| **Q7 NoC topology** | **A folded 2D torus over the L3 hubs.** Two rows of the checkerboard form one loop around one torus dimension, and two columns one loop around the other. The 8×8 checkerboard is a 4×4 torus: 4 loops per dimension, 8 L3 hubs per loop, and every link equidistant. The **fold ends are the ports** where traffic enters or leaves a loop, and the DMA channels attach there. This connectivity is a **first pass**: the block schedules decide what is added or removed (§3.1) |
+| **Q8 BlockMover count** | **Derived** from the topology. A declared value that disagrees is reported. First pass: every L3 tile has four BlockMovers, to the compute tiles abutting it W/N/E/S |
 
 ---
 
@@ -130,8 +147,9 @@ a DMA pulls a burst from DRAM through its memory controller and **pushes it into
 Outbound, it **pulls from the NoC** and writes DRAM. The NoC is therefore an **address-routed
 burst engine**: each burst carries its destination address (an L3 tile and offset, resolved
 through the naming map), and the routers forward it hop by hop to that tile's hub. An inbound
-tile's path is MC → DMA → NoC hops → destination L3 hub → slot, and the NoC carries both DMA
-bursts and BlockMover L3→L3 traffic.
+tile's path is MC → DMA → loop port → NoC hops → destination L3 hub → slot, and the NoC
+carries both DMA bursts and BlockMover L3→L3 traffic. The DMA channels connect at the torus's
+**fold-end ports** (below), the one place a burst can enter or leave a loop.
 
 So the floorplan becomes a first-class input with one rule:
 
@@ -156,7 +174,8 @@ struct FloorplanBlock {
 
 struct NocLink {                      // so every burst has a drawable, routable path
     std::string a, b;                 // hub to hub: "dev0/l3[5]/noc", "dev0/l3[9]/noc";
-                                      // or a DMA injection port: "dev0/mc[1]/dma[0]"
+                                      // or a fold-end port, where a DMA channel
+                                      // attaches: "dev0/noc/port[row0.E]"
     std::vector<std::pair<double, double>> route_um;   // the wire's path, for drawing
 };
 
@@ -175,7 +194,36 @@ SocFloorplan import_floorplan(const std::string& json_path, const DeploymentSpec
 
 The **generator** is parametric on `DeploymentSpec`. The topology (`single` / `news` /
 `checkerboard`) picks the pattern, the counts fill it, and the CPU cluster, memory
-controllers, DRAM PHYs and IO are placed on the periphery. The **import** path takes the
+controllers, DRAM PHYs and IO are placed on the periphery.
+
+**The NoC is a folded 2D torus over the L3 router hubs (Q7).** The checkerboard staggering is
+the traditional folded-torus layout: it closes each loop using only equidistant links. Two
+rows form one loop around the X dimension. For rows 0–1 of the 8×8 array, the loop runs
+(0,0) → (0,2) → (0,4) → (0,6) → (1,7) → (1,5) → (1,3) → (1,1) → (0,0). Two columns form
+one loop around the Y dimension in the same way. The 8×8 checkerboard is therefore a **4×4
+torus**: 4 loops per dimension, 8 L3 hubs per loop. Every hub sits on exactly one row loop
+and one column loop, so it has four links.
+
+- **Fold ends are ports.** The link where each loop folds back, such as (0,6)–(1,7) on the
+  east edge or (1,1)–(0,0) on the west, is where traffic can **enter or exit the loop**. The
+  DMA channels attach to these ports, so the memory controllers sit at the array edges where
+  the loops end. The 8×8 array has 16 such ports, one at each end of every loop. At two
+  corners the row loop and the column loop fold over the **same** link, (0,0)–(1,1) and
+  (6,6)–(7,7), so the hubs there have three distinct neighbours and two ports share one link.
+  That is an input to the connectivity study, not something to assume away.
+- **Routing is dimension-ordered and address-routed.** A burst rides its row loop to a hub on
+  the destination's column loop, then rides that loop to the destination, taking the shorter
+  way around each ring.
+- **Connectivity is a first pass, settled by measurement.** The block schedules decide which
+  links and ports are worth having. Showing, per link and per port, how the schedules use
+  them is part of what this debugger is for (§3.5, link-level activity).
+- **First pass for the BlockMovers:** every L3 tile has four, one to each compute tile abutting
+  it W/N/E/S. On the array boundary a finite checkerboard leaves some L3 edges with no abutting
+  compute tile. Whether those tiles get a mover toward the fold port, or the array is bordered
+  so that every L3 tile is interior, is part of the same connectivity study.
+
+The generator emits every link, with its `NocLink::route_um`, and every fold port as a named
+block. The **import** path takes the
 real SoC floorplan as layout guidance. It reads a JSON of named rectangles exported from the
 physical-design flow and **validates it against the deployment**: every declared resource
 must have a rectangle, and every rectangle must resolve to a resource. Extra or missing
@@ -221,8 +269,8 @@ level ignores (Q8).
 │ ├────────────┤   │ L3 │ CF │ L3 │ CF │ L3 │ CF │ L3 │ CF │           │
 │ │ IO / PCIe  │   ├────┼────┼── … 8 rows ─────────────────┤           │
 │ └────────────┘   └────┴────┴────┴────┴────┴────┴────┴────┘           │
-│                   NoC: one router hub per L3 tile,                   │
-│                        links hub-to-hub                              │
+│                   NoC: folded 2D torus over the L3 hubs (Q7);        │
+│                   fold-end ports at the array edges take the DMAs    │
 │                                                                      │
 │ ┌─PHY2─┐ ┌─MC2─┐  ┌─DMA2─┐              ┌─DMA3─┐ ┌─MC3─┐ ┌─PHY3─┐    │
 │ └──────┘ └─────┘  └──────┘              └──────┘ └─────┘ └──────┘    │
@@ -357,7 +405,7 @@ These are the hypothesized views. The companion artifact shows each one on synth
 
 **Step 3: Heat.** This view shows activity first, then energy, then temperature.
 
-- **(3a) Activity heat**, per floorplan block: occupancy-time, bytes moved, transactions per
+- **(3a) Activity heat**, per floorplan block, **per NoC link and per fold port**: occupancy-time, bytes moved, transactions per
   cycle. It uses one sequential ramp, over a selectable time window. Activity is **charged to
   the block that hosts the hardware doing it**. A BlockMove into a CF heats the source L3
   tile's mover, not the destination CF. A NoC transfer, whether a BlockMover L3→L3 move or a
@@ -453,32 +501,32 @@ python3 -m http.server -d tools/visualization/tileflow            # open, load r
 8. **Credit-based semantics only.** The vocabulary is arrive, resident, credit returned and
    waiting for credit. Never hit, miss or evict.
 
-## 7. Questions for review
+## 7. Questions for review (answered; see "Decided on review" at the top)
 
-- **Q1. Format.** Approve a new columnar `.tflow` bundle, superseding #286's "no new trace
+- **Q1. Format.** *Decided: yes, `.tflow`.* Approve a new columnar `.tflow` bundle, superseding #286's "no new trace
   format" clause, with Chrome-trace kept as a derived export? *Recommended: yes* (§3.3).
-- **Q2. L3 at L-T1.** Accept "pooled L3" in Step 1 and schedule slot binding (step 6) as a
+- **Q2. L3 at L-T1.** *Decided: pooled first.* Accept "pooled L3" in Step 1 and schedule slot binding (step 6) as a
   separate model change? Or bind slots first? *Recommended: pooled first.* Step 1 is useful
   without it, and binding is a placement policy that deserves its own review.
-- **Q3. Floorplan source of truth.** Is there an existing SoC floorplan (DEF/LEF, a
+- **Q3. Floorplan source of truth.** *Decided: generator for now; T64 = 64 compute tiles.* Is there an existing SoC floorplan (DEF/LEF, a
   spreadsheet, a slide) to import for T64/T256, or should the generator be the reference until
   one exists? Also: the T64 tile counts in `kpu-architecture.md` §5.2.1 disagree (64 compute
   tiles vs a 4×4 CF). Which is right?
-- **Q4. CPU detail.** Model the CPU as one block with descriptor activity, or as cores +
+- **Q4. CPU detail.** *Decided: cores + SRAM + rings.* Model the CPU as one block with descriptor activity, or as cores +
   SRAM + the descriptor/completion rings as separate blocks? *Recommended: cores + SRAM +
   rings*, so the MMIO traffic of ADR 0003 shows where it physically lands.
-- **Q5. Viewer tech.** A plain static HTML + Canvas2D/WebGL app under
+- **Q5. Viewer tech.** *Decided: plain.* A plain static HTML + Canvas2D/WebGL app under
   `tools/visualization/tileflow/` (no build step), or a framework? *Recommended: plain.* It
   must open from a file or an artifact with no server.
-- **Q6. Operator color budget.** The categorical palette validates three colors all-pairs.
+- **Q6. Operator color budget.** *Decided: by operator class.* The categorical palette validates three colors all-pairs.
   Real models have dozens of operators. Should the system view color by **operator class**
   (GEMM, elementwise, reduction, …), with individual operators distinguished on hover and in
   the phase strip? *Recommended: yes.*
-- **Q7. NoC topology among L3 hubs.** In a checkerboard, the nearest L3 tiles are diagonal
+- **Q7. NoC topology among L3 hubs.** *Decided: a folded 2D torus (4×4 loops, 8 hubs per loop), with fold-end ports for the DMAs; connectivity is a first pass (§3.1).* In a checkerboard, the nearest L3 tiles are diagonal
   neighbours. Do the hub-to-hub links run diagonally across the CF corners, or orthogonally
   two cells apart, routed between compute tiles? The generator needs one answer. An imported
   floorplan states it through its `NocLink` routes.
-- **Q8. BlockMover count.** Should `movers.block_movers` become derived from the topology (one
+- **Q8. BlockMover count.** *Decided: derived.* Should `movers.block_movers` become derived from the topology (one
   per L3 edge facing a compute tile), with a declared value reported when it disagrees, or
   stay declarable for what-if studies? *Recommended: derived*, because the count is a fact
   of the layout.
