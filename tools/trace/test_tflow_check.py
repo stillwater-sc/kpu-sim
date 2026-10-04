@@ -186,13 +186,26 @@ class TflowCheckSelfTest(unittest.TestCase):
                      lambda m: m["levels"][0].update(bins="many"),
                      lambda m: m["levels"][0].update(bins=True),
                      lambda m: m["levels"][0].update(occ=-8),
-                     lambda m: m["levels"][0].update(peak=1.5)):
+                     lambda m: m["levels"][0].update(peak=1.5),
+                     lambda m: m["rows"][0].pop("name"),
+                     lambda m: m["rows"][0].pop("kind"),
+                     lambda m: m["rows"][0].update(name=7),
+                     lambda m: m.update(rows={})):
             lod = json.loads((self.b.dir / "lod.json").read_text())
             edit(lod)
             (self.b.dir / "lod.json").write_text(json.dumps(lod))
             code, _ = run(self.b.dir)
             self.assertEqual(code, 2)
             shutil.copy(Path(BUNDLE) / "lod.json", self.b.dir / "lod.json")
+
+    def test_malformed_manifest_rows_are_exit_2(self):
+        for edit in (lambda m: m["stations"][0].pop("kind"),
+                     lambda m: m["movers"][0].pop("name")):
+            self.b.manifest = json.loads((Path(BUNDLE) / "manifest.json").read_text())
+            edit(self.b.manifest)
+            self.b.save_manifest()
+            code, _ = run(self.b.dir)
+            self.assertEqual(code, 2)
 
     def test_unreadable_is_exit_2(self):
         (self.b.dir / "manifest.json").unlink()

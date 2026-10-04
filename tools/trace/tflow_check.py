@@ -81,6 +81,16 @@ def _column(blob, table, name, rows):
     raise Unreadable(f"no column {name}")
 
 
+def _named(rows, what):
+    """A list of objects, each with a string name and kind: the shape TF8 compares row by row."""
+    if not isinstance(rows, list):
+        raise Unreadable(f"{what} is not a list")
+    for i, x in enumerate(rows):
+        if not (isinstance(x, dict) and isinstance(x.get("name"), str) and isinstance(x.get("kind"), str)):
+            raise Unreadable(f"{what}[{i}] needs a string name and kind")
+    return rows
+
+
 def load(path):
     d = Path(path)
     try:
@@ -90,6 +100,11 @@ def load(path):
     if m.get("format") != "kpu-tflow" or m.get("version") != 1:
         raise Unreadable("not a version-1 kpu-tflow bundle")
     rec = {"manifest": m}
+    _named(m.get("stations"), "manifest stations")
+    movers = m.get("movers", [])
+    if not isinstance(movers, list) or not all(isinstance(x, dict) and isinstance(x.get("name"), str)
+                                               for x in movers):
+        raise Unreadable("manifest movers need a string name each")
     try:
         for name in ("residency", "transit", "compute", "op_tiles"):
             t = m["tables"][name]
@@ -115,7 +130,7 @@ def load(path):
         try:
             lm = json.loads(lod_json.read_text())
             lblob = (d / lm["file"]).read_bytes()
-            nrows = len(lm["rows"])
+            nrows = len(_named(lm["rows"], "lod rows"))
             levels = []
             for lv in lm["levels"]:
                 bins = _count(lv["bins"], "a pyramid level's bin count", positive=True)
