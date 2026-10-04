@@ -377,16 +377,15 @@ SocFloorplan generate_floorplan(const DeploymentSpec& spec, Dim device, const Fl
                                    {hub_rect[h].cx(), hub_rect[h].cy()}}});
         // FIRST-PASS ATTACHMENT (§5.2.1: "DMA channels connect there"). Which DMA feeds which
         // port is a connectivity question the schedules will settle, so the default is the
-        // simplest defensible one: a controller on the top edge serves the N ports nearest it,
-        // a controller on the bottom edge the S ports, and its engines take those ports in
-        // turn. W and E ports start unattached -- visibly, so the study can see it.
+        // simplest defensible one: each N port goes to the nearest controller on the top edge,
+        // each S port to the nearest on the bottom, and EVERY engine of a controller attaches to
+        // one of that controller's ports, in turn -- eight engines over two ports is four per
+        // port, which is what lets eight engines contend for a multi-banked DRAM at all. W and E
+        // ports start unattached, visibly, so the study can see them.
         if (mcs) {
             const Dim per = d.dma.engines / mcs;
-            std::map<Dim, Dim> next_engine;
-            for (const NocPort& p : L->ports()) {
-                if (p.side != Edge::N && p.side != Edge::S) continue;
-                const bool top = p.side == Edge::N;
-                const Rect pr = port_rect[p.index];
+            std::map<Dim, std::vector<Dim>> ports_of;            // mc -> its ports, in index order
+            auto nearest_mc = [&](const Rect& pr, bool top) {
                 std::optional<Dim> best;
                 double best_d = 0;
                 for (const auto& [m, on_top] : mc_side) {
@@ -394,15 +393,40 @@ SocFloorplan generate_floorplan(const DeploymentSpec& spec, Dim device, const Fl
                     const double dist = std::abs(mc_rect[m].cx() - pr.cx());
                     if (!best || dist < best_d) { best = m; best_d = dist; }
                 }
-                if (!best) continue;
-                const Dim e = next_engine[*best]++ % per;
-                const ResourceName dma{d.name, ResourceKind::DmaEngine, {*best, e}, 0};
-                const FloorplanBlock* db = nullptr;
-                for (const FloorplanBlock& b : fp.blocks)
-                    for (const FloorplanBlock& ch : b.children)
-                        if (ch.name == format(dma)) db = &ch;
-                fp.noc.push_back({NocLink::Kind::Attach, format(dma), port_name(p.index),
-                                  {{db->rect.cx(), db->rect.cy()}, {pr.cx(), pr.cy()}}});
+                return best;
+            };
+            for (const NocPort& p : L->ports()) {
+                if (p.side != Edge::N && p.side != Edge::S) continue;
+                if (const auto m = nearest_mc(port_rect[p.index], p.side == Edge::N))
+                    ports_of[*m].push_back(p.index);
+            }
+            // A controller that won no port (more controllers than ports on its edge) shares the
+            // port nearest it rather than being left with engines that reach nothing.
+            for (const auto& [m, on_top] : mc_side) {
+                if (!ports_of[m].empty()) continue;
+                std::optional<Dim> best;
+                double best_d = 0;
+                for (const NocPort& p : L->ports()) {
+                    if (p.side != (on_top ? Edge::N : Edge::S)) continue;
+                    const double dist = std::abs(port_rect[p.index].cx() - mc_rect[m].cx());
+                    if (!best || dist < best_d) { best = p.index; best_d = dist; }
+                }
+                if (best) ports_of[m].push_back(*best);
+            }
+            for (const auto& [m, on_top] : mc_side) {
+                const auto& ports = ports_of[m];
+                if (ports.empty()) continue;
+                for (Dim e = 0; e < per; ++e) {
+                    const Dim k = ports[e % ports.size()];
+                    const ResourceName dma{d.name, ResourceKind::DmaEngine, {m, e}, 0};
+                    const FloorplanBlock* db = nullptr;
+                    for (const FloorplanBlock& b : fp.blocks)
+                        for (const FloorplanBlock& ch : b.children)
+                            if (ch.name == format(dma)) db = &ch;
+                    const Rect pr = port_rect[k];
+                    fp.noc.push_back({NocLink::Kind::Attach, format(dma), port_name(k),
+                                      {{db->rect.cx(), db->rect.cy()}, {pr.cx(), pr.cy()}}});
+                }
             }
         }
     }

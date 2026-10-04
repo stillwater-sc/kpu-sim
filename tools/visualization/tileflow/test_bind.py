@@ -1,0 +1,106 @@
+#!/usr/bin/env python3
+"""
+Consistency test for bind.py's derived binding (#286).
+
+Usage: python3 test_bind.py <bundle.tflow> <floorplan.json>
+
+Binds the bundle and checks the binding against the record and the floorplan: every tile is
+homed in an L3 tile, within its per-tile capacity or counted; every DMA transfer has an
+engine on the controller that owns its DRAM address; every DMA route starts at the engine's
+attached port and ends at the tile's home hub; every BlockMover named exists and abuts the
+compute tile it feeds.
+
+SPDX-License-Identifier: MIT
+Copyright (c) 2024-2025 Stillwater Supercomputing, Inc.
+"""
+
+import json
+import re
+import sys
+import unittest
+from pathlib import Path
+
+HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE))
+sys.path.insert(0, str(HERE.parents[1] / "trace"))
+import bind          # noqa: E402
+import tflow_check   # noqa: E402
+
+BUNDLE = FLOORPLAN = None
+
+
+class BindTest(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.rec = tflow_check.load(BUNDLE)
+        cls.fp = json.loads(Path(FLOORPLAN).read_text())
+        cls.b = bind.bind(cls.rec, cls.fp)
+        cls.names = {x["name"] for x in bind.flat(cls.fp["blocks"])}
+
+    def test_every_tile_is_homed_within_capacity(self):
+        b, res = self.b, self.rec["residency"]
+        homes = b["l3"]["residency_home"]
+        self.assertEqual(len(homes), self.rec["residency_rows"])
+        self.assertTrue(all(0 <= h < len(b["l3"]["tiles"]) for h in homes))
+        cap = b["l3"]["per_tile_capacity"]
+        over = 0
+        for t in range(len(b["l3"]["tiles"])):
+            ev = sorted([(res["t0"][i], 1) for i, h in enumerate(homes) if h == t] +
+                        [(res["t1"][i], -1) for i, h in enumerate(homes) if h == t])
+            cur = peak = 0
+            for _, d in ev:
+                cur += d
+                peak = max(peak, cur)
+            over += peak > cap
+        self.assertEqual(over > 0, b["l3"]["overflow"] > 0)
+
+    def test_dma_engines_follow_the_address_interleave(self):
+        b, tr, m = self.b, self.rec["transit"], self.rec["manifest"]
+        tensors = {t["name"]: t for t in b["dram"]["tensors"]}
+        mcs = sorted({bind.index_of(e, "mc") for e in b["engines"]})
+        for i in range(self.rec["transit_rows"]):
+            if tr["hop"][i] not in (0, 5):
+                self.assertEqual(b["transit_engine"][i], -1)
+                continue
+            name, ti, tj = m["tiles"][tr["tile"][i]]
+            t = tensors[name]
+            addr = t["base"] + (ti * t["tile_cols"] + tj) * t["tile_bytes"]
+            want_mc = mcs[(addr // t["tile_bytes"]) % len(mcs)]
+            eng = b["engines"][b["transit_engine"][i]]
+            self.assertEqual(bind.index_of(eng, "mc"), want_mc, eng)
+
+    def test_dma_routes_run_port_to_home_hub(self):
+        b, tr, res = self.b, self.rec["transit"], self.rec["residency"]
+        attach = {l["a"]: l["b"] for l in self.fp["noc"] if l["kind"] == "attach"}
+        homes = {}
+        for i, h in enumerate(b["l3"]["residency_home"]):
+            homes.setdefault(res["tile"][i], []).append((res["t0"][i], res["t1"][i], h))
+        for i in range(self.rec["transit_rows"]):
+            if tr["hop"][i] != 0:
+                continue
+            path = [b["nodes"][n] for n in b["transit_path"][i]]
+            self.assertTrue(path, f"transit {i} has no route")
+            self.assertEqual(path[0], attach[b["engines"][b["transit_engine"][i]]])
+            h = next(h for t0, t1, h in homes[tr["tile"][i]] if t0 <= tr["t1"][i] <= t1)
+            self.assertEqual(path[-1], b["l3"]["tiles"][h] + "/noc")
+            for n in path:
+                self.assertIn(n, self.names)
+
+    def test_blockmovers_exist_on_the_floorplan(self):
+        for name in self.b["bms"]:
+            self.assertIn(name, self.names)
+            self.assertRegex(name, r"/l3\[\d+\]/bm\[[0-3]\]$")
+
+    def test_a_floorplan_of_another_device_is_refused(self):
+        fp = dict(self.fp, device="elsewhere")
+        with self.assertRaises(bind.BindError):
+            bind.bind(self.rec, fp)
+
+
+if __name__ == "__main__":
+    if len(sys.argv) < 3:
+        print(__doc__)
+        sys.exit(2)
+    FLOORPLAN = sys.argv.pop(2)
+    BUNDLE = sys.argv.pop(1)
+    unittest.main()

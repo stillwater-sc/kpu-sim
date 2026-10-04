@@ -103,6 +103,14 @@ struct Compute {
     Cycle t0 = 0, t1 = 0;
 };
 
+// An operand's shape, so a consumer can lay the tensor out in an address space and say which
+// bytes a tile is (the derived DRAM map of the viewer). The record states shape only; where
+// a tensor lives in DRAM is not modelled at L-T1 and is not claimed here.
+struct OperandShape {
+    std::string name;
+    Dim rows = 0, cols = 0, tile_rows = 0, tile_cols = 0;
+};
+
 struct MoverPool {
     std::string name;                  // to_string(Mover): dma | block-mover | streamer | noc
     Dim lanes = 0;
@@ -119,6 +127,8 @@ struct TileFlowRecord {
 
     std::vector<Station> stations;
     std::vector<MoverPool> movers;     // lane count per pool: the capacity of a mover row
+    std::vector<OperandShape> operands;    // program order
+    Dim element_bytes = 0;
     std::vector<Tile> tiles;
     std::vector<Op> ops;
     std::vector<Residency> residency;

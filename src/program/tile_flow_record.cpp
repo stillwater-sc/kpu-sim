@@ -101,6 +101,11 @@ TileFlowRecord build_record(const TileProgram& prog, const driver::RunOutcome& o
     if (outcome.stats)
         for (const auto& [m, lanes] : outcome.stats->mover_lanes)
             rec.movers.push_back({to_string(m), lanes});
+    rec.element_bytes = d.element_bytes;
+    for (const std::string& name : prog.operand_order()) {
+        const TensorOperand& o = prog.operand(name);
+        rec.operands.push_back({o.name, o.rows, o.cols, o.tile_rows, o.tile_cols});
+    }
 
     // ---- tiles and ops, in first-appearance order (deterministic)
     std::map<std::string, std::uint32_t> tile_of;
@@ -307,6 +312,12 @@ void write_tflow(const TileFlowRecord& rec, const std::string& dir) {
     json mv = json::array();
     for (const MoverPool& p : rec.movers) mv.push_back(json{{"name", p.name}, {"lanes", p.lanes}});
     m["movers"] = mv;
+    m["element_bytes"] = rec.element_bytes;
+    json opd = json::array();
+    for (const OperandShape& o : rec.operands)
+        opd.push_back(json{{"name", o.name}, {"rows", o.rows}, {"cols", o.cols},
+                           {"tile_rows", o.tile_rows}, {"tile_cols", o.tile_cols}});
+    m["operands"] = opd;
     json tl = json::array();
     for (const Tile& t : rec.tiles) tl.push_back(json::array({t.operand, t.ti, t.tj}));
     m["tiles"] = tl;
@@ -433,6 +444,12 @@ TileFlowRecord read_tflow(const std::string& dir) {
         rec.stations.push_back({s.at("name").get<std::string>(), s.at("kind").get<std::string>(),
                                 s.at("capacity").get<std::uint64_t>(), s.at("pooled").get<bool>(),
                                 s.at("modelled").get<bool>()});
+    rec.element_bytes = m.value("element_bytes", Dim{0});
+    if (m.contains("operands"))
+        for (const json& o : m.at("operands"))
+            rec.operands.push_back({o.at("name").get<std::string>(), o.at("rows").get<Dim>(),
+                                    o.at("cols").get<Dim>(), o.at("tile_rows").get<Dim>(),
+                                    o.at("tile_cols").get<Dim>()});
     if (m.contains("movers"))
         for (const json& p : m.at("movers"))
             rec.movers.push_back({p.at("name").get<std::string>(), p.at("lanes").get<Dim>()});

@@ -95,7 +95,7 @@ code { font: 12px var(--font-data); }
 
   <section class="load" id="load">
     <h2>Load a run</h2>
-    <p class="sub">Write a bundle with <code>kpu-run --tflow run.tflow</code>, then choose the folder below (or drop its files here). For the physical view, also choose the deployment's floorplan from <code>kpu-floorplan --deploy spec.json --json fp.json</code>.</p>
+    <p class="sub">Write a bundle with <code>kpu-run --tflow run.tflow</code>, then choose the folder below (or drop its files here). For the physical view, also choose the deployment's floorplan from <code>kpu-floorplan --deploy spec.json --json fp.json</code>; for per-resource rows, run <code>bind.py run.tflow --floorplan fp.json</code> first.</p>
     <label>Bundle folder <input id="pickBundle" type="file" webkitdirectory multiple></label>
     <label>Floorplan (optional) <input id="pickFloorplan" type="file" accept=".json"></label>
     <p class="note" id="loadMsg"></p>
@@ -128,8 +128,14 @@ code { font: 12px var(--font-data); }
       </div>
     </div>
 
+    <div class="panel" id="dramPanel" hidden>
+      <h2>DRAM address space <span class="note" id="dramNote"></span></h2>
+      <canvas id="dram"></canvas>
+      <div class="legend" id="dramLegend"></div>
+    </div>
+
     <div class="panel">
-      <h2>Station swimlanes: occupancy ÷ capacity per time bin (drag or wheel to zoom in, wheel or "Zoom out" to zoom out, click to set the cursor)</h2>
+      <h2>Station swimlanes: occupancy ÷ capacity per time bin (drag or wheel to zoom in, wheel or "Zoom out" to zoom out, click to set the cursor; click a category to fold it)</h2>
       <canvas id="lanes" tabindex="0"></canvas>
       <div class="legend"><span><span class="sw" style="background:var(--seq-lo)"></span>empty</span><span><span class="sw" style="background:var(--seq-hi)"></span>full</span><span><span class="sw" style="background:var(--crit)"></span>over capacity (a bug: see tflow_check TF1)</span><span><span class="sw hatch"></span>not modelled at this level</span><span id="levelNote"></span></div>
     </div>
@@ -193,6 +199,10 @@ function parse(files) {
     }) };
   }
   if (files.floorplan) R.fp = JSON.parse(files.floorplan);
+  if (files["binding.json"]) {
+    R.B = JSON.parse(files["binding.json"]);
+    if (R.B.format !== "kpu-tflow-binding") throw new Error("binding.json is not a kpu-tflow-binding file");
+  }
   return R;
 }
 async function readPicked(list) {
@@ -200,7 +210,7 @@ async function readPicked(list) {
   for (const f of list) {
     const name = f.name;
     if (name.endsWith(".bin")) files[name] = await f.arrayBuffer();
-    else if (name === "manifest.json" || name === "lod.json") files[name] = await f.text();
+    else if (name === "manifest.json" || name === "lod.json" || name === "binding.json") files[name] = await f.text();
   }
   return files;
 }
@@ -275,12 +285,88 @@ function prepare() {
   for (const v of R.cfBy.values()) v.sort((a, b) => R.co.t0[a] - R.co.t0[b]);
   // pool occupancy step series, for the floorplan's pooled movers
   R.poolSteps = {};
+  ROWS = R.B ? buildBoundRows() : null;
   for (let p = 0; p < MOVERS.length; p++) {
     const iv = [];
     for (let i = 0; i < R.tr.rows; i++) if (R.tr.mover[i] === p) iv.push([R.tr.t0[i], R.tr.t1[i]]);
     R.poolSteps[MOVERS[p]] = stepSeries(iv, 0);
   }
 }
+// ------------------------------------------------------------------ derived rows (binding)
+// One row per resource, each with its own intervals [t0, t1, ref]. Built once; binned to the
+// pixels of the current view on every draw, so zoom never loses an interval.
+let ROWS = null;
+const collapsed = new Set();
+function buildBoundRows() {
+  const B = R.B, tr = R.tr, rows = [];
+  const cat = (key, label, derived, note) => rows.push({ header: true, cat: key, label, derived, note });
+  const row = (key, name, label, cap, ivs, extra) => rows.push({ cat: key, name, label, cap, ivs, ...(extra || {}) });
+  const dmaIn = [], dmaOut = [];
+  const byEngine = B.engines.map(() => []);
+  for (let i = 0; i < tr.rows; i++) {
+    const h = tr.hop[i];
+    if (h !== 0 && h !== 5) continue;
+    (h === 0 ? dmaIn : dmaOut).push([tr.t0[i], tr.t1[i], i]);
+    const e = B.transit_engine[i];
+    if (e >= 0) byEngine[e].push([tr.t0[i], tr.t1[i], i]);
+  }
+  const nEng = B.engines.length || 1;
+  cat("dram", "DRAM traffic", false, "every DMA transfer, by direction; capacity = the DMA engines");
+  row("dram", "dram:reads", "reads  DRAM -> L3", nEng, dmaIn, { kind: "dram" });
+  row("dram", "dram:writes", "writes L3 -> DRAM", nEng, dmaOut, { kind: "dram" });
+
+  const mcs = new Map();
+  B.engines.forEach((name, e) => { const mc = name.replace(/\/dma\[\d+\]$/, ""); if (!mcs.has(mc)) mcs.set(mc, []); mcs.get(mc).push(e); });
+  cat("mc", "Memory controllers", true, "a controller is busy with each of its engines' transfers");
+  for (const [mc, engs] of mcs) row("mc", mc, mc.split("/").pop(), engs.length, engs.flatMap(e => byEngine[e]), { kind: "mc", engines: engs });
+  cat("dma", "DMA engines", true, `controller chosen by DRAM address (tile-interleaved), then its first free engine; ${R.B.dma ? R.B.dma.overloaded : 0} transfers found every engine busy`);
+  B.engines.forEach((name, e) => row("dma", name, name.split("/").slice(-2).join("/"), 1, byEngine[e], { kind: "dma" }));
+
+  const l3ivs = B.l3.tiles.map(() => []);
+  for (let i = 0; i < R.res.rows; i++) { const h = B.l3.residency_home[i]; if (h >= 0) l3ivs[h].push([R.res.t0[i], R.res.t1[i], i]); }
+  cat("l3", "L3 tiles", true, `tiles homed by the derived binding; ${B.l3.per_tile_capacity || "unbounded"} slots each`);
+  B.l3.tiles.forEach((name, t) => row("l3", name, name.split("/").pop(), B.l3.per_tile_capacity, l3ivs[t], { kind: "l3", l3: t }));
+
+  cat("cf", "Compute tiles", false, "from the record");
+  for (const st of cfStations) {
+    const v = (R.cfBy.get(st) || []).map(i => [R.co.t0[i], R.co.t1[i], i]);
+    row("cf", R.m.stations[st].name, R.m.stations[st].name.split("/").pop(), 1, v, { kind: "cf", station: st });
+  }
+
+  const through = B.nodes.map(() => []);
+  for (let i = 0; i < tr.rows; i++) for (const n of B.transit_path[i] || []) through[n].push([tr.t0[i], tr.t1[i], i]);
+  const attached = new Map();
+  for (const l of (R.fp && R.fp.noc) || []) if (l.kind === "attach") attached.set(l.b, (attached.get(l.b) || 0) + 1);
+  const ports = [], hubs = new Map();
+  B.nodes.forEach((n, k) => { if (n.includes("/port[")) ports.push([n, k]); else hubs.set(n, k); });
+  const portIdx = n => +n.match(/port\[(\d+)\]/)[1];
+  ports.sort((a, b) => portIdx(a[0]) - portIdx(b[0]));
+  const portLabel = new Map();
+  if (R.fp) for (const b of flatBlocks(R.fp)) if (b.kind === "noc_port") portLabel.set(b.name, b.label);
+  cat("port", "NoC ports", true, "fold-end ports: DMA bursts entering or leaving a loop; capacity = engines attached");
+  for (const [n, k] of ports) row("port", n, `port[${portIdx(n)}] ${portLabel.get(n) || ""}`, attached.get(n) || 0, through[k], { kind: "port" });
+  cat("hub", "NoC hubs", true, "bursts crossing each L3 hub on the derived route (no per-hop timing at L-T1)");
+  B.l3.tiles.forEach(name => { const n = name + "/noc", k = hubs.get(n); row("hub", n, name.split("/").pop() + "/noc", 0, k === undefined ? [] : through[k], { kind: "hub" }); });
+
+  for (const r of rows) if (!r.header && r.cap === 0) {        // relative rows: scale by the busiest in the category
+    const peers = rows.filter(x => !x.header && x.cat === r.cat);
+    r.relMax = Math.max(1, ...peers.map(peakConcurrency));
+  }
+  return rows;
+}
+function peakConcurrency(r) {
+  const ev = [];
+  for (const [a, b] of r.ivs) if (b > a) { ev.push([a, 1]); ev.push([b, -1]); }
+  ev.sort((x, y) => x[0] - y[0] || x[1] - y[1]);
+  let c = 0, m = 0; for (const [, d] of ev) { c += d; m = Math.max(m, c); }
+  return m;
+}
+const dramAddr = tile => {
+  const t = R.m.tiles[tile], ten = R.B.dram.tensors.find(x => x.name === t[0]);
+  return ten ? ten.base + (t[1] * ten.tile_cols + t[2]) * ten.tile_bytes : null;
+};
+const hex = v => "0x" + Math.round(v).toString(16).padStart(6, "0");
+
 function busyAt(station, t) {
   const v = R.cfBy.get(station);
   if (!v) return -1;
@@ -301,10 +387,11 @@ function start() {
     ["level", m.level], ["device", `${m.device} (${m.device_label})`], ["makespan", fmt(m.makespan) + " cycles"],
     ["L3 capacity", l3cap ? fmt(l3cap) + " tiles" : "unbounded"], ["compute tiles", nCF],
     ["tiles", fmt(m.tiles.length)], ["transits", fmt(R.tr.rows)], ["computes", fmt(R.co.rows)],
-    ["lanes", lanes || "—"], ["floorplan", R.fp ? R.fp.source : "none loaded"]
+    ["lanes", lanes || "—"], ["floorplan", R.fp ? R.fp.source : "none loaded"],
+    ["binding", R.B ? `derived · ${R.B.engines.length} DMA engines · ${R.B.l3.tiles.length} L3 tiles · ${R.B.l3.overflow} L3 over · ${R.B.dma ? R.B.dma.overloaded : 0} DMA over` : "none (pooled rows)"]
   ].map(([k, v]) => `<span class="chip">${k} <b>${v}</b></span>`).join("") +
     (m.unmodelled && m.unmodelled.length ? `<span class="chip warn">not modelled <b>${m.unmodelled.join(", ")}</b></span>` : "");
-  $("honesty").textContent = `At ${m.level}, L3 is one pooled capacity and moves are bound to lanes of a mover pool, not to places: the floorplan draws L3 and the movers as pooled fills across every block of their kind, never as per-tile values this record does not hold. Invariants are checked by tools/trace/tflow_check.py, not here.`;
+  $("honesty").textContent = R.B ? `At ${m.level} the executor pools L3 and binds moves to lanes, not places. The per-resource rows and floorplan fills here come from a DERIVED binding (bind.py): ${R.B.policies.l3}; ${R.B.policies.dma}; ${R.B.policies.noc}. Timing is the executor's; only the place is derived. ${R.B.notes.join(" ")}` : `At ${m.level}, L3 is one pooled capacity and moves are bound to lanes of a mover pool, not to places: the floorplan draws L3 and the movers as pooled fills across every block of their kind, never as per-tile values this record does not hold. Invariants are checked by tools/trace/tflow_check.py, not here.`;
   viewA = 0; viewB = Math.max(1, m.makespan); zoomHistory.length = 0;
   const sc = $("scrub"); sc.max = m.makespan; sc.value = 0;
   T = Math.floor(m.makespan * 0.4);
@@ -315,7 +402,7 @@ function setT(t) {
   T = Math.max(0, Math.min(R.m.makespan, Math.round(t)));
   $("scrub").value = T;
   $("clock").textContent = `cycle ${fmt(T)} / ${fmt(R.m.makespan)}`;
-  drawFloorplan(); drawLanes(); drawOcc();
+  drawFloorplan(); drawDram(); drawLanes(); drawOcc();
 }
 $("scrub").addEventListener("input", e => setT(+e.target.value));
 $("play").addEventListener("click", () => {
@@ -402,6 +489,19 @@ function drawFloorplan() {
   const l3frac = l3cap ? l3now / l3cap : (R.m.tiles.length ? l3now / R.m.tiles.length : 0);
   const pool = name => { const p = (R.m.movers || []).find(x => x.name === name); return p && p.lanes ? valueAt(R.poolSteps[name], T) / p.lanes : 0; };
   const cfName = new Map(cfStations.map(i => [R.m.stations[i].name, i]));
+  // With a binding, every resource gets its own value at the cursor (derived); without, pools.
+  const bound = new Map();             // block name -> [busy, capacity]
+  if (R.B) {
+    const B = R.B, add = (n, c) => { const v = bound.get(n) || [0, c]; v[0]++; bound.set(n, v); };
+    for (let i = 0; i < R.res.rows; i++) if (R.res.t0[i] <= T && T < R.res.t1[i]) add(B.l3.tiles[B.l3.residency_home[i]], B.l3.per_tile_capacity);
+    for (let i = 0; i < R.tr.rows; i++) {
+      if (!(R.tr.t0[i] <= T && T < R.tr.t1[i])) continue;
+      if (B.transit_engine[i] >= 0) add(B.engines[B.transit_engine[i]], 1);
+      if (B.transit_bm[i] >= 0) add(B.bms[B.transit_bm[i]], 1);
+      for (const n of B.transit_path[i] || []) add(B.nodes[n], 4);
+    }
+  }
+  const boundFill = name => { const v = bound.get(name); return v ? ramp(Math.min(1, 0.25 + 0.75 * v[0] / Math.max(1, v[1]))) : ramp(0); };
   for (const b of fpGeom.blocks) {
     const [x, y, w, h] = b.rect.map(v => v * s);
     let fill = tok("--blk"), hatch = false;
@@ -413,12 +513,13 @@ function drawFloorplan() {
         if (st === undefined) hatch = true;
         break;
       }
-      case "l3_tile": fill = ramp(l3frac); break;
-      case "block_mover": fill = ramp(pool("block-mover")); break;
-      case "noc_router": fill = ramp(pool("noc")); break;
-      case "dma_engine": fill = ramp(pool("dma")); break;
+      case "l3_tile": fill = R.B ? boundFill(b.name) : ramp(l3frac); break;
+      case "block_mover": fill = R.B ? (bound.has(b.name) ? tok("--busy") : ramp(0)) : ramp(pool("block-mover")); break;
+      case "noc_router": fill = R.B ? (bound.has(b.name) ? boundFill(b.name) : ramp(0)) : ramp(pool("noc")); break;
+      case "dma_engine": fill = R.B ? (bound.has(b.name) ? tok("--busy") : ramp(0)) : ramp(pool("dma")); break;
+      case "noc_port": if (R.B) { fill = bound.has(b.name) ? tok("--busy") : ramp(0); break; } fill = tok("--blk"); hatch = true; break;
       case "l3_bank": fill = null; break;
-      case "l2_bank": case "l1_vector": case "register_file": case "noc_port":
+      case "l2_bank": case "l1_vector": case "register_file":
       case "cpu_hart": case "cpu_sram": case "descriptor_ring": case "completion_ring":
         fill = tok("--blk"); hatch = true; break;
       default: fill = tok("--blk");
@@ -430,6 +531,10 @@ function drawFloorplan() {
   ctx.strokeStyle = tok("--ink-3"); ctx.lineWidth = 0.8; ctx.globalAlpha = 0.35;
   for (const l of R.fp.noc || []) { if (l.kind !== "ring" || !l.route) continue; ctx.beginPath(); ctx.moveTo(l.route[0][0] * s, l.route[0][1] * s); for (const p of l.route.slice(1)) ctx.lineTo(p[0] * s, p[1] * s); ctx.stroke(); }
   ctx.globalAlpha = 1;
+  if (R.B) {
+    $("fpLegend").innerHTML = `<span><span class="sw" style="background:var(--busy)"></span>busy: compute tile, DMA engine, BlockMover, port</span><span><span class="sw" style="background:${ramp(0.7)}"></span>L3 tile / hub load at the cursor</span><span>placement DERIVED by bind.py (the L-T1 executor pools L3 and movers)</span><span><span class="sw hatch"></span>no events at ${R.m.level}</span>`;
+    return;
+  }
   $("fpLegend").innerHTML = `<span><span class="sw" style="background:var(--busy)"></span>compute tile computing</span><span><span class="sw" style="background:${ramp(l3frac)}"></span>L3: ${fmt(l3now)}${l3cap ? " / " + fmt(l3cap) : ""} tiles, POOLED across all L3 tiles</span><span>BlockMovers / DMA / NoC: pooled lane use</span><span><span class="sw hatch"></span>no events at ${R.m.level}</span>`;
 }
 $("fp").addEventListener("click", e => {
@@ -464,6 +569,10 @@ function inspectBlock(b) {
     $("insp").innerHTML = `<div class="kv"><span>block</span><span>${b.name}</span><span>computes</span><span>${list.length}</span><span>utilization</span><span>${(100 * busy / Math.max(1, R.m.makespan)).toFixed(1)}%</span><span>at cursor</span><span>${now >= 0 ? opText(R.co.op[now]) : "idle"}</span></div><p class="note">Next: ${near.map(i => `[${fmt(R.co.t0[i])}, ${fmt(R.co.t1[i])}) ${opText(R.co.op[i])}`).join("<br>") || "none"}</p>`;
     return;
   }
+  if (R.B) {
+    const row = ROWS.find(r => !r.header && r.name === b.name);
+    if (row) return inspectBoundRow(row);
+  }
   const pooled = { l3_tile: "L3 is pooled at this level: the record says how many tiles L3 held, never which L3 tile held them.", block_mover: "BlockMovers are a pooled lane set at this level; binding a move to this edge needs L3 slot binding (plan step 6).", dma_engine: "DMA engines are a pooled lane set at this level.", noc_router: "NoC lanes are pooled at this level." }[b.kind];
   $("insp").innerHTML = `<div class="kv"><span>block</span><span>${b.name}</span><span>kind</span><span>${b.kind}</span><span>clock</span><span>${b.clock || "—"}</span></div><p class="note">${pooled || "No events are recorded against this block at " + R.m.level + "."}</p>`;
 }
@@ -477,6 +586,7 @@ function pickLevel(px) {
   return L[L.length - 1];
 }
 function drawLanes() {
+  if (ROWS) return drawLanesBound();
   const cv = $("lanes");
   if (!R.lod) { const { ctx } = fit(cv, 40); ctx.fillStyle = tok("--ink-3"); ctx.fillText("This bundle has no lod.json.", 4, 24); return; }
   const rows = R.lod.rows, rh = 16, gutter = 150;
@@ -511,7 +621,8 @@ function drawLanes() {
     ctx.fillStyle = tok("--accent"); ctx.globalAlpha = .18;
     ctx.fillRect(Math.min(dragFrom, laneGeom.dragTo), 0, Math.abs(laneGeom.dragTo - dragFrom), ay); ctx.globalAlpha = 1;
   }
-  laneGeom = { gutter, pw, rh, lv, width, X, dragTo: laneGeom ? laneGeom.dragTo : undefined };
+  laneGeom = { gutter, pw, rh, lv, width, X, dragTo: laneGeom ? laneGeom.dragTo : undefined,
+              rowAt: y => Math.floor((y - 4) / rh) };
   $("levelNote").textContent = `bin = 2^${lv.k} = ${fmt(width)} cycles`;
   const zoomed = viewA > 0 || viewB < R.m.makespan;
   $("zoomNote").textContent = zoomed ? `view ${fmt(Math.round(viewA))}–${fmt(Math.round(viewB))} (${(R.m.makespan / (viewB - viewA)).toFixed(1)}x)` : "";
@@ -521,13 +632,14 @@ function laneAt(e) {
   const r = $("lanes").getBoundingClientRect(), x = e.clientX - r.left, y = e.clientY - r.top;
   const { gutter, pw, rh } = laneGeom;
   const t = viewA + (x - gutter) / pw * (viewB - viewA);
-  return { x, row: Math.floor((y - 4) / rh), t };
+  return { x, row: laneGeom.rowAt(y), t };
 }
 $("lanes").addEventListener("mousedown", e => { if (!laneGeom) return; dragFrom = laneAt(e).x; laneGeom.dragTo = dragFrom; });
 $("lanes").addEventListener("mousemove", e => {
-  if (!laneGeom || !R.lod) return;
+  if (!laneGeom || (!R.lod && !ROWS)) return;
   const h = laneAt(e);
   if (dragFrom !== null) { laneGeom.dragTo = h.x; drawLanes(); return; }
+  if (ROWS) return tipBound(e, h);
   const row = R.lod.rows[h.row];
   if (!row || h.t < viewA || h.t > viewB) return hideTip();
   const { lv, width } = laneGeom, b = Math.floor(h.t / width), i = h.row * lv.bins + b;
@@ -550,8 +662,179 @@ window.addEventListener("mouseup", e => {
   const { gutter, pw } = laneGeom;
   const tOf = x => viewA + (Math.max(gutter, Math.min(gutter + pw, x)) - gutter) / pw * (viewB - viewA);
   if (Math.abs(to - from) > 6) { const a = tOf(Math.min(from, to)), b = tOf(Math.max(from, to)); setView(a, Math.max(a + 1, b)); }
-  else { setT(tOf(from)); const h = laneAt(e); const row = R.lod.rows[h.row]; if (row) inspectRow(h.row); }
+  else {
+    const h = laneAt(e);
+    if (ROWS) {
+      const r = ROWS[h.row];
+      if (r && r.header) { collapsed.has(r.cat) ? collapsed.delete(r.cat) : collapsed.add(r.cat); drawLanes(); return; }
+      setT(tOf(from));
+      if (r) inspectBoundRow(r);
+      return;
+    }
+    setT(tOf(from)); const row = R.lod.rows[h.row]; if (row) inspectRow(h.row);
+  }
 });
+function drawLanesBound() {
+  const cv = $("lanes"), gutter = 170, rh = 13, hh = 20;
+  const layout = [];                      // [rowIndex, y, h]
+  let y = 2;
+  ROWS.forEach((r, i) => {
+    if (r.header) { layout.push([i, y, hh]); y += hh; return; }
+    if (collapsed.has(r.cat)) return;
+    layout.push([i, y, rh]); y += rh;
+  });
+  const H = y + 24;
+  const { ctx, w } = fit(cv, H);
+  const pw = Math.max(50, Math.floor(w - gutter - 8)), span = viewB - viewA;
+  const X = t => gutter + (t - viewA) / span * pw;
+  ctx.textBaseline = "middle";
+  const acc = new Float32Array(pw);
+  for (const [i, ry, h] of layout) {
+    const r = ROWS[i];
+    if (r.header) {
+      ctx.fillStyle = tok("--grid"); ctx.fillRect(0, ry + 2, w, h - 4);
+      ctx.fillStyle = tok("--ink"); ctx.font = `600 12px ${tok("--font-ui")}`;
+      const n = ROWS.filter(x => !x.header && x.cat === r.cat).length;
+      ctx.fillText(`${collapsed.has(r.cat) ? "▸" : "▾"} ${r.label} (${n})${r.derived ? "  · derived" : ""}`, 4, ry + h / 2);
+      ctx.fillStyle = tok("--ink-3"); ctx.font = `11px ${tok("--font-ui")}`;
+      ctx.fillText(r.note, gutter + 6, ry + h / 2);
+      continue;
+    }
+    ctx.font = `11px ${tok("--font-data")}`; ctx.fillStyle = tok("--ink-2");
+    ctx.fillText(r.label.length > 24 ? r.label.slice(0, 23) + "…" : r.label, 8, ry + h / 2);
+    ctx.fillStyle = tok("--grid"); ctx.fillRect(gutter, ry + h - 1, pw, 1);
+    acc.fill(0);
+    for (const [a, b] of r.ivs) {
+      if (b <= viewA || a >= viewB || b <= a) continue;
+      const x0 = (Math.max(a, viewA) - viewA) / span * pw, x1 = (Math.min(b, viewB) - viewA) / span * pw;
+      const p0 = Math.floor(x0), p1 = Math.min(pw - 1, Math.ceil(x1) - 1);
+      for (let p = p0; p <= p1; p++) acc[p] += Math.min(x1, p + 1) - Math.max(x0, p);
+    }
+    const scale = r.cap || r.relMax || 1;
+    let runStart = -1, runKey = null;
+    const flush = end => { if (runStart >= 0) { ctx.fillStyle = runKey; ctx.fillRect(gutter + runStart, ry + 1, end - runStart, h - 3); } };
+    for (let p = 0; p <= pw; p++) {
+      let key = null;
+      if (p < pw && acc[p] > 1e-6) key = r.cap && acc[p] > r.cap + 1e-6 ? tok("--crit") : ramp(Math.min(1, 0.15 + 0.85 * Math.round(16 * acc[p] / scale) / 16));
+      if (key !== runKey) { flush(p); runStart = key ? p : -1; runKey = key; }
+    }
+  }
+  const ay = y + 2;
+  ctx.fillStyle = tok("--line"); ctx.fillRect(gutter, ay, pw, 1);
+  ctx.fillStyle = tok("--ink-3"); ctx.textBaseline = "top"; ctx.font = `11px ${tok("--font-data")}`;
+  for (let i = 0; i <= 5; i++) { const t = viewA + span * i / 5; ctx.fillText(fmt(Math.round(t)), Math.min(X(t), gutter + pw - 40), ay + 4); }
+  if (T >= viewA && T <= viewB) { ctx.fillStyle = tok("--ink"); ctx.fillRect(X(T) - .5, 0, 1.5, ay); }
+  if (dragFrom !== null && laneGeom && laneGeom.dragTo !== undefined) {
+    ctx.fillStyle = tok("--accent"); ctx.globalAlpha = .18;
+    ctx.fillRect(Math.min(dragFrom, laneGeom.dragTo), 0, Math.abs(laneGeom.dragTo - dragFrom), ay); ctx.globalAlpha = 1;
+  }
+  laneGeom = { gutter, pw, X, dragTo: laneGeom ? laneGeom.dragTo : undefined,
+               rowAt: yy => { const hit = layout.find(([, ry, h]) => yy >= ry && yy < ry + h); return hit ? hit[0] : -1; } };
+  $("levelNote").textContent = `one pixel = ${fmt(Math.max(1, Math.round(span / pw)))} cycles`;
+  const zoomed = viewA > 0 || viewB < R.m.makespan;
+  $("zoomNote").textContent = zoomed ? `view ${fmt(Math.round(viewA))}–${fmt(Math.round(viewB))} (${(R.m.makespan / span).toFixed(1)}x)` : "";
+  $("zoomOut").disabled = !zoomed; $("resetZoom").disabled = !zoomed; $("zoomBack").disabled = !zoomHistory.length;
+}
+function activeAt(r, t) { return r.ivs.filter(([a, b]) => a <= t && t < b); }
+function transitText(i) {
+  const tile = R.m.tiles[R.tr.tile[i]], addr = R.B ? dramAddr(R.tr.tile[i]) : null;
+  return `${HOPS[R.tr.hop[i]]} ${tile[0]}[${tile[1]},${tile[2]}]${addr !== null ? " @" + hex(addr) : ""} [${fmt(R.tr.t0[i])}, ${fmt(R.tr.t1[i])})`;
+}
+function tipBound(e, h) {
+  const r = ROWS[h.row];
+  if (!r) return hideTip();
+  if (r.header) return showTip(e, `${r.label}${r.derived ? " (derived binding)" : ""}<br>${r.note}<br>click to ${collapsed.has(r.cat) ? "unfold" : "fold"}`);
+  if (h.t < viewA || h.t > viewB) return hideTip();
+  const a = activeAt(r, h.t);
+  showTip(e, `${r.name}<br>cycle ${fmt(Math.round(h.t))}: ${a.length}${r.cap ? " of " + r.cap : ""} busy${r.cap && a.length > r.cap ? " OVER CAPACITY" : ""}` +
+             (a.length ? "<br>" + a.slice(0, 4).map(([, , i]) => r.kind === "l3" ? tileText(R.res.tile[i]) : r.kind === "cf" ? opText(R.co.op[i]) : transitText(i)).join("<br>") : ""));
+}
+function tileText(tile) { const t = R.m.tiles[tile], a = R.B ? dramAddr(tile) : null; return `${t[0]}[${t[1]},${t[2]}]${a !== null ? " (DRAM " + hex(a) + ")" : ""}`; }
+function inspectBoundRow(r) {
+  let busy = 0; for (const [a, b] of r.ivs) busy += b - a;
+  const a = activeAt(r, T);
+  const util = r.cap ? busy / (r.cap * Math.max(1, R.m.makespan)) : busy / Math.max(1, R.m.makespan);
+  $("insp").innerHTML = `<div class="kv"><span>row</span><span>${r.name}</span><span>category</span><span>${r.cat}</span><span>capacity</span><span>${r.cap || "relative"}</span><span>intervals</span><span>${fmt(r.ivs.length)}</span><span>${r.cap ? "utilization" : "busy (sum)"}</span><span>${r.cap ? (100 * util).toFixed(1) + "%" : fmt(busy) + " cycles"}</span><span>at cursor</span><span>${a.length} active</span></div><p class="note">${a.slice(0, 8).map(([, , i]) => r.kind === "l3" ? tileText(R.res.tile[i]) : r.kind === "cf" ? opText(R.co.op[i]) : transitText(i)).join("<br>") || "nothing active at the cursor"}</p>`;
+}
+
+// ------------------------------------------------------------------ DRAM address map
+let dramGeom = null;
+const TENSOR_COLORS = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#008300", "#4a3aa7", "#e34948"];
+function drawDram() {
+  if (!R.B) return;
+  $("dramPanel").hidden = false;
+  const D = R.B.dram, cv = $("dram"), H = 92, gutter = 8;
+  const { ctx, w } = fit(cv, H);
+  const pw = w - 2 * gutter, A = a => gutter + a / D.top * pw, by = 30, bh = 30;
+  ctx.fillStyle = tok("--die"); ctx.fillRect(gutter, by, pw, bh);
+  hatchRect(ctx, A(D.end), by, A(D.top) - A(D.end), bh);
+  D.tensors.forEach((t, k) => {
+    const x0 = A(t.base), x1 = A(t.base + t.bytes);
+    ctx.fillStyle = TENSOR_COLORS[k % TENSOR_COLORS.length]; ctx.globalAlpha = 0.85;
+    ctx.fillRect(x0, by, Math.max(1, x1 - x0), bh); ctx.globalAlpha = 1;
+    ctx.fillStyle = "#ffffff"; ctx.font = `600 12px ${tok("--font-ui")}`; ctx.textBaseline = "middle";
+    if (x1 - x0 > 40) ctx.fillText(t.name, x0 + 6, by + bh / 2);
+  });
+  // the tiles a DMA is moving at the cursor, marked above the bar (in) or below (out)
+  ctx.fillStyle = tok("--ink");
+  let moving = 0;
+  for (let i = 0; i < R.tr.rows; i++) {
+    const h = R.tr.hop[i];
+    if ((h !== 0 && h !== 5) || !(R.tr.t0[i] <= T && T < R.tr.t1[i])) continue;
+    const a = dramAddr(R.tr.tile[i]);
+    if (a === null) continue;
+    const ten = D.tensors.find(x => x.name === R.m.tiles[R.tr.tile[i]][0]);
+    const x0 = A(a), x1 = Math.max(x0 + 2, A(a + ten.tile_bytes));
+    ctx.fillRect(x0, h === 0 ? by - 7 : by + bh + 2, x1 - x0, 5);
+    moving++;
+  }
+  ctx.fillStyle = tok("--ink-3"); ctx.font = `11px ${tok("--font-data")}`; ctx.textBaseline = "top";
+  for (let i = 0; i <= 4; i++) { const a = D.top * i / 4; ctx.fillText(hex(a), Math.min(A(a), w - 70), by + bh + 10); }
+  ctx.fillText("0", gutter, 6); ctx.textAlign = "right"; ctx.fillText(`top of memory ${hex(D.top)}`, w - gutter, 6); ctx.textAlign = "left";
+  dramGeom = { A, gutter, pw, by, bh };
+  $("dramNote").textContent = `(derived layout: ${D.layout}, ${fmt(D.align)}-byte aligned; ${fmt(D.end)} of ${fmt(D.top)} bytes used)`;
+  $("dramLegend").innerHTML = D.tensors.map((t, k) => `<span><span class="sw" style="background:${TENSOR_COLORS[k % TENSOR_COLORS.length]}"></span>${t.name} ${t.shape[0]}×${t.shape[1]} @${hex(t.base)}, ${t.tile_rows}×${t.tile_cols} tiles of ${fmt(t.tile_bytes)} B</span>`).join("") +
+    `<span>▀ / ▄ tiles a DMA is reading / writing at the cursor (${moving})</span><span><span class="sw hatch"></span>unused</span>`;
+}
+function dramHit(e) {
+  if (!dramGeom) return null;
+  const r = $("dram").getBoundingClientRect(), x = e.clientX - r.left;
+  const D = R.B.dram, a = (x - dramGeom.gutter) / dramGeom.pw * D.top;
+  if (a < 0 || a > D.top) return null;
+  const t = D.tensors.find(t => a >= t.base && a < t.base + t.bytes);
+  if (!t) return { a };
+  const k = Math.floor((a - t.base) / t.tile_bytes), ti = Math.floor(k / t.tile_cols), tj = k % t.tile_cols;
+  const tile = R.m.tiles.findIndex(x => x[0] === t.name && x[1] === ti && x[2] === tj);
+  return { a, t, ti, tj, tile };
+}
+function tileStory(tile) {
+  let reads = 0, writes = 0; const homes = new Set();
+  for (let i = 0; i < R.tr.rows; i++) if (R.tr.tile[i] === tile) { if (R.tr.hop[i] === 0) reads++; if (R.tr.hop[i] === 5) writes++; }
+  let homeNow = "not resident";
+  for (let i = 0; i < R.res.rows; i++) if (R.res.tile[i] === tile) {
+    const h = R.B.l3.tiles[R.B.l3.residency_home[i]];
+    homes.add(h);
+    if (R.res.t0[i] <= T && T < R.res.t1[i]) homeNow = h;
+  }
+  return { reads, writes, homes: [...homes], homeNow };
+}
+$("dram").addEventListener("mousemove", e => {
+  const h = dramHit(e);
+  if (!h) return hideTip();
+  if (!h.t) return showTip(e, `${hex(h.a)}<br>unused`);
+  const s = h.tile >= 0 ? tileStory(h.tile) : null;
+  showTip(e, `${hex(h.a)} in ${h.t.name} (base ${hex(h.t.base)}, ${fmt(h.t.bytes)} B)<br>tile [${h.ti},${h.tj}] at ${hex(h.t.base + (h.ti * h.t.tile_cols + h.tj) * h.t.tile_bytes)}` +
+    (s ? `<br>DMA reads ${s.reads}, writes ${s.writes}<br>at cursor: ${s.homeNow}` : "<br>never touched by this run"));
+});
+$("dram").addEventListener("mouseleave", hideTip);
+$("dram").addEventListener("click", e => {
+  const h = dramHit(e);
+  if (!h || !h.t) return;
+  const s = h.tile >= 0 ? tileStory(h.tile) : null;
+  $("insp").innerHTML = `<div class="kv"><span>tensor</span><span>${h.t.name} ${h.t.shape.join("×")}</span><span>base</span><span>${hex(h.t.base)}</span><span>bytes</span><span>${fmt(h.t.bytes)}</span><span>tile</span><span>[${h.ti},${h.tj}] @${hex(h.t.base + (h.ti * h.t.tile_cols + h.tj) * h.t.tile_bytes)}</span>` +
+    (s ? `<span>DMA reads / writes</span><span>${s.reads} / ${s.writes}</span><span>L3 homes</span><span>${s.homes.join(", ") || "—"}</span><span>at cursor</span><span>${s.homeNow}</span>` : "") + `</div><p class="note">Layout derived by bind.py (${R.B.dram.layout}); the deployment declares no DRAM placement.</p>`;
+});
+
 function inspectRow(r) {
   const row = R.lod.rows[r], top = R.lod.levels[R.lod.levels.length - 1];
   const mean = top.occ[r] / Math.max(1, R.m.makespan);
@@ -635,6 +918,7 @@ matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => { if
 // An embedded bundle (pack.py) loads itself.
 if (window.TFLOW_EMBED) {
   const E = window.TFLOW_EMBED, files = { "manifest.json": E.manifest, "lod.json": E.lod };
+  if (E.binding) files["binding.json"] = E.binding;
   for (const [name, data] of Object.entries(E.bins)) files[name] = b64(data);
   if (E.floorplan) pendingFloorplan = E.floorplan;
   loadFrom(files);

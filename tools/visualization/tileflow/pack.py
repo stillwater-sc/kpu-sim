@@ -53,6 +53,7 @@ def main():
         if total > MAX_BYTES:
             raise ValueError(f"the bundle's columns are {total} bytes; view it from its folder "
                              f"instead of embedding it")
+        binding = (d / "binding.json").read_text() if (d / "binding.json").exists() else None
         floorplan = Path(a.floorplan).read_text() if a.floorplan else None
         if floorplan and json.loads(floorplan).get("format") != "kpu-floorplan":
             raise ValueError("--floorplan is not a kpu-floorplan file")
@@ -64,13 +65,15 @@ def main():
     if MARKER not in page:
         print("pack: index.html has no embed marker", file=sys.stderr)
         sys.exit(2)
-    payload = json.dumps({"manifest": manifest, "lod": lod, "bins": bins, "floorplan": floorplan})
+    payload = json.dumps({"manifest": manifest, "lod": lod, "bins": bins, "floorplan": floorplan,
+                          "binding": binding})
     # "</" inside a <script> would end it early; JSON allows the escaped form.
     payload = payload.replace("</", "<\\/")
     page = page.replace(MARKER, f"<script>window.TFLOW_EMBED = {payload};</script>", 1)
     Path(a.output).write_text(page)
     print(f"pack: {a.output} ({len(page) // 1024} KiB, run {m['device']} {m['level']}, "
-          f"makespan {m['makespan']}{', with floorplan' if floorplan else ''})")
+          f"makespan {m['makespan']}{', with floorplan' if floorplan else ''}"
+          f"{', with derived binding' if binding else ''})")
 
 
 if __name__ == "__main__":

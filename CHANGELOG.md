@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Per-resource tile-flow rows by a derived binding (#286).** `tools/visualization/tileflow/bind.py`
+  derives the places the L-T1 executor does not model, by stated policies, and changes no
+  timing: a DRAM layout of the tensors, the DMA engine of each transfer by address-interleaved
+  memory controller, the home L3 tile of each tile, the BlockMover of each move, and the NoC
+  route of each burst. The viewer then shows a queryable DRAM address map (0 to the top of
+  memory, tensors and in-flight tiles), and swimlanes per memory controller, DMA engine, L3
+  tile, compute tile, NoC port and NoC hub, each labelled derived where it is. The KPU-T64
+  fixture now has 8 DMA engines per memory controller (32), and the floorplan attaches every
+  engine to one of its controller's fold ports. The record carries operand shapes and element
+  size. `test_bind.py` checks a binding's consistency.
 - **The tile-flow viewer (#286 step 4).** `tools/visualization/tileflow/index.html`: one static HTML
   file, no build and no server, that loads a `.tflow` bundle and the deployment's floorplan and
   shows the run on the physical floorplan at a cursor, as station swimlanes drawn from the

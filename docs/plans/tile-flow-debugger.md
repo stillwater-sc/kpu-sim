@@ -525,6 +525,30 @@ residency.
    (CPU, ports, L2, L1) are hatched. The viewer does not re-check invariants; it points at
    `tflow_check.py`.
 
+   **Per-resource rows by a derived binding (2026-10-04, at the architect's request).** The
+   swimlanes are organized by resource class:
+   - a DRAM address map from 0 to the top of memory, with the tensors placed and queryable;
+   - memory controllers, and their DMA engines (8 per controller in the T64 fixture);
+   - every L3 tile, every compute tile, the NoC fold ports, and the NoC hubs.
+
+   Q2 stands: the executor still pools L3. The places come from `bind.py`, which derives
+   them by stated policies, changes no timing, and is labelled "derived" wherever it shows.
+   The policies:
+   - **DRAM:** tile-major layout, 4 KiB aligned;
+   - **DMA:** the controller chosen by address, tile-interleaved, then its first free
+     engine, with overload counted;
+   - **L3:** each tile homed in the least-loaded L3 tile abutting its next consumer;
+   - **BlockMover:** the mover on the home tile facing the destination compute tile, else a
+     NoC relay;
+   - **NoC:** each DMA burst on a shortest path from its engine's port to the home hub.
+
+   The first DMA policy, "lane i is engine i", put almost all traffic on controller 0. The
+   executor takes the lowest free lane, so the picture was an artifact of the mapping, not a
+   finding. The address interleave replaced it. On a 512³ matmul it shows 115 transfers
+   arriving while every engine of their controller is busy. The floorplan now attaches every
+   DMA engine to one of its controller's fold ports, in turn. Step 6 replaces the L3 and
+   BlockMover policies with the executor's own binding.
+
 5. **Cause edges and lineage, Step 2.** Add the #286 causality plumbing and `CauseKind`, then
    views 2a/2b.
 6. **L3 slot binding.** This is a deliberate executor model change, with its own design note:

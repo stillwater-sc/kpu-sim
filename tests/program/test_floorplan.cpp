@@ -273,7 +273,7 @@ TEST_CASE("the generated T64 floorplan places every resource exactly once",
     CHECK(n.at(BlockKind::NocRouter) == 32);
     CHECK(n.at(BlockKind::NocPort) == 16);
     CHECK(n.at(BlockKind::MemoryController) == 4);
-    CHECK(n.at(BlockKind::DmaEngine) == 8);
+    CHECK(n.at(BlockKind::DmaEngine) == 32);                // 8 per memory controller
     CHECK(n.at(BlockKind::CpuHart) == 4);
     CHECK(n.at(BlockKind::L3Bank) == 32 * 4);
 
@@ -284,12 +284,17 @@ TEST_CASE("the generated T64 floorplan places every resource exactly once",
     CHECK(fp.find("t64/l3[0]/bm[0]") == nullptr);           // a corner has no N mover
 
     // The NoC's wires: 60 ring links (64 loop links, four shared at the corners), two port links per port, and one DMA attachment per
-    // N/S port in the first pass (W/E ports start unattached).
+    // engine in the first pass, spread over its controller's N/S ports (W/E start unattached).
     std::map<NocLink::Kind, std::size_t> links;
     for (const NocLink& l : fp.noc) ++links[l.kind];
     CHECK(links[NocLink::Kind::Ring] == 60);
     CHECK(links[NocLink::Kind::Port] == 32);
-    CHECK(links[NocLink::Kind::Attach] == 8);
+    CHECK(links[NocLink::Kind::Attach] == 32);
+    std::map<std::string, int> per_port;
+    for (const NocLink& l : fp.noc)
+        if (l.kind == NocLink::Kind::Attach) ++per_port[l.b];
+    CHECK(per_port.size() == 8);                             // the 8 N/S ports, 4 engines each
+    for (const auto& [port, k] : per_port) CHECK(k == 4);
 }
 
 TEST_CASE("the die holds everything placed, even when the CPU is taller than the array",

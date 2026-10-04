@@ -179,6 +179,10 @@ TEST_CASE("the .tflow bundle round-trips, and the same run writes the same bytes
     CHECK(back.level == rec.level);
     CHECK(back.makespan == rec.makespan);
     CHECK(back.stations.size() == rec.stations.size());
+    REQUIRE(back.operands.size() == 3);                      // A, B, C of the matmul
+    CHECK(back.operands[0].name == rec.operands[0].name);
+    CHECK(back.operands[0].tile_rows == 16);
+    CHECK(back.element_bytes == rec.element_bytes);
     REQUIRE(back.tiles.size() == rec.tiles.size());
     for (std::size_t i = 0; i < rec.tiles.size(); ++i) CHECK(back.tiles[i].key() == rec.tiles[i].key());
     REQUIRE(back.residency.size() == rec.residency.size());

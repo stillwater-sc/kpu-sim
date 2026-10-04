@@ -111,8 +111,29 @@ if(KPU_BUILD_TESTS)
             COMMAND ${KPU_PYTHON3} ${CMAKE_SOURCE_DIR}/tools/visualization/tileflow/test_viewer.py
                     ${CMAKE_CURRENT_BINARY_DIR}/kpu_run_matmul.tflow)
         set_tests_properties(tileflow_viewer_smoke PROPERTIES DEPENDS kpu_run_tflow_written)
+
+        # The derived binding on the T4 reference run (#286): the bundle and floorplan the
+        # viewer is demonstrated on. The T64 one below stays as the scale check.
+        add_test(NAME tileflow_bind_t4
+            COMMAND ${KPU_PYTHON3} ${CMAKE_SOURCE_DIR}/tools/visualization/tileflow/test_bind.py
+                    ${CMAKE_CURRENT_BINARY_DIR}/kpu_run_t4.tflow
+                    ${CMAKE_BINARY_DIR}/tools/floorplan/t4_floorplan.json)
+        set_tests_properties(tileflow_bind_t4 PROPERTIES DEPENDS "kpu_run_tflow_t4;kpu_floorplan_t4")
+
+        # The derived binding (bind.py) on a T64 run and its floorplan (written by
+        # kpu_floorplan_t64 in tools/floorplan).
+        add_test(NAME kpu_run_tflow_t64
+            COMMAND run --algo matmul --size 128 --tile 32 --level block-sequential
+                    --deploy ${CMAKE_SOURCE_DIR}/tests/program/deploy/kpu_t64.json
+                    --tflow ${CMAKE_CURRENT_BINARY_DIR}/t64_matmul.tflow)
+        add_test(NAME tileflow_bind_t64
+            COMMAND ${KPU_PYTHON3} ${CMAKE_SOURCE_DIR}/tools/visualization/tileflow/test_bind.py
+                    ${CMAKE_CURRENT_BINARY_DIR}/t64_matmul.tflow
+                    ${CMAKE_BINARY_DIR}/tools/floorplan/t64_floorplan.json)
+        set_tests_properties(tileflow_bind_t64 PROPERTIES DEPENDS "kpu_run_tflow_t64;kpu_floorplan_t64")
         set_tests_properties(tflow_check_matmul tflow_check_t4 kpu_run_tflow_shared_reader
             tflow_check_shared_reader tflow_check_selftest tileflow_viewer_smoke
+            kpu_run_tflow_t64 tileflow_bind_t64 tileflow_bind_t4
             PROPERTIES LABELS "program;tileflow")
     endif()
 
