@@ -54,6 +54,13 @@ class Unreadable(Exception):
     """The bundle cannot be read (exit 2)."""
 
 
+def _count(v, what, positive=False):
+    """A count or offset from a JSON file: an int, and not a bool (which Python treats as one)."""
+    if type(v) is not int or v < 0 or (positive and v == 0):
+        raise Unreadable(f"{what} is {v!r}, not a {'positive' if positive else 'non-negative'} integer")
+    return v
+
+
 # ---------------------------------------------------------------------------
 # Reading
 # ---------------------------------------------------------------------------
@@ -62,7 +69,8 @@ def _column(blob, table, name, rows):
         if c["name"] != name:
             continue
         code, size = DTYPES[c["dtype"]]
-        off = c["offset"]
+        off = _count(c["offset"], f"the offset of column {name}")
+        rows = _count(rows, f"the row count of column {name}")
         if off > len(blob) or rows > (len(blob) - off) // size:
             raise Unreadable(f"column {name} runs past the end of its file")
         a = array.array(code)
@@ -110,9 +118,7 @@ def load(path):
             nrows = len(lm["rows"])
             levels = []
             for lv in lm["levels"]:
-                bins = lv["bins"]
-                if not isinstance(bins, int) or bins <= 0:
-                    raise Unreadable(f"lod: a level declares {bins!r} bins")
+                bins = _count(lv["bins"], "a pyramid level's bin count", positive=True)
                 n = nrows * bins
                 levels.append({
                     "k": lv["k"], "bins": bins,

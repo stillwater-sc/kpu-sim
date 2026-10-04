@@ -136,7 +136,10 @@ class TflowCheckSelfTest(unittest.TestCase):
 
     def test_malformed_pyramid_is_exit_2(self):
         for edit in (lambda m: m.pop("rows"), lambda m: m["levels"][0].update(bins=0),
-                     lambda m: m["levels"][0].update(bins="many")):
+                     lambda m: m["levels"][0].update(bins="many"),
+                     lambda m: m["levels"][0].update(bins=True),
+                     lambda m: m["levels"][0].update(occ=-8),
+                     lambda m: m["levels"][0].update(peak=1.5)):
             lod = json.loads((self.b.dir / "lod.json").read_text())
             edit(lod)
             (self.b.dir / "lod.json").write_text(json.dumps(lod))
