@@ -177,25 +177,38 @@ def _overlaps(intervals):
     return out
 
 
-def _peak(iv, constant, makespan):
-    """Peak occupancy over [0, makespan), by the builder's sweep: ends sort before starts at the
-    same cycle, a zero-length interval occupies no time, and a level is counted only where it
-    holds for a positive span."""
-    ev = sorted([(a, 1) for a, b in iv if b > a] + [(b, -1) for a, b in iv if b > a],
-                key=lambda e: (e[0], e[1]))
-    cur, prev, peak = constant, 0, 0
-    i = 0
+def _accumulate(iv, constant, makespan, width, bins):
+    """One row's (occ, peak, starts) per bin -- a line-for-line port of accumulate() in
+    src/program/tile_flow_lod.cpp, so the checker recomputes the pyramid instead of trusting it.
+    Ends sort before starts at the same cycle, a zero-length interval occupies no time, and a
+    zero-length run still reports its constant (foreign slots) as the peak."""
+    occ, peak, starts = [0.0] * bins, [0] * bins, [0] * bins
+    for a, _ in iv:
+        starts[int(min(a // width, bins - 1))] += 1
+    ev = sorted([(a, 1) for a, b in iv if b > a] + [(b, -1) for a, b in iv if b > a])
+
+    def segment(a, b, level):
+        if b <= a or level <= 0:
+            return
+        bi = int(a // width)
+        while bi < bins and bi * width < b:
+            lo, hi = max(a, bi * width), min(b, (bi + 1) * width)
+            occ[bi] += level * (hi - lo)
+            peak[bi] = max(peak[bi], level)
+            bi += 1
+
+    cur, prev, i = constant, 0, 0
+    if makespan == 0:
+        peak[0] = max(peak[0], constant)
     while i < len(ev):
         t = ev[i][0]
-        if min(t, makespan) > prev and cur > 0:
-            peak = max(peak, cur)
+        segment(prev, min(t, makespan), cur)
         while i < len(ev) and ev[i][0] == t:
             cur += ev[i][1]
             i += 1
         prev = max(prev, min(t, makespan))
-    if makespan > prev and cur > 0:
-        peak = max(peak, cur)
-    return peak
+    segment(prev, makespan, cur)
+    return occ, peak, starts
 
 
 def check(rec):
@@ -323,7 +336,9 @@ def check(rec):
         tile, t0, t1 = res["tile"][i], res["t0"][i], res["t1"][i]
         if res["flags"][i] & SEEDED:
             continue
-        inside = lambda ts: any(t0 <= t <= t1 for t in ts)
+        # Half-open, like the residency itself: an event at t1 belongs to whatever holds the
+        # slot next. A zero-length residency is filled by an event at its one instant.
+        inside = lambda ts: any(t0 <= t < t1 or t0 == t == t1 for t in ts)
         if not (inside(arrivals.get(tile, ())) or inside(writes.get(tile, ()))):
             r.fail("TF9", f"{tile_name(tile)} holds an L3 slot over [{int(t0)}, {int(t1)}) that "
                           f"nothing filled: no DMA delivers it and no op writes it -- its data "
@@ -366,6 +381,17 @@ def check(rec):
                         r.fail("TF8", f"{lod['rows'][row]['name']}: level k={hi['k']} bin {b} "
                                       f"is not the merge of its children")
         top = levels[-1]
+        # The builder halves until one bin is left; a wider top would let every bin after the
+        # first escape the raw-event comparison.
+        if top["bins"] != 1:
+            r.fail("TF8", f"the coarsest level has {top['bins']} bins, not 1")
+            return r
+        base = levels[0]
+        width = 1 << base["k"]
+        if base["bins"] != max(1, -(-makespan // width)):
+            r.fail("TF8", f"the base level has {base['bins']} bins of {width} cycles for a "
+                          f"{makespan}-cycle run")
+            return r
         for row, info in enumerate(lod["rows"]):
             constant = 0
             if info["kind"] == "l3":
@@ -378,17 +404,17 @@ def check(rec):
                 iv = [(tr["t0"][i], tr["t1"][i]) for i in range(ntr) if tr["mover"][i] == pool]
             else:
                 iv = []
-            want = constant * makespan + sum(t1 - t0 for t0, t1 in iv)
-            if top["occ"][row] != want:
-                r.fail("TF8", f"{info['name']}: the coarsest bin holds {top['occ'][row]} "
-                              f"occupancy-cycles, the raw events {want}")
-            if top["starts"][row] != len(iv):
-                r.fail("TF8", f"{info['name']}: the coarsest bin counts {top['starts'][row]} "
-                              f"starts, the raw events {len(iv)}")
-            peak = _peak(iv, constant, makespan)
-            if top["peak"][row] != peak:
-                r.fail("TF8", f"{info['name']}: the coarsest bin peaks at {top['peak'][row]}, "
-                              f"the raw events at {peak}")
+            # Recomputed from the raw events at the base and at the top. With every merge
+            # checked above, that pins every level: a value moved between sibling bins keeps
+            # the merges and the total, and only the base comparison sees it.
+            for name, lvl, w in (("base", base, width), ("coarsest", top, 1 << top["k"])):
+                occ, peak, starts = _accumulate(iv, constant, makespan, w, lvl["bins"])
+                at = row * lvl["bins"]
+                for b in range(lvl["bins"]):
+                    for metric, want in (("occ", occ[b]), ("peak", peak[b]), ("starts", starts[b])):
+                        if lvl[metric][at + b] != want:
+                            r.fail("TF8", f"{info['name']}: {name} bin {b} {metric} is "
+                                          f"{lvl[metric][at + b]}, the raw events give {want}")
     return r
 
 

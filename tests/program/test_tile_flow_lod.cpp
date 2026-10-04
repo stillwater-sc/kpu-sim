@@ -123,6 +123,24 @@ TEST_CASE("at one cycle per bin the base level is a cycle-by-cycle count", "[pro
         }
 }
 
+TEST_CASE("a zero-length run still peaks at its foreign slots", "[program][record][lod]") {
+    // An empty program at L-T1 takes no time, but the slots other work holds are still held:
+    // peak_l3_occupancy() reports them, and the pyramid has to agree with it.
+    TileFlowRecord rec = record_of(32, 16, 8);
+    rec.residency.clear();
+    rec.transits.clear();
+    rec.computes.clear();
+    rec.makespan = 0;
+    rec.foreign_slots = 3;
+    const Lod lod = build_lod(rec);
+    const std::size_t l3 = rec.station(rec.device + "/l3[*]");
+    REQUIRE(lod.levels.size() == 1);
+    REQUIRE(lod.levels[0].bins == 1);
+    CHECK(lod.levels[0].peak[l3] == peak_l3_occupancy(rec));
+    CHECK(lod.levels[0].peak[l3] == 3);
+    CHECK(lod.levels[0].occ[l3] == 0.0);
+}
+
 TEST_CASE("the pyramid is written with the bundle and reads back unchanged", "[program][record][lod]") {
     const TileFlowRecord rec = record_of(32, 16, 0);
     const auto dir = (std::filesystem::temp_directory_path() / "kpu-tflow-lod-test").string();

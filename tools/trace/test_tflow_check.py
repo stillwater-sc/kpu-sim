@@ -106,6 +106,40 @@ class TflowCheckSelfTest(unittest.TestCase):
             self.b.set("compute", col, 1, self.b.get("compute", col, 0))
         self.assertFails("TF4")
 
+    def test_tf5_tile_residencies_overlap(self):
+        self.assertGreater(self.b.manifest["tables"]["residency"]["rows"], 1)
+        for col in ("tile", "t0", "t1"):
+            self.b.set("residency", col, 1, self.b.get("residency", col, 0))
+        self.assertFails("TF5")
+
+    def test_tf7_operation_hops_overlap(self):
+        self.assertGreater(self.b.manifest["tables"]["transit"]["rows"], 1)
+        for col in ("op", "t0", "t1"):
+            self.b.set("transit", col, 1, self.b.get("transit", col, 0))
+        self.assertFails("TF7")
+
+    def test_tf8_base_bins_shifted(self):
+        # Occupancy moved between two sibling base bins: every merge and the total still hold.
+        lod = json.loads((self.b.dir / "lod.json").read_text())
+        base = lod["levels"][0]
+        self.assertGreaterEqual(base["bins"], 2)
+        path = self.b.dir / lod["file"]
+        b = bytearray(path.read_bytes())
+        row = next(i for i, x in enumerate(lod["rows"]) if x["kind"] == "l3")
+        at0, at1 = base["occ"] + 8 * (row * base["bins"]), base["occ"] + 8 * (row * base["bins"] + 1)
+        v0, v1 = struct.unpack_from("<d", b, at0)[0], struct.unpack_from("<d", b, at1)[0]
+        self.assertGreater(v0 + v1, 0)
+        struct.pack_into("<d", b, at0, v0 + v1)
+        struct.pack_into("<d", b, at1, 0.0)
+        path.write_bytes(bytes(b))
+        self.assertFails("TF8")
+
+    def test_tf8_top_wider_than_one_bin(self):
+        lod = json.loads((self.b.dir / "lod.json").read_text())
+        lod["levels"].pop()
+        (self.b.dir / "lod.json").write_text(json.dumps(lod))
+        self.assertFails("TF8")
+
     def test_tf6_released_while_used(self):
         # End every residency at its start: every user now runs without a slot.
         rows = self.b.manifest["tables"]["residency"]["rows"]
@@ -122,6 +156,28 @@ class TflowCheckSelfTest(unittest.TestCase):
         for i in range(self.b.manifest["tables"]["transit"]["rows"]):
             if self.b.get("transit", "hop", i) == 0:
                 self.b.set("transit", "hop", i, 1)
+        self.assertFails("TF9")
+
+    def test_tf9_arrival_at_the_residency_end(self):
+        # A tile held once, filled only by DMA, with every arrival moved to the cycle its slot
+        # is released: [t0, t1) is half-open, so the slot was never filled.
+        res = self.b.manifest["tables"]["residency"]["rows"]
+        tiles = [self.b.get("residency", "tile", i) for i in range(res)]
+        pick = next(i for i in range(res)
+                    if tiles.count(tiles[i]) == 1 and not (self.b.get("residency", "flags", i) & 1)
+                    and self.b.get("residency", "t1", i) > self.b.get("residency", "t0", i))
+        tile, end = tiles[pick], self.b.get("residency", "t1", pick)
+        t = self.b.manifest["tables"]["op_tiles"]
+        for j in range(self.b.get("op_tiles", "offset", t["rows"])):
+            if self.b.get("op_tiles", "tile", j) == tile:
+                self.b.set("op_tiles", "written", j, 0)
+        moved = 0
+        for i in range(self.b.manifest["tables"]["transit"]["rows"]):
+            if self.b.get("transit", "tile", i) == tile and self.b.get("transit", "hop", i) in (0, 6):
+                self.b.set("transit", "t1", i, max(self.b.get("transit", "t1", i), end))
+                self.b.set("transit", "t0", i, end)
+                moved += 1
+        self.assertGreater(moved, 0)
         self.assertFails("TF9")
 
     def test_tf8_pyramid_tampered(self):

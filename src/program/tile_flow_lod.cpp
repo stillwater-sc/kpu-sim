@@ -54,6 +54,9 @@ void accumulate(const std::vector<Interval>& iv, std::uint32_t constant, Cycle m
     };
     std::int64_t cur = constant;
     Cycle prev = 0;
+    // A zero-length run holds its foreign slots for no time, but peak_l3_occupancy() still
+    // reports them, and the pyramid's peak has to agree with it.
+    if (makespan == 0) peak[0] = std::max(peak[0], constant);
     for (std::size_t i = 0; i < ev.size();) {
         const Cycle t = ev[i].first;
         segment(prev, std::min(t, makespan), cur);
