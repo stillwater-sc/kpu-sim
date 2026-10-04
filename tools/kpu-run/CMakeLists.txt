@@ -68,6 +68,32 @@ if(KPU_BUILD_TESTS)
     )
     set_tests_properties(kpu_run_tflow_written PROPERTIES LABELS "program;driver;tileflow")
 
+    # The tile-flow checker (#286 step 3) over real bundles, and its self-test: every
+    # invariant must fail on a bundle that breaks it. Skipped without a Python interpreter.
+    find_program(KPU_PYTHON3 NAMES python3 python)
+    if(KPU_PYTHON3)
+        set(_tflow_check ${CMAKE_SOURCE_DIR}/tools/trace/tflow_check.py)
+        add_test(NAME tflow_check_matmul
+            COMMAND ${KPU_PYTHON3} ${_tflow_check} ${CMAKE_CURRENT_BINARY_DIR}/kpu_run_matmul.tflow)
+        set_tests_properties(tflow_check_matmul PROPERTIES DEPENDS kpu_run_tflow_written)
+
+        # The #279 program: two readers of one tile, the higher-indexed one finishing first.
+        # Clean at L3 = 5; the checker's TF9 is what fails it under the old release rule.
+        add_test(NAME kpu_run_tflow_shared_reader
+            COMMAND run --program ${CMAKE_SOURCE_DIR}/tests/program/tflow/shared_reader.l0
+                    --fill-inputs --level block-sequential --compute-tiles 2 --l3-tiles 5
+                    --tflow ${CMAKE_CURRENT_BINARY_DIR}/shared_reader.tflow)
+        add_test(NAME tflow_check_shared_reader
+            COMMAND ${KPU_PYTHON3} ${_tflow_check} ${CMAKE_CURRENT_BINARY_DIR}/shared_reader.tflow)
+        set_tests_properties(tflow_check_shared_reader PROPERTIES DEPENDS kpu_run_tflow_shared_reader)
+        add_test(NAME tflow_check_selftest
+            COMMAND ${KPU_PYTHON3} ${CMAKE_SOURCE_DIR}/tools/trace/test_tflow_check.py
+                    ${CMAKE_CURRENT_BINARY_DIR}/shared_reader.tflow)
+        set_tests_properties(tflow_check_selftest PROPERTIES DEPENDS kpu_run_tflow_shared_reader)
+        set_tests_properties(tflow_check_matmul kpu_run_tflow_shared_reader
+            tflow_check_shared_reader tflow_check_selftest PROPERTIES LABELS "program;tileflow")
+    endif()
+
     add_test(NAME kpu_run_tflow_refused_without_timing
         COMMAND ${CMAKE_COMMAND}
             -DCMD=$<TARGET_FILE:run>

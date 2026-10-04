@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The tile-flow pyramid and invariant checker (#286 step 3).** Every `.tflow` bundle now carries
+  a level-of-detail pyramid (`lod.json`/`lod.bin`): per station and mover pool, per power-of-two
+  time bin, occupancy-time, peak and starts -- each bin the exact merge of its two children, the
+  coarsest equal to the raw totals. `tools/trace/tflow_check.py` checks nine invariants (L3
+  capacity, interval bounds, lane and compute-tile exclusivity, one slot per tile, held while
+  used, hop order, pyramid conservation, and every L3 slot filled) with exit codes 0/1/2, and
+  `test_tflow_check.py` proves each one fails on a bundle that breaks it. With the #279
+  early-release bug put back into the executor, the checker fails the run and names the
+  re-taken tiles.
 - **DRAM geometry and one address map (docs/plans/dram-bank-model.md step 1).** The deployment
   spec gains an optional `memory.dram`: technology, channels per controller, width, ranks, bank
   groups, banks, page and burst size, data rate, a required power-of-two `capacity_bytes`, the

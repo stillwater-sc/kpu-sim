@@ -1,0 +1,23 @@
+KPUL0 1.2.0
+MIN_CONSUMER 1.0.0
+OPSET tile 1.0.0
+PRODUCER kpu-sim 0.8.0
+PROGRAM "shared-reader"
+VALUES none
+OPERAND "A" rows=16 cols=16 tile_rows=16 tile_cols=16
+OPERAND "B" rows=16 cols=24 tile_rows=16 tile_cols=16
+OPERAND "C" rows=16 cols=24 tile_rows=16 tile_cols=16
+OPERAND "H" rows=8 cols=16 tile_rows=8 tile_cols=16
+OPERAND "G" rows=16 cols=16 tile_rows=16 tile_cols=16
+OP kind=FEED in=A:0,0 port_kind=input port="West"
+OP kind=FEED in=B:0,1 port_kind=input port="West"
+OP kind=FEED in=C:0,1 port_kind=input port="West"
+OP kind=FEED in=H:0,0 port_kind=input port="West"
+OP kind=FEED in=B:0,0 port_kind=input port="West"
+OP kind=MATMUL_ACCUM in=A:0,0;B:0,0 out=C:0,0
+OP kind=MATMUL_ACCUM in=A:0,0;B:0,1 out=C:0,1
+OP kind=MATMUL_ACCUM in=C:0,1;H:0,0 out=G:0,0
+OP kind=DRAIN out=C:0,0 port_kind=output port="South"
+OP kind=DRAIN out=C:0,1 port_kind=output port="South"
+OP kind=DRAIN out=G:0,0 port_kind=output port="South"
+END

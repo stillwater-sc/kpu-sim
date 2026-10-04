@@ -33,7 +33,9 @@
 //   residency.bin      columns tile:u32 station:u32 t0:f64 t1:f64 flags:u8
 //   transit.bin        columns tile:u32 op:u32 hop:u8 mover:u8 lane:u32 t0:f64 t1:f64 src:u32 dst:u32
 //   compute.bin        columns op:u32 station:u32 t0:f64 t1:f64
-//   op_tiles.bin       CSR of the tiles each op touches: kind:u8 offset:u32 (ops+1), tile:u32 (nnz)
+//   op_tiles.bin       CSR of the tiles each op touches: kind:u8 offset:u32 (ops+1), tile:u32 and
+//                      written:u8 (nnz; 1 when the op writes the tile, so a residency's filler
+//                      can be told from a mere reader)
 //
 // Little-endian, each column contiguous and 8-byte aligned. Cycles are written as f64, which is
 // exact up to 2^53 -- the writer refuses a run longer than that rather than round it.
@@ -77,6 +79,7 @@ struct Tile {
 struct Op {
     std::uint8_t kind = 0;                 // TileOpKind
     std::vector<std::uint32_t> tiles;      // every tile it reads or writes, deduplicated
+    std::vector<std::uint8_t> written;     // parallel to `tiles`: 1 if the op writes it
 };
 
 struct Residency {
@@ -100,6 +103,11 @@ struct Compute {
     Cycle t0 = 0, t1 = 0;
 };
 
+struct MoverPool {
+    std::string name;                  // to_string(Mover): dma | block-mover | streamer | noc
+    Dim lanes = 0;
+};
+
 struct TileFlowRecord {
     std::string level;                 // short name of the level that ran
     std::string device;                // device name in the deployment
@@ -110,6 +118,7 @@ struct TileFlowRecord {
     std::vector<std::string> unmodelled;   // station kinds this level does not model
 
     std::vector<Station> stations;
+    std::vector<MoverPool> movers;     // lane count per pool: the capacity of a mover row
     std::vector<Tile> tiles;
     std::vector<Op> ops;
     std::vector<Residency> residency;
@@ -127,8 +136,9 @@ TileFlowRecord build_record(const TileProgram& prog, const driver::RunOutcome& o
                             const platform::DeploymentSpec& spec, const Placement& placement,
                             Dim device = 0, std::uint64_t foreign_slots = 0);
 
-// Write `dir` (created if needed) as a .tflow bundle; read one back. Byte-deterministic: the
-// same record writes the same files.
+// Write `dir` (created if needed) as a .tflow bundle, with its level-of-detail pyramid
+// (tile_flow_lod.hpp) beside it; read the record back. Byte-deterministic: the same record
+// writes the same files.
 void write_tflow(const TileFlowRecord& rec, const std::string& dir);
 TileFlowRecord read_tflow(const std::string& dir);
 

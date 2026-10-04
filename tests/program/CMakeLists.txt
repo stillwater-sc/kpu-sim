@@ -90,6 +90,15 @@ set_tests_properties(test_dram_address_map PROPERTIES
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
 )
 
+# The level-of-detail pyramid over a tile-flow record (#286 step 3)
+kpu_add_component_test(test_tile_flow_lod "program"
+    test_tile_flow_lod.cpp
+)
+
+set_tests_properties(test_tile_flow_lod PROPERTIES
+    LABELS "program;record;tileflow;v0.9"
+)
+
 # The physical shape: array layout, folded-torus NoC, floorplan (#286 step 1)
 kpu_add_component_test(test_floorplan "program"
     test_floorplan.cpp

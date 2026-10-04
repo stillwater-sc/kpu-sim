@@ -46,6 +46,7 @@ add_library(kpu_program
     floorplan.cpp
     dram_address_map.cpp
     tile_flow_record.cpp
+    tile_flow_lod.cpp
     ${KPU_LOADABLE_GEN_HDR}
 )
 add_dependencies(kpu_program kpu_loadable_schema)

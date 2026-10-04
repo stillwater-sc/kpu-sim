@@ -491,6 +491,25 @@ residency.
 
 3. **LOD pyramid + invariant checker.** Add `src/program/record/lod.cpp` and
    `tools/trace/tflow_check.py`, the #286 checker. Reintroducing #279 must make it fail.
+
+   **Done (2026-10-04).** `record/tile_flow_lod.hpp` builds the pyramid and writes it beside
+   the record (`lod.json`, `lod.bin`). Rows are stations plus mover pools, and the metrics are
+   occupancy-time, peak and starts, all exactly mergeable; a cycle-by-cycle brute force pins
+   the base level. `tools/trace/tflow_check.py` checks nine invariants, TF1–TF9, with
+   trace_validator's exit contract. `test_tflow_check.py` breaks each invariant in turn and
+   requires the matching check to fail.
+   **Reintroducing #279 makes it fail, and it took a ninth invariant to do it.** With the
+   static "highest-indexed user" release put back into the executor, the #279 shared-reader
+   program (`tests/program/tflow/shared_reader.l0`) completes at L3 = 4. The first eight
+   checks all PASSED that run. The early release does not leave a reader running without a
+   slot: the next reader fires and re-takes one, as if the tile were still there. What is
+   wrong is that nothing ever filled that second slot. **TF9 ("every L3 residency is filled:
+   seeded, delivered by a DMA, or written by an op")** catches it and names both re-taken
+   tiles. That needed the record to know which tiles an op *writes*, so `op_tiles` gained a
+   `written` column. Also different from the text above: the pyramid stores no operator mix,
+   because a v0 record is one program; the mix arrives with the orchestrated record.
+
+
 4. **Viewer, Step 1.** In `tools/visualization/tileflow/index.html`, plus modules, build views
    1a/1b/1c and the diagnostics. Add a `kpu-run --tflow <dir>` flag.
 5. **Cause edges and lineage, Step 2.** Add the #286 causality plumbing and `CauseKind`, then
