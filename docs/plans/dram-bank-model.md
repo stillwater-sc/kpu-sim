@@ -1,7 +1,7 @@
 # DRAM Bank Concurrency, the DMA Abstraction, and Bank-Aware Allocation
 
 **Date:** 2026-10-04
-**Status:** Design
+**Status:** Design (Q1-Q6 decided on review, 2026-10-04)
 **Related:** #283 (L-T2 resource-transactional level), #286 (tile-flow debugger), ADR 0001 D5 / §7.5,
 `docs/plans/memory_controller_transactional.md`, `docs/plans/dma_csp.md`
 
@@ -347,7 +347,20 @@ Expected outcomes, each with a mutation that must make it fail:
 7. The static model never claims a tighter cost than was measured.
 8. No cache terms: a page hit is a row-buffer state, not a lookup that missed.
 
-## 7. Open Questions
+## 7. Decided on Review (2026-10-04)
+
+All six went with the recommendation.
+
+| # | Decision |
+|---|---|
+| Q1 | Host the temporal `LPDDR5MemoryController` behind the `MemoryControllerProcess` interface: one bank model, validated by `patterns/memory/lpddr5/`. Step 2 takes option (b) |
+| Q2 | T64 default map: linear `co:ch:bg:ba:mc:ro` plus a 4-bit row->bank XOR fold. Both remain selectable in the spec |
+| Q3 | L-T2 (#283) models DRAM per burst on `{mc, bank}` resources |
+| Q4 | The compiler owns `device_address` and records it in the loadable. The loader may relocate only modulo the bank stride |
+| Q5 | HBM uses the same abstraction: pseudo-channels are channels, and `technology` selects the timing table |
+| Q6 | `W` is spec-wide (`dma.window`) |
+
+## 8. Open Questions (as posed)
 
 | # | Question | Options | Recommendation |
 |---|---|---|---|
