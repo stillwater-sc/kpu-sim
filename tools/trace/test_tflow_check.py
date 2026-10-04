@@ -134,6 +134,26 @@ class TflowCheckSelfTest(unittest.TestCase):
         path.write_bytes(bytes(b))
         self.assertFails("TF8")
 
+    def _bump_every_level(self, metric, all_bins):
+        # +1 on row 0 at every level, so each parent is still the merge of its children and
+        # only the comparison with the raw events can notice.
+        lod = json.loads((self.b.dir / "lod.json").read_text())
+        path = self.b.dir / lod["file"]
+        b = bytearray(path.read_bytes())
+        for lvl in lod["levels"]:
+            for bin_ in range(lvl["bins"] if all_bins else 1):
+                at = lvl[metric] + 4 * bin_
+                struct.pack_into("<I", b, at, struct.unpack_from("<I", b, at)[0] + 1)
+        path.write_bytes(bytes(b))
+
+    def test_tf8_peak_consistent_but_wrong(self):
+        self._bump_every_level("peak", all_bins=True)
+        self.assertFails("TF8")
+
+    def test_tf8_starts_consistent_but_wrong(self):
+        self._bump_every_level("starts", all_bins=False)
+        self.assertFails("TF8")
+
     def test_malformed_pyramid_is_exit_2(self):
         for edit in (lambda m: m.pop("rows"), lambda m: m["levels"][0].update(bins=0),
                      lambda m: m["levels"][0].update(bins="many"),

@@ -162,6 +162,27 @@ def _overlaps(intervals):
     return out
 
 
+def _peak(iv, constant, makespan):
+    """Peak occupancy over [0, makespan), by the builder's sweep: ends sort before starts at the
+    same cycle, a zero-length interval occupies no time, and a level is counted only where it
+    holds for a positive span."""
+    ev = sorted([(a, 1) for a, b in iv if b > a] + [(b, -1) for a, b in iv if b > a],
+                key=lambda e: (e[0], e[1]))
+    cur, prev, peak = constant, 0, 0
+    i = 0
+    while i < len(ev):
+        t = ev[i][0]
+        if min(t, makespan) > prev and cur > 0:
+            peak = max(peak, cur)
+        while i < len(ev) and ev[i][0] == t:
+            cur += ev[i][1]
+            i += 1
+        prev = max(prev, min(t, makespan))
+    if makespan > prev and cur > 0:
+        peak = max(peak, cur)
+    return peak
+
+
 def check(rec):
     r = Report()
     m = rec["manifest"]
@@ -314,19 +335,28 @@ def check(rec):
                                       f"is not the merge of its children")
         top = levels[-1]
         for row, info in enumerate(lod["rows"]):
+            constant = 0
             if info["kind"] == "l3":
-                want = foreign * makespan + sum(res["t1"][i] - res["t0"][i] for i in range(nres)
-                                                if res["station"][i] == row)
+                iv = [(res["t0"][i], res["t1"][i]) for i in range(nres) if res["station"][i] == row]
+                constant = foreign
             elif info["kind"] == "cf":
-                want = sum(co["t1"][i] - co["t0"][i] for i in range(nco) if co["station"][i] == row)
+                iv = [(co["t0"][i], co["t1"][i]) for i in range(nco) if co["station"][i] == row]
             elif info["kind"] == "mover":
                 pool = MOVER_NAMES.index(info["name"].split(":", 1)[1])
-                want = sum(tr["t1"][i] - tr["t0"][i] for i in range(ntr) if tr["mover"][i] == pool)
+                iv = [(tr["t0"][i], tr["t1"][i]) for i in range(ntr) if tr["mover"][i] == pool]
             else:
-                want = 0
+                iv = []
+            want = constant * makespan + sum(t1 - t0 for t0, t1 in iv)
             if top["occ"][row] != want:
                 r.fail("TF8", f"{info['name']}: the coarsest bin holds {top['occ'][row]} "
                               f"occupancy-cycles, the raw events {want}")
+            if top["starts"][row] != len(iv):
+                r.fail("TF8", f"{info['name']}: the coarsest bin counts {top['starts'][row]} "
+                              f"starts, the raw events {len(iv)}")
+            peak = _peak(iv, constant, makespan)
+            if top["peak"][row] != peak:
+                r.fail("TF8", f"{info['name']}: the coarsest bin peaks at {top['peak'][row]}, "
+                              f"the raw events at {peak}")
     return r
 
 
