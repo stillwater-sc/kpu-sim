@@ -772,6 +772,27 @@ The KPU architecture scales across multiple product families targeting different
 
 ### 5.2 Product Family Specifications
 
+#### 5.2.0 KPU-T4: Reference SKU for Schedule Evaluation
+
+The T4 is not a product. It is the smallest board that still has every resource class, and it
+is the reference SKU for evaluating schedules and for testing the tile-flow debugger. The T64
+has too many resources to follow a schedule tile by tile.
+
+**Configuration** (`tests/program/deploy/kpu_t4.json`)
+- Compute tiles: 2 (4 tiles in all: 2 compute tiles and 2 L3 tiles)
+- Die organization: 2×2 alternating checkerboard (L3 tiles at (0,0) and (1,1), compute tiles at (0,1) and (1,0))
+- Fabric size per compute tile: 64×64 PEs, so 4096 concurrent MACs per cycle per tile (8192 in all)
+- L3: 64 tile slots per L3 tile (1 MiB of 64×64 fp32 tiles), 4 banks each
+- BlockMovers: 4. Each L3 tile abuts both compute tiles, so every (L3, compute) pair has its own mover
+- Topology: the folded torus degenerates. The row loop and the column loop are the same two-hub ring, so the NoC is **one wire** between the two L3 hubs, with four fold-end ports
+- Memory: 1 memory controller with 8 DMA engines
+- Orchestrator: 1 RV64 hart
+
+**Reference runs:** matmul in 64×64 tiles.
+- 256³ is 208 ops.
+- 512³ is 1600 ops, with an L3 peak of 123 of 128 slots.
+- 1024³ does not fit: its live set exceeds the L3, and the run is refused.
+
 #### 5.2.1 KPU-T64: Edge and Drone Applications
 
 **Target Market**

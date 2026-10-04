@@ -1,0 +1,14 @@
+{
+  "name": "t4",
+  "topology": "checkerboard",
+  "compute_tiles": 2,
+  "macs_per_cycle": 4096,
+  "array":   { "rows": 2, "cols": 2 },
+  "dma":     { "engines": 8, "bytes_per_cycle": 64 },
+  "l3":      { "tiles": 2, "banks": 4, "capacity_tiles": 128 },
+  "l2":      { "banks_per_tile": 4 },
+  "l1":      { "vectors": 2 },
+  "memory":  { "controllers": 1 },
+  "cpu":     { "harts": 1 },
+  "movers":  { "block_movers": 4, "streamers": 2 }
+}

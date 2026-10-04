@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The KPU-T4 reference SKU** (`tests/program/deploy/kpu_t4.json`, `kpu-architecture.md`
+  §5.2.0). The T64 has too many resources to evaluate a schedule by eye, so the T4 is the SKU
+  the tile-flow debugger is tested and demonstrated on. It is a 2×2 checkerboard:
+  - 2 compute tiles of 64×64 PEs (4096 MACs/cycle each);
+  - 2 L3 tiles of 64 slots;
+  - 4 BlockMovers, one per (L3, compute) pair;
+  - 1 memory controller with 8 DMA engines.
+
+  Its folded torus degenerates to one wire between the two L3 hubs. A 512³ matmul in 64×64
+  tiles is 1600 ops (`kpu_run_tflow_t4`). The layout, floorplan and `kpu-floorplan` tests cover
+  it. The T64 stays as the scale test.
 - **The tile-flow pyramid and invariant checker (#286 step 3).** Every `.tflow` bundle now carries
   a level-of-detail pyramid (`lod.json`/`lod.bin`): per station and mover pool, per power-of-two
   time bin, occupancy-time, peak and starts -- each bin the exact merge of its two children, the

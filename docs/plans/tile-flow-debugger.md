@@ -22,6 +22,7 @@ correct, not buried in the section it came from.
 | **Q2 L3 at L-T1** | **Pooled first.** Step 1 draws L3 as one pooled station, labelled as such. Slot binding (step 6) is a separate, reviewed executor model change |
 | **Q3a floorplan source** | **The generator is the reference** until a real SoC floorplan exists. The importer comes later |
 | **Q3b T64 size** | **64 compute tiles.** The checkerboard dimensions in `kpu-architecture.md` §5.2.1 are wrong and are corrected with the §5.1 amendment (step 1). The 8×8 diagram in §3.1 stays illustrative |
+| **Reference SKU** (2026-10-04) | **The KPU-T4** (`tests/program/deploy/kpu_t4.json`, `kpu-architecture.md` §5.2.0) is the SKU the debugger is tested and demonstrated on. The T64 has too many resources to evaluate a schedule by eye. The T4 is a 2×2 board: 2 compute tiles of 64×64 PEs (4096 MACs/cycle each), 2 L3 tiles of 64 slots, 4 BlockMovers, 1 memory controller with 8 DMA engines. Its torus is one wire. A 512³ matmul in 64×64 tiles is 1600 ops, so every movement can be read. The T64 stays as the scale test |
 | **Q4 CPU detail** | **Cores + SRAM + descriptor/completion rings** as separate blocks |
 | **Q5 viewer** | **Plain static HTML + Canvas2D**, with WebGL for dense pixel layers, and no build step |
 | **Q6 colour** | **By operator class**, with individual operators on hover and in the phase strip |

@@ -68,6 +68,18 @@ if(KPU_BUILD_TESTS)
     )
     set_tests_properties(kpu_run_tflow_written PROPERTIES LABELS "program;driver;tileflow")
 
+    # The T4 reference SKU: 512^3 in 64x64 tiles is 1600 ops -- small enough to read every
+    # movement in the tile-flow viewer, large enough to fill most of the 128-slot L3.
+    add_test(NAME kpu_run_tflow_t4
+        COMMAND ${CMAKE_COMMAND}
+            -DCMD=$<TARGET_FILE:run>
+            -DARGS=--deploy$<SEMICOLON>${CMAKE_SOURCE_DIR}/tests/program/deploy/kpu_t4.json$<SEMICOLON>--algo$<SEMICOLON>matmul$<SEMICOLON>--size$<SEMICOLON>512$<SEMICOLON>--tile$<SEMICOLON>64$<SEMICOLON>--tflow$<SEMICOLON>${CMAKE_CURRENT_BINARY_DIR}/kpu_run_t4.tflow
+            -DEXPECT_CODE=0
+            -DMUST_MATCH=residencies,.*transits,.*computes.from
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/expect_exit.cmake
+    )
+    set_tests_properties(kpu_run_tflow_t4 PROPERTIES LABELS "program;driver;tileflow;t4")
+
     # The tile-flow checker (#286 step 3) over real bundles, and its self-test: every
     # invariant must fail on a bundle that breaks it. Skipped without a Python interpreter.
     find_program(KPU_PYTHON3 NAMES python3 python)
@@ -76,6 +88,10 @@ if(KPU_BUILD_TESTS)
         add_test(NAME tflow_check_matmul
             COMMAND ${KPU_PYTHON3} ${_tflow_check} ${CMAKE_CURRENT_BINARY_DIR}/kpu_run_matmul.tflow)
         set_tests_properties(tflow_check_matmul PROPERTIES DEPENDS kpu_run_tflow_written)
+        # The T4 reference run (#286): the bundle the viewer is demonstrated on must be clean.
+        add_test(NAME tflow_check_t4
+            COMMAND ${KPU_PYTHON3} ${_tflow_check} ${CMAKE_CURRENT_BINARY_DIR}/kpu_run_t4.tflow)
+        set_tests_properties(tflow_check_t4 PROPERTIES DEPENDS kpu_run_tflow_t4)
 
         # The #279 program: two readers of one tile, the higher-indexed one finishing first.
         # Clean at L3 = 5; the checker's TF9 is what fails it under the old release rule.
@@ -90,7 +106,7 @@ if(KPU_BUILD_TESTS)
             COMMAND ${KPU_PYTHON3} ${CMAKE_SOURCE_DIR}/tools/trace/test_tflow_check.py
                     ${CMAKE_CURRENT_BINARY_DIR}/shared_reader.tflow)
         set_tests_properties(tflow_check_selftest PROPERTIES DEPENDS kpu_run_tflow_shared_reader)
-        set_tests_properties(tflow_check_matmul kpu_run_tflow_shared_reader
+        set_tests_properties(tflow_check_matmul tflow_check_t4 kpu_run_tflow_shared_reader
             tflow_check_shared_reader tflow_check_selftest PROPERTIES LABELS "program;tileflow")
     endif()
 
