@@ -15,7 +15,9 @@
 #include <sw/kpu/program/record/tile_flow_record.hpp>
 #include <sw/kpu/program/tile_transaction_executor.hpp>
 
+#include <cstring>
 #include <filesystem>
+#include <functional>
 #include <fstream>
 #include <map>
 #include <set>
@@ -202,4 +204,64 @@ TEST_CASE("the .tflow bundle round-trips, and the same run writes the same bytes
     m.replace(m.find("\"version\": 1"), 12, "\"version\": 2");
     std::ofstream(a + "/manifest.json", std::ios::binary) << m;
     CHECK_THROWS_WITH(read_tflow(a), ContainsSubstring("version 2"));
+}
+
+TEST_CASE("a corrupt or hostile bundle is refused, not trusted", "[program][record]") {
+    // The reader is a trust boundary: everything after it indexes without checking.
+    const Run r = run_matmul(32, 16, 0);
+    const TileFlowRecord rec = build_record(r.prog, r.outcome, r.spec, r.placement);
+    const std::string dir = scratch("corrupt");
+    auto fresh = [&] { std::filesystem::remove_all(dir); write_tflow(rec, dir); };
+    auto edit_file = [&](const char* f, const std::function<void(std::string&)>& e) {
+        std::string s = slurp(dir + "/" + f);
+        e(s);
+        std::ofstream(dir + "/" + f, std::ios::binary | std::ios::trunc) << s;
+    };
+    auto put_f64 = [](std::string& s, std::size_t at, double v) { std::memcpy(s.data() + at, &v, 8); };
+    auto put_u32 = [](std::string& s, std::size_t at, std::uint32_t v) { std::memcpy(s.data() + at, &v, 4); };
+
+    SECTION("a truncated column") {
+        fresh();
+        edit_file("transit.bin", [](std::string& s) { s.resize(s.size() / 2); });
+        CHECK_THROWS_WITH(read_tflow(dir), ContainsSubstring("runs past the end"));
+    }
+    SECTION("an offset that would overflow the bounds check") {
+        fresh();
+        edit_file("manifest.json", [](std::string& s) {
+            const auto p = s.find("\"name\": \"t0\"");
+            const auto o = s.find("\"offset\": ", p);
+            const auto e = s.find_first_of("\n}", o);
+            s.replace(o, e - o, "\"offset\": 18446744073709551600");
+        });
+        CHECK_THROWS_WITH(read_tflow(dir), ContainsSubstring("runs past the end"));
+    }
+    SECTION("a time that is not a cycle count") {
+        fresh();
+        // residency.bin: tile u32 (rows*4, padded to 8), station u32 (same), then t0 f64.
+        const std::size_t rows = rec.residency.size(), pad = (rows * 4 + 7) / 8 * 8;
+        edit_file("residency.bin", [&](std::string& s) { put_f64(s, 2 * pad, 2.5); });
+        CHECK_THROWS_WITH(read_tflow(dir), ContainsSubstring("not a cycle count"));
+        edit_file("residency.bin", [&](std::string& s) { put_f64(s, 2 * pad, -1.0); });
+        CHECK_THROWS_WITH(read_tflow(dir), ContainsSubstring("not a cycle count"));
+    }
+    SECTION("an op offset that decreases") {
+        fresh();
+        // op_tiles.bin: kind u8 (ops, padded to 8), then offset u32 (ops+1).
+        const std::size_t base = (rec.ops.size() + 7) / 8 * 8;
+        edit_file("op_tiles.bin", [&](std::string& s) { put_u32(s, base + 4 * 2, 0); });
+        CHECK_THROWS_WITH(read_tflow(dir), ContainsSubstring("decreases"));
+    }
+    SECTION("an index past its table") {
+        fresh();
+        edit_file("compute.bin", [&](std::string& s) {
+            const std::size_t pad = (rec.computes.size() * 4 + 7) / 8 * 8;
+            put_u32(s, pad, 9999);                     // station column, first row
+        });
+        CHECK_THROWS_WITH(read_tflow(dir), ContainsSubstring("station index 9999"));
+    }
+    SECTION("a time past 2^53 is refused by the writer, not rounded") {
+        TileFlowRecord bad = rec;
+        bad.transits.front().t1 = (Cycle{1} << 53) + 1;
+        CHECK_THROWS_WITH(write_tflow(bad, scratch("toolong")), ContainsSubstring("transit t1"));
+    }
 }

@@ -14,6 +14,7 @@
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
+#include <cmath>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
@@ -26,6 +27,7 @@ namespace sw::kpu::program::record {
 namespace {
 using json = nlohmann::ordered_json;
 
+// The largest cycle an f64 time column holds exactly (every integer up to 2^53 is exact).
 constexpr Cycle kMaxExactCycle = (Cycle{1} << 53);
 
 std::string pooled_name(const std::string& dev, const char* kind) {
@@ -81,7 +83,7 @@ TileFlowRecord build_record(const TileProgram& prog, const driver::RunOutcome& o
     rec.device_label = dev.label();
     rec.deployment_digest = platform::deployment_digest(spec);
     rec.makespan = outcome.makespan;
-    if (rec.makespan >= kMaxExactCycle)
+    if (rec.makespan > kMaxExactCycle)
         throw RecordError("record: makespan " + std::to_string(rec.makespan) +
                           " exceeds 2^53 cycles, which the f64 time columns cannot hold exactly");
 
@@ -258,6 +260,17 @@ std::vector<double> times(const std::vector<Cycle>& v) {
 
 void write_tflow(const TileFlowRecord& rec, const std::string& dir) {
     if (!little_endian()) throw RecordError("record: the .tflow writer assumes a little-endian host");
+    // EVERY time, not just the makespan: a record built by hand, or edited, can carry an
+    // endpoint past 2^53, and the f64 columns would round it silently.
+    auto exact = [](Cycle c, const char* what) {
+        if (c > kMaxExactCycle)
+            throw RecordError(std::string("record: ") + what + " " + std::to_string(c) +
+                              " exceeds 2^53 cycles, which an f64 time column cannot hold exactly");
+    };
+    exact(rec.makespan, "makespan");
+    for (const Residency& r : rec.residency) { exact(r.t0, "residency t0"); exact(r.t1, "residency t1"); }
+    for (const Transit& x : rec.transits) { exact(x.t0, "transit t0"); exact(x.t1, "transit t1"); }
+    for (const Compute& c : rec.computes) { exact(c.t0, "compute t0"); exact(c.t1, "compute t1"); }
     std::error_code ec;
     std::filesystem::create_directories(dir, ec);
     if (ec) throw RecordError("record: cannot create " + dir + ": " + ec.message());
@@ -358,7 +371,9 @@ std::vector<T> read_col(const json& table, const std::string& blob, const std::s
             throw RecordError("record: column " + name + " is " + c.at("dtype").get<std::string>() +
                               ", expected " + dtype);
         const std::size_t off = c.at("offset").get<std::size_t>();
-        if (off + count * sizeof(T) > blob.size())
+        // Checked without arithmetic that can overflow: a hostile offset or row count must
+        // fail here, not wrap around and pass.
+        if (off > blob.size() || count > (blob.size() - off) / sizeof(T))
             throw RecordError("record: column " + name + " runs past the end of its file");
         std::vector<T> v(count);
         if (count) std::memcpy(v.data(), blob.data() + off, count * sizeof(T));
@@ -397,9 +412,19 @@ TileFlowRecord read_tflow(const std::string& dir) {
 
     const json& tables = m.at("tables");
     auto blob_of = [&](const char* name) { return slurp(dir + "/" + tables.at(name).at("file").get<std::string>()); };
+    // A time column read back must hold cycles: finite, non-negative, whole, and no larger
+    // than the writer could have written exactly. Casting anything else would be undefined
+    // behaviour or a silently different run.
     auto cycles = [](const std::vector<double>& v) {
         std::vector<Cycle> out(v.size());
-        for (std::size_t i = 0; i < v.size(); ++i) out[i] = static_cast<Cycle>(v[i]);
+        for (std::size_t i = 0; i < v.size(); ++i) {
+            const double t = v[i];
+            if (!std::isfinite(t) || t < 0.0 || std::floor(t) != t ||
+                t > static_cast<double>(kMaxExactCycle))
+                throw RecordError("record: a time column holds " + std::to_string(t) +
+                                  ", which is not a cycle count");
+            out[i] = static_cast<Cycle>(t);
+        }
         return out;
     };
     {
@@ -445,10 +470,29 @@ TileFlowRecord read_tflow(const std::string& dir) {
         const std::size_t n = t.at("rows").get<std::size_t>();
         const auto kind = read_col<std::uint8_t>(t, b, "kind", "u8", n);
         const auto offset = read_col<std::uint32_t>(t, b, "offset", "u32", n + 1);
+        if (offset[0] != 0) throw RecordError("record: op_tiles offsets must start at 0");
+        for (std::size_t i = 0; i < n; ++i)
+            if (offset[i] > offset[i + 1])
+                throw RecordError("record: op_tiles offset " + std::to_string(i + 1) +
+                                  " decreases; the op tile table is corrupt");
         const auto tile = read_col<std::uint32_t>(t, b, "tile", "u32", n ? offset[n] : 0);
         for (std::size_t i = 0; i < n; ++i)
             rec.ops.push_back({kind[i], std::vector<std::uint32_t>(tile.begin() + offset[i], tile.begin() + offset[i + 1])});
     }
+    // Every index points into its table, so a consumer (the occupancy sweep, the viewer) can
+    // index without checking -- the checks are here, once, at the trust boundary.
+    auto in = [](std::uint32_t i, std::size_t n, const char* what) {
+        if (i >= n)
+            throw RecordError(std::string("record: a ") + what + " index " + std::to_string(i) +
+                              " is out of range (" + std::to_string(n) + ")");
+    };
+    for (const Residency& r : rec.residency) { in(r.tile, rec.tiles.size(), "tile"); in(r.station, rec.stations.size(), "station"); }
+    for (const Transit& x : rec.transits) {
+        in(x.tile, rec.tiles.size(), "tile"); in(x.op, rec.ops.size(), "op");
+        in(x.src, rec.stations.size(), "station"); in(x.dst, rec.stations.size(), "station");
+    }
+    for (const Compute& c : rec.computes) { in(c.op, rec.ops.size(), "op"); in(c.station, rec.stations.size(), "station"); }
+    for (const Op& o : rec.ops) for (std::uint32_t t : o.tiles) in(t, rec.tiles.size(), "tile");
     return rec;
 }
 
