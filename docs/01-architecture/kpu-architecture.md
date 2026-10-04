@@ -780,13 +780,13 @@ The KPU architecture scales across multiple product families targeting different
 - Low-power embedded vision systems
 
 **Configuration**
-- Compute tiles: 64
-- Die organization: 8×8 checkerboard (4×4 L3 tiles alternating with Compute tiles)
+- Compute tiles: 32 (64 tiles in all: 32 compute tiles and 32 L3 tiles)
+- Die organization: 8×8 alternating checkerboard (32 L3 tiles alternating with 32 compute tiles; cell (r, c) is an L3 tile when r + c is even)
 - Topology: a folded 2D torus, 4x4 in loops, with 8 L3 hubs on each ring
 - Fold ends are ports: the fold-end link of each row and column loop is where traffic enters or leaves the ring. DMA channels connect there.
 - Provisional connectivity: we do not know yet how well this connectivity works for the schedules, so the NoC architecture is TBD.
 - First pass: each L3 tile connects to four compute tiles that abut it W/N/E/S. Each L3 tile edge that connects to a Compute Tile will have an addressable Block Mover that can push/pull data into the Compute Tile.
-- Fabric size per compute tile: 16×16 to 32×32 PEs (total: 16K-64K PEs)
+- Fabric size per compute tile: 16×16 to 32×32 PEs (total: 8K-32K PEs)
 - Target process technology: 22nm (cost-optimized for edge deployment)
 
 **Characteristics**

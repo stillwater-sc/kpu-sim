@@ -11,6 +11,7 @@
 // ============================================================================
 
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/matchers/catch_matchers_string.hpp>
 
 #include <sw/kpu/program/driver/execution_level.hpp>
 #include <sw/kpu/program/driver/program_spec.hpp>
@@ -18,6 +19,7 @@
 
 #include <cmath>
 #include <fstream>
+#include <functional>
 #include <limits>
 #include <sstream>
 #include <string>
@@ -26,6 +28,7 @@
 using namespace sw::kpu::program;
 using namespace sw::kpu::program::driver;
 using namespace sw::kpu::program::platform;
+using Catch::Matchers::ContainsSubstring;
 
 namespace {
 
@@ -464,4 +467,48 @@ TEST_CASE("the canonical key order is part of the format",
     CHECK(topology < compute);
     CHECK(compute < dma);
     CHECK(dma < analytical);
+}
+
+// ---- the physical shape (#286 step 1) ------------------------------------------
+TEST_CASE("the physical shape is optional, round-trips, and leaves old specs' bytes alone",
+          "[program][platform][deploy][layout]") {
+    const DeploymentSpec t64 = read_spec_file(std::string(kDeploy) + "kpu_t64.json");
+    const DeviceSpecification& d = t64.device(0);
+    CHECK(d.array.rows == 8u);
+    CHECK(d.array.cols == 8u);
+    CHECK(d.memory.controllers == 4u);
+    CHECK(d.cpu.harts == 4u);
+    // Canonical write, read back, write again: the same bytes.
+    const std::string once = to_json(t64);
+    CHECK(to_json(from_json(once)) == once);
+    CHECK(once.find("\"array\"") != std::string::npos);
+
+    // A spec that never declares a shape writes no shape: its canonical bytes, and so every
+    // deployment_digest computed before this field existed, are unchanged.
+    const DeploymentSpec plain = read_spec_file(std::string(kDeploy) + "canonical_single.json");
+    const std::string text = to_json(plain);
+    CHECK(text.find("\"array\"") == std::string::npos);
+    CHECK(text.find("\"memory\"") == std::string::npos);
+    CHECK(text.find("\"cpu\"") == std::string::npos);
+}
+
+TEST_CASE("a declared shape that cannot be built is refused with the field's own words",
+          "[program][platform][deploy][layout]") {
+    auto why = [](const std::function<void(DeviceSpecification&)>& f) {
+        DeploymentSpec spec = read_spec_file(std::string(kDeploy) + "kpu_t64.json");
+        f(spec.device(0));
+        return spec.validate();
+    };
+    CHECK(why([](auto&) {}).empty());
+    CHECK_THAT(why([](auto& d) { d.array.cols.reset(); }), ContainsSubstring("declared together"));
+    CHECK_THAT(why([](auto& d) { d.array.rows = 7; d.array.cols = 8; }), ContainsSubstring("must be even"));
+    CHECK_THAT(why([](auto& d) { d.array.rows = 4; d.array.cols = 8; }), ContainsSubstring("holds 16 compute tiles"));
+    CHECK_THAT(why([](auto& d) { d.topology = "news"; }), ContainsSubstring("applies to the checkerboard"));
+    CHECK_THAT(why([](auto& d) { d.l3.tiles = 16; }), ContainsSubstring("l3.tiles = compute_tiles"));
+    CHECK_THAT(why([](auto& d) { d.memory.controllers = 3; }), ContainsSubstring("divide evenly"));
+    CHECK_THAT(why([](auto& d) { d.memory.controllers = 0; }), ContainsSubstring("memory.controllers declared as zero"));
+    CHECK_THAT(why([](auto& d) { d.cpu.harts = 0; }), ContainsSubstring("cpu.harts declared as zero"));
+    // An unknown key inside the new objects is refused like any other.
+    CHECK_THROWS_WITH(from_json(R"({"compute_tiles": 4, "array": {"rows": 2, "colz": 4}})"),
+                      ContainsSubstring("colz"));
 }

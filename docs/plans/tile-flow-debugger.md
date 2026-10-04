@@ -207,9 +207,10 @@ and one column loop, so it has four links.
 - **Fold ends are ports.** The link where each loop folds back, such as (0,6)–(1,7) on the
   east edge or (1,1)–(0,0) on the west, is where traffic can **enter or exit the loop**. The
   DMA channels attach to these ports, so the memory controllers sit at the array edges where
-  the loops end. The 8×8 array has 16 such ports, one at each end of every loop. At two
-  corners the row loop and the column loop fold over the **same** link, (0,0)–(1,1) and
-  (6,6)–(7,7), so the hubs there have three distinct neighbours and two ports share one link.
+  the loops end. The 8×8 array has 16 such ports, one at each end of every loop. At all
+  **four** corners a row loop and a column loop fold over the **same** link: (0,0)–(1,1),
+  (0,6)–(1,7), (6,0)–(7,1) and (6,6)–(7,7). The eight corner hubs therefore have three
+  distinct neighbours, the 64 loop links are 60 wires, and two ports share each corner link.
   That is an input to the connectivity study, not something to assume away.
 - **Routing is dimension-ordered and address-routed.** A burst rides its row loop to a hub on
   the destination's column loop, then rides that loop to the destination, taking the shorter
@@ -446,6 +447,27 @@ residency.
    `cf[c]`. Derive the BlockMover count from the topology and report a disagreeing
    `movers.block_movers`. Amend `docs/01-architecture/kpu-architecture.md` §5.1, which places
    the BlockMovers in the compute tile. Add `tools/floorplan/` to dump the floorplan as JSON + SVG.
+
+   **Done (2026-10-04).** `platform/array_layout.hpp` derives the grid, the BlockMover sites and
+   the folded torus once; the naming map and the floorplan both read it. The spec gains
+   optional `array.rows/cols`, `memory.controllers` and `cpu.harts`; a spec without them keeps
+   its canonical bytes. `kpu-floorplan` writes JSON and SVG and validates an imported file.
+   What differs from the text above, and why:
+   - **A layout is derived, not required.** It exists only when the spec describes an
+     alternating array (`l3.tiles == compute_tiles`, an even grid of 2 × compute_tiles
+     cells). Existing specs that do not, such as the 16-CF / 8-L3 fixture, stay valid and
+     simply have no floorplan, and the refusal says why.
+   - **Ports are numbered** (`dev/noc/port[k]`), because the address grammar takes digits in
+     brackets. The human label (`row0.W`, `col3.S`) is on the floorplan block. Port numbering
+     is fixed: row loop p gets ports 2p (W) and 2p+1 (E); column loop q gets R + 2q (N) and
+     R + 2q + 1 (S).
+   - **No Streamer names yet.** `movers.streamers` is a pool size, not a count per compute
+     tile, so there is nothing to place per tile without inventing one. The PE array is the
+     compute tile's own body, not a sub-block.
+   - **Four shared corner links, not two.** The test that checks every loop link found that
+     the 8×8 board's 64 loop links are 60 wires (§3.1 corrected).
+   - **First-pass DMA attachment:** controllers on the top edge feed the N ports nearest them,
+     controllers on the bottom edge the S ports. W and E ports start unattached, visibly.
 2. **Record v0 (residency + transit at L-T1).** In `tile_transaction_executor.hpp`, emit
    residency intervals and station-bound transits (L3 pooled; CF from `Placement`). Add
    `include/sw/kpu/program/record/tile_flow_record.hpp` and a writer for the `.tflow`

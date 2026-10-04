@@ -30,7 +30,8 @@ const std::set<std::string>& device_keys() {
     static const std::set<std::string> k = {"name",          "topology", "compute_tiles",
                                             "macs_per_cycle", "element_bytes",
                                             "dma",           "l3",       "l2",
-                                            "l1",            "movers",   "analytical"};
+                                            "l1",            "movers",   "analytical",
+                                            "array",         "memory",   "cpu"};
     return k;
 }
 const std::set<std::string>& dma_keys() {
@@ -49,6 +50,18 @@ const std::set<std::string>& l2_keys() {
 }
 const std::set<std::string>& l1_keys() {
     static const std::set<std::string> k = {"vectors"};
+    return k;
+}
+const std::set<std::string>& array_keys() {
+    static const std::set<std::string> k = {"rows", "cols"};
+    return k;
+}
+const std::set<std::string>& memory_keys() {
+    static const std::set<std::string> k = {"controllers"};
+    return k;
+}
+const std::set<std::string>& cpu_keys() {
+    static const std::set<std::string> k = {"harts"};
     return k;
 }
 const std::set<std::string>& mover_keys() {
@@ -175,6 +188,25 @@ DeviceSpecification read_device(const json& obj, const std::string& where) {
         d.movers.noc_bytes_per_cycle =
             read_double(s, "noc_bytes_per_cycle", d.movers.noc_bytes_per_cycle, w);
     }
+    if (obj.contains("array")) {
+        const json& s = obj.at("array");
+        const std::string w = where + ".array";
+        reject_unknown(s, array_keys(), w);
+        d.array.rows = read_optional_dim(s, "rows", w);
+        d.array.cols = read_optional_dim(s, "cols", w);
+    }
+    if (obj.contains("memory")) {
+        const json& s = obj.at("memory");
+        const std::string w = where + ".memory";
+        reject_unknown(s, memory_keys(), w);
+        d.memory.controllers = read_optional_dim(s, "controllers", w);
+    }
+    if (obj.contains("cpu")) {
+        const json& s = obj.at("cpu");
+        const std::string w = where + ".cpu";
+        reject_unknown(s, cpu_keys(), w);
+        d.cpu.harts = read_optional_dim(s, "harts", w);
+    }
     if (obj.contains("analytical")) {
         const json& s = obj.at("analytical");
         const std::string w = where + ".analytical";
@@ -220,6 +252,18 @@ json write_device(const DeviceSpecification& d) {
     movers["noc_links"] = d.movers.noc_links;
     movers["noc_bytes_per_cycle"] = d.movers.noc_bytes_per_cycle;
     o["movers"] = movers;
+
+    // The physical shape, each object written only when something in it is declared -- so a
+    // spec that never mentions one keeps its canonical bytes, and every existing
+    // deployment_digest with it.
+    if (d.array.rows || d.array.cols) {
+        json a = json::object();
+        if (d.array.rows) a["rows"] = *d.array.rows;
+        if (d.array.cols) a["cols"] = *d.array.cols;
+        o["array"] = a;
+    }
+    if (d.memory.controllers) o["memory"] = json{{"controllers", *d.memory.controllers}};
+    if (d.cpu.harts) o["cpu"] = json{{"harts", *d.cpu.harts}};
 
     json an = json::object();
     an["bytes_per_cycle"] = d.analytical.bytes_per_cycle;

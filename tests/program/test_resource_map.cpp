@@ -145,6 +145,9 @@ TEST_CASE("the map enumerates every declared resource and nothing twice",
     // Counted from the spec rather than pinned to a literal, so the arithmetic is visible:
     //   left:  1 dram + 2 l3 + 2*8 l3 banks + 4 cf + 4 regs + 4*8 l2 + 4*4 l1 = 75
     //   right: 1 dram + 1 l3 + 1*2 l3 banks + 1 cf + 1 regs + 1*2 l2 + 1*1 l1 = 9
+    //          + 1 BlockMover: a single layout (one L3 beside one compute tile) has one
+    //          L3 edge that abuts a compute tile. "left" has no layout -- 2 L3 tiles cannot
+    //          alternate with 4 compute tiles -- so it gains nothing.
     const DeploymentSpec spec = two_devices();
     std::size_t expected = 0;
     for (const DeviceSpecification& d : spec.devices) {
@@ -156,15 +159,18 @@ TEST_CASE("the map enumerates every declared resource and nothing twice",
         expected += d.compute_tiles * 2;                          // tile + register file
         if (d.l2.banks_per_tile) expected += d.compute_tiles * *d.l2.banks_per_tile;
         if (d.l1.vectors) expected += d.compute_tiles * *d.l1.vectors;
+        if (const auto L = ArrayLayout::of(d)) expected += L->block_movers().size();
     }
     CHECK(map.size() == expected);
-    CHECK(map.size() == 84);
+    CHECK(map.size() == 85);
 
     // Every kind that the deployment declares actually appears -- a map that enumerated
     // only the easy kinds would pass every count above if the count were wrong the same way.
+    // This fixture declares no memory controllers, CPU or torus, so those kinds are absent;
+    // the T64 test below declares everything and requires every kind.
     std::set<int> kinds;
     for (const ResourceName& n : map.enumerate()) kinds.insert(static_cast<int>(n.kind));
-    CHECK(kinds.size() == all_resource_kinds().size());
+    CHECK(kinds.size() == 8);   // the seven original kinds + BlockMover
 }
 
 TEST_CASE("a dense index identifies a resource, and ignores the offset",
@@ -304,4 +310,122 @@ TEST_CASE("an impossible deployment has no map", "[program][platform][names]") {
     DeploymentSpec zero;
     zero.device(0).compute_tiles = 0;
     CHECK_THROWS_AS(ResourceMap(zero), NameError);
+}
+
+
+// ---- the physical shape (#286 step 1) -----------------------------------------------
+namespace {
+
+// The KPU-T64 as kpu-architecture.md §5.2.1 now describes it: an 8×8 alternating board,
+// 32 L3 tiles and 32 compute tiles, every optional field declared.
+DeploymentSpec t64() {
+    DeviceSpecification d;
+    d.name = "t64";
+    d.topology = "checkerboard";
+    d.compute_tiles = 32;
+    d.l3.tiles = 32;
+    d.l3.banks = 4;
+    d.l3.capacity_tiles = 32 * 63;
+    d.l2.banks_per_tile = 4;
+    d.l1.vectors = 2;
+    d.dma.engines = 8;
+    d.memory.controllers = 4;
+    d.cpu.harts = 4;
+    d.array.rows = 8;
+    d.array.cols = 8;
+    DeploymentSpec spec;
+    spec.devices = {d};
+    return spec;
+}
+
+} // namespace
+
+TEST_CASE("the T64 names every kind, and each new kind round-trips through its text",
+          "[program][platform][names][layout]") {
+    const ResourceMap map(t64());
+    std::set<int> kinds;
+    for (const ResourceName& n : map.enumerate()) {
+        kinds.insert(static_cast<int>(n.kind));
+        CHECK(parse_resource_name(format(n)) == n);     // one spelling, both ways
+    }
+    CHECK(kinds.size() == all_resource_kinds().size());
+
+    for (const char* text : {"t64/l3[0]/bm[1]", "t64/l3[5]/noc", "t64/noc/port[15]",
+                             "t64/mc[3]", "t64/mc[3]/dma[1]", "t64/cpu/hart[3]",
+                             "t64/cpu/sram", "t64/cpu/dring", "t64/cpu/cring"})
+        CHECK(map.exists(parse_resource_name(text)));
+
+    // Counted: 112 BlockMovers (every horizontal and vertical neighbour pair on an 8×8
+    // alternating board is one L3 and one compute tile: 2 × 8 × 7), 32 hubs, 16 ports,
+    // 4 controllers × 2 engines, 4 harts + sram + 2 rings.
+    std::size_t bm = 0, hubs = 0, ports = 0, mcs = 0, dmas = 0;
+    for (const ResourceName& n : map.enumerate()) {
+        bm += n.kind == ResourceKind::BlockMover;
+        hubs += n.kind == ResourceKind::NocRouter;
+        ports += n.kind == ResourceKind::NocPort;
+        mcs += n.kind == ResourceKind::MemoryController;
+        dmas += n.kind == ResourceKind::DmaEngine;
+    }
+    CHECK(bm == 112);
+    CHECK(hubs == 32);
+    CHECK(ports == 16);
+    CHECK(mcs == 4);
+    CHECK(dmas == 8);
+}
+
+TEST_CASE("a missing physical name says which part of the shape is missing",
+          "[program][platform][names][layout]") {
+    const ResourceMap map(t64());
+    // The top-left L3 tile is at a corner: compute tiles abut only its E and S edges.
+    CHECK(map.exists(parse_resource_name("t64/l3[0]/bm[1]")));
+    CHECK(map.exists(parse_resource_name("t64/l3[0]/bm[2]")));
+    CHECK(map.why_not(parse_resource_name("t64/l3[0]/bm[0]")).find("no compute tile on its N edge") !=
+          std::string::npos);
+    CHECK(map.why_not(parse_resource_name("t64/l3[0]/bm[7]")).find("named by its edge") !=
+          std::string::npos);
+    CHECK(map.why_not(parse_resource_name("t64/mc[0]/dma[2]")).find("2 DMA engine") !=
+          std::string::npos);
+    CHECK(map.why_not(parse_resource_name("t64/noc/port[16]")).find("16 fold-end port") !=
+          std::string::npos);
+
+    // A deployment with no layout names none of it, and says why rather than "out of range".
+    const ResourceMap plain(two_devices());
+    const std::string why = plain.why_not(parse_resource_name("left/l3[0]/noc"));
+    CHECK(why.find("no array layout") != std::string::npos);
+    CHECK(why.find("as many L3 tiles as compute tiles") != std::string::npos);
+    CHECK(plain.why_not(parse_resource_name("left/mc[0]")).find("memory.controllers is not declared") !=
+          std::string::npos);
+    CHECK(plain.why_not(parse_resource_name("left/cpu/sram")).find("cpu.harts is not declared") !=
+          std::string::npos);
+}
+
+TEST_CASE("pre-existing resources keep their dense index when the shape is declared",
+          "[program][platform][names][layout]") {
+    // The new kinds are appended after every original kind, per device, so declaring the
+    // physical shape does not renumber a resource an event record already refers to. Stated
+    // as the ordering it relies on: in the enumeration, no physical-shape name precedes an
+    // original-kind name.
+    const ResourceMap map(t64());
+    const auto original = [](ResourceKind k) {
+        return static_cast<int>(k) <= static_cast<int>(ResourceKind::RegisterFile);
+    };
+    std::size_t last_original = 0, first_new = map.size();
+    for (std::size_t i = 0; i < map.size(); ++i) {
+        if (original(map.enumerate()[i].kind)) last_original = i;
+        else first_new = std::min(first_new, i);
+    }
+    CHECK(last_original < first_new);
+
+    // And the original names are exactly the ones a shape-less spec of the same counts gives,
+    // in the same order.
+    DeploymentSpec bare = t64();
+    bare.device(0).memory.controllers.reset();
+    bare.device(0).cpu.harts.reset();
+    bare.device(0).topology = "single";     // no checkerboard layout for 32 tiles
+    bare.device(0).array.rows.reset();
+    bare.device(0).array.cols.reset();
+    const ResourceMap plain(bare);
+    REQUIRE(plain.size() == last_original + 1);
+    for (std::size_t i = 0; i < plain.size(); ++i)
+        CHECK(plain.enumerate()[i] == map.enumerate()[i]);
 }

@@ -93,6 +93,18 @@ struct DeviceSpecification {
         double noc_bytes_per_cycle = 128.0;     // per link
     } movers;
 
+    // The PHYSICAL SHAPE (#286 step 1; array_layout.hpp). All optional, all additive (R8):
+    // absent means "not declared", and a deployment without them is exactly as valid as
+    // before. They are what lets the naming map name a BlockMover by the L3 edge it sits on
+    // and a DMA engine by the memory controller it hangs off.
+    //
+    //   array.rows/cols     the checkerboard's grid; absent = derived (squarest even grid)
+    //   memory.controllers  how many memory controllers; dma.engines are split evenly
+    //   cpu.harts           the attached RV64 orchestrator's harts (ADR 0003)
+    struct Array { std::optional<Dim> rows, cols; } array;
+    struct Memory { std::optional<Dim> controllers; } memory;
+    struct Cpu { std::optional<Dim> harts; } cpu;
+
     // Analytical-harness coefficients. The executors do not use these; the
     // first-order model is a different tier with a different job.
     struct Analytical {
@@ -224,6 +236,40 @@ inline std::string DeploymentSpec::validate() const {
         if (d.l1.vectors && *d.l1.vectors == 0) return where + ": l1.vectors declared as zero";
         if (d.dma.burst_bytes && *d.dma.burst_bytes == 0)
             return where + ": dma.burst_bytes declared as zero";
+        // The physical shape. Validated only when DECLARED: an absent shape is derived where
+        // it can be (array_layout.hpp), and a spec that never mentions one stays valid.
+        if (d.array.rows.has_value() != d.array.cols.has_value())
+            return where + ": array.rows and array.cols are declared together or not at all";
+        if (d.array.rows) {
+            if (*d.array.rows == 0 || *d.array.cols == 0)
+                return where + ": array.rows and array.cols must be non-zero";
+            if (d.topology != "checkerboard")
+                return where + ": an array shape applies to the checkerboard topology, not '" +
+                       d.topology + "'";
+            if (*d.array.rows % 2 != 0 || *d.array.cols % 2 != 0)
+                return where + ": array.rows and array.cols must be even, because the folded "
+                       "torus pairs rows and columns into loops";
+            if (static_cast<std::uint64_t>(*d.array.rows) * *d.array.cols !=
+                2ull * d.compute_tiles)
+                return where + ": an alternating checkerboard of " +
+                       std::to_string(*d.array.rows) + "x" + std::to_string(*d.array.cols) +
+                       " holds " + std::to_string(*d.array.rows * *d.array.cols / 2) +
+                       " compute tiles, but compute_tiles is " +
+                       std::to_string(d.compute_tiles);
+            if (d.l3.tiles && *d.l3.tiles != d.compute_tiles)
+                return where + ": an alternating checkerboard has as many L3 tiles as compute "
+                       "tiles, so a declared array needs l3.tiles = compute_tiles";
+        }
+        if (d.memory.controllers) {
+            if (*d.memory.controllers == 0)
+                return where + ": memory.controllers declared as zero";
+            if (d.dma.engines % *d.memory.controllers != 0)
+                return where + ": dma.engines (" + std::to_string(d.dma.engines) +
+                       ") must divide evenly across memory.controllers (" +
+                       std::to_string(*d.memory.controllers) +
+                       "), because each DMA engine belongs to one memory controller";
+        }
+        if (d.cpu.harts && *d.cpu.harts == 0) return where + ": cpu.harts declared as zero";
     }
     return {};
 }

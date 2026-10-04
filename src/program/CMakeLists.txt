@@ -43,6 +43,7 @@ add_library(kpu_program
     kpu_device.cpp
     abi.cpp
     mmio.cpp
+    floorplan.cpp
     ${KPU_LOADABLE_GEN_HDR}
 )
 add_dependencies(kpu_program kpu_loadable_schema)

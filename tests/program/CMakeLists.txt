@@ -71,6 +71,16 @@ set_tests_properties(test_reservation PROPERTIES
     LABELS "program;orchestration;v0.9"
 )
 
+# The physical shape: array layout, folded-torus NoC, floorplan (#286 step 1)
+kpu_add_component_test(test_floorplan "program"
+    test_floorplan.cpp
+)
+
+set_tests_properties(test_floorplan PROPERTIES
+    LABELS "program;platform;floorplan;v0.9"
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+)
+
 # The KPU loadable container: the unit of deployment (#305 increment 1)
 kpu_add_component_test(test_loadable "program"
     test_loadable.cpp

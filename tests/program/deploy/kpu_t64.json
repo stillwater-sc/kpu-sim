@@ -1,0 +1,13 @@
+{
+  "name": "t64",
+  "topology": "checkerboard",
+  "compute_tiles": 32,
+  "array":   { "rows": 8, "cols": 8 },
+  "dma":     { "engines": 8, "bytes_per_cycle": 64 },
+  "l3":      { "tiles": 32, "banks": 4, "capacity_tiles": 2016 },
+  "l2":      { "banks_per_tile": 4 },
+  "l1":      { "vectors": 2 },
+  "memory":  { "controllers": 4 },
+  "cpu":     { "harts": 4 },
+  "movers":  { "block_movers": 112, "streamers": 32 }
+}

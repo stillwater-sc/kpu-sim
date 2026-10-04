@@ -39,6 +39,7 @@
 // ============================================================================
 #pragma once
 
+#include <sw/kpu/program/platform/array_layout.hpp>
 #include <sw/kpu/program/platform/deployment_spec.hpp>
 
 #include <cstdint>
@@ -61,6 +62,17 @@ enum class ResourceKind {
     L2Bank,         // dev/cf[c]/l2[b]       -- L2 is PER COMPUTE TILE
     L1Vector,       // dev/cf[c]/l1[v]       -- so is L1
     RegisterFile,   // dev/cf[c]/regs
+    // ---- the physical shape (#286 step 1). Appended, so existing kinds keep their values,
+    //      and named only when the spec declares what they need (array_layout.hpp).
+    BlockMover,     // dev/l3[t]/bm[e]       -- e = the edge it sits on: 0 N, 1 E, 2 S, 3 W
+    NocRouter,      // dev/l3[t]/noc         -- the L3 tile's hub on the folded torus
+    NocPort,        // dev/noc/port[k]       -- a fold-end port, where traffic enters a loop
+    MemoryController, // dev/mc[m]
+    DmaEngine,      // dev/mc[m]/dma[d]      -- a DMA engine belongs to one controller
+    CpuHart,        // dev/cpu/hart[h]       -- the attached RV64 orchestrator (ADR 0003)
+    CpuSram,        // dev/cpu/sram
+    DescriptorRing, // dev/cpu/dring
+    CompletionRing, // dev/cpu/cring
 };
 
 inline const char* to_string(ResourceKind k) {
@@ -72,6 +84,15 @@ inline const char* to_string(ResourceKind k) {
         case ResourceKind::L2Bank:       return "l2";
         case ResourceKind::L1Vector:     return "l1";
         case ResourceKind::RegisterFile: return "regs";
+        case ResourceKind::BlockMover:   return "bm";
+        case ResourceKind::NocRouter:    return "noc";
+        case ResourceKind::NocPort:      return "port";
+        case ResourceKind::MemoryController: return "mc";
+        case ResourceKind::DmaEngine:    return "dma";
+        case ResourceKind::CpuHart:      return "hart";
+        case ResourceKind::CpuSram:      return "sram";
+        case ResourceKind::DescriptorRing: return "dring";
+        case ResourceKind::CompletionRing: return "cring";
     }
     return "?";
 }
@@ -87,6 +108,15 @@ inline std::size_t path_arity(ResourceKind k) {
         case ResourceKind::L2Bank:       return 2;   // {cf, bank}
         case ResourceKind::L1Vector:     return 2;   // {cf, vector}
         case ResourceKind::RegisterFile: return 1;   // {cf}
+        case ResourceKind::BlockMover:   return 2;   // {tile, edge}
+        case ResourceKind::NocRouter:    return 1;   // {tile}
+        case ResourceKind::NocPort:      return 1;   // {port}
+        case ResourceKind::MemoryController: return 1;   // {mc}
+        case ResourceKind::DmaEngine:    return 2;   // {mc, engine}
+        case ResourceKind::CpuHart:      return 1;   // {hart}
+        case ResourceKind::CpuSram:      return 0;
+        case ResourceKind::DescriptorRing: return 0;
+        case ResourceKind::CompletionRing: return 0;
     }
     return 0;
 }
@@ -95,7 +125,10 @@ inline const std::vector<ResourceKind>& all_resource_kinds() {
     static const std::vector<ResourceKind> k = {
         ResourceKind::Dram,   ResourceKind::L3Tile, ResourceKind::L3Bank,
         ResourceKind::ComputeTile, ResourceKind::L2Bank, ResourceKind::L1Vector,
-        ResourceKind::RegisterFile};
+        ResourceKind::RegisterFile, ResourceKind::BlockMover, ResourceKind::NocRouter,
+        ResourceKind::NocPort, ResourceKind::MemoryController, ResourceKind::DmaEngine,
+        ResourceKind::CpuHart, ResourceKind::CpuSram, ResourceKind::DescriptorRing,
+        ResourceKind::CompletionRing};
     return k;
 }
 
@@ -150,6 +183,27 @@ inline std::string format(const ResourceName& n) {
         case ResourceKind::RegisterFile:
             out += "/cf[" + std::to_string(n.path[0]) + "]/regs";
             break;
+        case ResourceKind::BlockMover:
+            out += "/l3[" + std::to_string(n.path[0]) + "]/bm[" + std::to_string(n.path[1]) + "]";
+            break;
+        case ResourceKind::NocRouter:
+            out += "/l3[" + std::to_string(n.path[0]) + "]/noc";
+            break;
+        case ResourceKind::NocPort:
+            out += "/noc/port[" + std::to_string(n.path[0]) + "]";
+            break;
+        case ResourceKind::MemoryController:
+            out += "/mc[" + std::to_string(n.path[0]) + "]";
+            break;
+        case ResourceKind::DmaEngine:
+            out += "/mc[" + std::to_string(n.path[0]) + "]/dma[" + std::to_string(n.path[1]) + "]";
+            break;
+        case ResourceKind::CpuHart:
+            out += "/cpu/hart[" + std::to_string(n.path[0]) + "]";
+            break;
+        case ResourceKind::CpuSram:        out += "/cpu/sram";  break;
+        case ResourceKind::DescriptorRing: out += "/cpu/dring"; break;
+        case ResourceKind::CompletionRing: out += "/cpu/cring"; break;
     }
     // A zero offset is omitted, so the common address has one spelling. Without that,
     // "dev0/l3[0]" and "dev0/l3[0]+0" would be the same resource under two names, and any
@@ -239,8 +293,13 @@ inline ResourceName parse_resource_name(const std::string& text) {
             n.path = {*i};
             return n;
         }
+        if (const auto i = detail::bracket_index(part[1], "mc")) {
+            n.kind = ResourceKind::MemoryController;
+            n.path = {*i};
+            return n;
+        }
         throw NameError(where + "'" + part[1] +
-                        "' is not a resource; expected dram, l3[i] or cf[i]");
+                        "' is not a resource; expected dram, l3[i], cf[i] or mc[i]");
     }
     if (part.size() == 3) {
         if (const auto t = detail::bracket_index(part[1], "l3")) {
@@ -249,7 +308,44 @@ inline ResourceName parse_resource_name(const std::string& text) {
                 n.path = {*t, *b};
                 return n;
             }
-            throw NameError(where + "under l3[i], expected bank[j]");
+            if (const auto e = detail::bracket_index(part[2], "bm")) {
+                n.kind = ResourceKind::BlockMover;
+                n.path = {*t, *e};
+                return n;
+            }
+            if (part[2] == "noc") {
+                n.kind = ResourceKind::NocRouter;
+                n.path = {*t};
+                return n;
+            }
+            throw NameError(where + "under l3[i], expected bank[j], bm[e] or noc");
+        }
+        if (const auto m = detail::bracket_index(part[1], "mc")) {
+            if (const auto e = detail::bracket_index(part[2], "dma")) {
+                n.kind = ResourceKind::DmaEngine;
+                n.path = {*m, *e};
+                return n;
+            }
+            throw NameError(where + "under mc[i], expected dma[j]");
+        }
+        if (part[1] == "noc") {
+            if (const auto k = detail::bracket_index(part[2], "port")) {
+                n.kind = ResourceKind::NocPort;
+                n.path = {*k};
+                return n;
+            }
+            throw NameError(where + "under noc, expected port[k]");
+        }
+        if (part[1] == "cpu") {
+            if (const auto h = detail::bracket_index(part[2], "hart")) {
+                n.kind = ResourceKind::CpuHart;
+                n.path = {*h};
+                return n;
+            }
+            if (part[2] == "sram")  { n.kind = ResourceKind::CpuSram; return n; }
+            if (part[2] == "dring") { n.kind = ResourceKind::DescriptorRing; return n; }
+            if (part[2] == "cring") { n.kind = ResourceKind::CompletionRing; return n; }
+            throw NameError(where + "under cpu, expected hart[h], sram, dring or cring");
         }
         if (const auto c = detail::bracket_index(part[1], "cf")) {
             if (part[2] == "regs") {
@@ -369,6 +465,62 @@ public:
                                "declares " + std::to_string(*d.l1.vectors) + " L1 vector(s)";
                 }
                 return {};
+            case ResourceKind::BlockMover:
+            case ResourceKind::NocRouter:
+            case ResourceKind::NocPort: {
+                // Named from the LAYOUT, so the reason a name is missing is usually that the
+                // device has none -- and that reason is the one worth reporting.
+                std::string lw;
+                const auto L = ArrayLayout::of(d, &lw);
+                if (!L)
+                    return std::string(to_string(n.kind)) +
+                           ": this device has no array layout, because " + lw;
+                if (n.kind == ResourceKind::NocPort) {
+                    if (!L->has_noc()) return "port: " + L->noc_reason();
+                    if (n.path[0] >= L->ports().size())
+                        return "port[" + std::to_string(n.path[0]) + "]: the torus has " +
+                               std::to_string(L->ports().size()) + " fold-end port(s)";
+                    return {};
+                }
+                if (n.path[0] >= L->l3_count())
+                    return "l3[" + std::to_string(n.path[0]) + "]: this device declares " +
+                           std::to_string(L->l3_count()) + " L3 module(s)";
+                if (n.kind == ResourceKind::NocRouter)
+                    return L->has_noc() ? std::string{} : "noc: " + L->noc_reason();
+                if (n.path[1] > 3)
+                    return "bm[" + std::to_string(n.path[1]) +
+                           "]: a BlockMover is named by its edge, 0 N, 1 E, 2 S, 3 W";
+                if (!L->abutting_cf(n.path[0], static_cast<Edge>(n.path[1])))
+                    return "l3[" + std::to_string(n.path[0]) + "] has no compute tile on its " +
+                           to_string(static_cast<Edge>(n.path[1])) +
+                           " edge, so it has no BlockMover there";
+                return {};
+            }
+            case ResourceKind::MemoryController:
+            case ResourceKind::DmaEngine: {
+                if (!d.memory.controllers)
+                    return "memory.controllers is not declared in this deployment, so no "
+                           "memory controller or DMA engine can be addressed";
+                if (n.path[0] >= *d.memory.controllers)
+                    return "mc[" + std::to_string(n.path[0]) + "]: this device declares " +
+                           std::to_string(*d.memory.controllers) + " memory controller(s)";
+                const Dim per = d.dma.engines / *d.memory.controllers;
+                if (n.kind == ResourceKind::DmaEngine && n.path[1] >= per)
+                    return "dma[" + std::to_string(n.path[1]) + "]: each memory controller has " +
+                           std::to_string(per) + " DMA engine(s)";
+                return {};
+            }
+            case ResourceKind::CpuHart:
+            case ResourceKind::CpuSram:
+            case ResourceKind::DescriptorRing:
+            case ResourceKind::CompletionRing:
+                if (!d.cpu.harts)
+                    return "cpu.harts is not declared in this deployment, so the attached CPU "
+                           "cannot be addressed";
+                if (n.kind == ResourceKind::CpuHart && n.path[0] >= *d.cpu.harts)
+                    return "hart[" + std::to_string(n.path[0]) + "]: this device declares " +
+                           std::to_string(*d.cpu.harts) + " hart(s)";
+                return {};
         }
         return "unknown resource kind";
     }
@@ -413,6 +565,35 @@ private:
                 if (d.l1.vectors)
                     for (Dim v = 0; v < *d.l1.vectors; ++v)
                         names_.push_back(ResourceName{d.name, ResourceKind::L1Vector, {c, v}, 0});
+            }
+
+            // ---- the physical shape, AFTER every pre-existing kind, so a resource that had
+            //      a dense index before this was added keeps it.
+            if (const auto L = ArrayLayout::of(d)) {
+                for (const BlockMoverSite& m : L->block_movers())
+                    names_.push_back(ResourceName{d.name, ResourceKind::BlockMover,
+                                                  {m.l3, static_cast<Dim>(m.edge)}, 0});
+                if (L->has_noc()) {
+                    for (Dim t = 0; t < L->l3_count(); ++t)
+                        names_.push_back(ResourceName{d.name, ResourceKind::NocRouter, {t}, 0});
+                    for (const NocPort& p : L->ports())
+                        names_.push_back(ResourceName{d.name, ResourceKind::NocPort, {p.index}, 0});
+                }
+            }
+            if (d.memory.controllers) {
+                const Dim per = d.dma.engines / *d.memory.controllers;
+                for (Dim m = 0; m < *d.memory.controllers; ++m) {
+                    names_.push_back(ResourceName{d.name, ResourceKind::MemoryController, {m}, 0});
+                    for (Dim e = 0; e < per; ++e)
+                        names_.push_back(ResourceName{d.name, ResourceKind::DmaEngine, {m, e}, 0});
+                }
+            }
+            if (d.cpu.harts) {
+                for (Dim h = 0; h < *d.cpu.harts; ++h)
+                    names_.push_back(ResourceName{d.name, ResourceKind::CpuHart, {h}, 0});
+                names_.push_back(ResourceName{d.name, ResourceKind::CpuSram, {}, 0});
+                names_.push_back(ResourceName{d.name, ResourceKind::DescriptorRing, {}, 0});
+                names_.push_back(ResourceName{d.name, ResourceKind::CompletionRing, {}, 0});
             }
         }
     }

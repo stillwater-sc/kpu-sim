@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The physical shape of a deployment: array layout, folded-torus NoC and floorplan (#286 step 1).**
+  `platform/array_layout.hpp` derives the alternating L3/compute grid, one BlockMover per L3 edge
+  that abuts a compute tile, and the folded 2D torus over the L3 router hubs, with fold-end
+  ports. The KPU-T64 is the 8×8 board: 32 L3 + 32 compute tiles, 112 BlockMovers, 4×4 loops of
+  8 hubs, 60 wires, 16 ports. The naming map gains `l3[t]/bm[e]`, `l3[t]/noc`,
+  `noc/port[k]`, `mc[m]`, `mc[m]/dma[d]` and `cpu/hart[h]`/`sram`/`dring`/`cring`, appended
+  after the original kinds so existing dense indices do not move.
+  `platform/floorplan.hpp` places every one of them exactly once
+  (generated from the deployment, or imported from JSON and validated against it), and
+  `kpu-floorplan` writes the floorplan as JSON and SVG. The deployment spec gains optional
+  `array`, `memory` and `cpu` fields; specs without them keep their canonical bytes and
+  digests. `kpu-architecture.md` §5.2.1 now states the T64 as 32 compute + 32 L3 tiles.
 - **The call ABI as MMIO, and reserve-then-launch (#305 increment 3).** The orchestrator no
   longer holds the machine. `KpuDevice` owns the data plane, the platform, the credit ledger and
   the reservation table; the decider (`run_orchestrator`) reaches it only through a `KpuPort`,

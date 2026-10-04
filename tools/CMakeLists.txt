@@ -100,6 +100,11 @@ add_subdirectory(harness)
 add_subdirectory(kpu-run)
 
 # ============================================================================
+# Floorplan — the physical shape of a deployment (#286 step 1)
+# ============================================================================
+add_subdirectory(floorplan)
+
+# ============================================================================
 # Legacy C++ tools (deprecated - to be migrated)
 # ============================================================================
 # add_subdirectory(cpp)
