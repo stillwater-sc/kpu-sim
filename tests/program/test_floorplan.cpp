@@ -224,6 +224,28 @@ TEST_CASE("the generated T64 floorplan places every resource exactly once",
     CHECK(links[NocLink::Kind::Attach] == 8);
 }
 
+TEST_CASE("the die holds everything placed, even when the CPU is taller than the array",
+          "[program][platform][floorplan]") {
+    // A 2x4 board (4 L3 + 4 compute tiles) is far shorter than an 8-hart CPU column and the IO
+    // block below it -- by more than the die margin, which is what made the first version of
+    // this test pass against the old sizing. The die must be sized from what was placed.
+    DeploymentSpec spec = t64();
+    DeviceSpecification& d = spec.device(0);
+    d.compute_tiles = 4;
+    d.l3.tiles = 4;
+    d.array.rows = 2;
+    d.array.cols = 4;
+    d.movers.block_movers = 10;
+    d.cpu.harts = 8;
+    REQUIRE(spec.validate().empty());
+    const SocFloorplan fp = generate_floorplan(spec);
+    CHECK(validate_floorplan(fp, spec).empty());
+    const FloorplanBlock* io = fp.find("t64/io");
+    REQUIRE(io != nullptr);
+    CHECK(io->rect.inside(fp.die));
+    CHECK(fp.find("t64/cpu")->rect.inside(fp.die));
+}
+
 TEST_CASE("the floorplan JSON round-trips, byte for byte, and is deterministic",
           "[program][platform][floorplan]") {
     const DeploymentSpec spec = t64();

@@ -863,7 +863,7 @@ The KPU architecture scales across multiple product families targeting different
 **Compute Capacity Scaling**
 - Total PE count: O(N²) where N is checkerboard dimension
 - Aggregate FLOPS/TOPS: Proportional to PE count and clock frequency
-- Scalable from 16K PEs (T64) to 12M PEs (T768) with consistent architecture
+- Scalable from 8K PEs (T64) to 12M PEs (T768) with consistent architecture
 
 **Energy Efficiency Scaling**
 - Smaller configurations (T64): Maximum energy efficiency, lower absolute performance

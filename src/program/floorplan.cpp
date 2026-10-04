@@ -213,7 +213,6 @@ SocFloorplan generate_floorplan(const DeploymentSpec& spec, Dim device, const Fl
     SocFloorplan fp;
     fp.source = "generated:" + d.topology;
     fp.device = d.name;
-    fp.die = R(0, 0, ax + aw + portBand + M, ay + ah + bottomBand + M);
 
     // ---- the array: L3 tiles (banks, BlockMovers, hub) and compute tiles (regs, L2, L1)
     FloorplanBlock array = group(d.name + "/array", BlockKind::Array, R(ax, ay, aw, ah), "array");
@@ -356,6 +355,13 @@ SocFloorplan generate_floorplan(const DeploymentSpec& spec, Dim device, const Fl
     }
     fp.blocks.push_back(group(d.name + "/io", BlockKind::Io,
                               R(M, cpu_bottom + (cpu ? g : 0), cpuW, std::max(P, ah * 0.25)), "IO"));
+
+    // THE DIE, sized from what was placed rather than from the array alone: on a short array the
+    // CPU column and IO below it reach lower than the array's bottom band, and a die sized to the
+    // array would leave them outside it -- a generated floorplan that fails its own validation.
+    double bottom = ay + ah + bottomBand;
+    for (const FloorplanBlock& b : fp.blocks) bottom = std::max(bottom, b.rect.y_um + b.rect.h_um);
+    fp.die = R(0, 0, ax + aw + portBand + M, bottom + M);
 
     // ---- the NoC's wires: ring links, port links, and DMA attachments
     if (L->has_noc()) {
