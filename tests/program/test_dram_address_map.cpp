@@ -160,6 +160,9 @@ TEST_CASE("an inconsistent DRAM is refused with the field's own words",
         {[](auto& d) { d.memory.dram->xor_folds[0].from = "ba"; }, "folds a field into itself"},
         {[](auto& d) { d.memory.dram->xor_folds[0].bits = 3; }, "folds 3 bits into 'ba', which has 2"},
         {[](auto& d) { d.memory.dram->xor_folds[1].from_lsb = 15; }, "reads bits [15, 17) of 'ro'"},
+        // Values a 32-bit cast or sum would turn into something that fits.
+        {[](auto& d) { d.memory.dram->xor_folds[0].bits = 0xFFFFFFFFu; }, "folds 4294967295 bits into 'ba'"},
+        {[](auto& d) { d.memory.dram->xor_folds[1].from_lsb = 0xFFFFFFFFu; }, "reads bits [4294967295, 4294967297) of 'ro'"},
         {[](auto& d) { auto& f = d.memory.dram->xor_folds[1]; f.from = "ba"; f.from_lsb = 0; }, "never both"},
     };
     for (const auto& [edit, want] : cases) {

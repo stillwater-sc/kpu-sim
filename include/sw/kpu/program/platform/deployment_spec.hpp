@@ -311,12 +311,14 @@ inline std::string dram_problem(const DeviceSpecification& d) {
             return at + " names an unknown field (into '" + f.into + "', from '" + f.from + "')";
         if (f.into == f.from) return at + " folds a field into itself";
         if (f.bits == 0) return at + ".bits must be non-zero";
-        if (static_cast<int>(f.bits) > bits.at(f.into))
+        // Compared in 64 bits: casting a Dim to int turns 2^32 - 1 into -1, which passes any
+        // width, and from_lsb + bits in 32 bits can wrap below a width it exceeds.
+        if (std::uint64_t{f.bits} > static_cast<std::uint64_t>(bits.at(f.into)))
             return at + " folds " + std::to_string(f.bits) + " bits into '" + f.into +
                    "', which has " + std::to_string(bits.at(f.into));
-        if (static_cast<int>(f.from_lsb + f.bits) > bits.at(f.from))
+        if (std::uint64_t{f.from_lsb} + f.bits > static_cast<std::uint64_t>(bits.at(f.from)))
             return at + " reads bits [" + std::to_string(f.from_lsb) + ", " +
-                   std::to_string(f.from_lsb + f.bits) + ") of '" + f.from + "', which has " +
+                   std::to_string(std::uint64_t{f.from_lsb} + f.bits) + ") of '" + f.from + "', which has " +
                    std::to_string(bits.at(f.from));
         // A field that is both folded into and folded from would make decode depend on the
         // order of the folds, and encode would no longer invert it.
