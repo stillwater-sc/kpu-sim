@@ -15,6 +15,7 @@
 #include <algorithm>
 #include <cstring>
 #include <fstream>
+#include <limits>
 #include <sstream>
 #include <utility>
 
@@ -204,7 +205,13 @@ Lod read_lod(const std::string& dir) {
         LodLevel x;
         x.k = l.at("k").get<unsigned>();
         x.bins = l.at("bins").get<std::uint64_t>();
-        const std::size_t n = lod.rows.size() * x.bins;
+        // Checked before the multiply: a hostile bin count must be refused, not wrap around
+        // into a small allocation that the column reads then overrun.
+        if (x.bins == 0) throw RecordError("lod: a level declares zero bins");
+        if (!lod.rows.empty() && x.bins > std::numeric_limits<std::size_t>::max() / lod.rows.size())
+            throw RecordError("lod: a level declares " + std::to_string(x.bins) +
+                              " bins, more than any file could hold");
+        const std::size_t n = lod.rows.size() * static_cast<std::size_t>(x.bins);
         x.occ = take<double>(blob, l.at("occ").get<std::size_t>(), n);
         x.peak = take<std::uint32_t>(blob, l.at("peak").get<std::size_t>(), n);
         x.starts = take<std::uint32_t>(blob, l.at("starts").get<std::size_t>(), n);

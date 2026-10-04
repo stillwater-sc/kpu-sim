@@ -14,6 +14,8 @@
 #include <sw/kpu/program/tile_transaction_executor.hpp>
 
 #include <filesystem>
+#include <fstream>
+#include <sstream>
 
 using namespace sw::kpu::program;
 using namespace sw::kpu::program::record;
@@ -138,4 +140,25 @@ TEST_CASE("the pyramid is written with the bundle and reads back unchanged", "[p
     // Rows that the level does not model say so.
     for (const LodRow& r : got.rows)
         if (r.kind == "l2" || r.kind == "l1") CHECK_FALSE(r.modelled);
+}
+
+TEST_CASE("a hostile pyramid file is refused, not allocated", "[program][record][lod]") {
+    const TileFlowRecord rec = record_of(32, 16, 0);
+    const auto dir = (std::filesystem::temp_directory_path() / "kpu-tflow-lod-hostile").string();
+    std::filesystem::remove_all(dir);
+    write_tflow(rec, dir);
+    std::stringstream ss;
+    ss << std::ifstream(dir + "/lod.json").rdbuf();
+    const std::string good = ss.str();
+    auto with_bins = [&](const std::string& bins) {
+        std::string s = good;
+        const auto p = s.find("\"bins\": ");
+        const auto e = s.find_first_of(",\n}", p + 8);
+        s.replace(p, e - p, "\"bins\": " + bins);
+        std::ofstream(dir + "/lod.json", std::ios::trunc) << s;
+    };
+    with_bins("0");
+    CHECK_THROWS_AS(read_lod(dir), RecordError);
+    with_bins("18446744073709551615");
+    CHECK_THROWS_AS(read_lod(dir), RecordError);
 }

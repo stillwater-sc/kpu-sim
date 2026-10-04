@@ -134,6 +134,16 @@ class TflowCheckSelfTest(unittest.TestCase):
         path.write_bytes(bytes(b))
         self.assertFails("TF8")
 
+    def test_malformed_pyramid_is_exit_2(self):
+        for edit in (lambda m: m.pop("rows"), lambda m: m["levels"][0].update(bins=0),
+                     lambda m: m["levels"][0].update(bins="many")):
+            lod = json.loads((self.b.dir / "lod.json").read_text())
+            edit(lod)
+            (self.b.dir / "lod.json").write_text(json.dumps(lod))
+            code, _ = run(self.b.dir)
+            self.assertEqual(code, 2)
+            shutil.copy(Path(BUNDLE) / "lod.json", self.b.dir / "lod.json")
+
     def test_unreadable_is_exit_2(self):
         (self.b.dir / "manifest.json").unlink()
         code, _ = run(self.b.dir)

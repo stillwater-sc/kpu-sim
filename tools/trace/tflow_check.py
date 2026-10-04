@@ -103,22 +103,26 @@ def load(path):
         raise Unreadable(f"{e}") from e
     lod_json = d / "lod.json"
     if lod_json.exists():
+        # The pyramid is input too: a malformed lod.json is unreadable (exit 2), never a crash.
         try:
             lm = json.loads(lod_json.read_text())
             lblob = (d / lm["file"]).read_bytes()
-        except (OSError, ValueError, KeyError) as e:
-            raise Unreadable(f"lod: {e}") from e
-        nrows = len(lm["rows"])
-        levels = []
-        for lv in lm["levels"]:
-            n = nrows * lv["bins"]
-            levels.append({
-                "k": lv["k"], "bins": lv["bins"],
-                "occ": _column(lblob, {"columns": [{"name": "occ", "dtype": "f64", "offset": lv["occ"]}]}, "occ", n),
-                "peak": _column(lblob, {"columns": [{"name": "peak", "dtype": "u32", "offset": lv["peak"]}]}, "peak", n),
-                "starts": _column(lblob, {"columns": [{"name": "starts", "dtype": "u32", "offset": lv["starts"]}]}, "starts", n),
-            })
-        rec["lod"] = {"rows": lm["rows"], "levels": levels}
+            nrows = len(lm["rows"])
+            levels = []
+            for lv in lm["levels"]:
+                bins = lv["bins"]
+                if not isinstance(bins, int) or bins <= 0:
+                    raise Unreadable(f"lod: a level declares {bins!r} bins")
+                n = nrows * bins
+                levels.append({
+                    "k": lv["k"], "bins": bins,
+                    "occ": _column(lblob, {"columns": [{"name": "occ", "dtype": "f64", "offset": lv["occ"]}]}, "occ", n),
+                    "peak": _column(lblob, {"columns": [{"name": "peak", "dtype": "u32", "offset": lv["peak"]}]}, "peak", n),
+                    "starts": _column(lblob, {"columns": [{"name": "starts", "dtype": "u32", "offset": lv["starts"]}]}, "starts", n),
+                })
+            rec["lod"] = {"rows": lm["rows"], "levels": levels}
+        except (OSError, ValueError, KeyError, TypeError) as e:
+            raise Unreadable(f"lod: {e!r}") from e
     return rec
 
 
