@@ -106,8 +106,14 @@ if(KPU_BUILD_TESTS)
             COMMAND ${KPU_PYTHON3} ${CMAKE_SOURCE_DIR}/tools/trace/test_tflow_check.py
                     ${CMAKE_CURRENT_BINARY_DIR}/shared_reader.tflow)
         set_tests_properties(tflow_check_selftest PROPERTIES DEPENDS kpu_run_tflow_shared_reader)
+        # The viewer (#286 step 4): pack a real bundle, refuse a non-bundle, parse the script.
+        add_test(NAME tileflow_viewer_smoke
+            COMMAND ${KPU_PYTHON3} ${CMAKE_SOURCE_DIR}/tools/visualization/tileflow/test_viewer.py
+                    ${CMAKE_CURRENT_BINARY_DIR}/kpu_run_matmul.tflow)
+        set_tests_properties(tileflow_viewer_smoke PROPERTIES DEPENDS kpu_run_tflow_written)
         set_tests_properties(tflow_check_matmul tflow_check_t4 kpu_run_tflow_shared_reader
-            tflow_check_shared_reader tflow_check_selftest PROPERTIES LABELS "program;tileflow")
+            tflow_check_shared_reader tflow_check_selftest tileflow_viewer_smoke
+            PROPERTIES LABELS "program;tileflow")
     endif()
 
     add_test(NAME kpu_run_tflow_refused_without_timing

@@ -1,0 +1,610 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>KPU Tile-Flow Viewer</title>
+<!--
+  tools/visualization/tileflow/index.html -- the tile-flow viewer, Step 1 (#286 step 4;
+  docs/plans/tile-flow-debugger.md §3.5).
+
+  Reads a .tflow bundle (kpu-run --tflow) and, optionally, the floorplan of the same deployment
+  (kpu-floorplan --json). Plain HTML, no build step, no server: open this file and choose the
+  bundle's files, or drop them on the page. pack.py embeds a bundle into a copy of this file.
+
+  WHAT IT SHOWS, AND WHAT IT REFUSES TO INVENT (plan §3.6):
+    - Swimlanes from the record's level-of-detail pyramid: one row per station and mover pool.
+    - The physical floorplan at the cursor. At L-T1, L3 and the movers are POOLED: they are drawn
+      as one shared fill across every block of their kind and labelled "pooled", never as
+      per-tile values the record does not contain. Blocks with no events (CPU, ports, L2, L1)
+      are hatched.
+    - The pooled L3 occupancy against capacity, exact, from the raw residency intervals.
+    - Diagnostics computed from the record. Invariants are tools/trace/tflow_check.py's job.
+
+  SPDX-License-Identifier: MIT
+  Copyright (c) 2024-2025 Stillwater Supercomputing, Inc.
+-->
+<style>
+:root {
+  --bg: #f4f5f6; --panel: #fcfcfb; --ink: #15181c; --ink-2: #4a5059; --ink-3: #7b828c;
+  --line: #d9dce0; --grid: #e8eaed; --die: #eceef0; --l3: #dfe3e8; --cf: #e6e2da; --blk: #e3e6ea;
+  --busy: #2a78d6; --crit: #d03b3b; --warn: #fab219; --hatch: #b9bec6; --accent: #2a5db0;
+  --seq-lo: #e8f0fb; --seq-hi: #0d366b;
+  --font-ui: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-data: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #121416; --panel: #1a1c1f; --ink: #eef0f2; --ink-2: #b9bfc7; --ink-3: #8a919b;
+    --line: #2e3237; --grid: #25292d; --die: #202327; --l3: #2a3038; --cf: #322e28; --blk: #2a2d33;
+    --busy: #3987e5; --accent: #7aa7ea; --hatch: #4a5058; --seq-lo: #1b2738; --seq-hi: #b7d3f6;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+    --bg: #121416; --panel: #1a1c1f; --ink: #eef0f2; --ink-2: #b9bfc7; --ink-3: #8a919b;
+    --line: #2e3237; --grid: #25292d; --die: #202327; --l3: #2a3038; --cf: #322e28; --blk: #2a2d33;
+    --busy: #3987e5; --accent: #7aa7ea; --hatch: #4a5058; --seq-lo: #1b2738; --seq-hi: #b7d3f6;
+    color-scheme: dark;
+}
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+body { margin: 0; background: var(--bg); color: var(--ink); font: 14px/1.45 var(--font-ui); }
+.wrap { max-width: 1400px; margin: 0 auto; padding: 18px 18px 60px; display: grid; gap: 16px; }
+h1 { font-size: 22px; margin: 0; }
+h2 { font-size: 13px; margin: 0; color: var(--ink-2); font-weight: 600; }
+.sub { color: var(--ink-2); max-width: 90ch; margin: 0; }
+.panel { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 12px; display: grid; gap: 8px; min-width: 0; }
+.row2 { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr); gap: 16px; align-items: start; }
+@media (max-width: 1000px) { .row2 { grid-template-columns: minmax(0, 1fr); } }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.chip { font: 12px var(--font-data); border: 1px solid var(--line); border-radius: 4px; padding: 2px 7px; color: var(--ink-2); }
+.chip b { color: var(--ink); font-weight: 600; }
+.chip.warn { border-color: var(--warn); }
+.load { border: 2px dashed var(--line); border-radius: 8px; padding: 18px; display: grid; gap: 10px; }
+.load.drag { border-color: var(--accent); }
+.transport { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; position: sticky; top: 0; z-index: 4; background: var(--bg); padding: 8px 0; border-bottom: 1px solid var(--line); }
+button, input[type=file] { font: 13px var(--font-ui); }
+button { background: var(--panel); color: var(--ink); border: 1px solid var(--line); border-radius: 5px; padding: 4px 10px; cursor: pointer; }
+button:hover { border-color: var(--ink-3); }
+input[type=range] { flex: 1 1 300px; min-width: 0; }
+.clock { font: 13px var(--font-data); min-width: 22ch; }
+canvas { display: block; width: 100%; }
+.legend { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 12px; color: var(--ink-2); align-items: center; }
+.sw { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 5px; vertical-align: -1px; border: 1px solid var(--line); }
+.hatch { background: repeating-linear-gradient(45deg, var(--hatch) 0 2px, transparent 2px 5px); }
+ul.diag { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; font-size: 13px; }
+ul.diag li { display: grid; grid-template-columns: 7.5em 1fr; gap: 8px; }
+.sev { font: 600 11px var(--font-data); text-transform: uppercase; border: 1px solid var(--line); border-radius: 3px; padding: 1px 5px; text-align: center; align-self: start; }
+.sev.crit { color: var(--crit); border-color: var(--crit); }
+.sev.warn { border-color: var(--warn); }
+.kv { display: grid; grid-template-columns: auto 1fr; gap: 2px 12px; font: 12px var(--font-data); }
+.kv span:nth-child(odd) { color: var(--ink-3); }
+.tip { position: fixed; z-index: 10; pointer-events: none; background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 6px 9px; font: 12px var(--font-data); box-shadow: 0 4px 16px rgba(0,0,0,.18); max-width: 360px; }
+.note { font-size: 12px; color: var(--ink-3); }
+code { font: 12px var(--font-data); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>KPU Tile-Flow Viewer</h1>
+    <p class="sub">Where every tile was, and when: the system-level schedule of one run, on the physical floorplan and as station swimlanes, with one shared cursor.</p>
+  </header>
+
+  <section class="load" id="load">
+    <h2>Load a run</h2>
+    <p class="sub">Write a bundle with <code>kpu-run --tflow run.tflow</code>, then choose the folder below (or drop its files here). For the physical view, also choose the deployment's floorplan from <code>kpu-floorplan --deploy spec.json --json fp.json</code>.</p>
+    <label>Bundle folder <input id="pickBundle" type="file" webkitdirectory multiple></label>
+    <label>Floorplan (optional) <input id="pickFloorplan" type="file" accept=".json"></label>
+    <p class="note" id="loadMsg"></p>
+  </section>
+
+  <section id="main" hidden>
+    <div class="panel"><div class="chips" id="summary"></div><p class="note" id="honesty"></p></div>
+
+    <div class="transport">
+      <button id="play" type="button">Play</button>
+      <input id="scrub" type="range" min="0" max="1" value="0" aria-label="Cycle">
+      <span class="clock" id="clock"></span>
+      <button id="resetZoom" type="button">Whole run</button>
+      <span class="note" id="zoomNote"></span>
+    </div>
+
+    <div class="row2">
+      <div class="panel">
+        <h2>Floorplan at the cursor</h2>
+        <canvas id="fp"></canvas>
+        <div class="legend" id="fpLegend"></div>
+      </div>
+      <div class="panel">
+        <h2>Diagnostics</h2>
+        <ul class="diag" id="diag"></ul>
+        <h2>Inspector</h2>
+        <div id="insp" class="note">Click a block on the floorplan or a cell in the swimlanes.</div>
+      </div>
+    </div>
+
+    <div class="panel">
+      <h2>Station swimlanes: occupancy ÷ capacity per time bin (drag to zoom, click to set the cursor)</h2>
+      <canvas id="lanes" tabindex="0"></canvas>
+      <div class="legend"><span><span class="sw" style="background:var(--seq-lo)"></span>empty</span><span><span class="sw" style="background:var(--seq-hi)"></span>full</span><span><span class="sw" style="background:var(--crit)"></span>over capacity (a bug: see tflow_check TF1)</span><span><span class="sw hatch"></span>not modelled at this level</span><span id="levelNote"></span></div>
+    </div>
+
+    <div class="panel">
+      <h2>Pooled L3 occupancy and busy compute tiles</h2>
+      <canvas id="occ"></canvas>
+      <div class="legend"><span><span class="sw" style="background:var(--busy)"></span>L3 tiles resident (exact, from the residency intervals)</span><span><span class="sw" style="background:var(--crit)"></span>L3 capacity</span><span><span class="sw" style="background:var(--ink-3)"></span>compute tiles busy</span></div>
+    </div>
+  </section>
+</div>
+<div class="tip" id="tip" hidden></div>
+
+<!--TFLOW_EMBED-->
+<script>
+(() => {
+"use strict";
+const $ = id => document.getElementById(id);
+const tok = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+const fmt = n => Number(n).toLocaleString("en-US");
+const HOPS = ["dma:dram->l3", "bm:l3->l2", "str:l2->l1", "str:l1->l2", "bm:l2->l3", "dma:l3->dram", "bm:l3->l3"];
+const MOVERS = ["dma", "block-mover", "streamer", "noc"];
+const OPKIND = ["FEED", "DRAIN", "MATMUL_ACCUM", "LU_DIAG_FACTOR", "PIVOT_APPLY", "TRSM_LL", "TRSM_UR"];   // enum TileOpKind, in order
+
+// ------------------------------------------------------------------ loading
+function col(buf, cols, name, n) {
+  const c = cols.find(x => x.name === name);
+  if (!c) throw new Error("no column " + name);
+  const T = { u8: Uint8Array, u32: Uint32Array, f64: Float64Array }[c.dtype];
+  return new T(buf, c.offset, n);
+}
+function parse(files) {
+  // files: { "manifest.json": text, "lod.json": text, "<x>.bin": ArrayBuffer, floorplan?: text }
+  const m = JSON.parse(files["manifest.json"]);
+  if (m.format !== "kpu-tflow" || m.version !== 1) throw new Error("not a version-1 kpu-tflow bundle");
+  const R = { m };
+  const tb = (name, extra) => {
+    const t = m.tables[name], buf = files[t.file];
+    if (!buf) throw new Error("missing " + t.file);
+    const out = { rows: t.rows };
+    for (const c of t.columns) {
+      if (extra && extra[c.name] !== undefined) continue;
+      out[c.name] = col(buf, t.columns, c.name, t.rows);
+    }
+    return out;
+  };
+  R.res = tb("residency");
+  R.tr = tb("transit");
+  R.co = tb("compute");
+  {
+    const t = m.tables.op_tiles, buf = files[t.file];
+    R.ops = { rows: t.rows, kind: col(buf, t.columns, "kind", t.rows), offset: col(buf, t.columns, "offset", t.rows + 1) };
+    const nnz = R.ops.offset[t.rows] || 0;
+    R.ops.tile = col(buf, t.columns, "tile", nnz);
+  }
+  if (files["lod.json"]) {
+    const lm = JSON.parse(files["lod.json"]), buf = files[lm.file];
+    R.lod = { rows: lm.rows, levels: lm.levels.map(l => {
+      const n = lm.rows.length * l.bins;
+      return { k: l.k, bins: l.bins, occ: new Float64Array(buf, l.occ, n), peak: new Uint32Array(buf, l.peak, n), starts: new Uint32Array(buf, l.starts, n) };
+    }) };
+  }
+  if (files.floorplan) R.fp = JSON.parse(files.floorplan);
+  return R;
+}
+async function readPicked(list) {
+  const files = {};
+  for (const f of list) {
+    const name = f.name;
+    if (name.endsWith(".bin")) files[name] = await f.arrayBuffer();
+    else if (name === "manifest.json" || name === "lod.json") files[name] = await f.text();
+  }
+  return files;
+}
+function b64(s) { const bin = atob(s); const u = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) u[i] = bin.charCodeAt(i); return u.buffer; }
+
+let R = null;
+let pendingFloorplan = null;
+async function loadFrom(files) {
+  try {
+    if (pendingFloorplan) files.floorplan = pendingFloorplan;
+    R = parse(files);
+    start();
+  } catch (e) { $("loadMsg").textContent = "Could not read the bundle: " + e.message; }
+}
+$("pickBundle").addEventListener("change", async e => loadFrom(await readPicked(e.target.files)));
+$("pickFloorplan").addEventListener("change", async e => {
+  pendingFloorplan = await e.target.files[0].text();
+  if (R) { R.fp = JSON.parse(pendingFloorplan); drawAll(); }
+  else $("loadMsg").textContent = "Floorplan loaded; now choose the bundle folder.";
+});
+const load = $("load");
+load.addEventListener("dragover", e => { e.preventDefault(); load.classList.add("drag"); });
+load.addEventListener("dragleave", () => load.classList.remove("drag"));
+load.addEventListener("drop", async e => {
+  e.preventDefault(); load.classList.remove("drag");
+  const list = [...e.dataTransfer.files];
+  const fp = list.find(f => f.name.endsWith(".json") && f.name !== "manifest.json" && f.name !== "lod.json");
+  if (fp) pendingFloorplan = await fp.text();
+  loadFrom(await readPicked(list));
+});
+
+// ------------------------------------------------------------------ derived data
+let T = 0, viewA = 0, viewB = 1, playing = false;
+let L3S = -1, nCF = 0, cfStations = [], l3Steps = null, cfBusySteps = null;
+function stepSeries(intervals, constant) {
+  // [[t, value]] step function from half-open intervals; ends before starts at equal t.
+  const ev = [];
+  for (const [a, b] of intervals) if (b > a) { ev.push([a, 1]); ev.push([b, -1]); }
+  ev.sort((x, y) => x[0] - y[0] || x[1] - y[1]);
+  const out = [[0, constant]];
+  let cur = constant;
+  for (let i = 0; i < ev.length;) {
+    const t = ev[i][0];
+    while (i < ev.length && ev[i][0] === t) cur += ev[i++][1];
+    if (out[out.length - 1][0] === t) out[out.length - 1][1] = cur; else out.push([t, cur]);
+  }
+  return out;
+}
+function valueAt(steps, t) {
+  let lo = 0, hi = steps.length - 1;
+  while (lo < hi) { const mid = (lo + hi + 1) >> 1; if (steps[mid][0] <= t) lo = mid; else hi = mid - 1; }
+  return steps[lo][1];
+}
+function prepare() {
+  const st = R.m.stations;
+  L3S = st.findIndex(s => s.kind === "l3");
+  cfStations = st.map((s, i) => [s, i]).filter(([s]) => s.kind === "cf").map(([, i]) => i);
+  nCF = cfStations.length;
+  const l3iv = [];
+  for (let i = 0; i < R.res.rows; i++) if (R.res.station[i] === L3S) l3iv.push([R.res.t0[i], R.res.t1[i]]);
+  l3Steps = stepSeries(l3iv, R.m.foreign_slots || 0);
+  const cfiv = [];
+  for (let i = 0; i < R.co.rows; i++) cfiv.push([R.co.t0[i], R.co.t1[i]]);
+  cfBusySteps = stepSeries(cfiv, 0);
+  // per-station compute intervals sorted, for "busy at t" and the inspector
+  R.cfBy = new Map();
+  for (let i = 0; i < R.co.rows; i++) {
+    const s = R.co.station[i];
+    if (!R.cfBy.has(s)) R.cfBy.set(s, []);
+    R.cfBy.get(s).push(i);
+  }
+  for (const v of R.cfBy.values()) v.sort((a, b) => R.co.t0[a] - R.co.t0[b]);
+  // pool occupancy step series, for the floorplan's pooled movers
+  R.poolSteps = {};
+  for (let p = 0; p < MOVERS.length; p++) {
+    const iv = [];
+    for (let i = 0; i < R.tr.rows; i++) if (R.tr.mover[i] === p) iv.push([R.tr.t0[i], R.tr.t1[i]]);
+    R.poolSteps[MOVERS[p]] = stepSeries(iv, 0);
+  }
+}
+function busyAt(station, t) {
+  const v = R.cfBy.get(station);
+  if (!v) return -1;
+  let lo = 0, hi = v.length - 1, hit = -1;
+  while (lo <= hi) { const mid = (lo + hi) >> 1; if (R.co.t0[v[mid]] <= t) { hit = mid; lo = mid + 1; } else hi = mid - 1; }
+  return hit >= 0 && t < R.co.t1[v[hit]] ? v[hit] : -1;
+}
+
+// ------------------------------------------------------------------ boot
+function start() {
+  $("load").hidden = true;
+  $("main").hidden = false;
+  prepare();
+  const m = R.m;
+  const lanes = (m.movers || []).map(p => `${p.name} ${p.lanes}`).join(" · ");
+  const l3cap = m.stations[L3S] ? m.stations[L3S].capacity : 0;
+  $("summary").innerHTML = [
+    ["level", m.level], ["device", `${m.device} (${m.device_label})`], ["makespan", fmt(m.makespan) + " cycles"],
+    ["L3 capacity", l3cap ? fmt(l3cap) + " tiles" : "unbounded"], ["compute tiles", nCF],
+    ["tiles", fmt(m.tiles.length)], ["transits", fmt(R.tr.rows)], ["computes", fmt(R.co.rows)],
+    ["lanes", lanes || "—"], ["floorplan", R.fp ? R.fp.source : "none loaded"]
+  ].map(([k, v]) => `<span class="chip">${k} <b>${v}</b></span>`).join("") +
+    (m.unmodelled && m.unmodelled.length ? `<span class="chip warn">not modelled <b>${m.unmodelled.join(", ")}</b></span>` : "");
+  $("honesty").textContent = `At ${m.level}, L3 is one pooled capacity and moves are bound to lanes of a mover pool, not to places: the floorplan draws L3 and the movers as pooled fills across every block of their kind, never as per-tile values this record does not hold. Invariants are checked by tools/trace/tflow_check.py, not here.`;
+  viewA = 0; viewB = Math.max(1, m.makespan);
+  const sc = $("scrub"); sc.max = m.makespan; sc.value = 0;
+  T = Math.floor(m.makespan * 0.4);
+  drawAll();
+}
+function drawAll() { setT(T); renderDiag(); }
+function setT(t) {
+  T = Math.max(0, Math.min(R.m.makespan, Math.round(t)));
+  $("scrub").value = T;
+  $("clock").textContent = `cycle ${fmt(T)} / ${fmt(R.m.makespan)}`;
+  drawFloorplan(); drawLanes(); drawOcc();
+}
+$("scrub").addEventListener("input", e => setT(+e.target.value));
+$("play").addEventListener("click", () => {
+  playing = !playing; $("play").textContent = playing ? "Pause" : "Play";
+  let last = 0;
+  const tick = ts => {
+    if (!playing) return;
+    const dt = last ? ts - last : 16; last = ts;
+    setT(T + Math.max(1, (viewB - viewA) * dt / 8000));
+    if (T >= R.m.makespan) { playing = false; $("play").textContent = "Play"; } else requestAnimationFrame(tick);
+  };
+  if (playing) requestAnimationFrame(tick);
+});
+$("resetZoom").addEventListener("click", () => { viewA = 0; viewB = R.m.makespan; drawLanes(); drawOcc(); });
+
+function fit(cv, h) {
+  const w = cv.parentElement.clientWidth - 24, dpr = window.devicePixelRatio || 1;
+  cv.style.height = h + "px"; cv.width = Math.round(w * dpr); cv.height = Math.round(h * dpr);
+  const ctx = cv.getContext("2d"); ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  return { ctx, w, h };
+}
+function ramp(v) {
+  v = Math.max(0, Math.min(1, v));
+  const p = s => [1, 3, 5].map(i => parseInt(s.slice(i, i + 2), 16));
+  const a = p(tok("--seq-lo")), b = p(tok("--seq-hi"));
+  return `rgb(${a.map((x, i) => Math.round(x + (b[i] - x) * v)).join(",")})`;
+}
+function hatchRect(ctx, x, y, w, h) {
+  ctx.save(); ctx.beginPath(); ctx.rect(x, y, w, h); ctx.clip();
+  ctx.strokeStyle = tok("--hatch"); ctx.lineWidth = 1;
+  for (let k = -h; k < w; k += 5) { ctx.beginPath(); ctx.moveTo(x + k, y + h); ctx.lineTo(x + k + h, y); ctx.stroke(); }
+  ctx.restore();
+}
+const tip = $("tip");
+function showTip(e, html) { tip.innerHTML = html; tip.hidden = false; tip.style.left = Math.min(e.clientX + 14, innerWidth - 380) + "px"; tip.style.top = (e.clientY + 14) + "px"; }
+function hideTip() { tip.hidden = true; }
+
+// ------------------------------------------------------------------ floorplan
+let fpGeom = null;
+function flatBlocks(fp) {
+  const out = [];
+  const walk = (bs, depth) => { for (const b of bs) { out.push({ ...b, depth }); if (b.children) walk(b.children, depth + 1); } };
+  walk(fp.blocks, 0);
+  return out;
+}
+function drawFloorplan() {
+  const cv = $("fp");
+  if (!R.fp) {
+    const { ctx, w } = fit(cv, 60);
+    ctx.fillStyle = tok("--ink-3"); ctx.font = `13px ${tok("--font-ui")}`;
+    ctx.fillText("No floorplan loaded. Write one with kpu-floorplan --deploy <spec.json> --json fp.json and choose it above.", 4, 30);
+    $("fpLegend").innerHTML = "";
+    return;
+  }
+  const die = R.fp.die, w0 = cv.parentElement.clientWidth - 24;
+  const s = w0 / die[2];
+  const { ctx } = fit(cv, Math.round(die[3] * s));
+  fpGeom = { s, blocks: flatBlocks(R.fp) };
+  ctx.fillStyle = tok("--die"); ctx.fillRect(0, 0, die[2] * s, die[3] * s);
+  const l3cap = R.m.stations[L3S] ? R.m.stations[L3S].capacity : 0;
+  const l3now = valueAt(l3Steps, T);
+  const l3frac = l3cap ? l3now / l3cap : (R.m.tiles.length ? l3now / R.m.tiles.length : 0);
+  const pool = name => { const p = (R.m.movers || []).find(x => x.name === name); return p && p.lanes ? valueAt(R.poolSteps[name], T) / p.lanes : 0; };
+  const cfName = new Map(cfStations.map(i => [R.m.stations[i].name, i]));
+  for (const b of fpGeom.blocks) {
+    const [x, y, w, h] = b.rect.map(v => v * s);
+    let fill = tok("--blk"), hatch = false;
+    switch (b.kind) {
+      case "array": fill = null; break;
+      case "compute_tile": {
+        const st = cfName.get(b.name);
+        fill = st === undefined ? tok("--cf") : (busyAt(st, T) >= 0 ? tok("--busy") : tok("--cf"));
+        if (st === undefined) hatch = true;
+        break;
+      }
+      case "l3_tile": fill = ramp(l3frac); break;
+      case "block_mover": fill = ramp(pool("block-mover")); break;
+      case "noc_router": fill = ramp(pool("noc")); break;
+      case "dma_engine": fill = ramp(pool("dma")); break;
+      case "l3_bank": fill = null; break;
+      case "l2_bank": case "l1_vector": case "register_file": case "noc_port":
+      case "cpu_hart": case "cpu_sram": case "descriptor_ring": case "completion_ring":
+        fill = tok("--blk"); hatch = true; break;
+      default: fill = tok("--blk");
+    }
+    if (fill) { ctx.fillStyle = fill; ctx.fillRect(x, y, w, h); }
+    if (hatch) hatchRect(ctx, x, y, w, h);
+    ctx.strokeStyle = tok("--line"); ctx.lineWidth = b.depth === 0 ? 1.5 : 0.6; ctx.strokeRect(x + .5, y + .5, w - 1, h - 1);
+  }
+  ctx.strokeStyle = tok("--ink-3"); ctx.lineWidth = 0.8; ctx.globalAlpha = 0.35;
+  for (const l of R.fp.noc || []) { if (l.kind !== "ring" || !l.route) continue; ctx.beginPath(); ctx.moveTo(l.route[0][0] * s, l.route[0][1] * s); for (const p of l.route.slice(1)) ctx.lineTo(p[0] * s, p[1] * s); ctx.stroke(); }
+  ctx.globalAlpha = 1;
+  $("fpLegend").innerHTML = `<span><span class="sw" style="background:var(--busy)"></span>compute tile computing</span><span><span class="sw" style="background:${ramp(l3frac)}"></span>L3: ${fmt(l3now)}${l3cap ? " / " + fmt(l3cap) : ""} tiles, POOLED across all L3 tiles</span><span>BlockMovers / DMA / NoC: pooled lane use</span><span><span class="sw hatch"></span>no events at ${R.m.level}</span>`;
+}
+$("fp").addEventListener("click", e => {
+  if (!fpGeom) return;
+  const r = $("fp").getBoundingClientRect(), x = (e.clientX - r.left) / fpGeom.s, y = (e.clientY - r.top) / fpGeom.s;
+  const hits = fpGeom.blocks.filter(b => x >= b.rect[0] && x <= b.rect[0] + b.rect[2] && y >= b.rect[1] && y <= b.rect[1] + b.rect[3]);
+  if (hits.length) inspectBlock(hits.sort((a, b) => b.depth - a.depth)[0]);
+});
+$("fp").addEventListener("mousemove", e => {
+  if (!fpGeom) return;
+  const r = $("fp").getBoundingClientRect(), x = (e.clientX - r.left) / fpGeom.s, y = (e.clientY - r.top) / fpGeom.s;
+  const hits = fpGeom.blocks.filter(b => x >= b.rect[0] && x <= b.rect[0] + b.rect[2] && y >= b.rect[1] && y <= b.rect[1] + b.rect[3]);
+  if (!hits.length) return hideTip();
+  const b = hits.sort((a, c) => c.depth - a.depth)[0];
+  showTip(e, `${b.name}${b.clock ? " (" + b.clock + " clock)" : ""}`);
+});
+$("fp").addEventListener("mouseleave", hideTip);
+
+function opText(op) {
+  const k = OPKIND[R.ops.kind[op]] || ("kind " + R.ops.kind[op]);
+  const ts = [];
+  for (let j = R.ops.offset[op]; j < R.ops.offset[op + 1]; j++) { const t = R.m.tiles[R.ops.tile[j]]; ts.push(`${t[0]}[${t[1]},${t[2]}]`); }
+  return `op ${op} ${k} ${ts.join(" ")}`;
+}
+function inspectBlock(b) {
+  const st = cfStations.find(i => R.m.stations[i].name === b.name);
+  if (st !== undefined) {
+    const list = R.cfBy.get(st) || [];
+    let busy = 0; for (const i of list) busy += R.co.t1[i] - R.co.t0[i];
+    const now = busyAt(st, T);
+    const near = list.filter(i => R.co.t1[i] >= T - (viewB - viewA) * 0.05).slice(0, 6);
+    $("insp").innerHTML = `<div class="kv"><span>block</span><span>${b.name}</span><span>computes</span><span>${list.length}</span><span>utilization</span><span>${(100 * busy / Math.max(1, R.m.makespan)).toFixed(1)}%</span><span>at cursor</span><span>${now >= 0 ? opText(R.co.op[now]) : "idle"}</span></div><p class="note">Next: ${near.map(i => `[${fmt(R.co.t0[i])}, ${fmt(R.co.t1[i])}) ${opText(R.co.op[i])}`).join("<br>") || "none"}</p>`;
+    return;
+  }
+  const pooled = { l3_tile: "L3 is pooled at this level: the record says how many tiles L3 held, never which L3 tile held them.", block_mover: "BlockMovers are a pooled lane set at this level; binding a move to this edge needs L3 slot binding (plan step 6).", dma_engine: "DMA engines are a pooled lane set at this level.", noc_router: "NoC lanes are pooled at this level." }[b.kind];
+  $("insp").innerHTML = `<div class="kv"><span>block</span><span>${b.name}</span><span>kind</span><span>${b.kind}</span><span>clock</span><span>${b.clock || "—"}</span></div><p class="note">${pooled || "No events are recorded against this block at " + R.m.level + "."}</p>`;
+}
+
+// ------------------------------------------------------------------ swimlanes
+let laneGeom = null, dragFrom = null;
+function pickLevel(px) {
+  // the finest stored level whose bins in view do not exceed the pixels available
+  const L = R.lod.levels;
+  for (const l of L) { const w = 2 ** l.k; if ((viewB - viewA) / w <= px) return l; }
+  return L[L.length - 1];
+}
+function drawLanes() {
+  const cv = $("lanes");
+  if (!R.lod) { const { ctx } = fit(cv, 40); ctx.fillStyle = tok("--ink-3"); ctx.fillText("This bundle has no lod.json.", 4, 24); return; }
+  const rows = R.lod.rows, rh = 16, gutter = 150;
+  const { ctx, w } = fit(cv, rows.length * rh + 34);
+  const pw = w - gutter - 8;
+  const lv = pickLevel(pw), width = 2 ** lv.k;
+  const b0 = Math.floor(viewA / width), b1 = Math.min(lv.bins - 1, Math.ceil(viewB / width));
+  const X = t => gutter + (t - viewA) / (viewB - viewA) * pw;
+  ctx.font = `11px ${tok("--font-data")}`; ctx.textBaseline = "middle";
+  rows.forEach((row, r) => {
+    const y = 4 + r * rh;
+    ctx.fillStyle = tok("--ink-2"); ctx.fillText(row.name.length > 22 ? "…" + row.name.slice(-21) : row.name, 2, y + rh / 2);
+    ctx.fillStyle = tok("--grid"); ctx.fillRect(gutter, y + rh - 1, pw, 1);
+    if (!row.modelled) { hatchRect(ctx, gutter, y + 1, pw, rh - 3); return; }
+    const cap = row.capacity;
+    for (let b = b0; b <= b1; b++) {
+      const i = r * lv.bins + b, x0 = Math.max(gutter, X(b * width)), x1 = Math.min(gutter + pw, X((b + 1) * width));
+      if (x1 <= x0) continue;
+      const occ = lv.occ[i], peak = lv.peak[i];
+      if (!occ && !peak) continue;
+      if (cap && peak > cap) ctx.fillStyle = tok("--crit");
+      else ctx.fillStyle = ramp(cap ? occ / (width * cap) : Math.min(1, occ / width));
+      ctx.fillRect(x0, y + 1, Math.max(1, x1 - x0), rh - 3);
+    }
+  });
+  const ay = 4 + rows.length * rh + 2;
+  ctx.fillStyle = tok("--line"); ctx.fillRect(gutter, ay, pw, 1);
+  ctx.fillStyle = tok("--ink-3"); ctx.textBaseline = "top";
+  for (let i = 0; i <= 5; i++) { const t = viewA + (viewB - viewA) * i / 5; ctx.fillText(fmt(Math.round(t)), Math.min(X(t), gutter + pw - 40), ay + 4); }
+  if (T >= viewA && T <= viewB) { ctx.fillStyle = tok("--ink"); ctx.fillRect(X(T) - .5, 0, 1.5, ay); }
+  if (dragFrom !== null && laneGeom && laneGeom.dragTo !== undefined) {
+    ctx.fillStyle = tok("--accent"); ctx.globalAlpha = .18;
+    ctx.fillRect(Math.min(dragFrom, laneGeom.dragTo), 0, Math.abs(laneGeom.dragTo - dragFrom), ay); ctx.globalAlpha = 1;
+  }
+  laneGeom = { gutter, pw, rh, lv, width, X, dragTo: laneGeom ? laneGeom.dragTo : undefined };
+  $("levelNote").textContent = `bin = 2^${lv.k} = ${fmt(width)} cycles`;
+  $("zoomNote").textContent = viewA > 0 || viewB < R.m.makespan ? `view ${fmt(Math.round(viewA))}–${fmt(Math.round(viewB))}` : "";
+}
+function laneAt(e) {
+  const r = $("lanes").getBoundingClientRect(), x = e.clientX - r.left, y = e.clientY - r.top;
+  const { gutter, pw, rh } = laneGeom;
+  const t = viewA + (x - gutter) / pw * (viewB - viewA);
+  return { x, row: Math.floor((y - 4) / rh), t };
+}
+$("lanes").addEventListener("mousedown", e => { if (!laneGeom) return; dragFrom = laneAt(e).x; laneGeom.dragTo = dragFrom; });
+$("lanes").addEventListener("mousemove", e => {
+  if (!laneGeom || !R.lod) return;
+  const h = laneAt(e);
+  if (dragFrom !== null) { laneGeom.dragTo = h.x; drawLanes(); return; }
+  const row = R.lod.rows[h.row];
+  if (!row || h.t < viewA || h.t > viewB) return hideTip();
+  const { lv, width } = laneGeom, b = Math.floor(h.t / width), i = h.row * lv.bins + b;
+  if (b < 0 || b >= lv.bins) return hideTip();
+  if (!row.modelled) return showTip(e, `${row.name}<br>not modelled at ${R.m.level}`);
+  showTip(e, `${row.name}<br>cycles ${fmt(b * width)}–${fmt((b + 1) * width)}<br>mean ${(lv.occ[i] / width).toFixed(2)}${row.capacity ? " of " + fmt(row.capacity) : ""} · peak ${fmt(lv.peak[i])}${row.capacity && lv.peak[i] > row.capacity ? " OVER CAPACITY" : ""}<br>${fmt(lv.starts[i])} started`);
+});
+$("lanes").addEventListener("mouseleave", hideTip);
+window.addEventListener("mouseup", e => {
+  if (dragFrom === null || !laneGeom) return;
+  const to = laneGeom.dragTo, from = dragFrom; dragFrom = null; laneGeom.dragTo = undefined;
+  const { gutter, pw } = laneGeom;
+  const tOf = x => viewA + (Math.max(gutter, Math.min(gutter + pw, x)) - gutter) / pw * (viewB - viewA);
+  if (Math.abs(to - from) > 6) { const a = tOf(Math.min(from, to)), b = tOf(Math.max(from, to)); viewA = a; viewB = Math.max(a + 1, b); drawLanes(); drawOcc(); }
+  else { setT(tOf(from)); const h = laneAt(e); const row = R.lod.rows[h.row]; if (row) inspectRow(h.row); }
+});
+function inspectRow(r) {
+  const row = R.lod.rows[r], top = R.lod.levels[R.lod.levels.length - 1];
+  const mean = top.occ[r] / Math.max(1, R.m.makespan);
+  $("insp").innerHTML = `<div class="kv"><span>row</span><span>${row.name}</span><span>kind</span><span>${row.kind}${row.modelled ? "" : " (not modelled)"}</span><span>capacity</span><span>${row.capacity || "—"}</span><span>mean occupancy</span><span>${mean.toFixed(2)}</span><span>peak</span><span>${fmt(top.peak[r])}</span><span>intervals</span><span>${fmt(top.starts[r])}</span></div>`;
+}
+
+// ------------------------------------------------------------------ occupancy strip
+function drawOcc() {
+  const cv = $("occ"), gutter = 150, H = 150;
+  const { ctx, w } = fit(cv, H);
+  const pw = w - gutter - 8, X = t => gutter + (t - viewA) / (viewB - viewA) * pw;
+  const cap = R.m.stations[L3S] ? R.m.stations[L3S].capacity : 0;
+  // Scaled to the DATA, not to the capacity: a 2,016-tile L3 holding 129 tiles would draw
+  // every line flat on the axis. A capacity far above the data is stated, not drawn.
+  let peak = 0;
+  for (const [, v] of l3Steps) peak = Math.max(peak, v);
+  let ymax = Math.max(peak, nCF, 1) * 1.15;
+  const capOnScale = cap && cap <= ymax * 1.5;
+  if (capOnScale) ymax = Math.max(ymax, cap * 1.05);
+  const Y = v => H - 18 - v / ymax * (H - 30);
+  ctx.fillStyle = tok("--ink-3"); ctx.font = `11px ${tok("--font-data")}`; ctx.textBaseline = "middle";
+  ctx.fillText(`0`, gutter - 20, Y(0)); ctx.fillText(fmt(Math.round(ymax)), gutter - 40, Y(ymax));
+  ctx.fillStyle = tok("--grid"); ctx.fillRect(gutter, Y(0), pw, 1);
+  const line = (steps, color, width) => {
+    ctx.strokeStyle = color; ctx.lineWidth = width; ctx.beginPath();
+    let started = false, prev = steps[0][1];
+    for (const [t, v] of steps) {
+      if (t > viewB) break;
+      const x = X(Math.max(t, viewA));
+      if (!started) { ctx.moveTo(x, Y(v)); started = true; } else { ctx.lineTo(x, Y(prev)); ctx.lineTo(x, Y(v)); }
+      prev = v;
+    }
+    ctx.lineTo(X(viewB), Y(prev)); ctx.stroke();
+  };
+  line(cfBusySteps, tok("--ink-3"), 1.2);
+  line(l3Steps, tok("--busy"), 2);
+  if (capOnScale) { ctx.strokeStyle = tok("--crit"); ctx.setLineDash([5, 4]); ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(gutter, Y(cap)); ctx.lineTo(gutter + pw, Y(cap)); ctx.stroke(); ctx.setLineDash([]); }
+  else if (cap) { ctx.fillStyle = tok("--crit"); ctx.fillText(`capacity ${fmt(cap)}, off scale (peak ${fmt(peak)})`, gutter + 6, 10); }
+  ctx.fillStyle = tok("--ink-2"); ctx.fillText("tiles", 4, Y(ymax / 2));
+  if (T >= viewA && T <= viewB) { ctx.fillStyle = tok("--ink"); ctx.fillRect(X(T) - .5, 0, 1.5, H - 14); }
+}
+
+// ------------------------------------------------------------------ diagnostics
+function renderDiag() {
+  const m = R.m, out = [];
+  const cap = m.stations[L3S] ? m.stations[L3S].capacity : 0;
+  let peak = 0; for (const [, v] of l3Steps) peak = Math.max(peak, v);
+  if (cap && peak > cap) out.push(["crit", "L3 over", `Pooled L3 holds ${peak} tiles against a capacity of ${cap}. Run tools/trace/tflow_check.py for the first violating cycle.`]);
+  else out.push(["info", "L3 peak", `${fmt(peak)} tiles${cap ? ` of ${fmt(cap)} (${(100 * peak / cap).toFixed(0)}%)` : " (unbounded L3)"}${m.foreign_slots ? `, ${m.foreign_slots} of them held by the caller` : ""}.`]);
+  let busy = 0; for (let i = 0; i < R.co.rows; i++) busy += R.co.t1[i] - R.co.t0[i];
+  const used = new Set(); for (let i = 0; i < R.co.rows; i++) used.add(R.co.station[i]);
+  const util = nCF ? busy / (nCF * Math.max(1, m.makespan)) : 0;
+  out.push([util < 0.3 ? "warn" : "info", "compute", `${(100 * util).toFixed(1)}% utilization across ${nCF} compute tile(s); ${nCF - used.size} never computed.`]);
+  if (R.lod) {
+    const L = R.lod.levels[0], width = 2 ** L.k;
+    const moverRows = R.lod.rows.map((r, i) => [r, i]).filter(([r]) => r.kind === "mover");
+    for (const [r, i] of moverRows) {
+      let occ = 0, sat = 0, active = 0;
+      for (let b = 0; b < L.bins; b++) { occ += L.occ[i * L.bins + b]; if (L.starts[i * L.bins + b] || L.occ[i * L.bins + b]) active++; if (r.capacity && L.peak[i * L.bins + b] >= r.capacity) sat++; }
+      if (!occ) continue;
+      const u = r.capacity ? occ / (r.capacity * Math.max(1, m.makespan)) : 0;
+      out.push([sat / L.bins > 0.5 ? "warn" : "info", r.name.replace("mover:", ""), `${(100 * u).toFixed(1)}% of ${r.capacity} lane(s) in use on average; every lane busy in ${(100 * sat / L.bins).toFixed(0)}% of the run (at ${fmt(width)}-cycle resolution).`]);
+    }
+    // Movement-bound: every lane of some pool busy while most compute tiles idle.
+    const cfRows = R.lod.rows.map((r, i) => [r, i]).filter(([r]) => r.kind === "cf").map(([, i]) => i);
+    let bound = 0;
+    for (let b = 0; b < L.bins; b++) {
+      const saturated = moverRows.some(([r, i]) => r.capacity && L.peak[i * L.bins + b] >= r.capacity);
+      let cfBusy = 0; for (const i of cfRows) cfBusy += L.occ[i * L.bins + b] / width;
+      if (saturated && cfBusy < 0.5 * Math.max(1, cfRows.length)) bound++;
+    }
+    out.push([bound / L.bins > 0.25 ? "warn" : "info", "movement-bound", `${(100 * bound / L.bins).toFixed(0)}% of the run has a mover pool saturated while fewer than half the compute tiles compute.`]);
+  }
+  out.push(["info", "invariants", "Not checked here: run python3 tools/trace/tflow_check.py on this bundle (TF1–TF9)."]);
+  $("diag").innerHTML = out.map(([sev, label, text]) => `<li><span class="sev ${sev}">${label}</span><span>${text}</span></li>`).join("");
+}
+
+addEventListener("resize", () => { if (R) drawAll(); });
+matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => { if (R) drawAll(); });
+
+// An embedded bundle (pack.py) loads itself.
+if (window.TFLOW_EMBED) {
+  const E = window.TFLOW_EMBED, files = { "manifest.json": E.manifest, "lod.json": E.lod };
+  for (const [name, data] of Object.entries(E.bins)) files[name] = b64(data);
+  if (E.floorplan) pendingFloorplan = E.floorplan;
+  loadFrom(files);
+}
+})();
+</script>
+</body>
+</html>

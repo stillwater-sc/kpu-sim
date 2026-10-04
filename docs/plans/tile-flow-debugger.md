@@ -513,6 +513,18 @@ residency.
 
 4. **Viewer, Step 1.** In `tools/visualization/tileflow/index.html`, plus modules, build views
    1a/1b/1c and the diagnostics. Add a `kpu-run --tflow <dir>` flag.
+
+   **Done (2026-10-04).** `tools/visualization/tileflow/index.html` is one static file with no
+   build step and no server. It draws the floorplan at the cursor, swimlanes from the pyramid
+   (the finest level that fits the pixels, drag to zoom), the exact pooled-L3 occupancy against
+   capacity, and diagnostics: L3 peak, compute utilization, per-pool lane use, and
+   movement-bound windows. `pack.py` embeds a bundle and a floorplan into one shareable HTML
+   file. A smoke test packs a real bundle and syntax-checks the script. The `kpu-run --tflow`
+   flag landed in step 2. Following §3.6, L3 and the movers are drawn as **pooled** fills
+   across every block of their kind and labelled so, and blocks with no events at the level
+   (CPU, ports, L2, L1) are hatched. The viewer does not re-check invariants; it points at
+   `tflow_check.py`.
+
 5. **Cause edges and lineage, Step 2.** Add the #286 causality plumbing and `CauseKind`, then
    views 2a/2b.
 6. **L3 slot binding.** This is a deliberate executor model change, with its own design note:

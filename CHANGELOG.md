@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The tile-flow viewer (#286 step 4).** `tools/visualization/tileflow/index.html`: one static HTML
+  file, no build and no server, that loads a `.tflow` bundle and the deployment's floorplan and
+  shows the run on the physical floorplan at a cursor, as station swimlanes drawn from the
+  level-of-detail pyramid (drag to zoom), as exact pooled-L3 occupancy against capacity, and as
+  diagnostics (L3 peak, compute utilization, lane use per mover pool, movement-bound windows).
+  `pack.py` embeds a run in one shareable page. At L-T1 it draws L3 and the movers as pooled
+  fills and hatches what the level does not model, rather than inventing per-tile values.
 - **The KPU-T4 reference SKU** (`tests/program/deploy/kpu_t4.json`, `kpu-architecture.md`
   §5.2.0). The T64 has too many resources to evaluate a schedule by eye, so the T4 is the SKU
   the tile-flow debugger is tested and demonstrated on. It is a 2×2 checkerboard:
