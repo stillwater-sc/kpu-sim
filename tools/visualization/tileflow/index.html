@@ -67,6 +67,7 @@ h2 { font-size: 13px; margin: 0; color: var(--ink-2); font-weight: 600; }
 button, input[type=file] { font: 13px var(--font-ui); }
 button { background: var(--panel); color: var(--ink); border: 1px solid var(--line); border-radius: 5px; padding: 4px 10px; cursor: pointer; }
 button:hover { border-color: var(--ink-3); }
+button:disabled { opacity: .45; cursor: default; }
 input[type=range] { flex: 1 1 300px; min-width: 0; }
 .clock { font: 13px var(--font-data); min-width: 22ch; }
 canvas { display: block; width: 100%; }
@@ -107,7 +108,9 @@ code { font: 12px var(--font-data); }
       <button id="play" type="button">Play</button>
       <input id="scrub" type="range" min="0" max="1" value="0" aria-label="Cycle">
       <span class="clock" id="clock"></span>
-      <button id="resetZoom" type="button">Whole run</button>
+      <button id="zoomOut" type="button" title="Zoom out 2x (key: -)">Zoom out</button>
+      <button id="zoomBack" type="button" title="Back to the previous view (key: Backspace)">Back</button>
+      <button id="resetZoom" type="button" title="Show the whole run (key: 0)">Whole run</button>
       <span class="note" id="zoomNote"></span>
     </div>
 
@@ -126,7 +129,7 @@ code { font: 12px var(--font-data); }
     </div>
 
     <div class="panel">
-      <h2>Station swimlanes: occupancy ÷ capacity per time bin (drag to zoom, click to set the cursor)</h2>
+      <h2>Station swimlanes: occupancy ÷ capacity per time bin (drag or wheel to zoom in, wheel or "Zoom out" to zoom out, click to set the cursor)</h2>
       <canvas id="lanes" tabindex="0"></canvas>
       <div class="legend"><span><span class="sw" style="background:var(--seq-lo)"></span>empty</span><span><span class="sw" style="background:var(--seq-hi)"></span>full</span><span><span class="sw" style="background:var(--crit)"></span>over capacity (a bug: see tflow_check TF1)</span><span><span class="sw hatch"></span>not modelled at this level</span><span id="levelNote"></span></div>
     </div>
@@ -302,7 +305,7 @@ function start() {
   ].map(([k, v]) => `<span class="chip">${k} <b>${v}</b></span>`).join("") +
     (m.unmodelled && m.unmodelled.length ? `<span class="chip warn">not modelled <b>${m.unmodelled.join(", ")}</b></span>` : "");
   $("honesty").textContent = `At ${m.level}, L3 is one pooled capacity and moves are bound to lanes of a mover pool, not to places: the floorplan draws L3 and the movers as pooled fills across every block of their kind, never as per-tile values this record does not hold. Invariants are checked by tools/trace/tflow_check.py, not here.`;
-  viewA = 0; viewB = Math.max(1, m.makespan);
+  viewA = 0; viewB = Math.max(1, m.makespan); zoomHistory.length = 0;
   const sc = $("scrub"); sc.max = m.makespan; sc.value = 0;
   T = Math.floor(m.makespan * 0.4);
   drawAll();
@@ -326,7 +329,29 @@ $("play").addEventListener("click", () => {
   };
   if (playing) requestAnimationFrame(tick);
 });
-$("resetZoom").addEventListener("click", () => { viewA = 0; viewB = R.m.makespan; drawLanes(); drawOcc(); });
+// ---- zoom: one function changes the view, and every change is undoable with Back.
+const zoomHistory = [];
+function setView(a, b, remember = true) {
+  const M = R.m.makespan, span = Math.min(M, Math.max(1, b - a));
+  a = Math.max(0, Math.min(a, M - span));
+  if (remember && (a !== viewA || a + span !== viewB)) zoomHistory.push([viewA, viewB]);
+  viewA = a; viewB = a + span;
+  drawLanes(); drawOcc();
+}
+function zoomAround(t, factor) {            // factor > 1 zooms out, < 1 zooms in
+  const span = (viewB - viewA) * factor, f = (t - viewA) / (viewB - viewA);
+  setView(t - span * f, t - span * f + span);
+}
+$("resetZoom").addEventListener("click", () => setView(0, R.m.makespan));
+$("zoomOut").addEventListener("click", () => zoomAround((viewA + viewB) / 2, 2));
+$("zoomBack").addEventListener("click", () => { const v = zoomHistory.pop(); if (v) setView(v[0], v[1], false); });
+addEventListener("keydown", e => {
+  if (!R || e.target.tagName === "INPUT") return;
+  if (e.key === "-" || e.key === "_") { zoomAround((viewA + viewB) / 2, 2); e.preventDefault(); }
+  else if (e.key === "+" || e.key === "=") { zoomAround((viewA + viewB) / 2, 0.5); e.preventDefault(); }
+  else if (e.key === "Backspace") { $("zoomBack").click(); e.preventDefault(); }
+  else if (e.key === "0") { setView(0, R.m.makespan); e.preventDefault(); }
+});
 
 function fit(cv, h) {
   const w = cv.parentElement.clientWidth - 24, dpr = window.devicePixelRatio || 1;
@@ -488,7 +513,9 @@ function drawLanes() {
   }
   laneGeom = { gutter, pw, rh, lv, width, X, dragTo: laneGeom ? laneGeom.dragTo : undefined };
   $("levelNote").textContent = `bin = 2^${lv.k} = ${fmt(width)} cycles`;
-  $("zoomNote").textContent = viewA > 0 || viewB < R.m.makespan ? `view ${fmt(Math.round(viewA))}–${fmt(Math.round(viewB))}` : "";
+  const zoomed = viewA > 0 || viewB < R.m.makespan;
+  $("zoomNote").textContent = zoomed ? `view ${fmt(Math.round(viewA))}–${fmt(Math.round(viewB))} (${(R.m.makespan / (viewB - viewA)).toFixed(1)}x)` : "";
+  $("zoomOut").disabled = !zoomed; $("resetZoom").disabled = !zoomed; $("zoomBack").disabled = !zoomHistory.length;
 }
 function laneAt(e) {
   const r = $("lanes").getBoundingClientRect(), x = e.clientX - r.left, y = e.clientY - r.top;
@@ -509,12 +536,20 @@ $("lanes").addEventListener("mousemove", e => {
   showTip(e, `${row.name}<br>cycles ${fmt(b * width)}–${fmt((b + 1) * width)}<br>mean ${(lv.occ[i] / width).toFixed(2)}${row.capacity ? " of " + fmt(row.capacity) : ""} · peak ${fmt(lv.peak[i])}${row.capacity && lv.peak[i] > row.capacity ? " OVER CAPACITY" : ""}<br>${fmt(lv.starts[i])} started`);
 });
 $("lanes").addEventListener("mouseleave", hideTip);
+// The wheel zooms around the pointer: down/away from you zooms out, up/toward you zooms in.
+$("lanes").addEventListener("wheel", e => {
+  if (!laneGeom) return;
+  const h = laneAt(e);
+  if (h.t < viewA || h.t > viewB) return;
+  e.preventDefault();
+  zoomAround(h.t, e.deltaY > 0 ? 1.25 : 0.8);
+}, { passive: false });
 window.addEventListener("mouseup", e => {
   if (dragFrom === null || !laneGeom) return;
   const to = laneGeom.dragTo, from = dragFrom; dragFrom = null; laneGeom.dragTo = undefined;
   const { gutter, pw } = laneGeom;
   const tOf = x => viewA + (Math.max(gutter, Math.min(gutter + pw, x)) - gutter) / pw * (viewB - viewA);
-  if (Math.abs(to - from) > 6) { const a = tOf(Math.min(from, to)), b = tOf(Math.max(from, to)); viewA = a; viewB = Math.max(a + 1, b); drawLanes(); drawOcc(); }
+  if (Math.abs(to - from) > 6) { const a = tOf(Math.min(from, to)), b = tOf(Math.max(from, to)); setView(a, Math.max(a + 1, b)); }
   else { setT(tOf(from)); const h = laneAt(e); const row = R.lod.rows[h.row]; if (row) inspectRow(h.row); }
 });
 function inspectRow(r) {

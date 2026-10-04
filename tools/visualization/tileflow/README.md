@@ -17,6 +17,11 @@ python3 tools/visualization/tileflow/pack.py run.tflow --floorplan t64_floorplan
 Open `run.html` in a browser. It needs no server and no other file. Alternatively, open
 `index.html` and choose the bundle folder (and floorplan) with the file pickers.
 
+**Zoom (swimlanes and the occupancy strip share one time window):** drag across the swimlanes
+or scroll the wheel over them to zoom in around the pointer; scroll the other way, press
+**Zoom out** (or `-`) to double the window, **Back** (or Backspace) to return to the previous
+view, and **Whole run** (or `0`) to see everything. Click to move the cursor.
+
 At L-T1 the viewer draws L3 and the movers as pooled fills, because the record holds a pool
 occupancy, not a per-tile one. L2 and L1 are hatched as not modelled. It does not check
 invariants: that is `tflow_check.py`'s job.
