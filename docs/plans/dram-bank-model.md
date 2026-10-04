@@ -80,8 +80,9 @@ never a bank count.
     which changes the next window's conflicts.
 
 So we model it a priori as a **bound and an expectation**, and we measure the actual cost at
-runtime. The difference between the two is itself a diagnostic: it is the part caused by
-refresh, interference and feedback.
+runtime. The difference between the two is itself a diagnostic, an unmodelled residual (§3.5).
+Once the deterministic costs the bound omits are added back (startup and CAS latency, ACT-rate
+limits, turnaround), what remains is the part caused by refresh, interference and feedback.
 
 ### 1.4 What the simulator cannot do today
 
@@ -202,8 +203,9 @@ required: without it there is no top of memory and no row field.
 
 **The fold contract.** A fold `{into, from, bits, from_lsb}` XORs bits
 `[from_lsb, from_lsb + bits)` of field `from` into bits `[0, bits)` of field `into`, bit i onto
-bit i. `bits` may not exceed `into`'s width or run past `from`'s. A field that one fold reads is
-never written by another, so decode and encode stay inverses.
+bit i. `bits` may not exceed `into`'s width or run past `from`'s. A fold never reads its own
+destination (`into` differs from `from`), and a field that one fold reads is never written by
+another, so decode and encode stay inverses.
 
 **The T64 row->bank fold** is 4 row bits onto the 4 bank-identity bits. `ba` and `bg` are 2 bits
 each, so the fold is written as two folds:
