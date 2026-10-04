@@ -7,7 +7,17 @@
   "l3":      { "tiles": 32, "banks": 4, "capacity_tiles": 2016 },
   "l2":      { "banks_per_tile": 4 },
   "l1":      { "vectors": 2 },
-  "memory":  { "controllers": 4 },
+  "memory":  {
+    "controllers": 4,
+    "dram": {
+      "technology": "lpddr5x", "channels": 2, "channel_width_bits": 16, "ranks": 1,
+      "bank_groups": 4, "banks_per_group": 4, "page_bytes": 2048, "burst_bytes": 64,
+      "data_rate_mtps": 8533, "capacity_bytes": 17179869184,
+      "map": "co:ch:rk:bg:ba:mc:ro",
+      "xor_folds": [ { "into": "ba", "from": "ro", "bits": 2 },
+                     { "into": "bg", "from": "ro", "bits": 2, "from_lsb": 2 } ]
+    }
+  },
   "cpu":     { "harts": 4 },
   "movers":  { "block_movers": 112, "streamers": 32 }
 }

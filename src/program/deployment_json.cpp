@@ -57,7 +57,18 @@ const std::set<std::string>& array_keys() {
     return k;
 }
 const std::set<std::string>& memory_keys() {
-    static const std::set<std::string> k = {"controllers"};
+    static const std::set<std::string> k = {"controllers", "dram"};
+    return k;
+}
+const std::set<std::string>& dram_keys() {
+    static const std::set<std::string> k = {
+        "technology",  "channels",   "channel_width_bits", "ranks",
+        "bank_groups", "banks_per_group", "page_bytes",    "burst_bytes",
+        "data_rate_mtps", "capacity_bytes", "map",         "xor_folds"};
+    return k;
+}
+const std::set<std::string>& xor_fold_keys() {
+    static const std::set<std::string> k = {"into", "from", "bits", "from_lsb"};
     return k;
 }
 const std::set<std::string>& cpu_keys() {
@@ -124,6 +135,25 @@ std::string read_string(const json& obj, const char* key, const std::string& fal
     if (!v.is_string())
         throw SpecError("deployment: " + where + "." + key + " must be a string");
     return v.get<std::string>();
+}
+
+// A 64-bit count. Capacities pass 4 GiB, so read_dim's 32-bit range is not enough; the
+// representability limit is 2^53, past which a JSON number is no longer an exact integer for
+// every reader (the same bound the tile-flow record keeps).
+std::uint64_t read_u64(const json& obj, const char* key, std::uint64_t fallback,
+                       const std::string& where) {
+    if (!obj.contains(key)) return fallback;
+    const json& v = obj.at(key);
+    if (v.is_number_unsigned()) {
+        const std::uint64_t raw = v.get<std::uint64_t>();
+        if (raw > (std::uint64_t{1} << 53))
+            throw SpecError("deployment: " + where + "." + key + " is out of range");
+        return raw;
+    }
+    if (v.is_number_integer())
+        throw SpecError("deployment: " + where + "." + key + " must not be negative (got " +
+                        std::to_string(v.get<long long>()) + ")");
+    throw SpecError("deployment: " + where + "." + key + " must be an integer");
 }
 
 std::optional<Dim> read_optional_dim(const json& obj, const char* key,
@@ -200,6 +230,45 @@ DeviceSpecification read_device(const json& obj, const std::string& where) {
         const std::string w = where + ".memory";
         reject_unknown(s, memory_keys(), w);
         d.memory.controllers = read_optional_dim(s, "controllers", w);
+        if (s.contains("dram")) {
+            const json& r = s.at("dram");
+            const std::string wd = w + ".dram";
+            reject_unknown(r, dram_keys(), wd);
+            DeviceSpecification::Memory::Dram m;
+            m.technology = read_string(r, "technology", m.technology, wd);
+            m.channels = read_dim(r, "channels", m.channels, wd);
+            m.channel_width_bits = read_dim(r, "channel_width_bits", m.channel_width_bits, wd);
+            m.ranks = read_dim(r, "ranks", m.ranks, wd);
+            m.bank_groups = read_dim(r, "bank_groups", m.bank_groups, wd);
+            m.banks_per_group = read_dim(r, "banks_per_group", m.banks_per_group, wd);
+            m.page_bytes = read_dim(r, "page_bytes", m.page_bytes, wd);
+            m.burst_bytes = read_dim(r, "burst_bytes", m.burst_bytes, wd);
+            m.data_rate_mtps = read_dim(r, "data_rate_mtps", m.data_rate_mtps, wd);
+            // Required: without it there is no top of memory and no row field.
+            if (!r.contains("capacity_bytes"))
+                throw SpecError("deployment: " + wd + ".capacity_bytes is required");
+            m.capacity_bytes = read_u64(r, "capacity_bytes", 0, wd);
+            m.map = read_string(r, "map", m.map, wd);
+            if (r.contains("xor_folds")) {
+                const json& folds = r.at("xor_folds");
+                if (!folds.is_array())
+                    throw SpecError("deployment: " + wd + ".xor_folds must be an array");
+                for (std::size_t i = 0; i < folds.size(); ++i) {
+                    const std::string wf = wd + ".xor_folds[" + std::to_string(i) + "]";
+                    reject_unknown(folds[i], xor_fold_keys(), wf);
+                    DeviceSpecification::Memory::XorFold f;
+                    if (!folds[i].contains("into") || !folds[i].contains("from") ||
+                        !folds[i].contains("bits"))
+                        throw SpecError("deployment: " + wf + " needs into, from and bits");
+                    f.into = read_string(folds[i], "into", "", wf);
+                    f.from = read_string(folds[i], "from", "", wf);
+                    f.bits = read_dim(folds[i], "bits", 0, wf);
+                    f.from_lsb = read_dim(folds[i], "from_lsb", 0, wf);
+                    m.xor_folds.push_back(f);
+                }
+            }
+            d.memory.dram = m;
+        }
     }
     if (obj.contains("cpu")) {
         const json& s = obj.at("cpu");
@@ -262,7 +331,34 @@ json write_device(const DeviceSpecification& d) {
         if (d.array.cols) a["cols"] = *d.array.cols;
         o["array"] = a;
     }
-    if (d.memory.controllers) o["memory"] = json{{"controllers", *d.memory.controllers}};
+    if (d.memory.controllers || d.memory.dram) {
+        json mem = json::object();
+        if (d.memory.controllers) mem["controllers"] = *d.memory.controllers;
+        if (d.memory.dram) {
+            const auto& m = *d.memory.dram;
+            json r = json::object();
+            r["technology"] = m.technology;
+            r["channels"] = m.channels;
+            r["channel_width_bits"] = m.channel_width_bits;
+            r["ranks"] = m.ranks;
+            r["bank_groups"] = m.bank_groups;
+            r["banks_per_group"] = m.banks_per_group;
+            r["page_bytes"] = m.page_bytes;
+            r["burst_bytes"] = m.burst_bytes;
+            r["data_rate_mtps"] = m.data_rate_mtps;
+            r["capacity_bytes"] = m.capacity_bytes;
+            r["map"] = m.map;
+            if (!m.xor_folds.empty()) {
+                json folds = json::array();
+                for (const auto& f : m.xor_folds)
+                    folds.push_back(json{{"into", f.into}, {"from", f.from},
+                                         {"bits", f.bits}, {"from_lsb", f.from_lsb}});
+                r["xor_folds"] = folds;
+            }
+            mem["dram"] = r;
+        }
+        o["memory"] = mem;
+    }
     if (d.cpu.harts) o["cpu"] = json{{"harts", *d.cpu.harts}};
 
     json an = json::object();

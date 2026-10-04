@@ -39,7 +39,10 @@
 #include <sw/kpu/program/characterize/device_model.hpp>
 #include <sw/kpu/program/platform/digest.hpp>
 
+#include <algorithm>
 #include <cmath>
+#include <cstdint>
+#include <map>
 #include <optional>
 #include <string>
 #include <vector>
@@ -102,7 +105,42 @@ struct DeviceSpecification {
     //   memory.controllers  how many memory controllers; dma.engines are split evenly
     //   cpu.harts           the attached RV64 orchestrator's harts (ADR 0003)
     struct Array { std::optional<Dim> rows, cols; } array;
-    struct Memory { std::optional<Dim> controllers; } memory;
+    //
+    //   memory.dram         the DRAM behind the controllers and how an address lands in it
+    //                       (docs/plans/dram-bank-model.md §3.1). Absent = no geometry
+    //                       declared, and the controller model keeps its built-in mapping.
+    struct Memory {
+        std::optional<Dim> controllers;
+        // One XOR fold of the address map: the low `bits` bits of field `into` are XORed
+        // with bits [from_lsb, from_lsb + bits) of field `from`. `from` is never itself
+        // folded into, so decode and encode stay inverses (dram_problem() enforces it).
+        struct XorFold {
+            std::string into, from;
+            Dim bits = 0;
+            Dim from_lsb = 0;
+        };
+        // Every count is a power of two, because each one is a bit field of the address.
+        // The map lists the fields low -> high ABOVE the burst offset:
+        //   co  burst within the page (page_bytes / burst_bytes)    ch  channel per controller
+        //   rk  rank                  bg  bank group                ba  bank within its group
+        //   mc  memory controller (memory.controllers, else 1)      ro  row
+        // `ro` takes whatever capacity_bytes leaves, so the map covers the capacity exactly.
+        struct Dram {
+            std::string technology = "lpddr5x";
+            Dim channels = 2;                   // per controller: x16 channels, so 2 = 32-bit
+            Dim channel_width_bits = 16;
+            Dim ranks = 1;
+            Dim bank_groups = 4;
+            Dim banks_per_group = 4;
+            Dim page_bytes = 2048;              // row-buffer size, per channel
+            Dim burst_bytes = 64;
+            Dim data_rate_mtps = 8533;
+            std::uint64_t capacity_bytes = 0;   // top of memory; required, a power of two
+            std::string map = "co:ch:rk:bg:ba:mc:ro";
+            std::vector<XorFold> xor_folds;
+        };
+        std::optional<Dram> dram;
+    } memory;
     struct Cpu { std::optional<Dim> harts; } cpu;
 
     // Analytical-harness coefficients. The executors do not use these; the
@@ -173,6 +211,122 @@ inline bool finite_non_negative(double v) { return std::isfinite(v) && v >= 0.0;
 
 inline constexpr const char* kFinitePos = " must be finite and positive";
 inline constexpr const char* kFiniteNonNeg = " must be finite and non-negative";
+
+// ----------------------------------------------------------------------------
+// DRAM geometry (docs/plans/dram-bank-model.md §3.1)
+// ----------------------------------------------------------------------------
+// The address-map field names, in no particular order; a map lists each exactly once.
+inline const std::vector<std::string>& dram_map_fields() {
+    static const std::vector<std::string> f = {"co", "ch", "rk", "bg", "ba", "mc", "ro"};
+    return f;
+}
+
+inline bool known_dram_technology(const std::string& t) {
+    return t == "lpddr5" || t == "lpddr5x" || t == "ddr5" || t == "hbm2" || t == "hbm3" ||
+           t == "gddr6" || t == "gddr7";
+}
+
+inline bool power_of_two(std::uint64_t v) { return v != 0 && (v & (v - 1)) == 0; }
+
+inline unsigned log2_exact(std::uint64_t v) {
+    unsigned n = 0;
+    while (v > 1) { v >>= 1; ++n; }
+    return n;
+}
+
+// The map split into its fields, or empty when a field is unknown, repeated or missing.
+inline std::vector<std::string> split_dram_map(const std::string& map) {
+    std::vector<std::string> out;
+    std::size_t at = 0;
+    while (at <= map.size()) {
+        const std::size_t colon = std::min(map.find(':', at), map.size());
+        out.push_back(map.substr(at, colon - at));
+        at = colon + 1;
+    }
+    const auto& known = dram_map_fields();
+    if (out.size() != known.size()) return {};
+    for (const std::string& f : known)
+        if (std::count(out.begin(), out.end(), f) != 1) return {};
+    return out;
+}
+
+// Bit width of each map field, keyed by name, for a device whose dram is declared and whose
+// counts are powers of two. `ro` may come out negative when the capacity is too small for the
+// rest of the geometry, which dram_problem() refuses.
+inline std::map<std::string, int> dram_field_bits(const DeviceSpecification& d) {
+    const auto& m = *d.memory.dram;
+    std::map<std::string, int> w;
+    w["co"] = static_cast<int>(log2_exact(m.page_bytes / m.burst_bytes));
+    w["ch"] = static_cast<int>(log2_exact(m.channels));
+    w["rk"] = static_cast<int>(log2_exact(m.ranks));
+    w["bg"] = static_cast<int>(log2_exact(m.bank_groups));
+    w["ba"] = static_cast<int>(log2_exact(m.banks_per_group));
+    w["mc"] = static_cast<int>(log2_exact(d.memory.controllers.value_or(1)));
+    int below = static_cast<int>(log2_exact(m.burst_bytes));
+    for (const auto& [k, v] : w) below += v;
+    w["ro"] = static_cast<int>(log2_exact(m.capacity_bytes)) - below;
+    return w;
+}
+
+// Empty when the device declares no DRAM or a consistent one; otherwise the first problem.
+inline std::string dram_problem(const DeviceSpecification& d) {
+    if (!d.memory.dram) return {};
+    const auto& m = *d.memory.dram;
+    const std::string w = "memory.dram";
+    if (!known_dram_technology(m.technology))
+        return w + ".technology '" + m.technology +
+               "' is not one of lpddr5 | lpddr5x | ddr5 | hbm2 | hbm3 | gddr6 | gddr7";
+    if (m.channel_width_bits == 0) return w + ".channel_width_bits must be non-zero";
+    if (m.data_rate_mtps == 0) return w + ".data_rate_mtps must be non-zero";
+    const std::pair<const char*, std::uint64_t> counts[] = {
+        {"channels", m.channels},       {"ranks", m.ranks},
+        {"bank_groups", m.bank_groups}, {"banks_per_group", m.banks_per_group},
+        {"page_bytes", m.page_bytes},   {"burst_bytes", m.burst_bytes},
+        {"capacity_bytes", m.capacity_bytes}};
+    for (const auto& [name, v] : counts)
+        if (!power_of_two(v))
+            return w + "." + name + " (" + std::to_string(v) +
+                   ") must be a non-zero power of two, because it is a bit field of the address";
+    if (d.memory.controllers && !power_of_two(*d.memory.controllers))
+        return "memory.controllers (" + std::to_string(*d.memory.controllers) +
+               ") must be a power of two when memory.dram is declared, because the map "
+               "interleaves controllers by address bits";
+    if (m.page_bytes < m.burst_bytes)
+        return w + ".page_bytes (" + std::to_string(m.page_bytes) +
+               ") is smaller than a burst (" + std::to_string(m.burst_bytes) + ")";
+    if (split_dram_map(m.map).empty())
+        return w + ".map '" + m.map + "' must list each of co, ch, rk, bg, ba, mc, ro exactly "
+               "once, separated by ':'";
+    const auto bits = dram_field_bits(d);
+    if (bits.at("ro") < 0)
+        return w + ".capacity_bytes (" + std::to_string(m.capacity_bytes) +
+               ") is smaller than one row across every controller, channel, rank and bank";
+    if (d.dma.burst_bytes && *d.dma.burst_bytes % m.burst_bytes != 0)
+        return "dma.burst_bytes (" + std::to_string(*d.dma.burst_bytes) +
+               ") must be a whole number of DRAM bursts (" + std::to_string(m.burst_bytes) + ")";
+    for (std::size_t i = 0; i < m.xor_folds.size(); ++i) {
+        const auto& f = m.xor_folds[i];
+        const std::string at = w + ".xor_folds[" + std::to_string(i) + "]";
+        if (!bits.count(f.into) || !bits.count(f.from))
+            return at + " names an unknown field (into '" + f.into + "', from '" + f.from + "')";
+        if (f.into == f.from) return at + " folds a field into itself";
+        if (f.bits == 0) return at + ".bits must be non-zero";
+        if (static_cast<int>(f.bits) > bits.at(f.into))
+            return at + " folds " + std::to_string(f.bits) + " bits into '" + f.into +
+                   "', which has " + std::to_string(bits.at(f.into));
+        if (static_cast<int>(f.from_lsb + f.bits) > bits.at(f.from))
+            return at + " reads bits [" + std::to_string(f.from_lsb) + ", " +
+                   std::to_string(f.from_lsb + f.bits) + ") of '" + f.from + "', which has " +
+                   std::to_string(bits.at(f.from));
+        // A field that is both folded into and folded from would make decode depend on the
+        // order of the folds, and encode would no longer invert it.
+        for (const auto& g : m.xor_folds)
+            if (g.into == f.from)
+                return at + " reads '" + f.from + "', which another fold writes; a field is "
+                       "folded into or from, never both";
+    }
+    return {};
+}
 
 inline std::string DeploymentSpec::validate() const {
     if (devices.empty()) return "a deployment needs at least one device";
@@ -270,6 +424,7 @@ inline std::string DeploymentSpec::validate() const {
                        "), because each DMA engine belongs to one memory controller";
         }
         if (d.cpu.harts && *d.cpu.harts == 0) return where + ": cpu.harts declared as zero";
+        if (std::string why = dram_problem(d); !why.empty()) return where + ": " + why;
     }
     return {};
 }
@@ -311,7 +466,7 @@ inline DeviceDescriptor DeploymentSpec::device_view(Dim i) const {
 // ----------------------------------------------------------------------------
 // Named as data so the report and the "does this level model it" table cannot drift
 // apart — a table keyed on a string typed twice is a table that disagrees with itself.
-enum class SpecField { L3Tiles, L3Banks, L2BanksPerTile, L1Vectors, DmaBurst, L3Capacity };
+enum class SpecField { L3Tiles, L3Banks, L2BanksPerTile, L1Vectors, DmaBurst, L3Capacity, Dram };
 
 inline const char* to_string(SpecField f) {
     switch (f) {
@@ -321,6 +476,7 @@ inline const char* to_string(SpecField f) {
         case SpecField::L1Vectors:      return "l1.vectors";
         case SpecField::DmaBurst:       return "dma.burst_bytes";
         case SpecField::L3Capacity:     return "l3.capacity_tiles";
+        case SpecField::Dram:           return "memory.dram";
     }
     return "?";
 }
@@ -336,6 +492,7 @@ inline bool declared(const DeviceSpecification& s, SpecField f) {
         case SpecField::L1Vectors:      return s.l1.vectors.has_value();
         case SpecField::DmaBurst:       return s.dma.burst_bytes.has_value();
         case SpecField::L3Capacity:     return s.l3.capacity_tiles != 0;
+        case SpecField::Dram:           return s.memory.dram.has_value();
     }
     return false;
 }
@@ -348,6 +505,14 @@ inline std::string declared_value(const DeviceSpecification& s, SpecField f) {
         case SpecField::L1Vectors:      return std::to_string(s.l1.vectors.value_or(0));
         case SpecField::DmaBurst:       return std::to_string(s.dma.burst_bytes.value_or(0));
         case SpecField::L3Capacity:     return std::to_string(s.l3.capacity_tiles);
+        case SpecField::Dram: {
+            if (!s.memory.dram) return "0";
+            const auto& m = *s.memory.dram;
+            return m.technology + ", " + std::to_string(s.memory.controllers.value_or(1)) +
+                   " mc x " + std::to_string(m.channels) + " ch x " +
+                   std::to_string(m.bank_groups * m.banks_per_group) + " banks, " +
+                   std::to_string(m.capacity_bytes) + " B, map " + m.map;
+        }
     }
     return "?";
 }
@@ -355,7 +520,7 @@ inline std::string declared_value(const DeviceSpecification& s, SpecField f) {
 inline const std::vector<SpecField>& all_spec_fields() {
     static const std::vector<SpecField> f = {
         SpecField::L3Tiles, SpecField::L3Banks, SpecField::L2BanksPerTile,
-        SpecField::L1Vectors, SpecField::DmaBurst, SpecField::L3Capacity};
+        SpecField::L1Vectors, SpecField::DmaBurst, SpecField::L3Capacity, SpecField::Dram};
     return f;
 }
 

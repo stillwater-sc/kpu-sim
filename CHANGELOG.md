@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **DRAM geometry and one address map (docs/plans/dram-bank-model.md step 1).** The deployment
+  spec gains an optional `memory.dram`: technology, channels per controller, width, ranks, bank
+  groups, banks, page and burst size, data rate, a required power-of-two `capacity_bytes`, the
+  address map as a field order (`co:ch:rk:bg:ba:mc:ro`) and XOR folds. Every count is a bit
+  field, so it is a power of two; a fold never reads a field another fold writes, so the map
+  stays a bijection. `platform/dram_address_map.hpp` derives `DramAddressMap`, which decodes an
+  address to controller, channel, rank, bank group, bank, row and burst, and encodes back. The
+  controller, the static conflict model, the record and the viewer will all decode through it.
+  The KPU-T64 declares 16 GiB of LPDDR5X over 4 controllers x 2 x16 channels, with a 4-bit
+  row->bank fold; sixteen consecutive rows that a linear map stacks on one bank land in sixteen.
+  No level models the geometry yet, so every level reports `memory.dram` as unmodelled.
 - **The tile-flow record and `.tflow` bundle (#286 step 2).** The L-T1 executor now publishes
   its L3 residency series -- one interval per tile, from the cycle its slot was taken to the
   cycle its last user returned the credit, seeded and still-held tiles flagged -- instead of

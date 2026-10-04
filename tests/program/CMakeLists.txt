@@ -80,6 +80,16 @@ set_tests_properties(test_tile_flow_record PROPERTIES
     LABELS "program;record;tileflow;v0.9"
 )
 
+# The DRAM geometry and its address map (docs/plans/dram-bank-model.md step 1)
+kpu_add_component_test(test_dram_address_map "program"
+    test_dram_address_map.cpp
+)
+
+set_tests_properties(test_dram_address_map PROPERTIES
+    LABELS "program;platform;dram;v0.9"
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+)
+
 # The physical shape: array layout, folded-torus NoC, floorplan (#286 step 1)
 kpu_add_component_test(test_floorplan "program"
     test_floorplan.cpp
