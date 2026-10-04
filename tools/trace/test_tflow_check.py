@@ -118,6 +118,54 @@ class TflowCheckSelfTest(unittest.TestCase):
             self.b.set("transit", col, 1, self.b.get("transit", col, 0))
         self.assertFails("TF7")
 
+    def test_tf7_hops_disjoint_but_out_of_order(self):
+        # Swap the stations of two consecutive hops of one tile: the times stay disjoint, but the
+        # chain no longer connects (and each hop now moves between the wrong kinds).
+        tr = self.b.manifest["tables"]["transit"]["rows"]
+        chains = {}
+        for i in range(tr):
+            key = (self.b.get("transit", "op", i), self.b.get("transit", "tile", i))
+            chains.setdefault(key, []).append((self.b.get("transit", "t0", i), i))
+        hops = next(sorted(h) for h in chains.values() if len(h) >= 3)
+        i, j = hops[1][1], hops[2][1]
+        for col in ("src", "dst", "hop"):
+            a, b = self.b.get("transit", col, i), self.b.get("transit", col, j)
+            self.b.set("transit", col, i, b)
+            self.b.set("transit", col, j, a)
+        self.assertFails("TF7")
+
+    def test_tf7_hop_between_wrong_kinds(self):
+        # A BlockMover L3 -> L2 hop relabelled as a streamer L2 -> L1 hop, stations untouched:
+        # the chain still connects and the times are unchanged, only the kinds are wrong.
+        tr = self.b.manifest["tables"]["transit"]["rows"]
+        i = next(i for i in range(tr) if self.b.get("transit", "hop", i) == 1)
+        self.b.set("transit", "hop", i, 2)
+        self.assertFails("TF7")
+
+    def test_tf9_arrival_must_land_in_l3(self):
+        # A tile held once and filled only by DMA, whose DMA now lands in L2: it never reached
+        # its L3 slot, so the slot is unfilled.
+        res = self.b.manifest["tables"]["residency"]["rows"]
+        tiles = [self.b.get("residency", "tile", i) for i in range(res)]
+        t = self.b.manifest["tables"]["op_tiles"]
+        nnz = self.b.get("op_tiles", "offset", t["rows"])
+        written = {self.b.get("op_tiles", "tile", j) for j in range(nnz)
+                   if self.b.get("op_tiles", "written", j)}
+        tr = self.b.manifest["tables"]["transit"]["rows"]
+        l2 = next(k for k, x in enumerate(self.b.manifest["stations"]) if x["kind"] == "l2")
+        for i in range(res):
+            tile = tiles[i]
+            if tiles.count(tile) != 1 or tile in written or self.b.get("residency", "flags", i) & 1:
+                continue
+            dma = [j for j in range(tr) if self.b.get("transit", "tile", j) == tile
+                   and self.b.get("transit", "hop", j) in (0, 6)]
+            if dma:
+                for j in dma:
+                    self.b.set("transit", "dst", j, l2)
+                self.assertFails("TF9")
+                return
+        self.fail("no tile filled only by DMA in this bundle")
+
     def test_tf8_base_bins_shifted(self):
         # Occupancy moved between two sibling base bins: every merge and the total still hold.
         lod = json.loads((self.b.dir / "lod.json").read_text())
@@ -246,7 +294,8 @@ class TflowCheckSelfTest(unittest.TestCase):
                      lambda m: m["rows"][0].pop("name"),
                      lambda m: m["rows"][0].pop("kind"),
                      lambda m: m["rows"][0].update(name=7),
-                     lambda m: m.update(rows={})):
+                     lambda m: m.update(rows={}),
+                     lambda m: m.update(levels=[])):
             lod = json.loads((self.b.dir / "lod.json").read_text())
             edit(lod)
             (self.b.dir / "lod.json").write_text(json.dumps(lod))
@@ -257,6 +306,17 @@ class TflowCheckSelfTest(unittest.TestCase):
     def test_malformed_manifest_rows_are_exit_2(self):
         for edit in (lambda m: m["stations"][0].pop("kind"),
                      lambda m: m["movers"][0].pop("name")):
+            self.b.manifest = json.loads((Path(BUNDLE) / "manifest.json").read_text())
+            edit(self.b.manifest)
+            self.b.save_manifest()
+            code, _ = run(self.b.dir)
+            self.assertEqual(code, 2)
+
+    def test_wrong_dtype_or_version_is_exit_2(self):
+        for edit in (lambda m: next(c for c in m["tables"]["transit"]["columns"]
+                                    if c["name"] == "src").update(dtype="f64"),
+                     lambda m: m.update(version=1),
+                     lambda m: m.update(version=3)):
             self.b.manifest = json.loads((Path(BUNDLE) / "manifest.json").read_text())
             edit(self.b.manifest)
             self.b.save_manifest()

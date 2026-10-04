@@ -25,9 +25,11 @@ Invariants:
                         touches holds an L3 slot -- the executor's own release rule ("a slot
                         is freed when every op that touches it has completed"). An early
                         release, the #279 class, violates it.
-    TF7  hop order      an op's hops do not overlap and run in chain order
+    TF7  hop order      an op's hops do not overlap; each hop moves between the station kinds
+                        its type names (a DMA in goes dram -> l3, ...); and a tile's hops for
+                        one op form a chain, each starting where the previous one ended
     TF8  pyramid        each level of lod.bin is the exact merge of the level below, and the
-                        coarsest level equals the raw totals
+                        base and coarsest levels equal the pyramid recomputed from raw events
     TF9  filled         every L3 residency is FILLED: the tile was seeded, or a DMA delivers
                         it into the slot, or an op writes it there. A slot taken by a mere
                         reader is a tile the machine claims to hold but never received -- what
@@ -48,6 +50,20 @@ from pathlib import Path
 
 MOVER_NAMES = ["dma", "block-mover", "streamer", "noc"]   # enum Mover, in order
 DTYPES = {"u8": ("B", 1), "u32": ("I", 4), "f64": ("d", 8)}
+
+# The version-2 column schema, as write_tflow() declares it. A column declared with another
+# dtype would be decoded at the wrong width and checked as garbage, or not checked at all.
+SCHEMA = {
+    "residency": {"tile": "u32", "station": "u32", "t0": "f64", "t1": "f64", "flags": "u8"},
+    "transit": {"tile": "u32", "op": "u32", "hop": "u8", "mover": "u8", "lane": "u32",
+                "t0": "f64", "t1": "f64", "src": "u32", "dst": "u32"},
+    "compute": {"op": "u32", "station": "u32", "t0": "f64", "t1": "f64"},
+    "op_tiles": {"kind": "u8", "offset": "u32", "tile": "u32", "written": "u8"},
+}
+
+# enum Hop (tile_transaction_executor.hpp), by value: the station kinds each one moves between.
+HOP_KINDS = [("dram", "l3"), ("l3", "l2"), ("l2", "l1"), ("l1", "l2"), ("l2", "l3"),
+             ("l3", "dram"), ("l3", "l3")]
 
 
 class Unreadable(Exception):
@@ -97,8 +113,15 @@ def load(path):
         m = json.loads((d / "manifest.json").read_text())
     except (OSError, ValueError) as e:
         raise Unreadable(f"manifest.json: {e}") from e
-    if m.get("format") != "kpu-tflow" or m.get("version") != 1:
-        raise Unreadable("not a version-1 kpu-tflow bundle")
+    if m.get("format") != "kpu-tflow":
+        raise Unreadable("not a kpu-tflow bundle")
+    if m.get("version") == 1:
+        # Version 1 has no op_tiles.written, so TF9 cannot tell a filled slot from a re-taken
+        # one. Reading it as "nothing writes" would report every result tile as unfilled.
+        raise Unreadable("a version-1 bundle has no op_tiles.written column; re-record it with "
+                         "this build's kpu-run --tflow")
+    if m.get("version") != 2:
+        raise Unreadable(f"version {m.get('version')!r} is not one this checker reads (2)")
     rec = {"manifest": m}
     _named(m.get("stations"), "manifest stations")
     movers = m.get("movers", [])
@@ -111,6 +134,11 @@ def load(path):
             blob = (d / t["file"]).read_bytes()
             rows = t["rows"]
             cols = {}
+            declared = {c["name"]: c["dtype"] for c in t["columns"]}
+            for col, dtype in SCHEMA[name].items():
+                if declared.get(col) != dtype:
+                    raise Unreadable(f"{name}.{col} is declared {declared.get(col)!r}, "
+                                     f"the format says {dtype}")
             for c in t["columns"]:
                 n = rows + 1 if (name == "op_tiles" and c["name"] == "offset") else rows
                 if name == "op_tiles" and c["name"] in ("tile", "written"):
@@ -132,6 +160,8 @@ def load(path):
             lblob = (d / lm["file"]).read_bytes()
             nrows = len(_named(lm["rows"], "lod rows"))
             levels = []
+            if not isinstance(lm["levels"], list) or not lm["levels"]:
+                raise Unreadable("lod has no levels")
             for lv in lm["levels"]:
                 bins = _count(lv["bins"], "a pyramid level's bin count", positive=True)
                 n = nrows * bins
@@ -309,20 +339,39 @@ def check(rec):
     # TF7 -------------------------------------------------------------------
     r.ran("TF7")
     chains = {}
+    links = {}
     for i in range(ntr):
-        chains.setdefault(tr["op"][i], []).append((tr["t0"][i], tr["t1"][i], tr["hop"][i]))
+        hop, src, dst = tr["hop"][i], tr["src"][i], tr["dst"][i]
+        if hop >= len(HOP_KINDS) or src >= len(st) or dst >= len(st):
+            r.fail("TF7", f"transit {i}: hop {hop} from station {src} to {dst} is out of range")
+            continue
+        if (st[src]["kind"], st[dst]["kind"]) != HOP_KINDS[hop]:
+            r.fail("TF7", f"transit {i}: hop {hop} should move {HOP_KINDS[hop][0]} -> "
+                          f"{HOP_KINDS[hop][1]}, not {st[src]['kind']} -> {st[dst]['kind']}")
+        chains.setdefault(tr["op"][i], []).append((tr["t0"][i], tr["t1"][i], hop))
+        links.setdefault((tr["op"][i], tr["tile"][i]), []).append((tr["t0"][i], tr["t1"][i], src, dst))
     for op, hops in chains.items():
         hops.sort()
         for (a0, a1, ah), (b0, b1, bh) in zip(hops, hops[1:]):
             if b0 < a1:
                 r.fail("TF7", f"op {op}: hop {bh} starts at {int(b0)} before hop {ah} finishes at {int(a1)}")
+    # Order, not just disjointness: DMA in, then a streamer, then a BlockMover can be disjoint
+    # in time and still impossible. A tile's hops for one op must be a connected chain.
+    for (op, tile), hops in links.items():
+        hops.sort()
+        for (_, _, _, a_dst), (b0, _, b_src, _) in zip(hops, hops[1:]):
+            if b_src != a_dst:
+                r.fail("TF7", f"op {op}: {tile_name(tile)} leaves {st[b_src]['name']} at "
+                              f"{int(b0)}, but its previous hop delivered it to {st[a_dst]['name']}")
 
     # TF9 -------------------------------------------------------------------
     r.ran("TF9")
     DMA_IN, L3_TO_L3 = 0, 6                 # enum Hop: DmaDramToL3, BlockMoverL3ToL3
     arrivals = {}
     for i in range(ntr):
-        if tr["hop"][i] in (DMA_IN, L3_TO_L3):
+        # Only a hop that really ends in L3 fills an L3 slot; TF7 reports the mislabelled ones.
+        if tr["hop"][i] in (DMA_IN, L3_TO_L3) and tr["dst"][i] < len(st) and \
+                st[tr["dst"][i]]["kind"] == "l3":
             arrivals.setdefault(tr["tile"][i], []).append(tr["t0"][i])
     writes = {}
     wr = ot["written"]

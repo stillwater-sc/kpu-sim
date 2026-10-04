@@ -199,11 +199,17 @@ TEST_CASE("the .tflow bundle round-trips, and the same run writes the same bytes
     for (std::size_t i = 0; i < rec.ops.size(); ++i) CHECK(back.ops[i].tiles == rec.ops[i].tiles);
     CHECK(peak_l3_occupancy(back) == peak_l3_occupancy(rec));
 
-    // A newer bundle is refused rather than misread.
-    std::string m = slurp(a + "/manifest.json");
-    m.replace(m.find("\"version\": 1"), 12, "\"version\": 2");
+    // A newer bundle is refused rather than misread, and so is a version-1 one: it has no
+    // `written` column, and reading it as "nothing writes" would be a wrong answer.
+    const std::string original = slurp(a + "/manifest.json");
+    std::string m = original;
+    m.replace(m.find("\"version\": 2"), 12, "\"version\": 3");
     std::ofstream(a + "/manifest.json", std::ios::binary) << m;
-    CHECK_THROWS_WITH(read_tflow(a), ContainsSubstring("version 2"));
+    CHECK_THROWS_WITH(read_tflow(a), ContainsSubstring("version 3"));
+    m = original;
+    m.replace(m.find("\"version\": 2"), 12, "\"version\": 1");
+    std::ofstream(a + "/manifest.json", std::ios::binary) << m;
+    CHECK_THROWS_WITH(read_tflow(a), ContainsSubstring("re-record"));
 }
 
 TEST_CASE("a corrupt or hostile bundle is refused, not trusted", "[program][record]") {

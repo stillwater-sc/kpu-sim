@@ -289,7 +289,9 @@ void write_tflow(const TileFlowRecord& rec, const std::string& dir) {
 
     json m = json::object();
     m["format"] = "kpu-tflow";
-    m["version"] = 1;
+    // 2: op_tiles gained `written` (#286 step 3). A version-1 bundle cannot answer "was this
+    // slot filled", so it is refused with a message, not read as "nothing writes".
+    m["version"] = 2;
     m["level"] = rec.level;
     m["device"] = rec.device;
     m["device_label"] = rec.device_label;
@@ -413,9 +415,12 @@ TileFlowRecord read_tflow(const std::string& dir) {
         throw RecordError(std::string("record: manifest is not valid JSON: ") + e.what());
     }
     if (m.value("format", "") != "kpu-tflow") throw RecordError("record: not a kpu-tflow bundle");
-    if (m.value("version", 0) != 1)
+    if (m.value("version", 0) == 1)
+        throw RecordError("record: a version-1 bundle has no op_tiles.written column; re-record "
+                          "it with this build's kpu-run --tflow");
+    if (m.value("version", 0) != 2)
         throw RecordError("record: version " + std::to_string(m.value("version", 0)) +
-                          " is not one this build reads (1)");
+                          " is not one this build reads (2)");
     TileFlowRecord rec;
     rec.level = m.at("level").get<std::string>();
     rec.device = m.at("device").get<std::string>();
