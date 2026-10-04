@@ -154,6 +154,33 @@ class TflowCheckSelfTest(unittest.TestCase):
         self._bump_every_level("starts", all_bins=False)
         self.assertFails("TF8")
 
+    def test_tf8_row_relabelled(self):
+        # The L3 row relabelled as dram AND its metrics zeroed at every level, so the pyramid
+        # is self-consistent and agrees with "a dram row has no events". Only checking the rows
+        # against the record's stations can see that the L3's occupancy has vanished.
+        path = self.b.dir / "lod.json"
+        lod = json.loads(path.read_text())
+        row = next(i for i, x in enumerate(lod["rows"]) if x["kind"] == "l3")
+        lod["rows"][row]["kind"] = "dram"
+        path.write_text(json.dumps(lod))
+        bin_path = self.b.dir / lod["file"]
+        b = bytearray(bin_path.read_bytes())
+        for lvl in lod["levels"]:
+            for k in range(lvl["bins"]):
+                at = row * lvl["bins"] + k
+                struct.pack_into("<d", b, lvl["occ"] + 8 * at, 0.0)
+                struct.pack_into("<I", b, lvl["peak"] + 4 * at, 0)
+                struct.pack_into("<I", b, lvl["starts"] + 4 * at, 0)
+        bin_path.write_bytes(bytes(b))
+        self.assertFails("TF8")
+
+    def test_tf8_row_dropped(self):
+        path = self.b.dir / "lod.json"
+        lod = json.loads(path.read_text())
+        lod["rows"].pop()
+        path.write_text(json.dumps(lod))
+        self.assertFails("TF8")
+
     def test_malformed_pyramid_is_exit_2(self):
         for edit in (lambda m: m.pop("rows"), lambda m: m["levels"][0].update(bins=0),
                      lambda m: m["levels"][0].update(bins="many"),

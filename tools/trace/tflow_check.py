@@ -320,6 +320,23 @@ def check(rec):
         lod = rec["lod"]
         nrows = len(lod["rows"])
         levels = lod["levels"]
+        # The rows say which raw events each one is compared against, so they are checked
+        # first: a relabelled row (an l3 renamed to kind "dram", say) would otherwise be
+        # compared against nothing and pass.
+        want_rows = [(s["name"], s["kind"]) for s in st] + \
+                    [("mover:" + mv["name"], "mover") for mv in m.get("movers", [])]
+        got_rows = [(x["name"], x["kind"]) for x in lod["rows"]]
+        if got_rows != want_rows:
+            bad = next((i for i, (g, w) in enumerate(zip(got_rows, want_rows)) if g != w),
+                       min(len(got_rows), len(want_rows)))
+            r.fail("TF8", f"the pyramid's rows do not match the record's stations and movers: "
+                          f"{len(got_rows)} rows for {len(want_rows)}, first difference at row "
+                          f"{bad}")
+            return r
+        unknown = [mv["name"] for mv in m.get("movers", []) if mv["name"] not in MOVER_NAMES]
+        if unknown:
+            r.fail("TF8", f"mover pools {unknown} are not among {MOVER_NAMES}")
+            return r
         for lo, hi in zip(levels, levels[1:]):
             if hi["bins"] != (lo["bins"] + 1) // 2 or hi["k"] != lo["k"] + 1:
                 r.fail("TF8", f"level k={hi['k']} is not the parent of k={lo['k']}")
