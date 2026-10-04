@@ -71,6 +71,15 @@ set_tests_properties(test_reservation PROPERTIES
     LABELS "program;orchestration;v0.9"
 )
 
+# The tile-flow record and its .tflow bundle (#286 step 2)
+kpu_add_component_test(test_tile_flow_record "program"
+    test_tile_flow_record.cpp
+)
+
+set_tests_properties(test_tile_flow_record PROPERTIES
+    LABELS "program;record;tileflow;v0.9"
+)
+
 # The physical shape: array layout, folded-torus NoC, floorplan (#286 step 1)
 kpu_add_component_test(test_floorplan "program"
     test_floorplan.cpp

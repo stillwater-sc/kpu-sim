@@ -20,6 +20,7 @@
 #include <sw/kpu/program/driver/step_cursor.hpp>
 #include <sw/kpu/program/serialize/l0_format.hpp>
 #include <sw/kpu/program/driver/timeline_trace.hpp>
+#include <sw/kpu/program/record/tile_flow_record.hpp>
 #include <sw/trace/trace_exporter.hpp>
 
 #include <cmath>
@@ -86,6 +87,8 @@ R"(kpu-run — execute a Domain Flow Program at one or more levels and compare t
   --emit-l0-result <file.l0>  write it AFTER execution: the same program with results,
                             which is the corpus's expected-output half
   --timeline <file.json>    Chrome Trace Event Format, one event PER HOP
+  --tflow <dir>             the tile-flow record (#286): L3 residency, every transit and
+                            compute, as a .tflow bundle for the tile-flow viewer
   --step                    single-step: one line per transaction at that level
                             (L-B: one op applied; L-T1: op fired / hop start / hop
                             end / op completed)
@@ -332,8 +335,9 @@ int main(int argc, char** argv) {
     }
     // Keeps main's required-value parsing (an option present without a value is an error,
     // not an absence) and adds increment 3's stepping options on top.
-    std::string timeline_path, emit_path, emit_result_path, deploy_path;
+    std::string timeline_path, emit_path, emit_result_path, deploy_path, tflow_path;
     if (!arg_required(a, "--timeline", timeline_path, err) ||
+        !arg_required(a, "--tflow", tflow_path, err) ||
         !arg_required(a, "--emit-l0", emit_path, err) ||
         !arg_required(a, "--deploy", deploy_path, err) ||
         !arg_required(a, "--emit-l0-result", emit_result_path, err)) {
@@ -696,6 +700,31 @@ int main(int argc, char** argv) {
         }
         std::cout << "\ntimeline  " << entries.size() << " events (one per hop) from "
                   << short_name(levels[src]) << " -> " << timeline_path << "\n";
+    }
+
+    // --tflow: the tile-flow record, from the level that models resources -- the same choice
+    // --timeline makes, for the same reason.
+    if (!tflow_path.empty()) {
+        std::size_t src = levels.size();
+        for (std::size_t i = 0; i < levels.size(); ++i)
+            if (outcomes[i].has_timing) src = i;
+        if (src == levels.size()) {
+            std::cerr << "kpu-run: --tflow needs a level that models resources; "
+                      << "L-B reports no intervals\n";
+            return 2;
+        }
+        try {
+            const auto rec = record::build_record(programs[src], outcomes[src], *deployment,
+                                                  Placement::single(device.compute_tiles));
+            record::write_tflow(rec, tflow_path);
+            std::cout << "\ntflow     " << rec.residency.size() << " residencies, "
+                      << rec.transits.size() << " transits, " << rec.computes.size()
+                      << " computes from " << short_name(levels[src]) << " -> " << tflow_path
+                      << "\n          L3 pooled; L2, L1 not modelled at this level\n";
+        } catch (const std::exception& e) {
+            std::cerr << "kpu-run: " << e.what() << "\n";
+            return 2;
+        }
     }
 
     if (!compare || levels.size() < 2) {

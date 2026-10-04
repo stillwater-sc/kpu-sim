@@ -1,0 +1,455 @@
+// ============================================================================
+// src/program/tile_flow_record.cpp
+// The tile-flow record and its .tflow bundle (#286 step 2). See the header for what v0 can
+// say at L-T1 and what it says it cannot.
+//
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2024-2025 Stillwater Supercomputing, Inc.
+// ============================================================================
+#include <sw/kpu/program/record/tile_flow_record.hpp>
+
+#include <sw/kpu/program/platform/deployment_json.hpp>
+#include <sw/kpu/program/tile_transaction_executor.hpp>
+
+#include <nlohmann/json.hpp>
+
+#include <algorithm>
+#include <cstring>
+#include <filesystem>
+#include <fstream>
+#include <map>
+#include <set>
+#include <sstream>
+
+namespace sw::kpu::program::record {
+
+namespace {
+using json = nlohmann::ordered_json;
+
+constexpr Cycle kMaxExactCycle = (Cycle{1} << 53);
+
+std::string pooled_name(const std::string& dev, const char* kind) {
+    return dev + "/" + kind + "[*]";
+}
+
+// The tile an op MOVES: a Feed's input, a Drain's output (or input when it names none).
+const TileCoord* moved_tile(const TileOp& op) {
+    if (op.kind == TileOpKind::Drain) {
+        if (!op.inputs.empty()) return &op.inputs[0];
+        if (!op.outputs.empty()) return &op.outputs[0];
+        return nullptr;
+    }
+    if (!op.inputs.empty()) return &op.inputs[0];
+    if (!op.outputs.empty()) return &op.outputs[0];
+    return nullptr;
+}
+
+} // namespace
+
+std::string Tile::key() const { return tile_key(TileCoord{operand, ti, tj}); }
+
+std::uint32_t TileFlowRecord::station(const std::string& name) const {
+    for (std::size_t i = 0; i < stations.size(); ++i)
+        if (stations[i].name == name) return static_cast<std::uint32_t>(i);
+    throw RecordError("record: no station named \"" + name + "\"");
+}
+
+// ============================================================================
+// Building
+// ============================================================================
+TileFlowRecord build_record(const TileProgram& prog, const driver::RunOutcome& outcome,
+                            const platform::DeploymentSpec& spec, const Placement& placement,
+                            Dim device, std::uint64_t foreign_slots) {
+    if (!outcome.has_timing)
+        throw RecordError(std::string("record: level ") + driver::short_name(outcome.level) +
+                          " models no time, so it has no intervals to record; run a level "
+                          "that models resources (L-T1)");
+    if (device >= spec.device_count())
+        throw RecordError("record: device " + std::to_string(device) + " of " +
+                          std::to_string(spec.device_count()));
+    const auto& ops = prog.ops();
+    if (outcome.timeline.size() != ops.size())
+        throw RecordError("record: the outcome's timeline has " +
+                          std::to_string(outcome.timeline.size()) + " ops, the program " +
+                          std::to_string(ops.size()) + "; they are not the same run");
+
+    const platform::DeviceSpecification& d = spec.device(device);
+    const auto dev = spec.device_view(device);
+    TileFlowRecord rec;
+    rec.level = driver::short_name(outcome.level);
+    rec.device = d.name;
+    rec.device_label = dev.label();
+    rec.deployment_digest = platform::deployment_digest(spec);
+    rec.makespan = outcome.makespan;
+    if (rec.makespan >= kMaxExactCycle)
+        throw RecordError("record: makespan " + std::to_string(rec.makespan) +
+                          " exceeds 2^53 cycles, which the f64 time columns cannot hold exactly");
+
+    // ---- stations: DRAM, pooled L3, unmodelled L2/L1, one per compute tile
+    rec.stations.push_back({d.name + "/dram", "dram", 0, false, true});
+    rec.stations.push_back({pooled_name(d.name, "l3"), "l3", dev.l3_tiles, true, true});
+    rec.stations.push_back({pooled_name(d.name, "l2"), "l2", 0, true, false});
+    rec.stations.push_back({pooled_name(d.name, "l1"), "l1", 0, true, false});
+    rec.unmodelled = {"l2", "l1"};
+    const Dim n_cf = std::max<Dim>(placement.compute_tiles(), 1);
+    for (Dim c = 0; c < n_cf; ++c)
+        rec.stations.push_back({d.name + "/cf[" + std::to_string(c) + "]", "cf", 1, false, true});
+    const std::uint32_t DRAM = 0, L3 = 1, L2 = 2, L1 = 3, CF0 = 4;
+
+    // ---- tiles and ops, in first-appearance order (deterministic)
+    std::map<std::string, std::uint32_t> tile_of;
+    auto tile_id = [&](const TileCoord& c) {
+        const std::string k = tile_key(c);
+        const auto it = tile_of.find(k);
+        if (it != tile_of.end()) return it->second;
+        const auto id = static_cast<std::uint32_t>(rec.tiles.size());
+        rec.tiles.push_back({c.operand, c.ti, c.tj});
+        tile_of.emplace(k, id);
+        return id;
+    };
+    for (const TileOp& op : ops) {
+        Op o;
+        o.kind = static_cast<std::uint8_t>(op.kind);
+        std::set<std::uint32_t> seen;
+        for (const TileCoord& c : op.inputs) if (seen.insert(tile_id(c)).second) o.tiles.push_back(tile_id(c));
+        for (const TileCoord& c : op.outputs) if (seen.insert(tile_id(c)).second) o.tiles.push_back(tile_id(c));
+        rec.ops.push_back(std::move(o));
+    }
+
+    // ---- L3 residency, from the executor's series
+    for (const L3Residency& r : outcome.l3_residency) {
+        const auto it = tile_of.find(r.tile);
+        if (it == tile_of.end())
+            throw RecordError("record: residency names tile \"" + r.tile + "\", which the program never touches");
+        Residency out{it->second, L3, r.start, r.finish, 0};
+        if (r.seeded) out.flags |= Residency::Seeded;
+        if (r.held) out.flags |= Residency::Held;
+        rec.residency.push_back(out);
+    }
+
+    // ---- transits, one per hop, and computes, one per compute op
+    auto endpoints = [&](Hop h) -> std::pair<std::uint32_t, std::uint32_t> {
+        switch (h) {
+            case Hop::DmaDramToL3:      return {DRAM, L3};
+            case Hop::BlockMoverL3ToL2: return {L3, L2};
+            case Hop::StreamerL2ToL1:   return {L2, L1};
+            case Hop::StreamerL1ToL2:   return {L1, L2};
+            case Hop::BlockMoverL2ToL3: return {L2, L3};
+            case Hop::DmaL3ToDram:      return {L3, DRAM};
+            case Hop::BlockMoverL3ToL3: return {L3, L3};
+        }
+        return {L3, L3};
+    };
+    for (std::size_t i = 0; i < ops.size(); ++i) {
+        const TileOpRecord& t = outcome.timeline[i];
+        if (t.resource == ResourceKind::ComputeTile && ops[i].kind != TileOpKind::Feed &&
+            ops[i].kind != TileOpKind::Drain) {
+            if (t.resource_id >= n_cf)
+                throw RecordError("record: op " + std::to_string(i) + " ran on compute tile " +
+                                  std::to_string(t.resource_id) + " of a " + std::to_string(n_cf) +
+                                  "-tile placement");
+            rec.computes.push_back({static_cast<std::uint32_t>(i), CF0 + t.resource_id, t.start, t.finish});
+            continue;
+        }
+        const TileCoord* moved = moved_tile(ops[i]);
+        if (!moved) continue;
+        for (const HopRecord& h : t.hops) {
+            const auto [src, dst] = endpoints(h.hop);
+            rec.transits.push_back({tile_id(*moved), static_cast<std::uint32_t>(i),
+                                    static_cast<std::uint8_t>(h.hop),
+                                    static_cast<std::uint8_t>(mover_of(h.hop)), h.lane, h.start,
+                                    h.finish, src, dst});
+        }
+    }
+    std::sort(rec.transits.begin(), rec.transits.end(), [](const Transit& a, const Transit& b) {
+        return a.t0 != b.t0 ? a.t0 < b.t0 : a.op != b.op ? a.op < b.op : a.hop < b.hop;
+    });
+    std::sort(rec.computes.begin(), rec.computes.end(), [](const Compute& a, const Compute& b) {
+        return a.t0 != b.t0 ? a.t0 < b.t0 : a.op < b.op;
+    });
+
+    // The caller's slots this program cannot name (TileExecutionRequest::foreign_held_slots):
+    // held for the whole run and counted in the executor's peak, so the record carries them
+    // or its occupancy series would be low by exactly that much.
+    rec.foreign_slots = foreign_slots;
+    return rec;
+}
+
+// ============================================================================
+// Occupancy
+// ============================================================================
+std::uint64_t l3_occupancy_at(const TileFlowRecord& rec, Cycle t) {
+    std::uint64_t n = rec.foreign_slots;
+    for (const Residency& r : rec.residency)
+        if (rec.stations[r.station].kind == "l3" && r.t0 <= t && t < r.t1) ++n;
+    return n;
+}
+
+std::uint64_t peak_l3_occupancy(const TileFlowRecord& rec) {
+    // Half-open intervals: a slot is held from t0 up to, not including, t1. Ends sort before
+    // starts at the same cycle, which is the executor's own order -- completions return their
+    // credits before the next ops fire.
+    std::vector<std::pair<Cycle, int>> ev;
+    for (const Residency& r : rec.residency)
+        if (rec.stations[r.station].kind == "l3" && r.t1 > r.t0) {
+            ev.emplace_back(r.t0, +1);
+            ev.emplace_back(r.t1, -1);
+        }
+    std::sort(ev.begin(), ev.end());
+    std::int64_t cur = 0, best = 0;
+    for (const auto& [t, d] : ev) {
+        cur += d;
+        best = std::max(best, cur);
+    }
+    return static_cast<std::uint64_t>(best) + rec.foreign_slots;
+}
+
+// ============================================================================
+// The bundle
+// ============================================================================
+namespace {
+
+// A columnar table under construction: each column a contiguous little-endian array, padded
+// to 8 bytes, so the viewer can view it as a typed array without copying.
+struct Table {
+    std::string name, file;
+    std::size_t rows = 0;
+    struct Col { std::string name, dtype; std::string bytes; };
+    std::vector<Col> cols;
+
+    template <class T> void put(const std::string& col, const std::string& dtype, const std::vector<T>& v) {
+        Col c{col, dtype, {}};
+        c.bytes.resize(v.size() * sizeof(T));
+        if (!v.empty()) std::memcpy(c.bytes.data(), v.data(), c.bytes.size());   // host is LE: asserted below
+        cols.push_back(std::move(c));
+    }
+};
+
+static_assert(sizeof(double) == 8, "f64 columns");
+
+bool little_endian() {
+    const std::uint16_t x = 1;
+    unsigned char b = 0;
+    std::memcpy(&b, &x, 1);
+    return b == 1;
+}
+
+json write_table(const Table& t, const std::string& dir) {
+    std::string blob;
+    json cols = json::array();
+    for (const Table::Col& c : t.cols) {
+        while (blob.size() % 8) blob.push_back('\0');
+        cols.push_back(json{{"name", c.name}, {"dtype", c.dtype}, {"offset", blob.size()}});
+        blob += c.bytes;
+    }
+    std::ofstream out(dir + "/" + t.file, std::ios::binary);
+    out << blob;
+    if (!out) throw RecordError("record: cannot write " + dir + "/" + t.file);
+    return json{{"file", t.file}, {"rows", t.rows}, {"columns", cols}};
+}
+
+std::vector<double> times(const std::vector<Cycle>& v) {
+    std::vector<double> out(v.size());
+    for (std::size_t i = 0; i < v.size(); ++i) out[i] = static_cast<double>(v[i]);
+    return out;
+}
+
+} // namespace
+
+void write_tflow(const TileFlowRecord& rec, const std::string& dir) {
+    if (!little_endian()) throw RecordError("record: the .tflow writer assumes a little-endian host");
+    std::error_code ec;
+    std::filesystem::create_directories(dir, ec);
+    if (ec) throw RecordError("record: cannot create " + dir + ": " + ec.message());
+
+    json m = json::object();
+    m["format"] = "kpu-tflow";
+    m["version"] = 1;
+    m["level"] = rec.level;
+    m["device"] = rec.device;
+    m["device_label"] = rec.device_label;
+    m["deployment_digest"] = rec.deployment_digest;
+    m["makespan"] = rec.makespan;
+    m["foreign_slots"] = rec.foreign_slots;
+    m["unmodelled"] = rec.unmodelled;
+    json st = json::array();
+    for (const Station& s : rec.stations)
+        st.push_back(json{{"name", s.name}, {"kind", s.kind}, {"capacity", s.capacity},
+                          {"pooled", s.pooled}, {"modelled", s.modelled}});
+    m["stations"] = st;
+    json tl = json::array();
+    for (const Tile& t : rec.tiles) tl.push_back(json::array({t.operand, t.ti, t.tj}));
+    m["tiles"] = tl;
+
+    json tables = json::object();
+    {
+        Table t{"residency", "residency.bin", rec.residency.size(), {}};
+        std::vector<std::uint32_t> tile, station;
+        std::vector<Cycle> t0, t1;
+        std::vector<std::uint8_t> flags;
+        for (const Residency& r : rec.residency) {
+            tile.push_back(r.tile); station.push_back(r.station);
+            t0.push_back(r.t0); t1.push_back(r.t1); flags.push_back(r.flags);
+        }
+        t.put("tile", "u32", tile); t.put("station", "u32", station);
+        t.put("t0", "f64", times(t0)); t.put("t1", "f64", times(t1)); t.put("flags", "u8", flags);
+        tables["residency"] = write_table(t, dir);
+    }
+    {
+        Table t{"transit", "transit.bin", rec.transits.size(), {}};
+        std::vector<std::uint32_t> tile, op, lane, src, dst;
+        std::vector<std::uint8_t> hop, mover;
+        std::vector<Cycle> t0, t1;
+        for (const Transit& x : rec.transits) {
+            tile.push_back(x.tile); op.push_back(x.op); hop.push_back(x.hop); mover.push_back(x.mover);
+            lane.push_back(x.lane); t0.push_back(x.t0); t1.push_back(x.t1); src.push_back(x.src); dst.push_back(x.dst);
+        }
+        t.put("tile", "u32", tile); t.put("op", "u32", op); t.put("hop", "u8", hop);
+        t.put("mover", "u8", mover); t.put("lane", "u32", lane); t.put("t0", "f64", times(t0));
+        t.put("t1", "f64", times(t1)); t.put("src", "u32", src); t.put("dst", "u32", dst);
+        tables["transit"] = write_table(t, dir);
+    }
+    {
+        Table t{"compute", "compute.bin", rec.computes.size(), {}};
+        std::vector<std::uint32_t> op, station;
+        std::vector<Cycle> t0, t1;
+        for (const Compute& c : rec.computes) {
+            op.push_back(c.op); station.push_back(c.station); t0.push_back(c.t0); t1.push_back(c.t1);
+        }
+        t.put("op", "u32", op); t.put("station", "u32", station);
+        t.put("t0", "f64", times(t0)); t.put("t1", "f64", times(t1));
+        tables["compute"] = write_table(t, dir);
+    }
+    {
+        Table t{"op_tiles", "op_tiles.bin", rec.ops.size(), {}};
+        std::vector<std::uint8_t> kind;
+        std::vector<std::uint32_t> offset{0}, tile;
+        for (const Op& o : rec.ops) {
+            kind.push_back(o.kind);
+            tile.insert(tile.end(), o.tiles.begin(), o.tiles.end());
+            offset.push_back(static_cast<std::uint32_t>(tile.size()));
+        }
+        t.put("kind", "u8", kind); t.put("offset", "u32", offset); t.put("tile", "u32", tile);
+        tables["op_tiles"] = write_table(t, dir);
+    }
+    m["tables"] = tables;
+
+    std::ofstream out(dir + "/manifest.json", std::ios::binary);
+    out << m.dump(1) << "\n";
+    if (!out) throw RecordError("record: cannot write " + dir + "/manifest.json");
+}
+
+namespace {
+
+std::string slurp(const std::string& path) {
+    std::ifstream in(path, std::ios::binary);
+    if (!in) throw RecordError("record: cannot read " + path);
+    std::ostringstream ss;
+    ss << in.rdbuf();
+    return ss.str();
+}
+
+template <class T>
+std::vector<T> read_col(const json& table, const std::string& blob, const std::string& name,
+                        const char* dtype, std::size_t count) {
+    for (const json& c : table.at("columns")) {
+        if (c.at("name").get<std::string>() != name) continue;
+        if (c.at("dtype").get<std::string>() != dtype)
+            throw RecordError("record: column " + name + " is " + c.at("dtype").get<std::string>() +
+                              ", expected " + dtype);
+        const std::size_t off = c.at("offset").get<std::size_t>();
+        if (off + count * sizeof(T) > blob.size())
+            throw RecordError("record: column " + name + " runs past the end of its file");
+        std::vector<T> v(count);
+        if (count) std::memcpy(v.data(), blob.data() + off, count * sizeof(T));
+        return v;
+    }
+    throw RecordError("record: no column " + name);
+}
+
+} // namespace
+
+TileFlowRecord read_tflow(const std::string& dir) {
+    json m;
+    try {
+        m = json::parse(slurp(dir + "/manifest.json"));
+    } catch (const nlohmann::json::parse_error& e) {
+        throw RecordError(std::string("record: manifest is not valid JSON: ") + e.what());
+    }
+    if (m.value("format", "") != "kpu-tflow") throw RecordError("record: not a kpu-tflow bundle");
+    if (m.value("version", 0) != 1)
+        throw RecordError("record: version " + std::to_string(m.value("version", 0)) +
+                          " is not one this build reads (1)");
+    TileFlowRecord rec;
+    rec.level = m.at("level").get<std::string>();
+    rec.device = m.at("device").get<std::string>();
+    rec.device_label = m.at("device_label").get<std::string>();
+    rec.deployment_digest = m.at("deployment_digest").get<std::string>();
+    rec.makespan = m.at("makespan").get<Cycle>();
+    rec.foreign_slots = m.at("foreign_slots").get<std::uint64_t>();
+    rec.unmodelled = m.at("unmodelled").get<std::vector<std::string>>();
+    for (const json& s : m.at("stations"))
+        rec.stations.push_back({s.at("name").get<std::string>(), s.at("kind").get<std::string>(),
+                                s.at("capacity").get<std::uint64_t>(), s.at("pooled").get<bool>(),
+                                s.at("modelled").get<bool>()});
+    for (const json& t : m.at("tiles"))
+        rec.tiles.push_back({t.at(0).get<std::string>(), t.at(1).get<Dim>(), t.at(2).get<Dim>()});
+
+    const json& tables = m.at("tables");
+    auto blob_of = [&](const char* name) { return slurp(dir + "/" + tables.at(name).at("file").get<std::string>()); };
+    auto cycles = [](const std::vector<double>& v) {
+        std::vector<Cycle> out(v.size());
+        for (std::size_t i = 0; i < v.size(); ++i) out[i] = static_cast<Cycle>(v[i]);
+        return out;
+    };
+    {
+        const json& t = tables.at("residency");
+        const std::string b = blob_of("residency");
+        const std::size_t n = t.at("rows").get<std::size_t>();
+        const auto tile = read_col<std::uint32_t>(t, b, "tile", "u32", n);
+        const auto station = read_col<std::uint32_t>(t, b, "station", "u32", n);
+        const auto t0 = cycles(read_col<double>(t, b, "t0", "f64", n));
+        const auto t1 = cycles(read_col<double>(t, b, "t1", "f64", n));
+        const auto flags = read_col<std::uint8_t>(t, b, "flags", "u8", n);
+        for (std::size_t i = 0; i < n; ++i) rec.residency.push_back({tile[i], station[i], t0[i], t1[i], flags[i]});
+    }
+    {
+        const json& t = tables.at("transit");
+        const std::string b = blob_of("transit");
+        const std::size_t n = t.at("rows").get<std::size_t>();
+        const auto tile = read_col<std::uint32_t>(t, b, "tile", "u32", n);
+        const auto op = read_col<std::uint32_t>(t, b, "op", "u32", n);
+        const auto hop = read_col<std::uint8_t>(t, b, "hop", "u8", n);
+        const auto mover = read_col<std::uint8_t>(t, b, "mover", "u8", n);
+        const auto lane = read_col<std::uint32_t>(t, b, "lane", "u32", n);
+        const auto t0 = cycles(read_col<double>(t, b, "t0", "f64", n));
+        const auto t1 = cycles(read_col<double>(t, b, "t1", "f64", n));
+        const auto src = read_col<std::uint32_t>(t, b, "src", "u32", n);
+        const auto dst = read_col<std::uint32_t>(t, b, "dst", "u32", n);
+        for (std::size_t i = 0; i < n; ++i)
+            rec.transits.push_back({tile[i], op[i], hop[i], mover[i], lane[i], t0[i], t1[i], src[i], dst[i]});
+    }
+    {
+        const json& t = tables.at("compute");
+        const std::string b = blob_of("compute");
+        const std::size_t n = t.at("rows").get<std::size_t>();
+        const auto op = read_col<std::uint32_t>(t, b, "op", "u32", n);
+        const auto station = read_col<std::uint32_t>(t, b, "station", "u32", n);
+        const auto t0 = cycles(read_col<double>(t, b, "t0", "f64", n));
+        const auto t1 = cycles(read_col<double>(t, b, "t1", "f64", n));
+        for (std::size_t i = 0; i < n; ++i) rec.computes.push_back({op[i], station[i], t0[i], t1[i]});
+    }
+    {
+        const json& t = tables.at("op_tiles");
+        const std::string b = blob_of("op_tiles");
+        const std::size_t n = t.at("rows").get<std::size_t>();
+        const auto kind = read_col<std::uint8_t>(t, b, "kind", "u8", n);
+        const auto offset = read_col<std::uint32_t>(t, b, "offset", "u32", n + 1);
+        const auto tile = read_col<std::uint32_t>(t, b, "tile", "u32", n ? offset[n] : 0);
+        for (std::size_t i = 0; i < n; ++i)
+            rec.ops.push_back({kind[i], std::vector<std::uint32_t>(tile.begin() + offset[i], tile.begin() + offset[i + 1])});
+    }
+    return rec;
+}
+
+} // namespace sw::kpu::program::record

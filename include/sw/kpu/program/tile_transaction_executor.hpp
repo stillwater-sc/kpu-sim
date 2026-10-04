@@ -244,6 +244,22 @@ struct TileOpRecord {
     std::vector<HopRecord> hops;
 };
 
+// A tile's L3 occupancy (#286): from the cycle its slot was taken -- the credit acquired when
+// the first op touching it fired -- to the cycle its last user completed and the credit came
+// back. This is the series `peak_l3_residency` is the maximum of; publishing only the peak
+// is how #279 hid a capacity violation behind a healthy number.
+//
+// POOLED: L-T1 models L3 as one capacity, not as L3 tiles with slots, so an interval says a
+// tile held A slot, never WHICH one. A tile the caller seeded opens at cycle 0; a tile still
+// held when the run ends (seeded or retained by the caller) closes at the makespan and is
+// flagged `held`, because its slot was not returned -- it outlived the run.
+struct L3Residency {
+    std::string tile;              // tile_key(): the program's operand spelling
+    Cycle start = 0, finish = 0;
+    bool seeded = false;           // resident before the run began
+    bool held = false;             // still resident when it ended
+};
+
 struct TileRunStats {
     Cycle makespan = 0;
     Cycle compute_cycles = 0;     // aggregate over compute ops; 0 only if nothing computes
@@ -290,6 +306,7 @@ struct TileRunProvenance {
 struct TileRunResult {
     TileRunStats stats;
     std::vector<TileOpRecord> timeline;
+    std::vector<L3Residency> l3_residency;      // ordered by (start, tile)
     TileRunProvenance provenance;
     TileProgramReference::RunSummary summary;   // op counts + LU permutation
 };
@@ -423,6 +440,11 @@ public:
                 ". Nothing releases a held tile, so the run cannot complete — retain "
                 "fewer tiles, or raise l3_tiles.");
 
+        // The residency SERIES, not just its peak (#286). Open intervals keyed by tile: the
+        // cycle the slot was taken, and whether the caller seeded it.
+        std::map<std::string, std::pair<Cycle, bool>> open_since;
+        for (const std::string& k : req.initially_resident) open_since[k] = {0, true};
+
         // What this op would have to make resident in order to run.
         auto needed_slots = [&](std::size_t op) {
             std::size_t n = 0;
@@ -435,16 +457,24 @@ public:
             const std::size_t need = needed_slots(op);
             return resident.size() + foreign + need <= l3_capacity;
         };
-        auto acquire = [&](std::size_t op) {
-            for (const std::string& k : op_tiles[op]) resident.insert(k);
+        auto acquire = [&](std::size_t op, Cycle at) {
+            for (const std::string& k : op_tiles[op])
+                if (resident.insert(k).second) open_since[k] = {at, false};
             peak_residency = std::max(peak_residency, resident.size() + foreign);
         };
-        auto release_after = [&](std::size_t op) {
+        auto release_after = [&](std::size_t op, Cycle at) {
             for (const std::string& k : op_tiles[op]) {
                 auto it = unfinished_users.find(k);
                 if (it == unfinished_users.end()) continue;
                 if (--it->second == 0) {          // last user done -> credit returned
-                    if (held.count(k) == 0) resident.erase(k);     // not ours to free
+                    if (held.count(k) == 0) {     // not ours to free
+                        resident.erase(k);
+                        const auto o = open_since.find(k);
+                        if (o != open_since.end()) {
+                            result.l3_residency.push_back({k, o->second.first, at, o->second.second, false});
+                            open_since.erase(o);
+                        }
+                    }
                     unfinished_users.erase(it);
                 }
             }
@@ -593,7 +623,7 @@ public:
                 ops[op].kind == TileOpKind::Feed && !ops[op].inputs.empty() &&
                 resident.count(tile_key(ops[op].inputs[0])) != 0;
 
-            acquire(op);                       // hold the slots for every tile it touches
+            acquire(op, now);                  // hold the slots for every tile it touches
 
             TileOpRecord& rec = result.timeline[op];
             rec.resource = kind;
@@ -924,7 +954,7 @@ public:
 
                 completed[op] = true;
                 --remaining;
-                release_after(op);          // slots whose last consumer just completed
+                release_after(op, now);     // slots whose last consumer just completed
 
                 for (std::size_t s : deps.succs[op])
                     if (--pred_remaining[s] == 0) enqueue(s);
@@ -985,6 +1015,15 @@ public:
 
         st.l3_credit_stalls = credit_stalls;
         st.peak_l3_residency = peak_residency;
+
+        // Whatever is still open was never returned: the caller's tiles, seeded or retained.
+        // They close at the makespan and say so, rather than vanishing from the series.
+        for (const auto& [k, o] : open_since)
+            result.l3_residency.push_back({k, o.first, st.makespan, o.second, true});
+        std::sort(result.l3_residency.begin(), result.l3_residency.end(),
+                  [](const L3Residency& a, const L3Residency& b) {
+                      return a.start != b.start ? a.start < b.start : a.tile < b.tile;
+                  });
         st.resident_feeds = resident_feeds;
 
         result.summary = summarize_(prog);

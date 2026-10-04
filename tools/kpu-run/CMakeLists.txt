@@ -57,6 +57,28 @@ if(KPU_BUILD_TESTS)
     )
     set_tests_properties(kpu_run_timeline_written PROPERTIES LABELS "program;driver")
 
+    # --tflow writes the tile-flow record from the level that models resources.
+    add_test(NAME kpu_run_tflow_written
+        COMMAND ${CMAKE_COMMAND}
+            -DCMD=$<TARGET_FILE:run>
+            -DARGS=--algo$<SEMICOLON>matmul$<SEMICOLON>--size$<SEMICOLON>32$<SEMICOLON>--tile$<SEMICOLON>16$<SEMICOLON>--tflow$<SEMICOLON>${CMAKE_CURRENT_BINARY_DIR}/kpu_run_matmul.tflow
+            -DEXPECT_CODE=0
+            -DMUST_MATCH=residencies,.*transits,.*computes.from
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/expect_exit.cmake
+    )
+    set_tests_properties(kpu_run_tflow_written PROPERTIES LABELS "program;driver;tileflow")
+
+    add_test(NAME kpu_run_tflow_refused_without_timing
+        COMMAND ${CMAKE_COMMAND}
+            -DCMD=$<TARGET_FILE:run>
+            -DARGS=--level$<SEMICOLON>behavioral$<SEMICOLON>--tflow$<SEMICOLON>${CMAKE_CURRENT_BINARY_DIR}/should_not_exist.tflow
+            -DEXPECT_CODE=2
+            -DMUST_MATCH=--tflow.needs.a.level.that.models.resources
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/expect_exit.cmake
+    )
+    set_tests_properties(kpu_run_tflow_refused_without_timing PROPERTIES
+        LABELS "program;driver;tileflow")
+
     add_test(NAME kpu_run_timeline_refused_without_timing
         COMMAND ${CMAKE_COMMAND}
             -DCMD=$<TARGET_FILE:run>

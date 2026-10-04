@@ -472,6 +472,23 @@ residency.
    residency intervals and station-bound transits (L3 pooled; CF from `Placement`). Add
    `include/sw/kpu/program/record/tile_flow_record.hpp` and a writer for the `.tflow`
    bundle. Fold in the descriptor trace from `orchestrate()`.
+
+   **Done (2026-10-04).** The executor publishes `L3Residency` intervals (the series
+   `peak_l3_residency` is the maximum of), carried on `RunOutcome`.
+   `record/tile_flow_record.hpp` builds the record from a run and writes and reads the
+   columnar `.tflow` bundle; `kpu-run --tflow <dir>` writes one. Pinned: the record's peak
+   equals the executor's own at tight and unbounded capacities, every hop is one transit,
+   seeded and retained tiles are flagged, and the bundle is byte-deterministic.
+   What differs from the text above:
+   - **The descriptor trace is not folded in yet.** An orchestrated model is several launches,
+     each of which starts at cycle 0, and a `PLACE` has no time of its own at L-T1. Folding
+     descriptors in needs a time base across launches. That is a separate, orchestrated
+     record, not a single-run field, so it comes after the viewer has a single run to show.
+   - **L2 and L1 appear only as pooled, unmodelled transit endpoints**, so the BlockMover and
+     Streamer legs have somewhere to go. They are listed in the manifest's `unmodelled`.
+   - **Moves carry a mover and a lane, not a place.** Binding a BlockMover hop to
+     `l3[t]/bm[e]` needs L3 slot binding (step 6).
+
 3. **LOD pyramid + invariant checker.** Add `src/program/record/lod.cpp` and
    `tools/trace/tflow_check.py`, the #286 checker. Reintroducing #279 must make it fail.
 4. **Viewer, Step 1.** In `tools/visualization/tileflow/index.html`, plus modules, build views

@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The tile-flow record and `.tflow` bundle (#286 step 2).** The L-T1 executor now publishes
+  its L3 residency series -- one interval per tile, from the cycle its slot was taken to the
+  cycle its last user returned the credit, seeded and still-held tiles flagged -- instead of
+  only the peak. `record/tile_flow_record.hpp` turns a run into stations (DRAM, pooled L3,
+  unmodelled L2/L1, one per compute tile), tiles, ops, residencies, transits (one per hop, with
+  mover and lane) and computes, and writes a columnar `.tflow` bundle: a JSON manifest plus
+  little-endian typed-array columns the viewer can load without parsing. `kpu-run --tflow <dir>`
+  writes one. The record's peak equals the executor's own at every capacity tested.
 - **The physical shape of a deployment: array layout, folded-torus NoC and floorplan (#286 step 1).**
   `platform/array_layout.hpp` derives the alternating L3/compute grid, one BlockMover per L3 edge
   that abuts a compute tile, and the folded 2D torus over the L3 router hubs, with fold-end

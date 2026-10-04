@@ -44,6 +44,7 @@ add_library(kpu_program
     abi.cpp
     mmio.cpp
     floorplan.cpp
+    tile_flow_record.cpp
     ${KPU_LOADABLE_GEN_HDR}
 )
 add_dependencies(kpu_program kpu_loadable_schema)

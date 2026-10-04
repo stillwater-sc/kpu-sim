@@ -193,6 +193,9 @@ struct RunOutcome {
     // Per-op records, including each movement op's per-hop intervals. Empty at L-B,
     // which models no time and therefore has no intervals to report.
     std::vector<TileOpRecord> timeline;
+    // L3 occupancy per tile over time (#286), pooled at L-T1. Empty at L-B, which models no
+    // capacity and no time.
+    std::vector<L3Residency> l3_residency;
 };
 
 // ----------------------------------------------------------------------------
@@ -272,6 +275,7 @@ inline RunOutcome run_at(ExecutionLevel level, TileProgram& prog,
             out.stats = r.stats;
             out.provenance = r.provenance;
             out.timeline = r.timeline;
+            out.l3_residency = r.l3_residency;
             out.has_timing = true;
             return out;
         }
