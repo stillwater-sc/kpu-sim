@@ -51,6 +51,15 @@ class ViewerSmokeTest(unittest.TestCase):
             self.assertIn(table["file"], payload["bins"])
         self.assertIsNotNone(payload["lod"])
 
+    def test_viewer_reads_the_version_the_writer_writes(self):
+        # The page refuses any other manifest version, so a format bump that the viewer does not
+        # follow would leave it refusing every new bundle -- invisible to a syntax check.
+        written = json.loads((Path(BUNDLE) / "manifest.json").read_text())["version"]
+        page = (HERE / "index.html").read_text()
+        accepted = re.search(r"m\.version !== (\d+)", page)
+        self.assertIsNotNone(accepted)
+        self.assertEqual(int(accepted.group(1)), written)
+
     def test_a_non_bundle_is_refused(self):
         p = self.pack(str(self.tmp), "-o", str(self.tmp / "x.html"))
         self.assertEqual(p.returncode, 2)

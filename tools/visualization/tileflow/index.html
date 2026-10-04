@@ -170,7 +170,8 @@ function col(buf, cols, name, n) {
 function parse(files) {
   // files: { "manifest.json": text, "lod.json": text, "<x>.bin": ArrayBuffer, floorplan?: text }
   const m = JSON.parse(files["manifest.json"]);
-  if (m.format !== "kpu-tflow" || m.version !== 1) throw new Error("not a version-1 kpu-tflow bundle");
+  // Version 2 added op_tiles.written (#286 step 3); a version-1 bundle predates it.
+  if (m.format !== "kpu-tflow" || m.version !== 2) throw new Error("not a version-2 kpu-tflow bundle (re-record with kpu-run --tflow)");
   const R = { m };
   const tb = (name, extra) => {
     const t = m.tables[name], buf = files[t.file];

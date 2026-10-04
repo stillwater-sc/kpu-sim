@@ -227,7 +227,7 @@ TEST_CASE("the generated T4 floorplan places every resource exactly once",
     for (const NocLink& l : fp.noc) ++links[l.kind];
     CHECK(links[NocLink::Kind::Ring] == 1);
     CHECK(links[NocLink::Kind::Port] == 8);
-    CHECK(links[NocLink::Kind::Attach] == 1);   // first pass: one per controller
+    CHECK(links[NocLink::Kind::Attach] == 8);   // every DMA engine, round-robin over the N/S ports
 }
 
 TEST_CASE("a spec that describes no layout has none, and says why",
