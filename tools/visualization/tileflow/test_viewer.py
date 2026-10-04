@@ -22,6 +22,8 @@ import unittest
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE))
+import bind  # noqa: E402
 BUNDLE = None
 
 
@@ -40,7 +42,7 @@ class ViewerSmokeTest(unittest.TestCase):
         out = self.tmp / "view.html"
         p = self.pack(BUNDLE, "-o", str(out))
         self.assertEqual(p.returncode, 0, p.stderr)
-        page = out.read_text()
+        page = out.read_text(encoding="utf-8")
         self.assertNotIn("<!--TFLOW_EMBED-->", page)
         m = re.search(r"window\.TFLOW_EMBED = (\{.*?\});</script>", page, re.S)
         self.assertIsNotNone(m)
@@ -54,11 +56,56 @@ class ViewerSmokeTest(unittest.TestCase):
     def test_viewer_reads_the_version_the_writer_writes(self):
         # The page refuses any other manifest version, so a format bump that the viewer does not
         # follow would leave it refusing every new bundle -- invisible to a syntax check.
-        written = json.loads((Path(BUNDLE) / "manifest.json").read_text())["version"]
-        page = (HERE / "index.html").read_text()
+        written = json.loads((Path(BUNDLE) / "manifest.json").read_text(encoding="utf-8"))["version"]
+        page = (HERE / "index.html").read_text(encoding="utf-8")
         accepted = re.search(r"m\.version !== (\d+)", page)
         self.assertIsNotNone(accepted)
         self.assertEqual(int(accepted.group(1)), written)
+
+    def _copy_with_binding(self, identity):
+        d = self.tmp / "bound.tflow"
+        shutil.copytree(BUNDLE, d)
+        (d / "binding.json").write_text(json.dumps({"format": "kpu-tflow-binding", "version": 2,
+                                                    "bundle": identity}), encoding="utf-8")
+        return d
+
+    def _embedded_binding(self, bundle):
+        out = self.tmp / "view.html"
+        p = self.pack(str(bundle), "-o", str(out))
+        self.assertEqual(p.returncode, 0, p.stderr)
+        m = re.search(r"window\.TFLOW_EMBED = (\{.*?\});</script>", out.read_text(encoding="utf-8"), re.S)
+        return json.loads(m.group(1).replace("<\\/", "</"))["binding"], p.stderr
+
+    def test_a_binding_of_this_run_is_embedded(self):
+        manifest = json.loads((Path(BUNDLE) / "manifest.json").read_text(encoding="utf-8"))
+        binding, _ = self._embedded_binding(self._copy_with_binding(bind.bundle_identity(manifest)))
+        self.assertIsNotNone(binding)
+
+    def test_a_binding_of_another_run_is_left_out(self):
+        # A binding.json left behind by an earlier run in the same folder indexes the wrong rows.
+        manifest = json.loads((Path(BUNDLE) / "manifest.json").read_text(encoding="utf-8"))
+        stale = dict(bind.bundle_identity(manifest), makespan=manifest["makespan"] + 1)
+        binding, err = self._embedded_binding(self._copy_with_binding(stale))
+        self.assertIsNone(binding)
+        self.assertIn("different run", err)
+
+    def test_viewer_and_bind_agree_on_the_identity(self):
+        # index.html and bind.py each compute the identity; they must produce the same object,
+        # or the viewer would ignore every good binding (or accept a stale one).
+        node = shutil.which("node")
+        if not node:
+            self.skipTest("Node.js not on PATH")
+        page = (HERE / "index.html").read_text(encoding="utf-8")
+        fn = re.search(r"function bundleIdentity\(m\) \{.*?\n\}", page, re.S)
+        self.assertIsNotNone(fn)
+        manifest = (Path(BUNDLE) / "manifest.json").read_text(encoding="utf-8")
+        js = self.tmp / "identity.js"
+        js.write_text(fn.group(0) + f"\nprocess.stdout.write(JSON.stringify(bundleIdentity({manifest})));",
+                      encoding="utf-8")
+        p = subprocess.run([node, str(js)], capture_output=True, text=True)
+        self.assertEqual(p.returncode, 0, p.stderr)
+        want = json.dumps(bind.bundle_identity(json.loads(manifest)), separators=(",", ":"))
+        self.assertEqual(p.stdout, want)
 
     def test_a_non_bundle_is_refused(self):
         p = self.pack(str(self.tmp), "-o", str(self.tmp / "x.html"))
@@ -68,11 +115,11 @@ class ViewerSmokeTest(unittest.TestCase):
         node = shutil.which("node")
         if not node:
             self.skipTest("Node.js not on PATH")
-        page = (HERE / "index.html").read_text()
+        page = (HERE / "index.html").read_text(encoding="utf-8")
         scripts = re.findall(r"<script>\n(.*?)\n</script>", page, re.S)
         self.assertTrue(scripts)
         js = self.tmp / "viewer.js"
-        js.write_text(scripts[-1])
+        js.write_text(scripts[-1], encoding="utf-8")
         p = subprocess.run([node, "--check", str(js)], capture_output=True, text=True)
         self.assertEqual(p.returncode, 0, p.stderr)
 

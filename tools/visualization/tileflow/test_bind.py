@@ -33,7 +33,7 @@ class BindTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.rec = tflow_check.load(BUNDLE)
-        cls.fp = json.loads(Path(FLOORPLAN).read_text())
+        cls.fp = json.loads(Path(FLOORPLAN).read_text(encoding="utf-8"))
         cls.b = bind.bind(cls.rec, cls.fp)
         cls.names = {x["name"] for x in bind.flat(cls.fp["blocks"])}
 
@@ -90,6 +90,12 @@ class BindTest(unittest.TestCase):
         for name in self.b["bms"]:
             self.assertIn(name, self.names)
             self.assertRegex(name, r"/l3\[\d+\]/bm\[[0-3]\]$")
+
+    def test_the_binding_names_the_run_it_indexes(self):
+        # Its arrays are per row of this run; a reader rejects a binding from another run.
+        self.assertEqual(self.b["bundle"], bind.bundle_identity(self.rec["manifest"]))
+        self.assertEqual(len(self.b["transit_engine"]), self.b["bundle"]["transit"])
+        self.assertEqual(len(self.b["l3"]["residency_home"]), self.b["bundle"]["residency"])
 
     def test_a_floorplan_of_another_device_is_refused(self):
         fp = dict(self.fp, device="elsewhere")

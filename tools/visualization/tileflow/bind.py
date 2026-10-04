@@ -307,8 +307,12 @@ def bind(rec, fp):
         raise BindError(f"derived BlockMover {missing[0]} is not on the floorplan")
 
     return {
-        "format": "kpu-tflow-binding", "version": 1, "derived": True,
+        "format": "kpu-tflow-binding", "version": 2, "derived": True,
         "device": dev,
+        # Which run this binding indexes. Its arrays are per row of THAT run's tables, and
+        # re-recording into the same folder leaves the old binding.json behind, so a reader
+        # compares this with the manifest and ignores a binding that does not match.
+        "bundle": bundle_identity(rec["manifest"]),
         "policies": {
             "dram": "operands in program order from 0, 4 KiB aligned, tile-major; top of memory = next power of two (no DRAM size is declared)",
             "dma": "the controller owning the tile's DRAM address (tile-interleaved across controllers), then its first free engine; overload counted",
@@ -331,6 +335,14 @@ def bind(rec, fp):
     }
 
 
+def bundle_identity(manifest):
+    """What a binding must match to be the binding of this bundle (index.html computes the same)."""
+    t = manifest["tables"]
+    return {"deployment_digest": manifest["deployment_digest"], "level": manifest["level"],
+            "makespan": manifest["makespan"], "residency": t["residency"]["rows"],
+            "transit": t["transit"]["rows"], "compute": t["compute"]["rows"]}
+
+
 def main():
     ap = argparse.ArgumentParser(description="Derive a spatial binding for a .tflow bundle.")
     ap.add_argument("bundle")
@@ -338,14 +350,15 @@ def main():
     a = ap.parse_args()
     try:
         rec = tflow_check.load(a.bundle)
-        fp = json.loads(Path(a.floorplan).read_text())
+        fp = json.loads(Path(a.floorplan).read_text(encoding="utf-8"))
         if fp.get("format") != "kpu-floorplan":
             raise BindError("--floorplan is not a kpu-floorplan file")
         out = bind(rec, fp)
     except (tflow_check.Unreadable, BindError, OSError, ValueError, KeyError) as e:
         print(f"bind: {e}", file=sys.stderr)
         sys.exit(2)
-    (Path(a.bundle) / "binding.json").write_text(json.dumps(out, separators=(",", ":")))
+    (Path(a.bundle) / "binding.json").write_text(json.dumps(out, separators=(",", ":")),
+                                                 encoding="utf-8")
     print(f"bind: {a.bundle}/binding.json  {len(out['engines'])} DMA engines, "
           f"{len(out['l3']['tiles'])} L3 tiles ({out['l3']['per_tile_capacity']} slots each, "
           f"{out['l3']['overflow']} over), {out['dma']['overloaded']} DMA transfers past a "

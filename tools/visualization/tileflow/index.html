@@ -201,10 +201,20 @@ function parse(files) {
   }
   if (files.floorplan) R.fp = JSON.parse(files.floorplan);
   if (files["binding.json"]) {
-    R.B = JSON.parse(files["binding.json"]);
-    if (R.B.format !== "kpu-tflow-binding") throw new Error("binding.json is not a kpu-tflow-binding file");
+    const B = JSON.parse(files["binding.json"]);
+    if (B.format !== "kpu-tflow-binding") throw new Error("binding.json is not a kpu-tflow-binding file");
+    // The binding's arrays index the rows of the run it was derived from. One left over from an
+    // earlier run in the same folder would draw wrong places, or index past the end: ignore it.
+    if (JSON.stringify(B.bundle) === JSON.stringify(bundleIdentity(m))) R.B = B;
+    else R.bindingIgnored = "binding.json was derived from a different run and is ignored; re-run bind.py on this bundle.";
   }
   return R;
+}
+// What a binding must match to be this bundle's (bind.py's bundle_identity, same keys and order).
+function bundleIdentity(m) {
+  const t = m.tables;
+  return { deployment_digest: m.deployment_digest, level: m.level, makespan: m.makespan,
+           residency: t.residency.rows, transit: t.transit.rows, compute: t.compute.rows };
 }
 async function readPicked(list) {
   const files = {};
@@ -238,8 +248,13 @@ load.addEventListener("dragleave", () => load.classList.remove("drag"));
 load.addEventListener("drop", async e => {
   e.preventDefault(); load.classList.remove("drag");
   const list = [...e.dataTransfer.files];
-  const fp = list.find(f => f.name.endsWith(".json") && f.name !== "manifest.json" && f.name !== "lod.json");
-  if (fp) pendingFloorplan = await fp.text();
+  // The floorplan is whichever other .json IS a floorplan: a bound bundle folder also holds
+  // binding.json, and taking that as the floorplan broke every bound drop.
+  for (const f of list) {
+    if (!f.name.endsWith(".json") || ["manifest.json", "lod.json", "binding.json"].includes(f.name)) continue;
+    const text = await f.text();
+    try { if (JSON.parse(text).format === "kpu-floorplan") { pendingFloorplan = text; break; } } catch (_) {}
+  }
   loadFrom(await readPicked(list));
 });
 
@@ -392,7 +407,7 @@ function start() {
     ["binding", R.B ? `derived · ${R.B.engines.length} DMA engines · ${R.B.l3.tiles.length} L3 tiles · ${R.B.l3.overflow} L3 over · ${R.B.dma ? R.B.dma.overloaded : 0} DMA over` : "none (pooled rows)"]
   ].map(([k, v]) => `<span class="chip">${k} <b>${v}</b></span>`).join("") +
     (m.unmodelled && m.unmodelled.length ? `<span class="chip warn">not modelled <b>${m.unmodelled.join(", ")}</b></span>` : "");
-  $("honesty").textContent = R.B ? `At ${m.level} the executor pools L3 and binds moves to lanes, not places. The per-resource rows and floorplan fills here come from a DERIVED binding (bind.py): ${R.B.policies.l3}; ${R.B.policies.dma}; ${R.B.policies.noc}. Timing is the executor's; only the place is derived. ${R.B.notes.join(" ")}` : `At ${m.level}, L3 is one pooled capacity and moves are bound to lanes of a mover pool, not to places: the floorplan draws L3 and the movers as pooled fills across every block of their kind, never as per-tile values this record does not hold. Invariants are checked by tools/trace/tflow_check.py, not here.`;
+  $("honesty").textContent = (R.bindingIgnored ? R.bindingIgnored + " " : "") + (R.B ? `At ${m.level} the executor pools L3 and binds moves to lanes, not places. The per-resource rows and floorplan fills here come from a DERIVED binding (bind.py): ${R.B.policies.l3}; ${R.B.policies.dma}; ${R.B.policies.noc}. Timing is the executor's; only the place is derived. ${R.B.notes.join(" ")}` : `At ${m.level}, L3 is one pooled capacity and moves are bound to lanes of a mover pool, not to places: the floorplan draws L3 and the movers as pooled fills across every block of their kind, never as per-tile values this record does not hold. Invariants are checked by tools/trace/tflow_check.py, not here.`);
   viewA = 0; viewB = Math.max(1, m.makespan); zoomHistory.length = 0;
   const sc = $("scrub"); sc.max = m.makespan; sc.value = 0;
   T = Math.floor(m.makespan * 0.4);

@@ -24,6 +24,9 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 MARKER = "<!--TFLOW_EMBED-->"
+
+sys.path.insert(0, str(HERE))
+import bind  # noqa: E402  (bundle_identity, shared with the viewer)
 MAX_BYTES = 12 * 1024 * 1024
 
 
@@ -36,11 +39,11 @@ def main():
 
     d = Path(a.bundle)
     try:
-        manifest = (d / "manifest.json").read_text()
+        manifest = (d / "manifest.json").read_text(encoding="utf-8")
         m = json.loads(manifest)
         if m.get("format") != "kpu-tflow":
             raise ValueError("not a kpu-tflow bundle")
-        lod = (d / "lod.json").read_text() if (d / "lod.json").exists() else None
+        lod = (d / "lod.json").read_text(encoding="utf-8") if (d / "lod.json").exists() else None
         files = [t["file"] for t in m["tables"].values()]
         if lod:
             files.append(json.loads(lod)["file"])
@@ -53,15 +56,23 @@ def main():
         if total > MAX_BYTES:
             raise ValueError(f"the bundle's columns are {total} bytes; view it from its folder "
                              f"instead of embedding it")
-        binding = (d / "binding.json").read_text() if (d / "binding.json").exists() else None
-        floorplan = Path(a.floorplan).read_text() if a.floorplan else None
+        binding = (d / "binding.json").read_text(encoding="utf-8") if (d / "binding.json").exists() else None
+        if binding is not None:
+            # A binding left over from an earlier run in this folder indexes the wrong rows.
+            # Embedding it would draw wrong places without a word, so it is left out, loudly.
+            b = json.loads(binding)
+            if b.get("bundle") != bind.bundle_identity(m):
+                print("pack: binding.json was derived from a different run; leaving it out -- "
+                      "re-run bind.py", file=sys.stderr)
+                binding = None
+        floorplan = Path(a.floorplan).read_text(encoding="utf-8") if a.floorplan else None
         if floorplan and json.loads(floorplan).get("format") != "kpu-floorplan":
             raise ValueError("--floorplan is not a kpu-floorplan file")
     except (OSError, ValueError, KeyError) as e:
         print(f"pack: {e}", file=sys.stderr)
         sys.exit(2)
 
-    page = (HERE / "index.html").read_text()
+    page = (HERE / "index.html").read_text(encoding="utf-8")
     if MARKER not in page:
         print("pack: index.html has no embed marker", file=sys.stderr)
         sys.exit(2)
@@ -70,7 +81,7 @@ def main():
     # "</" inside a <script> would end it early; JSON allows the escaped form.
     payload = payload.replace("</", "<\\/")
     page = page.replace(MARKER, f"<script>window.TFLOW_EMBED = {payload};</script>", 1)
-    Path(a.output).write_text(page)
+    Path(a.output).write_text(page, encoding="utf-8")
     print(f"pack: {a.output} ({len(page) // 1024} KiB, run {m['device']} {m['level']}, "
           f"makespan {m['makespan']}{', with floorplan' if floorplan else ''}"
           f"{', with derived binding' if binding else ''})")
