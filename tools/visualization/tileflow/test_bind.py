@@ -68,7 +68,7 @@ class BindTest(unittest.TestCase):
         tensors = {t["name"]: t for t in b["dram"]["tensors"]}
         mcs = sorted({bind.index_of(e, "mc") for e in b["engines"]})
         for i in range(self.rec["transit_rows"]):
-            if tr["hop"][i] not in (0, 5):
+            if tr["hop"][i] not in (bind.HOP_DMA_IN, bind.HOP_EJECT, bind.HOP_DMA_WRITE):
                 self.assertEqual(b["transit_engine"][i], -1)
                 continue
             name, ti, tj = m["tiles"][tr["tile"][i]]
@@ -95,6 +95,32 @@ class BindTest(unittest.TestCase):
             for n in path:
                 self.assertIn(n, self.names)
 
+    def test_an_ejection_fills_the_buffer_its_engine_writes_out(self):
+        # Every hop is a push: writeback is a BlockMover ejecting into a DMA engine buffer across
+        # the NoC (home hub -> that engine's port), then the SAME engine writing it to DRAM, off
+        # the NoC.
+        b, tr = self.b, self.rec["transit"]
+        attach = {l["a"]: l["b"] for l in self.fp["noc"] if l["kind"] == "attach"}
+        writes = {}
+        for i in range(self.rec["transit_rows"]):
+            if tr["hop"][i] == bind.HOP_DMA_WRITE:
+                writes.setdefault((tr["op"][i], tr["tile"][i]), []).append(i)
+                self.assertEqual(b["transit_path"][i], [], f"DMA write {i} crosses the NoC")
+        ejections = 0
+        for i in range(self.rec["transit_rows"]):
+            if tr["hop"][i] != bind.HOP_EJECT:
+                continue
+            ejections += 1
+            after = [w for w in writes.get((tr["op"][i], tr["tile"][i]), []) if tr["t0"][w] >= tr["t1"][i]]
+            self.assertTrue(after, f"ejection {i} is never written to DRAM")
+            w = min(after, key=lambda w: tr["t0"][w])
+            self.assertEqual(b["transit_engine"][w], b["transit_engine"][i])
+            path = [b["nodes"][n] for n in b["transit_path"][i]]
+            self.assertTrue(path, f"ejection {i} has no route")
+            self.assertTrue(path[0].endswith("/noc"), path)               # from the home hub
+            self.assertEqual(path[-1], attach[b["engines"][b["transit_engine"][i]]])   # to the port
+        self.assertEqual(ejections, sum(len(v) for v in writes.values()))
+
     def test_blockmovers_exist_on_the_floorplan(self):
         for name in self.b["bms"]:
             self.assertIn(name, self.names)
@@ -116,7 +142,7 @@ class BindTest(unittest.TestCase):
         want = {}
         for i, path in enumerate(self.b["transit_path"]):
             hop = tr["hop"][i]
-            if hop not in (bind.HOP_DMA_IN, bind.HOP_DMA_OUT) or not path:
+            if hop not in (bind.HOP_DMA_IN, bind.HOP_EJECT) or not path:
                 continue
             end = nodes[path[0] if hop == bind.HOP_DMA_IN else path[-1]]
             if "/port[" in end:

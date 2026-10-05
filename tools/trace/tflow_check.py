@@ -51,7 +51,7 @@ from pathlib import Path
 MOVER_NAMES = ["dma", "block-mover", "streamer", "noc"]   # enum Mover, in order
 DTYPES = {"u8": ("B", 1), "u32": ("I", 4), "f64": ("d", 8)}
 
-# The version-2 column schema, as write_tflow() declares it. A column declared with another
+# The column schema (unchanged since version 2), as write_tflow() declares it. A column declared with another
 # dtype would be decoded at the wrong width and checked as garbage, or not checked at all.
 SCHEMA = {
     "residency": {"tile": "u32", "station": "u32", "t0": "f64", "t1": "f64", "flags": "u8"},
@@ -62,8 +62,10 @@ SCHEMA = {
 }
 
 # enum Hop (tile_transaction_executor.hpp), by value: the station kinds each one moves between.
+# Every hop is a push (version 3): writeback is a BlockMover ejecting L3 -> DMA buffer (5), then
+# the DMA engine writing its buffer to DRAM (6). There is no DMA read of L3.
 HOP_KINDS = [("dram", "l3"), ("l3", "l2"), ("l2", "l1"), ("l1", "l2"), ("l2", "l3"),
-             ("l3", "dram"), ("l3", "l3")]
+             ("l3", "dmabuf"), ("dmabuf", "dram"), ("l3", "l3")]
 
 
 class Unreadable(Exception):
@@ -120,8 +122,12 @@ def load(path):
         # one. Reading it as "nothing writes" would report every result tile as unfilled.
         raise Unreadable("a version-1 bundle has no op_tiles.written column; re-record it with "
                          "this build's kpu-run --tflow")
-    if m.get("version") != 2:
-        raise Unreadable(f"version {m.get('version')!r} is not one this checker reads (2)")
+    if m.get("version") == 2:
+        # Version 2's hop 5 is the old DMA read of L3; reading it as an ejection would be wrong.
+        raise Unreadable("a version-2 bundle records writeback as a DMA read (hop 5 = "
+                         "dma:l3->dram); re-record it with this build's kpu-run --tflow")
+    if m.get("version") != 3:
+        raise Unreadable(f"version {m.get('version')!r} is not one this checker reads (3)")
     rec = {"manifest": m}
     _named(m.get("stations"), "manifest stations")
     movers = m.get("movers", [])
@@ -366,7 +372,7 @@ def check(rec):
 
     # TF9 -------------------------------------------------------------------
     r.ran("TF9")
-    DMA_IN, L3_TO_L3 = 0, 6                 # enum Hop: DmaDramToL3, BlockMoverL3ToL3
+    DMA_IN, L3_TO_L3 = 0, 7                 # enum Hop: DmaDramToL3, BlockMoverL3ToL3
     arrivals = {}
     for i in range(ntr):
         # Only a hop that really ends in L3 fills an L3 slot; TF7 reports the mislabelled ones.

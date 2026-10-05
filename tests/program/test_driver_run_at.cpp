@@ -210,7 +210,9 @@ TEST_CASE("each event lands on the component that performed the leg",
     // The hop names its governing process, and the trace vocabulary has one component per
     // process, so this must be a faithful rename rather than a guess.
     CHECK(component_of(Hop::DmaDramToL3) == sw::trace::ComponentType::DMA_ENGINE);
-    CHECK(component_of(Hop::DmaL3ToDram) == sw::trace::ComponentType::DMA_ENGINE);
+    CHECK(component_of(Hop::DmaBufferToDram) == sw::trace::ComponentType::DMA_ENGINE);
+    // The ejection is a BlockMover's push, not the DMA's.
+    CHECK(component_of(Hop::BlockMoverL3ToDmaBuffer) == sw::trace::ComponentType::BLOCK_MOVER);
     CHECK(component_of(Hop::BlockMoverL3ToL2) == sw::trace::ComponentType::BLOCK_MOVER);
     CHECK(component_of(Hop::BlockMoverL2ToL3) == sw::trace::ComponentType::BLOCK_MOVER);
     CHECK(component_of(Hop::StreamerL2ToL1) == sw::trace::ComponentType::STREAMER);

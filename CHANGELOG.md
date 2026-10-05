@@ -9,6 +9,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Every hop is a push (NoC port plan step 3, `.tflow` version 3).** Writeback no longer
+  ends in `DmaL3ToDram`, a DMA read of L3 the push machine does not have. It is now two legs:
+  - `BlockMoverL3ToDmaBuffer`: a BlockMover ejects the block from L3 into a DMA engine buffer,
+    the port's ejection bus;
+  - `DmaBufferToDram`: the DMA engine writes that buffer to DRAM.
+
+  Where it shows:
+  - **The record:** a `dmabuf` station (pooled, unmodelled). Both readers refuse version-2
+    bundles, whose hop 5 means the old DMA read.
+  - **The checker:** the hop table follows the new legs, and TF7's chain check covers them.
+  - **The binding:** an ejection crosses the NoC from the home hub to the port of the engine
+    whose buffer it fills, and the DMA write runs on that same engine, off the NoC.
+  - **The viewer:** it counts DMA traffic from the engines' own pushes.
+  - **L-T1 timing:** it changes by design. The BlockMover pool now carries three legs, and a
+    writeback holds L3 until it is ejected.
 - **The deployment declares its NoC (NoC port plan step 2, `docs/plans/noc-port-arbitration.md`).**
   An optional `noc` section:
   - `hub_buffer_blocks`: store-and-forward block buffers per hub, at least the hub's 4 inputs;

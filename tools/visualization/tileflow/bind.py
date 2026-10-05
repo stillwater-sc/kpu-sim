@@ -60,7 +60,10 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "trace"))
 import tflow_check  # noqa: E402  (the one bundle reader)
 
-HOP_DMA_IN, HOP_BM_DOWN, HOP_BM_UP, HOP_DMA_OUT = 0, 1, 4, 5
+# enum Hop, version 3: every hop is a push. Writeback is an ejection (a BlockMover pushes the
+# block from L3 into a DMA engine buffer, across the NoC to the port) and then a DMA write of
+# that buffer to DRAM, which does not touch the NoC.
+HOP_DMA_IN, HOP_BM_DOWN, HOP_BM_UP, HOP_EJECT, HOP_DMA_WRITE = 0, 1, 4, 5, 6
 EDGE_N, EDGE_E, EDGE_S, EDGE_W = 0, 1, 2, 3
 ALIGN = 4096
 
@@ -258,10 +261,23 @@ def bind(rec, fp):
         t = tensor_of.get(name)
         return None if t is None else t["base"] + (ti * t["tile_cols"] + tj) * t["tile_bytes"]
 
+    # Each ejection fills one engine's buffer, and that engine writes it to DRAM: pair every
+    # ejection with the DMA write that follows it on the same (op, tile) chain.
+    write_after = {}
+    by_chain = {}
+    for i in range(rec["transit_rows"]):
+        if tr["hop"][i] in (HOP_EJECT, HOP_DMA_WRITE):
+            by_chain.setdefault((tr["op"][i], tr["tile"][i]), []).append(i)
+    for rows in by_chain.values():
+        rows.sort(key=lambda i: (tr["t0"][i], i))
+        for a, b in zip(rows, rows[1:]):
+            if tr["hop"][a] == HOP_EJECT and tr["hop"][b] == HOP_DMA_WRITE:
+                write_after[a] = b
+
     t_engine = [-1] * rec["transit_rows"]
     engine_free = [0.0] * len(engines)
     overloaded = 0
-    dma_rows = sorted((i for i in range(rec["transit_rows"]) if tr["hop"][i] in (HOP_DMA_IN, HOP_DMA_OUT)),
+    dma_rows = sorted((i for i in range(rec["transit_rows"]) if tr["hop"][i] in (HOP_DMA_IN, HOP_EJECT)),
                       key=lambda i: (tr["t0"][i], i))
     for i in dma_rows:
         if not mc_list:
@@ -277,14 +293,19 @@ def bind(rec, fp):
             k = min(pool, key=lambda q: (engine_free[q], q))
             overloaded += 1
         t_engine[i] = k
-        engine_free[k] = max(engine_free[k], tr["t1"][i])
+        # An ejection holds its engine until that engine has written the buffer to DRAM.
+        w = write_after.get(i)
+        end = tr["t1"][w] if w is not None else tr["t1"][i]
+        if w is not None:
+            t_engine[w] = k
+        engine_free[k] = max(engine_free[k], end)
     t_bm = [""] * rec["transit_rows"]
     t_path = [[] for _ in range(rec["transit_rows"])]
     unrouted = 0
     for i in range(rec["transit_rows"]):
         hop, tile, t0, t1 = tr["hop"][i], tr["tile"][i], tr["t0"][i], tr["t1"][i]
         h = home_at(tile, t0 if hop != HOP_DMA_IN else t1)
-        if hop in (HOP_DMA_IN, HOP_DMA_OUT) and engines:
+        if hop in (HOP_DMA_IN, HOP_EJECT) and engines:
             eng = engines[t_engine[i]]
             port = attach.get(eng)
             if port and h is not None:
@@ -310,7 +331,7 @@ def bind(rec, fp):
     port_buses = {}
     for i in range(rec["transit_rows"]):
         hop = tr["hop"][i]
-        if hop not in (HOP_DMA_IN, HOP_DMA_OUT) or not t_path[i]:
+        if hop not in (HOP_DMA_IN, HOP_EJECT) or not t_path[i]:
             continue
         end = nodes[t_path[i][0] if hop == HOP_DMA_IN else t_path[i][-1]]
         if "/port[" in end:

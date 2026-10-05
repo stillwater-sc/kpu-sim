@@ -158,7 +158,7 @@ class TflowCheckSelfTest(unittest.TestCase):
             if tiles.count(tile) != 1 or tile in written or self.b.get("residency", "flags", i) & 1:
                 continue
             dma = [j for j in range(tr) if self.b.get("transit", "tile", j) == tile
-                   and self.b.get("transit", "hop", j) in (0, 6)]
+                   and self.b.get("transit", "hop", j) in (0, 7)]
             if dma:
                 for j in dma:
                     self.b.set("transit", "dst", j, l2)
@@ -221,7 +221,7 @@ class TflowCheckSelfTest(unittest.TestCase):
                 self.b.set("op_tiles", "written", j, 0)
         moved = 0
         for i in range(self.b.manifest["tables"]["transit"]["rows"]):
-            if self.b.get("transit", "tile", i) == tile and self.b.get("transit", "hop", i) in (0, 6):
+            if self.b.get("transit", "tile", i) == tile and self.b.get("transit", "hop", i) in (0, 7):
                 self.b.set("transit", "t1", i, max(self.b.get("transit", "t1", i), end))
                 self.b.set("transit", "t0", i, end)
                 moved += 1
@@ -316,7 +316,8 @@ class TflowCheckSelfTest(unittest.TestCase):
         for edit in (lambda m: next(c for c in m["tables"]["transit"]["columns"]
                                     if c["name"] == "src").update(dtype="f64"),
                      lambda m: m.update(version=1),
-                     lambda m: m.update(version=3)):
+                     lambda m: m.update(version=2),
+                     lambda m: m.update(version=4)):
             self.b.manifest = json.loads((Path(BUNDLE) / "manifest.json").read_text())
             edit(self.b.manifest)
             self.b.save_manifest()

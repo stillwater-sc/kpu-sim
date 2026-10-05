@@ -88,16 +88,18 @@ TileFlowRecord build_record(const TileProgram& prog, const driver::RunOutcome& o
         throw RecordError("record: makespan " + std::to_string(rec.makespan) +
                           " exceeds 2^53 cycles, which the f64 time columns cannot hold exactly");
 
-    // ---- stations: DRAM, pooled L3, unmodelled L2/L1, one per compute tile
+    // ---- stations: DRAM, pooled L3, unmodelled L2/L1/DMA buffers, one per compute tile
     rec.stations.push_back({d.name + "/dram", "dram", 0, false, true});
     rec.stations.push_back({pooled_name(d.name, "l3"), "l3", dev.l3_tiles, true, true});
     rec.stations.push_back({pooled_name(d.name, "l2"), "l2", 0, true, false});
     rec.stations.push_back({pooled_name(d.name, "l1"), "l1", 0, true, false});
-    rec.unmodelled = {"l2", "l1"};
+    // Where an ejected block waits for its DMA engine to write it to DRAM (version 3).
+    rec.stations.push_back({pooled_name(d.name, "dmabuf"), "dmabuf", 0, true, false});
+    rec.unmodelled = {"l2", "l1", "dmabuf"};
     const Dim n_cf = std::max<Dim>(placement.compute_tiles(), 1);
     for (Dim c = 0; c < n_cf; ++c)
         rec.stations.push_back({d.name + "/cf[" + std::to_string(c) + "]", "cf", 1, false, true});
-    const std::uint32_t DRAM = 0, L3 = 1, L2 = 2, L1 = 3, CF0 = 4;
+    const std::uint32_t DRAM = 0, L3 = 1, L2 = 2, L1 = 3, DMABUF = 4, CF0 = 5;
     if (outcome.stats)
         for (const auto& [m, lanes] : outcome.stats->mover_lanes)
             rec.movers.push_back({to_string(m), lanes});
@@ -154,7 +156,8 @@ TileFlowRecord build_record(const TileProgram& prog, const driver::RunOutcome& o
             case Hop::StreamerL2ToL1:   return {L2, L1};
             case Hop::StreamerL1ToL2:   return {L1, L2};
             case Hop::BlockMoverL2ToL3: return {L2, L3};
-            case Hop::DmaL3ToDram:      return {L3, DRAM};
+            case Hop::BlockMoverL3ToDmaBuffer: return {L3, DMABUF};
+            case Hop::DmaBufferToDram:  return {DMABUF, DRAM};
             case Hop::BlockMoverL3ToL3: return {L3, L3};
         }
         return {L3, L3};
@@ -296,7 +299,11 @@ void write_tflow(const TileFlowRecord& rec, const std::string& dir) {
     m["format"] = "kpu-tflow";
     // 2: op_tiles gained `written` (#286 step 3). A version-1 bundle cannot answer "was this
     // slot filled", so it is refused with a message, not read as "nothing writes".
-    m["version"] = 2;
+    // 3: every hop is a push (docs/plans/noc-port-arbitration.md step 3). The writeback leg
+    // "DMA reads L3" became a BlockMover ejecting into a DMA buffer, then the DMA writing DRAM,
+    // with a dmabuf station between them. A version-2 bundle's hop 5 means the old leg, so it
+    // is refused rather than read as an ejection.
+    m["version"] = 3;
     m["level"] = rec.level;
     m["device"] = rec.device;
     m["device_label"] = rec.device_label;
@@ -429,9 +436,12 @@ TileFlowRecord read_tflow(const std::string& dir) {
     if (m.value("version", 0) == 1)
         throw RecordError("record: a version-1 bundle has no op_tiles.written column; re-record "
                           "it with this build's kpu-run --tflow");
-    if (m.value("version", 0) != 2)
+    if (m.value("version", 0) == 2)
+        throw RecordError("record: a version-2 bundle records writeback as a DMA read (hop 5 = "
+                          "dma:l3->dram); re-record it with this build's kpu-run --tflow");
+    if (m.value("version", 0) != 3)
         throw RecordError("record: version " + std::to_string(m.value("version", 0)) +
-                          " is not one this build reads (2)");
+                          " is not one this build reads (3)");
     TileFlowRecord rec;
     rec.level = m.at("level").get<std::string>();
     rec.device = m.at("device").get<std::string>();

@@ -156,7 +156,10 @@ code { font: 12px var(--font-data); }
 const $ = id => document.getElementById(id);
 const tok = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
 const fmt = n => Number(n).toLocaleString("en-US");
-const HOPS = ["dma:dram->l3", "bm:l3->l2", "str:l2->l1", "str:l1->l2", "bm:l2->l3", "dma:l3->dram", "bm:l3->l3"];
+// enum Hop, version 3: every hop is a push. 5 is a BlockMover ejecting a block into a DMA engine
+// buffer (the port's ejection bus); 6 is that engine writing the buffer to DRAM.
+const HOPS = ["dma:dram->l3", "bm:l3->l2", "str:l2->l1", "str:l1->l2", "bm:l2->l3", "bm:l3->dmabuf", "dma:dmabuf->dram", "bm:l3->l3"];
+const HOP_DMA_IN = 0, HOP_EJECT = 5, HOP_DMA_WRITE = 6;
 const MOVERS = ["dma", "block-mover", "streamer", "noc"];
 const OPKIND = ["FEED", "DRAIN", "MATMUL_ACCUM", "LU_DIAG_FACTOR", "PIVOT_APPLY", "TRSM_LL", "TRSM_UR"];   // enum TileOpKind, in order
 
@@ -170,8 +173,8 @@ function col(buf, cols, name, n) {
 function parse(files) {
   // files: { "manifest.json": text, "lod.json": text, "<x>.bin": ArrayBuffer, floorplan?: text }
   const m = JSON.parse(files["manifest.json"]);
-  // Version 2 added op_tiles.written (#286 step 3); a version-1 bundle predates it.
-  if (m.format !== "kpu-tflow" || m.version !== 2) throw new Error("not a version-2 kpu-tflow bundle (re-record with kpu-run --tflow)");
+  // Version 3: every hop is a push (writeback = ejection, then a DMA write); version 2 recorded a DMA read.
+  if (m.format !== "kpu-tflow" || m.version !== 3) throw new Error("not a version-3 kpu-tflow bundle (re-record with kpu-run --tflow)");
   const R = { m };
   const tb = (name, extra) => {
     const t = m.tables[name], buf = files[t.file];
@@ -213,7 +216,7 @@ function parse(files) {
 // A port is two buses, one block each (docs/plans/noc-port-arbitration.md): injection carries
 // DMA-in transfers (hop 0), ejection the writebacks (hop 5). One row per bus, capacity 1.
 function portBusRows(name, label, ivs, hop) {
-  const inject = ivs.filter(iv => hop[iv[2]] === 0), eject = ivs.filter(iv => hop[iv[2]] === 5);
+  const inject = ivs.filter(iv => hop[iv[2]] === 0), eject = ivs.filter(iv => hop[iv[2]] === 5);   // DMA in; ejection
   return [
     { name: name + "#inject", label: label + " inject", cap: 1, ivs: inject, extra: { kind: "port", block: name } },
     { name: name + "#eject", label: label + " eject", cap: 1, ivs: eject, extra: { kind: "port", block: name } },
@@ -338,8 +341,8 @@ function buildBoundRows() {
   const byEngine = B.engines.map(() => []);
   for (let i = 0; i < tr.rows; i++) {
     const h = tr.hop[i];
-    if (h !== 0 && h !== 5) continue;
-    (h === 0 ? dmaIn : dmaOut).push([tr.t0[i], tr.t1[i], i]);
+    if (h !== HOP_DMA_IN && h !== HOP_DMA_WRITE) continue;       // the DMA engines' own pushes
+    (h === HOP_DMA_IN ? dmaIn : dmaOut).push([tr.t0[i], tr.t1[i], i]);
     const e = B.transit_engine[i];
     if (e >= 0) byEngine[e].push([tr.t0[i], tr.t1[i], i]);
   }
@@ -812,12 +815,12 @@ function drawDram() {
   let moving = 0;
   for (let i = 0; i < R.tr.rows; i++) {
     const h = R.tr.hop[i];
-    if ((h !== 0 && h !== 5) || !(R.tr.t0[i] <= T && T < R.tr.t1[i])) continue;
+    if ((h !== HOP_DMA_IN && h !== HOP_DMA_WRITE) || !(R.tr.t0[i] <= T && T < R.tr.t1[i])) continue;
     const a = dramAddr(R.tr.tile[i]);
     if (a === null) continue;
     const ten = D.tensors.find(x => x.name === R.m.tiles[R.tr.tile[i]][0]);
     const x0 = A(a), x1 = Math.max(x0 + 2, A(a + ten.tile_bytes));
-    ctx.fillRect(x0, h === 0 ? by - 7 : by + bh + 2, x1 - x0, 5);
+    ctx.fillRect(x0, h === HOP_DMA_IN ? by - 7 : by + bh + 2, x1 - x0, 5);
     moving++;
   }
   ctx.fillStyle = tok("--ink-3"); ctx.font = `11px ${tok("--font-data")}`; ctx.textBaseline = "top";
@@ -841,7 +844,7 @@ function dramHit(e) {
 }
 function tileStory(tile) {
   let reads = 0, writes = 0; const homes = new Set();
-  for (let i = 0; i < R.tr.rows; i++) if (R.tr.tile[i] === tile) { if (R.tr.hop[i] === 0) reads++; if (R.tr.hop[i] === 5) writes++; }
+  for (let i = 0; i < R.tr.rows; i++) if (R.tr.tile[i] === tile) { if (R.tr.hop[i] === HOP_DMA_IN) reads++; if (R.tr.hop[i] === HOP_DMA_WRITE) writes++; }
   let homeNow = "not resident";
   for (let i = 0; i < R.res.rows; i++) if (R.res.tile[i] === tile) {
     const h = R.B.l3.tiles[R.B.l3.residency_home[i]];

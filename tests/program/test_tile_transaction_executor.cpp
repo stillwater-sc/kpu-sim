@@ -17,6 +17,7 @@
 #include <sw/kpu/program/characterize/characterization.hpp>
 
 #include <algorithm>
+#include <set>
 #include <chrono>
 #include <cmath>
 #include <cstring>
@@ -93,9 +94,19 @@ TEST_CASE("GEMM is bit-exact against the functional reference", "[program][trans
         TileProgram par_prog = derive_matmul_tile_program(M, N, K, T, T, T);
         fill_matmul(par_prog, K, N);
         DeviceDescriptor par = DeviceDescriptor::checkerboard(4);
+        // Four lanes of every mover, so four compute tiles can actually be fed. With one
+        // DMA engine, one BlockMover and one Streamer the GEMM is movement-bound -- and since
+        // writeback's ejection leg is a third leg on the BlockMover, every compute then lands
+        // on tile 0 and nothing about the order changes, which is what this section tests.
+        par.dma_engines = par.block_movers = par.streamers = 4;
         const auto par_result = run_transactional(par_prog, par, Placement::single(4));
         CHECK(bit_identical(ref_prog.operand("C").values, par_prog.operand("C").values));
-        // and it really did run differently
+        // and it really did run differently: its computes were spread over several tiles
+        std::set<Dim> tiles_used;
+        for (const auto& rec : par_result.timeline)
+            if (rec.resource == ResourceKind::ComputeTile && rec.kind == TileOpKind::MatMulAccum)
+                tiles_used.insert(rec.resource_id);
+        CHECK(tiles_used.size() > 1);
         CHECK(par_result.stats.makespan < result.stats.makespan);
     }
 }
@@ -671,15 +682,18 @@ TEST_CASE("a span contains all of its hops; there is no collapse",
     const auto r = run_gemm_on(DeviceDescriptor::single());
 
     // Every inbound tile that actually comes from DRAM crosses all three legs, in order.
-    // Every outbound tile crosses all three of the reverse legs.
+    // Every outbound tile crosses four: back to L2 and L3, then ejected from L3 into a DMA
+    // engine buffer, then written to DRAM by that engine. Every hop is a push; there is no
+    // DMA read of L3.
     std::size_t inbound_full = 0, outbound_full = 0, resident_entry = 0;
     for (const auto& rec : r.timeline) {
         if (rec.kind == TileOpKind::MatMulAccum) { CHECK(rec.hops.empty()); continue; }
         if (rec.kind == TileOpKind::Drain) {
-            REQUIRE(rec.hops.size() == 3);
+            REQUIRE(rec.hops.size() == 4);
             CHECK(rec.hops[0].hop == Hop::StreamerL1ToL2);
             CHECK(rec.hops[1].hop == Hop::BlockMoverL2ToL3);
-            CHECK(rec.hops[2].hop == Hop::DmaL3ToDram);
+            CHECK(rec.hops[2].hop == Hop::BlockMoverL3ToDmaBuffer);
+            CHECK(rec.hops[3].hop == Hop::DmaBufferToDram);
             ++outbound_full;
             continue;
         }
@@ -777,13 +791,14 @@ TEST_CASE("hops are pipelined for one tile, not serialized end-to-end",
 }
 
 TEST_CASE("two legs of one process share its lanes", "[program][transactional][hops]") {
-    // There is one set of BlockMovers, not one per direction, so inbound L3->L2 and
-    // outbound L2->L3 compete. The process's busy cycles must therefore be the sum of
-    // both legs' cycles.
+    // There is one set of BlockMovers, not one per direction, so inbound L3->L2, outbound
+    // L2->L3 and the ejection L3->DMA buffer all compete. The process's busy cycles must
+    // therefore be the sum of its legs' cycles.
     const auto r = run_gemm_on(dma_starved(2));
     const Cycle bm = r.stats.mover_busy_cycles.at(Mover::BlockMover);
     const Cycle legs = r.stats.hop_busy_cycles.at(Hop::BlockMoverL3ToL2) +
-                       r.stats.hop_busy_cycles.at(Hop::BlockMoverL2ToL3);
+                       r.stats.hop_busy_cycles.at(Hop::BlockMoverL2ToL3) +
+                       r.stats.hop_busy_cycles.at(Hop::BlockMoverL3ToDmaBuffer);
     CHECK(bm == legs);
     const Cycle str = r.stats.mover_busy_cycles.at(Mover::Streamer);
     CHECK(str == r.stats.hop_busy_cycles.at(Hop::StreamerL2ToL1) +
@@ -813,8 +828,10 @@ TEST_CASE("the stream cost lands on the Streamer legs",
     // The drain bubble shows up on the Streamer, and the upstream legs are untouched.
     CHECK(stream_model.stats.hop_busy_cycles.at(Hop::StreamerL1ToL2) >
           bytes_model.stats.hop_busy_cycles.at(Hop::StreamerL1ToL2));
-    CHECK(stream_model.stats.hop_busy_cycles.at(Hop::DmaL3ToDram) ==
-          bytes_model.stats.hop_busy_cycles.at(Hop::DmaL3ToDram));
+    CHECK(stream_model.stats.hop_busy_cycles.at(Hop::DmaBufferToDram) ==
+          bytes_model.stats.hop_busy_cycles.at(Hop::DmaBufferToDram));
+    CHECK(stream_model.stats.hop_busy_cycles.at(Hop::BlockMoverL3ToDmaBuffer) ==
+          bytes_model.stats.hop_busy_cycles.at(Hop::BlockMoverL3ToDmaBuffer));
     CHECK(stream_model.stats.hop_busy_cycles.at(Hop::BlockMoverL2ToL3) ==
           bytes_model.stats.hop_busy_cycles.at(Hop::BlockMoverL2ToL3));
 }

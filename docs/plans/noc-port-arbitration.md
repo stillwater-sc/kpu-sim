@@ -222,6 +222,15 @@ Each step is one PR.
    buffer* (an ejection), then *DMA engine writes DRAM*. It replaces `DmaL3ToDram` (a "DMA
    read" the machine does not have) in the L-T1 executor, the record (`Hop`), the checker and
    the viewer. Bumps `.tflow` to version 3.
+   (Done.)
+   - The hops are explicit values: 5 is `BlockMoverL3ToDmaBuffer`, the ejection; 6 is
+     `DmaBufferToDram`; L3->L3 moved to 7.
+   - The record gains a pooled, unmodelled `dmabuf` station.
+   - Unlike step 1, **this changes L-T1 timing.** The ejection is a BlockMover push, so the
+     BlockMover pool now carries three legs (L3->L2, L2->L3, L3->DMA buffer), and a writeback
+     holds its L3 slot until it has been ejected. That is the push model's cost, not an
+     artifact. On a device with one lane per mover, a small GEMM becomes BlockMover-bound, so
+     extra compute tiles stop shortening it.
 4. **CSP processes** (`include/sw/kpu/timing/`): `NocHubProcess` and `NocPortProcess`.
    - **`NocHubProcess`:** store-and-forward, `hub_buffer_blocks` buffers, 4 in and 4 out, a
      credit per link.

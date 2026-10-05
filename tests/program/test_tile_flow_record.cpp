@@ -120,13 +120,14 @@ TEST_CASE("a transit's endpoints are the stations its hop connects, and L2/L1 sa
             case Hop::StreamerL2ToL1:   CHECK((kind(x.src) == "l2" && kind(x.dst) == "l1")); break;
             case Hop::StreamerL1ToL2:   CHECK((kind(x.src) == "l1" && kind(x.dst) == "l2")); break;
             case Hop::BlockMoverL2ToL3: CHECK((kind(x.src) == "l2" && kind(x.dst) == "l3")); break;
-            case Hop::DmaL3ToDram:      CHECK((kind(x.src) == "l3" && kind(x.dst) == "dram")); break;
+            case Hop::BlockMoverL3ToDmaBuffer: CHECK((kind(x.src) == "l3" && kind(x.dst) == "dmabuf")); break;
+            case Hop::DmaBufferToDram:  CHECK((kind(x.src) == "dmabuf" && kind(x.dst) == "dram")); break;
             case Hop::BlockMoverL3ToL3: CHECK((kind(x.src) == "l3" && kind(x.dst) == "l3")); break;
         }
         CHECK(static_cast<Mover>(x.mover) == mover_of(static_cast<Hop>(x.hop)));
     }
     // What L-T1 does not model is said, not drawn as empty.
-    CHECK(rec.unmodelled == std::vector<std::string>{"l2", "l1"});
+    CHECK(rec.unmodelled == std::vector<std::string>{"l2", "l1", "dmabuf"});
     CHECK_FALSE(rec.stations[rec.station(r.spec.device(0).name + "/l2[*]")].modelled);
     CHECK(rec.stations[rec.station(r.spec.device(0).name + "/l3[*]")].pooled);
 }
@@ -203,16 +204,20 @@ TEST_CASE("the .tflow bundle round-trips, and the same run writes the same bytes
     for (std::size_t i = 0; i < rec.ops.size(); ++i) CHECK(back.ops[i].tiles == rec.ops[i].tiles);
     CHECK(peak_l3_occupancy(back) == peak_l3_occupancy(rec));
 
-    // A newer bundle is refused rather than misread, and so is a version-1 one: it has no
-    // `written` column, and reading it as "nothing writes" would be a wrong answer.
+    // A newer bundle is refused rather than misread, and so are older ones: version 1 has no
+    // `written` column, and version 2 records writeback as a DMA read (its hop 5 is not an
+    // ejection). Reading either would be a wrong answer.
     const std::string original = slurp(a + "/manifest.json");
-    std::string m = original;
-    m.replace(m.find("\"version\": 2"), 12, "\"version\": 3");
-    std::ofstream(a + "/manifest.json", std::ios::binary) << m;
-    CHECK_THROWS_WITH(read_tflow(a), ContainsSubstring("version 3"));
-    m = original;
-    m.replace(m.find("\"version\": 2"), 12, "\"version\": 1");
-    std::ofstream(a + "/manifest.json", std::ios::binary) << m;
+    auto with_version = [&](const char* v) {
+        std::string m = original;
+        m.replace(m.find("\"version\": 3"), 12, std::string("\"version\": ") + v);
+        std::ofstream(a + "/manifest.json", std::ios::binary) << m;
+    };
+    with_version("4");
+    CHECK_THROWS_WITH(read_tflow(a), ContainsSubstring("version 4"));
+    with_version("2");
+    CHECK_THROWS_WITH(read_tflow(a), ContainsSubstring("records writeback as a DMA read"));
+    with_version("1");
     CHECK_THROWS_WITH(read_tflow(a), ContainsSubstring("re-record"));
 }
 
