@@ -9,6 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The CSP memory controller can host the cycle-accurate LPDDR5 controller (DRAM plan step 2).**
+  `MemoryControllerProcess` with `Config::hosted` (or `ConcurrentTimingExecutor::Config::dram`,
+  from `DramHosting::of(device)`):
+  - splits each tile into bursts placed by the deployment's `DramAddressMap`;
+  - runs `LPDDR5MemoryController` in its own clock through a rate bridge
+    (`timing/dram_bridge.hpp`);
+  - completes the tile with its last burst.
+
+  LPDDR5X timing is derived from the LPDDR5-6400 table by data rate, and the run says so. The
+  mode is opt-in: the legacy tile-level model stays the default. On the T4, a 64 KiB tile now
+  takes 1997 cycles against a 1920-cycle data-bus floor (it took one latency), and a 64^3 matmul
+  takes 2089 cycles to the legacy model's 1132.
+
 - **The KPU-T4 declares its DRAM:** 4 GiB of LPDDR5X behind its one controller, as 2 x16
   channels. That is the T64's 16 Gb x16 die per channel (64K rows x 16 banks x 2 KiB) with the
   same linear map and 4-bit row->bank fold, and no controller bits. `test_dram_address_map`
@@ -138,6 +151,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The LPDDR5 controller's throughput and scheduling (DRAM plan step 2):**
+  - It held the data bus from READ issue through tCL + burst, so reads never pipelined: about
+    36% of peak, now 99.8% on a stream.
+  - It was FCFS on the head of its queue; it is now FR-FCFS, one command per channel per cycle.
+  - It never checked tRRD_S or tCCD_S (INV-102 requires tRRD_S).
+  - Its timing history began at cycle 0, so no bank could activate before tRC.
+  - It refreshed only idle banks, so a streamed bank was never refreshed.
+
+  The pattern programs report the change: max-bandwidth 2.80 to 7.57 B/cycle, stream 1721 to 563
+  cycles. All 19 still pass with no invariant violations.
 - **Retention held every tile an operator read, not just the ones a later operator wants
   (#308 review, round 3).** Holding a tile nobody will read again buys nothing and costs a slot
   for the whole run, which can refuse a run that fits — the same argument as releasing before

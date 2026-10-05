@@ -10,6 +10,7 @@
 
 #include <array>
 #include <cstdint>
+#include <deque>
 #include <functional>
 #include <memory>
 #include <optional>
@@ -102,11 +103,20 @@ constexpr std::string_view bank_state_name(BankState state) {
     }
 }
 
+// "No such event yet." Timing history starts here rather than at cycle 0: a 0 would read as an
+// activate (or CAS) at cycle 0 on every bank, and hold the first activate off until tRC.
+inline constexpr uint64_t kNever = UINT64_MAX;
+
+// now >= last + t, where `last` may be kNever (never happened: always satisfied).
+constexpr bool elapsed(uint64_t now, uint64_t last, uint64_t t) {
+    return last == kNever || now >= last + t;
+}
+
 struct Bank {
     BankState state = BankState::IDLE;
     uint32_t open_row = 0;           // Valid when ACTIVE
     uint64_t state_until = 0;        // Cycle when current state completes
-    uint64_t last_activate = 0;      // For tRAS, tRC tracking
+    uint64_t last_activate = kNever; // For tRAS, tRC tracking
     uint64_t last_read_cmd = 0;      // For tRTP tracking
     uint64_t last_write_cmd = 0;     // For tWR tracking
     uint64_t last_refresh = 0;       // For per-bank refresh tracking
@@ -126,9 +136,9 @@ struct Bank {
 // ============================================================================
 
 struct BankGroup {
-    uint64_t last_activate = 0;      // For tRRD_L tracking
-    uint64_t last_cas = 0;           // For tCCD_L tracking
-    uint64_t last_write = 0;         // For tWTR_L tracking
+    uint64_t last_activate = kNever; // For tRRD_L tracking
+    uint64_t last_cas = kNever;      // For tCCD_L tracking
+    uint64_t last_write = kNever;    // For tWTR_L tracking
 };
 
 // ============================================================================
@@ -174,6 +184,12 @@ struct Channel {
     DataBusState data_bus_state = DataBusState::IDLE;
     uint64_t data_bus_until = 0;
     bool last_was_write = false;     // For R->W turnaround
+    // Across bank groups: tRRD_S between activates, tCCD_S between CAS commands.
+    uint64_t last_activate_any = kNever;
+    uint64_t last_cas_any = kNever;
+    // The last write's data end and bank group, for tWTR_L / tWTR_S.
+    uint64_t write_data_end = 0;
+    uint8_t last_write_bg = 0;
 
     // Deferred tracing flags (to avoid spurious IDLE traces)
     bool deferred_data_bus_idle_trace = false;
@@ -516,7 +532,6 @@ private:
 
     // Command scheduling
     void schedule_requests();
-    bool try_issue_request(MemoryRequest& req);
 
     // Bank operations
     bool can_activate(uint8_t channel, uint8_t bank, uint64_t cycle) const;
@@ -524,6 +539,10 @@ private:
     bool can_write(uint8_t channel, uint8_t bank, uint64_t cycle) const;
     bool can_precharge(uint8_t channel, uint8_t bank, uint64_t cycle) const;
     bool can_refresh(uint8_t channel, uint8_t bank) const;
+    // A refresh is due soon enough that the scheduler stops opening or reading the bank.
+    bool refresh_due(uint8_t channel, uint8_t bank) const;
+    // Some pending request hits the row open in this bank (FR-FCFS: hits before precharge).
+    bool open_row_hit_pending(uint8_t channel, uint8_t bank) const;
 
     void do_activate(uint8_t channel, uint8_t bank, uint32_t row, uint64_t request_id);
     void do_read(uint8_t channel, uint8_t bank, MemoryRequest& req);
@@ -580,7 +599,8 @@ private:
     uint64_t next_request_id_ = 1;
 
     // Request queues
-    std::queue<MemoryRequest> pending_queue_;
+    // A deque, not a queue: FR-FCFS serves the oldest READY request, not only the head.
+    std::deque<MemoryRequest> pending_queue_;
     std::vector<MemoryRequest> active_requests_;
 
     // Statistics (internal LPDDR5-specific)

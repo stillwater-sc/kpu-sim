@@ -45,6 +45,7 @@ add_library(kpu_program
     mmio.cpp
     floorplan.cpp
     dram_address_map.cpp
+    dram_bridge.cpp
     tile_flow_record.cpp
     tile_flow_lod.cpp
     ${KPU_LOADABLE_GEN_HDR}
@@ -61,6 +62,9 @@ target_include_directories(kpu_program
 )
 
 target_link_libraries(kpu_program
+    PUBLIC
+        # dram_bridge.cpp hosts the cycle-accurate LPDDR5 controller (DRAM plan step 2)
+        kpu_memory_components
     PRIVATE
         $<TARGET_NAME_IF_EXISTS:nlohmann_json::nlohmann_json>
         $<TARGET_NAME_IF_EXISTS:flatbuffers>

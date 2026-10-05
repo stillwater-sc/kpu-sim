@@ -117,7 +117,7 @@ std::optional<uint64_t> LPDDR5MemoryController::submit_read(
 
     decode_address(address, req.channel, req.bank, req.row, req.col);
 
-    pending_queue_.push(std::move(req));
+    pending_queue_.push_back(std::move(req));
     stats_.reads++;
 
     return req.id;
@@ -145,7 +145,7 @@ std::optional<uint64_t> LPDDR5MemoryController::submit_write(
 
     decode_address(address, req.channel, req.bank, req.row, req.col);
 
-    pending_queue_.push(std::move(req));
+    pending_queue_.push_back(std::move(req));
     stats_.writes++;
 
     return req.id;
@@ -205,7 +205,7 @@ void LPDDR5MemoryController::reset() {
         }
     }
 
-    while (!pending_queue_.empty()) pending_queue_.pop();
+    pending_queue_.clear();
     active_requests_.clear();
 
     current_cycle_ = 0;
@@ -410,7 +410,7 @@ bool LPDDR5MemoryController::can_activate(uint8_t channel, uint8_t bank, uint64_
     }
 
     // tRC: time since last activate on same bank
-    if (cycle < b.last_activate + timing.tRC) {
+    if (!elapsed(cycle, b.last_activate, timing.tRC)) {
         return false;
     }
 
@@ -419,7 +419,12 @@ bool LPDDR5MemoryController::can_activate(uint8_t channel, uint8_t bank, uint64_
     const BankGroup& bank_group = ch.bank_groups[bg];
 
     // tRRD_L: same bank group
-    if (cycle < bank_group.last_activate + timing.tRRD_L) {
+    if (!elapsed(cycle, bank_group.last_activate, timing.tRRD_L)) {
+        return false;
+    }
+
+    // tRRD_S: any bank group (it was not checked at all)
+    if (!elapsed(cycle, ch.last_activate_any, timing.tRRD_S)) {
         return false;
     }
 
@@ -441,8 +446,10 @@ bool LPDDR5MemoryController::can_read(uint8_t channel, uint8_t bank, uint64_t cy
     const Bank& b = ch.banks[bank];
     const auto& timing = lpddr5_config_.timing;
 
-    // INV-BANK-7: Bank must be ACTIVE
-    if (b.state != lpddr5::BankState::ACTIVE) {
+    // INV-BANK-7: a row must be open. A CAS may follow another CAS to the same open row while
+    // the earlier burst is still on the bus (READING/WRITING) -- that is what pipelines reads.
+    if (b.state != lpddr5::BankState::ACTIVE && b.state != lpddr5::BankState::READING &&
+        b.state != lpddr5::BankState::WRITING) {
         return false;
     }
 
@@ -451,22 +458,25 @@ bool LPDDR5MemoryController::can_read(uint8_t channel, uint8_t bank, uint64_t cy
         return false;
     }
 
-    // Bank group CAS timing
+    // CAS-to-CAS: tCCD_L within a bank group, tCCD_S across them
     uint8_t bg = bank / 4;
     const BankGroup& bank_group = ch.bank_groups[bg];
-    if (cycle < bank_group.last_cas + timing.tCCD_L) {
+    if (!elapsed(cycle, bank_group.last_cas, timing.tCCD_L) ||
+        !elapsed(cycle, ch.last_cas_any, timing.tCCD_S)) {
         return false;
     }
 
-    // Write-to-read turnaround (tWTR)
+    // Write-to-read turnaround: tWTR_L after a write in this bank group, tWTR_S otherwise
     if (ch.last_was_write) {
-        if (cycle < bank_group.last_write + timing.tWL + burst_cycles() + timing.tWTR_L) {
+        const uint32_t twtr = (ch.last_write_bg == bg) ? timing.tWTR_L : timing.tWTR_S;
+        if (cycle < ch.write_data_end + twtr) {
             return false;
         }
     }
 
-    // Data bus available
-    if (ch.data_bus_state != DataBusState::IDLE) {
+    // Data bus: this burst occupies [cycle + tCL, cycle + tCL + burst). It may be issued as
+    // soon as that window starts after the scheduled bursts end -- not after they finish.
+    if (cycle + timing.tCL < ch.data_bus_until) {
         return false;
     }
 
@@ -483,8 +493,9 @@ bool LPDDR5MemoryController::can_write(uint8_t channel, uint8_t bank, uint64_t c
     const Bank& b = ch.banks[bank];
     const auto& timing = lpddr5_config_.timing;
 
-    // INV-BANK-7: Bank must be ACTIVE
-    if (b.state != lpddr5::BankState::ACTIVE) {
+    // INV-BANK-7: a row must be open (see can_read)
+    if (b.state != lpddr5::BankState::ACTIVE && b.state != lpddr5::BankState::READING &&
+        b.state != lpddr5::BankState::WRITING) {
         return false;
     }
 
@@ -493,22 +504,23 @@ bool LPDDR5MemoryController::can_write(uint8_t channel, uint8_t bank, uint64_t c
         return false;
     }
 
-    // Bank group CAS timing
+    // CAS-to-CAS: tCCD_L within a bank group, tCCD_S across them
     uint8_t bg = bank / 4;
     const BankGroup& bank_group = ch.bank_groups[bg];
-    if (cycle < bank_group.last_cas + timing.tCCD_L) {
+    if (!elapsed(cycle, bank_group.last_cas, timing.tCCD_L) ||
+        !elapsed(cycle, ch.last_cas_any, timing.tCCD_S)) {
         return false;
     }
 
-    // Read-to-write turnaround (tRTW)
+    // Read-to-write turnaround (tRTW) after the last read's data
     if (!ch.last_was_write && ch.data_bus_until > 0) {
         if (cycle < ch.data_bus_until + timing.tRTW) {
             return false;
         }
     }
 
-    // Data bus available
-    if (ch.data_bus_state != DataBusState::IDLE) {
+    // Data bus: this burst occupies [cycle + tWL, cycle + tWL + burst)
+    if (cycle + timing.tWL < ch.data_bus_until) {
         return false;
     }
 
@@ -550,12 +562,34 @@ bool LPDDR5MemoryController::can_precharge(uint8_t channel, uint8_t bank, uint64
         }
     }
 
+    // Command bus available (it was not checked: a refresh-driven and a scheduled command could
+    // both issue in one cycle)
+    if (ch.cmd_bus_state != CommandBusState::IDLE) {
+        return false;
+    }
+
     return true;
 }
 
 bool LPDDR5MemoryController::can_refresh(uint8_t channel, uint8_t bank) const {
-    // INV-BANK-9: Bank must be IDLE
-    return channels_[channel].banks[bank].state == lpddr5::BankState::IDLE;
+    // INV-BANK-9: Bank must be IDLE, and the command bus free
+    return channels_[channel].banks[bank].state == lpddr5::BankState::IDLE &&
+           channels_[channel].cmd_bus_state == CommandBusState::IDLE;
+}
+
+bool LPDDR5MemoryController::refresh_due(uint8_t channel, uint8_t bank) const {
+    if (refresh_mode_ == RefreshMode::DISABLED || !deadline_enforcement_) return false;
+    // One interval before the 16 x tREFIpb deadline: enough to let the bank's last burst finish,
+    // precharge it, and refresh it before the deadline passes.
+    const Bank& b = channels_[channel].banks[bank];
+    return current_cycle_ >= b.last_refresh + 15ull * lpddr5_config_.timing.tREFIpb;
+}
+
+bool LPDDR5MemoryController::open_row_hit_pending(uint8_t channel, uint8_t bank) const {
+    const Bank& b = channels_[channel].banks[bank];
+    for (const MemoryRequest& r : pending_queue_)
+        if (r.channel == channel && r.bank == bank && r.row == b.open_row) return true;
+    return false;
 }
 
 // ============================================================================
@@ -577,9 +611,10 @@ void LPDDR5MemoryController::do_activate(uint8_t channel, uint8_t bank, uint32_t
     // is associated with the transaction that triggered it.
     b.page_opener_request_id = request_id;
 
-    // Update bank group
+    // Update bank group, and the channel-wide history tRRD_S reads
     uint8_t bg = bank / 4;
     ch.bank_groups[bg].last_activate = current_cycle_;
+    ch.last_activate_any = current_cycle_;
 
     // Record for tFAW
     record_activate(channel);
@@ -603,16 +638,18 @@ void LPDDR5MemoryController::do_read(uint8_t channel, uint8_t bank, MemoryReques
     b.last_read_cmd = current_cycle_;
     b.burst_end = current_cycle_ + timing.tCL + burst_cycles();
 
-    // Update bank group
+    // Update bank group, and the channel-wide history tCCD_S reads
     uint8_t bg = bank / 4;
     ch.bank_groups[bg].last_cas = current_cycle_;
+    ch.last_cas_any = current_cycle_;
 
     // Track turnarounds (must check BEFORE updating last_was_write)
     if (ch.last_was_write) {
         stats_.write_to_read_turnarounds++;
     }
 
-    // Data bus will be busy after tCL
+    // The burst occupies the data bus over [now + tCL, burst_end); can_read() only let this
+    // CAS through if that window starts after every scheduled burst ends.
     ch.data_bus_state = DataBusState::READ_BURST;
     ch.data_bus_until = b.burst_end;
     ch.last_was_write = false;
@@ -646,6 +683,9 @@ void LPDDR5MemoryController::do_write(uint8_t channel, uint8_t bank, MemoryReque
     uint8_t bg = bank / 4;
     ch.bank_groups[bg].last_cas = current_cycle_;
     ch.bank_groups[bg].last_write = current_cycle_;
+    ch.last_cas_any = current_cycle_;
+    ch.write_data_end = b.burst_end;
+    ch.last_write_bg = bg;
 
     // Data bus busy after tWL
     ch.data_bus_state = DataBusState::WRITE_BURST;
@@ -819,13 +859,17 @@ void LPDDR5MemoryController::handle_refresh() {
             for (uint8_t b = 0; b < 16; ++b) {
                 Bank& bank = channel.banks[b];
 
-                // Check if refresh deadline is approaching
-                uint64_t deadline = bank.last_refresh + 16 * timing.tREFIpb;
-                if (current_cycle_ >= deadline - timing.tRFCpb) {
-                    // Urgent refresh needed - force it regardless of mode
+                // Refresh due: the scheduler has stopped issuing to this bank (refresh_due()), so
+                // it drains. Refresh it once idle; close its open row first. An open-page bank
+                // used to wait for IDLE forever, and a streamed bank was never refreshed.
+                if (refresh_due(ch, b)) {
                     if (can_refresh(ch, b)) {
                         do_refresh(ch, b);
                         return;  // Only one refresh per cycle
+                    }
+                    if (bank.state == lpddr5::BankState::ACTIVE && can_precharge(ch, b, current_cycle_)) {
+                        do_precharge(ch, b);
+                        return;
                     }
                 }
             }
@@ -914,94 +958,70 @@ void LPDDR5MemoryController::handle_refresh() {
 // ============================================================================
 
 void LPDDR5MemoryController::schedule_requests() {
+    // FR-FCFS, one command per channel per cycle (each channel has its own command bus):
+    //   1. first ready: the oldest request whose CAS can issue now (a hit on an open row);
+    //   2. otherwise the oldest request whose bank needs an ACTIVATE or PRECHARGE that can issue
+    //      now. A row with pending hits is not closed for a conflict -- unless the conflicting
+    //      request has waited longer than the starvation limit.
+    // It was FCFS on the head only: a request waiting on its bank blocked every other bank.
     if (pending_queue_.empty()) {
         return;
     }
+    const auto& timing = lpddr5_config_.timing;
+    const uint64_t starvation = 4ull * timing.tRC;
+    bool issued_any = false;
 
-    // Simple FCFS scheduling for now
-    MemoryRequest& req = pending_queue_.front();
+    for (uint8_t ch = 0; ch < lpddr5_config_.num_channels; ++ch) {
+        bool issued = false;
 
-    if (try_issue_request(req)) {
-        active_requests_.push_back(std::move(pending_queue_.front()));
-        pending_queue_.pop();
-    } else {
-        stats_.stall_cycles++;
-    }
-}
+        // 1. First ready: a CAS to an open row.
+        for (auto it = pending_queue_.begin(); it != pending_queue_.end() && !issued; ++it) {
+            MemoryRequest& req = *it;
+            if (req.channel != ch || refresh_due(ch, req.bank)) continue;
+            const Bank& bk = channels_[ch].banks[req.bank];
+            const bool open = bk.state == lpddr5::BankState::ACTIVE ||
+                              bk.state == lpddr5::BankState::READING ||
+                              bk.state == lpddr5::BankState::WRITING;
+            if (!open || bk.open_row != req.row) continue;
+            const bool is_read = req.type == RequestType::READ;
+            if (is_read ? !can_read(ch, req.bank, current_cycle_)
+                        : !can_write(ch, req.bank, current_cycle_)) continue;
+            if (is_read) do_read(ch, req.bank, req);
+            else do_write(ch, req.bank, req);
+            if (!req.triggered_activate) stats_.page_hits++;
+            active_requests_.push_back(std::move(req));
+            pending_queue_.erase(it);
+            issued = true;
+        }
 
-bool LPDDR5MemoryController::try_issue_request(MemoryRequest& req) {
-    uint8_t ch = req.channel;
-    uint8_t bank = req.bank;
-    Bank& b = channels_[ch].banks[bank];
-
-    // Check current bank state
-    switch (b.state) {
-        case lpddr5::BankState::IDLE:
-            // Page empty - need to activate
-            if (can_activate(ch, bank, current_cycle_)) {
-                do_activate(ch, bank, req.row, req.id);
+        // 2. The oldest request that needs a row opened or closed.
+        for (auto it = pending_queue_.begin(); it != pending_queue_.end() && !issued; ++it) {
+            MemoryRequest& req = *it;
+            if (req.channel != ch || refresh_due(ch, req.bank)) continue;
+            const Bank& bk = channels_[ch].banks[req.bank];
+            if (bk.state == lpddr5::BankState::IDLE) {
+                if (!can_activate(ch, req.bank, current_cycle_)) continue;
+                do_activate(ch, req.bank, req.row, req.id);
                 // Only count as page_empty if this wasn't preceded by a page conflict
-                if (!req.triggered_conflict) {
-                    stats_.page_empty++;
-                }
-                req.triggered_activate = true;  // Mark that this request triggered activate
-                return false;  // Will issue R/W next cycle
+                if (!req.triggered_conflict) stats_.page_empty++;
+                req.triggered_activate = true;
+                issued = true;
+            } else if (bk.state == lpddr5::BankState::ACTIVE && bk.open_row != req.row) {
+                const bool starved = current_cycle_ >= req.submit_cycle + starvation;
+                if (open_row_hit_pending(ch, req.bank) && !starved) continue;
+                if (!can_precharge(ch, req.bank, current_cycle_)) continue;
+                do_precharge(ch, req.bank);
+                stats_.page_conflicts++;
+                req.triggered_conflict = true;
+                issued = true;
             }
-            return false;
+            // ACTIVATING, PRECHARGING, REFRESHING, or a burst in flight on another row: wait.
+        }
+        issued_any = issued_any || issued;
+    }
 
-        case lpddr5::BankState::ACTIVATING:
-            // Wait for activation to complete
-            return false;
-
-        case lpddr5::BankState::ACTIVE:
-            if (b.open_row == req.row) {
-                // Row is open - issue R/W
-                // Only count as page_hit if we didn't trigger the activate
-                if (req.type == RequestType::READ) {
-                    if (can_read(ch, bank, current_cycle_)) {
-                        do_read(ch, bank, req);
-                        if (!req.triggered_activate) {
-                            stats_.page_hits++;
-                        }
-
-                        // Track bank group usage
-                        // (simplified - would need to track previous access bank)
-                        return true;
-                    }
-                } else {
-                    if (can_write(ch, bank, current_cycle_)) {
-                        do_write(ch, bank, req);
-                        if (!req.triggered_activate) {
-                            stats_.page_hits++;
-                        }
-                        return true;
-                    }
-                }
-            } else {
-                // Page conflict - need to precharge
-                if (can_precharge(ch, bank, current_cycle_)) {
-                    do_precharge(ch, bank);
-                    stats_.page_conflicts++;
-                    req.triggered_conflict = true;  // Mark that this request triggered a conflict
-                }
-            }
-            return false;
-
-        case lpddr5::BankState::READING:
-        case lpddr5::BankState::WRITING:
-            // Wait for burst to complete
-            return false;
-
-        case lpddr5::BankState::PRECHARGING:
-            // Wait for precharge to complete
-            return false;
-
-        case lpddr5::BankState::REFRESHING:
-            // Wait for refresh to complete
-            return false;
-
-        default:
-            return false;
+    if (!issued_any) {
+        stats_.stall_cycles++;
     }
 }
 

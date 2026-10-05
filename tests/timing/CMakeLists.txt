@@ -52,6 +52,16 @@ set_tests_properties(test_memory_controller PROPERTIES
     LABELS "timing;memory_controller;v0.9"
 )
 
+# The hosted cycle-accurate DRAM controller (docs/plans/dram-bank-model.md step 2)
+kpu_add_component_test(test_hosted_dram "timing"
+    test_hosted_dram.cpp
+)
+
+set_tests_properties(test_hosted_dram PROPERTIES
+    LABELS "timing;memory_controller;dram;v0.9"
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+)
+
 # BlockMoverProcess tests
 kpu_add_component_test(test_block_mover_process "timing"
     test_block_mover_process.cpp

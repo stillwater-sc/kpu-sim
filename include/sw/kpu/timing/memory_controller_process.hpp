@@ -10,16 +10,30 @@
 // The MC is a "dumb" DRAM access resource. DMA engines submit requests and
 // poll for completions. L3 credit/tag management is done by DMA engines.
 //
+// TWO MODELS (docs/plans/dram-bank-model.md step 2). Without Config::hosted, the legacy
+// model below: one request per tile, a size-independent latency, and a data bus that is
+// written but never read -- blind to everything the bank structure does (§1.4). With
+// Config::hosted, the process hosts the cycle-accurate LPDDR5 controller through a
+// DramBridge: every tile is split into bursts the deployment's address map places, the
+// controller schedules them on its banks and per-channel data buses in its own clock, and the
+// tile completes when its last burst does. Opt-in for now; the legacy model stays the default
+// until a follow-up flips it and rebaselines.
+//
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2024-2025 Stillwater Supercomputing, Inc.
 // ============================================================================
 
 #pragma once
 
+#include <sw/kpu/timing/dram_bridge.hpp>
 #include <sw/kpu/timing/process_interface.hpp>
 
 #include <cstdint>
+#include <deque>
+#include <memory>
 #include <optional>
+#include <stdexcept>
+#include <unordered_map>
 #include <vector>
 
 namespace sw::kpu::timing {
@@ -105,6 +119,10 @@ public:
 
         std::string name = "MC";
 
+        // The declared DRAM to host (DramHosting::of(spec.device(i))). Absent = the legacy
+        // model. `clock_ghz` is then the executor clock the bridge converts to.
+        std::optional<DramHosting> hosted;
+
         std::string display_name() const {
             return "MC" + std::to_string(controller_id);
         }
@@ -144,7 +162,14 @@ public:
     explicit MemoryControllerProcess(const Config& config)
         : config_(config),
           bank_states_(config.num_banks) {
+        if (config_.hosted)
+            bridge_ = std::make_unique<DramBridge>(*config_.hosted, config_.controller_id,
+                                                   config_.clock_ghz,
+                                                   static_cast<std::uint32_t>(config_.request_queue_depth));
     }
+
+    [[nodiscard]] bool hosted() const { return bridge_ != nullptr; }
+    [[nodiscard]] const DramBridge* bridge() const { return bridge_.get(); }
 
     // ========================================================================
     // DMA Engine Interface (submit/poll pattern)
@@ -161,6 +186,7 @@ public:
      * process them respecting command bus and bank state constraints.
      */
     bool submit_request(const TileDescriptor& tile, bool is_load, uint32_t submitter_id = 0) {
+        if (bridge_) return submit_hosted(tile, is_load, submitter_id);
         if (request_queue_.size() >= config_.request_queue_depth) {
             return false;  // Queue full
         }
@@ -258,6 +284,10 @@ public:
     std::vector<TimingEvent> tick(Cycle current_cycle) override {
         current_cycle_ = current_cycle;
         std::vector<TimingEvent> events;
+        if (bridge_) {
+            tick_hosted(current_cycle, events);
+            return events;
+        }
 
         // Step 1: Check for completed transfers
         check_completions(current_cycle, events);
@@ -269,10 +299,12 @@ public:
     }
 
     [[nodiscard]] bool is_idle() const override {
+        if (bridge_) return hosted_.empty() && !bridge_->busy();
         return in_flight_.empty();
     }
 
     [[nodiscard]] bool has_pending_work() const override {
+        if (bridge_) return !hosted_.empty();
         return !request_queue_.empty();
     }
 
@@ -280,6 +312,7 @@ public:
      * @brief Check if MC is complete (no pending or in-flight work)
      */
     [[nodiscard]] bool is_complete() const override {
+        if (bridge_) return hosted_.empty() && !bridge_->busy();
         return request_queue_.empty() && in_flight_.empty();
     }
 
@@ -307,6 +340,9 @@ public:
         row_empty_ = 0;
         total_bytes_transferred_ = 0;
         next_request_id_ = 0;
+        hosted_.clear();
+        hosted_order_.clear();
+        if (bridge_) bridge_->reset();
     }
 
     // ========================================================================
@@ -317,13 +353,14 @@ public:
     [[nodiscard]] size_t in_flight_count() const { return in_flight_.size(); }
     [[nodiscard]] Cycle stall_cycles_cmd_bus() const { return stall_cycles_cmd_bus_; }
     [[nodiscard]] Cycle stall_cycles_bank() const { return stall_cycles_bank_; }
-    [[nodiscard]] size_t row_hits() const { return row_hits_; }
-    [[nodiscard]] size_t row_misses() const { return row_misses_; }
-    [[nodiscard]] size_t row_empty_accesses() const { return row_empty_; }
+    // Hosted: the controller's per-BURST row-buffer classification.
+    [[nodiscard]] size_t row_hits() const { return bridge_ ? bridge_->stats().page_hits : row_hits_; }
+    [[nodiscard]] size_t row_misses() const { return bridge_ ? bridge_->stats().page_conflicts : row_misses_; }
+    [[nodiscard]] size_t row_empty_accesses() const { return bridge_ ? bridge_->stats().page_empty : row_empty_; }
 
     [[nodiscard]] double row_hit_rate() const {
-        size_t total = row_hits_ + row_misses_ + row_empty_;
-        return total > 0 ? static_cast<double>(row_hits_) / static_cast<double>(total) : 0.0;
+        size_t total = row_hits() + row_misses() + row_empty_accesses();
+        return total > 0 ? static_cast<double>(row_hits()) / static_cast<double>(total) : 0.0;
     }
 
     [[nodiscard]] const Config& config() const { return config_; }
@@ -346,6 +383,20 @@ private:
     Cycle command_bus_ready_ = 0;    ///< When command bus is free
     Cycle data_bus_ready_ = 0;       ///< When data bus is free
     uint32_t next_request_id_ = 0;
+
+    // Hosted mode: tiles in flight, by request id, in arrival order. A tile's bursts are fed to
+    // the controller in order, tiles first-come first-served; the controller schedules them.
+    struct HostedTile {
+        PendingRequest req;
+        std::uint64_t first = 0;        // first burst's address (burst-aligned)
+        std::uint64_t bursts = 0, fed = 0, done = 0;
+        Cycle start = 0;
+        std::uint32_t bank = 0;         // flat bank of the first burst, for CompletedTransfer
+    };
+    std::unique_ptr<DramBridge> bridge_;
+    std::unordered_map<std::uint32_t, HostedTile> hosted_;
+    std::deque<std::uint32_t> hosted_order_;
+    std::vector<std::uint64_t> burst_done_;
 
     // Statistics
     Cycle stall_cycles_cmd_bus_ = 0;
@@ -414,6 +465,88 @@ private:
                        config_.t_cl + config_.t_burst;
         }
         return config_.startup_latency + config_.t_rcd + config_.t_cl + config_.t_burst;
+    }
+
+    // ========================================================================
+    // Hosted mode
+    // ========================================================================
+
+    bool submit_hosted(const TileDescriptor& tile, bool is_load, uint32_t submitter_id) {
+        if (hosted_.size() >= config_.request_queue_depth) return false;   // back-pressure
+        const auto& map = bridge_->map();
+        const std::uint64_t b = map.burst_bytes();
+        if (tile.dram_address + tile.size_bytes > map.capacity())
+            throw std::out_of_range(
+                config_.name + ": tile " + std::to_string(tile.dram_address) + " + " +
+                std::to_string(tile.size_bytes) + " B runs past the declared DRAM (" +
+                std::to_string(map.capacity()) + " B)");
+        HostedTile h;
+        h.req.tile = tile;
+        h.req.is_load = is_load;
+        h.req.enqueue_cycle = current_cycle_;
+        h.req.request_id = next_request_id_++;
+        h.req.submitter_id = submitter_id;
+        h.first = tile.dram_address / b * b;
+        const std::uint64_t end = (tile.dram_address + tile.size_bytes + b - 1) / b * b;
+        h.bursts = (end - h.first) / b;
+        h.bank = h.bursts ? map.flat_bank(map.decode(h.first)) : 0;
+        hosted_order_.push_back(h.req.request_id);
+        hosted_.emplace(h.req.request_id, std::move(h));
+        return true;
+    }
+
+    void tick_hosted(Cycle now, std::vector<TimingEvent>& events) {
+        const std::uint64_t b = bridge_->map().burst_bytes();
+        // Feed bursts, oldest tile first, until the controller's queue refuses one.
+        bool full = false;
+        for (std::uint32_t id : hosted_order_) {
+            HostedTile& h = hosted_.at(id);
+            while (h.fed < h.bursts) {
+                if (!bridge_->submit(h.first + h.fed * b, h.req.is_load, id)) { full = true; break; }
+                if (h.fed++ == 0) {
+                    h.start = now;
+                    auto e = TimingEvent(h.req.is_load ? EventType::DMA_LOAD_START
+                                                       : EventType::DMA_STORE_START,
+                                         now, config_.controller_id, h.req.tile.tile_id, name());
+                    e.matrix_base_address = h.req.tile.matrix_base_address;
+                    e.dram_address = h.req.tile.dram_address;
+                    events.push_back(e);
+                }
+            }
+            if (full) break;
+        }
+        if (full) ++stall_cycles_bank_;
+
+        // Time passes in the controller's clock; collect the bursts that finished.
+        burst_done_.clear();
+        bridge_->advance(now, burst_done_);
+        for (std::uint64_t tag : burst_done_) ++hosted_.at(static_cast<std::uint32_t>(tag)).done;
+
+        // A tile completes with its last burst (a zero-byte tile, on its first tick).
+        for (auto it = hosted_order_.begin(); it != hosted_order_.end();) {
+            HostedTile& h = hosted_.at(*it);
+            if (h.done < h.bursts || h.fed < h.bursts) { ++it; continue; }
+            if (h.bursts == 0) h.start = now;
+            CompletedTransfer ct;
+            ct.tile = h.req.tile;
+            ct.is_load = h.req.is_load;
+            ct.start_cycle = h.start;
+            ct.complete_cycle = now;
+            ct.bank_id = h.bank;
+            // Row-buffer state is per burst in this model; see row_hits() and friends.
+            ct.access_type = MemoryAccessType::ROW_EMPTY;
+            ct.submitter_id = h.req.submitter_id;
+            completed_transfers_.push_back(ct);
+            total_bytes_transferred_ += h.req.tile.size_bytes;
+            auto e = TimingEvent::duration_event(
+                h.req.is_load ? EventType::DMA_LOAD_COMPLETE : EventType::DMA_STORE_COMPLETE,
+                h.start, now - h.start, config_.controller_id, h.req.tile.tile_id, name());
+            e.matrix_base_address = h.req.tile.matrix_base_address;
+            e.dram_address = h.req.tile.dram_address;
+            events.push_back(e);
+            hosted_.erase(*it);
+            it = hosted_order_.erase(it);
+        }
     }
 
     // ========================================================================

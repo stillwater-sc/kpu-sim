@@ -54,7 +54,7 @@ three ways, and each part has its own sizing rule:
 |---|---|---|
 | DMA engine | one descriptor stream: address generation, tile -> bursts, push to L3 under credit | the number of tensor streams the schedule keeps live at once |
 | DMA outstanding window `W` | bursts in flight per engine | Little's law: `N_engines x W >= bursts needed in flight per controller` |
-| Memory controller | per-bank queues, row state, ACT/CAS arbitration, FR-FCFS reordering, refresh | the DRAM part (banks, bank groups, timing) |
+| Memory controller | per-bank queues, row state, ACT/CAS arbitration, FR-FCFS reordering (added in step 2), refresh | the DRAM part (banks, bank groups, timing) |
 
 Bank concurrency is the **controller's** job. If engines are made bank-addressed, the
 controller's scheduling decision moves into the compiler, and the compiler cannot see refresh or
@@ -90,7 +90,7 @@ There are two controller models. They are not at the same fidelity:
 
 | Model | Where | Banks | Bank groups / tRRD / tFAW / refresh | Burst decomposition | Data-bus contention |
 |---|---|---|---|---|---|
-| `LPDDR5MemoryController` | `include/sw/kpu/models/temporal/memory/controllers/lpddr5_controller.hpp` | 16 per channel, 1-2 channels | **yes**, FR-FCFS, validated by `patterns/memory/lpddr5/` | per request | yes |
+| `LPDDR5MemoryController` | `include/sw/kpu/models/temporal/memory/controllers/lpddr5_controller.hpp` | 16 per channel, 1-2 channels | bank groups, tRRD_L, tFAW, refresh; **but see the step 2 correction below** | per request | yes |
 | `MemoryControllerProcess` | `include/sw/kpu/timing/memory_controller_process.hpp` (the CSP executor's) | 16 | no | **no**: a tile is one request | **no** |
 
 The CSP-tier `MemoryControllerProcess` is the one on the program path, and it has three defects
@@ -110,6 +110,20 @@ that make it blind to everything in §1.1–1.3:
 The overload figure in the tile-flow binding (115 DMA transfers past 8 engines per controller at
 512³ on T64) comes from the same single-outstanding assumption. It overstates contention, and it
 should be re-expressed in outstanding bursts once `W` exists.
+
+**Correction (step 2, 2026-10-05).** This table first said the LPDDR5 controller had FR-FCFS
+and was "validated by `patterns/memory/lpddr5/`". Both overstated it:
+- **Scheduling:** it served only the head of its queue (FCFS).
+- **Data bus:** it held a channel's data bus from READ issue through tCL + burst, so reads never
+  pipelined. A stream ran at burst / (tCL + burst), about 36% of the bus.
+- **Missing limits:** it never checked tRRD_S or tCCD_S, although INVARIANTS.md (INV-102)
+  requires tRRD_S.
+- **Start-up:** its timing history started at cycle 0, so no bank could activate before tRC.
+- **Refresh:** it refreshed only idle banks, so a bank a stream kept open was never refreshed.
+
+The pattern suite checks protocol invariants and prints bandwidth; it never compares throughput
+with the part's peak. "Validated" meant invariant-clean, not timing-accurate. Step 2 fixed all
+five (see §4).
 
 Per CLAUDE.md, timing answers to L-CA. Until defects 1–3 are fixed, **L-CA is not an authority
 for DRAM timing.** The temporal LPDDR5 controller is the only bank-faithful model in the repo.
@@ -322,10 +336,32 @@ Each step is one PR and ends green.
    - Tests: encode/decode round-trip, xor folds, and every coordinate reachable.
 2. **Fix the CSP-tier controller's three defects (§1.4)** by hosting the temporal
    `LPDDR5MemoryController` behind the `MemoryControllerProcess` interface (Q1, decided).
-   - It brings bank groups, tRRD/tFAW, refresh and FR-FCFS.
-   - The CSP side adds burst submission, per-submitter completion, `DramAddressMap` decode and a
-     data bus per channel (§3.4).
-   - The `patterns/memory/lpddr5/` suites remain the oracle.
+   (Done.)
+   - **The bridge** (`timing/dram_bridge.hpp`):
+     - `DramAddressMap` decodes each burst and re-encodes it into the controller's own layout.
+     - A rate accumulator runs the controller in its own clock (data rate / 2), so its
+       nanoseconds and the executor's agree.
+     - An LPDDR5X rate scales the LPDDR5-6400 table: ns-fixed parameters scaled, burst-relative
+       ones kept. This is stated as derived timing, not a datasheet table.
+     - It refuses a DRAM the controller cannot model: other technologies, more than 2 channels,
+       ranks other than 1, banks other than 4x4, bursts other than BL16/BL32.
+   - **The process** (`MemoryControllerProcess` with `Config::hosted`, `ConcurrentTimingExecutor::Config::dram`):
+     - A tile becomes its bursts, fed oldest tile first.
+     - The tile completes with its last burst; completion stays per submitter.
+     - A tile past the declared capacity is refused.
+     - **Opt-in.** The legacy model stays the default; a follow-up flips it and rebaselines.
+   - **The controller**, the five step-2 corrections above:
+     - the data bus is held only for each burst's own window, so CAS commands pipeline under
+       tCCD_L/tCCD_S;
+     - FR-FCFS, one command per channel per cycle: hits first, then the oldest needed
+       ACTIVATE/PRECHARGE, a row with pending hits is closed only for a starved request;
+     - tRRD_S and tCCD_S are checked;
+     - timing history starts at "never";
+     - a refresh that is due drains its bank and precharges it.
+
+     Each has a test that failed on the old controller and fails again with the fix reverted.
+   - The `patterns/memory/lpddr5/` programs all still pass with no invariant violations. They
+     are not built by the default target or run by ctest, so they are not a CI oracle yet.
 3. **DMA window.** `dma_engine_process.hpp`: tile -> bursts, window `W` from the spec
    (`dma.window`), completion per burst. The L3 credit is still acquired before the first burst
    is submitted (§2), with the writeback reserve unchanged.
@@ -403,7 +439,7 @@ All six went with the recommendation.
 
 | # | Decision |
 |---|---|
-| Q1 | Host the temporal `LPDDR5MemoryController` behind the `MemoryControllerProcess` interface: one bank model, validated by `patterns/memory/lpddr5/`. Step 2 takes option (b) |
+| Q1 | Host the temporal `LPDDR5MemoryController` behind the `MemoryControllerProcess` interface: one bank model, invariant-checked by `patterns/memory/lpddr5/`. Step 2 takes option (b), and had to fix the controller's throughput and scheduling first (see the §1.4 correction) |
 | Q2 | T64 default map: linear `co:ch:bg:ba:mc:ro` plus a 4-bit row->bank XOR fold. Both remain selectable in the spec |
 | Q3 | L-T2 (#283) models DRAM per burst on bank resources `(mc, channel, rank, bank_group, bank)` |
 | Q4 | The compiler owns `device_address` and records it in the loadable. The loader may relocate only modulo the bank stride |

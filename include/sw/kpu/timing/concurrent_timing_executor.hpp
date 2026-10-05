@@ -22,6 +22,7 @@
 #include <fstream>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <unordered_map>
@@ -72,6 +73,11 @@ public:
     struct Config {
         // Grid topology configuration
         size_t num_memory_controllers = 1;  ///< Number of memory controllers (1 per DRAM channel)
+        /// The declared DRAM to host (DramHosting::of(device)). When set, every memory
+        /// controller hosts the cycle-accurate LPDDR5 controller over this address map, and
+        /// num_memory_controllers must equal the map's controller count. Absent = the legacy
+        /// tile-level model (docs/plans/dram-bank-model.md step 2).
+        std::optional<DramHosting> dram;
         size_t num_dma_engines = 1;         ///< Number of DMA engines
         size_t l3_tile_rows = 2;            ///< L3 tile grid rows (memory tiles)
         size_t l3_tile_cols = 2;            ///< L3 tile grid columns
@@ -498,6 +504,9 @@ public:
     // ========================================================================
 
     [[nodiscard]] size_t num_memory_controllers() const { return memory_controllers_.size(); }
+    [[nodiscard]] const MemoryControllerProcess& memory_controller(size_t i) const {
+        return *memory_controllers_.at(i);
+    }
     [[nodiscard]] size_t num_dma_engines() const { return dma_engines_.size(); }
     [[nodiscard]] size_t num_block_movers() const { return block_movers_.size(); }
     [[nodiscard]] size_t num_row_streamers() const { return row_streamers_.size(); }
@@ -675,8 +684,14 @@ inline void ConcurrentTimingExecutor::create_components() {
     // - Command bus: 1 command per cycle (shared across all banks)
     // - Bank state machines: Track open row per bank
     // - Data bus: Occupied during burst transfers
+    if (config_.dram && config_.dram->map.controllers() != config_.num_memory_controllers)
+        throw std::invalid_argument(
+            "ConcurrentTimingExecutor: the declared DRAM has " +
+            std::to_string(config_.dram->map.controllers()) + " memory controllers, the executor " +
+            std::to_string(config_.num_memory_controllers));
     for (size_t mc = 0; mc < config_.num_memory_controllers; ++mc) {
         MemoryControllerProcess::Config mc_config;
+        mc_config.hosted = config_.dram;
         mc_config.controller_id = static_cast<uint32_t>(mc);
         mc_config.num_banks = config_.mc_num_banks;
         mc_config.request_queue_depth = config_.mc_request_queue_depth;

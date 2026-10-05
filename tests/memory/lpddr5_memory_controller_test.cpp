@@ -848,3 +848,101 @@ TEST_CASE("Tracing: Resource tracking and Chrome Trace export", "[lpddr5][trace]
         std::cout << "=============================\n" << std::endl;
     }
 }
+
+// ============================================================================
+// Throughput and scheduling (docs/plans/dram-bank-model.md step 2)
+// ============================================================================
+// The controller held a channel's data bus from READ issue through tCL + burst, so reads never
+// pipelined (a stream ran at burst / (tCL + burst) of peak); it served only the head of its
+// queue (FCFS); it never checked the cross-bank-group limits tRRD_S and tCCD_S; and it could
+// refresh only an idle bank, so a bank kept open by a stream was never refreshed. Each case
+// below failed on that controller.
+
+namespace {
+uint64_t run_and_time(TestContext& ctx, uint64_t max_cycles = 200000) {
+    const uint64_t start = ctx.mc->current_cycle();
+    REQUIRE(ctx.run_until_complete(max_cycles));
+    ctx.check_violations();
+    return ctx.mc->current_cycle() - start;
+}
+} // namespace
+
+TEST_CASE("Streaming page hits keep the data bus busy", "[lpddr5][throughput]") {
+    TestContext ctx;
+    const auto& t = ctx.config.timing;
+    const int n = 64;
+    for (int i = 0; i < n; ++i) ctx.mc->submit_read(ctx.make_address(0, 100, i), 32);
+    const uint64_t elapsed = run_and_time(ctx);
+    // One activate and one CAS latency up front, then the bursts back to back: at least 90% of
+    // the data bus. The serialized controller reached burst / (tCL + burst), about 36%.
+    const double busy = static_cast<double>(n) * t.tBurst_BL16;
+    const double window = static_cast<double>(elapsed) - t.tRCD - t.tCL;
+    INFO("elapsed " << elapsed << " cycles for " << n << " bursts");
+    CHECK(busy / window >= 0.9);
+    CHECK(ctx.mc->lpddr5_stats().page_hits == n - 1);
+}
+
+TEST_CASE("Activates to different bank groups overlap", "[lpddr5][throughput]") {
+    TestContext ctx;
+    const auto& t = ctx.config.timing;
+    for (uint8_t b : {0, 4, 8, 12}) ctx.mc->submit_read(ctx.make_address(b, 7, 0), 32);
+    const uint64_t elapsed = run_and_time(ctx);
+    // Four activates tRRD_S apart, then four bursts back to back on the data bus.
+    const uint64_t bound = 3 * t.tRRD_S + t.tRCD + t.tCL + 4 * t.tBurst_BL16 + 16;
+    INFO("elapsed " << elapsed << ", bound " << bound);
+    CHECK(elapsed <= bound);
+}
+
+TEST_CASE("FR-FCFS serves a row hit before an older row conflict", "[lpddr5][scheduling]") {
+    TestContext ctx;
+    ctx.mc->submit_read(ctx.make_address(0, 1, 0), 32);   // opens row 1
+    ctx.mc->submit_read(ctx.make_address(0, 2, 0), 32);   // conflicts with row 1
+    ctx.mc->submit_read(ctx.make_address(0, 1, 1), 32);   // hits row 1 -- served first
+    run_and_time(ctx);
+    const auto& s = ctx.mc->lpddr5_stats();
+    CHECK(s.page_hits == 1);
+    CHECK(s.page_conflicts == 1);
+}
+
+TEST_CASE("Activates to different bank groups respect tRRD_S", "[lpddr5][timing]") {
+    TestContext base;
+    base.mc->submit_read(base.make_address(0, 7, 0), 32);
+    base.mc->submit_read(base.make_address(4, 7, 0), 32);
+    const uint64_t fast = run_and_time(base);
+
+    TestContext slow;
+    slow.config.timing.tRRD_S = 60;
+    slow.mc = std::make_unique<LPDDR5MemoryController>(slow.config);
+    slow.mc->submit_read(slow.make_address(0, 7, 0), 32);
+    slow.mc->submit_read(slow.make_address(4, 7, 0), 32);
+    const uint64_t constrained = run_and_time(slow);
+    INFO("tRRD_S 4: " << fast << " cycles, tRRD_S 60: " << constrained);
+    CHECK(constrained >= 60 + slow.config.timing.tRCD + slow.config.timing.tCL);
+}
+
+TEST_CASE("CAS commands to different bank groups respect tCCD_S", "[lpddr5][timing]") {
+    TestContext ctx;
+    ctx.config.timing.tCCD_S = 60;
+    ctx.mc = std::make_unique<LPDDR5MemoryController>(ctx.config);
+    ctx.mc->submit_read(ctx.make_address(0, 7, 0), 32);
+    ctx.mc->submit_read(ctx.make_address(4, 7, 0), 32);
+    const uint64_t elapsed = run_and_time(ctx);
+    // The second READ waits tCCD_S after the first, then its CAS latency and burst.
+    CHECK(elapsed >= ctx.config.timing.tRCD + 60 + ctx.config.timing.tCL +
+                         ctx.config.timing.tBurst_BL16);
+}
+
+TEST_CASE("A bank kept open by a stream is still refreshed", "[lpddr5][refresh]") {
+    TestContext ctx;
+    const auto& t = ctx.config.timing;
+    const uint64_t horizon = 20ull * 16 * t.tREFIpb;
+    int col = 0;
+    while (ctx.mc->current_cycle() < horizon) {
+        while (ctx.mc->can_accept()) ctx.mc->submit_read(ctx.make_address(0, 100, col++ % 1024), 32);
+        ctx.mc->tick();
+    }
+    ctx.check_violations();
+    // The refresh deadline (16 x tREFIpb) never passes for the streamed bank.
+    CHECK(ctx.mc->cycles_until_deadline(0, 0) > 0);
+    CHECK(ctx.mc->lpddr5_stats().refreshes > 0);
+}
