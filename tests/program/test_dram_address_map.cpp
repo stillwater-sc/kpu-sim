@@ -29,6 +29,7 @@ namespace {
 const char* kDeploy = "tests/program/deploy/";
 
 DeploymentSpec t64() { return read_spec_file(std::string(kDeploy) + "kpu_t64.json"); }
+DeploymentSpec t4() { return read_spec_file(std::string(kDeploy) + "kpu_t4.json"); }
 
 // A geometry small enough to enumerate: every field at least one bit wide, 1024 bursts.
 DeviceSpecification tiny(const std::string& map, bool folded) {
@@ -71,6 +72,23 @@ TEST_CASE("the T64 map has the declared geometry, bit for bit", "[program][platf
     CHECK(m.rows() == 65536);
     CHECK(m.describe() == "off[0,6) co[6,11) ch[11,12) bg[12,14) ba[14,16) mc[16,18) ro[18,34)"
                           " xor ba[0,2)^=ro[0,2) xor bg[0,2)^=ro[2,4)");
+}
+
+TEST_CASE("the T4 map is the T64's die behind one controller", "[program][platform][dram][t4]") {
+    // 4 GiB of LPDDR5X over 1 controller x 2 x16 channels: the same 16 Gb x16 die per channel
+    // (64K rows of 16 banks x 2 KiB), the same row->bank fold, and no controller bits.
+    const DramAddressMap m = DramAddressMap::of(t4().device(0));
+    CHECK(m.capacity() == (std::uint64_t{4} << 30));
+    CHECK(m.controllers() == 1);
+    CHECK(m.channels() == 2);
+    CHECK(m.bank_groups() * m.banks_per_group() == 16);
+    CHECK(m.rows() == 65536);
+    CHECK(m.describe() == "off[0,6) co[6,11) ch[11,12) bg[12,14) ba[14,16) ro[16,32)"
+                          " xor ba[0,2)^=ro[0,2) xor bg[0,2)^=ro[2,4)");
+    // Its sixteen consecutive rows land in sixteen banks, as on the T64.
+    std::set<Dim> banks;
+    for (std::uint64_t row = 0; row < 16; ++row) banks.insert(m.flat_bank(m.decode(row << 16)));
+    CHECK(banks.size() == 16);
 }
 
 TEST_CASE("the T64 map is linear below the row", "[program][platform][dram]") {

@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The KPU-T4 declares its DRAM:** 4 GiB of LPDDR5X behind its one controller, as 2 x16
+  channels. That is the T64's 16 Gb x16 die per channel (64K rows x 16 banks x 2 KiB) with the
+  same linear map and 4-bit row->bank fold, and no controller bits. `test_dram_address_map`
+  checks the geometry, and that sixteen consecutive rows land in sixteen banks.
 - **Per-resource tile-flow rows by a derived binding (#286).** `tools/visualization/tileflow/bind.py`
   derives the places the L-T1 executor does not model, by stated policies, and changes no
   timing: a DRAM layout of the tensors, the DMA engine of each transfer by address-interleaved

@@ -785,7 +785,7 @@ has too many resources to follow a schedule tile by tile.
 - L3: 64 tile slots per L3 tile (1 MiB of 64×64 fp32 tiles), 4 banks each
 - BlockMovers: 4. Each L3 tile abuts both compute tiles, so every (L3, compute) pair has its own mover
 - Topology: the folded torus degenerates. The row loop and the column loop are the same two-hub ring, so the NoC is **one wire** between the two L3 hubs, with four fold-end ports
-- Memory: 1 memory controller with 8 DMA engines
+- Memory: 1 memory controller with 8 DMA engines, over 4 GiB of LPDDR5X: 2 x16 channels at 8533 MT/s, 16 banks each, 2 KiB pages. The address map is linear (`co:ch:rk:bg:ba:mc:ro`) with the T64's 4-bit row->bank XOR fold
 - Orchestrator: 1 RV64 hart
 
 **Reference runs:** matmul in 64×64 tiles.
