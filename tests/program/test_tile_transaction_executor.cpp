@@ -101,12 +101,12 @@ TEST_CASE("GEMM is bit-exact against the functional reference", "[program][trans
         par.dma_engines = par.block_movers = par.streamers = 4;
         const auto par_result = run_transactional(par_prog, par, Placement::single(4));
         CHECK(bit_identical(ref_prog.operand("C").values, par_prog.operand("C").values));
-        // and it really did run differently: its computes were spread over several tiles
+        // and it really did run differently: its computes were spread over all four tiles
         std::set<Dim> tiles_used;
         for (const auto& rec : par_result.timeline)
             if (rec.resource == ResourceKind::ComputeTile && rec.kind == TileOpKind::MatMulAccum)
                 tiles_used.insert(rec.resource_id);
-        CHECK(tiles_used.size() > 1);
+        CHECK(tiles_used.size() == 4);          // every tile the fixture provisions
         CHECK(par_result.stats.makespan < result.stats.makespan);
     }
 }
