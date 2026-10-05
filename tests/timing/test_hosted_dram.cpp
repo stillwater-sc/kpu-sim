@@ -50,7 +50,7 @@ TileDescriptor tile_at(std::uint64_t addr, std::uint64_t bytes, Size ti = 0) {
     t.tile_id.matrix = MatrixID::A;
     t.tile_id.ti = ti;
     t.dram_address = addr;
-    t.size_bytes = bytes;
+    t.size_bytes = static_cast<Size>(bytes);
     t.element_size = 4;
     return t;
 }

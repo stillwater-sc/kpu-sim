@@ -5,10 +5,10 @@
 //
 // WHY A BRIDGE. The CSP executor's MemoryControllerProcess timed a whole tile as one request,
 // never read its own data-bus state, and decoded addresses with a hard-coded mapping (§1.4).
-// The repo already has a bank-faithful controller -- LPDDR5MemoryController, with bank groups,
-// tRRD/tFAW, per-bank refresh and a per-channel data bus, validated by patterns/memory/lpddr5
-// -- so rather than grow a second bank model that would drift from it, the process hosts it.
-// The bridge is what makes that possible without editing the validated model:
+// The repo already has a bank-level controller -- LPDDR5MemoryController, with bank groups,
+// tRRD/tCCD/tFAW, per-bank refresh, per-channel data buses and FR-FCFS, invariant-checked by
+// patterns/memory/lpddr5 -- so rather than grow a second bank model that would drift from it,
+// the process hosts it. The bridge adapts it without making it know about deployments:
 //
 //   address   the deployment's DramAddressMap decodes every burst; the bridge re-encodes the
 //             coordinates into the controller's own fixed layout, so the spec's map (and its
@@ -20,9 +20,9 @@
 //             nanosecond-fixed parameters to the faster clock and keeps the burst-relative
 //             ones -- DERIVED, not a datasheet table, and named so in timing_note()
 //
-// The controller's scheduler is FCFS on the head of its queue, not FR-FCFS: a request waiting
-// on its bank blocks the ones behind it. That is the hosted model's behavior, stated rather
-// than hidden; FR-FCFS is a change to the controller, not to this bridge.
+// Hosting it exposed defects in the controller itself -- reads that never pipelined, FCFS on
+// the queue head, unchecked tRRD_S/tCCD_S, and refresh that skipped open banks -- fixed in the
+// controller (docs/plans/dram-bank-model.md §1.4 correction), not worked around here.
 //
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2024-2025 Stillwater Supercomputing, Inc.

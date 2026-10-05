@@ -871,7 +871,7 @@ TEST_CASE("Streaming page hits keep the data bus busy", "[lpddr5][throughput]") 
     TestContext ctx;
     const auto& t = ctx.config.timing;
     const int n = 64;
-    for (int i = 0; i < n; ++i) ctx.mc->submit_read(ctx.make_address(0, 100, i), 32);
+    for (int i = 0; i < n; ++i) ctx.mc->submit_read(ctx.make_address(0, 100, static_cast<uint32_t>(i)), 32);
     const uint64_t elapsed = run_and_time(ctx);
     // One activate and one CAS latency up front, then the bursts back to back: at least 90% of
     // the data bus. The serialized controller reached burst / (tCL + burst), about 36%.
@@ -885,7 +885,7 @@ TEST_CASE("Streaming page hits keep the data bus busy", "[lpddr5][throughput]") 
 TEST_CASE("Activates to different bank groups overlap", "[lpddr5][throughput]") {
     TestContext ctx;
     const auto& t = ctx.config.timing;
-    for (uint8_t b : {0, 4, 8, 12}) ctx.mc->submit_read(ctx.make_address(b, 7, 0), 32);
+    for (int b : {0, 4, 8, 12}) ctx.mc->submit_read(ctx.make_address(static_cast<uint8_t>(b), 7, 0), 32);
     const uint64_t elapsed = run_and_time(ctx);
     // Four activates tRRD_S apart, then four bursts back to back on the data bus.
     const uint64_t bound = 3 * t.tRRD_S + t.tRCD + t.tCL + 4 * t.tBurst_BL16 + 16;
@@ -938,7 +938,7 @@ TEST_CASE("A bank kept open by a stream is still refreshed", "[lpddr5][refresh]"
     const uint64_t horizon = 20ull * 16 * t.tREFIpb;
     int col = 0;
     while (ctx.mc->current_cycle() < horizon) {
-        while (ctx.mc->can_accept()) ctx.mc->submit_read(ctx.make_address(0, 100, col++ % 1024), 32);
+        while (ctx.mc->can_accept()) ctx.mc->submit_read(ctx.make_address(0, 100, static_cast<uint32_t>(col++ % 1024)), 32);
         ctx.mc->tick();
     }
     ctx.check_violations();

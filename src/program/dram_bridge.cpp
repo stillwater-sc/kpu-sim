@@ -114,7 +114,7 @@ DramBridge::DramBridge(const DramHosting& h, unsigned controller_id, double exec
                                    : "timing DERIVED from the LPDDR5-6400 table by data rate "
                                      "(ns-fixed parameters scaled, burst-relative kept), not a "
                                      "datasheet table")
-      << "; FCFS scheduling; " << ticks_per_cycle_ << " controller ticks per executor cycle";
+      << "; FR-FCFS scheduling; " << ticks_per_cycle_ << " controller ticks per executor cycle";
     timing_note_ = n.str();
 }
 
