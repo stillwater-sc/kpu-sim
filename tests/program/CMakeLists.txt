@@ -80,6 +80,16 @@ set_tests_properties(test_tile_flow_record PROPERTIES
     LABELS "program;record;tileflow;v0.9"
 )
 
+# The NoC's hubs and port controllers in the deployment (docs/plans/noc-port-arbitration.md step 2)
+kpu_add_component_test(test_noc_spec "program"
+    test_noc_spec.cpp
+)
+
+set_tests_properties(test_noc_spec PROPERTIES
+    LABELS "program;platform;noc;v0.9"
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+)
+
 # The DRAM geometry and its address map (docs/plans/dram-bank-model.md step 1)
 kpu_add_component_test(test_dram_address_map "program"
     test_dram_address_map.cpp

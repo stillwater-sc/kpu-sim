@@ -143,6 +143,26 @@ struct DeviceSpecification {
     } memory;
     struct Cpu { std::optional<Dim> harts; } cpu;
 
+    // The NoC's store-and-forward hubs and fold-end port controllers
+    // (docs/plans/noc-port-arbitration.md §3.1). Absent = not declared; no level models it
+    // until the CSP hub and port processes land (plan step 4).
+    //   hub_buffer_blocks          block buffers per hub; at least its 4 inputs, so every
+    //                              link can deliver a block at once (the liveness argument)
+    //   port.input_queue_blocks    per attached DMA engine: blocks waiting to be injected
+    //   port.output_queue_blocks   per attached DMA engine: blocks ejected toward it;
+    //                              0 = derived from the DMA write latency (§3.4)
+    //   port.arbitration           ring-through traffic first, then the oldest queued head
+    //                              (greedy, stateless; decided on review, Q2/Q3)
+    struct Noc {
+        Dim hub_buffer_blocks = 4;
+        struct Port {
+            Dim input_queue_blocks = 2;
+            Dim output_queue_blocks = 0;
+            std::string arbitration = "ring_first_oldest";
+        } port;
+    };
+    std::optional<Noc> noc;
+
     // Analytical-harness coefficients. The executors do not use these; the
     // first-order model is a different tier with a different job.
     struct Analytical {
@@ -211,6 +231,32 @@ inline bool finite_non_negative(double v) { return std::isfinite(v) && v >= 0.0;
 
 inline constexpr const char* kFinitePos = " must be finite and positive";
 inline constexpr const char* kFiniteNonNeg = " must be finite and non-negative";
+
+// ----------------------------------------------------------------------------
+// NoC hubs and ports (docs/plans/noc-port-arbitration.md §3.1)
+// ----------------------------------------------------------------------------
+inline constexpr Dim kNocHubInputs = 4;   // a hub's links: two per torus dimension
+
+inline bool known_noc_arbitration(const std::string& a) { return a == "ring_first_oldest"; }
+
+// Empty when the device declares no NoC or a consistent one; otherwise the first problem.
+inline std::string noc_problem(const DeviceSpecification& d) {
+    if (!d.noc) return {};
+    const auto& n = *d.noc;
+    if (d.topology != "checkerboard")
+        return "noc applies to the checkerboard's folded torus, not the '" + d.topology +
+               "' topology";
+    if (n.hub_buffer_blocks < kNocHubInputs)
+        return "noc.hub_buffer_blocks (" + std::to_string(n.hub_buffer_blocks) +
+               ") must be at least the hub's " + std::to_string(kNocHubInputs) +
+               " inputs, so every link can deliver a block at once";
+    if (n.port.input_queue_blocks == 0)
+        return "noc.port.input_queue_blocks must be at least 1: an engine needs a slot to push "
+               "into before the port can inject its block";
+    if (!known_noc_arbitration(n.port.arbitration))
+        return "noc.port.arbitration '" + n.port.arbitration + "' is not one of ring_first_oldest";
+    return {};
+}
 
 // ----------------------------------------------------------------------------
 // DRAM geometry (docs/plans/dram-bank-model.md §3.1)
@@ -427,6 +473,7 @@ inline std::string DeploymentSpec::validate() const {
         }
         if (d.cpu.harts && *d.cpu.harts == 0) return where + ": cpu.harts declared as zero";
         if (std::string why = dram_problem(d); !why.empty()) return where + ": " + why;
+        if (std::string why = noc_problem(d); !why.empty()) return where + ": " + why;
     }
     return {};
 }
@@ -468,7 +515,8 @@ inline DeviceDescriptor DeploymentSpec::device_view(Dim i) const {
 // ----------------------------------------------------------------------------
 // Named as data so the report and the "does this level model it" table cannot drift
 // apart — a table keyed on a string typed twice is a table that disagrees with itself.
-enum class SpecField { L3Tiles, L3Banks, L2BanksPerTile, L1Vectors, DmaBurst, L3Capacity, Dram };
+enum class SpecField { L3Tiles, L3Banks, L2BanksPerTile, L1Vectors, DmaBurst, L3Capacity, Dram,
+                       Noc };
 
 inline const char* to_string(SpecField f) {
     switch (f) {
@@ -479,6 +527,7 @@ inline const char* to_string(SpecField f) {
         case SpecField::DmaBurst:       return "dma.burst_bytes";
         case SpecField::L3Capacity:     return "l3.capacity_tiles";
         case SpecField::Dram:           return "memory.dram";
+        case SpecField::Noc:            return "noc";
     }
     return "?";
 }
@@ -495,6 +544,7 @@ inline bool declared(const DeviceSpecification& s, SpecField f) {
         case SpecField::DmaBurst:       return s.dma.burst_bytes.has_value();
         case SpecField::L3Capacity:     return s.l3.capacity_tiles != 0;
         case SpecField::Dram:           return s.memory.dram.has_value();
+        case SpecField::Noc:            return s.noc.has_value();
     }
     return false;
 }
@@ -515,6 +565,15 @@ inline std::string declared_value(const DeviceSpecification& s, SpecField f) {
                    std::to_string(m.bank_groups * m.banks_per_group) + " banks, " +
                    std::to_string(m.capacity_bytes) + " B, map " + m.map;
         }
+        case SpecField::Noc: {
+            if (!s.noc) return "0";
+            const auto& n = *s.noc;
+            return "hub " + std::to_string(n.hub_buffer_blocks) + " blocks, port in " +
+                   std::to_string(n.port.input_queue_blocks) + " / out " +
+                   (n.port.output_queue_blocks ? std::to_string(n.port.output_queue_blocks)
+                                               : std::string("derived")) +
+                   " per engine, " + n.port.arbitration;
+        }
     }
     return "?";
 }
@@ -522,7 +581,8 @@ inline std::string declared_value(const DeviceSpecification& s, SpecField f) {
 inline const std::vector<SpecField>& all_spec_fields() {
     static const std::vector<SpecField> f = {
         SpecField::L3Tiles, SpecField::L3Banks, SpecField::L2BanksPerTile,
-        SpecField::L1Vectors, SpecField::DmaBurst, SpecField::L3Capacity, SpecField::Dram};
+        SpecField::L1Vectors, SpecField::DmaBurst, SpecField::L3Capacity, SpecField::Dram,
+        SpecField::Noc};
     return f;
 }
 

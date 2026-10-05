@@ -31,7 +31,8 @@ const std::set<std::string>& device_keys() {
                                             "macs_per_cycle", "element_bytes",
                                             "dma",           "l3",       "l2",
                                             "l1",            "movers",   "analytical",
-                                            "array",         "memory",   "cpu"};
+                                            "array",         "memory",   "cpu",
+                                            "noc"};
     return k;
 }
 const std::set<std::string>& dma_keys() {
@@ -69,6 +70,15 @@ const std::set<std::string>& dram_keys() {
 }
 const std::set<std::string>& xor_fold_keys() {
     static const std::set<std::string> k = {"into", "from", "bits", "from_lsb"};
+    return k;
+}
+const std::set<std::string>& noc_keys() {
+    static const std::set<std::string> k = {"hub_buffer_blocks", "port"};
+    return k;
+}
+const std::set<std::string>& noc_port_keys() {
+    static const std::set<std::string> k = {"input_queue_blocks", "output_queue_blocks",
+                                            "arbitration"};
     return k;
 }
 const std::set<std::string>& cpu_keys() {
@@ -270,6 +280,22 @@ DeviceSpecification read_device(const json& obj, const std::string& where) {
             d.memory.dram = m;
         }
     }
+    if (obj.contains("noc")) {
+        const json& s = obj.at("noc");
+        const std::string w = where + ".noc";
+        reject_unknown(s, noc_keys(), w);
+        DeviceSpecification::Noc n;
+        n.hub_buffer_blocks = read_dim(s, "hub_buffer_blocks", n.hub_buffer_blocks, w);
+        if (s.contains("port")) {
+            const json& p = s.at("port");
+            const std::string wp = w + ".port";
+            reject_unknown(p, noc_port_keys(), wp);
+            n.port.input_queue_blocks = read_dim(p, "input_queue_blocks", n.port.input_queue_blocks, wp);
+            n.port.output_queue_blocks = read_dim(p, "output_queue_blocks", n.port.output_queue_blocks, wp);
+            n.port.arbitration = read_string(p, "arbitration", n.port.arbitration, wp);
+        }
+        d.noc = n;
+    }
     if (obj.contains("cpu")) {
         const json& s = obj.at("cpu");
         const std::string w = where + ".cpu";
@@ -360,6 +386,14 @@ json write_device(const DeviceSpecification& d) {
         o["memory"] = mem;
     }
     if (d.cpu.harts) o["cpu"] = json{{"harts", *d.cpu.harts}};
+    // Written in full when declared, so a round trip states the defaults it relied on.
+    if (d.noc) {
+        const auto& n = *d.noc;
+        o["noc"] = json{{"hub_buffer_blocks", n.hub_buffer_blocks},
+                        {"port", json{{"input_queue_blocks", n.port.input_queue_blocks},
+                                      {"output_queue_blocks", n.port.output_queue_blocks},
+                                      {"arbitration", n.port.arbitration}}}};
+    }
 
     json an = json::object();
     an["bytes_per_cycle"] = d.analytical.bytes_per_cycle;

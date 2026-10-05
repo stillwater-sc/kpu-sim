@@ -140,6 +140,11 @@ inline bool level_models(ExecutionLevel l, platform::SpecField f) {
             // schedules on banks yet: the CSP-tier controller keeps its built-in mapping
             // until docs/plans/dram-bank-model.md step 2 hosts the LPDDR5 controller.
             return false;
+        case SpecField::Noc:
+            // Hubs and port controllers are declared and validated; L-T1 deliberately does
+            // not model ports (it tests tile sequencing and L3 occupancy), and the CSP hub and
+            // port processes are docs/plans/noc-port-arbitration.md step 4.
+            return false;
     }
     return false;
 }

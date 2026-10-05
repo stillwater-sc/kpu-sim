@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The deployment declares its NoC (NoC port plan step 2, `docs/plans/noc-port-arbitration.md`).**
+  An optional `noc` section:
+  - `hub_buffer_blocks`: store-and-forward block buffers per hub, at least the hub's 4 inputs;
+  - `port.input_queue_blocks` and `port.output_queue_blocks`: per attached DMA engine; an output
+    depth of 0 is derived from the DMA write latency;
+  - `port.arbitration`: `ring_first_oldest`, the decided policy.
+
+  It is validated with refusals that name the field, written out in full so a round trip states
+  the defaults it relied on, and absent from specs that don't declare it. Every level reports it
+  as unmodelled until the CSP hub and port processes land (step 4). The T4 and T64 fixtures
+  declare it.
 - **The CSP memory controller can host the cycle-accurate LPDDR5 controller (DRAM plan step 2).**
   `MemoryControllerProcess` with `Config::hosted` (or `ConcurrentTimingExecutor::Config::dram`,
   from `DramHosting::of(device)`):

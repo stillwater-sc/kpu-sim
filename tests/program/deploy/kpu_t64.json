@@ -18,6 +18,9 @@
                      { "into": "bg", "from": "ro", "bits": 2, "from_lsb": 2 } ]
     }
   },
+  "noc":     { "hub_buffer_blocks": 4,
+               "port": { "input_queue_blocks": 2, "output_queue_blocks": 0,
+                         "arbitration": "ring_first_oldest" } },
   "cpu":     { "harts": 4 },
   "movers":  { "block_movers": 112, "streamers": 32 }
 }
