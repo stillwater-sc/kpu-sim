@@ -151,6 +151,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **CI compile cache restored.** `mozilla-actions/sccache-action@v0.0.7` used GitHub's legacy
+  Actions cache service, which GitHub shut down on 2025-04-15.
+  - **The symptom:** sccache's server failed to start on every OS, and the probe step's fallback
+    turned that into a yellow warning. Every build ran uncached (`Compile requests 0`), and the
+    Windows job took 26 to 28 minutes against its 30-minute timeout.
+  - **The fix:** bumped to v0.0.11, which uses the v2 cache service.
+  - **So it can't hide again:** the fallback now raises an error annotation and a job-summary
+    line, and a configured cache that serves no compile requests is flagged after the build.
+    Builds still pass when the cache is down.
 - **The LPDDR5 controller's throughput and scheduling (DRAM plan step 2):**
   - It held the data bus from READ issue through tCL + burst, so reads never pipelined: about
     36% of peak, now 99.8% on a stream.

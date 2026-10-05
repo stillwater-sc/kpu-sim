@@ -88,7 +88,7 @@ jobs:
       uses: ilammy/msvc-dev-cmd@v1
 
     - name: Set up sccache
-      uses: mozilla-actions/sccache-action@v0.0.7
+      uses: mozilla-actions/sccache-action@v0.0.11
       # The action can hard-fail during a GitHub Actions Cache incident (its
       # setup call returns an HTML error page -> HttpError), which would kill
       # the job before the probe/fallback below runs. sccache is a build-speed
@@ -108,7 +108,10 @@ jobs:
         if sccache --start-server; then
           echo "SCCACHE_LAUNCHER=sccache" >> "$GITHUB_ENV"
         else
-          echo "::warning::sccache backend unavailable; building without compile cache"
+          # Loud on purpose: v0.0.7 spoke to GitHub's legacy cache service, which was shut down,
+          # and this fallback hid it behind a yellow warning while every build ran uncached.
+          echo "::error title=sccache down::sccache backend unavailable; building WITHOUT the compile cache (expect a much slower build)"
+          echo "### sccache backend unavailable -- this build ran without the compile cache" >> "$GITHUB_STEP_SUMMARY"
         fi
 
     - name: Set reusable strings
@@ -154,7 +157,15 @@ jobs:
       # transitions and cache-thrash regressions in PRs that touch many TUs.
       # Skipped when the backend probe failed and we built without sccache.
       if: env.SCCACHE_LAUNCHER
-      run: sccache --show-stats
+      shell: bash
+      run: |
+        sccache --show-stats | tee sccache-stats.txt
+        # A configured cache that served no compile requests is not caching anything.
+        requests=$(awk '/^Compile requests[[:space:]]/ {print $NF; exit}' sccache-stats.txt)
+        echo "### sccache: ${requests:-?} compile requests" >> "$GITHUB_STEP_SUMMARY"
+        if [ "${requests:-0}" = "0" ]; then
+          echo "::error title=sccache unused::sccache was configured but served 0 compile requests"
+        fi
 
     - name: Test
       working-directory: ${{ steps.strings.outputs.build-output-dir }}
