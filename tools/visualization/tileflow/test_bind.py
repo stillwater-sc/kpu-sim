@@ -29,6 +29,15 @@ import tflow_check   # noqa: E402
 BUNDLE = FLOORPLAN = None
 
 
+def over_count(ivs):
+    """Transfers that start while the bus already holds a block, counted directly: another
+    transfer started earlier and has not ended (an end at the same cycle frees the bus first),
+    or started at the same cycle and is served first. Zero-length transfers hold nothing."""
+    live = sorted((a, b) for a, b in ivs if b > a)
+    return sum(1 for j, (s, _) in enumerate(live)
+               if any(a < s < b for a, b in live) or any(a == s for a, _ in live[:j]))
+
+
 class BindTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -120,6 +129,7 @@ class BindTest(unittest.TestCase):
                 self.assertEqual(got["transfers"], len(ivs))
                 peak = max((sum(1 for a, b in ivs if a <= t < b) for t, _ in ivs), default=0)
                 self.assertEqual(got["peak"], peak, f"{name} {bus}")
+                self.assertEqual(got["oversubscribed"], over_count(ivs), f"{name} {bus}")
                 self.assertEqual(got["oversubscribed"] > 0, peak > 1, f"{name} {bus}")
 
     def test_a_floorplan_of_another_device_is_refused(self):

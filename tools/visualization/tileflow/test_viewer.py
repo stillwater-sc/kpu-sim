@@ -128,6 +128,25 @@ process.stdout.write(JSON.stringify(rows.map(r => [r.name, r.cap, r.ivs.length, 
         self.assertEqual(json.loads(p.stdout), [["t4/noc/port[2]#inject", 1, 3, "t4/noc/port[2]"],
                                                 ["t4/noc/port[2]#eject", 1, 1, "t4/noc/port[2]"]])
 
+    def test_a_port_opens_its_busy_bus(self):
+        # Clicking a port whose ejection bus is busy opened the idle injection row.
+        node = shutil.which("node")
+        if not node:
+            self.skipTest("Node.js not on PATH")
+        page = (HERE / "index.html").read_text(encoding="utf-8")
+        fn = re.search(r"function pickBlockRow\(rows, block, t\) \{.*?\n\}", page, re.S)
+        self.assertIsNotNone(fn)
+        js = self.tmp / "pick.js"
+        js.write_text(fn.group(0) + """
+const rows = [{ header: true }, { name: "p#inject", block: "p", ivs: [[0, 5]] },
+              { name: "p#eject", block: "p", ivs: [[10, 20]] }];
+process.stdout.write(JSON.stringify([pickBlockRow(rows, "p", 12).name,
+                                     pickBlockRow(rows, "p", 2).name,
+                                     pickBlockRow(rows, "p", 30).name]));""", encoding="utf-8")
+        p = subprocess.run([node, str(js)], capture_output=True, text=True)
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertEqual(json.loads(p.stdout), ["p#eject", "p#inject", "p#inject"])
+
     def test_a_non_bundle_is_refused(self):
         p = self.pack(str(self.tmp), "-o", str(self.tmp / "x.html"))
         self.assertEqual(p.returncode, 2)

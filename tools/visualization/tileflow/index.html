@@ -220,6 +220,13 @@ function portBusRows(name, label, ivs, hop) {
   ];
 }
 
+// The row a floorplan block opens in the inspector. A port has two (injection, ejection):
+// prefer the one carrying a block at the cursor, else the first.
+function pickBlockRow(rows, block, t) {
+  const mine = rows.filter(r => !r.header && (r.name === block || r.block === block));
+  return mine.find(r => r.ivs.some(([a, b]) => a <= t && t < b)) || mine[0];
+}
+
 // What a binding must match to be this bundle's (bind.py's bundle_identity, same keys and order).
 function bundleIdentity(m) {
   const t = m.tables;
@@ -595,7 +602,7 @@ function inspectBlock(b) {
     return;
   }
   if (R.B) {
-    const row = ROWS.find(r => !r.header && (r.name === b.name || r.block === b.name));
+    const row = pickBlockRow(ROWS, b.name, T);
     if (row) return inspectBoundRow(row);
   }
   const pooled = { l3_tile: "L3 is pooled at this level: the record says how many tiles L3 held, never which L3 tile held them.", block_mover: "BlockMovers are a pooled lane set at this level; binding a move to this edge needs L3 slot binding (plan step 6).", dma_engine: "DMA engines are a pooled lane set at this level.", noc_router: "NoC lanes are pooled at this level." }[b.kind];
