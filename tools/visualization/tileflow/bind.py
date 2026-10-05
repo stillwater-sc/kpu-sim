@@ -34,6 +34,12 @@ THE POLICIES (also written into binding.json, so a viewer can show them):
           attachment) and follows a shortest path over the torus's ring links to the home hub,
           deterministic on ties. Every hub and port on the path is busy for the transfer's
           whole interval: the executor models no per-hop NoC timing.
+  ports   A port is two buses, injection (a DMA engine pushes a block in) and ejection (a block
+          is pushed out to a DMA engine's buffer), each carrying ONE block at a time
+          (docs/plans/noc-port-arbitration.md). L-T1 does not model ports: its DMA lanes run
+          concurrently, so a bus that carries more than one block at once is the derived path
+          over-subscribing it. That is reported per bus (peak, and transfers that started while
+          the bus was held), never normalized away.
 
 When the executor binds L3 slots itself (plan step 6), the l3 and bm policies are replaced by
 the modelled binding and the viewer's rows stop saying "derived".
@@ -300,6 +306,19 @@ def bind(rec, fp):
                 p = path(hub(h), hub(relay))
                 if p:
                     t_path[i] = [node(n) for n in (p if hop == HOP_BM_DOWN else p[::-1])]
+    # ---- ports: one block per bus ------------------------------------------------------
+    port_buses = {}
+    for i in range(rec["transit_rows"]):
+        hop = tr["hop"][i]
+        if hop not in (HOP_DMA_IN, HOP_DMA_OUT) or not t_path[i]:
+            continue
+        end = nodes[t_path[i][0] if hop == HOP_DMA_IN else t_path[i][-1]]
+        if "/port[" in end:
+            bus = "inject" if hop == HOP_DMA_IN else "eject"
+            port_buses.setdefault(end, {"inject": [], "eject": []})[bus].append((tr["t0"][i], tr["t1"][i]))
+    ports = {name: {bus: bus_load(ivs) for bus, ivs in buses.items()}
+             for name, buses in sorted(port_buses.items())}
+
     bms = sorted({b for b in t_bm if b})
     bm_ix = {b: k for k, b in enumerate(bms)}
     missing = [b for b in bms if b not in names]
@@ -319,6 +338,7 @@ def bind(rec, fp):
             "l3": "homed at residency start in the least-loaded L3 tile abutting the next consuming compute tile; per-tile capacity = L3 capacity / L3 tiles; nearest L3 with room otherwise",
             "bm": "home L3's mover facing the destination compute tile, else a NoC relay to the nearest abutting L3",
             "noc": "shortest path over ring links from the engine's attached port to the home hub; every node busy for the whole transfer (no per-hop NoC timing at L-T1)",
+            "ports": "two buses per port (injection, ejection), one block each; NOT modelled at L-T1, so a bus over one block is over-subscription by the derived path, counted per bus",
         },
         "notes": notes,
         "dram": {"top": top, "end": addr, "align": ALIGN, "layout": "tile-major", "tensors": tensors},
@@ -332,7 +352,21 @@ def bind(rec, fp):
         "nodes": nodes,
         "transit_path": t_path,
         "unrouted": unrouted,
+        "ports": {"capacity_per_bus": 1, "modelled": False, "buses": ports},
     }
+
+
+def bus_load(intervals):
+    """A bus's transfers, its peak simultaneous blocks, and how many transfers started while
+    it already held one (ends before starts at the same cycle, as everywhere in the record)."""
+    ev = sorted([(a, 1) for a, b in intervals if b > a] + [(b, -1) for a, b in intervals if b > a])
+    cur = peak = over = 0
+    for _, d in ev:
+        if d > 0 and cur >= 1:
+            over += 1
+        cur += d
+        peak = max(peak, cur)
+    return {"transfers": len(intervals), "peak": peak, "oversubscribed": over}
 
 
 def bundle_identity(manifest):
@@ -364,6 +398,11 @@ def main():
           f"{out['l3']['overflow']} over), {out['dma']['overloaded']} DMA transfers past a "
           f"controller's engines, {len(out['bms'])} BlockMovers used, "
           f"{len(out['nodes'])} NoC nodes on paths, {out['unrouted']} unrouted"
+          + "".join(f"\n  port {name}: {bus} peak {v['peak']} blocks on a 1-block bus, "
+                    f"{v['oversubscribed']} of {v['transfers']} transfers over-subscribed "
+                    f"(ports are not modelled at L-T1)"
+                    for name, buses in out["ports"]["buses"].items()
+                    for bus, v in buses.items() if v["peak"] > 1)
           + "".join(f"\n  note: {n}" for n in out["notes"]))
 
 

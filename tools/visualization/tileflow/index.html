@@ -137,7 +137,7 @@ code { font: 12px var(--font-data); }
     <div class="panel">
       <h2>Station swimlanes: occupancy ÷ capacity per time bin (drag or wheel to zoom in, wheel or "Zoom out" to zoom out, click to set the cursor; click a category to fold it)</h2>
       <canvas id="lanes" tabindex="0"></canvas>
-      <div class="legend"><span><span class="sw" style="background:var(--seq-lo)"></span>empty</span><span><span class="sw" style="background:var(--seq-hi)"></span>full</span><span><span class="sw" style="background:var(--crit)"></span>over capacity (a bug: see tflow_check TF1)</span><span><span class="sw hatch"></span>not modelled at this level</span><span id="levelNote"></span></div>
+      <div class="legend"><span><span class="sw" style="background:var(--seq-lo)"></span>empty</span><span><span class="sw" style="background:var(--seq-hi)"></span>full</span><span><span class="sw" style="background:var(--crit)"></span>over capacity: on an L3 row a bug (tflow_check TF1); on a port bus, over-subscription that L-T1 does not model</span><span><span class="sw hatch"></span>not modelled at this level</span><span id="levelNote"></span></div>
     </div>
 
     <div class="panel">
@@ -210,6 +210,16 @@ function parse(files) {
   }
   return R;
 }
+// A port is two buses, one block each (docs/plans/noc-port-arbitration.md): injection carries
+// DMA-in transfers (hop 0), ejection the writebacks (hop 5). One row per bus, capacity 1.
+function portBusRows(name, label, ivs, hop) {
+  const inject = ivs.filter(iv => hop[iv[2]] === 0), eject = ivs.filter(iv => hop[iv[2]] === 5);
+  return [
+    { name: name + "#inject", label: label + " inject", cap: 1, ivs: inject, extra: { kind: "port", block: name } },
+    { name: name + "#eject", label: label + " eject", cap: 1, ivs: eject, extra: { kind: "port", block: name } },
+  ];
+}
+
 // What a binding must match to be this bundle's (bind.py's bundle_identity, same keys and order).
 function bundleIdentity(m) {
   const t = m.tables;
@@ -351,16 +361,15 @@ function buildBoundRows() {
 
   const through = B.nodes.map(() => []);
   for (let i = 0; i < tr.rows; i++) for (const n of B.transit_path[i] || []) through[n].push([tr.t0[i], tr.t1[i], i]);
-  const attached = new Map();
-  for (const l of (R.fp && R.fp.noc) || []) if (l.kind === "attach") attached.set(l.b, (attached.get(l.b) || 0) + 1);
   const ports = [], hubs = new Map();
   B.nodes.forEach((n, k) => { if (n.includes("/port[")) ports.push([n, k]); else hubs.set(n, k); });
   const portIdx = n => +n.match(/port\[(\d+)\]/)[1];
   ports.sort((a, b) => portIdx(a[0]) - portIdx(b[0]));
   const portLabel = new Map();
   if (R.fp) for (const b of flatBlocks(R.fp)) if (b.kind === "noc_port") portLabel.set(b.name, b.label);
-  cat("port", "NoC ports", true, "fold-end ports: DMA bursts entering or leaving a loop; capacity = engines attached");
-  for (const [n, k] of ports) row("port", n, `port[${portIdx(n)}] ${portLabel.get(n) || ""}`, attached.get(n) || 0, through[k], { kind: "port" });
+  cat("port", "NoC ports", true, "two buses per port, one block each: injection (a DMA engine pushes a block in) and ejection (a block pushed out to a DMA engine buffer). Ports are NOT modelled at L-T1 -- its DMA lanes run concurrently -- so a bus above one block is the derived path over-subscribing the port, shown as over capacity, not normalized away");
+  for (const [n, k] of ports)
+    for (const r of portBusRows(n, `port[${portIdx(n)}] ${portLabel.get(n) || ""}`, through[k], R.tr.hop)) row("port", r.name, r.label, r.cap, r.ivs, r.extra);
   cat("hub", "NoC hubs", true, "bursts crossing each L3 hub on the derived route (no per-hop timing at L-T1)");
   B.l3.tiles.forEach(name => { const n = name + "/noc", k = hubs.get(n); row("hub", n, name.split("/").pop() + "/noc", 0, k === undefined ? [] : through[k], { kind: "hub" }); });
 
@@ -586,7 +595,7 @@ function inspectBlock(b) {
     return;
   }
   if (R.B) {
-    const row = ROWS.find(r => !r.header && r.name === b.name);
+    const row = ROWS.find(r => !r.header && (r.name === b.name || r.block === b.name));
     if (row) return inspectBoundRow(row);
   }
   const pooled = { l3_tile: "L3 is pooled at this level: the record says how many tiles L3 held, never which L3 tile held them.", block_mover: "BlockMovers are a pooled lane set at this level; binding a move to this edge needs L3 slot binding (plan step 6).", dma_engine: "DMA engines are a pooled lane set at this level.", noc_router: "NoC lanes are pooled at this level." }[b.kind];

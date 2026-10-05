@@ -151,6 +151,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **NoC ports are no longer drawn as concurrent (NoC port plan step 1,
+  `docs/plans/noc-port-arbitration.md`).** A fold-end port is two buses, injection and ejection,
+  each carrying one block at a time.
+  - **What was wrong:** the viewer drew a port against "engines attached", so the T4 reference
+    run's eight concurrent transfers through `port[2]` read as a legal 100%. The binding let
+    overlapping transfers stack, and the floorplan comment justified it ("more engines per port
+    lets more traffic through").
+  - **The viewer:** one row per bus, each against capacity 1, with over-subscription shown as
+    over capacity.
+  - **`bind.py`:** reports each bus's peak and the transfers that over-subscribe it. On the T4,
+    injection peaks at 8 (105 of 128 transfers over) and ejection at 8 (61 of 64).
+  - **The floorplan:** its comment now says an attachment is queue membership.
+
+  L-T1 does not model ports, by design, so its timing is unchanged; the over-subscription is
+  reported, not treated as a violation.
 - **The LPDDR5 controller's throughput and scheduling (DRAM plan step 2):**
   - It held the data bus from READ issue through tCL + burst, so reads never pipelined: about
     36% of peak, now 99.8% on a stream.
