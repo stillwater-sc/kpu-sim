@@ -29,6 +29,15 @@ import tflow_check   # noqa: E402
 BUNDLE = FLOORPLAN = None
 
 
+def over_count(ivs):
+    """Transfers that start while the bus already holds a block, counted directly: another
+    transfer started earlier and has not ended (an end at the same cycle frees the bus first),
+    or started at the same cycle and is served first. Zero-length transfers hold nothing."""
+    live = sorted((a, b) for a, b in ivs if b > a)
+    return sum(1 for j, (s, _) in enumerate(live)
+               if any(a < s < b for a, b in live) or any(a == s for a, _ in live[:j]))
+
+
 class BindTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -96,6 +105,32 @@ class BindTest(unittest.TestCase):
         self.assertEqual(self.b["bundle"], bind.bundle_identity(self.rec["manifest"]))
         self.assertEqual(len(self.b["transit_engine"]), self.b["bundle"]["transit"])
         self.assertEqual(len(self.b["l3"]["residency_home"]), self.b["bundle"]["residency"])
+
+    def test_a_port_is_two_one_block_buses(self):
+        # Every bus is reported against a capacity of ONE block, recomputed here from the raw
+        # transits on their derived paths, and a bus over one is counted, never normalized.
+        ports = self.b["ports"]
+        self.assertEqual(ports["capacity_per_bus"], 1)
+        self.assertFalse(ports["modelled"])
+        tr, nodes = self.rec["transit"], self.b["nodes"]
+        want = {}
+        for i, path in enumerate(self.b["transit_path"]):
+            hop = tr["hop"][i]
+            if hop not in (bind.HOP_DMA_IN, bind.HOP_DMA_OUT) or not path:
+                continue
+            end = nodes[path[0] if hop == bind.HOP_DMA_IN else path[-1]]
+            if "/port[" in end:
+                bus = "inject" if hop == bind.HOP_DMA_IN else "eject"
+                want.setdefault(end, {"inject": [], "eject": []})[bus].append((tr["t0"][i], tr["t1"][i]))
+        self.assertEqual(sorted(ports["buses"]), sorted(want))
+        for name, buses in want.items():
+            for bus, ivs in buses.items():
+                got = ports["buses"][name][bus]
+                self.assertEqual(got["transfers"], len(ivs))
+                peak = max((sum(1 for a, b in ivs if a <= t < b) for t, _ in ivs), default=0)
+                self.assertEqual(got["peak"], peak, f"{name} {bus}")
+                self.assertEqual(got["oversubscribed"], over_count(ivs), f"{name} {bus}")
+                self.assertEqual(got["oversubscribed"] > 0, peak > 1, f"{name} {bus}")
 
     def test_a_floorplan_of_another_device_is_refused(self):
         fp = dict(self.fp, device="elsewhere")

@@ -378,10 +378,14 @@ SocFloorplan generate_floorplan(const DeploymentSpec& spec, Dim device, const Fl
         // FIRST-PASS ATTACHMENT (§5.2.1: "DMA channels connect there"). Which DMA feeds which
         // port is a connectivity question the schedules will settle, so the default is the
         // simplest defensible one: each N port goes to the nearest controller on the top edge,
-        // each S port to the nearest on the bottom, and EVERY engine of a controller attaches to
-        // one of that controller's ports, in turn -- eight engines over two ports is four per
-        // port, which is what lets eight engines contend for a multi-banked DRAM at all. W and E
-        // ports start unattached, visibly, so the study can see them.
+        // each S port to the nearest on the bottom, and every engine of a controller attaches to
+        // one of that controller's ports, in turn. W and E ports start unattached, visibly.
+        //
+        // An attachment is QUEUE MEMBERSHIP, not bandwidth: the port controller holds one input
+        // and one output queue per attached engine and moves ONE block per bus at a time
+        // (docs/plans/noc-port-arbitration.md). It used to say that more engines per port let
+        // more traffic through it; that read the engine count -- outstanding DRAM requests --
+        // as concurrency through the port, which a port does not have.
         if (mcs) {
             const Dim per = d.dma.engines / mcs;
             std::map<Dim, std::vector<Dim>> ports_of;            // mc -> its ports, in index order
