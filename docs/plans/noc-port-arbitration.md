@@ -152,6 +152,17 @@ Each cycle the injection bus is free, the arbiter makes one choice:
 ejection bus has no competing traffic, so it moves the head block to its engine's output queue
 when that queue has a credit.
 
+**Known risk: ring-first can starve injection.** If a ring block is ready at every arbitration,
+no queued head is ever injected. Nothing here bounds that wait: TF-HUB-2 bounds hub-buffer
+residence, not input-queue wait. The plan therefore:
+- **measures it:** TF-PORT-3 records the longest input-queue wait, and a test drives continuous
+  ring traffic past a port;
+- **leaves the fix to the architect:** an age bound that lets a queued head whose wait has
+  reached a limit go before ring traffic, when the downstream hub has credit. It stays
+  stateless, because age is a property of the block. It is not adopted here, because it changes
+  the ring-first decision (Q2); it is the first candidate if TF-PORT-3 shows starvation on real
+  schedules.
+
 ### 3.4 Output-queue sizing (ejection never stalls the NoC)
 
 ```
@@ -161,6 +172,21 @@ depth_blocks >= ceil( L_dma_write * r_eject / S ) + 1
    r_eject      the ejection bus rate (bytes/cycle)
    S            block bytes
 ```
+
+Depth hides **latency** only. It cannot make up for **rate**: if the DMA engines cannot write
+blocks to DRAM as fast as the ejection bus delivers them, any finite queue eventually fills. So
+the sizing rests on a rate condition:
+
+```
+mu_dma_write >= r_eject / S        (blocks per cycle, per port, over the engines draining it)
+```
+
+`mu_dma_write` is the sustained rate at which the attached engines retire blocks to DRAM. At L-CA
+it comes from the hosted controller, so the DRAM's own write bandwidth caps it. When the
+condition holds, the derived depth makes ejection stall-free and TF-PORT-2 applies. When it does
+not, the bottleneck is DRAM write bandwidth, not the queue. Ejection then back-pressures through
+the output-queue credit, as push-with-credit requires, and the stalls are counted and attributed
+to the rate, not reported as a sizing violation.
 
 A declared depth below the derived one is accepted but reported. Every ejection stall is
 counted (the TF-PORT-2 invariant, §6).
@@ -224,7 +250,9 @@ python3 tools/trace/test_tflow_check.py <bundle>
 | Binary occupancy | two engines on one port, same cycle: their injections serialize; the second waits a full block time | let the bus hold two blocks |
 | Ring first | a ring block at the fold link and a queued injection, same cycle: the ring block crosses first | swap the priority |
 | Oldest first, stateless | three engines with heads of ages 3, 1, 2: injection order is by age, whatever the engine index | pick the lowest index |
-| No ejection stall | T4 512³ writeback at the derived output depth: zero NoC cycles stalled on a full output queue | depth one block below derived: stalls appear and are counted |
+| No ejection stall | T4 512³ writeback at the derived output depth, rate condition met: zero NoC cycles stalled on a full output queue | depth one block below derived: stalls appear and are counted |
+| Rate, not depth | DMA write rate set below `r_eject / S`: stalls appear at any depth and are attributed to rate | attribute them to depth |
+| Injection wait | continuous ring traffic past a port with queued injections: TF-PORT-3 reports the wait (unbounded under ring-first, as §3.3 says) | none yet; it becomes an invariant if the age bound is adopted |
 | Liveness | saturating injection from every port of the T64, every engine always ready: the watchdog never fires, and every injected block arrives | reduce hub buffers to 1: the watchdog fires (or the run is refused at validation) |
 | Values never move | T4 and T64 matmul outputs bit-identical with and without the NoC model | none; this is ADR 0002 |
 | L3 is still the authority | peak L3 occupancy never exceeds capacity; TF1 and TF9 unchanged | none |
@@ -234,8 +262,10 @@ python3 tools/trace/test_tflow_check.py <bundle>
 
 - **TF-PORT-1:** a port's injection bus and its ejection bus each carry at most one block at any
   time.
-- **TF-PORT-2:** a NoC transfer never waits on a full output queue at the derived depth. Any
-  such wait is counted.
+- **TF-PORT-2:** while the §3.4 rate condition holds, a NoC transfer never waits on a full output
+  queue at the derived depth. Any such wait is counted, and attributed to depth or to rate.
+- **TF-PORT-3:** the longest input-queue wait is recorded per port. Ring-first has no bound on
+  it (§3.3); this is a measurement, not yet an invariant.
 - **TF-HUB-1:** a hub never holds more than `hub_buffer_blocks` blocks.
 - **TF-HUB-2 (liveness):** no block stays in a hub buffer longer than the watchdog bound.
 - **Credit:** every edge is push-with-credit. Nothing pulls.
