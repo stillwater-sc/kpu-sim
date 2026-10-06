@@ -1,0 +1,27 @@
+{
+  "name": "t16",
+  "topology": "checkerboard",
+  "compute_tiles": 8,
+  "macs_per_cycle": 4096,
+  "array":   { "rows": 4, "cols": 4 },
+  "dma":     { "engines": 16, "bytes_per_cycle": 64 },
+  "l3":      { "tiles": 8, "banks": 4, "capacity_tiles": 512 },
+  "l2":      { "banks_per_tile": 4 },
+  "l1":      { "vectors": 2 },
+  "memory":  {
+    "controllers": 2,
+    "dram": {
+      "technology": "lpddr5x", "channels": 2, "channel_width_bits": 16, "ranks": 1,
+      "bank_groups": 4, "banks_per_group": 4, "page_bytes": 2048, "burst_bytes": 64,
+      "data_rate_mtps": 8533, "capacity_bytes": 8589934592,
+      "map": "co:ch:rk:bg:ba:mc:ro",
+      "xor_folds": [ { "into": "ba", "from": "ro", "bits": 2 },
+                     { "into": "bg", "from": "ro", "bits": 2, "from_lsb": 2 } ]
+    }
+  },
+  "noc":     { "hub_buffer_blocks": 8,
+               "port": { "input_queue_blocks": 2, "output_queue_blocks": 0,
+                         "arbitration": "ring_first_oldest" } },
+  "cpu":     { "harts": 2 },
+  "movers":  { "block_movers": 24, "streamers": 8 }
+}

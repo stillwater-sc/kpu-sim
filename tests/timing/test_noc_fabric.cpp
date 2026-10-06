@@ -61,7 +61,7 @@ std::size_t delivered(const NocFabric& f) {
 
 TEST_CASE("NoC topology: four channels per hub, two per port, dimension-ordered routes",
           "[noc][topology]") {
-    for (const char* file : {"kpu_t4.json", "kpu_t64.json"}) {
+    for (const char* file : {"kpu_t4.json", "kpu_t16.json", "kpu_t64.json"}) {
         CAPTURE(file);
         const ArrayLayout L = layout(file);
         const NocTopology T(L);
@@ -202,6 +202,55 @@ TEST_CASE("Ring first: a ring block at the fold link crosses before a queued inj
     CHECK(cr[0].start == B);
     CHECK(cr[1].kind == Kind::Injection);
     CHECK(cr[1].start == 2 * B);
+    CHECK(delivered(f) == 2);
+}
+
+TEST_CASE("Ring first on a proper ring: a block passing THROUGH a port crosses before an injection",
+          "[noc][port][t16]") {
+    // On the T4 every channel is a fold link, so no block ever passes through a port: the
+    // ring-first test above races a block that only just entered. The T16's four-hub rings
+    // have true ring-through traffic. Find a route whose fold crossing continues the ring the
+    // block was already on.
+    const ArrayLayout L = layout("kpu_t16.json");
+    constexpr Cycle B = 8;
+    NocFabric f(L, cfg(B, L.ports().size()));
+    const NocTopology& T = f.topology();
+
+    struct Through { NocDim src = 0, dst = 0, hop = 0, channel = 0; };
+    std::optional<Through> pick;
+    for (NocDim s = 0; s < T.hub_count() && !pick; ++s)
+        for (NocDim d = 0; d < T.hub_count() && !pick; ++d) {
+            NocDim h = s, hop = 0;
+            std::optional<NocDim> prev;
+            while (h != d && !pick) {
+                const NocDim c = T.next_hop(h, d, prev && T.channel(*prev).column);
+                if (prev && T.channel(c).port && T.channel(c).same_ring(T.channel(*prev)))
+                    pick = Through{s, d, hop, c};
+                prev = c;
+                h = T.channel(c).to_hub;
+                ++hop;
+            }
+        }
+    REQUIRE(pick);
+    const NocChannel& fold = T.channel(pick->channel);
+    const NocDim k = *fold.port;
+    // The injection lands in the hub the ring block is crossing into, over the same channel.
+    REQUIRE(T.injection_hub(k, fold.to_hub) == fold.to_hub);
+    REQUIRE(T.fold_from(k, fold.from_hub) == pick->channel);
+
+    // Uncontended, the block enters at B and starts hop i at (i + 1) B.
+    const Cycle cross = (pick->hop + 1) * B;
+    REQUIRE(f.transfer(pick->src, pick->dst));
+    while (f.now() < cross) f.tick();
+    REQUIRE(f.inject(k, 0, fold.to_hub));
+    REQUIRE(f.run_until_quiescent(1000));
+
+    const auto& cr = f.ports()[k].crossings();
+    REQUIRE(cr.size() == 2);
+    CHECK(cr[0].kind == Kind::RingThrough);
+    CHECK(cr[0].start == cross);
+    CHECK(cr[1].kind == Kind::Injection);
+    CHECK(cr[1].start == cross + B);
     CHECK(delivered(f) == 2);
 }
 
@@ -414,6 +463,52 @@ TEST_CASE("Liveness: saturating injection from every T64 port drains, and every 
         CHECK(p.stats().injection_busy_cycles == p.stats().injected * B);
         CHECK_FALSE(p.injection_bus_busy());
     }
+}
+
+TEST_CASE("Liveness: the T16 drains saturating injection mixed with L3 -> L3 moves",
+          "[noc][liveness][t16]") {
+    // Injection alone never passes THROUGH a T16 port: a port injects into its nearer fold hub,
+    // and on a four-hub ring no shortest route from there crosses a fold link. L3 -> L3 moves
+    // do, so they are mixed in to load the ports with ring-through traffic too.
+    const ArrayLayout L = layout("kpu_t16.json");
+    constexpr Cycle B = 4;
+    NocFabric::Config c = cfg(B, L.ports().size(), 2);
+    c.watchdog_cycles = 200 * B;
+    NocFabric f(L, c);
+    const NocDim ports = f.topology().port_count(), hubs = f.topology().hub_count();
+
+    Lcg rng{4242};
+    std::map<std::uint64_t, NocDim> dst;
+    std::uint64_t tag = 0;
+    constexpr std::size_t N = 4000;     // of each kind
+    std::size_t injected = 0, moved = 0;
+    for (Cycle i = 0; i < 400000 && (injected < N || moved < N); ++i) {
+        for (NocDim k = 0; k < ports && injected < N; ++k) {
+            const NocDim d = rng.next(hubs);
+            if (f.inject(k, rng.next(2), d, tag)) { dst[tag++] = d; ++injected; }
+        }
+        for (NocDim h = 0; h < hubs && moved < N; ++h) {
+            const NocDim d = rng.next(hubs);
+            if (f.transfer(h, d, tag)) { dst[tag++] = d; ++moved; }
+        }
+        f.tick();
+    }
+    REQUIRE(injected == N);
+    REQUIRE(moved == N);
+    REQUIRE(f.run_until_quiescent(400000));
+    CHECK_FALSE(f.watchdog_fired());
+
+    std::size_t through = 0;
+    for (const auto& p : f.ports()) through += p.stats().ring_through;
+    CHECK(through > 0);
+    std::map<std::uint64_t, int> seen;
+    for (NocDim h = 0; h < f.hubs().size(); ++h)
+        for (const auto& d : f.hubs()[h].delivered()) {
+            ++seen[d.block.tag];
+            CHECK(dst.at(d.block.tag) == h);
+        }
+    CHECK(seen.size() == dst.size());
+    for (const auto& [t, n] : seen) CHECK(n == 1);
 }
 
 TEST_CASE("Liveness: injection, L3 -> L3 moves and ejection together drain on the T64",

@@ -32,6 +32,7 @@ const char* kDeploy = "tests/program/deploy/";
 
 DeploymentSpec t64() { return read_spec_file(std::string(kDeploy) + "kpu_t64.json"); }
 DeploymentSpec t4() { return read_spec_file(std::string(kDeploy) + "kpu_t4.json"); }
+DeploymentSpec t16() { return read_spec_file(std::string(kDeploy) + "kpu_t16.json"); }
 
 ArrayLayout t64_layout() {
     std::string why;
@@ -228,6 +229,72 @@ TEST_CASE("the generated T4 floorplan places every resource exactly once",
     CHECK(links[NocLink::Kind::Ring] == 1);
     CHECK(links[NocLink::Kind::Port] == 8);
     CHECK(links[NocLink::Kind::Attach] == 8);   // every DMA engine, round-robin over the N/S ports
+}
+
+// ---- the T16: the smallest board whose torus is a torus ---------------------------
+// The T4's row loop and column loop are the same two-hub ring, so every NoC channel is a fold
+// link and nothing ever passes THROUGH a port. The 4x4 T16 is the smallest board with proper
+// rings in both dimensions: two row loops and two column loops of four hubs each.
+TEST_CASE("the T16 is a 4x4 board with four-hub rings in both dimensions",
+          "[program][platform][layout][t16]") {
+    std::string why;
+    const auto L = ArrayLayout::of(t16().device(0), &why);
+    REQUIRE(L.has_value());
+    CHECK(L->rows() == 4);
+    CHECK(L->cols() == 4);
+    CHECK(L->l3_count() == 8);
+    CHECK(L->cf_count() == 8);
+    CHECK(L->block_movers().size() == 24);
+    CHECK(layout_notes(t16().device(0)).empty());   // the declared mover pool matches
+
+    REQUIRE(L->has_noc());
+    REQUIRE(L->loops().size() == 4);
+    std::set<std::vector<Dim>> rings;
+    for (const NocLoop& loop : L->loops()) {
+        CHECK(loop.hubs.size() == 4);
+        rings.insert(loop.hubs);
+    }
+    CHECK(rings.size() == 4);                       // four distinct rings, unlike the T4's one
+    // 16 loop links; at each of the four corners a row and a column loop fold over the same
+    // wire, so 12 wires.
+    CHECK(L->links().size() == 12);
+    REQUIRE(L->ports().size() == 8);
+    CHECK(L->ports()[0].label() == "row0.W");
+    CHECK(L->ports()[7].label() == "col1.S");
+
+    // Every hub sits on exactly one row loop and one column loop.
+    std::map<Dim, int> rows, cols;
+    for (const NocLoop& loop : L->loops())
+        for (Dim h : loop.hubs) ++(loop.axis == NocLoop::Axis::Row ? rows : cols)[h];
+    for (Dim h = 0; h < 8; ++h) {
+        CHECK(rows[h] == 1);
+        CHECK(cols[h] == 1);
+    }
+}
+
+TEST_CASE("the generated T16 floorplan places every resource exactly once",
+          "[program][platform][floorplan][t16]") {
+    const DeploymentSpec spec = t16();
+    REQUIRE(spec.validate().empty());
+    const SocFloorplan fp = generate_floorplan(spec);
+    CHECK(validate_floorplan(fp, spec).empty());
+
+    const auto n = kind_counts(fp);
+    CHECK(n.at(BlockKind::L3Tile) == 8);
+    CHECK(n.at(BlockKind::ComputeTile) == 8);
+    CHECK(n.at(BlockKind::BlockMover) == 24);
+    CHECK(n.at(BlockKind::NocRouter) == 8);
+    CHECK(n.at(BlockKind::NocPort) == 8);
+    CHECK(n.at(BlockKind::MemoryController) == 2);
+    CHECK(n.at(BlockKind::DmaEngine) == 16);
+    CHECK(n.at(BlockKind::CpuHart) == 2);
+    CHECK(n.at(BlockKind::L3Bank) == 8 * 4);
+
+    std::map<NocLink::Kind, std::size_t> links;
+    for (const NocLink& l : fp.noc) ++links[l.kind];
+    CHECK(links[NocLink::Kind::Ring] == 12);
+    CHECK(links[NocLink::Kind::Port] == 16);
+    CHECK(links[NocLink::Kind::Attach] == 16);  // every DMA engine attaches to an N/S port
 }
 
 TEST_CASE("a spec that describes no layout has none, and says why",

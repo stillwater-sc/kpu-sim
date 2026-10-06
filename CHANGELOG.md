@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The T16 deployment (`tests/program/deploy/kpu_t16.json`).** A 4x4 checkerboard with 8 L3
+  and 8 compute tiles, 2 memory controllers with 16 DMA engines, and 24 BlockMovers. It is the
+  smallest board whose folded torus has proper rings: two row loops and two column loops of
+  four hubs each, over 12 wires with 8 fold-end ports. The T4's row and column loops are the
+  same two-hub ring, so every T4 channel is a fold link and nothing ever passes through a port.
+  The T16 is where ring-through traffic exists. Tested:
+  - its layout and floorplan, including the `kpu-floorplan` round trip;
+  - NoC routing;
+  - a ring-through block crossing a port before a queued injection;
+  - saturated injection mixed with L3 -> L3 moves, live with every block delivered.
+
 - **The CSP NoC fabric (NoC port plan step 4a, `include/sw/kpu/timing/noc_*.hpp`).** Hubs and
   port controllers as CSP processes on the folded torus, on their own; wiring into the
   executor is step 4b.

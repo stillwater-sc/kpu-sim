@@ -52,6 +52,25 @@ if(KPU_BUILD_TESTS)
     )
     set_tests_properties(kpu_floorplan_t4_import PROPERTIES DEPENDS kpu_floorplan_t4)
 
+    # The T16: the smallest board whose torus has four-hub rings in both dimensions.
+    add_test(NAME kpu_floorplan_t16
+        COMMAND ${CMAKE_COMMAND}
+            -DCMD=$<TARGET_FILE:floorplan>
+            -DARGS=--deploy$<SEMICOLON>${_deploy}/kpu_t16.json$<SEMICOLON>--json$<SEMICOLON>${CMAKE_CURRENT_BINARY_DIR}/t16_floorplan.json$<SEMICOLON>--svg$<SEMICOLON>${CMAKE_CURRENT_BINARY_DIR}/t16_floorplan.svg
+            -DEXPECT_CODE=0
+            -DMUST_MATCH=folded.2D.torus:.2.row.loops.x.2.column.loops,.12.wires,.8.fold-end.ports
+            -P ${_expect}
+    )
+    add_test(NAME kpu_floorplan_t16_import
+        COMMAND ${CMAKE_COMMAND}
+            -DCMD=$<TARGET_FILE:floorplan>
+            -DARGS=--deploy$<SEMICOLON>${_deploy}/kpu_t16.json$<SEMICOLON>--import$<SEMICOLON>${CMAKE_CURRENT_BINARY_DIR}/t16_floorplan.json
+            -DEXPECT_CODE=0
+            -DMUST_MATCH=generated:checkerboard
+            -P ${_expect}
+    )
+    set_tests_properties(kpu_floorplan_t16_import PROPERTIES DEPENDS kpu_floorplan_t16)
+
     # A deployment that describes no layout is refused with the reason, exit 1.
     add_test(NAME kpu_floorplan_refuses_no_layout
         COMMAND ${CMAKE_COMMAND}
@@ -62,6 +81,6 @@ if(KPU_BUILD_TESTS)
             -P ${_expect}
     )
     set_tests_properties(kpu_floorplan_t64 kpu_floorplan_t64_import kpu_floorplan_t4 kpu_floorplan_t4_import
-        kpu_floorplan_refuses_no_layout
+        kpu_floorplan_t16 kpu_floorplan_t16_import kpu_floorplan_refuses_no_layout
         PROPERTIES LABELS "program;platform;floorplan")
 endif()
