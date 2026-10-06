@@ -573,21 +573,21 @@ TEST_CASE("Liveness: the bubble is what keeps a full ring moving", "[noc][livene
     c.watchdog_cycles = 200 * B;
     for (NocDim dist : {2u, 3u, 4u}) {
         CAPTURE(dist);
-        SECTION("two slots per input, bubble on: live") {
+        DYNAMIC_SECTION("dist " << dist << ": two slots per input, bubble on: live") {
             NocFabric f(L, c);
             same_ring(f, L, dist, 20000);
             CHECK_FALSE(f.watchdog_fired());
             REQUIRE(f.run_until_quiescent(20000));
             CHECK(delivered(f) > 0);
         }
-        SECTION("one slot per input, bubble off: the ring fills and wedges") {
+        DYNAMIC_SECTION("dist " << dist << ": one slot per input, bubble off: the ring fills and wedges") {
             c.hub_buffer_blocks = 4;
             c.bubble = false;
             NocFabric f(L, c);
             same_ring(f, L, dist, 20000);
             CHECK(f.watchdog_fired());
         }
-        SECTION("one slot per input, bubble on: nothing can enter (the spec refuses this)") {
+        DYNAMIC_SECTION("dist " << dist << ": one slot per input, bubble on: nothing can enter (the spec refuses this)") {
             c.hub_buffer_blocks = 4;
             NocFabric f(L, c);
             same_ring(f, L, dist, 2000);
