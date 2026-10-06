@@ -42,15 +42,23 @@ jobs:
           - os: windows-latest
             c_compiler: cl
             cpp_compiler: cl
+          # target_arch: an explicit Release CPU target, never "native". The compile cache
+          # is shared across runners whose CPUs differ, and sccache keys on the flag text,
+          # so -march=native objects built on an AVX-512/AVX10 runner were served to one
+          # without it and every test died with SIGILL (main, 2026-10-06). x86-64-v3
+          # (AVX2/FMA) and apple-m1 are the floors of the hosted runner fleets.
           - os: ubuntu-latest
             c_compiler: gcc
             cpp_compiler: g++
+            target_arch: x86-64-v3
           - os: ubuntu-latest
             c_compiler: clang
             cpp_compiler: clang++
+            target_arch: x86-64-v3
           - os: macos-latest
             c_compiler: clang
             cpp_compiler: clang++
+            target_arch: apple-m1
         exclude:
           - os: windows-latest
             c_compiler: gcc
@@ -140,6 +148,7 @@ jobs:
         ${{ env.SCCACHE_LAUNCHER && format('-DCMAKE_C_COMPILER_LAUNCHER={0} -DCMAKE_CXX_COMPILER_LAUNCHER={0}', env.SCCACHE_LAUNCHER) || '' }}
         -DCMAKE_CXX_COMPILER=${{ matrix.cpp_compiler }}
         -DCMAKE_C_COMPILER=${{ matrix.c_compiler }}
+        ${{ matrix.target_arch && format('-DKPU_TARGET_ARCH={0}', matrix.target_arch) || '' }}
 
     - name: Upload build system info
       uses: actions/upload-artifact@v4

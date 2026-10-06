@@ -31,11 +31,15 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
     endif()
 
 
-    # Architecture-specific optimizations
+    # Architecture-specific optimizations, for the target KPU_TARGET_ARCH names (top-level
+    # CMakeLists.txt): -march on x86, -mcpu on Arm. "native" tunes for the build host too.
     if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64")
-        list(APPEND KPU_CXX_FLAGS_RELEASE "-march=native -mtune=native")
+        list(APPEND KPU_CXX_FLAGS_RELEASE "-march=${KPU_TARGET_ARCH}")
+        if(KPU_TARGET_ARCH STREQUAL "native")
+            list(APPEND KPU_CXX_FLAGS_RELEASE "-mtune=native")
+        endif()
     elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "arm|aarch64")
-        list(APPEND KPU_CXX_FLAGS_RELEASE "-mcpu=native")
+        list(APPEND KPU_CXX_FLAGS_RELEASE "-mcpu=${KPU_TARGET_ARCH}")
     endif()
     
 elseif(CMAKE_CXX_COMPILER_ID MATCHES "MSVC")

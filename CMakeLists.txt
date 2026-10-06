@@ -38,6 +38,12 @@ list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 # Also generates: build/generated/sw/kpu/version.hpp and build/generated/kpu/_version.py
 include(Version)
 
+# The CPU the Release build targets: -march on x86, -mcpu on Arm. "native" (the default) is the
+# build host. A SHARED compile cache must not use it: sccache keys on the literal flag, not on
+# the CPU it resolves to, so an object built for one runner's ISA (AVX-512/AVX10) is served to
+# a runner without it, and every test dies with SIGILL. CI therefore names a target explicitly.
+set(KPU_TARGET_ARCH "native" CACHE STRING
+    "Release target CPU: -march (x86) / -mcpu (Arm) value; 'native' = the build host")
 include(CompilerOptions)
 
 # Include the custom script to gather system info during configuration
@@ -93,7 +99,11 @@ endif()
 if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" OR CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
     add_compile_options(-Wall -Wextra -Wpedantic)
         if(CMAKE_BUILD_TYPE STREQUAL "Release")
-        add_compile_options(-O3 -march=native)
+        if(CMAKE_SYSTEM_PROCESSOR MATCHES "arm|aarch64")
+            add_compile_options(-O3 -mcpu=${KPU_TARGET_ARCH})
+        else()
+            add_compile_options(-O3 -march=${KPU_TARGET_ARCH})
+        endif()
         # `-march=native` on newer CI runners enables a partial AVX10.1 feature that
         # Clang flags via -Winvalid-feature-combination, which -Werror turns fatal.
         # Suppress it GLOBALLY for Clang so targets that don't route through
