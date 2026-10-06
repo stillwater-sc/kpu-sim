@@ -37,7 +37,7 @@ DeviceSpecification device(const char* file) {
 }
 ArrayLayout layout(const char* file) { return *ArrayLayout::of(device(file)); }
 
-NocFabric::Config cfg(Cycle block_cycles, NocDim ports, NocDim engines = 1) {
+NocFabric::Config cfg(Cycle block_cycles, std::size_t ports, NocDim engines = 1) {
     NocFabric::Config c;
     c.block_cycles = block_cycles;
     c.engines_per_port.assign(ports, engines);
