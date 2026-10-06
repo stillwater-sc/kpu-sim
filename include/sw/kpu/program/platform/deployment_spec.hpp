@@ -145,16 +145,17 @@ struct DeviceSpecification {
 
     // The NoC's store-and-forward hubs and fold-end port controllers
     // (docs/plans/noc-port-arbitration.md §3.1). Absent = not declared; no level models it
-    // until the CSP hub and port processes land (plan step 4).
-    //   hub_buffer_blocks          block buffers per hub; at least its 4 inputs, so every
-    //                              link can deliver a block at once (the liveness argument)
+    // until the CSP hub and port processes are wired into the executor (plan step 4b).
+    //   hub_buffer_blocks          block buffers per hub, split evenly over its 4 ring inputs;
+    //                              at least two per input, one for the block and one for the
+    //                              bubble that keeps every ring moving (§3.5)
     //   port.input_queue_blocks    per attached DMA engine: blocks waiting to be injected
     //   port.output_queue_blocks   per attached DMA engine: blocks ejected toward it;
     //                              0 = derived from the DMA write latency (§3.4)
     //   port.arbitration           ring-through traffic first, then the oldest queued head
     //                              (greedy, stateless; decided on review, Q2/Q3)
     struct Noc {
-        Dim hub_buffer_blocks = 4;
+        Dim hub_buffer_blocks = 8;
         struct Port {
             Dim input_queue_blocks = 2;
             Dim output_queue_blocks = 0;
@@ -246,10 +247,10 @@ inline std::string noc_problem(const DeviceSpecification& d) {
     if (d.topology != "checkerboard")
         return "noc applies to the checkerboard's folded torus, not the '" + d.topology +
                "' topology";
-    if (n.hub_buffer_blocks < kNocHubInputs)
+    if (n.hub_buffer_blocks < 2 * kNocHubInputs || n.hub_buffer_blocks % kNocHubInputs != 0)
         return "noc.hub_buffer_blocks (" + std::to_string(n.hub_buffer_blocks) +
-               ") must be at least the hub's " + std::to_string(kNocHubInputs) +
-               " inputs, so every link can deliver a block at once";
+               ") must be a multiple of the hub's " + std::to_string(kNocHubInputs) +
+               " inputs and at least two per input: one for the block, one for the bubble";
     if (n.port.input_queue_blocks == 0)
         return "noc.port.input_queue_blocks must be at least 1: an engine needs a slot to push "
                "into before the port can inject its block";

@@ -482,3 +482,13 @@ kpu_add_component_test(test_tile_tracker "timing"
 set_tests_properties(test_tile_tracker PROPERTIES
     LABELS "timing;tracker;v0.9"
 )
+
+# The CSP NoC hubs and port controllers (docs/plans/noc-port-arbitration.md step 4a)
+kpu_add_component_test(test_noc_fabric "timing"
+    test_noc_fabric.cpp
+)
+
+set_tests_properties(test_noc_fabric PROPERTIES
+    LABELS "timing;noc;v0.9"
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+)

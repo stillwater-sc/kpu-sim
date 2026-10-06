@@ -143,7 +143,8 @@ inline bool level_models(ExecutionLevel l, platform::SpecField f) {
         case SpecField::Noc:
             // Hubs and port controllers are declared and validated; L-T1 deliberately does
             // not model ports (it tests tile sequencing and L3 occupancy), and the CSP hub and
-            // port processes are docs/plans/noc-port-arbitration.md step 4.
+            // port processes (timing/noc_fabric.hpp) are not wired into the executor until
+            // docs/plans/noc-port-arbitration.md step 4b.
             return false;
     }
     return false;
