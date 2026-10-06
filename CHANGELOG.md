@@ -212,6 +212,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **CI: the Release build names its target CPU (`KPU_TARGET_ARCH`).** Linux clang on `main`
+  died with SIGILL in every test. The build had served all 629 compiles from sccache, so every
+  object came from another runner, and `-march=native` objects carrying AVX-512/AVX10 code ran on
+  a CPU without it. sccache keys on the flag text, not on the CPU the flag resolves to.
+  `KPU_TARGET_ARCH` (default `native`, so local builds are unchanged) sets `-march` on x86 and
+  `-mcpu` on Arm. CI pins `x86-64-v3` on Ubuntu and `apple-m1` on macOS, the floors of the hosted
+  runner fleets.
 - **CI compile cache restored.** `mozilla-actions/sccache-action@v0.0.7` used GitHub's legacy
   Actions cache service, which GitHub shut down on 2025-04-15.
   - **The symptom:** sccache's server failed to start on every OS, and the probe step's fallback
