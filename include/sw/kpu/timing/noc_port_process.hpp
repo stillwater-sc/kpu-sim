@@ -68,7 +68,7 @@ class NocPortProcess : public IProcess {
 public:
     struct Config {
         NocDim port = 0;
-        NocDim engines = 1;                     // DMA engines attached: one queue pair each
+        NocDim engines = 1;                     // DMA engines attached (0 = ring-through only)
         std::size_t input_queue_blocks = 2;     // per engine
         std::size_t output_queue_blocks = 1;    // per engine, resolved (never 0 here)
         std::size_t derived_output_queue_blocks = 1;
@@ -98,8 +98,8 @@ public:
     NocPortProcess(const Config& config, const NocTopology& topo,
                    std::vector<NocHubProcess>& hubs)
         : config_(config), topo_(&topo), hubs_(&hubs) {
-        if (config.engines == 0)
-            throw std::invalid_argument(name() + ": a port controller needs an attached engine");
+        // A port with no attached engine is legal: it still arbitrates the ring traffic that
+        // crosses its fold link (the T16's and T64's W and E ports start unattached).
         if (config.input_queue_blocks == 0 || config.output_queue_blocks == 0)
             throw std::invalid_argument(name() + ": queue depths must be at least 1");
         const auto& p = topo.port(config.port);

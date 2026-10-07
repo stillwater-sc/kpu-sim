@@ -403,7 +403,7 @@ Each step is one PR.
      - Measured on the oracle (128^3/32^3): T4 6742 -> 7449 cycles, because only two movers
        serve each tile's blocks. T16 is 3686 -> 3680 and T64 is unchanged at 2289. Values stay
        bit-identical.
-4. **4b.4, wire the fabric.** Opt-in, like `dram`: `Config::noc`.
+4. **4b.4, wire the fabric.** Opt-in, like `dram`: `Config::noc`. (Done.)
    - **Load:** MC completion is no longer arrival. The DMA injects the block at its port, bound
      for the home hub. The hub's L3 delivery reserves nothing new, since the home credit was
      taken at load issue (§2). `TILE_ARRIVED_L3` and the DRAM->L3 copy fire on delivery.
@@ -413,11 +413,33 @@ Each step is one PR.
      DRAM writer.
    - The fabric ticks in `step()`: after the DMA engines, before the BlockMovers.
      `is_complete()` and `reset()` include it.
-   - `level_models(L-CA, SpecField::Noc)` becomes true when `Config::noc` is set.
    - Tests:
      - the oracle stays bit-identical on T4, T16 and T64 with the NoC on;
      - TF-PORT-1/2/3 and TF-HUB-1/2 hold on a real matmul;
      - the T4 port row shows 8 engines through one bus, now serialized.
+   - As built:
+     - **Loads:** `DMAEngineProcess::set_load_route`. A load read from DRAM waits in TO_INJECT
+       until its port's input queue takes it, then crosses to its home hub (IN_TRANSIT).
+       `land_load` makes it arrive when the hub delivers it, holding the home-tile credit taken
+       at issue.
+     - **Ejections:** `BlockMoverProcess::set_eject_sink`. A finished ejection enters its home
+       hub, or keeps its block and L3 slot if the hub has no room. The port's output queue
+       hands it into the engine's store buffer. The fabric's write model is the hand-off
+       (latency 0, one per cycle), so the MC stays the only DRAM writer. The output queue is
+       the store buffer's depth, and the slot is reserved before the block leaves L3, so no
+       ejection waits on a full output queue (TF-PORT-2 holds by construction; the test checks
+       it).
+     - **Clocks:** the fabric ticks in `step()` after the DMA engines. Its deliveries are landed
+       before it ticks, so a transfer that ends at cycle t lands at cycle t. `is_complete()`
+       waits for the fabric to be quiescent, and `reset()` rebuilds it.
+     - **Spec:** `csp_noc_wiring(device, block_bytes, store_buffer_blocks)` builds the wiring from
+       the declared `noc`, the layout, and `dma_port_attachment`. A port may now have no engines
+       and carry only ring-through traffic.
+     - **Measured** (128^3/32^3, NoC off -> on): T4 7449 -> 7521, T16 3680 -> 3889, T64
+       2289 -> 2624 cycles. Values stay bit-identical. On the T4 every load enters through its
+       one attached port.
+     - **Not done:** `level_models(L-CA, SpecField::Noc)` stays false, because the driver does
+       not run L-CA yet (#283), so no level a user can select models the NoC.
 5. **4b.5, burst granularity** (after DRAM step 3). The NoC block becomes the burst (Q11), and
    the DMA window supplies the injection stream.
 

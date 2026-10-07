@@ -23,7 +23,9 @@
 #include <sw/kpu/timing/schedule/matmul_schedule_generator.hpp>
 
 #include <cstdio>
+#include <algorithm>
 #include <limits>
+#include <map>
 #include <string>
 #include <vector>
 
@@ -57,11 +59,16 @@ struct OracleRun {
     std::vector<float> csp, reference;      // C, row-major
     Cycle cycles = 0;
     std::size_t l3_capacity = 0, l3_free_after = 0, l3_tiles = 0;
+    // With the NoC on (4b.4)
+    std::size_t dram_loads = 0, dram_stores = 0, noc_delivered = 0, noc_ejected = 0, noc_handed = 0;
+    std::size_t eject_stalls = 0, peak_ring_queue = 0, ring_queue_depth = 0;
+    bool watchdog = false, buses_serial = true;
+    std::map<NocDim, std::size_t> injected_per_port;
 };
 
 // C = A @ B (size^3, tile^3) on the CSP executor configured from `d`, and on the L0 reference
 // with the same inputs.
-OracleRun run_matmul(const DeviceSpecification& d, Size size, Size T) {
+OracleRun run_matmul(const DeviceSpecification& d, Size size, Size T, bool noc = false) {
     std::string why;
     const auto csp = csp_config_from(d, &why);
     INFO(why);
@@ -89,6 +96,12 @@ OracleRun run_matmul(const DeviceSpecification& d, Size size, Size T) {
 
     ConcurrentTimingExecutor::Config ec = csp->config;
     ec.max_cycles = 20'000'000;
+    if (noc) {
+        const auto w = csp_noc_wiring(d, static_cast<double>(T) * T * 4, ec.dma_store_buffer_blocks, &why);
+        INFO(why);
+        REQUIRE(w);
+        ec.noc = *w;
+    }
     ConcurrentTimingExecutor exec(ec);
     const TensorOperand& A = prog.operand("A");
     const TensorOperand& B = prog.operand("B");
@@ -121,6 +134,26 @@ OracleRun run_matmul(const DeviceSpecification& d, Size size, Size T) {
 
     OracleRun out;
     out.cycles = exec.current_cycle();
+    for (const auto& e : exec.events()) {
+        out.dram_loads += e.type == EventType::DMA_LOAD_COMPLETE;
+        out.dram_stores += e.type == EventType::DMA_STORE_COMPLETE;
+    }
+    if (const NocFabric* f = exec.noc()) {
+        out.watchdog = f->watchdog_fired();
+        out.ring_queue_depth = ec.noc->fabric.hub_buffer_blocks / 4;
+        for (const auto& h : f->hubs()) {
+            out.noc_delivered += h.delivered().size();
+            out.peak_ring_queue = std::max(out.peak_ring_queue, h.stats().peak_ring_queue);
+        }
+        for (const auto& p : f->ports()) {
+            out.noc_ejected += p.stats().ejected;
+            out.noc_handed += p.written().size();
+            out.eject_stalls += p.stats().eject_stall_cycles;
+            out.buses_serial = out.buses_serial &&
+                               p.stats().injection_busy_cycles == p.stats().injected * f->config().block_cycles;
+            if (p.stats().injected) out.injected_per_port[p.id()] = p.stats().injected;
+        }
+    }
     out.l3_capacity = ec.l3_buffer_count;
     out.l3_free_after = exec.l3_credits_available();
     out.l3_tiles = exec.l3_tiles();
@@ -323,3 +356,91 @@ TEST_CASE("L3 placement: a tile lives in its home L3 tile, and only there", "[ti
     }
 }
 
+TEST_CASE("NoC wired: loads and ejections cross the fabric, and values never move",
+          "[timing][csp][oracle][noc]") {
+    for (const char* file : {"kpu_t4.json", "kpu_t16.json", "kpu_t64.json"}) {
+        CAPTURE(file);
+        const OracleRun off = run_matmul(device(file), 128, 32, false);
+        const OracleRun on = run_matmul(device(file), 128, 32, true);
+
+        // When, never what (ADR 0002): bit-identical with and without the NoC, and to L0.
+        CHECK(on.csp == off.csp);
+        const auto cmp = sw::kpu::program::compare_within(
+            on.csp, on.reference, sw::kpu::program::kAtolFloat32, sw::kpu::program::kRtolMatmul);
+        CHECK(cmp.bit_identical);
+        CHECK(on.l3_free_after == on.l3_capacity);
+
+        // Every DRAM read crossed to its hub, and every store's ejection crossed to its port and
+        // was handed into the engine's store buffer.
+        CHECK(on.dram_loads > 0);
+        CHECK(on.noc_delivered == on.dram_loads);
+        CHECK(on.noc_ejected == on.dram_stores);
+        CHECK(on.noc_handed == on.dram_stores);
+
+        // TF-PORT-1 (one block per bus), TF-PORT-2 (the store buffer slot is reserved before the
+        // block leaves L3, so no ejection waits on a full output queue), TF-HUB-1 and -2.
+        CHECK(on.buses_serial);
+        CHECK(on.eject_stalls == 0);
+        CHECK(on.peak_ring_queue <= on.ring_queue_depth);
+        CHECK_FALSE(on.watchdog);
+
+        // The fabric costs time; it does not save any.
+        CHECK(on.cycles >= off.cycles);
+        std::printf("noc %-14s 128^3/32^3: %8llu cycles (off %llu), %zu loads delivered, "
+                    "%zu ejected, ports used %zu\n",
+                    file, static_cast<unsigned long long>(on.cycles),
+                    static_cast<unsigned long long>(off.cycles), on.noc_delivered, on.noc_ejected,
+                    on.injected_per_port.size());
+    }
+
+    // The T4: all eight engines attach to one port, so every load enters through one bus.
+    const OracleRun t4 = run_matmul(device("kpu_t4.json"), 128, 32, true);
+    REQUIRE(t4.injected_per_port.size() == 1);
+    CHECK(t4.injected_per_port.begin()->second == t4.dram_loads);
+}
+
+TEST_CASE("csp_noc_wiring refuses a device the NoC cannot be wired on", "[timing][csp][noc]") {
+    std::string why;
+    DeviceSpecification d = device("kpu_t16.json");
+    d.noc.reset();
+    CHECK_FALSE(csp_noc_wiring(d, 4096, 2, &why));
+    CHECK_THAT(why, ContainsSubstring("no noc"));
+
+    const auto w = csp_noc_wiring(device("kpu_t16.json"), 4096, 2, &why);
+    REQUIRE(w);
+    CHECK(w->engine_port.size() == 16);
+    CHECK(w->fabric.output_queue_blocks == 2);
+    CHECK(w->fabric.dma_write_latency == 0);
+    std::size_t attached = 0;
+    for (auto n : w->fabric.engines_per_port) attached += n;
+    CHECK(attached == 16);
+}
+
+
+TEST_CASE("NoC wired: a load is in L3 only once its hub delivers it", "[timing][csp][noc]") {
+    const DeviceSpecification d = device("kpu_t4.json");
+    auto cfg = csp_config_from(d)->config;
+    const double block = 32.0 * 32 * 4;
+    cfg.noc = *csp_noc_wiring(d, block, cfg.dma_store_buffer_blocks);
+    ConcurrentTimingExecutor exec(cfg);
+
+    TileDescriptor t;
+    t.tile_id = TileID{MatrixID::A, 0, 0, 0};
+    t.dram_address = 0x100000;
+    t.size_bytes = 32 * 32 * 4;
+    t.l3_tile = 1;
+    exec.schedule_load(t);
+    while (!exec.is_complete() && exec.current_cycle() < 100000) exec.step();
+    REQUIRE(exec.is_complete());
+
+    Cycle read = 0, arrived = 0;
+    for (const auto& e : exec.events()) {
+        if (e.type == EventType::DMA_LOAD_COMPLETE) read = e.cycle + e.duration;
+        if (e.type == EventType::TILE_ARRIVED_L3) arrived = e.cycle;
+    }
+    REQUIRE(read > 0);
+    // At least one block time on the fold link after DRAM delivered it; never at MC completion.
+    CHECK(arrived >= read + exec.noc()->config().block_cycles);
+    CHECK(exec.l3_tile_tag_cam(1).lookup(t.tile_id));
+    CHECK(exec.noc()->hubs()[1].delivered().size() == 1);
+}

@@ -23,6 +23,22 @@
 namespace sw::kpu::timing {
 
 /**
+ * @brief Where an ejection goes once it has left L3: onto the NoC, toward its engine's port
+ *
+ * Without a sink, an ejection lands straight in the DMA engine's store buffer. With one, the
+ * block is pushed into its home hub and crosses the NoC; the port delivers it into the store
+ * buffer later (docs/plans/noc-port-arbitration.md §4.1, step 4b.4). The store-buffer slot,
+ * reserved before the ejection started, is held the whole way.
+ */
+class EjectSink {
+public:
+    virtual ~EjectSink() = default;
+    /// Take the block onto the NoC. False = its hub has no room this cycle; the mover keeps
+    /// the block (and its L3 slot) and offers it again next cycle.
+    virtual bool accept(const TileDescriptor& tile, uint64_t ticket) = 0;
+};
+
+/**
  * @brief BlockMover Process for L3 ↔ L2 transfers
  *
  * The BlockMover handles:
@@ -135,6 +151,9 @@ public:
      * 2. The target buffer has a free slot (credit)
      * 3. No other transfer is in progress
      */
+    /// Route ejections over the NoC (step 4b.4). nullptr = they land in the store buffer.
+    void set_eject_sink(EjectSink* sink) { eject_sink_ = sink; }
+
     void schedule_eject(const TileDescriptor& tile, DmaStoreBuffer& target, uint64_t ticket) {
         TileDescriptor t = tile;
         t.enqueue_cycle = current_cycle_;
@@ -282,6 +301,7 @@ private:
     Leg in_flight_leg_ = Leg::Move;
     DmaStoreBuffer* in_flight_target_ = nullptr;     // Eject only
     uint64_t in_flight_ticket_ = 0;                  // Eject only
+    EjectSink* eject_sink_ = nullptr;
     uint32_t in_flight_l3_slot_ = 0;
 
     // Statistics
@@ -308,9 +328,17 @@ private:
 
         if (in_flight_->is_complete(current_cycle)) {
             if (in_flight_leg_ == Leg::Eject) {
-                // Ejection complete: the tile is in the DMA engine's store buffer, and its
-                // L3 slot is free (once the last reference is gone).
-                in_flight_target_->deliver(in_flight_ticket_);
+                // Ejection complete: the tile has left L3. Routed, it enters its hub, and the
+                // port delivers it into the store buffer later; a full hub keeps it here, L3
+                // slot and all, for another try next cycle. Unrouted, it is in the buffer now.
+                if (eject_sink_) {
+                    if (!eject_sink_->accept(in_flight_->tile, in_flight_ticket_)) {
+                        ++stall_cycles_credit_;
+                        return;
+                    }
+                } else {
+                    in_flight_target_->deliver(in_flight_ticket_);
+                }
                 bool credit_released = l3_tag_cam_.invalidate(in_flight_->tile.tile_id);
                 if (credit_released) {
                     l3_credits_.release(

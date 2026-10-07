@@ -57,7 +57,7 @@ public:
         Cycle block_cycles = 1;                 // one block across a link or a bus
         Cycle dma_write_latency = 0;            // an engine's DRAM write of one block
         Cycle dma_write_interval = 0;           // 0 = one block time
-        std::vector<NocDim> engines_per_port;   // empty = one engine on every port
+        std::vector<NocDim> engines_per_port;   // empty = one engine on every port; 0 allowed
         Cycle watchdog_cycles = 0;              // TF-HUB-2 bound; 0 = no watchdog
         bool bubble = true;                     // §3.5; off only to show what it prevents
 

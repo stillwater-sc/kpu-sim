@@ -16,6 +16,7 @@
 #include <sw/kpu/timing/block_mover_process.hpp>
 #include <sw/kpu/timing/streamer_process.hpp>
 #include <sw/kpu/timing/livelock_detector.hpp>
+#include <sw/kpu/timing/noc_fabric.hpp>
 
 #include <algorithm>
 #include <cstring>
@@ -117,6 +118,20 @@ public:
         /// and ejects only its own tile's blocks. Empty = round-robin over the L3 tiles.
         size_t l3_buffer_size = 64 * 1024; ///< Size of each L3 buffer (64KB)
         std::vector<size_t> block_mover_l3_tile;
+
+        /// The NoC between the DMA ports and the L3 hubs (docs/plans/noc-port-arbitration.md
+        /// §4.1, step 4b.4). Absent = loads land in L3 on MC completion and ejections land in
+        /// the store buffer directly. Present: a load crosses from its engine's port to its
+        /// home hub before it arrives in L3, and an ejection crosses from its home hub to its
+        /// engine's port before it reaches the store buffer. The L3 tiles are the layout's
+        /// hubs, so l3_tiles must equal the layout's L3 count.
+        struct NocWiring {
+            sw::kpu::program::platform::ArrayLayout layout;
+            NocFabric::Config fabric;
+            /// Per DMA engine: its port, and its index among that port's engines.
+            std::vector<std::pair<NocDim, NocDim>> engine_port;
+        };
+        std::optional<NocWiring> noc;
 
         // BlockMover configuration
         size_t num_block_movers = 4;      ///< Number of BlockMovers (= l3_tile_rows * l3_tile_cols)
@@ -542,6 +557,9 @@ public:
         for (const auto& c : l3_tile_credits_) n += c->available();
         return n;
     }
+    /// The NoC fabric, when Config::noc is set (nullptr otherwise).
+    [[nodiscard]] const NocFabric* noc() const { return noc_.get(); }
+
     /// The L3 tile a BlockMover belongs to.
     [[nodiscard]] size_t block_mover_l3_tile(size_t mover) const { return mover_tile_.at(mover); }
     /// The home L3 tile `tile` resolves to (its declared l3_tile, else the default).
@@ -559,6 +577,27 @@ private:
     std::vector<std::unique_ptr<TagCAM>> l3_tile_cams_;
     CreditPool l2_credits_;
     TagCAM l2_tag_cam_;
+
+    // The NoC (step 4b.4): the fabric, and the adapters the DMA engines and BlockMovers
+    // push through. Deliveries are read from the fabric's lists past these cursors.
+    std::unique_ptr<NocFabric> noc_;
+    struct NocLoads : LoadRoute {
+        ConcurrentTimingExecutor* ex = nullptr;
+        bool inject(uint32_t engine_id, const TileDescriptor& tile, uint64_t tag) override {
+            const auto [port, slot] = ex->config_.noc->engine_port.at(engine_id);
+            return ex->noc_->inject(port, slot, static_cast<NocDim>(tile.l3_tile), tag).has_value();
+        }
+    } noc_loads_;
+    struct NocEjects : EjectSink {
+        ConcurrentTimingExecutor* ex = nullptr;
+        bool accept(const TileDescriptor& tile, uint64_t ticket) override {
+            const auto [port, slot] = ex->config_.noc->engine_port.at(ticket >> 40);
+            return ex->noc_->eject(static_cast<NocDim>(tile.l3_tile), port, slot, ticket).has_value();
+        }
+    } noc_ejects_;
+    std::vector<std::size_t> noc_hub_cursor_, noc_port_cursor_;
+    void build_noc();
+    void tick_noc();
 
     std::vector<size_t> mover_tile_;                    // L3 tile of each BlockMover
     std::vector<std::vector<uint32_t>> movers_on_;      // BlockMovers of each L3 tile
@@ -727,6 +766,7 @@ inline ConcurrentTimingExecutor::ConcurrentTimingExecutor(const Config& config)
         l2_credits_.partition_equal();
     }
     create_components();
+    build_noc();
 
     if (config_.enable_livelock_detection) {
         LivelockDetector::Config ld_config;
@@ -1254,6 +1294,10 @@ inline bool ConcurrentTimingExecutor::step() {
         events_.insert(events_.end(), dma_events.begin(), dma_events.end());
     }
 
+    // 2b. Tick the NoC: loads delivered to their hubs land in L3, and ejections that reached
+    //     their ports land in the engines' store buffers, before the BlockMovers run.
+    if (noc_) tick_noc();
+
     // 3. Tick BlockMovers
     for (auto& mover : block_movers_) {
         auto mover_events = mover->tick(current_cycle_);
@@ -1314,6 +1358,9 @@ inline bool ConcurrentTimingExecutor::is_complete() const {
         if (!mover->is_idle() || mover->has_pending_work()) return false;
     }
 
+    // Check the NoC: nothing queued, buffered or in flight
+    if (noc_ && !noc_->quiescent()) return false;
+
     // Check Streamers
     for (const auto& streamer : row_streamers_) {
         if (!streamer->is_idle() || streamer->has_pending_work()) return false;
@@ -1325,7 +1372,54 @@ inline bool ConcurrentTimingExecutor::is_complete() const {
     return true;
 }
 
+inline void ConcurrentTimingExecutor::build_noc() {
+    noc_.reset();
+    if (!config_.noc) return;
+    const auto& w = *config_.noc;
+    if (w.layout.l3_count() != l3_tile_credits_.size())
+        throw std::invalid_argument("ConcurrentTimingExecutor: the NoC's layout has " +
+                                    std::to_string(w.layout.l3_count()) + " L3 hubs, the executor " +
+                                    std::to_string(l3_tile_credits_.size()) + " L3 tiles");
+    if (w.engine_port.size() != dma_engines_.size())
+        throw std::invalid_argument("ConcurrentTimingExecutor: the NoC places " +
+                                    std::to_string(w.engine_port.size()) + " DMA engines, the executor has " +
+                                    std::to_string(dma_engines_.size()));
+    noc_ = std::make_unique<NocFabric>(w.layout, w.fabric);
+    noc_loads_.ex = this;
+    noc_ejects_.ex = this;
+    for (auto& dma : dma_engines_) dma->set_load_route(&noc_loads_);
+    for (auto& mover : block_movers_) mover->set_eject_sink(&noc_ejects_);
+    noc_hub_cursor_.assign(noc_->hubs().size(), 0);
+    noc_port_cursor_.assign(noc_->ports().size(), 0);
+}
+
+inline void ConcurrentTimingExecutor::tick_noc() {
+    // The fabric's clock runs in step with ours: before this tick its now() is this cycle.
+    // Its tick ends by completing the transfers that end NEXT cycle, so what it has delivered
+    // so far ended at or before this cycle: land that first, then tick. Read after the tick,
+    // a delivery would land a cycle early.
+    std::vector<TimingEvent> landed;
+    for (std::size_t h = 0; h < noc_->hubs().size(); ++h) {
+        const auto& d = noc_->hubs()[h].delivered();
+        for (; noc_hub_cursor_[h] < d.size(); ++noc_hub_cursor_[h]) {
+            const uint64_t tag = d[noc_hub_cursor_[h]].block.tag;
+            dma_engines_.at(tag >> 40)->land_load(tag, current_cycle_, landed);
+        }
+    }
+    for (std::size_t k = 0; k < noc_->ports().size(); ++k) {
+        const auto& w = noc_->ports()[k].written();
+        for (; noc_port_cursor_[k] < w.size(); ++noc_port_cursor_[k]) {
+            const uint64_t ticket = w[noc_port_cursor_[k]].block.tag;
+            dma_engines_.at(ticket >> 40)->store_buffer().deliver(ticket);
+        }
+    }
+    for (const auto& event : landed) apply_payload_event(event);
+    events_.insert(events_.end(), landed.begin(), landed.end());
+    noc_->tick();
+}
+
 inline void ConcurrentTimingExecutor::reset() {
+    build_noc();
     current_cycle_ = 0;
     events_.clear();
 

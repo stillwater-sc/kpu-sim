@@ -9,6 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The NoC is wired into the CSP executor (NoC port plan step 4b.4), opt-in through
+  `Config::noc` and `csp_noc_wiring()`.**
+  - A load read from DRAM is injected at its engine's port and arrives in its home L3 tile only
+    when the hub delivers it.
+  - An ejection enters its home hub and crosses to its engine's port, whose output queue hands
+    it into the store buffer.
+  - The fabric ticks inside the executor's cycle.
+  - Tested on T4, T16 and T64:
+    - values are bit-identical with the NoC on and off;
+    - every load and ejection crosses the fabric;
+    - TF-PORT-1/2 and TF-HUB-1/2 hold on a real matmul.
+  - The T4's eight engines share one port. The NoC adds 1-15% to the oracle's cycles.
+
 - **L3 placement in the CSP tier (NoC port plan step 4b.3).**
   - Every tile has a **home L3 tile**, `TileDescriptor::l3_tile`. A schedule can declare it;
     otherwise it is a hash of the tile id, and every operation on the tile must agree.

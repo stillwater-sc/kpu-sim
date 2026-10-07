@@ -31,9 +31,11 @@
 
 #include <sw/kpu/program/platform/array_layout.hpp>
 #include <sw/kpu/program/platform/deployment_spec.hpp>
+#include <sw/kpu/program/platform/floorplan.hpp>
 #include <sw/kpu/timing/concurrent_timing_executor.hpp>
 #include <sw/kpu/timing/dram_bridge.hpp>
 
+#include <map>
 #include <optional>
 #include <string>
 #include <vector>
@@ -124,6 +126,55 @@ inline std::optional<CspDeviceConfig> csp_config_from(
         out.unmapped.push_back("l2.banks_per_tile: an L-T2 bank count, not tile-sized L2 "
                                "buffers; l2_bank_count keeps its default");
     return out;
+}
+
+
+// The NoC wiring for device `d` (step 4b.4; opt-in: set Config::noc to it), or nullopt with
+// the reason in `why`. Tile-granular until DRAM step 3 (Q11): one NoC block is one tile of
+// `block_bytes`. The fabric's port "write" is the hand-off into the engine's store buffer
+// (latency 0, one per cycle), and its output queue is that buffer's depth: the MC stays the
+// only DRAM writer, and because a BlockMover reserves the buffer slot before the block leaves
+// L3, an ejection can never find the output queue full.
+inline std::optional<ConcurrentTimingExecutor::Config::NocWiring> csp_noc_wiring(
+        const sw::kpu::program::platform::DeviceSpecification& d, double block_bytes,
+        std::size_t store_buffer_blocks, std::string* why = nullptr) {
+    using sw::kpu::program::platform::ArrayLayout;
+    using sw::kpu::program::platform::DeploymentSpec;
+    auto fail = [&](std::string s) -> std::optional<ConcurrentTimingExecutor::Config::NocWiring> {
+        if (why) *why = "device \"" + d.name + "\": " + std::move(s);
+        return std::nullopt;
+    };
+    std::string reason;
+    const auto L = ArrayLayout::of(d, &reason);
+    if (!L) return fail("no array layout: " + reason);
+    if (!L->has_noc()) return fail(L->noc_reason());
+    auto fabric = NocFabric::Config::from(d, block_bytes, 0, &reason);
+    if (!fabric) return fail(reason);
+    fabric->dma_write_latency = 0;
+    fabric->dma_write_interval = 1;
+    fabric->output_queue_blocks = store_buffer_blocks;
+
+    DeploymentSpec one;
+    one.devices = {d};
+    const auto attach = sw::kpu::program::platform::dma_port_attachment(one);
+    const std::size_t mcs = d.memory.controllers ? *d.memory.controllers : 1;
+    const std::size_t per = d.dma.engines / mcs;
+    ConcurrentTimingExecutor::Config::NocWiring w{*L, *fabric, {}};
+    w.engine_port.assign(d.dma.engines, {0, 0});
+    std::vector<bool> placed(d.dma.engines, false);
+    std::map<NocDim, NocDim> on_port;
+    for (const auto& a : attach) {
+        const std::size_t i = static_cast<std::size_t>(a.mc) * per + a.engine;
+        w.engine_port.at(i) = {a.port, on_port[a.port]++};
+        placed[i] = true;
+    }
+    for (std::size_t i = 0; i < placed.size(); ++i)
+        if (!placed[i])
+            return fail("DMA engine " + std::to_string(i) + " is attached to no NoC port, so its "
+                        "loads could not enter the NoC");
+    w.fabric.engines_per_port.assign(L->ports().size(), 0);
+    for (const auto& [port, n] : on_port) w.fabric.engines_per_port.at(port) = n;
+    return w;
 }
 
 } // namespace sw::kpu::timing

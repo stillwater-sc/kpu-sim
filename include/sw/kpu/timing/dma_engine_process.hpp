@@ -64,6 +64,21 @@ private:
 };
 
 /**
+ * @brief Where a load goes once DRAM has delivered it: onto the NoC, toward its home hub
+ *
+ * Without a route, a load lands in L3 the cycle the MC completes it. With one, it is injected
+ * at the engine's port, crosses the NoC, and lands only when the hub delivers it
+ * (DMAEngineProcess::land_load); its home-tile L3 credit is held the whole way
+ * (docs/plans/noc-port-arbitration.md §4.1, step 4b.4).
+ */
+class LoadRoute {
+public:
+    virtual ~LoadRoute() = default;
+    /// Offer the block to the NoC. False = the port's input queue has no room this cycle.
+    virtual bool inject(uint32_t engine_id, const TileDescriptor& tile, uint64_t tag) = 0;
+};
+
+/**
  * @brief DMA Engine Process for DRAM ↔ L3 transfers
  *
  * The DMA engine handles:
@@ -116,6 +131,8 @@ public:
         WAITING_CREDIT,   ///< Load waiting for L3 credit
         WAITING_TAG,      ///< Store waiting for tile in L3
         SUBMITTED,        ///< Submitted to MC, waiting for completion
+        TO_INJECT,        ///< Load read from DRAM, waiting to enter the NoC (routed loads)
+        IN_TRANSIT,       ///< Load on the NoC, waiting for its hub to deliver it to L3
         COMPLETED         ///< Completed (will be removed)
     };
 
@@ -185,8 +202,31 @@ public:
         req.is_load = true;
         req.state = RequestState::WAITING_CREDIT;
         req.enqueue_cycle = current_cycle_;
+        req.ticket = (static_cast<uint64_t>(config_.engine_id) << 40) | ++next_ticket_;
 
         pending_requests_.push_back(req);
+    }
+
+    /// Route loads over the NoC (step 4b.4). nullptr = they land in L3 on MC completion.
+    void set_load_route(LoadRoute* route) { load_route_ = route; }
+
+    /**
+     * @brief A routed load has been delivered to its home hub's L3
+     * @param tag The load's ticket, as given to LoadRoute::inject
+     *
+     * The load lands now: its Tag CAM entry appears and TILE_ARRIVED_L3 is emitted, so the
+     * DRAM -> L3 copy and every downstream consumer see it at delivery, not at MC completion.
+     */
+    void land_load(uint64_t tag, Cycle now, std::vector<TimingEvent>& events) {
+        for (auto& req : pending_requests_) {
+            if (!req.is_load || req.state != RequestState::IN_TRANSIT || req.ticket != tag) continue;
+            current_cycle_ = now;
+            arrive_in_l3(req, events);
+            req.state = RequestState::COMPLETED;
+            return;
+        }
+        throw std::logic_error(name() + ": delivery of an unknown load (ticket " +
+                               std::to_string(tag) + ")");
     }
 
     /**
@@ -223,6 +263,13 @@ public:
 
         // Step 1: Check for completed transfers from MC
         process_mc_completions(events);
+
+        // Step 1b: routed loads read from DRAM enter the NoC (oldest first, as room allows)
+        if (load_route_)
+            for (auto& req : pending_requests_)
+                if (req.state == RequestState::TO_INJECT &&
+                    load_route_->inject(config_.engine_id, req.tile, req.ticket))
+                    req.state = RequestState::IN_TRANSIT;
 
         // Step 2: Try to acquire credits and submit new loads
         process_pending_loads(events);
@@ -360,6 +407,7 @@ private:
     std::unordered_set<TileID, TileIDHash> submitted_load_tiles_;
     std::unordered_set<TileID, TileIDHash> submitted_store_tiles_;   // one write per tile at a time
     uint64_t next_ticket_ = 0;
+    LoadRoute* load_route_ = nullptr;
 
     Cycle current_cycle_ = 0;
     uint32_t next_slot_id_ = 0;
@@ -384,21 +432,13 @@ private:
                     req.is_load == completed->is_load) {
 
                     if (completed->is_load) {
-                        // Load complete: tile arrived at L3
-                        l3_cam(req.tile).insert(completed->tile.tile_id, req.slot_id, current_cycle_);
-                        submitted_load_tiles_.erase(completed->tile.tile_id);
-                        total_bytes_loaded_ += completed->tile.size_bytes;
-
-                        events.push_back(TimingEvent(
-                            EventType::TILE_ARRIVED_L3,
-                            current_cycle_,
-                            config_.engine_id,
-                            completed->tile.tile_id,
-                            name()
-                        ));
-                        events.back().slot_id = req.slot_id;
-                        events.back().matrix_base_address = completed->tile.matrix_base_address;
-                        events.back().dram_address = completed->tile.dram_address;
+                        // Read from DRAM. Unrouted, the tile arrives in L3 now; routed, it
+                        // enters the NoC first and arrives when its hub delivers it.
+                        if (load_route_) {
+                            req.state = RequestState::TO_INJECT;
+                            break;
+                        }
+                        arrive_in_l3(req, events);
                     } else {
                         // Store complete: the tile is in DRAM, and its store-buffer slot is
                         // free. L3 was freed when the BlockMover's ejection landed.
@@ -581,6 +621,24 @@ private:
                 }),
             pending_requests_.end()
         );
+    }
+
+    /// The load is in its home L3 tile: Tag CAM entry, and TILE_ARRIVED_L3.
+    void arrive_in_l3(const PendingRequest& req, std::vector<TimingEvent>& events) {
+        l3_cam(req.tile).insert(req.tile.tile_id, req.slot_id, current_cycle_);
+        submitted_load_tiles_.erase(req.tile.tile_id);
+        total_bytes_loaded_ += req.tile.size_bytes;
+
+        events.push_back(TimingEvent(
+            EventType::TILE_ARRIVED_L3,
+            current_cycle_,
+            config_.engine_id,
+            req.tile.tile_id,
+            name()
+        ));
+        events.back().slot_id = req.slot_id;
+        events.back().matrix_base_address = req.tile.matrix_base_address;
+        events.back().dram_address = req.tile.dram_address;
     }
 
     /**
