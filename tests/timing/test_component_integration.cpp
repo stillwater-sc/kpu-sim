@@ -331,8 +331,8 @@ TEST_CASE("Full round-trip: load → compute → drain → store", "[timing][int
     auto c_tile = make_tile(MatrixID::C, 0, 0);
     str.schedule_drain(c_tile);      // Drain result to L2
     bm.schedule_writeback(c_tile);   // Move from L2 to L3
-    bm.schedule_eject(c_tile, dma.store_buffer());  // Push from L3 into the DMA's buffer
-    dma.schedule_store(c_tile);      // Write the buffer to DRAM
+    const uint64_t ticket = dma.schedule_store(c_tile);       // Write the buffer to DRAM
+    bm.schedule_eject(c_tile, dma.store_buffer(), ticket);    // Push from L3 into that buffer
 
     // Run until complete
     Cycle cycle = 0;

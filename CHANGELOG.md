@@ -15,7 +15,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   DRAM.
   - New: `DmaStoreBuffer` (the port's per-engine output queue,
     `Config::dma_store_buffer_blocks`), `BlockMoverProcess::schedule_eject`, and
-    `MemoryLevel::DMA_BUFFER`.
+    `DMA_STORE_RETIRED`.
+  - **Each store is a ticket**, issued by `schedule_store` and carried by its ejection, so two
+    stores of one tile in flight at once stay two stores, each with its own bytes.
   - **CSP timing changes by design.** The ResNet-18 baseline is re-pinned (+7-10% cycles; only
     timing keys changed). The T4/T16/T64 values oracle stays bit-identical.
   - The DMA and integration unit tests now state the push semantics: a store waits for its

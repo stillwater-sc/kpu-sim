@@ -128,16 +128,17 @@ public:
      * @brief Schedule an ejection of an L3 tile into a DMA engine's store buffer
      * @param tile Tile descriptor
      * @param target The store buffer of the DMA engine that will write the tile to DRAM
+     * @param ticket The store's ticket (DMAEngineProcess::schedule_store), delivered on landing
      *
      * The tile will be ejected when:
      * 1. The tile is present in L3 (TagCAM match)
      * 2. The target buffer has a free slot (credit)
      * 3. No other transfer is in progress
      */
-    void schedule_eject(const TileDescriptor& tile, DmaStoreBuffer& target) {
+    void schedule_eject(const TileDescriptor& tile, DmaStoreBuffer& target, uint64_t ticket) {
         TileDescriptor t = tile;
         t.enqueue_cycle = current_cycle_;
-        eject_queue_.push_back({t, &target});
+        eject_queue_.push_back({t, &target, ticket});
     }
 
     /**
@@ -268,6 +269,7 @@ private:
     struct Eject {
         TileDescriptor tile;
         DmaStoreBuffer* target;
+        uint64_t ticket;
     };
     std::deque<Eject> eject_queue_;
 
@@ -279,6 +281,7 @@ private:
     enum class Leg { Move, Writeback, Eject };
     Leg in_flight_leg_ = Leg::Move;
     DmaStoreBuffer* in_flight_target_ = nullptr;     // Eject only
+    uint64_t in_flight_ticket_ = 0;                  // Eject only
     uint32_t in_flight_l3_slot_ = 0;
 
     // Statistics
@@ -307,7 +310,7 @@ private:
             if (in_flight_leg_ == Leg::Eject) {
                 // Ejection complete: the tile is in the DMA engine's store buffer, and its
                 // L3 slot is free (once the last reference is gone).
-                in_flight_target_->deliver(in_flight_->tile.tile_id);
+                in_flight_target_->deliver(in_flight_ticket_);
                 bool credit_released = l3_tag_cam_.invalidate(in_flight_->tile.tile_id);
                 if (credit_released) {
                     l3_credits_.release(
@@ -326,6 +329,7 @@ private:
                     name()
                 ));
                 events.back().slot_id = in_flight_->slot_id;
+                events.back().store_ticket = in_flight_ticket_;
                 if (credit_released) {
                     events.push_back(TimingEvent(
                         EventType::CREDIT_RELEASED,
@@ -336,6 +340,7 @@ private:
                     ));
                 }
                 in_flight_target_ = nullptr;
+                in_flight_ticket_ = 0;
             } else if (in_flight_leg_ == Leg::Move) {
                 // Move complete: tile arrived at L2. The ref count is seeded
                 // with the tile's consumer count (broadcast 1:1:k, #100);
@@ -728,8 +733,10 @@ private:
                                           l3_entry->slot_id, false);
             in_flight_leg_ = Leg::Eject;
             in_flight_target_ = ej.target;
+            in_flight_ticket_ = ej.ticket;
             events.push_back(TimingEvent(EventType::BM_EJECT_START, current_cycle,
                                          config_.mover_id, ej.tile.tile_id, name()));
+            events.back().store_ticket = ej.ticket;
             return true;
         }
 

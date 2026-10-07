@@ -369,8 +369,15 @@ Each step is one PR.
      - The BlockMover's third leg, `schedule_eject`, runs after move and writeback. A stalled
        writeback therefore lets an ejection run and free L3. An ejection's stall counts only in
        a tick no other leg stalled in, which keeps one stall per mover per cycle.
-     - `MemoryLevel::DMA_BUFFER` carries the bytes. `BM_EJECT_COMPLETE` copies them L3 -> buffer
-       before `CREDIT_RELEASED` retires L3, and `DMA_STORE_COMPLETE` copies buffer -> DRAM.
+     - **Every store is a ticket.** `DMAEngineProcess::schedule_store` issues one, the
+       ejection carries it, and the buffer stages it. Two stores of one tile are two tickets,
+       two slots and two writes.
+       - The bytes live under the ticket from `BM_EJECT_COMPLETE`, which runs before
+         `CREDIT_RELEASED` retires L3, until the engine's `DMA_STORE_RETIRED` moves them to
+         DRAM.
+       - An engine writes one store of a tile at a time. The MC's completion names the tile, not
+         the store, so this keeps the match unambiguous and write-after-write in order.
+       - Found in review: keyed by tile, overlapping stores of one tile collided.
      - The ejecting mover is the one the tile's writeback hashes to (`select_block_mover`).
        4b.3 replaces that with the tile's home L3 tile.
      - Measured on the ResNet-18 regression: total cycles rise 7-10%, from the ejection's

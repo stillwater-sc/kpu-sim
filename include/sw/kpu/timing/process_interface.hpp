@@ -44,6 +44,7 @@ enum class EventType {
     BM_STALL_CREDIT,     ///< BlockMover stalled waiting for L2 credit
     BM_EJECT_START,      ///< BlockMover started pushing an L3 tile into a DMA engine's buffer
     BM_EJECT_COMPLETE,   ///< BlockMover finished that push; the L3 slot is free
+    DMA_STORE_RETIRED,   ///< DMA engine retired a store: written to DRAM, buffer slot free
 
     // Streamer events
     STR_FEED_START,      ///< Streamer started feeding tile to compute
@@ -92,6 +93,7 @@ inline const char* to_string(EventType type) {
         case EventType::BM_STALL_CREDIT: return "BM_STALL_CREDIT";
         case EventType::BM_EJECT_START: return "BM_EJECT_START";
         case EventType::BM_EJECT_COMPLETE: return "BM_EJECT_COMPLETE";
+        case EventType::DMA_STORE_RETIRED: return "DMA_STORE_RETIRED";
         case EventType::STR_FEED_START: return "STR_FEED_START";
         case EventType::STR_FEED_COMPLETE: return "STR_FEED_COMPLETE";
         case EventType::STR_DRAIN_START: return "STR_DRAIN_START";
@@ -130,6 +132,8 @@ struct TimingEvent {
     uint32_t slot_id;         ///< Buffer/bank slot (if applicable)
     std::string component_name; ///< Human-readable component name
     std::string detail;         ///< Additional detail (e.g., "ROW_HIT" for MC_ACCESS_TYPE)
+    uint64_t store_ticket = 0;  ///< Which STORE an eject/retire event belongs to (0 = none):
+                                ///< two stores of one tile are two tickets
     Address matrix_base_address = 0; ///< Base address of the matrix in DRAM
     Address dram_address = 0;  ///< DRAM address for this tile
 

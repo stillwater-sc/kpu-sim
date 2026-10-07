@@ -291,7 +291,7 @@ TEST_CASE("BlockMoverProcess eject waits for the tile in L3 and a store-buffer s
     BlockMoverProcess bm(default_config(0), l3_tag_cam, l3_credits, l2_credits, l2_tag_cam);
 
     auto c = make_tile(MatrixID::C, 0, 0);
-    bm.schedule_eject(c, buffer);
+    bm.schedule_eject(c, buffer, 7);
 
     // Not in L3 yet: a tag stall.
     auto events = bm.tick(0);
@@ -311,14 +311,14 @@ TEST_CASE("BlockMoverProcess eject waits for the tile in L3 and a store-buffer s
     events = bm.tick(2);
     REQUIRE(count_events(events, EventType::BM_EJECT_START) == 1);
     REQUIRE(buffer.held() == 1);
-    REQUIRE_FALSE(buffer.staged(c.tile_id));
+    REQUIRE_FALSE(buffer.staged(7));
 
     // On completion the tile is in the buffer and its L3 slot is free.
     Cycle cycle = 3;
     std::size_t completed = 0;
     while (!bm.is_idle() && cycle < 10000) completed += count_events(bm.tick(cycle++), EventType::BM_EJECT_COMPLETE);
     REQUIRE(completed == 1);
-    REQUIRE(buffer.staged(c.tile_id));
+    REQUIRE(buffer.staged(7));
     REQUIRE_FALSE(l3_tag_cam.lookup(c.tile_id));
     REQUIRE(l3_credits.available() == 8);
     REQUIRE(bm.total_tiles_ejected() == 1);
@@ -340,7 +340,7 @@ TEST_CASE("BlockMoverProcess ejects only after moves and writebacks cannot start
     l3_tag_cam.insert(a.tile_id, 0, 0);
     l3_credits.acquire();
     l3_tag_cam.insert(c.tile_id, 1, 0);
-    bm.schedule_eject(c, buffer);
+    bm.schedule_eject(c, buffer, 7);
     bm.schedule_move(a);
 
     // Both are ready; the move goes first and the ejection waits for the mover.

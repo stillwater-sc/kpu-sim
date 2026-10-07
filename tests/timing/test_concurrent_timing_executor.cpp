@@ -879,3 +879,47 @@ TEST_CASE("ConcurrentTimingExecutor matmul pattern", "[timing][executor]") {
     REQUIRE(stats.tiles_drained == Ti * Tj);           // C tiles drained
     REQUIRE(stats.tiles_stored == Ti * Tj);            // C tiles stored
 }
+
+TEST_CASE("Two stores of one tile in flight at once each reach DRAM with their own bytes",
+          "[timing][executor][store]") {
+    // Each store is its own ticket from ejection to retirement. Keyed by tile alone, the second
+    // ejection overwrote the first's buffered bytes, and the first retirement erased them
+    // before the second write landed.
+    for (const bool same_engine : {true, false}) {
+        CAPTURE(same_engine);
+        auto cfg = default_config();
+        cfg.num_dma_engines = 2;
+        // Slow DRAM, so both ejections land before either write retires: the overlap.
+        cfg.mc_startup_latency = 5000;
+        ConcurrentTimingExecutor exec(cfg);
+        auto c = make_tile(MatrixID::C, 0, 0);
+        TilePayload p{4, 4, std::vector<float>(16)};
+        for (std::size_t i = 0; i < 16; ++i) p.values[i] = 0.5f * static_cast<float>(i);
+        exec.set_tile_payload(c.tile_id, p);
+
+        // Two references in L3, then two stores, both scheduled before either can finish.
+        exec.schedule_load(c, 0);
+        exec.schedule_load(c, 0);
+        exec.schedule_store(c, 0);
+        exec.schedule_store(c, same_engine ? 0 : 1);
+        while (!exec.is_complete() && exec.current_cycle() < 100000) exec.step();
+        REQUIRE(exec.is_complete());
+
+        std::size_t ejected = 0, retired = 0;
+        for (const auto& e : exec.events()) {
+            ejected += e.type == EventType::BM_EJECT_COMPLETE;
+            retired += e.type == EventType::DMA_STORE_RETIRED;
+        }
+        CHECK(ejected == 2);
+        CHECK(retired == 2);
+        // They did overlap: the second ejection landed before the first store retired.
+        Cycle second_eject = 0, first_retire = 0;
+        for (const auto& e : exec.events()) {
+            if (e.type == EventType::BM_EJECT_COMPLETE) second_eject = e.cycle + e.duration;
+            if (e.type == EventType::DMA_STORE_RETIRED && first_retire == 0) first_retire = e.cycle;
+        }
+        CHECK(second_eject < first_retire);
+        CHECK(exec.tile_payload_at(MemoryLevel::DRAM, c.tile_id).values == p.values);
+        CHECK(exec.l3_credits().available() == cfg.l3_buffer_count);
+    }
+}

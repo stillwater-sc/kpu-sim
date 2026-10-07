@@ -34,17 +34,19 @@ namespace sw::kpu::timing {
  * @brief A DMA engine's store buffer: tiles ejected out of L3, waiting for their DRAM write
  *
  * Push-with-credit on both sides. A BlockMover reserve()s a slot before it starts an
- * ejection and deliver()s the tile when the ejection lands. The engine take()s a staged tile
- * when it starts the DRAM write, and release()s the slot when the write completes.
+ * ejection and deliver()s the store's TICKET when the ejection lands. The engine take()s a
+ * staged ticket when it starts the DRAM write, and release()s the slot when the write
+ * completes. Entries are per store, not per tile: two stores of one tile are two tickets,
+ * two slots and two writes.
  */
 class DmaStoreBuffer {
 public:
     explicit DmaStoreBuffer(size_t blocks) : credits_(blocks) {}
 
     bool reserve() { return credits_.acquire(); }
-    void deliver(const TileID& id) { staged_.insert(id); }
-    [[nodiscard]] bool staged(const TileID& id) const { return staged_.count(id) != 0; }
-    void take(const TileID& id) { staged_.erase(id); }
+    void deliver(uint64_t ticket) { staged_.insert(ticket); }
+    [[nodiscard]] bool staged(uint64_t ticket) const { return staged_.count(ticket) != 0; }
+    void take(uint64_t ticket) { staged_.erase(ticket); }
     void release() { credits_.release(); }
 
     [[nodiscard]] size_t capacity() const { return credits_.capacity(); }
@@ -57,7 +59,7 @@ public:
 
 private:
     CreditPool credits_;
-    std::unordered_set<TileID, TileIDHash> staged_;
+    std::unordered_set<uint64_t> staged_;
 };
 
 /**
@@ -125,6 +127,7 @@ public:
         RequestState state;
         Cycle enqueue_cycle;
         uint32_t slot_id = 0;    ///< L3 slot for this tile (for loads)
+        uint64_t ticket = 0;     ///< Stores: this store's identity in the store buffer
     };
 
     /**
@@ -172,18 +175,24 @@ public:
      * @param tile Tile descriptor with DRAM address and size
      *
      * The tile will be stored when:
-     * 1. A BlockMover has ejected it into store_buffer()
-     * 2. MC can accept the request
+     * 1. A BlockMover has ejected it into store_buffer(), under the returned ticket
+     * 2. No other store of the same tile is being written by this engine (the MC's
+     *    completion names the tile, not the store, and write-after-write stays ordered)
+     * 3. MC can accept the request
+     *
+     * @return the store's ticket; the BlockMover's ejection must deliver it
      */
-    void schedule_store(const TileDescriptor& tile) {
+    uint64_t schedule_store(const TileDescriptor& tile) {
         // Staging queue accepts every scheduled request (see schedule_load).
         PendingRequest req;
         req.tile = tile;
         req.is_load = false;
         req.state = RequestState::WAITING_TAG;
         req.enqueue_cycle = current_cycle_;
+        req.ticket = (static_cast<uint64_t>(config_.engine_id) << 40) | ++next_ticket_;
 
         pending_requests_.push_back(req);
+        return req.ticket;
     }
 
     /**
@@ -249,6 +258,8 @@ public:
         pending_requests_.clear();
         store_buffer_.reset();
         submitted_load_tiles_.clear();
+        submitted_store_tiles_.clear();
+        next_ticket_ = 0;
         next_slot_id_ = 0;
         stall_cycles_credit_ = 0;
         stall_cycles_tag_ = 0;
@@ -316,6 +327,8 @@ private:
 
     std::vector<PendingRequest> pending_requests_;
     std::unordered_set<TileID, TileIDHash> submitted_load_tiles_;
+    std::unordered_set<TileID, TileIDHash> submitted_store_tiles_;   // one write per tile at a time
+    uint64_t next_ticket_ = 0;
 
     Cycle current_cycle_ = 0;
     uint32_t next_slot_id_ = 0;
@@ -360,6 +373,11 @@ private:
                         // free. L3 was freed when the BlockMover's ejection landed.
                         total_bytes_stored_ += completed->tile.size_bytes;
                         store_buffer_.release();
+                        submitted_store_tiles_.erase(completed->tile.tile_id);
+                        events.push_back(TimingEvent(EventType::DMA_STORE_RETIRED, current_cycle_,
+                                                     config_.engine_id, completed->tile.tile_id,
+                                                     name()));
+                        events.back().store_ticket = req.ticket;
                     }
 
                     req.state = RequestState::COMPLETED;
@@ -482,8 +500,8 @@ private:
                 break;  // All hardware queue slots occupied
             }
 
-            // Need the tile in this engine's store buffer (a BlockMover ejected it there)
-            if (!store_buffer_.staged(req.tile.tile_id)) {
+            // Need this store's ticket in the buffer (a BlockMover ejected it there)
+            if (!store_buffer_.staged(req.ticket)) {
                 if (!tag_stalled) {
                     tag_stalled = true;
                     stalled_tile = req.tile.tile_id;
@@ -491,12 +509,16 @@ private:
                 continue;  // Try other requests
             }
 
+            // Another store of this tile is being written by this engine: wait for it
+            if (submitted_store_tiles_.count(req.tile.tile_id) > 0) continue;
+
             // Tile is in the buffer - submit to MC with our engine_id
             if (!mc_.submit_request(req.tile, false, config_.engine_id)) {
                 // MC queue full - retry later
                 continue;
             }
-            store_buffer_.take(req.tile.tile_id);   // the slot stays held until the write ends
+            store_buffer_.take(req.ticket);   // the slot stays held until the write ends
+            submitted_store_tiles_.insert(req.tile.tile_id);
 
             req.state = RequestState::SUBMITTED;
             ++in_flight;
