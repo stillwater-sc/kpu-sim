@@ -406,6 +406,15 @@ TEST_CASE("csp_noc_wiring refuses a device the NoC cannot be wired on", "[timing
     CHECK_FALSE(csp_noc_wiring(d, 4096, 2, &why));
     CHECK_THAT(why, ContainsSubstring("no noc"));
 
+    d = device("kpu_t16.json");
+    d.memory.controllers = 0;
+    CHECK_FALSE(csp_noc_wiring(d, 4096, 2, &why));
+    CHECK_THAT(why, ContainsSubstring("does not split evenly over 0 memory controllers"));
+    d = device("kpu_t16.json");
+    d.dma.engines = 15;
+    CHECK_FALSE(csp_noc_wiring(d, 4096, 2, &why));
+    CHECK_THAT(why, ContainsSubstring("does not split evenly over 2"));
+
     const auto w = csp_noc_wiring(device("kpu_t16.json"), 4096, 2, &why);
     REQUIRE(w);
     CHECK(w->engine_port.size() == 16);

@@ -154,18 +154,35 @@ inline std::optional<ConcurrentTimingExecutor::Config::NocWiring> csp_noc_wiring
     fabric->dma_write_interval = 1;
     fabric->output_queue_blocks = store_buffer_blocks;
 
+    // A public entry point: it checks what csp_config_from checks, rather than trusting it ran.
+    const std::size_t mcs = d.memory.controllers ? *d.memory.controllers : 1;
+    if (mcs == 0 || d.dma.engines == 0 || d.dma.engines % mcs != 0)
+        return fail("dma.engines (" + std::to_string(d.dma.engines) + ") does not split evenly "
+                    "over " + std::to_string(mcs) + " memory controllers");
+    const std::size_t per = d.dma.engines / mcs;
+
     DeploymentSpec one;
     one.devices = {d};
-    const auto attach = sw::kpu::program::platform::dma_port_attachment(one);
-    const std::size_t mcs = d.memory.controllers ? *d.memory.controllers : 1;
-    const std::size_t per = d.dma.engines / mcs;
+    std::vector<sw::kpu::program::platform::DmaPortAttachment> attach;
+    try {
+        attach = sw::kpu::program::platform::dma_port_attachment(one);
+    } catch (const sw::kpu::program::platform::FloorplanError& e) {
+        return fail(std::string("no engine-to-port attachment: ") + e.what());
+    }
     ConcurrentTimingExecutor::Config::NocWiring w{*L, *fabric, {}};
     w.engine_port.assign(d.dma.engines, {0, 0});
     std::vector<bool> placed(d.dma.engines, false);
     std::map<NocDim, NocDim> on_port;
     for (const auto& a : attach) {
+        if (static_cast<std::size_t>(a.mc) >= mcs || static_cast<std::size_t>(a.engine) >= per)
+            return fail("the floorplan attaches mc[" + std::to_string(a.mc) + "]/dma[" +
+                        std::to_string(a.engine) + "], outside the declared " + std::to_string(mcs) +
+                        " controllers of " + std::to_string(per) + " engines");
         const std::size_t i = static_cast<std::size_t>(a.mc) * per + a.engine;
-        w.engine_port.at(i) = {a.port, on_port[a.port]++};
+        if (placed[i])
+            return fail("the floorplan attaches mc[" + std::to_string(a.mc) + "]/dma[" +
+                        std::to_string(a.engine) + "] to two ports");
+        w.engine_port[i] = {a.port, on_port[a.port]++};
         placed[i] = true;
     }
     for (std::size_t i = 0; i < placed.size(); ++i)
