@@ -50,7 +50,9 @@ inline ToleranceReport compare_within(const std::vector<float>& actual,
         const double a = actual[i], ref = reference[i];
         if (std::memcmp(&actual[i], &reference[i], sizeof(float)) != 0) r.bit_identical = false;
         const double err = std::abs(a - ref);
-        if (!std::isfinite(a) || err > atol + rtol * std::abs(ref)) {
+        // A non-finite reference is a failure too: with NaN, `err > bound` is false, and the
+        // element would otherwise pass unseen.
+        if (!std::isfinite(a) || !std::isfinite(ref) || err > atol + rtol * std::abs(ref)) {
             if (r.failures++ == 0) r.first_failure = i;
             r.pass = false;
         }

@@ -341,7 +341,9 @@ Each step is one PR.
      engine numbering.
    - A CSP matmul on T4, T16 and T64 spec configs with payloads, checked against the L0
      reference. This is the oracle every later step must keep.
-   - No timing change.
+   - No timing-model change. Hand-built configs keep round-robin. A spec-built config's
+     per-controller engine numbering can still give different cycle counts than round-robin,
+     because controller contention differs.
    - As built:
      - `timing/csp_config_from_spec.hpp` lists in `unmapped` what the executor has no
        counterpart for, and keeps its defaults for those: the spec's rates, `macs_per_cycle`,

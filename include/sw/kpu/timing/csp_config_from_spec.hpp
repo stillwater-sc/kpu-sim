@@ -53,6 +53,7 @@ inline std::optional<CspDeviceConfig> csp_config_from(
 
     const std::size_t mcs = d.memory.controllers ? *d.memory.controllers : 1;
     if (mcs == 0) return fail("memory.controllers is zero");
+    if (d.dma.engines == 0) return fail("dma.engines is zero; the executor needs an engine");
     if (d.dma.engines % mcs != 0)
         return fail("dma.engines (" + std::to_string(d.dma.engines) + ") does not split evenly over " +
                     std::to_string(mcs) + " memory controllers");

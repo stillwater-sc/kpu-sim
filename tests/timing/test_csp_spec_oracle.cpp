@@ -23,6 +23,7 @@
 #include <sw/kpu/timing/schedule/matmul_schedule_generator.hpp>
 
 #include <cstdio>
+#include <limits>
 #include <string>
 #include <vector>
 
@@ -183,6 +184,10 @@ TEST_CASE("csp_config_from maps a deployment's device onto the CSP executor",
         CHECK_FALSE(csp_config_from(d, &why));
         CHECK_THAT(why, ContainsSubstring("does not split evenly over 2 memory controllers"));
         d = device("kpu_t16.json");
+        d.dma.engines = 0;
+        CHECK_FALSE(csp_config_from(d, &why));
+        CHECK_THAT(why, ContainsSubstring("dma.engines is zero"));
+        d = device("kpu_t16.json");
         d.l3.capacity_tiles = 0;
         CHECK_FALSE(csp_config_from(d, &why));
         CHECK_THAT(why, ContainsSubstring("l3.capacity_tiles"));
@@ -233,4 +238,23 @@ TEST_CASE("Values oracle: a matmul on T4, T16 and T64 computes the L0 reference'
         std::printf("csp oracle %-14s 128^3/32^3: %8llu cycles, max abs %.3g, max rel %.3g\n",
                     file, static_cast<unsigned long long>(r.cycles), cmp.max_abs, cmp.max_rel);
     }
+}
+
+TEST_CASE("compare_within holds the ADR bar, and a non-finite value on either side fails",
+          "[timing][csp][oracle]") {
+    using sw::kpu::program::compare_within;
+    const std::vector<float> ref = {1.0f, 0.0f, 100.0f};
+    auto r = compare_within({1.0f, 0.0f, 100.0f}, ref, 1e-6, 1e-4);
+    CHECK(r.pass);
+    CHECK(r.bit_identical);
+    r = compare_within({1.00005f, 5e-7f, 100.009f}, ref, 1e-6, 1e-4);   // inside atol + rtol|r|
+    CHECK(r.pass);
+    CHECK_FALSE(r.bit_identical);
+    r = compare_within({1.0f, 0.0f, 100.02f}, ref, 1e-6, 1e-4);         // 0.02 > 1e-6 + 0.01
+    CHECK_FALSE(r.pass);
+    CHECK(r.first_failure == 2);
+    const float nan = std::numeric_limits<float>::quiet_NaN();
+    CHECK_FALSE(compare_within({nan, 0.0f, 100.0f}, ref, 1e-6, 1e-4).pass);
+    CHECK_FALSE(compare_within({1.0f, 0.0f, 100.0f}, {nan, 0.0f, 100.0f}, 1e-6, 1e-4).pass);
+    CHECK_FALSE(compare_within({1.0f}, {std::numeric_limits<float>::infinity()}, 1e-6, 1e-4).pass);
 }
