@@ -79,6 +79,11 @@ public:
         /// tile-level model (docs/plans/dram-bank-model.md step 2).
         std::optional<DramHosting> dram;
         size_t num_dma_engines = 1;         ///< Number of DMA engines
+        /// The memory controller of each DMA engine, by engine index. Empty = round-robin
+        /// (engine i on controller i % num_memory_controllers). A deployment numbers its
+        /// engines per controller (mc[m]/dma[e]), so csp_config_from() fills this to keep
+        /// engine i = mc * engines_per_mc + e on the controller the floorplan wires it to.
+        std::vector<size_t> dma_engine_controller;
         size_t l3_tile_rows = 2;            ///< L3 tile grid rows (memory tiles)
         size_t l3_tile_cols = 2;            ///< L3 tile grid columns
         size_t compute_tile_rows = 2;       ///< Compute tile grid rows
@@ -689,6 +694,19 @@ inline void ConcurrentTimingExecutor::create_components() {
             "ConcurrentTimingExecutor: the declared DRAM has " +
             std::to_string(config_.dram->map.controllers()) + " memory controllers, the executor " +
             std::to_string(config_.num_memory_controllers));
+    if (!config_.dma_engine_controller.empty()) {
+        if (config_.dma_engine_controller.size() != config_.num_dma_engines)
+            throw std::invalid_argument(
+                "ConcurrentTimingExecutor: dma_engine_controller names " +
+                std::to_string(config_.dma_engine_controller.size()) + " engines, the executor has " +
+                std::to_string(config_.num_dma_engines));
+        for (size_t mc : config_.dma_engine_controller)
+            if (mc >= config_.num_memory_controllers)
+                throw std::invalid_argument(
+                    "ConcurrentTimingExecutor: dma_engine_controller names controller " +
+                    std::to_string(mc) + ", the executor has " +
+                    std::to_string(config_.num_memory_controllers));
+    }
     for (size_t mc = 0; mc < config_.num_memory_controllers; ++mc) {
         MemoryControllerProcess::Config mc_config;
         mc_config.hosted = config_.dram;
@@ -727,8 +745,10 @@ inline void ConcurrentTimingExecutor::create_components() {
                   config_.l3_writeback_credit_reserve, config_.l3_buffer_count);
         dma_config.name = dma_config.display_name();
 
-        // Assign DMA to MC (round-robin if more DMAs than MCs)
-        size_t mc_id = dma % memory_controllers_.size();
+        // Assign DMA to MC: as declared, else round-robin if more DMAs than MCs.
+        const size_t mc_id = config_.dma_engine_controller.empty()
+            ? dma % memory_controllers_.size()
+            : config_.dma_engine_controller.at(dma);
 
         dma_engines_.push_back(std::make_unique<DMAEngineProcess>(
             dma_config, *memory_controllers_[mc_id], l3_credits_, l3_tag_cam_));

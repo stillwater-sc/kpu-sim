@@ -492,3 +492,14 @@ set_tests_properties(test_noc_fabric PROPERTIES
     LABELS "timing;noc;v0.9"
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
 )
+
+# A deployment's device drives the CSP executor, and its matmul computes the L0 reference's
+# values (docs/plans/noc-port-arbitration.md step 4b.1)
+kpu_add_component_test(test_csp_spec_oracle "timing"
+    test_csp_spec_oracle.cpp
+)
+
+set_tests_properties(test_csp_spec_oracle PROPERTIES
+    LABELS "timing;csp;oracle;v0.9"
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+)

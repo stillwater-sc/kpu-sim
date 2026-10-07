@@ -9,6 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **A deployment's device drives the CSP executor (NoC port plan step 4b.1).**
+  - `csp_config_from(DeviceSpecification)` builds `ConcurrentTimingExecutor::Config`:
+    controllers, engines, the hosted DRAM, L3 capacity, BlockMovers and streamers.
+  - It names what it does not map (rates, `macs_per_cycle`, `l2.banks_per_tile`) instead of
+    inventing values.
+  - Engines are numbered per controller like the floorplan, through the new explicit
+    `Config::dma_engine_controller`, which is validated and obeyed.
+  - `dma_port_attachment()` returns the floorplan's engine-to-port wiring as data.
+  - `program/value_tolerance.hpp` is ADR 0001's cycle-accurate comparator,
+    `|a - r| <= atol + rtol |r|`.
+  - **The oracle for the rest of step 4b:** a 128^3 matmul on T4, T16 and T64 matches the L0
+    reference, bit-identical, with every L3 credit returned. The step 4b design (plan §4.1,
+    Q10-Q12) is recorded.
+
 - **The T16 deployment (`tests/program/deploy/kpu_t16.json`).** A 4x4 checkerboard with 8 L3
   and 8 compute tiles, 2 memory controllers with 16 DMA engines, and 24 BlockMovers. It is the
   smallest board whose folded torus has proper rings: two row loops and two column loops of

@@ -437,6 +437,24 @@ SocFloorplan generate_floorplan(const DeploymentSpec& spec, Dim device, const Fl
     return fp;
 }
 
+std::vector<DmaPortAttachment> dma_port_attachment(const DeploymentSpec& spec, Dim device) {
+    const SocFloorplan fp = generate_floorplan(spec, device);
+    std::vector<DmaPortAttachment> out;
+    for (const NocLink& l : fp.noc) {
+        if (l.kind != NocLink::Kind::Attach) continue;
+        const ResourceName dma = parse_resource_name(l.a);
+        const ResourceName port = parse_resource_name(l.b);
+        if (dma.kind != ResourceKind::DmaEngine || port.kind != ResourceKind::NocPort)
+            throw FloorplanError("dma_port_attachment: attach link '" + l.a + "' -> '" + l.b +
+                                 "' does not join a DMA engine to a NoC port");
+        out.push_back({dma.path.at(0), dma.path.at(1), port.path.at(0)});
+    }
+    std::sort(out.begin(), out.end(), [](const DmaPortAttachment& x, const DmaPortAttachment& y) {
+        return x.mc != y.mc ? x.mc < y.mc : x.engine < y.engine;
+    });
+    return out;
+}
+
 // ============================================================================
 // Validation
 // ============================================================================

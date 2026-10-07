@@ -297,6 +297,46 @@ TEST_CASE("the generated T16 floorplan places every resource exactly once",
     CHECK(links[NocLink::Kind::Attach] == 16);  // every DMA engine attaches to an N/S port
 }
 
+TEST_CASE("dma_port_attachment reads the floorplan's engine-to-port wiring back as data",
+          "[program][platform][floorplan]") {
+    auto per_port = [](const std::vector<DmaPortAttachment>& a) {
+        std::map<Dim, std::size_t> n;
+        for (const auto& x : a) ++n[x.port];
+        return n;
+    };
+    // The T4: one controller on the top edge, so all eight engines share its one N port.
+    const auto t4a = dma_port_attachment(t4());
+    REQUIRE(t4a.size() == 8);
+    const auto t4n = per_port(t4a);
+    REQUIRE(t4n.size() == 1);
+    CHECK(t4n.begin()->second == 8);
+    for (Dim e = 0; e < 8; ++e) {
+        CHECK(t4a[e].mc == 0);
+        CHECK(t4a[e].engine == e);      // in (mc, engine) order
+    }
+
+    // The T16 and T64: four engines on each N and S port; the W and E ports have none.
+    for (const auto& [spec, ports] : {std::pair{t16(), std::size_t{4}}, std::pair{t64(), std::size_t{8}}}) {
+        const auto a = dma_port_attachment(spec);
+        CHECK(a.size() == spec.device(0).dma.engines);
+        const auto n = per_port(a);
+        CHECK(n.size() == ports);
+        const auto L = ArrayLayout::of(spec.device(0));
+        REQUIRE(L);
+        for (const auto& [k, count] : n) {
+            CHECK(count == 4);
+            const Edge side = L->ports().at(k).side;
+            CHECK((side == Edge::N || side == Edge::S));
+        }
+    }
+
+    // It is the floorplan's own wiring: one entry per Attach link, nothing invented.
+    const SocFloorplan fp = generate_floorplan(t64());
+    std::size_t attach = 0;
+    for (const NocLink& l : fp.noc) attach += l.kind == NocLink::Kind::Attach;
+    CHECK(dma_port_attachment(t64()).size() == attach);
+}
+
 TEST_CASE("a spec that describes no layout has none, and says why",
           "[program][platform][layout]") {
     // The checked-in 16-CF / 8-L3 fixture is a valid deployment with no alternating layout.

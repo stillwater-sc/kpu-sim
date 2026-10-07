@@ -121,6 +121,16 @@ public:
 SocFloorplan generate_floorplan(const DeploymentSpec& spec, Dim device = 0,
                                 const FloorplanStyle& style = {});
 
+// Which NoC port each DMA engine of device `device` attaches to: the floorplan's own Attach
+// links, read back as data, so the rule (floorplan.cpp, FIRST-PASS ATTACHMENT) lives in one
+// place. Engines are named per controller, `mc[m]/dma[e]`, in (mc, engine) order. An engine
+// whose controller won no port is absent. Throws FloorplanError as generate_floorplan does.
+struct DmaPortAttachment {
+    Dim mc = 0, engine = 0;           // mc[m]/dma[e]
+    Dim port = 0;                     // noc/port[k]
+};
+std::vector<DmaPortAttachment> dma_port_attachment(const DeploymentSpec& spec, Dim device = 0);
+
 // Empty when `fp` is a floorplan of `spec`; otherwise the first problem, naming the block.
 std::string validate_floorplan(const SocFloorplan& fp, const DeploymentSpec& spec);
 

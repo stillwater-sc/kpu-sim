@@ -1,8 +1,9 @@
 # NoC Ports, Port Controllers and Store-and-Forward Hubs
 
 **Date:** 2026-10-05
-**Status:** Steps 1-3 done; step 4a done (Q7 decided 2026-10-06, after step 4a's liveness test
-deadlocked the design as first written; §3.5)
+**Status:** Steps 1-3 and 4a done. Q7 was decided 2026-10-06, after step 4a's liveness test
+deadlocked the design as first written (§3.5). Step 4b is designed in §4.1 (Q10-Q12 decided
+2026-10-07).
 **Related:** #286 (tile-flow debugger), `docs/plans/dram-bank-model.md` (step 3, DMA window),
 `docs/plans/cycle-accurate-dma-noc.md` (the older mesh/wormhole plan this supersedes for the
 checkerboard), `kpu-architecture.md` §5.2
@@ -299,18 +300,97 @@ Each step is one PR.
      - `noc_fabric.hpp`: owns them all and fixes the tick order. Its entry points are the three
        pushes: inject, eject, and L3 -> L3 transfer. `Config::from` reads the spec.
      - `SpecField::Noc` stays unmodelled at every level until 4b.
-   - **4b, wiring.** DMA engines inject through their port; BlockMovers eject through it. It
-     needs:
-     - a destination L3 tile per block, which the executor's single pooled L3 does not have;
-     - the DMA burst window (DRAM plan step 3), which supplies the engine side;
-     - the floorplan's engine-to-port attachment, which 4a takes as a parameter.
-     The L3 credit becomes the hub's local delivery condition, which 4a leaves always true.
+   - **4b, wiring.** DMA engines inject through their port; BlockMovers eject through it.
+     Designed in §4.1 (2026-10-07); five PRs, 4b.1-4b.5.
 5. **Record and checker:**
    - port-bus and hub-buffer occupancy columns at L-T2/L-CA;
    - new invariants (§6) in `tflow_check.py`;
    - the liveness watchdog as an executor diagnostic.
 6. **Viewer:** per-port injection and ejection rows, per-engine queue-depth rows, and hub
    buffer occupancy.
+
+### 4.1 Step 4b design (2026-10-07; Q10-Q12 decided the same day)
+
+**What the CSP tier has today** (surveyed at `a532f34`):
+- **L3 is one pool.** `ConcurrentTimingExecutor` holds a single `l3_credits_` and `l3_tag_cam_`
+  that every process shares (`concurrent_timing_executor.hpp:657-677`). `l3_tile_rows/cols` only
+  name the BlockMovers. Nothing gives a block a home L3 tile.
+- **Writeback is still a DMA read.** Step 3's push vocabulary landed only in the L-T1 executor.
+  In `timing/`, a STORE waits on the L3 TagCAM, the MC reads, and the L3 slot frees on DMA
+  completion (`dma_engine_process.hpp:438-461`, `:311-328`). BlockMoverProcess has no eject leg.
+- **No spec reaches the executor.** Every `ConcurrentTimingExecutor::Config` is built by hand.
+  DRAM step 2 added only the opt-in `dram` field, set only by tests. The driver does not run
+  L-CA at all (`level_implemented`, `execution_level.hpp:88`).
+- **The engine-to-port attachment is buried.** It sits inside `generate_floorplan`
+  (`floorplan.cpp:389-435`) and is emitted only as drawing links.
+  - The floorplan numbers engines per controller (`mc[m]/dma[e]`), while the executor gives
+    engine `i` to controller `i % mcs`.
+  - All 8 T4 engines attach to one port (`col0.N`); the T16 and T64 attach 4 per N/S port.
+- **No oracle for "values never move" on a spec device.** The CSP value tests run on hand-built
+  default configs.
+- **Two clocks.** The fabric keeps its own `now_`. Wiring must tick it inside the executor's step
+  so one cycle means one cycle.
+
+**Steps.** Each is one PR and ends green.
+
+1. **4b.1, spec to executor, and the oracle.** (Done.)
+   - `csp_config_from(DeviceSpecification)` builds `ConcurrentTimingExecutor::Config` from the
+     spec: MCs, engines, the DRAM hosting, L3 capacity and BlockMover count.
+   - `dma_port_attachment(spec)` is lifted out of `generate_floorplan`, which then uses it.
+     It returns, for each engine `(mc, e)`, its port. The executor adopts the floorplan's
+     engine numbering.
+   - A CSP matmul on T4, T16 and T64 spec configs with payloads, checked against the L0
+     reference. This is the oracle every later step must keep.
+   - No timing change.
+   - As built:
+     - `timing/csp_config_from_spec.hpp` lists in `unmapped` what the executor has no
+       counterpart for, and keeps its defaults for those: the spec's rates, `macs_per_cycle`,
+       and `l2.banks_per_tile`.
+     - `Config::dma_engine_controller` is the explicit engine-to-controller map. Empty keeps
+       round-robin.
+     - `dma_port_attachment()` reads the floorplan's Attach links back, so its rule stays in
+       `generate_floorplan`.
+     - `program/value_tolerance.hpp` is the §7 answer 5 comparator.
+     - The oracle passes the ADR bar on all three devices, and is bit-identical too: `fill()`'s
+       inputs keep every product and partial sum exact, so accumulation order cannot round.
+2. **4b.2, push-only writeback in the CSP tier** (step 3's vocabulary, without the NoC).
+   - A BlockMover ejects a written-back tile from L3 into its DMA engine's buffer, then frees
+     the L3 slot.
+   - The DMA engine writes that buffer to DRAM, so a STORE no longer reads L3.
+   - New events `BM_EJECT_START/COMPLETE`, and the L3->DRAM value copy moves to the ejection.
+   - **This changes CSP timing**, as step 3 did at L-T1. The oracle and the regression
+     baselines are re-pinned in the same PR.
+3. **4b.3, L3 placement.** Every block gets a **home L3 tile** (Q10).
+   - The L3 credit pool and TagCAM split per L3 tile (`capacity_tiles / l3.tiles` each). A load
+     needs its home tile's credit.
+   - A BlockMover serves only its own L3 tile's blocks: movers are the layout's sites, one per
+     abutting edge, replacing the hash pool.
+   - Still no NoC: a load lands in its home tile instantly, as today.
+4. **4b.4, wire the fabric.** Opt-in, like `dram`: `Config::noc`.
+   - **Load:** MC completion is no longer arrival. The DMA injects the block at its port, bound
+     for the home hub. The hub's L3 delivery reserves nothing new, since the home credit was
+     taken at load issue (§2). `TILE_ARRIVED_L3` and the DRAM->L3 copy fire on delivery.
+   - **Writeback:** the 4b.2 ejection goes over the NoC, from the home hub to the engine's port
+     and output queue. The DMA's DRAM write starts when the block reaches the output queue.
+     That replaces the fabric's own write model (`dma_write_latency`), so the MC is the only
+     DRAM writer.
+   - The fabric ticks in `step()`: after the DMA engines, before the BlockMovers.
+     `is_complete()` and `reset()` include it.
+   - `level_models(L-CA, SpecField::Noc)` becomes true when `Config::noc` is set.
+   - Tests:
+     - the oracle stays bit-identical on T4, T16 and T64 with the NoC on;
+     - TF-PORT-1/2/3 and TF-HUB-1/2 hold on a real matmul;
+     - the T4 port row shows 8 engines through one bus, now serialized.
+5. **4b.5, burst granularity** (after DRAM step 3). The NoC block becomes the burst (Q11), and
+   the DMA window supplies the injection stream.
+
+**Decided on review (2026-10-07): all three as recommended.**
+
+| # | Question | Options | Recommendation |
+|---|---|---|---|
+| Q10 | How a block gets its home L3 tile | (a) the schedule op carries it (`l3_tile`), with a deterministic default when absent; (b) a hash of the tile id, like today's engine selection; (c) derived from the consumer: the L3 tile beside the compute tile that uses it | **(a) with (b) as the default.** Placement is the compiler's decision, so the schedule should be able to state it. A hash default keeps every existing schedule runnable. (c) needs compute placement, which does not exist yet |
+| Q11 | The NoC block at the CSP tier before DRAM step 3 | (a) a whole tile, until 4b.5; (b) wait for DRAM step 3 and wire bursts directly | **(a).** Q1 says bursts at L-CA, but tile-granular wiring exercises every credit edge now, and 4b.5 only changes the block size |
+| Q12 | Order of 4b.2 (push writeback) and 4b.3 (placement) | as listed; or placement first | **as listed.** 4b.2 is the vocabulary change that re-pins baselines; doing it before placement keeps the two timing changes separately attributable |
 
 ## 5. Verification
 
