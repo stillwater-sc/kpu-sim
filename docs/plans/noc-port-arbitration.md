@@ -384,12 +384,25 @@ Each step is one PR.
        BlockMover time. DMA stall cycles rise about 4x, because a store now waits for its
        ejection instead of reading L3 on a tag match. Only timing keys changed; the values
        oracle stays bit-identical.
-3. **4b.3, L3 placement.** Every block gets a **home L3 tile** (Q10).
+3. **4b.3, L3 placement.** Every block gets a **home L3 tile** (Q10). (Done.)
    - The L3 credit pool and TagCAM split per L3 tile (`capacity_tiles / l3.tiles` each). A load
      needs its home tile's credit.
    - A BlockMover serves only its own L3 tile's blocks: movers are the layout's sites, one per
      abutting edge, replacing the hash pool.
    - Still no NoC: a load lands in its home tile instantly, as today.
+   - As built:
+     - `TileDescriptor::l3_tile` is the home, -1 when undeclared. A schedule op states it through
+       its tile. The executor resolves an undeclared home to `hash(tile id) % l3_tiles`, records
+       each tile's home, and refuses a later operation that names a different one.
+     - `Config::l3_tiles` splits `l3_buffer_count` evenly; `Config::block_mover_l3_tile` gives
+       each mover's tile. A move, writeback or eject goes to a mover on the tile's home, and a
+       named mover on another tile is refused.
+     - `csp_config_from` takes both from the array layout: T4 2 tiles, T16 8, T64 32, with each
+       mover on the tile whose edge it sits on. One L3 tile reproduces the pooled behaviour
+       exactly, so hand-built configs and their baselines do not change.
+     - Measured on the oracle (128^3/32^3): T4 6742 -> 7449 cycles, because only two movers
+       serve each tile's blocks. T16 is 3686 -> 3680 and T64 is unchanged at 2289. Values stay
+       bit-identical.
 4. **4b.4, wire the fabric.** Opt-in, like `dram`: `Config::noc`.
    - **Load:** MC completion is no longer arrival. The DMA injects the block at its port, bound
      for the home hub. The hub's L3 delivery reserves nothing new, since the home credit was

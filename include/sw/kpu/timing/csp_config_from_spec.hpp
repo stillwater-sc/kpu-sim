@@ -14,6 +14,8 @@
 //                            engine i = mc * (engines / controllers) + e
 //   l3.capacity_tiles        l3_buffer_count (tile-sized L3 buffers, the credit pool)
 //   movers.block_movers      num_block_movers
+//   the array layout         l3_tiles (one credit pool and Tag CAM each) and the L3 tile of
+//                            every BlockMover (its site); without a layout, one pooled L3
 //   movers.streamers         split over the row and column streamer pools, at least one each
 //   noc.port.output_queue_blocks   dma_store_buffer_blocks, when declared (0 = derived: noted)
 //
@@ -27,6 +29,7 @@
 // ============================================================================
 #pragma once
 
+#include <sw/kpu/program/platform/array_layout.hpp>
 #include <sw/kpu/program/platform/deployment_spec.hpp>
 #include <sw/kpu/timing/concurrent_timing_executor.hpp>
 #include <sw/kpu/timing/dram_bridge.hpp>
@@ -86,6 +89,26 @@ inline std::optional<CspDeviceConfig> csp_config_from(
                                std::to_string(c.dma_store_buffer_blocks) + " until the NoC is wired");
 
     c.num_block_movers = d.movers.block_movers;
+
+    // L3 placement (step 4b.3): the layout's L3 tiles, and each mover on the tile it sits on.
+    std::string layout_why;
+    if (const auto L = sw::kpu::program::platform::ArrayLayout::of(d, &layout_why)) {
+        const auto& sites = L->block_movers();
+        if (sites.size() != d.movers.block_movers)
+            return fail("movers.block_movers (" + std::to_string(d.movers.block_movers) +
+                        ") is not the layout's " + std::to_string(sites.size()) +
+                        " BlockMovers (one per L3 edge that abuts a compute tile)");
+        if (d.l3.capacity_tiles < L->l3_count())
+            return fail("l3.capacity_tiles (" + std::to_string(d.l3.capacity_tiles) +
+                        ") cannot give each of " + std::to_string(L->l3_count()) +
+                        " L3 tiles a buffer");
+        c.l3_tiles = L->l3_count();
+        c.block_mover_l3_tile.clear();
+        for (const auto& s : sites) c.block_mover_l3_tile.push_back(s.l3);
+    } else {
+        out.unmapped.push_back("no array layout (" + layout_why + "): one pooled L3, every "
+                               "BlockMover on it");
+    }
     const std::size_t s = d.movers.streamers;
     c.num_row_streamers = s > 1 ? (s + 1) / 2 : 1;
     c.num_col_streamers = s > 1 ? s / 2 : 1;

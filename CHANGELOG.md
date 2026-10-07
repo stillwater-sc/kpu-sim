@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **L3 placement in the CSP tier (NoC port plan step 4b.3).**
+  - Every tile has a **home L3 tile**, `TileDescriptor::l3_tile`. A schedule can declare it;
+    otherwise it is a hash of the tile id, and every operation on the tile must agree.
+  - L3 credits and Tag CAMs are per L3 tile (`Config::l3_tiles`).
+  - Each BlockMover belongs to one tile (`Config::block_mover_l3_tile`) and serves only blocks
+    homed there.
+  - `csp_config_from` takes the tiles and mover sites from the array layout.
+  - With one L3 tile (every hand-built config) behaviour is exactly the pooled L3's, so no
+    baseline moves. On T4 the oracle runs 6742 -> 7449 cycles because only two movers serve
+    each tile; values stay bit-identical.
+
 - **Every hop is a push in the CSP tier too (NoC port plan step 4b.2).** A STORE is no longer
   a DMA read of L3. A BlockMover ejects the tile out of L3 into its DMA engine's store buffer
   (`BM_EJECT_START/COMPLETE`), which frees the L3 slot, and the engine writes the buffer to

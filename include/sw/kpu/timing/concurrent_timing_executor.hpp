@@ -107,8 +107,16 @@ public:
         size_t dma_store_buffer_blocks = 2;
 
         // L3 configuration
-        size_t l3_buffer_count = 32;      ///< Number of L3 buffers
+        size_t l3_buffer_count = 32;      ///< Number of L3 buffers, over all L3 tiles
+        /// L3 tiles (docs/plans/noc-port-arbitration.md §4.1, step 4b.3). Each has its own
+        /// credit pool and Tag CAM, l3_buffer_count split evenly (the remainder to the first
+        /// tiles); a tile is loaded into its HOME L3 tile (TileDescriptor::l3_tile, else a
+        /// hash of the tile id) and stays there. 1 = the pooled L3 every hand-built config has.
+        size_t l3_tiles = 1;
+        /// The L3 tile each BlockMover belongs to, by mover index; a mover moves, writes back
+        /// and ejects only its own tile's blocks. Empty = round-robin over the L3 tiles.
         size_t l3_buffer_size = 64 * 1024; ///< Size of each L3 buffer (64KB)
+        std::vector<size_t> block_mover_l3_tile;
 
         // BlockMover configuration
         size_t num_block_movers = 4;      ///< Number of BlockMovers (= l3_tile_rows * l3_tile_cols)
@@ -521,9 +529,23 @@ public:
     [[nodiscard]] size_t num_row_streamers() const { return row_streamers_.size(); }
     [[nodiscard]] size_t num_col_streamers() const { return col_streamers_.size(); }
 
-    [[nodiscard]] CreditPool& l3_credits() { return l3_credits_; }
+    // The pooled L3 (l3_tiles == 1). With several L3 tiles there is no one pool: use
+    // l3_tile_credits(h), l3_tile_tag_cam(h) and l3_credits_available().
+    [[nodiscard]] CreditPool& l3_credits() { return l3_tile_credits(single_l3_tile("l3_credits")); }
     [[nodiscard]] CreditPool& l2_credits() { return l2_credits_; }
-    [[nodiscard]] TagCAM& l3_tag_cam() { return l3_tag_cam_; }
+    [[nodiscard]] TagCAM& l3_tag_cam() { return l3_tile_tag_cam(single_l3_tile("l3_tag_cam")); }
+    [[nodiscard]] size_t l3_tiles() const { return l3_tile_credits_.size(); }
+    [[nodiscard]] CreditPool& l3_tile_credits(size_t h) { return *l3_tile_credits_.at(h); }
+    [[nodiscard]] TagCAM& l3_tile_tag_cam(size_t h) { return *l3_tile_cams_.at(h); }
+    [[nodiscard]] size_t l3_credits_available() const {
+        size_t n = 0;
+        for (const auto& c : l3_tile_credits_) n += c->available();
+        return n;
+    }
+    /// The L3 tile a BlockMover belongs to.
+    [[nodiscard]] size_t block_mover_l3_tile(size_t mover) const { return mover_tile_.at(mover); }
+    /// The home L3 tile `tile` resolves to (its declared l3_tile, else the default).
+    [[nodiscard]] uint32_t home_l3_tile(const TileDescriptor& tile) const;
     [[nodiscard]] TagCAM& l2_tag_cam() { return l2_tag_cam_; }
     [[nodiscard]] TagCAM& compute_result_tag_cam() { return compute_result_tag_cam_; }
 
@@ -532,13 +554,26 @@ private:
     Cycle current_cycle_ = 0;
     std::vector<TimingEvent> events_;
 
-    // Credit pools
-    CreditPool l3_credits_;
+    // Credit pools and Tag CAMs. L3 is per L3 tile; L2 is pooled.
+    std::vector<std::unique_ptr<CreditPool>> l3_tile_credits_;
+    std::vector<std::unique_ptr<TagCAM>> l3_tile_cams_;
     CreditPool l2_credits_;
-
-    // Tag CAMs
-    TagCAM l3_tag_cam_;
     TagCAM l2_tag_cam_;
+
+    std::vector<size_t> mover_tile_;                    // L3 tile of each BlockMover
+    std::vector<std::vector<uint32_t>> movers_on_;      // BlockMovers of each L3 tile
+    // Each scheduled tile's home, resolved once: every operation on a tile must agree.
+    std::unordered_map<TileID, uint32_t, TileIDHash> homes_;
+
+    size_t single_l3_tile(const char* what) const {
+        if (l3_tile_credits_.size() != 1)
+            throw std::logic_error(std::string("ConcurrentTimingExecutor::") + what +
+                                   ": this executor has " + std::to_string(l3_tile_credits_.size()) +
+                                   " L3 tiles; ask for one (l3_tile_credits) or the total");
+        return 0;
+    }
+    // Resolve `tile`'s home, check it against earlier operations, and stamp it on a copy.
+    TileDescriptor homed(const TileDescriptor& tile);
     TagCAM compute_result_tag_cam_;  ///< Tracks result tiles ready for DRAIN
 
     // Pending compute operations (tile + dependencies + state)
@@ -606,6 +641,9 @@ private:
      * @brief Select Streamer for a tile feed/drain
      */
     [[nodiscard]] uint32_t select_streamer(const TileDescriptor& tile, bool is_row) const;
+    // The mover for an operation on `tile` (already homed): the named one, which must be on
+    // the tile's home L3 tile, or a tile-affine pick among that tile's movers.
+    [[nodiscard]] uint32_t mover_for(const TileDescriptor& tile, int mover_id) const;
 
     // ========================================================================
     // Internal Helpers
@@ -668,13 +706,22 @@ private:
 
 inline ConcurrentTimingExecutor::ConcurrentTimingExecutor(const Config& config)
     : config_(config),
-      l3_credits_(config.l3_buffer_count),
       l2_credits_(config.l2_bank_count),
-      l3_tag_cam_(config.l3_buffer_count),
       l2_tag_cam_(config.l2_bank_count),
       compute_result_tag_cam_(256) {  // initial reserve; grows with the schedule (#210)
-    if (config_.partition_l3_credits) {
-        l3_credits_.partition_equal();
+    if (config_.l3_tiles == 0)
+        throw std::invalid_argument("ConcurrentTimingExecutor: l3_tiles must be at least 1");
+    if (config_.l3_buffer_count < config_.l3_tiles)
+        throw std::invalid_argument("ConcurrentTimingExecutor: " +
+                                    std::to_string(config_.l3_buffer_count) +
+                                    " L3 buffers cannot give each of " +
+                                    std::to_string(config_.l3_tiles) + " L3 tiles one");
+    for (size_t h = 0; h < config_.l3_tiles; ++h) {
+        const size_t n = config_.l3_buffer_count / config_.l3_tiles +
+                         (h < config_.l3_buffer_count % config_.l3_tiles ? 1 : 0);
+        l3_tile_credits_.push_back(std::make_unique<CreditPool>(n));
+        l3_tile_cams_.push_back(std::make_unique<TagCAM>(n));
+        if (config_.partition_l3_credits) l3_tile_credits_.back()->partition_equal();
     }
     if (config_.partition_l2_credits) {
         l2_credits_.partition_equal();
@@ -749,7 +796,7 @@ inline void ConcurrentTimingExecutor::create_components() {
         dma_config.l3_credit_reserve = config_.partition_l3_credits
             ? 0
             : Config::clamp_reserve(
-                  config_.l3_writeback_credit_reserve, config_.l3_buffer_count);
+                  config_.l3_writeback_credit_reserve, l3_tile_credits_.back()->capacity());
         dma_config.store_buffer_blocks = config_.dma_store_buffer_blocks;
         dma_config.name = dma_config.display_name();
 
@@ -758,8 +805,14 @@ inline void ConcurrentTimingExecutor::create_components() {
             ? dma % memory_controllers_.size()
             : config_.dma_engine_controller.at(dma);
 
+        std::vector<CreditPool*> pools;
+        std::vector<TagCAM*> cams;
+        for (size_t h = 0; h < l3_tile_credits_.size(); ++h) {
+            pools.push_back(l3_tile_credits_[h].get());
+            cams.push_back(l3_tile_cams_[h].get());
+        }
         dma_engines_.push_back(std::make_unique<DMAEngineProcess>(
-            dma_config, *memory_controllers_[mc_id], l3_credits_, l3_tag_cam_));
+            dma_config, *memory_controllers_[mc_id], std::move(pools), std::move(cams)));
     }
 
     // ========================================================================
@@ -767,6 +820,28 @@ inline void ConcurrentTimingExecutor::create_components() {
     // ========================================================================
     // BlockMovers handle L3 tile grid positions
     // Map to 2D grid: row = i / cols, col = i % cols
+    // Each belongs to one L3 tile and touches only that tile's credits and Tag CAM.
+    if (!config_.block_mover_l3_tile.empty() &&
+        config_.block_mover_l3_tile.size() != config_.num_block_movers)
+        throw std::invalid_argument("ConcurrentTimingExecutor: block_mover_l3_tile names " +
+                                    std::to_string(config_.block_mover_l3_tile.size()) +
+                                    " movers, the executor has " +
+                                    std::to_string(config_.num_block_movers));
+    movers_on_.assign(l3_tile_credits_.size(), {});
+    for (size_t i = 0; i < config_.num_block_movers; ++i) {
+        const size_t h = config_.block_mover_l3_tile.empty() ? i % l3_tile_credits_.size()
+                                                             : config_.block_mover_l3_tile[i];
+        if (h >= l3_tile_credits_.size())
+            throw std::invalid_argument("ConcurrentTimingExecutor: BlockMover " + std::to_string(i) +
+                                        " is on L3 tile " + std::to_string(h) + ", the executor has " +
+                                        std::to_string(l3_tile_credits_.size()));
+        mover_tile_.push_back(h);
+        movers_on_[h].push_back(static_cast<uint32_t>(i));
+    }
+    for (size_t h = 0; h < movers_on_.size(); ++h)
+        if (movers_on_[h].empty())
+            throw std::invalid_argument("ConcurrentTimingExecutor: L3 tile " + std::to_string(h) +
+                                        " has no BlockMover, so nothing could leave it");
     for (size_t i = 0; i < config_.num_block_movers; ++i) {
         BlockMoverProcess::Config bm_config;
         bm_config.mover_id = static_cast<uint32_t>(100 + i);  // 100, 101, 102, ...
@@ -788,7 +863,8 @@ inline void ConcurrentTimingExecutor::create_components() {
         bm_config.name = bm_config.display_name();
 
         block_movers_.push_back(std::make_unique<BlockMoverProcess>(
-            bm_config, l3_tag_cam_, l3_credits_, l2_credits_, l2_tag_cam_));
+            bm_config, *l3_tile_cams_[mover_tile_[i]], *l3_tile_credits_[mover_tile_[i]],
+            l2_credits_, l2_tag_cam_));
     }
 
     // ========================================================================
@@ -840,10 +916,11 @@ inline void ConcurrentTimingExecutor::schedule_load(const TileDescriptor& tile, 
     uint32_t dma = (engine_id >= 0)
         ? static_cast<uint32_t>(engine_id)
         : select_dma_engine(tile);
-    dma_engines_[dma % dma_engines_.size()]->schedule_load(tile);
+    dma_engines_[dma % dma_engines_.size()]->schedule_load(homed(tile));
 }
 
-inline void ConcurrentTimingExecutor::schedule_store(const TileDescriptor& tile, int engine_id) {
+inline void ConcurrentTimingExecutor::schedule_store(const TileDescriptor& tile_in, int engine_id) {
+    const TileDescriptor tile = homed(tile_in);
     uint32_t dma = (engine_id >= 0)
         ? static_cast<uint32_t>(engine_id)
         : select_dma_engine(tile);
@@ -855,18 +932,24 @@ inline void ConcurrentTimingExecutor::schedule_store(const TileDescriptor& tile,
         tile, engine.store_buffer(), ticket);
 }
 
-inline void ConcurrentTimingExecutor::schedule_move(const TileDescriptor& tile, bool transpose, int mover_id) {
-    uint32_t mover = (mover_id >= 0)
-        ? static_cast<uint32_t>(mover_id)
-        : select_block_mover(tile);
-    block_movers_[mover % block_movers_.size()]->schedule_move(tile, transpose);
+inline void ConcurrentTimingExecutor::schedule_move(const TileDescriptor& tile_in, bool transpose, int mover_id) {
+    const TileDescriptor tile = homed(tile_in);
+    block_movers_[mover_for(tile, mover_id)]->schedule_move(tile, transpose);
 }
 
-inline void ConcurrentTimingExecutor::schedule_writeback(const TileDescriptor& tile, int mover_id) {
-    uint32_t mover = (mover_id >= 0)
-        ? static_cast<uint32_t>(mover_id)
-        : select_block_mover(tile);
-    block_movers_[mover % block_movers_.size()]->schedule_writeback(tile);
+inline uint32_t ConcurrentTimingExecutor::mover_for(const TileDescriptor& tile, int mover_id) const {
+    if (mover_id < 0) return select_block_mover(tile);
+    const uint32_t m = static_cast<uint32_t>(mover_id) % static_cast<uint32_t>(block_movers_.size());
+    if (mover_tile_[m] != static_cast<size_t>(tile.l3_tile))
+        throw std::invalid_argument("BlockMover " + std::to_string(m) + " is on L3 tile " +
+                                    std::to_string(mover_tile_[m]) + "; " + tile.tile_id.to_string() +
+                                    " is homed on L3 tile " + std::to_string(tile.l3_tile));
+    return m;
+}
+
+inline void ConcurrentTimingExecutor::schedule_writeback(const TileDescriptor& tile_in, int mover_id) {
+    const TileDescriptor tile = homed(tile_in);
+    block_movers_[mover_for(tile, mover_id)]->schedule_writeback(tile);
 }
 
 inline void ConcurrentTimingExecutor::schedule_feed(const TileDescriptor& tile, int streamer_id) {
@@ -1246,9 +1329,10 @@ inline void ConcurrentTimingExecutor::reset() {
     current_cycle_ = 0;
     events_.clear();
 
-    l3_credits_.reset();
+    for (auto& c : l3_tile_credits_) c->reset();
+    for (auto& c : l3_tile_cams_) c->reset();
+    homes_.clear();
     l2_credits_.reset();
-    l3_tag_cam_.reset();
     l2_tag_cam_.reset();
     compute_result_tag_cam_.reset();
     pending_computes_.clear();
@@ -1466,7 +1550,11 @@ inline void ConcurrentTimingExecutor::apply_payload_event(const TimingEvent& eve
         case EventType::CREDIT_RELEASED:
             // Component processes update TagCAM ref-counts before emitting the
             // event. Retire bytes only when the final reference disappeared.
-            if (!l3_tag_cam_.lookup(event.tile_id)) l3_payloads_.erase(event.tile_id);
+            {
+                auto home = homes_.find(event.tile_id);
+                const size_t h = home != homes_.end() ? home->second : 0;
+                if (!l3_tile_cams_[h]->lookup(event.tile_id)) l3_payloads_.erase(event.tile_id);
+            }
             if (!l2_tag_cam_.lookup(event.tile_id)) l2_payloads_.erase(event.tile_id);
             break;
         default:
@@ -1566,9 +1654,36 @@ inline uint32_t ConcurrentTimingExecutor::select_dma_engine(const TileDescriptor
 }
 
 inline uint32_t ConcurrentTimingExecutor::select_block_mover(const TileDescriptor& tile) const {
-    // Tile-affine assignment (see select_dma_engine for rationale)
-    return static_cast<uint32_t>(
-        TileIDHash{}(tile.tile_id) % block_movers_.size());
+    // Tile-affine assignment (see select_dma_engine for rationale), among the movers of the
+    // tile's home L3 tile. With one L3 tile that is every mover, in order: the pooled choice.
+    const auto& movers = movers_on_.at(home_l3_tile(tile));
+    return movers[TileIDHash{}(tile.tile_id) % movers.size()];
+}
+
+inline uint32_t ConcurrentTimingExecutor::home_l3_tile(const TileDescriptor& tile) const {
+    if (tile.l3_tile >= 0) {
+        if (static_cast<size_t>(tile.l3_tile) >= l3_tile_credits_.size())
+            throw std::invalid_argument(tile.tile_id.to_string() + " is homed on L3 tile " +
+                                        std::to_string(tile.l3_tile) + "; there are " +
+                                        std::to_string(l3_tile_credits_.size()));
+        return static_cast<uint32_t>(tile.l3_tile);
+    }
+    auto it = homes_.find(tile.tile_id);
+    if (it != homes_.end()) return it->second;
+    return static_cast<uint32_t>(TileIDHash{}(tile.tile_id) % l3_tile_credits_.size());
+}
+
+inline TileDescriptor ConcurrentTimingExecutor::homed(const TileDescriptor& tile) {
+    const uint32_t h = home_l3_tile(tile);
+    auto [it, fresh] = homes_.emplace(tile.tile_id, h);
+    if (!fresh && it->second != h)
+        throw std::invalid_argument(tile.tile_id.to_string() + " is homed on L3 tile " +
+                                    std::to_string(h) + " here and on " +
+                                    std::to_string(it->second) +
+                                    " by an earlier operation; a tile has one home");
+    TileDescriptor t = tile;
+    t.l3_tile = static_cast<int32_t>(h);
+    return t;
 }
 
 inline uint32_t ConcurrentTimingExecutor::select_streamer(const TileDescriptor& tile, bool is_row) const {

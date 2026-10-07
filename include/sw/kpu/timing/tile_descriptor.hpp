@@ -121,6 +121,12 @@ struct TileDescriptor {
     // Matrix base address (for trace display - shows where matrix starts in DRAM)
     Address matrix_base_address = 0;  // Base address of the matrix in DRAM
 
+    // The tile's HOME L3 tile: where it is loaded to, written back to, and ejected from
+    // (docs/plans/noc-port-arbitration.md §4.1, Q10). Placement is the compiler's decision, so
+    // a schedule may state it; -1 = not stated, and the executor picks a deterministic default
+    // (a hash of the tile id). Every operation on one tile must agree on it.
+    int32_t l3_tile = -1;
+
     // Tile dimensions (for compute operations)
     Size height = 16;         // Tile height (rows)
     Size width = 16;          // Tile width (columns)

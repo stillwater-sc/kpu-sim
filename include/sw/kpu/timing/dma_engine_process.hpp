@@ -26,6 +26,7 @@
 #include <cmath>
 #include <optional>
 #include <unordered_set>
+#include <stdexcept>
 #include <vector>
 
 namespace sw::kpu::timing {
@@ -141,12 +142,30 @@ public:
                      MemoryControllerProcess& mc,
                      CreditPool& l3_credits,
                      TagCAM& l3_tag_cam)
+        : DMAEngineProcess(config, mc, std::vector<CreditPool*>{&l3_credits},
+                           std::vector<TagCAM*>{&l3_tag_cam}) {}
+
+    /**
+     * @brief Construct a DMA engine that loads into several L3 tiles
+     * @param l3_credits Each L3 tile's credit pool, by L3 tile index
+     * @param l3_tag_cams Each L3 tile's Tag CAM, by L3 tile index
+     *
+     * A load lands in its tile's home L3 tile (TileDescriptor::l3_tile; -1 = tile 0) and takes
+     * that tile's credit (docs/plans/noc-port-arbitration.md §4.1, step 4b.3).
+     */
+    DMAEngineProcess(const Config& config,
+                     MemoryControllerProcess& mc,
+                     std::vector<CreditPool*> l3_credits,
+                     std::vector<TagCAM*> l3_tag_cams)
         : config_(config),
           mc_(mc),
-          l3_credits_(l3_credits),
-          l3_tag_cam_(l3_tag_cam),
+          l3_credits_(std::move(l3_credits)),
+          l3_tag_cams_(std::move(l3_tag_cams)),
           store_buffer_(config.store_buffer_blocks),
           next_slot_id_(0) {
+        if (l3_credits_.empty() || l3_credits_.size() != l3_tag_cams_.size())
+            throw std::invalid_argument("DMAEngineProcess: one credit pool and one Tag CAM per "
+                                        "L3 tile, and at least one tile");
     }
 
     /**
@@ -321,8 +340,20 @@ public:
 private:
     Config config_;
     MemoryControllerProcess& mc_;
-    CreditPool& l3_credits_;
-    TagCAM& l3_tag_cam_;
+    std::vector<CreditPool*> l3_credits_;   // by L3 tile
+    std::vector<TagCAM*> l3_tag_cams_;      // by L3 tile
+
+    // The home L3 tile of `tile`: where it lands and whose credit it takes.
+    [[nodiscard]] size_t home(const TileDescriptor& tile) const {
+        const size_t h = tile.l3_tile < 0 ? 0 : static_cast<size_t>(tile.l3_tile);
+        if (h >= l3_credits_.size())
+            throw std::out_of_range(name() + ": " + tile.tile_id.to_string() + " is homed on L3 tile " +
+                                    std::to_string(h) + "; there are " +
+                                    std::to_string(l3_credits_.size()));
+        return h;
+    }
+    [[nodiscard]] CreditPool& l3_credits(const TileDescriptor& t) { return *l3_credits_[home(t)]; }
+    [[nodiscard]] TagCAM& l3_cam(const TileDescriptor& t) { return *l3_tag_cams_[home(t)]; }
     DmaStoreBuffer store_buffer_;
 
     std::vector<PendingRequest> pending_requests_;
@@ -354,7 +385,7 @@ private:
 
                     if (completed->is_load) {
                         // Load complete: tile arrived at L3
-                        l3_tag_cam_.insert(completed->tile.tile_id, req.slot_id, current_cycle_);
+                        l3_cam(req.tile).insert(completed->tile.tile_id, req.slot_id, current_cycle_);
                         submitted_load_tiles_.erase(completed->tile.tile_id);
                         total_bytes_loaded_ += completed->tile.size_bytes;
 
@@ -400,10 +431,11 @@ private:
             }
 
             // Check if tile is already in L3 (supports tile reuse)
-            if (l3_tag_cam_.lookup(req.tile.tile_id)) {
-                // Tile already in L3 - just increment ref_count, no credit needed
-                auto entry = l3_tag_cam_.match(req.tile.tile_id);
-                l3_tag_cam_.insert(req.tile.tile_id, entry->slot_id, current_cycle_);
+            TagCAM& cam = l3_cam(req.tile);
+            if (cam.lookup(req.tile.tile_id)) {
+                // Tile already in its home L3 tile - just increment ref_count, no credit needed
+                auto entry = cam.match(req.tile.tile_id);
+                cam.insert(req.tile.tile_id, entry->slot_id, current_cycle_);
 
                 events.push_back(TimingEvent(
                     EventType::TILE_ARRIVED_L3,
@@ -442,8 +474,9 @@ private:
             // every freed credit before a writeback can, starving the
             // downstream path and wedging the pipeline (credit cycle livelock).
             const size_t load_part = static_cast<size_t>(req.tile.tile_id.matrix);
-            if (l3_credits_.available(load_part) <= config_.l3_credit_reserve ||
-                !l3_credits_.acquire(load_part)) {
+            CreditPool& credits = l3_credits(req.tile);
+            if (credits.available(load_part) <= config_.l3_credit_reserve ||
+                !credits.acquire(load_part)) {
                 if (!credit_stalled) {
                     credit_stalled = true;
                     stalled_tile = req.tile.tile_id;
@@ -452,10 +485,10 @@ private:
             }
 
             // Got credit - submit to MC with our engine_id
-            req.slot_id = allocate_slot();
+            req.slot_id = allocate_slot(cam);
             if (!mc_.submit_request(req.tile, true, config_.engine_id)) {
                 // MC queue full - release credit and retry later
-                l3_credits_.release(load_part);
+                credits.release(load_part);
                 continue;
             }
 
@@ -553,9 +586,9 @@ private:
     /**
      * @brief Allocate a buffer slot (round-robin)
      */
-    uint32_t allocate_slot() {
-        uint32_t slot = next_slot_id_;
-        next_slot_id_ = (next_slot_id_ + 1) % static_cast<uint32_t>(l3_tag_cam_.capacity());
+    uint32_t allocate_slot(const TagCAM& cam) {
+        uint32_t slot = next_slot_id_ % static_cast<uint32_t>(cam.capacity());
+        next_slot_id_ = (slot + 1) % static_cast<uint32_t>(cam.capacity());
         return slot;
     }
 };

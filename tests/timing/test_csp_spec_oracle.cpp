@@ -56,7 +56,7 @@ std::vector<float> block(const TensorOperand& t, Size br, Size bc, Size T) {
 struct OracleRun {
     std::vector<float> csp, reference;      // C, row-major
     Cycle cycles = 0;
-    std::size_t l3_capacity = 0, l3_free_after = 0;
+    std::size_t l3_capacity = 0, l3_free_after = 0, l3_tiles = 0;
 };
 
 // C = A @ B (size^3, tile^3) on the CSP executor configured from `d`, and on the L0 reference
@@ -122,7 +122,8 @@ OracleRun run_matmul(const DeviceSpecification& d, Size size, Size T) {
     OracleRun out;
     out.cycles = exec.current_cycle();
     out.l3_capacity = ec.l3_buffer_count;
-    out.l3_free_after = exec.l3_credits().available();
+    out.l3_free_after = exec.l3_credits_available();
+    out.l3_tiles = exec.l3_tiles();
     out.reference = ref.operand("C").values;
     out.csp.assign(out.reference.size(), 0.0f);
     std::size_t stored = 0;
@@ -153,6 +154,9 @@ TEST_CASE("csp_config_from maps a deployment's device onto the CSP executor",
         CHECK(c->config.dram.has_value());
         CHECK(c->config.l3_buffer_count == 128);
         CHECK(c->config.num_block_movers == 4);
+        // Two L3 tiles, each with the two movers on its edges that abut a compute tile.
+        CHECK(c->config.l3_tiles == 2);
+        CHECK(c->config.block_mover_l3_tile == std::vector<std::size_t>{0, 0, 1, 1});
         CHECK(c->config.num_row_streamers == 1);
         CHECK(c->config.num_col_streamers == 1);
     }
@@ -164,6 +168,10 @@ TEST_CASE("csp_config_from maps a deployment's device onto the CSP executor",
         for (std::size_t i = 0; i < 32; ++i) CHECK(c->config.dma_engine_controller[i] == i / 8);
         CHECK(c->config.l3_buffer_count == 2016);
         CHECK(c->config.num_block_movers == 112);
+        CHECK(c->config.l3_tiles == 32);
+        std::vector<int> movers_per_tile(32, 0);
+        for (std::size_t h : c->config.block_mover_l3_tile) ++movers_per_tile.at(h);
+        for (int n : movers_per_tile) CHECK((n >= 2 && n <= 4));    // corner 2, edge 3, inner 4
         CHECK(c->config.num_row_streamers + c->config.num_col_streamers == 32);
     }
     SECTION("what it does not map, it says") {
@@ -235,6 +243,7 @@ TEST_CASE("Values oracle: a matmul on T4, T16 and T64 computes the L0 reference'
         // for bit. A change that breaks this has changed the arithmetic, not the timing.
         CHECK(cmp.bit_identical);
         CHECK(r.l3_free_after == r.l3_capacity);        // every L3 credit came home
+        CHECK(r.l3_tiles == csp_config_from(device(file))->config.l3_tiles);   // placed, not pooled
         std::printf("csp oracle %-14s 128^3/32^3: %8llu cycles, max abs %.3g, max rel %.3g\n",
                     file, static_cast<unsigned long long>(r.cycles), cmp.max_abs, cmp.max_rel);
     }
@@ -258,3 +267,59 @@ TEST_CASE("compare_within holds the ADR bar, and a non-finite value on either si
     CHECK_FALSE(compare_within({1.0f, 0.0f, 100.0f}, {nan, 0.0f, 100.0f}, 1e-6, 1e-4).pass);
     CHECK_FALSE(compare_within({1.0f}, {std::numeric_limits<float>::infinity()}, 1e-6, 1e-4).pass);
 }
+
+TEST_CASE("L3 placement: a tile lives in its home L3 tile, and only there", "[timing][csp][l3]") {
+    ConcurrentTimingExecutor::Config c;
+    c.l3_buffer_count = 8;
+    c.l3_tiles = 2;
+    c.num_block_movers = 2;
+    c.block_mover_l3_tile = {0, 1};
+
+    auto tile = [](Size ti, int home) {
+        TileDescriptor t;
+        t.tile_id = TileID{MatrixID::A, ti, 0, 0};
+        t.dram_address = 0x1000 * (ti + 1);
+        t.size_bytes = 1024;
+        t.l3_tile = home;
+        return t;
+    };
+
+    SECTION("a declared home is where it lands and whose credit it takes") {
+        ConcurrentTimingExecutor exec(c);
+        CHECK(exec.l3_tile_credits(0).capacity() == 4);
+        CHECK(exec.l3_tile_credits(1).capacity() == 4);
+        exec.schedule_load(tile(0, 1));
+        while (!exec.is_complete() && exec.current_cycle() < 10000) exec.step();
+        CHECK(exec.l3_tile_tag_cam(1).lookup(TileID{MatrixID::A, 0, 0, 0}));
+        CHECK_FALSE(exec.l3_tile_tag_cam(0).lookup(TileID{MatrixID::A, 0, 0, 0}));
+        CHECK(exec.l3_tile_credits(1).available() == 3);
+        CHECK(exec.l3_tile_credits(0).available() == 4);
+        CHECK_THROWS_WITH(exec.l3_credits(), ContainsSubstring("2 L3 tiles"));
+    }
+    SECTION("undeclared, every operation on a tile resolves the same default home") {
+        ConcurrentTimingExecutor exec(c);
+        const auto t = tile(3, -1);
+        const uint32_t h = exec.home_l3_tile(t);
+        exec.schedule_load(t);
+        exec.schedule_move(t);      // moved by a mover of the same tile
+        while (!exec.is_complete() && exec.current_cycle() < 10000) exec.step();
+        CHECK(exec.l3_credits_available() == 8);
+        CHECK(exec.block_mover_l3_tile(h) == h);
+    }
+    SECTION("one tile, one home: a conflicting declaration is refused") {
+        ConcurrentTimingExecutor exec(c);
+        exec.schedule_load(tile(0, 0));
+        CHECK_THROWS_WITH(exec.schedule_move(tile(0, 1)), ContainsSubstring("a tile has one home"));
+    }
+    SECTION("a named mover must sit on the tile's home") {
+        ConcurrentTimingExecutor exec(c);
+        CHECK_THROWS_WITH(exec.schedule_move(tile(0, 1), false, 0),
+                          ContainsSubstring("BlockMover 0 is on L3 tile 0"));
+        CHECK_NOTHROW(exec.schedule_move(tile(1, 1), false, 1));
+    }
+    SECTION("every L3 tile needs a mover") {
+        c.block_mover_l3_tile = {1, 1};
+        CHECK_THROWS_WITH(ConcurrentTimingExecutor(c), ContainsSubstring("L3 tile 0 has no BlockMover"));
+    }
+}
+
