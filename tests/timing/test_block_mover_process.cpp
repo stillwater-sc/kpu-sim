@@ -281,6 +281,79 @@ TEST_CASE("BlockMoverProcess prioritizes moves over writebacks", "[timing][block
 // Reset Tests
 // ============================================================================
 
+TEST_CASE("BlockMoverProcess eject waits for the tile in L3 and a store-buffer slot",
+          "[timing][block_mover_process]") {
+    CreditPool l3_credits(8);
+    TagCAM l3_tag_cam(8);
+    CreditPool l2_credits(16);
+    TagCAM l2_tag_cam(16);
+    DmaStoreBuffer buffer(1);
+    BlockMoverProcess bm(default_config(0), l3_tag_cam, l3_credits, l2_credits, l2_tag_cam);
+
+    auto c = make_tile(MatrixID::C, 0, 0);
+    bm.schedule_eject(c, buffer);
+
+    // Not in L3 yet: a tag stall.
+    auto events = bm.tick(0);
+    REQUIRE(count_events(events, EventType::BM_STALL_TAG) == 1);
+    REQUIRE(bm.is_idle());
+
+    // In L3, but the buffer's one slot is held: a credit stall.
+    l3_credits.acquire();
+    l3_tag_cam.insert(c.tile_id, 0, 1);
+    REQUIRE(buffer.reserve());
+    events = bm.tick(1);
+    REQUIRE(count_events(events, EventType::BM_STALL_CREDIT) == 1);
+    REQUIRE(bm.is_idle());
+
+    // The slot comes back: the ejection starts, holding it.
+    buffer.release();
+    events = bm.tick(2);
+    REQUIRE(count_events(events, EventType::BM_EJECT_START) == 1);
+    REQUIRE(buffer.held() == 1);
+    REQUIRE_FALSE(buffer.staged(c.tile_id));
+
+    // On completion the tile is in the buffer and its L3 slot is free.
+    Cycle cycle = 3;
+    std::size_t completed = 0;
+    while (!bm.is_idle() && cycle < 10000) completed += count_events(bm.tick(cycle++), EventType::BM_EJECT_COMPLETE);
+    REQUIRE(completed == 1);
+    REQUIRE(buffer.staged(c.tile_id));
+    REQUIRE_FALSE(l3_tag_cam.lookup(c.tile_id));
+    REQUIRE(l3_credits.available() == 8);
+    REQUIRE(bm.total_tiles_ejected() == 1);
+    REQUIRE_FALSE(bm.has_pending_work());
+}
+
+TEST_CASE("BlockMoverProcess ejects only after moves and writebacks cannot start",
+          "[timing][block_mover_process]") {
+    CreditPool l3_credits(8);
+    TagCAM l3_tag_cam(8);
+    CreditPool l2_credits(16);
+    TagCAM l2_tag_cam(16);
+    DmaStoreBuffer buffer(4);
+    BlockMoverProcess bm(default_config(0), l3_tag_cam, l3_credits, l2_credits, l2_tag_cam);
+
+    auto a = make_tile(MatrixID::A, 0, 0);
+    auto c = make_tile(MatrixID::C, 0, 0);
+    l3_credits.acquire();
+    l3_tag_cam.insert(a.tile_id, 0, 0);
+    l3_credits.acquire();
+    l3_tag_cam.insert(c.tile_id, 1, 0);
+    bm.schedule_eject(c, buffer);
+    bm.schedule_move(a);
+
+    // Both are ready; the move goes first and the ejection waits for the mover.
+    auto events = bm.tick(0);
+    REQUIRE(count_events(events, EventType::BM_MOVE_START) == 1);
+    REQUIRE(count_events(events, EventType::BM_EJECT_START) == 0);
+    Cycle cycle = 1;
+    std::size_t ejected = 0;
+    while ((bm.has_pending_work() || !bm.is_idle()) && cycle < 10000)
+        ejected += count_events(bm.tick(cycle++), EventType::BM_EJECT_COMPLETE);
+    REQUIRE(ejected == 1);
+}
+
 TEST_CASE("BlockMoverProcess reset clears state", "[timing][block_mover_process]") {
     TagCAM l3_tag_cam(8);
     CreditPool l3_credits(8);

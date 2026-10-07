@@ -188,7 +188,8 @@ enum class MemoryLevel {
     L3,         // L3 tile buffers
     L2,         // L2 banks
     L1,         // L1 streaming buffers
-    COMPUTE     // In systolic array / accumulator
+    COMPUTE,    // In systolic array / accumulator
+    DMA_BUFFER  // A DMA engine's store buffer: ejected out of L3, not yet written to DRAM
 };
 
 inline const char* to_string(MemoryLevel level) {
@@ -198,6 +199,7 @@ inline const char* to_string(MemoryLevel level) {
         case MemoryLevel::L2: return "L2";
         case MemoryLevel::L1: return "L1";
         case MemoryLevel::COMPUTE: return "COMPUTE";
+        case MemoryLevel::DMA_BUFFER: return "DMA_BUFFER";
         default: return "UNKNOWN";
     }
 }

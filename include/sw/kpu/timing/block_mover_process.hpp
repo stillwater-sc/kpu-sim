@@ -9,11 +9,13 @@
 #pragma once
 
 #include <sw/kpu/timing/process_interface.hpp>
+#include <sw/kpu/timing/dma_engine_process.hpp>
 #include <sw/kpu/timing/credit_pool.hpp>
 #include <sw/kpu/timing/tag_cam.hpp>
 #include <sw/kpu/timing/work_queue.hpp>
 
 #include <cmath>
+#include <deque>
 #include <limits>
 #include <optional>
 #include <vector>
@@ -26,10 +28,18 @@ namespace sw::kpu::timing {
  * The BlockMover handles:
  * - Moving tiles from L3 to L2 (ingress path, requires L2 credit + L3 tag match)
  * - Moving tiles from L2 to L3 (writeback path, requires L3 credit + L2 tag match)
+ * - Ejecting tiles from L3 into a DMA engine's store buffer (requires L3 tag match + a
+ *   store-buffer credit). This is how a result leaves the machine: every hop is a push, and
+ *   the DMA engine never reads L3 (docs/plans/noc-port-arbitration.md step 3; CSP, 4b.2).
  *
  * Credit flow:
  * - MOVE (L3→L2): Needs tile in L3 TagCAM, acquires L2 credit, releases L3 credit on complete
  * - WRITEBACK (L2→L3): Needs tile in L2 TagCAM, acquires L3 credit, releases L2 credit on complete
+ * - EJECT (L3→DMA buffer): Needs tile in L3 TagCAM, acquires the engine's store-buffer credit,
+ *   releases the L3 credit on complete (the engine returns the buffer credit after its write)
+ *
+ * One transfer at a time, in priority order: move, then writeback, then eject. A writeback
+ * stalled on L3 credit therefore lets an ejection run, and the ejection frees L3.
  *
  * Unlike DMA (which can have multiple in-flight), BlockMover handles one transfer at a time.
  * Multiple BlockMovers can operate concurrently.
@@ -115,6 +125,22 @@ public:
     }
 
     /**
+     * @brief Schedule an ejection of an L3 tile into a DMA engine's store buffer
+     * @param tile Tile descriptor
+     * @param target The store buffer of the DMA engine that will write the tile to DRAM
+     *
+     * The tile will be ejected when:
+     * 1. The tile is present in L3 (TagCAM match)
+     * 2. The target buffer has a free slot (credit)
+     * 3. No other transfer is in progress
+     */
+    void schedule_eject(const TileDescriptor& tile, DmaStoreBuffer& target) {
+        TileDescriptor t = tile;
+        t.enqueue_cycle = current_cycle_;
+        eject_queue_.push_back({t, &target});
+    }
+
+    /**
      * @brief Advance simulation by one cycle
      */
     std::vector<TimingEvent> tick(Cycle current_cycle) override {
@@ -131,8 +157,13 @@ public:
         // Step 3: If idle, try to start new work
         if (!in_flight_.has_value()) {
             // Priority: moves over writebacks (keep pipeline fed)
-            if (!try_start_move(current_cycle, events)) {
-                try_start_writeback(current_cycle, events);
+            const Cycle stalls_before = stall_cycles_tag_ + stall_cycles_credit_;
+            if (!try_start_move(current_cycle, events) &&
+                !try_start_writeback(current_cycle, events)) {
+                // An ejection's stall counts only in a tick no other leg already stalled in:
+                // a mover stalls at most one cycle per cycle.
+                try_start_eject(current_cycle, events,
+                                stall_cycles_tag_ + stall_cycles_credit_ == stalls_before);
             }
         }
 
@@ -150,7 +181,7 @@ public:
     }
 
     [[nodiscard]] bool has_pending_work() const override {
-        return !move_queue_.empty() || !writeback_queue_.empty();
+        return !move_queue_.empty() || !writeback_queue_.empty() || !eject_queue_.empty();
     }
 
     [[nodiscard]] uint32_t id() const override {
@@ -164,6 +195,8 @@ public:
     void reset() override {
         move_queue_.reset();
         writeback_queue_.reset();
+        eject_queue_.clear();
+        in_flight_target_ = nullptr;
         transpose_flags_.clear();
         in_flight_.reset();
         next_l2_slot_ = 0;
@@ -172,6 +205,7 @@ public:
         active_cycles_ = 0;
         total_tiles_moved_ = 0;
         total_tiles_writeback_ = 0;
+        total_tiles_ejected_ = 0;
     }
 
     // ========================================================================
@@ -208,6 +242,14 @@ public:
         return total_tiles_writeback_;
     }
 
+    [[nodiscard]] size_t total_tiles_ejected() const {
+        return total_tiles_ejected_;
+    }
+
+    [[nodiscard]] size_t eject_queue_depth() const {
+        return eject_queue_.size();
+    }
+
     [[nodiscard]] const Config& config() const {
         return config_;
     }
@@ -223,13 +265,20 @@ private:
     WorkQueue<TileDescriptor> writeback_queue_;
     std::vector<bool> transpose_flags_;  // Parallel to move_queue
     std::optional<InFlightTransfer> in_flight_;
+    struct Eject {
+        TileDescriptor tile;
+        DmaStoreBuffer* target;
+    };
+    std::deque<Eject> eject_queue_;
 
     Cycle current_cycle_ = 0;
     uint32_t next_l2_slot_ = 0;
     double cycles_per_byte_ = 0.02;  // ~50 bytes/cycle at 51.2 GB/s @ 1GHz
 
     // For in-flight tracking
-    bool in_flight_is_move_ = true;
+    enum class Leg { Move, Writeback, Eject };
+    Leg in_flight_leg_ = Leg::Move;
+    DmaStoreBuffer* in_flight_target_ = nullptr;     // Eject only
     uint32_t in_flight_l3_slot_ = 0;
 
     // Statistics
@@ -238,6 +287,7 @@ private:
     Cycle active_cycles_ = 0;
     size_t total_tiles_moved_ = 0;
     size_t total_tiles_writeback_ = 0;
+    size_t total_tiles_ejected_ = 0;
 
     /**
      * @brief Compute transfer time in cycles
@@ -254,7 +304,39 @@ private:
         if (!in_flight_.has_value()) return;
 
         if (in_flight_->is_complete(current_cycle)) {
-            if (in_flight_is_move_) {
+            if (in_flight_leg_ == Leg::Eject) {
+                // Ejection complete: the tile is in the DMA engine's store buffer, and its
+                // L3 slot is free (once the last reference is gone).
+                in_flight_target_->deliver(in_flight_->tile.tile_id);
+                bool credit_released = l3_tag_cam_.invalidate(in_flight_->tile.tile_id);
+                if (credit_released) {
+                    l3_credits_.release(
+                        static_cast<size_t>(in_flight_->tile.tile_id.matrix));
+                }
+                total_tiles_ejected_++;
+
+                // Order matters to the value plane: the bytes reach the buffer before the
+                // L3 copy is retired by CREDIT_RELEASED.
+                events.push_back(TimingEvent::duration_event(
+                    EventType::BM_EJECT_COMPLETE,
+                    in_flight_->start_cycle,
+                    in_flight_->duration(),
+                    config_.mover_id,
+                    in_flight_->tile.tile_id,
+                    name()
+                ));
+                events.back().slot_id = in_flight_->slot_id;
+                if (credit_released) {
+                    events.push_back(TimingEvent(
+                        EventType::CREDIT_RELEASED,
+                        current_cycle,
+                        config_.mover_id,
+                        in_flight_->tile.tile_id,
+                        name()
+                    ));
+                }
+                in_flight_target_ = nullptr;
+            } else if (in_flight_leg_ == Leg::Move) {
                 // Move complete: tile arrived at L2. The ref count is seeded
                 // with the tile's consumer count (broadcast 1:1:k, #100);
                 // the ordinary pipeline has consumer_count = 1.
@@ -502,7 +584,7 @@ private:
             l2_slot,
             true  // is_move
         );
-        in_flight_is_move_ = true;
+        in_flight_leg_ = Leg::Move;
         in_flight_l3_slot_ = found_entry->slot_id;
 
         events.push_back(TimingEvent(
@@ -603,7 +685,7 @@ private:
             l3_slot,
             false  // is_writeback
         );
-        in_flight_is_move_ = false;
+        in_flight_leg_ = Leg::Writeback;
 
         events.push_back(TimingEvent(
             EventType::BM_WRITEBACK_START,
@@ -622,6 +704,43 @@ private:
         ));
 
         return true;
+    }
+
+    /**
+     * @brief Start the first ejection whose tile is in L3 and whose target buffer has room
+     */
+    bool try_start_eject(Cycle current_cycle, std::vector<TimingEvent>& events,
+                         bool count_stall) {
+        if (eject_queue_.empty()) return false;
+
+        bool any_in_l3 = false;
+        for (std::size_t i = 0; i < eject_queue_.size(); ++i) {
+            const Eject& e = eject_queue_[i];
+            auto l3_entry = l3_tag_cam_.match(e.tile.tile_id);
+            if (!l3_entry.has_value()) continue;
+            any_in_l3 = true;
+            if (!e.target->reserve()) continue;     // that engine's buffer is full
+
+            const Eject ej = e;
+            eject_queue_.erase(eject_queue_.begin() + static_cast<std::ptrdiff_t>(i));
+            in_flight_ = InFlightTransfer(ej.tile, current_cycle,
+                                          current_cycle + compute_transfer_cycles(ej.tile.size_bytes),
+                                          l3_entry->slot_id, false);
+            in_flight_leg_ = Leg::Eject;
+            in_flight_target_ = ej.target;
+            events.push_back(TimingEvent(EventType::BM_EJECT_START, current_cycle,
+                                         config_.mover_id, ej.tile.tile_id, name()));
+            return true;
+        }
+
+        // Nothing could start: either no queued tile is in L3 yet, or every one that is waits
+        // on a full store buffer.
+        if (!count_stall) return false;
+        const TileID head = eject_queue_.front().tile.tile_id;
+        events.push_back(TimingEvent(any_in_l3 ? EventType::BM_STALL_CREDIT : EventType::BM_STALL_TAG,
+                                     current_cycle, config_.mover_id, head, name()));
+        ++(any_in_l3 ? stall_cycles_credit_ : stall_cycles_tag_);
+        return false;
     }
 
     /**

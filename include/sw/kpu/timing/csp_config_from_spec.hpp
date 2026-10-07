@@ -15,6 +15,7 @@
 //   l3.capacity_tiles        l3_buffer_count (tile-sized L3 buffers, the credit pool)
 //   movers.block_movers      num_block_movers
 //   movers.streamers         split over the row and column streamer pools, at least one each
+//   noc.port.output_queue_blocks   dma_store_buffer_blocks, when declared (0 = derived: noted)
 //
 // NOT MAPPED, listed in `unmapped`: the spec's rates (dma.bytes_per_cycle and the movers'
 // bytes per cycle) against the executor's GB/s and latency fields, macs_per_cycle against its
@@ -74,6 +75,15 @@ inline std::optional<CspDeviceConfig> csp_config_from(
     if (d.l3.capacity_tiles == 0)
         return fail("l3.capacity_tiles is not declared; the CSP L3 credit pool needs a size");
     c.l3_buffer_count = d.l3.capacity_tiles;
+
+    // The store buffer IS the NoC port's per-engine output queue (plan §1.2): where a
+    // BlockMover's ejection lands until the engine writes it to DRAM.
+    if (d.noc && d.noc->port.output_queue_blocks > 0)
+        c.dma_store_buffer_blocks = d.noc->port.output_queue_blocks;
+    else if (d.noc)
+        out.unmapped.push_back("noc.port.output_queue_blocks = 0 (derived from the DMA write "
+                               "latency, plan §3.4): the store buffer keeps its default of " +
+                               std::to_string(c.dma_store_buffer_blocks) + " until the NoC is wired");
 
     c.num_block_movers = d.movers.block_movers;
     const std::size_t s = d.movers.streamers;

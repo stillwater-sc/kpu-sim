@@ -30,7 +30,8 @@ enum class EventType {
     DMA_STORE_START,     ///< DMA started storing tile to DRAM
     DMA_STORE_COMPLETE,  ///< DMA finished storing tile to DRAM
     DMA_STALL_CREDIT,    ///< DMA stalled waiting for L3 credit
-    DMA_STALL_TAG,       ///< DMA stalled waiting for tile in L3 (for store)
+    DMA_STALL_TAG,       ///< DMA stalled waiting for a tile: in L3 (load reuse) or, for a
+                         ///< store, in its own store buffer (ejected there by a BlockMover)
     MC_ACCESS_TYPE,      ///< Memory Controller access classification (row hit/miss/empty)
     MC_BANK_CONFLICT,    ///< Memory Controller bank conflict (different row in same bank)
 
@@ -41,6 +42,8 @@ enum class EventType {
     BM_WRITEBACK_COMPLETE, ///< BlockMover finished L2→L3 writeback
     BM_STALL_TAG,        ///< BlockMover stalled waiting for tile in L3
     BM_STALL_CREDIT,     ///< BlockMover stalled waiting for L2 credit
+    BM_EJECT_START,      ///< BlockMover started pushing an L3 tile into a DMA engine's buffer
+    BM_EJECT_COMPLETE,   ///< BlockMover finished that push; the L3 slot is free
 
     // Streamer events
     STR_FEED_START,      ///< Streamer started feeding tile to compute
@@ -87,6 +90,8 @@ inline const char* to_string(EventType type) {
         case EventType::BM_WRITEBACK_COMPLETE: return "BM_WRITEBACK_COMPLETE";
         case EventType::BM_STALL_TAG: return "BM_STALL_TAG";
         case EventType::BM_STALL_CREDIT: return "BM_STALL_CREDIT";
+        case EventType::BM_EJECT_START: return "BM_EJECT_START";
+        case EventType::BM_EJECT_COMPLETE: return "BM_EJECT_COMPLETE";
         case EventType::STR_FEED_START: return "STR_FEED_START";
         case EventType::STR_FEED_COMPLETE: return "STR_FEED_COMPLETE";
         case EventType::STR_DRAIN_START: return "STR_DRAIN_START";

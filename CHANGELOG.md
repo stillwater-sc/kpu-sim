@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Every hop is a push in the CSP tier too (NoC port plan step 4b.2).** A STORE is no longer
+  a DMA read of L3. A BlockMover ejects the tile out of L3 into its DMA engine's store buffer
+  (`BM_EJECT_START/COMPLETE`), which frees the L3 slot, and the engine writes the buffer to
+  DRAM.
+  - New: `DmaStoreBuffer` (the port's per-engine output queue,
+    `Config::dma_store_buffer_blocks`), `BlockMoverProcess::schedule_eject`, and
+    `MemoryLevel::DMA_BUFFER`.
+  - **CSP timing changes by design.** The ResNet-18 baseline is re-pinned (+7-10% cycles; only
+    timing keys changed). The T4/T16/T64 values oracle stays bit-identical.
+  - The DMA and integration unit tests now state the push semantics: a store waits for its
+    tile in the buffer, not in L3.
+
 - **A deployment's device drives the CSP executor (NoC port plan step 4b.1).**
   - `csp_config_from(DeviceSpecification)` builds `ConcurrentTimingExecutor::Config`:
     controllers, engines, the hosted DRAM, L3 capacity, BlockMovers and streamers.

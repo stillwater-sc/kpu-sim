@@ -331,7 +331,8 @@ TEST_CASE("Full round-trip: load → compute → drain → store", "[timing][int
     auto c_tile = make_tile(MatrixID::C, 0, 0);
     str.schedule_drain(c_tile);      // Drain result to L2
     bm.schedule_writeback(c_tile);   // Move from L2 to L3
-    dma.schedule_store(c_tile);      // Store from L3 to DRAM
+    bm.schedule_eject(c_tile, dma.store_buffer());  // Push from L3 into the DMA's buffer
+    dma.schedule_store(c_tile);      // Write the buffer to DRAM
 
     // Run until complete
     Cycle cycle = 0;
@@ -374,7 +375,11 @@ TEST_CASE("Full round-trip: load → compute → drain → store", "[timing][int
     // Verify drain path completed
     REQUIRE(count_events(all_events, EventType::TILE_DRAINED) == 1);
     REQUIRE(count_events(all_events, EventType::BM_WRITEBACK_COMPLETE) == 1);
+    REQUIRE(count_events(all_events, EventType::BM_EJECT_COMPLETE) == 1);
     REQUIRE(count_events(all_events, EventType::DMA_STORE_COMPLETE) == 1);
+    // The ejection freed L3, and the DRAM write freed the store buffer.
+    REQUIRE(l3_credits.available() == 8);
+    REQUIRE(dma.store_buffer().held() == 0);
 }
 
 // ============================================================================

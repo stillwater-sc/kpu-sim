@@ -23,15 +23,15 @@
         "tile": 16
       },
       "timing": {
-        "cycles": 39881,
-        "critical_path_cycles": 39119,
+        "cycles": 42629,
+        "critical_path_cycles": 41720,
         "ops": 22,
         "nodes": 39
       },
       "stalls": {
-        "dma": 7016,
-        "block_mover": 99797,
-        "streamer": 26511
+        "dma": 27281,
+        "block_mover": 101726,
+        "streamer": 26402
       },
       "throughput": {
         "tiles_loaded": 1805,
@@ -41,16 +41,16 @@
         "bytes_stored": 114688
       },
       "utilization": {
-        "dma": 0.846092124,
-        "block_mover": 0.141069682,
-        "streamer": 0.106893007
+        "dma": 0.818668043,
+        "block_mover": 0.155105679,
+        "streamer": 0.100002346
       },
       "compute": {
         "macs": 2240512,
-        "gflops": 112.359871,
-        "peak_efficiency": 0.219452872,
+        "gflops": 105.116798,
+        "peak_efficiency": 0.205306247,
         "arithmetic_intensity": 5.25330132,
-        "roofline_efficiency": 0.334194228
+        "roofline_efficiency": 0.312651012
       },
       "validation": {
         "max_err": 5.96046448e-08,
@@ -75,15 +75,15 @@
         "tile": 16
       },
       "timing": {
-        "cycles": 51469,
-        "critical_path_cycles": 50707,
+        "cycles": 56487,
+        "critical_path_cycles": 55578,
         "ops": 38,
         "nodes": 67
       },
       "stalls": {
-        "dma": 9984,
-        "block_mover": 108557,
-        "streamer": 29951
+        "dma": 30249,
+        "block_mover": 112834,
+        "streamer": 29842
       },
       "throughput": {
         "tiles_loaded": 2773,
@@ -93,16 +93,16 @@
         "bytes_stored": 204800
       },
       "utilization": {
-        "dma": 0.77901261,
-        "block_mover": 0.184382832,
-        "streamer": 0.139248868
+        "dma": 0.747764972,
+        "block_mover": 0.194805885,
+        "streamer": 0.126878751
       },
       "compute": {
         "macs": 3862528,
-        "gflops": 150.091434,
-        "peak_efficiency": 0.293147331,
+        "gflops": 136.758121,
+        "peak_efficiency": 0.267105706,
         "arithmetic_intensity": 5.10765064,
-        "roofline_efficiency": 0.459150168
+        "roofline_efficiency": 0.418361747
       },
       "validation": {
         "max_err": 5.96046448e-08,
@@ -127,15 +127,15 @@
         "tile": 16
       },
       "timing": {
-        "cycles": 72169,
-        "critical_path_cycles": 71333,
+        "cycles": 78913,
+        "critical_path_cycles": 77780,
         "ops": 22,
         "nodes": 39
       },
       "stalls": {
-        "dma": 16430,
-        "block_mover": 196470,
-        "streamer": 49551
+        "dma": 58711,
+        "block_mover": 201789,
+        "streamer": 49442
       },
       "throughput": {
         "tiles_loaded": 3610,
@@ -145,16 +145,16 @@
         "bytes_stored": 229376
       },
       "utilization": {
-        "dma": 0.923235738,
-        "block_mover": 0.148845072,
-        "streamer": 0.118139367
+        "dma": 0.885215364,
+        "block_mover": 0.161114138,
+        "streamer": 0.108043035
       },
       "compute": {
         "macs": 4481024,
-        "gflops": 124.181408,
-        "peak_efficiency": 0.242541812,
+        "gflops": 113.568715,
+        "peak_efficiency": 0.221813896,
         "arithmetic_intensity": 5.53573688,
-        "roofline_efficiency": 0.350510607
+        "roofline_efficiency": 0.320555549
       },
       "validation": {
         "max_err": 5.96046448e-08,
