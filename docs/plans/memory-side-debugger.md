@@ -1,7 +1,8 @@
 # Memory-Side Debugger: DRAM, Controllers, DMA Engines and Buffers, Outside the NoC
 
 **Date:** 2026-10-08
-**Status:** Q1-Q5 decided 2026-10-08 (all as recommended); steps 1-3 done
+**Status:** Q1-Q5 decided 2026-10-08 (all as recommended); steps 1-3 and 5 done (5 built before
+4, at the architect's request)
 **Related:**
 - `docs/plans/dram-bank-model.md`: this plan carries its step 4 (per-bank record, TF10/TF11) and
   step 6 (viewer DRAM panel).
@@ -268,6 +269,38 @@ Each step is one PR and ends green.
 4. **Checker.** `mflow_check.py` with TF10, TF11 and M1-M5, plus a self-test.
 5. **Viewer.** The memflow page: banks, channels, engines, buffers, ports, the address view, the
    inspector, and a smoke test.
+   (Done, before step 4: the architect asked for the debugger first.)
+   - **As built,** `tools/visualization/memflow/` (`index.html`, `pack.py`, `test_viewer.py`):
+     - **Record additions:** the manifest carries `ceiling_bytes_per_cycle` (every controller's
+       data buses at full rate) and `burst_bytes`, so the page draws against the ceiling the CLI
+       prints. Readers default both to 0, so version 1 stands.
+     - **Summary:** bytes, bandwidth against the ceiling, window, bursts, commands, page
+       outcomes, and the timing table's provenance.
+     - **Bandwidth over time:** read and write bytes per bin, spread over each burst's data
+       window, against the ceiling line. Bins are at least 8 cycles: data windows are whole
+       executor cycles (a 64 B burst over 3.75 cycles is recorded as 3 or 4), so finer bins
+       showed that rounding as spikes. Even at 8 a bin can read a few percent above the ceiling.
+     - **Swimlanes** on one cursor and zoom (drag, wheel, back, whole run), in folding
+       categories: port stubs (loads from acceptance to landing, refusal ticks; deliveries and
+       ejection waits), DMA engines (bursts in flight against W; request lifetimes), store
+       buffers (held against capacity, staged as a line), channel data buses (each burst, read
+       or write), and banks (every command; a conflict marked under its ACT; the row on wide
+       ACTs; the open row in the tooltip). Banks start folded.
+     - **Address heat map** of the bursts in view, by bank and by the rows in use (bucketed
+       past 48), as counts, conflicts or hit rate. It follows the zoom.
+     - **Page outcomes by bank**, and observations computed from the record (window and buffer
+       peaks against capacity, refusals, ejection waits, most-conflicted banks, longest
+       request). Invariants stay with step 4's checker.
+     - **Inspector:** a command leads to its burst (coordinates, outcome, lifetime, queueing),
+       the burst's command chain, and its request; a request shows its bursts' outcomes.
+   - **Deviations from §3.5:** the channel lane shows the bus burst by burst, and the ceiling
+     lives on the bandwidth panel. The address view toggles count, conflicts and hit rate
+     rather than channel, bank or row. The characterization tab waits for step 6's
+     `sweep.json`.
+   - **Smoke test** (`memflow_viewer_smoke`, on the T4 bundle): pack embeds every table; the page
+     accepts the version the writer writes; a non-bundle is refused; under Node the script
+     parses, the page's own reader reads every column it draws from the real bundle, and the
+     step series is checked.
 6. **Characterization.** `--sweep`, `sweep.json` and the viewer tab, with the step-3 regression.
 
 ## 5. Decided on Review (2026-10-08)

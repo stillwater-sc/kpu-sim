@@ -133,6 +133,8 @@ void write_mflow(const MFR& rec, const std::string& dir) {
     m["makespan"] = rec.makespan;
     m["window"] = rec.window;
     m["timing_note"] = rec.timing_note;
+    m["ceiling_bytes_per_cycle"] = rec.ceiling_bytes_per_cycle;
+    m["burst_bytes"] = rec.burst_bytes;
     json st = json::array();
     for (const auto& s : rec.stations) st.push_back(json{{"name", s.name}, {"kind", s.kind}, {"capacity", s.capacity}});
     m["stations"] = st;
@@ -234,6 +236,8 @@ MFR read_mflow(const std::string& dir) {
     rec.makespan = m.at("makespan").get<Cycle>();
     rec.window = m.at("window").get<std::uint32_t>();
     rec.timing_note = m.value("timing_note", "");
+    rec.ceiling_bytes_per_cycle = m.value("ceiling_bytes_per_cycle", 0.0);
+    rec.burst_bytes = m.value("burst_bytes", 0u);
     for (const auto& s : m.at("stations"))
         rec.stations.push_back({s.at("name").get<std::string>(), s.at("kind").get<std::string>(),
                                 s.at("capacity").get<std::uint64_t>()});

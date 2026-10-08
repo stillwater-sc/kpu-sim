@@ -1,0 +1,820 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>KPU Memory-Side Debugger</title>
+<!--
+  tools/visualization/memflow/index.html -- the memory-side debugger
+  (docs/plans/memory-side-debugger.md §3.5, step 5).
+
+  Reads a .mflow bundle (kpu-memsim --out) of the memory side run on its own: DRAM, memory
+  controllers, DMA engines and their store buffers, with the NoC ports stubbed. Plain HTML, no
+  build step, no server: open this file and choose the bundle's folder, or drop its files on the
+  page. pack.py embeds a bundle into a copy of this file.
+
+  WHAT IT SHOWS
+    - Bandwidth over time against the DRAM ceiling, and each bank's page outcomes.
+    - Swimlanes, one shared cursor and zoom:
+        port stubs     loads crossing the injection bus; refusals; ejection waits
+        DMA engines    bursts in flight against the window W; request lifetimes
+        store buffers  slots held and staged against capacity
+        channels       the data bus, burst by burst (read / write)
+        banks          every DRAM command (ACT RD WR PRE REF), with the row it names
+    - An address heat map of the bursts in view, by bank and row (counts or conflicts).
+    - An inspector: a command, its burst (coordinates, outcome, lifetime), its request and the
+      burst's whole command chain; a request and its bursts.
+  Invariants (TF10, TF11, M1-M5) are mflow_check.py's job (plan step 4); the observations here are
+  computed from the record and say nothing the record does not contain.
+
+  SPDX-License-Identifier: MIT
+  Copyright (c) 2024-2025 Stillwater Supercomputing, Inc.
+-->
+<style>
+:root {
+  --bg: #f4f5f6; --panel: #fcfcfb; --ink: #15181c; --ink-2: #4a5059; --ink-3: #7b828c;
+  --line: #d9dce0; --grid: #e8eaed; --lane: #f0f2f4;
+  --act: #2f9e6e; --rd: #2a78d6; --wr: #d9822b; --pre: #8a919b; --ref: #8e5bd0;
+  --load: #2a78d6; --store: #d9822b; --crit: #d03b3b; --warn: #fab219; --accent: #2a5db0;
+  --seq-lo: #e8f0fb; --seq-hi: #0d366b;
+  --font-ui: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-data: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #121416; --panel: #1a1c1f; --ink: #eef0f2; --ink-2: #b9bfc7; --ink-3: #8a919b;
+    --line: #2e3237; --grid: #25292d; --lane: #1f2226;
+    --act: #3fbf86; --rd: #3987e5; --wr: #ec9a45; --pre: #6d747e; --ref: #a97ee6;
+    --load: #3987e5; --store: #ec9a45; --accent: #7aa7ea; --seq-lo: #1b2738; --seq-hi: #b7d3f6;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+    --bg: #121416; --panel: #1a1c1f; --ink: #eef0f2; --ink-2: #b9bfc7; --ink-3: #8a919b;
+    --line: #2e3237; --grid: #25292d; --lane: #1f2226;
+    --act: #3fbf86; --rd: #3987e5; --wr: #ec9a45; --pre: #6d747e; --ref: #a97ee6;
+    --load: #3987e5; --store: #ec9a45; --accent: #7aa7ea; --seq-lo: #1b2738; --seq-hi: #b7d3f6;
+    color-scheme: dark;
+}
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+body { margin: 0; background: var(--bg); color: var(--ink); font: 14px/1.45 var(--font-ui); }
+.wrap { max-width: 1500px; margin: 0 auto; padding: 18px 16px 60px; display: grid; gap: 16px; }
+h1 { font-size: 22px; margin: 0; }
+h2 { font-size: 13px; margin: 0; color: var(--ink-2); font-weight: 600; }
+.sub { color: var(--ink-2); max-width: 95ch; margin: 0; }
+.panel { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 12px; display: grid; gap: 8px; min-width: 0; }
+.row2 { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr); gap: 16px; align-items: start; }
+@media (max-width: 1000px) { .row2 { grid-template-columns: minmax(0, 1fr); } }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.chip { font: 12px var(--font-data); border: 1px solid var(--line); border-radius: 4px; padding: 2px 7px; color: var(--ink-2); }
+.chip b { color: var(--ink); font-weight: 600; }
+.load { border: 2px dashed var(--line); border-radius: 8px; padding: 18px; display: grid; gap: 10px; }
+.load.drag { border-color: var(--accent); }
+.transport { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; position: sticky; top: 0; z-index: 4; background: var(--bg); padding: 8px 0; border-bottom: 1px solid var(--line); }
+button, select { font: 13px var(--font-ui); background: var(--panel); color: var(--ink); border: 1px solid var(--line); border-radius: 5px; padding: 4px 10px; cursor: pointer; }
+button:hover { border-color: var(--ink-3); }
+input[type=range] { flex: 1 1 300px; min-width: 0; }
+.clock { font: 13px var(--font-data); min-width: 24ch; }
+canvas { display: block; width: 100%; }
+.legend { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 12px; color: var(--ink-2); align-items: center; }
+.sw { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 5px; vertical-align: -1px; border: 1px solid var(--line); }
+ul.obs { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; font-size: 13px; }
+.kv { display: grid; grid-template-columns: auto 1fr; gap: 2px 12px; font: 12px var(--font-data); }
+.kv span:nth-child(odd) { color: var(--ink-3); }
+.kv .h { grid-column: 1 / -1; color: var(--ink-2); font: 600 12px var(--font-ui); margin-top: 6px; }
+.tip { position: fixed; z-index: 10; pointer-events: none; background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 6px 9px; font: 12px var(--font-data); box-shadow: 0 4px 16px rgba(0,0,0,.18); max-width: 380px; white-space: pre; }
+.note { font-size: 12px; color: var(--ink-3); }
+code { font: 12px var(--font-data); }
+.chain { font: 12px var(--font-data); max-height: 220px; overflow: auto; border-top: 1px solid var(--line); padding-top: 4px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>KPU Memory-Side Debugger</h1>
+    <p class="sub">The memory side of the KPU on its own: DRAM, memory controllers, DMA engines and their store buffers, with the NoC ports stubbed by request models and sinks. Every DRAM command and every burst, on one cursor.</p>
+  </header>
+
+  <section class="load" id="load">
+    <h2>Load a run</h2>
+    <p class="sub">Write a bundle with <code>kpu-memsim --deploy spec.json --scenario scenario.json --out run.mflow</code>, then choose the folder below (or drop its files here).</p>
+    <label>Bundle folder <input id="pick" type="file" webkitdirectory multiple></label>
+    <p class="note" id="loadMsg"></p>
+  </section>
+
+  <section id="main" hidden>
+    <div class="panel"><div class="chips" id="summary"></div><p class="note" id="timingNote"></p></div>
+
+    <div class="transport">
+      <button id="play" type="button">Play</button>
+      <input id="scrub" type="range" min="0" max="1" value="0" aria-label="Cycle">
+      <span class="clock" id="clock"></span>
+      <button id="zoomOut" type="button" title="Zoom out 2x (key: -)">Zoom out</button>
+      <button id="zoomBack" type="button" title="Back to the previous view (key: Backspace)">Back</button>
+      <button id="resetZoom" type="button" title="Show the whole run (key: 0)">Whole run</button>
+      <span class="note" id="zoomNote"></span>
+    </div>
+
+    <div class="row2">
+      <div class="panel">
+        <h2>Bandwidth over time, against the DRAM ceiling</h2>
+        <canvas id="bw"></canvas>
+        <div class="legend"><span><span class="sw" style="background:var(--load)"></span>read</span><span><span class="sw" style="background:var(--store)"></span>write</span><span><span class="sw" style="background:var(--crit)"></span>ceiling</span><span class="note" id="bwNote"></span></div>
+      </div>
+      <div class="panel">
+        <h2>Observations</h2>
+        <ul class="obs" id="obs"></ul>
+        <p class="note">Computed from the record. Invariants (TF10, TF11, M1-M5) are <code>mflow_check.py</code>'s job.</p>
+      </div>
+    </div>
+
+    <div class="panel">
+      <h2>Swimlanes (drag or wheel to zoom in, wheel or "Zoom out" to zoom out, click to set the cursor and inspect; click a category to fold it)</h2>
+      <canvas id="lanes" tabindex="0"></canvas>
+      <div class="legend">
+        <span><span class="sw" style="background:var(--act)"></span>ACT</span>
+        <span><span class="sw" style="background:var(--rd)"></span>RD / read</span>
+        <span><span class="sw" style="background:var(--wr)"></span>WR / write</span>
+        <span><span class="sw" style="background:var(--pre)"></span>PRE</span>
+        <span><span class="sw" style="background:var(--ref)"></span>REF</span>
+        <span><span class="sw" style="background:var(--crit)"></span>row conflict / refusal / over capacity</span>
+        <span><span class="sw" style="background:var(--warn)"></span>ejection waiting for a buffer slot</span>
+      </div>
+    </div>
+
+    <div class="row2">
+      <div class="panel">
+        <h2>Bursts in view by bank and row <select id="heatMode"><option value="count">count</option><option value="conflict">conflicts</option><option value="hit">hit rate</option></select></h2>
+        <canvas id="heat"></canvas>
+        <div class="legend"><span><span class="sw" style="background:var(--seq-lo)"></span>low</span><span><span class="sw" style="background:var(--seq-hi)"></span>high</span><span class="note" id="heatNote"></span></div>
+      </div>
+      <div class="panel">
+        <h2>Inspector</h2>
+        <div id="insp" class="note">Click a lane in the swimlanes, or a cell of the heat map.</div>
+      </div>
+    </div>
+
+    <div class="panel">
+      <h2>Page outcomes by bank</h2>
+      <canvas id="pages"></canvas>
+      <div class="legend"><span><span class="sw" style="background:var(--act)"></span>hit</span><span><span class="sw" style="background:var(--rd)"></span>empty (row opened)</span><span><span class="sw" style="background:var(--crit)"></span>conflict (another row closed first)</span></div>
+    </div>
+  </section>
+</div>
+<div class="tip" id="tip" hidden></div>
+
+<!--MFLOW_EMBED-->
+<script>
+(() => {
+"use strict";
+const $ = id => document.getElementById(id);
+const tok = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+const fmt = n => Number(n).toLocaleString("en-US");
+const NONE = 0xFFFFFFFF;
+// The record's enums (memory_flow_record.hpp), in order.
+const CMD = ["ACT", "RD", "WR", "PRE", "REF"];
+const OUTCOME = ["unknown", "hit", "empty", "conflict"];
+const PORTK = ["offer", "accept", "refuse", "land", "eject_arrive", "eject_wait", "eject_deliver"];
+const CMD_COLOR = ["--act", "--rd", "--wr", "--pre", "--ref"];
+
+// ------------------------------------------------------------------ loading
+function col(buf, cols, name, n) {
+  const c = cols.find(x => x.name === name);
+  if (!c) throw new Error("no column " + name);
+  const T = { u8: Uint8Array, u32: Uint32Array, u64: BigUint64Array, f64: Float64Array }[c.dtype];
+  if (!T) throw new Error("column " + name + " has an unknown dtype " + c.dtype);
+  return new T(buf, c.offset, n);
+}
+function parse(files) {
+  const m = JSON.parse(files["manifest.json"]);
+  if (m.format !== "kpu-mflow" || m.version !== 1) throw new Error("not a version-1 kpu-mflow bundle (record it with kpu-memsim)");
+  const R = { m };
+  const tb = name => {
+    const t = m.tables[name], buf = files[t.file];
+    if (!buf) throw new Error("missing " + t.file);
+    const out = { rows: t.rows };
+    for (const c of t.columns) out[c.name] = col(buf, t.columns, c.name, t.rows);
+    return out;
+  };
+  R.B = tb("bursts"); R.C = tb("commands"); R.Q = tb("requests"); R.F = tb("buffers"); R.P = tb("ports");
+  // Every index the page follows is checked once, here.
+  for (let i = 0; i < R.C.rows; i++)
+    if (R.C.burst[i] !== NONE && R.C.burst[i] >= R.B.rows) throw new Error("command " + i + " names a burst past the table");
+  for (let i = 0; i < R.B.rows; i++)
+    if (R.B.request[i] !== NONE && R.B.request[i] >= R.Q.rows) throw new Error("burst " + i + " names a request past the table");
+  return R;
+}
+async function readPicked(list) {
+  const files = {};
+  for (const f of list) {
+    if (f.name.endsWith(".bin")) files[f.name] = await f.arrayBuffer();
+    else if (f.name === "manifest.json" || f.name === "lod.json") files[f.name] = await f.text();
+  }
+  return files;
+}
+function b64(s) { const bin = atob(s); const u = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) u[i] = bin.charCodeAt(i); return u.buffer; }
+
+let R = null;
+async function loadFrom(files) {
+  try { R = parse(files); start(); }
+  catch (e) { $("loadMsg").textContent = "Could not read the bundle: " + e.message; }
+}
+$("pick").addEventListener("change", async e => loadFrom(await readPicked(e.target.files)));
+const load = $("load");
+load.addEventListener("dragover", e => { e.preventDefault(); load.classList.add("drag"); });
+load.addEventListener("dragleave", () => load.classList.remove("drag"));
+load.addEventListener("drop", async e => { e.preventDefault(); load.classList.remove("drag"); loadFrom(await readPicked([...e.dataTransfer.files])); });
+
+// ------------------------------------------------------------------ derived data
+function stepSeries(intervals) {
+  // [[t, value]] from half-open intervals; ends before starts at equal t.
+  const ev = [];
+  for (const [a, b] of intervals) if (b > a) { ev.push([a, 1]); ev.push([b, -1]); }
+  ev.sort((x, y) => x[0] - y[0] || x[1] - y[1]);
+  const out = [[0, 0]];
+  let cur = 0;
+  for (let i = 0; i < ev.length;) {
+    const t = ev[i][0];
+    while (i < ev.length && ev[i][0] === t) cur += ev[i++][1];
+    if (out[out.length - 1][0] === t) out[out.length - 1][1] = cur;
+    else if (out[out.length - 1][1] !== cur) out.push([t, cur]);
+  }
+  return out;
+}
+function valueAt(steps, t) {
+  let lo = 0, hi = steps.length - 1;
+  while (lo < hi) { const mid = (lo + hi + 1) >> 1; if (steps[mid][0] <= t) lo = mid; else hi = mid - 1; }
+  return steps[lo][1];
+}
+function stepMax(steps) { let m = 0; for (const [, v] of steps) m = Math.max(m, v); return m; }
+const parseIdx = (name, key) => { const m = name.match(new RegExp(key + "\\[(\\d+)\\]")); return m ? Number(m[1]) : -1; };
+
+let D = null;   // everything derived from R that the views read
+function prepare() {
+  const st = R.m.stations, B = R.B, C = R.C, Q = R.Q, F = R.F, P = R.P;
+  D = { banks: [], buses: [], engines: [], buffers: [], ports: [] };
+  const bankAt = new Map(), busAt = new Map();
+  st.forEach((s, i) => {
+    if (s.kind === "dram_bank") {
+      const k = [parseIdx(s.name, "mc"), parseIdx(s.name, "ch"), parseIdx(s.name, "bg"), parseIdx(s.name, "ba")].join(".");
+      bankAt.set(k, D.banks.length);
+      D.banks.push({ name: s.name, key: k, label: s.name.replace(/^[^/]*\//, ""), cmds: [], bursts: [] });
+    } else if (s.kind === "dram_bus") {
+      const k = [parseIdx(s.name, "mc"), parseIdx(s.name, "ch")].join(".");
+      busAt.set(k, D.buses.length);
+      D.buses.push({ name: s.name, label: s.name.replace(/^[^/]*\//, ""), bursts: [] });
+    } else if (s.kind === "dma") D.engines.push({ name: s.name, e: parseIdx(s.name, "dma"), cap: s.capacity, bursts: [], reqs: [] });
+    else if (s.kind === "dmabuf") D.buffers.push({ name: s.name, e: parseIdx(s.name, "dmabuf"), cap: s.capacity, held: [[0, 0]], staged: [[0, 0]] });
+    else if (s.kind === "port") D.ports.push({ name: s.name, k: parseIdx(s.name, "port"), loads: [], refuse: [], waits: [], delivers: [] });
+  });
+  const engineAt = new Map(D.engines.map((x, i) => [x.e, i]));
+  const bufferAt = new Map(D.buffers.map((x, i) => [x.e, i]));
+  const portAt = new Map(D.ports.map((x, i) => [x.k, i]));
+  for (let i = 0; i < C.rows; i++) {
+    const b = bankAt.get([C.mc[i], C.channel[i], C.bank_group[i], C.bank[i]].join("."));
+    if (b !== undefined) D.banks[b].cmds.push(i);
+  }
+  for (const bank of D.banks) bank.cmds.sort((a, b) => C.t_issue[a] - C.t_issue[b]);
+  D.burstsOf = new Map();       // request -> bursts
+  D.cmdsOf = new Map();         // burst -> commands
+  for (let i = 0; i < C.rows; i++) if (C.burst[i] !== NONE) {
+    if (!D.cmdsOf.has(C.burst[i])) D.cmdsOf.set(C.burst[i], []);
+    D.cmdsOf.get(C.burst[i]).push(i);
+  }
+  for (let i = 0; i < B.rows; i++) {
+    const bus = busAt.get([B.mc[i], B.channel[i]].join("."));
+    if (bus !== undefined && B.t_data1[i] > B.t_data0[i]) D.buses[bus].bursts.push(i);
+    const bank = bankAt.get([B.mc[i], B.channel[i], B.bank_group[i], B.bank[i]].join("."));
+    if (bank !== undefined) D.banks[bank].bursts.push(i);
+    const e = engineAt.get(B.engine[i]);
+    if (e !== undefined) D.engines[e].bursts.push(i);
+    if (B.request[i] !== NONE) {
+      if (!D.burstsOf.has(B.request[i])) D.burstsOf.set(B.request[i], []);
+      D.burstsOf.get(B.request[i]).push(i);
+    }
+  }
+  for (const bus of D.buses) bus.bursts.sort((a, b) => B.t_data0[a] - B.t_data0[b]);
+  for (const eng of D.engines) eng.inflight = stepSeries(eng.bursts.map(i => [B.t_submit[i], B.t_done[i]]));
+  for (let i = 0; i < Q.rows; i++) { const e = engineAt.get(Q.engine[i]); if (e !== undefined) D.engines[e].reqs.push(i); }
+  for (const eng of D.engines) eng.reqs.sort((a, b) => Q.t_offered[a] - Q.t_offered[b]);
+  for (let i = 0; i < F.rows; i++) {
+    const b = bufferAt.get(F.engine[i]);
+    if (b === undefined) continue;
+    D.buffers[b].held.push([F.t[i], F.held[i]]);
+    D.buffers[b].staged.push([F.t[i], F.staged[i]]);
+  }
+  const accepted = new Map();
+  for (let i = 0; i < P.rows; i++) {
+    const p = portAt.get(P.port[i]);
+    if (p === undefined) continue;
+    const kind = PORTK[P.kind[i]], t = P.t[i];
+    if (kind === "accept") accepted.set(P.request[i], t);
+    else if (kind === "land" && accepted.has(P.request[i])) D.ports[p].loads.push([accepted.get(P.request[i]), t, P.request[i]]);
+    else if (kind === "refuse") D.ports[p].refuse.push([t, P.request[i]]);
+    else if (kind === "eject_wait") D.ports[p].waits.push([t, P.request[i]]);
+    else if (kind === "eject_deliver") D.ports[p].delivers.push([t, P.request[i]]);
+  }
+  for (const port of D.ports) port.inflight = stepSeries(port.loads.map(([a, b]) => [a, b]));
+  D.makespan = Math.max(1, R.m.makespan);
+  D.bytes = 0;
+  for (let i = 0; i < Q.rows; i++) D.bytes += Q.bytes[i];
+  D.outcomes = [0, 0, 0, 0];
+  for (let i = 0; i < B.rows; i++) D.outcomes[B.outcome[i]]++;
+  buildRows();
+}
+
+// ------------------------------------------------------------------ the lanes model
+let ROWS = [];
+const folded = new Set(["Banks"]);   // 32+ bank lanes start folded under their header
+function buildRows() {
+  ROWS = [];
+  const cat = (name, n) => { ROWS.push({ header: true, name, n }); return !folded.has(name); };
+  if (cat("Port stubs", D.ports.length * 2))
+    for (const p of D.ports) {
+      ROWS.push({ kind: "port-load", label: "port[" + p.k + "] loads in", ref: p, h: 18 });
+      ROWS.push({ kind: "port-eject", label: "port[" + p.k + "] ejections", ref: p, h: 14 });
+    }
+  if (cat("DMA engines", D.engines.length * 2))
+    for (const e of D.engines) {
+      ROWS.push({ kind: "dma-inflight", label: "dma[" + e.e + "] bursts / W=" + e.cap, ref: e, h: 18 });
+      ROWS.push({ kind: "dma-reqs", label: "dma[" + e.e + "] requests", ref: e, h: 16 });
+    }
+  if (cat("Store buffers", D.buffers.length))
+    for (const b of D.buffers) ROWS.push({ kind: "buffer", label: "dmabuf[" + b.e + "] / " + b.cap, ref: b, h: 16 });
+  if (cat("Channels", D.buses.length))
+    for (const b of D.buses) ROWS.push({ kind: "bus", label: b.label, ref: b, h: 16 });
+  if (cat("Banks", D.banks.length))
+    for (const b of D.banks) ROWS.push({ kind: "bank", label: b.label, ref: b, h: 16 });
+}
+const HEAD_H = 18, LABEL_W = 190, AXIS_H = 18;
+
+// ------------------------------------------------------------------ view state
+let T = 0, viewA = 0, viewB = 1, playing = false;
+const zoomStack = [];
+function setView(a, b, push = true) {
+  a = Math.max(0, a); b = Math.min(D.makespan, b);
+  if (b - a < 4) { const c = (a + b) / 2; a = Math.max(0, c - 2); b = Math.min(D.makespan, c + 2); }
+  if (push) zoomStack.push([viewA, viewB]);
+  viewA = a; viewB = b;
+  $("zoomNote").textContent = (viewA === 0 && viewB === D.makespan) ? "" : "cycles " + fmt(Math.round(viewA)) + " .. " + fmt(Math.round(viewB));
+  drawAll();
+}
+function setCursor(t) {
+  T = Math.max(0, Math.min(D.makespan, Math.round(t)));
+  $("scrub").value = T;
+  $("clock").textContent = "cycle " + fmt(T) + " / " + fmt(D.makespan);
+  drawAll();
+}
+
+// ------------------------------------------------------------------ canvas helpers
+function fit(cv, h) {
+  const dpr = window.devicePixelRatio || 1, w = cv.clientWidth || cv.parentElement.clientWidth;
+  cv.width = Math.round(w * dpr); cv.height = Math.round(h * dpr); cv.style.height = h + "px";
+  const g = cv.getContext("2d"); g.setTransform(dpr, 0, 0, dpr, 0, 0);
+  return [g, w, h];
+}
+const xOf = (t, x0, w) => x0 + (t - viewA) / (viewB - viewA) * w;
+const tOf = (x, x0, w) => viewA + (x - x0) / w * (viewB - viewA);
+
+function drawAxis(g, x0, w, y) {
+  g.fillStyle = tok("--ink-3"); g.font = "11px " + tok("--font-data");
+  g.strokeStyle = tok("--grid");
+  const span = viewB - viewA, step = Math.pow(10, Math.floor(Math.log10(span / 6)));
+  const nice = [1, 2, 5, 10].map(m => m * step).find(s => span / s <= 10) || step * 10;
+  for (let t = Math.ceil(viewA / nice) * nice; t <= viewB; t += nice) {
+    const x = xOf(t, x0, w);
+    g.beginPath(); g.moveTo(x, y); g.lineTo(x, y + 4); g.stroke();
+    g.fillText(fmt(t), x + 2, y + 13);
+  }
+}
+function drawSteps(g, steps, x0, w, y, h, cap, color) {
+  // A step series as an area, scaled to `cap` (values above it in --crit).
+  const scale = cap > 0 ? cap : Math.max(1, stepMax(steps));
+  let i = 0;
+  while (i + 1 < steps.length && steps[i + 1][0] <= viewA) i++;
+  for (; i < steps.length && steps[i][0] < viewB; i++) {
+    const v = steps[i][1]; if (v <= 0) continue;
+    const a = Math.max(steps[i][0], viewA), b = Math.min(i + 1 < steps.length ? steps[i + 1][0] : D.makespan, viewB);
+    const xa = xOf(a, x0, w), xb = Math.max(xOf(b, x0, w), xa + 0.5);
+    const hh = Math.min(1, v / scale) * (h - 2);
+    g.fillStyle = cap > 0 && v > cap ? tok("--crit") : color;
+    g.fillRect(xa, y + h - 1 - hh, xb - xa, hh);
+  }
+  if (cap > 0) { g.strokeStyle = tok("--ink-3"); g.setLineDash([3, 3]); g.beginPath(); g.moveTo(x0, y + 1); g.lineTo(x0 + w, y + 1); g.stroke(); g.setLineDash([]); }
+}
+
+// ------------------------------------------------------------------ the lanes
+let laneHits = [];   // [{y0, y1, row}] for picking
+function drawLanes() {
+  const cv = $("lanes");
+  let total = AXIS_H;
+  for (const r of ROWS) total += r.header ? HEAD_H : r.h;
+  const [g, W] = fit(cv, total + 4);
+  const x0 = LABEL_W, w = W - LABEL_W - 4;
+  g.fillStyle = tok("--panel"); g.fillRect(0, 0, W, total + 4);
+  drawAxis(g, x0, w, 0);
+  const B = R.B, C = R.C, Q = R.Q;
+  let y = AXIS_H;
+  laneHits = [];
+  const minPx = (viewB - viewA) / w;   // cycles per pixel
+  for (const row of ROWS) {
+    if (row.header) {
+      g.fillStyle = tok("--ink-2"); g.font = "600 12px " + tok("--font-ui");
+      g.fillText((folded.has(row.name) ? "▸ " : "▾ ") + row.name + "  (" + row.n + ")", 4, y + 13);
+      laneHits.push({ y0: y, y1: y + HEAD_H, row });
+      y += HEAD_H; continue;
+    }
+    const h = row.h;
+    g.fillStyle = tok("--lane"); g.fillRect(x0, y + 1, w, h - 2);
+    g.fillStyle = tok("--ink-2"); g.font = "11px " + tok("--font-data");
+    g.fillText(row.label, 6, y + h - 4);
+    const ref = row.ref;
+    g.save(); g.beginPath(); g.rect(x0, y, w, h); g.clip();
+    if (row.kind === "bank") {
+      for (const i of ref.cmds) {
+        const a = C.t_issue[i], b = Math.max(C.t_end[i], a + minPx);
+        if (b < viewA || a > viewB) continue;
+        const xa = xOf(a, x0, w), xb = Math.max(xOf(b, x0, w), xa + 1);
+        const k = C.kind[i];
+        g.fillStyle = tok(CMD_COLOR[k]);
+        const inset = k === 1 || k === 2 ? 4 : 2;
+        g.fillRect(xa, y + inset, xb - xa, h - 2 * inset);
+        const bi = C.burst[i];
+        if (k === 0 && bi !== NONE && B.outcome[bi] === 3) { g.fillStyle = tok("--crit"); g.fillRect(xa, y + h - 3, Math.max(xb - xa, 2), 2); }
+        if (k === 0 && xb - xa > 40) { g.fillStyle = "#fff"; g.font = "10px " + tok("--font-data"); g.fillText("row " + C.row[i], xa + 3, y + h - 5); }
+      }
+    } else if (row.kind === "bus") {
+      for (const i of ref.bursts) {
+        const a = B.t_data0[i], b = Math.max(B.t_data1[i], a + minPx);
+        if (b < viewA || a > viewB) continue;
+        const xa = xOf(a, x0, w), xb = Math.max(xOf(b, x0, w), xa + 1);
+        g.fillStyle = tok(B.is_load[i] ? "--load" : "--store");
+        g.fillRect(xa, y + 3, xb - xa, h - 6);
+      }
+    } else if (row.kind === "dma-inflight") {
+      drawSteps(g, ref.inflight, x0, w, y, h, ref.cap, tok("--accent"));
+    } else if (row.kind === "dma-reqs") {
+      let lane = 0;
+      for (const i of ref.reqs) {
+        const a = Q.t_offered[i], b = Math.max(Q.t_retired[i], a + minPx);
+        if (b < viewA || a > viewB) { lane++; continue; }
+        const xa = xOf(a, x0, w), xb = Math.max(xOf(b, x0, w), xa + 1), sub = (lane++ % 4) * ((h - 4) / 4);
+        g.fillStyle = tok(Q.is_load[i] ? "--load" : "--store");
+        g.fillRect(xa, y + 2 + sub, xb - xa, Math.max(1, (h - 4) / 4 - 1));
+      }
+    } else if (row.kind === "buffer") {
+      drawSteps(g, ref.held, x0, w, y, h, ref.cap, tok("--store"));
+      // staged: a line over the area
+      g.strokeStyle = tok("--ink"); g.beginPath();
+      let started = false;
+      for (let i = 0; i < ref.staged.length; i++) {
+        const [t, v] = ref.staged[i], tn = i + 1 < ref.staged.length ? ref.staged[i + 1][0] : D.makespan;
+        if (tn < viewA || t > viewB) continue;
+        const yy = y + h - 1 - Math.min(1, v / Math.max(1, ref.cap)) * (h - 2);
+        if (!started) { g.moveTo(xOf(Math.max(t, viewA), x0, w), yy); started = true; } else g.lineTo(xOf(Math.max(t, viewA), x0, w), yy);
+        g.lineTo(xOf(Math.min(tn, viewB), x0, w), yy);
+      }
+      g.stroke();
+    } else if (row.kind === "port-load") {
+      drawSteps(g, ref.inflight, x0, w, y, h, 0, tok("--load"));
+      g.fillStyle = tok("--crit");
+      for (const [t] of ref.refuse) if (t >= viewA && t <= viewB) g.fillRect(xOf(t, x0, w), y + 1, 1, 4);
+    } else if (row.kind === "port-eject") {
+      g.fillStyle = tok("--store");
+      for (const [t] of ref.delivers) if (t >= viewA && t <= viewB) g.fillRect(xOf(t, x0, w), y + 3, 1, h - 6);
+      g.fillStyle = tok("--warn");
+      for (const [t] of ref.waits) if (t >= viewA && t <= viewB) g.fillRect(xOf(t, x0, w) - 1, y + 1, 3, 4);
+    }
+    g.restore();
+    laneHits.push({ y0: y, y1: y + h, row });
+    y += h;
+  }
+  // cursor
+  if (T >= viewA && T <= viewB) {
+    g.strokeStyle = tok("--crit"); g.lineWidth = 1;
+    const x = xOf(T, x0, w);
+    g.beginPath(); g.moveTo(x, AXIS_H); g.lineTo(x, y); g.stroke();
+  }
+  // drag selection
+  if (drag && drag.moved) {
+    g.fillStyle = "rgba(42,93,176,0.15)";
+    g.fillRect(Math.min(drag.x0, drag.x1), AXIS_H, Math.abs(drag.x1 - drag.x0), y - AXIS_H);
+  }
+  cv.dataset.x0 = x0; cv.dataset.w = w;
+}
+
+// ------------------------------------------------------------------ bandwidth over time
+function drawBandwidth() {
+  const cv = $("bw"), [g, W, H] = fit(cv, 150);
+  const x0 = 40, w = W - 44, y0 = 8, h = H - 30;
+  g.fillStyle = tok("--panel"); g.fillRect(0, 0, W, H);
+  // Bins of at least 8 cycles: a burst's data window is whole executor cycles (a 64 B burst
+  // over 3.75 cycles is recorded as 3 or 4), so finer bins show that rounding as spikes.
+  const B = R.B, bins = Math.max(1, Math.min(400, Math.floor(w / 2), Math.floor((viewB - viewA) / 8)));
+  const width = (viewB - viewA) / bins, rd = new Float64Array(bins), wr = new Float64Array(bins);
+  const bb = R.m.burst_bytes || 64;
+  for (let i = 0; i < B.rows; i++) {
+    const a = B.t_data0[i], b = B.t_data1[i];
+    if (!(b > a) || b < viewA || a > viewB) continue;
+    // spread the burst's bytes over its data window
+    const rate = bb / (b - a), arr = B.is_load[i] ? rd : wr;
+    for (let k = Math.max(0, Math.floor((a - viewA) / width)); k < bins && viewA + k * width < b; k++) {
+      const lo = Math.max(a, viewA + k * width), hi = Math.min(b, viewA + (k + 1) * width);
+      if (hi > lo) arr[k] += rate * (hi - lo);
+    }
+  }
+  const ceil = R.m.ceiling_bytes_per_cycle || 0;
+  let top = ceil * 1.1;
+  for (let k = 0; k < bins; k++) top = Math.max(top, (rd[k] + wr[k]) / width);
+  top = Math.max(top, 1);
+  const bw = w / bins;
+  for (let k = 0; k < bins; k++) {
+    const r = rd[k] / width / top * h, s = wr[k] / width / top * h;
+    g.fillStyle = tok("--load"); g.fillRect(x0 + k * bw, y0 + h - r, Math.max(1, bw - 0.3), r);
+    g.fillStyle = tok("--store"); g.fillRect(x0 + k * bw, y0 + h - r - s, Math.max(1, bw - 0.3), s);
+  }
+  if (ceil > 0) {
+    const y = y0 + h - ceil / top * h;
+    g.strokeStyle = tok("--crit"); g.setLineDash([4, 3]); g.beginPath(); g.moveTo(x0, y); g.lineTo(x0 + w, y); g.stroke(); g.setLineDash([]);
+  }
+  g.fillStyle = tok("--ink-3"); g.font = "11px " + tok("--font-data");
+  g.fillText(top.toFixed(0) + " B/c", 2, y0 + 9); g.fillText("0", 28, y0 + h);
+  drawAxis(g, x0, w, y0 + h + 2);
+  if (T >= viewA && T <= viewB) { g.strokeStyle = tok("--crit"); const x = xOf(T, x0, w); g.beginPath(); g.moveTo(x, y0); g.lineTo(x, y0 + h); g.stroke(); }
+  let bytes = 0;
+  for (let k = 0; k < bins; k++) bytes += rd[k] + wr[k];
+  const avg = bytes / (viewB - viewA);
+  $("bwNote").textContent = "in view: " + avg.toFixed(1) + " B/cycle" + (ceil ? " (" + (100 * avg / ceil).toFixed(0) + "% of " + ceil.toFixed(1) + ")" : "");
+}
+
+// ------------------------------------------------------------------ page outcomes by bank
+function drawPages() {
+  const cv = $("pages"), n = D.banks.length, [g, W] = fit(cv, 26 + n * 12);
+  g.fillStyle = tok("--panel"); g.fillRect(0, 0, W, 26 + n * 12);
+  const B = R.B, x0 = LABEL_W, w = W - LABEL_W - 130;
+  let maxN = 1;
+  const counts = D.banks.map(bk => { const c = [0, 0, 0, 0]; for (const i of bk.bursts) c[B.outcome[i]]++; maxN = Math.max(maxN, c[1] + c[2] + c[3]); return c; });
+  g.font = "11px " + tok("--font-data");
+  D.banks.forEach((bk, r) => {
+    const y = 4 + r * 12, c = counts[r];
+    g.fillStyle = tok("--ink-2"); g.fillText(bk.label, 6, y + 9);
+    let x = x0;
+    for (const [k, color] of [[1, "--act"], [2, "--rd"], [3, "--crit"]]) {
+      const ww = c[k] / maxN * w; g.fillStyle = tok(color); g.fillRect(x, y + 1, ww, 9); x += ww;
+    }
+    const total = c[1] + c[2] + c[3];
+    if (total) { g.fillStyle = tok("--ink-3"); g.fillText(total + (c[3] ? "  " + (100 * c[3] / total).toFixed(0) + "% conflict" : ""), x + 4, y + 9); }
+  });
+}
+
+// ------------------------------------------------------------------ address heat map
+let heatCells = null;
+function drawHeat() {
+  const cv = $("heat"), [g, W, H] = fit(cv, 260);
+  g.fillStyle = tok("--panel"); g.fillRect(0, 0, W, H);
+  const B = R.B, n = D.banks.length, mode = $("heatMode").value;
+  const inView = [];
+  for (let i = 0; i < B.rows; i++) if (B.t_submit[i] <= viewB && B.t_done[i] >= viewA) inView.push(i);
+  if (!inView.length || !n) { $("heatNote").textContent = "no bursts in view"; heatCells = null; return; }
+  // The rows the bursts in view use, in order; a run touches few rows over a wide range, so the
+  // map's vertical axis is those rows (bucketed when there are more than 48), not the range.
+  const used = [...new Set(inView.map(i => B.row[i]))].sort((a, b) => a - b);
+  const ordinal = new Map(used.map((r, k) => [r, k]));
+  const rowsN = Math.min(48, used.length), span = used.length / rowsN;
+  const bankIdx = new Map(D.banks.map((bk, i) => [bk.key, i]));
+  const cnt = new Float64Array(n * rowsN), conf = new Float64Array(n * rowsN), hit = new Float64Array(n * rowsN);
+  for (const i of inView) {
+    const b = bankIdx.get([B.mc[i], B.channel[i], B.bank_group[i], B.bank[i]].join("."));
+    if (b === undefined) continue;
+    const r = Math.min(rowsN - 1, Math.floor(ordinal.get(B.row[i]) / span)), c = b * rowsN + r;
+    cnt[c]++; if (B.outcome[i] === 3) conf[c]++; if (B.outcome[i] === 1) hit[c]++;
+  }
+  const val = c => mode === "count" ? cnt[c] : mode === "conflict" ? conf[c] : (cnt[c] ? hit[c] / cnt[c] : -1);
+  let vmax = 0;
+  for (let c = 0; c < cnt.length; c++) vmax = Math.max(vmax, val(c));
+  const x0 = 44, y0 = 4, cw = (W - x0 - 4) / n, ch = (H - y0 - 22) / rowsN;
+  const lo3 = tok("--seq-lo"), hi3 = tok("--seq-hi");
+  const mix = f => { const p = s => [1, 3, 5].map(j => parseInt(s.slice(j, j + 2), 16)); const a = p(lo3), b = p(hi3); return "rgb(" + a.map((x, j) => Math.round(x + (b[j] - x) * f)).join(",") + ")"; };
+  for (let b = 0; b < n; b++) for (let r = 0; r < rowsN; r++) {
+    const v = val(b * rowsN + r);
+    if (cnt[b * rowsN + r] === 0) continue;
+    g.fillStyle = mix(vmax > 0 ? Math.max(0, v) / vmax : 0);
+    g.fillRect(x0 + b * cw, y0 + (rowsN - 1 - r) * ch, Math.max(1, cw - 0.5), Math.max(1, ch - 0.5));
+  }
+  g.fillStyle = tok("--ink-3"); g.font = "10px " + tok("--font-data");
+  g.fillText("row " + used[0], 2, H - 20); g.fillText("row " + used[used.length - 1], 2, y0 + 9);
+  g.fillText("banks: " + D.banks[0].label + " .. " + D.banks[n - 1].label, x0, H - 6);
+  heatCells = { x0, y0, cw, ch, rowsN, used, span, n, cnt, conf, hit };
+  $("heatNote").textContent = inView.length + " bursts in view, " + used.length + " rows; " + (mode === "hit" ? "colour = hit rate" : "colour = " + mode + ", max " + vmax);
+}
+
+// ------------------------------------------------------------------ observations
+function drawObs() {
+  const B = R.B, Q = R.Q, out = [];
+  for (const e of D.engines) {
+    const peak = stepMax(e.inflight);
+    if (peak > e.cap) out.push(["crit", "dma[" + e.e + "] had " + peak + " bursts in flight, over its window of " + e.cap]);
+  }
+  for (const b of D.buffers) {
+    const peak = stepMax(b.held);
+    if (peak > b.cap) out.push(["crit", "dmabuf[" + b.e + "] held " + peak + " slots, over its " + b.cap]);
+  }
+  const fullW = D.engines.filter(e => stepMax(e.inflight) === e.cap).length;
+  out.push(["", fullW + " of " + D.engines.length + " engines filled their window of " + (D.engines[0] ? D.engines[0].cap : "?") + " bursts at some point"]);
+  let refusals = 0, waits = 0;
+  for (const p of D.ports) { refusals += p.refuse.length; waits += p.waits.length; }
+  if (refusals) out.push(["warn", refusals + " load offers refused by a full port input queue (back-pressure)"]);
+  if (waits) out.push(["warn", waits + " ejections waited for a store-buffer slot"]);
+  const total = D.outcomes[1] + D.outcomes[2] + D.outcomes[3];
+  if (total) out.push(["", "page outcomes: " + (100 * D.outcomes[1] / total).toFixed(1) + "% hit, " + (100 * D.outcomes[2] / total).toFixed(1) + "% empty, " + (100 * D.outcomes[3] / total).toFixed(1) + "% conflict"]);
+  const worst = D.banks.map(bk => { let c = 0; for (const i of bk.bursts) c += B.outcome[i] === 3; return [c, bk.label, bk.bursts.length]; }).sort((a, b) => b[0] - a[0]).slice(0, 3).filter(x => x[0] > 0);
+  if (worst.length) out.push(["", "most conflicts: " + worst.map(([c, l, n]) => l + " " + c + "/" + n).join(", ")]);
+  let worstLat = 0, worstReq = -1;
+  for (let i = 0; i < Q.rows; i++) { const l = Q.t_retired[i] - Q.t_offered[i]; if (l > worstLat) { worstLat = l; worstReq = i; } }
+  if (worstReq >= 0) out.push(["", "longest request: #" + worstReq + " (" + (Q.is_load[worstReq] ? "load" : "store") + ", engine " + Q.engine[worstReq] + ") took " + fmt(worstLat) + " cycles"]);
+  $("obs").innerHTML = out.map(([s, t]) => "<li" + (s ? " style=\"color:var(--" + (s === "crit" ? "crit" : "ink") + ")\"" : "") + ">" + (s === "warn" ? "⚠ " : s === "crit" ? "✖ " : "") + t + "</li>").join("");
+}
+
+// ------------------------------------------------------------------ inspector
+const kv = pairs => "<div class=\"kv\">" + pairs.map(p => p.length === 1 ? "<div class=\"h\">" + p[0] + "</div>" : "<span>" + p[0] + "</span><span>" + p[1] + "</span>").join("") + "</div>";
+function burstPairs(i) {
+  const B = R.B;
+  return [["burst #" + i], ["coords", "mc " + B.mc[i] + " ch " + B.channel[i] + " bg " + B.bank_group[i] + " ba " + B.bank[i] + " row " + B.row[i] + " col " + B.col[i]],
+    ["kind", B.is_load[i] ? "read" : "write"], ["page", OUTCOME[B.outcome[i]]], ["engine", B.engine[i]],
+    ["submitted", fmt(B.t_submit[i])], ["first command", fmt(B.t_cmd[i])], ["data", fmt(B.t_data0[i]) + " .. " + fmt(B.t_data1[i])], ["done", fmt(B.t_done[i])],
+    ["queued", fmt(B.t_cmd[i] - B.t_submit[i]) + " cycles before its first command"]];
+}
+function requestPairs(q) {
+  const Q = R.Q, bs = D.burstsOf.get(q) || [], oc = [0, 0, 0, 0];
+  for (const i of bs) oc[R.B.outcome[i]]++;
+  return [["request #" + q], ["kind", Q.is_load[q] ? "load (DMA read toward L3)" : "store (ejection written to DRAM)"], ["engine / port", Q.engine[q] + " / " + Q.port[q]],
+    ["address", "0x" + Q.address[q].toString(16) + " (" + fmt(Q.bytes[q]) + " B, " + bs.length + " bursts)"],
+    ["offered", fmt(Q.t_offered[q])], [Q.is_load[q] ? "L3 credit" : "buffer slot", fmt(Q.t_credit[q])], ["first burst", fmt(Q.t_first[q])], ["last burst", fmt(Q.t_last[q])], ["retired", fmt(Q.t_retired[q])],
+    ["latency", fmt(Q.t_retired[q] - Q.t_offered[q]) + " cycles"], ["page outcomes", oc[1] + " hit, " + oc[2] + " empty, " + oc[3] + " conflict"]];
+}
+function chainHtml(bi) {
+  const C = R.C, cs = (D.cmdsOf.get(bi) || []).slice().sort((a, b) => C.t_issue[a] - C.t_issue[b]);
+  return "<div class=\"chain\">" + cs.map(i => fmt(C.t_issue[i]) + "  " + CMD[C.kind[i]].padEnd(3) + "  row " + C.row[i] + (C.t_data1[i] > C.t_data0[i] ? "  data " + fmt(C.t_data0[i]) + ".." + fmt(C.t_data1[i]) : "")).join("<br>") + "</div>";
+}
+function inspectCommand(i) {
+  const C = R.C, bi = C.burst[i];
+  let html = kv([["command #" + i], ["kind", CMD[C.kind[i]]], ["bank", "mc " + C.mc[i] + " ch " + C.channel[i] + " bg " + C.bank_group[i] + " ba " + C.bank[i]], ["row", C.row[i]], ["issue .. end", fmt(C.t_issue[i]) + " .. " + fmt(C.t_end[i])]]);
+  if (bi !== NONE) {
+    html += kv(burstPairs(bi)) + "<h2>its command chain</h2>" + chainHtml(bi);
+    const q = R.B.request[bi]; if (q !== NONE) html += kv(requestPairs(q));
+  } else html += "<p class=\"note\">" + (C.kind[i] === 4 ? "a refresh serves no burst" : "no burst recorded for this command") + "</p>";
+  $("insp").innerHTML = html;
+}
+function inspectBurst(i) {
+  let html = kv(burstPairs(i)) + "<h2>command chain</h2>" + chainHtml(i);
+  const q = R.B.request[i]; if (q !== NONE) html += kv(requestPairs(q));
+  $("insp").innerHTML = html;
+}
+function inspectRequest(q) { $("insp").innerHTML = kv(requestPairs(q)); }
+function nearest(list, t, start, end) {
+  let best = -1, bd = Infinity;
+  for (const i of list) { const a = start(i), b = end(i), d = t < a ? a - t : t > b ? t - b : 0; if (d < bd) { bd = d; best = i; } }
+  return [best, bd];
+}
+function pick(row, t, tol) {
+  const B = R.B, C = R.C, Q = R.Q, ref = row.ref;
+  if (row.kind === "bank") { const [i, d] = nearest(ref.cmds, t, i => C.t_issue[i], i => C.t_end[i]); if (i >= 0 && d <= tol) return () => inspectCommand(i); }
+  if (row.kind === "bus") { const [i, d] = nearest(ref.bursts, t, i => B.t_data0[i], i => B.t_data1[i]); if (i >= 0 && d <= tol) return () => inspectBurst(i); }
+  if (row.kind === "dma-reqs" || row.kind === "dma-inflight") {
+    const [i, d] = nearest(ref.reqs, t, i => Q.t_offered[i], i => Q.t_retired[i]);
+    if (i >= 0 && d <= tol) return () => inspectRequest(i);
+  }
+  if (row.kind === "buffer") return () => { $("insp").innerHTML = kv([["dmabuf[" + ref.e + "] at cycle " + fmt(t)], ["held", valueAt(ref.held, t) + " of " + ref.cap], ["staged (delivered, not yet writing)", valueAt(ref.staged, t)]]); };
+  if (row.kind === "port-load" || row.kind === "port-eject") {
+    const evs = row.kind === "port-load" ? ref.loads.map(([a, b, q]) => [a, b, q]) : ref.waits.concat(ref.delivers).map(([a, q]) => [a, a, q]);
+    let best = null, bd = Infinity;
+    for (const [a, b, q] of evs) { const d = t < a ? a - t : t > b ? t - b : 0; if (d < bd) { bd = d; best = q; } }
+    if (best !== null && bd <= tol) return () => inspectRequest(best);
+  }
+  return null;
+}
+
+// ------------------------------------------------------------------ interaction
+let drag = null;
+const lanes = $("lanes");
+function laneAt(y) { return laneHits.find(h => y >= h.y0 && y < h.y1); }
+lanes.addEventListener("mousedown", e => {
+  const r = lanes.getBoundingClientRect(), x = e.clientX - r.left;
+  if (x >= Number(lanes.dataset.x0)) drag = { x0: x, x1: x, moved: false };
+});
+lanes.addEventListener("mousemove", e => {
+  const r = lanes.getBoundingClientRect(), x = e.clientX - r.left, y = e.clientY - r.top;
+  if (drag) { drag.x1 = x; drag.moved = Math.abs(drag.x1 - drag.x0) > 4; if (drag.moved) drawLanes(); return; }
+  const x0 = Number(lanes.dataset.x0), w = Number(lanes.dataset.w), hit = laneAt(y), tip = $("tip");
+  if (!hit || hit.row.header || x < x0) { tip.hidden = true; return; }
+  const t = tOf(x, x0, w);
+  tip.textContent = hit.row.label + "\ncycle " + fmt(Math.round(t)) + tipText(hit.row, t);
+  tip.style.left = (e.clientX + 14) + "px"; tip.style.top = (e.clientY + 10) + "px"; tip.hidden = false;
+});
+lanes.addEventListener("mouseleave", () => { $("tip").hidden = true; });
+window.addEventListener("mouseup", e => {
+  if (!drag) return;
+  const d = drag; drag = null;
+  const x0 = Number(lanes.dataset.x0), w = Number(lanes.dataset.w);
+  if (d.moved) { setView(tOf(Math.min(d.x0, d.x1), x0, w), tOf(Math.max(d.x0, d.x1), x0, w)); return; }
+  const r = lanes.getBoundingClientRect(), hit = laneAt(e.clientY - r.top);
+  const t = tOf(d.x0, x0, w);
+  if (hit && !hit.row.header) { const f = pick(hit.row, t, (viewB - viewA) / w * 4); if (f) f(); }
+  setCursor(t);
+});
+lanes.addEventListener("click", e => {
+  const r = lanes.getBoundingClientRect(), hit = laneAt(e.clientY - r.top);
+  if (hit && hit.row.header && e.clientX - r.left < LABEL_W) {
+    folded.has(hit.row.name) ? folded.delete(hit.row.name) : folded.add(hit.row.name);
+    buildRows(); drawLanes();
+  }
+});
+function tipText(row, t) {
+  const ref = row.ref;
+  if (row.kind === "dma-inflight") return "\nbursts in flight " + valueAt(ref.inflight, t) + " / " + ref.cap;
+  if (row.kind === "buffer") return "\nheld " + valueAt(ref.held, t) + " / " + ref.cap + ", staged " + valueAt(ref.staged, t);
+  if (row.kind === "port-load") return "\nloads crossing or queued " + valueAt(ref.inflight, t);
+  if (row.kind === "bank") {
+    const C = R.C; let open = null;
+    for (const i of ref.cmds) { if (C.t_issue[i] > t) break; if (C.kind[i] === 0) open = C.row[i]; if (C.kind[i] === 3 || C.kind[i] === 4) open = null; }
+    return "\nopen row " + (open === null ? "none" : open);
+  }
+  return "";
+}
+lanes.addEventListener("wheel", e => {
+  e.preventDefault();
+  const r = lanes.getBoundingClientRect(), x0 = Number(lanes.dataset.x0), w = Number(lanes.dataset.w);
+  const t = tOf(Math.max(x0, e.clientX - r.left), x0, w), f = e.deltaY < 0 ? 0.6 : 1 / 0.6;
+  setView(t - (t - viewA) * f, t + (viewB - t) * f);
+}, { passive: false });
+$("heat").addEventListener("click", e => {
+  if (!heatCells) return;
+  const r = $("heat").getBoundingClientRect(), H = heatCells;
+  const b = Math.floor((e.clientX - r.left - H.x0) / H.cw), rr = H.rowsN - 1 - Math.floor((e.clientY - r.top - H.y0) / H.ch);
+  if (b < 0 || b >= H.n || rr < 0 || rr >= H.rowsN) return;
+  const c = b * H.rowsN + rr, rows = H.used.slice(Math.ceil(rr * H.span), Math.ceil((rr + 1) * H.span));
+  $("insp").innerHTML = kv([[D.banks[b].label + ", row" + (rows.length > 1 ? "s " + rows[0] + ".." + rows[rows.length - 1] : " " + rows[0]) + " (bursts in view)"], ["bursts", H.cnt[c]], ["page hits", H.hit[c]], ["conflicts", H.conf[c]]]);
+});
+$("heatMode").addEventListener("change", drawHeat);
+$("scrub").addEventListener("input", e => setCursor(Number(e.target.value)));
+$("zoomOut").addEventListener("click", () => { const c = (viewA + viewB) / 2, s = (viewB - viewA); setView(c - s, c + s); });
+$("zoomBack").addEventListener("click", () => { if (zoomStack.length) { const [a, b] = zoomStack.pop(); setView(a, b, false); } });
+$("resetZoom").addEventListener("click", () => setView(0, D.makespan));
+window.addEventListener("keydown", e => {
+  if (!D || e.target.tagName === "INPUT" || e.target.tagName === "SELECT") return;
+  if (e.key === "-") $("zoomOut").click();
+  else if (e.key === "Backspace") { e.preventDefault(); $("zoomBack").click(); }
+  else if (e.key === "0") $("resetZoom").click();
+});
+$("play").addEventListener("click", () => {
+  playing = !playing; $("play").textContent = playing ? "Pause" : "Play";
+  if (!playing) return;
+  let last = performance.now();
+  const tick = now => {
+    if (!playing) return;
+    const dt = now - last; last = now;
+    let t = T + (viewB - viewA) * dt / 8000;     // the view in eight seconds
+    if (t >= viewB) { t = viewB; playing = false; $("play").textContent = "Play"; }
+    setCursor(t);
+    if (playing) requestAnimationFrame(tick);
+  };
+  requestAnimationFrame(tick);
+});
+window.addEventListener("resize", () => { if (D) drawAll(); });
+if (window.matchMedia) window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => { if (D) drawAll(); });
+
+// ------------------------------------------------------------------ start
+function drawAll() { drawBandwidth(); drawLanes(); drawHeat(); }
+function start() {
+  prepare();
+  $("load").hidden = true; $("main").hidden = false;
+  const m = R.m, ceil = m.ceiling_bytes_per_cycle || 0, bpc = D.bytes / D.makespan;
+  const chip = (k, v) => "<span class=\"chip\">" + k + " <b>" + v + "</b></span>";
+  $("summary").innerHTML = [
+    chip("device", m.device), chip("makespan", fmt(m.makespan) + " cycles"), chip("requests", fmt(R.Q.rows)),
+    chip("bytes", fmt(D.bytes)), chip("bandwidth", bpc.toFixed(1) + " B/cycle" + (ceil ? " (" + (100 * bpc / ceil).toFixed(0) + "% of " + ceil.toFixed(1) + ")" : "")),
+    chip("window", m.window + " bursts/engine"), chip("bursts", fmt(R.B.rows)), chip("commands", fmt(R.C.rows)),
+    chip("hit / empty / conflict", D.outcomes[1] + " / " + D.outcomes[2] + " / " + D.outcomes[3]),
+    chip("engines", D.engines.length), chip("ports", D.ports.length), chip("banks", D.banks.length)].join("");
+  $("timingNote").textContent = m.timing_note ? "DRAM timing: " + m.timing_note : "";
+  $("scrub").max = D.makespan;
+  viewA = 0; viewB = D.makespan;
+  drawObs(); drawPages();
+  setCursor(0);
+}
+
+// An embedded bundle (pack.py) loads at once.
+if (window.MFLOW_EMBED) {
+  const E = window.MFLOW_EMBED, files = { "manifest.json": E.manifest };
+  if (E.lod) files["lod.json"] = E.lod;
+  for (const [k, v] of Object.entries(E.bins)) files[k] = b64(v);
+  loadFrom(files);
+}
+
+// For tests (test_viewer.py runs these under Node): the pure helpers.
+if (typeof module !== "undefined") module.exports = { stepSeries, valueAt, stepMax, parseIdx };
+})();
+</script>
+</body>
+</html>

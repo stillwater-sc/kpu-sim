@@ -307,6 +307,17 @@ public:
     std::size_t engines() const { return dmas_.size(); }
     unsigned port_of(std::size_t engine) const { return engine_port_.at(engine); }
     const CreditPool& l3_credits() const { return *l3_credits_; }
+    // Every controller's data buses at full rate, in bytes per executor cycle: channels x width x
+    // data rate, over the executor clock.
+    double ceiling_bytes_per_cycle() const {
+        double total = 0;
+        for (const auto& mc : mcs_) {
+            const auto& h = *mc->config().hosted;
+            total += static_cast<double>(h.map.channels()) * (h.channel_width_bits / 8.0) *
+                     h.data_rate_mtps * 1e6 / (mc->config().clock_ghz * 1e9);
+        }
+        return total;
+    }
     std::uint64_t bytes_moved() const {
         std::uint64_t n = 0;
         for (const auto& r : requests_) if (r.done) n += r.bytes;
@@ -524,8 +535,11 @@ inline program::record::MemoryFlowRecord to_record(const MemorySideHarness& h, c
     rec.device = device;
     rec.makespan = h.now();
     rec.window = static_cast<std::uint32_t>(h.window());
-    if (!h.controllers().empty() && h.controllers().front()->bridge())
+    if (!h.controllers().empty() && h.controllers().front()->bridge()) {
         rec.timing_note = h.controllers().front()->bridge()->timing_note();
+        rec.burst_bytes = static_cast<std::uint32_t>(h.controllers().front()->burst_bytes());
+    }
+    rec.ceiling_bytes_per_cycle = h.ceiling_bytes_per_cycle();
 
     // Stations: banks, buses, engines, store buffers, ports (memory_flow_record.hpp).
     for (std::size_t m = 0; m < h.controllers().size(); ++m) {

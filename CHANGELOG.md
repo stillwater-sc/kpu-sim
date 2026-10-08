@@ -9,6 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The memory-side debugger page (memory-side debugger step 5,
+  `tools/visualization/memflow/`).**
+  - A static page in the tile-flow viewer's style. It loads a `.mflow` bundle from its folder,
+    or embedded by `pack.py`.
+  - It shows bandwidth over time against the DRAM ceiling, and swimlanes on one cursor and zoom:
+    port stubs, DMA engines (bursts in flight against W, request lifetimes), store buffers,
+    channel data buses, and every DRAM command per bank.
+  - It also has an address heat map of the bursts in view, page outcomes by bank, observations,
+    and an inspector from a command to its burst, command chain and request.
+  - The `.mflow` manifest now carries `ceiling_bytes_per_cycle` and `burst_bytes`. Version 1
+    stands, because readers default both.
+  - New ctest `memflow_viewer_smoke`.
+
 - **The `.mflow` record and `kpu-memsim` (memory-side debugger step 3; DRAM plan step 4).**
   - `kpu-memsim --deploy <spec> --scenario <json> --out <dir>` runs the memory side with stubbed
     ports, writes a `.mflow` bundle, and prints bandwidth against the DRAM ceiling.

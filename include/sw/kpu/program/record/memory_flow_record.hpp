@@ -79,6 +79,8 @@ struct MemoryFlowRecord {
     Cycle makespan = 0;
     std::uint32_t window = 0;               // bursts per engine
     std::string timing_note;                // the DRAM timing table's provenance
+    double ceiling_bytes_per_cycle = 0;     // every controller's data buses at full rate (0 = unknown)
+    std::uint32_t burst_bytes = 0;          // one DRAM burst
     std::vector<Station> stations;
     std::vector<Burst> bursts;
     std::vector<Command> commands;

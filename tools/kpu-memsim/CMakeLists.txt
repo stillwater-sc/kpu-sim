@@ -73,4 +73,15 @@ if(KPU_BUILD_TESTS)
     )
     set_tests_properties(kpu_memsim_t4 kpu_memsim_rejects_bad_scenario kpu_memsim_unfinished
         kpu_memsim_rejects_bad_device PROPERTIES LABELS "memside;dram;tools")
+
+    # The debugger (plan step 5): pack the T4 run, refuse a non-bundle, parse the script and
+    # run its reader over the bundle.
+    find_program(KPU_PYTHON3 NAMES python3 python)
+    if(KPU_PYTHON3)
+        add_test(NAME memflow_viewer_smoke
+            COMMAND ${KPU_PYTHON3} ${CMAKE_SOURCE_DIR}/tools/visualization/memflow/test_viewer.py
+                    ${CMAKE_CURRENT_BINARY_DIR}/t4_mixed.mflow)
+        set_tests_properties(memflow_viewer_smoke PROPERTIES DEPENDS kpu_memsim_t4
+            LABELS "memside;dram;tools")
+    endif()
 endif()
