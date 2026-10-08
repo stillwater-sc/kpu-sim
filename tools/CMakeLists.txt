@@ -103,6 +103,7 @@ add_subdirectory(kpu-run)
 # Floorplan — the physical shape of a deployment (#286 step 1)
 # ============================================================================
 add_subdirectory(floorplan)
+add_subdirectory(kpu-memsim)
 
 # ============================================================================
 # Legacy C++ tools (deprecated - to be migrated)

@@ -42,6 +42,7 @@
 
 #include <cstdint>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace sw::kpu::program::record {
@@ -69,6 +70,13 @@ struct Lod {
 // Build the pyramid. The finest stored level is the smallest k whose bin count fits
 // `max_base_bins`; finer zoom reads the raw events instead.
 Lod build_lod(const TileFlowRecord& rec, std::uint64_t max_base_bins = 4096);
+
+// The same pyramid over any rows: row r's occupancy is the overlap of `intervals[r]` (half-open
+// [t0, t1)) plus `constants[r]` throughout. build_lod is this over a .tflow's stations and
+// mover pools; the .mflow record uses it over banks, buses, engines, buffers and ports.
+Lod build_lod_rows(std::vector<LodRow> rows, const std::vector<std::vector<std::pair<Cycle, Cycle>>>& intervals,
+                   const std::vector<std::uint32_t>& constants, Cycle makespan,
+                   std::uint64_t max_base_bins = 4096);
 
 // The next level up: each bin the merge of two children (sum, max, sum).
 LodLevel merge_level(const LodLevel& child, std::size_t rows);

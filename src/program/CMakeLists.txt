@@ -48,6 +48,7 @@ add_library(kpu_program
     dram_bridge.cpp
     tile_flow_record.cpp
     tile_flow_lod.cpp
+    memory_flow_record.cpp
     ${KPU_LOADABLE_GEN_HDR}
 )
 add_dependencies(kpu_program kpu_loadable_schema)

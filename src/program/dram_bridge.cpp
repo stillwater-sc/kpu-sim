@@ -88,6 +88,10 @@ struct DramBridge::Impl {
     // opener, and comes after the opener's burst has completed, so an opener's tag is kept until
     // that precharge is observed; every other request's is dropped when its burst completes.
     std::unordered_set<std::uint64_t> openers;
+    // Openers whose burst has completed: their tag is dropped at the precharge. An opener still
+    // pending when its row is closed (FR-FCFS may close a row for a starved request before the
+    // opener's CAS) keeps its tag: it will open the row again and its commands still name it.
+    std::unordered_set<std::uint64_t> completed_openers;
 
     std::uint64_t native(const DramCoord& c, unsigned flat_bank) const {
         // The controller's own layout: [row | bank | col | channel | 64-byte offset].
@@ -152,9 +156,9 @@ DramBridge::DramBridge(const DramHosting& h, unsigned controller_id, double exec
             if (r.kind == K::Activate) {
                 impl_->openers.insert(r.request_id);
             } else if (r.kind == K::Precharge) {
-                // The row is closed: its opener is done with.
+                // The row is closed. Its opener's tag goes only if that burst has completed.
                 impl_->openers.erase(r.request_id);
-                impl_->tag_of.erase(r.request_id);
+                if (impl_->completed_openers.erase(r.request_id)) impl_->tag_of.erase(r.request_id);
             }
         }
         cmd.activated = r.activated;
@@ -187,7 +191,9 @@ bool DramBridge::submit(std::uint64_t address, bool is_load, std::uint64_t tag) 
     auto cb = [&done, tag, impl, slot] {
         done.push_back(tag);
         // An opener's tag outlives its burst: the precharge that closes its row names it.
-        if (impl && !impl->openers.count(*slot)) impl->tag_of.erase(*slot);
+        if (!impl) return;
+        if (impl->openers.count(*slot)) impl->completed_openers.insert(*slot);
+        else impl->tag_of.erase(*slot);
     };
     const auto id = is_load ? impl_->mc->submit_read(a, hosting_.map.burst_bytes(), cb)
                             : impl_->mc->submit_write(a, nullptr, hosting_.map.burst_bytes(), cb);
@@ -218,6 +224,7 @@ void DramBridge::reset() {
     impl_->bursts = impl_->misrouted = 0;
     impl_->tag_of.clear();
     impl_->openers.clear();
+    impl_->completed_openers.clear();
 }
 
 void DramBridge::set_command_sink(std::function<void(const Command&)> sink) {

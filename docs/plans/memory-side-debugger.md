@@ -1,7 +1,7 @@
 # Memory-Side Debugger: DRAM, Controllers, DMA Engines and Buffers, Outside the NoC
 
 **Date:** 2026-10-08
-**Status:** Q1-Q5 decided 2026-10-08 (all as recommended); step 1 done
+**Status:** Q1-Q5 decided 2026-10-08 (all as recommended); steps 1-3 done
 **Related:**
 - `docs/plans/dram-bank-model.md`: this plan carries its step 4 (per-bank record, TF10/TF11) and
   step 6 (viewer DRAM panel).
@@ -242,6 +242,29 @@ Each step is one PR and ends green.
    - The `.mflow` writer and reader, and LOD rows for the new kinds.
    - `kpu-memsim scenario.json --out`.
    - A checked-in T4 scenario and its ctests.
+   (Done.)
+   - **The record,** `record/memory_flow_record.hpp` with `src/program/memory_flow_record.cpp`.
+     `MemoryFlowRecord` holds the stations and five tables. `write_mflow` and `read_mflow` check
+     the format, the version, and every index.
+   - **Shared container code:** `record/columnar.hpp`, now used by `.tflow` as well (the
+     columnar tables and the 2^53 exact-time limit).
+   - **The pyramid:** `build_lod_rows`, the generic pyramid. `build_lod` (`.tflow`) is a thin
+     wrapper over it, and its output is unchanged.
+   - **Conversion:** `memside::to_record(harness, device)`. Each command is tied to its burst
+     row, and each burst to its request.
+   - **The tool:** `kpu-memsim --deploy --scenario --out`. Scenarios are strict JSON, and
+     `replay_matmul` replays a matmul schedule. It prints bandwidth against the ceiling, bursts
+     by outcome, commands, refusals and ejection waits. Exit codes: 0 ok, 1 unfinished, 2 bad
+     input.
+   - **Fixture:** `tests/memside/t4_mixed.json`, with three ctests. On the T4 it reaches 90% of
+     the ceiling across 6,400 bursts.
+   - **Found while building it:**
+     - The record's integrity check caught step 1 dropping a pending opener's tag. FR-FCFS can
+       close a row before its opener's CAS. Fixed: the precharge erases an opener's tag only once
+       its burst has completed.
+     - Ejection waits were logged every cycle (52,644 events in the T4 scenario). They are now
+       logged once per ejection.
+
 4. **Checker.** `mflow_check.py` with TF10, TF11 and M1-M5, plus a self-test.
 5. **Viewer.** The memflow page: banks, channels, engines, buffers, ports, the address view, the
    inspector, and a smoke test.

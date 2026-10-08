@@ -1,0 +1,1 @@
+{ "window": 32, "streams": [ { "port": "first", "model": { "kind": "stream", "count": 1, "bogus": 3 } } ] }

@@ -7,6 +7,7 @@
 // Copyright (c) 2024-2025 Stillwater Supercomputing, Inc.
 // ============================================================================
 #include <sw/kpu/program/record/tile_flow_record.hpp>
+#include <sw/kpu/program/record/columnar.hpp>
 #include <sw/kpu/program/record/tile_flow_lod.hpp>
 
 #include <sw/kpu/program/platform/deployment_json.hpp>
@@ -29,7 +30,7 @@ namespace {
 using json = nlohmann::ordered_json;
 
 // The largest cycle an f64 time column holds exactly (every integer up to 2^53 is exact).
-constexpr Cycle kMaxExactCycle = (Cycle{1} << 53);
+using columnar::kMaxExactCycle;
 
 std::string pooled_name(const std::string& dev, const char* kind) {
     return dev + "/" + kind + "[*]";
@@ -229,54 +230,7 @@ std::uint64_t peak_l3_occupancy(const TileFlowRecord& rec) {
 // ============================================================================
 // The bundle
 // ============================================================================
-namespace {
-
-// A columnar table under construction: each column a contiguous little-endian array, padded
-// to 8 bytes, so the viewer can view it as a typed array without copying.
-struct Table {
-    std::string name, file;
-    std::size_t rows = 0;
-    struct Col { std::string name, dtype; std::string bytes; };
-    std::vector<Col> cols;
-
-    template <class T> void put(const std::string& col, const std::string& dtype, const std::vector<T>& v) {
-        Col c{col, dtype, {}};
-        c.bytes.resize(v.size() * sizeof(T));
-        if (!v.empty()) std::memcpy(c.bytes.data(), v.data(), c.bytes.size());   // host is LE: asserted below
-        cols.push_back(std::move(c));
-    }
-};
-
-static_assert(sizeof(double) == 8, "f64 columns");
-
-bool little_endian() {
-    const std::uint16_t x = 1;
-    unsigned char b = 0;
-    std::memcpy(&b, &x, 1);
-    return b == 1;
-}
-
-json write_table(const Table& t, const std::string& dir) {
-    std::string blob;
-    json cols = json::array();
-    for (const Table::Col& c : t.cols) {
-        while (blob.size() % 8) blob.push_back('\0');
-        cols.push_back(json{{"name", c.name}, {"dtype", c.dtype}, {"offset", blob.size()}});
-        blob += c.bytes;
-    }
-    std::ofstream out(dir + "/" + t.file, std::ios::binary);
-    out << blob;
-    if (!out) throw RecordError("record: cannot write " + dir + "/" + t.file);
-    return json{{"file", t.file}, {"rows", t.rows}, {"columns", cols}};
-}
-
-std::vector<double> times(const std::vector<Cycle>& v) {
-    std::vector<double> out(v.size());
-    for (std::size_t i = 0; i < v.size(); ++i) out[i] = static_cast<double>(v[i]);
-    return out;
-}
-
-} // namespace
+using namespace columnar;
 
 void write_tflow(const TileFlowRecord& rec, const std::string& dir) {
     if (!little_endian()) throw RecordError("record: the .tflow writer assumes a little-endian host");
@@ -393,37 +347,6 @@ void write_tflow(const TileFlowRecord& rec, const std::string& dir) {
     write_lod(build_lod(rec), dir);
 }
 
-namespace {
-
-std::string slurp(const std::string& path) {
-    std::ifstream in(path, std::ios::binary);
-    if (!in) throw RecordError("record: cannot read " + path);
-    std::ostringstream ss;
-    ss << in.rdbuf();
-    return ss.str();
-}
-
-template <class T>
-std::vector<T> read_col(const json& table, const std::string& blob, const std::string& name,
-                        const char* dtype, std::size_t count) {
-    for (const json& c : table.at("columns")) {
-        if (c.at("name").get<std::string>() != name) continue;
-        if (c.at("dtype").get<std::string>() != dtype)
-            throw RecordError("record: column " + name + " is " + c.at("dtype").get<std::string>() +
-                              ", expected " + dtype);
-        const std::size_t off = c.at("offset").get<std::size_t>();
-        // Checked without arithmetic that can overflow: a hostile offset or row count must
-        // fail here, not wrap around and pass.
-        if (off > blob.size() || count > (blob.size() - off) / sizeof(T))
-            throw RecordError("record: column " + name + " runs past the end of its file");
-        std::vector<T> v(count);
-        if (count) std::memcpy(v.data(), blob.data() + off, count * sizeof(T));
-        return v;
-    }
-    throw RecordError("record: no column " + name);
-}
-
-} // namespace
 
 TileFlowRecord read_tflow(const std::string& dir) {
     json m;

@@ -85,53 +85,65 @@ LodLevel merge_level(const LodLevel& c, std::size_t rows) {
     return p;
 }
 
-Lod build_lod(const TileFlowRecord& rec, std::uint64_t max_base_bins) {
+Lod build_lod_rows(std::vector<LodRow> rows, const std::vector<std::vector<Interval>>& intervals,
+                   const std::vector<std::uint32_t>& constants, Cycle makespan,
+                   std::uint64_t max_base_bins) {
     if (max_base_bins == 0) throw RecordError("lod: max_base_bins must be positive");
+    if (intervals.size() != rows.size() || constants.size() != rows.size())
+        throw RecordError("lod: one interval list and one constant per row");
     Lod lod;
-    for (const Station& s : rec.stations)
-        lod.rows.push_back({s.name, s.kind, s.capacity, s.modelled});
-    for (const MoverPool& m : rec.movers)
-        lod.rows.push_back({"mover:" + m.name, "mover", m.lanes, true});
+    lod.rows = std::move(rows);
 
     unsigned k = 0;
     auto bins_at = [&](unsigned kk) {
         const Cycle w = Cycle{1} << kk;
-        return std::max<std::uint64_t>(1, (rec.makespan + w - 1) / w);
+        return std::max<std::uint64_t>(1, (makespan + w - 1) / w);
     };
     while (bins_at(k) > max_base_bins) ++k;
     LodLevel base;
     base.k = k;
     base.bins = bins_at(k);
-    const std::size_t rows = lod.rows.size();
-    base.occ.assign(rows * base.bins, 0.0);
-    base.peak.assign(rows * base.bins, 0);
-    base.starts.assign(rows * base.bins, 0);
+    const std::size_t n = lod.rows.size();
+    base.occ.assign(n * base.bins, 0.0);
+    base.peak.assign(n * base.bins, 0);
+    base.starts.assign(n * base.bins, 0);
     const Cycle width = Cycle{1} << k;
+    for (std::size_t r = 0; r < n; ++r)
+        accumulate(intervals[r], constants[r], makespan, width, base.bins,
+                   base.occ.data() + r * base.bins, base.peak.data() + r * base.bins,
+                   base.starts.data() + r * base.bins);
+    lod.levels.push_back(std::move(base));
+    while (lod.levels.back().bins > 1) lod.levels.push_back(merge_level(lod.levels.back(), n));
+    return lod;
+}
 
-    for (std::size_t r = 0; r < rows; ++r) {
-        std::vector<Interval> iv;
-        std::uint32_t constant = 0;
+Lod build_lod(const TileFlowRecord& rec, std::uint64_t max_base_bins) {
+    std::vector<LodRow> rows;
+    for (const Station& s : rec.stations)
+        rows.push_back({s.name, s.kind, s.capacity, s.modelled});
+    for (const MoverPool& m : rec.movers)
+        rows.push_back({"mover:" + m.name, "mover", m.lanes, true});
+
+    std::vector<std::vector<Interval>> iv(rows.size());
+    std::vector<std::uint32_t> constant(rows.size(), 0);
+    for (std::size_t r = 0; r < rows.size(); ++r) {
         if (r < rec.stations.size()) {
             const std::string& kind = rec.stations[r].kind;
             if (kind == "l3") {
                 for (const Residency& x : rec.residency)
-                    if (x.station == r) iv.emplace_back(x.t0, x.t1);
-                constant = static_cast<std::uint32_t>(rec.foreign_slots);
+                    if (x.station == r) iv[r].emplace_back(x.t0, x.t1);
+                constant[r] = static_cast<std::uint32_t>(rec.foreign_slots);
             } else if (kind == "cf") {
                 for (const Compute& c : rec.computes)
-                    if (c.station == r) iv.emplace_back(c.t0, c.t1);
+                    if (c.station == r) iv[r].emplace_back(c.t0, c.t1);
             }
         } else {
             const std::string& pool = rec.movers[r - rec.stations.size()].name;
             for (const Transit& t : rec.transits)
-                if (to_string(static_cast<Mover>(t.mover)) == pool) iv.emplace_back(t.t0, t.t1);
+                if (to_string(static_cast<Mover>(t.mover)) == pool) iv[r].emplace_back(t.t0, t.t1);
         }
-        accumulate(iv, constant, rec.makespan, width, base.bins, base.occ.data() + r * base.bins,
-                   base.peak.data() + r * base.bins, base.starts.data() + r * base.bins);
     }
-    lod.levels.push_back(std::move(base));
-    while (lod.levels.back().bins > 1) lod.levels.push_back(merge_level(lod.levels.back(), rows));
-    return lod;
+    return build_lod_rows(std::move(rows), iv, constant, rec.makespan, max_base_bins);
 }
 
 // ---- files -------------------------------------------------------------------

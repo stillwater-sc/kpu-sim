@@ -1,0 +1,11 @@
+{
+  "window": 32,
+  "ports": { "consume_latency": 16, "eject_interval": 64 },
+  "streams": [
+    { "port": "first", "model": { "kind": "stream", "load": true,  "base": "0x100000", "count": 64, "bytes": 4096 } },
+    { "port": "first", "model": { "kind": "stream", "load": false, "base": "0x800000", "count": 32, "bytes": 4096 } },
+    { "port": "first", "model": { "kind": "matrix_tiles", "load": true, "base": "0x1000000",
+                                  "rows": 64, "cols": 64, "element_bytes": 4, "tile_rows": 32, "tile_cols": 32,
+                                  "pitch": 8192 } }
+  ]
+}

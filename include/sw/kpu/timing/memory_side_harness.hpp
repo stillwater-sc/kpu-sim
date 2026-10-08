@@ -342,6 +342,7 @@ private:
     std::deque<std::pair<Cycle, std::uint32_t>> consuming_;                     // (free at, request)
     std::map<unsigned, std::optional<std::uint32_t>> waiting_eject_;            // per engine
     std::map<unsigned, Cycle> next_eject_;
+    std::map<unsigned, std::uint32_t> wait_logged_;     // per engine: request id + 1 last logged
     std::vector<BufferSample> buffer_samples_;
     std::vector<std::pair<std::size_t, std::size_t>> last_buffer_;
     std::vector<PortEvent> port_events_;
@@ -388,7 +389,11 @@ private:
             DMAEngineProcess& dma = *dmas_[e];
             if (!config_.ports.infinite && now_ < p.eject_bus_free) continue;
             if (!dma.store_buffer().reserve()) {
-                port_events_.push_back({now_, r.port, e, PortEvent::Kind::EjectWait, r.id});
+                // Logged once, when the ejection first finds the buffer full; it retries silently.
+                if (wait_logged_[e] != r.id + 1) {
+                    port_events_.push_back({now_, r.port, e, PortEvent::Kind::EjectWait, r.id});
+                    wait_logged_[e] = r.id + 1;
+                }
                 continue;
             }
             r.credit = now_;
@@ -502,5 +507,109 @@ private:
         }
     }
 };
+
+} // namespace sw::kpu::timing::memside
+
+// ============================================================================
+// The run as a .mflow record (docs/plans/memory-side-debugger.md §3.3, step 3)
+// ============================================================================
+#include <sw/kpu/program/record/memory_flow_record.hpp>
+
+namespace sw::kpu::timing::memside {
+
+inline program::record::MemoryFlowRecord to_record(const MemorySideHarness& h, const std::string& device) {
+    using MFR = program::record::MemoryFlowRecord;
+    MFR rec;
+    rec.device = device;
+    rec.makespan = h.now();
+    rec.window = static_cast<std::uint32_t>(h.window());
+    if (!h.controllers().empty() && h.controllers().front()->bridge())
+        rec.timing_note = h.controllers().front()->bridge()->timing_note();
+
+    // Stations: banks, buses, engines, store buffers, ports (memory_flow_record.hpp).
+    for (std::size_t m = 0; m < h.controllers().size(); ++m) {
+        const auto& map = h.controllers()[m]->bridge()->map();
+        for (unsigned ch = 0; ch < map.channels(); ++ch)
+            for (unsigned bg = 0; bg < map.bank_groups(); ++bg)
+                for (unsigned ba = 0; ba < map.banks_per_group(); ++ba)
+                    rec.stations.push_back({device + "/mc[" + std::to_string(m) + "]/ch[" + std::to_string(ch) +
+                                                "]/bg[" + std::to_string(bg) + "]/ba[" + std::to_string(ba) + "]",
+                                            "dram_bank", 1});
+        for (unsigned ch = 0; ch < map.channels(); ++ch)
+            rec.stations.push_back({device + "/mc[" + std::to_string(m) + "]/ch[" + std::to_string(ch) + "]/bus",
+                                    "dram_bus", 1});
+    }
+    for (std::size_t e = 0; e < h.engines(); ++e)
+        rec.stations.push_back({device + "/dma[" + std::to_string(e) + "]", "dma", h.window()});
+    for (std::size_t e = 0; e < h.engines(); ++e)
+        rec.stations.push_back({device + "/dmabuf[" + std::to_string(e) + "]", "dmabuf",
+                                h.engine(e).store_buffer().capacity()});
+    std::vector<unsigned> ports;
+    for (std::size_t e = 0; e < h.engines(); ++e)
+        if (h.port_of(e) != ~0u && std::find(ports.begin(), ports.end(), h.port_of(e)) == ports.end())
+            ports.push_back(h.port_of(e));
+    std::sort(ports.begin(), ports.end());
+    for (unsigned k : ports) rec.stations.push_back({device + "/noc/port[" + std::to_string(k) + "]", "port", 1});
+
+    // Requests, by id; and each request's tile, to tie bursts to it.
+    std::unordered_map<TileID, std::uint32_t, TileIDHash> request_of;
+    for (const auto& r : h.requests()) {
+        request_of[r.tile] = r.id;
+        rec.requests.push_back({r.engine, r.port, r.is_load, r.address, r.bytes, r.offered, r.credit,
+                                r.first_burst, r.last_burst, r.retired});
+    }
+
+    // Bursts, then commands naming them: a command's tag is its controller's burst id.
+    constexpr std::uint64_t kBurstTag = std::uint64_t{1} << 63;
+    std::vector<std::unordered_map<std::uint64_t, std::uint32_t>> burst_index(h.controllers().size());
+    for (std::size_t m = 0; m < h.controllers().size(); ++m)
+        for (const auto& b : h.controllers()[m]->recorded_bursts()) {
+            burst_index[m][b.id] = static_cast<std::uint32_t>(rec.bursts.size());
+            auto it = request_of.find(b.tile);
+            MFR::Burst x;
+            x.engine = b.submitter_id;
+            x.request = it == request_of.end() ? program::record::kNone : it->second;
+            x.mc = static_cast<std::uint8_t>(b.coord.mc);
+            x.channel = static_cast<std::uint8_t>(b.coord.channel);
+            x.rank = static_cast<std::uint8_t>(b.coord.rank);
+            x.bank_group = static_cast<std::uint8_t>(b.coord.bank_group);
+            x.bank = static_cast<std::uint8_t>(b.coord.bank);
+            x.row = static_cast<std::uint32_t>(b.coord.row);
+            x.col = static_cast<std::uint32_t>(b.coord.col);
+            x.is_load = b.is_load;
+            x.outcome = static_cast<MFR::Outcome>(b.outcome);
+            x.submitted = b.submitted;
+            x.first_command = b.first_command;
+            x.data_start = b.data_start;
+            x.data_end = b.data_end;
+            x.done = b.done;
+            rec.bursts.push_back(x);
+        }
+    for (std::size_t m = 0; m < h.controllers().size(); ++m)
+        for (const auto& c : h.controllers()[m]->recorded_commands()) {
+            MFR::Command x;
+            x.mc = static_cast<std::uint8_t>(c.mc);
+            x.channel = static_cast<std::uint8_t>(c.channel);
+            x.bank_group = static_cast<std::uint8_t>(c.bank_group);
+            x.bank = static_cast<std::uint8_t>(c.bank);
+            x.row = static_cast<std::uint32_t>(c.row);
+            x.kind = static_cast<MFR::CommandKind>(c.kind);
+            if (c.tag && (*c.tag & kBurstTag)) {
+                auto it = burst_index[m].find(*c.tag & ~kBurstTag);
+                if (it != burst_index[m].end()) x.burst = it->second;
+            }
+            x.issue = c.issue;
+            x.end = c.end;
+            x.data_start = c.data_start;
+            x.data_end = c.data_end;
+            rec.commands.push_back(x);
+        }
+
+    for (const auto& b : h.buffers())
+        rec.buffers.push_back({b.engine, b.t, static_cast<std::uint32_t>(b.held), static_cast<std::uint32_t>(b.staged)});
+    for (const auto& p : h.port_events())
+        rec.ports.push_back({p.port, p.engine, p.request, static_cast<MFR::PortKind>(p.kind), p.t});
+    return rec;
+}
 
 } // namespace sw::kpu::timing::memside

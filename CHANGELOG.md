@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The `.mflow` record and `kpu-memsim` (memory-side debugger step 3; DRAM plan step 4).**
+  - `kpu-memsim --deploy <spec> --scenario <json> --out <dir>` runs the memory side with stubbed
+    ports, writes a `.mflow` bundle, and prints bandwidth against the DRAM ceiling.
+  - The bundle holds every burst (coordinates, page outcome, lifetime), every DRAM command, each
+    request's lifetime, store-buffer changes and port events. The LOD rows are banks, channel
+    buses, engines, store buffers and ports.
+  - It shares a new `record/columnar.hpp` container with `.tflow`, and its pyramid is the new
+    generic `build_lod_rows`. Both are behaviour-preserving for `.tflow`.
+  - **Fixed:** a precharge closing a row before its opener's CAS (FR-FCFS) dropped the
+    opener's tag from step 1's command records.
+
 - **The memory side runs on its own (memory-side debugger step 2,
   `timing/memory_side_harness.hpp`).**
   - It runs the DRAM, the hosted memory controllers, and the DMA engines with their burst windows
