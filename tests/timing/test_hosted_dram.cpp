@@ -279,7 +279,8 @@ Stream stream(std::size_t engines, std::size_t window, std::size_t n = 128) {
 
 // The controller's data-bus ceiling in bytes per executor cycle: channels x width x rate.
 double peak_bytes_per_cycle() {
-    const auto& m = *device("kpu_t4.json").memory.dram;
+    const DeviceSpecification d = device("kpu_t4.json");    // held: `m` points into it
+    const auto& m = *d.memory.dram;
     return static_cast<double>(m.channels) * (m.channel_width_bits / 8.0) * m.data_rate_mtps * 1e6 / 1e9;
 }
 
