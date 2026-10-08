@@ -458,6 +458,24 @@ public:
 
     void enable_tracing(bool enable) override { tracing_enabled_ = enable; }
     bool tracing_enabled() const override { return tracing_enabled_; }
+
+    // ========================================================================
+    // Command observer (docs/plans/memory-side-debugger.md §3.1)
+    // ========================================================================
+    // One record per command issued, at the moment of issue, with what the trace leaves out:
+    // the row, the data-bus window of a CAS, and whether that CAS's request had to open the
+    // row (activated) or close another first (conflicted). Cycles are this controller's.
+    struct CommandRecord {
+        enum class Kind : uint8_t { Activate, Read, Write, Precharge, Refresh } kind = Kind::Activate;
+        uint8_t channel = 0, bank = 0;      // bank: the controller's 0..15 (group * 4 + bank)
+        uint32_t row = 0, col = 0;          // row: the row opened, read, written or closed
+        uint64_t issue = 0, end = 0;        // command issue, and when its timing window ends
+        uint64_t data_start = 0, data_end = 0;  // the CAS's data-bus window (Read/Write only)
+        uint64_t request_id = 0;            // the request it serves (Precharge: the page's opener)
+        bool activated = false, conflicted = false;   // Read/Write: the page outcome
+    };
+    using CommandObserver = std::function<void(const CommandRecord&)>;
+    void set_command_observer(CommandObserver observer) { observer_ = std::move(observer); }
     void set_resource_tracker(sw::trace::ResourceTracker* tracker) override {
         resource_tracker_ = tracker;
     }
@@ -616,6 +634,10 @@ private:
 
     // Tracing
     bool tracing_enabled_ = false;
+    CommandObserver observer_;
+    void observe(CommandRecord::Kind kind, uint8_t channel, uint8_t bank, uint32_t row, uint32_t col,
+                 uint64_t duration, uint64_t data_start, uint64_t request_id, bool activated,
+                 bool conflicted);
     sw::trace::ResourceTracker* resource_tracker_ = nullptr;
     std::vector<sw::trace::TraceEntry> trace_entries_;
 

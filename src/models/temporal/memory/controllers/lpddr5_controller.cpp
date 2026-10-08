@@ -626,6 +626,8 @@ void LPDDR5MemoryController::do_activate(uint8_t channel, uint8_t bank, uint32_t
     // Trace the operation - use the request_id so ACTIVATE is correlated with its CAS command
     trace_bank_state_change(channel, bank, lpddr5::BankState::ACTIVATING, "ACTIVATE row " + std::to_string(row));
     trace_command(channel, bank, "ACTIVATE", timing.tRCD, request_id);
+    observe(CommandRecord::Kind::Activate, channel, bank, row, 0, timing.tRCD, 0, request_id,
+            false, false);
     trace_bus_state_change(channel, false, "BUSY", "ACT cmd");
 }
 
@@ -666,6 +668,8 @@ void LPDDR5MemoryController::do_read(uint8_t channel, uint8_t bank, MemoryReques
     uint64_t duration = timing.tCL + burst_cycles();
     trace_bank_state_change(channel, bank, lpddr5::BankState::READING, "READ burst");
     trace_command(channel, bank, "READ", duration, req.id);
+    observe(CommandRecord::Kind::Read, channel, bank, req.row, req.col, duration,
+            current_cycle_ + timing.tCL, req.id, req.triggered_activate, req.triggered_conflict);
     trace_bus_state_change(channel, true, "BUSY", "READ burst");
     trace_bus_state_change(channel, false, "BUSY", "RD cmd");
 }
@@ -709,6 +713,8 @@ void LPDDR5MemoryController::do_write(uint8_t channel, uint8_t bank, MemoryReque
     uint64_t duration = timing.tWL + burst_cycles();
     trace_bank_state_change(channel, bank, lpddr5::BankState::WRITING, "WRITE burst");
     trace_command(channel, bank, "WRITE", duration, req.id);
+    observe(CommandRecord::Kind::Write, channel, bank, req.row, req.col, duration,
+            current_cycle_ + timing.tWL, req.id, req.triggered_activate, req.triggered_conflict);
     trace_bus_state_change(channel, true, "BUSY", "WRITE burst");
     trace_bus_state_change(channel, false, "BUSY", "WR cmd");
 }
@@ -733,6 +739,8 @@ void LPDDR5MemoryController::do_precharge(uint8_t channel, uint8_t bank) {
     // Trace the operation with the correct request_id (not 0)
     trace_bank_state_change(channel, bank, lpddr5::BankState::PRECHARGING, "PRECHARGE");
     trace_command(channel, bank, "PRECHARGE", timing.tRP, request_id);
+    observe(CommandRecord::Kind::Precharge, channel, bank, b.open_row, 0, timing.tRP, 0, request_id,
+            false, false);
     trace_bus_state_change(channel, false, "BUSY", "PRE cmd");
 }
 
@@ -754,6 +762,7 @@ void LPDDR5MemoryController::do_refresh(uint8_t channel, uint8_t bank) {
     // Trace the operation
     trace_bank_state_change(channel, bank, lpddr5::BankState::REFRESHING, "REFRESH");
     trace_command(channel, bank, "REFRESH", timing.tRFCpb, 0);
+    observe(CommandRecord::Kind::Refresh, channel, bank, 0, 0, timing.tRFCpb, 0, 0, false, false);
     trace_bus_state_change(channel, false, "BUSY", "REF cmd");
 }
 
@@ -1257,6 +1266,29 @@ void LPDDR5MemoryController::trace_bus_state_change(
             reason
         );
     }
+}
+
+void LPDDR5MemoryController::observe(CommandRecord::Kind kind, uint8_t channel, uint8_t bank,
+                                     uint32_t row, uint32_t col, uint64_t duration,
+                                     uint64_t data_start, uint64_t request_id, bool activated,
+                                     bool conflicted) {
+    if (!observer_) return;
+    CommandRecord r;
+    r.kind = kind;
+    r.channel = channel;
+    r.bank = bank;
+    r.row = row;
+    r.col = col;
+    r.issue = current_cycle_;
+    r.end = current_cycle_ + duration;
+    if (kind == CommandRecord::Kind::Read || kind == CommandRecord::Kind::Write) {
+        r.data_start = data_start;
+        r.data_end = current_cycle_ + duration;
+    }
+    r.request_id = request_id;
+    r.activated = activated;
+    r.conflicted = conflicted;
+    observer_(r);
 }
 
 void LPDDR5MemoryController::trace_command(

@@ -123,6 +123,10 @@ public:
         // model. `clock_ghz` is then the executor clock the bridge converts to.
         std::optional<DramHosting> hosted;
 
+        // Record every DRAM command and every window burst (hosted only;
+        // docs/plans/memory-side-debugger.md §3.1). Off = no cost.
+        bool record = false;
+
         std::string display_name() const {
             return "MC" + std::to_string(controller_id);
         }
@@ -206,11 +210,24 @@ public:
                 std::to_string(map.capacity()) + " B)");
         const std::uint64_t address = tile.dram_address / b * b + index * b;
         const std::uint64_t id = next_burst_id_++;
+        ensure_recording();
         if (!bridge_->submit(address, is_load, kBurstTag | id)) {
             --next_burst_id_;
             return false;
         }
         bursts_[id] = BurstDone{tile.tile_id, is_load, submitter_id};
+        if (config_.record) {
+            BurstRecord r;
+            r.id = id;
+            r.submitter_id = submitter_id;
+            r.tile = tile.tile_id;
+            r.is_load = is_load;
+            r.address = address;
+            r.coord = map.decode(address);
+            r.submitted = current_cycle_;
+            burst_index_[id] = burst_records_.size();
+            burst_records_.push_back(r);
+        }
         return true;
     }
 
@@ -219,6 +236,27 @@ public:
         bool is_load = true;
         uint32_t submitter_id = 0;
     };
+
+    // ---- Recording (Config::record) ----
+    enum class PageOutcome : uint8_t { Unknown, Hit, Empty, Conflict };
+    struct BurstRecord {
+        uint64_t id = 0;                    // this controller's burst id
+        uint32_t submitter_id = 0;
+        TileID tile;
+        bool is_load = true;
+        uint64_t address = 0;               // the burst's first byte
+        program::platform::DramCoord coord; // decoded by the spec's map
+        Cycle submitted = 0;                // into the controller's queue
+        Cycle first_command = 0;            // its first command: ACT, or the CAS on a page hit
+        Cycle data_start = 0, data_end = 0; // its CAS's data-bus window
+        Cycle done = 0;                     // reported complete
+        bool commanded = false, finished = false;
+        PageOutcome outcome = PageOutcome::Unknown;
+    };
+    [[nodiscard]] const std::vector<BurstRecord>& recorded_bursts() const { return burst_records_; }
+    [[nodiscard]] const std::vector<DramBridge::Command>& recorded_commands() const {
+        return command_records_;
+    }
     /// The oldest finished burst submitted by `submitter_id`, if any.
     std::optional<BurstDone> get_completed_burst(uint32_t submitter_id) {
         for (auto it = bursts_done_.begin(); it != bursts_done_.end(); ++it)
@@ -405,6 +443,9 @@ public:
         bursts_.clear();
         bursts_done_.clear();
         next_burst_id_ = 0;
+        burst_records_.clear();
+        burst_index_.clear();
+        command_records_.clear();
         if (bridge_) bridge_->reset();
     }
 
@@ -465,6 +506,36 @@ private:
     std::uint64_t next_burst_id_ = 0;
     std::unordered_map<std::uint64_t, BurstDone> bursts_;     // in the controller
     std::deque<BurstDone> bursts_done_;                       // finished, for submitters to poll
+
+    // Recording
+    std::vector<BurstRecord> burst_records_;
+    std::unordered_map<std::uint64_t, std::size_t> burst_index_;   // burst id -> record
+    std::vector<DramBridge::Command> command_records_;
+    bool recording_ = false;
+    // Installed on first use, not in the constructor: the sink captures `this`, so it must be
+    // installed where the process will stay.
+    void ensure_recording() {
+        if (!config_.record || recording_ || !bridge_) return;
+        recording_ = true;
+        bridge_->set_command_sink([this](const DramBridge::Command& c) {
+            command_records_.push_back(c);
+            if (!c.tag || !(*c.tag & kBurstTag)) return;
+            auto it = burst_index_.find(*c.tag & ~kBurstTag);
+            if (it == burst_index_.end()) return;
+            BurstRecord& r = burst_records_[it->second];
+            if (!r.commanded) {
+                r.commanded = true;
+                r.first_command = c.issue;
+            }
+            if (c.kind == DramBridge::Command::Kind::Read || c.kind == DramBridge::Command::Kind::Write) {
+                r.data_start = c.data_start;
+                r.data_end = c.data_end;
+                r.outcome = c.conflicted ? PageOutcome::Conflict
+                          : c.activated  ? PageOutcome::Empty
+                                         : PageOutcome::Hit;
+            }
+        });
+    }
 
     // Statistics
     Cycle stall_cycles_cmd_bus_ = 0;
@@ -564,6 +635,7 @@ private:
     }
 
     void tick_hosted(Cycle now, std::vector<TimingEvent>& events) {
+        ensure_recording();
         const std::uint64_t b = bridge_->map().burst_bytes();
         // Feed bursts, oldest tile first, until the controller's queue refuses one.
         bool full = false;
@@ -594,6 +666,11 @@ private:
                 bursts_done_.push_back(it->second);
                 bursts_.erase(it);
                 total_bytes_transferred_ += b;
+                if (config_.record) {
+                    BurstRecord& r = burst_records_[burst_index_.at(tag & ~kBurstTag)];
+                    r.done = now;
+                    r.finished = true;
+                }
                 continue;
             }
             ++hosted_.at(static_cast<std::uint32_t>(tag)).done;

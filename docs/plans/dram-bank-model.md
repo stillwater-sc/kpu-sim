@@ -400,14 +400,16 @@ Each step is one PR and ends green.
      sufficient. The window should also be deep enough to keep each stream's row open.
    - Values never move: the T4, T16 and T64 matmul is bit-identical with `W = 32`, with the
      NoC off and on.
-4. **Record.** `.tflow` gains per-bank columns: busy intervals and page-conflict counts per
+4. **Record.** Carried by `docs/plans/memory-side-debugger.md` (Q1, 2026-10-08): a separate
+   `.mflow` bundle, because `.tflow` is tile-granular and produced only at L-T1, which has no
+   banks. As first written: `.tflow` gains per-bank columns: busy intervals and page-conflict counts per
    bank `B = (mc, channel, rank, bank_group, bank)`. These are stations of kind `dram_bank`, which the LOD pyramid picks up
    without change. `tflow_check.py` gains TF10 (a bank never has two open rows) and TF11 (the
    data bus never carries two bursts at once).
 5. **Static model.** `tools/trace/dram_conflicts.py` (or C++ under `src/program/analysis/`)
    computes §3.5 from the loadable, the schedule and the spec, and emits predicted per-bank
    load into the binding.
-6. **Viewer.** The DRAM panel colors addresses by bank or channel (toggle), and each controller
+6. **Viewer.** Carried by the memory-side debugger's memflow page. As first written: the DRAM panel colors addresses by bank or channel (toggle), and each controller
    expands into per-bank swimlanes. Predicted occupancy is drawn as an outline over measured.
    `bind.py` replaces its single-outstanding overload with outstanding-burst pressure against
    `N x W`.

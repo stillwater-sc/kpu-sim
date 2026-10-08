@@ -33,7 +33,9 @@
 #include <sw/kpu/timing/tile_descriptor.hpp>
 
 #include <cstdint>
+#include <functional>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -80,6 +82,22 @@ public:
 
     bool busy() const;
     void reset();
+
+    // One DRAM command, in executor cycles and the spec's coordinates
+    // (docs/plans/memory-side-debugger.md §3.1). `tag` is the burst's submit() tag; a refresh has
+    // none, and a precharge carries its page opener's tag while that burst is still in flight.
+    struct Command {
+        enum class Kind : std::uint8_t { Activate, Read, Write, Precharge, Refresh };
+        Kind kind = Kind::Activate;
+        unsigned mc = 0, channel = 0, bank_group = 0, bank = 0;
+        std::uint64_t row = 0, col = 0;
+        Cycle issue = 0, end = 0;
+        Cycle data_start = 0, data_end = 0;     // Read/Write: the data-bus window
+        std::optional<std::uint64_t> tag;
+        bool activated = false, conflicted = false;     // Read/Write: the page outcome
+    };
+    // Called for every command the controller issues. Unset = no cost.
+    void set_command_sink(std::function<void(const Command&)> sink);
 
     double ticks_per_cycle() const { return ticks_per_cycle_; }
     const program::platform::DramAddressMap& map() const { return hosting_.map; }

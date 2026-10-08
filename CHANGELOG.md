@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The DRAM is observable, command by command (memory-side debugger step 1,
+  `docs/plans/memory-side-debugger.md`).**
+  - `LPDDR5MemoryController::set_command_observer` reports every ACT/RD/WR/PRE/REF. Each record
+    carries the row (which the trace left out), the CAS data-bus window, and the page outcome.
+  - `DramBridge::set_command_sink` translates commands into executor cycles and the spec's
+    `(ch, bg, ba, row, col)`.
+  - `MemoryControllerProcess::Config::record` keeps every command, plus each window burst's
+    lifetime and outcome.
+  - The plan for the memory-side debugger is recorded, with Q1-Q5 decided: a separate `.mflow`
+    record (DRAM step 4), a standalone harness with NoC-port stubs, a checker, and a memflow
+    page.
+
 - **The DMA burst window (DRAM plan step 3).** `dma.window` in the spec and
   `ConcurrentTimingExecutor::Config::dma_window` turn it on.
   - A DMA engine decomposes each tile into DRAM bursts and keeps at most W in flight across its

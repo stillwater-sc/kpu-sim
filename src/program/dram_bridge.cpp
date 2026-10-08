@@ -10,6 +10,9 @@
 #include <sw/kpu/models/temporal/memory/controllers/lpddr5_controller.hpp>
 
 #include <cmath>
+#include <unordered_map>
+#include <functional>
+#include <memory>
 #include <sstream>
 
 namespace sw::kpu::timing {
@@ -78,6 +81,8 @@ struct DramBridge::Impl {
     double owed = 0.0;
     Cycle last = 0;
     std::uint64_t bursts = 0, misrouted = 0;
+    std::function<void(const Command&)> sink;
+    std::unordered_map<std::uint64_t, std::uint64_t> tag_of;   // controller request id -> tag
 
     std::uint64_t native(const DramCoord& c, unsigned flat_bank) const {
         // The controller's own layout: [row | bank | col | channel | 64-byte offset].
@@ -107,6 +112,43 @@ DramBridge::DramBridge(const DramHosting& h, unsigned controller_id, double exec
     c.bank_bits = 4;
     c.channel_bits = c.num_channels > 1 ? 1 : 0;
     impl_->mc = std::make_unique<lpddr5::LPDDR5MemoryController>(c);
+    impl_->mc->set_command_observer([this](const lpddr5::LPDDR5MemoryController::CommandRecord& r) {
+        if (!impl_->sink) return;
+        using K = lpddr5::LPDDR5MemoryController::CommandRecord::Kind;
+        // The controller is being ticked up to executor cycle `last`: the command issues then,
+        // and its later points are that many ticks on, at ticks_per_cycle_.
+        const Cycle now = impl_->last;
+        auto at = [&](std::uint64_t tick) -> Cycle {
+            if (tick <= r.issue) return now;
+            return now + static_cast<Cycle>(
+                             std::ceil(static_cast<double>(tick - r.issue) / ticks_per_cycle_));
+        };
+        Command cmd;
+        cmd.kind = r.kind == K::Activate    ? Command::Kind::Activate
+                 : r.kind == K::Read        ? Command::Kind::Read
+                 : r.kind == K::Write       ? Command::Kind::Write
+                 : r.kind == K::Precharge   ? Command::Kind::Precharge
+                                            : Command::Kind::Refresh;
+        cmd.mc = controller_id_;
+        cmd.channel = r.channel;
+        cmd.bank_group = r.bank / hosting_.map.banks_per_group();
+        cmd.bank = r.bank % hosting_.map.banks_per_group();
+        cmd.row = r.row;
+        cmd.col = r.col;
+        cmd.issue = now;
+        cmd.end = at(r.end);
+        if (cmd.kind == Command::Kind::Read || cmd.kind == Command::Kind::Write) {
+            cmd.data_start = at(r.data_start);
+            cmd.data_end = at(r.data_end);
+        }
+        if (r.request_id) {
+            auto it = impl_->tag_of.find(r.request_id);
+            if (it != impl_->tag_of.end()) cmd.tag = it->second;
+        }
+        cmd.activated = r.activated;
+        cmd.conflicted = r.conflicted;
+        impl_->sink(cmd);
+    });
 
     std::ostringstream n;
     n << h.technology << "-" << h.data_rate_mtps << ": "
@@ -126,10 +168,19 @@ bool DramBridge::submit(std::uint64_t address, bool is_load, std::uint64_t tag) 
     if (c.mc != controller_id_) ++impl_->misrouted;
     const std::uint64_t a = impl_->native(c, hosting_.map.flat_bank(c));
     auto& done = impl_->done;
-    auto cb = [&done, tag] { done.push_back(tag); };
+    // With a command sink, map the controller's request id to the tag so commands name their
+    // burst. The id is known only after submit, so the callback reads it from a shared slot.
+    auto* tags = impl_->sink ? &impl_->tag_of : nullptr;
+    auto slot = std::make_shared<std::uint64_t>(0);
+    auto cb = [&done, tag, tags, slot] {
+        done.push_back(tag);
+        if (tags) tags->erase(*slot);
+    };
     const auto id = is_load ? impl_->mc->submit_read(a, hosting_.map.burst_bytes(), cb)
                             : impl_->mc->submit_write(a, nullptr, hosting_.map.burst_bytes(), cb);
     if (!id) return false;
+    *slot = *id;
+    if (tags) (*tags)[*id] = tag;
     ++impl_->bursts;
     return true;
 }
@@ -152,6 +203,11 @@ void DramBridge::reset() {
     impl_->owed = 0.0;
     impl_->last = 0;
     impl_->bursts = impl_->misrouted = 0;
+    impl_->tag_of.clear();
+}
+
+void DramBridge::set_command_sink(std::function<void(const Command&)> sink) {
+    impl_->sink = std::move(sink);
 }
 
 DramBridge::Stats DramBridge::stats() const {

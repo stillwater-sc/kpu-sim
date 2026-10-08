@@ -356,3 +356,89 @@ TEST_CASE("Burst window: a tile completes with its last burst, not its first",
     CHECK(static_cast<double>(end - start) >= 4096.0 / peak_bytes_per_cycle());
     CHECK(ex.memory_controller(0).total_bytes_transferred() == 4096);
 }
+
+// ============================================================================
+// Memory-side debugger step 1: every command and every burst, observed
+// ============================================================================
+namespace {
+
+using Cmd = DramBridge::Command;
+using Outcome = MemoryControllerProcess::PageOutcome;
+
+// One 64 B burst at `addr`, run to completion on its own.
+void one_burst(MemoryControllerProcess& mc, std::uint64_t addr, Cycle& clock) {
+    REQUIRE(mc.submit_burst(tile_at(addr, 64), 0, true, 0));
+    for (int i = 0; i < 100000; ++i) {
+        mc.tick(++clock);
+        if (mc.get_completed_burst(0)) return;
+    }
+    FAIL("burst never completed");
+}
+
+}  // namespace
+
+TEST_CASE("Recording: a burst's commands, coordinates and page outcome are observed",
+          "[timing][dram][hosted][record]") {
+    MemoryControllerProcess::Config c;
+    c.clock_ghz = 1.0;
+    c.hosted = t4();
+    c.record = true;
+    MemoryControllerProcess mc(c);
+    const auto& map = c.hosted->map;
+
+    DramCoord a{};                      // channel 0, bank group 1, bank 2, row 5, column 0
+    a.bank_group = 1;
+    a.bank = 2;
+    a.row = 5;
+    DramCoord b = a;                    // the same row: a page hit
+    b.col = 1;
+    DramCoord k = a;                    // another row in the same bank: a page conflict
+    k.row = 9;
+
+    Cycle clock = 0;
+    one_burst(mc, map.encode(a), clock);
+    one_burst(mc, map.encode(b), clock);
+    one_burst(mc, map.encode(k), clock);
+
+    const auto& bursts = mc.recorded_bursts();
+    REQUIRE(bursts.size() == 3);
+    CHECK(bursts[0].coord == a);
+    CHECK(bursts[1].coord == b);
+    CHECK(bursts[2].coord == k);
+    CHECK(bursts[0].outcome == Outcome::Empty);
+    CHECK(bursts[1].outcome == Outcome::Hit);
+    CHECK(bursts[2].outcome == Outcome::Conflict);
+    for (const auto& r : bursts) {
+        CHECK(r.finished);
+        CHECK(r.commanded);
+        CHECK(r.submitted <= r.first_command);
+        CHECK(r.first_command <= r.data_start);
+        CHECK(r.data_start < r.data_end);
+        CHECK(r.data_end <= r.done + 1);
+    }
+
+    // The command chain: ACT row 5, RD; RD (no ACT on a hit); PRE row 5, ACT row 9, RD.
+    std::vector<std::pair<Cmd::Kind, std::uint64_t>> chain;
+    Cycle last = 0;
+    for (const auto& cmd : mc.recorded_commands()) {
+        if (cmd.kind == Cmd::Kind::Refresh) continue;
+        CHECK(cmd.issue >= last);                       // issued in order
+        last = cmd.issue;
+        CHECK(cmd.channel == a.channel);
+        CHECK(cmd.bank_group == a.bank_group);
+        CHECK(cmd.bank == a.bank);
+        chain.emplace_back(cmd.kind, cmd.row);
+    }
+    const std::vector<std::pair<Cmd::Kind, std::uint64_t>> want = {
+        {Cmd::Kind::Activate, 5}, {Cmd::Kind::Read, 5}, {Cmd::Kind::Read, 5},
+        {Cmd::Kind::Precharge, 5}, {Cmd::Kind::Activate, 9}, {Cmd::Kind::Read, 9}};
+    CHECK(chain == want);
+}
+
+TEST_CASE("Recording is off by default and costs nothing", "[timing][dram][hosted][record]") {
+    MemoryControllerProcess mc = hosted_mc(t4());
+    Cycle clock = 0;
+    one_burst(mc, 0x1000, clock);
+    CHECK(mc.recorded_bursts().empty());
+    CHECK(mc.recorded_commands().empty());
+}
