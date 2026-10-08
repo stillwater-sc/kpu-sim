@@ -199,3 +199,23 @@ TEST_CASE("Harness: a device it cannot run is refused by name", "[timing][memsid
     c.streams = {{99, stream(1), 0}};
     CHECK_THROWS_WITH(MemorySideHarness(t4(), c), ContainsSubstring("port 99 has no attached DMA engine"));
 }
+
+TEST_CASE("Harness: requests are offered when due, whichever stream they came from",
+          "[timing][memside]") {
+    // One engine, two streams: one paced at 1000 cycles, one all at once. The second stream's
+    // requests are due at cycle 0 and must not wait behind the first stream's later ones.
+    const DeviceSpecification d = t4(1);
+    MemorySideHarness::Config c;
+    c.ports.infinite = true;
+    MemorySideHarness probe(d, c);
+    const unsigned port = probe.port_of(0);
+    c.streams = {{port, stream(3, true, 0x100000), 1000}, {port, stream(3, true, 0x200000), 0}};
+    MemorySideHarness h(d, c);
+    REQUIRE(h.run());
+    for (const auto& r : h.requests()) {
+        CAPTURE(r.id, r.address);
+        if (r.address >= 0x200000) CHECK(r.offered == 0);
+        else CHECK(r.offered == 1000 * ((r.address - 0x100000) / 4096));
+    }
+}
+

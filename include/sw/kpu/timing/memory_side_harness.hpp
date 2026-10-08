@@ -254,6 +254,14 @@ public:
             }
         }
         for (const auto& r : requests_) by_tile_[r.tile] = r.id;
+        // Streams are dealt one after another, so an engine's queue is in stream order. Offering
+        // stops at the first entry not yet due: sort by due time (stably, keeping stream order on
+        // ties) so a later stream's early requests are not held behind an earlier stream's late
+        // ones.
+        for (auto* due : {&loads_due_, &ejects_due_})
+            for (auto& [e, q] : *due)
+                std::stable_sort(q.begin(), q.end(),
+                                 [](const Due& a, const Due& b) { return a.at < b.at; });
     }
     MemorySideHarness(const MemorySideHarness&) = delete;
     MemorySideHarness& operator=(const MemorySideHarness&) = delete;
