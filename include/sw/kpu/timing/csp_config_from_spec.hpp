@@ -18,6 +18,7 @@
 //                            every BlockMover (its site); without a layout, one pooled L3
 //   movers.streamers         split over the row and column streamer pools, at least one each
 //   noc.port.output_queue_blocks   dma_store_buffer_blocks, when declared (0 = derived: noted)
+//   dma.window               dma_window: bursts each engine keeps in flight (needs memory.dram)
 //
 // NOT MAPPED, listed in `unmapped`: the spec's rates (dma.bytes_per_cycle and the movers'
 // bytes per cycle) against the executor's GB/s and latency fields, macs_per_cycle against its
@@ -75,6 +76,11 @@ inline std::optional<CspDeviceConfig> csp_config_from(
         } catch (const std::exception& e) {
             return fail(std::string("memory.dram cannot be hosted: ") + e.what());
         }
+    }
+
+    if (d.dma.window) {
+        if (!c.dram) return fail("dma.window needs memory.dram: bursts are the DRAM's");
+        c.dma_window = *d.dma.window;
     }
 
     if (d.l3.capacity_tiles == 0)

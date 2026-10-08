@@ -14,10 +14,13 @@
 
 #include <sw/kpu/program/platform/deployment_json.hpp>
 #include <sw/kpu/timing/concurrent_timing_executor.hpp>
+#include <sw/kpu/timing/csp_config_from_spec.hpp>
 #include <sw/kpu/timing/memory_controller_process.hpp>
 #include <sw/kpu/timing/schedule/matmul_schedule_generator.hpp>
 #include <sw/kpu/timing/schedule/schedule_executor.hpp>
 
+#include <algorithm>
+#include <map>
 #include <string>
 #include <vector>
 
@@ -218,4 +221,137 @@ TEST_CASE("the declared DRAM must have as many controllers as the executor",
     c.num_memory_controllers = 1;
     c.dram = DramHosting::of(device("kpu_t64.json"));    // 4 controllers
     CHECK_THROWS_WITH(ConcurrentTimingExecutor(c), ContainsSubstring("4 memory controllers"));
+}
+
+// ============================================================================
+// DRAM plan step 3: the DMA burst window
+// ============================================================================
+namespace {
+
+struct Stream {
+    Cycle cycles = 0;
+    double bytes_per_cycle = 0;
+    std::size_t max_in_flight = 0;          // bursts, over all engines and cycles
+    bool credit_before_first_burst = true;
+};
+
+// `n` distinct 4 KiB loads through the T4's hosted controller, from `engines` engines with a
+// burst window of `window` (0 = tile-level requests).
+Stream stream(std::size_t engines, std::size_t window, std::size_t n = 128) {
+    auto c = csp_config_from(device("kpu_t4.json"))->config;
+    c.num_dma_engines = engines;
+    c.dma_engine_controller.assign(engines, 0);
+    c.dma_window = window;
+    c.l3_buffer_count = 4096;
+    c.l3_tiles = 1;
+    c.block_mover_l3_tile.clear();
+    c.num_block_movers = 1;
+    ConcurrentTimingExecutor ex(c);
+    const Size T = 4096;
+    for (std::size_t i = 0; i < n; ++i) {
+        TileDescriptor t;
+        t.tile_id = TileID{MatrixID::A, static_cast<Size>(i), 0, 0};
+        t.dram_address = 0x100000 + static_cast<sw::kpu::timing::Address>(i) * T;
+        t.size_bytes = T;
+        ex.schedule_load(t, static_cast<int>(i % engines));
+    }
+    Stream s;
+    while (!ex.is_complete() && ex.current_cycle() < 5'000'000) {
+        ex.step();
+        for (std::size_t e = 0; e < engines; ++e)
+            s.max_in_flight = std::max(s.max_in_flight, ex.dma_engine(e).bursts_in_flight());
+    }
+    REQUIRE(ex.is_complete());
+    s.cycles = ex.current_cycle();
+    s.bytes_per_cycle = static_cast<double>(n) * T / static_cast<double>(s.cycles);
+    // Per tile: its L3 credit is taken before its first burst goes out (plan §2).
+    std::map<std::string, Cycle> credit;
+    for (const auto& e : ex.events()) {
+        if (e.type == EventType::CREDIT_ACQUIRED) credit.emplace(e.tile_id.to_string(), e.cycle);
+        if (e.type == EventType::DMA_LOAD_START) {
+            auto it = credit.find(e.tile_id.to_string());
+            s.credit_before_first_burst = s.credit_before_first_burst && it != credit.end() &&
+                                          it->second <= e.cycle;
+        }
+    }
+    return s;
+}
+
+// The controller's data-bus ceiling in bytes per executor cycle: channels x width x rate.
+double peak_bytes_per_cycle() {
+    const auto& m = *device("kpu_t4.json").memory.dram;
+    return static_cast<double>(m.channels) * (m.channel_width_bits / 8.0) * m.data_rate_mtps * 1e6 / 1e9;
+}
+
+}  // namespace
+
+TEST_CASE("Burst window: one engine with W = 32 saturates the controller; 32 with W = 1 do not",
+          "[timing][dram][hosted][window]") {
+    // The plan's row (dram-bank-model.md step 3). Both have 32 bursts in flight, so Little's
+    // law alone does not separate them: locality does. One engine streams a tile's bursts
+    // through open rows; thirty-two single-burst engines scatter over rows, and FR-FCFS has
+    // nothing to reorder.
+    const double peak = peak_bytes_per_cycle();
+    const Stream one = stream(1, 32);
+    const Stream many = stream(32, 1);
+    CAPTURE(peak, one.bytes_per_cycle, many.bytes_per_cycle);
+    CHECK(one.bytes_per_cycle >= 0.90 * peak);
+    CHECK(many.bytes_per_cycle < 0.80 * peak);
+    CHECK(one.max_in_flight <= 32);
+    CHECK(many.max_in_flight <= 1);
+}
+
+TEST_CASE("Burst window: bandwidth grows with W until the latency is covered, and W bounds it",
+          "[timing][dram][hosted][window]") {
+    double last = 0;
+    for (std::size_t w : {1u, 2u, 4u, 8u, 16u, 32u}) {
+        CAPTURE(w);
+        const Stream s = stream(1, w);
+        CHECK(s.max_in_flight <= w);
+        CHECK(s.max_in_flight == w);                // and the engine does fill its window
+        CHECK(s.bytes_per_cycle >= last * 0.98);    // non-decreasing, within noise
+        CHECK(s.credit_before_first_burst);
+        last = s.bytes_per_cycle;
+    }
+    // A single-burst engine is latency-bound: a small fraction of the ceiling.
+    CHECK(stream(1, 1).bytes_per_cycle < 0.30 * peak_bytes_per_cycle());
+}
+
+TEST_CASE("Burst window: a window needs a hosted controller", "[timing][dram][window]") {
+    ConcurrentTimingExecutor::Config c;
+    c.dma_window = 8;                               // no `dram`: the legacy controller
+    CHECK_THROWS_WITH(ConcurrentTimingExecutor(c), ContainsSubstring("needs a hosted DRAM"));
+}
+
+
+TEST_CASE("Burst window: a tile completes with its last burst, not its first",
+          "[timing][dram][hosted][window]") {
+    auto c = csp_config_from(device("kpu_t4.json"))->config;
+    c.num_dma_engines = 1;
+    c.dma_engine_controller = {0};
+    c.dma_window = 32;
+    c.l3_tiles = 1;
+    c.block_mover_l3_tile.clear();
+    c.num_block_movers = 1;
+    ConcurrentTimingExecutor ex(c);
+    TileDescriptor t;
+    t.tile_id = TileID{MatrixID::A, 0, 0, 0};
+    t.dram_address = 0x100000;
+    t.size_bytes = 4096;                            // 64 bursts of 64 B
+    ex.schedule_load(t, 0);
+    while (!ex.is_complete() && ex.current_cycle() < 100000) ex.step();
+    REQUIRE(ex.is_complete());
+
+    Cycle start = 0, end = 0;
+    std::size_t completions = 0;
+    for (const auto& e : ex.events())
+        if (e.type == EventType::DMA_LOAD_COMPLETE) {
+            ++completions;
+            start = e.cycle;
+            end = e.cycle + e.duration;
+        }
+    CHECK(completions == 1);                        // one tile, one completion
+    // Its 4 KiB cannot cross the data bus faster than the controller's ceiling.
+    CHECK(static_cast<double>(end - start) >= 4096.0 / peak_bytes_per_cycle());
+    CHECK(ex.memory_controller(0).total_bytes_transferred() == 4096);
 }

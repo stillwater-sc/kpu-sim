@@ -102,6 +102,9 @@ public:
 
         // DMA Engine configuration
         size_t dma_queue_depth = 32;        ///< DMA request queue depth
+        /// Bursts each DMA engine keeps in flight (docs/plans/dram-bank-model.md step 3; the
+        /// spec's dma.window). 0 = tile-level requests. Needs `dram` (a hosted controller).
+        size_t dma_window = 0;
         /// Tiles each DMA engine's store buffer holds. A STORE is a BlockMover ejecting the
         /// tile out of L3 into this buffer, then the engine writing it to DRAM (every hop is
         /// a push; the engine never reads L3). It is the NoC port's per-engine output queue.
@@ -541,6 +544,7 @@ public:
     }
     [[nodiscard]] size_t num_dma_engines() const { return dma_engines_.size(); }
     [[nodiscard]] size_t num_block_movers() const { return block_movers_.size(); }
+    [[nodiscard]] const DMAEngineProcess& dma_engine(size_t i) const { return *dma_engines_.at(i); }
     [[nodiscard]] size_t num_row_streamers() const { return row_streamers_.size(); }
     [[nodiscard]] size_t num_col_streamers() const { return col_streamers_.size(); }
 
@@ -838,6 +842,7 @@ inline void ConcurrentTimingExecutor::create_components() {
             : Config::clamp_reserve(
                   config_.l3_writeback_credit_reserve, l3_tile_credits_.back()->capacity());
         dma_config.store_buffer_blocks = config_.dma_store_buffer_blocks;
+        dma_config.window = config_.dma_window;
         dma_config.name = dma_config.display_name();
 
         // Assign DMA to MC: as declared, else round-robin if more DMAs than MCs.

@@ -135,6 +135,11 @@ inline bool level_models(ExecutionLevel l, platform::SpecField f) {
         case SpecField::L1Vectors:
         case SpecField::DmaBurst:
             return false;                        // §3.3 resource vocabulary -- #283
+        case SpecField::DmaWindow:
+            // The CSP executor issues bursts within the window (dram-bank-model.md step 3,
+            // ConcurrentTimingExecutor::Config::dma_window), but the driver does not run L-CA
+            // yet (#283), so no selectable level models it.
+            return false;
         case SpecField::Dram:
             // The geometry and address map are declared and validated, but no level
             // schedules on banks yet: the CSP-tier controller keeps its built-in mapping

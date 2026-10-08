@@ -366,6 +366,40 @@ Each step is one PR and ends green.
    (`dma.window`), completion per burst. The L3 credit is still acquired before the first burst
    is submitted (§2), with the writeback reserve unchanged.
    Tests: one engine with `W = 32` saturates a channel, and 32 engines with `W = 1` do not.
+   (Done.)
+   - **Spec:** `dma.window` is optional. It must be at least 1 and needs `memory.dram`.
+     Undeclared, a tile is one request, as before. `SpecField::DmaWindow` is unmodelled at
+     every driver level until L-CA runs (#283).
+   - **The controller:** `MemoryControllerProcess::submit_burst` and `get_completed_burst`
+     (hosted only). Bursts get their own tag space, and each completion is reported to its
+     submitter. The tile path stays for `W = 0`.
+   - **The engine:** `Config::window` (from `ConcurrentTimingExecutor::Config::dma_window`).
+     - A submitted tile is decomposed into the bursts its bytes span.
+     - At most W bursts are in flight across all of the engine's tiles, issued oldest tile
+       first.
+     - A tile completes with its last burst. The engine then emits `DMA_LOAD_COMPLETE` or
+       `DMA_STORE_COMPLETE` and finishes exactly as on the tile path: the load lands, or enters
+       the NoC (4b.4), or the store retires.
+     - `queue_depth` still bounds the tiles in flight. The L3 credit is still taken first.
+   - **Measured** on the T4 controller (2 x16 channels at 8533 MT/s, a ceiling of 34.1 B/cycle;
+     128 x 4 KiB loads):
+
+     | engines x W | bursts in flight | B/cycle | % of ceiling |
+     |---|---|---|---|
+     | 1 x 1 | 1 | 6.9 | 20% |
+     | 1 x 8 | 8 | 18.6 | 54% |
+     | 1 x 32 | 32 | 32.6 | 95% |
+     | 32 x 1 | 32 | 23.6 | 69% |
+     | 4 x 8 | 32 | 32.4 | 95% |
+     | tile-level | all | 32.6 | 95% |
+
+     The plan's row holds, but **not by Little's law alone**: 1 x 32 and 32 x 1 have the same
+     32 bursts in flight. What separates them is locality. One engine streams a tile's bursts
+     through open rows. Thirty-two single-burst engines scatter over rows, and FR-FCFS has
+     little to reorder. §1.2's sizing rule, `N x W >= bursts needed`, is necessary but not
+     sufficient. The window should also be deep enough to keep each stream's row open.
+   - Values never move: the T4, T16 and T64 matmul is bit-identical with `W = 32`, with the
+     NoC off and on.
 4. **Record.** `.tflow` gains per-bank columns: busy intervals and page-conflict counts per
    bank `B = (mc, channel, rank, bank_group, bank)`. These are stations of kind `dram_bank`, which the LOD pyramid picks up
    without change. `tflow_check.py` gains TF10 (a bank never has two open rows) and TF11 (the

@@ -69,6 +69,11 @@ struct DeviceSpecification {
         Dim engines = 1;
         double bytes_per_cycle = 64.0;          // PER ENGINE (§6.3: per lane, always)
         std::optional<Dim> burst_bytes;         // §3.3 resource vocabulary — L-T2
+        // Bursts each engine keeps in flight (docs/plans/dram-bank-model.md step 3, Q6:
+        // spec-wide). Little's law sizes it: engines x window >= the bursts a controller
+        // needs in flight to keep its channels busy. Needs memory.dram (bursts need a burst
+        // size and an address map). Absent = a tile is one request to the controller.
+        std::optional<Dim> window;
     } dma;
 
     // L3. `tiles` and `capacity_tiles` are DIFFERENT THINGS and conflating them would
@@ -439,6 +444,11 @@ inline std::string DeploymentSpec::validate() const {
         if (d.l1.vectors && *d.l1.vectors == 0) return where + ": l1.vectors declared as zero";
         if (d.dma.burst_bytes && *d.dma.burst_bytes == 0)
             return where + ": dma.burst_bytes declared as zero";
+        if (d.dma.window && *d.dma.window == 0)
+            return where + ": dma.window declared as zero; an engine needs a burst in flight";
+        if (d.dma.window && !d.memory.dram)
+            return where + ": dma.window needs memory.dram: a burst is the DRAM's burst, "
+                           "placed by its address map";
         // The physical shape. Validated only when DECLARED: an absent shape is derived where
         // it can be (array_layout.hpp), and a spec that never mentions one stays valid.
         if (d.array.rows.has_value() != d.array.cols.has_value())
@@ -517,7 +527,7 @@ inline DeviceDescriptor DeploymentSpec::device_view(Dim i) const {
 // Named as data so the report and the "does this level model it" table cannot drift
 // apart — a table keyed on a string typed twice is a table that disagrees with itself.
 enum class SpecField { L3Tiles, L3Banks, L2BanksPerTile, L1Vectors, DmaBurst, L3Capacity, Dram,
-                       Noc };
+                       Noc, DmaWindow };
 
 inline const char* to_string(SpecField f) {
     switch (f) {
@@ -526,6 +536,7 @@ inline const char* to_string(SpecField f) {
         case SpecField::L2BanksPerTile: return "l2.banks_per_tile";
         case SpecField::L1Vectors:      return "l1.vectors";
         case SpecField::DmaBurst:       return "dma.burst_bytes";
+        case SpecField::DmaWindow:      return "dma.window";
         case SpecField::L3Capacity:     return "l3.capacity_tiles";
         case SpecField::Dram:           return "memory.dram";
         case SpecField::Noc:            return "noc";
@@ -543,6 +554,7 @@ inline bool declared(const DeviceSpecification& s, SpecField f) {
         case SpecField::L2BanksPerTile: return s.l2.banks_per_tile.has_value();
         case SpecField::L1Vectors:      return s.l1.vectors.has_value();
         case SpecField::DmaBurst:       return s.dma.burst_bytes.has_value();
+        case SpecField::DmaWindow:      return s.dma.window.has_value();
         case SpecField::L3Capacity:     return s.l3.capacity_tiles != 0;
         case SpecField::Dram:           return s.memory.dram.has_value();
         case SpecField::Noc:            return s.noc.has_value();
@@ -557,6 +569,7 @@ inline std::string declared_value(const DeviceSpecification& s, SpecField f) {
         case SpecField::L2BanksPerTile: return std::to_string(s.l2.banks_per_tile.value_or(0));
         case SpecField::L1Vectors:      return std::to_string(s.l1.vectors.value_or(0));
         case SpecField::DmaBurst:       return std::to_string(s.dma.burst_bytes.value_or(0));
+        case SpecField::DmaWindow:      return std::to_string(s.dma.window.value_or(0));
         case SpecField::L3Capacity:     return std::to_string(s.l3.capacity_tiles);
         case SpecField::Dram: {
             if (!s.memory.dram) return "0";
@@ -583,7 +596,7 @@ inline const std::vector<SpecField>& all_spec_fields() {
     static const std::vector<SpecField> f = {
         SpecField::L3Tiles, SpecField::L3Banks, SpecField::L2BanksPerTile,
         SpecField::L1Vectors, SpecField::DmaBurst, SpecField::L3Capacity, SpecField::Dram,
-        SpecField::Noc};
+        SpecField::Noc, SpecField::DmaWindow};
     return f;
 }
 

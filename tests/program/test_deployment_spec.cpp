@@ -512,3 +512,28 @@ TEST_CASE("a declared shape that cannot be built is refused with the field's own
     CHECK_THROWS_WITH(from_json(R"({"compute_tiles": 4, "array": {"rows": 2, "colz": 4}})"),
                       ContainsSubstring("colz"));
 }
+
+TEST_CASE("dma.window is declared, round-trips, and needs a DRAM to window",
+          "[program][platform][deploy][dram]") {
+    DeploymentSpec t4 = read_spec_file(std::string(kDeploy) + "kpu_t4.json");
+    REQUIRE_FALSE(t4.device(0).dma.window.has_value());     // undeclared: tile-level requests
+    CHECK(to_json(t4).find("\"window\"") == std::string::npos);
+
+    t4.device(0).dma.window = 32;
+    REQUIRE(t4.validate().empty());
+    const std::string text = to_json(t4);
+    CHECK(text.find("\"window\": 32") != std::string::npos);
+    CHECK(to_json(from_json(text)) == text);
+    CHECK(*from_json(text).device(0).dma.window == 32);
+
+    DeploymentSpec zero = t4;
+    zero.device(0).dma.window = 0;
+    CHECK(zero.validate().find("dma.window declared as zero") != std::string::npos);
+
+    DeploymentSpec no_dram = t4;
+    no_dram.device(0).memory.dram.reset();
+    CHECK(no_dram.validate().find("dma.window needs memory.dram") != std::string::npos);
+
+    CHECK(declared(t4.device(0), SpecField::DmaWindow));
+    CHECK(declared_value(t4.device(0), SpecField::DmaWindow) == "32");
+}

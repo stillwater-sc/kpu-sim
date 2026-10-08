@@ -38,7 +38,7 @@ const std::set<std::string>& device_keys() {
 const std::set<std::string>& dma_keys() {
     // "burst" is the ADR's spelling; "burst_bytes" is canonical (§ header).
     static const std::set<std::string> k = {"engines", "bytes_per_cycle", "burst",
-                                            "burst_bytes"};
+                                            "burst_bytes", "window"};
     return k;
 }
 const std::set<std::string>& l3_keys() {
@@ -193,6 +193,7 @@ DeviceSpecification read_device(const json& obj, const std::string& where) {
         d.dma.bytes_per_cycle = read_double(s, "bytes_per_cycle", d.dma.bytes_per_cycle, w);
         d.dma.burst_bytes = s.contains("burst") ? read_optional_dim(s, "burst", w)
                                                 : read_optional_dim(s, "burst_bytes", w);
+        d.dma.window = read_optional_dim(s, "window", w);
     }
     if (obj.contains("l3")) {
         const json& s = obj.at("l3");
@@ -328,6 +329,7 @@ json write_device(const DeviceSpecification& d) {
     // OMITTED when absent, which is the whole mechanism behind "declared": writing a
     // default here would turn every round trip into a declaration.
     if (d.dma.burst_bytes) dma["burst_bytes"] = *d.dma.burst_bytes;
+    if (d.dma.window) dma["window"] = *d.dma.window;
     o["dma"] = dma;
 
     json l3 = json::object();

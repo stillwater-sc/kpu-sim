@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The DMA burst window (DRAM plan step 3).** `dma.window` in the spec and
+  `ConcurrentTimingExecutor::Config::dma_window` turn it on.
+  - A DMA engine decomposes each tile into DRAM bursts and keeps at most W in flight across its
+    tiles. A tile completes with its last burst.
+  - The hosted controller takes bursts (`submit_burst`) and reports each completion to its
+    submitter (`get_completed_burst`).
+  - **Measured on the T4 controller:** one engine with W = 32 reaches 95% of the data-bus
+    ceiling; 32 engines with W = 1 reach 69%. Both have 32 bursts in flight; locality, not
+    Little's law alone, separates them. Bandwidth grows with W until the latency is covered.
+  - Values stay bit-identical on T4, T16 and T64, with the NoC off and on.
+
 - **The NoC is wired into the CSP executor (NoC port plan step 4b.4), opt-in through
   `Config::noc` and `csp_noc_wiring()`.**
   - A load read from DRAM is injected at its engine's port and arrives in its home L3 tile only

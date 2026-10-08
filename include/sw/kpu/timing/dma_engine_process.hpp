@@ -116,6 +116,12 @@ public:
                                        ///< downstream writebacks; prevents credit starvation)
         size_t store_buffer_blocks = 2;  ///< Tiles the store buffer holds: ejected out of L3,
                                          ///< waiting for or in their DRAM write
+        /// Bursts this engine keeps in flight (docs/plans/dram-bank-model.md step 3). 0 = a
+        /// tile is one request to the controller. W > 0 needs a hosted controller: the engine
+        /// decomposes each tile into DRAM bursts, keeps at most W in flight across all its
+        /// tiles, and a tile completes when its last burst is home. queue_depth still bounds
+        /// the tiles in flight; the L3 credit is still taken before the first burst.
+        size_t window = 0;
         std::string name = "DMA";      ///< Human-readable name
 
         /// Generate human-readable name
@@ -146,6 +152,9 @@ public:
         Cycle enqueue_cycle;
         uint32_t slot_id = 0;    ///< L3 slot for this tile (for loads)
         uint64_t ticket = 0;     ///< Stores: this store's identity in the store buffer
+        // Burst window only:
+        uint64_t bursts = 0, sent = 0, done = 0;    ///< the tile's bursts: total, in, home
+        Cycle start_cycle = 0;                      ///< when its first burst was submitted
     };
 
     /**
@@ -183,6 +192,9 @@ public:
         if (l3_credits_.empty() || l3_credits_.size() != l3_tag_cams_.size())
             throw std::invalid_argument("DMAEngineProcess: one credit pool and one Tag CAM per "
                                         "L3 tile, and at least one tile");
+        if (config_.window > 0 && !mc_.hosted())
+            throw std::invalid_argument(name() + ": a burst window needs a hosted DRAM "
+                                        "controller (bursts need a burst size and an address map)");
     }
 
     /**
@@ -277,6 +289,9 @@ public:
         // Step 3: Try to match tags and submit new stores
         process_pending_stores(events);
 
+        // Step 3b: with a burst window, keep up to W bursts of the submitted tiles in flight
+        if (config_.window > 0) issue_bursts(events);
+
         // Step 4: Remove completed requests
         remove_completed_requests();
 
@@ -326,6 +341,7 @@ public:
         submitted_load_tiles_.clear();
         submitted_store_tiles_.clear();
         next_ticket_ = 0;
+        bursts_in_flight_ = 0;
         next_slot_id_ = 0;
         stall_cycles_credit_ = 0;
         stall_cycles_tag_ = 0;
@@ -380,6 +396,9 @@ public:
         return config_;
     }
 
+    /// Bursts this engine has in the controller right now (burst window; never above it).
+    [[nodiscard]] size_t bursts_in_flight() const { return bursts_in_flight_; }
+
     /// Where a BlockMover ejects this engine's stores (schedule_eject).
     [[nodiscard]] DmaStoreBuffer& store_buffer() { return store_buffer_; }
     [[nodiscard]] const DmaStoreBuffer& store_buffer() const { return store_buffer_; }
@@ -408,6 +427,7 @@ private:
     std::unordered_set<TileID, TileIDHash> submitted_store_tiles_;   // one write per tile at a time
     uint64_t next_ticket_ = 0;
     LoadRoute* load_route_ = nullptr;
+    size_t bursts_in_flight_ = 0;           // burst window: across all this engine's tiles
 
     Cycle current_cycle_ = 0;
     uint32_t next_slot_id_ = 0;
@@ -423,6 +443,30 @@ private:
      * @brief Process completed transfers from MC
      */
     void process_mc_completions(std::vector<TimingEvent>& events) {
+        if (config_.window > 0) {
+            // Burst window: count each burst home; the tile completes with its last.
+            while (auto b = mc_.get_completed_burst(config_.engine_id)) {
+                for (auto& req : pending_requests_) {
+                    if (req.state != RequestState::SUBMITTED || req.is_load != b->is_load ||
+                        !(req.tile.tile_id == b->tile) || req.done >= req.sent)
+                        continue;
+                    ++req.done;
+                    --bursts_in_flight_;
+                    if (req.done == req.bursts) {
+                        auto e = TimingEvent::duration_event(
+                            req.is_load ? EventType::DMA_LOAD_COMPLETE : EventType::DMA_STORE_COMPLETE,
+                            req.start_cycle, current_cycle_ - req.start_cycle, config_.engine_id,
+                            req.tile.tile_id, name());
+                        e.matrix_base_address = req.tile.matrix_base_address;
+                        e.dram_address = req.tile.dram_address;
+                        events.push_back(e);
+                        finish(req, events);
+                    }
+                    break;
+                }
+            }
+            return;
+        }
         // Only poll for our own completions using our engine_id
         while (auto completed = mc_.get_completed_transfer(config_.engine_id)) {
             // Find matching pending request
@@ -430,31 +474,70 @@ private:
                 if (req.state == RequestState::SUBMITTED &&
                     req.tile.tile_id == completed->tile.tile_id &&
                     req.is_load == completed->is_load) {
-
-                    if (completed->is_load) {
-                        // Read from DRAM. Unrouted, the tile arrives in L3 now; routed, it
-                        // enters the NoC first and arrives when its hub delivers it.
-                        if (load_route_) {
-                            req.state = RequestState::TO_INJECT;
-                            break;
-                        }
-                        arrive_in_l3(req, events);
-                    } else {
-                        // Store complete: the tile is in DRAM, and its store-buffer slot is
-                        // free. L3 was freed when the BlockMover's ejection landed.
-                        total_bytes_stored_ += completed->tile.size_bytes;
-                        store_buffer_.release();
-                        submitted_store_tiles_.erase(completed->tile.tile_id);
-                        events.push_back(TimingEvent(EventType::DMA_STORE_RETIRED, current_cycle_,
-                                                     config_.engine_id, completed->tile.tile_id,
-                                                     name()));
-                        events.back().store_ticket = req.ticket;
-                    }
-
-                    req.state = RequestState::COMPLETED;
+                    finish(req, events);
                     break;
                 }
             }
+        }
+    }
+
+    /// Hand a tile to the controller. Tile-level: one request, which the MC may refuse. Burst
+    /// window: the tile is accepted and its bursts go out in issue_bursts as the window allows.
+    bool submit(PendingRequest& req) {
+        if (config_.window == 0) return mc_.submit_request(req.tile, req.is_load, config_.engine_id);
+        req.bursts = mc_.bursts_of(req.tile);
+        req.sent = req.done = 0;
+        return true;
+    }
+
+    /// The tile is through DRAM: a load arrives in L3 (or enters the NoC first); a store
+    /// retires, freeing its store-buffer slot.
+    void finish(PendingRequest& req, std::vector<TimingEvent>& events) {
+        if (req.is_load) {
+            // Read from DRAM. Unrouted, the tile arrives in L3 now; routed, it enters the NoC
+            // first and arrives when its hub delivers it.
+            if (load_route_) {
+                req.state = RequestState::TO_INJECT;
+                return;
+            }
+            arrive_in_l3(req, events);
+        } else {
+            // Store complete: the tile is in DRAM, and its store-buffer slot is free. L3 was
+            // freed when the BlockMover's ejection landed.
+            total_bytes_stored_ += req.tile.size_bytes;
+            store_buffer_.release();
+            submitted_store_tiles_.erase(req.tile.tile_id);
+            events.push_back(TimingEvent(EventType::DMA_STORE_RETIRED, current_cycle_,
+                                         config_.engine_id, req.tile.tile_id, name()));
+            events.back().store_ticket = req.ticket;
+        }
+        req.state = RequestState::COMPLETED;
+    }
+
+    /// Burst window: submit the next bursts of the submitted tiles, oldest tile first, while
+    /// fewer than W are in flight and the controller takes them.
+    void issue_bursts(std::vector<TimingEvent>& events) {
+        for (auto& req : pending_requests_) {
+            if (req.state != RequestState::SUBMITTED) continue;
+            if (req.bursts == 0) {              // a zero-byte tile: nothing to move
+                req.start_cycle = current_cycle_;
+                finish(req, events);
+                continue;
+            }
+            while (req.sent < req.bursts && bursts_in_flight_ < config_.window) {
+                if (!mc_.submit_burst(req.tile, req.sent, req.is_load, config_.engine_id)) return;
+                if (req.sent++ == 0) {
+                    req.start_cycle = current_cycle_;
+                    auto e = TimingEvent(req.is_load ? EventType::DMA_LOAD_START
+                                                     : EventType::DMA_STORE_START,
+                                         current_cycle_, config_.engine_id, req.tile.tile_id, name());
+                    e.matrix_base_address = req.tile.matrix_base_address;
+                    e.dram_address = req.tile.dram_address;
+                    events.push_back(e);
+                }
+                ++bursts_in_flight_;
+            }
+            if (bursts_in_flight_ >= config_.window) return;
         }
     }
 
@@ -526,7 +609,7 @@ private:
 
             // Got credit - submit to MC with our engine_id
             req.slot_id = allocate_slot(cam);
-            if (!mc_.submit_request(req.tile, true, config_.engine_id)) {
+            if (!submit(req)) {
                 // MC queue full - release credit and retry later
                 credits.release(load_part);
                 continue;
@@ -586,7 +669,7 @@ private:
             if (submitted_store_tiles_.count(req.tile.tile_id) > 0) continue;
 
             // Tile is in the buffer - submit to MC with our engine_id
-            if (!mc_.submit_request(req.tile, false, config_.engine_id)) {
+            if (!submit(req)) {
                 // MC queue full - retry later
                 continue;
             }

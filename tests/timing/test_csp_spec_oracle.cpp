@@ -453,3 +453,22 @@ TEST_CASE("NoC wired: a load is in L3 only once its hub delivers it", "[timing][
     CHECK(exec.l3_tile_tag_cam(1).lookup(t.tile_id));
     CHECK(exec.noc()->hubs()[1].delivered().size() == 1);
 }
+
+TEST_CASE("Burst window: values never move, with the NoC off and on", "[timing][csp][oracle][window]") {
+    for (const char* file : {"kpu_t4.json", "kpu_t16.json", "kpu_t64.json"}) {
+        CAPTURE(file);
+        const OracleRun tiles = run_matmul(device(file), 128, 32, false);
+        DeviceSpecification d = device(file);
+        d.dma.window = 32;
+        for (const bool noc : {false, true}) {
+            CAPTURE(noc);
+            const OracleRun w = run_matmul(d, 128, 32, noc);
+            CHECK(w.csp == tiles.csp);
+            CHECK(w.csp == w.reference);            // bit-identical: fill() keeps sums exact
+            CHECK(w.l3_free_after == w.l3_capacity);
+            std::printf("window %-14s noc=%d: %8llu cycles (tile-level, no NoC: %llu)\n", file,
+                        noc ? 1 : 0, static_cast<unsigned long long>(w.cycles),
+                        static_cast<unsigned long long>(tiles.cycles));
+        }
+    }
+}

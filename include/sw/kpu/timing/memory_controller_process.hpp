@@ -172,6 +172,65 @@ public:
     [[nodiscard]] const DramBridge* bridge() const { return bridge_.get(); }
 
     // ========================================================================
+    // Burst interface (hosted only; docs/plans/dram-bank-model.md step 3)
+    // ========================================================================
+    // A DMA engine with a burst window decomposes its tile, keeps up to W bursts in flight, and
+    // counts them home. The controller sees bursts, reorders them by bank (FR-FCFS), and
+    // reports each one's completion to its submitter. The tile is the engine's business.
+
+    /// The DRAM burst: the unit of submit_burst.
+    [[nodiscard]] std::uint64_t burst_bytes() const {
+        if (!bridge_) throw std::logic_error(name() + ": bursts need a hosted DRAM");
+        return bridge_->map().burst_bytes();
+    }
+
+    /// The bursts `tile` occupies: from the burst holding its first byte to the one holding
+    /// its last.
+    [[nodiscard]] std::uint64_t bursts_of(const TileDescriptor& tile) const {
+        const std::uint64_t b = burst_bytes();
+        if (tile.size_bytes == 0) return 0;
+        const std::uint64_t first = tile.dram_address / b * b;
+        const std::uint64_t end = (tile.dram_address + tile.size_bytes + b - 1) / b * b;
+        return (end - first) / b;
+    }
+
+    /// Submit burst `index` of `tile`. False = the controller's queue is full (back-pressure).
+    bool submit_burst(const TileDescriptor& tile, std::uint64_t index, bool is_load,
+                      uint32_t submitter_id) {
+        const std::uint64_t b = burst_bytes();
+        const auto& map = bridge_->map();
+        if (tile.dram_address + tile.size_bytes > map.capacity())
+            throw std::out_of_range(
+                config_.name + ": tile " + std::to_string(tile.dram_address) + " + " +
+                std::to_string(tile.size_bytes) + " B runs past the declared DRAM (" +
+                std::to_string(map.capacity()) + " B)");
+        const std::uint64_t address = tile.dram_address / b * b + index * b;
+        const std::uint64_t id = next_burst_id_++;
+        if (!bridge_->submit(address, is_load, kBurstTag | id)) {
+            --next_burst_id_;
+            return false;
+        }
+        bursts_[id] = BurstDone{tile.tile_id, is_load, submitter_id};
+        return true;
+    }
+
+    struct BurstDone {
+        TileID tile;
+        bool is_load = true;
+        uint32_t submitter_id = 0;
+    };
+    /// The oldest finished burst submitted by `submitter_id`, if any.
+    std::optional<BurstDone> get_completed_burst(uint32_t submitter_id) {
+        for (auto it = bursts_done_.begin(); it != bursts_done_.end(); ++it)
+            if (it->submitter_id == submitter_id) {
+                const BurstDone d = *it;
+                bursts_done_.erase(it);
+                return d;
+            }
+        return std::nullopt;
+    }
+
+    // ========================================================================
     // DMA Engine Interface (submit/poll pattern)
     // ========================================================================
 
@@ -299,12 +358,12 @@ public:
     }
 
     [[nodiscard]] bool is_idle() const override {
-        if (bridge_) return hosted_.empty() && !bridge_->busy();
+        if (bridge_) return hosted_.empty() && bursts_.empty() && !bridge_->busy();
         return in_flight_.empty();
     }
 
     [[nodiscard]] bool has_pending_work() const override {
-        if (bridge_) return !hosted_.empty();
+        if (bridge_) return !hosted_.empty() || !bursts_done_.empty();
         return !request_queue_.empty();
     }
 
@@ -312,7 +371,8 @@ public:
      * @brief Check if MC is complete (no pending or in-flight work)
      */
     [[nodiscard]] bool is_complete() const override {
-        if (bridge_) return hosted_.empty() && !bridge_->busy();
+        if (bridge_)
+            return hosted_.empty() && bursts_.empty() && bursts_done_.empty() && !bridge_->busy();
         return request_queue_.empty() && in_flight_.empty();
     }
 
@@ -342,6 +402,9 @@ public:
         next_request_id_ = 0;
         hosted_.clear();
         hosted_order_.clear();
+        bursts_.clear();
+        bursts_done_.clear();
+        next_burst_id_ = 0;
         if (bridge_) bridge_->reset();
     }
 
@@ -397,6 +460,11 @@ private:
     std::unordered_map<std::uint32_t, HostedTile> hosted_;
     std::deque<std::uint32_t> hosted_order_;
     std::vector<std::uint64_t> burst_done_;
+    // Window bursts (submit_burst): their own tag space, so the tile path's ids never collide.
+    static constexpr std::uint64_t kBurstTag = std::uint64_t{1} << 63;
+    std::uint64_t next_burst_id_ = 0;
+    std::unordered_map<std::uint64_t, BurstDone> bursts_;     // in the controller
+    std::deque<BurstDone> bursts_done_;                       // finished, for submitters to poll
 
     // Statistics
     Cycle stall_cycles_cmd_bus_ = 0;
@@ -520,7 +588,16 @@ private:
         // Time passes in the controller's clock; collect the bursts that finished.
         burst_done_.clear();
         bridge_->advance(now, burst_done_);
-        for (std::uint64_t tag : burst_done_) ++hosted_.at(static_cast<std::uint32_t>(tag)).done;
+        for (std::uint64_t tag : burst_done_) {
+            if (tag & kBurstTag) {
+                auto it = bursts_.find(tag & ~kBurstTag);
+                bursts_done_.push_back(it->second);
+                bursts_.erase(it);
+                total_bytes_transferred_ += b;
+                continue;
+            }
+            ++hosted_.at(static_cast<std::uint32_t>(tag)).done;
+        }
 
         // A tile completes with its last burst (a zero-byte tile, on its first tick).
         for (auto it = hosted_order_.begin(); it != hosted_order_.end();) {
