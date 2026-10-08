@@ -43,6 +43,34 @@ if(KPU_BUILD_TESTS)
             -DMUST_MATCH=did.not.finish
             -P ${_expect}
     )
+    # Input that would wrap or be silently ignored is refused by name, exit 2.
+    foreach(_case IN ITEMS
+            "negative|bad_negative.json|not.a.non-negative.number"
+            "trailing|bad_trailing.json|not.JSON"
+            "huge|bad_huge.json|larger.than.4294967295"
+            "zero_random|bad_zero_random.json|bytes.must.be.greater.than.zero")
+        string(REPLACE "|" ";" _parts "${_case}")
+        list(GET _parts 0 _name)
+        list(GET _parts 1 _file)
+        list(GET _parts 2 _match)
+        add_test(NAME kpu_memsim_rejects_${_name}
+            COMMAND ${CMAKE_COMMAND}
+                -DCMD=$<TARGET_FILE:memsim>
+                -DARGS=--deploy$<SEMICOLON>${_deploy}/kpu_t4.json$<SEMICOLON>--scenario$<SEMICOLON>${_memside}/${_file}$<SEMICOLON>--out$<SEMICOLON>${CMAKE_CURRENT_BINARY_DIR}/rejected.mflow
+                -DEXPECT_CODE=2
+                -DMUST_MATCH=${_match}
+                -P ${_expect}
+        )
+        set_tests_properties(kpu_memsim_rejects_${_name} PROPERTIES LABELS "memside;dram;tools")
+    endforeach()
+    add_test(NAME kpu_memsim_rejects_bad_device
+        COMMAND ${CMAKE_COMMAND}
+            -DCMD=$<TARGET_FILE:memsim>
+            -DARGS=--deploy$<SEMICOLON>${_deploy}/kpu_t4.json$<SEMICOLON>--device$<SEMICOLON>1x$<SEMICOLON>--scenario$<SEMICOLON>${_memside}/t4_mixed.json$<SEMICOLON>--out$<SEMICOLON>${CMAKE_CURRENT_BINARY_DIR}/rejected.mflow
+            -DEXPECT_CODE=2
+            -DMUST_MATCH=device.index
+            -P ${_expect}
+    )
     set_tests_properties(kpu_memsim_t4 kpu_memsim_rejects_bad_scenario kpu_memsim_unfinished
-        PROPERTIES LABELS "memside;dram;tools")
+        kpu_memsim_rejects_bad_device PROPERTIES LABELS "memside;dram;tools")
 endif()

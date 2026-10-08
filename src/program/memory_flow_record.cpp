@@ -10,6 +10,7 @@
 #include <sw/kpu/program/record/columnar.hpp>
 #include <sw/kpu/program/record/tile_flow_lod.hpp>
 
+#include <cmath>
 #include <filesystem>
 #include <map>
 #include <utility>
@@ -242,7 +243,15 @@ MFR read_mflow(const std::string& dir) {
         blob = slurp(dir + "/" + t.at("file").get<std::string>());
         return t;
     };
-    auto t64 = [](const std::vector<double>& v, std::size_t i) { return static_cast<Cycle>(v[i]); };
+    // A time column is untrusted input: it must hold a whole, non-negative cycle count that an
+    // f64 holds exactly. Casting anything else to Cycle would be undefined or would truncate.
+    auto t64 = [](const std::vector<double>& v, std::size_t i) {
+        const double t = v[i];
+        if (!std::isfinite(t) || t < 0.0 || std::floor(t) != t || t > static_cast<double>(kMaxExactCycle))
+            throw RecordError("record: a time column holds " + std::to_string(t) +
+                              ", which is not a cycle count");
+        return static_cast<Cycle>(t);
+    };
     {
         std::string b;
         const json& t = load("bursts", b);
@@ -339,6 +348,15 @@ MFR read_mflow(const std::string& dir) {
             rec.ports.push_back({port[i], engine[i], request[i], static_cast<MFR::PortKind>(kind[i]), t64(tt, i)});
         }
     }
+    // Indices into the requests table, checked once every table is in.
+    for (std::size_t i = 0; i < rec.bursts.size(); ++i)
+        if (rec.bursts[i].request != kNone && rec.bursts[i].request >= rec.requests.size())
+            throw RecordError("record: burst " + std::to_string(i) + " names request " +
+                              std::to_string(rec.bursts[i].request) + ", past the requests table");
+    for (std::size_t i = 0; i < rec.ports.size(); ++i)
+        if (rec.ports[i].request != kNone && rec.ports[i].request >= rec.requests.size())
+            throw RecordError("record: port event " + std::to_string(i) + " names request " +
+                              std::to_string(rec.ports[i].request) + ", past the requests table");
     return rec;
 }
 

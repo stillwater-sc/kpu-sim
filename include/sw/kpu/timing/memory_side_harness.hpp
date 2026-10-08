@@ -97,6 +97,7 @@ struct RequestModel {
                 break;
             }
             case Kind::Random: {
+                if (bytes == 0) throw std::invalid_argument("random: bytes must be greater than zero");
                 if (region < bytes) throw std::invalid_argument("random: region below the request size");
                 std::uint64_t s = seed ? seed : 1;
                 const std::uint64_t slots = region / bytes;

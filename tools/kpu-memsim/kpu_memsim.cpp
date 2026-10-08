@@ -32,9 +32,11 @@
 
 #include <nlohmann/json.hpp>
 
+#include <cctype>
 #include <cstdio>
 #include <fstream>
 #include <iostream>
+#include <limits>
 #include <set>
 #include <stdexcept>
 #include <string>
@@ -54,27 +56,39 @@ void reject_unknown(const json& o, const std::set<std::string>& keys, const std:
         if (!keys.count(it.key())) throw UsageError(where + ": unknown key '" + it.key() + "'");
 }
 
-std::uint64_t num(const json& o, const char* key, std::uint64_t dflt, const std::string& where) {
+// A non-negative whole number no larger than `max` (the destination field's range): a JSON
+// integer, or a decimal or "0x" string. Anything else is refused rather than wrapped.
+std::uint64_t num(const json& o, const char* key, std::uint64_t dflt, const std::string& where,
+                  std::uint64_t max = std::numeric_limits<std::uint64_t>::max()) {
     if (!o.contains(key)) return dflt;
     const json& v = o.at(key);
-    if (v.is_number_unsigned()) return v.get<std::uint64_t>();
-    if (v.is_number_integer()) {
+    std::uint64_t x = 0;
+    if (v.is_number_unsigned()) {
+        x = v.get<std::uint64_t>();
+    } else if (v.is_number_integer()) {
         if (v.get<std::int64_t>() < 0) throw UsageError(where + "." + key + " must not be negative");
-        return static_cast<std::uint64_t>(v.get<std::int64_t>());
-    }
-    if (v.is_string()) {
+        x = static_cast<std::uint64_t>(v.get<std::int64_t>());
+    } else if (v.is_string()) {
+        // stoull accepts leading space, '+' and '-' (wrapping a negative); a number here must
+        // start with a digit.
+        const std::string s = v.get<std::string>();
+        if (s.empty() || !std::isdigit(static_cast<unsigned char>(s[0])))
+            throw UsageError(where + "." + key + " is not a non-negative number: " + v.dump());
         try {
             std::size_t used = 0;
-            const std::string s = v.get<std::string>();
-            const std::uint64_t x = std::stoull(s, &used, 0);
+            x = std::stoull(s, &used, 0);
             if (used != s.size()) throw std::invalid_argument(s);
-            return x;
         } catch (const std::exception&) {
             throw UsageError(where + "." + key + " is not a number: " + v.dump());
         }
+    } else {
+        throw UsageError(where + "." + key + " must be a number");
     }
-    throw UsageError(where + "." + key + " must be a number");
+    if (x > max)
+        throw UsageError(where + "." + key + " (" + std::to_string(x) + ") is larger than " + std::to_string(max));
+    return x;
 }
+constexpr std::uint64_t kU32 = std::numeric_limits<std::uint32_t>::max();
 
 RequestModel model_of(const json& m, const std::string& where) {
     reject_unknown(m, {"kind", "load", "base", "count", "bytes", "stride", "region", "seed", "rows", "cols",
@@ -83,10 +97,10 @@ RequestModel model_of(const json& m, const std::string& where) {
     const bool load = m.value("load", true);
     if (kind == "replay_matmul") {
         schedule::MatMulScheduleGenerator::Config g;
-        g.M = static_cast<Size>(num(m, "M", 128, where));
-        g.N = static_cast<Size>(num(m, "N", g.M, where));
-        g.K = static_cast<Size>(num(m, "K", g.M, where));
-        g.Ti = g.Tj = g.Tk = static_cast<Size>(num(m, "tile", 32, where));
+        g.M = static_cast<Size>(num(m, "M", 128, where, kU32));
+        g.N = static_cast<Size>(num(m, "N", g.M, where, kU32));
+        g.K = static_cast<Size>(num(m, "K", g.M, where, kU32));
+        g.Ti = g.Tj = g.Tk = static_cast<Size>(num(m, "tile", 32, where, kU32));
         const auto s = schedule::MatMulScheduleGenerator(g).generate();
         if (!s.valid) throw UsageError(where + ": the matmul schedule is not valid");
         return RequestModel::replay_of(s, load);
@@ -94,20 +108,23 @@ RequestModel model_of(const json& m, const std::string& where) {
     RequestModel r;
     r.is_load = load;
     r.base = num(m, "base", 0, where);
-    r.count = static_cast<std::uint32_t>(num(m, "count", 0, where));
-    r.bytes = static_cast<std::uint32_t>(num(m, "bytes", 4096, where));
+    r.count = static_cast<std::uint32_t>(num(m, "count", 0, where, kU32));
+    r.bytes = static_cast<std::uint32_t>(num(m, "bytes", 4096, where, kU32));
     r.stride = num(m, "stride", 0, where);
     r.region = num(m, "region", 0, where);
     r.seed = num(m, "seed", 1, where);
-    r.rows = static_cast<std::uint32_t>(num(m, "rows", 0, where));
-    r.cols = static_cast<std::uint32_t>(num(m, "cols", 0, where));
-    r.element_bytes = static_cast<std::uint32_t>(num(m, "element_bytes", 4, where));
-    r.tile_rows = static_cast<std::uint32_t>(num(m, "tile_rows", 0, where));
-    r.tile_cols = static_cast<std::uint32_t>(num(m, "tile_cols", 0, where));
+    r.rows = static_cast<std::uint32_t>(num(m, "rows", 0, where, kU32));
+    r.cols = static_cast<std::uint32_t>(num(m, "cols", 0, where, kU32));
+    r.element_bytes = static_cast<std::uint32_t>(num(m, "element_bytes", 4, where, kU32));
+    r.tile_rows = static_cast<std::uint32_t>(num(m, "tile_rows", 0, where, kU32));
+    r.tile_cols = static_cast<std::uint32_t>(num(m, "tile_cols", 0, where, kU32));
     r.pitch = num(m, "pitch", 0, where);
     if (kind == "stream") r.kind = RequestModel::Kind::Stream;
     else if (kind == "strided") r.kind = RequestModel::Kind::Strided;
-    else if (kind == "random") r.kind = RequestModel::Kind::Random;
+    else if (kind == "random") {
+        r.kind = RequestModel::Kind::Random;
+        if (r.bytes == 0) throw UsageError(where + ".bytes must be greater than zero for a random model");
+    }
     else if (kind == "matrix_tiles") r.kind = RequestModel::Kind::MatrixTiles;
     else throw UsageError(where + ".kind '" + kind + "' is not one of stream, strided, random, matrix_tiles, "
                                   "replay_matmul");
@@ -147,7 +164,7 @@ MemorySideHarness::Config scenario_of(const json& s, const sw::kpu::program::pla
         if (!st.contains("port") || (st.at("port").is_string() && st.at("port").get<std::string>() == "first"))
             x.port = first;
         else
-            x.port = static_cast<unsigned>(num(st, "port", 0, where));
+            x.port = static_cast<unsigned>(num(st, "port", 0, where, std::numeric_limits<unsigned>::max()));
         x.issue_interval = num(st, "issue_interval", 0, where);
         if (!st.contains("model")) throw UsageError(where + ".model is required");
         x.model = model_of(st.at("model"), where + ".model");
@@ -175,7 +192,12 @@ int main(int argc, char** argv) {
             if (a == "--deploy") deploy = value();
             else if (a == "--scenario") scenario = value();
             else if (a == "--out") out = value();
-            else if (a == "--device") device = static_cast<unsigned>(std::stoul(value()));
+            else if (a == "--device") {
+                const std::string v = value();
+                if (v.empty() || v.size() > 9 || v.find_first_not_of("0123456789") != std::string::npos)
+                    throw UsageError("--device must be a device index, not '" + v + "'");
+                device = static_cast<unsigned>(std::stoul(v));
+            }
             else if (a == "-h" || a == "--help") { usage(); return 0; }
             else throw UsageError("unknown argument '" + a + "'");
         }
@@ -190,7 +212,7 @@ int main(int argc, char** argv) {
         if (!in) throw UsageError("cannot read " + scenario);
         json s;
         try {
-            in >> s;
+            s = json::parse(in);        // the whole file: trailing text after the scenario is refused
         } catch (const json::exception& e) {
             throw UsageError(scenario + " is not JSON: " + e.what());
         }
