@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The memory side runs on its own (memory-side debugger step 2,
+  `timing/memory_side_harness.hpp`).**
+  - It runs the DRAM, the hosted memory controllers, and the DMA engines with their burst windows
+    and store buffers.
+  - Each NoC port is a stub:
+    - request models: stream, strided, random, pitched matrix tiles, and schedule replay;
+    - a load sink at the injection-bus rate, with input-queue back-pressure (or infinite);
+    - an ejection model that fills the store buffers.
+  - It records each request's lifetime, store-buffer occupancy, and the port events, beside
+    the controllers' commands and bursts.
+  - The DRAM step-3 bandwidth table reproduces through it.
+
 - **The DRAM is observable, command by command (memory-side debugger step 1,
   `docs/plans/memory-side-debugger.md`).**
   - `LPDDR5MemoryController::set_command_observer` reports every ACT/RD/WR/PRE/REF. Each record

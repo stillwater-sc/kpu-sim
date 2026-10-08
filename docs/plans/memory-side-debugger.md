@@ -211,6 +211,33 @@ Each step is one PR and ends green.
      ejection model.
    - Tests: conservation (every request completes, every slot returns); the sink's back-pressure
      stalls injection; the step-3 table reproduces.
+   (Done.)
+   - **As built,** `timing/memory_side_harness.hpp` (`sw::kpu::timing::memside`):
+     - **Parts:** hosted MCs with recording on, and DMA engines numbered and attached as the
+       floorplan does. The stand-in L3 is one credit pool of `l3.capacity_tiles` slots.
+     - **`RequestModel`:** stream, strided, random, matrix tiles and replay. `matrix_tiles`
+       issues one request per tile row, the rows a pitch apart, as a 2D DMA would.
+       `replay_of(schedule)` takes a schedule's LOAD or STORE tiles.
+     - **Load sink:** each attached port has a per-engine input queue and an injection bus that
+       carries one block per `block_cycles`, oldest head first. A full queue refuses the
+       engine. A landed load frees its stand-in L3 slot `consume_latency` cycles later.
+       `infinite` lands at once.
+     - **Ejection model:** one ejection per engine at a time, every `eject_interval` cycles. It
+       reserves a store-buffer slot (waiting while none is free), crosses the ejection bus,
+       and is delivered under its ticket.
+     - **Records:** each request's lifetime (offered, credit, first burst, last burst,
+       retired), store-buffer occupancy on change, and port events (offer, accept, refuse,
+       land, eject arrive, wait, deliver).
+   - **Tests:**
+     - the models give their documented addresses (matrix-tile pitch, replay counts);
+     - conservation: every request retires, every credit and buffer slot returns, and the
+       burst count equals the bytes spanned;
+     - lifetimes are ordered;
+     - a slow bus paces loads and refuses engines, while an infinite sink runs at the DRAM
+       ceiling;
+     - the step-3 table reproduces: 1 x 32 reaches at least 90%, 32 x 1 stays under 80%.
+     - A sink that never refuses, or a consumer that never frees L3, each fails.
+
 3. **Record (DRAM step 4).**
    - The `.mflow` writer and reader, and LOD rows for the new kinds.
    - `kpu-memsim scenario.json --out`.
