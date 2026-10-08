@@ -433,6 +433,16 @@ TEST_CASE("Recording: a burst's commands, coordinates and page outcome are obser
         {Cmd::Kind::Activate, 5}, {Cmd::Kind::Read, 5}, {Cmd::Kind::Read, 5},
         {Cmd::Kind::Precharge, 5}, {Cmd::Kind::Activate, 9}, {Cmd::Kind::Read, 9}};
     CHECK(chain == want);
+
+    // Every command names its burst. The conflict's precharge names the burst that OPENED row 5
+    // (the first), although that burst completed long before: its tag outlives it until then.
+    auto burst_of = [](const Cmd& cmd) { return *cmd.tag & ~(std::uint64_t{1} << 63); };
+    for (const auto& cmd : mc.recorded_commands()) {
+        if (cmd.kind == Cmd::Kind::Refresh) continue;
+        REQUIRE(cmd.tag.has_value());
+        if (cmd.kind == Cmd::Kind::Precharge) CHECK(burst_of(cmd) == bursts[0].id);
+        if (cmd.kind == Cmd::Kind::Activate && cmd.row == 9) CHECK(burst_of(cmd) == bursts[2].id);
+    }
 }
 
 TEST_CASE("Recording is off by default and costs nothing", "[timing][dram][hosted][record]") {

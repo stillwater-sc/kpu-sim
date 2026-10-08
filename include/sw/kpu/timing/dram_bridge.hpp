@@ -85,7 +85,7 @@ public:
 
     // One DRAM command, in executor cycles and the spec's coordinates
     // (docs/plans/memory-side-debugger.md §3.1). `tag` is the burst's submit() tag; a refresh has
-    // none, and a precharge carries its page opener's tag while that burst is still in flight.
+    // none, and a precharge carries the tag of the burst that opened the row it closes.
     struct Command {
         enum class Kind : std::uint8_t { Activate, Read, Write, Precharge, Refresh };
         Kind kind = Kind::Activate;
@@ -96,7 +96,8 @@ public:
         std::optional<std::uint64_t> tag;
         bool activated = false, conflicted = false;     // Read/Write: the page outcome
     };
-    // Called for every command the controller issues. Unset = no cost.
+    // Called for every command the controller issues. Unset = recording is skipped; the
+    // controller still makes one null check per command.
     void set_command_sink(std::function<void(const Command&)> sink);
 
     double ticks_per_cycle() const { return ticks_per_cycle_; }

@@ -11,6 +11,7 @@
 
 #include <cmath>
 #include <unordered_map>
+#include <unordered_set>
 #include <functional>
 #include <memory>
 #include <sstream>
@@ -83,6 +84,10 @@ struct DramBridge::Impl {
     std::uint64_t bursts = 0, misrouted = 0;
     std::function<void(const Command&)> sink;
     std::unordered_map<std::uint64_t, std::uint64_t> tag_of;   // controller request id -> tag
+    // Requests that opened a row (issued an ACT). The precharge that closes the row names its
+    // opener, and comes after the opener's burst has completed, so an opener's tag is kept until
+    // that precharge is observed; every other request's is dropped when its burst completes.
+    std::unordered_set<std::uint64_t> openers;
 
     std::uint64_t native(const DramCoord& c, unsigned flat_bank) const {
         // The controller's own layout: [row | bank | col | channel | 64-byte offset].
@@ -144,6 +149,13 @@ DramBridge::DramBridge(const DramHosting& h, unsigned controller_id, double exec
         if (r.request_id) {
             auto it = impl_->tag_of.find(r.request_id);
             if (it != impl_->tag_of.end()) cmd.tag = it->second;
+            if (r.kind == K::Activate) {
+                impl_->openers.insert(r.request_id);
+            } else if (r.kind == K::Precharge) {
+                // The row is closed: its opener is done with.
+                impl_->openers.erase(r.request_id);
+                impl_->tag_of.erase(r.request_id);
+            }
         }
         cmd.activated = r.activated;
         cmd.conflicted = r.conflicted;
@@ -170,17 +182,18 @@ bool DramBridge::submit(std::uint64_t address, bool is_load, std::uint64_t tag) 
     auto& done = impl_->done;
     // With a command sink, map the controller's request id to the tag so commands name their
     // burst. The id is known only after submit, so the callback reads it from a shared slot.
-    auto* tags = impl_->sink ? &impl_->tag_of : nullptr;
+    Impl* impl = impl_->sink ? impl_.get() : nullptr;
     auto slot = std::make_shared<std::uint64_t>(0);
-    auto cb = [&done, tag, tags, slot] {
+    auto cb = [&done, tag, impl, slot] {
         done.push_back(tag);
-        if (tags) tags->erase(*slot);
+        // An opener's tag outlives its burst: the precharge that closes its row names it.
+        if (impl && !impl->openers.count(*slot)) impl->tag_of.erase(*slot);
     };
     const auto id = is_load ? impl_->mc->submit_read(a, hosting_.map.burst_bytes(), cb)
                             : impl_->mc->submit_write(a, nullptr, hosting_.map.burst_bytes(), cb);
     if (!id) return false;
     *slot = *id;
-    if (tags) (*tags)[*id] = tag;
+    if (impl) impl->tag_of[*id] = tag;
     ++impl_->bursts;
     return true;
 }
@@ -204,6 +217,7 @@ void DramBridge::reset() {
     impl_->last = 0;
     impl_->bursts = impl_->misrouted = 0;
     impl_->tag_of.clear();
+    impl_->openers.clear();
 }
 
 void DramBridge::set_command_sink(std::function<void(const Command&)> sink) {

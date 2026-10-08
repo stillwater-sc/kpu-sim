@@ -84,7 +84,8 @@ for everything north of the port.
 - **The MC's burst path records each burst:** submitted, first command (ACT or CAS), data
   start/end, and completed, with its decoded coordinates and page outcome (hit, empty or
   conflict).
-- All of this is **opt-in** (`Config::record`), so runs without a recorder pay nothing.
+- All of this is **opt-in** (`Config::record`). Without a recorder nothing is kept; the
+  controller still makes one null check per command.
 
 ### 3.2 The harness and the port stubs
 
@@ -190,8 +191,9 @@ Each step is one PR and ends green.
        - A command issues at the executor cycle the controller is being ticked to. Its end and
          data window are converted at ticks-per-cycle.
        - Coordinates come back in the spec's `(ch, bg, ba, row, col)`.
-       - `tag` is the burst's submit tag. A precharge carries its page opener's tag only while
-         that burst is still in flight, because the id map entry is dropped at completion.
+       - `tag` is the burst's submit tag. A precharge carries the tag of the burst that opened
+         the row it closes: an opener's tag is kept until that precharge, because a conflict's
+         precharge always comes after the opener's burst completed (found in review).
      - **MC:** `MemoryControllerProcess::Config::record`.
        - `recorded_commands()` returns every command.
        - `recorded_bursts()` returns each window burst: id, submitter, tile, address, decoded
@@ -232,7 +234,7 @@ All five went with the recommendation:
 | # | Question | Options | Recommendation |
 |---|---|---|---|
 | Q1 | Where the per-bank record lives (DRAM step 4) | (a) a new `.mflow` bundle sharing the `.tflow` container code; (b) `.tflow` v4 with optional DRAM tables | **(a).** `.tflow` is tile-granular and L-T1; per-burst and per-command data is a different grain from a different producer. Sharing the container keeps the readers and the LOD code common. The CSP executor can write both once it records (#283) |
-| Q2 | How the controller is observed | (a) a `CommandObserver` callback added to the LPDDR5 controller; (b) enable its existing trace and post-process the `TraceEntry` list | **(a).** The trace lacks the row and is in controller cycles. A callback gets the row and the request at the moment of issue, at no cost when unset |
+| Q2 | How the controller is observed | (a) a `CommandObserver` callback added to the LPDDR5 controller; (b) enable its existing trace and post-process the `TraceEntry` list | **(a).** The trace lacks the row and is in controller cycles. A callback gets the row and the request at the moment of issue; unset, it costs one null check per command |
 | Q3 | First request models | stream, strided, random, matrix tiles, schedule replay | **all five**; replay ties the harness to real schedules |
 | Q4 | Port-stub fidelity | (a) the injection bus at the NoC link rate, with an input-queue depth from the spec; (b) infinite sink only | **(a), with infinite as an option.** The point is to see the memory side under the port's actual back-pressure |
 | Q5 | The viewer | (a) a new page sharing the loader; (b) a mode in the tile-flow viewer | **(a).** Its rows are banks and commands, not tiles and stations |
