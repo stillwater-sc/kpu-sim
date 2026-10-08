@@ -246,6 +246,18 @@ class MflowCheckSelfTest(unittest.TestCase):
                    self.b.rows("bursts") + 5)
         self.assertUnreadable()
 
+    def test_a_station_without_an_index_is_refused(self):
+        # check() keys engines by the index in the name; a crash there would exit 1, a "violation".
+        s = next(s for s in self.b.manifest["stations"] if s["kind"] == "dmabuf")
+        s["name"] = "t4/dmabuf"
+        self.b.save_manifest()
+        self.assertUnreadable()
+
+    def test_a_non_numeric_burst_size_is_refused(self):
+        self.b.manifest["burst_bytes"] = "64"
+        self.b.save_manifest()
+        self.assertUnreadable()
+
     def test_a_non_bundle_is_refused(self):
         code, _ = run(self.b.dir.parent)
         self.assertEqual(code, 2)

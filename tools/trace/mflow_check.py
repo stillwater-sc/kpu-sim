@@ -128,6 +128,12 @@ def load(path):
             raise Unreadable("manifest stations need a string name and kind each")
         for s in st:
             _count(s.get("capacity"), f"the capacity of {s['name']}")
+            if s["kind"] in ("dma", "dmabuf"):
+                # check() keys these by the index in their name (dev/dma[3]): a name it cannot
+                # parse is unreadable input, not a crash that would exit 1 as a "violation".
+                _station_index(s["name"])
+        if "burst_bytes" in m:
+            _count(m["burst_bytes"], "burst_bytes")
         dt = m["dram_timing"]
         params = dt["params"]
         for p in TIMING:
@@ -189,16 +195,18 @@ def _peak_over(intervals, cap):
     return None
 
 
+def _station_index(name):
+    """The instance index of a station named like dev/dma[3]; Unreadable if it has none."""
+    lo, hi = name.rfind("["), name.rfind("]")
+    key = name[lo + 1:hi] if 0 <= lo < hi else ""
+    if not key.isdigit():
+        raise Unreadable(f"station {name!r} has no [index]")
+    return int(key)
+
+
 def _index(stations, kind):
     """{instance index: capacity} of a station kind named like dev/dma[3]."""
-    out = {}
-    for s in stations:
-        if s["kind"] != kind:
-            continue
-        name = s["name"]
-        key = name[name.rindex("[") + 1:name.rindex("]")]
-        out[int(key)] = s["capacity"]
-    return out
+    return {_station_index(s["name"]): s["capacity"] for s in stations if s["kind"] == kind}
 
 
 def check(rec):

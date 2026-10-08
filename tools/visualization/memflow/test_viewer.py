@@ -110,6 +110,16 @@ class ViewerSmokeTest(unittest.TestCase):
         self.assertGreater(got["commands"], got["bursts"])   # every burst has at least its RD/WR
         self.assertGreater(got["requests"], 0)
 
+    def test_a_bad_column_is_refused_by_name(self):
+        # An unknown dtype must say so, not fail on the alignment check with a TypeError.
+        src = "\n".join([extract(self.page, "function col(buf, cols, name, n) {"), """
+const out = [];
+for (const c of [{ name: "x", dtype: "u16", offset: 0 }, { name: "x", dtype: "f64", offset: 4 }]) {
+  try { col(new ArrayBuffer(64), [c], "x", 1); out.push("accepted"); } catch (e) { out.push(e.message); }
+}
+process.stdout.write(JSON.stringify(out));"""])
+        self.assertEqual(self.node(src), ["column x has an unknown dtype u16", "column x is misaligned"])
+
     def test_the_step_series_counts_in_flight(self):
         src = "\n".join([extract(self.page, "function stepSeries(intervals) {"),
                          extract(self.page, "function valueAt(steps, t) {"), """

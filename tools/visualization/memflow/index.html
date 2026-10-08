@@ -183,8 +183,8 @@ function col(buf, cols, name, n) {
   const c = cols.find(x => x.name === name);
   if (!c) throw new Error("no column " + name);
   const T = { u8: Uint8Array, u32: Uint32Array, u64: BigUint64Array, f64: Float64Array }[c.dtype];
-  if (c.offset % T.BYTES_PER_ELEMENT) throw new Error("column " + name + " is misaligned");
   if (!T) throw new Error("column " + name + " has an unknown dtype " + c.dtype);
+  if (c.offset % T.BYTES_PER_ELEMENT) throw new Error("column " + name + " is misaligned");
   return new T(buf, c.offset, n);
 }
 function parse(files) {
