@@ -197,7 +197,12 @@ The exit codes are the same as `tflow_check.py`'s.
 | M2 | a store buffer never holds more than its capacity |
 | M3 | a request's first burst comes no earlier than its credit (L3 slot or buffer slot) |
 | M4 | every burst completes once; a request's bursts are exactly the ones its bytes span |
-| M5 | DRAM timing (tRCD, tRP, tRRD, tFAW, tCCD) against the declared device's timing table |
+| M5 | DRAM timing against the declared device's table (the manifest's `dram_timing`): per bank tRCD, tRP, tRAS, tRC, tRFCpb; per bank group tRRD_L, tCCD_L; per channel tRRD_S, tCCD_S, tFAW |
+
+TF10, TF11 and M5 are checked in **controller clock ticks** (the commands' `k_*` columns), not
+executor cycles. One executor cycle is several ticks (4.27 on the T4), so a constraint missed by
+a tick would be invisible at cycle grain, and two back-to-back bursts could look as if they
+overlap. `--verbose` prints the timing table and the tick ratio.
 
 ### 3.4 View
 

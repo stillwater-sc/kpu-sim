@@ -9,6 +9,7 @@
 
 #include <sw/kpu/models/temporal/memory/controllers/lpddr5_controller.hpp>
 
+#include <algorithm>
 #include <cmath>
 #include <unordered_map>
 #include <unordered_set>
@@ -124,13 +125,18 @@ DramBridge::DramBridge(const DramHosting& h, unsigned controller_id, double exec
     impl_->mc->set_command_observer([this](const lpddr5::LPDDR5MemoryController::CommandRecord& r) {
         if (!impl_->sink) return;
         using K = lpddr5::LPDDR5MemoryController::CommandRecord::Kind;
-        // The controller is being ticked up to executor cycle `last`: the command issues then,
-        // and its later points are that many ticks on, at ticks_per_cycle_.
+        // The controller is being ticked up to executor cycle `last`: the command issues then.
+        // A later point is the executor cycle in which its tick will run. advance(n) runs the
+        // controller to floor(n * ticks_per_cycle_) ticks, so tick k runs in cycle
+        // ceil((k + 1) / ticks_per_cycle_). (Counting the ticks from the issue cycle instead
+        // rounds twice and records an end up to a cycle late: a burst then completes before its
+        // own data window ends, which mflow_check.py M4 caught.)
         const Cycle now = impl_->last;
         auto at = [&](std::uint64_t tick) -> Cycle {
             if (tick <= r.issue) return now;
-            return now + static_cast<Cycle>(
-                             std::ceil(static_cast<double>(tick - r.issue) / ticks_per_cycle_));
+            const auto runs_in = static_cast<Cycle>(
+                std::ceil(static_cast<double>(tick + 1) / ticks_per_cycle_));
+            return std::max(now, runs_in);
         };
         Command cmd;
         cmd.kind = r.kind == K::Activate    ? Command::Kind::Activate
@@ -146,9 +152,13 @@ DramBridge::DramBridge(const DramHosting& h, unsigned controller_id, double exec
         cmd.col = r.col;
         cmd.issue = now;
         cmd.end = at(r.end);
+        cmd.tick = r.issue;
+        cmd.tick_end = r.end;
         if (cmd.kind == Command::Kind::Read || cmd.kind == Command::Kind::Write) {
             cmd.data_start = at(r.data_start);
             cmd.data_end = at(r.data_end);
+            cmd.tick_data_start = r.data_start;
+            cmd.tick_data_end = r.data_end;
         }
         if (r.request_id) {
             auto it = impl_->tag_of.find(r.request_id);
@@ -225,6 +235,17 @@ void DramBridge::reset() {
     impl_->tag_of.clear();
     impl_->openers.clear();
     impl_->completed_openers.clear();
+}
+
+std::vector<std::pair<std::string, std::uint32_t>> DramBridge::timing_table() const {
+    const TimingParams& t = impl_->cfg.timing;
+    const std::uint32_t burst = impl_->cfg.burst_length == lpddr5::BurstLength::BL32 ? t.tBurst_BL32
+                                                                                   : t.tBurst_BL16;
+    return {{"tRCD", t.tRCD},     {"tRP", t.tRP},       {"tRAS", t.tRAS},     {"tRC", t.tRC},
+            {"tCL", t.tCL},       {"tWL", t.tWL},       {"tWR", t.tWR},       {"tRTP", t.tRTP},
+            {"tRRD_L", t.tRRD_L}, {"tRRD_S", t.tRRD_S}, {"tCCD_L", t.tCCD_L}, {"tCCD_S", t.tCCD_S},
+            {"tWTR_L", t.tWTR_L}, {"tWTR_S", t.tWTR_S}, {"tRTW", t.tRTW},     {"tBurst", burst},
+            {"tRFCpb", t.tRFCpb}, {"tRFCab", t.tRFCab}, {"tREFIpb", t.tREFIpb}, {"tFAW", t.tFAW}};
 }
 
 void DramBridge::set_command_sink(std::function<void(const Command&)> sink) {

@@ -8,6 +8,7 @@
 // A .mflow bundle is a directory in the .tflow container style (record/columnar.hpp):
 //
 //   manifest.json   format "kpu-mflow", version, device, makespan, window, timing note,
+//                   ceiling_bytes_per_cycle, burst_bytes, dram_timing{ticks_per_cycle, params},
 //                   stations, and tables{name: {file, rows, columns[{name, dtype, offset}]}}
 //   bursts.bin      one row per DRAM burst
 //   commands.bin    one row per DRAM command (ACT, RD, WR, PRE, REF)
@@ -16,7 +17,9 @@
 //   ports.bin       one row per port-stub event
 //   lod.json/.bin   the pyramid (record/tile_flow_lod.hpp) over the stations below
 //
-// Times are executor cycles, as f64 (exact to 2^53). An index that names nothing is kNone.
+// Times are executor cycles, as f64 (exact to 2^53). A command also carries its points in the
+// controller's clock (k_issue, k_end, k_data0, k_data1; u64 ticks): an executor cycle is several
+// ticks, too coarse to check DRAM timing against. An index that names nothing is kNone.
 //
 // STATIONS, the pyramid's rows, in this order: one per bank (kind dram_bank: its commands'
 // windows), one per channel data bus (dram_bus: its bursts' data windows), one per DMA engine
@@ -33,11 +36,13 @@
 
 #include <cstdint>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace sw::kpu::program::record {
 
-inline constexpr std::uint32_t kMflowVersion = 1;
+// Version 2: commands carry their controller-clock ticks, and the manifest the timing table.
+inline constexpr std::uint32_t kMflowVersion = 2;
 inline constexpr std::uint32_t kNone = 0xFFFFFFFFu;
 
 struct MemoryFlowRecord {
@@ -64,6 +69,8 @@ struct MemoryFlowRecord {
         CommandKind kind = CommandKind::Activate;
         std::uint32_t burst = kNone;        // index into bursts (a refresh has none)
         Cycle issue = 0, end = 0, data_start = 0, data_end = 0;
+        // The same points in the controller's clock ticks (exact; DRAM timing is checked on them).
+        std::uint64_t tick = 0, tick_end = 0, tick_data_start = 0, tick_data_end = 0;
     };
     struct Request {
         std::uint32_t engine = 0, port = 0;
@@ -81,6 +88,8 @@ struct MemoryFlowRecord {
     std::string timing_note;                // the DRAM timing table's provenance
     double ceiling_bytes_per_cycle = 0;     // every controller's data buses at full rate (0 = unknown)
     std::uint32_t burst_bytes = 0;          // one DRAM burst
+    double ticks_per_cycle = 0;             // controller clock ticks per executor cycle
+    std::vector<std::pair<std::string, std::uint32_t>> dram_timing;   // name -> controller ticks
     std::vector<Station> stations;
     std::vector<Burst> bursts;
     std::vector<Command> commands;

@@ -538,6 +538,9 @@ inline program::record::MemoryFlowRecord to_record(const MemorySideHarness& h, c
     if (!h.controllers().empty() && h.controllers().front()->bridge()) {
         rec.timing_note = h.controllers().front()->bridge()->timing_note();
         rec.burst_bytes = static_cast<std::uint32_t>(h.controllers().front()->burst_bytes());
+        // Every controller of a device runs the same part: one table, one clock ratio.
+        rec.ticks_per_cycle = h.controllers().front()->bridge()->ticks_per_cycle();
+        rec.dram_timing = h.controllers().front()->bridge()->timing_table();
     }
     rec.ceiling_bytes_per_cycle = h.ceiling_bytes_per_cycle();
 
@@ -617,6 +620,10 @@ inline program::record::MemoryFlowRecord to_record(const MemorySideHarness& h, c
             x.end = c.end;
             x.data_start = c.data_start;
             x.data_end = c.data_end;
+            x.tick = c.tick;
+            x.tick_end = c.tick_end;
+            x.tick_data_start = c.tick_data_start;
+            x.tick_data_end = c.tick_data_end;
             rec.commands.push_back(x);
         }
 

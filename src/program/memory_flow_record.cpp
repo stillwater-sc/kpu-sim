@@ -135,6 +135,10 @@ void write_mflow(const MFR& rec, const std::string& dir) {
     m["timing_note"] = rec.timing_note;
     m["ceiling_bytes_per_cycle"] = rec.ceiling_bytes_per_cycle;
     m["burst_bytes"] = rec.burst_bytes;
+    json params = json::object();
+    for (const auto& [name, ticks] : rec.dram_timing) params[name] = ticks;
+    m["dram_timing"] = json{{"unit", "controller clock tick"}, {"ticks_per_cycle", rec.ticks_per_cycle},
+                            {"params", params}};
     json st = json::array();
     for (const auto& s : rec.stations) st.push_back(json{{"name", s.name}, {"kind", s.kind}, {"capacity", s.capacity}});
     m["stations"] = st;
@@ -175,6 +179,10 @@ void write_mflow(const MFR& rec, const std::string& dir) {
         t.put("t_end", "f64", column<double>(v, +[](const MFR::Command& c) { return static_cast<double>(c.end); }));
         t.put("t_data0", "f64", column<double>(v, +[](const MFR::Command& c) { return static_cast<double>(c.data_start); }));
         t.put("t_data1", "f64", column<double>(v, +[](const MFR::Command& c) { return static_cast<double>(c.data_end); }));
+        t.put("k_issue", "u64", column<std::uint64_t>(v, +[](const MFR::Command& c) { return c.tick; }));
+        t.put("k_end", "u64", column<std::uint64_t>(v, +[](const MFR::Command& c) { return c.tick_end; }));
+        t.put("k_data0", "u64", column<std::uint64_t>(v, +[](const MFR::Command& c) { return c.tick_data_start; }));
+        t.put("k_data1", "u64", column<std::uint64_t>(v, +[](const MFR::Command& c) { return c.tick_data_end; }));
         tables["commands"] = write_table(t, dir);
     }
     {
@@ -238,6 +246,12 @@ MFR read_mflow(const std::string& dir) {
     rec.timing_note = m.value("timing_note", "");
     rec.ceiling_bytes_per_cycle = m.value("ceiling_bytes_per_cycle", 0.0);
     rec.burst_bytes = m.value("burst_bytes", 0u);
+    if (m.contains("dram_timing")) {
+        const json& dt = m.at("dram_timing");
+        rec.ticks_per_cycle = dt.value("ticks_per_cycle", 0.0);
+        for (auto it = dt.at("params").begin(); it != dt.at("params").end(); ++it)
+            rec.dram_timing.emplace_back(it.key(), it.value().get<std::uint32_t>());
+    }
     for (const auto& s : m.at("stations"))
         rec.stations.push_back({s.at("name").get<std::string>(), s.at("kind").get<std::string>(),
                                 s.at("capacity").get<std::uint64_t>()});
@@ -299,6 +313,10 @@ MFR read_mflow(const std::string& dir) {
         auto te = read_col<double>(t, b, "t_end", "f64", n);
         auto d0 = read_col<double>(t, b, "t_data0", "f64", n);
         auto d1 = read_col<double>(t, b, "t_data1", "f64", n);
+        auto ki = read_col<std::uint64_t>(t, b, "k_issue", "u64", n);
+        auto ke = read_col<std::uint64_t>(t, b, "k_end", "u64", n);
+        auto k0 = read_col<std::uint64_t>(t, b, "k_data0", "u64", n);
+        auto k1 = read_col<std::uint64_t>(t, b, "k_data1", "u64", n);
         for (std::size_t i = 0; i < n; ++i) {
             if (kind[i] > static_cast<std::uint8_t>(MFR::CommandKind::Refresh))
                 throw RecordError("record: command " + std::to_string(i) + " has an unknown kind");
@@ -306,7 +324,8 @@ MFR read_mflow(const std::string& dir) {
                 throw RecordError("record: command " + std::to_string(i) + " names burst " +
                                   std::to_string(burst[i]) + ", past the bursts table");
             rec.commands.push_back({mc[i], ch[i], bg[i], ba[i], row[i], static_cast<MFR::CommandKind>(kind[i]),
-                                    burst[i], t64(ti, i), t64(te, i), t64(d0, i), t64(d1, i)});
+                                    burst[i], t64(ti, i), t64(te, i), t64(d0, i), t64(d1, i),
+                                    ki[i], ke[i], k0[i], k1[i]});
         }
     }
     {

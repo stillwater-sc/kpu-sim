@@ -17,6 +17,8 @@
 #include <sw/kpu/timing/memory_side_harness.hpp>
 #include <sw/kpu/timing/schedule/matmul_schedule_generator.hpp>
 
+#include <algorithm>
+#include <cmath>
 #include <filesystem>
 #include <limits>
 #include <fstream>
@@ -292,6 +294,32 @@ TEST_CASE("Record: a harness run round-trips through .mflow, and every row names
         CHECK(back.commands[i].kind == r.commands[i].kind);
         CHECK(back.commands[i].burst == r.commands[i].burst);
         CHECK(back.commands[i].issue == r.commands[i].issue);
+        CHECK(back.commands[i].tick == r.commands[i].tick);
+        CHECK(back.commands[i].tick_data_end == r.commands[i].tick_data_end);
+    }
+    // The controller clock and its table travel with the record (version 2): a command's ticks
+    // follow the record's order, and an executor cycle is ticks_per_cycle of them.
+    CHECK(back.ticks_per_cycle == r.ticks_per_cycle);
+    CHECK(r.ticks_per_cycle > 1.0);
+    CHECK(back.dram_timing == r.dram_timing);
+    CHECK(std::find_if(r.dram_timing.begin(), r.dram_timing.end(),
+                       [](const auto& p) { return p.first == "tRCD" && p.second > 0; }) != r.dram_timing.end());
+    for (std::size_t i = 1; i < r.commands.size(); ++i)
+        if (r.commands[i].mc == r.commands[i - 1].mc) CHECK(r.commands[i].tick >= r.commands[i - 1].tick);
+    // Every point is the executor cycle in which its tick runs: tick k runs in cycle
+    // ceil((k + 1) / ticks_per_cycle). Counting from the issue cycle instead rounded twice and put
+    // a data window's end up to a cycle after its burst completed (caught by mflow_check.py M4).
+    auto runs_in = [&](std::uint64_t k) {
+        return static_cast<std::uint64_t>(std::ceil(static_cast<double>(k + 1) / r.ticks_per_cycle));
+    };
+    for (const auto& cmd : r.commands) {
+        CHECK(cmd.issue == runs_in(cmd.tick));
+        CHECK(cmd.end == std::max(cmd.issue, runs_in(cmd.tick_end)));
+        if (cmd.kind == rec::MemoryFlowRecord::CommandKind::Read ||
+            cmd.kind == rec::MemoryFlowRecord::CommandKind::Write) {
+            CHECK(cmd.data_end == runs_in(cmd.tick_data_end));
+            CHECK(r.bursts[cmd.burst].done == cmd.data_end);   // a burst completes as its data ends
+        }
     }
     for (std::size_t i = 0; i < r.requests.size(); ++i) CHECK(back.requests[i].address == r.requests[i].address);
     CHECK(std::filesystem::exists(dir + "/lod.json"));

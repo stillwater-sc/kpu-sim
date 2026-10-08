@@ -9,6 +9,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The memory-side checker, `tools/trace/mflow_check.py` (memory-side debugger step 4; DRAM
+  plan step 4).**
+  - It checks a `.mflow` bundle against:
+    - TF10 (one open row per bank) and TF11 (one burst on a data bus at a time);
+    - M1 (window), M2 (store buffer), M3 (ordered request lifetimes), M4 (every burst served
+      once; requests span their bursts);
+    - M5 (DRAM timing against the declared device's table).
+  - Exit codes 0, 1 and 2, as `tflow_check.py`. A self-test breaks each check in turn.
+  - **`.mflow` version 2.** Commands carry their controller-clock ticks, and the manifest carries
+    the timing table the controller ran (`DramBridge::timing_table()`). DRAM timing is checked
+    in ticks, because an executor cycle is several of them.
+  - **Fixed:** the bridge recorded a command's end and data window up to a cycle late (it
+    rounded twice), so a burst could complete before its own data window ended. Each point is
+    now the executor cycle in which its tick runs. This changes recording only, not the run.
+  - New how-to for both debuggers: `docs/tools/debuggers-how-to.md`.
+
 - **The memory-side debugger page (memory-side debugger step 5,
   `tools/visualization/memflow/`).**
   - A static page in the tile-flow viewer's style. It loads a `.mflow` bundle from its folder,

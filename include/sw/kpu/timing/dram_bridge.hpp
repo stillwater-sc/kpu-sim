@@ -37,6 +37,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace sw::kpu::timing {
@@ -93,6 +94,9 @@ public:
         std::uint64_t row = 0, col = 0;
         Cycle issue = 0, end = 0;
         Cycle data_start = 0, data_end = 0;     // Read/Write: the data-bus window
+        // The same points in the controller's own clock, exact: executor cycles are coarser
+        // (ticks_per_cycle() ticks each), too coarse to check DRAM timing against.
+        std::uint64_t tick = 0, tick_end = 0, tick_data_start = 0, tick_data_end = 0;
         std::optional<std::uint64_t> tag;
         bool activated = false, conflicted = false;     // Read/Write: the page outcome
     };
@@ -103,6 +107,9 @@ public:
     double ticks_per_cycle() const { return ticks_per_cycle_; }
     const program::platform::DramAddressMap& map() const { return hosting_.map; }
     const std::string& timing_note() const { return timing_note_; }
+    // The timing table the controller runs, in its own clock ticks, by parameter name (tRCD,
+    // tRP, ...): the declared device's table, derived by data rate (see timing_note()).
+    std::vector<std::pair<std::string, std::uint32_t>> timing_table() const;
     Stats stats() const;
 
 private:

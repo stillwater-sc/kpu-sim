@@ -1,8 +1,8 @@
 # Memory-Side Debugger: DRAM, Controllers, DMA Engines and Buffers, Outside the NoC
 
 **Date:** 2026-10-08
-**Status:** Q1-Q5 decided 2026-10-08 (all as recommended); steps 1-3 and 5 done (5 built before
-4, at the architect's request)
+**Status:** Q1-Q5 decided 2026-10-08 (all as recommended); steps 1-5 done (5 built before 4, at
+the architect's request); step 6 next
 **Related:**
 - `docs/plans/dram-bank-model.md`: this plan carries its step 4 (per-bank record, TF10/TF11) and
   step 6 (viewer DRAM panel).
@@ -267,6 +267,45 @@ Each step is one PR and ends green.
        logged once per ejection.
 
 4. **Checker.** `mflow_check.py` with TF10, TF11 and M1-M5, plus a self-test.
+   (Done, after step 5.)
+   - **The record, version 2.** DRAM timing cannot be checked at executor-cycle grain: on the
+     T4, one cycle is 4.27 controller ticks, and tRCD is 19 ticks. So each command now carries
+     its points in the controller's clock (`k_issue`, `k_end`, `k_data0`, `k_data1`, u64
+     ticks), and the manifest carries `dram_timing`: the table the controller ran, by name, and
+     `ticks_per_cycle`. The source is `DramBridge::timing_table()`. The viewer and the C++
+     reader follow the new version; version 1 is refused by name.
+   - **The checker,** `tools/trace/mflow_check.py`, standard library only, with exit codes 0, 1
+     and 2 as `tflow_check.py`:
+     - TF10, one open row per bank in issue order, and each RD/WR names its burst's bank, row
+       and direction;
+     - TF11, no data-bus overlap per channel, on ticks;
+     - M1, bursts in flight against the window;
+     - M2, store buffer held against its capacity, and staged no more than held;
+     - M3, a request's lifetime is ordered (offered, credit, first, last, retired);
+     - M4, each burst is ordered inside the run and served by exactly one RD/WR, and each
+       request's bursts are exactly its span, from its own engine;
+     - M5, on ticks: per bank tRCD, tRP, tRAS, tRC and tRFCpb; per bank group tRRD_L and
+       tCCD_L; per channel tRRD_S, tCCD_S and tFAW. This is wider than §3.4's list: the extra
+       checks are the controller's own `can_*` constraints, and the T4 run holds them all.
+   - **Self-test** (`test_mflow_check.py`, 21 cases):
+     - the clean run passes, and holds every command kind, conflicts and a full store buffer,
+       so no check passes vacuously;
+     - each invariant fails on a bundle that breaks it;
+     - M5 is tested per parameter, by tightening each table entry, and on the data, with a CAS
+       moved one tick inside tRCD;
+     - TF11 is shown to read ticks, not cycles;
+     - version 1, a missing table, a misdeclared column and an index past its table each exit 2.
+   - **ctests:** `mflow_check_t4` and `mflow_check_selftest`.
+   - **Found by the checker:**
+     - The bridge converted a command's later points (end, data window) to executor cycles
+       counted from the issue cycle. That rounds twice and recorded them up to a cycle late:
+       1,491 of the T4's 6,400 bursts completed a cycle before their own data window ended
+       (M4).
+     - The data showed that the issue cycle of every command is the cycle in which its tick
+       runs, `ceil((k + 1) / ticks_per_cycle)`, and that every burst completes exactly in the
+       cycle its data-end tick runs. The bridge now converts each point that way. A regression
+       in `test_memory_side_harness` pins it exactly.
+     - Recording only: the run is unchanged (makespan 13,345; 90% of the ceiling).
 5. **Viewer.** The memflow page: banks, channels, engines, buffers, ports, the address view, the
    inspector, and a smoke test.
    (Done, before step 4: the architect asked for the debugger first.)
