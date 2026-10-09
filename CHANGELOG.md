@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **L-CA from the CSP program (CSP-program sequencing plan step 2, `timing/csp_driver.hpp`).**
+  - The cycle-level executor runs a CSP program's actions, process by process. There is no
+    `ScheduleResult` and no generator.
+  - DRAM reads equal the program's Loads: residency rides on the descriptor
+    (`TileDescriptor::l3_consumers`), and a program load never hits the tag CAM.
+  - Matmul calls accumulate one k-slice each (`MatMulComputeSpec::accumulate`), and C stays in
+    the fabric.
+  - On S1, matmul 256³/32³ is bit-identical to the L0 reference and to L-B, with 128 DRAM loads.
+    Compute starts at cycle 1,465 against the generator's 10,077. The run ends 6-20% later,
+    with a longer store tail.
+  - Also: `ConcurrentTimingExecutor::livelock_detected()`.
+
 - **The CSP program, level 1 (`include/sw/kpu/program/csp/`; CSP-program sequencing plan step
   1, #281).**
   - The sequencing layer ADR 0002 makes central, lowered from L0. It has processes (dma, bm,

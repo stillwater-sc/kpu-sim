@@ -23,6 +23,7 @@
 #include <sw/kpu/timing/work_queue.hpp>
 #include <sw/kpu/timing/memory_controller_process.hpp>
 
+#include <algorithm>
 #include <cmath>
 #include <optional>
 #include <unordered_set>
@@ -557,6 +558,12 @@ private:
 
             // Check if tile is already in L3 (supports tile reuse)
             TagCAM& cam = l3_cam(req.tile);
+            if (cam.lookup(req.tile.tile_id) && req.tile.l3_consumers > 0) {
+                // A CSP program's load: the program decided this tile comes from DRAM; the copy
+                // still in L3 belongs to its previous residency, which releases when that
+                // residency's consumers are done. Wait for it (credits up, data down).
+                continue;
+            }
             if (cam.lookup(req.tile.tile_id)) {
                 // Tile already in its home L3 tile - just increment ref_count, no credit needed
                 auto entry = cam.match(req.tile.tile_id);
@@ -710,7 +717,9 @@ private:
 
     /// The load is in its home L3 tile: Tag CAM entry, and TILE_ARRIVED_L3.
     void arrive_in_l3(const PendingRequest& req, std::vector<TimingEvent>& events) {
-        l3_cam(req.tile).insert(req.tile.tile_id, req.slot_id, current_cycle_);
+        // A CSP program's load seeds its residency's consumer count; the legacy path, one.
+        l3_cam(req.tile).insert(req.tile.tile_id, req.slot_id, current_cycle_,
+                                std::max<uint32_t>(1, req.tile.l3_consumers));
         submitted_load_tiles_.erase(req.tile.tile_id);
         total_bytes_loaded_ += req.tile.size_bytes;
 

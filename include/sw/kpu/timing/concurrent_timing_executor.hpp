@@ -63,6 +63,10 @@ public:
         std::vector<TileID> resident_tiles;
         std::vector<float> bias;
         FunctionalActivation activation = FunctionalActivation::NONE;
+        // One k-slice of an accumulation (a CSP program's MatMulAccum Call): the result starts
+        // from the accumulator the previous call on this tile left in the fabric (zero for the
+        // first), and is ordered after that call. Off = the output is the sum over a_tiles/b_tiles.
+        bool accumulate = false;
     };
     struct FunctionalComputeSpec {
         std::vector<TileID> input_tiles;
@@ -492,6 +496,11 @@ public:
      * @return true if completed normally, false if hit max_cycles or livelock
      */
     bool run();
+
+    /// The livelock check run() makes every 100 cycles, for callers that step the executor
+    /// themselves (the CSP driver). True = no progress for the detector's threshold. It checks
+    /// only on a 100-cycle boundary, so calling it every step costs nothing between.
+    bool livelock_detected();
 
     /**
      * @brief Step simulation by one cycle
@@ -1164,6 +1173,9 @@ inline void ConcurrentTimingExecutor::schedule_matmul_compute(
         }
         pc.dependencies.push_back({id, scheduled_feed_counts_[id]});
     }
+    // An accumulating call waits for the previous call on its result (the accumulator it adds to).
+    if (spec.accumulate && scheduled_compute_counts_[tile.tile_id] > 0)
+        pc.resident_dependencies.push_back({tile.tile_id, scheduled_compute_counts_[tile.tile_id]});
     ++scheduled_compute_counts_[tile.tile_id];
     enqueue_compute(std::move(pc));
 }
@@ -1213,7 +1225,13 @@ inline void ConcurrentTimingExecutor::schedule_compute(const TileDescriptor& til
 inline bool ConcurrentTimingExecutor::run() {
     while (!is_complete() && current_cycle_ < config_.max_cycles) {
         step();
+        if (livelock_detected()) return false;
+    }
+    return is_complete();
+}
 
+inline bool ConcurrentTimingExecutor::livelock_detected() {
+    {
         // Check for livelock (every 100 cycles to avoid overhead)
         if (livelock_detector_ && (current_cycle_ % 100 == 0)) {
             // Count progress across ALL pipeline stages - forward (load/move/
@@ -1241,13 +1259,10 @@ inline bool ConcurrentTimingExecutor::run() {
                 metrics.tiles_streamed += streamer->total_tiles_fed();
             metrics.compute_ops_completed = next_compute_slot_;
             auto result = livelock_detector_->check(current_cycle_, metrics);
-            if (result.livelock_detected) {
-                // Livelock detected - could log or throw
-                return false;
-            }
+            if (result.livelock_detected) return true;
         }
     }
-    return is_complete();
+    return false;
 }
 
 inline bool ConcurrentTimingExecutor::step() {
@@ -1277,9 +1292,19 @@ inline bool ConcurrentTimingExecutor::step() {
                     }
                 }
                 if (config_.macs_per_cycle > 0.0) {
-                    // Latency from the MAC rate: fill and drain, then the MACs at full rate.
+                    // Latency from the MAC rate: fill and drain, then the MACs at full rate. An
+                    // accumulation chain (a CSP program's per-k-slice calls on one result) keeps
+                    // its result stationary and streams the slices through: it fills on its
+                    // first call and drains on its last, not on every slice.
                     const double edge = static_cast<double>(std::max(pc.tile.height, pc.tile.width));
-                    pc.latency = static_cast<Cycle>(std::ceil(config_.compute_fill_per_edge * edge)) +
+                    double fill = config_.compute_fill_per_edge * edge;
+                    if (pc.matmul && pc.matmul->accumulate) {
+                        const size_t done = completed_compute_counts_[pc.tile.tile_id];
+                        const bool first = done == 0;
+                        const bool last = done + 1 >= scheduled_compute_counts_[pc.tile.tile_id];
+                        fill = (first ? fill / 2 : 0.0) + (last ? fill / 2 : 0.0);
+                    }
+                    pc.latency = static_cast<Cycle>(std::ceil(fill)) +
                                  static_cast<Cycle>(std::ceil(static_cast<double>(compute_macs(pc)) /
                                                               config_.macs_per_cycle));
                 } else {
@@ -1328,11 +1353,17 @@ inline bool ConcurrentTimingExecutor::step() {
             // blocked forever (#210 - manifested at >256 output tiles, e.g.
             // pooling/depthwise at C>=17 with the old hardcoded 256 limit).
             uint32_t slot = next_compute_slot_++;
-            if (compute_result_tag_cam_.full()) {
+            // An accumulating call (one k-slice of a CSP program's MatMulAccum) publishes its
+            // result to DRAIN only when it is the last call scheduled on the tile: the
+            // accumulator is ready when its accumulation is, not after its first slice.
+            const bool partial = it->matmul && it->matmul->accumulate &&
+                                 completed_compute_counts_[it->tile.tile_id] <
+                                     scheduled_compute_counts_[it->tile.tile_id];
+            if (!partial && compute_result_tag_cam_.full()) {
                 compute_result_tag_cam_.set_capacity(
                     compute_result_tag_cam_.size() + 1);
             }
-            compute_result_tag_cam_.insert(it->tile.tile_id, slot, current_cycle_);
+            if (!partial) compute_result_tag_cam_.insert(it->tile.tile_id, slot, current_cycle_);
 
             // Emit COMPUTE_COMPLETE event
             TimingEvent event = TimingEvent::duration_event(
@@ -1593,6 +1624,15 @@ inline void ConcurrentTimingExecutor::execute_matmul(const PendingCompute& pc) {
     output.rows = m;
     output.cols = n;
     output.values.assign(static_cast<size_t>(m) * n, 0.0f);
+    if (spec.accumulate) {
+        // The accumulator the previous call on this tile left in the fabric (none: zero).
+        auto it = compute_payloads_.find(pc.tile.tile_id);
+        if (it != compute_payloads_.end()) {
+            if (it->second.payload.rows != m || it->second.payload.cols != n)
+                throw std::runtime_error("Matmul accumulator shape does not match the output tile");
+            output.values = it->second.payload.values;
+        }
+    }
 
     for (size_t tile_index = 0; tile_index < spec.a_tiles.size(); ++tile_index) {
         const auto& a = tile_payload(spec.a_tiles[tile_index]);

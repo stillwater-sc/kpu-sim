@@ -1,7 +1,7 @@
 # The CSP Program as the Center of Tile Sequencing
 
 **Date:** 2026-10-09
-**Status:** Q1-Q6 decided 2026-10-09 (all as recommended; §7); step 1 done; step 2 next
+**Status:** Q1-Q6 decided 2026-10-09 (all as recommended; §7); steps 1-2 done; step 2b (`kpu-run`) next
 **Supersedes:** step 3 and later of `docs/plans/system-schedule-debugger.md`. Steps 1-2 of that
 plan (round-robin arbitration, the compute fabric, `kpu_s1`) stand: they are resource models
 inside an interpreter, valid whatever program it runs. Step 3, the dispatcher (#340, on hold),
@@ -315,6 +315,58 @@ Each step is one PR and ends green.
      - each DMA engine's issue order is the program's;
      - DRAM loads equal the program's Loads (128 on S1).
    - Measured: the S1 makespan against the generator path's 36,668 cycles.
+   - (Done, except `kpu-run`, which is split out as step 2b below.)
+   - **As built:** `timing/csp_driver.hpp`, `CspDriver`.
+     - **Actions to executor queues:** each program action goes, in program order, to its
+       executor process's queue.
+     - **The dma process takes credits in order:** a Load is handed over only once the one
+       before it holds its L3 credit, so credits go in program order (no hold-and-wait).
+     - **Engine binding:** which engine (a lane of the dma process) is the executor's. A fixed
+       round-robin binding starved stores behind loads on the whole-tile path, where an engine
+       posts one tile at a time.
+     - **Residency rides on the descriptor** (`TileDescriptor::l3_consumers`). The arrival seeds
+       the L3 entry with the program's consumer count. A program Load never hits the tag CAM:
+       a copy left by the previous residency is waited out, so DRAM reads equal the program's
+       Loads.
+     - **Calls are accumulating matmul computes** (`MatMulComputeSpec::accumulate`). One
+       k-slice per call; C stays in the fabric; each call is ordered after the previous one on
+       its tile. The result reaches DRAIN only after the last call scheduled on the tile, and
+       the chain fills on its first call and drains on its last.
+     - **Refusals, by name** (Q2): a program lowered for more L3 than the machine holds (or an
+       unbounded one), and a machine with several L3 tiles (level 2's).
+     - **Scope:** explicit (matmul) programs. LU at L-CA, which needs its kernels as functional
+       computes and in-place residencies, is the next increment.
+     - `ConcurrentTimingExecutor::livelock_detected()` is the progress check `run()` makes,
+       for callers that step the executor themselves (first written for #340).
+   - **Tests** (`test_csp_driver`):
+     - **S1 256³/32³:** C is bit-identical to the L0 reference and to L-B; DRAM loads = the
+       program's Loads = 128; 64 stores; every L3 credit returns.
+     - **Tighter programs** (L3 4, 8, 16 slots, against 128^3): DRAM reads equal the program's
+       Loads, reloads included, and values hold.
+     - **Order:** the dma process's credits are taken in program order.
+     - **Refusals:** an oversized or unbounded program, and a multi-L3 machine.
+   - **Measured** on S1, matmul 256³/32³:
+
+     | | CSP program | generator |
+     |---|---|---|
+     | cycles (whole-tile DMA) | 43,968 | 36,668 |
+     | cycles (DMA window 32) | 38,089 | 35,813 |
+     | first compute | **1,465** | 10,077 |
+     | DRAM loads | 128 | 128 |
+     | compute busy | 6,144 | 6,144 |
+
+     - **The program gets compute going about 7 times sooner.** Its calls take one k-slice at
+       a time instead of waiting for all eight.
+     - **It ends 6-20% later.** The tail after the last compute is longer: stores drain behind
+       the remaining loads and moves on the one BlockMover.
+     - **Attributing the gap** (which store waited on what) is what the step-5 record is for.
+       It is recorded here, not tuned blind.
+2b. **`kpu-run --level cycle-accurate`.**
+   - `run_at` takes a device model, not the deployment spec L-CA needs (DRAM, compute fabric).
+   - The L0 corpus and serialization tests iterate every implemented level, so flipping
+     `level_implemented` would run LU and spec-less devices at L-CA.
+   - Step 2b gives `run_at` the spec and a per-program, per-machine `level_supported()`. The
+     corpus then runs L-CA where a program and machine allow it, and says why where they don't.
 3. **L-T1 from the program.** `TileTransactionExecutor` reads the CspProgram's residency instead
    of re-deriving it. Equivalence test: identical makespan and records on L0 programs it already
    runs.
