@@ -101,6 +101,12 @@ DAG/resource model (for timing).
 
 ### D1 — The portable program is the L0 `TileProgram`, per D6
 
+> **Amended 2026-10-09 by ADR 0004 §4.** L0 is reclassified as an *instance/trace* format: one
+> fully unrolled tile sequence, which cannot express a large operator (a 1M x 1M matmul is
+> about 3 x 10^13 tile ops). The portable program is the CSP program (`.csp`), whose loops
+> express intent. L0 remains what it is good at: the golden corpus, a carrier of inline values
+> for the value oracle, and a debugging artifact. The rest of D1 is the original decision.
+
 The portable, serializable, versioned KPU program is **L0 (tile sequences with explicit
 tile I/O), optionally annotated with L1 (stream signatures) and the compute recurrence**.
 This adopts D6 as written.

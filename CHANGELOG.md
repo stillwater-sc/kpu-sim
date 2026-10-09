@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The structured CSP program executes and validates without unrolling (CSP-language step 1c.1;
+  ADR 0004 §4).**
+  - L0 is reclassified as an instance/trace format (ADR 0001 D1 amended): a 1M x 1M matmul has
+    about 3 x 10^13 tile ops. The `.csp` program is the portable program.
+  - `lang/walk.hpp`: the program's structure runs incrementally. `compile()` drains it into the
+    trace, and `ActionStream` pulls actions one at a time in bounded memory.
+  - `lang/validate.hpp` checks residency, capacity and bounds over the loop structure: affine
+    indices, tile families, and residency-balanced loop bodies checked once.
+  - A 1M x 1M matmul validates in about 0.05 ms, with exact totals (7.0 x 10^13 loads), and
+    streams. Stream and trace agree action for action, and so do symbolic and traced totals.
+
 - **The CSP language (`include/sw/kpu/program/csp/lang/`; ADR 0004; CSP-language plan step 1).**
   - The written form of the CSP program, `.csp` (`csp 1.0`). It has C-style blocks, loops,
     explicit residency (`resident` / `release`), output-stationary accumulators

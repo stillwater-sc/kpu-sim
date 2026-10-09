@@ -1,7 +1,7 @@
 # The CSP Language: Writing the Tile Sequencing
 
 **Date:** 2026-10-09
-**Status:** Decided 2026-10-09 (A1-A3 with the request; Q1-Q6 answered, §7); step 1 done; step 2 next
+**Status:** Decided 2026-10-09 (A1-A3 with the request; Q1-Q6 answered, §7); steps 1 and 1c.1 done; 1c.2 next
 **Decision record:** ADR 0004 (the CSP program is a written language).
 **Is:** step 1b of `docs/plans/csp-program-tile-sequencing.md`, ahead of its step 2b (`kpu-run`).
 **Related:**
@@ -272,6 +272,51 @@ Each step is one PR and ends green.
        - 14 validator and syntax refusals, by line.
      - **`test_csp_driver`:** a written matmul runs at L-CA on S1, bit-identical, with exactly
        its 32 loads.
+1c. **The structured program executes; the trace is optional** (ADR 0004 §4, decided 2026-10-09).
+   - **Why.** L0 is a trace format: a 1M x 1M matmul is about 3 x 10^13 tile ops. Step 1's
+     compiler had the same flaw: it unrolled the language's loops into a flat action list, the
+     driver enqueued every action, and the validator walked every statement. Before anything is
+     built on that representation, the structured program becomes what executes.
+   - **1c.1** (done), `lang/walk.hpp` and `lang/validate.hpp`:
+     - **The Walker** runs the AST concretely and incrementally: one leaf statement or one block
+       boundary per `step()`, emitting to a sink. Its state is bounded by the program, not the
+       problem: the open residencies (at most the L3 capacity), the open accumulators, and one
+       frame per enclosing block.
+       - `compile()` is now the Walker draining into a `TraceSink`: the trace form, with
+         identical actions, values and refusals.
+       - `ActionStream` pulls actions one at a time and owns its program. Its buffer never
+         holds more than one statement's actions.
+     - **The symbolic validator** checks the same rules over the structure, nothing unrolled:
+       - index expressions must be affine, and their ranges come from interval arithmetic over
+         the loop bounds;
+       - tile references are *families* (an operand plus `:` or an affine form per dimension);
+         "already resident" is a possible overlap, "operand resident" is coverage, and `release`
+         and `store` must mirror a resident family;
+       - each loop body is checked once and must be **residency-balanced**: an iteration
+         releases what it makes resident and stores what it accumulates;
+       - capacity is exact per statement, from family sizes;
+       - totals (loads, calls, stores) are exact for rectangular loop nests.
+     - **Limit:** cross-iteration residency (double buffering: loading iteration k+1's tile
+       before releasing k's) is refused by name. Such a program still runs through the walker.
+       Proving it symbolically is a later step.
+     - The behavioral interpreter has `begin` / `step` / `finish`, so it runs from a stream.
+   - **Results:**
+     - **Stream = trace,** action for action, for matmul in two forms and for LU. L-B over the
+       stream computes what L-B over the trace does, which is bit-identical to the reference.
+     - **Symbolic validation agrees with the trace** on peak L3, loads, calls and stores.
+     - **A 1M x 1M matmul** (32 x 32 tiles, one A and one B tile resident at a time):
+       - validated in about 0.05 ms;
+       - peak L3 is 2;
+       - 70,368,744,177,664 loads, 35,184,372,088,832 calls and 1,073,741,824 stores, exact;
+       - its stream yields its first million actions with a bounded buffer;
+       - nothing is unrolled, and no operand is allocated.
+   - **1c.2 (next): L-CA from the stream.**
+     - The driver today seeds each L3 entry with a residency's consumer count at its Load,
+       which needs lookahead the stream does not have.
+     - The executor instead takes the program's Release as an action: the BlockMover retires
+       the entry after the moves the program issued before it.
+     - The driver feeds each process a window of actions from the stream, not the whole
+       program.
 2. **The linear operator at L-B.**
    - L0 gains the epilogue ops: `BiasAdd` (a broadcast vector) and `Activation` (relu, gelu,
      silu), with reference kernels.

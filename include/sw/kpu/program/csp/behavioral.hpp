@@ -41,10 +41,19 @@ public:
     // Run `p` from its source operands' values. On return, result() holds the operands as DRAM
     // has them: what the program stored.
     Summary run(const CspProgram& p) {
-        work_ = p.source;
+        begin(p.source);
+        for (const Action& a : p.actions)
+            step(a, a.kind == Action::Kind::Call ? &p.source.ops().at(a.l0_op) : nullptr);
+        return finish();
+    }
+
+    // The same, one action at a time (a program's ActionStream: lang/walk.hpp). `operands`
+    // carries the values; a Call's tile function travels with its action.
+    void begin(const TileProgram& operands) {
+        work_ = operands;
         state_ = TileKernelState{};
         for (auto& s : store_) s.clear();
-        Summary sum;
+        sum_ = Summary{};
         // DRAM starts with every operand's tiles.
         for (const auto& name : work_.operand_order()) {
             const TensorOperand& op = work_.operand(name);
@@ -52,34 +61,39 @@ public:
                 for (Dim tj = 0; tj < op.n_tile_cols(); ++tj)
                     at(Chan::Dram)[TileCoord{name, ti, tj}.to_string()] = extract(op, ti, tj);
         }
-        for (std::size_t i = 0; i < p.actions.size(); ++i) {
-            const Action& a = p.actions[i];
-            const std::string k = a.tile.to_string();
-            auto where = [&](std::size_t idx) {
-                return "csp action " + std::to_string(idx) + " " + to_string(a.kind) + " " + k;
-            };
-            switch (a.kind) {
-                case Action::Kind::Load:
-                case Action::Kind::Store:
-                case Action::Kind::Move:
-                    at(to_chan(a.kind))[k] = take(from_chan(a.kind), k, where(i), /*keep=*/true);
-                    break;
-                case Action::Kind::Writeback:
-                case Action::Kind::Feed:
-                case Action::Kind::Drain:
-                    at(to_chan(a.kind))[k] = take(from_chan(a.kind), k, where(i), /*keep=*/false);
-                    break;
-                case Action::Kind::Release:
-                    if (!at(Chan::L3).erase(k)) throw BehavioralError(where(i) + ": nothing resident to release");
-                    break;
-                case Action::Kind::Call:
-                    call(p.source.ops().at(a.l0_op), a.accumulate, where(i));
-                    ++sum.calls;
-                    break;
-            }
-            sum.peak_l3 = std::max(sum.peak_l3, at(Chan::L3).size());
-            ++sum.actions;
+    }
+
+    void step(const Action& a, const TileOp* call_op) {
+        const std::string k = a.tile.to_string();
+        const std::size_t i = sum_.actions;
+        auto where = [&](std::size_t idx) {
+            return "csp action " + std::to_string(idx) + " " + to_string(a.kind) + " " + k;
+        };
+        switch (a.kind) {
+            case Action::Kind::Load:
+            case Action::Kind::Store:
+            case Action::Kind::Move:
+                at(to_chan(a.kind))[k] = take(from_chan(a.kind), k, where(i), /*keep=*/true);
+                break;
+            case Action::Kind::Writeback:
+            case Action::Kind::Feed:
+            case Action::Kind::Drain:
+                at(to_chan(a.kind))[k] = take(from_chan(a.kind), k, where(i), /*keep=*/false);
+                break;
+            case Action::Kind::Release:
+                if (!at(Chan::L3).erase(k)) throw BehavioralError(where(i) + ": nothing resident to release");
+                break;
+            case Action::Kind::Call:
+                if (!call_op) throw BehavioralError(where(i) + ": a call without its tile function");
+                call(*call_op, a.accumulate, where(i));
+                ++sum_.calls;
+                break;
         }
+        sum_.peak_l3 = std::max(sum_.peak_l3, at(Chan::L3).size());
+        ++sum_.actions;
+    }
+
+    Summary finish() {
         for (Chan c : {Chan::L3, Chan::L2, Chan::Cf})
             if (!at(c).empty())
                 throw BehavioralError("csp program ends with " + std::to_string(at(c).size()) + " tiles left in " +
@@ -91,7 +105,7 @@ public:
                 for (Dim tj = 0; tj < op.n_tile_cols(); ++tj)
                     insert(op, ti, tj, at(Chan::Dram).at(TileCoord{name, ti, tj}.to_string()));
         }
-        return sum;
+        return sum_;
     }
 
     // The operands as DRAM holds them after run().
@@ -100,6 +114,7 @@ public:
 private:
     TileProgram work_;
     TileKernelState state_;
+    Summary sum_;
     std::array<std::map<std::string, std::vector<float>>, kChannels> store_;
 
     std::map<std::string, std::vector<float>>& at(Chan c) { return store_[static_cast<std::size_t>(c)]; }

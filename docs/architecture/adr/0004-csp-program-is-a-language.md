@@ -4,7 +4,7 @@
 |---|---|
 | **Status** | **Accepted** (2026-10-09) |
 | **Date** | 2026-10-09 |
-| **Amends** | ADR 0002 §6, answer 1 ("never hand-authored, so it needs no source language or parser") |
+| **Amends** | ADR 0002 §6, answer 1 ("never hand-authored, so it needs no source language or parser"); ADR 0001 D1 ("the portable program is the L0 `TileProgram`"), by §4 |
 | **Preserves** | ADR 0002 §2 (CSP is the program layer that every level interprets); ADR 0001 D1 (L0 is the portable program a CSP program is lowered from) |
 | **Context docs** | `docs/plans/csp-program-tile-sequencing.md` (the CSP program as the only source of tile sequencing), `docs/plans/csp-language.md` (this language) |
 
@@ -67,3 +67,34 @@ level:
   epilogue runs: in the compute fabric, on a streamer's drain, or on a BlockMover's ingress or
   egress. That is the **tile context** of `csp-language.md` §3.4.
 - **The language needs versioning,** as `.l0` has (format, opset, reader versions).
+
+## 4. Amendment (2026-10-09): L0 is a trace format; the CSP program is the portable program
+
+The architect observed that L0 cannot express a large operator. Its tile sequence is fully
+unrolled: a 1M x 1M matmul with 32 x 32 tiles is about 3 x 10^13 tile ops, so no L0 file of it
+can exist. **L0 is therefore an instance, or trace, format, not a program.**
+
+The same applies to the flat `CspProgram` action list of step 1. The `.csp` language keeps its
+loops, but the step-1 compiler unrolled them, the driver enqueued every action up front, and
+the validator walked every unrolled statement. The language was scalable; its representation
+was not.
+
+Decided:
+
+1. **The portable program is the CSP program (`.csp`).** L0's role narrows to what it is good at:
+   - the golden corpus;
+   - a carrier of inline values for the value oracle;
+   - a debugging artifact.
+
+   This amends ADR 0001 D1.
+2. **The structured program is what executes.**
+   - Interpreters pull actions lazily from the program's loop nests, in memory bounded by
+     L3 capacity and loop depth, not by the problem size.
+   - The flat action list is a trace, emitted on request for small cases, debugging and the
+     record. It is never required to run.
+3. **Validation is symbolic.** Residency, capacity and index bounds are checked over the loop
+   structure: affine indices, per-iteration residency balance, and one representative
+   iteration. Nothing is unrolled.
+4. **Derived programs should arrive with their loops.** The L0 → `.csp` emitter is a bridge for
+   today's corpus, not the path forward; DFP → `.csp` is.
+
