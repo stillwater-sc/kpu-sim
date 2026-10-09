@@ -20,7 +20,9 @@
 #include <sw/kpu/timing/csp_config_from_spec.hpp>
 #include <sw/kpu/timing/csp_driver.hpp>
 
+#include <cmath>
 #include <cstdio>
+#include <limits>
 #include <string>
 #include <vector>
 
@@ -217,3 +219,16 @@ TEST_CASE("Linear at L-CA: a stage on a site with no vector unit is refused", "[
     CHECK_THROWS_WITH(CspDriver(exec, p).run(), ContainsSubstring("runs on the BlockMovers, which have no vector unit"));
 }
 
+
+TEST_CASE("Linear at L-CA: a vector rate that is not finite and positive is refused", "[timing][csp][linear][lca]") {
+    csp::CspProgram p = lang::compile(linear_source(" via add(b[j]) @ bm.egress, relu @ bm.egress"));
+    const prog::TileProgram in = linear_inputs(prog::ActivationFn::Relu);
+    for (const char* name : {"A", "B", "b"}) p.source.operand(name).values = in.operand(name).values;
+    for (double rate : {std::nan(""), -1.0, std::numeric_limits<double>::infinity(), 1e-300}) {
+        CAPTURE(rate);
+        auto cfg = machine(s1());
+        cfg.bm_ve_rate = rate;
+        ConcurrentTimingExecutor exec(cfg);
+        CHECK_THROWS_WITH(CspDriver(exec, p).run(), ContainsSubstring("vector rate on the BlockMovers"));
+    }
+}

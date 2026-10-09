@@ -25,6 +25,7 @@
 #include <deque>
 #include <fstream>
 #include <functional>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <stdexcept>
@@ -1176,11 +1177,20 @@ inline void ConcurrentTimingExecutor::schedule_feed(const TileDescriptor& tile_i
 inline Cycle ConcurrentTimingExecutor::stage_cycles(const TileDescriptor& t, const std::vector<VectorStage>& stages,
                                                     double per_cycle, const char* site) const {
     if (stages.empty()) return 0;
-    if (per_cycle <= 0.0)
+    if (per_cycle == 0.0)
         throw std::invalid_argument(std::string("ConcurrentTimingExecutor: a tile context on ") + t.tile_id.to_string() +
                                     " runs on the " + site + ", which have no vector unit");
+    // Negated, so NaN fails too; a rate so small that the cycle count leaves Cycle's range is
+    // refused rather than converted (the double -> integer conversion would be undefined).
+    if (!(per_cycle > 0.0) || !std::isfinite(per_cycle))
+        throw std::invalid_argument(std::string("ConcurrentTimingExecutor: the vector rate on the ") + site +
+                                    " (lanes x rate) must be finite and positive");
     const double elements = static_cast<double>(t.height) * static_cast<double>(t.width);
-    return static_cast<Cycle>(stages.size()) * static_cast<Cycle>(std::ceil(elements / per_cycle));
+    const double cycles = std::ceil(elements / per_cycle) * static_cast<double>(stages.size());
+    if (!(cycles < static_cast<double>(std::numeric_limits<Cycle>::max())))
+        throw std::invalid_argument(std::string("ConcurrentTimingExecutor: a tile context on ") + t.tile_id.to_string() +
+                                    " needs more cycles than the clock counts: the vector rate on the " + site + " is too small");
+    return static_cast<Cycle>(cycles);
 }
 
 inline void ConcurrentTimingExecutor::schedule_drain(const TileDescriptor& tile_in, std::vector<VectorStage> fabric,
