@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The linear operator at L-CA: tile contexts on timed vector units (CSP-language step 3).**
+  - `movers.vector` maps to the executor's vector units. A stage overlaps the drain or
+    writeback it rides on, and the move takes the longer of the two. `fabric` stages charge the
+    compute tile.
+  - The executor applies each stage's values as the move lands, and `CspDriver` runs the linear
+    operator fused or unfused, bit-identical to the L0 reference.
+  - Running a tile through two residencies exposed five tag-match ordering hazards (chain
+    publication, Feed and Writeback copies in L2, RAW in L3, RAW through DRAM). All are fixed
+    by program order on CSP descriptors. The matmul driver's cycle counts are unchanged.
+  - On S1 (linear 128^3), fusing saves 2 x |C| of DRAM traffic and 22% of the makespan. A
+    1-lane BlockMover unit stretches the makespan from 17,894 to 44,167 cycles.
+
 - **The linear operator, Y = act(X . W + b), at L-B (CSP-language step 2).**
   - L0 opset 1.1.0 adds `BIAS_ADD` and `ACTIVATION` (`act=` relu, gelu, silu, atan), with
     reference kernels, and `--algo linear` (`--act`) derives the operator. A file's OPSET line

@@ -102,6 +102,17 @@ struct TileIDHash {
 };
 
 // ============================================================================
+// VectorStage - one stage of a tile context (docs/plans/csp-language.md step 3): a vector
+// operation applied to a tile as a move carries it. Add broadcasts a vector tile (`arg`, read
+// from L3) down the rows; the rest are elementwise activations.
+// ============================================================================
+struct VectorStage {
+    enum class Op : uint8_t { Add, Relu, Gelu, Silu, Atan };
+    Op op = Op::Relu;
+    TileID arg{};
+};
+
+// ============================================================================
 // TileDescriptor - Full description of a tile operation
 // ============================================================================
 
@@ -143,6 +154,24 @@ struct TileDescriptor {
     // The BlockMover's order between a tile's Moves and its Releases: the Releases of this
     // tile issued before this Move or Release (set by the mover at enqueue).
     uint32_t l3_epoch = 0;
+
+    // Vector-unit time on this move (set by the executor from a tile context's stages and the
+    // site's lanes and rate): the move takes the longer of its transfer and this, since the
+    // unit works on the tile as it streams. `fabric_cycles`: a Drain's stages in the compute
+    // fabric, on the accumulator before it leaves; they run first and charge the compute tile.
+    Cycle ve_cycles = 0;
+    Cycle fabric_cycles = 0;
+
+    // A CSP program's action (CspDriver): ordered by the program, not only by tag match. A Feed
+    // of such a tile takes the copy its own Move brought: it waits until the tile's Moves
+    // scheduled before it (`after_moves`, set by the executor) have arrived in L2, so it never
+    // feeds an earlier copy that is still in L2 for another purpose (a drained result on its way
+    // to its writeback).
+    bool ordered = false;
+    uint64_t after_moves = 0;
+    uint64_t program_seq = 0;   // the action's place in its program (ordered actions only)
+    uint64_t after_writebacks = 0;  // a Move's or ejection's: the tile's Writebacks before it (set by the mover)
+    uint64_t after_drains = 0;      // a Writeback's: the tile's Drains before it (set by the executor)
 
     // Tile dimensions (for compute operations)
     Size height = 16;         // Tile height (rows)

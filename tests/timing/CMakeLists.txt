@@ -514,6 +514,16 @@ set_tests_properties(test_csp_driver PROPERTIES
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
 )
 
+# The linear operator at L-CA: tile contexts on the vector units (docs/plans/csp-language.md step 3)
+kpu_add_component_test(test_csp_linear_lca "timing"
+    test_csp_linear_lca.cpp
+)
+
+set_tests_properties(test_csp_linear_lca PROPERTIES
+    LABELS "timing;csp;driver;v0.9"
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+)
+
 # The memory side on its own, NoC ports stubbed (docs/plans/memory-side-debugger.md step 2)
 kpu_add_component_test(test_memory_side_harness "timing"
     test_memory_side_harness.cpp

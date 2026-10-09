@@ -14,8 +14,10 @@
 #include <sw/kpu/timing/tag_cam.hpp>
 #include <sw/kpu/timing/work_queue.hpp>
 
+#include <algorithm>
 #include <cmath>
 #include <deque>
+#include <functional>
 #include <limits>
 #include <optional>
 #include <unordered_map>
@@ -123,6 +125,7 @@ public:
         TileDescriptor t = tile;
         t.enqueue_cycle = current_cycle_;
         t.l3_epoch = releases_issued_[t.tile_id];   // the tile's Releases issued before it
+        t.after_writebacks = writebacks_issued_[t.tile_id];
         ++moves_issued_[t.tile_id];
         move_queue_.enqueue(t);
         transpose_flags_.push_back(transpose);
@@ -140,6 +143,7 @@ public:
     void schedule_writeback(const TileDescriptor& tile) {
         TileDescriptor t = tile;
         t.enqueue_cycle = current_cycle_;
+        ++writebacks_issued_[t.tile_id];
         writeback_queue_.enqueue(t);
     }
 
@@ -162,6 +166,9 @@ public:
      * 1. Every Move of the tile scheduled before this Release has completed
      * 2. Every earlier Release of the tile has retired its own entry
      * 3. The tile is present in L3 (its load has arrived)
+     * A residency a Writeback opened (tile.l3_held false) left L3 with its Store's ejection; its
+     * Release retires once the ejections scheduled before it are done, and only orders the
+     * tile's later Moves after them -- so a later Move takes the next residency's copy.
      * A Release takes no transfer time; a Move of the tile scheduled after it waits for it, and
      * so moves the next residency's copy, never this one.
      */
@@ -169,8 +176,19 @@ public:
         TileDescriptor t = tile;
         t.enqueue_cycle = current_cycle_;
         t.l3_epoch = releases_issued_[t.tile_id]++;
-        release_queue_.push_back({t, moves_issued_[t.tile_id]});
+        release_queue_.push_back({t, moves_issued_[t.tile_id], ejects_issued_[t.tile_id]});
     }
+
+    /// A Release also waits while this says the entry still has a reader the BlockMover does
+    /// not see -- a tile context's stage that reads it (add's bias) on a later drain or writeback.
+    void set_release_guard(std::function<bool(const TileID&)> guard) { release_guard_ = std::move(guard); }
+
+    /// A writeback also waits while this says its own copy (its Drain's) has not reached L2.
+    void set_writeback_guard(std::function<bool(const TileDescriptor&)> guard) { writeback_guard_ = std::move(guard); }
+
+    /// The BlockMover's vector unit (bm.egress): busy cycles, and the cycles it slowed writebacks by.
+    [[nodiscard]] Cycle ve_busy_cycles() const { return ve_busy_cycles_; }
+    [[nodiscard]] Cycle ve_bound_cycles() const { return ve_bound_cycles_; }
 
     /// Route ejections over the NoC (step 4b.4). nullptr = they land in the store buffer.
     void set_eject_sink(EjectSink* sink) { eject_sink_ = sink; }
@@ -178,6 +196,8 @@ public:
     void schedule_eject(const TileDescriptor& tile, DmaStoreBuffer& target, uint64_t ticket) {
         TileDescriptor t = tile;
         t.enqueue_cycle = current_cycle_;
+        t.after_writebacks = writebacks_issued_[t.tile_id];
+        ++ejects_issued_[t.tile_id];
         eject_queue_.push_back({t, &target, ticket});
     }
 
@@ -244,8 +264,14 @@ public:
         release_queue_.clear();
         moves_issued_.clear();
         moves_done_.clear();
+        ejects_issued_.clear();
+        ejects_done_.clear();
+        writebacks_issued_.clear();
+        writebacks_done_.clear();
         releases_issued_.clear();
         releases_done_.clear();
+        ve_busy_cycles_ = 0;
+        ve_bound_cycles_ = 0;
         in_flight_target_ = nullptr;
         transpose_flags_.clear();
         in_flight_.reset();
@@ -328,11 +354,17 @@ private:
     struct Release {
         TileDescriptor tile;
         uint64_t moves_before;      // the tile's Moves scheduled before this Release
+        uint64_t ejects_before;     // ... and its ejections (Stores)
     };
     std::deque<Release> release_queue_;
     // Per tile, the program order between Moves and Releases (counts only grow).
-    std::unordered_map<TileID, uint64_t, TileIDHash> moves_issued_, moves_done_;
+    std::unordered_map<TileID, uint64_t, TileIDHash> moves_issued_, moves_done_, ejects_issued_, ejects_done_;
+    std::unordered_map<TileID, uint64_t, TileIDHash> writebacks_issued_, writebacks_done_;
     std::unordered_map<TileID, uint32_t, TileIDHash> releases_issued_, releases_done_;
+    std::function<bool(const TileID&)> release_guard_;
+    std::function<bool(const TileDescriptor&)> writeback_guard_;
+    Cycle ve_busy_cycles_ = 0;
+    Cycle ve_bound_cycles_ = 0;
 
     Cycle current_cycle_ = 0;
     uint32_t next_l2_slot_ = 0;
@@ -381,11 +413,14 @@ private:
                 } else {
                     in_flight_target_->deliver(in_flight_ticket_);
                 }
-                bool credit_released = l3_tag_cam_.invalidate(in_flight_->tile.tile_id);
+                // A program-held entry stays: its Release, not its Store, retires it.
+                bool credit_released = !in_flight_->tile.l3_held &&
+                                       l3_tag_cam_.invalidate(in_flight_->tile.tile_id);
                 if (credit_released) {
                     l3_credits_.release(
                         static_cast<size_t>(in_flight_->tile.tile_id.matrix));
                 }
+                ++ejects_done_[in_flight_->tile.tile_id];
                 total_tiles_ejected_++;
 
                 // Order matters to the value plane: the bytes reach the buffer before the
@@ -459,14 +494,17 @@ private:
                     ));
                 }
             } else {
-                // Writeback complete: tile arrived at L3
-                l3_tag_cam_.insert(in_flight_->tile.tile_id, in_flight_->slot_id, current_cycle);
+                // Writeback complete: tile arrived at L3. Into a program-held entry it overwrites
+                // the slot in place: the entry keeps its one reference, which its Release retires.
+                if (!(in_flight_->tile.l3_held && l3_tag_cam_.lookup(in_flight_->tile.tile_id)))
+                    l3_tag_cam_.insert(in_flight_->tile.tile_id, in_flight_->slot_id, current_cycle);
                 // Only release L2 credit if tile was fully removed (ref_count reached 0)
                 bool credit_released = l2_tag_cam_.invalidate(in_flight_->tile.tile_id);
                 if (credit_released) {
                     l2_credits_.release(
                         static_cast<size_t>(in_flight_->tile.tile_id.matrix));
                 }
+                ++writebacks_done_[in_flight_->tile.tile_id];
                 total_tiles_writeback_++;
 
                 events.push_back(TimingEvent::duration_event(
@@ -503,10 +541,16 @@ private:
         }
     }
 
-    /// Every Release of the tile scheduled before this Move has retired its entry.
+    /// Every Release of the tile scheduled before this Move has retired its entry -- and, for a
+    /// program's Move, every Writeback before it has landed: it reads what they wrote.
     [[nodiscard]] bool released_before(const TileDescriptor& t) const {
         const auto it = releases_done_.find(t.tile_id);
-        return (it == releases_done_.end() ? 0u : it->second) >= t.l3_epoch;
+        return (it == releases_done_.end() ? 0u : it->second) >= t.l3_epoch && written_before(t);
+    }
+    [[nodiscard]] bool written_before(const TileDescriptor& t) const {
+        if (!t.ordered) return true;
+        const auto it = writebacks_done_.find(t.tile_id);
+        return (it == writebacks_done_.end() ? 0 : it->second) >= t.after_writebacks;
     }
 
     /**
@@ -521,9 +565,17 @@ private:
             const TileID& id = it->tile.tile_id;
             const auto md = moves_done_.find(id);
             const auto rd = releases_done_.find(id);
-            const bool due = (md == moves_done_.end() ? 0 : md->second) >= it->moves_before &&
-                             (rd == releases_done_.end() ? 0u : rd->second) == it->tile.l3_epoch &&
-                             l3_tag_cam_.lookup(id);
+            const auto ed = ejects_done_.find(id);
+            const bool ordered = !(release_guard_ && release_guard_(id)) &&
+                                 (md == moves_done_.end() ? 0 : md->second) >= it->moves_before &&
+                                 (rd == releases_done_.end() ? 0u : rd->second) == it->tile.l3_epoch &&
+                                 (ed == ejects_done_.end() ? 0 : ed->second) >= it->ejects_before;
+            if (ordered && !it->tile.l3_held) {          // a written residency: already gone
+                ++releases_done_[id];
+                it = release_queue_.erase(it);
+                continue;
+            }
+            const bool due = ordered && l3_tag_cam_.lookup(id);
             if (!due) { ++it; continue; }
             const auto entry = l3_tag_cam_.match(id);
             bool credit_released = l3_tag_cam_.invalidate(id);
@@ -741,6 +793,7 @@ private:
 
         for (size_t i = 0; i < writeback_queue_.size(); ++i) {
             const auto& tile = writeback_queue_.at(i);
+            if (writeback_guard_ && writeback_guard_(tile)) continue;   // its own drain has not landed
             auto l2_entry = l2_tag_cam_.match(tile.tile_id);
             if (l2_entry.has_value()) {
                 if (config_.priority_aging) {
@@ -774,8 +827,10 @@ private:
         }
 
         // Check if L3 credit available (writebacks carry C tiles, which have
-        // their own partition when the pool is partitioned, per #89)
-        if (!l3_credits_.acquire(
+        // their own partition when the pool is partitioned, per #89). A writeback into a
+        // program-held entry writes its slot in place: the residency already holds the credit.
+        const bool in_place = writeback_queue_.at(found_index).l3_held;
+        if (!in_place && !l3_credits_.acquire(
                 static_cast<size_t>(writeback_queue_.at(found_index).tile_id.matrix))) {
             const auto& tile = writeback_queue_.at(found_index);
             events.push_back(TimingEvent(
@@ -791,7 +846,11 @@ private:
 
         // Start the writeback - remove from queue at found position
         TileDescriptor wb_tile = writeback_queue_.remove_at(found_index);
-        Cycle transfer_cycles = compute_transfer_cycles(wb_tile.size_bytes);
+        // The vector unit (bm.egress) works on the tile as it streams: the slower sets the pace.
+        const Cycle move = compute_transfer_cycles(wb_tile.size_bytes);
+        Cycle transfer_cycles = std::max(move, wb_tile.ve_cycles);
+        ve_busy_cycles_ += wb_tile.ve_cycles;
+        if (wb_tile.ve_cycles > move) ve_bound_cycles_ += wb_tile.ve_cycles - move;
         uint32_t l3_slot = found_entry->slot_id;  // Reuse slot info for tracking
 
         in_flight_ = InFlightTransfer(
@@ -811,13 +870,14 @@ private:
             name()
         ));
 
-        events.push_back(TimingEvent(
-            EventType::CREDIT_ACQUIRED,
-            current_cycle,
-            config_.mover_id,
-            wb_tile.tile_id,
-            name()
-        ));
+        if (!in_place)
+            events.push_back(TimingEvent(
+                EventType::CREDIT_ACQUIRED,
+                current_cycle,
+                config_.mover_id,
+                wb_tile.tile_id,
+                name()
+            ));
 
         return true;
     }
@@ -832,6 +892,7 @@ private:
         bool any_in_l3 = false;
         for (std::size_t i = 0; i < eject_queue_.size(); ++i) {
             const Eject& e = eject_queue_[i];
+            if (!written_before(e.tile)) continue;    // it stores what the writebacks before it wrote
             auto l3_entry = l3_tag_cam_.match(e.tile.tile_id);
             if (!l3_entry.has_value()) continue;
             any_in_l3 = true;
