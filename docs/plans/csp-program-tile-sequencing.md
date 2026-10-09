@@ -361,6 +361,10 @@ Each step is one PR and ends green.
        the remaining loads and moves on the one BlockMover.
      - **Attributing the gap** (which store waited on what) is what the step-5 record is for.
        It is recorded here, not tuned blind.
+1b. **The CSP language** (ADR 0004; `docs/plans/csp-language.md`): the written, structured
+   form of the CSP program. It has a parser, a validator, a lowering to the IR, and a printer.
+   Its drivers are matmul, LU, and the linear operator (matmul, bias and activation), the last
+   for fusion with tile contexts on block-move ingress and egress. It comes before 2b.
 2b. **`kpu-run --level cycle-accurate`.**
    - `run_at` takes a device model, not the deployment spec L-CA needs (DRAM, compute fabric).
    - The L0 corpus and serialization tests iterate every implemented level, so flipping

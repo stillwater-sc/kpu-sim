@@ -79,6 +79,8 @@ struct Action {
     std::size_t process = kNone;        // index into CspProgram::processes (Release: none)
     std::size_t l0_op = kNone;          // the L0 op this action implements (traceability)
     std::size_t residency = kNone;      // the L3 residency it opens, reads or releases
+    bool accumulate = false;            // Call: adds to the fabric's accumulator for its output,
+                                        // which starts at zero (an output-stationary chain)
 };
 
 inline const char* to_string(Action::Kind k) {

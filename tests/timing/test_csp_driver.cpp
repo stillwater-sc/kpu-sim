@@ -12,6 +12,7 @@
 #include <catch2/matchers/catch_matchers_string.hpp>
 
 #include <sw/kpu/program/csp/behavioral.hpp>
+#include <sw/kpu/program/csp/lang/compile.hpp>
 #include <sw/kpu/program/csp/lower.hpp>
 #include <sw/kpu/program/driver/program_spec.hpp>
 #include <sw/kpu/program/platform/deployment_json.hpp>
@@ -220,4 +221,44 @@ TEST_CASE("CSP driver: with the DMA burst window on (characterization)", "[timin
     REQUIRE(gr.success);
     std::printf("window 32 on S1 256^3/32^3: csp %llu cycles, generator %llu cycles\n",
                 static_cast<unsigned long long>(r.cycles), static_cast<unsigned long long>(gr.total_cycles));
+}
+
+TEST_CASE("CSP driver: a WRITTEN program runs at L-CA -- its values, its loads", "[timing][csp][driver][lang]") {
+    // The CSP language (docs/plans/csp-language.md step 1): a program someone wrote, not one
+    // derived. A held whole, B's column panel per j: 64 + 64 loads, as written.
+    const char* src = R"(csp 1.0
+program matmul machine flat(l3 = 128) {
+  tensor A[128,128] tile 32x32 in;
+  tensor B[128,128] tile 32x32 in;
+  tensor C[128,128] tile 32x32 out;
+  resident A[:, :];
+  for j in 0..4 {
+    resident B[:, j];
+    for i in 0..4 {
+      acc C[i, j] in fabric {
+        for k in 0..4 { call gemm(A[i, k], B[k, j]) +-> C[i, j]; }
+      }
+      store C[i, j];
+    }
+    release B[:, j];
+  }
+  release A[:, :];
+}
+)";
+    csp::CspProgram p = csp::lang::compile(src);
+    sw::kpu::program::driver::ProgramSpec spec;
+    spec.algo = "matmul";
+    spec.size = 128;
+    spec.tile = 32;
+    sw::kpu::program::driver::fill(p.source, spec);
+    ConcurrentTimingExecutor exec(machine("kpu_s1.json"));
+    const auto r = CspDriver(exec, p).run();
+    REQUIRE(r.completed);
+    TileProgram ref = matmul(128, 32);
+    TileProgramReference().run(ref);
+    CHECK(r.values.operand("C").values == ref.operand("C").values);
+    CHECK(r.dram_loads == p.reuse().loads);
+    CHECK(r.dram_loads == 32);
+    std::printf("csp driver, written matmul 128^3/32^3 on S1: %llu cycles, %zu DRAM loads\n",
+                static_cast<unsigned long long>(r.cycles), r.dram_loads);
 }

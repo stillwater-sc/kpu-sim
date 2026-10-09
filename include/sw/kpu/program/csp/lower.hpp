@@ -123,8 +123,10 @@ public:
                             if (!is_output && --in_fabric_[key(t)] == 0) in_fabric_.erase(key(t));
                         }
                         for (const auto& t : op.outputs) in_fabric_[key(t)] = 1;
-                        emit(Action::Kind::Call, op.outputs.empty() ? TileCoord{} : op.outputs.front(),
-                             ProcessKind::Compute, i);
+                        const std::size_t call = emit(Action::Kind::Call,
+                                                      op.outputs.empty() ? TileCoord{} : op.outputs.front(),
+                                                      ProcessKind::Compute, i);
+                        p_.actions[call].accumulate = true;   // the fabric accumulates from zero
                         break;
                     }
                     // Implicit: the whole working set must be in L3 at once.

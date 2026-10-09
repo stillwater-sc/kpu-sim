@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The CSP language (`include/sw/kpu/program/csp/lang/`; ADR 0004; CSP-language plan step 1).**
+  - The written form of the CSP program, `.csp` (`csp 1.0`). It has C-style blocks, loops,
+    explicit residency (`resident` / `release`), output-stationary accumulators
+    (`acc ... in fabric`), tile-function calls (`gemm`, `getrf`, `laswp`, `trsm_ll`,
+    `trsm_ur`) and `store`.
+  - A parser, a static validator that names the line of each error (residency is explicit
+    only), a compiler to the CSP program IR, a printer (round trips exactly), and an emitter
+    from derived L0.
+  - Written matmul and LU programs compute the L0 reference's values bit for bit at L-B, and a
+    written matmul does so at L-CA with exactly the loads it declares.
+  - ADR 0004 amends ADR 0002 §6.1: the CSP program is also written, not only derived.
+
 - **L-CA from the CSP program (CSP-program sequencing plan step 2, `timing/csp_driver.hpp`).**
   - The cycle-level executor runs a CSP program's actions, process by process. There is no
     `ScheduleResult` and no generator.

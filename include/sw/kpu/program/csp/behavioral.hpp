@@ -52,7 +52,6 @@ public:
                 for (Dim tj = 0; tj < op.n_tile_cols(); ++tj)
                     at(Chan::Dram)[TileCoord{name, ti, tj}.to_string()] = extract(op, ti, tj);
         }
-        const bool accumulates = has_drains(p.source);
         for (std::size_t i = 0; i < p.actions.size(); ++i) {
             const Action& a = p.actions[i];
             const std::string k = a.tile.to_string();
@@ -74,7 +73,7 @@ public:
                     if (!at(Chan::L3).erase(k)) throw BehavioralError(where(i) + ": nothing resident to release");
                     break;
                 case Action::Kind::Call:
-                    call(p.source.ops().at(a.l0_op), accumulates, where(i));
+                    call(p.source.ops().at(a.l0_op), a.accumulate, where(i));
                     ++sum.calls;
                     break;
             }
@@ -104,11 +103,6 @@ private:
     std::array<std::map<std::string, std::vector<float>>, kChannels> store_;
 
     std::map<std::string, std::vector<float>>& at(Chan c) { return store_[static_cast<std::size_t>(c)]; }
-
-    static bool has_drains(const TileProgram& p) {
-        for (const auto& op : p.ops()) if (op.kind == TileOpKind::Drain) return true;
-        return false;
-    }
 
     std::vector<float> take(Chan from, const std::string& k, const std::string& where, bool keep) {
         auto& s = at(from);

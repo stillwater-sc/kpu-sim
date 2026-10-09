@@ -426,7 +426,10 @@ is exactly "write and test Domain Flow Programs at different abstraction levels"
 
 ## 6. Answers recorded (2026-09-22)
 
-1. **The CSP program is derived from the DFP.** It is never hand-authored, so it needs no
+1. **The CSP program is derived from the DFP.** *(Amended 2026-10-09 by ADR 0004: the CSP
+   program is also a written, structured language. Humans, AI assistants and compilers write
+   it, and the DFP lowering is one producer of it. The rest of this answer is the original
+   decision.)* It is never hand-authored, so it needs no
    source language or parser — an in-memory IR with a disassembler is sufficient, and
    `--program` names a DFP or a serialized CSP IR, not a file anyone writes by hand. §5.1's
    work is therefore *deriving* explicit processes and channels, not designing a syntax.
