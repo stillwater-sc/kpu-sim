@@ -21,6 +21,7 @@
 #include <sw/kpu/program/value_tolerance.hpp>
 #include <sw/kpu/timing/csp_config_from_spec.hpp>
 #include <sw/kpu/timing/schedule/matmul_schedule_generator.hpp>
+#include <sw/kpu/timing/schedule/schedule_dispatcher.hpp>
 #include <sw/kpu/timing/schedule/schedule_executor.hpp>
 
 #include <cstdio>
@@ -28,6 +29,7 @@
 #include <set>
 #include <limits>
 #include <map>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -76,7 +78,7 @@ struct OracleRun {
 // C = A @ B (size^3, tile^3) on the CSP executor configured from `d`, and on the L0 reference
 // with the same inputs.
 OracleRun run_matmul(const DeviceSpecification& d, Size size, Size T, bool noc = false,
-                     int32_t cf_tile = -1) {
+                     int32_t cf_tile = -1, std::optional<std::size_t> prefetch = std::nullopt) {
     std::string why;
     const auto csp = csp_config_from(d, &why);
     INFO(why);
@@ -120,7 +122,7 @@ OracleRun run_matmul(const DeviceSpecification& d, Size size, Size T, bool noc =
                                       ? TilePayload{T, T, block(A, id.ti, id.tk, T)}
                                       : TilePayload{T, T, block(B, id.tk, id.tj, T)});
     }
-    for (const auto& op : schedule.operations) {
+    auto enqueue = [&](const ScheduleOperation& op) {
         switch (op.type) {
             case ScheduleOpType::LOAD:      exec.schedule_load(op.tile, op.engine_id); break;
             case ScheduleOpType::MOVE:      exec.schedule_move(op.tile, op.transpose, op.mover_id); break;
@@ -138,8 +140,15 @@ OracleRun run_matmul(const DeviceSpecification& d, Size size, Size T, bool noc =
                 break;
             }
         }
+    };
+    // Every operation up front, or paced by the dispatcher (system-schedule step 3).
+    ScheduleDispatcher dispatch(schedule.operations, prefetch.value_or(ScheduleDispatcher::kUnlimited));
+    while (exec.current_cycle() < ec.max_cycles) {
+        dispatch.release(exec, enqueue);
+        if (dispatch.done() && exec.is_complete()) break;
+        exec.step();
     }
-    while (!exec.is_complete() && exec.current_cycle() < ec.max_cycles) exec.step();
+    REQUIRE(dispatch.done());
     REQUIRE(exec.is_complete());
 
     OracleRun out;
@@ -581,4 +590,18 @@ TEST_CASE("Compute fabric: K is the A tiles' width, with non-square tiles",
             CHECK(e.duration == 64 + (16 * 32 * 64) / 8192);
         }
     CHECK(computes == (64 / 16) * (64 / 32));
+}
+
+// docs/plans/system-schedule-debugger.md step 3: pacing changes when operations are released,
+// never what is computed.
+TEST_CASE("Dispatcher: values never move with the prefetch depth", "[timing][csp][oracle][dispatcher]") {
+    for (const char* file : {"kpu_s1.json", "kpu_t4.json"})
+        for (std::size_t P : {std::size_t{0}, std::size_t{1}, std::size_t{4}}) {
+            CAPTURE(file, P);
+            const OracleRun r = run_matmul(device(file), 128, 32, false, -1, P);
+            const auto cmp = sw::kpu::program::compare_within(
+                r.csp, r.reference, sw::kpu::program::kAtolFloat32, sw::kpu::program::kRtolMatmul);
+            CHECK(cmp.bit_identical);
+            CHECK(r.l3_free_after == r.l3_capacity);
+        }
 }

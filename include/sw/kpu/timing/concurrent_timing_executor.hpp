@@ -571,6 +571,11 @@ public:
     [[nodiscard]] size_t l3_tiles() const { return l3_tile_credits_.size(); }
     /// The compute fabric: its tiles (0 = the legacy unbounded model) and each one's busy cycles.
     [[nodiscard]] size_t compute_tiles() const { return config_.num_compute_tiles; }
+    /// How many computes producing `tile` have completed (the dispatcher's cursor reads it).
+    [[nodiscard]] size_t completed_compute_count(const TileID& tile) const {
+        auto it = completed_compute_counts_.find(tile);
+        return it == completed_compute_counts_.end() ? 0 : it->second;
+    }
     [[nodiscard]] Cycle compute_tile_busy_cycles(size_t t) const { return cf_busy_cycles_.at(t); }
     [[nodiscard]] CreditPool& l3_tile_credits(size_t h) { return *l3_tile_credits_.at(h); }
     [[nodiscard]] TagCAM& l3_tile_tag_cam(size_t h) { return *l3_tile_cams_.at(h); }

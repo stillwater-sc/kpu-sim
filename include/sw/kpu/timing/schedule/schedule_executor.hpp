@@ -9,6 +9,7 @@
 #pragma once
 
 #include <sw/kpu/timing/schedule/schedule_generator_interface.hpp>
+#include <sw/kpu/timing/schedule/schedule_dispatcher.hpp>
 #include <sw/kpu/timing/concurrent_timing_executor.hpp>
 
 #include <functional>
@@ -106,6 +107,12 @@ public:
 
         /// Abort on first error
         bool abort_on_error = true;
+
+        /// Prefetch depth P, a SCHEDULE parameter (docs/plans/system-schedule-debugger.md §3.3):
+        /// operations are released against the oldest unfinished compute, at most P computes
+        /// ahead. Unset = every operation is enqueued before cycle 0 (the behaviour before the
+        /// dispatcher); ScheduleDispatcher::kUnlimited paces nothing but goes through it.
+        std::optional<size_t> prefetch_depth;
     };
 
     /**
@@ -173,6 +180,10 @@ public:
 
         // Reset executor state
         executor_.reset();
+        releases_.clear();
+        forced_releases_ = 0;
+
+        if (config_.prefetch_depth) return execute_paced(schedule, std::move(result));
 
         // Enqueue all operations
         for (size_t i = 0; i < schedule.operations.size(); ++i) {
@@ -257,6 +268,10 @@ public:
      */
     void set_config(const Config& config) { config_ = config; }
 
+    /// The last paced run's releases (empty when every operation was enqueued up front).
+    [[nodiscard]] const std::vector<ScheduleDispatcher::Release>& releases() const { return releases_; }
+    [[nodiscard]] size_t forced_releases() const { return forced_releases_; }
+
 private:
     ConcurrentTimingExecutor& executor_;
     Config config_;
@@ -301,6 +316,45 @@ private:
             : " - the executor pools are larger; execution is safe but "
               "regenerate against the actual envelope for faithful timing";
         result.warnings.push_back(std::move(warning));
+    }
+
+    std::vector<ScheduleDispatcher::Release> releases_;
+    size_t forced_releases_ = 0;
+
+    // Paced execution: release against the cursor, step, repeat. A cycle in which the executor
+    // has nothing left and the dispatcher releases nothing is a stall the dispatcher's progress
+    // rule makes impossible; it is reported, not looped on.
+    ExecutionResult execute_paced(const ScheduleResult& schedule, ExecutionResult result) {
+        ScheduleDispatcher d(schedule.operations, *config_.prefetch_depth);
+        const Cycle max = executor_.config().max_cycles;
+        try {
+            while (executor_.current_cycle() < max) {
+                result.ops_completed += d.release(executor_, [&](const ScheduleOperation& op) {
+                    enqueue_operation(op);
+                });
+                if (d.done() && executor_.is_complete()) break;
+                if (!d.done() && executor_.is_complete()) {
+                    result.error_message = "dispatcher stalled at operation " +
+                                           std::to_string(d.releases().size());
+                    break;
+                }
+                executor_.step();
+            }
+        } catch (const std::exception& e) {
+            result.error_message = std::string("Failed to enqueue an operation: ") + e.what();
+        }
+        releases_ = d.releases();
+        forced_releases_ = d.forced();
+        result.total_cycles = executor_.current_cycle();
+        result.success = result.error_message.empty() && d.done() && executor_.is_complete();
+        if (!result.success && result.error_message.empty())
+            result.error_message = "Execution exceeded max cycles";
+        auto stats = executor_.get_statistics();
+        result.dma_cycles = stats.dma_credit_stalls;
+        result.bm_cycles = stats.bm_tag_stalls + stats.bm_credit_stalls;
+        result.str_cycles = stats.str_tag_stalls + stats.str_credit_stalls;
+        result.stats = stats;
+        return result;
     }
 
     /**

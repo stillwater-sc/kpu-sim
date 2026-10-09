@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The schedule-paced dispatcher (system-schedule debugger step 3,
+  `schedule/schedule_dispatcher.hpp`).**
+  - It releases a schedule's operations in order, at most P computes ahead of the oldest
+    unfinished compute (`ScheduleExecutor::Config::prefetch_depth`, a schedule parameter).
+  - An unset P keeps every operation enqueued up front, as before. Unlimited P reproduces that
+    event for event, and values are bit-identical at every P.
+  - **Finding:** pacing exposes the matmul schedule's accidental reuse. On S1 (256³ / 32³), P = 1
+    loads 768 tiles from DRAM where releasing everything loads 128, and runs 3.3 times slower.
+    Mean credit-idle time falls from 6,214 to 2,106 cycles. A reuse-aware schedule is the next
+    plan.
+
 - **The compute fabric, and `kpu_s1` (system-schedule debugger step 2).**
   - A compute tile now runs one compute at a time, for `fill + MACs / macs_per_cycle` cycles.
     `csp_config_from` maps the spec's `compute_tiles` and `macs_per_cycle`.

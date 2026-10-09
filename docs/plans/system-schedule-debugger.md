@@ -1,7 +1,7 @@
 # System-Schedule Debugger: The Operator's Schedule, From Compute Down to DRAM Commands
 
 **Date:** 2026-10-08
-**Status:** Q1-Q5 decided 2026-10-08 (all as recommended; §7); steps 1-2 done; step 3 next
+**Status:** Q1-Q5 decided 2026-10-08 (all as recommended; §7); steps 1-3 done; step 4 next
 **Related:**
 - `docs/plans/memory-side-debugger.md`: the `.mflow` record, `mflow_check.py` and the memflow viewer. This
   plan reuses all three for its memory half.
@@ -417,6 +417,51 @@ Each step is one PR and ends green.
      - at P = 1 no load is released early;
      - credit-idle time falls as P falls;
      - values are unchanged.
+   - (Done.)
+   - **As built:** `schedule/schedule_dispatcher.hpp`, `ScheduleDispatcher`.
+     - **Tagging:** every operation is tagged with the compute it serves. A LOAD, MOVE or FEED
+       serves the first later compute that consumes its tile. A DRAIN, WRITEBACK or STORE
+       serves the latest earlier compute that produced it.
+     - **Release:** operations go out in schedule order while their compute is at most P
+       ahead of the cursor, the oldest compute not yet complete.
+     - **Progress rule:** an operation that the schedule placed ahead of the cursor's own
+       compute is released anyway and counted as **forced**. A forced count means the
+       schedule's order prefetches deeper than P.
+     - **`ScheduleExecutor::Config::prefetch_depth`:** a schedule parameter. Unset means every
+       operation is enqueued up front, the behaviour before the dispatcher, kept for every
+       existing caller. `releases()` and `forced_releases()` report the paced run.
+     - **The oracle's** hand-dispatch loop now runs through the dispatcher.
+   - **Tests** (`test_schedule_dispatcher`, plus the oracle):
+     - every operation's tag matches the compute that consumes or produced its tile;
+     - unlimited P reproduces up-front enqueueing event for event;
+     - at P = 1 no release is more than one compute ahead, and nothing is forced;
+     - a constructed early load is forced at P = 0 and is eligible at P = 1;
+     - values are bit-identical at P = 0, 1 and 4 on S1 and T4.
+   - **Finding: pacing exposes the schedule's accidental reuse.** On S1, matmul 256³ with 32³
+     tiles has 1,024 LOAD operations of 128 distinct tiles.
+
+     | P | Cycles | DRAM loads | Mean credit idle (cycles) |
+     |---|---|---|---|
+     | 0 | 174,725 | 1,024 | 1,467 |
+     | 1 | 121,464 | 768 | 2,106 |
+     | 2 | 128,738 | 782 | 3,595 |
+     | 4 | 112,586 | 777 | 4,590 |
+     | 8 | 80,492 | 530 | 4,428 |
+     | 16 | 62,274 | 359 | 5,221 |
+     | ∞ | 36,668 | **128** | 6,214 |
+
+     - **Why:** with everything released, all 128 tiles fit S1's 128-slot L3, and every repeat
+       load is a tag-CAM hit, so each tile is loaded once. Pacing returns a tile's credit once
+       its *released* consumers finish. A consumer more than P computes later (B tiles are
+       reused 8 computes apart in this order) reloads the tile from DRAM.
+     - **So P trades credit-idle time against reuse distance:** idle falls from 6,214 to 1,467
+       cycles while DRAM traffic grows up to eight-fold.
+     - **What fixes it** is a schedule whose reuse is explicit: each tile loaded once and kept
+       resident until its last consumer (Q4, the next plan). Pacing alone is not that schedule.
+     - **Until then,** unset P (release everything) is the faster baseline for problems that
+       fit in L3. The step-4 record will show each tile's residency and reloads.
+
+
 4. **The record and the tool** (§3.4, §3.7).
    - Files: `record/system_flow_record.hpp`/`.cpp` (sharing `.mflow`'s table writers);
      `TimingEvent` gains `cf_tile` and `l3_tile`; `ConcurrentTimingExecutor::record()`;

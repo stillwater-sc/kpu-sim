@@ -504,6 +504,16 @@ set_tests_properties(test_csp_spec_oracle PROPERTIES
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
 )
 
+# The schedule-paced dispatcher: prefetch depth P (docs/plans/system-schedule-debugger.md step 3)
+kpu_add_component_test(test_schedule_dispatcher "timing"
+    test_schedule_dispatcher.cpp
+)
+
+set_tests_properties(test_schedule_dispatcher PROPERTIES
+    LABELS "timing;schedule;dispatcher;v0.9"
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+)
+
 # The memory side on its own, NoC ports stubbed (docs/plans/memory-side-debugger.md step 2)
 kpu_add_component_test(test_memory_side_harness "timing"
     test_memory_side_harness.cpp
