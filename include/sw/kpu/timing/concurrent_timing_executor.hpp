@@ -19,6 +19,7 @@
 #include <sw/kpu/timing/noc_fabric.hpp>
 
 #include <algorithm>
+#include <cmath>
 #include <cstring>
 #include <fstream>
 #include <functional>
@@ -161,6 +162,15 @@ public:
         Cycle compute_cycles_per_k_slice = 32;  ///< Additional cycles per K slice beyond the
                                                 ///< first (accumulation depth; K-slice count is
                                                 ///< derived from the COMPUTE dependency set)
+        // The compute fabric (docs/plans/system-schedule-debugger.md §3.2). 0 compute tiles =
+        // the legacy model: any number of computes at once, latency from compute_latency. With
+        // N > 0, a compute tile runs one compute at a time; a compute names its tile
+        // (TileDescriptor::cf_tile) or takes the first free one.
+        size_t num_compute_tiles = 0;     ///< spec.compute_tiles; 0 = unbounded (legacy)
+        /// spec.macs_per_cycle, one compute tile's throughput; 0 = the legacy latency. With it,
+        /// latency = fill + ceil(MACs / macs_per_cycle), MACs = rows x cols x K of the result.
+        double macs_per_cycle = 0.0;
+        double compute_fill_per_edge = 2.0;     ///< fill + drain = this x the result's longer edge
 
         // Timing parameters
         double clock_ghz = 1.0;           ///< Reference clock in GHz
@@ -559,6 +569,9 @@ public:
     [[nodiscard]] CreditPool& l2_credits() { return l2_credits_; }
     [[nodiscard]] TagCAM& l3_tag_cam() { return l3_tile_tag_cam(single_l3_tile("l3_tag_cam")); }
     [[nodiscard]] size_t l3_tiles() const { return l3_tile_credits_.size(); }
+    /// The compute fabric: its tiles (0 = the legacy unbounded model) and each one's busy cycles.
+    [[nodiscard]] size_t compute_tiles() const { return config_.num_compute_tiles; }
+    [[nodiscard]] Cycle compute_tile_busy_cycles(size_t t) const { return cf_busy_cycles_.at(t); }
     [[nodiscard]] CreditPool& l3_tile_credits(size_t h) { return *l3_tile_credits_.at(h); }
     [[nodiscard]] TagCAM& l3_tile_tag_cam(size_t h) { return *l3_tile_cams_.at(h); }
     [[nodiscard]] size_t l3_credits_available() const {
@@ -635,8 +648,16 @@ private:
         Cycle complete_cycle = 0;    ///< When computation will complete (set when started)
         Cycle latency = 0;           ///< Computed latency (set when started)
         bool started = false;        ///< Has computation started?
+        std::uint32_t cf_tile = 0;   ///< The compute tile it runs on (set when started)
     };
     std::vector<PendingCompute> pending_computes_;
+    // The compute fabric (Config::num_compute_tiles > 0): when each tile is free again, and its
+    // busy cycles. An input's shape, as fed, gives a compute its K extent.
+    std::vector<Cycle> cf_busy_until_;
+    std::vector<Cycle> cf_busy_cycles_;
+    std::unordered_map<TileID, std::pair<Size, Size>, TileIDHash> fed_shape_;
+    void enqueue_compute(PendingCompute&& pc);
+    std::uint64_t compute_macs(const PendingCompute& pc) const;
 
     // Count scheduled and completed feed occurrences. Counts are required:
     // a boolean "ever fed" flag lets a reused tile start a later compute early.
@@ -757,6 +778,11 @@ inline ConcurrentTimingExecutor::ConcurrentTimingExecutor(const Config& config)
       l2_credits_(config.l2_bank_count),
       l2_tag_cam_(config.l2_bank_count),
       compute_result_tag_cam_(256) {  // initial reserve; grows with the schedule (#210)
+    cf_busy_until_.assign(config_.num_compute_tiles, 0);
+    cf_busy_cycles_.assign(config_.num_compute_tiles, 0);
+    if (config_.macs_per_cycle < 0.0 || !std::isfinite(config_.macs_per_cycle))
+        throw std::invalid_argument("ConcurrentTimingExecutor: macs_per_cycle must be a finite, "
+                                    "non-negative rate");
     if (config_.l3_tiles == 0)
         throw std::invalid_argument("ConcurrentTimingExecutor: l3_tiles must be at least 1");
     if (config_.l3_buffer_count < config_.l3_tiles)
@@ -1006,6 +1032,7 @@ inline void ConcurrentTimingExecutor::schedule_writeback(const TileDescriptor& t
 
 inline void ConcurrentTimingExecutor::schedule_feed(const TileDescriptor& tile, int streamer_id) {
     ++scheduled_feed_counts_[tile.tile_id];
+    fed_shape_[tile.tile_id] = {tile.height, tile.width};
     // Determine if this is a row (A) or column (B) tile
     bool is_row = (tile.tile_id.matrix == isa::MatrixID::A);
     uint32_t streamer = (streamer_id >= 0)
@@ -1025,6 +1052,30 @@ inline void ConcurrentTimingExecutor::schedule_drain(const TileDescriptor& tile,
         ? static_cast<uint32_t>(streamer_id)
         : select_streamer(tile, true);
     row_streamers_[streamer % row_streamers_.size()]->schedule_drain(tile);
+}
+
+inline void ConcurrentTimingExecutor::enqueue_compute(PendingCompute&& pc) {
+    const int32_t cf = pc.tile.cf_tile;
+    if (cf >= 0 && config_.num_compute_tiles > 0 && static_cast<size_t>(cf) >= config_.num_compute_tiles)
+        throw std::invalid_argument("ConcurrentTimingExecutor: compute " + pc.tile.tile_id.to_string() +
+                                    " names compute tile " + std::to_string(cf) + "; the fabric has " +
+                                    std::to_string(config_.num_compute_tiles));
+    pending_computes_.push_back(std::move(pc));
+}
+
+// MACs of a compute: the result's rows x cols x K, K summed over its A inputs' widths as fed
+// (one K slice each). Without A inputs (an elementwise or functional compute), rows x cols.
+inline std::uint64_t ConcurrentTimingExecutor::compute_macs(const PendingCompute& pc) const {
+    std::uint64_t k = 0;
+    for (const auto& [id, n] : pc.dependencies) {
+        if (id.matrix != isa::MatrixID::A) continue;
+        auto it = fed_shape_.find(id);
+        k += it != fed_shape_.end() ? it->second.second : pc.tile.width;
+    }
+    if (pc.matmul)
+        for (const auto& id : pc.matmul->resident_tiles)
+            if (id.matrix == isa::MatrixID::A) k += pc.tile.width;
+    return static_cast<std::uint64_t>(pc.tile.height) * pc.tile.width * std::max<std::uint64_t>(1, k);
 }
 
 inline void ConcurrentTimingExecutor::schedule_compute(
@@ -1047,7 +1098,7 @@ inline void ConcurrentTimingExecutor::schedule_compute(
     pc.schedule_cycle = current_cycle_;
     pc.complete_cycle = 0;  // Set when started
     pc.started = false;
-    pending_computes_.push_back(std::move(pc));
+    enqueue_compute(std::move(pc));
 }
 
 inline void ConcurrentTimingExecutor::schedule_compute(
@@ -1070,7 +1121,7 @@ inline void ConcurrentTimingExecutor::schedule_compute(
     pc.started = false;
     // This compute may itself be a resident source for a later compute
     ++scheduled_compute_counts_[tile.tile_id];
-    pending_computes_.push_back(std::move(pc));
+    enqueue_compute(std::move(pc));
 }
 
 inline void ConcurrentTimingExecutor::schedule_matmul_compute(
@@ -1114,7 +1165,7 @@ inline void ConcurrentTimingExecutor::schedule_matmul_compute(
         pc.dependencies.push_back({id, scheduled_feed_counts_[id]});
     }
     ++scheduled_compute_counts_[tile.tile_id];
-    pending_computes_.push_back(std::move(pc));
+    enqueue_compute(std::move(pc));
 }
 
 inline void ConcurrentTimingExecutor::schedule_functional_compute(
@@ -1143,7 +1194,7 @@ inline void ConcurrentTimingExecutor::schedule_functional_compute(
         }
     }
     ++scheduled_compute_counts_[tile.tile_id];
-    pending_computes_.push_back(std::move(pc));
+    enqueue_compute(std::move(pc));
 }
 
 inline void ConcurrentTimingExecutor::schedule_compute(const TileDescriptor& tile) {
@@ -1208,17 +1259,47 @@ inline bool ConcurrentTimingExecutor::step() {
             // count has been reached - per-instance accounting, not a
             // was-ever-fed set
             if (dependencies_satisfied(pc)) {
-                // Latency scales with accumulation depth: the K-slice count
-                // is dependencies/2 (one A and one B tile per K slice)
-                size_t k_slices = pc.dependencies.size() >= 2
-                    ? pc.dependencies.size() / 2 : 1;
-                pc.latency = config_.compute_latency +
-                    static_cast<Cycle>(k_slices - 1) * config_.compute_cycles_per_k_slice;
+                // The compute fabric: a compute tile runs one compute at a time. A compute that
+                // names its tile waits for it; one that does not takes the first free tile.
+                // A tile whose compute completes this cycle is free this cycle (back to back).
+                std::uint32_t cf = 0;
+                if (config_.num_compute_tiles > 0) {
+                    const int32_t want = pc.tile.cf_tile;
+                    auto free_at = [&](size_t t) { return cf_busy_until_[t] <= current_cycle_; };
+                    if (want >= 0) {
+                        if (!free_at(static_cast<size_t>(want))) continue;
+                        cf = static_cast<std::uint32_t>(want);
+                    } else {
+                        size_t t = 0;
+                        while (t < config_.num_compute_tiles && !free_at(t)) ++t;
+                        if (t == config_.num_compute_tiles) continue;   // every tile busy
+                        cf = static_cast<std::uint32_t>(t);
+                    }
+                }
+                if (config_.macs_per_cycle > 0.0) {
+                    // Latency from the MAC rate: fill and drain, then the MACs at full rate.
+                    const double edge = static_cast<double>(std::max(pc.tile.height, pc.tile.width));
+                    pc.latency = static_cast<Cycle>(std::ceil(config_.compute_fill_per_edge * edge)) +
+                                 static_cast<Cycle>(std::ceil(static_cast<double>(compute_macs(pc)) /
+                                                              config_.macs_per_cycle));
+                } else {
+                    // Latency scales with accumulation depth: the K-slice count
+                    // is dependencies/2 (one A and one B tile per K slice)
+                    size_t k_slices = pc.dependencies.size() >= 2
+                        ? pc.dependencies.size() / 2 : 1;
+                    pc.latency = config_.compute_latency +
+                        static_cast<Cycle>(k_slices - 1) * config_.compute_cycles_per_k_slice;
+                }
                 pc.started = true;
+                pc.cf_tile = cf;
                 pc.complete_cycle = current_cycle_ + pc.latency;
+                if (config_.num_compute_tiles > 0) {
+                    cf_busy_until_[cf] = pc.complete_cycle;
+                    cf_busy_cycles_[cf] += pc.latency;
+                }
 
-                // Emit COMPUTE_START event
-                TimingEvent event(EventType::COMPUTE_START, current_cycle_, 0,
+                // Emit COMPUTE_START event (component: the compute tile)
+                TimingEvent event(EventType::COMPUTE_START, current_cycle_, cf,
                                   pc.tile.tile_id, "Compute");
                 event.matrix_base_address = pc.tile.matrix_base_address;
                 events_.push_back(event);
@@ -1258,7 +1339,7 @@ inline bool ConcurrentTimingExecutor::step() {
                 EventType::COMPUTE_COMPLETE,
                 it->complete_cycle - it->latency,
                 it->latency,
-                0, it->tile.tile_id, "Compute");
+                it->cf_tile, it->tile.tile_id, "Compute");
             event.matrix_base_address = it->tile.matrix_base_address;
             events_.push_back(event);
 
@@ -1442,6 +1523,9 @@ inline void ConcurrentTimingExecutor::reset() {
     l2_tag_cam_.reset();
     compute_result_tag_cam_.reset();
     pending_computes_.clear();
+    cf_busy_until_.assign(config_.num_compute_tiles, 0);
+    cf_busy_cycles_.assign(config_.num_compute_tiles, 0);
+    fed_shape_.clear();
     scheduled_feed_counts_.clear();
     completed_feed_counts_.clear();
     scheduled_compute_counts_.clear();

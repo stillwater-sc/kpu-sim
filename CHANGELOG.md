@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The compute fabric, and `kpu_s1` (system-schedule debugger step 2).**
+  - A compute tile now runs one compute at a time, for `fill + MACs / macs_per_cycle` cycles.
+    `csp_config_from` maps the spec's `compute_tiles` and `macs_per_cycle`.
+  - `TileDescriptor::cf_tile` lets a schedule name the compute tile; unnamed computes take the
+    first free tile. Compute events carry their tile.
+  - Hand-built executor configs keep the legacy unbounded model.
+  - New fixture `tests/program/deploy/kpu_s1.json`: the T4's resources in one site, with one L3
+    of 128 tiles and one compute tile of 8,192 MACs/cycle. Values are bit-identical to the L0
+    reference on S1, T4, T16 and T64.
+
 - **Round-robin arbitration at the memory controller (system-schedule debugger step 1,
   `docs/plans/system-schedule-debugger.md`).**
   - DMA engines now post bursts and tiles, and each hosted controller grants its queue from its

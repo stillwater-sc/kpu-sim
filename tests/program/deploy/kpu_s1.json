@@ -1,0 +1,57 @@
+{
+  "name": "s1",
+  "topology": "single",
+  "compute_tiles": 1,
+  "macs_per_cycle": 8192,
+  "dma": {
+    "engines": 8,
+    "bytes_per_cycle": 64
+  },
+  "l3": {
+    "tiles": 1,
+    "banks": 4,
+    "capacity_tiles": 128
+  },
+  "l2": {
+    "banks_per_tile": 4
+  },
+  "l1": {
+    "vectors": 2
+  },
+  "memory": {
+    "controllers": 1,
+    "dram": {
+      "technology": "lpddr5x",
+      "channels": 2,
+      "channel_width_bits": 16,
+      "ranks": 1,
+      "bank_groups": 4,
+      "banks_per_group": 4,
+      "page_bytes": 2048,
+      "burst_bytes": 64,
+      "data_rate_mtps": 8533,
+      "capacity_bytes": 4294967296,
+      "map": "co:ch:rk:bg:ba:mc:ro",
+      "xor_folds": [
+        {
+          "into": "ba",
+          "from": "ro",
+          "bits": 2
+        },
+        {
+          "into": "bg",
+          "from": "ro",
+          "bits": 2,
+          "from_lsb": 2
+        }
+      ]
+    }
+  },
+  "cpu": {
+    "harts": 1
+  },
+  "movers": {
+    "block_movers": 1,
+    "streamers": 2
+  }
+}

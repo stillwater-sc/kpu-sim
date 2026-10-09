@@ -127,6 +127,11 @@ struct TileDescriptor {
     // (a hash of the tile id). Every operation on one tile must agree on it.
     int32_t l3_tile = -1;
 
+    // The compute tile a COMPUTE on this result runs on (docs/plans/system-schedule-debugger.md
+    // §3.2): a schedule's decision, like l3_tile. -1 = not stated, and the executor runs it on
+    // the first free compute tile. Ignored by the legacy unbounded compute model.
+    int32_t cf_tile = -1;
+
     // Tile dimensions (for compute operations)
     Size height = 16;         // Tile height (rows)
     Size width = 16;          // Tile width (columns)

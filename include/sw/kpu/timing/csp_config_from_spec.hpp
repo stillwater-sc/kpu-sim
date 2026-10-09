@@ -126,8 +126,12 @@ inline std::optional<CspDeviceConfig> csp_config_from(
 
     out.unmapped.push_back("dma.bytes_per_cycle and movers.*_bytes_per_cycle: the executor's "
                            "rates are GB/s and latency fields; its defaults are kept");
-    out.unmapped.push_back("macs_per_cycle: the executor's compute timing is compute_latency; "
-                           "its default is kept");
+    // The compute fabric (docs/plans/system-schedule-debugger.md §3.2): one compute at a time
+    // per compute tile, its latency from the MAC rate.
+    if (d.compute_tiles == 0) return fail("compute_tiles is zero; the executor needs a compute tile");
+    if (!(d.macs_per_cycle > 0.0)) return fail("macs_per_cycle must be positive");
+    c.num_compute_tiles = d.compute_tiles;
+    c.macs_per_cycle = d.macs_per_cycle;
     if (d.l2.banks_per_tile)
         out.unmapped.push_back("l2.banks_per_tile: an L-T2 bank count, not tile-sized L2 "
                                "buffers; l2_bank_count keeps its default");

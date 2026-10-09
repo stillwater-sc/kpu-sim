@@ -24,6 +24,7 @@
 
 #include <cstdio>
 #include <algorithm>
+#include <set>
 #include <limits>
 #include <map>
 #include <string>
@@ -64,11 +65,17 @@ struct OracleRun {
     std::size_t eject_stalls = 0, peak_ring_queue = 0, ring_queue_depth = 0;
     bool watchdog = false, buses_serial = true;
     std::map<NocDim, std::size_t> injected_per_port;
+    // The compute fabric (system-schedule step 2): each compute's tile and [start, end).
+    struct Compute { std::uint32_t cf; Cycle start, end; };
+    std::vector<Compute> computes;
+    std::size_t compute_tiles = 0;
+    std::vector<Cycle> busy;
 };
 
 // C = A @ B (size^3, tile^3) on the CSP executor configured from `d`, and on the L0 reference
 // with the same inputs.
-OracleRun run_matmul(const DeviceSpecification& d, Size size, Size T, bool noc = false) {
+OracleRun run_matmul(const DeviceSpecification& d, Size size, Size T, bool noc = false,
+                     int32_t cf_tile = -1) {
     std::string why;
     const auto csp = csp_config_from(d, &why);
     INFO(why);
@@ -124,7 +131,9 @@ OracleRun run_matmul(const DeviceSpecification& d, Size size, Size T, bool noc =
                 ConcurrentTimingExecutor::MatMulComputeSpec spec;
                 for (const auto& dep : op.dependency_tiles)
                     (dep.matrix == MatrixID::A ? spec.a_tiles : spec.b_tiles).push_back(dep);
-                exec.schedule_matmul_compute(op.tile, spec);
+                TileDescriptor result = op.tile;
+                result.cf_tile = cf_tile;
+                exec.schedule_matmul_compute(result, spec);
                 break;
             }
         }
@@ -137,7 +146,11 @@ OracleRun run_matmul(const DeviceSpecification& d, Size size, Size T, bool noc =
     for (const auto& e : exec.events()) {
         out.dram_loads += e.type == EventType::DMA_LOAD_COMPLETE;
         out.dram_stores += e.type == EventType::DMA_STORE_COMPLETE;
+        if (e.type == EventType::COMPUTE_COMPLETE)
+            out.computes.push_back({e.component_id, e.cycle, e.cycle + e.duration});
     }
+    out.compute_tiles = exec.compute_tiles();
+    for (std::size_t t = 0; t < out.compute_tiles; ++t) out.busy.push_back(exec.compute_tile_busy_cycles(t));
     if (const NocFabric* f = exec.noc()) {
         out.watchdog = f->watchdog_fired();
         out.ring_queue_depth = ec.noc->fabric.hub_buffer_blocks / 4;
@@ -262,9 +275,9 @@ TEST_CASE("the executor puts each engine on the controller it was given", "[timi
     CHECK(exec.memory_controller(1).total_bytes_transferred() == 2 * 4096);
 }
 
-TEST_CASE("Values oracle: a matmul on T4, T16 and T64 computes the L0 reference's values",
+TEST_CASE("Values oracle: a matmul on S1, T4, T16 and T64 computes the L0 reference's values",
           "[timing][csp][oracle]") {
-    for (const char* file : {"kpu_t4.json", "kpu_t16.json", "kpu_t64.json"}) {
+    for (const char* file : {"kpu_s1.json", "kpu_t4.json", "kpu_t16.json", "kpu_t64.json"}) {
         CAPTURE(file);
         const OracleRun r = run_matmul(device(file), 128, 32);
         const auto cmp = sw::kpu::program::compare_within(
@@ -470,5 +483,66 @@ TEST_CASE("Burst window: values never move, with the NoC off and on", "[timing][
                         noc ? 1 : 0, static_cast<unsigned long long>(w.cycles),
                         static_cast<unsigned long long>(tiles.cycles));
         }
+    }
+}
+
+// docs/plans/system-schedule-debugger.md step 2: a compute tile runs one compute at a time, for
+// as long as its MACs take at the spec's rate.
+TEST_CASE("Compute fabric: one compute at a time per compute tile, latency from the MAC rate",
+          "[timing][csp][compute]") {
+    using Compute = OracleRun::Compute;
+    auto no_overlap = [](std::vector<Compute> v, std::uint32_t cf) {
+        std::vector<std::pair<Cycle, Cycle>> on;
+        for (const auto& c : v) if (c.cf == cf) on.push_back({c.start, c.end});
+        std::sort(on.begin(), on.end());
+        for (std::size_t i = 1; i < on.size(); ++i)
+            if (on[i].first < on[i - 1].second) return false;
+        return true;
+    };
+
+    SECTION("kpu_s1: one large compute tile") {
+        const DeviceSpecification d = device("kpu_s1.json");
+        const OracleRun r = run_matmul(d, 128, 32);
+        REQUIRE(r.compute_tiles == 1);
+        REQUIRE(r.computes.size() == 16);                 // (128/32)^2 output tiles
+        CHECK(no_overlap(r.computes, 0));
+        // Each compute: fill (2 x 32) + 32 x 32 x 128 MACs at 8192 per cycle = 64 + 16.
+        Cycle busy = 0;
+        for (const auto& c : r.computes) {
+            CHECK(c.cf == 0);
+            CHECK(c.end - c.start == 64 + (32 * 32 * 128) / 8192);
+            busy += c.end - c.start;
+        }
+        CHECK(r.busy.at(0) == busy);
+        CHECK(sw::kpu::program::compare_within(r.csp, r.reference, sw::kpu::program::kAtolFloat32,
+                                               sw::kpu::program::kRtolMatmul).bit_identical);
+    }
+    SECTION("kpu_t4: two compute tiles, both used, neither double-booked") {
+        const OracleRun r = run_matmul(device("kpu_t4.json"), 128, 32);
+        REQUIRE(r.compute_tiles == 2);
+        CHECK(no_overlap(r.computes, 0));
+        CHECK(no_overlap(r.computes, 1));
+        std::set<std::uint32_t> used;
+        for (const auto& c : r.computes) used.insert(c.cf);
+        CHECK(used == std::set<std::uint32_t>{0, 1});
+        // T4's tile is 4096 MACs per cycle: the same compute takes 64 + 32.
+        for (const auto& c : r.computes) CHECK(c.end - c.start == 64 + (32 * 32 * 128) / 4096);
+    }
+    SECTION("a schedule that names a compute tile runs there") {
+        const OracleRun r = run_matmul(device("kpu_t4.json"), 128, 32, false, 1);
+        for (const auto& c : r.computes) CHECK(c.cf == 1);
+        CHECK(no_overlap(r.computes, 1));
+        CHECK(r.busy.at(0) == 0);
+        CHECK(sw::kpu::program::compare_within(r.csp, r.reference, sw::kpu::program::kAtolFloat32,
+                                               sw::kpu::program::kRtolMatmul).bit_identical);
+    }
+    SECTION("a compute tile the fabric does not have is refused by name") {
+        auto c = csp_config_from(device("kpu_t4.json"))->config;
+        ConcurrentTimingExecutor exec(c);
+        TileDescriptor t;
+        t.tile_id.matrix = MatrixID::C;
+        t.cf_tile = 2;
+        CHECK_THROWS_WITH(exec.schedule_compute(t, std::vector<TileID>{}),
+                          ContainsSubstring("names compute tile 2; the fabric has 2"));
     }
 }

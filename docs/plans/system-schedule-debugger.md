@@ -1,7 +1,7 @@
 # System-Schedule Debugger: The Operator's Schedule, From Compute Down to DRAM Commands
 
 **Date:** 2026-10-08
-**Status:** Q1-Q5 decided 2026-10-08 (all as recommended; §7); step 1 done; step 2 next
+**Status:** Q1-Q5 decided 2026-10-08 (all as recommended; §7); steps 1-2 done; step 3 next
 **Related:**
 - `docs/plans/memory-side-debugger.md`: the `.mflow` record, `mflow_check.py` and the memflow viewer. This
   plan reuses all three for its memory half.
@@ -368,6 +368,45 @@ Each step is one PR and ends green.
      - one compute at a time per tile;
      - latency follows the MACs model;
      - values are bit-identical to the L0 reference on `kpu_s1`, T4 and T16.
+   - (Done.)
+   - **As built:**
+     - **Executor Config:** `num_compute_tiles` (0 = the legacy unbounded model, which every
+       hand-built config keeps), `macs_per_cycle` (0 = the legacy latency) and
+       `compute_fill_per_edge` (2.0).
+     - **Latency:** `ceil(2 x the result's longer edge) + ceil(rows x cols x K / macs_per_cycle)`.
+       K is summed over the compute's A inputs, each at its width as fed. The generator sizes
+       every tile as `Ti x Tj`, so K is exact for today's square tiles; non-square tiles need
+       the generator fixed first.
+     - **Assignment:** `TileDescriptor::cf_tile` names the compute tile, beside `l3_tile`; the
+       plan's `ScheduleOperation::cf_tile` would not reach the executor's compute overloads,
+       which take a descriptor. Unnamed computes take the first free tile. A tile whose compute
+       completes in a cycle may start the next one in that cycle.
+     - **Events and accessors:** `COMPUTE_START`/`COMPUTE_COMPLETE` carry the compute tile as
+       `component_id`. New accessors: `compute_tiles()`, `compute_tile_busy_cycles(t)`.
+     - **Spec mapping:** `csp_config_from` maps `compute_tiles` and `macs_per_cycle`, so
+       every spec-driven run uses the fabric.
+     - **`kpu_s1.json`:** the T4's DMA, L3 capacity (128 tiles), DRAM and streamers. One L3
+       tile and one compute tile of 8,192 MACs/cycle. The `single` layout derives **one**
+       BlockMover (one L3-compute edge), where the T4 has four.
+   - **Tests** (`test_csp_spec_oracle`):
+     - values are bit-identical to the L0 reference on S1, T4, T16 and T64;
+     - on S1, the 16 computes never overlap, each takes exactly 64 + 16 cycles, and the busy
+       counter matches;
+     - on T4, both tiles are used, neither is double-booked, and each compute takes 64 + 32;
+     - a named compute tile is honoured, and one the fabric lacks is refused by name.
+   - **First numbers,** matmul 128³ with 32³ tiles:
+
+     | Machine | Cycles |
+     |---|---|
+     | S1 | 9,836 |
+     | T4 | 9,549 |
+     | T16 | 5,084 |
+     | T64 | 3,796 |
+
+     S1 has twice the MACs per compute tile and is no faster than the T4. That is consistent
+     with §1's balance (memory-bound) and with S1's single BlockMover. Attributing it is the
+     step-4 record's job.
+
 3. **The dispatcher** (§3.3).
    - Files: `schedule_executor.hpp` (the cursor and P), consumer tagging in
      `make_compute_dependencies`.
