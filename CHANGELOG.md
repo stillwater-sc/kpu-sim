@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The linear operator, Y = act(X . W + b), at L-B (CSP-language step 2).**
+  - L0 opset 1.1.0 adds `BIAS_ADD` and `ACTIVATION` (`act=` relu, gelu, silu, atan), with
+    reference kernels, and `--algo linear` (`--act`) derives the operator. A file's OPSET line
+    records the ops it uses, so existing matmul and LU files are byte-identical.
+  - The CSP language gains `vector` operands, the unfused epilogue as in-place calls, and tile
+    contexts: `store y via add(b[j]) @ bm.egress, relu @ bm.egress`. The epilogue runs on the
+    result's way out: in the fabric, on the streamer's drain, or on the BlockMover's egress.
+  - Every placement, and the unfused program, is bit-identical to the L0 reference.
+  - The spec gains `movers.vector { bm, str }` (`lanes`, `rate`, `ops`). Given a target, a stage
+    placed where its site lacks the operation is refused by line: `atan @ bm.egress` on a
+    BlockMover without atan.
+
 - **L-CA runs the structured CSP program from its stream (CSP-language step 1c.2).**
   - `CspDriver` takes either form of the program: the trace (`CspProgram`) or the stream
     (`lang::ActionStream` plus input values). It hands actions to the executor while its

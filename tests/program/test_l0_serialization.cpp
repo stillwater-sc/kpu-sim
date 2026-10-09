@@ -126,7 +126,9 @@ TEST_CASE("the file is text a human can read and diff", "[program][serialize]") 
     CHECK(text.rfind("KPUL0 1.2.0", 0) == 0);           // magic first, version with it
     // A kernel is still readable by a 1.0.0 reader, because nothing was added to it.
     CHECK(text.find("MIN_CONSUMER 1.0.0\n") != std::string::npos);
-    // The op set did NOT change: a new container record is not a new operator.
+    // The op set is versioned separately: a new container record is not a new operator. The
+    // line records what the FILE uses: 1.1.0 added BIAS_ADD and ACTIVATION, which a matmul does
+    // not use, so it still says 1.0.0.
     CHECK(text.find("OPSET tile 1.0.0\n") != std::string::npos);
     CHECK(text.find("VALUES none\n") != std::string::npos);   // a kernel, not a test case
     CHECK(text.find("OPERAND \"A\" rows=32 cols=32 tile_rows=16 tile_cols=16\n") !=

@@ -55,7 +55,8 @@ R"(kpu-run — execute a Domain Flow Program at one or more levels and compare t
                             things is a usage error, not a choice for the tool to make
   --fill-inputs             synthesize inputs for a --program file that carries none.
                             Only the operands the program READS are filled
-  --algo <matmul|lu>        program to derive            (default matmul)
+  --algo <matmul|lu|linear> program to derive            (default matmul)
+  --act <relu|gelu|silu|atan>  linear's activation          (default relu)
   --size <n>                square problem size          (default 64)
   --tile <n>                tile size                    (default 16)
   --level <name|all>        behavioral | block-sequential | resource-transactional
@@ -202,6 +203,17 @@ int main(int argc, char** argv) {
 
     ProgramSpec ps;
     ps.algo = arg(a, "--algo", "matmul");
+    {
+        const std::string act = arg(a, "--act", "relu");
+        if (!sw::kpu::program::parse_activation(act, ps.act)) {
+            std::cerr << "kpu-run: unknown --act '" << act << "' (relu | gelu | silu | atan)\n";
+            return 2;
+        }
+        if (arg_present(a, "--act") && ps.algo != "linear") {
+            std::cerr << "kpu-run: --act is the linear operator's activation; --algo is '" << ps.algo << "'\n";
+            return 2;
+        }
+    }
     if (!dim_opt("--size", 64, ps.size) || !dim_opt("--tile", 16, ps.tile)) {
         std::cerr << "kpu-run: " << err << "\n";
         return 2;
@@ -210,7 +222,7 @@ int main(int argc, char** argv) {
     // silently means a run reports the flags it was given and executes something else --
     // so this is refused, and the refusal names the flag that conflicts.
     if (from_file) {
-        for (const char* k : {"--algo", "--size", "--tile"})
+        for (const char* k : {"--algo", "--size", "--tile", "--act"})
             if (arg_present(a, k)) {
                 std::cerr << "kpu-run: --program and " << k << " cannot be combined: the "
                              "file already says what program to run\n";
@@ -218,7 +230,7 @@ int main(int argc, char** argv) {
             }
     } else {
         if (!known_algo(ps.algo)) {
-            std::cerr << "kpu-run: unknown --algo '" << ps.algo << "' (matmul | lu)\n";
+            std::cerr << "kpu-run: unknown --algo '" << ps.algo << "' (matmul | lu | linear)\n";
             return 2;
         }
         if (ps.tile == 0 || ps.size == 0) {

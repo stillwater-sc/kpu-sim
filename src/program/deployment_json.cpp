@@ -88,7 +88,16 @@ const std::set<std::string>& cpu_keys() {
 const std::set<std::string>& mover_keys() {
     static const std::set<std::string> k = {"block_movers",   "bm_bytes_per_cycle",
                                             "streamers",      "str_bytes_per_cycle",
-                                            "noc_links",      "noc_bytes_per_cycle"};
+                                            "noc_links",      "noc_bytes_per_cycle",
+                                            "vector"};
+    return k;
+}
+const std::set<std::string>& vector_site_keys() {
+    static const std::set<std::string> k = {"bm", "str"};
+    return k;
+}
+const std::set<std::string>& vector_unit_keys() {
+    static const std::set<std::string> k = {"lanes", "rate", "ops"};
     return k;
 }
 const std::set<std::string>& analytical_keys() {
@@ -228,6 +237,29 @@ DeviceSpecification read_device(const json& obj, const std::string& where) {
         d.movers.noc_links = read_dim(s, "noc_links", d.movers.noc_links, w);
         d.movers.noc_bytes_per_cycle =
             read_double(s, "noc_bytes_per_cycle", d.movers.noc_bytes_per_cycle, w);
+        if (s.contains("vector")) {
+            const json& v = s.at("vector");
+            const std::string wv = w + ".vector";
+            reject_unknown(v, vector_site_keys(), wv);
+            for (const char* site : {"bm", "str"}) {
+                if (!v.contains(site)) continue;
+                const json& u = v.at(site);
+                const std::string wu = wv + "." + site;
+                reject_unknown(u, vector_unit_keys(), wu);
+                DeviceSpecification::Movers::VectorUnit unit;
+                unit.lanes = read_dim(u, "lanes", unit.lanes, wu);
+                unit.rate = read_double(u, "rate", unit.rate, wu);
+                if (u.contains("ops")) {
+                    const json& ops = u.at("ops");
+                    if (!ops.is_array()) throw SpecError("deployment: " + wu + ".ops must be an array of names");
+                    for (const json& op : ops) {
+                        if (!op.is_string()) throw SpecError("deployment: " + wu + ".ops must be an array of names");
+                        unit.ops.push_back(op.get<std::string>());
+                    }
+                }
+                (std::string(site) == "bm" ? d.movers.bm_vector : d.movers.str_vector) = unit;
+            }
+        }
     }
     if (obj.contains("array")) {
         const json& s = obj.at("array");
@@ -348,6 +380,12 @@ json write_device(const DeviceSpecification& d) {
     movers["str_bytes_per_cycle"] = d.movers.str_bytes_per_cycle;
     movers["noc_links"] = d.movers.noc_links;
     movers["noc_bytes_per_cycle"] = d.movers.noc_bytes_per_cycle;
+    if (d.movers.bm_vector || d.movers.str_vector) {
+        json vec = json::object();
+        for (const auto& [site, v] : {std::pair{"bm", &d.movers.bm_vector}, std::pair{"str", &d.movers.str_vector}})
+            if (*v) vec[site] = json{{"lanes", (*v)->lanes}, {"rate", (*v)->rate}, {"ops", (*v)->ops}};
+        movers["vector"] = vec;
+    }
     o["movers"] = movers;
 
     // The physical shape, each object written only when something in it is declared -- so a

@@ -1073,6 +1073,8 @@ private:
                 case TileOpKind::PivotApply:     ++s.pivot_applies; break;
                 case TileOpKind::TrsmLowerLeft:
                 case TileOpKind::TrsmUpperRight: ++s.trsms; break;
+                case TileOpKind::BiasAdd:
+                case TileOpKind::Activation:     ++s.epilogues; break;
             }
         }
         s.row_swaps = state_.swaps_performed;

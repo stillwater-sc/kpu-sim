@@ -42,6 +42,7 @@ public:
         std::size_t diag_factors = 0;   // LuDiagFactor (GETRF)
         std::size_t trsms = 0;          // TrsmLowerLeft + TrsmUpperRight
         std::size_t pivot_applies = 0;  // PivotApply (LASWP)
+        std::size_t epilogues = 0;      // BiasAdd + Activation
         std::size_t row_swaps = 0;      // total within-tile row swaps performed by GETRF
         // Row permutation produced by pivoting (LU): perm[i] = original row now at
         // position i. Identity when no pivoting occurred. Sized to the largest
@@ -63,6 +64,8 @@ public:
                 case TileOpKind::PivotApply:     ++sum.pivot_applies; break;
                 case TileOpKind::TrsmLowerLeft:
                 case TileOpKind::TrsmUpperRight: ++sum.trsms; break;
+                case TileOpKind::BiasAdd:
+                case TileOpKind::Activation:     ++sum.epilogues; break;
             }
             apply(program, op, state_);   // the shared L0 kernels
         }

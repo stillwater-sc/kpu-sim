@@ -50,6 +50,12 @@ inline std::vector<TileCoord> unique_tiles(std::vector<TileCoord> v) {
 inline std::string emit(const TileProgram& l0, std::size_t l3_capacity, const std::string& name = "") {
     if (l3_capacity == 0) throw EmitError("csp emit: the L3 capacity must be positive");
     const auto& ops = l0.ops();
+    for (const auto& op : ops)
+        if (op.kind == TileOpKind::BiasAdd || op.kind == TileOpKind::Activation)
+            // L0 says the epilogue runs; WHERE is the program's decision (a tile context), which
+            // this bridge has no basis to make. Write the program (csp-language.md step 2).
+            throw EmitError(std::string("csp emit: L0 op ") + to_string(op.kind) + ": the linear operator's epilogue "
+                            "is placed by a tile context, which the emitter does not choose; write the program");
     bool explicit_style = false;
     for (const auto& op : ops)
         if (op.kind == TileOpKind::Feed || op.kind == TileOpKind::Drain) explicit_style = true;

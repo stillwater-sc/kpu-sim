@@ -51,6 +51,16 @@ set_tests_properties(test_csp_structured PROPERTIES
     LABELS "program;csp;lang;v0.9"
 )
 
+# The linear operator: L0 epilogue ops, vector operands, tile contexts (docs/plans/csp-language.md step 2)
+kpu_add_component_test(test_csp_linear "program"
+    test_csp_linear.cpp
+)
+
+set_tests_properties(test_csp_linear PROPERTIES
+    LABELS "program;csp;lang;v0.9"
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+)
+
 # The L0 portable program as a file (#265)
 kpu_add_component_test(test_l0_serialization "program"
     test_l0_serialization.cpp

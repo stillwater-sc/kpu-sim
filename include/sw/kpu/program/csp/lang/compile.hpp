@@ -18,7 +18,12 @@
 //                   writeback's moment); a resident, written tile: Store
 //
 // Functions: gemm(a, b) +-> y [alpha s]; getrf(x) -> x pivot p; laswp(x) -> x pivot p;
-// trsm_ll(d, x) -> x; trsm_ur(d, x) -> x.
+// trsm_ll(d, x) -> x; trsm_ur(d, x) -> x; the epilogue, unfused: add(y, b) -> y (b a vector),
+// relu(y) -> y, gelu(y) -> y, silu(y) -> y, atan(y) -> y.
+//
+// Contexts (step 2): `store y via op @ place, ...` and `call f(..) -> y via ...` put the
+// epilogue on the result's way out -- the stages of its Drain (fabric, str.drain) and its
+// Writeback (bm.egress). See context.hpp.
 //
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2024-2025 Stillwater Supercomputing, Inc.
@@ -33,14 +38,15 @@
 
 namespace sw::kpu::program::csp::lang {
 
-// Compile a parsed program to its trace. Throws CompileError, naming the line.
-inline CspProgram compile(const Program& ast) {
+// Compile a parsed program to its trace. Throws CompileError, naming the line. With a target,
+// a tile context's stages are checked against the machine's sites (context.hpp).
+inline CspProgram compile(const Program& ast, const Target* target = nullptr) {
     CspProgram p;
     p.name = ast.name;
     p.processes = {{ProcessKind::Dma, "dma", {}}, {ProcessKind::BlockMover, "bm", {}},
                    {ProcessKind::Streamer, "str", {}}, {ProcessKind::Compute, "cf", {}}};
     TraceSink sink(p);
-    Walker<TraceSink> walker(ast, sink);
+    Walker<TraceSink> walker(ast, sink, target);
     p.source = TileProgram(ast.name);   // the trace carries values: allocate them here
     for (const auto& name : walker.operands().operand_order()) {
         const TensorOperand& d = walker.operands().operand(name);
@@ -52,6 +58,8 @@ inline CspProgram compile(const Program& ast) {
 }
 
 // Parse and compile .csp source.
-inline CspProgram compile(const std::string& source) { return compile(parse(source)); }
+inline CspProgram compile(const std::string& source, const Target* target = nullptr) {
+    return compile(parse(source), target);
+}
 
 }  // namespace sw::kpu::program::csp::lang

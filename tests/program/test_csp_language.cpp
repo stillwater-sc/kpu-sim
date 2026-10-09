@@ -233,8 +233,9 @@ TEST_CASE("CSP language: the validator refuses each error by line", "[program][c
                ContainsSubstring("unknown tile function 'gemv'"));
     CHECK_THAT(compile_error("  broadcast A[0, :] along row;\n"), ContainsSubstring("level 2"));
     CHECK_THAT(compile_error("  resident A[0, 0], B[0, 0];\n  acc C[0, 0] in fabric {\n"
-                             "    call gemm(A[0, 0], B[0, 0]) +-> C[0, 0];\n  }\n  store C[0, 0] via relu @ bm.egress;\n"),
-               ContainsSubstring("tile contexts ('via') arrive with the linear operator"));
+                             "    call gemm(A[0, 0], B[0, 0]) +-> C[0, 0];\n  }\n  store C[0, 0] via relu @ bm.ingress;\n"
+                             "  release A[0, 0], B[0, 0];\n"),
+               ContainsSubstring("csp line 10: relu @ bm.ingress: bm.ingress is an operand's way into the fabric"));
     // Syntax errors name their line too.
     CHECK_THAT(compile_error("  resident A[0, 0]\n  release A[0, 0];\n"), ContainsSubstring("csp line 6: expected ';'"));
 }

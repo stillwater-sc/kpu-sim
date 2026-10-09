@@ -16,6 +16,7 @@
 #pragma once
 
 #include <sw/kpu/program/characterize/device_model.hpp>
+#include <sw/kpu/program/derive/linear_tile_program.hpp>
 #include <sw/kpu/program/derive/lu_tile_program.hpp>
 #include <sw/kpu/program/platform/deployment_spec.hpp>
 #include <sw/kpu/program/derive/matmul_tile_program.hpp>
@@ -183,22 +184,26 @@ inline bool parse_double(const std::vector<std::string>& a, const std::string& k
 
 // ---- what program to run ---------------------------------------------------
 struct ProgramSpec {
-    std::string algo = "matmul";     // "matmul" | "lu"
+    std::string algo = "matmul";     // "matmul" | "lu" | "linear"
     Dim size = 64;                   // square: M = N = K = size, or N for LU
     Dim tile = 16;
+    ActivationFn act = ActivationFn::Relu;   // linear: the epilogue's activation
 
     std::string label() const {
-        return algo + "/" + std::to_string(size) + "^3/t" + std::to_string(tile);
+        return algo + "/" + std::to_string(size) + "^3/t" + std::to_string(tile) +
+               (algo == "linear" ? std::string("/") + to_string(act) : std::string());
     }
 };
 
-inline bool known_algo(const std::string& a) { return a == "matmul" || a == "lu"; }
+inline bool known_algo(const std::string& a) { return a == "matmul" || a == "lu" || a == "linear"; }
 
 inline TileProgram derive(const ProgramSpec& s) {
     if (s.algo == "lu") return derive_lu_tile_program(s.size, s.tile);
     if (s.algo == "matmul")
         return derive_matmul_tile_program(s.size, s.size, s.size, s.tile, s.tile, s.tile);
-    throw std::invalid_argument("unknown --algo '" + s.algo + "' (matmul | lu)");
+    if (s.algo == "linear")
+        return derive_linear_tile_program(s.size, s.size, s.size, s.tile, s.tile, s.tile, s.act);
+    throw std::invalid_argument("unknown --algo '" + s.algo + "' (matmul | lu | linear)");
 }
 
 // Deterministic, non-trivial operand values. Identical for every level, which is the
@@ -224,6 +229,13 @@ inline void fill(TileProgram& p, const ProgramSpec& s) {
                 A.at(i, j) = (i == j) ? 4.0f + float((i * 3) % 5)
                                       : 0.5f - float((i * 7 + j * 3) % 9) * 0.125f;
         return;
+    }
+    if (s.algo == "linear") {
+        // The bias: integers in [-3, 3] plus a quarter, both signs, so an activation sees
+        // values on both sides of zero.
+        auto& b = p.operand("b");
+        for (std::size_t i = 0; i < b.values.size(); ++i)
+            b.values[i] = float((i * 5 + 3) % 7) - 3.0f + 0.25f * float(i % 2);
     }
     auto& A = p.operand("A");
     auto& B = p.operand("B");

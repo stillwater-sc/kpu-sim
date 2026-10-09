@@ -63,6 +63,67 @@ inline const char* to_string(Chan c) {
     return "?";
 }
 
+// A tile context (docs/plans/csp-language.md §3.4): transforms bound to a tile as it crosses a
+// boundary, each at the place it runs. A result leaves the fabric through `fabric` (on the
+// accumulator, before the Drain), `str.drain` (the streamer's L1 -> L2 drain) and `bm.egress`
+// (the BlockMover's L2 -> L3 writeback), in that order. `bm.ingress` (L3 -> L2) is an operand's
+// way in.
+enum class Place : std::uint8_t { Fabric, StrDrain, BmEgress, BmIngress };
+
+inline const char* to_string(Place p) {
+    switch (p) {
+        case Place::Fabric:    return "fabric";
+        case Place::StrDrain:  return "str.drain";
+        case Place::BmEgress:  return "bm.egress";
+        case Place::BmIngress: return "bm.ingress";
+    }
+    return "?";
+}
+
+inline bool parse_place(const std::string& s, Place& out) {
+    for (Place p : {Place::Fabric, Place::StrDrain, Place::BmEgress, Place::BmIngress})
+        if (s == to_string(p)) { out = p; return true; }
+    return false;
+}
+
+// A vector operation: the epilogue (decision Q4). add takes a vector tile, broadcast down the
+// rows; the rest are the activations.
+enum class VeOp : std::uint8_t { Add, Relu, Gelu, Silu, Atan };
+inline constexpr std::size_t kVeOps = 5;
+
+inline const char* to_string(VeOp v) {
+    switch (v) {
+        case VeOp::Add:  return "add";
+        case VeOp::Relu: return "relu";
+        case VeOp::Gelu: return "gelu";
+        case VeOp::Silu: return "silu";
+        case VeOp::Atan: return "atan";
+    }
+    return "?";
+}
+
+inline bool parse_veop(const std::string& s, VeOp& out) {
+    for (VeOp v : {VeOp::Add, VeOp::Relu, VeOp::Gelu, VeOp::Silu, VeOp::Atan})
+        if (s == to_string(v)) { out = v; return true; }
+    return false;
+}
+
+// The activation an op is, for an op that is one.
+inline ActivationFn activation_of(VeOp v) {
+    switch (v) {
+        case VeOp::Gelu: return ActivationFn::Gelu;
+        case VeOp::Silu: return ActivationFn::Silu;
+        case VeOp::Atan: return ActivationFn::Atan;
+        default:         return ActivationFn::Relu;
+    }
+}
+
+struct Stage {
+    VeOp op = VeOp::Relu;
+    Place place = Place::Fabric;
+    TileCoord arg;                      // add: the vector tile (resident in L3)
+};
+
 // One step of one process.
 //   Load      dma  dram -> l3   brings a tile into an L3 slot (opens a residency)
 //   Store     dma  l3 -> dram   writes a dirty tile back (an L3 consumer)
@@ -81,6 +142,9 @@ struct Action {
     std::size_t residency = kNone;      // the L3 residency it opens, reads or releases
     bool accumulate = false;            // Call: adds to the fabric's accumulator for its output,
                                         // which starts at zero (an output-stationary chain)
+    std::vector<Stage> context;         // applied to the tile as this action moves it, in order:
+                                        // Drain (fabric, str.drain), Writeback (bm.egress),
+                                        // Move (bm.ingress)
 };
 
 inline const char* to_string(Action::Kind k) {
@@ -211,6 +275,12 @@ public:
             if (a.kind != Action::Kind::Call && a.kind != Action::Kind::Release)
                 o << "  " << to_string(from_chan(a.kind)) << "->" << to_string(to_chan(a.kind));
             if (a.l0_op != kNone) o << "  [L0 " << a.l0_op << " " << to_string(source.ops()[a.l0_op].kind) << "]";
+            for (std::size_t k = 0; k < a.context.size(); ++k) {
+                const Stage& st = a.context[k];
+                o << (k ? ", " : "  via ") << to_string(st.op);
+                if (st.op == VeOp::Add) o << "(" << st.arg.to_string() << ")";
+                o << " @ " << to_string(st.place);
+            }
             if (a.residency != kNone && a.kind == Action::Kind::Release)
                 o << "  (" << residencies[a.residency].consumers << " consumers)";
             o << "\n";

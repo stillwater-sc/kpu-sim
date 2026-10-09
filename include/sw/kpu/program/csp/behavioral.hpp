@@ -72,14 +72,20 @@ public:
         switch (a.kind) {
             case Action::Kind::Load:
             case Action::Kind::Store:
-            case Action::Kind::Move:
-                at(to_chan(a.kind))[k] = take(from_chan(a.kind), k, where(i), /*keep=*/true);
+            case Action::Kind::Move: {
+                std::vector<float> v = take(from_chan(a.kind), k, where(i), /*keep=*/true);
+                stages(v, a, where(i));         // a Move's copy, transformed on its way (bm.ingress)
+                at(to_chan(a.kind))[k] = std::move(v);
                 break;
+            }
             case Action::Kind::Writeback:
             case Action::Kind::Feed:
-            case Action::Kind::Drain:
-                at(to_chan(a.kind))[k] = take(from_chan(a.kind), k, where(i), /*keep=*/false);
+            case Action::Kind::Drain: {
+                std::vector<float> v = take(from_chan(a.kind), k, where(i), /*keep=*/false);
+                stages(v, a, where(i));         // a result's epilogue, where the program placed it
+                at(to_chan(a.kind))[k] = std::move(v);
                 break;
+            }
             case Action::Kind::Release:
                 if (!at(Chan::L3).erase(k)) throw BehavioralError(where(i) + ": nothing resident to release");
                 break;
@@ -127,6 +133,27 @@ private:
         std::vector<float> v = it->second;
         if (!keep) s.erase(it);
         return v;
+    }
+
+    // The action's tile context, in order. Each stage computes with the L0 epilogue's own
+    // element functions, so a fused epilogue is bit-identical to the unfused one. An add's
+    // vector comes from L3, where the program made it resident.
+    void stages(std::vector<float>& v, const Action& a, const std::string& where) {
+        if (a.context.empty()) return;
+        const TensorOperand& t = work_.operand(a.tile.operand);
+        const std::size_t cols = t.col_end(a.tile.tj) - t.col_begin(a.tile.tj);
+        for (const Stage& st : a.context) {
+            if (st.op == VeOp::Add) {
+                const std::string b = st.arg.to_string();
+                auto it = at(Chan::L3).find(b);
+                if (it == at(Chan::L3).end())
+                    throw BehavioralError(where + ": add(" + b + ") @ " + to_string(st.place) + ": " + b +
+                                          " is not resident in L3");
+                bias_tile(v, cols, it->second);
+            } else {
+                activate_tile(v, activation_of(st.op));
+            }
+        }
     }
 
     static std::vector<float> extract(const TensorOperand& op, Dim ti, Dim tj) {

@@ -38,6 +38,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <map>
+#include <set>
 #include <optional>
 #include <string>
 #include <vector>
@@ -78,13 +79,14 @@ struct Interval { long long lo = 0, hi = 0; };   // inclusive
 
 class Symbolic {
 public:
-    explicit Symbolic(const Program& ast) : ast_(ast) {
+    Symbolic(const Program& ast, const Target* target) : ast_(ast), target_(target) {
         if (ast_.machine != "flat")
             throw CompileError(0, "machine " + ast_.machine + ": level 2 (a distributed machine) is not built yet; "
                                   "this step compiles level-1 programs (machine flat)");
         if (ast_.l3 <= 0) throw CompileError(0, "machine flat: the L3 capacity must be positive");
         cap_ = static_cast<std::size_t>(ast_.l3);
         operands_ = declared_operands(ast_);
+        for (const Decl& d : ast_.decls) if (d.is_vector) vectors_.insert(d.name);
     }
 
     Validation run() {
@@ -110,6 +112,8 @@ private:
     struct Var { Interval range; bool definite; };
 
     const Program& ast_;
+    const Target* target_ = nullptr;
+    std::set<std::string> vectors_;
     std::size_t cap_ = 0;
     TileProgram operands_;
     std::map<std::string, Var> vars_;
@@ -179,12 +183,14 @@ private:
     Family family(const TileRef& r) const {
         if (!operands_.has_operand(r.name)) throw CompileError(r.line, "'" + r.name + "' is not a declared operand");
         const TensorOperand& op = operands_.operand(r.name);
-        if (r.index.size() != 2) throw CompileError(r.line, r.name + " is a tensor: index it [row, col]");
+        const bool vec = vectors_.count(r.name) != 0;   // one dimension: its tiles down the column
+        if (vec && r.index.size() != 1) throw CompileError(r.line, r.name + " is a vector: index it [j]");
+        if (!vec && r.index.size() != 2) throw CompileError(r.line, r.name + " is a tensor: index it [row, col]");
         Family f;
         f.operand = r.name;
         f.line = r.line;
         const Dim n[2] = {op.n_tile_rows(), op.n_tile_cols()};
-        for (std::size_t i = 0; i < 2; ++i) {
+        for (std::size_t i = 0; i < r.index.size(); ++i) {
             Dimension d;
             d.all = r.index[i].all;
             if (!d.all) {
@@ -208,7 +214,7 @@ private:
         const TensorOperand& op = operands_.operand(f.operand);
         std::uint64_t n = 1;
         n *= f.dims[0].all ? op.n_tile_rows() : 1;
-        n *= f.dims[1].all ? op.n_tile_cols() : 1;
+        if (f.dims.size() > 1) n *= f.dims[1].all ? op.n_tile_cols() : 1;
         return n;
     }
     static bool same(const Family& a, const Family& b) {
@@ -248,9 +254,32 @@ private:
     }
 
     // ---- statements ----
+    // A result's `via` list (context.hpp), and each add's vector provably resident and tiled as
+    // the result's columns.
+    void context(const Stmt& s, const Family& y) {
+        const auto resolved = resolve_result_context(s.context, target_, [](int line, const std::string& m) {
+            throw CompileError(line, m);
+        });
+        for (const ResolvedStage& r : resolved) {
+            if (!r.arg) continue;
+            if (!vectors_.count(r.arg->name))
+                throw CompileError(r.arg->line, "add(" + r.arg->name + "[..]): add takes a vector operand");
+            const Family b = single(*r.arg);
+            check_width(b.operand, y.operand, r.arg->line);
+            if (std::none_of(state_.begin(), state_.end(), [&](const Entry& e) { return covers(e.family, b); }))
+                throw CompileError(r.arg->line, "add(" + text(b) + ") @ " + to_string(r.place) + " reads " + text(b) +
+                                                    ", which is not provably resident; make it resident first");
+        }
+    }
+    void check_width(const std::string& b, const std::string& y, int line) const {
+        const TensorOperand& bo = operands_.operand(b);
+        const TensorOperand& yo = operands_.operand(y);
+        if (bo.rows != yo.cols || bo.tile_rows != yo.tile_cols)
+            throw CompileError(line, "add: the vector " + b + " must be tiled as " + y + "'s columns (" +
+                                     std::to_string(yo.cols) + " tile " + std::to_string(yo.tile_cols) + ")");
+    }
+
     void stmt(const Stmt& s, std::size_t depth, bool definite) {
-        if (!s.context.empty())
-            throw CompileError(s.line, "tile contexts ('via') arrive with the linear operator (csp-language plan step 2)");
         switch (s.kind) {
             case Stmt::Kind::For: loop(s, depth, definite); break;
             case Stmt::Kind::Resident:
@@ -378,8 +407,17 @@ private:
         } else if (s.fn == "trsm_ll" || s.fn == "trsm_ur") {
             if (args.size() != 2 || !same(args[1], y))
                 throw CompileError(s.line, s.fn + " works in place on its second operand: " + s.fn + "(d, x) -> x");
+        } else if (s.fn == "add") {
+            if (args.size() != 2 || !same(args[0], y))
+                throw CompileError(s.line, "add works in place on its first operand: add(y, b) -> y");
+            if (!vectors_.count(args[1].operand)) throw CompileError(s.line, "add(y, b): b must be a vector operand");
+            check_width(args[1].operand, y.operand, s.line);
+        } else if (ActivationFn fn; parse_activation(s.fn, fn)) {
+            if (args.size() != 1 || !same(args[0], y))
+                throw CompileError(s.line, s.fn + " works in place: " + s.fn + "(y) -> y");
         } else {
-            throw CompileError(s.line, "unknown tile function '" + s.fn + "' (gemm, getrf, laswp, trsm_ll, trsm_ur)");
+            throw CompileError(s.line, "unknown tile function '" + s.fn +
+                                       "' (gemm, getrf, laswp, trsm_ll, trsm_ur, add, relu, gelu, silu, atan)");
         }
         if (s.fn != "gemm" && s.accumulate) throw CompileError(s.line, s.fn + " writes its result: '->', not '+->'");
         if (s.fn != "getrf" && s.fn != "laswp" && s.pivot) throw CompileError(s.line, s.fn + " takes no pivot");
@@ -391,6 +429,13 @@ private:
         };
         auto acc = std::find_if(accs_.begin(), accs_.end(), [&](const Acc& a) { return same(a.tile, y); });
         if (acc != accs_.end() && !acc->closed) {
+            if (s.fn != "gemm")
+                throw CompileError(s.line, "call " + s.fn + " on the open accumulator " + text(y) + ": an accumulator "
+                                           "takes gemm '+->'; its epilogue goes on its store: store " + text(y) +
+                                           " via " + s.fn + " @ fabric");
+            if (!s.context.empty())
+                throw CompileError(s.line, "an accumulating call's result stays in the fabric; place its epilogue on "
+                                           "its store");
             for (const Family& a : args) resident(a);
             // The accumulator is fed if this call runs in every iteration of the loops inside it.
             if (definite || depth <= acc->depth) acc->fed = true;
@@ -413,6 +458,7 @@ private:
             throw CompileError(s.line, "call " + s.fn + " writes " + text(y) + ", which is neither provably resident nor "
                                        "an open accumulator");
         for (const Family& a : args) resident(a);
+        context(s, y);
         owner->dirty = true;
         calls_ += multiplier_;
     }
@@ -423,6 +469,7 @@ private:
         if (acc != accs_.end()) {
             if (!acc->closed)
                 throw CompileError(s.line, "store " + text(y) + " inside its own accumulator; store it after the acc block");
+            context(s, y);
             hold(1, s.line, "store " + text(y) + "'s writeback");      // the writeback's moment in L3
             live_ -= 1;
             accs_.erase(acc);
@@ -433,6 +480,9 @@ private:
         if (it == state_.end())
             throw CompileError(s.line, "store " + text(y) + " must name an accumulator or mirror a resident statement");
         if (!it->dirty) throw CompileError(s.line, "store " + text(y) + ": nothing has written it since it was loaded");
+        if (!s.context.empty())
+            throw CompileError(s.line, "store " + text(y) + " via ...: a resident tile's store is a DMA write, and the DMA "
+                                       "has no vector unit; place the stages on the call that writes it");
         it->dirty = false;
         stores_ += count(y) * multiplier_;
     }
@@ -441,7 +491,12 @@ private:
 }  // namespace detail
 
 // Validate a program over its structure, without executing it. Throws CompileError, by line.
-inline Validation validate(const Program& ast) { return detail::Symbolic(ast).run(); }
-inline Validation validate(const std::string& source) { return validate(parse(source)); }
+// With a target, a context's stages are checked against the machine's sites.
+inline Validation validate(const Program& ast, const Target* target = nullptr) {
+    return detail::Symbolic(ast, target).run();
+}
+inline Validation validate(const std::string& source, const Target* target = nullptr) {
+    return validate(parse(source), target);
+}
 
 }  // namespace sw::kpu::program::csp::lang

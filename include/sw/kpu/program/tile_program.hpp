@@ -95,6 +95,8 @@ enum class TileOpKind {
     PivotApply,     // LASWP: replay the diagonal tile's row swaps onto another tile in the same row-block
     TrsmLowerLeft,  // TRSM: X := unit-lower(A[k,k])^{-1} . X   (U row-panel: U[k,j] = L_kk^{-1} A[k,j])
     TrsmUpperRight, // TRSM: X := X . upper(A[k,k])^{-1}        (L col-panel: L[i,k] = A[i,k] U_kk^{-1})
+    BiasAdd,        // epilogue: Y[r, c] += b[c] -- a vector tile broadcast down Y's rows (opset 1.1)
+    Activation,     // epilogue: Y := act(Y), elementwise; act = relu | gelu | silu | atan (opset 1.1)
 };
 
 inline const char* to_string(TileOpKind k) {
@@ -106,8 +108,32 @@ inline const char* to_string(TileOpKind k) {
         case TileOpKind::PivotApply:     return "PIVOT_APPLY";     // LASWP
         case TileOpKind::TrsmLowerLeft:  return "TRSM_LOWER_LEFT";
         case TileOpKind::TrsmUpperRight: return "TRSM_UPPER_RIGHT";
+        case TileOpKind::BiasAdd:        return "BIAS_ADD";
+        case TileOpKind::Activation:     return "ACTIVATION";
     }
     return "?";
+}
+
+// The elementwise functions an Activation applies (the linear operator's epilogue,
+// docs/plans/csp-language.md step 2). atan needs a transcendental unit (an SFU) that a machine
+// may have at some sites and not others: it is the language's placement test case.
+enum class ActivationFn : std::uint8_t { Relu, Gelu, Silu, Atan };
+
+inline const char* to_string(ActivationFn f) {
+    switch (f) {
+        case ActivationFn::Relu: return "relu";
+        case ActivationFn::Gelu: return "gelu";
+        case ActivationFn::Silu: return "silu";
+        case ActivationFn::Atan: return "atan";
+    }
+    return "?";
+}
+
+// The function named `s`, or false.
+inline bool parse_activation(const std::string& s, ActivationFn& out) {
+    for (ActivationFn f : {ActivationFn::Relu, ActivationFn::Gelu, ActivationFn::Silu, ActivationFn::Atan})
+        if (s == to_string(f)) { out = f; return true; }
+    return false;
 }
 
 // ----------------------------------------------------------------------------
@@ -129,6 +155,9 @@ struct TileOp {
     // This is the data-dependent control matmul does not have — a pivot decision
     // in one tile op flowing to row swaps in trailing tiles.
     int pivot_slot = -1;
+
+    // Activation: the function applied.
+    ActivationFn act = ActivationFn::Relu;
 
     std::string label;               // human-readable note for disassembly
 };
@@ -214,6 +243,7 @@ inline std::string TileProgram::disassemble() const {
             if (op.kind == TileOpKind::MatMulAccum && op.alpha != 1.0f)
                 s += " (alpha=" + std::to_string(op.alpha) + ")";
             if (op.pivot_slot >= 0) s += " {pivot#" + std::to_string(op.pivot_slot) + "}";
+            if (op.kind == TileOpKind::Activation) s += std::string(" (") + to_string(op.act) + ")";
         }
         if (!op.label.empty()) s += "  ; " + op.label;
         s += "\n";

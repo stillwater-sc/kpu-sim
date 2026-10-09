@@ -44,6 +44,7 @@
 #include <cstdint>
 #include <map>
 #include <optional>
+#include <utility>
 #include <string>
 #include <vector>
 
@@ -99,6 +100,19 @@ struct DeviceSpecification {
         double str_bytes_per_cycle = 256.0;     // per streamer, L2 <-> L1
         Dim noc_links = 0;                      // 0 = no L3 <-> L3 path
         double noc_bytes_per_cycle = 128.0;     // per link
+
+        // A vector unit at a mover site (docs/plans/csp-language.md §3.4, decision Q5): the
+        // tile-context operations it runs on a tile in flight. Absent = the site has none, and
+        // a program that places a stage there is refused. `ops` names what it runs ("add",
+        // "relu", "gelu", "silu", "atan"); atan needs a transcendental unit, so a machine may
+        // have it at one site and not another.
+        struct VectorUnit {
+            Dim lanes = 16;                     // elements per cycle at rate 1
+            double rate = 1.0;                  // operations per lane per cycle
+            std::vector<std::string> ops;
+        };
+        std::optional<VectorUnit> bm_vector;    // on each BlockMover: bm.egress, bm.ingress
+        std::optional<VectorUnit> str_vector;   // on each streamer: str.drain
     } movers;
 
     // The PHYSICAL SHAPE (#286 step 1; array_layout.hpp). All optional, all additive (R8):
@@ -425,6 +439,15 @@ inline std::string DeploymentSpec::validate() const {
             return where + ": movers.str_bytes_per_cycle" + kFinitePos;
         if (!finite_positive(d.movers.noc_bytes_per_cycle))
             return where + ": movers.noc_bytes_per_cycle" + kFinitePos;
+        for (const auto& [site, v] : {std::pair{"bm", &d.movers.bm_vector}, std::pair{"str", &d.movers.str_vector}}) {
+            if (!*v) continue;
+            const std::string at = where + ": movers.vector." + site;
+            if ((*v)->lanes == 0) return at + ".lanes must be non-zero";
+            if (!finite_positive((*v)->rate)) return at + ".rate" + kFinitePos;
+            for (const std::string& op : (*v)->ops)
+                if (op != "add" && op != "relu" && op != "gelu" && op != "silu" && op != "atan")
+                    return at + ".ops: '" + op + "' is not a vector operation (add, relu, gelu, silu, atan)";
+        }
         if (!finite_positive(d.analytical.bytes_per_cycle))
             return where + ": analytical.bytes_per_cycle" + kFinitePos;
         // The ENERGY coefficients were not validated at all. Zero is a legitimate modelling

@@ -28,6 +28,7 @@
 #include <cmath>
 #include <map>
 #include <stdexcept>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -223,6 +224,61 @@ inline void kernel_trsm_upper_right(TileProgram& prog, const TileOp& op) {
         }
 }
 
+// ----------------------------------------------------------------------------
+// The linear operator's epilogue (docs/plans/csp-language.md step 2). The element functions
+// and the tile forms are shared by the L0 ops below and by the tile contexts an interpreter
+// applies on a move, so a fused epilogue and an unfused one compute the same bits.
+//
+// The transcendental forms evaluate in double and round once to float: the L0 reference and
+// every level agree bit for bit on one host. Across hosts a libm may differ in the last bit,
+// which is why ADR 0001 D5 gives gelu, silu and atan a tolerance and relu none.
+// ----------------------------------------------------------------------------
+inline float activate(float x, ActivationFn f) {
+    const double d = x;
+    switch (f) {
+        case ActivationFn::Relu: return x > 0.0f ? x : 0.0f;
+        case ActivationFn::Gelu: return static_cast<float>(0.5 * d * (1.0 + std::erf(d / std::sqrt(2.0))));
+        case ActivationFn::Silu: return static_cast<float>(d / (1.0 + std::exp(-d)));
+        case ActivationFn::Atan: return static_cast<float>(std::atan(d));
+    }
+    return x;
+}
+
+// A row-major tile of `cols` columns, in place.
+inline void activate_tile(std::vector<float>& y, ActivationFn f) {
+    for (float& v : y) v = activate(v, f);
+}
+inline void bias_tile(std::vector<float>& y, std::size_t cols, const std::vector<float>& b) {
+    if (b.size() != cols)
+        throw std::invalid_argument("BiasAdd: a bias of " + std::to_string(b.size()) + " elements on a tile of " +
+                                    std::to_string(cols) + " columns");
+    for (std::size_t i = 0; i < y.size(); ++i) y[i] += b[i % cols];
+}
+
+// Y[r, c] += b[c]: inputs = {b's tile}, outputs = {Y's tile}. b is a vector operand (one
+// column), and its tile covers Y's tile's columns.
+inline void kernel_bias_add(TileProgram& prog, const TileOp& op) {
+    const TileCoord& bc = op.inputs.at(0);
+    const TileCoord& yc = op.outputs.at(0);
+    const TensorOperand& B = prog.operand(bc.operand);
+    TensorOperand& Y = prog.operand(yc.operand);
+    const Dim b0 = B.row_begin(bc.ti), b1 = B.row_end(bc.ti);
+    const Dim r0 = Y.row_begin(yc.ti), r1 = Y.row_end(yc.ti);
+    const Dim c0 = Y.col_begin(yc.tj), c1 = Y.col_end(yc.tj);
+    if (B.cols != 1 || b1 - b0 != c1 - c0)
+        throw std::invalid_argument("BiasAdd: " + bc.to_string() + " is not a vector tile as wide as " + yc.to_string());
+    for (Dim r = r0; r < r1; ++r)
+        for (Dim c = c0; c < c1; ++c) Y.at(r, c) += B.at(b0 + (c - c0), 0);
+}
+
+// Y := act(Y): outputs = {Y's tile}.
+inline void kernel_activation(TileProgram& prog, const TileOp& op) {
+    const TileCoord& yc = op.outputs.at(0);
+    TensorOperand& Y = prog.operand(yc.operand);
+    for (Dim r = Y.row_begin(yc.ti); r < Y.row_end(yc.ti); ++r)
+        for (Dim c = Y.col_begin(yc.tj); c < Y.col_end(yc.tj); ++c) Y.at(r, c) = activate(Y.at(r, c), op.act);
+}
+
 // ============================================================================
 // apply — execute ONE tile op's compute. The whole of L0 arithmetic dispatch.
 //
@@ -243,6 +299,8 @@ inline void apply(TileProgram& prog, const TileOp& op, TileKernelState& st) {
         case TileOpKind::PivotApply:     kernel_pivot_apply(prog, op, st); break;
         case TileOpKind::TrsmLowerLeft:  kernel_trsm_lower_left(prog, op); break;
         case TileOpKind::TrsmUpperRight: kernel_trsm_upper_right(prog, op); break;
+        case TileOpKind::BiasAdd:        kernel_bias_add(prog, op); break;
+        case TileOpKind::Activation:     kernel_activation(prog, op); break;
     }
 }
 

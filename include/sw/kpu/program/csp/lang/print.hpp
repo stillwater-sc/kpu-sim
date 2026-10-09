@@ -46,6 +46,22 @@ inline std::string tile_text(const TileCoord& t) {
     return t.operand + "[" + std::to_string(t.ti) + ", " + std::to_string(t.tj) + "]";
 }
 
+// An operand of one tile column prints as a vector: b[j] (the language's `vector` decl).
+inline bool is_vector(const TensorOperand& t) { return t.cols == 1 && t.tile_cols == 1; }
+
+// A result's `via` list, from its Drain's and Writeback's stages ("" when it has none).
+inline std::string via_text(const std::vector<csp::Stage>& drain, const std::vector<csp::Stage>& writeback) {
+    std::string out;
+    for (const auto* v : {&drain, &writeback})
+        for (const csp::Stage& st : *v) {
+            out += out.empty() ? " via " : ", ";
+            out += to_string(st.op);
+            if (st.op == VeOp::Add) out += "(" + st.arg.operand + "[" + std::to_string(st.arg.ti) + "])";
+            out += std::string(" @ ") + to_string(st.place);
+        }
+    return out;
+}
+
 inline std::string print(const CspProgram& p) {
     using K = Action::Kind;
     // How each operand is used, for its declaration.
@@ -61,8 +77,12 @@ inline std::string print(const CspProgram& p) {
     for (const auto& name : p.source.operand_order()) {
         const TensorOperand& t = p.source.operand(name);
         const bool in = loaded.count(name) != 0, out = stored.count(name) != 0;
-        o << "  tensor " << name << "[" << t.rows << "," << t.cols << "] tile " << t.tile_rows << "x" << t.tile_cols
-          << " " << (in && out ? "inout" : out ? "out" : "in") << ";\n";
+        const char* io = in && out ? "inout" : out ? "out" : "in";
+        if (is_vector(t))
+            o << "  vector " << name << "[" << t.rows << "] tile " << t.tile_rows << " " << io << ";\n";
+        else
+            o << "  tensor " << name << "[" << t.rows << "," << t.cols << "] tile " << t.tile_rows << "x" << t.tile_cols
+              << " " << io << ";\n";
     }
     std::vector<std::string> open;                       // accumulators, innermost last
     // The last accumulating call into each tile before that tile's Drain: its acc block may
@@ -91,6 +111,9 @@ inline std::string print(const CspProgram& p) {
         }
     };
     auto indent = [&]() { return std::string(2 + 2 * open.size(), ' '); };
+    auto text = [&](const TileCoord& t) {
+        return is_vector(p.source.operand(t.operand)) ? t.operand + "[" + std::to_string(t.ti) + "]" : tile_text(t);
+    };
     auto expect = [&](std::size_t i, K k, const TileCoord& t) {
         if (i >= p.actions.size() || p.actions[i].kind != k || p.actions[i].tile.to_string() != t.to_string())
             throw PrintError("csp print: action " + std::to_string(i) + " is not the " + to_string(k) + " of " +
@@ -99,9 +122,9 @@ inline std::string print(const CspProgram& p) {
     for (std::size_t i = 0; i < p.actions.size(); ++i) {
         const Action& a = p.actions[i];
         switch (a.kind) {
-            case K::Load: o << indent() << "resident " << tile_text(a.tile) << ";\n"; break;
-            case K::Release: o << indent() << "release " << tile_text(a.tile) << ";\n"; break;
-            case K::Store: o << indent() << "store " << tile_text(a.tile) << ";\n"; break;
+            case K::Load: o << indent() << "resident " << text(a.tile) << ";\n"; break;
+            case K::Release: o << indent() << "release " << text(a.tile) << ";\n"; break;
+            case K::Store: o << indent() << "store " << text(a.tile) << ";\n"; break;
             case K::Move:
             case K::Feed:
                 break;                                   // a call's deliveries: implied
@@ -109,25 +132,32 @@ inline std::string print(const CspProgram& p) {
                 const TileOp& op = p.source.ops().at(a.l0_op);
                 const TileCoord& y = op.outputs.at(0);
                 if (a.accumulate && std::find(open.begin(), open.end(), y.to_string()) == open.end()) {
-                    o << indent() << "acc " << tile_text(y) << " in fabric {\n";
+                    o << indent() << "acc " << text(y) << " in fabric {\n";
                     open.push_back(y.to_string());
                 }
                 std::string fn, args;
                 switch (op.kind) {
                     case TileOpKind::MatMulAccum:
                         fn = "gemm";
-                        args = tile_text(op.inputs.at(0)) + ", " + tile_text(op.inputs.at(1));
+                        args = text(op.inputs.at(0)) + ", " + text(op.inputs.at(1));
                         break;
-                    case TileOpKind::LuDiagFactor: fn = "getrf"; args = tile_text(y); break;
-                    case TileOpKind::PivotApply:   fn = "laswp"; args = tile_text(y); break;
-                    case TileOpKind::TrsmLowerLeft:  fn = "trsm_ll"; args = tile_text(op.inputs.at(0)) + ", " + tile_text(y); break;
-                    case TileOpKind::TrsmUpperRight: fn = "trsm_ur"; args = tile_text(op.inputs.at(0)) + ", " + tile_text(y); break;
+                    case TileOpKind::LuDiagFactor: fn = "getrf"; args = text(y); break;
+                    case TileOpKind::PivotApply:   fn = "laswp"; args = text(y); break;
+                    case TileOpKind::TrsmLowerLeft:  fn = "trsm_ll"; args = text(op.inputs.at(0)) + ", " + text(y); break;
+                    case TileOpKind::TrsmUpperRight: fn = "trsm_ur"; args = text(op.inputs.at(0)) + ", " + text(y); break;
+                    case TileOpKind::BiasAdd:        fn = "add"; args = text(y) + ", " + text(op.inputs.at(0)); break;
+                    case TileOpKind::Activation:     fn = to_string(op.act); args = text(y); break;
                     default: throw PrintError("csp print: a call of " + std::string(to_string(op.kind)));
                 }
                 o << indent() << "call " << fn << "(" << args << ") "
-                  << (op.kind == TileOpKind::MatMulAccum ? "+->" : "->") << " " << tile_text(y);
+                  << (op.kind == TileOpKind::MatMulAccum ? "+->" : "->") << " " << text(y);
                 if (op.pivot_slot >= 0) o << " pivot " << op.pivot_slot;
                 if (op.kind == TileOpKind::MatMulAccum && op.alpha != 1.0f) o << " alpha " << alpha_text(op.alpha);
+                if (!a.accumulate) {                     // in place: its result's context
+                    expect(i + 1, K::Drain, y);
+                    expect(i + 2, K::Writeback, y);
+                    o << via_text(p.actions[i + 1].context, p.actions[i + 2].context);
+                }
                 o << ";\n";
                 if (a.accumulate && last_call[i]) {
                     done.insert(y.to_string());
@@ -149,7 +179,7 @@ inline std::string print(const CspProgram& p) {
                 expect(i + 1, K::Writeback, a.tile);
                 expect(i + 2, K::Store, a.tile);
                 expect(i + 3, K::Release, a.tile);
-                o << indent() << "store " << tile_text(a.tile) << ";\n";
+                o << indent() << "store " << text(a.tile) << via_text(a.context, p.actions[i + 1].context) << ";\n";
                 i += 3;
                 break;
             }

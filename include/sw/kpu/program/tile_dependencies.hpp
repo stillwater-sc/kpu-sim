@@ -205,6 +205,7 @@ inline TileDependencies build_tile_dependencies(const TileProgram& prog) {
                 writes.push_back(&op.outputs[0]);       // read-modify-write accumulate
                 break;
             case TileOpKind::LuDiagFactor:
+            case TileOpKind::Activation:                // Y in place
                 reads.push_back(&op.outputs[0]);
                 writes.push_back(&op.outputs[0]);
                 break;
@@ -214,6 +215,7 @@ inline TileDependencies build_tile_dependencies(const TileProgram& prog) {
                 break;
             case TileOpKind::TrsmLowerLeft:
             case TileOpKind::TrsmUpperRight:
+            case TileOpKind::BiasAdd:                   // reads the bias, updates Y in place
                 reads.push_back(&op.inputs[0]);
                 reads.push_back(&op.outputs[0]);
                 writes.push_back(&op.outputs[0]);

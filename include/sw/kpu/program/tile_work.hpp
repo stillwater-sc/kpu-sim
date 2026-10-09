@@ -77,6 +77,13 @@ inline TileWork tile_work_of(const TileProgram& p, const TileOp& op, double elem
             w.is_compute = true;
             break;
         }
+        case TileOpKind::BiasAdd:                       // elementwise: one op per element
+        case TileOpKind::Activation: {
+            tile_extent(p, op.outputs[0], r, c);
+            w.macs = double(r) * c;
+            w.is_compute = true;
+            break;
+        }
         case TileOpKind::PivotApply: {                  // row swaps: movement
             tile_extent(p, op.outputs[0], r, c);
             w.bytes = double(r) * c * element_bytes;

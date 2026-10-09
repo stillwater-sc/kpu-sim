@@ -24,6 +24,7 @@
 #pragma once
 
 #include <sw/kpu/program/csp/csp_program.hpp>
+#include <sw/kpu/program/csp/lang/context.hpp>
 #include <sw/kpu/program/csp/lang/parse.hpp>
 
 #include <algorithm>
@@ -31,6 +32,7 @@
 #include <deque>
 #include <map>
 #include <optional>
+#include <set>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -60,9 +62,6 @@ struct Emission {
 inline TileProgram declared_operands(const Program& ast) {
     TileProgram t(ast.name);
     for (const Decl& d : ast.decls) {
-        if (d.is_vector)
-            throw CompileError(d.line, "vector " + d.name + ": vector operands arrive with the linear operator "
-                                       "(csp-language plan step 2)");
         if (t.has_operand(d.name)) throw CompileError(d.line, "operand " + d.name + " is declared twice");
         if (d.rows <= 0 || d.cols <= 0 || d.tile_rows <= 0 || d.tile_cols <= 0)
             throw CompileError(d.line, "operand " + d.name + ": sizes and tile sizes must be positive");
@@ -80,13 +79,15 @@ inline TileProgram declared_operands(const Program& ast) {
 template <class Sink>
 class Walker {
 public:
-    Walker(const Program& ast, Sink& sink) : ast_(ast), sink_(sink) {
+    // `target`: the machine whose sites a context's stages must run on; null = unchecked.
+    Walker(const Program& ast, Sink& sink, const Target* target = nullptr) : ast_(ast), sink_(sink), target_(target) {
         if (ast_.machine != "flat")
             throw CompileError(0, "machine " + ast_.machine + ": level 2 (a distributed machine) is not built yet; "
                                   "this step compiles level-1 programs (machine flat)");
         if (ast_.l3 <= 0) throw CompileError(0, "machine flat: the L3 capacity must be positive");
         cap_ = static_cast<std::size_t>(ast_.l3);
         operands_ = declared_operands(ast_);
+        for (const Decl& d : ast_.decls) if (d.is_vector) vectors_.insert(d.name);
         frames_.push_back(Frame{&ast_.body, 0, Frame::Kind::Program, {}, 0, 0, {}});
     }
 
@@ -152,6 +153,8 @@ private:
 
     const Program& ast_;
     Sink& sink_;
+    const Target* target_ = nullptr;
+    std::set<std::string> vectors_;                        // operands declared `vector`
     std::size_t cap_ = 0;
     TileProgram operands_;
     std::vector<Frame> frames_;
@@ -180,7 +183,9 @@ private:
     std::vector<TileCoord> expand(const TileRef& r) const {
         if (!operands_.has_operand(r.name)) throw CompileError(r.line, "'" + r.name + "' is not a declared operand");
         const TensorOperand& op = operands_.operand(r.name);
-        if (r.index.size() != 2) throw CompileError(r.line, r.name + " is a tensor: index it [row, col]");
+        const bool vec = vectors_.count(r.name) != 0;   // a vector's tiles run down its one column
+        if (vec && r.index.size() != 1) throw CompileError(r.line, r.name + " is a vector: index it [j]");
+        if (!vec && r.index.size() != 2) throw CompileError(r.line, r.name + " is a tensor: index it [row, col]");
         auto range = [&](const Index& ix, Dim n) {
             std::vector<Dim> v;
             if (ix.all) {
@@ -195,6 +200,10 @@ private:
             return v;
         };
         std::vector<TileCoord> out;
+        if (vec) {
+            for (Dim ti : range(r.index[0], op.n_tile_rows())) out.push_back(TileCoord{r.name, ti, 0});
+            return out;
+        }
         for (Dim ti : range(r.index[0], op.n_tile_rows()))
             for (Dim tj : range(r.index[1], op.n_tile_cols())) out.push_back(TileCoord{r.name, ti, tj});
         return out;
@@ -216,7 +225,8 @@ private:
         }
     }
     void emit(Action::Kind kind, const TileCoord& t, std::size_t residency = kNone, std::size_t l0 = kNone,
-              const TileOp* op = nullptr, bool opens = false, bool loaded = false, bool accumulate = false) {
+              const TileOp* op = nullptr, bool opens = false, bool loaded = false, bool accumulate = false,
+              std::vector<csp::Stage> context = {}) {
         Emission e;
         e.action.kind = kind;
         e.action.tile = t;
@@ -224,6 +234,7 @@ private:
         e.action.l0_op = l0;
         e.action.residency = residency;
         e.action.accumulate = accumulate;
+        e.action.context = std::move(context);
         if (op) e.op = *op;
         e.opens = opens;
         e.loaded = loaded;
@@ -235,9 +246,43 @@ private:
     }
 
     // ---- statements ----
+    // A result's `via` list, resolved and checked against the target, as the stages of its Drain
+    // (fabric, str.drain) and of its Writeback (bm.egress). An add's vector must be resident in
+    // L3 -- the stage reads it there -- and as long as the tile is wide.
+    std::pair<std::vector<csp::Stage>, std::vector<csp::Stage>> result_context(const Stmt& s, const TileCoord& y) {
+        std::pair<std::vector<csp::Stage>, std::vector<csp::Stage>> out;
+        const auto resolved = resolve_result_context(s.context, target_, [](int line, const std::string& m) {
+            throw CompileError(line, m);
+        });
+        for (const ResolvedStage& r : resolved) {
+            csp::Stage st;
+            st.op = r.op;
+            st.place = r.place;
+            if (r.arg) {
+                if (!vectors_.count(r.arg->name))
+                    throw CompileError(r.arg->line, "add(" + r.arg->name + "[..]): add takes a vector operand");
+                st.arg = one(*r.arg);
+                const std::string k = st.arg.to_string();
+                if (!resident_.count(k))
+                    throw CompileError(r.arg->line, "add(" + k + ") @ " + to_string(r.place) + " reads " + k +
+                                                    ", which is not resident; make it resident first");
+                check_width(st.arg, y, r.arg->line);
+            }
+            (r.place == Place::BmEgress ? out.second : out.first).push_back(st);
+        }
+        return out;
+    }
+    // A bias is tiled as the columns it adds to (the symbolic validator's rule, so the two agree).
+    void check_width(const TileCoord& b, const TileCoord& y, int line) const {
+        const TensorOperand& bo = operands_.operand(b.operand);
+        const TensorOperand& yo = operands_.operand(y.operand);
+        if (bo.rows != yo.cols || bo.tile_rows != yo.tile_cols)
+            throw CompileError(line, "add: the vector " + b.operand + " must be tiled as " + y.operand +
+                                     "'s columns (" + std::to_string(yo.cols) + " tile " + std::to_string(yo.tile_cols) +
+                                     ")");
+    }
+
     void enter(const Stmt& s) {
-        if (!s.context.empty())
-            throw CompileError(s.line, "tile contexts ('via') arrive with the linear operator (csp-language plan step 2)");
         switch (s.kind) {
             case Stmt::Kind::For: {
                 if (env_.count(s.var)) throw CompileError(s.line, "loop variable '" + s.var + "' shadows an outer one");
@@ -330,14 +375,36 @@ private:
             op.kind = s.fn == "trsm_ll" ? TileOpKind::TrsmLowerLeft : TileOpKind::TrsmUpperRight;
             op.inputs = {args[0]};
             op.outputs = {y};
+        } else if (s.fn == "add") {
+            if (args.size() != 2 || !same(args[0], y))
+                throw CompileError(s.line, "add works in place on its first operand: add(y, b) -> y");
+            if (!vectors_.count(args[1].operand)) throw CompileError(s.line, "add(y, b): b must be a vector operand");
+            check_width(args[1], y, s.line);
+            op.kind = TileOpKind::BiasAdd;
+            op.inputs = {args[1]};
+            op.outputs = {y};
+        } else if (ActivationFn fn; parse_activation(s.fn, fn)) {
+            if (args.size() != 1 || !same(args[0], y))
+                throw CompileError(s.line, s.fn + " works in place: " + s.fn + "(y) -> y");
+            op.kind = TileOpKind::Activation;
+            op.act = fn;
+            op.outputs = {y};
         } else {
-            throw CompileError(s.line, "unknown tile function '" + s.fn + "' (gemm, getrf, laswp, trsm_ll, trsm_ur)");
+            throw CompileError(s.line, "unknown tile function '" + s.fn +
+                                       "' (gemm, getrf, laswp, trsm_ll, trsm_ur, add, relu, gelu, silu, atan)");
         }
         if (s.fn != "gemm" && s.accumulate) throw CompileError(s.line, s.fn + " writes its result: '->', not '+->'");
         if (s.fn != "getrf" && s.fn != "laswp" && s.pivot) throw CompileError(s.line, s.fn + " takes no pivot");
 
         auto acc = acc_.find(yk);
         if (acc != acc_.end() && acc->second == AccState::Open) {
+            if (s.fn != "gemm")
+                throw CompileError(s.line, "call " + s.fn + " on the open accumulator " + yk + ": an accumulator takes "
+                                           "gemm '+->'; its epilogue goes on its store: store " + yk + " via " + s.fn +
+                                           " @ fabric");
+            if (!s.context.empty())
+                throw CompileError(s.line, "an accumulating call's result stays in the fabric; place its epilogue on "
+                                           "its store");
             // An output-stationary chain: the operands are fed; the result accumulates in the fabric.
             for (std::size_t i = 0; i < args.size(); ++i) {
                 TileOp feed;
@@ -361,9 +428,10 @@ private:
         std::vector<TileCoord> operands = args;
         if (std::none_of(args.begin(), args.end(), [&](const TileCoord& a) { return same(a, y); })) operands.push_back(y);
         for (const TileCoord& a : operands) deliver(a, s.line, s.fn);
+        auto [drain_ctx, wb_ctx] = result_context(s, y);
         emit(Action::Kind::Call, y, kNone, sink_.l0(op), &op);
-        emit(Action::Kind::Drain, y);
-        emit(Action::Kind::Writeback, y, resident_.at(yk).id);
+        emit(Action::Kind::Drain, y, kNone, kNone, nullptr, false, false, false, std::move(drain_ctx));
+        emit(Action::Kind::Writeback, y, resident_.at(yk).id, kNone, nullptr, false, false, false, std::move(wb_ctx));
         resident_.at(yk).dirty = true;
     }
 
@@ -375,6 +443,7 @@ private:
         if (acc != acc_.end()) {
             // Out of the fabric: drained, written back into an L3 slot for the moment, stored, freed.
             need_slot(s.line, "store " + k + "'s writeback");
+            auto [drain_ctx, wb_ctx] = result_context(s, y);
             TileOp drain;
             drain.kind = TileOpKind::Drain;
             drain.port_kind = PortKind::Output;
@@ -382,8 +451,8 @@ private:
             drain.outputs = {y};
             const std::size_t d = sink_.l0(drain);
             const std::size_t id = next_residency_++;
-            emit(Action::Kind::Drain, y, kNone, d);
-            emit(Action::Kind::Writeback, y, id, d, nullptr, true, false);
+            emit(Action::Kind::Drain, y, kNone, d, nullptr, false, false, false, std::move(drain_ctx));
+            emit(Action::Kind::Writeback, y, id, d, nullptr, true, false, false, std::move(wb_ctx));
             emit(Action::Kind::Store, y, id, d);
             emit(Action::Kind::Release, y, id, d);
             acc_.erase(acc);
@@ -393,6 +462,9 @@ private:
         auto it = resident_.find(k);
         if (it == resident_.end()) throw CompileError(s.line, "store " + k + ": it is neither resident nor an accumulator");
         if (!it->second.dirty) throw CompileError(s.line, "store " + k + ": nothing has written it since it was loaded");
+        if (!s.context.empty())
+            throw CompileError(s.line, "store " + k + " via ...: a resident tile's store is a DMA write, and the DMA has "
+                                       "no vector unit; place the stages on the call that writes it");
         emit(Action::Kind::Store, y, it->second.id);
         it->second.dirty = false;
     }
@@ -443,7 +515,10 @@ private:
 class ActionStream {
 public:
     // The stream owns its program: the walker's frames point into it.
-    explicit ActionStream(Program ast) : ast_(std::move(ast)), sink_(buffer_), walker_(ast_, sink_) {}
+    // With a target, a context's stages are checked against the machine's sites.
+    explicit ActionStream(Program ast, std::optional<Target> target = std::nullopt)
+        : ast_(std::move(ast)), target_(std::move(target)), sink_(buffer_),
+          walker_(ast_, sink_, target_ ? &*target_ : nullptr) {}
     ActionStream(const ActionStream&) = delete;
     ActionStream& operator=(const ActionStream&) = delete;
 
@@ -471,6 +546,7 @@ private:
         std::deque<Emission>& b_;
     };
     Program ast_;
+    std::optional<Target> target_;
     std::deque<Emission> buffer_;
     BufferSink sink_;
     Walker<BufferSink> walker_;

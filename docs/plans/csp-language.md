@@ -1,7 +1,7 @@
 # The CSP Language: Writing the Tile Sequencing
 
 **Date:** 2026-10-09
-**Status:** Decided 2026-10-09 (A1-A3 with the request; Q1-Q6 answered, §7); steps 1, 1c.1 and 1c.2 done; step 2 (the linear operator) next
+**Status:** Decided 2026-10-09 (A1-A3 with the request; Q1-Q6 answered, §7); steps 1, 1c and 2 done; step 3 (the vector processor at L-CA) next
 **Decision record:** ADR 0004 (the CSP program is a written language).
 **Is:** step 1b of `docs/plans/csp-program-tile-sequencing.md`, ahead of its step 2b (`kpu-run`).
 **Related:**
@@ -341,18 +341,54 @@ Each step is one PR and ends green.
      - **Remaining O(trace) state:** the executor's event log (and its per-tile counters, which
        are O(tiles)). L-CA of a very large program is bounded by simulated cycles first; a
        streaming event sink is a later step if it is needed.
-2. **The linear operator at L-B.**
-   - L0 gains the epilogue ops: `BiasAdd` (a broadcast vector) and `Activation` (relu, gelu,
-     silu), with reference kernels.
-   - The IR gains contexts on moves: a stage list, each with its place.
-   - The language gains `vector` declarations and `via`.
-   - L0's `Activation` also takes `atan`, with a reference kernel.
-   - The spec gains `movers.vector { lanes, rate, ops }`. The validator refuses a stage placed
-     where its site cannot run it: `atan @ bm.egress` on a BlockMover without it.
-   - Tests:
-     - all four placements, and unfused, give values bit-identical to the L0 reference (gelu,
-       silu and atan within the ADR tolerance);
-     - a misplaced `atan` is refused, and its legal placement runs.
+2. **The linear operator at L-B** (done).
+   - **L0, opset 1.1.0:** `BiasAdd` (a vector tile broadcast down the rows) and `Activation`
+     (`act=` relu, gelu, silu, atan), with reference kernels. The element functions are shared
+     by the L0 kernels and by every context stage, so fused and unfused compute the same bits.
+     The transcendental forms evaluate in double and round once.
+   - **Derivation:** `--algo linear` (`derive_linear_tile_program`, `ProgramSpec::act`, kpu-run
+     `--act`): matmul with Feed b, BiasAdd, Activation before each Drain. It lowers and runs at
+     L-B, and kpu-run's block-sequential level (L-T1) is bit-identical to it.
+   - **The language:**
+     - `vector` operands, indexed `b[j]`;
+     - the unfused epilogue as in-place calls: `add(y, b) -> y`, `relu(y) -> y`, and so on;
+     - tile contexts: `store y via op @ place, ...`, and on an in-place call's result. A stage
+       becomes part of the result's Drain (`fabric`, `str.drain`) or Writeback (`bm.egress`).
+       The IR's `Action::context` carries it, and the behavioral interpreter applies it to the
+       tile it moves.
+     - The walker and the symbolic validator check the same rules: known operations and
+       places, the stages in path order, add's vector resident and tiled as the result's
+       columns, an accumulator takes gemm only, and a resident tile's store (a DMA write) has
+       no vector unit.
+   - **Placement:** the spec gains `movers.vector { bm, str }`, each `{ lanes, rate, ops }`, and
+     `lang::target_from(device)` lists each site's operations. Given a target, `compile`,
+     `validate` and `ActionStream` refuse a stage where its site cannot run it. For example:
+     "atan @ bm.egress: the target's BlockMover vector unit runs add, relu, gelu, silu, not
+     atan".
+   - **Decided in the build, for review:**
+     - **The fabric's operations are fixed at {add, relu}:** what `execute_matmul` builds today
+       (bias + ReLU). It is not a spec field until a fabric with more exists.
+     - **`bm.ingress` is refused for a result.** It is an operand's way in, and operand contexts
+       (a fused prologue: dequantize, scale) need syntax on call arguments; that is a later
+       step. The "four placements" tested are `fabric`, `str.drain`, `bm.egress`, and
+       unfused.
+     - **The L0 → `.csp` emitter refuses the epilogue ops.** L0 does not say where the epilogue
+       runs, and the emitter has no basis to choose. DFP → `.csp` should arrive with its
+       placement (ADR 0004 §4).
+     - **A stage's operand (add's bias) is read from L3 at L-B.** Its delivery to the site, and
+       the `lanes` and `rate` time, are step 3's.
+   - **Tests** (`test_csp_linear`, 8 cases):
+     - the element functions against independent values;
+     - L0 against a double-precision direct computation (ADR rtol);
+     - the ops serialize and refuse a missing or unknown `act`;
+     - the lowered L0 at L-B;
+     - 12 placements (each activation at `str.drain` and `bm.egress`, relu in the fabric, two
+       split placements) and unfused, bit-identical to the reference through the trace and the
+       stream;
+     - symbolic totals equal traced, and the printer round-trips contexts;
+     - placement against the target;
+     - `movers.vector` JSON round-trip and refusal;
+     - refusals by line.
 3. **The vector processor at L-CA.**
    - A VE stage on the BlockMover's ingress and egress, and on the streamer's drain, timed by
      a new spec field (§7 Q5). `fabric` charges the compute tile.

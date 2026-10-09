@@ -94,7 +94,19 @@ inline bool is_known_dataflow(const std::string& name) {
 // either, which is why the two axes are separate: a new container record is not a new
 // operator.
 inline Version format_version()  { return {1, 2, 0}; }   // container structure
-inline Version opset_version()   { return {1, 0, 0}; }   // the TileOpKind surface
+inline Version opset_version()   { return {1, 1, 0}; }   // the TileOpKind surface this build
+                                                         // implements: 1.1.0 adds BIAS_ADD and
+                                                         // ACTIVATION (act=)
+
+// The op set a FILE needs, written on its OPSET line: what is in it, not who wrote it -- the
+// rule min_consumer_for() states. A matmul or LU program uses only 1.0.0 ops, so its bytes do
+// not change with a build that knows more (the checked-in corpus stays byte-identical), and a
+// 1.0.0 reader can tell from the line that it can run it.
+inline Version opset_for(const TileProgram& prog) {
+    for (const TileOp& op : prog.ops())
+        if (op.kind == TileOpKind::BiasAdd || op.kind == TileOpKind::Activation) return Version{1, 1, 0};
+    return Version{1, 0, 0};
+}
 inline Version reader_version()  { return {1, 2, 0}; }   // what THIS reader supports
 
 // The oldest reader that can be trusted with this file, which depends on WHAT IS IN IT
@@ -280,7 +292,7 @@ inline void write_l0(std::ostream& os, const TileProgram& prog, const WriteOptio
     os << kMagic << " " << format_version().str() << "\n";
     os << "MIN_CONSUMER "
        << min_consumer_for(opt.include_values, !opt.dataflow.empty()).str() << "\n";
-    os << "OPSET tile " << opset_version().str() << "\n";
+    os << "OPSET tile " << opset_for(prog).str() << "\n";
     os << "PRODUCER kpu-sim " << producer_version().str() << "\n";
     os << "PROGRAM " << detail::quote(prog.name()) << "\n";
     os << "VALUES " << (opt.include_values ? "inline" : "none") << "\n";
@@ -358,6 +370,7 @@ inline void write_l0(std::ostream& os, const TileProgram& prog, const WriteOptio
         if (op.kind == TileOpKind::MatMulAccum && op.alpha != 1.0f)
             os << " alpha=" << detail::exact_float(op.alpha);
         if (op.pivot_slot >= 0) os << " pivot=" << op.pivot_slot;
+        if (op.kind == TileOpKind::Activation) os << " act=" << to_string(op.act);
         if (!op.label.empty()) os << " label=" << detail::quote(op.label);
         os << "\n";
     }
@@ -538,7 +551,8 @@ inline std::vector<TileCoord> parse_coords(const std::string& s, const std::stri
 inline TileOpKind parse_kind(const std::string& s) {
     for (TileOpKind k : {TileOpKind::Feed, TileOpKind::Drain, TileOpKind::MatMulAccum,
                          TileOpKind::LuDiagFactor, TileOpKind::PivotApply,
-                         TileOpKind::TrsmLowerLeft, TileOpKind::TrsmUpperRight})
+                         TileOpKind::TrsmLowerLeft, TileOpKind::TrsmUpperRight,
+                         TileOpKind::BiasAdd, TileOpKind::Activation})
         if (s == to_string(k)) return k;
     throw FormatError(FormatError::Cause::UnknownOp,
                       "l0: unknown op '" + s + "': this build implements opset tile " +
@@ -724,6 +738,13 @@ inline TileProgram read_l0(std::istream& is, LoadInfo* info = nullptr) {
                     f["pivot"],
                     static_cast<unsigned long long>(std::numeric_limits<int>::max()),
                     "OP pivot"));
+            if (op.kind == TileOpKind::Activation) {
+                // Required, not optional: an activation without its function has no meaning.
+                const std::string act = detail::require(f, "act", "OP");
+                if (!parse_activation(act, op.act))
+                    throw FormatError(FormatError::Cause::MalformedRecord,
+                                      "l0: OP ACTIVATION act=" + act + ": relu, gelu, silu or atan");
+            }
             if (f.count("label")) op.label = f["label"];
             // R8, the other half: an unknown OPTIONAL FIELD is ignored, so a minor
             // producer bump stays readable instead of failing on a key that carries
