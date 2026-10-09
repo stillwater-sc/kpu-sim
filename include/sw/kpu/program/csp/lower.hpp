@@ -89,10 +89,15 @@ public:
             switch (op.kind) {
                 case TileOpKind::Feed:
                     for (const auto& t : op.inputs) deliver(t, i, {key(t)});
+                    for (const auto& t : op.inputs) ++in_fabric_[key(t)];
                     for (const auto& t : op.inputs) retire_if_dead(t, i);
                     break;
                 case TileOpKind::Drain:
                     for (const auto& t : op.outputs) {
+                        if (!in_fabric_.count(key(t)))
+                            throw LoweringError("csp lowering: L0 op " + std::to_string(i) + " drains " +
+                                                t.to_string() + ", which no call has produced in the fabric");
+                        in_fabric_.erase(key(t));
                         emit(Action::Kind::Drain, t, ProcessKind::Streamer, i);
                         writeback(t, i, {key(t)});
                         retire_if_dead(t, i);
@@ -100,6 +105,24 @@ public:
                     break;
                 default: {
                     if (explicit_) {
+                        // An explicit program brings every input to the fabric with a Feed; a
+                        // call consumes its fed inputs, and its outputs accumulate there until
+                        // their Drain. An input nothing fed is a malformed program, not a call.
+                        for (const auto& t : op.inputs) {
+                            auto it = in_fabric_.find(key(t));
+                            if (it == in_fabric_.end() || it->second == 0)
+                                throw LoweringError("csp lowering: L0 op " + std::to_string(i) + " (" +
+                                                    to_string(op.kind) +
+                                                    (op.label.empty() ? "" : ", " + op.label) + ") reads " +
+                                                    t.to_string() + ", which no Feed has brought to the fabric");
+                        }
+                        for (const auto& t : op.inputs) {
+                            bool is_output = false;
+                            for (const auto& o : op.outputs)
+                                if (o.operand == t.operand && o.ti == t.ti && o.tj == t.tj) is_output = true;
+                            if (!is_output && --in_fabric_[key(t)] == 0) in_fabric_.erase(key(t));
+                        }
+                        for (const auto& t : op.outputs) in_fabric_[key(t)] = 1;
                         emit(Action::Kind::Call, op.outputs.empty() ? TileCoord{} : op.outputs.front(),
                              ProcessKind::Compute, i);
                         break;
@@ -138,6 +161,7 @@ private:
     std::map<std::string, std::vector<std::size_t>> uses_;   // tile -> L0 ops needing it in L3
     std::map<std::string, std::size_t> resident_;            // tile -> open residency
     std::map<std::string, TileCoord> coord_;
+    std::map<std::string, std::size_t> in_fabric_;           // explicit style: tiles the fabric holds
 
     std::string key(const TileCoord& t) {
         std::string k = t.to_string();

@@ -229,3 +229,48 @@ TEST_CASE("CSP behavioral: a program that reads a released tile is refused",
     p.actions.insert(load + 1, released);
     CHECK_THROWS_WITH(BehavioralInterpreter().run(p), ContainsSubstring("the tile is not in l3"));
 }
+
+TEST_CASE("CSP lowering: an explicit program whose call reads an unfed tile is refused by name",
+          "[program][csp]") {
+    // A program with Feeds is explicit: every kernel input must be fed. Here the call reads B,
+    // which no Feed brought to the fabric.
+    TileProgram l0("mixed");
+    l0.add_operand(TensorOperand("A", 16, 16, 16, 16));
+    l0.add_operand(TensorOperand("B", 16, 16, 16, 16));
+    l0.add_operand(TensorOperand("C", 16, 16, 16, 16));
+    TileOp feed;
+    feed.kind = TileOpKind::Feed;
+    feed.port = "West";
+    feed.inputs = {TileCoord{"A", 0, 0}};
+    l0.push(feed);
+    TileOp mac;
+    mac.kind = TileOpKind::MatMulAccum;
+    mac.inputs = {TileCoord{"A", 0, 0}, TileCoord{"B", 0, 0}};
+    mac.outputs = {TileCoord{"C", 0, 0}};
+    mac.label = "gemm 0";
+    l0.push(mac);
+    CHECK_THROWS_WITH(lower(l0), ContainsSubstring("L0 op 1 (MATMUL_ACCUM, gemm 0) reads B[0,0], which no Feed"));
+    // A fed input is consumed by its call: a second call on the same feed is refused too.
+    TileProgram twice("twice");
+    twice.add_operand(TensorOperand("A", 16, 16, 16, 16));
+    twice.add_operand(TensorOperand("B", 16, 16, 16, 16));
+    twice.add_operand(TensorOperand("C", 16, 16, 16, 16));
+    TileOp fb = feed;
+    fb.inputs = {TileCoord{"B", 0, 0}};
+    fb.port = "North";
+    twice.push(feed);
+    twice.push(fb);
+    twice.push(mac);
+    twice.push(mac);
+    CHECK_THROWS_WITH(lower(twice), ContainsSubstring("L0 op 3"));
+    // A Drain of a tile no call produced is refused.
+    TileProgram drain("drain");
+    drain.add_operand(TensorOperand("C", 16, 16, 16, 16));
+    TileOp d;
+    d.kind = TileOpKind::Drain;
+    d.port_kind = PortKind::Output;
+    d.port = "South";
+    d.outputs = {TileCoord{"C", 0, 0}};
+    drain.push(d);
+    CHECK_THROWS_WITH(lower(drain), ContainsSubstring("drains C[0,0], which no call has produced"));
+}
