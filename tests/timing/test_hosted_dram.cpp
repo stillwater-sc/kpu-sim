@@ -21,6 +21,7 @@
 
 #include <algorithm>
 #include <map>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -454,4 +455,48 @@ TEST_CASE("Recording is off by default and costs nothing", "[timing][dram][hoste
     one_burst(mc, 0x1000, clock);
     CHECK(mc.recorded_bursts().empty());
     CHECK(mc.recorded_commands().empty());
+}
+
+// docs/plans/system-schedule-debugger.md §3.1 (review of step 1): tile admission is bounded by
+// the tile table, not the controller queue, so it proceeds while burst grants stall. Sharing one
+// round-robin cursor let every tile admission move the burst pass's starting engine.
+TEST_CASE("Arbitration: tile admissions do not move the burst grant cursor",
+          "[timing][dram][hosted][arbitration]") {
+    const DramHosting h = t4();
+    MemoryControllerProcess::Config c;
+    c.clock_ghz = 1.0;
+    c.hosted = h;
+    c.record = true;
+    c.request_queue_depth = 4;              // the controller queue fills: grants stall often
+    MemoryControllerProcess mc(c);
+
+    // Engines 0..2 keep bursts posted throughout; engine 3 posts a whole tile every cycle it can.
+    std::map<std::uint32_t, std::size_t> posted;
+    std::size_t tiles = 0;
+    for (Cycle cyc = 1; cyc < 4000; ++cyc) {
+        for (std::uint32_t e = 0; e < 3; ++e)
+            while (posted[e] < 64 + (cyc / 8)) {
+                mc.post_burst(tile_at(0x100000 * (e + 1), 64 * 1024, e), posted[e] % 1024, true, e);
+                ++posted[e];
+            }
+        if (mc.submit_request(tile_at(0x800000 + 4096 * tiles, 64, 3), true, 3)) ++tiles;
+        mc.tick(cyc);
+        while (mc.get_completed_burst(0) || mc.get_completed_burst(1) || mc.get_completed_burst(2)) {}
+        while (mc.get_completed_transfer(3)) {}
+    }
+    REQUIRE(tiles >= 3);                    // admissions while bursts stall: enough to move a shared cursor
+    // Burst grants among engines 0..2 stay round-robin: no engine is granted twice before
+    // another, while all three are waiting (they always are).
+    std::vector<std::uint32_t> order;
+    for (const auto& b : mc.recorded_bursts()) order.push_back(b.submitter_id);
+    REQUIRE(order.size() > 100);
+    std::map<std::uint32_t, std::size_t> count;
+    for (std::size_t i = 0; i + 3 <= order.size(); i += 3) {
+        std::set<std::uint32_t> three(order.begin() + static_cast<std::ptrdiff_t>(i),
+                                      order.begin() + static_cast<std::ptrdiff_t>(i + 3));
+        CHECK(three.size() == 3);
+    }
+    for (auto e : order) ++count[e];
+    const auto [lo, hi] = std::minmax({count[0], count[1], count[2]});
+    CHECK(hi - lo <= 1);
 }

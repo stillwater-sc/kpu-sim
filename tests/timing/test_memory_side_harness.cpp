@@ -405,6 +405,14 @@ TEST_CASE("Record: a harness run round-trips through .mflow, and every row names
     for (std::size_t i = 0; i < r.requests.size(); ++i) CHECK(back.requests[i].address == r.requests[i].address);
     CHECK(std::filesystem::exists(dir + "/lod.json"));
 
+    // An arbitration the format does not know is refused (it reaches the viewer's markup).
+    {
+        nlohmann::json m = nlohmann::json::parse(std::ifstream(dir + "/manifest.json"));
+        m["arbitration"] = "<b>lottery</b>";
+        std::ofstream(dir + "/manifest.json") << m.dump();
+    }
+    CHECK_THROWS_WITH(rec::read_mflow(dir), ContainsSubstring("is not round_robin or fixed"));
+
     // A bundle of another format or version is refused by name.
     {
         std::ofstream m(dir + "/manifest.json");

@@ -250,6 +250,8 @@ MFR read_mflow(const std::string& dir) {
     rec.ceiling_bytes_per_cycle = m.value("ceiling_bytes_per_cycle", 0.0);
     rec.burst_bytes = m.value("burst_bytes", 0u);
     rec.arbitration = m.value("arbitration", "round_robin");
+    if (rec.arbitration != "round_robin" && rec.arbitration != "fixed")
+        throw RecordError("record: arbitration '" + rec.arbitration + "' is not round_robin or fixed");
     rec.grant_quantum = m.value("grant_quantum", 1u);
     if (m.contains("dram_timing")) {
         const json& dt = m.at("dram_timing");

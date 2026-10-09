@@ -490,7 +490,7 @@ public:
         posted_bursts_.clear();
         posted_tiles_.clear();
         outstanding_.clear();
-        rr_next_ = rr_feed_next_ = 0;
+        rr_next_ = rr_tile_next_ = rr_feed_next_ = 0;
         if (bridge_) bridge_->reset();
     }
 
@@ -557,7 +557,10 @@ private:
     struct PostedTile { TileDescriptor tile; bool is_load = true; Cycle posted = 0; };
     std::map<std::uint32_t, std::deque<PostedBurst>> posted_bursts_;   // by engine id, in order
     std::map<std::uint32_t, PostedTile> posted_tiles_;                 // at most one per engine
-    std::uint32_t rr_next_ = 0;         // the engine id the next grant pass starts at
+    std::uint32_t rr_next_ = 0;         // the engine id the next burst grant pass starts at
+    std::uint32_t rr_tile_next_ = 0;    // the same, for admitting posted tiles (its own cursor:
+                                        // tile admission is bounded by the tile table, not the
+                                        // controller queue, so it can proceed while bursts stall)
     std::map<unsigned, std::size_t> outstanding_;   // granted window bursts not yet done, by channel
     std::uint32_t rr_feed_next_ = 0;    // the same, for feeding admitted tiles' bursts
 
@@ -635,11 +638,11 @@ private:
 
     // Admit posted tiles to the controller, in grant order, while it has room.
     void arbitrate_tiles() {
-        for (std::uint32_t e : grant_order(posted_tiles_, rr_next_)) {
+        for (std::uint32_t e : grant_order(posted_tiles_, rr_tile_next_)) {
             const PostedTile& p = posted_tiles_.at(e);
             if (!submit_hosted(p.tile, p.is_load, e)) return;        // full
             posted_tiles_.erase(e);
-            rr_next_ = e + 1;
+            rr_tile_next_ = e + 1;
         }
     }
 

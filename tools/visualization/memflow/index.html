@@ -172,6 +172,11 @@ const $ = id => document.getElementById(id);
 const tok = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
 const fmt = n => Number(n).toLocaleString("en-US");
 const NONE = 0xFFFFFFFF;
+// Every string the page writes as HTML goes through esc: a bundle is input, and its names
+// (device, stations, arbitration) must never become markup.
+function esc(v) {
+  return String(v).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
+}
 // The record's enums (memory_flow_record.hpp), in order.
 const CMD = ["ACT", "RD", "WR", "PRE", "REF"];
 const OUTCOME = ["unknown", "hit", "empty", "conflict"];
@@ -190,6 +195,7 @@ function col(buf, cols, name, n) {
 function parse(files) {
   const m = JSON.parse(files["manifest.json"]);
   if (m.format !== "kpu-mflow" || m.version !== 3) throw new Error("not a version-3 kpu-mflow bundle (record it with this build's kpu-memsim)");
+  if (m.arbitration !== "round_robin" && m.arbitration !== "fixed") throw new Error("unknown arbitration " + JSON.stringify(m.arbitration));
   const R = { m };
   const tb = name => {
     const t = m.tables[name], buf = files[t.file];
@@ -634,11 +640,11 @@ function drawObs() {
   let worstLat = 0, worstReq = -1;
   for (let i = 0; i < Q.rows; i++) { const l = Q.t_retired[i] - Q.t_offered[i]; if (l > worstLat) { worstLat = l; worstReq = i; } }
   if (worstReq >= 0) out.push(["", "longest request: #" + worstReq + " (" + (Q.is_load[worstReq] ? "load" : "store") + ", engine " + Q.engine[worstReq] + ") took " + fmt(worstLat) + " cycles"]);
-  $("obs").innerHTML = out.map(([s, t]) => "<li" + (s ? " style=\"color:var(--" + (s === "crit" ? "crit" : "ink") + ")\"" : "") + ">" + (s === "warn" ? "⚠ " : s === "crit" ? "✖ " : "") + t + "</li>").join("");
+  $("obs").innerHTML = out.map(([s, t]) => "<li" + (s ? " style=\"color:var(--" + (s === "crit" ? "crit" : "ink") + ")\"" : "") + ">" + (s === "warn" ? "⚠ " : s === "crit" ? "✖ " : "") + esc(t) + "</li>").join("");
 }
 
 // ------------------------------------------------------------------ inspector
-const kv = pairs => "<div class=\"kv\">" + pairs.map(p => p.length === 1 ? "<div class=\"h\">" + p[0] + "</div>" : "<span>" + p[0] + "</span><span>" + p[1] + "</span>").join("") + "</div>";
+const kv = pairs => "<div class=\"kv\">" + pairs.map(p => p.length === 1 ? "<div class=\"h\">" + esc(p[0]) + "</div>" : "<span>" + esc(p[0]) + "</span><span>" + esc(p[1]) + "</span>").join("") + "</div>";
 function burstPairs(i) {
   const B = R.B;
   return [["burst #" + i], ["coords", "mc " + B.mc[i] + " ch " + B.channel[i] + " bg " + B.bank_group[i] + " ba " + B.bank[i] + " row " + B.row[i] + " col " + B.col[i]],
@@ -792,7 +798,7 @@ function start() {
   prepare();
   $("load").hidden = true; $("main").hidden = false;
   const m = R.m, ceil = m.ceiling_bytes_per_cycle || 0, bpc = D.bytes / D.makespan;
-  const chip = (k, v) => "<span class=\"chip\">" + k + " <b>" + v + "</b></span>";
+  const chip = (k, v) => "<span class=\"chip\">" + esc(k) + " <b>" + esc(v) + "</b></span>";
   $("summary").innerHTML = [
     chip("device", m.device), chip("makespan", fmt(m.makespan) + " cycles"), chip("requests", fmt(R.Q.rows)),
     chip("bytes", fmt(D.bytes)), chip("bandwidth", bpc.toFixed(1) + " B/cycle" + (ceil ? " (" + (100 * bpc / ceil).toFixed(0) + "% of " + ceil.toFixed(1) + ")" : "")),
