@@ -113,6 +113,16 @@ public:
             return Ti * Tj * element_size;
         }
 
+        /// One tile of `matrix`, in bytes: A is Ti x Tk, B is Tk x Tj, C is Ti x Tj.
+        /// (tile_size_bytes() is C's, and all three when the tiles are square.)
+        [[nodiscard]] Size tile_bytes(isa::MatrixID matrix) const {
+            switch (matrix) {
+                case isa::MatrixID::A: return Ti * Tk * element_size;
+                case isa::MatrixID::B: return Tk * Tj * element_size;
+                default:               return Ti * Tj * element_size;
+            }
+        }
+
         /**
          * @brief Calculate number of tiles in M dimension
          */
@@ -498,10 +508,12 @@ private:
         tile.tile_id.tj = tj;
         tile.tile_id.tk = tk;
 
-        tile.height = config_.Ti;
-        tile.width = config_.Tj;
+        // Each matrix's own tile shape: A is Ti x Tk, B is Tk x Tj, C is Ti x Tj. The compute
+        // model reads K from A's width as fed (docs/plans/system-schedule-debugger.md §3.2).
+        tile.height = matrix == isa::MatrixID::B ? config_.Tk : config_.Ti;
+        tile.width = matrix == isa::MatrixID::A ? config_.Tk : config_.Tj;
         tile.element_size = config_.element_size;
-        tile.size_bytes = config_.tile_size_bytes();
+        tile.size_bytes = config_.tile_bytes(matrix);
 
         // Calculate DRAM address and set matrix base address
         tile.dram_address = calculate_address(matrix, ti, tj, tk);
@@ -524,7 +536,7 @@ private:
      * @brief Calculate DRAM address for a tile
      */
     Address calculate_address(isa::MatrixID matrix, Size ti, Size tj, Size tk) const {
-        Size tile_bytes = config_.tile_size_bytes();
+        const Size tile_bytes = config_.tile_bytes(matrix);
 
         switch (matrix) {
             case isa::MatrixID::A:

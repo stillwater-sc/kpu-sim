@@ -21,6 +21,7 @@
 #include <sw/kpu/program/value_tolerance.hpp>
 #include <sw/kpu/timing/csp_config_from_spec.hpp>
 #include <sw/kpu/timing/schedule/matmul_schedule_generator.hpp>
+#include <sw/kpu/timing/schedule/schedule_executor.hpp>
 
 #include <cstdio>
 #include <algorithm>
@@ -545,4 +546,39 @@ TEST_CASE("Compute fabric: one compute at a time per compute tile, latency from 
         CHECK_THROWS_WITH(exec.schedule_compute(t, std::vector<TileID>{}),
                           ContainsSubstring("names compute tile 2; the fabric has 2"));
     }
+}
+
+// Review of step 2: K comes from the A inputs' widths as fed, so a non-square schedule must give
+// A its true shape (Ti x Tk), not Ti x Tj.
+TEST_CASE("Compute fabric: K is the A tiles' width, with non-square tiles",
+          "[timing][csp][compute]") {
+    MatMulScheduleGenerator::Config g;
+    g.M = 64; g.N = 64; g.K = 64;
+    g.Ti = 16; g.Tj = 32; g.Tk = 8;
+    const auto schedule = MatMulScheduleGenerator(g).generate();
+    REQUIRE(schedule.valid);
+    for (const auto& op : schedule.operations) {
+        const auto& t = op.tile;
+        if (t.tile_id.matrix == MatrixID::A) { CHECK(t.height == 16); CHECK(t.width == 8); CHECK(t.size_bytes == 16 * 8 * 4); }
+        if (t.tile_id.matrix == MatrixID::B) { CHECK(t.height == 8); CHECK(t.width == 32); CHECK(t.size_bytes == 8 * 32 * 4); }
+        if (t.tile_id.matrix == MatrixID::C) { CHECK(t.height == 16); CHECK(t.width == 32); CHECK(t.size_bytes == 16 * 32 * 4); }
+    }
+    // A[ti, tk] tiles are packed by their own size: consecutive k tiles are 512 bytes apart.
+    std::map<std::pair<Size, Size>, Address> a_at;
+    for (const auto& op : schedule.operations)
+        if (op.tile.tile_id.matrix == MatrixID::A) a_at[{op.tile.tile_id.ti, op.tile.tile_id.tk}] = op.tile.dram_address;
+    CHECK(a_at.at({0, 1}) - a_at.at({0, 0}) == 16 * 8 * 4);
+
+    // On the fabric, each compute is 16 x 32 x 64 MACs: fill 2 x 32, then 32768 / 8192.
+    auto c = csp_config_from(device("kpu_s1.json"))->config;
+    ConcurrentTimingExecutor exec(c);
+    ScheduleExecutor run(exec);
+    REQUIRE(run.execute(schedule).success);
+    std::size_t computes = 0;
+    for (const auto& e : exec.events())
+        if (e.type == EventType::COMPUTE_COMPLETE) {
+            ++computes;
+            CHECK(e.duration == 64 + (16 * 32 * 64) / 8192);
+        }
+    CHECK(computes == (64 / 16) * (64 / 32));
 }

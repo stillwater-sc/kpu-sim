@@ -374,9 +374,11 @@ Each step is one PR and ends green.
        hand-built config keeps), `macs_per_cycle` (0 = the legacy latency) and
        `compute_fill_per_edge` (2.0).
      - **Latency:** `ceil(2 x the result's longer edge) + ceil(rows x cols x K / macs_per_cycle)`.
-       K is summed over the compute's A inputs, each at its width as fed. The generator sizes
-       every tile as `Ti x Tj`, so K is exact for today's square tiles; non-square tiles need
-       the generator fixed first.
+       K is summed over the compute's A inputs, each at its width as fed.
+     - **The matmul generator gives each matrix its own tile shape:** A is `Ti x Tk`, B is
+       `Tk x Tj`, C is `Ti x Tj` (`Config::tile_bytes(matrix)`, used for sizes and DRAM
+       addresses). It used to size every tile `Ti x Tj`, which made K wrong for non-square
+       tiles (found in review). Square tiles are unchanged.
      - **Assignment:** `TileDescriptor::cf_tile` names the compute tile, beside `l3_tile`; the
        plan's `ScheduleOperation::cf_tile` would not reach the executor's compute overloads,
        which take a descriptor. Unnamed computes take the first free tile. A tile whose compute
