@@ -196,7 +196,9 @@ struct Channel {
     bool deferred_cmd_bus_idle_trace = false;
 
     // tFAW tracking (circular buffer of last 4 activate times)
-    std::array<uint64_t, 4> activate_window = {0, 0, 0, 0};
+    // kNever = no activate yet. (A 0 here read as "empty", so an ACT at controller cycle 0
+    // was invisible to tFAW -- mflow_check.py M5 caught five ACTs in 24 ticks against 32.)
+    std::array<uint64_t, 4> activate_window = {kNever, kNever, kNever, kNever};
     uint8_t activate_index = 0;
 
     // Per-bank refresh tracking

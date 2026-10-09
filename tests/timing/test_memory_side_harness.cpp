@@ -23,6 +23,7 @@
 #include <limits>
 #include <fstream>
 #include <map>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -194,6 +195,86 @@ TEST_CASE("Harness: the step-3 table reproduces -- one engine at W = 32 saturate
     CAPTURE(peak, one, many);
     CHECK(one >= 0.90 * peak);
     CHECK(many < 0.80 * peak);
+}
+
+// docs/plans/system-schedule-debugger.md step 1: engines post, the controller grants.
+TEST_CASE("Arbitration: round-robin serves every waiting engine; fixed serves them in turn",
+          "[timing][memside][arbitration]") {
+    namespace rec = sw::kpu::program::record;
+    using Arb = MemoryControllerProcess::Config::Arbitration;
+    // Eight engines on one controller, each with the same stream of loads, all offered at once.
+    auto run = [](Arb a, std::uint32_t quantum) {
+        const DeviceSpecification d = t4();
+        MemorySideHarness::Config c;
+        c.arbitration = a;
+        c.grant_quantum = quantum;
+        c.l3_slots = 4096;
+        c.ports.infinite = true;
+        MemorySideHarness probe(d, c);
+        c.streams = {{probe.port_of(0), stream(64), 0}};
+        MemorySideHarness h(d, c);
+        REQUIRE(h.run());
+        return to_record(h, d.name);
+    };
+    // Each engine's first and last grant.
+    auto spans = [](const rec::MemoryFlowRecord& r) {
+        std::map<std::uint32_t, std::pair<sw::kpu::timing::Cycle, sw::kpu::timing::Cycle>> s;
+        for (const auto& b : r.bursts) {
+            auto [it, fresh] = s.try_emplace(b.engine, b.submitted, b.submitted);
+            if (!fresh) { it->second.first = std::min(it->second.first, b.submitted);
+                          it->second.second = std::max(it->second.second, b.submitted); }
+        }
+        return s;
+    };
+
+    const auto rr = run(Arb::RoundRobin, 1);
+    REQUIRE(rr.bursts.size() == 64 * 64);
+    CHECK(rr.arbitration == "round_robin");
+    // Every engine is granted within the first cycles, and served until near the end: the
+    // engines overlap instead of taking turns.
+    for (const auto& [e, sp] : spans(rr)) {
+        CAPTURE(e, sp.first, sp.second);
+        CHECK(sp.first <= 2);
+        CHECK(sp.second * 10 >= rr.makespan * 8);
+    }
+    // One burst per engine per turn: in any window of 8 consecutive grants while all eight have
+    // work, no engine appears twice.
+    for (std::size_t i = 0; i + 8 <= rr.bursts.size() / 2; ++i) {
+        std::set<std::uint32_t> seen;
+        for (std::size_t k = i; k < i + 8; ++k) seen.insert(rr.bursts[k].engine);
+        CHECK(seen.size() == 8);
+    }
+    // A grant never precedes its post, and the wait for it is recorded.
+    for (const auto& b : rr.bursts) CHECK(b.posted < b.submitted);
+
+    // Each engine's median grant: round-robin serves them together, fixed priority one after
+    // another, the lowest id first. (Fixed is not strictly serial: an engine whose window is full
+    // posts nothing, and the next engine takes the slot.)
+    auto medians = [](const rec::MemoryFlowRecord& r) {
+        std::map<std::uint32_t, std::vector<sw::kpu::timing::Cycle>> g;
+        for (const auto& b : r.bursts) g[b.engine].push_back(b.submitted);
+        std::vector<double> m;
+        for (auto& [e, v] : g) { std::sort(v.begin(), v.end()); m.push_back(static_cast<double>(v[v.size() / 2])); }
+        return m;
+    };
+    const auto rm = medians(rr);
+    CHECK(*std::max_element(rm.begin(), rm.end()) - *std::min_element(rm.begin(), rm.end()) <
+          0.10 * static_cast<double>(rr.makespan));
+    const auto fx = run(Arb::Fixed, 1);
+    CHECK(fx.arbitration == "fixed");
+    const auto fm = medians(fx);
+    for (std::size_t e = 1; e < fm.size(); ++e) CHECK(fm[e] > fm[e - 1]);
+    CHECK(fm.back() - fm.front() > 0.5 * static_cast<double>(fx.makespan));
+
+    // A quantum of Q grants up to Q bursts to an engine per turn.
+    const auto q4 = run(Arb::RoundRobin, 4);
+    CHECK(q4.grant_quantum == 4);
+    std::size_t longest = 0, run_len = 0;
+    for (std::size_t k = 0; k < q4.bursts.size() / 2; ++k) {
+        run_len = (k && q4.bursts[k].engine == q4.bursts[k - 1].engine) ? run_len + 1 : 1;
+        longest = std::max(longest, run_len);
+    }
+    CHECK(longest == 4);
 }
 
 TEST_CASE("Harness: a device it cannot run is refused by name", "[timing][memside]") {

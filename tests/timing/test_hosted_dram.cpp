@@ -58,11 +58,14 @@ TileDescriptor tile_at(std::uint64_t addr, std::uint64_t bytes, Size ti = 0) {
     return t;
 }
 
-// Run the controller until every submitted tile completed; the cycle each one finished.
+// Run the controller until every submitted tile completed; the cycle each one finished. Tiles
+// are posted as an engine posts them: one waiting for the arbiter at a time, so the next is
+// posted once the controller has granted the last (docs/plans/system-schedule-debugger.md §3.1).
 std::vector<Cycle> run(MemoryControllerProcess& mc, const std::vector<TileDescriptor>& tiles) {
-    for (const auto& t : tiles) REQUIRE(mc.submit_request(t, true, 0));
+    std::size_t posted = 0;
     std::vector<Cycle> done;
     for (Cycle c = 1; done.size() < tiles.size() && c < 1'000'000; ++c) {
+        while (posted < tiles.size() && mc.submit_request(tiles[posted], true, 0)) ++posted;
         mc.tick(c);
         while (auto ct = mc.get_completed_transfer(0)) done.push_back(ct->complete_cycle);
     }

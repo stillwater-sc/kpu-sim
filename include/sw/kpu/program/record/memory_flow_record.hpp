@@ -42,7 +42,9 @@
 namespace sw::kpu::program::record {
 
 // Version 2: commands carry their controller-clock ticks, and the manifest the timing table.
-inline constexpr std::uint32_t kMflowVersion = 2;
+// Version 3: bursts carry t_posted (the engine posted it; t_submit is the controller's grant) and
+// the manifest the controllers' arbitration.
+inline constexpr std::uint32_t kMflowVersion = 3;
 inline constexpr std::uint32_t kNone = 0xFFFFFFFFu;
 
 struct MemoryFlowRecord {
@@ -62,6 +64,7 @@ struct MemoryFlowRecord {
         bool is_load = true;
         Outcome outcome = Outcome::Unknown;
         Cycle submitted = 0, first_command = 0, data_start = 0, data_end = 0, done = 0;
+        Cycle posted = 0;                   // posted by its engine; `submitted` is the grant
     };
     struct Command {
         std::uint8_t mc = 0, channel = 0, bank_group = 0, bank = 0;
@@ -88,6 +91,8 @@ struct MemoryFlowRecord {
     std::string timing_note;                // the DRAM timing table's provenance
     double ceiling_bytes_per_cycle = 0;     // every controller's data buses at full rate (0 = unknown)
     std::uint32_t burst_bytes = 0;          // one DRAM burst
+    std::string arbitration = "round_robin";    // how controllers grant engines: round_robin | fixed
+    std::uint32_t grant_quantum = 1;        // round_robin: bursts per engine per turn
     double ticks_per_cycle = 0;             // controller clock ticks per executor cycle
     std::vector<std::pair<std::string, std::uint32_t>> dram_timing;   // name -> controller ticks
     std::vector<Station> stations;

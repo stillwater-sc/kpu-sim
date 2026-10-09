@@ -135,6 +135,8 @@ void write_mflow(const MFR& rec, const std::string& dir) {
     m["timing_note"] = rec.timing_note;
     m["ceiling_bytes_per_cycle"] = rec.ceiling_bytes_per_cycle;
     m["burst_bytes"] = rec.burst_bytes;
+    m["arbitration"] = rec.arbitration;
+    m["grant_quantum"] = rec.grant_quantum;
     json params = json::object();
     for (const auto& [name, ticks] : rec.dram_timing) params[name] = ticks;
     m["dram_timing"] = json{{"unit", "controller clock tick"}, {"ticks_per_cycle", rec.ticks_per_cycle},
@@ -158,6 +160,7 @@ void write_mflow(const MFR& rec, const std::string& dir) {
         t.put("bank", "u8", column<std::uint8_t>(v, +[](const MFR::Burst& b) { return b.bank; }));
         t.put("is_load", "u8", column<std::uint8_t>(v, +[](const MFR::Burst& b) -> std::uint8_t { return b.is_load; }));
         t.put("outcome", "u8", column<std::uint8_t>(v, +[](const MFR::Burst& b) { return static_cast<std::uint8_t>(b.outcome); }));
+        t.put("t_posted", "f64", column<double>(v, +[](const MFR::Burst& b) { return static_cast<double>(b.posted); }));
         t.put("t_submit", "f64", column<double>(v, +[](const MFR::Burst& b) { return static_cast<double>(b.submitted); }));
         t.put("t_cmd", "f64", column<double>(v, +[](const MFR::Burst& b) { return static_cast<double>(b.first_command); }));
         t.put("t_data0", "f64", column<double>(v, +[](const MFR::Burst& b) { return static_cast<double>(b.data_start); }));
@@ -246,6 +249,8 @@ MFR read_mflow(const std::string& dir) {
     rec.timing_note = m.value("timing_note", "");
     rec.ceiling_bytes_per_cycle = m.value("ceiling_bytes_per_cycle", 0.0);
     rec.burst_bytes = m.value("burst_bytes", 0u);
+    rec.arbitration = m.value("arbitration", "round_robin");
+    rec.grant_quantum = m.value("grant_quantum", 1u);
     if (m.contains("dram_timing")) {
         const json& dt = m.at("dram_timing");
         rec.ticks_per_cycle = dt.value("ticks_per_cycle", 0.0);
@@ -285,6 +290,7 @@ MFR read_mflow(const std::string& dir) {
         auto ba = read_col<std::uint8_t>(t, b, "bank", "u8", n);
         auto ld = read_col<std::uint8_t>(t, b, "is_load", "u8", n);
         auto oc = read_col<std::uint8_t>(t, b, "outcome", "u8", n);
+        auto tp = read_col<double>(t, b, "t_posted", "f64", n);
         auto ts = read_col<double>(t, b, "t_submit", "f64", n);
         auto tc = read_col<double>(t, b, "t_cmd", "f64", n);
         auto d0 = read_col<double>(t, b, "t_data0", "f64", n);
@@ -295,7 +301,7 @@ MFR read_mflow(const std::string& dir) {
                 throw RecordError("record: burst " + std::to_string(i) + " has an unknown outcome");
             rec.bursts.push_back({engine[i], request[i], mc[i], ch[i], rk[i], bg[i], ba[i], row[i], col[i],
                                   ld[i] != 0, static_cast<MFR::Outcome>(oc[i]), t64(ts, i), t64(tc, i),
-                                  t64(d0, i), t64(d1, i), t64(td, i)});
+                                  t64(d0, i), t64(d1, i), t64(td, i), t64(tp, i)});
         }
     }
     {

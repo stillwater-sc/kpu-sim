@@ -109,7 +109,7 @@ class MflowCheckSelfTest(unittest.TestCase):
     def test_clean_bundle_passes(self):
         code, report = run(self.b.dir)
         self.assertEqual(code, 0, report and report["violations"][:5])
-        self.assertEqual(report["checked"], ["TF10", "TF11", "M1", "M2", "M3", "M4", "M5"])
+        self.assertEqual(report["checked"], ["TF10", "TF11", "M1", "M2", "M3", "M4", "M6", "M5"])
 
     def test_the_run_exercises_what_is_checked(self):
         # A check over nothing passes vacuously: the clean run must hold conflicts (PRE then
@@ -201,6 +201,30 @@ class MflowCheckSelfTest(unittest.TestCase):
         self.b.set("bursts", "t_done", 0, self.b.get("bursts", "t_data0", 0) - 1)
         self.assertFails("M4", "not ordered")
 
+    # -- M6 -----------------------------------------------------------------
+    def test_m6_an_engine_passed_over(self):
+        # The last engine's bursts posted at cycle 0: it waits from the start while the other
+        # engines are granted turn after turn -- a fixed-priority arbiter's signature.
+        self.assertEqual(self.b.manifest["arbitration"], "round_robin")
+        last = max(self.b.get("bursts", "engine", i) for i in range(self.b.rows("bursts")))
+        first_grant = min(self.b.get("bursts", "t_submit", i) for i in range(self.b.rows("bursts"))
+                          if self.b.get("bursts", "engine", i) == last)
+        self.assertGreater(first_grant, 1, "the clean run must grant the last engine late for this test")
+        for i in range(self.b.rows("bursts")):
+            if self.b.get("bursts", "engine", i) == last:
+                self.b.set("bursts", "t_posted", i, 0.0)
+        self.assertFails("M6", f"while engine {last} waited")
+
+    def test_m6_is_not_applied_to_fixed_priority(self):
+        self.b.manifest["arbitration"] = "fixed"
+        self.b.save_manifest()
+        code, report = run(self.b.dir)
+        self.assertEqual(code, 0, report and report["violations"][:3])
+
+    def test_a_grant_before_its_post_is_refused_by_m4(self):
+        self.b.set("bursts", "t_posted", 0, self.b.get("bursts", "t_submit", 0) + 1)
+        self.assertFails("M4", "posted")
+
     # -- M5: every parameter, by tightening the table the run is checked against --------------
     def test_m5_each_parameter_is_checked(self):
         for p in ("tRCD", "tRP", "tRAS", "tRC", "tRFCpb", "tRRD_L", "tRRD_S", "tCCD_L", "tCCD_S", "tFAW"):
@@ -224,8 +248,15 @@ class MflowCheckSelfTest(unittest.TestCase):
         self.assertFails("M5", "tRCD")
 
     # -- unreadable ---------------------------------------------------------
-    def test_a_version_1_bundle_is_refused(self):
-        self.b.manifest["version"] = 1
+    def test_older_versions_are_refused(self):
+        for v in (1, 2):
+            with self.subTest(version=v):
+                self.b.manifest["version"] = v
+                self.b.save_manifest()
+                self.assertUnreadable()
+
+    def test_an_unknown_arbitration_is_refused(self):
+        self.b.manifest["arbitration"] = "lottery"
         self.b.save_manifest()
         self.assertUnreadable()
 

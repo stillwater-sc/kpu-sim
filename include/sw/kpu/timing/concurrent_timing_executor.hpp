@@ -92,6 +92,11 @@ public:
 
         // Memory Controller configuration
         size_t mc_request_queue_depth = 32; ///< MC request queue depth
+        /// How a hosted controller grants its queue to the engines sharing it (a model option of
+        /// the controller; docs/plans/system-schedule-debugger.md §3.1).
+        MemoryControllerProcess::Config::Arbitration mc_arbitration =
+            MemoryControllerProcess::Config::Arbitration::RoundRobin;
+        uint32_t mc_grant_quantum = 1;      ///< round-robin: bursts per engine per turn
         size_t mc_num_banks = 16;           ///< Banks per MC (LPDDR5: 4 BG × 4 banks)
         double mc_bandwidth_gbps = 25.6;    ///< MC bandwidth per channel
         Cycle mc_startup_latency = 5;       ///< MC command startup latency
@@ -811,6 +816,8 @@ inline void ConcurrentTimingExecutor::create_components() {
         mc_config.controller_id = static_cast<uint32_t>(mc);
         mc_config.num_banks = config_.mc_num_banks;
         mc_config.request_queue_depth = config_.mc_request_queue_depth;
+        mc_config.arbitration = config_.mc_arbitration;
+        mc_config.grant_quantum = config_.mc_grant_quantum;
         mc_config.bandwidth_gbps = config_.mc_bandwidth_gbps;
         mc_config.startup_latency = config_.mc_startup_latency;
         mc_config.t_cl = config_.mc_t_cl;

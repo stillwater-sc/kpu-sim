@@ -9,6 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Round-robin arbitration at the memory controller (system-schedule debugger step 1,
+  `docs/plans/system-schedule-debugger.md`).**
+  - DMA engines now post bursts and tiles, and each hosted controller grants its queue from its
+    own tick: one burst per engine per turn, the burst on the least-loaded channel. Before,
+    engines took free queue slots in tick order, so the lowest engine id was served first.
+  - On the T4, all eight engines are now served throughout the run. `t4_mixed` goes from 90%
+    to 91% of the ceiling, and the infinite-sink case from 93% to 96%.
+  - `fixed` keeps the old order for comparison. `grant_quantum` grants Q bursts per turn.
+  - `.mflow` v3: bursts carry `t_posted`, and the manifest carries the arbitration.
+    `mflow_check.py` adds **M6**, a round-robin fairness check.
+  - **Fixed:** the LPDDR5 controller's tFAW window treated an activate at controller cycle 0
+    as no activate, letting a fifth ACT through early. Found by M5.
+
 - **The memory-side checker, `tools/trace/mflow_check.py` (memory-side debugger step 4; DRAM
   plan step 4).**
   - It checks a `.mflow` bundle against:

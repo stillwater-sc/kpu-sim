@@ -156,6 +156,10 @@ public:
         std::size_t window = 0;             // 0 = the spec's dma.window (required)
         std::size_t store_buffer_blocks = 0;// 0 = noc.port.output_queue_blocks, else 2
         std::size_t l3_slots = 0;           // stand-in L3 credits; 0 = l3.capacity_tiles
+        // How each controller grants its queue to its engines (a model option of the controller).
+        MemoryControllerProcess::Config::Arbitration arbitration =
+            MemoryControllerProcess::Config::Arbitration::RoundRobin;
+        std::uint32_t grant_quantum = 1;    // round-robin: bursts per engine per turn
         PortStub ports;
         std::vector<Stream> streams;
         Cycle max_cycles = 10'000'000;
@@ -205,6 +209,8 @@ public:
             mc.hosted = c.dram;
             mc.clock_ghz = c.clock_ghz;
             mc.request_queue_depth = c.mc_request_queue_depth;
+            mc.arbitration = config_.arbitration;
+            mc.grant_quantum = config_.grant_quantum;
             mc.record = true;
             mcs_.push_back(std::make_unique<MemoryControllerProcess>(mc));
         }
@@ -298,6 +304,8 @@ public:
 
     // ---- results (the .mflow record, step 3) ----
     Cycle now() const { return now_; }
+    MemoryControllerProcess::Config::Arbitration arbitration() const { return config_.arbitration; }
+    std::uint32_t grant_quantum() const { return config_.grant_quantum; }
     std::size_t window() const { return window_; }
     const std::vector<Request>& requests() const { return requests_; }
     const std::vector<BufferSample>& buffers() const { return buffer_samples_; }
@@ -543,6 +551,8 @@ inline program::record::MemoryFlowRecord to_record(const MemorySideHarness& h, c
         rec.dram_timing = h.controllers().front()->bridge()->timing_table();
     }
     rec.ceiling_bytes_per_cycle = h.ceiling_bytes_per_cycle();
+    rec.arbitration = h.arbitration() == MemoryControllerProcess::Config::Arbitration::Fixed ? "fixed" : "round_robin";
+    rec.grant_quantum = h.grant_quantum();
 
     // Stations: banks, buses, engines, store buffers, ports (memory_flow_record.hpp).
     for (std::size_t m = 0; m < h.controllers().size(); ++m) {
@@ -596,6 +606,7 @@ inline program::record::MemoryFlowRecord to_record(const MemorySideHarness& h, c
             x.col = static_cast<std::uint32_t>(b.coord.col);
             x.is_load = b.is_load;
             x.outcome = static_cast<MFR::Outcome>(b.outcome);
+            x.posted = b.posted;
             x.submitted = b.submitted;
             x.first_command = b.first_command;
             x.data_start = b.data_start;

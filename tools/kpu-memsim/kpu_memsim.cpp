@@ -11,6 +11,8 @@
 //
 // SCENARIO (JSON; unknown keys are refused; any number may be a "0x..." string):
 //   window, store_buffer_blocks, l3_slots, max_cycles      (all optional)
+//   arbitration: "round_robin" (default) | "fixed"          (the controllers' grant order)
+//   grant_quantum: bursts per engine per round-robin turn    (default 1)
 //   ports:   { infinite, block_cycles, input_queue_blocks, consume_latency, eject_interval }
 //   streams: [ { port: <n> | "first", issue_interval, model: {...} } ]
 //   model:   { kind: stream | strided | random | matrix_tiles | replay_matmul, load: bool,
@@ -132,12 +134,24 @@ RequestModel model_of(const json& m, const std::string& where) {
 }
 
 MemorySideHarness::Config scenario_of(const json& s, const sw::kpu::program::platform::DeviceSpecification& d) {
-    reject_unknown(s, {"window", "store_buffer_blocks", "l3_slots", "max_cycles", "ports", "streams"}, "scenario");
+    reject_unknown(s, {"window", "store_buffer_blocks", "l3_slots", "max_cycles", "arbitration", "grant_quantum",
+                       "ports", "streams"},
+                   "scenario");
     MemorySideHarness::Config c;
     c.window = num(s, "window", 0, "scenario");
     c.store_buffer_blocks = num(s, "store_buffer_blocks", 0, "scenario");
     c.l3_slots = num(s, "l3_slots", 0, "scenario");
     c.max_cycles = num(s, "max_cycles", c.max_cycles, "scenario");
+    c.grant_quantum = static_cast<std::uint32_t>(num(s, "grant_quantum", 1, "scenario", 1u << 20));
+    if (c.grant_quantum == 0) throw UsageError("scenario.grant_quantum must be at least 1");
+    if (s.contains("arbitration")) {
+        // A model option of the memory controller, not a schedule parameter.
+        const json& a = s.at("arbitration");
+        if (!a.is_string() || (a != "round_robin" && a != "fixed"))
+            throw UsageError("scenario.arbitration must be \"round_robin\" or \"fixed\", not " + a.dump());
+        c.arbitration = a == "fixed" ? MemoryControllerProcess::Config::Arbitration::Fixed
+                                     : MemoryControllerProcess::Config::Arbitration::RoundRobin;
+    }
     if (s.contains("ports")) {
         const json& p = s.at("ports");
         reject_unknown(p, {"infinite", "block_cycles", "input_queue_blocks", "consume_latency", "eject_interval"},
@@ -239,9 +253,9 @@ int main(int argc, char** argv) {
                     "%.1f B/cycle DRAM ceiling)\n",
                     d.name.c_str(), record.requests.size(), static_cast<unsigned long long>(h.bytes_moved()),
                     static_cast<unsigned long long>(h.now()), bpc, ceiling > 0 ? 100.0 * bpc / ceiling : 0.0, ceiling);
-        std::printf("  window %u; bursts %zu: hit %zu, empty %zu, conflict %zu; commands %zu; refusals %zu; "
-                    "ejection waits %zu\n",
-                    record.window, record.bursts.size(), outcome[1], outcome[2], outcome[3], record.commands.size(),
+        std::printf("  window %u, %s arbitration (quantum %u); bursts %zu: hit %zu, empty %zu, conflict %zu; commands %zu; "
+                    "refusals %zu; ejection waits %zu\n",
+                    record.window, record.arbitration.c_str(), record.grant_quantum, record.bursts.size(), outcome[1], outcome[2], outcome[3], record.commands.size(),
                     refusals, waits);
         std::printf("  recorded to %s\n", out.c_str());
         if (!finished) {

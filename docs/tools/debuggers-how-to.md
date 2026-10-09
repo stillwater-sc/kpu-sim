@@ -159,6 +159,8 @@ given as a `"0x..."` string.
 | `store_buffer_blocks` | depth of each DMA engine's store buffer |
 | `l3_slots` | the stand-in L3's credit pool |
 | `max_cycles` | cut-off; past it the run exits 1 |
+| `arbitration` | how each memory controller grants its engines: `round_robin` (default; one burst per engine per turn, balancing channels) or `fixed` (lowest engine id first) -- a model option of the controller |
+| `grant_quantum` | round-robin: bursts granted per engine per turn (default 1) |
 | `ports.infinite` | sink loads at once (no injection-bus limit) |
 | `ports.block_cycles` | cycles the injection bus takes per block |
 | `ports.input_queue_blocks` | depth of a port's per-engine input queue; full means refused |
@@ -197,6 +199,7 @@ The exit codes are the same as `tflow_check.py`'s.
 | M2 | a store buffer never holds more than its capacity |
 | M3 | a request's first burst comes no earlier than its credit (L3 slot or buffer slot) |
 | M4 | every burst completes once; a request's bursts are exactly the ones its bytes span |
+| M6 | with round-robin arbitration: while an engine waits with a burst posted, no other engine of its controller is granted more than two turns |
 | M5 | DRAM timing against the declared device's table (the manifest's `dram_timing`): per bank tRCD, tRP, tRAS, tRC, tRFCpb; per bank group tRRD_L, tCCD_L; per channel tRRD_S, tCCD_S, tFAW |
 
 TF10, TF11 and M5 are checked in **controller clock ticks** (the commands' `k_*` columns), not
@@ -226,7 +229,7 @@ Open `run.html`. Alternatively, open `tools/visualization/memflow/index.html` an
   |---|---|
   | `port[k] loads in` | loads crossing the injection bus, from acceptance to landing; red ticks are refused offers |
   | `port[k] ejections` | ejections delivered; amber ticks are ejections waiting for a store-buffer slot |
-  | `dma[e] bursts / W` | bursts in flight against the window (dashed line = W) |
+  | `dma[e] bursts / W` | bursts in flight against the window (dashed line = W); a burst counts from when the engine posts it |
   | `dma[e] requests` | each request from offer to retirement (blue load, orange store) |
   | `dmabuf[e] / cap` | store-buffer slots held (area) and staged (line) against capacity |
   | `mc/ch/bus` | the channel's data bus, burst by burst |

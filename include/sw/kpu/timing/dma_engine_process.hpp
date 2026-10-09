@@ -514,8 +514,10 @@ private:
         req.state = RequestState::COMPLETED;
     }
 
-    /// Burst window: submit the next bursts of the submitted tiles, oldest tile first, while
-    /// fewer than W are in flight and the controller takes them.
+    /// Burst window: post the next bursts of the submitted tiles, oldest tile first, while fewer
+    /// than W are in flight. A posted burst counts against the window; the controller grants it
+    /// from its next tick, round-robin with the other engines it serves
+    /// (MemoryControllerProcess::Config::arbitration).
     void issue_bursts(std::vector<TimingEvent>& events) {
         for (auto& req : pending_requests_) {
             if (req.state != RequestState::SUBMITTED) continue;
@@ -525,7 +527,7 @@ private:
                 continue;
             }
             while (req.sent < req.bursts && bursts_in_flight_ < config_.window) {
-                if (!mc_.submit_burst(req.tile, req.sent, req.is_load, config_.engine_id)) return;
+                mc_.post_burst(req.tile, req.sent, req.is_load, config_.engine_id);
                 if (req.sent++ == 0) {
                     req.start_cycle = current_cycle_;
                     auto e = TimingEvent(req.is_load ? EventType::DMA_LOAD_START

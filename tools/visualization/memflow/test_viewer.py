@@ -96,7 +96,7 @@ class ViewerSmokeTest(unittest.TestCase):
             "  const b = fs.readFileSync(path.join(dir, t.file));",
             "  files[t.file] = b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength); }",
             "const R = parse(files);",
-            "const used = { B: ['mc','channel','bank_group','bank','row','col','engine','request','is_load','outcome','t_submit','t_cmd','t_data0','t_data1','t_done'],",
+            "const used = { B: ['mc','channel','bank_group','bank','row','col','engine','request','is_load','outcome','t_posted','t_submit','t_cmd','t_data0','t_data1','t_done'],",
             "  C: ['mc','channel','bank_group','bank','row','kind','burst','t_issue','t_end','t_data0','t_data1'],",
             "  Q: ['engine','port','is_load','address','bytes','t_offered','t_credit','t_first','t_last','t_retired'],",
             "  F: ['engine','held','staged','t'], P: ['port','request','kind','t'] };",

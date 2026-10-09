@@ -28,6 +28,10 @@ Invariants:
     M4   bursts         every burst completes exactly once: its times are ordered inside the run,
                         exactly one RD/WR serves it, and every request's bursts are exactly the
                         ones its bytes span, from its own engine
+    M6   round robin    with round_robin arbitration: while an engine has a burst posted and not
+                        granted, no other engine of its controller is granted more than two turns
+                        (2 x grant_quantum bursts) -- a fair arbiter serves every waiting engine
+                        within one pass. (fixed arbitration is priority by design: not checked)
     M5   DRAM timing    against the DECLARED device's table (the manifest's dram_timing, the
                         table the controller ran -- not the LPDDR5-6400 table trace_validator.py
                         hard-codes): per bank tRCD, tRP, tRAS, tRC, tRFCpb; per bank group
@@ -49,7 +53,7 @@ import json
 import sys
 from pathlib import Path
 
-VERSION = 2
+VERSION = 3
 NONE = 0xFFFFFFFF
 DTYPES = {"u8": ("B", 1), "u32": ("I", 4), "u64": ("Q", 8), "f64": ("d", 8)}
 ACT, RD, WR, PRE, REF = range(5)                      # enum CommandKind, in order
@@ -60,7 +64,7 @@ EMPTY_OUTCOMES = 4                                    # enum Outcome has 4 value
 SCHEMA = {
     "bursts": {"engine": "u32", "request": "u32", "row": "u32", "col": "u32", "mc": "u8",
                "channel": "u8", "rank": "u8", "bank_group": "u8", "bank": "u8", "is_load": "u8",
-               "outcome": "u8", "t_submit": "f64", "t_cmd": "f64", "t_data0": "f64",
+               "outcome": "u8", "t_posted": "f64", "t_submit": "f64", "t_cmd": "f64", "t_data0": "f64",
                "t_data1": "f64", "t_done": "f64"},
     "commands": {"row": "u32", "burst": "u32", "mc": "u8", "channel": "u8", "bank_group": "u8",
                  "bank": "u8", "kind": "u8", "t_issue": "f64", "t_end": "f64", "t_data0": "f64",
@@ -113,9 +117,11 @@ def load(path):
         raise Unreadable(f"manifest.json: {e}") from e
     if not isinstance(m, dict) or m.get("format") != "kpu-mflow":
         raise Unreadable("not a kpu-mflow bundle")
-    if m.get("version") == 1:
-        # Version 1 has executor cycles only: too coarse to check DRAM timing against.
-        raise Unreadable("a version-1 bundle has no controller-clock columns or timing table; "
+    if m.get("version") in (1, 2):
+        # Version 1 has executor cycles only, too coarse to check DRAM timing against; version 2
+        # has no posted cycle, so the arbiter's fairness cannot be checked.
+        raise Unreadable(f"a version-{m.get('version')} bundle lacks "
+                         f"{'controller-clock columns' if m.get('version') == 1 else 'bursts.t_posted'}; "
                          "re-record it with this build's kpu-memsim")
     if m.get("version") != VERSION:
         raise Unreadable(f"version {m.get('version')!r} is not one this checker reads ({VERSION})")
@@ -134,6 +140,10 @@ def load(path):
                 _station_index(s["name"])
         if "burst_bytes" in m:
             _count(m["burst_bytes"], "burst_bytes")
+        if m.get("arbitration") not in ("round_robin", "fixed"):
+            raise Unreadable(f"arbitration is {m.get('arbitration')!r}, not round_robin or fixed")
+        if _count(m.get("grant_quantum"), "grant_quantum") == 0:
+            raise Unreadable("grant_quantum is 0")
         dt = m["dram_timing"]
         params = dt["params"]
         for p in TIMING:
@@ -338,10 +348,11 @@ def check(rec):
             served[C["burst"][i]] += 1
     of_request = [0] * nq
     for b in range(nb):
-        ts = [B["t_submit"][b], B["t_cmd"][b], B["t_data0"][b], B["t_data1"][b], B["t_done"][b]]
+        ts = [B["t_posted"][b], B["t_submit"][b], B["t_cmd"][b], B["t_data0"][b], B["t_data1"][b],
+              B["t_done"][b]]
         if any(y < x for x, y in zip(ts, ts[1:])) or ts[-1] > makespan:
-            r.fail("M4", f"burst {b}: submit {ts[0]:.0f}, first command {ts[1]:.0f}, data "
-                         f"{ts[2]:.0f}..{ts[3]:.0f}, done {ts[4]:.0f} are not ordered inside the run")
+            r.fail("M4", f"burst {b}: posted {ts[0]:.0f}, granted {ts[1]:.0f}, first command {ts[2]:.0f}, "
+                         f"data {ts[3]:.0f}..{ts[4]:.0f}, done {ts[5]:.0f} are not ordered inside the run")
         if served[b] != 1:
             r.fail("M4", f"burst {b}: served by {served[b]} RD/WR commands, not exactly one")
         q = B["request"][b]
@@ -360,6 +371,49 @@ def check(rec):
                 r.fail("M4", f"request {q}: {of_request[q]} bursts, but its {n} bytes at {a:#x} span {want}")
     else:
         r.fail("M4", "the manifest declares no burst_bytes; request spans cannot be checked")
+
+    # M6 --------------------------------------------------------------------
+    # Bursts are recorded in grant order, per controller. The arbiter may grant an engine's
+    # posted bursts out of post order (it balances channels), so an engine is waiting at grant k
+    # when any of its bursts not yet granted was posted before k's cycle: the earliest post among
+    # its later grants (a suffix minimum). The controller ticks before the engines, so a burst
+    # posted in cycle t is first eligible in cycle t+1.
+    r.ran("M6")
+    if m["arbitration"] == "round_robin":
+        limit = 2 * m["grant_quantum"]
+        by_mc = {}
+        for b in range(nb):
+            by_mc.setdefault(B["mc"][b], []).append(b)
+        for mc, grants in by_mc.items():
+            mine = {}
+            for b in grants:
+                mine.setdefault(B["engine"][b], []).append(b)
+            # earliest[e][i]: the earliest post among e's grants i, i+1, ... (inf past the end)
+            earliest = {}
+            for e, lst in mine.items():
+                suf = [float("inf")] * (len(lst) + 1)
+                for i in range(len(lst) - 1, -1, -1):
+                    suf[i] = min(suf[i + 1], B["t_posted"][lst[i]])
+                earliest[e] = suf
+            nxt = {e: 0 for e in mine}                  # how many of e's bursts are granted
+            served = {e: {} for e in mine}              # waiting engine -> {other engine: grants}
+            for b in grants:
+                e, t = B["engine"][b], B["t_submit"][b]
+                for j in mine:
+                    if j == e:
+                        continue
+                    waiting_since = earliest[j][nxt[j]]
+                    if waiting_since < t:                        # j is waiting at this grant
+                        n = served[j][e] = served[j].get(e, 0) + 1
+                        if n == limit + 1:
+                            r.fail("M6", f"mc[{mc}]: engine {e} was granted {n} bursts (cycle {int(t)}) "
+                                         f"while engine {j} waited with a burst posted at cycle "
+                                         f"{int(waiting_since)} -- more than two turns of "
+                                         f"{m['grant_quantum']}")
+                    else:
+                        served[j].clear()
+                nxt[e] += 1
+                served[e].clear()
 
     # M5 --------------------------------------------------------------------
     r.ran("M5")

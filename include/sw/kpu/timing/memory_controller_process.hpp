@@ -28,8 +28,10 @@
 #include <sw/kpu/timing/dram_bridge.hpp>
 #include <sw/kpu/timing/process_interface.hpp>
 
+#include <algorithm>
 #include <cstdint>
 #include <deque>
+#include <map>
 #include <memory>
 #include <optional>
 #include <stdexcept>
@@ -127,6 +129,18 @@ public:
         // docs/plans/memory-side-debugger.md §3.1). Off = no cost.
         bool record = false;
 
+        // How a hosted controller grants its queue to the DMA engines that share it
+        // (docs/plans/system-schedule-debugger.md §3.1). Engines POST requests; the controller
+        // grants its free queue slots -- its credits -- from its own tick.
+        //   RoundRobin: one burst per engine per pass, starting after the last engine granted.
+        //   Fixed:      the lowest engine id first, until it has nothing posted (the order the
+        //               engines' tick order used to impose; kept to measure the difference).
+        // The legacy (unhosted) model is first-come and ignores this.
+        enum class Arbitration : uint8_t { RoundRobin, Fixed };
+        Arbitration arbitration = Arbitration::RoundRobin;
+        // RoundRobin: bursts granted to one engine per turn (1 = a burst at a time).
+        uint32_t grant_quantum = 1;
+
         std::string display_name() const {
             return "MC" + std::to_string(controller_id);
         }
@@ -198,9 +212,30 @@ public:
         return (end - first) / b;
     }
 
-    /// Submit burst `index` of `tile`. False = the controller's queue is full (back-pressure).
+    /// Post burst `index` of `tile` for the arbiter. Posted bursts wait, in order, per engine;
+    /// the controller grants them from its next tick (Config::arbitration). Never refused: the
+    /// engine's window bounds what it posts.
+    void post_burst(const TileDescriptor& tile, std::uint64_t index, bool is_load, uint32_t submitter_id) {
+        if (tile.dram_address + tile.size_bytes > bridge_->map().capacity())
+            throw std::out_of_range(
+                config_.name + ": tile " + std::to_string(tile.dram_address) + " + " +
+                std::to_string(tile.size_bytes) + " B runs past the declared DRAM (" +
+                std::to_string(bridge_->map().capacity()) + " B)");
+        posted_bursts_[submitter_id].push_back({tile, index, is_load, current_cycle_});
+    }
+
+    /// Bursts posted and not yet granted, all engines.
+    [[nodiscard]] std::size_t posted_bursts() const {
+        std::size_t n = 0;
+        for (const auto& [e, q] : posted_bursts_) n += q.size();
+        return n;
+    }
+
+    /// Submit burst `index` of `tile` straight into the controller's queue, bypassing the
+    /// arbiter. False = the queue is full (back-pressure). The arbiter grants through this; a
+    /// DMA engine posts (post_burst) instead.
     bool submit_burst(const TileDescriptor& tile, std::uint64_t index, bool is_load,
-                      uint32_t submitter_id) {
+                      uint32_t submitter_id, std::optional<Cycle> posted = std::nullopt) {
         const std::uint64_t b = burst_bytes();
         const auto& map = bridge_->map();
         if (tile.dram_address + tile.size_bytes > map.capacity())
@@ -215,7 +250,9 @@ public:
             --next_burst_id_;
             return false;
         }
-        bursts_[id] = BurstDone{tile.tile_id, is_load, submitter_id};
+        const unsigned channel = map.decode(address).channel;
+        bursts_[id] = BurstDone{tile.tile_id, is_load, submitter_id, channel};
+        ++outstanding_[channel];
         if (config_.record) {
             BurstRecord r;
             r.id = id;
@@ -225,6 +262,7 @@ public:
             r.address = address;
             r.coord = map.decode(address);
             r.submitted = current_cycle_;
+            r.posted = posted.value_or(current_cycle_);
             burst_index_[id] = burst_records_.size();
             burst_records_.push_back(r);
         }
@@ -235,6 +273,7 @@ public:
         TileID tile;
         bool is_load = true;
         uint32_t submitter_id = 0;
+        unsigned channel = 0;           // where it ran (the arbiter balances channels)
     };
 
     // ---- Recording (Config::record) ----
@@ -246,7 +285,8 @@ public:
         bool is_load = true;
         uint64_t address = 0;               // the burst's first byte
         program::platform::DramCoord coord; // decoded by the spec's map
-        Cycle submitted = 0;                // into the controller's queue
+        Cycle posted = 0;                   // posted by its engine, waiting for a grant
+        Cycle submitted = 0;                // granted: into the controller's queue
         Cycle first_command = 0;            // its first command: ACT, or the CAS on a page hit
         Cycle data_start = 0, data_end = 0; // its CAS's data-bus window
         Cycle done = 0;                     // reported complete
@@ -283,7 +323,7 @@ public:
      * process them respecting command bus and bank state constraints.
      */
     bool submit_request(const TileDescriptor& tile, bool is_load, uint32_t submitter_id = 0) {
-        if (bridge_) return submit_hosted(tile, is_load, submitter_id);
+        if (bridge_) return post_hosted(tile, is_load, submitter_id);
         if (request_queue_.size() >= config_.request_queue_depth) {
             return false;  // Queue full
         }
@@ -396,12 +436,12 @@ public:
     }
 
     [[nodiscard]] bool is_idle() const override {
-        if (bridge_) return hosted_.empty() && bursts_.empty() && !bridge_->busy();
+        if (bridge_) return hosted_.empty() && bursts_.empty() && !bridge_->busy() && nothing_posted();
         return in_flight_.empty();
     }
 
     [[nodiscard]] bool has_pending_work() const override {
-        if (bridge_) return !hosted_.empty() || !bursts_done_.empty();
+        if (bridge_) return !hosted_.empty() || !bursts_done_.empty() || !nothing_posted();
         return !request_queue_.empty();
     }
 
@@ -410,7 +450,8 @@ public:
      */
     [[nodiscard]] bool is_complete() const override {
         if (bridge_)
-            return hosted_.empty() && bursts_.empty() && bursts_done_.empty() && !bridge_->busy();
+            return hosted_.empty() && bursts_.empty() && bursts_done_.empty() && !bridge_->busy() &&
+                   nothing_posted();
         return request_queue_.empty() && in_flight_.empty();
     }
 
@@ -446,6 +487,10 @@ public:
         burst_records_.clear();
         burst_index_.clear();
         command_records_.clear();
+        posted_bursts_.clear();
+        posted_tiles_.clear();
+        outstanding_.clear();
+        rr_next_ = rr_feed_next_ = 0;
         if (bridge_) bridge_->reset();
     }
 
@@ -506,6 +551,97 @@ private:
     std::uint64_t next_burst_id_ = 0;
     std::unordered_map<std::uint64_t, BurstDone> bursts_;     // in the controller
     std::deque<BurstDone> bursts_done_;                       // finished, for submitters to poll
+
+    // Arbitration (Config::arbitration). Engines post; the controller grants from its tick.
+    struct PostedBurst { TileDescriptor tile; std::uint64_t index = 0; bool is_load = true; Cycle posted = 0; };
+    struct PostedTile { TileDescriptor tile; bool is_load = true; Cycle posted = 0; };
+    std::map<std::uint32_t, std::deque<PostedBurst>> posted_bursts_;   // by engine id, in order
+    std::map<std::uint32_t, PostedTile> posted_tiles_;                 // at most one per engine
+    std::uint32_t rr_next_ = 0;         // the engine id the next grant pass starts at
+    std::map<unsigned, std::size_t> outstanding_;   // granted window bursts not yet done, by channel
+    std::uint32_t rr_feed_next_ = 0;    // the same, for feeding admitted tiles' bursts
+
+    unsigned channel_of(const PostedBurst& p) const {
+        const std::uint64_t b = bridge_->map().burst_bytes();
+        return bridge_->map().decode(p.tile.dram_address / b * b + p.index * b).channel;
+    }
+
+    bool nothing_posted() const {
+        if (!posted_tiles_.empty()) return false;
+        for (const auto& [e, q] : posted_bursts_) if (!q.empty()) return false;
+        return true;
+    }
+
+    // The engines with work, in grant order: round-robin starts at rr_next, wrapping; fixed
+    // starts at the lowest id.
+    template <class Map>
+    std::vector<std::uint32_t> grant_order(const Map& m, std::uint32_t next) const {
+        std::vector<std::uint32_t> ids;
+        for (const auto& kv : m) ids.push_back(kv.first);
+        if (config_.arbitration == Config::Arbitration::RoundRobin) {
+            auto at = std::lower_bound(ids.begin(), ids.end(), next);
+            std::rotate(ids.begin(), at, ids.end());
+        }
+        return ids;
+    }
+
+    // Grant posted bursts to the controller's queue. Round-robin: pass after pass, one burst per
+    // engine per pass, until the queue refuses or nothing is posted. Fixed: each engine in id
+    // order, all of its posted bursts, until the queue refuses.
+    void arbitrate_bursts() {
+        const bool rr = config_.arbitration == Config::Arbitration::RoundRobin;
+        for (bool granted = true; granted;) {
+            granted = false;
+            for (std::uint32_t e : grant_order(posted_bursts_, rr_next_)) {
+                auto& q = posted_bursts_.at(e);
+                uint32_t turn = 0;
+                while (!q.empty()) {
+                    // Round-robin: of the engine's posted bursts, the one whose channel has the
+                    // fewest bursts outstanding (the oldest on a tie). A tile's bursts are
+                    // independent -- it completes when all are home -- and engines that walk
+                    // their tiles in step would otherwise all queue on one channel at a time.
+                    auto pick = q.begin();
+                    if (rr) {
+                        std::size_t best = ~std::size_t{0};
+                        for (auto it = q.begin(); it != q.end(); ++it) {
+                            const std::size_t o = outstanding_[channel_of(*it)];
+                            if (o < best) { best = o; pick = it; }
+                        }
+                    }
+                    const PostedBurst p = *pick;
+                    if (!submit_burst(p.tile, p.index, p.is_load, e, p.posted)) return;   // queue full
+                    q.erase(pick);
+                    granted = true;
+                    rr_next_ = e + 1;
+                    if (rr && ++turn >= std::max<uint32_t>(1, config_.grant_quantum)) break;   // the turn's quantum
+                }
+            }
+            if (!rr) return;                        // fixed: one sweep drains in priority order
+        }
+    }
+
+    // Tile path: an engine posts one tile at a time (a second is refused, and the engine keeps
+    // its L3 credit only while it waits for a grant).
+    bool post_hosted(const TileDescriptor& tile, bool is_load, uint32_t submitter_id) {
+        if (posted_tiles_.count(submitter_id)) return false;
+        if (tile.dram_address + tile.size_bytes > bridge_->map().capacity())
+            throw std::out_of_range(
+                config_.name + ": tile " + std::to_string(tile.dram_address) + " + " +
+                std::to_string(tile.size_bytes) + " B runs past the declared DRAM (" +
+                std::to_string(bridge_->map().capacity()) + " B)");
+        posted_tiles_[submitter_id] = {tile, is_load, current_cycle_};
+        return true;
+    }
+
+    // Admit posted tiles to the controller, in grant order, while it has room.
+    void arbitrate_tiles() {
+        for (std::uint32_t e : grant_order(posted_tiles_, rr_next_)) {
+            const PostedTile& p = posted_tiles_.at(e);
+            if (!submit_hosted(p.tile, p.is_load, e)) return;        // full
+            posted_tiles_.erase(e);
+            rr_next_ = e + 1;
+        }
+    }
 
     // Recording
     std::vector<BurstRecord> burst_records_;
@@ -637,23 +773,51 @@ private:
     void tick_hosted(Cycle now, std::vector<TimingEvent>& events) {
         ensure_recording();
         const std::uint64_t b = bridge_->map().burst_bytes();
-        // Feed bursts, oldest tile first, until the controller's queue refuses one.
+        // Grant what the engines posted last cycle: window bursts, and whole tiles.
+        arbitrate_bursts();
+        arbitrate_tiles();
+
+        // Feed admitted tiles' bursts until the controller's queue refuses one. Round-robin: one
+        // burst per engine per pass, each engine's oldest tile first. Fixed: oldest tile first.
         bool full = false;
-        for (std::uint32_t id : hosted_order_) {
-            HostedTile& h = hosted_.at(id);
-            while (h.fed < h.bursts) {
-                if (!bridge_->submit(h.first + h.fed * b, h.req.is_load, id)) { full = true; break; }
-                if (h.fed++ == 0) {
-                    h.start = now;
-                    auto e = TimingEvent(h.req.is_load ? EventType::DMA_LOAD_START
-                                                       : EventType::DMA_STORE_START,
-                                         now, config_.controller_id, h.req.tile.tile_id, name());
-                    e.matrix_base_address = h.req.tile.matrix_base_address;
-                    e.dram_address = h.req.tile.dram_address;
-                    events.push_back(e);
+        auto feed = [&](HostedTile& h, std::uint32_t id) {
+            if (!bridge_->submit(h.first + h.fed * b, h.req.is_load, id)) return false;
+            if (h.fed++ == 0) {
+                h.start = now;
+                auto e = TimingEvent(h.req.is_load ? EventType::DMA_LOAD_START
+                                                   : EventType::DMA_STORE_START,
+                                     now, config_.controller_id, h.req.tile.tile_id, name());
+                e.matrix_base_address = h.req.tile.matrix_base_address;
+                e.dram_address = h.req.tile.dram_address;
+                events.push_back(e);
+            }
+            return true;
+        };
+        if (config_.arbitration == Config::Arbitration::RoundRobin) {
+            std::map<std::uint32_t, std::deque<std::uint32_t>> by_engine;   // engine -> tiles, oldest first
+            for (std::uint32_t id : hosted_order_) {
+                const HostedTile& h = hosted_.at(id);
+                if (h.fed < h.bursts) by_engine[h.req.submitter_id].push_back(id);
+            }
+            for (bool fed = true; fed && !full;) {
+                fed = false;
+                for (std::uint32_t e : grant_order(by_engine, rr_feed_next_)) {
+                    auto& tiles = by_engine.at(e);
+                    if (tiles.empty()) continue;
+                    HostedTile& h = hosted_.at(tiles.front());
+                    if (!feed(h, tiles.front())) { full = true; break; }
+                    if (h.fed == h.bursts) tiles.pop_front();
+                    fed = true;
+                    rr_feed_next_ = e + 1;
                 }
             }
-            if (full) break;
+        } else {
+            for (std::uint32_t id : hosted_order_) {
+                HostedTile& h = hosted_.at(id);
+                while (h.fed < h.bursts)
+                    if (!feed(h, id)) { full = true; break; }
+                if (full) break;
+            }
         }
         if (full) ++stall_cycles_bank_;
 
@@ -663,6 +827,7 @@ private:
         for (std::uint64_t tag : burst_done_) {
             if (tag & kBurstTag) {
                 auto it = bursts_.find(tag & ~kBurstTag);
+                --outstanding_[it->second.channel];
                 bursts_done_.push_back(it->second);
                 bursts_.erase(it);
                 total_bytes_transferred_ += b;

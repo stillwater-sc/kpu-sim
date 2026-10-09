@@ -20,6 +20,7 @@
 #include <sw/trace/resource_tracker.hpp>
 #include <sw/trace/trace_exporter.hpp>
 #include <filesystem>
+#include <vector>
 #include <random>
 #include <iostream>
 #include <iomanip>
@@ -315,7 +316,14 @@ TEST_CASE("Level4: Four bank operations", "[lpddr5][level4]") {
     }
 
     SECTION("tFAW constraint") {
-        // Issue 4 activates, then 5th should wait for tFAW
+        // Issue 4 activates, then 5th should wait for tFAW -- measured, not assumed: the first
+        // ACT issues at controller cycle 0, which the activate window once read as "empty" and
+        // so let a fifth ACT through 24 cycles later against a tFAW of 32.
+        std::vector<uint64_t> acts;
+        ctx.mc->set_command_observer([&](const LPDDR5MemoryController::CommandRecord& r) {
+            if (r.kind == LPDDR5MemoryController::CommandRecord::Kind::Activate && r.channel == 0)
+                acts.push_back(r.issue);
+        });
         for (int b = 0; b < 5; ++b) {
             ctx.mc->submit_read(ctx.make_address(static_cast<uint8_t>(b), 100, 0), 64);
         }
@@ -325,6 +333,9 @@ TEST_CASE("Level4: Four bank operations", "[lpddr5][level4]") {
 
         const auto& s = ctx.mc->stats();
         CHECK(s.reads == 5);
+        REQUIRE(acts.size() == 5);
+        CAPTURE(acts);
+        CHECK(acts[4] - acts[0] >= ctx.mc->lpddr5_config().timing.tFAW);
     }
 
     SECTION("All bank groups") {

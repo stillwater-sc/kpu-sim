@@ -359,29 +359,14 @@ bool LPDDR5MemoryController::check_tFAW(uint8_t channel) const {
     const auto& ch = channels_[channel];
     const auto& timing = lpddr5_config_.timing;
 
-    // Find oldest activate in window
-    uint64_t oldest = ch.activate_window[0];
-    for (int i = 1; i < 4; ++i) {
-        if (ch.activate_window[i] < oldest && ch.activate_window[i] > 0) {
-            oldest = ch.activate_window[i];
-        }
-    }
-
-    // If oldest activate is within tFAW, we can't issue another
-    if (oldest > 0 && current_cycle_ < oldest + timing.tFAW) {
-        // Count activates in window
-        int count = 0;
-        for (int i = 0; i < 4; ++i) {
-            if (ch.activate_window[i] > 0 &&
-                current_cycle_ - ch.activate_window[i] < timing.tFAW) {
-                count++;
-            }
-        }
-        if (count >= 4) {
-            return false;
-        }
-    }
-    return true;
+    // At most four activates in any tFAW window: a fifth may issue only when one of the last four
+    // is tFAW old. An empty entry is kNever (an activate at cycle 0 is a real activate).
+    int count = 0;
+    for (int i = 0; i < 4; ++i)
+        if (ch.activate_window[i] != lpddr5::kNever &&
+            current_cycle_ - ch.activate_window[i] < timing.tFAW)
+            ++count;
+    return count < 4;
 }
 
 void LPDDR5MemoryController::record_activate(uint8_t channel) {
@@ -1155,7 +1140,7 @@ void LPDDR5MemoryController::check_timing_invariants(uint8_t channel) {
                             current_cycle_ - timing.tFAW : 0;
 
     for (int i = 0; i < 4; ++i) {
-        if (ch.activate_window[i] >= window_start) {
+        if (ch.activate_window[i] != lpddr5::kNever && ch.activate_window[i] >= window_start) {
             activate_count++;
         }
     }

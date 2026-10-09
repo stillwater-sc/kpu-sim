@@ -189,7 +189,7 @@ function col(buf, cols, name, n) {
 }
 function parse(files) {
   const m = JSON.parse(files["manifest.json"]);
-  if (m.format !== "kpu-mflow" || m.version !== 2) throw new Error("not a version-2 kpu-mflow bundle (record it with this build's kpu-memsim)");
+  if (m.format !== "kpu-mflow" || m.version !== 3) throw new Error("not a version-3 kpu-mflow bundle (record it with this build's kpu-memsim)");
   const R = { m };
   const tb = name => {
     const t = m.tables[name], buf = files[t.file];
@@ -643,7 +643,8 @@ function burstPairs(i) {
   const B = R.B;
   return [["burst #" + i], ["coords", "mc " + B.mc[i] + " ch " + B.channel[i] + " bg " + B.bank_group[i] + " ba " + B.bank[i] + " row " + B.row[i] + " col " + B.col[i]],
     ["kind", B.is_load[i] ? "read" : "write"], ["page", OUTCOME[B.outcome[i]]], ["engine", B.engine[i]],
-    ["submitted", fmt(B.t_submit[i])], ["first command", fmt(B.t_cmd[i])], ["data", fmt(B.t_data0[i]) + " .. " + fmt(B.t_data1[i])], ["done", fmt(B.t_done[i])],
+    ["posted", fmt(B.t_posted[i])], ["granted", fmt(B.t_submit[i]) + " (" + fmt(B.t_submit[i] - B.t_posted[i]) + " cycles waiting for the arbiter)"],
+    ["first command", fmt(B.t_cmd[i])], ["data", fmt(B.t_data0[i]) + " .. " + fmt(B.t_data1[i])], ["done", fmt(B.t_done[i])],
     ["queued", fmt(B.t_cmd[i] - B.t_submit[i]) + " cycles before its first command"]];
 }
 function requestPairs(q) {
@@ -795,7 +796,7 @@ function start() {
   $("summary").innerHTML = [
     chip("device", m.device), chip("makespan", fmt(m.makespan) + " cycles"), chip("requests", fmt(R.Q.rows)),
     chip("bytes", fmt(D.bytes)), chip("bandwidth", bpc.toFixed(1) + " B/cycle" + (ceil ? " (" + (100 * bpc / ceil).toFixed(0) + "% of " + ceil.toFixed(1) + ")" : "")),
-    chip("window", m.window + " bursts/engine"), chip("bursts", fmt(R.B.rows)), chip("commands", fmt(R.C.rows)),
+    chip("window", m.window + " bursts/engine"), chip("arbitration", m.arbitration + (m.arbitration === "round_robin" ? " (quantum " + m.grant_quantum + ")" : "")), chip("bursts", fmt(R.B.rows)), chip("commands", fmt(R.C.rows)),
     chip("hit / empty / conflict", D.outcomes[1] + " / " + D.outcomes[2] + " / " + D.outcomes[3]),
     chip("engines", D.engines.length), chip("ports", D.ports.length), chip("banks", D.banks.length)].join("");
   $("timingNote").textContent = m.timing_note ? "DRAM timing: " + m.timing_note : "";
