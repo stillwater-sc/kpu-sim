@@ -24,6 +24,15 @@ set_tests_properties(test_tile_transaction_executor PROPERTIES
     LABELS "program;transactional;executor;v0.9"
 )
 
+# The CSP program, level 1: lowered from L0, run behaviorally (docs/plans/csp-program-tile-sequencing.md step 1)
+kpu_add_component_test(test_csp_program "program"
+    test_csp_program.cpp
+)
+
+set_tests_properties(test_csp_program PROPERTIES
+    LABELS "program;csp;v0.9"
+)
+
 # The L0 portable program as a file (#265)
 kpu_add_component_test(test_l0_serialization "program"
     test_l0_serialization.cpp

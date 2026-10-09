@@ -2,6 +2,10 @@
 
 **Date:** 2026-10-08
 **Status:** Q1-Q5 decided 2026-10-08 (all as recommended; §7); steps 1-2 done; step 3 next
+**Superseded from step 3 on (2026-10-09):** `docs/plans/csp-program-tile-sequencing.md`. The CSP
+program, not a generator's flat list paced from outside, is the source of tile sequencing.
+Steps 1-2 (arbitration, compute fabric, `kpu_s1`) stand. The step-3 dispatcher (#340) is held,
+and its finding is recorded there in §1.2.
 **Related:**
 - `docs/plans/memory-side-debugger.md`: the `.mflow` record, `mflow_check.py` and the memflow viewer. This
   plan reuses all three for its memory half.

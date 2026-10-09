@@ -9,6 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The CSP program, level 1 (`include/sw/kpu/program/csp/`; CSP-program sequencing plan step
+  1, #281).**
+  - The sequencing layer ADR 0002 makes central, lowered from L0. It has processes (dma, bm,
+    str, cf) with ordered tile actions, channels whose capacities are credits, and L3
+    residencies with consumer counts.
+  - The lowering decides residency (a tile stays until its last use, with Belady eviction when
+    the L3 is full), so reuse is the program's decision, not a run-time tag match.
+  - Matmul 256³/32³ on S1's 128 slots lowers to 128 Loads, each tile once. At small capacities
+    the load count equals the brute-force minimum.
+  - A behavioral interpreter runs the program bit-identical to the L0 reference for matmul and
+    LU.
+  - Also: the system-schedule plan is superseded from step 3, and #340 is closed (see
+    `docs/plans/csp-program-tile-sequencing.md`).
+
 - **The compute fabric, and `kpu_s1` (system-schedule debugger step 2).**
   - A compute tile now runs one compute at a time, for `fill + MACs / macs_per_cycle` cycles.
     `csp_config_from` maps the spec's `compute_tiles` and `macs_per_cycle`.
