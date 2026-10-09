@@ -137,12 +137,25 @@ inline std::vector<Token> lex(const std::string& src) {
         if (std::isdigit(static_cast<unsigned char>(c))) {
             std::size_t j = i;
             while (j < src.size() && std::isdigit(static_cast<unsigned char>(src[j]))) ++j;
-            // A decimal ("1.0", "0.5"), but not a range ("0..8").
+            // A decimal ("1.0", "0.5", "1e-07", "9.99999975e-05"), but not a range ("0..8").
+            bool real = false;
             if (j + 1 < src.size() && src[j] == '.' && std::isdigit(static_cast<unsigned char>(src[j + 1]))) {
+                ++j;
+                while (j < src.size() && std::isdigit(static_cast<unsigned char>(src[j]))) ++j;
+                real = true;
+            }
+            if (j < src.size() && (src[j] == 'e' || src[j] == 'E')) {
                 std::size_t k = j + 1;
-                while (k < src.size() && std::isdigit(static_cast<unsigned char>(src[k]))) ++k;
-                push(Token::Kind::Num, src.substr(i, k - i));
-                i = k;
+                if (k < src.size() && (src[k] == '+' || src[k] == '-')) ++k;
+                if (k < src.size() && std::isdigit(static_cast<unsigned char>(src[k]))) {
+                    while (k < src.size() && std::isdigit(static_cast<unsigned char>(src[k]))) ++k;
+                    j = k;
+                    real = true;
+                }
+            }
+            if (real) {
+                push(Token::Kind::Num, src.substr(i, j - i));
+                i = j;
                 continue;
             }
             push(Token::Kind::Int, src.substr(i, j - i));
@@ -156,9 +169,10 @@ inline std::vector<Token> lex(const std::string& src) {
         }
         if (std::isalpha(static_cast<unsigned char>(c)) || c == '_') {
             std::size_t j = i;
-            while (j < src.size() && (std::isalnum(static_cast<unsigned char>(src[j])) || src[j] == '_' || src[j] == '.'))
+            // A name may hold single dots ("bm.egress"); ".." starts a range ("i..k").
+            while (j < src.size() && (std::isalnum(static_cast<unsigned char>(src[j])) || src[j] == '_' ||
+                                      (src[j] == '.' && !(j + 1 < src.size() && src[j + 1] == '.'))))
                 ++j;
-            // A name may hold dots ("bm.egress"), but a trailing ".." is a range.
             while (j > i && src[j - 1] == '.') --j;
             push(Token::Kind::Ident, src.substr(i, j - i));
             i = j;

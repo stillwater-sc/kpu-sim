@@ -115,10 +115,10 @@ Comments are `//` to the end of the line. Tensor element types beyond fp32 are d
 | Statement | IR actions (process) | Checked |
 |---|---|---|
 | `resident X` | Load X (dma) | X not already resident; L3 capacity at that point |
-| `release X` | Release X (l3 credit); Store X (dma) first if a call wrote it | X resident |
-| `call f(a, b) -> y` | per operand: Move (bm) and Feed (str); then Call (cf); for an in-place or `->` result: Drain (str), Writeback (bm) | operands resident; the result's residency, or an `acc` |
-| `acc y in fabric ... end` | y lives in the fabric; `+->` calls inside accumulate; no L3 slot | only `+->` to y inside |
-| `store y` | out of an `acc`: Drain, Writeback, Store, Release; from L3: Store | y written, not already stored |
+| `release X` | Release X (l3 credit) | X resident; not written-and-unstored (a written tile is stored by an explicit `store` first: nothing moves implicitly, Q2) |
+| `call f(a, b) -> y` | per operand: Move (bm) and Feed (str); then Call (cf); for an in-place result: Drain (str), Writeback (bm) | operands resident; the result resident, or its `acc` open |
+| `acc y in fabric { ... }` | y lives in the fabric; `+->` calls into it accumulate from zero; no L3 slot | at least one call into y; y stored after the block |
+| `store y` | out of a closed `acc`: Drain, Writeback, Store, Release (an L3 slot for the writeback's moment); a resident, written tile: Store | y written and not yet stored |
 
 The validator walks the program in order, as `csp::lower` does today. It is a static check, so
 no simulation is needed to find a capacity overflow, a call on a non-resident tile, or a read
@@ -293,8 +293,11 @@ Each step is one PR and ends green.
 
 ## 5. Verification
 
-- **Round trip:** every program the tests write, and every program `csp::lower` derives, prints
-  and parses back to the same IR.
+- **Round trip:** every program the language compiles prints and parses back to the same IR
+  (`compile(print(p))` reproduces `p`'s actions, and the printed text is a fixed point). That
+  includes sequential, later-stored and interleaved accumulators. Derived L0 enters through the
+  emitter (`emit.hpp`), whose output compiles. `csp::lower`'s action-granular IR is not
+  printable, because a call's operands must be co-resident (step 1's deviation note).
 - **Values:** bit-identical to the L0 reference at L-B and L-CA for matmul, LU and linear in
   every placement; gelu and silu within tolerance.
 - **The validator** finds each class of error statically and names its line.

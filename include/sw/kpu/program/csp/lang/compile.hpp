@@ -98,6 +98,7 @@ private:
     CspProgram p_;
     std::map<std::string, std::size_t> resident_;          // tile -> open residency
     std::map<std::string, AccState> acc_;                  // tile -> its accumulator's state
+    std::map<std::string, std::size_t> acc_calls_;         // tile -> calls into its open accumulator
 
     // ---- expressions and tiles ----
     long long eval(const Expr& e, const std::map<std::string, long long>& env, int line) const {
@@ -230,7 +231,11 @@ private:
                 if (acc_.count(k) && acc_.at(k) != AccState::Stored)
                     throw CompileError(s.line, "acc " + k + ": it already has an accumulator");
                 acc_[k] = AccState::Open;
+                acc_calls_[k] = 0;
                 for (const Stmt& b : s.body) stmt(b, env);
+                if (acc_calls_[k] == 0)
+                    throw CompileError(s.line, "acc " + k + " receives no call; an accumulator needs at least one "
+                                               "'+->' into it");
                 acc_[k] = AccState::Closed;
                 break;
             }
@@ -301,6 +306,7 @@ private:
             }
             const std::size_t c = emit(Action::Kind::Call, y, ProcessKind::Compute, l0(op));
             p_.actions[c].accumulate = true;
+            ++acc_calls_[yk];
             return;
         }
         if (acc_.count(yk) && acc_.at(yk) != AccState::Stored)

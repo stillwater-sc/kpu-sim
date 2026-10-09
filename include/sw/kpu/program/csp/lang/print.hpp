@@ -20,6 +20,8 @@
 #include <sw/kpu/program/csp/lang/parse.hpp>
 
 #include <algorithm>
+#include <iomanip>
+#include <limits>
 #include <set>
 #include <sstream>
 #include <stdexcept>
@@ -32,6 +34,13 @@ class PrintError : public std::runtime_error {
 public:
     using std::runtime_error::runtime_error;
 };
+
+// An alpha as text that reads back to the same float (the lexer takes exponents).
+inline std::string alpha_text(float a) {
+    std::ostringstream o;
+    o << std::setprecision(std::numeric_limits<float>::max_digits10) << a;
+    return o.str();
+}
 
 inline std::string tile_text(const TileCoord& t) {
     return t.operand + "[" + std::to_string(t.ti) + ", " + std::to_string(t.tj) + "]";
@@ -56,6 +65,31 @@ inline std::string print(const CspProgram& p) {
           << " " << (in && out ? "inout" : out ? "out" : "in") << ";\n";
     }
     std::vector<std::string> open;                       // accumulators, innermost last
+    // The last accumulating call into each tile before that tile's Drain: its acc block may
+    // close after it. Blocks open lazily and close innermost-first once their last call is out,
+    // so sequential, later-stored and interleaved (register-blocked) accumulators all print as
+    // properly nested blocks.
+    std::vector<bool> last_call(p.actions.size(), false);
+    {
+        std::set<std::string> seen;                      // tiles with a later call before their Drain
+        for (std::size_t i = p.actions.size(); i-- > 0;) {
+            const Action& a = p.actions[i];
+            const std::string k = a.tile.to_string();
+            if (a.kind == K::Drain) seen.erase(k);
+            if (a.kind == K::Call && a.accumulate && !seen.count(k)) {
+                last_call[i] = true;
+                seen.insert(k);
+            }
+        }
+    }
+    std::set<std::string> done;                          // open accumulators past their last call
+    auto close_finished = [&]() {
+        while (!open.empty() && done.count(open.back())) {
+            done.erase(open.back());
+            open.pop_back();
+            o << std::string(2 + 2 * open.size(), ' ') << "}\n";
+        }
+    };
     auto indent = [&]() { return std::string(2 + 2 * open.size(), ' '); };
     auto expect = [&](std::size_t i, K k, const TileCoord& t) {
         if (i >= p.actions.size() || p.actions[i].kind != k || p.actions[i].tile.to_string() != t.to_string())
@@ -74,11 +108,7 @@ inline std::string print(const CspProgram& p) {
             case K::Call: {
                 const TileOp& op = p.source.ops().at(a.l0_op);
                 const TileCoord& y = op.outputs.at(0);
-                if (a.accumulate && std::find(open.begin(), open.end(), y.to_string()) != open.end() &&
-                    open.back() != y.to_string())
-                    throw PrintError("csp print: accumulators " + open.back() + " and " + y.to_string() +
-                                     " overlap; acc blocks nest, they do not interleave");
-                if (a.accumulate && (open.empty() || open.back() != y.to_string())) {
+                if (a.accumulate && std::find(open.begin(), open.end(), y.to_string()) == open.end()) {
                     o << indent() << "acc " << tile_text(y) << " in fabric {\n";
                     open.push_back(y.to_string());
                 }
@@ -97,12 +127,12 @@ inline std::string print(const CspProgram& p) {
                 o << indent() << "call " << fn << "(" << args << ") "
                   << (op.kind == TileOpKind::MatMulAccum ? "+->" : "->") << " " << tile_text(y);
                 if (op.pivot_slot >= 0) o << " pivot " << op.pivot_slot;
-                if (op.kind == TileOpKind::MatMulAccum && op.alpha != 1.0f) {
-                    std::ostringstream al;
-                    al << op.alpha;
-                    o << " alpha " << al.str();
-                }
+                if (op.kind == TileOpKind::MatMulAccum && op.alpha != 1.0f) o << " alpha " << alpha_text(op.alpha);
                 o << ";\n";
+                if (a.accumulate && last_call[i]) {
+                    done.insert(y.to_string());
+                    close_finished();
+                }
                 if (!a.accumulate) {                     // in place: its result goes back to L3
                     expect(i + 1, K::Drain, y);
                     expect(i + 2, K::Writeback, y);
@@ -111,12 +141,11 @@ inline std::string print(const CspProgram& p) {
                 break;
             }
             case K::Drain: {
-                // The end of an accumulator: drained, written back, stored, released.
-                if (open.empty() || open.back() != a.tile.to_string())
+                // An accumulator's store: drained, written back, stored, released. Its block
+                // closed after its last call.
+                if (std::find(open.begin(), open.end(), a.tile.to_string()) != open.end())
                     throw PrintError("csp print: action " + std::to_string(i) + " drains " + a.tile.to_string() +
-                                     ", which is not the innermost open accumulator");
-                open.pop_back();
-                o << indent() << "}\n";
+                                     " while its accumulator is open");
                 expect(i + 1, K::Writeback, a.tile);
                 expect(i + 2, K::Store, a.tile);
                 expect(i + 3, K::Release, a.tile);
@@ -128,7 +157,7 @@ inline std::string print(const CspProgram& p) {
                 throw PrintError("csp print: action " + std::to_string(i) + " is a writeback no statement explains");
         }
     }
-    if (!open.empty()) throw PrintError("csp print: the accumulator " + open.back() + " is never drained");
+    if (!open.empty()) throw PrintError("csp print: the accumulator " + open.back() + " never closes");
     o << "}\n";
     return o.str();
 }

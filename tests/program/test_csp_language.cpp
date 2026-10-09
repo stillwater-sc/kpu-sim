@@ -238,3 +238,72 @@ TEST_CASE("CSP language: the validator refuses each error by line", "[program][c
     // Syntax errors name their line too.
     CHECK_THAT(compile_error("  resident A[0, 0]\n  release A[0, 0];\n"), ContainsSubstring("csp line 6: expected ';'"));
 }
+
+TEST_CASE("CSP language: review fixes -- loop bounds from variables, empty accumulators, nested accumulators, alpha",
+          "[program][csp][lang]") {
+    const std::string decls = "  tensor A[64,64] tile 16x16 in;\n  tensor B[64,64] tile 16x16 in;\n"
+                              "  tensor C[64,64] tile 16x16 out;\n";
+    auto program = [&](const std::string& body) {
+        return "csp 1.0\nprogram t machine flat(l3 = 40) {\n" + decls + body + "}\n";
+    };
+    // A loop whose bounds are both variables: `i..k`, `k..k+2`.
+    const CspProgram tri = lang::compile(program(
+        "  resident A[:, :];\n"
+        "  for k in 0..4 { for i in k..4 { for j in i..k+1 { release A[i, j]; resident A[i, j]; } } }\n"
+        "  release A[:, :];\n"));
+    CHECK(tri.reuse().loads > 16);
+    // An accumulator that receives no call is refused by line.
+    CHECK_THAT(compile_error("  acc C[0, 0] in fabric {\n    for k in 0..0 { }\n  }\n  store C[0, 0];\n"),
+               ContainsSubstring("csp line 6: acc C[0,0] receives no call"));
+
+    // Two accumulators, sequential and stored later; and interleaved (register-blocked) calls.
+    // Both print, round-trip exactly, and compute the reference.
+    const std::string sequential = program(
+        "  resident A[:, :], B[:, :];\n"
+        "  acc C[0, 0] in fabric { for k in 0..4 { call gemm(A[0, k], B[k, 0]) +-> C[0, 0]; } }\n"
+        "  acc C[0, 1] in fabric { for k in 0..4 { call gemm(A[0, k], B[k, 1]) +-> C[0, 1]; } }\n"
+        "  store C[0, 0];\n  store C[0, 1];\n"
+        "  release A[:, :], B[:, :];\n");
+    const std::string blocked = program(
+        "  resident A[:, :], B[:, :];\n"
+        "  acc C[0, 0] in fabric {\n    acc C[0, 1] in fabric {\n"
+        "      for k in 0..4 {\n"
+        "        call gemm(A[0, k], B[k, 0]) +-> C[0, 0];\n        call gemm(A[0, k], B[k, 1]) +-> C[0, 1];\n"
+        "      }\n    }\n  }\n"
+        "  store C[0, 0];\n  store C[0, 1];\n"
+        "  release A[:, :], B[:, :];\n");
+    for (const std::string& src : {sequential, blocked}) {
+        const CspProgram p = lang::compile(src);
+        const std::string text = lang::print(p);
+        CAPTURE(text);
+        const CspProgram q = lang::compile(text);
+        CHECK(same_actions(p, q));
+        CHECK(lang::print(q) == text);
+        CspProgram v = p;
+        auto s = spec("matmul", 64, 16);
+        driver::fill(v.source, s);
+        TileProgram ref = driver::derive(s);
+        driver::fill(ref, s);
+        TileProgramReference().run(ref);
+        BehavioralInterpreter lb;
+        lb.run(v);
+        const auto& got = lb.result().operand("C");
+        const auto& want = ref.operand("C");
+        for (Dim r = 0; r < 16; ++r)
+            for (Dim c = 0; c < 32; ++c) CHECK(got.at(r, c) == want.at(r, c));   // C[0,0] and C[0,1]
+    }
+
+    // alpha reads back to the same float, exponents included.
+    for (float a : {0.1f, -1.0f / 3.0f, 1e-7f, 6.02e23f}) {
+        CAPTURE(a);
+        const std::string src = "csp 1.0\nprogram t machine flat(l3 = 8) {\n  tensor A[16,16] tile 16x16 inout;\n"
+                                "  tensor B[16,16] tile 16x16 in;\n  resident A[0, 0], B[0, 0];\n"
+                                "  call gemm(B[0, 0], B[0, 0]) +-> A[0, 0] alpha " + lang::alpha_text(a) + ";\n"
+                                "  store A[0, 0];\n  release A[0, 0], B[0, 0];\n}\n";
+        const CspProgram p = lang::compile(src);
+        float got = 0;
+        for (const auto& op : p.source.ops()) if (op.kind == TileOpKind::MatMulAccum) got = op.alpha;
+        CHECK(got == a);
+        CHECK(lang::print(lang::compile(lang::print(p))) == lang::print(p));
+    }
+}

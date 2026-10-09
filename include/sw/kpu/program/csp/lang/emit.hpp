@@ -162,11 +162,7 @@ inline std::string emit(const TileProgram& l0, std::size_t l3_capacity, const st
         o << indent() << "call " << fn << "(" << args << ") " << (op.kind == TileOpKind::MatMulAccum ? "+->" : "->")
           << " " << tile_text(y);
         if (op.pivot_slot >= 0) o << " pivot " << op.pivot_slot;
-        if (op.kind == TileOpKind::MatMulAccum && op.alpha != 1.0f) {
-            std::ostringstream al;
-            al << op.alpha;
-            o << " alpha " << al.str();
-        }
+        if (op.kind == TileOpKind::MatMulAccum && op.alpha != 1.0f) o << " alpha " << alpha_text(op.alpha);
         o << ";\n";
         if (!explicit_style) resident[y.to_string()] = true;
         for (const auto& t : need)
