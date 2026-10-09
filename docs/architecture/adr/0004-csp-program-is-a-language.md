@@ -5,7 +5,7 @@
 | **Status** | **Accepted** (2026-10-09) |
 | **Date** | 2026-10-09 |
 | **Amends** | ADR 0002 §6, answer 1 ("never hand-authored, so it needs no source language or parser"); ADR 0001 D1 ("the portable program is the L0 `TileProgram`"), by §4 |
-| **Preserves** | ADR 0002 §2 (CSP is the program layer that every level interprets); ADR 0001 D1 (L0 is the portable program a CSP program is lowered from) |
+| **Preserves** | ADR 0002 §2 (CSP is the program layer that every level interprets); ADR 0001 D5 (values answer to the L0 reference, which L0 instances carry) |
 | **Context docs** | `docs/plans/csp-program-tile-sequencing.md` (the CSP program as the only source of tile sequencing), `docs/plans/csp-language.md` (this language) |
 
 ---

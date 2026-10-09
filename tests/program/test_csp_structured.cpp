@@ -231,11 +231,27 @@ TEST_CASE("CSP structured: the symbolic validator refuses by line, without execu
                               "  tensor B[1048576,1048576] tile 32x32 in;\n"
                               "  for j in 0..32768 { resident B[:, j]; release B[:, j]; }\n}\n"),
                ContainsSubstring("csp line 4: resident B[:, j] needs 32768 L3 slots, and 128 of 128 are free"));
-    // An accumulator a loop may never feed.
-    CHECK_THAT(symbolic_error(head + "  resident A[:, :], B[:, :];\n"
+    // An accumulator a loop may never feed: a loop that never runs, and one whose trip count can
+    // be zero for some outer iteration (`0..j` at j = 0).
+    CHECK_THAT(symbolic_error(head + "  resident A[0, :], B[:, 0];\n"
                                      "  acc C[0, 0] in fabric { for k in 0..0 { call gemm(A[0, k], B[k, 0]) +-> C[0, 0]; } }\n"
-                                     "  store C[0, 0];\n  release A[:, :], B[:, :];\n}\n"),
-               ContainsSubstring("needs 16 L3 slots"));
+                                     "  store C[0, 0];\n  release A[0, :], B[:, 0];\n}\n"),
+               ContainsSubstring("csp line 7: acc C[0, 0] receives no call"));
+    CHECK_THAT(symbolic_error(head + "  resident A[0, :], B[:, 0];\n"
+                                     "  for j in 0..4 {\n"
+                                     "    acc C[0, j] in fabric { for k in 0..j { call gemm(A[0, k], B[k, 0]) +-> C[0, j]; } }\n"
+                                     "    store C[0, j];\n  }\n  release A[0, :], B[:, 0];\n}\n"),
+               ContainsSubstring("csp line 8: acc C[0, j] receives no call"));
+    // A loop body checked once must not consume state it found: an accumulator closed before the
+    // loop, or a tile written before it (review of 1c.1).
+    CHECK_THAT(symbolic_error(head + "  resident A[0, 0], B[0, 0];\n"
+                                     "  acc C[0, 0] in fabric { call gemm(A[0, 0], B[0, 0]) +-> C[0, 0]; }\n"
+                                     "  for i in 0..4 { store C[0, 0]; }\n  release A[0, 0], B[0, 0];\n}\n"),
+               ContainsSubstring("csp line 8: the loop over i stores the accumulator C[0, 0], which it did not open"));
+    CHECK_THAT(symbolic_error("csp 1.0\nprogram t machine flat(l3 = 8) {\n  tensor A[128,128] tile 32x32 inout;\n"
+                              "  resident A[0, 0];\n  call getrf(A[0, 0]) -> A[0, 0] pivot 0;\n"
+                              "  for i in 0..4 { store A[0, 0]; }\n  release A[0, 0];\n}\n"),
+               ContainsSubstring("csp line 6: the loop over i stores A[0, 0], written before it"));
 }
 
 TEST_CASE("CSP structured: cross-iteration residency runs, and is named as beyond symbolic validation",

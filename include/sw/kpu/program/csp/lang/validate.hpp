@@ -325,6 +325,7 @@ private:
         if (rectangular) multiplier_ *= static_cast<std::uint64_t>(hi.constant - lo.constant);
 
         const std::vector<Entry> before = state_;
+        const std::vector<Acc> accs_found = accs_;
         const std::size_t accs_before = accs_.size();
         for (const Stmt& b : s.body) stmt(b, depth + 1, definite && trips.lo >= 1);
 
@@ -338,6 +339,21 @@ private:
             if (std::none_of(state_.begin(), state_.end(), [&](const Entry& x) { return same(x.family, e.family); }))
                 throw CompileError(s.line, "the loop over " + s.var + " releases " + text(e.family) +
                                            ", which was made resident outside it");
+        // A body checked once must not consume what it found: the next iteration would find it
+        // gone. An accumulator that existed before the loop must still exist after it, and a tile
+        // written before the loop must still be dirty (a store in the body would store it again,
+        // unwritten). Clean-to-dirty is fine: that is how a loop writes in place.
+        for (const Acc& a : accs_found)
+            if (std::none_of(accs_.begin(), accs_.end(), [&](const Acc& x) { return same(x.tile, a.tile); }))
+                throw CompileError(s.line, "the loop over " + s.var + " stores the accumulator " + text(a.tile) +
+                                           ", which it did not open: a second iteration would store it again");
+        for (const Entry& e : before) {
+            if (!e.dirty) continue;
+            auto it = std::find_if(state_.begin(), state_.end(), [&](const Entry& x) { return same(x.family, e.family); });
+            if (it != state_.end() && !it->dirty)
+                throw CompileError(s.line, "the loop over " + s.var + " stores " + text(e.family) +
+                                           ", written before it: a second iteration would store an unwritten tile");
+        }
         if (accs_.size() > accs_before)
             throw CompileError(s.line, "the loop over " + s.var + " leaves the accumulator " + text(accs_.back().tile) +
                                        " unstored: an iteration must store what it accumulates");
