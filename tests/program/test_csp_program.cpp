@@ -17,6 +17,7 @@
 #include <sw/kpu/program/tile_program_reference.hpp>
 
 #include <algorithm>
+#include <bit>
 #include <cstdint>
 #include <cstdio>
 #include <functional>
@@ -91,7 +92,7 @@ std::size_t optimal_loads(const TileProgram& l0, std::size_t cap) {
             r = best(i + 1, set);
         } else {
             const std::size_t cost = seq[i].feed ? 1 : 0;
-            const auto n = static_cast<std::size_t>(__builtin_popcountll(set));
+            const auto n = static_cast<std::size_t>(std::popcount(set));
             if (n < cap) {
                 r = cost + best(i + 1, seq[i].feed ? (set | bit) : set);
             } else {
