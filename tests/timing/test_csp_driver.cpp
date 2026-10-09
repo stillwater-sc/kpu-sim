@@ -52,6 +52,34 @@ ConcurrentTimingExecutor::Config machine(const char* file) {
     return c;
 }
 
+// A written matmul (docs/plans/csp-language.md step 1), 128^3 in 32 x 32 tiles: A held whole,
+// B's column panel per j -- 16 + 16 loads.
+const char* kWrittenMatmul = R"(csp 1.0
+program matmul machine flat(l3 = 128) {
+  tensor A[128,128] tile 32x32 in;
+  tensor B[128,128] tile 32x32 in;
+  tensor C[128,128] tile 32x32 out;
+  resident A[:, :];
+  for j in 0..4 {
+    resident B[:, j];
+    for i in 0..4 {
+      acc C[i, j] in fabric {
+        for k in 0..4 { call gemm(A[i, k], B[k, j]) +-> C[i, j]; }
+      }
+      store C[i, j];
+    }
+    release B[:, j];
+  }
+  release A[:, :];
+}
+)";
+
+TileProgram reference_matmul(sw::kpu::program::Dim size, sw::kpu::program::Dim tile) {
+    TileProgram ref = matmul(size, tile);
+    TileProgramReference().run(ref);
+    return ref;
+}
+
 }  // namespace
 
 TEST_CASE("CSP driver: S1 runs the program at L-CA -- the reference's values, the program's loads",
@@ -225,27 +253,8 @@ TEST_CASE("CSP driver: with the DMA burst window on (characterization)", "[timin
 
 TEST_CASE("CSP driver: a WRITTEN program runs at L-CA -- its values, its loads", "[timing][csp][driver][lang]") {
     // The CSP language (docs/plans/csp-language.md step 1): a program someone wrote, not one
-    // derived. A held whole, B's column panel per j: 64 + 64 loads, as written.
-    const char* src = R"(csp 1.0
-program matmul machine flat(l3 = 128) {
-  tensor A[128,128] tile 32x32 in;
-  tensor B[128,128] tile 32x32 in;
-  tensor C[128,128] tile 32x32 out;
-  resident A[:, :];
-  for j in 0..4 {
-    resident B[:, j];
-    for i in 0..4 {
-      acc C[i, j] in fabric {
-        for k in 0..4 { call gemm(A[i, k], B[k, j]) +-> C[i, j]; }
-      }
-      store C[i, j];
-    }
-    release B[:, j];
-  }
-  release A[:, :];
-}
-)";
-    csp::CspProgram p = csp::lang::compile(src);
+    // derived. A held whole, B's column panel per j: 16 + 16 loads, as written.
+    csp::CspProgram p = csp::lang::compile(kWrittenMatmul);
     sw::kpu::program::driver::ProgramSpec spec;
     spec.algo = "matmul";
     spec.size = 128;
@@ -254,11 +263,104 @@ program matmul machine flat(l3 = 128) {
     ConcurrentTimingExecutor exec(machine("kpu_s1.json"));
     const auto r = CspDriver(exec, p).run();
     REQUIRE(r.completed);
-    TileProgram ref = matmul(128, 32);
-    TileProgramReference().run(ref);
-    CHECK(r.values.operand("C").values == ref.operand("C").values);
+    CHECK(r.values.operand("C").values == reference_matmul(128, 32).operand("C").values);
     CHECK(r.dram_loads == p.reuse().loads);
     CHECK(r.dram_loads == 32);
     std::printf("csp driver, written matmul 128^3/32^3 on S1: %llu cycles, %zu DRAM loads\n",
                 static_cast<unsigned long long>(r.cycles), r.dram_loads);
+}
+
+TEST_CASE("CSP driver: the STREAM runs at L-CA -- the trace's cycles, in a bounded window",
+          "[timing][csp][driver][lang][stream]") {
+    // docs/plans/csp-language.md step 1c.2: the structured program executes at L-CA without
+    // its trace. The driver pulls actions as the executor's backlog allows; L3 entries are
+    // retired by the program's Releases, so nothing needs lookahead.
+    TileProgram inputs = matmul(128, 32);
+    const TileProgram ref = reference_matmul(128, 32);
+    const auto cfg = machine("kpu_s1.json");
+
+    csp::CspProgram trace = csp::lang::compile(kWrittenMatmul);
+    for (const char* name : {"A", "B"}) trace.source.operand(name).values = inputs.operand(name).values;
+    ConcurrentTimingExecutor e0(cfg);
+    const auto t = CspDriver(e0, trace).run();
+    REQUIRE(t.completed);
+
+    SECTION("the whole stream at once is the trace, cycle for cycle") {
+        csp::lang::ActionStream s(csp::lang::parse(kWrittenMatmul));
+        ConcurrentTimingExecutor e(cfg);
+        const auto r = CspDriver(e, s, inputs, CspDriver::kWholeProgram).run();
+        REQUIRE(r.completed);
+        CHECK(r.cycles == t.cycles);
+        CHECK(r.actions == trace.actions.size());
+        CHECK(r.dram_loads == t.dram_loads);
+        CHECK(r.values.operand("C").values == ref.operand("C").values);
+    }
+    SECTION("a window bounds what the driver holds; values and loads do not change") {
+        for (const std::size_t w : {1u, 2u, 4u, 16u, 64u, 256u}) {
+            CAPTURE(w);
+            csp::lang::ActionStream s(csp::lang::parse(kWrittenMatmul));
+            ConcurrentTimingExecutor e(cfg);
+            const auto r = CspDriver(e, s, inputs, w).run();
+            REQUIRE(r.completed);
+            CHECK(r.actions == trace.actions.size());
+            CHECK(r.peak_held <= w + 1);        // one pull hands over at most one more
+            CHECK(r.dram_loads == 32);
+            CHECK(r.values.operand("C").values == ref.operand("C").values);
+            CHECK(r.cycles >= t.cycles);
+            std::printf("csp driver, streamed matmul 128^3/32^3 on S1, window %2zu: %llu cycles (trace %llu)\n", w,
+                        static_cast<unsigned long long>(r.cycles), static_cast<unsigned long long>(t.cycles));
+        }
+    }
+    SECTION("the inputs must be the operands the program declares") {
+        csp::lang::ActionStream s(csp::lang::parse(kWrittenMatmul));
+        ConcurrentTimingExecutor e(cfg);
+        CHECK_THROWS_WITH(CspDriver(e, s, matmul(64, 32)), ContainsSubstring("not the shape the program declares"));
+    }
+}
+
+TEST_CASE("CSP driver: a Release retires its entry after the moves before it, and before the moves after it",
+          "[timing][csp][driver][release]") {
+    // The executor's Release (step 1c.2), directly: one tile, two residencies. The first is
+    // moved twice and released; the second is loaded again and moved once. The Release waits
+    // for both earlier moves, and the later move waits for the second load -- it never moves
+    // the first residency's copy, though that copy sits in L3 until its Release.
+    ConcurrentTimingExecutor exec(machine("kpu_s1.json"));
+    TileDescriptor d;
+    d.tile_id.matrix = sw::kpu::isa::MatrixID::A;
+    d.height = d.width = 32;
+    d.size_bytes = 32 * 32 * 4;
+    d.matrix_base_address = 0x100000;
+    d.dram_address = 0x100000;
+    d.l3_held = true;
+    TilePayload v;
+    v.rows = v.cols = 32;
+    v.values.assign(32 * 32, 1.0f);
+    exec.set_tile_payload(d.tile_id, v);
+    exec.schedule_load(d);
+    exec.schedule_move(d);
+    exec.schedule_move(d);
+    exec.schedule_release(d);
+    exec.schedule_move(d);         // the second residency's
+    const std::size_t credits = exec.l3_credits_available();
+    for (int i = 0; i < 20000; ++i) exec.step();
+    REQUIRE(exec.backlog() == 1);  // the last move waits on a load the program has not issued
+    exec.schedule_load(d);
+    exec.schedule_release(d);
+    while (!exec.is_complete() && exec.current_cycle() < 1'000'000) exec.step();
+    REQUIRE(exec.is_complete());
+    CHECK(exec.l3_credits_available() == credits);
+
+    std::vector<Cycle> in_l3, in_l2, released;
+    for (const auto& e : exec.events()) {
+        if (!(e.tile_id == d.tile_id)) continue;
+        if (e.type == EventType::TILE_ARRIVED_L3) in_l3.push_back(e.cycle);
+        if (e.type == EventType::TILE_ARRIVED_L2) in_l2.push_back(e.cycle);
+        if (e.type == EventType::CREDIT_RELEASED && e.component_name.find(":BM") != std::string::npos) released.push_back(e.cycle);
+    }
+    REQUIRE(in_l3.size() == 2);
+    REQUIRE(in_l2.size() == 3);
+    REQUIRE(released.size() == 2);
+    CHECK(released[0] >= in_l2[1]);    // after both of the first residency's moves
+    CHECK(in_l2[2] >= in_l3[1]);       // the later move takes the second load's copy
+    CHECK(released[1] >= in_l2[2]);
 }

@@ -1,7 +1,7 @@
 # The CSP Language: Writing the Tile Sequencing
 
 **Date:** 2026-10-09
-**Status:** Decided 2026-10-09 (A1-A3 with the request; Q1-Q6 answered, §7); steps 1 and 1c.1 done; 1c.2 next
+**Status:** Decided 2026-10-09 (A1-A3 with the request; Q1-Q6 answered, §7); steps 1, 1c.1 and 1c.2 done; step 2 (the linear operator) next
 **Decision record:** ADR 0004 (the CSP program is a written language).
 **Is:** step 1b of `docs/plans/csp-program-tile-sequencing.md`, ahead of its step 2b (`kpu-run`).
 **Related:**
@@ -310,13 +310,37 @@ Each step is one PR and ends green.
        - 70,368,744,177,664 loads, 35,184,372,088,832 calls and 1,073,741,824 stores, exact;
        - its stream yields its first million actions with a bounded buffer;
        - nothing is unrolled, and no operand is allocated.
-   - **1c.2 (next): L-CA from the stream.**
-     - The driver today seeds each L3 entry with a residency's consumer count at its Load,
-       which needs lookahead the stream does not have.
-     - The executor instead takes the program's Release as an action: the BlockMover retires
-       the entry after the moves the program issued before it.
-     - The driver feeds each process a window of actions from the stream, not the whole
-       program.
+   - **1c.2 (done): L-CA from the stream.**
+     - The driver used to seed each L3 entry with its residency's consumer count at the Load,
+       which needs lookahead the stream does not have. The executor now takes the program's
+       Release as an action (`schedule_release`): the BlockMover retires the entry after the
+       tile's Moves issued before it. Per-tile epochs order a tile's Moves and Releases, so a
+       Move issued after a Release takes the next residency's copy, never the old one.
+       `TileDescriptor::l3_consumers` is replaced by `l3_held`.
+     - `CspDriver` takes the trace or the stream (`ActionStream` plus input values). It hands
+       actions over while the executor's backlog (`backlog()`) and its own pending Loads are
+       under a window, a schedule parameter (default 256; 0 = the whole program at once).
+     - Windowed issue exposed two executor assumptions that the whole program was scheduled up
+       front; both are fixed.
+       - An accumulating call published its result to DRAIN when it was the last call
+         *scheduled* on the tile. With a window, the chain's first call can look like its last,
+         and the DRAIN took a partial sum: every C tile was wrong at windows 2 to 16. A later
+         call on the chain now retracts that publication, unless an earlier chain's DRAIN is
+         still waiting for it.
+       - The fill model charged the drain half of the fill to that same "last" call. It now also
+         requires the tile's DRAIN to be scheduled.
+     - **Results** (written matmul, 128^3 in 32 x 32 tiles, S1):
+       - The trace path's cycles are unchanged (43,968 and 38,089 for the step-2 cases), so
+         Release-based retirement times exactly as the consumer counts did.
+       - The stream at windows 1, 2, 4, 16, 64 and 256 computes the reference bit for bit, with
+         its 32 loads.
+       - The driver holds at most the window plus one action.
+       - Cycles: 24,588 / 19,675 / 18,506 / 16,008 / 12,642 / 9,985. Window 256 matches the trace
+         exactly. The window bounds how far the DMA can run ahead of compute, which makes it the
+         program's prefetch depth, and a schedule parameter, not a machine one.
+     - **Remaining O(trace) state:** the executor's event log (and its per-tile counters, which
+       are O(tiles)). L-CA of a very large program is bounded by simulated cycles first; a
+       streaming event sink is a later step if it is needed.
 2. **The linear operator at L-B.**
    - L0 gains the epilogue ops: `BiasAdd` (a broadcast vector) and `Activation` (relu, gelu,
      silu), with reference kernels.

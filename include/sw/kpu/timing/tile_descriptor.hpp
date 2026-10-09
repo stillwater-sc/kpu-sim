@@ -132,13 +132,17 @@ struct TileDescriptor {
     // the first free compute tile. Ignored by the legacy unbounded compute model.
     int32_t cf_tile = -1;
 
-    // L3 residency decided by a CSP program (docs/plans/csp-program-tile-sequencing.md §3.4):
-    // how many consumers (Moves out of L3, the Store) this LOAD's residency serves. The arrival
-    // seeds the L3 entry with that many references, and the slot frees after the last. 0 = the
-    // legacy schedule path: one reference per load, and a load of a tile already in L3 is a
-    // tag-CAM hit. A program load is never a hit -- the program decided to load -- so a load of
-    // a tile still held by its previous residency waits for that residency's release.
-    uint32_t l3_consumers = 0;
+    // L3 residency decided by a CSP program (docs/plans/csp-language.md step 1c.2): the program
+    // releases this LOAD's L3 entry with an explicit Release (schedule_release), so the entry
+    // holds one reference that Moves out of L3 do not consume. false = the legacy schedule path:
+    // each Move consumes the load's reference, and a load of a tile already in L3 is a tag-CAM
+    // hit. A program load is never a hit -- the program decided to load -- so a load of a tile
+    // still held by its previous residency waits for that residency's Release.
+    bool l3_held = false;
+
+    // The BlockMover's order between a tile's Moves and its Releases: the Releases of this
+    // tile issued before this Move or Release (set by the mover at enqueue).
+    uint32_t l3_epoch = 0;
 
     // Tile dimensions (for compute operations)
     Size height = 16;         // Tile height (rows)

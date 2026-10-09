@@ -9,6 +9,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **L-CA runs the structured CSP program from its stream (CSP-language step 1c.2).**
+  - `CspDriver` takes either form of the program: the trace (`CspProgram`) or the stream
+    (`lang::ActionStream` plus input values). It hands actions to the executor while its
+    backlog is under a window (a schedule parameter; default 256), so what it holds is bounded
+    by the window, not the program.
+  - The executor gains a Release action (`schedule_release`): the BlockMover retires an L3
+    entry after the tile's Moves issued before it, and a later Move waits for the next
+    residency's copy. `TileDescriptor::l3_consumers`, which needed lookahead, is replaced by
+    `l3_held`.
+  - Two executor assumptions of up-front scheduling are fixed. An accumulating call no longer
+    publishes its result to DRAIN merely because it is the last call scheduled so far; a later
+    call retracts the publication. The fill model charges the drain half only once the tile's
+    DRAIN is scheduled. Trace-path cycles are unchanged (43,968 and 38,089 on S1).
+  - A written matmul streamed at windows 1 to 256 computes the reference bit for bit with its
+    32 loads. Window 256 matches the trace cycle for cycle; window 64 costs 27%.
+
 - **The structured CSP program executes and validates without unrolling (CSP-language step 1c.1;
   ADR 0004 §4).**
   - L0 is reclassified as an instance/trace format (ADR 0001 D1 amended): a 1M x 1M matmul has

@@ -18,6 +18,7 @@
 #include <deque>
 #include <limits>
 #include <optional>
+#include <unordered_map>
 #include <vector>
 
 namespace sw::kpu::timing {
@@ -121,6 +122,8 @@ public:
     void schedule_move(const TileDescriptor& tile, bool transpose = false) {
         TileDescriptor t = tile;
         t.enqueue_cycle = current_cycle_;
+        t.l3_epoch = releases_issued_[t.tile_id];   // the tile's Releases issued before it
+        ++moves_issued_[t.tile_id];
         move_queue_.enqueue(t);
         transpose_flags_.push_back(transpose);
     }
@@ -151,6 +154,24 @@ public:
      * 2. The target buffer has a free slot (credit)
      * 3. No other transfer is in progress
      */
+    /**
+     * @brief Schedule a CSP program's Release of an L3 entry (docs/plans/csp-language.md 1c.2)
+     * @param tile Tile descriptor (its load was l3_held)
+     *
+     * The entry is retired, and its L3 credit returned, when:
+     * 1. Every Move of the tile scheduled before this Release has completed
+     * 2. Every earlier Release of the tile has retired its own entry
+     * 3. The tile is present in L3 (its load has arrived)
+     * A Release takes no transfer time; a Move of the tile scheduled after it waits for it, and
+     * so moves the next residency's copy, never this one.
+     */
+    void schedule_release(const TileDescriptor& tile) {
+        TileDescriptor t = tile;
+        t.enqueue_cycle = current_cycle_;
+        t.l3_epoch = releases_issued_[t.tile_id]++;
+        release_queue_.push_back({t, moves_issued_[t.tile_id]});
+    }
+
     /// Route ejections over the NoC (step 4b.4). nullptr = they land in the store buffer.
     void set_eject_sink(EjectSink* sink) { eject_sink_ = sink; }
 
@@ -173,6 +194,9 @@ public:
         // Step 2: Deduplicate moves for tiles already resident in L2
         // (tile reuse - no transfer, no L2 credit)
         process_dedup_moves(current_cycle, events);
+
+        // Step 2b: Retire the L3 entries a CSP program released, once their moves are done
+        process_releases(current_cycle, events);
 
         // Step 3: If idle, try to start new work
         if (!in_flight_.has_value()) {
@@ -201,7 +225,8 @@ public:
     }
 
     [[nodiscard]] bool has_pending_work() const override {
-        return !move_queue_.empty() || !writeback_queue_.empty() || !eject_queue_.empty();
+        return !move_queue_.empty() || !writeback_queue_.empty() || !eject_queue_.empty() ||
+               !release_queue_.empty();
     }
 
     [[nodiscard]] uint32_t id() const override {
@@ -216,6 +241,11 @@ public:
         move_queue_.reset();
         writeback_queue_.reset();
         eject_queue_.clear();
+        release_queue_.clear();
+        moves_issued_.clear();
+        moves_done_.clear();
+        releases_issued_.clear();
+        releases_done_.clear();
         in_flight_target_ = nullptr;
         transpose_flags_.clear();
         in_flight_.reset();
@@ -270,6 +300,10 @@ public:
         return eject_queue_.size();
     }
 
+    [[nodiscard]] size_t release_queue_depth() const {
+        return release_queue_.size();
+    }
+
     [[nodiscard]] const Config& config() const {
         return config_;
     }
@@ -291,6 +325,14 @@ private:
         uint64_t ticket;
     };
     std::deque<Eject> eject_queue_;
+    struct Release {
+        TileDescriptor tile;
+        uint64_t moves_before;      // the tile's Moves scheduled before this Release
+    };
+    std::deque<Release> release_queue_;
+    // Per tile, the program order between Moves and Releases (counts only grow).
+    std::unordered_map<TileID, uint64_t, TileIDHash> moves_issued_, moves_done_;
+    std::unordered_map<TileID, uint32_t, TileIDHash> releases_issued_, releases_done_;
 
     Cycle current_cycle_ = 0;
     uint32_t next_l2_slot_ = 0;
@@ -377,12 +419,15 @@ private:
                                    current_cycle,
                                    static_cast<uint32_t>(
                                        in_flight_->tile.consumer_count));
-                // Only release L3 credit if tile was fully removed (ref_count reached 0)
-                bool credit_released = l3_tag_cam_.invalidate(in_flight_->tile.tile_id);
+                // Only release L3 credit if tile was fully removed (ref_count reached 0). A
+                // program-held entry is not the Move's to consume: its Release retires it.
+                bool credit_released = !in_flight_->tile.l3_held &&
+                                       l3_tag_cam_.invalidate(in_flight_->tile.tile_id);
                 if (credit_released) {
                     l3_credits_.release(
                         static_cast<size_t>(in_flight_->tile.tile_id.matrix));
                 }
+                ++moves_done_[in_flight_->tile.tile_id];
                 total_tiles_moved_++;
 
                 events.push_back(TimingEvent::duration_event(
@@ -458,6 +503,41 @@ private:
         }
     }
 
+    /// Every Release of the tile scheduled before this Move has retired its entry.
+    [[nodiscard]] bool released_before(const TileDescriptor& t) const {
+        const auto it = releases_done_.find(t.tile_id);
+        return (it == releases_done_.end() ? 0u : it->second) >= t.l3_epoch;
+    }
+
+    /**
+     * @brief Retire the L3 entries of a CSP program's Releases that are due (zero time)
+     *
+     * A Release is due when the tile's Moves scheduled before it have completed, the tile's
+     * earlier Releases have retired, and the entry is present. Releases of different tiles are
+     * independent: any due one retires, in queue order.
+     */
+    void process_releases(Cycle current_cycle, std::vector<TimingEvent>& events) {
+        for (auto it = release_queue_.begin(); it != release_queue_.end();) {
+            const TileID& id = it->tile.tile_id;
+            const auto md = moves_done_.find(id);
+            const auto rd = releases_done_.find(id);
+            const bool due = (md == moves_done_.end() ? 0 : md->second) >= it->moves_before &&
+                             (rd == releases_done_.end() ? 0u : rd->second) == it->tile.l3_epoch &&
+                             l3_tag_cam_.lookup(id);
+            if (!due) { ++it; continue; }
+            const auto entry = l3_tag_cam_.match(id);
+            bool credit_released = l3_tag_cam_.invalidate(id);
+            if (credit_released) l3_credits_.release(static_cast<size_t>(id.matrix));
+            ++releases_done_[id];
+            if (credit_released) {
+                events.push_back(TimingEvent(EventType::CREDIT_RELEASED, current_cycle,
+                                             config_.mover_id, id, name()));
+                events.back().slot_id = entry->slot_id;
+            }
+            it = release_queue_.erase(it);
+        }
+    }
+
     /**
      * @brief Complete moves for tiles already resident in L2 (tile reuse)
      *
@@ -476,6 +556,7 @@ private:
         size_t i = 0;
         while (i < move_queue_.size()) {
             const auto& tile = move_queue_.at(i);
+            if (!released_before(tile)) { ++i; continue; }
             auto l2_entry = l2_tag_cam_.match(tile.tile_id);
             auto l3_entry = l3_tag_cam_.match(tile.tile_id);
             // Dedup only when the tile is present on BOTH sides: resident in
@@ -493,11 +574,12 @@ private:
 
             // ref_count++ in L2 (no credit - entry already holds one)
             l2_tag_cam_.insert(dedup_tile.tile_id, l2_entry->slot_id, current_cycle);
-            // Consume this move's L3 reference
-            bool credit_released = l3_tag_cam_.invalidate(dedup_tile.tile_id);
+            // Consume this move's L3 reference (a program-held entry's: its Release)
+            bool credit_released = !dedup_tile.l3_held && l3_tag_cam_.invalidate(dedup_tile.tile_id);
             if (credit_released) {
                 l3_credits_.release(static_cast<size_t>(dedup_tile.tile_id.matrix));
             }
+            ++moves_done_[dedup_tile.tile_id];
             total_tiles_moved_++;
 
             events.push_back(TimingEvent(
@@ -544,6 +626,7 @@ private:
 
         for (size_t i = 0; i < move_queue_.size(); ++i) {
             const auto& tile = move_queue_.at(i);
+            if (!released_before(tile)) continue;    // the copy in L3 is an earlier residency's
             auto l3_entry = l3_tag_cam_.match(tile.tile_id);
             if (l3_entry.has_value()) {
                 if (config_.priority_aging) {

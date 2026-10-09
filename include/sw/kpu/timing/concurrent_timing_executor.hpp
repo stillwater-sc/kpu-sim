@@ -324,6 +324,17 @@ public:
     void schedule_writeback(const TileDescriptor& tile, int mover_id = -1);
 
     /**
+     * @brief Schedule a CSP program's Release of an L3 entry its l3_held load opened
+     * @param tile Tile descriptor
+     * @param mover_id Optional specific BlockMover (-1 for auto-select; it must be the mover
+     *        of the tile's Moves, which tile-affine selection is)
+     *
+     * The BlockMover retires the entry, returning its L3 credit, after the tile's Moves
+     * scheduled before the Release (docs/plans/csp-language.md step 1c.2).
+     */
+    void schedule_release(const TileDescriptor& tile, int mover_id = -1);
+
+    /**
      * @brief Schedule a tile feed from L2 to compute
      * @param tile Tile descriptor
      * @param streamer_id Optional specific Streamer (-1 for auto-select)
@@ -514,6 +525,14 @@ public:
     [[nodiscard]] bool is_complete() const;
 
     /**
+     * @brief Actions handed to the processes and not yet taken: queued DMA requests (and those
+     *        in flight), BlockMover moves, writebacks, ejections and releases, streamer feeds
+     *        and drains, and computes not yet complete. A driver that feeds the executor from a
+     *        stream bounds this, not the program.
+     */
+    [[nodiscard]] std::size_t backlog() const;
+
+    /**
      * @brief Reset simulation state
      */
     void reset();
@@ -672,6 +691,8 @@ private:
     // a boolean "ever fed" flag lets a reused tile start a later compute early.
     std::unordered_map<TileID, size_t, TileIDHash> scheduled_feed_counts_;
     std::unordered_map<TileID, size_t, TileIDHash> completed_feed_counts_;
+    std::unordered_map<TileID, size_t, TileIDHash> scheduled_drain_counts_;
+    std::unordered_map<TileID, size_t, TileIDHash> started_drain_counts_;
     std::unordered_map<TileID, size_t, TileIDHash> scheduled_compute_counts_;
     std::unordered_map<TileID, size_t, TileIDHash> completed_compute_counts_;
 
@@ -1039,6 +1060,22 @@ inline void ConcurrentTimingExecutor::schedule_writeback(const TileDescriptor& t
     block_movers_[mover_for(tile, mover_id)]->schedule_writeback(tile);
 }
 
+inline void ConcurrentTimingExecutor::schedule_release(const TileDescriptor& tile_in, int mover_id) {
+    const TileDescriptor tile = homed(tile_in);
+    block_movers_[mover_for(tile, mover_id)]->schedule_release(tile);
+}
+
+inline std::size_t ConcurrentTimingExecutor::backlog() const {
+    std::size_t n = pending_computes_.size();
+    for (const auto& dma : dma_engines_) n += dma->pending_count();
+    for (const auto& m : block_movers_)
+        n += m->move_queue_depth() + m->writeback_queue_depth() + m->eject_queue_depth() +
+             m->release_queue_depth();
+    for (const auto& st : row_streamers_) n += st->feed_queue_depth() + st->drain_queue_depth();
+    for (const auto& st : col_streamers_) n += st->feed_queue_depth() + st->drain_queue_depth();
+    return n;
+}
+
 inline void ConcurrentTimingExecutor::schedule_feed(const TileDescriptor& tile, int streamer_id) {
     ++scheduled_feed_counts_[tile.tile_id];
     fed_shape_[tile.tile_id] = {tile.height, tile.width};
@@ -1056,6 +1093,7 @@ inline void ConcurrentTimingExecutor::schedule_feed(const TileDescriptor& tile, 
 }
 
 inline void ConcurrentTimingExecutor::schedule_drain(const TileDescriptor& tile, int streamer_id) {
+    ++scheduled_drain_counts_[tile.tile_id];
     // Drains typically go through row streamers (result tiles)
     uint32_t streamer = (streamer_id >= 0)
         ? static_cast<uint32_t>(streamer_id)
@@ -1174,8 +1212,17 @@ inline void ConcurrentTimingExecutor::schedule_matmul_compute(
         pc.dependencies.push_back({id, scheduled_feed_counts_[id]});
     }
     // An accumulating call waits for the previous call on its result (the accumulator it adds to).
-    if (spec.accumulate && scheduled_compute_counts_[tile.tile_id] > 0)
+    if (spec.accumulate && scheduled_compute_counts_[tile.tile_id] > 0) {
         pc.resident_dependencies.push_back({tile.tile_id, scheduled_compute_counts_[tile.tile_id]});
+        // A chain's call published its result to DRAIN when it was the last call scheduled on
+        // the tile. A driver that hands calls over as a window allows (csp-language.md step
+        // 1c.2) can schedule the chain's next call after that: the accumulation continues, so
+        // the publication is retracted -- unless a DRAIN not yet started is waiting for it,
+        // in which case it is an earlier chain's result, drained before this one's.
+        if (compute_result_tag_cam_.lookup(tile.tile_id) &&
+            scheduled_drain_counts_[tile.tile_id] == started_drain_counts_[tile.tile_id])
+            compute_result_tag_cam_.invalidate(tile.tile_id);
+    }
     ++scheduled_compute_counts_[tile.tile_id];
     enqueue_compute(std::move(pc));
 }
@@ -1301,7 +1348,12 @@ inline bool ConcurrentTimingExecutor::step() {
                     if (pc.matmul && pc.matmul->accumulate) {
                         const size_t done = completed_compute_counts_[pc.tile.tile_id];
                         const bool first = done == 0;
-                        const bool last = done + 1 >= scheduled_compute_counts_[pc.tile.tile_id];
+                        // Last: no later call scheduled on the tile, and its DRAIN is (a driver
+                        // that hands actions over in a window may not have scheduled the next
+                        // call yet; the DRAIN, which follows the chain, says it has ended).
+                        const bool last = done + 1 >= scheduled_compute_counts_[pc.tile.tile_id] &&
+                                          scheduled_drain_counts_[pc.tile.tile_id] >
+                                              started_drain_counts_[pc.tile.tile_id];
                         fill = (first ? fill / 2 : 0.0) + (last ? fill / 2 : 0.0);
                     }
                     pc.latency = static_cast<Cycle>(std::ceil(fill)) +
@@ -1438,6 +1490,7 @@ inline bool ConcurrentTimingExecutor::step() {
             if (event.type == EventType::TILE_FED_TO_COMPUTE) {
                 ++completed_feed_counts_[event.tile_id];
             }
+            if (event.type == EventType::STR_DRAIN_START) ++started_drain_counts_[event.tile_id];
         }
         events_.insert(events_.end(), str_events.begin(), str_events.end());
     }
@@ -1451,6 +1504,7 @@ inline bool ConcurrentTimingExecutor::step() {
             if (event.type == EventType::TILE_FED_TO_COMPUTE) {
                 ++completed_feed_counts_[event.tile_id];
             }
+            if (event.type == EventType::STR_DRAIN_START) ++started_drain_counts_[event.tile_id];
         }
         events_.insert(events_.end(), str_events.begin(), str_events.end());
     }
@@ -1559,6 +1613,8 @@ inline void ConcurrentTimingExecutor::reset() {
     fed_shape_.clear();
     scheduled_feed_counts_.clear();
     completed_feed_counts_.clear();
+    scheduled_drain_counts_.clear();
+    started_drain_counts_.clear();
     scheduled_compute_counts_.clear();
     completed_compute_counts_.clear();
 
