@@ -493,6 +493,11 @@ public:
      */
     bool run();
 
+    /// The livelock check run() makes every 100 cycles, for callers that step the executor
+    /// themselves (the schedule dispatcher). True = no progress for the detector's threshold.
+    /// Checks only on a 100-cycle boundary, so calling it every step costs nothing between.
+    bool livelock_detected();
+
     /**
      * @brief Step simulation by one cycle
      * @return true if simulation is complete
@@ -1218,7 +1223,13 @@ inline void ConcurrentTimingExecutor::schedule_compute(const TileDescriptor& til
 inline bool ConcurrentTimingExecutor::run() {
     while (!is_complete() && current_cycle_ < config_.max_cycles) {
         step();
+        if (livelock_detected()) return false;
+    }
+    return is_complete();
+}
 
+inline bool ConcurrentTimingExecutor::livelock_detected() {
+    {
         // Check for livelock (every 100 cycles to avoid overhead)
         if (livelock_detector_ && (current_cycle_ % 100 == 0)) {
             // Count progress across ALL pipeline stages - forward (load/move/
@@ -1246,13 +1257,10 @@ inline bool ConcurrentTimingExecutor::run() {
                 metrics.tiles_streamed += streamer->total_tiles_fed();
             metrics.compute_ops_completed = next_compute_slot_;
             auto result = livelock_detector_->check(current_cycle_, metrics);
-            if (result.livelock_detected) {
-                // Livelock detected - could log or throw
-                return false;
-            }
+            if (result.livelock_detected) return true;
         }
     }
-    return is_complete();
+    return false;
 }
 
 inline bool ConcurrentTimingExecutor::step() {

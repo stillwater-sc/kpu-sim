@@ -270,3 +270,29 @@ TEST_CASE("Dispatcher: P against reuse -- a tile reloads when its next consumer 
     CHECK(dram_at.at(1) < dram_at.at(0));
     CHECK(dram_at.at(0) == loads);                      // no lookahead: no reuse at all
 }
+
+TEST_CASE("Dispatcher: a paced run that wedges reports a livelock, as an up-front run does",
+          "[timing][schedule][dispatcher]") {
+    // A compute whose input is never fed can never start: the run makes no progress. Both
+    // paths must stop at the livelock detector's threshold, not at max_cycles.
+    ScheduleResult s;
+    s.valid = true;
+    ScheduleOperation c;
+    c.type = ScheduleOpType::COMPUTE;
+    c.tile.tile_id = TileID{MatrixID::C, 0, 0, 0};
+    TileID never_fed{MatrixID::A, 0, 0, 0};
+    c.dependency_tiles = {never_fed};
+    c.dependency_tile = never_fed;
+    s.operations = {c};
+    for (std::optional<std::size_t> P : {std::optional<std::size_t>{}, std::optional<std::size_t>{1}}) {
+        CAPTURE(P.has_value());
+        ConcurrentTimingExecutor exec(s1());
+        ScheduleExecutor::Config cfg;
+        cfg.prefetch_depth = P;
+        ScheduleExecutor x(exec, cfg);
+        const auto r = x.execute(s);
+        CHECK_FALSE(r.success);
+        CHECK(r.livelock_detected);
+        CHECK(r.total_cycles < exec.config().max_cycles / 10);
+    }
+}

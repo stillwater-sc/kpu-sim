@@ -339,6 +339,13 @@ private:
                     break;
                 }
                 executor_.step();
+                // The same livelock check run() makes: a paced run that wedges with work
+                // pending reports it, instead of grinding on to max_cycles.
+                if (executor_.livelock_detected()) {
+                    result.livelock_detected = true;
+                    result.error_message = "Livelock detected";
+                    break;
+                }
             }
         } catch (const std::exception& e) {
             result.error_message = std::string("Failed to enqueue an operation: ") + e.what();
