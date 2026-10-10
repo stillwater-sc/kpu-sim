@@ -447,6 +447,49 @@ if(KPU_BUILD_TESTS)
             -DMUST_NOT_MATCH=values.vs
             -P ${CMAKE_CURRENT_SOURCE_DIR}/expect_exit.cmake
     )
+    # Stepping and the timeline from the program (step 4c): L-T1 replays its records with
+    # lane and L3-slot occupancy; L-B applies one action per step and stops at the limit; the
+    # timeline is one event per leg. Each refuses a run that lacks the level it reads.
+    add_test(NAME kpu_run_csp_step_lt1
+        COMMAND ${CMAKE_COMMAND}
+            -DCMD=$<TARGET_FILE:run>
+            -DARGS=--program$<SEMICOLON>${_corpus}/linear_64_t16_relu.csp$<SEMICOLON>--deploy$<SEMICOLON>${_deploy}/kpu_s1.json$<SEMICOLON>--level$<SEMICOLON>block-sequential$<SEMICOLON>--step$<SEMICOLON>--step-limit$<SEMICOLON>20
+            -DEXPECT_CODE=0
+            -DMUST_MATCH=stepping.L-T1:.*records.*@0.+action.0.LOAD.*dma.lane.0.*L3.[0-9]+/128.*RELEASE.*stopped.after.20.of.*OK
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/expect_exit.cmake
+    )
+    add_test(NAME kpu_run_csp_step_lb
+        COMMAND ${CMAKE_COMMAND}
+            -DCMD=$<TARGET_FILE:run>
+            -DARGS=--program$<SEMICOLON>${_corpus}/linear_64_t16_relu.csp$<SEMICOLON>--level$<SEMICOLON>behavioral$<SEMICOLON>--step$<SEMICOLON>--step-limit$<SEMICOLON>12
+            -DEXPECT_CODE=0
+            -DMUST_MATCH=stepping.L-B:.*actions.*each.applied.*FEED.A.0,0.*fabric.1.*stopped.after.12.of
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/expect_exit.cmake
+    )
+    add_test(NAME kpu_run_csp_step_refuses_lca_only
+        COMMAND ${CMAKE_COMMAND}
+            -DCMD=$<TARGET_FILE:run>
+            -DARGS=--program$<SEMICOLON>${_corpus}/matmul_48x48x48_t16.csp$<SEMICOLON>--deploy$<SEMICOLON>${_deploy}/kpu_s1.json$<SEMICOLON>--level$<SEMICOLON>cycle-accurate$<SEMICOLON>--step
+            -DEXPECT_CODE=2
+            -DMUST_MATCH=--step.walks.L-B.*or.L-T1.*neither.ran
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/expect_exit.cmake
+    )
+    add_test(NAME kpu_run_csp_timeline
+        COMMAND ${CMAKE_COMMAND}
+            -DCMD=$<TARGET_FILE:run>
+            -DARGS=--program$<SEMICOLON>${_corpus}/matmul_48x48x48_t16.csp$<SEMICOLON>--level$<SEMICOLON>block-sequential$<SEMICOLON>--timeline$<SEMICOLON>${CMAKE_CURRENT_BINARY_DIR}/csp_matmul_timeline.json
+            -DEXPECT_CODE=0
+            -DMUST_MATCH=wrote.*csp_matmul_timeline.json.*events,.one.per.leg,.from.L-T1
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/expect_exit.cmake
+    )
+    add_test(NAME kpu_run_csp_timeline_needs_lt1
+        COMMAND ${CMAKE_COMMAND}
+            -DCMD=$<TARGET_FILE:run>
+            -DARGS=--program$<SEMICOLON>${_corpus}/matmul_48x48x48_t16.csp$<SEMICOLON>--level$<SEMICOLON>behavioral$<SEMICOLON>--timeline$<SEMICOLON>${CMAKE_CURRENT_BINARY_DIR}/should_not_exist_csp.json
+            -DEXPECT_CODE=2
+            -DMUST_MATCH=--timeline.records.the.L-T1.run
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/expect_exit.cmake
+    )
     add_test(NAME kpu_run_csp_rejects_algo
         COMMAND ${CMAKE_COMMAND}
             -DCMD=$<TARGET_FILE:run>
@@ -477,6 +520,8 @@ if(KPU_BUILD_TESTS)
         kpu_run_csp_block_sequential kpu_run_csp_emit_result
         kpu_run_csp_lu_skips_lca kpu_run_csp_refuses_lca_on_t4 kpu_run_csp_rejects_algo
         kpu_run_csp_refuses_invalid_program kpu_run_l0_refuses_lca
+        kpu_run_csp_step_lt1 kpu_run_csp_step_lb kpu_run_csp_step_refuses_lca_only
+        kpu_run_csp_timeline kpu_run_csp_timeline_needs_lt1
         PROPERTIES LABELS "program;driver;csp")
 
     # ---- the machine as a spec (#282 increment 4) ---------------------------------

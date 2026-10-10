@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Stepping a CSP program, and its timeline** (kpu-run-csp-programs step 4c).
+  - `kpu-run --program file.csp --step` walks the program at L-B (one action per step, applied
+    as it is stepped) or L-T1 (the run's records, replayed in start order).
+  - Each L-T1 step reports lanes busy per process and L3 slots held at its cycle. That is
+    station occupancy, which the L0 path's stepper cannot report.
+  - `--timeline` writes the L-T1 run as Chrome-trace events, one per leg, per process and
+    lane.
+  - `VirtualPlatform::step_begin` takes a CSP program.
+
 - **The tile-flow record of a CSP program: `.tflow` version 4** (kpu-run-csp-programs step 4b).
   - `kpu-run --program file.csp --tflow dir` records the program's L-T1 run: its actions as
     ops, and its own L3 slots as the residencies.

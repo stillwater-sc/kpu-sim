@@ -14,6 +14,7 @@
 // Copyright (c) 2024-2025 Stillwater Supercomputing, Inc.
 // ============================================================================
 #include <sw/kpu/program/driver/csp_run.hpp>
+#include <sw/kpu/program/driver/csp_timeline.hpp>
 #include <sw/kpu/program/driver/execution_level.hpp>
 #include <sw/kpu/program/driver/program_spec.hpp>
 #include <sw/kpu/program/platform/deployment_json.hpp>
@@ -58,7 +59,9 @@ R"(kpu-run — execute a Domain Flow Program at one or more levels and compare t
                             Write one with kpu-csp-gen. With it: --deploy (L-CA builds its
                             machine from it), --level, --window <W> (L-CA's driver window,
                             default 256), --inputs <values.l0>, --trace-limit <n>
-                            (the L0 oracle, default 1000000 actions), --no-compare
+                            (the L0 oracle, default 1000000 actions), --no-compare,
+                            --tflow, --timeline (both from L-T1), --step and
+                            --step-limit (L-B: one action per step; L-T1: one record)
   --program <file.l0>       execute a program FROM A FILE (#265). Mutually exclusive
                             with --algo/--size/--tile: a spec that says two different
                             things is a usage error, not a choice for the tool to make
@@ -196,7 +199,7 @@ int run_csp_program(const std::vector<std::string>& a, const std::string& path) 
     // --algo and friends are kpu-csp-gen's), and is refused by name rather than ignored.
     static const std::set<std::string> kOptions = {"--program", "--deploy", "--level", "--window", "--inputs",
                                                    "--trace-limit", "--no-compare", "--emit-l0-result",
-                                                   "--tflow"};
+                                                   "--tflow", "--step", "--step-limit", "--timeline"};
     for (const std::string& t : a)
         if (t.rfind("--", 0) == 0 && !kOptions.count(t)) {
             std::cerr << "kpu-run: " << t << " does not apply to a CSP program"
@@ -206,14 +209,16 @@ int run_csp_program(const std::vector<std::string>& a, const std::string& path) 
                       << "\n";
             return 2;
         }
-    std::string err, deploy_path, inputs_path, emit_path, tflow_path;
+    std::string err, deploy_path, inputs_path, emit_path, tflow_path, timeline_path;
     if (!arg_required(a, "--deploy", deploy_path, err) || !arg_required(a, "--inputs", inputs_path, err) ||
-        !arg_required(a, "--emit-l0-result", emit_path, err) || !arg_required(a, "--tflow", tflow_path, err)) {
+        !arg_required(a, "--emit-l0-result", emit_path, err) || !arg_required(a, "--tflow", tflow_path, err) ||
+        !arg_required(a, "--timeline", timeline_path, err)) {
         std::cerr << "kpu-run: " << err << "\n";
         return 2;
     }
-    std::uint32_t window = 256, trace_limit = 1000000;
-    if (!parse_dim(a, "--window", 256, window, err) || !parse_dim(a, "--trace-limit", 1000000, trace_limit, err)) {
+    std::uint32_t window = 256, trace_limit = 1000000, step_limit = 40;
+    if (!parse_dim(a, "--window", 256, window, err) || !parse_dim(a, "--trace-limit", 1000000, trace_limit, err) ||
+        !parse_dim(a, "--step-limit", 40, step_limit, err)) {
         std::cerr << "kpu-run: " << err << "\n";
         return 2;
     }
@@ -416,6 +421,67 @@ int run_csp_program(const std::vector<std::string>& a, const std::string& path) 
             std::cerr << "kpu-run: --tflow: " << e.what() << "\n";
             return 2;
         }
+    }
+
+    // --timeline: the L-T1 run's records as Chrome-trace intervals, one per leg (step 4c).
+    if (!timeline_path.empty()) {
+        const CspLevelOutcome* lt1 = nullptr;
+        for (const auto& o : res.levels)
+            if (o.level == ExecutionLevel::BlockSequential && !o.skipped) lt1 = &o;
+        if (!lt1) {
+            std::cerr << "kpu-run: --timeline records the L-T1 run, which did not run (add block-sequential to "
+                         "--level)\n";
+            return 2;
+        }
+        const auto entries = csp_trace_entries(lt1->records, inputs, spec.device_view().element_bytes);
+        if (!sw::trace::ChromeTraceExporter::export_traces(timeline_path, entries)) {
+            std::cerr << "kpu-run: could not write '" << timeline_path << "'\n";
+            return 2;
+        }
+        std::cout << "wrote  " << timeline_path << "  (" << entries.size()
+                  << " events, one per leg, from L-T1; per process and lane)\n";
+    }
+
+    // --step: walk the program at the finest of L-B and L-T1 that ran, through the platform
+    // (step 4c). L-B applies one action per step; L-T1 replays its records in start order.
+    if (has_flag(a, "--step")) {
+        std::optional<ExecutionLevel> target;
+        for (const auto& o : res.levels)
+            if (!o.skipped && (o.level == ExecutionLevel::Behavioral || o.level == ExecutionLevel::BlockSequential))
+                target = o.level;
+        if (!target) {
+            std::cerr << "kpu-run: --step walks L-B (actions) or L-T1 (records); neither ran (L-CA's step is a "
+                         "cycle, #283)\n";
+            return 2;
+        }
+        std::optional<platform::VirtualPlatform::CspCursor> cur;
+        try {
+            cur.emplace(vp->step_begin(handle, *target));
+        } catch (const std::exception& e) {
+            std::cerr << "kpu-run: " << e.what() << "\n";
+            return 2;
+        }
+        std::cout << "\nstepping " << short_name(*target) << ": " << cur->size()
+                  << (cur->executes() ? " actions (each applied as it is stepped)"
+                                      : " records (a replay of the run, in start order)")
+                  << (step_limit && cur->size() > step_limit ? ", showing the first " + std::to_string(step_limit)
+                                                              : "")
+                  << "\n";
+        std::size_t shown = 0;
+        // The limit is checked before advancing: at L-B a step applies an action.
+        while (!step_limit || shown < step_limit) {
+            if (!cur->step()) break;
+            const driver::CspStep& st = cur->current();
+            std::cout << "  " << std::setw(6) << std::right << cur->position() << "  " << std::left
+                      << describe(st, !cur->executes()) << "   L3 " << st.l3_held << "/" << ast->l3;
+            if (cur->executes())
+                std::cout << "  L2 " << st.l2_held << "  fabric " << st.cf_held;
+            else
+                for (const auto& [p, n] : cur->stepper().lanes_busy()) std::cout << "  [" << p << " " << n << "]";
+            std::cout << "\n";
+            ++shown;
+        }
+        std::cout << "  stopped after " << cur->position() << " of " << cur->size() << " steps\n";
     }
 
     if (has_flag(a, "--no-compare")) return 0;

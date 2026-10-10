@@ -126,6 +126,25 @@ modelled (L2, L1). `bind.py` derives per-resource places (DRAM layout, DMA engin
 tile, BlockMover, NoC route) by stated policies. Every derived row is labelled as derived: the
 timing is the executor's, the place is a policy.
 
+### 2.4 Step and timeline, in a terminal or a trace viewer
+
+A CSP program can also be walked without the page:
+
+```bash
+# L-T1: the run's records in start order, with lanes busy and L3 slots held at each cycle
+build/tools/kpu-run/kpu-run --program t4.csp --deploy tests/program/deploy/kpu_t4.json \
+    --level block-sequential --step --step-limit 60
+# L-B: one action per step, applied; tiles held in L3, L2 and the fabric after each
+build/tools/kpu-run/kpu-run --program t4.csp --level behavioral --step
+# the L-T1 run as Chrome-trace events, one per leg (chrome://tracing, Perfetto)
+build/tools/kpu-run/kpu-run --program t4.csp --level block-sequential --timeline run.json
+```
+
+- `--step` uses the finest of L-B and L-T1 that ran. `--step-limit 0` shows every step.
+- An L-T1 step's occupancy is at its **start** cycle. A Load's slot is held from its credit,
+  which can come before its DMA starts, so L3 can show slots held before any transfer runs.
+- L-CA's step is a cycle (#283), so `--step` and `--timeline` refuse a run with only L-CA.
+
 ---
 
 ## 3. The memory-side debugger

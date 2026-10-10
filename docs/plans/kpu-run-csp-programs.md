@@ -1,7 +1,7 @@
 # `kpu-run` runs CSP programs, at every level including cycle-accurate
 
-**Status:** Decided 2026-10-10 (revised after review, §8; Q1-Q4 as recommended, §9); steps 1-3, 4a and 4b done;
-4c-4e planned (§5, step 4; 4d's language decided 2026-10-10)
+**Status:** Decided 2026-10-10 (revised after review, §8; Q1-Q4 as recommended, §9); steps 1-3 and 4a-4c done;
+4d-4e planned (§5, step 4; 4d's language decided 2026-10-10)
 **Tracks:** #283 (the L-CA half). Covers `docs/plans/csp-program-tile-sequencing.md` steps 2b and
 3 (L-T1 from the program).
 **Depends on:** the CSP language and its stream (ADR 0004, #343-#345), `CspDriver` (#342, #345,
@@ -341,11 +341,28 @@ platform have moved (§5 step 4). Then it is retired.
          TF6 and TF9 fail when broken; an unlabelled v4 is exit 2; read as v3, TF6 fails), the
          viewer smoke test, and binding to the T4 floorplan.
        - The v3 path's tests are unchanged and pass.
-   - **4c: stepping and the timeline from the program.**
-     - `--step` walks the action stream: one action per step at L-B (re-executed); one record
-       per step at L-T1 (replayed in start order).
-     - `--timeline` writes the L-T1 records as Chrome-trace intervals per process and lane.
-     - `StepCursor` gains a CSP mode behind the platform's `step_begin`.
+   - **4c: stepping and the timeline from the program** (done).
+     - **`--step`** walks the program at the finest of L-B and L-T1 that ran, through
+       `VirtualPlatform::step_begin(CspProgramHandle, level)` (`driver/csp_step.hpp`):
+       - L-B applies one action per step from the ActionStream, so values form as you step.
+         Each step reports the tiles L3, L2 and the fabric hold after it.
+       - L-T1 runs the program, then replays its records in start order (program order at
+         one cycle). Each step reports, at its start cycle, the lanes busy per process and
+         the L3 slots held. That is station occupancy, which the L0 executor could not give
+         (it publishes only its peak).
+       - L-CA's step is a cycle (#283) and is refused with that reason; so is `--step` on a
+         run where neither L-B nor L-T1 ran.
+     - **`--timeline`** writes the L-T1 records as Chrome-trace events
+       (`driver/csp_timeline.hpp`): one per leg, on its process and lane, so a Store is two
+       (BlockMover to the DMA buffer, DMA to DRAM). A Release takes no process and no time,
+       so it is not an event; its slot is the `.tflow` record's to show.
+     - **Tests:** `test_csp_step` over the corpus (matmul, linear, LU). At L-B, stepping to
+       the end gives L-B's values and peak, and L3 is empty at the end. At L-T1, every action
+       is replayed, starts never go backwards, lanes busy stay within each process's lanes,
+       slots held stay within L-T1's peak, there is one Release per slot and two legs per
+       Store. L-CA is refused. The timeline has one event per non-Release record, with its
+       cycles, process, lane and bytes. Five CLI tests cover both modes, the two refusals,
+       and the timeline.
    - **4d: orchestration on CSP programs.** This needs a language decision first.
      - **The question:** the orchestrator runs a chain of operators and keeps tiles resident
        between them. Today it passes `initially_resident` (tiles an earlier operator left),

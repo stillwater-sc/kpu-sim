@@ -90,6 +90,16 @@ set_tests_properties(test_csp_corpus PROPERTIES
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
 )
 
+# Stepping a CSP program, and its L-T1 timeline (kpu-run-csp-programs step 4c)
+kpu_add_component_test(test_csp_step "program"
+    test_csp_step.cpp
+)
+
+set_tests_properties(test_csp_step PROPERTIES
+    LABELS "program;csp;step;v0.9"
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+)
+
 # The L0 portable program as a file (#265)
 kpu_add_component_test(test_l0_serialization "program"
     test_l0_serialization.cpp
