@@ -289,7 +289,10 @@ platform have moved (§5 step 4). Then it is retired.
     hosts);
   - LU at L-B and L-T1.
 - **Residency is the program's at every level:**
-  - peak L3 at L-B, L-T1 and L-CA equals the validator's `peak_l3`;
+  - peak L3 at L-B, which executes in program order, equals the validator's `peak_l3`;
+  - at the timed levels (L-T1, L-CA) the DMA runs ahead when a credit is free, so their peak
+    in time lies between the validator's `peak_l3` (the live set) and the program's L3
+    (corrected in step 3);
   - DRAM loads at L-T1 and L-CA equal the program's Loads.
 - **Determinism:** identical makespans across two runs and across CI's four platforms. A
   difference is a bug to fix, not a tolerance to add. L-CA's arbitration iterates maps keyed by
