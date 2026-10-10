@@ -6,7 +6,8 @@
 // meet the fabric, what is fused on a move -- and every level executes it.
 //
 //   L-B   csp::BehavioralInterpreter, from the program's stream
-//   L-T1  the program's transactions under its residency -- step 3; skipped until then
+//   L-T1  csp::TransactionalInterpreter: one tile move per transaction, under the program's
+//         own L3 credits (its Loads and Releases), timed per process from the device
 //   L-CA  timing::CspDriver, from the stream, on the machine csp_config_from(device) builds
 //
 // L0 is the ORACLE, not the input: when the program is small enough to trace, its trace's
@@ -21,6 +22,7 @@
 #include <sw/kpu/program/csp/behavioral.hpp>
 #include <sw/kpu/program/csp/lang/compile.hpp>
 #include <sw/kpu/program/csp/lang/validate.hpp>
+#include <sw/kpu/program/csp/transactional.hpp>
 #include <sw/kpu/program/driver/execution_level.hpp>
 #include <sw/kpu/program/driver/program_spec.hpp>
 #include <sw/kpu/program/platform/deployment_spec.hpp>
@@ -89,7 +91,7 @@ inline std::optional<std::string> csp_level_supported(ExecutionLevel level, cons
         case ExecutionLevel::Behavioral:
             return std::nullopt;
         case ExecutionLevel::BlockSequential:
-            return std::string("L-T1 runs CSP programs from step 3 of docs/plans/kpu-run-csp-programs.md");
+            return std::nullopt;
         case ExecutionLevel::ResourceTransactional:
             return not_implemented_reason(level);
         case ExecutionLevel::CycleAccurate:
@@ -138,7 +140,10 @@ struct CspLevelOutcome {
     bool has_timing = false;
     std::uint64_t makespan = 0;
     std::size_t actions = 0;
-    std::size_t peak_l3 = 0;                // L-B: as executed
+    std::size_t peak_l3 = 0;                // L-B: as executed; L-T1: slots held at once, in time
+    std::size_t credit_stalls = 0;          // L-T1: Loads that waited for a credit
+    std::map<std::string, std::uint64_t> busy;      // L-T1: lane-cycles per process
+    std::map<std::string, std::size_t> lanes;
     std::uint64_t dram_loads = 0, dram_stores = 0, dram_bytes = 0;
     std::uint64_t cf_busy = 0;
     timing::ConcurrentTimingExecutor::VectorStats ve;
@@ -210,6 +215,33 @@ inline CspRunResult run_csp(const CspRunRequest& req) {
             o.values = lb.result();
             o.actions = sum.actions;
             o.peak_l3 = sum.peak_l3;
+        } else if (level == ExecutionLevel::BlockSequential) {
+            // The device's lanes and rates; with no deployment, the default single-site device.
+            characterize::DeviceDescriptor dev = characterize::DeviceDescriptor::single();
+            if (req.device) {
+                platform::DeploymentSpec one;
+                one.devices = {*req.device};
+                dev = one.device_view(0);
+            }
+            csp::lang::ActionStream s(req.ast);
+            csp::TransactionalInterpreter lt(dev, static_cast<std::size_t>(req.ast.l3));
+            lt.begin(req.inputs);
+            while (auto e = s.next()) lt.step(e->action, e->op ? &*e->op : nullptr);
+            const auto st = lt.finish();
+            o.values = lt.result();
+            o.has_timing = true;
+            o.makespan = st.makespan;
+            o.actions = st.actions;
+            o.peak_l3 = st.peak_l3;
+            o.dram_loads = st.dram_loads;
+            o.dram_stores = st.dram_stores;
+            o.dram_bytes = st.dram_bytes;
+            o.credit_stalls = st.credit_stalls;
+            o.busy = st.busy;
+            o.lanes = st.lanes;
+            o.cf_busy = st.busy.count("cf") ? st.busy.at("cf") : 0;
+            o.unmodelled.push_back("tile contexts' vector-unit time (movers.vector): L-T1 applies the stages' "
+                                   "values; their time is L-CA's");
         } else {                                        // CycleAccurate
             const auto cfg = timing::csp_config_from(*req.device);
             o.unmodelled = cfg->unmapped;

@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **L-T1 from the CSP program** (kpu-run-csp-programs step 3; the sequencing plan's step 3).
+  - `csp::TransactionalInterpreter` times the program one tile move per transaction, under the
+    program's own L3 credits: Loads take them, its Releases return them, and nothing is inferred.
+  - It is a one-pass list schedule in program order over per-process lanes from the device
+    descriptor. Values are L-B's by construction.
+  - `kpu-run --program file.csp` now runs L-B, L-T1 and L-CA, all compared bit-exactly against
+    the L0 oracle. S1 matmul 256³: L-T1 43,840 cycles (uncalibrated), L-CA 117,887.
+
 - **`kpu-run --program file.csp`: the simulator executes CSP programs** (kpu-run-csp-programs
   step 2).
   - L-B runs from the program's stream; L-CA through `CspDriver` on the machine the deployment

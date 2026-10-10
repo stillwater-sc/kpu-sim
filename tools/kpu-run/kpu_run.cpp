@@ -348,6 +348,15 @@ int run_csp_program(const std::vector<std::string>& a, const std::string& path) 
         std::cout << "makespan " << o.makespan << " cycles   " << o.actions << " actions\n";
         std::cout << "        DRAM  " << o.dram_loads << " loads, " << o.dram_stores << " stores, " << o.dram_bytes
                   << " bytes      cf busy " << o.cf_busy << "\n";
+        if (o.level == ExecutionLevel::BlockSequential) {
+            std::cout << "        L3    peak " << o.peak_l3 << " of " << ast->l3 << " (in time), credit stalls "
+                      << o.credit_stalls << "\n        busy ";
+            for (const auto& [p, b] : o.busy)
+                std::cout << " " << p << " " << b << "/" << (o.lanes.count(p) ? o.lanes.at(p) : 0);
+            std::cout << "   (lane-cycles/lanes)   UNCALIBRATED\n";
+            for (const auto& u : o.unmodelled) std::cout << "        unmodelled: " << u << "\n";
+            continue;
+        }
         std::cout << "        VE    str " << o.ve.str_busy << "/" << o.ve.str_bound << "  bm " << o.ve.bm_busy << "/"
                   << o.ve.bm_bound << "  fabric " << o.ve.fabric << "   (busy/bound)   window " << window << "\n";
         for (const auto& u : o.unmodelled) std::cout << "        unmodelled: " << u << "\n";
