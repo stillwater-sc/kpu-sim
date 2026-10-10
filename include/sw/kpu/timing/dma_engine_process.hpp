@@ -558,6 +558,17 @@ private:
 
             // Check if tile is already in L3 (supports tile reuse)
             TagCAM& cam = l3_cam(req.tile);
+            if (req.tile.l3_held &&
+                std::any_of(pending_requests_.begin(), pending_requests_.end(), [&](const PendingRequest& o) {
+                    return !o.is_load && o.state != RequestState::COMPLETED && o.tile.ordered &&
+                           o.tile.program_seq < req.tile.program_seq && o.tile.tile_id == req.tile.tile_id;
+                })) {
+                // A CSP program's load after its own store of the tile (a result read back): DRAM
+                // has the new bytes only when that store retires. Stores and loads of one tile
+                // share this engine (tile-affine), so waiting here orders them -- by the
+                // program's order, since a driver may hand loads over later than stores.
+                continue;
+            }
             if (cam.lookup(req.tile.tile_id) && req.tile.l3_held) {
                 // A CSP program's load: the program decided this tile comes from DRAM; the copy
                 // still in L3 belongs to its previous residency, which the program's Release

@@ -19,6 +19,8 @@
 //   movers.streamers         split over the row and column streamer pools, at least one each
 //   noc.port.output_queue_blocks   dma_store_buffer_blocks, when declared (0 = derived: noted)
 //   dma.window               dma_window: bursts each engine keeps in flight (needs memory.dram)
+//   movers.vector.{bm,str}   bm_ve_lanes/rate, str_ve_lanes/rate: the vector units a tile
+//                            context's stages run on (absent = 0 lanes: the site has none)
 //
 // NOT MAPPED, listed in `unmapped`: the spec's rates (dma.bytes_per_cycle and the movers'
 // bytes per cycle) against the executor's GB/s and latency fields, macs_per_cycle against its
@@ -123,6 +125,15 @@ inline std::optional<CspDeviceConfig> csp_config_from(
     if (s == 1)
         out.unmapped.push_back("movers.streamers = 1: the executor has a row and a column "
                                "streamer pool and needs one in each, so it runs 2");
+
+    if (d.movers.bm_vector) {
+        c.bm_ve_lanes = d.movers.bm_vector->lanes;
+        c.bm_ve_rate = d.movers.bm_vector->rate;
+    }
+    if (d.movers.str_vector) {
+        c.str_ve_lanes = d.movers.str_vector->lanes;
+        c.str_ve_rate = d.movers.str_vector->rate;
+    }
 
     out.unmapped.push_back("dma.bytes_per_cycle and movers.*_bytes_per_cycle: the executor's "
                            "rates are GB/s and latency fields; its defaults are kept");

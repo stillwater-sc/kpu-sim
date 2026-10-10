@@ -27,14 +27,23 @@
 //                                  engine writes DRAM -- the executor's push-only store)
 //   bm    Move  -> schedule_move;  Writeback -> schedule_writeback
 //   str   Feed  -> schedule_feed;  Drain -> schedule_drain
-//   cf    Call  -> schedule_matmul_compute (values computed at completion)
-//   Release     -> schedule_release, for a residency a Load opened: the BlockMover retires the
-//                  entry after the Moves the program issued before the Release. A result's
-//                  residency (opened by a Writeback) is retired by its Store's ejection.
+//   cf    Call  -> gemm: schedule_matmul_compute; the unfused epilogue (add, an activation):
+//                  schedule_functional_compute, with L0's element functions (values computed
+//                  at completion)
+//   a tile context (csp-language.md step 3): a Drain's stages (fabric, str.drain) and a
+//                  Writeback's (bm.egress) ride the move -- schedule_drain/schedule_writeback
+//                  with stages, timed on the site's vector unit (movers.vector)
+//   Release     -> schedule_release: the BlockMover retires a loaded residency's entry after the
+//                  Moves the program issued before the Release. A result's residency (opened by
+//                  a Writeback) left L3 with its Store's ejection; its Release orders the tile's
+//                  later Moves after that ejection.
 //
-// This step runs explicit (matmul) programs: operands A, B and C, gemm with alpha 1. LU at
-// L-CA needs its kernels as functional computes and in-place residencies; that is a later
-// increment.
+// This step runs matmul and the linear operator: operands A, B and C, and vector operands (a
+// bias), gemm with alpha 1, and the epilogue fused or not. A vector operand's tiles are named
+// MatrixID::A with tk = 1 + its index among the vectors (the executor has no fourth matrix,
+// and a CSP tile's tk is otherwise 0). A Writeback or Store into a residency a Load opened is
+// in place (l3_held): the residency keeps its slot until its Release. LU at L-CA needs its
+// kernels as functional computes; that is a later increment.
 //
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2024-2025 Stillwater Supercomputing, Inc.
@@ -67,6 +76,9 @@ public:
         std::size_t dram_loads = 0;         // DMA_LOAD_COMPLETE events: DRAM reads of whole tiles
         std::size_t dram_stores = 0;
         std::size_t actions = 0;            // the program's actions handed to the executor
+        std::uint64_t dram_bytes = 0;       // bytes the program's Loads and Stores move
+        Cycle cf_busy = 0;                  // compute-tile busy cycles, epilogue included
+        ConcurrentTimingExecutor::VectorStats ve;   // tile-context time by site
         std::size_t peak_held = 0;          // most actions the driver and executor held at once
         program::TileProgram values;        // the source program's operands, as DRAM holds them
     };
@@ -115,6 +127,8 @@ public:
         next_ = 0;
         loads_.clear();
         loaded_.clear();
+        dram_bytes_ = 0;
+        seq_ = 0;
 
         Result r;
         const Cycle max = exec_.config().max_cycles;
@@ -154,6 +168,9 @@ public:
             r.dram_loads += e.type == EventType::DMA_LOAD_COMPLETE;
             r.dram_stores += e.type == EventType::DMA_STORE_COMPLETE;
         }
+        r.dram_bytes = dram_bytes_;
+        for (std::size_t t = 0; t < exec_.config().num_compute_tiles; ++t) r.cf_busy += exec_.compute_tile_busy_cycles(t);
+        r.ve = exec_.vector_stats();
         r.values = inputs_;
         if (r.completed) {
             auto& C = r.values.operand("C");
@@ -178,12 +195,21 @@ private:
     std::size_t next_ = 0;                      // the trace's next action
     std::deque<TileDescriptor> loads_;          // the dma process's Loads not yet handed over
     std::set<TileID> loaded_;                   // tiles whose open residency a Load opened
+    std::map<std::string, std::size_t> vector_tk_;   // vector operand -> its tk tag
+    std::uint64_t dram_bytes_ = 0;
+    std::uint64_t seq_ = 0;                          // program order of the actions handed over
 
     void check_machine(std::size_t l3) {
-        for (const auto& name : inputs_.operand_order())
+        for (const auto& name : inputs_.operand_order()) {
+            const auto& t = inputs_.operand(name);
+            if (t.cols == 1 && t.tile_cols == 1) {
+                vector_tk_[name] = 1 + vector_tk_.size();
+                continue;
+            }
             if (name != "A" && name != "B" && name != "C")
-                throw std::invalid_argument("CspDriver: operand '" + name + "': L-CA runs matmul programs "
-                                            "(operands A, B, C) in this step");
+                throw std::invalid_argument("CspDriver: operand '" + name + "': L-CA runs matmul and the linear "
+                                            "operator (operands A, B, C and vectors) in this step");
+        }
         // The program's channel capacities are its target's (decision Q2): a program that needs
         // more L3 than the machine has, or was lowered for an unbounded one, is not this
         // machine's program. Level 1 is one flat L3: a machine with several is level 2's.
@@ -205,9 +231,10 @@ private:
     }
 
     static void check_call(const program::TileOp& op) {
+        if (op.kind == program::TileOpKind::BiasAdd || op.kind == program::TileOpKind::Activation) return;
         if (op.kind != program::TileOpKind::MatMulAccum)
             throw std::invalid_argument(std::string("CspDriver: L0 op ") + program::to_string(op.kind) +
-                                        ": L-CA runs matmul programs in this step");
+                                        ": L-CA runs matmul and the linear operator in this step");
         if (op.alpha != 1.0f)
             throw std::invalid_argument("CspDriver: gemm with alpha " + std::to_string(op.alpha) +
                                         ": the fabric's matmul computes alpha 1 in this step");
@@ -233,48 +260,111 @@ private:
             }
         }
         TileDescriptor d = descriptor(a.tile);
+        d.program_seq = ++seq_;
         switch (a.kind) {
             case Action::Kind::Load:
                 d.l3_held = true;
                 loaded_.insert(d.tile_id);
                 loads_.push_back(d);
+                dram_bytes_ += d.size_bytes;
                 break;
             case Action::Kind::Move:
                 d.l3_held = loaded_.count(d.tile_id) != 0;
-                exec_.schedule_move(d, d.tile_id.matrix == isa::MatrixID::B);
+                exec_.schedule_move(d, d.tile_id.matrix == isa::MatrixID::B && d.tile_id.tk == 0);
                 break;
             case Action::Kind::Feed:      exec_.schedule_feed(d); break;
-            case Action::Kind::Drain:     exec_.schedule_drain(d); break;
-            case Action::Kind::Writeback: exec_.schedule_writeback(d); break;
-            case Action::Kind::Store:     exec_.schedule_store(d); break;
+            case Action::Kind::Drain: {
+                if (a.context.empty()) { exec_.schedule_drain(d); break; }
+                std::vector<VectorStage> fabric, drain;
+                for (const auto& st : a.context)
+                    (st.place == program::csp::Place::Fabric ? fabric : drain).push_back(stage(st));
+                exec_.schedule_drain(d, std::move(fabric), std::move(drain));
+                break;
+            }
+            case Action::Kind::Writeback: {
+                d.l3_held = loaded_.count(d.tile_id) != 0;     // in place, into its residency's slot
+                if (a.context.empty()) { exec_.schedule_writeback(d); break; }
+                std::vector<VectorStage> egress;
+                for (const auto& st : a.context) egress.push_back(stage(st));
+                exec_.schedule_writeback(d, std::move(egress));
+                break;
+            }
+            case Action::Kind::Store:
+                d.l3_held = loaded_.count(d.tile_id) != 0;
+                dram_bytes_ += d.size_bytes;
+                exec_.schedule_store(d);
+                break;
             case Action::Kind::Call: {
-                ConcurrentTimingExecutor::MatMulComputeSpec spec;
-                spec.a_tiles = {id(op->inputs.at(0))};
-                spec.b_tiles = {id(op->inputs.at(1))};
-                spec.accumulate = true;         // one k-slice; C stays in the fabric
-                exec_.schedule_matmul_compute(descriptor(op->outputs.at(0)), spec);
+                const program::TileCoord& y = op->outputs.at(0);
+                if (op->kind == program::TileOpKind::MatMulAccum) {
+                    ConcurrentTimingExecutor::MatMulComputeSpec spec;
+                    spec.a_tiles = {id(op->inputs.at(0))};
+                    spec.b_tiles = {id(op->inputs.at(1))};
+                    spec.accumulate = true;         // one k-slice; C stays in the fabric
+                    exec_.schedule_matmul_compute(descriptor(y), spec);
+                    break;
+                }
+                // The unfused epilogue, in the fabric on what was fed: L0's element functions.
+                ConcurrentTimingExecutor::FunctionalComputeSpec spec;
+                spec.input_tiles = {id(y)};
+                if (op->kind == program::TileOpKind::BiasAdd) {
+                    spec.input_tiles.push_back(id(op->inputs.at(0)));
+                    spec.operation = [](const std::vector<TilePayload>& in) {
+                        TilePayload out = in.at(0);
+                        program::bias_tile(out.values, out.cols, in.at(1).values);
+                        return out;
+                    };
+                } else {
+                    const program::ActivationFn fn = op->act;
+                    spec.operation = [fn](const std::vector<TilePayload>& in) {
+                        TilePayload out = in.at(0);
+                        program::activate_tile(out.values, fn);
+                        return out;
+                    };
+                }
+                exec_.schedule_functional_compute(descriptor(y), spec);
                 break;
             }
             case Action::Kind::Release:
-                if (loaded_.erase(d.tile_id)) exec_.schedule_release(d);
+                // A loaded residency's entry is retired here; a written one's left with its
+                // Store, and its Release still orders the tile's later Moves after it.
+                d.l3_held = loaded_.erase(d.tile_id) != 0;
+                exec_.schedule_release(d);
                 break;
         }
         return true;
     }
 
-    static TileID id(const std::string& operand, program::Dim ti, program::Dim tj) {
+    TileID id(const std::string& operand, program::Dim ti, program::Dim tj) const {
         TileID t;
-        t.matrix = operand == "A" ? isa::MatrixID::A : operand == "B" ? isa::MatrixID::B : isa::MatrixID::C;
+        auto v = vector_tk_.find(operand);
+        t.matrix = v != vector_tk_.end() || operand == "A" ? isa::MatrixID::A
+                   : operand == "B"                         ? isa::MatrixID::B
+                                                            : isa::MatrixID::C;
         t.ti = ti;
         t.tj = tj;
+        if (v != vector_tk_.end()) t.tk = static_cast<decltype(t.tk)>(v->second);
         return t;
     }
-    static TileID id(const program::TileCoord& c) { return id(c.operand, c.ti, c.tj); }
+    TileID id(const program::TileCoord& c) const { return id(c.operand, c.ti, c.tj); }
+
+    VectorStage stage(const program::csp::Stage& st) const {
+        VectorStage v;
+        switch (st.op) {
+            case program::csp::VeOp::Add:  v.op = VectorStage::Op::Add; v.arg = id(st.arg); break;
+            case program::csp::VeOp::Relu: v.op = VectorStage::Op::Relu; break;
+            case program::csp::VeOp::Gelu: v.op = VectorStage::Op::Gelu; break;
+            case program::csp::VeOp::Silu: v.op = VectorStage::Op::Silu; break;
+            case program::csp::VeOp::Atan: v.op = VectorStage::Op::Atan; break;
+        }
+        return v;
+    }
 
     TileDescriptor descriptor(const program::TileCoord& c) const {
         const auto& t = inputs_.operand(c.operand);
         TileDescriptor d;
         d.tile_id = id(c);
+        d.ordered = true;                   // the program orders it, not only a tag match
         d.height = t.row_end(c.ti) - t.row_begin(c.ti);
         d.width = t.col_end(c.tj) - t.col_begin(c.tj);
         d.element_size = 4;

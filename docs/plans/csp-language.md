@@ -1,7 +1,7 @@
 # The CSP Language: Writing the Tile Sequencing
 
 **Date:** 2026-10-09
-**Status:** Decided 2026-10-09 (A1-A3 with the request; Q1-Q6 answered, §7); steps 1, 1c and 2 done; step 3 (the vector processor at L-CA) next
+**Status:** Decided 2026-10-09 (A1-A3 with the request; Q1-Q6 answered, §7); steps 1, 1c, 2 and 3 done
 **Decision record:** ADR 0004 (the CSP program is a written language).
 **Is:** step 1b of `docs/plans/csp-program-tile-sequencing.md`, ahead of its step 2b (`kpu-run`).
 **Related:**
@@ -389,12 +389,55 @@ Each step is one PR and ends green.
      - placement against the target;
      - `movers.vector` JSON round-trip and refusal;
      - refusals by line.
-3. **The vector processor at L-CA.**
-   - A VE stage on the BlockMover's ingress and egress, and on the streamer's drain, timed by
-     a new spec field (§7 Q5). `fabric` charges the compute tile.
-   - `CspDriver` carries contexts on the descriptors.
-   - Measured on S1 for each placement: DRAM bytes, compute-fabric busy, VE busy and stalls,
-     and the makespan. This is the fusion benefit the driver exists to show.
+3. **The vector processor at L-CA** (done).
+   - **Timing:**
+     - A stage costs `ceil(elements / (lanes x rate))` cycles on its site (`movers.vector`,
+       mapped to the executor's `bm_ve_*` / `str_ve_*`).
+     - On a Drain (`str.drain`) or a Writeback (`bm.egress`), the move takes the longer of its
+       transfer and the vector unit's time. The excess is the unit's *bound* cycles.
+     - `fabric` stages run first, at `macs_per_cycle` elements per cycle, and charge the compute
+       tile that holds the accumulator.
+     - A stage on a site with no unit is refused by the executor too.
+   - **Values:** the executor applies each stage's L0 element functions to the payload as the
+     move lands. An add reads its bias from L3, and the bias's Release waits until every stage
+     that reads it has run.
+   - **`CspDriver` runs the linear operator:**
+     - vector operands (named `A` with `tk = 1 + index`, since the executor has three matrix ids);
+     - the unfused epilogue as functional computes;
+     - contexts on the Drain and Writeback descriptors;
+     - in-place Writebacks and Stores into a loaded residency (`l3_held`).
+   - **Running a tile through two residencies exposed five ordering hazards.** Each is a place
+     where a tag-CAM match by tile id picked the wrong copy. All are fixed by the program's
+     order, on CSP descriptors only (`TileDescriptor::ordered`):
+     - an accumulation chain is published to DRAIN when its DRAIN is scheduled *and* its calls
+       are done (`chains_`), not when it is the "last call scheduled". The epilogue's computes
+       on the same tile made the old rule wait forever. This also replaces 1c.2's retraction.
+     - a Feed takes the copy its own Move brought (waits for the tile's earlier Moves to
+       arrive), not a drained copy on its way to its writeback;
+     - a Writeback takes the copy its own Drain brought (waits for the tile's earlier Drains);
+     - a Move or an ejection waits for the tile's earlier Writebacks (RAW in L3), and a
+       written residency's Release orders the tile's later Moves after its Store's ejection;
+     - a Load waits for the tile's earlier Stores to retire (RAW through DRAM), by
+       `program_seq`, since the driver hands Loads over later than Stores.
+   - **Results** (linear 128^3 / 32^3, S1, 16-lane units, relu unless named):
+
+     | placement | cycles | DRAM bytes | cf busy | VE busy / bound |
+     |---|---|---|---|---|
+     | fabric | 17,628 | 393,728 | 1,312 | fabric 32 |
+     | str.drain | 17,865 | 393,728 | 1,280 | str 2,048 / 1,376 |
+     | bm.egress | 17,894 | 393,728 | 1,280 | bm 2,048 / 704 |
+     | unfused | 22,643 | 524,800 | 3,360 | none |
+
+     - Every placement is bit-identical to the L0 reference, through the trace and through the
+       stream at windows 4 and 64. So are atan on the streamers and gelu split fabric /
+       bm.egress.
+     - Fusing saves exactly 2 x |C| of DRAM traffic and 22% of the makespan here.
+     - At this size and rate the three fused placements differ by under 2%, and each unit is
+       partly bound. At 1 lane, `bm.egress` is bound by 31,424 cycles, and the makespan grows
+       from 17,894 to 44,167: the unit then sets the pace.
+     - The matmul driver's numbers are unchanged (43,968 / 38,089 / 9,985 and the window table).
+   - **Not modelled:** delivering the bias tile to its site costs no bandwidth, and the fabric's
+     epilogue charges the compute tile but not the drain's fill.
 
 ## 5. Verification
 

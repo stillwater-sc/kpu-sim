@@ -8,6 +8,7 @@
 
 #pragma once
 
+#include <sw/kpu/program/tile_kernels.hpp>
 #include <sw/kpu/timing/tile_descriptor.hpp>
 #include <sw/kpu/timing/credit_pool.hpp>
 #include <sw/kpu/timing/tag_cam.hpp>
@@ -21,8 +22,10 @@
 #include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <deque>
 #include <fstream>
 #include <functional>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <stdexcept>
@@ -176,6 +179,15 @@ public:
         double macs_per_cycle = 0.0;
         double compute_fill_per_edge = 2.0;     ///< fill + drain = this x the result's longer edge
 
+        // Vector units on the movers (spec movers.vector; docs/plans/csp-language.md step 3): a
+        // tile-context stage costs ceil(elements / (lanes x rate)) cycles on its site. 0 lanes =
+        // the site has none, and a stage scheduled there is refused. The fabric's stages run at
+        // macs_per_cycle elements per cycle on the compute tile that holds the accumulator.
+        size_t str_ve_lanes = 0;
+        double str_ve_rate = 1.0;
+        size_t bm_ve_lanes = 0;
+        double bm_ve_rate = 1.0;
+
         // Timing parameters
         double clock_ghz = 1.0;           ///< Reference clock in GHz
         Cycle max_cycles = 10'000'000;    ///< Maximum simulation cycles
@@ -324,6 +336,12 @@ public:
     void schedule_writeback(const TileDescriptor& tile, int mover_id = -1);
 
     /**
+     * @brief A writeback whose tile context runs on the BlockMover's vector unit (bm.egress):
+     *        the stages apply to the tile as it moves L2 -> L3, in order
+     */
+    void schedule_writeback(const TileDescriptor& tile, std::vector<VectorStage> egress, int mover_id = -1);
+
+    /**
      * @brief Schedule a CSP program's Release of an L3 entry its l3_held load opened
      * @param tile Tile descriptor
      * @param mover_id Optional specific BlockMover (-1 for auto-select; it must be the mover
@@ -347,6 +365,23 @@ public:
      * @param streamer_id Optional specific Streamer (-1 for auto-select)
      */
     void schedule_drain(const TileDescriptor& tile, int streamer_id = -1);
+
+    /**
+     * @brief A drain with a tile context: `fabric` stages run on the accumulator in the compute
+     *        tile before it leaves (charged to that tile), then `drain` stages on the streamer's
+     *        vector unit as it moves L1 -> L2 (str.drain)
+     */
+    void schedule_drain(const TileDescriptor& tile, std::vector<VectorStage> fabric,
+                        std::vector<VectorStage> drain, int streamer_id = -1);
+
+    /// Tile-context time, by site: busy cycles, and the cycles a vector unit slower than its
+    /// move added to it. `fabric` is the epilogue time charged to the compute tiles.
+    struct VectorStats {
+        Cycle str_busy = 0, str_bound = 0;
+        Cycle bm_busy = 0, bm_bound = 0;
+        Cycle fabric = 0;
+    };
+    [[nodiscard]] VectorStats vector_stats() const;
 
     /**
      * @brief Schedule a compute completion (signals result tile is ready)
@@ -691,8 +726,30 @@ private:
     // a boolean "ever fed" flag lets a reused tile start a later compute early.
     std::unordered_map<TileID, size_t, TileIDHash> scheduled_feed_counts_;
     std::unordered_map<TileID, size_t, TileIDHash> completed_feed_counts_;
-    std::unordered_map<TileID, size_t, TileIDHash> scheduled_drain_counts_;
-    std::unordered_map<TileID, size_t, TileIDHash> started_drain_counts_;
+    // An accumulation chain (a CSP program's MatMulAccum calls on one result, ended by its
+    // DRAIN): calls scheduled and done, and DRAINs scheduled that wait for it. Nothing about
+    // the chain assumes the program was scheduled up front (csp-language.md steps 1c.2, 3).
+    struct Chain { size_t scheduled = 0, done = 0, drains = 0; };
+    std::unordered_map<TileID, Chain, TileIDHash> chains_;
+    // Moves of each tile scheduled, and arrived in L2 (a program-ordered Feed's guard).
+    std::unordered_map<TileID, uint64_t, TileIDHash> moves_scheduled_, moves_arrived_;
+    // Drains of each tile scheduled, and landed in L2 (a program-ordered Writeback's guard).
+    std::unordered_map<TileID, uint64_t, TileIDHash> drains_scheduled_, drains_landed_;
+    void publish_result(const TileID& id);
+    void chain_done(const TileID& id);
+    // Tile contexts, per tile in the order its drains and writebacks were scheduled (a tile's
+    // drains complete in order, as do its writebacks). stage_reads_: stages not yet applied that
+    // read a tile (add's bias) -- its Release waits for them.
+    using StageQueue = std::unordered_map<TileID, std::deque<std::vector<VectorStage>>, TileIDHash>;
+    StageQueue drain_stages_, writeback_stages_;
+    std::unordered_map<TileID, std::deque<Cycle>, TileIDHash> fabric_pending_;
+    std::unordered_map<TileID, size_t, TileIDHash> stage_reads_;
+    std::unordered_map<TileID, uint32_t, TileIDHash> result_cf_;     // the compute tile holding a result
+    Cycle fabric_epilogue_cycles_ = 0;
+    [[nodiscard]] Cycle stage_cycles(const TileDescriptor& t, const std::vector<VectorStage>& stages,
+                                     double per_cycle, const char* site) const;
+    void apply_stages(MemoryLevel level, const TileID& id, StageQueue& queue);
+    void on_drain_start(const TileID& id);
     std::unordered_map<TileID, size_t, TileIDHash> scheduled_compute_counts_;
     std::unordered_map<TileID, size_t, TileIDHash> completed_compute_counts_;
 
@@ -973,6 +1030,17 @@ inline void ConcurrentTimingExecutor::create_components() {
         block_movers_.push_back(std::make_unique<BlockMoverProcess>(
             bm_config, *l3_tile_cams_[mover_tile_[i]], *l3_tile_credits_[mover_tile_[i]],
             l2_credits_, l2_tag_cam_));
+        // A program's Release waits for the context stages that still read the entry.
+        block_movers_.back()->set_release_guard([this](const TileID& id) {
+            auto it = stage_reads_.find(id);
+            return it != stage_reads_.end() && it->second > 0;
+        });
+        // A program's Writeback takes the copy its own Drain brought to L2.
+        block_movers_.back()->set_writeback_guard([this](const TileDescriptor& t) {
+            if (!t.ordered) return false;
+            auto it = drains_landed_.find(t.tile_id);
+            return (it == drains_landed_.end() ? 0 : it->second) < t.after_drains;
+        });
     }
 
     // ========================================================================
@@ -995,6 +1063,11 @@ inline void ConcurrentTimingExecutor::create_components() {
 
         row_streamers_.push_back(std::make_unique<StreamerProcess>(
             str_config, l2_tag_cam_, l2_credits_, compute_result_tag_cam_));
+        row_streamers_.back()->set_feed_guard([this](const TileDescriptor& t) {
+            if (!t.ordered) return false;
+            auto it = moves_arrived_.find(t.tile_id);
+            return (it == moves_arrived_.end() ? 0 : it->second) < t.after_moves;
+        });
     }
 
     // ========================================================================
@@ -1017,6 +1090,11 @@ inline void ConcurrentTimingExecutor::create_components() {
 
         col_streamers_.push_back(std::make_unique<StreamerProcess>(
             str_config, l2_tag_cam_, l2_credits_, compute_result_tag_cam_));
+        col_streamers_.back()->set_feed_guard([this](const TileDescriptor& t) {
+            if (!t.ordered) return false;
+            auto it = moves_arrived_.find(t.tile_id);
+            return (it == moves_arrived_.end() ? 0 : it->second) < t.after_moves;
+        });
     }
 }
 
@@ -1042,6 +1120,7 @@ inline void ConcurrentTimingExecutor::schedule_store(const TileDescriptor& tile_
 
 inline void ConcurrentTimingExecutor::schedule_move(const TileDescriptor& tile_in, bool transpose, int mover_id) {
     const TileDescriptor tile = homed(tile_in);
+    ++moves_scheduled_[tile.tile_id];
     block_movers_[mover_for(tile, mover_id)]->schedule_move(tile, transpose);
 }
 
@@ -1056,7 +1135,8 @@ inline uint32_t ConcurrentTimingExecutor::mover_for(const TileDescriptor& tile, 
 }
 
 inline void ConcurrentTimingExecutor::schedule_writeback(const TileDescriptor& tile_in, int mover_id) {
-    const TileDescriptor tile = homed(tile_in);
+    TileDescriptor tile = homed(tile_in);
+    if (tile.ordered) tile.after_drains = drains_scheduled_[tile.tile_id];
     block_movers_[mover_for(tile, mover_id)]->schedule_writeback(tile);
 }
 
@@ -1076,7 +1156,9 @@ inline std::size_t ConcurrentTimingExecutor::backlog() const {
     return n;
 }
 
-inline void ConcurrentTimingExecutor::schedule_feed(const TileDescriptor& tile, int streamer_id) {
+inline void ConcurrentTimingExecutor::schedule_feed(const TileDescriptor& tile_in, int streamer_id) {
+    TileDescriptor tile = tile_in;
+    if (tile.ordered) tile.after_moves = moves_scheduled_[tile.tile_id];
     ++scheduled_feed_counts_[tile.tile_id];
     fed_shape_[tile.tile_id] = {tile.height, tile.width};
     // Determine if this is a row (A) or column (B) tile
@@ -1092,8 +1174,130 @@ inline void ConcurrentTimingExecutor::schedule_feed(const TileDescriptor& tile, 
     }
 }
 
+inline Cycle ConcurrentTimingExecutor::stage_cycles(const TileDescriptor& t, const std::vector<VectorStage>& stages,
+                                                    double per_cycle, const char* site) const {
+    if (stages.empty()) return 0;
+    if (per_cycle == 0.0)
+        throw std::invalid_argument(std::string("ConcurrentTimingExecutor: a tile context on ") + t.tile_id.to_string() +
+                                    " runs on the " + site + ", which have no vector unit");
+    // Negated, so NaN fails too; a rate so small that the cycle count leaves Cycle's range is
+    // refused rather than converted (the double -> integer conversion would be undefined).
+    if (!(per_cycle > 0.0) || !std::isfinite(per_cycle))
+        throw std::invalid_argument(std::string("ConcurrentTimingExecutor: the vector rate on the ") + site +
+                                    " (lanes x rate) must be finite and positive");
+    const double elements = static_cast<double>(t.height) * static_cast<double>(t.width);
+    const double cycles = std::ceil(elements / per_cycle) * static_cast<double>(stages.size());
+    if (!(cycles < static_cast<double>(std::numeric_limits<Cycle>::max())))
+        throw std::invalid_argument(std::string("ConcurrentTimingExecutor: a tile context on ") + t.tile_id.to_string() +
+                                    " needs more cycles than the clock counts: the vector rate on the " + site + " is too small");
+    return static_cast<Cycle>(cycles);
+}
+
+inline void ConcurrentTimingExecutor::schedule_drain(const TileDescriptor& tile_in, std::vector<VectorStage> fabric,
+                                                     std::vector<VectorStage> drain, int streamer_id) {
+    TileDescriptor tile = tile_in;
+    tile.fabric_cycles = stage_cycles(tile, fabric, config_.macs_per_cycle > 0.0 ? config_.macs_per_cycle : 1.0,
+                                      "compute fabric");
+    tile.ve_cycles = stage_cycles(tile, drain, static_cast<double>(config_.str_ve_lanes) * config_.str_ve_rate,
+                                  "streamers");
+    std::vector<VectorStage> all = std::move(fabric);
+    all.insert(all.end(), drain.begin(), drain.end());
+    for (const VectorStage& st : all)
+        if (st.op == VectorStage::Op::Add) ++stage_reads_[st.arg];
+    drain_stages_[tile.tile_id].push_back(std::move(all));
+    fabric_pending_[tile.tile_id].push_back(tile.fabric_cycles);
+    schedule_drain(tile, streamer_id);
+}
+
+inline void ConcurrentTimingExecutor::schedule_writeback(const TileDescriptor& tile_in, std::vector<VectorStage> egress,
+                                                         int mover_id) {
+    TileDescriptor tile = tile_in;
+    tile.ve_cycles = stage_cycles(tile, egress, static_cast<double>(config_.bm_ve_lanes) * config_.bm_ve_rate,
+                                  "BlockMovers");
+    for (const VectorStage& st : egress)
+        if (st.op == VectorStage::Op::Add) ++stage_reads_[st.arg];
+    writeback_stages_[tile.tile_id].push_back(std::move(egress));
+    schedule_writeback(tile, mover_id);
+}
+
+inline ConcurrentTimingExecutor::VectorStats ConcurrentTimingExecutor::vector_stats() const {
+    VectorStats v;
+    for (const auto& st : row_streamers_) { v.str_busy += st->ve_busy_cycles(); v.str_bound += st->ve_bound_cycles(); }
+    for (const auto& st : col_streamers_) { v.str_busy += st->ve_busy_cycles(); v.str_bound += st->ve_bound_cycles(); }
+    for (const auto& m : block_movers_) { v.bm_busy += m->ve_busy_cycles(); v.bm_bound += m->ve_bound_cycles(); }
+    v.fabric = fabric_epilogue_cycles_;
+    return v;
+}
+
+// The fabric's epilogue runs as the drain starts, on the compute tile holding the accumulator.
+inline void ConcurrentTimingExecutor::on_drain_start(const TileID& id) {
+    auto f = fabric_pending_.find(id);
+    if (f == fabric_pending_.end() || f->second.empty()) return;
+    const Cycle fc = f->second.front();
+    f->second.pop_front();
+    fabric_epilogue_cycles_ += fc;
+    auto cf = result_cf_.find(id);
+    if (fc > 0 && config_.num_compute_tiles > 0 && cf != result_cf_.end()) {
+        cf_busy_until_[cf->second] = std::max(cf_busy_until_[cf->second], current_cycle_) + fc;
+        cf_busy_cycles_[cf->second] += fc;
+    }
+}
+
+// A drain's or writeback's context, on the tile's payload where the move put it. The element
+// functions are L0's (tile_kernels.hpp): the cycle-accurate level computes what L-B does.
+inline void ConcurrentTimingExecutor::apply_stages(MemoryLevel level, const TileID& id, StageQueue& queue) {
+    auto q = queue.find(id);
+    if (q == queue.end() || q->second.empty()) return;
+    const std::vector<VectorStage> stages = std::move(q->second.front());
+    q->second.pop_front();
+    auto& store = payload_store(level);
+    auto it = store.find(id);
+    if (it != store.end()) {
+        TilePayload y = it->second.payload;
+        const uint32_t slot = it->second.slot_id;
+        for (const VectorStage& st : stages) {
+            if (st.op == VectorStage::Op::Add) {
+                auto b = l3_payloads_.find(st.arg);
+                if (b == l3_payloads_.end())
+                    throw std::runtime_error("Tile context: add(" + st.arg.to_string() + ") on " + id.to_string() +
+                                             ": the vector is not in L3");
+                program::bias_tile(y.values, y.cols, b->second.payload.values);
+            } else {
+                const auto fn = st.op == VectorStage::Op::Gelu ? program::ActivationFn::Gelu
+                              : st.op == VectorStage::Op::Silu ? program::ActivationFn::Silu
+                              : st.op == VectorStage::Op::Atan ? program::ActivationFn::Atan
+                                                                : program::ActivationFn::Relu;
+                program::activate_tile(y.values, fn);
+            }
+        }
+        write_payload(level, id, std::move(y), slot);
+    }
+    for (const VectorStage& st : stages)
+        if (st.op == VectorStage::Op::Add) --stage_reads_[st.arg];
+}
+
+inline void ConcurrentTimingExecutor::publish_result(const TileID& id) {
+    if (compute_result_tag_cam_.full()) compute_result_tag_cam_.set_capacity(compute_result_tag_cam_.size() + 1);
+    compute_result_tag_cam_.insert(id, next_compute_slot_++, current_cycle_);
+}
+
+inline void ConcurrentTimingExecutor::chain_done(const TileID& id) {
+    Chain& c = chains_[id];
+    if (c.drains == 0 || c.scheduled == 0 || c.done < c.scheduled) return;
+    publish_result(id);
+    --c.drains;
+    c.scheduled = c.done = 0;
+}
+
 inline void ConcurrentTimingExecutor::schedule_drain(const TileDescriptor& tile, int streamer_id) {
-    ++scheduled_drain_counts_[tile.tile_id];
+    ++drains_scheduled_[tile.tile_id];
+    // A DRAIN ends its tile's accumulation chain (if one is open): the result publishes once
+    // the chain's calls are done.
+    Chain& c = chains_[tile.tile_id];
+    if (c.scheduled > 0) {
+        ++c.drains;
+        chain_done(tile.tile_id);
+    }
     // Drains typically go through row streamers (result tiles)
     uint32_t streamer = (streamer_id >= 0)
         ? static_cast<uint32_t>(streamer_id)
@@ -1214,15 +1418,8 @@ inline void ConcurrentTimingExecutor::schedule_matmul_compute(
     // An accumulating call waits for the previous call on its result (the accumulator it adds to).
     if (spec.accumulate && scheduled_compute_counts_[tile.tile_id] > 0) {
         pc.resident_dependencies.push_back({tile.tile_id, scheduled_compute_counts_[tile.tile_id]});
-        // A chain's call published its result to DRAIN when it was the last call scheduled on
-        // the tile. A driver that hands calls over as a window allows (csp-language.md step
-        // 1c.2) can schedule the chain's next call after that: the accumulation continues, so
-        // the publication is retracted -- unless a DRAIN not yet started is waiting for it,
-        // in which case it is an earlier chain's result, drained before this one's.
-        if (compute_result_tag_cam_.lookup(tile.tile_id) &&
-            scheduled_drain_counts_[tile.tile_id] == started_drain_counts_[tile.tile_id])
-            compute_result_tag_cam_.invalidate(tile.tile_id);
     }
+    if (spec.accumulate) ++chains_[tile.tile_id].scheduled;
     ++scheduled_compute_counts_[tile.tile_id];
     enqueue_compute(std::move(pc));
 }
@@ -1346,14 +1543,12 @@ inline bool ConcurrentTimingExecutor::step() {
                     const double edge = static_cast<double>(std::max(pc.tile.height, pc.tile.width));
                     double fill = config_.compute_fill_per_edge * edge;
                     if (pc.matmul && pc.matmul->accumulate) {
-                        const size_t done = completed_compute_counts_[pc.tile.tile_id];
-                        const bool first = done == 0;
-                        // Last: no later call scheduled on the tile, and its DRAIN is (a driver
-                        // that hands actions over in a window may not have scheduled the next
-                        // call yet; the DRAIN, which follows the chain, says it has ended).
-                        const bool last = done + 1 >= scheduled_compute_counts_[pc.tile.tile_id] &&
-                                          scheduled_drain_counts_[pc.tile.tile_id] >
-                                              started_drain_counts_[pc.tile.tile_id];
+                        // First and last of its chain. Last is known only once the chain's DRAIN
+                        // is scheduled: a driver handing actions over in a window may not have
+                        // scheduled the next call yet.
+                        const Chain& c = chains_[pc.tile.tile_id];
+                        const bool first = c.done == 0;
+                        const bool last = c.drains > 0 && c.done + 1 == c.scheduled;
                         fill = (first ? fill / 2 : 0.0) + (last ? fill / 2 : 0.0);
                     }
                     pc.latency = static_cast<Cycle>(std::ceil(fill)) +
@@ -1404,18 +1599,15 @@ inline bool ConcurrentTimingExecutor::step() {
             // the result: a dropped result leaves its DRAIN head-of-line
             // blocked forever (#210 - manifested at >256 output tiles, e.g.
             // pooling/depthwise at C>=17 with the old hardcoded 256 limit).
-            uint32_t slot = next_compute_slot_++;
             // An accumulating call (one k-slice of a CSP program's MatMulAccum) publishes its
-            // result to DRAIN only when it is the last call scheduled on the tile: the
-            // accumulator is ready when its accumulation is, not after its first slice.
-            const bool partial = it->matmul && it->matmul->accumulate &&
-                                 completed_compute_counts_[it->tile.tile_id] <
-                                     scheduled_compute_counts_[it->tile.tile_id];
-            if (!partial && compute_result_tag_cam_.full()) {
-                compute_result_tag_cam_.set_capacity(
-                    compute_result_tag_cam_.size() + 1);
+            // result to DRAIN only when its chain has ended: the chain's DRAIN is scheduled and
+            // every call of the chain is done (chain_done). Any other compute publishes now.
+            if (it->matmul && it->matmul->accumulate) {
+                ++chains_[it->tile.tile_id].done;
+                chain_done(it->tile.tile_id);
+            } else {
+                publish_result(it->tile.tile_id);
             }
-            if (!partial) compute_result_tag_cam_.insert(it->tile.tile_id, slot, current_cycle_);
 
             // Emit COMPUTE_COMPLETE event
             TimingEvent event = TimingEvent::duration_event(
@@ -1430,6 +1622,7 @@ inline bool ConcurrentTimingExecutor::step() {
             // retire any whose payload no consumer still needs (issue #165):
             // the array holds a tile only while it is actively being consumed.
             const TileID result_id = it->tile.tile_id;
+            result_cf_[result_id] = it->cf_tile;
             std::vector<TileID> consumed_inputs;
             consumed_inputs.reserve(it->dependencies.size() +
                                     it->resident_dependencies.size());
@@ -1477,7 +1670,10 @@ inline bool ConcurrentTimingExecutor::step() {
     // 3. Tick BlockMovers
     for (auto& mover : block_movers_) {
         auto mover_events = mover->tick(current_cycle_);
-        for (const auto& event : mover_events) apply_payload_event(event);
+        for (const auto& event : mover_events) {
+            apply_payload_event(event);
+            if (event.type == EventType::TILE_ARRIVED_L2) ++moves_arrived_[event.tile_id];
+        }
         events_.insert(events_.end(), mover_events.begin(), mover_events.end());
     }
 
@@ -1490,7 +1686,7 @@ inline bool ConcurrentTimingExecutor::step() {
             if (event.type == EventType::TILE_FED_TO_COMPUTE) {
                 ++completed_feed_counts_[event.tile_id];
             }
-            if (event.type == EventType::STR_DRAIN_START) ++started_drain_counts_[event.tile_id];
+            if (event.type == EventType::STR_DRAIN_START) on_drain_start(event.tile_id);
         }
         events_.insert(events_.end(), str_events.begin(), str_events.end());
     }
@@ -1504,7 +1700,7 @@ inline bool ConcurrentTimingExecutor::step() {
             if (event.type == EventType::TILE_FED_TO_COMPUTE) {
                 ++completed_feed_counts_[event.tile_id];
             }
-            if (event.type == EventType::STR_DRAIN_START) ++started_drain_counts_[event.tile_id];
+            if (event.type == EventType::STR_DRAIN_START) on_drain_start(event.tile_id);
         }
         events_.insert(events_.end(), str_events.begin(), str_events.end());
     }
@@ -1613,8 +1809,17 @@ inline void ConcurrentTimingExecutor::reset() {
     fed_shape_.clear();
     scheduled_feed_counts_.clear();
     completed_feed_counts_.clear();
-    scheduled_drain_counts_.clear();
-    started_drain_counts_.clear();
+    chains_.clear();
+    moves_scheduled_.clear();
+    moves_arrived_.clear();
+    drains_scheduled_.clear();
+    drains_landed_.clear();
+    drain_stages_.clear();
+    writeback_stages_.clear();
+    fabric_pending_.clear();
+    stage_reads_.clear();
+    result_cf_.clear();
+    fabric_epilogue_cycles_ = 0;
     scheduled_compute_counts_.clear();
     completed_compute_counts_.clear();
 
@@ -1796,8 +2001,10 @@ inline void ConcurrentTimingExecutor::apply_payload_event(const TimingEvent& eve
             copy_payload(MemoryLevel::L1, MemoryLevel::COMPUTE, event.tile_id, event.component_id);
             break;
         case EventType::TILE_DRAINED:
+            ++drains_landed_[event.tile_id];
             copy_payload(MemoryLevel::COMPUTE, MemoryLevel::L1, event.tile_id, event.component_id);
             copy_payload(MemoryLevel::L1, MemoryLevel::L2, event.tile_id, event.slot_id);
+            apply_stages(MemoryLevel::L2, event.tile_id, drain_stages_);      // fabric + str.drain
             // The result has moved to L2; free its array-side copies unless a
             // pending compute still holds it resident (issue #165).
             if (functional_payloads_enabled_ &&
@@ -1807,6 +2014,7 @@ inline void ConcurrentTimingExecutor::apply_payload_event(const TimingEvent& eve
             break;
         case EventType::BM_WRITEBACK_COMPLETE:
             copy_payload(MemoryLevel::L2, MemoryLevel::L3, event.tile_id, event.slot_id);
+            apply_stages(MemoryLevel::L3, event.tile_id, writeback_stages_);  // bm.egress
             break;
         case EventType::BM_EJECT_COMPLETE: {
             // L3 -> this store's buffer entry, before CREDIT_RELEASED retires the L3 bytes.

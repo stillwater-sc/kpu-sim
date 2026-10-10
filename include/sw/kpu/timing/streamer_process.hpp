@@ -13,7 +13,9 @@
 #include <sw/kpu/timing/tag_cam.hpp>
 #include <sw/kpu/timing/work_queue.hpp>
 
+#include <algorithm>
 #include <cmath>
+#include <functional>
 #include <limits>
 #include <optional>
 #include <vector>
@@ -165,6 +167,8 @@ public:
         stall_cycles_tag_ = 0;
         stall_cycles_credit_ = 0;
         stall_cycles_compute_ = 0;
+        ve_busy_cycles_ = 0;
+        ve_bound_cycles_ = 0;
         active_cycles_ = 0;
         total_tiles_fed_ = 0;
         total_tiles_drained_ = 0;
@@ -204,6 +208,13 @@ public:
         return total_tiles_fed_;
     }
 
+    /// A feed also waits while this says its own copy has not arrived (a program's ordering).
+    void set_feed_guard(std::function<bool(const TileDescriptor&)> guard) { feed_guard_ = std::move(guard); }
+
+    /// The streamer's vector unit (str.drain): its busy cycles, and the cycles it slowed drains by.
+    [[nodiscard]] Cycle ve_busy_cycles() const { return ve_busy_cycles_; }
+    [[nodiscard]] Cycle ve_bound_cycles() const { return ve_bound_cycles_; }
+
     [[nodiscard]] size_t total_tiles_drained() const {
         return total_tiles_drained_;
     }
@@ -238,6 +249,9 @@ private:
     Cycle stall_cycles_tag_ = 0;
     Cycle stall_cycles_credit_ = 0;
     Cycle stall_cycles_compute_ = 0;
+    std::function<bool(const TileDescriptor&)> feed_guard_;
+    Cycle ve_busy_cycles_ = 0;      // the vector unit's cycles on drains
+    Cycle ve_bound_cycles_ = 0;     // cycles a drain ran longer because the vector unit was slower
     Cycle active_cycles_ = 0;
     size_t total_tiles_fed_ = 0;
     size_t total_tiles_drained_ = 0;
@@ -343,6 +357,7 @@ private:
 
         for (size_t i = 0; i < feed_queue_.size(); ++i) {
             const auto& tile = feed_queue_.at(i);
+            if (feed_guard_ && feed_guard_(tile)) continue;    // its own copy has not arrived
             auto l2_entry = l2_tag_cam_.match(tile.tile_id);
             if (l2_entry.has_value()) {
                 if (config_.priority_aging) {
@@ -450,7 +465,12 @@ private:
 
         // Start the drain
         TileDescriptor drain_tile = drain_queue_.dequeue();
-        Cycle transfer_cycles = compute_transfer_cycles(drain_tile.size_bytes);
+        // The fabric's epilogue first, then the drain with the vector unit working on the tile
+        // as it streams: the longer of the two sets the pace.
+        const Cycle move = compute_transfer_cycles(drain_tile.size_bytes);
+        Cycle transfer_cycles = drain_tile.fabric_cycles + std::max(move, drain_tile.ve_cycles);
+        ve_busy_cycles_ += drain_tile.ve_cycles;
+        if (drain_tile.ve_cycles > move) ve_bound_cycles_ += drain_tile.ve_cycles - move;
         uint32_t l2_slot = allocate_l2_slot();
 
         in_flight_ = InFlightTransfer(
