@@ -1,6 +1,6 @@
 # `kpu-run` runs CSP programs, at every level including cycle-accurate
 
-**Status:** Decided 2026-10-10 (revised after review, §8; Q1-Q4 as recommended, §9); step 1 done
+**Status:** Decided 2026-10-10 (revised after review, §8; Q1-Q4 as recommended, §9); steps 1-2 done
 **Tracks:** #283 (the L-CA half). Covers `docs/plans/csp-program-tile-sequencing.md` steps 2b and
 3 (L-T1 from the program).
 **Depends on:** the CSP language and its stream (ADR 0004, #343-#345), `CspDriver` (#342, #345,
@@ -179,15 +179,53 @@ platform have moved (§5 step 4). Then it is retired.
        - its own trace's L0 reference agrees with that derivation.
      - Refusals: one slot short, placement against a target, bad options.
      - 5 CLI tests: written, from a target, refused for L3, refused for placement, bad option.
-2. **`kpu-run --program file.csp` at L-B and L-CA.**
-   - Parse, validate against the target, synthesize inputs, build the reference from the trace,
-     run L-B from the stream and L-CA through `CspDriver`.
-   - `run_at` takes the device spec; `level_supported`; the report.
-   - CLI tests:
-     - S1 matmul and linear in each placement: values identical at L-B and L-CA and equal to
-       the reference;
-     - L-CA DRAM loads equal the program's Loads;
-     - refusals: T4, LU at L-CA, an L0 file at L-CA, a misplaced atan.
+2. **`kpu-run --program file.csp` at L-B and L-CA** (done).
+   - **`program/driver/csp_run.hpp`:**
+     - `run_csp(CspRunRequest)` validates the program against the device's sites, builds the
+       oracle, and runs each level: L-B from the stream, and L-CA through `CspDriver` on
+       `csp_config_from(device)` with the window.
+     - `csp_level_supported(level, program, device)` gives the reason a level cannot run, by
+       name: no deployment, a multi-L3 machine, LU at L-CA, alpha != 1, a matrix not named A,
+       B or C, or a program written for more L3 than the machine has. L-T1 is skipped until step
+       3.
+     - `csp_inputs(ast)` builds the inputs.
+   - **`kpu-run`:** a `.csp` program takes `--deploy`, `--level`, `--window`, `--inputs
+     values.l0`, `--trace-limit` and `--no-compare`. Any other option is refused by name; `--algo`
+     and the size options point to `kpu-csp-gen`. `--level all` lists every level, with the
+     reason for each one skipped. The report gives L-CA's makespan, DRAM loads, stores and
+     bytes, compute busy, vector-unit busy and bound, the window, and the unmodelled spec
+     fields. Values are compared bit-exactly, on every operand, against the oracle (or against
+     L-B above the trace limit). An L0 file is refused at L-CA by name.
+   - **`CspDriver`** reads every operand back from DRAM, not only C, so a level that writes an
+     input is caught.
+   - **Found on the way: the oracle and `inout` results.** An `inout` operand only needs input
+     values if the program reads it before writing it. An accumulator starts from zero in the
+     fabric, but L0's MatMulAccum adds onto its operand's buffer. So the unfused linear
+     program's C, stored from an accumulator and then read back, made the oracle add `A . B` to
+     synthesized values. L-B and L-CA agreed with each other, and both disagreed with the oracle.
+     `csp_inputs` now decides by first touch: it streams until each `inout` operand is loaded (an
+     input) or written (it starts at zero).
+   - **Tests:**
+     - `test_csp_run`, 6 cases:
+       - matmul in both orientations and linear in all four placements, at L-B and L-CA:
+         bit-identical to the oracle on every operand, L-CA's DRAM loads and stores equal the
+         validator's, and L-B's peak L3 equals the validator's;
+       - first-touch inputs;
+       - LU at L-B, refused at L-CA;
+       - every refusal reason;
+       - the trace limit;
+       - a misplaced stage.
+     - 8 CLI tests:
+       - matmul, unfused linear (window 16), `--inputs` from the corpus;
+       - LU skipped at L-CA;
+       - T4 refused, `--algo` refused, an invalid program refused, an L0 file refused at L-CA.
+   - **Measured** (S1, matmul 256³ in 32-tiles, the generator's column-panel schedule):
+     - 117,887 cycles;
+     - 576 loads, 512 for the A panels;
+     - against the step-2 Belady program's 128 loads and 43,968 cycles.
+
+     The canonical panel schedule reloads A's row panel for every j: correct, and wasteful.
+     Choosing a better schedule is the generator's job, and the comparison is now one command.
 3. **L-T1 from the program** (§4.3).
    - The action-stream interpreter under the program's residency.
    - Tests:

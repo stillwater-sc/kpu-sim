@@ -267,7 +267,8 @@ inline std::vector<std::string> program_inputs(const TileProgram& p) {
     return order;
 }
 
-// Deterministic values for every operand the program reads, derived from the OPERAND NAME
+// Deterministic values for an operand -- and, through fill_inputs, every operand a program
+// reads -- derived from the OPERAND NAME
 // and the element position -- so two operands never get the same pattern, and the same file
 // fills identically on every machine and at every level.
 //
@@ -280,36 +281,39 @@ inline std::vector<std::string> program_inputs(const TileProgram& p) {
 // practice, but nothing here can guarantee it: a program whose inputs need structure (a
 // specific conditioning, a symmetry, a sparsity pattern) should CARRY ITS VALUES rather than
 // have them invented. That is what `VALUES inline` is for.
-inline void fill_inputs(TileProgram& p) {
-    for (const std::string& name : program_inputs(p)) {
-        TensorOperand& t = p.operand(name);
-        std::uint32_t h = 2166136261u;                      // FNV-1a over the operand name
-        for (char ch : name) {
-            h ^= static_cast<std::uint32_t>(static_cast<unsigned char>(ch));
-            h *= 16777619u;
-        }
-        const bool square = (t.rows == t.cols);
-        for (Dim r = 0; r < t.rows; ++r)
-            for (Dim c = 0; c < t.cols; ++c) {
-                // MIXED, not a linear combination of r and c. `h + 131*r + 17*c` looks
-                // adequate and is not: 17*c vanishes mod 17, so the integer part of a value
-                // was CONSTANT ALONG EACH ROW and only the eighths varied -- every row spanned
-                // a range of 1.0 with eight distinct values. Near-degenerate inputs weaken
-                // exactly what this fill is for: a level that transposed an index, or read a
-                // neighbouring element, would still produce a nearly identical answer.
-                std::uint32_t k = h;
-                k ^= r * 2654435761u; k *= 2246822519u;
-                k ^= c * 3266489917u; k *= 668265263u;
-                k ^= k >> 15;
-                // Integers in [-8, 8] plus a multiple of 1/8: no rounding anywhere.
-                float v = float(k % 17) - 8.0f + 0.125f * float((k >> 8) % 8);
-                // A dominant diagonal for a square operand, which is what keeps an in-place
-                // factorisation from pivoting on noise. It is a nudge, not a guarantee (see
-                // above): off-diagonal row sums grow with the operand and this term does not.
-                if (square && r == c) v += 32.0f;
-                t.at(r, c) = v;
-            }
+inline void fill_operand(TensorOperand& t) {
+    const std::string& name = t.name;
+    std::uint32_t h = 2166136261u;                      // FNV-1a over the operand name
+    for (char ch : name) {
+        h ^= static_cast<std::uint32_t>(static_cast<unsigned char>(ch));
+        h *= 16777619u;
     }
+    const bool square = (t.rows == t.cols);
+    for (Dim r = 0; r < t.rows; ++r)
+        for (Dim c = 0; c < t.cols; ++c) {
+            // MIXED, not a linear combination of r and c. `h + 131*r + 17*c` looks
+            // adequate and is not: 17*c vanishes mod 17, so the integer part of a value
+            // was CONSTANT ALONG EACH ROW and only the eighths varied -- every row spanned
+            // a range of 1.0 with eight distinct values. Near-degenerate inputs weaken
+            // exactly what this fill is for: a level that transposed an index, or read a
+            // neighbouring element, would still produce a nearly identical answer.
+            std::uint32_t k = h;
+            k ^= r * 2654435761u; k *= 2246822519u;
+            k ^= c * 3266489917u; k *= 668265263u;
+            k ^= k >> 15;
+            // Integers in [-8, 8] plus a multiple of 1/8: no rounding anywhere.
+            float v = float(k % 17) - 8.0f + 0.125f * float((k >> 8) % 8);
+            // A dominant diagonal for a square operand, which is what keeps an in-place
+            // factorisation from pivoting on noise. It is a nudge, not a guarantee (see
+            // above): off-diagonal row sums grow with the operand and this term does not.
+            if (square && r == c) v += 32.0f;
+            t.at(r, c) = v;
+        }
+}
+
+// Every operand the program reads (fill_operand, by name).
+inline void fill_inputs(TileProgram& p) {
+    for (const std::string& name : program_inputs(p)) fill_operand(p.operand(name));
 }
 
 // The operand a run's result lands in, which is what a comparison reads.

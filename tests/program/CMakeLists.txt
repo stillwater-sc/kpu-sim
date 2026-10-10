@@ -70,6 +70,16 @@ set_tests_properties(test_csp_gen PROPERTIES
     LABELS "program;csp;gen;v0.9"
 )
 
+# Running a CSP program at each level (docs/plans/kpu-run-csp-programs.md step 2)
+kpu_add_component_test(test_csp_run "program"
+    test_csp_run.cpp
+)
+
+set_tests_properties(test_csp_run PROPERTIES
+    LABELS "program;csp;run;v0.9"
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+)
+
 # The L0 portable program as a file (#265)
 kpu_add_component_test(test_l0_serialization "program"
     test_l0_serialization.cpp

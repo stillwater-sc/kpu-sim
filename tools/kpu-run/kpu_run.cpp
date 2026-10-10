@@ -13,6 +13,7 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2024-2025 Stillwater Supercomputing, Inc.
 // ============================================================================
+#include <sw/kpu/program/driver/csp_run.hpp>
 #include <sw/kpu/program/driver/execution_level.hpp>
 #include <sw/kpu/program/driver/program_spec.hpp>
 #include <sw/kpu/program/platform/deployment_json.hpp>
@@ -30,6 +31,8 @@
 #include <iostream>
 #include <memory>
 #include <optional>
+#include <set>
+#include <sstream>
 #include <string>
 #include <vector>
 
@@ -50,6 +53,12 @@ void usage() {
     std::cout <<
 R"(kpu-run — execute a Domain Flow Program at one or more levels and compare them.
 
+  --program <file.csp>      execute a CSP PROGRAM (docs/plans/kpu-run-csp-programs.md): the
+                            program configures the data path, and every level executes it.
+                            Write one with kpu-csp-gen. With it: --deploy (L-CA builds its
+                            machine from it), --level, --window <W> (L-CA's driver window,
+                            default 256), --inputs <values.l0>, --trace-limit <n>
+                            (the L0 oracle, default 1000000 actions), --no-compare
   --program <file.l0>       execute a program FROM A FILE (#265). Mutually exclusive
                             with --algo/--size/--tile: a spec that says two different
                             things is a usage error, not a choice for the tool to make
@@ -174,6 +183,207 @@ void print_run(const RunOutcome& o) {
                   << (o.provenance->extrapolated ? "   extrapolated" : "") << "\n";
 }
 
+// ---- a CSP program (docs/plans/kpu-run-csp-programs.md step 2) ------------------------------
+//
+// The program is the input. L0 is its oracle: the trace's ops, run by TileProgramReference on
+// the same inputs, when the program is small enough to trace.
+bool ends_with(const std::string& s, const std::string& suffix) {
+    return s.size() >= suffix.size() && s.compare(s.size() - suffix.size(), suffix.size(), suffix) == 0;
+}
+
+int run_csp_program(const std::vector<std::string>& a, const std::string& path) {
+    // What a CSP program run accepts. Everything else is the L0 path's (or the generator's:
+    // --algo and friends are kpu-csp-gen's), and is refused by name rather than ignored.
+    static const std::set<std::string> kOptions = {"--program", "--deploy", "--level", "--window", "--inputs",
+                                                   "--trace-limit", "--no-compare"};
+    for (const std::string& t : a)
+        if (t.rfind("--", 0) == 0 && !kOptions.count(t)) {
+            std::cerr << "kpu-run: " << t << " does not apply to a CSP program"
+                      << (t == "--algo" || t == "--size" || t == "--tile" || t == "--act"
+                              ? " (the program already says what it computes; kpu-csp-gen writes programs)"
+                              : "")
+                      << "\n";
+            return 2;
+        }
+    std::string err, deploy_path, inputs_path;
+    if (!arg_required(a, "--deploy", deploy_path, err) || !arg_required(a, "--inputs", inputs_path, err)) {
+        std::cerr << "kpu-run: " << err << "\n";
+        return 2;
+    }
+    std::uint32_t window = 256, trace_limit = 1000000;
+    if (!parse_dim(a, "--window", 256, window, err) || !parse_dim(a, "--trace-limit", 1000000, trace_limit, err)) {
+        std::cerr << "kpu-run: " << err << "\n";
+        return 2;
+    }
+    if (window == 0) {
+        std::cerr << "kpu-run: --window must be positive\n";
+        return 2;
+    }
+
+    std::ifstream in(path, std::ios::binary);
+    if (!in) {
+        std::cerr << "kpu-run: cannot read '" << path << "'\n";
+        return 2;
+    }
+    std::ostringstream text;
+    text << in.rdbuf();
+    std::optional<csp::lang::Program> ast;
+    try {
+        ast.emplace(csp::lang::parse(text.str()));
+    } catch (const std::exception& e) {
+        std::cerr << "kpu-run: " << path << ": " << e.what() << "\n";
+        return 2;
+    }
+
+    std::optional<platform::DeploymentSpec> deployment;
+    if (!deploy_path.empty()) {
+        try {
+            deployment.emplace(platform::read_spec_file(deploy_path));
+        } catch (const std::exception& e) {
+            std::cerr << "kpu-run: " << e.what() << "\n";
+            return 2;
+        }
+        if (deployment->devices.size() != 1) {
+            std::cerr << "kpu-run: the deployment has " << deployment->devices.size()
+                      << " devices; multi-device execution is not implemented\n";
+            return 2;
+        }
+    }
+    const platform::DeviceSpecification* device = deployment ? &deployment->devices.front() : nullptr;
+
+    // Levels: "all" is every level that can run this program here; a named one that cannot is
+    // a usage error with its reason.
+    const std::string level_arg = arg(a, "--level", "all");
+    std::vector<ExecutionLevel> levels;
+    if (level_arg == "all") {
+        levels = all_levels();
+    } else {
+        const auto parsed = parse_level(level_arg);
+        if (!parsed) {
+            std::cerr << "kpu-run: unknown --level '" << level_arg << "'\n";
+            return 2;
+        }
+        if (const auto why = csp_level_supported(*parsed, *ast, device)) {
+            std::cerr << "kpu-run: " << to_string(*parsed) << ": " << *why << "\n";
+            return 2;
+        }
+        levels.push_back(*parsed);
+    }
+
+    // Inputs: synthesized from the operand names, or the values an L0 file carries.
+    TileProgram inputs;
+    std::string inputs_note = "synthesized (by operand name)";
+    try {
+        inputs = csp_inputs(*ast);
+        if (!inputs_path.empty()) {
+            std::ifstream vin(inputs_path, std::ios::binary);
+            if (!vin) {
+                std::cerr << "kpu-run: cannot read '" << inputs_path << "'\n";
+                return 2;
+            }
+            serialize::LoadInfo vinfo;
+            const TileProgram values = serialize::read_l0(vin, &vinfo);
+            if (!vinfo.has_values) {
+                std::cerr << "kpu-run: " << inputs_path << " carries no values (VALUES none)\n";
+                return 2;
+            }
+            for (const auto& name : inputs.operand_order()) {
+                auto& t = inputs.operand(name);
+                if (!values.has_operand(name)) {
+                    std::cerr << "kpu-run: " << inputs_path << " has no operand '" << name << "'\n";
+                    return 2;
+                }
+                const auto& v = values.operand(name);
+                if (v.rows != t.rows || v.cols != t.cols) {
+                    std::cerr << "kpu-run: " << inputs_path << ": operand '" << name << "' is " << v.rows << "x"
+                              << v.cols << "; the program declares " << t.rows << "x" << t.cols << "\n";
+                    return 2;
+                }
+                t.values = v.values;
+            }
+            inputs_note = "from " + inputs_path;
+        }
+    } catch (const std::exception& e) {
+        std::cerr << "kpu-run: " << e.what() << "\n";
+        return 2;
+    }
+
+    CspRunRequest req{*ast, device, inputs, levels, window, trace_limit};
+    CspRunResult res;
+    try {
+        res = run_csp(req);
+    } catch (const csp::lang::CompileError& e) {
+        std::cerr << "kpu-run: " << path << ": " << e.what() << "\n";
+        return 2;
+    } catch (const std::exception& e) {
+        std::cerr << "kpu-run: " << e.what() << "\n";
+        return 2;
+    }
+
+    std::cout << "program  " << path << "   \"" << ast->name << "\"  csp " << ast->version << ", "
+              << ast->decls.size() << " operands, L3 " << ast->l3 << "   values: " << inputs_note << "\n";
+    std::cout << "         validated: peak L3 " << res.validation.peak_l3;
+    if (res.validation.loads) std::cout << ", " << *res.validation.loads << " loads";
+    if (res.validation.calls) std::cout << ", " << *res.validation.calls << " calls";
+    if (res.validation.stores) std::cout << ", " << *res.validation.stores << " stores";
+    std::cout << "\n";
+    std::cout << "oracle   " << (res.reference ? "L0 trace of " + std::to_string(res.actions) + " actions"
+                                               : res.reference_note) << "\n";
+    std::cout << "device   " << (deployment ? deployment->label() + "   digest " + platform::deployment_digest(*deployment)
+                                            : std::string("none (no --deploy)")) << "\n\n";
+
+    const CspLevelOutcome* lb = nullptr;
+    for (const auto& o : res.levels) {
+        std::cout << "  " << std::left << std::setw(24) << to_string(o.level) << std::setw(6) << short_name(o.level);
+        if (o.skipped) {
+            std::cout << "skipped: " << *o.skipped << "\n";
+            continue;
+        }
+        if (o.level == ExecutionLevel::Behavioral) lb = &o;
+        if (!o.has_timing) {
+            std::cout << "timing: not modelled at this level   " << o.actions << " actions, peak L3 " << o.peak_l3
+                      << "\n";
+            continue;
+        }
+        std::cout << "makespan " << o.makespan << " cycles   " << o.actions << " actions\n";
+        std::cout << "        DRAM  " << o.dram_loads << " loads, " << o.dram_stores << " stores, " << o.dram_bytes
+                  << " bytes      cf busy " << o.cf_busy << "\n";
+        std::cout << "        VE    str " << o.ve.str_busy << "/" << o.ve.str_bound << "  bm " << o.ve.bm_busy << "/"
+                  << o.ve.bm_bound << "  fabric " << o.ve.fabric << "   (busy/bound)   window " << window << "\n";
+        for (const auto& u : o.unmodelled) std::cout << "        unmodelled: " << u << "\n";
+    }
+
+    if (has_flag(a, "--no-compare")) return 0;
+    // Every operand, bit for bit, against the oracle -- and against L-B when there is none.
+    const TileProgram* authority = res.reference ? &*res.reference : (lb ? &lb->values : nullptr);
+    if (!authority) {
+        std::cout << "\nno oracle and no L-B run: nothing to compare against\n";
+        return 0;
+    }
+    std::cout << "\nvalues vs " << (res.reference ? "the L0 oracle" : "L-B") << " (bit-exact, every operand)\n";
+    bool all_agree = true;
+    for (const auto& o : res.levels) {
+        if (o.skipped) continue;
+        std::cout << "  " << std::left << std::setw(24) << to_string(o.level);
+        bool agrees = true;
+        for (const auto& name : authority->operand_order()) {
+            const Diff d = compare_bitwise(authority->operand(name).values, o.values.operand(name).values);
+            if (d.identical) continue;
+            if (agrees) std::cout << "\n";
+            agrees = all_agree = false;
+            std::cout << "      " << name << ": " << d.differing << " differ; first at " << d.first_index
+                      << " (expected " << d.expected << ", got " << d.actual << ")\n";
+        }
+        if (agrees) std::cout << "identical (" << authority->operand_order().size() << " operands)\n";
+    }
+    if (!all_agree) {
+        std::cout << "\nFAILED: the levels do not compute the program's values.\n";
+        return 1;
+    }
+    std::cout << "\nOK: every level that ran computes the program's values.\n";
+    return 0;
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -199,6 +409,7 @@ int main(int argc, char** argv) {
         std::cerr << "kpu-run: " << err << "\n";
         return 2;
     }
+    if (ends_with(program_path, ".csp")) return run_csp_program(a, program_path);
     const bool from_file = !program_path.empty();
 
     ProgramSpec ps;

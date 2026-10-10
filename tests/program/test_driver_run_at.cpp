@@ -90,8 +90,10 @@ TEST_CASE("a level with no interpreter is refused, never substituted",
                              ExecutionLevel::CycleAccurate}) {
         REQUIRE_FALSE(level_implemented(l));
         CHECK_THROWS_AS(run_at(l, p, device, Placement::single(1)), std::invalid_argument);
-        // The refusal has to say where to follow it up, or it is just a dead end.
-        CHECK(not_implemented_reason(l).find("#283") != std::string::npos);
+        // The refusal has to say where to follow it up, or it is just a dead end: L-T2's is
+        // #283; L-CA runs CSP programs, not this L0 trace (kpu-run-csp-programs step 2).
+        CHECK(not_implemented_reason(l).find(l == ExecutionLevel::CycleAccurate ? "kpu-csp-gen" : "#283") !=
+              std::string::npos);
     }
     // And nothing ran: the operand is bit-for-bit what fill() left there.
     REQUIRE_FALSE(c_before.empty());

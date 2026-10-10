@@ -171,17 +171,24 @@ public:
         r.dram_bytes = dram_bytes_;
         for (std::size_t t = 0; t < exec_.config().num_compute_tiles; ++t) r.cf_busy += exec_.compute_tile_busy_cycles(t);
         r.ve = exec_.vector_stats();
+        // Every operand as DRAM holds it -- inputs included, so a level that wrote an input is
+        // caught by the comparison. A tile nothing ever put in DRAM (an output the program
+        // did not store) reads as zeros, which the comparison then reports.
         r.values = inputs_;
-        if (r.completed) {
-            auto& C = r.values.operand("C");
-            for (program::Dim ti = 0; ti < C.n_tile_rows(); ++ti)
-                for (program::Dim tj = 0; tj < C.n_tile_cols(); ++tj) {
-                    const auto& v = exec_.tile_payload_at(MemoryLevel::DRAM, id("C", ti, tj)).values;
-                    std::size_t n = 0;
-                    for (program::Dim row = C.row_begin(ti); row < C.row_end(ti); ++row)
-                        for (program::Dim col = C.col_begin(tj); col < C.col_end(tj); ++col) C.at(row, col) = v.at(n++);
-                }
-        }
+        if (r.completed)
+            for (const auto& name : r.values.operand_order()) {
+                auto& t = r.values.operand(name);
+                for (program::Dim ti = 0; ti < t.n_tile_rows(); ++ti)
+                    for (program::Dim tj = 0; tj < t.n_tile_cols(); ++tj) {
+                        const TileID tid = id(name, ti, tj);
+                        const bool present = exec_.has_tile_payload_at(MemoryLevel::DRAM, tid);
+                        std::size_t n = 0;
+                        for (program::Dim row = t.row_begin(ti); row < t.row_end(ti); ++row)
+                            for (program::Dim col = t.col_begin(tj); col < t.col_end(tj); ++col)
+                                t.at(row, col) = present ? exec_.tile_payload_at(MemoryLevel::DRAM, tid).values.at(n++)
+                                                         : 0.0f;
+                    }
+            }
         return r;
     }
 

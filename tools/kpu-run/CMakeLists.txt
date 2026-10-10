@@ -338,6 +338,87 @@ if(KPU_BUILD_TESTS)
     set_tests_properties(kpu_run_program_names_the_flag_for_streams PROPERTIES
         LABELS "program;driver")
 
+    # ---- a CSP program (docs/plans/kpu-run-csp-programs.md step 2) -----------------
+    # The program is the input; L0 is its oracle. Fixtures are written by kpu-csp-gen.
+    set(_csp ${CMAKE_SOURCE_DIR}/tests/program/csp)
+
+    add_test(NAME kpu_run_csp_matmul
+        COMMAND ${CMAKE_COMMAND}
+            -DCMD=$<TARGET_FILE:run>
+            -DARGS=--program$<SEMICOLON>${_csp}/matmul_48_t16.csp$<SEMICOLON>--deploy$<SEMICOLON>${_deploy}/kpu_s1.json
+            -DEXPECT_CODE=0
+            -DMUST_MATCH=oracle...L0.trace.*cycle-accurate.*L-CA..makespan.*cycle-accurate.+identical.*OK:.every.level
+            -DMUST_NOT_MATCH=FAILED
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/expect_exit.cmake
+    )
+    # Unfused linear: C is written first (from the accumulator), so it starts at zero.
+    add_test(NAME kpu_run_csp_linear_unfused
+        COMMAND ${CMAKE_COMMAND}
+            -DCMD=$<TARGET_FILE:run>
+            -DARGS=--program$<SEMICOLON>${_csp}/linear_64_t16_unfused_gelu.csp$<SEMICOLON>--deploy$<SEMICOLON>${_deploy}/kpu_s1.json$<SEMICOLON>--window$<SEMICOLON>16
+            -DEXPECT_CODE=0
+            -DMUST_MATCH=cycle-accurate.+identical.*OK:.every.level
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/expect_exit.cmake
+    )
+    # Values from an L0 file: the corpus's matmul inputs.
+    add_test(NAME kpu_run_csp_inputs_from_l0
+        COMMAND ${CMAKE_COMMAND}
+            -DCMD=$<TARGET_FILE:run>
+            -DARGS=--program$<SEMICOLON>${_csp}/matmul_48_t16.csp$<SEMICOLON>--inputs$<SEMICOLON>${_corpus}/matmul_48x48x48_t16.l0$<SEMICOLON>--level$<SEMICOLON>behavioral
+            -DEXPECT_CODE=0
+            -DMUST_MATCH=values:.from.*matmul_48x48x48_t16.l0.*OK
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/expect_exit.cmake
+    )
+    # `all` runs what can run and says why the rest did not.
+    add_test(NAME kpu_run_csp_lu_skips_lca
+        COMMAND ${CMAKE_COMMAND}
+            -DCMD=$<TARGET_FILE:run>
+            -DARGS=--program$<SEMICOLON>${_csp}/lu_64_t16.csp$<SEMICOLON>--deploy$<SEMICOLON>${_deploy}/kpu_s1.json
+            -DEXPECT_CODE=0
+            -DMUST_MATCH=L-CA..skipped:.L-CA.runs.matmul.*OK:.every.level
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/expect_exit.cmake
+    )
+    # ...and a level named explicitly that cannot run is a usage error, with the reason.
+    add_test(NAME kpu_run_csp_refuses_lca_on_t4
+        COMMAND ${CMAKE_COMMAND}
+            -DCMD=$<TARGET_FILE:run>
+            -DARGS=--program$<SEMICOLON>${_csp}/matmul_48_t16.csp$<SEMICOLON>--deploy$<SEMICOLON>${_deploy}/kpu_t4.json$<SEMICOLON>--level$<SEMICOLON>cycle-accurate
+            -DEXPECT_CODE=2
+            -DMUST_MATCH=cycle-accurate:.*level.2.distributes
+            -DMUST_NOT_MATCH=values.vs
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/expect_exit.cmake
+    )
+    add_test(NAME kpu_run_csp_rejects_algo
+        COMMAND ${CMAKE_COMMAND}
+            -DCMD=$<TARGET_FILE:run>
+            -DARGS=--program$<SEMICOLON>${_csp}/matmul_48_t16.csp$<SEMICOLON>--algo$<SEMICOLON>matmul
+            -DEXPECT_CODE=2
+            -DMUST_MATCH=--algo.does.not.apply.to.a.CSP.program.*kpu-csp-gen
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/expect_exit.cmake
+    )
+    add_test(NAME kpu_run_csp_refuses_invalid_program
+        COMMAND ${CMAKE_COMMAND}
+            -DCMD=$<TARGET_FILE:run>
+            -DARGS=--program$<SEMICOLON>${_csp}/leaves_resident.csp
+            -DEXPECT_CODE=2
+            -DMUST_MATCH=still.resident.at.the.end.of.the.program
+            -DMUST_NOT_MATCH=values.vs
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/expect_exit.cmake
+    )
+    # An L0 file is a trace: L-CA runs CSP programs.
+    add_test(NAME kpu_run_l0_refuses_lca
+        COMMAND ${CMAKE_COMMAND}
+            -DCMD=$<TARGET_FILE:run>
+            -DARGS=--program$<SEMICOLON>${_corpus}/matmul_48x48x48_t16.l0$<SEMICOLON>--level$<SEMICOLON>cycle-accurate
+            -DEXPECT_CODE=2
+            -DMUST_MATCH=an.L0.program.is.a.trace.*kpu-csp-gen
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/expect_exit.cmake
+    )
+    set_tests_properties(kpu_run_csp_matmul kpu_run_csp_linear_unfused kpu_run_csp_inputs_from_l0
+        kpu_run_csp_lu_skips_lca kpu_run_csp_refuses_lca_on_t4 kpu_run_csp_rejects_algo
+        kpu_run_csp_refuses_invalid_program kpu_run_l0_refuses_lca
+        PROPERTIES LABELS "program;driver;csp")
+
     # ---- the machine as a spec (#282 increment 4) ---------------------------------
     add_test(NAME kpu_run_deploy_from_spec
         COMMAND ${CMAKE_COMMAND}
