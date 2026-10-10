@@ -100,6 +100,12 @@ add_subdirectory(harness)
 add_subdirectory(kpu-run)
 
 # ============================================================================
+# CSP program generator -- writes the programs kpu-run executes
+# (docs/plans/kpu-run-csp-programs.md step 1)
+# ============================================================================
+add_subdirectory(csp-gen)
+
+# ============================================================================
 # Floorplan — the physical shape of a deployment (#286 step 1)
 # ============================================================================
 add_subdirectory(floorplan)

@@ -61,6 +61,15 @@ set_tests_properties(test_csp_linear PROPERTIES
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
 )
 
+# csp-gen: the generator kpu-run's programs come from (docs/plans/kpu-run-csp-programs.md step 1)
+kpu_add_component_test(test_csp_gen "program"
+    test_csp_gen.cpp
+)
+
+set_tests_properties(test_csp_gen PROPERTIES
+    LABELS "program;csp;gen;v0.9"
+)
+
 # The L0 portable program as a file (#265)
 kpu_add_component_test(test_l0_serialization "program"
     test_l0_serialization.cpp
