@@ -60,7 +60,16 @@ if(KPU_BUILD_TESTS)
             -DMUST_MATCH=--act.and.--place.are.the.linear.operator.s
             -P ${_expect}
     )
+    # An option followed by another option has no value: refused, nothing written.
+    add_test(NAME csp_gen_rejects_missing_value
+        COMMAND ${CMAKE_COMMAND}
+            -DCMD=$<TARGET_FILE:csp-gen>
+            -DARGS=--algo$<SEMICOLON>matmul$<SEMICOLON>--size$<SEMICOLON>64$<SEMICOLON>--tile$<SEMICOLON>16$<SEMICOLON>--l3$<SEMICOLON>64$<SEMICOLON>-o$<SEMICOLON>--help
+            -DEXPECT_CODE=2
+            -DMUST_MATCH=-o:.missing.value
+            -P ${_expect}
+    )
     set_tests_properties(csp_gen_matmul csp_gen_lu_from_target csp_gen_refuses_small_l3
-        csp_gen_refuses_misplaced_stage csp_gen_rejects_bad_option
+        csp_gen_refuses_misplaced_stage csp_gen_rejects_bad_option csp_gen_rejects_missing_value
         PROPERTIES LABELS "program;csp;gen;v0.9")
 endif()

@@ -68,7 +68,9 @@ int main(int argc, char** argv) {
             return 0;
         }
         if (k.rfind("-", 0) != 0) return usage("unexpected argument '" + k + "'");
-        if (i + 1 >= argc) return usage(k + ": missing value");
+        // No option takes a value that begins with '-': the next token being another option
+        // means this one has no value (`-o --help` must not write a file named "--help").
+        if (i + 1 >= argc || argv[i + 1][0] == '-') return usage(k + ": missing value");
         if (a.count(k)) return usage(k + " given twice");
         a[k] = argv[++i];
     }
