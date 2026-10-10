@@ -168,6 +168,107 @@ struct CspRunResult {
     std::vector<CspLevelOutcome> levels;
 };
 
+// The oracle: the trace's L0, run on `inputs`, when the program has at most `trace_limit`
+// actions (counted without keeping them).
+struct CspReference {
+    std::optional<TileProgram> values;      // every operand, as the program leaves them
+    std::string note;                       // why there is none
+    std::size_t actions = 0;
+};
+
+inline CspReference csp_reference(const csp::lang::Program& ast, const TileProgram& inputs, std::size_t trace_limit) {
+    CspReference out;
+    csp::lang::ActionStream s(ast);
+    std::size_t n = 0;
+    while (n <= trace_limit && s.next()) ++n;
+    if (n > trace_limit) {
+        out.note = "more than " + std::to_string(trace_limit) +
+                   " actions: no L0 reference (raise --trace-limit); the levels are compared with each other";
+        return out;
+    }
+    out.actions = n;
+    csp::CspProgram trace = csp::lang::compile(ast);
+    for (const auto& name : trace.source.operand_order())
+        trace.source.operand(name).values = inputs.operand(name).values;
+    TileProgramReference().run(trace.source);
+    TileProgram ref = inputs;
+    for (const auto& name : ref.operand_order()) ref.operand(name).values = trace.source.operand(name).values;
+    out.values = std::move(ref);
+    return out;
+}
+
+// One level's run of the program on `inputs` (skipped, with the reason, when it cannot run).
+inline CspLevelOutcome csp_run_level(ExecutionLevel level, const csp::lang::Program& ast,
+                                     const platform::DeviceSpecification* device, const TileProgram& inputs,
+                                     std::size_t window = 256) {
+    CspLevelOutcome o;
+    o.level = level;
+    o.skipped = csp_level_supported(level, ast, device);
+    if (o.skipped) return o;
+    std::optional<csp::lang::Target> target;
+    if (device) target = csp::lang::target_from(*device);
+    if (level == ExecutionLevel::Behavioral) {
+        csp::lang::ActionStream s(ast);
+        csp::BehavioralInterpreter lb;
+        lb.begin(inputs);
+        while (auto e = s.next()) lb.step(e->action, e->op ? &*e->op : nullptr);
+        const auto sum = lb.finish();
+        o.values = lb.result();
+        o.actions = sum.actions;
+        o.peak_l3 = sum.peak_l3;
+    } else if (level == ExecutionLevel::BlockSequential) {
+        // The device's lanes and rates; with no deployment, the default single-site device.
+        characterize::DeviceDescriptor dev = characterize::DeviceDescriptor::single();
+        if (device) {
+            platform::DeploymentSpec one;
+            one.devices = {*device};
+            dev = one.device_view(0);
+        }
+        csp::lang::ActionStream s(ast);
+        csp::TransactionalInterpreter lt(dev, static_cast<std::size_t>(ast.l3));
+        lt.begin(inputs);
+        while (auto e = s.next()) lt.step(e->action, e->op ? &*e->op : nullptr);
+        const auto st = lt.finish();
+        o.values = lt.result();
+        o.has_timing = true;
+        o.makespan = st.makespan;
+        o.actions = st.actions;
+        o.peak_l3 = st.peak_l3;
+        o.dram_loads = st.dram_loads;
+        o.dram_stores = st.dram_stores;
+        o.dram_bytes = st.dram_bytes;
+        o.credit_stalls = st.credit_stalls;
+        o.busy = st.busy;
+        o.lanes = st.lanes;
+        o.cf_busy = st.busy.count("cf") ? st.busy.at("cf") : 0;
+        o.unmodelled.push_back("tile contexts' vector-unit time (movers.vector): L-T1 applies the stages' "
+                               "values; their time is L-CA's");
+    } else {                                        // CycleAccurate
+        const auto cfg = timing::csp_config_from(*device);
+        o.unmodelled = cfg->unmapped;
+        timing::ConcurrentTimingExecutor exec(cfg->config);
+        csp::lang::ActionStream s(ast, target);
+        const auto r = timing::CspDriver(exec, s, inputs, window).run();
+        if (!r.completed) {
+            o.livelock = r.livelock;
+            o.skipped = r.livelock ? std::string("L-CA livelocked at cycle ") + std::to_string(r.cycles)
+                                   : std::string("L-CA did not complete in ") + std::to_string(r.cycles) +
+                                         " cycles (max_cycles)";
+            return o;
+        }
+        o.values = r.values;
+        o.has_timing = true;
+        o.makespan = r.cycles;
+        o.actions = r.actions;
+        o.dram_loads = r.dram_loads;
+        o.dram_stores = r.dram_stores;
+        o.dram_bytes = r.dram_bytes;
+        o.cf_busy = r.cf_busy;
+        o.ve = r.ve;
+    }
+    return o;
+}
+
 // Validate, build the oracle, and run each requested level. Throws CompileError for a program
 // the validator refuses (against the device's sites when there is one).
 inline CspRunResult run_csp(const CspRunRequest& req) {
@@ -175,99 +276,12 @@ inline CspRunResult run_csp(const CspRunRequest& req) {
     std::optional<csp::lang::Target> target;
     if (req.device) target = csp::lang::target_from(*req.device);
     out.validation = csp::lang::validate(req.ast, target ? &*target : nullptr);
-
-    // The oracle: count the actions without keeping them, then trace if it is small enough.
-    {
-        csp::lang::ActionStream s(req.ast);
-        std::size_t n = 0;
-        while (n <= req.trace_limit && s.next()) ++n;
-        if (n > req.trace_limit) {
-            out.reference_note = "more than " + std::to_string(req.trace_limit) +
-                                 " actions: no L0 reference (raise --trace-limit); the levels are compared "
-                                 "with each other";
-        } else {
-            out.actions = n;
-            csp::CspProgram trace = csp::lang::compile(req.ast);
-            for (const auto& name : trace.source.operand_order())
-                trace.source.operand(name).values = req.inputs.operand(name).values;
-            TileProgramReference().run(trace.source);
-            TileProgram ref = req.inputs;
-            for (const auto& name : ref.operand_order())
-                ref.operand(name).values = trace.source.operand(name).values;
-            out.reference = std::move(ref);
-        }
-    }
-
-    for (ExecutionLevel level : req.levels) {
-        CspLevelOutcome o;
-        o.level = level;
-        o.skipped = csp_level_supported(level, req.ast, req.device);
-        if (o.skipped) {
-            out.levels.push_back(std::move(o));
-            continue;
-        }
-        if (level == ExecutionLevel::Behavioral) {
-            csp::lang::ActionStream s(req.ast);
-            csp::BehavioralInterpreter lb;
-            lb.begin(req.inputs);
-            while (auto e = s.next()) lb.step(e->action, e->op ? &*e->op : nullptr);
-            const auto sum = lb.finish();
-            o.values = lb.result();
-            o.actions = sum.actions;
-            o.peak_l3 = sum.peak_l3;
-        } else if (level == ExecutionLevel::BlockSequential) {
-            // The device's lanes and rates; with no deployment, the default single-site device.
-            characterize::DeviceDescriptor dev = characterize::DeviceDescriptor::single();
-            if (req.device) {
-                platform::DeploymentSpec one;
-                one.devices = {*req.device};
-                dev = one.device_view(0);
-            }
-            csp::lang::ActionStream s(req.ast);
-            csp::TransactionalInterpreter lt(dev, static_cast<std::size_t>(req.ast.l3));
-            lt.begin(req.inputs);
-            while (auto e = s.next()) lt.step(e->action, e->op ? &*e->op : nullptr);
-            const auto st = lt.finish();
-            o.values = lt.result();
-            o.has_timing = true;
-            o.makespan = st.makespan;
-            o.actions = st.actions;
-            o.peak_l3 = st.peak_l3;
-            o.dram_loads = st.dram_loads;
-            o.dram_stores = st.dram_stores;
-            o.dram_bytes = st.dram_bytes;
-            o.credit_stalls = st.credit_stalls;
-            o.busy = st.busy;
-            o.lanes = st.lanes;
-            o.cf_busy = st.busy.count("cf") ? st.busy.at("cf") : 0;
-            o.unmodelled.push_back("tile contexts' vector-unit time (movers.vector): L-T1 applies the stages' "
-                                   "values; their time is L-CA's");
-        } else {                                        // CycleAccurate
-            const auto cfg = timing::csp_config_from(*req.device);
-            o.unmodelled = cfg->unmapped;
-            timing::ConcurrentTimingExecutor exec(cfg->config);
-            csp::lang::ActionStream s(req.ast, target);
-            const auto r = timing::CspDriver(exec, s, req.inputs, req.window).run();
-            if (!r.completed) {
-                o.livelock = r.livelock;
-                o.skipped = r.livelock ? std::string("L-CA livelocked at cycle ") + std::to_string(r.cycles)
-                                       : std::string("L-CA did not complete in ") + std::to_string(r.cycles) +
-                                             " cycles (max_cycles)";
-                out.levels.push_back(std::move(o));
-                continue;
-            }
-            o.values = r.values;
-            o.has_timing = true;
-            o.makespan = r.cycles;
-            o.actions = r.actions;
-            o.dram_loads = r.dram_loads;
-            o.dram_stores = r.dram_stores;
-            o.dram_bytes = r.dram_bytes;
-            o.cf_busy = r.cf_busy;
-            o.ve = r.ve;
-        }
-        out.levels.push_back(std::move(o));
-    }
+    CspReference ref = csp_reference(req.ast, req.inputs, req.trace_limit);
+    out.reference = std::move(ref.values);
+    out.reference_note = std::move(ref.note);
+    out.actions = ref.actions;
+    for (ExecutionLevel level : req.levels)
+        out.levels.push_back(csp_run_level(level, req.ast, req.device, req.inputs, req.window));
     return out;
 }
 

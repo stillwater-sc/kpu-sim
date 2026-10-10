@@ -1,6 +1,7 @@
 # `kpu-run` runs CSP programs, at every level including cycle-accurate
 
-**Status:** Decided 2026-10-10 (revised after review, §8; Q1-Q4 as recommended, §9); steps 1-3 done
+**Status:** Decided 2026-10-10 (revised after review, §8; Q1-Q4 as recommended, §9); steps 1-3 and 4a done; 4b-4e
+planned (§5, step 4; for review)
 **Tracks:** #283 (the L-CA half). Covers `docs/plans/csp-program-tile-sequencing.md` steps 2b and
 3 (L-T1 from the program).
 **Depends on:** the CSP language and its stream (ADR 0004, #343-#345), `CspDriver` (#342, #345,
@@ -272,11 +273,93 @@ platform have moved (§5 step 4). Then it is retired.
        - a streamed program with 3 slots, where every Load after the third starts no earlier
          than the Release that freed its slot, values equal to L-B.
      - CLI: LU at `--level block-sequential` on S1.
-4. **The corpus and the platform.**
-   - The corpus gains `.csp` entries, each a program with its `.result.l0` values, and runs every
-     supported level against `kpu_s1.json`.
-   - `VirtualPlatform` holds CSP programs.
-   - The legacy L0 path of L-T1 is retired from the driver.
+4. **The corpus, the platform, and retiring the L0 path of L-T1.** Split on 2026-10-10. The L0
+   L-T1 executor turned out to underpin four working subsystems, so retiring it in one step
+   would have broken them. Each consumer moves to the program first, in its own PR, and the
+   executor retires last.
+
+   | Depends on the L0 L-T1 executor or L0 platform programs | For |
+   |---|---|
+   | Orchestration (#305: `.kpuld`, MMIO ABI, `KpuDevice`) | cross-operator residency: seeded and retained tiles, foreign-held slots |
+   | Tile-flow debugger (#286: `.tflow`, viewer, checker, T4 reference run) | L-T1's per-hop records and residency intervals |
+   | `kpu-run --step`, `--timeline` | L-T1's transaction cursor and timeline |
+   | Characterization (`examples/characterize`) | the platform and L-T1 on L0 programs |
+
+   - **4a: the corpus and the platform** (done).
+     - **`lang::format`** (`csp/lang/format.hpp`) gives a program's canonical text: its structure
+       in one layout, without comments, with constant subexpressions folded and parentheses
+       only where precedence needs them. It is a fixed point and compiles to the same actions.
+       Two spellings of one program format identically.
+     - **`VirtualPlatform` holds CSP programs** beside its L0 ones: `load_csp(ast, inputs)`
+       validates against device 0's sites; `run_csp(h, level, window)` and
+       `csp_reference(h)`. The program digest is the digest of the canonical text, the
+       snapshot digest that of the inputs. `RunIdentity` gains `schedule` (L-CA's window),
+       compared and rendered; the class-closing test was extended for it. A CSP run is a pure
+       function of (program, inputs, deployment, level, schedule) and leaves no state on the
+       platform. Cross-run residency is 4d's.
+     - **`driver::run_csp` is split** into `csp_reference` (the oracle) and `csp_run_level` (one
+       level), which the platform calls.
+     - **`kpu-run`'s `.csp` path goes through the platform:** one execution path, a run id per
+       level, `--emit-l0-result` after agreement. Without `--deploy` the platform holds the
+       default device, placement is not checked, and L-CA is skipped with its reason.
+     - **The corpus gains three `.csp` programs:** matmul 48³/16 and LU 64/16 (moved from
+       `tests/program/csp/`, with the existing inputs and results) and linear 64/16 relu (with a
+       new input/result pair). `test_csp_corpus` runs each through the platform on S1 at L-B,
+       L-T1 and L-CA, asserting the reason where L-CA is refused (LU). It makes the L0 corpus's
+       two claims: within tolerance of the recorded result across machines, and bit-identical
+       to the program's own oracle on one machine.
+   - **4b: the tile-flow record from the program.** `TransactionalInterpreter` records each
+     action's interval, lane and process, and each residency's slot interval. That is what
+     `.tflow` needs, at action rather than L0-op granularity. Plan:
+     - a `.tflow` v4 whose rows are CSP actions (kind, tile, process, lane, start, finish, the
+       residency id), and whose residency intervals are the program's;
+     - `tflow_check.py`'s invariants restated over actions (TF9, the shared-reader release,
+       becomes "a Release follows every reader of its residency");
+     - the viewer reading v4;
+     - the T4 reference run regenerated from a csp-gen program.
+
+     `kpu-run --tflow` on a `.csp` program writes it, and the L0 path keeps v3 until 4e.
+   - **4c: stepping and the timeline from the program.**
+     - `--step` walks the action stream: one action per step at L-B (re-executed); one record
+       per step at L-T1 (replayed in start order).
+     - `--timeline` writes the L-T1 records as Chrome-trace intervals per process and lane.
+     - `StepCursor` gains a CSP mode behind the platform's `step_begin`.
+   - **4d: orchestration on CSP programs.** This needs a language decision first.
+     - **The question:** the orchestrator runs a chain of operators and keeps tiles resident
+       between them. Today it passes `initially_resident` (tiles an earlier operator left),
+       `retained_by_caller` (tiles this one must leave) and `foreign_held_slots` to the L0
+       L-T1 executor, which infers the rest.
+     - **Proposed:** residency across operators is written in the program, like all residency
+       (decision Q2 of the language plan):
+       - `inherit X;` declares tiles that arrive resident. There is no Load, and the slots are
+         held from the start; the validator counts them against capacity from the first
+         statement.
+       - `retain X;` ends a residency without a Release. The slot outlives the program, and the
+         validator accepts the tile still resident at the end, only if retained.
+       - The orchestrator checks that one operator's `retain` matches the next one's `inherit`,
+         by tile and by operand binding.
+       - Foreign-held slots become the program's L3: the orchestrator (or csp-gen) writes
+         `machine flat(l3 = free slots)`.
+     - **Levels:**
+       - L-B seeds L3 with the inherited tiles' values;
+       - L-T1 holds their slots from cycle 0 and does no DMA for them;
+       - L-CA needs an executor entry that seeds an L3 entry with a payload (`l3_held`, no
+         DMA).
+     - **`.kpuld`:** an operator carries `.csp` text instead of L0 text (`csp_program`), with
+       the L0 form kept as the oracle when traceable. Format version bump; the reader refuses
+       an old file with the reason.
+     - Kept unchanged: `KpuDevice`, the MMIO ABI, reservations, and the run identity's
+       residency field, which then digests the inherit/retain sets.
+     - **For review before building:** the `inherit` / `retain` syntax and semantics, and the
+       `.kpuld` change.
+   - **4e: retire the L0 L-T1 executor.**
+     - Once 4b-4d land, `TileTransactionExecutor`, `run_at`'s L-T1 case and the L0 platform run
+       path have no users.
+     - L0 files then run at L-B only: they are the oracle and the trace format.
+     - `examples/characterize` moves to csp-gen programs through the platform, or is retired if
+       the analytical harness (`TileDag`) is all it still needs. This is decided in 4e with the
+       code in front of us.
+     - The L0 corpus keeps its role (format stability, the oracle), checked at L-B.
 5. **`--algo` leaves `kpu-run`.**
    - Its CLI tests move to `csp-gen | kpu-run`.
    - Docs (the how-to, the L0 serialization note) and the CHANGELOG say where it went.

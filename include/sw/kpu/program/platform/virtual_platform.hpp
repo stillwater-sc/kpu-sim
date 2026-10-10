@@ -36,6 +36,8 @@
 // ============================================================================
 #pragma once
 
+#include <sw/kpu/program/csp/lang/format.hpp>
+#include <sw/kpu/program/driver/csp_run.hpp>
 #include <sw/kpu/program/driver/execution_level.hpp>
 #include <sw/kpu/program/driver/step_cursor.hpp>
 // The JSON header is declaration-only, so this stays a std-only include graph; the
@@ -110,6 +112,22 @@ private:
 // digested instead. The name is kept beside it as a LABEL and is deliberately not compared:
 // two annotations with identical content ARE the same annotation whatever they are called, and
 // comparing both would be two sources of truth for one input.
+// A CSP program on the platform (docs/plans/kpu-run-csp-programs.md step 4a): the program is
+// the input that configures the data path, and every level runs it.
+class CspProgramHandle {
+public:
+    CspProgramHandle() = default;
+    bool valid() const { return valid_; }
+    std::size_t index() const { return index_; }
+    bool operator==(const CspProgramHandle& o) const { return valid_ == o.valid_ && index_ == o.index_; }
+
+private:
+    friend class VirtualPlatform;
+    explicit CspProgramHandle(std::size_t i) : index_(i), valid_(true) {}
+    std::size_t index_ = 0;
+    bool valid_ = false;
+};
+
 struct RunIdentity {
     std::string program_digest;      // the program's STRUCTURE (see below)
     std::string snapshot_digest;     // the coverage tag + the state it covers
@@ -119,13 +137,14 @@ struct RunIdentity {
                                      // starts cold and keeps nothing
     std::string stream_digest;        // the annotation's CONTENT; empty when there is none
     std::string dataflow;             // the map's name -- a LABEL, not compared (see above)
+    std::string schedule;             // a CSP run's schedule options (L-CA's window); empty for L0
     ExecutionLevel level{};
 
     bool operator==(const RunIdentity& o) const {
         return program_digest == o.program_digest && snapshot_digest == o.snapshot_digest &&
                deployment_digest == o.deployment_digest && placement == o.placement &&
                residency == o.residency && stream_digest == o.stream_digest &&
-               level == o.level;
+               schedule == o.schedule && level == o.level;
     }
 
     // EVERY COMPARED COMPONENT IS RENDERED. str() printed the map's NAME and not the digest,
@@ -140,8 +159,15 @@ struct RunIdentity {
         if (!residency.empty()) out += " resident:" + digest_of(residency);
         if (!stream_digest.empty())
             out += " flow:" + stream_digest + (dataflow.empty() ? "" : "(" + dataflow + ")");
+        if (!schedule.empty()) out += " schedule:" + schedule;
         return out;
     }
+};
+
+// A CSP program's run at one level: its outcome (values, timing) and the identity of the run.
+struct CspPlatformRun {
+    driver::CspLevelOutcome outcome;
+    RunIdentity identity;
 };
 
 struct PlatformRunResult {
@@ -178,6 +204,63 @@ public:
     }
 
     std::size_t program_count() const { return programs_.size(); }
+
+    // ---- CSP programs (kpu-run-csp-programs step 4a) ---------------------------------------
+    // A CSP program and its inputs. Validated at load against device 0's sites, so a program
+    // the machine cannot run is refused here, by line. A CSP run is a PURE FUNCTION of
+    // (program, inputs, deployment, level, schedule): it reads the inputs it was loaded with
+    // and returns its values; it does not leave state on the platform. (Cross-run residency
+    // is orchestration's, plan step 4d.)
+    // `check_placement` false validates without the machine's sites: values do not depend on
+    // where a stage runs, and a caller with no real machine (kpu-run without --deploy) runs the
+    // program at the levels that do not time it.
+    CspProgramHandle load_csp(csp::lang::Program ast, TileProgram inputs, bool check_placement = true) {
+        require_single_device();
+        const csp::lang::Target target = csp::lang::target_from(spec_.device(0));
+        (void)csp::lang::validate(ast, check_placement ? &target : nullptr);
+        CspEntry e;
+        e.text = csp::lang::format(ast);
+        e.digest = digest_of(e.text);
+        serialize::WriteOptions values;
+        values.include_values = true;
+        e.inputs_digest = digest_of(serialize::to_string(inputs, values));
+        e.ast = std::move(ast);
+        e.inputs = std::move(inputs);
+        csp_.push_back(std::move(e));
+        return CspProgramHandle(csp_.size() - 1);
+    }
+
+    std::size_t csp_program_count() const { return csp_.size(); }
+    const csp::lang::Program& csp_program(CspProgramHandle h) const { return csp_.at(checked(h)).ast; }
+    const TileProgram& csp_inputs(CspProgramHandle h) const { return csp_.at(checked(h)).inputs; }
+    // The canonical text: the program's identity (two spellings of one program are one).
+    const std::string& csp_text(CspProgramHandle h) const { return csp_.at(checked(h)).text; }
+
+    // Why `level` cannot run the program on this platform's machine, or nullopt.
+    std::optional<std::string> csp_supported(CspProgramHandle h, ExecutionLevel level) const {
+        return driver::csp_level_supported(level, csp_.at(checked(h)).ast, &spec_.device(0));
+    }
+
+    // Run the program at `level`. `window` is L-CA's driver window, a schedule option.
+    CspPlatformRun run_csp(CspProgramHandle h, ExecutionLevel level, std::size_t window = 256) const {
+        require_single_device();
+        const CspEntry& e = csp_.at(checked(h));
+        CspPlatformRun r;
+        r.outcome = driver::csp_run_level(level, e.ast, &spec_.device(0), e.inputs, window);
+        r.identity.program_digest = e.digest;
+        r.identity.snapshot_digest = e.inputs_digest;
+        r.identity.deployment_digest = deployment_digest_;
+        r.identity.placement = "single";
+        r.identity.level = level;
+        if (level == ExecutionLevel::CycleAccurate) r.identity.schedule = "window=" + std::to_string(window);
+        return r;
+    }
+
+    // The oracle for the program: its trace's L0 on its inputs, within `trace_limit` actions.
+    driver::CspReference csp_reference(CspProgramHandle h, std::size_t trace_limit = 1'000'000) const {
+        const CspEntry& e = csp_.at(checked(h));
+        return driver::csp_reference(e.ast, e.inputs, trace_limit);
+    }
 
     const TileProgram& program(ProgramHandle h) const { return programs_.at(checked(h)); }
     TileProgram& program(ProgramHandle h) { return programs_.at(checked(h)); }
@@ -434,6 +517,13 @@ private:
                 "schedule device 0 and ignore the rest without saying so");
     }
 
+    std::size_t checked(CspProgramHandle h) const {
+        if (!h.valid()) throw std::invalid_argument("platform: an unset CspProgramHandle names no program");
+        if (h.index() >= csp_.size())
+            throw std::invalid_argument("platform: CspProgramHandle " + std::to_string(h.index()) + " is not loaded");
+        return h.index();
+    }
+
     std::size_t checked(ProgramHandle h) const {
         if (!h.valid())
             throw std::invalid_argument("platform: an unset ProgramHandle names no program");
@@ -455,6 +545,13 @@ private:
     // above is size(), operator[] or at(), all of which behave identically. Loading while
     // stepping is an ordinary thing to do, and #286 builds its event record on this cursor.
     std::deque<TileProgram> programs_;
+
+    struct CspEntry {
+        csp::lang::Program ast;
+        TileProgram inputs;
+        std::string text, digest, inputs_digest;
+    };
+    std::deque<CspEntry> csp_;
 };
 
 } // namespace sw::kpu::program::platform

@@ -80,6 +80,16 @@ set_tests_properties(test_csp_run PROPERTIES
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
 )
 
+# The CSP corpus through the platform, and the canonical text (kpu-run-csp-programs step 4a)
+kpu_add_component_test(test_csp_corpus "program"
+    test_csp_corpus.cpp
+)
+
+set_tests_properties(test_csp_corpus PROPERTIES
+    LABELS "program;csp;corpus;v0.9"
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+)
+
 # The L0 portable program as a file (#265)
 kpu_add_component_test(test_l0_serialization "program"
     test_l0_serialization.cpp

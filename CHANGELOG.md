@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **CSP programs on the virtual platform, and a CSP corpus** (kpu-run-csp-programs step 4a).
+  - `VirtualPlatform::load_csp` / `run_csp` / `csp_reference` run a CSP program at any level as
+    a pure function of (program, inputs, deployment, level, schedule).
+  - The program digest is the digest of its canonical text (`lang::format`), so two spellings of
+    one program are one program. `RunIdentity` gains `schedule` (L-CA's window).
+  - `kpu-run`'s `.csp` path goes through the platform, with a run id per level and
+    `--emit-l0-result`.
+  - The corpus gains matmul, LU and linear `.csp` programs. They run at every level that can run
+    them on S1, against recorded results.
+  - The plan now splits retiring the L0 L-T1 path into 4b-4e: the tile-flow record, stepping and
+    the timeline, orchestration (`inherit` / `retain`, for review), then retirement.
+
 - **L-T1 from the CSP program** (kpu-run-csp-programs step 3; the sequencing plan's step 3).
   - `csp::TransactionalInterpreter` times the program one tile move per transaction, under the
     program's own L3 credits: Loads take them, its Releases return them, and nothing is inferred.
