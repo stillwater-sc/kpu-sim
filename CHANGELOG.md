@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`kpu-run --program file.csp`: the simulator executes CSP programs** (kpu-run-csp-programs
+  step 2).
+  - L-B runs from the program's stream; L-CA through `CspDriver` on the machine the deployment
+    builds. L-T1 follows in step 3.
+  - The trace's L0, when small enough (`--trace-limit`), is the oracle. Every level is compared
+    against it bit-exactly, on every operand.
+  - A level that cannot run a program on a machine is skipped (under `--level all`) or refused
+    (when named), with the reason.
+  - Inputs are synthesized, `inout` operands by first touch, or read from an L0 file
+    (`--inputs`).
+  - `program/driver/csp_run.hpp` is the library; `CspDriver` now reads every operand back.
+
 - **`kpu-csp-gen`: the CSP program generator** (`docs/plans/kpu-run-csp-programs.md` step 1).
   - Writes an operator's canonical schedule as a `.csp` program with its loops: matmul
     (column or row panels), the linear operator (epilogue fused at a place, or unfused), and LU.

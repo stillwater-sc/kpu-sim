@@ -1,0 +1,5 @@
+csp 1.0
+program broken machine flat(l3 = 4) {
+  tensor A[64,64] tile 32x32 in;
+  resident A[0, 0];
+}

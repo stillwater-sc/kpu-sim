@@ -96,8 +96,8 @@ inline std::string not_implemented_reason(ExecutionLevel l) {
         case ExecutionLevel::ResourceTransactional:
             return "the L-T2 resource-transactional interpreter is not implemented (#283)";
         case ExecutionLevel::CycleAccurate:
-            return "L-CA exists in substance (ConcurrentTimingExecutor) but consumes a "
-                   "ScheduleResult rather than this program, so it cannot run it yet (#283)";
+            return "an L0 program is a trace; L-CA runs a CSP program (--program file.csp; write one "
+                   "with kpu-csp-gen)";
         default:
             return "";
     }
