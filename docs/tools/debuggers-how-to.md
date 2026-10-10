@@ -53,6 +53,19 @@ of the machine's timing mixed in.
 
 ### 2.1 Record
 
+A CSP program (the input `kpu-run` is moving to; `docs/plans/kpu-run-csp-programs.md`) records
+a **version-4** bundle, whose ops are the program's actions and whose L3 residencies are the
+program's own slots:
+
+```bash
+build/tools/csp-gen/kpu-csp-gen --algo matmul --size 512 --tile 64 \
+    --target tests/program/deploy/kpu_t4.json -o t4.csp
+build/tools/kpu-run/kpu-run --program t4.csp --deploy tests/program/deploy/kpu_t4.json \
+    --level block-sequential --tflow run.tflow
+```
+
+An L0 program records a version-3 bundle, whose ops are L0 ops:
+
 ```bash
 build/tools/kpu-run/kpu-run --algo matmul --size 256 --tile 32 --level block-sequential \
     --deploy tests/program/deploy/kpu_t4.json --tflow run.tflow
@@ -80,10 +93,10 @@ cause. Exit **2** means the bundle could not be read, so there are no violations
 | TF3 | no two transits overlap on one lane of a mover pool |
 | TF4 | no two computes overlap on one compute tile |
 | TF5 | a tile's L3 residencies never overlap |
-| TF6 | every compute and transit runs while each tile it touches holds its L3 slot |
+| TF6 | every compute and transit runs while each tile it touches holds its L3 slot (v4: every transit into or out of L3; an accumulator has no slot, and a Feed reads L2) |
 | TF7 | an op's hops chain correctly: kinds, order and endpoints |
 | TF8 | the level-of-detail pyramid is the exact merge of the raw events |
-| TF9 | every L3 residency was filled, by a seed, a DMA delivery or a write |
+| TF9 | every L3 residency was filled, by a seed, a DMA delivery or a write (v4: or its Writeback) |
 
 ### 2.3 View
 

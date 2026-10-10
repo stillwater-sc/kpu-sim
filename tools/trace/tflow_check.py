@@ -24,7 +24,10 @@ Invariants:
     TF6  held while used  every compute and every transit runs while each tile its op
                         touches holds an L3 slot -- the executor's own release rule ("a slot
                         is freed when every op that touches it has completed"). An early
-                        release, the #279 class, violates it.
+                        release, the #279 class, violates it. Version 4 (a CSP program's
+                        record; an op is one action): every transit into or out of L3 runs
+                        while its tile holds an L3 slot -- an accumulator has none, and a Feed
+                        reads L2 after the program released the L3 copy.
     TF7  hop order      an op's hops do not overlap; each hop moves between the station kinds
                         its type names (a DMA in goes dram -> l3, ...); and a tile's hops for
                         one op form a chain, each starting where the previous one ended
@@ -126,8 +129,12 @@ def load(path):
         # Version 2's hop 5 is the old DMA read of L3; reading it as an ejection would be wrong.
         raise Unreadable("a version-2 bundle records writeback as a DMA read (hop 5 = "
                          "dma:l3->dram); re-record it with this build's kpu-run --tflow")
-    if m.get("version") != 3:
-        raise Unreadable(f"version {m.get('version')!r} is not one this checker reads (3)")
+    if m.get("version") not in (3, 4):
+        raise Unreadable(f"version {m.get('version')!r} is not one this checker reads (3, 4)")
+    if m.get("version") == 4 and m.get("ops") != "csp-actions":
+        # Version 4 is a CSP program's record: an op is one of the program's actions. A bundle that
+        # does not say so cannot be read as one, or TF6 would be checked under the wrong rule.
+        raise Unreadable('a version-4 bundle must say what its ops are ("ops": "csp-actions")')
     rec = {"manifest": m}
     _named(m.get("stations"), "manifest stations")
     movers = m.get("movers", [])
@@ -327,14 +334,32 @@ def check(rec):
     off, opt = ot["offset"], ot["tile"]
     def op_tiles(op):
         return opt[off[op]:off[op + 1]]
-    for i in range(nco):
+    if m.get("version") == 4:
+        # A CSP PROGRAM's record (version 4): an op is one action, and L3 holds a tile only between
+        # its program's credit and Release. An accumulator lives in the fabric with no L3 slot,
+        # and a Feed reads L2 -- often after the L3 copy was released, which is the point of a
+        # release. So the rule is the program's: every transit INTO or OUT OF L3 runs while its
+        # tile holds an L3 slot. (A Release before its last L3 reader -- #279's class -- breaks it.)
+        l3 = {i for i, s in enumerate(st) if s.get("kind") == "l3"}
+        for i in range(ntr):
+            if tr["src"][i] not in l3 and tr["dst"][i] not in l3:
+                continue
+            tile = tr["tile"][i]
+            if not held(tile, tr["t0"][i], tr["t1"][i]):
+                r.fail("TF6", f"action {tr['op'][i]} moves {tile_name(tile)} through L3 over "
+                              f"[{int(tr['t0'][i])}, {int(tr['t1'][i])}) without it holding an L3 slot -- "
+                              f"released before its last L3 reader finished")
+        nco_v3 = 0
+    else:
+        nco_v3 = nco
+    for i in range(nco_v3):
         op = co["op"][i]
         for tile in op_tiles(op):
             if not held(tile, co["t0"][i], co["t1"][i]):
                 r.fail("TF6", f"op {op} computes over [{int(co['t0'][i])}, {int(co['t1'][i])}) but "
                               f"{tile_name(tile)} does not hold an L3 slot for all of it -- "
                               f"released before its last user finished")
-    for i in range(ntr):
+    for i in range(ntr if m.get("version") == 3 else 0):
         op = tr["op"][i]
         for tile in op_tiles(op):
             if not held(tile, tr["t0"][i], tr["t1"][i]):
@@ -372,11 +397,14 @@ def check(rec):
 
     # TF9 -------------------------------------------------------------------
     r.ran("TF9")
-    DMA_IN, L3_TO_L3 = 0, 7                 # enum Hop: DmaDramToL3, BlockMoverL3ToL3
+    DMA_IN, WRITEBACK, L3_TO_L3 = 0, 4, 7   # enum Hop: DmaDramToL3, BlockMoverL2ToL3, BlockMoverL3ToL3
     arrivals = {}
     for i in range(ntr):
         # Only a hop that really ends in L3 fills an L3 slot; TF7 reports the mislabelled ones.
-        if tr["hop"][i] in (DMA_IN, L3_TO_L3) and tr["dst"][i] < len(st) and \
+        # Version 4 (a CSP program): a result reaches L3 by its Writeback (hop 4), not by being
+        # computed there, so that hop fills a slot too.
+        fills = (DMA_IN, L3_TO_L3, WRITEBACK) if m.get("version") == 4 else (DMA_IN, L3_TO_L3)
+        if tr["hop"][i] in fills and tr["dst"][i] < len(st) and \
                 st[tr["dst"][i]]["kind"] == "l3":
             arrivals.setdefault(tr["tile"][i], []).append(tr["t0"][i])
     writes = {}

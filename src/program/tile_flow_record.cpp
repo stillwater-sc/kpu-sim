@@ -199,6 +199,128 @@ TileFlowRecord build_record(const TileProgram& prog, const driver::RunOutcome& o
 }
 
 // ============================================================================
+// A CSP program's run at L-T1 (version 4)
+// ============================================================================
+TileFlowRecord build_csp_record(const csp::lang::Program& ast, const driver::CspLevelOutcome& outcome,
+                                const TileProgram& operands, const platform::DeploymentSpec& spec, Dim device) {
+    if (outcome.level != driver::ExecutionLevel::BlockSequential || outcome.skipped)
+        throw RecordError(std::string("record: a CSP program's record is built from its L-T1 run; this is ") +
+                          driver::short_name(outcome.level) + (outcome.skipped ? " (skipped)" : ""));
+    if (device >= spec.device_count())
+        throw RecordError("record: device " + std::to_string(device) + " of " + std::to_string(spec.device_count()));
+    const platform::DeviceSpecification& d = spec.device(device);
+    const auto dev = spec.device_view(device);
+    TileFlowRecord rec;
+    rec.op_space = "csp-actions";
+    rec.level = driver::short_name(outcome.level);
+    rec.device = d.name;
+    rec.device_label = dev.label();
+    rec.deployment_digest = platform::deployment_digest(spec);
+    rec.makespan = outcome.makespan;
+    if (rec.makespan > kMaxExactCycle)
+        throw RecordError("record: makespan " + std::to_string(rec.makespan) +
+                          " exceeds 2^53 cycles, which the f64 time columns cannot hold exactly");
+
+    // ---- stations: as version 3, with L3's capacity the PROGRAM's (its credits)
+    rec.stations.push_back({d.name + "/dram", "dram", 0, false, true});
+    rec.stations.push_back({pooled_name(d.name, "l3"), "l3", static_cast<std::uint64_t>(ast.l3), true, true});
+    rec.stations.push_back({pooled_name(d.name, "l2"), "l2", 0, true, false});
+    rec.stations.push_back({pooled_name(d.name, "l1"), "l1", 0, true, false});
+    rec.stations.push_back({pooled_name(d.name, "dmabuf"), "dmabuf", 0, true, false});
+    rec.unmodelled = {"l2", "l1", "dmabuf"};
+    const std::size_t n_cf = std::max<std::size_t>(outcome.compute_tiles, 1);
+    for (std::size_t c = 0; c < n_cf; ++c)
+        rec.stations.push_back({d.name + "/cf[" + std::to_string(c) + "]", "cf", 1, false, true});
+    const std::uint32_t DRAM = 0, L3 = 1, L2 = 2, L1 = 3, DMABUF = 4, CF0 = 5;
+    for (const auto& [proc, name] : {std::pair{"dma", "dma"}, std::pair{"bm", "block-mover"},
+                                     std::pair{"str", "streamer"}})
+        rec.movers.push_back({name, static_cast<Dim>(outcome.lanes.count(proc) ? outcome.lanes.at(proc) : 0)});
+    rec.element_bytes = d.element_bytes;
+    for (const std::string& name : operands.operand_order()) {
+        const TensorOperand& o = operands.operand(name);
+        rec.operands.push_back({o.name, o.rows, o.cols, o.tile_rows, o.tile_cols});
+    }
+
+    // ---- tiles and ops: one op per action, in program order (the program's stream)
+    std::map<std::string, std::uint32_t> tile_of;
+    auto tile_id = [&](const TileCoord& c) {
+        const std::string k = tile_key(c);
+        const auto it = tile_of.find(k);
+        if (it != tile_of.end()) return it->second;
+        const auto id = static_cast<std::uint32_t>(rec.tiles.size());
+        rec.tiles.push_back({c.operand, c.ti, c.tj});
+        tile_of.emplace(k, id);
+        return id;
+    };
+    csp::lang::ActionStream stream(ast);
+    while (auto e = stream.next()) {
+        const csp::Action& a = e->action;
+        Op o;
+        o.kind = static_cast<std::uint8_t>(a.kind);
+        std::map<std::uint32_t, std::size_t> at;
+        auto touch = [&](const TileCoord& c, bool writes) {
+            const std::uint32_t id = tile_id(c);
+            const auto it = at.find(id);
+            if (it != at.end()) { if (writes) o.written[it->second] = 1; return; }
+            at.emplace(id, o.tiles.size());
+            o.tiles.push_back(id);
+            o.written.push_back(writes ? 1 : 0);
+        };
+        if (a.kind == csp::Action::Kind::Call && e->op) {
+            for (const TileCoord& c : e->op->inputs) touch(c, false);
+            for (const TileCoord& c : e->op->outputs) touch(c, true);
+        } else {
+            // A Load or a Writeback fills its L3 slot: it WRITES the tile there (TF9).
+            touch(a.tile, a.kind == csp::Action::Kind::Load || a.kind == csp::Action::Kind::Writeback);
+        }
+        rec.ops.push_back(std::move(o));
+    }
+
+    // ---- residency: the program's slots, credit to Release
+    for (const auto& sl : outcome.slots)
+        rec.residency.push_back({tile_id(sl.tile), L3, sl.t0, sl.t1, 0});
+
+    // ---- transits (each movement leg) and computes (each Call)
+    using K = csp::Action::Kind;
+    using P = csp::TransactionalInterpreter::Proc;
+    for (const auto& r : outcome.records) {
+        if (r.kind == K::Release) continue;
+        const auto op = static_cast<std::uint32_t>(r.action);
+        if (r.kind == K::Call) {
+            if (r.lane >= n_cf)
+                throw RecordError("record: action " + std::to_string(r.action) + " ran on compute tile " +
+                                  std::to_string(r.lane) + " of " + std::to_string(n_cf));
+            rec.computes.push_back({op, CF0 + static_cast<std::uint32_t>(r.lane), r.start, r.finish});
+            continue;
+        }
+        Hop h = Hop::DmaDramToL3;
+        std::uint32_t src = DRAM, dst = L3;
+        switch (r.kind) {
+            case K::Load:      h = Hop::DmaDramToL3;      src = DRAM; dst = L3; break;
+            case K::Move:      h = Hop::BlockMoverL3ToL2; src = L3;   dst = L2; break;
+            case K::Feed:      h = Hop::StreamerL2ToL1;   src = L2;   dst = L1; break;
+            case K::Drain:     h = Hop::StreamerL1ToL2;   src = L1;   dst = L2; break;
+            case K::Writeback: h = Hop::BlockMoverL2ToL3; src = L2;   dst = L3; break;
+            case K::Store:
+                if (r.proc == P::Bm) { h = Hop::BlockMoverL3ToDmaBuffer; src = L3; dst = DMABUF; }
+                else                 { h = Hop::DmaBufferToDram;         src = DMABUF; dst = DRAM; }
+                break;
+            default: break;
+        }
+        rec.transits.push_back({tile_id(r.tile), op, static_cast<std::uint8_t>(h),
+                                static_cast<std::uint8_t>(mover_of(h)), static_cast<std::uint32_t>(r.lane), r.start,
+                                r.finish, src, dst});
+    }
+    std::sort(rec.transits.begin(), rec.transits.end(), [](const Transit& a, const Transit& b) {
+        return a.t0 != b.t0 ? a.t0 < b.t0 : a.op != b.op ? a.op < b.op : a.hop < b.hop;
+    });
+    std::sort(rec.computes.begin(), rec.computes.end(), [](const Compute& a, const Compute& b) {
+        return a.t0 != b.t0 ? a.t0 < b.t0 : a.op < b.op;
+    });
+    return rec;
+}
+
+// ============================================================================
 // Occupancy
 // ============================================================================
 std::uint64_t l3_occupancy_at(const TileFlowRecord& rec, Cycle t) {
@@ -257,7 +379,10 @@ void write_tflow(const TileFlowRecord& rec, const std::string& dir) {
     // "DMA reads L3" became a BlockMover ejecting into a DMA buffer, then the DMA writing DRAM,
     // with a dmabuf station between them. A version-2 bundle's hop 5 means the old leg, so it
     // is refused rather than read as an ejection.
-    m["version"] = 3;
+    // 4: a CSP program's record -- the columns are version 3's, an op is one of the program's
+    // ACTIONS (kpu-run-csp-programs step 4b), and `ops` says so.
+    m["version"] = rec.op_space == "csp-actions" ? 4 : 3;
+    if (rec.op_space == "csp-actions") m["ops"] = "csp-actions";
     m["level"] = rec.level;
     m["device"] = rec.device;
     m["device_label"] = rec.device_label;
@@ -362,10 +487,15 @@ TileFlowRecord read_tflow(const std::string& dir) {
     if (m.value("version", 0) == 2)
         throw RecordError("record: a version-2 bundle records writeback as a DMA read (hop 5 = "
                           "dma:l3->dram); re-record it with this build's kpu-run --tflow");
-    if (m.value("version", 0) != 3)
-        throw RecordError("record: version " + std::to_string(m.value("version", 0)) +
-                          " is not one this build reads (3)");
+    const int version = m.value("version", 0);
+    if (version != 3 && version != 4)
+        throw RecordError("record: version " + std::to_string(version) + " is not one this build reads (3, 4)");
     TileFlowRecord rec;
+    if (version == 4) {
+        if (m.value("ops", "") != "csp-actions")
+            throw RecordError("record: a version-4 bundle must say what its ops are (\"ops\": \"csp-actions\")");
+        rec.op_space = "csp-actions";
+    }
     rec.level = m.at("level").get<std::string>();
     rec.device = m.at("device").get<std::string>();
     rec.device_label = m.at("device_label").get<std::string>();

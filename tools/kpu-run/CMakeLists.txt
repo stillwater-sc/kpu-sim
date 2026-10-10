@@ -131,6 +131,46 @@ if(KPU_BUILD_TESTS)
                     ${CMAKE_CURRENT_BINARY_DIR}/t64_matmul.tflow
                     ${CMAKE_BINARY_DIR}/tools/floorplan/t64_floorplan.json)
         set_tests_properties(tileflow_bind_t64 PROPERTIES DEPENDS "kpu_run_tflow_t64;kpu_floorplan_t64")
+        # ---- version 4: a CSP program's record (docs/plans/kpu-run-csp-programs.md step 4b) ----
+        # The T4 reference run, from a program kpu-csp-gen writes: 512^3 in 64x64 tiles.
+        add_test(NAME csp_gen_t4_matmul
+            COMMAND $<TARGET_FILE:csp-gen> --algo matmul --size 512 --tile 64
+                    --target ${CMAKE_SOURCE_DIR}/tests/program/deploy/kpu_t4.json
+                    -o ${CMAKE_CURRENT_BINARY_DIR}/t4_matmul.csp)
+        add_test(NAME kpu_run_csp_tflow_t4
+            COMMAND run --program ${CMAKE_CURRENT_BINARY_DIR}/t4_matmul.csp
+                    --deploy ${CMAKE_SOURCE_DIR}/tests/program/deploy/kpu_t4.json
+                    --level block-sequential --tflow ${CMAKE_CURRENT_BINARY_DIR}/csp_t4.tflow)
+        set_tests_properties(kpu_run_csp_tflow_t4 PROPERTIES DEPENDS csp_gen_t4_matmul)
+        add_test(NAME kpu_run_csp_tflow_linear
+            COMMAND run --program ${CMAKE_SOURCE_DIR}/tests/program/corpus/linear_64_t16_relu.csp
+                    --inputs ${CMAKE_SOURCE_DIR}/tests/program/corpus/linear_64_t16_relu.l0
+                    --deploy ${CMAKE_SOURCE_DIR}/tests/program/deploy/kpu_s1.json
+                    --tflow ${CMAKE_CURRENT_BINARY_DIR}/csp_linear.tflow)
+        add_test(NAME tflow_check_csp_t4
+            COMMAND ${KPU_PYTHON3} ${_tflow_check} ${CMAKE_CURRENT_BINARY_DIR}/csp_t4.tflow)
+        set_tests_properties(tflow_check_csp_t4 PROPERTIES DEPENDS kpu_run_csp_tflow_t4)
+        add_test(NAME tflow_check_csp_linear
+            COMMAND ${KPU_PYTHON3} ${_tflow_check} ${CMAKE_CURRENT_BINARY_DIR}/csp_linear.tflow)
+        set_tests_properties(tflow_check_csp_linear PROPERTIES DEPENDS kpu_run_csp_tflow_linear)
+        add_test(NAME tflow_check_v4_selftest
+            COMMAND ${KPU_PYTHON3} ${CMAKE_SOURCE_DIR}/tools/trace/test_tflow_check_v4.py
+                    ${CMAKE_CURRENT_BINARY_DIR}/csp_linear.tflow)
+        set_tests_properties(tflow_check_v4_selftest PROPERTIES DEPENDS kpu_run_csp_tflow_linear)
+        add_test(NAME tileflow_viewer_csp_smoke
+            COMMAND ${KPU_PYTHON3} ${CMAKE_SOURCE_DIR}/tools/visualization/tileflow/test_viewer.py
+                    ${CMAKE_CURRENT_BINARY_DIR}/csp_linear.tflow)
+        set_tests_properties(tileflow_viewer_csp_smoke PROPERTIES DEPENDS kpu_run_csp_tflow_linear)
+        add_test(NAME tileflow_bind_csp_t4
+            COMMAND ${KPU_PYTHON3} ${CMAKE_SOURCE_DIR}/tools/visualization/tileflow/test_bind.py
+                    ${CMAKE_CURRENT_BINARY_DIR}/csp_t4.tflow
+                    ${CMAKE_BINARY_DIR}/tools/floorplan/t4_floorplan.json)
+        set_tests_properties(tileflow_bind_csp_t4 PROPERTIES DEPENDS "kpu_run_csp_tflow_t4;kpu_floorplan_t4")
+        set_tests_properties(csp_gen_t4_matmul kpu_run_csp_tflow_t4 kpu_run_csp_tflow_linear
+            tflow_check_csp_t4 tflow_check_csp_linear tflow_check_v4_selftest
+            tileflow_viewer_csp_smoke tileflow_bind_csp_t4
+            PROPERTIES LABELS "program;tileflow;csp")
+
         set_tests_properties(tflow_check_matmul tflow_check_t4 kpu_run_tflow_shared_reader
             tflow_check_shared_reader tflow_check_selftest tileflow_viewer_smoke
             kpu_run_tflow_t64 tileflow_bind_t64 tileflow_bind_t4
