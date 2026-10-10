@@ -71,12 +71,19 @@ public:
         return "?";
     }
 
-    struct Record {                     // one action's interval (Release: zero length)
+    struct Record {                     // one leg of one action (Release: zero length; Store: two)
+        std::size_t action = 0;         // the action's index in program order
         Action::Kind kind = Action::Kind::Call;
         TileCoord tile;
         Proc proc = Proc::Cf;
         std::size_t lane = 0;
         Cycle start = 0, finish = 0;
+    };
+
+    // One residency's L3 slot: held from its credit to its Release.
+    struct Slot {
+        TileCoord tile;
+        Cycle t0 = 0, t1 = 0;
     };
 
     struct Stats {
@@ -115,7 +122,9 @@ public:
         fed_.clear();
         acc_.clear();
         intervals_.clear();
+        slots_.clear();
         stage_reads_.clear();
+        released_.clear();
     }
 
     void step(const Action& a, const TileOp* call_op) {
@@ -124,7 +133,10 @@ public:
         const Cycle bytes = tile_bytes(a.tile);
         switch (a.kind) {
             case Action::Kind::Load: {
-                Cycle ready = get(dram_ready_, k);
+                // After the tile's earlier Store retires (RAW via DRAM), and after its previous
+                // residency's Release: a tile holds one L3 slot at a time (L-CA's DMA waits out
+                // a copy still held the same way).
+                Cycle ready = std::max(get(dram_ready_, k), get(released_, k));
                 const Cycle credit = take_credit();
                 if (credit > ready) {
                     ready = credit;
@@ -171,7 +183,7 @@ public:
                 if (in_place) {
                     ready = std::max(ready, it->second.readers);   // WAR: earlier reads of the slot
                 } else {
-                    ready = std::max(ready, take_credit());         // opens a residency
+                    ready = std::max({ready, take_credit(), get(released_, k)});   // opens a residency
                 }
                 const Cycle f = run(Proc::Bm, ready, transfer(Proc::Bm, bytes), a);
                 Residency& r = residency_[k];
@@ -202,9 +214,12 @@ public:
                 auto s = stage_reads_.find(k);
                 if (s != stage_reads_.end()) t = std::max(t, s->second);
                 credits_.push(t);
+                released_[k] = std::max(get(released_, k), t);
                 intervals_.push_back({r.slot_since, t});
+                slots_.push_back(Slot{a.tile, r.slot_since, t});
                 r.slot = false;
                 Record rec;
+                rec.action = st_.actions;
                 rec.kind = a.kind;
                 rec.tile = a.tile;
                 rec.start = rec.finish = t;
@@ -241,6 +256,8 @@ public:
 
     const TileProgram& result() const { return values_.result(); }
     const std::vector<Record>& records() const { return records_; }
+    const std::vector<Slot>& slots() const { return slots_; }
+    std::size_t lanes_of(Proc p) const { return lanes(p); }
 
 private:
     struct Residency {
@@ -260,8 +277,9 @@ private:
     std::map<Proc, Cycle> last_start_;
     std::priority_queue<Cycle, std::vector<Cycle>, std::greater<Cycle>> credits_;   // when each free slot frees
     std::map<std::string, Residency> residency_;
-    std::map<std::string, Cycle> dram_ready_, moved_, drained_, fed_, acc_, stage_reads_;
+    std::map<std::string, Cycle> dram_ready_, moved_, drained_, fed_, acc_, stage_reads_, released_;
     std::vector<std::pair<Cycle, Cycle>> intervals_;     // each residency's slot: credit -> Release
+    std::vector<Slot> slots_;
 
     static Cycle get(const std::map<std::string, Cycle>& m, const std::string& k) {
         auto it = m.find(k);
@@ -313,6 +331,7 @@ private:
         st_.busy[name(p)] += duration;
         st_.makespan = std::max(st_.makespan, finish);
         Record rec;
+        rec.action = st_.actions;
         rec.kind = a.kind;
         rec.tile = a.tile;
         rec.proc = p;

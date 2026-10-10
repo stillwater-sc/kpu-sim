@@ -58,9 +58,9 @@ class ViewerSmokeTest(unittest.TestCase):
         # follow would leave it refusing every new bundle -- invisible to a syntax check.
         written = json.loads((Path(BUNDLE) / "manifest.json").read_text(encoding="utf-8"))["version"]
         page = (HERE / "index.html").read_text(encoding="utf-8")
-        accepted = re.search(r"m\.version !== (\d+)", page)
+        accepted = re.search(r"const VERSIONS = \[([\d, ]+)\]", page)
         self.assertIsNotNone(accepted)
-        self.assertEqual(int(accepted.group(1)), written)
+        self.assertIn(written, [int(v) for v in accepted.group(1).split(",")])
 
     def _copy_with_binding(self, identity):
         d = self.tmp / "bound.tflow"

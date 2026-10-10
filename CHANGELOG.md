@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The tile-flow record of a CSP program: `.tflow` version 4** (kpu-run-csp-programs step 4b).
+  - `kpu-run --program file.csp --tflow dir` records the program's L-T1 run: its actions as
+    ops, and its own L3 slots as the residencies.
+  - `tflow_check.py` reads it, with TF6 and TF9 stated for programs. The viewer and the binder
+    read it.
+  - The T4 reference run comes from a `kpu-csp-gen` program.
+  - The checker found an L-T1 bug: a tile's next residency could take a credit before the
+    previous one's Release. It is fixed.
+
 - **CSP programs on the virtual platform, and a CSP corpus** (kpu-run-csp-programs step 4a).
   - `VirtualPlatform::load_csp` / `run_csp` / `csp_reference` run a CSP program at any level as
     a pure function of (program, inputs, deployment, level, schedule).

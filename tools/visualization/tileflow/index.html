@@ -161,7 +161,9 @@ const fmt = n => Number(n).toLocaleString("en-US");
 const HOPS = ["dma:dram->l3", "bm:l3->l2", "str:l2->l1", "str:l1->l2", "bm:l2->l3", "bm:l3->dmabuf", "dma:dmabuf->dram", "bm:l3->l3"];
 const HOP_DMA_IN = 0, HOP_EJECT = 5, HOP_DMA_WRITE = 6;
 const MOVERS = ["dma", "block-mover", "streamer", "noc"];
-const OPKIND = ["FEED", "DRAIN", "MATMUL_ACCUM", "LU_DIAG_FACTOR", "PIVOT_APPLY", "TRSM_LL", "TRSM_UR"];   // enum TileOpKind, in order
+const OPKIND = ["FEED", "DRAIN", "MATMUL_ACCUM", "LU_DIAG_FACTOR", "PIVOT_APPLY", "TRSM_LL", "TRSM_UR", "BIAS_ADD", "ACTIVATION"];   // enum TileOpKind, in order (version 3: an op is an L0 op)
+// Version 4 is a CSP program's record: an op is one of the program's ACTIONS (enum Action::Kind, in order).
+const ACTIONKIND = ["LOAD", "STORE", "MOVE", "WRITEBACK", "FEED", "DRAIN", "CALL", "RELEASE"];
 
 // ------------------------------------------------------------------ loading
 function col(buf, cols, name, n) {
@@ -174,7 +176,10 @@ function parse(files) {
   // files: { "manifest.json": text, "lod.json": text, "<x>.bin": ArrayBuffer, floorplan?: text }
   const m = JSON.parse(files["manifest.json"]);
   // Version 3: every hop is a push (writeback = ejection, then a DMA write); version 2 recorded a DMA read.
-  if (m.format !== "kpu-tflow" || m.version !== 3) throw new Error("not a version-3 kpu-tflow bundle (re-record with kpu-run --tflow)");
+  // Version 4: the same columns, recording a CSP program's run -- an op is one of its actions.
+  const VERSIONS = [3, 4];
+  if (m.format !== "kpu-tflow" || !VERSIONS.includes(m.version)) throw new Error("not a version-3 or -4 kpu-tflow bundle (re-record with kpu-run --tflow)");
+  if (m.version === 4 && m.ops !== "csp-actions") throw new Error("a version-4 bundle must say its ops are csp-actions");
   const R = { m };
   const tb = (name, extra) => {
     const t = m.tables[name], buf = files[t.file];
@@ -589,10 +594,11 @@ $("fp").addEventListener("mousemove", e => {
 $("fp").addEventListener("mouseleave", hideTip);
 
 function opText(op) {
-  const k = OPKIND[R.ops.kind[op]] || ("kind " + R.ops.kind[op]);
+  const v4 = R.m.version === 4;
+  const k = (v4 ? ACTIONKIND : OPKIND)[R.ops.kind[op]] || ("kind " + R.ops.kind[op]);
   const ts = [];
   for (let j = R.ops.offset[op]; j < R.ops.offset[op + 1]; j++) { const t = R.m.tiles[R.ops.tile[j]]; ts.push(`${t[0]}[${t[1]},${t[2]}]`); }
-  return `op ${op} ${k} ${ts.join(" ")}`;
+  return `${v4 ? "action" : "op"} ${op} ${k} ${ts.join(" ")}`;
 }
 function inspectBlock(b) {
   const st = cfStations.find(i => R.m.stations[i].name === b.name);

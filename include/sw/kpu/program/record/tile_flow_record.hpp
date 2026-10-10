@@ -22,6 +22,14 @@
 //               mover in a place: binding a BlockMover hop to `l3[t]/bm[e]` needs L3 slot
 //               binding first (plan step 6).
 //
+// VERSION 4 (docs/plans/kpu-run-csp-programs.md step 4b): the record of a CSP PROGRAM's run at
+// L-T1. The columns are version 3's; what an "op" is changes, and the manifest says so
+// (`"ops": "csp-actions"`): op i is the program's i-th ACTION, its kind an Action::Kind (Load,
+// Store, Move, Writeback, Feed, Drain, Call, Release). Each movement action is one transit (a
+// Store two: the ejection, then the DMA write), each Call one compute, and the residency
+// intervals are the program's own slots, credit to Release. Version 3 stays the record of an L0
+// run.
+//
 // Not in v0, by design and named so: cause edges (step 5) and the orchestrator's descriptor
 // trace, which needs a time base across launches and arrives with the orchestrated record.
 //
@@ -45,6 +53,8 @@
 // ============================================================================
 #pragma once
 
+#include <sw/kpu/program/csp/lang/parse.hpp>
+#include <sw/kpu/program/driver/csp_run.hpp>
 #include <sw/kpu/program/driver/execution_level.hpp>
 #include <sw/kpu/program/placement.hpp>
 #include <sw/kpu/program/platform/deployment_spec.hpp>
@@ -117,6 +127,7 @@ struct MoverPool {
 };
 
 struct TileFlowRecord {
+    std::string op_space = "l0";       // what an op is: "l0" (version 3) or "csp-actions" (4)
     std::string level;                 // short name of the level that ran
     std::string device;                // device name in the deployment
     std::string device_label;          // DeviceDescriptor::label()
@@ -145,6 +156,12 @@ struct TileFlowRecord {
 TileFlowRecord build_record(const TileProgram& prog, const driver::RunOutcome& outcome,
                             const platform::DeploymentSpec& spec, const Placement& placement,
                             Dim device = 0, std::uint64_t foreign_slots = 0);
+
+// Build the record of a CSP program's run at L-T1 (version 4): `outcome` is the L-T1 outcome of
+// `ast` on `operands` (driver::csp_run_level), timed on device `device` of `spec`. Throws
+// RecordError for an outcome that is not an L-T1 run.
+TileFlowRecord build_csp_record(const csp::lang::Program& ast, const driver::CspLevelOutcome& outcome,
+                                const TileProgram& operands, const platform::DeploymentSpec& spec, Dim device = 0);
 
 // Write `dir` (created if needed) as a .tflow bundle, with its level-of-detail pyramid
 // (tile_flow_lod.hpp) beside it; read the record back. Byte-deterministic: the same record

@@ -195,7 +195,8 @@ int run_csp_program(const std::vector<std::string>& a, const std::string& path) 
     // What a CSP program run accepts. Everything else is the L0 path's (or the generator's:
     // --algo and friends are kpu-csp-gen's), and is refused by name rather than ignored.
     static const std::set<std::string> kOptions = {"--program", "--deploy", "--level", "--window", "--inputs",
-                                                   "--trace-limit", "--no-compare", "--emit-l0-result"};
+                                                   "--trace-limit", "--no-compare", "--emit-l0-result",
+                                                   "--tflow"};
     for (const std::string& t : a)
         if (t.rfind("--", 0) == 0 && !kOptions.count(t)) {
             std::cerr << "kpu-run: " << t << " does not apply to a CSP program"
@@ -205,9 +206,9 @@ int run_csp_program(const std::vector<std::string>& a, const std::string& path) 
                       << "\n";
             return 2;
         }
-    std::string err, deploy_path, inputs_path, emit_path;
+    std::string err, deploy_path, inputs_path, emit_path, tflow_path;
     if (!arg_required(a, "--deploy", deploy_path, err) || !arg_required(a, "--inputs", inputs_path, err) ||
-        !arg_required(a, "--emit-l0-result", emit_path, err)) {
+        !arg_required(a, "--emit-l0-result", emit_path, err) || !arg_required(a, "--tflow", tflow_path, err)) {
         std::cerr << "kpu-run: " << err << "\n";
         return 2;
     }
@@ -394,6 +395,27 @@ int run_csp_program(const std::vector<std::string>& a, const std::string& path) 
         std::cout << "        VE    str " << o.ve.str_busy << "/" << o.ve.str_bound << "  bm " << o.ve.bm_busy << "/"
                   << o.ve.bm_bound << "  fabric " << o.ve.fabric << "   (busy/bound)   window " << window << "\n";
         for (const auto& u : o.unmodelled) std::cout << "        unmodelled: " << u << "\n";
+    }
+
+    // --tflow: the tile-flow record (version 4) of the program's L-T1 run (step 4b).
+    if (!tflow_path.empty()) {
+        const CspLevelOutcome* lt1 = nullptr;
+        for (const auto& o : res.levels)
+            if (o.level == ExecutionLevel::BlockSequential && !o.skipped) lt1 = &o;
+        if (!lt1) {
+            std::cerr << "kpu-run: --tflow records the L-T1 run, which did not run (add block-sequential to --level)\n";
+            return 2;
+        }
+        try {
+            const auto rec = record::build_csp_record(*ast, *lt1, inputs, spec);
+            record::write_tflow(rec, tflow_path);
+            std::cout << "wrote  " << tflow_path << "  (" << rec.residency.size() << " residencies, "
+                      << rec.transits.size() << " transits, " << rec.computes.size()
+                      << " computes from L-T1; ops are the program's actions, version 4)\n";
+        } catch (const std::exception& e) {
+            std::cerr << "kpu-run: --tflow: " << e.what() << "\n";
+            return 2;
+        }
     }
 
     if (has_flag(a, "--no-compare")) return 0;

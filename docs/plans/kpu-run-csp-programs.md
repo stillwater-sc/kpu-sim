@@ -1,7 +1,7 @@
 # `kpu-run` runs CSP programs, at every level including cycle-accurate
 
-**Status:** Decided 2026-10-10 (revised after review, §8; Q1-Q4 as recommended, §9); steps 1-3 and 4a done; 4b-4e
-planned (§5, step 4; for review)
+**Status:** Decided 2026-10-10 (revised after review, §8; Q1-Q4 as recommended, §9); steps 1-3, 4a and 4b done;
+4c-4e planned (§5, step 4; 4d's language decided 2026-10-10)
 **Tracks:** #283 (the L-CA half). Covers `docs/plans/csp-program-tile-sequencing.md` steps 2b and
 3 (L-T1 from the program).
 **Depends on:** the CSP language and its stream (ADR 0004, #343-#345), `CspDriver` (#342, #345,
@@ -308,17 +308,39 @@ platform have moved (§5 step 4). Then it is retired.
        L-T1 and L-CA, asserting the reason where L-CA is refused (LU). It makes the L0 corpus's
        two claims: within tolerance of the recorded result across machines, and bit-identical
        to the program's own oracle on one machine.
-   - **4b: the tile-flow record from the program.** `TransactionalInterpreter` records each
-     action's interval, lane and process, and each residency's slot interval. That is what
-     `.tflow` needs, at action rather than L0-op granularity. Plan:
-     - a `.tflow` v4 whose rows are CSP actions (kind, tile, process, lane, start, finish, the
-       residency id), and whose residency intervals are the program's;
-     - `tflow_check.py`'s invariants restated over actions (TF9, the shared-reader release,
-       becomes "a Release follows every reader of its residency");
-     - the viewer reading v4;
-     - the T4 reference run regenerated from a csp-gen program.
-
-     `kpu-run --tflow` on a `.csp` program writes it, and the L0 path keeps v3 until 4e.
+   - **4b: the tile-flow record from the program** (done).
+     - **`.tflow` version 4:** the columns are version 3's, an op is one of the program's
+       actions (`"ops": "csp-actions"`; kind = `Action::Kind`), and the residency intervals are
+       the program's slots, credit to Release. Each movement action is one transit, a Store two
+       (the ejection, then the DMA write), and each Call one compute. The L3 station's capacity
+       is the program's L3. `record::build_csp_record(ast, L-T1 outcome, inputs, spec)` builds
+       it from `TransactionalInterpreter`'s per-leg records (now carrying the action index) and
+       slots; `read_tflow` reads 3 and 4.
+     - `kpu-run --program file.csp --tflow dir` writes it from the L-T1 run.
+     - **`tflow_check.py`** reads version 4, which must name its ops; one without `ops` is
+       refused (exit 2).
+       - TF6 is restated for programs: every transit into or out of L3 runs while its tile
+         holds a slot. An accumulator has none, and a Feed reads L2 after the program released
+         the L3 copy.
+       - TF9 counts a Writeback (hop 4) as filling a slot, since a result reaches L3 that way,
+         not by being computed there.
+       - The other checks are unchanged.
+     - **The viewer** reads 3 and 4 and names a v4 op by its action. `bind.py` binds a v4
+       record unchanged.
+     - **Found by the checker:** L-T1 let a tile's next Load (or opening Writeback) take a
+       credit before its previous residency's Release had run, so the tile held two slots
+       (TF5). A program Load now also waits for the tile's previous Release, as L-CA's DMA
+       already did.
+     - **Tests:**
+       - `test_tile_flow_record` v4 case: matmul, unfused linear and LU. One op per action,
+         slots = residencies, L3 capacity = the program's, the record's peak = L-T1's peak
+         <= L3, one slot per tile at a time, a compute per Call, two legs per Store, and a
+         read-back.
+       - CTests: the T4 reference run from a `kpu-csp-gen` program (512³/64), and the corpus
+         linear. Each is checked (all nine invariants), with the v4 self-test (clean passes;
+         TF6 and TF9 fail when broken; an unlabelled v4 is exit 2; read as v3, TF6 fails), the
+         viewer smoke test, and binding to the T4 floorplan.
+       - The v3 path's tests are unchanged and pass.
    - **4c: stepping and the timeline from the program.**
      - `--step` walks the action stream: one action per step at L-B (re-executed); one record
        per step at L-T1 (replayed in start order).
@@ -350,8 +372,16 @@ platform have moved (§5 step 4). Then it is retired.
        an old file with the reason.
      - Kept unchanged: `KpuDevice`, the MMIO ABI, reservations, and the run identity's
        residency field, which then digests the inherit/retain sets.
-     - **For review before building:** the `inherit` / `retain` syntax and semantics, and the
-       `.kpuld` change.
+     - **Decided 2026-10-10, all as recommended:**
+       - `inherit` and `retain` are **statements** in the body, like `resident` and `release`,
+         not declaration attributes.
+       - The names are `inherit` and `retain`.
+       - A retained tile need not be stored: skipping DRAM is the point of keeping it resident.
+         The orchestrator guarantees that a later operator stores or consumes it, and refuses a
+         chain whose last retained tile nothing claims.
+       - `.kpuld` operators carry `.csp` text, with a format version bump. The L0 form rides
+         along as the oracle when it is small enough to trace, and an older file is refused
+         with the reason.
    - **4e: retire the L0 L-T1 executor.**
      - Once 4b-4d land, `TileTransactionExecutor`, `run_at`'s L-T1 case and the L0 platform run
        path have no users.

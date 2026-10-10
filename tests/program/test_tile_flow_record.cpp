@@ -11,10 +11,12 @@
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_string.hpp>
 
+#include <sw/kpu/program/csp/gen/generate.hpp>
 #include <sw/kpu/program/driver/program_spec.hpp>
 #include <sw/kpu/program/record/tile_flow_record.hpp>
 #include <sw/kpu/program/tile_transaction_executor.hpp>
 
+#include <algorithm>
 #include <cstring>
 #include <filesystem>
 #include <functional>
@@ -204,7 +206,7 @@ TEST_CASE("the .tflow bundle round-trips, and the same run writes the same bytes
     for (std::size_t i = 0; i < rec.ops.size(); ++i) CHECK(back.ops[i].tiles == rec.ops[i].tiles);
     CHECK(peak_l3_occupancy(back) == peak_l3_occupancy(rec));
 
-    // A newer bundle is refused rather than misread, and so are older ones: version 1 has no
+    // A newer bundle (version 5) is refused rather than misread, and so are older ones: version 1 has no
     // `written` column, and version 2 records writeback as a DMA read (its hop 5 is not an
     // ejection). Reading either would be a wrong answer.
     const std::string original = slurp(a + "/manifest.json");
@@ -213,8 +215,11 @@ TEST_CASE("the .tflow bundle round-trips, and the same run writes the same bytes
         m.replace(m.find("\"version\": 3"), 12, std::string("\"version\": ") + v);
         std::ofstream(a + "/manifest.json", std::ios::binary) << m;
     };
+    with_version("5");
+    CHECK_THROWS_WITH(read_tflow(a), ContainsSubstring("version 5"));
+    // Version 4 is a CSP program's record; one that does not say its ops are actions is refused.
     with_version("4");
-    CHECK_THROWS_WITH(read_tflow(a), ContainsSubstring("version 4"));
+    CHECK_THROWS_WITH(read_tflow(a), ContainsSubstring("must say what its ops are"));
     with_version("2");
     CHECK_THROWS_WITH(read_tflow(a), ContainsSubstring("records writeback as a DMA read"));
     with_version("1");
@@ -278,5 +283,63 @@ TEST_CASE("a corrupt or hostile bundle is refused, not trusted", "[program][reco
         TileFlowRecord bad = rec;
         bad.transits.front().t1 = (Cycle{1} << 53) + 1;
         CHECK_THROWS_WITH(write_tflow(bad, scratch("toolong")), ContainsSubstring("transit t1"));
+    }
+}
+
+// ============================================================================
+// Version 4: a CSP program's record (docs/plans/kpu-run-csp-programs.md step 4b)
+// ============================================================================
+TEST_CASE("v4: a CSP program's L-T1 run records its actions, its slots, and reads back", "[program][record][csp]") {
+    namespace gen = sw::kpu::program::csp::gen;
+    namespace lang = sw::kpu::program::csp::lang;
+    for (const char* algo : {"matmul", "linear", "lu"}) {
+        CAPTURE(algo);
+        gen::Options o;
+        o.algo = algo;
+        o.size = 64;
+        o.tile = 16;
+        o.l3 = algo == std::string("lu") ? 16 : 12;
+        if (o.algo == "linear") o.place = "unfused";       // a tile through two residencies
+        const lang::Program ast = lang::parse(gen::generate(o));
+        const TileProgram inputs = driver::csp_inputs(ast);
+        const platform::DeploymentSpec spec = driver::make_deployment(driver::DeviceSpec{});
+        const auto lt1 = driver::csp_run_level(driver::ExecutionLevel::BlockSequential, ast, &spec.device(0), inputs);
+        REQUIRE_FALSE(lt1.skipped);
+
+        const TileFlowRecord rec = build_csp_record(ast, lt1, inputs, spec);
+        CHECK(rec.op_space == "csp-actions");
+        CHECK(rec.ops.size() == lt1.actions);             // one op per action
+        CHECK(rec.residency.size() == lt1.slots.size());   // the program's slots
+        CHECK(rec.stations[1].capacity == static_cast<std::uint64_t>(o.l3));   // L3: the program's credits
+        CHECK(peak_l3_occupancy(rec) == lt1.peak_l3);
+        CHECK(peak_l3_occupancy(rec) <= static_cast<std::uint64_t>(o.l3));
+        // A tile holds one L3 slot at a time, even across residencies (the unfused C).
+        std::map<std::uint32_t, std::vector<std::pair<Cycle, Cycle>>> by_tile;
+        for (const Residency& r : rec.residency) by_tile[r.tile].push_back({r.t0, r.t1});
+        for (auto& [tile, ivs] : by_tile) {
+            std::sort(ivs.begin(), ivs.end());
+            for (std::size_t i = 1; i < ivs.size(); ++i) CHECK(ivs[i].first >= ivs[i - 1].second);
+        }
+        // Each Call is one compute; each Store two legs.
+        std::size_t calls = 0, stores = 0;
+        for (const Op& op : rec.ops) {
+            calls += op.kind == static_cast<std::uint8_t>(csp::Action::Kind::Call);
+            stores += op.kind == static_cast<std::uint8_t>(csp::Action::Kind::Store);
+        }
+        CHECK(rec.computes.size() == calls);
+        std::size_t store_legs = 0;
+        for (const Transit& t : rec.transits)
+            store_legs += t.hop == static_cast<std::uint8_t>(Hop::BlockMoverL3ToDmaBuffer) ||
+                          t.hop == static_cast<std::uint8_t>(Hop::DmaBufferToDram);
+        CHECK(store_legs == 2 * stores);
+
+        const auto dir = std::filesystem::temp_directory_path() / ("tflow_v4_" + std::string(algo));
+        write_tflow(rec, dir.string());
+        const TileFlowRecord back = read_tflow(dir.string());
+        CHECK(back.op_space == "csp-actions");
+        CHECK(back.ops.size() == rec.ops.size());
+        CHECK(back.transits.size() == rec.transits.size());
+        CHECK(peak_l3_occupancy(back) == peak_l3_occupancy(rec));
+        std::filesystem::remove_all(dir);
     }
 }

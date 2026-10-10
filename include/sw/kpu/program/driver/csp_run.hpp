@@ -144,6 +144,11 @@ struct CspLevelOutcome {
     std::size_t credit_stalls = 0;          // L-T1: Loads that waited for a credit
     std::map<std::string, std::uint64_t> busy;      // L-T1: lane-cycles per process
     std::map<std::string, std::size_t> lanes;
+    // L-T1: every leg of every action, every residency's slot, and the compute tiles it was
+    // timed on -- what the tile-flow record (record::build_csp_record) is built from.
+    std::vector<csp::TransactionalInterpreter::Record> records;
+    std::vector<csp::TransactionalInterpreter::Slot> slots;
+    std::size_t compute_tiles = 0;
     std::uint64_t dram_loads = 0, dram_stores = 0, dram_bytes = 0;
     std::uint64_t cf_busy = 0;
     timing::ConcurrentTimingExecutor::VectorStats ve;
@@ -241,6 +246,9 @@ inline CspLevelOutcome csp_run_level(ExecutionLevel level, const csp::lang::Prog
         o.busy = st.busy;
         o.lanes = st.lanes;
         o.cf_busy = st.busy.count("cf") ? st.busy.at("cf") : 0;
+        o.records = lt.records();
+        o.slots = lt.slots();
+        o.compute_tiles = lt.lanes_of(csp::TransactionalInterpreter::Proc::Cf);
         o.unmodelled.push_back("tile contexts' vector-unit time (movers.vector): L-T1 applies the stages' "
                                "values; their time is L-CA's");
     } else {                                        // CycleAccurate
