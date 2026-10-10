@@ -111,6 +111,10 @@ inline void stmt(std::ostringstream& o, const Stmt& s, int depth) {
             return;
         case Stmt::Kind::Resident: o << in << "resident " << refs_text(s.tiles) << ";\n"; return;
         case Stmt::Kind::Release:  o << in << "release " << refs_text(s.tiles) << ";\n"; return;
+        case Stmt::Kind::Inherit:  o << in << "inherit " << refs_text(s.tiles) << ";\n"; return;
+        case Stmt::Kind::Retain:
+            o << in << "retain " << refs_text(s.tiles) << context_text(s.context) << ";\n";
+            return;
         case Stmt::Kind::Acc:
             o << in << "acc " << ref_text(s.out) << " in fabric {\n";
             stmts(o, s.body, depth + 1);

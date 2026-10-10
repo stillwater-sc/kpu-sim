@@ -67,8 +67,8 @@ inline std::string print(const CspProgram& p) {
     // How each operand is used, for its declaration.
     std::set<std::string> loaded, stored;
     for (const Action& a : p.actions) {
-        if (a.kind == K::Load) loaded.insert(a.tile.operand);
-        if (a.kind == K::Store) stored.insert(a.tile.operand);
+        if (a.kind == K::Load || a.kind == K::Inherit) loaded.insert(a.tile.operand);   // arrives with a value
+        if (a.kind == K::Store || a.kind == K::Retain) stored.insert(a.tile.operand);   // leaves with one
     }
     std::ostringstream o;
     o << "csp " << kVersion << "\n";
@@ -124,6 +124,8 @@ inline std::string print(const CspProgram& p) {
         switch (a.kind) {
             case K::Load: o << indent() << "resident " << text(a.tile) << ";\n"; break;
             case K::Release: o << indent() << "release " << text(a.tile) << ";\n"; break;
+            case K::Inherit: o << indent() << "inherit " << text(a.tile) << ";\n"; break;
+            case K::Retain: o << indent() << "retain " << text(a.tile) << ";\n"; break;
             case K::Store: o << indent() << "store " << text(a.tile) << ";\n"; break;
             case K::Move:
             case K::Feed:
@@ -177,6 +179,13 @@ inline std::string print(const CspProgram& p) {
                     throw PrintError("csp print: action " + std::to_string(i) + " drains " + a.tile.to_string() +
                                      " while its accumulator is open");
                 expect(i + 1, K::Writeback, a.tile);
+                // ...or retained: drained and written back into a slot it keeps.
+                if (i + 2 < p.actions.size() && p.actions[i + 2].kind == K::Retain) {
+                    expect(i + 2, K::Retain, a.tile);
+                    o << indent() << "retain " << text(a.tile) << via_text(a.context, p.actions[i + 1].context) << ";\n";
+                    i += 2;
+                    break;
+                }
                 expect(i + 2, K::Store, a.tile);
                 expect(i + 3, K::Release, a.tile);
                 o << indent() << "store " << text(a.tile) << via_text(a.context, p.actions[i + 1].context) << ";\n";

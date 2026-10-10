@@ -1,0 +1,21 @@
+csp 1.0
+// The first operator of a chain (kpu-run-csp-programs step 4d): C = relu(A B), left resident in
+// L3 for the operator after it. `retain` writes each accumulator back into a slot it keeps --
+// with its epilogue on the way -- and never stores it.
+program matmul_relu_retain machine flat(l3 = 16) {
+  tensor A[32,32] tile 16x16 in;
+  tensor B[32,32] tile 16x16 in;
+  tensor C[32,32] tile 16x16 out;
+  for i in 0..2 {
+    resident A[i, :];
+    for j in 0..2 {
+      resident B[:, j];
+      acc C[i, j] in fabric {
+        for k in 0..2 { call gemm(A[i, k], B[k, j]) +-> C[i, j]; }
+      }
+      retain C[i, j] via relu @ fabric;
+      release B[:, j];
+    }
+    release A[i, :];
+  }
+}

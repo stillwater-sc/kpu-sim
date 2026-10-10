@@ -44,7 +44,7 @@ inline std::vector<sw::trace::TraceEntry> csp_trace_entries(
     std::uint64_t id = 0;
     for (const auto& r : records) {
         const std::size_t leg = legs[r.action]++;
-        if (r.kind == csp::Action::Kind::Release) continue;
+        if (!csp::TransactionalInterpreter::has_process(r.kind)) continue;
         const bool compute = r.proc == P::Cf;
         sw::trace::TraceEntry e(r.start, component_of(r.proc), static_cast<std::uint32_t>(r.lane),
                                 compute ? sw::trace::TransactionType::MATMUL : sw::trace::TransactionType::TRANSFER,

@@ -29,6 +29,10 @@
 //   Store      bm    L3 -> DMA buffer, then dma buffer -> DRAM (the push-only store's two legs)
 //   Release    --    zero time, after every reader of the residency issued before it; its
 //                                     credit returns
+//   Inherit    --    zero time, at cycle 0: the residency is open from the start, its credit
+//                                     held, with no DMA (the operator before left the tile)
+//   Retain     --    zero time, after every reader of the residency; its credit is NOT returned:
+//                                     the slot is held to the end of the program (step 4d)
 //
 // The credit pool is the PROGRAM's L3 (machine flat(l3 = N)): the program's declared machine.
 // Values are the behavioral interpreter's, stepped in the same order, so L-T1 is bit-identical
@@ -71,7 +75,12 @@ public:
         return "?";
     }
 
-    struct Record {                     // one leg of one action (Release: zero length; Store: two)
+    // Release, Inherit and Retain take no process: zero-length records whose `proc` means nothing.
+    static bool has_process(Action::Kind k) {
+        return k != Action::Kind::Release && k != Action::Kind::Inherit && k != Action::Kind::Retain;
+    }
+
+    struct Record {                     // one leg of one action (Release, Inherit, Retain: zero length; Store: two)
         std::size_t action = 0;         // the action's index in program order
         Action::Kind kind = Action::Kind::Call;
         TileCoord tile;
@@ -80,10 +89,12 @@ public:
         Cycle start = 0, finish = 0;
     };
 
-    // One residency's L3 slot: held from its credit to its Release.
+    // One residency's L3 slot: held from its credit to its Release (a retained one: to the end).
     struct Slot {
         TileCoord tile;
         Cycle t0 = 0, t1 = 0;
+        bool inherited = false;         // opened by an Inherit: filled before the program
+        bool retained = false;          // closed by a Retain: held past the program's end
     };
 
     struct Stats {
@@ -125,6 +136,7 @@ public:
         slots_.clear();
         stage_reads_.clear();
         released_.clear();
+        retained_.clear();
     }
 
     void step(const Action& a, const TileOp* call_op) {
@@ -207,6 +219,28 @@ public:
                 st_.dram_bytes += bytes;
                 break;
             }
+            case Action::Kind::Inherit: {
+                const Cycle credit = take_credit();
+                Residency& r = residency_[k];
+                r = Residency{};
+                r.slot = true;
+                r.slot_since = credit;
+                r.current = credit;
+                r.readers = credit;
+                r.inherited = true;
+                zero_length(a, credit);
+                break;
+            }
+            case Action::Kind::Retain: {
+                Residency& r = residency_[k];
+                Cycle t = r.readers;
+                auto s = stage_reads_.find(k);
+                if (s != stage_reads_.end()) t = std::max(t, s->second);
+                retained_.push_back(Slot{a.tile, r.slot_since, 0, r.inherited, true});   // closed in finish()
+                r.slot = false;
+                zero_length(a, t);
+                break;
+            }
             case Action::Kind::Release: {
                 Residency& r = residency_[k];
                 Cycle t = r.readers;
@@ -216,7 +250,7 @@ public:
                 credits_.push(t);
                 released_[k] = std::max(get(released_, k), t);
                 intervals_.push_back({r.slot_since, t});
-                slots_.push_back(Slot{a.tile, r.slot_since, t});
+                slots_.push_back(Slot{a.tile, r.slot_since, t, r.inherited, false});
                 r.slot = false;
                 Record rec;
                 rec.action = st_.actions;
@@ -239,6 +273,13 @@ public:
 
     Stats finish() {
         (void)values_.finish();
+        // A retained slot is held to the end of the program.
+        for (Slot sl : retained_) {
+            sl.t1 = st_.makespan;
+            intervals_.push_back({sl.t0, sl.t1});
+            slots_.push_back(sl);
+        }
+        retained_.clear();
         // Peak in time: the most slots held at once, a slot held from its credit to its Release.
         std::vector<std::pair<Cycle, int>> ev;
         for (const auto& [b, e] : intervals_) {
@@ -265,6 +306,7 @@ private:
         Cycle readers = 0;          // the latest finish of anything that read it (or wrote it)
         bool slot = false;          // holds a credit
         Cycle slot_since = 0;       // when its credit was taken
+        bool inherited = false;     // opened by an Inherit
     };
 
     characterize::DeviceDescriptor dev_;
@@ -280,6 +322,17 @@ private:
     std::map<std::string, Cycle> dram_ready_, moved_, drained_, fed_, acc_, stage_reads_, released_;
     std::vector<std::pair<Cycle, Cycle>> intervals_;     // each residency's slot: credit -> Release
     std::vector<Slot> slots_;
+    std::vector<Slot> retained_;                         // open to the end of the program
+
+    void zero_length(const Action& a, Cycle t) {
+        Record rec;
+        rec.action = st_.actions;
+        rec.kind = a.kind;
+        rec.tile = a.tile;
+        rec.start = rec.finish = t;
+        records_.push_back(rec);
+        st_.makespan = std::max(st_.makespan, t);
+    }
 
     static Cycle get(const std::map<std::string, Cycle>& m, const std::string& k) {
         auto it = m.find(k);

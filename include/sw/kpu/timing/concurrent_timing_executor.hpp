@@ -353,6 +353,19 @@ public:
     void schedule_release(const TileDescriptor& tile, int mover_id = -1);
 
     /**
+     * @brief Seed an L3 entry with a tile's bytes, as if a load had delivered it -- a CSP
+     *        program's Inherit (docs/plans/kpu-run-csp-programs.md step 4d)
+     * @param tile Tile descriptor (l3_held: the program's Release retires it, or it is retained)
+     * @param payload The tile's values: what the operator before left in its slot
+     *
+     * The entry takes an L3 credit of its home tile and a tag CAM entry now, with no DRAM read
+     * and no DMA: the operator before this one left the tile resident. Throws when no credit is
+     * free -- a program's inherited tiles come first, so the pool is full only when the program
+     * asks for more than the machine's L3.
+     */
+    void seed_l3(const TileDescriptor& tile, TilePayload payload);
+
+    /**
      * @brief Schedule a tile feed from L2 to compute
      * @param tile Tile descriptor
      * @param streamer_id Optional specific Streamer (-1 for auto-select)
@@ -761,6 +774,7 @@ private:
     };
     using PayloadStore = std::unordered_map<TileID, StoredPayload, TileIDHash>;
     PayloadStore dram_payloads_, l3_payloads_, l2_payloads_, l1_payloads_, compute_payloads_;
+    std::size_t seeded_l3_ = 0;     ///< seed_l3's slot ids, round-robin
     // The bytes of each store between its ejection and its retirement, by store ticket: two
     // stores of one tile in flight at once are two entries.
     std::unordered_map<uint64_t, StoredPayload> store_payloads_;
@@ -1143,6 +1157,19 @@ inline void ConcurrentTimingExecutor::schedule_writeback(const TileDescriptor& t
 inline void ConcurrentTimingExecutor::schedule_release(const TileDescriptor& tile_in, int mover_id) {
     const TileDescriptor tile = homed(tile_in);
     block_movers_[mover_for(tile, mover_id)]->schedule_release(tile);
+}
+
+inline void ConcurrentTimingExecutor::seed_l3(const TileDescriptor& tile_in, TilePayload payload) {
+    const TileDescriptor tile = homed(tile_in);
+    if (!payload.valid()) throw std::invalid_argument("seed_l3: payload dimensions do not match value count");
+    CreditPool& credits = l3_tile_credits(tile.l3_tile);
+    if (!credits.acquire(static_cast<size_t>(tile.tile_id.matrix)))
+        throw std::runtime_error("seed_l3: no L3 credit is free for " + tile.tile_id.to_string());
+    TagCAM& cam = l3_tile_tag_cam(tile.l3_tile);
+    const auto slot = static_cast<uint32_t>(seeded_l3_++ % cam.capacity());
+    cam.insert(tile.tile_id, slot, current_cycle_);
+    functional_payloads_enabled_ = true;
+    write_payload(MemoryLevel::L3, tile.tile_id, std::move(payload), slot);
 }
 
 inline std::size_t ConcurrentTimingExecutor::backlog() const {
@@ -1796,6 +1823,7 @@ inline void ConcurrentTimingExecutor::reset() {
     build_noc();
     current_cycle_ = 0;
     events_.clear();
+    seeded_l3_ = 0;
 
     for (auto& c : l3_tile_credits_) c->reset();
     for (auto& c : l3_tile_cams_) c->reset();

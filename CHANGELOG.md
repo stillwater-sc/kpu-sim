@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Residency across operators in the CSP language: `inherit` and `retain`**
+  (kpu-run-csp-programs step 4d.1).
+  - `inherit X;` opens a program with X resident and no Load.
+  - `retain X;` ends a residency without a Release, so the slot and the tile outlive the
+    program. On an accumulator, `retain y via relu @ fabric` writes the result back into a
+    slot it keeps, and never stores it.
+  - Both the validator and the walker check them.
+  - L-B, L-T1 and L-CA execute them. L-CA's executor gains `seed_l3`, which fills an L3 entry
+    with no DMA.
+  - A two-operator chain matches the composed oracle bit for bit at every level.
+
 - **Stepping a CSP program, and its timeline** (kpu-run-csp-programs step 4c).
   - `kpu-run --program file.csp --step` walks the program at L-B (one action per step, applied
     as it is stepped) or L-T1 (the run's records, replayed in start order).

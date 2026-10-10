@@ -154,7 +154,7 @@ public:
         cur_.action = r.action;
         cur_.kind = r.kind;
         cur_.tile = r.tile;
-        if (r.kind != csp::Action::Kind::Release) cur_.proc = r.proc;
+        if (csp::TransactionalInterpreter::has_process(r.kind)) cur_.proc = r.proc;
         cur_.lane = r.lane;
         cur_.start = r.start;
         cur_.finish = r.finish;
@@ -180,7 +180,7 @@ private:
     void advance(std::uint64_t t) {
         for (; admitted_ < by_start_.size() && records_[by_start_[admitted_]].start <= t; ++admitted_) {
             const Record& r = records_[by_start_[admitted_]];
-            if (r.kind != csp::Action::Kind::Release && r.finish > r.start) busy_q_[r.proc].push(r.finish);
+            if (csp::TransactionalInterpreter::has_process(r.kind) && r.finish > r.start) busy_q_[r.proc].push(r.finish);
         }
         for (auto& [p, q] : busy_q_)
             while (!q.empty() && q.top() <= t) q.pop();
