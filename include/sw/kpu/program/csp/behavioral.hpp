@@ -117,6 +117,9 @@ public:
     // The operands as DRAM holds them after run().
     const TileProgram& result() const { return work_; }
 
+    // Tiles a channel holds now (stepping reads station occupancy from this).
+    std::size_t held(Chan c) const { return store_[static_cast<std::size_t>(c)].size(); }
+
 private:
     TileProgram work_;
     TileKernelState state_;

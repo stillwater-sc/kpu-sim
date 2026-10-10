@@ -38,6 +38,7 @@
 
 #include <sw/kpu/program/csp/lang/format.hpp>
 #include <sw/kpu/program/driver/csp_run.hpp>
+#include <sw/kpu/program/driver/csp_step.hpp>
 #include <sw/kpu/program/driver/execution_level.hpp>
 #include <sw/kpu/program/driver/step_cursor.hpp>
 // The JSON header is declaration-only, so this stays a std-only include graph; the
@@ -260,6 +261,55 @@ public:
     driver::CspReference csp_reference(CspProgramHandle h, std::size_t trace_limit = 1'000'000) const {
         const CspEntry& e = csp_.at(checked(h));
         return driver::csp_reference(e.ast, e.inputs, trace_limit);
+    }
+
+    // Stepping a CSP program (kpu-run-csp-programs step 4c): one action per step at L-B,
+    // applied; at L-T1 the program runs first and the cursor replays its records in start
+    // order, as an L0 program's L-T1 cursor replays its timeline. L-CA steps cycles (#283).
+    class CspCursor {
+    public:
+        driver::CspStepper& stepper() const { return *stepper_; }
+        bool executes() const { return stepper_->executes(); }
+        ExecutionLevel level() const { return level_; }
+        // Present only for a replay, because only a replay has a run behind it.
+        const std::optional<CspPlatformRun>& run_result() const { return run_; }
+
+        bool step() { return stepper_->step(); }
+        const driver::CspStep& current() const { return stepper_->current(); }
+        std::size_t position() const { return stepper_->position(); }
+        std::size_t size() const { return stepper_->size(); }
+
+    private:
+        friend class VirtualPlatform;
+        std::unique_ptr<driver::CspStepper> stepper_;
+        ExecutionLevel level_{};
+        std::optional<CspPlatformRun> run_;
+    };
+
+    CspCursor step_begin(CspProgramHandle h, ExecutionLevel level) const {
+        require_single_device();
+        const CspEntry& e = csp_.at(checked(h));
+        CspCursor cur;
+        cur.level_ = level;
+        switch (level) {
+            case ExecutionLevel::Behavioral:
+                cur.stepper_ = std::make_unique<driver::CspBehavioralStepper>(e.ast, e.inputs);
+                return cur;
+            case ExecutionLevel::BlockSequential: {
+                cur.run_ = run_csp(h, level);
+                if (cur.run_->outcome.skipped)
+                    throw std::invalid_argument("platform: " + *cur.run_->outcome.skipped);
+                cur.stepper_ = std::make_unique<driver::CspReplayStepper>(cur.run_->outcome.records,
+                                                                          cur.run_->outcome.slots);
+                return cur;
+            }
+            case ExecutionLevel::ResourceTransactional:
+            case ExecutionLevel::CycleAccurate:
+                break;
+        }
+        throw std::invalid_argument(std::string("platform: stepping a CSP program at ") + driver::to_string(level) +
+                                    " is not implemented: L-B steps actions, L-T1 replays records; L-CA's step is "
+                                    "a cycle (#283)");
     }
 
     const TileProgram& program(ProgramHandle h) const { return programs_.at(checked(h)); }
