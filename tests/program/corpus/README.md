@@ -8,6 +8,23 @@ that is not tested is a version policy that will be wrong.
 
 ## What is here
 
+**CSP programs** (`docs/plans/kpu-run-csp-programs.md` step 4a): a `<case>.csp` program
+beside its `<case>.l0` (the inputs, carried as L0 `VALUES`) and `<case>.result.l0` (every
+operand after the run). `test_csp_corpus` runs each through the virtual platform on
+`tests/program/deploy/kpu_s1.json` at L-B, L-T1 and L-CA, and asserts the reason where L-CA is
+refused (LU). It makes the two claims below: within tolerance of the recorded result across
+machines, and bit-identical to the program's own L0 oracle on one machine. The matmul and LU
+programs share the L0 cases' inputs and results (csp-gen writes them in the derivation's op
+order); `linear_64_t16_relu` has its own pair, written by `kpu-run --algo linear --emit-l0`.
+
+| CSP program | inputs / results |
+|---|---|
+| `matmul_48x48x48_t16.csp` | `matmul_48x48x48_t16.l0` / `.result.l0` |
+| `lu_64_t16.csp` | `lu_64_t16.l0` / `.result.l0` |
+| `linear_64_t16_relu.csp` | `linear_64_t16_relu.l0` / `.result.l0` |
+
+**L0 programs:**
+
 | File | Role |
 |---|---|
 | `<case>.l0` | the program with its **inputs** inline — a test case |

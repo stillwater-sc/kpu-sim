@@ -195,7 +195,7 @@ int run_csp_program(const std::vector<std::string>& a, const std::string& path) 
     // What a CSP program run accepts. Everything else is the L0 path's (or the generator's:
     // --algo and friends are kpu-csp-gen's), and is refused by name rather than ignored.
     static const std::set<std::string> kOptions = {"--program", "--deploy", "--level", "--window", "--inputs",
-                                                   "--trace-limit", "--no-compare"};
+                                                   "--trace-limit", "--no-compare", "--emit-l0-result"};
     for (const std::string& t : a)
         if (t.rfind("--", 0) == 0 && !kOptions.count(t)) {
             std::cerr << "kpu-run: " << t << " does not apply to a CSP program"
@@ -205,8 +205,9 @@ int run_csp_program(const std::vector<std::string>& a, const std::string& path) 
                       << "\n";
             return 2;
         }
-    std::string err, deploy_path, inputs_path;
-    if (!arg_required(a, "--deploy", deploy_path, err) || !arg_required(a, "--inputs", inputs_path, err)) {
+    std::string err, deploy_path, inputs_path, emit_path;
+    if (!arg_required(a, "--deploy", deploy_path, err) || !arg_required(a, "--inputs", inputs_path, err) ||
+        !arg_required(a, "--emit-l0-result", emit_path, err)) {
         std::cerr << "kpu-run: " << err << "\n";
         return 2;
     }
@@ -308,10 +309,35 @@ int run_csp_program(const std::vector<std::string>& a, const std::string& path) 
         return 2;
     }
 
-    CspRunRequest req{*ast, device, inputs, levels, window, trace_limit};
-    CspRunResult res;
+    // THROUGH THE PLATFORM, the one execution path (kpu-run-csp-programs step 4a). Without
+    // --deploy the platform holds the default device, and L-CA -- which builds its machine from
+    // a deployment -- is skipped with that reason.
+    platform::DeploymentSpec spec = deployment ? *deployment : make_deployment(DeviceSpec{});
+    std::optional<platform::VirtualPlatform> vp;
+    platform::CspProgramHandle handle;
+    csp::lang::Validation validation;
+    driver::CspReference reference;
+    std::vector<CspLevelOutcome> outcomes;
+    std::vector<std::string> run_ids;
     try {
-        res = run_csp(req);
+        vp.emplace(spec);
+        const csp::lang::Target target = csp::lang::target_from(spec.device(0));
+        validation = csp::lang::validate(*ast, deployment ? &target : nullptr);
+        handle = vp->load_csp(*ast, inputs, deployment.has_value());
+        reference = vp->csp_reference(handle, trace_limit);
+        for (ExecutionLevel l : levels) {
+            if (!deployment && l == ExecutionLevel::CycleAccurate) {
+                CspLevelOutcome o;
+                o.level = l;
+                o.skipped = std::string("L-CA builds its machine from a deployment spec (--deploy)");
+                outcomes.push_back(std::move(o));
+                run_ids.emplace_back();
+                continue;
+            }
+            auto r = vp->run_csp(handle, l, window);
+            run_ids.push_back(r.outcome.skipped ? std::string() : r.identity.str());
+            outcomes.push_back(std::move(r.outcome));
+        }
     } catch (const csp::lang::CompileError& e) {
         std::cerr << "kpu-run: " << path << ": " << e.what() << "\n";
         return 2;
@@ -319,6 +345,12 @@ int run_csp_program(const std::vector<std::string>& a, const std::string& path) 
         std::cerr << "kpu-run: " << e.what() << "\n";
         return 2;
     }
+    CspRunResult res;
+    res.validation = validation;
+    res.reference = reference.values;
+    res.reference_note = reference.note;
+    res.actions = reference.actions;
+    res.levels = outcomes;
 
     std::cout << "program  " << path << "   \"" << ast->name << "\"  csp " << ast->version << ", "
               << ast->decls.size() << " operands, L3 " << ast->l3 << "   values: " << inputs_note << "\n";
@@ -330,10 +362,11 @@ int run_csp_program(const std::vector<std::string>& a, const std::string& path) 
     std::cout << "oracle   " << (res.reference ? "L0 trace of " + std::to_string(res.actions) + " actions"
                                                : res.reference_note) << "\n";
     std::cout << "device   " << (deployment ? deployment->label() + "   digest " + platform::deployment_digest(*deployment)
-                                            : std::string("none (no --deploy)")) << "\n\n";
+                                            : std::string("none (no --deploy): the default device")) << "\n\n";
 
     const CspLevelOutcome* lb = nullptr;
-    for (const auto& o : res.levels) {
+    for (std::size_t li = 0; li < res.levels.size(); ++li) {
+        const auto& o = res.levels[li];
         std::cout << "  " << std::left << std::setw(24) << to_string(o.level) << std::setw(6) << short_name(o.level);
         if (o.skipped) {
             std::cout << "skipped: " << *o.skipped << "\n";
@@ -342,10 +375,11 @@ int run_csp_program(const std::vector<std::string>& a, const std::string& path) 
         if (o.level == ExecutionLevel::Behavioral) lb = &o;
         if (!o.has_timing) {
             std::cout << "timing: not modelled at this level   " << o.actions << " actions, peak L3 " << o.peak_l3
-                      << "\n";
+                      << "\n        run id " << run_ids[li] << "\n";
             continue;
         }
         std::cout << "makespan " << o.makespan << " cycles   " << o.actions << " actions\n";
+        std::cout << "        run id " << run_ids[li] << "\n";
         std::cout << "        DRAM  " << o.dram_loads << " loads, " << o.dram_stores << " stores, " << o.dram_bytes
                   << " bytes      cf busy " << o.cf_busy << "\n";
         if (o.level == ExecutionLevel::BlockSequential) {
@@ -390,6 +424,19 @@ int run_csp_program(const std::vector<std::string>& a, const std::string& path) 
         return 1;
     }
     std::cout << "\nOK: every level that ran computes the program's values.\n";
+    // The agreed values, written only after the comparison passed: a file from a run whose
+    // levels disagreed must never look like an expected output.
+    if (!emit_path.empty()) {
+        std::ofstream out(emit_path, std::ios::binary);
+        serialize::WriteOptions opt;
+        opt.include_values = true;
+        TileProgram result = *authority;
+        if (!(out << serialize::to_string(result, opt))) {
+            std::cerr << "kpu-run: cannot write '" << emit_path << "'\n";
+            return 2;
+        }
+        std::cout << "wrote  " << emit_path << "  (every operand, as the program leaves them)\n";
+    }
     return 0;
 }
 

@@ -665,13 +665,13 @@ TEST_CASE("every RunIdentity field is either compared or a declared label, and a
     // for the same reason. A designated-initializer aggregate would NOT do: a new member would
     // just default-initialise and the test would still build.
     const RunIdentity base{"prog0",  "state0",     "deploy0", "place0",
-                           "resid0", "flow0",      "the-label",
+                           "resid0", "flow0",      "the-label", "window=256",
                            ExecutionLevel::BlockSequential};
     {
         const auto& [program, state, deployment, placement, residency, stream, dataflow,
-                     level] = base;
+                     schedule, level] = base;
         (void)program; (void)state; (void)deployment; (void)placement;
-        (void)residency; (void)stream; (void)dataflow; (void)level;
+        (void)residency; (void)stream; (void)dataflow; (void)schedule; (void)level;
     }
 
     // ---- the COMPARED fields: perturbing any one must change == AND str() ----------------
@@ -691,6 +691,9 @@ TEST_CASE("every RunIdentity field is either compared or a declared label, and a
         // field be compared-but-unrendered, or rendered-but-uncompared.
         {"residency",         perturbed([](RunIdentity& o) { o.residency += "x"; })},
         {"stream_digest",     perturbed([](RunIdentity& o) { o.stream_digest += "x"; })},
+        // Added with CSP programs on the platform (kpu-run-csp-programs step 4a): L-CA's window
+        // is a schedule option, and two runs differing only in it have different makespans.
+        {"schedule",          perturbed([](RunIdentity& o) { o.schedule += "x"; })},
         {"level",             perturbed([](RunIdentity& o) { o.level = ExecutionLevel::Behavioral; })},
     };
     for (const auto& [field, other] : compared) {
@@ -714,7 +717,8 @@ TEST_CASE("every RunIdentity field is either compared or a declared label, and a
     // by a digest of a digest.
     const std::string text = base.str();
     for (const std::string& part : {base.program_digest, base.snapshot_digest,
-                                    base.deployment_digest, base.stream_digest, base.dataflow}) {
+                                    base.deployment_digest, base.stream_digest, base.dataflow,
+                                    base.schedule}) {
         INFO("part " << part);
         CHECK(text.find(part) != std::string::npos);
     }

@@ -345,7 +345,7 @@ if(KPU_BUILD_TESTS)
     add_test(NAME kpu_run_csp_matmul
         COMMAND ${CMAKE_COMMAND}
             -DCMD=$<TARGET_FILE:run>
-            -DARGS=--program$<SEMICOLON>${_csp}/matmul_48_t16.csp$<SEMICOLON>--deploy$<SEMICOLON>${_deploy}/kpu_s1.json
+            -DARGS=--program$<SEMICOLON>${_corpus}/matmul_48x48x48_t16.csp$<SEMICOLON>--deploy$<SEMICOLON>${_deploy}/kpu_s1.json
             -DEXPECT_CODE=0
             -DMUST_MATCH=oracle...L0.trace.*cycle-accurate.*L-CA..makespan.*cycle-accurate.+identical.*OK:.every.level
             -DMUST_NOT_MATCH=FAILED
@@ -360,11 +360,21 @@ if(KPU_BUILD_TESTS)
             -DMUST_MATCH=cycle-accurate.+identical.*OK:.every.level
             -P ${CMAKE_CURRENT_SOURCE_DIR}/expect_exit.cmake
     )
+    # Through the platform (step 4a): every level's run id, and the agreed values written only
+    # after the comparison passed.
+    add_test(NAME kpu_run_csp_emit_result
+        COMMAND ${CMAKE_COMMAND}
+            -DCMD=$<TARGET_FILE:run>
+            -DARGS=--program$<SEMICOLON>${_corpus}/linear_64_t16_relu.csp$<SEMICOLON>--inputs$<SEMICOLON>${_corpus}/linear_64_t16_relu.l0$<SEMICOLON>--deploy$<SEMICOLON>${_deploy}/kpu_s1.json$<SEMICOLON>--emit-l0-result$<SEMICOLON>${CMAKE_CURRENT_BINARY_DIR}/linear_csp.result.l0
+            -DEXPECT_CODE=0
+            -DMUST_MATCH=run.id.L-CA.prog:.*schedule:window=256.*OK:.every.level.*wrote
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/expect_exit.cmake
+    )
     # L-T1 from the program (step 3): the program's credits, timed per process.
     add_test(NAME kpu_run_csp_block_sequential
         COMMAND ${CMAKE_COMMAND}
             -DCMD=$<TARGET_FILE:run>
-            -DARGS=--program$<SEMICOLON>${_csp}/lu_64_t16.csp$<SEMICOLON>--deploy$<SEMICOLON>${_deploy}/kpu_s1.json$<SEMICOLON>--level$<SEMICOLON>block-sequential
+            -DARGS=--program$<SEMICOLON>${_corpus}/lu_64_t16.csp$<SEMICOLON>--deploy$<SEMICOLON>${_deploy}/kpu_s1.json$<SEMICOLON>--level$<SEMICOLON>block-sequential
             -DEXPECT_CODE=0
             -DMUST_MATCH=L-T1..makespan.*L3....peak.*of.128.*block-sequential.+identical.*OK
             -P ${CMAKE_CURRENT_SOURCE_DIR}/expect_exit.cmake
@@ -373,7 +383,7 @@ if(KPU_BUILD_TESTS)
     add_test(NAME kpu_run_csp_inputs_from_l0
         COMMAND ${CMAKE_COMMAND}
             -DCMD=$<TARGET_FILE:run>
-            -DARGS=--program$<SEMICOLON>${_csp}/matmul_48_t16.csp$<SEMICOLON>--inputs$<SEMICOLON>${_corpus}/matmul_48x48x48_t16.l0$<SEMICOLON>--level$<SEMICOLON>behavioral
+            -DARGS=--program$<SEMICOLON>${_corpus}/matmul_48x48x48_t16.csp$<SEMICOLON>--inputs$<SEMICOLON>${_corpus}/matmul_48x48x48_t16.l0$<SEMICOLON>--level$<SEMICOLON>behavioral
             -DEXPECT_CODE=0
             -DMUST_MATCH=values:.from.*matmul_48x48x48_t16.l0.*OK
             -P ${CMAKE_CURRENT_SOURCE_DIR}/expect_exit.cmake
@@ -382,7 +392,7 @@ if(KPU_BUILD_TESTS)
     add_test(NAME kpu_run_csp_lu_skips_lca
         COMMAND ${CMAKE_COMMAND}
             -DCMD=$<TARGET_FILE:run>
-            -DARGS=--program$<SEMICOLON>${_csp}/lu_64_t16.csp$<SEMICOLON>--deploy$<SEMICOLON>${_deploy}/kpu_s1.json
+            -DARGS=--program$<SEMICOLON>${_corpus}/lu_64_t16.csp$<SEMICOLON>--deploy$<SEMICOLON>${_deploy}/kpu_s1.json
             -DEXPECT_CODE=0
             -DMUST_MATCH=L-CA..skipped:.L-CA.runs.matmul.*OK:.every.level
             -P ${CMAKE_CURRENT_SOURCE_DIR}/expect_exit.cmake
@@ -391,7 +401,7 @@ if(KPU_BUILD_TESTS)
     add_test(NAME kpu_run_csp_refuses_lca_on_t4
         COMMAND ${CMAKE_COMMAND}
             -DCMD=$<TARGET_FILE:run>
-            -DARGS=--program$<SEMICOLON>${_csp}/matmul_48_t16.csp$<SEMICOLON>--deploy$<SEMICOLON>${_deploy}/kpu_t4.json$<SEMICOLON>--level$<SEMICOLON>cycle-accurate
+            -DARGS=--program$<SEMICOLON>${_corpus}/matmul_48x48x48_t16.csp$<SEMICOLON>--deploy$<SEMICOLON>${_deploy}/kpu_t4.json$<SEMICOLON>--level$<SEMICOLON>cycle-accurate
             -DEXPECT_CODE=2
             -DMUST_MATCH=cycle-accurate:.*level.2.distributes
             -DMUST_NOT_MATCH=values.vs
@@ -400,7 +410,7 @@ if(KPU_BUILD_TESTS)
     add_test(NAME kpu_run_csp_rejects_algo
         COMMAND ${CMAKE_COMMAND}
             -DCMD=$<TARGET_FILE:run>
-            -DARGS=--program$<SEMICOLON>${_csp}/matmul_48_t16.csp$<SEMICOLON>--algo$<SEMICOLON>matmul
+            -DARGS=--program$<SEMICOLON>${_corpus}/matmul_48x48x48_t16.csp$<SEMICOLON>--algo$<SEMICOLON>matmul
             -DEXPECT_CODE=2
             -DMUST_MATCH=--algo.does.not.apply.to.a.CSP.program.*kpu-csp-gen
             -P ${CMAKE_CURRENT_SOURCE_DIR}/expect_exit.cmake
@@ -424,7 +434,7 @@ if(KPU_BUILD_TESTS)
             -P ${CMAKE_CURRENT_SOURCE_DIR}/expect_exit.cmake
     )
     set_tests_properties(kpu_run_csp_matmul kpu_run_csp_linear_unfused kpu_run_csp_inputs_from_l0
-        kpu_run_csp_block_sequential
+        kpu_run_csp_block_sequential kpu_run_csp_emit_result
         kpu_run_csp_lu_skips_lca kpu_run_csp_refuses_lca_on_t4 kpu_run_csp_rejects_algo
         kpu_run_csp_refuses_invalid_program kpu_run_l0_refuses_lca
         PROPERTIES LABELS "program;driver;csp")
