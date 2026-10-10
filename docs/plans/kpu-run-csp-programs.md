@@ -1,6 +1,6 @@
 # `kpu-run` runs CSP programs, at every level including cycle-accurate
 
-**Status:** Decided 2026-10-10 (revised after review, §8; Q1-Q4 as recommended, §9); steps 1-2 done
+**Status:** Decided 2026-10-10 (revised after review, §8; Q1-Q4 as recommended, §9); steps 1-3 done
 **Tracks:** #283 (the L-CA half). Covers `docs/plans/csp-program-tile-sequencing.md` steps 2b and
 3 (L-T1 from the program).
 **Depends on:** the CSP language and its stream (ADR 0004, #343-#345), `CspDriver` (#342, #345,
@@ -226,14 +226,52 @@ platform have moved (§5 step 4). Then it is retired.
 
      The canonical panel schedule reloads A's row panel for every j: correct, and wasteful.
      Choosing a better schedule is the generator's job, and the comparison is now one command.
-3. **L-T1 from the program** (§4.3).
-   - The action-stream interpreter under the program's residency.
-   - Tests:
-     - values bit-identical to L-B for matmul, linear and LU;
-     - peak L3 equals the validator's `peak_l3`;
-     - DRAM loads equal the program's Loads;
-     - deterministic makespans;
-     - L-T1 beside L-CA on S1, reported.
+3. **L-T1 from the program** (§4.3) (done).
+   - **`csp/transactional.hpp`, `TransactionalInterpreter`** (`begin`, `step`, `finish`, like the
+     behavioral interpreter). It is a one-pass list schedule in program order. Every dependency
+     of a CSP action points backwards, so each action's start is known when it is reached:
+     - the data it reads is ready, from a scoreboard per tile and channel: the L3 copy, the
+       moved and drained copies in L2, the fed operands, the accumulator chain, and RAW
+       through DRAM;
+     - a lane of its process is free (`DeviceDescriptor`: lanes and bytes per cycle; compute
+       tiles and MACs per cycle);
+     - the process issues in program order;
+     - for a Load, or a Writeback that opens a residency, an L3 credit is free. The credit pool
+       is the program's L3, and only the program's Releases return credits.
+
+     A Store is the push-only store's two legs, a BlockMover ejection and then a DMA write. A
+     Release waits for every reader of the residency, including stages that read a bias. An
+     in-place Writeback waits for the earlier reads of its slot. Values come from
+     `BehavioralInterpreter`, stepped in the same order, so they are bit-identical to L-B by
+     construction.
+   - **`run_csp`** runs it as L-T1, with the deployment's descriptor (or the default device).
+     `kpu-run` reports:
+     - the makespan;
+     - DRAM traffic;
+     - the L3 peak in time against the program's L3;
+     - credit stalls;
+     - lane-cycles per process;
+     - UNCALIBRATED, and the tile contexts' vector time as unmodelled.
+   - **Corrected from §6:** "peak L3 equals the validator's" holds for L-B, which executes in
+     program order, but not for L-T1 or L-CA. In time, the DMA runs ahead as soon as a credit is
+     free. On S1, matmul 256³ (program L3 128, live set 17) holds 117 slots at once. The
+     invariant is peak <= the program's L3, and >= its live set.
+   - **The L0 path's L-T1** (`TileTransactionExecutor`) is unchanged, and still runs L0 files.
+     Its pinned makespans did not move, so nothing was re-baselined. It retires in step 4.
+   - **Measured** (S1, matmul 256³, csp-gen's column-panel schedule):
+     - L-T1: 43,840 cycles, 576 loads;
+     - L-CA: 117,887 cycles.
+
+     L-T1 is uncalibrated; the gap is the first calibration data point for the program path.
+   - **Tests:**
+     - `test_csp_run`, now 7 cases:
+       - matmul and linear at L-B, L-T1 and L-CA, all bit-identical to the oracle;
+       - L-T1: loads and stores equal the validator's, peak within [live set, program L3], a
+         deterministic makespan;
+       - LU at L-T1, 16 loads;
+       - a streamed program with 3 slots, where every Load after the third starts no earlier
+         than the Release that freed its slot, values equal to L-B.
+     - CLI: LU at `--level block-sequential` on S1.
 4. **The corpus and the platform.**
    - The corpus gains `.csp` entries, each a program with its `.result.l0` values, and runs every
      supported level against `kpu_s1.json`.
@@ -251,7 +289,10 @@ platform have moved (§5 step 4). Then it is retired.
     hosts);
   - LU at L-B and L-T1.
 - **Residency is the program's at every level:**
-  - peak L3 at L-B, L-T1 and L-CA equals the validator's `peak_l3`;
+  - peak L3 at L-B, which executes in program order, equals the validator's `peak_l3`;
+  - at the timed levels (L-T1, L-CA) the DMA runs ahead when a credit is free, so their peak
+    in time lies between the validator's `peak_l3` (the live set) and the program's L3
+    (corrected in step 3);
   - DRAM loads at L-T1 and L-CA equal the program's Loads.
 - **Determinism:** identical makespans across two runs and across CI's four platforms. A
   difference is a bug to fix, not a tolerance to add. L-CA's arbitration iterates maps keyed by

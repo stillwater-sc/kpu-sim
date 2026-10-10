@@ -360,6 +360,15 @@ if(KPU_BUILD_TESTS)
             -DMUST_MATCH=cycle-accurate.+identical.*OK:.every.level
             -P ${CMAKE_CURRENT_SOURCE_DIR}/expect_exit.cmake
     )
+    # L-T1 from the program (step 3): the program's credits, timed per process.
+    add_test(NAME kpu_run_csp_block_sequential
+        COMMAND ${CMAKE_COMMAND}
+            -DCMD=$<TARGET_FILE:run>
+            -DARGS=--program$<SEMICOLON>${_csp}/lu_64_t16.csp$<SEMICOLON>--deploy$<SEMICOLON>${_deploy}/kpu_s1.json$<SEMICOLON>--level$<SEMICOLON>block-sequential
+            -DEXPECT_CODE=0
+            -DMUST_MATCH=L-T1..makespan.*L3....peak.*of.128.*block-sequential.+identical.*OK
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/expect_exit.cmake
+    )
     # Values from an L0 file: the corpus's matmul inputs.
     add_test(NAME kpu_run_csp_inputs_from_l0
         COMMAND ${CMAKE_COMMAND}
@@ -415,6 +424,7 @@ if(KPU_BUILD_TESTS)
             -P ${CMAKE_CURRENT_SOURCE_DIR}/expect_exit.cmake
     )
     set_tests_properties(kpu_run_csp_matmul kpu_run_csp_linear_unfused kpu_run_csp_inputs_from_l0
+        kpu_run_csp_block_sequential
         kpu_run_csp_lu_skips_lca kpu_run_csp_refuses_lca_on_t4 kpu_run_csp_rejects_algo
         kpu_run_csp_refuses_invalid_program kpu_run_l0_refuses_lca
         PROPERTIES LABELS "program;driver;csp")
