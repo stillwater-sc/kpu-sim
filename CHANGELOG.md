@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`kpu-csp-gen`: the CSP program generator** (`docs/plans/kpu-run-csp-programs.md` step 1).
+  - Writes an operator's canonical schedule as a `.csp` program with its loops: matmul
+    (column or row panels), the linear operator (epilogue fused at a place, or unfused), and LU.
+  - The L3 comes from `--l3` or from a deployment (`--target`), which also checks the placement.
+  - Every program is validated before it is written, and a schedule that does not fit is refused
+    with its slot count. The library is `csp/gen/generate.hpp`.
+  - Separately, a compiled program's trace now records a tile context's arithmetic as L0 ops,
+    so the trace's L0 reference is complete for fused programs.
+
 - **The linear operator at L-CA: tile contexts on timed vector units (CSP-language step 3).**
   - `movers.vector` maps to the executor's vector units. A stage overlaps the drain or
     writeback it rides on, and the move takes the longer of the two. `fabric` stages charge the

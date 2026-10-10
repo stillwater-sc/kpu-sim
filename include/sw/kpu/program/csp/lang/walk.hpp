@@ -272,6 +272,27 @@ private:
         }
         return out;
     }
+    // A context's arithmetic, recorded as L0 ops where it applies (after the result is computed,
+    // before it leaves the fabric): the trace's L0 is then a complete record of what the
+    // program computes, and TileProgramReference over it is the oracle for a fused program as
+    // much as for an unfused one. The stages themselves ride the moves.
+    void record_stages(const TileCoord& y, const std::vector<csp::Stage>& drain, const std::vector<csp::Stage>& wb) {
+        for (const auto* v : {&drain, &wb})
+            for (const csp::Stage& st : *v) {
+                TileOp op;
+                op.label = std::string("context @ ") + to_string(st.place);
+                if (st.op == VeOp::Add) {
+                    op.kind = TileOpKind::BiasAdd;
+                    op.inputs = {st.arg};
+                } else {
+                    op.kind = TileOpKind::Activation;
+                    op.act = activation_of(st.op);
+                }
+                op.outputs = {y};
+                (void)sink_.l0(op);
+            }
+    }
+
     // A bias is tiled as the columns it adds to (the symbolic validator's rule, so the two agree).
     void check_width(const TileCoord& b, const TileCoord& y, int line) const {
         const TensorOperand& bo = operands_.operand(b.operand);
@@ -430,6 +451,7 @@ private:
         for (const TileCoord& a : operands) deliver(a, s.line, s.fn);
         auto [drain_ctx, wb_ctx] = result_context(s, y);
         emit(Action::Kind::Call, y, kNone, sink_.l0(op), &op);
+        record_stages(y, drain_ctx, wb_ctx);
         emit(Action::Kind::Drain, y, kNone, kNone, nullptr, false, false, false, std::move(drain_ctx));
         emit(Action::Kind::Writeback, y, resident_.at(yk).id, kNone, nullptr, false, false, false, std::move(wb_ctx));
         resident_.at(yk).dirty = true;
@@ -449,6 +471,7 @@ private:
             drain.port_kind = PortKind::Output;
             drain.port = "South";
             drain.outputs = {y};
+            record_stages(y, drain_ctx, wb_ctx);
             const std::size_t d = sink_.l0(drain);
             const std::size_t id = next_residency_++;
             emit(Action::Kind::Drain, y, kNone, d, nullptr, false, false, false, std::move(drain_ctx));
