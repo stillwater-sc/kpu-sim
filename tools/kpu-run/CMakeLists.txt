@@ -446,6 +446,27 @@ if(KPU_BUILD_TESTS)
             -DMUST_NOT_MATCH=values.vs
             -P ${CMAKE_CURRENT_SOURCE_DIR}/expect_exit.cmake
     )
+    # A file is written only after the levels agree, so asking for one without comparing is
+    # refused, not answered with exit 0 and no file.
+    add_test(NAME kpu_run_csp_emit_needs_compare
+        COMMAND ${CMAKE_COMMAND}
+            -DCMD=$<TARGET_FILE:run>
+            -DARGS=--program$<SEMICOLON>${_corpus}/matmul_48x48x48_t16.csp$<SEMICOLON>--no-compare$<SEMICOLON>--emit-l0$<SEMICOLON>${CMAKE_CURRENT_BINARY_DIR}/should_not_exist_trace.l0
+            -DEXPECT_CODE=2
+            -DMUST_MATCH=cannot.be.combined.with.--no-compare
+            -DMUST_NOT_MATCH=run.id
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/expect_exit.cmake
+    )
+    add_test(NAME kpu_run_csp_emit_needs_an_authority
+        COMMAND ${CMAKE_COMMAND}
+            -DCMD=$<TARGET_FILE:run>
+            -DARGS=--program$<SEMICOLON>${_corpus}/matmul_48x48x48_t16.csp$<SEMICOLON>--level$<SEMICOLON>block-sequential$<SEMICOLON>--trace-limit$<SEMICOLON>1$<SEMICOLON>--emit-l0-result$<SEMICOLON>${CMAKE_CURRENT_BINARY_DIR}/should_not_exist_result.l0
+            -DEXPECT_CODE=2
+            -DMUST_MATCH=nothing.was.compared
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/expect_exit.cmake
+    )
+    set_tests_properties(kpu_run_csp_emit_needs_compare kpu_run_csp_emit_needs_an_authority
+        PROPERTIES LABELS "program;driver;csp")
     # An L0 file is a trace: L-CA runs CSP programs.
     add_test(NAME kpu_run_l0_refuses_lca
         COMMAND ${CMAKE_COMMAND}

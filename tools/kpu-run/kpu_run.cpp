@@ -156,6 +156,14 @@ int run_csp_program(const std::vector<std::string>& a, const std::string& path) 
         std::cerr << "kpu-run: " << err << "\n";
         return 2;
     }
+    // Every emitted file is written only after the levels agreed, so a run that does not compare
+    // writes none. Refused here rather than skipped at the end: a regeneration script that asked
+    // for a file must not get exit 0 and no file.
+    if (has_flag(a, "--no-compare") && (!emit_path.empty() || !trace_path.empty() || !kernel_path.empty())) {
+        std::cerr << "kpu-run: --emit-l0, --emit-l0-kernel and --emit-l0-result are written only after the "
+                     "levels agree, so they cannot be combined with --no-compare\n";
+        return 2;
+    }
     if (window == 0) {
         std::cerr << "kpu-run: --window must be positive\n";
         return 2;
@@ -425,6 +433,13 @@ int run_csp_program(const std::vector<std::string>& a, const std::string& path) 
     const TileProgram* authority = res.reference ? &*res.reference : (lb ? &lb->values : nullptr);
     if (!authority) {
         std::cout << "\nno oracle and no L-B run: nothing to compare against\n";
+        // The same rule as --no-compare: nothing agreed, so nothing is written, and asking for a
+        // file is an error rather than a silent success.
+        if (!emit_path.empty() || !trace_path.empty() || !kernel_path.empty()) {
+            std::cerr << "kpu-run: nothing was compared (no L0 oracle and no L-B run), so no file is "
+                         "written; add behavioral to --level, or raise --trace-limit\n";
+            return 2;
+        }
         return 0;
     }
     std::cout << "\nvalues vs " << (res.reference ? "the L0 oracle" : "L-B") << " (bit-exact, every operand)\n";
