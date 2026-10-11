@@ -186,6 +186,12 @@ attention value is `-inf`, and this repo does softmax and attention work.
    into a rubber stamp — the files still load, because the code that reads them also wrote
    them.
 
+   > **Amended (2026-10-11, kpu-run-csp-programs step 5).** The corpus files are now traces:
+   > `kpu-run --program <case>.csp --emit-l0 ... --emit-l0-result ...` writes them, after every
+   > level has agreed with the trace. "Derivation equivalence" became "trace equivalence": each
+   > file is still the trace kpu-sim produces from its `.csp` program. `kpu-run --algo` is gone.
+   > kpu-sim is the one source of an L0.
+
    **Fixture values must be exactly representable, or the inputs are not reproducible
    either.** `driver::fill` now emits only values that need no rounding — matmul's `A` in
    quarters and `B` in eighths, LU in eighths; the per-operand granularity is incidental, the

@@ -41,70 +41,41 @@ using namespace sw::kpu::program::driver;
 
 namespace {
 
-// Bandwidths go through the SHARED checked parse (program_spec.hpp), so this tool and
-// tile_characterize agree on what "--macs-per-cycle inf" means. A local copy drifted once
-// already in this repo's history; §D1 exists to stop it.
-bool parse_rate(const std::vector<std::string>& a, const char* key, double fallback,
-                double& out, std::string& error) {
-    return parse_double(a, key, fallback, /*require_positive=*/true, out, error);
-}
-
 void usage() {
     std::cout <<
-R"(kpu-run — execute a Domain Flow Program at one or more levels and compare them.
+R"(kpu-run — the simulator: execute a program at one or more levels and compare them.
+kpu-run runs a program; it does not write one. kpu-csp-gen writes CSP programs.
 
   --program <file.csp>      execute a CSP PROGRAM (docs/plans/kpu-run-csp-programs.md): the
-                            program configures the data path, and every level executes it.
-                            Write one with kpu-csp-gen. With it: --deploy (L-CA builds its
-                            machine from it), --level, --window <W> (L-CA's driver window,
-                            default 256), --inputs <values.l0>, --trace-limit <n>
-                            (the L0 oracle, default 1000000 actions), --no-compare,
-                            --tflow, --timeline (both from L-T1), --step and
-                            --step-limit (L-B: one action per step; L-T1: one record)
-  --program <file.l0>       execute an L0 program FROM A FILE (#265). An L0 program is a
-                            trace, the oracle CSP runs answer to: it runs at L-B only.
-                            Mutually exclusive with --algo/--size/--tile: a spec that says
-                            two different things is a usage error
-  --fill-inputs             synthesize inputs for a --program file that carries none.
-                            Only the operands the program READS are filled
-  --algo <matmul|lu|linear> L0 program to derive, run at L-B (default matmul)
-  --act <relu|gelu|silu|atan>  linear's activation          (default relu)
-  --size <n>                square problem size          (default 64)
-  --tile <n>                tile size                    (default 16)
+                            program configures the data path, and every level executes it
+  --deploy <file.json>      the machine, as a deployment spec (ADR 0002 §3.5). L-CA builds
+                            its machine from it; without it L-CA is skipped
   --level <name|all>        behavioral | block-sequential | resource-transactional
                             | cycle-accurate | all       (default all)
-  --deploy <file.json>      the machine, as a deployment spec (ADR 0002 §3.5). Mutually
-                            exclusive with the device flags below: a spec and a flag
-                            that describe different machines is a usage error
-  --topology <t>            single | news | checkerboard  (default single)
-  --compute-tiles <n>       compute fabric tiles         (default 1)
-  --l3-tiles <n>            L3 capacity in tiles, 0=unbounded (default 0)
-  --dma-engines <n>         DMA engines   (DRAM<->L3)    (default 1)
-  --block-movers <n>        BlockMovers   (L3<->L2)      (default 1)
-  --streamers <n>           Streamers     (L2<->L1)      (default 1)
-  --noc-links <n>           NoC links     (L3->L3 reuse) (default 0 = none)
-                            Sizes the pool only: no program emits an L3->L3 leg
-                            until multi-compute-tile execution lands (#244).
-  --dma-bytes-per-cycle <b> per DMA engine               (default 64)
-  --bm-bytes-per-cycle <b>  per BlockMover               (default 128)
-  --str-bytes-per-cycle <b> per Streamer                 (default 256)
-  --noc-bytes-per-cycle <b> per NoC link                 (default 128)
-  --macs-per-cycle <m>      one compute tile's throughput (default 256)
-  --emit-l0 <file.l0>       write the program BEFORE execution: a test case, inputs
-                            inline. This is how the golden corpus is regenerated
-  --emit-l0-result <file.l0>  write it AFTER execution: the same program with results,
-                            which is the corpus's expected-output half
-  --step                    single-step an L0 program at L-B: one op applied per step
+  --window <W>              L-CA's driver window         (default 256)
+  --inputs <values.l0>      the inputs, from an L0 file's values (default: synthesized)
+  --trace-limit <n>         the L0 oracle's limit, in actions (default 1000000)
+  --emit-l0 <file.l0>       write the program's L0 TRACE, inputs inline, once every level
+                            has agreed with it: a test case, and how the golden corpus is
+                            made (kpu-sim is the one source of an L0)
+  --emit-l0-kernel <file.l0>  the trace, structure only (VALUES none)
+  --emit-l0-result <file.l0>  the agreed values: the corpus's expected-output half
+  --tflow <dir>             the L-T1 run's tile-flow record (.tflow version 4)
+  --timeline <file.json>    the L-T1 run as Chrome-trace intervals, one per leg
+  --step                    single-step (L-B: one action per step; L-T1: one record)
   --step-limit <n>          stop after n steps, 0 = all      (default 40)
   --no-compare              run the levels, do not diff values
+
+  --program <file.l0>       execute an L0 trace FROM A FILE (#265). An L0 program is the
+                            oracle CSP runs answer to: it runs at L-B only. With it:
+                            --fill-inputs (synthesize the inputs of a file that carries
+                            none), --deploy, --emit-l0 (the program before it runs),
+                            --emit-l0-result, --step, --step-limit
   -h, --help
 
-Every *-bytes-per-cycle is PER LANE, never aggregate: lanes give concurrency, never
-speed-up (design note §6.3).
-
-Values are compared bit-exactly against the behavioral level, which is the
-authority (ADR 0001 D5), over EVERY operand rather than just the result: a level
-that scribbled on an input is a model bug too. A disagreement exits 1.
+Values are compared bit-exactly against the L0 oracle (or L-B when the program is too long
+to trace), over EVERY operand rather than just the result: a level that scribbled on an
+input is a model bug too. A disagreement exits 1.
 )";
 }
 
@@ -160,6 +131,7 @@ int run_csp_program(const std::vector<std::string>& a, const std::string& path) 
     // --algo and friends are kpu-csp-gen's), and is refused by name rather than ignored.
     static const std::set<std::string> kOptions = {"--program", "--deploy", "--level", "--window", "--inputs",
                                                    "--trace-limit", "--no-compare", "--emit-l0-result",
+                                                   "--emit-l0", "--emit-l0-kernel",
                                                    "--tflow", "--step", "--step-limit", "--timeline"};
     for (const std::string& t : a)
         if (t.rfind("--", 0) == 0 && !kOptions.count(t)) {
@@ -170,10 +142,11 @@ int run_csp_program(const std::vector<std::string>& a, const std::string& path) 
                       << "\n";
             return 2;
         }
-    std::string err, deploy_path, inputs_path, emit_path, tflow_path, timeline_path;
+    std::string err, deploy_path, inputs_path, emit_path, tflow_path, timeline_path, trace_path, kernel_path;
     if (!arg_required(a, "--deploy", deploy_path, err) || !arg_required(a, "--inputs", inputs_path, err) ||
         !arg_required(a, "--emit-l0-result", emit_path, err) || !arg_required(a, "--tflow", tflow_path, err) ||
-        !arg_required(a, "--timeline", timeline_path, err)) {
+        !arg_required(a, "--timeline", timeline_path, err) || !arg_required(a, "--emit-l0", trace_path, err) ||
+        !arg_required(a, "--emit-l0-kernel", kernel_path, err)) {
         std::cerr << "kpu-run: " << err << "\n";
         return 2;
     }
@@ -488,81 +461,64 @@ int run_csp_program(const std::vector<std::string>& a, const std::string& path) 
         }
         std::cout << "wrote  " << emit_path << "  (every operand, as the program leaves them)\n";
     }
+    // The program's L0 trace, written by the simulator that ran it (ADR 0004 §4: kpu-sim is
+    // the one source of an L0), and only after every level agreed with it: this is how a test
+    // reference is made. --emit-l0 writes a test case (the inputs inline); --emit-l0-kernel the
+    // structure alone. A program too long to trace has no trace to write, which is refused.
+    for (const auto& [file, with_values] : {std::pair<const std::string&, bool>{trace_path, true},
+                                            std::pair<const std::string&, bool>{kernel_path, false}}) {
+        if (file.empty()) continue;
+        if (!reference.trace) {
+            std::cerr << "kpu-run: " << (with_values ? "--emit-l0" : "--emit-l0-kernel")
+                      << ": the program has no L0 trace (" << reference.note << ")\n";
+            return 2;
+        }
+        std::ofstream out(file, std::ios::binary);
+        serialize::WriteOptions opt;
+        opt.include_values = with_values;
+        if (!(out << serialize::to_string(*reference.trace, opt))) {
+            std::cerr << "kpu-run: cannot write '" << file << "'\n";
+            return 2;
+        }
+        std::cout << "wrote  " << file << "  (the program's L0 trace, " << reference.trace->ops().size()
+                  << " ops" << (with_values ? ", inputs inline)" : ", structure only)") << "\n";
+    }
     return 0;
 }
 
-} // namespace
-
-int main(int argc, char** argv) {
-    const std::vector<std::string> a(argv + 1, argv + argc);
-    if (has_flag(a, "--help") || has_flag(a, "-h")) { usage(); return 0; }
-
-    // Every numeric option goes through the checked parse: an uncaught std::stoul throw
-    // would abort with SIGABRT, which a CI job cannot tell apart from a crash in the
-    // model, and the usage contract above promises exit 2.
+// ---- an L0 program: the trace, run at L-B as the oracle ---------------------------------------
+int run_l0_program(const std::vector<std::string>& a, const std::string& program_path) {
+    // What an L0 program run accepts. An L0 program is a trace (ADR 0004 §4) and runs at L-B,
+    // which models no machine, so the timing options are refused by name, with where their
+    // job went, rather than ignored.
+    static const std::set<std::string> kOptions = {"--program", "--fill-inputs", "--deploy", "--level",
+                                                   "--emit-l0", "--emit-l0-result", "--step", "--step-limit"};
+    static const std::set<std::string> kDeviceFlags = {
+        "--topology", "--compute-tiles", "--l3-tiles", "--dma-engines", "--block-movers", "--streamers",
+        "--noc-links", "--dma-bytes-per-cycle", "--bm-bytes-per-cycle", "--str-bytes-per-cycle",
+        "--noc-bytes-per-cycle", "--macs-per-cycle"};
+    for (const std::string& t : a) {
+        if (t.rfind("--", 0) != 0 || kOptions.count(t)) continue;
+        if (t == "--streams" || t == "--timeline" || t == "--tflow")
+            std::cerr << "kpu-run: " << t << " times an L0 program's L-T1 run, which retired: an L0 "
+                         "program is a trace and runs at L-B. Time its CSP program instead "
+                         "(--program file.csp; write one with kpu-csp-gen)\n";
+        else if (kDeviceFlags.count(t))
+            std::cerr << "kpu-run: " << t << " left kpu-run (kpu-run-csp-programs step 5): the machine "
+                         "is a deployment spec (--deploy), and an L0 program runs at L-B, which "
+                         "models none of it\n";
+        else
+            std::cerr << "kpu-run: " << t << " does not apply to an L0 program\n";
+        return 2;
+    }
     std::string err;
-    auto dim_opt = [&](const char* key, std::uint32_t fallback, Dim& out) {
-        std::uint32_t v = 0;
-        if (!parse_dim(a, key, fallback, v, err)) return false;
-        out = static_cast<Dim>(v);
-        return true;
-    };
-
-    // --program is the point of #265: until a program can come from a FILE, every program
-    // this simulator runs is one the simulator wrote, and "load a program and execute it" is
-    // not literally true of anything.
-    std::string program_path;
-    if (!arg_required(a, "--program", program_path, err)) {
-        std::cerr << "kpu-run: " << err << "\n";
-        return 2;
-    }
-    if (ends_with(program_path, ".csp")) return run_csp_program(a, program_path);
-    const bool from_file = !program_path.empty();
-
-    ProgramSpec ps;
-    ps.algo = arg(a, "--algo", "matmul");
-    {
-        const std::string act = arg(a, "--act", "relu");
-        if (!sw::kpu::program::parse_activation(act, ps.act)) {
-            std::cerr << "kpu-run: unknown --act '" << act << "' (relu | gelu | silu | atan)\n";
-            return 2;
-        }
-        if (arg_present(a, "--act") && ps.algo != "linear") {
-            std::cerr << "kpu-run: --act is the linear operator's activation; --algo is '" << ps.algo << "'\n";
-            return 2;
-        }
-    }
-    if (!dim_opt("--size", 64, ps.size) || !dim_opt("--tile", 16, ps.tile)) {
-        std::cerr << "kpu-run: " << err << "\n";
-        return 2;
-    }
-    // A file AND a derivation spec describe two different programs. Letting one win
-    // silently means a run reports the flags it was given and executes something else --
-    // so this is refused, and the refusal names the flag that conflicts.
-    if (from_file) {
-        for (const char* k : {"--algo", "--size", "--tile", "--act"})
-            if (arg_present(a, k)) {
-                std::cerr << "kpu-run: --program and " << k << " cannot be combined: the "
-                             "file already says what program to run\n";
-                return 2;
-            }
-    } else {
-        if (!known_algo(ps.algo)) {
-            std::cerr << "kpu-run: unknown --algo '" << ps.algo << "' (matmul | lu | linear)\n";
-            return 2;
-        }
-        if (ps.tile == 0 || ps.size == 0) {
-            std::cerr << "kpu-run: --size and --tile must be non-zero\n";
-            return 2;
-        }
-    }
 
     // Load it. A refusal must be a DIAGNOSTIC and an exit code -- never a variant crash
     // and never a silent mis-parse -- which is why read_l0 throws FormatError with a cause
     // rather than returning a half-built program.
     std::optional<TileProgram> loaded;
     serialize::LoadInfo info;
-    if (from_file) {
+    {
         std::ifstream in(program_path, std::ios::binary);   // see --emit-l0 on binary mode
         if (!in) {
             std::cerr << "kpu-run: cannot read '" << program_path << "'\n";
@@ -577,75 +533,26 @@ int main(int argc, char** argv) {
     }
 
     // Inputs. A program that carries no values would execute on zeros and report success,
-    // which is the one outcome worse than refusing: every level would agree, on nothing.
+    // which is the one outcome worse than refusing.
     const bool want_fill = has_flag(a, "--fill-inputs");
-    if (from_file) {
-        if (!info.has_values && !want_fill) {
-            std::cerr << "kpu-run: " << program_path << " carries no values (VALUES none), "
-                         "so every level would agree on zeros. Pass --fill-inputs to "
-                         "synthesize inputs, or use a file written as a test case\n";
-            return 2;
-        }
-        if (info.has_values && want_fill) {
-            std::cerr << "kpu-run: " << program_path << " carries its own values; "
-                         "--fill-inputs would replace them and the run would no longer be "
-                         "the one the file describes\n";
-            return 2;
-        }
-        if (want_fill) fill_inputs(*loaded);
-    } else if (want_fill) {
-        std::cerr << "kpu-run: --fill-inputs applies to --program only; a derived program "
-                     "is filled from its spec\n";
+    if (!info.has_values && !want_fill) {
+        std::cerr << "kpu-run: " << program_path << " carries no values (VALUES none), "
+                     "so its run would compute zeros. Pass --fill-inputs to "
+                     "synthesize inputs, or use a file written as a test case\n";
         return 2;
     }
+    if (info.has_values && want_fill) {
+        std::cerr << "kpu-run: " << program_path << " carries its own values; "
+                     "--fill-inputs would replace them and the run would no longer be "
+                     "the one the file describes\n";
+        return 2;
+    }
+    if (want_fill) fill_inputs(*loaded);
 
-    DeviceSpec ds;
-    ds.topology = arg(a, "--topology", "single");
-    if (!dim_opt("--compute-tiles", 1, ds.compute_tiles) ||
-        !dim_opt("--l3-tiles", 0, ds.l3_tiles) ||
-        !dim_opt("--dma-engines", 1, ds.dma_engines) ||
-        !dim_opt("--block-movers", 1, ds.block_movers) ||
-        !dim_opt("--streamers", 1, ds.streamers)) {
-        std::cerr << "kpu-run: " << err << "\n";
-        return 2;
-    }
-    if (!dim_opt("--noc-links", 0, ds.noc_links)) {
-        std::cerr << "kpu-run: " << err << "\n";
-        return 2;
-    }
-    if (!parse_rate(a, "--dma-bytes-per-cycle", ds.dma_bytes_per_cycle,
-                    ds.dma_bytes_per_cycle, err) ||
-        !parse_rate(a, "--bm-bytes-per-cycle", ds.bm_bytes_per_cycle,
-                    ds.bm_bytes_per_cycle, err) ||
-        !parse_rate(a, "--str-bytes-per-cycle", ds.str_bytes_per_cycle,
-                    ds.str_bytes_per_cycle, err) ||
-        !parse_rate(a, "--noc-bytes-per-cycle", ds.noc_bytes_per_cycle,
-                    ds.noc_bytes_per_cycle, err) ||
-        !parse_rate(a, "--macs-per-cycle", ds.macs_per_cycle, ds.macs_per_cycle, err)) {
-        std::cerr << "kpu-run: " << err << "\n";
-        return 2;
-    }
-    if (ds.compute_tiles == 0) {
-        std::cerr << "kpu-run: --compute-tiles must be non-zero\n";
-        return 2;
-    }
-
-    // An L0 program runs at L-B only (kpu-run-csp-programs step 4e): it is the trace, and the
-    // oracle. The options that fed the L0 L-T1 executor went with it, and each is refused by
-    // name rather than ignored, with where its job went.
-    for (const char* k : {"--streams", "--timeline", "--tflow"})
-        if (arg_present(a, k)) {
-            std::cerr << "kpu-run: " << k << " times an L0 program's L-T1 run, which retired: an L0 "
-                         "program is a trace and runs at L-B. Time its CSP program instead "
-                         "(--program file.csp; write one with kpu-csp-gen)\n";
-            return 2;
-        }
     // A file may carry a STREAMS record, a dataflow choice. Nothing here consumes it any more,
     // but --emit-l0 and --emit-l0-result keep it, so the file a run writes still says what the
     // file it read said.
-    const std::string dataflow = from_file && info.has_streams ? info.dataflow : std::string();
-    // Keeps main's required-value parsing (an option present without a value is an error,
-    // not an absence) and adds increment 3's stepping options on top.
+    const std::string dataflow = info.has_streams ? info.dataflow : std::string();
     std::string emit_path, emit_result_path, deploy_path;
     if (!arg_required(a, "--emit-l0", emit_path, err) ||
         !arg_required(a, "--deploy", deploy_path, err) ||
@@ -654,25 +561,16 @@ int main(int argc, char** argv) {
         return 2;
     }
     const bool do_step = has_flag(a, "--step");
-    Dim step_limit = 40;
-    if (!dim_opt("--step-limit", 40, step_limit)) {
+    std::uint32_t step_limit = 40;
+    if (!parse_dim(a, "--step-limit", 40, step_limit, err)) {
         std::cerr << "kpu-run: " << err << "\n";
         return 2;
     }
-    if (!known_topology(ds.topology)) {
-        std::cerr << "kpu-run: unknown --topology '" << ds.topology
-                  << "' (single | news | checkerboard)\n";
-        return 2;
-    }
 
-    // Which levels to run. "all" means every level that HAS an interpreter; naming
-    // one explicitly that does not is an error, not a silent substitution.
+    // The level: L-B, the only one an L0 program runs at. Naming another is an error with the
+    // reason, not a silent substitution.
     const std::string level_arg = arg(a, "--level", "all");
-    std::vector<ExecutionLevel> levels;
-    if (level_arg == "all") {
-        for (ExecutionLevel l : all_levels())
-            if (level_implemented(l)) levels.push_back(l);
-    } else {
+    if (level_arg != "all") {
         const auto parsed = parse_level(level_arg);
         if (!parsed) {
             std::cerr << "kpu-run: unknown --level '" << level_arg << "'\n";
@@ -683,78 +581,41 @@ int main(int argc, char** argv) {
                       << not_implemented_reason(*parsed) << "\n";
             return 2;
         }
-        levels.push_back(*parsed);
     }
+    const ExecutionLevel level = ExecutionLevel::Behavioral;
 
-    // The machine comes from a SPEC FILE or from the flags, never from both: two
-    // descriptions of a machine is the same usage error as --program beside --algo, and
-    // silently preferring one would make the tool report the flags it was given and run
-    // something else.
-    //
-    // The flags build a deployment too (#282 increment 1), so there is one machine
-    // description either way and the descriptor the executors schedule on is a view of it.
+    // The machine, from a spec file or the default device. L-B schedules on none of it, but a
+    // run's identity names its deployment, and a multi-device one is refused by the platform.
     std::optional<platform::DeploymentSpec> deployment;
-    if (!deploy_path.empty()) {
-        static const char* kDeviceFlags[] = {
-            "--topology", "--compute-tiles", "--l3-tiles", "--dma-engines", "--block-movers",
-            "--streamers", "--noc-links", "--dma-bytes-per-cycle", "--bm-bytes-per-cycle",
-            "--str-bytes-per-cycle", "--noc-bytes-per-cycle", "--macs-per-cycle"};
-        for (const char* k : kDeviceFlags)
-            if (arg_present(a, k)) {
-                std::cerr << "kpu-run: --deploy and " << k << " cannot be combined: the "
-                             "spec already says what machine to run on\n";
-                return 2;
-            }
-        try {
-            deployment.emplace(platform::read_spec_file(deploy_path));
-        } catch (const std::exception& e) {
-            std::cerr << "kpu-run: " << e.what() << "\n";
-            return 2;
-        }
-    } else {
-        try {
-            deployment.emplace(make_deployment(ds));
-        } catch (const std::exception& e) {
-            std::cerr << "kpu-run: " << e.what() << "\n";
-            return 2;
-        }
+    try {
+        deployment.emplace(deploy_path.empty() ? make_deployment(DeviceSpec{})
+                                               : platform::read_spec_file(deploy_path));
+    } catch (const std::exception& e) {
+        std::cerr << "kpu-run: " << e.what() << "\n";
+        return 2;
     }
-    const auto device = deployment->device_view();
-    const bool compare = !has_flag(a, "--no-compare");
 
-    std::cout << "program  " << (from_file ? program_path : ps.label()) << "\n";
-    // What the FILE turned out to carry, stated rather than assumed. "values: from file"
-    // versus "synthesized" is the difference between a test case and a timing exercise, and
-    // a reader of the output should never have to guess which one ran.
-    if (from_file)
-        std::cout << "         \"" << loaded->name() << "\"  "
-                  << loaded->operand_order().size() << " operands, "
-                  << loaded->ops().size() << " ops   values: "
-                  << (info.has_values ? "from file" : "synthesized (--fill-inputs)")
-                  << (dataflow.empty() ? "" : "   streams: " + dataflow + " (carried, not run)")
-                  << "\n";
+    std::cout << "program  " << program_path << "\n";
+    // What the FILE turned out to carry, stated rather than assumed: a test case or a kernel
+    // filled here.
+    std::cout << "         \"" << loaded->name() << "\"  "
+              << loaded->operand_order().size() << " operands, "
+              << loaded->ops().size() << " ops   values: "
+              << (info.has_values ? "from file" : "synthesized (--fill-inputs)")
+              << (dataflow.empty() ? "" : "   streams: " + dataflow + " (carried, not run)")
+              << "\n";
     std::cout << "device   " << deployment->label()
               << "   digest " << platform::deployment_digest(*deployment) << "\n";
-    std::cout << "levels   ";
-    for (std::size_t i = 0; i < levels.size(); ++i)
-        std::cout << (i ? ", " : "") << short_name(levels[i]);
+    std::cout << "levels   " << short_name(level);
     // Say out loud what is NOT being run, so a clean report is not mistaken for
     // full coverage.
     for (ExecutionLevel l : all_levels())
         if (!level_implemented(l))
             std::cout << "\n         (" << short_name(l) << " not run: "
                       << not_implemented_reason(l) << ")";
-    // ...and what of the MACHINE is not being modelled. A deployment is a superset of what
-    // any level schedules on, so a declared field can be dropped by the projection --
-    // quietly, unless it is said here.
-    //
-    // ONE LINE PER LEVEL, not one per field. A fully declared spec has six such fields and
-    // two levels ran, which printed eleven near-identical lines -- and a report nobody reads
-    // is no better than one that was never written.
-    for (ExecutionLevel l : levels) {
-        const auto fields = unmodelled(l, *deployment);
-        if (fields.empty()) continue;
-        std::cout << "\n         (" << short_name(l) << " ignores: ";
+    // ...and what of the MACHINE is not being modelled, on one line.
+    if (const auto fields = unmodelled(level, *deployment); !fields.empty()) {
+        std::cout << "\n         (" << short_name(level) << " ignores: ";
         for (std::size_t i = 0; i < fields.size(); ++i)
             std::cout << (i ? ", " : "") << platform::to_string(fields[i]);
         std::cout << ")";
@@ -762,154 +623,67 @@ int main(int argc, char** argv) {
     std::cout << "\n\n";
 
     // One place decides what an emitted file records, so the two emit paths cannot drift.
-    // The dataflow is stored under the MAP'S OWN NAME rather than the CLI alias, because the
-    // file has to be readable by something that never saw this command line.
     auto emit_options = [&]() {
         serialize::WriteOptions opt;
         opt.include_values = true;
         if (!dataflow.empty()) opt.dataflow = dataflow;
         return opt;
     };
-
-    // ONE place decides where a program comes from. The run loop, --step and --emit-l0 each
-    // need their own copy, and three copies of the "derive or load" decision would drift --
-    // the failure mode being a --step that steps a different program than the one that ran.
-    // A loaded program is COPIED rather than re-read: the copy is taken from the pristine
-    // load, so no level can be handed state a previous level mutated.
-    auto make_program = [&]() -> TileProgram {
-        if (loaded) return *loaded;
-        TileProgram p = derive(ps);
-        fill(p, ps);
-        return p;
-    };
-
-    // --emit-l0 writes the program BEFORE anything executes, so the file is an input
-    // rather than a snapshot of a finished run. Written as a test case (values inline),
-    // because a corpus entry that needed an external fill step would not be self-contained.
-    if (!emit_path.empty()) {
-        // derive() and fill() throw, and this path had them OUTSIDE a handler -- so
-        // --emit-l0 would exit through an uncaught exception while every other path returns
-        // 2. The run loop already had this fixed once; writing a new path reintroduced it.
-        std::optional<TileProgram> to_emit;
-        try {
-            to_emit.emplace(make_program());
-        } catch (const std::exception& e) {
-            std::cerr << "kpu-run: " << e.what() << "\n";
-            return 2;
-        }
+    auto write_file = [&](const std::string& path, const TileProgram& prog, const char* what) -> int {
         // BINARY, so the bytes do not depend on the platform that wrote them: a text-mode
         // stream on Windows would translate every \n into \r\n, and a format with a
         // byte-stability check cannot have a platform-dependent encoding.
-        std::ofstream out(emit_path, std::ios::binary);
+        std::ofstream out(path, std::ios::binary);
         if (!out) {
-            std::cerr << "kpu-run: cannot write '" << emit_path << "'\n";
+            std::cerr << "kpu-run: cannot write '" << path << "'\n";
             return 2;
         }
-        serialize::write_l0(out, *to_emit, emit_options());
+        serialize::write_l0(out, prog, emit_options());
         out.close();
         if (!out) {
-            std::cerr << "kpu-run: failed while writing '" << emit_path << "'\n";
+            std::cerr << "kpu-run: failed while writing '" << path << "'\n";
             return 2;
         }
-        std::cout << "wrote  " << emit_path << "  (test case, inputs inline)\n";
-    }
+        std::cout << "wrote  " << path << "  (" << what << ")\n";
+        return 0;
+    };
 
-    // EVERY RUN GOES THROUGH THE PLATFORM (#282 increment 4). The driver used to call
-    // run_at() directly, which made it a second path to execution beside the platform -- and
-    // "one VirtualPlatform owns the deployment; every driver goes through it" (ADR 0002 §3.5)
-    // is the discipline that keeps a result reproducible: the platform takes the initial
-    // state as an argument, so the run identity is complete.
+    // --emit-l0 writes the program BEFORE it executes, so the file is an input rather than a
+    // snapshot of a finished run.
+    if (!emit_path.empty())
+        if (const int rc = write_file(emit_path, *loaded, "test case, inputs inline")) return rc;
+
+    // EVERY RUN GOES THROUGH THE PLATFORM (#282 increment 4): it takes the initial state as an
+    // argument, so the run identity is complete.
     std::optional<platform::VirtualPlatform> vp;
-    std::vector<platform::ProgramHandle> handles;
+    platform::ProgramHandle handle;
+    std::optional<platform::StateSnapshot> initial;
+    TileProgram result;
     try {
         vp.emplace(*deployment);
-        // Each level gets its OWN program, filled identically, so the comparison is of the
-        // models rather than of leftover state.
-        for (std::size_t i = 0; i < levels.size(); ++i) {
-            // derive() and fill() throw too -- on an operand a spec does not declare, for
-            // one -- so they belong inside the guard rather than beside it.
-            handles.push_back(vp->load_program(make_program()));
-        }
+        handle = vp->load_program(*loaded);
+        initial.emplace(vp->snapshot());
+        const auto r = vp->run(handle, level, *initial);
+        result = vp->program(handle);
+        std::cout << "run id   " << r.identity.str() << "\n\n";
+        print_run(r.outcome);
     } catch (const std::exception& e) {
         std::cerr << "kpu-run: " << e.what() << "\n";
         return 2;
     }
 
-    // ONE snapshot, taken before anything runs, so every level starts from the same state --
-    // which is what makes the comparison a test of the models. Its digest is part of each
-    // run's identity.
-    const platform::StateSnapshot initial = vp->snapshot();
-
-    // RESULTS ARE CAPTURED AS THEY ARE PRODUCED, not read back afterwards. run() restores
-    // the snapshot platform-wide, so the NEXT run resets every program -- including the one
-    // that just produced an answer. Reading vp->program(h) after the loop would read the
-    // INPUT the last restore put back, and the comparison would diff a result against an
-    // input. (test_virtual_platform learned this the same way.)
-    std::vector<TileProgram> programs;
-    std::vector<RunOutcome> outcomes;
-    programs.reserve(levels.size());
-    for (std::size_t i = 0; i < levels.size(); ++i) {
-        try {
-            const auto r = vp->run(handles[i], levels[i], initial,
-                                   Placement::single(device.compute_tiles));
-            outcomes.push_back(r.outcome);
-            programs.push_back(vp->program(handles[i]));
-            if (i == 0)
-                std::cout << "run id   " << r.identity.str() << "\n\n";
-        } catch (const std::exception& e) {
-            std::cerr << "kpu-run: " << e.what() << "\n";
-            return 2;
-        }
-        print_run(outcomes.back());
-    }
-
-    // --emit-l0-result is written AFTER the value comparison, never before. Writing it here
-    // would leave a result file from a run whose levels DISAGREED: kpu-run returns 1, but
-    // the file sits there looking like a golden expected output, and the corpus could be
-    // seeded from a run that failed its own check. Deferred to emit_result_if_agreed(),
-    // called after the comparison -- and immediately when there is nothing to compare (one
-    // level, or --no-compare), since then there is no verdict to wait for.
-    auto emit_result_if_agreed = [&]() -> int {
-        if (emit_result_path.empty()) return 0;
-        std::ofstream out(emit_result_path, std::ios::binary);   // see --emit-l0 above
-        if (!out) {
-            std::cerr << "kpu-run: cannot write '" << emit_result_path << "'\n";
-            return 2;
-        }
-        serialize::write_l0(out, programs.back(), emit_options());
-        out.close();
-        if (!out) {
-            std::cerr << "kpu-run: failed while writing '" << emit_result_path << "'\n";
-            return 2;
-        }
-        std::cout << "wrote  " << emit_result_path << "  (results, from "
-                  << short_name(levels.back()) << ")\n";
-        return 0;
-    };
-
     // --step: walk the program at L-B, THROUGH THE PLATFORM (#282 increment 5). step_begin()
     // restores the snapshot first, so a stepped walk has the same identity a run does, and
     // each step EXECUTES one op.
     if (do_step) {
-        const ExecutionLevel target = levels.back();
         std::optional<platform::VirtualPlatform::Cursor> cur;
         try {
-            // A program of its own, so the walk does not consume a captured result.
-            // The initial state is restored BEFORE the extra program is loaded, so the
-            // snapshot the walk starts from holds every program at its inputs rather than at
-            // whatever the comparison runs left behind. Snapshotting first would have folded
-            // those results into the stepped run's identity -- not wrong, but a run identity
-            // that quietly depends on what ran before it is exactly the thing the platform
-            // exists to prevent.
-            vp->restore(initial);
-            const platform::ProgramHandle sh = vp->load_program(make_program());
-            const platform::StateSnapshot staged = vp->snapshot();
-            cur.emplace(vp->step_begin(sh, target, staged));
+            cur.emplace(vp->step_begin(handle, level, *initial));
         } catch (const std::exception& e) {
             std::cerr << "kpu-run: " << e.what() << "\n";
             return 2;
         }
-        std::cout << "\nstepping " << short_name(target) << ": " << cur->size()
+        std::cout << "\nstepping " << short_name(level) << ": " << cur->size()
                   << " steps (re-executed one op at a time)"
                   << (step_limit && cur->size() > step_limit
                           ? ", showing the first " + std::to_string(step_limit)
@@ -918,87 +692,52 @@ int main(int argc, char** argv) {
         std::size_t shown = 0;
         // The limit is checked BEFORE advancing, because a step is not free: step() APPLIES
         // the next op, so testing afterwards executed one more op than it showed.
-        // --step-limit says "stop after n steps", so it has to stop.
         while (!step_limit || shown < step_limit) {
             if (!cur->step()) break;
             std::cout << "  " << std::setw(5) << std::right << cur->position() << "  "
                       << std::left << describe(cur->current(), false) << "\n";
             ++shown;
         }
-        // Report where it stopped, so "stop after n steps" is checkable from outside
-        // rather than a claim in the help text.
+        // Report where it stopped, so "stop after n steps" is checkable from outside.
         std::cout << "  stopped after " << cur->position() << " of " << cur->size()
                   << " steps\n";
     }
 
-    if (!compare || levels.size() < 2) {
-        if (compare && levels.size() < 2)
-            std::cout << "\nonly one level ran, so there is nothing to compare\n";
-        return emit_result_if_agreed();     // no verdict to wait for
-    }
-
-    // L-B is the authority for values (ADR 0001 D5).
-    std::size_t authority = 0;
-    for (std::size_t i = 0; i < levels.size(); ++i)
-        if (levels[i] == ExecutionLevel::Behavioral) authority = i;
-
-    // EVERY operand, not just the result. The comparison used to read one operand -- "C" for
-    // matmul, "A" for LU -- which cannot see a level that scribbled on an INPUT while
-    // computing the right output, and a loaded program has no spec to ask for a result
-    // operand in the first place. Comparing the whole registry answers both.
-    std::cout << "\nvalues vs " << short_name(levels[authority])
-              << " (bit-exact, every operand)\n";
-    bool all_agree = true;
-    for (std::size_t i = 0; i < levels.size(); ++i) {
-        if (i == authority) continue;
-        std::cout << "  " << std::left << std::setw(24) << to_string(levels[i]);
-        bool level_agrees = true;
-        for (const std::string& name : programs[authority].operand_order()) {
-            const Diff d = compare_bitwise(programs[authority].operand(name).values,
-                                           programs[i].operand(name).values);
-            if (d.identical) continue;
-            if (level_agrees) std::cout << "\n";
-            level_agrees = all_agree = false;
-            // print_run() leaves std::fixed and a small precision on the stream, which
-            // would render a one-bit disagreement as "expected 1.234 got 1.234" -- the one
-            // diagnostic line for a failure, hiding the failure. Hex float is exact.
-            std::cout << "        operand " << name << " DISAGREES: " << d.differing
-                      << " element(s), first at [" << d.first_index << "] expected "
-                      << std::defaultfloat << std::setprecision(9) << d.expected
-                      << " got " << d.actual
-                      << "  (" << std::hexfloat << d.expected << " vs " << d.actual
-                      << std::defaultfloat << ")\n";
-        }
-        if (level_agrees) {
-            const std::size_t n = programs[authority].operand_order().size();
-            std::cout << "identical (" << n << (n == 1 ? " operand)\n" : " operands)\n");
-        }
-        // The pivot permutation and the swap count are compared UNCONDITIONALLY rather than
-        // for LU only: a program loaded from a file does not announce which kernel it is,
-        // and for a program with no pivoting both sides are 0 and empty, so the check costs
-        // nothing where it does not apply.
-        if (outcomes[i].summary.row_swaps != outcomes[authority].summary.row_swaps) {
-            all_agree = false;
-            std::cout << "        DISAGREES on row swaps: "
-                      << outcomes[authority].summary.row_swaps << " vs "
-                      << outcomes[i].summary.row_swaps << "\n";
-        }
-        if (outcomes[i].summary.permutation != outcomes[authority].summary.permutation) {
-            all_agree = false;
-            std::cout << "        DISAGREES on the row permutation\n";
-        }
-    }
-
-    if (!all_agree) {
-        std::cout << "\nFAILED: the levels do not compute the same values. Decomposition "
-                     "changes WHEN, never WHAT (ADR 0002 §2), so this is a model bug.\n";
-        if (!emit_result_path.empty())
-            std::cout << "not writing " << emit_result_path
-                      << ": a run whose levels disagree must not become an expected "
-                         "output\n";
-        return 1;
-    }
-    std::cout << "\nOK: every level computes identical values.\n";
-    if (const int rc = emit_result_if_agreed()) return rc;
+    // An L0 program is the oracle: its L-B values are the reference other levels answer to, so
+    // there is nothing here to compare them against, and the result is written as it stands.
+    std::cout << "\nL-B ran the oracle; an L0 program has no other level to compare with\n";
+    if (!emit_result_path.empty())
+        if (const int rc = write_file(emit_result_path, result, "results, from L-B")) return rc;
     return 0;
+}
+
+} // namespace
+
+int main(int argc, char** argv) {
+    const std::vector<std::string> a(argv + 1, argv + argc);
+    if (has_flag(a, "--help") || has_flag(a, "-h")) { usage(); return 0; }
+
+    // kpu-run is the simulator: it runs a program, and does not write one
+    // (kpu-run-csp-programs step 5). The derivation flags are refused by name, with where
+    // their job went.
+    for (const char* k : {"--algo", "--size", "--tile", "--act"})
+        if (arg_present(a, k)) {
+            std::cerr << "kpu-run: " << k << " left kpu-run (kpu-run-csp-programs step 5): kpu-run runs a "
+                         "program and does not write one. Write it with kpu-csp-gen, then run it:\n"
+                         "  kpu-csp-gen --algo matmul --size 64 --tile 16 --l3 16 -o matmul.csp\n"
+                         "  kpu-run --program matmul.csp\n";
+            return 2;
+        }
+    std::string err, program_path;
+    if (!arg_required(a, "--program", program_path, err)) {
+        std::cerr << "kpu-run: " << err << "\n";
+        return 2;
+    }
+    if (program_path.empty()) {
+        std::cerr << "kpu-run: --program is required: a CSP program (file.csp; write one with "
+                     "kpu-csp-gen), or an L0 trace (file.l0), which runs at L-B as the oracle\n";
+        return 2;
+    }
+    if (ends_with(program_path, ".csp")) return run_csp_program(a, program_path);
+    return run_l0_program(a, program_path);
 }

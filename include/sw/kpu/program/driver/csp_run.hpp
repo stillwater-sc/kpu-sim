@@ -177,6 +177,10 @@ struct CspRunResult {
 // actions (counted without keeping them).
 struct CspReference {
     std::optional<TileProgram> values;      // every operand, as the program leaves them
+    // The trace itself: the program's L0, on its inputs, before it runs. kpu-sim is the one
+    // source of an L0 (ADR 0004 §4), so this is what `kpu-run --emit-l0` writes as a test
+    // case, once the levels have agreed with it.
+    std::optional<TileProgram> trace;
     std::string note;                       // why there is none
     std::size_t actions = 0;
 };
@@ -195,6 +199,7 @@ inline CspReference csp_reference(const csp::lang::Program& ast, const TileProgr
     csp::CspProgram trace = csp::lang::compile(ast);
     for (const auto& name : trace.source.operand_order())
         trace.source.operand(name).values = inputs.operand(name).values;
+    out.trace = trace.source;
     TileProgramReference().run(trace.source);
     TileProgram ref = inputs;
     for (const auto& name : ref.operand_order()) ref.operand(name).values = trace.source.operand(name).values;

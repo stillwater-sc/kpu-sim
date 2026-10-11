@@ -8,27 +8,35 @@ that is not tested is a version policy that will be wrong.
 
 ## What is here
 
-**CSP programs** (`docs/plans/kpu-run-csp-programs.md` step 4a): a `<case>.csp` program
-beside its `<case>.l0` (the inputs, carried as L0 `VALUES`) and `<case>.result.l0` (every
-operand after the run). `test_csp_corpus` runs each through the virtual platform on
+**Every L0 file here is a trace kpu-sim wrote** (kpu-run-csp-programs step 5). An L0 is the
+trace of a CSP execution (ADR 0004 §4), and kpu-sim is its one source. Each case is a
+`<case>.csp` program, written by `kpu-csp-gen`, beside:
+- `<case>.l0`: the program's L0 trace, with its inputs inline;
+- `<case>.result.l0`: every operand after the run.
+
+`kpu-run` wrote both files, and only after every level that could run the program agreed with
+the trace (the regeneration command is below). There is no second L0 generator to drift from
+it. Before step 5 these files were written by `driver::derive`, a C++ derivation, which was a
+second source.
+
+`test_csp_corpus` runs each program through the virtual platform on
 `tests/program/deploy/kpu_s1.json` at L-B, L-T1 and L-CA, and asserts the reason where L-CA is
 refused (LU). It makes the two claims below: within tolerance of the recorded result across
-machines, and bit-identical to the program's own L0 oracle on one machine. The matmul and LU
-programs share the L0 cases' inputs and results (csp-gen writes them in the derivation's op
-order); `linear_64_t16_relu` has its own pair, written by `kpu-run --algo linear --emit-l0`.
+machines, and bit-identical to the program's own L0 oracle on one machine.
 
 | CSP program | inputs / results |
 |---|---|
 | `matmul_48x48x48_t16.csp` | `matmul_48x48x48_t16.l0` / `.result.l0` |
 | `lu_64_t16.csp` | `lu_64_t16.l0` / `.result.l0` |
 | `linear_64_t16_relu.csp` | `linear_64_t16_relu.l0` / `.result.l0` |
+| `matmul_32x32x32_t16.csp` | `matmul_32x32x32_t16_kernel.l0` (structure only) |
 
 **L0 programs:**
 
 | File | Role |
 |---|---|
-| `<case>.l0` | the program with its **inputs** inline — a test case |
-| `<case>.result.l0` | the same program **after execution** — the expected outputs |
+| `<case>.l0` | the program's trace with its **inputs** inline — a test case |
+| `<case>.result.l0` | every operand **after execution** — the expected outputs |
 | `matmul_32x32x32_t16_kernel.l0` | a **kernel**: structure only, `VALUES none`, `MIN_CONSUMER 1.0.0` |
 | `needs_a_newer_reader.l0` | **hand-written**: a supported container version with `MIN_CONSUMER 9.0.0`, so only the min_consumer gate can refuse it |
 | `needs_a_newer_container.l0` | **hand-written**: `KPUL0 9.0.0`, so only the container-major check can refuse it |
@@ -52,7 +60,8 @@ newer reader is the whole point of the version policy.
 
 It carries no expected-output half, because a program with no inputs has no answer to
 record. `test_l0_corpus` runs it the way `kpu-run --program ... --fill-inputs` does: inputs
-are **synthesized** first, and every level must then agree. Executing it as loaded would run
+are **synthesized** first, and the result must equal the program's trace run on the same
+inputs. Executing it as loaded would run
 on zeros, where every level agrees about nothing — which is why the driver refuses that
 combination outright.
 
@@ -64,11 +73,14 @@ fail for different reasons:
 | Claim | Scope | Strictness |
 |---|---|---|
 | the recorded answer is still the answer | **cross-machine** | within tolerance (`atol 1e-5`, `rtol 1e-4`) |
-| executing a corpus file equals executing a fresh derivation | **same machine** | **bit-identical** |
+| executing a corpus file equals executing the program's trace today | **same machine** | **bit-identical** |
+| each file is still the trace kpu-sim writes from its program today | any | **byte-identical** |
 | re-serializing a corpus file reproduces it | any | **byte-identical** |
 
-**Why every fixture value must be exactly representable.** `driver::fill` produces only
-values that need no rounding: matmul's `A` in quarters and `B` in **eighths**, LU in eighths.
+**Why every fixture value must be exactly representable.** The inputs kpu-run synthesizes
+(`fill_operand`, by operand name) are integers in [-8, 8] plus a multiple of **1/8**, with a
+dominant diagonal on a square operand: none of them needs rounding. (`driver::fill`, which wrote
+the corpus before step 5, kept the same rule: matmul's `A` in quarters, `B` and LU in eighths.)
 The per-operand granularity is incidental — the property that matters is that none of them
 round. That is a requirement, not a coincidence: Release builds with `-march=native`, so
 host-specific code
@@ -117,10 +129,17 @@ saw different bytes.
 ## Regenerating, which is a decision and not a chore
 
 ```
-kpu-run --algo matmul --size 48 --tile 16 \
+kpu-run --program tests/program/corpus/matmul_48x48x48_t16.csp \
+        --deploy tests/program/deploy/kpu_s1.json \
         --emit-l0 tests/program/corpus/matmul_48x48x48_t16.l0 \
         --emit-l0-result tests/program/corpus/matmul_48x48x48_t16.result.l0
+kpu-run --program tests/program/corpus/matmul_32x32x32_t16.csp \
+        --deploy tests/program/deploy/kpu_s1.json \
+        --emit-l0-kernel tests/program/corpus/matmul_32x32x32_t16_kernel.l0
 ```
+
+The inputs are the ones kpu-run synthesizes from the operand names (`csp_inputs`): exact
+multiples of 1/8, so the bytes are the same on every host.
 
 Before regenerating, answer this: **does the change need a version bump?**
 
@@ -141,9 +160,7 @@ the fixture was to exercise `UnsupportedVersion`.
 `needs_a_newer_reader.l0` is never regenerated. It is hand-written on purpose, so no tool
 can quietly bring it in line with the current version.
 
-The kernel entry has no `--emit-l0` form, because `kpu-run` writes test cases: every emitted
-file carries its inputs, which is what makes a corpus entry self-contained. The kernel file
-is `serialize::to_string(derive_matmul_tile_program(32, 32, 32, 16, 16, 16))` — the default
-`WriteOptions`, no values — and `test_l0_corpus` asserts exactly that equality, so a
-derivation change or a format change fails there and forces the version question rather than
-being absorbed silently.
+The kernel entry is the matmul 32³ program's trace written by `--emit-l0-kernel`: the
+default `WriteOptions`, no values. `test_l0_corpus` asserts that it equals the trace kpu-sim
+produces today, so a compiler change or a format change fails there and forces the version
+question rather than being absorbed silently.

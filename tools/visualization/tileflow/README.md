@@ -4,8 +4,9 @@ Step 1 of the tile-flow debugger (#286; `docs/plans/tile-flow-debugger.md`): whe
 was, and when, on the physical floorplan and as station swimlanes.
 
 ```bash
-# a run, and the floorplan of the same deployment
-kpu-run --algo matmul --size 256 --tile 32 --level block-sequential \
+# a program, its L-T1 run, and the floorplan of the same deployment
+kpu-csp-gen --algo matmul --size 256 --tile 32 --target tests/program/deploy/kpu_t64.json -o t64.csp
+kpu-run --program t64.csp --level block-sequential \
         --deploy tests/program/deploy/kpu_t64.json --tflow run.tflow
 kpu-floorplan --deploy tests/program/deploy/kpu_t64.json --json t64_floorplan.json
 

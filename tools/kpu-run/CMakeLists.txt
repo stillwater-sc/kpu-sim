@@ -14,20 +14,30 @@ kpu_add_tool(run
 # project (it never includes CTest), so a `if(BUILD_TESTING)` block silently registers
 # nothing — which is how examples/characterize's smoke test went unregistered.
 if(KPU_BUILD_TESTS)
-    # A derived L0 program runs at L-B only since the L0 L-T1 executor retired
-    # (kpu-run-csp-programs step 4e), so these run the oracle, and --algo leaves in step 5.
-    # The comparison between levels is the CSP tests' below.
-    add_test(NAME kpu_run_matmul_compare
-        COMMAND run --algo matmul --size 48 --tile 16 --level all
+    # kpu-run is the simulator: it runs a program and does not write one
+    # (kpu-run-csp-programs step 5). The derivation flags are refused by name, with where their
+    # job went, and a run needs a program. The comparison between levels is the CSP tests'
+    # below, on programs kpu-csp-gen writes.
+    foreach(_flag algo size tile act)
+        add_test(NAME kpu_run_refuses_${_flag}
+            COMMAND ${CMAKE_COMMAND}
+                -DCMD=$<TARGET_FILE:run>
+                -DARGS=--${_flag}$<SEMICOLON>x
+                -DEXPECT_CODE=2
+                -DMUST_MATCH=--${_flag}.left.kpu-run.*kpu-csp-gen.*kpu-run.--program
+                -P ${CMAKE_CURRENT_SOURCE_DIR}/expect_exit.cmake
+        )
+        set_tests_properties(kpu_run_refuses_${_flag} PROPERTIES LABELS "program;driver")
+    endforeach()
+    add_test(NAME kpu_run_needs_a_program
+        COMMAND ${CMAKE_COMMAND}
+            -DCMD=$<TARGET_FILE:run>
+            -DARGS=--level$<SEMICOLON>behavioral
+            -DEXPECT_CODE=2
+            -DMUST_MATCH=--program.is.required
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/expect_exit.cmake
     )
-    set_tests_properties(kpu_run_matmul_compare PROPERTIES LABELS "program;driver")
-
-    # LU exercises the pivot permutation and swap count, which a value diff alone
-    # would not catch.
-    add_test(NAME kpu_run_lu_compare
-        COMMAND run --algo lu --size 64 --tile 16 --level all
-    )
-    set_tests_properties(kpu_run_lu_compare PROPERTIES LABELS "program;driver")
+    set_tests_properties(kpu_run_needs_a_program PROPERTIES LABELS "program;driver")
 
     # A level with no interpreter must be refused, NOT silently substituted -- and the
     # assertion has to be able to tell those apart. PASS_REGULAR_EXPRESSION cannot: it
@@ -37,7 +47,7 @@ if(KPU_BUILD_TESTS)
     add_test(NAME kpu_run_refuses_unimplemented_level
         COMMAND ${CMAKE_COMMAND}
             -DCMD=$<TARGET_FILE:run>
-            -DARGS=--level$<SEMICOLON>resource-transactional
+            -DARGS=--program$<SEMICOLON>${CMAKE_SOURCE_DIR}/tests/program/corpus/matmul_48x48x48_t16.csp$<SEMICOLON>--level$<SEMICOLON>resource-transactional
             -DEXPECT_CODE=2
             -DMUST_MATCH=kpu-run:.resource-transactional:.*not.implemented..#283.
             -DMUST_NOT_MATCH=values.vs
@@ -146,7 +156,7 @@ if(KPU_BUILD_TESTS)
         add_test(NAME kpu_run_l0_refuses_${_retired}
             COMMAND ${CMAKE_COMMAND}
                 -DCMD=$<TARGET_FILE:run>
-                -DARGS=--algo$<SEMICOLON>matmul$<SEMICOLON>--${_retired}$<SEMICOLON>${CMAKE_CURRENT_BINARY_DIR}/should_not_exist_${_retired}
+                -DARGS=--program$<SEMICOLON>${CMAKE_SOURCE_DIR}/tests/program/corpus/matmul_48x48x48_t16.l0$<SEMICOLON>--${_retired}$<SEMICOLON>${CMAKE_CURRENT_BINARY_DIR}/should_not_exist_${_retired}
                 -DEXPECT_CODE=2
                 -DMUST_MATCH=--${_retired}.times.an.L0.program.s.L-T1.run,.which.retired.*kpu-csp-gen
                 -DMUST_NOT_MATCH=values.vs
@@ -160,7 +170,7 @@ if(KPU_BUILD_TESTS)
     add_test(NAME kpu_run_rejects_valueless_option
         COMMAND ${CMAKE_COMMAND}
             -DCMD=$<TARGET_FILE:run>
-            -DARGS=--size$<SEMICOLON>32$<SEMICOLON>--tile$<SEMICOLON>16$<SEMICOLON>--emit-l0
+            -DARGS=--program$<SEMICOLON>${CMAKE_SOURCE_DIR}/tests/program/corpus/matmul_48x48x48_t16.l0$<SEMICOLON>--emit-l0
             -DEXPECT_CODE=2
             -DMUST_MATCH=--emit-l0:.missing.value
             -P ${CMAKE_CURRENT_SOURCE_DIR}/expect_exit.cmake
@@ -172,7 +182,7 @@ if(KPU_BUILD_TESTS)
     add_test(NAME kpu_run_step_behavioral
         COMMAND ${CMAKE_COMMAND}
             -DCMD=$<TARGET_FILE:run>
-            -DARGS=--algo$<SEMICOLON>matmul$<SEMICOLON>--size$<SEMICOLON>32$<SEMICOLON>--tile$<SEMICOLON>16$<SEMICOLON>--level$<SEMICOLON>behavioral$<SEMICOLON>--step$<SEMICOLON>--step-limit$<SEMICOLON>4
+            -DARGS=--program$<SEMICOLON>${CMAKE_SOURCE_DIR}/tests/program/corpus/matmul_48x48x48_t16.l0$<SEMICOLON>--level$<SEMICOLON>behavioral$<SEMICOLON>--step$<SEMICOLON>--step-limit$<SEMICOLON>4
             -DEXPECT_CODE=0
             -DMUST_MATCH=re-executed.one.op.at.a.time
             -DMUST_NOT_MATCH=hop-start
@@ -185,7 +195,7 @@ if(KPU_BUILD_TESTS)
     add_test(NAME kpu_run_step_limit_is_exact
         COMMAND ${CMAKE_COMMAND}
             -DCMD=$<TARGET_FILE:run>
-            -DARGS=--size$<SEMICOLON>32$<SEMICOLON>--tile$<SEMICOLON>16$<SEMICOLON>--level$<SEMICOLON>behavioral$<SEMICOLON>--step$<SEMICOLON>--step-limit$<SEMICOLON>4
+            -DARGS=--program$<SEMICOLON>${CMAKE_SOURCE_DIR}/tests/program/corpus/matmul_48x48x48_t16.l0$<SEMICOLON>--step$<SEMICOLON>--step-limit$<SEMICOLON>4
             -DEXPECT_CODE=0
             -DMUST_MATCH=stopped.after.4.of
             -DMUST_NOT_MATCH=stopped.after.5.of
@@ -200,9 +210,9 @@ if(KPU_BUILD_TESTS)
     add_test(NAME kpu_run_emit_after_agreement
         COMMAND ${CMAKE_COMMAND}
             -DCMD=$<TARGET_FILE:run>
-            -DARGS=--algo$<SEMICOLON>matmul$<SEMICOLON>--size$<SEMICOLON>32$<SEMICOLON>--tile$<SEMICOLON>16$<SEMICOLON>--emit-l0$<SEMICOLON>${CMAKE_CURRENT_BINARY_DIR}/emit.l0$<SEMICOLON>--emit-l0-result$<SEMICOLON>${CMAKE_CURRENT_BINARY_DIR}/emit.result.l0
+            -DARGS=--program$<SEMICOLON>${CMAKE_SOURCE_DIR}/tests/program/corpus/matmul_48x48x48_t16.l0$<SEMICOLON>--emit-l0$<SEMICOLON>${CMAKE_CURRENT_BINARY_DIR}/emit.l0$<SEMICOLON>--emit-l0-result$<SEMICOLON>${CMAKE_CURRENT_BINARY_DIR}/emit.result.l0
             -DEXPECT_CODE=0
-            -DMUST_MATCH=only.one.level.ran.*wrote.*emit.result.l0
+            -DMUST_MATCH=wrote.*emit.l0.*L-B.ran.the.oracle.*wrote.*emit.result.l0
             -P ${CMAKE_CURRENT_SOURCE_DIR}/expect_exit.cmake
     )
     set_tests_properties(kpu_run_emit_after_agreement PROPERTIES LABELS "program;driver")
@@ -219,7 +229,7 @@ if(KPU_BUILD_TESTS)
             -DCMD=$<TARGET_FILE:run>
             -DARGS=--program$<SEMICOLON>${_corpus}/matmul_48x48x48_t16.l0
             -DEXPECT_CODE=0
-            -DMUST_MATCH=values:.from.file.*behavioral.*only.one.level.ran
+            -DMUST_MATCH=values:.from.file.*behavioral.*L-B.ran.the.oracle
             -P ${CMAKE_CURRENT_SOURCE_DIR}/expect_exit.cmake
     )
     set_tests_properties(kpu_run_program_from_file PROPERTIES LABELS "program;driver")
@@ -243,7 +253,7 @@ if(KPU_BUILD_TESTS)
             -DCMD=$<TARGET_FILE:run>
             -DARGS=--program$<SEMICOLON>${_corpus}/matmul_32x32x32_t16_kernel.l0$<SEMICOLON>--fill-inputs
             -DEXPECT_CODE=0
-            -DMUST_MATCH=values:.synthesized.*behavioral.*only.one.level.ran
+            -DMUST_MATCH=values:.synthesized.*behavioral.*L-B.ran.the.oracle
             -P ${CMAKE_CURRENT_SOURCE_DIR}/expect_exit.cmake
     )
     set_tests_properties(kpu_run_program_fill_inputs PROPERTIES LABELS "program;driver")
@@ -268,7 +278,7 @@ if(KPU_BUILD_TESTS)
             -DCMD=$<TARGET_FILE:run>
             -DARGS=--program$<SEMICOLON>${_corpus}/matmul_48x48x48_t16.l0$<SEMICOLON>--algo$<SEMICOLON>lu
             -DEXPECT_CODE=2
-            -DMUST_MATCH=--program.and.--algo.cannot.be.combined
+            -DMUST_MATCH=--algo.left.kpu-run
             -DMUST_NOT_MATCH=values.vs
             -P ${CMAKE_CURRENT_SOURCE_DIR}/expect_exit.cmake
     )
@@ -424,7 +434,7 @@ if(KPU_BUILD_TESTS)
             -DCMD=$<TARGET_FILE:run>
             -DARGS=--program$<SEMICOLON>${_corpus}/matmul_48x48x48_t16.csp$<SEMICOLON>--algo$<SEMICOLON>matmul
             -DEXPECT_CODE=2
-            -DMUST_MATCH=--algo.does.not.apply.to.a.CSP.program.*kpu-csp-gen
+            -DMUST_MATCH=--algo.left.kpu-run.*kpu-csp-gen
             -P ${CMAKE_CURRENT_SOURCE_DIR}/expect_exit.cmake
     )
     add_test(NAME kpu_run_csp_refuses_invalid_program
@@ -457,32 +467,32 @@ if(KPU_BUILD_TESTS)
     add_test(NAME kpu_run_deploy_from_spec
         COMMAND ${CMAKE_COMMAND}
             -DCMD=$<TARGET_FILE:run>
-            -DARGS=--size$<SEMICOLON>32$<SEMICOLON>--tile$<SEMICOLON>16$<SEMICOLON>--deploy$<SEMICOLON>${_deploy}/adr_checkerboard16.json
+            -DARGS=--program$<SEMICOLON>${CMAKE_SOURCE_DIR}/tests/program/corpus/matmul_48x48x48_t16.l0$<SEMICOLON>--deploy$<SEMICOLON>${_deploy}/adr_checkerboard16.json
             -DEXPECT_CODE=0
-            -DMUST_MATCH=checkerboard.cf16.*run.id.*only.one.level.ran
+            -DMUST_MATCH=checkerboard.cf16.*run.id.*L-B.ran.the.oracle
             -P ${CMAKE_CURRENT_SOURCE_DIR}/expect_exit.cmake
     )
     set_tests_properties(kpu_run_deploy_from_spec PROPERTIES LABELS "program;driver")
 
-    # A spec AND a device flag describe two machines. Picking one silently would make the
-    # tool report the flags it was given and run something else.
-    add_test(NAME kpu_run_deploy_rejects_device_flags
+    # The device flags left with --algo (step 5): the machine is a deployment spec, and an L0
+    # program runs at L-B, which models none of it. Refused by name, never ignored.
+    add_test(NAME kpu_run_refuses_device_flags
         COMMAND ${CMAKE_COMMAND}
             -DCMD=$<TARGET_FILE:run>
-            -DARGS=--deploy$<SEMICOLON>${_deploy}/canonical_single.json$<SEMICOLON>--topology$<SEMICOLON>news
+            -DARGS=--program$<SEMICOLON>${CMAKE_SOURCE_DIR}/tests/program/corpus/matmul_48x48x48_t16.l0$<SEMICOLON>--deploy$<SEMICOLON>${_deploy}/canonical_single.json$<SEMICOLON>--topology$<SEMICOLON>news
             -DEXPECT_CODE=2
-            -DMUST_MATCH=--deploy.and.--topology.cannot.be.combined
-            -DMUST_NOT_MATCH=values.vs
+            -DMUST_MATCH=--topology.left.kpu-run.*deployment.spec
+            -DMUST_NOT_MATCH=run.id
             -P ${CMAKE_CURRENT_SOURCE_DIR}/expect_exit.cmake
     )
-    set_tests_properties(kpu_run_deploy_rejects_device_flags PROPERTIES LABELS "program;driver")
+    set_tests_properties(kpu_run_refuses_device_flags PROPERTIES LABELS "program;driver")
 
     # A declared field the level does not model is REPORTED, compactly -- one line per level
     # rather than one per field, which is what made an 11-line report nobody would read.
     add_test(NAME kpu_run_reports_unmodelled_fields
         COMMAND ${CMAKE_COMMAND}
             -DCMD=$<TARGET_FILE:run>
-            -DARGS=--size$<SEMICOLON>32$<SEMICOLON>--tile$<SEMICOLON>16$<SEMICOLON>--deploy$<SEMICOLON>${_deploy}/adr_checkerboard16.json
+            -DARGS=--program$<SEMICOLON>${CMAKE_SOURCE_DIR}/tests/program/corpus/matmul_48x48x48_t16.l0$<SEMICOLON>--deploy$<SEMICOLON>${_deploy}/adr_checkerboard16.json
             -DEXPECT_CODE=0
             -DMUST_MATCH=L-B.ignores:.*l3.banks.*l1.vectors
             -P ${CMAKE_CURRENT_SOURCE_DIR}/expect_exit.cmake
@@ -494,7 +504,7 @@ if(KPU_BUILD_TESTS)
     add_test(NAME kpu_run_refuses_multi_device
         COMMAND ${CMAKE_COMMAND}
             -DCMD=$<TARGET_FILE:run>
-            -DARGS=--size$<SEMICOLON>32$<SEMICOLON>--tile$<SEMICOLON>16$<SEMICOLON>--deploy$<SEMICOLON>${_deploy}/two_devices.json
+            -DARGS=--program$<SEMICOLON>${CMAKE_SOURCE_DIR}/tests/program/corpus/matmul_48x48x48_t16.l0$<SEMICOLON>--deploy$<SEMICOLON>${_deploy}/two_devices.json
             -DEXPECT_CODE=2
             -DMUST_MATCH=multi-device.execution.is.not.implemented
             -DMUST_NOT_MATCH=OK:.every.level
@@ -505,7 +515,7 @@ if(KPU_BUILD_TESTS)
     add_test(NAME kpu_run_deploy_missing_file
         COMMAND ${CMAKE_COMMAND}
             -DCMD=$<TARGET_FILE:run>
-            -DARGS=--deploy$<SEMICOLON>${CMAKE_CURRENT_BINARY_DIR}/no_such_deploy.json
+            -DARGS=--program$<SEMICOLON>${CMAKE_SOURCE_DIR}/tests/program/corpus/matmul_48x48x48_t16.l0$<SEMICOLON>--deploy$<SEMICOLON>${CMAKE_CURRENT_BINARY_DIR}/no_such_deploy.json
             -DEXPECT_CODE=2
             -DMUST_MATCH=cannot.read
             -P ${CMAKE_CURRENT_SOURCE_DIR}/expect_exit.cmake
@@ -527,9 +537,9 @@ if(KPU_BUILD_TESTS)
     add_test(NAME kpu_run_rejects_bad_number
         COMMAND ${CMAKE_COMMAND}
             -DCMD=$<TARGET_FILE:run>
-            -DARGS=--size$<SEMICOLON>abc
+            -DARGS=--program$<SEMICOLON>${CMAKE_SOURCE_DIR}/tests/program/corpus/matmul_48x48x48_t16.l0$<SEMICOLON>--step-limit$<SEMICOLON>abc
             -DEXPECT_CODE=2
-            -DMUST_MATCH=--size
+            -DMUST_MATCH=--step-limit
             -P ${CMAKE_CURRENT_SOURCE_DIR}/expect_exit.cmake
     )
     set_tests_properties(kpu_run_rejects_bad_number PROPERTIES
