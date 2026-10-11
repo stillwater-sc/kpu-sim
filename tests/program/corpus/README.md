@@ -78,8 +78,11 @@ fail for different reasons:
 | re-serializing a corpus file reproduces it | any | **byte-identical** |
 
 **Why every fixture value must be exactly representable.** The inputs kpu-run synthesizes
-(`fill_operand`, by operand name) are integers in [-8, 8] plus a multiple of **1/8**, with a
-dominant diagonal on a square operand: none of them needs rounding. (`driver::fill`, which wrote
+(`fill_operand`, by operand name) are integers in [-8, 8] plus a multiple of **1/8**: none of them
+needs rounding. A square operand the program factors in place (LU's `A`) is also made
+**strictly diagonally dominant** (`csp_inputs` adds 9 × cols + 8, an integer). Without that, LU
+pivots on near-ties, which a host's code generation can tip: the first regeneration in step 5
+failed on the clang builds by exactly that. (`driver::fill`, which wrote
 the corpus before step 5, kept the same rule: matmul's `A` in quarters, `B` and LU in eighths.)
 The per-operand granularity is incidental — the property that matters is that none of them
 round. That is a requirement, not a coincidence: Release builds with `-march=native`, so
