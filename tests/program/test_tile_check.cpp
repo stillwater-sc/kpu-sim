@@ -81,6 +81,21 @@ TEST_CASE("tile check: a different grid is structural, and an uncarried format i
     bf16.type = sw::kpu::DataType::BFLOAT16;
     CHECK_THROWS_WITH(check_tiles(oracle, oracle, bf16, Proximity{}), ContainsSubstring("not carried yet"));
     CHECK_THROWS_WITH(proximity_for(bf16), ContainsSubstring("no proximity bound"));
+    // Values that do not fill the declared shape are structural, not a value to bound.
+    TensorOperand empty = oracle;
+    empty.values.clear();
+    CHECK_THROWS_WITH(check_tiles(empty, empty, ElementFormat{}, Proximity{}), ContainsSubstring("declares 35 elements"));
+}
+
+TEST_CASE("tile check: a bound that would pass anything is refused", "[program][tile_check]") {
+    const TensorOperand oracle = operand();
+    const double nan = std::numeric_limits<double>::quiet_NaN();
+    CHECK_THROWS_WITH(check_tiles(oracle, oracle, ElementFormat{}, Proximity{nan, 1e-4}), ContainsSubstring("finite and non-negative"));
+    CHECK_THROWS_WITH(check_tiles(oracle, oracle, ElementFormat{}, Proximity{1e-6, nan}), ContainsSubstring("finite and non-negative"));
+    CHECK_THROWS_WITH(check_tiles(oracle, oracle, ElementFormat{}, Proximity{-1.0, 1e-4}), ContainsSubstring("finite and non-negative"));
+    CHECK_THROWS_WITH(check_tiles(oracle, oracle, ElementFormat{},
+                                  Proximity{std::numeric_limits<double>::infinity(), 0.0}),
+                      ContainsSubstring("finite and non-negative"));
 }
 
 TEST_CASE("tile check: two programs' operand, at the format's default bound", "[program][tile_check]") {

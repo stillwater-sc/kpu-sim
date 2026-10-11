@@ -107,6 +107,15 @@ inline TileCheck check_tiles(const TensorOperand& actual, const TensorOperand& o
                                     std::to_string(actual.tile_cols) + " tiles; the oracle's is " +
                                     std::to_string(oracle.rows) + "x" + std::to_string(oracle.cols) + " in " +
                                     std::to_string(oracle.tile_rows) + "x" + std::to_string(oracle.tile_cols));
+    const std::size_t declared = static_cast<std::size_t>(oracle.rows) * oracle.cols;
+    if (actual.values.size() != declared || oracle.values.size() != declared)
+        throw std::invalid_argument("tile_check: " + actual.name + " declares " + std::to_string(declared) +
+                                    " elements; actual holds " + std::to_string(actual.values.size()) +
+                                    ", the oracle " + std::to_string(oracle.values.size()));
+    // A NaN or negative bound would pass anything (NaN compares false): refuse it.
+    if (!std::isfinite(bound.atol) || !std::isfinite(bound.rtol) || bound.atol < 0.0 || bound.rtol < 0.0)
+        throw std::invalid_argument("tile_check: the proximity bound must be finite and non-negative (atol " +
+                                    std::to_string(bound.atol) + ", rtol " + std::to_string(bound.rtol) + ")");
     TileCheck out;
     out.operand = actual.name;
     for (Dim ti = 0; ti < oracle.n_tile_rows(); ++ti)
