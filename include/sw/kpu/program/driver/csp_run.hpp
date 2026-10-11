@@ -79,6 +79,16 @@ inline TileProgram csp_inputs(const csp::lang::Program& ast) {
                                                          shape.tile_cols));
         const bool reads = d.io == "in" || (d.io == "inout" && (!read_first.count(d.name) || read_first.at(d.name)));
         if (reads) fill_operand(o);
+        // A square operand the program reads and then updates in place -- LU's A, factored where
+        // it lies -- is made STRICTLY diagonally dominant. fill_operand's diagonal is a nudge
+        // (+32), not a guarantee, and a 64-wide row's off-diagonals sum past it: pivoting then
+        // chooses between near-ties, a host's code generation can tip the choice, and the
+        // recorded answer stops being reproducible elsewhere (clang CI, step 5). With every
+        // |off-diagonal| <= 8.875, adding 9 x cols + 8 to the diagonal puts it above any row's
+        // off-diagonal sum, so no pivot is ever a near-tie. An integer, so still exact.
+        // `in` operands keep fill_operand's values: a matmul's arithmetic stays exact on them.
+        if (reads && d.io == "inout" && o.rows == o.cols)
+            for (Dim i = 0; i < o.rows; ++i) o.at(i, i) += 9.0f * float(o.cols) + 8.0f;
     }
     return out;
 }
