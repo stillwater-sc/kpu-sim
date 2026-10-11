@@ -1,7 +1,7 @@
 # `kpu-run` runs CSP programs, at every level including cycle-accurate
 
-**Status:** Decided 2026-10-10 (revised after review, §8; Q1-Q4 as recommended, §9); steps 1-3, 4a-4c and 4d.1 done;
-4d.2-4e planned (§5, step 4; 4d's language decided 2026-10-10)
+**Status:** Decided 2026-10-10 (revised after review, §8; Q1-Q4 as recommended, §9); steps 1-3 and 4a-4d done;
+4e and 5 planned (§5, step 4; 4d's language decided 2026-10-10, 4d.2's orchestrator 2026-10-11)
 **Tracks:** #283 (the L-CA half). Covers `docs/plans/csp-program-tile-sequencing.md` steps 2b and
 3 (L-T1 from the program).
 **Depends on:** the CSP language and its stream (ADR 0004, #343-#345), `CspDriver` (#342, #345,
@@ -280,7 +280,7 @@ platform have moved (§5 step 4). Then it is retired.
 
    | Depends on the L0 L-T1 executor or L0 platform programs | For |
    |---|---|
-   | Orchestration (#305: `.kpuld`, MMIO ABI, `KpuDevice`) | cross-operator residency: seeded and retained tiles, foreign-held slots |
+   | Orchestration (#305: `.kpuld`, MMIO ABI, `KpuDevice`) — moved in 4d | cross-operator residency: seeded and retained tiles, foreign-held slots |
    | Tile-flow debugger (#286: `.tflow`, viewer, checker, T4 reference run) | L-T1's per-hop records and residency intervals |
    | `kpu-run --step`, `--timeline` | L-T1's transaction cursor and timeline |
    | Characterization (`examples/characterize`) | the platform and L-T1 on L0 programs |
@@ -391,43 +391,55 @@ platform have moved (§5 step 4). Then it is retired.
          - Each matches its oracle bit for bit at L-B, L-T1 and L-CA.
          - Chained by hand at each level, the second operator's C equals the two oracles
            composed.
-     - **4d.2, the orchestrator** (next): `.kpuld` operators carry `.csp` text, and `KpuDevice`
-       runs chains of them, matching `retain` against `inherit`. The design as decided follows.
-     - **The question:** the orchestrator runs a chain of operators and keeps tiles resident
-       between them. Today it passes `initially_resident` (tiles an earlier operator left),
-       `retained_by_caller` (tiles this one must leave) and `foreign_held_slots` to the L0
-       L-T1 executor, which infers the rest.
-     - **Proposed:** residency across operators is written in the program, like all residency
-       (decision Q2 of the language plan):
-       - `inherit X;` declares tiles that arrive resident. There is no Load, and the slots are
-         held from the start; the validator counts them against capacity from the first
-         statement.
-       - `retain X;` ends a residency without a Release. The slot outlives the program, and the
-         validator accepts the tile still resident at the end, only if retained.
-       - The orchestrator checks that one operator's `retain` matches the next one's `inherit`,
-         by tile and by operand binding.
-       - Foreign-held slots become the program's L3: the orchestrator (or csp-gen) writes
-         `machine flat(l3 = free slots)`.
-     - **Levels:**
-       - L-B seeds L3 with the inherited tiles' values;
-       - L-T1 holds their slots from cycle 0 and does no DMA for them;
-       - L-CA needs an executor entry that seeds an L3 entry with a payload (`l3_held`, no
-         DMA).
-     - **`.kpuld`:** an operator carries `.csp` text instead of L0 text (`csp_program`), with
-       the L0 form kept as the oracle when traceable. Format version bump; the reader refuses
-       an old file with the reason.
-     - Kept unchanged: `KpuDevice`, the MMIO ABI, reservations, and the run identity's
-       residency field, which then digests the inherit/retain sets.
-     - **Decided 2026-10-10, all as recommended:**
-       - `inherit` and `retain` are **statements** in the body, like `resident` and `release`,
-         not declaration attributes.
-       - The names are `inherit` and `retain`.
-       - A retained tile need not be stored: skipping DRAM is the point of keeping it resident.
-         The orchestrator guarantees that a later operator stores or consumes it, and refuses a
-         chain whose last retained tile nothing claims.
-       - `.kpuld` operators carry `.csp` text, with a format version bump. The L0 form rides
-         along as the oracle when it is small enough to trace, and an older file is refused
-         with the reason.
+     - **4d.2, the orchestrator** (done): `.kpuld` operators carry `.csp` text, and `KpuDevice`
+       runs chains of them, matching `retain` against `inherit`.
+       - **`.kpuld` 2.0.0.** An operator carries `csp_program`, the canonical text, and
+         `l0_program` becomes optional: the oracle, filled by `loadable::csp_operator` when the
+         program has at most 1M actions. The reader validates the program at load. It refuses a
+         1.x file with the reason ("carries L0 operators; this reader runs CSP operators"),
+         after the min_consumer gate, so a file demanding a newer reader is still refused for
+         that. The 1.x golden file is kept as `matmul_32_external_v1.kpuld`, to prove the
+         refusal.
+       - **Binding by declaration.** An operator's `inputs` bind to the operands declared `in`
+         or `inout`, its `outputs` to those declared `out`, in declaration order. An operand
+         whose shape or tiling differs from its tensor's is refused, so a tile index names the
+         same region in every program.
+       - **The device holds what programs retain.** It keeps each retained tile's values,
+         because a retained tile need not be stored and DRAM may not have them. A launch
+         overlays the inherited values on the program's inputs. Afterwards it writes back to
+         DRAM only the tiles the program stored.
+       - **The chain is checked at load**, by tensor tile, and the first operator it fails is
+         marked invalid:
+         - an `inherit` needs an earlier `retain` of that tile, with the same tiling, and no
+           claim in between;
+         - every `retain` needs a later `inherit`;
+         - no operator in between may load a retained tile that was never stored;
+         - two operators may not retain one tile.
+       - **Decided 2026-10-11, both as recommended:**
+         - **The decider issues RESERVE and LAUNCH only.** A PLACE is refused, because the
+           program loads its own tiles, and a PLACE would be a DMA no program sequences. It
+           returns with L-T2 (#283). Three things retire:
+           - release at last read;
+           - `reuse_shared_inputs`: reuse is now measured by running a chain written with
+             retain/inherit against one written without;
+           - the greedy-prefetch ablation with reservations off, since its wedge needs a tile
+             held by the decider.
+           R1-R4 and `ReserveThenLaunch` stay.
+         - **The program's declared L3 is its need.** It reserves `l3` less the slots it
+           inherits, which are already held. The device refuses when that does not fit beside
+           the other held tiles, and never rewrites the text.
+       - **MMIO ABI 2.0.**
+         - `MAN_L3_SLOTS` takes `MAN_PEAK_LIVE`'s offset.
+         - `MAN_LIST` (0x130) selects which list the read window shows: reads, inherits or
+           retains.
+       - The run identity's residency field stays empty for a CSP run: `inherit` and `retain`
+         are in the program's text, which `program_digest` already covers.
+       - **Measured:**
+         - three GEMMs with a gap need 5 L3 slots cold and 9 warm, so holding W across the
+           middle operator costs exactly its four tiles;
+         - the warm chain loads 4 fewer DRAM tiles;
+         - `relu_then_bias` keeps H = relu(X W) in L3 unstored, and the bias operator's
+           stored H equals the two oracles composed, at L-B and L-T1.
    - **4e: retire the L0 L-T1 executor.**
      - Once 4b-4d land, `TileTransactionExecutor`, `run_at`'s L-T1 case and the L0 platform run
        path have no users.

@@ -1,6 +1,8 @@
 // ============================================================================
 // tests/program/test_loadable.cpp
-// The KPU loadable container (#305 increment 1): the unit of deployment.
+// The KPU loadable container (#305 increment 1): the unit of deployment. Format 2.0.0
+// (kpu-run-csp-programs step 4d.2): an operator carries its CSP program, with its trace's L0 as
+// the oracle, and a 1.x file is refused with that reason.
 //
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2024-2025 Stillwater Supercomputing, Inc.
@@ -9,7 +11,8 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <sw/kpu/loadable/loadable.hpp>
-#include <sw/kpu/program/driver/program_spec.hpp>
+#include <sw/kpu/program/csp/lang/format.hpp>
+#include <sw/kpu/program/csp/lang/parse.hpp>
 #include <sw/kpu/program/platform/deployment_spec.hpp>
 #include <sw/kpu/program/serialize/l0_format.hpp>
 
@@ -22,13 +25,30 @@ using namespace sw::kpu::loadable;
 
 namespace {
 
-// An L0 program as text, which is what an operator embeds — verbatim, not re-encoded.
-std::string l0_matmul(unsigned n = 32, unsigned t = 16) {
-    sw::kpu::program::driver::ProgramSpec ps;
-    ps.algo = "matmul";
-    ps.size = n;
-    ps.tile = t;
-    return sw::kpu::program::serialize::to_string(sw::kpu::program::driver::derive(ps));
+// A CSP program as text, which is what an operator embeds -- verbatim, not re-encoded. What
+// kpu-csp-gen writes for a 32x32x32 GEMM in 16x16 tiles.
+const char* kMatmulCsp = R"(csp 1.0
+program matmul machine flat(l3 = 8) {
+  tensor A[32,32] tile 16x16 in;
+  tensor B[32,32] tile 16x16 in;
+  tensor C[32,32] tile 16x16 out;
+  for j in 0..2 {
+    resident B[:, j];
+    for i in 0..2 {
+      resident A[i, :];
+      acc C[i, j] in fabric {
+        for k in 0..2 { call gemm(A[i, k], B[k, j]) +-> C[i, j]; }
+      }
+      store C[i, j];
+      release A[i, :];
+    }
+    release B[:, j];
+  }
+}
+)";
+
+Operator gemm_operator(const char* name, std::vector<std::string> in, std::vector<std::string> out) {
+    return csp_operator(name, kMatmulCsp, std::move(in), std::move(out));
 }
 
 // A two-operator loadable with external tensors, which is the shape increment 1 must
@@ -68,17 +88,10 @@ Loadable two_operator_model() {
 
     l.tensors = {a, b, c, d};
 
-    Operator first;
-    first.name = "gemm0";
-    first.l0_program = l0_matmul();
+    Operator first = gemm_operator("gemm0", {"A", "B"}, {"C"});
     first.requires_tile = ComputeTileKind::Programmable;
-    first.inputs = {"A", "B"};
-    first.outputs = {"C"};
-
-    Operator second = first;
-    second.name = "gemm1";
-    second.inputs = {"C", "B"};      // consumes the first operator's output
-    second.outputs = {"D"};
+    // consumes the first operator's output
+    Operator second = gemm_operator("gemm1", {"C", "B"}, {"D"});
 
     l.operators = {first, second};
     l.profile.min_compute_tiles = 1;
@@ -114,10 +127,21 @@ TEST_CASE("a loadable round-trips, and the bytes are a function of the content",
     CHECK(back.tensors[0].shape == std::vector<std::uint64_t>{32, 32});
     CHECK(back.tensors[0].device_address == 0x1000);
 
-    // The L0 program survives VERBATIM. That is the whole reason it is embedded as text:
-    // a re-encoding would be a second representation to keep in step.
+    // The CSP program survives VERBATIM, canonically formatted. That is the whole reason it is
+    // embedded as text: a re-encoding would be a second representation to keep in step.
+    namespace lang = sw::kpu::program::csp::lang;
+    CHECK(back.operators[0].csp_program == l.operators[0].csp_program);
+    CHECK(back.operators[0].csp_program == lang::format(lang::parse(kMatmulCsp)));
+    // ...and its oracle beside it, the trace's L0, which loads.
+    REQUIRE(back.operators[0].l0_program.has_value());
     CHECK(back.operators[0].l0_program == l.operators[0].l0_program);
-    CHECK_NOTHROW(sw::kpu::program::serialize::from_string(back.operators[0].l0_program));
+    CHECK_NOTHROW(sw::kpu::program::serialize::from_string(*back.operators[0].l0_program));
+    // An operator too large to trace carries no oracle, and is a loadable all the same.
+    Loadable untraced = l;
+    for (Operator& op : untraced.operators) op = csp_operator(op.name, kMatmulCsp, op.inputs, op.outputs, 3);
+    const Loadable untraced_back = read(write(untraced));
+    CHECK_FALSE(untraced_back.operators[0].l0_program.has_value());
+    CHECK(untraced_back.operators[0].csp_program == back.operators[0].csp_program);
 
     // Canonical: re-writing what was read reproduces the bytes, which is what lets a
     // digest key a cache and a checked-in fixture be compared byte for byte.
@@ -268,15 +292,21 @@ TEST_CASE("a loadable that contradicts itself is refused", "[program][loadable]"
         l.tensors[0].tile_shape = {16};
         CHECK(cause_of(write(l)) == LoadError::Cause::InconsistentRecord);
     }
-    SECTION("an embedded L0 program that does not load") {
+    SECTION("an embedded CSP program that does not validate") {
+        Loadable l = two_operator_model();
+        l.operators[0].csp_program = "csp 1.0\nprogram p machine flat(l3 = 1) {\n"
+                                     "  tensor A[32,32] tile 16x16 in;\n  resident A[:, :];\n}\n";
+        CHECK(cause_of(write(l)) == LoadError::Cause::InconsistentRecord);
+    }
+    SECTION("an operator with no CSP program at all") {
+        Loadable l = two_operator_model();
+        l.operators[0].csp_program = "";
+        CHECK(cause_of(write(l)) == LoadError::Cause::MissingRequiredField);
+    }
+    SECTION("an embedded L0 oracle that does not load") {
         Loadable l = two_operator_model();
         l.operators[0].l0_program = "KPUL0 1.0.0\nthis is not a program\n";
         CHECK(cause_of(write(l)) == LoadError::Cause::InconsistentRecord);
-    }
-    SECTION("an operator with no L0 program at all") {
-        Loadable l = two_operator_model();
-        l.operators[0].l0_program = "";
-        CHECK(cause_of(write(l)) == LoadError::Cause::MissingRequiredField);
     }
     SECTION("a fixed-ISA tile given a domain flow program") {
         // Both directions matter: a programmable tile needs one, a fixed tile must not be
@@ -301,7 +331,7 @@ TEST_CASE("a loadable that contradicts itself is refused", "[program][loadable]"
     }
 }
 
-TEST_CASE("the embedded L0 program is validated at load, not at first execution",
+TEST_CASE("the embedded programs are validated at load, not at first execution",
           "[program][loadable]") {
     // A container that loads and then fails to run is the worst of both: it reports success
     // and dies later, somewhere else, with a diagnosis about the wrong layer.
@@ -309,10 +339,22 @@ TEST_CASE("the embedded L0 program is validated at load, not at first execution"
     l.operators[1].l0_program = "KPUL0 9.0.0\nMIN_CONSUMER 9.0.0\nEND\n";
     try {
         (void)read(write(l));
-        FAIL("a program this build cannot read must be refused with the container");
+        FAIL("an oracle this build cannot read must be refused with the container");
     } catch (const LoadError& e) {
         CHECK(e.cause() == LoadError::Cause::InconsistentRecord);
         CHECK(std::string(e.what()).find("gemm1") != std::string::npos);
+    }
+    // The program itself, by the validator's reason: B[0,0] is never released.
+    Loadable leaks = two_operator_model();
+    leaks.operators[1].csp_program = "csp 1.0\nprogram p machine flat(l3 = 4) {\n"
+                                     "  tensor A[32,32] tile 16x16 in;\n  resident A[0, 0];\n}\n";
+    try {
+        (void)read(write(leaks));
+        FAIL("a CSP program the validator refuses must be refused with the container");
+    } catch (const LoadError& e) {
+        CHECK(e.cause() == LoadError::Cause::InconsistentRecord);
+        CHECK(std::string(e.what()).find("gemm1") != std::string::npos);
+        CHECK(std::string(e.what()).find("CSP program does not validate") != std::string::npos);
     }
 }
 
@@ -512,12 +554,8 @@ Loadable canonical_fixture() {
     c.device_address = 0x3000;
     c.size_bytes = 4096;
     l.tensors = {a, b, c};
-    Operator op;
-    op.name = "gemm";
-    op.l0_program = l0_matmul(32, 16);
+    Operator op = gemm_operator("gemm", {"A", "B"}, {"C"});
     op.requires_tile = ComputeTileKind::Programmable;
-    op.inputs = {"A", "B"};
-    op.outputs = {"C"};
     l.operators = {op};
     l.profile.min_compute_tiles = 1;
     return l;
@@ -541,12 +579,14 @@ TEST_CASE("a checked-in loadable still loads, and is still what this build write
     CHECK(l.tensors[0].is_input());
     CHECK_FALSE(l.tensors[2].is_input());          // C is produced
 
-    // The embedded L0 program still loads, which is the coupling embedding it verbatim buys
+    // The embedded programs still load, which is the coupling embedding them verbatim buys
     // and owes: a container that read fine and then choked on its contents would be worse.
-    CHECK_NOTHROW(sw::kpu::program::serialize::from_string(l.operators[0].l0_program));
+    CHECK_NOTHROW(sw::kpu::program::csp::lang::parse(l.operators[0].csp_program));
+    REQUIRE(l.operators[0].l0_program.has_value());
+    CHECK_NOTHROW(sw::kpu::program::serialize::from_string(*l.operators[0].l0_program));
 
     // BYTE-IDENTICAL to what this build writes. Deliberately strict, and it will fail on any
-    // change to the container OR to the L0 text OR to the project version that stamps the
+    // change to the container OR to the CSP or L0 text OR to the project version that stamps the
     // producer -- which is the point: regeneration is then a decision, and the question to
     // answer before regenerating is whether the FORMAT changed.
     CHECK(write(canonical_fixture()) == bytes);
@@ -579,5 +619,24 @@ TEST_CASE("a loadable demanding a newer reader is refused by the min_consumer ga
     } catch (const LoadError& e) {
         CHECK(std::string(e.what()).find("requires a reader") != std::string::npos);
         CHECK(std::string(e.what()).find("is newer than this reader") == std::string::npos);
+        // ...nor the format-1 gate: the fixture declares container 2.0.0.
+        CHECK(std::string(e.what()).find("carries L0 operators") == std::string::npos);
+    }
+}
+
+TEST_CASE("a format 1 loadable is refused with the reason, not run", "[program][loadable][corpus]") {
+    // 1.x operators carry L0, which is a trace (ADR 0004 §4) and no longer what runs. The file is
+    // the format-1 golden fixture as it was checked in, kept to prove the refusal: reading it as
+    // a 2.x loadable would run nothing, and converting it would invent a schedule it never had.
+    const std::string bytes = read_bytes(std::string(kCorpus) + "matmul_32_external_v1.kpuld");
+    try {
+        (void)read(bytes);
+        FAIL("a format 1 loadable must be refused");
+    } catch (const LoadError& e) {
+        CHECK(e.cause() == LoadError::Cause::UnsupportedVersion);
+        const std::string why = e.what();
+        CHECK(why.find("1.0.0") != std::string::npos);
+        CHECK(why.find("carries L0 operators") != std::string::npos);
+        CHECK(why.find("CSP") != std::string::npos);
     }
 }

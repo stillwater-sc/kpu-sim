@@ -4,7 +4,8 @@ Checked-in loadables that CI **loads**, so the container cannot rot quietly (#30
 
 | File | Role |
 |---|---|
-| `matmul_32_external.kpuld` | one operator, three tensors, **data external** — compared **byte for byte** |
+| `matmul_32_external.kpuld` | format 2.0.0: one CSP operator with its L0 oracle, three tensors, **data external** — compared **byte for byte** |
+| `matmul_32_external_v1.kpuld` | the format 1.0.0 golden file as it was checked in: an L0 operator, which this reader **refuses with the reason** |
 | `needs_a_newer_reader.kpuld` | **hand-built**: a supported container version with `min_consumer 9.0.0`, so only the min_consumer gate can refuse it |
 
 ## Why a corpus at all
@@ -21,7 +22,7 @@ undefined behaviour rather than a wrong answer.
 ## What each file proves
 
 `matmul_32_external.kpuld` is compared **byte for byte** against what this build writes. That
-is deliberately strict and will fail on a change to the container, to the embedded L0 text, or
+is deliberately strict and will fail on a change to the container, to the embedded CSP or L0 text, or
 to the project version that stamps `producer_version`. Before regenerating, answer the question
 that matters: **did the format change?** If only the project version moved, regeneration is
 routine. If the format moved, it needs a version decision first — a regenerated fixture always
@@ -33,7 +34,13 @@ the records present. That impossibility is what makes the fixture trustworthy �
 quietly bring it into line. It declares a container version this reader **does** support, so the
 only thing that can refuse it is the `min_consumer` gate itself; the test also checks that the
 *message* names the demand rather than the container, because #265's corpus once had a fixture
-that passed for the wrong reason by tripping the earlier gate.
+that passed for the wrong reason by tripping the earlier gate. Format 2.0.0 made its container
+version (1.0.0) one this reader refuses, so its `format_version` was patched by hand to 2.0.0:
+one byte, at offset 0x46. It is still a file the writer cannot produce.
+
+`matmul_32_external_v1.kpuld` is the format-1 golden file, renamed when format 2.0.0 replaced it
+(kpu-run-csp-programs step 4d.2). It is never regenerated either: it is the evidence that an old
+loadable is refused, with "carries L0 operators", rather than run.
 
 ## The bytes are the evidence
 
