@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Removed
 
+- **`--algo` and the device flags leave kpu-run** (kpu-run-csp-programs step 5). kpu-run is the
+  simulator: it runs a program and does not write one.
+  - `--algo`, `--size`, `--tile` and `--act` are refused by name, and the refusal says to write
+    the program with `kpu-csp-gen`. `--program` is now required.
+  - `--topology`, `--compute-tiles`, `--l3-tiles`, the lane counts and the rates are refused
+    too: the machine is `--deploy`'s.
+  - An L0 program (`--program file.l0`) runs at L-B as the oracle.
+
 - **The L0 L-T1 executor, `TileTransactionExecutor`** (kpu-run-csp-programs step 4e). L-T1
   runs the CSP program (`csp/transactional.hpp`). An L0 program is a trace, and runs at L-B only,
   as the oracle.
@@ -27,6 +35,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `examples/characterize` is unchanged: it never ran the executor.
 
 ### Added
+
+- **kpu-run writes a CSP program's L0 trace, and the golden corpus is made of them**
+  (kpu-run-csp-programs step 5). kpu-sim is now the one source of an L0.
+  - `--emit-l0` writes the trace, with its inputs inline, once every level has agreed with it.
+    `--emit-l0-kernel` writes its structure only.
+  - The corpus (matmul 48³, LU 64, linear 64, and the matmul 32³ kernel) was regenerated this
+    way, from its `.csp` programs. `test_l0_corpus` checks each file against the trace kpu-sim
+    produces today, where it used to check against `driver::derive`.
 
 - **Loadables run CSP programs** (kpu-run-csp-programs step 4d.2).
   - `.kpuld` format 2.0.0: an operator carries its CSP program, with its trace's L0 as the

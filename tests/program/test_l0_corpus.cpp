@@ -8,6 +8,10 @@
 // variant". A version policy that is not tested is a version policy that will be
 // wrong, so the checked-in files are the evidence that old files still work.
 //
+// Every file here is a TRACE kpu-sim wrote: `kpu-run --program <case>.csp --emit-l0 ...` ran
+// the case's CSP program, and wrote its L0 once every level agreed with it (ADR 0004 §4:
+// kpu-sim is the one source of an L0; kpu-run-csp-programs step 5).
+//
 // Paths are relative to the project root; the test's WORKING_DIRECTORY is set to
 // CMAKE_SOURCE_DIR, following tests/compiler's convention.
 //
@@ -18,6 +22,8 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <sw/kpu/program/driver/execution_level.hpp>
+#include <sw/kpu/program/csp/lang/parse.hpp>
+#include <sw/kpu/program/driver/csp_run.hpp>
 #include <sw/kpu/program/driver/program_spec.hpp>
 #include <sw/kpu/program/serialize/l0_format.hpp>
 
@@ -51,35 +57,34 @@ bool bits_equal(const std::vector<float>& a, const std::vector<float>& b) {
     return true;
 }
 
-// The spec lives WITH the case, so a new corpus entry cannot be added to one check and
-// forgotten by another -- which is exactly what happened: derivation equivalence covered
-// matmul only, so a change to derive_lu_tile_program would have left the LU input stale
-// while every other check still passed.
+// The program lives WITH the case, so a new corpus entry cannot be added to one check and
+// forgotten by another -- which is exactly what happened once: derivation equivalence covered
+// matmul only, so a change to LU would have left its input stale while every other check passed.
 struct Case {
     const char* name;
+    const char* program;   // the CSP program the trace came from
     const char* input;
     const char* expected;
-    const char* algo;
-    Dim size;
-    Dim tile;
 };
 
 const std::vector<Case>& cases() {
     static const std::vector<Case> c = {
-        {"matmul 48^3 t16", "matmul_48x48x48_t16.l0", "matmul_48x48x48_t16.result.l0",
-         "matmul", 48, 16},
-        {"tile LU 64 t16",  "lu_64_t16.l0",           "lu_64_t16.result.l0",
-         "lu", 64, 16},
+        {"matmul 48^3 t16", "matmul_48x48x48_t16.csp", "matmul_48x48x48_t16.l0",
+         "matmul_48x48x48_t16.result.l0"},
+        {"tile LU 64 t16", "lu_64_t16.csp", "lu_64_t16.l0", "lu_64_t16.result.l0"},
+        {"linear 64 t16 relu", "linear_64_t16_relu.csp", "linear_64_t16_relu.l0",
+         "linear_64_t16_relu.result.l0"},
     };
     return c;
 }
 
-ProgramSpec spec_of(const Case& c) {
-    ProgramSpec ps;
-    ps.algo = c.algo;
-    ps.size = c.size;
-    ps.tile = c.tile;
-    return ps;
+// The trace kpu-sim produces TODAY from a case's program, on the inputs kpu-run synthesizes:
+// what `kpu-run --emit-l0` would write now.
+TileProgram trace_of(const char* program) {
+    const auto ast = csp::lang::parse(read_file(std::string(kCorpus) + program));
+    const CspReference ref = csp_reference(ast, csp_inputs(ast), 1'000'000);
+    REQUIRE(ref.trace.has_value());
+    return *ref.trace;
 }
 
 } // namespace
@@ -100,9 +105,9 @@ ProgramSpec spec_of(const Case& c) {
 // overclaim:
 //   - CROSS-MACHINE: the recorded answer is still the answer, within tolerance. This
 //     catches an op that starts computing something else.
-//   - SAME-MACHINE: executing the corpus file is BIT-IDENTICAL to executing a freshly
-//     derived program. This catches executor and derivation drift, where bit-exactness is
-//     genuinely promised.
+//   - SAME-MACHINE: executing the corpus file is BIT-IDENTICAL to executing the trace kpu-sim
+//     produces from the program today. This catches executor and trace drift, where
+//     bit-exactness is genuinely promised.
 namespace {
 
 // Chosen for cross-machine FP variation in a float accumulation, not borrowed from the
@@ -170,28 +175,21 @@ TEST_CASE("every corpus program loads and computes its recorded answer",
     }
 }
 
-TEST_CASE("executing a corpus file is bit-identical to executing a fresh derivation",
+TEST_CASE("executing a corpus file is bit-identical to executing the program's trace today",
           "[program][serialize][corpus]") {
     // Where bit-exactness IS promised: one machine, one build, two routes to the same
-    // program. This is the check that catches executor or derivation drift, and it is kept
-    // separate from the recorded-answer comparison because the two fail for different
-    // reasons and conflating them hides which one moved.
-    for (const Case& sp : cases()) {
-        const ProgramSpec ps = spec_of(sp);
+    // program. Kept separate from the recorded-answer comparison because the two fail for
+    // different reasons and conflating them hides which one moved.
+    for (const Case& c : cases()) {
         const DeviceSpec ds;
         const auto device = make_device(ds);
-
-        for (ExecutionLevel level : all_levels()) {
-            if (!level_implemented(level)) continue;
-            TileProgram from_file = from_string(read_file(std::string(kCorpus) + sp.input));
-            TileProgram fresh = derive(ps);
-            fill(fresh, ps);
-            run_at(level, from_file, device, Placement::single(device.compute_tiles));
-            run_at(level, fresh, device, Placement::single(device.compute_tiles));
-            for (const std::string& key : fresh.operand_order()) {
-                INFO(std::string(sp.input) + " at " + short_name(level) + ", operand " + key);
-                CHECK(bits_equal(from_file.operand(key).values, fresh.operand(key).values));
-            }
+        TileProgram from_file = from_string(read_file(std::string(kCorpus) + c.input));
+        TileProgram fresh = trace_of(c.program);
+        run_at(ExecutionLevel::Behavioral, from_file, device, Placement::single(device.compute_tiles));
+        run_at(ExecutionLevel::Behavioral, fresh, device, Placement::single(device.compute_tiles));
+        for (const std::string& key : fresh.operand_order()) {
+            INFO(std::string(c.input) + ", operand " + key);
+            CHECK(bits_equal(from_file.operand(key).values, fresh.operand(key).values));
         }
     }
 }
@@ -266,22 +264,16 @@ TEST_CASE("both version gates refuse, and each is exercised on its own",
     CHECK_NOTHROW(from_string(relaxed));
 }
 
-TEST_CASE("every corpus program still matches what the derivation produces today",
+TEST_CASE("every corpus file is still the trace kpu-sim produces from its program today",
           "[program][serialize][corpus]") {
     // Separate from the execution check, and it answers a different question: that one asks
-    // "does this file still compute its answer", this asks "is the file still what our
-    // derivation would emit". They diverge -- a derivation change keeps the corpus
-    // executing correctly while silently making it stale -- so conflating them would hide
-    // which of the two moved.
-    //
-    // EVERY case, driven by the case list. This covered matmul only, which meant a change
-    // to the LU derivation would have gone unnoticed while every check still passed.
+    // "does this file still compute its answer", this asks "is the file still what kpu-sim
+    // would write". They diverge -- a change to the CSP compiler keeps the corpus executing
+    // correctly while silently making it stale -- so conflating them would hide which moved.
+    // The inputs are exact (multiples of 1/8), so the bytes are the same on every host.
     for (const Case& c : cases()) {
-        const ProgramSpec ps = spec_of(c);
-        TileProgram fresh = derive(ps);
-        fill(fresh, ps);
         INFO("corpus input " << c.input);
-        CHECK(to_test_case(fresh) == read_file(std::string(kCorpus) + c.input));
+        CHECK(to_test_case(trace_of(c.program)) == read_file(std::string(kCorpus) + c.input));
     }
 }
 
@@ -306,14 +298,11 @@ TEST_CASE("the corpus's kernel case carries no values, and runs once they are sy
     CHECK_FALSE(info.has_values);
     CHECK_FALSE(info.has_streams);
 
-    // Still what the derivation emits today -- the same staleness check the valued cases
-    // get, and it doubles as byte stability, so a format change fails here and forces the
-    // version question rather than being absorbed silently.
-    ProgramSpec ps;
-    ps.algo = "matmul";
-    ps.size = 32;
-    ps.tile = 16;
-    CHECK(to_string(derive(ps)) == text);
+    // Still the trace kpu-sim writes today (`kpu-run --emit-l0-kernel`) -- the same staleness
+    // check the valued cases get, and it doubles as byte stability, so a format change fails
+    // here and forces the version question rather than being absorbed silently.
+    const TileProgram trace = trace_of("matmul_32x32x32_t16.csp");
+    CHECK(to_string(trace) == text);
 
     // And it executes once inputs are SYNTHESIZED -- which is `kpu-run --program ...
     // --fill-inputs`. Executing it as loaded would run on zeros and agree with any reference
@@ -322,7 +311,7 @@ TEST_CASE("the corpus's kernel case carries no values, and runs once they are sy
     const auto device = make_device(ds);
     // L-B, the level an L0 program runs at; the same program filled the same way in memory is
     // the reference.
-    TileProgram filled = kernel, fresh = derive(ps);
+    TileProgram filled = kernel, fresh = trace;
     fill_inputs(filled);
     fill_inputs(fresh);
     run_at(ExecutionLevel::Behavioral, filled, device, Placement::single(device.compute_tiles));
