@@ -149,6 +149,9 @@ guest by default, so the hole would open without anyone writing it:
 
 `PLACE` is the only way a tensor byte moves, and the memory map is what makes that true
 rather than merely intended.
+- **Amended by step 4d.2:** an operator's CSP program moves its tensor bytes, through the DMA,
+  and the device refuses a `PLACE`. The orchestrator still cannot touch a tensor byte, and the
+  memory map still enforces that.
 
 ### D5 — The call ABI
 
@@ -175,11 +178,16 @@ blocking operator), and readable text that names the operator.
 tiles an operator reads, and its peak live set), and completions. It may not read tile
 contents or any tensor element. The manifest is derived by the **device**, so the orchestrator
 never parses L0.
+- **Amended by step 4d.2:** a manifest carries the tiles the program reads, the tiles it
+  inherits and retains, and its declared L3 (`l3_slots`). The device derives them from the CSP
+  program, so the orchestrator never parses one.
 
 **Wire format.** The authoritative layout is `include/sw/kpu/orchestration/abi.hpp`. In
 summary:
 
-- ABI version 1.0, magic `KPULD` in the `ID` register.
+- ABI version 1.0, magic `KPULD` in the `ID` register. **Amended by step 4d.2:** version 2.0.
+  `MAN_L3_SLOTS` takes `MAN_PEAK_LIVE`'s offset, and `MAN_LIST` (0x130) selects which tile list
+  the manifest window shows: reads, inherits or retains.
 - 64-bit registers in a 4 KiB window, accessed as aligned 8-byte words.
 - 64-byte descriptor and completion records, little-endian and packed by hand.
 - Every field is an index, a count, an id or a flag. Names cross as indices into tables both
@@ -279,6 +287,8 @@ later operator holding the credits, and never hang.
   bus logs. Each check was confirmed to fail when its property is broken.
 - The minimum L3 is now the machine's, not the orchestrator's guess. For the three-GEMM chain
   it is 6 slots cold and 10 warm; increment 2's `|tiles to place|` check had reported 8 and 12.
+  **Amended by step 4d.2:** with CSP operators the minimum is 5 cold and 9 warm, which is each
+  program's declared L3 plus the four W tiles held across the gap.
 
 ### Negative and costs
 

@@ -258,6 +258,26 @@ TEST_CASE("the chain is checked at load: a held tile is never lost or misread",
         CHECK_THAT(why, ContainsSubstring("between"));
         CHECK_THAT(why, ContainsSubstring("has not stored"));
     }
+    SECTION("a tile stored, written again, then retained") {
+        // DRAM holds the value at the store and L3 a later one; a level reports only the later
+        // one, so writing the tile back would put a value in DRAM the program never stored.
+        Loadable l;
+        l.name = "store-then-write";
+        // X and W are unused; fill_inputs expects them.
+        l.tensors = {tensor("X", 0x1000, true), tensor("W", 0x2000, true), tensor("H", 0x3000, true),
+                     tensor("bias", 0x5000, true, {32}, {16})};
+        l.operators = {sw::kpu::loadable::csp_operator(
+            "twice", "csp 1.0\nprogram twice machine flat(l3 = 4) {\n"
+                     "  tensor C[32,32] tile 16x16 inout;\n  vector b[32] tile 16 in;\n"
+                     "  resident C[0, 0];\n  resident b[0];\n"
+                     "  call add(C[0, 0], b[0]) -> C[0, 0];\n  store C[0, 0];\n"
+                     "  call add(C[0, 0], b[0]) -> C[0, 0];\n"
+                     "  retain C[0, 0];\n  release b[0];\n}\n",
+            {"H", "bias"}, {})};
+        const std::string why = refusal(l);
+        CHECK_THAT(why, ContainsSubstring("twice"));
+        CHECK_THAT(why, ContainsSubstring("writes it again before retaining it"));
+    }
     SECTION("an operand tiled differently from its tensor") {
         Loadable l = two_gemms_sharing_weights(false);
         l.tensors[1].tile_shape = {8, 8};

@@ -233,16 +233,22 @@ void KpuDevice::check_chain() {
     std::size_t k = 0;
     for (; k < ops_.size() && ops_[k].manifest.valid; ++k) {
         Op& o = ops_[k];
-        // What this program writes and stores, by operand tile key.
-        std::set<std::string> written, stored;
+        // Each tile's state in PROGRAM ORDER, by operand tile key: a write makes it dirty, a
+        // store clean. An unordered "written / stored somewhere" would call a tile stored and then
+        // written again clean.
+        std::map<std::string, bool> dirty_now;
+        std::set<std::string> stored;
         std::map<std::string, TileRef> loaded;          // by tensor key
         lang::ActionStream s(o.ast);
         while (auto e = s.next()) {
             const auto& a = e->action;
-            if (a.kind == Kind::Writeback) written.insert(program::tile_key(a.tile));
+            if (a.kind == Kind::Writeback) dirty_now[program::tile_key(a.tile)] = true;
             if (a.kind == Kind::Call && e->op)
-                for (const auto& c : e->op->outputs) written.insert(program::tile_key(c));
-            if (a.kind == Kind::Store) stored.insert(program::tile_key(a.tile));
+                for (const auto& c : e->op->outputs) dirty_now[program::tile_key(c)] = true;
+            if (a.kind == Kind::Store) {
+                dirty_now[program::tile_key(a.tile)] = false;
+                stored.insert(program::tile_key(a.tile));
+            }
             if (a.kind == Kind::Load) {
                 const TileRef t{o.binding.at(a.tile.operand), a.tile.ti, a.tile.tj};
                 loaded.emplace(t.key(), t);
@@ -290,8 +296,20 @@ void KpuDevice::check_chain() {
                 break;
             }
             const std::string okey = program::tile_key(b.operand_tile);
-            const bool was_dirty = inherited_dirty.count(key) && inherited_dirty.at(key);
-            const bool dirty = !stored.count(okey) && (written.count(okey) || was_dirty);
+            const auto now = dirty_now.find(okey);
+            const bool dirty = now != dirty_now.end() ? now->second
+                                                      : inherited_dirty.count(key) && inherited_dirty.at(key);
+            // STORED, THEN WRITTEN AGAIN, THEN RETAINED: DRAM holds the value at the store, L3 a
+            // later one, and a level reports only the later one (its result is DRAM with the
+            // retained tiles laid over it). Writing the tile back would put the retained value in
+            // DRAM, a write the program never made, so the shape is refused until a level reports
+            // the value at each store.
+            if (dirty && stored.count(okey)) {
+                invalidate(k, "stores " + b.tensor_tile.str() + " and writes it again before retaining it: "
+                              "a level reports the retained value, not the stored one, so DRAM's copy "
+                              "cannot be written back");
+                break;
+            }
             held.emplace(key, Holder{k, dirty, b.operand_tile});
         }
         if (!o.manifest.valid) break;
