@@ -69,6 +69,16 @@ inline TileProgram trace_of(const csp::lang::Program& ast) { return *reference_o
 inline TileProgram trace_of(const csp::gen::Options& o) { return trace_of(program_of(o)); }
 inline TileProgram trace_of_file(const std::string& path) { return trace_of(program_of_file(path)); }
 
+// The program compiled to its action list (csp::CspProgram), on the inputs kpu-run synthesizes:
+// what an interpreter or the L-CA driver runs when it is handed the whole program.
+inline csp::CspProgram compiled(const csp::lang::Program& ast) {
+    csp::CspProgram p = csp::lang::compile(ast);
+    const TileProgram in = driver::csp_inputs(ast);
+    for (const auto& name : p.source.operand_order()) p.source.operand(name).values = in.operand(name).values;
+    return p;
+}
+inline csp::CspProgram compiled(const csp::gen::Options& o) { return compiled(program_of(o)); }
+
 // Every operand as L-B leaves it: the oracle.
 inline TileProgram lb_values(const csp::lang::Program& ast) { return *reference_of(ast).values; }
 inline TileProgram lb_values(const csp::gen::Options& o) { return lb_values(program_of(o)); }

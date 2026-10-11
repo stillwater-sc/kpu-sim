@@ -16,7 +16,16 @@ set_tests_properties(test_tile_program PROPERTIES
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}     # reads tests/program/csp/*.csp
 )
 
-# The CSP program, level 1: lowered from L0, run behaviorally (docs/plans/csp-program-tile-sequencing.md step 1)
+# Functional checks on tile contents: the format interpretation layer and the proximity bound
+kpu_add_component_test(test_tile_check "program"
+    test_tile_check.cpp
+)
+
+set_tests_properties(test_tile_check PROPERTIES
+    LABELS "program;tile_program;v0.9"
+)
+
+# The CSP program's compiled form, run behaviorally (docs/plans/csp-program-tile-sequencing.md step 1)
 kpu_add_component_test(test_csp_program "program"
     test_csp_program.cpp
 )
@@ -25,7 +34,7 @@ set_tests_properties(test_csp_program PROPERTIES
     LABELS "program;csp;v0.9"
 )
 
-# The CSP language: written programs, the validator, print and emit (docs/plans/csp-language.md step 1)
+# The CSP language: written programs, the validator, print (docs/plans/csp-language.md step 1)
 kpu_add_component_test(test_csp_language "program"
     test_csp_language.cpp
 )

@@ -169,6 +169,48 @@ scope here.
 takes it). Its naive value checks (`validate_matmul`, `validate_lu`) become a comparison with
 L-B's values for the same program (§3.2).
 
+### 3.8 Functional checks: tile contents, interpreted, within a proximity bound
+
+**Decided by the user (2026-10-11), at the start of PR 2.** A machine's functional behaviour has
+two parts, and they are checked differently:
+
+1. **The sequence of tile moves through the resources**: which tiles are loaded, moved, fed,
+   drained, written back, stored and released, by which process, and in what order. This is
+   structure, and it is checked **exactly**: DRAM load and store counts, credit order against
+   program order, every L3 credit returned.
+2. **The bits of the result.** Floating point is not associative, and a data path legitimately
+   reorders reductions and converts between formats (quantization, accumulator widths). So a
+   value check is made **on tile contents, through an interpretation layer**:
+   - the layer reads a tile's stored bits **in the format the program intends** (float32 today;
+     bf16, fp16, fp8 and the integer formats as the machine comes to carry them);
+   - each element is asserted to be **within a proximity bound** of the oracle's (L-B's) value
+     for the same tile;
+   - a failure names the operand, the tile, the first element out of bound, and the worst
+     absolute and relative error.
+
+The layer is `include/sw/kpu/program/tile_check.hpp`:
+- `ElementFormat` is the interpretation: the `DataType` the bits are meant as, and how a stored
+  element decodes. Operands store float32 today, so float32 is the one format decoded; any other
+  is refused by name until operands carry it, rather than checked as though it were float32.
+- `Proximity` is the bound, the ADR 0001 D5 comparator per element:
+  `|actual - oracle| <= atol + rtol * |oracle|`. `proximity_for(format)` gives the format's
+  default (float32: atol 1e-6, rtol 1e-4); a test states a looser one where its data path
+  justifies it.
+- `check_tiles(actual, oracle, operand, format, proximity)` walks the operand's tile grid
+  (clamped trailing tiles included) and returns a per-tile report.
+
+**WRONG:** `CHECK(r.values.operand("C").values == lb.result().operand("C").values)`, bit
+equality of whole operands as the functional bar.
+**CORRECT:** `CHECK(check_tiles(r.values, lb, "C").pass)`, plus exact checks of the move
+sequence.
+
+Scope:
+- **PR 2** uses the layer for every value check it writes or moves: `test_csp_driver`'s L-CA
+  tests and the `test_csp_program` tests that survive the lowering.
+- **PR 4** (proposed, §4 step 4, for review): the remaining value checks move to the layer.
+  These are kpu-run's level comparison, `run_csp`, and the CSP and platform suites. ADR 0001 D5
+  and the fidelity table in `CLAUDE.md` ("bit-identical to L-B") are amended to match.
+
 ## 4. Implementation Steps
 
 Three PRs, so each leaves the suite green and the derivation's users strictly fewer.
@@ -194,8 +236,12 @@ Three PRs, so each leaves the suite green and the derivation's users strictly fe
 2. **Retire `csp::lower` and `lang::emit`** (PR 2, Q1):
    - remove `test_csp_program.cpp` and the lowered-L0 tests in `test_csp_driver`, `test_csp_linear`
      and `test_csp_language`;
-   - move `test_csp_driver`'s L-CA assertions (values, DRAM loads, credit order, refusal messages)
-     onto generated programs at several L3 sizes;
+   - add `tile_check.hpp` (§3.8) and its unit test;
+   - move `test_csp_driver`'s L-CA assertions onto generated and written programs. Values are
+     checked per tile against L-B (§3.8). DRAM loads, stores, credit order and the refusal
+     messages are checked exactly;
+   - keep `test_csp_program`'s tests of the program form (process ownership, read-after-release
+     refusal, L-B values, LU load and store counts) on compiled programs;
    - delete `csp/lower.hpp` and `csp/lang/emit.hpp`, and reword the comment references
      (`csp_program.hpp`, `print.hpp`, `l0_format.hpp:307`).
 3. **Characterize, then delete** (PR 3):
@@ -203,6 +249,9 @@ Three PRs, so each leaves the suite green and the derivation's users strictly fe
    - delete `include/sw/kpu/program/derive/` and the `program_spec.hpp` retirements (§3.5);
    - update `CLAUDE.md`, ADR 0004 (a status note: the derivations retired), the corpus README's
      history line, the CHANGELOG and a session log.
+
+4. **Functional checks move to the tile layer** (PR 4, proposed, Q4): kpu-run, `run_csp`, the CSP
+   and platform suites; amend ADR 0001 D5 and the `CLAUDE.md` fidelity table.
 
 ## 5. Verification
 
@@ -213,8 +262,10 @@ Three PRs, so each leaves the suite green and the derivation's users strictly fe
   - Each migrated test keeps its assertion against the new source.
   - The PR description lists every assertion that is removed, with why: the lowering suite and the
     derivation-shape counts.
-  - Assertions are not weakened from bit-exact to tolerance anywhere they were bit-exact.
-    The one exception is LU, which was already compared by reconstruction and tolerance.
+  - Until PR 2, assertions were not weakened from bit-exact to tolerance anywhere they were
+    bit-exact; the one exception is LU, which was already compared by reconstruction and
+    tolerance. From PR 2, value checks move to the tile proximity layer by decision (§3.8), and
+    each PR lists the checks it moved.
 - **The corpus is untouched:** `test_l0_corpus` and `test_csp_corpus` pass with no regenerated file.
 - **Full suite** on all CI platforms, clang included: input conditioning is host-sensitive, as step
   5 showed.
@@ -229,6 +280,8 @@ Three PRs, so each leaves the suite green and the derivation's users strictly fe
 - No code turns an L0 into a program.
 - A test's oracle is L-B on the same program and inputs. It is never another L0 or another model.
 - A trace leaves kpu-sim only after its replay reproduces L-B bit for bit.
+- A functional value check is made per tile, through the format interpretation layer, within a
+  stated proximity bound. The sequence of tile moves is checked exactly.
 - Inputs are exact multiples of 1/8, and an operand factored in place is strictly dominant.
 
 ## 7. Questions
@@ -245,3 +298,12 @@ Three PRs, so each leaves the suite green and the derivation's users strictly fe
 - **Q3. The stream layer (`StreamProgram`, `derive_matmul_streams`)?**
   - **Decided: keep it**, as the characterizer's analytical model, applied to traces (§3.6).
   - Whether the systolic L1 model should survive is a separate question.
+- **Q4. How far do functional checks move to the tile layer, and does anything stay bit-exact?**
+  - **Recommended:** every check of a level's values against L-B moves to the tile layer (PR 4).
+    The trace's replay validation (§3.2) stays bit-exact. It is not a functional check of the
+    machine. It checks that a trace records the run it came from: the same kernels in the same
+    order on the same inputs. Any difference there means the trace is wrong, not that the data
+    path rounded differently.
+  - **For review:** whether L-T1 against L-B, which today is bit-identical by construction,
+    keeps an additional bit-exact assertion as a determinism check, or is held only to the
+    proximity bound.

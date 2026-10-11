@@ -5,7 +5,7 @@
 //
 // It checks the program as much as it runs it. A tile an action reads must be where the program
 // says it is: a Move of a tile not resident in L3, a Feed of one not in L2, a Call on an operand
-// the fabric does not hold, or any read of a released tile, is a lowering bug, reported by name.
+// the fabric does not hold, or any read of a released tile, is a program bug, reported by name.
 // Calls run the shared L0 kernels (tile_kernels.hpp), so a correct program reproduces the L0
 // reference bit for bit.
 //

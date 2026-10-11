@@ -4,7 +4,7 @@
 // validate, compile to the CSP program IR, print back exactly, and compute what L-B computes
 // for kpu-csp-gen's program of the same operator, bit for bit, on the same inputs (L-B is the
 // oracle: docs/plans/retire-l0-derivations.md §3.2); the validator refuses each class of error by
-// line; derived L0 is emitted as text (retires with lang::emit, PR 2 of that plan).
+// line. An L0 is never turned back into a program: it is a program's trace.
 //
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2024-2025 Stillwater Supercomputing, Inc.
@@ -15,10 +15,7 @@
 
 #include <sw/kpu/program/csp/behavioral.hpp>
 #include <sw/kpu/program/csp/lang/compile.hpp>
-#include <sw/kpu/program/csp/lang/emit.hpp>
 #include <sw/kpu/program/csp/lang/print.hpp>
-#include <sw/kpu/program/driver/program_spec.hpp>
-#include <sw/kpu/program/tile_program_reference.hpp>
 
 #include "trace_fixtures.hpp"
 
@@ -98,14 +95,6 @@ program lu machine flat(l3 = 16) {
 }
 )";
 
-driver::ProgramSpec spec(const std::string& algo, Dim size, Dim tile) {
-    driver::ProgramSpec s;
-    s.algo = algo;
-    s.size = size;
-    s.tile = tile;
-    return s;
-}
-
 // The written program, run at L-B on its synthesized inputs (csp_inputs), through the compiled
 // action list: the operand `out` as it leaves it.
 std::vector<float> run_lb(CspProgram p, const std::string& src, const std::string& out) {
@@ -124,18 +113,6 @@ void check_values(const CspProgram& p, const std::string& src, const trace_fixtu
     const auto got = run_lb(p, src, out);
     CHECK(got == trace_fixtures::lb_values(lang::parse(src)).operand(out).values);
     CHECK(got == trace_fixtures::lb_values(o).operand(out).values);
-}
-
-// The emitted program's values against the derived program's L0 reference. Only the emission
-// test uses it; both retire with lang::emit (retire-l0-derivations PR 2).
-void check_values_derived(CspProgram p, const driver::ProgramSpec& s, const std::string& out) {
-    driver::fill(p.source, s);
-    TileProgram ref = driver::derive(s);
-    driver::fill(ref, s);
-    TileProgramReference().run(ref);
-    BehavioralInterpreter lb;
-    lb.run(p);
-    CHECK(lb.result().operand(out).values == ref.operand(out).values);
 }
 
 std::size_t count(const CspProgram& p, Action::Kind k) {
@@ -201,28 +178,6 @@ TEST_CASE("CSP language: print and compile reproduce a program exactly", "[progr
         const CspProgram q = lang::compile(text);
         CHECK(same_actions(p, q));
         CHECK(lang::print(q) == text);                    // the printed form is a fixed point
-    }
-}
-
-TEST_CASE("CSP language: derived L0 is emitted as a program that compiles and computes the reference",
-          "[program][csp][lang]") {
-    for (std::size_t cap : {std::size_t{128}, std::size_t{16}, std::size_t{4}}) {
-        CAPTURE(cap);
-        const auto s = spec("matmul", 128, 32);
-        TileProgram l0 = driver::derive(s);
-        const std::string text = lang::emit(l0, cap, "matmul");
-        const CspProgram p = lang::compile(text);
-        CHECK(p.reuse().peak_l3 <= cap);
-        if (cap >= 32) CHECK(p.reuse().reloads == 0);      // all 32 input tiles fit
-        check_values_derived(p, s, "C");
-    }
-    for (std::size_t cap : {std::size_t{16}, std::size_t{4}}) {
-        CAPTURE(cap);
-        const auto s = spec("lu", 64, 16);
-        const std::string text = lang::emit(driver::derive(s), cap, "lu");
-        const CspProgram p = lang::compile(text);
-        CHECK(p.reuse().peak_l3 <= cap);
-        check_values_derived(p, s, "A");
     }
 }
 

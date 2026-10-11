@@ -20,11 +20,8 @@
 
 #include <sw/kpu/program/csp/behavioral.hpp>
 #include <sw/kpu/program/csp/lang/compile.hpp>
-#include <sw/kpu/program/csp/lang/emit.hpp>
 #include <sw/kpu/program/csp/lang/print.hpp>
 #include <sw/kpu/program/csp/lang/validate.hpp>
-#include <sw/kpu/program/csp/lower.hpp>
-#include <sw/kpu/program/driver/program_spec.hpp>
 #include <sw/kpu/program/platform/deployment_json.hpp>
 #include <sw/kpu/program/serialize/l0_format.hpp>
 #include <sw/kpu/program/tile_program_reference.hpp>
@@ -54,25 +51,6 @@ TileProgram linear_trace(ActivationFn act) { return trace_fixtures::trace_of(lin
 // What L-B computes for it: the oracle every written linear program of this shape must equal.
 std::vector<float> linear_oracle(ActivationFn act) {
     return trace_fixtures::lb_values(linear_gen(act)).operand("C").values;
-}
-
-// The derived linear operator (128^3 in 32 x 32 tiles), its inputs filled, before the run. Only
-// the lowering test uses it; both retire with csp::lower (retire-l0-derivations PR 2).
-TileProgram linear_inputs(ActivationFn act) {
-    driver::ProgramSpec s;
-    s.algo = "linear";
-    s.size = 128;
-    s.tile = 32;
-    s.act = act;
-    TileProgram p = driver::derive(s);
-    driver::fill(p, s);
-    return p;
-}
-
-TileProgram linear_reference(ActivationFn act) {
-    TileProgram p = linear_inputs(act);
-    TileProgramReference().run(p);
-    return p;
 }
 
 // The written linear operator. `via` is the store's context; `unfused` (if set) is the
@@ -214,22 +192,6 @@ TEST_CASE("Linear: the epilogue ops serialize, opset 1.1.0", "[program][csp][lin
     std::string bad_act = text;
     bad_act.replace(bad_act.find(" act=silu"), 9, " act=tanh");
     CHECK_THROWS_WITH(serialize::from_string(bad_act), ContainsSubstring("act=tanh: relu, gelu, silu or atan"));
-}
-
-TEST_CASE("Linear: the lowered L0 runs at L-B -- the reference, bit for bit", "[program][csp][linear]") {
-    for (ActivationFn act : {ActivationFn::Relu, ActivationFn::Atan}) {
-        CAPTURE(to_string(act));
-        const TileProgram in = linear_inputs(act);
-        for (std::size_t cap : {8u, 64u}) {
-            const csp::CspProgram p = csp::lower(in, {cap});
-            csp::BehavioralInterpreter lb;
-            lb.run(p);
-            CHECK(lb.result().operand("C").values == linear_reference(act).operand("C").values);
-        }
-    }
-    // The emitter does not choose a placement for the epilogue: the program is written.
-    CHECK_THROWS_WITH(lang::emit(linear_inputs(ActivationFn::Relu), 64),
-                      ContainsSubstring("placed by a tile context"));
 }
 
 TEST_CASE("Linear: every placement of the epilogue, and none, computes what L-B computes for kpu-csp-gen's",

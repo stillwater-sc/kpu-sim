@@ -1,8 +1,15 @@
 // ============================================================================
 // tests/timing/test_csp_driver.cpp
 // L-CA from the CSP program (docs/plans/csp-program-tile-sequencing.md step 2): the cycle-level
-// executor runs the program's actions, process by process -- no ScheduleResult, no generator --
-// and computes the L0 reference's values, with exactly the program's DRAM loads.
+// executor runs the program's actions, process by process -- no ScheduleResult, no generator.
+//
+// Two checks, made differently (docs/plans/retire-l0-derivations.md §3.8):
+//   the sequence of tile moves   exactly: the program's DRAM loads and stores, the DMA's credit
+//                                order, every L3 credit returned
+//   the bits of the result       per tile, read as float32, within the proximity bound of L-B's
+//                                values for the same program (check_tiles)
+//
+// The programs are written (kpu-csp-gen, or by hand), on the inputs kpu-run synthesizes.
 //
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2024-2025 Stillwater Supercomputing, Inc.
@@ -11,16 +18,15 @@
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_string.hpp>
 
-#include <sw/kpu/program/csp/behavioral.hpp>
 #include <sw/kpu/program/csp/lang/compile.hpp>
-#include <sw/kpu/program/csp/lower.hpp>
-#include <sw/kpu/program/driver/program_spec.hpp>
 #include <sw/kpu/program/platform/deployment_json.hpp>
-#include <sw/kpu/program/tile_program_reference.hpp>
+#include <sw/kpu/program/tile_check.hpp>
 #include <sw/kpu/timing/csp_config_from_spec.hpp>
 #include <sw/kpu/timing/csp_driver.hpp>
 #include <sw/kpu/timing/schedule/matmul_schedule_generator.hpp>
 #include <sw/kpu/timing/schedule/schedule_executor.hpp>
+
+#include "../program/trace_fixtures.hpp"
 
 #include <algorithm>
 #include <cstdio>
@@ -30,26 +36,30 @@
 using namespace sw::kpu::timing;
 namespace csp = sw::kpu::program::csp;
 using sw::kpu::program::TileProgram;
-using sw::kpu::program::TileProgramReference;
+using sw::kpu::program::check_tiles;
 using sw::kpu::program::platform::read_spec_file;
 using Catch::Matchers::ContainsSubstring;
 
 namespace {
 
-TileProgram matmul(sw::kpu::program::Dim size, sw::kpu::program::Dim tile) {
-    sw::kpu::program::driver::ProgramSpec s;
-    s.algo = "matmul";
-    s.size = size;
-    s.tile = tile;
-    TileProgram p = sw::kpu::program::driver::derive(s);
-    sw::kpu::program::driver::fill(p, s);
-    return p;
-}
-
 ConcurrentTimingExecutor::Config machine(const char* file) {
     auto c = csp_config_from(read_spec_file(std::string("tests/program/deploy/") + file).device(0))->config;
     c.max_cycles = 5'000'000;
     return c;
+}
+
+// kpu-csp-gen's matmul, column panels unless asked otherwise.
+csp::gen::Options matmul(sw::kpu::program::Dim size, sw::kpu::program::Dim tile, const char* orient = "col") {
+    csp::gen::Options o = trace_fixtures::gen("matmul", size, tile);
+    o.orient = orient;
+    return o;
+}
+
+// C at L-CA, tile by tile, against L-B's C for the same program.
+void check_c(const TileProgram& lca, const TileProgram& lb) {
+    const auto c = check_tiles(lca, lb, "C");
+    CAPTURE(c.summary());
+    CHECK(c.pass);
 }
 
 // A written matmul (docs/plans/csp-language.md step 1), 128^3 in 32 x 32 tiles: A held whole,
@@ -74,35 +84,25 @@ program matmul machine flat(l3 = 128) {
 }
 )";
 
-TileProgram reference_matmul(sw::kpu::program::Dim size, sw::kpu::program::Dim tile) {
-    TileProgram ref = matmul(size, tile);
-    TileProgramReference().run(ref);
-    return ref;
-}
-
 }  // namespace
 
-TEST_CASE("CSP driver: S1 runs the program at L-CA -- the reference's values, the program's loads",
+TEST_CASE("CSP driver: S1 runs a written program at L-CA -- L-B's values, the program's loads",
           "[timing][csp][driver]") {
-    const TileProgram l0 = matmul(256, 32);
+    const auto o = matmul(256, 32);
+    const csp::CspProgram p = trace_fixtures::compiled(o);
     const auto cfg = machine("kpu_s1.json");
-    const csp::CspProgram p = csp::lower(l0, {cfg.l3_buffer_count});
     ConcurrentTimingExecutor exec(cfg);
     CspDriver driver(exec, p);
     const auto r = driver.run();
     REQUIRE(r.completed);
     CHECK_FALSE(r.livelock);
 
-    TileProgram ref = l0;
-    TileProgramReference().run(ref);
-    CHECK(r.values.operand("C").values == ref.operand("C").values);          // bit for bit
-    csp::BehavioralInterpreter lb;
-    lb.run(p);
-    CHECK(r.values.operand("C").values == lb.result().operand("C").values);  // L-B == L-CA
+    check_c(r.values, trace_fixtures::lb_values(o));
 
     // Reuse is the program's: the executor read DRAM exactly as often as the program loads.
+    // Column panels: B's 64 tiles once, A's row panel (8 tiles) once per (j, i): 64 + 512.
     CHECK(r.dram_loads == p.reuse().loads);
-    CHECK(r.dram_loads == 128);
+    CHECK(r.dram_loads == 576);
     CHECK(r.dram_stores == 64);
     CHECK(exec.l3_credits_available() == cfg.l3_buffer_count);              // every slot came home
     Cycle last_load = 0, first_compute = ~Cycle{0}, last_feed = 0, last_move = 0;
@@ -112,25 +112,12 @@ TEST_CASE("CSP driver: S1 runs the program at L-CA -- the reference's values, th
         if (e.type == EventType::STR_FEED_COMPLETE) last_feed = std::max(last_feed, e.cycle + e.duration);
         if (e.type == EventType::BM_MOVE_COMPLETE) last_move = std::max(last_move, e.cycle + e.duration);
     }
-    std::printf("csp driver S1 256^3/32^3: %llu cycles, %zu DRAM loads (generator path: 36,668 cycles, 128); "
+    std::printf("csp driver S1 256^3/32^3 (kpu-csp-gen, col): %llu cycles, %zu DRAM loads; "
                 "last load %llu, first compute %llu, last move %llu, last feed %llu, cf busy %llu\n",
                 static_cast<unsigned long long>(r.cycles), r.dram_loads, static_cast<unsigned long long>(last_load),
                 static_cast<unsigned long long>(first_compute), static_cast<unsigned long long>(last_move),
                 static_cast<unsigned long long>(last_feed),
                 static_cast<unsigned long long>(exec.compute_tile_busy_cycles(0)));
-    {
-        Cycle first_store = ~Cycle{0}, last_store = 0, last_compute = 0, first_drain = ~Cycle{0}, first_wb = ~Cycle{0};
-        for (const auto& e : exec.events()) {
-            if (e.type == EventType::DMA_STORE_COMPLETE) { first_store = std::min(first_store, e.cycle); last_store = std::max(last_store, e.cycle + e.duration); }
-            if (e.type == EventType::COMPUTE_COMPLETE) last_compute = std::max(last_compute, e.cycle + e.duration);
-            if (e.type == EventType::STR_DRAIN_COMPLETE) first_drain = std::min(first_drain, e.cycle);
-            if (e.type == EventType::BM_WRITEBACK_COMPLETE) first_wb = std::min(first_wb, e.cycle);
-        }
-        std::printf("  first drain %llu, first writeback %llu, first store %llu, last store %llu, last compute %llu\n",
-                    static_cast<unsigned long long>(first_drain), static_cast<unsigned long long>(first_wb),
-                    static_cast<unsigned long long>(first_store), static_cast<unsigned long long>(last_store),
-                    static_cast<unsigned long long>(last_compute));
-    }
     auto st = exec.get_statistics();
     std::printf("  stalls: dma credit %llu, bm tag %llu bm credit %llu, str tag %llu str credit %llu\n",
                 static_cast<unsigned long long>(st.dma_credit_stalls), static_cast<unsigned long long>(st.bm_tag_stalls),
@@ -138,32 +125,35 @@ TEST_CASE("CSP driver: S1 runs the program at L-CA -- the reference's values, th
                 static_cast<unsigned long long>(st.str_credit_stalls));
 }
 
-TEST_CASE("CSP driver: a tighter program's reloads are the executor's DRAM reads, one for one",
+TEST_CASE("CSP driver: a program's loads are the executor's DRAM reads, one for one, whatever its reuse",
           "[timing][csp][driver]") {
-    const TileProgram l0 = matmul(128, 32);
     const auto cfg = machine("kpu_s1.json");
-    for (std::size_t cap : {std::size_t{4}, std::size_t{8}, std::size_t{16}}) {
-        CAPTURE(cap);
-        const csp::CspProgram p = csp::lower(l0, {cap});
-        REQUIRE(p.reuse().reloads > 0);
+    // Three schedules of one matmul: A held whole (no reloads), and column and row panels, which
+    // reload the panel they do not hold.
+    struct Case { const char* name; csp::lang::Program ast; };
+    const std::vector<Case> cases = {{"written, A whole", csp::lang::parse(kWrittenMatmul)},
+                                     {"kpu-csp-gen col", trace_fixtures::program_of(matmul(128, 32, "col"))},
+                                     {"kpu-csp-gen row", trace_fixtures::program_of(matmul(128, 32, "row"))}};
+    for (const Case& c : cases) {
+        CAPTURE(c.name);
+        const csp::CspProgram p = trace_fixtures::compiled(c.ast);
         ConcurrentTimingExecutor exec(cfg);
         const auto r = CspDriver(exec, p).run();
         REQUIRE(r.completed);
         CHECK(r.dram_loads == p.reuse().loads);
-        TileProgram ref = l0;
-        TileProgramReference().run(ref);
-        CHECK(r.values.operand("C").values == ref.operand("C").values);
-        std::printf("csp driver S1 128^3/32^3, program L3 %2zu: %llu cycles, %zu DRAM loads\n", cap,
-                    static_cast<unsigned long long>(r.cycles), r.dram_loads);
+        CHECK(r.dram_stores == p.reuse().stores);
+        CHECK(exec.l3_credits_available() == cfg.l3_buffer_count);
+        if (std::string(c.name) != "written, A whole") CHECK(p.reuse().reloads > 0);
+        check_c(r.values, trace_fixtures::lb_values(c.ast));
+        std::printf("csp driver S1 128^3/32^3, %s: %llu cycles, %zu DRAM loads (%zu reloads)\n", c.name,
+                    static_cast<unsigned long long>(r.cycles), r.dram_loads, p.reuse().reloads);
     }
 }
 
 TEST_CASE("CSP driver: the dma process takes its credits in program order",
           "[timing][csp][driver]") {
-    const TileProgram l0 = matmul(128, 32);
-    const auto cfg = machine("kpu_s1.json");
-    const csp::CspProgram p = csp::lower(l0, {8});
-    ConcurrentTimingExecutor exec(cfg);
+    const csp::CspProgram p = trace_fixtures::compiled(matmul(128, 32));
+    ConcurrentTimingExecutor exec(machine("kpu_s1.json"));
     REQUIRE(CspDriver(exec, p).run().completed);
     std::vector<TileID> program_order, credit_order;
     for (const auto& a : p.actions)
@@ -178,22 +168,26 @@ TEST_CASE("CSP driver: the dma process takes its credits in program order",
         if (e.type == EventType::CREDIT_ACQUIRED && e.component_name.rfind("DMA", 0) == 0 &&
             e.tile_id.matrix != sw::kpu::isa::MatrixID::C)
             credit_order.push_back(e.tile_id);
+    REQUIRE_FALSE(program_order.empty());
     CHECK(credit_order == program_order);
 }
 
-TEST_CASE("CSP driver: a program not lowered for this machine is refused by name",
+TEST_CASE("CSP driver: a program not written for this machine is refused by name",
           "[timing][csp][driver]") {
-    const TileProgram l0 = matmul(64, 32);
     SECTION("more L3 than the machine has, or an unbounded one") {
         ConcurrentTimingExecutor exec(machine("kpu_s1.json"));
-        const csp::CspProgram big = csp::lower(l0, {4096});
-        CHECK_THROWS_WITH(CspDriver(exec, big), ContainsSubstring("lowered for an L3 of 4096 tiles"));
-        const csp::CspProgram unbounded = csp::lower(l0, {0});
+        csp::gen::Options o = matmul(64, 32);
+        o.l3 = 4096;
+        const csp::CspProgram big = trace_fixtures::compiled(o);
+        CHECK_THROWS_WITH(CspDriver(exec, big), ContainsSubstring("written for an L3 of 4096 tiles"));
+        csp::CspProgram unbounded = trace_fixtures::compiled(matmul(64, 32));
+        unbounded.channels.at(static_cast<std::size_t>(csp::Chan::L3)).capacity = 0;
         CHECK_THROWS_WITH(CspDriver(exec, unbounded), ContainsSubstring("unbounded size"));
     }
     SECTION("a machine with several L3 tiles is level 2's") {
         ConcurrentTimingExecutor exec(machine("kpu_t4.json"));
-        CHECK_THROWS_WITH(CspDriver(exec, csp::lower(l0, {8})), ContainsSubstring("level 2 distributes"));
+        CHECK_THROWS_WITH(CspDriver(exec, trace_fixtures::compiled(matmul(64, 32))),
+                          ContainsSubstring("level 2 distributes"));
     }
 }
 
@@ -235,8 +229,7 @@ TEST_CASE("CSP driver: with the DMA burst window on (characterization)", "[timin
     using namespace sw::kpu::timing::schedule;
     auto cfg = machine("kpu_s1.json");
     cfg.dma_window = 32;
-    const TileProgram l0 = matmul(256, 32);
-    const csp::CspProgram p = csp::lower(l0, {cfg.l3_buffer_count});
+    const csp::CspProgram p = trace_fixtures::compiled(matmul(256, 32));
     ConcurrentTimingExecutor e1(cfg);
     const auto r = CspDriver(e1, p).run();
     REQUIRE(r.completed);
@@ -252,18 +245,14 @@ TEST_CASE("CSP driver: with the DMA burst window on (characterization)", "[timin
 }
 
 TEST_CASE("CSP driver: a WRITTEN program runs at L-CA -- its values, its loads", "[timing][csp][driver][lang]") {
-    // The CSP language (docs/plans/csp-language.md step 1): a program someone wrote, not one
-    // derived. A held whole, B's column panel per j: 16 + 16 loads, as written.
-    csp::CspProgram p = csp::lang::compile(kWrittenMatmul);
-    sw::kpu::program::driver::ProgramSpec spec;
-    spec.algo = "matmul";
-    spec.size = 128;
-    spec.tile = 32;
-    sw::kpu::program::driver::fill(p.source, spec);
+    // The CSP language (docs/plans/csp-language.md step 1): a program someone wrote by hand.
+    // A held whole, B's column panel per j: 16 + 16 loads, as written.
+    const csp::lang::Program ast = csp::lang::parse(kWrittenMatmul);
+    const csp::CspProgram p = trace_fixtures::compiled(ast);
     ConcurrentTimingExecutor exec(machine("kpu_s1.json"));
     const auto r = CspDriver(exec, p).run();
     REQUIRE(r.completed);
-    CHECK(r.values.operand("C").values == reference_matmul(128, 32).operand("C").values);
+    check_c(r.values, trace_fixtures::lb_values(ast));
     CHECK(r.dram_loads == p.reuse().loads);
     CHECK(r.dram_loads == 32);
     std::printf("csp driver, written matmul 128^3/32^3 on S1: %llu cycles, %zu DRAM loads\n",
@@ -275,12 +264,12 @@ TEST_CASE("CSP driver: the STREAM runs at L-CA -- the trace's cycles, in a bound
     // docs/plans/csp-language.md step 1c.2: the structured program executes at L-CA without
     // its trace. The driver pulls actions as the executor's backlog allows; L3 entries are
     // retired by the program's Releases, so nothing needs lookahead.
-    TileProgram inputs = matmul(128, 32);
-    const TileProgram ref = reference_matmul(128, 32);
+    const csp::lang::Program ast = csp::lang::parse(kWrittenMatmul);
+    const TileProgram inputs = sw::kpu::program::driver::csp_inputs(ast);
+    const TileProgram ref = trace_fixtures::lb_values(ast);
     const auto cfg = machine("kpu_s1.json");
 
-    csp::CspProgram trace = csp::lang::compile(kWrittenMatmul);
-    for (const char* name : {"A", "B"}) trace.source.operand(name).values = inputs.operand(name).values;
+    const csp::CspProgram trace = trace_fixtures::compiled(ast);
     ConcurrentTimingExecutor e0(cfg);
     const auto t = CspDriver(e0, trace).run();
     REQUIRE(t.completed);
@@ -293,7 +282,7 @@ TEST_CASE("CSP driver: the STREAM runs at L-CA -- the trace's cycles, in a bound
         CHECK(r.cycles == t.cycles);
         CHECK(r.actions == trace.actions.size());
         CHECK(r.dram_loads == t.dram_loads);
-        CHECK(r.values.operand("C").values == ref.operand("C").values);
+        check_c(r.values, ref);
     }
     SECTION("a window bounds what the driver holds; values and loads do not change") {
         for (const std::size_t w : {1u, 2u, 4u, 16u, 64u, 256u}) {
@@ -305,7 +294,7 @@ TEST_CASE("CSP driver: the STREAM runs at L-CA -- the trace's cycles, in a bound
             CHECK(r.actions == trace.actions.size());
             CHECK(r.peak_held <= w + 1);        // one pull hands over at most one more
             CHECK(r.dram_loads == 32);
-            CHECK(r.values.operand("C").values == ref.operand("C").values);
+            check_c(r.values, ref);
             CHECK(r.cycles >= t.cycles);
             std::printf("csp driver, streamed matmul 128^3/32^3 on S1, window %2zu: %llu cycles (trace %llu)\n", w,
                         static_cast<unsigned long long>(r.cycles), static_cast<unsigned long long>(t.cycles));
@@ -314,7 +303,9 @@ TEST_CASE("CSP driver: the STREAM runs at L-CA -- the trace's cycles, in a bound
     SECTION("the inputs must be the operands the program declares") {
         csp::lang::ActionStream s(csp::lang::parse(kWrittenMatmul));
         ConcurrentTimingExecutor e(cfg);
-        CHECK_THROWS_WITH(CspDriver(e, s, matmul(64, 32)), ContainsSubstring("not the shape the program declares"));
+        CHECK_THROWS_WITH(CspDriver(e, s, sw::kpu::program::driver::csp_inputs(
+                                             trace_fixtures::program_of(matmul(64, 32)))),
+                          ContainsSubstring("not the shape the program declares"));
     }
 }
 
