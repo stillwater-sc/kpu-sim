@@ -9,9 +9,8 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <sw/kpu/program/tile_dependencies.hpp>
-#include <sw/kpu/program/derive/lu_tile_program.hpp>
-#include <sw/kpu/program/derive/matmul_tile_program.hpp>
 #include <sw/kpu/program/characterize/tile_dag.hpp>
+#include "trace_fixtures.hpp"
 
 #include <algorithm>
 #include <stdexcept>
@@ -19,6 +18,8 @@
 
 using namespace sw::kpu::program;
 using namespace sw::kpu::program::characterize;
+using trace_fixtures::gen;
+using trace_fixtures::trace_of;
 
 namespace {
 
@@ -34,7 +35,7 @@ std::size_t count_kind(const TileDependencies& d, TileDepKind kind) {
 }
 
 // A two-panel LU-shaped program that REUSES pivot slot 0 for both panels. The
-// derivations in-tree use a unique slot per panel, so this is the case the
+// LU traces kpu-csp-gen writes use a unique slot per panel, so this is the case the
 // anti-dependency edges exist for, constructed explicitly.
 TileProgram slot_reusing_program() {
     TileProgram prog("slot reuse");
@@ -58,7 +59,7 @@ TileProgram slot_reusing_program() {
 
 TEST_CASE("tile hazards are recovered from declared tile I/O", "[program][deps]") {
     // C[0,0] accumulates over two K-slices, so the second must follow the first.
-    TileProgram prog = derive_matmul_tile_program(32, 32, 32, 16, 16, 16);
+    TileProgram prog = trace_of(gen("matmul", 32, 16));
     const TileDependencies d = build_tile_dependencies(prog);
 
     REQUIRE(d.op_count() == prog.ops().size());
@@ -107,13 +108,13 @@ TEST_CASE("tile hazards are recovered from declared tile I/O", "[program][deps]"
 }
 
 TEST_CASE("pivot-slot dataflow is recovered for LU", "[program][deps]") {
-    TileProgram prog = derive_lu_tile_program(64, 32);
+    TileProgram prog = trace_of(gen("lu", 64, 32));
     const TileDependencies d = build_tile_dependencies(prog);
 
     // GETRF -> LASWP on the same slot is the data-dependent control edge.
     CHECK(count_kind(d, TileDepKind::PivotRaw) > 0);
 
-    SECTION("the in-tree derivation assigns each slot once, so no slot anti-deps arise") {
+    SECTION("kpu-csp-gen's LU assigns each slot once, so no slot anti-deps arise") {
         CHECK(d.pivot_slots_single_assignment());
         CHECK(d.reused_pivot_slots().empty());
         CHECK(count_kind(d, TileDepKind::PivotWar) == 0);
@@ -155,7 +156,7 @@ TEST_CASE("pivot-slot reuse is ordered by anti-dependencies", "[program][deps]")
 }
 
 TEST_CASE("dependency diagnosis explains why an op is blocked", "[program][deps]") {
-    TileProgram prog = derive_lu_tile_program(64, 32);
+    TileProgram prog = trace_of(gen("lu", 64, 32));
     const TileDependencies d = build_tile_dependencies(prog);
 
     std::vector<bool> completed(d.op_count(), false);
@@ -191,7 +192,7 @@ TEST_CASE("dependency diagnosis explains why an op is blocked", "[program][deps]
 TEST_CASE("TileDag reuses the shared dependency model", "[program][deps][characterize]") {
     // One recovery, not two: the analysis must not disagree with the executor
     // about what is legal.
-    TileProgram prog = derive_lu_tile_program(64, 32);
+    TileProgram prog = trace_of(gen("lu", 64, 32));
     TileDag dag(prog, DeviceDescriptor::single());
     const TileDependencies& d = dag.dependencies();
 

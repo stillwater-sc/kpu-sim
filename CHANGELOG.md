@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **L-B is the oracle, and the one place a CSP program becomes an L0** (retire-l0-derivations
+  PR 1). L-T1, L-T2 and L-CA refine the behavioral model, so every level answers to L-B's values.
+  - The walker's L0 ops ride on the `ActionStream` with their action (`Emission::l0`), and
+    `BehavioralInterpreter` records them when asked (`begin(operands, true)`, `trace()`).
+  - `csp_reference` runs L-B: its values are the oracle for every program, however large.
+    `--trace-limit` now bounds only the trace. The trace is validated by replaying it with
+    `TileProgramReference`; one that does not reproduce L-B bit for bit is never emitted, and
+    kpu-run fails (`CspReference::replay_mismatch`).
+  - kpu-run prints `oracle L-B, N actions; L0 trace of M ops, replayed bit-exact`, and compares
+    every level against L-B. `--emit-l0-result` now works past the trace limit.
+    `kpu_run_csp_emit_needs_an_authority` became `kpu_run_csp_emit_l0_needs_a_trace`.
+  - The corpus is unchanged, byte for byte: the trace L-B records is the one `compile` produced.
+- **Test fixtures are L-B traces** (`tests/program/trace_fixtures.hpp`), not C++ derivations,
+  with hand-written rectangular-tile programs in `tests/program/csp/`. The tests that used the
+  derivation's values as a second oracle compare against L-B.
+
 ### Removed
 
 - **`--algo` and the device flags leave kpu-run** (kpu-run-csp-programs step 5). kpu-run is the

@@ -1,0 +1,20 @@
+csp 1.0
+// hand-written fixture: matmul C = A . B with rectangular tiles that divide the operands evenly
+// (6x4x8 in Ti=2, Tj=2, Tk=4). kpu-csp-gen writes square tiles only.
+program matmul_6x4x8 machine flat(l3 = 5) {
+  tensor A[6,8] tile 2x4 in;
+  tensor B[8,4] tile 4x2 in;
+  tensor C[6,4] tile 2x2 out;
+  for j in 0..2 {
+    resident B[:, j];
+    for i in 0..3 {
+      resident A[i, :];
+      acc C[i, j] in fabric {
+        for k in 0..2 { call gemm(A[i, k], B[k, j]) +-> C[i, j]; }
+      }
+      store C[i, j];
+      release A[i, :];
+    }
+    release B[:, j];
+  }
+}

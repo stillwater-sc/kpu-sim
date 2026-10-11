@@ -22,7 +22,8 @@ second source.
 `test_csp_corpus` runs each program through the virtual platform on
 `tests/program/deploy/kpu_s1.json` at L-B, L-T1 and L-CA, and asserts the reason where L-CA is
 refused (LU). It makes the two claims below: within tolerance of the recorded result across
-machines, and bit-identical to the program's own L0 oracle on one machine.
+machines, and bit-identical to L-B, the oracle, on one machine (L-B also writes the trace, and its replay
+must reproduce L-B before it is written).
 
 | CSP program | inputs / results |
 |---|---|

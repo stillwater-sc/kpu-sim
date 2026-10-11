@@ -49,7 +49,16 @@ public:
 
     // The same, one action at a time (a program's ActionStream: lang/walk.hpp). `operands`
     // carries the values; a Call's tile function travels with its action.
-    void begin(const TileProgram& operands) {
+    //
+    // With `record`, L-B keeps the trace of what it executes: the operands with their input
+    // values, and every L0 op an action carries (step's `l0`), in the order it ran them. That is
+    // the program's L0 (ADR 0004 §4): L-B is the oracle, and the one place a CSP program becomes
+    // an L0. Off by default: a large program streams, and its trace would not fit.
+    void begin(const TileProgram& operands, bool record = false) {
+        recording_ = record;
+        trace_ = TileProgram(operands.name());
+        if (record)
+            for (const auto& name : operands.operand_order()) trace_.add_operand(operands.operand(name));
         work_ = operands;
         state_ = TileKernelState{};
         for (auto& s : store_) s.clear();
@@ -64,7 +73,9 @@ public:
         }
     }
 
-    void step(const Action& a, const TileOp* call_op) {
+    void step(const Action& a, const TileOp* call_op, const std::vector<TileOp>* l0 = nullptr) {
+        if (recording_ && l0)
+            for (const TileOp& op : *l0) trace_.push(op);
         const std::string k = a.tile.to_string();
         const std::size_t i = sum_.actions;
         auto where = [&](std::size_t idx) {
@@ -136,6 +147,9 @@ public:
     // The operands as DRAM holds them after run().
     const TileProgram& result() const { return work_; }
 
+    // The trace begin(..., true) recorded: the operands on their inputs, and the ops L-B ran.
+    const TileProgram& trace() const { return trace_; }
+
     // The tiles the program retained, by key, with the values their slots hold.
     std::map<std::string, std::vector<float>> retained() const {
         std::map<std::string, std::vector<float>> out;
@@ -148,6 +162,8 @@ public:
 
 private:
     TileProgram work_;
+    TileProgram trace_;
+    bool recording_ = false;
     TileKernelState state_;
     Summary sum_;
     std::array<std::map<std::string, std::vector<float>>, kChannels> store_;

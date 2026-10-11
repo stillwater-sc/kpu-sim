@@ -1,8 +1,10 @@
 // ============================================================================
 // tests/program/test_csp_language.cpp
 // The CSP language (docs/plans/csp-language.md step 1; ADR 0004): written programs parse,
-// validate, compile to the CSP program IR, print back exactly, and compute the L0 reference's
-// values; the validator refuses each class of error by line; derived L0 is emitted as text.
+// validate, compile to the CSP program IR, print back exactly, and compute what L-B computes
+// for kpu-csp-gen's program of the same operator, bit for bit, on the same inputs (L-B is the
+// oracle: docs/plans/retire-l0-derivations.md §3.2); the validator refuses each class of error by
+// line; derived L0 is emitted as text (retires with lang::emit, PR 2 of that plan).
 //
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2024-2025 Stillwater Supercomputing, Inc.
@@ -17,6 +19,8 @@
 #include <sw/kpu/program/csp/lang/print.hpp>
 #include <sw/kpu/program/driver/program_spec.hpp>
 #include <sw/kpu/program/tile_program_reference.hpp>
+
+#include "trace_fixtures.hpp"
 
 #include <string>
 #include <vector>
@@ -102,8 +106,29 @@ driver::ProgramSpec spec(const std::string& algo, Dim size, Dim tile) {
     return s;
 }
 
-// The written program's values against the derived program's L0 reference.
-void check_values(CspProgram p, const driver::ProgramSpec& s, const std::string& out) {
+// The written program, run at L-B on its synthesized inputs (csp_inputs), through the compiled
+// action list: the operand `out` as it leaves it.
+std::vector<float> run_lb(CspProgram p, const std::string& src, const std::string& out) {
+    const TileProgram in = driver::csp_inputs(lang::parse(src));
+    for (const auto& name : p.source.operand_order()) p.source.operand(name).values = in.operand(name).values;
+    BehavioralInterpreter lb;
+    lb.run(p);
+    return lb.result().operand(out).values;
+}
+
+// The written program's values against the L-B oracle on the same program (the stream, with its
+// trace replayed), and against L-B on kpu-csp-gen's program of the same operator: a different
+// schedule of the same tile functions, on the same inputs (operands are filled by name).
+void check_values(const CspProgram& p, const std::string& src, const trace_fixtures::csp::gen::Options& o,
+                  const std::string& out) {
+    const auto got = run_lb(p, src, out);
+    CHECK(got == trace_fixtures::lb_values(lang::parse(src)).operand(out).values);
+    CHECK(got == trace_fixtures::lb_values(o).operand(out).values);
+}
+
+// The emitted program's values against the derived program's L0 reference. Only the emission
+// test uses it; both retire with lang::emit (retire-l0-derivations PR 2).
+void check_values_derived(CspProgram p, const driver::ProgramSpec& s, const std::string& out) {
     driver::fill(p.source, s);
     TileProgram ref = driver::derive(s);
     driver::fill(ref, s);
@@ -153,19 +178,19 @@ TEST_CASE("CSP language: a written matmul computes the reference, loading exactl
     const CspProgram all_a = lang::compile(kMatmulAllA);
     CHECK(all_a.reuse().loads == 128);                    // 64 A + 64 B: each tile once
     CHECK(all_a.reuse().peak_l3 <= 128);
-    check_values(all_a, spec("matmul", 256, 32), "C");
+    check_values(all_a, kMatmulAllA, trace_fixtures::gen("matmul", 256, 32), "C");
 
     // A different residency is a different program, with the loads it wrote.
     const CspProgram panels = lang::compile(kMatmulPanels);
     CHECK(panels.reuse().loads == 64 + 8 * 64);           // B once; A's row panel per column panel
-    check_values(panels, spec("matmul", 256, 32), "C");
+    check_values(panels, kMatmulPanels, trace_fixtures::gen("matmul", 256, 32), "C");
 }
 
 TEST_CASE("CSP language: a written LU computes the reference", "[program][csp][lang]") {
     const CspProgram lu = lang::compile(kLu);
     CHECK(lu.reuse().loads == 16);
     CHECK(count(lu, Action::Kind::Store) == 16);
-    check_values(lu, spec("lu", 64, 16), "A");
+    check_values(lu, kLu, trace_fixtures::gen("lu", 64, 16), "A");
 }
 
 TEST_CASE("CSP language: print and compile reproduce a program exactly", "[program][csp][lang]") {
@@ -189,7 +214,7 @@ TEST_CASE("CSP language: derived L0 is emitted as a program that compiles and co
         const CspProgram p = lang::compile(text);
         CHECK(p.reuse().peak_l3 <= cap);
         if (cap >= 32) CHECK(p.reuse().reloads == 0);      // all 32 input tiles fit
-        check_values(p, s, "C");
+        check_values_derived(p, s, "C");
     }
     for (std::size_t cap : {std::size_t{16}, std::size_t{4}}) {
         CAPTURE(cap);
@@ -197,7 +222,7 @@ TEST_CASE("CSP language: derived L0 is emitted as a program that compiles and co
         const std::string text = lang::emit(driver::derive(s), cap, "lu");
         const CspProgram p = lang::compile(text);
         CHECK(p.reuse().peak_l3 <= cap);
-        check_values(p, s, "A");
+        check_values_derived(p, s, "A");
     }
 }
 
@@ -258,7 +283,7 @@ TEST_CASE("CSP language: review fixes -- loop bounds from variables, empty accum
                ContainsSubstring("csp line 6: acc C[0,0] receives no call"));
 
     // Two accumulators, sequential and stored later; and interleaved (register-blocked) calls.
-    // Both print, round-trip exactly, and compute the reference.
+    // Both print, round-trip exactly, and compute what L-B computes for kpu-csp-gen's matmul.
     const std::string sequential = program(
         "  resident A[:, :], B[:, :];\n"
         "  acc C[0, 0] in fabric { for k in 0..4 { call gemm(A[0, k], B[k, 0]) +-> C[0, 0]; } }\n"
@@ -280,16 +305,14 @@ TEST_CASE("CSP language: review fixes -- loop bounds from variables, empty accum
         const CspProgram q = lang::compile(text);
         CHECK(same_actions(p, q));
         CHECK(lang::print(q) == text);
+        const TileProgram in = driver::csp_inputs(lang::parse(src));
         CspProgram v = p;
-        auto s = spec("matmul", 64, 16);
-        driver::fill(v.source, s);
-        TileProgram ref = driver::derive(s);
-        driver::fill(ref, s);
-        TileProgramReference().run(ref);
+        for (const auto& name : v.source.operand_order()) v.source.operand(name).values = in.operand(name).values;
         BehavioralInterpreter lb;
         lb.run(v);
         const auto& got = lb.result().operand("C");
-        const auto& want = ref.operand("C");
+        const TileProgram oracle = trace_fixtures::lb_values(trace_fixtures::gen("matmul", 64, 16));
+        const auto& want = oracle.operand("C");
         for (Dim r = 0; r < 16; ++r)
             for (Dim c = 0; c < 32; ++c) CHECK(got.at(r, c) == want.at(r, c));   // C[0,0] and C[0,1]
     }

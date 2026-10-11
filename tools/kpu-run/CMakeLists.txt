@@ -308,7 +308,7 @@ if(KPU_BUILD_TESTS)
             -DCMD=$<TARGET_FILE:run>
             -DARGS=--program$<SEMICOLON>${_corpus}/matmul_48x48x48_t16.csp$<SEMICOLON>--deploy$<SEMICOLON>${_deploy}/kpu_s1.json
             -DEXPECT_CODE=0
-            -DMUST_MATCH=oracle...L0.trace.*cycle-accurate.*L-CA..makespan.*cycle-accurate.+identical.*OK:.every.level
+            -DMUST_MATCH=oracle...L-B.*L0.trace.*replayed.bit-exact.*cycle-accurate.*L-CA..makespan.*cycle-accurate.+identical.*OK:.every.level
             -DMUST_NOT_MATCH=FAILED
             -P ${CMAKE_CURRENT_SOURCE_DIR}/expect_exit.cmake
     )
@@ -457,15 +457,17 @@ if(KPU_BUILD_TESTS)
             -DMUST_NOT_MATCH=run.id
             -P ${CMAKE_CURRENT_SOURCE_DIR}/expect_exit.cmake
     )
-    add_test(NAME kpu_run_csp_emit_needs_an_authority
+    # L-B is the oracle at any size; only the trace is limited, so asking for one past the limit
+    # is refused.
+    add_test(NAME kpu_run_csp_emit_l0_needs_a_trace
         COMMAND ${CMAKE_COMMAND}
             -DCMD=$<TARGET_FILE:run>
-            -DARGS=--program$<SEMICOLON>${_corpus}/matmul_48x48x48_t16.csp$<SEMICOLON>--level$<SEMICOLON>block-sequential$<SEMICOLON>--trace-limit$<SEMICOLON>1$<SEMICOLON>--emit-l0-result$<SEMICOLON>${CMAKE_CURRENT_BINARY_DIR}/should_not_exist_result.l0
+            -DARGS=--program$<SEMICOLON>${_corpus}/matmul_48x48x48_t16.csp$<SEMICOLON>--level$<SEMICOLON>block-sequential$<SEMICOLON>--trace-limit$<SEMICOLON>1$<SEMICOLON>--emit-l0$<SEMICOLON>${CMAKE_CURRENT_BINARY_DIR}/should_not_exist.l0
             -DEXPECT_CODE=2
-            -DMUST_MATCH=nothing.was.compared
+            -DMUST_MATCH=emit-l0:.the.program.has.no.L0.trace
             -P ${CMAKE_CURRENT_SOURCE_DIR}/expect_exit.cmake
     )
-    set_tests_properties(kpu_run_csp_emit_needs_compare kpu_run_csp_emit_needs_an_authority
+    set_tests_properties(kpu_run_csp_emit_needs_compare kpu_run_csp_emit_l0_needs_a_trace
         PROPERTIES LABELS "program;driver;csp")
     # An L0 file is a trace: L-CA runs CSP programs.
     add_test(NAME kpu_run_l0_refuses_lca

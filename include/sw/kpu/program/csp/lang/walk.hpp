@@ -54,6 +54,9 @@ private:
 struct Emission {
     Action action;
     std::optional<TileOp> op;       // a Call's tile function (the trace form keeps it in its L0)
+    // The L0 ops the walker recorded with this action -- feeds, the call, a drain, a context's
+    // stages -- in order. L-B appends them as it executes: its trace (behavioral.hpp).
+    std::vector<TileOp> l0;
     bool opens = false;             // the action opens its residency
     bool loaded = false;            //   ... by a Load (else by a result's Writeback)
 };
@@ -633,7 +636,11 @@ public:
     // The next action, or nullopt when the program has ended.
     std::optional<Emission> next() {
         while (buffer_.empty()) {
-            if (!walker_.step() && buffer_.empty()) return std::nullopt;
+            if (!walker_.step() && buffer_.empty()) {
+                if (!sink_.pending_.empty())
+                    throw std::logic_error("csp stream: L0 ops recorded after the program's last action");
+                return std::nullopt;
+            }
         }
         Emission e = std::move(buffer_.front());
         buffer_.pop_front();
@@ -646,9 +653,18 @@ public:
 private:
     struct BufferSink {
         explicit BufferSink(std::deque<Emission>& b) : b_(b) {}
-        std::size_t l0(const TileOp&) { return kNone; }       // the stream carries the op itself
-        void emit(const Emission& e) { b_.push_back(e); }
+        // The stream carries the ops themselves, on the next action the walker emits.
+        std::size_t l0(const TileOp& op) {
+            pending_.push_back(op);
+            return kNone;
+        }
+        void emit(const Emission& e) {
+            b_.push_back(e);
+            b_.back().l0 = std::move(pending_);
+            pending_.clear();
+        }
         std::deque<Emission>& b_;
+        std::vector<TileOp> pending_;
     };
     Program ast_;
     std::optional<Target> target_;

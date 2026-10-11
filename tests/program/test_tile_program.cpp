@@ -4,6 +4,10 @@
 // ({GETRF,LASWP,TRSM,GEMM} kernels; P.A = L.U reconstruction). Validates that the
 // device-independent tile sequence alone computes the correct result (issue #230).
 //
+// The programs are L-B traces of CSP programs (trace_fixtures.hpp): an L0 is a trace, never
+// written by C++. The naive matmul and the reconstruction check the shared tile KERNELS that
+// L-B and the replay both run, on inputs the test chooses; they are not an oracle for a program.
+//
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2024-2025 Stillwater Supercomputing, Inc.
 // ============================================================================
@@ -13,13 +17,16 @@
 
 #include <sw/kpu/program/tile_program.hpp>
 #include <sw/kpu/program/tile_program_reference.hpp>
-#include <sw/kpu/program/derive/matmul_tile_program.hpp>
-#include <sw/kpu/program/derive/lu_tile_program.hpp>
+#include "trace_fixtures.hpp"
 
 #include <cmath>
+#include <string>
 #include <vector>
 
 using namespace sw::kpu::program;
+using trace_fixtures::gen;
+using trace_fixtures::trace_of;
+using trace_fixtures::trace_of_file;
 
 namespace {
 
@@ -43,6 +50,10 @@ float max_abs_diff(const std::vector<float>& a, const std::vector<float>& b) {
     return m;
 }
 
+// A hand-written program beside this file (tests/program/csp/): kpu-csp-gen writes square tiles.
+// Hand-written fixtures, relative to the source tree (the test runs from CMAKE_SOURCE_DIR).
+std::string fixture(const std::string& name) { return "tests/program/csp/" + name; }
+
 // Fill an operand's value buffer (row-major) from a flat vector.
 void fill(TensorOperand& op, const std::vector<float>& v) {
     REQUIRE(v.size() == op.values.size());
@@ -64,7 +75,8 @@ TEST_CASE("TileProgram matmul reproduces naive matmul exactly", "[program][matmu
     for (Dim k = 0; k < K; ++k)
         for (Dim j = 0; j < N; ++j) B[static_cast<std::size_t>(k) * N + j] = float((3 * k + j) % 5);
 
-    TileProgram prog = derive_matmul_tile_program(M, N, K, Ti, Tj, Tk);
+    (void)Ti; (void)Tj; (void)Tk;      // the fixture's tiles
+    TileProgram prog = trace_of_file(fixture("matmul_6x4x8_t2x2x4.csp"));
     fill(prog.operand("A"), A);
     fill(prog.operand("B"), B);
 
@@ -91,7 +103,8 @@ TEST_CASE("TileProgram matmul handles non-divisible tiling", "[program][matmul]"
     for (std::size_t i = 0; i < A.size(); ++i) A[i] = std::sin(0.7f * float(i)) * 2.0f;
     for (std::size_t i = 0; i < B.size(); ++i) B[i] = std::cos(0.4f * float(i)) * 1.5f;
 
-    TileProgram prog = derive_matmul_tile_program(M, N, K, Ti, Tj, Tk);
+    (void)Ti; (void)Tj; (void)Tk;      // the fixture's tiles
+    TileProgram prog = trace_of_file(fixture("matmul_7x5x6_t3x2x4.csp"));
     fill(prog.operand("A"), A);
     fill(prog.operand("B"), B);
 
@@ -110,7 +123,7 @@ namespace {
 
 void check_lu_reconstructs(const std::vector<float>& A0, Dim N, Dim T,
                            bool expect_swaps) {
-    TileProgram prog = derive_lu_tile_program(N, T);
+    TileProgram prog = trace_of(gen("lu", N, T));
     fill(prog.operand("A"), A0);
 
     TileProgramReference ref;
@@ -206,14 +219,14 @@ TEST_CASE("TileProgram tile-LU handles a clamped trailing block", "[program][lu]
 
 // ----------------------------------------------------------------------------
 TEST_CASE("TileProgram disassembly lists the tile sequence", "[program][disasm]") {
-    TileProgram prog = derive_matmul_tile_program(4, 4, 4, 2, 2, 2);
+    TileProgram prog = trace_of(gen("matmul", 4, 2));
     const std::string text = prog.disassemble();
     CHECK(text.find("TileProgram") != std::string::npos);
     CHECK(text.find("MATMUL_ACCUM") != std::string::npos);
     CHECK(text.find("FEED") != std::string::npos);
     CHECK(text.find("DRAIN") != std::string::npos);
 
-    TileProgram lu = derive_lu_tile_program(6, 2);
+    TileProgram lu = trace_of(gen("lu", 6, 2));
     const std::string lut = lu.disassemble();
     CHECK(lut.find("LU_DIAG_FACTOR") != std::string::npos);
     CHECK(lut.find("PIVOT_APPLY") != std::string::npos);

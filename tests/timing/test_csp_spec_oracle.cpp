@@ -1,7 +1,9 @@
 // ============================================================================
 // tests/timing/test_csp_spec_oracle.cpp
 // NoC port plan step 4b.1: a deployment's device drives the CSP cycle-accurate executor, and
-// a matmul on it computes the L0 reference's values (ADR 0001 D5: within atol + rtol).
+// a matmul on it computes L-B's values for the same operator on the same inputs (ADR 0001 D5:
+// within atol + rtol; bit for bit on these exact inputs). L-B is the oracle: L-CA is a
+// cycle-accurate refinement of the behavioral model (docs/plans/retire-l0-derivations.md §3.2).
 //
 // This is the oracle the rest of step 4b keeps: push-only writeback (4b.2), L3 placement
 // (4b.3) and the NoC (4b.4) each change WHEN things happen on T4, T16 and T64, and never WHAT
@@ -14,10 +16,10 @@
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_string.hpp>
 
-#include <sw/kpu/program/driver/program_spec.hpp>
+#include "../program/trace_fixtures.hpp"
+
 #include <sw/kpu/program/platform/deployment_json.hpp>
 #include <sw/kpu/program/platform/floorplan.hpp>
-#include <sw/kpu/program/tile_program_reference.hpp>
 #include <sw/kpu/program/value_tolerance.hpp>
 #include <sw/kpu/timing/csp_config_from_spec.hpp>
 #include <sw/kpu/timing/schedule/matmul_schedule_generator.hpp>
@@ -36,7 +38,6 @@ using namespace sw::kpu::timing::schedule;
 using sw::kpu::isa::MatrixID;
 using sw::kpu::program::TensorOperand;
 using sw::kpu::program::TileProgram;
-using sw::kpu::program::TileProgramReference;
 using sw::kpu::program::platform::DeviceSpecification;
 using sw::kpu::program::platform::read_spec_file;
 using Catch::Matchers::ContainsSubstring;
@@ -73,8 +74,8 @@ struct OracleRun {
     std::vector<Cycle> busy;
 };
 
-// C = A @ B (size^3, tile^3) on the CSP executor configured from `d`, and on the L0 reference
-// with the same inputs.
+// C = A @ B (size^3, tile^3) on the CSP executor configured from `d`, and at L-B: kpu-csp-gen's
+// matmul program on the same inputs (csp_inputs: exact multiples of 1/8).
 OracleRun run_matmul(const DeviceSpecification& d, Size size, Size T, bool noc = false,
                      int32_t cf_tile = -1) {
     std::string why;
@@ -82,14 +83,10 @@ OracleRun run_matmul(const DeviceSpecification& d, Size size, Size T, bool noc =
     INFO(why);
     REQUIRE(csp);
 
-    sw::kpu::program::driver::ProgramSpec ps;
-    ps.algo = "matmul";
-    ps.size = size;
-    ps.tile = T;
-    TileProgram prog = sw::kpu::program::driver::derive(ps);
-    sw::kpu::program::driver::fill(prog, ps);
-    TileProgram ref = prog;
-    TileProgramReference().run(ref);
+    const auto ast = trace_fixtures::program_of(trace_fixtures::gen("matmul", static_cast<sw::kpu::program::Dim>(size),
+                                                                    static_cast<sw::kpu::program::Dim>(T)));
+    const TileProgram prog = sw::kpu::program::driver::csp_inputs(ast);
+    const TileProgram ref = trace_fixtures::lb_values(ast);
 
     MatMulScheduleGenerator::Config g;
     g.M = g.N = g.K = size;
@@ -276,7 +273,7 @@ TEST_CASE("the executor puts each engine on the controller it was given", "[timi
     CHECK(exec.memory_controller(1).total_bytes_transferred() == 2 * 4096);
 }
 
-TEST_CASE("Values oracle: a matmul on S1, T4, T16 and T64 computes the L0 reference's values",
+TEST_CASE("Values oracle: a matmul on S1, T4, T16 and T64 computes L-B's values",
           "[timing][csp][oracle]") {
     for (const char* file : {"kpu_s1.json", "kpu_t4.json", "kpu_t16.json", "kpu_t64.json"}) {
         CAPTURE(file);
@@ -285,9 +282,8 @@ TEST_CASE("Values oracle: a matmul on S1, T4, T16 and T64 computes the L0 refere
             r.csp, r.reference, sw::kpu::program::kAtolFloat32, sw::kpu::program::kRtolMatmul);
         CAPTURE(cmp.max_abs, cmp.max_rel, cmp.failures, r.cycles);
         CHECK(cmp.pass);
-        // fill()'s inputs are exactly representable and their products and partial sums stay
-        // exact, so accumulation order cannot round: the CSP result is the reference's, bit
-        // for bit. A change that breaks this has changed the arithmetic, not the timing.
+        // csp_inputs' values are exactly representable and their products and partial sums stay
+        // exact, so accumulation order cannot round: the CSP result is L-B's, bit for bit. A change that breaks this has changed the arithmetic, not the timing.
         CHECK(cmp.bit_identical);
         CHECK(r.l3_free_after == r.l3_capacity);        // every L3 credit came home
         CHECK(r.l3_tiles == csp_config_from(device(file))->config.l3_tiles);   // placed, not pooled
@@ -377,7 +373,7 @@ TEST_CASE("NoC wired: loads and ejections cross the fabric, and values never mov
         const OracleRun off = run_matmul(device(file), 128, 32, false);
         const OracleRun on = run_matmul(device(file), 128, 32, true);
 
-        // When, never what (ADR 0002): bit-identical with and without the NoC, and to L0.
+        // When, never what (ADR 0002): bit-identical with and without the NoC, and to L-B.
         CHECK(on.csp == off.csp);
         const auto cmp = sw::kpu::program::compare_within(
             on.csp, on.reference, sw::kpu::program::kAtolFloat32, sw::kpu::program::kRtolMatmul);
@@ -478,7 +474,7 @@ TEST_CASE("Burst window: values never move, with the NoC off and on", "[timing][
             CAPTURE(noc);
             const OracleRun w = run_matmul(d, 128, 32, noc);
             CHECK(w.csp == tiles.csp);
-            CHECK(w.csp == w.reference);            // bit-identical: fill() keeps sums exact
+            CHECK(w.csp == w.reference);            // bit-identical to L-B: exact inputs keep sums exact
             CHECK(w.l3_free_after == w.l3_capacity);
             std::printf("window %-14s noc=%d: %8llu cycles (tile-level, no NoC: %llu)\n", file,
                         noc ? 1 : 0, static_cast<unsigned long long>(w.cycles),

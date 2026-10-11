@@ -13,6 +13,7 @@ kpu_add_component_test(test_tile_program "program"
 
 set_tests_properties(test_tile_program PROPERTIES
     LABELS "program;tile_program;v0.9"
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}     # reads tests/program/csp/*.csp
 )
 
 # The CSP program, level 1: lowered from L0, run behaviorally (docs/plans/csp-program-tile-sequencing.md step 1)
@@ -273,4 +274,5 @@ kpu_add_component_test(test_stream_signature "program"
 
 set_tests_properties(test_stream_signature PROPERTIES
     LABELS "program;stream;v0.9"
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}     # reads tests/program/csp/*.csp
 )

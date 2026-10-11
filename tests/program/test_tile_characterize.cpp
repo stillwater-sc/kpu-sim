@@ -9,14 +9,15 @@
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/catch_approx.hpp>
 
-#include <sw/kpu/program/derive/matmul_tile_program.hpp>
-#include <sw/kpu/program/derive/lu_tile_program.hpp>
 #include <sw/kpu/program/characterize/characterization.hpp>
 #include <sw/kpu/program/stream/derive/matmul_streams.hpp>
+#include "trace_fixtures.hpp"
 
 using namespace sw::kpu::program;
 using namespace sw::kpu::program::characterize;
 using Catch::Approx;
+using trace_fixtures::gen;
+using trace_fixtures::trace_of;
 
 namespace {
 // A device where movement is effectively free, so the compute DAG governs the
@@ -34,7 +35,7 @@ DeviceDescriptor compute_bound(Dim cf) {
 TEST_CASE("matmul tile-DAG exposes output-tile parallelism", "[program][characterize]") {
     // 64^3, T=16 -> 4x4x4 tile grid: 16 output tiles, each an accumulate chain of
     // kt=4 GEMMs. So depth=4, width=16 independent chains.
-    TileProgram prog = derive_matmul_tile_program(64, 64, 64, 16, 16, 16);
+    TileProgram prog = trace_of(gen("matmul", 64, 16));
 
     TileDag dag(prog, compute_bound(1));
     const double cp = dag.critical_path_cycles();
@@ -60,8 +61,8 @@ TEST_CASE("matmul tile-DAG exposes output-tile parallelism", "[program][characte
 
 TEST_CASE("LU tile-DAG is far more serial than matmul", "[program][characterize]") {
     const Dim N = 64, T = 16;   // 4x4 tile grid
-    TileProgram mm = derive_matmul_tile_program(N, N, N, T, T, T);
-    TileProgram lu = derive_lu_tile_program(N, T);
+    TileProgram mm = trace_of(gen("matmul", N, T));
+    TileProgram lu = trace_of(gen("lu", N, T));
 
     DeviceDescriptor big = compute_bound(64);
     const double mm_cp = TileDag(mm, big).critical_path_cycles();
@@ -75,7 +76,7 @@ TEST_CASE("LU tile-DAG is far more serial than matmul", "[program][characterize]
 }
 
 TEST_CASE("characterize reports structural + modeled metrics", "[program][characterize]") {
-    TileProgram prog = derive_matmul_tile_program(64, 64, 64, 16, 16, 16);
+    TileProgram prog = trace_of(gen("matmul", 64, 16));
     DeviceDescriptor d = DeviceDescriptor::checkerboard(4);
     Metrics m = characterize_program(prog, d);
 
@@ -92,7 +93,7 @@ TEST_CASE("characterize reports structural + modeled metrics", "[program][charac
 
 TEST_CASE("dataflow sweep: L1 makes the schedule systolic + dataflow-sensitive",
           "[program][characterize]") {
-    TileProgram prog = derive_matmul_tile_program(128, 128, 128, 32, 32, 32);
+    TileProgram prog = trace_of(gen("matmul", 128, 32));
     // enough compute tiles that the drain (not compute) shapes the makespan
     DeviceDescriptor d = DeviceDescriptor::checkerboard(16);
 
@@ -122,7 +123,7 @@ TEST_CASE("dataflow sweep: L1 makes the schedule systolic + dataflow-sensitive",
 }
 
 TEST_CASE("feasibility gates on L3 tile capacity", "[program][characterize]") {
-    TileProgram prog = derive_matmul_tile_program(64, 64, 64, 16, 16, 16);
+    TileProgram prog = trace_of(gen("matmul", 64, 16));
     const std::size_t peak = peak_live_tiles(prog);
     REQUIRE(peak > 1);
 
@@ -141,7 +142,7 @@ TEST_CASE("feasibility gates on L3 tile capacity", "[program][characterize]") {
 TEST_CASE("to_dot exports the tile-dependency DAG", "[program][characterize][dot]") {
     // LU exercises both edge kinds: tile dataflow AND the pivot-slot edge that
     // carries a GETRF pivot decision to the trailing LASWP ops.
-    TileProgram prog = derive_lu_tile_program(64, 32);
+    TileProgram prog = trace_of(gen("lu", 64, 32));
     TileDag dag(prog, DeviceDescriptor::single());
 
     const std::string structural = dag.to_dot(prog, "lu");
