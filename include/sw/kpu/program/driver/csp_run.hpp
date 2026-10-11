@@ -35,6 +35,7 @@
 #include <cstddef>
 #include <algorithm>
 #include <cstdint>
+#include <cstring>
 #include <map>
 #include <optional>
 #include <string>
@@ -226,8 +227,12 @@ inline CspReference csp_reference(const csp::lang::Program& ast, const TileProgr
     // The trace's validation: replayed on the same inputs, it computes what L-B computed.
     TileProgram replay = lb.trace();
     TileProgramReference().run(replay);
+    // Bit for bit: an untouched NaN input matches itself, and -0 differs from +0.
+    auto same_bits = [](const std::vector<float>& a, const std::vector<float>& b) {
+        return a.size() == b.size() && (a.empty() || std::memcmp(a.data(), b.data(), a.size() * sizeof(float)) == 0);
+    };
     for (const auto& name : replay.operand_order())
-        if (replay.operand(name).values != lb.result().operand(name).values) {
+        if (!same_bits(replay.operand(name).values, lb.result().operand(name).values)) {
             out.replay_mismatch = name;
             out.note = "the L0 trace's replay differs from L-B on operand " + name + ": no trace (a kpu-sim defect)";
             return out;
