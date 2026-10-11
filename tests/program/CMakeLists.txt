@@ -15,15 +15,6 @@ set_tests_properties(test_tile_program PROPERTIES
     LABELS "program;tile_program;v0.9"
 )
 
-# TRANSACTIONAL tier executor (event engine + firing rule)
-kpu_add_component_test(test_tile_transaction_executor "program"
-    test_tile_transaction_executor.cpp
-)
-
-set_tests_properties(test_tile_transaction_executor PROPERTIES
-    LABELS "program;transactional;executor;v0.9"
-)
-
 # The CSP program, level 1: lowered from L0, run behaviorally (docs/plans/csp-program-tile-sequencing.md step 1)
 kpu_add_component_test(test_csp_program "program"
     test_csp_program.cpp
@@ -167,6 +158,7 @@ kpu_add_component_test(test_tile_flow_record "program"
 
 set_tests_properties(test_tile_flow_record PROPERTIES
     LABELS "program;record;tileflow;v0.9"
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
 )
 
 # The NoC's hubs and port controllers in the deployment (docs/plans/noc-port-arbitration.md step 2)

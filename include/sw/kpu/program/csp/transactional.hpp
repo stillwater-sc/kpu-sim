@@ -6,8 +6,8 @@
 // L-T1 decomposes a CSP transaction into one tile move under L3 credits -- and the credits
 // are THE PROGRAM'S: a Load takes a slot, the program's Release returns it, a Writeback into
 // an open residency writes in place. Nothing is inferred. (The L0-driven TileTransaction-
-// Executor infers residency -- a credit at first touch, returned after the last reader --
-// which describes an execution order, not a program.)
+// Executor inferred residency -- a credit at first touch, returned after the last reader --
+// which described an execution order, not a program. It retired in step 4e.)
 //
 // THE SCHEDULE IS ONE PASS IN PROGRAM ORDER. Every dependency of a CSP action points backwards
 // in program order -- its tile was put where it reads it by an earlier action, its credit was

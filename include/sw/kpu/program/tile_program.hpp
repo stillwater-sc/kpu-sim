@@ -75,6 +75,14 @@ struct TileCoord {
     }
 };
 
+// A tile's KEY, "A#0#1": how the tile-flow record, the orchestration ABI and KpuDevice name a
+// tile. Not TileCoord::to_string(): that is for humans and uses "A[0,1]". The two have
+// different jobs, so they are allowed to differ -- but each has exactly one definition, because
+// a caller copying the format is the "two spellings drift" failure waiting to happen.
+inline std::string tile_key(const TileCoord& c) {
+    return c.operand + "#" + std::to_string(c.ti) + "#" + std::to_string(c.tj);
+}
+
 // Logical fabric port direction (no engine/bank id — that is JIT output).
 enum class PortKind { Input, Output };
 

@@ -1,0 +1,295 @@
+{
+ "format": "kpu-tflow",
+ "version": 3,
+ "level": "L-T1",
+ "device": "dev0",
+ "device_label": "single/cf2/dma1/bm1/str1",
+ "deployment_digest": "307ca98705604596",
+ "makespan": 136,
+ "foreign_slots": 0,
+ "unmodelled": [
+  "l2",
+  "l1",
+  "dmabuf"
+ ],
+ "stations": [
+  {
+   "name": "dev0/dram",
+   "kind": "dram",
+   "capacity": 0,
+   "pooled": false,
+   "modelled": true
+  },
+  {
+   "name": "dev0/l3[*]",
+   "kind": "l3",
+   "capacity": 5,
+   "pooled": true,
+   "modelled": true
+  },
+  {
+   "name": "dev0/l2[*]",
+   "kind": "l2",
+   "capacity": 0,
+   "pooled": true,
+   "modelled": false
+  },
+  {
+   "name": "dev0/l1[*]",
+   "kind": "l1",
+   "capacity": 0,
+   "pooled": true,
+   "modelled": false
+  },
+  {
+   "name": "dev0/dmabuf[*]",
+   "kind": "dmabuf",
+   "capacity": 0,
+   "pooled": true,
+   "modelled": false
+  },
+  {
+   "name": "dev0/cf[0]",
+   "kind": "cf",
+   "capacity": 1,
+   "pooled": false,
+   "modelled": true
+  },
+  {
+   "name": "dev0/cf[1]",
+   "kind": "cf",
+   "capacity": 1,
+   "pooled": false,
+   "modelled": true
+  }
+ ],
+ "movers": [
+  {
+   "name": "dma",
+   "lanes": 1
+  },
+  {
+   "name": "block-mover",
+   "lanes": 1
+  },
+  {
+   "name": "streamer",
+   "lanes": 1
+  },
+  {
+   "name": "noc",
+   "lanes": 1
+  }
+ ],
+ "element_bytes": 4,
+ "operands": [
+  {
+   "name": "A",
+   "rows": 16,
+   "cols": 16,
+   "tile_rows": 16,
+   "tile_cols": 16
+  },
+  {
+   "name": "B",
+   "rows": 16,
+   "cols": 24,
+   "tile_rows": 16,
+   "tile_cols": 16
+  },
+  {
+   "name": "C",
+   "rows": 16,
+   "cols": 24,
+   "tile_rows": 16,
+   "tile_cols": 16
+  },
+  {
+   "name": "H",
+   "rows": 8,
+   "cols": 16,
+   "tile_rows": 8,
+   "tile_cols": 16
+  },
+  {
+   "name": "G",
+   "rows": 16,
+   "cols": 16,
+   "tile_rows": 16,
+   "tile_cols": 16
+  }
+ ],
+ "tiles": [
+  [
+   "A",
+   0,
+   0
+  ],
+  [
+   "B",
+   0,
+   1
+  ],
+  [
+   "C",
+   0,
+   1
+  ],
+  [
+   "H",
+   0,
+   0
+  ],
+  [
+   "B",
+   0,
+   0
+  ],
+  [
+   "C",
+   0,
+   0
+  ],
+  [
+   "G",
+   0,
+   0
+  ]
+ ],
+ "tables": {
+  "residency": {
+   "file": "residency.bin",
+   "rows": 7,
+   "columns": [
+    {
+     "name": "tile",
+     "dtype": "u32",
+     "offset": 0
+    },
+    {
+     "name": "station",
+     "dtype": "u32",
+     "offset": 32
+    },
+    {
+     "name": "t0",
+     "dtype": "f64",
+     "offset": 64
+    },
+    {
+     "name": "t1",
+     "dtype": "f64",
+     "offset": 120
+    },
+    {
+     "name": "flags",
+     "dtype": "u8",
+     "offset": 176
+    }
+   ]
+  },
+  "transit": {
+   "file": "transit.bin",
+   "rows": 27,
+   "columns": [
+    {
+     "name": "tile",
+     "dtype": "u32",
+     "offset": 0
+    },
+    {
+     "name": "op",
+     "dtype": "u32",
+     "offset": 112
+    },
+    {
+     "name": "hop",
+     "dtype": "u8",
+     "offset": 224
+    },
+    {
+     "name": "mover",
+     "dtype": "u8",
+     "offset": 256
+    },
+    {
+     "name": "lane",
+     "dtype": "u32",
+     "offset": 288
+    },
+    {
+     "name": "t0",
+     "dtype": "f64",
+     "offset": 400
+    },
+    {
+     "name": "t1",
+     "dtype": "f64",
+     "offset": 616
+    },
+    {
+     "name": "src",
+     "dtype": "u32",
+     "offset": 832
+    },
+    {
+     "name": "dst",
+     "dtype": "u32",
+     "offset": 944
+    }
+   ]
+  },
+  "compute": {
+   "file": "compute.bin",
+   "rows": 3,
+   "columns": [
+    {
+     "name": "op",
+     "dtype": "u32",
+     "offset": 0
+    },
+    {
+     "name": "station",
+     "dtype": "u32",
+     "offset": 16
+    },
+    {
+     "name": "t0",
+     "dtype": "f64",
+     "offset": 32
+    },
+    {
+     "name": "t1",
+     "dtype": "f64",
+     "offset": 56
+    }
+   ]
+  },
+  "op_tiles": {
+   "file": "op_tiles.bin",
+   "rows": 11,
+   "columns": [
+    {
+     "name": "kind",
+     "dtype": "u8",
+     "offset": 0
+    },
+    {
+     "name": "offset",
+     "dtype": "u32",
+     "offset": 16
+    },
+    {
+     "name": "tile",
+     "dtype": "u32",
+     "offset": 64
+    },
+    {
+     "name": "written",
+     "dtype": "u8",
+     "offset": 136
+    }
+   ]
+  }
+ }
+}

@@ -315,24 +315,22 @@ TEST_CASE("the corpus's kernel case carries no values, and runs once they are sy
     ps.tile = 16;
     CHECK(to_string(derive(ps)) == text);
 
-    // And it executes, identically at every level, once inputs are SYNTHESIZED -- which is
-    // `kpu-run --program ... --fill-inputs`. Executing it as loaded would run on zeros and
-    // agree at every level about nothing, which is why the driver refuses that.
+    // And it executes once inputs are SYNTHESIZED -- which is `kpu-run --program ...
+    // --fill-inputs`. Executing it as loaded would run on zeros and agree with any reference
+    // about nothing, which is why the driver refuses that.
     const DeviceSpec ds;
     const auto device = make_device(ds);
-    std::vector<TileProgram> ran;
-    for (ExecutionLevel level : all_levels()) {
-        if (!level_implemented(level)) continue;
-        ran.push_back(kernel);
-        fill_inputs(ran.back());
-        run_at(level, ran.back(), device, Placement::single(device.compute_tiles));
-    }
-    REQUIRE(ran.size() >= 2);
-    for (std::size_t i = 1; i < ran.size(); ++i)
-        for (const std::string& key : ran[0].operand_order())
-            CHECK(bits_equal(ran[0].operand(key).values, ran[i].operand(key).values));
+    // L-B, the level an L0 program runs at; the same program filled the same way in memory is
+    // the reference.
+    TileProgram filled = kernel, fresh = derive(ps);
+    fill_inputs(filled);
+    fill_inputs(fresh);
+    run_at(ExecutionLevel::Behavioral, filled, device, Placement::single(device.compute_tiles));
+    run_at(ExecutionLevel::Behavioral, fresh, device, Placement::single(device.compute_tiles));
+    for (const std::string& key : fresh.operand_order())
+        CHECK(bits_equal(filled.operand(key).values, fresh.operand(key).values));
 
     bool produced = false;
-    for (float v : ran[0].operand("C").values) produced = produced || (v != 0.0f);
+    for (float v : filled.operand("C").values) produced = produced || (v != 0.0f);
     CHECK(produced);
 }

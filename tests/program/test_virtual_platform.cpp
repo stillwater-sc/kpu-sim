@@ -2,7 +2,8 @@
 // tests/program/test_virtual_platform.cpp
 // A run is a pure function of (program, initial_state, deployment, level)
 // (#282 increment 2). run_at() took three of the four; the platform takes all of them
-// and restores the state FIRST.
+// and restores the state FIRST. An L0 program runs at L-B only (kpu-run-csp-programs
+// step 4e), so what differs by level is checked on a CSP program.
 //
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2024-2025 Stillwater Supercomputing, Inc.
@@ -10,6 +11,8 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <sw/kpu/program/csp/gen/generate.hpp>
+#include <sw/kpu/program/csp/lang/parse.hpp>
 #include <sw/kpu/program/driver/program_spec.hpp>
 #include <sw/kpu/program/platform/virtual_platform.hpp>
 
@@ -69,11 +72,11 @@ TEST_CASE("the same four inputs produce the same result", "[program][platform][r
         const ProgramHandle h = platform.load_program(filled(algo));
         const StateSnapshot initial = platform.snapshot();
 
-        const auto first = platform.run(h, ExecutionLevel::BlockSequential, initial);
+        const auto first = platform.run(h, ExecutionLevel::Behavioral, initial);
         const TileProgram after_first = platform.program(h);
 
         // Same program, same state, same deployment, same level.
-        const auto second = platform.run(h, ExecutionLevel::BlockSequential, initial);
+        const auto second = platform.run(h, ExecutionLevel::Behavioral, initial);
 
         INFO("algo " << algo);
         CHECK(first.identity == second.identity);
@@ -101,18 +104,18 @@ TEST_CASE("a run cannot read what the previous run left behind",
     const ProgramHandle h = platform.load_program(filled("lu"));
     const StateSnapshot initial = platform.snapshot();
 
-    platform.run(h, ExecutionLevel::BlockSequential, initial);
+    platform.run(h, ExecutionLevel::Behavioral, initial);
     const TileProgram once = platform.program(h);
 
     // Passing `initial` again resets the situation, so the answer is the same.
-    platform.run(h, ExecutionLevel::BlockSequential, initial);
+    platform.run(h, ExecutionLevel::Behavioral, initial);
     CHECK(all_operands_identical(once, platform.program(h)));
 
     // ...and the program is genuinely not idempotent: starting from the PREVIOUS OUTPUT
     // gives something else. If this failed, the check above would prove nothing.
     const StateSnapshot after = platform.snapshot();
     CHECK(after.digest() != initial.digest());
-    platform.run(h, ExecutionLevel::BlockSequential, after);
+    platform.run(h, ExecutionLevel::Behavioral, after);
     CHECK_FALSE(all_operands_identical(once, platform.program(h)));
 }
 
@@ -126,7 +129,7 @@ TEST_CASE("the platform holds the state, so a snapshot after a run is the result
     const ProgramHandle h = platform.load_program(mine);
     const StateSnapshot initial = platform.snapshot();
 
-    platform.run(h, ExecutionLevel::BlockSequential, initial);
+    platform.run(h, ExecutionLevel::Behavioral, initial);
 
     // The caller's copy is untouched; the platform's holds the result.
     bool caller_computed_something = false;
@@ -147,46 +150,29 @@ TEST_CASE("the platform holds the state, so a snapshot after a run is the result
 
 TEST_CASE("every level run from one snapshot agrees, through the platform",
           "[program][platform][run]") {
-    // The differential test of #285, now expressed as the pure function: same program,
-    // same state, same deployment, differing only in LEVEL.
+    // The differential test of #285, as the pure function: same program, same inputs, same
+    // deployment, differing only in LEVEL. The program is a CSP program, which every level
+    // runs; an L0 program is the trace, and runs at L-B only.
     for (const char* algo : {"matmul", "lu"}) {
+        csp::gen::Options o;
+        o.algo = algo;
+        o.size = 32;
+        o.tile = 16;
+        o.l3 = 16;
+        const csp::lang::Program ast = csp::lang::parse(csp::gen::generate(o));
         VirtualPlatform platform = default_platform();
-        std::vector<ProgramHandle> handles;
-        std::vector<ExecutionLevel> levels;
-        for (ExecutionLevel l : all_levels()) {
-            if (!level_implemented(l)) continue;
-            handles.push_back(platform.load_program(filled(algo)));
-            levels.push_back(l);
-        }
-        REQUIRE(handles.size() >= 2);
-        // One snapshot covers every loaded program, and each was filled identically -- so
-        // the state each level starts from is the same state.
-        const StateSnapshot initial = platform.snapshot();
-
-        // EACH RESULT IS CAPTURED IMMEDIATELY, and that is not incidental: restore() is
-        // platform-wide, so the NEXT run resets every program -- including the one that
-        // just produced an answer. Comparing platform.program(h) after the loop compares
-        // one level's output against another level's restored INPUT, which is what the
-        // first version of this test did and what the platform is right to do. The purity
-        // guarantee has a usage consequence, and this is it.
-        std::vector<RunIdentity> ids;
-        std::vector<TileProgram> results;
-        for (std::size_t i = 0; i < handles.size(); ++i) {
-            const auto r = platform.run(handles[i], levels[i], initial);
-            ids.push_back(r.identity);
-            results.push_back(platform.program(handles[i]));
-        }
+        const CspProgramHandle h = platform.load_csp(ast, csp_inputs(ast));
+        const CspPlatformRun lb = platform.run_csp(h, ExecutionLevel::Behavioral);
+        const CspPlatformRun lt1 = platform.run_csp(h, ExecutionLevel::BlockSequential);
         INFO("algo " << algo);
-        for (std::size_t i = 1; i < results.size(); ++i)
-            CHECK(all_operands_identical(results[0], results[i]));
+        REQUIRE_FALSE(lt1.outcome.skipped);
+        CHECK(all_operands_identical(lb.outcome.values, lt1.outcome.values));
         // The identities differ in exactly one field: the level.
-        for (std::size_t i = 1; i < ids.size(); ++i) {
-            CHECK(ids[i].program_digest == ids[0].program_digest);
-            CHECK(ids[i].snapshot_digest == ids[0].snapshot_digest);
-            CHECK(ids[i].deployment_digest == ids[0].deployment_digest);
-            CHECK(ids[i].level != ids[0].level);
-            CHECK_FALSE(ids[i] == ids[0]);
-        }
+        CHECK(lt1.identity.program_digest == lb.identity.program_digest);
+        CHECK(lt1.identity.snapshot_digest == lb.identity.snapshot_digest);
+        CHECK(lt1.identity.deployment_digest == lb.identity.deployment_digest);
+        CHECK(lt1.identity.level != lb.identity.level);
+        CHECK_FALSE(lt1.identity == lb.identity);
     }
 }
 
@@ -195,19 +181,20 @@ TEST_CASE("the identity moves when any one of the four inputs moves",
     VirtualPlatform platform = default_platform();
     const ProgramHandle h = platform.load_program(filled("matmul"));
     const StateSnapshot initial = platform.snapshot();
-    const auto base = platform.run(h, ExecutionLevel::BlockSequential, initial);
+    const auto base = platform.run(h, ExecutionLevel::Behavioral, initial);
 
     SECTION("a different level") {
-        const auto other = platform.run(h, ExecutionLevel::Behavioral, initial);
-        CHECK(other.identity.level != base.identity.level);
-        CHECK_FALSE(other.identity == base.identity);
+        // An L0 program runs at L-B only; a timed level is refused, not substituted. (The
+        // level's place in the identity is checked on a CSP program, above.)
+        CHECK_THROWS_AS(platform.run(h, ExecutionLevel::BlockSequential, initial),
+                        std::invalid_argument);
     }
     SECTION("a different state") {
         platform.restore(initial);
         platform.program(h).operand("A").values[0] += 1.0f;
         const StateSnapshot nudged = platform.snapshot();
         CHECK(nudged.digest() != initial.digest());
-        const auto other = platform.run(h, ExecutionLevel::BlockSequential, nudged);
+        const auto other = platform.run(h, ExecutionLevel::Behavioral, nudged);
         CHECK(other.identity.program_digest == base.identity.program_digest);
         CHECK(other.identity.snapshot_digest != base.identity.snapshot_digest);
     }
@@ -215,7 +202,7 @@ TEST_CASE("the identity moves when any one of the four inputs moves",
         const ProgramHandle other_h = platform.load_program(filled("lu"));
         // The snapshot now has to cover both programs, or restoring it is refused.
         const StateSnapshot both = platform.snapshot();
-        const auto other = platform.run(other_h, ExecutionLevel::BlockSequential, both);
+        const auto other = platform.run(other_h, ExecutionLevel::Behavioral, both);
         CHECK(other.identity.program_digest != base.identity.program_digest);
     }
     SECTION("a different deployment") {
@@ -223,7 +210,7 @@ TEST_CASE("the identity moves when any one of the four inputs moves",
         ds.compute_tiles = 4;
         VirtualPlatform bigger(make_deployment(ds));
         const ProgramHandle bh = bigger.load_program(filled("matmul"));
-        const auto other = bigger.run(bh, ExecutionLevel::BlockSequential, bigger.snapshot());
+        const auto other = bigger.run(bh, ExecutionLevel::Behavioral, bigger.snapshot());
         CHECK(other.identity.deployment_digest != base.identity.deployment_digest);
         // Same program and same state, though: the machine changed, not the problem.
         CHECK(other.identity.program_digest == base.identity.program_digest);
@@ -327,13 +314,12 @@ TEST_CASE("the result carries what the level does not model",
     const ProgramHandle h = platform.load_program(filled("matmul"));
     const StateSnapshot initial = platform.snapshot();
 
-    const auto at_t1 = platform.run(h, ExecutionLevel::BlockSequential, initial);
-    CHECK(at_t1.unmodelled.size() == 1);                     // l3.banks
-    CHECK(at_t1.unmodelled.front().find("l3.banks") != std::string::npos);
-
     const auto at_b = platform.run(h, ExecutionLevel::Behavioral, initial);
-    CHECK(at_b.unmodelled.size() == 2);                      // + the capacity
-    CHECK(at_b.identity.deployment_digest == at_t1.identity.deployment_digest);
+    CHECK(at_b.unmodelled.size() == 2);                      // l3.banks and the capacity
+    // L-T1 models the capacity (a CSP program's L3 credits), so it drops only the banks.
+    const auto at_t1 = unmodelled_fields(ExecutionLevel::BlockSequential, spec);
+    CHECK(at_t1.size() == 1);
+    CHECK(at_t1.front().find("l3.banks") != std::string::npos);
 }
 
 TEST_CASE("the coverage tag is part of what a snapshot digests",
@@ -465,7 +451,7 @@ TEST_CASE("a multi-device deployment cannot be run, and says why",
     CHECK(platform.deployment().device_count() == 2);
 
     try {
-        platform.run(h, ExecutionLevel::BlockSequential, initial);
+        platform.run(h, ExecutionLevel::Behavioral, initial);
         FAIL("a multi-device run must be refused");
     } catch (const std::invalid_argument& e) {
         const std::string what = e.what();
@@ -478,7 +464,7 @@ TEST_CASE("a multi-device deployment cannot be run, and says why",
     one.devices = {a};
     VirtualPlatform single(one);
     const ProgramHandle sh = single.load_program(filled("matmul"));
-    CHECK_NOTHROW(single.run(sh, ExecutionLevel::BlockSequential, single.snapshot()));
+    CHECK_NOTHROW(single.run(sh, ExecutionLevel::Behavioral, single.snapshot()));
 }
 
 // ----------------------------------------------------------------------------
@@ -510,11 +496,11 @@ TEST_CASE("a snapshot naming one operand twice is refused", "[program][platform]
     CHECK(platform.snapshot().canonical_bytes() == moved.canonical_bytes());
 }
 
-TEST_CASE("the identity covers the placement and the dataflow too",
+TEST_CASE("the identity covers the placement too",
           "[program][platform][run]") {
-    // ADR 0002 §3.5 names four inputs; run() takes SIX. `placement` changes which compute tile
-    // an op lands on and so the schedule, and the L1 annotation changes per-op timing -- so
-    // two runs differing only in those must not compare equal.
+    // ADR 0002 §3.5 names four inputs; run() takes FIVE. `placement` changes which compute tile
+    // an op lands on and so the schedule, so two runs differing only in it must not compare
+    // equal.
     VirtualPlatform platform(make_deployment([] {
         DeviceSpec ds;
         ds.compute_tiles = 4;
@@ -523,116 +509,23 @@ TEST_CASE("the identity covers the placement and the dataflow too",
     const ProgramHandle h = platform.load_program(filled("matmul"));
     const StateSnapshot initial = platform.snapshot();
 
-    const auto unpinned = platform.run(h, ExecutionLevel::BlockSequential, initial,
-                                       Placement::single(4), nullptr);
+    const auto unpinned = platform.run(h, ExecutionLevel::Behavioral, initial,
+                                       Placement::single(4));
     // A pinned placement over the SAME compute tiles: label() cannot tell these apart, which
     // is exactly why the identity records the assignment instead of the label.
     std::vector<Dim> assignment(platform.program(h).ops().size(), 0);
-    const auto pinned_a = platform.run(h, ExecutionLevel::BlockSequential, initial,
-                                       Placement::pinned(assignment, 4), nullptr);
+    const auto pinned_a = platform.run(h, ExecutionLevel::Behavioral, initial,
+                                       Placement::pinned(assignment, 4));
     std::vector<Dim> other = assignment;
     other.back() = 3;
-    const auto pinned_b = platform.run(h, ExecutionLevel::BlockSequential, initial,
-                                       Placement::pinned(other, 4), nullptr);
+    const auto pinned_b = platform.run(h, ExecutionLevel::Behavioral, initial,
+                                       Placement::pinned(other, 4));
 
     CHECK(Placement::single(4).label() != Placement::pinned(assignment, 4).label());
     CHECK(Placement::pinned(assignment, 4).label() == Placement::pinned(other, 4).label());
     CHECK_FALSE(unpinned.identity == pinned_a.identity);
     CHECK_FALSE(pinned_a.identity == pinned_b.identity);      // the label would have matched
     CHECK(pinned_a.identity.program_digest == pinned_b.identity.program_digest);
-
-    // The dataflow is recorded as the map's NAME, because a StreamProgram is a pure function
-    // of (program, map) and both are already in the identity (#265 increment 4's reasoning).
-    auto streams = stream::derive_matmul_streams(platform.program(h), map_for("ws"));
-    const auto annotated = platform.run(h, ExecutionLevel::BlockSequential, initial,
-                                       Placement::single(4), &streams);
-    CHECK(annotated.identity.dataflow == map_for("ws").name);
-    CHECK(unpinned.identity.dataflow.empty());
-    CHECK_FALSE(annotated.identity == unpinned.identity);
-
-    auto other_flow = stream::derive_matmul_streams(platform.program(h), map_for("as"));
-    const auto annotated_b = platform.run(h, ExecutionLevel::BlockSequential, initial,
-                                         Placement::single(4), &other_flow);
-    CHECK_FALSE(annotated.identity == annotated_b.identity);
-
-    // A TAMPERED ANNOTATION MUST NOT SHARE AN IDENTITY. The first version recorded the map's
-    // NAME, justified by "a StreamProgram is a pure function of (program, map)" -- true of
-    // every one this repo derives, and an assumption about the CALLER stated in a comment.
-    // run() takes a pointer, so a caller can change a wavefront's depth or an element stride,
-    // get a different makespan, and the name would have called the two runs identical. An
-    // assumption a type cannot enforce does not belong in an identity.
-    auto tampered = streams;
-    REQUIRE_FALSE(tampered.computes.empty());
-    tampered.computes.begin()->second.k_depth += 1;
-    CHECK(tampered.map.name == streams.map.name);          // the NAME is unchanged...
-    const auto tampered_run = platform.run(h, ExecutionLevel::BlockSequential, initial,
-                                          Placement::single(4), &tampered);
-    CHECK(tampered_run.identity.dataflow == annotated.identity.dataflow);   // ...and so is the label
-    CHECK_FALSE(tampered_run.identity == annotated.identity);               // but not the identity
-    // ...and the RENDERED provenance distinguishes them too. str() printed the name and not
-    // the digest, so two runs operator== correctly told apart rendered identically -- and a
-    // provenance line that cannot tell two runs apart is not provenance.
-    CHECK(tampered_run.identity.str() != annotated.identity.str());
-    // Every compared component appears in the rendering, which is what makes that true.
-    CHECK(annotated.identity.str().find(annotated.identity.stream_digest) != std::string::npos);
-    CHECK(annotated.identity.str().find(annotated.identity.program_digest) != std::string::npos);
-    CHECK(annotated.identity.str().find(annotated.identity.snapshot_digest) != std::string::npos);
-    CHECK(annotated.identity.str().find(annotated.identity.deployment_digest) != std::string::npos);
-    CHECK(unpinned.identity.str().find("flow:") == std::string::npos);   // none to report
-
-    // Same for a signature field the L1 cost model reads.
-    auto strided = streams;
-    REQUIRE_FALSE(strided.signatures.empty());
-    strided.signatures.begin()->second.element_stride += 1;
-    const auto strided_run = platform.run(h, ExecutionLevel::BlockSequential, initial,
-                                         Placement::single(4), &strided);
-    CHECK_FALSE(strided_run.identity == annotated.identity);
-
-    // A RATE THAT DIFFERS BEYOND SIX DECIMALS MUST STILL DIFFER. std::to_string(double) gives
-    // six decimal places, so 1.0 and 1.0000001 rendered identically and two annotations that
-    // schedule differently shared an identity. That is the same mistake #265 increment 2 found
-    // in the L0 format's `alpha`, in a file written the same day -- which is why the assertion
-    // is here rather than left to the reader's trust in max_digits10.
-    auto fine = streams;
-    REQUIRE_FALSE(fine.signatures.empty());
-    fine.signatures.begin()->second.rate = 1.0;
-    auto finer = streams;
-    finer.signatures.begin()->second.rate = 1.0000001;
-    CHECK(fine.canonical_bytes() != finer.canonical_bytes());
-    const auto fine_run = platform.run(h, ExecutionLevel::BlockSequential, initial,
-                                      Placement::single(4), &fine);
-    const auto finer_run = platform.run(h, ExecutionLevel::BlockSequential, initial,
-                                       Placement::single(4), &finer);
-    CHECK_FALSE(fine_run.identity == finer_run.identity);
-
-    // THE NAME REALLY IS OUTSIDE THE COMPARISON. The rule was stated in a comment while the
-    // name sat inside the digested bytes, so renaming a map and changing nothing else gave a
-    // different identity for the same run -- the code contradicting its own documentation.
-    auto renamed = streams;
-    renamed.map.name = "a-different-label";
-    CHECK(renamed.canonical_bytes() == streams.canonical_bytes());
-    const auto renamed_run = platform.run(h, ExecutionLevel::BlockSequential, initial,
-                                         Placement::single(4), &renamed);
-    CHECK(renamed_run.identity == annotated.identity);            // same run...
-    CHECK(renamed_run.identity.dataflow != annotated.identity.dataflow);   // ...different label
-
-    // ...while an identical annotation, freshly derived, digests the same -- so the check is
-    // about CONTENT and not about object identity.
-    auto rederived = stream::derive_matmul_streams(platform.program(h), map_for("ws"));
-    CHECK(rederived.canonical_bytes() == streams.canonical_bytes());
-    const auto rederived_run = platform.run(h, ExecutionLevel::BlockSequential, initial,
-                                           Placement::single(4), &rederived);
-    CHECK(rederived_run.identity == annotated.identity);
-
-    // And two DIFFERENT maps still differ, so dropping the name from the bytes did not make
-    // the four presets indistinguishable -- what a map does is tau and proj, and those remain.
-    CHECK(stream::derive_matmul_streams(platform.program(h), map_for("os")).canonical_bytes() !=
-          streams.canonical_bytes());
-
-    // Same six inputs, same identity -- the property all of this exists to support.
-    const auto again = platform.run(h, ExecutionLevel::BlockSequential, initial,
-                                    Placement::single(4), &streams);
-    CHECK(again.identity == annotated.identity);
 }
 
 TEST_CASE("an unset handle sorts apart from the first loaded one",
@@ -664,14 +557,12 @@ TEST_CASE("every RunIdentity field is either compared or a declared label, and a
     // silent omission -- the same technique as the exhaustive switch over StateCoverage, and
     // for the same reason. A designated-initializer aggregate would NOT do: a new member would
     // just default-initialise and the test would still build.
-    const RunIdentity base{"prog0",  "state0",     "deploy0", "place0",
-                           "resid0", "flow0",      "the-label", "window=256",
+    const RunIdentity base{"prog0", "state0", "deploy0", "place0", "window=256",
                            ExecutionLevel::BlockSequential};
     {
-        const auto& [program, state, deployment, placement, residency, stream, dataflow,
-                     schedule, level] = base;
-        (void)program; (void)state; (void)deployment; (void)placement;
-        (void)residency; (void)stream; (void)dataflow; (void)schedule; (void)level;
+        const auto& [program, state, deployment, placement, schedule, level] = base;
+        (void)program; (void)state; (void)deployment; (void)placement; (void)schedule;
+        (void)level;
     }
 
     // ---- the COMPARED fields: perturbing any one must change == AND str() ----------------
@@ -685,12 +576,8 @@ TEST_CASE("every RunIdentity field is either compared or a declared label, and a
         {"snapshot_digest",   perturbed([](RunIdentity& o) { o.snapshot_digest += "x"; })},
         {"deployment_digest", perturbed([](RunIdentity& o) { o.deployment_digest += "x"; })},
         {"placement",         perturbed([](RunIdentity& o) { o.placement += "x"; })},
-        // Added when #305 increment 2 made seeded residency a run input: a seeded tile's
-        // chain skips the DMA leg, so two runs differing only here produce different
-        // makespans. The tripwire below is what forced this entry rather than letting the
-        // field be compared-but-unrendered, or rendered-but-uncompared.
-        {"residency",         perturbed([](RunIdentity& o) { o.residency += "x"; })},
-        {"stream_digest",     perturbed([](RunIdentity& o) { o.stream_digest += "x"; })},
+        // (`residency`, `stream_digest` and the `dataflow` label were inputs of the L0 L-T1
+        // executor, and left the identity with it in kpu-run-csp-programs step 4e.)
         // Added with CSP programs on the platform (kpu-run-csp-programs step 4a): L-CA's window
         // is a schedule option, and two runs differing only in it have different makespans.
         {"schedule",          perturbed([](RunIdentity& o) { o.schedule += "x"; })},
@@ -703,74 +590,20 @@ TEST_CASE("every RunIdentity field is either compared or a declared label, and a
     }
     CHECK(base == base);
 
-    // ---- the DECLARED LABEL: not compared, but still rendered ---------------------------
-    // `dataflow` is the map's name. Two annotations with identical content ARE the same
-    // annotation whatever they are called, so it must NOT be compared -- and it must still be
-    // rendered, because it is what a reader recognises. Both halves are asserted, since the
-    // first version of this code got the comparison wrong and a later one got the rendering
-    // wrong.
-    const RunIdentity relabelled = perturbed([](RunIdentity& o) { o.dataflow = "other-label"; });
-    CHECK(relabelled == base);
-    CHECK(relabelled.str() != base.str());
-
     // Every compared string appears verbatim in the rendering, so "rendered" is not satisfied
     // by a digest of a digest.
     const std::string text = base.str();
     for (const std::string& part : {base.program_digest, base.snapshot_digest,
-                                    base.deployment_digest, base.stream_digest, base.dataflow,
-                                    base.schedule}) {
+                                    base.deployment_digest, base.schedule}) {
         INFO("part " << part);
         CHECK(text.find(part) != std::string::npos);
     }
-    // The placement and the seeded residency are rendered as DIGESTS rather than verbatim,
-    // because a pinned assignment is one number per op and a resident set is one key per
-    // tile -- either would swamp the line. Stated here so the exceptions are deliberate
-    // rather than oversights, and asserted both ways: the digest appears, the raw bytes do
+    // The placement is rendered as a DIGEST rather than verbatim, because a pinned assignment
+    // is one number per op and would swamp the line. Stated here so the exception is deliberate
+    // rather than an oversight, and asserted both ways: the digest appears, the raw bytes do
     // not.
     CHECK(text.find(digest_of(base.placement)) != std::string::npos);
     CHECK(text.find("place0") == std::string::npos);
-    CHECK(text.find(digest_of(base.residency)) != std::string::npos);
-    CHECK(text.find("resid0") == std::string::npos);
-}
-
-TEST_CASE("the residency decision is serialized unambiguously", "[program][platform][run]") {
-    // A SEPARATOR IS NOT A SERIALIZATION. Nothing constrains a tile key's characters --
-    // `TileCoord::operand` takes any string -- so joining a set with ";" made one rendering
-    // ambiguous: the single key `A#0#0;B#0#0` and the two-key set {`A#0#0`, `B#0#0`} produced
-    // identical bytes. Two runs seeding different tiles then compared EQUAL in the identity
-    // while producing different makespans, and an identity that can collide is worse than no
-    // identity, because it is trusted. Length prefixes fix it.
-    //
-    // The seeds here match no tile in the program on purpose: what is under test is the
-    // RENDERING of a decision, and identical behaviour is what leaves the identity as the only
-    // thing that can tell the two runs apart.
-    VirtualPlatform platform = default_platform();
-    const ProgramHandle h = platform.load_program(filled("matmul"));
-    const StateSnapshot initial = platform.snapshot();
-    const Placement pl = Placement::single(platform.deployment().device_view().compute_tiles);
-
-    const auto one_key = platform.run(h, ExecutionLevel::BlockSequential, initial, pl, nullptr,
-                                      {"A#0#0;B#0#0"});
-    const auto two_keys = platform.run(h, ExecutionLevel::BlockSequential, initial, pl, nullptr,
-                                       {"A#0#0", "B#0#0"});
-    CHECK_FALSE(one_key.identity == two_keys.identity);
-    CHECK(one_key.identity.program_digest == two_keys.identity.program_digest);
-
-    // SEEDED and RETAINED are different claims about the same key, so moving a key between
-    // them must change the identity: one says "already there", the other "must still be there
-    // afterwards", and they produce different transfer counts.
-    const auto seeded = platform.run(h, ExecutionLevel::BlockSequential, initial, pl, nullptr,
-                                     {"A#0#0"}, {});
-    const auto retained = platform.run(h, ExecutionLevel::BlockSequential, initial, pl, nullptr,
-                                       {}, {"A#0#0"});
-    CHECK_FALSE(seeded.identity == retained.identity);
-
-    // A cold run that keeps nothing still renders EMPTY, not "i[]r[]" -- the field's own
-    // comment says "empty when the run starts cold", and a rendering that is never empty would
-    // make every run look as though it had made a residency decision.
-    const auto cold = platform.run(h, ExecutionLevel::BlockSequential, initial, pl, nullptr);
-    CHECK(cold.identity.residency.empty());
-    CHECK(cold.identity.str().find("resident:") == std::string::npos);
 }
 
 // ----------------------------------------------------------------------------
@@ -783,11 +616,8 @@ TEST_CASE("at L-B a step executes, so the state advances as you step",
     const StateSnapshot initial = platform.snapshot();
 
     auto cur = platform.step_begin(h, ExecutionLevel::Behavioral, initial);
-    CHECK(cur.executes());
     CHECK(cur.level() == ExecutionLevel::Behavioral);
     CHECK(cur.program() == h);
-    // There is no run behind an L-B cursor, because nothing has run: the steps ARE the run.
-    CHECK_FALSE(cur.run_result().has_value());
     CHECK(cur.size() == platform.program(h).ops().size());
 
     // Nothing computed yet.
@@ -811,41 +641,6 @@ TEST_CASE("at L-B a step executes, so the state advances as you step",
     const ProgramHandle rh = reference.load_program(filled("matmul"));
     reference.run(rh, ExecutionLevel::Behavioral, reference.snapshot());
     CHECK(all_operands_identical(reference.program(rh), platform.program(h)));
-}
-
-TEST_CASE("at L-T1 a step replays a finished run, and the cursor says so",
-          "[program][platform][step]") {
-    // The executor's schedule depends on the WHOLE program -- credits, residency and lane
-    // contention are decided across it -- so there is no meaningful half a schedule.
-    // step_begin() runs to completion and the cursor walks the timeline that run produced.
-    // A caller that believed stepping advanced the state would be wrong here, which is why
-    // executes() exists rather than a uniform pretence.
-    VirtualPlatform platform = default_platform();
-    const ProgramHandle h = platform.load_program(filled("matmul"));
-    const StateSnapshot initial = platform.snapshot();
-
-    auto cur = platform.step_begin(h, ExecutionLevel::BlockSequential, initial);
-    CHECK_FALSE(cur.executes());
-    REQUIRE(cur.run_result().has_value());
-    CHECK(cur.run_result()->outcome.makespan > 0);
-    CHECK(cur.run_result()->identity.level == ExecutionLevel::BlockSequential);
-
-    // The state is ALREADY FINAL before the first step.
-    bool computed = false;
-    for (float v : platform.program(h).operand("C").values) computed = computed || (v != 0.0f);
-    CHECK(computed);
-
-    std::size_t taken = 0;
-    Cycle last = 0;
-    while (cur.step()) {
-        // A replay is ordered in time, which is what makes it readable.
-        CHECK(cur.current().at >= last);
-        last = cur.current().at;
-        ++taken;
-    }
-    CHECK(taken > 0);
-    CHECK(taken == cur.size());
-    CHECK(last == cur.run_result()->outcome.makespan);
 }
 
 TEST_CASE("a cursor starts from the snapshot it was given", "[program][platform][step]") {
@@ -873,6 +668,9 @@ TEST_CASE("a level with no stepper is refused, and so is a multi-device deployme
     VirtualPlatform platform = default_platform();
     const ProgramHandle h = platform.load_program(filled("matmul"));
     const StateSnapshot initial = platform.snapshot();
+    // L-T1 too: an L0 program steps at L-B; a CSP program's L-T1 cursor replays its records.
+    CHECK_THROWS_AS(platform.step_begin(h, ExecutionLevel::BlockSequential, initial),
+                    std::invalid_argument);
     CHECK_THROWS_AS(platform.step_begin(h, ExecutionLevel::ResourceTransactional, initial),
                     std::invalid_argument);
     CHECK_THROWS_AS(platform.step_begin(h, ExecutionLevel::CycleAccurate, initial),
@@ -914,7 +712,6 @@ TEST_CASE("loading a program while a cursor is live does not invalidate it",
     const StateSnapshot initial = platform.snapshot();
 
     auto cur = platform.step_begin(h, ExecutionLevel::Behavioral, initial);
-    REQUIRE(cur.executes());
     CHECK(cur.step());                       // one step, then grow the container
 
     // Enough appends to force a vector to reallocate several times over.

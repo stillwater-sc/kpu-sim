@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Removed
+
+- **The L0 L-T1 executor, `TileTransactionExecutor`** (kpu-run-csp-programs step 4e). L-T1
+  runs the CSP program (`csp/transactional.hpp`). An L0 program is a trace, and runs at L-B only,
+  as the oracle.
+  - `run_at` and the platform refuse an L0 program at L-T1 with the reason, as they already did
+    at L-CA. The platform's L0 run lost its stream-annotation and residency inputs, and
+    `RunIdentity` lost `residency`, `stream_digest` and `dataflow`.
+  - Gone with it, since only it used them:
+    - the L0 L-T1 stepper;
+    - `driver/timeline_trace.hpp`;
+    - `record::build_record`, which wrote `.tflow` versions 1-3.
+  - Version 3 is still read, by `read_tflow`, the checker and the viewer, on a checked-in
+    fixture (`tests/program/tflow/shared_reader_v3.tflow`).
+  - kpu-run refuses `--streams`, `--timeline` and `--tflow` for an L0 program, and says to time
+    its CSP program instead.
+  - `Hop`, `Mover` and `Cycle` moved to `program/hop.hpp`, and `tile_key` to `tile_program.hpp`.
+  - `examples/characterize` is unchanged: it never ran the executor.
+
 ### Added
 
 - **Loadables run CSP programs** (kpu-run-csp-programs step 4d.2).

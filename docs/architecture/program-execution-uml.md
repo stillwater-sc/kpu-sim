@@ -10,6 +10,11 @@ engine owns which tier).
 DMProgram executors, the OFG flow executors — ADR 0001 D6) are deliberately absent: they
 are not part of the path forward.
 
+**Out of date (2026-10-11):** `TileTransactionExecutor`, drawn below as L-T1 [today], retired in
+kpu-run-csp-programs step 4e. L-T1 now interprets the CSP program
+(`include/sw/kpu/program/csp/transactional.hpp`), and an L0 program runs at L-B only. The
+diagrams have not been redrawn yet.
+
 **On naming (ADR 0002):** **CSP is the program layer, not a fidelity.** The engines below
 are *interpreters* of one CSP program at different **transaction granularities** — L-B
 (atomic block move), L-T1 (tile move), L-T2 (per-resource `read`/`write`, `push` into the

@@ -8,7 +8,7 @@
 // ============================================================================
 #include <sw/kpu/program/record/tile_flow_lod.hpp>
 
-#include <sw/kpu/program/tile_transaction_executor.hpp>
+#include <sw/kpu/program/hop.hpp>
 
 #include <nlohmann/json.hpp>
 

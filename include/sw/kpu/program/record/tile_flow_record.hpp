@@ -4,7 +4,7 @@
 // did, as events placed in space and time, written as a columnar `.tflow` bundle the viewer
 // loads straight into typed arrays.
 //
-// THE RECORD IS NOT THE VIEW. It is built from a RunOutcome and nothing else, so a viewer, an
+// THE RECORD IS NOT THE VIEW. It is built from a run's outcome and nothing else, so a viewer, an
 // invariant checker and a diff between runs all read the same thing, and none of them reads
 // the executor.
 //
@@ -27,8 +27,9 @@
 // (`"ops": "csp-actions"`): op i is the program's i-th ACTION, its kind an Action::Kind (Load,
 // Store, Move, Writeback, Feed, Drain, Call, Release). Each movement action is one transit (a
 // Store two: the ejection, then the DMA write), each Call one compute, and the residency
-// intervals are the program's own slots, credit to Release. Version 3 stays the record of an L0
-// run.
+// intervals are the program's own slots, credit to Release. Versions 1-3 were the records of an
+// L0 program's run at L-T1; the executor that made them retired (kpu-run-csp-programs step 4e),
+// so they are read and no longer written.
 //
 // Not in v0, by design and named so: cause edges (step 5) and the orchestrator's descriptor
 // trace, which needs a time base across launches and arrives with the orchestrated record.
@@ -149,13 +150,6 @@ struct TileFlowRecord {
     // Index of a station by name; throws RecordError when absent.
     std::uint32_t station(const std::string& name) const;
 };
-
-// Build the record of one run of `prog` at a level that models resources. Throws RecordError
-// for a level with no intervals (L-B), naming it. `foreign_slots` is the run's
-// TileExecutionRequest::foreign_held_slots, which the outcome does not carry.
-TileFlowRecord build_record(const TileProgram& prog, const driver::RunOutcome& outcome,
-                            const platform::DeploymentSpec& spec, const Placement& placement,
-                            Dim device = 0, std::uint64_t foreign_slots = 0);
 
 // Build the record of a CSP program's run at L-T1 (version 4): `outcome` is the L-T1 outcome of
 // `ast` on `operands` (driver::csp_run_level), timed on device `device` of `spec`. Throws

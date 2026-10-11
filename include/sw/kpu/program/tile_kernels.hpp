@@ -4,18 +4,14 @@
 // transient state they carry between ops (pivot slots + row permutation).
 //
 // These are the SINGLE implementation of L0 arithmetic. Every driver executes a
-// TileProgram by calling apply() per op, and differs only in the ORDER it
-// chooses and what it measures:
-//   - TileProgramReference (tile_program_reference.hpp) walks ops in program
-//     order with no timing — the BEHAVIORAL tier and the value oracle.
-//   - TileTransactionExecutor (docs/plans/tile-transaction-executor.md, #264)
-//     fires ops in dataflow order under credits and resource contention — the
-//     TRANSACTIONAL tier.
-// Because both call these kernels, their values are bit-identical BY
-// CONSTRUCTION rather than by testing: dependency-respecting orders cannot
-// differ, since each op declares its full tile I/O (§3a of
-// docs/plans/kpu-program-model.md) and WAW ordering on an output tile preserves
-// accumulation order. See ADR 0001 D3.1.
+// TileProgram by calling apply() per op: TileProgramReference
+// (tile_program_reference.hpp) walks ops in program order with no timing — the
+// BEHAVIORAL tier and the value oracle — and the L-B stepper applies the same ops
+// one at a time. Dependency-respecting orders cannot differ, since each op
+// declares its full tile I/O (§3a of docs/plans/kpu-program-model.md) and WAW
+// ordering on an output tile preserves accumulation order. See ADR 0001 D3.1.
+// (The L0 L-T1 executor, which fired ops in dataflow order under credits, also
+// called these kernels; it retired in kpu-run-csp-programs step 4e.)
 //
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2024-2025 Stillwater Supercomputing, Inc.

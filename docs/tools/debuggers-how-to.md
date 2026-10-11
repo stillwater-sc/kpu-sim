@@ -6,7 +6,7 @@ The simulator has two record-and-view debuggers. They cover the two halves of th
 |---|---|---|
 | **Question it answers** | Where was every tile, and when? | What did the DRAM, controllers, DMA engines and their buffers do? |
 | **Scope** | The whole program: DRAM -> L3 -> compute and back | Outside the NoC: DRAM, MCs, DMA engines, store buffers; NoC ports stubbed |
-| **Producer** | `kpu-run --tflow` (L-T1, block-sequential) | `kpu-memsim --out` (CSP memory side, hosted LPDDR5 controller) |
+| **Producer** | `kpu-run --program file.csp --tflow` (L-T1, block-sequential) | `kpu-memsim --out` (CSP memory side, hosted LPDDR5 controller) |
 | **Record** | `.tflow` bundle (tile residency, transits, computes) | `.mflow` bundle (bursts, DRAM commands, requests, buffers, port events) |
 | **Grain** | one tile move | one DRAM burst and one DRAM command |
 | **Checker** | `tools/trace/tflow_check.py` (TF1-TF9) | `tools/trace/mflow_check.py` (TF10, TF11, M1-M5) |
@@ -53,9 +53,8 @@ of the machine's timing mixed in.
 
 ### 2.1 Record
 
-A CSP program (the input `kpu-run` is moving to; `docs/plans/kpu-run-csp-programs.md`) records
-a **version-4** bundle, whose ops are the program's actions and whose L3 residencies are the
-program's own slots:
+A CSP program's L-T1 run records a **version-4** bundle. Its ops are the program's actions,
+and its L3 residencies are the program's own slots:
 
 ```bash
 build/tools/csp-gen/kpu-csp-gen --algo matmul --size 512 --tile 64 \
@@ -64,18 +63,13 @@ build/tools/kpu-run/kpu-run --program t4.csp --deploy tests/program/deploy/kpu_t
     --level block-sequential --tflow run.tflow
 ```
 
-An L0 program records a version-3 bundle, whose ops are L0 ops:
-
-```bash
-build/tools/kpu-run/kpu-run --algo matmul --size 256 --tile 32 --level block-sequential \
-    --deploy tests/program/deploy/kpu_t4.json --tflow run.tflow
-```
-
-- `--tflow` needs a level with timing (`block-sequential`); a behavioral-only run refuses it.
+- `--tflow` records the L-T1 run, so `--level` must include `block-sequential`.
 - `--deploy` takes the machine from a deployment spec. The fixtures are in
   `tests/program/deploy/`: `kpu_t4.json` (the reference SKU), `kpu_t16.json` and
   `kpu_t64.json`.
-- `--program file.l0` runs a serialized program instead of `--algo`.
+- An L0 program is a trace and runs at L-B only, so it has no record. Version 3, an L0 run's
+  record, came from the L0 L-T1 executor, which retired in kpu-run-csp-programs step 4e. The
+  checker and the viewer still read version 3 (`tests/program/tflow/shared_reader_v3.tflow`).
 
 ### 2.2 Check
 

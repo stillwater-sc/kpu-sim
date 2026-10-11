@@ -25,7 +25,7 @@
 
 #include <sw/kpu/program/platform/resource_map.hpp>
 #include <sw/kpu/program/tile_program.hpp>
-#include <sw/kpu/program/tile_transaction_executor.hpp>
+#include <sw/kpu/program/hop.hpp>
 
 #include <cstdint>
 #include <string>

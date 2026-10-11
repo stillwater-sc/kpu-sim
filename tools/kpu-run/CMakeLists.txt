@@ -14,8 +14,9 @@ kpu_add_tool(run
 # project (it never includes CTest), so a `if(BUILD_TESTING)` block silently registers
 # nothing — which is how examples/characterize's smoke test went unregistered.
 if(KPU_BUILD_TESTS)
-    # Agreement between the levels is the point of the tool, so the smoke test is
-    # the comparison itself: a non-zero exit means the models disagree.
+    # A derived L0 program runs at L-B only since the L0 L-T1 executor retired
+    # (kpu-run-csp-programs step 4e), so these run the oracle, and --algo leaves in step 5.
+    # The comparison between levels is the CSP tests' below.
     add_test(NAME kpu_run_matmul_compare
         COMMAND run --algo matmul --size 48 --tile 16 --level all
     )
@@ -45,92 +46,42 @@ if(KPU_BUILD_TESTS)
     set_tests_properties(kpu_run_refuses_unimplemented_level PROPERTIES
         LABELS "program;driver")
 
-    # --timeline must write a trace the existing tooling can read, and must REFUSE when
-    # only L-B was asked for, since L-B models no intervals to write.
-    add_test(NAME kpu_run_timeline_written
-        COMMAND ${CMAKE_COMMAND}
-            -DCMD=$<TARGET_FILE:run>
-            -DARGS=--algo$<SEMICOLON>matmul$<SEMICOLON>--size$<SEMICOLON>32$<SEMICOLON>--tile$<SEMICOLON>16$<SEMICOLON>--timeline$<SEMICOLON>${CMAKE_CURRENT_BINARY_DIR}/kpu_run_timeline.json
-            -DEXPECT_CODE=0
-            -DMUST_MATCH=events..one.per.hop
-            -P ${CMAKE_CURRENT_SOURCE_DIR}/expect_exit.cmake
-    )
-    set_tests_properties(kpu_run_timeline_written PROPERTIES LABELS "program;driver")
-
-    # --tflow writes the tile-flow record from the level that models resources.
-    add_test(NAME kpu_run_tflow_written
-        COMMAND ${CMAKE_COMMAND}
-            -DCMD=$<TARGET_FILE:run>
-            -DARGS=--algo$<SEMICOLON>matmul$<SEMICOLON>--size$<SEMICOLON>32$<SEMICOLON>--tile$<SEMICOLON>16$<SEMICOLON>--tflow$<SEMICOLON>${CMAKE_CURRENT_BINARY_DIR}/kpu_run_matmul.tflow
-            -DEXPECT_CODE=0
-            -DMUST_MATCH=residencies,.*transits,.*computes.from
-            -P ${CMAKE_CURRENT_SOURCE_DIR}/expect_exit.cmake
-    )
-    set_tests_properties(kpu_run_tflow_written PROPERTIES LABELS "program;driver;tileflow")
-
-    # The T4 reference SKU: 512^3 in 64x64 tiles is 1600 ops -- small enough to read every
-    # movement in the tile-flow viewer, large enough to fill most of the 128-slot L3.
-    add_test(NAME kpu_run_tflow_t4
-        COMMAND ${CMAKE_COMMAND}
-            -DCMD=$<TARGET_FILE:run>
-            -DARGS=--deploy$<SEMICOLON>${CMAKE_SOURCE_DIR}/tests/program/deploy/kpu_t4.json$<SEMICOLON>--algo$<SEMICOLON>matmul$<SEMICOLON>--size$<SEMICOLON>512$<SEMICOLON>--tile$<SEMICOLON>64$<SEMICOLON>--tflow$<SEMICOLON>${CMAKE_CURRENT_BINARY_DIR}/kpu_run_t4.tflow
-            -DEXPECT_CODE=0
-            -DMUST_MATCH=residencies,.*transits,.*computes.from
-            -P ${CMAKE_CURRENT_SOURCE_DIR}/expect_exit.cmake
-    )
-    set_tests_properties(kpu_run_tflow_t4 PROPERTIES LABELS "program;driver;tileflow;t4")
-
     # The tile-flow checker (#286 step 3) over real bundles, and its self-test: every
     # invariant must fail on a bundle that breaks it. Skipped without a Python interpreter.
     find_program(KPU_PYTHON3 NAMES python3 python)
     if(KPU_PYTHON3)
         set(_tflow_check ${CMAKE_SOURCE_DIR}/tools/trace/tflow_check.py)
-        add_test(NAME tflow_check_matmul
-            COMMAND ${KPU_PYTHON3} ${_tflow_check} ${CMAKE_CURRENT_BINARY_DIR}/kpu_run_matmul.tflow)
-        set_tests_properties(tflow_check_matmul PROPERTIES DEPENDS kpu_run_tflow_written)
-        # The T4 reference run (#286): the bundle the viewer is demonstrated on must be clean.
-        add_test(NAME tflow_check_t4
-            COMMAND ${KPU_PYTHON3} ${_tflow_check} ${CMAKE_CURRENT_BINARY_DIR}/kpu_run_t4.tflow)
-        set_tests_properties(tflow_check_t4 PROPERTIES DEPENDS kpu_run_tflow_t4)
-
-        # The #279 program: two readers of one tile, the higher-indexed one finishing first.
-        # Clean at L3 = 5; the checker's TF9 is what fails it under the old release rule.
-        add_test(NAME kpu_run_tflow_shared_reader
-            COMMAND run --program ${CMAKE_SOURCE_DIR}/tests/program/tflow/shared_reader.l0
-                    --fill-inputs --level block-sequential --compute-tiles 2 --l3-tiles 5
-                    --tflow ${CMAKE_CURRENT_BINARY_DIR}/shared_reader.tflow)
+        # Version 3, an L0 run's record, is still read: the checker, its self-test and the
+        # viewer run on a v3 bundle kept as a fixture (tests/program/tflow/README.md), since
+        # the L0 L-T1 executor that wrote it retired (kpu-run-csp-programs step 4e). It is the
+        # #279 program: two readers of one tile, the higher-indexed one finishing first, clean
+        # at L3 = 5, and the checker's TF9 is what fails it under the old release rule.
+        set(_v3_bundle ${CMAKE_SOURCE_DIR}/tests/program/tflow/shared_reader_v3.tflow)
         add_test(NAME tflow_check_shared_reader
-            COMMAND ${KPU_PYTHON3} ${_tflow_check} ${CMAKE_CURRENT_BINARY_DIR}/shared_reader.tflow)
-        set_tests_properties(tflow_check_shared_reader PROPERTIES DEPENDS kpu_run_tflow_shared_reader)
+            COMMAND ${KPU_PYTHON3} ${_tflow_check} ${_v3_bundle})
         add_test(NAME tflow_check_selftest
-            COMMAND ${KPU_PYTHON3} ${CMAKE_SOURCE_DIR}/tools/trace/test_tflow_check.py
-                    ${CMAKE_CURRENT_BINARY_DIR}/shared_reader.tflow)
-        set_tests_properties(tflow_check_selftest PROPERTIES DEPENDS kpu_run_tflow_shared_reader)
+            COMMAND ${KPU_PYTHON3} ${CMAKE_SOURCE_DIR}/tools/trace/test_tflow_check.py ${_v3_bundle})
         # The viewer (#286 step 4): pack a real bundle, refuse a non-bundle, parse the script.
         add_test(NAME tileflow_viewer_smoke
             COMMAND ${KPU_PYTHON3} ${CMAKE_SOURCE_DIR}/tools/visualization/tileflow/test_viewer.py
-                    ${CMAKE_CURRENT_BINARY_DIR}/kpu_run_matmul.tflow)
-        set_tests_properties(tileflow_viewer_smoke PROPERTIES DEPENDS kpu_run_tflow_written)
+                    ${_v3_bundle})
 
-        # The derived binding on the T4 reference run (#286): the bundle and floorplan the
-        # viewer is demonstrated on. The T64 one below stays as the scale check.
-        add_test(NAME tileflow_bind_t4
-            COMMAND ${KPU_PYTHON3} ${CMAKE_SOURCE_DIR}/tools/visualization/tileflow/test_bind.py
-                    ${CMAKE_CURRENT_BINARY_DIR}/kpu_run_t4.tflow
-                    ${CMAKE_BINARY_DIR}/tools/floorplan/t4_floorplan.json)
-        set_tests_properties(tileflow_bind_t4 PROPERTIES DEPENDS "kpu_run_tflow_t4;kpu_floorplan_t4")
-
-        # The derived binding (bind.py) on a T64 run and its floorplan (written by
-        # kpu_floorplan_t64 in tools/floorplan).
-        add_test(NAME kpu_run_tflow_t64
-            COMMAND run --algo matmul --size 128 --tile 32 --level block-sequential
+        # The derived binding (bind.py) at scale: a T64 run of a program kpu-csp-gen writes,
+        # and its floorplan (written by kpu_floorplan_t64 in tools/floorplan).
+        add_test(NAME csp_gen_t64_matmul
+            COMMAND $<TARGET_FILE:csp-gen> --algo matmul --size 128 --tile 32
+                    --target ${CMAKE_SOURCE_DIR}/tests/program/deploy/kpu_t64.json
+                    -o ${CMAKE_CURRENT_BINARY_DIR}/t64_matmul.csp)
+        add_test(NAME kpu_run_csp_tflow_t64
+            COMMAND run --program ${CMAKE_CURRENT_BINARY_DIR}/t64_matmul.csp
                     --deploy ${CMAKE_SOURCE_DIR}/tests/program/deploy/kpu_t64.json
-                    --tflow ${CMAKE_CURRENT_BINARY_DIR}/t64_matmul.tflow)
+                    --level block-sequential --tflow ${CMAKE_CURRENT_BINARY_DIR}/csp_t64.tflow)
+        set_tests_properties(kpu_run_csp_tflow_t64 PROPERTIES DEPENDS csp_gen_t64_matmul)
         add_test(NAME tileflow_bind_t64
             COMMAND ${KPU_PYTHON3} ${CMAKE_SOURCE_DIR}/tools/visualization/tileflow/test_bind.py
-                    ${CMAKE_CURRENT_BINARY_DIR}/t64_matmul.tflow
+                    ${CMAKE_CURRENT_BINARY_DIR}/csp_t64.tflow
                     ${CMAKE_BINARY_DIR}/tools/floorplan/t64_floorplan.json)
-        set_tests_properties(tileflow_bind_t64 PROPERTIES DEPENDS "kpu_run_tflow_t64;kpu_floorplan_t64")
+        set_tests_properties(tileflow_bind_t64 PROPERTIES DEPENDS "kpu_run_csp_tflow_t64;kpu_floorplan_t64")
         # ---- version 4: a CSP program's record (docs/plans/kpu-run-csp-programs.md step 4b) ----
         # The T4 reference run, from a program kpu-csp-gen writes: 512^3 in 64x64 tiles.
         add_test(NAME csp_gen_t4_matmul
@@ -184,80 +135,40 @@ if(KPU_BUILD_TESTS)
             tileflow_viewer_csp_smoke tileflow_bind_csp_t4
             PROPERTIES LABELS "program;tileflow;csp")
 
-        set_tests_properties(tflow_check_matmul tflow_check_t4 kpu_run_tflow_shared_reader
-            tflow_check_shared_reader tflow_check_selftest tileflow_viewer_smoke
-            kpu_run_tflow_t64 tileflow_bind_t64 tileflow_bind_t4
+        set_tests_properties(tflow_check_shared_reader tflow_check_selftest tileflow_viewer_smoke
+            csp_gen_t64_matmul kpu_run_csp_tflow_t64 tileflow_bind_t64
             PROPERTIES LABELS "program;tileflow")
     endif()
 
-    add_test(NAME kpu_run_tflow_refused_without_timing
-        COMMAND ${CMAKE_COMMAND}
-            -DCMD=$<TARGET_FILE:run>
-            -DARGS=--level$<SEMICOLON>behavioral$<SEMICOLON>--tflow$<SEMICOLON>${CMAKE_CURRENT_BINARY_DIR}/should_not_exist.tflow
-            -DEXPECT_CODE=2
-            -DMUST_MATCH=--tflow.needs.a.level.that.models.resources
-            -P ${CMAKE_CURRENT_SOURCE_DIR}/expect_exit.cmake
-    )
-    set_tests_properties(kpu_run_tflow_refused_without_timing PROPERTIES
-        LABELS "program;driver;tileflow")
-
-    add_test(NAME kpu_run_timeline_refused_without_timing
-        COMMAND ${CMAKE_COMMAND}
-            -DCMD=$<TARGET_FILE:run>
-            -DARGS=--level$<SEMICOLON>behavioral$<SEMICOLON>--timeline$<SEMICOLON>${CMAKE_CURRENT_BINARY_DIR}/should_not_exist.json
-            -DEXPECT_CODE=2
-            -DMUST_MATCH=needs.a.level.that.models.resources
-            -P ${CMAKE_CURRENT_SOURCE_DIR}/expect_exit.cmake
-    )
-    set_tests_properties(kpu_run_timeline_refused_without_timing PROPERTIES
-        LABELS "program;driver")
-
-    # An unknown dataflow, and a dataflow on an algorithm that has no stream derivation,
-    # must both be refused rather than silently ignored.
-    add_test(NAME kpu_run_rejects_bad_streams
-        COMMAND ${CMAKE_COMMAND}
-            -DCMD=$<TARGET_FILE:run>
-            -DARGS=--streams$<SEMICOLON>sideways
-            -DEXPECT_CODE=2
-            -DMUST_MATCH=unknown.--streams
-            -P ${CMAKE_CURRENT_SOURCE_DIR}/expect_exit.cmake
-    )
-    set_tests_properties(kpu_run_rejects_bad_streams PROPERTIES LABELS "program;driver")
-
-    add_test(NAME kpu_run_rejects_streams_for_lu
-        COMMAND ${CMAKE_COMMAND}
-            -DCMD=$<TARGET_FILE:run>
-            -DARGS=--algo$<SEMICOLON>lu$<SEMICOLON>--streams$<SEMICOLON>os
-            -DEXPECT_CODE=2
-            -DMUST_MATCH=matmul.only
-            -P ${CMAKE_CURRENT_SOURCE_DIR}/expect_exit.cmake
-    )
-    set_tests_properties(kpu_run_rejects_streams_for_lu PROPERTIES LABELS "program;driver")
+    # The options that fed the L0 L-T1 executor are refused by name for an L0 program, with
+    # where their job went (kpu-run-csp-programs step 4e), never ignored.
+    foreach(_retired tflow timeline streams)
+        add_test(NAME kpu_run_l0_refuses_${_retired}
+            COMMAND ${CMAKE_COMMAND}
+                -DCMD=$<TARGET_FILE:run>
+                -DARGS=--algo$<SEMICOLON>matmul$<SEMICOLON>--${_retired}$<SEMICOLON>${CMAKE_CURRENT_BINARY_DIR}/should_not_exist_${_retired}
+                -DEXPECT_CODE=2
+                -DMUST_MATCH=--${_retired}.times.an.L0.program.s.L-T1.run,.which.retired.*kpu-csp-gen
+                -DMUST_NOT_MATCH=values.vs
+                -P ${CMAKE_CURRENT_SOURCE_DIR}/expect_exit.cmake
+        )
+        set_tests_properties(kpu_run_l0_refuses_${_retired} PROPERTIES LABELS "program;driver")
+    endforeach()
 
     # An option present without its value must be an ERROR, not a silent absence: a
-    # terminal --timeline previously read as "no timeline requested".
+    # terminal --timeline once read as "no timeline requested".
     add_test(NAME kpu_run_rejects_valueless_option
         COMMAND ${CMAKE_COMMAND}
             -DCMD=$<TARGET_FILE:run>
-            -DARGS=--size$<SEMICOLON>32$<SEMICOLON>--tile$<SEMICOLON>16$<SEMICOLON>--timeline
+            -DARGS=--size$<SEMICOLON>32$<SEMICOLON>--tile$<SEMICOLON>16$<SEMICOLON>--emit-l0
             -DEXPECT_CODE=2
-            -DMUST_MATCH=--timeline:.missing.value
+            -DMUST_MATCH=--emit-l0:.missing.value
             -P ${CMAKE_CURRENT_SOURCE_DIR}/expect_exit.cmake
     )
     set_tests_properties(kpu_run_rejects_valueless_option PROPERTIES LABELS "program;driver")
 
-    # --step must produce a readable transaction stream at each level, and the two levels
-    # step by different mechanisms: L-T1 replays the run, L-B re-executes.
-    add_test(NAME kpu_run_step_block_sequential
-        COMMAND ${CMAKE_COMMAND}
-            -DCMD=$<TARGET_FILE:run>
-            -DARGS=--algo$<SEMICOLON>matmul$<SEMICOLON>--size$<SEMICOLON>32$<SEMICOLON>--tile$<SEMICOLON>16$<SEMICOLON>--step$<SEMICOLON>--step-limit$<SEMICOLON>8
-            -DEXPECT_CODE=0
-            -DMUST_MATCH=hop-start.*dma:dram->l3
-            -P ${CMAKE_CURRENT_SOURCE_DIR}/expect_exit.cmake
-    )
-    set_tests_properties(kpu_run_step_block_sequential PROPERTIES LABELS "program;driver")
-
+    # --step on an L0 program re-executes it at L-B, one op per step. (A CSP program's L-T1
+    # replay is kpu_run_csp_step_lt1, below.)
     add_test(NAME kpu_run_step_behavioral
         COMMAND ${CMAKE_COMMAND}
             -DCMD=$<TARGET_FILE:run>
@@ -283,14 +194,15 @@ if(KPU_BUILD_TESTS)
     set_tests_properties(kpu_run_step_limit_is_exact PROPERTIES LABELS "program;driver")
 
     # --emit-l0-result must be written only AFTER the comparison agrees, so a run whose
-    # levels disagreed cannot leave a file that looks like a golden expected output. The
-    # ordering is the observable contract: OK before wrote.
+    # levels disagreed cannot leave a file that looks like a golden expected output. An L0
+    # program runs at L-B alone, so there is no verdict to wait for and it is written; the
+    # ordering contract (OK before wrote) is kpu_run_csp_emit_result's.
     add_test(NAME kpu_run_emit_after_agreement
         COMMAND ${CMAKE_COMMAND}
             -DCMD=$<TARGET_FILE:run>
             -DARGS=--algo$<SEMICOLON>matmul$<SEMICOLON>--size$<SEMICOLON>32$<SEMICOLON>--tile$<SEMICOLON>16$<SEMICOLON>--emit-l0$<SEMICOLON>${CMAKE_CURRENT_BINARY_DIR}/emit.l0$<SEMICOLON>--emit-l0-result$<SEMICOLON>${CMAKE_CURRENT_BINARY_DIR}/emit.result.l0
             -DEXPECT_CODE=0
-            -DMUST_MATCH=OK:.every.level.computes.identical.values.*wrote
+            -DMUST_MATCH=only.one.level.ran.*wrote.*emit.result.l0
             -P ${CMAKE_CURRENT_SOURCE_DIR}/expect_exit.cmake
     )
     set_tests_properties(kpu_run_emit_after_agreement PROPERTIES LABELS "program;driver")
@@ -307,7 +219,7 @@ if(KPU_BUILD_TESTS)
             -DCMD=$<TARGET_FILE:run>
             -DARGS=--program$<SEMICOLON>${_corpus}/matmul_48x48x48_t16.l0
             -DEXPECT_CODE=0
-            -DMUST_MATCH=values:.from.file.*values.vs.L-B.*OK:.every.level
+            -DMUST_MATCH=values:.from.file.*behavioral.*only.one.level.ran
             -P ${CMAKE_CURRENT_SOURCE_DIR}/expect_exit.cmake
     )
     set_tests_properties(kpu_run_program_from_file PROPERTIES LABELS "program;driver")
@@ -331,7 +243,7 @@ if(KPU_BUILD_TESTS)
             -DCMD=$<TARGET_FILE:run>
             -DARGS=--program$<SEMICOLON>${_corpus}/matmul_32x32x32_t16_kernel.l0$<SEMICOLON>--fill-inputs
             -DEXPECT_CODE=0
-            -DMUST_MATCH=values:.synthesized.*OK:.every.level
+            -DMUST_MATCH=values:.synthesized.*behavioral.*only.one.level.ran
             -P ${CMAKE_CURRENT_SOURCE_DIR}/expect_exit.cmake
     )
     set_tests_properties(kpu_run_program_fill_inputs PROPERTIES LABELS "program;driver")
@@ -375,20 +287,6 @@ if(KPU_BUILD_TESTS)
             -P ${CMAKE_CURRENT_SOURCE_DIR}/expect_exit.cmake
     )
     set_tests_properties(kpu_run_program_refuses_newer_reader PROPERTIES
-        LABELS "program;driver")
-
-    # A loaded program has no algo to gate --streams on, so the refusal comes from the
-    # derivation -- which throws about the operand it could not find. The FLAG has to appear
-    # in the diagnostic, or "no operand 'C'" is all the user sees.
-    add_test(NAME kpu_run_program_names_the_flag_for_streams
-        COMMAND ${CMAKE_COMMAND}
-            -DCMD=$<TARGET_FILE:run>
-            -DARGS=--program$<SEMICOLON>${_corpus}/lu_64_t16.l0$<SEMICOLON>--streams$<SEMICOLON>os
-            -DEXPECT_CODE=2
-            -DMUST_MATCH=--streams.output-stationary:.*no.matmul.stream.derivation
-            -P ${CMAKE_CURRENT_SOURCE_DIR}/expect_exit.cmake
-    )
-    set_tests_properties(kpu_run_program_names_the_flag_for_streams PROPERTIES
         LABELS "program;driver")
 
     # ---- a CSP program (docs/plans/kpu-run-csp-programs.md step 2) -----------------
@@ -561,7 +459,7 @@ if(KPU_BUILD_TESTS)
             -DCMD=$<TARGET_FILE:run>
             -DARGS=--size$<SEMICOLON>32$<SEMICOLON>--tile$<SEMICOLON>16$<SEMICOLON>--deploy$<SEMICOLON>${_deploy}/adr_checkerboard16.json
             -DEXPECT_CODE=0
-            -DMUST_MATCH=checkerboard.cf16.*run.id.*OK:.every.level
+            -DMUST_MATCH=checkerboard.cf16.*run.id.*only.one.level.ran
             -P ${CMAKE_CURRENT_SOURCE_DIR}/expect_exit.cmake
     )
     set_tests_properties(kpu_run_deploy_from_spec PROPERTIES LABELS "program;driver")
@@ -586,7 +484,7 @@ if(KPU_BUILD_TESTS)
             -DCMD=$<TARGET_FILE:run>
             -DARGS=--size$<SEMICOLON>32$<SEMICOLON>--tile$<SEMICOLON>16$<SEMICOLON>--deploy$<SEMICOLON>${_deploy}/adr_checkerboard16.json
             -DEXPECT_CODE=0
-            -DMUST_MATCH=L-T1.ignores:.*l3.banks.*l1.vectors
+            -DMUST_MATCH=L-B.ignores:.*l3.banks.*l1.vectors
             -P ${CMAKE_CURRENT_SOURCE_DIR}/expect_exit.cmake
     )
     set_tests_properties(kpu_run_reports_unmodelled_fields PROPERTIES LABELS "program;driver")

@@ -1,6 +1,9 @@
 # TileTransactionExecutor — design note
 
-**Status:** design, for review before implementation (#264)
+**Status:** retired 2026-10-11 (kpu-run-csp-programs step 4e). L-T1 interprets the CSP program
+(`include/sw/kpu/program/csp/transactional.hpp`), and an L0 program runs at L-B only. This note
+is kept as the record of the design. Its `Hop` and `Mover` live on in `program/hop.hpp`.
+**Original status:** design, for review before implementation (#264)
 **Decided by:** ADR 0001 (`docs/architecture/adr/0001-program-contract-and-transactional-engine.md`)
 **Companions:** `docs/plans/kpu-program-model.md` (D6), `docs/architecture/program-execution-assessment.md`
 
