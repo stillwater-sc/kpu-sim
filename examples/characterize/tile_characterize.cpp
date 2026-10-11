@@ -66,15 +66,20 @@ struct Cell {
 };
 
 // The deployment's L3 sizes the schedule, as kpu-csp-gen's --target takes it. An unbounded L3
-// (capacity 0) gets the L3 the schedule needs. A schedule that does not fit is refused with
-// GenError's reason.
-Cell cell_program(const std::string& algo, Dim size, Dim tile, const platform::DeploymentSpec& spec) {
+// (capacity 0) gets the L3 the schedule needs.
+csp::gen::Options cell_options(const std::string& algo, Dim size, Dim tile, const platform::DeploymentSpec& spec) {
     csp::gen::Options o;
     o.algo = algo;
     o.size = size;
     o.tile = tile;
     o.l3 = spec.device(0).l3.capacity_tiles;
     if (o.l3 == 0) o.l3 = csp::gen::slots_needed(o);
+    return o;
+}
+
+// Any refusal here is an error: the one refusal that skips a cell (the schedule does not fit
+// the L3) is checked before this is called.
+Cell cell_program(const csp::gen::Options& o, const platform::DeploymentSpec& spec) {
     const csp::lang::Target target = csp::lang::target_from(spec.device(0));
     const csp::lang::Program ast = csp::lang::parse(csp::gen::generate(o, &target));
     driver::CspReference r = driver::csp_reference(ast, driver::csp_inputs(ast),
@@ -169,6 +174,10 @@ int main(int argc, char** argv) {
         sizes = parse_ints(arg(a, "--sizes", "128"));
         tiles = parse_ints(arg(a, "--tiles", "32"));
         cfs   = parse_ints(arg(a, "--compute-tiles", "1,4,16"));
+        for (const auto v : sizes)
+            if (v == 0) throw std::invalid_argument("a size must be positive");
+        for (const auto v : tiles)
+            if (v == 0) throw std::invalid_argument("a tile must be positive");
     } catch (const std::exception& e) {
         std::cerr << "error: --sizes/--tiles/--compute-tiles: " << e.what() << "\n";
         return 2;
@@ -287,15 +296,18 @@ int main(int argc, char** argv) {
                         std::cerr << "error: " << e.what() << "\n";
                         return 2;
                     }
-                    Cell program;
-                    try {
-                        program = cell_program(algo, size, tile, cell);
-                    } catch (const csp::gen::GenError& e) {
+                    const csp::gen::Options opts = cell_options(algo, size, tile, cell);
+                    if (csp::gen::slots_needed(opts) > opts.l3) {
                         // The schedule does not fit this machine's L3: the cell is refused, not
                         // characterized as a program written for another machine.
                         std::cout << algo << " " << size << " t" << tile << " CF " << cf << " " << topo
-                                  << ": skipped, " << e.what() << "\n";
+                                  << ": skipped, the schedule needs " << csp::gen::slots_needed(opts)
+                                  << " L3 slots; the L3 holds " << opts.l3 << "\n";
                         continue;
+                    }
+                    Cell program;
+                    try {
+                        program = cell_program(opts, cell);
                     } catch (const std::exception& e) {
                         std::cerr << "error: " << e.what() << "\n";
                         return 1;

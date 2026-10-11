@@ -48,4 +48,16 @@ if(KPU_BUILD_TESTS)
     )
     set_tests_properties(tile_characterize_rejects_bad_numbers PROPERTIES
         LABELS "program;characterize")
+
+    # A zero size or tile is refused (exit 2), never reported as a cell that does not fit the L3.
+    add_test(NAME tile_characterize_rejects_zero_tile
+        COMMAND ${CMAKE_COMMAND}
+            -DCMD=$<TARGET_FILE:tile_characterize>
+            -DARGS=--sizes$<SEMICOLON>64$<SEMICOLON>--tiles$<SEMICOLON>0
+            -DEXPECT_CODE=2
+            -DMUST_MATCH=a.tile.must.be.positive
+            -P ${CMAKE_SOURCE_DIR}/tools/kpu-run/expect_exit.cmake
+    )
+    set_tests_properties(tile_characterize_rejects_zero_tile PROPERTIES
+        LABELS "program;characterize")
 endif()
