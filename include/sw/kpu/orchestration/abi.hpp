@@ -31,7 +31,10 @@
 namespace sw::kpu::orchestration::abi {
 
 inline constexpr std::uint64_t kMagic = 0x4B50554C44000000ull;   // "KPULD"
-inline constexpr std::uint64_t kAbiMajor = 1, kAbiMinor = 0;
+// 2.0: manifests describe CSP operators (kpu-run-csp-programs step 4d.2) -- MAN_L3_SLOTS took
+// MAN_PEAK_LIVE's offset with a different meaning, and MAN_LIST selects which tile list the
+// MAN_N_READS / MAN_READ_* window shows.
+inline constexpr std::uint64_t kAbiMajor = 2, kAbiMinor = 0;
 inline constexpr std::uint32_t kNone = 0xFFFFFFFFu;
 
 inline constexpr std::size_t kDescriptorBytes = 64;
@@ -83,9 +86,9 @@ inline constexpr std::uint64_t RES_Q_TJ        = 0x0B0;   // WO
 inline constexpr std::uint64_t RES_RESULT      = 0x0B8;   // RO  1 resident, 0 not. NEVER contents
 inline constexpr std::uint64_t MAN_OP          = 0x0C0;   // WO  select an operator manifest
 inline constexpr std::uint64_t MAN_VALID       = 0x0C8;   // RO
-inline constexpr std::uint64_t MAN_PEAK_LIVE   = 0x0D0;   // RO
-inline constexpr std::uint64_t MAN_N_READS     = 0x0D8;   // RO
-inline constexpr std::uint64_t MAN_READ_IDX    = 0x0E0;   // WO  select a read tile
+inline constexpr std::uint64_t MAN_L3_SLOTS    = 0x0D0;   // RO  the program's L3
+inline constexpr std::uint64_t MAN_N_READS     = 0x0D8;   // RO  tiles in the selected list
+inline constexpr std::uint64_t MAN_READ_IDX    = 0x0E0;   // WO  select a tile of that list
 inline constexpr std::uint64_t MAN_READ_TENSOR = 0x0E8;   // RO
 inline constexpr std::uint64_t MAN_READ_TI     = 0x0F0;   // RO
 inline constexpr std::uint64_t MAN_READ_TJ     = 0x0F8;   // RO
@@ -95,6 +98,7 @@ inline constexpr std::uint64_t DIAG_BASE       = 0x110;   // RW  device-written 
 inline constexpr std::uint64_t DIAG_SIZE       = 0x118;   // RW
 inline constexpr std::uint64_t IRQ_STATUS      = 0x120;   // RO  bit 0: completions pending
 inline constexpr std::uint64_t IRQ_ACK         = 0x128;   // W1C
+inline constexpr std::uint64_t MAN_LIST        = 0x130;   // WO  0 reads, 1 inherits, 2 retains
 inline constexpr std::uint64_t kWindow         = 0x1000;  // bytes the device decodes
 } // namespace reg
 

@@ -224,14 +224,14 @@ std::uint64_t KpuMmioDevice::read_reg(std::uint64_t off) {
             return dev_.is_resident(t) ? 1 : 0;
         }
         case MAN_VALID:       return dev_.manifest(static_cast<std::uint32_t>(man_op_)).valid;
-        case MAN_PEAK_LIVE:
-            return dev_.manifest(static_cast<std::uint32_t>(man_op_)).peak_live_tiles;
+        case MAN_L3_SLOTS:
+            return dev_.manifest(static_cast<std::uint32_t>(man_op_)).l3_slots;
         case MAN_N_READS:
-            return dev_.manifest(static_cast<std::uint32_t>(man_op_)).reads.size();
+            return manifest_list().size();
         case MAN_READ_TENSOR:
         case MAN_READ_TI:
         case MAN_READ_TJ: {
-            const auto& reads = dev_.manifest(static_cast<std::uint32_t>(man_op_)).reads;
+            const auto& reads = manifest_list();
             if (man_read_ >= reads.size()) return ~std::uint64_t{0};
             const TileRef& t = reads[man_read_];
             if (off == MAN_READ_TENSOR) return names_.tensor_index(t.tensor);
@@ -275,6 +275,7 @@ void KpuMmioDevice::write_reg(std::uint64_t off, std::uint64_t v) {
         case MAN_OP: {
             man_op_ = v;
             man_read_ = 0;
+            man_list_ = 0;
             man_err_off_ = man_err_len_ = 0;
             if (v >= dev_.operator_count())
                 throw BusFault("kpu: manifest of operator " + std::to_string(v) + " of " +
@@ -288,6 +289,13 @@ void KpuMmioDevice::write_reg(std::uint64_t off, std::uint64_t v) {
             return;
         }
         case MAN_READ_IDX: man_read_ = v; return;
+        case MAN_LIST:
+            if (v > 2)
+                throw BusFault("kpu: manifest list " + std::to_string(v) +
+                               " (0 reads, 1 inherits, 2 retains)");
+            man_list_ = v;
+            man_read_ = 0;
+            return;
         case DIAG_BASE:    diag_base_ = v; diag_cursor_ = 0; flush_completions(); return;
         case DIAG_SIZE:    diag_size_ = v; diag_cursor_ = 0; flush_completions(); return;
         case IRQ_ACK:      return;   // the notifier is level-triggered on head != tail
@@ -414,15 +422,19 @@ OperatorManifest MmioPort::manifest(std::uint32_t op) {
                             static_cast<std::uint32_t>(rd(MAN_ERR_LEN)));
         return m;
     }
-    m.peak_live_tiles = static_cast<std::uint32_t>(rd(MAN_PEAK_LIVE));
-    const std::uint64_t n = rd(MAN_N_READS);
-    for (std::uint64_t i = 0; i < n; ++i) {
-        wr(MAN_READ_IDX, i);
-        TileRef t;
-        t.tensor = names_.tensor_name(static_cast<std::uint32_t>(rd(MAN_READ_TENSOR)));
-        t.ti = static_cast<program::Dim>(rd(MAN_READ_TI));
-        t.tj = static_cast<program::Dim>(rd(MAN_READ_TJ));
-        m.reads.push_back(t);
+    m.l3_slots = static_cast<std::uint32_t>(rd(MAN_L3_SLOTS));
+    std::vector<TileRef>* lists[] = {&m.reads, &m.inherits, &m.retains};
+    for (std::uint64_t list = 0; list < 3; ++list) {
+        wr(MAN_LIST, list);
+        const std::uint64_t n = rd(MAN_N_READS);
+        for (std::uint64_t i = 0; i < n; ++i) {
+            wr(MAN_READ_IDX, i);
+            TileRef t;
+            t.tensor = names_.tensor_name(static_cast<std::uint32_t>(rd(MAN_READ_TENSOR)));
+            t.ti = static_cast<program::Dim>(rd(MAN_READ_TI));
+            t.tj = static_cast<program::Dim>(rd(MAN_READ_TJ));
+            lists[list]->push_back(t);
+        }
     }
     return m;
 }

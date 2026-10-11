@@ -9,6 +9,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Loadables run CSP programs** (kpu-run-csp-programs step 4d.2).
+  - `.kpuld` format 2.0.0: an operator carries its CSP program, with its trace's L0 as the
+    oracle when the program is small enough to trace. `loadable::csp_operator` builds one.
+  - The reader validates the program at load, and refuses a 1.x file with the reason.
+  - `KpuDevice` runs chains of CSP operators:
+    - it holds what a program retains, values included, until a later program inherits it;
+    - it writes back to DRAM only the tiles a program stores;
+    - it checks the chain at load and refuses one that would lose a retained tile or read a
+      stale copy of it.
+  - The deciding orchestrator issues RESERVE and LAUNCH only. Each operator reserves its
+    program's L3 less what it inherits.
+  - MMIO ABI 2.0: manifests carry the program's L3 and its inherits and retains.
+  - Retired, because residency is now the program's:
+    - a PLACE for an operator (the device refuses it);
+    - release at last read;
+    - `OrchestratorOptions::reuse_shared_inputs`;
+    - `AllocationPolicy::GreedyPrefetch`;
+    - `DeviceOptions`.
+
 - **Residency across operators in the CSP language: `inherit` and `retain`**
   (kpu-run-csp-programs step 4d.1).
   - `inherit X;` opens a program with X resident and no Load.

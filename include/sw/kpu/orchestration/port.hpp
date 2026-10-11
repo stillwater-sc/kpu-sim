@@ -35,22 +35,30 @@ namespace sw::kpu::orchestration {
 // ----------------------------------------------------------------------------
 // What the orchestrator may know about an operator
 // ----------------------------------------------------------------------------
-// Derived by the DEVICE from the L0 program at load time (plan Q2), so the orchestrator never
-// parses L0 -- a freestanding RV64 guest should not carry a text parser to learn which tiles
-// an operator reads. Every field is a tile NAME or a COUNT; none is a value.
+// Derived by the DEVICE from the operator's CSP program at load time (plan Q2), so the
+// orchestrator never parses a program -- a freestanding RV64 guest should not carry a text
+// parser to learn what an operator holds. Every field is a tile NAME or a COUNT; none is a
+// value. Tiles are named in the LOADABLE's vocabulary (tensors), never the program's (operands).
+//
+// Residency is the PROGRAM's (kpu-run-csp-programs step 4d.2): it loads its own tiles, and says
+// what it inherits from an earlier operator and what it retains for a later one. So the
+// orchestrator decides only admission -- when to RESERVE and LAUNCH -- and the manifest gives
+// it exactly what that needs.
 struct OperatorManifest {
     std::uint32_t index = 0;
     bool valid = false;
     std::string error;                  // why it is not valid; empty when it is
-    std::vector<TileRef> reads;         // distinct TENSOR tiles read, first-appearance order
-    std::uint32_t peak_live_tiles = 0;  // characterize::peak_live_tiles(prog)
+    std::vector<TileRef> reads;         // distinct tiles it loads or inherits, in program order
+    std::vector<TileRef> inherits;      // held when it launches, from an earlier operator's retain
+    std::vector<TileRef> retains;       // held after it completes, for a later operator's inherit
+    std::uint32_t l3_slots = 0;         // the program's L3 (`machine flat(l3 = N)`): its credits
 
-    // The SUFFICIENT reservation for a run that keeps `retained` of its read tiles past their
-    // last reader (plan §3.4). Seeded tiles are live tiles of this program, so they are already
-    // inside peak_live_tiles; retained tiles extend a lifetime past its last reader, so each can
-    // raise the in-run live set by at most one.
-    std::uint32_t bound(std::size_t retained) const {
-        return peak_live_tiles + static_cast<std::uint32_t>(retained);
+    // The SUFFICIENT reservation: the program runs under its own L3 credits, inherited slots
+    // included, and those are already held when it launches. Retained slots are inside the
+    // program's L3 too -- the validator counts them to the end -- so they cost nothing extra.
+    std::uint32_t bound() const {
+        const auto held = static_cast<std::uint32_t>(inherits.size());
+        return l3_slots > held ? l3_slots - held : 0;
     }
 };
 

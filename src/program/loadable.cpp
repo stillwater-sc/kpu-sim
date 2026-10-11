@@ -8,6 +8,9 @@
 // ============================================================================
 #include <sw/kpu/loadable/loadable.hpp>
 
+#include <sw/kpu/program/csp/lang/compile.hpp>
+#include <sw/kpu/program/csp/lang/format.hpp>
+#include <sw/kpu/program/csp/lang/validate.hpp>
 #include <sw/kpu/program/platform/deployment_spec.hpp>
 #include <sw/kpu/program/platform/digest.hpp>
 #include <sw/kpu/program/serialize/l0_format.hpp>
@@ -22,8 +25,9 @@
 namespace sw::kpu::loadable {
 
 // ---- versions ---------------------------------------------------------------
-Version format_version()   { return {1, 0, 0}; }
-Version reader_version()   { return {1, 0, 0}; }
+// 2.0.0: operators carry CSP programs, L0 only as their oracle (kpu-run-csp-programs 4d.2).
+Version format_version()   { return {2, 0, 0}; }
+Version reader_version()   { return {2, 0, 0}; }
 
 Version producer_version() {
     // The BUILD, not the format. R4's bad_producers needs a version that tracks the
@@ -73,8 +77,8 @@ const char* to_string(ComputeTileKind k) {
 // ---- min_consumer, derived from the records present -------------------------
 Version min_consumer_for(const Loadable& l) {
     Version need = format_version();
-    // Nothing in 1.0.0 is optional-with-semantics yet, so the container's own floor is
-    // 1.0.0. The mechanism is here from the start anyway, because retrofitting it is what
+    // Nothing in 2.0.0 is optional-with-semantics yet, so the container's own floor is
+    // 2.0.0. The mechanism is here from the start anyway, because retrofitting it is what
     // #265 had to avoid and did: a future optional record that carries MEANING raises this,
     // and the writer never hand-sets it.
     //
@@ -84,9 +88,10 @@ Version min_consumer_for(const Loadable& l) {
     // rather than re-encoding it, and it is the right price -- but it has to be paid here
     // rather than assumed away.
     for (const Operator& op : l.operators) {
+        if (!op.l0_program) continue;               // no oracle, nothing to cover
         program::serialize::LoadInfo info;
         try {
-            (void)program::serialize::from_string(op.l0_program, &info);
+            (void)program::serialize::from_string(*op.l0_program, &info);
         } catch (const std::exception&) {
             continue;   // read() validates these; min_consumer_for does not diagnose
         }
@@ -95,7 +100,7 @@ Version min_consumer_for(const Loadable& l) {
         // The L0 format and the container version their own axes independently, so the
         // container cannot simply adopt an L0 version number. What it must guarantee is
         // that a reader able to read THIS container can also read the programs inside it,
-        // which for now is true of any 1.x reader because this build's L0 reader is 1.2.0.
+        // which for now is true of any 2.x reader because this build's L0 reader is 1.2.0.
         // Recorded as a check rather than a conversion: if a future L0 needs more than the
         // container's reader offers, that is a container bump, and this is where it is
         // noticed.
@@ -143,7 +148,9 @@ std::string write(const Loadable& l) {
     std::vector<flatbuffers::Offset<fb::Operator>> ops;
     for (const Operator& op : l.operators) {
         const auto name = b.CreateString(op.name);
-        const auto prog = b.CreateString(op.l0_program);
+        const auto prog = op.l0_program ? b.CreateString(*op.l0_program)
+                                        : flatbuffers::Offset<flatbuffers::String>();
+        const auto csp = b.CreateString(op.csp_program);
         const auto dfp = op.domain_flow_program
                              ? b.CreateString(*op.domain_flow_program)
                              : flatbuffers::Offset<flatbuffers::String>();
@@ -153,7 +160,8 @@ std::string write(const Loadable& l) {
         const auto outs = b.CreateVectorOfStrings(op.outputs);
         fb::OperatorBuilder ob(b);
         ob.add_name(name);
-        ob.add_l0_program(prog);
+        if (!prog.IsNull()) ob.add_l0_program(prog);
+        ob.add_csp_program(csp);
         ob.add_requires_tile(static_cast<fb::ComputeTileKind>(op.requires_tile));
         if (!dfp.IsNull()) ob.add_domain_flow_program(dfp);
         if (!flow.IsNull()) ob.add_dataflow(flow);
@@ -310,6 +318,18 @@ Loadable read(const std::string& bytes) {
              "file requires a reader >= " + need.str() + "; this build is " +
                  reader_version().str());
 
+    // ...and an OLDER major is refused too, with the reason, not read. A 1.x operator's
+    // program is L0, which is now a trace (ADR 0004 §4) and no longer what runs: reading
+    // one as a 2.x operator would run nothing, and converting it would invent a schedule
+    // the file never had. Checked after min_consumer, so a file demanding a newer reader
+    // is refused for that demand whatever its container version.
+    if (file_format.major < format_version().major)
+        fail(LoadError::Cause::UnsupportedVersion,
+             "file format " + file_format.str() +
+                 " carries L0 operators; this reader (" + reader_version().str() +
+                 ") runs CSP operators, with L0 only as their oracle (kpu-run-csp-programs "
+                 "step 4d.2): rebuild the loadable from CSP programs");
+
     Loadable out;
     out.file_format_version = file_format;
     out.file_min_consumer = need;
@@ -398,19 +418,30 @@ Loadable read(const std::string& bytes) {
         if (!op_names.insert(op.name).second)
             fail(LoadError::Cause::InconsistentRecord,
                  "two operators are named \"" + op.name + "\"");
-        if (!o->l0_program() || o->l0_program()->size() == 0)
+        if (!o->csp_program() || o->csp_program()->size() == 0)
             fail(LoadError::Cause::MissingRequiredField,
-                 "operator \"" + op.name + "\" carries no L0 program");
-        op.l0_program = o->l0_program()->str();
+                 "operator \"" + op.name + "\" carries no CSP program");
+        op.csp_program = o->csp_program()->str();
         // THE EMBEDDED PROGRAM IS VALIDATED HERE, not on first execution. A container that
         // loads and then fails to run is the worst of both: it reports success and dies
-        // later, somewhere else.
+        // later, somewhere else. Validated symbolically and without a machine: whether a
+        // deployment's sites can run its stages is the platform's check, at load_csp.
         try {
-            (void)program::serialize::from_string(op.l0_program);
+            (void)program::csp::lang::validate(op.csp_program);
         } catch (const std::exception& e) {
             fail(LoadError::Cause::InconsistentRecord,
-                 "operator \"" + op.name + "\": its L0 program does not load (" + e.what() +
-                     ")");
+                 "operator \"" + op.name + "\": its CSP program does not validate (" +
+                     e.what() + ")");
+        }
+        if (o->l0_program()) {
+            op.l0_program = o->l0_program()->str();
+            try {
+                (void)program::serialize::from_string(*op.l0_program);
+            } catch (const std::exception& e) {
+                fail(LoadError::Cause::InconsistentRecord,
+                     "operator \"" + op.name + "\": its L0 oracle does not load (" + e.what() +
+                         ")");
+            }
         }
         op.requires_tile = static_cast<ComputeTileKind>(o->requires_tile());
         if (o->domain_flow_program())
@@ -479,6 +510,25 @@ Loadable read_file(const std::string& path) {
 }
 
 std::string digest(const Loadable& l) { return program::platform::digest_of(write(l)); }
+
+// ---- an operator from CSP text ------------------------------------------------
+Operator csp_operator(std::string name, const std::string& csp_text, std::vector<std::string> inputs,
+                      std::vector<std::string> outputs, std::size_t trace_limit) {
+    namespace lang = program::csp::lang;
+    const lang::Program ast = lang::parse(csp_text);
+    Operator op;
+    op.name = std::move(name);
+    op.csp_program = lang::format(ast);
+    op.inputs = std::move(inputs);
+    op.outputs = std::move(outputs);
+    // The oracle: the trace's L0, when the program is small enough to trace. Counted first,
+    // without keeping the actions, so a program too large to trace costs nothing here.
+    lang::ActionStream s(ast);
+    std::size_t n = 0;
+    while (n <= trace_limit && s.next()) ++n;
+    if (n <= trace_limit) op.l0_program = program::serialize::to_string(lang::compile(ast).source);
+    return op;
+}
 
 // ---- capability checking ----------------------------------------------------
 namespace {
