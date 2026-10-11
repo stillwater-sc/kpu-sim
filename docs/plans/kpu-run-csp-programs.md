@@ -1,7 +1,7 @@
 # `kpu-run` runs CSP programs, at every level including cycle-accurate
 
-**Status:** Decided 2026-10-10 (revised after review, §8; Q1-Q4 as recommended, §9); steps 1-3 and 4a-4c done;
-4d-4e planned (§5, step 4; 4d's language decided 2026-10-10)
+**Status:** Decided 2026-10-10 (revised after review, §8; Q1-Q4 as recommended, §9); steps 1-3, 4a-4c and 4d.1 done;
+4d.2-4e planned (§5, step 4; 4d's language decided 2026-10-10)
 **Tracks:** #283 (the L-CA half). Covers `docs/plans/csp-program-tile-sequencing.md` steps 2b and
 3 (L-T1 from the program).
 **Depends on:** the CSP language and its stream (ADR 0004, #343-#345), `CspDriver` (#342, #345,
@@ -363,7 +363,36 @@ platform have moved (§5 step 4). Then it is retired.
        Store. L-CA is refused. The timeline has one event per non-Release record, with its
        cycles, process, lane and bytes. Five CLI tests cover both modes, the two refusals,
        and the timeline.
-   - **4d: orchestration on CSP programs.** This needs a language decision first.
+   - **4d: orchestration on CSP programs.** Split in two:
+     - **4d.1, the language and the levels** (done):
+       - `inherit X;` and `retain X;` are statements. They lower to two new zero-time actions,
+         Inherit and Retain, with no process.
+       - The symbolic validator and the walker enforce the same rules:
+         - an `inherit` opens the program, outside any loop, on an operand declared `in` or
+           `inout`;
+         - a `retain` mirrors a resident statement or names a closed accumulator, with its
+           epilogue on the way (`retain y via relu @ fabric`);
+         - inside loops, a `retain` names a distinct tile in every iteration;
+         - a retained tile cannot be named again;
+         - retained slots count against capacity to the end;
+         - an inherited tile may be stored unwritten.
+       - L-B: Inherit reads the operand's value into L3, and Retain leaves it there. The result
+         is DRAM overlaid with the retained tiles' L3 values, and `retained()` gives those
+         values.
+       - L-T1: Inherit takes its credit at cycle 0 with no DMA. Retain is a zero-length record,
+         and its slot is held to the makespan.
+       - The `.tflow` v4 record marks inherited slots Seeded and retained ones Held. The viewer
+         names the two new actions.
+       - L-CA: `ConcurrentTimingExecutor::seed_l3` puts a tile's bytes into an L3 entry with a
+         credit and a tag CAM entry, with no DMA. `CspDriver` seeds each Inherit (`l3_held`)
+         and schedules nothing for a Retain. The result reads retained tiles from L3.
+       - Fixtures: `matmul_relu_retain_32_t16.csp` (C = relu(A B), retained, never stored) and
+         `bias_inherit_32_t16.csp` (C inherited, biased, stored).
+         - Each matches its oracle bit for bit at L-B, L-T1 and L-CA.
+         - Chained by hand at each level, the second operator's C equals the two oracles
+           composed.
+     - **4d.2, the orchestrator** (next): `.kpuld` operators carry `.csp` text, and `KpuDevice`
+       runs chains of them, matching `retain` against `inherit`. The design as decided follows.
      - **The question:** the orchestrator runs a chain of operators and keeps tiles resident
        between them. Today it passes `initially_resident` (tiles an earlier operator left),
        `retained_by_caller` (tiles this one must leave) and `foreign_held_slots` to the L0

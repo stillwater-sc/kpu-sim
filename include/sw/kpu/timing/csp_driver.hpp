@@ -37,6 +37,10 @@
 //                  Moves the program issued before the Release. A result's residency (opened by
 //                  a Writeback) left L3 with its Store's ejection; its Release orders the tile's
 //                  later Moves after that ejection.
+//   Inherit     -> seed_l3: the tile's bytes enter an L3 entry with a credit and no DMA, l3_held
+//                  like a Load's (step 4d: the operator before left it resident)
+//   Retain      -> nothing: the entry keeps its credit past the program's end. The result reads
+//                  a retained tile from L3, since DRAM need not have it.
 //
 // This step runs matmul and the linear operator: operands A, B and C, and vector operands (a
 // bias), gemm with alpha 1, and the epilogue fused or not. A vector operand's tiles are named
@@ -129,6 +133,7 @@ public:
         loaded_.clear();
         dram_bytes_ = 0;
         seq_ = 0;
+        retained_.clear();
 
         Result r;
         const Cycle max = exec_.config().max_cycles;
@@ -189,6 +194,15 @@ public:
                                                          : 0.0f;
                     }
             }
+        // A retained tile's bytes are in its L3 entry; DRAM need not have them.
+        if (r.completed)
+            for (const program::TileCoord& c : retained_) {
+                auto& t = r.values.operand(c.operand);
+                const auto& v = exec_.tile_payload_at(MemoryLevel::L3, id(c)).values;
+                std::size_t n = 0;
+                for (program::Dim row = t.row_begin(c.ti); row < t.row_end(c.ti); ++row)
+                    for (program::Dim col = t.col_begin(c.tj); col < t.col_end(c.tj); ++col) t.at(row, col) = v.at(n++);
+            }
         return r;
     }
 
@@ -205,6 +219,7 @@ private:
     std::map<std::string, std::size_t> vector_tk_;   // vector operand -> its tk tag
     std::uint64_t dram_bytes_ = 0;
     std::uint64_t seq_ = 0;                          // program order of the actions handed over
+    std::vector<program::TileCoord> retained_;       // tiles the program retained, in L3 at the end
 
     void check_machine(std::size_t l3) {
         for (const auto& name : inputs_.operand_order()) {
@@ -337,6 +352,14 @@ private:
                 // Store, and its Release still orders the tile's later Moves after it.
                 d.l3_held = loaded_.erase(d.tile_id) != 0;
                 exec_.schedule_release(d);
+                break;
+            case Action::Kind::Inherit:
+                d.l3_held = true;
+                loaded_.insert(d.tile_id);
+                exec_.seed_l3(d, payload(inputs_.operand(a.tile.operand), a.tile.ti, a.tile.tj));
+                break;
+            case Action::Kind::Retain:
+                retained_.push_back(a.tile);
                 break;
         }
         return true;

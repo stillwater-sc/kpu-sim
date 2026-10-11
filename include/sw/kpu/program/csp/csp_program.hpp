@@ -133,8 +133,13 @@ struct Stage {
 //   Drain     str  cf -> l2     a result out of the fabric
 //   Call      cf                a tile function: the L0 op `l0_op`, on tiles the fabric holds
 //   Release   (l3 credit)       the residency's last consumer is done: its slot is free
+//   Inherit   (l3 credit)       the tile arrives resident, from the operator before this one: a
+//                               residency opened with no Load, its slot held from the start
+//   Retain    (l3 credit)       the residency ends without a Release: its slot, and the tile,
+//                               outlive the program, for the operator after it
+// (Inherit and Retain are kpu-run-csp-programs step 4d: residency across operators.)
 struct Action {
-    enum class Kind : std::uint8_t { Load, Store, Move, Writeback, Feed, Drain, Call, Release };
+    enum class Kind : std::uint8_t { Load, Store, Move, Writeback, Feed, Drain, Call, Release, Inherit, Retain };
     Kind kind = Kind::Call;
     TileCoord tile;                     // the tile moved, released, or the Call's first output
     std::size_t process = kNone;        // index into CspProgram::processes (Release: none)
@@ -157,6 +162,8 @@ inline const char* to_string(Action::Kind k) {
         case Action::Kind::Drain:     return "DRAIN";
         case Action::Kind::Call:      return "CALL";
         case Action::Kind::Release:   return "RELEASE";
+        case Action::Kind::Inherit:   return "INHERIT";
+        case Action::Kind::Retain:    return "RETAIN";
     }
     return "?";
 }
@@ -199,7 +206,8 @@ struct Channel {
     std::size_t capacity = 0;
 };
 
-// One tile's stay in L3: opened by a Load or a Writeback, closed by its Release.
+// One tile's stay in L3: opened by a Load, a Writeback or an Inherit, closed by its Release --
+// or by a Retain, when it outlives the program.
 struct Residency {
     TileCoord tile;
     std::size_t open = kNone;           // action index of the Load / Writeback that opened it
@@ -207,6 +215,8 @@ struct Residency {
     std::size_t consumers = 0;          // Moves and Stores that read it
     bool loaded = false;                // opened by a Load (a DRAM read)
     bool dirty = false;                 // holds a result DRAM does not have yet
+    bool inherited = false;             // opened by an Inherit (no DRAM read)
+    bool retained = false;              // closed by a Retain: held when the program ends
 };
 
 // What the lowering decided about reuse, before any simulation.
@@ -246,6 +256,7 @@ public:
                 case Action::Kind::Store:   ++r.stores; break;
                 case Action::Kind::Move:    ++r.moves; break;
                 case Action::Kind::Call:    ++r.calls; break;
+                case Action::Kind::Inherit: ++open; break;
                 case Action::Kind::Release: --open; break;
                 default: break;
             }
@@ -272,7 +283,8 @@ public:
             const Action& a = actions[i];
             o << "  " << i << "  " << (a.process == kNone ? std::string("l3") : processes[a.process].name) << "  "
               << to_string(a.kind) << " " << a.tile.to_string();
-            if (a.kind != Action::Kind::Call && a.kind != Action::Kind::Release)
+            if (a.kind != Action::Kind::Call && a.kind != Action::Kind::Release && a.kind != Action::Kind::Inherit &&
+                a.kind != Action::Kind::Retain)
                 o << "  " << to_string(from_chan(a.kind)) << "->" << to_string(to_chan(a.kind));
             if (a.l0_op != kNone) o << "  [L0 " << a.l0_op << " " << to_string(source.ops()[a.l0_op].kind) << "]";
             for (std::size_t k = 0; k < a.context.size(); ++k) {

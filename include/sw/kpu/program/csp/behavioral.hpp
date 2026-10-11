@@ -53,6 +53,7 @@ public:
         work_ = operands;
         state_ = TileKernelState{};
         for (auto& s : store_) s.clear();
+        retained_.clear();
         sum_ = Summary{};
         // DRAM starts with every operand's tiles.
         for (const auto& name : work_.operand_order()) {
@@ -89,6 +90,16 @@ public:
             case Action::Kind::Release:
                 if (!at(Chan::L3).erase(k)) throw BehavioralError(where(i) + ": nothing resident to release");
                 break;
+            case Action::Kind::Inherit:
+                // Resident from the start, with the value the operator before this one left: here,
+                // the operand's value (an orchestrator puts the retained tile's value there).
+                if (at(Chan::L3).count(k)) throw BehavioralError(where(i) + ": the tile is already resident");
+                at(Chan::L3)[k] = take(Chan::Dram, k, where(i), /*keep=*/true);
+                break;
+            case Action::Kind::Retain:
+                if (!at(Chan::L3).count(k)) throw BehavioralError(where(i) + ": nothing resident to retain");
+                retained_[k] = a.tile;
+                break;
             case Action::Kind::Call:
                 if (!call_op) throw BehavioralError(where(i) + ": a call without its tile function");
                 call(*call_op, a.accumulate, where(i));
@@ -100,7 +111,12 @@ public:
     }
 
     Summary finish() {
-        for (Chan c : {Chan::L3, Chan::L2, Chan::Cf})
+        // L3 may hold only what the program retained: those slots outlive it.
+        for (const auto& [k, v] : at(Chan::L3))
+            if (!retained_.count(k))
+                throw BehavioralError("csp program ends with " + k + " still resident in l3 (neither released nor "
+                                      "retained)");
+        for (Chan c : {Chan::L2, Chan::Cf})
             if (!at(c).empty())
                 throw BehavioralError("csp program ends with " + std::to_string(at(c).size()) + " tiles left in " +
                                       to_string(c) + " (first: " + at(c).begin()->first + ")");
@@ -111,11 +127,21 @@ public:
                 for (Dim tj = 0; tj < op.n_tile_cols(); ++tj)
                     insert(op, ti, tj, at(Chan::Dram).at(TileCoord{name, ti, tj}.to_string()));
         }
+        // A retained tile's value is the one in its slot, which DRAM may not have (it need not be
+        // stored): the operands are what the program leaves, in DRAM or retained in L3.
+        for (const auto& [k, t] : retained_) insert(work_.operand(t.operand), t.ti, t.tj, at(Chan::L3).at(k));
         return sum_;
     }
 
     // The operands as DRAM holds them after run().
     const TileProgram& result() const { return work_; }
+
+    // The tiles the program retained, by key, with the values their slots hold.
+    std::map<std::string, std::vector<float>> retained() const {
+        std::map<std::string, std::vector<float>> out;
+        for (const auto& [k, t] : retained_) out[k] = store_[static_cast<std::size_t>(Chan::L3)].at(k);
+        return out;
+    }
 
     // Tiles a channel holds now (stepping reads station occupancy from this).
     std::size_t held(Chan c) const { return store_[static_cast<std::size_t>(c)].size(); }
@@ -125,6 +151,7 @@ private:
     TileKernelState state_;
     Summary sum_;
     std::array<std::map<std::string, std::vector<float>>, kChannels> store_;
+    std::map<std::string, TileCoord> retained_;      // key -> tile
 
     std::map<std::string, std::vector<float>>& at(Chan c) { return store_[static_cast<std::size_t>(c)]; }
 

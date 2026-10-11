@@ -270,21 +270,26 @@ TileFlowRecord build_csp_record(const csp::lang::Program& ast, const driver::Csp
             for (const TileCoord& c : e->op->inputs) touch(c, false);
             for (const TileCoord& c : e->op->outputs) touch(c, true);
         } else {
-            // A Load or a Writeback fills its L3 slot: it WRITES the tile there (TF9).
-            touch(a.tile, a.kind == csp::Action::Kind::Load || a.kind == csp::Action::Kind::Writeback);
+            // A Load or a Writeback fills its L3 slot: it WRITES the tile there (TF9). An Inherit's
+            // slot arrives filled, by the operator before.
+            touch(a.tile, a.kind == csp::Action::Kind::Load || a.kind == csp::Action::Kind::Writeback ||
+                              a.kind == csp::Action::Kind::Inherit);
         }
         rec.ops.push_back(std::move(o));
     }
 
     // ---- residency: the program's slots, credit to Release
+    // An inherited slot arrives filled (Seeded); a retained one is held past the end (Held).
     for (const auto& sl : outcome.slots)
-        rec.residency.push_back({tile_id(sl.tile), L3, sl.t0, sl.t1, 0});
+        rec.residency.push_back({tile_id(sl.tile), L3, sl.t0, sl.t1,
+                                 static_cast<std::uint8_t>((sl.inherited ? Residency::Seeded : 0) |
+                                                           (sl.retained ? Residency::Held : 0))});
 
     // ---- transits (each movement leg) and computes (each Call)
     using K = csp::Action::Kind;
     using P = csp::TransactionalInterpreter::Proc;
     for (const auto& r : outcome.records) {
-        if (r.kind == K::Release) continue;
+        if (!csp::TransactionalInterpreter::has_process(r.kind)) continue;   // Release, Inherit, Retain
         const auto op = static_cast<std::uint32_t>(r.action);
         if (r.kind == K::Call) {
             if (r.lane >= n_cf)

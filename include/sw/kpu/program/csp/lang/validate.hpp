@@ -22,6 +22,12 @@
 //     name and still runs through the walker.)
 //   * capacity: the live tile count is exact per statement (a family's count is a product of
 //     ':' extents), and the peak over the program is reported.
+//   * residency across operators (kpu-run-csp-programs step 4d): `inherit` opens the program, at
+//     its top, and holds its slots from the first statement; `retain` ends a residency (or
+//     writes an accumulator back into a slot) without a Release, and the slot is held to the end.
+//     A `retain` inside loops must name a distinct tile in every iteration -- each enclosing loop
+//     variable indexes one dimension of it, alone -- and is charged for every iteration at once
+//     (the loops' bounds must be constant), which is exact at the end and conservative before.
 //
 // Totals (loads, calls, stores) are exact for rectangular loop nests (constant bounds) and
 // absent otherwise.
@@ -47,6 +53,8 @@ namespace sw::kpu::program::csp::lang {
 
 struct Validation {
     std::size_t peak_l3 = 0;                  // the most L3 slots the program holds at once
+    std::uint64_t inherited = 0;              // slots held from the start (inherit)
+    std::uint64_t retained = 0;               // slots held at the end (retain)
     std::optional<std::uint64_t> loads, calls, stores;   // exact for rectangular loop nests
 };
 
@@ -90,12 +98,20 @@ public:
     }
 
     Validation run() {
-        for (const Stmt& s : ast_.body) stmt(s, 1, true);
+        for (const Stmt& s : ast_.body) {
+            if (s.kind != Stmt::Kind::Inherit) started_ = true;
+            else if (started_)
+                throw CompileError(s.line, "inherit comes first: the tiles arrive resident before the program runs, "
+                                           "so `inherit` statements open the program, outside any loop");
+            stmt(s, 1, true);
+        }
         for (const Entry& e : state_)
             throw CompileError(0, text(e.family) + " is still resident at the end of the program; release it");
         for (const Acc& a : accs_) throw CompileError(0, "the accumulator " + text(a.tile) + " is never stored");
         Validation v;
         v.peak_l3 = peak_;
+        v.inherited = inherited_;
+        v.retained = retained_count_;
         if (exact_) {
             v.loads = loads_;
             v.calls = calls_;
@@ -107,7 +123,8 @@ public:
 private:
     struct Dimension { bool all = false; Affine a; };
     struct Family { std::string operand; std::vector<Dimension> dims; int line = 0; };
-    struct Entry { Family family; bool dirty = false; };
+    struct Entry { Family family; bool dirty = false; bool inherited = false; };
+    struct Box { std::string operand; std::vector<std::pair<bool, Interval>> dims; };   // (all, range)
     struct Acc { Family tile; bool closed = false; bool fed = false; std::size_t depth = 0; };
     struct Var { Interval range; bool definite; };
 
@@ -122,6 +139,10 @@ private:
     std::vector<Acc> accs_;
     std::size_t live_ = 0, peak_ = 0;
     bool exact_ = true;
+    bool started_ = false;                          // a top-level statement other than inherit ran
+    std::size_t nonrect_ = 0;                       // enclosing loops with non-constant bounds
+    std::vector<Box> retained_;                     // every tile a retain names, as a range per dimension
+    std::uint64_t inherited_ = 0, retained_count_ = 0;
     std::uint64_t loads_ = 0, calls_ = 0, stores_ = 0;
 
     // ---- affine forms and ranges ----
@@ -253,6 +274,73 @@ private:
         peak_ = std::max(peak_, live_);
     }
 
+    // ---- residency across operators ----
+    Box box(const Family& f) const {
+        Box b;
+        b.operand = f.operand;
+        for (const Dimension& d : f.dims) b.dims.push_back({d.all, d.all ? Interval{} : range(d.a)});
+        return b;
+    }
+    void not_retained(const Family& f, int line) const {
+        for (const Box& b : retained_) {
+            if (b.operand != f.operand) continue;
+            bool overlap = true;
+            for (std::size_t i = 0; i < f.dims.size() && overlap; ++i) {
+                if (b.dims[i].first || f.dims[i].all) continue;
+                const Interval x = range(f.dims[i].a);
+                if (x.hi < b.dims[i].second.lo || x.lo > b.dims[i].second.hi) overlap = false;
+            }
+            if (overlap)
+                throw CompileError(line, text(f) + " may be retained: a retained slot is held for the operator after "
+                                         "this one, and this program cannot name the tile again");
+        }
+    }
+    // Every enclosing loop variable indexes one dimension of the retained family, alone: then each
+    // iteration retains different tiles, and the iterations' total is the family's count times
+    // the trip counts.
+    void distinct_per_iteration(const Family& f, int line) const {
+        if (nonrect_ > 0)
+            throw CompileError(line, "retain " + text(f) + " inside a loop with non-constant bounds: its slots are "
+                                     "counted for every iteration, which needs constant bounds");
+        for (const std::string& v : loop_order_) {
+            std::size_t in = 0;
+            bool alone = true;
+            for (const Dimension& d : f.dims)
+                if (!d.all && d.a.coeff.count(v)) {
+                    ++in;
+                    alone = alone && d.a.coeff.size() == 1;
+                }
+            if (in != 1 || !alone)
+                throw CompileError(line, "retain " + text(f) + " inside the loop over " + v + ": every iteration must "
+                                         "retain different tiles, so " + v + " must index one dimension of it, alone");
+        }
+    }
+    void retain(const Stmt& s, const TileRef& r) {
+        const Family f = family(r);
+        distinct_per_iteration(f, s.line);
+        const std::uint64_t n = count(f), total = n * multiplier_;
+        auto acc = std::find_if(accs_.begin(), accs_.end(), [&](const Acc& a) { return same(a.tile, f); });
+        if (acc != accs_.end()) {
+            if (!acc->closed)
+                throw CompileError(s.line, "retain " + text(f) + " inside its own accumulator; retain it after the acc block");
+            context(s, f);
+            hold(total, s.line, "retain " + text(f) + "'s writeback");
+            accs_.erase(acc);
+        } else {
+            auto it = std::find_if(state_.begin(), state_.end(), [&](const Entry& e) { return same(e.family, f); });
+            if (it == state_.end())
+                throw CompileError(s.line, "retain " + text(f) + ": it is neither resident nor an accumulator (a retain "
+                                           "mirrors a resident statement, as written)");
+            if (!s.context.empty())
+                throw CompileError(s.line, "retain " + text(f) + " via ...: a resident tile stays where it is, so nothing "
+                                           "moves it to run the stages on; place them on the call that writes it");
+            hold(total - n, s.line, "retain " + text(f) + " in every iteration");   // its own slots are held
+            state_.erase(it);
+        }
+        retained_.push_back(box(f));
+        retained_count_ += total;
+    }
+
     // ---- statements ----
     // A result's `via` list (context.hpp), and each add's vector provably resident and tiled as
     // the result's columns.
@@ -294,6 +382,7 @@ private:
                     for (const Acc& a : accs_)
                         if (may_overlap(f, a.tile))
                             throw CompileError(s.line, text(f) + " can be an accumulator in the fabric, not a DRAM tile to load");
+                    not_retained(f, s.line);
                     hold(count(f), s.line, "resident " + text(f));
                     state_.push_back(Entry{f, false});
                     loads_ += count(f) * multiplier_;
@@ -323,6 +412,7 @@ private:
                         throw CompileError(s.line, "acc " + text(y) + ": it can be resident in L3; an accumulator lives in the fabric");
                 for (const Acc& a : accs_)
                     if (may_overlap(y, a.tile)) throw CompileError(s.line, "acc " + text(y) + ": it may already have an accumulator");
+                not_retained(y, s.line);
                 accs_.push_back(Acc{y, false, false, depth});
                 for (const Stmt& b : s.body) stmt(b, depth, definite);
                 Acc& a = *std::find_if(accs_.begin(), accs_.end(), [&](const Acc& x) { return same(x.tile, y); });
@@ -332,6 +422,27 @@ private:
                 a.closed = true;
                 break;
             }
+            case Stmt::Kind::Inherit:
+                if (depth != 1 || started_)
+                    throw CompileError(s.line, "inherit comes first: the tiles arrive resident before the program runs, "
+                                               "so `inherit` statements open the program, outside any loop");
+                for (const TileRef& r : s.tiles) {
+                    const Family f = family(r);
+                    const auto d = std::find_if(ast_.decls.begin(), ast_.decls.end(),
+                                                [&](const Decl& x) { return x.name == r.name; });
+                    if (d != ast_.decls.end() && d->io == "out")
+                        throw CompileError(s.line, "inherit " + r.name + "[..]: " + r.name + " is declared out; an "
+                                                   "inherited tile arrives with a value (declare it in or inout)");
+                    for (const Entry& e : state_)
+                        if (may_overlap(f, e.family)) throw CompileError(s.line, text(f) + " is already resident");
+                    hold(count(f), s.line, "inherit " + text(f));
+                    state_.push_back(Entry{f, false, true});
+                    inherited_ += count(f);
+                }
+                break;
+            case Stmt::Kind::Retain:
+                for (const TileRef& r : s.tiles) retain(s, r);
+                break;
             case Stmt::Kind::Call: call(s, depth, definite); break;
             case Stmt::Kind::Store: store(s); break;
             case Stmt::Kind::Distribute:
@@ -348,6 +459,7 @@ private:
         const Interval trips = range(hi + scale(lo, -1));
         const bool rectangular = lo.is_constant() && hi.is_constant();
         if (!rectangular) exact_ = false;
+        if (!rectangular) ++nonrect_;
         vars_[s.var] = Var{Interval{lor.lo, hir.hi - 1}, trips.lo >= 1};
         loop_order_.push_back(s.var);
         const std::uint64_t saved_mult = multiplier_;
@@ -387,6 +499,7 @@ private:
             throw CompileError(s.line, "the loop over " + s.var + " leaves the accumulator " + text(accs_.back().tile) +
                                        " unstored: an iteration must store what it accumulates");
         multiplier_ = saved_mult;
+        if (!rectangular) --nonrect_;
         loop_order_.pop_back();
         vars_.erase(s.var);
     }
@@ -479,11 +592,13 @@ private:
         auto it = std::find_if(state_.begin(), state_.end(), [&](const Entry& e) { return same(e.family, y); });
         if (it == state_.end())
             throw CompileError(s.line, "store " + text(y) + " must name an accumulator or mirror a resident statement");
-        if (!it->dirty) throw CompileError(s.line, "store " + text(y) + ": nothing has written it since it was loaded");
+        if (!it->dirty && !it->inherited)
+            throw CompileError(s.line, "store " + text(y) + ": nothing has written it since it was loaded");
         if (!s.context.empty())
             throw CompileError(s.line, "store " + text(y) + " via ...: a resident tile's store is a DMA write, and the DMA "
                                        "has no vector unit; place the stages on the call that writes it");
         it->dirty = false;
+        it->inherited = false;
         stores_ += count(y) * multiplier_;
     }
 };

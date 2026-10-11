@@ -364,6 +364,8 @@ int run_csp_program(const std::vector<std::string>& a, const std::string& path) 
     if (res.validation.loads) std::cout << ", " << *res.validation.loads << " loads";
     if (res.validation.calls) std::cout << ", " << *res.validation.calls << " calls";
     if (res.validation.stores) std::cout << ", " << *res.validation.stores << " stores";
+    if (res.validation.inherited) std::cout << ", " << res.validation.inherited << " inherited";
+    if (res.validation.retained) std::cout << ", " << res.validation.retained << " retained";
     std::cout << "\n";
     std::cout << "oracle   " << (res.reference ? "L0 trace of " + std::to_string(res.actions) + " actions"
                                                : res.reference_note) << "\n";

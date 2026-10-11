@@ -163,7 +163,7 @@ const HOP_DMA_IN = 0, HOP_EJECT = 5, HOP_DMA_WRITE = 6;
 const MOVERS = ["dma", "block-mover", "streamer", "noc"];
 const OPKIND = ["FEED", "DRAIN", "MATMUL_ACCUM", "LU_DIAG_FACTOR", "PIVOT_APPLY", "TRSM_LL", "TRSM_UR", "BIAS_ADD", "ACTIVATION"];   // enum TileOpKind, in order (version 3: an op is an L0 op)
 // Version 4 is a CSP program's record: an op is one of the program's ACTIONS (enum Action::Kind, in order).
-const ACTIONKIND = ["LOAD", "STORE", "MOVE", "WRITEBACK", "FEED", "DRAIN", "CALL", "RELEASE"];
+const ACTIONKIND = ["LOAD", "STORE", "MOVE", "WRITEBACK", "FEED", "DRAIN", "CALL", "RELEASE", "INHERIT", "RETAIN"];
 
 // ------------------------------------------------------------------ loading
 function col(buf, cols, name, n) {

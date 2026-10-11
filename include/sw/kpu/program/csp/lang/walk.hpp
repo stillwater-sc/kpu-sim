@@ -149,7 +149,7 @@ private:
         std::string acc;
         int line = 0;
     };
-    struct Live { std::size_t id; bool dirty; };
+    struct Live { std::size_t id; bool dirty; bool inherited = false; };
 
     const Program& ast_;
     Sink& sink_;
@@ -160,6 +160,8 @@ private:
     std::vector<Frame> frames_;
     std::map<std::string, long long> env_;
     std::map<std::string, Live> resident_;                 // open residencies (<= capacity)
+    std::set<std::string> retained_;                       // residencies Retain ended: their slots stay held
+    bool started_ = false;                                 // a statement other than `inherit` has run
     std::map<std::string, AccState> acc_;                  // accumulators not yet stored
     std::map<std::string, std::size_t> acc_calls_;
     std::size_t next_residency_ = 0;
@@ -241,8 +243,15 @@ private:
         sink_.emit(e);
     }
     void need_slot(int line, const std::string& why) const {
-        if (resident_.size() >= cap_)
-            throw CompileError(line, why + " needs an L3 slot, and all " + std::to_string(cap_) + " are held");
+        if (resident_.size() + retained_.size() >= cap_)
+            throw CompileError(line, why + " needs an L3 slot, and all " + std::to_string(cap_) + " are held" +
+                                     (retained_.empty() ? std::string()
+                                                        : " (" + std::to_string(retained_.size()) + " retained)"));
+    }
+    void not_retained(int line, const std::string& k) const {
+        if (retained_.count(k))
+            throw CompileError(line, k + " is retained: its slot is held for the operator after this one, and this "
+                                     "program cannot name it again");
     }
 
     // ---- statements ----
@@ -304,6 +313,7 @@ private:
     }
 
     void enter(const Stmt& s) {
+        if (s.kind != Stmt::Kind::Inherit) started_ = true;
         switch (s.kind) {
             case Stmt::Kind::For: {
                 if (env_.count(s.var)) throw CompileError(s.line, "loop variable '" + s.var + "' shadows an outer one");
@@ -318,6 +328,7 @@ private:
                 const TileCoord y = one(s.out);
                 const std::string k = y.to_string();
                 if (resident_.count(k)) throw CompileError(s.line, "acc " + k + ": it is resident in L3; an accumulator lives in the fabric");
+                not_retained(s.line, k);
                 if (acc_.count(k)) throw CompileError(s.line, "acc " + k + ": it already has an accumulator");
                 acc_[k] = AccState::Open;
                 acc_calls_[k] = 0;
@@ -330,6 +341,7 @@ private:
                         const std::string k = t.to_string();
                         if (resident_.count(k)) throw CompileError(s.line, k + " is already resident");
                         if (acc_.count(k)) throw CompileError(s.line, k + " is an accumulator in the fabric, not a DRAM tile to load");
+                        not_retained(s.line, k);
                         need_slot(s.line, "resident " + k);
                         const std::size_t id = next_residency_++;
                         resident_[k] = Live{id, false};
@@ -347,6 +359,33 @@ private:
                         emit(Action::Kind::Release, t, it->second.id);
                         resident_.erase(it);
                     }
+                break;
+            case Stmt::Kind::Inherit: {
+                // The tiles the operator before this one retained: resident from the start, with no
+                // Load. So they come first, at the top of the program, before anything else runs.
+                if (started_ || frames_.size() != 1)
+                    throw CompileError(s.line, "inherit comes first: the tiles arrive resident before the program "
+                                               "runs, so `inherit` statements open the program, outside any loop");
+                for (const TileRef& r : s.tiles) {
+                    const auto d = std::find_if(ast_.decls.begin(), ast_.decls.end(),
+                                                [&](const Decl& x) { return x.name == r.name; });
+                    if (d != ast_.decls.end() && d->io == "out")
+                        throw CompileError(s.line, "inherit " + r.name + "[..]: " + r.name + " is declared out; an "
+                                                   "inherited tile arrives with a value (declare it in or inout)");
+                    for (const TileCoord& t : expand(r)) {
+                        const std::string k = t.to_string();
+                        if (resident_.count(k)) throw CompileError(s.line, k + " is already resident");
+                        need_slot(s.line, "inherit " + k);
+                        const std::size_t id = next_residency_++;
+                        resident_[k] = Live{id, false, true};
+                        emit(Action::Kind::Inherit, t, id, kNone, nullptr, true, false);
+                    }
+                }
+                break;
+            }
+            case Stmt::Kind::Retain:
+                for (const TileRef& r : s.tiles)
+                    for (const TileCoord& t : expand(r)) retain(s, t);
                 break;
             case Stmt::Kind::Call: call(s); break;
             case Stmt::Kind::Store:
@@ -484,12 +523,53 @@ private:
         }
         auto it = resident_.find(k);
         if (it == resident_.end()) throw CompileError(s.line, "store " + k + ": it is neither resident nor an accumulator");
-        if (!it->second.dirty) throw CompileError(s.line, "store " + k + ": nothing has written it since it was loaded");
+        // An inherited tile may hold a result the operator before this one did not store: storing it
+        // is how a later operator keeps the orchestrator's promise that a retained tile is stored.
+        if (!it->second.dirty && !it->second.inherited)
+            throw CompileError(s.line, "store " + k + ": nothing has written it since it was loaded");
         if (!s.context.empty())
             throw CompileError(s.line, "store " + k + " via ...: a resident tile's store is a DMA write, and the DMA has "
                                        "no vector unit; place the stages on the call that writes it");
         emit(Action::Kind::Store, y, it->second.id);
         it->second.dirty = false;
+        it->second.inherited = false;
+    }
+
+    // `retain y`: the residency ends without a Release -- its slot and the tile outlive the
+    // program. A resident tile (written or not) keeps its slot; an accumulator is drained and
+    // written back into a slot it keeps, with its epilogue on the way, and never stored.
+    void retain(const Stmt& s, const TileCoord& y) {
+        const std::string k = y.to_string();
+        auto acc = acc_.find(k);
+        if (acc != acc_.end()) {
+            if (acc->second == AccState::Open)
+                throw CompileError(s.line, "retain " + k + " inside its own accumulator; retain it after the acc block");
+            need_slot(s.line, "retain " + k + "'s writeback");
+            auto [drain_ctx, wb_ctx] = result_context(s, y);
+            TileOp drain;
+            drain.kind = TileOpKind::Drain;
+            drain.port_kind = PortKind::Output;
+            drain.port = "South";
+            drain.outputs = {y};
+            record_stages(y, drain_ctx, wb_ctx);
+            const std::size_t d = sink_.l0(drain);
+            const std::size_t id = next_residency_++;
+            emit(Action::Kind::Drain, y, kNone, d, nullptr, false, false, false, std::move(drain_ctx));
+            emit(Action::Kind::Writeback, y, id, d, nullptr, true, false, false, std::move(wb_ctx));
+            emit(Action::Kind::Retain, y, id, d);
+            acc_.erase(acc);
+            acc_calls_.erase(k);
+            retained_.insert(k);
+            return;
+        }
+        auto it = resident_.find(k);
+        if (it == resident_.end()) throw CompileError(s.line, "retain " + k + ": it is neither resident nor an accumulator");
+        if (!s.context.empty())
+            throw CompileError(s.line, "retain " + k + " via ...: a resident tile stays where it is, so nothing moves it "
+                                       "to run the stages on; place them on the call that writes it");
+        emit(Action::Kind::Retain, y, it->second.id);
+        resident_.erase(it);
+        retained_.insert(k);
     }
 };
 
@@ -514,7 +594,8 @@ public:
             r.tile = a.tile;
             r.open = i;
             r.loaded = e.loaded;
-            r.dirty = !e.loaded;
+            r.inherited = a.kind == Action::Kind::Inherit;
+            r.dirty = !e.loaded && !r.inherited;
             p_.residencies.push_back(r);
             return;
         }
@@ -524,6 +605,7 @@ public:
             case Action::Kind::Store:     ++r.consumers; r.dirty = false; break;
             case Action::Kind::Writeback: r.dirty = true; break;
             case Action::Kind::Release:   r.release = i; break;
+            case Action::Kind::Retain:    r.retained = true; break;
             default: break;
         }
     }

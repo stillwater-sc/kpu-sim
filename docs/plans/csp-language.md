@@ -85,7 +85,7 @@ decl       := 'tensor' NAME '[' INT ',' INT ']' 'tile' INT 'x' INT io ';'
             | 'vector' NAME '[' INT ']' 'tile' INT io ';'                 -- e.g. a bias (Q6)
 io         := 'in' | 'out' | 'inout'                                      -- (all in DRAM)
 
-stmt       := for | resident | release | acc | call | store | distribute | broadcast
+stmt       := for | resident | release | acc | call | store | inherit | retain | distribute | broadcast
 for        := 'for' VAR 'in' expr '..' expr '{' stmt* '}'
 resident   := 'resident' tiles ';'         -- into L3; an error if already resident
 release    := 'release' tiles ';'          -- the program's last use: the credit returns
@@ -93,6 +93,8 @@ acc        := 'acc' tile 'in' 'fabric' '{' stmt* '}'          -- an output-stati
 call       := 'call' FN '(' tiles ')' ( '->' | '+->' ) tile [ context ] ';'
                                            -- '->' writes, '+->' accumulates
 store      := 'store' tile [ context ] ';' -- out of the fabric (or L3) to DRAM
+inherit    := 'inherit' tiles ';'          -- resident from the operator before (opens the program)
+retain     := 'retain' tiles [ context ] ';'   -- stays resident for the operator after
 context    := 'via' stage ( ',' stage )*   -- the tile context (§3.4)
 stage      := VEOP '(' args ')' '@' place
 place      := 'fabric' | 'str.drain' | 'bm.egress' | 'bm.ingress'
@@ -118,7 +120,14 @@ Comments are `//` to the end of the line. Tensor element types beyond fp32 are d
 | `release X` | Release X (l3 credit) | X resident; not written-and-unstored (a written tile is stored by an explicit `store` first: nothing moves implicitly, Q2) |
 | `call f(a, b) -> y` | per operand: Move (bm) and Feed (str); then Call (cf); for an in-place result: Drain (str), Writeback (bm) | operands resident; the result resident, or its `acc` open |
 | `acc y in fabric { ... }` | y lives in the fabric; `+->` calls into it accumulate from zero; no L3 slot | at least one call into y; y stored after the block |
-| `store y` | out of a closed `acc`: Drain, Writeback, Store, Release (an L3 slot for the writeback's moment); a resident, written tile: Store | y written and not yet stored |
+| `store y` | out of a closed `acc`: Drain, Writeback, Store, Release (an L3 slot for the writeback's moment); a resident, written tile: Store | y written and not yet stored, or inherited |
+| `inherit X` | Inherit X (l3 credit, held from the start; no DMA) | at the top of the program, before any other statement; X declared `in` or `inout`; L3 capacity |
+| `retain y` | a resident tile: Retain (its credit is not returned); a closed `acc`: Drain, Writeback, Retain | y resident (as written) or a closed accumulator; inside loops, each enclosing loop variable indexes one dimension alone; the slot counts against capacity to the end |
+
+`inherit` and `retain` are residency across operators (`docs/plans/kpu-run-csp-programs.md` step
+4d). A retained tile need not be stored: the orchestrator that chains operators guarantees a later
+store or consumption. An inherited tile may be stored without being written, which is how a later
+operator keeps that guarantee.
 
 The validator walks the program in order, as `csp::lower` does today. It is a static check, so
 no simulation is needed to find a capacity overflow, a call on a non-resident tile, or a read

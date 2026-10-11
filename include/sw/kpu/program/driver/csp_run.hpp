@@ -65,7 +65,7 @@ inline TileProgram csp_inputs(const csp::lang::Program& ast) {
             const std::string& name = act.tile.operand;
             auto decl = std::find_if(ast.decls.begin(), ast.decls.end(), [&](const auto& d) { return d.name == name; });
             if (decl == ast.decls.end() || decl->io != "inout" || read_first.count(name)) continue;
-            if (act.kind == csp::Action::Kind::Load) read_first[name] = true;
+            if (act.kind == csp::Action::Kind::Load || act.kind == csp::Action::Kind::Inherit) read_first[name] = true;
             else if (act.kind == csp::Action::Kind::Drain || act.kind == csp::Action::Kind::Writeback)
                 read_first[name] = false;
             else continue;

@@ -166,6 +166,19 @@ if(KPU_BUILD_TESTS)
                     ${CMAKE_CURRENT_BINARY_DIR}/csp_t4.tflow
                     ${CMAKE_BINARY_DIR}/tools/floorplan/t4_floorplan.json)
         set_tests_properties(tileflow_bind_csp_t4 PROPERTIES DEPENDS "kpu_run_csp_tflow_t4;kpu_floorplan_t4")
+        # Residency across operators (step 4d): an inherited slot is Seeded, a retained one Held,
+        # and both records keep all nine invariants.
+        foreach(_chain matmul_relu_retain_32_t16 bias_inherit_32_t16)
+            add_test(NAME kpu_run_csp_tflow_${_chain}
+                COMMAND run --program ${CMAKE_SOURCE_DIR}/tests/program/csp/${_chain}.csp
+                        --deploy ${CMAKE_SOURCE_DIR}/tests/program/deploy/kpu_s1.json
+                        --level block-sequential --tflow ${CMAKE_CURRENT_BINARY_DIR}/csp_${_chain}.tflow)
+            add_test(NAME tflow_check_csp_${_chain}
+                COMMAND ${KPU_PYTHON3} ${_tflow_check} ${CMAKE_CURRENT_BINARY_DIR}/csp_${_chain}.tflow)
+            set_tests_properties(tflow_check_csp_${_chain} PROPERTIES DEPENDS kpu_run_csp_tflow_${_chain})
+            set_tests_properties(kpu_run_csp_tflow_${_chain} tflow_check_csp_${_chain}
+                PROPERTIES LABELS "program;tileflow;csp")
+        endforeach()
         set_tests_properties(csp_gen_t4_matmul kpu_run_csp_tflow_t4 kpu_run_csp_tflow_linear
             tflow_check_csp_t4 tflow_check_csp_linear tflow_check_v4_selftest
             tileflow_viewer_csp_smoke tileflow_bind_csp_t4
@@ -490,6 +503,24 @@ if(KPU_BUILD_TESTS)
             -DMUST_MATCH=--timeline.records.the.L-T1.run
             -P ${CMAKE_CURRENT_SOURCE_DIR}/expect_exit.cmake
     )
+    # Residency across operators (step 4d): the first operator of a chain retains its result
+    # (no stores), the second inherits it (no loads of it), each at every level.
+    add_test(NAME kpu_run_csp_retain
+        COMMAND ${CMAKE_COMMAND}
+            -DCMD=$<TARGET_FILE:run>
+            -DARGS=--program$<SEMICOLON>${_csp}/matmul_relu_retain_32_t16.csp$<SEMICOLON>--deploy$<SEMICOLON>${_deploy}/kpu_s1.json
+            -DEXPECT_CODE=0
+            -DMUST_MATCH=0.stores,.4.retained.*L-CA..makespan.*DRAM..12.loads,.0.stores.*cycle-accurate.+identical.*OK
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/expect_exit.cmake
+    )
+    add_test(NAME kpu_run_csp_inherit
+        COMMAND ${CMAKE_COMMAND}
+            -DCMD=$<TARGET_FILE:run>
+            -DARGS=--program$<SEMICOLON>${_csp}/bias_inherit_32_t16.csp$<SEMICOLON>--deploy$<SEMICOLON>${_deploy}/kpu_s1.json
+            -DEXPECT_CODE=0
+            -DMUST_MATCH=4.inherited.*L-CA..makespan.*DRAM..2.loads,.4.stores.*cycle-accurate.+identical.*OK
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/expect_exit.cmake
+    )
     add_test(NAME kpu_run_csp_rejects_algo
         COMMAND ${CMAKE_COMMAND}
             -DCMD=$<TARGET_FILE:run>
@@ -521,7 +552,7 @@ if(KPU_BUILD_TESTS)
         kpu_run_csp_lu_skips_lca kpu_run_csp_refuses_lca_on_t4 kpu_run_csp_rejects_algo
         kpu_run_csp_refuses_invalid_program kpu_run_l0_refuses_lca
         kpu_run_csp_step_lt1 kpu_run_csp_step_lb kpu_run_csp_step_refuses_lca_only
-        kpu_run_csp_timeline kpu_run_csp_timeline_needs_lt1
+        kpu_run_csp_timeline kpu_run_csp_timeline_needs_lt1 kpu_run_csp_retain kpu_run_csp_inherit
         PROPERTIES LABELS "program;driver;csp")
 
     # ---- the machine as a spec (#282 increment 4) ---------------------------------

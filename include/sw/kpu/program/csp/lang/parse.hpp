@@ -75,14 +75,14 @@ struct Stage {                                // a tile-context stage: op(args) 
 };
 
 struct Stmt {
-    enum class Kind : std::uint8_t { For, Resident, Release, Acc, Call, Store, Distribute, Broadcast };
+    enum class Kind : std::uint8_t { For, Resident, Release, Acc, Call, Store, Distribute, Broadcast, Inherit, Retain };
     Kind kind = Kind::Call;
     int line = 0;
     // For
     std::string var;
     Expr lo, hi;
     std::vector<Stmt> body;                   // For, Acc
-    // Resident, Release, Broadcast; Call: the arguments
+    // Resident, Release, Inherit, Retain, Broadcast; Call: the arguments
     std::vector<TileRef> tiles;
     // Call
     std::string fn;
@@ -90,7 +90,7 @@ struct Stmt {
     TileRef out;                              // Call: the result; Acc, Store: the tile
     std::optional<Expr> pivot;
     std::optional<double> alpha;
-    std::vector<Stage> context;               // Call, Store: 'via' stages
+    std::vector<Stage> context;               // Call, Store, Retain: 'via' stages
     // Distribute / Broadcast
     std::string map, along;
 };
@@ -431,6 +431,21 @@ private:
         if (kw == "resident" || kw == "release") {
             s.kind = kw == "resident" ? Stmt::Kind::Resident : Stmt::Kind::Release;
             s.tiles = tiles();
+            expect(";");
+            return s;
+        }
+        // Residency across operators (kpu-run-csp-programs step 4d): `inherit X;` -- X arrives
+        // resident from the operator before; `retain X;` -- X stays resident for the one after.
+        if (kw == "inherit") {
+            s.kind = Stmt::Kind::Inherit;
+            s.tiles = tiles();
+            expect(";");
+            return s;
+        }
+        if (kw == "retain") {
+            s.kind = Stmt::Kind::Retain;
+            s.tiles = tiles();
+            s.context = context();
             expect(";");
             return s;
         }
