@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Functional checks on tile contents** (`include/sw/kpu/program/tile_check.hpp`;
+  retire-l0-derivations §3.8). A result is checked tile by tile, through an interpretation layer
+  that reads each tile's bits in the format the program intends, with every element within a
+  proximity bound of L-B's (`|actual - oracle| <= atol + rtol * |oracle|`). Floating point is not
+  associative, and a data path legitimately reorders reductions and converts formats, so bit
+  equality is not the functional bar. The sequence of tile moves is checked exactly, separately.
+  - `ElementFormat` decodes float32, which is what operands store today. Other formats are
+    refused by name until operands carry them.
+  - `check_tiles` reports the tiles out of bound, each with its first bad element.
+  - `test_csp_driver` and `test_csp_program` use it. The remaining value checks move in a later
+    step, which is up for review.
+
+### Removed
+
+- **`csp::lower` and `csp::lang::emit`** (retire-l0-derivations PR 2). They turned an L0 back into
+  a program, which inverts "an L0 is a program's trace".
+  - Removed with them, as tests of the retired paths:
+    - the Belady-optimality and lowering-refusal tests (`test_csp_program`);
+    - the emission test (`test_csp_language`);
+    - the lowered-L0 test (`test_csp_linear`).
+  - `test_csp_driver`'s L-CA tests now run kpu-csp-gen and hand-written programs. Their values
+    are checked per tile against L-B, and their loads, stores, credit order and refusals exactly.
+  - CspDriver's refusal now reads "written for an L3 of N tiles".
+
 ### Changed
 
 - **L-B is the oracle, and the one place a CSP program becomes an L0** (retire-l0-derivations

@@ -233,13 +233,13 @@ private:
                                             "operator (operands A, B, C and vectors) in this step");
         }
         // The program's channel capacities are its target's (decision Q2): a program that needs
-        // more L3 than the machine has, or was lowered for an unbounded one, is not this
+        // more L3 than the machine has, or was written for an unbounded one, is not this
         // machine's program. Level 1 is one flat L3: a machine with several is level 2's.
         if (exec_.l3_tiles() != 1)
             throw std::invalid_argument("CspDriver: the machine has " + std::to_string(exec_.l3_tiles()) +
                                         " L3 tiles; a level-1 program addresses one (level 2 distributes)");
         if (l3 == 0 || l3 > exec_.config().l3_buffer_count)
-            throw std::invalid_argument("CspDriver: the program was lowered for an L3 of " +
+            throw std::invalid_argument("CspDriver: the program was written for an L3 of " +
                                         (l3 ? std::to_string(l3) + " tiles" : std::string("unbounded size")) +
                                         "; the machine's holds " + std::to_string(exec_.config().l3_buffer_count));
         // DRAM layout: each operand's tiles row-major, operands one after another.

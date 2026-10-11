@@ -6,10 +6,9 @@
 // statement: compile(print(p)) reproduces p's actions exactly. The output is flat -- loops are
 // not recovered -- but it is the program, readable and editable.
 //
-// An IR whose actions do not form statements (the action-level lowering of csp/lower.hpp can
-// release a tile between one operand's feed and the next operand's load, which a call cannot
-// express: its operands are co-resident) is refused by name; that IR's text form comes from
-// the L0 emitter (emit.hpp), which decides residency at call granularity.
+// An IR whose actions do not form statements (say, one edited to release a tile between one
+// operand's feed and the next operand's load, which a call cannot express: its operands are
+// co-resident) is refused by name. It has no text form.
 //
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2024-2025 Stillwater Supercomputing, Inc.

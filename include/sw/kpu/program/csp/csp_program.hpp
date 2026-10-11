@@ -4,8 +4,9 @@
 //
 // The sequencing layer every execution level interprets: PROCESSES, each with the ordered tile
 // actions it performs, exchanging tiles over CHANNELS whose capacities are their credits. It is
-// lowered from L0 (csp/lower.hpp), which today is derived from hand-coded loops and later from
-// the Domain Flow Program -- never written by hand, so it has a disassembler and no syntax.
+// the compiled form of a written program (csp/lang/compile.hpp; ADR 0004), and its source is the
+// program's L0 trace. An L0 is never turned back into a program: it is a trace, not a source
+// (docs/plans/retire-l0-derivations.md §3.4).
 //
 // LEVEL 1 addresses the machine as one flat L3 and one fat compute fabric (the plan's MPI
 // hypothesis): one process of each kind, and inner loops collapsed into tile-function calls --
@@ -16,7 +17,7 @@
 // (Load, or a Writeback of a result) to its Release, which follows its last consumer (a Move
 // out of L3, or the Store). Every residency records its consumer count. No tag-match at run
 // time creates reuse the program did not decide; an interpreter that sees a read of a released
-// tile has found a lowering bug.
+// tile has found a bug in the program, or in the compiler that produced the actions.
 //
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2024-2025 Stillwater Supercomputing, Inc.
@@ -219,7 +220,7 @@ struct Residency {
     bool retained = false;              // closed by a Retain: held when the program ends
 };
 
-// What the lowering decided about reuse, before any simulation.
+// What the program decided about reuse, before any simulation.
 struct ReuseReport {
     std::size_t loads = 0, stores = 0, moves = 0, calls = 0;
     std::size_t distinct_loaded = 0;    // tiles read from DRAM at least once
@@ -230,7 +231,7 @@ struct ReuseReport {
 class CspProgram {
 public:
     std::string name;
-    TileProgram source;                 // the L0 it was lowered from (operands, ops, values)
+    TileProgram source;                 // its L0 trace (operands, ops, values)
     std::vector<Process> processes;     // level 1: dma, bm, str, cf
     std::vector<Channel> channels;      // indexed by Chan
     std::vector<Action> actions;        // every action, in program order
