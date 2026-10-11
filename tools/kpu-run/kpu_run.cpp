@@ -54,7 +54,7 @@ kpu-run runs a program; it does not write one. kpu-csp-gen writes CSP programs.
                             | cycle-accurate | all       (default all)
   --window <W>              L-CA's driver window         (default 256)
   --inputs <values.l0>      the inputs, from an L0 file's values (default: synthesized)
-  --trace-limit <n>         the L0 oracle's limit, in actions (default 1000000)
+  --trace-limit <n>         trace (and replay) at most this many actions (default 1000000)
   --emit-l0 <file.l0>       write the program's L0 TRACE, inputs inline, once every level
                             has agreed with it: a test case, and how the golden corpus is
                             made (kpu-sim is the one source of an L0)
@@ -73,9 +73,10 @@ kpu-run runs a program; it does not write one. kpu-csp-gen writes CSP programs.
                             --emit-l0-result, --step, --step-limit
   -h, --help
 
-Values are compared bit-exactly against the L0 oracle (or L-B when the program is too long
-to trace), over EVERY operand rather than just the result: a level that scribbled on an
-input is a model bug too. A disagreement exits 1.
+Values are compared bit-exactly against L-B, the oracle (the other levels refine the
+behavioral model), over EVERY operand rather than just the result: a level that scribbled on
+an input is a model bug too. A disagreement exits 1. L-B also writes the program's L0 trace,
+and that trace's replay must reproduce L-B before it is written.
 )";
 }
 
@@ -309,12 +310,14 @@ int run_csp_program(const std::vector<std::string>& a, const std::string& path) 
     if (res.validation.inherited) std::cout << ", " << res.validation.inherited << " inherited";
     if (res.validation.retained) std::cout << ", " << res.validation.retained << " retained";
     std::cout << "\n";
-    std::cout << "oracle   " << (res.reference ? "L0 trace of " + std::to_string(res.actions) + " actions"
-                                               : res.reference_note) << "\n";
+    // L-B is the oracle; its trace, replayed, must reproduce it before it can be written.
+    std::cout << "oracle   L-B, " << res.actions << " actions; "
+              << (reference.trace ? std::string("L0 trace of ") + std::to_string(reference.trace->ops().size()) +
+                                        " ops, replayed bit-exact"
+                                  : res.reference_note) << "\n";
     std::cout << "device   " << (deployment ? deployment->label() + "   digest " + platform::deployment_digest(*deployment)
                                             : std::string("none (no --deploy): the default device")) << "\n\n";
 
-    const CspLevelOutcome* lb = nullptr;
     for (std::size_t li = 0; li < res.levels.size(); ++li) {
         const auto& o = res.levels[li];
         std::cout << "  " << std::left << std::setw(24) << to_string(o.level) << std::setw(6) << short_name(o.level);
@@ -322,7 +325,6 @@ int run_csp_program(const std::vector<std::string>& a, const std::string& path) 
             std::cout << "skipped: " << *o.skipped << "\n";
             continue;
         }
-        if (o.level == ExecutionLevel::Behavioral) lb = &o;
         if (!o.has_timing) {
             std::cout << "timing: not modelled at this level   " << o.actions << " actions, peak L3 " << o.peak_l3
                       << "\n        run id " << run_ids[li] << "\n";
@@ -428,21 +430,15 @@ int run_csp_program(const std::vector<std::string>& a, const std::string& path) 
         std::cout << "  stopped after " << cur->position() << " of " << cur->size() << " steps\n";
     }
 
-    if (has_flag(a, "--no-compare")) return 0;
-    // Every operand, bit for bit, against the oracle -- and against L-B when there is none.
-    const TileProgram* authority = res.reference ? &*res.reference : (lb ? &lb->values : nullptr);
-    if (!authority) {
-        std::cout << "\nno oracle and no L-B run: nothing to compare against\n";
-        // The same rule as --no-compare: nothing agreed, so nothing is written, and asking for a
-        // file is an error rather than a silent success.
-        if (!emit_path.empty() || !trace_path.empty() || !kernel_path.empty()) {
-            std::cerr << "kpu-run: nothing was compared (no L0 oracle and no L-B run), so no file is "
-                         "written; add behavioral to --level, or raise --trace-limit\n";
-            return 2;
-        }
-        return 0;
+    // A trace that does not reproduce the run it records is a kpu-sim defect, whatever was asked.
+    if (!reference.replay_mismatch.empty()) {
+        std::cout << "\nFAILED: " << reference.note << "\n";
+        return 1;
     }
-    std::cout << "\nvalues vs " << (res.reference ? "the L0 oracle" : "L-B") << " (bit-exact, every operand)\n";
+    if (has_flag(a, "--no-compare")) return 0;
+    // Every operand, bit for bit, against L-B: the levels refine the behavioral model.
+    const TileProgram* authority = &*res.reference;
+    std::cout << "\nvalues vs L-B, the oracle (bit-exact, every operand)\n";
     bool all_agree = true;
     for (const auto& o : res.levels) {
         if (o.skipped) continue;
@@ -477,8 +473,8 @@ int run_csp_program(const std::vector<std::string>& a, const std::string& path) 
         std::cout << "wrote  " << emit_path << "  (every operand, as the program leaves them)\n";
     }
     // The program's L0 trace, written by the simulator that ran it (ADR 0004 §4: kpu-sim is
-    // the one source of an L0), and only after every level agreed with it: this is how a test
-    // reference is made. --emit-l0 writes a test case (the inputs inline); --emit-l0-kernel the
+    // the one source of an L0, and L-B the one place it is made), only after its replay reproduced
+    // L-B and every level agreed with L-B: this is how a test reference is made. --emit-l0 writes a test case (the inputs inline); --emit-l0-kernel the
     // structure alone. A program too long to trace has no trace to write, which is refused.
     for (const auto& [file, with_values] : {std::pair<const std::string&, bool>{trace_path, true},
                                             std::pair<const std::string&, bool>{kernel_path, false}}) {

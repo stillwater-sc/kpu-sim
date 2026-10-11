@@ -16,6 +16,8 @@
 #include <sw/kpu/program/driver/program_spec.hpp>
 #include <sw/kpu/program/platform/virtual_platform.hpp>
 
+#include "trace_fixtures.hpp"
+
 #include <cstring>
 #include <set>
 #include <string>
@@ -42,18 +44,16 @@ bool all_operands_identical(const TileProgram& a, const TileProgram& b) {
     return true;
 }
 
-ProgramSpec spec_for(const char* algo) {
-    ProgramSpec ps;
-    ps.algo = algo;
-    ps.size = 32;
-    ps.tile = 16;
-    return ps;
+// L-B's trace of kpu-csp-gen's program, on its synthesized inputs.
+TileProgram filled(const char* algo, Dim size = 32) {
+    return trace_fixtures::trace_of(trace_fixtures::gen(algo, size, 16));
 }
 
-TileProgram filled(const char* algo) {
-    const ProgramSpec ps = spec_for(algo);
-    TileProgram p = derive(ps);
-    fill(p, ps);
+// The same program with every value zero: its structure only.
+TileProgram structure(const char* algo) {
+    TileProgram p = filled(algo);
+    for (const std::string& key : p.operand_order())
+        for (float& v : p.operand(key).values) v = 0.0f;
     return p;
 }
 
@@ -223,10 +223,8 @@ TEST_CASE("the program digest covers structure, and the snapshot covers values",
     // The four inputs have to be FOUR INDEPENDENT THINGS. Folding values into the program
     // digest would make two of them cover the same bytes, and "identical inputs" would stop
     // meaning what it says.
-    const ProgramSpec ps = spec_for("matmul");
-    TileProgram a = derive(ps);
-    TileProgram b = derive(ps);
-    fill(b, ps);
+    TileProgram a = structure("matmul");
+    TileProgram b = filled("matmul");
     CHECK(VirtualPlatform::program_digest(a) == VirtualPlatform::program_digest(b));
 
     VirtualPlatform platform = default_platform();
@@ -259,11 +257,7 @@ TEST_CASE("a snapshot that is not about this platform is refused",
     // A snapshot from a DIFFERENT platform, whose programs have different shapes, is
     // refused on shape rather than silently truncated.
     VirtualPlatform other = default_platform();
-    ProgramSpec big = spec_for("matmul");
-    big.size = 64;
-    TileProgram wide = derive(big);
-    fill(wide, big);
-    other.load_program(wide);
+    other.load_program(filled("matmul", 64));
     other.load_program(filled("lu"));
     CHECK_THROWS_AS(platform.restore(other.snapshot()), std::invalid_argument);
 }
@@ -360,8 +354,7 @@ TEST_CASE("a snapshot refuses to be applied to a program of another shape",
           "[program][platform][state]") {
     // apply() is strict on purpose: a missing operand or a mismatched size means the
     // snapshot and the program are not about the same thing.
-    const ProgramSpec ps = spec_for("matmul");
-    TileProgram p = derive(ps);
+    TileProgram p = structure("matmul");
     ProgramState st = capture(p, 0);
 
     st.operands.pop_back();
@@ -474,9 +467,7 @@ TEST_CASE("a snapshot naming one operand twice is refused", "[program][platform]
     // A COUNT IS NOT A COVER. {A, A} on a two-operand program passes the count check, and
     // apply() then writes A twice and leaves B untouched -- the partial restore the check
     // exists to prevent, one level below where it was first closed.
-    const ProgramSpec ps = spec_for("matmul");
-    TileProgram p = derive(ps);
-    fill(p, ps);
+    TileProgram p = filled("matmul");
     REQUIRE(p.operand_order().size() == 3);
 
     ProgramState doubled = capture(p, 0);

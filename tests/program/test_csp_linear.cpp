@@ -5,8 +5,9 @@
 // L0 gains the epilogue ops (BiasAdd, Activation: relu, gelu, silu, atan). The CSP language
 // gains vector operands and tile contexts, `via op @ place`: the epilogue runs on the result's
 // way out, in the fabric, on the streamer's drain, or on the BlockMover's egress. Every
-// placement, and the unfused program, computes the L0 reference bit for bit: one set of
-// element functions serves the L0 kernels and every context stage. Where a stage may run is
+// placement, and the unfused program, computes what L-B computes for kpu-csp-gen's linear
+// operator, bit for bit, on the same inputs (L-B is the oracle: docs/plans/retire-l0-derivations.md
+// §3.2): one set of element functions serves the L0 kernels and every context stage. Where a stage may run is
 // the machine's: `atan @ bm.egress` on a BlockMover without it is refused before anything runs.
 //
 // SPDX-License-Identifier: MIT
@@ -28,6 +29,8 @@
 #include <sw/kpu/program/serialize/l0_format.hpp>
 #include <sw/kpu/program/tile_program_reference.hpp>
 
+#include "trace_fixtures.hpp"
+
 #include <string>
 #include <vector>
 
@@ -38,7 +41,23 @@ using Catch::Matchers::ContainsSubstring;
 
 namespace {
 
-// The derived linear operator (128^3 in 32 x 32 tiles), its inputs filled, before the run.
+// kpu-csp-gen's linear operator, 128^3 in 32 x 32 tiles, the epilogue in the fabric.
+csp::gen::Options linear_gen(ActivationFn act) {
+    csp::gen::Options o = trace_fixtures::gen("linear", 128, 32);
+    o.act = act;
+    return o;
+}
+
+// Its L0: the trace L-B wrote, on its synthesized inputs, before the run.
+TileProgram linear_trace(ActivationFn act) { return trace_fixtures::trace_of(linear_gen(act)); }
+
+// What L-B computes for it: the oracle every written linear program of this shape must equal.
+std::vector<float> linear_oracle(ActivationFn act) {
+    return trace_fixtures::lb_values(linear_gen(act)).operand("C").values;
+}
+
+// The derived linear operator (128^3 in 32 x 32 tiles), its inputs filled, before the run. Only
+// the lowering test uses it; both retire with csp::lower (retire-l0-derivations PR 2).
 TileProgram linear_inputs(ActivationFn act) {
     driver::ProgramSpec s;
     s.algo = "linear";
@@ -91,29 +110,19 @@ std::string unfused_epilogue(const std::string& act) {
            "    }\n";
 }
 
-// Run a compiled program at L-B on the derived inputs; return C as DRAM holds it.
-std::vector<float> run_lb(csp::CspProgram p, ActivationFn act) {
-    const TileProgram in = linear_inputs(act);
-    for (const char* name : {"A", "B", "b"}) p.source.operand(name).values = in.operand(name).values;
+// Run a compiled program at L-B on its synthesized inputs (csp_inputs: the same values
+// kpu-csp-gen's program gets, by operand name); return C as DRAM holds it.
+std::vector<float> run_lb(csp::CspProgram p, const std::string& src) {
+    const TileProgram in = driver::csp_inputs(lang::parse(src));
+    for (const auto& name : p.source.operand_order()) p.source.operand(name).values = in.operand(name).values;
     csp::BehavioralInterpreter lb;
     lb.run(p);
     return lb.result().operand("C").values;
 }
 
-// The same, pulled from the program's stream.
-std::vector<float> run_lb_stream(const std::string& src, ActivationFn act) {
-    const TileProgram in = linear_inputs(act);
-    lang::ActionStream s(lang::parse(src));
-    TileProgram operands = s.operands();
-    for (const auto& name : operands.operand_order()) {
-        auto& o = operands.operand(name);
-        o.values = in.operand(name).values;
-    }
-    csp::BehavioralInterpreter lb;
-    lb.begin(operands);
-    while (auto e = s.next()) lb.step(e->action, e->op ? &*e->op : nullptr);
-    lb.finish();
-    return lb.result().operand("C").values;
+// The same, pulled from the program's stream: L-B as the oracle runs it (its trace replayed).
+std::vector<float> run_lb_stream(const std::string& src) {
+    return trace_fixtures::lb_values(lang::parse(src)).operand("C").values;
 }
 
 std::string compile_error(const std::string& src, const lang::Target* t = nullptr) {
@@ -159,10 +168,11 @@ TEST_CASE("Linear: the epilogue's element functions", "[program][csp][linear]") 
 TEST_CASE("Linear: L0 computes act(A . B + b)", "[program][csp][linear]") {
     for (ActivationFn act : {ActivationFn::Relu, ActivationFn::Gelu, ActivationFn::Silu, ActivationFn::Atan}) {
         CAPTURE(to_string(act));
-        const TileProgram in = linear_inputs(act);
+        const TileProgram in = linear_trace(act);
         TileProgram ref = in;
         const auto sum = TileProgramReference().run(ref);
         CHECK(sum.epilogues == 2 * 16);
+        CHECK(ref.operand("C").values == linear_oracle(act));   // the trace replays to L-B
         // Directly, in double: the kernels' float accumulation agrees within ADR 0001 D5's rtol.
         const auto& A = in.operand("A");
         const auto& B = in.operand("B");
@@ -183,7 +193,7 @@ TEST_CASE("Linear: L0 computes act(A . B + b)", "[program][csp][linear]") {
 }
 
 TEST_CASE("Linear: the epilogue ops serialize, opset 1.1.0", "[program][csp][linear][l0]") {
-    const TileProgram in = linear_inputs(ActivationFn::Silu);
+    const TileProgram in = linear_trace(ActivationFn::Silu);
     serialize::WriteOptions opt;
     opt.include_values = true;
     const std::string text = serialize::to_string(in, opt);
@@ -222,7 +232,7 @@ TEST_CASE("Linear: the lowered L0 runs at L-B -- the reference, bit for bit", "[
                       ContainsSubstring("placed by a tile context"));
 }
 
-TEST_CASE("Linear: every placement of the epilogue, and none, computes the reference",
+TEST_CASE("Linear: every placement of the epilogue, and none, computes what L-B computes for kpu-csp-gen's",
           "[program][csp][linear][lang]") {
     struct Case { ActivationFn act; std::string via; };
     std::vector<Case> cases;
@@ -239,9 +249,9 @@ TEST_CASE("Linear: every placement of the epilogue, and none, computes the refer
         CAPTURE(c.via);
         const std::string src = linear_source(c.via);
         const csp::CspProgram p = lang::compile(src);
-        const auto want = linear_reference(c.act).operand("C").values;
-        CHECK(run_lb(p, c.act) == want);
-        CHECK(run_lb_stream(src, c.act) == want);
+        const auto want = linear_oracle(c.act);
+        CHECK(run_lb(p, src) == want);
+        CHECK(run_lb_stream(src) == want);
         // Symbolic validation agrees with the trace.
         const auto v = lang::validate(src);
         const auto r = p.reuse();
@@ -268,9 +278,9 @@ TEST_CASE("Linear: every placement of the epilogue, and none, computes the refer
             CAPTURE(to_string(act));
             const std::string src = linear_source("", unfused_epilogue(to_string(act)));
             const csp::CspProgram p = lang::compile(src);
-            const auto want = linear_reference(act).operand("C").values;
-            CHECK(run_lb(p, act) == want);
-            CHECK(run_lb_stream(src, act) == want);
+            const auto want = linear_oracle(act);
+            CHECK(run_lb(p, src) == want);
+            CHECK(run_lb_stream(src) == want);
             const csp::CspProgram fused = lang::compile(linear_source(" via add(b[j]) @ bm.egress, relu @ bm.egress"));
             // 16 more loads (C read back) and 16 more stores than the fused program.
             CHECK(p.reuse().loads == fused.reuse().loads + 16);
@@ -301,13 +311,13 @@ TEST_CASE("Linear: a stage runs where the machine has it, or the program is refu
     // Without a target, placement is not checked: the values do not depend on it.
     CHECK(compile_error(misplaced) == "compiled");
 
-    // Its legal placement, on the streamer's drain, runs and computes the reference.
+    // Its legal placement, on the streamer's drain, runs and computes what L-B computes.
     const std::string legal = linear_source(" via add(b[j]) @ bm.egress, atan @ str.drain");
     CHECK_THAT(compile_error(legal, &target), ContainsSubstring("listed after a stage @ bm.egress"));
     const std::string ordered = linear_source(" via add(b[j]) @ str.drain, atan @ str.drain");
     const csp::CspProgram p = lang::compile(ordered, &target);
     CHECK(lang::validate(ordered, &target).peak_l3 == p.reuse().peak_l3);
-    CHECK(run_lb(p, ActivationFn::Atan) == linear_reference(ActivationFn::Atan).operand("C").values);
+    CHECK(run_lb(p, ordered) == linear_oracle(ActivationFn::Atan));
 
     // The fabric runs add and relu only.
     CHECK_THAT(compile_error(linear_source(" via add(b[j]) @ fabric, gelu @ fabric"), &target),

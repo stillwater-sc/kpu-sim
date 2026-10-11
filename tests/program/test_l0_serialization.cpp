@@ -13,6 +13,8 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include "trace_fixtures.hpp"
+
 #include <sw/kpu/program/driver/execution_level.hpp>
 #include <sw/kpu/program/driver/program_spec.hpp>
 #include <sw/kpu/program/serialize/l0_format.hpp>
@@ -28,8 +30,13 @@
 using namespace sw::kpu::program;
 using namespace sw::kpu::program::driver;
 using namespace sw::kpu::program::serialize;
+using trace_fixtures::gen;
+using trace_fixtures::trace_of;
 
 namespace {
+
+// The operand an operator leaves its answer in: C for a matmul, A (factored in place) for LU.
+const char* result_of(const std::string& algo) { return algo == "lu" ? "A" : "C"; }
 
 bool bits_equal(const std::vector<float>& a, const std::vector<float>& b) {
     if (a.size() != b.size()) return false;
@@ -42,16 +49,11 @@ bool bits_equal(const std::vector<float>& a, const std::vector<float>& b) {
 
 TEST_CASE("a program round-trips and then executes bit-identically",
           "[program][serialize]") {
-    // This is the whole point of the format. Values are increment 2, so the reloaded
-    // program is filled the same way afterwards -- what must survive the file is the
-    // STRUCTURE that decides the computation.
+    // This is the whole point of the format. Written as a kernel, the reloaded program is
+    // given the trace's inputs afterwards -- what must survive the file is the STRUCTURE that
+    // decides the computation. The program is L-B's trace of a kpu-csp-gen program.
     for (const char* algo : {"matmul", "lu"}) {
-        ProgramSpec ps;
-        ps.algo = algo;
-        ps.size = 48;
-        ps.tile = 16;
-
-        TileProgram original = derive(ps);
+        TileProgram original = trace_of(gen(algo, 48, 16));
         const TileProgram reloaded = from_string(to_string(original));
 
         // Structure first, because a difference here localises a bug far better than a
@@ -96,14 +98,13 @@ TEST_CASE("a program round-trips and then executes bit-identically",
         const auto device = make_device(ds);
         for (ExecutionLevel level : all_levels()) {
             if (!level_implemented(level)) continue;
-            TileProgram a = derive(ps);
+            TileProgram a = original;
             TileProgram b = from_string(to_string(a));
-            fill(a, ps);
-            fill(b, ps);
+            for (const std::string& key : a.operand_order()) b.operand(key).values = a.operand(key).values;
             const auto ra = run_at(level, a, device, Placement::single(device.compute_tiles));
             const auto rb = run_at(level, b, device, Placement::single(device.compute_tiles));
-            CHECK(bits_equal(a.operand(result_operand(ps)).values,
-                             b.operand(result_operand(ps)).values));
+            CHECK(bits_equal(a.operand(result_of(algo)).values,
+                             b.operand(result_of(algo)).values));
             CHECK(rb.summary.row_swaps == ra.summary.row_swaps);
             CHECK(rb.summary.permutation == ra.summary.permutation);
         }
@@ -113,11 +114,7 @@ TEST_CASE("a program round-trips and then executes bit-identically",
 TEST_CASE("the file is text a human can read and diff", "[program][serialize]") {
     // §5's reason for text: a golden corpus whose rot is visible in a diff. That only
     // holds if the content is actually legible, so this pins the shape.
-    ProgramSpec ps;
-    ps.algo = "matmul";
-    ps.size = 32;
-    ps.tile = 16;
-    const std::string text = to_string(derive(ps));
+    const std::string text = to_string(trace_of(gen("matmul", 32, 16)));
 
     // Pinned literally, so a version bump has to be DELIBERATE: an accidental one would
     // silently change what older readers accept, which is the failure this axis exists to
@@ -132,7 +129,8 @@ TEST_CASE("the file is text a human can read and diff", "[program][serialize]") 
     CHECK(text.find("VALUES none\n") != std::string::npos);   // a kernel, not a test case
     CHECK(text.find("OPERAND \"A\" rows=32 cols=32 tile_rows=16 tile_cols=16\n") !=
           std::string::npos);
-    CHECK(text.find("OP kind=MATMUL_ACCUM in=A:0,0;B:0,0 out=C:0,0\n") != std::string::npos);
+    // A trace's op names the program line it ran from.
+    CHECK(text.find("OP kind=MATMUL_ACCUM in=A:0,0;B:0,0 out=C:0,0 label=\"line 12\"\n") != std::string::npos);
     CHECK(text.find("\nEND\n") != std::string::npos);
 
     // alpha is omitted at its default, so a diff shows what differs rather than what is
@@ -142,11 +140,7 @@ TEST_CASE("the file is text a human can read and diff", "[program][serialize]") 
 
 TEST_CASE("LU's pivot slots and labels survive the file", "[program][serialize]") {
     // The fields most likely to be dropped silently, because GEMM does not use them.
-    ProgramSpec ps;
-    ps.algo = "lu";
-    ps.size = 64;
-    ps.tile = 16;
-    TileProgram original = derive(ps);
+    TileProgram original = trace_of(gen("lu", 64, 16));
     const std::string text = to_string(original);
     CHECK(text.find("pivot=") != std::string::npos);
     CHECK(text.find("label=") != std::string::npos);
@@ -425,16 +419,11 @@ TEST_CASE("the reader validates a program against its own registry",
 TEST_CASE("a test case carries its inputs, and executes without being re-filled",
           "[program][serialize][values]") {
     // The whole point of carrying values: the file is self-contained. If the reloaded
-    // program needed fill() to compute the right answer, the file would not be a test case
-    // at all -- it would be a kernel with a misleading preamble.
+    // program needed its inputs supplied to compute the right answer, the file would not be a
+    // test case at all -- it would be a kernel with a misleading preamble. A trace carries the
+    // inputs L-B ran it on.
     for (const char* algo : {"matmul", "lu"}) {
-        ProgramSpec ps;
-        ps.algo = algo;
-        ps.size = 48;
-        ps.tile = 16;
-
-        TileProgram original = derive(ps);
-        fill(original, ps);
+        const TileProgram original = trace_of(gen(algo, 48, 16));
 
         LoadInfo info;
         TileProgram reloaded = from_string(to_test_case(original), &info);
@@ -444,28 +433,22 @@ TEST_CASE("a test case carries its inputs, and executes without being re-filled"
         for (const std::string& key : original.operand_order())
             CHECK(bits_equal(reloaded.operand(key).values, original.operand(key).values));
 
-        // And the reloaded program computes the same answer with NO fill() call.
+        // And the reloaded program computes the same answer with nothing supplied.
         const DeviceSpec ds;
         const auto device = make_device(ds);
-        TileProgram ref = derive(ps);
-        fill(ref, ps);
+        TileProgram ref = original;
         run_at(ExecutionLevel::Behavioral, ref, device,
                Placement::single(device.compute_tiles));
         run_at(ExecutionLevel::Behavioral, reloaded, device,
                Placement::single(device.compute_tiles));
-        CHECK(bits_equal(ref.operand(result_operand(ps)).values,
-                         reloaded.operand(result_operand(ps)).values));
+        CHECK(bits_equal(ref.operand(result_of(algo)).values,
+                         reloaded.operand(result_of(algo)).values));
     }
 }
 
 TEST_CASE("a kernel says it has no values, and carries none",
           "[program][serialize][values]") {
-    ProgramSpec ps;
-    ps.algo = "matmul";
-    ps.size = 32;
-    ps.tile = 16;
-    TileProgram filled = derive(ps);
-    fill(filled, ps);
+    const TileProgram filled = trace_of(gen("matmul", 32, 16));
 
     // Written as a kernel, the values are deliberately dropped -- and the file says so,
     // which is what lets a reader tell this from a test case whose inputs are all zero.
@@ -558,14 +541,8 @@ TEST_CASE("values are written one row per record, so a diff is readable",
     // §5's justification for text only holds if a change shows up small. One record per
     // row means a changed row is one changed line; a whole operand per line would make
     // every change look like a rewrite.
-    ProgramSpec ps;
-    ps.algo = "matmul";
-    ps.size = 32;
-    ps.tile = 16;
-    TileProgram a = derive(ps);
-    fill(a, ps);
-    TileProgram b = derive(ps);
-    fill(b, ps);
+    const TileProgram a = trace_of(gen("matmul", 32, 16));
+    TileProgram b = a;
     b.operand("A").at(7, 3) = 42.5f;          // one element differs
 
     const std::string ta = to_test_case(a), tb = to_test_case(b);
@@ -650,12 +627,7 @@ TEST_CASE("a test case demands a reader that understands values, a kernel does n
     // not know VALUES_ROW, so it would SKIP every value record, accept the file, and
     // execute a test case with zero-initialised inputs. A confident wrong answer is the
     // worst possible outcome for a format whose purpose is reproducibility.
-    ProgramSpec ps;
-    ps.algo = "matmul";
-    ps.size = 32;
-    ps.tile = 16;
-    TileProgram p = derive(ps);
-    fill(p, ps);
+    const TileProgram p = trace_of(gen("matmul", 32, 16));
 
     const std::string kernel = to_string(p);
     const std::string test_case = to_test_case(p);
@@ -695,11 +667,7 @@ TEST_CASE("a test case demands a reader that understands values, a kernel does n
 TEST_CASE("write_l0 keeps its two-argument form", "[program][serialize]") {
     // Removing the overload would break callers compiled against increment 1 for no
     // benefit -- the default is what makes the new option additive.
-    ProgramSpec ps;
-    ps.algo = "matmul";
-    ps.size = 16;
-    ps.tile = 16;
-    const TileProgram p = derive(ps);
+    const TileProgram p = trace_of(gen("matmul", 16, 16));
     std::ostringstream two_arg;
     write_l0(two_arg, p);                       // must compile and mean "no values"
     CHECK(two_arg.str().find("VALUES none\n") != std::string::npos);
@@ -718,15 +686,9 @@ TEST_CASE("write_l0 keeps its two-argument form", "[program][serialize]") {
 
 TEST_CASE("the stream annotation round-trips as a choice, and re-derives",
           "[program][serialize][streams]") {
-    ProgramSpec ps;
-    ps.algo = "matmul";
-    ps.size = 48;
-    ps.tile = 16;
-
+    const TileProgram p = trace_of(gen("matmul", 48, 16));
     for (const char* alias : {"output-stationary", "weight-stationary", "a-stationary",
                               "fully-streaming"}) {
-        TileProgram p = derive(ps);
-        fill(p, ps);
         const auto map = map_for(alias);
 
         LoadInfo info;
@@ -746,12 +708,7 @@ TEST_CASE("the stream annotation round-trips as a choice, and re-derives",
 
 TEST_CASE("a program with no annotation says so, and none is invented",
           "[program][serialize][streams]") {
-    ProgramSpec ps;
-    ps.algo = "matmul";
-    ps.size = 32;
-    ps.tile = 16;
-    TileProgram p = derive(ps);
-    fill(p, ps);
+    const TileProgram p = trace_of(gen("matmul", 32, 16));
 
     const std::string text = to_test_case(p);          // no dataflow
     CHECK(text.find("STREAMS") == std::string::npos);
@@ -768,12 +725,7 @@ TEST_CASE("an annotated file demands a reader that understands annotations",
     // STREAMS record carries semantics, so a 1.1.0 reader -- which would SKIP it and execute
     // with no L1 timing while reporting success -- must refuse. Same silent-wrong-answer
     // shape as VALUES_ROW on a 1.0.0 reader, one level down.
-    ProgramSpec ps;
-    ps.algo = "matmul";
-    ps.size = 32;
-    ps.tile = 16;
-    TileProgram p = derive(ps);
-    fill(p, ps);
+    const TileProgram p = trace_of(gen("matmul", 32, 16));
 
     CHECK(to_test_case(p).find("MIN_CONSUMER 1.1.0\n") != std::string::npos);
     CHECK(to_test_case(p, "output-stationary").find("MIN_CONSUMER 1.2.0\n") !=

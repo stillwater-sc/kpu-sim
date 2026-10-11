@@ -10,9 +10,11 @@
 //         own L3 credits (its Loads and Releases), timed per process from the device
 //   L-CA  timing::CspDriver, from the stream, on the machine csp_config_from(device) builds
 //
-// L0 is the ORACLE, not the input: when the program is small enough to trace, its trace's
-// L0 ops (calls, and the arithmetic of its tile contexts) run by TileProgramReference on the
-// same inputs give the values every level must equal, bit for bit, on every operand.
+// L-B is the ORACLE (docs/plans/retire-l0-derivations.md §3.2): the other levels refine the
+// behavioral model, so every level must equal L-B's values, bit for bit, on every operand. L-B
+// also writes the program's L0 -- the trace of what it executed -- when the program is small
+// enough to trace, and the trace is validated by replaying it with TileProgramReference on the
+// same inputs: it must reproduce L-B exactly before it leaves kpu-sim.
 //
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2024-2025 Stillwater Supercomputing, Inc.
@@ -177,43 +179,60 @@ struct CspRunRequest {
 
 struct CspRunResult {
     csp::lang::Validation validation;
-    std::optional<TileProgram> reference;               // the trace's L0, run on the inputs
-    std::string reference_note;                         // why there is none
+    std::optional<TileProgram> reference;               // L-B's values: the oracle
+    std::string reference_note;                         // why there is no trace
     std::size_t actions = 0;                            // the program's actions (when counted)
     std::vector<CspLevelOutcome> levels;
 };
 
-// The oracle: the trace's L0, run on `inputs`, when the program has at most `trace_limit`
-// actions (counted without keeping them).
+// The oracle: L-B's run of the program on `inputs`, with its trace when the program has at most
+// `trace_limit` actions (counted without keeping them).
 struct CspReference {
-    std::optional<TileProgram> values;      // every operand, as the program leaves them
-    // The trace itself: the program's L0, on its inputs, before it runs. kpu-sim is the one
-    // source of an L0 (ADR 0004 §4), so this is what `kpu-run --emit-l0` writes as a test
-    // case, once the levels have agreed with it.
+    std::optional<TileProgram> values;      // every operand, as L-B leaves them
+    // The trace L-B executed: the program's L0, on its inputs, before it runs. kpu-sim is the one
+    // source of an L0 (ADR 0004 §4), and L-B is the one place in kpu-sim a program becomes one,
+    // so this is what `kpu-run --emit-l0` writes as a test case, once the levels have agreed.
+    // Present only when the trace reproduced L-B (`replay_mismatch` empty).
     std::optional<TileProgram> trace;
-    std::string note;                       // why there is none
+    std::string note;                       // why there is no trace
+    // The trace's validation failed: the first operand its replay computed differently from L-B.
+    // A kpu-sim defect, never a property of the program.
+    std::string replay_mismatch;
     std::size_t actions = 0;
 };
 
 inline CspReference csp_reference(const csp::lang::Program& ast, const TileProgram& inputs, std::size_t trace_limit) {
     CspReference out;
-    csp::lang::ActionStream s(ast);
     std::size_t n = 0;
-    while (n <= trace_limit && s.next()) ++n;
-    if (n > trace_limit) {
-        out.note = "more than " + std::to_string(trace_limit) +
-                   " actions: no L0 reference (raise --trace-limit); the levels are compared with each other";
-        return out;
+    {
+        csp::lang::ActionStream count(ast);
+        while (n <= trace_limit && count.next()) ++n;
     }
-    out.actions = n;
-    csp::CspProgram trace = csp::lang::compile(ast);
-    for (const auto& name : trace.source.operand_order())
-        trace.source.operand(name).values = inputs.operand(name).values;
-    out.trace = trace.source;
-    TileProgramReference().run(trace.source);
-    TileProgram ref = inputs;
-    for (const auto& name : ref.operand_order()) ref.operand(name).values = trace.source.operand(name).values;
-    out.values = std::move(ref);
+    const bool record = n <= trace_limit;
+    if (!record)
+        out.note = "more than " + std::to_string(trace_limit) + " actions: no L0 trace (raise --trace-limit)";
+    // The operands as the program declares them, in its order, on the inputs' values.
+    TileProgram operands = csp::lang::declared_operands(ast);
+    for (const auto& name : operands.operand_order()) operands.operand(name).values = inputs.operand(name).values;
+    csp::lang::ActionStream s(ast);
+    csp::BehavioralInterpreter lb;
+    lb.begin(operands, record);
+    while (auto e = s.next()) lb.step(e->action, e->op ? &*e->op : nullptr, &e->l0);
+    out.actions = lb.finish().actions;
+    TileProgram values = inputs;
+    for (const auto& name : values.operand_order()) values.operand(name).values = lb.result().operand(name).values;
+    out.values = std::move(values);
+    if (!record) return out;
+    // The trace's validation: replayed on the same inputs, it computes what L-B computed.
+    TileProgram replay = lb.trace();
+    TileProgramReference().run(replay);
+    for (const auto& name : replay.operand_order())
+        if (replay.operand(name).values != lb.result().operand(name).values) {
+            out.replay_mismatch = name;
+            out.note = "the L0 trace's replay differs from L-B on operand " + name + ": no trace (a kpu-sim defect)";
+            return out;
+        }
+    out.trace = lb.trace();
     return out;
 }
 

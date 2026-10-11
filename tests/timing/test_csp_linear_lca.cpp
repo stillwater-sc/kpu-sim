@@ -3,8 +3,10 @@
 // The linear operator at L-CA (docs/plans/csp-language.md step 3): the epilogue's placement,
 // timed. A tile context's stages run on the vector unit of the site the program put them on
 // (movers.vector), overlapping the move they ride on; `fabric` stages charge the compute tile.
-// Every placement computes the L0 reference bit for bit; what differs is the time and the
-// traffic, which is the fusion benefit the driver exists to show.
+// Every placement computes L-B's values for its program bit for bit -- L-B is the oracle, and
+// L-CA a cycle-accurate refinement of it (docs/plans/retire-l0-derivations.md §3.2) -- and the
+// placements of one activation agree with each other; what differs is the time and the traffic,
+// which is the fusion benefit the driver exists to show.
 //
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2024-2025 Stillwater Supercomputing, Inc.
@@ -13,16 +15,17 @@
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_string.hpp>
 
+#include "../program/trace_fixtures.hpp"
+
 #include <sw/kpu/program/csp/lang/compile.hpp>
-#include <sw/kpu/program/driver/program_spec.hpp>
 #include <sw/kpu/program/platform/deployment_json.hpp>
-#include <sw/kpu/program/tile_program_reference.hpp>
 #include <sw/kpu/timing/csp_config_from_spec.hpp>
 #include <sw/kpu/timing/csp_driver.hpp>
 
 #include <cmath>
 #include <cstdio>
 #include <limits>
+#include <map>
 #include <string>
 #include <vector>
 
@@ -34,21 +37,13 @@ using Catch::Matchers::ContainsSubstring;
 
 namespace {
 
-prog::TileProgram linear_inputs(prog::ActivationFn act) {
-    prog::driver::ProgramSpec s;
-    s.algo = "linear";
-    s.size = 128;
-    s.tile = 32;
-    s.act = act;
-    prog::TileProgram p = prog::driver::derive(s);
-    prog::driver::fill(p, s);
-    return p;
-}
+// The program's inputs, as kpu-run synthesizes them (exact multiples of 1/8; C, written before
+// it is read, starts at zero).
+prog::TileProgram linear_inputs(const std::string& src) { return prog::driver::csp_inputs(lang::parse(src)); }
 
-std::vector<float> reference(prog::ActivationFn act) {
-    prog::TileProgram p = linear_inputs(act);
-    prog::TileProgramReference().run(p);
-    return p.operand("C").values;
+// The oracle: C as L-B leaves it, for the same program on the same inputs.
+std::vector<float> reference(const std::string& src) {
+    return trace_fixtures::lb_values(lang::parse(src)).operand("C").values;
 }
 
 std::string linear_source(const std::string& via, const std::string& unfused = "") {
@@ -104,10 +99,10 @@ struct Run {
     std::size_t program_loads = 0;
 };
 
-Run run(const std::string& src, prog::ActivationFn act, const prog::platform::DeviceSpecification& d) {
+Run run(const std::string& src, const prog::platform::DeviceSpecification& d) {
     const lang::Target target = lang::target_from(d);
     csp::CspProgram p = lang::compile(src, &target);
-    const prog::TileProgram in = linear_inputs(act);
+    const prog::TileProgram in = linear_inputs(src);
     for (const char* name : {"A", "B", "b"}) p.source.operand(name).values = in.operand(name).values;
     ConcurrentTimingExecutor exec(machine(d));
     Run out;
@@ -135,11 +130,15 @@ TEST_CASE("Linear at L-CA: every placement computes the reference; the placement
                 "fabric epilogue, str VE busy/bound, bm VE busy/bound\n");
     std::uint64_t fused_bytes = 0;
     Cycle fused_cycles = 0;
+    std::map<prog::ActivationFn, std::vector<float>> by_act;    // the first placement's C, per activation
     for (const Case& c : cases) {
         CAPTURE(c.name);
-        const Run x = run(c.src, c.act, d);
+        const Run x = run(c.src, d);
         REQUIRE(x.r.completed);
-        CHECK(x.r.values.operand("C").values == reference(c.act));
+        CHECK(x.r.values.operand("C").values == reference(c.src));
+        // Where the epilogue runs changes when, never what: one activation, one C.
+        auto [first, fresh] = by_act.emplace(c.act, x.r.values.operand("C").values);
+        if (!fresh) CHECK(x.r.values.operand("C").values == first->second);
         CHECK(x.r.dram_loads == x.program_loads);
         std::printf("  %-10s %7llu  %7llu  %6llu  %4llu  %5llu/%-4llu  %5llu/%-4llu\n", c.name,
                     static_cast<unsigned long long>(x.r.cycles), static_cast<unsigned long long>(x.r.dram_bytes),
@@ -177,9 +176,13 @@ TEST_CASE("Linear at L-CA: every placement computes the reference; the placement
 TEST_CASE("Linear at L-CA: the stream runs it too, in a window", "[timing][csp][linear][lca][stream]") {
     const auto d = s1();
     const lang::Target target = lang::target_from(d);
-    const prog::TileProgram in = linear_inputs(prog::ActivationFn::Silu);
+    std::vector<float> first;
     for (const std::string& src : {linear_source(" via add(b[j]) @ str.drain, silu @ bm.egress"),
                                    linear_source("", unfused_epilogue("silu"))}) {
+        const prog::TileProgram in = linear_inputs(src);
+        const std::vector<float> ref = reference(src);
+        if (first.empty()) first = ref;
+        CHECK(ref == first);                    // fused and unfused: the same C at L-B
         for (std::size_t w : {4u, 64u}) {
             CAPTURE(w);
             lang::ActionStream s(lang::parse(src), target);
@@ -188,15 +191,15 @@ TEST_CASE("Linear at L-CA: the stream runs it too, in a window", "[timing][csp][
             ConcurrentTimingExecutor exec(machine(d));
             const auto r = CspDriver(exec, s, operands, w).run();
             REQUIRE(r.completed);
-            CHECK(r.values.operand("C").values == reference(prog::ActivationFn::Silu));
+            CHECK(r.values.operand("C").values == ref);
         }
     }
 }
 
 TEST_CASE("Linear at L-CA: a vector unit slower than its move sets the pace", "[timing][csp][linear][lca]") {
     const std::string src = linear_source(" via add(b[j]) @ bm.egress, relu @ bm.egress");
-    const Run fast = run(src, prog::ActivationFn::Relu, s1(16));
-    const Run slow = run(src, prog::ActivationFn::Relu, s1(1));
+    const Run fast = run(src, s1(16));
+    const Run slow = run(src, s1(1));
     REQUIRE(fast.r.completed);
     REQUIRE(slow.r.completed);
     CHECK(slow.r.values.operand("C").values == fast.r.values.operand("C").values);
@@ -212,8 +215,9 @@ TEST_CASE("Linear at L-CA: a stage on a site with no vector unit is refused", "[
     auto d = s1();
     d.movers.bm_vector.reset();
     // Compiled without the target (the language check is skipped), the executor still refuses.
-    csp::CspProgram p = lang::compile(linear_source(" via add(b[j]) @ bm.egress, relu @ bm.egress"));
-    const prog::TileProgram in = linear_inputs(prog::ActivationFn::Relu);
+    const std::string src = linear_source(" via add(b[j]) @ bm.egress, relu @ bm.egress");
+    csp::CspProgram p = lang::compile(src);
+    const prog::TileProgram in = linear_inputs(src);
     for (const char* name : {"A", "B", "b"}) p.source.operand(name).values = in.operand(name).values;
     ConcurrentTimingExecutor exec(machine(d));
     CHECK_THROWS_WITH(CspDriver(exec, p).run(), ContainsSubstring("runs on the BlockMovers, which have no vector unit"));
@@ -221,8 +225,9 @@ TEST_CASE("Linear at L-CA: a stage on a site with no vector unit is refused", "[
 
 
 TEST_CASE("Linear at L-CA: a vector rate that is not finite and positive is refused", "[timing][csp][linear][lca]") {
-    csp::CspProgram p = lang::compile(linear_source(" via add(b[j]) @ bm.egress, relu @ bm.egress"));
-    const prog::TileProgram in = linear_inputs(prog::ActivationFn::Relu);
+    const std::string src = linear_source(" via add(b[j]) @ bm.egress, relu @ bm.egress");
+    csp::CspProgram p = lang::compile(src);
+    const prog::TileProgram in = linear_inputs(src);
     for (const char* name : {"A", "B", "b"}) p.source.operand(name).values = in.operand(name).values;
     for (double rate : {std::nan(""), -1.0, std::numeric_limits<double>::infinity(), 1e-300}) {
         CAPTURE(rate);

@@ -1,9 +1,11 @@
 // ============================================================================
 // tests/program/test_csp_gen.cpp
 // csp-gen (docs/plans/kpu-run-csp-programs.md step 1): every program the generator writes
-// validates symbolically, compiles, and -- executed at L-B -- computes what the L0 derivation
-// of the same operator computes, bit for bit. Its schedules use exactly the L3 they claim, and
-// one slot less is refused.
+// validates symbolically, compiles, and computes the same values however it is executed: the
+// compiled action list at L-B, the stream at L-B (the oracle, docs/plans/retire-l0-derivations.md
+// §3.2), and its own L0 trace replayed, bit for bit. Every schedule of one operator -- both
+// orientations, every epilogue placement -- computes the same values, bit for bit. Its schedules
+// use exactly the L3 they claim, and one slot less is refused.
 //
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2024-2025 Stillwater Supercomputing, Inc.
@@ -15,9 +17,10 @@
 #include <sw/kpu/program/csp/behavioral.hpp>
 #include <sw/kpu/program/csp/gen/generate.hpp>
 #include <sw/kpu/program/csp/lang/compile.hpp>
-#include <sw/kpu/program/driver/program_spec.hpp>
+#include <sw/kpu/program/driver/csp_run.hpp>
 #include <sw/kpu/program/tile_program_reference.hpp>
 
+#include <map>
 #include <string>
 #include <vector>
 
@@ -30,57 +33,44 @@ using sw::kpu::program::csp::VeOp;
 
 namespace {
 
-// The L0 derivation of the same operator, filled and run: the values the program must compute.
-TileProgram derived(const gen::Options& o, bool run) {
-    driver::ProgramSpec s;
-    s.algo = o.algo;
-    s.size = o.size;
-    s.tile = o.tile;
-    s.act = o.act;
-    TileProgram p = driver::derive(s);
-    driver::fill(p, s);
-    if (run) TileProgramReference().run(p);
-    return p;
-}
-
 const char* result_of(const gen::Options& o) { return o.algo == "lu" ? "A" : "C"; }
 
-// Generate, compile, run at L-B on the derivation's inputs, through the trace and the stream.
-void check_program(const gen::Options& o) {
+// Generate, compile, run at L-B on the program's synthesized inputs (csp_inputs), through the
+// action list, the stream and the trace. Returns the result operand's values: the oracle's.
+std::vector<float> check_program(const gen::Options& o) {
     const std::string text = gen::generate(o);
     CHECK(text.find("for ") != std::string::npos);         // written with its loops
     const auto v = lang::validate(text);
     CHECK(v.peak_l3 == gen::slots_needed(o));
 
+    const lang::Program ast = lang::parse(text);
+    const TileProgram in = driver::csp_inputs(ast);
+    const driver::CspReference ref = driver::csp_reference(ast, in, 1'000'000);
+    REQUIRE(ref.values.has_value());
+    REQUIRE(ref.trace.has_value());                         // its replay reproduced L-B
+    const auto want = ref.values->operand(result_of(o)).values;
+
     csp::CspProgram p = lang::compile(text);
-    const TileProgram in = derived(o, false);
     for (const auto& name : p.source.operand_order()) p.source.operand(name).values = in.operand(name).values;
     CHECK(p.reuse().peak_l3 == v.peak_l3);
     if (v.loads) CHECK(*v.loads == p.reuse().loads);
 
-    const auto want = derived(o, true).operand(result_of(o)).values;
     csp::BehavioralInterpreter lb;
     lb.run(p);
     CHECK(lb.result().operand(result_of(o)).values == want);
 
-    // The program's own trace is its oracle, and agrees with the derivation.
-    TileProgram trace_ref = p.source;
+    // The program's own trace, replayed, agrees with L-B.
+    TileProgram trace_ref = *ref.trace;
     TileProgramReference().run(trace_ref);
     CHECK(trace_ref.operand(result_of(o)).values == want);
-
-    lang::ActionStream s(lang::parse(text));
-    TileProgram operands = s.operands();
-    for (const auto& name : operands.operand_order()) operands.operand(name).values = in.operand(name).values;
-    csp::BehavioralInterpreter ls;
-    ls.begin(operands);
-    while (auto e = s.next()) ls.step(e->action, e->op ? &*e->op : nullptr);
-    ls.finish();
-    CHECK(ls.result().operand(result_of(o)).values == want);
+    return want;
 }
 
 }  // namespace
 
-TEST_CASE("csp-gen: matmul, both orientations, computes the derivation's values", "[program][csp][gen]") {
+TEST_CASE("csp-gen: matmul, both orientations, compute the same values", "[program][csp][gen]") {
+    // Inputs are exact eighths, so a matmul is exact in any order: the schedules agree bit for bit.
+    std::map<Dim, std::vector<float>> first;               // size -> the first schedule's C
     for (const char* orient : {"col", "row"})
         for (auto [size, tile] : std::vector<std::pair<Dim, Dim>>{{64, 16}, {128, 32}, {80, 32}}) {
             gen::Options o;
@@ -90,12 +80,17 @@ TEST_CASE("csp-gen: matmul, both orientations, computes the derivation's values"
             o.orient = orient;
             o.l3 = gen::slots_needed(o);                    // the smallest L3 the schedule accepts
             CAPTURE(orient, size, tile, o.l3);
-            check_program(o);
+            const auto c = check_program(o);
+            if (!first.count(size)) first[size] = c;
+            else CHECK(c == first[size]);
         }
 }
 
-TEST_CASE("csp-gen: linear, every placement and activation, computes the derivation's values",
+TEST_CASE("csp-gen: linear, every placement and orientation, computes the same values",
           "[program][csp][gen]") {
+    // A fused epilogue computes with the unfused one's element functions, so every placement and
+    // both orientations of one activation agree bit for bit.
+    std::map<std::string, std::vector<float>> first;       // activation -> the first schedule's C
     for (const char* place : {"fabric", "str.drain", "bm.egress", "unfused"})
         for (ActivationFn act : {ActivationFn::Relu, ActivationFn::Gelu, ActivationFn::Silu, ActivationFn::Atan})
             for (const char* orient : {"col", "row"}) {
@@ -108,11 +103,14 @@ TEST_CASE("csp-gen: linear, every placement and activation, computes the derivat
                 o.orient = orient;
                 o.l3 = gen::slots_needed(o);
                 CAPTURE(place, to_string(act), orient);
-                check_program(o);
+                const auto c = check_program(o);
+                const std::string key = to_string(act);
+                if (!first.count(key)) first[key] = c;
+                else CHECK(c == first[key]);
             }
 }
 
-TEST_CASE("csp-gen: LU computes the derivation's values", "[program][csp][gen]") {
+TEST_CASE("csp-gen: LU computes the same values through every path", "[program][csp][gen]") {
     for (auto [size, tile] : std::vector<std::pair<Dim, Dim>>{{64, 16}, {96, 32}, {48, 16}}) {
         gen::Options o;
         o.algo = "lu";

@@ -15,6 +15,8 @@
 #include <sw/kpu/program/driver/step_cursor.hpp>
 #include <sw/kpu/program/serialize/l0_format.hpp>
 
+#include "trace_fixtures.hpp"
+
 #include <cmath>
 #include <cstring>
 #include <map>
@@ -25,8 +27,13 @@
 
 using namespace sw::kpu::program;
 using namespace sw::kpu::program::driver;
+using trace_fixtures::gen;
+using trace_fixtures::trace_of;
 
 namespace {
+
+// The fixture: L-B's trace of kpu-csp-gen's program, on its synthesized inputs.
+TileProgram matmul_trace(Dim size = 64, Dim tile = 16) { return trace_of(gen("matmul", size, tile)); }
 
 bool bit_identical(const std::vector<float>& a, const std::vector<float>& b) {
     if (a.size() != b.size()) return false;
@@ -39,12 +46,10 @@ bool bit_identical(const std::vector<float>& a, const std::vector<float>& b) {
 
 TEST_CASE("a level with no interpreter is refused, never substituted",
           "[program][driver]") {
-    ProgramSpec ps;
-    TileProgram p = derive(ps);
-    fill(p, ps);
+    TileProgram p = matmul_trace();
     // Snapshot the result operand, so "nothing ran" is checkable. Asserting only that the
     // vector is non-empty would pass even if run_at had computed a full result into it --
-    // the vector is sized by derive(), not by the run.
+    // the vector is sized by the operand's declaration, not by the run.
     const std::vector<float> c_before = p.operand("C").values;
     const DeviceSpec ds;
     const auto device = make_device(ds);
@@ -61,7 +66,7 @@ TEST_CASE("a level with no interpreter is refused, never substituted",
               std::string::npos);
     }
     CHECK(level_implemented(ExecutionLevel::Behavioral));
-    // And nothing ran: the operand is bit-for-bit what fill() left there.
+    // And nothing ran: the operand is bit-for-bit what the trace's inputs left there.
     REQUIRE_FALSE(c_before.empty());
     CHECK(bit_identical(p.operand("C").values, c_before));
 }
@@ -70,9 +75,7 @@ TEST_CASE("L-B reports that it models no timing, rather than a timing of zero",
           "[program][driver]") {
     // makespan 0 would read as "instant". has_timing == false is a different claim,
     // and the distinction matters when a report is compared across levels.
-    ProgramSpec ps;
-    TileProgram p = derive(ps);
-    fill(p, ps);
+    TileProgram p = matmul_trace();
     const DeviceSpec ds;
     const auto out = run_at(ExecutionLevel::Behavioral, p, make_device(ds),
                             Placement::single(1));
@@ -155,20 +158,14 @@ TEST_CASE("an option present without a value is an error, not an absence",
 // ============================================================================
 
 TEST_CASE("behavioral stepping executes, one op at a time", "[program][driver][step]") {
-    ProgramSpec ps;
-    ps.size = 32;
-    ps.tile = 16;
-
     // Stepping every op must land in the same place as running the level outright. If it
     // did not, the stepper would be showing a different computation than the one it claims
     // to be stepping through.
-    TileProgram whole = derive(ps);
-    fill(whole, ps);
+    TileProgram whole = matmul_trace(32, 16);
     const DeviceSpec ds;
     run_at(ExecutionLevel::Behavioral, whole, make_device(ds), Placement::single(1));
 
-    TileProgram stepped = derive(ps);
-    fill(stepped, ps);
+    TileProgram stepped = matmul_trace(32, 16);
     BehavioralStepper cur(stepped);
     CHECK(cur.size() == stepped.ops().size());
 
@@ -179,18 +176,13 @@ TEST_CASE("behavioral stepping executes, one op at a time", "[program][driver][s
         ++steps;
     }
     CHECK(steps == stepped.ops().size());
-    CHECK(bit_identical(whole.operand(result_operand(ps)).values,
-                        stepped.operand(result_operand(ps)).values));
+    CHECK(bit_identical(whole.operand("C").values, stepped.operand("C").values));
 }
 
 TEST_CASE("behavioral stepping shows values forming", "[program][driver][step]") {
     // The reason real execution beats a replay at L-B: the result is observably
     // incomplete partway through, which is what makes it useful for debugging arithmetic.
-    ProgramSpec ps;
-    ps.size = 32;
-    ps.tile = 16;
-    TileProgram p = derive(ps);
-    fill(p, ps);
+    TileProgram p = matmul_trace(32, 16);
     BehavioralStepper cur(p);
 
     const std::vector<float> before = p.operand("C").values;
@@ -206,9 +198,7 @@ TEST_CASE("behavioral stepping shows values forming", "[program][driver][step]")
 
 TEST_CASE("a level with no interpreter has no stepper either",
           "[program][driver][step]") {
-    ProgramSpec ps;
-    TileProgram p = derive(ps);
-    fill(p, ps);
+    TileProgram p = matmul_trace();
     for (ExecutionLevel l : {ExecutionLevel::BlockSequential, ExecutionLevel::ResourceTransactional,
                              ExecutionLevel::CycleAccurate})
         CHECK_THROWS_AS(make_stepper(l, p), std::invalid_argument);
@@ -219,23 +209,21 @@ TEST_CASE("a level with no interpreter has no stepper either",
 // ----------------------------------------------------------------------------
 TEST_CASE("the program's inputs are the operands it READS", "[program][driver][file]") {
     // The rule is "read at all", not "read before it is written", and tile LU is why.
-    ProgramSpec mm;
-    mm.algo = "matmul"; mm.size = 32; mm.tile = 16;
-    CHECK(program_inputs(derive(mm)) == std::vector<std::string>{"A", "B"});
+    CHECK(program_inputs(trace_of(gen("matmul", 32, 16))) == std::vector<std::string>{"A", "B"});
 
-    ProgramSpec lu;
-    lu.algo = "lu"; lu.size = 32; lu.tile = 16;
     // LU factors A IN PLACE, and its FIRST op (LuDiagFactor) declares A[k,k] as an OUTPUT.
     // A read-before-written rule would classify A as produced and return nothing here --
     // leaving a loaded LU kernel to factor a zero matrix and report success at every level.
-    CHECK(program_inputs(derive(lu)) == std::vector<std::string>{"A"});
+    const TileProgram lu = trace_of(gen("lu", 32, 16));
+    REQUIRE(lu.ops().front().kind == TileOpKind::LuDiagFactor);
+    CHECK(program_inputs(lu) == std::vector<std::string>{"A"});
 }
 
 TEST_CASE("synthesized inputs fill only what the program reads",
           "[program][driver][file]") {
-    ProgramSpec ps;
-    ps.algo = "matmul"; ps.size = 32; ps.tile = 16;
-    TileProgram p = derive(ps);
+    // The trace carries csp_inputs' values; fill_inputs replaces them, as kpu-run does for a
+    // kernel file.
+    TileProgram p = trace_of(gen("matmul", 32, 16));
     fill_inputs(p);
 
     // C is produced, so pre-filling it would make a value comparison compare the fill.
@@ -274,9 +262,7 @@ TEST_CASE("synthesized inputs are the same on every call", "[program][driver][fi
     // The driver fills each level's copy independently, so a fill that varied between
     // calls would make every comparison meaningless -- and it would fail as a DISAGREEMENT
     // between the models, which is the most expensive way to find out.
-    ProgramSpec ps;
-    ps.algo = "lu"; ps.size = 32; ps.tile = 16;
-    TileProgram a = derive(ps), b = derive(ps);
+    TileProgram a = trace_of(gen("lu", 32, 16)), b = trace_of(gen("lu", 32, 16));
     fill_inputs(a);
     fill_inputs(b);
     CHECK(bit_identical(a.operand("A").values, b.operand("A").values));
@@ -285,23 +271,23 @@ TEST_CASE("synthesized inputs are the same on every call", "[program][driver][fi
 TEST_CASE("a kernel from a file, filled, computes what the same program computes in memory",
           "[program][driver][file]") {
     // The path the driver takes for `--program kernel.l0 --fill-inputs`: nothing here
-    // calls fill(), because a loaded program has no ProgramSpec behind it to fill from.
+    // uses the trace's own inputs, because a loaded kernel carries none to use.
     using namespace sw::kpu::program::serialize;
     for (const char* algo : {"matmul", "lu"}) {
-        ProgramSpec ps;
-        ps.algo = algo; ps.size = 32; ps.tile = 16;
+        const TileProgram trace = trace_of(gen(algo, 32, 16));
+        const std::string result = std::string(algo) == "lu" ? "A" : "C";
 
         // Written as a KERNEL: structure only, no values (increment 1's mode).
-        const std::string text = to_string(derive(ps));
+        const std::string text = to_string(trace);
         LoadInfo info;
         const TileProgram kernel = from_string(text, &info);
         REQUIRE_FALSE(info.has_values);
 
         const DeviceSpec ds;
         const auto device = make_device(ds);
-        // The file's program, and the derivation's own, each filled the way kpu-run fills a
+        // The file's program, and the trace in memory, each filled the way kpu-run fills a
         // kernel and run at L-B: reading the file must not change what is computed.
-        std::vector<TileProgram> ran{kernel, derive(ps)};
+        std::vector<TileProgram> ran{kernel, trace};
         for (TileProgram& p : ran) {
             fill_inputs(p);
             run_at(ExecutionLevel::Behavioral, p, device, Placement::single(device.compute_tiles));
@@ -318,7 +304,7 @@ TEST_CASE("a kernel from a file, filled, computes what the same program computes
         // zeros also agrees at every level, and agreeing on nothing is the failure this
         // whole path exists to avoid.
         bool produced_something = false;
-        for (float v : ran[0].operand(result_operand(ps)).values)
+        for (float v : ran[0].operand(result).values)
             produced_something = produced_something || (v != 0.0f);
         CHECK(produced_something);
     }
@@ -330,10 +316,7 @@ TEST_CASE("a test case from a file runs without being filled at all",
     // combination: a file carrying values must not have them replaced, or the run is no
     // longer the one the file describes.
     using namespace sw::kpu::program::serialize;
-    ProgramSpec ps;
-    ps.algo = "matmul"; ps.size = 32; ps.tile = 16;
-    TileProgram authored = derive(ps);
-    fill(authored, ps);
+    const TileProgram authored = trace_of(gen("matmul", 32, 16));
 
     LoadInfo info;
     TileProgram loaded = from_string(to_test_case(authored), &info);

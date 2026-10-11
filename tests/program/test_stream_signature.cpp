@@ -10,19 +10,29 @@
 
 #include <catch2/catch_test_macros.hpp>
 
-#include <sw/kpu/program/derive/matmul_tile_program.hpp>
 #include <sw/kpu/program/tile_program_reference.hpp>
 #include <sw/kpu/program/stream/derive/matmul_streams.hpp>
+#include "trace_fixtures.hpp"
 
 #include <cmath>
+#include <string>
 #include <vector>
 
 using namespace sw::kpu::program;
 using namespace sw::kpu::program::stream;
+using trace_fixtures::gen;
+using trace_fixtures::trace_of;
+using trace_fixtures::trace_of_file;
+
+namespace {
+// A hand-written program beside this file (tests/program/csp/): kpu-csp-gen writes square tiles.
+// Hand-written fixtures, relative to the source tree (the test runs from CMAKE_SOURCE_DIR).
+std::string fixture(const std::string& name) { return "tests/program/csp/" + name; }
+} // namespace
 
 TEST_CASE("output-stationary: A/B stream in, C evacuates North with a bubble", "[program][stream]") {
     const Dim T = 16;
-    TileProgram l0 = derive_matmul_tile_program(64, 64, 64, T, T, T);
+    TileProgram l0 = trace_of(gen("matmul", 64, T));
     StreamProgram sp = derive_matmul_streams(l0, SpaceTimeMap::output_stationary());
 
     const StreamSignature* A = sp.signature("A");
@@ -57,7 +67,7 @@ TEST_CASE("output-stationary: A/B stream in, C evacuates North with a bubble", "
 
 TEST_CASE("weight(B)-stationary: B is held, C exits East dense", "[program][stream]") {
     const Dim T = 16;
-    TileProgram l0 = derive_matmul_tile_program(64, 64, 64, T, T, T);
+    TileProgram l0 = trace_of(gen("matmul", 64, T));
     StreamProgram sp = derive_matmul_streams(l0, SpaceTimeMap::b_stationary());
 
     CHECK(sp.signature("B")->role == FlowRole::Stationary);
@@ -71,7 +81,7 @@ TEST_CASE("weight(B)-stationary: B is held, C exits East dense", "[program][stre
 }
 
 TEST_CASE("A-stationary: A is held, mesh network", "[program][stream]") {
-    TileProgram l0 = derive_matmul_tile_program(64, 64, 64, 16, 16, 16);
+    TileProgram l0 = trace_of(gen("matmul", 64, 16));
     StreamProgram sp = derive_matmul_streams(l0, SpaceTimeMap::a_stationary());
     CHECK(sp.signature("A")->role == FlowRole::Stationary);
     CHECK(sp.signature("B")->role == FlowRole::StreamIn);
@@ -81,7 +91,7 @@ TEST_CASE("A-stationary: A is held, mesh network", "[program][stream]") {
 
 TEST_CASE("fully-streaming: hexagonal network, all operands stream, no bubbles",
           "[program][stream]") {
-    TileProgram l0 = derive_matmul_tile_program(64, 64, 64, 16, 16, 16);
+    TileProgram l0 = trace_of(gen("matmul", 64, 16));
     SpaceTimeMap hex = SpaceTimeMap::fully_streaming();
     StreamProgram sp = derive_matmul_streams(l0, hex);
 
@@ -108,7 +118,7 @@ TEST_CASE("wavefront latency is the systolic fill+reduce+drain (incl. clamped ti
           "[program][stream]") {
     const Dim T = 16;
     // full 16^3 tiles
-    StreamProgram full = derive_matmul_streams(derive_matmul_tile_program(64, 64, 64, T, T, T));
+    StreamProgram full = derive_matmul_streams(trace_of(gen("matmul", 64, T)));
     for (const auto& [idx, w] : full.computes) {
         (void)idx;
         CHECK(w.latency() == static_cast<Dim>(3 * (T - 1) + 1));   // 46
@@ -116,7 +126,7 @@ TEST_CASE("wavefront latency is the systolic fill+reduce+drain (incl. clamped ti
     }
 
     // N=40 -> trailing 8x8x8 corner tile
-    TileProgram l0 = derive_matmul_tile_program(40, 40, 40, T, T, T);
+    TileProgram l0 = trace_of(gen("matmul", 40, T));
     StreamProgram sp = derive_matmul_streams(l0);
     const auto& ops = l0.ops();
     bool saw_corner = false;
@@ -133,10 +143,10 @@ TEST_CASE("wavefront latency is the systolic fill+reduce+drain (incl. clamped ti
     CHECK(saw_corner);
 }
 
-TEST_CASE("L1 is value-orthogonal (derivation does not change L0 results)",
+TEST_CASE("L1 is value-orthogonal (deriving streams does not change L0 results)",
           "[program][stream]") {
-    const Dim M = 6, N = 4, K = 8, Ti = 2, Tj = 2, Tk = 4;
-    TileProgram l0 = derive_matmul_tile_program(M, N, K, Ti, Tj, Tk);
+    const Dim M = 6, N = 4, K = 8;      // in Ti = 2, Tj = 2, Tk = 4
+    TileProgram l0 = trace_of_file(fixture("matmul_6x4x8_t2x2x4.csp"));
 
     std::vector<float> A(static_cast<std::size_t>(M) * K), B(static_cast<std::size_t>(K) * N);
     for (Dim i = 0; i < M; ++i)
@@ -166,7 +176,7 @@ TEST_CASE("L1 is value-orthogonal (derivation does not change L0 results)",
 
 TEST_CASE("StreamProgram disassembly names mapping, roles, bubbles, and network",
           "[program][stream]") {
-    TileProgram l0 = derive_matmul_tile_program(32, 32, 32, 16, 16, 16);
+    TileProgram l0 = trace_of(gen("matmul", 32, 16));
     const std::string os = derive_matmul_streams(l0, SpaceTimeMap::output_stationary()).disassemble();
     CHECK(os.find("output-stationary") != std::string::npos);
     CHECK(os.find("network=Mesh2D") != std::string::npos);

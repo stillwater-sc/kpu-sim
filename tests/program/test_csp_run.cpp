@@ -174,7 +174,7 @@ program t machine flat(l3 = 8) {
     check_values(run(renamed, &d, {ExecutionLevel::Behavioral}));
 }
 
-TEST_CASE("CSP run: above the trace limit there is no oracle, and the levels still agree", "[program][csp][run]") {
+TEST_CASE("CSP run: above the trace limit there is no trace, and L-B is still the oracle", "[program][csp][run]") {
     gen::Options o;
     o.algo = "matmul";
     o.size = 64;
@@ -185,10 +185,43 @@ TEST_CASE("CSP run: above the trace limit there is no oracle, and the levels sti
     CspRunRequest req{ast, &d, csp_inputs(ast), {ExecutionLevel::Behavioral, ExecutionLevel::CycleAccurate}};
     req.trace_limit = 10;
     const auto r = run_csp(req);
-    CHECK_FALSE(r.reference.has_value());
-    CHECK_THAT(r.reference_note, ContainsSubstring("more than 10 actions: no L0 reference"));
+    REQUIRE(r.reference.has_value());          // L-B streams: an oracle at any size
+    CHECK_THAT(r.reference_note, ContainsSubstring("more than 10 actions: no L0 trace"));
+    CHECK_FALSE(csp_reference(ast, csp_inputs(ast), 10).trace.has_value());
     REQUIRE_FALSE(r.levels[1].skipped);
-    CHECK(r.levels[0].values.operand("C").values == r.levels[1].values.operand("C").values);
+    for (const auto& o : r.levels)
+        CHECK(o.values.operand("C").values == r.reference->operand("C").values);
+}
+
+// L-B is the one place a CSP program becomes an L0 (retire-l0-derivations §3.2): the trace is
+// what it executed, every op the walker recorded, in order, and its replay reproduces L-B.
+TEST_CASE("CSP run: L-B writes the trace, and the trace replays to L-B's values", "[program][csp][run]") {
+    for (const char* algo : {"matmul", "linear", "lu"}) {
+        gen::Options o;
+        o.algo = algo;
+        o.size = 32;
+        o.tile = 16;
+        o.l3 = gen::slots_needed(o);
+        const lang::Program ast = lang::parse(gen::generate(o));
+        const TileProgram in = csp_inputs(ast);
+        const auto ref = csp_reference(ast, in, 1'000'000);
+        REQUIRE(ref.trace.has_value());
+        CHECK(ref.replay_mismatch.empty());
+        // The ops of the compiled action list, in the same order: one walker, one sequence.
+        const auto compiled = lang::compile(ast);
+        REQUIRE(ref.trace->ops().size() == compiled.source.ops().size());
+        for (std::size_t i = 0; i < ref.trace->ops().size(); ++i) {
+            CHECK(ref.trace->ops()[i].kind == compiled.source.ops()[i].kind);
+            CHECK(ref.trace->ops()[i].label == compiled.source.ops()[i].label);
+        }
+        // The trace carries the inputs; L-B's values are the oracle.
+        for (const auto& name : in.operand_order())
+            CHECK(ref.trace->operand(name).values == in.operand(name).values);
+        TileProgram replay = *ref.trace;
+        TileProgramReference().run(replay);
+        for (const auto& name : replay.operand_order())
+            CHECK(replay.operand(name).values == ref.values->operand(name).values);
+    }
 }
 
 TEST_CASE("CSP run: a program the validator refuses is refused against the machine", "[program][csp][run]") {

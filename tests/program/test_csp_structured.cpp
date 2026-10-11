@@ -16,8 +16,9 @@
 #include <sw/kpu/program/csp/lang/compile.hpp>
 #include <sw/kpu/program/csp/lang/validate.hpp>
 #include <sw/kpu/program/csp/lang/walk.hpp>
-#include <sw/kpu/program/driver/program_spec.hpp>
-#include <sw/kpu/program/tile_program_reference.hpp>
+#include <sw/kpu/program/driver/csp_run.hpp>
+
+#include "trace_fixtures.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -130,12 +131,10 @@ TEST_CASE("CSP structured: the stream yields exactly the trace's actions, one at
 TEST_CASE("CSP structured: L-B over the stream computes what L-B over the trace does",
           "[program][csp][lang][structured]") {
     auto check = [](const std::string& src, const char* algo, Dim size, Dim tile, const char* out) {
-        driver::ProgramSpec s;
-        s.algo = algo;
-        s.size = size;
-        s.tile = tile;
         CspProgram trace = lang::compile(src);
-        driver::fill(trace.source, s);
+        const TileProgram in = driver::csp_inputs(lang::parse(src));
+        for (const auto& name : trace.source.operand_order())
+            trace.source.operand(name).values = in.operand(name).values;
         BehavioralInterpreter by_trace;
         by_trace.run(trace);
 
@@ -147,10 +146,10 @@ TEST_CASE("CSP structured: L-B over the stream computes what L-B over the trace 
         by_stream.finish();
         CHECK(by_stream.result().operand(out).values == by_trace.result().operand(out).values);
 
-        TileProgram ref = driver::derive(s);
-        driver::fill(ref, s);
-        TileProgramReference().run(ref);
-        CHECK(by_stream.result().operand(out).values == ref.operand(out).values);
+        // And what L-B computes for kpu-csp-gen's program of the same operator: another schedule
+        // of the same tile functions, on the same inputs (operands are filled by name).
+        CHECK(by_stream.result().operand(out).values ==
+              trace_fixtures::lb_values(trace_fixtures::gen(algo, size, tile)).operand(out).values);
     };
     check(matmul_all_a(4, 32, 64), "matmul", 128, 32, "C");
     check(matmul_streaming(128, 32, 3), "matmul", 128, 32, "C");
@@ -279,16 +278,11 @@ program prefetch machine flat(l3 = 8) {
 }
 )";
     CspProgram trace = lang::compile(src);
-    driver::ProgramSpec s;
-    s.algo = "matmul";
-    s.size = 128;
-    s.tile = 32;
-    driver::fill(trace.source, s);
+    const TileProgram in = driver::csp_inputs(lang::parse(src));
+    for (const auto& name : trace.source.operand_order()) trace.source.operand(name).values = in.operand(name).values;
     BehavioralInterpreter lb;
     lb.run(trace);
-    TileProgram ref = driver::derive(s);
-    driver::fill(ref, s);
-    TileProgramReference().run(ref);
+    const TileProgram ref = trace_fixtures::lb_values(trace_fixtures::gen("matmul", 128, 32));
     for (Dim c = 0; c < 32; ++c) CHECK(lb.result().operand("C").at(5, c) == ref.operand("C").at(5, c));
     // The first thing it cannot prove: this iteration's A[0, k] was made resident by the last one.
     CHECK_THAT(symbolic_error(src), ContainsSubstring("csp line 11: call gemm reads A[0, k], which is not provably resident"));
