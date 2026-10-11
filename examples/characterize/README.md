@@ -6,9 +6,11 @@ the modeling rationale see `docs/tools/tile-characterization.md`; for the operat
 kernel context see `docs/plans/plasma-tile-algorithms.md`.
 
 Each invocation selects **one** algorithm via `--algo`; the harness then sweeps
-**(size × tile-shape × compute-tiles × topology)** and, for each cell, (1) builds the
-L0 tile program, (2) runs the functional reference and **validates** it against an
-oracle, and (3) reports structural + first-order modeled performance/energy metrics.
+**(size × tile-shape × compute-tiles × topology)** and, for each cell, (1) takes the
+L0 tile program: kpu-csp-gen writes the operator's CSP program for the cell's L3, and L-B
+runs it and records the trace; (2) runs that L0 on the platform and **validates** its
+tiles against L-B's values, within a proximity bound; and (3) reports structural +
+first-order modeled performance/energy metrics.
 Comparing matmul vs. LU is two separate invocations.
 
 ---
@@ -43,12 +45,12 @@ build/examples/characterize/tile_characterize \
 | `--topology single\|news\|checkerboard[,...]` | spatial layout (sets movement lanes) | `single` |
 | `--dataflow output-stationary\|weight-stationary\|a-stationary\|fully-streaming[,...]` | **array dataflow** (L1 space-time mapping; matmul only; aliases `os`/`ws`/`as`/`hex`) | `output-stationary` |
 | `--macs-per-cycle` `--bytes-per-cycle` `--pj-per-mac` `--pj-per-byte` | device cost knobs | `256 / 64 / 1 / 20` |
-| `--l3-tiles N` | L3 budget in tiles for feasibility (`0` = unbounded) | `0` |
+| `--l3-tiles N` | L3 capacity in tiles, which sizes the schedule kpu-csp-gen writes (`0` = unbounded: the L3 the schedule needs) | `0` |
 | `--csv FILE` `--json FILE` | write the full metric table | — |
 | `--trace FILE` | Chrome trace of the **first** cell | — |
 | `--disasm` | print the tile sequence of the first cell | — |
 | `--dot FILE` | Graphviz **tile-dependency DAG** of the first cell | — |
-| `--no-validate` | skip the functional oracle check | (validate on) |
+| `--no-validate` | skip the check against L-B | (validate on) |
 
 The **list-valued** factor flags (`--sizes`, `--tiles`, `--compute-tiles`,
 `--topology`, `--dataflow`) are comma-separated → a **full-factorial** sweep (one row
@@ -80,10 +82,11 @@ matmul  256   32   4 single     fully-streaming   -      0 Hexagonal+overlay    
 | `cmp_util` | compute-tile utilization |
 | `bound` | `cmp` = compute-bound, `mov` = movement-bound |
 | `energy_pJ` | modeled total energy (compute + movement + leakage) |
-| `err` | functional `max_err` vs. the oracle (`0` for integer matmul; ~`1e-6` for LU); `-1` if `--no-validate` |
+| `err` | the worst absolute error of any element against L-B's value; `-1` if `--no-validate` |
 
-**`err` is the correctness check** — a nonzero-beyond-tolerance `err` means the tile
-program computed the wrong answer. The CSV/JSON carry the full metric set (macs,
+**`err` is the correctness check.** Every tile is compared with L-B's, interpreted as
+float32, within the default proximity bound (|a − o| ≤ 1e-6 + 1e-4·|o|). A tile out of
+bound is printed, and the run exits 1. The CSV/JSON carry the full metric set (macs,
 arithmetic intensity, critical path, peak live tiles, movement bytes, feasibility, …).
 
 ### What is `makespan`?
@@ -155,11 +158,11 @@ ctest --test-dir build -R tile_characterize_smoke --output-on-failure
 - `test_tile_characterize` asserts the analytical core: matmul's makespan falls to its
   critical path as compute tiles grow, LU is far more serial, and the metrics are
   self-consistent (`makespan ≥ lower_bound`, energy sums, feasibility gating).
-- `tile_characterize_smoke` runs the binary on a small LU grid and fails if the
-  functional validation regresses.
+- `tile_characterize_smoke` runs the binary on a small LU grid and fails if any
+  cell's tiles fall out of bound of L-B's.
 
-To sanity-check a run yourself, confirm the `err` column is `0` (matmul) or `< 1e-4`
-(LU) across the sweep.
+A cell whose schedule does not fit the machine's L3 is printed as `skipped`, with the
+L3 the schedule needs.
 
 ## 6. Recipes — the machine principles to look for
 
@@ -177,7 +180,8 @@ tile_characterize --algo matmul --sizes 256 --tiles 32 --compute-tiles 16 --byte
 # (c) Tiling <-> reuse: bigger tiles raise AI and cut movement-bound makespan/energy.
 tile_characterize --algo matmul --sizes 256 --tiles 16,32,64 --compute-tiles 16 --topology single
 
-# (d) Feasibility: does the working set fit the L3 budget?
+# (d) Fit: does the operator's schedule fit the L3? A cell that does not is skipped,
+#     with the L3 its schedule needs.
 tile_characterize --algo matmul --sizes 256 --tiles 32 --compute-tiles 16 --l3-tiles 8
 
 # (e) Dataflow choice: which array mapping (stationary operand + network)?

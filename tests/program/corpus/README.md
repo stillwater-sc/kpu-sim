@@ -17,7 +17,7 @@ trace of a CSP execution (ADR 0004 §4), and kpu-sim is its one source. Each cas
 `kpu-run` wrote both files, and only after every level that could run the program agreed with
 the trace (the regeneration command is below). There is no second L0 generator to drift from
 it. Before step 5 these files were written by `driver::derive`, a C++ derivation, which was a
-second source.
+second source. The derivations were deleted in retire-l0-derivations PR 3.
 
 `test_csp_corpus` runs each program through the virtual platform on
 `tests/program/deploy/kpu_s1.json` at L-B, L-T1 and L-CA, and asserts the reason where L-CA is

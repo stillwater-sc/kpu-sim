@@ -1,7 +1,7 @@
 # Retire the L0 derivations: kpu-sim is the one source of an L0
 
 **Date:** 2026-10-11
-**Status:** Approved 2026-10-11 (Q1 yes, Q3 keep; Q2 decided: the L-B model is the oracle). PR 1 in progress
+**Status:** Approved 2026-10-11 (Q1 yes, Q3 keep; Q2 decided: the L-B model is the oracle). PR 1 (#358) and PR 2 (#359) merged; PR 3 in review. PR 4 (Q4) awaits review
 **Follows:** `docs/plans/kpu-run-csp-programs.md` (complete). Step 5 of that plan made the golden
 corpus kpu-sim traces, and flagged this as the next step.
 **Decided already (2026-10-11):** an L0 is the trace of a CSP execution (ADR 0004 §4). kpu-sim

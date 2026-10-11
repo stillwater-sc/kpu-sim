@@ -7,8 +7,9 @@
 // DeviceDescriptor. Two copies drift, and then a bug reproduces in one tool and
 // not the other — which is the expensive kind.
 //
-// No derivation logic lives here: it calls derive_*_tile_program and the
-// DeviceDescriptor presets. This header is where the NAMES agree.
+// No program comes from here. An L0 is the trace L-B records from a CSP program
+// (docs/plans/retire-l0-derivations.md); this header parses arguments, synthesizes input
+// values, names the dataflows, and builds the machine. It is where the NAMES agree.
 //
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2024-2025 Stillwater Supercomputing, Inc.
@@ -16,11 +17,8 @@
 #pragma once
 
 #include <sw/kpu/program/characterize/device_model.hpp>
-#include <sw/kpu/program/derive/linear_tile_program.hpp>
-#include <sw/kpu/program/derive/lu_tile_program.hpp>
 #include <sw/kpu/program/platform/deployment_spec.hpp>
-#include <sw/kpu/program/derive/matmul_tile_program.hpp>
-#include <sw/kpu/program/stream/derive/matmul_streams.hpp>
+#include <sw/kpu/program/stream/stream_signature.hpp>
 #include <sw/kpu/program/tile_program.hpp>
 
 #include <cmath>
@@ -182,72 +180,8 @@ inline bool parse_double(const std::vector<std::string>& a, const std::string& k
     }
 }
 
-// ---- what program to run ---------------------------------------------------
-struct ProgramSpec {
-    std::string algo = "matmul";     // "matmul" | "lu" | "linear"
-    Dim size = 64;                   // square: M = N = K = size, or N for LU
-    Dim tile = 16;
-    ActivationFn act = ActivationFn::Relu;   // linear: the epilogue's activation
-
-    std::string label() const {
-        return algo + "/" + std::to_string(size) + "^3/t" + std::to_string(tile) +
-               (algo == "linear" ? std::string("/") + to_string(act) : std::string());
-    }
-};
-
-inline bool known_algo(const std::string& a) { return a == "matmul" || a == "lu" || a == "linear"; }
-
-inline TileProgram derive(const ProgramSpec& s) {
-    if (s.algo == "lu") return derive_lu_tile_program(s.size, s.tile);
-    if (s.algo == "matmul")
-        return derive_matmul_tile_program(s.size, s.size, s.size, s.tile, s.tile, s.tile);
-    if (s.algo == "linear")
-        return derive_linear_tile_program(s.size, s.size, s.size, s.tile, s.tile, s.tile, s.act);
-    throw std::invalid_argument("unknown --algo '" + s.algo + "' (matmul | lu | linear)");
-}
-
-// Deterministic, non-trivial operand values. Identical for every level, which is the
-// precondition for comparing their results at all: a run whose inputs differ tells you
-// nothing about the models.
-//
-// EVERY VALUE HERE IS EXACTLY REPRESENTABLE, and that is a requirement rather than a
-// coincidence. This project builds Release with `-march=native`, so the compiler may
-// contract `a - b * c` into an FMA -- a single rounding instead of two -- and the result
-// then depends on the HOST CPU. If the fill itself needs rounding, the input values differ
-// between machines, and no checked-in golden file can be reproduced elsewhere.
-//
-// That is not hypothetical: the LU fill used `* 0.1f`, which left 3129 of its off-diagonal
-// values inexact, and CI failed on the LU corpus INPUT -- not its output. With a power of
-// two the product is exact, so single and double rounding agree because neither rounds.
-inline void fill(TileProgram& p, const ProgramSpec& s) {
-    if (s.algo == "lu") {
-        auto& A = p.operand("A");
-        for (Dim i = 0; i < s.size; ++i)
-            for (Dim j = 0; j < s.size; ++j)
-                // Diagonally dominant, for a stable factorisation, and every term a
-                // multiple of 1/8.
-                A.at(i, j) = (i == j) ? 4.0f + float((i * 3) % 5)
-                                      : 0.5f - float((i * 7 + j * 3) % 9) * 0.125f;
-        return;
-    }
-    if (s.algo == "linear") {
-        // The bias: integers in [-3, 3] plus a quarter, both signs, so an activation sees
-        // values on both sides of zero.
-        auto& b = p.operand("b");
-        for (std::size_t i = 0; i < b.values.size(); ++i)
-            b.values[i] = float((i * 5 + 3) % 7) - 3.0f + 0.25f * float(i % 2);
-    }
-    auto& A = p.operand("A");
-    auto& B = p.operand("B");
-    for (std::size_t i = 0; i < A.values.size(); ++i)
-        A.values[i] = float((i * 7 + 1) % 13) - 6.0f + 0.25f * float(i % 3);
-    for (std::size_t i = 0; i < B.values.size(); ++i)
-        B.values[i] = float((i * 5 + 2) % 11) - 5.0f - 0.125f * float(i % 5);
-}
-
-// ---- values for a program nobody derived --------------------------------------
-// A loaded L0 program has no ProgramSpec behind it, so fill() -- which knows "A" and "B" by
-// name -- cannot be used. These two work from the OP LIST instead.
+// ---- input values ----------------------------------------------------------------
+// A program's inputs, from its OP LIST: no operand is known by name.
 
 // The operands the program READS. An operand that appears in some op's `inputs` needs a
 // value; one that appears only in `outputs` is produced, and pre-filling it would make a
@@ -272,9 +206,13 @@ inline std::vector<std::string> program_inputs(const TileProgram& p) {
 // and the element position -- so two operands never get the same pattern, and the same file
 // fills identically on every machine and at every level.
 //
-// EVERY VALUE IS EXACTLY REPRESENTABLE, for the reason fill() states at length: Release
-// builds with `-march=native`, so a value that needed rounding would differ between hosts
-// and no run of a checked-in file could be reproduced elsewhere.
+// EVERY VALUE IS EXACTLY REPRESENTABLE, and that is a requirement rather than a coincidence.
+// This project builds Release with `-march=native`, so the compiler may contract `a - b * c`
+// into an FMA -- a single rounding instead of two -- and the result then depends on the HOST
+// CPU. If the fill itself needed rounding, the input values would differ between hosts and no
+// run of a checked-in file could be reproduced elsewhere. That is not hypothetical: an LU fill
+// using `* 0.1f` left 3129 of its values inexact, and CI failed on the LU corpus INPUT -- not
+// its output.
 //
 // NO NUMERICAL-STABILITY PROMISE IS MADE, and that is worth saying rather than hoping. A
 // square operand gets a dominant diagonal, which keeps a factorisation well behaved in
@@ -314,11 +252,6 @@ inline void fill_operand(TensorOperand& t) {
 // Every operand the program reads (fill_operand, by name).
 inline void fill_inputs(TileProgram& p) {
     for (const std::string& name : program_inputs(p)) fill_operand(p.operand(name));
-}
-
-// The operand a run's result lands in, which is what a comparison reads.
-inline const char* result_operand(const ProgramSpec& s) {
-    return s.algo == "lu" ? "A" : "C";      // LU factors in place
 }
 
 // ---- the L1 stream program (optional) ---------------------------------------

@@ -3,8 +3,9 @@
 // Design-of-experiments harness for characterizing L0 TilePrograms.
 //
 // Sweeps (algorithm x size x tile-shape x compute-tiles x topology), for each cell:
-//   1. builds the tile program (so you can SEE the tile sequence: --disasm/--trace),
-//   2. runs the L0 functional reference and VALIDATES it against an oracle,
+//   1. takes the cell's L0 -- the trace of kpu-csp-gen's program for the operator, as L-B
+//      records it -- so you can SEE the tile sequence (--disasm/--trace),
+//   2. runs the L0 on the platform and VALIDATES its tiles against L-B's values,
 //   3. characterizes structural + first-order modeled performance/energy metrics,
 // and emits a table (+ CSV/JSON). The compute-tiles sweep is the domain-flow analogue
 // of CUDA's occupancy-vs-resources question: how does achievable concurrency (and
@@ -19,10 +20,11 @@
 // ============================================================================
 
 #include <sw/kpu/program/tile_program.hpp>
-#include <sw/kpu/program/tile_program_reference.hpp>
-#include <sw/kpu/program/derive/matmul_tile_program.hpp>
-#include <sw/kpu/program/derive/lu_tile_program.hpp>
+#include <sw/kpu/program/tile_check.hpp>
 #include <sw/kpu/program/characterize/characterization.hpp>
+#include <sw/kpu/program/csp/gen/generate.hpp>
+#include <sw/kpu/program/csp/lang/parse.hpp>
+#include <sw/kpu/program/driver/csp_run.hpp>
 #include <sw/kpu/program/stream/derive/matmul_streams.hpp>
 #include <sw/kpu/program/driver/program_spec.hpp>
 #include <sw/kpu/program/platform/deployment_json.hpp>
@@ -32,12 +34,15 @@
 #include <cstdint>
 #include <fstream>
 #include <iostream>
+#include <limits>
 #include <sstream>
 #include <string>
 #include <vector>
 
 using namespace sw::kpu::program;
 using namespace sw::kpu::program::characterize;
+namespace csp = sw::kpu::program::csp;
+namespace driver = sw::kpu::program::driver;
 
 namespace {
 
@@ -50,76 +55,59 @@ using sw::kpu::program::driver::has_flag;
 using sw::kpu::program::driver::parse_ints;
 using sw::kpu::program::driver::parse_strs;
 
-// ---- build + validate each algorithm ---------------------------------------
-// EVERY EXECUTION GOES THROUGH THE PLATFORM (#282 increment 4). These two used to call
-// TileProgramReference directly, which made this harness a SECOND path to execution beside
-// the one the platform owns -- the "fourth execution path" the issue names. The harness's
-// characterization is a first-order ANALYTICAL model and is deliberately NOT routed through
-// a level: giving an estimate a fidelity level would claim something it does not have. It is
-// the VALIDATION that executes, so that is what moved.
-//
-// A fresh platform per cell rather than one for the sweep, because restore() is
-// platform-wide: accumulating every cell's program into one platform would make each run
-// restore all of the previous ones.
-float validate_matmul(const platform::DeploymentSpec& spec, TileProgram prog,
-                      Dim M, Dim N, Dim K) {
-    {
-        auto& A = prog.operand("A"); auto& B = prog.operand("B");
-        for (std::size_t i = 0; i < A.values.size(); ++i)
-            A.values[i] = float((i * 7 + 1) % 13) - 6.0f;
-        for (std::size_t i = 0; i < B.values.size(); ++i)
-            B.values[i] = float((i * 5 + 2) % 11) - 5.0f;
-    }
-    platform::VirtualPlatform vp(spec);
-    const platform::ProgramHandle h = vp.load_program(std::move(prog));
-    vp.run(h, platform::ExecutionLevel::Behavioral, vp.snapshot());
-    const TileProgram& done = vp.program(h);
+// ---- the cell's program, and its validation --------------------------------
+// EACH CELL'S L0 IS A TRACE: kpu-csp-gen writes the operator's CSP program for the cell's L3,
+// and L-B runs it and records the trace (docs/plans/retire-l0-derivations.md §3.7). L-B is the
+// oracle, so it gives the cell's values too. A C++ derivation used to write these L0s, which
+// made this harness a second source of one.
+struct Cell {
+    TileProgram trace;               // the L0, on its inputs, before it runs
+    TileProgram oracle;              // every operand as L-B leaves it
+};
 
-    // naive oracle
-    const auto& Av = done.operand("A").values;
-    const auto& Bv = done.operand("B").values;
-    float max_err = 0.0f;
-    const auto& C = done.operand("C").values;
-    for (Dim i = 0; i < M; ++i)
-        for (Dim j = 0; j < N; ++j) {
-            float acc = 0.0f;
-            for (Dim k = 0; k < K; ++k)
-                acc += Av[std::size_t(i) * K + k] * Bv[std::size_t(k) * N + j];
-            max_err = std::max(max_err, std::fabs(acc - C[std::size_t(i) * N + j]));
-        }
-    return max_err;
+// The deployment's L3 sizes the schedule, as kpu-csp-gen's --target takes it. An unbounded L3
+// (capacity 0) gets the L3 the schedule needs. A schedule that does not fit is refused with
+// GenError's reason.
+Cell cell_program(const std::string& algo, Dim size, Dim tile, const platform::DeploymentSpec& spec) {
+    csp::gen::Options o;
+    o.algo = algo;
+    o.size = size;
+    o.tile = tile;
+    o.l3 = spec.device(0).l3.capacity_tiles;
+    if (o.l3 == 0) o.l3 = csp::gen::slots_needed(o);
+    const csp::lang::Target target = csp::lang::target_from(spec.device(0));
+    const csp::lang::Program ast = csp::lang::parse(csp::gen::generate(o, &target));
+    driver::CspReference r = driver::csp_reference(ast, driver::csp_inputs(ast),
+                                                   std::numeric_limits<std::size_t>::max());
+    if (!r.trace) throw std::runtime_error(ast.name + ": " + r.note);
+    if (!r.replay_mismatch.empty()) throw std::runtime_error(ast.name + ": " + r.replay_mismatch);
+    return Cell{std::move(*r.trace), std::move(*r.values)};
 }
 
-float validate_lu(const platform::DeploymentSpec& spec, TileProgram prog, Dim N) {
-    auto& A = prog.operand("A");
-    std::vector<float> A0(std::size_t(N) * N);
-    for (Dim i = 0; i < N; ++i)
-        for (Dim j = 0; j < N; ++j)
-            A0[std::size_t(i) * N + j] =
-                (i == j) ? 4.0f + float((i * 3) % 5)
-                         : 1.0f / (1.0f + std::fabs(float(int(i) - int(j))));
-    if (N > 1) A0[1 * std::size_t(N) + 0] = 7.0f;   // force a within-tile swap
-    A.values = A0;
-
+// EVERY EXECUTION GOES THROUGH THE PLATFORM (#282 increment 4). The characterization is a
+// first-order ANALYTICAL model and is deliberately NOT routed through a level: giving an
+// estimate a fidelity level would claim something it does not have. It is the VALIDATION that
+// executes. A fresh platform per cell, because restore() is platform-wide.
+//
+// The values are checked per tile against L-B's, interpreted as float32, within the default
+// proximity bound (§3.8). Returns the worst absolute error over every operand; `ok` is false
+// when a tile is out of bound.
+float validate(const platform::DeploymentSpec& spec, const Cell& c, bool& ok) {
     platform::VirtualPlatform vp(spec);
-    const platform::ProgramHandle h = vp.load_program(std::move(prog));
-    const auto sum = vp.run(h, platform::ExecutionLevel::Behavioral, vp.snapshot())
-                         .outcome.summary;
-    const auto& F = vp.program(h).operand("A").values;
-    auto idx = [N](Dim i, Dim j) { return std::size_t(i) * N + j; };
-    float max_err = 0.0f;
-    for (Dim i = 0; i < N; ++i)
-        for (Dim j = 0; j < N; ++j) {
-            float lu = 0.0f;
-            for (Dim k = 0; k < N; ++k) {
-                float l = (i > k) ? F[idx(i, k)] : (i == k ? 1.0f : 0.0f);
-                float u = (k <= j) ? F[idx(k, j)] : 0.0f;
-                lu += l * u;
-            }
-            float pa = A0[idx(sum.permutation[i], j)];
-            max_err = std::max(max_err, std::fabs(lu - pa));
+    const platform::ProgramHandle h = vp.load_program(c.trace);
+    vp.run(h, platform::ExecutionLevel::Behavioral, vp.snapshot());
+    const TileProgram& done = vp.program(h);
+    double max_err = 0.0;
+    ok = true;
+    for (const auto& name : c.oracle.operand_order()) {
+        const TileCheck t = check_tiles(done, c.oracle, name);
+        if (!t.pass) {
+            ok = false;
+            std::cerr << "error: " << t.summary() << "\n";
         }
-    return max_err;
+        max_err = std::max(max_err, t.max_abs);
+    }
+    return static_cast<float>(max_err);
 }
 
 // The DEPLOYMENT for one sweep cell. A --deploy spec supplies the machine and the sweep
@@ -156,7 +144,8 @@ int main(int argc, char** argv) {
             "  --dataflow output-stationary|weight-stationary|a-stationary|fully-streaming[,...]\n"
             "             (matmul only; aliases os/ws/as/hex; systolic L1 timing + network)\n"
             "  --macs-per-cycle F  --bytes-per-cycle F  --pj-per-mac F  --pj-per-byte F\n"
-            "  --l3-tiles N               L3 capacity in tiles for feasibility (0=unbounded)\n"
+            "  --l3-tiles N               L3 capacity in tiles: the schedule kpu-csp-gen writes\n"
+            "                             (0 = unbounded: the L3 the schedule needs)\n"
             "  --deploy FILE              the machine as a deployment spec (ADR 0002 §3.5);\n"
             "                             mutually exclusive with the machine flags above.\n"
             "                             --topology/--compute-tiles remain the SWEEP axes\n"
@@ -249,7 +238,11 @@ int main(int argc, char** argv) {
         topos = {base.device(0).topology};
         cfs = {base.device(0).compute_tiles};
     }
-    const bool validate = !has_flag(a, "--no-validate");
+    if (algo != "matmul" && algo != "lu") {
+        std::cerr << "error: unknown --algo '" << algo << "' (matmul | lu)\n";
+        return 2;
+    }
+    const bool do_validate = !has_flag(a, "--no-validate");
     const std::string csv_path = arg(a, "--csv", "");
     const std::string json_path = arg(a, "--json", "");
     const std::string trace_path = arg(a, "--trace", "");
@@ -281,15 +274,12 @@ int main(int argc, char** argv) {
     std::cout << "------------------------------------------------------------------------------------"
                  "-------------------------------------\n";
 
-    bool did_trace = false, did_disasm = false, did_dot = false, first_json = true;
+    bool did_trace = false, did_disasm = false, did_dot = false, first_json = true, failed = false;
     for (const auto& topo : topos)
         for (Dim size : sizes)
             for (Dim tile : tiles) {
                 if (tile > size) continue;
                 for (Dim cf : cfs) {
-                    TileProgram prog =
-                        (algo == "lu") ? derive_lu_tile_program(size, tile)
-                                       : derive_matmul_tile_program(size, size, size, tile, tile, tile);
                     platform::DeploymentSpec cell;
                     try {
                         cell = cell_deployment(base, topo, cf);
@@ -297,10 +287,26 @@ int main(int argc, char** argv) {
                         std::cerr << "error: " << e.what() << "\n";
                         return 2;
                     }
+                    Cell program;
+                    try {
+                        program = cell_program(algo, size, tile, cell);
+                    } catch (const csp::gen::GenError& e) {
+                        // The schedule does not fit this machine's L3: the cell is refused, not
+                        // characterized as a program written for another machine.
+                        std::cout << algo << " " << size << " t" << tile << " CF " << cf << " " << topo
+                                  << ": skipped, " << e.what() << "\n";
+                        continue;
+                    } catch (const std::exception& e) {
+                        std::cerr << "error: " << e.what() << "\n";
+                        return 1;
+                    }
+                    const TileProgram& prog = program.trace;
                     float err = -1.0f;
-                    if (validate)
-                        err = (algo == "lu") ? validate_lu(cell, prog, size)
-                                             : validate_matmul(cell, prog, size, size, size);
+                    if (do_validate) {
+                        bool ok = true;
+                        err = validate(cell, program, ok);
+                        if (!ok) failed = true;
+                    }
 
                     const DeviceDescriptor dev = cell.device_view();
 
@@ -376,5 +382,9 @@ int main(int argc, char** argv) {
 
     if (!csv_path.empty()) { std::ofstream(csv_path) << csv.str(); std::cout << "[csv] wrote " << csv_path << "\n"; }
     if (!json_path.empty()) { std::ofstream(json_path) << json.str(); std::cout << "[json] wrote " << json_path << "\n"; }
+    if (failed) {
+        std::cerr << "FAILED: a cell's values are out of bound of L-B's\n";
+        return 1;
+    }
     return 0;
 }

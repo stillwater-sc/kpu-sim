@@ -23,6 +23,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Removed
 
+- **The C++ L0 derivations** (retire-l0-derivations PR 3). `include/sw/kpu/program/derive/`
+  (`derive_matmul_tile_program`, `derive_lu_tile_program`, `derive_linear_tile_program`) is
+  deleted. So are `program_spec.hpp`'s `ProgramSpec`, `known_algo`, `derive`, `fill` and
+  `result_operand`. kpu-sim is now the only source of an L0: the trace L-B records from a CSP
+  program.
+  - `program_spec.hpp` keeps argument parsing, input synthesis (`fill_operand`, `fill_inputs`),
+    the dataflow names and the machine. It includes `stream_signature.hpp` directly.
+- **`tile_characterize` takes each cell's L0 from kpu-csp-gen.** L-B runs the program
+  kpu-csp-gen writes for the cell's L3 (`--l3-tiles`, or the deployment's), and records the
+  trace.
+  - The naive matmul and LU checks became a per-tile check against L-B's values (`tile_check`).
+    A tile out of bound is printed, and the run exits 1.
+  - A cell whose schedule does not fit the L3 is printed as `skipped` with the L3 it needs. An
+    unknown `--algo` is refused; it used to run matmul.
+  - The characterization numbers move where kpu-csp-gen's panel order differs from the
+    derivation's (the session log has the before and after).
 - **`csp::lower` and `csp::lang::emit`** (retire-l0-derivations PR 2). They turned an L0 back into
   a program, which inverts "an L0 is a program's trace".
   - Removed with them, as tests of the retired paths:

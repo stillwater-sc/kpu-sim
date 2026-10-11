@@ -68,7 +68,9 @@ A behavioral component that only models timing is wrong.
 **Authorities:** values answer to **L-B**, the behavioral model, timing to **L-CA**, the
 cycle-accurate level. L-T1, L-T2 and L-CA refine the behavioral model, so L-B is the oracle and
 the one place a CSP program becomes an L0 trace; `TileProgramReference` replays that trace to
-validate it (`docs/plans/retire-l0-derivations.md` §3.2). Before comparing either, read D5 and §7.5 of
+validate it (`docs/plans/retire-l0-derivations.md` §3.2). No C++ code writes an L0: the
+derivations (`program/derive/`), `csp::lower` and the L0 → `.csp` emitter are retired.
+Before comparing either, read D5 and §7.5 of
 `docs/architecture/adr/0001-program-contract-and-transactional-engine.md` — they give
 the required bar per tier (bit-exact vs tolerance) and the comparator to use.
 
