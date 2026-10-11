@@ -137,6 +137,7 @@ kpu_add_component_test(test_orchestrator "program"
 
 set_tests_properties(test_orchestrator PROPERTIES
     LABELS "program;orchestration;v0.9"
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}     # reads tests/program/csp/*.csp
 )
 
 # The call ABI as MMIO: rings, doorbell, status registers, the payload-free bus (#305 inc. 3)
@@ -146,15 +147,17 @@ kpu_add_component_test(test_orchestration_mmio "program"
 
 set_tests_properties(test_orchestration_mmio PROPERTIES
     LABELS "program;orchestration;v0.9"
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}     # reads tests/program/csp/*.csp
 )
 
-# Reserve-then-launch: R1-R4, the freedom, the wedge, and sufficiency (#305 inc. 3)
+# Reserve-then-launch: R1-R4, the freedom, and sufficiency (#305 inc. 3; CSP operators, 4d.2)
 kpu_add_component_test(test_reservation "program"
     test_reservation.cpp
 )
 
 set_tests_properties(test_reservation PROPERTIES
     LABELS "program;orchestration;v0.9"
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}     # reads tests/program/csp/*.csp
 )
 
 # The tile-flow record and its .tflow bundle (#286 step 2)

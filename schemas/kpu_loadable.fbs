@@ -25,10 +25,16 @@
 //   * 64-BIT ADDRESSES AND EXTENTS ALWAYS, whatever the orchestrator's XLEN. An RV32
 //     manager core cannot address a 100 GB tensor space; it manipulates these as opaque
 //     pairs. Narrowing them later is a format change.
-//   * ONE REPRESENTATION PER THING. An operator's tile program is the #265 L0 TEXT,
-//     verbatim, not a re-encoding of it in FlatBuffers tables. L0 is already versioned,
-//     corpus-tested and byte-stable; a second encoding of the same program is the
-//     "two descriptions drift" failure this project keeps undoing.
+//   * ONE REPRESENTATION PER THING. An operator's program is its CSP TEXT (ADR 0004),
+//     verbatim, not a re-encoding of it in FlatBuffers tables. The language is versioned
+//     and canonically formatted; a second encoding of the same program is the "two
+//     descriptions drift" failure this project keeps undoing. The L0 text rides along
+//     only as the program's ORACLE (its trace), never as what runs.
+//
+// FORMAT 2.0.0 (kpu-run-csp-programs step 4d.2) is a MAJOR bump, the one exception to
+// add-only evolution: an operator's program changed from L0 to CSP, so `l0_program` lost
+// `(required)` and `csp_program` was added. A 1.x file carries L0 operators only, and a
+// 2.x reader refuses it with that reason rather than running what is now a trace.
 //
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2024-2025 Stillwater Supercomputing, Inc.
@@ -114,12 +120,12 @@ table DomainFlowProgram {
 table Operator {
   name:string (required);
 
-  // THE #265 L0 TEXT, VERBATIM. Not a re-encoding: L0 already has a versioned format,
-  // a golden corpus and a byte-stability test, and a second encoding of the same
-  // program would be a second thing to keep in step. A consequence worth stating: this
-  // loadable's `min_consumer` must cover the L0 `MIN_CONSUMER` of every program it
-  // embeds, or a reader could accept the container and choke on its contents.
-  l0_program:string (required);
+  // THE ORACLE, optional: the #265 L0 text of the CSP program's trace, verbatim, carried
+  // when the program is small enough to trace. It is what the operator's values answer
+  // to, never what runs (ADR 0004 §4: L0 is a trace). When present, this loadable's
+  // `min_consumer` must cover its L0 `MIN_CONSUMER`, or a reader could accept the
+  // container and choke on its contents.
+  l0_program:string;
 
   // Which kind of compute tile this operator needs. Checked against the deployment.
   requires_tile:ComputeTileKind;
@@ -134,9 +140,17 @@ table Operator {
   // parameter.
   dataflow:string;
 
-  // Tensor names this operator reads and writes, in the L0 program's operand order.
+  // Tensor names bound to the program's operands, in DECLARATION order: `inputs` to the
+  // operands declared `in` or `inout`, `outputs` to those declared `out`.
   inputs:[string];
   outputs:[string];
+
+  // THE PROGRAM (format 2.0.0): the operator's CSP text (ADR 0004), canonically
+  // formatted. It configures the data path and sequences every move, including the
+  // residency it inherits from the operator before it and retains for the one after.
+  // Required by the reader, not by `(required)`: the verifier would then reject a 1.x
+  // file as a broken buffer, before the reader could refuse it for its version.
+  csp_program:string;
 }
 
 // ----------------------------------------------------------------------------

@@ -26,6 +26,7 @@
 // ============================================================================
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <optional>
 #include <stdexcept>
@@ -137,15 +138,26 @@ struct DomainFlowProgram {
 
 struct Operator {
     std::string name;
-    // The #265 L0 TEXT, verbatim. Not a re-encoding: see the schema's comment on why a
-    // second representation of one program is the failure this project keeps undoing.
-    std::string l0_program;
+    // THE PROGRAM: the operator's CSP text (ADR 0004), which configures the data path and
+    // sequences every move, residency across operators included (`inherit`, `retain`).
+    std::string csp_program;
+    // THE ORACLE, when the program is small enough to trace: the #265 L0 text of its trace,
+    // verbatim. What the values answer to, never what runs (ADR 0004 §4).
+    std::optional<std::string> l0_program;
     ComputeTileKind requires_tile = ComputeTileKind::Programmable;
     std::optional<std::string> domain_flow_program;
     std::optional<std::string> dataflow;        // the space-time map's NAME
+    // Tensors bound to the program's operands in DECLARATION order: `inputs` to the operands
+    // declared `in` or `inout`, `outputs` to those declared `out`.
     std::vector<std::string> inputs;
     std::vector<std::string> outputs;
 };
+
+// An operator from CSP text: the program canonically formatted, and its trace's L0 as the
+// oracle when the program has at most `trace_limit` actions. Throws what the language throws
+// (SyntaxError, CompileError) for a program that does not parse or compile.
+Operator csp_operator(std::string name, const std::string& csp_text, std::vector<std::string> inputs,
+                      std::vector<std::string> outputs, std::size_t trace_limit = 1'000'000);
 
 struct Orchestration {
     OrchestrationKind kind = OrchestrationKind::RiscvElf;
@@ -187,7 +199,7 @@ struct Loadable {
 // PRESENT rather than hand-set — the rule #265 increment 2 established and increment 4
 // applied without rediscovering.
 //
-// It also covers the L0 `MIN_CONSUMER` of every embedded program, because a reader that
+// It also covers the L0 `MIN_CONSUMER` of every embedded oracle, because a reader that
 // accepted the container and then choked on its contents would have been told it was
 // safe. That coupling is the price of embedding L0 verbatim, and it is the right price.
 // ----------------------------------------------------------------------------

@@ -100,6 +100,11 @@ public:
     void write_reg(std::uint64_t offset, std::uint64_t value);
 
 private:
+    // The manifest list MAN_LIST selects: the operator's reads, inherits or retains.
+    const std::vector<TileRef>& manifest_list() const {
+        const OperatorManifest& m = dev_.manifest(static_cast<std::uint32_t>(man_op_));
+        return man_list_ == 1 ? m.inherits : man_list_ == 2 ? m.retains : m.reads;
+    }
     std::uint8_t* ctrl_at(std::uint64_t addr, std::size_t bytes);
     void service_descriptors();     // the doorbell
     void flush_completions();       // into the completion ring, as space allows
@@ -115,7 +120,7 @@ private:
     std::uint64_t cring_base_ = 0, cring_size_ = 0, cring_head_ = 0, cring_tail_ = 0;
     std::uint64_t diag_base_ = 0, diag_size_ = 0, diag_cursor_ = 0;
     std::uint64_t inv_index_ = 0, res_tensor_ = 0, res_ti_ = 0, res_tj_ = 0;
-    std::uint64_t man_op_ = 0, man_read_ = 0, man_err_off_ = 0, man_err_len_ = 0;
+    std::uint64_t man_op_ = 0, man_read_ = 0, man_list_ = 0, man_err_off_ = 0, man_err_len_ = 0;
     // Completions waiting to be posted, kept UNENCODED: encoding writes the diagnosis text,
     // so it waits until the completion ring and (for a refusal) the DIAG area exist.
     std::deque<Completion> backlog_;

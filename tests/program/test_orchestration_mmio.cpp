@@ -18,6 +18,8 @@
 #include "orchestration_fixtures.hpp"
 
 #include <sw/kpu/orchestration/mmio.hpp>
+#include <sw/kpu/program/csp/lang/parse.hpp>
+#include <sw/kpu/program/driver/csp_run.hpp>
 
 #include <memory>
 
@@ -47,9 +49,7 @@ Run run(const Loadable& l, OrchestratorOptions opt, std::uint32_t l3_tiles = 0,
     return r;
 }
 
-std::size_t peak_of(const RunOutcome& o) {
-    return o.stats ? o.stats->peak_l3_residency : std::size_t{0};
-}
+std::size_t peak_of(const sw::kpu::program::driver::CspLevelOutcome& o) { return o.peak_l3; }
 
 } // namespace
 
@@ -59,8 +59,14 @@ TEST_CASE("the MMIO transport agrees with the direct one, byte for byte",
     // difference here is a transport bug by definition -- an encoding that lost a field, a
     // ring that reordered, a diagnosis that did not survive the trip.
     const std::vector<std::pair<const char*, Loadable>> loadables = {
-        {"two-gemms", two_gemms_sharing_weights()}, {"three-gemms", three_gemms_with_a_gap()}};
+        {"two-gemms", two_gemms_sharing_weights()}, {"three-gemms", three_gemms_with_a_gap()},
+        {"relu-then-bias", relu_then_bias()}};
     const char* outputs[] = {"H", "Y"};
+    auto has = [](const Loadable& l, const char* t) {
+        for (const TensorRef& r : l.tensors)
+            if (r.name == t) return true;
+        return false;
+    };
 
     for (const auto& [label, l] : loadables)
         for (ExecutionLevel level :
@@ -83,7 +89,7 @@ TEST_CASE("the MMIO transport agrees with the direct one, byte for byte",
                     CHECK(d.result.trace.canonical_bytes() == m.result.trace.canonical_bytes());
                     // The values.
                     for (const char* out : outputs)
-                        CHECK(bit_identical(d.store.values(out), m.store.values(out)));
+                        if (has(l, out)) CHECK(bit_identical(d.store.values(out), m.store.values(out)));
                     // The residency behaviour: what was fetched, and how full L3 got.
                     CHECK(d.result.dma_transfers() == m.result.dma_transfers());
                     REQUIRE(d.result.per_operator.size() == m.result.per_operator.size());
@@ -108,13 +114,14 @@ TEST_CASE("an MMIO run computes what the in-process path computes",
         const Run m = run(l, opt);
         REQUIRE_FALSE(m.result.refused);
 
-        TileProgram direct = sw::kpu::program::serialize::from_string(l.operators[0].l0_program);
-        direct.operand("A").values = m.store.values("X");
-        direct.operand("B").values = m.store.values("W");
-        const auto dev = sw::kpu::program::driver::make_device(DeviceSpec{});
-        sw::kpu::program::driver::run_at(level, direct, dev,
-                                        sw::kpu::program::Placement::single(dev.compute_tiles));
-        CHECK(bit_identical(direct.operand("C").values, m.store.values("H")));
+        namespace lang = sw::kpu::program::csp::lang;
+        const lang::Program ast = lang::parse(l.operators[0].csp_program);
+        TileProgram inputs = sw::kpu::program::driver::csp_inputs(ast);
+        inputs.operand("A").values = m.store.values("X");
+        inputs.operand("B").values = m.store.values("W");
+        VirtualPlatform platform = fresh();
+        const auto direct = platform.run_csp(platform.load_csp(ast, inputs), level).outcome;
+        CHECK(bit_identical(direct.values.operand("C").values, m.store.values("H")));
     }
 }
 
@@ -256,14 +263,15 @@ TEST_CASE("the wire records are fixed, and hold indices rather than names",
 TEST_CASE("the status surface reports placement through MMIO as it does directly",
           "[program][orchestration][mmio]") {
     // Residency, credits and inventory are METADATA the orchestrator may read (§6.4). Driven
-    // by hand so the state is known: gemm0 reserves, places one W tile, keeps it.
+    // by hand so the state is known: gemm0 reserves, a PLACE is refused (its program loads its
+    // own tiles), and the launch leaves the four W tiles its program retains.
     const Loadable l = three_gemms_with_a_gap();
     auto drive = [&](KpuPort& port) {
         Descriptor r;
         r.id = 1;
         r.kind = DescriptorKind::Reserve;
         r.target = "gemm0";
-        r.slots = 12;
+        r.slots = 7;
         port.submit(r);
         Descriptor p;
         p.id = 2;
@@ -292,15 +300,24 @@ TEST_CASE("the status surface reports placement through MMIO as it does directly
 
     CHECK(drive(direct) == drive(mmio));
     for (KpuPort* port : {static_cast<KpuPort*>(&direct), &mmio}) {
-        CHECK(port->is_resident(TileRef{"W", 0, 0}));       // placed and kept
-        CHECK_FALSE(port->is_resident(TileRef{"W", 0, 1})); // never placed
-        CHECK_FALSE(port->is_resident(TileRef{"X", 0, 0})); // read, not kept
+        CHECK(port->is_resident(TileRef{"W", 0, 0}));       // retained by the program
+        CHECK(port->is_resident(TileRef{"W", 1, 1}));
+        CHECK_FALSE(port->is_resident(TileRef{"X", 0, 0})); // read, released
         const StatusSnapshot s = port->read_status();
-        CHECK(s.held == 1);
+        CHECK(s.held == 4);
         CHECK(s.reserved == 0);                             // gemm0's returned at completion
         CHECK(s.completed == 1);
         CHECK(s.l3_capacity == 16);
-        CHECK(s.credits_free() == 15);
+        CHECK(s.credits_free() == 12);
+        // The manifests cross the bus whole: the lists a decider plans admission with.
+        for (std::uint32_t op = 0; op < 3; ++op) {
+            const OperatorManifest a = direct.manifest(op), b = mmio.manifest(op);
+            CHECK(a.l3_slots == b.l3_slots);
+            CHECK(a.reads == b.reads);
+            CHECK(a.inherits == b.inherits);
+            CHECK(a.retains == b.retains);
+        }
+        CHECK(port->manifest(2).inherits.size() == 4);
     }
     CHECK(direct.inventory() == mmio.inventory());
     CHECK_FALSE(mmio.inventory().empty());

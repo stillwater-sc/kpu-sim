@@ -88,6 +88,10 @@ would mean a format change later, so it is decided now.
   lowers. Only the artifact's identity changes, in the direction ADR 0001 already pushed.
 - **ADR 0001 D1 is preserved.** The loadable *contains* L0 programs, one per operator, in
   #265's format.
+  - **Amended by kpu-run-csp-programs step 4d.2 (format 2.0.0).** An operator carries its
+    **CSP program** (ADR 0004), which is what runs. The L0 text rides along only as the
+    program's oracle, its trace, when the program is small enough to trace (ADR 0004 §4: L0 is
+    a trace). A 1.x file is refused with that reason.
 - **The versioning plan's §4 is answered rather than bypassed.** It asked for "one binary format,
   one source format". That is now `.dfg` as source and `.kpuld` as binary, with L0 inside it.
   This supplies the binary format it asked for; it does not add a third path.
@@ -218,9 +222,14 @@ wedge. So:
   refused rather than queued.
 - **R3.** A `PLACE` must name an operator holding a reservation. A placement made ahead of an
   earlier operator's launch must fit inside that reservation.
+  - **Amended by step 4d.2:** a `PLACE` is refused. A CSP program loads its own tiles, so a
+    `PLACE` would be a DMA no program sequences. It returns with L-T2 (#283).
 - **R4.** Operators launch in order, and only within what they reserved. The bound,
   `peak_live_tiles + retained`, is checked by the device at launch, not trusted from the
   orchestrator.
+  - **Amended by step 4d.2:** the bound is the program's declared L3 less the slots it
+    inherits, which are already held. Retained slots are inside the program's L3. The device
+    also checks that every tile the program inherits is held.
 
 **Why this cannot deadlock.** By R1, the earliest uncompleted operator either holds a
 reservation or no later one exists. If it holds one, that reservation is sufficient, so it
@@ -275,7 +284,8 @@ later operator holding the credits, and never hang.
 
 - The reservation bound is conservative by construction (`peak_live_tiles` plus retained
   tiles). A tighter, searched bound is possible and deliberately deferred until a test shows
-  the extra slots cost something real.
+  the extra slots cost something real. Since step 4d.2 the bound is the program's own L3, which
+  its validator proved it runs in, and which csp-gen sets to the peak it uses.
 - FlatBuffers and `flatc` are build dependencies, kept private to `kpu_program`, so nothing
   outside it sees `<flatbuffers/...>`.
 - The orchestrator now has a protocol to get wrong. Every protocol bug becomes a refusal, but a
@@ -298,6 +308,7 @@ later operator holding the credits, and never hang.
 | 1. the container | done | PR #307: `include/sw/kpu/loadable/`, `schemas/kpu_loadable.fbs`, `tests/program/loadable/` |
 | 2. deciding orchestrator, program-order acquisition | done | PR #308: `include/sw/kpu/orchestration/{descriptor,status,orchestrator}.hpp` |
 | 3. MMIO ABI, reserve-then-launch | done | PR #310: `include/sw/kpu/orchestration/{port,kpu_device,abi,mmio}.hpp` |
+| kpu-run-csp-programs 4d.2 | done | operators carry CSP programs (format 2.0.0); `KpuDevice` runs them and checks the chain's `retain`/`inherit`; the decider issues RESERVE and LAUNCH only; MMIO ABI 2.0 (manifests carry the program's L3, its inherits and retains) |
 | 4. RISC-V under Renode | next | split `descriptor.hpp`; freestanding decider; RV64 differential trace test; tensor-DRAM fault test in the guest; `RunIdentity` gains the image and data digests (D6) |
 | 5. heterogeneous compute tiles | planned | compute-tile kinds in `DeviceSpecification`; `CONFIGURE` becomes real |
 | 6. scale | planned | ONNX in (#229 [A]) → `.kpuld` with external weights, mapped not loaded |
