@@ -21,3 +21,8 @@ tests/program/deploy/*.json -text
 # #299 several rounds to learn that a CRLF rewrite on a Windows checkout breaks a
 # byte-stability check, and a binary container makes that worse, not better.
 *.kpuld -text -diff
+
+# A version-3 tile-flow bundle, kept as a fixture after the L0 L-T1 executor that wrote it
+# retired (kpu-run-csp-programs step 4e): its columns are binary and its manifest gives byte
+# offsets into them, so git must never transform any of it.
+tests/program/tflow/*.tflow/* -text

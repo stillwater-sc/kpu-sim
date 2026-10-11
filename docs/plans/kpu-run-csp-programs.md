@@ -1,7 +1,7 @@
 # `kpu-run` runs CSP programs, at every level including cycle-accurate
 
-**Status:** Decided 2026-10-10 (revised after review, §8; Q1-Q4 as recommended, §9); steps 1-3 and 4a-4d done;
-4e and 5 planned (§5, step 4; 4d's language decided 2026-10-10, 4d.2's orchestrator 2026-10-11)
+**Status:** Decided 2026-10-10 (revised after review, §8; Q1-Q4 as recommended, §9); steps 1-4 done
+(4e 2026-10-11); 5 planned (§5; 4d's language decided 2026-10-10, 4d.2's orchestrator 2026-10-11)
 **Tracks:** #283 (the L-CA half). Covers `docs/plans/csp-program-tile-sequencing.md` steps 2b and
 3 (L-T1 from the program).
 **Depends on:** the CSP language and its stream (ADR 0004, #343-#345), `CspDriver` (#342, #345,
@@ -126,7 +126,7 @@ Values come from the same L0 kernels and tile-context element functions, so L-T1
 bit-identical to L-B by construction.
 
 The existing L0 path stays as `TileTransactionExecutor`'s legacy entry until the corpus and the
-platform have moved (§5 step 4). Then it is retired.
+platform have moved (§5 step 4). Then it is retired (done in 4e).
 
 ### 4.4 The platform and the level contract
 
@@ -258,7 +258,7 @@ platform have moved (§5 step 4). Then it is retired.
      free. On S1, matmul 256³ (program L3 128, live set 17) holds 117 slots at once. The
      invariant is peak <= the program's L3, and >= its live set.
    - **The L0 path's L-T1** (`TileTransactionExecutor`) is unchanged, and still runs L0 files.
-     Its pinned makespans did not move, so nothing was re-baselined. It retires in step 4.
+     Its pinned makespans did not move, so nothing was re-baselined. It retired in step 4e.
    - **Measured** (S1, matmul 256³, csp-gen's column-panel schedule):
      - L-T1: 43,840 cycles, 576 loads;
      - L-CA: 117,887 cycles.
@@ -440,16 +440,34 @@ platform have moved (§5 step 4). Then it is retired.
          - the warm chain loads 4 fewer DRAM tiles;
          - `relu_then_bias` keeps H = relu(X W) in L3 unstored, and the bias operator's
            stored H equals the two oracles composed, at L-B and L-T1.
-   - **4e: retire the L0 L-T1 executor.**
-     - Once 4b-4d land, `TileTransactionExecutor`, `run_at`'s L-T1 case and the L0 platform run
-       path have no users.
-     - L0 files then run at L-B only: they are the oracle and the trace format.
-     - `examples/characterize` moves to csp-gen programs through the platform, or is retired if
-       the analytical harness (`TileDag`) is all it still needs. This is decided in 4e with the
-       code in front of us.
+   - **4e: retire the L0 L-T1 executor** (done). `TileTransactionExecutor` had no users left
+     once 4b-4d landed, and it went with everything that only it fed:
+     - `run_at`'s L-T1 case. An L0 program runs at L-B only: it is the trace and the oracle.
+       `level_implemented` says so, and L-T1 is refused, as L-CA was, with "an L0 program is a
+       trace; L-T1 runs a CSP program".
+     - The platform's L0 run lost its stream annotation and residency inputs, and the run
+       identity lost the three fields they filled (`residency`, `stream_digest`, `dataflow`).
+       A CSP program states its residency in `inherit` and `retain`, which its digest covers.
+     - The L0 L-T1 stepper (the replay), `timeline_trace.hpp`, and the L0 record builder
+       (`.tflow` versions 1-3). `read_tflow`, the checker and the viewer still read version 3,
+       and a v3 bundle is kept as a fixture (`tests/program/tflow/shared_reader_v3.tflow`) for
+       them.
+     - In kpu-run's L0 path, `--streams`, `--timeline` and `--tflow` are refused by name, with
+       where their job went. A file's STREAMS record is still carried through `--emit-l0`.
+     - What the executor's header held for others moved: `Hop`, `Mover` and `Cycle` to
+       `program/hop.hpp` (the record's columns and the ABI's PLACE leg name a leg by them),
+       and `tile_key` to `tile_program.hpp`, beside `TileCoord`.
+     - **`examples/characterize` stays as it is.** It validates values at L-B and times with
+       the analytical harness (`TileDag`), and never ran the executor. Moving it to csp-gen
+       programs is a separate question, about what it characterizes.
+     - The CLI tests that drove L0 at L-T1 were removed where a CSP twin already existed
+       (T4 record, viewer, step, timeline). The T64 binding moved to a csp-gen program.
      - The L0 corpus keeps its role (format stability, the oracle), checked at L-B.
 5. **`--algo` leaves `kpu-run`.**
    - Its CLI tests move to `csp-gen | kpu-run`.
+   - Since 4e an L0 program runs at L-B only, which models no machine. So the L0 path's device
+     flags (`--topology`, `--compute-tiles`, `--l3-tiles`, the lane counts and the rates)
+     configure nothing any more, and they leave with `--algo`. The machine is `--deploy`'s.
    - Docs (the how-to, the L0 serialization note) and the CHANGELOG say where it went.
 
 ## 6. Verification

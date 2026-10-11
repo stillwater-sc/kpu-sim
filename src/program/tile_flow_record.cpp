@@ -11,7 +11,7 @@
 #include <sw/kpu/program/record/tile_flow_lod.hpp>
 
 #include <sw/kpu/program/platform/deployment_json.hpp>
-#include <sw/kpu/program/tile_transaction_executor.hpp>
+#include <sw/kpu/program/hop.hpp>
 
 #include <nlohmann/json.hpp>
 
@@ -36,18 +36,6 @@ std::string pooled_name(const std::string& dev, const char* kind) {
     return dev + "/" + kind + "[*]";
 }
 
-// The tile an op MOVES: a Feed's input, a Drain's output (or input when it names none).
-const TileCoord* moved_tile(const TileOp& op) {
-    if (op.kind == TileOpKind::Drain) {
-        if (!op.inputs.empty()) return &op.inputs[0];
-        if (!op.outputs.empty()) return &op.outputs[0];
-        return nullptr;
-    }
-    if (!op.inputs.empty()) return &op.inputs[0];
-    if (!op.outputs.empty()) return &op.outputs[0];
-    return nullptr;
-}
-
 } // namespace
 
 std::string Tile::key() const { return tile_key(TileCoord{operand, ti, tj}); }
@@ -61,142 +49,8 @@ std::uint32_t TileFlowRecord::station(const std::string& name) const {
 // ============================================================================
 // Building
 // ============================================================================
-TileFlowRecord build_record(const TileProgram& prog, const driver::RunOutcome& outcome,
-                            const platform::DeploymentSpec& spec, const Placement& placement,
-                            Dim device, std::uint64_t foreign_slots) {
-    if (!outcome.has_timing)
-        throw RecordError(std::string("record: level ") + driver::short_name(outcome.level) +
-                          " models no time, so it has no intervals to record; run a level "
-                          "that models resources (L-T1)");
-    if (device >= spec.device_count())
-        throw RecordError("record: device " + std::to_string(device) + " of " +
-                          std::to_string(spec.device_count()));
-    const auto& ops = prog.ops();
-    if (outcome.timeline.size() != ops.size())
-        throw RecordError("record: the outcome's timeline has " +
-                          std::to_string(outcome.timeline.size()) + " ops, the program " +
-                          std::to_string(ops.size()) + "; they are not the same run");
-
-    const platform::DeviceSpecification& d = spec.device(device);
-    const auto dev = spec.device_view(device);
-    TileFlowRecord rec;
-    rec.level = driver::short_name(outcome.level);
-    rec.device = d.name;
-    rec.device_label = dev.label();
-    rec.deployment_digest = platform::deployment_digest(spec);
-    rec.makespan = outcome.makespan;
-    if (rec.makespan > kMaxExactCycle)
-        throw RecordError("record: makespan " + std::to_string(rec.makespan) +
-                          " exceeds 2^53 cycles, which the f64 time columns cannot hold exactly");
-
-    // ---- stations: DRAM, pooled L3, unmodelled L2/L1/DMA buffers, one per compute tile
-    rec.stations.push_back({d.name + "/dram", "dram", 0, false, true});
-    rec.stations.push_back({pooled_name(d.name, "l3"), "l3", dev.l3_tiles, true, true});
-    rec.stations.push_back({pooled_name(d.name, "l2"), "l2", 0, true, false});
-    rec.stations.push_back({pooled_name(d.name, "l1"), "l1", 0, true, false});
-    // Where an ejected block waits for its DMA engine to write it to DRAM (version 3).
-    rec.stations.push_back({pooled_name(d.name, "dmabuf"), "dmabuf", 0, true, false});
-    rec.unmodelled = {"l2", "l1", "dmabuf"};
-    const Dim n_cf = std::max<Dim>(placement.compute_tiles(), 1);
-    for (Dim c = 0; c < n_cf; ++c)
-        rec.stations.push_back({d.name + "/cf[" + std::to_string(c) + "]", "cf", 1, false, true});
-    const std::uint32_t DRAM = 0, L3 = 1, L2 = 2, L1 = 3, DMABUF = 4, CF0 = 5;
-    if (outcome.stats)
-        for (const auto& [m, lanes] : outcome.stats->mover_lanes)
-            rec.movers.push_back({to_string(m), lanes});
-    rec.element_bytes = d.element_bytes;
-    for (const std::string& name : prog.operand_order()) {
-        const TensorOperand& o = prog.operand(name);
-        rec.operands.push_back({o.name, o.rows, o.cols, o.tile_rows, o.tile_cols});
-    }
-
-    // ---- tiles and ops, in first-appearance order (deterministic)
-    std::map<std::string, std::uint32_t> tile_of;
-    auto tile_id = [&](const TileCoord& c) {
-        const std::string k = tile_key(c);
-        const auto it = tile_of.find(k);
-        if (it != tile_of.end()) return it->second;
-        const auto id = static_cast<std::uint32_t>(rec.tiles.size());
-        rec.tiles.push_back({c.operand, c.ti, c.tj});
-        tile_of.emplace(k, id);
-        return id;
-    };
-    for (const TileOp& op : ops) {
-        Op o;
-        o.kind = static_cast<std::uint8_t>(op.kind);
-        std::map<std::uint32_t, std::size_t> at;          // tile -> position in o.tiles
-        auto touch = [&](const TileCoord& c, bool writes) {
-            const std::uint32_t id = tile_id(c);
-            const auto it = at.find(id);
-            if (it != at.end()) { if (writes) o.written[it->second] = 1; return; }
-            at.emplace(id, o.tiles.size());
-            o.tiles.push_back(id);
-            o.written.push_back(writes ? 1 : 0);
-        };
-        for (const TileCoord& c : op.inputs) touch(c, false);
-        for (const TileCoord& c : op.outputs) touch(c, true);
-        rec.ops.push_back(std::move(o));
-    }
-
-    // ---- L3 residency, from the executor's series
-    for (const L3Residency& r : outcome.l3_residency) {
-        const auto it = tile_of.find(r.tile);
-        if (it == tile_of.end())
-            throw RecordError("record: residency names tile \"" + r.tile + "\", which the program never touches");
-        Residency out{it->second, L3, r.start, r.finish, 0};
-        if (r.seeded) out.flags |= Residency::Seeded;
-        if (r.held) out.flags |= Residency::Held;
-        rec.residency.push_back(out);
-    }
-
-    // ---- transits, one per hop, and computes, one per compute op
-    auto endpoints = [&](Hop h) -> std::pair<std::uint32_t, std::uint32_t> {
-        switch (h) {
-            case Hop::DmaDramToL3:      return {DRAM, L3};
-            case Hop::BlockMoverL3ToL2: return {L3, L2};
-            case Hop::StreamerL2ToL1:   return {L2, L1};
-            case Hop::StreamerL1ToL2:   return {L1, L2};
-            case Hop::BlockMoverL2ToL3: return {L2, L3};
-            case Hop::BlockMoverL3ToDmaBuffer: return {L3, DMABUF};
-            case Hop::DmaBufferToDram:  return {DMABUF, DRAM};
-            case Hop::BlockMoverL3ToL3: return {L3, L3};
-        }
-        return {L3, L3};
-    };
-    for (std::size_t i = 0; i < ops.size(); ++i) {
-        const TileOpRecord& t = outcome.timeline[i];
-        if (t.resource == ResourceKind::ComputeTile && ops[i].kind != TileOpKind::Feed &&
-            ops[i].kind != TileOpKind::Drain) {
-            if (t.resource_id >= n_cf)
-                throw RecordError("record: op " + std::to_string(i) + " ran on compute tile " +
-                                  std::to_string(t.resource_id) + " of a " + std::to_string(n_cf) +
-                                  "-tile placement");
-            rec.computes.push_back({static_cast<std::uint32_t>(i), CF0 + t.resource_id, t.start, t.finish});
-            continue;
-        }
-        const TileCoord* moved = moved_tile(ops[i]);
-        if (!moved) continue;
-        for (const HopRecord& h : t.hops) {
-            const auto [src, dst] = endpoints(h.hop);
-            rec.transits.push_back({tile_id(*moved), static_cast<std::uint32_t>(i),
-                                    static_cast<std::uint8_t>(h.hop),
-                                    static_cast<std::uint8_t>(mover_of(h.hop)), h.lane, h.start,
-                                    h.finish, src, dst});
-        }
-    }
-    std::sort(rec.transits.begin(), rec.transits.end(), [](const Transit& a, const Transit& b) {
-        return a.t0 != b.t0 ? a.t0 < b.t0 : a.op != b.op ? a.op < b.op : a.hop < b.hop;
-    });
-    std::sort(rec.computes.begin(), rec.computes.end(), [](const Compute& a, const Compute& b) {
-        return a.t0 != b.t0 ? a.t0 < b.t0 : a.op < b.op;
-    });
-
-    // The caller's slots this program cannot name (TileExecutionRequest::foreign_held_slots):
-    // held for the whole run and counted in the executor's peak, so the record carries them
-    // or its occupancy series would be low by exactly that much.
-    rec.foreign_slots = foreign_slots;
-    return rec;
-}
+// An L0 run's record (versions 1-3) was built here from the L0 L-T1 executor's timeline. The
+// executor retired in kpu-run-csp-programs step 4e; read_tflow still reads those versions.
 
 // ============================================================================
 // A CSP program's run at L-T1 (version 4)

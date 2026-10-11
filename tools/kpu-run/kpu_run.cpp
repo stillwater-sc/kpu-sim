@@ -21,7 +21,6 @@
 #include <sw/kpu/program/platform/virtual_platform.hpp>
 #include <sw/kpu/program/driver/step_cursor.hpp>
 #include <sw/kpu/program/serialize/l0_format.hpp>
-#include <sw/kpu/program/driver/timeline_trace.hpp>
 #include <sw/kpu/program/record/tile_flow_record.hpp>
 #include <sw/trace/trace_exporter.hpp>
 
@@ -62,12 +61,13 @@ R"(kpu-run — execute a Domain Flow Program at one or more levels and compare t
                             (the L0 oracle, default 1000000 actions), --no-compare,
                             --tflow, --timeline (both from L-T1), --step and
                             --step-limit (L-B: one action per step; L-T1: one record)
-  --program <file.l0>       execute a program FROM A FILE (#265). Mutually exclusive
-                            with --algo/--size/--tile: a spec that says two different
-                            things is a usage error, not a choice for the tool to make
+  --program <file.l0>       execute an L0 program FROM A FILE (#265). An L0 program is a
+                            trace, the oracle CSP runs answer to: it runs at L-B only.
+                            Mutually exclusive with --algo/--size/--tile: a spec that says
+                            two different things is a usage error
   --fill-inputs             synthesize inputs for a --program file that carries none.
                             Only the operands the program READS are filled
-  --algo <matmul|lu|linear> program to derive            (default matmul)
+  --algo <matmul|lu|linear> L0 program to derive, run at L-B (default matmul)
   --act <relu|gelu|silu|atan>  linear's activation          (default relu)
   --size <n>                square problem size          (default 64)
   --tile <n>                tile size                    (default 16)
@@ -90,21 +90,11 @@ R"(kpu-run — execute a Domain Flow Program at one or more levels and compare t
   --str-bytes-per-cycle <b> per Streamer                 (default 256)
   --noc-bytes-per-cycle <b> per NoC link                 (default 128)
   --macs-per-cycle <m>      one compute tile's throughput (default 256)
-  --streams <dataflow>      derive an L1 stream program: output-stationary|os,
-                            weight-stationary|ws, a-stationary|as,
-                            fully-streaming|hex  (matmul only). A --program file that
-                            carries a STREAMS record supplies this; an explicit
-                            --streams overrides it and says so
   --emit-l0 <file.l0>       write the program BEFORE execution: a test case, inputs
                             inline. This is how the golden corpus is regenerated
   --emit-l0-result <file.l0>  write it AFTER execution: the same program with results,
                             which is the corpus's expected-output half
-  --timeline <file.json>    Chrome Trace Event Format, one event PER HOP
-  --tflow <dir>             the tile-flow record (#286): L3 residency, every transit and
-                            compute, as a .tflow bundle for the tile-flow viewer
-  --step                    single-step: one line per transaction at that level
-                            (L-B: one op applied; L-T1: op fired / hop start / hop
-                            end / op completed)
+  --step                    single-step an L0 program at L-B: one op applied per step
   --step-limit <n>          stop after n steps, 0 = all      (default 40)
   --no-compare              run the levels, do not diff values
   -h, --help
@@ -152,38 +142,9 @@ Diff compare_bitwise(const std::vector<float>& authority, const std::vector<floa
 void print_run(const RunOutcome& o) {
     std::cout << "  " << std::left << std::setw(24) << to_string(o.level)
               << std::setw(6) << short_name(o.level);
-    if (!o.has_timing) {
-        std::cout << "timing: not modelled at this level";
-    } else {
-        std::cout << "makespan " << std::right << std::setw(8) << o.makespan
-                  << "   floor " << std::setw(8) << std::fixed << std::setprecision(0)
-                  << o.lower_bound;
-    }
-    std::cout << "\n";
-    if (o.stats) {
-        const auto& s = *o.stats;
-        std::cout << "        ops " << s.ops << " (" << s.computes << " compute, "
-                  << s.movements << " movement)"
-                  << ", L3 peak " << s.peak_l3_residency
-                  << ", credit stalls " << s.l3_credit_stalls
-                  << ", reuse chains " << s.resident_feeds << "\n";
-        for (const auto& kv : s.hop_busy_cycles)
-            std::cout << "        " << std::left << std::setw(16) << to_string(kv.first)
-                      << "busy " << std::right << std::setw(8) << kv.second
-                      << "   transfers " << std::setw(6)
-                      << (s.hop_transfers.count(kv.first) ? s.hop_transfers.at(kv.first) : 0)
-                      << "\n";
-        for (const auto& kv : s.mover_utilization)
-            std::cout << "        [" << std::left << std::setw(13) << to_string(kv.first)
-                      << "util " << std::fixed << std::setprecision(3) << kv.second
-                      << "  lanes " << (s.mover_lanes.count(kv.first)
-                                        ? s.mover_lanes.at(kv.first) : 0) << "]\n";
-    }
-    if (o.provenance)
-        std::cout << "        device " << o.provenance->device
-                  << "   placement " << o.provenance->placement
-                  << (o.provenance->calibrated ? "   calibrated" : "   UNCALIBRATED")
-                  << (o.provenance->extrapolated ? "   extrapolated" : "") << "\n";
+    if (!o.has_timing) std::cout << "timing: not modelled at this level";
+    else std::cout << "makespan " << std::right << std::setw(8) << o.makespan;
+    std::cout << "   " << o.ops << " ops\n";
 }
 
 // ---- a CSP program (docs/plans/kpu-run-csp-programs.md step 2) ------------------------------
@@ -669,45 +630,24 @@ int main(int argc, char** argv) {
         return 2;
     }
 
-    // An L1 stream program is matmul-only, and saying so beats deriving an empty one and
-    // reporting timing that silently ignored the flag.
-    std::string dataflow;
-    if (!arg_required(a, "--streams", dataflow, err)) {
-        std::cerr << "kpu-run: " << err << "\n";
-        return 2;
-    }
-    if (arg_present(a, "--streams") && !dataflow.empty()) {
-        if (!known_dataflow(dataflow)) {
-            std::cerr << "kpu-run: unknown --streams '" << dataflow
-                      << "' (output-stationary|os, weight-stationary|ws, "
-                         "a-stationary|as, fully-streaming|hex)\n";
+    // An L0 program runs at L-B only (kpu-run-csp-programs step 4e): it is the trace, and the
+    // oracle. The options that fed the L0 L-T1 executor went with it, and each is refused by
+    // name rather than ignored, with where its job went.
+    for (const char* k : {"--streams", "--timeline", "--tflow"})
+        if (arg_present(a, k)) {
+            std::cerr << "kpu-run: " << k << " times an L0 program's L-T1 run, which retired: an L0 "
+                         "program is a trace and runs at L-B. Time its CSP program instead "
+                         "(--program file.csp; write one with kpu-csp-gen)\n";
             return 2;
         }
-        // Gated on the ALGO, so it can only be checked for a derived program. A loaded
-        // program has no algo -- only ops -- so the check there is the derivation itself,
-        // which throws on a program it cannot map.
-        if (!from_file && ps.algo != "matmul") {
-            std::cerr << "kpu-run: --streams is derived for matmul only, not '"
-                      << ps.algo << "'\n";
-            return 2;
-        }
-    }
-    // A file may carry its own STREAMS record, which is a dataflow CHOICE the consumer
-    // re-derives from. It supplies --streams when --streams is absent; when both are given
-    // and they differ, the CLI wins and SAYS SO -- a run whose L1 timing came from a
-    // different map than the file records must not be silent about it.
-    std::string stream_note;
-    if (from_file && info.has_streams) {
-        if (dataflow.empty()) dataflow = info.dataflow;
-        else if (map_for(dataflow).name != info.dataflow)
-            stream_note = " (overrides the file's " + info.dataflow + ")";
-    }
+    // A file may carry a STREAMS record, a dataflow choice. Nothing here consumes it any more,
+    // but --emit-l0 and --emit-l0-result keep it, so the file a run writes still says what the
+    // file it read said.
+    const std::string dataflow = from_file && info.has_streams ? info.dataflow : std::string();
     // Keeps main's required-value parsing (an option present without a value is an error,
     // not an absence) and adds increment 3's stepping options on top.
-    std::string timeline_path, emit_path, emit_result_path, deploy_path, tflow_path;
-    if (!arg_required(a, "--timeline", timeline_path, err) ||
-        !arg_required(a, "--tflow", tflow_path, err) ||
-        !arg_required(a, "--emit-l0", emit_path, err) ||
+    std::string emit_path, emit_result_path, deploy_path;
+    if (!arg_required(a, "--emit-l0", emit_path, err) ||
         !arg_required(a, "--deploy", deploy_path, err) ||
         !arg_required(a, "--emit-l0-result", emit_result_path, err)) {
         std::cerr << "kpu-run: " << err << "\n";
@@ -791,11 +731,8 @@ int main(int argc, char** argv) {
                   << loaded->operand_order().size() << " operands, "
                   << loaded->ops().size() << " ops   values: "
                   << (info.has_values ? "from file" : "synthesized (--fill-inputs)")
-                  // The EFFECTIVE dataflow, not the one the file records. Printing the file's
-                  // choice next to a run that used a different map would be a report of the
-                  // wrong thing -- so the override is named where the value is shown.
-                  << (dataflow.empty() ? "" : "   streams: " + map_for(dataflow).name)
-                  << stream_note << "\n";
+                  << (dataflow.empty() ? "" : "   streams: " + dataflow + " (carried, not run)")
+                  << "\n";
     std::cout << "device   " << deployment->label()
               << "   digest " << platform::deployment_digest(*deployment) << "\n";
     std::cout << "levels   ";
@@ -830,7 +767,7 @@ int main(int argc, char** argv) {
     auto emit_options = [&]() {
         serialize::WriteOptions opt;
         opt.include_values = true;
-        if (!dataflow.empty()) opt.dataflow = map_for(dataflow).name;
+        if (!dataflow.empty()) opt.dataflow = dataflow;
         return opt;
     };
 
@@ -884,8 +821,6 @@ int main(int argc, char** argv) {
     // state as an argument, so the run identity is complete.
     std::optional<platform::VirtualPlatform> vp;
     std::vector<platform::ProgramHandle> handles;
-    std::vector<stream::StreamProgram> streams;
-    streams.reserve(levels.size());
     try {
         vp.emplace(*deployment);
         // Each level gets its OWN program, filled identically, so the comparison is of the
@@ -898,28 +833,6 @@ int main(int argc, char** argv) {
     } catch (const std::exception& e) {
         std::cerr << "kpu-run: " << e.what() << "\n";
         return 2;
-    }
-
-    // The stream program is derived PER PROGRAM: it indexes ops of the program it was
-    // derived from, so sharing one across levels would alias the wrong ops.
-    //
-    // Its failure gets its OWN handler, because the derivation throws about the thing it
-    // could not find -- "no operand 'C'" -- and for a program that came from a FILE there is
-    // no algo to gate on beforehand, so that bare message is all the user would see. The flag
-    // that caused it belongs in the diagnostic.
-    for (const platform::ProgramHandle& h : handles) {
-        if (dataflow.empty()) {
-            streams.push_back(stream::StreamProgram{});
-            continue;
-        }
-        try {
-            streams.push_back(stream::derive_matmul_streams(vp->program(h), map_for(dataflow)));
-        } catch (const std::exception& e) {
-            std::cerr << "kpu-run: --streams " << map_for(dataflow).name
-                      << ": this program has no matmul stream derivation (" << e.what()
-                      << ")\n";
-            return 2;
-        }
     }
 
     // ONE snapshot, taken before anything runs, so every level starts from the same state --
@@ -938,8 +851,7 @@ int main(int argc, char** argv) {
     for (std::size_t i = 0; i < levels.size(); ++i) {
         try {
             const auto r = vp->run(handles[i], levels[i], initial,
-                                   Placement::single(device.compute_tiles),
-                                   dataflow.empty() ? nullptr : &streams[i]);
+                                   Placement::single(device.compute_tiles));
             outcomes.push_back(r.outcome);
             programs.push_back(vp->program(handles[i]));
             if (i == 0)
@@ -975,25 +887,14 @@ int main(int argc, char** argv) {
         return 0;
     };
 
-    // --step: walk one level's transactions, THROUGH THE PLATFORM (#282 increment 5). The
-    // driver used to build its own Stepper over its own program copy, which made stepping a
-    // second seam beside the platform's -- and #286 and L-T2 both need one. step_begin()
-    // restores the snapshot first, so a stepped walk has the same identity a run does.
-    //
-    // The mechanism still differs by level and the cursor still says which: at L-B a step
-    // EXECUTES, at L-T1 step_begin runs to completion and the cursor replays that run,
-    // because the executor's schedule is decided across the whole program.
+    // --step: walk the program at L-B, THROUGH THE PLATFORM (#282 increment 5). step_begin()
+    // restores the snapshot first, so a stepped walk has the same identity a run does, and
+    // each step EXECUTES one op.
     if (do_step) {
-        const ExecutionLevel target = levels.back();     // the finest level that ran
-        std::size_t src = levels.size();
-        for (std::size_t i = 0; i < levels.size(); ++i)
-            if (levels[i] == target) src = i;
+        const ExecutionLevel target = levels.back();
         std::optional<platform::VirtualPlatform::Cursor> cur;
         try {
-            // A program of its own, so the walk does not consume a captured result. At L-T1
-            // this runs the program a second time, which is the price of having one stepping
-            // seam instead of two -- and the alternative, threading an already-finished
-            // timeline in, is exactly the second path the seam exists to remove.
+            // A program of its own, so the walk does not consume a captured result.
             // The initial state is restored BEFORE the extra program is loaded, so the
             // snapshot the walk starts from holds every program at its inputs rather than at
             // whatever the comparison runs left behind. Snapshotting first would have folded
@@ -1003,97 +904,31 @@ int main(int argc, char** argv) {
             vp->restore(initial);
             const platform::ProgramHandle sh = vp->load_program(make_program());
             const platform::StateSnapshot staged = vp->snapshot();
-            cur.emplace(vp->step_begin(sh, target, staged,
-                                       Placement::single(device.compute_tiles),
-                                       dataflow.empty() ? nullptr : &streams[src]));
+            cur.emplace(vp->step_begin(sh, target, staged));
         } catch (const std::exception& e) {
             std::cerr << "kpu-run: " << e.what() << "\n";
             return 2;
         }
         std::cout << "\nstepping " << short_name(target) << ": " << cur->size()
-                  << " steps"
-                  << (cur->executes() ? " (re-executed one op at a time)"
-                                      : " (replay of the run above)")
+                  << " steps (re-executed one op at a time)"
                   << (step_limit && cur->size() > step_limit
                           ? ", showing the first " + std::to_string(step_limit)
                           : "")
                   << "\n";
         std::size_t shown = 0;
-        // The limit is checked BEFORE advancing, because a step is not free: at L-B
-        // step() APPLIES the next op, so testing afterwards executed one more op than it
-        // showed, and at L-T1 it advanced the replay's occupancy counters past what was
-        // printed. --step-limit says "stop after n steps", so it has to stop.
+        // The limit is checked BEFORE advancing, because a step is not free: step() APPLIES
+        // the next op, so testing afterwards executed one more op than it showed.
+        // --step-limit says "stop after n steps", so it has to stop.
         while (!step_limit || shown < step_limit) {
             if (!cur->step()) break;
-            const bool timed = !cur->executes();
             std::cout << "  " << std::setw(5) << std::right << cur->position() << "  "
-                      << std::left << describe(cur->current(), timed);
-            if (timed) {
-                std::cout << "   in-flight " << cur->stepper().in_flight();
-                for (const auto& kv : cur->stepper().lanes_busy())
-                    if (kv.second)
-                        std::cout << "  [" << to_string(kv.first) << " " << kv.second << "]";
-            }
-            std::cout << "\n";
+                      << std::left << describe(cur->current(), false) << "\n";
             ++shown;
         }
-        // Station occupancy (L3/L2/L1 tile counts) is deliberately absent: the executor
-        // keeps its resident set internal and publishes only the peak, which is the first
-        // gap #286 lists. Reporting lane occupancy and calling it station occupancy would
-        // be the wrong kind of helpful. Only say so where lanes were shown at all.
         // Report where it stopped, so "stop after n steps" is checkable from outside
         // rather than a claim in the help text.
         std::cout << "  stopped after " << cur->position() << " of " << cur->size()
                   << " steps\n";
-        if (!cur->executes())
-            std::cout << "  (lane occupancy shown; station occupancy needs the residency "
-                         "series the executor does not emit yet -- #286)\n";
-    }
-
-    // --timeline: one event per hop, from the level that models resources. L-B has no
-    // intervals to report, so there is nothing to write from it.
-    if (!timeline_path.empty()) {
-        std::size_t src = levels.size();
-        for (std::size_t i = 0; i < levels.size(); ++i)
-            if (!outcomes[i].timeline.empty()) src = i;
-        if (src == levels.size()) {
-            std::cerr << "kpu-run: --timeline needs a level that models resources; "
-                      << "L-B reports no intervals\n";
-            return 2;
-        }
-        const auto entries = to_trace_entries(programs[src], outcomes[src].timeline,
-                                              device.element_bytes);
-        if (!sw::trace::ChromeTraceExporter::export_traces(timeline_path, entries)) {
-            std::cerr << "kpu-run: could not write '" << timeline_path << "'\n";
-            return 2;
-        }
-        std::cout << "\ntimeline  " << entries.size() << " events (one per hop) from "
-                  << short_name(levels[src]) << " -> " << timeline_path << "\n";
-    }
-
-    // --tflow: the tile-flow record, from the level that models resources -- the same choice
-    // --timeline makes, for the same reason.
-    if (!tflow_path.empty()) {
-        std::size_t src = levels.size();
-        for (std::size_t i = 0; i < levels.size(); ++i)
-            if (outcomes[i].has_timing) src = i;
-        if (src == levels.size()) {
-            std::cerr << "kpu-run: --tflow needs a level that models resources; "
-                      << "L-B reports no intervals\n";
-            return 2;
-        }
-        try {
-            const auto rec = record::build_record(programs[src], outcomes[src], *deployment,
-                                                  Placement::single(device.compute_tiles));
-            record::write_tflow(rec, tflow_path);
-            std::cout << "\ntflow     " << rec.residency.size() << " residencies, "
-                      << rec.transits.size() << " transits, " << rec.computes.size()
-                      << " computes from " << short_name(levels[src]) << " -> " << tflow_path
-                      << "\n          L3 pooled; L2, L1 not modelled at this level\n";
-        } catch (const std::exception& e) {
-            std::cerr << "kpu-run: " << e.what() << "\n";
-            return 2;
-        }
     }
 
     if (!compare || levels.size() < 2) {

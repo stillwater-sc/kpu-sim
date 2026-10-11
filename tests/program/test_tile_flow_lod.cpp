@@ -11,7 +11,10 @@
 
 #include <sw/kpu/program/driver/program_spec.hpp>
 #include <sw/kpu/program/record/tile_flow_lod.hpp>
-#include <sw/kpu/program/tile_transaction_executor.hpp>
+#include <sw/kpu/program/csp/gen/generate.hpp>
+#include <sw/kpu/program/csp/lang/parse.hpp>
+#include <sw/kpu/program/hop.hpp>
+#include <sw/kpu/program/record/tile_flow_record.hpp>
 
 #include <filesystem>
 #include <fstream>
@@ -22,21 +25,23 @@ using namespace sw::kpu::program::record;
 
 namespace {
 
-TileFlowRecord record_of(unsigned n, unsigned t, Dim cap, std::size_t foreign = 0) {
-    driver::ProgramSpec ps;
-    ps.algo = "matmul";
-    ps.size = n;
-    ps.tile = t;
-    TileProgram prog = driver::derive(ps);
+// A CSP matmul's L-T1 record, declaring `l3` slots, with `foreign` slots held beside it: data
+// the pyramid must count, as an orchestrated run's record would carry it.
+TileFlowRecord record_of(unsigned n, unsigned t, int l3, std::size_t foreign = 0) {
+    csp::gen::Options o;
+    o.algo = "matmul";
+    o.size = n;
+    o.tile = t;
+    o.l3 = l3;
+    const csp::lang::Program ast = csp::lang::parse(csp::gen::generate(o));
+    const TileProgram inputs = driver::csp_inputs(ast);
     driver::DeviceSpec ds;
-    ds.l3_tiles = cap;
     ds.dma_engines = 2;
     const auto spec = driver::make_deployment(ds);
-    const auto dev = spec.device_view();
-    const auto placement = Placement::single(dev.compute_tiles);
-    const auto out = driver::run_at(driver::ExecutionLevel::BlockSequential, prog, dev, placement,
-                                    nullptr, 0, {}, {}, foreign);
-    return build_record(prog, out, spec, placement, 0, foreign);
+    const auto out = driver::csp_run_level(driver::ExecutionLevel::BlockSequential, ast, &spec.device(0), inputs);
+    TileFlowRecord rec = build_csp_record(ast, out, inputs, spec);
+    rec.foreign_slots = foreign;
+    return rec;
 }
 
 // The occupancy of each row at each cycle, counted directly from the intervals.
@@ -58,7 +63,7 @@ std::vector<std::vector<std::uint32_t>> brute(const TileFlowRecord& rec, const L
 } // namespace
 
 TEST_CASE("every pyramid bin is the exact merge of its two children", "[program][record][lod]") {
-    const TileFlowRecord rec = record_of(64, 16, 0);
+    const TileFlowRecord rec = record_of(64, 16, 12);
     const Lod lod = build_lod(rec, 16);           // a small base, so there are many levels
     REQUIRE(lod.levels.size() > 3);
     CHECK(lod.levels.front().bins <= 16);
@@ -74,7 +79,7 @@ TEST_CASE("every pyramid bin is the exact merge of its two children", "[program]
 }
 
 TEST_CASE("the coarsest bin equals the raw totals", "[program][record][lod]") {
-    const TileFlowRecord rec = record_of(64, 16, 0, 2);
+    const TileFlowRecord rec = record_of(64, 16, 12, 2);
     const Lod lod = build_lod(rec);
     const LodLevel& top = lod.levels.back();
     const std::uint32_t l3 = rec.station(rec.device + "/l3[*]");
@@ -107,7 +112,7 @@ TEST_CASE("the coarsest bin equals the raw totals", "[program][record][lod]") {
 }
 
 TEST_CASE("at one cycle per bin the base level is a cycle-by-cycle count", "[program][record][lod]") {
-    const TileFlowRecord rec = record_of(32, 16, 7, 1);   // 6 live + 1 foreign: tight, not wedged
+    const TileFlowRecord rec = record_of(32, 16, 7, 1);   // the program's 7 + 1 foreign
     const Lod lod = build_lod(rec, rec.makespan);  // width 1
     const LodLevel& base = lod.levels.front();
     REQUIRE(base.k == 0);
@@ -142,7 +147,7 @@ TEST_CASE("a zero-length run still peaks at its foreign slots", "[program][recor
 }
 
 TEST_CASE("the pyramid is written with the bundle and reads back unchanged", "[program][record][lod]") {
-    const TileFlowRecord rec = record_of(32, 16, 0);
+    const TileFlowRecord rec = record_of(32, 16, 8);
     const auto dir = (std::filesystem::temp_directory_path() / "kpu-tflow-lod-test").string();
     std::filesystem::remove_all(dir);
     write_tflow(rec, dir);
@@ -161,7 +166,7 @@ TEST_CASE("the pyramid is written with the bundle and reads back unchanged", "[p
 }
 
 TEST_CASE("a hostile pyramid file is refused, not allocated", "[program][record][lod]") {
-    const TileFlowRecord rec = record_of(32, 16, 0);
+    const TileFlowRecord rec = record_of(32, 16, 8);
     const auto dir = (std::filesystem::temp_directory_path() / "kpu-tflow-lod-hostile").string();
     std::filesystem::remove_all(dir);
     write_tflow(rec, dir);

@@ -1,0 +1,143 @@
+{
+ "format": "kpu-tflow-lod",
+ "version": 1,
+ "rows": [
+  {
+   "name": "dev0/dram",
+   "kind": "dram",
+   "capacity": 0,
+   "modelled": true
+  },
+  {
+   "name": "dev0/l3[*]",
+   "kind": "l3",
+   "capacity": 5,
+   "modelled": true
+  },
+  {
+   "name": "dev0/l2[*]",
+   "kind": "l2",
+   "capacity": 0,
+   "modelled": false
+  },
+  {
+   "name": "dev0/l1[*]",
+   "kind": "l1",
+   "capacity": 0,
+   "modelled": false
+  },
+  {
+   "name": "dev0/dmabuf[*]",
+   "kind": "dmabuf",
+   "capacity": 0,
+   "modelled": false
+  },
+  {
+   "name": "dev0/cf[0]",
+   "kind": "cf",
+   "capacity": 1,
+   "modelled": true
+  },
+  {
+   "name": "dev0/cf[1]",
+   "kind": "cf",
+   "capacity": 1,
+   "modelled": true
+  },
+  {
+   "name": "mover:dma",
+   "kind": "mover",
+   "capacity": 1,
+   "modelled": true
+  },
+  {
+   "name": "mover:block-mover",
+   "kind": "mover",
+   "capacity": 1,
+   "modelled": true
+  },
+  {
+   "name": "mover:streamer",
+   "kind": "mover",
+   "capacity": 1,
+   "modelled": true
+  },
+  {
+   "name": "mover:noc",
+   "kind": "mover",
+   "capacity": 1,
+   "modelled": true
+  }
+ ],
+ "metrics": {
+  "occ": "f64 occupancy x cycles; merges by sum",
+  "peak": "u32 max occupancy in the bin; merges by max",
+  "starts": "u32 intervals beginning in the bin; merges by sum"
+ },
+ "file": "lod.bin",
+ "levels": [
+  {
+   "k": 0,
+   "bins": 136,
+   "occ": 0,
+   "peak": 11968,
+   "starts": 17952
+  },
+  {
+   "k": 1,
+   "bins": 68,
+   "occ": 23936,
+   "peak": 29920,
+   "starts": 32912
+  },
+  {
+   "k": 2,
+   "bins": 34,
+   "occ": 35904,
+   "peak": 38896,
+   "starts": 40392
+  },
+  {
+   "k": 3,
+   "bins": 17,
+   "occ": 41888,
+   "peak": 43384,
+   "starts": 44136
+  },
+  {
+   "k": 4,
+   "bins": 9,
+   "occ": 44888,
+   "peak": 45680,
+   "starts": 46080
+  },
+  {
+   "k": 5,
+   "bins": 5,
+   "occ": 46480,
+   "peak": 46920,
+   "starts": 47144
+  },
+  {
+   "k": 6,
+   "bins": 3,
+   "occ": 47368,
+   "peak": 47632,
+   "starts": 47768
+  },
+  {
+   "k": 7,
+   "bins": 2,
+   "occ": 47904,
+   "peak": 48080,
+   "starts": 48168
+  },
+  {
+   "k": 8,
+   "bins": 1,
+   "occ": 48256,
+   "peak": 48344,
+   "starts": 48392
+  }
+ ]
+}

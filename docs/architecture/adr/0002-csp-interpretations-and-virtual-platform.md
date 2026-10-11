@@ -394,6 +394,11 @@ public:
 | `ResourceTransactionalInterpreter` | L-T2 | **missing** — the main new work |
 | `CycleAccurateInterpreter` | L-CA | **exists in substance** — `ConcurrentTimingExecutor` + the four processes, but consumes `ScheduleResult` rather than the CSP program |
 
+> **Amended (2026-10-11, kpu-run-csp-programs step 4e).** L-T1 now interprets the CSP program
+> (`csp/transactional.hpp`, plan step 3), and `TileTransactionExecutor`, which ran L0 at L-T1,
+> is retired. An L0 program is a trace (ADR 0004 §4) and runs at L-B only, as the oracle. L-CA
+> also runs the CSP program (`CspDriver`), no longer only a `ScheduleResult`.
+
 The driver application is then thin and level-agnostic:
 
 ```console

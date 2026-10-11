@@ -151,9 +151,8 @@ include/sw/kpu/timing/                    # cycle-accurate: the live credit mode
 ├── tag_cam.hpp                           # out-of-order tile-arrival matching
 └── {dma,block_mover,streamer,memory_controller}_process.hpp   # push-with-credit
 
-include/sw/kpu/program/                   # tile granularity
-├── tile_transaction_executor.hpp         # transactional tier: fires on credit + residency
-└── tile_dependencies.hpp                 # what must be ordered, and why
+include/sw/kpu/program/csp/               # tile granularity: a CSP program at L-T1
+└── transactional.hpp                     # one tile move per action, under the program's L3 credits
 ```
 
 **AVOID THESE:**

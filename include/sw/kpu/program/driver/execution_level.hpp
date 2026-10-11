@@ -19,12 +19,11 @@
 #pragma once
 
 #include <sw/kpu/program/characterize/device_model.hpp>
+#include <sw/kpu/program/hop.hpp>
 #include <sw/kpu/program/placement.hpp>
 #include <sw/kpu/program/platform/deployment_spec.hpp>
-#include <sw/kpu/program/stream/stream_signature.hpp>
 #include <sw/kpu/program/tile_program.hpp>
 #include <sw/kpu/program/tile_program_reference.hpp>
-#include <sw/kpu/program/tile_transaction_executor.hpp>
 
 #include <optional>
 #include <set>
@@ -82,10 +81,15 @@ inline std::vector<ExecutionLevel> all_levels() {
             ExecutionLevel::ResourceTransactional, ExecutionLevel::CycleAccurate};
 }
 
-// Which levels have an interpreter today. Stated as data rather than as a comment
-// so a caller can enumerate what it may run instead of discovering it by failing.
+// Which levels run an L0 PROGRAM today. Stated as data rather than as a comment so a
+// caller can enumerate what it may run instead of discovering it by failing.
+//
+// L-B only. An L0 program is a trace (ADR 0004 §4): it is the oracle every level's values
+// answer to, and L-B executes it. The timed levels execute the CSP program the trace came
+// from, through VirtualPlatform::run_csp; csp_level_supported() says which of them can. The
+// L0 L-T1 executor that once timed traces retired in kpu-run-csp-programs step 4e.
 inline bool level_implemented(ExecutionLevel l) {
-    return l == ExecutionLevel::Behavioral || l == ExecutionLevel::BlockSequential;
+    return l == ExecutionLevel::Behavioral;
 }
 
 // Why a level is missing, and where to follow it up. A driver that silently fell
@@ -95,9 +99,10 @@ inline std::string not_implemented_reason(ExecutionLevel l) {
     switch (l) {
         case ExecutionLevel::ResourceTransactional:
             return "the L-T2 resource-transactional interpreter is not implemented (#283)";
+        case ExecutionLevel::BlockSequential:
         case ExecutionLevel::CycleAccurate:
-            return "an L0 program is a trace; L-CA runs a CSP program (--program file.csp; write one "
-                   "with kpu-csp-gen)";
+            return std::string("an L0 program is a trace; ") + short_name(l) +
+                   " runs a CSP program (--program file.csp; write one with kpu-csp-gen)";
         default:
             return "";
     }
@@ -122,8 +127,8 @@ inline bool level_models(ExecutionLevel l, platform::SpecField f) {
     using platform::SpecField;
     switch (f) {
         case SpecField::L3Capacity:
-            // Enforced by TileTransactionExecutor (#264 increment 4) and by the
-            // cycle-accurate credit model; L-B has no buffers to bound.
+            // Enforced by the CSP L-T1 interpreter's L3 credits and by the cycle-accurate
+            // credit model; L-B has no buffers to bound.
             return l == ExecutionLevel::BlockSequential ||
                    l == ExecutionLevel::CycleAccurate;
         case SpecField::L3Tiles:
@@ -200,18 +205,8 @@ struct RunOutcome {
     std::vector<std::string> unmodelled_inputs;
     bool has_timing = false;         // L-B computes values but models no time
     Cycle makespan = 0;
-    double lower_bound = 0.0;
     std::size_t ops = 0;
     TileProgramReference::RunSummary summary{};
-    // Present only for levels that model resources.
-    std::optional<TileRunStats> stats;
-    std::optional<TileRunProvenance> provenance;
-    // Per-op records, including each movement op's per-hop intervals. Empty at L-B,
-    // which models no time and therefore has no intervals to report.
-    std::vector<TileOpRecord> timeline;
-    // L3 occupancy per tile over time (#286), pooled at L-T1. Empty at L-B, which models no
-    // capacity and no time.
-    std::vector<L3Residency> l3_residency;
 };
 
 // ----------------------------------------------------------------------------
@@ -222,82 +217,21 @@ struct RunOutcome {
 // Throws std::invalid_argument for a level with no interpreter. It does not fall
 // back.
 // ----------------------------------------------------------------------------
-// Tiles already resident when the run starts, by `tile_key`. Threaded through rather than
-// smuggled in, because it changes what a run does: a seeded tile's chain skips the DMA leg, so
-// two runs differing only in this produce different makespans and different transfer counts.
-// An input that changes the result belongs in the signature -- and, once the platform carries
-// it, in the run identity.
-//
-// `retained_by_caller` is the other half of the same input and travels with it: tiles this run
-// must leave resident, which the executor therefore may not release. A caller that seeds without
-// retaining is claiming a residency the next run cannot rely on.
-//
-// `foreign_held_slots` is the third: slots the caller holds for some OTHER program, which this
-// one cannot name and must not be allowed to use.
-//
-// Empty is the old behaviour and the default: a run that begins cold and keeps nothing.
 inline RunOutcome run_at(ExecutionLevel level, TileProgram& prog,
-                         const characterize::DeviceDescriptor& device,
-                         const Placement& placement,
-                         const stream::StreamProgram* streams = nullptr,
-                         std::uint64_t seed = 0,
-                         const std::set<std::string>& initially_resident = {},
-                         const std::set<std::string>& retained_by_caller = {},
-                         std::size_t foreign_held_slots = 0) {
+                         const characterize::DeviceDescriptor& /*device*/,
+                         const Placement& /*placement*/) {
     RunOutcome out;
     out.level = level;
 
-    switch (level) {
-        case ExecutionLevel::Behavioral: {
-            // L-B applies every op in program order and models no time at all.
-            // Reporting makespan 0 here would read as "instant"; has_timing says
-            // "not modelled", which is a different claim.
-            // L-B MODELS NO RESOURCES AT ALL, so residency is not merely unmodelled here --
-            // it is meaningless. Silently ignoring a non-empty set would let a caller believe
-            // L-B honoured a placement decision it cannot represent, which is the same class
-            // of quiet lie as a timing-free level advancing a clock. Reported, not ignored.
-            if (!initially_resident.empty())
-                out.unmodelled_inputs.push_back(
-                    "initially_resident (" + std::to_string(initially_resident.size()) +
-                    " tiles) declared, but L-B models no buffers, so residency has no meaning "
-                    "at this level");
-            if (!retained_by_caller.empty())
-                out.unmodelled_inputs.push_back(
-                    "retained_by_caller (" + std::to_string(retained_by_caller.size()) +
-                    " tiles) declared, but L-B models no buffers, so retention has no meaning "
-                    "at this level");
-            if (foreign_held_slots > 0)
-                out.unmodelled_inputs.push_back(
-                    "foreign_held_slots (" + std::to_string(foreign_held_slots) +
-                    ") declared, but L-B models no buffers, so an occupied slot has no meaning "
-                    "at this level");
-            TileProgramReference ref;
-            out.summary = ref.run(prog);
-            out.ops = out.summary.ops;
-            out.has_timing = false;
-            return out;
-        }
-        case ExecutionLevel::BlockSequential: {
-            TileTransactionExecutor exec;
-            TileExecutionRequest req{prog, placement, device, streams, seed};
-            req.initially_resident = initially_resident;
-            req.retained_by_caller = retained_by_caller;
-            req.foreign_held_slots = foreign_held_slots;
-            const TileRunResult r = exec.run(req);
-            out.summary = r.summary;
-            out.ops = r.stats.ops;
-            out.makespan = r.stats.makespan;
-            out.lower_bound = r.stats.lower_bound;
-            out.stats = r.stats;
-            out.provenance = r.provenance;
-            out.timeline = r.timeline;
-            out.l3_residency = r.l3_residency;
-            out.has_timing = true;
-            return out;
-        }
-        case ExecutionLevel::ResourceTransactional:
-        case ExecutionLevel::CycleAccurate:
-            break;
+    if (level == ExecutionLevel::Behavioral) {
+        // L-B applies every op in program order and models no time at all.
+        // Reporting makespan 0 here would read as "instant"; has_timing says
+        // "not modelled", which is a different claim.
+        TileProgramReference ref;
+        out.summary = ref.run(prog);
+        out.ops = out.summary.ops;
+        out.has_timing = false;
+        return out;
     }
     throw std::invalid_argument(std::string("run_at: ") + to_string(level) + ": " +
                                not_implemented_reason(level));

@@ -97,22 +97,12 @@ private:
 // ----------------------------------------------------------------------------
 // The four inputs, named
 // ----------------------------------------------------------------------------
-// ADR 0002 §3.5 names FOUR inputs; run() actually takes SIX, and the identity has to say so
-// or it is not an identity. `placement` changes which compute tile an op lands on, and so the
-// schedule; the L1 stream annotation changes per-op timing. Two runs differing only in those
-// would have compared EQUAL -- and the whole point of the identity is that they cannot.
-//
-// The stream annotation is identified by a DIGEST OF ITS CONTENT, not by its map's name. The
-// name was the first answer, justified by "a StreamProgram is a pure function of (program,
-// map)" -- which is true of every StreamProgram this repo DERIVES, and was an ASSUMPTION
-// ABOUT THE CALLER stated in a comment. run() takes a pointer: a caller can hand it a
-// StreamProgram whose wavefront timing or element stride has been changed, run_at will produce
-// a different makespan, and the name would have recorded the two runs as identical.
-//
-// An assumption a type cannot enforce does not belong in an identity, so the content is
-// digested instead. The name is kept beside it as a LABEL and is deliberately not compared:
-// two annotations with identical content ARE the same annotation whatever they are called, and
-// comparing both would be two sources of truth for one input.
+// ADR 0002 §3.5 names FOUR inputs; an L0 run takes FIVE, and the identity has to say so or it
+// is not an identity. `placement` changes which compute tile an op lands on, so two runs
+// differing only in it must not compare equal. (The L0 L-T1 executor also took an L1 stream
+// annotation and a residency decision; both left with it in kpu-run-csp-programs step 4e. A
+// CSP program states its own residency, in `inherit` and `retain`, and its digest covers
+// them.)
 // A CSP program on the platform (docs/plans/kpu-run-csp-programs.md step 4a): the program is
 // the input that configures the data path, and every level runs it.
 class CspProgramHandle {
@@ -134,32 +124,21 @@ struct RunIdentity {
     std::string snapshot_digest;     // the coverage tag + the state it covers
     std::string deployment_digest;   // the canonical spec bytes
     std::string placement;           // the whole assignment, not its label
-    std::string residency;           // tiles seeded AND tiles retained; empty when the run
-                                     // starts cold and keeps nothing
-    std::string stream_digest;        // the annotation's CONTENT; empty when there is none
-    std::string dataflow;             // the map's name -- a LABEL, not compared (see above)
     std::string schedule;             // a CSP run's schedule options (L-CA's window); empty for L0
     ExecutionLevel level{};
 
     bool operator==(const RunIdentity& o) const {
         return program_digest == o.program_digest && snapshot_digest == o.snapshot_digest &&
                deployment_digest == o.deployment_digest && placement == o.placement &&
-               residency == o.residency && stream_digest == o.stream_digest &&
                schedule == o.schedule && level == o.level;
     }
 
-    // EVERY COMPARED COMPONENT IS RENDERED. str() printed the map's NAME and not the digest,
-    // so two annotations with the same name and different wavefronts -- which operator==
-    // correctly distinguishes -- rendered identically in the provenance. A provenance line
-    // that cannot tell two runs apart is not provenance; the name rides along in brackets
-    // because it is what a reader recognises.
+    // EVERY COMPARED COMPONENT IS RENDERED: a provenance line that cannot tell two runs apart
+    // is not provenance.
     std::string str() const {
         std::string out = std::string(driver::short_name(level)) + " prog:" + program_digest +
                           " state:" + snapshot_digest + " deploy:" + deployment_digest +
                           " place:" + digest_of(placement);
-        if (!residency.empty()) out += " resident:" + digest_of(residency);
-        if (!stream_digest.empty())
-            out += " flow:" + stream_digest + (dataflow.empty() ? "" : "(" + dataflow + ")");
         if (!schedule.empty()) out += " schedule:" + schedule;
         return out;
     }
@@ -389,22 +368,11 @@ public:
     // Reading platform.program(h[0]) after the loop reads the INPUT that the last run's
     // restore put back, not the answer it computed. test_virtual_platform got this wrong
     // first and the assertion caught it, which is the cheapest place to learn it.
-    // `initially_resident` is a RUN INPUT, not a hint: a seeded tile's chain skips the DMA
-    // leg, so two runs differing only in it produce different makespans and different
-    // transfer counts. It therefore belongs in the identity as well as the signature --
-    // which is where the "four inputs were really six" lesson lands for the seventh.
-    //
-    // `retained_by_caller` travels with it and lands in the SAME identity field, because the
-    // two are one decision -- which tiles the caller holds, before and after -- and a run
-    // differing only in what it retains has a different makespan too. One field with two
-    // labelled halves keeps the class-closing test's rule (compared AND rendered) intact
-    // without pretending they are interchangeable.
+    // An L0 program runs at L-B only (kpu-run-csp-programs step 4e): it is the trace, and the
+    // oracle the timed levels' CSP runs answer to. Any other level is refused by run_at() with
+    // the reason.
     PlatformRunResult run(ProgramHandle h, ExecutionLevel level,
-                          const StateSnapshot& initial, const Placement& placement,
-                          const stream::StreamProgram* streams = nullptr,
-                          const std::set<std::string>& initially_resident = {},
-                          const std::set<std::string>& retained_by_caller = {},
-                          std::size_t foreign_held_slots = 0) {
+                          const StateSnapshot& initial, const Placement& placement) {
         const std::size_t i = checked(h);
         require_single_device();
         restore(initial);
@@ -414,54 +382,28 @@ public:
         result.identity.snapshot_digest = initial.digest();
         result.identity.deployment_digest = deployment_digest_;
         result.identity.placement = placement.canonical_bytes();
-        result.identity.stream_digest =
-            streams ? digest_of(streams->canonical_bytes()) : std::string();
-        result.identity.dataflow = streams ? streams->map.name : std::string();
         result.identity.level = level;
         result.unmodelled = driver::unmodelled_fields(level, spec_);
-        result.identity.residency =
-            residency_key(initially_resident, retained_by_caller, foreign_held_slots);
-        result.outcome = driver::run_at(level, programs_[i], spec_.device_view(), placement,
-                                       streams, 0, initially_resident, retained_by_caller,
-                                       foreign_held_slots);
+        result.outcome = driver::run_at(level, programs_[i], spec_.device_view(), placement);
         return result;
     }
 
-    // The common case: one device, its own compute tiles, no stream annotation.
+    // The common case: one device, its own compute tiles.
     PlatformRunResult run(ProgramHandle h, ExecutionLevel level,
                           const StateSnapshot& initial) {
-        return run(h, level, initial,
-                   Placement::single(spec_.device_view().compute_tiles), nullptr);
+        return run(h, level, initial, Placement::single(spec_.device_view().compute_tiles));
     }
 
     // ---- step ---------------------------------------------------------------
     // ONE TRANSACTION PER CALL, at the granularity the level defines (§3.2: "the unit of
-    // stepping IS the level").
-    //
-    // THE TWO LEVELS STEP BY DIFFERENT MECHANISMS, and the cursor says which rather than
-    // papering over it:
-    //
-    //   L-B   EXECUTES. Each step applies the next op for real, so the platform's state
-    //         advances as you step and a caller can read values forming.
-    //   L-T1  REPLAYS. The executor's schedule depends on the WHOLE program -- credits,
-    //         residency and lane contention are decided across it -- so there is no
-    //         meaningful "half a schedule". step_begin() therefore RUNS THE PROGRAM TO
-    //         COMPLETION first and the cursor walks the timeline that run produced.
-    //
-    // That difference is not an implementation detail a caller can ignore: at L-T1 the
-    // state is already final before the first step() call. `executes()` on the cursor is
-    // what a caller must consult before believing that stepping advanced anything, and
-    // hiding it behind a uniform interface would make "step until the value appears" a
-    // loop that never terminates at one level and works at the other.
+    // stepping IS the level"). An L0 program steps at L-B, where each step applies the next op
+    // for real, so the platform's state advances as you step and a caller can read values
+    // forming. A CSP program's L-T1 cursor (step_begin on a CspProgramHandle) replays records.
     class Cursor {
     public:
         driver::Stepper& stepper() const { return *stepper_; }
-        // True when a step APPLIES work (L-B); false when it walks a finished run (L-T1).
-        bool executes() const { return !stepper_->models_time(); }
         ExecutionLevel level() const { return level_; }
         ProgramHandle program() const { return handle_; }
-        // Present only for a replay, because only a replay has a run behind it.
-        const std::optional<PlatformRunResult>& run_result() const { return run_; }
 
         bool step() { return stepper_->step(); }
         const driver::StepEvent& current() const { return stepper_->current(); }
@@ -473,69 +415,22 @@ public:
         std::unique_ptr<driver::Stepper> stepper_;
         ExecutionLevel level_{};
         ProgramHandle handle_;
-        std::optional<PlatformRunResult> run_;
     };
 
     // Restores `initial` FIRST, exactly as run() does -- stepping is execution, so it has
     // the same identity requirement, and a cursor begun from ambient state would be a
     // walk through a run nobody can reproduce.
-    Cursor step_begin(ProgramHandle h, ExecutionLevel level, const StateSnapshot& initial,
-                      const Placement& placement,
-                      const stream::StreamProgram* streams = nullptr) {
+    Cursor step_begin(ProgramHandle h, ExecutionLevel level, const StateSnapshot& initial) {
         const std::size_t i = checked(h);
         // THE SAME GUARD AS run(), because stepping IS execution. Without it, stepping at L-B
-        // would succeed on a deployment that running at L-B refuses -- an inconsistency a
-        // caller would have no way to make sense of, and the kind that gets discovered by
-        // someone building on the seam rather than by whoever wrote it.
+        // would succeed on a deployment that running at L-B refuses.
         require_single_device();
         Cursor cur;
         cur.level_ = level;
         cur.handle_ = h;
-        if (level == ExecutionLevel::BlockSequential) {
-            // The whole run happens here; see the note above on why there is no half a
-            // schedule. run() restores the snapshot, so this cursor is reproducible.
-            cur.run_ = run(h, level, initial, placement, streams);
-            cur.stepper_ = driver::make_stepper(level, programs_[i], cur.run_->outcome.timeline);
-        } else {
-            restore(initial);
-            cur.stepper_ = driver::make_stepper(level, programs_[i], {});
-        }
+        cur.stepper_ = driver::make_stepper(level, programs_[i]);   // refuses all but L-B
+        restore(initial);
         return cur;
-    }
-
-    Cursor step_begin(ProgramHandle h, ExecutionLevel level, const StateSnapshot& initial) {
-        return step_begin(h, level, initial,
-                          Placement::single(spec_.device_view().compute_tiles), nullptr);
-    }
-
-    // A stable rendering of the RESIDENCY DECISION -- what is already there, and what must
-    // still be there at the end. std::set iterates in order, so the key does not depend on the
-    // order a caller inserted in: two orchestrators that chose the same tiles by different
-    // routes made the same decision and must share an identity.
-    //
-    // LENGTH-PREFIXED, because a separator is not a serialization. Nothing constrains a tile
-    // key's characters -- `TileCoord::operand` takes any string -- so joining with ";" made
-    // one rendering ambiguous: the single key `A#0#0;B#0#0` and the two-key set
-    // {`A#0#0`, `B#0#0`} produced identical bytes, and two runs seeding different tiles would
-    // then compare EQUAL in the identity while producing different makespans. An identity that
-    // can collide is worse than no identity, because it is trusted.
-    static std::string residency_key(const std::set<std::string>& initial,
-                                     const std::set<std::string>& retained,
-                                     std::size_t foreign) {
-        auto render = [](const std::set<std::string>& keys) {
-            std::string out;
-            for (const std::string& k : keys) out += std::to_string(k.size()) + ":" + k;
-            return out;
-        };
-        // A cold run that keeps nothing renders EMPTY, not "i[]r[]": `str()` and the
-        // identity's own comment both read "empty when the run starts cold", and a rendering
-        // that is never empty would quietly make every run look as though it had made a
-        // residency decision.
-        if (initial.empty() && retained.empty() && foreign == 0) return std::string();
-        // The two sets are different claims, so the rendering must not let a key move between
-        // them unnoticed -- hence one field, two labelled halves, rather than a merge.
-        return "i[" + render(initial) + "]r[" + render(retained) + "]f" +
-               std::to_string(foreign);
     }
 
     // THE PROGRAM'S STRUCTURE, NOT ITS VALUES. Values are the `initial_state` input and

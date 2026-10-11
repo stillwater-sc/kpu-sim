@@ -45,13 +45,11 @@ struct DeviceDescriptor {
     // Concurrency / capacity ---------------------------------------------------
     Dim compute_tiles = 1;      // # CF tiles that can run tile-compute ops concurrently
     // Aggregate movement concurrency for the ANALYTICAL harness only (lumped_duration,
-    // TileDag). The executor does not use it: it schedules per process, above. Kept
-    // because the first-order analytical model is a different tier with a different job,
-    // not because movement is ever one pool.
+    // TileDag). Kept because the first-order analytical model is a different tier with a
+    // different job, not because movement is ever one pool.
     Dim move_lanes    = 1;
     // L3 capacity, counted IN TILES. 0 = unbounded, which is what a design-space sweep
-    // wants and what preserves pre-capacity behaviour. Enforced dynamically by
-    // TileTransactionExecutor as well as checked statically by the harness.
+    // wants and what preserves pre-capacity behaviour. Checked statically by the harness.
     // L2/L1 capacity is per COMPUTE TILE, so it waits for the placement pass to bind
     // tiles to compute tiles (#264 increment 5) — no field here until it is enforced.
     Dim l3_tiles      = 0;

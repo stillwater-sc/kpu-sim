@@ -90,8 +90,8 @@ TEST_CASE("a program round-trips and then executes bit-identically",
             CHECK(b.label == a.label);
         }
 
-        // Then the claim that matters: same answers, at BOTH levels that exist. A format
-        // that round-trips structurally but executes differently is not portable.
+        // Then the claim that matters: same answers, at L-B, the level an L0 program runs at.
+        // A format that round-trips structurally but executes differently is not portable.
         const DeviceSpec ds;
         const auto device = make_device(ds);
         for (ExecutionLevel level : all_levels()) {
@@ -104,7 +104,6 @@ TEST_CASE("a program round-trips and then executes bit-identically",
             const auto rb = run_at(level, b, device, Placement::single(device.compute_tiles));
             CHECK(bits_equal(a.operand(result_operand(ps)).values,
                              b.operand(result_operand(ps)).values));
-            CHECK(rb.makespan == ra.makespan);          // and identical timing
             CHECK(rb.summary.row_swaps == ra.summary.row_swaps);
             CHECK(rb.summary.permutation == ra.summary.permutation);
         }
@@ -450,9 +449,9 @@ TEST_CASE("a test case carries its inputs, and executes without being re-filled"
         const auto device = make_device(ds);
         TileProgram ref = derive(ps);
         fill(ref, ps);
-        run_at(ExecutionLevel::BlockSequential, ref, device,
+        run_at(ExecutionLevel::Behavioral, ref, device,
                Placement::single(device.compute_tiles));
-        run_at(ExecutionLevel::BlockSequential, reloaded, device,
+        run_at(ExecutionLevel::Behavioral, reloaded, device,
                Placement::single(device.compute_tiles));
         CHECK(bits_equal(ref.operand(result_operand(ps)).values,
                          reloaded.operand(result_operand(ps)).values));
