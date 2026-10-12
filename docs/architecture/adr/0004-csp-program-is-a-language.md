@@ -6,6 +6,7 @@
 | **Date** | 2026-10-09 |
 | **Amends** | ADR 0002 §6, answer 1 ("never hand-authored, so it needs no source language or parser"); ADR 0001 D1 ("the portable program is the L0 `TileProgram`"), by §4 |
 | **Preserves** | ADR 0002 §2 (CSP is the program layer that every level interprets); ADR 0001 D5 (values answer to the L0 reference, which L0 instances carry) |
+| **Amended by** | §5 (2026-10-11): placement within an L3 is behavior, explicit at every level (`docs/plans/l3-placement-at-lb.md`) |
 | **Context docs** | `docs/plans/csp-program-tile-sequencing.md` (the CSP program as the only source of tile sequencing), `docs/plans/csp-language.md` (this language) |
 
 ---
@@ -104,3 +105,33 @@ Decided:
    program, and L-B is the value oracle that ADR 0001 D5's "L0 reference" names: the reference
    replays L-B's trace and must reproduce L-B's values bit for bit on every operand.
 
+## 5. Amendment (2026-10-11): L3 placement is behavior, at every level
+
+The architect, reviewing the domain-flow debugger plan (#363): *"The L-B behavioral model has to
+model L3 placement otherwise the CSP sequencing doesn't do anything. The tile placement in L3 is
+a key component of the behavior of the machine, in the same way that loading an operand into the
+registers of a CPU is key to the behavior of a CPU."*
+
+Decision 3 made placement explicit only at level 2: the owner of a partition (which L3 tile,
+which compute tile). Placement *within* an L3 was assigned to no level. L-B and L-T1 modelled
+the L3 as a count against capacity, and L-CA numbered slots with a per-DMA-engine counter, so no
+level executed the program's placement and none could be compared on it.
+
+Decided (`docs/plans/l3-placement-at-lb.md`, Q1-Q6):
+
+1. **Every residency has an L3 address:** the L3 module, the slot, and the bank (`slot % banks`).
+   It is fixed when the residency opens and freed when it is released. A retained residency keeps
+   its slot across launches, and the next operator's `inherit` opens it there.
+2. **The walker allocates it once**, by a policy the program names
+   (`machine flat(l3 = N, place = fifo | lowest | bank-spread)`, default `fifo`), as a compiler
+   allocates registers. A program may place a residency explicitly (`resident X @ slots(...)`),
+   and a collision is refused. The policy is a schedule choice, part of the program's identity,
+   never a deployment field.
+3. **Every level executes that address.** L-B's L3 is addressed storage and refuses a write into a
+   live slot, a read of a slot that holds another tile, and a release of the wrong slot. L-T1's
+   Load waits for its own slot's Release. L-CA's DMA writes the program's slot under per-slot
+   credits. No level allocates a slot of its own.
+4. **The trace records the L3 transactions** with their slots (opset 1.2), so the reference replay
+   validates placement as well as values.
+5. **Level 2 is the same address with the module set** by the partition map. Decision 3 stands
+   for level 2's owners and communication; within a module, placement is this amendment's.

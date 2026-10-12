@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **L3 placement is behavior, decided** (`docs/plans/l3-placement-at-lb.md` step 1; ADR 0004
+  §5). The architect ruled that L-B must model where every tile lives in L3, as a CPU model must
+  model which register an operand is loaded into.
+  - Every residency gets an L3 address (module, slot, bank). The walker allocates it once, by a
+    policy the program names (`place = fifo | lowest | bank-spread`, default `fifo`), and a
+    `resident X @ slots(...)` override is refused on collision.
+  - Every level executes the address, and the trace records the L3 transactions (opset 1.2).
+  - Today no level does: L-B and L-T1 count L3 against capacity, L-CA numbers slots with a
+    per-DMA-engine counter, and the trace has no L3 transaction. Steps 2-7 build it.
+  - Amended with it: `csp-program-tile-sequencing.md` §2.1, the tile-flow debugger's Q2, and the
+    domain-flow debugger plan (#363, held until step 3), whose "L-B models a capacity, not
+    placement" rule was wrong.
 - **Functional checks on tile contents** (`include/sw/kpu/program/tile_check.hpp`;
   retire-l0-derivations §3.8). A result is checked tile by tile, through an interpretation layer
   that reads each tile's bits in the format the program intends, with every element within a

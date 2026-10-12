@@ -33,6 +33,12 @@ decomposes a CSP transaction**.
 | **L-T2** resource transactional | `read`/`write` per resource; `push` into the compute tile | — | **YES** — within the tile bound of L-B |
 | **L-CA** cycle-accurate | protocol events, per cycle | 1x (baseline) | **YES** — within the tile bound of L-B |
 
+**L3 placement is behavior** (ADR 0004 §5, decided 2026-10-11): each residency has an L3
+address (module, slot, bank), allocated once by the walker; L-B models it, the trace records it,
+and no level allocates a slot of its own. **Being implemented** (`docs/plans/l3-placement-at-lb.md`):
+until its steps land, L-B and L-T1 still count L3 against capacity and L-CA's `slot_id` is a
+per-DMA-engine counter. Never present a pooled L3 as the intended model.
+
 **Every level computes values.** Decomposition changes *when* things happen, never *what*
 is computed. A level that returns timing without values is not a cheaper simulation — it is
 an unvalidated one. Full model: `docs/architecture/adr/0002-csp-interpretations-and-virtual-platform.md`.
