@@ -95,7 +95,8 @@ public:
               std::size_t window = kWholeProgram)
         : exec_(exec), trace_(&p), inputs_(p.source), window_(window) {
         for (const auto& op : p.source.ops())
-            if (op.kind != program::TileOpKind::Feed && op.kind != program::TileOpKind::Drain)
+            if (op.kind != program::TileOpKind::Feed && op.kind != program::TileOpKind::Drain &&
+                !program::is_l3(op.kind))
                 check_call(op);
         check_machine(p.channel(program::csp::Chan::L3).capacity);
     }

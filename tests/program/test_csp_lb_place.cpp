@@ -6,6 +6,10 @@
 // frees the wrong slot (#279's class of defect) is refused at that action, naming the slot and
 // both tiles.
 //
+// The trace records it (step 4, opset 1.2): one L3 transaction per action on a residency, with
+// its address. It round-trips through the L0 text, and the reference's replay executes it on an
+// addressed L3, refusing what L-B refuses.
+//
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2024-2025 Stillwater Supercomputing, Inc.
 // ============================================================================
@@ -16,6 +20,8 @@
 #include <sw/kpu/program/csp/behavioral.hpp>
 #include <sw/kpu/program/csp/lang/compile.hpp>
 #include <sw/kpu/program/driver/csp_step.hpp>
+#include <sw/kpu/program/serialize/l0_format.hpp>
+#include <sw/kpu/program/tile_program_reference.hpp>
 
 #include "trace_fixtures.hpp"
 
@@ -225,4 +231,151 @@ TEST_CASE("L-B stepping names each action's slot", "[csp][placement][behavioral]
         }
     }
     CHECK(placed > 0);
+}
+
+namespace {
+
+std::size_t first_op(const TileProgram& t, TileOpKind k, std::size_t from = 0) {
+    for (std::size_t i = from; i < t.ops().size(); ++i)
+        if (t.ops()[i].kind == k) return i;
+    FAIL("no " << to_string(k) << " from op " << from);
+    return 0;
+}
+
+// The tiles live in L3 just before op `upto` of a trace: slot -> tile.
+std::map<std::uint32_t, std::string> live_ops_before(const TileProgram& t, std::size_t upto) {
+    std::map<std::uint32_t, std::string> live;
+    for (std::size_t i = 0; i < upto; ++i) {
+        const TileOp& op = t.ops()[i];
+        if (op.kind == TileOpKind::L3Release) live.erase(op.l3.slot);
+        else if (op.kind == TileOpKind::L3Load || op.kind == TileOpKind::L3Writeback || op.kind == TileOpKind::L3Inherit)
+            live[op.l3.slot] = op.outputs.at(0).to_string();
+    }
+    return live;
+}
+
+}  // namespace
+
+TEST_CASE("the trace records every L3 transaction with its address", "[csp][placement][l0]") {
+    for (const char* algo : {"matmul", "lu"}) {
+        CAPTURE(algo);
+        const auto o = trace_fixtures::gen(algo, algo == std::string("lu") ? 64 : 48, 16);
+        const CspProgram p = trace_fixtures::compiled(o);
+        std::size_t placed = 0;
+        for (const Action& a : p.actions) {
+            if (!a.place) continue;
+            ++placed;
+            CAPTURE(to_string(a.kind), a.tile.to_string());
+            REQUIRE(a.l0_op != kNone);
+            const TileOp& op = p.source.ops().at(a.l0_op);
+            CHECK(is_l3(op.kind));
+            CHECK(op.l3 == *a.place);
+            REQUIRE(op.outputs.size() == 1);
+            CHECK(op.outputs[0].to_string() == a.tile.to_string());
+            CHECK(op.inputs.empty());
+        }
+        // The trace L-B records holds the same transactions, in program order.
+        const TileProgram trace = trace_fixtures::trace_of(o);
+        std::size_t l3_ops = 0;
+        for (const TileOp& op : trace.ops()) l3_ops += is_l3(op.kind) ? 1 : 0;
+        CHECK(l3_ops == placed);
+        CHECK(serialize::opset_for(trace).str() == "1.2.0");
+        // A Feed follows the Move that took its tile out of L3. (LU's in-place calls record no
+        // Feed: only an accumulating call's operands are fed in the trace.)
+        if (std::string(algo) == "matmul") {
+            const std::size_t feed = first_op(trace, TileOpKind::Feed);
+            REQUIRE(feed > 0);
+            CHECK(trace.ops()[feed - 1].kind == TileOpKind::L3Move);
+            CHECK(trace.ops()[feed - 1].outputs[0].to_string() == trace.ops()[feed].inputs[0].to_string());
+        }
+    }
+}
+
+TEST_CASE("L3 transactions round-trip through the L0 text and replay", "[csp][placement][l0]") {
+    const TileProgram trace = trace_fixtures::trace_of(trace_fixtures::gen("lu", 64, 16));
+    serialize::WriteOptions opt;
+    opt.include_values = true;
+    const std::string text = serialize::to_string(trace, opt);
+    const TileProgram back = serialize::from_string(text);
+    REQUIRE(back.ops().size() == trace.ops().size());
+    for (std::size_t i = 0; i < back.ops().size(); ++i) {
+        CAPTURE(i);
+        CHECK(back.ops()[i].kind == trace.ops()[i].kind);
+        CHECK(back.ops()[i].l3 == trace.ops()[i].l3);
+    }
+    CHECK(serialize::to_string(back, opt) == text);
+    TileProgram a = trace, b = back;
+    const auto sa = TileProgramReference().run(a);
+    const auto sb = TileProgramReference().run(b);
+    CHECK(sa.l3_ops == sb.l3_ops);
+    CHECK(sa.peak_l3 == sb.peak_l3);
+    CHECK(sa.l3_ops > 0);
+
+    SECTION("an L3 transaction without its address, or naming its tile as in=, is refused") {
+        const auto at = text.find(" slot=");
+        REQUIRE(at != std::string::npos);
+        std::string no_slot = text;
+        no_slot.erase(at, no_slot.find(' ', at + 1) - at);
+        CHECK_THROWS_AS(serialize::from_string(no_slot), serialize::FormatError);
+        std::string as_input = text;
+        const auto op = as_input.find("OP kind=L3_LOAD out=");
+        as_input.replace(op, 20, "OP kind=L3_LOAD in=");
+        CHECK_THROWS_WITH(serialize::from_string(as_input), ContainsSubstring("names one tile, as out="));
+    }
+}
+
+TEST_CASE("the replay refuses a trace that breaks placement", "[csp][placement][l0]") {
+    const TileProgram good = trace_fixtures::trace_of(trace_fixtures::gen("matmul", 64, 32));
+    {
+        TileProgram t = good;
+        REQUIRE_NOTHROW(TileProgramReference().run(t));
+    }
+    SECTION("#279: a release of another tile's slot") {
+        TileProgram t = good;
+        const std::size_t i = first_op(t, TileOpKind::L3Release);
+        const auto live = live_ops_before(t, i);
+        std::uint32_t other = 0;
+        for (const auto& [slot, tile] : live)
+            if (slot != t.ops()[i].l3.slot) { other = slot; break; }
+        REQUIRE(other != t.ops()[i].l3.slot);
+        t.ops()[i].l3.slot = other;
+        CHECK_THROWS_WITH(TileProgramReference().run(t),
+                          ContainsSubstring("L3_RELEASE") && ContainsSubstring(" holds " + live.at(other) + ", not " +
+                                                                               t.ops()[i].outputs[0].to_string()));
+    }
+    SECTION("a load into a live slot") {
+        TileProgram t = good;
+        const std::size_t first = first_op(t, TileOpKind::L3Load);
+        const std::size_t i = first_op(t, TileOpKind::L3Load, first + 1);
+        t.ops()[i].l3 = t.ops()[first].l3;
+        CHECK_THROWS_WITH(TileProgramReference().run(t),
+                          ContainsSubstring(" holds " + t.ops()[first].outputs[0].to_string() + ", which is live"));
+    }
+    SECTION("a read or release whose bank is not the slot's") {
+        // The slot is keyed by module and slot, so the bank is compared as part of the address.
+        TileProgram t = good;
+        const std::size_t i = first_op(t, TileOpKind::L3Move);
+        const L3Address opened = t.ops()[i].l3;
+        t.ops()[i].l3.bank += 1;
+        CHECK_THROWS_WITH(TileProgramReference().run(t),
+                          ContainsSubstring("L3_MOVE") && ContainsSubstring("'s address, " + opened.to_string()));
+        CspProgram p = trace_fixtures::compiled(trace_fixtures::gen("matmul", 64, 32));
+        const std::size_t r = first(p, Kind::Release);
+        const L3Address at = *p.actions[r].place;
+        p.actions[r].place->bank += 1;
+        BehavioralInterpreter lb;                       // no geometry: the bank is not range-checked
+        lb.begin(p.source);
+        CHECK_THROWS_WITH([&] {
+            for (const Action& a : p.actions) lb.step(a, a.kind == Kind::Call ? &p.source.ops().at(a.l0_op) : nullptr);
+        }(), ContainsSubstring("RELEASE") && ContainsSubstring("'s address, " + at.to_string()));
+    }
+    SECTION("a release of a free slot, and a slot never freed") {
+        TileProgram twice = good;
+        const std::size_t i = first_op(twice, TileOpKind::L3Release);
+        twice.ops().insert(twice.ops().begin() + static_cast<std::ptrdiff_t>(i) + 1, twice.ops()[i]);
+        CHECK_THROWS_WITH(TileProgramReference().run(twice), ContainsSubstring("the slot is free"));
+        TileProgram never = good;
+        never.ops().erase(never.ops().begin() + static_cast<std::ptrdiff_t>(i));
+        CHECK_THROWS_AS(TileProgramReference().run(never), PlacementError);
+    }
 }

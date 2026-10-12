@@ -197,6 +197,14 @@ public:
         return c == Chan::L3 ? l3_.size() : store_[static_cast<std::size_t>(c)].size();
     }
 
+    // The tiles L3 holds now, by address (after finish(): the retained ones). The replay's
+    // TileProgramReference::l3_contents() must agree.
+    std::map<std::string, std::string> l3_contents() const {
+        std::map<std::string, std::string> out;
+        for (const auto& [k, addr] : l3_index_) out[addr.to_string()] = k;
+        return out;
+    }
+
     // The L3 address a tile is resident at now; none when it is not resident.
     std::optional<L3Address> resident_at(const TileCoord& t) const {
         auto it = l3_index_.find(t.to_string());
@@ -259,6 +267,7 @@ private:
         if (held != k || it->second.residency != a.residency)
             throw BehavioralError(where + ": " + s.to_string() + " holds " + held + ", which is live; " + k +
                                   " cannot be written there");
+        same_address(s, k, where);
         it->second.values = std::move(v);
     }
 
@@ -275,7 +284,16 @@ private:
         const std::string held = it->second.tag.to_string();
         if (held != k || it->second.residency != a.residency)
             throw BehavioralError(where + ": " + s.to_string() + " holds " + held + ", not " + k);
+        same_address(s, k, where);
         return it->second;
+    }
+
+    // The whole address, bank included, is the one the residency opened with: a slot is keyed by
+    // module and slot, so a wrong bank would otherwise pass where no geometry checks it.
+    void same_address(const L3Address& s, const std::string& k, const std::string& where) const {
+        const L3Address& opened = l3_index_.at(k);
+        if (!(opened == s))
+            throw BehavioralError(where + ": " + s.to_string() + " is not " + k + "'s address, " + opened.to_string());
     }
 
     std::map<std::string, std::vector<float>>& at(Chan c) { return store_[static_cast<std::size_t>(c)]; }

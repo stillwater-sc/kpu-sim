@@ -73,6 +73,7 @@ inline std::size_t peak_live_tiles(const TileProgram& prog) {
         else it->second.second = i;
     };
     for (std::size_t i = 0; i < ops.size(); ++i) {
+        if (is_l3(ops[i].kind)) continue;               // placement: the compute schedule's footprint only
         for (const auto& c : ops[i].inputs)  touch(c, i);
         for (const auto& c : ops[i].outputs) touch(c, i);
     }
@@ -103,6 +104,8 @@ inline Metrics characterize_program(const TileProgram& prog, const DeviceDescrip
                                     const stream::StreamProgram* l1 = nullptr) {
     Metrics m;
     m.ops = prog.ops().size();
+    for (const TileOp& op : prog.ops())
+        if (is_l3(op.kind)) --m.ops;                    // the compute schedule's ops: L3 placement is L-T1's
     m.feeds  = prog.count(TileOpKind::Feed);
     m.drains = prog.count(TileOpKind::Drain);
     m.computes = prog.count(TileOpKind::MatMulAccum) + prog.count(TileOpKind::LuDiagFactor) +
@@ -193,6 +196,7 @@ inline void write_chrome_trace(const TileProgram& prog, const DeviceDescriptor& 
            ",\"args\":{\"name\":\"MOVE" + std::to_string(w) + "\"}}");
     for (const auto& n : dag.nodes()) {
         const TileOp& op = prog.ops()[n.op_index];
+        if (is_l3(op.kind)) continue;                   // no work: placement, not the compute schedule
         const std::string tile = op.outputs.empty()
             ? (op.inputs.empty() ? std::string() : op.inputs[0].to_string())
             : op.outputs[0].to_string();

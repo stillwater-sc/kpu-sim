@@ -220,6 +220,17 @@ inline TileDependencies build_tile_dependencies(const TileProgram& prog) {
                 reads.push_back(&op.outputs[0]);
                 writes.push_back(&op.outputs[0]);
                 break;
+            // An L3 transaction records placement, and this DAG is the compute schedule's: no
+            // hazards. Slot hazards (a reuse waiting on its release) are L-T1's, step 5 of
+            // docs/plans/l3-placement-at-lb.md.
+        case TileOpKind::L3Load:
+        case TileOpKind::L3Store:
+        case TileOpKind::L3Move:
+        case TileOpKind::L3Writeback:
+        case TileOpKind::L3Release:
+        case TileOpKind::L3Inherit:
+        case TileOpKind::L3Retain:
+                break;
         }
 
         // ---- pivot-slot hazards, modelled exactly like tiles ----------------

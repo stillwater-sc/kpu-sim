@@ -1,38 +1,90 @@
 KPUL0 1.2.0
 MIN_CONSUMER 1.0.0
-OPSET tile 1.0.0
+OPSET tile 1.2.0
 PRODUCER kpu-sim 0.8.0
 PROGRAM "matmul"
 VALUES none
 OPERAND "A" rows=32 cols=32 tile_rows=16 tile_cols=16
 OPERAND "B" rows=32 cols=32 tile_rows=16 tile_cols=16
 OPERAND "C" rows=32 cols=32 tile_rows=16 tile_cols=16
+OP kind=L3_LOAD out=B:0,0 l3=0 slot=0 bank=0
+OP kind=L3_LOAD out=B:1,0 l3=0 slot=1 bank=0
+OP kind=L3_LOAD out=A:0,0 l3=0 slot=2 bank=0
+OP kind=L3_LOAD out=A:0,1 l3=0 slot=3 bank=0
+OP kind=L3_MOVE out=A:0,0 l3=0 slot=2 bank=0
 OP kind=FEED in=A:0,0 port_kind=input port="West"
+OP kind=L3_MOVE out=B:0,0 l3=0 slot=0 bank=0
 OP kind=FEED in=B:0,0 port_kind=input port="North"
 OP kind=MATMUL_ACCUM in=A:0,0;B:0,0 out=C:0,0 label="line 12"
+OP kind=L3_MOVE out=A:0,1 l3=0 slot=3 bank=0
 OP kind=FEED in=A:0,1 port_kind=input port="West"
+OP kind=L3_MOVE out=B:1,0 l3=0 slot=1 bank=0
 OP kind=FEED in=B:1,0 port_kind=input port="North"
 OP kind=MATMUL_ACCUM in=A:0,1;B:1,0 out=C:0,0 label="line 12"
 OP kind=DRAIN out=C:0,0 port_kind=output port="South"
+OP kind=L3_WRITEBACK out=C:0,0 l3=0 slot=4 bank=0
+OP kind=L3_STORE out=C:0,0 l3=0 slot=4 bank=0
+OP kind=L3_RELEASE out=C:0,0 l3=0 slot=4 bank=0
+OP kind=L3_RELEASE out=A:0,0 l3=0 slot=2 bank=0
+OP kind=L3_RELEASE out=A:0,1 l3=0 slot=3 bank=0
+OP kind=L3_LOAD out=A:1,0 l3=0 slot=5 bank=0
+OP kind=L3_LOAD out=A:1,1 l3=0 slot=6 bank=0
+OP kind=L3_MOVE out=A:1,0 l3=0 slot=5 bank=0
 OP kind=FEED in=A:1,0 port_kind=input port="West"
+OP kind=L3_MOVE out=B:0,0 l3=0 slot=0 bank=0
 OP kind=FEED in=B:0,0 port_kind=input port="North"
 OP kind=MATMUL_ACCUM in=A:1,0;B:0,0 out=C:1,0 label="line 12"
+OP kind=L3_MOVE out=A:1,1 l3=0 slot=6 bank=0
 OP kind=FEED in=A:1,1 port_kind=input port="West"
+OP kind=L3_MOVE out=B:1,0 l3=0 slot=1 bank=0
 OP kind=FEED in=B:1,0 port_kind=input port="North"
 OP kind=MATMUL_ACCUM in=A:1,1;B:1,0 out=C:1,0 label="line 12"
 OP kind=DRAIN out=C:1,0 port_kind=output port="South"
+OP kind=L3_WRITEBACK out=C:1,0 l3=0 slot=7 bank=0
+OP kind=L3_STORE out=C:1,0 l3=0 slot=7 bank=0
+OP kind=L3_RELEASE out=C:1,0 l3=0 slot=7 bank=0
+OP kind=L3_RELEASE out=A:1,0 l3=0 slot=5 bank=0
+OP kind=L3_RELEASE out=A:1,1 l3=0 slot=6 bank=0
+OP kind=L3_RELEASE out=B:0,0 l3=0 slot=0 bank=0
+OP kind=L3_RELEASE out=B:1,0 l3=0 slot=1 bank=0
+OP kind=L3_LOAD out=B:0,1 l3=0 slot=8 bank=0
+OP kind=L3_LOAD out=B:1,1 l3=0 slot=9 bank=0
+OP kind=L3_LOAD out=A:0,0 l3=0 slot=10 bank=0
+OP kind=L3_LOAD out=A:0,1 l3=0 slot=11 bank=0
+OP kind=L3_MOVE out=A:0,0 l3=0 slot=10 bank=0
 OP kind=FEED in=A:0,0 port_kind=input port="West"
+OP kind=L3_MOVE out=B:0,1 l3=0 slot=8 bank=0
 OP kind=FEED in=B:0,1 port_kind=input port="North"
 OP kind=MATMUL_ACCUM in=A:0,0;B:0,1 out=C:0,1 label="line 12"
+OP kind=L3_MOVE out=A:0,1 l3=0 slot=11 bank=0
 OP kind=FEED in=A:0,1 port_kind=input port="West"
+OP kind=L3_MOVE out=B:1,1 l3=0 slot=9 bank=0
 OP kind=FEED in=B:1,1 port_kind=input port="North"
 OP kind=MATMUL_ACCUM in=A:0,1;B:1,1 out=C:0,1 label="line 12"
 OP kind=DRAIN out=C:0,1 port_kind=output port="South"
+OP kind=L3_WRITEBACK out=C:0,1 l3=0 slot=12 bank=0
+OP kind=L3_STORE out=C:0,1 l3=0 slot=12 bank=0
+OP kind=L3_RELEASE out=C:0,1 l3=0 slot=12 bank=0
+OP kind=L3_RELEASE out=A:0,0 l3=0 slot=10 bank=0
+OP kind=L3_RELEASE out=A:0,1 l3=0 slot=11 bank=0
+OP kind=L3_LOAD out=A:1,0 l3=0 slot=13 bank=0
+OP kind=L3_LOAD out=A:1,1 l3=0 slot=14 bank=0
+OP kind=L3_MOVE out=A:1,0 l3=0 slot=13 bank=0
 OP kind=FEED in=A:1,0 port_kind=input port="West"
+OP kind=L3_MOVE out=B:0,1 l3=0 slot=8 bank=0
 OP kind=FEED in=B:0,1 port_kind=input port="North"
 OP kind=MATMUL_ACCUM in=A:1,0;B:0,1 out=C:1,1 label="line 12"
+OP kind=L3_MOVE out=A:1,1 l3=0 slot=14 bank=0
 OP kind=FEED in=A:1,1 port_kind=input port="West"
+OP kind=L3_MOVE out=B:1,1 l3=0 slot=9 bank=0
 OP kind=FEED in=B:1,1 port_kind=input port="North"
 OP kind=MATMUL_ACCUM in=A:1,1;B:1,1 out=C:1,1 label="line 12"
 OP kind=DRAIN out=C:1,1 port_kind=output port="South"
+OP kind=L3_WRITEBACK out=C:1,1 l3=0 slot=15 bank=0
+OP kind=L3_STORE out=C:1,1 l3=0 slot=15 bank=0
+OP kind=L3_RELEASE out=C:1,1 l3=0 slot=15 bank=0
+OP kind=L3_RELEASE out=A:1,0 l3=0 slot=13 bank=0
+OP kind=L3_RELEASE out=A:1,1 l3=0 slot=14 bank=0
+OP kind=L3_RELEASE out=B:0,1 l3=0 slot=8 bank=0
+OP kind=L3_RELEASE out=B:1,1 l3=0 slot=9 bank=0
 END

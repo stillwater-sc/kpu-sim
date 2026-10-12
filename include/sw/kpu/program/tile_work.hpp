@@ -96,6 +96,16 @@ inline TileWork tile_work_of(const TileProgram& p, const TileOp& op, double elem
             w.bytes = double(r) * c * element_bytes;
             break;
         }
+        // An L3 transaction records placement. The compute schedule's analyses skip it: slot
+        // timing is L-T1's (docs/plans/l3-placement-at-lb.md step 5).
+        case TileOpKind::L3Load:
+        case TileOpKind::L3Store:
+        case TileOpKind::L3Move:
+        case TileOpKind::L3Writeback:
+        case TileOpKind::L3Release:
+        case TileOpKind::L3Inherit:
+        case TileOpKind::L3Retain:
+            break;
     }
     return w;
 }
@@ -117,6 +127,7 @@ inline double lumped_duration(const TileWork& w, double macs_per_cycle, double b
 // ----------------------------------------------------------------------------
 inline double l1_duration(const TileProgram& prog, const TileOp& op, std::size_t idx,
                           double fallback, const stream::StreamProgram& l1) {
+    if (is_l3(op.kind)) return 0.0;                     // placement, not the compute schedule
     if (op.kind == TileOpKind::MatMulAccum) {
         auto it = l1.computes.find(idx);
         return it != l1.computes.end() ? static_cast<double>(it->second.latency()) : fallback;

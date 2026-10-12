@@ -297,6 +297,13 @@ inline void apply(TileProgram& prog, const TileOp& op, TileKernelState& st) {
         case TileOpKind::TrsmUpperRight: kernel_trsm_upper_right(prog, op); break;
         case TileOpKind::BiasAdd:        kernel_bias_add(prog, op); break;
         case TileOpKind::Activation:     kernel_activation(prog, op); break;
+        case TileOpKind::L3Load:
+        case TileOpKind::L3Store:
+        case TileOpKind::L3Move:
+        case TileOpKind::L3Writeback:
+        case TileOpKind::L3Release:
+        case TileOpKind::L3Inherit:
+        case TileOpKind::L3Retain:      break;   // placement: the reference replays it (tile_program_reference.hpp)
     }
 }
 
