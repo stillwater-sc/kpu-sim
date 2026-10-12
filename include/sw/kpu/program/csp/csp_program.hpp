@@ -19,6 +19,11 @@
 // time creates reuse the program did not decide; an interpreter that sees a read of a released
 // tile has found a bug in the program, or in the compiler that produced the actions.
 //
+// PLACEMENT IS THE PROGRAM'S TOO (ADR 0004 §5; docs/plans/l3-placement-at-lb.md). Every
+// residency has an L3 address -- module, slot, bank -- fixed when it opens and freed when it is
+// released, allocated once by the walker (csp/lang/place.hpp). Every level executes that address;
+// none allocates a slot of its own.
+//
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2024-2025 Stillwater Supercomputing, Inc.
 // ============================================================================
@@ -30,6 +35,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <limits>
+#include <optional>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -119,6 +125,21 @@ inline ActivationFn activation_of(VeOp v) {
     }
 }
 
+// Where a residency lives in L3: as a register names where a CPU operand lives.
+struct L3Address {
+    std::uint32_t l3_tile = 0;          // the L3 module (always 0 at level 1; level 2's owner)
+    std::uint32_t slot = 0;             // the tile-sized buffer within the module
+    std::uint32_t bank = 0;             // slot % banks (interleaved; plan Q4)
+
+    std::string to_string() const {
+        return "l3[" + std::to_string(l3_tile) + "]:" + std::to_string(slot) + "/b" + std::to_string(bank);
+    }
+};
+
+inline bool operator==(const L3Address& a, const L3Address& b) {
+    return a.l3_tile == b.l3_tile && a.slot == b.slot && a.bank == b.bank;
+}
+
 struct Stage {
     VeOp op = VeOp::Relu;
     Place place = Place::Fabric;
@@ -151,6 +172,9 @@ struct Action {
     std::vector<Stage> context;         // applied to the tile as this action moves it, in order:
                                         // Drain (fabric, str.drain), Writeback (bm.egress),
                                         // Move (bm.ingress)
+    // The L3 slot the action writes (Load, Writeback, Inherit), reads (Move, Store) or frees
+    // (Release, Retain): its residency's address. None for an action with no residency.
+    std::optional<L3Address> place;
 };
 
 inline const char* to_string(Action::Kind k) {
@@ -218,6 +242,8 @@ struct Residency {
     bool dirty = false;                 // holds a result DRAM does not have yet
     bool inherited = false;             // opened by an Inherit (no DRAM read)
     bool retained = false;              // closed by a Retain: held when the program ends
+    L3Address place;                    // where it lives, from open to close
+    bool pinned = false;                // the program named its slot (`@ slots(...)`)
 };
 
 // What the program decided about reuse, before any simulation.
@@ -236,6 +262,9 @@ public:
     std::vector<Channel> channels;      // indexed by Chan
     std::vector<Action> actions;        // every action, in program order
     std::vector<Residency> residencies;
+    // Placement (ADR 0004 §5): the L3's interleaved banks and the policy the walker placed by.
+    std::uint32_t l3_banks = 1;
+    std::string place = "fifo";
 
     const Channel& channel(Chan c) const { return channels.at(static_cast<std::size_t>(c)); }
 
@@ -294,6 +323,7 @@ public:
                 if (st.op == VeOp::Add) o << "(" << st.arg.to_string() << ")";
                 o << " @ " << to_string(st.place);
             }
+            if (a.place) o << "  @" << a.place->to_string();
             if (a.residency != kNone && a.kind == Action::Kind::Release)
                 o << "  (" << residencies[a.residency].consumers << " consumers)";
             o << "\n";

@@ -91,6 +91,9 @@ struct Stmt {
     std::optional<Expr> pivot;
     std::optional<double> alpha;
     std::vector<Stage> context;               // Call, Store, Retain: 'via' stages
+    // Resident: the program's own placement, `@ slots(lo..hi)` -- one slot per tile, in order
+    // (ADR 0004 §5). Absent: the machine clause's policy places it.
+    std::optional<Expr> slot_lo, slot_hi;
     // Distribute / Broadcast
     std::string map, along;
 };
@@ -108,6 +111,8 @@ struct Program {
     std::string name;
     std::string machine;                      // flat | grid
     long long l3 = 0;
+    long long banks = 1;                      // the L3's interleaved banks (slot % banks)
+    std::string place = "fifo";               // the placement policy: fifo | lowest | bank-spread
     long long grid_rows = 0, grid_cols = 0;
     std::vector<Decl> decls;
     std::vector<Stmt> body;
@@ -229,6 +234,28 @@ public:
             p.l3 = integer("the L3 capacity");
         } else {
             throw SyntaxError(line(), "machine '" + p.machine + "': flat or grid");
+        }
+        // Placement (ADR 0004 §5): `, banks = B` and `, place = fifo | lowest | bank-spread`.
+        while (sym(",")) {
+            expect(",");
+            const std::string key = ident("banks or place");
+            expect("=");
+            if (key == "banks") {
+                p.banks = integer("the L3's banks");
+                if (p.banks <= 0) throw SyntaxError(line(), "banks must be positive");
+            } else if (key == "place") {
+                std::string pol = ident("a placement policy");
+                if (pol == "bank" && sym("-")) {
+                    expect("-");
+                    expect_word("spread");
+                    pol = "bank-spread";
+                }
+                if (pol != "fifo" && pol != "lowest" && pol != "bank-spread")
+                    throw SyntaxError(line(), "place = " + pol + ": fifo, lowest or bank-spread");
+                p.place = pol;
+            } else {
+                throw SyntaxError(line(), "machine option '" + key + "': banks or place");
+            }
         }
         expect(")");
         expect("{");
@@ -431,6 +458,15 @@ private:
         if (kw == "resident" || kw == "release") {
             s.kind = kw == "resident" ? Stmt::Kind::Resident : Stmt::Kind::Release;
             s.tiles = tiles();
+            if (s.kind == Stmt::Kind::Resident && sym("@")) {
+                expect("@");
+                expect_word("slots");
+                expect("(");
+                s.slot_lo = expr();
+                expect("..");
+                s.slot_hi = expr();
+                expect(")");
+            }
             expect(";");
             return s;
         }

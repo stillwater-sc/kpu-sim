@@ -109,7 +109,11 @@ inline void stmt(std::ostringstream& o, const Stmt& s, int depth) {
             stmts(o, s.body, depth + 1);
             o << in << "}\n";
             return;
-        case Stmt::Kind::Resident: o << in << "resident " << refs_text(s.tiles) << ";\n"; return;
+        case Stmt::Kind::Resident:
+            o << in << "resident " << refs_text(s.tiles);
+            if (s.slot_lo) o << " @ slots(" << expr_text(*s.slot_lo) << ".." << expr_text(*s.slot_hi) << ")";
+            o << ";\n";
+            return;
         case Stmt::Kind::Release:  o << in << "release " << refs_text(s.tiles) << ";\n"; return;
         case Stmt::Kind::Inherit:  o << in << "inherit " << refs_text(s.tiles) << ";\n"; return;
         case Stmt::Kind::Retain:
@@ -151,7 +155,11 @@ inline std::string format(const Program& p) {
     o << "csp " << p.version << "\n";
     o << "program " << p.name << " machine " << p.machine << "(";
     if (p.machine == "grid") o << p.grid_rows << "x" << p.grid_cols << ", ";
-    o << "l3 = " << p.l3 << ") {\n";
+    o << "l3 = " << p.l3;
+    // Defaults are not printed, so a program that does not name them keeps its text and digest.
+    if (p.banks != 1) o << ", banks = " << p.banks;
+    if (p.place != "fifo") o << ", place = " << p.place;
+    o << ") {\n";
     for (const Decl& d : p.decls) {
         if (d.is_vector)
             o << "  vector " << d.name << "[" << d.rows << "] tile " << d.tile_rows << " " << d.io << ";\n";

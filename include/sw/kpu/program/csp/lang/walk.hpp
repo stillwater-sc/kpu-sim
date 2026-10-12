@@ -26,6 +26,7 @@
 #include <sw/kpu/program/csp/csp_program.hpp>
 #include <sw/kpu/program/csp/lang/context.hpp>
 #include <sw/kpu/program/csp/lang/parse.hpp>
+#include <sw/kpu/program/csp/lang/place.hpp>
 
 #include <algorithm>
 #include <cstddef>
@@ -59,6 +60,7 @@ struct Emission {
     std::vector<TileOp> l0;
     bool opens = false;             // the action opens its residency
     bool loaded = false;            //   ... by a Load (else by a result's Writeback)
+    bool pinned = false;            //   ... in a slot the program named (`@ slots(...)`)
 };
 
 // The operands a program declares (no values: an interpreter supplies them).
@@ -89,6 +91,10 @@ public:
                                   "this step compiles level-1 programs (machine flat)");
         if (ast_.l3 <= 0) throw CompileError(0, "machine flat: the L3 capacity must be positive");
         cap_ = static_cast<std::size_t>(ast_.l3);
+        const auto policy = parse_place_policy(ast_.place);
+        if (!policy) throw CompileError(0, "place = " + ast_.place + ": fifo, lowest or bank-spread");
+        if (ast_.banks <= 0) throw CompileError(0, "machine flat: banks must be positive");
+        alloc_.emplace(static_cast<std::uint32_t>(cap_), static_cast<std::uint32_t>(ast_.banks), *policy);
         operands_ = declared_operands(ast_);
         for (const Decl& d : ast_.decls) if (d.is_vector) vectors_.insert(d.name);
         frames_.push_back(Frame{&ast_.body, 0, Frame::Kind::Program, {}, 0, 0, {}});
@@ -168,6 +174,10 @@ private:
     std::map<std::string, AccState> acc_;                  // accumulators not yet stored
     std::map<std::string, std::size_t> acc_calls_;
     std::size_t next_residency_ = 0;
+    // Placement (ADR 0004 §5): every open residency's L3 address, and who holds each live slot.
+    std::optional<L3Allocator> alloc_;
+    std::map<std::size_t, L3Address> places_;              // residency -> its address (open ones)
+    std::map<std::uint32_t, std::string> slot_owner_;      // live slot -> the tile in it
 
     // ---- expressions and tiles ----
     long long eval(const Expr& e, int line) const {
@@ -243,7 +253,41 @@ private:
         if (op) e.op = *op;
         e.opens = opens;
         e.loaded = loaded;
+        if (residency != kNone) {
+            const auto pl = places_.find(residency);
+            if (pl == places_.end()) throw std::logic_error("csp walk: residency " + std::to_string(residency) + " has no place");
+            e.action.place = pl->second;
+            e.pinned = opens && pinned_.count(residency) != 0;
+        }
         sink_.emit(e);
+        // A residency's slot is free once its Release is out; a Retain keeps it past the program.
+        if (residency != kNone && (kind == Action::Kind::Release || kind == Action::Kind::Retain)) {
+            const L3Address a = places_.at(residency);
+            if (kind == Action::Kind::Release) {
+                alloc_->give(a);
+                slot_owner_.erase(a.slot);
+            }
+            places_.erase(residency);
+            pinned_.erase(residency);
+        }
+    }
+    std::set<std::size_t> pinned_;                          // residencies the program placed itself
+
+    // Place residency `id` for tile `t`: by the policy, or in `slot` when the program names one.
+    void place(std::size_t id, const TileCoord& t, std::optional<std::uint32_t> slot = std::nullopt, int line = 0) {
+        L3Address a;
+        if (slot) {
+            if (const auto why = alloc_->take_at(*slot, a)) {
+                const auto owner = slot_owner_.find(*slot);
+                throw CompileError(line, "resident " + t.to_string() + " @ slot " + std::to_string(*slot) + ": " + *why +
+                                         (owner != slot_owner_.end() ? " (" + owner->second + ")" : std::string()));
+            }
+            pinned_.insert(id);
+        } else {
+            a = alloc_->take();
+        }
+        places_[id] = a;
+        slot_owner_[a.slot] = t.to_string();
     }
     void need_slot(int line, const std::string& why) const {
         if (resident_.size() + retained_.size() >= cap_)
@@ -338,19 +382,34 @@ private:
                 frames_.push_back(Frame{&s.body, 0, Frame::Kind::Acc, {}, 0, 0, k, s.line});
                 break;
             }
-            case Stmt::Kind::Resident:
+            case Stmt::Kind::Resident: {
+                std::vector<TileCoord> ts;
                 for (const TileRef& r : s.tiles)
-                    for (const TileCoord& t : expand(r)) {
-                        const std::string k = t.to_string();
-                        if (resident_.count(k)) throw CompileError(s.line, k + " is already resident");
-                        if (acc_.count(k)) throw CompileError(s.line, k + " is an accumulator in the fabric, not a DRAM tile to load");
-                        not_retained(s.line, k);
-                        need_slot(s.line, "resident " + k);
-                        const std::size_t id = next_residency_++;
-                        resident_[k] = Live{id, false};
-                        emit(Action::Kind::Load, t, id, kNone, nullptr, true, true);
-                    }
+                    for (const TileCoord& t : expand(r)) ts.push_back(t);
+                // `@ slots(lo..hi)`: the program's own placement, one slot per tile, in order.
+                long long next_slot = 0;
+                if (s.slot_lo) {
+                    const long long lo = eval(*s.slot_lo, s.line), hi = eval(*s.slot_hi, s.line);
+                    if (hi - lo != static_cast<long long>(ts.size()) || lo < 0)
+                        throw CompileError(s.line, "resident @ slots(" + std::to_string(lo) + ".." + std::to_string(hi) +
+                                                   "): " + std::to_string(hi - lo) + " slots for " +
+                                                   std::to_string(ts.size()) + " tiles; name one slot per tile");
+                    next_slot = lo;
+                }
+                for (const TileCoord& t : ts) {
+                    const std::string k = t.to_string();
+                    if (resident_.count(k)) throw CompileError(s.line, k + " is already resident");
+                    if (acc_.count(k)) throw CompileError(s.line, k + " is an accumulator in the fabric, not a DRAM tile to load");
+                    not_retained(s.line, k);
+                    need_slot(s.line, "resident " + k);
+                    const std::size_t id = next_residency_++;
+                    resident_[k] = Live{id, false};
+                    if (s.slot_lo) place(id, t, static_cast<std::uint32_t>(next_slot++), s.line);
+                    else place(id, t);
+                    emit(Action::Kind::Load, t, id, kNone, nullptr, true, true);
+                }
                 break;
+            }
             case Stmt::Kind::Release:
                 for (const TileRef& r : s.tiles)
                     for (const TileCoord& t : expand(r)) {
@@ -381,6 +440,7 @@ private:
                         need_slot(s.line, "inherit " + k);
                         const std::size_t id = next_residency_++;
                         resident_[k] = Live{id, false, true};
+                        place(id, t);
                         emit(Action::Kind::Inherit, t, id, kNone, nullptr, true, false);
                     }
                 }
@@ -516,6 +576,7 @@ private:
             record_stages(y, drain_ctx, wb_ctx);
             const std::size_t d = sink_.l0(drain);
             const std::size_t id = next_residency_++;
+            place(id, y);
             emit(Action::Kind::Drain, y, kNone, d, nullptr, false, false, false, std::move(drain_ctx));
             emit(Action::Kind::Writeback, y, id, d, nullptr, true, false, false, std::move(wb_ctx));
             emit(Action::Kind::Store, y, id, d);
@@ -557,6 +618,7 @@ private:
             record_stages(y, drain_ctx, wb_ctx);
             const std::size_t d = sink_.l0(drain);
             const std::size_t id = next_residency_++;
+            place(id, y);
             emit(Action::Kind::Drain, y, kNone, d, nullptr, false, false, false, std::move(drain_ctx));
             emit(Action::Kind::Writeback, y, id, d, nullptr, true, false, false, std::move(wb_ctx));
             emit(Action::Kind::Retain, y, id, d);
@@ -599,6 +661,8 @@ public:
             r.loaded = e.loaded;
             r.inherited = a.kind == Action::Kind::Inherit;
             r.dirty = !e.loaded && !r.inherited;
+            if (a.place) r.place = *a.place;
+            r.pinned = e.pinned;
             p_.residencies.push_back(r);
             return;
         }

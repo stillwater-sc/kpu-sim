@@ -43,6 +43,16 @@ set_tests_properties(test_csp_language PROPERTIES
     LABELS "program;csp;lang;v0.9"
 )
 
+# L3 placement: every residency's address, allocated once by the walker (docs/plans/l3-placement-at-lb.md step 2)
+kpu_add_component_test(test_csp_place "program"
+    test_csp_place.cpp
+)
+
+set_tests_properties(test_csp_place PROPERTIES
+    LABELS "program;csp;lang;placement;v0.9"
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+)
+
 # The structured CSP program: streamed and validated without unrolling (docs/plans/csp-language.md step 1c)
 kpu_add_component_test(test_csp_structured "program"
     test_csp_structured.cpp

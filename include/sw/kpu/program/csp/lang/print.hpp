@@ -72,7 +72,10 @@ inline std::string print(const CspProgram& p) {
     std::ostringstream o;
     o << "csp " << kVersion << "\n";
     o << "program " << (p.name.empty() ? std::string("p") : p.name) << " machine flat(l3 = "
-      << p.channel(Chan::L3).capacity << ") {\n";
+      << p.channel(Chan::L3).capacity;
+    if (p.l3_banks != 1) o << ", banks = " << p.l3_banks;
+    if (p.place != "fifo") o << ", place = " << p.place;
+    o << ") {\n";
     for (const auto& name : p.source.operand_order()) {
         const TensorOperand& t = p.source.operand(name);
         const bool in = loaded.count(name) != 0, out = stored.count(name) != 0;
@@ -121,7 +124,14 @@ inline std::string print(const CspProgram& p) {
     for (std::size_t i = 0; i < p.actions.size(); ++i) {
         const Action& a = p.actions[i];
         switch (a.kind) {
-            case K::Load: o << indent() << "resident " << text(a.tile) << ";\n"; break;
+            case K::Load: {
+                o << indent() << "resident " << text(a.tile);
+                // A slot the program named prints as named; the rest the policy places again.
+                if (a.residency != kNone && p.residencies.at(a.residency).pinned && a.place)
+                    o << " @ slots(" << a.place->slot << ".." << a.place->slot + 1 << ")";
+                o << ";\n";
+                break;
+            }
             case K::Release: o << indent() << "release " << text(a.tile) << ";\n"; break;
             case K::Inherit: o << indent() << "inherit " << text(a.tile) << ";\n"; break;
             case K::Retain: o << indent() << "retain " << text(a.tile) << ";\n"; break;
