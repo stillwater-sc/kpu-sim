@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Every residency has an L3 address** (`docs/plans/l3-placement-at-lb.md` step 2; ADR 0004 §5).
+  The walker allocates it as the residency opens and frees it on release, and every action that
+  touches the residency carries it (`Action::place`, `Residency::place`).
+  - `L3Address{l3_tile, slot, bank}` in `csp_program.hpp`, where `bank = slot % banks`.
+  - `csp/lang/place.hpp`: `L3Allocator` with the policies `fifo` (default; the slot freed longest
+    ago), `lowest` and `bank-spread`.
+  - The language: `machine flat(l3 = N, banks = B, place = P)`, and `resident X @ slots(lo..hi)`
+    for a program's own placement. A named slot that holds a live tile is refused, naming the tile.
+  - Defaults are not printed, so every existing program keeps its text and digest. `print`
+    reproduces placement, and the disassembly shows `@l3[0]:slot/bbank`.
+  - No level executes the address yet: L-B does in step 3.
 - **L3 placement is behavior, decided** (`docs/plans/l3-placement-at-lb.md` step 1; ADR 0004
   §5). The architect ruled that L-B must model where every tile lives in L3, as a CPU model must
   model which register an operand is loaded into.

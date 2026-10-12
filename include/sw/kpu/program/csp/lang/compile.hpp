@@ -43,6 +43,8 @@ namespace sw::kpu::program::csp::lang {
 inline CspProgram compile(const Program& ast, const Target* target = nullptr) {
     CspProgram p;
     p.name = ast.name;
+    p.l3_banks = static_cast<std::uint32_t>(ast.banks);
+    p.place = ast.place;
     p.processes = {{ProcessKind::Dma, "dma", {}}, {ProcessKind::BlockMover, "bm", {}},
                    {ProcessKind::Streamer, "str", {}}, {ProcessKind::Compute, "cf", {}}};
     TraceSink sink(p);
