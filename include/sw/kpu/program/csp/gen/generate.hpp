@@ -17,8 +17,7 @@
 //           back and applies add and act as calls. L3: the matmul's + 1 (fused), and 2 for the
 //           unfused pass.
 //   lu      right-looking tile LU, A resident whole: getrf, laswp across the row block, the
-//           two trsm panels, the trailing gemm update (alpha -1) -- the L0 derivation's order,
-//           so its trace computes bit-identically to derive_lu_tile_program. L3: tiles^2.
+//           two trsm panels, the trailing gemm update (alpha -1), per diagonal step. L3: tiles^2.
 //
 // Schedule options (orient, place) are the program's choices, never machine parameters; the
 // machine's L3 is an input. With a target, placement is checked against its vector units.

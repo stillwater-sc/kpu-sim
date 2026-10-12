@@ -98,3 +98,9 @@ Decided:
 4. **Derived programs should arrive with their loops.** The L0 → `.csp` emitter is a bridge for
    today's corpus, not the path forward; DFP → `.csp` is.
 
+   **Status (2026-10-11).** The bridge and the C++ L0 derivations are retired
+   (`docs/plans/retire-l0-derivations.md`): the L0 → `.csp` emitter and `csp::lower` (PR 2), and
+   `derive/` with `ProgramSpec` (PR 3). An L0 is now only the trace L-B records from a CSP
+   program, and L-B is the value oracle that ADR 0001 D5's "L0 reference" names: the reference
+   replays L-B's trace and must reproduce L-B's values bit for bit on every operand.
+
