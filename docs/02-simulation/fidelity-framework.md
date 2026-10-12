@@ -26,9 +26,16 @@ transaction**, and therefore what the run can tell you.
 Two consequences follow, and they are what make the levels worth having:
 
 - **Values are level-invariant.** Every level drives the same tile kernels, so decomposition
-  changes *when* things happen, never *what* is computed. L-B, L-T1 and L-T2 are bit-exact
-  to one another; L-CA matches within a stated tolerance where its accumulation order
-  legitimately differs.
+  changes *when* things happen, never *what* is computed. **L-B is the oracle**: the other
+  levels refine the behavioral model, and L-B is the one place a CSP program becomes an L0
+  trace. Every level's values are checked against L-B's **per tile**, read in the format the
+  program intends, with every element within `|a − o| ≤ atol + rtol·|o|` (float32: 1e-6,
+  1e-4; `include/sw/kpu/program/tile_check.hpp`). Floating point is not associative, and a
+  data path may legitimately reorder a reduction or convert a format, so bit equality is not
+  the functional bar. It remains the bar only where the same computation is repeated: the
+  trace's replay, a round trip, stepping against running. The sequence of tile moves (loads,
+  stores, credit order) is checked exactly. ADR 0001 D5 (as amended) and
+  `docs/plans/retire-l0-derivations.md` §3.8 have the rule.
 - **Each finer level calibrates the coarser one**, and an uncalibrated level says so in its
   provenance rather than being quoted as measured.
 
@@ -38,7 +45,7 @@ Two consequences follow, and they are what make the levels worth having:
 
 | Aspect | Behavior |
 |--------|----------|
-| **Values** | **Exact** |
+| **Values** | **Exact — the oracle** every other level is checked against |
 | Transaction granularity | a whole block move, atomic |
 | Timing | none |
 | Speed | ~100-1000x faster than cycle-accurate |
@@ -53,7 +60,7 @@ Two consequences follow, and they are what make the levels worth having:
 
 | Aspect | Behavior |
 |--------|----------|
-| **Values** | **Exact — bit-identical to L-B** |
+| **Values** | **Computed** — within the per-tile bound of L-B |
 | Transaction granularity | one tile / block move |
 | Timing | per-move duration, **uncalibrated today** — every run reports `calibrated: false` in its provenance until the calibration step of #264 increment 6 lands. Distributions are later still (#268) |
 | State | compute tiles and movement lanes are contended, and **L3 buffer capacity is enforced in tiles**: slots are acquired in program order, a feed of a resident tile is free, and a budget below the program's live set is refused with a diagnosis. **L2/L1 capacity is not yet enforced** — it is counted per compute tile and waits for the placement pass (#264 increment 5) |
@@ -70,7 +77,7 @@ L2 and L1, which are per-compute-tile and arrive with the placement pass.
 
 | Aspect | Behavior |
 |--------|----------|
-| **Values** | **Exact — bit-identical to L-B** |
+| **Values** | **Computed** — within the per-tile bound of L-B |
 | Transaction granularity | the fixed per-resource vocabulary: `read`/`write` on every resource, `push` on the compute tile |
 | Timing | per transaction, with queueing per engine, port and bank |
 | State | per-resource queues and occupancy |
@@ -85,7 +92,7 @@ streamer read, a push into the compute tile.
 
 | Aspect | Behavior |
 |--------|----------|
-| **Values** | **Within tolerance of L-B** — accumulation order legitimately differs, so this level is checked against a tolerance, never for bit-equality |
+| **Values** | **Computed** — within the per-tile bound of L-B; its accumulation order may legitimately differ |
 | Transaction granularity | protocol events, per cycle |
 | Timing | per-cycle protocol timing, full state machines |
 | Queuing | realistic scheduling (FR-FCFS, etc.) |
