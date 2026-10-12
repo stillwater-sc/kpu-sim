@@ -195,6 +195,7 @@ These are requirements. The implementation design follows in its own plan.
    ordering serializes accumulation into a tile, so running ops in dataflow order gives
    **bit-identical** results to running them in program order. That is the acceptance
    test.
+   *Superseded 2026-10-11 by the D5 amendment: the acceptance bar is the per-tile proximity bound against L-B.*
 2. **It reacts; it does not schedule.** An op fires when three things hold: its declared
    input tiles are resident at its assigned compute tile, the resource is free, and
    downstream credit is available for its output. This is the credit-based dataflow
@@ -220,7 +221,8 @@ These are requirements. The implementation design follows in its own plan.
 The fidelity table in `CLAUDE.md` lists TRANSACTIONAL as computing values
 "Statistically", and `docs/02-simulation/fidelity-framework.md` describes Level 1 by its
 timing only. **This ADR changes that.** The transactional tier computes **exact** values,
-identical to BEHAVIORAL, and differs only in adding timing.
+identical to BEHAVIORAL, and differs only in adding timing. *Amended 2026-10-11 by the D5
+amendment: exact means L-B's values within the per-tile proximity bound, not bit identity.*
 
 The reason is the goal: a *functional* transactional simulator that validates programs.
 It costs almost nothing, because the kernels are shared. On acceptance, `CLAUDE.md` and
@@ -283,7 +285,8 @@ parallel graph bridge.
 - One program flows through every tier. A BLAS routine or an MLP layer is written once,
   as tile ops, and runs at all three fidelities.
 - The transactional acceptance test is sharp: bit-exact against the oracle, plus timing
-  within a band of cycle-accurate.
+  within a band of cycle-accurate. *(Since the 2026-10-11 D5 amendment: within the per-tile
+  proximity bound of L-B, plus timing within a band of cycle-accurate.)*
 - Real model sizes become tractable at transactional fidelity.
 - The engine count goes down, which answers G9.
 
@@ -324,7 +327,8 @@ parallel graph bridge.
 
 1. A GEMM `TileProgram`, with random non-square inputs and ragged trailing tiles, is
    serialized to a file, loaded, and executed through the factory at TRANSACTIONAL.
-2. Its values are bit-exact against `TileProgramReference`.
+2. Its values are bit-exact against `TileProgramReference`. *(The milestone as accepted; since the 2026-10-11
+   D5 amendment, a level's values are held to L-B per tile within the proximity bound.)*
 3. Compute time is non-zero and scales with M, N, K and tile size.
 4. Runs are deterministic.
 5. Over a size sweep, its makespan is within the documented band of the CSP tier.
