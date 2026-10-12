@@ -18,6 +18,7 @@
 #include <sw/kpu/program/driver/execution_level.hpp>
 #include <sw/kpu/program/driver/program_spec.hpp>
 #include <sw/kpu/program/platform/deployment_json.hpp>
+#include <sw/kpu/program/tile_check.hpp>
 #include <sw/kpu/program/platform/virtual_platform.hpp>
 #include <sw/kpu/program/driver/step_cursor.hpp>
 #include <sw/kpu/program/serialize/l0_format.hpp>
@@ -73,42 +74,13 @@ kpu-run runs a program; it does not write one. kpu-csp-gen writes CSP programs.
                             --emit-l0-result, --step, --step-limit
   -h, --help
 
-Values are compared bit-exactly against L-B, the oracle (the other levels refine the
-behavioral model), over EVERY operand rather than just the result: a level that scribbled on
-an input is a model bug too. A disagreement exits 1. L-B also writes the program's L0 trace,
-and that trace's replay must reproduce L-B before it is written.
+Values are checked against L-B, the oracle (the other levels refine the behavioral model),
+over EVERY operand rather than just the result: a level that scribbled on an input is a model
+bug too. Each tile is read as float32 and every element must lie within |a - o| <= 1e-6 +
+1e-4|o| of L-B's: a data path may reorder a reduction, so bit equality is not the bar
+(retire-l0-derivations §3.8). A tile out of bound exits 1. L-B also writes the program's L0
+trace, and that trace's replay must reproduce L-B bit for bit before it is written.
 )";
-}
-
-// Bit-exact, not a tolerance: L-B/L-T1/L-T2 must agree exactly, and a tolerance
-// here would hide precisely the reordering bugs this comparison exists to find.
-struct Diff {
-    bool identical = true;
-    std::size_t first_index = 0;
-    float expected = 0.0f, actual = 0.0f;
-    std::size_t differing = 0;
-};
-
-Diff compare_bitwise(const std::vector<float>& authority, const std::vector<float>& other) {
-    Diff d;
-    if (authority.size() != other.size()) {
-        d.identical = false;
-        d.differing = authority.size() > other.size() ? authority.size() - other.size()
-                                                      : other.size() - authority.size();
-        return d;
-    }
-    for (std::size_t i = 0; i < authority.size(); ++i) {
-        if (std::memcmp(&authority[i], &other[i], sizeof(float)) != 0) {
-            if (d.identical) {
-                d.identical = false;
-                d.first_index = i;
-                d.expected = authority[i];
-                d.actual = other[i];
-            }
-            ++d.differing;
-        }
-    }
-    return d;
 }
 
 void print_run(const RunOutcome& o) {
@@ -436,23 +408,23 @@ int run_csp_program(const std::vector<std::string>& a, const std::string& path) 
         return 1;
     }
     if (has_flag(a, "--no-compare")) return 0;
-    // Every operand, bit for bit, against L-B: the levels refine the behavioral model.
+    // Every operand, tile by tile, within the proximity bound of L-B's: the levels refine the
+    // behavioral model, and a data path may round differently (§3.8).
     const TileProgram* authority = &*res.reference;
-    std::cout << "\nvalues vs L-B, the oracle (bit-exact, every operand)\n";
+    std::cout << "\nvalues vs L-B, the oracle (every operand, per tile, float32 within 1e-6 + 1e-4|o|)\n";
     bool all_agree = true;
     for (const auto& o : res.levels) {
         if (o.skipped) continue;
         std::cout << "  " << std::left << std::setw(24) << to_string(o.level);
-        bool agrees = true;
-        for (const auto& name : authority->operand_order()) {
-            const Diff d = compare_bitwise(authority->operand(name).values, o.values.operand(name).values);
-            if (d.identical) continue;
-            if (agrees) std::cout << "\n";
-            agrees = all_agree = false;
-            std::cout << "      " << name << ": " << d.differing << " differ; first at " << d.first_index
-                      << " (expected " << d.expected << ", got " << d.actual << ")\n";
+        const OperandsCheck c = check_operands(o.values, *authority);
+        all_agree = all_agree && c.pass;
+        if (c.pass) {
+            std::cout << "within bound (" << c.operands.size() << " operands, max abs " << c.max_abs << ")\n";
+            continue;
         }
-        if (agrees) std::cout << "identical (" << authority->operand_order().size() << " operands)\n";
+        std::cout << "\n";
+        for (const TileCheck& t : c.operands)
+            if (!t.pass) std::cout << "      " << t.summary() << "\n";
     }
     if (!all_agree) {
         std::cout << "\nFAILED: the levels do not compute the program's values.\n";

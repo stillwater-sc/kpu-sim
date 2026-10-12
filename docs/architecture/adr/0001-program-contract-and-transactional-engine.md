@@ -7,7 +7,7 @@
 | **Issue** | #253 |
 | **Context docs** | `docs/architecture/program-execution-assessment.md` (#252), `docs/plans/kpu-program-model.md` (D6), `docs/plans/model-ingestion-compilation-epic.md` (#229) |
 | **Affects** | #229, #230, #231, #254, #255, #256, #257 |
-| **Amended by** | **ADR 0002** (2026-09-22) — the tier/engine *naming* in D2. CSP is a program layer, not a fidelity; the engines are interpreters of one program at different transaction granularities. D1–D7's decisions stand. |
+| **Amended by** | **ADR 0002** (2026-09-22) — the tier/engine *naming* in D2. CSP is a program layer, not a fidelity; the engines are interpreters of one program at different transaction granularities. D1–D7's decisions stand.; **D5 amendment** (2026-10-11, below D5) — values answer to L-B, checked per tile within the proximity bound at every level. |
 
 ---
 
@@ -234,6 +234,19 @@ the fidelity framework doc get updated.
 - **Timing:** the CSP cycle-accurate tier is authoritative. The transactional tier is
   calibrated against it and reports its error band.
 
+**Amendment (2026-10-11; `docs/plans/retire-l0-derivations.md` §3.2, §3.8, Q4).** The value
+authority is the **behavioral model, L-B**: L-T1, L-T2 and L-CA refine it, and L-B is the one
+place a CSP program becomes an L0 trace. Every level's values are checked against L-B's **per
+tile**, through an interpretation layer that reads the tile's bits in the format the program
+intends, with every element within the §7.5 comparator (`|a − o| ≤ atol + rtol·|o|`;
+`include/sw/kpu/program/tile_check.hpp`). The transactional tier is held to that bound too,
+not to bit equality: floating point is not associative, and a data path may legitimately
+reorder a reduction or convert a format. Bit equality remains the bar only where the same
+computation is repeated: the trace's replay by `TileProgramReference` (which validates that
+the trace records its run), a serialization round trip, stepping against running, and
+determinism checks of one level. The move sequence (loads, stores, credit order) is checked
+exactly.
+
 ### D6 — Engine disposition
 
 Each retirement gets its own issue after acceptance, per #253's definition of done.
@@ -358,6 +371,8 @@ parallel graph bridge.
    - Transactional versus the L0 reference: **bit-exact**, no tolerance. Both run the same
      kernels in a dependency-respecting order, and WAW ordering fixes accumulation order.
      Any difference is a bug, not rounding.
+     *Superseded 2026-10-11 by the D5 amendment: every level is checked against L-B per tile,
+     within the comparator below.*
    - Cycle-accurate versus the L0 reference: **mixed absolute/relative**, since
      accumulation order legitimately differs. A pure relative error is undefined at a zero
      reference and unstable near zero — common in these tensors, where ReLU zeroes

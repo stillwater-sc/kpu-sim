@@ -1,7 +1,7 @@
 # Retire the L0 derivations: kpu-sim is the one source of an L0
 
 **Date:** 2026-10-11
-**Status:** Approved 2026-10-11 (Q1 yes, Q3 keep; Q2 decided: the L-B model is the oracle). PR 1 (#358) and PR 2 (#359) merged; PR 3 in review. PR 4 (Q4) awaits review
+**Status:** Approved 2026-10-11 (Q1 yes, Q3 keep; Q2 decided: the L-B model is the oracle). PR 1 (#358), PR 2 (#359) and PR 3 (#360) merged; Q4 decided (the recommendation); PR 4 in review
 **Follows:** `docs/plans/kpu-run-csp-programs.md` (complete). Step 5 of that plan made the golden
 corpus kpu-sim traces, and flagged this as the next step.
 **Decided already (2026-10-11):** an L0 is the trace of a CSP execution (ADR 0004 §4). kpu-sim
@@ -250,8 +250,13 @@ Three PRs, so each leaves the suite green and the derivation's users strictly fe
    - update `CLAUDE.md`, ADR 0004 (a status note: the derivations retired), the corpus README's
      history line, the CHANGELOG and a session log.
 
-4. **Functional checks move to the tile layer** (PR 4, proposed, Q4): kpu-run, `run_csp`, the CSP
-   and platform suites; amend ADR 0001 D5 and the `CLAUDE.md` fidelity table.
+4. **Functional checks move to the tile layer** (PR 4, Q4 decided): kpu-run, `run_csp`'s callers,
+   the CSP and platform suites, through `check_operands` (every operand of the oracle); amend
+   ADR 0001 D5 and the `CLAUDE.md` fidelity table. A comparison stays bit-exact only where it
+   repeats the same computation: the trace's replay, a serialization round trip, stepping
+   against running, and one level's determinism: the same program on the same data path with
+   only timing changed (NoC on and off, the DMA window, a vector unit's speed), or a run
+   repeated through another route (orchestrated vs direct, MMIO vs in-process).
 
 ## 5. Verification
 
@@ -299,6 +304,7 @@ Three PRs, so each leaves the suite green and the derivation's users strictly fe
   - **Decided: keep it**, as the characterizer's analytical model, applied to traces (§3.6).
   - Whether the systolic L1 model should survive is a separate question.
 - **Q4. How far do functional checks move to the tile layer, and does anything stay bit-exact?**
+  **Decided (2026-10-11): the recommendation.** L-T1 is held to the proximity bound only.
   - **Recommended:** every check of a level's values against L-B moves to the tile layer (PR 4).
     The trace's replay validation (§3.2) stays bit-exact. It is not a functional check of the
     machine. It checks that a trace records the run it came from: the same kernels in the same

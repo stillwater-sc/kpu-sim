@@ -20,6 +20,7 @@
 
 #include <sw/kpu/program/platform/deployment_json.hpp>
 #include <sw/kpu/program/platform/floorplan.hpp>
+#include <sw/kpu/program/tile_check.hpp>
 #include <sw/kpu/program/value_tolerance.hpp>
 #include <sw/kpu/timing/csp_config_from_spec.hpp>
 #include <sw/kpu/timing/schedule/matmul_schedule_generator.hpp>
@@ -60,6 +61,7 @@ std::vector<float> block(const TensorOperand& t, Size br, Size bc, Size T) {
 
 struct OracleRun {
     std::vector<float> csp, reference;      // C, row-major
+    Size size = 0, tile = 0;
     Cycle cycles = 0;
     std::size_t l3_capacity = 0, l3_free_after = 0, l3_tiles = 0;
     // With the NoC on (4b.4)
@@ -168,6 +170,8 @@ OracleRun run_matmul(const DeviceSpecification& d, Size size, Size T, bool noc =
     out.l3_capacity = ec.l3_buffer_count;
     out.l3_free_after = exec.l3_credits_available();
     out.l3_tiles = exec.l3_tiles();
+    out.size = size;
+    out.tile = T;
     out.reference = ref.operand("C").values;
     out.csp.assign(out.reference.size(), 0.0f);
     std::size_t stored = 0;
@@ -183,6 +187,20 @@ OracleRun run_matmul(const DeviceSpecification& d, Size size, Size T, bool noc =
     }
     REQUIRE(stored == static_cast<std::size_t>(size / T) * (size / T));
     return out;
+}
+
+// C against L-B's, tile by tile, read as float32 within its proximity bound
+// (docs/plans/retire-l0-derivations.md §3.8): L-CA refines L-B, and its data path may round
+// differently, so bit equality is not the bar.
+sw::kpu::program::TileCheck check_c(const OracleRun& r) {
+    using sw::kpu::program::Dim;
+    TensorOperand got("C", static_cast<Dim>(r.size), static_cast<Dim>(r.size), static_cast<Dim>(r.tile),
+                      static_cast<Dim>(r.tile));
+    TensorOperand want = got;
+    got.values = r.csp;
+    want.values = r.reference;
+    const sw::kpu::program::ElementFormat f;
+    return sw::kpu::program::check_tiles(got, want, f, sw::kpu::program::proximity_for(f));
 }
 
 }  // namespace
@@ -278,13 +296,9 @@ TEST_CASE("Values oracle: a matmul on S1, T4, T16 and T64 computes L-B's values"
     for (const char* file : {"kpu_s1.json", "kpu_t4.json", "kpu_t16.json", "kpu_t64.json"}) {
         CAPTURE(file);
         const OracleRun r = run_matmul(device(file), 128, 32);
-        const auto cmp = sw::kpu::program::compare_within(
-            r.csp, r.reference, sw::kpu::program::kAtolFloat32, sw::kpu::program::kRtolMatmul);
-        CAPTURE(cmp.max_abs, cmp.max_rel, cmp.failures, r.cycles);
+        const auto cmp = check_c(r);
+        CAPTURE(cmp.summary(), r.cycles);
         CHECK(cmp.pass);
-        // csp_inputs' values are exactly representable and their products and partial sums stay
-        // exact, so accumulation order cannot round: the CSP result is L-B's, bit for bit. A change that breaks this has changed the arithmetic, not the timing.
-        CHECK(cmp.bit_identical);
         CHECK(r.l3_free_after == r.l3_capacity);        // every L3 credit came home
         CHECK(r.l3_tiles == csp_config_from(device(file))->config.l3_tiles);   // placed, not pooled
         std::printf("csp oracle %-14s 128^3/32^3: %8llu cycles, max abs %.3g, max rel %.3g\n",
@@ -373,11 +387,12 @@ TEST_CASE("NoC wired: loads and ejections cross the fabric, and values never mov
         const OracleRun off = run_matmul(device(file), 128, 32, false);
         const OracleRun on = run_matmul(device(file), 128, 32, true);
 
-        // When, never what (ADR 0002): bit-identical with and without the NoC, and to L-B.
+        // When, never what (ADR 0002): the NoC changes no value of the same computation, and C
+        // is within bound of L-B's.
         CHECK(on.csp == off.csp);
-        const auto cmp = sw::kpu::program::compare_within(
-            on.csp, on.reference, sw::kpu::program::kAtolFloat32, sw::kpu::program::kRtolMatmul);
-        CHECK(cmp.bit_identical);
+        const auto cmp = check_c(on);
+        CAPTURE(cmp.summary());
+        CHECK(cmp.pass);
         CHECK(on.l3_free_after == on.l3_capacity);
 
         // Every DRAM read crossed to its hub, and every store's ejection crossed to its port and
@@ -474,7 +489,7 @@ TEST_CASE("Burst window: values never move, with the NoC off and on", "[timing][
             CAPTURE(noc);
             const OracleRun w = run_matmul(d, 128, 32, noc);
             CHECK(w.csp == tiles.csp);
-            CHECK(w.csp == w.reference);            // bit-identical to L-B: exact inputs keep sums exact
+            CHECK(check_c(w).pass);                 // within bound of L-B
             CHECK(w.l3_free_after == w.l3_capacity);
             std::printf("window %-14s noc=%d: %8llu cycles (tile-level, no NoC: %llu)\n", file,
                         noc ? 1 : 0, static_cast<unsigned long long>(w.cycles),
@@ -511,8 +526,7 @@ TEST_CASE("Compute fabric: one compute at a time per compute tile, latency from 
             busy += c.end - c.start;
         }
         CHECK(r.busy.at(0) == busy);
-        CHECK(sw::kpu::program::compare_within(r.csp, r.reference, sw::kpu::program::kAtolFloat32,
-                                               sw::kpu::program::kRtolMatmul).bit_identical);
+        CHECK(check_c(r).pass);
     }
     SECTION("kpu_t4: two compute tiles, both used, neither double-booked") {
         const OracleRun r = run_matmul(device("kpu_t4.json"), 128, 32);
@@ -530,8 +544,7 @@ TEST_CASE("Compute fabric: one compute at a time per compute tile, latency from 
         for (const auto& c : r.computes) CHECK(c.cf == 1);
         CHECK(no_overlap(r.computes, 1));
         CHECK(r.busy.at(0) == 0);
-        CHECK(sw::kpu::program::compare_within(r.csp, r.reference, sw::kpu::program::kAtolFloat32,
-                                               sw::kpu::program::kRtolMatmul).bit_identical);
+        CHECK(check_c(r).pass);
     }
     SECTION("a compute tile the fabric does not have is refused by name") {
         auto c = csp_config_from(device("kpu_t4.json"))->config;

@@ -1,10 +1,12 @@
 // ============================================================================
 // include/sw/kpu/program/value_tolerance.hpp
-// The ADR 0001 value comparator (D5; §7 answer 5): how a level's results are held to the L0
-// TileProgramReference.
+// The ADR 0001 value comparator (D5 as amended 2026-10-11; §7 answer 5): how a level's results
+// are held to L-B's, elementwise:
 //
-//   transactional (L-T1)  vs L0: bit-exact, no tolerance
-//   cycle-accurate (CSP)  vs L0: elementwise  |actual - reference| <= atol + rtol * |reference|
+//   |actual - reference| <= atol + rtol * |reference|
+//
+// Every level is held to it (L-T1 included), per tile, through tile_check.hpp, which takes its
+// default bound from the constants here.
 //
 // atol = 1e-6 for float32. rtol = 1e-4 for the MLP/matmul oracle and 5e-3 for the composed CNN
 // references. A pure relative error is undefined at a zero reference and unstable near zero,

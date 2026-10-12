@@ -17,6 +17,7 @@
 #include <sw/kpu/program/csp/lang/validate.hpp>
 #include <sw/kpu/program/csp/lang/walk.hpp>
 #include <sw/kpu/program/driver/csp_run.hpp>
+#include <sw/kpu/program/tile_check.hpp>
 
 #include "trace_fixtures.hpp"
 
@@ -147,9 +148,12 @@ TEST_CASE("CSP structured: L-B over the stream computes what L-B over the trace 
         CHECK(by_stream.result().operand(out).values == by_trace.result().operand(out).values);
 
         // And what L-B computes for kpu-csp-gen's program of the same operator: another schedule
-        // of the same tile functions, on the same inputs (operands are filled by name).
-        CHECK(by_stream.result().operand(out).values ==
-              trace_fixtures::lb_values(trace_fixtures::gen(algo, size, tile)).operand(out).values);
+        // of the same tile functions, on the same inputs (operands are filled by name). It may
+        // round differently, so tile by tile within the float32 bound (retire-l0-derivations §3.8).
+        const TileCheck c =
+            check_tiles(by_stream.result(), trace_fixtures::lb_values(trace_fixtures::gen(algo, size, tile)), out);
+        CAPTURE(c.summary());
+        CHECK(c.pass);
     };
     check(matmul_all_a(4, 32, 64), "matmul", 128, 32, "C");
     check(matmul_streaming(128, 32, 3), "matmul", 128, 32, "C");

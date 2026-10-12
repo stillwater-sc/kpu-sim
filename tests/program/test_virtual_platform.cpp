@@ -15,6 +15,7 @@
 #include <sw/kpu/program/csp/lang/parse.hpp>
 #include <sw/kpu/program/driver/program_spec.hpp>
 #include <sw/kpu/program/platform/virtual_platform.hpp>
+#include <sw/kpu/program/tile_check.hpp>
 
 #include "trace_fixtures.hpp"
 
@@ -166,7 +167,10 @@ TEST_CASE("every level run from one snapshot agrees, through the platform",
         const CspPlatformRun lt1 = platform.run_csp(h, ExecutionLevel::BlockSequential);
         INFO("algo " << algo);
         REQUIRE_FALSE(lt1.outcome.skipped);
-        CHECK(all_operands_identical(lb.outcome.values, lt1.outcome.values));
+        // L-T1 refines L-B: every operand within the float32 bound, tile by tile (§3.8).
+        const OperandsCheck c = check_operands(lt1.outcome.values, lb.outcome.values);
+        CAPTURE(c.summary());
+        CHECK(c.pass);
         // The identities differ in exactly one field: the level.
         CHECK(lt1.identity.program_digest == lb.identity.program_digest);
         CHECK(lt1.identity.snapshot_digest == lb.identity.snapshot_digest);
