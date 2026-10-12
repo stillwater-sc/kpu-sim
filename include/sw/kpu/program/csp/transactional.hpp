@@ -111,7 +111,7 @@ public:
     TransactionalInterpreter(const characterize::DeviceDescriptor& dev, std::size_t l3) : dev_(dev), l3_(l3) {}
 
     void begin(const TileProgram& operands) {
-        values_.begin(operands);
+        values_.begin(operands, false, {static_cast<std::uint32_t>(l3_), 0});
         shapes_ = operands;
         st_ = Stats{};
         records_.clear();

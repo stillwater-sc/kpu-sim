@@ -1,7 +1,7 @@
 # L3 Placement Is Behavior: L-B Models Where Every Tile Lives
 
 **Date:** 2026-10-11
-**Status:** Approved 2026-10-11 (Q1-Q6 as recommended, §7). Step 1 (record the decision) in review
+**Status:** Approved 2026-10-11 (Q1-Q6 as recommended, §7). Steps 1-2 merged (#364, #365); step 3 (L-B executes placement) in review
 **Raised by:** the architect, 2026-10-11, reviewing `docs/plans/domain-flow-debugger.md` (#363):
 > The L-B behavioral model has to model L3 placement otherwise the CSP sequencing doesn't do
 > anything. The tile placement in L3 is a key component of the behavior of the machine, in the
@@ -271,6 +271,10 @@ Each step is one PR, reviewed and merged before the next. The suite stays green 
    - `TileDescriptor` gains the slot; `dma_engine_process.hpp` inserts at the program's slot.
    - Per-slot credits in `ConcurrentTimingExecutor`; `CspDriver` passes the slot.
    - L3 banks enter the timing.
+   - The program's `banks` is checked against the deployment's `l3.banks` (`csp_level_supported`),
+     as `l3` is against `capacity_tiles`. Deferred here from step 3 (decided 2026-10-12): the
+     deployments declare 4 banks and every existing program defaults to 1, so the check waits
+     until banks change the timing, with the programs updated to match.
    - Tests (`test_csp_driver`, `test_csp_spec_oracle`): placement equals L-B's; bank conflicts
      measured.
 7. **Retain and inherit carry slots** (§3.6): the orchestrator and `KpuDevice`.

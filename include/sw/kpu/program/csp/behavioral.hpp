@@ -9,6 +9,13 @@
 // Calls run the shared L0 kernels (tile_kernels.hpp), so a correct program reproduces the L0
 // reference bit for bit.
 //
+// L3 IS ADDRESSED STORAGE (ADR 0004 §5; docs/plans/l3-placement-at-lb.md §3.3). Every action on
+// a residency carries the L3 address the walker placed it at, and L-B executes that address: a
+// Load, Inherit or opening Writeback writes into a free slot and tags it with the tile; a Move or
+// Store reads the slot its tile was placed in; a Release frees exactly that slot; a Retain holds
+// it past the program. A write into a live slot, a read of a slot tagged with another tile, and a
+// release of a free slot are refused, naming the slot and both tiles (#279's class of defect).
+//
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2024-2025 Stillwater Supercomputing, Inc.
 // ============================================================================
@@ -19,9 +26,12 @@
 
 #include <array>
 #include <cstddef>
+#include <cstdint>
 #include <map>
+#include <optional>
 #include <stdexcept>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace sw::kpu::program::csp {
@@ -31,17 +41,21 @@ public:
     using std::runtime_error::runtime_error;
 };
 
+inline L3Geometry l3_geometry(const CspProgram& p) {
+    return {static_cast<std::uint32_t>(p.channels.at(static_cast<std::size_t>(Chan::L3)).capacity), p.l3_banks};
+}
+
 class BehavioralInterpreter {
 public:
     struct Summary {
         std::size_t actions = 0, calls = 0;
-        std::size_t peak_l3 = 0;            // tiles held in L3 at once, as executed
+        std::size_t peak_l3 = 0;            // L3 slots tagged at once, as executed
     };
 
     // Run `p` from its source operands' values. On return, result() holds the operands as DRAM
     // has them: what the program stored.
     Summary run(const CspProgram& p) {
-        begin(p.source);
+        begin(p.source, false, l3_geometry(p));
         for (const Action& a : p.actions)
             step(a, a.kind == Action::Kind::Call ? &p.source.ops().at(a.l0_op) : nullptr);
         return finish();
@@ -54,8 +68,11 @@ public:
     // values, and every L0 op an action carries (step's `l0`), in the order it ran them. That is
     // the program's L0 (ADR 0004 §4): L-B is the oracle, and the one place a CSP program becomes
     // an L0. Off by default: a large program streams, and its trace would not fit.
-    void begin(const TileProgram& operands, bool record = false) {
+    void begin(const TileProgram& operands, bool record = false, L3Geometry l3 = {}) {
         recording_ = record;
+        geometry_ = l3;
+        l3_.clear();
+        l3_index_.clear();
         trace_ = TileProgram(operands.name());
         if (record)
             for (const auto& name : operands.operand_order()) trace_.add_operand(operands.operand(name));
@@ -82,15 +99,26 @@ public:
             return "csp action " + std::to_string(idx) + " " + to_string(a.kind) + " " + k;
         };
         switch (a.kind) {
-            case Action::Kind::Load:
+            case Action::Kind::Load: {
+                const L3Address& s = address(a, where(i));
+                std::vector<float> v = take(Chan::Dram, k, where(i), /*keep=*/true);
+                write_l3(s, a, k, std::move(v), where(i));
+                break;
+            }
             case Action::Kind::Store:
             case Action::Kind::Move: {
-                std::vector<float> v = take(from_chan(a.kind), k, where(i), /*keep=*/true);
+                std::vector<float> v = read_l3(address(a, where(i)), a, k, where(i)).values;
                 stages(v, a, where(i));         // a Move's copy, transformed on its way (bm.ingress)
                 at(to_chan(a.kind))[k] = std::move(v);
                 break;
             }
-            case Action::Kind::Writeback:
+            case Action::Kind::Writeback: {
+                const L3Address& s = address(a, where(i));
+                std::vector<float> v = take(Chan::L2, k, where(i), /*keep=*/false);
+                stages(v, a, where(i));         // a result's epilogue, where the program placed it
+                write_l3(s, a, k, std::move(v), where(i));
+                break;
+            }
             case Action::Kind::Feed:
             case Action::Kind::Drain: {
                 std::vector<float> v = take(from_chan(a.kind), k, where(i), /*keep=*/false);
@@ -98,17 +126,23 @@ public:
                 at(to_chan(a.kind))[k] = std::move(v);
                 break;
             }
-            case Action::Kind::Release:
-                if (!at(Chan::L3).erase(k)) throw BehavioralError(where(i) + ": nothing resident to release");
+            case Action::Kind::Release: {
+                const L3Address& s = address(a, where(i));
+                read_l3(s, a, k, where(i), "nothing resident to release");
+                if (retained_.count(k)) throw BehavioralError(where(i) + ": " + k + " is retained; its slot is not freed");
+                l3_index_.erase(k);
+                l3_.erase(key_of(s));
                 break;
-            case Action::Kind::Inherit:
+            }
+            case Action::Kind::Inherit: {
                 // Resident from the start, with the value the operator before this one left: here,
                 // the operand's value (an orchestrator puts the retained tile's value there).
-                if (at(Chan::L3).count(k)) throw BehavioralError(where(i) + ": the tile is already resident");
-                at(Chan::L3)[k] = take(Chan::Dram, k, where(i), /*keep=*/true);
+                const L3Address& s = address(a, where(i));
+                write_l3(s, a, k, take(Chan::Dram, k, where(i), /*keep=*/true), where(i));
                 break;
+            }
             case Action::Kind::Retain:
-                if (!at(Chan::L3).count(k)) throw BehavioralError(where(i) + ": nothing resident to retain");
+                read_l3(address(a, where(i)), a, k, where(i), "nothing resident to retain");
                 retained_[k] = a.tile;
                 break;
             case Action::Kind::Call:
@@ -117,16 +151,16 @@ public:
                 ++sum_.calls;
                 break;
         }
-        sum_.peak_l3 = std::max(sum_.peak_l3, at(Chan::L3).size());
+        sum_.peak_l3 = std::max(sum_.peak_l3, l3_.size());
         ++sum_.actions;
     }
 
     Summary finish() {
         // L3 may hold only what the program retained: those slots outlive it.
-        for (const auto& [k, v] : at(Chan::L3))
+        for (const auto& [k, addr] : l3_index_)
             if (!retained_.count(k))
-                throw BehavioralError("csp program ends with " + k + " still resident in l3 (neither released nor "
-                                      "retained)");
+                throw BehavioralError("csp program ends with " + k + " still resident at " + addr.to_string() +
+                                      " (neither released nor retained)");
         for (Chan c : {Chan::L2, Chan::Cf})
             if (!at(c).empty())
                 throw BehavioralError("csp program ends with " + std::to_string(at(c).size()) + " tiles left in " +
@@ -140,7 +174,7 @@ public:
         }
         // A retained tile's value is the one in its slot, which DRAM may not have (it need not be
         // stored): the operands are what the program leaves, in DRAM or retained in L3.
-        for (const auto& [k, t] : retained_) insert(work_.operand(t.operand), t.ti, t.tj, at(Chan::L3).at(k));
+        for (const auto& [k, t] : retained_) insert(work_.operand(t.operand), t.ti, t.tj, slot_of(k).values);
         return sum_;
     }
 
@@ -153,12 +187,22 @@ public:
     // The tiles the program retained, by key, with the values their slots hold.
     std::map<std::string, std::vector<float>> retained() const {
         std::map<std::string, std::vector<float>> out;
-        for (const auto& [k, t] : retained_) out[k] = store_[static_cast<std::size_t>(Chan::L3)].at(k);
+        for (const auto& [k, t] : retained_) out[k] = slot_of(k).values;
         return out;
     }
 
-    // Tiles a channel holds now (stepping reads station occupancy from this).
-    std::size_t held(Chan c) const { return store_[static_cast<std::size_t>(c)].size(); }
+    // Tiles a channel holds now (stepping reads station occupancy from this). L3's are its
+    // tagged slots.
+    std::size_t held(Chan c) const {
+        return c == Chan::L3 ? l3_.size() : store_[static_cast<std::size_t>(c)].size();
+    }
+
+    // The L3 address a tile is resident at now; none when it is not resident.
+    std::optional<L3Address> resident_at(const TileCoord& t) const {
+        auto it = l3_index_.find(t.to_string());
+        if (it == l3_index_.end()) return std::nullopt;
+        return it->second;
+    }
 
 private:
     TileProgram work_;
@@ -166,8 +210,73 @@ private:
     bool recording_ = false;
     TileKernelState state_;
     Summary sum_;
-    std::array<std::map<std::string, std::vector<float>>, kChannels> store_;
+    std::array<std::map<std::string, std::vector<float>>, kChannels> store_;     // DRAM, L2, the fabric
     std::map<std::string, TileCoord> retained_;      // key -> tile
+
+    // The addressed L3: a tagged slot holds one tile, of one residency. Untagged slots are free
+    // and not stored, so the state is bounded by the slots in use.
+    struct L3Slot {
+        TileCoord tag;
+        std::size_t residency = kNone;
+        std::vector<float> values;
+    };
+    L3Geometry geometry_;
+    std::map<std::pair<std::uint32_t, std::uint32_t>, L3Slot> l3_;     // (module, slot) -> its tile
+    std::map<std::string, L3Address> l3_index_;                         // resident tile -> its slot
+
+    static std::pair<std::uint32_t, std::uint32_t> key_of(const L3Address& s) { return {s.l3_tile, s.slot}; }
+
+    const L3Slot& slot_of(const std::string& k) const { return l3_.at(key_of(l3_index_.at(k))); }
+
+    // The address an action on a residency carries, checked against the L3's geometry.
+    const L3Address& address(const Action& a, const std::string& where) const {
+        if (!a.place) throw BehavioralError(where + ": the action carries no L3 address");
+        const L3Address& s = *a.place;
+        if (geometry_.slots && s.slot >= geometry_.slots)
+            throw BehavioralError(where + ": " + s.to_string() + " is outside the L3's " +
+                                  std::to_string(geometry_.slots) + " slots");
+        if (geometry_.banks && s.bank != s.slot % geometry_.banks)
+            throw BehavioralError(where + ": " + s.to_string() + ": slot " + std::to_string(s.slot) + " is in bank " +
+                                  std::to_string(s.slot % geometry_.banks) + " of " + std::to_string(geometry_.banks));
+        return s;
+    }
+
+    // Write tile `k` into slot `s`: a free slot opens the residency; the slot of the same
+    // residency is rewritten in place (a result written back into its resident tile).
+    void write_l3(const L3Address& s, const Action& a, const std::string& k, std::vector<float> v,
+                  const std::string& where) {
+        auto it = l3_.find(key_of(s));
+        if (it == l3_.end()) {
+            auto other = l3_index_.find(k);
+            if (other != l3_index_.end())
+                throw BehavioralError(where + ": " + s.to_string() + ": " + k + " is already resident at " +
+                                      other->second.to_string());
+            l3_[key_of(s)] = L3Slot{a.tile, a.residency, std::move(v)};
+            l3_index_[k] = s;
+            return;
+        }
+        const std::string held = it->second.tag.to_string();
+        if (held != k || it->second.residency != a.residency)
+            throw BehavioralError(where + ": " + s.to_string() + " holds " + held + ", which is live; " + k +
+                                  " cannot be written there");
+        it->second.values = std::move(v);
+    }
+
+    // The slot `s`, which must hold tile `k` of this action's residency.
+    const L3Slot& read_l3(const L3Address& s, const Action& a, const std::string& k, const std::string& where,
+                          const char* when_free = "the slot is free") const {
+        auto it = l3_.find(key_of(s));
+        if (it == l3_.end()) {
+            auto other = l3_index_.find(k);
+            throw BehavioralError(where + ": " + s.to_string() + ": " + when_free + " (" + k +
+                                  (other != l3_index_.end() ? " is at " + other->second.to_string()
+                                                            : std::string(" is not resident")) + ")");
+        }
+        const std::string held = it->second.tag.to_string();
+        if (held != k || it->second.residency != a.residency)
+            throw BehavioralError(where + ": " + s.to_string() + " holds " + held + ", not " + k);
+        return it->second;
+    }
 
     std::map<std::string, std::vector<float>>& at(Chan c) { return store_[static_cast<std::size_t>(c)]; }
 
@@ -191,11 +300,10 @@ private:
         for (const Stage& st : a.context) {
             if (st.op == VeOp::Add) {
                 const std::string b = st.arg.to_string();
-                auto it = at(Chan::L3).find(b);
-                if (it == at(Chan::L3).end())
+                if (!l3_index_.count(b))
                     throw BehavioralError(where + ": add(" + b + ") @ " + to_string(st.place) + ": " + b +
                                           " is not resident in L3");
-                bias_tile(v, cols, it->second);
+                bias_tile(v, cols, slot_of(b).values);
             } else {
                 activate_tile(v, activation_of(st.op));
             }

@@ -119,5 +119,9 @@ TEST_CASE("CSP behavioral: a program that reads a released tile is refused", "[p
     });
     REQUIRE(load != p.actions.end());
     p.actions.insert(load + 1, released);
-    CHECK_THROWS_WITH(BehavioralInterpreter().run(p), ContainsSubstring("the tile is not in l3"));
+    // The read finds its slot free, and L-B names the slot and the tile (ADR 0004 §5).
+    CHECK_THROWS_WITH(BehavioralInterpreter().run(p),
+                      ContainsSubstring("MOVE " + released.tile.to_string()) &&
+                          ContainsSubstring(released.place->to_string() + ": the slot is free (" +
+                                            released.tile.to_string() + " is not resident)"));
 }
