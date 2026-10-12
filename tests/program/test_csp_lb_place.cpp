@@ -351,6 +351,24 @@ TEST_CASE("the replay refuses a trace that breaks placement", "[csp][placement][
         CHECK_THROWS_WITH(TileProgramReference().run(t),
                           ContainsSubstring(" holds " + t.ops()[first].outputs[0].to_string() + ", which is live"));
     }
+    SECTION("a read or release whose bank is not the slot's") {
+        // The slot is keyed by module and slot, so the bank is compared as part of the address.
+        TileProgram t = good;
+        const std::size_t i = first_op(t, TileOpKind::L3Move);
+        const L3Address opened = t.ops()[i].l3;
+        t.ops()[i].l3.bank += 1;
+        CHECK_THROWS_WITH(TileProgramReference().run(t),
+                          ContainsSubstring("L3_MOVE") && ContainsSubstring("'s address, " + opened.to_string()));
+        CspProgram p = trace_fixtures::compiled(trace_fixtures::gen("matmul", 64, 32));
+        const std::size_t r = first(p, Kind::Release);
+        const L3Address at = *p.actions[r].place;
+        p.actions[r].place->bank += 1;
+        BehavioralInterpreter lb;                       // no geometry: the bank is not range-checked
+        lb.begin(p.source);
+        CHECK_THROWS_WITH([&] {
+            for (const Action& a : p.actions) lb.step(a, a.kind == Kind::Call ? &p.source.ops().at(a.l0_op) : nullptr);
+        }(), ContainsSubstring("RELEASE") && ContainsSubstring("'s address, " + at.to_string()));
+    }
     SECTION("a release of a free slot, and a slot never freed") {
         TileProgram twice = good;
         const std::size_t i = first_op(twice, TileOpKind::L3Release);

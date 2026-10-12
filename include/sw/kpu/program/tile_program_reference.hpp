@@ -155,12 +155,18 @@ private:
                 } else if (op.kind != TileOpKind::L3Writeback || it->second.tile != t) {
                     throw PlacementError(where + " " + t + ": " + addr + " holds " + it->second.tile +
                                          ", which is live");
-                }
+                } else if (it->second.addr != addr) {   // the whole address, bank included
+                    throw PlacementError(where + " " + t + ": " + addr + " is not " + t + "'s address, " +
+                                         it->second.addr);
+                }                                       // else: a result rewritten in its own slot
                 break;
             default:                                    // reads and frees: the slot holds the tile
                 if (it == l3_.end()) throw PlacementError(where + " " + t + ": " + addr + ": the slot is free");
                 if (it->second.tile != t)
                     throw PlacementError(where + " " + t + ": " + addr + " holds " + it->second.tile + ", not " + t);
+                if (it->second.addr != addr)            // the whole address, bank included
+                    throw PlacementError(where + " " + t + ": " + addr + " is not " + t + "'s address, " +
+                                         it->second.addr);
                 if (op.kind == TileOpKind::L3Release) {
                     if (retained_.count(at)) throw PlacementError(where + " " + t + ": " + addr + " is retained");
                     l3_.erase(it);
