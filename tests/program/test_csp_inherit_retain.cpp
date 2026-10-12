@@ -24,6 +24,7 @@
 #include <sw/kpu/program/csp/lang/validate.hpp>
 #include <sw/kpu/program/driver/csp_run.hpp>
 #include <sw/kpu/program/platform/deployment_json.hpp>
+#include <sw/kpu/program/tile_check.hpp>
 
 #include <fstream>
 #include <sstream>
@@ -63,7 +64,7 @@ const char* kHead = "csp 1.0\nprogram p machine flat(l3 = 8) {\n"
 
 }  // namespace
 
-TEST_CASE("inherit/retain: each operator runs at every level, bit-identical to its oracle", "[csp][inherit]") {
+TEST_CASE("inherit/retain: each operator runs at every level, within bound of its oracle", "[csp][inherit]") {
     const auto dev = s1();
     for (const char* name : {"matmul_relu_retain_32_t16.csp", "bias_inherit_32_t16.csp"}) {
         CAPTURE(name);
@@ -73,8 +74,9 @@ TEST_CASE("inherit/retain: each operator runs at every level, bit-identical to i
         for (const auto& o : r.levels) {
             CAPTURE(to_string(o.level));
             REQUIRE_FALSE(o.skipped.has_value());
-            for (const auto& op : r.reference->operand_order())
-                CHECK(o.values.operand(op).values == r.reference->operand(op).values);
+            const OperandsCheck c = check_operands(o.values, *r.reference);
+            CAPTURE(c.summary());
+            CHECK(c.pass);
         }
     }
 }
@@ -153,7 +155,9 @@ TEST_CASE("inherit/retain: a chain hands the retained tiles to the next operator
         handed.operand("C").values = a.values.operand("C").values;
         const CspLevelOutcome b = csp_run_level(level, second, &dev, handed);
         REQUIRE_FALSE(b.skipped.has_value());
-        CHECK(b.values.operand("C").values == ref2.values->operand("C").values);
+        const TileCheck c = check_tiles(b.values, *ref2.values, "C");
+        CAPTURE(c.summary());
+        CHECK(c.pass);
     }
 }
 

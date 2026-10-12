@@ -15,6 +15,7 @@
 #include <sw/kpu/program/csp/gen/generate.hpp>
 #include <sw/kpu/program/driver/csp_run.hpp>
 #include <sw/kpu/program/platform/deployment_json.hpp>
+#include <sw/kpu/program/tile_check.hpp>
 
 #include <algorithm>
 #include <string>
@@ -46,14 +47,16 @@ CspRunResult run(const std::string& text, const platform::DeviceSpecification* d
     return run_csp(req);
 }
 
-// Every level that ran computes the oracle, on every operand.
+// Every level that ran computes the oracle's values, on every operand, tile by tile within the
+// float32 bound (docs/plans/retire-l0-derivations.md §3.8).
 void check_values(const CspRunResult& r) {
     REQUIRE(r.reference.has_value());
     for (const auto& o : r.levels) {
         if (o.skipped) continue;
         CAPTURE(to_string(o.level));
-        for (const auto& name : r.reference->operand_order())
-            CHECK(o.values.operand(name).values == r.reference->operand(name).values);
+        const OperandsCheck c = check_operands(o.values, *r.reference);
+        CAPTURE(c.summary());
+        CHECK(c.pass);
     }
 }
 
@@ -189,8 +192,7 @@ TEST_CASE("CSP run: above the trace limit there is no trace, and L-B is still th
     CHECK_THAT(r.reference_note, ContainsSubstring("more than 10 actions: no L0 trace"));
     CHECK_FALSE(csp_reference(ast, csp_inputs(ast), 10).trace.has_value());
     REQUIRE_FALSE(r.levels[1].skipped);
-    for (const auto& o : r.levels)
-        CHECK(o.values.operand("C").values == r.reference->operand("C").values);
+    for (const auto& o : r.levels) CHECK(check_tiles(o.values, *r.reference, "C").pass);
 }
 
 // L-B is the one place a CSP program becomes an L0 (retire-l0-derivations §3.2): the trace is
@@ -283,5 +285,5 @@ program streamed machine flat(l3 = 3) {
     lang::ActionStream s2(ast);
     while (auto e = s2.next()) lb.step(e->action, e->op ? &*e->op : nullptr);
     lb.finish();
-    CHECK(lt.result().operand("C").values == lb.result().operand("C").values);
+    CHECK(check_tiles(lt.result(), lb.result(), "C").pass);
 }

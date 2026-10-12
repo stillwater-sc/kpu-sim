@@ -19,6 +19,7 @@
 
 #include <sw/kpu/program/csp/lang/compile.hpp>
 #include <sw/kpu/program/platform/deployment_json.hpp>
+#include <sw/kpu/program/tile_check.hpp>
 #include <sw/kpu/timing/csp_config_from_spec.hpp>
 #include <sw/kpu/timing/csp_driver.hpp>
 
@@ -26,6 +27,7 @@
 #include <cstdio>
 #include <limits>
 #include <map>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -41,9 +43,15 @@ namespace {
 // it is read, starts at zero).
 prog::TileProgram linear_inputs(const std::string& src) { return prog::driver::csp_inputs(lang::parse(src)); }
 
-// The oracle: C as L-B leaves it, for the same program on the same inputs.
-std::vector<float> reference(const std::string& src) {
-    return trace_fixtures::lb_values(lang::parse(src)).operand("C").values;
+// The oracle: every operand as L-B leaves it, for the same program on the same inputs.
+prog::TileProgram reference(const std::string& src) { return trace_fixtures::lb_values(lang::parse(src)); }
+
+// C against another run's, tile by tile, read as float32 within its proximity bound
+// (docs/plans/retire-l0-derivations.md §3.8): where the epilogue runs is a different data path.
+bool c_within(const prog::TileProgram& actual, const prog::TileProgram& oracle) {
+    const prog::TileCheck c = prog::check_tiles(actual, oracle, "C");
+    UNSCOPED_INFO(c.summary());
+    return c.pass;
 }
 
 std::string linear_source(const std::string& via, const std::string& unfused = "") {
@@ -130,15 +138,15 @@ TEST_CASE("Linear at L-CA: every placement computes the reference; the placement
                 "fabric epilogue, str VE busy/bound, bm VE busy/bound\n");
     std::uint64_t fused_bytes = 0;
     Cycle fused_cycles = 0;
-    std::map<prog::ActivationFn, std::vector<float>> by_act;    // the first placement's C, per activation
+    std::map<prog::ActivationFn, prog::TileProgram> by_act;     // the first placement's values, per activation
     for (const Case& c : cases) {
         CAPTURE(c.name);
         const Run x = run(c.src, d);
         REQUIRE(x.r.completed);
-        CHECK(x.r.values.operand("C").values == reference(c.src));
-        // Where the epilogue runs changes when, never what: one activation, one C.
-        auto [first, fresh] = by_act.emplace(c.act, x.r.values.operand("C").values);
-        if (!fresh) CHECK(x.r.values.operand("C").values == first->second);
+        CHECK(c_within(x.r.values, reference(c.src)));
+        // Where the epilogue runs changes when, and at most the rounding: one activation, one C.
+        auto [first, fresh] = by_act.emplace(c.act, x.r.values);
+        if (!fresh) CHECK(c_within(x.r.values, first->second));
         CHECK(x.r.dram_loads == x.program_loads);
         std::printf("  %-10s %7llu  %7llu  %6llu  %4llu  %5llu/%-4llu  %5llu/%-4llu\n", c.name,
                     static_cast<unsigned long long>(x.r.cycles), static_cast<unsigned long long>(x.r.dram_bytes),
@@ -176,13 +184,13 @@ TEST_CASE("Linear at L-CA: every placement computes the reference; the placement
 TEST_CASE("Linear at L-CA: the stream runs it too, in a window", "[timing][csp][linear][lca][stream]") {
     const auto d = s1();
     const lang::Target target = lang::target_from(d);
-    std::vector<float> first;
+    std::optional<prog::TileProgram> first;
     for (const std::string& src : {linear_source(" via add(b[j]) @ str.drain, silu @ bm.egress"),
                                    linear_source("", unfused_epilogue("silu"))}) {
         const prog::TileProgram in = linear_inputs(src);
-        const std::vector<float> ref = reference(src);
-        if (first.empty()) first = ref;
-        CHECK(ref == first);                    // fused and unfused: the same C at L-B
+        const prog::TileProgram ref = reference(src);
+        if (!first) first = ref;
+        CHECK(c_within(ref, *first));           // fused and unfused: two schedules, one C at L-B
         for (std::size_t w : {4u, 64u}) {
             CAPTURE(w);
             lang::ActionStream s(lang::parse(src), target);
@@ -191,7 +199,7 @@ TEST_CASE("Linear at L-CA: the stream runs it too, in a window", "[timing][csp][
             ConcurrentTimingExecutor exec(machine(d));
             const auto r = CspDriver(exec, s, operands, w).run();
             REQUIRE(r.completed);
-            CHECK(r.values.operand("C").values == ref);
+            CHECK(c_within(r.values, ref));
         }
     }
 }

@@ -18,8 +18,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `ElementFormat` decodes float32, which is what operands store today. Other formats are
     refused by name until operands carry them.
   - `check_tiles` reports the tiles out of bound, each with its first bad element.
-  - `test_csp_driver` and `test_csp_program` use it. The remaining value checks move in a later
-    step, which is up for review.
+  - `test_csp_driver` and `test_csp_program` use it.
+  - **Every level's values are now checked this way** (retire-l0-derivations PR 4, Q4).
+    `check_operands` checks every operand of the oracle, not only the result.
+    - kpu-run reports each level as `within bound (N operands, max abs X)`, or names the tiles
+      out of bound and exits 1. It no longer compares bit for bit.
+    - The CSP suites (`test_csp_run`, `test_csp_inherit_retain`, `test_csp_corpus`,
+      `test_csp_language`, `test_csp_structured`), the platform and orchestrator suites, the L0
+      corpus, and the L-CA suites (`test_csp_spec_oracle`, `test_csp_linear_lca`) moved.
+    - Bit equality stays only where the same computation is repeated: the trace's replay, a
+      round trip, step against run, and a level's determinism under a timing-only change.
+    - ADR 0001 D5 is amended (values answer to L-B, per tile, at every level, L-T1 included),
+      and the `CLAUDE.md` fidelity table no longer says "bit-identical to L-B".
 
 ### Removed
 

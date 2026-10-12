@@ -29,9 +29,9 @@ decomposes a CSP transaction**.
 | Level | Decomposes a transaction into | Speed | Computes Values? |
 |-------|-------------------------------|-------|------------------|
 | **L-B** behavioral | a whole block move, atomic | ~100-1000x | **YES** |
-| **L-T1** block-sequential | one tile move, under L3 tile credits (L2/L1 capacity arrives with the placement pass) | ~10-100x | **YES — exact**, bit-identical to L-B |
-| **L-T2** resource transactional | `read`/`write` per resource; `push` into the compute tile | — | **YES — exact**, bit-identical to L-B |
-| **L-CA** cycle-accurate | protocol events, per cycle | 1x (baseline) | **YES** — within tolerance of L-B |
+| **L-T1** block-sequential | one tile move, under L3 tile credits (L2/L1 capacity arrives with the placement pass) | ~10-100x | **YES** — within the tile bound of L-B |
+| **L-T2** resource transactional | `read`/`write` per resource; `push` into the compute tile | — | **YES** — within the tile bound of L-B |
+| **L-CA** cycle-accurate | protocol events, per cycle | 1x (baseline) | **YES** — within the tile bound of L-B |
 
 **Every level computes values.** Decomposition changes *when* things happen, never *what*
 is computed. A level that returns timing without values is not a cheaper simulation — it is
@@ -70,9 +70,11 @@ cycle-accurate level. L-T1, L-T2 and L-CA refine the behavioral model, so L-B is
 the one place a CSP program becomes an L0 trace; `TileProgramReference` replays that trace to
 validate it (`docs/plans/retire-l0-derivations.md` §3.2). No C++ code writes an L0: the
 derivations (`program/derive/`), `csp::lower` and the L0 → `.csp` emitter are retired.
-Before comparing either, read D5 and §7.5 of
-`docs/architecture/adr/0001-program-contract-and-transactional-engine.md` — they give
-the required bar per tier (bit-exact vs tolerance) and the comparator to use.
+Values are checked **per tile**, read in the program's format, every element within
+`|a − o| ≤ atol + rtol·|o|` of L-B's (`include/sw/kpu/program/tile_check.hpp`;
+`check_operands` for every operand). Bit equality is the bar only where the same computation
+is repeated (the trace's replay, a round trip, step vs run). Before comparing either, read D5
+(as amended) and §7.5 of `docs/architecture/adr/0001-program-contract-and-transactional-engine.md`.
 
 ---
 

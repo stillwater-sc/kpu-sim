@@ -26,6 +26,7 @@
 #include <sw/kpu/program/driver/csp_run.hpp>
 #include <sw/kpu/program/driver/program_spec.hpp>
 #include <sw/kpu/program/serialize/l0_format.hpp>
+#include <sw/kpu/program/tile_check.hpp>
 
 #include <cmath>
 #include <cstring>
@@ -116,27 +117,6 @@ namespace {
 constexpr double kAtol = 1e-5;
 constexpr double kRtol = 1e-4;
 
-bool close_enough(const std::vector<float>& got, const std::vector<float>& want,
-                  std::string& why) {
-    if (got.size() != want.size()) {
-        why = "size " + std::to_string(got.size()) + " vs " + std::to_string(want.size());
-        return false;
-    }
-    for (std::size_t i = 0; i < got.size(); ++i) {
-        const double a = got[i], b = want[i];
-        if (std::isnan(a) && std::isnan(b)) continue;
-        const double tol = kAtol + kRtol * std::abs(b);
-        if (!(std::abs(a - b) <= tol)) {
-            std::ostringstream ss;
-            ss << "element " << i << ": got " << a << ", expected " << b
-               << " (tolerance " << tol << ")";
-            why = ss.str();
-            return false;
-        }
-    }
-    return true;
-}
-
 } // namespace
 
 TEST_CASE("every corpus program loads and computes its recorded answer",
@@ -164,12 +144,11 @@ TEST_CASE("every corpus program loads and computes its recorded answer",
 
             for (const std::string& key : expected.operand_order()) {
                 REQUIRE(prog.has_operand(key));
-                std::string why;
-                const bool ok = close_enough(prog.operand(key).values,
-                                             expected.operand(key).values, why);
-                INFO(std::string(c.name) + " at " + short_name(level) + ", operand " + key
-                     << ": " << why);
-                CHECK(ok);
+                // Tile by tile, read as float32, within the cross-machine bound (§3.8 of
+                // docs/plans/retire-l0-derivations.md).
+                const TileCheck t = check_tiles(prog, expected, key, {}, Proximity{kAtol, kRtol});
+                INFO(std::string(c.name) + " at " + short_name(level) + ": " + t.summary());
+                CHECK(t.pass);
             }
         }
     }

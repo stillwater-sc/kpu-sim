@@ -308,7 +308,7 @@ if(KPU_BUILD_TESTS)
             -DCMD=$<TARGET_FILE:run>
             -DARGS=--program$<SEMICOLON>${_corpus}/matmul_48x48x48_t16.csp$<SEMICOLON>--deploy$<SEMICOLON>${_deploy}/kpu_s1.json
             -DEXPECT_CODE=0
-            -DMUST_MATCH=oracle...L-B.*L0.trace.*replayed.bit-exact.*cycle-accurate.*L-CA..makespan.*cycle-accurate.+identical.*OK:.every.level
+            -DMUST_MATCH=oracle...L-B.*L0.trace.*replayed.bit-exact.*cycle-accurate.*L-CA..makespan.*cycle-accurate.+within.bound.*OK:.every.level
             -DMUST_NOT_MATCH=FAILED
             -P ${CMAKE_CURRENT_SOURCE_DIR}/expect_exit.cmake
     )
@@ -318,7 +318,7 @@ if(KPU_BUILD_TESTS)
             -DCMD=$<TARGET_FILE:run>
             -DARGS=--program$<SEMICOLON>${_csp}/linear_64_t16_unfused_gelu.csp$<SEMICOLON>--deploy$<SEMICOLON>${_deploy}/kpu_s1.json$<SEMICOLON>--window$<SEMICOLON>16
             -DEXPECT_CODE=0
-            -DMUST_MATCH=cycle-accurate.+identical.*OK:.every.level
+            -DMUST_MATCH=cycle-accurate.+within.bound.*OK:.every.level
             -P ${CMAKE_CURRENT_SOURCE_DIR}/expect_exit.cmake
     )
     # Through the platform (step 4a): every level's run id, and the agreed values written only
@@ -337,7 +337,7 @@ if(KPU_BUILD_TESTS)
             -DCMD=$<TARGET_FILE:run>
             -DARGS=--program$<SEMICOLON>${_corpus}/lu_64_t16.csp$<SEMICOLON>--deploy$<SEMICOLON>${_deploy}/kpu_s1.json$<SEMICOLON>--level$<SEMICOLON>block-sequential
             -DEXPECT_CODE=0
-            -DMUST_MATCH=L-T1..makespan.*L3....peak.*of.128.*block-sequential.+identical.*OK
+            -DMUST_MATCH=L-T1..makespan.*L3....peak.*of.128.*block-sequential.+within.bound.*OK
             -P ${CMAKE_CURRENT_SOURCE_DIR}/expect_exit.cmake
     )
     # Values from an L0 file: the corpus's matmul inputs.
@@ -418,7 +418,7 @@ if(KPU_BUILD_TESTS)
             -DCMD=$<TARGET_FILE:run>
             -DARGS=--program$<SEMICOLON>${_csp}/matmul_relu_retain_32_t16.csp$<SEMICOLON>--deploy$<SEMICOLON>${_deploy}/kpu_s1.json
             -DEXPECT_CODE=0
-            -DMUST_MATCH=0.stores,.4.retained.*L-CA..makespan.*DRAM..12.loads,.0.stores.*cycle-accurate.+identical.*OK
+            -DMUST_MATCH=0.stores,.4.retained.*L-CA..makespan.*DRAM..12.loads,.0.stores.*cycle-accurate.+within.bound.*OK
             -P ${CMAKE_CURRENT_SOURCE_DIR}/expect_exit.cmake
     )
     add_test(NAME kpu_run_csp_inherit
@@ -426,7 +426,7 @@ if(KPU_BUILD_TESTS)
             -DCMD=$<TARGET_FILE:run>
             -DARGS=--program$<SEMICOLON>${_csp}/bias_inherit_32_t16.csp$<SEMICOLON>--deploy$<SEMICOLON>${_deploy}/kpu_s1.json
             -DEXPECT_CODE=0
-            -DMUST_MATCH=4.inherited.*L-CA..makespan.*DRAM..2.loads,.4.stores.*cycle-accurate.+identical.*OK
+            -DMUST_MATCH=4.inherited.*L-CA..makespan.*DRAM..2.loads,.4.stores.*cycle-accurate.+within.bound.*OK
             -P ${CMAKE_CURRENT_SOURCE_DIR}/expect_exit.cmake
     )
     add_test(NAME kpu_run_csp_rejects_algo

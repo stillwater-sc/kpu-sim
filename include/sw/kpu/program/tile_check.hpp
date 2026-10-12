@@ -160,4 +160,37 @@ inline TileCheck check_tiles(const TileProgram& actual, const TileProgram& oracl
                        bound ? *bound : proximity_for(format));
 }
 
+// Every operand of the oracle, not only the result: a level that scribbled on an input is a
+// model bug too. This is what "a level computes L-B's values" means.
+struct OperandsCheck {
+    bool pass = true;
+    double max_abs = 0.0, max_rel = 0.0;    // worst over every operand
+    std::vector<TileCheck> operands;        // in the oracle's operand order
+
+    // One line, or the operands out of bound: what a failing CHECK prints.
+    std::string summary() const {
+        std::ostringstream o;
+        o << operands.size() << " operands, max abs " << max_abs << ", max rel " << max_rel;
+        if (pass) return o.str() + ", within bound";
+        for (const TileCheck& t : operands)
+            if (!t.pass) o << "\n" << t.summary();
+        return o.str();
+    }
+};
+
+inline OperandsCheck check_operands(const TileProgram& actual, const TileProgram& oracle, const ElementFormat& format = {},
+                                    std::optional<Proximity> bound = std::nullopt) {
+    OperandsCheck out;
+    for (const auto& name : oracle.operand_order()) {
+        if (!actual.has_operand(name))
+            throw std::invalid_argument("tile_check: the oracle has operand " + name + "; the result does not");
+        TileCheck t = check_tiles(actual, oracle, name, format, bound);
+        out.pass = out.pass && t.pass;
+        out.max_abs = std::max(out.max_abs, t.max_abs);
+        out.max_rel = std::max(out.max_rel, t.max_rel);
+        out.operands.push_back(std::move(t));
+    }
+    return out;
+}
+
 }  // namespace sw::kpu::program

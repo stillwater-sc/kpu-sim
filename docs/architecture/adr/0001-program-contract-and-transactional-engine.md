@@ -7,7 +7,7 @@
 | **Issue** | #253 |
 | **Context docs** | `docs/architecture/program-execution-assessment.md` (#252), `docs/plans/kpu-program-model.md` (D6), `docs/plans/model-ingestion-compilation-epic.md` (#229) |
 | **Affects** | #229, #230, #231, #254, #255, #256, #257 |
-| **Amended by** | **ADR 0002** (2026-09-22) — the tier/engine *naming* in D2. CSP is a program layer, not a fidelity; the engines are interpreters of one program at different transaction granularities. D1–D7's decisions stand. |
+| **Amended by** | **ADR 0002** (2026-09-22) — the tier/engine *naming* in D2. CSP is a program layer, not a fidelity; the engines are interpreters of one program at different transaction granularities. D1–D7's decisions stand.; **D5 amendment** (2026-10-11, below D5) — values answer to L-B, checked per tile within the proximity bound at every level. |
 
 ---
 
@@ -195,6 +195,7 @@ These are requirements. The implementation design follows in its own plan.
    ordering serializes accumulation into a tile, so running ops in dataflow order gives
    **bit-identical** results to running them in program order. That is the acceptance
    test.
+   *Superseded 2026-10-11 by the D5 amendment: the acceptance bar is the per-tile proximity bound against L-B.*
 2. **It reacts; it does not schedule.** An op fires when three things hold: its declared
    input tiles are resident at its assigned compute tile, the resource is free, and
    downstream credit is available for its output. This is the credit-based dataflow
@@ -220,7 +221,8 @@ These are requirements. The implementation design follows in its own plan.
 The fidelity table in `CLAUDE.md` lists TRANSACTIONAL as computing values
 "Statistically", and `docs/02-simulation/fidelity-framework.md` describes Level 1 by its
 timing only. **This ADR changes that.** The transactional tier computes **exact** values,
-identical to BEHAVIORAL, and differs only in adding timing.
+identical to BEHAVIORAL, and differs only in adding timing. *Amended 2026-10-11 by the D5
+amendment: exact means L-B's values within the per-tile proximity bound, not bit identity.*
 
 The reason is the goal: a *functional* transactional simulator that validates programs.
 It costs almost nothing, because the kernels are shared. On acceptance, `CLAUDE.md` and
@@ -233,6 +235,19 @@ the fidelity framework doc get updated.
   floating-point tolerance, because accumulation order may differ.
 - **Timing:** the CSP cycle-accurate tier is authoritative. The transactional tier is
   calibrated against it and reports its error band.
+
+**Amendment (2026-10-11; `docs/plans/retire-l0-derivations.md` §3.2, §3.8, Q4).** The value
+authority is the **behavioral model, L-B**: L-T1, L-T2 and L-CA refine it, and L-B is the one
+place a CSP program becomes an L0 trace. Every level's values are checked against L-B's **per
+tile**, through an interpretation layer that reads the tile's bits in the format the program
+intends, with every element within the §7.5 comparator (`|a − o| ≤ atol + rtol·|o|`;
+`include/sw/kpu/program/tile_check.hpp`). The transactional tier is held to that bound too,
+not to bit equality: floating point is not associative, and a data path may legitimately
+reorder a reduction or convert a format. Bit equality remains the bar only where the same
+computation is repeated: the trace's replay by `TileProgramReference` (which validates that
+the trace records its run), a serialization round trip, stepping against running, and
+determinism checks of one level. The move sequence (loads, stores, credit order) is checked
+exactly.
 
 ### D6 — Engine disposition
 
@@ -270,7 +285,8 @@ parallel graph bridge.
 - One program flows through every tier. A BLAS routine or an MLP layer is written once,
   as tile ops, and runs at all three fidelities.
 - The transactional acceptance test is sharp: bit-exact against the oracle, plus timing
-  within a band of cycle-accurate.
+  within a band of cycle-accurate. *(Since the 2026-10-11 D5 amendment: within the per-tile
+  proximity bound of L-B, plus timing within a band of cycle-accurate.)*
 - Real model sizes become tractable at transactional fidelity.
 - The engine count goes down, which answers G9.
 
@@ -311,7 +327,8 @@ parallel graph bridge.
 
 1. A GEMM `TileProgram`, with random non-square inputs and ragged trailing tiles, is
    serialized to a file, loaded, and executed through the factory at TRANSACTIONAL.
-2. Its values are bit-exact against `TileProgramReference`.
+2. Its values are bit-exact against `TileProgramReference`. *(The milestone as accepted; since the 2026-10-11
+   D5 amendment, a level's values are held to L-B per tile within the proximity bound.)*
 3. Compute time is non-zero and scales with M, N, K and tile size.
 4. Runs are deterministic.
 5. Over a size sweep, its makespan is within the documented band of the CSP tier.
@@ -358,6 +375,8 @@ parallel graph bridge.
    - Transactional versus the L0 reference: **bit-exact**, no tolerance. Both run the same
      kernels in a dependency-respecting order, and WAW ordering fixes accumulation order.
      Any difference is a bug, not rounding.
+     *Superseded 2026-10-11 by the D5 amendment: every level is checked against L-B per tile,
+     within the comparator below.*
    - Cycle-accurate versus the L0 reference: **mixed absolute/relative**, since
      accumulation order legitimately differs. A pure relative error is undefined at a zero
      reference and unstable near zero — common in these tensors, where ReLU zeroes

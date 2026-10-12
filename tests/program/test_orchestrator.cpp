@@ -18,6 +18,7 @@
 
 #include <sw/kpu/program/csp/lang/parse.hpp>
 #include <sw/kpu/program/driver/csp_run.hpp>
+#include <sw/kpu/program/tile_check.hpp>
 
 #include <cstring>
 #include <string>
@@ -185,7 +186,13 @@ TEST_CASE("a result kept in L3 and never stored reaches the next operator",
         in2.operand("b").values = r.store.values("bias");
         const auto ref2 = driver::csp_reference(second, in2, 1'000'000);
         REQUIRE(ref2.values.has_value());
-        CHECK(bit_identical(r.store.values("H"), ref2.values->operand("C").values));
+        // Within the float32 bound of the composed L-B oracle, tile by tile: the level refines L-B
+        // (docs/plans/retire-l0-derivations.md §3.8).
+        TileProgram got = *ref2.values;
+        got.operand("C").values = r.store.values("H");
+        const auto c = sw::kpu::program::check_tiles(got, *ref2.values, "C");
+        CAPTURE(c.summary());
+        CHECK(c.pass);
     }
 
     // Between the two launches H is in L3 and NOT in DRAM: driven by hand, so the state between

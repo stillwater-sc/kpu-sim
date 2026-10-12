@@ -4,8 +4,9 @@
 // through the virtual platform at every level that can run them on S1, against their
 // checked-in answers. Same two claims as the L0 corpus (test_l0_corpus.cpp), for the same
 // reason -- Release builds use -march=native, so the last bits follow the host CPU:
-//   - CROSS-MACHINE: every level's operands equal the recorded .result.l0 within tolerance;
-//   - SAME-MACHINE: every level is bit-identical to the program's own L0 oracle.
+//   - CROSS-MACHINE: every level's operands are within tolerance of the recorded .result.l0;
+//   - SAME-MACHINE: every level is within the float32 bound of L-B on this host, tile by tile
+//     (docs/plans/retire-l0-derivations.md §3.8).
 // A level that cannot run a corpus program says why, and the test asserts the reason.
 //
 // SPDX-License-Identifier: MIT
@@ -18,6 +19,7 @@
 #include <sw/kpu/program/csp/lang/format.hpp>
 #include <sw/kpu/program/platform/virtual_platform.hpp>
 #include <sw/kpu/program/serialize/l0_format.hpp>
+#include <sw/kpu/program/tile_check.hpp>
 
 #include <cmath>
 #include <fstream>
@@ -62,13 +64,6 @@ const std::vector<Case>& cases() {
 constexpr double kAtol = 1e-5;
 constexpr double kRtol = 1e-4;
 
-bool close_enough(const std::vector<float>& got, const std::vector<float>& want) {
-    if (got.size() != want.size()) return false;
-    for (std::size_t i = 0; i < got.size(); ++i)
-        if (!(std::abs(double(got[i]) - double(want[i])) <= kAtol + kRtol * std::abs(double(want[i])))) return false;
-    return true;
-}
-
 }  // namespace
 
 TEST_CASE("CSP corpus: every program runs at every level it can, and computes its recorded answer",
@@ -97,8 +92,11 @@ TEST_CASE("CSP corpus: every program runs at every level it can, and computes it
             REQUIRE_FALSE(r.outcome.skipped);
             for (const auto& name : expected.operand_order()) {
                 CAPTURE(name);
-                CHECK(close_enough(r.outcome.values.operand(name).values, expected.operand(name).values));
-                CHECK(r.outcome.values.operand(name).values == oracle.values->operand(name).values);
+                const TileCheck rec = check_tiles(r.outcome.values, expected, name, {}, Proximity{kAtol, kRtol});
+                const TileCheck lb = check_tiles(r.outcome.values, *oracle.values, name);
+                CAPTURE(rec.summary(), lb.summary());
+                CHECK(rec.pass);
+                CHECK(lb.pass);
             }
         }
     }

@@ -16,6 +16,7 @@
 #include <sw/kpu/program/csp/behavioral.hpp>
 #include <sw/kpu/program/csp/lang/compile.hpp>
 #include <sw/kpu/program/csp/lang/print.hpp>
+#include <sw/kpu/program/tile_check.hpp>
 
 #include "trace_fixtures.hpp"
 
@@ -106,13 +107,19 @@ std::vector<float> run_lb(CspProgram p, const std::string& src, const std::strin
 }
 
 // The written program's values against the L-B oracle on the same program (the stream, with its
-// trace replayed), and against L-B on kpu-csp-gen's program of the same operator: a different
-// schedule of the same tile functions, on the same inputs (operands are filled by name).
+// trace replayed): the same computation, so bit for bit. And against L-B on kpu-csp-gen's
+// program of the same operator: a different schedule of the same tile functions, on the same
+// inputs (operands are filled by name), which may round differently, so tile by tile within the
+// float32 bound (docs/plans/retire-l0-derivations.md §3.8).
 void check_values(const CspProgram& p, const std::string& src, const trace_fixtures::csp::gen::Options& o,
                   const std::string& out) {
     const auto got = run_lb(p, src, out);
     CHECK(got == trace_fixtures::lb_values(lang::parse(src)).operand(out).values);
-    CHECK(got == trace_fixtures::lb_values(o).operand(out).values);
+    TileProgram written = trace_fixtures::lb_values(lang::parse(src));
+    written.operand(out).values = got;
+    const TileCheck c = check_tiles(written, trace_fixtures::lb_values(o), out);
+    CAPTURE(c.summary());
+    CHECK(c.pass);
 }
 
 std::size_t count(const CspProgram& p, Action::Kind k) {

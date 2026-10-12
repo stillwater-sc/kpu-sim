@@ -104,3 +104,25 @@ TEST_CASE("tile check: two programs' operand, at the format's default bound", "[
     b.add_operand(operand());
     CHECK(check_tiles(a, b, "C").pass);
 }
+
+TEST_CASE("tile check: every operand of the oracle, an input included", "[program][tile_check]") {
+    TileProgram a("p"), oracle("p");
+    TensorOperand in("A", 4, 4, 2, 2);
+    for (std::size_t i = 0; i < in.values.size(); ++i) in.values[i] = float(i);
+    for (TileProgram* p : {&a, &oracle}) {
+        p->add_operand(in);
+        p->add_operand(operand());
+    }
+    CHECK(check_operands(a, oracle).pass);
+    CHECK(check_operands(a, oracle).operands.size() == 2);
+
+    a.operand("A").at(3, 1) = 99.0f;                        // a level scribbled on an input
+    const OperandsCheck r = check_operands(a, oracle);
+    CHECK_FALSE(r.pass);
+    CHECK(r.operands.at(0).misses.at(0).tile.to_string() == TileCoord{"A", 1, 0}.to_string());
+    CHECK_THAT(r.summary(), ContainsSubstring("A: 4 tiles"));
+
+    TileProgram missing("p");
+    missing.add_operand(operand());
+    CHECK_THROWS_WITH(check_operands(missing, oracle), ContainsSubstring("the oracle has operand A"));
+}
