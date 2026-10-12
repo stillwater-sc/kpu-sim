@@ -1,7 +1,7 @@
 # L3 Placement Is Behavior: L-B Models Where Every Tile Lives
 
 **Date:** 2026-10-11
-**Status:** Approved 2026-10-11 (Q1-Q6 as recommended, §7). Steps 1-2 merged (#364, #365); step 3 (L-B executes placement) in review
+**Status:** Approved 2026-10-11 (Q1-Q6 as recommended, §7). Steps 1-3 merged (#364-#366); step 4 (the trace carries placement) in review
 **Raised by:** the architect, 2026-10-11, reviewing `docs/plans/domain-flow-debugger.md` (#363):
 > The L-B behavioral model has to model L3 placement otherwise the CSP sequencing doesn't do
 > anything. The tile placement in L3 is a key component of the behavior of the machine, in the
@@ -206,13 +206,27 @@ The L0 trace has no L3 transaction today: it holds feeds, drains and tile functi
 "transactions and operations" without its L3 transactions cannot carry placement, and
 `TileProgramReference`'s replay cannot validate it.
 
-- New ops: `L3_LOAD`, `L3_WRITEBACK`, `L3_RELEASE` and `L3_RETAIN`, each with `l3=`, `slot=` and
-  `tile=`. A Feed names the slot it reads (`from=l3:slot`).
-- `TileProgramReference` replays them on an addressed L3. It must reproduce L-B's placement and
-  values bit for bit, and it refuses an occupied write or a mistagged read.
-- **The corpus is regenerated** with `kpu-run --emit-l0` (the one source of an L0). The diff is the
-  added ops; the recorded values are unchanged. `.kpuld` loadables carry `.csp`, so they need no
-  change.
+- **As built (decided on review, 2026-10-12): one L3 op per CSP action on a residency.** The ops
+  are `L3_LOAD`, `L3_STORE`, `L3_MOVE`, `L3_WRITEBACK`, `L3_RELEASE`, `L3_INHERIT` and
+  `L3_RETAIN`, each written `out=<tile> l3= slot= bank=`.
+  - This replaces the first draft: four ops, plus a `from=l3:slot` on Feed. That draft left
+    reads unchecked: LU's in-place calls record no Feed, and Store and Inherit had no op.
+  - A field on Feed would also have been dropped silently by a 1.1 reader. New ops are refused
+    by name (`UnknownOp`), so `MIN_CONSUMER` is unchanged.
+- An accumulating call's L0 Feed now follows its tile's `L3_MOVE`. No other op moved.
+- `TileProgramReference` replays them on an addressed L3 of tags. It throws `PlacementError` on a
+  write into a live slot, a read or release of a slot holding another tile, a release of a free
+  slot, and a trace that ends with a slot neither released nor retained.
+  - `csp_reference` requires the replay to agree with L-B on placement: no refusal, the same
+    peak, the same slots held at the end. Values must still agree bit for bit.
+- **The analyses of the compute schedule skip the L3 ops** (decided on review). These are
+  `tile_dependencies` (no hazards), `tile_work` and `l1_duration` (no work), and the
+  characterization (not counted, not live). Slot hazards are timed at L-T1, in step 5.
+- **The corpus is regenerated** with `kpu-run --emit-l0` (the one source of an L0). The diff is
+  the added ops and the `OPSET` line, and the `.result.l0` files are unchanged.
+  - `.kpuld` loadables embed the L0 text as well as the `.csp`. So the byte-compared
+    `tests/program/loadable/matmul_32_external.kpuld` was regenerated too; its container format
+    is unchanged.
 
 ### 3.6 Retain and inherit carry their slots
 

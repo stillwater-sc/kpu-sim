@@ -130,6 +130,19 @@ This was not theoretical. CI went red on three builds while the corpus was green
 because a Windows checkout had rewritten every LF as CRLF and the re-serialization comparison
 saw different bytes.
 
+## Regenerated for opset 1.2.0: the L3 transactions (2026-10-12)
+
+`docs/plans/l3-placement-at-lb.md` step 4 (ADR 0004 §5): every trace records each CSP action on
+an L3 residency as an `L3_*` op with its tile and address (`l3= slot= bank=`), and the replay
+checks placement as L-B executes it. The version question, answered:
+- **New ops** are an op-set bump: `OPSET tile 1.2.0`. A 1.1 reader refuses them by name
+  (`UnknownOp`), so no reader runs a trace without its placement.
+- **No existing op gained a field**, so `MIN_CONSUMER` is unchanged (1.1.0 for a test case,
+  1.0.0 for the kernel).
+- **The diff is the added ops and the OPSET line.** With the `L3_*` ops removed, every trace is
+  byte-identical to the one before, and the `.result.l0` files did not change at all: the values
+  are the same.
+
 ## Regenerating, which is a decision and not a chore
 
 ```

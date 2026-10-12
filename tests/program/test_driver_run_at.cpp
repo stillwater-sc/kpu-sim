@@ -17,6 +17,7 @@
 
 #include "trace_fixtures.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <cstring>
 #include <map>
@@ -211,11 +212,14 @@ TEST_CASE("the program's inputs are the operands it READS", "[program][driver][f
     // The rule is "read at all", not "read before it is written", and tile LU is why.
     CHECK(program_inputs(trace_of(gen("matmul", 32, 16))) == std::vector<std::string>{"A", "B"});
 
-    // LU factors A IN PLACE, and its FIRST op (LuDiagFactor) declares A[k,k] as an OUTPUT.
-    // A read-before-written rule would classify A as produced and return nothing here --
-    // leaving a loaded LU kernel to factor a zero matrix and report success at every level.
+    // LU factors A IN PLACE, and its first compute op (LuDiagFactor) declares A[k,k] as an
+    // OUTPUT. A read-before-written rule would classify A as produced and return nothing here --
+    // leaving a loaded LU kernel to factor a zero matrix and report success at every level. (The
+    // trace's L3 transactions come first; they name their tile as out= too, and read nothing.)
     const TileProgram lu = trace_of(gen("lu", 32, 16));
-    REQUIRE(lu.ops().front().kind == TileOpKind::LuDiagFactor);
+    const auto first = std::find_if(lu.ops().begin(), lu.ops().end(), [](const TileOp& op) { return !is_l3(op.kind); });
+    REQUIRE(first != lu.ops().end());
+    REQUIRE(first->kind == TileOpKind::LuDiagFactor);
     CHECK(program_inputs(lu) == std::vector<std::string>{"A"});
 }
 

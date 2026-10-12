@@ -132,6 +132,8 @@ Decided (`docs/plans/l3-placement-at-lb.md`, Q1-Q6):
    Load waits for its own slot's Release. L-CA's DMA writes the program's slot under per-slot
    credits. No level allocates a slot of its own.
 4. **The trace records the L3 transactions** with their slots (opset 1.2), so the reference replay
-   validates placement as well as values.
+   validates placement as well as values. As built: one `L3_*` op per CSP action on a residency
+   (load, store, move, writeback, release, inherit, retain); the compute schedule's analyses skip
+   them.
 5. **Level 2 is the same address with the module set** by the partition map. Decision 3 stands
    for level 2's owners and communication; within a module, placement is this amendment's.

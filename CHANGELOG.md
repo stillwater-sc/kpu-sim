@@ -9,6 +9,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The L0 trace records placement** (`docs/plans/l3-placement-at-lb.md` step 4; L0 opset 1.2.0).
+  Every CSP action on an L3 residency is recorded as one L3 op with its tile and address:
+  `L3_LOAD`, `L3_STORE`, `L3_MOVE`, `L3_WRITEBACK`, `L3_RELEASE`, `L3_INHERIT` and `L3_RETAIN`.
+  For example: `OP kind=L3_LOAD out=B:0,0 l3=0 slot=0 bank=0`.
+  - `TileProgramReference` replays them on an addressed L3 of tags, and throws `PlacementError`
+    where L-B would refuse.
+  - `csp_reference` requires the replay to agree with L-B on placement (the peak and the slots
+    held at the end) as well as on values.
+  - Old readers refuse the new ops by name, so `MIN_CONSUMER` is unchanged.
+  - An accumulating call's Feed now follows its tile's `L3_MOVE` in the trace.
+  - The compute schedule's analyses skip the L3 ops: dependencies, tile work, `l1_duration`,
+    peak live tiles and the characterization counts. Slot timing is L-T1's, in step 5.
+  - The corpus (`tests/program/corpus/`) and `tests/program/loadable/matmul_32_external.kpuld`
+    are regenerated. With the L3 ops removed, every trace is byte-identical, and the result files
+    did not change.
 - **L-B executes L3 placement** (`docs/plans/l3-placement-at-lb.md` step 3; ADR 0004 §5). L-B's L3
   is now addressed storage, `(module, slot) -> {tile, residency, values}`, in place of a map from
   tile name to values counted against capacity.

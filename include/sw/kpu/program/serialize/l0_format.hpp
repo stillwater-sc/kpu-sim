@@ -92,20 +92,28 @@ inline bool is_known_dataflow(const std::string& name) {
 //
 // 1.1.0 added the VALUES_ROW record; 1.2.0 adds STREAMS. The op set has not changed for
 // either, which is why the two axes are separate: a new container record is not a new
-// operator.
+// operator. (Opset 1.2.0 and container 1.2.0 share a number by coincidence.)
 inline Version format_version()  { return {1, 2, 0}; }   // container structure
-inline Version opset_version()   { return {1, 1, 0}; }   // the TileOpKind surface this build
+inline Version opset_version()   { return {1, 2, 0}; }   // the TileOpKind surface this build
                                                          // implements: 1.1.0 adds BIAS_ADD and
-                                                         // ACTIVATION (act=)
+                                                         // ACTIVATION (act=); 1.2.0 adds the L3
+                                                         // transactions (L3_*, l3= slot= bank=)
 
 // The op set a FILE needs, written on its OPSET line: what is in it, not who wrote it -- the
 // rule min_consumer_for() states. A matmul or LU program uses only 1.0.0 ops, so its bytes do
 // not change with a build that knows more (the checked-in corpus stays byte-identical), and a
 // 1.0.0 reader can tell from the line that it can run it.
+//
+// MIN_CONSUMER does not depend on the op set: a reader older than an op refuses the op by name
+// (parse_kind, R8), and no op added since 1.0.0 put a new field on an existing op, which an
+// older reader would drop silently. Keep it that way, or make MIN_CONSUMER see the op set.
 inline Version opset_for(const TileProgram& prog) {
-    for (const TileOp& op : prog.ops())
-        if (op.kind == TileOpKind::BiasAdd || op.kind == TileOpKind::Activation) return Version{1, 1, 0};
-    return Version{1, 0, 0};
+    Version v{1, 0, 0};
+    for (const TileOp& op : prog.ops()) {
+        if (is_l3(op.kind)) return Version{1, 2, 0};
+        if (op.kind == TileOpKind::BiasAdd || op.kind == TileOpKind::Activation) v = Version{1, 1, 0};
+    }
+    return v;
 }
 inline Version reader_version()  { return {1, 2, 0}; }   // what THIS reader supports
 
@@ -371,6 +379,7 @@ inline void write_l0(std::ostream& os, const TileProgram& prog, const WriteOptio
             os << " alpha=" << detail::exact_float(op.alpha);
         if (op.pivot_slot >= 0) os << " pivot=" << op.pivot_slot;
         if (op.kind == TileOpKind::Activation) os << " act=" << to_string(op.act);
+        if (is_l3(op.kind)) os << " l3=" << op.l3.l3_tile << " slot=" << op.l3.slot << " bank=" << op.l3.bank;
         if (!op.label.empty()) os << " label=" << detail::quote(op.label);
         os << "\n";
     }
@@ -552,7 +561,9 @@ inline TileOpKind parse_kind(const std::string& s) {
     for (TileOpKind k : {TileOpKind::Feed, TileOpKind::Drain, TileOpKind::MatMulAccum,
                          TileOpKind::LuDiagFactor, TileOpKind::PivotApply,
                          TileOpKind::TrsmLowerLeft, TileOpKind::TrsmUpperRight,
-                         TileOpKind::BiasAdd, TileOpKind::Activation})
+                         TileOpKind::BiasAdd, TileOpKind::Activation, TileOpKind::L3Load,
+                         TileOpKind::L3Store, TileOpKind::L3Move, TileOpKind::L3Writeback,
+                         TileOpKind::L3Release, TileOpKind::L3Inherit, TileOpKind::L3Retain})
         if (s == to_string(k)) return k;
     throw FormatError(FormatError::Cause::UnknownOp,
                       "l0: unknown op '" + s + "': this build implements opset tile " +
@@ -744,6 +755,22 @@ inline TileProgram read_l0(std::istream& is, LoadInfo* info = nullptr) {
                 if (!parse_activation(act, op.act))
                     throw FormatError(FormatError::Cause::MalformedRecord,
                                       "l0: OP ACTIVATION act=" + act + ": relu, gelu, silu or atan");
+            }
+            if (is_l3(op.kind)) {
+                // Required: an L3 transaction is its address. One tile, written out=.
+                const auto u32 = [&](const char* key) {
+                    return static_cast<std::uint32_t>(detail::to_bounded(
+                        detail::require(f, key, "OP"),
+                        static_cast<unsigned long long>(std::numeric_limits<std::uint32_t>::max()),
+                        std::string("OP ") + key));
+                };
+                op.l3.l3_tile = u32("l3");
+                op.l3.slot = u32("slot");
+                op.l3.bank = u32("bank");
+                if (op.outputs.size() != 1 || !op.inputs.empty())
+                    throw FormatError(FormatError::Cause::MalformedRecord,
+                                      std::string("l0: OP ") + to_string(op.kind) + ": an L3 transaction names one "
+                                      "tile, as out=");
             }
             if (f.count("label")) op.label = f["label"];
             // R8, the other half: an unknown OPTIONAL FIELD is ignored, so a minor

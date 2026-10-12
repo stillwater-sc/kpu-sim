@@ -196,8 +196,9 @@ struct CspReference {
     // Present only when the trace reproduced L-B (`replay_mismatch` empty).
     std::optional<TileProgram> trace;
     std::string note;                       // why there is no trace
-    // The trace's validation failed: the first operand its replay computed differently from L-B.
-    // A kpu-sim defect, never a property of the program.
+    // The trace's validation failed: the first operand its replay computed differently from L-B,
+    // or "placement" when its L3 transactions do not reproduce L-B's placement. A kpu-sim defect,
+    // never a property of the program.
     std::string replay_mismatch;
     std::size_t actions = 0;
 };
@@ -219,14 +220,33 @@ inline CspReference csp_reference(const csp::lang::Program& ast, const TileProgr
     csp::BehavioralInterpreter lb;
     lb.begin(operands, record, csp::lang::l3_geometry(ast));
     while (auto e = s.next()) lb.step(e->action, e->op ? &*e->op : nullptr, &e->l0);
-    out.actions = lb.finish().actions;
+    const auto lb_sum = lb.finish();
+    out.actions = lb_sum.actions;
     TileProgram values = inputs;
     for (const auto& name : values.operand_order()) values.operand(name).values = lb.result().operand(name).values;
     out.values = std::move(values);
     if (!record) return out;
     // The trace's validation: replayed on the same inputs, it computes what L-B computed.
     TileProgram replay = lb.trace();
-    TileProgramReference().run(replay);
+    TileProgramReference ref;
+    // Placement first: the replay executes the trace's L3 transactions on an addressed L3, and
+    // must find what L-B found -- no refusal, the same peak, the same slots held at the end.
+    std::string placement;
+    try {
+        const auto sum = ref.run(replay);
+        if (sum.peak_l3 != lb_sum.peak_l3)
+            placement = "its peak L3 is " + std::to_string(sum.peak_l3) + " slots, L-B's " +
+                        std::to_string(lb_sum.peak_l3);
+        else if (ref.l3_contents() != lb.l3_contents())
+            placement = "it ends with other L3 slots held than L-B";
+    } catch (const PlacementError& e) {
+        placement = e.what();
+    }
+    if (!placement.empty()) {
+        out.replay_mismatch = "placement";
+        out.note = "the L0 trace's replay differs from L-B on placement (" + placement + "): no trace (a kpu-sim defect)";
+        return out;
+    }
     // Bit for bit: an untouched NaN input matches itself, and -0 differs from +0.
     auto same_bits = [](const std::vector<float>& a, const std::vector<float>& b) {
         return a.size() == b.size() && (a.empty() || std::memcmp(a.data(), b.data(), a.size() * sizeof(float)) == 0);

@@ -263,6 +263,13 @@ private:
             if (pl == places_.end()) throw std::logic_error("csp walk: residency " + std::to_string(residency) + " has no place");
             e.action.place = pl->second;
             e.pinned = opens && pinned_.count(residency) != 0;
+            // The trace records the L3 transaction with its address (opset 1.2), and the action
+            // implements it.
+            TileOp l3;
+            l3.kind = l3_kind(kind);
+            l3.outputs = {t};
+            l3.l3 = pl->second;
+            e.action.l0_op = sink_.l0(l3);
         }
         sink_.emit(e);
         // A residency's slot is free once its Release is out; a Retain keeps it past the program.
@@ -465,13 +472,29 @@ private:
         }
     }
 
-    void deliver(const TileCoord& t, int line, const std::string& fn) {
+    // Out of L3 and into the fabric. An accumulating call's operand carries its L0 Feed, recorded
+    // after the Move's L3 transaction, so the trace moves the tile out of its slot before it feeds.
+    void deliver(const TileCoord& t, int line, const std::string& fn, const TileOp* feed = nullptr) {
         const std::string k = t.to_string();
         auto it = resident_.find(k);
         if (it == resident_.end())
             throw CompileError(line, "call " + fn + " reads " + k + ", which is not resident; make it resident first");
         emit(Action::Kind::Move, t, it->second.id);
-        emit(Action::Kind::Feed, t);
+        emit(Action::Kind::Feed, t, kNone, feed ? sink_.l0(*feed) : kNone);
+    }
+
+    static TileOpKind l3_kind(Action::Kind k) {
+        switch (k) {
+            case Action::Kind::Load:      return TileOpKind::L3Load;
+            case Action::Kind::Store:     return TileOpKind::L3Store;
+            case Action::Kind::Move:      return TileOpKind::L3Move;
+            case Action::Kind::Writeback: return TileOpKind::L3Writeback;
+            case Action::Kind::Release:   return TileOpKind::L3Release;
+            case Action::Kind::Inherit:   return TileOpKind::L3Inherit;
+            case Action::Kind::Retain:    return TileOpKind::L3Retain;
+            default: break;
+        }
+        throw std::logic_error(std::string("csp walk: ") + to_string(k) + " is not an L3 transaction");
     }
 
     void call(const Stmt& s) {
@@ -540,8 +563,7 @@ private:
                 feed.port_kind = PortKind::Input;
                 feed.port = i == 0 ? "West" : "North";
                 feed.inputs = {args[i]};
-                sink_.l0(feed);
-                deliver(args[i], s.line, s.fn);
+                deliver(args[i], s.line, s.fn, &feed);
             }
             emit(Action::Kind::Call, y, kNone, sink_.l0(op), &op, false, false, true);
             ++acc_calls_[yk];

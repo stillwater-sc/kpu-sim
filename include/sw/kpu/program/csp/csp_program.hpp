@@ -125,20 +125,8 @@ inline ActivationFn activation_of(VeOp v) {
     }
 }
 
-// Where a residency lives in L3: as a register names where a CPU operand lives.
-struct L3Address {
-    std::uint32_t l3_tile = 0;          // the L3 module (always 0 at level 1; level 2's owner)
-    std::uint32_t slot = 0;             // the tile-sized buffer within the module
-    std::uint32_t bank = 0;             // slot % banks (interleaved; plan Q4)
-
-    std::string to_string() const {
-        return "l3[" + std::to_string(l3_tile) + "]:" + std::to_string(slot) + "/b" + std::to_string(bank);
-    }
-};
-
-inline bool operator==(const L3Address& a, const L3Address& b) {
-    return a.l3_tile == b.l3_tile && a.slot == b.slot && a.bank == b.bank;
-}
+// Where a residency lives in L3: as a register names where a CPU operand lives (tile_program.hpp).
+using sw::kpu::program::L3Address;
 
 // The L3 a program addresses: its slots and its interleaved banks. 0 leaves that bound unchecked
 // (a caller with no program in hand); slots and banks out of the geometry are refused.

@@ -51,6 +51,10 @@ files were at least human-readable. `-diff` keeps git from trying to render a bi
 
 ## Regenerating
 
+`matmul_32_external.kpuld` was regenerated on 2026-10-12 for L0 opset 1.2.0 (the L3
+transactions, `docs/plans/l3-placement-at-lb.md` step 4). The container format did not change;
+its embedded L0 text did, which a reader older than opset 1.2.0 refuses by op name.
+
 `matmul_32_external.kpuld` is `write()` applied to the loadable that
 `tests/program/test_loadable.cpp` builds in `canonical_fixture()` — the test asserts that
 equality, so the two cannot drift. There is deliberately **no tool** that regenerates the

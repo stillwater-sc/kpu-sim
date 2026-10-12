@@ -197,6 +197,14 @@ public:
         return c == Chan::L3 ? l3_.size() : store_[static_cast<std::size_t>(c)].size();
     }
 
+    // The tiles L3 holds now, by address (after finish(): the retained ones). The replay's
+    // TileProgramReference::l3_contents() must agree.
+    std::map<std::string, std::string> l3_contents() const {
+        std::map<std::string, std::string> out;
+        for (const auto& [k, addr] : l3_index_) out[addr.to_string()] = k;
+        return out;
+    }
+
     // The L3 address a tile is resident at now; none when it is not resident.
     std::optional<L3Address> resident_at(const TileCoord& t) const {
         auto it = l3_index_.find(t.to_string());

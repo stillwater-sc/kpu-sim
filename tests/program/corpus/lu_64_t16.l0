@@ -1,6 +1,6 @@
 KPUL0 1.2.0
 MIN_CONSUMER 1.1.0
-OPSET tile 1.0.0
+OPSET tile 1.2.0
 PRODUCER kpu-sim 0.8.0
 PROGRAM "lu"
 VALUES inline
@@ -69,46 +69,218 @@ VALUES_ROW "A" 60 0.5 7.375 -4.625 1.625 -5.625 1.375 0.625 -5.875 -5.5 4.875 7.
 VALUES_ROW "A" 61 -0.625 6.375 -0.625 7.5 -0.125 0.25 6.125 7.625 -7.75 0 -1.375 -2.875 7.25 0.25 -7.625 6.125 8.25 -2.125 -6.75 -2.875 3.25 6 -6.375 4.25 -3.125 -1.5 -5 0 0 -7.5 -5.375 7.75 4.5 0.5 8.125 -7.375 -5 8.625 0.25 -6.5 -5.375 4.25 5.875 8 8 7.25 -5.125 2.125 -1.25 5.875 -2 -5.5 -6.875 0.75 -6 -0.5 -7.75 3.125 2.75 -4.625 5.75 611.5 0.5 -1.875
 VALUES_ROW "A" 62 6.125 -3.25 8.125 4.375 3.5 3.875 0.25 -1.375 -3.25 -5.5 3.875 -4.875 2.75 7.125 3.75 5.5 4.125 7 3.625 5.875 -2 8 6.75 7.125 -2 5 5.875 -4 -2.75 6.375 7.25 -7.125 -2.375 4.625 -0.25 5.375 5 4.25 4.375 1.625 0.125 2 8.5 -6.875 5.375 -4.125 7.75 0.125 -2.5 7.375 -4.625 -2.25 -2.375 -6.75 4.5 -1.5 -4.25 -7.625 -2.5 -1.125 -0.25 -7 622.75 6.5
 VALUES_ROW "A" 63 8.875 3.75 7.25 8.375 4 7.125 -3.75 8.125 3.375 -7.125 7.375 -6 8.625 -4.625 -2 6.375 -3.75 7.625 -7.875 -2.375 3 5.125 -7.75 -6.5 -7.75 7.125 -4.625 -7.5 5.5 2.5 -0.125 -3.75 3.5 6.125 3.125 3.375 -7.5 -3 -5 0.875 -4.5 -4.25 7 7.875 -0.25 -1.875 -3.5 -5.25 -6.625 0.125 7.25 -7.125 -7.5 6.125 -1.625 0.875 6.75 -6.625 1.75 -0.375 1.125 2.75 6 613.375
+OP kind=L3_LOAD out=A:0,0 l3=0 slot=0 bank=0
+OP kind=L3_LOAD out=A:0,1 l3=0 slot=1 bank=0
+OP kind=L3_LOAD out=A:0,2 l3=0 slot=2 bank=0
+OP kind=L3_LOAD out=A:0,3 l3=0 slot=3 bank=0
+OP kind=L3_LOAD out=A:1,0 l3=0 slot=4 bank=0
+OP kind=L3_LOAD out=A:1,1 l3=0 slot=5 bank=0
+OP kind=L3_LOAD out=A:1,2 l3=0 slot=6 bank=0
+OP kind=L3_LOAD out=A:1,3 l3=0 slot=7 bank=0
+OP kind=L3_LOAD out=A:2,0 l3=0 slot=8 bank=0
+OP kind=L3_LOAD out=A:2,1 l3=0 slot=9 bank=0
+OP kind=L3_LOAD out=A:2,2 l3=0 slot=10 bank=0
+OP kind=L3_LOAD out=A:2,3 l3=0 slot=11 bank=0
+OP kind=L3_LOAD out=A:3,0 l3=0 slot=12 bank=0
+OP kind=L3_LOAD out=A:3,1 l3=0 slot=13 bank=0
+OP kind=L3_LOAD out=A:3,2 l3=0 slot=14 bank=0
+OP kind=L3_LOAD out=A:3,3 l3=0 slot=15 bank=0
+OP kind=L3_MOVE out=A:0,0 l3=0 slot=0 bank=0
 OP kind=LU_DIAG_FACTOR out=A:0,0 pivot=0 label="line 7"
+OP kind=L3_WRITEBACK out=A:0,0 l3=0 slot=0 bank=0
+OP kind=L3_MOVE out=A:0,1 l3=0 slot=1 bank=0
 OP kind=PIVOT_APPLY out=A:0,1 pivot=0 label="line 9"
+OP kind=L3_WRITEBACK out=A:0,1 l3=0 slot=1 bank=0
+OP kind=L3_MOVE out=A:0,2 l3=0 slot=2 bank=0
 OP kind=PIVOT_APPLY out=A:0,2 pivot=0 label="line 9"
+OP kind=L3_WRITEBACK out=A:0,2 l3=0 slot=2 bank=0
+OP kind=L3_MOVE out=A:0,3 l3=0 slot=3 bank=0
 OP kind=PIVOT_APPLY out=A:0,3 pivot=0 label="line 9"
+OP kind=L3_WRITEBACK out=A:0,3 l3=0 slot=3 bank=0
+OP kind=L3_MOVE out=A:0,0 l3=0 slot=0 bank=0
+OP kind=L3_MOVE out=A:0,1 l3=0 slot=1 bank=0
 OP kind=TRSM_LOWER_LEFT in=A:0,0 out=A:0,1 label="line 10"
+OP kind=L3_WRITEBACK out=A:0,1 l3=0 slot=1 bank=0
+OP kind=L3_MOVE out=A:0,0 l3=0 slot=0 bank=0
+OP kind=L3_MOVE out=A:0,2 l3=0 slot=2 bank=0
 OP kind=TRSM_LOWER_LEFT in=A:0,0 out=A:0,2 label="line 10"
+OP kind=L3_WRITEBACK out=A:0,2 l3=0 slot=2 bank=0
+OP kind=L3_MOVE out=A:0,0 l3=0 slot=0 bank=0
+OP kind=L3_MOVE out=A:0,3 l3=0 slot=3 bank=0
 OP kind=TRSM_LOWER_LEFT in=A:0,0 out=A:0,3 label="line 10"
+OP kind=L3_WRITEBACK out=A:0,3 l3=0 slot=3 bank=0
+OP kind=L3_MOVE out=A:0,0 l3=0 slot=0 bank=0
+OP kind=L3_MOVE out=A:1,0 l3=0 slot=4 bank=0
 OP kind=TRSM_UPPER_RIGHT in=A:0,0 out=A:1,0 label="line 11"
+OP kind=L3_WRITEBACK out=A:1,0 l3=0 slot=4 bank=0
+OP kind=L3_MOVE out=A:0,0 l3=0 slot=0 bank=0
+OP kind=L3_MOVE out=A:2,0 l3=0 slot=8 bank=0
 OP kind=TRSM_UPPER_RIGHT in=A:0,0 out=A:2,0 label="line 11"
+OP kind=L3_WRITEBACK out=A:2,0 l3=0 slot=8 bank=0
+OP kind=L3_MOVE out=A:0,0 l3=0 slot=0 bank=0
+OP kind=L3_MOVE out=A:3,0 l3=0 slot=12 bank=0
 OP kind=TRSM_UPPER_RIGHT in=A:0,0 out=A:3,0 label="line 11"
+OP kind=L3_WRITEBACK out=A:3,0 l3=0 slot=12 bank=0
+OP kind=L3_MOVE out=A:1,0 l3=0 slot=4 bank=0
+OP kind=L3_MOVE out=A:0,1 l3=0 slot=1 bank=0
+OP kind=L3_MOVE out=A:1,1 l3=0 slot=5 bank=0
 OP kind=MATMUL_ACCUM in=A:1,0;A:0,1 out=A:1,1 alpha=-1 label="line 13"
+OP kind=L3_WRITEBACK out=A:1,1 l3=0 slot=5 bank=0
+OP kind=L3_MOVE out=A:1,0 l3=0 slot=4 bank=0
+OP kind=L3_MOVE out=A:0,2 l3=0 slot=2 bank=0
+OP kind=L3_MOVE out=A:1,2 l3=0 slot=6 bank=0
 OP kind=MATMUL_ACCUM in=A:1,0;A:0,2 out=A:1,2 alpha=-1 label="line 13"
+OP kind=L3_WRITEBACK out=A:1,2 l3=0 slot=6 bank=0
+OP kind=L3_MOVE out=A:1,0 l3=0 slot=4 bank=0
+OP kind=L3_MOVE out=A:0,3 l3=0 slot=3 bank=0
+OP kind=L3_MOVE out=A:1,3 l3=0 slot=7 bank=0
 OP kind=MATMUL_ACCUM in=A:1,0;A:0,3 out=A:1,3 alpha=-1 label="line 13"
+OP kind=L3_WRITEBACK out=A:1,3 l3=0 slot=7 bank=0
+OP kind=L3_MOVE out=A:2,0 l3=0 slot=8 bank=0
+OP kind=L3_MOVE out=A:0,1 l3=0 slot=1 bank=0
+OP kind=L3_MOVE out=A:2,1 l3=0 slot=9 bank=0
 OP kind=MATMUL_ACCUM in=A:2,0;A:0,1 out=A:2,1 alpha=-1 label="line 13"
+OP kind=L3_WRITEBACK out=A:2,1 l3=0 slot=9 bank=0
+OP kind=L3_MOVE out=A:2,0 l3=0 slot=8 bank=0
+OP kind=L3_MOVE out=A:0,2 l3=0 slot=2 bank=0
+OP kind=L3_MOVE out=A:2,2 l3=0 slot=10 bank=0
 OP kind=MATMUL_ACCUM in=A:2,0;A:0,2 out=A:2,2 alpha=-1 label="line 13"
+OP kind=L3_WRITEBACK out=A:2,2 l3=0 slot=10 bank=0
+OP kind=L3_MOVE out=A:2,0 l3=0 slot=8 bank=0
+OP kind=L3_MOVE out=A:0,3 l3=0 slot=3 bank=0
+OP kind=L3_MOVE out=A:2,3 l3=0 slot=11 bank=0
 OP kind=MATMUL_ACCUM in=A:2,0;A:0,3 out=A:2,3 alpha=-1 label="line 13"
+OP kind=L3_WRITEBACK out=A:2,3 l3=0 slot=11 bank=0
+OP kind=L3_MOVE out=A:3,0 l3=0 slot=12 bank=0
+OP kind=L3_MOVE out=A:0,1 l3=0 slot=1 bank=0
+OP kind=L3_MOVE out=A:3,1 l3=0 slot=13 bank=0
 OP kind=MATMUL_ACCUM in=A:3,0;A:0,1 out=A:3,1 alpha=-1 label="line 13"
+OP kind=L3_WRITEBACK out=A:3,1 l3=0 slot=13 bank=0
+OP kind=L3_MOVE out=A:3,0 l3=0 slot=12 bank=0
+OP kind=L3_MOVE out=A:0,2 l3=0 slot=2 bank=0
+OP kind=L3_MOVE out=A:3,2 l3=0 slot=14 bank=0
 OP kind=MATMUL_ACCUM in=A:3,0;A:0,2 out=A:3,2 alpha=-1 label="line 13"
+OP kind=L3_WRITEBACK out=A:3,2 l3=0 slot=14 bank=0
+OP kind=L3_MOVE out=A:3,0 l3=0 slot=12 bank=0
+OP kind=L3_MOVE out=A:0,3 l3=0 slot=3 bank=0
+OP kind=L3_MOVE out=A:3,3 l3=0 slot=15 bank=0
 OP kind=MATMUL_ACCUM in=A:3,0;A:0,3 out=A:3,3 alpha=-1 label="line 13"
+OP kind=L3_WRITEBACK out=A:3,3 l3=0 slot=15 bank=0
+OP kind=L3_MOVE out=A:1,1 l3=0 slot=5 bank=0
 OP kind=LU_DIAG_FACTOR out=A:1,1 pivot=1 label="line 7"
+OP kind=L3_WRITEBACK out=A:1,1 l3=0 slot=5 bank=0
+OP kind=L3_MOVE out=A:1,0 l3=0 slot=4 bank=0
 OP kind=PIVOT_APPLY out=A:1,0 pivot=1 label="line 8"
+OP kind=L3_WRITEBACK out=A:1,0 l3=0 slot=4 bank=0
+OP kind=L3_MOVE out=A:1,2 l3=0 slot=6 bank=0
 OP kind=PIVOT_APPLY out=A:1,2 pivot=1 label="line 9"
+OP kind=L3_WRITEBACK out=A:1,2 l3=0 slot=6 bank=0
+OP kind=L3_MOVE out=A:1,3 l3=0 slot=7 bank=0
 OP kind=PIVOT_APPLY out=A:1,3 pivot=1 label="line 9"
+OP kind=L3_WRITEBACK out=A:1,3 l3=0 slot=7 bank=0
+OP kind=L3_MOVE out=A:1,1 l3=0 slot=5 bank=0
+OP kind=L3_MOVE out=A:1,2 l3=0 slot=6 bank=0
 OP kind=TRSM_LOWER_LEFT in=A:1,1 out=A:1,2 label="line 10"
+OP kind=L3_WRITEBACK out=A:1,2 l3=0 slot=6 bank=0
+OP kind=L3_MOVE out=A:1,1 l3=0 slot=5 bank=0
+OP kind=L3_MOVE out=A:1,3 l3=0 slot=7 bank=0
 OP kind=TRSM_LOWER_LEFT in=A:1,1 out=A:1,3 label="line 10"
+OP kind=L3_WRITEBACK out=A:1,3 l3=0 slot=7 bank=0
+OP kind=L3_MOVE out=A:1,1 l3=0 slot=5 bank=0
+OP kind=L3_MOVE out=A:2,1 l3=0 slot=9 bank=0
 OP kind=TRSM_UPPER_RIGHT in=A:1,1 out=A:2,1 label="line 11"
+OP kind=L3_WRITEBACK out=A:2,1 l3=0 slot=9 bank=0
+OP kind=L3_MOVE out=A:1,1 l3=0 slot=5 bank=0
+OP kind=L3_MOVE out=A:3,1 l3=0 slot=13 bank=0
 OP kind=TRSM_UPPER_RIGHT in=A:1,1 out=A:3,1 label="line 11"
+OP kind=L3_WRITEBACK out=A:3,1 l3=0 slot=13 bank=0
+OP kind=L3_MOVE out=A:2,1 l3=0 slot=9 bank=0
+OP kind=L3_MOVE out=A:1,2 l3=0 slot=6 bank=0
+OP kind=L3_MOVE out=A:2,2 l3=0 slot=10 bank=0
 OP kind=MATMUL_ACCUM in=A:2,1;A:1,2 out=A:2,2 alpha=-1 label="line 13"
+OP kind=L3_WRITEBACK out=A:2,2 l3=0 slot=10 bank=0
+OP kind=L3_MOVE out=A:2,1 l3=0 slot=9 bank=0
+OP kind=L3_MOVE out=A:1,3 l3=0 slot=7 bank=0
+OP kind=L3_MOVE out=A:2,3 l3=0 slot=11 bank=0
 OP kind=MATMUL_ACCUM in=A:2,1;A:1,3 out=A:2,3 alpha=-1 label="line 13"
+OP kind=L3_WRITEBACK out=A:2,3 l3=0 slot=11 bank=0
+OP kind=L3_MOVE out=A:3,1 l3=0 slot=13 bank=0
+OP kind=L3_MOVE out=A:1,2 l3=0 slot=6 bank=0
+OP kind=L3_MOVE out=A:3,2 l3=0 slot=14 bank=0
 OP kind=MATMUL_ACCUM in=A:3,1;A:1,2 out=A:3,2 alpha=-1 label="line 13"
+OP kind=L3_WRITEBACK out=A:3,2 l3=0 slot=14 bank=0
+OP kind=L3_MOVE out=A:3,1 l3=0 slot=13 bank=0
+OP kind=L3_MOVE out=A:1,3 l3=0 slot=7 bank=0
+OP kind=L3_MOVE out=A:3,3 l3=0 slot=15 bank=0
 OP kind=MATMUL_ACCUM in=A:3,1;A:1,3 out=A:3,3 alpha=-1 label="line 13"
+OP kind=L3_WRITEBACK out=A:3,3 l3=0 slot=15 bank=0
+OP kind=L3_MOVE out=A:2,2 l3=0 slot=10 bank=0
 OP kind=LU_DIAG_FACTOR out=A:2,2 pivot=2 label="line 7"
+OP kind=L3_WRITEBACK out=A:2,2 l3=0 slot=10 bank=0
+OP kind=L3_MOVE out=A:2,0 l3=0 slot=8 bank=0
 OP kind=PIVOT_APPLY out=A:2,0 pivot=2 label="line 8"
+OP kind=L3_WRITEBACK out=A:2,0 l3=0 slot=8 bank=0
+OP kind=L3_MOVE out=A:2,1 l3=0 slot=9 bank=0
 OP kind=PIVOT_APPLY out=A:2,1 pivot=2 label="line 8"
+OP kind=L3_WRITEBACK out=A:2,1 l3=0 slot=9 bank=0
+OP kind=L3_MOVE out=A:2,3 l3=0 slot=11 bank=0
 OP kind=PIVOT_APPLY out=A:2,3 pivot=2 label="line 9"
+OP kind=L3_WRITEBACK out=A:2,3 l3=0 slot=11 bank=0
+OP kind=L3_MOVE out=A:2,2 l3=0 slot=10 bank=0
+OP kind=L3_MOVE out=A:2,3 l3=0 slot=11 bank=0
 OP kind=TRSM_LOWER_LEFT in=A:2,2 out=A:2,3 label="line 10"
+OP kind=L3_WRITEBACK out=A:2,3 l3=0 slot=11 bank=0
+OP kind=L3_MOVE out=A:2,2 l3=0 slot=10 bank=0
+OP kind=L3_MOVE out=A:3,2 l3=0 slot=14 bank=0
 OP kind=TRSM_UPPER_RIGHT in=A:2,2 out=A:3,2 label="line 11"
+OP kind=L3_WRITEBACK out=A:3,2 l3=0 slot=14 bank=0
+OP kind=L3_MOVE out=A:3,2 l3=0 slot=14 bank=0
+OP kind=L3_MOVE out=A:2,3 l3=0 slot=11 bank=0
+OP kind=L3_MOVE out=A:3,3 l3=0 slot=15 bank=0
 OP kind=MATMUL_ACCUM in=A:3,2;A:2,3 out=A:3,3 alpha=-1 label="line 13"
+OP kind=L3_WRITEBACK out=A:3,3 l3=0 slot=15 bank=0
+OP kind=L3_MOVE out=A:3,3 l3=0 slot=15 bank=0
 OP kind=LU_DIAG_FACTOR out=A:3,3 pivot=3 label="line 7"
+OP kind=L3_WRITEBACK out=A:3,3 l3=0 slot=15 bank=0
+OP kind=L3_MOVE out=A:3,0 l3=0 slot=12 bank=0
 OP kind=PIVOT_APPLY out=A:3,0 pivot=3 label="line 8"
+OP kind=L3_WRITEBACK out=A:3,0 l3=0 slot=12 bank=0
+OP kind=L3_MOVE out=A:3,1 l3=0 slot=13 bank=0
 OP kind=PIVOT_APPLY out=A:3,1 pivot=3 label="line 8"
+OP kind=L3_WRITEBACK out=A:3,1 l3=0 slot=13 bank=0
+OP kind=L3_MOVE out=A:3,2 l3=0 slot=14 bank=0
 OP kind=PIVOT_APPLY out=A:3,2 pivot=3 label="line 8"
+OP kind=L3_WRITEBACK out=A:3,2 l3=0 slot=14 bank=0
+OP kind=L3_STORE out=A:0,0 l3=0 slot=0 bank=0
+OP kind=L3_STORE out=A:0,1 l3=0 slot=1 bank=0
+OP kind=L3_STORE out=A:0,2 l3=0 slot=2 bank=0
+OP kind=L3_STORE out=A:0,3 l3=0 slot=3 bank=0
+OP kind=L3_STORE out=A:1,0 l3=0 slot=4 bank=0
+OP kind=L3_STORE out=A:1,1 l3=0 slot=5 bank=0
+OP kind=L3_STORE out=A:1,2 l3=0 slot=6 bank=0
+OP kind=L3_STORE out=A:1,3 l3=0 slot=7 bank=0
+OP kind=L3_STORE out=A:2,0 l3=0 slot=8 bank=0
+OP kind=L3_STORE out=A:2,1 l3=0 slot=9 bank=0
+OP kind=L3_STORE out=A:2,2 l3=0 slot=10 bank=0
+OP kind=L3_STORE out=A:2,3 l3=0 slot=11 bank=0
+OP kind=L3_STORE out=A:3,0 l3=0 slot=12 bank=0
+OP kind=L3_STORE out=A:3,1 l3=0 slot=13 bank=0
+OP kind=L3_STORE out=A:3,2 l3=0 slot=14 bank=0
+OP kind=L3_STORE out=A:3,3 l3=0 slot=15 bank=0
+OP kind=L3_RELEASE out=A:0,0 l3=0 slot=0 bank=0
+OP kind=L3_RELEASE out=A:0,1 l3=0 slot=1 bank=0
+OP kind=L3_RELEASE out=A:0,2 l3=0 slot=2 bank=0
+OP kind=L3_RELEASE out=A:0,3 l3=0 slot=3 bank=0
+OP kind=L3_RELEASE out=A:1,0 l3=0 slot=4 bank=0
+OP kind=L3_RELEASE out=A:1,1 l3=0 slot=5 bank=0
+OP kind=L3_RELEASE out=A:1,2 l3=0 slot=6 bank=0
+OP kind=L3_RELEASE out=A:1,3 l3=0 slot=7 bank=0
+OP kind=L3_RELEASE out=A:2,0 l3=0 slot=8 bank=0
+OP kind=L3_RELEASE out=A:2,1 l3=0 slot=9 bank=0
+OP kind=L3_RELEASE out=A:2,2 l3=0 slot=10 bank=0
+OP kind=L3_RELEASE out=A:2,3 l3=0 slot=11 bank=0
+OP kind=L3_RELEASE out=A:3,0 l3=0 slot=12 bank=0
+OP kind=L3_RELEASE out=A:3,1 l3=0 slot=13 bank=0
+OP kind=L3_RELEASE out=A:3,2 l3=0 slot=14 bank=0
+OP kind=L3_RELEASE out=A:3,3 l3=0 slot=15 bank=0
 END

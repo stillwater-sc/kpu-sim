@@ -1,6 +1,6 @@
 KPUL0 1.2.0
 MIN_CONSUMER 1.1.0
-OPSET tile 1.1.0
+OPSET tile 1.2.0
 PRODUCER kpu-sim 0.8.0
 PROGRAM "linear"
 VALUES inline
@@ -264,244 +264,588 @@ VALUES_ROW "C" 60 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 
 VALUES_ROW "C" 61 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0
 VALUES_ROW "C" 62 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0
 VALUES_ROW "C" 63 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0
+OP kind=L3_LOAD out=B:0,0 l3=0 slot=0 bank=0
+OP kind=L3_LOAD out=B:1,0 l3=0 slot=1 bank=0
+OP kind=L3_LOAD out=B:2,0 l3=0 slot=2 bank=0
+OP kind=L3_LOAD out=B:3,0 l3=0 slot=3 bank=0
+OP kind=L3_LOAD out=b:0,0 l3=0 slot=4 bank=0
+OP kind=L3_LOAD out=A:0,0 l3=0 slot=5 bank=0
+OP kind=L3_LOAD out=A:0,1 l3=0 slot=6 bank=0
+OP kind=L3_LOAD out=A:0,2 l3=0 slot=7 bank=0
+OP kind=L3_LOAD out=A:0,3 l3=0 slot=8 bank=0
+OP kind=L3_MOVE out=A:0,0 l3=0 slot=5 bank=0
 OP kind=FEED in=A:0,0 port_kind=input port="West"
+OP kind=L3_MOVE out=B:0,0 l3=0 slot=0 bank=0
 OP kind=FEED in=B:0,0 port_kind=input port="North"
 OP kind=MATMUL_ACCUM in=A:0,0;B:0,0 out=C:0,0 label="line 13"
+OP kind=L3_MOVE out=A:0,1 l3=0 slot=6 bank=0
 OP kind=FEED in=A:0,1 port_kind=input port="West"
+OP kind=L3_MOVE out=B:1,0 l3=0 slot=1 bank=0
 OP kind=FEED in=B:1,0 port_kind=input port="North"
 OP kind=MATMUL_ACCUM in=A:0,1;B:1,0 out=C:0,0 label="line 13"
+OP kind=L3_MOVE out=A:0,2 l3=0 slot=7 bank=0
 OP kind=FEED in=A:0,2 port_kind=input port="West"
+OP kind=L3_MOVE out=B:2,0 l3=0 slot=2 bank=0
 OP kind=FEED in=B:2,0 port_kind=input port="North"
 OP kind=MATMUL_ACCUM in=A:0,2;B:2,0 out=C:0,0 label="line 13"
+OP kind=L3_MOVE out=A:0,3 l3=0 slot=8 bank=0
 OP kind=FEED in=A:0,3 port_kind=input port="West"
+OP kind=L3_MOVE out=B:3,0 l3=0 slot=3 bank=0
 OP kind=FEED in=B:3,0 port_kind=input port="North"
 OP kind=MATMUL_ACCUM in=A:0,3;B:3,0 out=C:0,0 label="line 13"
 OP kind=BIAS_ADD in=b:0,0 out=C:0,0 label="context @ fabric"
 OP kind=ACTIVATION out=C:0,0 act=relu label="context @ fabric"
 OP kind=DRAIN out=C:0,0 port_kind=output port="South"
+OP kind=L3_WRITEBACK out=C:0,0 l3=0 slot=9 bank=0
+OP kind=L3_STORE out=C:0,0 l3=0 slot=9 bank=0
+OP kind=L3_RELEASE out=C:0,0 l3=0 slot=9 bank=0
+OP kind=L3_RELEASE out=A:0,0 l3=0 slot=5 bank=0
+OP kind=L3_RELEASE out=A:0,1 l3=0 slot=6 bank=0
+OP kind=L3_RELEASE out=A:0,2 l3=0 slot=7 bank=0
+OP kind=L3_RELEASE out=A:0,3 l3=0 slot=8 bank=0
+OP kind=L3_LOAD out=A:1,0 l3=0 slot=10 bank=0
+OP kind=L3_LOAD out=A:1,1 l3=0 slot=11 bank=0
+OP kind=L3_LOAD out=A:1,2 l3=0 slot=12 bank=0
+OP kind=L3_LOAD out=A:1,3 l3=0 slot=13 bank=0
+OP kind=L3_MOVE out=A:1,0 l3=0 slot=10 bank=0
 OP kind=FEED in=A:1,0 port_kind=input port="West"
+OP kind=L3_MOVE out=B:0,0 l3=0 slot=0 bank=0
 OP kind=FEED in=B:0,0 port_kind=input port="North"
 OP kind=MATMUL_ACCUM in=A:1,0;B:0,0 out=C:1,0 label="line 13"
+OP kind=L3_MOVE out=A:1,1 l3=0 slot=11 bank=0
 OP kind=FEED in=A:1,1 port_kind=input port="West"
+OP kind=L3_MOVE out=B:1,0 l3=0 slot=1 bank=0
 OP kind=FEED in=B:1,0 port_kind=input port="North"
 OP kind=MATMUL_ACCUM in=A:1,1;B:1,0 out=C:1,0 label="line 13"
+OP kind=L3_MOVE out=A:1,2 l3=0 slot=12 bank=0
 OP kind=FEED in=A:1,2 port_kind=input port="West"
+OP kind=L3_MOVE out=B:2,0 l3=0 slot=2 bank=0
 OP kind=FEED in=B:2,0 port_kind=input port="North"
 OP kind=MATMUL_ACCUM in=A:1,2;B:2,0 out=C:1,0 label="line 13"
+OP kind=L3_MOVE out=A:1,3 l3=0 slot=13 bank=0
 OP kind=FEED in=A:1,3 port_kind=input port="West"
+OP kind=L3_MOVE out=B:3,0 l3=0 slot=3 bank=0
 OP kind=FEED in=B:3,0 port_kind=input port="North"
 OP kind=MATMUL_ACCUM in=A:1,3;B:3,0 out=C:1,0 label="line 13"
 OP kind=BIAS_ADD in=b:0,0 out=C:1,0 label="context @ fabric"
 OP kind=ACTIVATION out=C:1,0 act=relu label="context @ fabric"
 OP kind=DRAIN out=C:1,0 port_kind=output port="South"
+OP kind=L3_WRITEBACK out=C:1,0 l3=0 slot=14 bank=0
+OP kind=L3_STORE out=C:1,0 l3=0 slot=14 bank=0
+OP kind=L3_RELEASE out=C:1,0 l3=0 slot=14 bank=0
+OP kind=L3_RELEASE out=A:1,0 l3=0 slot=10 bank=0
+OP kind=L3_RELEASE out=A:1,1 l3=0 slot=11 bank=0
+OP kind=L3_RELEASE out=A:1,2 l3=0 slot=12 bank=0
+OP kind=L3_RELEASE out=A:1,3 l3=0 slot=13 bank=0
+OP kind=L3_LOAD out=A:2,0 l3=0 slot=15 bank=0
+OP kind=L3_LOAD out=A:2,1 l3=0 slot=16 bank=0
+OP kind=L3_LOAD out=A:2,2 l3=0 slot=17 bank=0
+OP kind=L3_LOAD out=A:2,3 l3=0 slot=18 bank=0
+OP kind=L3_MOVE out=A:2,0 l3=0 slot=15 bank=0
 OP kind=FEED in=A:2,0 port_kind=input port="West"
+OP kind=L3_MOVE out=B:0,0 l3=0 slot=0 bank=0
 OP kind=FEED in=B:0,0 port_kind=input port="North"
 OP kind=MATMUL_ACCUM in=A:2,0;B:0,0 out=C:2,0 label="line 13"
+OP kind=L3_MOVE out=A:2,1 l3=0 slot=16 bank=0
 OP kind=FEED in=A:2,1 port_kind=input port="West"
+OP kind=L3_MOVE out=B:1,0 l3=0 slot=1 bank=0
 OP kind=FEED in=B:1,0 port_kind=input port="North"
 OP kind=MATMUL_ACCUM in=A:2,1;B:1,0 out=C:2,0 label="line 13"
+OP kind=L3_MOVE out=A:2,2 l3=0 slot=17 bank=0
 OP kind=FEED in=A:2,2 port_kind=input port="West"
+OP kind=L3_MOVE out=B:2,0 l3=0 slot=2 bank=0
 OP kind=FEED in=B:2,0 port_kind=input port="North"
 OP kind=MATMUL_ACCUM in=A:2,2;B:2,0 out=C:2,0 label="line 13"
+OP kind=L3_MOVE out=A:2,3 l3=0 slot=18 bank=0
 OP kind=FEED in=A:2,3 port_kind=input port="West"
+OP kind=L3_MOVE out=B:3,0 l3=0 slot=3 bank=0
 OP kind=FEED in=B:3,0 port_kind=input port="North"
 OP kind=MATMUL_ACCUM in=A:2,3;B:3,0 out=C:2,0 label="line 13"
 OP kind=BIAS_ADD in=b:0,0 out=C:2,0 label="context @ fabric"
 OP kind=ACTIVATION out=C:2,0 act=relu label="context @ fabric"
 OP kind=DRAIN out=C:2,0 port_kind=output port="South"
+OP kind=L3_WRITEBACK out=C:2,0 l3=0 slot=19 bank=0
+OP kind=L3_STORE out=C:2,0 l3=0 slot=19 bank=0
+OP kind=L3_RELEASE out=C:2,0 l3=0 slot=19 bank=0
+OP kind=L3_RELEASE out=A:2,0 l3=0 slot=15 bank=0
+OP kind=L3_RELEASE out=A:2,1 l3=0 slot=16 bank=0
+OP kind=L3_RELEASE out=A:2,2 l3=0 slot=17 bank=0
+OP kind=L3_RELEASE out=A:2,3 l3=0 slot=18 bank=0
+OP kind=L3_LOAD out=A:3,0 l3=0 slot=20 bank=0
+OP kind=L3_LOAD out=A:3,1 l3=0 slot=21 bank=0
+OP kind=L3_LOAD out=A:3,2 l3=0 slot=22 bank=0
+OP kind=L3_LOAD out=A:3,3 l3=0 slot=23 bank=0
+OP kind=L3_MOVE out=A:3,0 l3=0 slot=20 bank=0
 OP kind=FEED in=A:3,0 port_kind=input port="West"
+OP kind=L3_MOVE out=B:0,0 l3=0 slot=0 bank=0
 OP kind=FEED in=B:0,0 port_kind=input port="North"
 OP kind=MATMUL_ACCUM in=A:3,0;B:0,0 out=C:3,0 label="line 13"
+OP kind=L3_MOVE out=A:3,1 l3=0 slot=21 bank=0
 OP kind=FEED in=A:3,1 port_kind=input port="West"
+OP kind=L3_MOVE out=B:1,0 l3=0 slot=1 bank=0
 OP kind=FEED in=B:1,0 port_kind=input port="North"
 OP kind=MATMUL_ACCUM in=A:3,1;B:1,0 out=C:3,0 label="line 13"
+OP kind=L3_MOVE out=A:3,2 l3=0 slot=22 bank=0
 OP kind=FEED in=A:3,2 port_kind=input port="West"
+OP kind=L3_MOVE out=B:2,0 l3=0 slot=2 bank=0
 OP kind=FEED in=B:2,0 port_kind=input port="North"
 OP kind=MATMUL_ACCUM in=A:3,2;B:2,0 out=C:3,0 label="line 13"
+OP kind=L3_MOVE out=A:3,3 l3=0 slot=23 bank=0
 OP kind=FEED in=A:3,3 port_kind=input port="West"
+OP kind=L3_MOVE out=B:3,0 l3=0 slot=3 bank=0
 OP kind=FEED in=B:3,0 port_kind=input port="North"
 OP kind=MATMUL_ACCUM in=A:3,3;B:3,0 out=C:3,0 label="line 13"
 OP kind=BIAS_ADD in=b:0,0 out=C:3,0 label="context @ fabric"
 OP kind=ACTIVATION out=C:3,0 act=relu label="context @ fabric"
 OP kind=DRAIN out=C:3,0 port_kind=output port="South"
+OP kind=L3_WRITEBACK out=C:3,0 l3=0 slot=24 bank=0
+OP kind=L3_STORE out=C:3,0 l3=0 slot=24 bank=0
+OP kind=L3_RELEASE out=C:3,0 l3=0 slot=24 bank=0
+OP kind=L3_RELEASE out=A:3,0 l3=0 slot=20 bank=0
+OP kind=L3_RELEASE out=A:3,1 l3=0 slot=21 bank=0
+OP kind=L3_RELEASE out=A:3,2 l3=0 slot=22 bank=0
+OP kind=L3_RELEASE out=A:3,3 l3=0 slot=23 bank=0
+OP kind=L3_RELEASE out=B:0,0 l3=0 slot=0 bank=0
+OP kind=L3_RELEASE out=B:1,0 l3=0 slot=1 bank=0
+OP kind=L3_RELEASE out=B:2,0 l3=0 slot=2 bank=0
+OP kind=L3_RELEASE out=B:3,0 l3=0 slot=3 bank=0
+OP kind=L3_RELEASE out=b:0,0 l3=0 slot=4 bank=0
+OP kind=L3_LOAD out=B:0,1 l3=0 slot=25 bank=0
+OP kind=L3_LOAD out=B:1,1 l3=0 slot=26 bank=0
+OP kind=L3_LOAD out=B:2,1 l3=0 slot=27 bank=0
+OP kind=L3_LOAD out=B:3,1 l3=0 slot=28 bank=0
+OP kind=L3_LOAD out=b:1,0 l3=0 slot=29 bank=0
+OP kind=L3_LOAD out=A:0,0 l3=0 slot=30 bank=0
+OP kind=L3_LOAD out=A:0,1 l3=0 slot=31 bank=0
+OP kind=L3_LOAD out=A:0,2 l3=0 slot=32 bank=0
+OP kind=L3_LOAD out=A:0,3 l3=0 slot=33 bank=0
+OP kind=L3_MOVE out=A:0,0 l3=0 slot=30 bank=0
 OP kind=FEED in=A:0,0 port_kind=input port="West"
+OP kind=L3_MOVE out=B:0,1 l3=0 slot=25 bank=0
 OP kind=FEED in=B:0,1 port_kind=input port="North"
 OP kind=MATMUL_ACCUM in=A:0,0;B:0,1 out=C:0,1 label="line 13"
+OP kind=L3_MOVE out=A:0,1 l3=0 slot=31 bank=0
 OP kind=FEED in=A:0,1 port_kind=input port="West"
+OP kind=L3_MOVE out=B:1,1 l3=0 slot=26 bank=0
 OP kind=FEED in=B:1,1 port_kind=input port="North"
 OP kind=MATMUL_ACCUM in=A:0,1;B:1,1 out=C:0,1 label="line 13"
+OP kind=L3_MOVE out=A:0,2 l3=0 slot=32 bank=0
 OP kind=FEED in=A:0,2 port_kind=input port="West"
+OP kind=L3_MOVE out=B:2,1 l3=0 slot=27 bank=0
 OP kind=FEED in=B:2,1 port_kind=input port="North"
 OP kind=MATMUL_ACCUM in=A:0,2;B:2,1 out=C:0,1 label="line 13"
+OP kind=L3_MOVE out=A:0,3 l3=0 slot=33 bank=0
 OP kind=FEED in=A:0,3 port_kind=input port="West"
+OP kind=L3_MOVE out=B:3,1 l3=0 slot=28 bank=0
 OP kind=FEED in=B:3,1 port_kind=input port="North"
 OP kind=MATMUL_ACCUM in=A:0,3;B:3,1 out=C:0,1 label="line 13"
 OP kind=BIAS_ADD in=b:1,0 out=C:0,1 label="context @ fabric"
 OP kind=ACTIVATION out=C:0,1 act=relu label="context @ fabric"
 OP kind=DRAIN out=C:0,1 port_kind=output port="South"
+OP kind=L3_WRITEBACK out=C:0,1 l3=0 slot=34 bank=0
+OP kind=L3_STORE out=C:0,1 l3=0 slot=34 bank=0
+OP kind=L3_RELEASE out=C:0,1 l3=0 slot=34 bank=0
+OP kind=L3_RELEASE out=A:0,0 l3=0 slot=30 bank=0
+OP kind=L3_RELEASE out=A:0,1 l3=0 slot=31 bank=0
+OP kind=L3_RELEASE out=A:0,2 l3=0 slot=32 bank=0
+OP kind=L3_RELEASE out=A:0,3 l3=0 slot=33 bank=0
+OP kind=L3_LOAD out=A:1,0 l3=0 slot=35 bank=0
+OP kind=L3_LOAD out=A:1,1 l3=0 slot=36 bank=0
+OP kind=L3_LOAD out=A:1,2 l3=0 slot=37 bank=0
+OP kind=L3_LOAD out=A:1,3 l3=0 slot=38 bank=0
+OP kind=L3_MOVE out=A:1,0 l3=0 slot=35 bank=0
 OP kind=FEED in=A:1,0 port_kind=input port="West"
+OP kind=L3_MOVE out=B:0,1 l3=0 slot=25 bank=0
 OP kind=FEED in=B:0,1 port_kind=input port="North"
 OP kind=MATMUL_ACCUM in=A:1,0;B:0,1 out=C:1,1 label="line 13"
+OP kind=L3_MOVE out=A:1,1 l3=0 slot=36 bank=0
 OP kind=FEED in=A:1,1 port_kind=input port="West"
+OP kind=L3_MOVE out=B:1,1 l3=0 slot=26 bank=0
 OP kind=FEED in=B:1,1 port_kind=input port="North"
 OP kind=MATMUL_ACCUM in=A:1,1;B:1,1 out=C:1,1 label="line 13"
+OP kind=L3_MOVE out=A:1,2 l3=0 slot=37 bank=0
 OP kind=FEED in=A:1,2 port_kind=input port="West"
+OP kind=L3_MOVE out=B:2,1 l3=0 slot=27 bank=0
 OP kind=FEED in=B:2,1 port_kind=input port="North"
 OP kind=MATMUL_ACCUM in=A:1,2;B:2,1 out=C:1,1 label="line 13"
+OP kind=L3_MOVE out=A:1,3 l3=0 slot=38 bank=0
 OP kind=FEED in=A:1,3 port_kind=input port="West"
+OP kind=L3_MOVE out=B:3,1 l3=0 slot=28 bank=0
 OP kind=FEED in=B:3,1 port_kind=input port="North"
 OP kind=MATMUL_ACCUM in=A:1,3;B:3,1 out=C:1,1 label="line 13"
 OP kind=BIAS_ADD in=b:1,0 out=C:1,1 label="context @ fabric"
 OP kind=ACTIVATION out=C:1,1 act=relu label="context @ fabric"
 OP kind=DRAIN out=C:1,1 port_kind=output port="South"
+OP kind=L3_WRITEBACK out=C:1,1 l3=0 slot=39 bank=0
+OP kind=L3_STORE out=C:1,1 l3=0 slot=39 bank=0
+OP kind=L3_RELEASE out=C:1,1 l3=0 slot=39 bank=0
+OP kind=L3_RELEASE out=A:1,0 l3=0 slot=35 bank=0
+OP kind=L3_RELEASE out=A:1,1 l3=0 slot=36 bank=0
+OP kind=L3_RELEASE out=A:1,2 l3=0 slot=37 bank=0
+OP kind=L3_RELEASE out=A:1,3 l3=0 slot=38 bank=0
+OP kind=L3_LOAD out=A:2,0 l3=0 slot=40 bank=0
+OP kind=L3_LOAD out=A:2,1 l3=0 slot=41 bank=0
+OP kind=L3_LOAD out=A:2,2 l3=0 slot=42 bank=0
+OP kind=L3_LOAD out=A:2,3 l3=0 slot=43 bank=0
+OP kind=L3_MOVE out=A:2,0 l3=0 slot=40 bank=0
 OP kind=FEED in=A:2,0 port_kind=input port="West"
+OP kind=L3_MOVE out=B:0,1 l3=0 slot=25 bank=0
 OP kind=FEED in=B:0,1 port_kind=input port="North"
 OP kind=MATMUL_ACCUM in=A:2,0;B:0,1 out=C:2,1 label="line 13"
+OP kind=L3_MOVE out=A:2,1 l3=0 slot=41 bank=0
 OP kind=FEED in=A:2,1 port_kind=input port="West"
+OP kind=L3_MOVE out=B:1,1 l3=0 slot=26 bank=0
 OP kind=FEED in=B:1,1 port_kind=input port="North"
 OP kind=MATMUL_ACCUM in=A:2,1;B:1,1 out=C:2,1 label="line 13"
+OP kind=L3_MOVE out=A:2,2 l3=0 slot=42 bank=0
 OP kind=FEED in=A:2,2 port_kind=input port="West"
+OP kind=L3_MOVE out=B:2,1 l3=0 slot=27 bank=0
 OP kind=FEED in=B:2,1 port_kind=input port="North"
 OP kind=MATMUL_ACCUM in=A:2,2;B:2,1 out=C:2,1 label="line 13"
+OP kind=L3_MOVE out=A:2,3 l3=0 slot=43 bank=0
 OP kind=FEED in=A:2,3 port_kind=input port="West"
+OP kind=L3_MOVE out=B:3,1 l3=0 slot=28 bank=0
 OP kind=FEED in=B:3,1 port_kind=input port="North"
 OP kind=MATMUL_ACCUM in=A:2,3;B:3,1 out=C:2,1 label="line 13"
 OP kind=BIAS_ADD in=b:1,0 out=C:2,1 label="context @ fabric"
 OP kind=ACTIVATION out=C:2,1 act=relu label="context @ fabric"
 OP kind=DRAIN out=C:2,1 port_kind=output port="South"
+OP kind=L3_WRITEBACK out=C:2,1 l3=0 slot=44 bank=0
+OP kind=L3_STORE out=C:2,1 l3=0 slot=44 bank=0
+OP kind=L3_RELEASE out=C:2,1 l3=0 slot=44 bank=0
+OP kind=L3_RELEASE out=A:2,0 l3=0 slot=40 bank=0
+OP kind=L3_RELEASE out=A:2,1 l3=0 slot=41 bank=0
+OP kind=L3_RELEASE out=A:2,2 l3=0 slot=42 bank=0
+OP kind=L3_RELEASE out=A:2,3 l3=0 slot=43 bank=0
+OP kind=L3_LOAD out=A:3,0 l3=0 slot=45 bank=0
+OP kind=L3_LOAD out=A:3,1 l3=0 slot=46 bank=0
+OP kind=L3_LOAD out=A:3,2 l3=0 slot=47 bank=0
+OP kind=L3_LOAD out=A:3,3 l3=0 slot=48 bank=0
+OP kind=L3_MOVE out=A:3,0 l3=0 slot=45 bank=0
 OP kind=FEED in=A:3,0 port_kind=input port="West"
+OP kind=L3_MOVE out=B:0,1 l3=0 slot=25 bank=0
 OP kind=FEED in=B:0,1 port_kind=input port="North"
 OP kind=MATMUL_ACCUM in=A:3,0;B:0,1 out=C:3,1 label="line 13"
+OP kind=L3_MOVE out=A:3,1 l3=0 slot=46 bank=0
 OP kind=FEED in=A:3,1 port_kind=input port="West"
+OP kind=L3_MOVE out=B:1,1 l3=0 slot=26 bank=0
 OP kind=FEED in=B:1,1 port_kind=input port="North"
 OP kind=MATMUL_ACCUM in=A:3,1;B:1,1 out=C:3,1 label="line 13"
+OP kind=L3_MOVE out=A:3,2 l3=0 slot=47 bank=0
 OP kind=FEED in=A:3,2 port_kind=input port="West"
+OP kind=L3_MOVE out=B:2,1 l3=0 slot=27 bank=0
 OP kind=FEED in=B:2,1 port_kind=input port="North"
 OP kind=MATMUL_ACCUM in=A:3,2;B:2,1 out=C:3,1 label="line 13"
+OP kind=L3_MOVE out=A:3,3 l3=0 slot=48 bank=0
 OP kind=FEED in=A:3,3 port_kind=input port="West"
+OP kind=L3_MOVE out=B:3,1 l3=0 slot=28 bank=0
 OP kind=FEED in=B:3,1 port_kind=input port="North"
 OP kind=MATMUL_ACCUM in=A:3,3;B:3,1 out=C:3,1 label="line 13"
 OP kind=BIAS_ADD in=b:1,0 out=C:3,1 label="context @ fabric"
 OP kind=ACTIVATION out=C:3,1 act=relu label="context @ fabric"
 OP kind=DRAIN out=C:3,1 port_kind=output port="South"
+OP kind=L3_WRITEBACK out=C:3,1 l3=0 slot=49 bank=0
+OP kind=L3_STORE out=C:3,1 l3=0 slot=49 bank=0
+OP kind=L3_RELEASE out=C:3,1 l3=0 slot=49 bank=0
+OP kind=L3_RELEASE out=A:3,0 l3=0 slot=45 bank=0
+OP kind=L3_RELEASE out=A:3,1 l3=0 slot=46 bank=0
+OP kind=L3_RELEASE out=A:3,2 l3=0 slot=47 bank=0
+OP kind=L3_RELEASE out=A:3,3 l3=0 slot=48 bank=0
+OP kind=L3_RELEASE out=B:0,1 l3=0 slot=25 bank=0
+OP kind=L3_RELEASE out=B:1,1 l3=0 slot=26 bank=0
+OP kind=L3_RELEASE out=B:2,1 l3=0 slot=27 bank=0
+OP kind=L3_RELEASE out=B:3,1 l3=0 slot=28 bank=0
+OP kind=L3_RELEASE out=b:1,0 l3=0 slot=29 bank=0
+OP kind=L3_LOAD out=B:0,2 l3=0 slot=50 bank=0
+OP kind=L3_LOAD out=B:1,2 l3=0 slot=51 bank=0
+OP kind=L3_LOAD out=B:2,2 l3=0 slot=52 bank=0
+OP kind=L3_LOAD out=B:3,2 l3=0 slot=53 bank=0
+OP kind=L3_LOAD out=b:2,0 l3=0 slot=54 bank=0
+OP kind=L3_LOAD out=A:0,0 l3=0 slot=55 bank=0
+OP kind=L3_LOAD out=A:0,1 l3=0 slot=56 bank=0
+OP kind=L3_LOAD out=A:0,2 l3=0 slot=57 bank=0
+OP kind=L3_LOAD out=A:0,3 l3=0 slot=58 bank=0
+OP kind=L3_MOVE out=A:0,0 l3=0 slot=55 bank=0
 OP kind=FEED in=A:0,0 port_kind=input port="West"
+OP kind=L3_MOVE out=B:0,2 l3=0 slot=50 bank=0
 OP kind=FEED in=B:0,2 port_kind=input port="North"
 OP kind=MATMUL_ACCUM in=A:0,0;B:0,2 out=C:0,2 label="line 13"
+OP kind=L3_MOVE out=A:0,1 l3=0 slot=56 bank=0
 OP kind=FEED in=A:0,1 port_kind=input port="West"
+OP kind=L3_MOVE out=B:1,2 l3=0 slot=51 bank=0
 OP kind=FEED in=B:1,2 port_kind=input port="North"
 OP kind=MATMUL_ACCUM in=A:0,1;B:1,2 out=C:0,2 label="line 13"
+OP kind=L3_MOVE out=A:0,2 l3=0 slot=57 bank=0
 OP kind=FEED in=A:0,2 port_kind=input port="West"
+OP kind=L3_MOVE out=B:2,2 l3=0 slot=52 bank=0
 OP kind=FEED in=B:2,2 port_kind=input port="North"
 OP kind=MATMUL_ACCUM in=A:0,2;B:2,2 out=C:0,2 label="line 13"
+OP kind=L3_MOVE out=A:0,3 l3=0 slot=58 bank=0
 OP kind=FEED in=A:0,3 port_kind=input port="West"
+OP kind=L3_MOVE out=B:3,2 l3=0 slot=53 bank=0
 OP kind=FEED in=B:3,2 port_kind=input port="North"
 OP kind=MATMUL_ACCUM in=A:0,3;B:3,2 out=C:0,2 label="line 13"
 OP kind=BIAS_ADD in=b:2,0 out=C:0,2 label="context @ fabric"
 OP kind=ACTIVATION out=C:0,2 act=relu label="context @ fabric"
 OP kind=DRAIN out=C:0,2 port_kind=output port="South"
+OP kind=L3_WRITEBACK out=C:0,2 l3=0 slot=59 bank=0
+OP kind=L3_STORE out=C:0,2 l3=0 slot=59 bank=0
+OP kind=L3_RELEASE out=C:0,2 l3=0 slot=59 bank=0
+OP kind=L3_RELEASE out=A:0,0 l3=0 slot=55 bank=0
+OP kind=L3_RELEASE out=A:0,1 l3=0 slot=56 bank=0
+OP kind=L3_RELEASE out=A:0,2 l3=0 slot=57 bank=0
+OP kind=L3_RELEASE out=A:0,3 l3=0 slot=58 bank=0
+OP kind=L3_LOAD out=A:1,0 l3=0 slot=60 bank=0
+OP kind=L3_LOAD out=A:1,1 l3=0 slot=61 bank=0
+OP kind=L3_LOAD out=A:1,2 l3=0 slot=62 bank=0
+OP kind=L3_LOAD out=A:1,3 l3=0 slot=63 bank=0
+OP kind=L3_MOVE out=A:1,0 l3=0 slot=60 bank=0
 OP kind=FEED in=A:1,0 port_kind=input port="West"
+OP kind=L3_MOVE out=B:0,2 l3=0 slot=50 bank=0
 OP kind=FEED in=B:0,2 port_kind=input port="North"
 OP kind=MATMUL_ACCUM in=A:1,0;B:0,2 out=C:1,2 label="line 13"
+OP kind=L3_MOVE out=A:1,1 l3=0 slot=61 bank=0
 OP kind=FEED in=A:1,1 port_kind=input port="West"
+OP kind=L3_MOVE out=B:1,2 l3=0 slot=51 bank=0
 OP kind=FEED in=B:1,2 port_kind=input port="North"
 OP kind=MATMUL_ACCUM in=A:1,1;B:1,2 out=C:1,2 label="line 13"
+OP kind=L3_MOVE out=A:1,2 l3=0 slot=62 bank=0
 OP kind=FEED in=A:1,2 port_kind=input port="West"
+OP kind=L3_MOVE out=B:2,2 l3=0 slot=52 bank=0
 OP kind=FEED in=B:2,2 port_kind=input port="North"
 OP kind=MATMUL_ACCUM in=A:1,2;B:2,2 out=C:1,2 label="line 13"
+OP kind=L3_MOVE out=A:1,3 l3=0 slot=63 bank=0
 OP kind=FEED in=A:1,3 port_kind=input port="West"
+OP kind=L3_MOVE out=B:3,2 l3=0 slot=53 bank=0
 OP kind=FEED in=B:3,2 port_kind=input port="North"
 OP kind=MATMUL_ACCUM in=A:1,3;B:3,2 out=C:1,2 label="line 13"
 OP kind=BIAS_ADD in=b:2,0 out=C:1,2 label="context @ fabric"
 OP kind=ACTIVATION out=C:1,2 act=relu label="context @ fabric"
 OP kind=DRAIN out=C:1,2 port_kind=output port="South"
+OP kind=L3_WRITEBACK out=C:1,2 l3=0 slot=64 bank=0
+OP kind=L3_STORE out=C:1,2 l3=0 slot=64 bank=0
+OP kind=L3_RELEASE out=C:1,2 l3=0 slot=64 bank=0
+OP kind=L3_RELEASE out=A:1,0 l3=0 slot=60 bank=0
+OP kind=L3_RELEASE out=A:1,1 l3=0 slot=61 bank=0
+OP kind=L3_RELEASE out=A:1,2 l3=0 slot=62 bank=0
+OP kind=L3_RELEASE out=A:1,3 l3=0 slot=63 bank=0
+OP kind=L3_LOAD out=A:2,0 l3=0 slot=65 bank=0
+OP kind=L3_LOAD out=A:2,1 l3=0 slot=66 bank=0
+OP kind=L3_LOAD out=A:2,2 l3=0 slot=67 bank=0
+OP kind=L3_LOAD out=A:2,3 l3=0 slot=68 bank=0
+OP kind=L3_MOVE out=A:2,0 l3=0 slot=65 bank=0
 OP kind=FEED in=A:2,0 port_kind=input port="West"
+OP kind=L3_MOVE out=B:0,2 l3=0 slot=50 bank=0
 OP kind=FEED in=B:0,2 port_kind=input port="North"
 OP kind=MATMUL_ACCUM in=A:2,0;B:0,2 out=C:2,2 label="line 13"
+OP kind=L3_MOVE out=A:2,1 l3=0 slot=66 bank=0
 OP kind=FEED in=A:2,1 port_kind=input port="West"
+OP kind=L3_MOVE out=B:1,2 l3=0 slot=51 bank=0
 OP kind=FEED in=B:1,2 port_kind=input port="North"
 OP kind=MATMUL_ACCUM in=A:2,1;B:1,2 out=C:2,2 label="line 13"
+OP kind=L3_MOVE out=A:2,2 l3=0 slot=67 bank=0
 OP kind=FEED in=A:2,2 port_kind=input port="West"
+OP kind=L3_MOVE out=B:2,2 l3=0 slot=52 bank=0
 OP kind=FEED in=B:2,2 port_kind=input port="North"
 OP kind=MATMUL_ACCUM in=A:2,2;B:2,2 out=C:2,2 label="line 13"
+OP kind=L3_MOVE out=A:2,3 l3=0 slot=68 bank=0
 OP kind=FEED in=A:2,3 port_kind=input port="West"
+OP kind=L3_MOVE out=B:3,2 l3=0 slot=53 bank=0
 OP kind=FEED in=B:3,2 port_kind=input port="North"
 OP kind=MATMUL_ACCUM in=A:2,3;B:3,2 out=C:2,2 label="line 13"
 OP kind=BIAS_ADD in=b:2,0 out=C:2,2 label="context @ fabric"
 OP kind=ACTIVATION out=C:2,2 act=relu label="context @ fabric"
 OP kind=DRAIN out=C:2,2 port_kind=output port="South"
+OP kind=L3_WRITEBACK out=C:2,2 l3=0 slot=69 bank=0
+OP kind=L3_STORE out=C:2,2 l3=0 slot=69 bank=0
+OP kind=L3_RELEASE out=C:2,2 l3=0 slot=69 bank=0
+OP kind=L3_RELEASE out=A:2,0 l3=0 slot=65 bank=0
+OP kind=L3_RELEASE out=A:2,1 l3=0 slot=66 bank=0
+OP kind=L3_RELEASE out=A:2,2 l3=0 slot=67 bank=0
+OP kind=L3_RELEASE out=A:2,3 l3=0 slot=68 bank=0
+OP kind=L3_LOAD out=A:3,0 l3=0 slot=70 bank=0
+OP kind=L3_LOAD out=A:3,1 l3=0 slot=71 bank=0
+OP kind=L3_LOAD out=A:3,2 l3=0 slot=72 bank=0
+OP kind=L3_LOAD out=A:3,3 l3=0 slot=73 bank=0
+OP kind=L3_MOVE out=A:3,0 l3=0 slot=70 bank=0
 OP kind=FEED in=A:3,0 port_kind=input port="West"
+OP kind=L3_MOVE out=B:0,2 l3=0 slot=50 bank=0
 OP kind=FEED in=B:0,2 port_kind=input port="North"
 OP kind=MATMUL_ACCUM in=A:3,0;B:0,2 out=C:3,2 label="line 13"
+OP kind=L3_MOVE out=A:3,1 l3=0 slot=71 bank=0
 OP kind=FEED in=A:3,1 port_kind=input port="West"
+OP kind=L3_MOVE out=B:1,2 l3=0 slot=51 bank=0
 OP kind=FEED in=B:1,2 port_kind=input port="North"
 OP kind=MATMUL_ACCUM in=A:3,1;B:1,2 out=C:3,2 label="line 13"
+OP kind=L3_MOVE out=A:3,2 l3=0 slot=72 bank=0
 OP kind=FEED in=A:3,2 port_kind=input port="West"
+OP kind=L3_MOVE out=B:2,2 l3=0 slot=52 bank=0
 OP kind=FEED in=B:2,2 port_kind=input port="North"
 OP kind=MATMUL_ACCUM in=A:3,2;B:2,2 out=C:3,2 label="line 13"
+OP kind=L3_MOVE out=A:3,3 l3=0 slot=73 bank=0
 OP kind=FEED in=A:3,3 port_kind=input port="West"
+OP kind=L3_MOVE out=B:3,2 l3=0 slot=53 bank=0
 OP kind=FEED in=B:3,2 port_kind=input port="North"
 OP kind=MATMUL_ACCUM in=A:3,3;B:3,2 out=C:3,2 label="line 13"
 OP kind=BIAS_ADD in=b:2,0 out=C:3,2 label="context @ fabric"
 OP kind=ACTIVATION out=C:3,2 act=relu label="context @ fabric"
 OP kind=DRAIN out=C:3,2 port_kind=output port="South"
+OP kind=L3_WRITEBACK out=C:3,2 l3=0 slot=74 bank=0
+OP kind=L3_STORE out=C:3,2 l3=0 slot=74 bank=0
+OP kind=L3_RELEASE out=C:3,2 l3=0 slot=74 bank=0
+OP kind=L3_RELEASE out=A:3,0 l3=0 slot=70 bank=0
+OP kind=L3_RELEASE out=A:3,1 l3=0 slot=71 bank=0
+OP kind=L3_RELEASE out=A:3,2 l3=0 slot=72 bank=0
+OP kind=L3_RELEASE out=A:3,3 l3=0 slot=73 bank=0
+OP kind=L3_RELEASE out=B:0,2 l3=0 slot=50 bank=0
+OP kind=L3_RELEASE out=B:1,2 l3=0 slot=51 bank=0
+OP kind=L3_RELEASE out=B:2,2 l3=0 slot=52 bank=0
+OP kind=L3_RELEASE out=B:3,2 l3=0 slot=53 bank=0
+OP kind=L3_RELEASE out=b:2,0 l3=0 slot=54 bank=0
+OP kind=L3_LOAD out=B:0,3 l3=0 slot=75 bank=0
+OP kind=L3_LOAD out=B:1,3 l3=0 slot=76 bank=0
+OP kind=L3_LOAD out=B:2,3 l3=0 slot=77 bank=0
+OP kind=L3_LOAD out=B:3,3 l3=0 slot=78 bank=0
+OP kind=L3_LOAD out=b:3,0 l3=0 slot=79 bank=0
+OP kind=L3_LOAD out=A:0,0 l3=0 slot=80 bank=0
+OP kind=L3_LOAD out=A:0,1 l3=0 slot=81 bank=0
+OP kind=L3_LOAD out=A:0,2 l3=0 slot=82 bank=0
+OP kind=L3_LOAD out=A:0,3 l3=0 slot=83 bank=0
+OP kind=L3_MOVE out=A:0,0 l3=0 slot=80 bank=0
 OP kind=FEED in=A:0,0 port_kind=input port="West"
+OP kind=L3_MOVE out=B:0,3 l3=0 slot=75 bank=0
 OP kind=FEED in=B:0,3 port_kind=input port="North"
 OP kind=MATMUL_ACCUM in=A:0,0;B:0,3 out=C:0,3 label="line 13"
+OP kind=L3_MOVE out=A:0,1 l3=0 slot=81 bank=0
 OP kind=FEED in=A:0,1 port_kind=input port="West"
+OP kind=L3_MOVE out=B:1,3 l3=0 slot=76 bank=0
 OP kind=FEED in=B:1,3 port_kind=input port="North"
 OP kind=MATMUL_ACCUM in=A:0,1;B:1,3 out=C:0,3 label="line 13"
+OP kind=L3_MOVE out=A:0,2 l3=0 slot=82 bank=0
 OP kind=FEED in=A:0,2 port_kind=input port="West"
+OP kind=L3_MOVE out=B:2,3 l3=0 slot=77 bank=0
 OP kind=FEED in=B:2,3 port_kind=input port="North"
 OP kind=MATMUL_ACCUM in=A:0,2;B:2,3 out=C:0,3 label="line 13"
+OP kind=L3_MOVE out=A:0,3 l3=0 slot=83 bank=0
 OP kind=FEED in=A:0,3 port_kind=input port="West"
+OP kind=L3_MOVE out=B:3,3 l3=0 slot=78 bank=0
 OP kind=FEED in=B:3,3 port_kind=input port="North"
 OP kind=MATMUL_ACCUM in=A:0,3;B:3,3 out=C:0,3 label="line 13"
 OP kind=BIAS_ADD in=b:3,0 out=C:0,3 label="context @ fabric"
 OP kind=ACTIVATION out=C:0,3 act=relu label="context @ fabric"
 OP kind=DRAIN out=C:0,3 port_kind=output port="South"
+OP kind=L3_WRITEBACK out=C:0,3 l3=0 slot=84 bank=0
+OP kind=L3_STORE out=C:0,3 l3=0 slot=84 bank=0
+OP kind=L3_RELEASE out=C:0,3 l3=0 slot=84 bank=0
+OP kind=L3_RELEASE out=A:0,0 l3=0 slot=80 bank=0
+OP kind=L3_RELEASE out=A:0,1 l3=0 slot=81 bank=0
+OP kind=L3_RELEASE out=A:0,2 l3=0 slot=82 bank=0
+OP kind=L3_RELEASE out=A:0,3 l3=0 slot=83 bank=0
+OP kind=L3_LOAD out=A:1,0 l3=0 slot=85 bank=0
+OP kind=L3_LOAD out=A:1,1 l3=0 slot=86 bank=0
+OP kind=L3_LOAD out=A:1,2 l3=0 slot=87 bank=0
+OP kind=L3_LOAD out=A:1,3 l3=0 slot=88 bank=0
+OP kind=L3_MOVE out=A:1,0 l3=0 slot=85 bank=0
 OP kind=FEED in=A:1,0 port_kind=input port="West"
+OP kind=L3_MOVE out=B:0,3 l3=0 slot=75 bank=0
 OP kind=FEED in=B:0,3 port_kind=input port="North"
 OP kind=MATMUL_ACCUM in=A:1,0;B:0,3 out=C:1,3 label="line 13"
+OP kind=L3_MOVE out=A:1,1 l3=0 slot=86 bank=0
 OP kind=FEED in=A:1,1 port_kind=input port="West"
+OP kind=L3_MOVE out=B:1,3 l3=0 slot=76 bank=0
 OP kind=FEED in=B:1,3 port_kind=input port="North"
 OP kind=MATMUL_ACCUM in=A:1,1;B:1,3 out=C:1,3 label="line 13"
+OP kind=L3_MOVE out=A:1,2 l3=0 slot=87 bank=0
 OP kind=FEED in=A:1,2 port_kind=input port="West"
+OP kind=L3_MOVE out=B:2,3 l3=0 slot=77 bank=0
 OP kind=FEED in=B:2,3 port_kind=input port="North"
 OP kind=MATMUL_ACCUM in=A:1,2;B:2,3 out=C:1,3 label="line 13"
+OP kind=L3_MOVE out=A:1,3 l3=0 slot=88 bank=0
 OP kind=FEED in=A:1,3 port_kind=input port="West"
+OP kind=L3_MOVE out=B:3,3 l3=0 slot=78 bank=0
 OP kind=FEED in=B:3,3 port_kind=input port="North"
 OP kind=MATMUL_ACCUM in=A:1,3;B:3,3 out=C:1,3 label="line 13"
 OP kind=BIAS_ADD in=b:3,0 out=C:1,3 label="context @ fabric"
 OP kind=ACTIVATION out=C:1,3 act=relu label="context @ fabric"
 OP kind=DRAIN out=C:1,3 port_kind=output port="South"
+OP kind=L3_WRITEBACK out=C:1,3 l3=0 slot=89 bank=0
+OP kind=L3_STORE out=C:1,3 l3=0 slot=89 bank=0
+OP kind=L3_RELEASE out=C:1,3 l3=0 slot=89 bank=0
+OP kind=L3_RELEASE out=A:1,0 l3=0 slot=85 bank=0
+OP kind=L3_RELEASE out=A:1,1 l3=0 slot=86 bank=0
+OP kind=L3_RELEASE out=A:1,2 l3=0 slot=87 bank=0
+OP kind=L3_RELEASE out=A:1,3 l3=0 slot=88 bank=0
+OP kind=L3_LOAD out=A:2,0 l3=0 slot=90 bank=0
+OP kind=L3_LOAD out=A:2,1 l3=0 slot=91 bank=0
+OP kind=L3_LOAD out=A:2,2 l3=0 slot=92 bank=0
+OP kind=L3_LOAD out=A:2,3 l3=0 slot=93 bank=0
+OP kind=L3_MOVE out=A:2,0 l3=0 slot=90 bank=0
 OP kind=FEED in=A:2,0 port_kind=input port="West"
+OP kind=L3_MOVE out=B:0,3 l3=0 slot=75 bank=0
 OP kind=FEED in=B:0,3 port_kind=input port="North"
 OP kind=MATMUL_ACCUM in=A:2,0;B:0,3 out=C:2,3 label="line 13"
+OP kind=L3_MOVE out=A:2,1 l3=0 slot=91 bank=0
 OP kind=FEED in=A:2,1 port_kind=input port="West"
+OP kind=L3_MOVE out=B:1,3 l3=0 slot=76 bank=0
 OP kind=FEED in=B:1,3 port_kind=input port="North"
 OP kind=MATMUL_ACCUM in=A:2,1;B:1,3 out=C:2,3 label="line 13"
+OP kind=L3_MOVE out=A:2,2 l3=0 slot=92 bank=0
 OP kind=FEED in=A:2,2 port_kind=input port="West"
+OP kind=L3_MOVE out=B:2,3 l3=0 slot=77 bank=0
 OP kind=FEED in=B:2,3 port_kind=input port="North"
 OP kind=MATMUL_ACCUM in=A:2,2;B:2,3 out=C:2,3 label="line 13"
+OP kind=L3_MOVE out=A:2,3 l3=0 slot=93 bank=0
 OP kind=FEED in=A:2,3 port_kind=input port="West"
+OP kind=L3_MOVE out=B:3,3 l3=0 slot=78 bank=0
 OP kind=FEED in=B:3,3 port_kind=input port="North"
 OP kind=MATMUL_ACCUM in=A:2,3;B:3,3 out=C:2,3 label="line 13"
 OP kind=BIAS_ADD in=b:3,0 out=C:2,3 label="context @ fabric"
 OP kind=ACTIVATION out=C:2,3 act=relu label="context @ fabric"
 OP kind=DRAIN out=C:2,3 port_kind=output port="South"
+OP kind=L3_WRITEBACK out=C:2,3 l3=0 slot=94 bank=0
+OP kind=L3_STORE out=C:2,3 l3=0 slot=94 bank=0
+OP kind=L3_RELEASE out=C:2,3 l3=0 slot=94 bank=0
+OP kind=L3_RELEASE out=A:2,0 l3=0 slot=90 bank=0
+OP kind=L3_RELEASE out=A:2,1 l3=0 slot=91 bank=0
+OP kind=L3_RELEASE out=A:2,2 l3=0 slot=92 bank=0
+OP kind=L3_RELEASE out=A:2,3 l3=0 slot=93 bank=0
+OP kind=L3_LOAD out=A:3,0 l3=0 slot=95 bank=0
+OP kind=L3_LOAD out=A:3,1 l3=0 slot=96 bank=0
+OP kind=L3_LOAD out=A:3,2 l3=0 slot=97 bank=0
+OP kind=L3_LOAD out=A:3,3 l3=0 slot=98 bank=0
+OP kind=L3_MOVE out=A:3,0 l3=0 slot=95 bank=0
 OP kind=FEED in=A:3,0 port_kind=input port="West"
+OP kind=L3_MOVE out=B:0,3 l3=0 slot=75 bank=0
 OP kind=FEED in=B:0,3 port_kind=input port="North"
 OP kind=MATMUL_ACCUM in=A:3,0;B:0,3 out=C:3,3 label="line 13"
+OP kind=L3_MOVE out=A:3,1 l3=0 slot=96 bank=0
 OP kind=FEED in=A:3,1 port_kind=input port="West"
+OP kind=L3_MOVE out=B:1,3 l3=0 slot=76 bank=0
 OP kind=FEED in=B:1,3 port_kind=input port="North"
 OP kind=MATMUL_ACCUM in=A:3,1;B:1,3 out=C:3,3 label="line 13"
+OP kind=L3_MOVE out=A:3,2 l3=0 slot=97 bank=0
 OP kind=FEED in=A:3,2 port_kind=input port="West"
+OP kind=L3_MOVE out=B:2,3 l3=0 slot=77 bank=0
 OP kind=FEED in=B:2,3 port_kind=input port="North"
 OP kind=MATMUL_ACCUM in=A:3,2;B:2,3 out=C:3,3 label="line 13"
+OP kind=L3_MOVE out=A:3,3 l3=0 slot=98 bank=0
 OP kind=FEED in=A:3,3 port_kind=input port="West"
+OP kind=L3_MOVE out=B:3,3 l3=0 slot=78 bank=0
 OP kind=FEED in=B:3,3 port_kind=input port="North"
 OP kind=MATMUL_ACCUM in=A:3,3;B:3,3 out=C:3,3 label="line 13"
 OP kind=BIAS_ADD in=b:3,0 out=C:3,3 label="context @ fabric"
 OP kind=ACTIVATION out=C:3,3 act=relu label="context @ fabric"
 OP kind=DRAIN out=C:3,3 port_kind=output port="South"
+OP kind=L3_WRITEBACK out=C:3,3 l3=0 slot=99 bank=0
+OP kind=L3_STORE out=C:3,3 l3=0 slot=99 bank=0
+OP kind=L3_RELEASE out=C:3,3 l3=0 slot=99 bank=0
+OP kind=L3_RELEASE out=A:3,0 l3=0 slot=95 bank=0
+OP kind=L3_RELEASE out=A:3,1 l3=0 slot=96 bank=0
+OP kind=L3_RELEASE out=A:3,2 l3=0 slot=97 bank=0
+OP kind=L3_RELEASE out=A:3,3 l3=0 slot=98 bank=0
+OP kind=L3_RELEASE out=B:0,3 l3=0 slot=75 bank=0
+OP kind=L3_RELEASE out=B:1,3 l3=0 slot=76 bank=0
+OP kind=L3_RELEASE out=B:2,3 l3=0 slot=77 bank=0
+OP kind=L3_RELEASE out=B:3,3 l3=0 slot=78 bank=0
+OP kind=L3_RELEASE out=b:3,0 l3=0 slot=79 bank=0
 END

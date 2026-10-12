@@ -11,6 +11,11 @@
 // operator's tile-level compute produces the correct numeric result, L0 alone is
 // a *pure functional reference* (see tile_program_reference.hpp).
 //
+// L3 placement is the exception to "no bank ids" (ADR 0004 §5; docs/plans/l3-placement-at-lb.md
+// §3.5): placement is behavior, decided once by the program's walker, so a trace records every L3
+// transaction with its address (opset 1.2: the L3_* ops). The replay checks it; the analyses of
+// the compute schedule (dependencies, characterization) skip those ops.
+//
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2024-2025 Stillwater Supercomputing, Inc.
 // ============================================================================
@@ -95,6 +100,22 @@ enum class PortKind { Input, Output };
 // GEMM), one op per tile, so multi-tile linear algebra is an explicit DAG of tile
 // kernels with complete per-op tile I/O (§3a of docs/plans/kpu-program-model.md;
 // catalog + HW requirements in docs/plans/plasma-tile-algorithms.md).
+// Where a residency lives in L3 (ADR 0004 §5): the module, the tile-sized slot within it, and the
+// slot's bank. The walker allocates it (csp/lang/place.hpp); every level executes it.
+struct L3Address {
+    std::uint32_t l3_tile = 0;          // the L3 module (always 0 at level 1; level 2's owner)
+    std::uint32_t slot = 0;             // the tile-sized buffer within the module
+    std::uint32_t bank = 0;             // slot % banks (interleaved; plan Q4)
+
+    std::string to_string() const {
+        return "l3[" + std::to_string(l3_tile) + "]:" + std::to_string(slot) + "/b" + std::to_string(bank);
+    }
+};
+
+inline bool operator==(const L3Address& a, const L3Address& b) {
+    return a.l3_tile == b.l3_tile && a.slot == b.slot && a.bank == b.bank;
+}
+
 enum class TileOpKind {
     Feed,           // inject an input tile into a logical port (structural; L1 attaches streams)
     Drain,          // extract a result tile from a logical port (structural)
@@ -105,7 +126,32 @@ enum class TileOpKind {
     TrsmUpperRight, // TRSM: X := X . upper(A[k,k])^{-1}        (L col-panel: L[i,k] = A[i,k] U_kk^{-1})
     BiasAdd,        // epilogue: Y[r, c] += b[c] -- a vector tile broadcast down Y's rows (opset 1.1)
     Activation,     // epilogue: Y := act(Y), elementwise; act = relu | gelu | silu | atan (opset 1.1)
+    // The L3 transactions (opset 1.2), one per CSP action on a residency, each naming its tile and
+    // its L3 address. They move no values the reference computes with: they record placement.
+    L3Load,         // dram -> the slot (opens a residency)
+    L3Store,        // the slot -> dram (reads it)
+    L3Move,         // the slot -> l2, toward the fabric (reads it)
+    L3Writeback,    // l2 -> the slot: a result (opens a residency, or rewrites its own)
+    L3Release,      // frees the slot
+    L3Inherit,      // the tile arrives resident in the slot, from the operator before (opens)
+    L3Retain,       // the slot, and its tile, outlive the program
 };
+
+// An L3 transaction: carries an L3 address and one tile (outputs[0]); computes nothing.
+inline bool is_l3(TileOpKind k) {
+    switch (k) {
+        case TileOpKind::L3Load:
+        case TileOpKind::L3Store:
+        case TileOpKind::L3Move:
+        case TileOpKind::L3Writeback:
+        case TileOpKind::L3Release:
+        case TileOpKind::L3Inherit:
+        case TileOpKind::L3Retain:
+            return true;
+        default:
+            return false;
+    }
+}
 
 inline const char* to_string(TileOpKind k) {
     switch (k) {
@@ -118,6 +164,13 @@ inline const char* to_string(TileOpKind k) {
         case TileOpKind::TrsmUpperRight: return "TRSM_UPPER_RIGHT";
         case TileOpKind::BiasAdd:        return "BIAS_ADD";
         case TileOpKind::Activation:     return "ACTIVATION";
+        case TileOpKind::L3Load:         return "L3_LOAD";
+        case TileOpKind::L3Store:        return "L3_STORE";
+        case TileOpKind::L3Move:         return "L3_MOVE";
+        case TileOpKind::L3Writeback:    return "L3_WRITEBACK";
+        case TileOpKind::L3Release:      return "L3_RELEASE";
+        case TileOpKind::L3Inherit:      return "L3_INHERIT";
+        case TileOpKind::L3Retain:       return "L3_RETAIN";
     }
     return "?";
 }
@@ -166,6 +219,9 @@ struct TileOp {
 
     // Activation: the function applied.
     ActivationFn act = ActivationFn::Relu;
+
+    // An L3 transaction (is_l3): the slot it writes, reads or frees. Its tile is outputs[0].
+    L3Address l3;
 
     std::string label;               // human-readable note for disassembly
 };
@@ -237,7 +293,9 @@ inline std::string TileProgram::disassemble() const {
     std::size_t idx = 0;
     for (const auto& op : ops_) {
         s += "    " + std::to_string(idx++) + ": " + to_string(op.kind);
-        if (op.kind == TileOpKind::Feed || op.kind == TileOpKind::Drain) {
+        if (is_l3(op.kind)) {
+            s += " " + (op.outputs.empty() ? std::string("?") : op.outputs[0].to_string()) + " @ " + op.l3.to_string();
+        } else if (op.kind == TileOpKind::Feed || op.kind == TileOpKind::Drain) {
             s += " " + (op.inputs.empty() ? (op.outputs.empty() ? std::string("?")
                                                                 : op.outputs[0].to_string())
                                           : op.inputs[0].to_string());

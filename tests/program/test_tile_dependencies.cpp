@@ -66,6 +66,13 @@ TEST_CASE("tile hazards are recovered from declared tile I/O", "[program][deps]"
     CHECK(count_kind(d, TileDepKind::TileRaw) > 0);
     CHECK(count_kind(d, TileDepKind::FeedAvailable) > 0);
     CHECK(count_kind(d, TileDepKind::TileWaw) > 0);   // accumulation into one output tile
+    // The trace's L3 transactions record placement: this DAG gives them no hazards (they are
+    // timed at L-T1, docs/plans/l3-placement-at-lb.md step 5).
+    for (std::size_t i = 0; i < d.op_count(); ++i)
+        if (is_l3(prog.ops()[i].kind)) {
+            CHECK(d.preds[i].empty());
+            CHECK(d.succs[i].empty());
+        }
 
     SECTION("preds and succs are consistent and acyclic in program order") {
         for (std::size_t i = 0; i < d.op_count(); ++i)
@@ -167,7 +174,10 @@ TEST_CASE("dependency diagnosis explains why an op is blocked", "[program][deps]
     }
 
     SECTION("a later op names its blockers, its edge kinds and its subjects") {
-        const std::size_t last = d.op_count() - 1;
+        // The last compute op: the trace ends with L3 transactions, which this DAG gives no
+        // hazards (placement is L-T1's to time; docs/plans/l3-placement-at-lb.md step 5).
+        std::size_t last = d.op_count() - 1;
+        while (last > 0 && is_l3(prog.ops()[last].kind)) --last;
         const auto blockers = d.blocking_edges(last, completed);
         REQUIRE_FALSE(blockers.empty());
         const std::string why = d.explain_blocked(prog, last, completed);

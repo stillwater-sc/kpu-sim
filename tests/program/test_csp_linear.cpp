@@ -170,12 +170,12 @@ TEST_CASE("Linear: L0 computes act(A . B + b)", "[program][csp][linear]") {
     }
 }
 
-TEST_CASE("Linear: the epilogue ops serialize, opset 1.1.0", "[program][csp][linear][l0]") {
+TEST_CASE("Linear: the epilogue ops serialize (opset 1.2.0, with the L3 ops)", "[program][csp][linear][l0]") {
     const TileProgram in = linear_trace(ActivationFn::Silu);
     serialize::WriteOptions opt;
     opt.include_values = true;
     const std::string text = serialize::to_string(in, opt);
-    CHECK(text.find("OPSET tile 1.1.0\n") != std::string::npos);
+    CHECK(text.find("OPSET tile 1.2.0\n") != std::string::npos);
     CHECK(text.find("OP kind=BIAS_ADD in=") != std::string::npos);
     CHECK(text.find("OP kind=ACTIVATION out=") != std::string::npos);
     CHECK(text.find(" act=silu") != std::string::npos);
