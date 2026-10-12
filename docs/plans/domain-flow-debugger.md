@@ -77,7 +77,7 @@ just moved one, and where in the program we are.**
 │   │ DRAM │────►│  L3  │───►│ L2  │───►│ CF │   for j in 0..8 {    float32, 64x64  │
 │   │      │◄────│ 9/17 │◄───│ 2/- │◄───│ 1  │ ►   resident B[:,j]  max |Δ| vs L-B  │
 │   └──────┘store└──────┘ wb  └─────┘drain└────┘     for i ...  j=3 i=2              │
-│   slots = residencies (tile, open, release)        step 1204 of 3968               │
+│   L3 slots by address (module:slot/bank)           step 1204 of 3968               │
 └──────────────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -169,14 +169,19 @@ run.dflow/
                    digest, deployment digest); the program's text; channels with capacities
                    (as the program declares them); processes; operand table (name, shape,
                    tiling); step count; what was sampled (§3.6); what is not modelled at L-B
-  steps.bin        u32 action, u8 kind, u8 process, u8 from, u8 to, u32 tile, u32 residency,
-                   u8 flags (opens, closes), u32 where, u16 held[4]
-  residency.bin    u32 tile, u8 chan, u32 open, u32 close, u8 flags (loaded, dirty, inherited,
-                   retained)
+  steps.bin        u64 action, u8 kind, u8 process, u8 from, u8 to, u32 tile, u64 residency,
+                   u8 flags (opens, closes), u64 where, u16 held[4], u32 l3_tile, u32 slot,
+                   u32 bank (the action's L3 address, ADR 0004 §5)
+  residency.bin    u32 tile, u8 chan, u64 open, u64 close, u32 l3_tile, u32 slot, u32 bank,
+                   u8 flags (loaded, dirty, inherited, retained, pinned)
   where.bin        u32 line, u32 loop_first, u16 loop_count;  loops.bin: u32 var, i64 value,
                    i64 hi, u32 line
-  iteration.bin    per (loop depth, iteration): u32 first_step, u32 last_step, u32 loads,
-                   u32 stores, u16 peak[4]       -- the summary the zoomed-out view reads
+  iteration.bin    per (loop depth, iteration): u64 first_step, u64 last_step, u64 loads,
+                   u64 stores, u16 peak[4]       -- the summary the zoomed-out view reads
+
+  Action, residency and step indices are u64 throughout: a large operator has more than 2^32
+  actions (a 1M x 1M matmul in 32-tiles has about 3 x 10^13), and the complete iteration summary
+  and late residency closes must index them.
   values/          opt-in (§3.6): f32 tile contents at sampled steps
 ```
 
@@ -194,7 +199,13 @@ run.dflow/
 - **Bounded detail, complete summary.** `--dflow-limit N` (default 1,000,000 actions, like
   `--trace-limit`) caps `steps.bin`. `iteration.bin` is written for the whole run, so a program
   too long to record step by step can still be read iteration by iteration.
-  - L-B runs to the end regardless: the oracle is never truncated.
+  - **The limit bounds the file, not the work.** L-B runs to the end regardless, since the oracle
+    is never truncated, and the iteration summary visits every action. A run is as long as L-B's
+    run of the program. At 3 x 10^13 actions that is infeasible with or without a record, and a
+    record cannot make it otherwise.
+  - Bounding the work as well would need a different contract: stop L-B after N actions and
+    write a summary marked partial, which is no longer the oracle's run. That is out of scope
+    here.
   - The manifest says what was cut, and where.
 - **The viewer aggregates by loop depth.** At depth 0 it shows one row per outermost iteration;
   expanding an iteration loads its steps, a range of `steps.bin`.
@@ -333,9 +344,11 @@ Expected:
     "one step, one action" invariant.
 - **Q4. The machine view's layout.**
   - **Recommended:** the program's channel graph (DRAM, L3, L2, CF, with the processes on the
-    edges), because L-B models one flat machine.
-  - Drawing the T4 floorplan instead would imply a placement that L-B does not model. That
-    belongs to the tile-flow debugger and to the L-T1 overlay.
+    edges), with **L3 drawn as its addressed slots**. Each residency sits at its L3 address
+    (module, slot, bank; ADR 0004 §5), grouped by bank, so placement, slot reuse and bank
+    occupancy are visible at L-B.
+  - This is the program's address space, not the T4 floorplan. The floorplan, with the modules'
+    physical sites and the NoC, belongs to the tile-flow debugger and to the L-T1 overlay.
 - **Q5. A new format, `.dflow`?**
   - **Recommended:** yes, in the shared columnar container. No existing bundle has actions,
     residency lifetimes or program positions.
