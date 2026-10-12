@@ -30,6 +30,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
       round trip, step against run, and a level's determinism under a timing-only change.
     - ADR 0001 D5 is amended (values answer to L-B, per tile, at every level, L-T1 included),
       and the `CLAUDE.md` fidelity table no longer says "bit-identical to L-B".
+      `docs/02-simulation/fidelity-framework.md` states the same rule: L-B is the oracle, and
+      L-T1, L-T2 and L-CA are each "within the per-tile bound of L-B".
 
 ### Removed
 
