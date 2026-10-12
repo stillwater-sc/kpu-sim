@@ -217,7 +217,7 @@ inline CspReference csp_reference(const csp::lang::Program& ast, const TileProgr
     for (const auto& name : operands.operand_order()) operands.operand(name).values = inputs.operand(name).values;
     csp::lang::ActionStream s(ast);
     csp::BehavioralInterpreter lb;
-    lb.begin(operands, record);
+    lb.begin(operands, record, csp::lang::l3_geometry(ast));
     while (auto e = s.next()) lb.step(e->action, e->op ? &*e->op : nullptr, &e->l0);
     out.actions = lb.finish().actions;
     TileProgram values = inputs;
@@ -254,7 +254,7 @@ inline CspLevelOutcome csp_run_level(ExecutionLevel level, const csp::lang::Prog
     if (level == ExecutionLevel::Behavioral) {
         csp::lang::ActionStream s(ast);
         csp::BehavioralInterpreter lb;
-        lb.begin(inputs);
+        lb.begin(inputs, false, csp::lang::l3_geometry(ast));
         while (auto e = s.next()) lb.step(e->action, e->op ? &*e->op : nullptr);
         const auto sum = lb.finish();
         o.values = lb.result();

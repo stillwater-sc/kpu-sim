@@ -63,6 +63,11 @@ struct Emission {
     bool pinned = false;            //   ... in a slot the program named (`@ slots(...)`)
 };
 
+// The L3 the program's machine clause declares: `machine flat(l3 = N, banks = B)`.
+inline L3Geometry l3_geometry(const Program& ast) {
+    return {static_cast<std::uint32_t>(ast.l3), static_cast<std::uint32_t>(ast.banks)};
+}
+
 // The operands a program declares (no values: an interpreter supplies them).
 inline TileProgram declared_operands(const Program& ast) {
     TileProgram t(ast.name);

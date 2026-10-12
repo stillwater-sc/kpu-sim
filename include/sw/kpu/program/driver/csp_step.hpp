@@ -41,6 +41,7 @@ struct CspStep {
     csp::Action::Kind kind = csp::Action::Kind::Call;
     TileCoord tile;
     std::vector<csp::Stage> context;        // L-B: the tile context the action carries
+    std::optional<csp::L3Address> place;    // L-B: the L3 slot it writes, reads or frees
     // L-T1 only.
     std::optional<csp::TransactionalInterpreter::Proc> proc;   // none for a Release
     std::size_t lane = 0;
@@ -74,7 +75,7 @@ public:
             while (count.next()) ++size_;
         }
         stream_ = std::make_unique<csp::lang::ActionStream>(ast);
-        lb_.begin(inputs);
+        lb_.begin(inputs, false, csp::lang::l3_geometry(ast));
     }
 
     bool step() override {
@@ -92,6 +93,7 @@ public:
         cur_.kind = e->action.kind;
         cur_.tile = e->action.tile;
         cur_.context = e->action.context;
+        cur_.place = e->action.place;
         cur_.l3_held = lb_.held(csp::Chan::L3);
         cur_.l2_held = lb_.held(csp::Chan::L2);
         cur_.cf_held = lb_.held(csp::Chan::Cf);
@@ -207,6 +209,7 @@ inline std::string describe(const CspStep& s, bool timed) {
         out.append(out.size() < 10 ? 10 - out.size() : 1, ' ');
     }
     out += "action " + std::to_string(s.action) + " " + csp::to_string(s.kind) + " " + s.tile.to_string();
+    if (s.place) out += " @ " + s.place->to_string();      // the L3 slot it writes, reads or frees
     if (timed) {
         if (s.proc)
             out += "  " + std::string(csp::TransactionalInterpreter::name(*s.proc)) + " lane " +

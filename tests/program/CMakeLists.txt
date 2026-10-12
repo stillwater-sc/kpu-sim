@@ -53,6 +53,16 @@ set_tests_properties(test_csp_place PROPERTIES
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
 )
 
+# L-B executes placement: its L3 is addressed storage (docs/plans/l3-placement-at-lb.md step 3)
+kpu_add_component_test(test_csp_lb_place "program"
+    test_csp_lb_place.cpp
+)
+
+set_tests_properties(test_csp_lb_place PROPERTIES
+    LABELS "program;csp;behavioral;placement;v0.9"
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+)
+
 # The structured CSP program: streamed and validated without unrolling (docs/plans/csp-language.md step 1c)
 kpu_add_component_test(test_csp_structured "program"
     test_csp_structured.cpp

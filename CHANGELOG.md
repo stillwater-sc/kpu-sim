@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **L-B executes L3 placement** (`docs/plans/l3-placement-at-lb.md` step 3; ADR 0004 §5). L-B's L3
+  is now addressed storage, `(module, slot) -> {tile, residency, values}`, in place of a map from
+  tile name to values counted against capacity.
+  - A Load, Inherit or opening Writeback writes the tile into the slot its action carries; a Move
+    or Store reads that slot; a Release frees exactly it; a Retain holds it past the program.
+  - Refused at the action, naming the slot and both tiles: a write into a live slot, a read or
+    release of a slot holding another tile (#279's class), a release of a free slot, an action
+    with no address, a slot outside the program's L3 and a bank that is not `slot % banks`.
+  - `held(L3)` is the number of tagged slots; `resident_at(tile)` gives a tile's address.
+  - `CspStep::place`, and `kpu-run --step` prints each action's slot (`@ l3[0]:5/b1`).
+  - Values are unchanged: the corpus programs compute bit-identical results under every policy.
 - **Every residency has an L3 address** (`docs/plans/l3-placement-at-lb.md` step 2; ADR 0004 §5).
   The walker allocates it as the residency opens and frees it on release, and every action that
   touches the residency carries it (`Action::place`, `Residency::place`).

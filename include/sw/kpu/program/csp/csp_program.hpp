@@ -140,6 +140,13 @@ inline bool operator==(const L3Address& a, const L3Address& b) {
     return a.l3_tile == b.l3_tile && a.slot == b.slot && a.bank == b.bank;
 }
 
+// The L3 a program addresses: its slots and its interleaved banks. 0 leaves that bound unchecked
+// (a caller with no program in hand); slots and banks out of the geometry are refused.
+struct L3Geometry {
+    std::uint32_t slots = 0;
+    std::uint32_t banks = 0;
+};
+
 struct Stage {
     VeOp op = VeOp::Relu;
     Place place = Place::Fabric;

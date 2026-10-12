@@ -36,8 +36,10 @@ decomposes a CSP transaction**.
 **L3 placement is behavior** (ADR 0004 §5, decided 2026-10-11): each residency has an L3
 address (module, slot, bank), allocated once by the walker; L-B models it, the trace records it,
 and no level allocates a slot of its own. **Being implemented** (`docs/plans/l3-placement-at-lb.md`):
-until its steps land, L-B and L-T1 still count L3 against capacity and L-CA's `slot_id` is a
-per-DMA-engine counter. Never present a pooled L3 as the intended model.
+L-B executes the walker's addresses (step 3: its L3 is addressed storage, and it refuses a write
+into a live slot or a read of the wrong one). Until the later steps land, the trace has no L3 ops,
+L-T1 still counts L3 against capacity, and L-CA's `slot_id` is a per-DMA-engine counter. Never
+present a pooled L3 as the intended model.
 
 **Every level computes values.** Decomposition changes *when* things happen, never *what*
 is computed. A level that returns timing without values is not a cheaper simulation — it is
