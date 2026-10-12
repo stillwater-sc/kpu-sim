@@ -52,6 +52,11 @@ The fix is to make the CSP program the only one.
 - L0 today is very nearly this program. It is flat, has logical ports and no engines, and its
   ops are tile functions (`MatMulAccum`, `LuDiagFactor`, `TrsmLowerLeft`, ...).
 
+> **Amended 2026-10-11** (ADR 0004 §5; `docs/plans/l3-placement-at-lb.md`). "One flat L3" means
+> one L3 *address space* the program sees, not an unplaced pool. Every residency has an L3
+> address (module, slot, bank), allocated once by the walker and executed by every level: the
+> placement of a tile in L3 is behavior, as loading an operand into a register is for a CPU.
+
 **Level 2: divide and conquer over distributed L3 and CF tiles.**
 - When the machine has many L3 tiles and compute tiles, the level-1 program is partitioned as a
   distributed-memory program is:
