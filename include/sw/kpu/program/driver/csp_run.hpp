@@ -205,12 +205,26 @@ struct CspReference {
     std::size_t actions = 0;
 };
 
-inline CspReference csp_reference(const csp::lang::Program& ast, const TileProgram& inputs, std::size_t trace_limit) {
+// Watches the oracle's run, action by action: the domain-flow record (record/domain_flow_record.hpp)
+// is written this way, so it is the run whose values are the oracle's, never a separate walk.
+struct CspObserver {
+    virtual ~CspObserver() = default;
+    // After action `e` has been applied: `lb` holds the state it left.
+    virtual void step(const csp::lang::Emission& e, const csp::BehavioralInterpreter& lb) = 0;
+    // The walker or L-B refused the action at `action` (the run then throws `what`).
+    virtual void refused(std::size_t /*action*/, const std::string& /*what*/) {}
+};
+
+inline CspReference csp_reference(const csp::lang::Program& ast, const TileProgram& inputs, std::size_t trace_limit,
+                                  CspObserver* observer = nullptr) {
     CspReference out;
     std::size_t n = 0;
-    {
+    try {
         csp::lang::ActionStream count(ast);
         while (n <= trace_limit && count.next()) ++n;
+    } catch (const std::exception&) {
+        // A program the walker refuses: the run below refuses it again, at its own action, where
+        // the observer sees the refusal.
     }
     const bool record = n <= trace_limit;
     if (!record)
@@ -221,7 +235,18 @@ inline CspReference csp_reference(const csp::lang::Program& ast, const TileProgr
     csp::lang::ActionStream s(ast);
     csp::BehavioralInterpreter lb;
     lb.begin(operands, record, csp::lang::l3_geometry(ast));
-    while (auto e = s.next()) lb.step(e->action, e->op ? &*e->op : nullptr, &e->l0);
+    for (std::size_t i = 0;; ++i) {
+        std::optional<csp::lang::Emission> e;
+        try {
+            e = s.next();
+            if (!e) break;
+            lb.step(e->action, e->op ? &*e->op : nullptr, &e->l0);
+        } catch (const std::exception& x) {
+            if (observer) observer->refused(i, x.what());
+            throw;
+        }
+        if (observer) observer->step(*e, lb);
+    }
     const auto lb_sum = lb.finish();
     out.actions = lb_sum.actions;
     TileProgram values = inputs;
