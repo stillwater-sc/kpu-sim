@@ -6,8 +6,12 @@
 // program's ACTIONS rather than a trace's ops:
 //
 //   L-B   one action, applied: the ActionStream feeds csp::BehavioralInterpreter one action per
-//         step, so values form as you step. Station occupancy (tiles held in L3, L2, the
-//         fabric) is the interpreter's own, after the action.
+//         step, so values form as you step. Station occupancy (tiles held in each channel) is
+//         the interpreter's own, after the action. A step also carries the CSP state transition
+//         (docs/plans/domain-flow-debugger.md step 1): the process that acted, the channels it
+//         moved the tile between, the residency it opened, closed or retained, and where in the
+//         program it was emitted -- every field read from the walker's Emission or the
+//         interpreter that executed it, never re-derived.
 //   L-T1  one record, replayed in start order: a leg of an action as the one-pass schedule
 //         timed it (a Store has two legs, a Release one of zero length). The run is finished
 //         before the first step, as for an L0 program at L-T1. Occupancy is AT THE RECORD'S
@@ -25,13 +29,16 @@
 #include <sw/kpu/program/csp/transactional.hpp>
 
 #include <algorithm>
+#include <array>
 #include <cstddef>
+#include <exception>
 #include <functional>
 #include <map>
 #include <memory>
 #include <optional>
 #include <queue>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace sw::kpu::program::driver {
@@ -42,6 +49,14 @@ struct CspStep {
     TileCoord tile;
     std::vector<csp::Stage> context;        // L-B: the tile context the action carries
     std::optional<csp::L3Address> place;    // the L3 slot it writes, reads or frees
+    // L-B only: the CSP state transition (docs/plans/domain-flow-debugger.md §3.2).
+    std::optional<csp::ProcessKind> process;            // who acted; none for Release, Inherit, Retain
+    std::optional<csp::Chan> from, to;                  // the move; none for Call, Release, Inherit, Retain
+    std::size_t residency = csp::kNone;                 // the residency it opens, reads or ends
+    bool opens = false, closes = false, retains = false; // a Retain does not close: it holds
+    bool pinned = false;                                // it opens a residency in a slot the program named
+    std::optional<csp::lang::Where> where;              // the statement and loop iteration
+    std::array<std::size_t, csp::kChannels> held{};     // tiles each channel holds after the action
     // L-T1 only.
     std::optional<csp::TransactionalInterpreter::Proc> proc;   // none for a Release
     std::size_t lane = 0;
@@ -58,7 +73,8 @@ public:
     virtual bool step() = 0;                        // false when there is nothing left
     virtual const CspStep& current() const = 0;
     virtual std::size_t position() const = 0;       // steps taken
-    virtual std::size_t size() const = 0;           // total steps
+    virtual std::size_t size() const = 0;           // total steps (see size_known())
+    virtual bool size_known() const { return true; } // false: size() is the steps so far
     virtual bool executes() const = 0;              // true: a step applies work (L-B)
     // L-T1: lanes busy per process at the current step's start. Empty at L-B.
     virtual const std::map<std::string, std::size_t>& lanes_busy() const = 0;
@@ -69,43 +85,60 @@ public:
 // ----------------------------------------------------------------------------
 class CspBehavioralStepper final : public CspStepper {
 public:
-    CspBehavioralStepper(const csp::lang::Program& ast, const TileProgram& inputs) {
-        {
-            csp::lang::ActionStream count(ast);         // the walk is lazy; counting is one pass
-            while (count.next()) ++size_;
+    // Upfront walks the program once more to learn size() before the first step; Lazy does not, so
+    // a program of any length starts at once, and size() is known only when the stream ends
+    // (docs/plans/domain-flow-debugger.md §3.5).
+    enum class Count { Upfront, Lazy };
+
+    CspBehavioralStepper(const csp::lang::Program& ast, const TileProgram& inputs, Count count = Count::Upfront) {
+        if (count == Count::Upfront) {
+            csp::lang::ActionStream c(ast);             // the walk is lazy; counting is one pass
+            std::size_t n = 0;
+            while (c.next()) ++n;
+            size_ = n;
         }
         stream_ = std::make_unique<csp::lang::ActionStream>(ast);
         lb_.begin(inputs, false, csp::lang::l3_geometry(ast));
+        advance();
     }
 
     bool step() override {
-        auto e = stream_->next();
-        if (!e) {
-            if (!finished_) {
-                (void)lb_.finish();                     // DRAM's tiles back into operands
-                finished_ = true;
-            }
+        if (error_) std::rethrow_exception(std::exchange(error_, nullptr));   // the walker refused this step
+        if (!ahead_) {
+            finish();
             return false;
         }
-        lb_.step(e->action, e->op ? &*e->op : nullptr);
+        const csp::lang::Emission e = std::move(*ahead_);
+        lb_.step(e.action, e.op ? &*e.op : nullptr);
         cur_ = CspStep{};
         cur_.action = next_++;
-        cur_.kind = e->action.kind;
-        cur_.tile = e->action.tile;
-        cur_.context = e->action.context;
-        cur_.place = e->action.place;
-        cur_.l3_held = lb_.held(csp::Chan::L3);
-        cur_.l2_held = lb_.held(csp::Chan::L2);
-        cur_.cf_held = lb_.held(csp::Chan::Cf);
-        if (next_ == size_ && !finished_) {             // the last action: the values are final
-            (void)lb_.finish();
-            finished_ = true;
+        cur_.kind = e.action.kind;
+        cur_.tile = e.action.tile;
+        cur_.context = e.action.context;
+        cur_.place = e.action.place;
+        if (e.action.process != csp::kNone) cur_.process = static_cast<csp::ProcessKind>(e.action.process);
+        if (moves(e.action.kind)) {
+            cur_.from = csp::from_chan(e.action.kind);
+            cur_.to = csp::to_chan(e.action.kind);
         }
+        cur_.residency = e.action.residency;
+        cur_.opens = e.opens;
+        cur_.closes = e.action.kind == csp::Action::Kind::Release;
+        cur_.retains = e.action.kind == csp::Action::Kind::Retain;
+        cur_.pinned = e.pinned;
+        cur_.where = e.where;
+        for (std::size_t c = 0; c < csp::kChannels; ++c) cur_.held[c] = lb_.held(static_cast<csp::Chan>(c));
+        cur_.l3_held = cur_.held[static_cast<std::size_t>(csp::Chan::L3)];
+        cur_.l2_held = cur_.held[static_cast<std::size_t>(csp::Chan::L2)];
+        cur_.cf_held = cur_.held[static_cast<std::size_t>(csp::Chan::Cf)];
+        advance();                                      // one action ahead: is this the last?
+        if (!ahead_ && !error_) finish();               // the last action: the values are final
         return true;
     }
     const CspStep& current() const override { return cur_; }
     std::size_t position() const override { return next_; }
-    std::size_t size() const override { return size_; }
+    std::size_t size() const override { return size_ ? *size_ : next_; }
+    bool size_known() const override { return size_.has_value(); }
     bool executes() const override { return true; }
     const std::map<std::string, std::size_t>& lanes_busy() const override { return none_; }
 
@@ -114,10 +147,35 @@ public:
     bool finished() const { return finished_; }
 
 private:
+    // The kinds that move a tile between two channels (csp::from_chan / to_chan).
+    static bool moves(csp::Action::Kind k) {
+        using K = csp::Action::Kind;
+        return k == K::Load || k == K::Store || k == K::Move || k == K::Writeback || k == K::Feed || k == K::Drain;
+    }
+    // Pull the next action. A walker error belongs to the step that would have pulled it, so it is
+    // held and thrown there, not one step early.
+    void advance() {
+        try {
+            ahead_ = stream_->next();
+        } catch (...) {
+            ahead_.reset();
+            error_ = std::current_exception();
+        }
+    }
+    void finish() {
+        if (finished_) return;
+        (void)lb_.finish();                             // DRAM's tiles back into operands
+        finished_ = true;
+        size_ = next_;
+    }
+
     std::unique_ptr<csp::lang::ActionStream> stream_;
+    std::optional<csp::lang::Emission> ahead_;
+    std::exception_ptr error_;
     csp::BehavioralInterpreter lb_;
     CspStep cur_{};
-    std::size_t next_ = 0, size_ = 0;
+    std::size_t next_ = 0;
+    std::optional<std::size_t> size_;
     bool finished_ = false;
     std::map<std::string, std::size_t> none_;
 };
@@ -221,6 +279,16 @@ inline std::string describe(const CspStep& s, bool timed) {
         out += i ? ", " : "  via ";
         out += std::string(csp::to_string(s.context[i].op)) + " @ " + csp::to_string(s.context[i].place);
     }
+    // L-B: who acted, on which residency, and where in the program.
+    if (s.process) out += "  " + std::string(csp::to_string(*s.process));
+    if (s.from && s.to) out += std::string(" ") + csp::to_string(*s.from) + "->" + csp::to_string(*s.to);
+    if (s.residency != csp::kNone) {
+        out += "  r" + std::to_string(s.residency);
+        if (s.opens) out += s.pinned ? " opens (pinned)" : " opens";
+        if (s.closes) out += " closes";
+        if (s.retains) out += " retained";
+    }
+    if (s.where) out += "  | " + csp::lang::to_string(*s.where);
     return out;
 }
 

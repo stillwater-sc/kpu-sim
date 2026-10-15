@@ -52,6 +52,32 @@ private:
 };
 
 // What the walker reports to its sink.
+// Where in the program an action was emitted (docs/plans/domain-flow-debugger.md §3.3): the
+// statement's source line and the index of every enclosing loop, outermost first. The walker that
+// drives L-B reports it as it emits, so nothing re-walks the program to find where action N came
+// from. An `acc` block is not a loop and does not appear.
+struct Where {
+    int line = 0;                                   // the statement that emitted the action
+    struct Loop {
+        std::string var;
+        long long value = 0, hi = 0;                // this iteration, and the loop's bound (exclusive)
+        int line = 0;                               // the `for` statement
+        bool operator==(const Loop&) const = default;
+    };
+    std::vector<Loop> loops;                        // outermost first
+    bool operator==(const Where&) const = default;
+};
+
+// "line 9  j=1/3 i=2/3": the line, then each loop's index of its bound.
+inline std::string to_string(const Where& w) {
+    std::string out = "line " + std::to_string(w.line);
+    for (std::size_t i = 0; i < w.loops.size(); ++i) {
+        out += i ? " " : "  ";
+        out += w.loops[i].var + "=" + std::to_string(w.loops[i].value) + "/" + std::to_string(w.loops[i].hi);
+    }
+    return out;
+}
+
 struct Emission {
     Action action;
     std::optional<TileOp> op;       // a Call's tile function (the trace form keeps it in its L0)
@@ -61,6 +87,7 @@ struct Emission {
     bool opens = false;             // the action opens its residency
     bool loaded = false;            //   ... by a Load (else by a result's Writeback)
     bool pinned = false;            //   ... in a slot the program named (`@ slots(...)`)
+    Where where;                    // the statement and loop iteration that emitted it
 };
 
 // The L3 the program's machine clause declares: `machine flat(l3 = N, banks = B)`.
@@ -258,6 +285,9 @@ private:
         if (op) e.op = *op;
         e.opens = opens;
         e.loaded = loaded;
+        e.where.line = line_;
+        for (const Frame& f : frames_)
+            if (f.kind == Frame::Kind::Loop) e.where.loops.push_back({f.var, f.value, f.hi, f.line});
         if (residency != kNone) {
             const auto pl = places_.find(residency);
             if (pl == places_.end()) throw std::logic_error("csp walk: residency " + std::to_string(residency) + " has no place");
@@ -284,6 +314,7 @@ private:
         }
     }
     std::set<std::size_t> pinned_;                          // residencies the program placed itself
+    int line_ = 0;                                          // the statement being executed
 
     // Place residency `id` for tile `t`: by the policy, or in `slot` when the program names one.
     void place(std::size_t id, const TileCoord& t, std::optional<std::uint32_t> slot = std::nullopt, int line = 0) {
@@ -373,6 +404,7 @@ private:
 
     void enter(const Stmt& s) {
         if (s.kind != Stmt::Kind::Inherit) started_ = true;
+        line_ = s.line;                                     // every action a statement emits is from it
         switch (s.kind) {
             case Stmt::Kind::For: {
                 if (env_.count(s.var)) throw CompileError(s.line, "loop variable '" + s.var + "' shadows an outer one");
