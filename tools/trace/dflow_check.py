@@ -32,6 +32,12 @@ Invariants (the plan's §6 numbering):
                               its residency's; after every step each slot holds at most one open
                               or retained residency
 
+    REF references            every index a table holds names a row that exists, in every bundle,
+                              cut or not: a step's tile, position, kind, process and channels; a
+                              position's loops; a loop's variable; a tile's operand; a residency's
+                              tile; and every slot is inside the program's L3. The viewer resolves
+                              each of them, so a dangling one is a broken bundle, not a display bug
+
 D1 (the record is the oracle's run) and D7 (the viewer never executes) are properties of the code
 that writes and reads the bundle, not of its contents.
 
@@ -289,17 +295,44 @@ def check(m, T, limit=20):
                 if len(parents) != 1:
                     bad("D6", f"depth {d}: iteration [{r['first']}, {r['last']}] lies in "
                               f"{len(parents)} iterations of depth {d - 1}")
-    # Every recorded step's position resolves, cut or not: the viewer reads it at every step.
-    W, L = T["where"], T["loops"]
+    # REF: every reference resolves, cut or not -- the viewer resolves each one.
+    W, L, TL = T["where"], T["loops"], T["tiles"]
+    nvars, nops, nkinds = len(m.get("vars", [])), len(m.get("operands", [])), len(m.get("kinds", []))
+    nprocs, nchans = len(m.get("processes", [])), len(m.get("channels", []))
+    for t in range(TL["rows"]):
+        if TL["operand"][t] >= nops:
+            bad("REF", f"tile {t} names operand {TL['operand'][t]}; there are {nops}")
+    for l in range(L["rows"]):
+        if L["var"][l] >= nvars:
+            bad("REF", f"loop row {l} names variable {L['var'][l]}; there are {nvars}")
+    where_ok = [True] * W["rows"]
+    for w in range(W["rows"]):
+        if W["loop_first"][w] + W["loop_count"][w] > L["rows"]:
+            bad("REF", f"position {w} names loops past the {L['rows']} recorded")
+            where_ok[w] = False
+    for r in range(nr):
+        if R["tile"][r] >= TL["rows"]:
+            bad("REF", f"residency {r} names tile {R['tile'][r]}; there are {TL['rows']}")
+        if R["slot"][r] >= l3:
+            bad("REF", f"residency {r} is in slot {R['slot'][r]}, outside the program's {l3}")
     pos_ok = [True] * n
     for i in range(n):
         w = S["where"][i]
-        if w >= W["rows"]:
-            bad("D6", f"step {i} names position {w}; there are {W['rows']}")
+        if w >= W["rows"] or not where_ok[w]:
+            if w >= W["rows"]:
+                bad("REF", f"step {i} names position {w}; there are {W['rows']}")
             pos_ok[i] = False
-        elif W["loop_first"][w] + W["loop_count"][w] > L["rows"]:
-            bad("D6", f"position {w} names loops past the {L['rows']} recorded")
-            pos_ok[i] = False
+        if S["tile"][i] >= TL["rows"]:
+            bad("REF", f"step {i} names tile {S['tile'][i]}; there are {TL['rows']}")
+        if S["kind"][i] >= nkinds:
+            bad("REF", f"step {i} has kind {S['kind'][i]}; there are {nkinds}")
+        if S["process"][i] != NONE8 and S["process"][i] >= nprocs:
+            bad("REF", f"step {i} names process {S['process'][i]}; there are {nprocs}")
+        for c in ("from", "to"):
+            if S[c][i] != NONE8 and S[c][i] >= nchans:
+                bad("REF", f"step {i} moves {c} channel {S[c][i]}; there are {nchans}")
+        if S["flags"][i] & HAS_PLACE and S["slot"][i] >= l3:
+            bad("REF", f"step {i} is at slot {S['slot'][i]}, outside the program's {l3}")
     if not m["cut"] and n == actions:
         # Every step recorded: recount each iteration from its steps and their positions.
         for d, rs in sorted(by_depth.items()):
@@ -348,7 +381,7 @@ def main(argv=None):
             print(f"dflow_check: cannot read {args.bundle}: {e}", file=sys.stderr)
         return 2
     violations, count = check(m, tables)
-    invs = ["D2", "D3", "D4", "D5", "D6", "D8", "D9"]
+    invs = ["D2", "D3", "D4", "D5", "D6", "D8", "D9", "REF"]
     if args.json:
         print(json.dumps({"ok": not violations, "steps": tables["steps"]["rows"],
                           "actions": m["totals"]["actions"], "cut": m["cut"],

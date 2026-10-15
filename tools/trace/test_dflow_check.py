@@ -184,17 +184,41 @@ class DflowCheckSelfTest(unittest.TestCase):
         self.b.set("iteration", "last", i, self.b.rows("steps") + 100)
         self.assertFails("D6", "runs past")
 
-    def test_d6_position_out_of_range_is_reported_not_a_crash(self):
+    # -- REF ----------------------------------------------------------------
+    def test_ref_position_out_of_range_is_reported_not_a_crash(self):
         self.b.set("steps", "where", 7, self.b.rows("where") + 5)
-        self.assertFails("D6", "names position")
+        self.assertFails("REF", "names position")
 
-    def test_d6_position_out_of_range_in_a_cut_bundle(self):
+    def test_ref_loop_variable_out_of_range(self):
+        self.b.set("loops", "var", 0, len(self.b.manifest["vars"]) + 3)
+        self.assertFails("REF", "names variable")
+
+    def test_ref_tile_operand_out_of_range(self):
+        self.b.set("tiles", "operand", 0, len(self.b.manifest["operands"]) + 1)
+        self.assertFails("REF", "names operand")
+
+    def test_ref_step_tile_out_of_range(self):
+        self.b.set("steps", "tile", 4, self.b.rows("tiles") + 2)
+        self.assertFails("REF", "names tile")
+
+    def test_ref_step_kind_out_of_range(self):
+        self.b.set("steps", "kind", 4, 200)
+        self.assertFails("REF", "has kind")
+
+    def test_ref_position_out_of_range_in_a_cut_bundle(self):
         # A cut bundle skips the recount; its recorded positions are still checked.
         self.b.manifest["cut"] = True
         self.b.manifest["totals"]["actions"] += 10
         self.b.save_manifest()
         self.b.set("steps", "where", 7, self.b.rows("where") + 5)
-        self.assertFails("D6", "names position")
+        self.assertFails("REF", "names position")
+
+    def test_ref_loop_variable_out_of_range_in_a_cut_bundle(self):
+        self.b.manifest["cut"] = True
+        self.b.manifest["totals"]["actions"] += 10
+        self.b.save_manifest()
+        self.b.set("loops", "var", 0, len(self.b.manifest["vars"]) + 3)
+        self.assertFails("REF", "names variable")
 
     # -- unreadable ---------------------------------------------------------
     def test_malformed_manifest_is_unreadable(self):
