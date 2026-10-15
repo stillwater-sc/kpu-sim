@@ -1,7 +1,7 @@
 # Domain-Flow Debugger: CSP State at L-B, Domains Moving Through the Machine (#363)
 
 **Date:** 2026-10-11
-**Status:** Approved 2026-10-15 (Q1-Q7 as recommended, §7). Step 1 in review.
+**Status:** Approved 2026-10-15 (Q1-Q7 as recommended, §7). Step 1 merged (#370); step 2 in review.
 Revised 2026-10-15. Held 2026-10-11 when the architect ruled that L-B must model L3
 placement (ADR 0004 §5). Resumed now that `docs/plans/l3-placement-at-lb.md` steps 1-4 are merged (#364-#367)
 and step 5a (L-T1 waits on its own slot) is in review: every residency has an L3 address at L-B, so the
@@ -174,28 +174,39 @@ entry, so the table grows with iterations, not with actions.
 
 ```
 run.dflow/
-  manifest.json    format "dflow" version 1; level "L-B"; RunIdentity (program digest, inputs
-                   digest, deployment digest); the program's text; channels with capacities
+  manifest.json    format "kpu-dflow" version 1; level "L-B"; the L-B run id (when L-B ran as a
+                   level); the program's name and text; channels with capacities
                    (as the program declares them); the L3 geometry (slots, banks) and the
                    placement policy; processes; operand table (name, shape,
-                   tiling); step count; what was sampled (§3.6); what is not modelled at L-B
+                   tiling); loop variables; totals (actions, loads, stores); the step limit and
+                   whether it cut steps.bin; the refusal, if L-B refused an action; what is not
+                   modelled at L-B
   steps.bin        u64 action, u8 kind, u8 process, u8 from, u8 to, u32 tile, u64 residency,
                    u8 flags (opens, closes, retains, has_place, pinned), u64 where,
-                   u16 held[4], u32 l3_tile, u32 slot, u32 bank (the action's L3 address,
+                   u32 held[4], u32 l3_tile, u32 slot, u32 bank (the action's L3 address,
                    ADR 0004 §5, when has_place is set; ignored otherwise, since (0, 0, 0)
                    is a valid address)
-  residency.bin    u32 tile, u8 chan, u64 open, u64 close, u32 l3_tile, u32 slot, u32 bank,
-                   u8 flags (loaded, dirty, inherited, retained, pinned)
+  tiles.bin        u32 operand, u32 ti, u32 tj   -- the tiles steps and residencies name, interned
+  residency.bin    u32 tile, u8 chan, u64 open, u64 close (its Release, or its Retain when
+                   retained), u32 l3_tile, u32 slot, u32 bank, u8 flags (loaded, inherited,
+                   retained, pinned)
   where.bin        u32 line, u32 loop_first, u16 loop_count;  loops.bin: u32 var, i64 value,
                    i64 hi, u32 line
-  iteration.bin    per (loop depth, iteration): u64 first_step, u64 last_step, u64 loads,
-                   u64 stores, u16 peak[4]       -- the summary the zoomed-out view reads
+  iteration.bin    per (loop depth, iteration), and one row at depth 0 for the program:
+                   u16 depth, u32 line (the loop's), i64 value, u64 first, u64 last,
+                   u64 actions, u64 loads, u64 stores, u32 peak[4]
+                                                 -- the summary the zoomed-out view reads
 
   Action, residency and step indices are u64 throughout: a large operator has more than 2^32
   actions (a 1M x 1M matmul in 32-tiles has about 3 x 10^13), and the complete iteration summary
   and late residency closes must index them.
-  values/          opt-in (§3.6): f32 tile contents at sampled steps
+  values/          opt-in (§3.6): f32 tile contents at sampled steps (step 4; not in version 1)
 ```
+
+*As built in step 2 (2026-10-15):* occupancy and peaks are u32, not u16, since DRAM alone can hold
+more than 65,535 tiles; `dirty` is not a residency flag, since it changes over the residency's life
+(a Writeback sets it, a Store clears it) and the steps carry those actions; `tiles.bin` interns the
+tiles; and `--dflow-values` arrives with the values in step 4.
 
 - It is written and read through `record/columnar.hpp`, like `.tflow` and `.mflow`: each column is
   little-endian and padded to 8 bytes, so the viewer maps it as a typed array without parsing.

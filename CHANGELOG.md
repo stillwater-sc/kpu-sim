@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The domain-flow record (`.dflow`)** (`docs/plans/domain-flow-debugger.md` step 2, #363). A CSP
+  program's L-B run as CSP state transitions, one step per action.
+  - `record/domain_flow_record.hpp`: `DomainFlowRecord`, `write_dflow`/`read_dflow` in the shared
+    columnar container (tables `steps`, `tiles`, `residency`, `where`, `loops`, `iteration`).
+  - `DomainFlowRecorder` observes the oracle's own run through the new `driver::CspObserver` on
+    `csp_reference` (and `VirtualPlatform::csp_reference`), so the record is the run whose values
+    are the oracle's, never a second walk. A refusal is recorded at its action.
+  - `kpu-run --dflow <dir> [--dflow-limit N]`: the limit cuts `steps.bin` only; residencies and the
+    per-depth iteration summary always cover the whole run.
+  - `tools/trace/dflow_check.py` checks the plan's §6 invariants (D2-D6, D8, D9);
+    `test_dflow_check.py` breaks each one. CMake writes and checks a bundle for every CSP corpus
+    program, the retain/inherit chains, a cut run and the reference run (matmul 512^3 in 64-tiles).
 - **Each L-B step carries its CSP state transition** (`docs/plans/domain-flow-debugger.md` step 1, #363).
   - `csp/lang/walk.hpp`: `Where` on `Emission`. The walker reports each action's source line and
     the index and bound of every enclosing loop, so nothing re-walks the program to find where an

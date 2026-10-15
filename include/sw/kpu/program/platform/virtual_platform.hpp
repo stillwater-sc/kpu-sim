@@ -237,9 +237,11 @@ public:
     }
 
     // The oracle for the program: its trace's L0 on its inputs, within `trace_limit` actions.
-    driver::CspReference csp_reference(CspProgramHandle h, std::size_t trace_limit = 1'000'000) const {
+    // `observer` watches the run action by action (the domain-flow record is written this way).
+    driver::CspReference csp_reference(CspProgramHandle h, std::size_t trace_limit = 1'000'000,
+                                       driver::CspObserver* observer = nullptr) const {
         const CspEntry& e = csp_.at(checked(h));
-        return driver::csp_reference(e.ast, e.inputs, trace_limit);
+        return driver::csp_reference(e.ast, e.inputs, trace_limit, observer);
     }
 
     // Stepping a CSP program (kpu-run-csp-programs step 4c): one action per step at L-B,

@@ -412,6 +412,61 @@ if(KPU_BUILD_TESTS)
             -DMUST_MATCH=--timeline.records.the.L-T1.run
             -P ${CMAKE_CURRENT_SOURCE_DIR}/expect_exit.cmake
     )
+    # The domain-flow record (domain-flow-debugger step 2, #363): the oracle's own L-B run, one
+    # step per action. A bundle for every CSP corpus program and the retain/inherit chains, each
+    # checked against the plan's invariants; a cut bundle; the reference run (matmul 512^3 in
+    # 64-tiles at L3 17, plan Q6); and the checker's self-test, which must fail every invariant.
+    if(KPU_PYTHON3)
+        set(_dflow_check ${CMAKE_SOURCE_DIR}/tools/trace/dflow_check.py)
+        set(_dflow_tests "")
+        foreach(_p matmul_48x48x48_t16 linear_64_t16_relu lu_64_t16)
+            add_test(NAME kpu_run_csp_dflow_${_p}
+                COMMAND run --program ${_corpus}/${_p}.csp --level behavioral
+                        --dflow ${CMAKE_CURRENT_BINARY_DIR}/csp_${_p}.dflow)
+            add_test(NAME dflow_check_${_p}
+                COMMAND ${KPU_PYTHON3} ${_dflow_check} ${CMAKE_CURRENT_BINARY_DIR}/csp_${_p}.dflow)
+            set_tests_properties(dflow_check_${_p} PROPERTIES DEPENDS kpu_run_csp_dflow_${_p})
+            list(APPEND _dflow_tests kpu_run_csp_dflow_${_p} dflow_check_${_p})
+        endforeach()
+        foreach(_p matmul_relu_retain_32_t16 bias_inherit_32_t16)
+            add_test(NAME kpu_run_csp_dflow_${_p}
+                COMMAND run --program ${_csp}/${_p}.csp --deploy ${_deploy}/kpu_s1.json --level behavioral
+                        --dflow ${CMAKE_CURRENT_BINARY_DIR}/csp_${_p}.dflow)
+            add_test(NAME dflow_check_${_p}
+                COMMAND ${KPU_PYTHON3} ${_dflow_check} ${CMAKE_CURRENT_BINARY_DIR}/csp_${_p}.dflow)
+            set_tests_properties(dflow_check_${_p} PROPERTIES DEPENDS kpu_run_csp_dflow_${_p})
+            list(APPEND _dflow_tests kpu_run_csp_dflow_${_p} dflow_check_${_p})
+        endforeach()
+        add_test(NAME kpu_run_csp_dflow_cut
+            COMMAND ${CMAKE_COMMAND}
+                -DCMD=$<TARGET_FILE:run>
+                -DARGS=--program$<SEMICOLON>${_corpus}/matmul_48x48x48_t16.csp$<SEMICOLON>--level$<SEMICOLON>behavioral$<SEMICOLON>--dflow$<SEMICOLON>${CMAKE_CURRENT_BINARY_DIR}/csp_cut.dflow$<SEMICOLON>--dflow-limit$<SEMICOLON>50
+                -DEXPECT_CODE=0
+                -DMUST_MATCH=wrote.*csp_cut.dflow.*50.of.243.steps.*steps.cut.at.--dflow-limit
+                -P ${CMAKE_CURRENT_SOURCE_DIR}/expect_exit.cmake
+        )
+        add_test(NAME dflow_check_cut
+            COMMAND ${KPU_PYTHON3} ${_dflow_check} ${CMAKE_CURRENT_BINARY_DIR}/csp_cut.dflow)
+        set_tests_properties(dflow_check_cut PROPERTIES DEPENDS kpu_run_csp_dflow_cut)
+        add_test(NAME csp_gen_dflow_reference
+            COMMAND $<TARGET_FILE:csp-gen> --algo matmul --size 512 --tile 64 --l3 17
+                    -o ${CMAKE_CURRENT_BINARY_DIR}/dflow_reference.csp)
+        add_test(NAME kpu_run_csp_dflow_reference
+            COMMAND run --program ${CMAKE_CURRENT_BINARY_DIR}/dflow_reference.csp
+                    --deploy ${_deploy}/kpu_s1.json --level behavioral
+                    --dflow ${CMAKE_CURRENT_BINARY_DIR}/csp_reference.dflow)
+        set_tests_properties(kpu_run_csp_dflow_reference PROPERTIES DEPENDS csp_gen_dflow_reference)
+        add_test(NAME dflow_check_reference
+            COMMAND ${KPU_PYTHON3} ${_dflow_check} ${CMAKE_CURRENT_BINARY_DIR}/csp_reference.dflow)
+        set_tests_properties(dflow_check_reference PROPERTIES DEPENDS kpu_run_csp_dflow_reference)
+        add_test(NAME dflow_check_selftest
+            COMMAND ${KPU_PYTHON3} ${CMAKE_SOURCE_DIR}/tools/trace/test_dflow_check.py
+                    ${CMAKE_CURRENT_BINARY_DIR}/csp_linear_64_t16_relu.dflow)
+        set_tests_properties(dflow_check_selftest PROPERTIES DEPENDS kpu_run_csp_dflow_linear_64_t16_relu)
+        set_tests_properties(${_dflow_tests} kpu_run_csp_dflow_cut dflow_check_cut csp_gen_dflow_reference
+            kpu_run_csp_dflow_reference dflow_check_reference dflow_check_selftest
+            PROPERTIES LABELS "program;domainflow;csp")
+    endif()
     # Residency across operators (step 4d): the first operator of a chain retains its result
     # (no stores), the second inherits it (no loads of it), each at every level.
     add_test(NAME kpu_run_csp_retain

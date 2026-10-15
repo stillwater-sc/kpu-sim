@@ -22,6 +22,7 @@
 #include <sw/kpu/program/platform/virtual_platform.hpp>
 #include <sw/kpu/program/driver/step_cursor.hpp>
 #include <sw/kpu/program/serialize/l0_format.hpp>
+#include <sw/kpu/program/record/domain_flow_record.hpp>
 #include <sw/kpu/program/record/tile_flow_record.hpp>
 #include <sw/trace/trace_exporter.hpp>
 
@@ -62,6 +63,10 @@ kpu-run runs a program; it does not write one. kpu-csp-gen writes CSP programs.
   --emit-l0-kernel <file.l0>  the trace, structure only (VALUES none)
   --emit-l0-result <file.l0>  the agreed values: the corpus's expected-output half
   --tflow <dir>             the L-T1 run's tile-flow record (.tflow version 4)
+  --dflow <dir>             the L-B run's domain-flow record (.dflow version 1): every action
+                            as a CSP state transition, written by the oracle's own run
+  --dflow-limit <n>         record at most n steps (0 = all; default 1000000); residencies and
+                            the iteration summary are always complete
   --timeline <file.json>    the L-T1 run as Chrome-trace intervals, one per leg
   --step                    single-step (L-B: one action per step; L-T1: one record)
   --step-limit <n>          stop after n steps, 0 = all      (default 40)
@@ -105,7 +110,8 @@ int run_csp_program(const std::vector<std::string>& a, const std::string& path) 
     static const std::set<std::string> kOptions = {"--program", "--deploy", "--level", "--window", "--inputs",
                                                    "--trace-limit", "--no-compare", "--emit-l0-result",
                                                    "--emit-l0", "--emit-l0-kernel",
-                                                   "--tflow", "--step", "--step-limit", "--timeline"};
+                                                   "--tflow", "--step", "--step-limit", "--timeline",
+                                                   "--dflow", "--dflow-limit"};
     for (const std::string& t : a)
         if (t.rfind("--", 0) == 0 && !kOptions.count(t)) {
             std::cerr << "kpu-run: " << t << " does not apply to a CSP program"
@@ -115,17 +121,17 @@ int run_csp_program(const std::vector<std::string>& a, const std::string& path) 
                       << "\n";
             return 2;
         }
-    std::string err, deploy_path, inputs_path, emit_path, tflow_path, timeline_path, trace_path, kernel_path;
+    std::string err, deploy_path, inputs_path, emit_path, tflow_path, timeline_path, trace_path, kernel_path, dflow_path;
     if (!arg_required(a, "--deploy", deploy_path, err) || !arg_required(a, "--inputs", inputs_path, err) ||
         !arg_required(a, "--emit-l0-result", emit_path, err) || !arg_required(a, "--tflow", tflow_path, err) ||
         !arg_required(a, "--timeline", timeline_path, err) || !arg_required(a, "--emit-l0", trace_path, err) ||
-        !arg_required(a, "--emit-l0-kernel", kernel_path, err)) {
+        !arg_required(a, "--emit-l0-kernel", kernel_path, err) || !arg_required(a, "--dflow", dflow_path, err)) {
         std::cerr << "kpu-run: " << err << "\n";
         return 2;
     }
-    std::uint32_t window = 256, trace_limit = 1000000, step_limit = 40;
+    std::uint32_t window = 256, trace_limit = 1000000, step_limit = 40, dflow_limit = 1000000;
     if (!parse_dim(a, "--window", 256, window, err) || !parse_dim(a, "--trace-limit", 1000000, trace_limit, err) ||
-        !parse_dim(a, "--step-limit", 40, step_limit, err)) {
+        !parse_dim(a, "--step-limit", 40, step_limit, err) || !parse_dim(a, "--dflow-limit", 1000000, dflow_limit, err)) {
         std::cerr << "kpu-run: " << err << "\n";
         return 2;
     }
@@ -238,6 +244,27 @@ int run_csp_program(const std::vector<std::string>& a, const std::string& path) 
     platform::CspProgramHandle handle;
     csp::lang::Validation validation;
     driver::CspReference reference;
+    std::optional<record::DomainFlowRecorder> dflow;
+    auto write_dflow_bundle = [&](const std::string& run_id) {
+        try {
+            record::DomainFlowRecord rec = dflow->finish();
+            rec.run_id = run_id;
+            record::write_dflow(rec, dflow_path);
+            std::cout << "wrote  " << dflow_path << "  (" << rec.steps.size() << " of " << rec.actions
+                      << " steps, " << rec.residencies.size() << " residencies, " << rec.iterations.size()
+                      << " iterations, from L-B" << (rec.cut ? "; steps cut at --dflow-limit" : "")
+                      << (rec.refusal ? "; L-B refused action " + std::to_string(rec.refusal->action) : "")
+                      << ")\n";
+            return true;
+        } catch (const std::exception& e) {
+            std::cerr << "kpu-run: --dflow: " << e.what() << "\n";
+            return false;
+        }
+    };
+    // A program L-B refuses is recorded up to the refusal, which the record names (§6 invariant 4).
+    auto write_refused_dflow = [&]() {
+        if (dflow && dflow->refused_at()) (void)write_dflow_bundle("");
+    };
     std::vector<CspLevelOutcome> outcomes;
     std::vector<std::string> run_ids;
     try {
@@ -245,7 +272,8 @@ int run_csp_program(const std::vector<std::string>& a, const std::string& path) 
         const csp::lang::Target target = csp::lang::target_from(spec.device(0));
         validation = csp::lang::validate(*ast, deployment ? &target : nullptr);
         handle = vp->load_csp(*ast, inputs, deployment.has_value());
-        reference = vp->csp_reference(handle, trace_limit);
+        if (!dflow_path.empty()) dflow.emplace(*ast, text.str(), dflow_limit);
+        reference = vp->csp_reference(handle, trace_limit, dflow ? &*dflow : nullptr);
         for (ExecutionLevel l : levels) {
             if (!deployment && l == ExecutionLevel::CycleAccurate) {
                 CspLevelOutcome o;
@@ -261,10 +289,19 @@ int run_csp_program(const std::vector<std::string>& a, const std::string& path) 
         }
     } catch (const csp::lang::CompileError& e) {
         std::cerr << "kpu-run: " << path << ": " << e.what() << "\n";
+        write_refused_dflow();
         return 2;
     } catch (const std::exception& e) {
         std::cerr << "kpu-run: " << e.what() << "\n";
+        write_refused_dflow();
         return 2;
+    }
+    // --dflow: the domain-flow record of the oracle's run (domain-flow step 2).
+    if (dflow) {
+        std::string run_id;
+        for (std::size_t li = 0; li < outcomes.size(); ++li)
+            if (outcomes[li].level == ExecutionLevel::Behavioral) run_id = run_ids[li];
+        if (!write_dflow_bundle(run_id)) return 2;
     }
     CspRunResult res;
     res.validation = validation;
