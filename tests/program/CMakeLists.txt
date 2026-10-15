@@ -63,6 +63,16 @@ set_tests_properties(test_csp_lb_place PROPERTIES
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
 )
 
+# L-T1 executes placement: a credit is a slot (docs/plans/l3-placement-at-lb.md step 5)
+kpu_add_component_test(test_csp_lt1_place "program"
+    test_csp_lt1_place.cpp
+)
+
+set_tests_properties(test_csp_lt1_place PROPERTIES
+    LABELS "program;csp;lt1;placement;v0.9"
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+)
+
 # The structured CSP program: streamed and validated without unrolling (docs/plans/csp-language.md step 1c)
 kpu_add_component_test(test_csp_structured "program"
     test_csp_structured.cpp

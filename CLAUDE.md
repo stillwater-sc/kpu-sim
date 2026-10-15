@@ -29,7 +29,7 @@ decomposes a CSP transaction**.
 | Level | Decomposes a transaction into | Speed | Computes Values? |
 |-------|-------------------------------|-------|------------------|
 | **L-B** behavioral | a whole block move, atomic | ~100-1000x | **YES** |
-| **L-T1** block-sequential | one tile move, under L3 tile credits (L2/L1 capacity arrives with the placement pass) | ~10-100x | **YES** — within the tile bound of L-B |
+| **L-T1** block-sequential | one tile move, under its own L3 slot's credit (L2/L1 capacity arrives with the placement pass) | ~10-100x | **YES** — within the tile bound of L-B |
 | **L-T2** resource transactional | `read`/`write` per resource; `push` into the compute tile | — | **YES** — within the tile bound of L-B |
 | **L-CA** cycle-accurate | protocol events, per cycle | 1x (baseline) | **YES** — within the tile bound of L-B |
 
@@ -38,9 +38,10 @@ address (module, slot, bank), allocated once by the walker; L-B models it, the t
 and no level allocates a slot of its own. **Being implemented** (`docs/plans/l3-placement-at-lb.md`):
 L-B executes the walker's addresses (step 3: its L3 is addressed storage, and it refuses a write
 into a live slot or a read of the wrong one), and the L0 trace records them (step 4: opset 1.2's
-`L3_*` ops, which the replay checks and the compute-schedule analyses skip). Until the later steps
-land, L-T1 still counts L3 against capacity and L-CA's `slot_id` is a per-DMA-engine counter.
-Never present a pooled L3 as the intended model.
+`L3_*` ops, which the replay checks and the compute-schedule analyses skip), and L-T1 times them
+(step 5: a Load waits for its own slot's Release). Until the later steps land, `.tflow` draws L3
+pooled and L-CA's `slot_id` is a per-DMA-engine counter. Never present a pooled L3 as the
+intended model.
 
 **Every level computes values.** Decomposition changes *when* things happen, never *what*
 is computed. A level that returns timing without values is not a cheaper simulation — it is

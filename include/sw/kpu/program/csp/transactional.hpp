@@ -16,10 +16,15 @@
 //   start = max( the data it reads is ready,            (scoreboard per tile and channel)
 //                a lane of its process is free,          (lanes x bytes/cycle, per process)
 //                the process's previous action started,  (each process issues in order)
-//                an L3 credit is free )                  (Load, and a Writeback that opens)
+//                ITS L3 slot is free )                   (Load, Inherit, a Writeback that opens)
+//
+// A CREDIT IS A SLOT (ADR 0004 §5; docs/plans/l3-placement-at-lb.md step 5). Every action that
+// opens a residency carries the L3 address the walker placed it at, and waits for THAT slot's
+// Release -- not for whichever slot frees first. A program, or a placement policy, that reuses a
+// slot early serializes on it, as a register's write-after-read does. Retained slots never free.
 //
 //   Load       dma   DRAM -> L3       after the tile's earlier Store retires (RAW via DRAM)
-//                                     and a credit is free
+//                                     and its slot is free
 //   Move       bm    L3 -> L2         after the L3 copy is current (its Load / Writeback)
 //   Feed       str   L2 -> L1         after its Move
 //   Call       cf    the tile function's MACs on a compute tile, after its operands' Feeds and
@@ -34,7 +39,7 @@
 //   Retain     --    zero time, after every reader of the residency; its credit is NOT returned:
 //                                     the slot is held to the end of the program (step 4d)
 //
-// The credit pool is the PROGRAM's L3 (machine flat(l3 = N)): the program's declared machine.
+// The slots are the PROGRAM's L3 (machine flat(l3 = N, banks = B)): the program's declared machine.
 // Values are the behavioral interpreter's, stepped in the same order, so L-T1 is bit-identical
 // to L-B by construction. Timing is per process, per lane, from the device descriptor, and
 // UNCALIBRATED -- as L-T1 always says.
@@ -53,8 +58,9 @@
 #include <cstddef>
 #include <cstdint>
 #include <map>
-#include <queue>
+#include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace sw::kpu::program::csp {
@@ -84,6 +90,7 @@ public:
         std::size_t action = 0;         // the action's index in program order
         Action::Kind kind = Action::Kind::Call;
         TileCoord tile;
+        std::optional<L3Address> place; // the L3 slot the action writes, reads or frees
         Proc proc = Proc::Cf;
         std::size_t lane = 0;
         Cycle start = 0, finish = 0;
@@ -92,6 +99,7 @@ public:
     // One residency's L3 slot: held from its credit to its Release (a retained one: to the end).
     struct Slot {
         TileCoord tile;
+        L3Address place;                // where: the walker's address, executed
         Cycle t0 = 0, t1 = 0;
         bool inherited = false;         // opened by an Inherit: filled before the program
         bool retained = false;          // closed by a Retain: held past the program's end
@@ -102,16 +110,23 @@ public:
         std::size_t actions = 0;
         std::uint64_t dram_loads = 0, dram_stores = 0, dram_bytes = 0;
         std::size_t peak_l3 = 0;                    // slots held at once, in time
-        std::size_t credit_stalls = 0;              // Loads that waited for a credit
+        std::size_t credit_stalls = 0;              // Loads whose data was ready before their slot was free
+        // Loads whose START their slot decided: the slot freed after the data was ready, a DMA lane
+        // was free and the previous DMA action had started. The slot was the binding constraint,
+        // and slot_wait_cycles is what it cost them (a reuse's write-after-read, in time).
+        std::size_t slot_bound = 0;
+        Cycle slot_wait_cycles = 0;
         std::map<std::string, Cycle> busy;          // per process: lane-cycles occupied
         std::map<std::string, std::size_t> lanes;   // per process
     };
 
-    // `l3` is the program's L3 capacity (its declared machine); `dev` gives the lanes and rates.
-    TransactionalInterpreter(const characterize::DeviceDescriptor& dev, std::size_t l3) : dev_(dev), l3_(l3) {}
+    // `l3` and `banks` are the program's L3 (its declared machine; banks 0: unchecked); `dev` gives
+    // the lanes and rates.
+    TransactionalInterpreter(const characterize::DeviceDescriptor& dev, std::size_t l3, std::uint32_t banks = 0)
+        : dev_(dev), l3_(l3), banks_(banks) {}
 
     void begin(const TileProgram& operands) {
-        values_.begin(operands, false, {static_cast<std::uint32_t>(l3_), 0});
+        values_.begin(operands, false, {static_cast<std::uint32_t>(l3_), banks_});
         shapes_ = operands;
         st_ = Stats{};
         records_.clear();
@@ -124,8 +139,7 @@ public:
             st_.lanes[name(p)] = n;
             st_.busy[name(p)] = 0;
         }
-        credits_ = {};
-        for (std::size_t i = 0; i < l3_; ++i) credits_.push(0);
+        slot_free_.clear();
         residency_.clear();
         dram_ready_.clear();
         moved_.clear();
@@ -149,8 +163,16 @@ public:
                 // residency's Release: a tile holds one L3 slot at a time (L-CA's DMA waits out
                 // a copy still held the same way).
                 Cycle ready = std::max(get(dram_ready_, k), get(released_, k));
-                const Cycle credit = take_credit();
+                const Cycle credit = take_slot(a);
                 if (credit > ready) {
+                    // Every other bound on the start: a lane free, and in-order issue.
+                    const auto& lanes_free = lane_free_[Proc::Dma];
+                    const Cycle other = std::max({ready, *std::min_element(lanes_free.begin(), lanes_free.end()),
+                                                  last_start_[Proc::Dma]});
+                    if (credit > other) {
+                        ++st_.slot_bound;
+                        st_.slot_wait_cycles += credit - other;
+                    }
                     ready = credit;
                     ++st_.credit_stalls;                    // the data was ready; the slot was not
                 }
@@ -161,6 +183,7 @@ public:
                 r.readers = f;
                 r.slot = true;
                 r.slot_since = ready;
+                r.place = *a.place;
                 ++st_.dram_loads;
                 st_.dram_bytes += bytes;
                 break;
@@ -195,7 +218,7 @@ public:
                 if (in_place) {
                     ready = std::max(ready, it->second.readers);   // WAR: earlier reads of the slot
                 } else {
-                    ready = std::max({ready, take_credit(), get(released_, k)});   // opens a residency
+                    ready = std::max({ready, take_slot(a), get(released_, k)});   // opens a residency
                 }
                 const Cycle f = run(Proc::Bm, ready, transfer(Proc::Bm, bytes), a);
                 Residency& r = residency_[k];
@@ -203,6 +226,7 @@ public:
                     r = Residency{};
                     r.slot = true;
                     r.slot_since = ready;
+                    r.place = *a.place;
                 }
                 r.current = f;
                 r.readers = std::max(r.readers, f);
@@ -220,11 +244,12 @@ public:
                 break;
             }
             case Action::Kind::Inherit: {
-                const Cycle credit = take_credit();
+                const Cycle credit = take_slot(a);
                 Residency& r = residency_[k];
                 r = Residency{};
                 r.slot = true;
                 r.slot_since = credit;
+                r.place = *a.place;
                 r.current = credit;
                 r.readers = credit;
                 r.inherited = true;
@@ -236,7 +261,7 @@ public:
                 Cycle t = r.readers;
                 auto s = stage_reads_.find(k);
                 if (s != stage_reads_.end()) t = std::max(t, s->second);
-                retained_.push_back(Slot{a.tile, r.slot_since, 0, r.inherited, true});   // closed in finish()
+                retained_.push_back(Slot{a.tile, r.place, r.slot_since, 0, r.inherited, true});   // closed in finish()
                 r.slot = false;
                 zero_length(a, t);
                 break;
@@ -247,18 +272,12 @@ public:
                 // A stage's operand (add's bias) is read by the drains and writebacks that carry it.
                 auto s = stage_reads_.find(k);
                 if (s != stage_reads_.end()) t = std::max(t, s->second);
-                credits_.push(t);
+                slot_free_[key_of(r.place)] = t;           // THIS slot is free from t
                 released_[k] = std::max(get(released_, k), t);
                 intervals_.push_back({r.slot_since, t});
-                slots_.push_back(Slot{a.tile, r.slot_since, t, r.inherited, false});
+                slots_.push_back(Slot{a.tile, r.place, r.slot_since, t, r.inherited, false});
                 r.slot = false;
-                Record rec;
-                rec.action = st_.actions;
-                rec.kind = a.kind;
-                rec.tile = a.tile;
-                rec.start = rec.finish = t;
-                records_.push_back(rec);
-                st_.makespan = std::max(st_.makespan, t);
+                zero_length(a, t);
                 break;
             }
         }
@@ -304,20 +323,22 @@ private:
     struct Residency {
         Cycle current = 0;          // when the L3 copy became current
         Cycle readers = 0;          // the latest finish of anything that read it (or wrote it)
-        bool slot = false;          // holds a credit
-        Cycle slot_since = 0;       // when its credit was taken
+        bool slot = false;          // holds its slot
+        Cycle slot_since = 0;       // when it took its slot
         bool inherited = false;     // opened by an Inherit
+        L3Address place;            // its slot
     };
 
     characterize::DeviceDescriptor dev_;
     std::size_t l3_;
+    std::uint32_t banks_ = 0;
     BehavioralInterpreter values_;
     TileProgram shapes_;
     Stats st_;
     std::vector<Record> records_;
     std::map<Proc, std::vector<Cycle>> lane_free_;
     std::map<Proc, Cycle> last_start_;
-    std::priority_queue<Cycle, std::vector<Cycle>, std::greater<Cycle>> credits_;   // when each free slot frees
+    std::map<std::pair<std::uint32_t, std::uint32_t>, Cycle> slot_free_;   // (module, slot) -> when its Release freed it
     std::map<std::string, Residency> residency_;
     std::map<std::string, Cycle> dram_ready_, moved_, drained_, fed_, acc_, stage_reads_, released_;
     std::vector<std::pair<Cycle, Cycle>> intervals_;     // each residency's slot: credit -> Release
@@ -329,10 +350,13 @@ private:
         rec.action = st_.actions;
         rec.kind = a.kind;
         rec.tile = a.tile;
+        rec.place = a.place;
         rec.start = rec.finish = t;
         records_.push_back(rec);
         st_.makespan = std::max(st_.makespan, t);
     }
+
+    static std::pair<std::uint32_t, std::uint32_t> key_of(const L3Address& s) { return {s.l3_tile, s.slot}; }
 
     static Cycle get(const std::map<std::string, Cycle>& m, const std::string& k) {
         auto it = m.find(k);
@@ -362,13 +386,11 @@ private:
         return quantize_cycles(double(bytes) / std::max(1.0, rate), bytes > 0);
     }
 
-    // The earliest a credit is free (an L3 slot), held from then on. With the program's
-    // capacity, the pool never runs dry: the program validated against it, and its Releases
-    // come earlier in program order.
-    Cycle take_credit() {
-        const Cycle t = credits_.empty() ? 0 : credits_.top();
-        if (!credits_.empty()) credits_.pop();
-        return t;
+    // When the action's own slot is free: its previous occupant's Release (0 if it has had none).
+    // L-B, stepped first, has already refused an action without an address or into a live slot.
+    Cycle take_slot(const Action& a) const {
+        auto it = slot_free_.find(key_of(*a.place));
+        return it == slot_free_.end() ? 0 : it->second;
     }
 
     // Run one leg of `a` on process `p`: start at the latest of `ready`, a free lane, and the
@@ -387,6 +409,7 @@ private:
         rec.action = st_.actions;
         rec.kind = a.kind;
         rec.tile = a.tile;
+        rec.place = a.place;
         rec.proc = p;
         rec.lane = lane;
         rec.start = start;

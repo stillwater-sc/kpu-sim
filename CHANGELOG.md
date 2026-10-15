@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **L-T1 executes L3 placement: a credit is a slot** (`docs/plans/l3-placement-at-lb.md` step 5a).
+  A Load, Inherit or opening Writeback waits for its own slot's Release, not for whichever slot
+  frees first, so an early reuse serializes on it.
+  - `TransactionalInterpreter`: per-slot free times replace the anonymous credit queue.
+  - `Slot` and `Record` carry their `L3Address`, so `kpu-run --step` at L-T1 names the slot.
+  - The program's banks are passed to the value interpreter, so a wrong bank is refused at L-T1.
+  - New stats: `slot_bound`, the Loads whose start their slot decided, and `slot_wait_cycles`,
+    what those waits cost. `kpu-run` prints them.
+  - Measured on kpu_s1: generated matmul 128/32 is never slot-bound under `fifo` or `lowest`. A
+    streamed program under `lowest` (or pinned to two slots) waits 704 cycles on its slots, with a
+    makespan of 964, against `fifo`'s 416 and 740.
 - **The L0 trace records placement** (`docs/plans/l3-placement-at-lb.md` step 4; L0 opset 1.2.0).
   Every CSP action on an L3 residency is recorded as one L3 op with its tile and address:
   `L3_LOAD`, `L3_STORE`, `L3_MOVE`, `L3_WRITEBACK`, `L3_RELEASE`, `L3_INHERIT` and `L3_RETAIN`.
