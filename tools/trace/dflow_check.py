@@ -289,9 +289,19 @@ def check(m, T, limit=20):
                 if len(parents) != 1:
                     bad("D6", f"depth {d}: iteration [{r['first']}, {r['last']}] lies in "
                               f"{len(parents)} iterations of depth {d - 1}")
+    # Every recorded step's position resolves, cut or not: the viewer reads it at every step.
+    W, L = T["where"], T["loops"]
+    pos_ok = [True] * n
+    for i in range(n):
+        w = S["where"][i]
+        if w >= W["rows"]:
+            bad("D6", f"step {i} names position {w}; there are {W['rows']}")
+            pos_ok[i] = False
+        elif W["loop_first"][w] + W["loop_count"][w] > L["rows"]:
+            bad("D6", f"position {w} names loops past the {L['rows']} recorded")
+            pos_ok[i] = False
     if not m["cut"] and n == actions:
         # Every step recorded: recount each iteration from its steps and their positions.
-        W, L = T["where"], T["loops"]
         for d, rs in sorted(by_depth.items()):
             for r in rs:
                 if r["last"] >= n or r["last"] < r["first"]:
@@ -299,17 +309,13 @@ def check(m, T, limit=20):
                 acts = loads = stores = 0
                 peak = [0, 0, 0, 0]
                 for i in range(r["first"], r["last"] + 1):
+                    if not pos_ok[i]:
+                        continue                # reported above
                     w = S["where"][i]
-                    if w >= W["rows"]:
-                        bad("D6", f"step {i} names position {w}; there are {W['rows']}")
-                        continue
                     if d > 0:
                         if W["loop_count"][w] < d:
                             continue
                         loop = W["loop_first"][w] + d - 1
-                        if loop >= L["rows"]:
-                            bad("D6", f"position {w} names loop {loop}; there are {L['rows']}")
-                            continue
                         if (L["line"][loop], L["value"][loop]) != (r["line"], r["value"]):
                             continue
                     acts += 1

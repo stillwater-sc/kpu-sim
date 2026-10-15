@@ -188,6 +188,14 @@ class DflowCheckSelfTest(unittest.TestCase):
         self.b.set("steps", "where", 7, self.b.rows("where") + 5)
         self.assertFails("D6", "names position")
 
+    def test_d6_position_out_of_range_in_a_cut_bundle(self):
+        # A cut bundle skips the recount; its recorded positions are still checked.
+        self.b.manifest["cut"] = True
+        self.b.manifest["totals"]["actions"] += 10
+        self.b.save_manifest()
+        self.b.set("steps", "where", 7, self.b.rows("where") + 5)
+        self.assertFails("D6", "names position")
+
     # -- unreadable ---------------------------------------------------------
     def test_malformed_manifest_is_unreadable(self):
         del self.b.manifest["totals"]["loads"]
