@@ -1,0 +1,602 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Domain-Flow Debugger</title>
+<!--
+  The domain-flow viewer (docs/plans/domain-flow-debugger.md step 3; #363): a CSP program's L-B run,
+  read from a .dflow bundle, as domains moving through the program's channels. One step is one CSP
+  action; there is no time axis, because L-B has no time.
+
+  It READS, never executes: every residency, address, occupancy and loop index shown is a column of
+  the record that the oracle's run wrote (§6 invariant 7). Open it and choose a bundle folder, or
+  embed a bundle with pack.py. Invariants are dflow_check.py's job, not this page's.
+
+  SPDX-License-Identifier: MIT
+  Copyright (c) 2024-2025 Stillwater Supercomputing, Inc.
+-->
+<style>
+/* Layout: an instrument panel. Transport and the iteration ribbon across the top (the step axis),
+   then program | machine | inspector. The machine view is the program's channel graph, with L3
+   drawn as its addressed slots, grouped by bank. */
+:root {
+  --bg: #f3f5f7; --panel: #ffffff; --ink: #17212b; --muted: #5b6875; --line: #d5dce3; --soft: #e9edf1;
+  --accent: #1f5fa8; --accent-soft: #dce8f6; --bad: #b3261e; --bad-soft: #fbe3e1;
+  --op-0: #1d7f86; --op-1: #b4691b; --op-2: #7b4bb0; --op-3: #a63d57;
+  --font-body: system-ui, -apple-system, "Segoe UI", "IBM Plex Sans", sans-serif;
+  --font-mono: ui-monospace, "SFMono-Regular", "IBM Plex Mono", Menlo, Consolas, monospace;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0f151b; --panel: #161e26; --ink: #e3e9ef; --muted: #93a1ae; --line: #2a3640; --soft: #1d2731;
+    --accent: #6aa6e8; --accent-soft: #1d3247; --bad: #f2867c; --bad-soft: #3a1f1d;
+    --op-0: #4fb8bf; --op-1: #e3a052; --op-2: #ab86de; --op-3: #dd7893; color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0f151b; --panel: #161e26; --ink: #e3e9ef; --muted: #93a1ae; --line: #2a3640; --soft: #1d2731;
+  --accent: #6aa6e8; --accent-soft: #1d3247; --bad: #f2867c; --bad-soft: #3a1f1d;
+  --op-0: #4fb8bf; --op-1: #e3a052; --op-2: #ab86de; --op-3: #dd7893; color-scheme: dark;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--ink); font: 14px/1.45 var(--font-body); padding: 16px; }
+.wrap { max-width: 1400px; margin: 0 auto; display: grid; gap: 14px; }
+h1 { font-size: 1.45rem; margin: 0; font-weight: 600; }
+h2 { font-size: 0.76rem; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); margin: 0; font-weight: 600; }
+.mono { font-family: var(--font-mono); }
+.num { font-variant-numeric: tabular-nums; }
+[hidden] { display: none !important; }
+header.top { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 16px; }
+header.top .meta { color: var(--muted); font-size: 0.86rem; display: flex; flex-wrap: wrap; gap: 4px 14px; }
+.chip { display: inline-flex; padding: 2px 8px; border-radius: 999px; font-size: 0.74rem; border: 1px solid var(--accent); color: var(--accent); background: var(--accent-soft); }
+.panel { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; min-width: 0; }
+.banner { padding: 8px 12px; border-radius: 6px; font-size: 0.86rem; }
+.banner.bad { background: var(--bad-soft); color: var(--bad); border: 1px solid var(--bad); }
+.banner.info { background: var(--accent-soft); color: var(--ink); border: 1px solid var(--line); }
+.loader { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; }
+button, select, input[type="number"] { font: inherit; font-size: 0.86rem; color: var(--ink); background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 5px 9px; cursor: pointer; }
+button:hover:not(:disabled) { border-color: var(--accent); }
+button:disabled { opacity: 0.45; cursor: default; }
+button:focus-visible, select:focus-visible, input:focus-visible, .slot:focus-visible, .ln:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+button.primary { background: var(--accent); color: var(--panel); border-color: var(--accent); min-width: 64px; }
+.controls { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.sep { width: 1px; height: 22px; background: var(--line); }
+.group { display: inline-flex; align-items: center; gap: 6px; }
+.group label { color: var(--muted); font-size: 0.8rem; }
+input[type="range"] { width: 100%; accent-color: var(--accent); }
+input[type="number"] { width: 7em; cursor: text; }
+.transport { display: grid; gap: 10px; }
+canvas.ribbon { width: 100%; height: 90px; display: block; cursor: pointer; }
+.axis { display: flex; justify-content: space-between; font: 0.72rem var(--font-mono); color: var(--muted); }
+.main { display: grid; grid-template-columns: minmax(230px, 1fr) minmax(0, 2.2fr) minmax(250px, 1fr); gap: 14px; align-items: start; }
+@media (max-width: 1100px) { .main { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); } .machine { grid-column: 1 / -1; order: -1; } }
+@media (max-width: 680px) { .main { grid-template-columns: minmax(0, 1fr); } }
+.src { font-family: var(--font-mono); font-size: 0.8rem; margin-top: 8px; overflow-x: auto; max-height: 70vh; overflow-y: auto; }
+.ln { display: grid; grid-template-columns: 2.4em 1fr auto; gap: 8px; padding: 1px 6px; border-radius: 4px; white-space: pre; cursor: pointer; }
+.ln .no { color: var(--muted); text-align: right; }
+.ln.cur { background: var(--accent-soft); }
+.ln.cur .no { color: var(--accent); font-weight: 600; }
+.ln .idx { color: var(--accent); font-weight: 600; }
+.where { margin-top: 10px; font: 0.82rem var(--font-mono); display: flex; flex-wrap: wrap; gap: 6px; }
+.where span { padding: 2px 7px; border: 1px solid var(--line); border-radius: 4px; }
+.where b { color: var(--accent); }
+.machine { display: grid; gap: 12px; }
+.now { font: 0.86rem var(--font-mono); padding: 8px 10px; border-radius: 6px; background: var(--soft); overflow-x: auto; white-space: nowrap; }
+.now .k { font-weight: 600; color: var(--accent); }
+.now.refused { background: var(--bad-soft); color: var(--bad); }
+.flow { display: grid; grid-template-columns: minmax(70px, 0.7fr) 64px minmax(0, 3fr) 64px minmax(70px, 0.7fr) 64px minmax(70px, 0.7fr); align-items: center; }
+@media (max-width: 680px) { .flow { grid-template-columns: minmax(0, 1fr); gap: 4px; } .edge { flex-direction: row !important; justify-content: center; } }
+.station { border: 1px solid var(--line); border-radius: 8px; padding: 8px; background: var(--soft); min-width: 0; text-align: center; }
+.station .name { font-weight: 600; }
+.station .count { font: 1.25rem var(--font-mono); font-variant-numeric: tabular-nums; }
+.station .cap { font-size: 0.72rem; color: var(--muted); }
+.station.l3 { text-align: left; background: var(--panel); }
+.station.l3 .head { display: flex; justify-content: space-between; gap: 8px; margin-bottom: 6px; }
+.edge { display: flex; flex-direction: column; align-items: center; gap: 4px; font: 0.7rem var(--font-mono); color: var(--muted); }
+.arrow { padding: 1px 4px; border-radius: 4px; white-space: nowrap; }
+.arrow.on { background: var(--accent); color: var(--panel); font-weight: 600; }
+.bank + .bank { margin-top: 8px; }
+.bank .bl { font: 0.7rem var(--font-mono); color: var(--muted); margin-bottom: 3px; }
+.slots { display: grid; grid-template-columns: repeat(auto-fill, minmax(64px, 1fr)); gap: 4px; }
+.slot { border: 1px solid var(--line); border-radius: 5px; padding: 4px 5px; min-height: 46px; font: 0.72rem var(--font-mono); cursor: pointer; background: var(--panel); }
+.slot .sn, .slot .rn { color: var(--muted); font-size: 0.64rem; }
+.slot .tn { font-weight: 600; font-size: 0.78rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.slot.empty .tn { color: var(--muted); font-weight: 400; }
+.slot.full { border-left: 4px solid var(--op); }
+.slot.full .tn { color: var(--op); }
+.slot.touched { box-shadow: 0 0 0 2px var(--accent); }
+.slot.freed { border-style: dashed; }
+.slot.selected { background: var(--accent-soft); }
+.op-0 { --op: var(--op-0); } .op-1 { --op: var(--op-1); } .op-2 { --op: var(--op-2); } .op-3 { --op: var(--op-3); }
+.legend { display: flex; flex-wrap: wrap; gap: 12px; font-size: 0.78rem; color: var(--muted); }
+.legend .sw { display: inline-block; width: 10px; height: 10px; border-radius: 2px; background: var(--op); margin-right: 5px; vertical-align: -1px; }
+dl.kv { display: grid; grid-template-columns: auto 1fr; gap: 3px 12px; margin: 8px 0 0; font-size: 0.84rem; }
+dl.kv dt { color: var(--muted); }
+dl.kv dd { margin: 0; font-family: var(--font-mono); overflow-wrap: anywhere; }
+.insp { display: grid; gap: 14px; }
+.histwrap { max-height: 260px; overflow-y: auto; }
+table.hist { width: 100%; border-collapse: collapse; font: 0.76rem var(--font-mono); margin-top: 6px; font-variant-numeric: tabular-nums; }
+table.hist th { text-align: left; color: var(--muted); font-weight: 500; border-bottom: 1px solid var(--line); padding: 3px 4px; }
+table.hist td { padding: 2px 4px; border-bottom: 1px solid var(--soft); }
+table.hist tr.live td { background: var(--accent-soft); }
+table.hist button { padding: 0 5px; font-size: 0.72rem; }
+.note { font-size: 0.78rem; color: var(--muted); margin: 4px 0 0; }
+footer { font-size: 0.8rem; color: var(--muted); display: grid; gap: 4px; }
+footer ul { margin: 0; padding-left: 18px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="top">
+    <h1>Domain-Flow Debugger</h1>
+    <span class="chip">L-B &middot; the axis is the action, not time</span>
+    <div class="meta" id="meta"></div>
+  </header>
+
+  <section class="panel loader" id="loader">
+    <label>Bundle folder (.dflow) <input id="pick" type="file" webkitdirectory multiple></label>
+    <span class="note">Write one with <span class="mono">kpu-run --program p.csp --dflow run.dflow</span>, or embed one with <span class="mono">pack.py</span>.</span>
+  </section>
+  <div class="banner bad" id="error" hidden></div>
+  <div class="banner bad" id="refusal" hidden></div>
+  <div class="banner info" id="cutnote" hidden></div>
+
+  <div id="viewer" hidden>
+    <div class="wrap">
+      <section class="panel transport" aria-label="Navigation">
+        <div class="controls">
+          <button id="first" title="First step (Home)">|&lt;</button>
+          <button id="back" title="Step back (Left arrow)">&lt; step</button>
+          <button id="play" class="primary" title="Play or pause (Space)">Play</button>
+          <button id="fwd" title="Step forward (Right arrow)">step &gt;</button>
+          <button id="last" title="Last recorded step (End)">&gt;|</button>
+          <span class="sep"></span>
+          <span class="mono">step <b id="pos" class="num"></b> of <span id="total" class="num"></span></span>
+          <span class="sep"></span>
+          <span class="group" id="iterbtns"></span>
+          <span class="sep"></span>
+          <span class="group"><label for="kind">run to next</label><select id="kind"></select><button id="nextkind">go</button></span>
+          <button id="release" title="The step that releases the residency this step names">to its release</button>
+          <span class="group"><label for="jump">jump to step</label><input id="jump" type="number" min="0"></span>
+          <span class="group"><label for="speed">speed</label><select id="speed"><option value="4">4/s</option><option value="15" selected>15/s</option><option value="60">60/s</option><option value="240">240/s</option></select></span>
+        </div>
+        <input id="scrub" type="range" min="0" value="0" aria-label="Step">
+        <canvas class="ribbon" id="ribbon" aria-label="Loop iterations and L3 occupancy over the whole run; click to jump"></canvas>
+        <div class="axis"><span>step 0</span><span>step (action) &rarr;</span><span id="axis-end"></span></div>
+      </section>
+
+      <div class="main">
+        <section class="panel" aria-label="Program">
+          <h2>Program position</h2>
+          <div class="where" id="where"></div>
+          <div class="src" id="src" title="Click a line to run to its next action"></div>
+        </section>
+
+        <section class="panel machine" aria-label="Machine">
+          <h2>Domains in the machine, after this action</h2>
+          <div class="now" id="now"></div>
+          <div class="flow">
+            <div class="station"><div class="name">DRAM</div><div class="count" id="c-dram"></div><div class="cap">tiles off chip</div></div>
+            <div class="edge"><span class="arrow" id="e-LOAD">dma LOAD &rarr;</span><span class="arrow" id="e-STORE">&larr; STORE dma</span></div>
+            <div class="station l3"><div class="head"><span class="name">L3</span><span class="mono num" id="c-l3"></span></div><div id="banks"></div></div>
+            <div class="edge"><span class="arrow" id="e-MOVE">bm MOVE &rarr;</span><span class="arrow" id="e-WRITEBACK">&larr; WRITEBACK bm</span></div>
+            <div class="station"><div class="name">L2</div><div class="count" id="c-l2"></div><div class="cap">unbounded at L-B</div></div>
+            <div class="edge"><span class="arrow" id="e-FEED">str FEED &rarr;</span><span class="arrow" id="e-DRAIN">&larr; DRAIN str</span></div>
+            <div class="station"><div class="name">Fabric</div><div class="count" id="c-cf"></div><div class="cap" id="cf-cap">unbounded at L-B</div></div>
+          </div>
+          <div class="legend" id="legend"></div>
+        </section>
+
+        <section class="panel insp" aria-label="Inspector">
+          <div><h2>This step</h2><dl class="kv" id="step-kv"></dl></div>
+          <div>
+            <h2 id="slot-title">Slot history</h2>
+            <p class="note" id="slot-note">Select a slot in L3 to see every tile it held.</p>
+            <div class="histwrap"><table class="hist" id="slot-hist" hidden><thead><tr><th>tile</th><th>res</th><th>opened</th><th>released</th><th></th></tr></thead><tbody></tbody></table></div>
+          </div>
+        </section>
+      </div>
+
+      <footer>
+        <div id="runid"></div>
+        <div>Not modelled at L-B (from the record's manifest):</div>
+        <ul id="notmodelled"></ul>
+        <div>Everything shown is read from the record that L-B's own run wrote; this page computes no value, residency or loop index. Invariants: <span class="mono">python3 tools/trace/dflow_check.py</span>.</div>
+      </footer>
+    </div>
+  </div>
+</div>
+
+<!--DFLOW_EMBED-->
+
+<!-- The data layer: decoding and reading the record. No DOM, so test_viewer.py runs it in Node. -->
+<script id="dflow-core">
+"use strict";
+globalThis.DflowCore = (() => {
+  const VERSIONS = [1];
+  const OPENS = 1, CLOSES = 2, RETAINS = 4, HAS_PLACE = 8, PINNED = 16, RES_RETAINED = 4;
+  const NONE8 = 255, NONE32 = 0xFFFFFFFF;
+  const TYPED = { u8: Uint8Array, u16: Uint16Array, u32: Uint32Array, u64: BigUint64Array, i64: BigInt64Array };
+  const NONE64 = 0xFFFFFFFFFFFFFFFFn;
+
+  // A column as a typed array. 64-bit columns become Float64Array (indices stay far below 2^53);
+  // a u64 none (all ones) becomes -1.
+  function column(buf, t, name) {
+    const c = t.columns.find(x => x.name === name);
+    if (!c) throw new Error(`table has no column ${name}`);
+    const T = TYPED[c.dtype];
+    if (!T) throw new Error(`column ${name}: unknown dtype ${c.dtype}`);
+    if (c.offset + t.rows * T.BYTES_PER_ELEMENT > buf.byteLength) throw new Error(`column ${name} runs past the end of ${t.file}`);
+    const a = new T(buf, c.offset, t.rows);
+    if (c.dtype !== "u64" && c.dtype !== "i64") return a;
+    const out = new Float64Array(t.rows);
+    for (let i = 0; i < t.rows; i++) out[i] = a[i] === NONE64 && c.dtype === "u64" ? -1 : Number(a[i]);
+    return out;
+  }
+
+  // files: { "manifest.json": text, "<table>.bin": ArrayBuffer }
+  function parse(files) {
+    const m = JSON.parse(files["manifest.json"]);
+    if (m.format !== "kpu-dflow") throw new Error("not a .dflow bundle (manifest format " + JSON.stringify(m.format) + ")");
+    if (!VERSIONS.includes(m.version)) throw new Error(`a version-${m.version} .dflow bundle; this viewer reads version ${VERSIONS.join(", ")}`);
+    const R = { m };
+    for (const name of ["steps", "tiles", "residency", "where", "loops", "iteration"]) {
+      const t = m.tables[name];
+      if (!t) throw new Error("no table " + name);
+      const buf = files[t.file];
+      if (!buf) throw new Error("missing " + t.file);
+      const out = { rows: t.rows };
+      for (const c of t.columns) out[c.name] = column(buf, t, c.name);
+      R[name] = out;
+    }
+    R.n = R.steps.rows;                      // recorded steps (fewer than the run's actions if cut)
+    R.actions = m.totals.actions;
+    R.cap = m.machine.l3;
+    R.banks = m.machine.banks;
+    // Each slot's residencies, in open order: they never overlap (D9), so the one held at a step is
+    // found by binary search.
+    R.slotRes = Array.from({ length: R.cap }, () => []);
+    for (let r = 0; r < R.residency.rows; r++) {
+      const s = R.residency.slot[r];
+      if (s < R.cap) R.slotRes[s].push(r);
+    }
+    return R;
+  }
+
+  const tileName = (R, t) => `${R.m.operands[R.tiles.operand[t]].name}[${R.tiles.ti[t]},${R.tiles.tj[t]}]`;
+  const kindName = (R, s) => R.m.kinds[R.steps.kind[s]];
+
+  // The program position of step s: its line and every enclosing loop's index.
+  function position(R, s) {
+    const w = R.steps.where[s], W = R.where, L = R.loops, loops = [];
+    for (let d = 0; d < W.loop_count[w]; d++) {
+      const l = W.loop_first[w] + d;
+      loops.push({ var: R.m.vars[L.var[l]], value: L.value[l], hi: L.hi[l], line: L.line[l], depth: d + 1 });
+    }
+    return { line: W.line[w], loops };
+  }
+
+  // What slot `sl` holds after step s: { res, held } where held is false for a residency released
+  // by step s itself (drawn as just freed); res is -1 for a free slot.
+  function slotAt(R, sl, s) {
+    const list = R.slotRes[sl], X = R.residency;
+    let lo = 0, hi = list.length - 1, at = -1;
+    while (lo <= hi) {
+      const mid = (lo + hi) >> 1;
+      if (X.open[list[mid]] <= s) { at = mid; lo = mid + 1; } else hi = mid - 1;
+    }
+    if (at < 0) return { res: -1, held: false };
+    const r = list[at], close = X.close[r];
+    if (close < 0 || close > s || (X.flags[r] & RES_RETAINED)) return { res: r, held: true };
+    if (close === s) return { res: r, held: false };
+    return { res: -1, held: false };
+  }
+
+  function step(R, s) {
+    const S = R.steps, f = S.flags[s];
+    return {
+      action: S.action[s], kind: kindName(R, s), tile: tileName(R, S.tile[s]),
+      process: S.process[s] === NONE8 ? null : R.m.processes[S.process[s]],
+      from: S.from[s] === NONE8 ? null : R.m.channels[S.from[s]].name,
+      to: S.to[s] === NONE8 ? null : R.m.channels[S.to[s]].name,
+      residency: S.residency[s], opens: !!(f & OPENS), closes: !!(f & CLOSES), retains: !!(f & RETAINS),
+      pinned: !!(f & PINNED),
+      place: f & HAS_PLACE ? { l3_tile: S.l3_tile[s], slot: S.slot[s], bank: S.bank[s] } : null,
+      held: { dram: S.held_dram[s], l3: S.held_l3[s], l2: S.held_l2[s], cf: S.held_cf[s] },
+    };
+  }
+
+  // ---- navigation (plan §3.5a); each returns a recorded step, or -1 ----
+  function nextIteration(R, s, depth) {
+    const here = position(R, s).loops[depth - 1];
+    if (!here) return -1;
+    const I = R.iteration;
+    let best = -1;
+    for (let i = 0; i < I.rows; i++)
+      if (I.depth[i] === depth && I.line[i] === here.line && I.first[i] > s && (best < 0 || I.first[i] < best)) best = I.first[i];
+    return best >= 0 && best < R.n ? best : -1;
+  }
+  function nextWhere(R, s, pred) {
+    for (let i = s + 1; i < R.n; i++) if (pred(i)) return i;
+    return -1;
+  }
+  const nextKind = (R, s, kind) => nextWhere(R, s, i => R.steps.kind[i] === kind);
+  const nextOnTile = (R, s) => nextWhere(R, s, i => R.steps.tile[i] === R.steps.tile[s]);
+  const nextFromLine = (R, s, line) => nextWhere(R, s, i => R.where.line[R.steps.where[i]] === line);
+  function releaseOf(R, res) {
+    if (res < 0 || res >= R.residency.rows) return -1;
+    const c = R.residency.close[res];
+    return c >= 0 && c < R.n ? c : -1;
+  }
+
+  return { VERSIONS, parse, tileName, position, slotAt, step, nextIteration, nextKind, nextOnTile, nextFromLine, releaseOf, RES_RETAINED };
+})();
+</script>
+
+<script>
+"use strict";
+(() => {
+  const C = globalThis.DflowCore;
+  const $ = id => document.getElementById(id);
+  const esc = s => String(s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+  const tok = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+  const fmt = n => Number(n).toLocaleString("en-US");
+  const EDGES = ["LOAD", "STORE", "MOVE", "WRITEBACK", "FEED", "DRAIN"];
+  let R = null, cur = 0, selected = -1, timer = null;
+
+  function fail(msg) { const e = $("error"); e.textContent = msg; e.hidden = false; }
+
+  function load(files) {
+    try {
+      R = C.parse(files);
+    } catch (e) {
+      fail("Cannot read this bundle: " + e.message);
+      return;
+    }
+    $("error").hidden = true;
+    $("loader").hidden = !!window.DFLOW_EMBED;
+    $("viewer").hidden = false;
+    setup();
+    let start = 0;                            // open where L3 first fills: the most telling frame
+    for (let s = 0; s < R.n; s++) if (R.steps.held_l3[s] === R.cap) { start = s; break; }
+    if (R.n) {
+      const st = C.step(R, start);
+      selected = st.place ? st.place.slot : -1;
+      go(start);
+    }
+  }
+
+  function setup() {
+    const M = R.m;
+    const shape = M.operands.map(o => `${esc(o.name)} ${o.rows}&times;${o.cols} in ${o.tile_rows}&times;${o.tile_cols} tiles`).join(" &middot; ");
+    $("meta").innerHTML = `<span>program <b>${esc(M.program.name)}</b></span><span>${shape}</span>` +
+      `<span>L3 ${R.cap} slots, ${R.banks} bank${R.banks > 1 ? "s" : ""}, place = ${esc(M.machine.place)}</span>` +
+      `<span>${fmt(M.totals.actions)} actions &middot; ${fmt(M.totals.loads)} loads &middot; ${fmt(M.totals.stores)} stores</span>`;
+    $("runid").textContent = M.run_id ? `run id: ${M.run_id}` : "run id: none (L-B did not run as a level)";
+    $("notmodelled").innerHTML = M.not_modelled.map(x => `<li>${esc(x)}</li>`).join("");
+    $("total").textContent = fmt(Math.max(0, R.n - 1));
+    $("axis-end").textContent = `step ${fmt(Math.max(0, R.actions - 1))}`;
+    $("legend").innerHTML = M.operands.map((o, k) => `<span class="op-${k % 4}"><span class="sw"></span>${esc(o.name)}</span>`).join("") +
+      `<span>outlined: the slot this action touches</span><span>dashed: released by this action</span>`;
+    if (M.refusal) { $("refusal").textContent = `L-B refused action ${fmt(M.refusal.action)}: ${M.refusal.what}. The record stops there.`; $("refusal").hidden = false; }
+    else $("refusal").hidden = true;
+    if (M.cut) { $("cutnote").textContent = `Step detail is cut at ${fmt(R.n)} of ${fmt(R.actions)} actions (--dflow-limit ${fmt(M.step_limit)}). The ribbon's iterations and the slot histories cover the whole run.`; $("cutnote").hidden = false; }
+    else $("cutnote").hidden = true;
+
+    $("src").innerHTML = M.program.text.split("\n").map((t, k) => `<div class="ln" id="ln-${k + 1}" data-line="${k + 1}" tabindex="0"><span class="no">${k + 1}</span><span>${esc(t)}</span><span class="idx" id="ix-${k + 1}"></span></div>`).join("");
+
+    let bh = "";
+    for (let b = 0; b < R.banks; b++) {
+      bh += `<div class="bank"><div class="bl">bank ${b}</div><div class="slots">`;
+      for (let s = b; s < R.cap; s += R.banks) bh += `<div class="slot" id="slot-${s}" tabindex="0" data-slot="${s}"></div>`;
+      bh += `</div></div>`;
+    }
+    $("banks").innerHTML = bh;
+    const kinds = [...new Set(R.steps.kind)].sort((a, b) => a - b);
+    $("kind").innerHTML = kinds.map(k => `<option value="${k}">${esc(M.kinds[k])}</option>`).join("") + `<option value="tile">action on this tile</option>`;
+    $("scrub").max = Math.max(0, R.n - 1);
+    drawRibbon();
+  }
+
+  // The ribbon: the whole run's iterations at each depth (complete even when steps are cut), and
+  // L3 occupancy over the recorded steps.
+  function drawRibbon() {
+    const cv = $("ribbon"), dpr = window.devicePixelRatio || 1, w = cv.clientWidth, h = cv.clientHeight;
+    cv.width = w * dpr; cv.height = h * dpr;
+    const g = cv.getContext("2d");
+    g.setTransform(dpr, 0, 0, dpr, 0, 0);
+    g.clearRect(0, 0, w, h);
+    const I = R.iteration, depths = [...new Set(I.depth)].filter(d => d > 0).sort((a, b) => a - b);
+    const lab = 28, W = w - lab, N = Math.max(1, R.actions);
+    const x = s => lab + (s / N) * W;
+    const rowH = Math.max(6, Math.min(14, (h - 40) / Math.max(1, depths.length) - 3));
+    g.font = `10px ${tok("--font-mono")}`;
+    g.textBaseline = "middle";
+    const varAt = {};
+    for (let w2 = 0; w2 < R.where.rows; w2++)
+      for (let d = 0; d < R.where.loop_count[w2]; d++) varAt[d + 1] ??= R.m.vars[R.loops.var[R.where.loop_first[w2] + d]];
+    depths.forEach((d, k) => {
+      const y = k * (rowH + 3);
+      g.fillStyle = tok("--muted");
+      g.fillText(varAt[d] ?? "d" + d, 0, y + rowH / 2);
+      for (let i = 0; i < I.rows; i++) {
+        if (I.depth[i] !== d) continue;
+        const x0 = x(I.first[i]), x1 = x(I.last[i] + 1);
+        g.fillStyle = I.value[i] % 2 ? tok("--accent") : tok("--accent-soft");
+        g.globalAlpha = I.value[i] % 2 ? 0.55 : 1;
+        g.fillRect(x0, y, Math.max(0.6, x1 - x0 - 0.4), rowH);
+      }
+      g.globalAlpha = 1;
+    });
+    const oy = depths.length * (rowH + 3) + 4, oh = h - oy - 2;
+    g.fillStyle = tok("--muted");
+    g.fillText("L3", 0, oy + 8);
+    g.strokeStyle = tok("--line");
+    g.setLineDash([2, 3]);
+    g.beginPath(); g.moveTo(lab, oy); g.lineTo(lab + W, oy); g.stroke();
+    g.setLineDash([]);
+    if (R.n) {
+      g.beginPath();
+      g.moveTo(x(0), oy + oh);
+      const stride = Math.max(1, Math.floor(R.n / (W * 2)));
+      for (let s = 0; s < R.n; s += stride) g.lineTo(x(s), oy + oh - (R.steps.held_l3[s] / R.cap) * oh);
+      g.lineTo(x(R.n - 1), oy + oh);
+      g.closePath();
+      g.fillStyle = tok("--op-0"); g.globalAlpha = 0.25; g.fill(); g.globalAlpha = 1;
+      g.strokeStyle = tok("--op-0"); g.stroke();
+    }
+    if (R.m.cut) {
+      g.fillStyle = tok("--soft");
+      g.fillRect(x(R.n), oy, lab + W - x(R.n), oh);
+      g.fillStyle = tok("--muted");
+      g.fillText("steps cut", Math.min(x(R.n) + 4, lab + W - 60), oy + oh / 2);
+    }
+    g.strokeStyle = tok("--ink"); g.lineWidth = 1.5;
+    g.beginPath(); g.moveTo(x(cur), 0); g.lineTo(x(cur), h); g.stroke();
+    g.lineWidth = 1;
+    cv._x = s => x(s); cv._lab = lab; cv._W = W; cv._N = N;
+  }
+
+  function render() {
+    const s = cur, st = C.step(R, s), pos = C.position(R, s);
+    $("pos").textContent = fmt(s);
+    $("scrub").value = s;
+    $("jump").value = s;
+
+    document.querySelectorAll(".ln.cur").forEach(e => e.classList.remove("cur"));
+    document.querySelectorAll(".ln .idx").forEach(e => { e.textContent = ""; });
+    const ln = $("ln-" + pos.line);
+    if (ln) { ln.classList.add("cur"); if (!timer) ln.scrollIntoView({ block: "nearest" }); }
+    for (const l of pos.loops) { const ix = $("ix-" + l.line); if (ix) ix.textContent = `${l.var} = ${l.value}`; }
+    $("where").innerHTML = `<span>line <b>${pos.line}</b></span>` + pos.loops.map(l => `<span>${esc(l.var)} = <b>${l.value}</b> of ${l.hi}</span>`).join("");
+
+    let rtxt = "";
+    if (st.residency >= 0) rtxt = `r${st.residency}` + (st.opens ? (st.pinned ? " opens (pinned)" : " opens") : "") + (st.closes ? " released" : "") + (st.retains ? " retained" : "");
+    const mv = st.from ? `${st.from} &rarr; ${st.to}` : "";
+    const refusedNext = R.m.refusal && s === R.n - 1;
+    $("now").className = "now" + (refusedNext ? " refused" : "");
+    $("now").innerHTML = `<span class="k">${esc(st.kind)}</span> ${esc(st.tile)}` + (st.process ? ` &middot; ${st.process}` : "") + (mv ? ` &middot; ${mv}` : "") +
+      (st.place ? ` &middot; L3 slot ${st.place.slot}, bank ${st.place.bank}` : "") + (rtxt ? ` &middot; ${rtxt}` : "") +
+      (refusedNext ? ` &middot; the next action was refused` : "");
+    for (const e of EDGES) $("e-" + e).classList.toggle("on", st.kind === e);
+
+    $("c-dram").textContent = fmt(st.held.dram);
+    $("c-l3").textContent = `${st.held.l3} / ${R.cap} held`;
+    $("c-l2").textContent = fmt(st.held.l2);
+    $("c-cf").textContent = fmt(st.held.cf);
+    $("cf-cap").textContent = st.kind === "CALL" ? `${st.tile} computed here` : "unbounded at L-B";
+
+    for (let sl = 0; sl < R.cap; sl++) {
+      const el = $("slot-" + sl), at = C.slotAt(R, sl, s);
+      el.className = "slot";
+      if (at.res >= 0 && at.held) {
+        const t = R.residency.tile[at.res];
+        el.classList.add("full", `op-${R.tiles.operand[t] % 4}`);
+        el.innerHTML = `<div class="sn">slot ${sl}</div><div class="tn">${esc(C.tileName(R, t))}</div><div class="rn">r${at.res}${R.residency.flags[at.res] & C.RES_RETAINED ? " retained" : ""}</div>`;
+      } else if (at.res >= 0) {
+        el.classList.add("empty", "freed");
+        el.innerHTML = `<div class="sn">slot ${sl}</div><div class="tn">${esc(C.tileName(R, R.residency.tile[at.res]))}</div><div class="rn">released</div>`;
+      } else {
+        el.classList.add("empty");
+        el.innerHTML = `<div class="sn">slot ${sl}</div><div class="tn">free</div>`;
+      }
+      if (st.place && st.place.slot === sl) el.classList.add("touched");
+      if (selected === sl) el.classList.add("selected");
+    }
+
+    const kv = [["action", fmt(st.action)], ["kind", st.kind], ["tile", st.tile], ["process", st.process ?? "none (a credit action)"],
+      ["move", st.from ? `${st.from} → ${st.to}` : "none"], ["residency", rtxt || "none"],
+      ["L3 address", st.place ? `l3[${st.place.l3_tile}] slot ${st.place.slot} bank ${st.place.bank}` : "none"],
+      ["held after", `dram ${fmt(st.held.dram)} · l3 ${st.held.l3} · l2 ${st.held.l2} · cf ${st.held.cf}`]];
+    $("step-kv").innerHTML = kv.map(([a, b]) => `<dt>${a}</dt><dd>${esc(b)}</dd>`).join("");
+    $("release").disabled = C.releaseOf(R, st.residency) < 0 || C.releaseOf(R, st.residency) === s;
+    renderSlot();
+    $("iterbtns").innerHTML = `<label>next iteration</label>` + (pos.loops.length
+      ? pos.loops.map(l => `<button data-depth="${l.depth}" title="Next ${esc(l.var)} iteration">${esc(l.var)} &gt;</button>`).join("")
+      : `<span class="note">outside every loop</span>`);
+    drawRibbon();
+  }
+
+  function renderSlot() {
+    const tb = $("slot-hist");
+    if (selected < 0) { tb.hidden = true; $("slot-note").hidden = false; $("slot-title").textContent = "Slot history"; return; }
+    $("slot-note").hidden = true; tb.hidden = false;
+    const rows = R.slotRes[selected], X = R.residency;
+    $("slot-title").textContent = `Slot ${selected}: ${fmt(rows.length)} residencies`;
+    const shown = rows.length > 2000 ? rows.slice(0, 2000) : rows;
+    tb.tBodies[0].innerHTML = shown.map(r => {
+      const live = X.open[r] <= cur && (X.close[r] < 0 || X.close[r] > cur || (X.flags[r] & C.RES_RETAINED));
+      const close = X.close[r] < 0 ? "never" : (X.flags[r] & C.RES_RETAINED ? `${fmt(X.close[r])} (retained)` : fmt(X.close[r]));
+      const t = X.tile[r], reach = X.open[r] < R.n;
+      return `<tr class="${live ? "live" : ""}"><td class="op-${R.tiles.operand[t] % 4}" style="color:var(--op)">${esc(C.tileName(R, t))}</td><td>r${r}</td><td>${fmt(X.open[r])}</td><td>${close}</td><td>${reach ? `<button data-go="${X.open[r]}">go</button>` : ""}</td></tr>`;
+    }).join("") + (rows.length > shown.length ? `<tr><td colspan="5">first 2,000 of ${fmt(rows.length)}</td></tr>` : "");
+  }
+
+  function go(s) {
+    if (!R || !R.n) return;
+    if (s < 0) return;
+    cur = Math.max(0, Math.min(R.n - 1, s));
+    render();
+  }
+  function play() {
+    if (timer) { clearInterval(timer); timer = null; $("play").textContent = "Play"; return; }
+    if (cur >= R.n - 1) go(0);
+    $("play").textContent = "Pause";
+    timer = setInterval(() => { if (cur >= R.n - 1) { play(); return; } go(cur + 1); }, 1000 / +$("speed").value);
+  }
+
+  $("first").onclick = () => go(0);
+  $("last").onclick = () => go(R.n - 1);
+  $("back").onclick = () => go(cur - 1);
+  $("fwd").onclick = () => go(cur + 1);
+  $("play").onclick = play;
+  $("speed").onchange = () => { if (timer) { play(); play(); } };
+  $("nextkind").onclick = () => { const v = $("kind").value; go(v === "tile" ? C.nextOnTile(R, cur) : C.nextKind(R, cur, +v)); };
+  $("release").onclick = () => go(C.releaseOf(R, C.step(R, cur).residency));
+  $("scrub").oninput = () => go(+$("scrub").value);
+  $("jump").onchange = () => go(+$("jump").value);
+  $("iterbtns").onclick = e => { const b = e.target.closest("button[data-depth]"); if (b) go(C.nextIteration(R, cur, +b.dataset.depth)); };
+  $("src").onclick = e => { const l = e.target.closest(".ln"); if (l) go(C.nextFromLine(R, cur, +l.dataset.line)); };
+  $("src").onkeydown = e => { if (e.key === "Enter") { const l = e.target.closest(".ln"); if (l) go(C.nextFromLine(R, cur, +l.dataset.line)); } };
+  $("banks").onclick = e => { const el = e.target.closest(".slot"); if (el) { selected = +el.dataset.slot === selected ? -1 : +el.dataset.slot; render(); } };
+  $("banks").onkeydown = e => { if (e.key === "Enter" || e.key === " ") { const el = e.target.closest(".slot"); if (el) { e.preventDefault(); selected = +el.dataset.slot; render(); } } };
+  $("slot-hist").onclick = e => { const b = e.target.closest("button[data-go]"); if (b) go(+b.dataset.go); };
+  $("ribbon").onclick = e => {
+    const cv = $("ribbon"), r = cv.getBoundingClientRect();
+    const s = Math.round(((e.clientX - r.left - cv._lab) / cv._W) * cv._N);
+    go(Math.min(s, R.n - 1));
+  };
+  document.addEventListener("keydown", e => {
+    if (!R || e.target.matches("input, select, textarea")) return;
+    if (e.key === "ArrowRight") { e.preventDefault(); go(cur + 1); }
+    else if (e.key === "ArrowLeft") { e.preventDefault(); go(cur - 1); }
+    else if (e.key === "Home") go(0);
+    else if (e.key === "End") go(R.n - 1);
+    else if (e.key === " " && !e.target.matches("button, .slot, .ln")) { e.preventDefault(); play(); }
+  });
+  addEventListener("resize", () => { if (R) drawRibbon(); });
+  matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => { if (R) drawRibbon(); });
+
+  $("pick").onchange = async e => {
+    const files = {};
+    for (const f of e.target.files) {
+      if (f.name === "manifest.json") files[f.name] = await f.text();
+      else if (f.name.endsWith(".bin")) files[f.name] = await f.arrayBuffer();
+    }
+    if (!files["manifest.json"]) { fail("That folder has no manifest.json: choose a .dflow bundle folder."); return; }
+    load(files);
+  };
+
+  // An embedded bundle (pack.py) loads itself.
+  if (window.DFLOW_EMBED) {
+    const E = window.DFLOW_EMBED, files = { "manifest.json": E.manifest };
+    const b64 = s => { const bin = atob(s), u = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) u[i] = bin.charCodeAt(i); return u.buffer; };
+    for (const [name, data] of Object.entries(E.bins)) files[name] = b64(data);
+    load(files);
+  }
+})();
+</script>
+</body>
+</html>

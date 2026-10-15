@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The domain-flow viewer** (`docs/plans/domain-flow-debugger.md` step 3, #363):
+  `tools/visualization/domainflow/{index.html, pack.py, README.md, test_viewer.py}`.
+  - Machine view: the program's channels (DRAM, L3, L2, fabric) with the process on each edge. L3
+    is drawn as its addressed slots by bank, with each tile and residency at its address.
+  - Program view (current line, loop indices; click a line to run to it), the iteration ribbon
+    over the whole run with L3 occupancy, and an inspector with per-slot histories.
+  - Navigation: step, back, play, next iteration at any depth, next action of a kind or on a tile,
+    the current residency's release, jump to a step.
+  - Reads a bundle folder, or a bundle `pack.py` embeds. It handles a cut bundle and a refused run.
+  - `test_viewer.py` runs the page's DOM-free data layer in Node on four bundles and compares it
+    with the bundle read in Python.
 - **The domain-flow record (`.dflow`)** (`docs/plans/domain-flow-debugger.md` step 2, #363). A CSP
   program's L-B run as CSP state transitions, one step per action.
   - `record/domain_flow_record.hpp`: `DomainFlowRecord`, `write_dflow`/`read_dflow` in the shared
