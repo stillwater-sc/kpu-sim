@@ -41,7 +41,7 @@ struct CspStep {
     csp::Action::Kind kind = csp::Action::Kind::Call;
     TileCoord tile;
     std::vector<csp::Stage> context;        // L-B: the tile context the action carries
-    std::optional<csp::L3Address> place;    // L-B: the L3 slot it writes, reads or frees
+    std::optional<csp::L3Address> place;    // the L3 slot it writes, reads or frees
     // L-T1 only.
     std::optional<csp::TransactionalInterpreter::Proc> proc;   // none for a Release
     std::size_t lane = 0;
@@ -156,6 +156,7 @@ public:
         cur_.action = r.action;
         cur_.kind = r.kind;
         cur_.tile = r.tile;
+        cur_.place = r.place;
         if (csp::TransactionalInterpreter::has_process(r.kind)) cur_.proc = r.proc;
         cur_.lane = r.lane;
         cur_.start = r.start;

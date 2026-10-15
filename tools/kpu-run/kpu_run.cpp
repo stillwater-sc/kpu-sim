@@ -308,7 +308,8 @@ int run_csp_program(const std::vector<std::string>& a, const std::string& path) 
                   << " bytes      cf busy " << o.cf_busy << "\n";
         if (o.level == ExecutionLevel::BlockSequential) {
             std::cout << "        L3    peak " << o.peak_l3 << " of " << ast->l3 << " (in time), credit stalls "
-                      << o.credit_stalls << "\n        busy ";
+                      << o.credit_stalls << ", slot-bound " << o.slot_bound << " (" << o.slot_wait_cycles
+                      << " cycles)\n        busy ";
             for (const auto& [p, b] : o.busy)
                 std::cout << " " << p << " " << b << "/" << (o.lanes.count(p) ? o.lanes.at(p) : 0);
             std::cout << "   (lane-cycles/lanes)   UNCALIBRATED\n";

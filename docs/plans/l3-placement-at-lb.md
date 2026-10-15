@@ -1,7 +1,7 @@
 # L3 Placement Is Behavior: L-B Models Where Every Tile Lives
 
 **Date:** 2026-10-11
-**Status:** Approved 2026-10-11 (Q1-Q6 as recommended, §7). Steps 1-3 merged (#364-#366); step 4 (the trace carries placement) in review
+**Status:** Approved 2026-10-11 (Q1-Q6 as recommended, §7). Steps 1-4 merged (#364-#367); step 5 (L-T1) in review, split as 5a (the executor) and 5b (`.tflow` binds slots)
 **Raised by:** the architect, 2026-10-11, reviewing `docs/plans/domain-flow-debugger.md` (#363):
 > The L-B behavioral model has to model L3 placement otherwise the CSP sequencing doesn't do
 > anything. The tile placement in L3 is a key component of the behavior of the machine, in the
@@ -276,7 +276,14 @@ Each step is one PR, reviewed and merged before the next. The suite stays green 
    - The corpus is regenerated; `tests/program/corpus/README.md` records why.
    - Tests: `test_l0_serialization` (round trip), `test_csp_run` (the replay reproduces placement),
      and the corpus tests.
-5. **L-T1 executes placement.**
+5. **L-T1 executes placement.** *Split on implementation (2026-10-12):* 5a is the executor; 5b is
+   `.tflow`'s slot binding, which changes the record format, the viewer and `tflow_check.py`.
+   *Measured in 5a, on kpu_s1's lanes:*
+   - kpu-csp-gen's matmul 128/32 has no slot-bound Load under `fifo` or `lowest`, at its own L3
+     or at twice it. The plan's expectation that `lowest` waits more does not hold for it.
+   - A streamed program (two tiles a step, 5 slots) does show the effect. `lowest` reuses slots 0
+     and 1, as pinning them does: 704 slot-wait cycles and a makespan of 964, against `fifo`'s 416
+     and 740 (`test_csp_lt1_place`).
    - `csp/transactional.hpp`: a Load waits on its slot; `Slot` gains its address.
    - `.tflow` binds slots (the tile-flow debugger's step 6).
    - Tests: placement equals L-B's; a policy that reuses early stalls, measured on matmul (`lowest`

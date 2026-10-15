@@ -154,7 +154,9 @@ struct CspLevelOutcome {
     std::uint64_t makespan = 0;
     std::size_t actions = 0;
     std::size_t peak_l3 = 0;                // L-B: as executed; L-T1: slots held at once, in time
-    std::size_t credit_stalls = 0;          // L-T1: Loads that waited for a credit
+    std::size_t credit_stalls = 0;          // L-T1: Loads that waited for their own slot's Release
+    std::size_t slot_bound = 0;             // L-T1: ...of which the slot decided the start
+    std::uint64_t slot_wait_cycles = 0;     //        and what those waits cost
     std::map<std::string, std::uint64_t> busy;      // L-T1: lane-cycles per process
     std::map<std::string, std::size_t> lanes;
     // L-T1: every leg of every action, every residency's slot, and the compute tiles it was
@@ -289,7 +291,7 @@ inline CspLevelOutcome csp_run_level(ExecutionLevel level, const csp::lang::Prog
             dev = one.device_view(0);
         }
         csp::lang::ActionStream s(ast);
-        csp::TransactionalInterpreter lt(dev, static_cast<std::size_t>(ast.l3));
+        csp::TransactionalInterpreter lt(dev, static_cast<std::size_t>(ast.l3), static_cast<std::uint32_t>(ast.banks));
         lt.begin(inputs);
         while (auto e = s.next()) lt.step(e->action, e->op ? &*e->op : nullptr);
         const auto st = lt.finish();
@@ -302,6 +304,8 @@ inline CspLevelOutcome csp_run_level(ExecutionLevel level, const csp::lang::Prog
         o.dram_stores = st.dram_stores;
         o.dram_bytes = st.dram_bytes;
         o.credit_stalls = st.credit_stalls;
+        o.slot_bound = st.slot_bound;
+        o.slot_wait_cycles = st.slot_wait_cycles;
         o.busy = st.busy;
         o.lanes = st.lanes;
         o.cf_busy = st.busy.count("cf") ? st.busy.at("cf") : 0;
