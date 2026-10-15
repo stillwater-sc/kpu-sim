@@ -179,7 +179,31 @@ class DflowCheckSelfTest(unittest.TestCase):
         self.b.set("residency", "slot", 1, self.b.get("residency", "slot", 0))
         self.assertFails("D9", "still holds")
 
+    def test_d6_iteration_past_the_run_is_reported_not_a_crash(self):
+        i = self.b.find("iteration", lambda i: self.b.get("iteration", "depth", i) == 3)
+        self.b.set("iteration", "last", i, self.b.rows("steps") + 100)
+        self.assertFails("D6", "runs past")
+
+    def test_d6_position_out_of_range_is_reported_not_a_crash(self):
+        self.b.set("steps", "where", 7, self.b.rows("where") + 5)
+        self.assertFails("D6", "names position")
+
     # -- unreadable ---------------------------------------------------------
+    def test_malformed_manifest_is_unreadable(self):
+        del self.b.manifest["totals"]["loads"]
+        self.b.save_manifest()
+        self.assertUnreadable()
+
+    def test_malformed_table_entry_is_unreadable(self):
+        self.b.manifest["tables"]["steps"]["rows"] = "many"
+        self.b.save_manifest()
+        self.assertUnreadable()
+
+    def test_negative_column_offset_is_unreadable(self):
+        self.b.manifest["tables"]["steps"]["columns"][0]["offset"] = -8
+        self.b.save_manifest()
+        self.assertUnreadable()
+
     def test_unknown_version_is_unreadable(self):
         self.b.manifest["version"] = 2
         self.b.save_manifest()

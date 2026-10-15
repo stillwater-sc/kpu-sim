@@ -76,6 +76,30 @@ class Unreadable(Exception):
     pass
 
 
+def _int(v, what, lo=0):
+    if not isinstance(v, int) or isinstance(v, bool) or v < lo:
+        raise Unreadable(f"{what} is {v!r}, not an integer >= {lo}")
+    return v
+
+
+def _manifest(m):
+    """The manifest fields check() reads, typed: a malformed one is unreadable (exit 2), never a
+    traceback that exits 1 as if an invariant had failed."""
+    try:
+        for k in ("actions", "loads", "stores"):
+            _int(m["totals"][k], f"totals.{k}")
+        if not isinstance(m["cut"], bool):
+            raise Unreadable(f"cut is {m['cut']!r}, not a boolean")
+        _int(m["machine"]["l3"], "machine.l3", 1)
+        r = m["refusal"]
+        if r is not None:
+            _int(r["action"], "refusal.action")
+        if not isinstance(m["tables"], dict):
+            raise Unreadable("tables is not an object")
+    except (KeyError, TypeError) as e:
+        raise Unreadable(f"manifest: missing or malformed field ({e!r})")
+
+
 def load(path):
     path = Path(path)
     try:
@@ -86,18 +110,24 @@ def load(path):
         raise Unreadable(f"{path} is not a .dflow bundle (format {m.get('format')!r})")
     if m.get("version") != VERSION:
         raise Unreadable(f".dflow version {m.get('version')} (this checker reads {VERSION})")
+    _manifest(m)
     tables = {}
     for name, schema in SCHEMA.items():
-        t = m.get("tables", {}).get(name)
-        if t is None:
+        t = m["tables"].get(name)
+        if not isinstance(t, dict):
             raise Unreadable(f"no table {name}")
+        if not isinstance(t.get("file"), str) or not isinstance(t.get("columns"), list):
+            raise Unreadable(f"{name}: malformed table entry")
+        rows = _int(t.get("rows"), f"{name}.rows")
         try:
             blob = (path / t["file"]).read_bytes()
         except OSError as e:
             raise Unreadable(str(e))
-        rows = t["rows"]
         cols = {}
         for c in t["columns"]:
+            if not isinstance(c, dict) or not isinstance(c.get("name"), str) or not isinstance(c.get("dtype"), str):
+                raise Unreadable(f"{name}: malformed column {c!r}")
+            _int(c.get("offset"), f"{name}.{c['name']}.offset")
             code, size = DTYPES.get(c["dtype"], (None, None))
             if code is None:
                 raise Unreadable(f"{name}.{c['name']}: unknown dtype {c['dtype']}")
@@ -251,6 +281,8 @@ def check(m, T, limit=20):
         for r in rs:
             if r["last"] < r["first"] or r["actions"] > r["last"] - r["first"] + 1 or r["actions"] == 0:
                 bad("D6", f"depth {d}: iteration [{r['first']}, {r['last']}] has {r['actions']} actions")
+            if r["last"] >= actions:
+                bad("D6", f"depth {d}: iteration [{r['first']}, {r['last']}] runs past the run's {actions} actions")
             if d > 0:
                 parents = [p for p in by_depth.get(d - 1, [])
                            if p["first"] <= r["first"] and r["last"] <= p["last"]]
@@ -262,14 +294,22 @@ def check(m, T, limit=20):
         W, L = T["where"], T["loops"]
         for d, rs in sorted(by_depth.items()):
             for r in rs:
+                if r["last"] >= n or r["last"] < r["first"]:
+                    continue                    # reported above; nothing to recount
                 acts = loads = stores = 0
                 peak = [0, 0, 0, 0]
                 for i in range(r["first"], r["last"] + 1):
                     w = S["where"][i]
+                    if w >= W["rows"]:
+                        bad("D6", f"step {i} names position {w}; there are {W['rows']}")
+                        continue
                     if d > 0:
                         if W["loop_count"][w] < d:
                             continue
                         loop = W["loop_first"][w] + d - 1
+                        if loop >= L["rows"]:
+                            bad("D6", f"position {w} names loop {loop}; there are {L['rows']}")
+                            continue
                         if (L["line"][loop], L["value"][loop]) != (r["line"], r["value"]):
                             continue
                     acts += 1
