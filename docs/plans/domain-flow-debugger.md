@@ -1,9 +1,12 @@
 # Domain-Flow Debugger: CSP State at L-B, Domains Moving Through the Machine (#363)
 
 **Date:** 2026-10-11
-**Status:** Held (2026-10-11). The architect ruled that L-B must model L3 placement; this plan resumes after
-`docs/plans/l3-placement-at-lb.md` step 3, with slots in its machine view. §3.7's rule "L-B models a capacity,
-not placement" is wrong and is superseded by ADR 0004 §5.
+**Status:** Approved 2026-10-15 (Q1-Q7 as recommended, §7). Steps 1 and 2 follow placement step 5a's merge.
+Revised 2026-10-15. Held 2026-10-11 when the architect ruled that L-B must model L3
+placement (ADR 0004 §5). Resumed now that `docs/plans/l3-placement-at-lb.md` steps 1-4 are merged (#364-#367)
+and step 5a (L-T1 waits on its own slot) is in review: every residency has an L3 address at L-B, so the
+machine view draws L3 as its addressed slots (§3.4a). The revision replaces the old §3.7 rule "L-B models a
+capacity, not placement" and adds Q7 (ordering against the placement plan's steps 5b-7).
 **Issue:** #363
 **Builds on:** `driver::CspBehavioralStepper` (`include/sw/kpu/program/driver/csp_step.hpp`), the
 CSP walker (`csp/lang/walk.hpp`), the columnar bundle container (`record/columnar.hpp`), and the
@@ -25,7 +28,8 @@ and whose step is *one CSP state transition*, stays readable at any machine size
 state becomes a drill-down.
 
 What exists does not show this:
-- **`kpu-run --step`** prints one line per action: index, kind, tile and L3 occupancy.
+- **`kpu-run --step`** prints one line per action: index, kind, tile, L3 occupancy and, since
+  placement step 3 (L-T1: step 5a), the action's L3 address.
   - It does not say which process acted, which residency was opened or released, or where the
     domain came from and went.
   - It does not say where in the program the action is: the source line, or the loop indices.
@@ -82,8 +86,9 @@ just moved one, and where in the program we are.**
 ```
 
 The machine view is **the program's channels**, not the floorplan. At level 1 a CSP program
-addresses one flat machine: one L3, its L2 and the compute fabric (`machine flat(l3 = N)`), with
-one process on each edge. The floorplan belongs to the tile-flow debugger, which draws the
+addresses one flat machine: one L3, its L2 and the compute fabric
+(`machine flat(l3 = N, banks = B, place = policy)`), with one process on each edge. The L3 is
+addressed: N slots in B banks, each residency at the address the walker placed it (§3.4a). The floorplan belongs to the tile-flow debugger, which draws the
 placed machine in time.
 
 ## 3. Design
@@ -93,7 +98,7 @@ placed machine in time.
 | Zoom | Domain | Identity | Lifetime |
 |---|---|---|---|
 | tile | one operand tile | `TileCoord` (operand, ti, tj) | as long as the operand exists |
-| residency | a tile held in a channel | `Action::residency` | open (`load`, `writeback`, `inherit`) to close (`release`, `retain`) |
+| residency | a tile held in a channel, at its L3 address | `Action::residency`, `Action::place` | open (`load`, `writeback`, `inherit`) to close (`release`); or open to retained (`retain`), its slot held past the program's end |
 | working set | one loop iteration's residencies | the loop indices (`where`, §3.3) | the iteration's first action to its last |
 
 The default frame is residencies in channels. Zooming out groups them by loop iteration
@@ -110,17 +115,20 @@ struct DomainStep {
     csp::Chan from, to;                 // csp::from_chan / to_chan of the kind
     TileCoord tile;
     std::size_t residency;              // csp::kNone when the action has none
-    bool opens = false, closes = false;
+    bool opens = false, closes = false, retains = false;   // a Retain does not close: it holds
     std::array<std::size_t, csp::kChannels> held{};   // occupancy of each channel AFTER the action
     std::uint32_t where;                // index into the where table (§3.3)
     std::vector<csp::Stage> context;    // the tile context the action applies (bias, activation)
+    std::optional<csp::L3Address> place;// the L3 slot it opens, reads or frees (ADR 0004 §5)
+    bool pinned = false;                // the program named the slot (`@ slots(...)`)
 };
 ```
 
 Each field already exists at L-B, except `where`:
-- `kind`, `tile`, `residency`, `context` and `process` are on `csp::Action`;
+- `kind`, `tile`, `residency`, `context`, `place` and `process` are on `csp::Action` (`place` is the
+  walker's allocation, placement step 2);
 - `from` and `to` come from `csp::from_chan` and `to_chan`;
-- `opens` and `loaded` are on the `Emission`;
+- `opens`, `loaded` and `pinned` are on the `Emission`;
 - `held` is `BehavioralInterpreter::held(chan)`.
 
 ```
@@ -148,6 +156,7 @@ struct Emission {
     std::optional<TileOp> op;
     std::vector<TileOp> l0;
     bool opens = false, loaded = false;
+    bool pinned = false;                            // the program named the slot (placement step 2)
     Where where;                                    // NEW: filled by the walker as it emits
 };
 ```
@@ -167,11 +176,14 @@ entry, so the table grows with iterations, not with actions.
 run.dflow/
   manifest.json    format "dflow" version 1; level "L-B"; RunIdentity (program digest, inputs
                    digest, deployment digest); the program's text; channels with capacities
-                   (as the program declares them); processes; operand table (name, shape,
+                   (as the program declares them); the L3 geometry (slots, banks) and the
+                   placement policy; processes; operand table (name, shape,
                    tiling); step count; what was sampled (§3.6); what is not modelled at L-B
   steps.bin        u64 action, u8 kind, u8 process, u8 from, u8 to, u32 tile, u64 residency,
-                   u8 flags (opens, closes), u64 where, u16 held[4], u32 l3_tile, u32 slot,
-                   u32 bank (the action's L3 address, ADR 0004 §5)
+                   u8 flags (opens, closes, retains, has_place, pinned), u64 where,
+                   u16 held[4], u32 l3_tile, u32 slot, u32 bank (the action's L3 address,
+                   ADR 0004 §5, when has_place is set; ignored otherwise, since (0, 0, 0)
+                   is a valid address)
   residency.bin    u32 tile, u8 chan, u64 open, u64 close, u32 l3_tile, u32 slot, u32 bank,
                    u8 flags (loaded, dirty, inherited, retained, pinned)
   where.bin        u32 line, u32 loop_first, u16 loop_count;  loops.bin: u32 var, i64 value,
@@ -190,6 +202,33 @@ run.dflow/
 - It is a new format. The case for one: neither `.tflow` (stations in time) nor `.mflow` (DRAM
   commands) has a notion of a CSP action, a residency's open and close, or a program position.
   This is raised for review (Q5).
+
+### 3.4a Placement: L3 is drawn as its addressed slots
+
+Since placement step 3, L-B's L3 is addressed storage: every residency sits at the `L3Address`
+(module, slot, bank) the walker allocated, by the program's policy (`fifo`, `lowest`,
+`bank-spread`) or by the program itself (`@ slots(a..b)`). L-B refuses a write into a live slot or
+a read of the wrong one. That is behavior, so the machine view shows it:
+- **L3 is a grid of its slots, grouped by bank.** A residency is drawn in its slot from its open
+  to its close; an empty slot is drawn empty.
+- **Reuse is visible.** Selecting a slot lists its residencies in order (the slot's history), so
+  a policy that reuses a slot early, or a pinned program, can be read off the grid. Whether that
+  reuse *costs* time is an L-T1 question (placement step 5a's `slot_bound`), shown only in the
+  overlay (step 5).
+- **The manifest names the policy and the banks.** A pinned residency is marked.
+- **A refusal is shown at its step.** A program L-B refuses (a write into a live slot) records up to
+  the refusing action, and the viewer shows the slot conflict there.
+
+```
+WRONG — the viewer packs open residencies into the first free cells, or re-derives a slot from
+        the tile name (a second allocator; it disagrees with the walker's the first time the
+        policy is not first-fit)
+CORRECT — each residency is drawn at the address in the record, which is the walker's, executed
+```
+
+The slot grid is the same picture the tile-flow debugger will draw in time once `.tflow` binds
+slots (placement step 5b). The two should share the drawing convention: slot order, bank
+grouping and colour by operand (Q7).
 
 ### 3.5 Scale: lazy, bounded, summarised
 
@@ -245,9 +284,13 @@ CORRECT — the axis is "step (action)"; time appears only with an L-T1 overlay,
 WRONG — an L2 or CF capacity drawn as full or empty when the program declares none
 CORRECT — drawn as "unbounded at L-B", with the count of tiles held
 
-WRONG — residency slots drawn at fixed positions, as if L3 had addresses
-CORRECT — slots are an ordering of open residencies; L-B models a capacity, not placement
-          [SUPERSEDED 2026-10-11, ADR 0004 §5: L-B places every residency; draw it in its slot]
+WRONG — L3 drawn as a pooled count, or residencies as an ordering of open tiles
+          (placement is behavior, ADR 0004 §5; a pool hides the slot reuse the program decides)
+CORRECT — each residency drawn in its slot, at the walker's address (§3.4a)
+
+WRONG — a slot wait, or any cost of a reuse, drawn on an L-B record
+CORRECT — L-B shows where tiles are and which slot they reuse; what a reuse costs is L-T1's,
+          shown only in the overlay, labelled L-T1
 
 WRONG — the viewer computes a value, a residency, or a loop index
 CORRECT — everything shown is read from the record the oracle's run wrote
@@ -262,7 +305,8 @@ Each step is one PR, reviewed and merged before the next.
    - `driver/csp_step.hpp`: `CspStep` gains `process`, `from`, `to`, `residency`,
      `opens`/`closes`, `held[]` and `where`. The size pre-count becomes optional: `size()` is known
      only once the stream ends, unless asked for.
-   - `kpu-run --step` prints the process and the source position.
+   - `CspStep` keeps `place` (already there) and gains `pinned`; `kpu-run --step` prints the
+     process, the residency it opens or closes, and the source position.
    - Tests: `tests/program/test_csp_step.cpp`, `test_csp_structured.cpp`.
      - `where` matches the loop indices of known programs (matmul `j`/`i`/`k`, LU's `k`).
      - Stepping with `where` changes no value: the result is bit-identical to `run` (same
@@ -284,8 +328,9 @@ Each step is one PR, reviewed and merged before the next.
 4. **Tile inspection.** Values in the record (§3.6), and the inspector decoding them through
    `ElementFormat`.
 5. **The L-T1 overlay.**
-   - Join L-T1's records (`CspLevelOutcome::records`, each carrying its `action`) on the action
-     index: per step, its start and finish, the lane, credit stalls.
+   - Join L-T1's records (`CspLevelOutcome::records`, each carrying its `action` and, since
+     placement step 5a, its slot) on the action index: per step, its start and finish, the lane,
+     and whether its slot decided its start (a slot-bound Load, and its wait).
    - The inspector shows proximity to L-B. The axis may then switch to time, labelled L-T1.
 
 ## 5. Verification
@@ -326,6 +371,10 @@ Expected:
 7. **The viewer never executes.** Every value, residency and index it shows is read from the
    record.
 8. **No time at L-B.** An L-B record has no time column; time enters only with the L-T1 overlay.
+9. **Placement is the walker's.** A recorded step has `has_place` set exactly when its action
+   carries `Action::place`, and then its address equals it. Each residency's address equals the
+   `Action::place` of its opening action. After every step each slot holds at most one open or
+   retained residency.
 
 ## 7. Questions for review
 
@@ -358,3 +407,10 @@ Expected:
   - **Recommended:** matmul 512³ in 64-tiles on `kpu_s1.json` (L3 17): 3,968 actions
     (measured) in panel loops, which is readable, and the same operator as the tile-flow reference run.
   - LU, with its in-place factorization and pivot-ordered loops, is the second.
+- **Q7. Ordering against the placement plan.**
+  - **Recommended:** steps 1 and 2 here now, after placement 5a merges, and before placement 5b-7.
+    They depend only on L-B's placement (steps 2-3, merged), not on `.tflow`, L-CA or the
+    orchestrator. Step 3 (the viewer) and placement 5b both draw the slot grid; whichever lands
+    second adopts the first's convention.
+  - The alternative is to finish placement first (5b, 6, 7). The viewer would start on the
+    complete model, but the earliest picture of L-B state waits behind an L-CA change.
