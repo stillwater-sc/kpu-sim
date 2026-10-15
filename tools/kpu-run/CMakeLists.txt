@@ -369,7 +369,8 @@ if(KPU_BUILD_TESTS)
             -P ${CMAKE_CURRENT_SOURCE_DIR}/expect_exit.cmake
     )
     # Stepping and the timeline from the program (step 4c): L-T1 replays its records with
-    # lane and L3-slot occupancy; L-B applies one action per step and stops at the limit; the
+    # lane and L3-slot occupancy; L-B applies one action per step and stops at the limit, naming
+    # the process, the move, the residency and the source position (domain-flow step 1); the
     # timeline is one event per leg. Each refuses a run that lacks the level it reads.
     add_test(NAME kpu_run_csp_step_lt1
         COMMAND ${CMAKE_COMMAND}
@@ -384,7 +385,7 @@ if(KPU_BUILD_TESTS)
             -DCMD=$<TARGET_FILE:run>
             -DARGS=--program$<SEMICOLON>${_corpus}/linear_64_t16_relu.csp$<SEMICOLON>--level$<SEMICOLON>behavioral$<SEMICOLON>--step$<SEMICOLON>--step-limit$<SEMICOLON>12
             -DEXPECT_CODE=0
-            -DMUST_MATCH=stepping.L-B:.*actions.*each.applied.*FEED.A.0,0.*fabric.1.*stopped.after.12.of
+            -DMUST_MATCH=stepping.L-B:.*actions.*each.applied.*LOAD.B.0,0.*dma.dram->l3..r0.opens....line.9..j=0/4.*LOAD.A.0,0.*line.11..j=0/4.i=0/4.*FEED.A.0,0...str.l2->cf.*line.13..j=0/4.i=0/4.k=0/4.*fabric.1.*stopped.after.12.of
             -P ${CMAKE_CURRENT_SOURCE_DIR}/expect_exit.cmake
     )
     add_test(NAME kpu_run_csp_step_refuses_lca_only

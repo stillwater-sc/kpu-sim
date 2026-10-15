@@ -257,6 +257,7 @@ public:
         const driver::CspStep& current() const { return stepper_->current(); }
         std::size_t position() const { return stepper_->position(); }
         std::size_t size() const { return stepper_->size(); }
+        bool size_known() const { return stepper_->size_known(); }
 
     private:
         friend class VirtualPlatform;

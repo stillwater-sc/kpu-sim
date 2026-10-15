@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Each L-B step carries its CSP state transition** (`docs/plans/domain-flow-debugger.md` step 1, #363).
+  - `csp/lang/walk.hpp`: `Where` on `Emission`. The walker reports each action's source line and
+    the index and bound of every enclosing loop, so nothing re-walks the program to find where an
+    action came from.
+  - `driver::CspStep` (L-B): `process`, `from`/`to`, `residency`, `opens`/`closes`/`retains`,
+    `pinned`, `where` and `held[]` (every channel), read from the Emission and the interpreter.
+  - `CspBehavioralStepper` can count lazily (`Count::Lazy`): no pre-walk; `size_known()` turns true
+    when the stream ends. It looks one action ahead so the values are final at the last step, and a
+    walker refusal is still thrown at its own step.
+  - `kpu-run --step` at L-B prints the process, the move, the residency and the program position,
+    e.g. `LOAD A[0,0] @ l3[0]:5/b0  dma dram->l3  r5 opens  | line 11  j=0/4 i=0/4`.
 - **L-T1 executes L3 placement: a credit is a slot** (`docs/plans/l3-placement-at-lb.md` step 5a).
   A Load, Inherit or opening Writeback waits for its own slot's Release, not for whichever slot
   frees first, so an early reuse serializes on it.
