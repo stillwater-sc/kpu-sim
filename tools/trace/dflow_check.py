@@ -102,6 +102,13 @@ def _manifest(m):
             _int(r["action"], "refusal.action")
         if not isinstance(m["tables"], dict):
             raise Unreadable("tables is not an object")
+        # The lists REF counts indices against: arrays of names (or of named objects).
+        for k in ("vars", "kinds", "processes"):
+            if not isinstance(m[k], list) or not all(isinstance(x, str) for x in m[k]):
+                raise Unreadable(f"{k} is not an array of names")
+        for k in ("operands", "channels"):
+            if not isinstance(m[k], list) or not all(isinstance(x, dict) and isinstance(x.get("name"), str) for x in m[k]):
+                raise Unreadable(f"{k} is not an array of named objects")
     except (KeyError, TypeError) as e:
         raise Unreadable(f"manifest: missing or malformed field ({e!r})")
 
@@ -297,8 +304,8 @@ def check(m, T, limit=20):
                               f"{len(parents)} iterations of depth {d - 1}")
     # REF: every reference resolves, cut or not -- the viewer resolves each one.
     W, L, TL = T["where"], T["loops"], T["tiles"]
-    nvars, nops, nkinds = len(m.get("vars", [])), len(m.get("operands", [])), len(m.get("kinds", []))
-    nprocs, nchans = len(m.get("processes", [])), len(m.get("channels", []))
+    nvars, nops, nkinds = len(m["vars"]), len(m["operands"]), len(m["kinds"])
+    nprocs, nchans = len(m["processes"]), len(m["channels"])
     for t in range(TL["rows"]):
         if TL["operand"][t] >= nops:
             bad("REF", f"tile {t} names operand {TL['operand'][t]}; there are {nops}")

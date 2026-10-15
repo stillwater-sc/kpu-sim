@@ -226,6 +226,12 @@ class DflowCheckSelfTest(unittest.TestCase):
         self.b.save_manifest()
         self.assertUnreadable()
 
+    def test_reference_list_not_an_array_is_unreadable(self):
+        # A string as long as the array would let every index pass REF.
+        self.b.manifest["operands"] = "x" * len(self.b.manifest["operands"])
+        self.b.save_manifest()
+        self.assertUnreadable()
+
     def test_malformed_table_entry_is_unreadable(self):
         self.b.manifest["tables"]["steps"]["rows"] = "many"
         self.b.save_manifest()
