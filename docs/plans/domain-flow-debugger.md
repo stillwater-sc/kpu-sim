@@ -98,7 +98,7 @@ placed machine in time.
 | Zoom | Domain | Identity | Lifetime |
 |---|---|---|---|
 | tile | one operand tile | `TileCoord` (operand, ti, tj) | as long as the operand exists |
-| residency | a tile held in a channel, at its L3 address | `Action::residency`, `Action::place` | open (`load`, `writeback`, `inherit`) to close (`release`, `retain`) |
+| residency | a tile held in a channel, at its L3 address | `Action::residency`, `Action::place` | open (`load`, `writeback`, `inherit`) to close (`release`); or open to retained (`retain`), its slot held past the program's end |
 | working set | one loop iteration's residencies | the loop indices (`where`, §3.3) | the iteration's first action to its last |
 
 The default frame is residencies in channels. Zooming out groups them by loop iteration
@@ -115,7 +115,7 @@ struct DomainStep {
     csp::Chan from, to;                 // csp::from_chan / to_chan of the kind
     TileCoord tile;
     std::size_t residency;              // csp::kNone when the action has none
-    bool opens = false, closes = false;
+    bool opens = false, closes = false, retains = false;   // a Retain does not close: it holds
     std::array<std::size_t, csp::kChannels> held{};   // occupancy of each channel AFTER the action
     std::uint32_t where;                // index into the where table (§3.3)
     std::vector<csp::Stage> context;    // the tile context the action applies (bias, activation)
@@ -156,6 +156,7 @@ struct Emission {
     std::optional<TileOp> op;
     std::vector<TileOp> l0;
     bool opens = false, loaded = false;
+    bool pinned = false;                            // the program named the slot (placement step 2)
     Where where;                                    // NEW: filled by the walker as it emits
 };
 ```
@@ -179,8 +180,10 @@ run.dflow/
                    placement policy; processes; operand table (name, shape,
                    tiling); step count; what was sampled (§3.6); what is not modelled at L-B
   steps.bin        u64 action, u8 kind, u8 process, u8 from, u8 to, u32 tile, u64 residency,
-                   u8 flags (opens, closes), u64 where, u16 held[4], u32 l3_tile, u32 slot,
-                   u32 bank (the action's L3 address, ADR 0004 §5)
+                   u8 flags (opens, closes, retains, has_place, pinned), u64 where,
+                   u16 held[4], u32 l3_tile, u32 slot, u32 bank (the action's L3 address,
+                   ADR 0004 §5, when has_place is set; ignored otherwise, since (0, 0, 0)
+                   is a valid address)
   residency.bin    u32 tile, u8 chan, u64 open, u64 close, u32 l3_tile, u32 slot, u32 bank,
                    u8 flags (loaded, dirty, inherited, retained, pinned)
   where.bin        u32 line, u32 loop_first, u16 loop_count;  loops.bin: u32 var, i64 value,
@@ -368,9 +371,10 @@ Expected:
 7. **The viewer never executes.** Every value, residency and index it shows is read from the
    record.
 8. **No time at L-B.** An L-B record has no time column; time enters only with the L-T1 overlay.
-9. **Placement is the walker's.** Every recorded step's and residency's address equals the
-   `Action::place` the walker allocated, and after every step each slot holds at most one open
-   residency.
+9. **Placement is the walker's.** A recorded step has `has_place` set exactly when its action
+   carries `Action::place`, and then its address equals it. Each residency's address equals the
+   `Action::place` of its opening action. After every step each slot holds at most one open or
+   retained residency.
 
 ## 7. Questions for review
 
