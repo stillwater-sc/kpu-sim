@@ -53,6 +53,17 @@ class ViewerSmokeTest(unittest.TestCase):
             self.assertIn(table["file"], payload["bins"])
         self.assertIsNotNone(payload["lod"])
 
+    def test_bundle_strings_written_as_html_are_escaped(self):
+        # A packed page is shared, so every name a bundle or floorplan supplies must go through
+        # esc() where it is written as HTML (innerHTML or a tooltip). This scans those statements.
+        page = (HERE / "index.html").read_text(encoding="utf-8")
+        stmts = re.findall(r"(?:innerHTML\s*=|showTip\(e,).*?;\n", page, re.S)
+        self.assertGreater(len(stmts), 8)
+        for st in stmts:
+            # (The summary chips build plain values and escape each one where they render it, esc(v).)
+            for name in ("b.name", "b.kind", "b.clock", "row.name", "row.kind", "r.name", "t[0]"):
+                self.assertNotRegex(st, r"\$\{" + re.escape(name) + r"\}", f"{name} unescaped in: {st[:120]}")
+
     def test_viewer_reads_the_version_the_writer_writes(self):
         # The page refuses any other manifest version, so a format bump that the viewer does not
         # follow would leave it refusing every new bundle -- invisible to a syntax check.

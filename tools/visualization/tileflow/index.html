@@ -156,6 +156,9 @@ code { font: 12px var(--font-data); }
 const $ = id => document.getElementById(id);
 const tok = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
 const fmt = n => Number(n).toLocaleString("en-US");
+// Every string a bundle or floorplan names (stations, blocks, operands, the device) is untrusted
+// input -- a packed page is made to be shared -- so it is escaped wherever it is written as HTML.
+const esc = v => String(v).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 // enum Hop, version 3: every hop is a push. 5 is a BlockMover ejecting a block into a DMA engine
 // buffer (the port's ejection bus); 6 is that engine writing the buffer to DRAM.
 const HOPS = ["dma:dram->l3", "bm:l3->l2", "str:l2->l1", "str:l1->l2", "bm:l2->l3", "bm:l3->dmabuf", "dma:dmabuf->dram", "bm:l3->l3"];
@@ -434,9 +437,9 @@ function start() {
     ["tiles", fmt(m.tiles.length)], ["transits", fmt(R.tr.rows)], ["computes", fmt(R.co.rows)],
     ["lanes", lanes || "—"], ["floorplan", R.fp ? R.fp.source : "none loaded"],
     ["binding", R.B ? `derived · ${R.B.engines.length} DMA engines · ${R.B.l3.tiles.length} L3 tiles · ${R.B.l3.overflow} L3 over · ${R.B.dma ? R.B.dma.overloaded : 0} DMA over` : "none (pooled rows)"]
-  ].map(([k, v]) => `<span class="chip">${k} <b>${v}</b></span>`).join("") +
-    (m.unmodelled && m.unmodelled.length ? `<span class="chip warn">not modelled <b>${m.unmodelled.join(", ")}</b></span>` : "");
-  $("honesty").textContent = (R.bindingIgnored ? R.bindingIgnored + " " : "") + (R.B ? `At ${m.level} the executor pools L3 and binds moves to lanes, not places. The per-resource rows and floorplan fills here come from a DERIVED binding (bind.py): ${R.B.policies.l3}; ${R.B.policies.dma}; ${R.B.policies.noc}. Timing is the executor's; only the place is derived. ${R.B.notes.join(" ")}` : (m.version === 5 ? `At ${m.level}, every L3 residency carries the address the program placed it at (module, slot, bank): the swimlanes draw one row per slot. A slot is an address in the program's L3, not a physical L3 tile, so the floorplan still draws L3 pooled across every L3 block; moves are bound to lanes of a mover pool, not to places. ` : `At ${m.level}, L3 is one pooled capacity and moves are bound to lanes of a mover pool, not to places: the floorplan draws L3 and the movers as pooled fills across every block of their kind, never as per-tile values this record does not hold. `) + `Invariants are checked by tools/trace/tflow_check.py, not here.`);
+  ].map(([k, v]) => `<span class="chip">${k} <b>${esc(v)}</b></span>`).join("") +
+    (m.unmodelled && m.unmodelled.length ? `<span class="chip warn">not modelled <b>${esc(m.unmodelled.join(", "))}</b></span>` : "");
+  $("honesty").textContent = (R.bindingIgnored ? R.bindingIgnored + " " : "") + (R.B ? (m.version === 5 ? `At ${m.level} each L3 residency's PROGRAM slot is recorded (one swimlane row per slot, from the record); which physical L3 tile holds it is not. ` : "") + `At ${m.level} the executor binds moves to lanes, not places, and does not place L3 on the floorplan's tiles. The per-resource rows and floorplan fills here come from a DERIVED binding (bind.py): ${R.B.policies.l3}; ${R.B.policies.dma}; ${R.B.policies.noc}. Timing is the executor's; only the place is derived. ${R.B.notes.join(" ")}` : (m.version === 5 ? `At ${m.level}, every L3 residency carries the address the program placed it at (module, slot, bank): the swimlanes draw one row per slot. A slot is an address in the program's L3, not a physical L3 tile, so the floorplan still draws L3 pooled across every L3 block; moves are bound to lanes of a mover pool, not to places. ` : `At ${m.level}, L3 is one pooled capacity and moves are bound to lanes of a mover pool, not to places: the floorplan draws L3 and the movers as pooled fills across every block of their kind, never as per-tile values this record does not hold. `) + `Invariants are checked by tools/trace/tflow_check.py, not here.`);
   viewA = 0; viewB = Math.max(1, m.makespan); zoomHistory.length = 0;
   const sc = $("scrub"); sc.max = m.makespan; sc.value = 0;
   T = Math.floor(m.makespan * 0.4);
@@ -594,15 +597,15 @@ $("fp").addEventListener("mousemove", e => {
   const hits = fpGeom.blocks.filter(b => x >= b.rect[0] && x <= b.rect[0] + b.rect[2] && y >= b.rect[1] && y <= b.rect[1] + b.rect[3]);
   if (!hits.length) return hideTip();
   const b = hits.sort((a, c) => c.depth - a.depth)[0];
-  showTip(e, `${b.name}${b.clock ? " (" + b.clock + " clock)" : ""}`);
+  showTip(e, `${esc(b.name)}${b.clock ? " (" + esc(b.clock) + " clock)" : ""}`);
 });
 $("fp").addEventListener("mouseleave", hideTip);
 
 function opText(op) {
-  const v4 = R.m.version === 4;
+  const v4 = R.m.version >= 4;                    // versions 4 and 5: an op is one of the program's actions
   const k = (v4 ? ACTIONKIND : OPKIND)[R.ops.kind[op]] || ("kind " + R.ops.kind[op]);
   const ts = [];
-  for (let j = R.ops.offset[op]; j < R.ops.offset[op + 1]; j++) { const t = R.m.tiles[R.ops.tile[j]]; ts.push(`${t[0]}[${t[1]},${t[2]}]`); }
+  for (let j = R.ops.offset[op]; j < R.ops.offset[op + 1]; j++) { const t = R.m.tiles[R.ops.tile[j]]; ts.push(`${esc(t[0])}[${esc(t[1])},${esc(t[2])}]`); }
   return `${v4 ? "action" : "op"} ${op} ${k} ${ts.join(" ")}`;
 }
 function inspectBlock(b) {
@@ -612,7 +615,7 @@ function inspectBlock(b) {
     let busy = 0; for (const i of list) busy += R.co.t1[i] - R.co.t0[i];
     const now = busyAt(st, T);
     const near = list.filter(i => R.co.t1[i] >= T - (viewB - viewA) * 0.05).slice(0, 6);
-    $("insp").innerHTML = `<div class="kv"><span>block</span><span>${b.name}</span><span>computes</span><span>${list.length}</span><span>utilization</span><span>${(100 * busy / Math.max(1, R.m.makespan)).toFixed(1)}%</span><span>at cursor</span><span>${now >= 0 ? opText(R.co.op[now]) : "idle"}</span></div><p class="note">Next: ${near.map(i => `[${fmt(R.co.t0[i])}, ${fmt(R.co.t1[i])}) ${opText(R.co.op[i])}`).join("<br>") || "none"}</p>`;
+    $("insp").innerHTML = `<div class="kv"><span>block</span><span>${esc(b.name)}</span><span>computes</span><span>${list.length}</span><span>utilization</span><span>${(100 * busy / Math.max(1, R.m.makespan)).toFixed(1)}%</span><span>at cursor</span><span>${now >= 0 ? opText(R.co.op[now]) : "idle"}</span></div><p class="note">Next: ${near.map(i => `[${fmt(R.co.t0[i])}, ${fmt(R.co.t1[i])}) ${opText(R.co.op[i])}`).join("<br>") || "none"}</p>`;
     return;
   }
   if (R.B) {
@@ -620,7 +623,7 @@ function inspectBlock(b) {
     if (row) return inspectBoundRow(row);
   }
   const pooled = { l3_tile: "L3 is pooled at this level: the record says how many tiles L3 held, never which L3 tile held them.", block_mover: "BlockMovers are a pooled lane set at this level; binding a move to this edge needs L3 slot binding (plan step 6).", dma_engine: "DMA engines are a pooled lane set at this level.", noc_router: "NoC lanes are pooled at this level." }[b.kind];
-  $("insp").innerHTML = `<div class="kv"><span>block</span><span>${b.name}</span><span>kind</span><span>${b.kind}</span><span>clock</span><span>${b.clock || "—"}</span></div><p class="note">${pooled || "No events are recorded against this block at " + R.m.level + "."}</p>`;
+  $("insp").innerHTML = `<div class="kv"><span>block</span><span>${esc(b.name)}</span><span>kind</span><span>${esc(b.kind)}</span><span>clock</span><span>${esc(b.clock || "—")}</span></div><p class="note">${pooled || "No events are recorded against this block at " + R.m.level + "."}</p>`;
 }
 
 // ------------------------------------------------------------------ swimlanes
@@ -690,12 +693,12 @@ $("lanes").addEventListener("mousemove", e => {
   if (!row || h.t < viewA || h.t > viewB) return hideTip();
   const { lv, width } = laneGeom, b = Math.floor(h.t / width), i = h.row * lv.bins + b;
   if (b < 0 || b >= lv.bins) return hideTip();
-  if (!row.modelled) return showTip(e, `${row.name}<br>not modelled at ${R.m.level}`);
+  if (!row.modelled) return showTip(e, `${esc(row.name)}<br>not modelled at ${esc(R.m.level)}`);
   if (row.kind === "l3_slot") {
-    const i = slotResidencyAt(slotOfRow(row), h.t);
-    return showTip(e, `${row.name}<br>cycle ${fmt(Math.round(h.t))}: ${i >= 0 ? tileText(R.res.tile[i]) + " (bank " + R.res.bank[i] + ")" : "free"}`);
+    const i = slotResidencyAt(stationOfRow(row), slotOfRow(row), h.t);
+    return showTip(e, `${esc(row.name)}<br>cycle ${fmt(Math.round(h.t))}: ${i >= 0 ? tileText(R.res.tile[i]) + " (bank " + R.res.bank[i] + ")" : "free"}`);
   }
-  showTip(e, `${row.name}<br>cycles ${fmt(b * width)}–${fmt((b + 1) * width)}<br>mean ${(lv.occ[i] / width).toFixed(2)}${row.capacity ? " of " + fmt(row.capacity) : ""} · peak ${fmt(lv.peak[i])}${row.capacity && lv.peak[i] > row.capacity ? " OVER CAPACITY" : ""}<br>${fmt(lv.starts[i])} started`);
+  showTip(e, `${esc(row.name)}<br>cycles ${fmt(b * width)}–${fmt((b + 1) * width)}<br>mean ${(lv.occ[i] / width).toFixed(2)}${row.capacity ? " of " + fmt(row.capacity) : ""} · peak ${fmt(lv.peak[i])}${row.capacity && lv.peak[i] > row.capacity ? " OVER CAPACITY" : ""}<br>${fmt(lv.starts[i])} started`);
 });
 $("lanes").addEventListener("mouseleave", hideTip);
 // The wheel zooms around the pointer: down/away from you zooms out, up/toward you zooms in.
@@ -796,15 +799,15 @@ function tipBound(e, h) {
   if (r.header) return showTip(e, `${r.label}${r.derived ? " (derived binding)" : ""}<br>${r.note}<br>click to ${collapsed.has(r.cat) ? "unfold" : "fold"}`);
   if (h.t < viewA || h.t > viewB) return hideTip();
   const a = activeAt(r, h.t);
-  showTip(e, `${r.name}<br>cycle ${fmt(Math.round(h.t))}: ${a.length}${r.cap ? " of " + r.cap : ""} busy${r.cap && a.length > r.cap ? " OVER CAPACITY" : ""}` +
+  showTip(e, `${esc(r.name)}<br>cycle ${fmt(Math.round(h.t))}: ${a.length}${r.cap ? " of " + r.cap : ""} busy${r.cap && a.length > r.cap ? " OVER CAPACITY" : ""}` +
              (a.length ? "<br>" + a.slice(0, 4).map(([, , i]) => r.kind === "l3" ? tileText(R.res.tile[i]) : r.kind === "cf" ? opText(R.co.op[i]) : transitText(i)).join("<br>") : ""));
 }
-function tileText(tile) { const t = R.m.tiles[tile], a = R.B ? dramAddr(tile) : null; return `${t[0]}[${t[1]},${t[2]}]${a !== null ? " (DRAM " + hex(a) + ")" : ""}`; }
+function tileText(tile) { const t = R.m.tiles[tile], a = R.B ? dramAddr(tile) : null; return `${esc(t[0])}[${esc(t[1])},${esc(t[2])}]${a !== null ? " (DRAM " + hex(a) + ")" : ""}`; }
 function inspectBoundRow(r) {
   let busy = 0; for (const [a, b] of r.ivs) busy += b - a;
   const a = activeAt(r, T);
   const util = r.cap ? busy / (r.cap * Math.max(1, R.m.makespan)) : busy / Math.max(1, R.m.makespan);
-  $("insp").innerHTML = `<div class="kv"><span>row</span><span>${r.name}</span><span>category</span><span>${r.cat}</span><span>capacity</span><span>${r.cap || "relative"}</span><span>intervals</span><span>${fmt(r.ivs.length)}</span><span>${r.cap ? "utilization" : "busy (sum)"}</span><span>${r.cap ? (100 * util).toFixed(1) + "%" : fmt(busy) + " cycles"}</span><span>at cursor</span><span>${a.length} active</span></div><p class="note">${a.slice(0, 8).map(([, , i]) => r.kind === "l3" ? tileText(R.res.tile[i]) : r.kind === "cf" ? opText(R.co.op[i]) : transitText(i)).join("<br>") || "nothing active at the cursor"}</p>`;
+  $("insp").innerHTML = `<div class="kv"><span>row</span><span>${esc(r.name)}</span><span>category</span><span>${r.cat}</span><span>capacity</span><span>${r.cap || "relative"}</span><span>intervals</span><span>${fmt(r.ivs.length)}</span><span>${r.cap ? "utilization" : "busy (sum)"}</span><span>${r.cap ? (100 * util).toFixed(1) + "%" : fmt(busy) + " cycles"}</span><span>at cursor</span><span>${a.length} active</span></div><p class="note">${a.slice(0, 8).map(([, , i]) => r.kind === "l3" ? tileText(R.res.tile[i]) : r.kind === "cf" ? opText(R.co.op[i]) : transitText(i)).join("<br>") || "nothing active at the cursor"}</p>`;
 }
 
 // ------------------------------------------------------------------ DRAM address map
@@ -885,25 +888,28 @@ $("dram").addEventListener("click", e => {
     (s ? `<span>DMA reads / writes</span><span>${s.reads} / ${s.writes}</span><span>L3 homes</span><span>${s.homes.join(", ") || "—"}</span><span>at cursor</span><span>${s.homeNow}</span>` : "") + `</div><p class="note">Layout derived by bind.py (${R.B.dram.layout}); the deployment declares no DRAM placement.</p>`;
 });
 
-// Version 5: the slot a pyramid row stands for, and the residency it holds at cycle t (-1: free).
+// Version 5: the L3 station and slot a pyramid row stands for (its name is "<station>/slot[k]", as
+// tile_flow_lod.cpp builds it), and the residency it holds at cycle t (-1: free).
 function slotOfRow(row) { return +row.name.slice(row.name.lastIndexOf("[") + 1, -1); }
-function slotResidencyAt(slot, t) {
-  for (let i = 0; i < R.res.rows; i++) if (R.res.slot[i] === slot && R.res.t0[i] <= t && t < R.res.t1[i]) return i;
+function stationOfRow(row) { const n = row.name.slice(0, row.name.lastIndexOf("/slot[")); return R.m.stations.findIndex(s => s.name === n); }
+function slotResidencyAt(station, slot, t) {
+  for (let i = 0; i < R.res.rows; i++)
+    if (R.res.station[i] === station && R.res.slot[i] === slot && R.res.t0[i] <= t && t < R.res.t1[i]) return i;
   return -1;
 }
 function inspectRow(r) {
   const row = R.lod.rows[r], top = R.lod.levels[R.lod.levels.length - 1];
   if (row.kind === "l3_slot") {
-    const slot = slotOfRow(row), held = [];
-    for (let i = 0; i < R.res.rows; i++) if (R.res.slot[i] === slot) held.push(i);
+    const slot = slotOfRow(row), station = stationOfRow(row), held = [];
+    for (let i = 0; i < R.res.rows; i++) if (R.res.station[i] === station && R.res.slot[i] === slot) held.push(i);
     held.sort((a, b) => R.res.t0[a] - R.res.t0[b]);
-    const now = slotResidencyAt(slot, T);
-    $("insp").innerHTML = `<div class="kv"><span>slot</span><span>${row.name}</span><span>bank</span><span>${held.length ? R.res.bank[held[0]] : "—"}</span><span>at cursor</span><span>${now >= 0 ? tileText(R.res.tile[now]) : "free"}</span><span>residencies</span><span>${fmt(held.length)}</span></div>` +
+    const now = slotResidencyAt(station, slot, T);
+    $("insp").innerHTML = `<div class="kv"><span>slot</span><span>${esc(row.name)}</span><span>bank</span><span>${held.length ? R.res.bank[held[0]] : "—"}</span><span>at cursor</span><span>${now >= 0 ? tileText(R.res.tile[now]) : "free"}</span><span>residencies</span><span>${fmt(held.length)}</span></div>` +
       `<p class="note">${held.slice(0, 12).map(i => `${tileText(R.res.tile[i])}: ${fmt(R.res.t0[i])}–${fmt(R.res.t1[i])}`).join("<br>") || "never used"}${held.length > 12 ? "<br>…" : ""}</p>`;
     return;
   }
   const mean = top.occ[r] / Math.max(1, R.m.makespan);
-  $("insp").innerHTML = `<div class="kv"><span>row</span><span>${row.name}</span><span>kind</span><span>${row.kind}${row.modelled ? "" : " (not modelled)"}</span><span>capacity</span><span>${row.capacity || "—"}</span><span>mean occupancy</span><span>${mean.toFixed(2)}</span><span>peak</span><span>${fmt(top.peak[r])}</span><span>intervals</span><span>${fmt(top.starts[r])}</span></div>`;
+  $("insp").innerHTML = `<div class="kv"><span>row</span><span>${esc(row.name)}</span><span>kind</span><span>${esc(row.kind)}${row.modelled ? "" : " (not modelled)"}</span><span>capacity</span><span>${row.capacity || "—"}</span><span>mean occupancy</span><span>${mean.toFixed(2)}</span><span>peak</span><span>${fmt(top.peak[r])}</span><span>intervals</span><span>${fmt(top.starts[r])}</span></div>`;
 }
 
 // ------------------------------------------------------------------ occupancy strip

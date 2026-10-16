@@ -39,8 +39,10 @@ Invariants:
                         an early release (#279) turns into when a later reader re-takes the slot
 
     TF12 one tile per slot (version 5: residencies carry their L3 address) every L3 residency's
-                        slot is inside its L3's capacity and its bank is slot % l3_banks; the
-                        residencies placed in one slot never overlap in time
+                        module is 0 (a version-5 record is the program's flat L3), its slot is
+                        inside its L3's capacity, and its bank is slot % l3_banks; the residencies
+                        placed in one slot of one L3 never overlap in time (a zero-length one
+                        occupies no time)
 
 Standard library only.
 
@@ -449,18 +451,23 @@ def check(rec):
             if s_i >= len(st) or st[s_i].get("kind") != "l3":
                 continue
             slot, bank, cap = res["slot"][i], res["bank"][i], st[s_i].get("capacity", 0)
+            if res["l3_tile"][i] != 0:
+                r.fail("TF12", f"{tile_name(res['tile'][i])} is placed in L3 module {res['l3_tile'][i]}; a "
+                               f"version-5 record is the program's flat L3 (module 0)")
+                continue
             if cap and slot >= cap:
                 r.fail("TF12", f"{tile_name(res['tile'][i])} is placed in slot {slot} of an L3 with {cap} slots")
                 continue
             if bank != slot % banks:
                 r.fail("TF12", f"{tile_name(res['tile'][i])} in slot {slot} says bank {bank}; slot {slot} is in "
                                f"bank {slot % banks} of {banks}")
-            by_slot.setdefault((s_i, res["l3_tile"][i], slot), []).append((res["t0"][i], res["t1"][i], i))
-        for (s_i, mod, slot), iv in by_slot.items():
+            if res["t1"][i] > res["t0"][i]:                 # a zero-length residency occupies no time
+                by_slot.setdefault((s_i, slot), []).append((res["t0"][i], res["t1"][i], i))
+        for (s_i, slot), iv in by_slot.items():
             iv.sort()
-            for (a0, a1, a), (b0, b1, b) in zip(iv, iv[1:]):
+            for (a0, a1, a), (b0, _b1, b) in zip(iv, iv[1:]):
                 if b0 < a1:
-                    r.fail("TF12", f"l3[{mod}] slot {slot} holds {tile_name(res['tile'][a])} over "
+                    r.fail("TF12", f"{st[s_i]['name']} slot {slot} holds {tile_name(res['tile'][a])} over "
                                    f"[{int(a0)}, {int(a1)}) and {tile_name(res['tile'][b])} from {int(b0)}: "
                                    f"two tiles in one slot")
 
@@ -528,8 +535,12 @@ def check(rec):
                 pool = MOVER_NAMES.index(info["name"].split(":", 1)[1])
                 iv = [(tr["t0"][i], tr["t1"][i]) for i in range(ntr) if tr["mover"][i] == pool]
             elif info["kind"] == "l3_slot":
+                # "<station>/slot[k]": the residencies of THAT station placed in slot k.
                 slot = int(info["name"][info["name"].rindex("[") + 1:-1])
-                iv = [(res["t0"][i], res["t1"][i]) for i in range(nres) if res["slot"][i] == slot]
+                owner = info["name"][:info["name"].rindex("/slot[")]
+                s_own = next((k for k, s in enumerate(st) if s["name"] == owner), -1)
+                iv = [(res["t0"][i], res["t1"][i]) for i in range(nres)
+                      if res["station"][i] == s_own and res["slot"][i] == slot]
             else:
                 iv = []
             # Recomputed from the raw events at the base and at the top. With every merge

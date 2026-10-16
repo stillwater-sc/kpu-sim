@@ -104,6 +104,28 @@ class TflowCheckV4SelfTest(unittest.TestCase):
         self.b.set("residency", "bank", i, (self.b.get("residency", "slot", i) + 1) % 4)
         self.assertFails("TF12")
 
+    def test_tf12_module_other_than_0(self):
+        self.v5()
+        self.b.set("residency", "l3_tile", self.l3_residencies()[0], 1)
+        self.assertFails("TF12")
+
+    def test_tf12_zero_length_residency_is_no_collision(self):
+        self.v5()
+        # Collapse a residency to zero length at a cycle inside another residency of its slot:
+        # it occupies no time, so TF12 must not call it a second tile in the slot.
+        rs = self.l3_residencies()
+        for a in rs:
+            for b in rs:
+                if a != b and self.b.get("residency", "slot", a) == self.b.get("residency", "slot", b) and \
+                        self.b.get("residency", "t1", a) - self.b.get("residency", "t0", a) > 2:
+                    mid = self.b.get("residency", "t0", a) + 1
+                    self.b.set("residency", "t0", b, mid)
+                    self.b.set("residency", "t1", b, mid)
+                    code, report = run(self.b.dir)
+                    self.assertNotIn("TF12", {v["invariant"] for v in (report or {}).get("violations", [])})
+                    return
+        self.skipTest("no slot is reused in this bundle")
+
     def test_tf8_slot_rows_must_be_there(self):
         self.v5()
         lod = json.loads((self.b.dir / "lod.json").read_text())
