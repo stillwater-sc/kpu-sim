@@ -28,6 +28,14 @@
 //     A `retain` inside loops must name a distinct tile in every iteration -- each enclosing loop
 //     variable indexes one dimension of it, alone -- and is charged for every iteration at once
 //     (the loops' bounds must be constant), which is exact at the end and conservative before.
+//   * a late store (`store C[i, j] late;`) is checked where it is written, as any store; the
+//     walker emits its Drain, Writeback, Store and Release after the next accumulator's calls, at
+//     the end of the program, or before a `resident` or `acc` that names the tile again. Its
+//     writeback needs a slot THERE, so when the program has a late store, every acc block's open
+//     and close and the program's end must leave one slot free (a `resident` needs a slot of its
+//     own anyway, and the late store's is free again before the Load). A late store
+//     names an accumulator, and carries no epilogue (an add's vector would have to be resident
+//     where it is emitted, which the structure does not say).
 //
 // Totals (loads, calls, stores) are exact for rectangular loop nests (constant bounds) and
 // absent otherwise.
@@ -52,7 +60,8 @@
 namespace sw::kpu::program::csp::lang {
 
 struct Validation {
-    std::size_t peak_l3 = 0;                  // the most L3 slots the program holds at once
+    std::size_t peak_l3 = 0;                  // the most L3 slots the program holds at once (with a late
+                                              // store: counting its writeback at every place it can land)
     std::uint64_t inherited = 0;              // slots held from the start (inherit)
     std::uint64_t retained = 0;               // slots held at the end (retain)
     std::optional<std::uint64_t> loads, calls, stores;   // exact for rectangular loop nests
@@ -95,6 +104,7 @@ public:
         cap_ = static_cast<std::size_t>(ast_.l3);
         operands_ = declared_operands(ast_);
         for (const Decl& d : ast_.decls) if (d.is_vector) vectors_.insert(d.name);
+        has_late_ = any_late(ast_.body);
     }
 
     Validation run() {
@@ -107,6 +117,7 @@ public:
         }
         for (const Entry& e : state_)
             throw CompileError(0, text(e.family) + " is still resident at the end of the program; release it");
+        if (has_late_) late_room(0, "the end of the program");
         for (const Acc& a : accs_) throw CompileError(0, "the accumulator " + text(a.tile) + " is never stored");
         Validation v;
         v.peak_l3 = peak_;
@@ -144,6 +155,22 @@ private:
     std::vector<Box> retained_;                     // every tile a retain names, as a range per dimension
     std::uint64_t inherited_ = 0, retained_count_ = 0;
     std::uint64_t loads_ = 0, calls_ = 0, stores_ = 0;
+    bool has_late_ = false;                         // the program has a `store ... late`
+
+    static bool any_late(const std::vector<Stmt>& body) {
+        for (const Stmt& s : body)
+            if ((s.kind == Stmt::Kind::Store && s.late) || any_late(s.body)) return true;
+        return false;
+    }
+    // A late store's writeback takes a slot where the walker emits it: an acc block's open or
+    // close, or the program's end. The structure does not say which of those has a store pending,
+    // so each counts the slot, in the capacity check and in the peak (conservative, never low).
+    void late_room(int line, const std::string& where) {
+        if (live_ + 1 > cap_)
+            throw CompileError(line, "a late store is emitted at " + where + " and its writeback needs an L3 slot, "
+                                     "and all " + std::to_string(cap_) + " are held there");
+        peak_ = std::max(peak_, live_ + 1);
+    }
 
     // ---- affine forms and ranges ----
     Affine affine(const Expr& e, int line) const {
@@ -413,6 +440,7 @@ private:
                 for (const Acc& a : accs_)
                     if (may_overlap(y, a.tile)) throw CompileError(s.line, "acc " + text(y) + ": it may already have an accumulator");
                 not_retained(y, s.line);
+                if (has_late_) late_room(s.line, "the open of acc " + text(y));
                 accs_.push_back(Acc{y, false, false, depth});
                 for (const Stmt& b : s.body) stmt(b, depth, definite);
                 Acc& a = *std::find_if(accs_.begin(), accs_.end(), [&](const Acc& x) { return same(x.tile, y); });
@@ -420,6 +448,7 @@ private:
                     throw CompileError(s.line, "acc " + text(y) + " receives no call; an accumulator needs at least one "
                                                "'+->' into it");
                 a.closed = true;
+                if (has_late_) late_room(s.line, "the close of acc " + text(y));
                 break;
             }
             case Stmt::Kind::Inherit:
@@ -582,6 +611,9 @@ private:
         if (acc != accs_.end()) {
             if (!acc->closed)
                 throw CompileError(s.line, "store " + text(y) + " inside its own accumulator; store it after the acc block");
+            if (s.late && !s.context.empty())
+                throw CompileError(s.line, "store " + text(y) + " late via ...: a late store carries no epilogue (it is "
+                                           "emitted after the next accumulator, where its vectors' residency is not known)");
             context(s, y);
             hold(1, s.line, "store " + text(y) + "'s writeback");      // the writeback's moment in L3
             live_ -= 1;
@@ -590,6 +622,9 @@ private:
             return;
         }
         auto it = std::find_if(state_.begin(), state_.end(), [&](const Entry& e) { return same(e.family, y); });
+        if (s.late)
+            throw CompileError(s.line, "store " + text(y) + " late: late defers an accumulator's store; a resident tile "
+                                       "is stored where it is written");
         if (it == state_.end())
             throw CompileError(s.line, "store " + text(y) + " must name an accumulator or mirror a resident statement");
         if (!it->dirty && !it->inherited)

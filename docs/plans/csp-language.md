@@ -92,7 +92,8 @@ release    := 'release' tiles ';'          -- the program's last use: the credit
 acc        := 'acc' tile 'in' 'fabric' '{' stmt* '}'          -- an output-stationary accumulator
 call       := 'call' FN '(' tiles ')' ( '->' | '+->' ) tile [ context ] ';'
                                            -- '->' writes, '+->' accumulates
-store      := 'store' tile [ context ] ';' -- out of the fabric (or L3) to DRAM
+store      := 'store' tile [ 'late' ] [ context ] ';'   -- out of the fabric (or L3) to DRAM;
+                                           -- late: after the next acc's calls
 inherit    := 'inherit' tiles ';'          -- resident from the operator before (opens the program)
 retain     := 'retain' tiles [ context ] ';'   -- stays resident for the operator after
 context    := 'via' stage ( ',' stage )*   -- the tile context (§3.4)
@@ -121,6 +122,7 @@ Comments are `//` to the end of the line. Tensor element types beyond fp32 are d
 | `call f(a, b) -> y` | per operand: Move (bm) and Feed (str); then Call (cf); for an in-place result: Drain (str), Writeback (bm) | operands resident; the result resident, or its `acc` open |
 | `acc y in fabric { ... }` | y lives in the fabric; `+->` calls into it accumulate from zero; no L3 slot | at least one call into y; y stored after the block |
 | `store y` | out of a closed `acc`: Drain, Writeback, Store, Release (an L3 slot for the writeback's moment); a resident, written tile: Store | y written and not yet stored, or inherited |
+| `store y late` | the accumulator's four actions, emitted after the NEXT `acc` block's calls, at the end of the program, or before a `resident`/`acc` that names y again (added by `l2-reuse-and-fabric-pipeline-view.md` step 2b) | y a closed `acc`; no `via` |
 | `inherit X` | Inherit X (l3 credit, held from the start; no DMA) | at the top of the program, before any other statement; X declared `in` or `inout`; L3 capacity |
 | `retain y` | a resident tile: Retain (its credit is not returned); a closed `acc`: Drain, Writeback, Retain | y resident (as written) or a closed accumulator; inside loops, each enclosing loop variable indexes one dimension alone; the slot counts against capacity to the end |
 

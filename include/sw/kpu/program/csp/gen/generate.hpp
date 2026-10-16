@@ -10,7 +10,9 @@
 //
 //   matmul  output-stationary panels: a column panel of B and a row panel of A resident at a
 //           time, an accumulator per C tile. orient = "col" (B's panel outer, j) or "row" (A's
-//           panel outer, i). L3: 2 x tiles-per-panel + 1 (the store's writeback).
+//           panel outer, i). L3: 2 x tiles-per-panel + 1 (the store's writeback). Each store is
+//           `late`: it leaves after the next accumulator's calls, so the movers bring the next
+//           chain's tiles in before this chain's results go out, and the chains pipeline.
 //   linear  matmul plus the epilogue act(C + b): the bias vector b[j] is resident with B's
 //           panel, and `place` writes the context -- `via add(b[j]) @ P, act @ P` for
 //           P = fabric | str.drain | bm.egress -- or "unfused": a second pass that reads C
@@ -108,7 +110,9 @@ inline std::string tensor(const char* name, const Options& o, const char* io) {
 inline std::string matmul_nest(const Options& o, bool linear_fused) {
     const std::string nt = std::to_string(tiles(o));
     const std::string bias = linear_fused ? ", b[j]" : "";
-    std::string via;
+    // A fused store carries its epilogue, which reads b[j] where it is written; a late store
+    // carries none (lang/validate.hpp), so only the plain matmul nest defers its stores.
+    std::string via = " late";
     if (linear_fused)
         via = std::string(" via add(b[j]) @ ") + o.place + ", " + to_string(o.act) + " @ " + o.place;
     const std::string acc = "      acc C[i, j] in fabric {\n"

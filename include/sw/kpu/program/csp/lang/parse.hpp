@@ -12,7 +12,7 @@
 //       acc C[i, j] in fabric {
 //         for k in 0..8 { call gemm(A[i, k], B[k, j]) +-> C[i, j]; }
 //       }
-//       store C[i, j];
+//       store C[i, j];                      // or `store C[i, j] late;`: after the next acc
 //     }
 //   }
 //
@@ -91,6 +91,10 @@ struct Stmt {
     std::optional<Expr> pivot;
     std::optional<double> alpha;
     std::vector<Stage> context;               // Call, Store, Retain: 'via' stages
+    // Store: `store C[i, j] late;` -- an accumulator's store, emitted after the NEXT
+    // accumulator's calls (or at the end of the program), so the movers issue the next chain's
+    // Loads and Moves before this chain's Writeback and Store, and the chains pipeline.
+    bool late = false;
     // Resident: the program's own placement, `@ slots(lo..hi)` -- one slot per tile, in order
     // (ADR 0004 §5). Absent: the machine clause's policy places it.
     std::optional<Expr> slot_lo, slot_hi;
@@ -515,6 +519,7 @@ private:
         if (kw == "store") {
             s.kind = Stmt::Kind::Store;
             s.out = tile();
+            if (word("late")) { take(); s.late = true; }
             s.context = context();
             expect(";");
             return s;
