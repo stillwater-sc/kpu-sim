@@ -1,7 +1,7 @@
 # Domain-Flow Debugger: CSP State at L-B, Domains Moving Through the Machine (#363)
 
 **Date:** 2026-10-11
-**Status:** Approved 2026-10-15 (Q1-Q7 as recommended, §7). Step 1 merged (#370); step 2 in review (#371); step 3 in review.
+**Status:** Approved 2026-10-15 (Q1-Q7 as recommended, §7). Steps 1-2 merged (#370, #371); step 3 in review (#372); step 4 in review.
 Revised 2026-10-15. Held 2026-10-11 when the architect ruled that L-B must model L3
 placement (ADR 0004 §5). Resumed now that `docs/plans/l3-placement-at-lb.md` steps 1-4 are merged (#364-#367)
 and step 5a (L-T1 waits on its own slot) is in review: every residency has an L3 address at L-B, so the
@@ -342,6 +342,13 @@ Each step is one PR, reviewed and merged before the next.
      at sample steps with the bundle read through `dflow_check.load`. A browser is not needed.
 4. **Tile inspection.** Values in the record (§3.6), and the inspector decoding them through
    `ElementFormat`.
+   - *As built (2026-10-15):* `.dflow` version 2 adds `snapshots.bin` (step or final, tile,
+     channel, height x width, first element) and `elements.bin` (float32). A snapshot is the tile
+     where its action leaves it: Load, Writeback and Inherit in L3; Move and Drain in L2; Feed and
+     Call in the fabric (a Call's is the accumulator so far); Store in DRAM. `--dflow-values`
+     selects tiles, operands or `all`; `--dflow-values-cap` (64 MiB) bounds them, finals first.
+     `BehavioralInterpreter::tile_in` reads a channel's copy. `dflow_check.py` adds V1-V5; the
+     manifest names the format, and the checker and the viewer refuse anything but float32.
 5. **The L-T1 overlay.**
    - Join L-T1's records (`CspLevelOutcome::records`, each carrying its `action` and, since
      placement step 5a, its slot) on the action index: per step, its start and finish, the lane,

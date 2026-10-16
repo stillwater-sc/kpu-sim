@@ -6,6 +6,8 @@
 //   - It round-trips through write_dflow / read_dflow.
 //   - A step limit cuts steps.bin and nothing else.
 //   - A program L-B refuses is recorded up to the refusal, which the record names.
+//   - Values (step 4): every operand's final tile values are L-B's result, bit for bit; a selected
+//     tile is recorded wherever each action leaves it; a byte cap stops them and says where.
 //
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2024-2025 Stillwater Supercomputing, Inc.
@@ -47,13 +49,27 @@ struct Recorded {
     driver::CspReference ref;
 };
 
-Recorded record_of(const std::string& text, std::uint64_t limit = 0) {
+Recorded record_of(const std::string& text, std::uint64_t limit = 0, record::ValueSelection values = {}) {
     const lang::Program ast = lang::parse(text);
-    DomainFlowRecorder r(ast, text, limit);
+    DomainFlowRecorder r(ast, text, limit, values);
     Recorded out;
     out.ref = driver::csp_reference(ast, driver::csp_inputs(ast), 1'000'000, &r);
-    out.rec = r.finish();
+    out.rec = r.finish(out.ref.values ? &*out.ref.values : nullptr);
     return out;
+}
+
+// A snapshot's elements.
+std::vector<float> elements_of(const DomainFlowRecord& r, const DomainFlowRecord::Snapshot& s) {
+    return {r.elements.begin() + static_cast<std::ptrdiff_t>(s.first),
+            r.elements.begin() + static_cast<std::ptrdiff_t>(s.first + std::uint64_t(s.rows) * s.cols)};
+}
+
+// The tile's values in an operand.
+std::vector<float> tile_of(const TensorOperand& o, Dim ti, Dim tj) {
+    std::vector<float> v;
+    for (Dim r = o.row_begin(ti); r < o.row_end(ti); ++r)
+        for (Dim c = o.col_begin(tj); c < o.col_end(tj); ++c) v.push_back(o.at(r, c));
+    return v;
 }
 
 std::filesystem::path scratch(const std::string& name) {
@@ -165,6 +181,111 @@ TEST_CASE("dflow: the bundle round-trips", "[dflow][record]") {
     CHECK(b.loops.size() == a.loops.size());
     CHECK(b.tiles.size() == a.tiles.size());
     std::filesystem::remove_all(dir);
+}
+
+TEST_CASE("dflow: values round-trip, bit for bit", "[dflow][record][values]") {
+    const std::string text = slurp("tests/program/corpus/linear_64_t16_relu.csp");
+    const DomainFlowRecord a = record_of(text, 0, record::parse_value_selection("C[1,2],b")).rec;
+    REQUIRE_FALSE(a.snapshots.empty());
+    const auto dir = scratch("values");
+    record::write_dflow(a, dir.string());
+    const DomainFlowRecord b = record::read_dflow(dir.string());
+    REQUIRE(b.snapshots.size() == a.snapshots.size());
+    for (std::size_t i = 0; i < a.snapshots.size(); ++i) {
+        const auto &x = a.snapshots[i], &y = b.snapshots[i];
+        CHECK((x.step == y.step && x.first == y.first && x.tile == y.tile && x.rows == y.rows && x.cols == y.cols &&
+               x.chan == y.chan));
+    }
+    CHECK(same_bits(b.elements, a.elements));
+    CHECK(b.values_selected == "C[1,2],b");
+    CHECK(b.values_cap == a.values_cap);
+    CHECK_FALSE(b.values_cut_at.has_value());
+    CHECK(b.finals_note.empty());
+    std::filesystem::remove_all(dir);
+}
+
+TEST_CASE("dflow: every operand's final values are L-B's result", "[dflow][record][values]") {
+    for (const char* name : kPrograms) {
+        CAPTURE(name);
+        const Recorded r = record_of(slurp(std::string("tests/program/corpus/") + name));
+        REQUIRE(r.rec.finals_note.empty());
+        std::size_t finals = 0, tiles = 0;
+        for (const auto& op : r.ref.values->operand_order()) {
+            const auto& o = r.ref.values->operand(op);
+            tiles += o.n_tile_rows() * o.n_tile_cols();
+        }
+        for (const auto& s : r.rec.snapshots) {
+            REQUIRE(s.step == record::kNone64);      // nothing selected: finals only
+            ++finals;
+            const auto& t = r.rec.tiles.at(s.tile);
+            const auto& o = r.ref.values->operand(r.rec.operands.at(t.operand).name);
+            CHECK(same_bits(elements_of(r.rec, s), tile_of(o, t.ti, t.tj)));
+        }
+        CHECK(finals == tiles);
+    }
+}
+
+TEST_CASE("dflow: a selected tile is recorded wherever each action leaves it", "[dflow][record][values]") {
+    // matmul_48x48x48_t16: C[1,2] is three accumulating calls, then drained, written back, stored.
+    const Recorded r = record_of(slurp("tests/program/corpus/matmul_48x48x48_t16.csp"), 0,
+                                 record::parse_value_selection("C[1,2]"));
+    std::vector<const DomainFlowRecord::Snapshot*> mine;
+    const DomainFlowRecord::Snapshot* final = nullptr;
+    for (const auto& s : r.rec.snapshots) {
+        if (r.rec.tile_name(s.tile) != "C[1,2]") {
+            CHECK(s.step == record::kNone64);        // only the selected tile has step snapshots
+            continue;
+        }
+        if (s.step == record::kNone64) final = &s; else mine.push_back(&s);
+    }
+    REQUIRE(final != nullptr);
+    std::vector<std::string> kinds;
+    for (const auto* s : mine) kinds.push_back(csp::to_string(static_cast<csp::Action::Kind>(r.rec.steps.at(s->step).kind)));
+    CHECK(kinds == std::vector<std::string>{"CALL", "CALL", "CALL", "DRAIN", "WRITEBACK", "STORE"});
+    CHECK(mine[0]->chan == static_cast<std::uint8_t>(csp::Chan::Cf));
+    CHECK(mine[3]->chan == static_cast<std::uint8_t>(csp::Chan::L2));
+    CHECK(mine[4]->chan == static_cast<std::uint8_t>(csp::Chan::L3));
+    CHECK(mine[5]->chan == static_cast<std::uint8_t>(csp::Chan::Dram));
+    // The accumulator changes with each call, and what is stored is the result.
+    CHECK_FALSE(same_bits(elements_of(r.rec, *mine[0]), elements_of(r.rec, *mine[1])));
+    CHECK(same_bits(elements_of(r.rec, *mine[2]), elements_of(r.rec, *mine[5])));
+    CHECK(same_bits(elements_of(r.rec, *mine[5]), elements_of(r.rec, *final)));
+}
+
+TEST_CASE("dflow: the values cap stops snapshots and says where; finals come first", "[dflow][record][values]") {
+    const std::string text = slurp("tests/program/corpus/matmul_48x48x48_t16.csp");
+    // Finals are 3 x 48 x 48 floats = 27,648 bytes; a 16x16 snapshot is 1,024.
+    auto sel = record::parse_value_selection("all");
+    sel.cap_bytes = 27'648 + 5 * 1'024;
+    const DomainFlowRecord r = record_of(text, 0, sel).rec;
+    CHECK(r.finals_note.empty());
+    REQUIRE(r.values_cut_at.has_value());
+    std::size_t steps = 0;
+    for (const auto& s : r.snapshots) steps += s.step != record::kNone64;
+    CHECK(steps == 5);
+    // Below the finals, nothing fits: no finals, and the note says why.
+    auto tiny = record::parse_value_selection("all");
+    tiny.cap_bytes = 1'000;
+    const DomainFlowRecord t = record_of(text, 0, tiny).rec;
+    CHECK_THAT(t.finals_note, ContainsSubstring("cap"));
+    for (const auto& s : t.snapshots) CHECK(s.step != record::kNone64);
+}
+
+TEST_CASE("dflow: the value selection parses tiles, operands and all", "[dflow][record][values]") {
+    const auto v = record::parse_value_selection("C[2,3], A[02,0],B");
+    CHECK_FALSE(v.all);
+    CHECK(v.tiles == std::vector<std::string>{"C[2,3]", "A[2,0]"});
+    CHECK(v.operands == std::vector<std::string>{"B"});
+    CHECK(v.selects(TileCoord{"B", 4, 4}));
+    CHECK(v.selects(TileCoord{"C", 2, 3}));
+    CHECK_FALSE(v.selects(TileCoord{"C", 3, 2}));
+    CHECK(record::parse_value_selection("all").all);
+    CHECK_THROWS_AS(record::parse_value_selection("C[2]"), std::invalid_argument);
+    CHECK_THROWS_AS(record::parse_value_selection("C[2,x]"), std::invalid_argument);
+    CHECK_THROWS_AS(record::parse_value_selection("C[1,1],,A"), std::invalid_argument);
+    const lang::Program ast = lang::parse(slurp("tests/program/corpus/matmul_48x48x48_t16.csp"));
+    CHECK_THROWS_WITH(DomainFlowRecorder(ast, "", 0, record::parse_value_selection("Q[0,0]")),
+                      ContainsSubstring("names no declared operand"));
 }
 
 TEST_CASE("dflow: the iteration summary covers the run", "[dflow][record]") {

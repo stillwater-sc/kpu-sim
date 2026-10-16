@@ -6,6 +6,9 @@ is not a checker.
 
 Usage: python3 test_dflow_check.py <clean-bundle.dflow>
 
+The clean bundle must be version 2 with step snapshots (kpu-run --dflow-values all), so the value
+invariants are exercised too.
+
 SPDX-License-Identifier: MIT
 Copyright (c) 2024-2025 Stillwater Supercomputing, Inc.
 """
@@ -22,8 +25,9 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 CHECK = HERE / "dflow_check.py"
 BUNDLE = None
-FMT = {"u8": ("<B", 1), "u16": ("<H", 2), "u32": ("<I", 4), "u64": ("<Q", 8), "i64": ("<q", 8)}
+FMT = {"u8": ("<B", 1), "u16": ("<H", 2), "u32": ("<I", 4), "u64": ("<Q", 8), "i64": ("<q", 8), "f32": ("<f", 4)}
 OPENS, CLOSES = 1, 2
+STORE_KIND = 1                                       # enum Action::Kind
 NONE64 = 0xFFFFFFFFFFFFFFFF
 
 
@@ -220,6 +224,70 @@ class DflowCheckSelfTest(unittest.TestCase):
         self.b.set("loops", "var", 0, len(self.b.manifest["vars"]) + 3)
         self.assertFails("REF", "names variable")
 
+    # -- V1-V5: values (version 2) -------------------------------------------
+    def step_snapshot(self, kind=None):
+        for k in range(self.b.rows("snapshots")):
+            st = self.b.get("snapshots", "step", k)
+            if st != NONE64 and (kind is None or self.b.get("steps", "kind", st) == kind):
+                return k
+        self.fail("the clean bundle has no such step snapshot")
+
+    def final_snapshot(self, tile):
+        return self.find("snapshots", lambda k: self.b.get("snapshots", "step", k) == NONE64
+                         and self.b.get("snapshots", "tile", k) == tile)
+
+    def find(self, table, pred):
+        return self.b.find(table, pred)
+
+    def test_values_are_exercised(self):
+        self.assertEqual(self.b.manifest["version"], 2)
+        self.assertTrue(self.b.manifest["values"]["selected"])
+        self.step_snapshot(STORE_KIND)
+
+    def test_v1_elements_past_the_end(self):
+        k = self.step_snapshot()
+        self.b.set("snapshots", "first", k, self.b.rows("elements"))
+        self.assertFails("V1", "run past")
+
+    def test_v2_snapshot_of_another_tile(self):
+        k = self.step_snapshot()
+        self.b.set("snapshots", "tile", k, (self.b.get("snapshots", "tile", k) + 1) % self.b.rows("tiles"))
+        self.assertFails("V2", "acts on tile")
+
+    def test_v2_snapshot_in_the_wrong_channel(self):
+        k = self.step_snapshot(STORE_KIND)
+        self.b.set("snapshots", "chan", k, 2)        # a Store leaves its tile in DRAM, not L2
+        self.assertFails("V2", "not where the action leaves")
+
+    def test_v3_wrong_shape(self):
+        k = self.step_snapshot()
+        self.b.set("snapshots", "height", k, self.b.get("snapshots", "height", k) - 1)
+        self.assertFails("V3", "its tile is")
+
+    def test_v4_two_finals_for_one_tile(self):
+        a = self.final_snapshot(0)
+        other = self.find("snapshots", lambda k: self.b.get("snapshots", "step", k) == NONE64
+                          and self.b.get("snapshots", "tile", k) != 0)
+        self.b.set("snapshots", "tile", other, 0)
+        self.assertFails("V4", "two final values")
+
+    def test_v4_step_snapshots_without_a_selection(self):
+        self.b.manifest["values"]["selected"] = ""
+        self.b.save_manifest()
+        self.assertFails("V4", "no tiles were selected")
+
+    def test_v5_store_differs_from_final(self):
+        k = self.step_snapshot(STORE_KIND)
+        f = self.final_snapshot(self.b.get("snapshots", "tile", k))
+        first = self.b.get("snapshots", "first", f)
+        self.b.set("elements", "v", first, self.b.get("elements", "v", first) + 1.0)
+        self.assertFails("V5", "differs from its final")
+
+    def test_values_format_other_than_float32_is_unreadable(self):
+        self.b.manifest["values"]["format"] = "bfloat16"
+        self.b.save_manifest()
+        self.assertUnreadable()
+
     # -- unreadable ---------------------------------------------------------
     def test_malformed_manifest_is_unreadable(self):
         del self.b.manifest["totals"]["loads"]
@@ -243,7 +311,7 @@ class DflowCheckSelfTest(unittest.TestCase):
         self.assertUnreadable()
 
     def test_unknown_version_is_unreadable(self):
-        self.b.manifest["version"] = 2
+        self.b.manifest["version"] = 99
         self.b.save_manifest()
         self.assertUnreadable()
 
