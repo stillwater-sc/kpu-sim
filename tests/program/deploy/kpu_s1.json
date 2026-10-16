@@ -3,6 +3,10 @@
   "topology": "single",
   "compute_tiles": 1,
   "macs_per_cycle": 8192,
+  "fabric": {
+    "pe_rows": 128,
+    "pe_cols": 64
+  },
   "dma": {
     "engines": 8,
     "bytes_per_cycle": 64

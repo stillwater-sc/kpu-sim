@@ -75,6 +75,23 @@ Standard library only.
 
 SPDX-License-Identifier: MIT
 Copyright (c) 2024-2025 Stillwater Supercomputing, Inc.
+Version 4 adds the fabric pipeline (lt1_chains, lt1_calls; manifest lt1.fabric and lt1.one_leg;
+docs/plans/l2-reuse-and-fabric-pipeline-view.md step 2). Each accumulator's gemm chain that L-T1
+timed as an output-stationary systolic stream, on r x c PEs with skew = (r-1) + (c-1):
+    P1 references             a chain's tile, compute tile (a cf lane) and actions exist, and its
+                              PEs fit the declared array; a call row names a recorded Call and a
+                              chain. With no fabric declared, both tables are empty
+    P2 the wavefront          front - in0 == skew; a chain whose calls are over (at its Drain, or
+                              when the next accumulator took its compute tile) has last - in1 == skew and
+                              out1 - last == r + link_delay; in0 <= in1. front and in1 are not
+                              ordered: front > in1 exactly when the chain is shorter than the skew
+    P3 the calls              a chain's calls are numbered 1..calls in action order, each on its
+                              chain's cf lane, the first starting at in0 and the last ending at in1
+    P4 one chain per array    on one cf lane, chains' operand streams [in0, in1) never overlap,
+                              and a chain's Drain starts no earlier than its out1
+    P5 the top link           each chain's out1 is at least the previous chain's on its lane plus
+                              r, and link_delay is exactly what that cost; the manifest's chain
+                              count and link_delay_cycles are the tables'
 """
 
 import argparse
@@ -83,7 +100,7 @@ import json
 import sys
 from pathlib import Path
 
-VERSIONS = (1, 2, 3)
+VERSIONS = (1, 2, 3, 4)
 NONE8, NONE32, NONE64 = 0xFF, 0xFFFFFFFF, 0xFFFFFFFFFFFFFFFF
 DTYPES = {"u8": ("B", 1), "u16": ("H", 2), "u32": ("I", 4), "u64": ("Q", 8), "i64": ("q", 8),
           "f32": ("f", 4), "f64": ("d", 8)}
@@ -115,6 +132,13 @@ SCHEMA_V3 = {
                  "kind": "u8", "proc": "u8", "leg": "u8"},
     "lt1_tiles": {"max_abs": "f64", "max_rel": "f64", "tile": "u32", "pass": "u8"},
 }
+SCHEMA_V4 = {
+    "lt1_chains": {"first_action": "u64", "last_action": "u64", "drain_action": "u64", "in0": "u64",
+                   "front": "u64", "in1": "u64", "last": "u64", "out1": "u64", "link_delay": "u64",
+                   "tile": "u32", "lane": "u32", "used_rows": "u32", "used_cols": "u32", "calls": "u32"},
+    "lt1_calls": {"action": "u64", "chain": "u32", "pos": "u32"},
+}
+CALL_KIND = 6
 CREDIT_KINDS = {7, 8, 9}                               # RELEASE, INHERIT, RETAIN
 LOAD_KIND = 0
 # The channel each kind leaves its tile in (enum Action::Kind, in order); None: no snapshot.
@@ -185,7 +209,17 @@ def load(path):
                               or not all(isinstance(o.get(k), int) and o[k] >= 0 for k in ("makespan", "slot_bound", "slot_wait_cycles"))
                               or not isinstance(o.get("pass"), bool)):
             raise Unreadable("lt1: malformed (lanes, makespan, slot_bound, slot_wait_cycles, pass)")
-    schemas = dict(SCHEMA, **(SCHEMA_V2 if m["version"] >= 2 else {}), **(SCHEMA_V3 if m["version"] >= 3 else {}))
+    if m["version"] >= 4 and m.get("lt1") is not None:
+        o = m["lt1"]
+        f = o.get("fabric")
+        if not isinstance(o.get("one_leg"), dict) or not all(isinstance(v, int) and v >= 0 for v in o["one_leg"].values()):
+            raise Unreadable("lt1.one_leg: malformed (an object of counts)")
+        if f is not None and (not isinstance(f, dict)
+                              or not all(isinstance(f.get(k), int) and f[k] >= 0 for k in ("pe_rows", "pe_cols", "chains", "link_delay_cycles"))
+                              or f["pe_rows"] < 1 or f["pe_cols"] < 1):
+            raise Unreadable("lt1.fabric: malformed (pe_rows, pe_cols, chains, link_delay_cycles)")
+    schemas = dict(SCHEMA, **(SCHEMA_V2 if m["version"] >= 2 else {}), **(SCHEMA_V3 if m["version"] >= 3 else {}),
+                   **(SCHEMA_V4 if m["version"] >= 4 else {}))
     for name, schema in schemas.items():
         t = m["tables"].get(name)
         if not isinstance(t, dict):
@@ -437,7 +471,106 @@ def check(m, T, limit=20):
         check_values(m, T, bad, nr)
     if m["version"] >= 3:
         check_lt1(m, T, bad)
+    if m["version"] >= 4:
+        check_fabric(m, T, bad)
     return out, count
+
+
+def check_fabric(m, T, bad):
+    C, K, G, S = T["lt1_chains"], T["lt1_calls"], T["lt1_legs"], T["steps"]
+    o = m.get("lt1")
+    f = o.get("fabric") if o else None
+    if f is None:
+        if C["rows"] or K["rows"]:
+            bad("P1", f"no fabric declared, but {C['rows']} chains and {K['rows']} stream calls")
+        return
+    actions, n, lanes = m["totals"]["actions"], S["rows"], o["lanes"].get("cf", 0)
+    cf = m["processes"].index("cf") if "cf" in m["processes"] else -1
+    legs = {}
+    for g in range(G["rows"]):
+        legs.setdefault(G["action"][g], []).append(g)
+    calls_of = {}
+    for r in range(K["rows"]):
+        a, c, pos = K["action"][r], K["chain"][r], K["pos"][r]
+        if a >= actions or c >= C["rows"]:
+            bad("P1", f"stream call row {r} names action {a} and chain {c}; there are {actions} actions, {C['rows']} chains")
+            continue
+        if a < n and S["kind"][a] != CALL_KIND:
+            bad("P1", f"stream call row {r} names action {a}, which is not a Call")
+        calls_of.setdefault(c, []).append((a, pos))
+    by_lane = {}
+    delays = 0
+    for c in range(C["rows"]):
+        rows, cols, lane = C["used_rows"][c], C["used_cols"][c], C["lane"][c]
+        in0, front, in1, last, out1, delay = (C[k][c] for k in ("in0", "front", "in1", "last", "out1", "link_delay"))
+        first, lastA, drain, ncalls = C["first_action"][c], C["last_action"][c], C["drain_action"][c], C["calls"][c]
+        if C["tile"][c] >= T["tiles"]["rows"] or lane >= lanes or first >= actions or lastA >= actions \
+                or (drain != NONE64 and drain >= actions):
+            bad("P1", f"chain {c} names tile {C['tile'][c]}, cf lane {lane} or actions {first}/{lastA}/{drain} that do not exist")
+            continue
+        if not (1 <= rows <= f["pe_rows"] and 1 <= cols <= f["pe_cols"]):
+            bad("P1", f"chain {c} occupies {rows} x {cols} PEs; the array is {f['pe_rows']} x {f['pe_cols']}")
+        skew = (rows - 1) + (cols - 1)
+        if front - in0 != skew:
+            bad("P2", f"chain {c}: front - in0 is {front - in0}; the skew is {skew}")
+        if in1 < in0:
+            bad("P2", f"chain {c}: in1 {in1} is before in0 {in0}")
+        over = out1 != NONE64                  # its calls are over: last and out1 are known
+        if (last == NONE64) != (out1 == NONE64):
+            bad("P2", f"chain {c} records last {last} and out1 {out1}: both are known or neither is")
+        elif over:
+            if last - in1 != skew:
+                bad("P2", f"chain {c}: last - in1 is {last - in1}; the skew is {skew}")
+            if out1 - last != rows + delay:
+                bad("P2", f"chain {c}: out1 - last is {out1 - last}; r + link_delay is {rows + delay}")
+            delays += delay
+        elif drain != NONE64:
+            bad("P2", f"chain {c} was drained at action {drain}, yet its calls are not over")
+        got = sorted(calls_of.get(c, []))
+        if [p for _, p in got] != list(range(1, len(got) + 1)) or len(got) != ncalls:
+            bad("P3", f"chain {c}'s calls are numbered {[p for _, p in got]}; it records {ncalls}")
+        elif got:
+            if got[0][0] != first or got[-1][0] != lastA:
+                bad("P3", f"chain {c}: its calls run {got[0][0]}..{got[-1][0]}; it records {first}..{lastA}")
+            prev_end = None
+            for a, p in got:
+                cl = [g for g in legs.get(a, []) if G["proc"][g] == cf]
+                if len(cl) != 1:
+                    bad("P3", f"chain {c} call {p} (action {a}) has {len(cl)} cf legs")
+                    continue
+                g = cl[0]
+                if G["lane"][g] != lane:
+                    bad("P3", f"chain {c} call {p} runs on cf lane {G['lane'][g]}; the chain owns lane {lane}")
+                if p == 1 and G["start"][g] != in0:
+                    bad("P3", f"chain {c}: its first call starts at {G['start'][g]}; in0 is {in0}")
+                if p == ncalls and G["finish"][g] != in1:
+                    bad("P3", f"chain {c}: its last call ends at {G['finish'][g]}; in1 is {in1}")
+                if prev_end is not None and G["start"][g] < prev_end:
+                    bad("P3", f"chain {c} call {p} starts at {G['start'][g]}, before call {p - 1} ends at {prev_end}")
+                prev_end = G["finish"][g]
+        if over and drain != NONE64:
+            dl = legs.get(drain, [])
+            if dl and min(G["start"][g] for g in dl) < out1:
+                bad("P4", f"chain {c}: its Drain (action {drain}) starts before its last result is out at {out1}")
+        by_lane.setdefault(lane, []).append((in0, in1, c))
+    for lane, iv in by_lane.items():
+        iv.sort()
+        for (a0, a1, c0), (b0, b1, c1) in zip(iv, iv[1:]):
+            if b0 < a1:
+                bad("P4", f"cf lane {lane}: chains {c0} [{a0}, {a1}) and {c1} [{b0}, {b1}) stream operands at once")
+        prev = None
+        for _, _, c in iv:
+            if C["out1"][c] == NONE64:
+                continue
+            out, rows = C["out1"][c], C["used_rows"][c]
+            natural = C["last"][c] + rows
+            want = max(natural, prev + rows) if prev is not None else natural
+            if out != want:
+                bad("P5", f"chain {c}: out1 is {out}; its results leave the top link at {want}")
+            prev = out
+    if C["rows"] != f["chains"] or delays != f["link_delay_cycles"]:
+        bad("P5", f"the tables hold {C['rows']} chains and {delays} link-delay cycles; the manifest says "
+                  f"{f['chains']} and {f['link_delay_cycles']}")
 
 
 def check_lt1(m, T, bad):
@@ -602,7 +735,8 @@ def main(argv=None):
             print(f"dflow_check: cannot read {args.bundle}: {e}", file=sys.stderr)
         return 2
     violations, count = check(m, tables)
-    invs = ["D2", "D3", "D4", "D5", "D6", "D8", "D9", "REF", "V1", "V2", "V3", "V4", "V5", "L1", "L2", "L3", "L4", "L5"]
+    invs = ["D2", "D3", "D4", "D5", "D6", "D8", "D9", "REF", "V1", "V2", "V3", "V4", "V5", "L1", "L2", "L3", "L4", "L5",
+            "P1", "P2", "P3", "P4", "P5"]
     if args.json:
         print(json.dumps({"ok": not violations, "steps": tables["steps"]["rows"],
                           "actions": m["totals"]["actions"], "cut": m["cut"],

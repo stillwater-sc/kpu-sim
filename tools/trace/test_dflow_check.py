@@ -313,7 +313,7 @@ class DflowCheckSelfTest(unittest.TestCase):
         return self.b.find("lt1_legs", pred)
 
     def test_overlay_is_exercised(self):
-        self.assertEqual(self.b.manifest["version"], 3)
+        self.assertEqual(self.b.manifest["version"], 4)
         self.assertIsNotNone(self.b.manifest["lt1"])
         self.assertGreater(self.b.rows("lt1_legs"), self.b.rows("steps"))     # a Store has two legs
 
@@ -384,6 +384,49 @@ class DflowCheckSelfTest(unittest.TestCase):
         self.b.manifest["tables"]["residency"]["columns"].append({"name": "start", "dtype": "u64", "offset": 0})
         self.b.save_manifest()
         self.assertFails("D8", "residency.start")
+
+    # -- P (version 4: the fabric pipeline) ---------------------------------
+    def test_p_the_run_has_stream_chains(self):
+        # Without chains, every P check passes vacuously: the clean run is on kpu_s1's 128x64 array.
+        self.assertIsNotNone(self.b.manifest["lt1"]["fabric"])
+        self.assertGreater(self.b.rows("lt1_chains"), 1)
+        self.assertGreater(self.b.rows("lt1_calls"), self.b.rows("lt1_chains"))
+
+    def test_p1_chains_without_a_fabric(self):
+        self.b.manifest["lt1"]["fabric"] = None
+        self.b.save_manifest()
+        self.assertFails("P1", "no fabric declared")
+
+    def test_p2_wavefront_off_by_one(self):
+        self.b.set("lt1_chains", "front", 0, self.b.get("lt1_chains", "front", 0) + 1)
+        self.assertFails("P2", "the skew is")
+
+    def test_p2_drain_too_soon(self):
+        self.b.set("lt1_chains", "out1", 0, self.b.get("lt1_chains", "out1", 0) - 1)
+        self.assertFails("P2", "out1 - last")
+
+    def test_p3_calls_misnumbered(self):
+        r = self.b.find("lt1_calls", lambda r: self.b.get("lt1_calls", "pos", r) == 2)
+        self.b.set("lt1_calls", "pos", r, 3)
+        self.assertFails("P3", "are numbered")
+
+    def test_p4_two_chains_stream_at_once(self):
+        self.b.set("lt1_chains", "in0", 1, self.b.get("lt1_chains", "in0", 0))
+        self.assertFails("P4", "stream operands at once")
+
+    def test_p4_drain_before_the_results_are_out(self):
+        self.b.set("lt1_chains", "out1", 0, self.b.get("lt1_chains", "out1", 0) + 10**6)
+        self.assertFails("P4", "starts before its last result is out")
+
+    def test_p5_manifest_link_delay_disagrees(self):
+        self.b.manifest["lt1"]["fabric"]["link_delay_cycles"] += 1
+        self.b.save_manifest()
+        self.assertFails("P5", "the manifest says")
+
+    def test_p_malformed_fabric_is_unreadable(self):
+        self.b.manifest["lt1"]["fabric"]["pe_rows"] = "128"
+        self.b.save_manifest()
+        self.assertUnreadable()
 
     # -- unreadable ---------------------------------------------------------
     def test_malformed_manifest_is_unreadable(self):

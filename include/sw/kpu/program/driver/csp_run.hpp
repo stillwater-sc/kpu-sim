@@ -163,6 +163,12 @@ struct CspLevelOutcome {
     // timed on -- what the tile-flow record (record::build_csp_record) is built from.
     std::vector<csp::TransactionalInterpreter::Record> records;
     std::vector<csp::TransactionalInterpreter::Slot> slots;
+    // L-T1 with a declared fabric: each accumulator's gemm chain as a systolic stream, and the
+    // calls timed as one leg instead, by why (docs/plans/l2-reuse-and-fabric-pipeline-view.md).
+    std::vector<csp::TransactionalInterpreter::Chain> chains;
+    std::map<std::string, std::size_t> one_leg;
+    std::uint64_t link_delay_cycles = 0;
+    std::uint32_t pe_rows = 0, pe_cols = 0;
     std::size_t compute_tiles = 0;
     std::uint64_t dram_loads = 0, dram_stores = 0, dram_bytes = 0;
     std::uint64_t cf_busy = 0;
@@ -336,6 +342,11 @@ inline CspLevelOutcome csp_run_level(ExecutionLevel level, const csp::lang::Prog
         o.cf_busy = st.busy.count("cf") ? st.busy.at("cf") : 0;
         o.records = lt.records();
         o.slots = lt.slots();
+        o.chains = lt.chains();
+        o.one_leg = st.one_leg;
+        o.link_delay_cycles = st.link_delay_cycles;
+        o.pe_rows = static_cast<std::uint32_t>(dev.pe_rows);
+        o.pe_cols = static_cast<std::uint32_t>(dev.pe_cols);
         o.compute_tiles = lt.lanes_of(csp::TransactionalInterpreter::Proc::Cf);
         o.unmodelled.push_back("tile contexts' vector-unit time (movers.vector): L-T1 applies the stages' "
                                "values; their time is L-CA's");

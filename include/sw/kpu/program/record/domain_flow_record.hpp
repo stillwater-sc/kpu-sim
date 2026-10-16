@@ -27,6 +27,12 @@
 //                   cycles, the leg (a Store has two), and a Load's slot wait. Empty without one.
 //   lt1_tiles.bin   (version 3) every final tile's proximity to L-B under L-T1 (tile_check):
 //                   max |a - o|, max relative error, and whether it is within the bound
+//   lt1_chains.bin  (version 4) the fabric pipeline: one row per accumulator's gemm chain L-T1
+//                   timed as a systolic stream (docs/plans/l2-reuse-and-fabric-pipeline-view.md):
+//                   its tile, compute tile, the PEs its C tile occupies, its first, last and Drain
+//                   actions, and in0, front, in1, last, out1, link_delay in cycles. Empty when the
+//                   deployment declares no fabric (manifest lt1.fabric is then null).
+//   lt1_calls.bin   (version 4) each stream call: its action, its chain, and its place in it
 //
 // THE L-T1 OVERLAY (§3.7, step 5). L-B has no time; the overlay is a second run, L-T1's, of the same
 // program, joined on the action index. Its cycles are UNCALIBRATED, as L-T1 always says, and only
@@ -66,8 +72,9 @@
 namespace sw::kpu::program::record {
 
 // Version 2: tile values (snapshots, elements). A version-1 bundle has none and is still read.
-// Version 3: the L-T1 overlay (lt1_legs, lt1_tiles). Versions 1 and 2 are still read.
-inline constexpr std::uint32_t kDflowVersion = 3;
+// Version 3: the L-T1 overlay (lt1_legs, lt1_tiles). Version 4: the fabric pipeline (lt1_chains,
+// lt1_calls, manifest lt1.fabric and lt1.one_leg). Versions 1 to 3 are still read.
+inline constexpr std::uint32_t kDflowVersion = 4;
 inline constexpr std::uint8_t kNone8 = 0xFF;
 inline constexpr std::uint32_t kNone32 = 0xFFFFFFFFu;
 inline constexpr std::uint64_t kNone64 = ~std::uint64_t{0};
@@ -156,6 +163,19 @@ struct DomainFlowRecord {
     bool lt1_pass = true;
     std::vector<Leg> legs;
     std::vector<Proximity> proximity;
+    // The fabric pipeline (version 4): present when the deployment gives the PE array.
+    struct Chain {
+        std::uint32_t tile = 0, lane = 0, rows = 0, cols = 0, calls = 0;
+        std::uint64_t first_action = 0, last_action = 0, drain_action = kNone64;   // none: no Drain recorded
+        std::uint64_t in0 = 0, front = 0, in1 = 0, last = kNone64, out1 = kNone64, link_delay = 0;   // none: calls not over
+    };
+    struct Call { std::uint64_t action = 0; std::uint32_t chain = 0, pos = 0; };
+    bool fabric = false;
+    std::uint32_t pe_rows = 0, pe_cols = 0;
+    std::uint64_t link_delay_cycles = 0;
+    std::vector<std::pair<std::string, std::uint64_t>> one_leg;     // calls timed as one leg, by why
+    std::vector<Chain> chains;
+    std::vector<Call> calls;
 
     std::string tile_name(std::uint32_t t) const {
         const Tile& x = tiles.at(t);
@@ -206,6 +226,32 @@ inline void attach_lt1(DomainFlowRecord& rec, const driver::CspLevelOutcome& lt1
         l.slot_wait = r.slot_wait;
         l.leg = legs_of[r.action]++;
         rec.legs.push_back(l);
+        if (r.chain != TI::kNoChain) rec.calls.push_back({r.action, r.chain, r.chain_pos});
+    }
+    rec.fabric = lt1.pe_rows > 0;
+    rec.pe_rows = lt1.pe_rows;
+    rec.pe_cols = lt1.pe_cols;
+    rec.link_delay_cycles = lt1.link_delay_cycles;
+    for (const auto& [why, n] : lt1.one_leg) rec.one_leg.emplace_back(why, n);
+    for (const TI::Chain& c : lt1.chains) {
+        DFR::Chain x;
+        x.tile = intern(c.tile);
+        x.lane = static_cast<std::uint32_t>(c.lane);
+        x.rows = c.rows;
+        x.cols = c.cols;
+        x.calls = c.calls;
+        x.first_action = c.first_action;
+        x.last_action = c.last_action;
+        x.in0 = c.in0;
+        x.front = c.front;
+        x.in1 = c.in1;
+        if (c.closed) {                     // its calls are over: last and out1 are known
+            x.last = c.last;
+            x.out1 = c.out1;
+            x.link_delay = c.link_delay;
+        }
+        if (c.drain_action != TI::kNoAction) x.drain_action = c.drain_action;
+        rec.chains.push_back(x);
     }
     const ElementFormat format{};
     const Proximity bound = proximity_for(format);

@@ -83,6 +83,16 @@ set_tests_properties(test_csp_lt1_place PROPERTIES
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
 )
 
+# L-T1 times the fabric as a systolic pipeline (docs/plans/l2-reuse-and-fabric-pipeline-view.md step 2)
+kpu_add_component_test(test_fabric_pipeline "program"
+    test_fabric_pipeline.cpp
+)
+
+set_tests_properties(test_fabric_pipeline PROPERTIES
+    LABELS "program;csp;lt1;fabric;v0.9"
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+)
+
 # The structured CSP program: streamed and validated without unrolling (docs/plans/csp-language.md step 1c)
 kpu_add_component_test(test_csp_structured "program"
     test_csp_structured.cpp

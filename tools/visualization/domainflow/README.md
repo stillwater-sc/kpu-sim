@@ -63,6 +63,22 @@ iteration at any depth, the next action of a kind or on the same tile, the relea
 residency, the next slot-bound Load (with an overlay), the next chain start or end, and jump to a
 step. A link to `page.html#step=123` opens at that step.
 
+- **The L-T1 pipeline (step 2, `.dflow` version 4):** when L-T1 ran on a deployment that declares
+  its PE array (`fabric`), the fabric panel adds L-T1's pipeline at the current action's start
+  cycle, per compute tile:
+  - the operands streaming into the array, and how far, at PE(0,0);
+  - every chain on the array and its phase: fill, steady, tail, or fill+tail for a chain shorter
+    than the array's skew;
+  - the results draining north, and how far.
+
+  The bars are linear within each recorded interval (the model's dense stream). The cycle-axis
+  ribbon adds "cf in" (each chain's operand stream, darker while every PE is on it) and "north"
+  (its results leaving). "Next three-tile moment" jumps to an action that starts while a compute
+  tile streams one chain in and drains the one before. The timing note names a stream call's
+  chain and its bounds. On a deployment without a fabric, the panel says every call was one leg.
+  A program that stores each C right after its chain shows no overlap: its stores serialize the
+  chains (the plan's step-2 finding).
+
 **A steady layout:** every area that changes from step to step has a fixed size, so nothing
 jumps while the run plays. A value too wide for its box is cut with an ellipsis and shown in full
 in its tooltip; a list that does not fit scrolls inside its box; an inspector row that does not
@@ -82,4 +98,4 @@ has no DOM) in Node, comparing what it reads at sample steps (step fields, posit
 tile values the inspector shows, the overlay's legs, proximity, slot waits and time-to-action
 lookup, and L2's and the fabric's contents and calls against an independent replay) with the
 bundle read in Python. Every recorded L2 or fabric snapshot must find its tile where the page puts
-it. A strict scan requires every interpolation that writes HTML to be escaped or reviewed. It reads versions 1 to 3.
+it. A strict scan requires every interpolation that writes HTML to be escaped or reviewed. It reads versions 1 to 4.

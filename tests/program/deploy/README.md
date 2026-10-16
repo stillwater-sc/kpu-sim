@@ -41,6 +41,14 @@ and `kpu-run --deploy two_devices.json` exits 2 with the device count in the mes
 resource and executing on it are different capabilities, and the fixture is where that
 distinction is checked rather than asserted in prose.
 
+## The fabric
+
+`fabric: {pe_rows, pe_cols}` is ONE compute tile's systolic array, and `pe_rows * pe_cols` must
+equal `macs_per_cycle` (one MAC per PE per cycle). It is not `array`, which is the grid of compute
+tiles. `kpu_s1.json` declares 128 x 64 (decided 2026-10-16); the other fixtures declare none, so
+L-T1 times their calls as one leg each, as before
+(`docs/plans/l2-reuse-and-fabric-pipeline-view.md` step 2).
+
 ## The bytes are the evidence
 
 `tests/program/deploy/*.json` is marked `-text` in `.gitattributes`, so git never converts

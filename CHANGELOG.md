@@ -9,6 +9,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **L-T1 times the fabric as a systolic pipeline** (`docs/plans/l2-reuse-and-fabric-pipeline-view.md`
+  step 2; `.dflow` version 4).
+  - Deployment field `fabric {pe_rows, pe_cols}`: one compute tile's PE array, checked against
+    `macs_per_cycle`. kpu_s1 declares 128 x 64. Without it, L-T1 times every call as before.
+  - With it, an accumulator's gemm chain (`acc C in fabric`) is one output-stationary stream on
+    one compute tile:
+    - a call takes its reduction depth in cycles on the PEs its C tile occupies, so a tile
+      smaller than the array leaves PEs idle;
+    - the chain fills once and drains once, and its results leave north on their own links, so
+      the next chain's operands follow right behind;
+    - each column's top link carries the results, and results that come faster wait in the grid,
+      never the operands (`link_delay`).
+  - The streamer's drains get their own lanes, so a drain never waits behind a feed.
+  - Calls that do not stream stay one leg, counted by why:
+    - other tile functions;
+    - in-place gemm;
+    - a C tile larger than the array;
+    - accumulators interleaved on one array.
+  - Finding: every mover issues in program order, so a program that stores each C right after its
+    chain serializes its chains. kpu-csp-gen's matmul does; `store ... late` (step 2b) will fix it.
+  - `.dflow` v4: `lt1_chains` and `lt1_calls`, and manifest `lt1.fabric` and `lt1.one_leg`.
+    `dflow_check.py` adds P1-P5. The viewer adds an L-T1 pipeline panel (per compute tile:
+    streaming in, in the array with its phase, draining north), "cf in" and "north" ribbon rows,
+    and "next three-tile moment". `kpu-run` reports the fabric line.
+  - `tests/program/test_fabric_pipeline.cpp`.
+
 - **L2 and the compute fabric in the domain-flow viewer** (`docs/plans/l2-reuse-and-fabric-pipeline-view.md`
   step 1; viewer only, `.dflow` unchanged).
   - L2 and the fabric list their tiles after each action. An L2 tile marks how many times it has
