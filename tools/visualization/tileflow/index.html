@@ -432,11 +432,11 @@ function start() {
   $("summary").innerHTML = [
     ["level", m.level], ["device", `${m.device} (${m.device_label})`], ["makespan", fmt(m.makespan) + " cycles"],
     ["L3 capacity", l3cap ? fmt(l3cap) + " tiles" : "unbounded"],
-    ["L3 slots", m.version === 5 ? `addressed: ${fmt(l3cap)} slots, ${m.l3_banks} bank${m.l3_banks > 1 ? "s" : ""} (one row each)` : "pooled (no addresses before version 5)"],
+    ["L3 slots", m.version === 5 ? `addressed: ${fmt(l3cap)} slots, ${esc(m.l3_banks)} bank${m.l3_banks > 1 ? "s" : ""} (one row each)` : "pooled (no addresses before version 5)"],
     ["compute tiles", nCF],
     ["tiles", fmt(m.tiles.length)], ["transits", fmt(R.tr.rows)], ["computes", fmt(R.co.rows)],
     ["lanes", lanes || "—"], ["floorplan", R.fp ? R.fp.source : "none loaded"],
-    ["binding", R.B ? `derived · ${R.B.engines.length} DMA engines · ${R.B.l3.tiles.length} L3 tiles · ${R.B.l3.overflow} L3 over · ${R.B.dma ? R.B.dma.overloaded : 0} DMA over` : "none (pooled rows)"]
+    ["binding", R.B ? `derived · ${esc(R.B.engines.length)} DMA engines · ${esc(R.B.l3.tiles.length)} L3 tiles · ${esc(R.B.l3.overflow)} L3 over · ${esc(R.B.dma ? R.B.dma.overloaded : 0)} DMA over` : "none (pooled rows)"]
   ].map(([k, v]) => `<span class="chip">${k} <b>${esc(v)}</b></span>`).join("") +
     (m.unmodelled && m.unmodelled.length ? `<span class="chip warn">not modelled <b>${esc(m.unmodelled.join(", "))}</b></span>` : "");
   $("honesty").textContent = (R.bindingIgnored ? R.bindingIgnored + " " : "") + (R.B ? (m.version === 5 ? `At ${m.level} each L3 residency's PROGRAM slot is recorded (one swimlane row per slot, from the record); which physical L3 tile holds it is not. ` : "") + `At ${m.level} the executor binds moves to lanes, not places, and does not place L3 on the floorplan's tiles. The per-resource rows and floorplan fills here come from a DERIVED binding (bind.py): ${R.B.policies.l3}; ${R.B.policies.dma}; ${R.B.policies.noc}. Timing is the executor's; only the place is derived. ${R.B.notes.join(" ")}` : (m.version === 5 ? `At ${m.level}, every L3 residency carries the address the program placed it at (module, slot, bank): the swimlanes draw one row per slot. A slot is an address in the program's L3, not a physical L3 tile, so the floorplan still draws L3 pooled across every L3 block; moves are bound to lanes of a mover pool, not to places. ` : `At ${m.level}, L3 is one pooled capacity and moves are bound to lanes of a mover pool, not to places: the floorplan draws L3 and the movers as pooled fills across every block of their kind, never as per-tile values this record does not hold. `) + `Invariants are checked by tools/trace/tflow_check.py, not here.`);
@@ -791,15 +791,15 @@ function drawLanesBound() {
 function activeAt(r, t) { return r.ivs.filter(([a, b]) => a <= t && t < b); }
 function transitText(i) {
   const tile = R.m.tiles[R.tr.tile[i]], addr = R.B ? dramAddr(R.tr.tile[i]) : null;
-  return `${HOPS[R.tr.hop[i]]} ${tile[0]}[${tile[1]},${tile[2]}]${addr !== null ? " @" + hex(addr) : ""} [${fmt(R.tr.t0[i])}, ${fmt(R.tr.t1[i])})`;
+  return `${HOPS[R.tr.hop[i]]} ${esc(tile[0])}[${esc(tile[1])},${esc(tile[2])}]${addr !== null ? " @" + hex(addr) : ""} [${fmt(R.tr.t0[i])}, ${fmt(R.tr.t1[i])})`;
 }
 function tipBound(e, h) {
   const r = ROWS[h.row];
   if (!r) return hideTip();
-  if (r.header) return showTip(e, `${r.label}${r.derived ? " (derived binding)" : ""}<br>${r.note}<br>click to ${collapsed.has(r.cat) ? "unfold" : "fold"}`);
+  if (r.header) return showTip(e, `${esc(r.label)}${r.derived ? " (derived binding)" : ""}<br>${esc(r.note)}<br>click to ${collapsed.has(r.cat) ? "unfold" : "fold"}`);
   if (h.t < viewA || h.t > viewB) return hideTip();
   const a = activeAt(r, h.t);
-  showTip(e, `${esc(r.name)}<br>cycle ${fmt(Math.round(h.t))}: ${a.length}${r.cap ? " of " + r.cap : ""} busy${r.cap && a.length > r.cap ? " OVER CAPACITY" : ""}` +
+  showTip(e, `${esc(r.name)}<br>cycle ${fmt(Math.round(h.t))}: ${a.length}${r.cap ? " of " + esc(r.cap) : ""} busy${r.cap && a.length > r.cap ? " OVER CAPACITY" : ""}` +
              (a.length ? "<br>" + a.slice(0, 4).map(([, , i]) => r.kind === "l3" ? tileText(R.res.tile[i]) : r.kind === "cf" ? opText(R.co.op[i]) : transitText(i)).join("<br>") : ""));
 }
 function tileText(tile) { const t = R.m.tiles[tile], a = R.B ? dramAddr(tile) : null; return `${esc(t[0])}[${esc(t[1])},${esc(t[2])}]${a !== null ? " (DRAM " + hex(a) + ")" : ""}`; }
@@ -807,7 +807,7 @@ function inspectBoundRow(r) {
   let busy = 0; for (const [a, b] of r.ivs) busy += b - a;
   const a = activeAt(r, T);
   const util = r.cap ? busy / (r.cap * Math.max(1, R.m.makespan)) : busy / Math.max(1, R.m.makespan);
-  $("insp").innerHTML = `<div class="kv"><span>row</span><span>${esc(r.name)}</span><span>category</span><span>${r.cat}</span><span>capacity</span><span>${r.cap || "relative"}</span><span>intervals</span><span>${fmt(r.ivs.length)}</span><span>${r.cap ? "utilization" : "busy (sum)"}</span><span>${r.cap ? (100 * util).toFixed(1) + "%" : fmt(busy) + " cycles"}</span><span>at cursor</span><span>${a.length} active</span></div><p class="note">${a.slice(0, 8).map(([, , i]) => r.kind === "l3" ? tileText(R.res.tile[i]) : r.kind === "cf" ? opText(R.co.op[i]) : transitText(i)).join("<br>") || "nothing active at the cursor"}</p>`;
+  $("insp").innerHTML = `<div class="kv"><span>row</span><span>${esc(r.name)}</span><span>category</span><span>${esc(r.cat)}</span><span>capacity</span><span>${esc(r.cap || "relative")}</span><span>intervals</span><span>${fmt(r.ivs.length)}</span><span>${r.cap ? "utilization" : "busy (sum)"}</span><span>${r.cap ? (100 * util).toFixed(1) + "%" : fmt(busy) + " cycles"}</span><span>at cursor</span><span>${a.length} active</span></div><p class="note">${a.slice(0, 8).map(([, , i]) => r.kind === "l3" ? tileText(R.res.tile[i]) : r.kind === "cf" ? opText(R.co.op[i]) : transitText(i)).join("<br>") || "nothing active at the cursor"}</p>`;
 }
 
 // ------------------------------------------------------------------ DRAM address map
@@ -846,7 +846,7 @@ function drawDram() {
   ctx.fillText("0", gutter, 6); ctx.textAlign = "right"; ctx.fillText(`top of memory ${hex(D.top)}`, w - gutter, 6); ctx.textAlign = "left";
   dramGeom = { A, gutter, pw, by, bh };
   $("dramNote").textContent = `(derived layout: ${D.layout}, ${fmt(D.align)}-byte aligned; ${fmt(D.end)} of ${fmt(D.top)} bytes used)`;
-  $("dramLegend").innerHTML = D.tensors.map((t, k) => `<span><span class="sw" style="background:${TENSOR_COLORS[k % TENSOR_COLORS.length]}"></span>${esc(t.name)} ${t.shape[0]}×${t.shape[1]} @${hex(t.base)}, ${t.tile_rows}×${t.tile_cols} tiles of ${fmt(t.tile_bytes)} B</span>`).join("") +
+  $("dramLegend").innerHTML = D.tensors.map((t, k) => `<span><span class="sw" style="background:${TENSOR_COLORS[k % TENSOR_COLORS.length]}"></span>${esc(t.name)} ${esc(t.shape[0])}×${esc(t.shape[1])} @${hex(t.base)}, ${esc(t.tile_rows)}×${esc(t.tile_cols)} tiles of ${fmt(t.tile_bytes)} B</span>`).join("") +
     `<span>▀ / ▄ tiles a DMA is reading / writing at the cursor (${moving})</span><span><span class="sw hatch"></span>unused</span>`;
 }
 function dramHit(e) {
@@ -876,16 +876,16 @@ $("dram").addEventListener("mousemove", e => {
   if (!h) return hideTip();
   if (!h.t) return showTip(e, `${hex(h.a)}<br>unused`);
   const s = h.tile >= 0 ? tileStory(h.tile) : null;
-  showTip(e, `${hex(h.a)} in ${esc(h.t.name)} (base ${hex(h.t.base)}, ${fmt(h.t.bytes)} B)<br>tile [${h.ti},${h.tj}] at ${hex(h.t.base + (h.ti * h.t.tile_cols + h.tj) * h.t.tile_bytes)}` +
-    (s ? `<br>DMA reads ${s.reads}, writes ${s.writes}<br>at cursor: ${s.homeNow}` : "<br>never touched by this run"));
+  showTip(e, `${hex(h.a)} in ${esc(h.t.name)} (base ${hex(h.t.base)}, ${fmt(h.t.bytes)} B)<br>tile [${esc(h.ti)},${esc(h.tj)}] at ${hex(h.t.base + (h.ti * h.t.tile_cols + h.tj) * h.t.tile_bytes)}` +
+    (s ? `<br>DMA reads ${s.reads}, writes ${s.writes}<br>at cursor: ${esc(s.homeNow)}` : "<br>never touched by this run"));
 });
 $("dram").addEventListener("mouseleave", hideTip);
 $("dram").addEventListener("click", e => {
   const h = dramHit(e);
   if (!h || !h.t) return;
   const s = h.tile >= 0 ? tileStory(h.tile) : null;
-  $("insp").innerHTML = `<div class="kv"><span>tensor</span><span>${esc(h.t.name)} ${h.t.shape.join("×")}</span><span>base</span><span>${hex(h.t.base)}</span><span>bytes</span><span>${fmt(h.t.bytes)}</span><span>tile</span><span>[${h.ti},${h.tj}] @${hex(h.t.base + (h.ti * h.t.tile_cols + h.tj) * h.t.tile_bytes)}</span>` +
-    (s ? `<span>DMA reads / writes</span><span>${s.reads} / ${s.writes}</span><span>L3 homes</span><span>${s.homes.join(", ") || "—"}</span><span>at cursor</span><span>${s.homeNow}</span>` : "") + `</div><p class="note">Layout derived by bind.py (${R.B.dram.layout}); the deployment declares no DRAM placement.</p>`;
+  $("insp").innerHTML = `<div class="kv"><span>tensor</span><span>${esc(h.t.name)} ${esc(h.t.shape.join("×"))}</span><span>base</span><span>${hex(h.t.base)}</span><span>bytes</span><span>${fmt(h.t.bytes)}</span><span>tile</span><span>[${esc(h.ti)},${esc(h.tj)}] @${hex(h.t.base + (h.ti * h.t.tile_cols + h.tj) * h.t.tile_bytes)}</span>` +
+    (s ? `<span>DMA reads / writes</span><span>${s.reads} / ${s.writes}</span><span>L3 homes</span><span>${esc(s.homes.join(", ") || "—")}</span><span>at cursor</span><span>${esc(s.homeNow)}</span>` : "") + `</div><p class="note">Layout derived by bind.py (${esc(R.B.dram.layout)}); the deployment declares no DRAM placement.</p>`;
 });
 
 // Version 5: the L3 station and slot a pyramid row stands for (its name is "<station>/slot[k]", as
@@ -909,7 +909,7 @@ function inspectRow(r) {
     return;
   }
   const mean = top.occ[r] / Math.max(1, R.m.makespan);
-  $("insp").innerHTML = `<div class="kv"><span>row</span><span>${esc(row.name)}</span><span>kind</span><span>${esc(row.kind)}${row.modelled ? "" : " (not modelled)"}</span><span>capacity</span><span>${row.capacity || "—"}</span><span>mean occupancy</span><span>${mean.toFixed(2)}</span><span>peak</span><span>${fmt(top.peak[r])}</span><span>intervals</span><span>${fmt(top.starts[r])}</span></div>`;
+  $("insp").innerHTML = `<div class="kv"><span>row</span><span>${esc(row.name)}</span><span>kind</span><span>${esc(row.kind)}${row.modelled ? "" : " (not modelled)"}</span><span>capacity</span><span>${esc(row.capacity || "—")}</span><span>mean occupancy</span><span>${mean.toFixed(2)}</span><span>peak</span><span>${fmt(top.peak[r])}</span><span>intervals</span><span>${fmt(top.starts[r])}</span></div>`;
 }
 
 // ------------------------------------------------------------------ occupancy strip
@@ -980,7 +980,7 @@ function renderDiag() {
     out.push([bound / L.bins > 0.25 ? "warn" : "info", "movement-bound", `${(100 * bound / L.bins).toFixed(0)}% of the run has a mover pool saturated while fewer than half the compute tiles compute.`]);
   }
   out.push(["info", "invariants", "Not checked here: run python3 tools/trace/tflow_check.py on this bundle (TF1–TF9)."]);
-  $("diag").innerHTML = out.map(([sev, label, text]) => `<li><span class="sev ${sev}">${label}</span><span>${text}</span></li>`).join("");
+  $("diag").innerHTML = out.map(([sev, label, text]) => `<li><span class="sev ${esc(sev)}">${esc(label)}</span><span>${esc(text)}</span></li>`).join("");
 }
 
 addEventListener("resize", () => { if (R) drawAll(); });
