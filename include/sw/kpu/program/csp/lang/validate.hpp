@@ -60,7 +60,8 @@
 namespace sw::kpu::program::csp::lang {
 
 struct Validation {
-    std::size_t peak_l3 = 0;                  // the most L3 slots the program holds at once
+    std::size_t peak_l3 = 0;                  // the most L3 slots the program holds at once (with a late
+                                              // store: counting its writeback at every place it can land)
     std::uint64_t inherited = 0;              // slots held from the start (inherit)
     std::uint64_t retained = 0;               // slots held at the end (retain)
     std::optional<std::uint64_t> loads, calls, stores;   // exact for rectangular loop nests
@@ -161,12 +162,14 @@ private:
             if ((s.kind == Stmt::Kind::Store && s.late) || any_late(s.body)) return true;
         return false;
     }
-    // A late store's writeback takes a slot where the walker emits it: an acc block's close or the
-    // program's end.
-    void late_room(int line, const std::string& where) const {
+    // A late store's writeback takes a slot where the walker emits it: an acc block's open or
+    // close, or the program's end. The structure does not say which of those has a store pending,
+    // so each counts the slot, in the capacity check and in the peak (conservative, never low).
+    void late_room(int line, const std::string& where) {
         if (live_ + 1 > cap_)
             throw CompileError(line, "a late store is emitted at " + where + " and its writeback needs an L3 slot, "
                                      "and all " + std::to_string(cap_) + " are held there");
+        peak_ = std::max(peak_, live_ + 1);
     }
 
     // ---- affine forms and ranges ----

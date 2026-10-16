@@ -92,7 +92,8 @@ release    := 'release' tiles ';'          -- the program's last use: the credit
 acc        := 'acc' tile 'in' 'fabric' '{' stmt* '}'          -- an output-stationary accumulator
 call       := 'call' FN '(' tiles ')' ( '->' | '+->' ) tile [ context ] ';'
                                            -- '->' writes, '+->' accumulates
-store      := 'store' tile [ context ] ';' -- out of the fabric (or L3) to DRAM
+store      := 'store' tile [ 'late' ] [ context ] ';'   -- out of the fabric (or L3) to DRAM;
+                                           -- late: after the next acc's calls
 inherit    := 'inherit' tiles ';'          -- resident from the operator before (opens the program)
 retain     := 'retain' tiles [ context ] ';'   -- stays resident for the operator after
 context    := 'via' stage ( ',' stage )*   -- the tile context (§3.4)

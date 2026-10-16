@@ -193,6 +193,17 @@ TEST_CASE("store late: what it refuses, by line", "[program][csp][lang][late]") 
                                     "  store C[1, 0];\n  release A[0, 0], B[0, 0], b[0];\n}\n";
     CHECK_THAT(error_of(full, true), ContainsSubstring("csp line 11: a late store is emitted at the open of acc C[1, 0]"));
     CHECK_THAT(error_of(full, false), ContainsSubstring("csp line 9: store C[0,0]'s writeback needs an L3 slot"));
+    // The peak counts the writeback where a late store can land, never less than the walker holds:
+    // here a third resident and the deferred writeback, at the next acc's close.
+    const std::string peak = head + "  resident A[0, 0], B[0, 0];\n"
+                                    "  acc C[0, 0] in fabric { call gemm(A[0, 0], B[0, 0]) +-> C[0, 0]; }\n"
+                                    "  store C[0, 0] late;\n  resident b[0];\n"
+                                    "  acc C[1, 0] in fabric { call gemm(A[0, 0], B[0, 0]) +-> C[1, 0]; }\n"
+                                    "  store C[1, 0];\n  release A[0, 0], B[0, 0], b[0];\n}\n";
+    std::string four = peak;
+    four.replace(four.find("l3 = 3"), 6, "l3 = 4");
+    CHECK(lang::validate(four).peak_l3 == 4);
+    CHECK(lang::compile(four).reuse().peak_l3 == 4);
     // Stored twice.
     const std::string twice = head + "  resident A[0, 0], B[0, 0];\n"
                                      "  acc C[0, 0] in fabric { call gemm(A[0, 0], B[0, 0]) +-> C[0, 0]; }\n"
