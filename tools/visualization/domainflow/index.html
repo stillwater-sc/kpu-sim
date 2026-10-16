@@ -140,6 +140,7 @@ footer ul { margin: 0; padding-left: 18px; }
   <header class="top">
     <h1>Domain-Flow Debugger</h1>
     <span class="chip">L-B &middot; the axis is the action, not time</span>
+    <span class="chip" id="lt1chip" hidden></span>
     <div class="meta" id="meta"></div>
   </header>
 
@@ -167,12 +168,14 @@ footer ul { margin: 0; padding-left: 18px; }
           <span class="sep"></span>
           <span class="group"><label for="kind">run to next</label><select id="kind"></select><button id="nextkind">go</button></span>
           <button id="release" title="The step that releases the residency this step names">to its release</button>
+          <button id="slotbound" title="The next Load whose L3 slot decided its start under L-T1" hidden>next slot-bound Load</button>
+          <span class="group" id="axisgroup" hidden><label for="axis">axis</label><select id="axis"><option value="step">step (L-B)</option><option value="time">L-T1 cycles</option></select></span>
           <span class="group"><label for="jump">jump to step</label><input id="jump" type="number" min="0"></span>
           <span class="group"><label for="speed">speed</label><select id="speed"><option value="4">4/s</option><option value="15" selected>15/s</option><option value="60">60/s</option><option value="240">240/s</option></select></span>
         </div>
         <input id="scrub" type="range" min="0" value="0" aria-label="Step">
         <canvas class="ribbon" id="ribbon" aria-label="Loop iterations and L3 occupancy over the whole run; click to jump"></canvas>
-        <div class="axis"><span>step 0</span><span>step (action) &rarr;</span><span id="axis-end"></span></div>
+        <div class="axis"><span id="axis-start">step 0</span><span id="axis-mid">step (action) &rarr;</span><span id="axis-end"></span></div>
       </section>
 
       <div class="main">
@@ -199,6 +202,12 @@ footer ul { margin: 0; padding-left: 18px; }
 
         <section class="panel insp" aria-label="Inspector">
           <div><h2>This step</h2><dl class="kv" id="step-kv"></dl></div>
+          <div id="lt1box" hidden>
+            <h2>L-T1 timing (uncalibrated)</h2>
+            <p class="note" id="lt1-note"></p>
+            <div class="histwrap"><table class="hist" id="leg-table"><thead><tr><th>leg</th><th>process</th><th>start</th><th>finish</th><th>cycles</th></tr></thead><tbody></tbody></table></div>
+            <dl class="kv" id="prox-kv"></dl>
+          </div>
           <div id="tilebox">
             <div class="tilehead">
               <h2 id="tile-title">Tile</h2>
@@ -237,10 +246,10 @@ footer ul { margin: 0; padding-left: 18px; }
 <script id="dflow-core">
 "use strict";
 globalThis.DflowCore = (() => {
-  const VERSIONS = [1, 2];
+  const VERSIONS = [1, 2, 3];
   const OPENS = 1, CLOSES = 2, RETAINS = 4, HAS_PLACE = 8, PINNED = 16, RES_RETAINED = 4;
   const NONE8 = 255, NONE32 = 0xFFFFFFFF;
-  const TYPED = { u8: Uint8Array, u16: Uint16Array, u32: Uint32Array, u64: BigUint64Array, i64: BigInt64Array, f32: Float32Array };
+  const TYPED = { u8: Uint8Array, u16: Uint16Array, u32: Uint32Array, u64: BigUint64Array, i64: BigInt64Array, f32: Float32Array, f64: Float64Array };
   const NONE64 = 0xFFFFFFFFFFFFFFFFn;
 
   // A column as a typed array. 64-bit columns become Float64Array (indices stay far below 2^53);
@@ -264,6 +273,8 @@ globalThis.DflowCore = (() => {
     if (m.format !== "kpu-dflow") throw new Error("not a .dflow bundle (manifest format " + JSON.stringify(m.format) + ")");
     if (!VERSIONS.includes(m.version)) throw new Error(`a version-${m.version} .dflow bundle; this viewer reads version ${VERSIONS.join(", ")}`);
     const R = { m };
+    // Numbers the page draws with are checked as numbers (the manifest is untrusted input).
+    const int = (v, what, lo) => { if (!Number.isInteger(v) || v < lo) throw new Error(`${what} is ${JSON.stringify(v)}, not an integer >= ${lo}`); return v; };
     for (const name of ["steps", "tiles", "residency", "where", "loops", "iteration"]) {
       const t = m.tables[name];
       if (!t) throw new Error("no table " + name);
@@ -294,11 +305,35 @@ globalThis.DflowCore = (() => {
       }
       for (const e of R.snap.values()) e.steps.sort((a, b) => R.snapshots.step[a] - R.snapshots.step[b]);
     }
+    // Version 3: the L-T1 overlay, joined on the action index. Its cycles are L-T1's, uncalibrated.
+    R.lt1 = null;
+    if (m.version >= 3) {
+      for (const name of ["lt1_legs", "lt1_tiles"]) {
+        const t = m.tables[name], buf = files[t.file];
+        if (!buf) throw new Error("missing " + t.file);
+        const out = { rows: t.rows };
+        for (const c of t.columns) out[c.name] = column(buf, t, c.name);
+        R[name] = out;
+      }
+      if (m.lt1) {
+        R.lt1 = m.lt1;
+        int(m.lt1.makespan, "lt1.makespan", 0);
+        R.legsOf = new Map();                // action -> its legs, in leg order
+        for (let g = 0; g < R.lt1_legs.rows; g++) {
+          const a = R.lt1_legs.action[g];
+          if (!R.legsOf.has(a)) R.legsOf.set(a, []);
+          R.legsOf.get(a).push(g);
+        }
+        for (const v of R.legsOf.values()) v.sort((x, y) => R.lt1_legs.leg[x] - R.lt1_legs.leg[y]);
+        R.proxOf = new Map();
+        for (let q = 0; q < R.lt1_tiles.rows; q++) R.proxOf.set(R.lt1_tiles.tile[q], q);
+        R.byStart = Array.from({ length: R.lt1_legs.rows }, (_, g) => g).sort((x, y) => R.lt1_legs.start[x] - R.lt1_legs.start[y]);
+      }
+    }
     R.n = R.steps.rows;                      // recorded steps (fewer than the run's actions if cut)
     R.actions = m.totals.actions;
     // Numbers the page draws with are checked as numbers: a manifest is untrusted input (a packed
     // page is made to be shared), and every string it names is escaped where it is written.
-    const int = (v, what, lo) => { if (!Number.isInteger(v) || v < lo) throw new Error(`${what} is ${JSON.stringify(v)}, not an integer >= ${lo}`); return v; };
     R.cap = int(m.machine.l3, "machine.l3", 1);
     R.banks = int(m.machine.banks, "machine.banks", 1);
     for (const o of m.operands) for (const k of ["rows", "cols", "tile_rows", "tile_cols"]) int(o[k], `operand ${o.name} ${k}`, 1);
@@ -402,7 +437,44 @@ globalThis.DflowCore = (() => {
   }
   const snapshotsOf = (R, t) => (R.snap && R.snap.get(t) ? R.snap.get(t).steps : []);
 
-  return { VERSIONS, parse, tileName, position, slotAt, step, snapshot, valueAt, finalOf, snapshotsOf, nextIteration, nextKind, nextOnTile, nextFromLine, releaseOf, RES_RETAINED };
+  // ---- the L-T1 overlay ----
+  function legs(R, s) {
+    if (!R.lt1 || !R.legsOf.has(s)) return [];
+    const G = R.lt1_legs;
+    return R.legsOf.get(s).map(g => ({ leg: G.leg[g], process: G.proc[g] === NONE8 ? null : R.m.processes[G.proc[g]],
+      lane: G.lane[g], start: G.start[g], finish: G.finish[g], slot_wait: G.slot_wait[g] }));
+  }
+  function proximity(R, t) {
+    if (!R.lt1 || !R.proxOf.has(t)) return null;
+    const q = R.proxOf.get(t), Q = R.lt1_tiles;
+    return { max_abs: Q.max_abs[q], max_rel: Q.max_rel[q], pass: Q.pass[q] === 1 };
+  }
+  // The next recorded action after s whose L3 slot decided its start (a Load with a slot wait).
+  function nextSlotBound(R, s) {
+    if (!R.lt1) return -1;
+    let best = -1;
+    for (let g = 0; g < R.lt1_legs.rows; g++) {
+      const a = R.lt1_legs.action[g];
+      if (R.lt1_legs.slot_wait[g] > 0 && a > s && a < R.n && (best < 0 || a < best)) best = a;
+    }
+    return best;
+  }
+  // The recorded action running at cycle t (one of its legs has start <= t < finish), the latest to
+  // start: what a click on the time axis lands on. -1 when every lane is idle at t.
+  function actionAtTime(R, t) {
+    if (!R.lt1 || !R.byStart.length) return -1;
+    let lo = 0, hi = R.byStart.length - 1, at = -1;
+    while (lo <= hi) { const mid = (lo + hi) >> 1; if (R.lt1_legs.start[R.byStart[mid]] <= t) { at = mid; lo = mid + 1; } else hi = mid - 1; }
+    for (let i = at; i >= 0; i--) {
+      const g = R.byStart[i];
+      if (R.lt1_legs.finish[g] <= t) continue;      // ended (or zero-length): not running at t
+      const a = R.lt1_legs.action[g];
+      if (a < R.n) return a;
+    }
+    return -1;
+  }
+
+  return { VERSIONS, parse, tileName, position, slotAt, step, snapshot, valueAt, finalOf, snapshotsOf, legs, proximity, nextSlotBound, actionAtTime, nextIteration, nextKind, nextOnTile, nextFromLine, releaseOf, RES_RETAINED };
 })();
 </script>
 
@@ -415,7 +487,7 @@ globalThis.DflowCore = (() => {
   const tok = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
   const fmt = n => Number(n).toLocaleString("en-US");
   const EDGES = ["LOAD", "STORE", "MOVE", "WRITEBACK", "FEED", "DRAIN"];
-  let R = null, cur = 0, selected = -1, timer = null, selTile = -1, showFinal = false;
+  let R = null, cur = 0, selected = -1, timer = null, selTile = -1, showFinal = false, timeAxis = false;
 
   function fail(msg) { const e = $("error"); e.textContent = msg; e.hidden = false; }
 
@@ -468,12 +540,27 @@ globalThis.DflowCore = (() => {
     const kinds = [...new Set(R.steps.kind)].sort((a, b) => a - b);
     $("kind").innerHTML = kinds.map(k => `<option value="${k}">${esc(M.kinds[k])}</option>`).join("") + `<option value="tile">action on this tile</option>`;
     $("scrub").max = Math.max(0, R.n - 1);
+    const o = R.lt1;
+    $("lt1chip").hidden = !o;
+    $("axisgroup").hidden = !o;
+    $("lt1box").hidden = !o;
+    $("slotbound").hidden = !o;
+    if (o) {
+      $("lt1chip").textContent = `L-T1 overlay · makespan ${fmt(o.makespan)} cycles, uncalibrated · ${fmt(o.slot_bound)} slot-bound Loads (${fmt(o.slot_wait_cycles)} cycles)`;
+      $("slotbound").disabled = !o.slot_bound;
+    }
+    timeAxis = false;
+    $("axis").value = "step";
     drawRibbon();
   }
 
   // The ribbon: the whole run's iterations at each depth (complete even when steps are cut), and
   // L3 occupancy over the recorded steps.
   function drawRibbon() {
+    if (timeAxis && R.lt1) { drawTimeRibbon(); return; }
+    $("axis-start").textContent = "step 0";
+    $("axis-mid").textContent = "step (action) →";
+    $("axis-end").textContent = `step ${fmt(Math.max(0, R.actions - 1))}`;
     const cv = $("ribbon"), dpr = window.devicePixelRatio || 1, w = cv.clientWidth, h = cv.clientHeight;
     cv.width = w * dpr; cv.height = h * dpr;
     const g = cv.getContext("2d");
@@ -528,6 +615,53 @@ globalThis.DflowCore = (() => {
     g.beginPath(); g.moveTo(x(cur), 0); g.lineTo(x(cur), h); g.stroke();
     g.lineWidth = 1;
     cv._x = s => x(s); cv._lab = lab; cv._W = W; cv._N = N;
+  }
+
+  // The time axis, L-T1's: one row per process, every leg drawn where L-T1 timed it, and each
+  // slot-bound Load's wait marked before its start. Labelled L-T1 and uncalibrated (§3.7).
+  function drawTimeRibbon() {
+    const cv = $("ribbon"), dpr = window.devicePixelRatio || 1, w = cv.clientWidth, h = cv.clientHeight;
+    cv.width = w * dpr; cv.height = h * dpr;
+    const g = cv.getContext("2d");
+    g.setTransform(dpr, 0, 0, dpr, 0, 0);
+    g.clearRect(0, 0, w, h);
+    const G = R.lt1_legs, procs = R.m.processes, lab = 28, W = w - lab, T = Math.max(1, R.lt1.makespan);
+    const x = t => lab + (t / T) * W, rowH = (h - 4) / procs.length - 3;
+    g.font = `10px ${tok("--font-mono")}`;
+    g.textBaseline = "middle";
+    procs.forEach((p, k) => { g.fillStyle = tok("--muted"); g.fillText(p, 0, k * (rowH + 3) + rowH / 2); });
+    for (let i = 0; i < G.rows; i++) {
+      const p = G.proc[i];
+      if (p === 255 || p >= procs.length) continue;
+      const y = p * (rowH + 3), x0 = x(G.start[i]), x1 = x(G.finish[i]);
+      g.fillStyle = tok("--accent"); g.globalAlpha = 0.35;
+      g.fillRect(x0, y, Math.max(0.6, x1 - x0), rowH);
+      if (G.slot_wait[i] > 0) { g.globalAlpha = 0.9; g.fillStyle = tok("--bad"); g.fillRect(x(G.start[i] - G.slot_wait[i]), y + rowH - 3, Math.max(1, x(G.start[i]) - x(G.start[i] - G.slot_wait[i])), 3); }
+    }
+    g.globalAlpha = 1;
+    const mine = C.legs(R, cur);
+    if (mine.length) {
+      g.strokeStyle = tok("--ink"); g.lineWidth = 1.5;
+      g.beginPath(); g.moveTo(x(mine[0].start), 0); g.lineTo(x(mine[0].start), h); g.stroke(); g.lineWidth = 1;
+    }
+    $("axis-start").textContent = "cycle 0";
+    $("axis-mid").textContent = "L-T1 cycles (uncalibrated) →";
+    $("axis-end").textContent = `cycle ${fmt(R.lt1.makespan)}`;
+    cv._time = t => t; cv._lab = lab; cv._W = W; cv._T = T;
+  }
+
+  function renderLt1() {
+    if (!R.lt1) return;
+    const L = C.legs(R, cur), tb = $("leg-table");
+    const wait = L.reduce((a, l) => a + l.slot_wait, 0);
+    $("lt1-note").textContent = L.length
+      ? (wait ? `This Load waited ${fmt(wait)} cycles for its L3 slot to be released: the slot, not the data or a DMA lane, decided its start.` : `This action as L-T1 timed it.`)
+      : "L-T1 recorded no leg for this action.";
+    tb.tBodies[0].innerHTML = L.map(l => `<tr><td>${l.leg}</td><td>${l.process ? `${esc(l.process)} lane ${l.lane}` : "none (credit)"}</td><td>${fmt(l.start)}</td><td>${fmt(l.finish)}</td><td>${fmt(l.finish - l.start)}</td></tr>`).join("");
+    const t = selTile >= 0 ? selTile : R.steps.tile[cur], px = C.proximity(R, t);
+    $("prox-kv").innerHTML = px ? [["tile", C.tileName(R, t)], ["vs L-B", px.pass ? "within bound" : "OUT OF BOUND"],
+      ["max |a − o|", px.max_abs.toPrecision(3)], ["max relative", px.max_rel.toPrecision(3)],
+      ["bound", `${R.lt1.bound.atol} + ${R.lt1.bound.rtol}·|o|`]].map(([a, b]) => `<dt>${esc(a)}</dt><dd>${esc(b)}</dd>`).join("") : "";
   }
 
   function render() {
@@ -585,6 +719,7 @@ globalThis.DflowCore = (() => {
     $("release").disabled = C.releaseOf(R, st.residency) < 0 || C.releaseOf(R, st.residency) === s;
     renderSlot();
     renderTile();
+    renderLt1();
     $("iterbtns").innerHTML = `<label>next iteration</label>` + (pos.loops.length
       ? pos.loops.map(l => `<button data-depth="${l.depth}" title="Next ${esc(l.var)} iteration">${esc(l.var)} &gt;</button>`).join("")
       : `<span class="note">outside every loop</span>`);
@@ -736,8 +871,11 @@ globalThis.DflowCore = (() => {
   };
   $("heat").onmouseleave = () => { $("readout").textContent = ""; };
   $("slot-hist").onclick = e => { const b = e.target.closest("button[data-go]"); if (b) go(+b.dataset.go); };
+  $("axis").onchange = () => { timeAxis = $("axis").value === "time"; drawRibbon(); };
+  $("slotbound").onclick = () => go(C.nextSlotBound(R, cur));
   $("ribbon").onclick = e => {
     const cv = $("ribbon"), r = cv.getBoundingClientRect();
+    if (timeAxis && R.lt1) { go(C.actionAtTime(R, Math.round(((e.clientX - r.left - cv._lab) / cv._W) * cv._T))); return; }
     const s = Math.round(((e.clientX - r.left - cv._lab) / cv._W) * cv._N);
     go(Math.min(s, R.n - 1));
   };

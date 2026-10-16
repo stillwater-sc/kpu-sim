@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The L-T1 overlay in the domain-flow debugger** (`docs/plans/domain-flow-debugger.md` step 5, #363).
+  - `.dflow` version 3: `lt1_legs` (every action's legs as L-T1 timed them, joined on the action
+    index, with a Load's slot wait) and `lt1_tiles` (each final tile's proximity to L-B under
+    L-T1). `kpu-run --dflow` attaches it when L-T1 ran too. Versions 1 and 2 are still read.
+  - `TileCheck::per_tile`: every tile's max abs, max rel and verdict, not only the misses.
+  - L-T1's `Record::slot_wait`: what a Load's slot cost it.
+  - Viewer: a timing inspector (legs, slot wait, proximity), "next slot-bound Load", and an
+    L-T1 cycle axis drawing every leg by process, labelled uncalibrated.
+  - `dflow_check.py` adds L1-L5 (references, the join, timing and lane overlap, slot waits,
+    proximity), and D8 confines time to the overlay's tables. `tests/program/dflow/streamed_lowest.csp`
+    is the slot-wait fixture (14 slot-bound Loads, 704 cycles on kpu_s1).
 - **Tile inspection in the domain-flow debugger** (`docs/plans/domain-flow-debugger.md` step 4, #363).
   - `.dflow` version 2 records tile values: every operand's final tiles (L-B's result) always, and
     with `kpu-run --dflow-values <tiles|operand|all>` a selected tile wherever each action leaves

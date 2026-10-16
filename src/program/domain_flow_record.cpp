@@ -164,6 +164,38 @@ void write_dflow(const DFR& rec, const std::string& dir) {
         t.put("v", "f32", rec.elements);
         tables["elements"] = write_table(t, dir);
     }
+    {
+        Table t{"lt1_legs", "lt1_legs.bin", rec.legs.size(), {}};
+        using Lg = DFR::Leg;
+        t.put("action", "u64", col<std::uint64_t>(rec.legs, [](const Lg& x) { return x.action; }));
+        t.put("start", "u64", col<std::uint64_t>(rec.legs, [](const Lg& x) { return x.start; }));
+        t.put("finish", "u64", col<std::uint64_t>(rec.legs, [](const Lg& x) { return x.finish; }));
+        t.put("slot_wait", "u64", col<std::uint64_t>(rec.legs, [](const Lg& x) { return x.slot_wait; }));
+        t.put("lane", "u32", col<std::uint32_t>(rec.legs, [](const Lg& x) { return x.lane; }));
+        t.put("kind", "u8", col<std::uint8_t>(rec.legs, [](const Lg& x) { return x.kind; }));
+        t.put("proc", "u8", col<std::uint8_t>(rec.legs, [](const Lg& x) { return x.proc; }));
+        t.put("leg", "u8", col<std::uint8_t>(rec.legs, [](const Lg& x) { return x.leg; }));
+        tables["lt1_legs"] = write_table(t, dir);
+    }
+    {
+        Table t{"lt1_tiles", "lt1_tiles.bin", rec.proximity.size(), {}};
+        using Px = DFR::Proximity;
+        t.put("max_abs", "f64", col<double>(rec.proximity, [](const Px& x) { return x.max_abs; }));
+        t.put("max_rel", "f64", col<double>(rec.proximity, [](const Px& x) { return x.max_rel; }));
+        t.put("tile", "u32", col<std::uint32_t>(rec.proximity, [](const Px& x) { return x.tile; }));
+        t.put("pass", "u8", col<std::uint8_t>(rec.proximity, [](const Px& x) { return x.pass ? 1 : 0; }));
+        tables["lt1_tiles"] = write_table(t, dir);
+    }
+    if (rec.lt1) {
+        json lanes = json::object();
+        for (const auto& [p, n] : rec.lt1_lanes) lanes[p] = n;
+        m["lt1"] = json{{"level", "L-T1"}, {"run_id", rec.lt1_run_id}, {"makespan", rec.lt1_makespan},
+                        {"lanes", lanes}, {"slot_bound", rec.lt1_slot_bound},
+                        {"slot_wait_cycles", rec.lt1_slot_wait_cycles}, {"uncalibrated", true},
+                        {"bound", json{{"atol", rec.lt1_atol}, {"rtol", rec.lt1_rtol}}}, {"pass", rec.lt1_pass}};
+    } else {
+        m["lt1"] = nullptr;
+    }
     m["tables"] = tables;
 
     std::ofstream out(dir + "/manifest.json", std::ios::binary);
@@ -182,8 +214,8 @@ DFR read_dflow(const std::string& dir) {
     try {
         if (m.at("format").get<std::string>() != "kpu-dflow") throw RecordError("record: " + dir + " is not a .dflow bundle");
         const auto version = m.at("version").get<std::uint32_t>();
-        if (version != 1 && version != kDflowVersion)
-            throw RecordError("record: .dflow version " + m.at("version").dump() + " (this reader reads 1 and " +
+        if (version < 1 || version > kDflowVersion)
+            throw RecordError("record: .dflow version " + m.at("version").dump() + " (this reader reads 1 to " +
                               std::to_string(kDflowVersion) + ")");
         DFR rec;
         rec.run_id = m.at("run_id").get<std::string>();
@@ -326,6 +358,41 @@ DFR read_dflow(const std::string& dir) {
             {
                 auto [t, blob] = table("elements", n);
                 rec.elements = read_col<float>(t, blob, "v", "f32", n);
+            }
+        }
+        if (version >= 3 && !m.at("lt1").is_null()) {
+            const json& o = m.at("lt1");
+            rec.lt1 = true;
+            rec.lt1_run_id = o.at("run_id").get<std::string>();
+            rec.lt1_makespan = o.at("makespan").get<std::uint64_t>();
+            rec.lt1_slot_bound = o.at("slot_bound").get<std::uint64_t>();
+            rec.lt1_slot_wait_cycles = o.at("slot_wait_cycles").get<std::uint64_t>();
+            for (const auto& [p, n] : o.at("lanes").items()) rec.lt1_lanes.emplace_back(p, n.get<std::uint32_t>());
+            rec.lt1_atol = o.at("bound").at("atol").get<double>();
+            rec.lt1_rtol = o.at("bound").at("rtol").get<double>();
+            rec.lt1_pass = o.at("pass").get<bool>();
+        }
+        if (version >= 3) {
+            {
+                auto [t, blob] = table("lt1_legs", n);
+                auto action = read_col<std::uint64_t>(t, blob, "action", "u64", n);
+                auto start = read_col<std::uint64_t>(t, blob, "start", "u64", n);
+                auto finish = read_col<std::uint64_t>(t, blob, "finish", "u64", n);
+                auto wait = read_col<std::uint64_t>(t, blob, "slot_wait", "u64", n);
+                auto lane = read_col<std::uint32_t>(t, blob, "lane", "u32", n);
+                auto kind = read_col<std::uint8_t>(t, blob, "kind", "u8", n);
+                auto proc = read_col<std::uint8_t>(t, blob, "proc", "u8", n);
+                auto leg = read_col<std::uint8_t>(t, blob, "leg", "u8", n);
+                for (std::size_t i = 0; i < n; ++i)
+                    rec.legs.push_back({action[i], start[i], finish[i], wait[i], lane[i], kind[i], proc[i], leg[i]});
+            }
+            {
+                auto [t, blob] = table("lt1_tiles", n);
+                auto max_abs = read_col<double>(t, blob, "max_abs", "f64", n);
+                auto max_rel = read_col<double>(t, blob, "max_rel", "f64", n);
+                auto tile = read_col<std::uint32_t>(t, blob, "tile", "u32", n);
+                auto pass = read_col<std::uint8_t>(t, blob, "pass", "u8", n);
+                for (std::size_t i = 0; i < n; ++i) rec.proximity.push_back({tile[i], max_abs[i], max_rel[i], pass[i] != 0});
             }
         }
         return rec;

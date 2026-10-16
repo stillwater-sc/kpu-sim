@@ -27,7 +27,8 @@ Invariants (the plan's §6 numbering):
                               are the run's; at each depth iterations are disjoint, ordered and
                               nested in one iteration of the depth above; with every step
                               recorded, each iteration's counts and peaks are its steps'
-    D8 no time at L-B         no time column (f64, or a t_* name) in any table
+    D8 no time at L-B         no time column (f64, or a t_*, start or finish name) in any table but
+                              the L-T1 overlay's (version 3), which is L-T1's time, not L-B's
     D9 placement              a step has an address exactly when it names a residency, and it is
                               its residency's; after every step each slot holds at most one open
                               or retained residency
@@ -52,6 +53,21 @@ Version 2 adds tile values (snapshots and their float32 elements):
                               when nothing was cut and the tile was not retained (L-B's DRAM is
                               its result)
 
+Version 3 adds the L-T1 overlay (lt1_legs, lt1_tiles; the manifest's lt1 says whether it ran):
+    L1 references             a leg's action is an action of the run, its kind and process exist,
+                              its lane is one of its process's lanes, and a credit action (Release,
+                              Inherit, Retain) has no process; a proximity row's tile exists. With
+                              no overlay, both tables are empty
+    L2 the join               a leg's kind is its action's kind; every recorded action has legs,
+                              numbered 0, 1, ... in order
+    L3 timing                 start <= finish <= the makespan, which is the latest finish; the legs
+                              on one process lane never overlap
+    L4 slot waits             the legs' slot waits add up to the manifest's slot_wait_cycles, the
+                              legs with one count slot_bound, only Loads wait on a slot, and no
+                              wait is longer than the cycles before the Load's start
+    L5 proximity              one row per tile of every operand; the manifest's pass is every
+                              tile's; the errors are finite and non-negative
+
 D1 (the record is the oracle's run) and D7 (the viewer never executes) are properties of the code
 that writes and reads the bundle, not of its contents.
 
@@ -67,7 +83,7 @@ import json
 import sys
 from pathlib import Path
 
-VERSIONS = (1, 2)
+VERSIONS = (1, 2, 3)
 NONE8, NONE32, NONE64 = 0xFF, 0xFFFFFFFF, 0xFFFFFFFFFFFFFFFF
 DTYPES = {"u8": ("B", 1), "u16": ("H", 2), "u32": ("I", 4), "u64": ("Q", 8), "i64": ("q", 8),
           "f32": ("f", 4), "f64": ("d", 8)}
@@ -94,6 +110,13 @@ SCHEMA_V2 = {
     "snapshots": {"step": "u64", "first": "u64", "tile": "u32", "height": "u32", "width": "u32", "chan": "u8"},
     "elements": {"v": "f32"},
 }
+SCHEMA_V3 = {
+    "lt1_legs": {"action": "u64", "start": "u64", "finish": "u64", "slot_wait": "u64", "lane": "u32",
+                 "kind": "u8", "proc": "u8", "leg": "u8"},
+    "lt1_tiles": {"max_abs": "f64", "max_rel": "f64", "tile": "u32", "pass": "u8"},
+}
+CREDIT_KINDS = {7, 8, 9}                               # RELEASE, INHERIT, RETAIN
+LOAD_KIND = 0
 # The channel each kind leaves its tile in (enum Action::Kind, in order); None: no snapshot.
 LANDS = [1, 0, 2, 1, 3, 2, 3, None, 1, None]   # LOAD l3, STORE dram, MOVE l2, WRITEBACK l3, FEED cf,
                                                 # DRAIN l2, CALL cf, RELEASE, INHERIT l3, RETAIN
@@ -156,7 +179,13 @@ def load(path):
                 or not (v.get("cut_at") is None or (type(v.get("cut_at")) is int and v["cut_at"] >= 0)):
             raise Unreadable("values: missing or malformed (format float32, selected, finals, cut_at)")
     tables = {}
-    schemas = dict(SCHEMA, **(SCHEMA_V2 if m["version"] >= 2 else {}))
+    if m["version"] >= 3:
+        o = m.get("lt1")
+        if o is not None and (not isinstance(o, dict) or not isinstance(o.get("lanes"), dict)
+                              or not all(isinstance(o.get(k), int) and o[k] >= 0 for k in ("makespan", "slot_bound", "slot_wait_cycles"))
+                              or not isinstance(o.get("pass"), bool)):
+            raise Unreadable("lt1: malformed (lanes, makespan, slot_bound, slot_wait_cycles, pass)")
+    schemas = dict(SCHEMA, **(SCHEMA_V2 if m["version"] >= 2 else {}), **(SCHEMA_V3 if m["version"] >= 3 else {}))
     for name, schema in schemas.items():
         t = m["tables"].get(name)
         if not isinstance(t, dict):
@@ -213,8 +242,10 @@ def check(m, T, limit=20):
 
     # D8: no time at L-B.
     for name, t in T.items():
+        if name.startswith("lt1_"):
+            continue                                    # the L-T1 overlay: L-T1's time
         for col, dtype in t["dtypes"].items():
-            if dtype == "f64" or col.startswith("t_"):
+            if dtype == "f64" or col.startswith("t_") or col in ("start", "finish"):
                 bad("D8", f"{name}.{col} is a time column ({dtype}); L-B has no time")
 
     # D2: one step, one action.
@@ -404,7 +435,90 @@ def check(m, T, limit=20):
 
     if m["version"] >= 2:
         check_values(m, T, bad, nr)
+    if m["version"] >= 3:
+        check_lt1(m, T, bad)
     return out, count
+
+
+def check_lt1(m, T, bad):
+    G, Q, S, TL = T["lt1_legs"], T["lt1_tiles"], T["steps"], T["tiles"]
+    o, n, actions = m["lt1"], S["rows"], m["totals"]["actions"]
+    if o is None:
+        if G["rows"] or Q["rows"]:
+            bad("L1", f"no L-T1 overlay, but {G['rows']} legs and {Q['rows']} proximity rows")
+        return
+    procs, kinds = m["processes"], m["kinds"]
+    legs_of = {}
+    busy = {}
+    latest = 0
+    waits = waited = 0
+    for g in range(G["rows"]):
+        a, k, p, lane = G["action"][g], G["kind"][g], G["proc"][g], G["lane"][g]
+        st, fi, w = G["start"][g], G["finish"][g], G["slot_wait"][g]
+        if a >= actions:
+            bad("L1", f"leg {g} names action {a}; the run has {actions}")
+            continue
+        if k >= len(kinds):
+            bad("L1", f"leg {g} has kind {k}; there are {len(kinds)}")
+            continue
+        if (p == NONE8) != (k in CREDIT_KINDS):
+            bad("L1", f"leg {g} ({kinds[k]}) {'has no' if p == NONE8 else 'has a'} process")
+        elif p != NONE8:
+            if p >= len(procs):
+                bad("L1", f"leg {g} names process {p}; there are {len(procs)}")
+            elif lane >= o["lanes"].get(procs[p], 0):
+                bad("L1", f"leg {g} is on {procs[p]} lane {lane}; it has {o['lanes'].get(procs[p], 0)}")
+            elif fi > st:
+                busy.setdefault((p, lane), []).append((st, fi, g))
+        if a < n and S["kind"][a] != k:
+            bad("L2", f"leg {g} is a {kinds[k]}; action {a} is a {kinds[S['kind'][a]] if S['kind'][a] < len(kinds) else S['kind'][a]}")
+        legs_of.setdefault(a, []).append(G["leg"][g])
+        if st > fi:
+            bad("L3", f"leg {g} starts at {st}, after it finishes at {fi}")
+        latest = max(latest, fi)
+        if w:
+            waits += w
+            waited += 1
+            if w > st:
+                bad("L4", f"leg {g} waits {w} cycles on its slot but starts at cycle {st}")
+            if k != LOAD_KIND:
+                bad("L4", f"leg {g} ({kinds[k]}) waits {w} cycles on a slot; only a Load waits on its slot")
+    for a in range(n):
+        if a not in legs_of and m.get("refusal") is None:
+            bad("L2", f"action {a} has no L-T1 leg")
+    for a, ls in legs_of.items():
+        if ls != list(range(len(ls))):
+            bad("L2", f"action {a}'s legs are numbered {ls}")
+    if latest != o["makespan"]:
+        bad("L3", f"the latest leg finishes at {latest}; the makespan is {o['makespan']}")
+    for (p, lane), iv in busy.items():
+        iv.sort()
+        for (s0, f0, g0), (s1, f1, g1) in zip(iv, iv[1:]):
+            if s1 < f0:
+                bad("L3", f"{procs[p]} lane {lane}: legs {g0} [{s0}, {f0}) and {g1} [{s1}, {f1}) overlap")
+    if waits != o["slot_wait_cycles"] or waited != o["slot_bound"]:
+        bad("L4", f"the legs wait {waits} cycles in {waited} Loads; the manifest says {o['slot_wait_cycles']} in {o['slot_bound']}")
+    ops = m["operands"]
+    expected = sum(-(-x["rows"] // x["tile_rows"]) * -(-x["cols"] // x["tile_cols"]) for x in ops)
+    if Q["rows"] != expected:
+        bad("L5", f"{Q['rows']} proximity rows; the operands have {expected} tiles")
+    seen = set()
+    all_pass = True
+    for q in range(Q["rows"]):
+        t = Q["tile"][q]
+        if t >= TL["rows"]:
+            bad("L1", f"proximity row {q} names tile {t}; there are {TL['rows']}")
+            continue
+        if t in seen:
+            bad("L5", f"tile {t} has two proximity rows")
+        seen.add(t)
+        for c in ("max_abs", "max_rel"):
+            v = Q[c][q]
+            if not (v == v and v >= 0.0 and v != float("inf")):
+                bad("L5", f"proximity row {q}'s {c} is {v}")
+        all_pass = all_pass and Q["pass"][q] == 1
+    if all_pass != o["pass"]:
+        bad("L5", f"the manifest says pass is {o['pass']}; the tiles say {all_pass}")
 
 
 def check_values(m, T, bad, nr):
@@ -488,7 +602,7 @@ def main(argv=None):
             print(f"dflow_check: cannot read {args.bundle}: {e}", file=sys.stderr)
         return 2
     violations, count = check(m, tables)
-    invs = ["D2", "D3", "D4", "D5", "D6", "D8", "D9", "REF", "V1", "V2", "V3", "V4", "V5"]
+    invs = ["D2", "D3", "D4", "D5", "D6", "D8", "D9", "REF", "V1", "V2", "V3", "V4", "V5", "L1", "L2", "L3", "L4", "L5"]
     if args.json:
         print(json.dumps({"ok": not violations, "steps": tables["steps"]["rows"],
                           "actions": m["totals"]["actions"], "cut": m["cut"],

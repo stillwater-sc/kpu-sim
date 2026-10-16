@@ -6,8 +6,8 @@ is not a checker.
 
 Usage: python3 test_dflow_check.py <clean-bundle.dflow>
 
-The clean bundle must be version 2 with step snapshots (kpu-run --dflow-values all), so the value
-invariants are exercised too.
+The clean bundle must be version 3 with step snapshots and an L-T1 overlay (kpu-run --level
+block-sequential --dflow-values all), so the value and overlay invariants are exercised too.
 
 SPDX-License-Identifier: MIT
 Copyright (c) 2024-2025 Stillwater Supercomputing, Inc.
@@ -25,7 +25,8 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 CHECK = HERE / "dflow_check.py"
 BUNDLE = None
-FMT = {"u8": ("<B", 1), "u16": ("<H", 2), "u32": ("<I", 4), "u64": ("<Q", 8), "i64": ("<q", 8), "f32": ("<f", 4)}
+FMT = {"u8": ("<B", 1), "u16": ("<H", 2), "u32": ("<I", 4), "u64": ("<Q", 8), "i64": ("<q", 8), "f32": ("<f", 4),
+       "f64": ("<d", 8)}
 OPENS, CLOSES = 1, 2
 STORE_KIND = 1                                       # enum Action::Kind
 NONE64 = 0xFFFFFFFFFFFFFFFF
@@ -240,7 +241,7 @@ class DflowCheckSelfTest(unittest.TestCase):
         return self.b.find(table, pred)
 
     def test_values_are_exercised(self):
-        self.assertEqual(self.b.manifest["version"], 2)
+        self.assertGreaterEqual(self.b.manifest["version"], 2)
         self.assertTrue(self.b.manifest["values"]["selected"])
         self.step_snapshot(STORE_KIND)
 
@@ -306,6 +307,83 @@ class DflowCheckSelfTest(unittest.TestCase):
         self.b.manifest["values"]["format"] = "bfloat16"
         self.b.save_manifest()
         self.assertUnreadable()
+
+    # -- L1-L5: the L-T1 overlay (version 3) ---------------------------------
+    def leg_of(self, pred):
+        return self.b.find("lt1_legs", pred)
+
+    def test_overlay_is_exercised(self):
+        self.assertEqual(self.b.manifest["version"], 3)
+        self.assertIsNotNone(self.b.manifest["lt1"])
+        self.assertGreater(self.b.rows("lt1_legs"), self.b.rows("steps"))     # a Store has two legs
+
+    def test_l1_leg_on_a_lane_its_process_lacks(self):
+        g = self.leg_of(lambda g: self.b.get("lt1_legs", "proc", g) == 3)    # cf
+        self.b.set("lt1_legs", "lane", g, 99)
+        self.assertFails("L1", "lane 99")
+
+    def test_l1_credit_action_with_a_process(self):
+        g = self.leg_of(lambda g: self.b.get("lt1_legs", "kind", g) == 7)    # RELEASE
+        self.b.set("lt1_legs", "proc", g, 0)
+        self.assertFails("L1", "has a process")
+
+    def test_l2_leg_of_another_kind(self):
+        g = self.leg_of(lambda g: self.b.get("lt1_legs", "kind", g) == 6)    # CALL
+        self.b.set("lt1_legs", "kind", g, 4)                                  # FEED
+        self.assertFails("L2", "is a FEED")
+
+    def test_l2_action_without_a_leg(self):
+        a = self.b.get("lt1_legs", "action", 0)
+        for g in range(self.b.rows("lt1_legs")):
+            if self.b.get("lt1_legs", "action", g) == a:
+                self.b.set("lt1_legs", "action", g, a + 1)
+        self.assertFails("L2", f"action {a} has no L-T1 leg")
+
+    def test_l3_legs_overlap_on_a_lane(self):
+        cf = sorted((self.b.get("lt1_legs", "start", g), g) for g in range(self.b.rows("lt1_legs"))
+                    if self.b.get("lt1_legs", "proc", g) == 3 and self.b.get("lt1_legs", "lane", g) == 0)
+        (_, g0), (s1, _) = cf[0], cf[1]
+        self.b.set("lt1_legs", "finish", g0, s1 + 10)
+        self.assertFails("L3", "overlap")
+
+    def test_l3_makespan_not_the_latest_finish(self):
+        self.b.manifest["lt1"]["makespan"] += 5
+        self.b.save_manifest()
+        self.assertFails("L3", "makespan")
+
+    def test_l4_slot_wait_on_a_non_load(self):
+        g = self.leg_of(lambda g: self.b.get("lt1_legs", "kind", g) == 2)    # MOVE
+        self.b.set("lt1_legs", "slot_wait", g, 7)
+        self.assertFails("L4", "only a Load waits")
+
+    def test_l4_waits_do_not_add_up(self):
+        g = self.leg_of(lambda g: self.b.get("lt1_legs", "kind", g) == 0)    # LOAD
+        self.b.set("lt1_legs", "slot_wait", g, self.b.get("lt1_legs", "slot_wait", g) + 3)
+        self.assertFails("L4", "the manifest says")
+
+    def test_l4_wait_longer_than_the_start(self):
+        g = self.leg_of(lambda g: self.b.get("lt1_legs", "kind", g) == 0)    # LOAD
+        self.b.set("lt1_legs", "slot_wait", g, self.b.get("lt1_legs", "start", g) + 1)
+        self.assertFails("L4", "but starts at cycle")
+
+    def test_l5_pass_disagrees_with_the_tiles(self):
+        self.b.set("lt1_tiles", "pass", 0, 0)
+        self.assertFails("L5", "pass is True")
+
+    def test_l5_a_missing_proximity_row(self):
+        self.b.manifest["tables"]["lt1_tiles"]["rows"] -= 1
+        self.b.save_manifest()
+        self.assertFails("L5", "proximity rows")
+
+    def test_l1_overlay_rows_without_an_overlay(self):
+        self.b.manifest["lt1"] = None
+        self.b.save_manifest()
+        self.assertFails("L1", "no L-T1 overlay")
+
+    def test_d8_time_outside_the_overlay(self):
+        self.b.manifest["tables"]["residency"]["columns"].append({"name": "start", "dtype": "u64", "offset": 0})
+        self.b.save_manifest()
+        self.assertFails("D8", "residency.start")
 
     # -- unreadable ---------------------------------------------------------
     def test_malformed_manifest_is_unreadable(self):

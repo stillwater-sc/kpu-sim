@@ -1,0 +1,17 @@
+csp 1.0
+// A stream that reuses its L3 slots early: two tiles a step, five slots, placed lowest-first, so
+// each step's Loads wait on the Releases of the step before (l3-placement-at-lb step 5a). The
+// domain-flow L-T1 overlay's fixture for slot waits (domain-flow-debugger step 5).
+program streamed machine flat(l3 = 5, place = lowest) {
+  tensor A[32,256] tile 32x32 in;
+  tensor B[256,32] tile 32x32 in;
+  tensor C[32,32] tile 32x32 out;
+  acc C[0, 0] in fabric {
+    for k in 0..8 {
+      resident A[0, k], B[k, 0];
+      call gemm(A[0, k], B[k, 0]) +-> C[0, 0];
+      release A[0, k], B[k, 0];
+    }
+  }
+  store C[0, 0];
+}

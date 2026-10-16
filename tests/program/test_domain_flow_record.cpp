@@ -8,6 +8,8 @@
 //   - A program L-B refuses is recorded up to the refusal, which the record names.
 //   - Values (step 4): every operand's final tile values are L-B's result, bit for bit; a selected
 //     tile is recorded wherever each action leaves it; a byte cap stops them and says where.
+//   - The L-T1 overlay (step 5): L-T1's legs joined on the action, every slot wait a Load's and
+//     adding up to L-T1's, and each final tile's proximity to L-B (tile_check, per tile).
 //
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2024-2025 Stillwater Supercomputing, Inc.
@@ -17,6 +19,7 @@
 #include <catch2/matchers/catch_matchers_string.hpp>
 
 #include <sw/kpu/program/driver/csp_step.hpp>
+#include <sw/kpu/program/platform/deployment_json.hpp>
 #include <sw/kpu/program/record/domain_flow_record.hpp>
 
 #include <cstring>
@@ -370,4 +373,110 @@ TEST_CASE("dflow: the reader refuses what is not a version-1 bundle", "[dflow][r
     CHECK_THROWS_WITH(record::read_dflow(dir.string()), ContainsSubstring("version 99"));
     CHECK_THROWS_AS(record::read_dflow((dir / "missing").string()), record::RecordError);
     std::filesystem::remove_all(dir);
+}
+
+namespace {
+
+// A program's record with its L-T1 overlay, on kpu_s1's lanes (where a slot can decide a start).
+struct Overlaid {
+    DomainFlowRecord rec;
+    driver::CspLevelOutcome lt1;
+};
+
+Overlaid overlaid(const std::string& text) {
+    const lang::Program ast = lang::parse(text);
+    const auto spec = platform::read_spec_file("tests/program/deploy/kpu_s1.json");
+    Recorded r = record_of(text);
+    Overlaid out;
+    out.lt1 = driver::csp_run_level(driver::ExecutionLevel::BlockSequential, ast, &spec.device(0), driver::csp_inputs(ast));
+    out.rec = std::move(r.rec);
+    record::attach_lt1(out.rec, out.lt1, *r.ref.values, "test");
+    return out;
+}
+
+}  // namespace
+
+TEST_CASE("dflow: the L-T1 overlay joins L-T1's legs on the action", "[dflow][record][lt1]") {
+    for (const char* name : kPrograms) {
+        CAPTURE(name);
+        const Overlaid o = overlaid(slurp(std::string("tests/program/corpus/") + name));
+        REQUIRE(o.rec.lt1);
+        CHECK(o.rec.legs.size() == o.lt1.records.size());
+        CHECK(o.rec.lt1_makespan == o.lt1.makespan);
+        std::vector<std::size_t> legs(o.rec.actions, 0);
+        std::uint64_t latest = 0;
+        for (const auto& l : o.rec.legs) {
+            REQUIRE(l.action < o.rec.actions);
+            CHECK(l.kind == o.rec.steps.at(l.action).kind);      // the join: the same action
+            CHECK(l.leg == legs[l.action]++);                    // legs numbered in order
+            CHECK(l.start <= l.finish);
+            latest = std::max(latest, l.finish);
+        }
+        for (std::size_t a = 0; a < legs.size(); ++a) CHECK(legs[a] >= 1);
+        CHECK(latest == o.rec.lt1_makespan);
+        // L-T1 refines L-B: every final tile within the bound (bit-identical by construction).
+        CHECK(o.rec.lt1_pass);
+        std::size_t tiles = 0;
+        for (const auto& op : o.rec.operands) tiles += ((op.rows + op.tile_rows - 1) / op.tile_rows) * ((op.cols + op.tile_cols - 1) / op.tile_cols);
+        CHECK(o.rec.proximity.size() == tiles);
+        for (const auto& p : o.rec.proximity) {
+            CHECK(p.pass);
+            CHECK(p.max_abs == 0.0);
+        }
+    }
+}
+
+TEST_CASE("dflow: the overlay's slot waits are a Load's, and add up to L-T1's", "[dflow][record][lt1]") {
+    const Overlaid o = overlaid(slurp("tests/program/dflow/streamed_lowest.csp"));
+    REQUIRE(o.rec.lt1_slot_bound > 0);
+    std::uint64_t waits = 0, waited = 0;
+    for (const auto& l : o.rec.legs)
+        if (l.slot_wait) {
+            CHECK(l.kind == static_cast<std::uint8_t>(csp::Action::Kind::Load));
+            waits += l.slot_wait;
+            ++waited;
+        }
+    CHECK(waits == o.rec.lt1_slot_wait_cycles);
+    CHECK(waited == o.rec.lt1_slot_bound);
+    CHECK(o.rec.lt1_slot_wait_cycles == 704);           // l3-placement-at-lb step 5a's measurement
+}
+
+TEST_CASE("dflow: the overlay round-trips", "[dflow][record][lt1]") {
+    const Overlaid o = overlaid(slurp("tests/program/dflow/streamed_lowest.csp"));
+    const auto dir = scratch("lt1");
+    record::write_dflow(o.rec, dir.string());
+    const DomainFlowRecord b = record::read_dflow(dir.string());
+    REQUIRE(b.lt1);
+    CHECK((b.lt1_makespan == o.rec.lt1_makespan && b.lt1_slot_bound == o.rec.lt1_slot_bound &&
+           b.lt1_slot_wait_cycles == o.rec.lt1_slot_wait_cycles && b.lt1_pass == o.rec.lt1_pass));
+    CHECK(b.lt1_lanes == o.rec.lt1_lanes);
+    REQUIRE(b.legs.size() == o.rec.legs.size());
+    for (std::size_t i = 0; i < b.legs.size(); ++i) {
+        const auto &x = o.rec.legs[i], &y = b.legs[i];
+        CHECK((x.action == y.action && x.start == y.start && x.finish == y.finish && x.slot_wait == y.slot_wait &&
+               x.lane == y.lane && x.kind == y.kind && x.proc == y.proc && x.leg == y.leg));
+    }
+    REQUIRE(b.proximity.size() == o.rec.proximity.size());
+    for (std::size_t i = 0; i < b.proximity.size(); ++i)
+        CHECK((b.proximity[i].tile == o.rec.proximity[i].tile && b.proximity[i].pass == o.rec.proximity[i].pass));
+    // A record without an overlay says so, and reads back without one.
+    const DomainFlowRecord plain = record_of(slurp("tests/program/corpus/matmul_48x48x48_t16.csp")).rec;
+    record::write_dflow(plain, dir.string());
+    CHECK_FALSE(record::read_dflow(dir.string()).lt1);
+    std::filesystem::remove_all(dir);
+}
+
+TEST_CASE("tile_check reports every tile's proximity, not only the misses", "[dflow][tile_check]") {
+    TensorOperand a("X", 4, 4, 2, 2), o("X", 4, 4, 2, 2);
+    for (std::size_t i = 0; i < 16; ++i) a.values[i] = o.values[i] = 1.0f + static_cast<float>(i);
+    a.at(3, 3) += 1.0f;                                 // one element of tile (1,1) out of bound
+    const TileCheck c = check_tiles(a, o, ElementFormat{}, Proximity{});
+    REQUIRE(c.per_tile.size() == 4);
+    for (const auto& t : c.per_tile) {
+        CAPTURE(t.tile.to_string());
+        const bool off = t.tile.ti == 1 && t.tile.tj == 1;
+        CHECK(t.pass == !off);
+        CHECK((t.max_abs > 0.0) == off);
+    }
+    CHECK(c.misses.size() == 1);
 }

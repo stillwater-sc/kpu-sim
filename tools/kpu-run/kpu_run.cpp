@@ -72,6 +72,9 @@ kpu-run runs a program; it does not write one. kpu-csp-gen writes CSP programs.
                             or "all". Every operand's final values are recorded regardless
   --dflow-values-cap <MiB>  the values' byte cap (default 64): finals first, then snapshots
                             until the cap, and the record says where they stopped
+                            When L-T1 runs too (--level all, or block-sequential), the record
+                            carries its overlay: every action's legs in L-T1 cycles, and each
+                            final tile's proximity to L-B
   --timeline <file.json>    the L-T1 run as Chrome-trace intervals, one per leg
   --step                    single-step (L-B: one action per step; L-T1: one record)
   --step-limit <n>          stop after n steps, 0 = all      (default 40)
@@ -253,10 +256,14 @@ int run_csp_program(const std::vector<std::string>& a, const std::string& path) 
     csp::lang::Validation validation;
     driver::CspReference reference;
     std::optional<record::DomainFlowRecorder> dflow;
-    auto write_dflow_bundle = [&](const std::string& run_id, const TileProgram* finals) {
+    auto write_dflow_bundle = [&](const std::string& run_id, const TileProgram* finals,
+                                  const CspLevelOutcome* lt1 = nullptr, const std::string& lt1_id = "") {
         try {
             record::DomainFlowRecord rec = dflow->finish(finals);
             rec.run_id = run_id;
+            // The L-T1 overlay, when L-T1 ran too: its legs joined on the action, and its values
+            // checked per tile against L-B's (domain-flow step 5).
+            if (lt1 && finals) record::attach_lt1(rec, *lt1, *finals, lt1_id);
             record::write_dflow(rec, dflow_path);
             std::cout << "wrote  " << dflow_path << "  (" << rec.steps.size() << " of " << rec.actions
                       << " steps, " << rec.residencies.size() << " residencies, " << rec.iterations.size()
@@ -264,6 +271,7 @@ int run_csp_program(const std::vector<std::string>& a, const std::string& path) 
                       << (rec.refusal ? "; L-B refused action " + std::to_string(rec.refusal->action) : "")
                       << "; " << rec.snapshots.size() << " tile values"
                       << (rec.values_cut_at ? ", cut at the cap at action " + std::to_string(*rec.values_cut_at) : "")
+                      << (rec.lt1 ? "; L-T1 overlay, " + std::to_string(rec.legs.size()) + " legs" : "")
                       << ")\n";
             return true;
         } catch (const std::exception& e) {
@@ -313,10 +321,16 @@ int run_csp_program(const std::vector<std::string>& a, const std::string& path) 
     }
     // --dflow: the domain-flow record of the oracle's run (domain-flow step 2).
     if (dflow) {
-        std::string run_id;
-        for (std::size_t li = 0; li < outcomes.size(); ++li)
+        std::string run_id, lt1_id;
+        const CspLevelOutcome* lt1 = nullptr;
+        for (std::size_t li = 0; li < outcomes.size(); ++li) {
             if (outcomes[li].level == ExecutionLevel::Behavioral) run_id = run_ids[li];
-        if (!write_dflow_bundle(run_id, reference.values ? &*reference.values : nullptr)) return 2;
+            if (outcomes[li].level == ExecutionLevel::BlockSequential && !outcomes[li].skipped) {
+                lt1 = &outcomes[li];
+                lt1_id = run_ids[li];
+            }
+        }
+        if (!write_dflow_bundle(run_id, reference.values ? &*reference.values : nullptr, lt1, lt1_id)) return 2;
     }
     CspRunResult res;
     res.validation = validation;

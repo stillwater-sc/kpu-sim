@@ -94,6 +94,7 @@ public:
         Proc proc = Proc::Cf;
         std::size_t lane = 0;
         Cycle start = 0, finish = 0;
+        Cycle slot_wait = 0;            // a Load whose slot decided its start: what the wait cost
     };
 
     // One residency's L3 slot: held from its credit to its Release (a retained one: to the end).
@@ -164,6 +165,7 @@ public:
                 // a copy still held the same way).
                 Cycle ready = std::max(get(dram_ready_, k), get(released_, k));
                 const Cycle credit = take_slot(a);
+                Cycle slot_wait = 0;
                 if (credit > ready) {
                     // Every other bound on the start: a lane free, and in-order issue.
                     const auto& lanes_free = lane_free_[Proc::Dma];
@@ -172,11 +174,13 @@ public:
                     if (credit > other) {
                         ++st_.slot_bound;
                         st_.slot_wait_cycles += credit - other;
+                        slot_wait = credit - other;
                     }
                     ready = credit;
                     ++st_.credit_stalls;                    // the data was ready; the slot was not
                 }
                 const Cycle f = run(Proc::Dma, ready, transfer(Proc::Dma, bytes), a);
+                records_.back().slot_wait = slot_wait;
                 Residency& r = residency_[k];
                 r = Residency{};
                 r.current = f;
