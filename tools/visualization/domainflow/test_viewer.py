@@ -49,7 +49,12 @@ for (const s of JSON.parse(stepsArg)) {
   for (let sl = 0; sl < R.cap; sl++) slots.push(C.slotAt(R, sl, s));
   const t = R.steps.tile[s], val = v => v && { k: v.k, step: v.step, chan: v.chan, h: v.h, w: v.w, head: Array.from(v.data.slice(0, 4)), n: v.data.length };
   out.steps[s] = { step: C.step(R, s), position: C.position(R, s), slots,
-                   value: R.snap ? val(C.valueAt(R, t, s)) : null, final: R.snap ? val(C.finalOf(R, t)) : null };
+                   value: R.snap ? val(C.valueAt(R, t, s)) : null, final: R.snap ? val(C.finalOf(R, t)) : null,
+                   legs: C.legs(R, s), proximity: C.proximity(R, t), nextSlotBound: C.nextSlotBound(R, s) };
+}
+if (R.lt1) {
+  out.atTime = {};
+  for (const t of [0, Math.floor(R.lt1.makespan / 3), Math.floor(R.lt1.makespan / 2), R.lt1.makespan]) out.atTime[t] = C.actionAtTime(R, t);
 }
 process.stdout.write(JSON.stringify(out));
 """
@@ -204,6 +209,36 @@ class ViewerTest(unittest.TestCase):
                     # The tile inspector: the step tile's value after step s, and its final value.
                     if m["version"] >= 2:
                         self.assertEqual((v["value"], v["final"]), self.expected_values(T, m, S["tile"][s], s))
+                    # The L-T1 overlay: this action's legs, the tile's proximity, the next slot wait.
+                    if m["version"] >= 3 and m["lt1"]:
+                        self.assertEqual((v["legs"], v["proximity"], v["nextSlotBound"]),
+                                         self.expected_lt1(T, m, S["tile"][s], s, n))
+                    else:
+                        self.assertEqual((v["legs"], v["proximity"], v["nextSlotBound"]), ([], None, -1))
+                if m["version"] >= 3 and m["lt1"]:
+                    G = T["lt1_legs"]
+                    for t, a in got["atTime"].items():
+                        cand = [(G["start"][g], g) for g in range(G["rows"]) if G["start"][g] <= int(t) and G["action"][g] < n]
+                        want = G["action"][max(cand)[1]] if cand else -1
+                        # Ties on the start cycle: any action starting at that cycle is right.
+                        if cand and a != want:
+                            starts = {G["action"][g] for st, g in cand if st == max(cand)[0]}
+                            self.assertIn(a, starts, f"action at cycle {t}")
+                        else:
+                            self.assertEqual(a, want, f"action at cycle {t}")
+
+    def expected_lt1(self, T, m, t, s, n):
+        G, Q = T["lt1_legs"], T["lt1_tiles"]
+        legs = sorted((G["leg"][g], g) for g in range(G["rows"]) if G["action"][g] == s)
+        out = [{"leg": G["leg"][g], "process": None if G["proc"][g] == NONE8 else m["processes"][G["proc"][g]],
+                "lane": G["lane"][g], "start": G["start"][g], "finish": G["finish"][g], "slot_wait": G["slot_wait"][g]}
+               for _, g in legs]
+        prox = None
+        for q in range(Q["rows"]):
+            if Q["tile"][q] == t:
+                prox = {"max_abs": Q["max_abs"][q], "max_rel": Q["max_rel"][q], "pass": Q["pass"][q] == 1}
+        nxt = [G["action"][g] for g in range(G["rows"]) if G["slot_wait"][g] > 0 and s < G["action"][g] < n]
+        return out, prox, min(nxt) if nxt else -1
 
     def expected_values(self, T, m, t, s):
         P, E = T["snapshots"], T["elements"]["v"]
@@ -231,6 +266,13 @@ class ViewerTest(unittest.TestCase):
             if m["version"] >= 2:
                 carried += sum(1 for k in range(T["snapshots"]["rows"]) if T["snapshots"]["step"][k] != NONE64)
         self.assertGreater(carried, 0)
+        # And one must carry an L-T1 overlay with a slot wait, or the overlay comparison is vacuous.
+        waits = 0
+        for b in BUNDLES:
+            m, T = dflow_check.load(b)
+            if m["version"] >= 3 and m["lt1"]:
+                waits += sum(1 for g in range(T["lt1_legs"]["rows"]) if T["lt1_legs"]["slot_wait"][g] > 0)
+        self.assertGreater(waits, 0)
 
 
 if __name__ == "__main__":

@@ -22,6 +22,15 @@
 //                   taken (kNone64: the run's final value), the tile, the channel that holds it,
 //                   its shape (height x width), and where its elements start in elements.bin
 //   elements.bin    (version 2) the snapshots' elements, float32, row-major, back to back
+//   lt1_legs.bin    (version 3) the L-T1 overlay: one row per leg of an action as L-T1 timed it
+//                   -- the action (the join key), its kind, process, lane, start and finish in
+//                   cycles, the leg (a Store has two), and a Load's slot wait. Empty without one.
+//   lt1_tiles.bin   (version 3) every final tile's proximity to L-B under L-T1 (tile_check):
+//                   max |a - o|, max relative error, and whether it is within the bound
+//
+// THE L-T1 OVERLAY (§3.7, step 5). L-B has no time; the overlay is a second run, L-T1's, of the same
+// program, joined on the action index. Its cycles are UNCALIBRATED, as L-T1 always says, and only
+// its two tables carry time. Its values are checked per tile against L-B's, the oracle.
 //
 // VALUES (§3.6, step 4). At L-B the values are the oracle's. A run records the FINAL value of every
 // operand's every tile (from L-B's result), and, for the tiles selected (kpu-run --dflow-values),
@@ -41,6 +50,7 @@
 
 #include <sw/kpu/program/driver/csp_run.hpp>
 #include <sw/kpu/program/record/tile_flow_record.hpp>   // RecordError
+#include <sw/kpu/program/tile_check.hpp>
 
 #include <algorithm>
 #include <array>
@@ -56,7 +66,8 @@
 namespace sw::kpu::program::record {
 
 // Version 2: tile values (snapshots, elements). A version-1 bundle has none and is still read.
-inline constexpr std::uint32_t kDflowVersion = 2;
+// Version 3: the L-T1 overlay (lt1_legs, lt1_tiles). Versions 1 and 2 are still read.
+inline constexpr std::uint32_t kDflowVersion = 3;
 inline constexpr std::uint8_t kNone8 = 0xFF;
 inline constexpr std::uint32_t kNone32 = 0xFFFFFFFFu;
 inline constexpr std::uint64_t kNone64 = ~std::uint64_t{0};
@@ -129,6 +140,22 @@ struct DomainFlowRecord {
     std::uint64_t values_cap = 0;                   // bytes
     std::optional<std::uint64_t> values_cut_at;     // the first action whose snapshot the cap refused
     std::string finals_note;                        // empty: finals recorded; else why not
+    // The L-T1 overlay (version 3); `lt1` is false when the run had none.
+    struct Leg {
+        std::uint64_t action = 0;
+        std::uint64_t start = 0, finish = 0, slot_wait = 0;     // cycles, L-T1's, uncalibrated
+        std::uint32_t lane = 0;
+        std::uint8_t kind = 0, proc = kNone8, leg = 0;          // proc: none for a credit action
+    };
+    struct Proximity { std::uint32_t tile = 0; double max_abs = 0.0, max_rel = 0.0; bool pass = true; };
+    bool lt1 = false;
+    std::string lt1_run_id;
+    std::uint64_t lt1_makespan = 0, lt1_slot_bound = 0, lt1_slot_wait_cycles = 0;
+    std::vector<std::pair<std::string, std::uint32_t>> lt1_lanes;   // process -> lanes
+    double lt1_atol = 0.0, lt1_rtol = 0.0;
+    bool lt1_pass = true;
+    std::vector<Leg> legs;
+    std::vector<Proximity> proximity;
 
     std::string tile_name(std::uint32_t t) const {
         const Tile& x = tiles.at(t);
@@ -140,6 +167,55 @@ struct DomainFlowRecord {
 void write_dflow(const DomainFlowRecord& rec, const std::string& dir);
 // Read a bundle back. Throws RecordError on a malformed or unknown-version bundle.
 DomainFlowRecord read_dflow(const std::string& dir);
+
+// The L-T1 overlay: L-T1's run of the same program, joined on the action index, and its values
+// checked per tile against L-B's (`oracle`, the reference). Tiles are interned into `rec.tiles`.
+inline void attach_lt1(DomainFlowRecord& rec, const driver::CspLevelOutcome& lt1, const TileProgram& oracle,
+                       const std::string& run_id) {
+    using DFR = DomainFlowRecord;
+    using TI = csp::TransactionalInterpreter;
+    std::map<std::string, std::uint32_t> tile_at, op_at;
+    for (std::uint32_t i = 0; i < rec.operands.size(); ++i) op_at[rec.operands[i].name] = i;
+    for (std::uint32_t t = 0; t < rec.tiles.size(); ++t) tile_at[rec.tile_name(t)] = t;
+    auto intern = [&](const TileCoord& c) {
+        const auto k = c.to_string();
+        auto it = tile_at.find(k);
+        if (it != tile_at.end()) return it->second;
+        const auto op = op_at.find(c.operand);
+        if (op == op_at.end()) throw RecordError("dflow: L-T1 names " + k + ", no declared operand");
+        const auto idx = static_cast<std::uint32_t>(rec.tiles.size());
+        rec.tiles.push_back({op->second, static_cast<std::uint32_t>(c.ti), static_cast<std::uint32_t>(c.tj)});
+        tile_at.emplace(k, idx);
+        return idx;
+    };
+    rec.lt1 = true;
+    rec.lt1_run_id = run_id;
+    rec.lt1_makespan = lt1.makespan;
+    rec.lt1_slot_bound = lt1.slot_bound;
+    rec.lt1_slot_wait_cycles = lt1.slot_wait_cycles;
+    for (const auto& [p, n] : lt1.lanes) rec.lt1_lanes.emplace_back(p, static_cast<std::uint32_t>(n));
+    std::map<std::size_t, std::uint8_t> legs_of;
+    for (const auto& r : lt1.records) {
+        DFR::Leg l;
+        l.action = r.action;
+        l.kind = static_cast<std::uint8_t>(r.kind);
+        l.proc = TI::has_process(r.kind) ? static_cast<std::uint8_t>(r.proc) : kNone8;
+        l.lane = static_cast<std::uint32_t>(r.lane);
+        l.start = r.start;
+        l.finish = r.finish;
+        l.slot_wait = r.slot_wait;
+        l.leg = legs_of[r.action]++;
+        rec.legs.push_back(l);
+    }
+    const ElementFormat format{};
+    const Proximity bound = proximity_for(format);
+    rec.lt1_atol = bound.atol;
+    rec.lt1_rtol = bound.rtol;
+    const OperandsCheck c = check_operands(lt1.values, oracle, format, bound);
+    rec.lt1_pass = c.pass;
+    for (const TileCheck& t : c.operands)
+        for (const auto& pt : t.per_tile) rec.proximity.push_back({intern(pt.tile), pt.max_abs, pt.max_rel, pt.pass});
+}
 
 // Which tiles' values to record at each action (kpu-run --dflow-values): every tile, the tiles of
 // named operands, or named tiles. Empty: none (the finals are recorded regardless).

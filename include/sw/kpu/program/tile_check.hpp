@@ -78,6 +78,9 @@ struct TileCheck {
     double max_abs = 0.0;           // worst |actual - oracle|, over every element
     double max_rel = 0.0;           // worst relative error, over elements with |oracle| >= atol
     std::vector<TileMiss> misses;   // the tiles out of bound, in tile order
+    // Every tile's worst errors and verdict, in tile order (what a debugger shows per tile).
+    struct PerTile { TileCoord tile; double max_abs = 0.0, max_rel = 0.0; bool pass = true; };
+    std::vector<PerTile> per_tile;
 
     // One line, or the first misses by tile: what a failing CHECK prints.
     std::string summary(std::size_t show = 4) const {
@@ -123,6 +126,8 @@ inline TileCheck check_tiles(const TensorOperand& actual, const TensorOperand& o
             ++out.tiles;
             TileMiss miss;
             miss.tile = TileCoord{actual.name, ti, tj};
+            TileCheck::PerTile pt;
+            pt.tile = miss.tile;
             for (Dim r = oracle.row_begin(ti); r < oracle.row_end(ti); ++r)
                 for (Dim c = oracle.col_begin(tj); c < oracle.col_end(tj); ++c) {
                     ++out.elements;
@@ -134,7 +139,11 @@ inline TileCheck check_tiles(const TensorOperand& actual, const TensorOperand& o
                         !std::isfinite(a) || !std::isfinite(e) || err > bound.atol + bound.rtol * std::abs(e);
                     if (std::isfinite(err)) {
                         out.max_abs = std::max(out.max_abs, err);
-                        if (std::abs(e) >= bound.atol) out.max_rel = std::max(out.max_rel, err / std::abs(e));
+                        pt.max_abs = std::max(pt.max_abs, err);
+                        if (std::abs(e) >= bound.atol) {
+                            out.max_rel = std::max(out.max_rel, err / std::abs(e));
+                            pt.max_rel = std::max(pt.max_rel, err / std::abs(e));
+                        }
                     }
                     if (!out_of_bound) continue;
                     if (miss.elements++ == 0) {
@@ -145,6 +154,8 @@ inline TileCheck check_tiles(const TensorOperand& actual, const TensorOperand& o
                     }
                     if (std::isfinite(err)) miss.max_abs = std::max(miss.max_abs, err);
                 }
+            pt.pass = miss.elements == 0;
+            out.per_tile.push_back(pt);
             if (miss.elements) {
                 out.pass = false;
                 out.misses.push_back(miss);

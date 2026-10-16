@@ -7,7 +7,7 @@ program's L-B run as domains moving through the program's channels, one CSP acti
 # a program, its L-B run recorded as a .dflow bundle
 kpu-csp-gen --algo matmul --size 512 --tile 64 --l3 17 -o mm512.csp
 kpu-run --program mm512.csp --deploy tests/program/deploy/kpu_s1.json \
-        --level behavioral --dflow mm512.dflow --dflow-values "C[2,3],A[2,0],B[0,3]"
+        --level block-sequential --dflow mm512.dflow --dflow-values "C[2,3],A[2,0],B[0,3]"
 
 # check it, then look at it
 python3 tools/trace/dflow_check.py mm512.dflow
@@ -37,9 +37,17 @@ Open `mm512.html` in a browser. It needs no server and no other file. Alternativ
   `--dflow-values-cap` (64 MiB). The elements are float32, the format the operands carry; the page
   refuses a bundle naming another format rather than misread it.
 
+- **The L-T1 overlay (step 5):** when L-T1 ran in the same `kpu-run` (`--level block-sequential`
+  or `all`), the record carries its run joined on the action index. The inspector lists the
+  current action's legs (process, lane, start and finish in L-T1 cycles), says when a Load's L3
+  slot decided its start and what the wait cost, and shows the tile's proximity to L-B under L-T1
+  (max |a - o|, max relative error, within bound or not). The axis can switch to L-T1 cycles: the
+  ribbon then draws every leg on its process's row, marks slot waits, and a click lands on the
+  action running at that cycle. Everything in the overlay is labelled L-T1 and uncalibrated.
+
 **Navigation:** step, back, play (Space, the arrow keys, Home, End), the slider, the next
 iteration at any depth, the next action of a kind or on the same tile, the release of the current
-residency, and jump to a step.
+residency, the next slot-bound Load (with an overlay), and jump to a step.
 
 **Honesty rules (plan §3.7):** the axis is the step, not time, because L-B has no time; L-T1
 timing is a later overlay (step 5). Every residency, address, occupancy and loop index is read from
@@ -49,4 +57,5 @@ refused shows the refusal. The page does not check invariants: that is `dflow_ch
 
 `test_viewer.py` packs bundles, and runs the page's data layer (`<script id="dflow-core">`, which
 has no DOM) in Node, comparing what it reads at sample steps (step fields, position, slots, and the
-tile values the inspector shows) with the bundle read in Python. It reads version 1 and 2.
+tile values the inspector shows, and the overlay's legs, proximity, slot waits and time-to-action
+lookup) with the bundle read in Python. It reads versions 1 to 3.
