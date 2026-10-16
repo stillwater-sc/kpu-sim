@@ -1,7 +1,7 @@
 # Domain-Flow Debugger: CSP State at L-B, Domains Moving Through the Machine (#363)
 
 **Date:** 2026-10-11
-**Status:** Approved 2026-10-15 (Q1-Q7 as recommended, §7). Steps 1-3 merged (#370-#372); step 4 in review (#373); step 5 in review.
+**Status:** Complete (2026-10-15). Approved 2026-10-15 (Q1-Q7 as recommended, §7); all five steps merged (#370-#374).
 Revised 2026-10-15. Held 2026-10-11 when the architect ruled that L-B must model L3
 placement (ADR 0004 §5). Resumed now that `docs/plans/l3-placement-at-lb.md` steps 1-4 are merged (#364-#367)
 and step 5a (L-T1 waits on its own slot) is in review: every residency has an L3 address at L-B, so the
