@@ -108,13 +108,30 @@ means: C stays in the PEs across the chain, and A and B stream through. Other ma
 
 **Two streams per chain on an R x S array, reduction depth K cycles (tile = array; §3.1.1):**
 
+PE(i, j) works on a chain during `[in0 + i + j, in0 + i + j + K)`: the wavefront reaches it
+`i + j` cycles after the corner, and it then does its K MACs. With `skew = (R-1) + (S-1)`:
+
 ```
-operands in:  [in0, in1)      in1 = in0 + K,  K = the chain's steady cycles, sum of macs/rate
-  fill        [in0, in0 + (R-1)+(S-1))     the wavefront reaches the far PE
-  steady      [fill end, in1)              every PE busy
-results out:  [out0, out1)    out0 = in1   PE(0,0)'s reduction ends as its last operand arrives
-  drain       out1 = in1 + (R-1)+(S-1) + E E: the farthest PE's hops to the drain edge (§3.1.1)
+in0        the chain's first operands reach PE(0,0)
+front      = in0 + skew        the wavefront reaches the far PE, PE(R-1, S-1)
+in1        = in0 + K           PE(0,0) finishes; its result leaves north, and the next chain's
+                               first operands may enter it (each row and column stream runs
+                               back to back from chain to chain)
+last       = in0 + K + skew    the far PE finishes
+out1       = last + E          the far PE's result leaves the array (E: §3.1.1)
+
+fill       [in0, front)        PEs joining the chain
+tail       [in1, last)         PEs leaving it, each result starting north as it finishes
+steady     [front, in1)        every PE on this chain; EMPTY when K <= skew
+results    [in1, out1)         on the northbound links
 ```
+
+The phases are not a partition. When `K <= skew` (a short reduction, or a large array) the
+chain never occupies the whole array: its fill and tail overlap during `[in1, front)`, and
+`steady` is empty. The array is still busy, because each PE goes from one chain to the next
+without a gap (the next chain's wavefront follows at `in1`), so utilization does not depend on
+`K > skew`; only the single-chain picture does. The viewer draws the phases as overlapping
+bands, never as a sequence.
 
 **The pipeline is chain-aware.** This is the point of output-stationary and of the architect's
 "three tiles":
@@ -145,7 +162,7 @@ for (auto& call : chain) { t += fill; t += steady; t += drain; }
 next.in0 = std::max(ready, prev.out1);
 
 // CORRECT: the streams follow from the geometry and the chain, and they ARE the timing
-struct ChainStreams { Cycle in0, fill_end, in1, out0, out1, link_delay; };
+struct ChainStreams { Cycle in0, front, in1, last, out1, link_delay; };
 ChainStreams streams_of(const Chain& ch, const ArrayShape& a, Cycle ready, Cycle prev_in1) {
     const Cycle K    = ch.steady_cycles();                       // sum of macs/rate over its calls
     const Cycle skew = (a.rows - 1) + (a.cols - 1);
@@ -153,14 +170,15 @@ ChainStreams streams_of(const Chain& ch, const ArrayShape& a, Cycle ready, Cycle
     ChainStreams s;
     s.link_delay = ch.has_prev() && K < E ? E - K : 0;           // the northbound link's one limit
     s.in0        = std::max(ready, prev_in1) + s.link_delay;
-    s.fill_end   = s.in0 + skew;
+    s.front      = s.in0 + skew;                                 // may lie after in1 (K <= skew)
     s.in1        = s.in0 + K;
-    s.out0       = s.in1;
-    s.out1       = s.in1 + skew + E;
+    s.last       = s.in1 + skew;
+    s.out1       = s.last + E;
     return s;
 }
-// A call's own interval is its share of [in0, in1), in chain order. Its Drain leg (str, L1 -> L2)
-// is ready at out1, where it was ready at the Call leg's end before.
+// A call's own interval is its share of [in0, in1) at PE(0,0), in chain order; at PE(i, j) the
+// same share runs i + j cycles later. Its Drain leg (str, L1 -> L2) is ready at out1, where it was
+// ready at the Call leg's end before.
 ```
 
 **The timing changes and the values do not.** L-T1's cycles move, since it is uncalibrated and
@@ -169,9 +187,9 @@ retire-l0-derivations requires bit equality. Tests that pin L-T1 cycle counts ar
 the same PR, each with the reason.
 
 **L1 occupancy is derived from recorded bounds, never stored per cycle.**
-- An operand tile is in L1 from its Feed leg's finish to the end of its call's injection
-  interval (consumed).
-- A result tile is in L1 from `out0` to its Drain leg's finish.
+- An operand tile is in L1 from its Feed leg's finish until its last row (A) or column (B)
+  enters the array: the end of its call's share at PE(0,0), plus `R-1` (A) or `S-1` (B).
+- A result tile is in L1 from `in1` (the first result arrives) to its Drain leg's finish.
 - The streamed fraction of a tile at cycle t is linear within its interval. That is the model
   (`element_stride = 1`, dense streams), and the page labels it "L-T1 model, linear stream".
 
@@ -179,7 +197,7 @@ the same PR, each with the reason.
 
 ```
 lt1_calls.bin   action (join key), chain id, k of K, inject0, inject1   (its share of the chain)
-lt1_chains.bin  chain id, cf lane, in0, fill_end, in1, out0, out1, link_delay
+lt1_chains.bin  chain id, cf lane, in0, front, in1, last, out1, link_delay
                 (cycles; both tables empty, and meta says why, when the deployment has no array)
 meta            + array_rows, array_cols, drain_edge = "north", mapping = "output-stationary"
 ```
@@ -277,7 +295,7 @@ The machine view gains two panels. Every value comes from the record (domain-flo
     its chain position (k of K), and whether the call opens or closes the chain. It shows no
     phase, because L-B has no time.
   - *Cycle axis (L-T1 overlay):* two concurrent streams per lane, not serial phases:
-    - operands in, marked fill then steady;
+    - operands in, with fill, steady and tail as overlapping bands (steady may be empty);
     - results out, northbound, drawn under the next chain's fill.
 
     Each tile in L1 has a bar showing its streamed fraction. The ribbon gains two CF rows per lane
@@ -293,7 +311,7 @@ const reuse = steps.filter(s => s.kind === 'feed' && s.tile === t).length;   // 
 // CORRECT: read the record; the only arithmetic is the documented linear fraction
 const c = core.callStreams(action);                         // lt1_calls + lt1_chains, or null
 const inFrac  = c ? clamp01((t - c.inject0) / Math.max(1, c.inject1 - c.inject0)) : null;
-const outFrac = c ? clamp01((t - c.chain.out0) / Math.max(1, c.chain.out1 - c.chain.out0)) : null;
+const outFrac = c ? clamp01((t - c.chain.in1) / Math.max(1, c.chain.out1 - c.chain.in1)) : null;
 ```
 
 Every new string reaching HTML (tile names, CF lane names, mapping) goes through `esc()`. The
@@ -401,15 +419,16 @@ for review as soon as step 1 renders.
   - the pipeline changes L-T1 cycles only, and L-T1's values stay bit-equal to before;
   - staged and unstaged programs compute bit-equal results.
 - **dflow_check, part B:**
-  - **P1** Per chain, `in0 <= fill_end`, `in0 <= in1 = out0 <= out1`.
-  - **P2** A chain's calls' injection intervals tile `[in0, in1)` in chain order, with no gap and
-    no overlap.
+  - **P1** Per chain, `in0 <= front`, `in0 <= in1 <= last <= out1`. `front` and `in1` are not
+    ordered: `front > in1` exactly when `K < skew`, and then the chain has no steady phase.
+  - **P2** A chain's calls' intervals at PE(0,0) tile `[in0, in1)` in chain order, with no gap
+    and no overlap.
   - **P3** On one CF lane, operand streams never overlap: a chain's `in0` is no earlier than the
     previous chain's `in1` plus its `link_delay`. Result streams may overlap operand streams;
     that is the fabric.
   - **P4** A call's injection starts no earlier than its operands' Feed finish, and a result's
     Drain leg no earlier than its chain's `out1`.
-  - **P5** `fill_end - in0 == (R-1)+(S-1)`, `out1 - in1 == (R-1)+(S-1)+E`, and
+  - **P5** `front - in0 == last - in1 == (R-1)+(S-1)`, `out1 - last == E`, and
     `link_delay == max(0, E - K)` after the lane's first chain (geometry and edge from meta).
 - **dflow_check, part A:**
   - **S1** One residency per L2 slot at a time.

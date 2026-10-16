@@ -169,13 +169,16 @@ class ViewerTest(unittest.TestCase):
         # rows that appear, or a window scroll would make the page jump at every step.
         for b in BUNDLES:
             out = self.tmp / "view.html"
-            self.assertEqual(self.pack(str(b), "-o", str(out)).returncode, 0)
+            pk = self.pack(str(b), "-o", str(out))
+            self.assertEqual(pk.returncode, 0, f"{b.name}: {pk.stderr}")
             html = out.read_text(encoding="utf-8")
             i = html.rindex("</body>")
             (self.tmp / "probe.html").write_text(html[:i] + LAYOUT_PROBE + html[i:], encoding="utf-8")
             for width in (1400, 1000, 600):
                 with self.subTest(bundle=b.name, width=width):
-                    p = subprocess.run([CHROME, "--no-sandbox", "--disable-gpu", "--hide-scrollbars",
+                    # --headless: a full Chrome (CI runners have one on PATH) otherwise wants a
+                    # display; chrome-headless-shell accepts the flag and is headless anyway.
+                    p = subprocess.run([CHROME, "--headless", "--no-sandbox", "--disable-gpu", "--hide-scrollbars",
                                         f"--window-size={width},1400", "--virtual-time-budget=60000", "--dump-dom",
                                         (self.tmp / "probe.html").as_uri()], capture_output=True, text=True, timeout=180)
                     m = re.search(r'<pre id="layout-result">(.*?)</pre>', p.stdout, re.S)

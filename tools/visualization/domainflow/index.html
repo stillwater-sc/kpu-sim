@@ -62,6 +62,7 @@ button:disabled { opacity: 0.45; cursor: default; }
 button:focus-visible, select:focus-visible, input:focus-visible, .slot:focus-visible, .ln:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 button.primary { background: var(--accent); color: var(--panel); border-color: var(--accent); min-width: 64px; }
 .controls { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.controls > *, .controls button { flex-shrink: 0; white-space: nowrap; }   /* a label never wraps: the toolbar keeps its shape */
 .sep { width: 1px; height: 22px; background: var(--line); }
 .group { display: inline-flex; align-items: center; gap: 6px; }
 .group label { color: var(--muted); font-size: 0.8rem; }
@@ -410,10 +411,8 @@ globalThis.DflowCore = (() => {
   const CHECKPOINT = 256;
   function apply(R, st, s) {
     const S = R.steps, t = S.tile[s];
-    if (S.from[s] === R.chL2) st.l2.delete(t);
-    if (S.from[s] === R.chCf) st.cf.delete(t);
-    if (S.to[s] === R.chL2) st.l2.set(t, s);
-    if (S.to[s] === R.chCf) { st.cf.set(t, { since: s, acc: false }); st.fed.push(t); }
+    // A Call moves no tile (the record leaves its from/to none; derive() refuses one that does
+    // not), so its channel fields are never read: its result is an accumulator, not a fed tile.
     if (S.kind[s] === R.kCall) {
       const used = st.fed.filter(x => x !== t);
       for (const x of used) st.cf.delete(x);
@@ -421,6 +420,10 @@ globalThis.DflowCore = (() => {
       if (!st.cf.has(t)) st.cf.set(t, { since: s, acc: true });     // an accumulator opens in the fabric
       return used;
     }
+    if (S.from[s] === R.chL2) st.l2.delete(t);
+    if (S.from[s] === R.chCf) st.cf.delete(t);
+    if (S.to[s] === R.chL2) st.l2.set(t, s);
+    if (S.to[s] === R.chCf) { st.cf.set(t, { since: s, acc: false }); st.fed.push(t); }
     return null;
   }
   const copyState = st => ({ l2: new Map(st.l2), cf: new Map([...st.cf].map(([k, v]) => [k, { ...v }])), fed: st.fed.slice() });
@@ -451,6 +454,9 @@ globalThis.DflowCore = (() => {
         R.callAtStep.set(s, k);
       }
       if (S.from[s] === R.chCf && open.has(t)) { R.chains[open.get(t)].drain = s; open.delete(t); }
+      if (R.lb.ok && S.kind[s] === R.kCall && (S.from[s] !== NONE8 || S.to[s] !== NONE8)) {
+        R.lb = { ok: false, at: s, why: `step ${s} is a Call that names a channel move; a Call moves no tile` };
+      }
       if (R.lb.ok && (st.l2.size !== S.held_l2[s] || st.cf.size !== S.held_cf[s])) {
         R.lb = { ok: false, at: s, why: `after step ${s} the actions put ${st.l2.size} tiles in L2 and ${st.cf.size} in the fabric; L-B held ${S.held_l2[s]} and ${S.held_cf[s]}` };
       }
@@ -729,8 +735,10 @@ globalThis.DflowCore = (() => {
     $("iterbtns").innerHTML = `<label>next iteration</label>` + (depths.length
       ? depths.map((d, k) => `<button data-depth="${k + 1}" title="Next ${esc(d.var)} iteration">${esc(d.var)} &gt;</button>`).join("")
       : `<span class="note">no loops</span>`);
-    $("pos").style.minWidth = `${fmt(Math.max(0, R.n - 1)).length}ch`;
-    $("c-l3").style.minWidth = `${`${R.cap} / ${R.cap} held`.length}ch`;
+    // Fixed widths, with slack: bold digits run a hair wider than 1ch, and a min-width would let
+    // the counter (and everything after it in the toolbar) shift by a sub-pixel between steps.
+    $("pos").style.width = `${fmt(Math.max(0, R.n - 1)).length + 1}ch`;
+    $("c-l3").style.width = `${`${R.cap} / ${R.cap} held`.length + 1}ch`;
     drawRibbon();
   }
 
