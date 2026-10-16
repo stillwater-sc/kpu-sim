@@ -59,10 +59,15 @@ class ViewerSmokeTest(unittest.TestCase):
         page = (HERE / "index.html").read_text(encoding="utf-8")
         stmts = re.findall(r"(?:innerHTML\s*=|showTip\(e,).*?;\n", page, re.S)
         self.assertGreater(len(stmts), 8)
+        # A name-like field (x.name, x.kind, x.clock, x.level, x.device, x.source, t[0]) written into
+        # the HTML either as ${...} or concatenated (+ ... +) must be inside esc(). (The summary chips
+        # build plain values in an array and escape each one where they render it, esc(v).)
+        field = r"(?:[A-Za-z_][\w.]*\.(?:name|kind|clock|level|device|device_label|source)|t\[0\])"
         for st in stmts:
-            # (The summary chips build plain values and escape each one where they render it, esc(v).)
-            for name in ("b.name", "b.kind", "b.clock", "row.name", "row.kind", "r.name", "t[0]"):
-                self.assertNotRegex(st, r"\$\{" + re.escape(name) + r"\}", f"{name} unescaped in: {st[:120]}")
+            if st.startswith("innerHTML = [") and "<b>${esc(v)}</b>" in st:
+                continue                        # the summary: plain values, each escaped as rendered
+            for m in re.finditer(r"\$\{(" + field + r")\}|\+\s*(" + field + r")\s*\+", st):
+                self.fail(f"{m.group(1) or m.group(2)} unescaped in: {st[:140]}")
 
     def test_viewer_reads_the_version_the_writer_writes(self):
         # The page refuses any other manifest version, so a format bump that the viewer does not

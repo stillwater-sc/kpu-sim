@@ -122,7 +122,8 @@ class TflowCheckV4SelfTest(unittest.TestCase):
                     self.b.set("residency", "t0", b, mid)
                     self.b.set("residency", "t1", b, mid)
                     code, report = run(self.b.dir)
-                    self.assertNotIn("TF12", {v["invariant"] for v in (report or {}).get("violations", [])})
+                    self.assertIn(code, (0, 1), "the checker could not read the bundle")
+                    self.assertNotIn("TF12", {v["invariant"] for v in report["violations"]})
                     return
         self.skipTest("no slot is reused in this bundle")
 
