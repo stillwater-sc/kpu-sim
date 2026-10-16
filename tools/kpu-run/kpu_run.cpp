@@ -67,6 +67,11 @@ kpu-run runs a program; it does not write one. kpu-csp-gen writes CSP programs.
                             as a CSP state transition, written by the oracle's own run
   --dflow-limit <n>         record at most n steps (0 = all; default 1000000); residencies and
                             the iteration summary are always complete
+  --dflow-values <tiles>    also record these tiles' values after every action that leaves
+                            them somewhere: "C[2,3],A[2,0]", an operand name for all its tiles,
+                            or "all". Every operand's final values are recorded regardless
+  --dflow-values-cap <MiB>  the values' byte cap (default 64): finals first, then snapshots
+                            until the cap, and the record says where they stopped
   --timeline <file.json>    the L-T1 run as Chrome-trace intervals, one per leg
   --step                    single-step (L-B: one action per step; L-T1: one record)
   --step-limit <n>          stop after n steps, 0 = all      (default 40)
@@ -111,7 +116,7 @@ int run_csp_program(const std::vector<std::string>& a, const std::string& path) 
                                                    "--trace-limit", "--no-compare", "--emit-l0-result",
                                                    "--emit-l0", "--emit-l0-kernel",
                                                    "--tflow", "--step", "--step-limit", "--timeline",
-                                                   "--dflow", "--dflow-limit"};
+                                                   "--dflow", "--dflow-limit", "--dflow-values", "--dflow-values-cap"};
     for (const std::string& t : a)
         if (t.rfind("--", 0) == 0 && !kOptions.count(t)) {
             std::cerr << "kpu-run: " << t << " does not apply to a CSP program"
@@ -121,17 +126,20 @@ int run_csp_program(const std::vector<std::string>& a, const std::string& path) 
                       << "\n";
             return 2;
         }
-    std::string err, deploy_path, inputs_path, emit_path, tflow_path, timeline_path, trace_path, kernel_path, dflow_path;
+    std::string err, deploy_path, inputs_path, emit_path, tflow_path, timeline_path, trace_path, kernel_path, dflow_path,
+        dflow_values;
     if (!arg_required(a, "--deploy", deploy_path, err) || !arg_required(a, "--inputs", inputs_path, err) ||
         !arg_required(a, "--emit-l0-result", emit_path, err) || !arg_required(a, "--tflow", tflow_path, err) ||
         !arg_required(a, "--timeline", timeline_path, err) || !arg_required(a, "--emit-l0", trace_path, err) ||
-        !arg_required(a, "--emit-l0-kernel", kernel_path, err) || !arg_required(a, "--dflow", dflow_path, err)) {
+        !arg_required(a, "--emit-l0-kernel", kernel_path, err) || !arg_required(a, "--dflow", dflow_path, err) ||
+        !arg_required(a, "--dflow-values", dflow_values, err)) {
         std::cerr << "kpu-run: " << err << "\n";
         return 2;
     }
-    std::uint32_t window = 256, trace_limit = 1000000, step_limit = 40, dflow_limit = 1000000;
+    std::uint32_t window = 256, trace_limit = 1000000, step_limit = 40, dflow_limit = 1000000, dflow_cap_mib = 64;
     if (!parse_dim(a, "--window", 256, window, err) || !parse_dim(a, "--trace-limit", 1000000, trace_limit, err) ||
-        !parse_dim(a, "--step-limit", 40, step_limit, err) || !parse_dim(a, "--dflow-limit", 1000000, dflow_limit, err)) {
+        !parse_dim(a, "--step-limit", 40, step_limit, err) || !parse_dim(a, "--dflow-limit", 1000000, dflow_limit, err) ||
+        !parse_dim(a, "--dflow-values-cap", 64, dflow_cap_mib, err)) {
         std::cerr << "kpu-run: " << err << "\n";
         return 2;
     }
@@ -245,15 +253,17 @@ int run_csp_program(const std::vector<std::string>& a, const std::string& path) 
     csp::lang::Validation validation;
     driver::CspReference reference;
     std::optional<record::DomainFlowRecorder> dflow;
-    auto write_dflow_bundle = [&](const std::string& run_id) {
+    auto write_dflow_bundle = [&](const std::string& run_id, const TileProgram* finals) {
         try {
-            record::DomainFlowRecord rec = dflow->finish();
+            record::DomainFlowRecord rec = dflow->finish(finals);
             rec.run_id = run_id;
             record::write_dflow(rec, dflow_path);
             std::cout << "wrote  " << dflow_path << "  (" << rec.steps.size() << " of " << rec.actions
                       << " steps, " << rec.residencies.size() << " residencies, " << rec.iterations.size()
                       << " iterations, from L-B" << (rec.cut ? "; steps cut at --dflow-limit" : "")
                       << (rec.refusal ? "; L-B refused action " + std::to_string(rec.refusal->action) : "")
+                      << "; " << rec.snapshots.size() << " tile values"
+                      << (rec.values_cut_at ? ", cut at the cap at action " + std::to_string(*rec.values_cut_at) : "")
                       << ")\n";
             return true;
         } catch (const std::exception& e) {
@@ -263,7 +273,7 @@ int run_csp_program(const std::vector<std::string>& a, const std::string& path) 
     };
     // A program L-B refuses is recorded up to the refusal, which the record names (§6 invariant 4).
     auto write_refused_dflow = [&]() {
-        if (dflow && dflow->refused_at()) (void)write_dflow_bundle("");
+        if (dflow && dflow->refused_at()) (void)write_dflow_bundle("", nullptr);
     };
     std::vector<CspLevelOutcome> outcomes;
     std::vector<std::string> run_ids;
@@ -272,7 +282,12 @@ int run_csp_program(const std::vector<std::string>& a, const std::string& path) 
         const csp::lang::Target target = csp::lang::target_from(spec.device(0));
         validation = csp::lang::validate(*ast, deployment ? &target : nullptr);
         handle = vp->load_csp(*ast, inputs, deployment.has_value());
-        if (!dflow_path.empty()) dflow.emplace(*ast, text.str(), dflow_limit);
+        if (!dflow_path.empty()) {
+            record::ValueSelection sel;
+            if (!dflow_values.empty()) sel = record::parse_value_selection(dflow_values);
+            sel.cap_bytes = static_cast<std::uint64_t>(dflow_cap_mib) << 20;
+            dflow.emplace(*ast, text.str(), dflow_limit, sel);
+        }
         reference = vp->csp_reference(handle, trace_limit, dflow ? &*dflow : nullptr);
         for (ExecutionLevel l : levels) {
             if (!deployment && l == ExecutionLevel::CycleAccurate) {
@@ -301,7 +316,7 @@ int run_csp_program(const std::vector<std::string>& a, const std::string& path) 
         std::string run_id;
         for (std::size_t li = 0; li < outcomes.size(); ++li)
             if (outcomes[li].level == ExecutionLevel::Behavioral) run_id = run_ids[li];
-        if (!write_dflow_bundle(run_id)) return 2;
+        if (!write_dflow_bundle(run_id, reference.values ? &*reference.values : nullptr)) return 2;
     }
     CspRunResult res;
     res.validation = validation;

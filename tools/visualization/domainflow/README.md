@@ -7,7 +7,7 @@ program's L-B run as domains moving through the program's channels, one CSP acti
 # a program, its L-B run recorded as a .dflow bundle
 kpu-csp-gen --algo matmul --size 512 --tile 64 --l3 17 -o mm512.csp
 kpu-run --program mm512.csp --deploy tests/program/deploy/kpu_s1.json \
-        --level behavioral --dflow mm512.dflow
+        --level behavioral --dflow mm512.dflow --dflow-values "C[2,3],A[2,0],B[0,3]"
 
 # check it, then look at it
 python3 tools/trace/dflow_check.py mm512.dflow
@@ -28,6 +28,14 @@ Open `mm512.html` in a browser. It needs no server and no other file. Alternativ
 - **Ribbon:** every loop iteration at every depth across the whole run, and L3 occupancy over the
   recorded steps. Click to jump.
 - **Inspector:** the current action's fields; select a slot to list every tile it held.
+- **Tile inspection (step 4):** the current step's tile, or the tile in a selected slot, as a
+  heatmap (diverging about zero; a value that is not finite is marked), with its min, max, mean
+  and a readout of any element in tile and operand coordinates. "At this step" shows the value the
+  latest recorded action left it with, and in which channel; "final" shows its value when the run
+  ended. Every operand's final values are always recorded; a tile's value at each action only when
+  `--dflow-values` selected it (`C[2,3],A[2,0]`, an operand name, or `all`), under
+  `--dflow-values-cap` (64 MiB). The elements are float32, the format the operands carry; the page
+  refuses a bundle naming another format rather than misread it.
 
 **Navigation:** step, back, play (Space, the arrow keys, Home, End), the slider, the next
 iteration at any depth, the next action of a kind or on the same tile, the release of the current
@@ -40,4 +48,5 @@ up to the cut, while the ribbon and the slot histories still cover the whole run
 refused shows the refusal. The page does not check invariants: that is `dflow_check.py`'s job.
 
 `test_viewer.py` packs bundles, and runs the page's data layer (`<script id="dflow-core">`, which
-has no DOM) in Node, comparing what it reads at sample steps with the bundle read in Python.
+has no DOM) in Node, comparing what it reads at sample steps (step fields, position, slots, and the
+tile values the inspector shows) with the bundle read in Python. It reads version 1 and 2.

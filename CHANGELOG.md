@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Tile inspection in the domain-flow debugger** (`docs/plans/domain-flow-debugger.md` step 4, #363).
+  - `.dflow` version 2 records tile values: every operand's final tiles (L-B's result) always, and
+    with `kpu-run --dflow-values <tiles|operand|all>` a selected tile wherever each action leaves
+    it (L3, L2, the fabric with the accumulator so far, DRAM), under `--dflow-values-cap`.
+    Version-1 bundles are still read.
+  - `BehavioralInterpreter::tile_in(chan, tile)`: a read-only view of a channel's copy.
+  - The viewer's inspector draws the tile as a heatmap with stats and an element readout, at this
+    step or final. The format is float32, and other formats are refused.
+  - `dflow_check.py` adds V1-V5 (references, where a snapshot was taken, shape, finals, and a last
+    Store equals the final); its self-test breaks each.
 - **The domain-flow viewer** (`docs/plans/domain-flow-debugger.md` step 3, #363):
   `tools/visualization/domainflow/{index.html, pack.py, README.md, test_viewer.py}`.
   - Machine view: the program's channels (DRAM, L3, L2, fabric) with the process on each edge. L3

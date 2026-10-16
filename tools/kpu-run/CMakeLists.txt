@@ -422,9 +422,14 @@ if(KPU_BUILD_TESTS)
         set(_dflow_check ${CMAKE_SOURCE_DIR}/tools/trace/dflow_check.py)
         set(_dflow_tests "")
         foreach(_p matmul_48x48x48_t16 linear_64_t16_relu lu_64_t16)
+            # linear records every tile's values (step 4), so the self-test's bundle carries them.
+            set(_vals "")
+            if(_p STREQUAL "linear_64_t16_relu")
+                set(_vals --dflow-values all)
+            endif()
             add_test(NAME kpu_run_csp_dflow_${_p}
                 COMMAND run --program ${_corpus}/${_p}.csp --level behavioral
-                        --dflow ${CMAKE_CURRENT_BINARY_DIR}/csp_${_p}.dflow)
+                        --dflow ${CMAKE_CURRENT_BINARY_DIR}/csp_${_p}.dflow ${_vals})
             add_test(NAME dflow_check_${_p}
                 COMMAND ${KPU_PYTHON3} ${_dflow_check} ${CMAKE_CURRENT_BINARY_DIR}/csp_${_p}.dflow)
             set_tests_properties(kpu_run_csp_dflow_${_p} PROPERTIES FIXTURES_SETUP dflow_${_p})
@@ -459,7 +464,8 @@ if(KPU_BUILD_TESTS)
         add_test(NAME kpu_run_csp_dflow_reference
             COMMAND run --program ${CMAKE_CURRENT_BINARY_DIR}/dflow_reference.csp
                     --deploy ${_deploy}/kpu_s1.json --level behavioral
-                    --dflow ${CMAKE_CURRENT_BINARY_DIR}/csp_reference.dflow)
+                    --dflow ${CMAKE_CURRENT_BINARY_DIR}/csp_reference.dflow
+                    --dflow-values C[2,3],A[2,0],B[0,3])
         set_tests_properties(csp_gen_dflow_reference PROPERTIES FIXTURES_SETUP dflow_reference_csp)
         set_tests_properties(kpu_run_csp_dflow_reference PROPERTIES
             FIXTURES_REQUIRED dflow_reference_csp FIXTURES_SETUP dflow_reference)
@@ -470,6 +476,16 @@ if(KPU_BUILD_TESTS)
             COMMAND ${KPU_PYTHON3} ${CMAKE_SOURCE_DIR}/tools/trace/test_dflow_check.py
                     ${CMAKE_CURRENT_BINARY_DIR}/csp_linear_64_t16_relu.dflow)
         set_tests_properties(dflow_check_selftest PROPERTIES FIXTURES_REQUIRED dflow_linear_64_t16_relu)
+        # A value selection that names no operand is refused, and writes nothing.
+        add_test(NAME kpu_run_csp_dflow_values_refuses
+            COMMAND ${CMAKE_COMMAND}
+                -DCMD=$<TARGET_FILE:run>
+                -DARGS=--program$<SEMICOLON>${_corpus}/matmul_48x48x48_t16.csp$<SEMICOLON>--level$<SEMICOLON>behavioral$<SEMICOLON>--dflow$<SEMICOLON>${CMAKE_CURRENT_BINARY_DIR}/should_not_exist.dflow$<SEMICOLON>--dflow-values$<SEMICOLON>Q[0,0]
+                -DEXPECT_CODE=2
+                -DMUST_MATCH=--dflow-values:.Q.0,0..names.no.declared.operand
+                -DMUST_NOT_MATCH=wrote
+                -P ${CMAKE_CURRENT_SOURCE_DIR}/expect_exit.cmake
+        )
         # The viewer (step 3): pack each bundle, refuse a non-bundle, and run the page's data layer
         # in Node on the reference run, a retain chain, LU and a cut bundle.
         add_test(NAME domainflow_viewer
@@ -477,11 +493,13 @@ if(KPU_BUILD_TESTS)
                     ${CMAKE_CURRENT_BINARY_DIR}/csp_reference.dflow
                     ${CMAKE_CURRENT_BINARY_DIR}/csp_matmul_relu_retain_32_t16.dflow
                     ${CMAKE_CURRENT_BINARY_DIR}/csp_lu_64_t16.dflow
-                    ${CMAKE_CURRENT_BINARY_DIR}/csp_cut.dflow)
+                    ${CMAKE_CURRENT_BINARY_DIR}/csp_cut.dflow
+                    ${CMAKE_CURRENT_BINARY_DIR}/csp_linear_64_t16_relu.dflow)
         set_tests_properties(domainflow_viewer PROPERTIES FIXTURES_REQUIRED
-            "dflow_reference;dflow_matmul_relu_retain_32_t16;dflow_lu_64_t16;dflow_cut")
+            "dflow_reference;dflow_matmul_relu_retain_32_t16;dflow_lu_64_t16;dflow_cut;dflow_linear_64_t16_relu")
         set_tests_properties(${_dflow_tests} kpu_run_csp_dflow_cut dflow_check_cut csp_gen_dflow_reference
             kpu_run_csp_dflow_reference dflow_check_reference dflow_check_selftest domainflow_viewer
+            kpu_run_csp_dflow_values_refuses
             PROPERTIES LABELS "program;domainflow;csp")
     endif()
     # Residency across operators (step 4d): the first operator of a chain retains its result

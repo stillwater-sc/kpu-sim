@@ -205,6 +205,20 @@ public:
         return out;
     }
 
+    // A tile's values in channel `c` now, as the interpreter holds them (L3: its slot); null when
+    // the channel does not hold it. Read-only: the domain-flow record's tile snapshots come from
+    // here (docs/plans/domain-flow-debugger.md §3.6).
+    const std::vector<float>* tile_in(Chan c, const TileCoord& t) const {
+        const std::string k = t.to_string();
+        if (c == Chan::L3) {
+            auto it = l3_index_.find(k);
+            return it == l3_index_.end() ? nullptr : &l3_.at(key_of(it->second)).values;
+        }
+        const auto& s = store_[static_cast<std::size_t>(c)];
+        auto it = s.find(k);
+        return it == s.end() ? nullptr : &it->second;
+    }
+
     // The L3 address a tile is resident at now; none when it is not resident.
     std::optional<L3Address> resident_at(const TileCoord& t) const {
         auto it = l3_index_.find(t.to_string());

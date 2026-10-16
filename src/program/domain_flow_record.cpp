@@ -68,7 +68,16 @@ void write_dflow(const DFR& rec, const std::string& dir) {
     m["refusal"] = rec.refusal ? json{{"action", rec.refusal->action}, {"what", rec.refusal->what}} : json(nullptr);
     m["not_modelled"] = json::array({"time: L-B has no time; the axis is the step (action)",
                                      "L2 and fabric capacity: unbounded at L-B (a level-1 program declares only L3)",
-                                     "tile values: not recorded in version 1 (domain-flow step 4)"});
+                                     "tile values between the recorded actions: a snapshot is taken only where an action leaves a selected tile"});
+    {
+        json v = json::object();
+        v["format"] = "float32";                    // tile_check's ElementFormat: the operands' format
+        v["selected"] = rec.values_selected;
+        v["cap_bytes"] = rec.values_cap;
+        v["cut_at"] = rec.values_cut_at ? json(*rec.values_cut_at) : json(nullptr);
+        v["finals"] = rec.finals_note.empty() ? json(true) : json(rec.finals_note);
+        m["values"] = v;
+    }
 
     json tables = json::object();
     {
@@ -138,6 +147,23 @@ void write_dflow(const DFR& rec, const std::string& dir) {
         t.put("depth", "u16", col<std::uint16_t>(rec.iterations, [](const It& x) { return x.depth; }));
         tables["iteration"] = write_table(t, dir);
     }
+    {
+        Table t{"snapshots", "snapshots.bin", rec.snapshots.size(), {}};
+        using Sn = DFR::Snapshot;
+        t.put("step", "u64", col<std::uint64_t>(rec.snapshots, [](const Sn& x) { return x.step; }));
+        t.put("first", "u64", col<std::uint64_t>(rec.snapshots, [](const Sn& x) { return x.first; }));
+        t.put("tile", "u32", col<std::uint32_t>(rec.snapshots, [](const Sn& x) { return x.tile; }));
+        t.put("height", "u32", col<std::uint32_t>(rec.snapshots, [](const Sn& x) { return x.rows; }));
+        t.put("width", "u32", col<std::uint32_t>(rec.snapshots, [](const Sn& x) { return x.cols; }));
+        t.put("chan", "u8", col<std::uint8_t>(rec.snapshots, [](const Sn& x) { return x.chan; }));
+        tables["snapshots"] = write_table(t, dir);
+    }
+    {
+        static_assert(sizeof(float) == 4, "f32 elements");
+        Table t{"elements", "elements.bin", rec.elements.size(), {}};
+        t.put("v", "f32", rec.elements);
+        tables["elements"] = write_table(t, dir);
+    }
     m["tables"] = tables;
 
     std::ofstream out(dir + "/manifest.json", std::ios::binary);
@@ -155,8 +181,9 @@ DFR read_dflow(const std::string& dir) {
     }
     try {
         if (m.at("format").get<std::string>() != "kpu-dflow") throw RecordError("record: " + dir + " is not a .dflow bundle");
-        if (m.at("version").get<std::uint32_t>() != kDflowVersion)
-            throw RecordError("record: .dflow version " + m.at("version").dump() + " (this reader reads " +
+        const auto version = m.at("version").get<std::uint32_t>();
+        if (version != 1 && version != kDflowVersion)
+            throw RecordError("record: .dflow version " + m.at("version").dump() + " (this reader reads 1 and " +
                               std::to_string(kDflowVersion) + ")");
         DFR rec;
         rec.run_id = m.at("run_id").get<std::string>();
@@ -278,6 +305,27 @@ DFR read_dflow(const std::string& dir) {
                 it.stores = stores[i];
                 for (std::size_t c = 0; c < csp::kChannels; ++c) it.peak[c] = peak[c][i];
                 rec.iterations.push_back(it);
+            }
+        }
+        if (version >= 2) {
+            const json& v = m.at("values");
+            rec.values_selected = v.at("selected").get<std::string>();
+            rec.values_cap = v.at("cap_bytes").get<std::uint64_t>();
+            if (!v.at("cut_at").is_null()) rec.values_cut_at = v.at("cut_at").get<std::uint64_t>();
+            if (!v.at("finals").is_boolean()) rec.finals_note = v.at("finals").get<std::string>();
+            {
+                auto [t, blob] = table("snapshots", n);
+                auto step = read_col<std::uint64_t>(t, blob, "step", "u64", n);
+                auto first = read_col<std::uint64_t>(t, blob, "first", "u64", n);
+                auto tile = read_col<std::uint32_t>(t, blob, "tile", "u32", n);
+                auto rows = read_col<std::uint32_t>(t, blob, "height", "u32", n);
+                auto cols = read_col<std::uint32_t>(t, blob, "width", "u32", n);
+                auto chan = read_col<std::uint8_t>(t, blob, "chan", "u8", n);
+                for (std::size_t i = 0; i < n; ++i) rec.snapshots.push_back({step[i], first[i], tile[i], rows[i], cols[i], chan[i]});
+            }
+            {
+                auto [t, blob] = table("elements", n);
+                rec.elements = read_col<float>(t, blob, "v", "f32", n);
             }
         }
         return rec;

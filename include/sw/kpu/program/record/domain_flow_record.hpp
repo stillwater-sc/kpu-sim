@@ -18,6 +18,17 @@
 //   loops.bin       one row per (loop, iteration) a position names: variable, value, bound, line
 //   iteration.bin   one row per loop iteration at every depth, for the WHOLE run (and depth 0, the
 //                   program): its first and last action, its loads, stores and peak occupancy
+//   snapshots.bin   (version 2) one row per recorded tile value: the action after which it was
+//                   taken (kNone64: the run's final value), the tile, the channel that holds it,
+//                   its shape (height x width), and where its elements start in elements.bin
+//   elements.bin    (version 2) the snapshots' elements, float32, row-major, back to back
+//
+// VALUES (§3.6, step 4). At L-B the values are the oracle's. A run records the FINAL value of every
+// operand's every tile (from L-B's result), and, for the tiles selected (kpu-run --dflow-values),
+// the tile's value in the channel each action leaves it in: Load (L3), Move (L2), Feed and Call
+// (the fabric; a Call's is the accumulator so far), Drain (L2), Writeback (L3), Store (DRAM) and
+// Inherit (L3). A byte cap bounds them: finals first; snapshots stop at the cap, and the manifest
+// says where. The elements are float32, the format the operands carry (tile_check's ElementFormat).
 //
 // There is no time column: L-B has no time (§3.7). Indices that name nothing are kNone8/32/64.
 // The record is written by the run that is the oracle (driver::csp_reference, through its
@@ -37,13 +48,15 @@
 #include <cstdint>
 #include <map>
 #include <optional>
+#include <stdexcept>
 #include <string>
 #include <utility>
 #include <vector>
 
 namespace sw::kpu::program::record {
 
-inline constexpr std::uint32_t kDflowVersion = 1;
+// Version 2: tile values (snapshots, elements). A version-1 bundle has none and is still read.
+inline constexpr std::uint32_t kDflowVersion = 2;
 inline constexpr std::uint8_t kNone8 = 0xFF;
 inline constexpr std::uint32_t kNone32 = 0xFFFFFFFFu;
 inline constexpr std::uint64_t kNone64 = ~std::uint64_t{0};
@@ -87,6 +100,12 @@ struct DomainFlowRecord {
         std::array<std::uint32_t, csp::kChannels> peak{};
     };
     struct Refusal { std::uint64_t action = 0; std::string what; };
+    struct Snapshot {
+        std::uint64_t step = kNone64;               // the action after which it was taken; none: final
+        std::uint64_t first = 0;                    // its first element in `elements`
+        std::uint32_t tile = 0, rows = 0, cols = 0;
+        std::uint8_t chan = static_cast<std::uint8_t>(csp::Chan::Dram);
+    };
 
     std::string program_name, program_text, run_id;
     std::uint32_t l3 = 0, banks = 1;
@@ -103,6 +122,13 @@ struct DomainFlowRecord {
     std::uint64_t step_limit = 0;                   // 0: none
     bool cut = false;                               // steps.bin holds fewer than `actions` rows
     std::optional<Refusal> refusal;
+    // Values (version 2).
+    std::vector<Snapshot> snapshots;
+    std::vector<float> elements;
+    std::string values_selected;                    // "" (none), "all", or the selection as given
+    std::uint64_t values_cap = 0;                   // bytes
+    std::optional<std::uint64_t> values_cut_at;     // the first action whose snapshot the cap refused
+    std::string finals_note;                        // empty: finals recorded; else why not
 
     std::string tile_name(std::uint32_t t) const {
         const Tile& x = tiles.at(t);
@@ -115,6 +141,63 @@ void write_dflow(const DomainFlowRecord& rec, const std::string& dir);
 // Read a bundle back. Throws RecordError on a malformed or unknown-version bundle.
 DomainFlowRecord read_dflow(const std::string& dir);
 
+// Which tiles' values to record at each action (kpu-run --dflow-values): every tile, the tiles of
+// named operands, or named tiles. Empty: none (the finals are recorded regardless).
+struct ValueSelection {
+    bool all = false;
+    std::vector<std::string> operands;              // every tile of these
+    std::vector<std::string> tiles;                 // TileCoord::to_string(), e.g. "C[2,3]"
+    std::string as_given;                           // for the manifest
+    std::uint64_t cap_bytes = 64ull << 20;
+    bool empty() const { return !all && operands.empty() && tiles.empty(); }
+    bool selects(const TileCoord& t) const {
+        if (all) return true;
+        for (const auto& o : operands) if (o == t.operand) return true;
+        const std::string k = t.to_string();
+        for (const auto& x : tiles) if (x == k) return true;
+        return false;
+    }
+};
+
+// Parse "C[2,3],A[1,0],B" (commas inside brackets belong to the tile) or "all". Throws
+// std::invalid_argument on a malformed item.
+inline ValueSelection parse_value_selection(const std::string& text) {
+    ValueSelection v;
+    v.as_given = text;
+    if (text == "all") { v.all = true; return v; }
+    std::string item;
+    int depth = 0;
+    auto flush = [&] {
+        if (item.empty()) throw std::invalid_argument("--dflow-values: an empty item in '" + text + "'");
+        const auto lb = item.find('[');
+        if (lb == std::string::npos) {
+            v.operands.push_back(item);
+        } else {
+            const auto comma = item.find(',', lb), rb = item.find(']', lb);
+            if (lb == 0 || comma == std::string::npos || rb != item.size() - 1 || comma > rb)
+                throw std::invalid_argument("--dflow-values: '" + item + "' is not operand[ti,tj]");
+            const std::string a = item.substr(lb + 1, comma - lb - 1), b = item.substr(comma + 1, rb - comma - 1);
+            auto digits = [](const std::string& x) { return !x.empty() && x.find_first_not_of("0123456789") == std::string::npos; };
+            if (!digits(a) || !digits(b)) throw std::invalid_argument("--dflow-values: '" + item + "' is not operand[ti,tj]");
+            try {
+                v.tiles.push_back(item.substr(0, lb) + "[" + std::to_string(std::stoull(a)) + "," + std::to_string(std::stoull(b)) + "]");
+            } catch (const std::out_of_range&) {
+                throw std::invalid_argument("--dflow-values: '" + item + "' has a coordinate out of range");
+            }
+        }
+        item.clear();
+    };
+    for (char c : text) {
+        if (c == ' ') continue;
+        if (c == '[') ++depth;
+        if (c == ']') --depth;
+        if (c == ',' && depth == 0) flush();
+        else item.push_back(c);
+    }
+    flush();
+    return v;
+}
+
 // ----------------------------------------------------------------------------
 // The recorder: an observer of the oracle's run (driver::csp_reference). Every field is read from
 // the walker's Emission or the interpreter that just executed it (§3.2).
@@ -125,18 +208,35 @@ public:
 
     // `text`: the program's source, kept in the manifest; `limit`: steps.bin holds at most this many
     // actions (0: all). The iteration summary and the residencies are always complete.
-    DomainFlowRecorder(const csp::lang::Program& ast, std::string text, std::uint64_t limit) {
+    DomainFlowRecorder(const csp::lang::Program& ast, std::string text, std::uint64_t limit,
+                       ValueSelection values = {}) : values_(std::move(values)) {
         rec_.program_name = ast.name;
         rec_.program_text = std::move(text);
         rec_.l3 = static_cast<std::uint32_t>(ast.l3);
         rec_.banks = static_cast<std::uint32_t>(ast.banks);
         rec_.place = ast.place;
         rec_.step_limit = limit;
-        const TileProgram ops = csp::lang::declared_operands(ast);
-        for (const auto& name : ops.operand_order()) {
-            const auto& o = ops.operand(name);
+        shapes_ = csp::lang::declared_operands(ast);
+        std::uint64_t finals = 0;
+        for (const auto& name : shapes_.operand_order()) {
+            const auto& o = shapes_.operand(name);
             operand_index_[name] = static_cast<std::uint32_t>(rec_.operands.size());
             rec_.operands.push_back({name, o.rows, o.cols, o.tile_rows, o.tile_cols});
+            finals += static_cast<std::uint64_t>(o.rows) * o.cols * sizeof(float);
+        }
+        for (const auto& name : values_.operands)
+            if (!operand_index_.count(name)) throw RecordError("--dflow-values: " + name + " is not a declared operand");
+        for (const auto& k : values_.tiles)
+            if (!operand_index_.count(k.substr(0, k.find('['))))
+                throw RecordError("--dflow-values: " + k + " names no declared operand");
+        rec_.values_selected = values_.empty() ? "" : values_.as_given;
+        rec_.values_cap = values_.cap_bytes;
+        // The finals come first in the cap; the snapshots get what is left.
+        if (finals > values_.cap_bytes) {
+            finals_fit_ = false;
+            budget_ = values_.cap_bytes;
+        } else {
+            budget_ = values_.cap_bytes - finals;
         }
     }
 
@@ -176,6 +276,20 @@ public:
         // The iteration summary: every loop iteration at every depth, for the whole run.
         iterate(i, e.where, held, load, store);
 
+        // The tile's value where this action left it, if it is selected (§3.6).
+        if (!values_.empty() && !rec_.values_cut_at && values_.selects(a.tile)) {
+            if (const auto chan = lands_in(a.kind)) {
+                if (const std::vector<float>* v = lb.tile_in(*chan, a.tile)) {
+                    if (static_cast<std::uint64_t>(v->size()) * sizeof(float) > budget_) {
+                        rec_.values_cut_at = i;
+                    } else {
+                        budget_ -= v->size() * sizeof(float);
+                        snapshot(i, tile, *chan, a.tile, *v);
+                    }
+                }
+            }
+        }
+
         // The step, while within the limit.
         if (rec_.step_limit && i >= rec_.step_limit) {
             rec_.cut = true;
@@ -213,8 +327,26 @@ public:
         return rec_.refusal ? std::optional<std::uint64_t>(rec_.refusal->action) : std::nullopt;
     }
 
-    // The record, once the run has ended (or been refused). Closes the open iterations.
-    DomainFlowRecord finish() {
+    // The record, once the run has ended (or been refused). Closes the open iterations. `finals`:
+    // the operands as L-B left them (CspReference::values), whose every tile is recorded.
+    DomainFlowRecord finish(const TileProgram* finals = nullptr) {
+        if (!finals) {
+            rec_.finals_note = rec_.refusal ? "the run was refused, so it has no final values" : "not given to the recorder";
+        } else if (!finals_fit_) {
+            rec_.finals_note = "the operands exceed --dflow-values-cap (" + std::to_string(values_.cap_bytes) + " bytes)";
+        } else {
+            for (const auto& name : shapes_.operand_order()) {
+                const TensorOperand& o = finals->operand(name);
+                for (Dim ti = 0; ti < o.n_tile_rows(); ++ti)
+                    for (Dim tj = 0; tj < o.n_tile_cols(); ++tj) {
+                        const TileCoord t{name, ti, tj};
+                        std::vector<float> v;
+                        for (Dim r = o.row_begin(ti); r < o.row_end(ti); ++r)
+                            for (Dim c = o.col_begin(tj); c < o.col_end(tj); ++c) v.push_back(o.at(r, c));
+                        snapshot(kNone64, tile_index(t), csp::Chan::Dram, t, v);
+                    }
+            }
+        }
         close_from(0);
         DFR::Iteration program;
         program.first = 0;
@@ -233,6 +365,34 @@ public:
 
 private:
     struct Open { DFR::Iteration it; };
+
+    // The channel an action leaves its tile in (none: Release and Retain move nothing).
+    static std::optional<csp::Chan> lands_in(csp::Action::Kind k) {
+        using K = csp::Action::Kind;
+        switch (k) {
+            case K::Load: case K::Writeback: case K::Inherit: return csp::Chan::L3;
+            case K::Move: case K::Drain:                      return csp::Chan::L2;
+            case K::Feed: case K::Call:                       return csp::Chan::Cf;
+            case K::Store:                                    return csp::Chan::Dram;
+            default:                                          return std::nullopt;
+        }
+    }
+
+    void snapshot(std::uint64_t step, std::uint32_t tile, csp::Chan chan, const TileCoord& t, const std::vector<float>& v) {
+        const TensorOperand& o = shapes_.operand(t.operand);
+        DFR::Snapshot s;
+        s.step = step;
+        s.tile = tile;
+        s.chan = static_cast<std::uint8_t>(chan);
+        s.rows = static_cast<std::uint32_t>(o.row_end(t.ti) - o.row_begin(t.ti));
+        s.cols = static_cast<std::uint32_t>(o.col_end(t.tj) - o.col_begin(t.tj));
+        if (static_cast<std::uint64_t>(s.rows) * s.cols != v.size())
+            throw RecordError("dflow: " + t.to_string() + " holds " + std::to_string(v.size()) + " elements, not " +
+                              std::to_string(s.rows) + "x" + std::to_string(s.cols));
+        s.first = rec_.elements.size();
+        rec_.elements.insert(rec_.elements.end(), v.begin(), v.end());
+        rec_.snapshots.push_back(s);
+    }
 
     static bool moves(csp::Action::Kind k) {
         using K = csp::Action::Kind;
@@ -308,6 +468,10 @@ private:
     }
 
     DomainFlowRecord rec_;
+    ValueSelection values_;
+    TileProgram shapes_;
+    std::uint64_t budget_ = 0;                      // snapshot bytes left under the cap
+    bool finals_fit_ = true;
     std::uint64_t n_ = 0;
     std::map<std::string, std::uint32_t> operand_index_, tile_index_, var_index_;
     std::optional<csp::lang::Where> last_where_;

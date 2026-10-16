@@ -47,7 +47,9 @@ const C = globalThis.DflowCore, R = C.parse(files), out = { n: R.n, steps: {} };
 for (const s of JSON.parse(stepsArg)) {
   const slots = [];
   for (let sl = 0; sl < R.cap; sl++) slots.push(C.slotAt(R, sl, s));
-  out.steps[s] = { step: C.step(R, s), position: C.position(R, s), slots };
+  const t = R.steps.tile[s], val = v => v && { k: v.k, step: v.step, chan: v.chan, h: v.h, w: v.w, head: Array.from(v.data.slice(0, 4)), n: v.data.length };
+  out.steps[s] = { step: C.step(R, s), position: C.position(R, s), slots,
+                   value: R.snap ? val(C.valueAt(R, t, s)) : null, final: R.snap ? val(C.finalOf(R, t)) : null };
 }
 process.stdout.write(JSON.stringify(out));
 """
@@ -199,6 +201,36 @@ class ViewerTest(unittest.TestCase):
                         elif c == s:
                             want[X["slot"][r]] = {"res": r, "held": False}
                     self.assertEqual(v["slots"], want, f"slots after step {s}")
+                    # The tile inspector: the step tile's value after step s, and its final value.
+                    if m["version"] >= 2:
+                        self.assertEqual((v["value"], v["final"]), self.expected_values(T, m, S["tile"][s], s))
+
+    def expected_values(self, T, m, t, s):
+        P, E = T["snapshots"], T["elements"]["v"]
+        def shown(k):
+            if k is None:
+                return None
+            h, w, f = P["height"][k], P["width"][k], P["first"][k]
+            return {"k": k, "step": -1 if P["step"][k] == NONE64 else P["step"][k], "chan": m["channels"][P["chan"][k]]["name"],
+                    "h": h, "w": w, "head": list(E[f:f + min(4, h * w)]), "n": h * w}
+        at, final = None, None
+        for k in range(P["rows"]):
+            if P["tile"][k] != t:
+                continue
+            if P["step"][k] == NONE64:
+                final = k
+            elif P["step"][k] <= s and (at is None or P["step"][k] >= P["step"][at]):
+                at = k
+        return shown(at), shown(final)
+
+    def test_the_bundles_exercise_the_inspector(self):
+        # At least one bundle must carry step snapshots, or the value comparison above is vacuous.
+        carried = 0
+        for b in BUNDLES:
+            m, T = dflow_check.load(b)
+            if m["version"] >= 2:
+                carried += sum(1 for k in range(T["snapshots"]["rows"]) if T["snapshots"]["step"][k] != NONE64)
+        self.assertGreater(carried, 0)
 
 
 if __name__ == "__main__":

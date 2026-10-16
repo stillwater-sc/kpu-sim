@@ -123,6 +123,14 @@ table.hist td { padding: 2px 4px; border-bottom: 1px solid var(--soft); }
 table.hist tr.live td { background: var(--accent-soft); }
 table.hist button { padding: 0 5px; font-size: 0.72rem; }
 .note { font-size: 0.78rem; color: var(--muted); margin: 4px 0 0; }
+.tilehead { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 6px; }
+.seg { display: inline-flex; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
+.seg button { border: 0; border-radius: 0; padding: 3px 8px; font-size: 0.76rem; }
+.seg button[aria-pressed="true"] { background: var(--accent); color: var(--panel); }
+canvas.heat { width: 100%; max-width: 320px; aspect-ratio: 1; display: block; margin-top: 8px; image-rendering: pixelated; border: 1px solid var(--line); cursor: crosshair; }
+.readout { font: 0.78rem var(--font-mono); min-height: 1.3em; margin-top: 4px; }
+.scale { display: flex; align-items: center; gap: 6px; font: 0.7rem var(--font-mono); color: var(--muted); margin-top: 4px; }
+.scale .bar { flex: 1; max-width: 200px; height: 8px; border-radius: 2px; border: 1px solid var(--line); }
 footer { font-size: 0.8rem; color: var(--muted); display: grid; gap: 4px; }
 footer ul { margin: 0; padding-left: 18px; }
 </style>
@@ -191,6 +199,20 @@ footer ul { margin: 0; padding-left: 18px; }
 
         <section class="panel insp" aria-label="Inspector">
           <div><h2>This step</h2><dl class="kv" id="step-kv"></dl></div>
+          <div id="tilebox">
+            <div class="tilehead">
+              <h2 id="tile-title">Tile</h2>
+              <span class="seg" role="group" aria-label="Which value">
+                <button id="v-step" aria-pressed="true">at this step</button><button id="v-final" aria-pressed="false">final</button>
+              </span>
+            </div>
+            <p class="note" id="tile-note"></p>
+            <canvas class="heat" id="heat" aria-label="The tile's values as a heatmap; hover to read an element"></canvas>
+            <div class="scale"><span id="sc-lo"></span><span class="bar" id="sc-bar"></span><span id="sc-hi"></span></div>
+            <div class="readout" id="readout"></div>
+            <dl class="kv" id="tile-kv"></dl>
+            <div class="histwrap"><table class="hist" id="snap-hist" hidden><thead><tr><th>step</th><th>action</th><th>in</th><th></th></tr></thead><tbody></tbody></table></div>
+          </div>
           <div>
             <h2 id="slot-title">Slot history</h2>
             <p class="note" id="slot-note">Select a slot in L3 to see every tile it held.</p>
@@ -215,10 +237,10 @@ footer ul { margin: 0; padding-left: 18px; }
 <script id="dflow-core">
 "use strict";
 globalThis.DflowCore = (() => {
-  const VERSIONS = [1];
+  const VERSIONS = [1, 2];
   const OPENS = 1, CLOSES = 2, RETAINS = 4, HAS_PLACE = 8, PINNED = 16, RES_RETAINED = 4;
   const NONE8 = 255, NONE32 = 0xFFFFFFFF;
-  const TYPED = { u8: Uint8Array, u16: Uint16Array, u32: Uint32Array, u64: BigUint64Array, i64: BigInt64Array };
+  const TYPED = { u8: Uint8Array, u16: Uint16Array, u32: Uint32Array, u64: BigUint64Array, i64: BigInt64Array, f32: Float32Array };
   const NONE64 = 0xFFFFFFFFFFFFFFFFn;
 
   // A column as a typed array. 64-bit columns become Float64Array (indices stay far below 2^53);
@@ -250,6 +272,27 @@ globalThis.DflowCore = (() => {
       const out = { rows: t.rows };
       for (const c of t.columns) out[c.name] = column(buf, t, c.name);
       R[name] = out;
+    }
+    // Version 2: tile values. The elements are float32, the operands' format (tile_check's
+    // ElementFormat); a bundle naming another format is refused rather than misread.
+    R.snap = null;
+    if (m.version >= 2) {
+      if (!m.values || m.values.format !== "float32") throw new Error(`tile values in format ${JSON.stringify(m.values && m.values.format)}; this viewer decodes float32, the format the operands carry`);
+      for (const name of ["snapshots", "elements"]) {
+        const t = m.tables[name], buf = files[t.file];
+        if (!buf) throw new Error("missing " + t.file);
+        const out = { rows: t.rows };
+        for (const c of t.columns) out[c.name] = column(buf, t, c.name);
+        R[name] = out;
+      }
+      R.snap = new Map();                    // tile -> its step snapshots in step order, and its final
+      for (let k = 0; k < R.snapshots.rows; k++) {
+        const t = R.snapshots.tile[k];
+        if (!R.snap.has(t)) R.snap.set(t, { steps: [], final: -1 });
+        const e = R.snap.get(t);
+        if (R.snapshots.step[k] < 0) e.final = k; else e.steps.push(k);
+      }
+      for (const e of R.snap.values()) e.steps.sort((a, b) => R.snapshots.step[a] - R.snapshots.step[b]);
     }
     R.n = R.steps.rows;                      // recorded steps (fewer than the run's actions if cut)
     R.actions = m.totals.actions;
@@ -336,7 +379,30 @@ globalThis.DflowCore = (() => {
     return c >= 0 && c < R.n ? c : -1;
   }
 
-  return { VERSIONS, parse, tileName, position, slotAt, step, nextIteration, nextKind, nextOnTile, nextFromLine, releaseOf, RES_RETAINED };
+  // A snapshot, decoded: its step (-1: final), channel, shape and elements (a view, not a copy).
+  function snapshot(R, k) {
+    const P = R.snapshots, h = P.height[k], w = P.width[k], first = P.first[k];
+    return { k, step: P.step[k], chan: R.m.channels[P.chan[k]].name, h, w, data: R.elements.v.subarray(first, first + h * w) };
+  }
+  // The tile's value after step s: its latest snapshot at or before s, or null when none was taken
+  // by then (the tile was not selected, or not yet touched). Final: its final value, or null.
+  function valueAt(R, t, s) {
+    const e = R.snap && R.snap.get(t);
+    if (!e || !e.steps.length) return null;
+    let lo = 0, hi = e.steps.length - 1, at = -1;
+    while (lo <= hi) {
+      const mid = (lo + hi) >> 1;
+      if (R.snapshots.step[e.steps[mid]] <= s) { at = mid; lo = mid + 1; } else hi = mid - 1;
+    }
+    return at < 0 ? null : snapshot(R, e.steps[at]);
+  }
+  function finalOf(R, t) {
+    const e = R.snap && R.snap.get(t);
+    return e && e.final >= 0 ? snapshot(R, e.final) : null;
+  }
+  const snapshotsOf = (R, t) => (R.snap && R.snap.get(t) ? R.snap.get(t).steps : []);
+
+  return { VERSIONS, parse, tileName, position, slotAt, step, snapshot, valueAt, finalOf, snapshotsOf, nextIteration, nextKind, nextOnTile, nextFromLine, releaseOf, RES_RETAINED };
 })();
 </script>
 
@@ -349,7 +415,7 @@ globalThis.DflowCore = (() => {
   const tok = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
   const fmt = n => Number(n).toLocaleString("en-US");
   const EDGES = ["LOAD", "STORE", "MOVE", "WRITEBACK", "FEED", "DRAIN"];
-  let R = null, cur = 0, selected = -1, timer = null;
+  let R = null, cur = 0, selected = -1, timer = null, selTile = -1, showFinal = false;
 
   function fail(msg) { const e = $("error"); e.textContent = msg; e.hidden = false; }
 
@@ -518,10 +584,81 @@ globalThis.DflowCore = (() => {
     $("step-kv").innerHTML = kv.map(([a, b]) => `<dt>${a}</dt><dd>${esc(b)}</dd>`).join("");
     $("release").disabled = C.releaseOf(R, st.residency) < 0 || C.releaseOf(R, st.residency) === s;
     renderSlot();
+    renderTile();
     $("iterbtns").innerHTML = `<label>next iteration</label>` + (pos.loops.length
       ? pos.loops.map(l => `<button data-depth="${l.depth}" title="Next ${esc(l.var)} iteration">${esc(l.var)} &gt;</button>`).join("")
       : `<span class="note">outside every loop</span>`);
     drawRibbon();
+  }
+
+  // The tile inspector: the selected tile (else the current step's) at this step, or its final
+  // value, as read from the record's snapshots. Values at L-B are the oracle's (§3.6).
+  let heatView = null;
+  function renderTile() {
+    const t = selTile >= 0 ? selTile : R.steps.tile[cur];
+    const name = C.tileName(R, t);
+    $("tile-title").textContent = `Tile ${name}` + (selTile >= 0 ? " (selected)" : "");
+    $("v-step").setAttribute("aria-pressed", String(!showFinal));
+    $("v-final").setAttribute("aria-pressed", String(showFinal));
+    const note = $("tile-note"), kv = $("tile-kv");
+    if (!R.snap) {
+      note.textContent = "This bundle is version 1: it carries no tile values. Re-record with kpu-run --dflow (version 2).";
+      heatView = null; drawHeat(null); kv.innerHTML = ""; $("snap-hist").hidden = true; return;
+    }
+    const steps = C.snapshotsOf(R, t);
+    const v = showFinal ? C.finalOf(R, t) : C.valueAt(R, t, cur);
+    if (showFinal) {
+      note.textContent = v ? "Its value when the run ended (L-B's result)." : `No final value recorded: ${R.m.values.finals === true ? "not an operand tile" : R.m.values.finals}.`;
+    } else if (!steps.length) {
+      note.textContent = `Not recorded at each step. Record it with kpu-run --dflow-values ${name}${R.m.values.selected ? ` (this run selected ${R.m.values.selected})` : ""}; its final value is under "final".`;
+    } else if (!v) {
+      note.textContent = `No action has left ${name} anywhere yet; its first snapshot is after step ${fmt(R.snapshots.step[steps[0]])}.`;
+    } else {
+      const k = R.steps.kind[v.step] !== undefined && v.step < R.n ? R.m.kinds[R.steps.kind[v.step]] : "";
+      note.textContent = v.step === cur ? `After this action, in ${v.chan}.` : `As step ${fmt(v.step)} (${k}) left it, in ${v.chan}; no recorded action has changed it since.`;
+    }
+    if (R.m.values.cut_at !== null && R.m.values.cut_at !== undefined && !showFinal)
+      note.textContent += ` Snapshots stop at action ${fmt(R.m.values.cut_at)} (the values cap).`;
+    heatView = v;
+    drawHeat(v);
+    if (v) {
+      let lo = Infinity, hi = -Infinity, sum = 0, bad = 0;
+      for (const x of v.data) { if (!Number.isFinite(x)) { bad++; continue; } lo = Math.min(lo, x); hi = Math.max(hi, x); sum += x; }
+      const fin = v.data.length - bad;
+      kv.innerHTML = [["shape", `${v.h} × ${v.w} float32`], ["min", fin ? lo.toPrecision(6) : "—"], ["max", fin ? hi.toPrecision(6) : "—"],
+        ["mean", fin ? (sum / fin).toPrecision(6) : "—"], ["not finite", String(bad)]].map(([a, b]) => `<dt>${a}</dt><dd>${esc(b)}</dd>`).join("");
+    } else kv.innerHTML = "";
+    const tb = $("snap-hist");
+    tb.hidden = !steps.length;
+    const shown = steps.length > 500 ? steps.slice(0, 500) : steps;
+    tb.tBodies[0].innerHTML = shown.map(k => {
+      const st = R.snapshots.step[k], live = v && !showFinal && v.k === k;
+      return `<tr class="${live ? "live" : ""}"><td>${fmt(st)}</td><td>${st < R.n ? esc(R.m.kinds[R.steps.kind[st]]) : ""}</td><td>${esc(R.m.channels[R.snapshots.chan[k]].name)}</td><td>${st < R.n ? `<button data-go="${st}">go</button>` : ""}</td></tr>`;
+    }).join("") + (steps.length > shown.length ? `<tr><td colspan="4">first 500 of ${fmt(steps.length)}</td></tr>` : "");
+  }
+
+  // Diverging colour: negative toward --op-1, positive toward --accent, zero the panel; a value
+  // that is not finite is --bad. Symmetric about zero, so a sign is never hidden by the scale.
+  function rgb(hex) { const h = hex.replace("#", ""); return [0, 2, 4].map(i => parseInt(h.substr(i, 2), 16)); }
+  function drawHeat(v) {
+    const cv = $("heat"), g = cv.getContext("2d");
+    if (!v) { cv.width = 1; cv.height = 1; g.clearRect(0, 0, 1, 1); $("sc-lo").textContent = ""; $("sc-hi").textContent = ""; $("readout").textContent = ""; $("sc-bar").style.background = "none"; return; }
+    cv.width = v.w; cv.height = v.h;
+    let m = 0;
+    for (const x of v.data) if (Number.isFinite(x)) m = Math.max(m, Math.abs(x));
+    const neg = rgb(tok("--op-1")), pos = rgb(tok("--accent")), mid = rgb(tok("--panel")), badc = rgb(tok("--bad"));
+    const img = g.createImageData(v.w, v.h);
+    for (let i = 0; i < v.data.length; i++) {
+      const x = v.data[i];
+      let c;
+      if (!Number.isFinite(x)) c = badc;
+      else { const f = m ? Math.min(1, Math.abs(x) / m) : 0, e = x < 0 ? neg : pos; c = [0, 1, 2].map(j => Math.round(mid[j] + (e[j] - mid[j]) * f)); }
+      img.data.set([c[0], c[1], c[2], 255], i * 4);
+    }
+    g.putImageData(img, 0, 0);
+    $("sc-lo").textContent = (-m).toPrecision(3);
+    $("sc-hi").textContent = m.toPrecision(3);
+    $("sc-bar").style.background = `linear-gradient(90deg, ${tok("--op-1")}, ${tok("--panel")}, ${tok("--accent")})`;
   }
 
   function renderSlot() {
@@ -565,8 +702,39 @@ globalThis.DflowCore = (() => {
   $("iterbtns").onclick = e => { const b = e.target.closest("button[data-depth]"); if (b) go(C.nextIteration(R, cur, +b.dataset.depth)); };
   $("src").onclick = e => { const l = e.target.closest(".ln"); if (l) go(C.nextFromLine(R, cur, +l.dataset.line)); };
   $("src").onkeydown = e => { if (e.key === "Enter") { const l = e.target.closest(".ln"); if (l) go(C.nextFromLine(R, cur, +l.dataset.line)); } };
-  $("banks").onclick = e => { const el = e.target.closest(".slot"); if (el) { selected = +el.dataset.slot === selected ? -1 : +el.dataset.slot; render(); } };
-  $("banks").onkeydown = e => { if (e.key === "Enter" || e.key === " ") { const el = e.target.closest(".slot"); if (el) { e.preventDefault(); selected = +el.dataset.slot; render(); } } };
+  $("banks").onclick = e => {
+    const el = e.target.closest(".slot");
+    if (!el) return;
+    const sl = +el.dataset.slot;
+    selected = sl === selected ? -1 : sl;
+    const at = selected >= 0 ? C.slotAt(R, selected, cur) : { res: -1 };
+    selTile = at.res >= 0 ? R.residency.tile[at.res] : -1;   // inspect the tile it holds; deselect: follow the step
+    render();
+  };
+  $("now").onclick = () => { selTile = -1; render(); };
+  $("banks").onkeydown = e => {
+    if (e.key !== "Enter" && e.key !== " ") return;
+    const el = e.target.closest(".slot");
+    if (!el) return;
+    e.preventDefault();
+    selected = +el.dataset.slot;
+    const at = C.slotAt(R, selected, cur);
+    selTile = at.res >= 0 ? R.residency.tile[at.res] : -1;
+    render();
+  };
+  $("v-step").onclick = () => { showFinal = false; renderTile(); };
+  $("v-final").onclick = () => { showFinal = true; renderTile(); };
+  $("snap-hist").onclick = e => { const b = e.target.closest("button[data-go]"); if (b) { showFinal = false; go(+b.dataset.go); } };
+  $("heat").onmousemove = e => {
+    if (!heatView) return;
+    const cv = $("heat"), r = cv.getBoundingClientRect();
+    const col = Math.floor((e.clientX - r.left) / r.width * heatView.w), row = Math.floor((e.clientY - r.top) / r.height * heatView.h);
+    if (row < 0 || col < 0 || row >= heatView.h || col >= heatView.w) return;
+    const t = selTile >= 0 ? selTile : R.steps.tile[cur], o = R.m.operands[R.tiles.operand[t]];
+    const gr = R.tiles.ti[t] * o.tile_rows + row, gc = R.tiles.tj[t] * o.tile_cols + col;
+    $("readout").textContent = `[${row},${col}] in the tile = ${o.name}[${gr},${gc}]: ${heatView.data[row * heatView.w + col]}`;
+  };
+  $("heat").onmouseleave = () => { $("readout").textContent = ""; };
   $("slot-hist").onclick = e => { const b = e.target.closest("button[data-go]"); if (b) go(+b.dataset.go); };
   $("ribbon").onclick = e => {
     const cv = $("ribbon"), r = cv.getBoundingClientRect();
