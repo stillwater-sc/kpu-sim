@@ -16,7 +16,9 @@ SPDX-License-Identifier: MIT
 Copyright (c) 2024-2025 Stillwater Supercomputing, Inc.
 """
 
+import glob
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -31,6 +33,47 @@ import dflow_check  # noqa: E402
 
 BUNDLES = []
 NODE = shutil.which("node")
+
+
+def find_chrome():
+    # A headless Chrome for the layout check: $CHROME, one on PATH, or Playwright's download.
+    if os.environ.get("CHROME"):
+        return os.environ["CHROME"]
+    for name in ("chrome-headless-shell", "chromium", "chromium-browser", "google-chrome"):
+        if shutil.which(name):
+            return shutil.which(name)
+    found = sorted(glob.glob(os.path.expanduser("~/.cache/ms-playwright/chromium_headless_shell-*/*/chrome-headless-shell")))
+    return found[-1] if found else None
+
+
+CHROME = find_chrome()
+
+# Steps the packed page through its run (as play does, one render per step) and records every
+# element's box; prints the ones whose position or size changed.
+LAYOUT_PROBE = r"""<script>
+addEventListener("load", () => setTimeout(() => {
+  const jump = document.getElementById("jump"), n = +document.getElementById("scrub").max + 1;
+  const els = [...document.querySelectorAll("#viewer [id], #viewer .panel, #viewer .station, #viewer .slot, #viewer .col, #viewer .ln")]
+    .filter(e => !["ribbon", "scrub"].includes(e.id));
+  const key = e => e.id || (e.className + ":" + [...e.parentNode.children].indexOf(e) + "<" + (e.parentNode.id || e.parentNode.className));
+  const span = new Map(), steps = [];
+  for (let s = 0; s < n; s += Math.max(1, Math.floor(n / 400))) steps.push(s);
+  for (const s of steps) {
+    jump.value = s; jump.dispatchEvent(new Event("change"));
+    for (const e of els) {
+      const r = e.getBoundingClientRect(), k = key(e), v = [r.x, r.y, r.width, r.height].map(Math.round);
+      if (!span.has(k)) span.set(k, { lo: v.slice(), hi: v.slice() });
+      const x = span.get(k);
+      for (let i = 0; i < 4; i++) { x.lo[i] = Math.min(x.lo[i], v[i]); x.hi[i] = Math.max(x.hi[i], v[i]); }
+    }
+  }
+  const moved = [...span].filter(([, x]) => x.lo.some((v, i) => v !== x.hi[i])).map(([k]) => k);
+  const pre = document.createElement("pre");
+  pre.id = "layout-result";
+  pre.textContent = JSON.stringify({ steps: steps.length, moved });
+  document.body.appendChild(pre);
+}, 200));
+</script>"""
 NONE8, NONE64 = 0xFF, 0xFFFFFFFFFFFFFFFF
 RES_RETAINED, HAS_PLACE = 4, 8
 
@@ -50,7 +93,23 @@ for (const s of JSON.parse(stepsArg)) {
   const t = R.steps.tile[s], val = v => v && { k: v.k, step: v.step, chan: v.chan, h: v.h, w: v.w, head: Array.from(v.data.slice(0, 4)), n: v.data.length };
   out.steps[s] = { step: C.step(R, s), position: C.position(R, s), slots,
                    value: R.snap ? val(C.valueAt(R, t, s)) : null, final: R.snap ? val(C.finalOf(R, t)) : null,
-                   legs: C.legs(R, s), proximity: C.proximity(R, t), nextSlotBound: C.nextSlotBound(R, s) };
+                   legs: C.legs(R, s), proximity: C.proximity(R, t), nextSlotBound: C.nextSlotBound(R, s),
+                   contents: C.contentsAt(R, s), call: C.callAt(R, s), last: C.lastCallAt(R, s),
+                   nextChainStart: C.nextChainStart(R, s), nextChainEnd: C.nextChainEnd(R, s) };
+}
+out.lb = R.lb;
+// Where the derivation puts a tile, at every step a snapshot recorded it in L2 or the fabric: an
+// identity check (the held counts check only how many).
+out.snapIn = [];
+if (R.snap) {
+  const want = new Set(["l2", "cf"]);
+  for (let k = 0; k < R.snapshots.rows && out.snapIn.length < 400; k++) {
+    const s = R.snapshots.step[k], chan = R.m.channels[R.snapshots.chan[k]].name;
+    if (s < 0 || s >= R.n || !want.has(chan)) continue;
+    const c = C.contentsAt(R, s), t = R.snapshots.tile[k];
+    if (!c) { out.snapIn.push({ s, chan, l2: false, cf: false }); continue; }
+    out.snapIn.push({ s, chan, l2: c.l2.some(e => e.tile === t), cf: c.cf.some(e => e.tile === t) });
+  }
 }
 if (R.lt1) {
   out.atTime = {};
@@ -100,6 +159,35 @@ class ViewerTest(unittest.TestCase):
                 for t in manifest["tables"].values():
                     self.assertIn(t["file"], payload["bins"])
 
+    # Elements allowed to change size while stepping, because each sits inside a fixed box and
+    # moves nothing else: tables inside fixed-height scroll boxes, and a heading's own text.
+    LAYOUT_CONTAINED = {"leg-table", "snap-hist", "slot-hist", "tile-title"}
+
+    @unittest.skipUnless(CHROME, "no headless Chrome (set $CHROME)")
+    def test_stepping_does_not_move_the_layout(self):
+        # During play every information area keeps its size and place: text that wraps differently,
+        # rows that appear, or a window scroll would make the page jump at every step.
+        for b in BUNDLES:
+            out = self.tmp / "view.html"
+            pk = self.pack(str(b), "-o", str(out))
+            self.assertEqual(pk.returncode, 0, f"{b.name}: {pk.stderr}")
+            html = out.read_text(encoding="utf-8")
+            i = html.rindex("</body>")
+            (self.tmp / "probe.html").write_text(html[:i] + LAYOUT_PROBE + html[i:], encoding="utf-8")
+            for width in (1400, 1000, 600):
+                with self.subTest(bundle=b.name, width=width):
+                    # --headless: a full Chrome (CI runners have one on PATH) otherwise wants a
+                    # display; chrome-headless-shell accepts the flag and is headless anyway.
+                    p = subprocess.run([CHROME, "--headless", "--no-sandbox", "--disable-gpu", "--hide-scrollbars",
+                                        f"--window-size={width},1400", "--virtual-time-budget=60000", "--dump-dom",
+                                        (self.tmp / "probe.html").as_uri()], capture_output=True, text=True, timeout=180)
+                    m = re.search(r'<pre id="layout-result">(.*?)</pre>', p.stdout, re.S)
+                    self.assertIsNotNone(m, "the layout probe did not run: " + p.stderr[-400:])
+                    got = json.loads(m.group(1).replace("&quot;", '"').replace("&lt;", "<").replace("&gt;", ">").replace("&amp;", "&"))
+                    self.assertGreater(got["steps"], 1)
+                    self.assertEqual(sorted(set(got["moved"]) - self.LAYOUT_CONTAINED), [],
+                                     f"these moved or resized while stepping at {width}px")
+
     def test_pack_refuses_a_non_bundle(self):
         (self.tmp / "manifest.json").write_text('{"format": "kpu-tflow"}')
         p = self.pack(str(self.tmp), "-o", str(self.tmp / "x.html"))
@@ -116,19 +204,95 @@ class ViewerTest(unittest.TestCase):
             written = json.loads((Path(b) / "manifest.json").read_text(encoding="utf-8"))["version"]
             self.assertIn(written, versions)
 
-    def test_every_manifest_string_written_as_html_is_escaped(self):
-        # The page writes manifest strings with innerHTML; each one must go through esc(). A name
-        # like <img onerror=...> in a shared bundle would otherwise run script in the viewer.
-        # The statements that build HTML: every innerHTML assignment, and the move string (mv) the
-        # step line inserts into one. A string escaped where it is finally written (the inspector's
-        # esc(b)) is built elsewhere and is not an HTML statement.
+    # Interpolations in HTML that are not escaped, each reviewed: numbers the page computes or reads
+    # as checked integers, its own constants and class names, and pieces built only from escaped
+    # or numeric parts. A new raw interpolation fails the scan below until it is escaped or added
+    # here after review.
+    REVIEWED_RAW = {
+        # Numbers: record columns (typed arrays), loop counters, counts.
+        "k", "k % 4", "k + 1", "sl", "at.res", "l.leg", "l.depth", "l.value", "l.hi", "pos.line",
+        "st.place.slot", "st.place.bank", "v.h", "v.w", "e.moves", "K - cells", "R.tiles.operand[t] % 4",
+        "r", "lineW + 2", "w",
+        # Page constants and conditionals over them.
+        "a", 'R.banks > 1 ? "s" : ""', 'live ? "live" : ""', 'R.residency.flags[at.res] & C.RES_RETAINED ? " retained" : ""',
+        'now ? "<b>this step</b>" : `latest: step ${fmt(call.step)}`',
+        # Built only from escaped or numeric pieces just above the statement that writes them.
+        "shape", "mv", "rtxt", "ops", "cls", "extra", "close",
+        'st < R.n ? esc(R.m.kinds[R.steps.kind[st]]) : ""',
+        'st < R.n ? `<button data-go="${st}">go</button>` : ""',
+        'reach ? `<button data-go="${X.open[r]}">go</button>` : ""',
+        'l.process ? `${esc(l.process)} lane ${l.lane}` : "none (credit)"',
+        # Inside a key/value pair that is escaped where it is written (esc(b)).
+        "R.lt1.bound.atol", "R.lt1.bound.rtol",
+    }
+    SAFE_CALL = re.compile(r"^(esc|fmt|chip|list|kvHtml)\(")
+
+    @staticmethod
+    def interpolations(st):
+        out, i = [], 0
+        while (j := st.find("${", i)) >= 0:
+            d, k = 0, j + 2
+            while k < len(st) and not (st[k] == "}" and d == 0):
+                d += st[k] == "{"
+                d -= st[k] == "}"
+                k += 1
+            out.append(st[j + 2:k].strip())
+            i = k + 1
+        return out
+
+    def html_statements(self):
+        # Every statement that writes HTML: an innerHTML assignment, the move string (mv) and the
+        # chip helper, whose results are written as HTML.
+        # A statement runs to the first ';' at bracket depth 0, so a multi-line arrow body inside
+        # an innerHTML assignment is scanned whole (the first ';' would stop inside it).
         html = page()
-        stmts = re.findall(r"innerHTML\s*=.*?;\n", html, re.S) + re.findall(r"const mv = .*?;\n", html, re.S)
+        stmts = [self.statement_at(html, m.start()) for m in re.finditer(r"innerHTML\s*=|const mv = ", html)]
+        stmts += re.findall(r"function chip\(.*?\n  \}", html, re.S)
+        stmts += re.findall(r"const kvHtml = .*?;\n", html, re.S)
+        return stmts
+
+    @staticmethod
+    def statement_at(text, i):
+        depth, j = 0, i
+        while j < len(text):
+            c = text[j]
+            if c in "([{":
+                depth += 1
+            elif c in ")]}":
+                depth -= 1
+            elif c == ";" and depth == 0:
+                return text[i:j + 1]
+            j += 1
+        return text[i:]
+
+    def test_every_bundle_string_written_as_html_is_escaped(self):
+        # A packed page is shared, and a bundle is untrusted input: a name like <img onerror=...>
+        # written raw would run script in the viewer. Every ${...} in a statement that writes HTML
+        # must be escaped (esc, or a helper that escapes), or be a reviewed safe expression.
+        stmts = self.html_statements()
         self.assertGreater(len(stmts), 10)
         for st in stmts:
-            for name in ("st.process", "st.from", "st.to", "M.machine.place", "o.name", "o.rows", "o.cols",
-                         "R.cap", "R.banks", "M.program.name"):
-                self.assertNotRegex(st, r"\$\{" + re.escape(name) + r"\}", f"{name} unescaped in: {st[:120]}")
+            for e in self.interpolations(st):
+                if self.SAFE_CALL.match(e) or e in self.REVIEWED_RAW:
+                    continue
+                self.fail(f"unescaped interpolation in HTML: ${{{e[:100]}}} -- escape it or review it into REVIEWED_RAW")
+            for m in re.finditer(r"\+\s*([A-Za-z_][\w.]*\.(?:name|kind|tile|process|from|to|place|text|what))\s*\+", st):
+                self.fail(f"{m.group(1)} concatenated unescaped in: {st[:140]}")
+
+    def test_the_trusted_helpers_escape(self):
+        # SAFE_CALL trusts chip(), list() and kvHtml() to return escaped HTML: chip writes the tile name only
+        # through esc(), and list() only joins what its callback (chip) returns, plus a count.
+        html = page()
+        body = re.search(r"function chip\(.*?\n  \}", html, re.S).group(0)
+        self.assertIn("esc(C.tileName(R, t))", body)
+        self.assertNotRegex(body, r"\$\{C\.tileName")
+        kv = re.search(r"const kvHtml = .*?;\n", html, re.S).group(0)
+        self.assertEqual(self.interpolations(kv), ["esc(a)", "esc(b)", "esc(b)"])
+        lst = re.search(r"const MAX = 40, list = .*?;\n", html, re.S).group(0)
+        self.assertEqual([e for e in self.interpolations(lst)], ["v.length - MAX"])
+        # Each caller's extra argument is a constant, or built from numbers only.
+        for extra in re.findall(r"chip\(e\.tile, (.*?), (?:touched|e\.tile|call)", html):
+            self.assertRegex(extra, r'^(""|e\.moves > 1 \? .*e\.moves.*: "")$', extra)
 
     @unittest.skipUnless(NODE, "Node.js is not on PATH")
     def test_parse_refuses_a_non_integer_geometry(self):
@@ -168,6 +332,13 @@ class ViewerTest(unittest.TestCase):
                 self.assertGreater(n, 0)
                 sample = sorted({0, 1, n // 7, n // 3, n // 2, (2 * n) // 3, n - 2, n - 1} - {-1})
                 sample = [s for s in sample if 0 <= s < n]
+                # And the first, a middle and the last call, and the step before each (a Feed).
+                ci = [s for s in range(n) if m["kinds"][S["kind"][s]] == "CALL"]
+                if ci:
+                    for s in (ci[0], ci[len(ci) // 2], ci[-1]):
+                        sample += [s - 1, s]
+                    sample = sorted({s for s in sample if 0 <= s < n})
+                derived = self.expected_contents(m, T, sample)
                 p = subprocess.run([NODE, str(self.tmp / "harness.js"), str(self.tmp / "core.js"), str(b),
                                     json.dumps(sample)], capture_output=True, text=True)
                 self.assertEqual(p.returncode, 0, p.stderr)
@@ -218,6 +389,15 @@ class ViewerTest(unittest.TestCase):
                                          self.expected_lt1(T, m, S["tile"][s], s, n))
                     else:
                         self.assertEqual((v["legs"], v["proximity"], v["nextSlotBound"]), ([], None, -1))
+                    # L2 and the fabric (l2-reuse-and-fabric-pipeline-view.md step 1).
+                    want = derived[s]
+                    self.assertEqual(v["contents"], want["contents"], f"L2 and fabric contents after step {s}")
+                    self.assertEqual(v["call"], want["call"], f"the call at step {s}")
+                    self.assertEqual(v["last"], want["last"], f"the latest call at step {s}")
+                    self.assertEqual((v["nextChainStart"], v["nextChainEnd"]), want["next"], f"chain navigation from {s}")
+                self.assertTrue(got["lb"]["ok"], got["lb"]["why"])
+                for e in got["snapIn"]:
+                    self.assertTrue(e[e["chan"]], f"a snapshot has a tile in {e['chan']} after step {e['s']}; the derivation does not")
                 if m["version"] >= 3 and m["lt1"]:
                     G = T["lt1_legs"]
                     for t, a in got["atTime"].items():
@@ -229,6 +409,68 @@ class ViewerTest(unittest.TestCase):
                         else:
                             latest = max(run)[0]
                             self.assertIn(a, {G["action"][g] for st, g in run if st == latest}, f"action at cycle {t}")
+
+    @staticmethod
+    def expected_contents(m, T, sample):
+        # An independent replay of the recorded actions: a step's `to` channel gains its tile, its
+        # `from` channel loses it, and a Call consumes what was fed since the last call (its result
+        # stays, or opens as an accumulator). Every step's counts must equal L-B's held counts.
+        S = T["steps"]
+        ch = [c["name"] for c in m["channels"]]
+        L3, L2, CF, CALL = ch.index("l3"), ch.index("l2"), ch.index("cf"), m["kinds"].index("CALL")
+        l2, cf, fed, moves, calls, chains, open_ = {}, {}, [], {}, [], [], {}
+        snaps, wanted = {}, set(sample)
+        for s in range(S["rows"]):
+            t, f, to = S["tile"][s], S["from"][s], S["to"][s]
+            if f == L3 and to == L2:
+                moves.setdefault(t, []).append(s)
+            if f == L2:
+                l2.pop(t)
+            if f == CF:
+                cf.pop(t)
+            if to == L2:
+                l2[t] = s
+            if to == CF:
+                cf[t] = (s, False)
+                fed.append(t)
+            if S["kind"][s] == CALL:
+                used = [x for x in fed if x != t]
+                for x in used:
+                    cf.pop(x)
+                fed = []
+                cf.setdefault(t, (s, True))
+                if t not in open_:
+                    open_[t] = len(chains)
+                    chains.append({"calls": [], "drain": -1})
+                c = open_[t]
+                chains[c]["calls"].append(len(calls))
+                calls.append({"step": s, "tile": t, "operands": used, "chain": c, "pos": len(chains[c]["calls"])})
+            if f == CF and t in open_:
+                chains[open_.pop(t)]["drain"] = s
+            assert (len(l2), len(cf)) == (S["held_l2"][s], S["held_cf"][s]), f"replay disagrees with held at {s}"
+            if s in wanted:
+                snaps[s] = (dict(l2), dict(cf))
+
+        def info(k):
+            c = calls[k]
+            ch_ = chains[c["chain"]]
+            of = len(ch_["calls"]) if ch_["drain"] >= 0 else -1
+            return {"step": c["step"], "result": c["tile"], "operands": c["operands"], "chain": c["chain"], "pos": c["pos"],
+                    "of": of, "opens": c["pos"] == 1, "closes": of >= 0 and c["pos"] == of, "drain": ch_["drain"]}
+
+        out = {}
+        for s in sample:
+            l2s, cfs = snaps[s]
+            nm = lambda t: sum(1 for x in moves.get(t, []) if x <= s)
+            contents = {"l2": [{"tile": t, "since": a, "moves": nm(t)} for t, a in sorted(l2s.items(), key=lambda kv: kv[1])],
+                        "cf": [{"tile": t, "since": a, "acc": acc} for t, (a, acc) in sorted(cfs.items(), key=lambda kv: kv[1][0])]}
+            at = [k for k, c in enumerate(calls) if c["step"] == s]
+            before = [k for k, c in enumerate(calls) if c["step"] <= s]
+            after = [info(k) for k, c in enumerate(calls) if c["step"] > s]
+            nxt = (next((c["step"] for c in after if c["opens"]), -1), next((c["step"] for c in after if c["closes"]), -1))
+            out[s] = {"contents": contents, "call": info(at[0]) if at else None,
+                      "last": info(before[-1]) if before else None, "next": nxt}
+        return out
 
     def expected_lt1(self, T, m, t, s, n):
         G, Q = T["lt1_legs"], T["lt1_tiles"]
