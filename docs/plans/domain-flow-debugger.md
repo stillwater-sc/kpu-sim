@@ -1,7 +1,7 @@
 # Domain-Flow Debugger: CSP State at L-B, Domains Moving Through the Machine (#363)
 
 **Date:** 2026-10-11
-**Status:** Approved 2026-10-15 (Q1-Q7 as recommended, §7). Step 1 merged (#370); step 2 in review.
+**Status:** Approved 2026-10-15 (Q1-Q7 as recommended, §7). Step 1 merged (#370); step 2 in review (#371); step 3 in review.
 Revised 2026-10-15. Held 2026-10-11 when the architect ruled that L-B must model L3
 placement (ADR 0004 §5). Resumed now that `docs/plans/l3-placement-at-lb.md` steps 1-4 are merged (#364-#367)
 and step 5a (L-T1 waits on its own slot) is in review: every residency has an L3 address at L-B, so the
@@ -336,6 +336,10 @@ Each step is one PR, reviewed and merged before the next.
    - Reference run: matmul 512³ in 64-tiles on `kpu_s1.json` (T4 folded into one site).
    - `test_viewer.py` loads a packed bundle headless and checks that steps, residencies and the
      program position render.
+   - *As built (2026-10-15):* the page's data layer is a DOM-free `<script id="dflow-core">`;
+     `test_viewer.py` runs it in Node on four bundles (the reference run, a retain chain, LU and a
+     cut bundle) and compares each step's fields, its program position and every slot's residency
+     at sample steps with the bundle read through `dflow_check.load`. A browser is not needed.
 4. **Tile inspection.** Values in the record (§3.6), and the inspector decoding them through
    `ElementFormat`.
 5. **The L-T1 overlay.**

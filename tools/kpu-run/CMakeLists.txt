@@ -470,8 +470,18 @@ if(KPU_BUILD_TESTS)
             COMMAND ${KPU_PYTHON3} ${CMAKE_SOURCE_DIR}/tools/trace/test_dflow_check.py
                     ${CMAKE_CURRENT_BINARY_DIR}/csp_linear_64_t16_relu.dflow)
         set_tests_properties(dflow_check_selftest PROPERTIES FIXTURES_REQUIRED dflow_linear_64_t16_relu)
+        # The viewer (step 3): pack each bundle, refuse a non-bundle, and run the page's data layer
+        # in Node on the reference run, a retain chain, LU and a cut bundle.
+        add_test(NAME domainflow_viewer
+            COMMAND ${KPU_PYTHON3} ${CMAKE_SOURCE_DIR}/tools/visualization/domainflow/test_viewer.py
+                    ${CMAKE_CURRENT_BINARY_DIR}/csp_reference.dflow
+                    ${CMAKE_CURRENT_BINARY_DIR}/csp_matmul_relu_retain_32_t16.dflow
+                    ${CMAKE_CURRENT_BINARY_DIR}/csp_lu_64_t16.dflow
+                    ${CMAKE_CURRENT_BINARY_DIR}/csp_cut.dflow)
+        set_tests_properties(domainflow_viewer PROPERTIES FIXTURES_REQUIRED
+            "dflow_reference;dflow_matmul_relu_retain_32_t16;dflow_lu_64_t16;dflow_cut")
         set_tests_properties(${_dflow_tests} kpu_run_csp_dflow_cut dflow_check_cut csp_gen_dflow_reference
-            kpu_run_csp_dflow_reference dflow_check_reference dflow_check_selftest
+            kpu_run_csp_dflow_reference dflow_check_reference dflow_check_selftest domainflow_viewer
             PROPERTIES LABELS "program;domainflow;csp")
     endif()
     # Residency across operators (step 4d): the first operator of a chain retains its result
