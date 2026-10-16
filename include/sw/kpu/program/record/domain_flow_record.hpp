@@ -179,7 +179,11 @@ inline ValueSelection parse_value_selection(const std::string& text) {
             const std::string a = item.substr(lb + 1, comma - lb - 1), b = item.substr(comma + 1, rb - comma - 1);
             auto digits = [](const std::string& x) { return !x.empty() && x.find_first_not_of("0123456789") == std::string::npos; };
             if (!digits(a) || !digits(b)) throw std::invalid_argument("--dflow-values: '" + item + "' is not operand[ti,tj]");
-            v.tiles.push_back(item.substr(0, lb) + "[" + std::to_string(std::stoull(a)) + "," + std::to_string(std::stoull(b)) + "]");
+            try {
+                v.tiles.push_back(item.substr(0, lb) + "[" + std::to_string(std::stoull(a)) + "," + std::to_string(std::stoull(b)) + "]");
+            } catch (const std::out_of_range&) {
+                throw std::invalid_argument("--dflow-values: '" + item + "' has a coordinate out of range");
+            }
         }
         item.clear();
     };

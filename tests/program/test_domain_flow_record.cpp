@@ -283,6 +283,7 @@ TEST_CASE("dflow: the value selection parses tiles, operands and all", "[dflow][
     CHECK_THROWS_AS(record::parse_value_selection("C[2]"), std::invalid_argument);
     CHECK_THROWS_AS(record::parse_value_selection("C[2,x]"), std::invalid_argument);
     CHECK_THROWS_AS(record::parse_value_selection("C[1,1],,A"), std::invalid_argument);
+    CHECK_THROWS_AS(record::parse_value_selection("C[99999999999999999999,0]"), std::invalid_argument);
     const lang::Program ast = lang::parse(slurp("tests/program/corpus/matmul_48x48x48_t16.csp"));
     CHECK_THROWS_WITH(DomainFlowRecorder(ast, "", 0, record::parse_value_selection("Q[0,0]")),
                       ContainsSubstring("names no declared operand"));

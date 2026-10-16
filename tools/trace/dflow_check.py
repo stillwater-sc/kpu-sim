@@ -130,6 +130,10 @@ def _manifest(m):
         for k in ("operands", "channels"):
             if not isinstance(m[k], list) or not all(isinstance(x, dict) and isinstance(x.get("name"), str) for x in m[k]):
                 raise Unreadable(f"{k} is not an array of named objects")
+        # The shapes the value checks divide by and compare against.
+        for o in m["operands"]:
+            for k in ("rows", "cols", "tile_rows", "tile_cols"):
+                _int(o[k], f"operand {o['name']}.{k}", 1)
     except (KeyError, TypeError) as e:
         raise Unreadable(f"manifest: missing or malformed field ({e!r})")
 
@@ -149,7 +153,7 @@ def load(path):
         v = m.get("values")
         if not isinstance(v, dict) or v.get("format") != "float32" or not isinstance(v.get("selected"), str) \
                 or not (v.get("finals") is True or isinstance(v.get("finals"), str)) \
-                or not (v.get("cut_at") is None or (isinstance(v.get("cut_at"), int) and v["cut_at"] >= 0)):
+                or not (v.get("cut_at") is None or (type(v.get("cut_at")) is int and v["cut_at"] >= 0)):
             raise Unreadable("values: missing or malformed (format float32, selected, finals, cut_at)")
     tables = {}
     schemas = dict(SCHEMA, **(SCHEMA_V2 if m["version"] >= 2 else {}))
@@ -419,6 +423,7 @@ def check_values(m, T, bad, nr):
             good = False
         if chan >= len(m["channels"]):
             bad("V1", f"snapshot {k} is in channel {chan}; there are {len(m['channels'])}")
+            good = False
         if first + rows * cols > ne:
             bad("V1", f"snapshot {k}'s elements [{first}, {first + rows * cols}) run past the {ne} recorded")
             good = False

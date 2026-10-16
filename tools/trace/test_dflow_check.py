@@ -283,6 +283,25 @@ class DflowCheckSelfTest(unittest.TestCase):
         self.b.set("elements", "v", first, self.b.get("elements", "v", first) + 1.0)
         self.assertFails("V5", "differs from its final")
 
+    def test_v1_channel_out_of_range_is_one_violation(self):
+        k = self.step_snapshot(STORE_KIND)
+        self.b.set("snapshots", "chan", k, 77)
+        code, report = run(self.b.dir)
+        self.assertEqual(code, 1)
+        mine = [v for v in report["violations"] if f"snapshot {k} " in v["message"] or f"(snapshot {k})" in v["message"]]
+        self.assertTrue(any(v["invariant"] == "V1" for v in mine))
+        self.assertFalse(any(v["invariant"] in ("V2", "V5") for v in mine), mine)
+
+    def test_boolean_cut_at_is_unreadable(self):
+        self.b.manifest["values"]["cut_at"] = True
+        self.b.save_manifest()
+        self.assertUnreadable()
+
+    def test_zero_tile_rows_is_unreadable(self):
+        self.b.manifest["operands"][0]["tile_rows"] = 0
+        self.b.save_manifest()
+        self.assertUnreadable()
+
     def test_values_format_other_than_float32_is_unreadable(self):
         self.b.manifest["values"]["format"] = "bfloat16"
         self.b.save_manifest()
