@@ -22,7 +22,7 @@ Open `mm512.html` in a browser. It needs no server and no other file. Alternativ
   current action moves a tile along is lit. L3 is drawn as its addressed slots, grouped by bank,
   each showing the tile it holds and the residency. The slot the action touches is outlined; a
   slot this action released is dashed. L2 and the fabric show their tile counts and are labelled
-  unbounded at L-B, since a level-1 program declares only L3.
+  "no bound at L-B", since a level-1 program declares only L3.
 - **Program view:** the source, with the current line highlighted and every enclosing loop's
   index. Click a line to run to its next action.
 - **Ribbon:** every loop iteration at every depth across the whole run, and L3 occupancy over the
@@ -62,6 +62,14 @@ Open `mm512.html` in a browser. It needs no server and no other file. Alternativ
 iteration at any depth, the next action of a kind or on the same tile, the release of the current
 residency, the next slot-bound Load (with an overlay), the next chain start or end, and jump to a
 step. A link to `page.html#step=123` opens at that step.
+
+**A steady layout:** every area that changes from step to step has a fixed size, so nothing
+jumps while the run plays. A value too wide for its box is cut with an ellipsis and shown in full
+in its tooltip; a list that does not fit scrolls inside its box; an inspector row that does not
+apply to a step shows a dash instead of disappearing; and stepping scrolls only the program
+listing, never the window. `test_viewer.py` checks this in a headless Chrome when one is
+available (`$CHROME`, one on `PATH`, or Playwright's): it steps every bundle at three widths and
+fails if any panel moves or changes size.
 
 **Honesty rules (plan §3.7):** the axis is the step, not time, because L-B has no time; L-T1
 timing is a later overlay (step 5). Every residency, address, occupancy and loop index is read from

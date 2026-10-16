@@ -16,7 +16,9 @@ SPDX-License-Identifier: MIT
 Copyright (c) 2024-2025 Stillwater Supercomputing, Inc.
 """
 
+import glob
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -31,6 +33,47 @@ import dflow_check  # noqa: E402
 
 BUNDLES = []
 NODE = shutil.which("node")
+
+
+def find_chrome():
+    # A headless Chrome for the layout check: $CHROME, one on PATH, or Playwright's download.
+    if os.environ.get("CHROME"):
+        return os.environ["CHROME"]
+    for name in ("chrome-headless-shell", "chromium", "chromium-browser", "google-chrome"):
+        if shutil.which(name):
+            return shutil.which(name)
+    found = sorted(glob.glob(os.path.expanduser("~/.cache/ms-playwright/chromium_headless_shell-*/*/chrome-headless-shell")))
+    return found[-1] if found else None
+
+
+CHROME = find_chrome()
+
+# Steps the packed page through its run (as play does, one render per step) and records every
+# element's box; prints the ones whose position or size changed.
+LAYOUT_PROBE = r"""<script>
+addEventListener("load", () => setTimeout(() => {
+  const jump = document.getElementById("jump"), n = +document.getElementById("scrub").max + 1;
+  const els = [...document.querySelectorAll("#viewer [id], #viewer .panel, #viewer .station, #viewer .slot, #viewer .col, #viewer .ln")]
+    .filter(e => !["ribbon", "scrub"].includes(e.id));
+  const key = e => e.id || (e.className + ":" + [...e.parentNode.children].indexOf(e) + "<" + (e.parentNode.id || e.parentNode.className));
+  const span = new Map(), steps = [];
+  for (let s = 0; s < n; s += Math.max(1, Math.floor(n / 400))) steps.push(s);
+  for (const s of steps) {
+    jump.value = s; jump.dispatchEvent(new Event("change"));
+    for (const e of els) {
+      const r = e.getBoundingClientRect(), k = key(e), v = [r.x, r.y, r.width, r.height].map(Math.round);
+      if (!span.has(k)) span.set(k, { lo: v.slice(), hi: v.slice() });
+      const x = span.get(k);
+      for (let i = 0; i < 4; i++) { x.lo[i] = Math.min(x.lo[i], v[i]); x.hi[i] = Math.max(x.hi[i], v[i]); }
+    }
+  }
+  const moved = [...span].filter(([, x]) => x.lo.some((v, i) => v !== x.hi[i])).map(([k]) => k);
+  const pre = document.createElement("pre");
+  pre.id = "layout-result";
+  pre.textContent = JSON.stringify({ steps: steps.length, moved });
+  document.body.appendChild(pre);
+}, 200));
+</script>"""
 NONE8, NONE64 = 0xFF, 0xFFFFFFFFFFFFFFFF
 RES_RETAINED, HAS_PLACE = 4, 8
 
@@ -116,6 +159,32 @@ class ViewerTest(unittest.TestCase):
                 for t in manifest["tables"].values():
                     self.assertIn(t["file"], payload["bins"])
 
+    # Elements allowed to change size while stepping, because each sits inside a fixed box and
+    # moves nothing else: tables inside fixed-height scroll boxes, and a heading's own text.
+    LAYOUT_CONTAINED = {"leg-table", "snap-hist", "slot-hist", "tile-title"}
+
+    @unittest.skipUnless(CHROME, "no headless Chrome (set $CHROME)")
+    def test_stepping_does_not_move_the_layout(self):
+        # During play every information area keeps its size and place: text that wraps differently,
+        # rows that appear, or a window scroll would make the page jump at every step.
+        for b in BUNDLES:
+            out = self.tmp / "view.html"
+            self.assertEqual(self.pack(str(b), "-o", str(out)).returncode, 0)
+            html = out.read_text(encoding="utf-8")
+            i = html.rindex("</body>")
+            (self.tmp / "probe.html").write_text(html[:i] + LAYOUT_PROBE + html[i:], encoding="utf-8")
+            for width in (1400, 1000, 600):
+                with self.subTest(bundle=b.name, width=width):
+                    p = subprocess.run([CHROME, "--no-sandbox", "--disable-gpu", "--hide-scrollbars",
+                                        f"--window-size={width},1400", "--virtual-time-budget=60000", "--dump-dom",
+                                        (self.tmp / "probe.html").as_uri()], capture_output=True, text=True, timeout=180)
+                    m = re.search(r'<pre id="layout-result">(.*?)</pre>', p.stdout, re.S)
+                    self.assertIsNotNone(m, "the layout probe did not run: " + p.stderr[-400:])
+                    got = json.loads(m.group(1).replace("&quot;", '"').replace("&lt;", "<").replace("&gt;", ">").replace("&amp;", "&"))
+                    self.assertGreater(got["steps"], 1)
+                    self.assertEqual(sorted(set(got["moved"]) - self.LAYOUT_CONTAINED), [],
+                                     f"these moved or resized while stepping at {width}px")
+
     def test_pack_refuses_a_non_bundle(self):
         (self.tmp / "manifest.json").write_text('{"format": "kpu-tflow"}')
         p = self.pack(str(self.tmp), "-o", str(self.tmp / "x.html"))
@@ -140,16 +209,20 @@ class ViewerTest(unittest.TestCase):
         # Numbers: record columns (typed arrays), loop counters, counts.
         "k", "k % 4", "k + 1", "sl", "at.res", "l.leg", "l.depth", "l.value", "l.hi", "pos.line",
         "st.place.slot", "st.place.bank", "v.h", "v.w", "e.moves", "K - cells", "R.tiles.operand[t] % 4",
+        "r", "lineW + 2", "w",
         # Page constants and conditionals over them.
-        "a", 'R.banks > 1 ? "s" : ""', 'R.residency.flags[at.res] & C.RES_RETAINED ? " retained" : ""',
+        "a", 'R.banks > 1 ? "s" : ""', 'live ? "live" : ""', 'R.residency.flags[at.res] & C.RES_RETAINED ? " retained" : ""',
         'now ? "<b>this step</b>" : `latest: step ${fmt(call.step)}`',
         # Built only from escaped or numeric pieces just above the statement that writes them.
-        "shape", "mv", "rtxt", "ops", "cls", "extra",
+        "shape", "mv", "rtxt", "ops", "cls", "extra", "close",
+        'st < R.n ? esc(R.m.kinds[R.steps.kind[st]]) : ""',
+        'st < R.n ? `<button data-go="${st}">go</button>` : ""',
+        'reach ? `<button data-go="${X.open[r]}">go</button>` : ""',
         'l.process ? `${esc(l.process)} lane ${l.lane}` : "none (credit)"',
         # Inside a key/value pair that is escaped where it is written (esc(b)).
         "R.lt1.bound.atol", "R.lt1.bound.rtol",
     }
-    SAFE_CALL = re.compile(r"^(esc|fmt|chip|list)\(")
+    SAFE_CALL = re.compile(r"^(esc|fmt|chip|list|kvHtml)\(")
 
     @staticmethod
     def interpolations(st):
@@ -167,10 +240,27 @@ class ViewerTest(unittest.TestCase):
     def html_statements(self):
         # Every statement that writes HTML: an innerHTML assignment, the move string (mv) and the
         # chip helper, whose results are written as HTML.
+        # A statement runs to the first ';' at bracket depth 0, so a multi-line arrow body inside
+        # an innerHTML assignment is scanned whole (the first ';' would stop inside it).
         html = page()
-        stmts = re.findall(r"innerHTML\s*=.*?;\n", html, re.S) + re.findall(r"const mv = .*?;\n", html, re.S)
+        stmts = [self.statement_at(html, m.start()) for m in re.finditer(r"innerHTML\s*=|const mv = ", html)]
         stmts += re.findall(r"function chip\(.*?\n  \}", html, re.S)
+        stmts += re.findall(r"const kvHtml = .*?;\n", html, re.S)
         return stmts
+
+    @staticmethod
+    def statement_at(text, i):
+        depth, j = 0, i
+        while j < len(text):
+            c = text[j]
+            if c in "([{":
+                depth += 1
+            elif c in ")]}":
+                depth -= 1
+            elif c == ";" and depth == 0:
+                return text[i:j + 1]
+            j += 1
+        return text[i:]
 
     def test_every_bundle_string_written_as_html_is_escaped(self):
         # A packed page is shared, and a bundle is untrusted input: a name like <img onerror=...>
@@ -187,12 +277,14 @@ class ViewerTest(unittest.TestCase):
                 self.fail(f"{m.group(1)} concatenated unescaped in: {st[:140]}")
 
     def test_the_trusted_helpers_escape(self):
-        # SAFE_CALL trusts chip() and list() to return escaped HTML: chip writes the tile name only
+        # SAFE_CALL trusts chip(), list() and kvHtml() to return escaped HTML: chip writes the tile name only
         # through esc(), and list() only joins what its callback (chip) returns, plus a count.
         html = page()
         body = re.search(r"function chip\(.*?\n  \}", html, re.S).group(0)
         self.assertIn("esc(C.tileName(R, t))", body)
         self.assertNotRegex(body, r"\$\{C\.tileName")
+        kv = re.search(r"const kvHtml = .*?;\n", html, re.S).group(0)
+        self.assertEqual(self.interpolations(kv), ["esc(a)", "esc(b)", "esc(b)"])
         lst = re.search(r"const MAX = 40, list = .*?;\n", html, re.S).group(0)
         self.assertEqual([e for e in self.interpolations(lst)], ["v.length - MAX"])
         # Each caller's extra argument is a constant, or built from numbers only.

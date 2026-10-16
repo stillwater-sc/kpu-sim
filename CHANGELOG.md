@@ -20,6 +20,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - The tiles are derived from the recorded actions as L-B moves them, and checked against L-B's
     held counts at every step. On a disagreement the page shows no contents.
   - Navigation: next chain start and end; `#step=N` opens a page at a step.
+  - A steady layout during play: every changing area has a fixed size, so text no longer jumps
+    as steps change. Wide values are cut with an ellipsis and shown in full in a tooltip, lists
+    scroll inside their boxes, inspector rows that do not apply show a dash, the loop chips and
+    next-iteration buttons cover every loop depth from the start, and stepping scrolls only the
+    program listing, never the window. `test_viewer.py` steps every bundle at three widths in a
+    headless Chrome (when one is available) and fails if any panel moves or resizes. Its escape
+    scan now reads each HTML statement to its real end, so multi-line arrow bodies are scanned.
   - `test_viewer.py` compares the contents and calls with an independent replay, checks every
     recorded L2 or fabric snapshot against them, and replaces its name-list escape check with
     the strict allow-list scan.
