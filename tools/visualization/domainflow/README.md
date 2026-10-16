@@ -43,7 +43,7 @@ Open `mm512.html` in a browser. It needs no server and no other file. Alternativ
   slot decided its start and what the wait cost, and shows the tile's proximity to L-B under L-T1
   (max |a - o|, max relative error, within bound or not). The axis can switch to L-T1 cycles: the
   ribbon then draws every leg on its process's row, marks slot waits, and a click lands on the
-  action running at that cycle. Everything in the overlay is labelled L-T1 and uncalibrated.
+  action running at that cycle (on an idle cycle, it stays where it is). Everything in the overlay is labelled L-T1 and uncalibrated.
 
 **Navigation:** step, back, play (Space, the arrow keys, Home, End), the slider, the next
 iteration at any depth, the next action of a kind or on the same tile, the release of the current

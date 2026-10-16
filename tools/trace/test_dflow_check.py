@@ -361,6 +361,11 @@ class DflowCheckSelfTest(unittest.TestCase):
         self.b.set("lt1_legs", "slot_wait", g, self.b.get("lt1_legs", "slot_wait", g) + 3)
         self.assertFails("L4", "the manifest says")
 
+    def test_l4_wait_longer_than_the_start(self):
+        g = self.leg_of(lambda g: self.b.get("lt1_legs", "kind", g) == 0)    # LOAD
+        self.b.set("lt1_legs", "slot_wait", g, self.b.get("lt1_legs", "start", g) + 1)
+        self.assertFails("L4", "but starts at cycle")
+
     def test_l5_pass_disagrees_with_the_tiles(self):
         self.b.set("lt1_tiles", "pass", 0, 0)
         self.assertFails("L5", "pass is True")

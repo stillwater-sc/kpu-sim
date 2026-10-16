@@ -459,13 +459,18 @@ globalThis.DflowCore = (() => {
     }
     return best;
   }
-  // The recorded action whose latest-starting leg at or before cycle t is the latest: what a click
-  // on the time axis lands on.
+  // The recorded action running at cycle t (one of its legs has start <= t < finish), the latest to
+  // start: what a click on the time axis lands on. -1 when every lane is idle at t.
   function actionAtTime(R, t) {
     if (!R.lt1 || !R.byStart.length) return -1;
     let lo = 0, hi = R.byStart.length - 1, at = -1;
     while (lo <= hi) { const mid = (lo + hi) >> 1; if (R.lt1_legs.start[R.byStart[mid]] <= t) { at = mid; lo = mid + 1; } else hi = mid - 1; }
-    for (let i = Math.max(at, 0); i >= 0; i--) { const a = R.lt1_legs.action[R.byStart[i]]; if (a < R.n) return a; }
+    for (let i = at; i >= 0; i--) {
+      const g = R.byStart[i];
+      if (R.lt1_legs.finish[g] <= t) continue;      // ended (or zero-length): not running at t
+      const a = R.lt1_legs.action[g];
+      if (a < R.n) return a;
+    }
     return -1;
   }
 

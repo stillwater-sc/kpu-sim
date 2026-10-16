@@ -63,7 +63,8 @@ Version 3 adds the L-T1 overlay (lt1_legs, lt1_tiles; the manifest's lt1 says wh
     L3 timing                 start <= finish <= the makespan, which is the latest finish; the legs
                               on one process lane never overlap
     L4 slot waits             the legs' slot waits add up to the manifest's slot_wait_cycles, the
-                              legs with one count slot_bound, and only Loads wait on a slot
+                              legs with one count slot_bound, only Loads wait on a slot, and no
+                              wait is longer than the cycles before the Load's start
     L5 proximity              one row per tile of every operand; the manifest's pass is every
                               tile's; the errors are finite and non-negative
 
@@ -478,6 +479,8 @@ def check_lt1(m, T, bad):
         if w:
             waits += w
             waited += 1
+            if w > st:
+                bad("L4", f"leg {g} waits {w} cycles on its slot but starts at cycle {st}")
             if k != LOAD_KIND:
                 bad("L4", f"leg {g} ({kinds[k]}) waits {w} cycles on a slot; only a Load waits on its slot")
     for a in range(n):

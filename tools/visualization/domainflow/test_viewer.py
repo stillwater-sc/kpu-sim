@@ -54,7 +54,10 @@ for (const s of JSON.parse(stepsArg)) {
 }
 if (R.lt1) {
   out.atTime = {};
-  for (const t of [0, Math.floor(R.lt1.makespan / 3), Math.floor(R.lt1.makespan / 2), R.lt1.makespan]) out.atTime[t] = C.actionAtTime(R, t);
+  // Sample cycles, and every leg's finish (where the lane that ran it falls idle, or another starts).
+  const ts = new Set([0, Math.floor(R.lt1.makespan / 3), Math.floor(R.lt1.makespan / 2), R.lt1.makespan]);
+  for (let g = 0; g < R.lt1_legs.rows && ts.size < 200; g += Math.max(1, Math.floor(R.lt1_legs.rows / 150))) ts.add(R.lt1_legs.finish[g]);
+  for (const t of ts) out.atTime[t] = C.actionAtTime(R, t);
 }
 process.stdout.write(JSON.stringify(out));
 """
@@ -218,14 +221,14 @@ class ViewerTest(unittest.TestCase):
                 if m["version"] >= 3 and m["lt1"]:
                     G = T["lt1_legs"]
                     for t, a in got["atTime"].items():
-                        cand = [(G["start"][g], g) for g in range(G["rows"]) if G["start"][g] <= int(t) and G["action"][g] < n]
-                        want = G["action"][max(cand)[1]] if cand else -1
-                        # Ties on the start cycle: any action starting at that cycle is right.
-                        if cand and a != want:
-                            starts = {G["action"][g] for st, g in cand if st == max(cand)[0]}
-                            self.assertIn(a, starts, f"action at cycle {t}")
+                        # Running at t: start <= t < finish. The latest to start; on a tie, any.
+                        run = [(G["start"][g], g) for g in range(G["rows"])
+                               if G["start"][g] <= int(t) < G["finish"][g] and G["action"][g] < n]
+                        if not run:
+                            self.assertEqual(a, -1, f"cycle {t}: nothing runs, yet the click lands on {a}")
                         else:
-                            self.assertEqual(a, want, f"action at cycle {t}")
+                            latest = max(run)[0]
+                            self.assertIn(a, {G["action"][g] for st, g in run if st == latest}, f"action at cycle {t}")
 
     def expected_lt1(self, T, m, t, s, n):
         G, Q = T["lt1_legs"], T["lt1_tiles"]
