@@ -63,6 +63,12 @@ struct DeviceSpecification {
     std::string topology = "single";            // single | news | checkerboard
     Dim compute_tiles = 1;
     double macs_per_cycle = 256.0;              // ONE compute tile's throughput
+    // ONE compute tile's systolic array, in PEs (docs/plans/l2-reuse-and-fabric-pipeline-view.md
+    // §3.1): pe_rows x pe_cols == macs_per_cycle. Absent = not declared, and L-T1 times a call
+    // as one leg at macs_per_cycle, as before. Declared, L-T1 times an accumulator's gemm chain
+    // as an output-stationary wavefront: operands in, results draining north on their own links.
+    // Not `array`, which is the grid of compute tiles.
+    struct Fabric { std::optional<Dim> pe_rows, pe_cols; } fabric;
     Dim element_bytes = 4;
 
     // DMA: DRAM <-> L3.
@@ -472,6 +478,17 @@ inline std::string DeploymentSpec::validate() const {
         if (d.dma.window && !d.memory.dram)
             return where + ": dma.window needs memory.dram: a burst is the DRAM's burst, "
                            "placed by its address map";
+        if (d.fabric.pe_rows.has_value() != d.fabric.pe_cols.has_value())
+            return where + ": fabric.pe_rows and fabric.pe_cols are declared together or not at all";
+        if (d.fabric.pe_rows) {
+            if (*d.fabric.pe_rows == 0 || *d.fabric.pe_cols == 0)
+                return where + ": fabric.pe_rows and fabric.pe_cols must be non-zero";
+            const double pes = double(*d.fabric.pe_rows) * double(*d.fabric.pe_cols);
+            if (pes != d.macs_per_cycle)
+                return where + ": fabric is " + std::to_string(*d.fabric.pe_rows) + " x " +
+                       std::to_string(*d.fabric.pe_cols) + " PEs, but macs_per_cycle is " +
+                       std::to_string(d.macs_per_cycle) + "; one PE does one MAC a cycle, so they must agree";
+        }
         // The physical shape. Validated only when DECLARED: an absent shape is derived where
         // it can be (array_layout.hpp), and a spec that never mentions one stays valid.
         if (d.array.rows.has_value() != d.array.cols.has_value())
@@ -526,6 +543,8 @@ inline DeviceDescriptor DeploymentSpec::device_view(Dim i) const {
     else d.move_lanes = s.compute_tiles;
 
     d.fabric_macs_per_cycle = s.macs_per_cycle;
+    d.pe_rows = s.fabric.pe_rows.value_or(0);
+    d.pe_cols = s.fabric.pe_cols.value_or(0);
     d.element_bytes = static_cast<double>(s.element_bytes);
     d.l3_tiles = s.l3.capacity_tiles;            // CAPACITY, not the module count
 

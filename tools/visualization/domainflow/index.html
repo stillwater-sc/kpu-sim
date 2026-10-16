@@ -130,6 +130,18 @@ canvas.ribbon { width: 100%; height: 90px; display: block; cursor: pointer; }
 .fabric .to { align-self: center; text-align: center; color: var(--muted); }
 .fabric .call { font: 0.82rem var(--font-mono); height: 4.35em; overflow: hidden; }
 .fabric .call div { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pipe { border-top: 1px solid var(--line); padding-top: 8px; display: grid; gap: 6px; }
+.pipelanes { height: 152px; overflow-y: auto; scrollbar-gutter: stable; display: grid; gap: 4px; align-content: start; }
+.pipelane { display: grid; grid-template-columns: 4.5em repeat(3, minmax(0, 1fr)); gap: 4px; align-items: stretch; }
+.pipelane > div { background: var(--soft); border-radius: 5px; padding: 3px 6px; height: 44px; overflow: hidden; min-width: 0; }
+.pipelane .ln2 { font: 0.72rem var(--font-mono); color: var(--muted); background: none; padding: 3px 0; }
+.pipelane .tiles { height: auto; margin-top: 0; justify-content: flex-start; overflow: hidden; flex-wrap: nowrap; }
+.pipehd { display: grid; grid-template-columns: 4.5em repeat(3, minmax(0, 1fr)); gap: 4px; font-size: 0.7rem; color: var(--muted); }
+.tchip .pc { color: var(--muted); }
+.tchip .ph { color: var(--ink); font-weight: 600; }
+#pipe-note { height: 2.9em; overflow: hidden; }
+#pipe-t { display: inline-block; text-align: right; }
+.pipe h2 { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .chainbar { display: flex; gap: 2px; margin-top: 4px; flex-wrap: nowrap; height: 10px; overflow: hidden; align-items: center; }
 .chainbar .note { margin: 0; font-size: 0.66rem; }
 .chainbar i { width: 10px; height: 8px; border-radius: 2px; background: var(--line); }
@@ -210,6 +222,7 @@ footer ul { margin: 0; padding-left: 18px; }
           <button id="chainstart" title="The next call that opens a chain: the first call on a result in the fabric">next chain start</button>
           <button id="chainend" title="The next call that closes a chain: the last call before its result drains">next chain end</button>
           <button id="slotbound" title="The next Load whose L3 slot decided its start under L-T1" hidden>next slot-bound Load</button>
+          <button id="overlap" title="The next action that starts while a compute tile streams one chain's operands in and drains the previous chain's results north" hidden>next three-tile moment</button>
           <span class="group" id="axisgroup" hidden><label for="axis">axis</label><select id="axis"><option value="step">step (L-B)</option><option value="time">L-T1 cycles</option></select></span>
           <span class="group"><label for="jump">jump to step</label><input id="jump" type="number" min="0"></span>
           <span class="group"><label for="speed">speed</label><select id="speed"><option value="4">4/s</option><option value="15" selected>15/s</option><option value="60">60/s</option><option value="240">240/s</option></select></span>
@@ -247,7 +260,13 @@ footer ul { margin: 0; padding-left: 18px; }
               <div class="to">&rarr;</div>
               <div class="col"><div class="lbl">results in the array (open accumulators)</div><div class="tiles" id="fab-acc"></div></div>
             </div>
-            <p class="note" id="fab-note">Which tiles the fabric holds and which call ran, read from L-B's actions. L-B has no time, so nothing here is a fill, a steady state or a drain: those are timing, and arrive with the L-T1 pipeline overlay.</p>
+            <p class="note" id="fab-note">Which tiles the fabric holds and which call ran, read from L-B's actions. L-B has no time, so nothing here is a fill, a steady state or a drain: those are L-T1's, below when it ran.</p>
+            <div class="pipe" id="pipe" hidden>
+              <h2>L-T1 pipeline at cycle <span id="pipe-t" class="num"></span> (this action's start) &middot; uncalibrated</h2>
+              <div class="pipehd"><span>compute tile</span><span>streaming in (A west, B north)</span><span>in the array</span><span>results draining north</span></div>
+              <div class="pipelanes" id="pipe-lanes"></div>
+              <p class="note" id="pipe-note"></p>
+            </div>
           </div>
           <div class="legend" id="legend"></div>
         </section>
@@ -298,7 +317,7 @@ footer ul { margin: 0; padding-left: 18px; }
 <script id="dflow-core">
 "use strict";
 globalThis.DflowCore = (() => {
-  const VERSIONS = [1, 2, 3];
+  const VERSIONS = [1, 2, 3, 4];
   const OPENS = 1, CLOSES = 2, RETAINS = 4, HAS_PLACE = 8, PINNED = 16, RES_RETAINED = 4;
   const NONE8 = 255, NONE32 = 0xFFFFFFFF;
   const TYPED = { u8: Uint8Array, u16: Uint16Array, u32: Uint32Array, u64: BigUint64Array, i64: BigInt64Array, f32: Float32Array, f64: Float64Array };
@@ -380,6 +399,37 @@ globalThis.DflowCore = (() => {
         R.proxOf = new Map();
         for (let q = 0; q < R.lt1_tiles.rows; q++) R.proxOf.set(R.lt1_tiles.tile[q], q);
         R.byStart = Array.from({ length: R.lt1_legs.rows }, (_, g) => g).sort((x, y) => R.lt1_legs.start[x] - R.lt1_legs.start[y]);
+      }
+    }
+    // Version 4: the fabric pipeline. Each accumulator's gemm chain as L-T1 timed it on the systolic
+    // array (in0, front, in1, last, out1, per chain; each stream call's place in its chain).
+    R.fabric = null;
+    if (m.version >= 4) {
+      for (const name of ["lt1_chains", "lt1_calls"]) {
+        const t = m.tables[name], buf = files[t.file];
+        if (!buf) throw new Error("missing " + t.file);
+        const out = { rows: t.rows };
+        for (const c of t.columns) out[c.name] = column(buf, t, c.name);
+        R[name] = out;
+      }
+      if (R.lt1 && m.lt1.fabric) {
+        const f = m.lt1.fabric;
+        R.fabric = { pe_rows: int(f.pe_rows, "lt1.fabric.pe_rows", 1), pe_cols: int(f.pe_cols, "lt1.fabric.pe_cols", 1),
+                     lanes: int(m.lt1.lanes.cf ?? 1, "lt1.lanes.cf", 1) };
+        R.chainOfCall = new Map();           // action -> its lt1_calls row
+        for (let r = 0; r < R.lt1_calls.rows; r++) R.chainOfCall.set(R.lt1_calls.action[r], r);
+        R.laneChains = Array.from({ length: R.fabric.lanes }, () => []);   // per cf lane, by in0
+        for (let c = 0; c < R.lt1_chains.rows; c++) if (R.lt1_chains.lane[c] < R.fabric.lanes) R.laneChains[R.lt1_chains.lane[c]].push(c);
+        for (const v of R.laneChains) v.sort((a, b) => R.lt1_chains.in0[a] - R.lt1_chains.in0[b]);
+        // The three-tile moments: a chain's operands streaming in while the chain before it on the
+        // same compute tile still drains its results north.
+        R.overlaps = [];
+        for (const v of R.laneChains)
+          for (let i = 1; i < v.length; i++) {
+            const prev = R.lt1_chains.out1[v[i - 1]], next = R.lt1_chains.in0[v[i]];
+            if (prev >= 0 && prev > next) R.overlaps.push([next, prev]);
+          }
+        R.overlaps.sort((a, b) => a[0] - b[0]);
       }
     }
     R.n = R.steps.rows;                      // recorded steps (fewer than the run's actions if cut)
@@ -637,7 +687,82 @@ globalThis.DflowCore = (() => {
     return -1;
   }
 
-  return { VERSIONS, parse, tileName, contentsAt, movesBefore, callAt, lastCallAt, nextChainStart, nextChainEnd, position, slotAt, step, snapshot, valueAt, finalOf, snapshotsOf, legs, proximity, nextSlotBound, actionAtTime, nextIteration, nextKind, nextOnTile, nextFromLine, releaseOf, RES_RETAINED };
+  // ---- the fabric pipeline (version 4; l2-reuse-and-fabric-pipeline-view.md step 2) ----
+  // A chain's recorded bounds (cycles, L-T1's): -1 where it was not drained.
+  function chainInfo(R, c) {
+    const X = R.lt1_chains;
+    return { chain: c, tile: X.tile[c], lane: X.lane[c], rows: X.used_rows[c], cols: X.used_cols[c], calls: X.calls[c],
+             in0: X.in0[c], front: X.front[c], in1: X.in1[c], last: X.last[c], out1: X.out1[c], link_delay: X.link_delay[c],
+             first: X.first_action[c], lastAction: X.last_action[c], drain: X.drain_action[c] };
+  }
+  // The stream call at action a: its chain and its place in it; null for a call timed as one leg.
+  function streamCall(R, a) {
+    if (!R.fabric || !R.chainOfCall.has(a)) return null;
+    const r = R.chainOfCall.get(a);
+    return { chain: chainInfo(R, R.lt1_calls.chain[r]), pos: R.lt1_calls.pos[r] };
+  }
+  // The cf leg of action a, or null.
+  function cfLeg(R, a) {
+    if (!R.legsOf || !R.legsOf.has(a)) return null;
+    const G = R.lt1_legs, cf = R.m.processes.indexOf("cf");
+    for (const g of R.legsOf.get(a)) if (G.proc[g] === cf) return { start: G.start[g], finish: G.finish[g], lane: G.lane[g] };
+    return null;
+  }
+  const frac = (t, a, b) => Math.max(0, Math.min(1, (t - a) / Math.max(1, b - a)));
+  // What each compute tile's array does at cycle t, read from the recorded bounds. Per lane:
+  //   incoming  the operands of the call streaming into PE(0,0) at t, and how far (linear: the
+  //             model's dense stream, element_stride 1)
+  //   array     every chain with PEs on it at t (in0 <= t < last), and its phase: fill (the wavefront
+  //             still spreading, t < front), steady (every PE on it), tail (PEs finishing, t >= in1).
+  //             Two chains share the array while one's tail overlaps the next one's fill
+  //   draining  every chain whose results are on the northbound links at t (in1 <= t < out1)
+  function fabricAt(R, t) {
+    if (!R.fabric) return null;
+    return R.laneChains.map((v, lane) => {
+      const out = { lane, incoming: [], array: [], draining: [] };
+      let hi = v.length - 1, lo = 0, at = -1;
+      while (lo <= hi) { const mid = (lo + hi) >> 1; if (R.lt1_chains.in0[v[mid]] <= t) { at = mid; lo = mid + 1; } else hi = mid - 1; }
+      for (let i = at; i >= 0; i--) {
+        const c = chainInfo(R, v[i]);
+        // Chains on one compute tile end in order (each one's out1 is past the one before it, by
+        // the top-link rule), so the first that has ended ends the scan.
+        const end = c.out1 >= 0 ? c.out1 : c.in1;            // calls not over in the record: known to in1
+        if (end <= t) break;
+        if (t < c.in1) {
+          for (let a = c.first; a <= c.lastAction; a++) {
+            const sc = streamCall(R, a), leg = sc && sc.chain.chain === c.chain ? cfLeg(R, a) : null;
+            if (leg && leg.start <= t && t < leg.finish) { out.incoming.push({ chain: c.chain, action: a, pos: sc.pos, frac: frac(t, leg.start, leg.finish) }); break; }
+          }
+        }
+        const last = c.last >= 0 ? c.last : c.in1 + (c.rows - 1) + (c.cols - 1);
+        const filling = t < c.front, finishing = t >= c.in1;
+        if (t < last) out.array.push({ ...c, phase: filling && finishing ? "fill+tail" : filling ? "fill" : finishing ? "tail" : "steady" });
+        if (c.out1 >= 0 && c.in1 <= t && t < c.out1) out.draining.push({ ...c, frac: frac(t, c.in1, c.out1) });
+      }
+      out.array.reverse(); out.draining.reverse();
+      return out;
+    });
+  }
+  // When action s runs under L-T1: its first leg's start; -1 without an overlay.
+  function timeOf(R, s) {
+    const L = legs(R, s);
+    return L.length ? L[0].start : -1;
+  }
+  // The next action after s that starts while some compute tile streams one chain's operands in
+  // and drains the previous chain's results: the three-tile moment.
+  function nextOverlap(R, s) {
+    if (!R.fabric || !R.overlaps.length) return -1;
+    for (let a = s + 1; a < R.n; a++) {
+      const t = timeOf(R, a);
+      if (t < 0) continue;
+      let lo = 0, hi = R.overlaps.length - 1, at = -1;
+      while (lo <= hi) { const mid = (lo + hi) >> 1; if (R.overlaps[mid][0] <= t) { at = mid; lo = mid + 1; } else hi = mid - 1; }
+      for (let i = at; i >= 0 && i > at - 8; i--) if (R.overlaps[i][0] <= t && t < R.overlaps[i][1]) return a;
+    }
+    return -1;
+  }
+
+  return { VERSIONS, parse, tileName, contentsAt, chainInfo, streamCall, cfLeg, fabricAt, timeOf, nextOverlap, movesBefore, callAt, lastCallAt, nextChainStart, nextChainEnd, position, slotAt, step, snapshot, valueAt, finalOf, snapshotsOf, legs, proximity, nextSlotBound, actionAtTime, nextIteration, nextKind, nextOnTile, nextFromLine, releaseOf, RES_RETAINED };
 })();
 </script>
 
@@ -715,6 +840,13 @@ globalThis.DflowCore = (() => {
     $("axisgroup").hidden = !o;
     $("lt1box").hidden = !o;
     $("slotbound").hidden = !o;
+    $("overlap").hidden = !o;
+    $("overlap").disabled = !(R.fabric && R.overlaps.length);
+    $("pipe").hidden = !o;
+    $("pipe-note").textContent = !o ? "" : R.fabric
+      ? `${R.fabric.pe_rows} x ${R.fabric.pe_cols} PEs per compute tile, output-stationary; results drain north on their own links. ` +
+        `The bars are linear in each recorded interval (the model's dense stream), at PE(0,0) for the operands.` + oneLegText()
+      : `The deployment declares no fabric (fabric.pe_rows / pe_cols), so L-T1 timed every call as one leg: there is no pipeline to show.`;
     if (o) {
       $("lt1chip").textContent = `L-T1 overlay · makespan ${fmt(o.makespan)} cycles, uncalibrated · ${fmt(o.slot_bound)} slot-bound Loads (${fmt(o.slot_wait_cycles)} cycles)`;
       $("slotbound").disabled = !o.slot_bound;
@@ -814,7 +946,8 @@ globalThis.DflowCore = (() => {
     g.setTransform(dpr, 0, 0, dpr, 0, 0);
     g.clearRect(0, 0, w, h);
     const G = R.lt1_legs, procs = R.m.processes, lab = 28, W = w - lab, T = Math.max(1, R.lt1.makespan);
-    const x = t => lab + (t / T) * W, rowH = (h - 4) / procs.length - 3;
+    const nrows = procs.length + (R.fabric ? 2 : 0);
+    const x = t => lab + (t / T) * W, rowH = (h - 4) / nrows - 3;
     g.font = `10px ${tok("--font-mono")}`;
     g.textBaseline = "middle";
     procs.forEach((p, k) => { g.fillStyle = tok("--muted"); g.fillText(p, 0, k * (rowH + 3) + rowH / 2); });
@@ -827,6 +960,19 @@ globalThis.DflowCore = (() => {
       if (G.slot_wait[i] > 0) { g.globalAlpha = 0.9; g.fillStyle = tok("--bad"); g.fillRect(x(G.start[i] - G.slot_wait[i]), y + rowH - 3, Math.max(1, x(G.start[i]) - x(G.start[i] - G.slot_wait[i])), 3); }
     }
     g.globalAlpha = 1;
+    if (R.fabric) {
+      // The fabric pipeline: each chain's operand stream (fill, steady, tail) and its results
+      // draining north, every compute tile overlaid.
+      const yi = procs.length * (rowH + 3), yo = yi + rowH + 3, X = R.lt1_chains;
+      g.fillStyle = tok("--muted"); g.fillText("cf in", 0, yi + rowH / 2); g.fillText("north", 0, yo + rowH / 2);
+      for (let c = 0; c < X.rows; c++) {
+        const last = X.last[c] >= 0 ? X.last[c] : X.in1[c];
+        g.fillStyle = tok("--op-2"); g.globalAlpha = 0.25; g.fillRect(x(X.in0[c]), yi, Math.max(0.6, x(last) - x(X.in0[c])), rowH);
+        g.globalAlpha = 0.6; g.fillRect(x(Math.min(X.front[c], X.in1[c])), yi, Math.max(0, x(X.in1[c]) - x(Math.min(X.front[c], X.in1[c]))), rowH);
+        if (X.out1[c] >= 0) { g.fillStyle = tok("--op-3"); g.globalAlpha = 0.45; g.fillRect(x(X.in1[c]), yo, Math.max(0.6, x(X.out1[c]) - x(X.in1[c])), rowH); }
+      }
+      g.globalAlpha = 1;
+    }
     const mine = C.legs(R, cur);
     if (mine.length) {
       g.strokeStyle = tok("--ink"); g.lineWidth = 1.5;
@@ -845,6 +991,13 @@ globalThis.DflowCore = (() => {
     $("lt1-note").textContent = L.length
       ? (wait ? `This Load waited ${fmt(wait)} cycles for its L3 slot to be released: the slot, not the data or a DMA lane, decided its start.` : `This action as L-T1 timed it.`)
       : "L-T1 recorded no leg for this action.";
+    const sc = C.streamCall(R, cur);
+    if (sc) {
+      const c = sc.chain;
+      $("lt1-note").textContent += ` Call ${sc.pos} of ${c.calls} in a systolic chain on cf ${c.lane} (${c.rows} x ${c.cols} PEs): ` +
+        `operands from ${fmt(c.in0)} to ${fmt(c.in1)}, wavefront across at ${fmt(c.front)}` +
+        (c.out1 >= 0 ? `, last result out at ${fmt(c.out1)}${c.link_delay ? ` (${fmt(c.link_delay)} cycles waiting for a top link)` : ""}.` : ", its calls not over in this record.");
+    }
     tb.tBodies[0].innerHTML = L.map(l => `<tr><td>${l.leg}</td><td>${l.process ? `${esc(l.process)} lane ${l.lane}` : "none (credit)"}</td><td>${fmt(l.start)}</td><td>${fmt(l.finish)}</td><td>${fmt(l.finish - l.start)}</td></tr>`).join("");
     const t = selTile >= 0 ? selTile : R.steps.tile[cur], px = C.proximity(R, t);
     $("prox-kv").innerHTML = kvHtml([["tile", C.tileName(R, t)], ["vs L-B", px ? (px.pass ? "within bound" : "OUT OF BOUND") : "—"],
@@ -894,6 +1047,7 @@ globalThis.DflowCore = (() => {
     $("c-cf").textContent = fmt(st.held.cf);
     $("cf-cap").textContent = st.kind === "CALL" ? `${st.tile} computed here` : "no bound at L-B";
     renderFabric(s, st);
+    renderPipe(s);
 
     for (let sl = 0; sl < R.cap; sl++) {
       const el = $("slot-" + sl), at = C.slotAt(R, sl, s);
@@ -961,6 +1115,34 @@ globalThis.DflowCore = (() => {
     let bar = "";
     for (let k = 1; k <= cells; k++) bar += `<i class="${k < call.pos ? "done" : k === call.pos ? "now" : ""}"></i>`;
     $("fab-bar").innerHTML = bar + (K > cells ? `<span class="note">+${K - cells}</span>` : "");
+  }
+
+  // The calls L-T1 timed as one leg, and why (the manifest's lt1.one_leg).
+  function oneLegText() {
+    const o = R.m.lt1 && R.m.lt1.one_leg ? Object.entries(R.m.lt1.one_leg) : [];
+    return o.length ? " One leg, not a stream: " + o.map(([why, n]) => `${fmt(n)} (${why})`).join(", ") + "." : "";
+  }
+
+  // The L-T1 pipeline at this action's start (plan step 2): per compute tile, what streams in,
+  // which chains are on the array and in what phase, and which results drain north. Read from
+  // the recorded chain bounds; the bars are linear within each recorded interval.
+  function renderPipe(s) {
+    if (!R.lt1) return;
+    const t = C.timeOf(R, s);
+    $("pipe-t").textContent = t >= 0 ? fmt(t) : "—";
+    $("pipe-t").style.width = `${fmt(R.lt1.makespan).length + 1}ch`;     // fixed: the heading never reflows
+    const F = R.fabric && t >= 0 ? C.fabricAt(R, t) : null;
+    if (!F) { $("pipe-lanes").innerHTML = ""; return; }
+    const pct = f => ` <span class="pc">${Math.round(100 * f)}%</span>`;
+    $("pipe-lanes").innerHTML = F.map(L => {
+      const inc = L.incoming.map(e => {
+        const call = C.callAt(R, e.action), ops = call ? call.operands : [];
+        return ops.map(op => chip(op, pct(e.frac), false, false)).join("");
+      }).join("") || `<span class="note">idle</span>`;
+      const arr = L.array.map(c => chip(c.tile, ` <span class="ph">${esc(c.phase)}</span>`, false, true)).join("") || `<span class="note">empty</span>`;
+      const dr = L.draining.map(c => chip(c.tile, pct(c.frac), false, true)).join("") || `<span class="note">none</span>`;
+      return `<div class="pipelane"><div class="ln2">cf ${L.lane}</div><div><div class="tiles">${inc}</div></div><div><div class="tiles">${arr}</div></div><div><div class="tiles">${dr}</div></div></div>`;
+    }).join("");
   }
 
   // The tile inspector: the selected tile (else the current step's) at this step, or its final
@@ -1112,6 +1294,7 @@ globalThis.DflowCore = (() => {
   $("slot-hist").onclick = e => { const b = e.target.closest("button[data-go]"); if (b) go(+b.dataset.go); };
   $("axis").onchange = () => { timeAxis = $("axis").value === "time"; drawRibbon(); };
   $("slotbound").onclick = () => go(C.nextSlotBound(R, cur));
+  $("overlap").onclick = () => go(C.nextOverlap(R, cur));
   $("ribbon").onclick = e => {
     const cv = $("ribbon"), r = cv.getBoundingClientRect();
     if (timeAxis && R.lt1) { go(C.actionAtTime(R, Math.round(((e.clientX - r.left - cv._lab) / cv._W) * cv._T))); return; }

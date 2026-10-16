@@ -1,7 +1,7 @@
 # L2 Reuse and the L1 + Compute-Fabric Pipeline in the Domain-Flow Debugger
 
 **Date:** 2026-10-16
-**Status:** In Progress (approved 2026-10-16: Q1-Q7 as recommended, Q3 and Q8 decided by the architect; step 1 in review)
+**Status:** In Progress (approved 2026-10-16: Q1-Q7 as recommended, Q3 and Q8 decided by the architect; step 1 merged #377; step 2 in review; step 2b decided)
 
 Extends the domain-flow debugger (`docs/plans/domain-flow-debugger.md`, #363, complete) and
 follows the pattern of L3 placement (`docs/plans/l3-placement-at-lb.md`). It answers the
@@ -83,11 +83,27 @@ That modelling comes in two independent parts with different owners:
 **Geometry is a machine parameter.** The deployment gains each compute tile's array shape:
 
 ```json
-"compute": { "array": { "rows": 32, "cols": 32 } }
+"fabric": { "pe_rows": 128, "pe_cols": 64 }
 ```
 
-Validation: `compute_tiles * rows * cols == macs_per_cycle`, or the deployment is refused by name.
-A deployment without `array` still runs, but the overlay records no phases and says so.
+`macs_per_cycle` is ONE compute tile's rate, so validation is `pe_rows * pe_cols == macs_per_cycle`,
+or the deployment is refused by name. The key is `fabric`, because `array` already names the grid
+of compute tiles. A deployment without `fabric` runs as before: every call one leg, and the overlay
+says so. Step 2 declares it on kpu_s1 only, `128 x 64` (decided 2026-10-16); the other deployments
+gain it when their arrays are stated.
+
+**Which calls stream (decided 2026-10-16).** A gemm in an open accumulator (`acc C in fabric`)
+whose C tile fits the array. Its C tile occupies `r x c = min(tile, array)` PEs and a call takes its
+reduction depth in cycles, `macs / (r*c)`, so a tile smaller than the array leaves the other PEs
+idle (kpu_s1's 64x64 tiles use half its 128 rows). Every other call keeps one leg at
+`macs / macs_per_cycle`, counted by why in `lt1.one_leg`:
+- getrf, trsm, laswp and the vector tile functions ("not a gemm"): their array mappings are not
+  designed;
+- a gemm on a resident C ("in-place gemm (C preloaded)"): loading C into the PEs is a stream no
+  one has designed;
+- a C tile larger than the array: it would take several passes, each holding a different part
+  of C, which breaks the chain's one-C-per-array rule;
+- a chain opening while every compute tile holds an open accumulator.
 
 **The mapping is output-stationary.** That is what `acc C[i,j] in fabric { for k ... }` already
 means: C stays in the PEs across the chain, and A and B stream through. Other mappings
@@ -143,10 +159,14 @@ bands, never as a sequence.
   three tiles: the next A and B streaming in, the running operands' tails, and the previous C
   streaming out.
 - The one structural limit is the northbound link, and it is checked, never assumed:
-  - the northbound link out of each column's top PE carries that column's R results per chain;
-  - so a chain whose K is shorter than E would overrun the previous chain's results on it;
-  - L-T1 delays that chain's injection by the shortfall, `max(0, E - K)`, and records the delay.
-  With the matmul tiles in use (K >= tile edge) the delay is zero.
+  - the link out of each column's top PE carries that column's `r` results per chain;
+  - so a chain whose results arrive faster than that would overtake the previous chain's;
+  - its results wait in the grid's registers, which hold outputs beside inputs, so the limit
+    falls on the RESULTS, never on the operands: `out1 >= previous out1 + r`, and
+    `link_delay = out1 - (last + r)` is recorded;
+  - delaying the operands instead would need the chain's K before its last call, and would
+    contradict "a drain never stalls the next tile".
+  With the matmul tiles in use (K >= r) the delay is zero.
 
 ```cpp
 // WRONG: phases painted inside the existing leg, so the timing stays as it was and the panel lies
@@ -163,17 +183,17 @@ next.in0 = std::max(ready, prev.out1);
 
 // CORRECT: the streams follow from the geometry and the chain, and they ARE the timing
 struct ChainStreams { Cycle in0, front, in1, last, out1, link_delay; };
-ChainStreams streams_of(const Chain& ch, const ArrayShape& a, Cycle ready, Cycle prev_in1) {
+ChainStreams streams_of(const Chain& ch, const ArrayShape& a, Cycle ready, Cycle prev_in1, Cycle prev_out1) {
     const Cycle K    = ch.steady_cycles();                       // sum of macs/rate over its calls
     const Cycle skew = (a.rows - 1) + (a.cols - 1);
     const Cycle E    = a.drain_hops();                           // §3.1.1
     ChainStreams s;
-    s.link_delay = ch.has_prev() && K < E ? E - K : 0;           // the northbound link's one limit
-    s.in0        = std::max(ready, prev_in1) + s.link_delay;
+    s.in0        = std::max(ready, prev_in1);                    // operands never wait on a drain
     s.front      = s.in0 + skew;                                 // may lie after in1 (K <= skew)
     s.in1        = s.in0 + K;
     s.last       = s.in1 + skew;
-    s.out1       = s.last + E;
+    s.out1       = std::max(s.last + E, prev_out1 + E);          // the top link: E = r results
+    s.link_delay = s.out1 - (s.last + E);
     return s;
 }
 // A call's own interval is its share of [in0, in1) at PE(0,0), in chain order; at PE(i, j) the
@@ -336,9 +356,9 @@ Each step is one PR. Steps 1 and 2 need no language change. Steps 3 and 4 depend
      positions against Python; the strict escape scan, ported from tileflow.
    - `README.md`.
 2. **L-T1 fabric pipeline and the cycle-axis panel (.dflow v4).**
-   - `include/sw/kpu/program/platform/deployment_spec.hpp`: `compute.array {rows, cols}`,
+   - `include/sw/kpu/program/platform/deployment_spec.hpp`: `fabric {pe_rows, pe_cols}`,
      validation against `macs_per_cycle`, and `device_view` carries it.
-   - Deployments in `tests/program/deploy/*.json` and the shipped SKUs gain `array`.
+   - `tests/program/deploy/kpu_s1.json` gains `fabric` (128 x 64); the others when stated.
    - `include/sw/kpu/program/csp/transactional.hpp`: chains known per CF lane, `streams_of`
      per chain, each call's injection interval, and the Drain leg ready at `out1`. Feed legs are
      unchanged. The record grows `chain_streams`.
@@ -352,9 +372,31 @@ Each step is one PR. Steps 1 and 2 need no language change. Steps 3 and 4 depend
      - `tests/program/test_domain_flow_record.cpp`;
      - a new `tests/program/test_fabric_pipeline.cpp`: one chain fills once and drains once;
        the next chain's operands start at the previous `in1`, under its drain; a chain with
-       K < E is delayed by exactly `E - K`; back-to-back chains reach utilization
+       K < r has its results wait `r - K` on the top link; back-to-back chains reach utilization
        `sum K / (last in1 - first in0) == 1`; values are bit-equal to before;
      - rebaselined L-T1 cycle pins, each with its reason.
+   As built (2026-10-16):
+   - The deployment key is `fabric {pe_rows, pe_cols}`; kpu_s1 declares 128 x 64.
+   - A chain owns a compute tile while its calls run. It gives the array up at its Drain, or when
+     the next accumulator's first call needs that compute tile: its results leave as they emerge,
+     so the Drain action only moves them L1 -> L2. Calls that come back to a chain whose array was
+     taken are one leg ("accumulators interleaved on one array").
+   - With a declared fabric, the streamer's drain legs run on their own lanes (str lanes [n, 2n)),
+     issued in order among drains only, so a drain never waits behind a feed (decided 2026-10-16).
+   - Finding: every mover issues in program order, and `store C` right after its chain puts C's
+     Writeback (bm) and Store (dma) ahead of the next chain's Moves and Loads. Both wait for the
+     Drain, so a store-each-chain program serializes its chains: the fabric could overlap them, the
+     program does not let it. `test_fabric_pipeline` pins this; a program that defers its stores
+     runs back to back at full array utilization. kpu-csp-gen's matmul stores each chain, so its
+     runs show no overlap until step 2b.
+2b. **`store ... late` (decided 2026-10-16; its own PR).** A modifier on the store statement,
+   `store C[i, j] late;`, written where the store is today. The validator checks it in place; the
+   walker emits its Drain, Writeback, Store and Release after the NEXT accumulator's calls (at the
+   end of the program for the last). kpu-csp-gen's matmul then writes `late`, so its drains
+   overlap the next chain's fill. The loop-carried alternative (`store C[i - 1, j]` with peeled
+   loops) was rejected: the symbolic validator would need loop-carried accumulator state.
+   With L3 at the generator's minimum (2 panels + 1), the next A row still waits for the slots the
+   current row frees, which the overlay shows as slot waits; a larger L3 removes them.
 3. **L2 staging in the language and at L-B (.dflow v5, opset 1.3).**
    - `csp/lang/` (parser, AST, `walk.hpp`): `l2 =`, `stage ... in l2 { }`, `L2Address`,
      allocation, and the Feed-only lowering.
@@ -419,17 +461,20 @@ for review as soon as step 1 renders.
   - the pipeline changes L-T1 cycles only, and L-T1's values stay bit-equal to before;
   - staged and unstaged programs compute bit-equal results.
 - **dflow_check, part B:**
-  - **P1** Per chain, `in0 <= front`, `in0 <= in1 <= last <= out1`. `front` and `in1` are not
-    ordered: `front > in1` exactly when `K < skew`, and then the chain has no steady phase.
-  - **P2** A chain's calls' intervals at PE(0,0) tile `[in0, in1)` in chain order, with no gap
-    and no overlap.
-  - **P3** On one CF lane, operand streams never overlap: a chain's `in0` is no earlier than the
-    previous chain's `in1` plus its `link_delay`. Result streams may overlap operand streams;
+  As built (`tools/trace/dflow_check.py`):
+  - **P1** References: a chain's tile, cf lane and actions exist and its PEs fit the array; a call
+    row names a recorded Call. With no fabric declared, both tables are empty.
+  - **P2** The wavefront: `front - in0 == skew`; drained, `last - in1 == skew` and
+    `out1 - last == r + link_delay`. `front` and `in1` are not ordered: `front > in1` exactly when
+    `K < skew`, and then the chain has no steady phase.
+  - **P3** The calls: numbered 1..calls in action order, each on the chain's cf lane, the first
+    starting at `in0` and the last ending at `in1`, never overlapping. Gaps are allowed: a call
+    whose operands arrive late leaves a bubble in the wavefront.
+  - **P4** One chain per array: on one cf lane, operand streams `[in0, in1)` never overlap, and a
+    chain's Drain starts no earlier than its `out1`. Result streams may overlap operand streams;
     that is the fabric.
-  - **P4** A call's injection starts no earlier than its operands' Feed finish, and a result's
-    Drain leg no earlier than its chain's `out1`.
-  - **P5** `front - in0 == last - in1 == (R-1)+(S-1)`, `out1 - last == E`, and
-    `link_delay == max(0, E - K)` after the lane's first chain (geometry and edge from meta).
+  - **P5** The top link: `out1 == max(last + r, previous out1 + r)` on its lane, and the manifest's
+    chain count and `link_delay_cycles` are the tables'.
 - **dflow_check, part A:**
   - **S1** One residency per L2 slot at a time.
   - **S2** A Feed of a staged tile names the slot that holds it.

@@ -212,12 +212,12 @@ class ViewerTest(unittest.TestCase):
         # Numbers: record columns (typed arrays), loop counters, counts.
         "k", "k % 4", "k + 1", "sl", "at.res", "l.leg", "l.depth", "l.value", "l.hi", "pos.line",
         "st.place.slot", "st.place.bank", "v.h", "v.w", "e.moves", "K - cells", "R.tiles.operand[t] % 4",
-        "r", "lineW + 2", "w",
+        "r", "lineW + 2", "w", "L.lane", "Math.round(100 * f)",
         # Page constants and conditionals over them.
         "a", 'R.banks > 1 ? "s" : ""', 'live ? "live" : ""', 'R.residency.flags[at.res] & C.RES_RETAINED ? " retained" : ""',
         'now ? "<b>this step</b>" : `latest: step ${fmt(call.step)}`',
         # Built only from escaped or numeric pieces just above the statement that writes them.
-        "shape", "mv", "rtxt", "ops", "cls", "extra", "close",
+        "shape", "mv", "rtxt", "ops", "cls", "extra", "close", "inc", "arr", "dr",
         'st < R.n ? esc(R.m.kinds[R.steps.kind[st]]) : ""',
         'st < R.n ? `<button data-go="${st}">go</button>` : ""',
         'reach ? `<button data-go="${X.open[r]}">go</button>` : ""',
@@ -290,9 +290,16 @@ class ViewerTest(unittest.TestCase):
         self.assertEqual(self.interpolations(kv), ["esc(a)", "esc(b)", "esc(b)"])
         lst = re.search(r"const MAX = 40, list = .*?;\n", html, re.S).group(0)
         self.assertEqual([e for e in self.interpolations(lst)], ["v.length - MAX"])
-        # Each caller's extra argument is a constant, or built from numbers only.
-        for extra in re.findall(r"chip\(e\.tile, (.*?), (?:touched|e\.tile|call)", html):
-            self.assertRegex(extra, r'^(""|e\.moves > 1 \? .*e\.moves.*: "")$', extra)
+        # Each caller's extra argument is a constant, a percentage (pct, numbers only), the moves
+        # mark (numbers only), or a template whose every interpolation is escaped.
+        callers = re.findall(r"chip\((?:e\.tile|op|c\.tile), (.*?), (?:touched|e\.tile|call|false)", html)
+        self.assertGreaterEqual(len(callers), 6)
+        for extra in callers:
+            ok = re.fullmatch(r'""|pct\((?:e|c)\.frac\)|e\.moves > 1 \? .*e\.moves.*: ""', extra) or \
+                (extra.startswith("`") and all(i.startswith("esc(") for i in self.interpolations(extra)))
+            self.assertTrue(ok, f"chip extra not reviewed: {extra}")
+        pct = re.search(r"const pct = .*?;\n", html, re.S).group(0)
+        self.assertEqual(self.interpolations(pct), ["Math.round(100 * f)"])
 
     @unittest.skipUnless(NODE, "Node.js is not on PATH")
     def test_parse_refuses_a_non_integer_geometry(self):

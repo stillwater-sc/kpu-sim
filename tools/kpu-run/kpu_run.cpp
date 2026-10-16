@@ -64,7 +64,7 @@ kpu-run runs a program; it does not write one. kpu-csp-gen writes CSP programs.
   --emit-l0-result <file.l0>  the agreed values: the corpus's expected-output half
   --tflow <dir>             the L-T1 run's tile-flow record (.tflow version 5: residencies at
                             their L3 addresses)
-  --dflow <dir>             the L-B run's domain-flow record (.dflow version 1): every action
+  --dflow <dir>             the L-B run's domain-flow record (.dflow version 4): every action
                             as a CSP state transition, written by the oracle's own run
   --dflow-limit <n>         record at most n steps (0 = all; default 1000000); residencies and
                             the iteration summary are always complete
@@ -74,8 +74,9 @@ kpu-run runs a program; it does not write one. kpu-csp-gen writes CSP programs.
   --dflow-values-cap <MiB>  the values' byte cap (default 64): finals first, then snapshots
                             until the cap, and the record says where they stopped
                             When L-T1 runs too (--level all, or block-sequential), the record
-                            carries its overlay: every action's legs in L-T1 cycles, and each
-                            final tile's proximity to L-B
+                            carries its overlay: every action's legs in L-T1 cycles, each
+                            final tile's proximity to L-B, and (with a declared fabric) each
+                            accumulator's gemm chain as a systolic stream
   --timeline <file.json>    the L-T1 run as Chrome-trace intervals, one per leg
   --step                    single-step (L-B: one action per step; L-T1: one record)
   --step-limit <n>          stop after n steps, 0 = all      (default 40)
@@ -380,6 +381,16 @@ int run_csp_program(const std::vector<std::string>& a, const std::string& path) 
             for (const auto& [p, b] : o.busy)
                 std::cout << " " << p << " " << b << "/" << (o.lanes.count(p) ? o.lanes.at(p) : 0);
             std::cout << "   (lane-cycles/lanes)   UNCALIBRATED\n";
+            // The fabric pipeline (docs/plans/l2-reuse-and-fabric-pipeline-view.md step 2).
+            if (o.pe_rows) {
+                std::cout << "        fabric " << o.pe_rows << "x" << o.pe_cols << " PEs, output-stationary: "
+                          << o.chains.size() << " chains as systolic streams, results waited " << o.link_delay_cycles
+                          << " cycles for a top link";
+            } else {
+                std::cout << "        fabric not declared (fabric.pe_rows/pe_cols): every call is one leg";
+            }
+            for (const auto& [why, n] : o.one_leg) std::cout << "; one leg: " << n << " (" << why << ")";
+            std::cout << "\n";
             for (const auto& u : o.unmodelled) std::cout << "        unmodelled: " << u << "\n";
             continue;
         }

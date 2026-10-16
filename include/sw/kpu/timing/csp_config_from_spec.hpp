@@ -135,6 +135,9 @@ inline std::optional<CspDeviceConfig> csp_config_from(
         c.str_ve_rate = d.movers.str_vector->rate;
     }
 
+    if (d.fabric.pe_rows)
+        out.unmapped.push_back("fabric.pe_rows/pe_cols: L-T1 times an accumulator's gemm chain as a systolic "
+                               "stream on them; the executor's compute fabric keeps its own timing");
     out.unmapped.push_back("dma.bytes_per_cycle and movers.*_bytes_per_cycle: the executor's "
                            "rates are GB/s and latency fields; its defaults are kept");
     // The compute fabric (docs/plans/system-schedule-debugger.md §3.2): one compute at a time

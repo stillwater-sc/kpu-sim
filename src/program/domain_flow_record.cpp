@@ -186,6 +186,34 @@ void write_dflow(const DFR& rec, const std::string& dir) {
         t.put("pass", "u8", col<std::uint8_t>(rec.proximity, [](const Px& x) { return x.pass ? 1 : 0; }));
         tables["lt1_tiles"] = write_table(t, dir);
     }
+    {
+        Table t{"lt1_chains", "lt1_chains.bin", rec.chains.size(), {}};
+        using Ch = DFR::Chain;
+        t.put("first_action", "u64", col<std::uint64_t>(rec.chains, [](const Ch& x) { return x.first_action; }));
+        t.put("last_action", "u64", col<std::uint64_t>(rec.chains, [](const Ch& x) { return x.last_action; }));
+        t.put("drain_action", "u64", col<std::uint64_t>(rec.chains, [](const Ch& x) { return x.drain_action; }));
+        t.put("in0", "u64", col<std::uint64_t>(rec.chains, [](const Ch& x) { return x.in0; }));
+        t.put("front", "u64", col<std::uint64_t>(rec.chains, [](const Ch& x) { return x.front; }));
+        t.put("in1", "u64", col<std::uint64_t>(rec.chains, [](const Ch& x) { return x.in1; }));
+        t.put("last", "u64", col<std::uint64_t>(rec.chains, [](const Ch& x) { return x.last; }));
+        t.put("out1", "u64", col<std::uint64_t>(rec.chains, [](const Ch& x) { return x.out1; }));
+        t.put("link_delay", "u64", col<std::uint64_t>(rec.chains, [](const Ch& x) { return x.link_delay; }));
+        t.put("tile", "u32", col<std::uint32_t>(rec.chains, [](const Ch& x) { return x.tile; }));
+        t.put("lane", "u32", col<std::uint32_t>(rec.chains, [](const Ch& x) { return x.lane; }));
+        t.put("used_rows", "u32", col<std::uint32_t>(rec.chains, [](const Ch& x) { return x.rows; }));   // not "rows":
+        // the checker keys a table's row count by that name
+        t.put("used_cols", "u32", col<std::uint32_t>(rec.chains, [](const Ch& x) { return x.cols; }));
+        t.put("calls", "u32", col<std::uint32_t>(rec.chains, [](const Ch& x) { return x.calls; }));
+        tables["lt1_chains"] = write_table(t, dir);
+    }
+    {
+        Table t{"lt1_calls", "lt1_calls.bin", rec.calls.size(), {}};
+        using Ca = DFR::Call;
+        t.put("action", "u64", col<std::uint64_t>(rec.calls, [](const Ca& x) { return x.action; }));
+        t.put("chain", "u32", col<std::uint32_t>(rec.calls, [](const Ca& x) { return x.chain; }));
+        t.put("pos", "u32", col<std::uint32_t>(rec.calls, [](const Ca& x) { return x.pos; }));
+        tables["lt1_calls"] = write_table(t, dir);
+    }
     if (rec.lt1) {
         json lanes = json::object();
         for (const auto& [p, n] : rec.lt1_lanes) lanes[p] = n;
@@ -193,6 +221,14 @@ void write_dflow(const DFR& rec, const std::string& dir) {
                         {"lanes", lanes}, {"slot_bound", rec.lt1_slot_bound},
                         {"slot_wait_cycles", rec.lt1_slot_wait_cycles}, {"uncalibrated", true},
                         {"bound", json{{"atol", rec.lt1_atol}, {"rtol", rec.lt1_rtol}}}, {"pass", rec.lt1_pass}};
+        json one_leg = json::object();
+        for (const auto& [why, n] : rec.one_leg) one_leg[why] = n;
+        m["lt1"]["one_leg"] = one_leg;
+        // The fabric pipeline: null when the deployment declares no PE array (every call one leg).
+        m["lt1"]["fabric"] = rec.fabric
+            ? json{{"pe_rows", rec.pe_rows}, {"pe_cols", rec.pe_cols}, {"mapping", "output-stationary"},
+                   {"drain_edge", "north"}, {"chains", rec.chains.size()}, {"link_delay_cycles", rec.link_delay_cycles}}
+            : json(nullptr);
     } else {
         m["lt1"] = nullptr;
     }
@@ -393,6 +429,46 @@ DFR read_dflow(const std::string& dir) {
                 auto tile = read_col<std::uint32_t>(t, blob, "tile", "u32", n);
                 auto pass = read_col<std::uint8_t>(t, blob, "pass", "u8", n);
                 for (std::size_t i = 0; i < n; ++i) rec.proximity.push_back({tile[i], max_abs[i], max_rel[i], pass[i] != 0});
+            }
+        }
+        if (version >= 4) {
+            if (rec.lt1) {
+                const json& o = m.at("lt1");
+                for (const auto& [why, k] : o.at("one_leg").items()) rec.one_leg.emplace_back(why, k.get<std::uint64_t>());
+                if (!o.at("fabric").is_null()) {
+                    const json& f = o.at("fabric");
+                    rec.fabric = true;
+                    rec.pe_rows = f.at("pe_rows").get<std::uint32_t>();
+                    rec.pe_cols = f.at("pe_cols").get<std::uint32_t>();
+                    rec.link_delay_cycles = f.at("link_delay_cycles").get<std::uint64_t>();
+                }
+            }
+            {
+                auto [t, blob] = table("lt1_chains", n);
+                auto first = read_col<std::uint64_t>(t, blob, "first_action", "u64", n);
+                auto lastA = read_col<std::uint64_t>(t, blob, "last_action", "u64", n);
+                auto drain = read_col<std::uint64_t>(t, blob, "drain_action", "u64", n);
+                auto in0 = read_col<std::uint64_t>(t, blob, "in0", "u64", n);
+                auto front = read_col<std::uint64_t>(t, blob, "front", "u64", n);
+                auto in1 = read_col<std::uint64_t>(t, blob, "in1", "u64", n);
+                auto last = read_col<std::uint64_t>(t, blob, "last", "u64", n);
+                auto out1 = read_col<std::uint64_t>(t, blob, "out1", "u64", n);
+                auto delay = read_col<std::uint64_t>(t, blob, "link_delay", "u64", n);
+                auto tile = read_col<std::uint32_t>(t, blob, "tile", "u32", n);
+                auto lane = read_col<std::uint32_t>(t, blob, "lane", "u32", n);
+                auto rows = read_col<std::uint32_t>(t, blob, "used_rows", "u32", n);
+                auto cols = read_col<std::uint32_t>(t, blob, "used_cols", "u32", n);
+                auto calls = read_col<std::uint32_t>(t, blob, "calls", "u32", n);
+                for (std::size_t i = 0; i < n; ++i)
+                    rec.chains.push_back({tile[i], lane[i], rows[i], cols[i], calls[i], first[i], lastA[i], drain[i],
+                                          in0[i], front[i], in1[i], last[i], out1[i], delay[i]});
+            }
+            {
+                auto [t, blob] = table("lt1_calls", n);
+                auto action = read_col<std::uint64_t>(t, blob, "action", "u64", n);
+                auto chain = read_col<std::uint32_t>(t, blob, "chain", "u32", n);
+                auto pos = read_col<std::uint32_t>(t, blob, "pos", "u32", n);
+                for (std::size_t i = 0; i < n; ++i) rec.calls.push_back({action[i], chain[i], pos[i]});
             }
         }
         return rec;

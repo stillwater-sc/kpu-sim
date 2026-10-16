@@ -32,7 +32,7 @@ const std::set<std::string>& device_keys() {
                                             "dma",           "l3",       "l2",
                                             "l1",            "movers",   "analytical",
                                             "array",         "memory",   "cpu",
-                                            "noc"};
+                                            "noc",           "fabric"};
     return k;
 }
 const std::set<std::string>& dma_keys() {
@@ -51,6 +51,10 @@ const std::set<std::string>& l2_keys() {
 }
 const std::set<std::string>& l1_keys() {
     static const std::set<std::string> k = {"vectors"};
+    return k;
+}
+const std::set<std::string>& fabric_keys() {
+    static const std::set<std::string> k = {"pe_rows", "pe_cols"};
     return k;
 }
 const std::set<std::string>& array_keys() {
@@ -261,6 +265,13 @@ DeviceSpecification read_device(const json& obj, const std::string& where) {
             }
         }
     }
+    if (obj.contains("fabric")) {
+        const json& s = obj.at("fabric");
+        const std::string w = where + ".fabric";
+        reject_unknown(s, fabric_keys(), w);
+        d.fabric.pe_rows = read_optional_dim(s, "pe_rows", w);
+        d.fabric.pe_cols = read_optional_dim(s, "pe_cols", w);
+    }
     if (obj.contains("array")) {
         const json& s = obj.at("array");
         const std::string w = where + ".array";
@@ -391,6 +402,12 @@ json write_device(const DeviceSpecification& d) {
     // The physical shape, each object written only when something in it is declared -- so a
     // spec that never mentions one keeps its canonical bytes, and every existing
     // deployment_digest with it.
+    if (d.fabric.pe_rows || d.fabric.pe_cols) {
+        json f = json::object();
+        if (d.fabric.pe_rows) f["pe_rows"] = *d.fabric.pe_rows;
+        if (d.fabric.pe_cols) f["pe_cols"] = *d.fabric.pe_cols;
+        o["fabric"] = f;
+    }
     if (d.array.rows || d.array.cols) {
         json a = json::object();
         if (d.array.rows) a["rows"] = *d.array.rows;
