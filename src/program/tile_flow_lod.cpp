@@ -143,6 +143,21 @@ Lod build_lod(const TileFlowRecord& rec, std::uint64_t max_base_bins) {
                 if (to_string(static_cast<Mover>(t.mover)) == pool) iv[r].emplace_back(t.t0, t.t1);
         }
     }
+    // Version 5: one row per L3 slot, capacity 1, after every station and mover row (so no
+    // existing row moves). A slot is an address in the program's L3; its row is the residencies
+    // placed there.
+    if (rec.l3_banks > 0) {
+        for (std::size_t s = 0; s < rec.stations.size(); ++s) {
+            if (rec.stations[s].kind != "l3") continue;
+            for (std::uint64_t slot = 0; slot < rec.stations[s].capacity; ++slot) {
+                rows.push_back({rec.stations[s].name + "/slot[" + std::to_string(slot) + "]", "l3_slot", 1, true});
+                iv.emplace_back();
+                constant.push_back(0);
+                for (const Residency& x : rec.residency)
+                    if (x.station == s && x.slot == slot) iv.back().emplace_back(x.t0, x.t1);
+            }
+        }
+    }
     return build_lod_rows(std::move(rows), iv, constant, rec.makespan, max_base_bins);
 }
 

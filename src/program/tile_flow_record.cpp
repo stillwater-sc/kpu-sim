@@ -134,10 +134,13 @@ TileFlowRecord build_csp_record(const csp::lang::Program& ast, const driver::Csp
 
     // ---- residency: the program's slots, credit to Release
     // An inherited slot arrives filled (Seeded); a retained one is held past the end (Held).
+    // Each carries the L3 address L-T1 executed: the walker's placement (version 5).
+    rec.l3_banks = static_cast<std::uint32_t>(ast.banks);
     for (const auto& sl : outcome.slots)
         rec.residency.push_back({tile_id(sl.tile), L3, sl.t0, sl.t1,
                                  static_cast<std::uint8_t>((sl.inherited ? Residency::Seeded : 0) |
-                                                           (sl.retained ? Residency::Held : 0))});
+                                                           (sl.retained ? Residency::Held : 0)),
+                                 sl.place.l3_tile, sl.place.slot, sl.place.bank});
 
     // ---- transits (each movement leg) and computes (each Call)
     using K = csp::Action::Kind;
@@ -240,7 +243,9 @@ void write_tflow(const TileFlowRecord& rec, const std::string& dir) {
     // is refused rather than read as an ejection.
     // 4: a CSP program's record -- the columns are version 3's, an op is one of the program's
     // ACTIONS (kpu-run-csp-programs step 4b), and `ops` says so.
-    m["version"] = rec.op_space == "csp-actions" ? 4 : 3;
+    // 5: its residencies carry their L3 address (l3-placement-at-lb step 5b).
+    const bool addressed = rec.op_space == "csp-actions" && rec.l3_banks > 0;
+    m["version"] = addressed ? 5 : rec.op_space == "csp-actions" ? 4 : 3;
     if (rec.op_space == "csp-actions") m["ops"] = "csp-actions";
     m["level"] = rec.level;
     m["device"] = rec.device;
@@ -248,6 +253,7 @@ void write_tflow(const TileFlowRecord& rec, const std::string& dir) {
     m["deployment_digest"] = rec.deployment_digest;
     m["makespan"] = rec.makespan;
     m["foreign_slots"] = rec.foreign_slots;
+    if (addressed) m["l3_banks"] = rec.l3_banks;
     m["unmodelled"] = rec.unmodelled;
     json st = json::array();
     for (const Station& s : rec.stations)
@@ -279,6 +285,13 @@ void write_tflow(const TileFlowRecord& rec, const std::string& dir) {
         }
         t.put("tile", "u32", tile); t.put("station", "u32", station);
         t.put("t0", "f64", times(t0)); t.put("t1", "f64", times(t1)); t.put("flags", "u8", flags);
+        if (addressed) {
+            std::vector<std::uint32_t> l3_tile, slot, bank;
+            for (const Residency& r : rec.residency) {
+                l3_tile.push_back(r.l3_tile); slot.push_back(r.slot); bank.push_back(r.bank);
+            }
+            t.put("l3_tile", "u32", l3_tile); t.put("slot", "u32", slot); t.put("bank", "u32", bank);
+        }
         tables["residency"] = write_table(t, dir);
     }
     {
@@ -347,13 +360,20 @@ TileFlowRecord read_tflow(const std::string& dir) {
         throw RecordError("record: a version-2 bundle records writeback as a DMA read (hop 5 = "
                           "dma:l3->dram); re-record it with this build's kpu-run --tflow");
     const int version = m.value("version", 0);
-    if (version != 3 && version != 4)
-        throw RecordError("record: version " + std::to_string(version) + " is not one this build reads (3, 4)");
+    if (version < 3 || version > 5)
+        throw RecordError("record: version " + std::to_string(version) + " is not one this build reads (3, 4, 5)");
     TileFlowRecord rec;
-    if (version == 4) {
+    if (version >= 4) {
         if (m.value("ops", "") != "csp-actions")
-            throw RecordError("record: a version-4 bundle must say what its ops are (\"ops\": \"csp-actions\")");
+            throw RecordError("record: a version-" + std::to_string(version) +
+                              " bundle must say what its ops are (\"ops\": \"csp-actions\")");
         rec.op_space = "csp-actions";
+    }
+    if (version == 5) {
+        if (!m.contains("l3_banks") || !m.at("l3_banks").is_number_unsigned())
+            throw RecordError("record: a version-5 bundle must say its L3 banks (l3_banks)");
+        rec.l3_banks = m.at("l3_banks").get<std::uint32_t>();
+        if (rec.l3_banks == 0) throw RecordError("record: a version-5 bundle needs l3_banks >= 1");
     }
     rec.level = m.at("level").get<std::string>();
     rec.device = m.at("device").get<std::string>();
@@ -404,7 +424,14 @@ TileFlowRecord read_tflow(const std::string& dir) {
         const auto t0 = cycles(read_col<double>(t, b, "t0", "f64", n));
         const auto t1 = cycles(read_col<double>(t, b, "t1", "f64", n));
         const auto flags = read_col<std::uint8_t>(t, b, "flags", "u8", n);
-        for (std::size_t i = 0; i < n; ++i) rec.residency.push_back({tile[i], station[i], t0[i], t1[i], flags[i]});
+        std::vector<std::uint32_t> l3_tile(n, kNoSlot), slot(n, kNoSlot), bank(n, kNoSlot);
+        if (version == 5) {
+            l3_tile = read_col<std::uint32_t>(t, b, "l3_tile", "u32", n);
+            slot = read_col<std::uint32_t>(t, b, "slot", "u32", n);
+            bank = read_col<std::uint32_t>(t, b, "bank", "u32", n);
+        }
+        for (std::size_t i = 0; i < n; ++i)
+            rec.residency.push_back({tile[i], station[i], t0[i], t1[i], flags[i], l3_tile[i], slot[i], bank[i]});
     }
     {
         const json& t = tables.at("transit");
@@ -458,6 +485,12 @@ TileFlowRecord read_tflow(const std::string& dir) {
                               " is out of range (" + std::to_string(n) + ")");
     };
     for (const Residency& r : rec.residency) { in(r.tile, rec.tiles.size(), "tile"); in(r.station, rec.stations.size(), "station"); }
+    // Version 5: every residency's slot is an address in its L3 station's capacity.
+    if (rec.l3_banks > 0)
+        for (const Residency& r : rec.residency)
+            if (r.slot == kNoSlot || r.slot >= rec.stations[r.station].capacity)
+                throw RecordError("record: a residency holds slot " + std::to_string(r.slot) + " of an L3 with " +
+                                  std::to_string(rec.stations[r.station].capacity) + " slots");
     for (const Transit& x : rec.transits) {
         in(x.tile, rec.tiles.size(), "tile"); in(x.op, rec.ops.size(), "op");
         in(x.src, rec.stations.size(), "station"); in(x.dst, rec.stations.size(), "station");

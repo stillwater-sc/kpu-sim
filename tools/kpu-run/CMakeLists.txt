@@ -92,7 +92,8 @@ if(KPU_BUILD_TESTS)
                     ${CMAKE_CURRENT_BINARY_DIR}/csp_t64.tflow
                     ${CMAKE_BINARY_DIR}/tools/floorplan/t64_floorplan.json)
         set_tests_properties(tileflow_bind_t64 PROPERTIES DEPENDS "kpu_run_csp_tflow_t64;kpu_floorplan_t64")
-        # ---- version 4: a CSP program's record (docs/plans/kpu-run-csp-programs.md step 4b) ----
+        # ---- version 4/5: a CSP program's record (kpu-run-csp-programs step 4b); version 5 carries ----
+        # ---- each residency's L3 address (l3-placement-at-lb step 5b) ----
         # The T4 reference run, from a program kpu-csp-gen writes: 512^3 in 64x64 tiles.
         add_test(NAME csp_gen_t4_matmul
             COMMAND $<TARGET_FILE:csp-gen> --algo matmul --size 512 --tile 64

@@ -1,16 +1,18 @@
 #!/usr/bin/env python3
 """
-Self-test for tflow_check.py on a VERSION-4 bundle -- a CSP program's record, whose ops are the
-program's actions (docs/plans/kpu-run-csp-programs.md step 4b). The clean bundle passes; each
-invariant that version 4 states differently fails when it is broken; and the version label is
-load-bearing.
+Self-test for tflow_check.py on a CSP program's record -- VERSION 4, whose ops are the program's
+actions (docs/plans/kpu-run-csp-programs.md step 4b), and VERSION 5, whose residencies also carry
+their L3 address (docs/plans/l3-placement-at-lb.md step 5b). The clean bundle passes; each
+invariant those versions state differently fails when it is broken (TF6, TF9; TF12 and the slot
+rows of TF8 in version 5); and the version label is load-bearing.
 
-Usage: python3 test_tflow_check_v4.py <clean-v4-bundle.tflow>
+Usage: python3 test_tflow_check_v4.py <clean-csp-bundle.tflow>   (kpu-run writes version 5)
 
 SPDX-License-Identifier: MIT
 Copyright (c) 2024-2025 Stillwater Supercomputing, Inc.
 """
 
+import json
 import sys
 import unittest
 
@@ -23,7 +25,7 @@ BUNDLE = None
 class TflowCheckV4SelfTest(unittest.TestCase):
     def setUp(self):
         self.b = Bundle(BUNDLE)
-        self.assertEqual(self.b.manifest["version"], 4)
+        self.assertIn(self.b.manifest["version"], (4, 5))
         self.assertEqual(self.b.manifest["ops"], "csp-actions")
 
     def tearDown(self):
@@ -59,6 +61,83 @@ class TflowCheckV4SelfTest(unittest.TestCase):
 
     def test_version_4_must_say_its_ops(self):
         del self.b.manifest["ops"]
+        self.b.save_manifest()
+        code, _ = run(self.b.dir)
+        self.assertEqual(code, 2)
+
+    # -- version 5: the L3 address of every residency ------------------------
+    def v5(self):
+        if self.b.manifest["version"] != 5:
+            self.skipTest("a version-4 bundle has no L3 addresses")
+
+    def l3_residencies(self):
+        l3 = next(i for i, s in enumerate(self.b.manifest["stations"]) if s["kind"] == "l3")
+        return [i for i in range(self.b.manifest["tables"]["residency"]["rows"])
+                if self.b.get("residency", "station", i) == l3]
+
+    def test_tf12_two_tiles_in_one_slot(self):
+        self.v5()
+        # Move a residency into the slot of one that overlaps it in time.
+        rs = self.l3_residencies()
+        for a in rs:
+            for b in rs:
+                if a != b and self.b.get("residency", "slot", a) != self.b.get("residency", "slot", b) and \
+                        self.b.get("residency", "t0", b) < self.b.get("residency", "t1", a) and \
+                        self.b.get("residency", "t0", a) < self.b.get("residency", "t1", b):
+                    slot = self.b.get("residency", "slot", a)
+                    self.b.set("residency", "slot", b, slot)
+                    self.b.set("residency", "bank", b, self.b.get("residency", "bank", a))
+                    return self.assertFails("TF12")
+        self.fail("the clean bundle has no two residencies live at once")
+
+    def test_tf12_slot_beyond_the_capacity(self):
+        self.v5()
+        cap = next(s["capacity"] for s in self.b.manifest["stations"] if s["kind"] == "l3")
+        self.b.set("residency", "slot", self.l3_residencies()[0], cap + 3)
+        self.assertFails("TF12")
+
+    def test_tf12_wrong_bank(self):
+        self.v5()
+        self.b.manifest["l3_banks"] = 4
+        self.b.save_manifest()
+        i = self.l3_residencies()[0]
+        self.b.set("residency", "bank", i, (self.b.get("residency", "slot", i) + 1) % 4)
+        self.assertFails("TF12")
+
+    def test_tf12_module_other_than_0(self):
+        self.v5()
+        self.b.set("residency", "l3_tile", self.l3_residencies()[0], 1)
+        self.assertFails("TF12")
+
+    def test_tf12_zero_length_residency_is_no_collision(self):
+        self.v5()
+        # Collapse a residency to zero length at a cycle inside another residency of its slot:
+        # it occupies no time, so TF12 must not call it a second tile in the slot.
+        rs = self.l3_residencies()
+        for a in rs:
+            for b in rs:
+                if a != b and self.b.get("residency", "slot", a) == self.b.get("residency", "slot", b) and \
+                        self.b.get("residency", "t1", a) - self.b.get("residency", "t0", a) > 2:
+                    mid = self.b.get("residency", "t0", a) + 1
+                    self.b.set("residency", "t0", b, mid)
+                    self.b.set("residency", "t1", b, mid)
+                    code, report = run(self.b.dir)
+                    self.assertIn(code, (0, 1), "the checker could not read the bundle")
+                    self.assertNotIn("TF12", {v["invariant"] for v in report["violations"]})
+                    return
+        self.skipTest("no slot is reused in this bundle")
+
+    def test_tf8_slot_rows_must_be_there(self):
+        self.v5()
+        lod = json.loads((self.b.dir / "lod.json").read_text())
+        self.assertTrue(any(x["kind"] == "l3_slot" for x in lod["rows"]))
+        lod["rows"] = [x for x in lod["rows"] if x["kind"] != "l3_slot"]
+        (self.b.dir / "lod.json").write_text(json.dumps(lod))
+        self.assertFails("TF8")
+
+    def test_version_5_must_say_its_banks(self):
+        self.v5()
+        del self.b.manifest["l3_banks"]
         self.b.save_manifest()
         code, _ = run(self.b.dir)
         self.assertEqual(code, 2)

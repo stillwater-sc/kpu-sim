@@ -39,9 +39,9 @@ and no level allocates a slot of its own. **Being implemented** (`docs/plans/l3-
 L-B executes the walker's addresses (step 3: its L3 is addressed storage, and it refuses a write
 into a live slot or a read of the wrong one), and the L0 trace records them (step 4: opset 1.2's
 `L3_*` ops, which the replay checks and the compute-schedule analyses skip), and L-T1 times them
-(step 5: a Load waits for its own slot's Release). Until the later steps land, `.tflow` draws L3
-pooled and L-CA's `slot_id` is a per-DMA-engine counter. Never present a pooled L3 as the
-intended model.
+(step 5a: a Load waits for its own slot's Release) and records them (step 5b: `.tflow` version 5
+carries each residency's slot, one swimlane row per slot). Until step 6 lands, L-CA's `slot_id`
+is a per-DMA-engine counter. Never present a pooled L3 as the intended model.
 
 **Every level computes values.** Decomposition changes *when* things happen, never *what*
 is computed. A level that returns timing without values is not a cheaper simulation — it is

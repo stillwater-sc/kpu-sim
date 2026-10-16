@@ -53,6 +53,70 @@ class ViewerSmokeTest(unittest.TestCase):
             self.assertIn(table["file"], payload["bins"])
         self.assertIsNotNone(payload["lod"])
 
+    # Interpolations in HTML that are not escaped, each reviewed: numbers the page computes, its
+    # own constants and colours, and the summary's values (plain, escaped where they render).
+    REVIEWED_RAW = {
+        '(100 * busy / Math.max(1, R.m.makespan)).toFixed(1)', '(lv.occ[i] / width).toFixed(2)',
+        'TENSOR_COLORS[k % TENSOR_COLORS.length]', 'a.length', 'list.length', 'mean.toFixed(2)', 'moving',
+        'collapsed.has(r.cat) ? "unfold" : "fold"', 'held.length > 12 ? "<br>…" : ""',
+        'held.length ? R.res.bank[held[0]] : "—"', 'r.cap && a.length > r.cap ? " OVER CAPACITY" : ""',
+        'r.cap ? "utilization" : "busy (sum)"', 'r.cap ? (100 * util).toFixed(1) + "%" : fmt(busy) + " cycles"',
+        'r.derived ? " (derived binding)" : ""', 'ramp(0.7)', 'ramp(l3frac)',
+        'row.capacity && lv.peak[i] > row.capacity ? " OVER CAPACITY" : ""', 'row.modelled ? "" : " (not modelled)"',
+        's.reads', 's.writes', 'k', 'm.device', 'm.device_label', 'm.l3_banks > 1 ? "s" : ""',
+        # Conditionals and lists whose every output piece is escaped or a number:
+        'b.clock ? " (" + esc(b.clock) + " clock)" : ""',
+        'l3cap ? " / " + fmt(l3cap) : ""',
+        'now >= 0 ? opText(R.co.op[now]) : "idle"',
+        'now >= 0 ? tileText(R.res.tile[now]) : "free"',
+        'i >= 0 ? tileText(R.res.tile[i]) + " (bank " + R.res.bank[i] + ")" : "free"',
+        'pooled || "No events are recorded against this block at " + esc(R.m.level) + "."',
+        'r.cap ? " of " + esc(r.cap) : ""',
+        'row.capacity ? " of " + fmt(row.capacity) : ""',
+        'near.map(i => `[${fmt(R.co.t0[i])}, ${fmt(R.co.t1[i])}) ${opText(R.co.op[i])}`).join("<br>") || "none"',
+        'held.slice(0, 12).map(i => `${tileText(R.res.tile[i])}: ${fmt(R.res.t0[i])}–${fmt(R.res.t1[i])}`).join("<br>") || "never used"',
+        'a.slice(0, 8).map(([, , i]) => r.kind === "l3" ? tileText(R.res.tile[i]) : r.kind === "cf" ? opText(R.co.op[i]) : transitText(i)).join("<br>") || "nothing active at the cursor"',
+    }
+    SAFE_CALL = re.compile(r"^(esc|fmt|hex|tileText|opText|transitText)\(")
+
+    @staticmethod
+    def interpolations(st):
+        out, i = [], 0
+        while (j := st.find("${", i)) >= 0:
+            d, k = 0, j + 2
+            while k < len(st) and not (st[k] == "}" and d == 0):
+                d += st[k] == "{"
+                d -= st[k] == "}"
+                k += 1
+            out.append(st[j + 2:k].strip())
+            i = k + 1
+        return out
+
+    def test_the_trusted_helpers_escape_the_names_they_write(self):
+        # SAFE_CALL trusts tileText, opText and transitText to return escaped HTML: each must write
+        # a tile's operand name (the bundle's string) only through esc().
+        page = (HERE / "index.html").read_text(encoding="utf-8")
+        for fn in ("tileText", "opText", "transitText"):
+            body = re.search(r"function " + fn + r"\(.*?\n\}", page, re.S).group(0)
+            self.assertNotRegex(body, r"\$\{(?:tile|t)\[0\]\}", f"{fn} writes an operand name unescaped")
+            self.assertIn("esc(", body, f"{fn} escapes nothing")
+
+    def test_bundle_strings_written_as_html_are_escaped(self):
+        # A packed page is shared, and a bundle, its binding and a floorplan are untrusted input.
+        # Every ${...} in a statement that writes HTML (innerHTML or a tooltip) must be escaped
+        # (esc, or a helper that escapes or returns a number), or be a reviewed safe expression.
+        # A new raw interpolation fails here until it is escaped or reviewed.
+        page = (HERE / "index.html").read_text(encoding="utf-8")
+        stmts = re.findall(r"(?:innerHTML\s*=|showTip\(e,).*?;\n", page, re.S)
+        self.assertGreater(len(stmts), 8)
+        for st in stmts:
+            for e in self.interpolations(st):
+                if self.SAFE_CALL.match(e) or e in self.REVIEWED_RAW:
+                    continue
+                self.fail(f"unescaped interpolation in HTML: ${{{e[:100]}}} -- escape it or review it into REVIEWED_RAW")
+            for m in re.finditer(r"\+\s*([A-Za-z_][\w.]*\.(?:name|kind|clock|level|device|source))\s*\+", st):
+                self.fail(f"{m.group(1)} concatenated unescaped in: {st[:140]}")
+
     def test_viewer_reads_the_version_the_writer_writes(self):
         # The page refuses any other manifest version, so a format bump that the viewer does not
         # follow would leave it refusing every new bundle -- invisible to a syntax check.

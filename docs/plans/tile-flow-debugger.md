@@ -554,6 +554,10 @@ residency.
 6. **L3 slot binding.** This is a deliberate executor model change, with its own design note:
    L-T1 assigns a concrete L3 tile and slot per residency, using a placement policy that
    follows the floorplan (nearest L3 to the consuming CF). Pooled L3 stays available.
+   *Superseded in part (2026-10-15):* the slot is the program's, placed by the walker and executed
+   by L-T1 (`l3-placement-at-lb.md` steps 2-5a), and `.tflow` version 5 records it (that plan's
+   step 5b), one swimlane row per slot. Binding the program's flat L3 to physical L3 tiles of the
+   floorplan is level 2 (a distributed machine) and is not done here.
 7. **Heat, Step 3.** Views 3a/3b. 3c (thermal) is planned behind its own review.
 8. **L-T2 density.** When #283 lands, L2 banks and L1 vectors become real stations, and S2
    LOD fills in.
