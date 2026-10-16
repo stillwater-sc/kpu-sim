@@ -18,6 +18,13 @@
 // (validate.hpp) proves them over the loop structure before anything runs; here they guard
 // every program the walker executes.
 //
+// A late store (`store C[i, j] late;`) is held, not emitted: its Drain, Writeback, Store and
+// Release come out when the next accumulator's block closes -- after that accumulator's calls --
+// or at the end of the program, with the store's own line and loop indices. A statement that
+// names the tile again (`resident` or `acc`) first emits it, and every late store before it. In program order the
+// movers then issue the next chain's Loads and Moves before this chain's results leave, so the
+// chains pipeline on the fabric.
+//
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2024-2025 Stillwater Supercomputing, Inc.
 // ============================================================================
@@ -158,15 +165,19 @@ public:
             case Frame::Kind::Acc: {
                 const std::string k = f.acc;
                 const int line = f.line;
+                const std::size_t due = f.due;
                 frames_.pop_back();
                 if (acc_calls_[k] == 0)
                     throw CompileError(line, "acc " + k + " receives no call; an accumulator needs at least one "
                                              "'+->' into it");
                 acc_[k] = AccState::Closed;
+                // The late stores written before this accumulator opened leave now.
+                while (!late_.empty() && late_.front().seq < due) flush_late();
                 return true;
             }
             case Frame::Kind::Program:
                 frames_.pop_back();
+                while (!late_.empty()) flush_late();
                 for (const auto& [k, r] : resident_)
                     throw CompileError(0, k + " is still resident at the end of the program; release it");
                 for (const auto& [k, state] : acc_)
@@ -179,7 +190,7 @@ public:
     void run() { while (step()) {} }
 
 private:
-    enum class AccState { Open, Closed, Stored };
+    enum class AccState { Open, Closed, Late, Stored };
     struct Frame {
         enum class Kind { Program, Loop, Acc };
         const std::vector<Stmt>* body;
@@ -189,7 +200,9 @@ private:
         long long value, hi;
         std::string acc;
         int line = 0;
+        std::size_t due = 0;                               // Acc: late stores numbered below this leave at its close
     };
+    struct LateStore { const Stmt* s; TileCoord y; Where where; std::size_t seq; };
     struct Live { std::size_t id; bool dirty; bool inherited = false; };
 
     const Program& ast_;
@@ -205,6 +218,9 @@ private:
     bool started_ = false;                                 // a statement other than `inherit` has run
     std::map<std::string, AccState> acc_;                  // accumulators not yet stored
     std::map<std::string, std::size_t> acc_calls_;
+    std::deque<LateStore> late_;                           // late stores not yet emitted, in program order
+    std::size_t late_seq_ = 0;
+    std::optional<Where> where_;                           // a late store's own place in the program
     std::size_t next_residency_ = 0;
     // Placement (ADR 0004 §5): every open residency's L3 address, and who holds each live slot.
     std::optional<L3Allocator> alloc_;
@@ -285,9 +301,7 @@ private:
         if (op) e.op = *op;
         e.opens = opens;
         e.loaded = loaded;
-        e.where.line = line_;
-        for (const Frame& f : frames_)
-            if (f.kind == Frame::Kind::Loop) e.where.loops.push_back({f.var, f.value, f.hi, f.line});
+        e.where = where_ ? *where_ : here();
         if (residency != kNone) {
             const auto pl = places_.find(residency);
             if (pl == places_.end()) throw std::logic_error("csp walk: residency " + std::to_string(residency) + " has no place");
@@ -312,6 +326,32 @@ private:
             places_.erase(residency);
             pinned_.erase(residency);
         }
+    }
+    Where here() const {
+        Where w;
+        w.line = line_;
+        for (const Frame& f : frames_)
+            if (f.kind == Frame::Kind::Loop) w.loops.push_back({f.var, f.value, f.hi, f.line});
+        return w;
+    }
+    // Emit the pending late stores up to and including tile k's, if k has one.
+    void flush_late_until(const std::string& k) {
+        const auto a = acc_.find(k);
+        if (a == acc_.end() || a->second != AccState::Late) return;
+        const int line = line_;
+        for (bool found = false; !found;) {
+            found = late_.front().y.to_string() == k;
+            flush_late();
+        }
+        line_ = line;
+    }
+    void flush_late() {
+        const LateStore l = late_.front();
+        late_.pop_front();
+        line_ = l.s->line;
+        where_ = l.where;
+        acc_out(*l.s, l.y);
+        where_.reset();
     }
     std::set<std::size_t> pinned_;                          // residencies the program placed itself
     int line_ = 0;                                          // the statement being executed
@@ -418,12 +458,13 @@ private:
             case Stmt::Kind::Acc: {
                 const TileCoord y = one(s.out);
                 const std::string k = y.to_string();
+                flush_late_until(k);
                 if (resident_.count(k)) throw CompileError(s.line, "acc " + k + ": it is resident in L3; an accumulator lives in the fabric");
                 not_retained(s.line, k);
                 if (acc_.count(k)) throw CompileError(s.line, "acc " + k + ": it already has an accumulator");
                 acc_[k] = AccState::Open;
                 acc_calls_[k] = 0;
-                frames_.push_back(Frame{&s.body, 0, Frame::Kind::Acc, {}, 0, 0, k, s.line});
+                frames_.push_back(Frame{&s.body, 0, Frame::Kind::Acc, {}, 0, 0, k, s.line, late_seq_});
                 break;
             }
             case Stmt::Kind::Resident: {
@@ -442,6 +483,7 @@ private:
                 }
                 for (const TileCoord& t : ts) {
                     const std::string k = t.to_string();
+                    flush_late_until(k);
                     if (resident_.count(k)) throw CompileError(s.line, k + " is already resident");
                     if (acc_.count(k)) throw CompileError(s.line, k + " is an accumulator in the fabric, not a DRAM tile to load");
                     not_retained(s.line, k);
@@ -623,27 +665,23 @@ private:
         auto acc = acc_.find(k);
         if (acc != acc_.end() && acc->second == AccState::Open)
             throw CompileError(s.line, "store " + k + " inside its own accumulator; store it after the acc block");
-        if (acc != acc_.end()) {
-            // Out of the fabric: drained, written back into an L3 slot for the moment, stored, freed.
-            need_slot(s.line, "store " + k + "'s writeback");
-            auto [drain_ctx, wb_ctx] = result_context(s, y);
-            TileOp drain;
-            drain.kind = TileOpKind::Drain;
-            drain.port_kind = PortKind::Output;
-            drain.port = "South";
-            drain.outputs = {y};
-            record_stages(y, drain_ctx, wb_ctx);
-            const std::size_t d = sink_.l0(drain);
-            const std::size_t id = next_residency_++;
-            place(id, y);
-            emit(Action::Kind::Drain, y, kNone, d, nullptr, false, false, false, std::move(drain_ctx));
-            emit(Action::Kind::Writeback, y, id, d, nullptr, true, false, false, std::move(wb_ctx));
-            emit(Action::Kind::Store, y, id, d);
-            emit(Action::Kind::Release, y, id, d);
-            acc_.erase(acc);
-            acc_calls_.erase(k);
+        if (acc != acc_.end() && acc->second == AccState::Late)
+            throw CompileError(s.line, "store " + k + ": its late store is already pending");
+        if (acc != acc_.end() && s.late) {
+            if (!s.context.empty())
+                throw CompileError(s.line, "store " + k + " late via ...: a late store carries no epilogue (it is "
+                                           "emitted after the next accumulator, where its vectors' residency is not known)");
+            acc->second = AccState::Late;
+            late_.push_back(LateStore{&s, y, here(), late_seq_++});
             return;
         }
+        if (acc != acc_.end()) {
+            acc_out(s, y);
+            return;
+        }
+        if (s.late)
+            throw CompileError(s.line, "store " + k + " late: late defers an accumulator's store; a resident tile is "
+                                       "stored where it is written");
         auto it = resident_.find(k);
         if (it == resident_.end()) throw CompileError(s.line, "store " + k + ": it is neither resident nor an accumulator");
         // An inherited tile may hold a result the operator before this one did not store: storing it
@@ -658,6 +696,29 @@ private:
         it->second.inherited = false;
     }
 
+    // An accumulator's store: out of the fabric -- drained, written back into an L3 slot for the
+    // moment, stored, freed.
+    void acc_out(const Stmt& s, const TileCoord& y) {
+        const std::string k = y.to_string();
+        need_slot(s.line, "store " + k + "'s writeback");
+        auto [drain_ctx, wb_ctx] = result_context(s, y);
+        TileOp drain;
+        drain.kind = TileOpKind::Drain;
+        drain.port_kind = PortKind::Output;
+        drain.port = "South";
+        drain.outputs = {y};
+        record_stages(y, drain_ctx, wb_ctx);
+        const std::size_t d = sink_.l0(drain);
+        const std::size_t id = next_residency_++;
+        place(id, y);
+        emit(Action::Kind::Drain, y, kNone, d, nullptr, false, false, false, std::move(drain_ctx));
+        emit(Action::Kind::Writeback, y, id, d, nullptr, true, false, false, std::move(wb_ctx));
+        emit(Action::Kind::Store, y, id, d);
+        emit(Action::Kind::Release, y, id, d);
+        acc_.erase(k);
+        acc_calls_.erase(k);
+    }
+
     // `retain y`: the residency ends without a Release -- its slot and the tile outlive the
     // program. A resident tile (written or not) keeps its slot; an accumulator is drained and
     // written back into a slot it keeps, with its epilogue on the way, and never stored.
@@ -667,6 +728,8 @@ private:
         if (acc != acc_.end()) {
             if (acc->second == AccState::Open)
                 throw CompileError(s.line, "retain " + k + " inside its own accumulator; retain it after the acc block");
+            if (acc->second == AccState::Late)
+                throw CompileError(s.line, "retain " + k + ": its late store is pending");
             need_slot(s.line, "retain " + k + "'s writeback");
             auto [drain_ctx, wb_ctx] = result_context(s, y);
             TileOp drain;

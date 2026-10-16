@@ -132,7 +132,7 @@ inline void stmt(std::ostringstream& o, const Stmt& s, int depth) {
             o << context_text(s.context) << ";\n";
             return;
         case Stmt::Kind::Store:
-            o << in << "store " << ref_text(s.out) << context_text(s.context) << ";\n";
+            o << in << "store " << ref_text(s.out) << (s.late ? " late" : "") << context_text(s.context) << ";\n";
             return;
         case Stmt::Kind::Distribute:
             o << in << "distribute " << s.tiles.at(0).name << " over grid " << s.map << ";\n";

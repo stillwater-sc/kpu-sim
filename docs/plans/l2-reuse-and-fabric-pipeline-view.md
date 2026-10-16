@@ -1,7 +1,7 @@
 # L2 Reuse and the L1 + Compute-Fabric Pipeline in the Domain-Flow Debugger
 
 **Date:** 2026-10-16
-**Status:** In Progress (approved 2026-10-16: Q1-Q7 as recommended, Q3 and Q8 decided by the architect; step 1 merged #377; step 2 in review; step 2b decided)
+**Status:** In Progress (approved 2026-10-16: Q1-Q7 as recommended, Q3 and Q8 decided by the architect; step 1 merged #377; step 2 merged #378; step 2b in review)
 
 Extends the domain-flow debugger (`docs/plans/domain-flow-debugger.md`, #363, complete) and
 follows the pattern of L3 placement (`docs/plans/l3-placement-at-lb.md`). It answers the
@@ -397,6 +397,29 @@ Each step is one PR. Steps 1 and 2 need no language change. Steps 3 and 4 depend
    loops) was rejected: the symbolic validator would need loop-carried accumulator state.
    With L3 at the generator's minimum (2 panels + 1), the next A row still waits for the slots the
    current row frees, which the overlay shows as slot waits; a larger L3 removes them.
+   - As built:
+     - A statement that names the tile again (`resident` or `acc`) first emits the pending late
+       store, and every one before it. Unfused linear depends on this: its second pass loads C
+       back, so it needs the last chain's store to reach DRAM first.
+     - The emitted actions carry the store's own line and loop indices.
+     - The symbolic validator checks the store in place. When a program has a late store, it also
+       requires a free slot at every acc open and close and at the program's end, which is where
+       the writeback can land.
+     - A late store refuses `via`: its epilogue's vector would need to be resident where the store
+       is emitted.
+     - It refuses a resident tile and a second store.
+     - kpu-csp-gen writes `late` in the matmul nest: matmul and unfused linear. Fused linear does
+       not, because its store carries the epilogue.
+   - Finding: `late` defers by ONE chain. The block mover issues in order, so the previous chain's
+     Writeback still leads the chain after next's Moves. The chains run back to back only while a
+     chain's calls outlast the chain ahead's drain (skew + rows). `test_fabric_pipeline` pins both
+     regimes: 8 k-steps of 32 on 64x64 pipeline fully, and 4 do not. On kpu_s1 a 512 matmul chain
+     (~1,856 cycles) far outlasts its drain (~254).
+   - Measured: kpu-csp-gen's 512 matmul in 64-tiles on kpu_s1 (L3 17):
+     - L-T1 makespan 190,592 -> 166,014 cycles;
+     - mean gap between chains 1,114 -> 724 cycles.
+     - The chains still do not overlap: the one block mover is busy 147,456 of 166,014 cycles,
+       moving each chain's A and B tiles out of L3 again. That is step 3's L2 reuse.
 3. **L2 staging in the language and at L-B (.dflow v5, opset 1.3).**
    - `csp/lang/` (parser, AST, `walk.hpp`): `l2 =`, `stage ... in l2 { }`, `L2Address`,
      allocation, and the Feed-only lowering.

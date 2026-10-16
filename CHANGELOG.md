@@ -9,6 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`store C[i, j] late;`** (`docs/plans/l2-reuse-and-fabric-pipeline-view.md` step 2b).
+  - An accumulator's store whose Drain, Writeback, Store and Release the walker emits after the
+    next accumulator's calls. The last one leaves at the end of the program. A statement that
+    names the tile again (`resident` or `acc`) first emits any pending late store.
+  - Every mover issues in program order, so the next chain's Loads and Moves now go ahead of this
+    chain's results, and its drain overlaps the next chain's fill.
+  - The symbolic validator checks it in place, and requires a slot where the writeback can land:
+    every acc open and close, and the program's end.
+  - Refused: `late via ...`, `late` on a resident tile, and a second store while one is pending.
+  - kpu-csp-gen's matmul nest writes it, in matmul and unfused linear. Fused linear does not,
+    because its store carries the epilogue.
+  - The deferral is one chain deep. Chains whose calls finish before the previous drain does still
+    wait.
+
 - **L-T1 times the fabric as a systolic pipeline** (`docs/plans/l2-reuse-and-fabric-pipeline-view.md`
   step 2; `.dflow` version 4).
   - Deployment field `fabric {pe_rows, pe_cols}`: one compute tile's PE array, checked against

@@ -93,6 +93,16 @@ set_tests_properties(test_fabric_pipeline PROPERTIES
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
 )
 
+# `store ... late`: an accumulator's store emitted after the next accumulator's calls
+# (docs/plans/l2-reuse-and-fabric-pipeline-view.md step 2b)
+kpu_add_component_test(test_csp_store_late "program"
+    test_csp_store_late.cpp
+)
+
+set_tests_properties(test_csp_store_late PROPERTIES
+    LABELS "program;csp;lang;v0.9"
+)
+
 # The structured CSP program: streamed and validated without unrolling (docs/plans/csp-language.md step 1c)
 kpu_add_component_test(test_csp_structured "program"
     test_csp_structured.cpp

@@ -50,12 +50,12 @@ Run lt1(const std::string& text, const characterize::DeviceDescriptor& dev) {
 }
 
 // C[m,n] = A[m,k] . B[k,n], one accumulator chain per C tile, k innermost. `store` after each
-// chain (as kpu-csp-gen writes it), or deferred until every chain has run.
-enum class Store { EachChain, Deferred };
+// chain, `store ... late` (as kpu-csp-gen writes it), or deferred until every chain has run.
+enum class Store { EachChain, Late, Deferred };
 std::string matmul(int m, int n, int k, int tm, int tn, int tk, Store store = Store::EachChain) {
     const int ni = m / tm, nj = n / tn, nk = k / tk;
     auto s = [](int v) { return std::to_string(v); };
-    const bool each = store == Store::EachChain;
+    const bool each = store != Store::Deferred;
     std::string p = "csp 1.0\nprogram mm machine flat(l3 = " + s(2 * nk + 2) + ") {\n"
            "  tensor A[" + s(m) + "," + s(k) + "] tile " + s(tm) + "x" + s(tk) + " in;\n"
            "  tensor B[" + s(k) + "," + s(n) + "] tile " + s(tk) + "x" + s(tn) + " in;\n"
@@ -63,7 +63,7 @@ std::string matmul(int m, int n, int k, int tm, int tn, int tk, Store store = St
            "  for j in 0.." + s(nj) + " {\n    resident B[:, j];\n"
            "    for i in 0.." + s(ni) + " {\n      resident A[i, :];\n"
            "      acc C[i, j] in fabric {\n        for k in 0.." + s(nk) + " { call gemm(A[i, k], B[k, j]) +-> C[i, j]; }\n      }\n" +
-           std::string(each ? "      store C[i, j];\n" : "") +
+           std::string(!each ? "" : store == Store::Late ? "      store C[i, j] late;\n" : "      store C[i, j];\n") +
            "      release A[i, :];\n    }\n    release B[:, j];\n  }\n";
     if (!each) p += "  for j in 0.." + s(nj) + " { for i in 0.." + s(ni) + " { store C[i, j]; } }\n";
     return p + "}\n";
@@ -177,6 +177,30 @@ TEST_CASE("a store between chains serializes them: the program is the schedule",
     const Run r = lt1(matmul(128, 128, 128, 64, 64, 32), fast(64, 64));
     REQUIRE(r.chains.size() == 4);
     for (std::size_t i = 1; i < r.chains.size(); ++i) CHECK(r.chains[i].in0 >= r.chains[i - 1].out1);
+}
+
+TEST_CASE("a late store lets the chains pipeline, one chain deep", "[fabric][lt1][late]") {
+    // Step 2b: each store leaves after the next chain's calls, so the movers bring that chain's
+    // tiles in first. 8 k-steps of 32: a chain's calls (256) outlast its drain (126 + 64), so the
+    // array goes from one chain to the next exactly as it does with no stores in between.
+    const Run late = lt1(matmul(128, 128, 256, 64, 64, 32, Store::Late), fast(64, 64));
+    const Run deferred = lt1(matmul(128, 128, 256, 64, 64, 32, Store::Deferred), fast(64, 64));
+    REQUIRE(late.chains.size() == 4);
+    for (std::size_t i = 1; i < late.chains.size(); ++i) {
+        CHECK(late.chains[i].in0 == late.chains[i - 1].in1);
+        CHECK(late.chains[i].in0 < late.chains[i - 1].out1);   // the three-tile moment
+        CHECK(late.chains[i].in0 == deferred.chains[i].in0);
+    }
+    CHECK(same_values(late.values, lt1(matmul(128, 128, 256, 64, 64, 32), fast(64, 64)).values));
+
+    // One chain deep, not more: with 4 k-steps a chain's calls (128) end before the chain ahead
+    // of it has drained (190), and the store that chain's Writeback leads in the block mover's
+    // order holds the third chain's Moves until the first chain's results are out.
+    const Run shallow = lt1(matmul(128, 128, 128, 64, 64, 32, Store::Late), fast(64, 64));
+    REQUIRE(shallow.chains.size() == 4);
+    CHECK(shallow.chains[1].in0 == shallow.chains[0].in1);
+    CHECK(shallow.chains[2].in0 > shallow.chains[1].in1);
+    CHECK(shallow.chains[2].in0 >= shallow.chains[0].out1);
 }
 
 TEST_CASE("a C tile smaller than the array leaves the other PEs idle", "[fabric][lt1]") {
