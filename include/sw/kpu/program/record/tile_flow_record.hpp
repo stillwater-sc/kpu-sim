@@ -10,9 +10,12 @@
 //
 // WHAT v0 CAN SAY, AND WHAT IT SAYS IT CANNOT (L-T1):
 //
-//   L3          a POOLED station. L-T1 models L3 as one capacity, so a residency interval says
-//               a tile held A slot, never which L3 tile or which slot. The station is named
-//               `<dev>/l3[*]` and flagged pooled; it is not a naming-map address (plan Q2).
+//   L3          a POOLED station across the physical L3 tiles, named `<dev>/l3[*]` and flagged
+//               pooled; it is not a naming-map address (plan Q2). From version 5 each residency
+//               also carries the L3 ADDRESS it held (module, slot, bank): the program's
+//               placement, executed by L-T1 (ADR 0004 §5; l3-placement-at-lb step 5). A slot is
+//               an address in the program's L3, not a physical L3 tile, so the floorplan stays
+//               pooled; the swimlanes draw one row per slot (tile_flow_lod.hpp).
 //   L2, L1      UNMODELLED stations, pooled, present only as the endpoints of the BlockMover
 //               and Streamer legs that cross them. The manifest lists them as unmodelled, and
 //               the viewer must draw them so, never as empty (plan §3.6).
@@ -31,6 +34,10 @@
 // L0 program's run at L-T1; the executor that made them retired (kpu-run-csp-programs step 4e),
 // so they are read and no longer written.
 //
+// VERSION 5 (docs/plans/l3-placement-at-lb.md step 5b): a CSP program's record whose residencies
+// carry their L3 address -- residency.bin gains l3_tile:u32 slot:u32 bank:u32, and the manifest
+// `l3_banks`. Version 4 is still read; its residencies have no address (kNoSlot).
+//
 // Not in v0, by design and named so: cause edges (step 5) and the orchestrator's descriptor
 // trace, which needs a time base across launches and arrives with the orchestrated record.
 //
@@ -40,6 +47,7 @@
 //                      stations, foreign slots, the station and tile tables, and for each binary
 //                      table its file, row count and columns (name, dtype, byte offset)
 //   residency.bin      columns tile:u32 station:u32 t0:f64 t1:f64 flags:u8
+//                      (version 5) l3_tile:u32 slot:u32 bank:u32, the L3 address it held
 //   transit.bin        columns tile:u32 op:u32 hop:u8 mover:u8 lane:u32 t0:f64 t1:f64 src:u32 dst:u32
 //   compute.bin        columns op:u32 station:u32 t0:f64 t1:f64
 //   op_tiles.bin       CSR of the tiles each op touches: kind:u8 offset:u32 (ops+1), tile:u32 and
@@ -93,11 +101,15 @@ struct Op {
     std::vector<std::uint8_t> written;     // parallel to `tiles`: 1 if the op writes it
 };
 
+inline constexpr std::uint32_t kNoSlot = 0xFFFFFFFFu;   // a residency of a record with no addresses
+
 struct Residency {
     enum : std::uint8_t { Seeded = 1, Held = 2 };
     std::uint32_t tile = 0, station = 0;
     Cycle t0 = 0, t1 = 0;
     std::uint8_t flags = 0;
+    // The L3 address it held (version 5); kNoSlot in a record without placement.
+    std::uint32_t l3_tile = kNoSlot, slot = kNoSlot, bank = kNoSlot;
 };
 
 struct Transit {
@@ -135,6 +147,7 @@ struct TileFlowRecord {
     std::string deployment_digest;
     Cycle makespan = 0;
     std::uint64_t foreign_slots = 0;   // L3 slots the caller held that this program never names
+    std::uint32_t l3_banks = 0;        // the program's L3 banks; 0: residencies carry no address
     std::vector<std::string> unmodelled;   // station kinds this level does not model
 
     std::vector<Station> stations;

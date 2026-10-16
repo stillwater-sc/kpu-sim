@@ -14,6 +14,7 @@
 
 #include <sw/kpu/program/csp/gen/generate.hpp>
 #include <sw/kpu/program/driver/program_spec.hpp>
+#include <sw/kpu/program/record/tile_flow_lod.hpp>
 #include <sw/kpu/program/record/tile_flow_record.hpp>
 #include <sw/kpu/program/csp/lang/parse.hpp>
 #include <sw/kpu/program/hop.hpp>
@@ -196,18 +197,39 @@ TEST_CASE("the .tflow bundle round-trips, and the same run writes the same bytes
     for (std::size_t i = 0; i < rec.ops.size(); ++i) CHECK(back.ops[i].tiles == rec.ops[i].tiles);
     CHECK(peak_l3_occupancy(back) == peak_l3_occupancy(rec));
 
-    // A newer bundle (version 5) is refused rather than misread, and so are older ones: version 1 has no
+    // Version 5: every residency carries the L3 address it held, and it round-trips.
+    CHECK(back.l3_banks == rec.l3_banks);
+    REQUIRE(back.residency.size() == rec.residency.size());
+    for (std::size_t i = 0; i < rec.residency.size(); ++i)
+        CHECK((back.residency[i].l3_tile == rec.residency[i].l3_tile && back.residency[i].slot == rec.residency[i].slot &&
+               back.residency[i].bank == rec.residency[i].bank));
+
+    // A newer bundle (version 6) is refused rather than misread, and so are older ones: version 1 has no
     // `written` column, and version 2 records writeback as a DMA read (its hop 5 is not an
     // ejection). Reading either would be a wrong answer.
     const std::string original = slurp(a + "/manifest.json");
     auto with_version = [&](const char* v, bool says_ops = true) {
         std::string m = original;
-        m.replace(m.find("\"version\": 4"), 12, std::string("\"version\": ") + v);
+        m.replace(m.find("\"version\": 5"), 12, std::string("\"version\": ") + v);
         if (!says_ops) m.replace(m.find("\"ops\": "), 7, "\"opz\": ");
         std::ofstream(a + "/manifest.json", std::ios::binary) << m;
     };
-    with_version("5");
-    CHECK_THROWS_WITH(read_tflow(a), ContainsSubstring("version 5"));
+    with_version("6");
+    CHECK_THROWS_WITH(read_tflow(a), ContainsSubstring("version 6"));
+    // Version 5 must say its banks.
+    {
+        std::string m = original;
+        m.replace(m.find("\"l3_banks\": "), 12, "\"l3_bankz\": ");
+        std::ofstream(a + "/manifest.json", std::ios::binary) << m;
+        CHECK_THROWS_WITH(read_tflow(a), ContainsSubstring("l3_banks"));
+    }
+    // Version 4 still reads; its residencies carry no address.
+    with_version("4");
+    {
+        const TileFlowRecord v4 = read_tflow(a);
+        CHECK(v4.l3_banks == 0);
+        for (const Residency& x : v4.residency) CHECK(x.slot == kNoSlot);
+    }
     // Version 4 is a CSP program's record; one that does not say its ops are actions is refused.
     with_version("4", false);
     CHECK_THROWS_WITH(read_tflow(a), ContainsSubstring("must say what its ops are"));
@@ -336,3 +358,33 @@ TEST_CASE("v4: a CSP program's L-T1 run records its actions, its slots, and read
         std::filesystem::remove_all(dir);
     }
 }
+
+TEST_CASE("version 5: every residency is at the address L-T1 placed it, one tile per slot", "[program][record][placement]") {
+    const Run r = run_text(slurp("tests/program/dflow/streamed_lowest.csp"));
+    REQUIRE_FALSE(r.outcome.skipped);
+    const TileFlowRecord rec = r.record();
+    CHECK(rec.l3_banks == 1);
+    REQUIRE(rec.residency.size() == r.outcome.slots.size());
+    std::map<std::uint32_t, std::vector<std::pair<Cycle, Cycle>>> by_slot;
+    for (std::size_t i = 0; i < rec.residency.size(); ++i) {
+        const Residency& x = rec.residency[i];
+        const auto& sl = r.outcome.slots[i];
+        CHECK(x.slot == sl.place.slot);                 // the address L-T1 executed
+        CHECK(x.bank == sl.place.bank);
+        CHECK(x.l3_tile == sl.place.l3_tile);
+        CHECK(x.slot < rec.stations[x.station].capacity);
+        by_slot[x.slot].emplace_back(x.t0, x.t1);
+    }
+    // place = lowest on a stream reuses slots 0 and 1 only (step 5a).
+    for (const auto& [slot, iv] : by_slot) CHECK(slot < 2);
+    for (auto& [slot, iv] : by_slot) {
+        std::sort(iv.begin(), iv.end());
+        for (std::size_t i = 1; i < iv.size(); ++i) CHECK(iv[i].first >= iv[i - 1].second);
+    }
+    // The pyramid draws one row per slot, after the stations and movers.
+    const Lod lod = build_lod(rec);
+    REQUIRE(lod.rows.size() == rec.stations.size() + rec.movers.size() + 5);
+    CHECK(lod.rows.back().kind == "l3_slot");
+    CHECK(lod.rows.back().name == rec.device + "/l3[*]/slot[4]");
+}
+

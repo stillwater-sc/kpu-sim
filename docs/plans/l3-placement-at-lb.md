@@ -1,7 +1,7 @@
 # L3 Placement Is Behavior: L-B Models Where Every Tile Lives
 
 **Date:** 2026-10-11
-**Status:** Approved 2026-10-11 (Q1-Q6 as recommended, §7). Steps 1-4 merged (#364-#367); step 5 (L-T1) in review, split as 5a (the executor) and 5b (`.tflow` binds slots)
+**Status:** Approved 2026-10-11 (Q1-Q6 as recommended, §7). Steps 1-4 and 5a merged (#364-#368); step 5b (`.tflow` binds slots) in review
 **Raised by:** the architect, 2026-10-11, reviewing `docs/plans/domain-flow-debugger.md` (#363):
 > The L-B behavioral model has to model L3 placement otherwise the CSP sequencing doesn't do
 > anything. The tile placement in L3 is a key component of the behavior of the machine, in the
@@ -286,6 +286,13 @@ Each step is one PR, reviewed and merged before the next. The suite stays green 
      and 740 (`test_csp_lt1_place`).
    - `csp/transactional.hpp`: a Load waits on its slot; `Slot` gains its address.
    - `.tflow` binds slots (the tile-flow debugger's step 6).
+     *As built in 5b (2026-10-15):* `.tflow` version 5. `residency.bin` gains `l3_tile`, `slot`,
+     `bank` (the address L-T1 executed), and the manifest gains `l3_banks`. The pyramid appends one
+     capacity-1 row per slot after the station and mover rows, so the swimlanes draw each slot and
+     no existing row moves. The L3 station stays pooled across the physical L3 tiles: a slot is an
+     address in the program's L3, not a physical tile, so the floorplan stays pooled.
+     `tflow_check.py` adds TF12 (slot inside the capacity, bank = slot % banks, one tile per slot
+     in time), and TF8 checks the slot rows. Version 4 is still read.
    - Tests: placement equals L-B's; a policy that reuses early stalls, measured on matmul (`lowest`
      against `fifo`).
 6. **L-CA executes placement.**

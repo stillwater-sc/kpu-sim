@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`.tflow` records L3 placement** (`docs/plans/l3-placement-at-lb.md` step 5b; `.tflow` version 5).
+  - Every residency carries the L3 address L-T1 executed (`l3_tile`, `slot`, `bank`), and the
+    manifest carries `l3_banks`. Version 4 is still read.
+  - The pyramid has one row per slot, after the station and mover rows, so the tile-flow viewer's
+    swimlanes draw each slot. Hovering names the tile in the slot at that cycle, and the inspector
+    lists the slot's residencies. The floorplan stays pooled, because a slot is a program address,
+    not a physical L3 tile.
+  - `tflow_check.py` reads version 5 and adds TF12: a slot inside the capacity, bank = slot %
+    banks, and one tile per slot in time. TF8 checks the slot rows.
 - **The L-T1 overlay in the domain-flow debugger** (`docs/plans/domain-flow-debugger.md` step 5, #363).
   - `.dflow` version 3: `lt1_legs` (every action's legs as L-T1 timed them, joined on the action
     index, with a Load's slot wait) and `lt1_tiles` (each final tile's proximity to L-B under

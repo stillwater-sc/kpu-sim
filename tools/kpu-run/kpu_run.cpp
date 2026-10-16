@@ -62,7 +62,8 @@ kpu-run runs a program; it does not write one. kpu-csp-gen writes CSP programs.
                             made (kpu-sim is the one source of an L0)
   --emit-l0-kernel <file.l0>  the trace, structure only (VALUES none)
   --emit-l0-result <file.l0>  the agreed values: the corpus's expected-output half
-  --tflow <dir>             the L-T1 run's tile-flow record (.tflow version 4)
+  --tflow <dir>             the L-T1 run's tile-flow record (.tflow version 5: residencies at
+                            their L3 addresses)
   --dflow <dir>             the L-B run's domain-flow record (.dflow version 1): every action
                             as a CSP state transition, written by the oracle's own run
   --dflow-limit <n>         record at most n steps (0 = all; default 1000000); residencies and
@@ -387,7 +388,8 @@ int run_csp_program(const std::vector<std::string>& a, const std::string& path) 
         for (const auto& u : o.unmodelled) std::cout << "        unmodelled: " << u << "\n";
     }
 
-    // --tflow: the tile-flow record (version 4) of the program's L-T1 run (step 4b).
+    // --tflow: the tile-flow record (version 5) of the program's L-T1 run (step 4b; its residencies
+    // carry their L3 address since l3-placement-at-lb step 5b).
     if (!tflow_path.empty()) {
         const CspLevelOutcome* lt1 = nullptr;
         for (const auto& o : res.levels)
@@ -401,7 +403,8 @@ int run_csp_program(const std::vector<std::string>& a, const std::string& path) 
             record::write_tflow(rec, tflow_path);
             std::cout << "wrote  " << tflow_path << "  (" << rec.residency.size() << " residencies, "
                       << rec.transits.size() << " transits, " << rec.computes.size()
-                      << " computes from L-T1; ops are the program's actions, version 4)\n";
+                      << " computes from L-T1; ops are the program's actions, residencies at their L3 "
+                      << "addresses, version 5)\n";
         } catch (const std::exception& e) {
             std::cerr << "kpu-run: --tflow: " << e.what() << "\n";
             return 2;

@@ -38,6 +38,10 @@ Invariants:
                         reader is a tile the machine claims to hold but never received -- what
                         an early release (#279) turns into when a later reader re-takes the slot
 
+    TF12 one tile per slot (version 5: residencies carry their L3 address) every L3 residency's
+                        slot is inside its L3's capacity and its bank is slot % l3_banks; the
+                        residencies placed in one slot never overlap in time
+
 Standard library only.
 
 SPDX-License-Identifier: MIT
@@ -63,6 +67,8 @@ SCHEMA = {
     "compute": {"op": "u32", "station": "u32", "t0": "f64", "t1": "f64"},
     "op_tiles": {"kind": "u8", "offset": "u32", "tile": "u32", "written": "u8"},
 }
+# Version 5 adds the L3 address each residency held.
+SCHEMA_V5 = {"residency": {"l3_tile": "u32", "slot": "u32", "bank": "u32"}}
 
 # enum Hop (tile_transaction_executor.hpp), by value: the station kinds each one moves between.
 # Every hop is a push (version 3): writeback is a BlockMover ejecting L3 -> DMA buffer (5), then
@@ -129,12 +135,17 @@ def load(path):
         # Version 2's hop 5 is the old DMA read of L3; reading it as an ejection would be wrong.
         raise Unreadable("a version-2 bundle records writeback as a DMA read (hop 5 = "
                          "dma:l3->dram); re-record it with this build's kpu-run --tflow")
-    if m.get("version") not in (3, 4):
-        raise Unreadable(f"version {m.get('version')!r} is not one this checker reads (3, 4)")
-    if m.get("version") == 4 and m.get("ops") != "csp-actions":
-        # Version 4 is a CSP program's record: an op is one of the program's actions. A bundle that
-        # does not say so cannot be read as one, or TF6 would be checked under the wrong rule.
-        raise Unreadable('a version-4 bundle must say what its ops are ("ops": "csp-actions")')
+    if m.get("version") not in (3, 4, 5):
+        raise Unreadable(f"version {m.get('version')!r} is not one this checker reads (3, 4, 5)")
+    if m.get("version") in (4, 5) and m.get("ops") != "csp-actions":
+        # Versions 4 and 5 are a CSP program's record: an op is one of the program's actions. A
+        # bundle that does not say so cannot be read as one, or TF6 would be checked under the wrong rule.
+        raise Unreadable(f'a version-{m.get("version")} bundle must say what its ops are ("ops": "csp-actions")')
+    if m.get("version") == 5:
+        # Version 5: every residency carries its L3 address; the banks make the bank checkable.
+        b = m.get("l3_banks")
+        if type(b) is not int or b < 1:
+            raise Unreadable(f"a version-5 bundle must say its L3 banks (l3_banks), not {b!r}")
     rec = {"manifest": m}
     _named(m.get("stations"), "manifest stations")
     movers = m.get("movers", [])
@@ -148,7 +159,8 @@ def load(path):
             rows = t["rows"]
             cols = {}
             declared = {c["name"]: c["dtype"] for c in t["columns"]}
-            for col, dtype in SCHEMA[name].items():
+            schema = dict(SCHEMA[name], **(SCHEMA_V5.get(name, {}) if m.get("version") == 5 else {}))
+            for col, dtype in schema.items():
                 if declared.get(col) != dtype:
                     raise Unreadable(f"{name}.{col} is declared {declared.get(col)!r}, "
                                      f"the format says {dtype}")
@@ -334,8 +346,8 @@ def check(rec):
     off, opt = ot["offset"], ot["tile"]
     def op_tiles(op):
         return opt[off[op]:off[op + 1]]
-    if m.get("version") == 4:
-        # A CSP PROGRAM's record (version 4): an op is one action, and L3 holds a tile only between
+    if m.get("version") in (4, 5):
+        # A CSP PROGRAM's record (versions 4 and 5): an op is one action, and L3 holds a tile only between
         # its program's credit and Release. An accumulator lives in the fabric with no L3 slot,
         # and a Feed reads L2 -- often after the L3 copy was released, which is the point of a
         # release. So the rule is the program's: every transit INTO or OUT OF L3 runs while its
@@ -403,7 +415,7 @@ def check(rec):
         # Only a hop that really ends in L3 fills an L3 slot; TF7 reports the mislabelled ones.
         # Version 4 (a CSP program): a result reaches L3 by its Writeback (hop 4), not by being
         # computed there, so that hop fills a slot too.
-        fills = (DMA_IN, L3_TO_L3, WRITEBACK) if m.get("version") == 4 else (DMA_IN, L3_TO_L3)
+        fills = (DMA_IN, L3_TO_L3, WRITEBACK) if m.get("version") in (4, 5) else (DMA_IN, L3_TO_L3)
         if tr["hop"][i] in fills and tr["dst"][i] < len(st) and \
                 st[tr["dst"][i]]["kind"] == "l3":
             arrivals.setdefault(tr["tile"][i], []).append(tr["t0"][i])
@@ -427,6 +439,31 @@ def check(rec):
                           f"nothing filled: no DMA delivers it and no op writes it -- its data "
                           f"was released earlier and the slot was re-taken by a reader")
 
+    # TF12 ------------------------------------------------------------------
+    if m.get("version") == 5:
+        r.ran("TF12")
+        banks = m["l3_banks"]
+        by_slot = {}
+        for i in range(nres):
+            s_i = res["station"][i]
+            if s_i >= len(st) or st[s_i].get("kind") != "l3":
+                continue
+            slot, bank, cap = res["slot"][i], res["bank"][i], st[s_i].get("capacity", 0)
+            if cap and slot >= cap:
+                r.fail("TF12", f"{tile_name(res['tile'][i])} is placed in slot {slot} of an L3 with {cap} slots")
+                continue
+            if bank != slot % banks:
+                r.fail("TF12", f"{tile_name(res['tile'][i])} in slot {slot} says bank {bank}; slot {slot} is in "
+                               f"bank {slot % banks} of {banks}")
+            by_slot.setdefault((s_i, res["l3_tile"][i], slot), []).append((res["t0"][i], res["t1"][i], i))
+        for (s_i, mod, slot), iv in by_slot.items():
+            iv.sort()
+            for (a0, a1, a), (b0, b1, b) in zip(iv, iv[1:]):
+                if b0 < a1:
+                    r.fail("TF12", f"l3[{mod}] slot {slot} holds {tile_name(res['tile'][a])} over "
+                                   f"[{int(a0)}, {int(a1)}) and {tile_name(res['tile'][b])} from {int(b0)}: "
+                                   f"two tiles in one slot")
+
     # TF8 -------------------------------------------------------------------
     if "lod" in rec:
         r.ran("TF8")
@@ -438,6 +475,11 @@ def check(rec):
         # compared against nothing and pass.
         want_rows = [(s["name"], s["kind"]) for s in st] + \
                     [("mover:" + mv["name"], "mover") for mv in m.get("movers", [])]
+        if m.get("version") == 5:
+            # One row per L3 slot, after the stations and movers (tile_flow_lod.cpp).
+            for s in st:
+                if s.get("kind") == "l3":
+                    want_rows += [(f"{s['name']}/slot[{k}]", "l3_slot") for k in range(s.get("capacity", 0))]
         got_rows = [(x["name"], x["kind"]) for x in lod["rows"]]
         if got_rows != want_rows:
             bad = next((i for i, (g, w) in enumerate(zip(got_rows, want_rows)) if g != w),
@@ -485,6 +527,9 @@ def check(rec):
             elif info["kind"] == "mover":
                 pool = MOVER_NAMES.index(info["name"].split(":", 1)[1])
                 iv = [(tr["t0"][i], tr["t1"][i]) for i in range(ntr) if tr["mover"][i] == pool]
+            elif info["kind"] == "l3_slot":
+                slot = int(info["name"][info["name"].rindex("[") + 1:-1])
+                iv = [(res["t0"][i], res["t1"][i]) for i in range(nres) if res["slot"][i] == slot]
             else:
                 iv = []
             # Recomputed from the raw events at the base and at the top. With every merge

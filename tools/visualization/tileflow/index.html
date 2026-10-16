@@ -177,9 +177,12 @@ function parse(files) {
   const m = JSON.parse(files["manifest.json"]);
   // Version 3: every hop is a push (writeback = ejection, then a DMA write); version 2 recorded a DMA read.
   // Version 4: the same columns, recording a CSP program's run -- an op is one of its actions.
-  const VERSIONS = [3, 4];
-  if (m.format !== "kpu-tflow" || !VERSIONS.includes(m.version)) throw new Error("not a version-3 or -4 kpu-tflow bundle (re-record with kpu-run --tflow)");
-  if (m.version === 4 && m.ops !== "csp-actions") throw new Error("a version-4 bundle must say its ops are csp-actions");
+  // Version 5: a CSP program's record whose residencies carry their L3 address (l3_tile, slot,
+  // bank; l3-placement-at-lb step 5b). The pyramid then has one row per slot.
+  const VERSIONS = [3, 4, 5];
+  if (m.format !== "kpu-tflow" || !VERSIONS.includes(m.version)) throw new Error("not a version-3, -4 or -5 kpu-tflow bundle (re-record with kpu-run --tflow)");
+  if (m.version >= 4 && m.ops !== "csp-actions") throw new Error(`a version-${m.version} bundle must say its ops are csp-actions`);
+  if (m.version === 5 && !(Number.isInteger(m.l3_banks) && m.l3_banks >= 1)) throw new Error("a version-5 bundle must say its L3 banks (l3_banks)");
   const R = { m };
   const tb = (name, extra) => {
     const t = m.tables[name], buf = files[t.file];
@@ -425,13 +428,15 @@ function start() {
   const l3cap = m.stations[L3S] ? m.stations[L3S].capacity : 0;
   $("summary").innerHTML = [
     ["level", m.level], ["device", `${m.device} (${m.device_label})`], ["makespan", fmt(m.makespan) + " cycles"],
-    ["L3 capacity", l3cap ? fmt(l3cap) + " tiles" : "unbounded"], ["compute tiles", nCF],
+    ["L3 capacity", l3cap ? fmt(l3cap) + " tiles" : "unbounded"],
+    ["L3 slots", m.version === 5 ? `addressed: ${fmt(l3cap)} slots, ${m.l3_banks} bank${m.l3_banks > 1 ? "s" : ""} (one row each)` : "pooled (no addresses before version 5)"],
+    ["compute tiles", nCF],
     ["tiles", fmt(m.tiles.length)], ["transits", fmt(R.tr.rows)], ["computes", fmt(R.co.rows)],
     ["lanes", lanes || "—"], ["floorplan", R.fp ? R.fp.source : "none loaded"],
     ["binding", R.B ? `derived · ${R.B.engines.length} DMA engines · ${R.B.l3.tiles.length} L3 tiles · ${R.B.l3.overflow} L3 over · ${R.B.dma ? R.B.dma.overloaded : 0} DMA over` : "none (pooled rows)"]
   ].map(([k, v]) => `<span class="chip">${k} <b>${v}</b></span>`).join("") +
     (m.unmodelled && m.unmodelled.length ? `<span class="chip warn">not modelled <b>${m.unmodelled.join(", ")}</b></span>` : "");
-  $("honesty").textContent = (R.bindingIgnored ? R.bindingIgnored + " " : "") + (R.B ? `At ${m.level} the executor pools L3 and binds moves to lanes, not places. The per-resource rows and floorplan fills here come from a DERIVED binding (bind.py): ${R.B.policies.l3}; ${R.B.policies.dma}; ${R.B.policies.noc}. Timing is the executor's; only the place is derived. ${R.B.notes.join(" ")}` : `At ${m.level}, L3 is one pooled capacity and moves are bound to lanes of a mover pool, not to places: the floorplan draws L3 and the movers as pooled fills across every block of their kind, never as per-tile values this record does not hold. Invariants are checked by tools/trace/tflow_check.py, not here.`);
+  $("honesty").textContent = (R.bindingIgnored ? R.bindingIgnored + " " : "") + (R.B ? `At ${m.level} the executor pools L3 and binds moves to lanes, not places. The per-resource rows and floorplan fills here come from a DERIVED binding (bind.py): ${R.B.policies.l3}; ${R.B.policies.dma}; ${R.B.policies.noc}. Timing is the executor's; only the place is derived. ${R.B.notes.join(" ")}` : (m.version === 5 ? `At ${m.level}, every L3 residency carries the address the program placed it at (module, slot, bank): the swimlanes draw one row per slot. A slot is an address in the program's L3, not a physical L3 tile, so the floorplan still draws L3 pooled across every L3 block; moves are bound to lanes of a mover pool, not to places. ` : `At ${m.level}, L3 is one pooled capacity and moves are bound to lanes of a mover pool, not to places: the floorplan draws L3 and the movers as pooled fills across every block of their kind, never as per-tile values this record does not hold. `) + `Invariants are checked by tools/trace/tflow_check.py, not here.`);
   viewA = 0; viewB = Math.max(1, m.makespan); zoomHistory.length = 0;
   const sc = $("scrub"); sc.max = m.makespan; sc.value = 0;
   T = Math.floor(m.makespan * 0.4);
@@ -686,6 +691,10 @@ $("lanes").addEventListener("mousemove", e => {
   const { lv, width } = laneGeom, b = Math.floor(h.t / width), i = h.row * lv.bins + b;
   if (b < 0 || b >= lv.bins) return hideTip();
   if (!row.modelled) return showTip(e, `${row.name}<br>not modelled at ${R.m.level}`);
+  if (row.kind === "l3_slot") {
+    const i = slotResidencyAt(slotOfRow(row), h.t);
+    return showTip(e, `${row.name}<br>cycle ${fmt(Math.round(h.t))}: ${i >= 0 ? tileText(R.res.tile[i]) + " (bank " + R.res.bank[i] + ")" : "free"}`);
+  }
   showTip(e, `${row.name}<br>cycles ${fmt(b * width)}–${fmt((b + 1) * width)}<br>mean ${(lv.occ[i] / width).toFixed(2)}${row.capacity ? " of " + fmt(row.capacity) : ""} · peak ${fmt(lv.peak[i])}${row.capacity && lv.peak[i] > row.capacity ? " OVER CAPACITY" : ""}<br>${fmt(lv.starts[i])} started`);
 });
 $("lanes").addEventListener("mouseleave", hideTip);
@@ -876,8 +885,23 @@ $("dram").addEventListener("click", e => {
     (s ? `<span>DMA reads / writes</span><span>${s.reads} / ${s.writes}</span><span>L3 homes</span><span>${s.homes.join(", ") || "—"}</span><span>at cursor</span><span>${s.homeNow}</span>` : "") + `</div><p class="note">Layout derived by bind.py (${R.B.dram.layout}); the deployment declares no DRAM placement.</p>`;
 });
 
+// Version 5: the slot a pyramid row stands for, and the residency it holds at cycle t (-1: free).
+function slotOfRow(row) { return +row.name.slice(row.name.lastIndexOf("[") + 1, -1); }
+function slotResidencyAt(slot, t) {
+  for (let i = 0; i < R.res.rows; i++) if (R.res.slot[i] === slot && R.res.t0[i] <= t && t < R.res.t1[i]) return i;
+  return -1;
+}
 function inspectRow(r) {
   const row = R.lod.rows[r], top = R.lod.levels[R.lod.levels.length - 1];
+  if (row.kind === "l3_slot") {
+    const slot = slotOfRow(row), held = [];
+    for (let i = 0; i < R.res.rows; i++) if (R.res.slot[i] === slot) held.push(i);
+    held.sort((a, b) => R.res.t0[a] - R.res.t0[b]);
+    const now = slotResidencyAt(slot, T);
+    $("insp").innerHTML = `<div class="kv"><span>slot</span><span>${row.name}</span><span>bank</span><span>${held.length ? R.res.bank[held[0]] : "—"}</span><span>at cursor</span><span>${now >= 0 ? tileText(R.res.tile[now]) : "free"}</span><span>residencies</span><span>${fmt(held.length)}</span></div>` +
+      `<p class="note">${held.slice(0, 12).map(i => `${tileText(R.res.tile[i])}: ${fmt(R.res.t0[i])}–${fmt(R.res.t1[i])}`).join("<br>") || "never used"}${held.length > 12 ? "<br>…" : ""}</p>`;
+    return;
+  }
   const mean = top.occ[r] / Math.max(1, R.m.makespan);
   $("insp").innerHTML = `<div class="kv"><span>row</span><span>${row.name}</span><span>kind</span><span>${row.kind}${row.modelled ? "" : " (not modelled)"}</span><span>capacity</span><span>${row.capacity || "—"}</span><span>mean occupancy</span><span>${mean.toFixed(2)}</span><span>peak</span><span>${fmt(top.peak[r])}</span><span>intervals</span><span>${fmt(top.starts[r])}</span></div>`;
 }

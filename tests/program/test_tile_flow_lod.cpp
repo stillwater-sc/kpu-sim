@@ -56,6 +56,12 @@ std::vector<std::vector<std::uint32_t>> brute(const TileFlowRecord& rec, const L
                     if (rec.movers[m].name == to_string(static_cast<Mover>(x.mover)))
                         ++at[rec.stations.size() + m][c];
         at[rec.station(rec.device + "/l3[*]")][c] += static_cast<std::uint32_t>(rec.foreign_slots);
+        // Version 5: a slot row counts the residencies placed in that slot.
+        for (std::size_t r = rec.stations.size() + rec.movers.size(); r < lod.rows.size(); ++r) {
+            const std::string& n = lod.rows[r].name;
+            const auto slot = static_cast<std::uint32_t>(std::stoul(n.substr(n.rfind('[') + 1)));
+            for (const Residency& x : rec.residency) if (x.slot == slot && x.t0 <= c && c < x.t1) ++at[r][c];
+        }
     }
     return at;
 }
