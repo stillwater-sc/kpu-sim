@@ -253,8 +253,13 @@ globalThis.DflowCore = (() => {
     }
     R.n = R.steps.rows;                      // recorded steps (fewer than the run's actions if cut)
     R.actions = m.totals.actions;
-    R.cap = m.machine.l3;
-    R.banks = m.machine.banks;
+    // Numbers the page draws with are checked as numbers: a manifest is untrusted input (a packed
+    // page is made to be shared), and every string it names is escaped where it is written.
+    const int = (v, what, lo) => { if (!Number.isInteger(v) || v < lo) throw new Error(`${what} is ${JSON.stringify(v)}, not an integer >= ${lo}`); return v; };
+    R.cap = int(m.machine.l3, "machine.l3", 1);
+    R.banks = int(m.machine.banks, "machine.banks", 1);
+    for (const o of m.operands) for (const k of ["rows", "cols", "tile_rows", "tile_cols"]) int(o[k], `operand ${o.name} ${k}`, 1);
+    for (const k of ["actions", "loads", "stores"]) int(m.totals[k], `totals.${k}`, 0);
     // Each slot's residencies, in open order: they never overlap (D9), so the one held at a step is
     // found by binary search.
     R.slotRes = Array.from({ length: R.cap }, () => []);
@@ -370,9 +375,9 @@ globalThis.DflowCore = (() => {
 
   function setup() {
     const M = R.m;
-    const shape = M.operands.map(o => `${esc(o.name)} ${o.rows}&times;${o.cols} in ${o.tile_rows}&times;${o.tile_cols} tiles`).join(" &middot; ");
+    const shape = M.operands.map(o => `${esc(o.name)} ${esc(o.rows)}&times;${esc(o.cols)} in ${esc(o.tile_rows)}&times;${esc(o.tile_cols)} tiles`).join(" &middot; ");
     $("meta").innerHTML = `<span>program <b>${esc(M.program.name)}</b></span><span>${shape}</span>` +
-      `<span>L3 ${R.cap} slots, ${R.banks} bank${R.banks > 1 ? "s" : ""}, place = ${esc(M.machine.place)}</span>` +
+      `<span>L3 ${esc(R.cap)} slots, ${esc(R.banks)} bank${R.banks > 1 ? "s" : ""}, place = ${esc(M.machine.place)}</span>` +
       `<span>${fmt(M.totals.actions)} actions &middot; ${fmt(M.totals.loads)} loads &middot; ${fmt(M.totals.stores)} stores</span>`;
     $("runid").textContent = M.run_id ? `run id: ${M.run_id}` : "run id: none (L-B did not run as a level)";
     $("notmodelled").innerHTML = M.not_modelled.map(x => `<li>${esc(x)}</li>`).join("");
@@ -474,10 +479,10 @@ globalThis.DflowCore = (() => {
 
     let rtxt = "";
     if (st.residency >= 0) rtxt = `r${st.residency}` + (st.opens ? (st.pinned ? " opens (pinned)" : " opens") : "") + (st.closes ? " released" : "") + (st.retains ? " retained" : "");
-    const mv = st.from ? `${st.from} &rarr; ${st.to}` : "";
+    const mv = st.from ? `${esc(st.from)} &rarr; ${esc(st.to)}` : "";
     const refusedNext = R.m.refusal && s === R.n - 1;
     $("now").className = "now" + (refusedNext ? " refused" : "");
-    $("now").innerHTML = `<span class="k">${esc(st.kind)}</span> ${esc(st.tile)}` + (st.process ? ` &middot; ${st.process}` : "") + (mv ? ` &middot; ${mv}` : "") +
+    $("now").innerHTML = `<span class="k">${esc(st.kind)}</span> ${esc(st.tile)}` + (st.process ? ` &middot; ${esc(st.process)}` : "") + (mv ? ` &middot; ${mv}` : "") +
       (st.place ? ` &middot; L3 slot ${st.place.slot}, bank ${st.place.bank}` : "") + (rtxt ? ` &middot; ${rtxt}` : "") +
       (refusedNext ? ` &middot; the next action was refused` : "");
     for (const e of EDGES) $("e-" + e).classList.toggle("on", st.kind === e);

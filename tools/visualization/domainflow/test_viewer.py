@@ -106,6 +106,35 @@ class ViewerTest(unittest.TestCase):
             written = json.loads((Path(b) / "manifest.json").read_text(encoding="utf-8"))["version"]
             self.assertIn(written, versions)
 
+    def test_every_manifest_string_written_as_html_is_escaped(self):
+        # The page writes manifest strings with innerHTML; each one must go through esc(). A name
+        # like <img onerror=...> in a shared bundle would otherwise run script in the viewer.
+        # The statements that build HTML: every innerHTML assignment, and the move string (mv) the
+        # step line inserts into one. A string escaped where it is finally written (the inspector's
+        # esc(b)) is built elsewhere and is not an HTML statement.
+        html = page()
+        stmts = re.findall(r"innerHTML\s*=.*?;\n", html, re.S) + re.findall(r"const mv = .*?;\n", html, re.S)
+        self.assertGreater(len(stmts), 10)
+        for st in stmts:
+            for name in ("st.process", "st.from", "st.to", "M.machine.place", "o.name", "o.rows", "o.cols",
+                         "R.cap", "R.banks", "M.program.name"):
+                self.assertNotRegex(st, r"\$\{" + re.escape(name) + r"\}", f"{name} unescaped in: {st[:120]}")
+
+    @unittest.skipUnless(NODE, "Node.js is not on PATH")
+    def test_parse_refuses_a_non_integer_geometry(self):
+        core, _ = scripts()
+        b = self.tmp / "hostile.dflow"
+        shutil.copytree(BUNDLES[0], b)
+        m = json.loads((b / "manifest.json").read_text(encoding="utf-8"))
+        m["machine"]["l3"] = "17<img src=x onerror=alert(1)>"
+        (b / "manifest.json").write_text(json.dumps(m), encoding="utf-8")
+        (self.tmp / "core.js").write_text(core, encoding="utf-8")
+        (self.tmp / "harness.js").write_text(HARNESS, encoding="utf-8")
+        p = subprocess.run([NODE, str(self.tmp / "harness.js"), str(self.tmp / "core.js"), str(b), "[0]"],
+                           capture_output=True, text=True)
+        self.assertNotEqual(p.returncode, 0)
+        self.assertIn("machine.l3", p.stderr)
+
     @unittest.skipUnless(NODE, "Node.js is not on PATH")
     def test_scripts_parse(self):
         core, ui = scripts()
@@ -178,4 +207,8 @@ if __name__ == "__main__":
         sys.exit(2)
     while len(sys.argv) > 1 and not sys.argv[1].startswith("-"):
         BUNDLES.append(Path(sys.argv.pop(1)).resolve())
+    if not BUNDLES:
+        print("test_viewer: give at least one .dflow bundle; with none, every bundle test would pass vacuously",
+              file=sys.stderr)
+        sys.exit(2)
     unittest.main()
