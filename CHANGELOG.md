@@ -9,6 +9,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **L2 and the compute fabric in the domain-flow viewer** (`docs/plans/l2-reuse-and-fabric-pipeline-view.md`
+  step 1; viewer only, `.dflow` unchanged).
+  - L2 and the fabric list their tiles after each action. An L2 tile marks how many times it has
+    been moved from L3 so far: at L-B every use is a new Move, so the marks show the re-Moves that
+    L2 staging (step 3) will remove.
+  - The L1 + compute fabric panel shows the operands fed for the next call, the call with its
+    chain position (k of K), and the open accumulators. It is structural: L-B has no time, so the
+    fill, steady state and drain wait for the L-T1 pipeline overlay (step 2).
+  - The tiles are derived from the recorded actions as L-B moves them, and checked against L-B's
+    held counts at every step. On a disagreement the page shows no contents.
+  - Navigation: next chain start and end; `#step=N` opens a page at a step.
+  - `test_viewer.py` compares the contents and calls with an independent replay, checks every
+    recorded L2 or fabric snapshot against them, and replaces its name-list escape check with
+    the strict allow-list scan.
+- **Design plan: L2 reuse and the L1 + compute-fabric pipeline** (`docs/plans/l2-reuse-and-fabric-pipeline-view.md`).
+  - The fabric is output-stationary. Results drain north on their own one-way links, two per PE
+    edge, so a drain never stalls the next tile.
+  - L-T1 times a chain as an operand stream in and a result stream out. L2 staging becomes
+    program behavior, the way L3 placement did.
+
 - **`.tflow` records L3 placement** (`docs/plans/l3-placement-at-lb.md` step 5b; `.tflow` version 5).
   - Every residency carries the L3 address L-T1 executed (`l3_tile`, `slot`, `bank`), and the
     manifest carries `l3_banks`. Version 4 is still read.

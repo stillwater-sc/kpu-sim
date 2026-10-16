@@ -109,6 +109,23 @@ canvas.ribbon { width: 100%; height: 90px; display: block; cursor: pointer; }
 .slot.touched { box-shadow: 0 0 0 2px var(--accent); }
 .slot.freed { border-style: dashed; }
 .slot.selected { background: var(--accent-soft); }
+.tiles { display: flex; flex-wrap: wrap; gap: 3px; justify-content: center; margin-top: 6px; max-height: 132px; overflow-y: auto; }
+.tchip { font: 0.68rem var(--font-mono); border: 1px solid var(--line); border-left: 3px solid var(--op); border-radius: 4px; padding: 0 4px; background: var(--panel); color: var(--op); white-space: nowrap; }
+.tchip .x { color: var(--bad); font-weight: 600; }
+.tchip.acc { background: var(--accent-soft); }
+.tchip.touched { box-shadow: 0 0 0 2px var(--accent); }
+.fabric { border: 1px solid var(--line); border-radius: 8px; padding: 10px; display: grid; gap: 8px; }
+.fabric .cols { display: grid; grid-template-columns: minmax(0, 1fr) 28px minmax(0, 1fr) 28px minmax(0, 1fr); align-items: start; gap: 4px; }
+@media (max-width: 680px) { .fabric .cols { grid-template-columns: minmax(0, 1fr); } .fabric .to { display: none; } }
+.fabric .col { background: var(--soft); border-radius: 6px; padding: 6px 8px; min-height: 58px; min-width: 0; }
+.fabric .col .lbl { font-size: 0.72rem; color: var(--muted); }
+.fabric .col .tiles { justify-content: flex-start; }
+.fabric .to { align-self: center; text-align: center; color: var(--muted); }
+.fabric .call { font: 0.82rem var(--font-mono); overflow-wrap: anywhere; }
+.chainbar { display: flex; gap: 2px; margin-top: 4px; flex-wrap: wrap; }
+.chainbar i { width: 10px; height: 8px; border-radius: 2px; background: var(--line); }
+.chainbar i.done { background: var(--accent); opacity: 0.45; }
+.chainbar i.now { background: var(--accent); }
 .op-0 { --op: var(--op-0); } .op-1 { --op: var(--op-1); } .op-2 { --op: var(--op-2); } .op-3 { --op: var(--op-3); }
 .legend { display: flex; flex-wrap: wrap; gap: 12px; font-size: 0.78rem; color: var(--muted); }
 .legend .sw { display: inline-block; width: 10px; height: 10px; border-radius: 2px; background: var(--op); margin-right: 5px; vertical-align: -1px; }
@@ -151,6 +168,7 @@ footer ul { margin: 0; padding-left: 18px; }
   <div class="banner bad" id="error" hidden></div>
   <div class="banner bad" id="refusal" hidden></div>
   <div class="banner info" id="cutnote" hidden></div>
+  <div class="banner bad" id="lbnote" hidden></div>
 
   <div id="viewer" hidden>
     <div class="wrap">
@@ -168,6 +186,8 @@ footer ul { margin: 0; padding-left: 18px; }
           <span class="sep"></span>
           <span class="group"><label for="kind">run to next</label><select id="kind"></select><button id="nextkind">go</button></span>
           <button id="release" title="The step that releases the residency this step names">to its release</button>
+          <button id="chainstart" title="The next call that opens a chain: the first call on a result in the fabric">next chain start</button>
+          <button id="chainend" title="The next call that closes a chain: the last call before its result drains">next chain end</button>
           <button id="slotbound" title="The next Load whose L3 slot decided its start under L-T1" hidden>next slot-bound Load</button>
           <span class="group" id="axisgroup" hidden><label for="axis">axis</label><select id="axis"><option value="step">step (L-B)</option><option value="time">L-T1 cycles</option></select></span>
           <span class="group"><label for="jump">jump to step</label><input id="jump" type="number" min="0"></span>
@@ -193,9 +213,20 @@ footer ul { margin: 0; padding-left: 18px; }
             <div class="edge"><span class="arrow" id="e-LOAD">dma LOAD &rarr;</span><span class="arrow" id="e-STORE">&larr; STORE dma</span></div>
             <div class="station l3"><div class="head"><span class="name">L3</span><span class="mono num" id="c-l3"></span></div><div id="banks"></div></div>
             <div class="edge"><span class="arrow" id="e-MOVE">bm MOVE &rarr;</span><span class="arrow" id="e-WRITEBACK">&larr; WRITEBACK bm</span></div>
-            <div class="station"><div class="name">L2</div><div class="count" id="c-l2"></div><div class="cap">unbounded at L-B</div></div>
+            <div class="station"><div class="name">L2</div><div class="count" id="c-l2"></div><div class="cap">unbounded at L-B</div><div class="tiles" id="l2-tiles"></div></div>
             <div class="edge"><span class="arrow" id="e-FEED">str FEED &rarr;</span><span class="arrow" id="e-DRAIN">&larr; DRAIN str</span></div>
-            <div class="station"><div class="name">Fabric</div><div class="count" id="c-cf"></div><div class="cap" id="cf-cap">unbounded at L-B</div></div>
+            <div class="station"><div class="name">Fabric</div><div class="count" id="c-cf"></div><div class="cap" id="cf-cap">unbounded at L-B</div><div class="tiles" id="cf-tiles"></div></div>
+          </div>
+          <div class="fabric" aria-label="L1 and the compute fabric">
+            <h2>L1 + compute fabric &middot; structural (L-B)</h2>
+            <div class="cols">
+              <div class="col"><div class="lbl">fed for the next call (L1 &rarr; array)</div><div class="tiles" id="fab-fed"></div></div>
+              <div class="to">&rarr;</div>
+              <div class="col"><div class="lbl">the call</div><div class="call" id="fab-call"></div><div class="chainbar" id="fab-bar"></div></div>
+              <div class="to">&rarr;</div>
+              <div class="col"><div class="lbl">results in the array (open accumulators)</div><div class="tiles" id="fab-acc"></div></div>
+            </div>
+            <p class="note" id="fab-note">Which tiles the fabric holds and which call ran, read from L-B's actions. L-B has no time, so nothing here is a fill, a steady state or a drain: those are timing, and arrive with the L-T1 pipeline overlay.</p>
           </div>
           <div class="legend" id="legend"></div>
         </section>
@@ -345,8 +376,114 @@ globalThis.DflowCore = (() => {
       const s = R.residency.slot[r];
       if (s < R.cap) R.slotRes[s].push(r);
     }
+    derive(R);
     return R;
   }
+
+  // ---- L2 and the fabric (docs/plans/l2-reuse-and-fabric-pipeline-view.md step 1) ----
+  // The record names L3's residencies but only counts L2's and the fabric's tiles (held). Which
+  // tiles they are follows from the recorded actions, exactly as L-B moves them: a step whose `to`
+  // is a channel puts its tile there, one whose `from` is takes it out, and a Call consumes the
+  // tiles fed for it (its operands, fed just before it) and leaves its result in the fabric. The
+  // derivation is checked against L-B's held counts at EVERY step; on the first disagreement R.lb
+  // says where, and the page shows no derived contents at all rather than wrong ones.
+  const CHECKPOINT = 256;
+  function apply(R, st, s) {
+    const S = R.steps, t = S.tile[s];
+    if (S.from[s] === R.chL2) st.l2.delete(t);
+    if (S.from[s] === R.chCf) st.cf.delete(t);
+    if (S.to[s] === R.chL2) st.l2.set(t, s);
+    if (S.to[s] === R.chCf) { st.cf.set(t, { since: s, acc: false }); st.fed.push(t); }
+    if (S.kind[s] === R.kCall) {
+      const used = st.fed.filter(x => x !== t);
+      for (const x of used) st.cf.delete(x);
+      st.fed = [];
+      if (!st.cf.has(t)) st.cf.set(t, { since: s, acc: true });     // an accumulator opens in the fabric
+      return used;
+    }
+    return null;
+  }
+  const copyState = st => ({ l2: new Map(st.l2), cf: new Map([...st.cf].map(([k, v]) => [k, { ...v }])), fed: st.fed.slice() });
+  function derive(R) {
+    const ch = R.m.channels.map(c => c.name), S = R.steps;
+    R.chL3 = ch.indexOf("l3"); R.chL2 = ch.indexOf("l2"); R.chCf = ch.indexOf("cf"); R.kCall = R.m.kinds.indexOf("CALL");
+    R.lb = { ok: true, at: -1, why: "" };
+    R.checkpoints = [];
+    R.movesOf = new Map();                   // tile -> the steps that Move it L3 -> L2
+    R.calls = [];                            // { step, tile, operands, chain, pos }
+    R.chains = [];                           // { tile, calls: [call index], drain: step or -1 }
+    R.callAtStep = new Map();
+    const open = new Map();                  // result tile -> its chain while it is in the fabric
+    let st = { l2: new Map(), cf: new Map(), fed: [] };
+    for (let s = 0; s < R.n; s++) {
+      if (s % CHECKPOINT === 0) R.checkpoints.push(copyState(st));
+      const t = S.tile[s];
+      if (S.from[s] === R.chL3 && S.to[s] === R.chL2) {
+        if (!R.movesOf.has(t)) R.movesOf.set(t, []);
+        R.movesOf.get(t).push(s);
+      }
+      const used = apply(R, st, s);
+      if (used) {
+        if (!open.has(t)) { open.set(t, R.chains.length); R.chains.push({ tile: t, calls: [], drain: -1 }); }
+        const c = open.get(t), k = R.calls.length;
+        R.chains[c].calls.push(k);
+        R.calls.push({ step: s, tile: t, operands: used, chain: c, pos: R.chains[c].calls.length });
+        R.callAtStep.set(s, k);
+      }
+      if (S.from[s] === R.chCf && open.has(t)) { R.chains[open.get(t)].drain = s; open.delete(t); }
+      if (R.lb.ok && (st.l2.size !== S.held_l2[s] || st.cf.size !== S.held_cf[s])) {
+        R.lb = { ok: false, at: s, why: `after step ${s} the actions put ${st.l2.size} tiles in L2 and ${st.cf.size} in the fabric; L-B held ${S.held_l2[s]} and ${S.held_cf[s]}` };
+      }
+    }
+  }
+  // What L2 and the fabric hold after step s, each list in the order the tiles arrived. An L2
+  // tile carries how many times it has been moved from L3 so far: at L-B every use is a new Move
+  // (a call's operand is moved, then fed and consumed), so a count above one is a re-Move that
+  // staging in L2 would remove. A fabric tile is an operand fed for the next call, or an
+  // accumulator a call opened. null when the derivation disagreed with L-B (R.lb).
+  function contentsAt(R, s) {
+    if (!R.lb.ok || s < 0 || s >= R.n) return null;
+    const c = Math.floor(s / CHECKPOINT), st = copyState(R.checkpoints[c]);
+    for (let i = c * CHECKPOINT; i <= s; i++) apply(R, st, i);
+    const l2 = [...st.l2].map(([t, since]) => ({ tile: t, since, moves: movesBefore(R, t, s) }));
+    const cf = [...st.cf].map(([t, v]) => ({ tile: t, since: v.since, acc: v.acc }));
+    l2.sort((a, b) => a.since - b.since);
+    cf.sort((a, b) => a.since - b.since);
+    return { l2, cf };
+  }
+  // How many times tile t was moved L3 -> L2 at or before step s.
+  function movesBefore(R, t, s) {
+    const v = R.movesOf.get(t);
+    if (!v) return 0;
+    let lo = 0, hi = v.length;
+    while (lo < hi) { const mid = (lo + hi) >> 1; if (v[mid] <= s) lo = mid + 1; else hi = mid; }
+    return lo;
+  }
+  // A call, by index: its result, operands, and place in its chain. A chain is the calls on one
+  // result while it stays in the fabric (an accumulator's k-steps, or one in-place call), up to its
+  // Drain. `of` is -1 when the chain's Drain is not among the recorded steps (a cut or refused run).
+  function callInfo(R, k) {
+    const c = R.calls[k], ch = R.chains[c.chain];
+    const of = ch.drain >= 0 ? ch.calls.length : -1;
+    return { step: c.step, result: c.tile, operands: c.operands.slice(), chain: c.chain, pos: c.pos, of,
+             opens: c.pos === 1, closes: of >= 0 && c.pos === of, drain: ch.drain };
+  }
+  // The call at step s, or null.
+  const callAt = (R, s) => (R.lb.ok && R.callAtStep.has(s) ? callInfo(R, R.callAtStep.get(s)) : null);
+  // The latest call at or before step s, or null.
+  function lastCallAt(R, s) {
+    if (!R.lb.ok) return null;
+    let lo = 0, hi = R.calls.length - 1, at = -1;
+    while (lo <= hi) { const mid = (lo + hi) >> 1; if (R.calls[mid].step <= s) { at = mid; lo = mid + 1; } else hi = mid - 1; }
+    return at < 0 ? null : callInfo(R, at);
+  }
+  function nextCall(R, s, pred) {
+    if (!R.lb.ok) return -1;
+    for (let k = 0; k < R.calls.length; k++) if (R.calls[k].step > s && pred(callInfo(R, k))) return R.calls[k].step;
+    return -1;
+  }
+  const nextChainStart = (R, s) => nextCall(R, s, c => c.opens);
+  const nextChainEnd = (R, s) => nextCall(R, s, c => c.closes);
 
   const tileName = (R, t) => `${R.m.operands[R.tiles.operand[t]].name}[${R.tiles.ti[t]},${R.tiles.tj[t]}]`;
   const kindName = (R, s) => R.m.kinds[R.steps.kind[s]];
@@ -474,7 +611,7 @@ globalThis.DflowCore = (() => {
     return -1;
   }
 
-  return { VERSIONS, parse, tileName, position, slotAt, step, snapshot, valueAt, finalOf, snapshotsOf, legs, proximity, nextSlotBound, actionAtTime, nextIteration, nextKind, nextOnTile, nextFromLine, releaseOf, RES_RETAINED };
+  return { VERSIONS, parse, tileName, contentsAt, movesBefore, callAt, lastCallAt, nextChainStart, nextChainEnd, position, slotAt, step, snapshot, valueAt, finalOf, snapshotsOf, legs, proximity, nextSlotBound, actionAtTime, nextIteration, nextKind, nextOnTile, nextFromLine, releaseOf, RES_RETAINED };
 })();
 </script>
 
@@ -504,6 +641,8 @@ globalThis.DflowCore = (() => {
     setup();
     let start = 0;                            // open where L3 first fills: the most telling frame
     for (let s = 0; s < R.n; s++) if (R.steps.held_l3[s] === R.cap) { start = s; break; }
+    const want = /(?:^#|&)step=(\d+)/.exec(location.hash);   // a link to a step: page.html#step=123
+    if (want) start = Math.min(R.n - 1, +want[1]);
     if (R.n) {
       const st = C.step(R, start);
       selected = st.place ? st.place.slot : -1;
@@ -527,6 +666,8 @@ globalThis.DflowCore = (() => {
     else $("refusal").hidden = true;
     if (M.cut) { $("cutnote").textContent = `Step detail is cut at ${fmt(R.n)} of ${fmt(R.actions)} actions (--dflow-limit ${fmt(M.step_limit)}). The ribbon's iterations and the slot histories cover the whole run.`; $("cutnote").hidden = false; }
     else $("cutnote").hidden = true;
+    if (!R.lb.ok) { $("lbnote").textContent = `L2 and fabric contents are not shown: ${R.lb.why}. The derivation from the recorded actions disagrees with L-B; report the bundle.`; $("lbnote").hidden = false; }
+    else $("lbnote").hidden = true;
 
     $("src").innerHTML = M.program.text.split("\n").map((t, k) => `<div class="ln" id="ln-${k + 1}" data-line="${k + 1}" tabindex="0"><span class="no">${k + 1}</span><span>${esc(t)}</span><span class="idx" id="ix-${k + 1}"></span></div>`).join("");
 
@@ -692,6 +833,7 @@ globalThis.DflowCore = (() => {
     $("c-l2").textContent = fmt(st.held.l2);
     $("c-cf").textContent = fmt(st.held.cf);
     $("cf-cap").textContent = st.kind === "CALL" ? `${st.tile} computed here` : "unbounded at L-B";
+    renderFabric(s, st);
 
     for (let sl = 0; sl < R.cap; sl++) {
       const el = $("slot-" + sl), at = C.slotAt(R, sl, s);
@@ -715,6 +857,9 @@ globalThis.DflowCore = (() => {
       ["move", st.from ? `${st.from} → ${st.to}` : "none"], ["residency", rtxt || "none"],
       ["L3 address", st.place ? `l3[${st.place.l3_tile}] slot ${st.place.slot} bank ${st.place.bank}` : "none"],
       ["held after", `dram ${fmt(st.held.dram)} · l3 ${st.held.l3} · l2 ${st.held.l2} · cf ${st.held.cf}`]];
+    const call = C.callAt(R, s);
+    if (call) kv.push(["operands", call.operands.map(t => C.tileName(R, t)).join(", ") || "none"], ["chain", chainText(call)]);
+    if (st.kind === "MOVE") { const n = C.movesBefore(R, R.steps.tile[s], s); kv.push(["moves from L3", n > 1 ? `${n} (a re-Move: L-B stages nothing in L2)` : String(n)]); }
     $("step-kv").innerHTML = kv.map(([a, b]) => `<dt>${a}</dt><dd>${esc(b)}</dd>`).join("");
     $("release").disabled = C.releaseOf(R, st.residency) < 0 || C.releaseOf(R, st.residency) === s;
     renderSlot();
@@ -724,6 +869,38 @@ globalThis.DflowCore = (() => {
       ? pos.loops.map(l => `<button data-depth="${l.depth}" title="Next ${esc(l.var)} iteration">${esc(l.var)} &gt;</button>`).join("")
       : `<span class="note">outside every loop</span>`);
     drawRibbon();
+  }
+
+  // A tile as a chip: operand colour, name, and (in L2) how many times it was moved from L3.
+  function chip(t, extra, touched, acc) {
+    const cls = `tchip op-${R.tiles.operand[t] % 4}` + (acc ? " acc" : "") + (touched ? " touched" : "");
+    return `<span class="${cls}">${esc(C.tileName(R, t))}${extra}</span>`;
+  }
+  const chainText = c => `${c.pos} of ${c.of < 0 ? "? (its drain is not recorded)" : c.of}` + (c.opens ? " · opens" : "") + (c.closes ? " · closes" : "");
+
+  // L2 and the fabric: their tiles after this step, and the call structure (plan step 1). Read from
+  // the derivation in the data layer, which agreed with L-B's held counts at every step (R.lb).
+  function renderFabric(s, st) {
+    const cont = C.contentsAt(R, s), here = R.steps.tile[s];
+    const MAX = 40, list = (v, f) => v.slice(0, MAX).map(f).join("") + (v.length > MAX ? `<span class="tchip">+${v.length - MAX}</span>` : "");
+    if (!cont) {
+      for (const id of ["l2-tiles", "cf-tiles", "fab-fed", "fab-acc", "fab-call", "fab-bar"]) $(id).innerHTML = "";
+      return;
+    }
+    const touchedL2 = st.to === "l2" || st.from === "l2", touchedCf = st.to === "cf" || st.from === "cf" || st.kind === "CALL";
+    $("l2-tiles").innerHTML = list(cont.l2, e => chip(e.tile, e.moves > 1 ? ` <span class="x" title="moved from L3 ${e.moves} times so far">×${e.moves}</span>` : "", touchedL2 && e.tile === here, false));
+    $("cf-tiles").innerHTML = list(cont.cf, e => chip(e.tile, "", touchedCf && e.tile === here, e.acc));
+    const fed = cont.cf.filter(e => !e.acc), acc = cont.cf.filter(e => e.acc);
+    $("fab-fed").innerHTML = fed.length ? list(fed, e => chip(e.tile, "", e.tile === here, false)) : `<span class="note">none</span>`;
+    const call = C.callAt(R, s) || C.lastCallAt(R, s);
+    $("fab-acc").innerHTML = acc.length ? list(acc, e => chip(e.tile, "", call && e.tile === call.result, true)) : `<span class="note">none</span>`;
+    if (!call) { $("fab-call").innerHTML = `<span class="note">no call yet</span>`; $("fab-bar").innerHTML = ""; return; }
+    const now = call.step === s, ops = call.operands.map(t => esc(C.tileName(R, t))).join(", ") || "none";
+    $("fab-call").innerHTML = `${now ? "<b>this step</b>" : `latest: step ${fmt(call.step)}`}<br>${esc(C.tileName(R, call.result))} ← ${ops}<br>chain ${esc(chainText(call))}`;
+    const K = call.of < 0 ? call.pos : call.of, cells = Math.min(K, 64);
+    let bar = "";
+    for (let k = 1; k <= cells; k++) bar += `<i class="${k < call.pos ? "done" : k === call.pos ? "now" : ""}"></i>`;
+    $("fab-bar").innerHTML = bar + (K > cells ? `<span class="note">+${K - cells}</span>` : "");
   }
 
   // The tile inspector: the selected tile (else the current step's) at this step, or its final
@@ -832,6 +1009,8 @@ globalThis.DflowCore = (() => {
   $("speed").onchange = () => { if (timer) { play(); play(); } };
   $("nextkind").onclick = () => { const v = $("kind").value; go(v === "tile" ? C.nextOnTile(R, cur) : C.nextKind(R, cur, +v)); };
   $("release").onclick = () => go(C.releaseOf(R, C.step(R, cur).residency));
+  $("chainstart").onclick = () => go(C.nextChainStart(R, cur));
+  $("chainend").onclick = () => go(C.nextChainEnd(R, cur));
   $("scrub").oninput = () => go(+$("scrub").value);
   $("jump").onchange = () => go(+$("jump").value);
   $("iterbtns").onclick = e => { const b = e.target.closest("button[data-depth]"); if (b) go(C.nextIteration(R, cur, +b.dataset.depth)); };

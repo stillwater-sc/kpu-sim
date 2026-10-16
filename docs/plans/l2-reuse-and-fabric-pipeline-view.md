@@ -1,0 +1,463 @@
+# L2 Reuse and the L1 + Compute-Fabric Pipeline in the Domain-Flow Debugger
+
+**Date:** 2026-10-16
+**Status:** In Progress (approved 2026-10-16: Q1-Q7 as recommended, Q3 and Q8 decided by the architect; step 1 in review)
+
+Extends the domain-flow debugger (`docs/plans/domain-flow-debugger.md`, #363, complete) and
+follows the pattern of L3 placement (`docs/plans/l3-placement-at-lb.md`). It answers the
+architect's request (2026-10-16): show what L2 holds (its reuse) and what L1 and the compute
+fabric (CF) hold (the operator running on the array, as fill, steady state and drain), next to
+the L3 slots, so the system-level schedule can be read and debugged in one view.
+
+## 1. Problem Statement
+
+The domain-flow viewer draws L3 as addressed slots, but L2 and the fabric only as tile counts,
+hatched "not modelled". The architect wants two more pieces of state on screen:
+
+1. **L2 occupancy, which represents reuse.** A tile staged in L2 is fed to the fabric several
+   times without coming back from L3.
+2. **L1 + CF, the operator on the array.** L1 is not a reuse level: it generates the streams into
+   the array. When the CF is fully pipelined, L1 holds up to three tiles at once, each partly:
+   - the next operand tiles, streaming in (fill);
+   - the operands of the running call (steady state);
+   - the previous result, draining out (drain).
+
+**Neither is in the model today, so the viewer cannot draw it honestly.** The page draws only
+what the record holds (domain-flow plan §3.7), and the record holds only what the levels compute.
+
+| Wanted | What the levels do today | Gap |
+|--------|--------------------------|-----|
+| L2 reuse | A `call` emits, per operand, Move (L3→L2) and then Feed (L2→CF), which **takes** the tile (`behavioral.hpp`, Feed `keep=false`). A tile lives in L2 from its Move to its Feed, so every use re-Moves from L3. The language has no L2 statement; `machine flat(...)` declares only `l3`. | **Reuse is zero by construction.** An L2 panel drawn today could show only transient tiles and repeated Moves. |
+| L1 state | L-B has no L1 channel (`Chan {Dram, L3, L2, Cf}`); a Feed lands in `Cf`. `.tflow` has a pooled, unbounded `l1` station. | No L1 occupancy anywhere |
+| Fill / steady / drain | L-B has no time; a Call is atomic. L-T1 times a Call as one leg, `macs / fabric_macs_per_cycle` (`transactional.hpp:211`), after its Feeds and before its Drain. A chain's calls run back to back, each a whole leg. | **No phases, no overlap.** A wavefront model exists (`stream/stream_signature.hpp`, `WavefrontTiming`: fill + reduce + drain), but no level uses it. The deployment carries `macs_per_cycle` but no array geometry. |
+
+So this plan is mostly not a viewer change. Most of it is modelling that the viewer then reads.
+That modelling comes in two independent parts with different owners:
+
+- **L-T1 times the fabric pipeline (part B).** This is timing, so it belongs to the timed levels,
+  never to L-B. It needs the array's geometry and a space-time mapping.
+- **L2 residency becomes behavior (part A).** This is the L3 placement pattern applied one level
+  down. Placement plan Q5 deferred it: "L2 and L1 slots follow the same pattern ... a later
+  plan". The language says what is staged, L-B models it, and the record carries it.
+
+## 2. Architecture
+
+```
+┌──────────────────────────────────────────────────────────────────────────────────────┐
+│                          kpu-run --dflow  (one .dflow bundle)                        │
+│                                                                                      │
+│  ┌──────────────────────────────┐            ┌──────────────────────────────────┐    │
+│  │  L-B  (oracle, step axis)    │            │  L-T1  (overlay, cycle axis)     │    │
+│  │                              │            │                                  │    │
+│  │  L3: addressed slots (done)  │            │  legs per action (done)          │    │
+│  │  L2: staged residencies  [A] │  joined on │  slot waits (done)               │    │
+│  │      (slot, reuse count)     │◄──action──►│  CF chains: in/out streams   [B] │    │
+│  │  CF: open acc + its chain    │   index    │    drain north, own links       │    │
+│  │      position (structural)   │            │  L1: tiles in flight, derived    │    │
+│  │  NO time, NO phases          │            │      from recorded phase bounds  │    │
+│  └──────────────┬───────────────┘            └──────────────┬───────────────────┘    │
+│                 │ steps, residency, l2_*                    │ lt1_calls, lt1_chains  │
+│                 ▼                                           ▼                        │
+│        ┌──────────────────────────────────────────────────────────────────┐          │
+│        │ .dflow v4/v5  (columnar)  ──►  dflow_check.py  (D*, L*, P*, S*)  │          │
+│        └───────────────────────────────┬──────────────────────────────────┘          │
+└────────────────────────────────────────┼─────────────────────────────────────────────┘
+                                         ▼
+  ┌────────────────────────────────────────────────────────────────────────────────────┐
+  │ domainflow/index.html — machine view                                               │
+  │                                                                                    │
+  │  DRAM ──► L3 [bank 0: s0 s1 ..][bank 1: ..] ──► L2 [s0: A[0,k] x3][s1: ..] ──►     │
+  │                                                                                    │
+  │      L1 + CF[c]   ┌────────────── fill ──────────────┐┌── steady ──┐┌─ drain ─┐    │
+  │                   │ A[1,0] ▓▓▓░░  B[0,1] ▓▓░░░       ││ A[0,3]·B.. ││ C[0,0]▓░│    │
+  │                   └──────────────────────────────────┘└────────────┘└─────────┘    │
+  │      step axis: the structural panel (what is fed, the acc, k of K)                │
+  │      cycle axis: the three phases, with each tile's streamed fraction              │
+  └────────────────────────────────────────────────────────────────────────────────────┘
+```
+
+## 3. Design
+
+### 3.1 Part B: L-T1 times the fabric as a pipeline
+
+**Geometry is a machine parameter.** The deployment gains each compute tile's array shape:
+
+```json
+"compute": { "array": { "rows": 32, "cols": 32 } }
+```
+
+Validation: `compute_tiles * rows * cols == macs_per_cycle`, or the deployment is refused by name.
+A deployment without `array` still runs, but the overlay records no phases and says so.
+
+**The mapping is output-stationary.** That is what `acc C[i,j] in fabric { for k ... }` already
+means: C stays in the PEs across the chain, and A and B stream through. Other mappings
+(`SpaceTimeMap::b_stationary`, ...) come later and are a schedule choice, never a deployment field
+(memory: schedule vs machine parameters).
+
+**The fabric drains through the network (architect, Q3, 2026-10-16).**
+- PEs have no double-buffered result registers.
+- Once a PE's reduction ends, its result is pushed into the NEWS grid in the direction opposite
+  the wavefront: north, against B (Q8). It travels on the northbound links, in the grid's
+  registers, which carry operands
+  and results at the same time because each stream has its own spatial allocation.
+- So a drain never holds up the next tile's operands. The next chain's wavefront enters right
+  behind the last one, and the array stays busy. That is the target: deep pipelining at 100%
+  utilization.
+- This is standard output-stationary systolic scheduling. A weight-stationary array such as the
+  TPU's does not drain this way, and this model must not be read as one.
+
+**Two streams per chain on an R x S array, reduction depth K cycles (tile = array; §3.1.1):**
+
+```
+operands in:  [in0, in1)      in1 = in0 + K,  K = the chain's steady cycles, sum of macs/rate
+  fill        [in0, in0 + (R-1)+(S-1))     the wavefront reaches the far PE
+  steady      [fill end, in1)              every PE busy
+results out:  [out0, out1)    out0 = in1   PE(0,0)'s reduction ends as its last operand arrives
+  drain       out1 = in1 + (R-1)+(S-1) + E E: the farthest PE's hops to the drain edge (§3.1.1)
+```
+
+**The pipeline is chain-aware.** This is the point of output-stationary and of the architect's
+"three tiles":
+- Within an `acc` chain, the k-steps stream back to back as one wavefront. C never leaves the
+  array, so only the chain fills, once, and only the chain drains, once. A call has an injection
+  interval, not phases of its own.
+- Across chains on one CF, the next chain's operands start at the previous chain's `in1`. Its
+  fill runs while the previous results drain north on their own links. That is the moment L1 holds
+  three tiles: the next A and B streaming in, the running operands' tails, and the previous C
+  streaming out.
+- The one structural limit is the northbound link, and it is checked, never assumed:
+  - the northbound link out of each column's top PE carries that column's R results per chain;
+  - so a chain whose K is shorter than E would overrun the previous chain's results on it;
+  - L-T1 delays that chain's injection by the shortfall, `max(0, E - K)`, and records the delay.
+  With the matmul tiles in use (K >= tile edge) the delay is zero.
+
+```cpp
+// WRONG: phases painted inside the existing leg, so the timing stays as it was and the panel lies
+const Cycle d = macs / rate;
+call.fill = {start, start + d / 10};            // invented split, no model behind it
+
+// WRONG: a fill and a drain on every call of a chain (C leaves the array each k-step;
+// that is not output-stationary, and it multiplies the chain's latency)
+for (auto& call : chain) { t += fill; t += steady; t += drain; }
+
+// WRONG: the next chain waits for the previous drain (double-buffer thinking; a TPU-style
+// array). In this fabric results leave on the northbound links while operands keep entering.
+next.in0 = std::max(ready, prev.out1);
+
+// CORRECT: the streams follow from the geometry and the chain, and they ARE the timing
+struct ChainStreams { Cycle in0, fill_end, in1, out0, out1, link_delay; };
+ChainStreams streams_of(const Chain& ch, const ArrayShape& a, Cycle ready, Cycle prev_in1) {
+    const Cycle K    = ch.steady_cycles();                       // sum of macs/rate over its calls
+    const Cycle skew = (a.rows - 1) + (a.cols - 1);
+    const Cycle E    = a.drain_hops();                           // §3.1.1
+    ChainStreams s;
+    s.link_delay = ch.has_prev() && K < E ? E - K : 0;           // the northbound link's one limit
+    s.in0        = std::max(ready, prev_in1) + s.link_delay;
+    s.fill_end   = s.in0 + skew;
+    s.in1        = s.in0 + K;
+    s.out0       = s.in1;
+    s.out1       = s.in1 + skew + E;
+    return s;
+}
+// A call's own interval is its share of [in0, in1), in chain order. Its Drain leg (str, L1 -> L2)
+// is ready at out1, where it was ready at the Call leg's end before.
+```
+
+**The timing changes and the values do not.** L-T1's cycles move, since it is uncalibrated and
+says so. Values are bit-identical to before. This is a timing-only change, which is where Q4 of
+retire-l0-derivations requires bit equality. Tests that pin L-T1 cycle counts are rebaselined in
+the same PR, each with the reason.
+
+**L1 occupancy is derived from recorded bounds, never stored per cycle.**
+- An operand tile is in L1 from its Feed leg's finish to the end of its call's injection
+  interval (consumed).
+- A result tile is in L1 from `out0` to its Drain leg's finish.
+- The streamed fraction of a tile at cycle t is linear within its interval. That is the model
+  (`element_stride = 1`, dense streams), and the page labels it "L-T1 model, linear stream".
+
+**Record (.dflow version 4):** two new tables, and nothing in L-B's tables changes.
+
+```
+lt1_calls.bin   action (join key), chain id, k of K, inject0, inject1   (its share of the chain)
+lt1_chains.bin  chain id, cf lane, in0, fill_end, in1, out0, out1, link_delay
+                (cycles; both tables empty, and meta says why, when the deployment has no array)
+meta            + array_rows, array_cols, drain_edge = "north", mapping = "output-stationary"
+```
+
+#### 3.1.1 Assumptions of the stream model
+
+- **Tile = array.** A tile larger than the array is an integer number of passes, each its own
+  in and out streams, back to back on the lane. A tile that is not a multiple of the array is
+  refused for the overlay by name (the run still runs; the overlay records no streams).
+- **Links are unidirectional (architect, 2026-10-16).**
+  - The grid is NEWS-connected, and every PE edge has two physical links, one in each
+    direction.
+  - In output-stationary, A travels east and B travels south, each on its own link.
+  - Results travel north on the northbound links, which no operand stream uses.
+  - So a drain shares a PE edge with B but never a link: the only contention is results queuing
+    behind other results on a column's northbound links. That is the `link_delay` above.
+- **The drain edge is north (Q8).** A result of PE(i, j) travels i hops north, plus one to
+  leave the array, into L1's drain port on the north edge.
+  - The farthest is PE(R-1, j), so `E = R`.
+  - North is the model, not a deployment option. The record's meta says `drain_edge = "north"`,
+    so a later model with another edge reads as different.
+
+### 3.2 Part A: L2 residency is behavior
+
+The same contract as L3 (ADR 0004 §5): the program says what is staged, the walker allocates the
+address, L-B executes it and refuses what breaks it, the trace records it, and no level invents
+one.
+
+**Language:**
+
+```
+program mm machine flat(l3 = 17, l2 = 4) {          // l2: slots per compute tile's L2
+  ...
+  for i in 0..4 {
+    stage A[i, 0..4] in l2 {                         // Move once; the Feeds below keep the copy
+      for j in 0..4 {
+        acc C[i, j] in fabric {
+          for k in 0..4 {
+            resident B[k, j];
+            call gemm(A[i, k], B[k, j]) +-> C[i, j]; // A[i,k]: Feed only (staged); B: Move + Feed
+            release B[k, j];
+          }
+        }
+      }
+    }                                                 // end of block: the L2 slots free (credit up)
+  }
+}
+```
+
+**Actions:** a `stage` emits the Move at block entry (L3 → L2, into an `L2Address{cf, slot}`).
+A call on a staged tile emits only a Feed, which keeps the copy. Block exit emits `L2Release`,
+which is the credit returned upstream. Unstaged operands lower exactly as today (Move + Feed,
+transient), so every existing program is unchanged.
+
+```cpp
+// WRONG: L2 as a cache. Look the tile up, and Move it if absent.
+if (!l2.contains(k)) emit(Move, t);             // demand fetch; a "hit" decided at run time
+emit(Feed, t);
+
+// CORRECT: the program placed it. The walker knows it is staged and where, so L-B checks it.
+if (const L2Address* s = staged(t)) emit(Feed, t, *s);          // keep=true at L-B
+else { emit(Move, t, place_l2_transient(t)); emit(Feed, t); }   // today's lowering
+```
+
+**L-B refuses:**
+- a Feed naming an L2 slot that does not hold the tile;
+- a stage into a live slot;
+- staging more than `l2` slots;
+- a program that ends with a staged tile.
+
+These are the L3 checks of placement step 3, one level down.
+
+**Trace:** the L0 opset gains `L2_STAGE` and `L2_RELEASE`, the way opset 1.2 gained `L3_*`. The
+replay (`TileProgramReference`) checks them, and the compute-schedule analyses skip them.
+
+**Record (.dflow version 5):** an `l2_*` group like L3's.
+- steps gain `l2_cf`, `l2_slot`, and an opens/closes flag;
+- a `l2_residency` table, each row with its Feed count (the reuse count, read by the page, never
+  computed by it).
+
+**Timing:** L-T1 holds an L2 credit per slot, the way step 5a holds L3's. L-CA follows with
+placement step 6. Both are listed here for completeness and gated on the questions below.
+
+### 3.3 The viewer
+
+The machine view gains two panels. Every value comes from the record (domain-flow plan §3.7).
+
+- **L2 panel.**
+  - *Before part A:* a list of the tiles L2 holds at this step, and per tile its "Moves from L3"
+    so far. This is honest: it shows the re-Moves that staging would remove.
+  - *After part A:* L2 slots per compute tile, as L3's are drawn, each with its tile, its
+    residency and its reuse count. A slot is outlined when the action touches it.
+- **L1 + CF panel, per compute tile.**
+  - *Step axis (L-B):* structural. It shows the call's operands and result, the open accumulator,
+    its chain position (k of K), and whether the call opens or closes the chain. It shows no
+    phase, because L-B has no time.
+  - *Cycle axis (L-T1 overlay):* two concurrent streams per lane, not serial phases:
+    - operands in, marked fill then steady;
+    - results out, northbound, drawn under the next chain's fill.
+
+    Each tile in L1 has a bar showing its streamed fraction. The ribbon gains two CF rows per lane
+    (in, out) and shows the lane's utilization. Clicking a stream lands on its call or chain.
+- **Navigation:** next chain start or end on this CF; next reuse of the selected L2 tile; next
+  three-tile moment (a fill overlapping a drain).
+
+```js
+// WRONG: the page infers phases or reuse
+const fill = (call.t1 - call.t0) * 0.1;                     // invented
+const reuse = steps.filter(s => s.kind === 'feed' && s.tile === t).length;   // after part A,
+                                                            // the record carries the count
+// CORRECT: read the record; the only arithmetic is the documented linear fraction
+const c = core.callStreams(action);                         // lt1_calls + lt1_chains, or null
+const inFrac  = c ? clamp01((t - c.inject0) / Math.max(1, c.inject1 - c.inject0)) : null;
+const outFrac = c ? clamp01((t - c.chain.out0) / Math.max(1, c.chain.out1 - c.chain.out0)) : null;
+```
+
+Every new string reaching HTML (tile names, CF lane names, mapping) goes through `esc()`. The
+strict allow-list scan in `test_viewer.py` (domainflow and tileflow both; memory: viewer HTML
+escaping) covers every new `${...}`, and a new trusted helper gets a test that it escapes.
+
+## 4. Implementation Steps
+
+Each step is one PR. Steps 1 and 2 need no language change. Steps 3 and 4 depend on Q1.
+
+1. **The structural L2 and CF panels (viewer only, .dflow unchanged).** As built: L2's and the
+   fabric's tiles are derived from the recorded actions and checked against L-B's held counts at
+   every step (all eight test bundles agree everywhere). An L2 tile shows its Moves from L3 so far.
+   The panel shows the call's operands and result and its chain position. Navigation: next chain
+   start and end, and `#step=N` links. The strict escape scan is ported to the domain-flow test.
+   - `tools/visualization/domainflow/index.html`:
+     - the L2 tile list with Moves-from-L3 counts;
+     - the L1 + CF structural panel (the call, the acc, k of K, chain open/close);
+     - chain navigation;
+     - the hatching keeps saying "L2 unbounded at L-B".
+   - `tools/visualization/domainflow/test_viewer.py`: the data layer's L2 list and chain
+     positions against Python; the strict escape scan, ported from tileflow.
+   - `README.md`.
+2. **L-T1 fabric pipeline and the cycle-axis panel (.dflow v4).**
+   - `include/sw/kpu/program/platform/deployment_spec.hpp`: `compute.array {rows, cols}`,
+     validation against `macs_per_cycle`, and `device_view` carries it.
+   - Deployments in `tests/program/deploy/*.json` and the shipped SKUs gain `array`.
+   - `include/sw/kpu/program/csp/transactional.hpp`: chains known per CF lane, `streams_of`
+     per chain, each call's injection interval, and the Drain leg ready at `out1`. Feed legs are
+     unchanged. The record grows `chain_streams`.
+   - `include/sw/kpu/program/record/domain_flow_record.hpp`, `src/program/domain_flow_record.cpp`:
+     `lt1_calls`, `lt1_chains`, meta fields, `kDflowVersion = 4`. Versions 1-3 are still read.
+   - `tools/kpu-run/kpu_run.cpp`: attach the streams. The text report gains fabric
+     utilization per lane (steady cycles over the lane's span) and any link delays.
+   - `tools/trace/dflow_check.py` (+ self-test): P1-P5 (§6).
+   - Viewer: the phase lanes, L1 bars, CF ribbon rows, three-tile navigation; versions [1..4].
+   - Tests:
+     - `tests/program/test_domain_flow_record.cpp`;
+     - a new `tests/program/test_fabric_pipeline.cpp`: one chain fills once and drains once;
+       the next chain's operands start at the previous `in1`, under its drain; a chain with
+       K < E is delayed by exactly `E - K`; back-to-back chains reach utilization
+       `sum K / (last in1 - first in0) == 1`; values are bit-equal to before;
+     - rebaselined L-T1 cycle pins, each with its reason.
+3. **L2 staging in the language and at L-B (.dflow v5, opset 1.3).**
+   - `csp/lang/` (parser, AST, `walk.hpp`): `l2 =`, `stage ... in l2 { }`, `L2Address`,
+     allocation, and the Feed-only lowering.
+   - `csp/behavioral.hpp`: addressed L2 storage per CF, with Feed `keep=true` on a staged tile and
+     the four refusals.
+   - `serialize/l0_format.hpp` and the replay: `L2_STAGE`, `L2_RELEASE`.
+   - The record's `l2_*` group; `dflow_check.py` S1-S4; the viewer's L2 slots with reuse counts.
+   - `kpu-csp-gen --algo matmul --stage-a` emits a staged program.
+   - Tests:
+     - staged and unstaged programs compute identical values (bit-equal, the same arithmetic);
+     - each refusal by name;
+     - the replay agrees;
+     - the staged matmul's Moves from L3 drop by the reuse factor.
+4. **L-T1 times L2 credits; `.tflow` v6 draws L2 slots and CF phases.**
+   - L-T1: an L2 slot credit per staged residency, released at `L2Release`.
+   - `tile_flow_record.cpp`: L2 slot rows after the L3 slot rows, and CF phase rows.
+   - The tileflow viewer: versions [3..6].
+   - `tflow_check.py`: TF13 (an L2 slot never holds two residencies at once).
+
+L-CA's L2 credits join L3's in placement step 6. That is out of scope here.
+
+## 5. Verification
+
+```bash
+nice -n 19 cmake --build build -j 2
+cd build && ctest -j 4 --output-on-failure            # all green, rebaselines explained
+
+# step 1: viewer only
+python3 tools/visualization/domainflow/test_viewer.py
+
+# step 2: the pipeline on the overlay
+kpu-csp-gen --algo matmul --size 256 --tile 64 --l3 17 -o mm256.csp
+kpu-run --program mm256.csp --deploy tests/program/deploy/kpu_s1.json \
+        --level block-sequential --dflow mm256.dflow
+python3 tools/trace/dflow_check.py mm256.dflow        # exit 0; P1-P5 pass
+python3 tools/visualization/domainflow/pack.py mm256.dflow -o mm256.html
+#   expect: 16 chains (4x4 C tiles, 4 calls each); 16 fills and 16 drains, not 64 of each;
+#   on each lane every chain but the first starts at the previous in1, under its drain;
+#   no link delays; values bit-equal to the run before this step (lt1_tiles unchanged)
+
+# step 3: staging
+kpu-csp-gen --algo matmul --size 256 --tile 64 --l3 17 --stage-a -o mm256s.csp
+kpu-run --program mm256s.csp --deploy tests/program/deploy/kpu_s1.json --level all \
+        --dflow mm256s.dflow --emit-l0 mm256s.l0
+#   expect: A Moves from L3 drop from 64 to 16 (reuse 4); values bit-equal to mm256.csp;
+#   the replay of the L0 passes; dflow_check S1-S4 pass
+```
+
+The pages are reviewed in a browser as packed bundles, as for #363. A visualization page is shown
+for review as soon as step 1 renders.
+
+## 6. Key Invariants
+
+- **Every value on screen comes from the record.** The page computes two things, both stated on
+  the page:
+  - which tiles L2 and the fabric hold (step 1). The record counts them (`held`) but does not name
+    them, so the page replays the recorded actions exactly as L-B moves tiles, and checks the
+    replay against `held` at every step. On a disagreement it shows no contents;
+  - the linear streamed fraction within recorded stream bounds (step 2), labelled as L-T1's model.
+- **L-B has no time:** no phase, fraction or overlap is drawn on the step axis.
+- **Decomposition never changes values:**
+  - the pipeline changes L-T1 cycles only, and L-T1's values stay bit-equal to before;
+  - staged and unstaged programs compute bit-equal results.
+- **dflow_check, part B:**
+  - **P1** Per chain, `in0 <= fill_end`, `in0 <= in1 = out0 <= out1`.
+  - **P2** A chain's calls' injection intervals tile `[in0, in1)` in chain order, with no gap and
+    no overlap.
+  - **P3** On one CF lane, operand streams never overlap: a chain's `in0` is no earlier than the
+    previous chain's `in1` plus its `link_delay`. Result streams may overlap operand streams;
+    that is the fabric.
+  - **P4** A call's injection starts no earlier than its operands' Feed finish, and a result's
+    Drain leg no earlier than its chain's `out1`.
+  - **P5** `fill_end - in0 == (R-1)+(S-1)`, `out1 - in1 == (R-1)+(S-1)+E`, and
+    `link_delay == max(0, E - K)` after the lane's first chain (geometry and edge from meta).
+- **dflow_check, part A:**
+  - **S1** One residency per L2 slot at a time.
+  - **S2** A Feed of a staged tile names the slot that holds it.
+  - **S3** A residency's recorded reuse count equals its Feeds.
+  - **S4** The run ends with every L2 slot free.
+- **Credit semantics:**
+  - L2 is a buffer the program stages into, and a stage's end returns the credit upstream;
+  - nothing is looked up, nothing "hits", nothing is re-fetched on demand;
+  - L1 is a stream buffer with no reuse.
+
+## 7. Open Questions
+
+- **Q1. Is L2 staging (part A) in this plan or its own? DECIDED (2026-10-16): as recommended.**
+  - **Recommended:** keep it here as steps 3-4. The viewer's L2 shape depends on it, and it is
+    small next to L3 placement, because it reuses that machinery (the address, the walker
+    allocation, the refusals, the opset pattern).
+  - Alternative: a separate `l2-placement-at-lb.md`, with this plan stopping at step 2 plus the
+    honest L2 list.
+- **Q2. Where does array geometry come from? DECIDED (2026-10-16): as recommended.**
+  - **Recommended:** the deployment (`compute.array`), validated against `macs_per_cycle`, since
+    it is a machine parameter.
+  - Alternative: derive a square array from `macs_per_cycle / compute_tiles`. That is silent
+    when the result is not square, so it is not recommended.
+- **Q3. The overlap model. DECIDED (architect, 2026-10-16).**
+  - No double-buffered result registers. Results drain into the NEWS grid opposite the
+    wavefront, as soon as they emerge, and the grid's registers carry operands and results at
+    once by spatial stream allocation. Drains never stall the next tile's operands, and the
+    array is driven toward 100% utilization (§3.1).
+  - Output-stationary systolic scheduling, not a weight-stationary (TPU-style) array.
+- **Q4. Do L-T1's cycles change? DECIDED (2026-10-16): as recommended.**
+  - **Recommended:** yes. The phases are the timing, and painting them inside the old leg would
+    show a pipeline L-T1 does not run.
+  - The cost is rebaselined cycle pins in step 2.
+- **Q5. Which mappings? DECIDED (2026-10-16): as recommended.**
+  - **Recommended:** output-stationary only, which is what `acc ... in fabric` means.
+  - Weight-stationary and others need a program-side mapping choice: a later plan.
+- **Q6. Which viewer first? DECIDED (2026-10-16): as recommended.**
+  - **Recommended:** the domain-flow viewer (steps 1-3). It already draws L3 slots next to the
+    program, which is the context the request names.
+  - The tile-flow viewer follows in step 4.
+- **Q7. The staging syntax. DECIDED (2026-10-16): as recommended.**
+  - **Recommended:** a block, `stage T[...] in l2 { }`, since a block's end is the release and
+    cannot be forgotten.
+  - Alternative: `stage` / `unstage` statements, mirroring `resident` / `release`, which allows
+    staggered lifetimes (staging the next row of A while the last columns of the current one
+    run).
+- **Q8. The drain edge. DECIDED (architect, 2026-10-16).**
+  - North, against B, so `E = R`.
+  - Links are unidirectional, two per PE edge, one each way, so the northbound result stream
+    never shares a link with an operand stream (§3.1.1).
