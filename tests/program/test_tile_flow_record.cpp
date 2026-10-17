@@ -484,6 +484,19 @@ TEST_CASE("version 6: the staged L2 copies and the fabric's chains, recorded and
     const std::string bdir = scratch("v6bad");
     write_tflow(bad, bdir);
     CHECK_THROWS_WITH(read_tflow(bdir), ContainsSubstring("L2 slot 9 of 4"));
+    // So are an inverted copy, a copy in no compute tile's L2, and a chain whose phases are out of order.
+    bad = rec;
+    bad.l2_residency[0].t0 = bad.l2_residency[0].t1 + 1;
+    write_tflow(bad, bdir);
+    CHECK_THROWS_WITH(read_tflow(bdir), ContainsSubstring("is inverted"));
+    bad = rec;
+    bad.l2_residency[0].cf = 7;
+    write_tflow(bad, bdir);
+    CHECK_THROWS_WITH(read_tflow(bdir), ContainsSubstring("compute tile 7"));
+    bad = rec;
+    bad.chains[0].out1 = bad.chains[0].in1 - 1;
+    write_tflow(bad, bdir);
+    CHECK_THROWS_WITH(read_tflow(bdir), ContainsSubstring("out of order"));
     std::filesystem::remove_all(dir);
     std::filesystem::remove_all(bdir);
 }

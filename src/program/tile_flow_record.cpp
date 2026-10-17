@@ -584,10 +584,18 @@ TileFlowRecord read_tflow(const std::string& dir) {
     }
     for (const Compute& c : rec.computes) { in(c.op, rec.ops.size(), "op"); in(c.station, rec.stations.size(), "station"); }
     for (const Op& o : rec.ops) for (std::uint32_t t : o.tiles) in(t, rec.tiles.size(), "tile");
-    // Version 6: every staged copy's slot is one of the program's L2 slots, and every chain runs on
-    // a compute tile.
+    // Version 6: every staged copy is in one of the program's L2 slots, in the L2 of a compute tile,
+    // over an interval that is not inverted; every chain runs on a compute tile, its phases in order.
+    std::size_t n_cf = 0;
+    for (const Station& st : rec.stations) n_cf += st.kind == "cf";
     for (const L2Residency& r : rec.l2_residency) {
         in(r.tile, rec.tiles.size(), "tile");
+        if (r.t0 > r.t1)
+            throw RecordError("record: a staged copy's L2 interval [" + std::to_string(r.t0) + ", " +
+                              std::to_string(r.t1) + ") is inverted");
+        if (r.cf >= n_cf)
+            throw RecordError("record: a staged copy is in the L2 of compute tile " + std::to_string(r.cf) + " of " +
+                              std::to_string(n_cf));
         if (r.slot >= rec.l2_slots)
             throw RecordError("record: a staged copy holds L2 slot " + std::to_string(r.slot) + " of " +
                               std::to_string(rec.l2_slots));
@@ -597,6 +605,9 @@ TileFlowRecord read_tflow(const std::string& dir) {
         in(c.station, rec.stations.size(), "station");
         if (rec.stations[c.station].kind != "cf")
             throw RecordError("record: a chain runs on " + rec.stations[c.station].name + ", not a compute tile");
+        if (c.in0 > c.in1 || c.in1 > c.out1)
+            throw RecordError("record: a chain's phases are out of order (in0 " + std::to_string(c.in0) + ", in1 " +
+                              std::to_string(c.in1) + ", out1 " + std::to_string(c.out1) + ")");
     }
     return rec;
 }
