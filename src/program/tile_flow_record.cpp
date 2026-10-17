@@ -249,7 +249,11 @@ void write_tflow(const TileFlowRecord& rec, const std::string& dir) {
     for (const Transit& x : rec.transits) { exact(x.t0, "transit t0"); exact(x.t1, "transit t1"); }
     for (const Compute& c : rec.computes) { exact(c.t0, "compute t0"); exact(c.t1, "compute t1"); }
     for (const L2Residency& r : rec.l2_residency) { exact(r.t0, "l2 residency t0"); exact(r.t1, "l2 residency t1"); }
-    for (const Chain& c : rec.chains) exact(c.out1, "chain out1");    // its latest phase
+    // Every phase, not just out1: a hand-built chain need not have its phases in order.
+    for (const Chain& c : rec.chains) {
+        exact(c.in0, "chain in0"); exact(c.front, "chain front"); exact(c.in1, "chain in1");
+        exact(c.last, "chain last"); exact(c.out1, "chain out1");
+    }
     std::error_code ec;
     std::filesystem::create_directories(dir, ec);
     if (ec) throw RecordError("record: cannot create " + dir + ": " + ec.message());

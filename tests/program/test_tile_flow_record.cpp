@@ -497,6 +497,10 @@ TEST_CASE("version 6: the staged L2 copies and the fabric's chains, recorded and
     bad.chains[0].out1 = bad.chains[0].in1 - 1;
     write_tflow(bad, bdir);
     CHECK_THROWS_WITH(read_tflow(bdir), ContainsSubstring("out of order"));
+    // The writer refuses a phase an f64 column cannot hold exactly, whichever phase it is.
+    bad = rec;
+    bad.chains[0].front = (Cycle{1} << 53) + 1;
+    CHECK_THROWS_WITH(write_tflow(bad, scratch("v6toolong")), ContainsSubstring("chain front"));
     std::filesystem::remove_all(dir);
     std::filesystem::remove_all(bdir);
 }
