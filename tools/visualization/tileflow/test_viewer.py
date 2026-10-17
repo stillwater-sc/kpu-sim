@@ -70,6 +70,16 @@ class ViewerSmokeTest(unittest.TestCase):
         'now >= 0 ? opText(R.co.op[now]) : "idle"',
         'now >= 0 ? tileText(R.res.tile[now]) : "free"',
         'i >= 0 ? tileText(R.res.tile[i]) + " (bank " + R.res.bank[i] + ")" : "free"',
+        # Version 6: the staged L2 copies and the fabric's chains (tiles through tileText, numbers
+        # through fmt, the page's own phase names through esc).
+        'i >= 0 ? tileText(R.l2.tile[i]) + " staged, fed " + fmt(R.l2.feeds[i]) + "x" : "free"',
+        'c >= 0 ? tileText(R.ch.tile[c]) + " " + esc(chainPhase(c, h.t)) : "idle"',
+        'now >= 0 ? tileText(R.l2.tile[now]) : "free"',
+        'now >= 0 ? tileText(R.ch.tile[now]) + " " + esc(chainPhase(now, T)) : "idle"',
+        'row.kind === "cf_in" ? "operands in [in0, in1)" : "results out [in1, out1)"',
+        'mine.length > 12 ? "<br>…" : ""',
+        'held.slice(0, 12).map(i => `${tileText(R.l2.tile[i])}: ${fmt(R.l2.t0[i])}–${fmt(R.l2.t1[i])}, fed ${fmt(R.l2.feeds[i])}x`).join("<br>") || "never staged into"',
+        'mine.slice(0, 12).map(c => `${tileText(R.ch.tile[c])}: ${fmt(R.ch.calls[c])} calls on ${fmt(R.ch.rows[c])}x${fmt(R.ch.cols[c])} PEs, in ${fmt(R.ch.in0[c])}–${fmt(R.ch.in1[c])}, out by ${fmt(R.ch.out1[c])}`).join("<br>") || "no chains"',
         'pooled || "No events are recorded against this block at " + esc(R.m.level) + "."',
         'r.cap ? " of " + esc(r.cap) : ""',
         'row.capacity ? " of " + fmt(row.capacity) : ""',

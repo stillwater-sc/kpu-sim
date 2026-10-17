@@ -56,11 +56,23 @@ std::vector<std::vector<std::uint32_t>> brute(const TileFlowRecord& rec, const L
                     if (rec.movers[m].name == to_string(static_cast<Mover>(x.mover)))
                         ++at[rec.stations.size() + m][c];
         at[rec.station(rec.device + "/l3[*]")][c] += static_cast<std::uint32_t>(rec.foreign_slots);
-        // Version 5: a slot row counts the residencies placed in that slot.
+        // Version 5: a slot row counts the residencies placed in that slot. Version 6: an L2 slot row
+        // the staged copies in it, and a compute tile's in and out rows its chains' streams.
         for (std::size_t r = rec.stations.size() + rec.movers.size(); r < lod.rows.size(); ++r) {
             const std::string& n = lod.rows[r].name;
-            const auto slot = static_cast<std::uint32_t>(std::stoul(n.substr(n.rfind('[') + 1)));
-            for (const Residency& x : rec.residency) if (x.slot == slot && x.t0 <= c && c < x.t1) ++at[r][c];
+            const std::string& kind = lod.rows[r].kind;
+            if (kind == "l3_slot" || kind == "l2_slot") {
+                const auto slot = static_cast<std::uint32_t>(std::stoul(n.substr(n.rfind('[') + 1)));
+                if (kind == "l3_slot")
+                    for (const Residency& x : rec.residency) at[r][c] += x.slot == slot && x.t0 <= c && c < x.t1;
+                else
+                    for (const L2Residency& x : rec.l2_residency) at[r][c] += x.slot == slot && x.t0 <= c && c < x.t1;
+            } else {
+                const std::uint32_t cf = rec.station(n.substr(0, n.rfind('/')));
+                for (const Chain& x : rec.chains)
+                    if (x.station == cf)
+                        at[r][c] += kind == "cf_in" ? (x.in0 <= c && c < x.in1) : (x.in1 <= c && c < x.out1);
+            }
         }
     }
     return at;

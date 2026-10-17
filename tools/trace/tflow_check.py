@@ -43,6 +43,15 @@ Invariants:
                         inside its L3's capacity, and its bank is slot % l3_banks; the residencies
                         placed in one slot of one L3 never overlap in time (a zero-length one
                         occupies no time)
+    TF13 one copy per L2 slot (version 6: the program stages) every staged copy is in one of the
+                        program's l2_slots, held [t0, t1) inside the run and fed at least once; the
+                        copies placed in one slot of one compute tile's L2 never overlap in time,
+                        and no more than l2_slots are held at once
+    TF14 the fabric's phases (version 6) each chain runs on a compute tile with PEs and calls;
+                        front = in0 + skew and last = in1 + skew, with skew = (rows-1) + (cols-1);
+                        on one compute tile the chains' operand streams [in0, in1) never overlap; and
+                        out1 = max(last + rows, the previous chain's out1 + rows) on its compute tile
+                        (the top link; last + rows for its first chain)
 
 Standard library only.
 
@@ -71,6 +80,12 @@ SCHEMA = {
 }
 # Version 5 adds the L3 address each residency held.
 SCHEMA_V5 = {"residency": {"l3_tile": "u32", "slot": "u32", "bank": "u32"}}
+# Version 6 adds two tables: each staged copy's L2 slot, and each gemm chain's phases on the fabric.
+SCHEMA_V6 = {
+    "l2_residency": {"tile": "u32", "cf": "u32", "slot": "u32", "t0": "f64", "t1": "f64", "feeds": "u32"},
+    "chain": {"tile": "u32", "station": "u32", "rows": "u32", "cols": "u32", "calls": "u32",
+              "in0": "f64", "front": "f64", "in1": "f64", "last": "f64", "out1": "f64"},
+}
 
 # enum Hop (tile_transaction_executor.hpp), by value: the station kinds each one moves between.
 # Every hop is a push (version 3): writeback is a BlockMover ejecting L3 -> DMA buffer (5), then
@@ -137,17 +152,21 @@ def load(path):
         # Version 2's hop 5 is the old DMA read of L3; reading it as an ejection would be wrong.
         raise Unreadable("a version-2 bundle records writeback as a DMA read (hop 5 = "
                          "dma:l3->dram); re-record it with this build's kpu-run --tflow")
-    if m.get("version") not in (3, 4, 5):
-        raise Unreadable(f"version {m.get('version')!r} is not one this checker reads (3, 4, 5)")
-    if m.get("version") in (4, 5) and m.get("ops") != "csp-actions":
-        # Versions 4 and 5 are a CSP program's record: an op is one of the program's actions. A
+    if m.get("version") not in (3, 4, 5, 6):
+        raise Unreadable(f"version {m.get('version')!r} is not one this checker reads (3, 4, 5, 6)")
+    if m.get("version") in (4, 5, 6) and m.get("ops") != "csp-actions":
+        # Versions 4 to 6 are a CSP program's record: an op is one of the program's actions. A
         # bundle that does not say so cannot be read as one, or TF6 would be checked under the wrong rule.
         raise Unreadable(f'a version-{m.get("version")} bundle must say what its ops are ("ops": "csp-actions")')
-    if m.get("version") == 5:
+    if m.get("version") in (5, 6):
         # Version 5: every residency carries its L3 address; the banks make the bank checkable.
         b = m.get("l3_banks")
         if type(b) is not int or b < 1:
-            raise Unreadable(f"a version-5 bundle must say its L3 banks (l3_banks), not {b!r}")
+            raise Unreadable(f"a version-{m.get('version')} bundle must say its L3 banks (l3_banks), not {b!r}")
+    if m.get("version") == 6:
+        n = m.get("l2_slots")
+        if type(n) is not int or n < 0:
+            raise Unreadable(f"a version-6 bundle must say its L2 slots (l2_slots), not {n!r}")
     rec = {"manifest": m}
     _named(m.get("stations"), "manifest stations")
     movers = m.get("movers", [])
@@ -155,13 +174,16 @@ def load(path):
                                                for x in movers):
         raise Unreadable("manifest movers need a string name each")
     try:
-        for name in ("residency", "transit", "compute", "op_tiles"):
+        names = ("residency", "transit", "compute", "op_tiles") + \
+                (("l2_residency", "chain") if m.get("version") == 6 else ())
+        for name in names:
             t = m["tables"][name]
             blob = (d / t["file"]).read_bytes()
             rows = t["rows"]
             cols = {}
             declared = {c["name"]: c["dtype"] for c in t["columns"]}
-            schema = dict(SCHEMA[name], **(SCHEMA_V5.get(name, {}) if m.get("version") == 5 else {}))
+            schema = dict(SCHEMA.get(name) or SCHEMA_V6[name],
+                          **(SCHEMA_V5.get(name, {}) if m.get("version") in (5, 6) else {}))
             for col, dtype in schema.items():
                 if declared.get(col) != dtype:
                     raise Unreadable(f"{name}.{col} is declared {declared.get(col)!r}, "
@@ -348,8 +370,8 @@ def check(rec):
     off, opt = ot["offset"], ot["tile"]
     def op_tiles(op):
         return opt[off[op]:off[op + 1]]
-    if m.get("version") in (4, 5):
-        # A CSP PROGRAM's record (versions 4 and 5): an op is one action, and L3 holds a tile only between
+    if m.get("version") in (4, 5, 6):
+        # A CSP PROGRAM's record (versions 4 to 6): an op is one action, and L3 holds a tile only between
         # its program's credit and Release. An accumulator lives in the fabric with no L3 slot,
         # and a Feed reads L2 -- often after the L3 copy was released, which is the point of a
         # release. So the rule is the program's: every transit INTO or OUT OF L3 runs while its
@@ -417,7 +439,7 @@ def check(rec):
         # Only a hop that really ends in L3 fills an L3 slot; TF7 reports the mislabelled ones.
         # Version 4 (a CSP program): a result reaches L3 by its Writeback (hop 4), not by being
         # computed there, so that hop fills a slot too.
-        fills = (DMA_IN, L3_TO_L3, WRITEBACK) if m.get("version") in (4, 5) else (DMA_IN, L3_TO_L3)
+        fills = (DMA_IN, L3_TO_L3, WRITEBACK) if m.get("version") in (4, 5, 6) else (DMA_IN, L3_TO_L3)
         if tr["hop"][i] in fills and tr["dst"][i] < len(st) and \
                 st[tr["dst"][i]]["kind"] == "l3":
             arrivals.setdefault(tr["tile"][i], []).append(tr["t0"][i])
@@ -442,7 +464,7 @@ def check(rec):
                           f"was released earlier and the slot was re-taken by a reader")
 
     # TF12 ------------------------------------------------------------------
-    if m.get("version") == 5:
+    if m.get("version") in (5, 6):
         r.ran("TF12")
         banks = m["l3_banks"]
         by_slot = {}
@@ -471,6 +493,78 @@ def check(rec):
                                    f"[{int(a0)}, {int(a1)}) and {tile_name(res['tile'][b])} from {int(b0)}: "
                                    f"two tiles in one slot")
 
+    # TF13 ------------------------------------------------------------------
+    if m.get("version") == 6:
+        r.ran("TF13")
+        l2r, nl2 = rec["l2_residency"], rec["l2_residency_rows"]
+        cap = m["l2_slots"]
+        by_slot, ev = {}, []
+        for i in range(nl2):
+            who = f"{tile_name(l2r['tile'][i])}" if l2r["tile"][i] < len(tiles) else f"tile {l2r['tile'][i]}"
+            t0, t1, slot = l2r["t0"][i], l2r["t1"][i], l2r["slot"][i]
+            if slot >= cap:
+                r.fail("TF13", f"{who} is staged in L2 slot {slot} of a program with {cap} L2 slots")
+                continue
+            if not (0 <= t0 <= t1 <= makespan):
+                r.fail("TF13", f"{who} holds L2 slot {slot} over [{t0}, {t1}), not inside [0, {makespan}]")
+            if l2r["feeds"][i] < 1:
+                r.fail("TF13", f"{who} is staged in L2 slot {slot} and never fed")
+            if t1 > t0:
+                by_slot.setdefault((l2r["cf"][i], slot), []).append((t0, t1, i))
+                ev += [(t0, 1, i), (t1, -1, i)]
+        for (cf, slot), iv in by_slot.items():
+            iv.sort()
+            for (a0, a1, a), (b0, _b1, b) in zip(iv, iv[1:]):
+                if b0 < a1:
+                    r.fail("TF13", f"L2 slot {slot} of compute tile {cf} holds {tile_name(l2r['tile'][a])} over "
+                                   f"[{int(a0)}, {int(a1)}) and {tile_name(l2r['tile'][b])} from {int(b0)}: two "
+                                   f"copies in one slot")
+        ev.sort(key=lambda e: (e[0], e[1]))
+        cur = 0
+        for t, d, i in ev:
+            cur += d
+            if cur > cap:
+                r.fail("TF13", f"{cur} staged copies held at cycle {int(t)}, more than the program's {cap} L2 slots")
+
+    # TF14 ------------------------------------------------------------------
+    if m.get("version") == 6:
+        r.ran("TF14")
+        ch, nch = rec["chain"], rec["chain_rows"]
+        lanes_ch = {}
+        for i in range(nch):
+            s_i, rows, cols = ch["station"][i], ch["rows"][i], ch["cols"][i]
+            if s_i >= len(st) or st[s_i].get("kind") != "cf":
+                r.fail("TF14", f"chain {i} runs on station {s_i}, not a compute tile")
+                continue
+            if rows < 1 or cols < 1 or ch["calls"][i] < 1:
+                r.fail("TF14", f"chain {i} has {rows}x{cols} PEs and {ch['calls'][i]} calls")
+                continue
+            skew = (rows - 1) + (cols - 1)
+            in0, front, in1, last, out1 = (ch[k][i] for k in ("in0", "front", "in1", "last", "out1"))
+            if front != in0 + skew or last != in1 + skew:
+                r.fail("TF14", f"chain {i}: front {int(front)} and last {int(last)} are not in0 {int(in0)} and "
+                               f"in1 {int(in1)} plus the skew {skew}")
+            if not (in0 <= in1 and out1 >= last + rows and out1 <= makespan):
+                r.fail("TF14", f"chain {i}: [in0 {int(in0)}, in1 {int(in1)}] and out1 {int(out1)} are out of order "
+                               f"(out1 must be at least last + rows = {int(last + rows)}, within the run)")
+            lanes_ch.setdefault(s_i, []).append((in0, in1, out1, rows, last, i))
+        for s_i, cs in lanes_ch.items():
+            cs.sort()
+            for (a0, a1, ao, _ar, _al, a), (b0, _b1, _bo, _br, _bl, b) in zip(cs, cs[1:]):
+                if b0 < a1:
+                    r.fail("TF14", f"{st[s_i]['name']}: chains {a} and {b} stream operands at once from cycle {int(b0)}")
+            # The top link (P5, exactly): a chain's results leave when its far PE's result has travelled
+            # its rows north, or rows after the previous chain's results on this compute tile, whichever
+            # is later -- out1 = max(last + rows, previous out1 + rows), and last + rows for the first.
+            prev = None
+            for (_0, _1, out1, rows, last, i) in cs:
+                want = last + rows if prev is None else max(last + rows, prev + rows)
+                if out1 != want:
+                    r.fail("TF14", f"{st[s_i]['name']}: chain {i}'s results leave at {int(out1)}; the top link gives "
+                                   f"{int(want)} (last {int(last)} + {rows} rows"
+                                   + ("" if prev is None else f", or the previous chain's {int(prev)} + {rows}") + ")")
+                prev = out1
+
     # TF8 -------------------------------------------------------------------
     if "lod" in rec:
         r.ran("TF8")
@@ -482,11 +576,19 @@ def check(rec):
         # compared against nothing and pass.
         want_rows = [(s["name"], s["kind"]) for s in st] + \
                     [("mover:" + mv["name"], "mover") for mv in m.get("movers", [])]
-        if m.get("version") == 5:
+        if m.get("version") in (5, 6):
             # One row per L3 slot, after the stations and movers (tile_flow_lod.cpp).
             for s in st:
                 if s.get("kind") == "l3":
                     want_rows += [(f"{s['name']}/slot[{k}]", "l3_slot") for k in range(s.get("capacity", 0))]
+        if m.get("version") == 6:
+            # Then one row per L2 slot, and two per compute tile: its chains in and out.
+            for s in st:
+                if s.get("kind") == "l2":
+                    want_rows += [(f"{s['name']}/slot[{k}]", "l2_slot") for k in range(m["l2_slots"])]
+            for s in st:
+                if s.get("kind") == "cf":
+                    want_rows += [(f"{s['name']}/in", "cf_in"), (f"{s['name']}/out", "cf_out")]
         got_rows = [(x["name"], x["kind"]) for x in lod["rows"]]
         if got_rows != want_rows:
             bad = next((i for i, (g, w) in enumerate(zip(got_rows, want_rows)) if g != w),
@@ -534,6 +636,18 @@ def check(rec):
             elif info["kind"] == "mover":
                 pool = MOVER_NAMES.index(info["name"].split(":", 1)[1])
                 iv = [(tr["t0"][i], tr["t1"][i]) for i in range(ntr) if tr["mover"][i] == pool]
+            elif info["kind"] == "l2" and m.get("version") == 6 and m["l2_slots"] > 0:
+                l2r = rec["l2_residency"]
+                iv = [(l2r["t0"][i], l2r["t1"][i]) for i in range(rec["l2_residency_rows"])]
+            elif info["kind"] == "l2_slot":
+                slot = int(info["name"][info["name"].rindex("[") + 1:-1])
+                l2r = rec["l2_residency"]
+                iv = [(l2r["t0"][i], l2r["t1"][i]) for i in range(rec["l2_residency_rows"]) if l2r["slot"][i] == slot]
+            elif info["kind"] in ("cf_in", "cf_out"):
+                owner = info["name"][:info["name"].rindex("/")]
+                s_own = next((k for k, s in enumerate(st) if s["name"] == owner), -1)
+                ch, a, b = rec["chain"], *(("in0", "in1") if info["kind"] == "cf_in" else ("in1", "out1"))
+                iv = [(ch[a][i], ch[b][i]) for i in range(rec["chain_rows"]) if ch["station"][i] == s_own]
             elif info["kind"] == "l3_slot":
                 # "<station>/slot[k]": the residencies of THAT station placed in slot k.
                 slot = int(info["name"][info["name"].rindex("[") + 1:-1])
