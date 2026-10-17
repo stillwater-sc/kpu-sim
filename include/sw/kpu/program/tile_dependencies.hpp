@@ -230,6 +230,8 @@ inline TileDependencies build_tile_dependencies(const TileProgram& prog) {
         case TileOpKind::L3Release:
         case TileOpKind::L3Inherit:
         case TileOpKind::L3Retain:
+        case TileOpKind::L2Stage:
+        case TileOpKind::L2Release:
                 break;
         }
 

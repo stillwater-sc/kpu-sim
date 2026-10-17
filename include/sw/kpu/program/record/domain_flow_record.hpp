@@ -33,6 +33,12 @@
 //                   actions, and in0, front, in1, last, out1, link_delay in cycles. Empty when the
 //                   deployment declares no fabric (manifest lt1.fabric is then null).
 //   lt1_calls.bin   (version 4) each stream call: its action, its chain, and its place in it
+//   l2_staging.bin  (version 5) L2 staging (docs/plans/l2-reuse-and-fabric-pipeline-view.md
+//                   step 3): one row per staged copy -- its tile, compute tile and L2 slot, the
+//                   Move that staged it and the L2Release that freed it, its L3 residency, and
+//                   its Feeds (the reuse count). Steps carry the L2 address they write, read or
+//                   free (l2_cf, l2_slot; flag kHasL2), the staging (staging), and kStages on a
+//                   staging Move. The manifest's machine.l2 is the program's `l2 = N` (0: none).
 //
 // THE L-T1 OVERLAY (§3.7, step 5). L-B has no time; the overlay is a second run, L-T1's, of the same
 // program, joined on the action index. Its cycles are UNCALIBRATED, as L-T1 always says, and only
@@ -73,15 +79,17 @@ namespace sw::kpu::program::record {
 
 // Version 2: tile values (snapshots, elements). A version-1 bundle has none and is still read.
 // Version 3: the L-T1 overlay (lt1_legs, lt1_tiles). Version 4: the fabric pipeline (lt1_chains,
-// lt1_calls, manifest lt1.fabric and lt1.one_leg). Versions 1 to 3 are still read.
-inline constexpr std::uint32_t kDflowVersion = 4;
+// lt1_calls, manifest lt1.fabric and lt1.one_leg). Version 5: L2 staging (l2_staging, the steps'
+// l2_cf, l2_slot and staging, machine.l2). Versions 1 to 4 are still read.
+inline constexpr std::uint32_t kDflowVersion = 5;
 inline constexpr std::uint8_t kNone8 = 0xFF;
 inline constexpr std::uint32_t kNone32 = 0xFFFFFFFFu;
 inline constexpr std::uint64_t kNone64 = ~std::uint64_t{0};
 
 struct DomainFlowRecord {
     // Step flags.
-    static constexpr std::uint8_t kOpens = 1, kCloses = 2, kRetains = 4, kHasPlace = 8, kPinned = 16;
+    static constexpr std::uint8_t kOpens = 1, kCloses = 2, kRetains = 4, kHasPlace = 8, kPinned = 16, kHasL2 = 32,
+                                  kStages = 64;
     // Residency flags.
     static constexpr std::uint8_t kLoaded = 1, kInherited = 2, kRetained = 4, kResPinned = 8;
 
@@ -98,6 +106,15 @@ struct DomainFlowRecord {
         std::uint64_t where = 0;                    // index into wheres
         std::array<std::uint32_t, csp::kChannels> held{};   // tiles each channel holds AFTER the action
         std::uint32_t l3_tile = kNone32, slot = kNone32, bank = kNone32;   // valid when kHasPlace
+        std::uint32_t l2_cf = kNone32, l2_slot = kNone32;                 // valid when kHasL2
+        std::uint64_t staging = kNone64;                                    // index into stagings
+    };
+    struct Staging {
+        std::uint32_t tile = 0, cf = 0, slot = 0;
+        std::uint64_t open = 0;                     // the staging Move
+        std::uint64_t close = kNone64;              // its L2Release
+        std::uint64_t residency = kNone64;          // the L3 residency it copies
+        std::uint64_t feeds = 0;                    // Feeds of the copy: its reuse count
     };
     struct Residency {
         std::uint32_t tile = 0;
@@ -127,6 +144,8 @@ struct DomainFlowRecord {
 
     std::string program_name, program_text, run_id;
     std::uint32_t l3 = 0, banks = 1;
+    std::uint32_t l2 = 0;                           // the program's `l2 = N`: staging slots per compute tile
+    std::vector<Staging> stagings;
     std::string place = "fifo";
     std::vector<Operand> operands;
     std::vector<std::string> vars;                  // loop variables, by index
@@ -336,6 +355,7 @@ public:
         rec_.program_text = std::move(text);
         rec_.l3 = static_cast<std::uint32_t>(ast.l3);
         rec_.banks = static_cast<std::uint32_t>(ast.banks);
+        rec_.l2 = static_cast<std::uint32_t>(ast.l2);
         rec_.place = ast.place;
         rec_.step_limit = limit;
         shapes_ = csp::lang::declared_operands(ast);
@@ -395,6 +415,25 @@ public:
             }
         }
 
+        // Stagings: a staging Move opens one, its Feeds count, its L2Release ends it.
+        if (a.staging != csp::kNone) {
+            if (e.opens_staging) {
+                if (a.staging != rec_.stagings.size())
+                    throw RecordError("dflow: staging " + std::to_string(a.staging) + " opens out of order");
+                DFR::Staging st;
+                st.tile = tile;
+                st.cf = a.l2->cf;
+                st.slot = a.l2->slot;
+                st.open = i;
+                st.residency = a.residency == csp::kNone ? kNone64 : a.residency;
+                rec_.stagings.push_back(st);
+            } else if (a.kind == csp::Action::Kind::Feed) {
+                ++rec_.stagings.at(a.staging).feeds;
+            } else if (a.kind == csp::Action::Kind::L2Release) {
+                rec_.stagings.at(a.staging).close = i;
+            }
+        }
+
         // The iteration summary: every loop iteration at every depth, for the whole run.
         iterate(i, e.where, held, load, store);
 
@@ -430,13 +469,19 @@ public:
         s.flags = static_cast<std::uint8_t>((e.opens ? DFR::kOpens : 0) |
                                             (a.kind == csp::Action::Kind::Release ? DFR::kCloses : 0) |
                                             (a.kind == csp::Action::Kind::Retain ? DFR::kRetains : 0) |
-                                            (a.place ? DFR::kHasPlace : 0) | (e.pinned ? DFR::kPinned : 0));
+                                            (a.place ? DFR::kHasPlace : 0) | (e.pinned ? DFR::kPinned : 0) |
+                                            (a.l2 ? DFR::kHasL2 : 0) | (e.opens_staging ? DFR::kStages : 0));
         s.where = where_index(e.where);
         s.held = held;
         if (a.place) {
             s.l3_tile = a.place->l3_tile;
             s.slot = a.place->slot;
             s.bank = a.place->bank;
+        }
+        if (a.l2) {
+            s.l2_cf = a.l2->cf;
+            s.l2_slot = a.l2->slot;
+            s.staging = a.staging;
         }
         rec_.steps.push_back(s);
     }

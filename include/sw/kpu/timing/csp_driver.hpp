@@ -41,6 +41,11 @@
 //                  like a Load's (step 4d: the operator before left it resident)
 //   Retain      -> nothing: the entry keeps its credit past the program's end. The result reads
 //                  a retained tile from L3, since DRAM need not have it.
+//   L2 staging (docs/plans/l2-reuse-and-fabric-pipeline-view.md step 3) is UNMAPPED here until
+//   the executor's L2 joins placement (l3-placement-at-lb.md step 6), decided 2026-10-16: the
+//   staging Move is skipped, each staged Feed is a Move from the tile's L3 slot (which the
+//   language keeps live for the block) and a Feed, and an L2Release is nothing. The values are
+//   the same; the timing is the unstaged program's. staged_feeds() counts them.
 //
 // This step runs matmul and the linear operator: operands A, B and C, and vector operands (a
 // bias), gemm with alpha 1, and the epilogue fused or not. A vector operand's tiles are named
@@ -84,6 +89,7 @@ public:
         Cycle cf_busy = 0;                  // compute-tile busy cycles, epilogue included
         ConcurrentTimingExecutor::VectorStats ve;   // tile-context time by site
         std::size_t peak_held = 0;          // most actions the driver and executor held at once
+        std::size_t staged_feeds = 0;       // staged Feeds run as Move + Feed (L2 staging unmapped)
         program::TileProgram values;        // the source program's operands, as DRAM holds them
     };
 
@@ -134,6 +140,7 @@ public:
         loaded_.clear();
         dram_bytes_ = 0;
         seq_ = 0;
+        staged_feeds_ = 0;
         retained_.clear();
 
         Result r;
@@ -175,6 +182,7 @@ public:
             r.dram_stores += e.type == EventType::DMA_STORE_COMPLETE;
         }
         r.dram_bytes = dram_bytes_;
+        r.staged_feeds = staged_feeds_;
         for (std::size_t t = 0; t < exec_.config().num_compute_tiles; ++t) r.cf_busy += exec_.compute_tile_busy_cycles(t);
         r.ve = exec_.vector_stats();
         // Every operand as DRAM holds it -- inputs included, so a level that wrote an input is
@@ -220,6 +228,7 @@ private:
     std::map<std::string, std::size_t> vector_tk_;   // vector operand -> its tk tag
     std::uint64_t dram_bytes_ = 0;
     std::uint64_t seq_ = 0;                          // program order of the actions handed over
+    std::size_t staged_feeds_ = 0;
     std::vector<program::TileCoord> retained_;       // tiles the program retained, in L3 at the end
 
     void check_machine(std::size_t l3) {
@@ -292,10 +301,21 @@ private:
                 dram_bytes_ += d.size_bytes;
                 break;
             case Action::Kind::Move:
+                if (a.l2) break;                // the staging copy: each staged Feed moves its own
                 d.l3_held = loaded_.count(d.tile_id) != 0;
                 exec_.schedule_move(d, d.tile_id.matrix == isa::MatrixID::B && d.tile_id.tk == 0);
                 break;
-            case Action::Kind::Feed:      exec_.schedule_feed(d); break;
+            case Action::Kind::Feed:
+                if (a.l2) {                     // unmapped staging: out of L3 again, then fed
+                    TileDescriptor m = d;
+                    m.l3_held = loaded_.count(m.tile_id) != 0;
+                    exec_.schedule_move(m, m.tile_id.matrix == isa::MatrixID::B && m.tile_id.tk == 0);
+                    d.program_seq = ++seq_;
+                    ++staged_feeds_;
+                }
+                exec_.schedule_feed(d);
+                break;
+            case Action::Kind::L2Release: break;
             case Action::Kind::Drain: {
                 if (a.context.empty()) { exec_.schedule_drain(d); break; }
                 std::vector<VectorStage> fabric, drain;

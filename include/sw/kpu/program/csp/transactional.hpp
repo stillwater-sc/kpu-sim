@@ -107,9 +107,11 @@ public:
         return "?";
     }
 
-    // Release, Inherit and Retain take no process: zero-length records whose `proc` means nothing.
+    // Release, Inherit, Retain and L2Release take no process: zero-length records whose `proc`
+    // means nothing.
     static bool has_process(Action::Kind k) {
-        return k != Action::Kind::Release && k != Action::Kind::Inherit && k != Action::Kind::Retain;
+        return k != Action::Kind::Release && k != Action::Kind::Inherit && k != Action::Kind::Retain &&
+               k != Action::Kind::L2Release;
     }
 
     struct Record {                     // one leg of one action (Release, Inherit, Retain: zero length; Store: two)
@@ -359,6 +361,11 @@ public:
                 zero_length(a, t);
                 break;
             }
+            case Action::Kind::L2Release:
+                // A stage block's end: its slot is free once the staged copy's last Feed is out. L2
+                // credits are timed in step 4 of docs/plans/l2-reuse-and-fabric-pipeline-view.md.
+                zero_length(a, std::max(get(moved_, k), get(fed_, k)));
+                break;
             case Action::Kind::Release: {
                 Residency& r = residency_[k];
                 Cycle t = r.readers;

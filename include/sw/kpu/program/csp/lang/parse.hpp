@@ -14,6 +14,11 @@
 //       }
 //       store C[i, j];                      // or `store C[i, j] late;`: after the next acc
 //     }
+//
+// L2 staging (docs/plans/l2-reuse-and-fabric-pipeline-view.md step 3): `machine flat(l3 = 17,
+// l2 = 4)` declares each compute tile's L2 slots, and `stage A[i, :] in l2 { ... }` copies
+// resident tiles into L2 once for the block; the calls inside feed the copy, and the block's end
+// frees the slots.
 //   }
 //
 // C-style blocks, ';'-terminated statements, '//' comments. The parser builds the AST and
@@ -75,14 +80,14 @@ struct Stage {                                // a tile-context stage: op(args) 
 };
 
 struct Stmt {
-    enum class Kind : std::uint8_t { For, Resident, Release, Acc, Call, Store, Distribute, Broadcast, Inherit, Retain };
+    enum class Kind : std::uint8_t { For, Resident, Release, Acc, Call, Store, Distribute, Broadcast, Inherit, Retain, Stage };
     Kind kind = Kind::Call;
     int line = 0;
     // For
     std::string var;
     Expr lo, hi;
-    std::vector<Stmt> body;                   // For, Acc
-    // Resident, Release, Inherit, Retain, Broadcast; Call: the arguments
+    std::vector<Stmt> body;                   // For, Acc, Stage
+    // Resident, Release, Inherit, Retain, Broadcast, Stage; Call: the arguments
     std::vector<TileRef> tiles;
     // Call
     std::string fn;
@@ -116,6 +121,7 @@ struct Program {
     std::string machine;                      // flat | grid
     long long l3 = 0;
     long long banks = 1;                      // the L3's interleaved banks (slot % banks)
+    long long l2 = 0;                         // each compute tile's L2 slots; 0: no staging
     std::string place = "fifo";               // the placement policy: fifo | lowest | bank-spread
     long long grid_rows = 0, grid_cols = 0;
     std::vector<Decl> decls;
@@ -239,12 +245,16 @@ public:
         } else {
             throw SyntaxError(line(), "machine '" + p.machine + "': flat or grid");
         }
-        // Placement (ADR 0004 §5): `, banks = B` and `, place = fifo | lowest | bank-spread`.
+        // Placement (ADR 0004 §5): `, banks = B` and `, place = fifo | lowest | bank-spread`;
+        // L2 staging: `, l2 = N`.
         while (sym(",")) {
             expect(",");
-            const std::string key = ident("banks or place");
+            const std::string key = ident("banks, place or l2");
             expect("=");
-            if (key == "banks") {
+            if (key == "l2") {
+                p.l2 = integer("the L2's slots");
+                if (p.l2 <= 0) throw SyntaxError(line(), "l2 must be positive");
+            } else if (key == "banks") {
                 p.banks = integer("the L3's banks");
                 if (p.banks <= 0) throw SyntaxError(line(), "banks must be positive");
             } else if (key == "place") {
@@ -258,7 +268,7 @@ public:
                     throw SyntaxError(line(), "place = " + pol + ": fifo, lowest or bank-spread");
                 p.place = pol;
             } else {
-                throw SyntaxError(line(), "machine option '" + key + "': banks or place");
+                throw SyntaxError(line(), "machine option '" + key + "': banks, place or l2");
             }
         }
         expect(")");
@@ -487,6 +497,14 @@ private:
             s.tiles = tiles();
             s.context = context();
             expect(";");
+            return s;
+        }
+        if (kw == "stage") {
+            s.kind = Stmt::Kind::Stage;
+            s.tiles = tiles();
+            expect_word("in");
+            expect_word("l2");
+            s.body = block();
             return s;
         }
         if (kw == "acc") {

@@ -1,7 +1,7 @@
 # L2 Reuse and the L1 + Compute-Fabric Pipeline in the Domain-Flow Debugger
 
 **Date:** 2026-10-16
-**Status:** In Progress (approved 2026-10-16: Q1-Q7 as recommended, Q3 and Q8 decided by the architect; step 1 merged #377; step 2 merged #378; step 2b in review)
+**Status:** In Progress (approved 2026-10-16: Q1-Q7 as recommended, Q3 and Q8 decided by the architect; step 1 merged #377; step 2 merged #378; step 2b merged #379; step 3 in review)
 
 Extends the domain-flow debugger (`docs/plans/domain-flow-debugger.md`, #363, complete) and
 follows the pattern of L3 placement (`docs/plans/l3-placement-at-lb.md`). It answers the
@@ -433,6 +433,40 @@ Each step is one PR. Steps 1 and 2 need no language change. Steps 3 and 4 depend
      - each refusal by name;
      - the replay agrees;
      - the staged matmul's Moves from L3 drop by the reuse factor.
+   - As built (decisions 2026-10-16):
+     - **The L3 source stays live.** A staged tile's L3 residency stays live for the whole block,
+       and releasing, retaining or writing it there is refused. Staging cuts block-mover traffic,
+       not L3 capacity.
+     - **L-CA re-Moves from L3.** Until the executor's L2 joins placement step 6, L-CA runs each
+       staged Feed as a Move from the tile's live L3 slot plus a Feed, skips the staging Move, and
+       treats L2_RELEASE as nothing. The values are the same and the timing is the unstaged
+       program's. It reports "L2 staging: unmapped at L-CA" and counts the staged Feeds.
+     - **Index forms.** `stage` takes the existing tile forms (`A[i, :]`, `A[i, k]`), not the
+       range index (`0..4`) this section's sketch used.
+     - **Slot allocation.** The lowest free slot of compute tile 0's L2 (level 1 has one fabric).
+     - **The CSP action.** A Move or Feed carries an `L2Address` and a staging index. The new
+       action kind `L2Release` takes no process, like Release.
+     - **L0 ops.** L2_STAGE is recorded after the stage Move's L3_MOVE, and L2_RELEASE at the
+       block's end. `opset_for` writes 1.3.0 only when a program stages.
+     - **L-T1.** A staged Feed waits for its stage Move, and L2Release is a zero-length credit
+       record. L2 credits are step 4.
+     - **The record.** `.dflow` v5 adds the steps' `staging`, `l2_cf`, `l2_slot`, flags `kHasL2`
+       and `kStages`, the `l2_staging` table, and `machine.l2`. dflow_check adds S1-S4. The
+       viewer keeps a staged copy in L2 when it is fed and shows its slot and reuse count.
+     - **The trace printer.** It rebuilds `stage` blocks from the stage Moves and L2Releases.
+     - **kpu-csp-gen.** `--stage-a` implies the row schedule (A's panel outer) and declares
+       `l2 = tiles per panel`.
+   - Measured: kpu-csp-gen's 512 matmul in 64-tiles on kpu_s1 (L3 17, row schedule, late stores):
+     - Each A tile leaves L3 once per row, not once per call: 448 fewer Moves (64 stagings serve
+       512 Feeds), plus 64 L2Releases, so 3,968 actions become 3,584.
+     - L-T1 makespan 157,950 -> 106,622 cycles; block-mover busy 147,456 -> 90,112.
+     - Each chain's calls take 960 cycles instead of 1,856.
+     - Values are exact at L-B, L-T1 and L-CA. L-CA's makespan is the unstaged run's (staging is
+       unmapped there).
+     - Finding: the chains still barely overlap (1 of 63). The mean gap of 682 cycles is the next
+       B panel's reload. The program releases B[:, j] before it makes B[:, j+1] resident, so the
+       panel comes from DRAM after the chain ahead frees its slots. Prefetching it is
+       cross-iteration residency, beyond the symbolic validator today.
 4. **L-T1 times L2 credits; `.tflow` v6 draws L2 slots and CF phases.**
    - L-T1: an L2 slot credit per staged residency, released at `L2Release`.
    - `tile_flow_record.cpp`: L2 slot rows after the L3 slot rows, and CF phase rows.

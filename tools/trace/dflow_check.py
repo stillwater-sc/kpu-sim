@@ -92,6 +92,19 @@ timed as an output-stationary systolic stream, on r x c PEs with skew = (r-1) + 
     P5 the top link           each chain's out1 is at least the previous chain's on its lane plus
                               r, and link_delay is exactly what that cost; the manifest's chain
                               count and link_delay_cycles are the tables'
+
+Version 5 adds L2 staging (l2_staging; the steps' staging, l2_cf, l2_slot; machine.l2;
+docs/plans/l2-reuse-and-fabric-pipeline-view.md step 3). A `stage` block's Move copies a resident
+tile into an L2 slot, the calls inside it feed the copy, and its L2_RELEASE frees the slot:
+    S1 one staging per slot   after every step each L2 slot holds at most one open staging, and
+                              every slot is inside the program's l2
+    S2 the address            a staging's Move (flag stages) and L2_RELEASE are its open and
+                              close, a step with an L2 address names its staging and that
+                              staging's slot and tile, a staged Feed is inside the staging's life,
+                              and only Moves, Feeds and L2_RELEASEs carry an L2 address
+    S3 reuse counts           with every step recorded, a staging's feeds are its staged Feeds
+    S4 all free at the end    every staging closes after it opens (only a refused run leaves one
+                              open)
 """
 
 import argparse
@@ -100,11 +113,11 @@ import json
 import sys
 from pathlib import Path
 
-VERSIONS = (1, 2, 3, 4)
+VERSIONS = (1, 2, 3, 4, 5)
 NONE8, NONE32, NONE64 = 0xFF, 0xFFFFFFFF, 0xFFFFFFFFFFFFFFFF
 DTYPES = {"u8": ("B", 1), "u16": ("H", 2), "u32": ("I", 4), "u64": ("Q", 8), "i64": ("q", 8),
           "f32": ("f", 4), "f64": ("d", 8)}
-OPENS, CLOSES, RETAINS, HAS_PLACE, PINNED = 1, 2, 4, 8, 16
+OPENS, CLOSES, RETAINS, HAS_PLACE, PINNED, HAS_L2, STAGES = 1, 2, 4, 8, 16, 32, 64
 RES_RETAINED = 4
 LOAD, STORE = 0, 1                                    # enum Action::Kind, in order
 CHANNELS = ["dram", "l3", "l2", "cf"]
@@ -138,12 +151,19 @@ SCHEMA_V4 = {
                    "tile": "u32", "lane": "u32", "used_rows": "u32", "used_cols": "u32", "calls": "u32"},
     "lt1_calls": {"action": "u64", "chain": "u32", "pos": "u32"},
 }
+SCHEMA_V5 = {
+    "l2_staging": {"open": "u64", "close": "u64", "residency": "u64", "feeds": "u64", "tile": "u32",
+                   "cf": "u32", "slot": "u32"},
+}
+STEPS_V5 = {"staging": "u64", "l2_cf": "u32", "l2_slot": "u32"}
+MOVE_KIND, FEED_KIND, L2_RELEASE_KIND = 2, 4, 10
 CALL_KIND = 6
-CREDIT_KINDS = {7, 8, 9}                               # RELEASE, INHERIT, RETAIN
+CREDIT_KINDS = {7, 8, 9, 10}                           # RELEASE, INHERIT, RETAIN, L2_RELEASE
 LOAD_KIND = 0
 # The channel each kind leaves its tile in (enum Action::Kind, in order); None: no snapshot.
-LANDS = [1, 0, 2, 1, 3, 2, 3, None, 1, None]   # LOAD l3, STORE dram, MOVE l2, WRITEBACK l3, FEED cf,
-                                                # DRAIN l2, CALL cf, RELEASE, INHERIT l3, RETAIN
+LANDS = [1, 0, 2, 1, 3, 2, 3, None, 1, None, None]   # LOAD l3, STORE dram, MOVE l2, WRITEBACK l3, FEED cf,
+                                                      # DRAIN l2, CALL cf, RELEASE, INHERIT l3, RETAIN,
+                                                      # L2_RELEASE
 
 
 class Unreadable(Exception):
@@ -209,6 +229,11 @@ def load(path):
                               or not all(isinstance(o.get(k), int) and o[k] >= 0 for k in ("makespan", "slot_bound", "slot_wait_cycles"))
                               or not isinstance(o.get("pass"), bool)):
             raise Unreadable("lt1: malformed (lanes, makespan, slot_bound, slot_wait_cycles, pass)")
+    if m["version"] >= 5:
+        try:
+            _int(m["machine"]["l2"], "machine.l2")
+        except (KeyError, TypeError) as e:
+            raise Unreadable(f"manifest: missing or malformed field ({e!r})")
     if m["version"] >= 4 and m.get("lt1") is not None:
         o = m["lt1"]
         f = o.get("fabric")
@@ -219,7 +244,9 @@ def load(path):
                               or f["pe_rows"] < 1 or f["pe_cols"] < 1):
             raise Unreadable("lt1.fabric: malformed (pe_rows, pe_cols, chains, link_delay_cycles)")
     schemas = dict(SCHEMA, **(SCHEMA_V2 if m["version"] >= 2 else {}), **(SCHEMA_V3 if m["version"] >= 3 else {}),
-                   **(SCHEMA_V4 if m["version"] >= 4 else {}))
+                   **(SCHEMA_V4 if m["version"] >= 4 else {}), **(SCHEMA_V5 if m["version"] >= 5 else {}))
+    if m["version"] >= 5:
+        schemas["steps"] = dict(schemas["steps"], **STEPS_V5)
     for name, schema in schemas.items():
         t = m["tables"].get(name)
         if not isinstance(t, dict):
@@ -473,7 +500,88 @@ def check(m, T, limit=20):
         check_lt1(m, T, bad)
     if m["version"] >= 4:
         check_fabric(m, T, bad)
+    if m["version"] >= 5:
+        check_staging(m, T, bad)
     return out, count
+
+
+def check_staging(m, T, bad):
+    G, S = T["l2_staging"], T["steps"]
+    ng, n = G["rows"], S["rows"]
+    actions, l2 = m["totals"]["actions"], m["machine"]["l2"]
+    refused = m.get("refusal") is not None
+    complete = not m["cut"] and n == actions
+
+    # S4 (and the references S1 needs): every staging closes after it opens, in a slot of the L2.
+    for g in range(ng):
+        o, c = G["open"][g], G["close"][g]
+        if G["tile"][g] >= T["tiles"]["rows"]:
+            bad("S2", f"staging {g} names tile {G['tile'][g]}; there are {T['tiles']['rows']}")
+        if G["slot"][g] >= l2:
+            bad("S1", f"staging {g} is in L2 slot {G['slot'][g]}, outside the program's l2 = {l2}")
+        if o >= actions:
+            bad("S4", f"staging {g} opens at {o}, past the run's {actions} actions")
+        if c == NONE64:
+            if not refused:
+                bad("S4", f"staging {g} never ends (no L2_RELEASE)")
+        elif c <= o:
+            bad("S4", f"staging {g} ends at {c}, not after its open at {o}")
+        if g and o <= G["open"][g - 1]:
+            bad("S2", f"staging {g} opens at {o}, not after staging {g - 1}")
+
+    # S1: one open staging per slot, step by step.
+    opens_at, ends_at = {}, {}
+    for g in range(ng):
+        opens_at.setdefault(G["open"][g], []).append(g)
+        if G["close"][g] != NONE64:
+            ends_at.setdefault(G["close"][g], []).append(g)
+    live = {}
+    for i in range(actions):
+        for g in opens_at.get(i, []):
+            key = (G["cf"][g], G["slot"][g])
+            if key in live:
+                bad("S1", f"step {i}: staging {g} opens in l2[{key[0]}] slot {key[1]}, which staging {live[key]} holds")
+            live[key] = g
+        for g in ends_at.get(i, []):
+            live.pop((G["cf"][g], G["slot"][g]), None)
+
+    # S2: each step's L2 address is its staging's; S3: the feeds are counted.
+    feeds = [0] * ng
+    for i in range(n):
+        f, g, k = S["flags"][i], S["staging"][i], S["kind"][i]
+        has = bool(f & HAS_L2)
+        if has != (g != NONE64):
+            bad("S2", f"step {i}: has_l2 is {has} but it names {'no' if g == NONE64 else 'a'} staging")
+            continue
+        if not has:
+            if f & STAGES:
+                bad("S2", f"step {i} is flagged as staging but names no staging")
+            continue
+        if g >= ng:
+            bad("S2", f"step {i} names staging {g}; there are {ng}")
+            continue
+        if k not in (MOVE_KIND, FEED_KIND, L2_RELEASE_KIND):
+            bad("S2", f"step {i}: a {m['kinds'][k] if k < len(m['kinds']) else k} carries an L2 address")
+        if (S["l2_cf"][i], S["l2_slot"][i]) != (G["cf"][g], G["slot"][g]):
+            bad("S2", f"step {i} is at l2[{S['l2_cf'][i]}] slot {S['l2_slot'][i]}; its staging {g} is at "
+                      f"l2[{G['cf'][g]}] slot {G['slot'][g]}")
+        if S["tile"][i] != G["tile"][g]:
+            bad("S2", f"step {i} names tile {S['tile'][i]}; its staging {g} holds tile {G['tile'][g]}")
+        o, c = G["open"][g], G["close"][g]
+        if bool(f & STAGES) != (o == i):
+            bad("S2", f"step {i}: flag stages is {bool(f & STAGES)}, and staging {g} opens at {o}")
+        if f & STAGES and k != MOVE_KIND:
+            bad("S2", f"step {i} stages a tile but is not a Move")
+        if k == L2_RELEASE_KIND and c != i:
+            bad("S2", f"step {i} ends staging {g}, which ends at {c}")
+        if k == FEED_KIND:
+            feeds[g] += 1
+            if not (o < i and (c == NONE64 or i < c)):
+                bad("S2", f"step {i} feeds staging {g} outside its life ({o}, {c})")
+    if complete:
+        for g in range(ng):
+            if feeds[g] != G["feeds"][g]:
+                bad("S3", f"staging {g} records {G['feeds'][g]} feeds; its steps give {feeds[g]}")
 
 
 def check_fabric(m, T, bad):
@@ -736,7 +844,7 @@ def main(argv=None):
         return 2
     violations, count = check(m, tables)
     invs = ["D2", "D3", "D4", "D5", "D6", "D8", "D9", "REF", "V1", "V2", "V3", "V4", "V5", "L1", "L2", "L3", "L4", "L5",
-            "P1", "P2", "P3", "P4", "P5"]
+            "P1", "P2", "P3", "P4", "P5", "S1", "S2", "S3", "S4"]
     if args.json:
         print(json.dumps({"ok": not violations, "steps": tables["steps"]["rows"],
                           "actions": m["totals"]["actions"], "cut": m["cut"],

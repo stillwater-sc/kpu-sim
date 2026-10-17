@@ -127,6 +127,7 @@ inline ActivationFn activation_of(VeOp v) {
 
 // Where a residency lives in L3: as a register names where a CPU operand lives (tile_program.hpp).
 using sw::kpu::program::L3Address;
+using sw::kpu::program::L2Address;
 
 // The L3 a program addresses: its slots and its interleaved banks. 0 leaves that bound unchecked
 // (a caller with no program in hand); slots and banks out of the geometry are refused.
@@ -154,9 +155,15 @@ struct Stage {
 //                               residency opened with no Load, its slot held from the start
 //   Retain    (l3 credit)       the residency ends without a Release: its slot, and the tile,
 //                               outlive the program, for the operator after it
+//   L2Release (l2 credit)       a `stage` block ends: the staged tile's L2 slot is free
 // (Inherit and Retain are kpu-run-csp-programs step 4d: residency across operators.)
+//
+// L2 staging (docs/plans/l2-reuse-and-fabric-pipeline-view.md step 3): a Move that carries an
+// L2 address opens a STAGING -- the tile's copy in that L2 slot, kept for the block -- and a
+// Feed that carries one reads the staged copy and leaves it there. Unstaged Moves and Feeds
+// carry none: the tile passes through L2 once, as before.
 struct Action {
-    enum class Kind : std::uint8_t { Load, Store, Move, Writeback, Feed, Drain, Call, Release, Inherit, Retain };
+    enum class Kind : std::uint8_t { Load, Store, Move, Writeback, Feed, Drain, Call, Release, Inherit, Retain, L2Release };
     Kind kind = Kind::Call;
     TileCoord tile;                     // the tile moved, released, or the Call's first output
     std::size_t process = kNone;        // index into CspProgram::processes (Release: none)
@@ -170,6 +177,10 @@ struct Action {
     // The L3 slot the action writes (Load, Writeback, Inherit), reads (Move, Store) or frees
     // (Release, Retain): its residency's address. None for an action with no residency.
     std::optional<L3Address> place;
+    // The L2 slot a staging Move writes, a staged Feed reads, or an L2Release frees; and which
+    // staging it is (CspProgram::stagings). None on an unstaged action.
+    std::optional<L2Address> l2;
+    std::size_t staging = kNone;
 };
 
 inline const char* to_string(Action::Kind k) {
@@ -184,6 +195,7 @@ inline const char* to_string(Action::Kind k) {
         case Action::Kind::Release:   return "RELEASE";
         case Action::Kind::Inherit:   return "INHERIT";
         case Action::Kind::Retain:    return "RETAIN";
+        case Action::Kind::L2Release: return "L2_RELEASE";
     }
     return "?";
 }
@@ -241,9 +253,22 @@ struct Residency {
     bool pinned = false;                // the program named its slot (`@ slots(...)`)
 };
 
+// One tile's stay in an L2 slot: opened by a staging Move, read by staged Feeds, closed by its
+// L2Release at the end of its `stage` block.
+struct Staging {
+    TileCoord tile;
+    std::size_t open = kNone;           // action index of the Move that staged it
+    std::size_t release = kNone;        // action index of its L2Release
+    std::size_t feeds = 0;              // Feeds of the staged copy: its reuse count
+    std::size_t residency = kNone;      // the L3 residency it was copied from (live throughout)
+    L2Address place;
+};
+
 // What the program decided about reuse, before any simulation.
 struct ReuseReport {
     std::size_t loads = 0, stores = 0, moves = 0, calls = 0;
+    std::size_t stagings = 0, staged_feeds = 0;   // L2: copies staged, and Feeds they served
+    std::size_t peak_l2 = 0;            // most stagings open at once
     std::size_t distinct_loaded = 0;    // tiles read from DRAM at least once
     std::size_t reloads = 0;            // loads - distinct_loaded: what capacity cost
     std::size_t peak_l3 = 0;            // most residencies open at once
@@ -257,6 +282,8 @@ public:
     std::vector<Channel> channels;      // indexed by Chan
     std::vector<Action> actions;        // every action, in program order
     std::vector<Residency> residencies;
+    std::vector<Staging> stagings;
+    std::uint32_t l2_slots = 0;         // the machine clause's `l2 = N`: slots per compute tile's L2
     // Placement (ADR 0004 §5): the L3's interleaved banks and the policy the walker placed by.
     std::uint32_t l3_banks = 1;
     std::string place = "fifo";
@@ -266,8 +293,11 @@ public:
     ReuseReport reuse() const {
         ReuseReport r;
         std::vector<std::string> seen;
-        std::size_t open = 0;
+        std::size_t open = 0, staged = 0;
         for (const Action& a : actions) {
+            if (a.l2 && a.kind == Action::Kind::Move) { ++r.stagings; r.peak_l2 = std::max(r.peak_l2, ++staged); }
+            if (a.l2 && a.kind == Action::Kind::Feed) ++r.staged_feeds;
+            if (a.kind == Action::Kind::L2Release) --staged;
             switch (a.kind) {
                 case Action::Kind::Load:
                     ++r.loads;
@@ -303,13 +333,15 @@ public:
         const ReuseReport r = reuse();
         o << "  reuse: " << r.loads << " loads of " << r.distinct_loaded << " tiles (" << r.reloads
           << " reloads), " << r.stores << " stores, " << r.moves << " moves, " << r.calls
-          << " calls, peak L3 " << r.peak_l3 << "\n";
+          << " calls, peak L3 " << r.peak_l3;
+        if (r.stagings) o << ", " << r.stagings << " staged in L2 for " << r.staged_feeds << " feeds, peak L2 " << r.peak_l2;
+        o << "\n";
         for (std::size_t i = 0; i < actions.size(); ++i) {
             const Action& a = actions[i];
             o << "  " << i << "  " << (a.process == kNone ? std::string("l3") : processes[a.process].name) << "  "
               << to_string(a.kind) << " " << a.tile.to_string();
             if (a.kind != Action::Kind::Call && a.kind != Action::Kind::Release && a.kind != Action::Kind::Inherit &&
-                a.kind != Action::Kind::Retain)
+                a.kind != Action::Kind::Retain && a.kind != Action::Kind::L2Release)
                 o << "  " << to_string(from_chan(a.kind)) << "->" << to_string(to_chan(a.kind));
             if (a.l0_op != kNone) o << "  [L0 " << a.l0_op << " " << to_string(source.ops()[a.l0_op].kind) << "]";
             for (std::size_t k = 0; k < a.context.size(); ++k) {
@@ -319,6 +351,7 @@ public:
                 o << " @ " << to_string(st.place);
             }
             if (a.place) o << "  @" << a.place->to_string();
+            if (a.l2) o << "  @" << a.l2->to_string();
             if (a.residency != kNone && a.kind == Action::Kind::Release)
                 o << "  (" << residencies[a.residency].consumers << " consumers)";
             o << "\n";

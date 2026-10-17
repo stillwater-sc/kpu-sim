@@ -13,6 +13,10 @@
 //           panel outer, i). L3: 2 x tiles-per-panel + 1 (the store's writeback). Each store is
 //           `late`: it leaves after the next accumulator's calls, so the movers bring the next
 //           chain's tiles in before this chain's results go out, and the chains pipeline.
+//           stage_a (the row schedule): A's row panel is staged in L2 for the j loop, so each
+//           A tile leaves L3 once per row instead of once per C tile; the machine clause
+//           declares `l2 = tiles-per-panel` (docs/plans/l2-reuse-and-fabric-pipeline-view.md
+//           step 3).
 //   linear  matmul plus the epilogue act(C + b): the bias vector b[j] is resident with B's
 //           panel, and `place` writes the context -- `via add(b[j]) @ P, act @ P` for
 //           P = fabric | str.drain | bm.egress -- or "unfused": a second pass that reads C
@@ -54,6 +58,7 @@ struct Options {
     std::string orient = "col";             // matmul, linear: col | row
     ActivationFn act = ActivationFn::Relu;  // linear
     std::string place = "fabric";           // linear: fabric | str.drain | bm.egress | unfused
+    bool stage_a = false;                   // matmul, orient row: stage A's row panel in L2
 };
 
 // Tiles along one dimension.
@@ -80,6 +85,9 @@ inline void check(const Options& o) {
     if (o.algo == "linear" && o.place != "fabric" && o.place != "str.drain" && o.place != "bm.egress" &&
         o.place != "unfused")
         throw GenError("csp-gen: place '" + o.place + "' (fabric | str.drain | bm.egress | unfused)");
+    if (o.stage_a && o.algo != "matmul") throw GenError("csp-gen: stage_a is matmul's; --algo is '" + o.algo + "'");
+    if (o.stage_a && o.orient != "row")
+        throw GenError("csp-gen: stage_a stages A's row panel for the loop over B's panels, which needs orient row");
     const std::size_t need = slots_needed(o);
     if (need > o.l3) {
         const std::size_t nt = tiles(o);
@@ -131,13 +139,27 @@ inline std::string matmul_nest(const Options& o, bool linear_fused) {
         s += "    release B[:, j]" + bias + ";\n";
         s += "  }\n";
     } else {
+        // Staged, the j loop runs inside A's stage block, one level deeper.
+        const std::string in = o.stage_a ? "  " : "";
+        std::string body = acc;
+        if (o.stage_a) {
+            std::string deeper;
+            for (std::size_t at = 0; at < body.size();) {
+                const std::size_t nl = body.find('\n', at);
+                deeper += "  " + body.substr(at, nl - at + 1);
+                at = nl + 1;
+            }
+            body = deeper;
+        }
         s += "  for i in 0.." + nt + " {\n";
         s += "    resident A[i, :];\n";
-        s += "    for j in 0.." + nt + " {\n";
-        s += "      resident B[:, j]" + bias + ";\n";
-        s += acc;
-        s += "      release B[:, j]" + bias + ";\n";
-        s += "    }\n";
+        if (o.stage_a) s += "    stage A[i, :] in l2 {\n";
+        s += in + "    for j in 0.." + nt + " {\n";
+        s += in + "      resident B[:, j]" + bias + ";\n";
+        s += body;
+        s += in + "      release B[:, j]" + bias + ";\n";
+        s += in + "    }\n";
+        if (o.stage_a) s += "    }\n";
         s += "    release A[i, :];\n";
         s += "  }\n";
     }
@@ -145,8 +167,10 @@ inline std::string matmul_nest(const Options& o, bool linear_fused) {
 }
 
 inline std::string matmul(const Options& o) {
-    std::string s = header(o, "matmul C = A . B, " + o.orient + "-panel schedule");
-    s += "program matmul machine flat(l3 = " + std::to_string(o.l3) + ") {\n";
+    std::string s = header(o, "matmul C = A . B, " + o.orient + "-panel schedule" +
+                                  (o.stage_a ? std::string(", A's row panel staged in L2") : std::string()));
+    s += "program matmul machine flat(l3 = " + std::to_string(o.l3) +
+         (o.stage_a ? ", l2 = " + std::to_string(tiles(o)) : std::string()) + ") {\n";
     s += tensor("A", o, "in") + tensor("B", o, "in") + tensor("C", o, "out");
     s += matmul_nest(o, false);
     return s + "}\n";

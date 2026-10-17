@@ -36,6 +36,11 @@
 //     own anyway, and the late store's is free again before the Load). A late store
 //     names an accumulator, and carries no epilogue (an add's vector would have to be resident
 //     where it is emitted, which the structure does not say).
+//   * a stage block (`stage T in l2 { }`) copies tiles of resident families into L2: T must be
+//     covered by a resident family, may not overlap a family staged around it, and fits the
+//     machine clause's `l2 = N` with the families staged around it. Inside the block the staged
+//     tiles stay resident in L3 and unwritten: a release, a retain or a call that may touch them
+//     is refused.
 //
 // Totals (loads, calls, stores) are exact for rectangular loop nests (constant bounds) and
 // absent otherwise.
@@ -62,6 +67,7 @@ namespace sw::kpu::program::csp::lang {
 struct Validation {
     std::size_t peak_l3 = 0;                  // the most L3 slots the program holds at once (with a late
                                               // store: counting its writeback at every place it can land)
+    std::size_t peak_l2 = 0;                  // the most L2 slots its stage blocks hold at once
     std::uint64_t inherited = 0;              // slots held from the start (inherit)
     std::uint64_t retained = 0;               // slots held at the end (retain)
     std::optional<std::uint64_t> loads, calls, stores;   // exact for rectangular loop nests
@@ -121,6 +127,7 @@ public:
         for (const Acc& a : accs_) throw CompileError(0, "the accumulator " + text(a.tile) + " is never stored");
         Validation v;
         v.peak_l3 = peak_;
+        v.peak_l2 = peak_l2_;
         v.inherited = inherited_;
         v.retained = retained_count_;
         if (exact_) {
@@ -156,6 +163,49 @@ private:
     std::uint64_t inherited_ = 0, retained_count_ = 0;
     std::uint64_t loads_ = 0, calls_ = 0, stores_ = 0;
     bool has_late_ = false;                         // the program has a `store ... late`
+    std::vector<Family> staged_;                    // families the enclosing stage blocks hold
+    std::size_t l2_live_ = 0, peak_l2_ = 0;
+
+    void not_staged(const Family& f, int line, const std::string& what) const {
+        for (const Family& st : staged_)
+            if (may_overlap(f, st))
+                throw CompileError(line, what + " " + text(f) + ", which can be staged in L2 (" + text(st) +
+                                         "): a staged tile stays resident and unwritten until its stage block ends");
+    }
+    void stage(const Stmt& s, std::size_t depth, bool definite) {
+        if (ast_.l2 <= 0)
+            throw CompileError(s.line, "stage ... in l2: the machine clause declares no L2 (write `l2 = N`)");
+        std::vector<Family> mine;
+        std::size_t n = 0;
+        for (const TileRef& r : s.tiles) {
+            const Family f = family(r);
+            const bool covered = std::any_of(state_.begin(), state_.end(), [&](const Entry& e) {
+                if (e.family.operand != f.operand) return false;
+                for (std::size_t i = 0; i < f.dims.size(); ++i)
+                    if (!e.family.dims[i].all && (f.dims[i].all || !(e.family.dims[i].a == f.dims[i].a))) return false;
+                return true;
+            });
+            if (!covered)
+                throw CompileError(s.line, "stage " + text(f) + ": it is not provably resident; a stage copies resident "
+                                           "tiles from L3");
+            for (const Family& st : staged_)
+                if (may_overlap(f, st)) throw CompileError(s.line, "stage " + text(f) + ": it may already be staged (" + text(st) + ")");
+            for (const Family& st : mine)
+                if (may_overlap(f, st)) throw CompileError(s.line, "stage " + text(f) + ": it may already be staged (" + text(st) + ")");
+            mine.push_back(f);
+            n += count(f);
+        }
+        if (l2_live_ + n > static_cast<std::size_t>(ast_.l2))
+            throw CompileError(s.line, "stage needs " + std::to_string(n) + " L2 slot" + (n == 1 ? "" : "s") + ", and " +
+                                       std::to_string(static_cast<std::size_t>(ast_.l2) - std::min(l2_live_, static_cast<std::size_t>(ast_.l2))) +
+                                       " of " + std::to_string(ast_.l2) + " are free");
+        l2_live_ += n;
+        peak_l2_ = std::max(peak_l2_, l2_live_);
+        for (const Family& f : mine) staged_.push_back(f);
+        for (const Stmt& b : s.body) stmt(b, depth, definite);
+        staged_.resize(staged_.size() - mine.size());
+        l2_live_ -= n;
+    }
 
     static bool any_late(const std::vector<Stmt>& body) {
         for (const Stmt& s : body)
@@ -344,6 +394,7 @@ private:
     }
     void retain(const Stmt& s, const TileRef& r) {
         const Family f = family(r);
+        not_staged(f, s.line, "retain");
         distinct_per_iteration(f, s.line);
         const std::uint64_t n = count(f), total = n * multiplier_;
         auto acc = std::find_if(accs_.begin(), accs_.end(), [&](const Acc& a) { return same(a.tile, f); });
@@ -428,6 +479,7 @@ private:
                     }
                     if (it->dirty)
                         throw CompileError(s.line, "release " + text(f) + ": a call wrote it and it is not stored; store it first");
+                    not_staged(f, s.line, "release");
                     live_ -= count(f);
                     state_.erase(it);
                 }
@@ -472,6 +524,7 @@ private:
             case Stmt::Kind::Retain:
                 for (const TileRef& r : s.tiles) retain(s, r);
                 break;
+            case Stmt::Kind::Stage: stage(s, depth, definite); break;
             case Stmt::Kind::Call: call(s, depth, definite); break;
             case Stmt::Kind::Store: store(s); break;
             case Stmt::Kind::Distribute:
@@ -600,6 +653,7 @@ private:
             throw CompileError(s.line, "call " + s.fn + " writes " + text(y) + ", which is neither provably resident nor "
                                        "an open accumulator");
         for (const Family& a : args) resident(a);
+        not_staged(y, s.line, "call " + s.fn + " writes");
         context(s, y);
         owner->dirty = true;
         calls_ += multiplier_;

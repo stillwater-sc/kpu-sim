@@ -75,7 +75,7 @@ addEventListener("load", () => setTimeout(() => {
 }, 200));
 </script>"""
 NONE8, NONE64 = 0xFF, 0xFFFFFFFFFFFFFFFF
-RES_RETAINED, HAS_PLACE = 4, 8
+RES_RETAINED, HAS_PLACE, HAS_L2, STAGES = 4, 8, 32, 64
 
 HARNESS = r"""
 const fs = require("fs"), path = require("path");
@@ -295,9 +295,13 @@ class ViewerTest(unittest.TestCase):
         callers = re.findall(r"chip\((?:e\.tile|op|c\.tile), (.*?), (?:touched|e\.tile|call|false)", html)
         self.assertGreaterEqual(len(callers), 6)
         for extra in callers:
-            ok = re.fullmatch(r'""|pct\((?:e|c)\.frac\)|e\.moves > 1 \? .*e\.moves.*: ""', extra) or \
+            ok = re.fullmatch(r'""|pct\((?:e|c)\.frac\)|e\.moves > 1 \? .*e\.moves.*: ""|l2extra\(e\)', extra) or \
                 (extra.startswith("`") and all(i.startswith("esc(") for i in self.interpolations(extra)))
             self.assertTrue(ok, f"chip extra not reviewed: {extra}")
+        # l2extra: a staged copy's slot and Feeds (numbers through fmt), or the moves mark.
+        l2x = re.search(r"const l2extra = .*?;\n", html, re.S).group(0)
+        self.assertTrue(all(i.startswith("fmt(") or i == "e.moves" for i in self.interpolations(l2x)),
+                        self.interpolations(l2x))
         pct = re.search(r"const pct = .*?;\n", html, re.S).group(0)
         self.assertEqual(self.interpolations(pct), ["Math.round(100 * f)"])
 
@@ -421,17 +425,25 @@ class ViewerTest(unittest.TestCase):
     def expected_contents(m, T, sample):
         # An independent replay of the recorded actions: a step's `to` channel gains its tile, its
         # `from` channel loses it, and a Call consumes what was fed since the last call (its result
-        # stays, or opens as an accumulator). Every step's counts must equal L-B's held counts.
+        # stays, or opens as an accumulator). A staged copy (version 5) stays in L2 when it is fed,
+        # and its L2_RELEASE takes it out. Every step's counts must equal L-B's held counts.
         S = T["steps"]
         ch = [c["name"] for c in m["channels"]]
         L3, L2, CF, CALL = ch.index("l3"), ch.index("l2"), ch.index("cf"), m["kinds"].index("CALL")
+        L2REL = m["kinds"].index("L2_RELEASE") if "L2_RELEASE" in m["kinds"] else -1
+        feeds = {}                                      # staging -> its staged Feeds' steps
         l2, cf, fed, moves, calls, chains, open_ = {}, {}, [], {}, [], [], {}
         snaps, wanted = {}, set(sample)
         for s in range(S["rows"]):
             t, f, to = S["tile"][s], S["from"][s], S["to"][s]
+            staged = m["version"] >= 5 and S["flags"][s] & HAS_L2
+            if staged and to == CF:
+                feeds.setdefault(S["staging"][s], []).append(s)
             if f == L3 and to == L2:
                 moves.setdefault(t, []).append(s)
-            if f == L2:
+            if S["kind"][s] == L2REL:
+                l2.pop(t)
+            if f == L2 and not staged:
                 l2.pop(t)
             if f == CF:
                 cf.pop(t)
@@ -469,7 +481,15 @@ class ViewerTest(unittest.TestCase):
         for s in sample:
             l2s, cfs = snaps[s]
             nm = lambda t: sum(1 for x in moves.get(t, []) if x <= s)
-            contents = {"l2": [{"tile": t, "since": a, "moves": nm(t)} for t, a in sorted(l2s.items(), key=lambda kv: kv[1])],
+
+            def st(a):
+                if m["version"] < 5 or not S["flags"][a] & STAGES:
+                    return None
+                g = S["staging"][a]
+                return {"staging": g, "cf": S["l2_cf"][a], "slot": S["l2_slot"][a],
+                        "fed": sum(1 for x in feeds.get(g, []) if x <= s), "of": T["l2_staging"]["feeds"][g]}
+            contents = {"l2": [{"tile": t, "since": a, "moves": nm(t), "staged": st(a)}
+                               for t, a in sorted(l2s.items(), key=lambda kv: kv[1])],
                         "cf": [{"tile": t, "since": a, "acc": acc} for t, (a, acc) in sorted(cfs.items(), key=lambda kv: kv[1][0])]}
             at = [k for k, c in enumerate(calls) if c["step"] == s]
             before = [k for k, c in enumerate(calls) if c["step"] <= s]

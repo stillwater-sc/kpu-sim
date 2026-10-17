@@ -64,7 +64,7 @@ kpu-run runs a program; it does not write one. kpu-csp-gen writes CSP programs.
   --emit-l0-result <file.l0>  the agreed values: the corpus's expected-output half
   --tflow <dir>             the L-T1 run's tile-flow record (.tflow version 5: residencies at
                             their L3 addresses)
-  --dflow <dir>             the L-B run's domain-flow record (.dflow version 4): every action
+  --dflow <dir>             the L-B run's domain-flow record (.dflow version 5): every action
                             as a CSP state transition, written by the oracle's own run
   --dflow-limit <n>         record at most n steps (0 = all; default 1000000); residencies and
                             the iteration summary are always complete
@@ -349,6 +349,7 @@ int run_csp_program(const std::vector<std::string>& a, const std::string& path) 
     if (res.validation.stores) std::cout << ", " << *res.validation.stores << " stores";
     if (res.validation.inherited) std::cout << ", " << res.validation.inherited << " inherited";
     if (res.validation.retained) std::cout << ", " << res.validation.retained << " retained";
+    if (ast->l2 > 0) std::cout << ", peak L2 " << res.validation.peak_l2 << " of " << ast->l2 << " staged";
     std::cout << "\n";
     // L-B is the oracle; its trace, replayed, must reproduce it before it can be written.
     std::cout << "oracle   L-B, " << res.actions << " actions; "

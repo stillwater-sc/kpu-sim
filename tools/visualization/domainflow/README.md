@@ -79,6 +79,18 @@ step. A link to `page.html#step=123` opens at that step.
   A program that stores each C right after its chain shows no overlap: its stores serialize the
   chains (the plan's step-2 finding).
 
+- **L2 staging (step 3, `.dflow` version 5):** a program that stages tiles (`stage A[i, :] in l2
+  { }`, `l2 = N` in its machine clause) keeps one copy of each staged tile in an L2 slot for the
+  block, and the calls inside feed it.
+  - The L2 station lists a staged copy with its slot and its Feeds so far of all, `s2 3/8`: the
+    reuse count, read from the record (`l2_staging`).
+  - The station's caption counts the staged slots against `l2`.
+  - The inspector names each step's L2 address, and whether it stages the tile, is fed from the
+    copy, or frees it (L2_RELEASE).
+  - A transient tile still shows its re-Moves, `×n`.
+  - The derivation keeps a staged copy in L2 when it is fed, and is checked against L-B's counts
+    as before.
+
 **A steady layout:** every area that changes from step to step has a fixed size, so nothing
 jumps while the run plays. A value too wide for its box is cut with an ellipsis and shown in full
 in its tooltip; a list that does not fit scrolls inside its box; an inspector row that does not
@@ -98,4 +110,4 @@ has no DOM) in Node, comparing what it reads at sample steps (step fields, posit
 tile values the inspector shows, the overlay's legs, proximity, slot waits and time-to-action
 lookup, and L2's and the fabric's contents and calls against an independent replay) with the
 bundle read in Python. Every recorded L2 or fabric snapshot must find its tile where the page puts
-it. A strict scan requires every interpolation that writes HTML to be escaped or reviewed. It reads versions 1 to 4.
+it. A strict scan requires every interpolation that writes HTML to be escaped or reviewed. It reads versions 1 to 5.
