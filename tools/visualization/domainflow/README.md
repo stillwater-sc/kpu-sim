@@ -110,4 +110,4 @@ has no DOM) in Node, comparing what it reads at sample steps (step fields, posit
 tile values the inspector shows, the overlay's legs, proximity, slot waits and time-to-action
 lookup, and L2's and the fabric's contents and calls against an independent replay) with the
 bundle read in Python. Every recorded L2 or fabric snapshot must find its tile where the page puts
-it. A strict scan requires every interpolation that writes HTML to be escaped or reviewed. It reads versions 1 to 4.
+it. A strict scan requires every interpolation that writes HTML to be escaped or reviewed. It reads versions 1 to 5.

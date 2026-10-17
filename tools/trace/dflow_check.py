@@ -844,7 +844,7 @@ def main(argv=None):
         return 2
     violations, count = check(m, tables)
     invs = ["D2", "D3", "D4", "D5", "D6", "D8", "D9", "REF", "V1", "V2", "V3", "V4", "V5", "L1", "L2", "L3", "L4", "L5",
-            "P1", "P2", "P3", "P4", "P5"]
+            "P1", "P2", "P3", "P4", "P5", "S1", "S2", "S3", "S4"]
     if args.json:
         print(json.dumps({"ok": not violations, "steps": tables["steps"]["rows"],
                           "actions": m["totals"]["actions"], "cut": m["cut"],
