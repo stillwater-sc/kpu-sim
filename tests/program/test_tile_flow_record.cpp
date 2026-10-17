@@ -14,6 +14,7 @@
 
 #include <sw/kpu/program/csp/gen/generate.hpp>
 #include <sw/kpu/program/driver/program_spec.hpp>
+#include <sw/kpu/program/platform/deployment_json.hpp>
 #include <sw/kpu/program/record/tile_flow_lod.hpp>
 #include <sw/kpu/program/record/tile_flow_record.hpp>
 #include <sw/kpu/program/csp/lang/parse.hpp>
@@ -204,19 +205,33 @@ TEST_CASE("the .tflow bundle round-trips, and the same run writes the same bytes
         CHECK((back.residency[i].l3_tile == rec.residency[i].l3_tile && back.residency[i].slot == rec.residency[i].slot &&
                back.residency[i].bank == rec.residency[i].bank));
 
-    // A newer bundle (version 6) is refused rather than misread, and so are older ones: version 1 has no
+    // A newer bundle (version 7) is refused rather than misread, and so are older ones: version 1 has no
     // `written` column, and version 2 records writeback as a DMA read (its hop 5 is not an
     // ejection). Reading either would be a wrong answer.
     const std::string original = slurp(a + "/manifest.json");
     auto with_version = [&](const char* v, bool says_ops = true) {
         std::string m = original;
-        m.replace(m.find("\"version\": 5"), 12, std::string("\"version\": ") + v);
+        m.replace(m.find("\"version\": 6"), 12, std::string("\"version\": ") + v);
         if (!says_ops) m.replace(m.find("\"ops\": "), 7, "\"opz\": ");
         std::ofstream(a + "/manifest.json", std::ios::binary) << m;
     };
-    with_version("6");
-    CHECK_THROWS_WITH(read_tflow(a), ContainsSubstring("version 6"));
-    // Version 5 must say its banks.
+    with_version("7");
+    CHECK_THROWS_WITH(read_tflow(a), ContainsSubstring("version 7"));
+    // Version 6 must say its L2 slots.
+    {
+        std::string m = original;
+        m.replace(m.find("\"l2_slots\": "), 12, "\"l2_slotz\": ");
+        std::ofstream(a + "/manifest.json", std::ios::binary) << m;
+        CHECK_THROWS_WITH(read_tflow(a), ContainsSubstring("l2_slots"));
+    }
+    // Version 5 still reads (its records have no L2 or chain tables), and must say its banks.
+    with_version("5");
+    {
+        const TileFlowRecord v5 = read_tflow(a);
+        CHECK_FALSE(v5.phases);
+        CHECK(v5.l2_residency.empty());
+        CHECK(v5.chains.empty());
+    }
     {
         std::string m = original;
         m.replace(m.find("\"l3_banks\": "), 12, "\"l3_bankz\": ");
@@ -383,8 +398,92 @@ TEST_CASE("version 5: every residency is at the address L-T1 placed it, one tile
     }
     // The pyramid draws one row per slot, after the stations and movers.
     const Lod lod = build_lod(rec);
-    REQUIRE(lod.rows.size() == rec.stations.size() + rec.movers.size() + 5);
-    CHECK(lod.rows.back().kind == "l3_slot");
-    CHECK(lod.rows.back().name == rec.device + "/l3[*]/slot[4]");
+    std::size_t slot_rows = 0;
+    for (const LodRow& row : lod.rows) slot_rows += row.kind == "l3_slot";
+    CHECK(slot_rows == 5);
+    const LodRow& last_slot = lod.rows[rec.stations.size() + rec.movers.size() + 4];
+    CHECK(last_slot.kind == "l3_slot");
+    CHECK(last_slot.name == rec.device + "/l3[*]/slot[4]");
 }
 
+
+TEST_CASE("version 6: the staged L2 copies and the fabric's chains, recorded and read back", "[program][record][l2]") {
+    gen::Options o;
+    o.size = 64;
+    o.tile = 16;
+    o.l3 = 9;
+    o.stage_a = true;                                   // implies the row schedule
+    o.orient = "row";
+    Run r;
+    r.ast = lang::parse(gen::generate(o));
+    r.inputs = driver::csp_inputs(r.ast);
+    r.spec = platform::read_spec_file("tests/program/deploy/kpu_s1.json");   // declares the fabric
+    r.outcome = driver::csp_run_level(driver::ExecutionLevel::BlockSequential, r.ast, &r.spec.device(0), r.inputs);
+    REQUIRE_FALSE(r.outcome.skipped);
+    const TileFlowRecord rec = r.record();
+    CHECK(rec.phases);
+    CHECK(rec.l2_slots == 4);
+    // Every staged copy, at the address L-T1 executed, with its reuse count: A[i,k] is fed once per j.
+    REQUIRE(rec.l2_residency.size() == 16);
+    REQUIRE(rec.l2_residency.size() == r.outcome.l2_slots.size());
+    for (std::size_t i = 0; i < rec.l2_residency.size(); ++i) {
+        const L2Residency& x = rec.l2_residency[i];
+        CHECK(x.slot == r.outcome.l2_slots[i].place.slot);
+        CHECK(x.feeds == 4);
+        CHECK(rec.tiles[x.tile].operand == "A");
+    }
+    // L2 is modelled when the program stages: its capacity is the program's slots.
+    const Station& l2 = rec.stations[2];
+    CHECK(l2.kind == "l2");
+    CHECK(l2.modelled);
+    CHECK(l2.capacity == 4);
+    CHECK(std::find(rec.unmodelled.begin(), rec.unmodelled.end(), "l2") == rec.unmodelled.end());
+    // One chain per C tile, on the compute tile L-T1 ran it on.
+    REQUIRE(rec.chains.size() == 16);
+    REQUIRE(rec.chains.size() == r.outcome.chains.size());
+    for (std::size_t i = 0; i < rec.chains.size(); ++i) {
+        CHECK(rec.chains[i].calls == 4);
+        CHECK(rec.chains[i].out1 == r.outcome.chains[i].out1);
+        CHECK(rec.stations[rec.chains[i].station].kind == "cf");
+    }
+
+    const std::string dir = scratch("v6");
+    write_tflow(rec, dir);
+    CHECK_THAT(slurp(dir + "/manifest.json"), ContainsSubstring("\"version\": 6"));
+    const TileFlowRecord back = read_tflow(dir);
+    CHECK(back.phases);
+    CHECK(back.l2_slots == rec.l2_slots);
+    REQUIRE(back.l2_residency.size() == rec.l2_residency.size());
+    for (std::size_t i = 0; i < rec.l2_residency.size(); ++i)
+        CHECK((back.l2_residency[i].t0 == rec.l2_residency[i].t0 && back.l2_residency[i].t1 == rec.l2_residency[i].t1 &&
+               back.l2_residency[i].feeds == rec.l2_residency[i].feeds && back.l2_residency[i].slot == rec.l2_residency[i].slot));
+    REQUIRE(back.chains.size() == rec.chains.size());
+    for (std::size_t i = 0; i < rec.chains.size(); ++i)
+        CHECK((back.chains[i].in0 == rec.chains[i].in0 && back.chains[i].front == rec.chains[i].front &&
+               back.chains[i].in1 == rec.chains[i].in1 && back.chains[i].last == rec.chains[i].last &&
+               back.chains[i].out1 == rec.chains[i].out1 && back.chains[i].station == rec.chains[i].station));
+
+    // The pyramid: after the L3 slot rows, one row per L2 slot, then each compute tile's in and out.
+    const Lod lod = build_lod(rec);
+    std::size_t l2_rows = 0, in_rows = 0, out_rows = 0;
+    for (const LodRow& row : lod.rows) {
+        l2_rows += row.kind == "l2_slot";
+        in_rows += row.kind == "cf_in";
+        out_rows += row.kind == "cf_out";
+    }
+    std::size_t n_cf = 0;
+    for (const Station& st : rec.stations) n_cf += st.kind == "cf";
+    CHECK(l2_rows == 4);
+    CHECK(in_rows == n_cf);
+    CHECK(out_rows == n_cf);
+    CHECK(lod.rows.back().kind == "cf_out");
+
+    // A staged copy beyond the program's slots is refused at the trust boundary.
+    TileFlowRecord bad = rec;
+    bad.l2_residency[0].slot = 9;
+    const std::string bdir = scratch("v6bad");
+    write_tflow(bad, bdir);
+    CHECK_THROWS_WITH(read_tflow(bdir), ContainsSubstring("L2 slot 9 of 4"));
+    std::filesystem::remove_all(dir);
+    std::filesystem::remove_all(bdir);
+}

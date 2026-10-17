@@ -163,6 +163,11 @@ struct CspLevelOutcome {
     // timed on -- what the tile-flow record (record::build_csp_record) is built from.
     std::vector<csp::TransactionalInterpreter::Record> records;
     std::vector<csp::TransactionalInterpreter::Slot> slots;
+    // L-T1 with L2 staging: each staged copy's L2 slot, credit to L2Release, with its Feeds.
+    std::vector<csp::TransactionalInterpreter::L2Slot> l2_slots;
+    std::size_t peak_l2 = 0;                // L-T1: staged copies held at once, in time
+    std::size_t l2_bound = 0;               // L-T1: stage Moves whose start their L2 slot decided
+    std::uint64_t l2_wait_cycles = 0;       //        and what those waits cost
     // L-T1 with a declared fabric: each accumulator's gemm chain as a systolic stream, and the
     // calls timed as one leg instead, by why (docs/plans/l2-reuse-and-fabric-pipeline-view.md).
     std::vector<csp::TransactionalInterpreter::Chain> chains;
@@ -343,6 +348,10 @@ inline CspLevelOutcome csp_run_level(ExecutionLevel level, const csp::lang::Prog
         o.cf_busy = st.busy.count("cf") ? st.busy.at("cf") : 0;
         o.records = lt.records();
         o.slots = lt.slots();
+        o.l2_slots = lt.l2_slots();
+        o.peak_l2 = st.peak_l2;
+        o.l2_bound = st.l2_bound;
+        o.l2_wait_cycles = st.l2_wait_cycles;
         o.chains = lt.chains();
         o.one_leg = st.one_leg;
         o.link_delay_cycles = st.link_delay_cycles;

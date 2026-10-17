@@ -78,10 +78,15 @@ TileFlowRecord build_csp_record(const csp::lang::Program& ast, const driver::Csp
     // ---- stations: as version 3, with L3's capacity the PROGRAM's (its credits)
     rec.stations.push_back({d.name + "/dram", "dram", 0, false, true});
     rec.stations.push_back({pooled_name(d.name, "l3"), "l3", static_cast<std::uint64_t>(ast.l3), true, true});
-    rec.stations.push_back({pooled_name(d.name, "l2"), "l2", 0, true, false});
+    // L2 is modelled when the program stages (version 6): its capacity is the program's slots,
+    // and its occupancy the staged copies. A transient copy holds no L2 credit at L-T1.
+    rec.phases = true;
+    rec.l2_slots = static_cast<std::uint32_t>(ast.l2);
+    const bool staged = rec.l2_slots > 0;
+    rec.stations.push_back({pooled_name(d.name, "l2"), "l2", rec.l2_slots, true, staged});
     rec.stations.push_back({pooled_name(d.name, "l1"), "l1", 0, true, false});
     rec.stations.push_back({pooled_name(d.name, "dmabuf"), "dmabuf", 0, true, false});
-    rec.unmodelled = {"l2", "l1", "dmabuf"};
+    rec.unmodelled = staged ? std::vector<std::string>{"l1", "dmabuf"} : std::vector<std::string>{"l2", "l1", "dmabuf"};
     const std::size_t n_cf = std::max<std::size_t>(outcome.compute_tiles, 1);
     for (std::size_t c = 0; c < n_cf; ++c)
         rec.stations.push_back({d.name + "/cf[" + std::to_string(c) + "]", "cf", 1, false, true});
@@ -142,11 +147,25 @@ TileFlowRecord build_csp_record(const csp::lang::Program& ast, const driver::Csp
                                                            (sl.retained ? Residency::Held : 0)),
                                  sl.place.l3_tile, sl.place.slot, sl.place.bank});
 
+    // ---- L2: each staged copy's slot, credit to L2Release, with its reuse count (version 6)
+    for (const auto& sl : outcome.l2_slots)
+        rec.l2_residency.push_back({tile_id(sl.tile), sl.place.cf, sl.place.slot, sl.t0, sl.t1, sl.feeds});
+
+    // ---- the fabric: each accumulator's chain on its compute tile (version 6)
+    for (const auto& ch : outcome.chains) {
+        if (!ch.closed)
+            throw RecordError("record: the chain of " + ch.tile.to_string() + " never closed; its results never left the array");
+        if (ch.lane >= n_cf)
+            throw RecordError("record: a chain ran on compute tile " + std::to_string(ch.lane) + " of " + std::to_string(n_cf));
+        rec.chains.push_back({tile_id(ch.tile), CF0 + static_cast<std::uint32_t>(ch.lane), ch.rows, ch.cols, ch.calls,
+                              ch.in0, ch.front, ch.in1, ch.last, ch.out1});
+    }
+
     // ---- transits (each movement leg) and computes (each Call)
     using K = csp::Action::Kind;
     using P = csp::TransactionalInterpreter::Proc;
     for (const auto& r : outcome.records) {
-        if (!csp::TransactionalInterpreter::has_process(r.kind)) continue;   // Release, Inherit, Retain
+        if (!csp::TransactionalInterpreter::has_process(r.kind)) continue;   // Release, Inherit, Retain, L2Release
         const auto op = static_cast<std::uint32_t>(r.action);
         if (r.kind == K::Call) {
             if (r.lane >= n_cf)
@@ -229,6 +248,8 @@ void write_tflow(const TileFlowRecord& rec, const std::string& dir) {
     for (const Residency& r : rec.residency) { exact(r.t0, "residency t0"); exact(r.t1, "residency t1"); }
     for (const Transit& x : rec.transits) { exact(x.t0, "transit t0"); exact(x.t1, "transit t1"); }
     for (const Compute& c : rec.computes) { exact(c.t0, "compute t0"); exact(c.t1, "compute t1"); }
+    for (const L2Residency& r : rec.l2_residency) { exact(r.t0, "l2 residency t0"); exact(r.t1, "l2 residency t1"); }
+    for (const Chain& c : rec.chains) exact(c.out1, "chain out1");    // its latest phase
     std::error_code ec;
     std::filesystem::create_directories(dir, ec);
     if (ec) throw RecordError("record: cannot create " + dir + ": " + ec.message());
@@ -244,8 +265,10 @@ void write_tflow(const TileFlowRecord& rec, const std::string& dir) {
     // 4: a CSP program's record -- the columns are version 3's, an op is one of the program's
     // ACTIONS (kpu-run-csp-programs step 4b), and `ops` says so.
     // 5: its residencies carry their L3 address (l3-placement-at-lb step 5b).
+    // 6: the l2_residency and chain tables, and l2_slots (l2-reuse-and-fabric-pipeline-view step 4).
     const bool addressed = rec.op_space == "csp-actions" && rec.l3_banks > 0;
-    m["version"] = addressed ? 5 : rec.op_space == "csp-actions" ? 4 : 3;
+    const bool phases = addressed && rec.phases;
+    m["version"] = phases ? 6 : addressed ? 5 : rec.op_space == "csp-actions" ? 4 : 3;
     if (rec.op_space == "csp-actions") m["ops"] = "csp-actions";
     m["level"] = rec.level;
     m["device"] = rec.device;
@@ -254,6 +277,7 @@ void write_tflow(const TileFlowRecord& rec, const std::string& dir) {
     m["makespan"] = rec.makespan;
     m["foreign_slots"] = rec.foreign_slots;
     if (addressed) m["l3_banks"] = rec.l3_banks;
+    if (phases) m["l2_slots"] = rec.l2_slots;
     m["unmodelled"] = rec.unmodelled;
     json st = json::array();
     for (const Station& s : rec.stations)
@@ -333,6 +357,33 @@ void write_tflow(const TileFlowRecord& rec, const std::string& dir) {
         t.put("written", "u8", written);
         tables["op_tiles"] = write_table(t, dir);
     }
+    if (phases) {
+        Table t{"l2_residency", "l2_residency.bin", rec.l2_residency.size(), {}};
+        std::vector<std::uint32_t> tile, cf, slot, feeds;
+        std::vector<Cycle> t0, t1;
+        for (const L2Residency& r : rec.l2_residency) {
+            tile.push_back(r.tile); cf.push_back(r.cf); slot.push_back(r.slot);
+            t0.push_back(r.t0); t1.push_back(r.t1); feeds.push_back(r.feeds);
+        }
+        t.put("tile", "u32", tile); t.put("cf", "u32", cf); t.put("slot", "u32", slot);
+        t.put("t0", "f64", times(t0)); t.put("t1", "f64", times(t1)); t.put("feeds", "u32", feeds);
+        tables["l2_residency"] = write_table(t, dir);
+    }
+    if (phases) {
+        Table t{"chain", "chain.bin", rec.chains.size(), {}};
+        std::vector<std::uint32_t> tile, station, rows, cols, calls;
+        std::vector<Cycle> in0, front, in1, last, out1;
+        for (const Chain& c : rec.chains) {
+            tile.push_back(c.tile); station.push_back(c.station); rows.push_back(c.rows); cols.push_back(c.cols);
+            calls.push_back(c.calls); in0.push_back(c.in0); front.push_back(c.front); in1.push_back(c.in1);
+            last.push_back(c.last); out1.push_back(c.out1);
+        }
+        t.put("tile", "u32", tile); t.put("station", "u32", station); t.put("rows", "u32", rows);
+        t.put("cols", "u32", cols); t.put("calls", "u32", calls); t.put("in0", "f64", times(in0));
+        t.put("front", "f64", times(front)); t.put("in1", "f64", times(in1)); t.put("last", "f64", times(last));
+        t.put("out1", "f64", times(out1));
+        tables["chain"] = write_table(t, dir);
+    }
     m["tables"] = tables;
 
     std::ofstream out(dir + "/manifest.json", std::ios::binary);
@@ -360,8 +411,8 @@ TileFlowRecord read_tflow(const std::string& dir) {
         throw RecordError("record: a version-2 bundle records writeback as a DMA read (hop 5 = "
                           "dma:l3->dram); re-record it with this build's kpu-run --tflow");
     const int version = m.value("version", 0);
-    if (version < 3 || version > 5)
-        throw RecordError("record: version " + std::to_string(version) + " is not one this build reads (3, 4, 5)");
+    if (version < 3 || version > 6)
+        throw RecordError("record: version " + std::to_string(version) + " is not one this build reads (3, 4, 5, 6)");
     TileFlowRecord rec;
     if (version >= 4) {
         if (m.value("ops", "") != "csp-actions")
@@ -369,11 +420,18 @@ TileFlowRecord read_tflow(const std::string& dir) {
                               " bundle must say what its ops are (\"ops\": \"csp-actions\")");
         rec.op_space = "csp-actions";
     }
-    if (version == 5) {
+    if (version >= 5) {
+        const std::string v = std::to_string(version);
         if (!m.contains("l3_banks") || !m.at("l3_banks").is_number_unsigned())
-            throw RecordError("record: a version-5 bundle must say its L3 banks (l3_banks)");
+            throw RecordError("record: a version-" + v + " bundle must say its L3 banks (l3_banks)");
         rec.l3_banks = m.at("l3_banks").get<std::uint32_t>();
-        if (rec.l3_banks == 0) throw RecordError("record: a version-5 bundle needs l3_banks >= 1");
+        if (rec.l3_banks == 0) throw RecordError("record: a version-" + v + " bundle needs l3_banks >= 1");
+    }
+    if (version == 6) {
+        if (!m.contains("l2_slots") || !m.at("l2_slots").is_number_unsigned())
+            throw RecordError("record: a version-6 bundle must say its L2 slots (l2_slots)");
+        rec.phases = true;
+        rec.l2_slots = m.at("l2_slots").get<std::uint32_t>();
     }
     rec.level = m.at("level").get<std::string>();
     rec.device = m.at("device").get<std::string>();
@@ -425,7 +483,7 @@ TileFlowRecord read_tflow(const std::string& dir) {
         const auto t1 = cycles(read_col<double>(t, b, "t1", "f64", n));
         const auto flags = read_col<std::uint8_t>(t, b, "flags", "u8", n);
         std::vector<std::uint32_t> l3_tile(n, kNoSlot), slot(n, kNoSlot), bank(n, kNoSlot);
-        if (version == 5) {
+        if (version >= 5) {
             l3_tile = read_col<std::uint32_t>(t, b, "l3_tile", "u32", n);
             slot = read_col<std::uint32_t>(t, b, "slot", "u32", n);
             bank = read_col<std::uint32_t>(t, b, "bank", "u32", n);
@@ -477,6 +535,35 @@ TileFlowRecord read_tflow(const std::string& dir) {
                                std::vector<std::uint32_t>(tile.begin() + offset[i], tile.begin() + offset[i + 1]),
                                std::vector<std::uint8_t>(written.begin() + offset[i], written.begin() + offset[i + 1])});
     }
+    if (version == 6) {
+        const json& t = tables.at("l2_residency");
+        const std::string b = blob_of("l2_residency");
+        const std::size_t n = t.at("rows").get<std::size_t>();
+        const auto tile = read_col<std::uint32_t>(t, b, "tile", "u32", n);
+        const auto cf = read_col<std::uint32_t>(t, b, "cf", "u32", n);
+        const auto slot = read_col<std::uint32_t>(t, b, "slot", "u32", n);
+        const auto t0 = cycles(read_col<double>(t, b, "t0", "f64", n));
+        const auto t1 = cycles(read_col<double>(t, b, "t1", "f64", n));
+        const auto feeds = read_col<std::uint32_t>(t, b, "feeds", "u32", n);
+        for (std::size_t i = 0; i < n; ++i) rec.l2_residency.push_back({tile[i], cf[i], slot[i], t0[i], t1[i], feeds[i]});
+    }
+    if (version == 6) {
+        const json& t = tables.at("chain");
+        const std::string b = blob_of("chain");
+        const std::size_t n = t.at("rows").get<std::size_t>();
+        const auto tile = read_col<std::uint32_t>(t, b, "tile", "u32", n);
+        const auto station = read_col<std::uint32_t>(t, b, "station", "u32", n);
+        const auto rows = read_col<std::uint32_t>(t, b, "rows", "u32", n);
+        const auto cols = read_col<std::uint32_t>(t, b, "cols", "u32", n);
+        const auto calls = read_col<std::uint32_t>(t, b, "calls", "u32", n);
+        const auto in0 = cycles(read_col<double>(t, b, "in0", "f64", n));
+        const auto front = cycles(read_col<double>(t, b, "front", "f64", n));
+        const auto in1 = cycles(read_col<double>(t, b, "in1", "f64", n));
+        const auto last = cycles(read_col<double>(t, b, "last", "f64", n));
+        const auto out1 = cycles(read_col<double>(t, b, "out1", "f64", n));
+        for (std::size_t i = 0; i < n; ++i)
+            rec.chains.push_back({tile[i], station[i], rows[i], cols[i], calls[i], in0[i], front[i], in1[i], last[i], out1[i]});
+    }
     // Every index points into its table, so a consumer (the occupancy sweep, the viewer) can
     // index without checking -- the checks are here, once, at the trust boundary.
     auto in = [](std::uint32_t i, std::size_t n, const char* what) {
@@ -497,6 +584,20 @@ TileFlowRecord read_tflow(const std::string& dir) {
     }
     for (const Compute& c : rec.computes) { in(c.op, rec.ops.size(), "op"); in(c.station, rec.stations.size(), "station"); }
     for (const Op& o : rec.ops) for (std::uint32_t t : o.tiles) in(t, rec.tiles.size(), "tile");
+    // Version 6: every staged copy's slot is one of the program's L2 slots, and every chain runs on
+    // a compute tile.
+    for (const L2Residency& r : rec.l2_residency) {
+        in(r.tile, rec.tiles.size(), "tile");
+        if (r.slot >= rec.l2_slots)
+            throw RecordError("record: a staged copy holds L2 slot " + std::to_string(r.slot) + " of " +
+                              std::to_string(rec.l2_slots));
+    }
+    for (const Chain& c : rec.chains) {
+        in(c.tile, rec.tiles.size(), "tile");
+        in(c.station, rec.stations.size(), "station");
+        if (rec.stations[c.station].kind != "cf")
+            throw RecordError("record: a chain runs on " + rec.stations[c.station].name + ", not a compute tile");
+    }
     return rec;
 }
 

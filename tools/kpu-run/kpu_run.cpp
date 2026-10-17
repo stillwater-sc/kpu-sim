@@ -378,7 +378,13 @@ int run_csp_program(const std::vector<std::string>& a, const std::string& path) 
         if (o.level == ExecutionLevel::BlockSequential) {
             std::cout << "        L3    peak " << o.peak_l3 << " of " << ast->l3 << " (in time), credit stalls "
                       << o.credit_stalls << ", slot-bound " << o.slot_bound << " (" << o.slot_wait_cycles
-                      << " cycles)\n        busy ";
+                      << " cycles)\n";
+            // L2 staging's credits (docs/plans/l2-reuse-and-fabric-pipeline-view.md step 4).
+            if (ast->l2 > 0)
+                std::cout << "        L2    peak " << o.peak_l2 << " of " << ast->l2 << " staged (in time), "
+                          << o.l2_slots.size() << " stagings, slot-bound " << o.l2_bound << " (" << o.l2_wait_cycles
+                          << " cycles)\n";
+            std::cout << "        busy ";
             for (const auto& [p, b] : o.busy)
                 std::cout << " " << p << " " << b << "/" << (o.lanes.count(p) ? o.lanes.at(p) : 0);
             std::cout << "   (lane-cycles/lanes)   UNCALIBRATED\n";
@@ -400,8 +406,9 @@ int run_csp_program(const std::vector<std::string>& a, const std::string& path) 
         for (const auto& u : o.unmodelled) std::cout << "        unmodelled: " << u << "\n";
     }
 
-    // --tflow: the tile-flow record (version 5) of the program's L-T1 run (step 4b; its residencies
-    // carry their L3 address since l3-placement-at-lb step 5b).
+    // --tflow: the tile-flow record (version 6) of the program's L-T1 run (step 4b; its residencies
+    // carry their L3 address since l3-placement-at-lb step 5b, and its staged L2 copies and fabric
+    // chains since l2-reuse-and-fabric-pipeline-view step 4).
     if (!tflow_path.empty()) {
         const CspLevelOutcome* lt1 = nullptr;
         for (const auto& o : res.levels)
@@ -415,8 +422,9 @@ int run_csp_program(const std::vector<std::string>& a, const std::string& path) 
             record::write_tflow(rec, tflow_path);
             std::cout << "wrote  " << tflow_path << "  (" << rec.residency.size() << " residencies, "
                       << rec.transits.size() << " transits, " << rec.computes.size()
-                      << " computes from L-T1; ops are the program's actions, residencies at their L3 "
-                      << "addresses, version 5)\n";
+                      << " computes, " << rec.l2_residency.size() << " staged L2 copies, " << rec.chains.size()
+                      << " fabric chains from L-T1; ops are the program's actions, residencies at their L3 "
+                      << "addresses, version 6)\n";
         } catch (const std::exception& e) {
             std::cerr << "kpu-run: --tflow: " << e.what() << "\n";
             return 2;

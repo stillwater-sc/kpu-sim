@@ -1,7 +1,7 @@
 # L2 Reuse and the L1 + Compute-Fabric Pipeline in the Domain-Flow Debugger
 
 **Date:** 2026-10-16
-**Status:** In Progress (approved 2026-10-16: Q1-Q7 as recommended, Q3 and Q8 decided by the architect; step 1 merged #377; step 2 merged #378; step 2b merged #379; step 3 in review)
+**Status:** In Progress (approved 2026-10-16: Q1-Q7 as recommended, Q3 and Q8 decided by the architect; step 1 merged #377; step 2 merged #378; step 2b merged #379; step 3 merged #380; step 4 in review)
 
 Extends the domain-flow debugger (`docs/plans/domain-flow-debugger.md`, #363, complete) and
 follows the pattern of L3 placement (`docs/plans/l3-placement-at-lb.md`). It answers the
@@ -472,6 +472,39 @@ Each step is one PR. Steps 1 and 2 need no language change. Steps 3 and 4 depend
    - `tile_flow_record.cpp`: L2 slot rows after the L3 slot rows, and CF phase rows.
    - The tileflow viewer: versions [3..6].
    - `tflow_check.py`: TF13 (an L2 slot never holds two residencies at once).
+   - As built (2026-10-16):
+     - **L-T1.** A stage Move waits for its own L2 slot's `L2Release` (`TransactionalInterpreter::
+       L2Slot`), as a Load waits for its L3 slot. The copy is held from that credit to its
+       `L2Release`, and its Feeds are counted. The outcome carries `l2_slots`, `peak_l2`,
+       `l2_bound` and `l2_wait_cycles`, and kpu-run prints an `L2` line. A transient Move holds
+       no L2 credit.
+     - **`.tflow` v6**, written for every addressed CSP record, with two tables of its own rather
+       than rows in `residency`, so the L3 checks (TF1, TF5, TF6, TF9, TF12) are unchanged:
+       - `l2_residency`: tile, cf, slot, t0, t1, feeds;
+       - `chain`: tile, station, rows, cols, calls and the five phases;
+       - the manifest's `l2_slots`.
+
+       With `l2 > 0`, the L2 station is modelled, with the program's slots as its capacity. The
+       pyramid adds, after the L3 slot rows, one `l2_slot` row per slot and a `cf_in` and a
+       `cf_out` row per compute tile.
+     - **tflow_check.**
+       - TF13: the slot within `l2_slots`, no overlap per slot, at most `l2_slots` held, each copy
+         fed.
+       - TF14: `front`/`last` equal `in0`/`in1` plus the skew, `out1 >= last + rows`, one operand
+         stream per compute tile, and the top link.
+       - TF8 recomputes the new rows from the raw tables.
+       - New self-test: `test_tflow_check_v6.py`.
+     - **The viewer** reads versions 3-6. It shows the L2 slot rows with each copy's Feeds and the
+       compute-fabric rows with each chain's phase, and has an L2-reuse diagnostic.
+   - Measured: the 512 staged matmul on kpu_s1, the step-3 program.
+     - Makespan is unchanged at 106,622 cycles. Peak L2 is 8 of 8, over 64 stagings.
+     - The L2 credit never decided a stage Move's start (`l2_bound` 0). The program releases a
+       row's copies before it stages the next row, and the block mover is in order, so the next
+       stage Move issues after the last Feed of the slot's previous copy anyway. The credit holds,
+       and binds only when a program stages faster than it feeds.
+     - The fabric rows show the step-3 finding directly: 64 chains, operand streams busy for
+       61,440 cycles, a mean 682-cycle gap between chains, and one chain whose results overlap the
+       next chain's operands.
 
 L-CA's L2 credits join L3's in placement step 6. That is out of scope here.
 
