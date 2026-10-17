@@ -303,7 +303,9 @@ inline void apply(TileProgram& prog, const TileOp& op, TileKernelState& st) {
         case TileOpKind::L3Writeback:
         case TileOpKind::L3Release:
         case TileOpKind::L3Inherit:
-        case TileOpKind::L3Retain:      break;   // placement: the reference replays it (tile_program_reference.hpp)
+        case TileOpKind::L3Retain:
+        case TileOpKind::L2Stage:
+        case TileOpKind::L2Release:     break;   // placement: the reference replays it (tile_program_reference.hpp)
     }
 }
 

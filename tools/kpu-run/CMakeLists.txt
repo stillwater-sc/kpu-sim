@@ -474,10 +474,27 @@ if(KPU_BUILD_TESTS)
         add_test(NAME dflow_check_reference
             COMMAND ${KPU_PYTHON3} ${_dflow_check} ${CMAKE_CURRENT_BINARY_DIR}/csp_reference.dflow)
         set_tests_properties(dflow_check_reference PROPERTIES FIXTURES_REQUIRED dflow_reference)
+        # L2 staging (l2-reuse-and-fabric-pipeline-view.md step 3): kpu-csp-gen --stage-a, recorded
+        # with its L-T1 overlay and checked (S1-S4), and read by the viewer.
+        add_test(NAME csp_gen_dflow_staged
+            COMMAND $<TARGET_FILE:csp-gen> --algo matmul --size 256 --tile 64 --l3 17 --stage-a
+                    -o ${CMAKE_CURRENT_BINARY_DIR}/dflow_staged.csp)
+        add_test(NAME kpu_run_csp_dflow_staged
+            COMMAND run --program ${CMAKE_CURRENT_BINARY_DIR}/dflow_staged.csp
+                    --deploy ${_deploy}/kpu_s1.json --level block-sequential
+                    --dflow ${CMAKE_CURRENT_BINARY_DIR}/csp_staged.dflow
+                    --dflow-values A[1,0],A[1,2],C[1,1])
+        add_test(NAME dflow_check_staged
+            COMMAND ${KPU_PYTHON3} ${_dflow_check} ${CMAKE_CURRENT_BINARY_DIR}/csp_staged.dflow)
+        set_tests_properties(csp_gen_dflow_staged PROPERTIES FIXTURES_SETUP dflow_staged_csp)
+        set_tests_properties(kpu_run_csp_dflow_staged PROPERTIES
+            FIXTURES_REQUIRED dflow_staged_csp FIXTURES_SETUP dflow_staged)
+        set_tests_properties(dflow_check_staged PROPERTIES FIXTURES_REQUIRED dflow_staged)
         add_test(NAME dflow_check_selftest
             COMMAND ${KPU_PYTHON3} ${CMAKE_SOURCE_DIR}/tools/trace/test_dflow_check.py
-                    ${CMAKE_CURRENT_BINARY_DIR}/csp_linear_64_t16_relu.dflow)
-        set_tests_properties(dflow_check_selftest PROPERTIES FIXTURES_REQUIRED dflow_linear_64_t16_relu)
+                    ${CMAKE_CURRENT_BINARY_DIR}/csp_linear_64_t16_relu.dflow
+                    ${CMAKE_CURRENT_BINARY_DIR}/csp_staged.dflow)
+        set_tests_properties(dflow_check_selftest PROPERTIES FIXTURES_REQUIRED "dflow_linear_64_t16_relu;dflow_staged")
         # The L-T1 overlay's slot waits (step 5): a stream that reuses its slots early.
         add_test(NAME kpu_run_csp_dflow_streamed
             COMMAND ${CMAKE_COMMAND}
@@ -510,12 +527,14 @@ if(KPU_BUILD_TESTS)
                     ${CMAKE_CURRENT_BINARY_DIR}/csp_lu_64_t16.dflow
                     ${CMAKE_CURRENT_BINARY_DIR}/csp_cut.dflow
                     ${CMAKE_CURRENT_BINARY_DIR}/csp_linear_64_t16_relu.dflow
-                    ${CMAKE_CURRENT_BINARY_DIR}/csp_streamed.dflow)
+                    ${CMAKE_CURRENT_BINARY_DIR}/csp_streamed.dflow
+                    ${CMAKE_CURRENT_BINARY_DIR}/csp_staged.dflow)
         set_tests_properties(domainflow_viewer PROPERTIES FIXTURES_REQUIRED
-            "dflow_reference;dflow_matmul_relu_retain_32_t16;dflow_lu_64_t16;dflow_cut;dflow_linear_64_t16_relu;dflow_streamed")
+            "dflow_reference;dflow_matmul_relu_retain_32_t16;dflow_lu_64_t16;dflow_cut;dflow_linear_64_t16_relu;dflow_streamed;dflow_staged")
         set_tests_properties(${_dflow_tests} kpu_run_csp_dflow_cut dflow_check_cut csp_gen_dflow_reference
             kpu_run_csp_dflow_reference dflow_check_reference dflow_check_selftest domainflow_viewer
             kpu_run_csp_dflow_values_refuses kpu_run_csp_dflow_streamed dflow_check_streamed
+            csp_gen_dflow_staged kpu_run_csp_dflow_staged dflow_check_staged
             PROPERTIES LABELS "program;domainflow;csp")
     endif()
     # Residency across operators (step 4d): the first operator of a chain retains its result

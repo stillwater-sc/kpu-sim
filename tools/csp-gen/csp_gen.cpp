@@ -43,6 +43,8 @@ R"(kpu-csp-gen -- write a CSP program: an operator's canonical schedule, as .csp
                                 a linear epilogue's placement is checked against
                                 (one of --l3, --target is required; --l3 overrides the spec's)
   --orient <col|row>            matmul, linear: which panel is outer   (default col)
+  --stage-a                     matmul: stage A's row panel in L2 for the loop over B's
+                                panels (the row schedule; declares l2 = tiles per panel)
   --act <relu|gelu|silu|atan>   linear: the activation               (default relu)
   --place <fabric|str.drain|bm.egress|unfused>
                                 linear: where the epilogue runs      (default fabric)
@@ -68,6 +70,11 @@ int main(int argc, char** argv) {
             return 0;
         }
         if (k.rfind("-", 0) != 0) return usage("unexpected argument '" + k + "'");
+        if (k == "--stage-a") {                  // the one option without a value
+            if (a.count(k)) return usage(k + " given twice");
+            a[k] = "";
+            continue;
+        }
         // No option takes a value that begins with '-': the next token being another option
         // means this one has no value (`-o --help` must not write a file named "--help").
         if (i + 1 >= argc || argv[i + 1][0] == '-') return usage(k + ": missing value");
@@ -76,7 +83,7 @@ int main(int argc, char** argv) {
     }
     for (const auto& [k, v] : a)
         if (k != "--algo" && k != "--size" && k != "--tile" && k != "--l3" && k != "--target" && k != "--orient" &&
-            k != "--act" && k != "--place" && k != "-o")
+            k != "--act" && k != "--place" && k != "--stage-a" && k != "-o")
             return usage("unknown option '" + k + "'");
     for (const char* k : {"--algo", "--size", "--tile"})
         if (!a.count(k)) return usage(std::string(k) + " is required");
@@ -96,6 +103,11 @@ int main(int argc, char** argv) {
     o.size = static_cast<sw::kpu::program::Dim>(size);
     o.tile = static_cast<sw::kpu::program::Dim>(tile);
     if (a.count("--orient")) o.orient = a["--orient"];
+    if (a.count("--stage-a")) {
+        if (o.algo != "matmul") return usage("--stage-a is matmul's; --algo is '" + o.algo + "'");
+        o.stage_a = true;
+        if (!a.count("--orient")) o.orient = "row";   // A's panel outer: the schedule staging needs
+    }
     if (a.count("--place")) o.place = a["--place"];
     if (a.count("--act") && !sw::kpu::program::parse_activation(a["--act"], o.act))
         return usage("--act '" + a["--act"] + "' (relu | gelu | silu | atan)");

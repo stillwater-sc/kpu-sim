@@ -9,6 +9,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **L2 staging** (`docs/plans/l2-reuse-and-fabric-pipeline-view.md` step 3; opset 1.3, `.dflow`
+  version 5).
+  - Language: `machine flat(l3 = N, l2 = M)` and `stage A[i, :] in l2 { ... }`.
+    - Each resident tile of the block is copied into an L2 slot that the walker allocates, with one
+      Move.
+    - Calls inside the block feed the copy: a Feed and no Move.
+    - The block's end emits one `L2Release` per tile, which frees its slot.
+    - The tile's L3 slot stays live for the block. Releasing, retaining or writing it there is
+      refused, and the validator checks this symbolically.
+  - L-B executes the L2 addresses. It refuses, by name:
+    - a stage into a live slot or outside `l2`;
+    - a tile staged twice;
+    - a Feed of a slot that does not hold its tile;
+    - a program that ends with a tile staged.
+  - The trace records `L2_STAGE` and `L2_RELEASE` (opset 1.3), and its replay checks them.
+  - L-T1 times a staged Feed after its stage Move. L-CA runs each staged Feed as a Move from L3 plus
+    a Feed, reported as unmapped until L3 placement step 6. Values are the same at every level.
+  - The trace printer rebuilds `stage` blocks.
+  - `.dflow` v5 records each staging (slot, life, Feeds) and each step's L2 address. `dflow_check`
+    adds S1-S4.
+  - The domain-flow viewer shows each staged copy's slot and reuse count (`s2 3/8`).
+  - `kpu-csp-gen --stage-a` stages A's row panel. On the kpu_s1 512 matmul, L-T1 goes from
+    157,950 to 106,622 cycles, and block-mover busy time from 147,456 to 90,112.
+
 - **`store C[i, j] late;`** (`docs/plans/l2-reuse-and-fabric-pipeline-view.md` step 2b).
   - An accumulator's store whose Drain, Writeback, Store and Release the walker emits after the
     next accumulator's calls. The last one leaves at the end of the program. A statement that

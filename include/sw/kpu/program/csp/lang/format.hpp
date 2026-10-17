@@ -119,6 +119,11 @@ inline void stmt(std::ostringstream& o, const Stmt& s, int depth) {
         case Stmt::Kind::Retain:
             o << in << "retain " << refs_text(s.tiles) << context_text(s.context) << ";\n";
             return;
+        case Stmt::Kind::Stage:
+            o << in << "stage " << refs_text(s.tiles) << " in l2 {\n";
+            stmts(o, s.body, depth + 1);
+            o << in << "}\n";
+            return;
         case Stmt::Kind::Acc:
             o << in << "acc " << ref_text(s.out) << " in fabric {\n";
             stmts(o, s.body, depth + 1);
@@ -159,6 +164,7 @@ inline std::string format(const Program& p) {
     // Defaults are not printed, so a program that does not name them keeps its text and digest.
     if (p.banks != 1) o << ", banks = " << p.banks;
     if (p.place != "fifo") o << ", place = " << p.place;
+    if (p.l2 != 0) o << ", l2 = " << p.l2;
     o << ") {\n";
     for (const Decl& d : p.decls) {
         if (d.is_vector)

@@ -43,7 +43,7 @@ void write_dflow(const DFR& rec, const std::string& dir) {
     m["level"] = "L-B";
     m["run_id"] = rec.run_id;
     m["program"] = json{{"name", rec.program_name}, {"text", rec.program_text}};
-    m["machine"] = json{{"kind", "flat"}, {"l3", rec.l3}, {"banks", rec.banks}, {"place", rec.place}};
+    m["machine"] = json{{"kind", "flat"}, {"l3", rec.l3}, {"banks", rec.banks}, {"place", rec.place}, {"l2", rec.l2}};
     json chans = json::array();
     for (std::size_t c = 0; c < csp::kChannels; ++c) {
         // Only L3's capacity is declared by a level-1 program; the others are unbounded at L-B.
@@ -53,7 +53,7 @@ void write_dflow(const DFR& rec, const std::string& dir) {
     m["channels"] = chans;
     m["processes"] = json::array({"dma", "bm", "str", "cf"});
     json kinds = json::array();
-    for (int k = 0; k <= static_cast<int>(csp::Action::Kind::Retain); ++k)
+    for (int k = 0; k <= static_cast<int>(csp::Action::Kind::L2Release); ++k)
         kinds.push_back(csp::to_string(static_cast<csp::Action::Kind>(k)));
     m["kinds"] = kinds;
     json ops = json::array();
@@ -67,7 +67,7 @@ void write_dflow(const DFR& rec, const std::string& dir) {
     m["cut"] = rec.cut;
     m["refusal"] = rec.refusal ? json{{"action", rec.refusal->action}, {"what", rec.refusal->what}} : json(nullptr);
     m["not_modelled"] = json::array({"time: L-B has no time; the axis is the step (action)",
-                                     "L2 and fabric capacity: unbounded at L-B (a level-1 program declares only L3)",
+                                     "L2 and fabric capacity for tiles in transit: unbounded at L-B (a program declares L3, and the L2 slots it stages into)",
                                      "tile values between the recorded actions: a snapshot is taken only where an action leaves a selected tile"});
     {
         json v = json::object();
@@ -96,7 +96,22 @@ void write_dflow(const DFR& rec, const std::string& dir) {
         t.put("from", "u8", col<std::uint8_t>(rec.steps, [](const DFR::Step& s) { return s.from; }));
         t.put("to", "u8", col<std::uint8_t>(rec.steps, [](const DFR::Step& s) { return s.to; }));
         t.put("flags", "u8", col<std::uint8_t>(rec.steps, [](const DFR::Step& s) { return s.flags; }));
+        t.put("staging", "u64", col<std::uint64_t>(rec.steps, [](const DFR::Step& s) { return s.staging; }));
+        t.put("l2_cf", "u32", col<std::uint32_t>(rec.steps, [](const DFR::Step& s) { return s.l2_cf; }));
+        t.put("l2_slot", "u32", col<std::uint32_t>(rec.steps, [](const DFR::Step& s) { return s.l2_slot; }));
         tables["steps"] = write_table(t, dir);
+    }
+    {
+        using St = DFR::Staging;
+        Table t{"l2_staging", "l2_staging.bin", rec.stagings.size(), {}};
+        t.put("open", "u64", col<std::uint64_t>(rec.stagings, [](const St& x) { return x.open; }));
+        t.put("close", "u64", col<std::uint64_t>(rec.stagings, [](const St& x) { return x.close; }));
+        t.put("residency", "u64", col<std::uint64_t>(rec.stagings, [](const St& x) { return x.residency; }));
+        t.put("feeds", "u64", col<std::uint64_t>(rec.stagings, [](const St& x) { return x.feeds; }));
+        t.put("tile", "u32", col<std::uint32_t>(rec.stagings, [](const St& x) { return x.tile; }));
+        t.put("cf", "u32", col<std::uint32_t>(rec.stagings, [](const St& x) { return x.cf; }));
+        t.put("slot", "u32", col<std::uint32_t>(rec.stagings, [](const St& x) { return x.slot; }));
+        tables["l2_staging"] = write_table(t, dir);
     }
     {
         Table t{"tiles", "tiles.bin", rec.tiles.size(), {}};
@@ -260,6 +275,7 @@ DFR read_dflow(const std::string& dir) {
         rec.l3 = m.at("machine").at("l3").get<std::uint32_t>();
         rec.banks = m.at("machine").at("banks").get<std::uint32_t>();
         rec.place = m.at("machine").at("place").get<std::string>();
+        if (version >= 5) rec.l2 = m.at("machine").at("l2").get<std::uint32_t>();
         for (const json& o : m.at("operands"))
             rec.operands.push_back({o.at("name").get<std::string>(), o.at("rows").get<std::uint64_t>(),
                                     o.at("cols").get<std::uint64_t>(), o.at("tile_rows").get<std::uint64_t>(),
@@ -313,6 +329,28 @@ DFR read_dflow(const std::string& dir) {
                 s.to = to[i];
                 s.flags = flags[i];
             }
+            if (version >= 5) {
+                auto staging = read_col<std::uint64_t>(t, blob, "staging", "u64", n);
+                auto l2_cf = read_col<std::uint32_t>(t, blob, "l2_cf", "u32", n);
+                auto l2_slot = read_col<std::uint32_t>(t, blob, "l2_slot", "u32", n);
+                for (std::size_t i = 0; i < n; ++i) {
+                    rec.steps[i].staging = staging[i];
+                    rec.steps[i].l2_cf = l2_cf[i];
+                    rec.steps[i].l2_slot = l2_slot[i];
+                }
+            }
+        }
+        if (version >= 5) {
+            auto [t, blob] = table("l2_staging", n);
+            auto open = read_col<std::uint64_t>(t, blob, "open", "u64", n);
+            auto close = read_col<std::uint64_t>(t, blob, "close", "u64", n);
+            auto residency = read_col<std::uint64_t>(t, blob, "residency", "u64", n);
+            auto feeds = read_col<std::uint64_t>(t, blob, "feeds", "u64", n);
+            auto tile = read_col<std::uint32_t>(t, blob, "tile", "u32", n);
+            auto cf = read_col<std::uint32_t>(t, blob, "cf", "u32", n);
+            auto slot = read_col<std::uint32_t>(t, blob, "slot", "u32", n);
+            for (std::size_t i = 0; i < n; ++i)
+                rec.stagings.push_back({tile[i], cf[i], slot[i], open[i], close[i], residency[i], feeds[i]});
         }
         {
             auto [t, blob] = table("tiles", n);

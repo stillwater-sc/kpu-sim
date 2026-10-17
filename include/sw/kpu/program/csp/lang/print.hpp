@@ -21,6 +21,7 @@
 #include <algorithm>
 #include <iomanip>
 #include <limits>
+#include <map>
 #include <set>
 #include <sstream>
 #include <stdexcept>
@@ -75,6 +76,7 @@ inline std::string print(const CspProgram& p) {
       << p.channel(Chan::L3).capacity;
     if (p.l3_banks != 1) o << ", banks = " << p.l3_banks;
     if (p.place != "fifo") o << ", place = " << p.place;
+    if (p.l2_slots) o << ", l2 = " << p.l2_slots;
     o << ") {\n";
     for (const auto& name : p.source.operand_order()) {
         const TensorOperand& t = p.source.operand(name);
@@ -105,6 +107,10 @@ inline std::string print(const CspProgram& p) {
         }
     }
     std::set<std::string> done;                          // open accumulators past their last call
+    // A stage block is on the same stack as the accumulators, keyed "stage #n", with the L2Releases
+    // that close it still to come.
+    std::map<std::string, std::size_t> stage_left;
+    std::size_t stages = 0;
     auto close_finished = [&]() {
         while (!open.empty() && done.count(open.back())) {
             done.erase(open.back());
@@ -137,6 +143,30 @@ inline std::string print(const CspProgram& p) {
             case K::Retain: o << indent() << "retain " << text(a.tile) << ";\n"; break;
             case K::Store: o << indent() << "store " << text(a.tile) << ";\n"; break;
             case K::Move:
+                if (a.l2) {                              // a stage block opens: its tiles' Moves, together
+                    std::string tiles;
+                    std::size_t n = 0;
+                    for (; i + n < p.actions.size() && p.actions[i + n].kind == K::Move && p.actions[i + n].l2; ++n)
+                        tiles += (n ? ", " : "") + text(p.actions[i + n].tile);
+                    o << indent() << "stage " << tiles << " in l2 {\n";
+                    const std::string key = "stage #" + std::to_string(stages++);
+                    open.push_back(key);
+                    stage_left[key] = n;
+                    i += n - 1;
+                }
+                break;
+            case K::L2Release: {
+                const auto it = open.empty() ? stage_left.end() : stage_left.find(open.back());
+                if (it == stage_left.end())
+                    throw PrintError("csp print: action " + std::to_string(i) + " ends the staging of " +
+                                     a.tile.to_string() + " inside a block that is not its stage block");
+                if (--it->second == 0) {
+                    stage_left.erase(it);
+                    open.pop_back();
+                    o << indent() << "}\n";
+                }
+                break;
+            }
             case K::Feed:
                 break;                                   // a call's deliveries: implied
             case K::Call: {

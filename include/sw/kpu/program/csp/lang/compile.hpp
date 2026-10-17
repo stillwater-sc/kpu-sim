@@ -45,6 +45,7 @@ inline CspProgram compile(const Program& ast, const Target* target = nullptr) {
     p.name = ast.name;
     p.l3_banks = static_cast<std::uint32_t>(ast.banks);
     p.place = ast.place;
+    p.l2_slots = static_cast<std::uint32_t>(ast.l2);
     p.processes = {{ProcessKind::Dma, "dma", {}}, {ProcessKind::BlockMover, "bm", {}},
                    {ProcessKind::Streamer, "str", {}}, {ProcessKind::Compute, "cf", {}}};
     TraceSink sink(p);

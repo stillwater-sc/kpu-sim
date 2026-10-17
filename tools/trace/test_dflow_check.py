@@ -4,10 +4,11 @@ Self-test for dflow_check.py (docs/plans/domain-flow-debugger.md step 2): every 
 FAIL on a bundle that breaks it, and the clean bundle must pass. A checker that passes everything
 is not a checker.
 
-Usage: python3 test_dflow_check.py <clean-bundle.dflow>
+Usage: python3 test_dflow_check.py <clean-bundle.dflow> <staged-bundle.dflow>
 
 The clean bundle must be version 3 with step snapshots and an L-T1 overlay (kpu-run --level
-block-sequential --dflow-values all), so the value and overlay invariants are exercised too.
+block-sequential --dflow-values all), so the value and overlay invariants are exercised too. The
+staged bundle is a run of a program that stages tiles in L2 (kpu-csp-gen --stage-a), for S1-S4.
 
 SPDX-License-Identifier: MIT
 Copyright (c) 2024-2025 Stillwater Supercomputing, Inc.
@@ -25,6 +26,7 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 CHECK = HERE / "dflow_check.py"
 BUNDLE = None
+STAGED = None
 FMT = {"u8": ("<B", 1), "u16": ("<H", 2), "u32": ("<I", 4), "u64": ("<Q", 8), "i64": ("<q", 8), "f32": ("<f", 4),
        "f64": ("<d", 8)}
 OPENS, CLOSES = 1, 2
@@ -313,7 +315,7 @@ class DflowCheckSelfTest(unittest.TestCase):
         return self.b.find("lt1_legs", pred)
 
     def test_overlay_is_exercised(self):
-        self.assertEqual(self.b.manifest["version"], 4)
+        self.assertEqual(self.b.manifest["version"], 5)
         self.assertIsNotNone(self.b.manifest["lt1"])
         self.assertGreater(self.b.rows("lt1_legs"), self.b.rows("steps"))     # a Store has two legs
 
@@ -460,9 +462,70 @@ class DflowCheckSelfTest(unittest.TestCase):
         self.assertUnreadable()
 
 
+class StagedSelfTest(unittest.TestCase):
+    """S1-S4 (version 5: L2 staging), on a run that stages A's row panel."""
+
+    def setUp(self):
+        self.b = Bundle(STAGED)
+
+    def tearDown(self):
+        self.b.close()
+
+    assertFails = DflowCheckSelfTest.assertFails
+
+    def staged_feed(self):
+        return self.b.find("steps", lambda i: self.b.get("steps", "kind", i) == 4 and
+                           self.b.get("steps", "staging", i) != NONE64)
+
+    def test_s_clean_staged_bundle_passes(self):
+        code, report = run(self.b.dir)
+        self.assertEqual(code, 0, report and report["violations"][:5])
+
+    def test_s_the_run_stages(self):
+        # Without stagings every S check passes vacuously.
+        self.assertGreater(self.b.manifest["machine"]["l2"], 1)
+        self.assertGreater(self.b.rows("l2_staging"), 1)
+        self.assertGreater(self.b.get("l2_staging", "feeds", 0), 1)
+
+    def test_s1_two_stagings_in_one_slot(self):
+        self.b.set("l2_staging", "slot", 1, self.b.get("l2_staging", "slot", 0))
+        self.assertFails("S1", "which staging 0 holds")
+
+    def test_s1_slot_outside_the_l2(self):
+        self.b.manifest["machine"]["l2"] = 1
+        self.b.save_manifest()
+        self.assertFails("S1", "outside the program's l2")
+
+    def test_s2_feed_names_another_slot(self):
+        i = self.staged_feed()
+        self.b.set("steps", "l2_slot", i, self.b.get("steps", "l2_slot", i) + 1)
+        self.assertFails("S2", "its staging")
+
+    def test_s2_feed_outside_the_staging(self):
+        i = self.staged_feed()
+        g = self.b.get("steps", "staging", i)
+        self.b.set("l2_staging", "close", g, self.b.get("l2_staging", "open", g) + 1)
+        self.assertFails("S2", "outside its life")
+
+    def test_s3_reuse_count_disagrees(self):
+        self.b.set("l2_staging", "feeds", 0, self.b.get("l2_staging", "feeds", 0) + 1)
+        self.assertFails("S3", "feeds")
+
+    def test_s4_staging_never_ends(self):
+        self.b.set("l2_staging", "close", 0, NONE64)
+        self.assertFails("S4", "never ends")
+
+    def test_s_malformed_l2_is_unreadable(self):
+        self.b.manifest["machine"]["l2"] = "4"
+        self.b.save_manifest()
+        code, _ = run(self.b.dir)
+        self.assertEqual(code, 2)
+
+
 if __name__ == "__main__":
-    if len(sys.argv) < 2:
+    if len(sys.argv) < 3:
         print(__doc__)
         sys.exit(2)
     BUNDLE = Path(sys.argv.pop(1)).resolve()
+    STAGED = Path(sys.argv.pop(1)).resolve()
     unittest.main()

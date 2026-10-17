@@ -25,6 +25,13 @@
 // movers then issue the next chain's Loads and Moves before this chain's results leave, so the
 // chains pipeline on the fabric.
 //
+// L2 staging (docs/plans/l2-reuse-and-fabric-pipeline-view.md step 3): `stage T in l2 { ... }`
+// copies each resident tile of T into an L2 slot the walker allocates (the lowest free one of
+// the machine clause's `l2 = N`), with one Move that carries the address. A call inside the
+// block feeds the staged copy -- a Feed with the address, and no Move -- and the block's end
+// emits an L2Release per tile, which frees its slot. The L3 residency stays live for the whole
+// block (decided 2026-10-16): releasing a staged tile, or writing it, is refused there.
+//
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2024-2025 Stillwater Supercomputing, Inc.
 // ============================================================================
@@ -94,6 +101,7 @@ struct Emission {
     bool opens = false;             // the action opens its residency
     bool loaded = false;            //   ... by a Load (else by a result's Writeback)
     bool pinned = false;            //   ... in a slot the program named (`@ slots(...)`)
+    bool opens_staging = false;     // a Move that stages its tile in L2 (action.l2: where)
     Where where;                    // the statement and loop iteration that emitted it
 };
 
@@ -136,12 +144,14 @@ public:
         alloc_.emplace(static_cast<std::uint32_t>(cap_), static_cast<std::uint32_t>(ast_.banks), *policy);
         operands_ = declared_operands(ast_);
         for (const Decl& d : ast_.decls) if (d.is_vector) vectors_.insert(d.name);
+        l2_live_.assign(static_cast<std::size_t>(ast_.l2), false);
         frames_.push_back(Frame{&ast_.body, 0, Frame::Kind::Program, {}, 0, 0, {}});
     }
 
     const TileProgram& operands() const { return operands_; }
     std::size_t capacity() const { return cap_; }
     bool done() const { return frames_.empty(); }
+    std::size_t l2_slots() const { return l2_live_.size(); }
 
     // Execute one leaf statement or one block boundary. False when the program has ended.
     bool step() {
@@ -175,6 +185,13 @@ public:
                 while (!late_.empty() && late_.front().seq < due) flush_late();
                 return true;
             }
+            case Frame::Kind::Stage: {
+                const std::vector<std::string> keys = f.staged;
+                line_ = f.line;
+                frames_.pop_back();
+                for (const std::string& k : keys) unstage(k);
+                return true;
+            }
             case Frame::Kind::Program:
                 frames_.pop_back();
                 while (!late_.empty()) flush_late();
@@ -192,7 +209,7 @@ public:
 private:
     enum class AccState { Open, Closed, Late, Stored };
     struct Frame {
-        enum class Kind { Program, Loop, Acc };
+        enum class Kind { Program, Loop, Acc, Stage };
         const std::vector<Stmt>* body;
         std::size_t pc;
         Kind kind;
@@ -201,7 +218,9 @@ private:
         std::string acc;
         int line = 0;
         std::size_t due = 0;                               // Acc: late stores numbered below this leave at its close
+        std::vector<std::string> staged = {};              // Stage: the tiles it staged, in order
     };
+    struct Staged { L2Address at; std::size_t id; TileCoord tile; };
     struct LateStore { const Stmt* s; TileCoord y; Where where; std::size_t seq; };
     struct Live { std::size_t id; bool dirty; bool inherited = false; };
 
@@ -221,6 +240,9 @@ private:
     std::deque<LateStore> late_;                           // late stores not yet emitted, in program order
     std::size_t late_seq_ = 0;
     std::optional<Where> where_;                           // a late store's own place in the program
+    std::map<std::string, Staged> staged_;                 // tiles staged in L2 now
+    std::vector<bool> l2_live_;                            // the L2's slots (cf 0), live or free
+    std::size_t next_staging_ = 0;
     std::size_t next_residency_ = 0;
     // Placement (ADR 0004 §5): every open residency's L3 address, and who holds each live slot.
     std::optional<L3Allocator> alloc_;
@@ -289,7 +311,8 @@ private:
     }
     void emit(Action::Kind kind, const TileCoord& t, std::size_t residency = kNone, std::size_t l0 = kNone,
               const TileOp* op = nullptr, bool opens = false, bool loaded = false, bool accumulate = false,
-              std::vector<csp::Stage> context = {}) {
+              std::vector<csp::Stage> context = {}, std::optional<L2Address> l2 = std::nullopt,
+              std::size_t staging = kNone) {
         Emission e;
         e.action.kind = kind;
         e.action.tile = t;
@@ -314,6 +337,21 @@ private:
             l3.outputs = {t};
             l3.l3 = pl->second;
             e.action.l0_op = sink_.l0(l3);
+        }
+        if (l2) {
+            e.action.l2 = l2;
+            e.action.staging = staging;
+            e.opens_staging = kind == Action::Kind::Move;
+            if (kind == Action::Kind::Move || kind == Action::Kind::L2Release) {
+                // The trace records the L2 transaction after the L3 one: out of the L3 slot,
+                // into the L2 slot.
+                TileOp l2op;
+                l2op.kind = kind == Action::Kind::Move ? TileOpKind::L2Stage : TileOpKind::L2Release;
+                l2op.outputs = {t};
+                l2op.l2 = *l2;
+                const std::size_t at = sink_.l0(l2op);
+                if (kind == Action::Kind::L2Release) e.action.l0_op = at;
+            }
         }
         sink_.emit(e);
         // A residency's slot is free once its Release is out; a Retain keeps it past the program.
@@ -502,6 +540,9 @@ private:
                         const std::string k = t.to_string();
                         auto it = resident_.find(k);
                         if (it == resident_.end()) throw CompileError(s.line, "release " + k + ": it is not resident");
+                        if (staged_.count(k))
+                            throw CompileError(s.line, "release " + k + ": it is staged in L2, and its L3 slot stays live "
+                                                       "until its stage block ends");
                         if (it->second.dirty)
                             throw CompileError(s.line, "release " + k + ": a call wrote it and it is not stored; store it first");
                         emit(Action::Kind::Release, t, it->second.id);
@@ -536,6 +577,7 @@ private:
                 for (const TileRef& r : s.tiles)
                     for (const TileCoord& t : expand(r)) retain(s, t);
                 break;
+            case Stmt::Kind::Stage: stage(s); break;
             case Stmt::Kind::Call: call(s); break;
             case Stmt::Kind::Store:
                 for (const TileCoord& y : expand(s.out)) store(s, y);
@@ -553,8 +595,54 @@ private:
         auto it = resident_.find(k);
         if (it == resident_.end())
             throw CompileError(line, "call " + fn + " reads " + k + ", which is not resident; make it resident first");
+        if (auto st = staged_.find(k); st != staged_.end()) {
+            // Staged: the copy in L2 is fed, and stays.
+            emit(Action::Kind::Feed, t, kNone, feed ? sink_.l0(*feed) : kNone, nullptr, false, false, false, {},
+                 st->second.at, st->second.id);
+            return;
+        }
         emit(Action::Kind::Move, t, it->second.id);
         emit(Action::Kind::Feed, t, kNone, feed ? sink_.l0(*feed) : kNone);
+    }
+
+    // `stage T in l2 { ... }`: each tile of T, resident in L3, copied into an L2 slot for the block.
+    void stage(const Stmt& s) {
+        if (ast_.l2 <= 0)
+            throw CompileError(s.line, "stage ... in l2: the machine clause declares no L2 (write `l2 = N`)");
+        std::vector<std::string> keys;
+        for (const TileRef& r : s.tiles)
+            for (const TileCoord& t : expand(r)) {
+                const std::string k = t.to_string();
+                auto it = resident_.find(k);
+                if (it == resident_.end())
+                    throw CompileError(s.line, "stage " + k + ": it is not resident; a stage copies a resident tile "
+                                               "from L3");
+                if (staged_.count(k)) throw CompileError(s.line, "stage " + k + ": it is already staged in L2");
+                const auto free = std::find(l2_live_.begin(), l2_live_.end(), false);
+                if (free == l2_live_.end())
+                    throw CompileError(s.line, "stage " + k + " needs an L2 slot, and all " +
+                                               std::to_string(l2_live_.size()) + " are held");
+                *free = true;
+                const L2Address at{0, static_cast<std::uint32_t>(free - l2_live_.begin())};
+                const std::size_t id = next_staging_++;
+                staged_[k] = Staged{at, id, t};
+                keys.push_back(k);
+                emit(Action::Kind::Move, t, it->second.id, kNone, nullptr, false, false, false, {}, at, id);
+            }
+        Frame f{&s.body, 0, Frame::Kind::Stage, {}, 0, 0, {}, s.line};
+        f.staged = std::move(keys);
+        frames_.push_back(std::move(f));
+    }
+    void unstage(const std::string& k) {
+        const Staged st = staged_.at(k);
+        staged_.erase(k);
+        l2_live_.at(st.at.slot) = false;
+        emit(Action::Kind::L2Release, st.tile, kNone, kNone, nullptr, false, false, false, {}, st.at, st.id);
+    }
+    void not_staged(int line, const std::string& what, const std::string& k) const {
+        if (staged_.count(k))
+            throw CompileError(line, what + " " + k + ", which is staged in L2: the staged copy would be stale; "
+                                     "write it outside the stage block");
     }
 
     static TileOpKind l3_kind(Action::Kind k) {
@@ -649,6 +737,7 @@ private:
         if (res == resident_.end())
             throw CompileError(s.line, "call " + s.fn + " writes " + yk + ", which is neither resident nor an open "
                                        "accumulator");
+        not_staged(s.line, "call " + s.fn + " writes", yk);
         std::vector<TileCoord> operands = args;
         if (std::none_of(args.begin(), args.end(), [&](const TileCoord& a) { return same(a, y); })) operands.push_back(y);
         for (const TileCoord& a : operands) deliver(a, s.line, s.fn);
@@ -751,6 +840,8 @@ private:
         }
         auto it = resident_.find(k);
         if (it == resident_.end()) throw CompileError(s.line, "retain " + k + ": it is neither resident nor an accumulator");
+        if (staged_.count(k))
+            throw CompileError(s.line, "retain " + k + ": it is staged in L2 until its stage block ends");
         if (!s.context.empty())
             throw CompileError(s.line, "retain " + k + " via ...: a resident tile stays where it is, so nothing moves it "
                                        "to run the stages on; place them on the call that writes it");
@@ -773,6 +864,21 @@ public:
         p_.actions.push_back(a);
         const std::size_t i = p_.actions.size() - 1;
         if (a.process != kNone) p_.processes[a.process].actions.push_back(i);
+        if (a.staging != kNone) {
+            if (e.opens_staging) {
+                if (a.staging != p_.stagings.size()) throw std::logic_error("csp trace: stagings must open in order");
+                Staging st;
+                st.tile = a.tile;
+                st.open = i;
+                st.residency = a.residency;
+                st.place = *a.l2;
+                p_.stagings.push_back(st);
+            } else if (a.kind == Action::Kind::Feed) {
+                ++p_.stagings.at(a.staging).feeds;
+            } else if (a.kind == Action::Kind::L2Release) {
+                p_.stagings.at(a.staging).release = i;
+            }
+        }
         if (a.residency == kNone) return;
         if (e.opens) {
             if (a.residency != p_.residencies.size())

@@ -212,5 +212,5 @@ TEST_CASE("placement: the machine clause's options, and their text", "[csp][plac
     CHECK_THAT(print(compile(named)), ContainsSubstring(", banks = 4, place = bank-spread)"));
     CHECK_THROWS_WITH(parse(with_machine(text, ", place = random")), ContainsSubstring("fifo, lowest or bank-spread"));
     CHECK_THROWS_WITH(parse(with_machine(text, ", banks = 0")), ContainsSubstring("banks must be positive"));
-    CHECK_THROWS_WITH(parse(with_machine(text, ", ways = 2")), ContainsSubstring("banks or place"));
+    CHECK_THROWS_WITH(parse(with_machine(text, ", ways = 2")), ContainsSubstring("banks, place or l2"));
 }

@@ -79,17 +79,18 @@ So this plan also builds the epilogue's operations and the vector processor that
 ```
 file       := 'csp' VERSION NL program                               -- e.g. `csp 1.0` (Q3)
 program    := 'program' NAME machine '{' decl* stmt* '}'
-machine    := 'machine' 'flat' '(' 'l3' '=' INT ')'                      -- level 1
+machine    := 'machine' 'flat' '(' 'l3' '=' INT [ ',' 'l2' '=' INT ] ')'  -- level 1 (l2: staging slots)
             | 'machine' 'grid' '(' INT 'x' INT ',' 'l3' '=' INT ')'      -- level 2
 decl       := 'tensor' NAME '[' INT ',' INT ']' 'tile' INT 'x' INT io ';'
             | 'vector' NAME '[' INT ']' 'tile' INT io ';'                 -- e.g. a bias (Q6)
 io         := 'in' | 'out' | 'inout'                                      -- (all in DRAM)
 
-stmt       := for | resident | release | acc | call | store | inherit | retain | distribute | broadcast
+stmt       := for | resident | release | acc | stage | call | store | inherit | retain | distribute | broadcast
 for        := 'for' VAR 'in' expr '..' expr '{' stmt* '}'
 resident   := 'resident' tiles ';'         -- into L3; an error if already resident
 release    := 'release' tiles ';'          -- the program's last use: the credit returns
 acc        := 'acc' tile 'in' 'fabric' '{' stmt* '}'          -- an output-stationary accumulator
+stage      := 'stage' tiles 'in' 'l2' '{' stmt* '}'           -- resident tiles copied into L2 for the block
 call       := 'call' FN '(' tiles ')' ( '->' | '+->' ) tile [ context ] ';'
                                            -- '->' writes, '+->' accumulates
 store      := 'store' tile [ 'late' ] [ context ] ';'   -- out of the fabric (or L3) to DRAM;
@@ -123,6 +124,7 @@ Comments are `//` to the end of the line. Tensor element types beyond fp32 are d
 | `acc y in fabric { ... }` | y lives in the fabric; `+->` calls into it accumulate from zero; no L3 slot | at least one call into y; y stored after the block |
 | `store y` | out of a closed `acc`: Drain, Writeback, Store, Release (an L3 slot for the writeback's moment); a resident, written tile: Store | y written and not yet stored, or inherited |
 | `store y late` | the accumulator's four actions, emitted after the NEXT `acc` block's calls, at the end of the program, or before a `resident`/`acc` that names y again (added by `l2-reuse-and-fabric-pipeline-view.md` step 2b) | y a closed `acc`; no `via` |
+| `stage X in l2 { ... }` | per tile: Move (bm) into an L2 slot the walker allocates; a call inside on X: Feed (str) of the copy, no Move; the block's end: L2Release per tile (l2 credit) (added by `l2-reuse-and-fabric-pipeline-view.md` step 3) | `l2 = N` declared; X resident; not already staged; L2 capacity; inside the block X is not released, retained or written |
 | `inherit X` | Inherit X (l3 credit, held from the start; no DMA) | at the top of the program, before any other statement; X declared `in` or `inout`; L3 capacity |
 | `retain y` | a resident tile: Retain (its credit is not returned); a closed `acc`: Drain, Writeback, Retain | y resident (as written) or a closed accumulator; inside loops, each enclosing loop variable indexes one dimension alone; the slot counts against capacity to the end |
 

@@ -63,6 +63,8 @@ public:
         std::size_t pivot_applies = 0;  // PivotApply (LASWP)
         std::size_t epilogues = 0;      // BiasAdd + Activation
         std::size_t l3_ops = 0;         // the L3 transactions (opset 1.2)
+        std::size_t l2_ops = 0;         // the L2 transactions (opset 1.3)
+        std::size_t peak_l2 = 0;        // L2 slots staged at once, as replayed
         std::size_t peak_l3 = 0;        // L3 slots tagged at once, as replayed
         std::size_t row_swaps = 0;      // total within-tile row swaps performed by GETRF
         // Row permutation produced by pivoting (LU): perm[i] = original row now at
@@ -75,6 +77,7 @@ public:
     RunSummary run(TileProgram& program) {
         state_.clear();   // reset up front so a throw mid-run can't leak stale state
         l3_.clear();
+        l2_.clear();
         retained_.clear();
         RunSummary sum;
         for (const auto& op : program.ops()) {
@@ -82,6 +85,11 @@ public:
                 place(op, sum.ops);
                 ++sum.l3_ops;
                 sum.peak_l3 = std::max(sum.peak_l3, l3_.size());
+            }
+            if (is_l2(op.kind)) {
+                stage(op, sum.ops);
+                ++sum.l2_ops;
+                sum.peak_l2 = std::max(sum.peak_l2, l2_.size());
             }
             ++sum.ops;
             switch (op.kind) {
@@ -101,6 +109,8 @@ public:
                 case TileOpKind::L3Release:
                 case TileOpKind::L3Inherit:
                 case TileOpKind::L3Retain:       break;   // replayed by place()
+                case TileOpKind::L2Stage:
+                case TileOpKind::L2Release:      break;   // replayed by stage()
             }
             apply(program, op, state_);   // the shared L0 kernels
         }
@@ -109,6 +119,8 @@ public:
             if (!retained_.count(at))
                 throw PlacementError("l0: the trace ends with " + slot.tile + " still resident at " + slot.addr +
                                      " (neither released nor retained)");
+        for (const auto& [at, slot] : l2_)
+            throw PlacementError("l0: the trace ends with " + slot.tile + " still staged at " + slot.addr);
         sum.row_swaps = state_.swaps_performed;
         sum.permutation = state_.perm;
         return sum;
@@ -133,6 +145,30 @@ private:
     using Key = std::pair<std::uint32_t, std::uint32_t>;
     std::map<Key, Tag> l3_;
     std::map<Key, bool> retained_;
+    std::map<Key, Tag> l2_;                       // (cf, slot) -> the staged tile
+
+    // One L2 transaction, checked as L-B executes it: a stage into a free slot, of a tile staged
+    // nowhere else; a release of the slot that holds it.
+    void stage(const TileOp& op, std::size_t index) {
+        const std::string where = "l0 op " + std::to_string(index) + " " + to_string(op.kind);
+        if (op.outputs.size() != 1) throw PlacementError(where + ": an L2 transaction names one tile");
+        const std::string t = op.outputs[0].to_string();
+        const std::string addr = op.l2.to_string();
+        const Key at{op.l2.cf, op.l2.slot};
+        auto it = l2_.find(at);
+        if (op.kind == TileOpKind::L2Stage) {
+            if (it != l2_.end())
+                throw PlacementError(where + " " + t + ": " + addr + " holds " + it->second.tile + ", which is live");
+            for (const auto& [k, slot] : l2_)
+                if (slot.tile == t) throw PlacementError(where + " " + t + ": " + t + " is already staged at " + slot.addr);
+            l2_[at] = Tag{t, addr};
+            return;
+        }
+        if (it == l2_.end()) throw PlacementError(where + " " + t + ": " + addr + ": the slot is free");
+        if (it->second.tile != t)
+            throw PlacementError(where + " " + t + ": " + addr + " holds " + it->second.tile + ", not " + t);
+        l2_.erase(it);
+    }
 
     // One L3 transaction, checked as L-B executes it (csp/behavioral.hpp).
     void place(const TileOp& op, std::size_t index) {

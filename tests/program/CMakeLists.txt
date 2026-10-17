@@ -93,6 +93,17 @@ set_tests_properties(test_fabric_pipeline PROPERTIES
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
 )
 
+# L2 staging: `stage ... in l2 { }` at L-B, in the trace and at every level
+# (docs/plans/l2-reuse-and-fabric-pipeline-view.md step 3)
+kpu_add_component_test(test_csp_l2_staging "program"
+    test_csp_l2_staging.cpp
+)
+
+set_tests_properties(test_csp_l2_staging PROPERTIES
+    LABELS "program;csp;lang;l2;v0.9"
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+)
+
 # `store ... late`: an accumulator's store emitted after the next accumulator's calls
 # (docs/plans/l2-reuse-and-fabric-pipeline-view.md step 2b)
 kpu_add_component_test(test_csp_store_late "program"

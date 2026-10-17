@@ -98,7 +98,7 @@ public:
             size_ = n;
         }
         stream_ = std::make_unique<csp::lang::ActionStream>(ast);
-        lb_.begin(inputs, false, csp::lang::l3_geometry(ast));
+        lb_.begin(inputs, false, csp::lang::l3_geometry(ast), static_cast<std::uint32_t>(ast.l2));
         advance();
     }
 

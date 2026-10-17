@@ -105,6 +105,8 @@ inline TileWork tile_work_of(const TileProgram& p, const TileOp& op, double elem
         case TileOpKind::L3Release:
         case TileOpKind::L3Inherit:
         case TileOpKind::L3Retain:
+        case TileOpKind::L2Stage:
+        case TileOpKind::L2Release:
             break;
     }
     return w;

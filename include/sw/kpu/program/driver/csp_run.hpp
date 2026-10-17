@@ -175,6 +175,7 @@ struct CspLevelOutcome {
     timing::ConcurrentTimingExecutor::VectorStats ve;
     bool livelock = false;
     std::vector<std::string> unmodelled;    // spec fields the level keeps a default for
+    std::size_t staged_feeds = 0;           // Feeds of an L2-staged copy (L-CA: run as Move + Feed)
 };
 
 struct CspRunRequest {
@@ -240,7 +241,7 @@ inline CspReference csp_reference(const csp::lang::Program& ast, const TileProgr
     for (const auto& name : operands.operand_order()) operands.operand(name).values = inputs.operand(name).values;
     csp::lang::ActionStream s(ast);
     csp::BehavioralInterpreter lb;
-    lb.begin(operands, record, csp::lang::l3_geometry(ast));
+    lb.begin(operands, record, csp::lang::l3_geometry(ast), static_cast<std::uint32_t>(ast.l2));
     for (std::size_t i = 0;; ++i) {
         std::optional<csp::lang::Emission> e;
         try {
@@ -307,7 +308,7 @@ inline CspLevelOutcome csp_run_level(ExecutionLevel level, const csp::lang::Prog
     if (level == ExecutionLevel::Behavioral) {
         csp::lang::ActionStream s(ast);
         csp::BehavioralInterpreter lb;
-        lb.begin(inputs, false, csp::lang::l3_geometry(ast));
+        lb.begin(inputs, false, csp::lang::l3_geometry(ast), static_cast<std::uint32_t>(ast.l2));
         while (auto e = s.next()) lb.step(e->action, e->op ? &*e->op : nullptr);
         const auto sum = lb.finish();
         o.values = lb.result();
@@ -372,6 +373,11 @@ inline CspLevelOutcome csp_run_level(ExecutionLevel level, const csp::lang::Prog
         o.dram_bytes = r.dram_bytes;
         o.cf_busy = r.cf_busy;
         o.ve = r.ve;
+        o.staged_feeds = r.staged_feeds;
+        if (ast.l2 > 0)
+            o.unmodelled.push_back("L2 staging: unmapped at L-CA until placement step 6 -- each staged Feed moves its "
+                                   "tile out of L3 again (the values are the same; the timing is the unstaged "
+                                   "program's)");
     }
     return o;
 }

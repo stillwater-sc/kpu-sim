@@ -247,7 +247,7 @@ footer ul { margin: 0; padding-left: 18px; }
             <div class="edge"><span class="arrow" id="e-LOAD">dma LOAD &rarr;</span><span class="arrow" id="e-STORE">&larr; STORE dma</span></div>
             <div class="station l3"><div class="head"><span class="name">L3</span><span class="mono num" id="c-l3"></span></div><div id="banks"></div></div>
             <div class="edge"><span class="arrow" id="e-MOVE">bm MOVE &rarr;</span><span class="arrow" id="e-WRITEBACK">&larr; WRITEBACK bm</span></div>
-            <div class="station"><div class="name">L2</div><div class="count" id="c-l2"></div><div class="cap">no bound at L-B</div><div class="tiles" id="l2-tiles"></div></div>
+            <div class="station"><div class="name">L2</div><div class="count" id="c-l2"></div><div class="cap" id="l2-cap">no bound at L-B</div><div class="tiles" id="l2-tiles"></div></div>
             <div class="edge"><span class="arrow" id="e-FEED">str FEED &rarr;</span><span class="arrow" id="e-DRAIN">&larr; DRAIN str</span></div>
             <div class="station"><div class="name">Fabric</div><div class="count" id="c-cf"></div><div class="cap" id="cf-cap">no bound at L-B</div><div class="tiles" id="cf-tiles"></div></div>
           </div>
@@ -317,8 +317,8 @@ footer ul { margin: 0; padding-left: 18px; }
 <script id="dflow-core">
 "use strict";
 globalThis.DflowCore = (() => {
-  const VERSIONS = [1, 2, 3, 4];
-  const OPENS = 1, CLOSES = 2, RETAINS = 4, HAS_PLACE = 8, PINNED = 16, RES_RETAINED = 4;
+  const VERSIONS = [1, 2, 3, 4, 5];
+  const OPENS = 1, CLOSES = 2, RETAINS = 4, HAS_PLACE = 8, PINNED = 16, HAS_L2 = 32, STAGES = 64, RES_RETAINED = 4;
   const NONE8 = 255, NONE32 = 0xFFFFFFFF;
   const TYPED = { u8: Uint8Array, u16: Uint16Array, u32: Uint32Array, u64: BigUint64Array, i64: BigInt64Array, f32: Float32Array, f64: Float64Array };
   const NONE64 = 0xFFFFFFFFFFFFFFFFn;
@@ -401,6 +401,17 @@ globalThis.DflowCore = (() => {
         R.byStart = Array.from({ length: R.lt1_legs.rows }, (_, g) => g).sort((x, y) => R.lt1_legs.start[x] - R.lt1_legs.start[y]);
       }
     }
+    // Version 5: L2 staging. Each staged copy (its tile, compute tile, slot, the Move that staged it,
+    // its L2_RELEASE and its Feeds, the reuse count), and the program's `l2 = N`.
+    R.l2slots = 0;
+    R.l2_staging = null;
+    if (m.version >= 5) {
+      R.l2slots = int(m.machine.l2, "machine.l2", 0);
+      const t = m.tables.l2_staging, buf = files[t.file];
+      if (!buf) throw new Error("missing " + t.file);
+      R.l2_staging = { rows: t.rows };
+      for (const c of t.columns) R.l2_staging[c.name] = column(buf, t, c.name);
+    }
     // Version 4: the fabric pipeline. Each accumulator's gemm chain as L-T1 timed it on the systolic
     // array (in0, front, in1, last, out1, per chain; each stream call's place in its chain).
     R.fabric = null;
@@ -470,7 +481,9 @@ globalThis.DflowCore = (() => {
       if (!st.cf.has(t)) st.cf.set(t, { since: s, acc: true });     // an accumulator opens in the fabric
       return used;
     }
-    if (S.from[s] === R.chL2) st.l2.delete(t);
+    // A staged copy stays in L2 when it is fed; its stage block's L2_RELEASE takes it out.
+    if (S.kind[s] === R.kL2Release) { st.l2.delete(t); return null; }
+    if (S.from[s] === R.chL2 && !(S.flags[s] & HAS_L2)) st.l2.delete(t);
     if (S.from[s] === R.chCf) st.cf.delete(t);
     if (S.to[s] === R.chL2) st.l2.set(t, s);
     if (S.to[s] === R.chCf) { st.cf.set(t, { since: s, acc: false }); st.fed.push(t); }
@@ -480,6 +493,8 @@ globalThis.DflowCore = (() => {
   function derive(R) {
     const ch = R.m.channels.map(c => c.name), S = R.steps;
     R.chL3 = ch.indexOf("l3"); R.chL2 = ch.indexOf("l2"); R.chCf = ch.indexOf("cf"); R.kCall = R.m.kinds.indexOf("CALL");
+    R.kL2Release = R.m.kinds.indexOf("L2_RELEASE");    // -1 before version 5: no step has it
+    R.feedsOf = new Map();                   // staging -> its staged Feeds' steps, in order
     R.lb = { ok: true, at: -1, why: "" };
     R.checkpoints = [];
     R.movesOf = new Map();                   // tile -> the steps that Move it L3 -> L2
@@ -491,6 +506,11 @@ globalThis.DflowCore = (() => {
     for (let s = 0; s < R.n; s++) {
       if (s % CHECKPOINT === 0) R.checkpoints.push(copyState(st));
       const t = S.tile[s];
+      if (S.flags[s] & HAS_L2 && S.to[s] === R.chCf) {
+        const g = S.staging[s];
+        if (!R.feedsOf.has(g)) R.feedsOf.set(g, []);
+        R.feedsOf.get(g).push(s);
+      }
       if (S.from[s] === R.chL3 && S.to[s] === R.chL2) {
         if (!R.movesOf.has(t)) R.movesOf.set(t, []);
         R.movesOf.get(t).push(s);
@@ -521,11 +541,20 @@ globalThis.DflowCore = (() => {
     if (!R.lb.ok || s < 0 || s >= R.n) return null;
     const c = Math.floor(s / CHECKPOINT), st = copyState(R.checkpoints[c]);
     for (let i = c * CHECKPOINT; i <= s; i++) apply(R, st, i);
-    const l2 = [...st.l2].map(([t, since]) => ({ tile: t, since, moves: movesBefore(R, t, s) }));
+    const l2 = [...st.l2].map(([t, since]) => ({ tile: t, since, moves: movesBefore(R, t, s), staged: stagedAt(R, since, s) }));
     const cf = [...st.cf].map(([t, v]) => ({ tile: t, since: v.since, acc: v.acc }));
     l2.sort((a, b) => a.since - b.since);
     cf.sort((a, b) => a.since - b.since);
     return { l2, cf };
+  }
+  // A tile in L2 since step `since`: its staging when that step staged it (slot, Feeds of the copy
+  // at or before step s, and its Feeds in all, both from the record), else null.
+  function stagedAt(R, since, s) {
+    if (!(R.steps.flags[since] & STAGES)) return null;
+    const g = R.steps.staging[since], v = R.feedsOf.get(g) || [];
+    let fed = 0;
+    while (fed < v.length && v[fed] <= s) fed++;
+    return { staging: g, cf: R.steps.l2_cf[since], slot: R.steps.l2_slot[since], fed, of: R.l2_staging.feeds[g] };
   }
   // How many times tile t was moved L3 -> L2 at or before step s.
   function movesBefore(R, t, s) {
@@ -600,6 +629,7 @@ globalThis.DflowCore = (() => {
       residency: S.residency[s], opens: !!(f & OPENS), closes: !!(f & CLOSES), retains: !!(f & RETAINS),
       pinned: !!(f & PINNED),
       place: f & HAS_PLACE ? { l3_tile: S.l3_tile[s], slot: S.slot[s], bank: S.bank[s] } : null,
+      l2: f & HAS_L2 ? { cf: S.l2_cf[s], slot: S.l2_slot[s], staging: S.staging[s], stages: !!(f & STAGES) } : null,
       held: { dram: S.held_dram[s], l3: S.held_l3[s], l2: S.held_l2[s], cf: S.held_cf[s] },
     };
   }
@@ -1070,12 +1100,13 @@ globalThis.DflowCore = (() => {
     const kv = [["action", fmt(st.action)], ["kind", st.kind], ["tile", st.tile], ["process", st.process ?? "none (a credit action)"],
       ["move", st.from ? `${st.from} → ${st.to}` : "none"], ["residency", rtxt || "none"],
       ["L3 address", st.place ? `l3[${st.place.l3_tile}] slot ${st.place.slot} bank ${st.place.bank}` : "none"],
+      ["L2 address", st.l2 ? `l2[${st.l2.cf}] slot ${st.l2.slot} · staging ${st.l2.staging}${st.l2.stages ? " (stages it)" : st.kind === "FEED" ? " (fed from the copy)" : " (freed)"}` : "none"],
       ["held after", `dram ${fmt(st.held.dram)} · l3 ${st.held.l3} · l2 ${st.held.l2} · cf ${st.held.cf}`]];
     // The same rows at every step (a dash where one does not apply), so the inspector never reflows.
     const call = C.callAt(R, s), n = st.kind === "MOVE" ? C.movesBefore(R, R.steps.tile[s], s) : 0;
     kv.push(["operands", call ? call.operands.map(t => C.tileName(R, t)).join(", ") || "none" : "—"],
             ["chain", call ? chainText(call) : "—"],
-            ["moves from L3", st.kind !== "MOVE" ? "—" : n > 1 ? `${n} (a re-Move: L-B stages nothing in L2)` : String(n)]);
+            ["moves from L3", st.kind !== "MOVE" ? "—" : n > 1 ? `${n} (a re-Move${st.l2 ? ", staged this time" : ": this program does not stage it"})` : String(n)]);
     $("step-kv").innerHTML = kvHtml(kv);
     $("release").disabled = C.releaseOf(R, st.residency) < 0 || C.releaseOf(R, st.residency) === s;
     renderSlot();
@@ -1102,7 +1133,13 @@ globalThis.DflowCore = (() => {
       return;
     }
     const touchedL2 = st.to === "l2" || st.from === "l2", touchedCf = st.to === "cf" || st.from === "cf" || st.kind === "CALL";
-    $("l2-tiles").innerHTML = list(cont.l2, e => chip(e.tile, e.moves > 1 ? ` <span class="x" title="moved from L3 ${e.moves} times so far">×${e.moves}</span>` : "", touchedL2 && e.tile === here, false));
+    // A staged copy: its slot, and its Feeds so far of all (the reuse); a transient tile: its re-Moves.
+    const l2extra = e => e.staged
+      ? ` <span class="x" title="staged in L2 slot ${fmt(e.staged.slot)}: fed ${fmt(e.staged.fed)} of ${fmt(e.staged.of)} times">s${fmt(e.staged.slot)} ${fmt(e.staged.fed)}/${fmt(e.staged.of)}</span>`
+      : e.moves > 1 ? ` <span class="x" title="moved from L3 ${e.moves} times so far">×${e.moves}</span>` : "";
+    $("l2-tiles").innerHTML = list(cont.l2, e => chip(e.tile, l2extra(e), touchedL2 && e.tile === here, false));
+    const staged = cont.l2.filter(e => e.staged).length;
+    $("l2-cap").textContent = R.l2slots ? `staged ${staged} of ${R.l2slots} slots; transit unbounded` : "no bound at L-B";
     $("cf-tiles").innerHTML = list(cont.cf, e => chip(e.tile, "", touchedCf && e.tile === here, e.acc));
     const fed = cont.cf.filter(e => !e.acc), acc = cont.cf.filter(e => e.acc);
     $("fab-fed").innerHTML = fed.length ? list(fed, e => chip(e.tile, "", e.tile === here, false)) : `<span class="note">none</span>`;

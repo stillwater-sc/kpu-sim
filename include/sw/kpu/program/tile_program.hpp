@@ -116,6 +116,18 @@ inline bool operator==(const L3Address& a, const L3Address& b) {
     return a.l3_tile == b.l3_tile && a.slot == b.slot && a.bank == b.bank;
 }
 
+// Where a staged tile lives in L2 (docs/plans/l2-reuse-and-fabric-pipeline-view.md §3.2): the
+// compute tile whose L2 it is, and the tile-sized slot within it. The walker allocates it when a
+// `stage` block opens; every level executes it, as it does an L3Address.
+struct L2Address {
+    std::uint32_t cf = 0;               // the compute tile (always 0 at level 1)
+    std::uint32_t slot = 0;             // the tile-sized buffer within its L2
+
+    std::string to_string() const { return "l2[" + std::to_string(cf) + "]:" + std::to_string(slot); }
+};
+
+inline bool operator==(const L2Address& a, const L2Address& b) { return a.cf == b.cf && a.slot == b.slot; }
+
 enum class TileOpKind {
     Feed,           // inject an input tile into a logical port (structural; L1 attaches streams)
     Drain,          // extract a result tile from a logical port (structural)
@@ -135,6 +147,11 @@ enum class TileOpKind {
     L3Release,      // frees the slot
     L3Inherit,      // the tile arrives resident in the slot, from the operator before (opens)
     L3Retain,       // the slot, and its tile, outlive the program
+    // The L2 transactions (opset 1.3): a `stage` block's copy of a tile into an L2 slot, which the
+    // calls inside the block feed from, and the block's end, which frees the slot (the credit
+    // returns upstream). Like the L3 ones, they record placement and compute nothing.
+    L2Stage,        // l3 -> the L2 slot (opens a staging)
+    L2Release,      // frees the L2 slot
 };
 
 // An L3 transaction: carries an L3 address and one tile (outputs[0]); computes nothing.
@@ -171,9 +188,14 @@ inline const char* to_string(TileOpKind k) {
         case TileOpKind::L3Release:      return "L3_RELEASE";
         case TileOpKind::L3Inherit:      return "L3_INHERIT";
         case TileOpKind::L3Retain:       return "L3_RETAIN";
+        case TileOpKind::L2Stage:        return "L2_STAGE";
+        case TileOpKind::L2Release:      return "L2_RELEASE";
     }
     return "?";
 }
+
+// An L2 transaction: carries an L2 address and one tile (outputs[0]); computes nothing.
+inline bool is_l2(TileOpKind k) { return k == TileOpKind::L2Stage || k == TileOpKind::L2Release; }
 
 // The elementwise functions an Activation applies (the linear operator's epilogue,
 // docs/plans/csp-language.md step 2). atan needs a transcendental unit (an SFU) that a machine
@@ -222,6 +244,8 @@ struct TileOp {
 
     // An L3 transaction (is_l3): the slot it writes, reads or frees. Its tile is outputs[0].
     L3Address l3;
+    // An L2 transaction (is_l2): the slot it writes or frees. Its tile is outputs[0].
+    L2Address l2;
 
     std::string label;               // human-readable note for disassembly
 };

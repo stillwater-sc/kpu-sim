@@ -16,6 +16,13 @@
 // it past the program. A write into a live slot, a read of a slot tagged with another tile, and a
 // release of a free slot are refused, naming the slot and both tiles (#279's class of defect).
 //
+// L2 STAGING IS ADDRESSED TOO (docs/plans/l2-reuse-and-fabric-pipeline-view.md step 3). A Move
+// that carries an L2 address writes its copy into that slot of the compute tile's L2 and tags
+// it; a Feed that carries one reads the slot and leaves the copy (keep); an L2Release frees it.
+// Refused, by name: a stage into a live slot (or outside the program's `l2 = N`), a tile staged
+// twice, a Feed of a slot that does not hold its tile, and a program that ends with a tile
+// staged. An unstaged Move and Feed pass through L2 as before.
+//
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2024-2025 Stillwater Supercomputing, Inc.
 // ============================================================================
@@ -50,12 +57,14 @@ public:
     struct Summary {
         std::size_t actions = 0, calls = 0;
         std::size_t peak_l3 = 0;            // L3 slots tagged at once, as executed
+        std::size_t peak_l2 = 0;            // L2 slots staged at once, as executed
+        std::size_t staged_feeds = 0;       // Feeds served by a staged copy
     };
 
     // Run `p` from its source operands' values. On return, result() holds the operands as DRAM
     // has them: what the program stored.
     Summary run(const CspProgram& p) {
-        begin(p.source, false, l3_geometry(p));
+        begin(p.source, false, l3_geometry(p), p.l2_slots);
         for (const Action& a : p.actions)
             step(a, a.kind == Action::Kind::Call ? &p.source.ops().at(a.l0_op) : nullptr);
         return finish();
@@ -68,11 +77,15 @@ public:
     // values, and every L0 op an action carries (step's `l0`), in the order it ran them. That is
     // the program's L0 (ADR 0004 §4): L-B is the oracle, and the one place a CSP program becomes
     // an L0. Off by default: a large program streams, and its trace would not fit.
-    void begin(const TileProgram& operands, bool record = false, L3Geometry l3 = {}) {
+    // `l2_slots`: the program's `l2 = N`, which a stage's slot must be inside (0: unchecked).
+    void begin(const TileProgram& operands, bool record = false, L3Geometry l3 = {}, std::uint32_t l2_slots = 0) {
         recording_ = record;
         geometry_ = l3;
+        l2_slots_ = l2_slots;
         l3_.clear();
         l3_index_.clear();
+        l2_.clear();
+        l2_index_.clear();
         trace_ = TileProgram(operands.name());
         if (record)
             for (const auto& name : operands.operand_order()) trace_.add_operand(operands.operand(name));
@@ -109,7 +122,8 @@ public:
             case Action::Kind::Move: {
                 std::vector<float> v = read_l3(address(a, where(i)), a, k, where(i)).values;
                 stages(v, a, where(i));         // a Move's copy, transformed on its way (bm.ingress)
-                at(to_chan(a.kind))[k] = std::move(v);
+                if (a.kind == Action::Kind::Move && a.l2) stage_l2(*a.l2, a, k, std::move(v), where(i));
+                else at(to_chan(a.kind))[k] = std::move(v);
                 break;
             }
             case Action::Kind::Writeback: {
@@ -120,6 +134,12 @@ public:
                 break;
             }
             case Action::Kind::Feed:
+                if (a.l2) {                     // the staged copy: read, and kept for the next Feed
+                    at(Chan::Cf)[k] = read_l2(*a.l2, a, k, where(i)).values;
+                    ++sum_.staged_feeds;
+                    break;
+                }
+                [[fallthrough]];
             case Action::Kind::Drain: {
                 std::vector<float> v = take(from_chan(a.kind), k, where(i), /*keep=*/false);
                 stages(v, a, where(i));         // a result's epilogue, where the program placed it
@@ -145,6 +165,13 @@ public:
                 read_l3(address(a, where(i)), a, k, where(i), "nothing resident to retain");
                 retained_[k] = a.tile;
                 break;
+            case Action::Kind::L2Release: {
+                if (!a.l2) throw BehavioralError(where(i) + ": the action carries no L2 address");
+                read_l2(*a.l2, a, k, where(i), "nothing staged to release");
+                l2_index_.erase(k);
+                l2_.erase(l2_key(*a.l2));
+                break;
+            }
             case Action::Kind::Call:
                 if (!call_op) throw BehavioralError(where(i) + ": a call without its tile function");
                 call(*call_op, a.accumulate, where(i));
@@ -152,6 +179,7 @@ public:
                 break;
         }
         sum_.peak_l3 = std::max(sum_.peak_l3, l3_.size());
+        sum_.peak_l2 = std::max(sum_.peak_l2, l2_.size());
         ++sum_.actions;
     }
 
@@ -161,6 +189,8 @@ public:
             if (!retained_.count(k))
                 throw BehavioralError("csp program ends with " + k + " still resident at " + addr.to_string() +
                                       " (neither released nor retained)");
+        for (const auto& [k, addr] : l2_index_)
+            throw BehavioralError("csp program ends with " + k + " still staged at " + addr.to_string());
         for (Chan c : {Chan::L2, Chan::Cf})
             if (!at(c).empty())
                 throw BehavioralError("csp program ends with " + std::to_string(at(c).size()) + " tiles left in " +
@@ -193,8 +223,24 @@ public:
 
     // Tiles a channel holds now (stepping reads station occupancy from this). L3's are its
     // tagged slots.
+    // L2's are its transient tiles and its staged copies.
     std::size_t held(Chan c) const {
-        return c == Chan::L3 ? l3_.size() : store_[static_cast<std::size_t>(c)].size();
+        if (c == Chan::L3) return l3_.size();
+        return store_[static_cast<std::size_t>(c)].size() + (c == Chan::L2 ? l2_.size() : 0);
+    }
+
+    // The tiles L2 has staged now, by address.
+    std::map<std::string, std::string> l2_contents() const {
+        std::map<std::string, std::string> out;
+        for (const auto& [k, addr] : l2_index_) out[addr.to_string()] = k;
+        return out;
+    }
+
+    // The L2 address a tile is staged at now; none when it is not staged.
+    std::optional<L2Address> staged_at(const TileCoord& t) const {
+        auto it = l2_index_.find(t.to_string());
+        if (it == l2_index_.end()) return std::nullopt;
+        return it->second;
     }
 
     // The tiles L3 holds now, by address (after finish(): the retained ones). The replay's
@@ -214,6 +260,8 @@ public:
             auto it = l3_index_.find(k);
             return it == l3_index_.end() ? nullptr : &l3_.at(key_of(it->second)).values;
         }
+        if (c == Chan::L2)
+            if (auto st = l2_index_.find(k); st != l2_index_.end()) return &l2_.at(l2_key(st->second)).values;
         const auto& s = store_[static_cast<std::size_t>(c)];
         auto it = s.find(k);
         return it == s.end() ? nullptr : &it->second;
@@ -247,6 +295,44 @@ private:
     std::map<std::string, L3Address> l3_index_;                         // resident tile -> its slot
 
     static std::pair<std::uint32_t, std::uint32_t> key_of(const L3Address& s) { return {s.l3_tile, s.slot}; }
+
+    // The addressed L2 of each compute tile: a staged slot holds one tile, of one staging.
+    struct L2Slot {
+        TileCoord tag;
+        std::size_t staging = kNone;
+        std::vector<float> values;
+    };
+    std::uint32_t l2_slots_ = 0;
+    std::map<std::pair<std::uint32_t, std::uint32_t>, L2Slot> l2_;     // (cf, slot) -> its staged tile
+    std::map<std::string, L2Address> l2_index_;                         // staged tile -> its slot
+    static std::pair<std::uint32_t, std::uint32_t> l2_key(const L2Address& s) { return {s.cf, s.slot}; }
+
+    void stage_l2(const L2Address& s, const Action& a, const std::string& k, std::vector<float> v,
+                  const std::string& where) {
+        if (l2_slots_ && s.slot >= l2_slots_)
+            throw BehavioralError(where + ": " + s.to_string() + " is outside the L2's " + std::to_string(l2_slots_) +
+                                  " slots");
+        if (auto it = l2_.find(l2_key(s)); it != l2_.end())
+            throw BehavioralError(where + ": " + s.to_string() + " holds " + it->second.tag.to_string() +
+                                  ", which is staged; " + k + " cannot be staged there");
+        if (auto other = l2_index_.find(k); other != l2_index_.end())
+            throw BehavioralError(where + ": " + k + " is already staged at " + other->second.to_string());
+        l2_[l2_key(s)] = L2Slot{a.tile, a.staging, std::move(v)};
+        l2_index_[k] = s;
+    }
+    const L2Slot& read_l2(const L2Address& s, const Action& a, const std::string& k, const std::string& where,
+                          const char* when_free = "the slot is free") const {
+        auto it = l2_.find(l2_key(s));
+        if (it == l2_.end()) {
+            auto other = l2_index_.find(k);
+            throw BehavioralError(where + ": " + s.to_string() + ": " + when_free + " (" + k +
+                                  (other != l2_index_.end() ? " is staged at " + other->second.to_string()
+                                                            : std::string(" is not staged")) + ")");
+        }
+        if (it->second.tag.to_string() != k || it->second.staging != a.staging)
+            throw BehavioralError(where + ": " + s.to_string() + " holds " + it->second.tag.to_string() + ", not " + k);
+        return it->second;
+    }
 
     const L3Slot& slot_of(const std::string& k) const { return l3_.at(key_of(l3_index_.at(k))); }
 
