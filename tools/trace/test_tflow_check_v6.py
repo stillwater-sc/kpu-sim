@@ -83,6 +83,12 @@ class TflowCheckV6SelfTest(unittest.TestCase):
         self.b.set("chain", "out1", 0, self.b.get("chain", "last", 0))
         self.assertFails("TF14")
 
+    def test_tf14_results_leave_late(self):
+        # Later than the top link allows: the lower bound still holds, the exact recurrence does not.
+        last = self.rows("chain") - 1
+        self.b.set("chain", "out1", last, self.b.get("chain", "out1", last) + 1)
+        self.assertFails("TF14")
+
     def test_tf14_two_chains_stream_at_once(self):
         # Start the second chain on the first one's compute tile inside the first one's operand stream.
         s = self.b.get("chain", "station", 0)

@@ -49,9 +49,9 @@ Invariants:
                         and no more than l2_slots are held at once
     TF14 the fabric's phases (version 6) each chain runs on a compute tile with PEs and calls;
                         front = in0 + skew and last = in1 + skew, with skew = (rows-1) + (cols-1);
-                        out1 >= last + rows (its results travel rows hops out); and on one compute
-                        tile the chains' operand streams [in0, in1) never overlap, and each chain's
-                        results leave no earlier than the previous one's plus its rows (the top link)
+                        on one compute tile the chains' operand streams [in0, in1) never overlap; and
+                        out1 = max(last + rows, the previous chain's out1 + rows) on its compute tile
+                        (the top link; last + rows for its first chain)
 
 Standard library only.
 
@@ -547,15 +547,23 @@ def check(rec):
             if not (in0 <= in1 and out1 >= last + rows and out1 <= makespan):
                 r.fail("TF14", f"chain {i}: [in0 {int(in0)}, in1 {int(in1)}] and out1 {int(out1)} are out of order "
                                f"(out1 must be at least last + rows = {int(last + rows)}, within the run)")
-            lanes_ch.setdefault(s_i, []).append((in0, in1, out1, rows, i))
+            lanes_ch.setdefault(s_i, []).append((in0, in1, out1, rows, last, i))
         for s_i, cs in lanes_ch.items():
             cs.sort()
-            for (a0, a1, ao, _ar, a), (b0, _b1, bo, br, b) in zip(cs, cs[1:]):
+            for (a0, a1, ao, _ar, _al, a), (b0, _b1, _bo, _br, _bl, b) in zip(cs, cs[1:]):
                 if b0 < a1:
                     r.fail("TF14", f"{st[s_i]['name']}: chains {a} and {b} stream operands at once from cycle {int(b0)}")
-                if bo < ao + br:
-                    r.fail("TF14", f"{st[s_i]['name']}: chain {b}'s results leave at {int(bo)}, before chain {a}'s "
-                                   f"({int(ao)}) plus {br} on the top link")
+            # The top link (P5, exactly): a chain's results leave when its far PE's result has travelled
+            # its rows north, or rows after the previous chain's results on this compute tile, whichever
+            # is later -- out1 = max(last + rows, previous out1 + rows), and last + rows for the first.
+            prev = None
+            for (_0, _1, out1, rows, last, i) in cs:
+                want = last + rows if prev is None else max(last + rows, prev + rows)
+                if out1 != want:
+                    r.fail("TF14", f"{st[s_i]['name']}: chain {i}'s results leave at {int(out1)}; the top link gives "
+                                   f"{int(want)} (last {int(last)} + {rows} rows"
+                                   + ("" if prev is None else f", or the previous chain's {int(prev)} + {rows}") + ")")
+                prev = out1
 
     # TF8 -------------------------------------------------------------------
     if "lod" in rec:

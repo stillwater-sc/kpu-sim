@@ -490,8 +490,8 @@ Each step is one PR. Steps 1 and 2 need no language change. Steps 3 and 4 depend
      - **tflow_check.**
        - TF13: the slot within `l2_slots`, no overlap per slot, at most `l2_slots` held, each copy
          fed.
-       - TF14: `front`/`last` equal `in0`/`in1` plus the skew, `out1 >= last + rows`, one operand
-         stream per compute tile, and the top link.
+       - TF14: `front`/`last` equal `in0`/`in1` plus the skew, one operand stream per compute tile,
+         and the top link exactly, as P5: `out1 = max(last + rows, previous out1 + rows)`.
        - TF8 recomputes the new rows from the raw tables.
        - New self-test: `test_tflow_check_v6.py`.
      - **The viewer** reads versions 3-6. It shows the L2 slot rows with each copy's Feeds and the
