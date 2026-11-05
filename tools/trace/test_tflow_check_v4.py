@@ -25,7 +25,7 @@ BUNDLE = None
 class TflowCheckV4SelfTest(unittest.TestCase):
     def setUp(self):
         self.b = Bundle(BUNDLE)
-        self.assertIn(self.b.manifest["version"], (4, 5))
+        self.assertIn(self.b.manifest["version"], (4, 5, 6))
         self.assertEqual(self.b.manifest["ops"], "csp-actions")
 
     def tearDown(self):
@@ -67,7 +67,7 @@ class TflowCheckV4SelfTest(unittest.TestCase):
 
     # -- version 5: the L3 address of every residency ------------------------
     def v5(self):
-        if self.b.manifest["version"] != 5:
+        if self.b.manifest["version"] not in (5, 6):
             self.skipTest("a version-4 bundle has no L3 addresses")
 
     def l3_residencies(self):

@@ -16,7 +16,8 @@
 //   start = max( the data it reads is ready,            (scoreboard per tile and channel)
 //                a lane of its process is free,          (lanes x bytes/cycle, per process)
 //                the process's previous action started,  (each process issues in order)
-//                ITS L3 slot is free )                   (Load, Inherit, a Writeback that opens)
+//                ITS L3 slot is free,                    (Load, Inherit, a Writeback that opens)
+//                ITS L2 slot is free )                   (a stage Move)
 //
 // A CREDIT IS A SLOT (ADR 0004 §5; docs/plans/l3-placement-at-lb.md step 5). Every action that
 // opens a residency carries the L3 address the walker placed it at, and waits for THAT slot's
@@ -42,6 +43,13 @@
 //                                     held, with no DMA (the operator before left the tile)
 //   Retain     --    zero time, after every reader of the residency; its credit is NOT returned:
 //                                     the slot is held to the end of the program (step 4d)
+//   L2Release  --    zero time, after the staged copy's last Feed; its L2 slot's credit returns
+//
+// L2 STAGING HOLDS AN L2 CREDIT PER SLOT (docs/plans/l2-reuse-and-fabric-pipeline-view.md step 4).
+// A stage Move (`stage T in l2 { }`) carries the L2 address the walker placed the copy at and
+// waits for THAT slot's L2Release, as a Load waits for its L3 slot. The staged copy is held from
+// that credit to its L2Release, and every Feed in between reads it (the reuse count). A transient
+// Move -- an unstaged operand, fed once -- holds no L2 credit at L-T1: its copy streams straight on.
 //
 // THE FABRIC IS A SYSTOLIC ARRAY when the deployment declares one (fabric.pe_rows x pe_cols;
 // docs/plans/l2-reuse-and-fabric-pipeline-view.md §3.1). An accumulator's gemm calls -- `acc C in
@@ -154,6 +162,14 @@ public:
         bool retained = false;          // closed by a Retain: held past the program's end
     };
 
+    // One staged copy's L2 slot: held from its stage Move's credit to its L2Release.
+    struct L2Slot {
+        TileCoord tile;
+        L2Address place;                // the walker's L2 address, executed
+        Cycle t0 = 0, t1 = 0;
+        std::uint32_t feeds = 0;        // the Feeds that read it: its reuse count
+    };
+
     struct Stats {
         Cycle makespan = 0;
         std::size_t actions = 0;
@@ -165,6 +181,9 @@ public:
         // and slot_wait_cycles is what it cost them (a reuse's write-after-read, in time).
         std::size_t slot_bound = 0;
         Cycle slot_wait_cycles = 0;
+        std::size_t peak_l2 = 0;                    // staged copies held at once, in time
+        std::size_t l2_bound = 0;                   // stage Moves whose start their L2 slot decided
+        Cycle l2_wait_cycles = 0;                   //   and what those waits cost
         std::size_t stream_chains = 0;              // chains timed as systolic streams
         Cycle link_delay_cycles = 0;                // what their results waited for a top link
         std::map<std::string, std::size_t> one_leg; // calls timed as one leg, by why
@@ -212,6 +231,9 @@ public:
         stage_reads_.clear();
         released_.clear();
         retained_.clear();
+        l2_free_.clear();
+        l2_open_.clear();
+        l2_slots_.clear();
     }
 
     void step(const Action& a, const TileOp* call_op) {
@@ -254,13 +276,35 @@ public:
             }
             case Action::Kind::Move: {
                 Residency& r = residency_[k];
-                const Cycle f = run(Proc::Bm, r.current, transfer(Proc::Bm, bytes), a);
+                Cycle ready = r.current;
+                if (a.l2) {                                 // a stage: after ITS L2 slot's L2Release
+                    const Cycle credit = get_l2(*a.l2);
+                    if (credit > ready) {
+                        const auto& lanes_free = lane_free_[Proc::Bm];
+                        const Cycle other = std::max({ready, *std::min_element(lanes_free.begin(), lanes_free.end()),
+                                                      last_start_[Proc::Bm]});
+                        if (credit > other) {
+                            ++st_.l2_bound;
+                            st_.l2_wait_cycles += credit - other;
+                        }
+                        ready = credit;
+                    }
+                }
+                const Cycle f = run(Proc::Bm, ready, transfer(Proc::Bm, bytes), a);
                 r.readers = std::max(r.readers, f);
                 moved_[k] = f;
+                if (a.l2) {
+                    l2_open_[k] = l2_slots_.size();
+                    l2_slots_.push_back(L2Slot{a.tile, *a.l2, ready, 0, 0});
+                }
                 break;
             }
             case Action::Kind::Feed:
                 fed_[k] = run(Proc::Str, get(moved_, k), transfer(Proc::Str, bytes), a);
+                if (a.l2) {
+                    auto it = l2_open_.find(k);
+                    if (it != l2_open_.end()) ++l2_slots_[it->second].feeds;
+                }
                 break;
             case Action::Kind::Call: {
                 Cycle ready = get(acc_, k);                         // the chain's previous call
@@ -361,11 +405,19 @@ public:
                 zero_length(a, t);
                 break;
             }
-            case Action::Kind::L2Release:
-                // A stage block's end: its slot is free once the staged copy's last Feed is out. L2
-                // credits are timed in step 4 of docs/plans/l2-reuse-and-fabric-pipeline-view.md.
-                zero_length(a, std::max(get(moved_, k), get(fed_, k)));
+            case Action::Kind::L2Release: {
+                // A stage block's end: its slot is free once the staged copy's last Feed is out,
+                // and the next stage into it may start from then (its credit returns upstream).
+                const Cycle t = std::max(get(moved_, k), get(fed_, k));
+                l2_free_[key_of(*a.l2)] = t;
+                auto it = l2_open_.find(k);
+                if (it != l2_open_.end()) {
+                    l2_slots_[it->second].t1 = t;
+                    l2_open_.erase(it);
+                }
+                zero_length(a, t);
                 break;
+            }
             case Action::Kind::Release: {
                 Residency& r = residency_[k];
                 Cycle t = r.readers;
@@ -411,12 +463,25 @@ public:
             live += d;
             st_.peak_l3 = std::max(st_.peak_l3, static_cast<std::size_t>(std::max(live, 0)));
         }
+        // The same for L2's staged copies (L-B, stepped first, refused a program ending with one).
+        ev.clear();
+        for (const L2Slot& sl : l2_slots_) {
+            ev.push_back({sl.t0, +1});
+            ev.push_back({sl.t1, -1});
+        }
+        std::sort(ev.begin(), ev.end());
+        live = 0;
+        for (const auto& [t, d] : ev) {
+            live += d;
+            st_.peak_l2 = std::max(st_.peak_l2, static_cast<std::size_t>(std::max(live, 0)));
+        }
         return st_;
     }
 
     const TileProgram& result() const { return values_.result(); }
     const std::vector<Record>& records() const { return records_; }
     const std::vector<Slot>& slots() const { return slots_; }
+    const std::vector<L2Slot>& l2_slots() const { return l2_slots_; }
     const std::vector<Chain>& chains() const { return chains_; }
     std::size_t lanes_of(Proc p) const { return lanes(p); }
 
@@ -451,6 +516,9 @@ private:
     std::vector<std::pair<Cycle, Cycle>> intervals_;     // each residency's slot: credit -> Release
     std::vector<Slot> slots_;
     std::vector<Slot> retained_;                         // open to the end of the program
+    std::map<std::pair<std::uint32_t, std::uint32_t>, Cycle> l2_free_;    // (cf, slot) -> when its L2Release freed it
+    std::map<std::string, std::size_t> l2_open_;         // a staged tile -> its open L2Slot
+    std::vector<L2Slot> l2_slots_;
 
     void zero_length(const Action& a, Cycle t) {
         Record rec;
@@ -464,6 +532,11 @@ private:
     }
 
     static std::pair<std::uint32_t, std::uint32_t> key_of(const L3Address& s) { return {s.l3_tile, s.slot}; }
+    static std::pair<std::uint32_t, std::uint32_t> key_of(const L2Address& s) { return {s.cf, s.slot}; }
+    Cycle get_l2(const L2Address& s) const {
+        auto it = l2_free_.find(key_of(s));
+        return it == l2_free_.end() ? 0 : it->second;
+    }
 
     static Cycle get(const std::map<std::string, Cycle>& m, const std::string& k) {
         auto it = m.find(k);

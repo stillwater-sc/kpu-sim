@@ -38,6 +38,19 @@
 // carry their L3 address -- residency.bin gains l3_tile:u32 slot:u32 bank:u32, and the manifest
 // `l3_banks`. Version 4 is still read; its residencies have no address (kNoSlot).
 //
+// VERSION 6 (docs/plans/l2-reuse-and-fabric-pipeline-view.md step 4): two tables more, and the
+// manifest's `l2_slots` (the program's `l2 = N`; 0 when it stages nothing).
+//   l2_residency  each STAGED copy's L2 slot, credit (its stage Move) to L2Release, with the
+//                 Feeds that read it -- its reuse count, recorded, never computed by a reader.
+//                 With l2_slots > 0 the L2 station is modelled: its capacity is the program's
+//                 slots and its occupancy the staged copies. A transient Move's copy (an unstaged
+//                 operand, fed once) holds no L2 credit at L-T1 and is not a residency.
+//   chain         each accumulator's gemm chain on the systolic array (L-T1's fabric pipeline):
+//                 its compute tile, its PEs, and its phases in0, front, in1, last, out1.
+// The pyramid gains a row per L2 slot after the L3 slot rows, then two rows per compute tile:
+// `<cf>/in`, the chains' operand streams [in0, in1), and `<cf>/out`, their results [in1, out1).
+// Version 5 is still read; its records have neither table.
+//
 // Not in v0, by design and named so: cause edges (step 5) and the orchestrator's descriptor
 // trace, which needs a time base across launches and arrives with the orchestrated record.
 //
@@ -50,6 +63,9 @@
 //                      (version 5) l3_tile:u32 slot:u32 bank:u32, the L3 address it held
 //   transit.bin        columns tile:u32 op:u32 hop:u8 mover:u8 lane:u32 t0:f64 t1:f64 src:u32 dst:u32
 //   compute.bin        columns op:u32 station:u32 t0:f64 t1:f64
+//   l2_residency.bin   (version 6) columns tile:u32 cf:u32 slot:u32 t0:f64 t1:f64 feeds:u32
+//   chain.bin          (version 6) columns tile:u32 station:u32 rows:u32 cols:u32 calls:u32
+//                      in0:f64 front:f64 in1:f64 last:f64 out1:f64
 //   op_tiles.bin       CSR of the tiles each op touches: kind:u8 offset:u32 (ops+1), tile:u32 and
 //                      written:u8 (nnz; 1 when the op writes the tile, so a residency's filler
 //                      can be told from a mere reader)
@@ -112,6 +128,23 @@ struct Residency {
     std::uint32_t l3_tile = kNoSlot, slot = kNoSlot, bank = kNoSlot;
 };
 
+// A staged copy's L2 slot (version 6): held from its stage Move's credit to its L2Release.
+struct L2Residency {
+    std::uint32_t tile = 0;
+    std::uint32_t cf = 0, slot = 0;    // the L2 address: the compute tile's L2, and the slot in it
+    Cycle t0 = 0, t1 = 0;
+    std::uint32_t feeds = 0;           // the Feeds that read it: its reuse count
+};
+
+// An accumulator's gemm chain on the systolic array (version 6): L-T1's phases, uncalibrated.
+struct Chain {
+    std::uint32_t tile = 0;            // the accumulator
+    std::uint32_t station = 0;         // the compute tile's station
+    std::uint32_t rows = 0, cols = 0;  // the PEs its C tile occupies
+    std::uint32_t calls = 0;
+    Cycle in0 = 0, front = 0, in1 = 0, last = 0, out1 = 0;
+};
+
 struct Transit {
     std::uint32_t tile = 0, op = 0;
     std::uint8_t hop = 0;        // Hop
@@ -149,6 +182,8 @@ struct TileFlowRecord {
     std::uint64_t foreign_slots = 0;   // L3 slots the caller held that this program never names
     std::uint32_t l3_banks = 0;        // the program's L3 banks; 0: residencies carry no address
     std::vector<std::string> unmodelled;   // station kinds this level does not model
+    bool phases = false;               // version 6: the l2_residency and chain tables are present
+    std::uint32_t l2_slots = 0;        // version 6: the program's L2 slots; 0 when it stages nothing
 
     std::vector<Station> stations;
     std::vector<MoverPool> movers;     // lane count per pool: the capacity of a mover row
@@ -159,6 +194,8 @@ struct TileFlowRecord {
     std::vector<Residency> residency;
     std::vector<Transit> transits;
     std::vector<Compute> computes;
+    std::vector<L2Residency> l2_residency;   // version 6
+    std::vector<Chain> chains;               // version 6
 
     // Index of a station by name; throws RecordError when absent.
     std::uint32_t station(const std::string& name) const;

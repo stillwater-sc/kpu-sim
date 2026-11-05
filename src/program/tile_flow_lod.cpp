@@ -136,6 +136,8 @@ Lod build_lod(const TileFlowRecord& rec, std::uint64_t max_base_bins) {
             } else if (kind == "cf") {
                 for (const Compute& c : rec.computes)
                     if (c.station == r) iv[r].emplace_back(c.t0, c.t1);
+            } else if (kind == "l2" && rec.l2_slots > 0) {    // version 6: the staged copies
+                for (const L2Residency& x : rec.l2_residency) iv[r].emplace_back(x.t0, x.t1);
             }
         } else {
             const std::string& pool = rec.movers[r - rec.stations.size()].name;
@@ -155,6 +157,33 @@ Lod build_lod(const TileFlowRecord& rec, std::uint64_t max_base_bins) {
                 constant.push_back(0);
                 for (const Residency& x : rec.residency)
                     if (x.station == s && x.slot == slot) iv.back().emplace_back(x.t0, x.t1);
+            }
+        }
+    }
+    // Version 6: one row per L2 slot, capacity 1, the staged copies placed there; then two rows per
+    // compute tile, its chains' operand streams [in0, in1) and their results leaving [in1, out1).
+    // Results overlap the next chain's operands, which is the fabric (plan §3.1); the out row can
+    // reach 2 where a short chain's results overtake into the previous one's link wait.
+    if (rec.phases) {
+        for (std::size_t s = 0; s < rec.stations.size(); ++s) {
+            if (rec.stations[s].kind != "l2") continue;
+            for (std::uint32_t slot = 0; slot < rec.l2_slots; ++slot) {
+                rows.push_back({rec.stations[s].name + "/slot[" + std::to_string(slot) + "]", "l2_slot", 1, true});
+                iv.emplace_back();
+                constant.push_back(0);
+                for (const L2Residency& x : rec.l2_residency)
+                    if (x.slot == slot) iv.back().emplace_back(x.t0, x.t1);
+            }
+        }
+        for (std::size_t s = 0; s < rec.stations.size(); ++s) {
+            if (rec.stations[s].kind != "cf") continue;
+            for (const char* phase : {"in", "out"}) {
+                const bool in = phase[0] == 'i';
+                rows.push_back({rec.stations[s].name + "/" + phase, in ? "cf_in" : "cf_out", 1, true});
+                iv.emplace_back();
+                constant.push_back(0);
+                for (const Chain& c : rec.chains)
+                    if (c.station == s) iv.back().emplace_back(in ? c.in0 : c.in1, in ? c.in1 : c.out1);
             }
         }
     }

@@ -9,6 +9,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **L-T1 times L2 credits; `.tflow` version 6** (`docs/plans/l2-reuse-and-fabric-pipeline-view.md`
+  step 4).
+  - L-T1 holds an L2 credit per slot. A stage Move waits for its own slot's `L2Release`, as a Load
+    waits for its L3 slot's Release. A staged copy is held from that credit to its `L2Release`,
+    and its Feeds are counted (its reuse count). The run reports `peak_l2`, and the stage Moves
+    whose start their L2 slot decided (`l2_bound`, `l2_wait_cycles`); `kpu-run` prints them.
+  - `.tflow` version 6 adds two tables and the manifest's `l2_slots`:
+    - `l2_residency`: each staged copy's slot, life and Feeds. With `l2 > 0` the L2 station is
+      modelled, with the program's slots as its capacity.
+    - `chain`: each gemm chain's compute tile, PEs and phases (`in0`, `front`, `in1`, `last`,
+      `out1`).
+
+    The pyramid gains a row per L2 slot, and an operands-in and a results-out row per compute tile.
+  - `tflow_check.py` adds two checks, and TF8 covers the new rows:
+    - TF13: one copy per L2 slot, within `l2_slots`, each fed.
+    - TF14: the fabric's phases, i.e. the skew, the top link, and one operand stream per compute
+      tile.
+  - New self-test `test_tflow_check_v6.py`.
+  - The tile-flow viewer reads versions 3-6. It draws and inspects the L2 slot and compute-fabric
+    rows, and reports L2 reuse.
+
 - **L2 staging** (`docs/plans/l2-reuse-and-fabric-pipeline-view.md` step 3; opset 1.3, `.dflow`
   version 5).
   - Language: `machine flat(l3 = N, l2 = M)` and `stage A[i, :] in l2 { ... }`.

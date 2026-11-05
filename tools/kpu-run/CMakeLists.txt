@@ -483,9 +483,22 @@ if(KPU_BUILD_TESTS)
             COMMAND run --program ${CMAKE_CURRENT_BINARY_DIR}/dflow_staged.csp
                     --deploy ${_deploy}/kpu_s1.json --level block-sequential
                     --dflow ${CMAKE_CURRENT_BINARY_DIR}/csp_staged.dflow
-                    --dflow-values A[1,0],A[1,2],C[1,1])
+                    --dflow-values A[1,0],A[1,2],C[1,1]
+                    --tflow ${CMAKE_CURRENT_BINARY_DIR}/csp_staged.tflow)
         add_test(NAME dflow_check_staged
             COMMAND ${KPU_PYTHON3} ${_dflow_check} ${CMAKE_CURRENT_BINARY_DIR}/csp_staged.dflow)
+        # Its tile-flow record (version 6, step 4): the staged L2 copies and the fabric's chains,
+        # checked (TF13, TF14), self-tested, and read by the tile-flow viewer.
+        add_test(NAME tflow_check_staged
+            COMMAND ${KPU_PYTHON3} ${_tflow_check} ${CMAKE_CURRENT_BINARY_DIR}/csp_staged.tflow)
+        add_test(NAME tflow_check_v6_selftest
+            COMMAND ${KPU_PYTHON3} ${CMAKE_SOURCE_DIR}/tools/trace/test_tflow_check_v6.py
+                    ${CMAKE_CURRENT_BINARY_DIR}/csp_staged.tflow)
+        add_test(NAME tileflow_viewer_staged
+            COMMAND ${KPU_PYTHON3} ${CMAKE_SOURCE_DIR}/tools/visualization/tileflow/test_viewer.py
+                    ${CMAKE_CURRENT_BINARY_DIR}/csp_staged.tflow)
+        set_tests_properties(tflow_check_staged tflow_check_v6_selftest tileflow_viewer_staged
+            PROPERTIES FIXTURES_REQUIRED dflow_staged)
         set_tests_properties(csp_gen_dflow_staged PROPERTIES FIXTURES_SETUP dflow_staged_csp)
         set_tests_properties(kpu_run_csp_dflow_staged PROPERTIES
             FIXTURES_REQUIRED dflow_staged_csp FIXTURES_SETUP dflow_staged)
@@ -535,6 +548,7 @@ if(KPU_BUILD_TESTS)
             kpu_run_csp_dflow_reference dflow_check_reference dflow_check_selftest domainflow_viewer
             kpu_run_csp_dflow_values_refuses kpu_run_csp_dflow_streamed dflow_check_streamed
             csp_gen_dflow_staged kpu_run_csp_dflow_staged dflow_check_staged
+            tflow_check_staged tflow_check_v6_selftest tileflow_viewer_staged
             PROPERTIES LABELS "program;domainflow;csp")
     endif()
     # Residency across operators (step 4d): the first operator of a chain retains its result

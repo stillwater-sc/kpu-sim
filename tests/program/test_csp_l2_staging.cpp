@@ -25,7 +25,9 @@
 #include <sw/kpu/program/serialize/l0_format.hpp>
 #include <sw/kpu/program/tile_program_reference.hpp>
 
+#include <algorithm>
 #include <cstddef>
+#include <map>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -298,6 +300,41 @@ TEST_CASE("L2 staging: every level computes the oracle; L-CA re-Moves from L3", 
     const auto saved = bm(false) - bm(true);
     CHECK(saved > 0);
     CHECK(saved % 48 == 0);
+}
+
+TEST_CASE("L2 staging: L-T1 holds an L2 credit per slot, stage Move to L2Release", "[program][csp][run][l2]") {
+    const auto d = platform::read_spec_file("tests/program/deploy/kpu_s1.json").device(0);
+    const lang::Program ast = lang::parse(matmul(true));
+    const auto o = driver::csp_run_level(ExecutionLevel::BlockSequential, ast, &d, driver::csp_inputs(ast));
+    REQUIRE_FALSE(o.skipped);
+    // A's 16 tiles, each staged once (one per row and k) and fed once per column j.
+    REQUIRE(o.l2_slots.size() == 16);
+    CHECK(o.peak_l2 == 4);
+    std::map<std::uint32_t, std::vector<std::pair<std::uint64_t, std::uint64_t>>> by_slot;
+    for (const auto& sl : o.l2_slots) {
+        CAPTURE(sl.tile.to_string());
+        CHECK(sl.feeds == 4);
+        CHECK(sl.t1 > sl.t0);
+        by_slot[sl.place.slot].emplace_back(sl.t0, sl.t1);
+    }
+    // Every row reuses slots 0-3: the next row's stage into a slot starts no earlier than the
+    // L2Release of the copy before it -- a write-after-read on the slot, as for L3.
+    REQUIRE(by_slot.size() == 4);
+    for (auto& [slot, iv] : by_slot) {
+        CAPTURE(slot);
+        REQUIRE(iv.size() == 4);
+        std::sort(iv.begin(), iv.end());
+        for (std::size_t i = 1; i < iv.size(); ++i) CHECK(iv[i].first >= iv[i - 1].second);
+    }
+    // Each stage Move starts no earlier than its copy's credit.
+    std::size_t k = 0;
+    for (const auto& rec : o.records)
+        if (rec.kind == Action::Kind::Move && k < o.l2_slots.size() &&
+            rec.tile.to_string() == o.l2_slots[k].tile.to_string()) {
+            CHECK(rec.start >= o.l2_slots[k].t0);
+            ++k;
+        }
+    CHECK(k == o.l2_slots.size());
 }
 
 TEST_CASE("L2 staging: the trace prints as a program with its stage blocks", "[program][csp][lang][l2]") {

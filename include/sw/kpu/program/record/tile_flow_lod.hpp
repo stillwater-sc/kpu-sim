@@ -14,6 +14,10 @@
 //   mover pool    occupancy = lanes busy
 //   dram, l2, l1  no occupancy at L-T1 (DRAM is unbounded, L2 and L1 are not modelled);
 //                 the row exists so the viewer can draw it, and says `modelled = false`
+//   l2 station    (version 6, a program that stages) occupancy = staged copies held
+//
+// Then, after every station and mover row: one row per L3 slot (version 5), one per L2 slot and
+// two per compute tile, `<cf>/in` and `<cf>/out`, its chains' operand and result streams (version 6).
 //
 // METRICS, per row per bin, every one of them EXACTLY MERGEABLE:
 //

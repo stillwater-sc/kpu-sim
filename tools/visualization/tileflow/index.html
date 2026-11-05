@@ -182,10 +182,14 @@ function parse(files) {
   // Version 4: the same columns, recording a CSP program's run -- an op is one of its actions.
   // Version 5: a CSP program's record whose residencies carry their L3 address (l3_tile, slot,
   // bank; l3-placement-at-lb step 5b). The pyramid then has one row per slot.
-  const VERSIONS = [3, 4, 5];
-  if (m.format !== "kpu-tflow" || !VERSIONS.includes(m.version)) throw new Error("not a version-3, -4 or -5 kpu-tflow bundle (re-record with kpu-run --tflow)");
+  // Version 6: two tables more -- each staged L2 copy (its slot, credit to L2Release, and its Feeds)
+  // and each gemm chain's phases on the fabric -- and pyramid rows per L2 slot and per compute tile's
+  // operand and result streams (l2-reuse-and-fabric-pipeline-view step 4).
+  const VERSIONS = [3, 4, 5, 6];
+  if (m.format !== "kpu-tflow" || !VERSIONS.includes(m.version)) throw new Error("not a version-3 to -6 kpu-tflow bundle (re-record with kpu-run --tflow)");
   if (m.version >= 4 && m.ops !== "csp-actions") throw new Error(`a version-${m.version} bundle must say its ops are csp-actions`);
-  if (m.version === 5 && !(Number.isInteger(m.l3_banks) && m.l3_banks >= 1)) throw new Error("a version-5 bundle must say its L3 banks (l3_banks)");
+  if (m.version >= 5 && !(Number.isInteger(m.l3_banks) && m.l3_banks >= 1)) throw new Error(`a version-${m.version} bundle must say its L3 banks (l3_banks)`);
+  if (m.version === 6 && !(Number.isInteger(m.l2_slots) && m.l2_slots >= 0)) throw new Error("a version-6 bundle must say its L2 slots (l2_slots)");
   const R = { m };
   const tb = (name, extra) => {
     const t = m.tables[name], buf = files[t.file];
@@ -200,6 +204,8 @@ function parse(files) {
   R.res = tb("residency");
   R.tr = tb("transit");
   R.co = tb("compute");
+  R.l2 = m.version === 6 ? tb("l2_residency") : { rows: 0 };
+  R.ch = m.version === 6 ? tb("chain") : { rows: 0 };
   {
     const t = m.tables.op_tiles, buf = files[t.file];
     R.ops = { rows: t.rows, kind: col(buf, t.columns, "kind", t.rows), offset: col(buf, t.columns, "offset", t.rows + 1) };
@@ -432,14 +438,16 @@ function start() {
   $("summary").innerHTML = [
     ["level", m.level], ["device", `${m.device} (${m.device_label})`], ["makespan", fmt(m.makespan) + " cycles"],
     ["L3 capacity", l3cap ? fmt(l3cap) + " tiles" : "unbounded"],
-    ["L3 slots", m.version === 5 ? `addressed: ${fmt(l3cap)} slots, ${esc(m.l3_banks)} bank${m.l3_banks > 1 ? "s" : ""} (one row each)` : "pooled (no addresses before version 5)"],
+    ["L3 slots", m.version >= 5 ? `addressed: ${fmt(l3cap)} slots, ${esc(m.l3_banks)} bank${m.l3_banks > 1 ? "s" : ""} (one row each)` : "pooled (no addresses before version 5)"],
     ["compute tiles", nCF],
+    ["L2 staging", m.version === 6 ? (m.l2_slots ? `${fmt(m.l2_slots)} slots, ${fmt(R.l2.rows)} staged copies (one row per slot)` : "none (the program stages nothing)") : "not recorded before version 6"],
+    ["fabric chains", m.version === 6 ? fmt(R.ch.rows) : "not recorded before version 6"],
     ["tiles", fmt(m.tiles.length)], ["transits", fmt(R.tr.rows)], ["computes", fmt(R.co.rows)],
     ["lanes", lanes || "—"], ["floorplan", R.fp ? R.fp.source : "none loaded"],
     ["binding", R.B ? `derived · ${esc(R.B.engines.length)} DMA engines · ${esc(R.B.l3.tiles.length)} L3 tiles · ${esc(R.B.l3.overflow)} L3 over · ${esc(R.B.dma ? R.B.dma.overloaded : 0)} DMA over` : "none (pooled rows)"]
   ].map(([k, v]) => `<span class="chip">${k} <b>${esc(v)}</b></span>`).join("") +
     (m.unmodelled && m.unmodelled.length ? `<span class="chip warn">not modelled <b>${esc(m.unmodelled.join(", "))}</b></span>` : "");
-  $("honesty").textContent = (R.bindingIgnored ? R.bindingIgnored + " " : "") + (R.B ? (m.version === 5 ? `At ${m.level} each L3 residency's PROGRAM slot is recorded (one swimlane row per slot, from the record); which physical L3 tile holds it is not. ` : "") + `At ${m.level} the executor binds moves to lanes, not places, and does not place L3 on the floorplan's tiles. The per-resource rows and floorplan fills here come from a DERIVED binding (bind.py): ${R.B.policies.l3}; ${R.B.policies.dma}; ${R.B.policies.noc}. Timing is the executor's; only the place is derived. ${R.B.notes.join(" ")}` : (m.version === 5 ? `At ${m.level}, every L3 residency carries the address the program placed it at (module, slot, bank): the swimlanes draw one row per slot. A slot is an address in the program's L3, not a physical L3 tile, so the floorplan still draws L3 pooled across every L3 block; moves are bound to lanes of a mover pool, not to places. ` : `At ${m.level}, L3 is one pooled capacity and moves are bound to lanes of a mover pool, not to places: the floorplan draws L3 and the movers as pooled fills across every block of their kind, never as per-tile values this record does not hold. `) + `Invariants are checked by tools/trace/tflow_check.py, not here.`);
+  $("honesty").textContent = (R.bindingIgnored ? R.bindingIgnored + " " : "") + (R.B ? (m.version >= 5 ? `At ${m.level} each L3 residency's PROGRAM slot is recorded (one swimlane row per slot, from the record); which physical L3 tile holds it is not. ` : "") + `At ${m.level} the executor binds moves to lanes, not places, and does not place L3 on the floorplan's tiles. The per-resource rows and floorplan fills here come from a DERIVED binding (bind.py): ${R.B.policies.l3}; ${R.B.policies.dma}; ${R.B.policies.noc}. Timing is the executor's; only the place is derived. ${R.B.notes.join(" ")}` : (m.version >= 5 ? `At ${m.level}, every L3 residency carries the address the program placed it at (module, slot, bank): the swimlanes draw one row per slot. A slot is an address in the program's L3, not a physical L3 tile, so the floorplan still draws L3 pooled across every L3 block; moves are bound to lanes of a mover pool, not to places. ` : `At ${m.level}, L3 is one pooled capacity and moves are bound to lanes of a mover pool, not to places: the floorplan draws L3 and the movers as pooled fills across every block of their kind, never as per-tile values this record does not hold. `) + (m.version === 6 ? `Each staged L2 copy is drawn in its slot from its stage Move's credit to its L2Release, with the Feeds that read it (its reuse count, from the record); a transient copy, fed once, holds no L2 credit at ${m.level} and is not drawn. Each compute tile has two rows: its chains' operands entering [in0, in1) and their results leaving [in1, out1), L-T1's output-stationary pipeline, uncalibrated. ` : "") + `Invariants are checked by tools/trace/tflow_check.py, not here.`);
   viewA = 0; viewB = Math.max(1, m.makespan); zoomHistory.length = 0;
   const sc = $("scrub"); sc.max = m.makespan; sc.value = 0;
   T = Math.floor(m.makespan * 0.4);
@@ -698,6 +706,14 @@ $("lanes").addEventListener("mousemove", e => {
     const i = slotResidencyAt(stationOfRow(row), slotOfRow(row), h.t);
     return showTip(e, `${esc(row.name)}<br>cycle ${fmt(Math.round(h.t))}: ${i >= 0 ? tileText(R.res.tile[i]) + " (bank " + R.res.bank[i] + ")" : "free"}`);
   }
+  if (row.kind === "l2_slot") {
+    const i = l2CopyAt(slotOfRow(row), h.t);
+    return showTip(e, `${esc(row.name)}<br>cycle ${fmt(Math.round(h.t))}: ${i >= 0 ? tileText(R.l2.tile[i]) + " staged, fed " + fmt(R.l2.feeds[i]) + "x" : "free"}`);
+  }
+  if (row.kind === "cf_in" || row.kind === "cf_out") {
+    const c = chainAt(row, h.t);
+    return showTip(e, `${esc(row.name)}<br>cycle ${fmt(Math.round(h.t))}: ${c >= 0 ? tileText(R.ch.tile[c]) + " " + esc(chainPhase(c, h.t)) : "idle"}`);
+  }
   showTip(e, `${esc(row.name)}<br>cycles ${fmt(b * width)}–${fmt((b + 1) * width)}<br>mean ${(lv.occ[i] / width).toFixed(2)}${row.capacity ? " of " + fmt(row.capacity) : ""} · peak ${fmt(lv.peak[i])}${row.capacity && lv.peak[i] > row.capacity ? " OVER CAPACITY" : ""}<br>${fmt(lv.starts[i])} started`);
 });
 $("lanes").addEventListener("mouseleave", hideTip);
@@ -897,8 +913,47 @@ function slotResidencyAt(station, slot, t) {
     if (R.res.station[i] === station && R.res.slot[i] === slot && R.res.t0[i] <= t && t < R.res.t1[i]) return i;
   return -1;
 }
+// Version 6: the staged copy an L2 slot row holds at cycle t, the chain a compute tile's in or out row
+// carries at t (-1: none), and which of L-T1's phases t falls in. The phases are the record's.
+function l2CopyAt(slot, t) {
+  for (let i = 0; i < R.l2.rows; i++) if (R.l2.slot[i] === slot && R.l2.t0[i] <= t && t < R.l2.t1[i]) return i;
+  return -1;
+}
+function cfOfRow(row) { const n = row.name.slice(0, row.name.lastIndexOf("/")); return R.m.stations.findIndex(s => s.name === n); }
+function chainAt(row, t) {
+  const s = cfOfRow(row), inRow = row.kind === "cf_in";
+  for (let c = 0; c < R.ch.rows; c++) {
+    if (R.ch.station[c] !== s) continue;
+    const a = inRow ? R.ch.in0[c] : R.ch.in1[c], b = inRow ? R.ch.in1[c] : R.ch.out1[c];
+    if (a <= t && t < b) return c;
+  }
+  return -1;
+}
+function chainPhase(c, t) {
+  const C = R.ch;
+  if (t >= C.in1[c]) return t < C.last[c] ? "tail: the last operands cross the array, results leave" : "results leaving the array";
+  return t < C.front[c] ? "fill: the wavefront crosses the array" : "steady: every PE computes";
+}
 function inspectRow(r) {
   const row = R.lod.rows[r], top = R.lod.levels[R.lod.levels.length - 1];
+  if (row.kind === "l2_slot") {
+    const slot = slotOfRow(row), held = [];
+    for (let i = 0; i < R.l2.rows; i++) if (R.l2.slot[i] === slot) held.push(i);
+    held.sort((a, b) => R.l2.t0[a] - R.l2.t0[b]);
+    const now = l2CopyAt(slot, T);
+    let feeds = 0; for (const i of held) feeds += R.l2.feeds[i];
+    $("insp").innerHTML = `<div class="kv"><span>L2 slot</span><span>${esc(row.name)}</span><span>at cursor</span><span>${now >= 0 ? tileText(R.l2.tile[now]) : "free"}</span><span>staged copies</span><span>${fmt(held.length)}</span><span>Feeds served</span><span>${fmt(feeds)}</span></div>` +
+      `<p class="note">${held.slice(0, 12).map(i => `${tileText(R.l2.tile[i])}: ${fmt(R.l2.t0[i])}–${fmt(R.l2.t1[i])}, fed ${fmt(R.l2.feeds[i])}x`).join("<br>") || "never staged into"}${held.length > 12 ? "<br>…" : ""}</p>`;
+    return;
+  }
+  if (row.kind === "cf_in" || row.kind === "cf_out") {
+    const s = cfOfRow(row), mine = [];
+    for (let c = 0; c < R.ch.rows; c++) if (R.ch.station[c] === s) mine.push(c);
+    const now = chainAt(row, T);
+    $("insp").innerHTML = `<div class="kv"><span>row</span><span>${esc(row.name)}</span><span>stream</span><span>${row.kind === "cf_in" ? "operands in [in0, in1)" : "results out [in1, out1)"}</span><span>chains</span><span>${fmt(mine.length)}</span><span>at cursor</span><span>${now >= 0 ? tileText(R.ch.tile[now]) + " " + esc(chainPhase(now, T)) : "idle"}</span></div>` +
+      `<p class="note">${mine.slice(0, 12).map(c => `${tileText(R.ch.tile[c])}: ${fmt(R.ch.calls[c])} calls on ${fmt(R.ch.rows[c])}x${fmt(R.ch.cols[c])} PEs, in ${fmt(R.ch.in0[c])}–${fmt(R.ch.in1[c])}, out by ${fmt(R.ch.out1[c])}`).join("<br>") || "no chains"}${mine.length > 12 ? "<br>…" : ""}</p>`;
+    return;
+  }
   if (row.kind === "l3_slot") {
     const slot = slotOfRow(row), station = stationOfRow(row), held = [];
     for (let i = 0; i < R.res.rows; i++) if (R.res.station[i] === station && R.res.slot[i] === slot) held.push(i);
@@ -979,7 +1034,11 @@ function renderDiag() {
     }
     out.push([bound / L.bins > 0.25 ? "warn" : "info", "movement-bound", `${(100 * bound / L.bins).toFixed(0)}% of the run has a mover pool saturated while fewer than half the compute tiles compute.`]);
   }
-  out.push(["info", "invariants", "Not checked here: run python3 tools/trace/tflow_check.py on this bundle (TF1–TF9)."]);
+  if (m.version === 6 && R.l2.rows) {
+    let feeds = 0; for (let i = 0; i < R.l2.rows; i++) feeds += R.l2.feeds[i];
+    out.push(["info", "L2 reuse", `${fmt(R.l2.rows)} staged copies served ${fmt(feeds)} Feeds (${(feeds / R.l2.rows).toFixed(1)} each) from ${fmt(m.l2_slots)} L2 slots; each copy left L3 once.`]);
+  }
+  out.push(["info", "invariants", "Not checked here: run python3 tools/trace/tflow_check.py on this bundle (TF1–TF14)."]);
   $("diag").innerHTML = out.map(([sev, label, text]) => `<li><span class="sev ${esc(sev)}">${esc(label)}</span><span>${esc(text)}</span></li>`).join("");
 }
 
