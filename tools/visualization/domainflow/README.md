@@ -34,8 +34,21 @@ Open `mm512.html` in a browser. It needs no server and no other file. Alternativ
   latest recorded action left it with, and in which channel; "final" shows its value when the run
   ended. Every operand's final values are always recorded; a tile's value at each action only when
   `--dflow-values` selected it (`C[2,3],A[2,0]`, an operand name, or `all`), under
-  `--dflow-values-cap` (64 MiB). The elements are float32, the format the operands carry; the page
-  refuses a bundle naming another format rather than misread it.
+  `--dflow-values-cap` (64 MiB). Before version 6 the elements are float32; from version 6 they
+  are a byte payload decoded by each operand's element type (int8, int32, fp16, bf16, fp32,
+  fp8_e4m3, fp8_e5m2). The page refuses a format or type it doesn't know rather than misread it.
+
+- **The shared record (`.dflow` version 6, `docs/plans/shared-tile-flow-record.md`, #386):** one
+  format for kpu-sim and the KPU RTL, so a record from any level opens here.
+  - The header names the record's level (L-B, L-T1, L-T2, L-CA or RTL); the footer names its
+    producer.
+  - A timed level's cycles to result and its event count are stated, not drawn. Drawing time and
+    row progress belongs to the RTL's tile-flow view (kpugen #20).
+  - The inspector shows the element type. An element outside its operand's domain (a triangle, a
+    band, a padding window) is drawn as a checker, never as a zero value, and is left out of the
+    statistics. When the record holds expected values, the inspector says whether the tile equals
+    its expected value, and the readout shows both.
+  - `tools/trace/dflow_rtl_sample.py` writes a hand-written RTL-level sample to try it on.
 
 - **The L-T1 overlay (step 5):** when L-T1 ran in the same `kpu-run` (`--level block-sequential`
   or `all`), the record carries its run joined on the action index. The inspector lists the
@@ -110,4 +123,6 @@ has no DOM) in Node, comparing what it reads at sample steps (step fields, posit
 tile values the inspector shows, the overlay's legs, proximity, slot waits and time-to-action
 lookup, and L2's and the fabric's contents and calls against an independent replay) with the
 bundle read in Python. Every recorded L2 or fabric snapshot must find its tile where the page puts
-it. A strict scan requires every interpolation that writes HTML to be escaped or reviewed. It reads versions 1 to 5.
+it. A strict scan requires every interpolation that writes HTML to be escaped or reviewed. It also
+decodes every byte pattern of every version-6 element type in Node and compares the values with
+`dflow_check.decode`. It reads versions 1 to 6.

@@ -61,7 +61,7 @@ def main():
     page = page.replace(MARKER, f"<script>window.DFLOW_EMBED = {payload};</script>", 1)
     Path(a.output).write_text(page, encoding="utf-8")
     print(f"pack: {a.output} ({len(page) // 1024} KiB, program {m['program']['name']}, "
-          f"{m['tables']['steps']['rows']} of {m['totals']['actions']} steps, L-B)")
+          f"{m['tables']['steps']['rows']} of {m['totals']['actions']} steps, {m.get('level', 'L-B')})")
 
 
 if __name__ == "__main__":

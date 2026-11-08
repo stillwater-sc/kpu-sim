@@ -9,6 +9,10 @@
   read from a .dflow bundle, as domains moving through the program's channels. One step is one CSP
   action; there is no time axis, because L-B has no time.
 
+  Version 6 is the record kpu-sim and the KPU RTL share (docs/plans/shared-tile-flow-record.md): a
+  record from any level opens here, its values decoded by element type and drawn in their domain.
+  A timed level's cycles and events are read and stated, not drawn.
+
   It READS, never executes: every residency, address, occupancy and loop index shown is a column of
   the record that the oracle's run wrote (§6 invariant 7). Open it and choose a bundle folder, or
   embed a bundle with pack.py. Invariants are dflow_check.py's job, not this page's.
@@ -189,7 +193,7 @@ footer ul { margin: 0; padding-left: 18px; }
 <div class="wrap">
   <header class="top">
     <h1>Domain-Flow Debugger</h1>
-    <span class="chip">L-B &middot; the axis is the action, not time</span>
+    <span class="chip" id="levelchip">L-B &middot; the axis is the action, not time</span>
     <span class="chip" id="lt1chip" hidden></span>
     <div class="meta" id="meta"></div>
   </header>
@@ -303,7 +307,7 @@ footer ul { margin: 0; padding-left: 18px; }
 
       <footer>
         <div id="runid"></div>
-        <div>Not modelled at L-B (from the record's manifest):</div>
+        <div id="nm-title">Not modelled at L-B (from the record's manifest):</div>
         <ul id="notmodelled"></ul>
         <div>Everything shown is read from the record that L-B's own run wrote; this page computes no value, residency or loop index. Invariants: <span class="mono">python3 tools/trace/dflow_check.py</span>.</div>
       </footer>
@@ -317,7 +321,12 @@ footer ul { margin: 0; padding-left: 18px; }
 <script id="dflow-core">
 "use strict";
 globalThis.DflowCore = (() => {
-  const VERSIONS = [1, 2, 3, 4, 5];
+  const VERSIONS = [1, 2, 3, 4, 5, 6];
+  // Version 6, the shared record (docs/plans/shared-tile-flow-record.md): the element types and
+  // domains a value is decoded by, and the levels a record can come from.
+  const ELEMENTS = { int8: 1, int32: 4, fp16: 2, bf16: 2, fp32: 4, fp8_e4m3: 1, fp8_e5m2: 1 };
+  const DOMAINS = ["dense", "lower", "upper", "band"];
+  const LEVELS = ["L-B", "L-T1", "L-T2", "L-CA", "RTL"];
   const OPENS = 1, CLOSES = 2, RETAINS = 4, HAS_PLACE = 8, PINNED = 16, HAS_L2 = 32, STAGES = 64, RES_RETAINED = 4;
   const NONE8 = 255, NONE32 = 0xFFFFFFFF;
   const TYPED = { u8: Uint8Array, u16: Uint16Array, u32: Uint32Array, u64: BigUint64Array, i64: BigInt64Array, f32: Float32Array, f64: Float64Array };
@@ -355,11 +364,26 @@ globalThis.DflowCore = (() => {
       for (const c of t.columns) out[c.name] = column(buf, t, c.name);
       R[name] = out;
     }
-    // Version 2: tile values. The elements are float32, the operands' format (tile_check's
-    // ElementFormat); a bundle naming another format is refused rather than misread.
+    // Version 6: the level and producer, time where the level has it, each operand's element type
+    // and domain. Before version 6 a record is L-B's, fp32 and dense.
+    R.level = m.version >= 6 ? m.level : "L-B";
+    R.producer = m.version >= 6 ? m.producer : null;
+    R.cycles = m.version >= 6 && m.time ? int(m.time.cycles, "time.cycles", 0) : null;
+    if (m.version >= 6) {
+      if (!LEVELS.includes(m.level)) throw new Error(`level ${JSON.stringify(m.level)}; a record is one of ${LEVELS.join(", ")}`);
+      for (const o of m.operands) {
+        if (!Object.hasOwn(ELEMENTS, o.element)) throw new Error(`operand ${o.name}: element type ${JSON.stringify(o.element)}; this viewer decodes ${Object.keys(ELEMENTS).join(", ")}`);
+        if (!o.domain || !DOMAINS.includes(o.domain.kind)) throw new Error(`operand ${o.name}: domain ${JSON.stringify(o.domain)}; a domain is one of ${DOMAINS.join(", ")}`);
+      }
+    }
+    R.element = k => (m.version >= 6 ? m.operands[k].element : "fp32");
+    // Version 2: tile values. Before version 6 the elements are float32 (tile_check's ElementFormat);
+    // from version 6 a byte payload, decoded by each operand's element type. A bundle naming another
+    // format is refused rather than misread.
     R.snap = null;
     if (m.version >= 2) {
-      if (!m.values || m.values.format !== "float32") throw new Error(`tile values in format ${JSON.stringify(m.values && m.values.format)}; this viewer decodes float32, the format the operands carry`);
+      const want = m.version >= 6 ? "per-operand" : "float32";
+      if (!m.values || m.values.format !== want) throw new Error(`tile values in format ${JSON.stringify(m.values && m.values.format)}; a version-${m.version} bundle's are ${want}`);
       for (const name of ["snapshots", "elements"]) {
         const t = m.tables[name], buf = files[t.file];
         if (!buf) throw new Error("missing " + t.file);
@@ -368,11 +392,23 @@ globalThis.DflowCore = (() => {
         R[name] = out;
       }
       R.snap = new Map();                    // tile -> its step snapshots in step order, and its final
+      R.expectedOf = new Map();              // an actual snapshot -> the expected one beside it (version 6)
+      const expected = [];
       for (let k = 0; k < R.snapshots.rows; k++) {
+        if (m.version >= 6 && R.snapshots.role[k] === 1) { expected.push(k); continue; }
         const t = R.snapshots.tile[k];
         if (!R.snap.has(t)) R.snap.set(t, { steps: [], final: -1 });
         const e = R.snap.get(t);
         if (R.snapshots.step[k] < 0) e.final = k; else e.steps.push(k);
+      }
+      const actualAt = new Map();
+      for (const [t, e] of R.snap) {
+        for (const k of e.steps) actualAt.set(`${t}:${R.snapshots.step[k]}`, k);
+        if (e.final >= 0) actualAt.set(`${t}:-1`, e.final);
+      }
+      for (const k of expected) {
+        const a = actualAt.get(`${R.snapshots.tile[k]}:${R.snapshots.step[k]}`);
+        if (a !== undefined) R.expectedOf.set(a, k);
       }
       for (const e of R.snap.values()) e.steps.sort((a, b) => R.snapshots.step[a] - R.snapshots.step[b]);
     }
@@ -400,6 +436,16 @@ globalThis.DflowCore = (() => {
         for (let q = 0; q < R.lt1_tiles.rows; q++) R.proxOf.set(R.lt1_tiles.tile[q], q);
         R.byStart = Array.from({ length: R.lt1_legs.rows }, (_, g) => g).sort((x, y) => R.lt1_legs.start[x] - R.lt1_legs.start[y]);
       }
+    }
+    // Version 6: the events a timed level emits (DMAs, moves, streams, credits, tokens, row
+    // progress), with a cycle column only at a timed level. Read, not yet drawn: showing time and
+    // progress is the tile-flow view's (#386 leaves it to the RTL viewer work).
+    R.events = null;
+    if (m.version >= 6) {
+      const t = m.tables.events, buf = files[t.file];
+      if (!buf) throw new Error("missing " + t.file);
+      R.events = { rows: t.rows };
+      for (const c of t.columns) R.events[c.name] = column(buf, t, c.name);
     }
     // Version 5: L2 staging. Each staged copy (its tile, compute tile, slot, the Move that staged it,
     // its L2_RELEASE and its Feeds, the reuse count), and the program's `l2 = N`.
@@ -657,10 +703,56 @@ globalThis.DflowCore = (() => {
     return c >= 0 && c < R.n ? c : -1;
   }
 
-  // A snapshot, decoded: its step (-1: final), channel, shape and elements (a view, not a copy).
+  // Decoding an element type's bytes (version 6) into numbers: integers as integers, the floating
+  // types as their values. fp8 is OCP's: e4m3 (no infinity, one NaN) and e5m2 (IEEE-style).
+  function fp8(b, eb, mb, bias, ieee) {
+    const s = b & 0x80 ? -1 : 1, e = (b >> mb) & ((1 << eb) - 1), f = b & ((1 << mb) - 1);
+    if (ieee && e === (1 << eb) - 1) return f ? NaN : s * Infinity;
+    if (!ieee && e === (1 << eb) - 1 && f === (1 << mb) - 1) return NaN;
+    return e === 0 ? s * f * 2 ** (1 - bias - mb) : s * (1 + f / (1 << mb)) * 2 ** (e - bias);
+  }
+  function decode(element, bytes, first, n) {
+    const dv = new DataView(bytes.buffer, bytes.byteOffset + first, n * ELEMENTS[element]);
+    const out = element === "int8" ? new Int8Array(n) : element === "int32" ? new Int32Array(n) : new Float32Array(n);
+    for (let i = 0; i < n; i++) {
+      switch (element) {
+        case "int8": out[i] = dv.getInt8(i); break;
+        case "int32": out[i] = dv.getInt32(4 * i, true); break;
+        case "fp32": out[i] = dv.getFloat32(4 * i, true); break;
+        case "fp16": { const h = dv.getUint16(2 * i, true), e = (h >> 10) & 31, f = h & 1023, s = h & 0x8000 ? -1 : 1;
+          out[i] = e === 31 ? (f ? NaN : s * Infinity) : e === 0 ? s * f * 2 ** -24 : s * (1 + f / 1024) * 2 ** (e - 15); break; }
+        case "bf16": { const b = new DataView(new ArrayBuffer(4)); b.setUint32(0, dv.getUint16(2 * i, true) << 16); out[i] = b.getFloat32(0); break; }
+        case "fp8_e4m3": out[i] = fp8(dv.getUint8(i), 4, 3, 7, false); break;
+        case "fp8_e5m2": out[i] = fp8(dv.getUint8(i), 5, 2, 15, true); break;
+      }
+    }
+    return out;
+  }
+  // Whether operand element (r, c) is in the operand's declared domain (version 6). Read from the
+  // manifest; an element outside it is drawn as out of domain, never as a zero value.
+  function inDomain(d, r, c) {
+    if (d.pad && (r >= d.pad.rows || c >= d.pad.cols)) return false;
+    if (d.kind === "lower") return c - r <= (d.diagonal ?? 0);
+    if (d.kind === "upper") return r - c <= (d.diagonal ?? 0);
+    if (d.kind === "band") return r - c <= d.lower && c - r <= d.upper;
+    return true;
+  }
+  // A snapshot, decoded: its step (-1: final), channel, shape, element type and elements, the
+  // in-domain mask (null when every element is in the domain), and the expected value beside it.
   function snapshot(R, k) {
     const P = R.snapshots, h = P.height[k], w = P.width[k], first = P.first[k];
-    return { k, step: P.step[k], chan: R.m.channels[P.chan[k]].name, h, w, data: R.elements.v.subarray(first, first + h * w) };
+    const t = P.tile[k], op = R.tiles.operand[t], element = R.element(op);
+    const data = R.m.version >= 6 ? decode(element, R.elements.b, first, h * w) : R.elements.v.subarray(first, first + h * w);
+    let mask = null;
+    const d = R.m.version >= 6 ? R.m.operands[op].domain : null;
+    if (d && (d.kind !== "dense" || d.pad)) {
+      const o = R.m.operands[op], r0 = R.tiles.ti[t] * o.tile_rows, c0 = R.tiles.tj[t] * o.tile_cols;
+      mask = new Uint8Array(h * w);
+      for (let r = 0; r < h; r++) for (let c = 0; c < w; c++) mask[r * w + c] = inDomain(d, r0 + r, c0 + c) ? 1 : 0;
+    }
+    const x = R.expectedOf ? R.expectedOf.get(k) : undefined;
+    return { k, step: P.step[k], chan: R.m.channels[P.chan[k]].name, h, w, element, data, mask,
+             expected: x === undefined ? null : decode(element, R.elements.b, P.first[x], h * w) };
   }
   // The tile's value after step s: its latest snapshot at or before s, or null when none was taken
   // by then (the tile was not selected, or not yet touched). Final: its final value, or null.
@@ -792,7 +884,7 @@ globalThis.DflowCore = (() => {
     return -1;
   }
 
-  return { VERSIONS, parse, tileName, contentsAt, chainInfo, streamCall, cfLeg, fabricAt, timeOf, nextOverlap, movesBefore, callAt, lastCallAt, nextChainStart, nextChainEnd, position, slotAt, step, snapshot, valueAt, finalOf, snapshotsOf, legs, proximity, nextSlotBound, actionAtTime, nextIteration, nextKind, nextOnTile, nextFromLine, releaseOf, RES_RETAINED };
+  return { VERSIONS, ELEMENTS, decode, inDomain, parse, tileName, contentsAt, chainInfo, streamCall, cfLeg, fabricAt, timeOf, nextOverlap, movesBefore, callAt, lastCallAt, nextChainStart, nextChainEnd, position, slotAt, step, snapshot, valueAt, finalOf, snapshotsOf, legs, proximity, nextSlotBound, actionAtTime, nextIteration, nextKind, nextOnTile, nextFromLine, releaseOf, RES_RETAINED };
 })();
 </script>
 
@@ -840,7 +932,13 @@ globalThis.DflowCore = (() => {
     $("meta").innerHTML = `<span>program <b>${esc(M.program.name)}</b></span><span>${shape}</span>` +
       `<span>L3 ${esc(R.cap)} slots, ${esc(R.banks)} bank${R.banks > 1 ? "s" : ""}, place = ${esc(M.machine.place)}</span>` +
       `<span>${fmt(M.totals.actions)} actions &middot; ${fmt(M.totals.loads)} loads &middot; ${fmt(M.totals.stores)} stores</span>`;
-    $("runid").textContent = M.run_id ? `run id: ${M.run_id}` : "run id: none (L-B did not run as a level)";
+    $("runid").textContent = (M.run_id ? `run id: ${M.run_id}` : R.level === "L-B" ? "run id: none (L-B did not run as a level)" : "run id: none")
+      + (R.producer ? ` · producer: ${R.producer}` : "");
+    // The record's level (version 6). The step axis is the CSP action at every level; a timed
+    // level's cycles are stated, not drawn (its time and row progress are the tile-flow view's).
+    $("levelchip").textContent = R.level === "L-B" ? "L-B · the axis is the action, not time"
+      : `${R.level} · the axis is the action; ${R.cycles === null ? "no" : fmt(R.cycles)} cycles to result, ${fmt(R.events ? R.events.rows : 0)} events (not drawn here)`;
+    $("nm-title").textContent = `Not modelled at ${R.level} (from the record's manifest):`;
     $("notmodelled").innerHTML = M.not_modelled.map(x => `<li>${esc(x)}</li>`).join("");
     $("total").textContent = fmt(Math.max(0, R.n - 1));
     $("axis-end").textContent = `step ${fmt(Math.max(0, R.actions - 1))}`;
@@ -1199,7 +1297,7 @@ globalThis.DflowCore = (() => {
     const steps = C.snapshotsOf(R, t);
     const v = showFinal ? C.finalOf(R, t) : C.valueAt(R, t, cur);
     if (showFinal) {
-      note.textContent = v ? "Its value when the run ended (L-B's result)." : `No final value recorded: ${R.m.values.finals === true ? "not an operand tile" : R.m.values.finals}.`;
+      note.textContent = v ? `Its value when the run ended (${R.level}'s result).` : `No final value recorded: ${R.m.values.finals === true ? "not an operand tile" : R.m.values.finals}.`;
     } else if (!steps.length) {
       note.textContent = `Not recorded at each step. Record it with kpu-run --dflow-values ${name}${R.m.values.selected ? ` (this run selected ${R.m.values.selected})` : ""}; its final value is under "final".`;
     } else if (!v) {
@@ -1213,12 +1311,27 @@ globalThis.DflowCore = (() => {
     heatView = v;
     drawHeat(v);
     if (v) {
-      let lo = Infinity, hi = -Infinity, sum = 0, bad = 0;
-      for (const x of v.data) { if (!Number.isFinite(x)) { bad++; continue; } lo = Math.min(lo, x); hi = Math.max(hi, x); sum += x; }
-      const fin = v.data.length - bad;
-      kv.innerHTML = [["shape", `${v.h} × ${v.w} float32`], ["min", fin ? lo.toPrecision(6) : "—"], ["max", fin ? hi.toPrecision(6) : "—"],
-        ["mean", fin ? (sum / fin).toPrecision(6) : "—"], ["not finite", String(bad)]].map(([a, b]) => `<dt>${a}</dt><dd>${esc(b)}</dd>`).join("");
-    } else kv.innerHTML = kvHtml([["shape", "—"], ["min", "—"], ["max", "—"], ["mean", "—"], ["not finite", "—"]]);
+      // Statistics over the elements in the operand's domain; the others are not values.
+      let lo = Infinity, hi = -Infinity, sum = 0, bad = 0, out = 0, differ = 0;
+      for (let i = 0; i < v.data.length; i++) {
+        if (v.mask && !v.mask[i]) { out++; continue; }
+        const x = v.data[i];
+        if (v.expected && !(x === v.expected[i] || (Number.isNaN(x) && Number.isNaN(v.expected[i])))) differ++;
+        if (!Number.isFinite(x)) { bad++; continue; }
+        lo = Math.min(lo, x); hi = Math.max(hi, x); sum += x;
+      }
+      const fin = v.data.length - bad - out, int = v.element === "int8" || v.element === "int32";
+      const num = x => (int ? String(x) : x.toPrecision(6));
+      const rows = [["shape", `${v.h} × ${v.w} ${v.element}`], ["min", fin ? num(lo) : "—"], ["max", fin ? num(hi) : "—"],
+        ["mean", fin ? (sum / fin).toPrecision(6) : "—"], ["not finite", String(bad)]];
+      // A version-6 record always has both rows, so stepping between tiles never moves the layout.
+      if (R.m.version >= 6) {
+        rows.push(["out of domain", v.mask ? `${out} of ${v.data.length}` : "none (dense)"]);
+        rows.push(["vs expected", v.expected ? (differ ? `${differ} element(s) differ` : "equal") : "not recorded"]);
+      }
+      kv.innerHTML = rows.map(([a, b]) => `<dt>${esc(a)}</dt><dd>${esc(b)}</dd>`).join("");
+    } else kv.innerHTML = kvHtml([["shape", "—"], ["min", "—"], ["max", "—"], ["mean", "—"], ["not finite", "—"],
+      ...(R.m.version >= 6 ? [["out of domain", "—"], ["vs expected", "—"]] : [])]);
     const tb = $("snap-hist");
     tb.hidden = !steps.length;
     const shown = steps.length > 500 ? steps.slice(0, 500) : steps;
@@ -1236,13 +1349,16 @@ globalThis.DflowCore = (() => {
     if (!v) { cv.width = 1; cv.height = 1; g.clearRect(0, 0, 1, 1); $("sc-lo").textContent = "\u00a0"; $("sc-hi").textContent = "\u00a0"; $("readout").textContent = ""; $("sc-bar").style.background = "none"; return; }
     cv.width = v.w; cv.height = v.h;
     let m = 0;
-    for (const x of v.data) if (Number.isFinite(x)) m = Math.max(m, Math.abs(x));
+    for (let i = 0; i < v.data.length; i++) if ((!v.mask || v.mask[i]) && Number.isFinite(v.data[i])) m = Math.max(m, Math.abs(v.data[i]));
     const neg = rgb(tok("--op-1")), pos = rgb(tok("--accent")), mid = rgb(tok("--panel")), badc = rgb(tok("--bad"));
+    // Out of domain: a checker of --line and --soft, never the panel colour a zero value gets.
+    const outA = rgb(tok("--line")), outB = rgb(tok("--soft"));
     const img = g.createImageData(v.w, v.h);
     for (let i = 0; i < v.data.length; i++) {
       const x = v.data[i];
       let c;
-      if (!Number.isFinite(x)) c = badc;
+      if (v.mask && !v.mask[i]) c = ((i % v.w) + Math.floor(i / v.w)) % 2 ? outA : outB;
+      else if (!Number.isFinite(x)) c = badc;
       else { const f = m ? Math.min(1, Math.abs(x) / m) : 0, e = x < 0 ? neg : pos; c = [0, 1, 2].map(j => Math.round(mid[j] + (e[j] - mid[j]) * f)); }
       img.data.set([c[0], c[1], c[2], 255], i * 4);
     }
@@ -1325,7 +1441,10 @@ globalThis.DflowCore = (() => {
     if (row < 0 || col < 0 || row >= heatView.h || col >= heatView.w) return;
     const t = selTile >= 0 ? selTile : R.steps.tile[cur], o = R.m.operands[R.tiles.operand[t]];
     const gr = R.tiles.ti[t] * o.tile_rows + row, gc = R.tiles.tj[t] * o.tile_cols + col;
-    $("readout").textContent = `[${row},${col}] in the tile = ${o.name}[${gr},${gc}]: ${heatView.data[row * heatView.w + col]}`;
+    const i = row * heatView.w + col;
+    const what = heatView.mask && !heatView.mask[i] ? "out of domain"
+      : `${heatView.data[i]}` + (heatView.expected ? ` (expected ${heatView.expected[i]})` : "");
+    $("readout").textContent = `[${row},${col}] in the tile = ${o.name}[${gr},${gc}]: ${what}`;
   };
   $("heat").onmouseleave = () => { $("readout").textContent = ""; };
   $("slot-hist").onclick = e => { const b = e.target.closest("button[data-go]"); if (b) go(+b.dataset.go); };

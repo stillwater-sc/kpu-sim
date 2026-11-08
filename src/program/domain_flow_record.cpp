@@ -9,6 +9,9 @@
 #include <sw/kpu/program/record/domain_flow_record.hpp>
 #include <sw/kpu/program/record/columnar.hpp>
 
+#include <sw/kpu/version.hpp>
+
+#include <cstring>
 #include <filesystem>
 
 namespace sw::kpu::program::record {
@@ -41,6 +44,7 @@ void write_dflow(const DFR& rec, const std::string& dir) {
     m["format"] = "kpu-dflow";
     m["version"] = kDflowVersion;
     m["level"] = "L-B";
+    m["producer"] = "kpu-sim " + std::string(sw::kpu::VERSION_FULL);
     m["run_id"] = rec.run_id;
     m["program"] = json{{"name", rec.program_name}, {"text", rec.program_text}};
     m["machine"] = json{{"kind", "flat"}, {"l3", rec.l3}, {"banks", rec.banks}, {"place", rec.place}, {"l2", rec.l2}};
@@ -59,8 +63,22 @@ void write_dflow(const DFR& rec, const std::string& dir) {
     json ops = json::array();
     for (const auto& o : rec.operands)
         ops.push_back(json{{"name", o.name}, {"rows", o.rows}, {"cols", o.cols}, {"tile_rows", o.tile_rows},
-                           {"tile_cols", o.tile_cols}});
+                           {"tile_cols", o.tile_cols}, {"element", "fp32"}, {"domain", json{{"kind", "dense"}}}});
     m["operands"] = ops;
+    // Version 6: the shared record's enums, verbatim (docs/plans/shared-tile-flow-record.md §3).
+    m["layers"] = json::array({"dram", "l3", "l2", "acc", "l1"});
+    m["event_kinds"] = json::array({"DMA", "BLOCK_MOVE", "STREAM", "COMPUTE", "DRAIN", "CREDIT", "TOKEN", "BM_ROW",
+                                    "STR_ROW", "DRAIN_ROW"});
+    m["time"] = nullptr;                                // L-B has no time (§3.7 of the domain-flow plan)
+    m["geometry"] = json{
+        {"dram", json{{"modelled", true}}},
+        {"l3", json{{"modelled", true}, {"slots", rec.l3}, {"banks", rec.banks}}},
+        {"l2", json{{"modelled", false},
+                    {"why", "L-B moves whole tiles through L2 (and stages them in machine.l2 slots); its banks and rows are not modelled"}}},
+        {"acc", json{{"modelled", false},
+                     {"why", "L-B holds an accumulator as a whole tile in the fabric; its banks and rows are not modelled"}}},
+        {"l1", json{{"modelled", false}, {"why", "L-B feeds whole tiles to the fabric; the array's edge is not modelled"}}}};
+    m["result"] = json{{"cycles", nullptr}, {"values", "unchecked"}, {"bound", nullptr}};
     m["vars"] = rec.vars;
     m["totals"] = json{{"actions", rec.actions}, {"loads", rec.loads}, {"stores", rec.stores}};
     m["step_limit"] = rec.step_limit;
@@ -71,7 +89,8 @@ void write_dflow(const DFR& rec, const std::string& dir) {
                                      "tile values between the recorded actions: a snapshot is taken only where an action leaves a selected tile"});
     {
         json v = json::object();
-        v["format"] = "float32";                    // tile_check's ElementFormat: the operands' format
+        v["format"] = "per-operand";                // each operand's element type (fp32: tile_check's ElementFormat)
+        v["expected"] = false;                      // L-B is the oracle: its values are the expected ones
         v["selected"] = rec.values_selected;
         v["cap_bytes"] = rec.values_cap;
         v["cut_at"] = rec.values_cut_at ? json(*rec.values_cut_at) : json(nullptr);
@@ -166,18 +185,32 @@ void write_dflow(const DFR& rec, const std::string& dir) {
         Table t{"snapshots", "snapshots.bin", rec.snapshots.size(), {}};
         using Sn = DFR::Snapshot;
         t.put("step", "u64", col<std::uint64_t>(rec.snapshots, [](const Sn& x) { return x.step; }));
-        t.put("first", "u64", col<std::uint64_t>(rec.snapshots, [](const Sn& x) { return x.first; }));
+        // A byte offset into the payload (version 6): an fp32 element is four bytes.
+        t.put("first", "u64", col<std::uint64_t>(rec.snapshots, [](const Sn& x) { return x.first * sizeof(float); }));
         t.put("tile", "u32", col<std::uint32_t>(rec.snapshots, [](const Sn& x) { return x.tile; }));
         t.put("height", "u32", col<std::uint32_t>(rec.snapshots, [](const Sn& x) { return x.rows; }));
         t.put("width", "u32", col<std::uint32_t>(rec.snapshots, [](const Sn& x) { return x.cols; }));
         t.put("chan", "u8", col<std::uint8_t>(rec.snapshots, [](const Sn& x) { return x.chan; }));
+        t.put("role", "u8", std::vector<std::uint8_t>(rec.snapshots.size(), 0));   // actual: L-B's own
         tables["snapshots"] = write_table(t, dir);
     }
     {
+        // The payload: the fp32 elements' bytes, little-endian (the host is, as checked above).
         static_assert(sizeof(float) == 4, "f32 elements");
-        Table t{"elements", "elements.bin", rec.elements.size(), {}};
-        t.put("v", "f32", rec.elements);
+        std::vector<std::uint8_t> bytes(rec.elements.size() * sizeof(float));
+        if (!bytes.empty()) std::memcpy(bytes.data(), rec.elements.data(), bytes.size());
+        Table t{"elements", "elements.bin", bytes.size(), {}};
+        t.put("b", "u8", bytes);
         tables["elements"] = write_table(t, dir);
+    }
+    {
+        // Events (version 6): a timed level's DMAs, moves, streams, credits, tokens and row progress.
+        // L-B's steps are its events, so it writes none, and no cycle column (L-B has no time).
+        Table t{"events", "events.bin", 0, {}};
+        for (const char* c : {"id", "parent", "action", "where", "src_addr", "dst_addr"}) t.put(c, "u64", std::vector<std::uint64_t>{});
+        for (const char* c : {"tile", "lane", "row", "beat"}) t.put(c, "u32", std::vector<std::uint32_t>{});
+        for (const char* c : {"kind", "process", "src", "dst"}) t.put(c, "u8", std::vector<std::uint8_t>{});
+        tables["events"] = write_table(t, dir);
     }
     {
         Table t{"lt1_legs", "lt1_legs.bin", rec.legs.size(), {}};
@@ -276,6 +309,16 @@ DFR read_dflow(const std::string& dir) {
         rec.banks = m.at("machine").at("banks").get<std::uint32_t>();
         rec.place = m.at("machine").at("place").get<std::string>();
         if (version >= 5) rec.l2 = m.at("machine").at("l2").get<std::uint32_t>();
+        if (version >= 6) {
+            // This record holds what L-B writes: fp32, dense operands. A timed level's or the RTL's
+            // bundle (int8, a triangular domain, ...) is read by tools/trace/dflow_check.py instead.
+            for (const json& o : m.at("operands")) {
+                if (o.at("element").get<std::string>() != "fp32" || o.at("domain").at("kind").get<std::string>() != "dense")
+                    throw RecordError("record: " + dir + ": operand " + o.at("name").get<std::string>() + " is " +
+                                      o.at("element").get<std::string>() + ", " + o.at("domain").at("kind").get<std::string>() +
+                                      "; this reader holds fp32 dense operands only (L-B's)");
+            }
+        }
         for (const json& o : m.at("operands"))
             rec.operands.push_back({o.at("name").get<std::string>(), o.at("rows").get<std::uint64_t>(),
                                     o.at("cols").get<std::uint64_t>(), o.at("tile_rows").get<std::uint64_t>(),
@@ -427,9 +470,27 @@ DFR read_dflow(const std::string& dir) {
                 auto rows = read_col<std::uint32_t>(t, blob, "height", "u32", n);
                 auto cols = read_col<std::uint32_t>(t, blob, "width", "u32", n);
                 auto chan = read_col<std::uint8_t>(t, blob, "chan", "u8", n);
-                for (std::size_t i = 0; i < n; ++i) rec.snapshots.push_back({step[i], first[i], tile[i], rows[i], cols[i], chan[i]});
+                std::vector<std::uint8_t> role(n, 0);
+                if (version >= 6) role = read_col<std::uint8_t>(t, blob, "role", "u8", n);
+                for (std::size_t i = 0; i < n; ++i) {
+                    std::uint64_t f = first[i];
+                    if (version >= 6) {
+                        if (role[i] != 0) throw RecordError("record: " + dir + ": snapshot " + std::to_string(i) +
+                                                            " is an expected value; this reader holds L-B's actual values only");
+                        if (f % sizeof(float)) throw RecordError("record: " + dir + ": snapshot " + std::to_string(i) +
+                                                                 " starts at byte " + std::to_string(f) + ", inside an fp32 element");
+                        f /= sizeof(float);
+                    }
+                    rec.snapshots.push_back({step[i], f, tile[i], rows[i], cols[i], chan[i]});
+                }
             }
-            {
+            if (version >= 6) {
+                auto [t, blob] = table("elements", n);
+                const auto bytes = read_col<std::uint8_t>(t, blob, "b", "u8", n);
+                if (bytes.size() % sizeof(float)) throw RecordError("record: " + dir + ": the payload is not whole fp32 elements");
+                rec.elements.resize(bytes.size() / sizeof(float));
+                if (!bytes.empty()) std::memcpy(rec.elements.data(), bytes.data(), bytes.size());
+            } else {
                 auto [t, blob] = table("elements", n);
                 rec.elements = read_col<float>(t, blob, "v", "f32", n);
             }

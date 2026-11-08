@@ -39,6 +39,15 @@
 //                   its Feeds (the reuse count). Steps carry the L2 address they write, read or
 //                   free (l2_cf, l2_slot; flag kHasL2), the staging (staging), and kStages on a
 //                   staging Move. The manifest's machine.l2 is the program's `l2 = N` (0: none).
+//   (version 6)     the record kpu-sim and the KPU RTL share (docs/plans/shared-tile-flow-record.md,
+//                   #386). The manifest names the level and the producer, time (null at L-B), every
+//                   layer's geometry (L-B models DRAM and L3; L2's banks and rows, the accumulator and
+//                   L1 are declared not modelled), each operand's element type and domain (fp32 and
+//                   dense at L-B), and the result (no cycles at L-B; values unchecked). elements.bin
+//                   becomes a byte payload (column b, u8), decoded by the operand's element type; a
+//                   snapshot's first is a byte offset, and its role says actual or expected (L-B:
+//                   actual). events.bin holds the events a timed level emits; L-B writes it empty,
+//                   with no time column. In memory the record keeps fp32 elements and element offsets.
 //
 // THE L-T1 OVERLAY (§3.7, step 5). L-B has no time; the overlay is a second run, L-T1's, of the same
 // program, joined on the action index. Its cycles are UNCALIBRATED, as L-T1 always says, and only
@@ -80,8 +89,10 @@ namespace sw::kpu::program::record {
 // Version 2: tile values (snapshots, elements). A version-1 bundle has none and is still read.
 // Version 3: the L-T1 overlay (lt1_legs, lt1_tiles). Version 4: the fabric pipeline (lt1_chains,
 // lt1_calls, manifest lt1.fabric and lt1.one_leg). Version 5: L2 staging (l2_staging, the steps'
-// l2_cf, l2_slot and staging, machine.l2). Versions 1 to 4 are still read.
-inline constexpr std::uint32_t kDflowVersion = 5;
+// l2_cf, l2_slot and staging, machine.l2). Version 6: the shared record (level, producer, time,
+// geometry, element types, domains, the byte payload, events, result). Versions 1 to 5 are still read;
+// a version-6 bundle is read when it holds what L-B writes (fp32, dense operands, actual values).
+inline constexpr std::uint32_t kDflowVersion = 6;
 inline constexpr std::uint8_t kNone8 = 0xFF;
 inline constexpr std::uint32_t kNone32 = 0xFFFFFFFFu;
 inline constexpr std::uint64_t kNone64 = ~std::uint64_t{0};
