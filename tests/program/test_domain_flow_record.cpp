@@ -22,6 +22,8 @@
 #include <sw/kpu/program/platform/deployment_json.hpp>
 #include <sw/kpu/program/record/domain_flow_record.hpp>
 
+#include <nlohmann/json.hpp>
+
 #include <cstring>
 #include <filesystem>
 #include <fstream>
@@ -372,6 +374,51 @@ TEST_CASE("dflow: the reader refuses what is not a version-1 bundle", "[dflow][r
     }
     CHECK_THROWS_WITH(record::read_dflow(dir.string()), ContainsSubstring("version 99"));
     CHECK_THROWS_AS(record::read_dflow((dir / "missing").string()), record::RecordError);
+    std::filesystem::remove_all(dir);
+}
+
+// Version 6, the record kpu-sim and the KPU RTL share (docs/plans/shared-tile-flow-record.md, #386).
+TEST_CASE("dflow: L-B writes the shared record, version 6, with no time", "[dflow][record][v6]") {
+    const DomainFlowRecord a = record_of(slurp("tests/program/corpus/linear_64_t16_relu.csp"), 0,
+                                         record::parse_value_selection("C[1,2]")).rec;
+    const auto dir = scratch("v6");
+    record::write_dflow(a, dir.string());
+    const auto m = nlohmann::json::parse(slurp((dir / "manifest.json").string()));
+    CHECK(m.at("version") == 6);
+    CHECK(m.at("level") == "L-B");
+    CHECK_THAT(m.at("producer").get<std::string>(), ContainsSubstring("kpu-sim"));
+    CHECK(m.at("time").is_null());                          // L-B has no time
+    CHECK(m.at("result").at("cycles").is_null());
+    CHECK(m.at("result").at("values") == "unchecked");      // L-B is the oracle: nothing to check it against
+    CHECK(m.at("values").at("format") == "per-operand");
+    const auto& g = m.at("geometry");
+    CHECK(g.at("l3").at("slots") == a.l3);
+    CHECK(g.at("l3").at("banks") == a.banks);
+    for (const char* layer : {"l2", "acc", "l1"}) {         // declared not modelled, never drawn as empty
+        CAPTURE(layer);
+        CHECK(g.at(layer).at("modelled") == false);
+        CHECK_FALSE(g.at(layer).at("why").get<std::string>().empty());
+    }
+    for (const auto& o : m.at("operands")) {
+        CHECK(o.at("element") == "fp32");
+        CHECK(o.at("domain").at("kind") == "dense");
+    }
+    // The payload is bytes, and the events table has no time column at L-B.
+    const auto& tables = m.at("tables");
+    CHECK(tables.at("elements").at("rows") == a.elements.size() * sizeof(float));
+    CHECK(tables.at("events").at("rows") == 0);
+    for (const auto& c : tables.at("events").at("columns")) CHECK(c.at("name") != "cycle");
+    std::filesystem::remove_all(dir);
+}
+
+TEST_CASE("dflow: the C++ reader refuses what L-B does not write", "[dflow][record][v6]") {
+    const DomainFlowRecord a = record_of(slurp("tests/program/corpus/matmul_48x48x48_t16.csp")).rec;
+    const auto dir = scratch("v6-int8");
+    record::write_dflow(a, dir.string());
+    auto m = nlohmann::json::parse(slurp((dir / "manifest.json").string()));
+    m["operands"][0]["element"] = "int8";                   // an RTL record's operand
+    std::ofstream(dir / "manifest.json") << m.dump();
+    CHECK_THROWS_WITH(record::read_dflow(dir.string()), ContainsSubstring("fp32 dense operands only"));
     std::filesystem::remove_all(dir);
 }
 

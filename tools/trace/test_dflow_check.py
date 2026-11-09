@@ -6,7 +6,8 @@ is not a checker.
 
 Usage: python3 test_dflow_check.py <clean-bundle.dflow> <staged-bundle.dflow>
 
-The clean bundle must be version 3 with step snapshots and an L-T1 overlay (kpu-run --level
+The version-6 additions (G1, T1, E1-E5, X1-X3) are tested by test_dflow_check_v6.py, on the RTL
+sample. The clean bundle must be version 6 (kpu-run writes it) with step snapshots and an L-T1 overlay (kpu-run --level
 block-sequential --dflow-values all), so the value and overlay invariants are exercised too. The
 staged bundle is a run of a program that stages tiles in L2 (kpu-csp-gen --stage-a), for S1-S4.
 
@@ -283,7 +284,8 @@ class DflowCheckSelfTest(unittest.TestCase):
         k = self.step_snapshot(STORE_KIND)
         f = self.final_snapshot(self.b.get("snapshots", "tile", k))
         first = self.b.get("snapshots", "first", f)
-        self.b.set("elements", "v", first, self.b.get("elements", "v", first) + 1.0)
+        # Version 6: the payload is bytes (an fp32 element is four); flip one of the first element's.
+        self.b.set("elements", "b", first, self.b.get("elements", "b", first) ^ 0x01)
         self.assertFails("V5", "differs from its final")
 
     def test_v1_channel_out_of_range_is_one_violation(self):
@@ -305,7 +307,7 @@ class DflowCheckSelfTest(unittest.TestCase):
         self.b.save_manifest()
         self.assertUnreadable()
 
-    def test_values_format_other_than_float32_is_unreadable(self):
+    def test_values_format_other_than_per_operand_is_unreadable(self):
         self.b.manifest["values"]["format"] = "bfloat16"
         self.b.save_manifest()
         self.assertUnreadable()
@@ -315,7 +317,7 @@ class DflowCheckSelfTest(unittest.TestCase):
         return self.b.find("lt1_legs", pred)
 
     def test_overlay_is_exercised(self):
-        self.assertEqual(self.b.manifest["version"], 5)
+        self.assertEqual(self.b.manifest["version"], 6)
         self.assertIsNotNone(self.b.manifest["lt1"])
         self.assertGreater(self.b.rows("lt1_legs"), self.b.rows("steps"))     # a Store has two legs
 

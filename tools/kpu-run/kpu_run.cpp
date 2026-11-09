@@ -64,8 +64,9 @@ kpu-run runs a program; it does not write one. kpu-csp-gen writes CSP programs.
   --emit-l0-result <file.l0>  the agreed values: the corpus's expected-output half
   --tflow <dir>             the L-T1 run's tile-flow record (.tflow version 6: residencies at
                             their L3 addresses, staged L2 copies, and fabric chains)
-  --dflow <dir>             the L-B run's domain-flow record (.dflow version 5): every action
-                            as a CSP state transition, written by the oracle's own run
+  --dflow <dir>             the L-B run's domain-flow record (.dflow version 6, the format the
+                            KPU RTL shares): every action as a CSP state transition, written by
+                            the oracle's own run
   --dflow-limit <n>         record at most n steps (0 = all; default 1000000); residencies and
                             the iteration summary are always complete
   --dflow-values <tiles>    also record these tiles' values after every action that leaves

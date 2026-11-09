@@ -105,15 +105,56 @@ tile into an L2 slot, the calls inside it feed the copy, and its L2_RELEASE free
     S3 reuse counts           with every step recorded, a staging's feeds are its staged Feeds
     S4 all free at the end    every staging closes after it opens (only a refused run leaves one
                               open)
+
+Version 6 is the record kpu-sim and the KPU RTL share (docs/plans/shared-tile-flow-record.md; #386):
+the level and producer, time where the level has it, each layer's geometry, the events both sides
+emit (with identities), typed element values, operand domains, expected values and the result:
+    G1 geometry               every layer (dram, l3, l2, acc, l1) is declared, modelled or not (and
+                              then why); a modelled L3 is the machine's slots and banks; a modelled
+                              L2 or accumulator has banks, rows, a row width and a known interleave;
+                              a modelled L1 is the array's edge (rows x cols)
+    T1 time                   an L-B record has no time (no manifest time, no cycle or end column,
+                              no result cycles); a timed level has all three, every event has
+                              cycle <= end, the latest end is the time's cycles to result, and the
+                              result's cycles are the same number
+    E1 references             an event's id is its row; its kind, process, layers, tile, action,
+                              position and parent exist; its layers are modelled and its addresses
+                              inside them; a transaction moves between the layers its kind names
+    E2 identities             no two events share a key (kind, process, tile, layers and addresses,
+                              loop indices, row, beat), and none shares (kind, action, row, beat)
+    E3 progress               a row event (BM_ROW, STR_ROW, DRAIN_ROW) is a child of a transaction
+                              of its kind, of the same tile and action, its row inside the tile, and
+                              (timed) inside its parent's [cycle, end]; only row events have rows
+    E4 credits and tokens     a TOKEN goes downstream along a data edge after its tile arrived at its
+                              source; a CREDIT goes upstream against one after its tile left its
+                              source
+    E5 the join               a transaction's action is a step of the matching kind and tile, at the
+                              step's L3 slot; when every transaction names its action, each recorded
+                              data step has exactly one
+    X1 element types          every operand names a known element type; a snapshot holds exactly
+                              height x width elements of it; its role is actual or expected
+    X2 domains                every operand's domain is well formed, and every element outside it
+                              is stored as zero bytes (the viewer draws it as out of domain, never
+                              as a zero value)
+    X3 expected values        an expected snapshot sits beside an actual one (same tile, step,
+                              channel, shape), once; with expected values every final has one; the
+                              result's values say match exactly when every final equals its
+                              expected (bit for bit, or within result.bound for floating types)
+
+    --result prints only the result -- the level, the producer, the cycles to result and a digest
+    of each operand's final values -- which is what CI compares (D3), never the event sequence.
 """
 
 import argparse
 import array
+import hashlib
 import json
+import math
+import struct
 import sys
 from pathlib import Path
 
-VERSIONS = (1, 2, 3, 4, 5)
+VERSIONS = (1, 2, 3, 4, 5, 6)
 NONE8, NONE32, NONE64 = 0xFF, 0xFFFFFFFF, 0xFFFFFFFFFFFFFFFF
 DTYPES = {"u8": ("B", 1), "u16": ("H", 2), "u32": ("I", 4), "u64": ("Q", 8), "i64": ("q", 8),
           "f32": ("f", 4), "f64": ("d", 8)}
@@ -156,6 +197,33 @@ SCHEMA_V5 = {
                    "cf": "u32", "slot": "u32"},
 }
 STEPS_V5 = {"staging": "u64", "l2_cf": "u32", "l2_slot": "u32"}
+
+# Version 6: the shared record (docs/plans/shared-tile-flow-record.md). The enums below are part of
+# the format: a producer writes them into the manifest verbatim, and both sides index them.
+LEVELS = ("L-B", "L-T1", "L-T2", "L-CA", "RTL")
+LAYERS = ["dram", "l3", "l2", "acc", "l1"]
+EVENT_KINDS = ["DMA", "BLOCK_MOVE", "STREAM", "COMPUTE", "DRAIN", "CREDIT", "TOKEN", "BM_ROW", "STR_ROW",
+               "DRAIN_ROW"]
+EV_DMA, EV_BM, EV_STREAM, EV_COMPUTE, EV_DRAIN, EV_CREDIT, EV_TOKEN, EV_BM_ROW, EV_STR_ROW, EV_DRAIN_ROW = range(10)
+DRAM, L3, L2, ACC, L1 = range(5)
+# A transaction's layers, and the CSP action kind each pair is (enum Action::Kind).
+TRANSACTION = {EV_DMA: {(DRAM, L3): 0, (L3, DRAM): 1},           # LOAD, STORE
+               EV_BM: {(L3, L2): 2, (L2, L3): 3},                 # MOVE, WRITEBACK
+               EV_STREAM: {(L2, L1): 4},                          # FEED
+               EV_COMPUTE: {(L1, ACC): 6},                        # CALL
+               EV_DRAIN: {(ACC, L2): 5}}                          # DRAIN
+PROGRESS = {EV_BM_ROW: EV_BM, EV_STR_ROW: EV_STREAM, EV_DRAIN_ROW: EV_DRAIN}
+DATA_EDGES = {(DRAM, L3), (L3, L2), (L2, L1), (L1, ACC), (ACC, L2), (L2, L3), (L3, DRAM)}
+ELEMENTS = {"int8": 1, "int32": 4, "fp16": 2, "bf16": 2, "fp32": 4, "fp8_e4m3": 1, "fp8_e5m2": 1}
+INTERLEAVES = ("row-mod-banks",)
+DOMAINS = ("dense", "lower", "upper", "band")
+ROLE_ACTUAL, ROLE_EXPECTED = 0, 1
+SCHEMA_V6 = {
+    "events": {"id": "u64", "parent": "u64", "action": "u64", "where": "u64", "src_addr": "u64",
+               "dst_addr": "u64", "tile": "u32", "lane": "u32", "row": "u32", "beat": "u32", "kind": "u8",
+               "process": "u8", "src": "u8", "dst": "u8"},
+}
+EVENTS_TIMED = {"cycle": "u64", "end": "u64"}
 MOVE_KIND, FEED_KIND, L2_RELEASE_KIND = 2, 4, 10
 CALL_KIND = 6
 CREDIT_KINDS = {7, 8, 9, 10}                           # RELEASE, INHERIT, RETAIN, L2_RELEASE
@@ -174,6 +242,16 @@ def _int(v, what, lo=0):
     if not isinstance(v, int) or isinstance(v, bool) or v < lo:
         raise Unreadable(f"{what} is {v!r}, not an integer >= {lo}")
     return v
+
+
+def _isint(v):
+    """An integer, and not a boolean (JSON's true is Python's 1)."""
+    return isinstance(v, int) and not isinstance(v, bool)
+
+
+def nat(v):
+    """A non-negative integer: a band width, a padding count."""
+    return _isint(v) and v >= 0
 
 
 def _manifest(m):
@@ -205,6 +283,106 @@ def _manifest(m):
         raise Unreadable(f"manifest: missing or malformed field ({e!r})")
 
 
+def _manifest_v6(m):
+    """The version-6 manifest fields, typed. Their invariants (G1, T1, X1, X2) are checked by
+    check_v6; here only what load() and the value decoding read."""
+    try:
+        _int(m["machine"]["banks"], "machine.banks", 1)
+        if m["level"] not in LEVELS:
+            raise Unreadable(f"level is {m['level']!r}, not one of {', '.join(LEVELS)}")
+        if not isinstance(m["producer"], str) or not m["producer"]:
+            raise Unreadable("producer is not a non-empty string")
+        if m["layers"] != LAYERS:
+            raise Unreadable(f"layers are {m['layers']!r}; version 6 names {LAYERS}")
+        if m["event_kinds"] != EVENT_KINDS:
+            raise Unreadable(f"event_kinds are {m['event_kinds']!r}; version 6 names {EVENT_KINDS}")
+        t = m["time"]
+        if t is not None and (not isinstance(t, dict) or t.get("unit") != "cycle"):
+            raise Unreadable("time is neither null nor {unit: cycle, cycles}")
+        if t is not None:
+            _int(t.get("cycles"), "time.cycles")
+        if not isinstance(m["geometry"], dict):
+            raise Unreadable("geometry is not an object")
+        r = m["result"]
+        if not isinstance(r, dict) or r.get("values") not in ("match", "mismatch", "unchecked"):
+            raise Unreadable("result: missing or malformed (cycles, values: match | mismatch | unchecked)")
+        if r.get("cycles") is not None:
+            _int(r["cycles"], "result.cycles")
+        b = r.get("bound")
+        if b is not None and not (isinstance(b, dict) and all(isinstance(b.get(k), (int, float)) and not isinstance(b.get(k), bool)
+                                                              and b[k] >= 0 for k in ("atol", "rtol"))):
+            raise Unreadable("result.bound is neither null nor {atol, rtol}")
+        for o in m["operands"]:
+            if not isinstance(o.get("element"), str):
+                raise Unreadable(f"operand {o['name']}: no element type")
+            if not isinstance(o.get("domain"), dict):
+                raise Unreadable(f"operand {o['name']}: no domain")
+    except (KeyError, TypeError) as e:
+        raise Unreadable(f"manifest: missing or malformed field ({e!r})")
+
+
+def element_of(m, operand):
+    """An operand's element type: float32 before version 6, the operand's own from version 6."""
+    return m["operands"][operand]["element"] if m["version"] >= 6 else "fp32"
+
+
+def raw(m, T, k):
+    """Snapshot k's elements as bytes, little-endian, row-major."""
+    P = T["snapshots"]
+    n = P["height"][k] * P["width"][k]
+    if m["version"] < 6:
+        return T["elements"]["v"][P["first"][k]:P["first"][k] + n].tobytes()
+    size = ELEMENTS.get(element_of(m, T["tiles"]["operand"][P["tile"][k]]), 1)
+    return T["elements"]["b"][P["first"][k]:P["first"][k] + n * size].tobytes()
+
+
+def _fp8(b, ebits, mbits, bias, ieee):
+    s = -1.0 if b & 0x80 else 1.0
+    e = (b >> mbits) & ((1 << ebits) - 1)
+    f = b & ((1 << mbits) - 1)
+    if ieee and e == (1 << ebits) - 1:                  # e5m2: IEEE-style inf and NaN
+        return s * math.inf if f == 0 else math.nan
+    if not ieee and e == (1 << ebits) - 1 and f == (1 << mbits) - 1:   # e4m3fn: one NaN, no inf
+        return math.nan
+    if e == 0:
+        return s * f * 2.0 ** (1 - bias - mbits)
+    return s * (1 + f / (1 << mbits)) * 2.0 ** (e - bias)
+
+
+def decode(element, data):
+    """Bytes of one element type as Python numbers (ints for the integer types)."""
+    if element == "int8":
+        return list(struct.unpack(f"<{len(data)}b", data))
+    if element == "int32":
+        return list(struct.unpack(f"<{len(data) // 4}i", data))
+    if element == "fp32":
+        return list(struct.unpack(f"<{len(data) // 4}f", data))
+    if element == "fp16":
+        return list(struct.unpack(f"<{len(data) // 2}e", data))
+    if element == "bf16":
+        return [struct.unpack("<f", struct.pack("<I", h << 16))[0] for h in struct.unpack(f"<{len(data) // 2}H", data)]
+    if element == "fp8_e4m3":
+        return [_fp8(b, 4, 3, 7, False) for b in data]
+    if element == "fp8_e5m2":
+        return [_fp8(b, 5, 2, 15, True) for b in data]
+    raise ValueError(f"unknown element type {element}")
+
+
+def in_domain(domain, r, c):
+    """Whether operand element (r, c) is inside the operand's domain (global coordinates)."""
+    pad = domain.get("pad")
+    if pad is not None and (r >= pad["rows"] or c >= pad["cols"]):
+        return False
+    k = domain["kind"]
+    if k == "lower":
+        return c - r <= domain.get("diagonal", 0)
+    if k == "upper":
+        return r - c <= domain.get("diagonal", 0)
+    if k == "band":
+        return r - c <= domain["lower"] and c - r <= domain["upper"]
+    return True
+
+
 def load(path):
     path = Path(path)
     try:
@@ -216,12 +394,15 @@ def load(path):
     if m.get("version") not in VERSIONS:
         raise Unreadable(f".dflow version {m.get('version')} (this checker reads {', '.join(map(str, VERSIONS))})")
     _manifest(m)
+    if m["version"] >= 6:
+        _manifest_v6(m)
     if m["version"] >= 2:
         v = m.get("values")
-        if not isinstance(v, dict) or v.get("format") != "float32" or not isinstance(v.get("selected"), str) \
+        fmt = "per-operand" if m["version"] >= 6 else "float32"
+        if not isinstance(v, dict) or v.get("format") != fmt or not isinstance(v.get("selected"), str) \
                 or not (v.get("finals") is True or isinstance(v.get("finals"), str)) \
                 or not (v.get("cut_at") is None or (type(v.get("cut_at")) is int and v["cut_at"] >= 0)):
-            raise Unreadable("values: missing or malformed (format float32, selected, finals, cut_at)")
+            raise Unreadable(f"values: missing or malformed (format {fmt}, selected, finals, cut_at)")
     tables = {}
     if m["version"] >= 3:
         o = m.get("lt1")
@@ -247,6 +428,12 @@ def load(path):
                    **(SCHEMA_V4 if m["version"] >= 4 else {}), **(SCHEMA_V5 if m["version"] >= 5 else {}))
     if m["version"] >= 5:
         schemas["steps"] = dict(schemas["steps"], **STEPS_V5)
+    if m["version"] >= 6:
+        schemas.update(SCHEMA_V6)
+        schemas["snapshots"] = dict(schemas["snapshots"], role="u8")
+        schemas["elements"] = {"b": "u8"}       # the payload: bytes, decoded by the operand's element type
+        if m["time"] is not None:
+            schemas["events"] = dict(schemas["events"], **EVENTS_TIMED)
     for name, schema in schemas.items():
         t = m["tables"].get(name)
         if not isinstance(t, dict):
@@ -301,12 +488,13 @@ def check(m, T, limit=20):
     refused = m.get("refusal") is not None
     l3 = m["machine"]["l3"]
 
-    # D8: no time at L-B.
+    # D8: no time at L-B. A timed level's events (version 6) carry its time; nothing else does.
+    timed = m["version"] >= 6 and m["level"] != "L-B"
     for name, t in T.items():
-        if name.startswith("lt1_"):
-            continue                                    # the L-T1 overlay: L-T1's time
+        if name.startswith("lt1_") or (timed and name == "events"):
+            continue                                    # the L-T1 overlay, or a timed level's events
         for col, dtype in t["dtypes"].items():
-            if dtype == "f64" or col.startswith("t_") or col in ("start", "finish"):
+            if dtype == "f64" or col.startswith("t_") or col in ("start", "finish", "cycle", "end"):
                 bad("D8", f"{name}.{col} is a time column ({dtype}); L-B has no time")
 
     # D2: one step, one action.
@@ -502,6 +690,8 @@ def check(m, T, limit=20):
         check_fabric(m, T, bad)
     if m["version"] >= 5:
         check_staging(m, T, bad)
+    if m["version"] >= 6:
+        check_v6(m, T, bad)
     return out, count
 
 
@@ -772,6 +962,15 @@ def check_values(m, T, bad, nr):
     for k in range(P["rows"]):
         t, step, chan = P["tile"][k], P["step"][k], P["chan"][k]
         rows, cols, first = P["height"][k], P["width"][k], P["first"][k]
+        # Version 6: first is a byte offset into the payload, an element is its operand's width;
+        # an expected value (role 1) is checked against its actual one by X3, not here.
+        size = 1
+        if m["version"] >= 6:
+            if P["role"][k] == ROLE_EXPECTED:
+                ok.append(None)
+                continue
+            if t < TL["rows"] and TL["operand"][t] < len(ops):
+                size = ELEMENTS.get(element_of(m, TL["operand"][t]), 1)
         good = True
         if t >= TL["rows"]:
             bad("V1", f"snapshot {k} names tile {t}; there are {TL['rows']}")
@@ -779,8 +978,8 @@ def check_values(m, T, bad, nr):
         if chan >= len(m["channels"]):
             bad("V1", f"snapshot {k} is in channel {chan}; there are {len(m['channels'])}")
             good = False
-        if first + rows * cols > ne:
-            bad("V1", f"snapshot {k}'s elements [{first}, {first + rows * cols}) run past the {ne} recorded")
+        if first + rows * cols * size > ne:
+            bad("V1", f"snapshot {k}'s elements [{first}, {first + rows * cols * size}) run past the {ne} recorded")
             good = False
         if step != NONE64 and step >= actions:
             bad("V1", f"snapshot {k} is at step {step}, past the run's {actions} actions")
@@ -822,10 +1021,359 @@ def check_values(m, T, bad, nr):
             if t in retained or t not in final_of:
                 continue
             f = final_of[t]
-            a = E["v"][P["first"][k]:P["first"][k] + P["height"][k] * P["width"][k]].tobytes()
-            b = E["v"][P["first"][f]:P["first"][f] + P["height"][f] * P["width"][f]].tobytes()
-            if a != b:
+            if raw(m, T, k) != raw(m, T, f):
                 bad("V5", f"tile {t}'s last Store (snapshot {k}) differs from its final value (snapshot {f})")
+
+
+def _extent(g, layer):
+    """How many addresses a modelled layer has: L3 slots, L2 or accumulator rows, L1 edge lanes;
+    None when any address is valid (DRAM)."""
+    if layer == L3:
+        return g["l3"]["slots"]
+    if layer in (L2, ACC):
+        return g[LAYERS[layer]]["rows"]
+    if layer == L1:
+        return max(g["l1"]["rows"], g["l1"]["cols"])
+    return None
+
+
+def check_v6(m, T, bad):
+    S, TL, W, L, P = T["steps"], T["tiles"], T["where"], T["loops"], T["snapshots"]
+    n, actions, ops = S["rows"], m["totals"]["actions"], m["operands"]
+    timed = m["level"] != "L-B"
+    g = m["geometry"]
+
+    # G1: every layer declared; the modelled ones well formed.
+    modelled = [False] * len(LAYERS)
+    geometry_ok = True
+    for i, name in enumerate(LAYERS):
+        x = g.get(name)
+        if not isinstance(x, dict) or not isinstance(x.get("modelled"), bool):
+            bad("G1", f"geometry.{name} is not declared (an object with modelled: true or false)")
+            geometry_ok = False
+            continue
+        if not x["modelled"]:
+            if not isinstance(x.get("why"), str) or not x["why"]:
+                bad("G1", f"geometry.{name} is not modelled but does not say why")
+            continue
+        modelled[i] = True
+        need = {"l3": ("slots", "banks"), "l2": ("banks", "rows", "row_bytes"), "acc": ("banks", "rows", "row_bytes"),
+                "l1": ("rows", "cols")}.get(name, ())
+        for k in need:
+            v = x.get(k)
+            if not isinstance(v, int) or isinstance(v, bool) or v < 1:
+                bad("G1", f"geometry.{name}.{k} is {v!r}, not an integer >= 1")
+                geometry_ok = False
+        if name in ("l2", "acc") and x.get("interleave") not in INTERLEAVES:
+            bad("G1", f"geometry.{name}.interleave is {x.get('interleave')!r}, not one of {', '.join(INTERLEAVES)}")
+        if name == "l3" and geometry_ok and (x["slots"], x["banks"]) != (m["machine"]["l3"], m["machine"]["banks"]):
+            bad("G1", f"geometry.l3 is {x['slots']} slots in {x['banks']} banks; the machine is "
+                      f"{m['machine']['l3']} in {m['machine']['banks']}")
+
+    # T1: time only where the level has it.
+    E = T["events"]
+    ne = E["rows"]
+    cycles = m["time"]["cycles"] if m["time"] is not None else None
+    if not timed:
+        if m["time"] is not None:
+            bad("T1", "an L-B record declares time; L-B has none")
+        if m["result"].get("cycles") is not None:
+            bad("T1", "an L-B record states cycles to result; L-B has no time")
+        for c in EVENTS_TIMED:
+            if c in E["dtypes"]:
+                bad("T1", f"an L-B record's events have a {c} column")
+    else:
+        if m["time"] is None:
+            bad("T1", f"a {m['level']} record declares no time")
+        else:
+            latest = 0
+            for e in range(ne):
+                if E["cycle"][e] > E["end"][e]:
+                    bad("T1", f"event {e} starts at cycle {E['cycle'][e]}, after it ends at {E['end'][e]}")
+                latest = max(latest, E["end"][e])
+            if ne and latest != cycles:
+                bad("T1", f"the latest event ends at cycle {latest}; the time's cycles to result is {cycles}")
+            if m["result"].get("cycles") != cycles:
+                bad("T1", f"result.cycles is {m['result'].get('cycles')}; the time's cycles to result is {cycles}")
+
+    # E1: references, layers and addresses.
+    def loops_of(w):
+        if w == NONE64 or w >= W["rows"] or W["loop_first"][w] + W["loop_count"][w] > L["rows"]:
+            return ()
+        f = W["loop_first"][w]
+        return tuple((L["var"][f + d], L["value"][f + d]) for d in range(W["loop_count"][w]))
+
+    good = [False] * ne
+    for e in range(ne):
+        k, pr, src, dst, t = E["kind"][e], E["process"][e], E["src"][e], E["dst"][e], E["tile"][e]
+        ok = True
+        if E["id"][e] != e:
+            bad("E1", f"event row {e} has id {E['id'][e]}")
+            ok = False
+        if k >= len(EVENT_KINDS):
+            bad("E1", f"event {e} has kind {k}; there are {len(EVENT_KINDS)}")
+            continue
+        if pr != NONE8 and pr >= len(m["processes"]):
+            bad("E1", f"event {e} names process {pr}; there are {len(m['processes'])}")
+            ok = False
+        if t != NONE32 and t >= TL["rows"]:
+            bad("E1", f"event {e} names tile {t}; there are {TL['rows']}")
+            ok = False
+        if E["action"][e] != NONE64 and E["action"][e] >= actions:
+            bad("E1", f"event {e} names action {E['action'][e]}; the run has {actions}")
+            ok = False
+        if E["where"][e] != NONE64 and E["where"][e] >= W["rows"]:
+            bad("E1", f"event {e} names position {E['where'][e]}; there are {W['rows']}")
+            ok = False
+        par = E["parent"][e]
+        if par != NONE64 and (par >= ne or par == e):
+            bad("E1", f"event {e} names parent {par}; there are {ne} events")
+            ok = False
+        for side, layer, addr in (("source", src, E["src_addr"][e]), ("destination", dst, E["dst_addr"][e])):
+            if layer == NONE8:
+                continue
+            if layer >= len(LAYERS):
+                bad("E1", f"event {e}'s {side} is layer {layer}; there are {len(LAYERS)}")
+                ok = False
+            elif not modelled[layer]:
+                bad("E1", f"event {e} ({EVENT_KINDS[k]}) moves through {LAYERS[layer]}, which the record declares not modelled")
+                ok = False
+            elif addr != NONE64 and geometry_ok and _extent(g, layer) is not None and addr >= _extent(g, layer):
+                bad("E1", f"event {e}'s {side} address {addr} is outside {LAYERS[layer]} ({_extent(g, layer)})")
+                ok = False
+        if k in TRANSACTION and ok and (src, dst) not in TRANSACTION[k]:
+            names = lambda x: LAYERS[x] if x < len(LAYERS) else "none"
+            bad("E1", f"event {e} is a {EVENT_KINDS[k]} from {names(src)} to {names(dst)}; a {EVENT_KINDS[k]} moves "
+                      + " or ".join(f"{LAYERS[a]} -> {LAYERS[b]}" for a, b in TRANSACTION[k]))
+            ok = False
+        good[e] = ok
+
+    # E2: identities.
+    keys, by_action = {}, {}
+    for e in range(ne):
+        if not good[e]:
+            continue
+        key = (E["kind"][e], E["process"][e], E["tile"][e], E["src"][e], E["src_addr"][e], E["dst"][e],
+               E["dst_addr"][e], loops_of(E["where"][e]), E["row"][e], E["beat"][e])
+        if key in keys:
+            bad("E2", f"events {keys[key]} and {e} ({EVENT_KINDS[E['kind'][e]]}) share an identity")
+        keys.setdefault(key, e)
+        if E["action"][e] != NONE64:
+            ak = (E["kind"][e], E["action"][e], E["row"][e], E["beat"][e])
+            if ak in by_action:
+                bad("E2", f"events {by_action[ak]} and {e} are both the {EVENT_KINDS[E['kind'][e]]} of action "
+                          f"{E['action'][e]} (row {E['row'][e]}, beat {E['beat'][e]})")
+            by_action.setdefault(ak, e)
+
+    # E3: progress rows.
+    def tile_rows(t):
+        o = ops[TL["operand"][t]] if TL["operand"][t] < len(ops) else None
+        return None if o is None else min(o["tile_rows"], o["rows"] - TL["ti"][t] * o["tile_rows"])
+
+    for e in range(ne):
+        if not good[e]:
+            continue
+        k = E["kind"][e]
+        if k not in PROGRESS:
+            if E["row"][e] != NONE32 or E["beat"][e] != NONE32:
+                bad("E3", f"event {e} ({EVENT_KINDS[k]}) has a row or beat; only row events do")
+            if k in TRANSACTION and E["parent"][e] != NONE64:
+                bad("E3", f"event {e} ({EVENT_KINDS[k]}) is a transaction with a parent")
+            continue
+        par = E["parent"][e]
+        if par == NONE64 or not good[par] or E["kind"][par] != PROGRESS[k]:
+            bad("E3", f"event {e} ({EVENT_KINDS[k]}) is not a child of a {EVENT_KINDS[PROGRESS[k]]}")
+            continue
+        if (E["tile"][e], E["action"][e]) != (E["tile"][par], E["action"][par]):
+            bad("E3", f"event {e} ({EVENT_KINDS[k]}) is of tile {E['tile'][e]}, action {E['action'][e]}; its parent "
+                      f"{par} of tile {E['tile'][par]}, action {E['action'][par]}")
+        h = tile_rows(E["tile"][e]) if E["tile"][e] != NONE32 else None
+        if E["row"][e] == NONE32 or (h is not None and E["row"][e] >= h):
+            bad("E3", f"event {e} ({EVENT_KINDS[k]}) is row {E['row'][e]} of a tile of {h} rows")
+        if timed and "cycle" in E and not (E["cycle"][par] <= E["cycle"][e] and E["end"][e] <= E["end"][par]):
+            bad("E3", f"event {e} ({EVENT_KINDS[k]}) runs [{E['cycle'][e]}, {E['end'][e]}], outside its parent's "
+                      f"[{E['cycle'][par]}, {E['end'][par]}]")
+
+    # E4: credits upstream, tokens downstream.
+    # Timed: a token or credit is sent no earlier than the transaction it follows ends. Untimed: it
+    # comes after it in event order.
+    clocked = timed and "cycle" in E
+    when = (lambda e: E["end"][e]) if clocked else (lambda e: e)
+    arrived, left = {}, {}                     # (tile, layer) -> the earliest transaction into / out of it
+    for e in range(ne):
+        if good[e] and E["kind"][e] in TRANSACTION and E["tile"][e] != NONE32:
+            for d, key in ((arrived, (E["tile"][e], E["dst"][e])), (left, (E["tile"][e], E["src"][e]))):
+                if key not in d or when(e) < when(d[key]):
+                    d[key] = e
+    for e in range(ne):
+        k = E["kind"][e]
+        if not good[e] or k not in (EV_CREDIT, EV_TOKEN):
+            continue
+        src, dst, t = E["src"][e], E["dst"][e], E["tile"][e]
+        edge = (src, dst) if k == EV_TOKEN else (dst, src)
+        if edge not in DATA_EDGES:
+            what = "downstream along" if k == EV_TOKEN else "upstream against"
+            bad("E4", f"event {e} ({EVENT_KINDS[k]}) from {LAYERS[src] if src < len(LAYERS) else src} to "
+                      f"{LAYERS[dst] if dst < len(LAYERS) else dst} does not go {what} a data edge")
+            continue
+        if t == NONE32:
+            continue
+        before = arrived if k == EV_TOKEN else left
+        x = before.get((t, src))
+        if x is None or (when(x) > E["cycle"][e] if clocked else x > e):
+            what = "arrived at" if k == EV_TOKEN else "left"
+            bad("E4", f"event {e} ({EVENT_KINDS[k]}) of tile {t} precedes any transaction that {what} {LAYERS[src]}")
+
+    # E5: the join with the CSP actions.
+    covered, transactions, joined = [0] * n, 0, 0
+    for e in range(ne):
+        k = E["kind"][e]
+        if not good[e] or k not in TRANSACTION:
+            continue
+        transactions += 1
+        a = E["action"][e]
+        if a == NONE64:
+            continue
+        joined += 1
+        if a >= n:
+            continue                            # past a cut: nothing recorded to join to
+        covered[a] += 1
+        want = TRANSACTION[k][(E["src"][e], E["dst"][e])]
+        if S["kind"][a] != want:
+            bad("E5", f"event {e} is a {EVENT_KINDS[k]} {LAYERS[E['src'][e]]} -> {LAYERS[E['dst'][e]]}; action {a} is a "
+                      f"{m['kinds'][S['kind'][a]] if S['kind'][a] < len(m['kinds']) else S['kind'][a]}")
+            continue
+        if E["tile"][e] != S["tile"][a]:
+            bad("E5", f"event {e} is of tile {E['tile'][e]}; its action {a} is of tile {S['tile'][a]}")
+        if S["flags"][a] & HAS_PLACE:
+            addr = E["dst_addr"][e] if E["dst"][e] == L3 else E["src_addr"][e] if E["src"][e] == L3 else NONE64
+            if addr != NONE64 and addr != S["slot"][a]:
+                bad("E5", f"event {e} is at L3 slot {addr}; its action {a} is at slot {S['slot'][a]}")
+    if transactions and joined == transactions:
+        data_kinds = {v for d in TRANSACTION.values() for v in d.values()}
+        for a in range(n):
+            if S["kind"][a] in data_kinds and covered[a] != 1:
+                bad("E5", f"action {a} ({m['kinds'][S['kind'][a]]}) has {covered[a]} transaction events; it moves a tile once")
+
+    # X1, X2: element types, shapes and domains.
+    dom_ok = []
+    for i, o in enumerate(ops):
+        if o["element"] not in ELEMENTS:
+            bad("X1", f"operand {o['name']} has element type {o['element']!r}; the format knows {', '.join(ELEMENTS)}")
+        d = o["domain"]
+        okd = d.get("kind") in DOMAINS
+        if not okd:
+            bad("X2", f"operand {o['name']}'s domain kind is {d.get('kind')!r}, not one of {', '.join(DOMAINS)}")
+        # A diagonal may be negative (d = -1 is strictly lower); widths and padding may not.
+        if okd and d["kind"] in ("lower", "upper") and not _isint(d.get("diagonal", 0)):
+            bad("X2", f"operand {o['name']}'s domain diagonal is {d.get('diagonal')!r}")
+            okd = False
+        if okd and d["kind"] == "band" and not (nat(d.get("lower")) and nat(d.get("upper"))):
+            bad("X2", f"operand {o['name']}'s band needs lower and upper widths")
+            okd = False
+        pad = d.get("pad")
+        if okd and pad is not None and not (isinstance(pad, dict) and nat(pad.get("rows")) and nat(pad.get("cols"))
+                                            and pad["rows"] <= o["rows"] and pad["cols"] <= o["cols"]):
+            bad("X2", f"operand {o['name']}'s padding window {pad!r} is not inside its {o['rows']} x {o['cols']}")
+            okd = False
+        dom_ok.append(okd)
+    nb = T["elements"]["rows"]
+    usable = []
+    for k in range(P["rows"]):
+        t = P["tile"][k]
+        if P["role"][k] not in (ROLE_ACTUAL, ROLE_EXPECTED):
+            bad("X1", f"snapshot {k} has role {P['role'][k]}; a snapshot is actual (0) or expected (1)")
+            usable.append(False)
+            continue
+        if t >= TL["rows"] or TL["operand"][t] >= len(ops) or ops[TL["operand"][t]]["element"] not in ELEMENTS:
+            usable.append(False)
+            continue
+        o = ops[TL["operand"][t]]
+        size = ELEMENTS[o["element"]]
+        h, w = P["height"][k], P["width"][k]
+        if P["first"][k] + h * w * size > nb:
+            bad("X1", f"snapshot {k}'s {h} x {w} {o['element']} elements run past the {nb} payload bytes")
+            usable.append(False)
+            continue
+        usable.append(True)
+        if not dom_ok[TL["operand"][t]] or o["domain"]["kind"] == "dense" and o["domain"].get("pad") is None:
+            continue
+        data, r0, c0 = raw(m, T, k), TL["ti"][t] * o["tile_rows"], TL["tj"][t] * o["tile_cols"]
+        for r in range(h):
+            for c in range(w):
+                if not in_domain(o["domain"], r0 + r, c0 + c):
+                    x = (r * w + c) * size
+                    if any(data[x:x + size]):
+                        bad("X2", f"snapshot {k} ({o['name']}[{TL['ti'][t]},{TL['tj'][t]}]) holds a nonzero element at "
+                                  f"({r0 + r}, {c0 + c}), outside operand {o['name']}'s {o['domain']['kind']} domain")
+                        break
+                else:
+                    continue
+                break
+
+    # X3: expected values beside actual ones, and the result they decide.
+    actual, expected = {}, {}
+    for k in range(P["rows"]):
+        if not usable[k]:
+            continue
+        key = (P["tile"][k], P["step"][k])
+        d = actual if P["role"][k] == ROLE_ACTUAL else expected
+        if P["role"][k] == ROLE_EXPECTED and key in d:
+            bad("X3", f"snapshots {d[key]} and {k} are both the expected value of tile {key[0]} at step {key[1]}")
+        d.setdefault(key, k)
+    for key, k in expected.items():
+        a = actual.get(key)
+        if a is None:
+            bad("X3", f"expected snapshot {k} (tile {key[0]}, step {key[1]}) has no actual value beside it")
+        elif (P["chan"][a], P["height"][a], P["width"][a]) != (P["chan"][k], P["height"][k], P["width"][k]):
+            bad("X3", f"expected snapshot {k} is not in the channel and shape of its actual snapshot {a}")
+    has_expected = bool(expected)
+    if m["values"].get("expected", False) != has_expected:
+        bad("X3", f"values.expected is {m['values'].get('expected')}, but the record holds {len(expected)} expected values")
+    finals = [(key, k) for key, k in actual.items() if key[1] == NONE64]
+    verdict = "unchecked"
+    if has_expected:
+        verdict = "match"
+        bound = m["result"].get("bound")
+        for key, a in finals:
+            x = expected.get(key)
+            if x is None:
+                bad("X3", f"the final value of tile {key[0]} has no expected value")
+                verdict = "mismatch"
+                continue
+            el = element_of(m, TL["operand"][key[0]])
+            if el in ("int8", "int32") or bound is None:
+                same = raw(m, T, a) == raw(m, T, x)
+            else:
+                same = all(p == q or abs(p - q) <= bound["atol"] + bound["rtol"] * abs(q) or (p != p and q != q)
+                           for p, q in zip(decode(el, raw(m, T, a)), decode(el, raw(m, T, x))))
+            if not same:
+                verdict = "mismatch"
+    if m["result"]["values"] != verdict:
+        bad("X3", f"result.values is {m['result']['values']!r}; the finals and their expected values give {verdict!r}")
+
+
+def result(m, T):
+    """The transformation's result, which CI compares (D3): cycles to result and a digest of each
+    operand's final values, in tile order. Independent of the event vocabulary."""
+    P, TL = T.get("snapshots"), T["tiles"]
+    finals = {}
+    if P is not None:
+        for k in range(P["rows"]):
+            if P["step"][k] == NONE64 and (m["version"] < 6 or P["role"][k] == ROLE_ACTUAL):
+                t = P["tile"][k]
+                finals[(TL["operand"][t], TL["ti"][t], TL["tj"][t])] = k
+    digests = {}
+    for i, o in enumerate(m["operands"]):
+        h = hashlib.sha256()
+        tiles = sorted(key for key in finals if key[0] == i)
+        for key in tiles:
+            h.update(raw(m, T, finals[key]))
+        digests[o["name"]] = {"element": element_of(m, i), "tiles": len(tiles), "sha256": h.hexdigest()}
+    v6 = m["version"] >= 6
+    return {"level": m["level"] if v6 else "L-B", "producer": m["producer"] if v6 else None,
+            "program": m["program"]["name"], "cycles": m["result"]["cycles"] if v6 else None,
+            "values": m["result"]["values"] if v6 else "unchecked", "finals": digests}
 
 
 def main(argv=None):
@@ -833,6 +1381,8 @@ def main(argv=None):
     ap.add_argument("bundle")
     ap.add_argument("--json", action="store_true", help="machine-readable report")
     ap.add_argument("--verbose", action="store_true", help="also list the checks that passed")
+    ap.add_argument("--result", action="store_true",
+                    help="print only the result (cycles to result, final-value digests) as JSON, after the checks pass")
     args = ap.parse_args(argv)
     try:
         m, tables = load(args.bundle)
@@ -843,8 +1393,16 @@ def main(argv=None):
             print(f"dflow_check: cannot read {args.bundle}: {e}", file=sys.stderr)
         return 2
     violations, count = check(m, tables)
+    if args.result:
+        # The result of a record that breaks an invariant is not a result: report and exit 1.
+        if violations:
+            for inv, msg in violations:
+                print(f"dflow_check: {inv}: {msg}", file=sys.stderr)
+            return 1
+        print(json.dumps(result(m, tables), indent=1))
+        return 0
     invs = ["D2", "D3", "D4", "D5", "D6", "D8", "D9", "REF", "V1", "V2", "V3", "V4", "V5", "L1", "L2", "L3", "L4", "L5",
-            "P1", "P2", "P3", "P4", "P5", "S1", "S2", "S3", "S4"]
+            "P1", "P2", "P3", "P4", "P5", "S1", "S2", "S3", "S4", "G1", "T1", "E1", "E2", "E3", "E4", "E5", "X1", "X2", "X3"]
     if args.json:
         print(json.dumps({"ok": not violations, "steps": tables["steps"]["rows"],
                           "actions": m["totals"]["actions"], "cut": m["cut"],

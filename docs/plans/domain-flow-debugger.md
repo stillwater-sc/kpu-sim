@@ -7,6 +7,8 @@ placement (ADR 0004 §5). Resumed now that `docs/plans/l3-placement-at-lb.md` st
 and step 5a (L-T1 waits on its own slot) is in review: every residency has an L3 address at L-B, so the
 machine view draws L3 as its addressed slots (§3.4a). The revision replaces the old §3.7 rule "L-B models a
 capacity, not placement" and adds Q7 (ordering against the placement plan's steps 5b-7).
+**Successor:** `.dflow` version 6, the record kpu-sim and the KPU RTL share, is specified in
+`docs/plans/shared-tile-flow-record.md` (#386).
 **Issue:** #363
 **Builds on:** `driver::CspBehavioralStepper` (`include/sw/kpu/program/driver/csp_step.hpp`), the
 CSP walker (`csp/lang/walk.hpp`), the columnar bundle container (`record/columnar.hpp`), and the

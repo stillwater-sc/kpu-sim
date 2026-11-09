@@ -21,6 +21,7 @@ import json
 import os
 import re
 import shutil
+import struct
 import subprocess
 import sys
 import tempfile
@@ -90,7 +91,8 @@ const C = globalThis.DflowCore, R = C.parse(files), out = { n: R.n, steps: {} };
 for (const s of JSON.parse(stepsArg)) {
   const slots = [];
   for (let sl = 0; sl < R.cap; sl++) slots.push(C.slotAt(R, sl, s));
-  const t = R.steps.tile[s], val = v => v && { k: v.k, step: v.step, chan: v.chan, h: v.h, w: v.w, head: Array.from(v.data.slice(0, 4)), n: v.data.length };
+  const t = R.steps.tile[s], val = v => v && { k: v.k, step: v.step, chan: v.chan, h: v.h, w: v.w, head: Array.from(v.data.slice(0, 4)), n: v.data.length,
+    element: v.element, out: v.mask ? v.mask.reduce((a, x) => a + (x ? 0 : 1), 0) : 0, expected: v.expected ? Array.from(v.expected.slice(0, 4)) : null };
   out.steps[s] = { step: C.step(R, s), position: C.position(R, s), slots,
                    value: R.snap ? val(C.valueAt(R, t, s)) : null, final: R.snap ? val(C.finalOf(R, t)) : null,
                    legs: C.legs(R, s), proximity: C.proximity(R, t), nextSlotBound: C.nextSlotBound(R, s),
@@ -98,6 +100,7 @@ for (const s of JSON.parse(stepsArg)) {
                    nextChainStart: C.nextChainStart(R, s), nextChainEnd: C.nextChainEnd(R, s) };
 }
 out.lb = R.lb;
+out.level = R.level; out.cycles = R.cycles; out.events = R.events ? R.events.rows : null;
 // Where the derivation puts a tile, at every step a snapshot recorded it in L2 or the fabric: an
 // identity check (the held counts check only how many).
 out.snapIn = [];
@@ -331,6 +334,33 @@ class ViewerTest(unittest.TestCase):
             self.assertEqual(p.returncode, 0, p.stderr)
 
     @unittest.skipUnless(NODE, "Node.js is not on PATH")
+    def test_the_page_decodes_every_element_type_as_the_checker_does(self):
+        # Version 6: every byte pattern of the one-byte types, and a spread of the wider ones.
+        core, _ = scripts()
+        (self.tmp / "core.js").write_text(core, encoding="utf-8")
+        data = {"int8": bytes(range(256)), "fp8_e4m3": bytes(range(256)), "fp8_e5m2": bytes(range(256)),
+                "fp16": b"".join(struct.pack("<H", h) for h in range(0, 65536, 97)),
+                "bf16": b"".join(struct.pack("<H", h) for h in range(0, 65536, 97)),
+                "int32": struct.pack("<5i", 0, -1, 2**31 - 1, -2**31, 12345),
+                "fp32": struct.pack("<4f", 1.5, -0.0, 3.4e38, 1e-40)}
+        js = ("const fs = require('fs'); eval(fs.readFileSync(process.argv[2], 'utf8')); const C = globalThis.DflowCore;"
+              "const d = JSON.parse(process.argv[3]), out = {};"
+              "for (const [el, hex] of Object.entries(d)) { const b = Uint8Array.from(Buffer.from(hex, 'hex'));"
+              "  out[el] = Array.from(C.decode(el, b, 0, b.length / C.ELEMENTS[el]), x => Number.isNaN(x) ? 'nan' : x === Infinity ? 'inf' : x === -Infinity ? '-inf' : x); }"
+              "process.stdout.write(JSON.stringify(out));")
+        (self.tmp / "decode.js").write_text(js, encoding="utf-8")
+        p = subprocess.run([NODE, str(self.tmp / "decode.js"), str(self.tmp / "core.js"),
+                            json.dumps({k: v.hex() for k, v in data.items()})], capture_output=True, text=True)
+        self.assertEqual(p.returncode, 0, p.stderr)
+        got = json.loads(p.stdout)
+        tag = lambda x: "nan" if x != x else "inf" if x == float("inf") else "-inf" if x == float("-inf") else x
+        for el, raw in data.items():
+            # Every one of these values is exact in float32, which the page holds them as.
+            # JSON may write a large float as an integer literal: read every number back as a float.
+            page = [x if isinstance(x, str) else float(x) for x in got[el]]
+            self.assertEqual(page, [tag(float(x)) for x in dflow_check.decode(el, raw)], el)
+
+    @unittest.skipUnless(NODE, "Node.js is not on PATH")
     def test_the_viewer_reads_what_the_bundle_holds(self):
         core, _ = scripts()
         (self.tmp / "core.js").write_text(core, encoding="utf-8")
@@ -407,6 +437,11 @@ class ViewerTest(unittest.TestCase):
                     self.assertEqual(v["last"], want["last"], f"the latest call at step {s}")
                     self.assertEqual((v["nextChainStart"], v["nextChainEnd"]), want["next"], f"chain navigation from {s}")
                 self.assertTrue(got["lb"]["ok"], got["lb"]["why"])
+                # Version 6: the record's level, its cycles to result (a timed level), its events.
+                v6 = m["version"] >= 6
+                self.assertEqual(got["level"], m["level"] if v6 else "L-B")
+                self.assertEqual(got["cycles"], m["time"]["cycles"] if v6 and m["time"] else None)
+                self.assertEqual(got["events"], T["events"]["rows"] if v6 else None)
                 for e in got["snapIn"]:
                     self.assertTrue(e[e["chan"]], f"a snapshot has a tile in {e['chan']} after step {e['s']}; the derivation does not")
                 if m["version"] >= 3 and m["lt1"]:
@@ -513,16 +548,34 @@ class ViewerTest(unittest.TestCase):
         return out, prox, min(nxt) if nxt else -1
 
     def expected_values(self, T, m, t, s):
-        P, E = T["snapshots"], T["elements"]["v"]
+        # Decoded by dflow_check (the element type, the domain), independently of the page's decoder.
+        P, TL = T["snapshots"], T["tiles"]
+        v6 = m["version"] >= 6
+        op = TL["operand"][t]
+        el = dflow_check.element_of(m, op)
+        expected = {}
+        if v6:
+            for k in range(P["rows"]):
+                if P["role"][k] == 1 and P["tile"][k] == t:
+                    expected[P["step"][k]] = k
         def shown(k):
             if k is None:
                 return None
-            h, w, f = P["height"][k], P["width"][k], P["first"][k]
+            h, w = P["height"][k], P["width"][k]
+            vals = dflow_check.decode(el, dflow_check.raw(m, T, k))
+            out = 0
+            if v6:
+                o, d = m["operands"][op], m["operands"][op]["domain"]
+                if d["kind"] != "dense" or d.get("pad") is not None:
+                    r0, c0 = TL["ti"][t] * o["tile_rows"], TL["tj"][t] * o["tile_cols"]
+                    out = sum(1 for r in range(h) for c in range(w) if not dflow_check.in_domain(d, r0 + r, c0 + c))
+            x = expected.get(P["step"][k])
             return {"k": k, "step": -1 if P["step"][k] == NONE64 else P["step"][k], "chan": m["channels"][P["chan"][k]]["name"],
-                    "h": h, "w": w, "head": list(E[f:f + min(4, h * w)]), "n": h * w}
+                    "h": h, "w": w, "head": vals[:4], "n": h * w, "element": el, "out": out,
+                    "expected": dflow_check.decode(el, dflow_check.raw(m, T, x))[:4] if x is not None else None}
         at, final = None, None
         for k in range(P["rows"]):
-            if P["tile"][k] != t:
+            if P["tile"][k] != t or (v6 and P["role"][k] != 0):
                 continue
             if P["step"][k] == NONE64:
                 final = k
@@ -545,6 +598,12 @@ class ViewerTest(unittest.TestCase):
             if m["version"] >= 3 and m["lt1"]:
                 waits += sum(1 for g in range(T["lt1_legs"]["rows"]) if T["lt1_legs"]["slot_wait"][g] > 0)
         self.assertGreater(waits, 0)
+        # And one must be a version-6 record from a timed level, with expected values and an operand
+        # whose domain leaves elements out (the RTL sample), or the v6 decoding is vacuous.
+        v6 = [m for m, _ in (dflow_check.load(b) for b in BUNDLES) if m["version"] >= 6 and m["level"] != "L-B"]
+        self.assertTrue(any(m["values"]["expected"] for m in v6), "no timed version-6 bundle with expected values")
+        self.assertTrue(any(o["domain"]["kind"] != "dense" for m in v6 for o in m["operands"]),
+                        "no timed version-6 bundle with an operand domain other than dense")
 
 
 if __name__ == "__main__":
