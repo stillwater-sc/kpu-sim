@@ -244,6 +244,16 @@ def _int(v, what, lo=0):
     return v
 
 
+def _isint(v):
+    """An integer, and not a boolean (JSON's true is Python's 1)."""
+    return isinstance(v, int) and not isinstance(v, bool)
+
+
+def nat(v):
+    """A non-negative integer: a band width, a padding count."""
+    return _isint(v) and v >= 0
+
+
 def _manifest(m):
     """The manifest fields check() reads, typed: a malformed one is unreadable (exit 2), never a
     traceback that exits 1 as if an invariant had failed."""
@@ -277,6 +287,7 @@ def _manifest_v6(m):
     """The version-6 manifest fields, typed. Their invariants (G1, T1, X1, X2) are checked by
     check_v6; here only what load() and the value decoding read."""
     try:
+        _int(m["machine"]["banks"], "machine.banks", 1)
         if m["level"] not in LEVELS:
             raise Unreadable(f"level is {m['level']!r}, not one of {', '.join(LEVELS)}")
         if not isinstance(m["producer"], str) or not m["producer"]:
@@ -1253,8 +1264,8 @@ def check_v6(m, T, bad):
         okd = d.get("kind") in DOMAINS
         if not okd:
             bad("X2", f"operand {o['name']}'s domain kind is {d.get('kind')!r}, not one of {', '.join(DOMAINS)}")
-        nat = lambda v: isinstance(v, int) and not isinstance(v, bool) and v >= 0
-        if okd and d["kind"] in ("lower", "upper") and not nat(d.get("diagonal", 0)):
+        # A diagonal may be negative (d = -1 is strictly lower); widths and padding may not.
+        if okd and d["kind"] in ("lower", "upper") and not _isint(d.get("diagonal", 0)):
             bad("X2", f"operand {o['name']}'s domain diagonal is {d.get('diagonal')!r}")
             okd = False
         if okd and d["kind"] == "band" and not (nat(d.get("lower")) and nat(d.get("upper"))):
@@ -1334,7 +1345,7 @@ def check_v6(m, T, bad):
             if el in ("int8", "int32") or bound is None:
                 same = raw(m, T, a) == raw(m, T, x)
             else:
-                same = all(abs(p - q) <= bound["atol"] + bound["rtol"] * abs(q) or (p != p and q != q)
+                same = all(p == q or abs(p - q) <= bound["atol"] + bound["rtol"] * abs(q) or (p != p and q != q)
                            for p, q in zip(decode(el, raw(m, T, a)), decode(el, raw(m, T, x))))
             if not same:
                 verdict = "mismatch"

@@ -290,6 +290,19 @@ class RtlSample(Checks):
         self.b.set("elements", "b", first + 1, 5)              # L[0,1]: above the diagonal
         self.assertFails("X2", "outside operand L's lower domain")
 
+    def test_x2_a_negative_diagonal_is_a_domain(self):
+        # d = -1 is strictly lower: L's diagonal is then outside it, and nonzero.
+        self.b.manifest["operands"][0]["domain"] = {"kind": "lower", "diagonal": -1}
+        self.b.save_manifest()
+        self.assertFails("X2", "outside operand L's lower domain")
+        code, report = run(self.b.dir)
+        self.assertFalse([v for v in report["violations"] if "diagonal is" in v["message"]])
+
+    def test_x2_diagonal_not_an_integer(self):
+        self.b.manifest["operands"][0]["domain"] = {"kind": "lower", "diagonal": 0.5}
+        self.b.save_manifest()
+        self.assertFails("X2", "diagonal is 0.5")
+
     def test_x2_unknown_domain(self):
         self.b.manifest["operands"][0]["domain"] = {"kind": "triangle"}
         self.b.save_manifest()
@@ -354,7 +367,25 @@ class RtlSample(Checks):
         self.b.save_manifest()
         self.assertPasses()
 
+    def test_x3_identical_infinities_match_under_a_bound(self):
+        # inf - inf is nan: a bound alone would call a bit-identical infinity a mismatch.
+        self.b.manifest["operands"][2]["element"] = "fp32"
+        self.b.manifest["result"]["bound"] = {"atol": 1e-30, "rtol": 0.0}
+        self.b.save_manifest()
+        tile = self.operand_tile("C", 0, 0)
+        snaps = [k for k in range(self.b.rows("snapshots")) if self.b.get("snapshots", "tile", k) == tile]
+        for k in snaps:                                             # every value of the tile: V5 pins them equal
+            first = self.b.get("snapshots", "first", k)
+            for j, byte in enumerate((0x00, 0x00, 0x80, 0x7F)):     # +inf, little-endian
+                self.b.set("elements", "b", first + j, byte)
+        self.assertPasses()
+
     # -- unreadable manifests -------------------------------------------------
+    def test_machine_without_banks_is_unreadable(self):
+        del self.b.manifest["machine"]["banks"]
+        self.b.save_manifest()
+        self.assertUnreadable()
+
     def test_unknown_level_is_unreadable(self):
         self.b.manifest["level"] = "GPU"
         self.b.save_manifest()

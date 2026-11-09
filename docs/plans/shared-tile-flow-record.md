@@ -258,8 +258,8 @@ A domain says which elements of an operand exist. It uses operand coordinates (r
 | Kind | In the domain |
 |---|---|
 | `dense` | every element |
-| `lower` (`diagonal` d, default 0) | c − r ≤ d |
-| `upper` (`diagonal` d, default 0) | r − c ≤ d |
+| `lower` (`diagonal` d, any integer, default 0; d = −1 is strictly lower) | c − r ≤ d |
+| `upper` (`diagonal` d, any integer, default 0) | r − c ≤ d |
 | `band` (`lower` p, `upper` q) | r − c ≤ p and c − r ≤ q |
 
 An optional `pad: {"rows": R, "cols": C}` marks the padding window: elements with r ≥ R or c ≥ C
