@@ -25,6 +25,11 @@
 // movers then issue the next chain's Loads and Moves before this chain's results leave, so the
 // chains pipeline on the fabric.
 //
+// An accumulator's init (`acc Y in fabric init X`; docs/plans/accumulator-init-stream.md) is one
+// more edge stream: X, resident, is Moved and Fed as the block opens, before its first call, and
+// the Feed carries `seeds = Y` and records L0 ACC_INIT. `init Y` on its own accumulator hands the
+// residency to the fabric: its Move and Feed are followed by its Release.
+//
 // L2 staging (docs/plans/l2-reuse-and-fabric-pipeline-view.md step 3): `stage T in l2 { ... }`
 // copies each resident tile of T into an L2 slot the walker allocates (the lowest free one of
 // the machine clause's `l2 = N`), with one Move that carries the address. A call inside the
@@ -321,6 +326,10 @@ private:
         e.action.residency = residency;
         e.action.accumulate = accumulate;
         e.action.context = std::move(context);
+        if (kind == Action::Kind::Feed && seed_) {
+            e.action.seeds = *seed_;
+            seed_.reset();
+        }
         if (op) e.op = *op;
         e.opens = opens;
         e.loaded = loaded;
@@ -392,6 +401,7 @@ private:
         where_.reset();
     }
     std::set<std::size_t> pinned_;                          // residencies the program placed itself
+    std::optional<TileCoord> seed_;                         // the accumulator the next Feed starts
     int line_ = 0;                                          // the statement being executed
 
     // Place residency `id` for tile `t`: by the policy, or in `slot` when the program names one.
@@ -497,9 +507,14 @@ private:
                 const TileCoord y = one(s.out);
                 const std::string k = y.to_string();
                 flush_late_until(k);
-                if (resident_.count(k)) throw CompileError(s.line, "acc " + k + ": it is resident in L3; an accumulator lives in the fabric");
+                const std::optional<TileCoord> x = s.init ? std::optional<TileCoord>(one(*s.init)) : std::nullopt;
+                const bool self = x && x->to_string() == k;
+                if (resident_.count(k) && !self)
+                    throw CompileError(s.line, "acc " + k + ": it is resident in L3; an accumulator lives in the fabric "
+                                               "(to accumulate onto it, write `init " + k + "`)");
                 not_retained(s.line, k);
                 if (acc_.count(k)) throw CompileError(s.line, "acc " + k + ": it already has an accumulator");
+                if (x) init_acc(s, y, *x, self);
                 acc_[k] = AccState::Open;
                 acc_calls_[k] = 0;
                 frames_.push_back(Frame{&s.body, 0, Frame::Kind::Acc, {}, 0, 0, k, s.line, late_seq_});
@@ -603,6 +618,68 @@ private:
         }
         emit(Action::Kind::Move, t, it->second.id);
         emit(Action::Kind::Feed, t, kNone, feed ? sink_.l0(*feed) : kNone);
+    }
+
+    // `acc y in fabric init x`: x streamed into the fabric as y's initial value. The checks are the
+    // symbolic validator's (validate.hpp), so the two agree.
+    void init_acc(const Stmt& s, const TileCoord& y, const TileCoord& x, bool self) {
+        const std::string yk = y.to_string(), xk = x.to_string();
+        const std::string what = "acc " + yk + " init " + xk;
+        const TensorOperand& xo = operands_.operand(x.operand);
+        const TensorOperand& yo = operands_.operand(y.operand);
+        if (vectors_.count(x.operand)) {
+            if (yo.cols < 2)
+                throw CompileError(s.line, what + ": a vector init is a bias row, broadcast down " + y.operand +
+                                           "'s rows; " + y.operand + " has one column, so give it a tensor init");
+            check_width(x, y, s.line);
+        } else if (xo.rows != yo.rows || xo.cols != yo.cols || xo.tile_rows != yo.tile_rows ||
+                   xo.tile_cols != yo.tile_cols) {
+            throw CompileError(s.line, what + ": a tensor init is tiled as the accumulator (" + y.operand + " is " +
+                                       std::to_string(yo.rows) + "x" + std::to_string(yo.cols) + " in " +
+                                       std::to_string(yo.tile_rows) + "x" + std::to_string(yo.tile_cols) + " tiles)");
+        } else if (x.ti != y.ti || x.tj != y.tj) {
+            throw CompileError(s.line, what + ": a tensor init starts the tile in the same place, " + x.operand + "[" +
+                                       std::to_string(y.ti) + ", " + std::to_string(y.tj) + "]");
+        }
+        if (self) {
+            const auto d = std::find_if(ast_.decls.begin(), ast_.decls.end(), [&](const Decl& e) { return e.name == y.operand; });
+            if (d != ast_.decls.end() && d->io == "out")
+                throw CompileError(s.line, what + ": " + y.operand + " is declared out, so it has no value to accumulate "
+                                           "onto; declare it inout");
+        } else {
+            flush_late_until(xk);
+        }
+        auto it = resident_.find(xk);
+        if (it == resident_.end())
+            throw CompileError(s.line, what + " reads " + xk + ", which is not resident; make it resident first");
+        if (self && staged_.count(xk))
+            throw CompileError(s.line, what + ": " + xk + " is staged in L2; the accumulator takes its residency over, "
+                                       "so init it outside the stage block");
+        TileOp feed;
+        feed.kind = TileOpKind::Feed;
+        feed.port_kind = PortKind::Input;
+        feed.port = "South";                   // the C stream's edge: the one its drain leaves by
+        feed.inputs = {x};
+        TileOp init;
+        init.kind = TileOpKind::AccInit;
+        init.label = "line " + std::to_string(s.line);
+        init.inputs = {x};
+        init.outputs = {y};
+        seed_ = y;
+        if (auto st = staged_.find(xk); st != staged_.end()) {
+            const std::size_t f = sink_.l0(feed);
+            (void)sink_.l0(init);
+            emit(Action::Kind::Feed, x, kNone, f, nullptr, false, false, false, {}, st->second.at, st->second.id);
+            return;
+        }
+        emit(Action::Kind::Move, x, it->second.id);
+        const std::size_t f = sink_.l0(feed);
+        (void)sink_.l0(init);
+        emit(Action::Kind::Feed, x, kNone, f);
+        if (self) {                             // the value lives in the fabric now: the slot is free
+            emit(Action::Kind::Release, x, it->second.id);
+            resident_.erase(it);
+        }
     }
 
     // `stage T in l2 { ... }`: each tile of T, resident in L3, copied into an L2 slot for the block.

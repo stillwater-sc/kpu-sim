@@ -125,7 +125,9 @@ inline void stmt(std::ostringstream& o, const Stmt& s, int depth) {
             o << in << "}\n";
             return;
         case Stmt::Kind::Acc:
-            o << in << "acc " << ref_text(s.out) << " in fabric {\n";
+            o << in << "acc " << ref_text(s.out) << " in fabric";
+            if (s.init) o << " init " << ref_text(*s.init);
+            o << " {\n";
             stmts(o, s.body, depth + 1);
             o << in << "}\n";
             return;

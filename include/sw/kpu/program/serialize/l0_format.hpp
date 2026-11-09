@@ -94,11 +94,13 @@ inline bool is_known_dataflow(const std::string& name) {
 // either, which is why the two axes are separate: a new container record is not a new
 // operator. (Opset 1.2.0 and container 1.2.0 share a number by coincidence.)
 inline Version format_version()  { return {1, 2, 0}; }   // container structure
-inline Version opset_version()   { return {1, 3, 0}; }   // the TileOpKind surface this build
+inline Version opset_version()   { return {1, 4, 0}; }   // the TileOpKind surface this build
                                                          // implements: 1.1.0 adds BIAS_ADD and
                                                          // ACTIVATION (act=); 1.2.0 adds the L3
                                                          // transactions (L3_*, l3= slot= bank=);
-                                                         // 1.3.0 the L2 ones (L2_*, l2= slot=)
+                                                         // 1.3.0 the L2 ones (L2_*, l2= slot=);
+                                                         // 1.4.0 ACC_INIT (an accumulator's
+                                                         // initial value)
 
 // The op set a FILE needs, written on its OPSET line: what is in it, not who wrote it -- the
 // rule min_consumer_for() states. A matmul or LU program uses only 1.0.0 ops, so its bytes do
@@ -110,6 +112,7 @@ inline Version opset_version()   { return {1, 3, 0}; }   // the TileOpKind surfa
 // older reader would drop silently. Keep it that way, or make MIN_CONSUMER see the op set.
 inline Version opset_for(const TileProgram& prog) {
     Version v{1, 0, 0};
+    for (const TileOp& op : prog.ops()) if (op.kind == TileOpKind::AccInit) return Version{1, 4, 0};
     for (const TileOp& op : prog.ops()) if (is_l2(op.kind)) return Version{1, 3, 0};
     for (const TileOp& op : prog.ops()) {
         if (is_l3(op.kind)) return Version{1, 2, 0};
@@ -567,7 +570,7 @@ inline TileOpKind parse_kind(const std::string& s) {
                          TileOpKind::BiasAdd, TileOpKind::Activation, TileOpKind::L3Load,
                          TileOpKind::L3Store, TileOpKind::L3Move, TileOpKind::L3Writeback,
                          TileOpKind::L3Release, TileOpKind::L3Inherit, TileOpKind::L3Retain,
-                         TileOpKind::L2Stage, TileOpKind::L2Release})
+                         TileOpKind::L2Stage, TileOpKind::L2Release, TileOpKind::AccInit})
         if (s == to_string(k)) return k;
     throw FormatError(FormatError::Cause::UnknownOp,
                       "l0: unknown op '" + s + "': this build implements opset tile " +

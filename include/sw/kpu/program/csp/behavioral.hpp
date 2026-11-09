@@ -134,6 +134,13 @@ public:
                 break;
             }
             case Action::Kind::Feed:
+                if (a.seeds) {                  // an accumulator's init: its values start the accumulator
+                    std::vector<float> v = a.l2 ? read_l2(*a.l2, a, k, where(i)).values
+                                                : take(Chan::L2, k, where(i), /*keep=*/false);
+                    if (a.l2) ++sum_.staged_feeds;
+                    seed(*a.seeds, a.tile, std::move(v), where(i));
+                    break;
+                }
                 if (a.l2) {                     // the staged copy: read, and kept for the next Feed
                     at(Chan::Cf)[k] = read_l2(*a.l2, a, k, where(i)).values;
                     ++sum_.staged_feeds;
@@ -426,6 +433,29 @@ private:
                 activate_tile(v, activation_of(st.op));
             }
         }
+    }
+
+    // The accumulator y, started in the fabric from the init tile x's values: a tensor tile as it
+    // is, a vector tile (a bias row) broadcast down y's rows. ACC_INIT's kernel computes the same.
+    void seed(const TileCoord& y, const TileCoord& x, std::vector<float> v, const std::string& where) {
+        auto& cf = at(Chan::Cf);
+        const std::string yk = y.to_string();
+        if (cf.count(yk)) throw BehavioralError(where + ": the accumulator " + yk + " is already in the fabric");
+        const TensorOperand& yo = work_.operand(y.operand);
+        const std::size_t rows = yo.row_end(y.ti) - yo.row_begin(y.ti), cols = yo.col_end(y.tj) - yo.col_begin(y.tj);
+        const TensorOperand& xo = work_.operand(x.operand);
+        if (xo.cols == 1 && yo.cols > 1) {
+            if (v.size() != cols)
+                throw BehavioralError(where + ": a bias row of " + std::to_string(v.size()) + " elements on " + yk +
+                                      "'s " + std::to_string(cols) + " columns");
+            std::vector<float> full(rows * cols);
+            for (std::size_t r = 0; r < rows; ++r)
+                for (std::size_t c = 0; c < cols; ++c) full[r * cols + c] = v[c];
+            v = std::move(full);
+        } else if (v.size() != rows * cols) {
+            throw BehavioralError(where + ": " + x.to_string() + " is not shaped as " + yk);
+        }
+        cf[yk] = std::move(v);
     }
 
     static std::vector<float> extract(const TensorOperand& op, Dim ti, Dim tj) {

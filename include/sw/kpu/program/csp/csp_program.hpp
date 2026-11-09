@@ -181,6 +181,11 @@ struct Action {
     // staging it is (CspProgram::stagings). None on an unstaged action.
     std::optional<L2Address> l2;
     std::size_t staging = kNone;
+    // Feed: the tile's values start this accumulator in the fabric (`acc Y in fabric init X`;
+    // docs/plans/accumulator-init-stream.md): the init is one more edge stream, fed before the
+    // accumulator's first call, and its values (a vector's broadcast down the rows) are the
+    // accumulator's from then on. None on every other action.
+    std::optional<TileCoord> seeds;
 };
 
 inline const char* to_string(Action::Kind k) {

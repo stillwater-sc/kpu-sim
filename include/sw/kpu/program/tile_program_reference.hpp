@@ -62,6 +62,7 @@ public:
         std::size_t trsms = 0;          // TrsmLowerLeft + TrsmUpperRight
         std::size_t pivot_applies = 0;  // PivotApply (LASWP)
         std::size_t epilogues = 0;      // BiasAdd + Activation
+        std::size_t acc_inits = 0;      // AccInit (opset 1.4)
         std::size_t l3_ops = 0;         // the L3 transactions (opset 1.2)
         std::size_t l2_ops = 0;         // the L2 transactions (opset 1.3)
         std::size_t peak_l2 = 0;        // L2 slots staged at once, as replayed
@@ -102,6 +103,7 @@ public:
                 case TileOpKind::TrsmUpperRight: ++sum.trsms; break;
                 case TileOpKind::BiasAdd:
                 case TileOpKind::Activation:     ++sum.epilogues; break;
+                case TileOpKind::AccInit:        ++sum.acc_inits; break;
                 case TileOpKind::L3Load:
                 case TileOpKind::L3Store:
                 case TileOpKind::L3Move:

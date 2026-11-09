@@ -45,6 +45,11 @@ R"(kpu-csp-gen -- write a CSP program: an operator's canonical schedule, as .csp
   --orient <col|row>            matmul, linear: which panel is outer   (default col)
   --stage-a                     matmul: stage A's row panel in L2 for the loop over B's
                                 panels (the row schedule; declares l2 = tiles per panel)
+  --init <none|bias|bias-row|accumulate>
+                                matmul: where each accumulator starts, streamed into the
+                                fabric before its first call: bias C = A.B + D, bias-row
+                                C = A.B + b (b broadcast down the rows), accumulate C += A.B
+                                (default none: from zero)
   --act <relu|gelu|silu|atan>   linear: the activation               (default relu)
   --place <fabric|str.drain|bm.egress|unfused>
                                 linear: where the epilogue runs      (default fabric)
@@ -83,7 +88,7 @@ int main(int argc, char** argv) {
     }
     for (const auto& [k, v] : a)
         if (k != "--algo" && k != "--size" && k != "--tile" && k != "--l3" && k != "--target" && k != "--orient" &&
-            k != "--act" && k != "--place" && k != "--stage-a" && k != "-o")
+            k != "--act" && k != "--place" && k != "--stage-a" && k != "--init" && k != "-o")
             return usage("unknown option '" + k + "'");
     for (const char* k : {"--algo", "--size", "--tile"})
         if (!a.count(k)) return usage(std::string(k) + " is required");
@@ -109,6 +114,10 @@ int main(int argc, char** argv) {
         if (!a.count("--orient")) o.orient = "row";   // A's panel outer: the schedule staging needs
     }
     if (a.count("--place")) o.place = a["--place"];
+    if (a.count("--init")) {
+        if (o.algo != "matmul") return usage("--init is matmul's; --algo is '" + o.algo + "'");
+        o.init = a["--init"];
+    }
     if (a.count("--act") && !sw::kpu::program::parse_activation(a["--act"], o.act))
         return usage("--act '" + a["--act"] + "' (relu | gelu | silu | atan)");
     if (o.algo != "linear" && (a.count("--act") || a.count("--place")))

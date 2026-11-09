@@ -267,6 +267,38 @@ inline void kernel_bias_add(TileProgram& prog, const TileOp& op) {
         for (Dim c = c0; c < c1; ++c) Y.at(r, c) += B.at(b0 + (c - c0), 0);
 }
 
+// An accumulator's initial value (opset 1.4): Y := X (a tensor tile tiled as Y), Y[r, c] := b[c]
+// (a vector tile as wide as Y, broadcast down its rows), or Y := 0 (no input, a clear).
+inline void kernel_acc_init(TileProgram& prog, const TileOp& op) {
+    const TileCoord& yc = op.outputs.at(0);
+    TensorOperand& Y = prog.operand(yc.operand);
+    const Dim r0 = Y.row_begin(yc.ti), r1 = Y.row_end(yc.ti);
+    const Dim c0 = Y.col_begin(yc.tj), c1 = Y.col_end(yc.tj);
+    if (op.inputs.empty()) {
+        for (Dim r = r0; r < r1; ++r)
+            for (Dim c = c0; c < c1; ++c) Y.at(r, c) = 0.0f;
+        return;
+    }
+    const TileCoord& xc = op.inputs.at(0);
+    const TensorOperand& X = prog.operand(xc.operand);
+    if (&X == &Y && xc.ti == yc.ti && xc.tj == yc.tj) return;   // accumulate onto Y: it starts as it is
+    const Dim x0 = X.row_begin(xc.ti), x1 = X.row_end(xc.ti);
+    // A vector (one column) on a wider tile is a bias row; a single-column Y takes a tensor init.
+    if (X.cols == 1 && Y.cols > 1) {
+        if (x1 - x0 != c1 - c0)
+            throw std::invalid_argument("AccInit: " + xc.to_string() + " is not a vector tile as wide as " + yc.to_string());
+        for (Dim r = r0; r < r1; ++r)
+            for (Dim c = c0; c < c1; ++c) Y.at(r, c) = X.at(x0 + (c - c0), 0);
+        return;
+    }
+    const Dim xc0 = X.col_begin(xc.tj), xc1 = X.col_end(xc.tj);
+    if (x1 - x0 != r1 - r0 || xc1 - xc0 != c1 - c0)
+        throw std::invalid_argument("AccInit: " + xc.to_string() + " is neither a tile shaped as " + yc.to_string() +
+                                    " nor a vector tile as wide as it");
+    for (Dim r = r0; r < r1; ++r)
+        for (Dim c = c0; c < c1; ++c) Y.at(r, c) = X.at(x0 + (r - r0), xc0 + (c - c0));
+}
+
 // Y := act(Y): outputs = {Y's tile}.
 inline void kernel_activation(TileProgram& prog, const TileOp& op) {
     const TileCoord& yc = op.outputs.at(0);
@@ -297,6 +329,7 @@ inline void apply(TileProgram& prog, const TileOp& op, TileKernelState& st) {
         case TileOpKind::TrsmUpperRight: kernel_trsm_upper_right(prog, op); break;
         case TileOpKind::BiasAdd:        kernel_bias_add(prog, op); break;
         case TileOpKind::Activation:     kernel_activation(prog, op); break;
+        case TileOpKind::AccInit:        kernel_acc_init(prog, op); break;
         case TileOpKind::L3Load:
         case TileOpKind::L3Store:
         case TileOpKind::L3Move:
