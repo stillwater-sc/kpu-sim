@@ -127,6 +127,9 @@ const char* const kHead = "csp 1.0\nprogram t machine flat(l3 = 6) {\n"
                           "  tensor D[16,16] tile 16x16 in;\n  tensor E[16,32] tile 16x16 in;\n"
                           "  vector b[16] tile 16 in;\n  tensor C[16,16] tile 16x16 out;\n"
                           "  tensor S[16,1] tile 16x1 out;\n  tensor X[16,16] tile 16x16 inout;\n";
+// Operands of more than one tile, for the position refusals.
+const char* const kWide = "  tensor F[32,32] tile 16x16 in;\n  tensor G[32,32] tile 16x16 out;\n"
+                          "  vector v[32] tile 16 in;\n";
 
 }  // namespace
 
@@ -273,6 +276,17 @@ TEST_CASE("acc init: what it refuses, symbolically and as it runs", "[program][c
         {std::string(kHead) + "  resident A[0, 0], B[0, 0], C[0, 0];\n" + acc + "C[0, 0]" + body +
              "  release A[0, 0], B[0, 0];\n}\n",
          "C is declared out", "C is declared out"},
+        // A tensor init starts the tile in the same place (review of #407: the validator agrees).
+        {std::string(kHead) + kWide + "  resident A[0, 0], B[0, 0], F[1, 1];\n"
+                              "  acc G[0, 0] in fabric init F[1, 1] { call gemm(A[0, 0], B[0, 0]) +-> G[0, 0]; }\n"
+                              "  store G[0, 0];\n  release A[0, 0], B[0, 0], F[1, 1];\n}\n",
+         "a tensor init starts the tile in the same place", "a tensor init starts the tile in the same place"},
+        // A bias row is indexed by the accumulator's column.
+        {std::string(kHead) + kWide + "  resident A[0, 0], B[0, 0], v[0];\n"
+                              "  acc G[0, 1] in fabric init v[0] { call gemm(A[0, 0], B[0, 0]) +-> G[0, 1]; }\n"
+                              "  store G[0, 1];\n  release A[0, 0], B[0, 0], v[0];\n}\n",
+         "a bias row is indexed by the accumulator's column, v[1]",
+         "a bias row is indexed by the accumulator's column, v[1]"},
     };
     for (const Case& c : cases) {
         CAPTURE(c.src);

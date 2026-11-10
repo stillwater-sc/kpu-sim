@@ -632,6 +632,9 @@ private:
                 throw CompileError(s.line, what + ": a vector init is a bias row, broadcast down " + y.operand +
                                            "'s rows; " + y.operand + " has one column, so give it a tensor init");
             check_width(x, y, s.line);
+            if (x.ti != y.tj)
+                throw CompileError(s.line, what + ": a bias row is indexed by the accumulator's column, " + x.operand +
+                                           "[" + std::to_string(y.tj) + "]");
         } else if (xo.rows != yo.rows || xo.cols != yo.cols || xo.tile_rows != yo.tile_rows ||
                    xo.tile_cols != yo.tile_cols) {
             throw CompileError(s.line, what + ": a tensor init is tiled as the accumulator (" + y.operand + " is " +

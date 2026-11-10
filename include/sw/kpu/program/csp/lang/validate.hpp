@@ -450,11 +450,17 @@ private:
                 throw CompileError(s.line, what + ": a vector init is a bias row, broadcast down " + y.operand +
                                            "'s rows; " + y.operand + " has one column, so give it a tensor init");
             check_width(x.operand, y.operand, s.line);
+            if (y.dims.size() == 2 && !(x.dims[0].a == y.dims[1].a))
+                throw CompileError(s.line, what + ": a bias row is indexed by the accumulator's column, " + x.operand +
+                                           "[" + text(y.dims[1].a) + "]");
         } else if (xo.rows != yo.rows || xo.cols != yo.cols || xo.tile_rows != yo.tile_rows ||
                    xo.tile_cols != yo.tile_cols) {
             throw CompileError(s.line, what + ": a tensor init is tiled as the accumulator (" + y.operand + " is " +
                                        std::to_string(yo.rows) + "x" + std::to_string(yo.cols) + " in " +
                                        std::to_string(yo.tile_rows) + "x" + std::to_string(yo.tile_cols) + " tiles)");
+        } else if (y.dims.size() == 2 && (!(x.dims[0].a == y.dims[0].a) || !(x.dims[1].a == y.dims[1].a))) {
+            throw CompileError(s.line, what + ": a tensor init starts the tile in the same place, " + x.operand + "[" +
+                                       text(y.dims[0].a) + ", " + text(y.dims[1].a) + "]");
         }
         if (same(x, y)) {
             const auto d = std::find_if(ast_.decls.begin(), ast_.decls.end(), [&](const Decl& e) { return e.name == y.operand; });
