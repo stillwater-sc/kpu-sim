@@ -107,6 +107,7 @@ inline std::string print(const CspProgram& p) {
         }
     }
     std::set<std::string> done;                          // open accumulators past their last call
+    std::map<std::string, std::string> inits;            // accumulator -> its init's text, until its block opens
     // A stage block is on the same stack as the accumulators, keyed "stage #n", with the L2Releases
     // that close it still to come.
     std::map<std::string, std::size_t> stage_left;
@@ -168,12 +169,25 @@ inline std::string print(const CspProgram& p) {
                 break;
             }
             case K::Feed:
+                if (a.seeds) {                           // an accumulator's init: its block says so
+                    const std::string yk = a.seeds->to_string();
+                    inits[yk] = text(a.tile);
+                    // `init y` on its own accumulator: the residency the fabric took over ends here.
+                    if (a.tile.to_string() == yk && i + 1 < p.actions.size() && p.actions[i + 1].kind == K::Release &&
+                        p.actions[i + 1].tile.to_string() == yk)
+                        ++i;
+                }
                 break;                                   // a call's deliveries: implied
             case K::Call: {
                 const TileOp& op = p.source.ops().at(a.l0_op);
                 const TileCoord& y = op.outputs.at(0);
                 if (a.accumulate && std::find(open.begin(), open.end(), y.to_string()) == open.end()) {
-                    o << indent() << "acc " << text(y) << " in fabric {\n";
+                    o << indent() << "acc " << text(y) << " in fabric";
+                    if (auto in = inits.find(y.to_string()); in != inits.end()) {
+                        o << " init " << in->second;
+                        inits.erase(in);
+                    }
+                    o << " {\n";
                     open.push_back(y.to_string());
                 }
                 std::string fn, args;

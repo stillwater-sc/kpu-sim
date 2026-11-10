@@ -89,7 +89,9 @@ stmt       := for | resident | release | acc | stage | call | store | inherit | 
 for        := 'for' VAR 'in' expr '..' expr '{' stmt* '}'
 resident   := 'resident' tiles ';'         -- into L3; an error if already resident
 release    := 'release' tiles ';'          -- the program's last use: the credit returns
-acc        := 'acc' tile 'in' 'fabric' '{' stmt* '}'          -- an output-stationary accumulator
+acc        := 'acc' tile 'in' 'fabric' [ 'init' tile ] '{' stmt* '}'
+                                           -- an output-stationary accumulator; init: its start
+                                           -- (accumulator-init-stream.md), else zero
 stage      := 'stage' tiles 'in' 'l2' '{' stmt* '}'           -- resident tiles copied into L2 for the block
 call       := 'call' FN '(' tiles ')' ( '->' | '+->' ) tile [ context ] ';'
                                            -- '->' writes, '+->' accumulates
@@ -122,6 +124,7 @@ Comments are `//` to the end of the line. Tensor element types beyond fp32 are d
 | `release X` | Release X (l3 credit) | X resident; not written-and-unstored (a written tile is stored by an explicit `store` first: nothing moves implicitly, Q2) |
 | `call f(a, b) -> y` | per operand: Move (bm) and Feed (str); then Call (cf); for an in-place result: Drain (str), Writeback (bm) | operands resident; the result resident, or its `acc` open |
 | `acc y in fabric { ... }` | y lives in the fabric; `+->` calls into it accumulate from zero; no L3 slot | at least one call into y; y stored after the block |
+| `acc y in fabric init x { ... }` | as above, from x: x's Move (bm) and Feed (str), the Feed seeding y, before the first call; `init y` then Releases y's residency (docs/plans/accumulator-init-stream.md) | x resident; a tensor tiled as y, or a vector tiled as y's columns; `init y` needs y inout |
 | `store y` | out of a closed `acc`: Drain, Writeback, Store, Release (an L3 slot for the writeback's moment); a resident, written tile: Store | y written and not yet stored, or inherited |
 | `store y late` | the accumulator's four actions, emitted after the NEXT `acc` block's calls, at the end of the program, or before a `resident`/`acc` that names y again (added by `l2-reuse-and-fabric-pipeline-view.md` step 2b) | y a closed `acc`; no `via` |
 | `stage X in l2 { ... }` | per tile: Move (bm) into an L2 slot the walker allocates; a call inside on X: Feed (str) of the copy, no Move; the block's end: L2Release per tile (l2 credit) (added by `l2-reuse-and-fabric-pipeline-view.md` step 3) | `l2 = N` declared; X resident; not already staged; L2 capacity; inside the block X is not released, retained or written |

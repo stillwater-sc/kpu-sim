@@ -27,7 +27,9 @@
 //   Load       dma   DRAM -> L3       after the tile's earlier Store retires (RAW via DRAM)
 //                                     and its slot is free
 //   Move       bm    L3 -> L2         after the L3 copy is current (its Load / Writeback)
-//   Feed       str   L2 -> L1         after its Move
+//   Feed       str   L2 -> L1         after its Move. An accumulator's init (`acc Y init X`) is
+//                                     one more edge stream: its Feed is timed as any operand's,
+//                                     and Y's first call waits for it as for A's and B's
 //   Call       cf    the tile function's MACs on a compute tile, after its operands' Feeds and
 //                                     the previous call on its accumulator
 //   Drain      str   L1 -> L2         after the call that produced it (a stream chain: after its
@@ -301,6 +303,7 @@ public:
             }
             case Action::Kind::Feed:
                 fed_[k] = run(Proc::Str, get(moved_, k), transfer(Proc::Str, bytes), a);
+                if (a.seeds) fed_[a.seeds->to_string()] = fed_[k];   // the accumulator's first call waits for it
                 if (a.l2) {
                     auto it = l2_open_.find(k);
                     if (it != l2_open_.end()) ++l2_slots_[it->second].feeds;

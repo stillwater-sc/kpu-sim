@@ -59,6 +59,10 @@ struct Options {
     ActivationFn act = ActivationFn::Relu;  // linear
     std::string place = "fabric";           // linear: fabric | str.drain | bm.egress | unfused
     bool stage_a = false;                   // matmul, orient row: stage A's row panel in L2
+    // matmul: where each accumulator starts (docs/plans/accumulator-init-stream.md). none: zero;
+    // bias: C = A . B + D, D tiled as C; bias-row: C = A . B + b, b broadcast down C's rows;
+    // accumulate: C += A . B, C inout.
+    std::string init = "none";
 };
 
 // Tiles along one dimension.
@@ -70,7 +74,8 @@ inline std::size_t slots_needed(const Options& o) {
     if (o.algo == "lu") return nt * nt;
     const std::size_t mm = 2 * nt + 1;
     if (o.algo == "linear" && o.place != "unfused") return mm + 1;
-    return mm;                              // the unfused pass needs 2, which mm always covers
+    if (o.algo == "matmul" && (o.init == "bias" || o.init == "bias-row")) return mm + 1;   // D's tile, or b's
+    return mm;                              // accumulate: C's tile is handed to the fabric before its calls                              // the unfused pass needs 2, which mm always covers
 }
 
 namespace detail {
@@ -86,6 +91,9 @@ inline void check(const Options& o) {
         o.place != "unfused")
         throw GenError("csp-gen: place '" + o.place + "' (fabric | str.drain | bm.egress | unfused)");
     if (o.stage_a && o.algo != "matmul") throw GenError("csp-gen: stage_a is matmul's; --algo is '" + o.algo + "'");
+    if (o.init != "none" && o.init != "bias" && o.init != "bias-row" && o.init != "accumulate")
+        throw GenError("csp-gen: init '" + o.init + "' (none | bias | bias-row | accumulate)");
+    if (o.init != "none" && o.algo != "matmul") throw GenError("csp-gen: init is matmul's; --algo is '" + o.algo + "'");
     if (o.stage_a && o.orient != "row")
         throw GenError("csp-gen: stage_a stages A's row panel for the loop over B's panels, which needs orient row");
     const std::size_t need = slots_needed(o);
@@ -94,7 +102,8 @@ inline void check(const Options& o) {
         const std::string why =
             o.algo == "lu" ? "the whole matrix, " + std::to_string(nt) + " x " + std::to_string(nt) + " tiles"
                            : "2 panels of " + std::to_string(nt) + " tiles and the store's writeback" +
-                                 (o.algo == "linear" && o.place != "unfused" ? ", and the bias tile" : "");
+                                 (o.algo == "linear" && o.place != "unfused" ? ", and the bias tile" : "") +
+                                 (o.init == "bias" || o.init == "bias-row" ? ", and the init's tile" : "");
         throw GenError("csp-gen: the " + o.algo + " schedule at " + std::to_string(o.size) + " in " +
                        std::to_string(o.tile) + "-tiles needs " + std::to_string(need) + " L3 slots (" + why +
                        "); the L3 holds " + std::to_string(o.l3) + " -- use a larger tile or a larger L3");
@@ -117,15 +126,28 @@ inline std::string tensor(const char* name, const Options& o, const char* io) {
 // The matmul nest, and for a fused linear its bias (resident with B's panel) and context.
 inline std::string matmul_nest(const Options& o, bool linear_fused) {
     const std::string nt = std::to_string(tiles(o));
-    const std::string bias = linear_fused ? ", b[j]" : "";
+    const std::string bias = linear_fused || o.init == "bias-row" ? ", b[j]" : "";
     // A fused store carries its epilogue, which reads b[j] where it is written; a late store
     // carries none (lang/validate.hpp), so only the plain matmul nest defers its stores.
     std::string via = " late";
     if (linear_fused)
         via = std::string(" via add(b[j]) @ ") + o.place + ", " + to_string(o.act) + " @ " + o.place;
-    const std::string acc = "      acc C[i, j] in fabric {\n"
+    // The accumulator's init: a tile made resident for it (D's, or C's own), or b's with B's panel.
+    std::string before, init, after;
+    if (o.init == "bias") {
+        before = "      resident D[i, j];\n";
+        init = " init D[i, j]";
+        after = "      release D[i, j];\n";
+    } else if (o.init == "bias-row") {
+        init = " init b[j]";
+    } else if (o.init == "accumulate") {
+        before = "      resident C[i, j];\n";   // the fabric takes the residency over: no release
+        init = " init C[i, j]";
+    }
+    const std::string acc = before +
+                            "      acc C[i, j] in fabric" + init + " {\n"
                             "        for k in 0.." + nt + " { call gemm(A[i, k], B[k, j]) +-> C[i, j]; }\n"
-                            "      }\n"
+                            "      }\n" + after +
                             "      store C[i, j]" + via + ";\n";
     std::string s;
     if (o.orient == "col") {
@@ -167,11 +189,19 @@ inline std::string matmul_nest(const Options& o, bool linear_fused) {
 }
 
 inline std::string matmul(const Options& o) {
-    std::string s = header(o, "matmul C = A . B, " + o.orient + "-panel schedule" +
-                                  (o.stage_a ? std::string(", A's row panel staged in L2") : std::string()));
+    const std::string what = o.init == "bias"       ? "matmul C = A . B + D"
+                             : o.init == "bias-row" ? "matmul C = A . B + b"
+                             : o.init == "accumulate" ? "matmul C += A . B"
+                                                      : "matmul C = A . B";
+    std::string s = header(o, what + ", " + o.orient + "-panel schedule" +
+                                  (o.stage_a ? std::string(", A's row panel staged in L2") : std::string()) +
+                                  (o.init != "none" ? ", the accumulator's init streamed in" : std::string()));
     s += "program matmul machine flat(l3 = " + std::to_string(o.l3) +
          (o.stage_a ? ", l2 = " + std::to_string(tiles(o)) : std::string()) + ") {\n";
-    s += tensor("A", o, "in") + tensor("B", o, "in") + tensor("C", o, "out");
+    s += tensor("A", o, "in") + tensor("B", o, "in");
+    if (o.init == "bias") s += tensor("D", o, "in");
+    if (o.init == "bias-row") s += "  vector b[" + std::to_string(o.size) + "] tile " + std::to_string(o.tile) + " in;\n";
+    s += tensor("C", o, o.init == "accumulate" ? "inout" : "out");
     s += matmul_nest(o, false);
     return s + "}\n";
 }

@@ -122,6 +122,12 @@ inline std::optional<std::string> csp_level_supported(ExecutionLevel level, cons
     auto scan = [&](const std::vector<csp::lang::Stmt>& body, auto&& self) -> void {
         for (const auto& s : body) {
             if (refused) return;
+            if (s.kind == csp::lang::Stmt::Kind::Acc && s.init) {
+                refused = "an accumulator's init (acc ... init " + s.init->name + "[..]) is one more edge stream, which "
+                          "L-CA's Streamer does not feed yet (docs/plans/accumulator-init-stream.md step 2; csp line " +
+                          std::to_string(s.line) + ")";
+                return;
+            }
             if (s.kind == csp::lang::Stmt::Kind::Call) {
                 if (s.fn == "getrf" || s.fn == "laswp" || s.fn == "trsm_ll" || s.fn == "trsm_ur")
                     refused = "L-CA runs matmul and the linear operator; " + s.fn + " (LU) at L-CA is a later "

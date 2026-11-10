@@ -15,6 +15,11 @@
 //       store C[i, j];                      // or `store C[i, j] late;`: after the next acc
 //     }
 //
+// An accumulator's initial value (docs/plans/accumulator-init-stream.md): `acc C[i, j] in fabric
+// init D[i, j] { ... }` starts C from a tile tiled as C, `init b[j]` from a vector broadcast down
+// its rows (a bias row), and `init C[i, j]` from C itself (accumulate onto it). Without `init` an
+// accumulator starts at zero (a clear).
+//
 // L2 staging (docs/plans/l2-reuse-and-fabric-pipeline-view.md step 3): `machine flat(l3 = 17,
 // l2 = 4)` declares each compute tile's L2 slots, and `stage A[i, :] in l2 { ... }` copies
 // resident tiles into L2 once for the block; the calls inside feed the copy, and the block's end
@@ -105,6 +110,8 @@ struct Stmt {
     std::optional<Expr> slot_lo, slot_hi;
     // Distribute / Broadcast
     std::string map, along;
+    // Acc: `init X` -- the tile whose values the accumulator starts from; none: from zero.
+    std::optional<TileRef> init;
 };
 
 struct Decl {
@@ -512,6 +519,10 @@ private:
             s.out = tile();
             expect_word("in");
             expect_word("fabric");
+            if (word("init")) {
+                take();
+                s.init = tile();
+            }
             s.body = block();
             return s;
         }

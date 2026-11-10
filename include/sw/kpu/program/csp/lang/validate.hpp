@@ -437,6 +437,50 @@ private:
                                                     ", which is not provably resident; make it resident first");
         }
     }
+    // `acc y in fabric init x` (docs/plans/accumulator-init-stream.md), as the walker checks it: x
+    // provably resident and tiled as y (a vector: as y's columns). `init y` on its own accumulator
+    // mirrors a resident statement of y, whose residency the fabric takes over.
+    void init(const Stmt& s, const Family& y) {
+        const Family x = single(*s.init);
+        const std::string what = "acc " + text(y) + " init " + text(x);
+        const TensorOperand& xo = operands_.operand(x.operand);
+        const TensorOperand& yo = operands_.operand(y.operand);
+        if (vectors_.count(x.operand)) {
+            if (yo.cols < 2)
+                throw CompileError(s.line, what + ": a vector init is a bias row, broadcast down " + y.operand +
+                                           "'s rows; " + y.operand + " has one column, so give it a tensor init");
+            check_width(x.operand, y.operand, s.line);
+            if (y.dims.size() == 2 && !(x.dims[0].a == y.dims[1].a))
+                throw CompileError(s.line, what + ": a bias row is indexed by the accumulator's column, " + x.operand +
+                                           "[" + text(y.dims[1].a) + "]");
+        } else if (xo.rows != yo.rows || xo.cols != yo.cols || xo.tile_rows != yo.tile_rows ||
+                   xo.tile_cols != yo.tile_cols) {
+            throw CompileError(s.line, what + ": a tensor init is tiled as the accumulator (" + y.operand + " is " +
+                                       std::to_string(yo.rows) + "x" + std::to_string(yo.cols) + " in " +
+                                       std::to_string(yo.tile_rows) + "x" + std::to_string(yo.tile_cols) + " tiles)");
+        } else if (y.dims.size() == 2 && (!(x.dims[0].a == y.dims[0].a) || !(x.dims[1].a == y.dims[1].a))) {
+            throw CompileError(s.line, what + ": a tensor init starts the tile in the same place, " + x.operand + "[" +
+                                       text(y.dims[0].a) + ", " + text(y.dims[1].a) + "]");
+        }
+        if (same(x, y)) {
+            const auto d = std::find_if(ast_.decls.begin(), ast_.decls.end(), [&](const Decl& e) { return e.name == y.operand; });
+            if (d != ast_.decls.end() && d->io == "out")
+                throw CompileError(s.line, what + ": " + y.operand + " is declared out, so it has no value to accumulate "
+                                           "onto; declare it inout");
+            auto it = std::find_if(state_.begin(), state_.end(), [&](const Entry& e) { return same(e.family, y); });
+            if (it == state_.end())
+                throw CompileError(s.line, what + " reads " + text(y) + ", which is not provably resident (it mirrors "
+                                           "a resident statement of " + text(y) + ", as written)");
+            not_staged(y, s.line, what + ": the accumulator takes over the residency of");
+            live_ -= count(y);
+            state_.erase(it);
+            return;
+        }
+        if (std::none_of(state_.begin(), state_.end(), [&](const Entry& e) { return covers(e.family, x); }))
+            throw CompileError(s.line, what + " reads " + text(x) + ", which is not provably resident; make it resident "
+                                       "first");
+    }
+
     void check_width(const std::string& b, const std::string& y, int line) const {
         const TensorOperand& bo = operands_.operand(b);
         const TensorOperand& yo = operands_.operand(y);
@@ -486,6 +530,7 @@ private:
                 break;
             case Stmt::Kind::Acc: {
                 const Family y = single(s.out);
+                if (s.init) init(s, y);
                 for (const Entry& e : state_)
                     if (may_overlap(y, e.family))
                         throw CompileError(s.line, "acc " + text(y) + ": it can be resident in L3; an accumulator lives in the fabric");

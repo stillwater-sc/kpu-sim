@@ -108,6 +108,9 @@ inline TileWork tile_work_of(const TileProgram& p, const TileOp& op, double elem
         case TileOpKind::L2Stage:
         case TileOpKind::L2Release:
             break;
+        // An accumulator's init computes nothing: its values arrive by the Feed recorded with it.
+        case TileOpKind::AccInit:
+            break;
     }
     return w;
 }

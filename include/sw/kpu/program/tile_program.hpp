@@ -152,6 +152,11 @@ enum class TileOpKind {
     // returns upstream). Like the L3 ones, they record placement and compute nothing.
     L2Stage,        // l3 -> the L2 slot (opens a staging)
     L2Release,      // frees the L2 slot
+    // An accumulator's initial value (opset 1.4; docs/plans/accumulator-init-stream.md): Y := X for
+    // a tensor tile X tiled as Y, Y[r, c] := b[c] for a vector tile (a bias row, broadcast down Y's
+    // rows), or Y := 0 with no input (a clear). outputs = {Y}; inputs = {} or {X}. The value enters
+    // the fabric as one more edge stream, before the accumulator's first MatMulAccum.
+    AccInit,
 };
 
 // An L3 transaction: carries an L3 address and one tile (outputs[0]); computes nothing.
@@ -190,6 +195,7 @@ inline const char* to_string(TileOpKind k) {
         case TileOpKind::L3Retain:       return "L3_RETAIN";
         case TileOpKind::L2Stage:        return "L2_STAGE";
         case TileOpKind::L2Release:      return "L2_RELEASE";
+        case TileOpKind::AccInit:        return "ACC_INIT";
     }
     return "?";
 }

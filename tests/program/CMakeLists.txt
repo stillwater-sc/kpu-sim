@@ -114,6 +114,17 @@ set_tests_properties(test_csp_store_late PROPERTIES
     LABELS "program;csp;lang;v0.9"
 )
 
+# An accumulator's init: bias, bias row, accumulate onto C, as one more edge stream (#406;
+# docs/plans/accumulator-init-stream.md)
+kpu_add_component_test(test_csp_acc_init "program"
+    test_csp_acc_init.cpp
+)
+
+set_tests_properties(test_csp_acc_init PROPERTIES
+    LABELS "program;csp;lang;v0.9"
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+)
+
 # The structured CSP program: streamed and validated without unrolling (docs/plans/csp-language.md step 1c)
 kpu_add_component_test(test_csp_structured "program"
     test_csp_structured.cpp
