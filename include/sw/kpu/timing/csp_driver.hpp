@@ -47,10 +47,18 @@
 //   language keeps live for the block) and a Feed, and an L2Release is nothing. The values are
 //   the same; the timing is the unstaged program's. staged_feeds() counts them.
 //
-// This step runs matmul and the linear operator: operands A, B and C, and vector operands (a
-// bias), gemm with alpha 1, and the epilogue fused or not. A vector operand's tiles are named
-// MatrixID::A with tk = 1 + its index among the vectors (the executor has no fourth matrix,
-// and a CSP tile's tk is otherwise 0). A Writeback or Store into a residency a Load opened is
+// This step runs matmul and the linear operator: operands A, B and C, vector operands (a
+// bias), gemm with alpha 1, and the epilogue fused or not. Any other operand -- a vector, or a
+// matrix an accumulator is initialised from (a bias matrix D) -- is named MatrixID::A with
+// tk = 1 + its index among them (the executor has no fourth matrix, and a CSP tile's tk is
+// otherwise 0).
+//
+// An accumulator's init (`acc Y in fabric init X`, #406 step 2): X's Feed carries `seeds = Y`,
+// and Y's first Call names X as its MatMulComputeSpec::init, so the call waits for that feed
+// and starts from its values (a bias row broadcast down the rows) instead of zero -- one more
+// edge stream, as at L-B and L-T1. C enters DRAM from the inputs when the program first Loads a
+// C tile that no Store wrote before (C inout: accumulate onto it); an output C no Store wrote
+// still reads as zeros. A Writeback or Store into a residency a Load opened is
 // in place (l3_held): the residency keeps its slot until its Release. LU at L-CA needs its
 // kernels as functional computes; that is a later increment.
 //
@@ -102,7 +110,7 @@ public:
         : exec_(exec), trace_(&p), inputs_(p.source), window_(window) {
         for (const auto& op : p.source.ops())
             if (op.kind != program::TileOpKind::Feed && op.kind != program::TileOpKind::Drain &&
-                !program::is_l3(op.kind))
+                op.kind != program::TileOpKind::AccInit && !program::is_l3(op.kind))
                 check_call(op);
         check_machine(p.channel(program::csp::Chan::L3).capacity);
     }
@@ -142,6 +150,8 @@ public:
         seq_ = 0;
         staged_feeds_ = 0;
         retained_.clear();
+        inits_.clear();
+        stored_.clear();
 
         Result r;
         const Cycle max = exec_.config().max_cycles;
@@ -225,22 +235,21 @@ private:
     std::size_t next_ = 0;                      // the trace's next action
     std::deque<TileDescriptor> loads_;          // the dma process's Loads not yet handed over
     std::set<TileID> loaded_;                   // tiles whose open residency a Load opened
-    std::map<std::string, std::size_t> vector_tk_;   // vector operand -> its tk tag
+    std::map<std::string, std::size_t> tagged_tk_;   // an operand other than A, B, C -> its tk tag
     std::uint64_t dram_bytes_ = 0;
     std::uint64_t seq_ = 0;                          // program order of the actions handed over
     std::size_t staged_feeds_ = 0;
     std::vector<program::TileCoord> retained_;       // tiles the program retained, in L3 at the end
+    std::map<std::string, TileID> inits_;            // accumulator -> its init's fed tile, until its first Call
+    std::set<TileID> stored_;                        // C tiles a Store has written to DRAM
 
     void check_machine(std::size_t l3) {
+        // csp_level_supported admits an operand other than A, B and C only as a vector or as an
+        // accumulator's init; both are tagged.
         for (const auto& name : inputs_.operand_order()) {
             const auto& t = inputs_.operand(name);
-            if (t.cols == 1 && t.tile_cols == 1) {
-                vector_tk_[name] = 1 + vector_tk_.size();
-                continue;
-            }
-            if (name != "A" && name != "B" && name != "C")
-                throw std::invalid_argument("CspDriver: operand '" + name + "': L-CA runs matmul and the linear "
-                                            "operator (operands A, B, C and vectors) in this step");
+            if ((t.cols == 1 && t.tile_cols == 1) || (name != "A" && name != "B" && name != "C"))
+                tagged_tk_[name] = 1 + tagged_tk_.size();
         }
         // The program's channel capacities are its target's (decision Q2): a program that needs
         // more L3 than the machine has, or was written for an unbounded one, is not this
@@ -295,6 +304,10 @@ private:
         d.program_seq = ++seq_;
         switch (a.kind) {
             case Action::Kind::Load:
+                // An inout C: DRAM holds the input until a Store writes the tile.
+                if (a.tile.operand == "C" && !stored_.count(d.tile_id) &&
+                    !exec_.has_tile_payload_at(MemoryLevel::DRAM, d.tile_id))
+                    exec_.set_tile_payload(d.tile_id, payload(inputs_.operand("C"), a.tile.ti, a.tile.tj));
                 d.l3_held = true;
                 loaded_.insert(d.tile_id);
                 loads_.push_back(d);
@@ -313,6 +326,7 @@ private:
                     d.program_seq = ++seq_;
                     ++staged_feeds_;
                 }
+                if (a.seeds) inits_[a.seeds->to_string()] = d.tile_id;   // an accumulator's init stream
                 exec_.schedule_feed(d);
                 break;
             case Action::Kind::L2Release: break;
@@ -333,6 +347,7 @@ private:
                 break;
             }
             case Action::Kind::Store:
+                if (a.tile.operand == "C") stored_.insert(d.tile_id);
                 d.l3_held = loaded_.count(d.tile_id) != 0;
                 dram_bytes_ += d.size_bytes;
                 exec_.schedule_store(d);
@@ -344,6 +359,10 @@ private:
                     spec.a_tiles = {id(op->inputs.at(0))};
                     spec.b_tiles = {id(op->inputs.at(1))};
                     spec.accumulate = true;         // one k-slice; C stays in the fabric
+                    if (auto in = inits_.find(y.to_string()); in != inits_.end()) {
+                        spec.init = in->second;     // the chain's first call starts from its init
+                        inits_.erase(in);
+                    }
                     exec_.schedule_matmul_compute(descriptor(y), spec);
                     break;
                 }
@@ -388,13 +407,13 @@ private:
 
     TileID id(const std::string& operand, program::Dim ti, program::Dim tj) const {
         TileID t;
-        auto v = vector_tk_.find(operand);
-        t.matrix = v != vector_tk_.end() || operand == "A" ? isa::MatrixID::A
+        auto v = tagged_tk_.find(operand);
+        t.matrix = v != tagged_tk_.end() || operand == "A" ? isa::MatrixID::A
                    : operand == "B"                         ? isa::MatrixID::B
                                                             : isa::MatrixID::C;
         t.ti = ti;
         t.tj = tj;
-        if (v != vector_tk_.end()) t.tk = static_cast<decltype(t.tk)>(v->second);
+        if (v != tagged_tk_.end()) t.tk = static_cast<decltype(t.tk)>(v->second);
         return t;
     }
     TileID id(const program::TileCoord& c) const { return id(c.operand, c.ti, c.tj); }
