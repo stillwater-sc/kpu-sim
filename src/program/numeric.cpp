@@ -42,7 +42,8 @@ struct Codec<su::integer<N, Bt>> {
         constexpr unsigned bb = sizeof(Bt) * 8;
         Word w = 0;
         for (unsigned i = 0; i * bb < N; ++i) w |= static_cast<Word>(t.block(i)) << (i * bb);
-        return N == 32 ? w : (w & ((Word{1} << N) - 1));
+        if constexpr (N < 32) w &= (Word{1} << N) - 1;   // constexpr: no shift by 32 to instantiate
+        return w;
     }
     static double decode(Word w) { return static_cast<double>(static_cast<long long>(from_word(w))); }
     static Word encode(double v) {
