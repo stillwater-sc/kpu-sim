@@ -304,9 +304,9 @@ private:
         d.program_seq = ++seq_;
         switch (a.kind) {
             case Action::Kind::Load:
-                // An inout C: DRAM holds the input until a Store writes the tile.
-                if (a.tile.operand == "C" && !stored_.count(d.tile_id) &&
-                    !exec_.has_tile_payload_at(MemoryLevel::DRAM, d.tile_id))
+                // An inout C: DRAM holds this run's input until a Store writes the tile (the
+                // executor's reset keeps DRAM, so a reused executor may hold another run's C).
+                if (a.tile.operand == "C" && !stored_.count(d.tile_id))
                     exec_.set_tile_payload(d.tile_id, payload(inputs_.operand("C"), a.tile.ti, a.tile.tj));
                 d.l3_held = true;
                 loaded_.insert(d.tile_id);

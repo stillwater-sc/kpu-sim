@@ -378,6 +378,22 @@ TEST_CASE("acc init: L-CA feeds the init stream; values are the reference's", "[
                 for (std::size_t n = 0; n < starts.size(); ++n) CHECK(starts[n] >= feeds[x][n]);
             }
         }
+    // An executor reused for another run keeps its DRAM: the next run's C is its own inputs'
+    // (review of #409), not the C the run before stored.
+    {
+        const lang::Program acc = lang::parse(gen::generate(matmul("accumulate")));
+        TileProgram in = driver::csp_inputs(acc);
+        const auto cfg = timing::csp_config_from(dev);
+        timing::ConcurrentTimingExecutor exec(cfg->config);
+        for (int run = 0; run < 2; ++run) {
+            CAPTURE(run);
+            for (float& v : in.operand("C").values) v += 1.0f;
+            lang::ActionStream s(acc);
+            const auto r = timing::CspDriver(exec, s, in).run();
+            REQUIRE(r.completed);
+            check_close(r.values.operand("C").values, reference(in, "accumulate"));
+        }
+    }
     // The run's own entry point admits it, and a matrix L-CA does not map is still refused
     // when it is computed on rather than streamed in as an init.
     const lang::Program bias = lang::parse(gen::generate(matmul("bias")));
