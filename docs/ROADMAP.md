@@ -409,120 +409,36 @@ resulting in **4-8x overestimation** of execution time. See CHANGELOG for detail
 
 ---
 
-## v0.9.0 - Concurrent Timing Model (CSP Architecture)
+## v0.9.0 → v1.0.0: the CSP Simulator
 
-**Priority:** CRITICAL PATH TO v1.0.0
-**Effort:** 6-8 weeks
-**Theme:** True dataflow concurrency for accurate timing simulation
+**The plan:** `docs/plans/roadmap-to-v1.md` (2026-11-11). It replaces this document's earlier
+v0.9.0, v1.0.0 and post-1.0 sections, and the hardware-timeline table. The concurrent timing model
+those sections planned shipped on the way: the credit pools, tag CAMs, processes and
+`ConcurrentTimingExecutor` are L-CA today.
 
-### Problem
+v1.0.0 simulates a KPU built from systolic-array tiles, programmed in the CSP language, at four
+levels that agree on values:
+- L-B, behavioral;
+- L-T1, block-sequential;
+- L-T2, resource-transactional;
+- L-CA, cycle-accurate.
 
-The current transactional timing model processes instructions sequentially,
-missing the natural concurrency of the KPU's credit-based dataflow. This
-results in **4-8x overestimation** of execution time.
+A host program calls Domain Flow Program kernels at a chosen level. Schedules, resource
+occupancy and performance are visualized.
 
-### Solution
+| Release | Theme |
+|---|---|
+| v0.9.0 | One tile, one program, three levels, first RTL cross-check |
+| v0.10.0 | The cycle-accurate systolic tile (OS/WS/IS, conv2d, the RTL tile tests) |
+| v0.11.0 | L-T2, resource-transactional, and the spatial event viewer |
+| v0.12.0 | The multi-tile KPU and the NoC |
+| v0.13.0 | Host orchestration of Domain Flow Program kernels |
+| v1.0.0 | Stable release: legacy engines retired, a versioned program format, the performance suite |
 
-Transform timing model to use Communicating Sequential Processes (CSP):
-- DMA, BlockMover, Streamer as concurrent processes
-- Credit-based flow control (not barriers)
-- Tag CAM matching for data availability
-- Work-conserving scheduling (no head-of-line blocking)
-- Livelock prevention mechanisms
+Each release is one GitHub milestone. Work after 1.0 is in the milestone "Backlog (post-1.0)".
 
-### Features
-
-| SEMVER | Feature | Description |
-|--------|---------|-------------|
-| v0.9.0 | CreditPool | Buffer availability tracking |
-| v0.9.1 | TagCAM | Hardware tile matching |
-| v0.9.2 | DMAEngineProcess | Concurrent DMA with queue depth |
-| v0.9.3 | BlockMoverProcess | L3→L2 with credit/tag sync |
-| v0.9.4 | StreamerProcess | L2→L1 with credit/tag sync |
-| v0.9.5 | ConcurrentTimingExecutor | Discrete event simulation |
-| v0.9.6 | Livelock Prevention | Work-conserving, partitioned credits |
-| v0.9.7 | Validation Suite | Analytical model comparison |
-
-### Success Criteria
-
-- [ ] Same functional results as v0.8.x (100% match)
-- [ ] Timing within ±10% of analytical model
-- [ ] Compute Tile utilization >95% on blocked matmul
-- [ ] DMA channel utilization >80%
-- [ ] No livelock in any test case
-- [ ] Simulation speed >1M cycles/sec
-
-### Detailed Plan
-
-See `docs/plans/v0.9_concurrent_timing_roadmap.md` for:
-- 40 detailed tasks across 4 phases
-- Review gates (G1-G6)
-- Risk register
-- Testing strategy
-- Accountability structure
-
-### Tag: `v0.9.0-concurrent-timing`
-
----
-
-## v1.0.0 - Production Ready
-
-**Priority:** HIGH (milestone)
-**Theme:** Full DNN execution with complete timing simulation
-
-### Requirements for 1.0
-
-- [ ] All v0.x features stable (including v0.9.0 concurrent timing)
-- [ ] CYCLE_ACCURATE mode fully functional
-- [ ] Documentation complete
-- [ ] API stability guaranteed
-- [ ] Performance within 2× of theoretical predictions
-- [ ] Validated against hardware (FPGA or silicon)
-
-### Validation Models
-
-| Model | Status |
-|-------|--------|
-| MNIST MLP | Must pass |
-| MNIST CNN | Must pass |
-| SqueezeNet 1.0 | Must pass |
-| MobileNetV2 | Must pass |
-| BERT-base attention | Must pass |
-
-### Tag: `v1.0.0`
-
----
-
-## Post-1.0 Roadmap
-
-### v1.1.0 - Advanced Optimizations
-- Auto-tuning for tile sizes
-- ML-based tile prediction
-- Advanced scheduling heuristics
-
-### v1.2.0 - Multi-Device
-- Multi-chip simulation
-- Distributed inference
-- Model parallelism
-
-### v1.3.0 - Training Support
-- Backward pass kernels
-- Gradient accumulation
-- Optimizer kernels
-
----
-
-## Hardware Development Milestones
-
-These simulator versions align with hardware development:
-
-| Hardware Milestone | Timeline | Simulator Version |
-|-------------------|----------|-------------------|
-| **M1: fsim** | Months 1-3 | v0.3.0+ (benchmarks) |
-| **M2: FPGA** | Months 3-6 | v0.4.0+ (transactional) |
-| **M3: MPW** | Months 6-9 | v0.5.0+ (all kernels) |
-| **M4: Test Chip** | Months 9-12 | v0.8.0+ (model execution) |
-| **M5: Production** | Months 12-24 | v1.0.0 (production ready) |
+> **Historical (superseded 2026-11-11):** the Priority Matrix and Open TODOs below predate the
+> CSP simulator and are kept only for the record.
 
 ---
 
@@ -603,4 +519,4 @@ git push origin v0.3.0
 ---
 
 *Document created: 2026-01-18*
-*Last updated: 2026-01-20*
+*Last updated: 2026-11-11 (v0.9.0 → v1.0.0: docs/plans/roadmap-to-v1.md)*
